@@ -148,6 +148,7 @@ func Open(path string) (*Store, error) {
 		`ALTER TABLE findings ADD COLUMN reporter_model TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE findings ADD COLUMN reporter_backend TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE tasks ADD COLUMN claimed_instance TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE findings ADD COLUMN resolved_ts REAL NOT NULL DEFAULT 0`,
 	} {
 		if _, err := db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			return nil, err

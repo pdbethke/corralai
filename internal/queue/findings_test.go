@@ -251,6 +251,30 @@ func TestFindingByID(t *testing.T) {
 	}
 }
 
+// TestSetFindingStatusStampsResolvedTS verifies resolved_ts stays 0 until the
+// finding first leaves "open", then gets stamped >= created_ts.
+func TestSetFindingStatusStampsResolvedTS(t *testing.T) {
+	s := open(t)
+	id, err := s.AddFinding(Finding{MissionID: 1, Reporter: "bee1", Type: "bug", Severity: "high", Target: "x.go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, ok, _ := s.FindingByID(id)
+	if !ok || f.ResolvedTS != 0 {
+		t.Fatalf("freshly-opened finding must have resolved_ts=0, got %v", f.ResolvedTS)
+	}
+	if ok, err := s.SetFindingStatus(id, FindingAddressed); err != nil || !ok {
+		t.Fatalf("SetFindingStatus: ok=%v err=%v", ok, err)
+	}
+	f2, _, _ := s.FindingByID(id)
+	if f2.ResolvedTS == 0 {
+		t.Fatal("resolved finding must have a non-zero resolved_ts")
+	}
+	if f2.ResolvedTS < f.CreatedTS {
+		t.Fatalf("resolved_ts %v must be >= created_ts %v", f2.ResolvedTS, f.CreatedTS)
+	}
+}
+
 func TestSeverityRankOrders(t *testing.T) {
 	if !(SeverityRank("low") < SeverityRank("medium") &&
 		SeverityRank("medium") < SeverityRank("high") &&

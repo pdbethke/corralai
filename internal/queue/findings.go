@@ -46,6 +46,7 @@ type Finding struct {
 	Status          string  `json:"status"`
 	Recurring       bool    `json:"recurring,omitempty"` // a prior finding had the same type+target — the lesson didn't land
 	CreatedTS       float64 `json:"created_ts"`
+	ResolvedTS      float64 `json:"resolved_ts,omitempty"` // set when status transitions to addressed|dismissed
 }
 
 // AddFinding validates and stores a finding (always open), returning its id. A
@@ -174,12 +175,21 @@ func (s *Store) FindingByID(id int64) (Finding, bool, error) {
 }
 
 // SetFindingStatus transitions a finding (open|addressed|dismissed). Returns
-// false if no such finding. Validates the target status.
+// false if no such finding. Validates the target status. Stamps resolved_ts
+// the first time a finding leaves "open" — it is never cleared by a later
+// transition, so it always reflects when the finding was FIRST resolved.
 func (s *Store) SetFindingStatus(id int64, status string) (bool, error) {
 	if !findingStatuses[status] {
 		return false, fmt.Errorf("invalid status %q (want open|addressed|dismissed)", status)
 	}
-	res, err := s.db.Exec(`UPDATE findings SET status=? WHERE id=?`, status, id)
+	var res sql.Result
+	var err error
+	if status == FindingOpen {
+		res, err = s.db.Exec(`UPDATE findings SET status=? WHERE id=?`, status, id)
+	} else {
+		res, err = s.db.Exec(`UPDATE findings SET status=?, resolved_ts=CASE WHEN resolved_ts=0 THEN ? ELSE resolved_ts END WHERE id=?`,
+			status, now(), id)
+	}
 	if err != nil {
 		return false, err
 	}
@@ -187,7 +197,7 @@ func (s *Store) SetFindingStatus(id int64, status string) (bool, error) {
 	return n > 0, nil
 }
 
-const findingsSelect = `SELECT id,mission_id,task_id,reporter,type,severity,target,evidence,suggested_action,status,recurring,created_ts,reporter_model,reporter_backend FROM findings`
+const findingsSelect = `SELECT id,mission_id,task_id,reporter,type,severity,target,evidence,suggested_action,status,recurring,created_ts,reporter_model,reporter_backend,resolved_ts FROM findings`
 
 func (s *Store) queryFindings(q string, args ...any) ([]Finding, error) {
 	rows, err := s.db.Query(q, args...)
@@ -202,7 +212,7 @@ func (s *Store) queryFindings(q string, args ...any) ([]Finding, error) {
 		var recurring int
 		if err := rows.Scan(&f.ID, &f.MissionID, &f.TaskID, &f.Reporter, &f.Type, &f.Severity,
 			&target, &evidence, &action, &f.Status, &recurring, &f.CreatedTS,
-			&f.ReporterModel, &f.ReporterBackend); err != nil {
+			&f.ReporterModel, &f.ReporterBackend, &f.ResolvedTS); err != nil {
 			return nil, err
 		}
 		f.Target, f.Evidence, f.SuggestedAction = target.String, evidence.String, action.String

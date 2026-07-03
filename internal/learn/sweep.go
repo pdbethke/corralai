@@ -11,9 +11,19 @@ import (
 // proposal worth a human's attention.
 const minOccurrences = 3
 
-// jaccardThreshold is the minimum token-Jaccard similarity for two lesson
+// overlapThreshold is the minimum token-overlap coefficient for two lesson
 // docs to be linked into the same cluster.
-const jaccardThreshold = 0.5
+const overlapThreshold = 0.5
+
+// minSharedTokens is the absolute floor on |a∩b| for a link. The overlap
+// coefficient is monotonically ≥ Jaccard, so the 0.5 threshold alone is more
+// permissive than the spec's Jaccard-calibrated 0.5: a very short body whose
+// few kept tokens happen to appear in an unrelated longer doc scores high on
+// ratio despite sharing almost nothing (e.g. 2 of 3 tokens ≈ 0.67).
+// Calibration: genuinely restated lessons in the canonical fixture share 5-6
+// tokens per linking pair, while the short-vs-long noise shape shares 2-3 —
+// so 4 cleanly separates the two.
+const minSharedTokens = 4
 
 // FindingSignal is one observed occurrence of a recurring problem — e.g. a
 // missing requirement or a repeated bug — surfaced by a herd role during a
@@ -60,16 +70,18 @@ func tokenize(s string) map[string]struct{} {
 	return set
 }
 
-// jaccard computes token-overlap similarity between two token sets: |a∩b|
-// over the smaller set's size (the Szymkiewicz-Simpson overlap coefficient).
-// Near-duplicate lessons tend to differ in length (one restates the other
-// with extra words), which sinks a strict |a∩b|/|a∪b| Jaccard score well
-// below any reasonable threshold; the overlap coefficient stays high as
-// long as the shorter doc's tokens are (almost) a subset of the longer's,
-// which is exactly the near-duplicate shape this clustering targets.
-func jaccard(a, b map[string]struct{}) float64 {
+// linked reports whether two token sets are similar enough to join a
+// cluster: the Szymkiewicz-Simpson overlap coefficient (|a∩b| over the
+// smaller set's size) must reach overlapThreshold, AND the raw intersection
+// must reach minSharedTokens. Near-duplicate lessons tend to differ in
+// length (one restates the other with extra words), which sinks a strict
+// |a∩b|/|a∪b| Jaccard score well below any reasonable threshold; the
+// overlap coefficient stays high for that shape, and the shared-token floor
+// keeps it from also linking a tiny body to any long doc that happens to
+// contain its few tokens.
+func linked(a, b map[string]struct{}) bool {
 	if len(a) == 0 || len(b) == 0 {
-		return 0
+		return false
 	}
 	inter := 0
 	for t := range a {
@@ -77,11 +89,14 @@ func jaccard(a, b map[string]struct{}) float64 {
 			inter++
 		}
 	}
-	min := len(a)
-	if len(b) < min {
-		min = len(b)
+	if inter < minSharedTokens {
+		return false
 	}
-	return float64(inter) / float64(min)
+	smaller := len(a)
+	if len(b) < smaller {
+		smaller = len(b)
+	}
+	return float64(inter)/float64(smaller) >= overlapThreshold
 }
 
 // unionFind is a minimal disjoint-set structure for clustering.
@@ -111,9 +126,10 @@ func (u *unionFind) union(a, b int) {
 }
 
 // ClusterLessons groups near-duplicate lesson docs: two docs are linked when
-// their body token-overlap similarity is ≥ 0.5, and connected groups whose
-// size is ≥ minSize are emitted as clusters. This is the deliberate v1 —
-// pure-Go token overlap, no FTS or vector search (spec-deferred upgrades).
+// their body token-overlap coefficient is ≥ 0.5 and they share at least
+// minSharedTokens tokens; connected groups of size ≥ minSize are emitted as
+// clusters. This is the deliberate v1 — pure-Go token overlap, no FTS or
+// vector search (spec-deferred upgrades).
 func ClusterLessons(docs []LessonDoc, minSize int) [][]LessonDoc {
 	n := len(docs)
 	if n == 0 {
@@ -126,7 +142,7 @@ func ClusterLessons(docs []LessonDoc, minSize int) [][]LessonDoc {
 	uf := newUnionFind(n)
 	for i := 0; i < n; i++ {
 		for j := i + 1; j < n; j++ {
-			if jaccard(tokens[i], tokens[j]) >= jaccardThreshold {
+			if linked(tokens[i], tokens[j]) {
 				uf.union(i, j)
 			}
 		}
@@ -176,7 +192,8 @@ func (s *Store) Sweep(findings []FindingSignal, lessons []LessonDoc) ([]Proposal
 	var opened []Proposal
 
 	type findingGroup struct {
-		role     string
+		roles    []string // distinct, first-seen order
+		roleSeen map[string]struct{}
 		evidence []string
 	}
 	groups := make(map[string]*findingGroup)
@@ -185,9 +202,13 @@ func (s *Store) Sweep(findings []FindingSignal, lessons []LessonDoc) ([]Proposal
 		sig := Signature(f)
 		g, ok := groups[sig]
 		if !ok {
-			g = &findingGroup{role: f.Role}
+			g = &findingGroup{roleSeen: make(map[string]struct{})}
 			groups[sig] = g
 			sigOrder = append(sigOrder, sig)
+		}
+		if _, seen := g.roleSeen[f.Role]; !seen && f.Role != "" {
+			g.roleSeen[f.Role] = struct{}{}
+			g.roles = append(g.roles, f.Role)
 		}
 		g.evidence = append(g.evidence, f.Evidence)
 	}
@@ -196,7 +217,7 @@ func (s *Store) Sweep(findings []FindingSignal, lessons []LessonDoc) ([]Proposal
 		if len(g.evidence) < minOccurrences {
 			continue
 		}
-		p, created, err := s.Upsert(sig, "finding", g.role, g.evidence)
+		p, created, err := s.Upsert(sig, "finding", strings.Join(g.roles, ","), g.evidence)
 		if err != nil {
 			return opened, err
 		}

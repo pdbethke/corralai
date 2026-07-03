@@ -27,6 +27,36 @@ func TestClusterLessonsGroupsNearDuplicates(t *testing.T) {
 	}
 }
 
+func TestClusterLessonsIgnoresShortDocSubsetFalsePositive(t *testing.T) {
+	// A short body whose few kept tokens are largely a subset of an
+	// unrelated longer body must not link: {"install","tool","globally"}
+	// shares only {"install","tool"} with the long doc, yet the overlap
+	// coefficient alone scores that pair 2/3 ≈ 0.67 ≥ 0.5.
+	docs := []LessonDoc{
+		{Name: "npm-global", Body: "install tool globally"},
+		{Name: "release-pipeline", Body: "the release pipeline should install every build tool, run the linter, publish artifacts, and page on-call when coverage drops below the agreed threshold"},
+	}
+	if got := ClusterLessons(docs, 2); len(got) != 0 {
+		t.Fatalf("unrelated short/long docs must not cluster, got %v", got)
+	}
+}
+
+func TestSweepCollectsDistinctRolesAcrossSignals(t *testing.T) {
+	s := open(t)
+	findings := []FindingSignal{
+		{Type: "flaky", Target: "ci.yml", Role: "builder", Evidence: "e1"},
+		{Type: "flaky", Target: "ci.yml", Role: "tester", Evidence: "e2"},
+		{Type: "flaky", Target: "ci.yml", Role: "builder", Evidence: "e3"},
+	}
+	opened, err := s.Sweep(findings, nil)
+	if err != nil || len(opened) != 1 {
+		t.Fatalf("opened=%v err=%v", opened, err)
+	}
+	if opened[0].Roles != "builder,tester" {
+		t.Fatalf("roles should be distinct, first-seen order: got %q", opened[0].Roles)
+	}
+}
+
 func TestSweepOpensProposals(t *testing.T) {
 	s := open(t)
 	findings := []FindingSignal{

@@ -46,7 +46,10 @@ type scrumNudge struct {
 // scrumFacts distills the standup from raw queue + presence state. Pure —
 // covered by unit tests; the loop just delivers what this returns.
 // stallAfter is how long a claim may sit before its holder gets named.
-func scrumFacts(tasks []scrumTask, agents []scrumAgent, nowTS float64, stallAfter float64) (standup string, nudges []scrumNudge) {
+// pendingProposals is the count of learning-loop proposals awaiting the
+// operator's approve/reject decision (from list_proposals status=pending);
+// when >0 it's appended to the standup so the human gate doesn't go unnoticed.
+func scrumFacts(tasks []scrumTask, agents []scrumAgent, nowTS float64, stallAfter float64, pendingProposals int) (standup string, nudges []scrumNudge) {
 	var done, total int
 	var ready []scrumTask
 	var stalled []scrumTask
@@ -103,6 +106,9 @@ func scrumFacts(tasks []scrumTask, agents []scrumAgent, nowTS float64, stallAfte
 	if len(parts) == 1 && done == total {
 		parts = append(parts, "queue drained — nothing outstanding")
 	}
+	if pendingProposals > 0 {
+		parts = append(parts, fmt.Sprintf("%d skill proposal(s) awaiting the operator", pendingProposals))
+	}
 	return strings.Join(parts, " · "), nudges
 }
 
@@ -137,8 +143,14 @@ func runScrumLoop(name string, brain func(string, map[string]any) string) {
 			ActiveAgents []scrumAgent `json:"active_agents"`
 		}
 		_ = json.Unmarshal([]byte(brain("coordination_status", nil)), &st)
+		var lp struct {
+			Proposals []struct {
+				ID int64 `json:"id"`
+			} `json:"proposals"`
+		}
+		_ = json.Unmarshal([]byte(brain("list_proposals", map[string]any{"status": "pending"})), &lp)
 
-		standup, nudges := scrumFacts(tl.Tasks, st.ActiveAgents, float64(time.Now().Unix()), stallAfter)
+		standup, nudges := scrumFacts(tl.Tasks, st.ActiveAgents, float64(time.Now().Unix()), stallAfter, len(lp.Proposals))
 		if standup != "" && standup != lastStandup {
 			fmt.Printf("[%s/scrum] %s\n", name, standup)
 			brain("report_activity", map[string]any{"role": "scrum", "tool": "standup", "detail": standup})

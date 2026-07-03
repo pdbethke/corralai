@@ -929,7 +929,19 @@ func main() {
 	// proxy (which carries the operator's or an observer token). A direct browser hit
 	// without a bearer gets 401. No browser-login flow lives in the brain. When auth
 	// is disabled (dev) the wraps are no-ops and the UI is open on localhost.
-	uiHandler := verifier.Wrap(authz(ui.Handler(ui.Deps{Coord: store, Mem: memStore, Gateway: gwStore, Bus: bus, MemOwners: memOwners, Roles: princStore, Queue: queueStore, Missions: missionStore, Executions: execRing, Activity: activityRing, Hosts: hostBook, Narrator: narrator, Telemetry: telStore, Oracle: fleetOracle, RoleModels: roleModels})))
+	// Proposal fan-out from the UI's approve button reuses the exact same
+	// logic the approve_proposal MCP tool runs (brain.ApproveProposal) — the
+	// operator clicking "approve" in the browser and an MCP client calling
+	// approve_proposal are indistinguishable at the fan-out level. Reject is
+	// the symmetric thin wrapper over brain.RejectProposal.
+	proposalPromote := func(id int64) error {
+		_, err := brain.ApproveProposal(learnStore, memStore, artStore, telStore, id, "operator", false, false)
+		return err
+	}
+	proposalReject := func(id int64, reason string) error {
+		return brain.RejectProposal(learnStore, id, reason)
+	}
+	uiHandler := verifier.Wrap(authz(ui.Handler(ui.Deps{Coord: store, Mem: memStore, Gateway: gwStore, Bus: bus, MemOwners: memOwners, Roles: princStore, Queue: queueStore, Missions: missionStore, Executions: execRing, Activity: activityRing, Hosts: hostBook, Narrator: narrator, Telemetry: telStore, Oracle: fleetOracle, RoleModels: roleModels, Learn: learnStore, Promote: proposalPromote, Reject: proposalReject})))
 	if verifier.Enabled() {
 		log.Printf("ui: bearer-gated (view via `corral-observe`)")
 	} else {

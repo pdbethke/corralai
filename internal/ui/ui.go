@@ -20,6 +20,7 @@ import (
 	"github.com/pdbethke/corralai/internal/brain"
 	"github.com/pdbethke/corralai/internal/coord"
 	"github.com/pdbethke/corralai/internal/gateway"
+	"github.com/pdbethke/corralai/internal/learn"
 	"github.com/pdbethke/corralai/internal/llm"
 	"github.com/pdbethke/corralai/internal/memory"
 	"github.com/pdbethke/corralai/internal/mission"
@@ -49,6 +50,9 @@ type Server struct {
 	tel        *telemetry.Store
 	oracle     *oracle.Client
 	roleModels rolemodel.Policy
+	learn      *learn.Store
+	promote    func(id int64) error
+	reject     func(id int64, reason string) error
 }
 
 // Handler returns the UI routes: / (the page), /api/me (the viewer's identity +
@@ -89,10 +93,21 @@ type Deps struct {
 	// each host with expected model + drift when this is non-nil. nil => no drift
 	// annotations (degrade-never-block).
 	RoleModels rolemodel.Policy
+	// Learn is the learning-loop proposals store; /api/state surfaces pending
+	// proposals from it for the proposals card. nil => the card stays empty.
+	Learn *learn.Store
+	// Promote fans a proposal's guidance/skill out into standing memory + the
+	// fleet artifact store (the same fan-out the approve_proposal MCP tool
+	// runs — see brain.ApproveProposal). Wired in cmd/corral/main.go. nil =>
+	// the approve endpoint returns 404 (proposals unavailable).
+	Promote func(id int64) error
+	// Reject dismisses a pending proposal, recording the reason. Wired in
+	// cmd/corral/main.go. nil => the reject endpoint returns 404.
+	Reject func(id int64, reason string) error
 }
 
 func Handler(d Deps) http.Handler {
-	s := &Server{coord: d.Coord, mem: d.Mem, gw: d.Gateway, bus: d.Bus, memOwners: d.MemOwners, roles: d.Roles, queue: d.Queue, missions: d.Missions, execs: d.Executions, acts: d.Activity, hosts: d.Hosts, narrator: d.Narrator, tel: d.Telemetry, oracle: d.Oracle, roleModels: d.RoleModels}
+	s := &Server{coord: d.Coord, mem: d.Mem, gw: d.Gateway, bus: d.Bus, memOwners: d.MemOwners, roles: d.Roles, queue: d.Queue, missions: d.Missions, execs: d.Executions, acts: d.Activity, hosts: d.Hosts, narrator: d.Narrator, tel: d.Telemetry, oracle: d.Oracle, roleModels: d.RoleModels, learn: d.Learn, promote: d.Promote, reject: d.Reject}
 	mux := http.NewServeMux()
 	sub, _ := fs.Sub(webFS, "web")
 	mux.Handle("/", http.FileServer(http.FS(sub)))
@@ -108,7 +123,80 @@ func Handler(d Deps) http.Handler {
 	mux.HandleFunc("/api/ask_fleet", s.askFleet)
 	mux.HandleFunc("/api/chatter", s.chatter)
 	mux.HandleFunc("/api/review", s.review)
+	mux.HandleFunc("/api/proposal/approve", s.proposalApprove)
+	mux.HandleFunc("/api/proposal/reject", s.proposalReject)
 	return mux
+}
+
+// proposalApprove promotes a pending learning-loop proposal — the UI's
+// approve button. It calls the Promote callback (wired in cmd/corral/main.go
+// to brain.ApproveProposal), the same fan-out the approve_proposal MCP tool
+// runs, so approving from the browser and approving over MCP behave
+// identically. Read-only observers can't act.
+func (s *Server) proposalApprove(w http.ResponseWriter, r *http.Request) {
+	if auth.ReadOnly(r) {
+		http.Error(w, "forbidden: read-only observer token cannot act", http.StatusForbidden)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.promote == nil {
+		http.Error(w, "proposals unavailable", http.StatusNotFound)
+		return
+	}
+	var body struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+	if body.ID == 0 {
+		http.Error(w, "id required", http.StatusBadRequest)
+		return
+	}
+	if err := s.promote(body.ID); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+// proposalReject dismisses a pending learning-loop proposal — the UI's
+// reject button. A reason is accepted but not required (the server stores
+// whatever the client sends, including empty).
+func (s *Server) proposalReject(w http.ResponseWriter, r *http.Request) {
+	if auth.ReadOnly(r) {
+		http.Error(w, "forbidden: read-only observer token cannot act", http.StatusForbidden)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.reject == nil {
+		http.Error(w, "proposals unavailable", http.StatusNotFound)
+		return
+	}
+	var body struct {
+		ID     int64  `json:"id"`
+		Reason string `json:"reason"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+	if body.ID == 0 {
+		http.Error(w, "id required", http.StatusBadRequest)
+		return
+	}
+	if err := s.reject(body.ID, body.Reason); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
 }
 
 // me reports the viewer's verified identity and role so the UI can show who's
@@ -318,6 +406,20 @@ type stateView struct {
 	Activity        []brain.Activity      `json:"recent_activity"`            // newest-first tool-calls across all phases
 	Topology        []brain.AnnotatedHost `json:"topology"`                   // per-agent runtime facts (where each bee runs) + drift annotation
 	ModelComparison *telemetry.Report     `json:"model_comparison,omitempty"` // per-model finding volume + confirmation rate
+	Proposals       []proposalView        `json:"proposals"`                  // pending learning-loop proposals awaiting the operator
+}
+
+// proposalView is the /api/state shape of a pending learning-loop proposal —
+// just enough for the card to render (signature, count badge, guidance,
+// skill-name chip, status) without leaking the full evidence/rejection
+// bookkeeping the internal learn.Proposal carries.
+type proposalView struct {
+	ID        int64  `json:"id"`
+	Signature string `json:"signature"`
+	Count     int    `json:"count"`
+	Guidance  string `json:"guidance"`
+	SkillName string `json:"skill_name"`
+	Status    string `json:"status"`
 }
 
 func (s *Server) snapshot() stateView {
@@ -365,7 +467,18 @@ func (s *Server) snapshot() stateView {
 			modelComparison = &mc
 		}
 	}
-	return stateView{Status: st, Tasks: tasks, Findings: findings, Missions: missions, Executions: executions, Activity: activity, Topology: topology, ModelComparison: modelComparison}
+	proposals := []proposalView{}
+	if s.learn != nil {
+		if ps, err := s.learn.List(learn.StatusPending); err == nil {
+			for _, p := range ps {
+				proposals = append(proposals, proposalView{
+					ID: p.ID, Signature: p.Signature, Count: p.Count,
+					Guidance: p.Guidance, SkillName: p.SkillName, Status: p.Status,
+				})
+			}
+		}
+	}
+	return stateView{Status: st, Tasks: tasks, Findings: findings, Missions: missions, Executions: executions, Activity: activity, Topology: topology, ModelComparison: modelComparison, Proposals: proposals}
 }
 
 func (s *Server) state(w http.ResponseWriter, _ *http.Request) {

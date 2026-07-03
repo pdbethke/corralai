@@ -134,6 +134,20 @@
   .mc-table td { color:var(--fg); padding:3px 8px 3px 0; border-bottom:1px solid rgba(255,255,255,.04); font-family:ui-monospace,monospace; font-size:11.5px; }
   .mc-table td:first-child { color:var(--green); }
   .mc-null { color:var(--muted); font-style:italic; }
+  /* .proposal-card — same visual family as .tqueen (amber-tinted gradient card)
+     but block layout (guidance text + actions need their own lines), and the
+     accept/reject buttons reuse .preview's .acc/.chg color language. */
+  .proposals-wrap { max-width:840px; margin:0 auto 20px; }
+  .proposals-title { color:#f4c430; font-size:13px; font-weight:600; margin:0 0 8px; letter-spacing:.2px; }
+  .proposal-card { padding:13px 16px; margin-bottom:10px; background:linear-gradient(180deg,rgba(244,196,48,.12),var(--panel)); border:1px solid rgba(244,196,48,.5); border-radius:10px; }
+  .pr-hdr { display:flex; align-items:center; gap:8px; margin-bottom:5px; }
+  .pr-sig { color:var(--fg); font-size:13.5px; font-weight:600; font-family:ui-monospace,monospace; }
+  .pr-count { background:#f4c430; color:var(--bg); font-size:11px; font-weight:700; padding:1px 8px; border-radius:9px; flex:none; }
+  .pr-guidance { color:var(--muted); font-size:12.5px; margin:2px 0 8px; }
+  .pr-skill { display:inline-block; background:rgba(79,195,217,.15); border:1px solid #4fc3d9; color:#4fc3d9; font-size:11px; padding:2px 9px; border-radius:9px; margin-bottom:9px; font-family:ui-monospace,monospace; }
+  .pr-actions button { border:none; border-radius:5px; padding:4px 12px; font-size:12px; cursor:pointer; margin-right:8px; }
+  .pr-actions .acc { background:var(--green); color:var(--bg); }
+  .pr-actions .chg { background:var(--panel); color:var(--fg); border:1px solid var(--line); }
   .pmission { max-width:800px; margin:0 auto 20px; padding:16px 18px; background:var(--panel); border:1px solid var(--line); border-radius:10px; }
   .phdr { display:flex; align-items:center; gap:10px; margin-bottom:3px; }
   .pdir { font-size:16px; font-weight:600; color:var(--fg); }
@@ -391,22 +405,22 @@ const buzzes = [];         // little "buzz.." sound-effect texts that float up f
 // as lassos. 'hive' keeps the original hand-drawn bees for the nostalgic.
 const SKINS = {
   ranch: { label:'🤠 ranch', brain:'🤠', worker:'🐴', roles:{scrum:'🐕', client:'🧑‍💼'}, sub:'🐎', subtitle:'— the corral', bg:'grass', tab:'corral', empty:'no agents in the corral yet', warming:'the herd is saddling up…',
-           center:'the corral', lasso:true, favicon:'🤠',
+           center:'the corral', lasso:true, favicon:'🤠', proposes:'the herd proposes:',
            sounds:['neigh~','clop clop','*swish*','yeehaw~'],
            caught:['Caught me — no {cmd} on record!','Busted! Never ran {cmd}…','Can’t outride the brand 🤠','No proof, no pass — re-doing it'],
            brainTag:'the wrangler — MCP coordinator · task queue · verification gate' },
   flock: { label:'🐑 flock', brain:'🐕', worker:'🐑', roles:{scrum:'🐕‍🦺', client:'🧑‍🌾'}, sub:'🐑', subtitle:'— the fold', bg:'grass', tab:'fold', empty:'no agents in the fold yet', warming:'the flock is gathering…',
-           center:'the fold', lasso:false, favicon:'🐑',
+           center:'the fold', lasso:false, favicon:'🐑', proposes:'the flock proposes:',
            sounds:['baa~','baaa..','*nibble*','baa!'],
            caught:['Caught me — no {cmd} on record!','Busted! Never ran {cmd}…','Fleeced! No {cmd} run…','No proof, no pass — re-doing it'],
            brainTag:'the sheepdog — MCP coordinator · task queue · verification gate' },
   matrix:{ label:'🕶 matrix', brain:'👁️', worker:'🕶️', roles:{scrum:'📟', client:'🥄'}, sub:'🐇', subtitle:'— the construct', bg:'rain', tab:'construct', honorific:'Mr. ', empty:'no Agents in the construct yet', warming:'loading the construct…',
-           center:'the construct', lasso:false, favicon:'🕶️',
+           center:'the construct', lasso:false, favicon:'🕶️', proposes:'the construct proposes:',
            sounds:['0101..','⋮⋮⋮','*dodge*','follow the 🐇'],
            caught:['There is no {cmd} on record','Busted! Never ran {cmd}…','The gate sees all 👁️','No proof, no pass — re-doing it'],
            brainTag:'the architect — MCP coordinator · task queue · verification gate' },
   hive:  { label:'🐝 hive', brain:null, worker:null, roles:{}, sub:null, subtitle:'— the hive', bg:'comb', tab:'hive', empty:'no bees in the hive yet', warming:'the bees are warming up…',
-           center:'the corral', lasso:false, favicon:'🐝',
+           center:'the corral', lasso:false, favicon:'🐝', proposes:'the hive proposes:',
            sounds:['buzz..','bzz..','bzzz~','buzz~'],
            caught:['Caught me — no {cmd} on record!','Busted! Never ran {cmd}…','Can’t fake the buzz 🐝','No proof, no pass — re-doing it'],
            brainTag:'the queen — MCP coordinator · task queue · verification gate' },
@@ -702,16 +716,52 @@ function renderModelComparison(){
 // its steps (status, assignee, supersession lineage), and its findings, live. The
 // synthesis view: you watch the directive fill in, bees claim steps, findings
 // appear, and the reflex/lead re-planning rewrite the plan in real time.
+// renderProposals: the learning loop's human gate, made visible — pending
+// proposals the herd's sweep clustered from findings/lessons, rendered above
+// the mission review bar so the operator triages them alongside the rest of
+// the standup. Approve fans the proposal's guidance/skill out into standing
+// memory + the fleet artifact store (POST /api/proposal/approve); reject
+// dismisses it, suppressing the signature until the evidence doubles (POST
+// /api/proposal/reject). Same .tqueen-card family styling as the topology
+// header and mission review bar.
+function renderProposals(){
+  const ps = (lastState && lastState.proposals) || [];
+  if(!ps.length) return '';
+  const cards = ps.map(p => {
+    const skillChip = p.skill_name ? `<div class="pr-skill">🛠 ${esc(p.skill_name)}</div>` : '';
+    return `<div class="proposal-card">`
+      + `<div class="pr-hdr"><span class="pr-sig">${esc(p.signature)}</span><span class="pr-count">${p.count}</span></div>`
+      + `<div class="pr-guidance">${esc(p.guidance || '(no guidance drafted yet)')}</div>`
+      + skillChip
+      + `<div class="pr-actions"><button class="acc" onclick="approveProposal(${p.id})">approve</button>`
+      + `<button class="chg" onclick="rejectProposal(${p.id})">reject</button></div>`
+      + `</div>`;
+  }).join('');
+  return `<div class="proposals-wrap"><div class="proposals-title">${esc(skin().proposes)}</div>${cards}</div>`;
+}
+function approveProposal(id){
+  fetch('/api/proposal/approve', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({id})})
+    .then(r => { if(!r.ok) return r.text().then(t => alert('approve failed: ' + t)); });
+}
+function rejectProposal(id){
+  const reason = prompt('Why reject this proposal? (optional)') || '';
+  fetch('/api/proposal/reject', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({id, reason})})
+    .then(r => { if(!r.ok) return r.text().then(t => alert('reject failed: ' + t)); });
+}
+
 function renderProgress(){
   const el = document.getElementById('progress');
   const missions = lastState.missions || [];
-  if(!missions.length){ el.innerHTML = '<div class="pmt">no missions yet — create one with <code>corral-admin mission create "…"</code></div>'; return; }
+  const proposalsHtml = renderProposals();
+  if(!missions.length){ el.innerHTML = proposalsHtml + '<div class="pmt">no missions yet — create one with <code>corral-admin mission create "…"</code></div>'; return; }
   const tasks = lastState.tasks || [], findings = lastState.findings || [];
   const tByM = {}, fByM = {}, replacedBy = {};
   tasks.forEach(t => { (tByM[t.mission_id] = tByM[t.mission_id] || []).push(t); if(t.supersedes) replacedBy[t.supersedes] = t; });
   findings.forEach(f => { (fByM[f.mission_id] = fByM[f.mission_id] || []).push(f); });
   const order = {claimed:0, ready:1, pending:2, done:3, superseded:4, cancelled:5};
-  el.innerHTML = missions.map(m => {
+  const missionsHtml = missions.map(m => {
     const ts = (tByM[m.id] || []).slice().sort((a,b)=>(order[a.status]??9)-(order[b.status]??9));
     const fs = (fByM[m.id] || []);
     const done = ts.filter(t=>t.status==='done').length;
@@ -736,6 +786,7 @@ function renderProgress(){
       `<span class="pfrow"><b style="color:${sevColor(f.severity)}">${esc(f.severity)} ${esc(f.type)}</b> <span style="color:var(--fg)">${esc(f.target||'')}</span> <span style="color:#6b6452">· ${esc(displayName(f.reporter))} · ${esc(f.status)}</span></span>`).join('') + '</div>' : '';
     return `<div class="pmission"><div class="phdr"><span class="ppill ${pillClass}">${esc(pillText)}</span><span class="pdir">${esc(m.directive)}</span>${sprintBadge}</div><div class="psum">${esc(summary)}</div>${reviewBar}<div class="psteps">${steps}</div>${frows}</div>`;
   }).join('');
+  el.innerHTML = proposalsHtml + missionsHtml;
 }
 
 // sevColor: critical/high red (the alert), medium amber, low muted.

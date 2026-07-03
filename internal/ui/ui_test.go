@@ -3,6 +3,7 @@
 package ui
 
 import (
+	"bytes"
 	"encoding/json"
 	"io/fs"
 	"net/http"
@@ -11,8 +12,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pdbethke/corralai/internal/artifacts"
 	"github.com/pdbethke/corralai/internal/brain"
 	"github.com/pdbethke/corralai/internal/coord"
+	"github.com/pdbethke/corralai/internal/learn"
+	"github.com/pdbethke/corralai/internal/memory"
 	"github.com/pdbethke/corralai/internal/mission"
 	"github.com/pdbethke/corralai/internal/queue"
 	"github.com/pdbethke/corralai/internal/telemetry"
@@ -370,5 +374,145 @@ func TestStateEndpointCarriesModelComparison(t *testing.T) {
 	}
 	if got := payload.ModelComparison.Rows[0][0]; got != "gpt-x" {
 		t.Fatalf("model = %v, want gpt-x", got)
+	}
+}
+
+// The proposals card reads its data from /api/state, so the snapshot must
+// carry pending learning-loop proposals with the fields the card renders
+// (signature, count badge, guidance, skill-name chip, status). Only pending
+// proposals are surfaced — approved/rejected proposals aren't awaiting an
+// operator decision anymore.
+func TestStateEndpointCarriesProposals(t *testing.T) {
+	dir := t.TempDir()
+	cs, err := coord.Open(filepath.Join(dir, "c.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+	ls, err := learn.Open(filepath.Join(dir, "l.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ls.Close()
+
+	p, _, err := ls.Upsert("missing-req|go.mod", "finding", "builder", []string{"a", "b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ls.SetDraft(p.ID, "run go mod init first", "init-go-workspace", "# init-go-workspace\nsteps"); err != nil {
+		t.Fatal(err)
+	}
+
+	h := Handler(Deps{Coord: cs, MemOwners: map[string]bool{}, Learn: ls})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/state", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d", rec.Code)
+	}
+	var payload struct {
+		Proposals []struct {
+			ID        int64  `json:"id"`
+			Signature string `json:"signature"`
+			Count     int    `json:"count"`
+			Guidance  string `json:"guidance"`
+			SkillName string `json:"skill_name"`
+			Status    string `json:"status"`
+		} `json:"proposals"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(payload.Proposals) != 1 {
+		t.Fatalf("want 1 pending proposal in /api/state, got %d: %+v", len(payload.Proposals), payload.Proposals)
+	}
+	pp := payload.Proposals[0]
+	if pp.ID != p.ID || pp.Signature != "missing-req|go.mod" || pp.Count != 2 ||
+		pp.Guidance != "run go mod init first" || pp.SkillName != "init-go-workspace" || pp.Status != "pending" {
+		t.Fatalf("proposal not rendered with expected fields: %+v", pp)
+	}
+}
+
+// POST /api/proposal/approve calls the Promote callback wired in Deps — here
+// wired to the real brain.ApproveProposal over temp stores, proving the UI
+// endpoint drives the same fan-out the MCP tool does. Only pending proposals
+// remain in /api/state afterward.
+func TestProposalApproveEndpointPromotesViaCallback(t *testing.T) {
+	dir := t.TempDir()
+	cs, err := coord.Open(filepath.Join(dir, "c.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+	ls, err := learn.Open(filepath.Join(dir, "l.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ls.Close()
+	mstore, err := memory.Open(filepath.Join(dir, "m.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mstore.Close()
+	astore, err := artifacts.Open(filepath.Join(dir, "a.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer astore.Close()
+
+	p, _, err := ls.Upsert("missing-req|go.mod", "finding", "builder", []string{"a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ls.SetDraft(p.ID, "run go mod init first", "init-go-workspace", "# init-go-workspace\nsteps"); err != nil {
+		t.Fatal(err)
+	}
+
+	promote := func(id int64) error {
+		_, err := brain.ApproveProposal(ls, mstore, astore, nil, id, "operator", false, false)
+		return err
+	}
+	reject := func(id int64, reason string) error { return ls.Reject(id, reason) }
+
+	h := Handler(Deps{Coord: cs, MemOwners: map[string]bool{}, Learn: ls, Promote: promote, Reject: reject})
+
+	// Non-POST is rejected.
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/proposal/approve", nil))
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("GET /api/proposal/approve status = %d, want 405", rec.Code)
+	}
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/proposal/reject", nil))
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("GET /api/proposal/reject status = %d, want 405", rec.Code)
+	}
+
+	body, _ := json.Marshal(map[string]any{"id": p.ID})
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/proposal/approve", bytes.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /api/proposal/approve status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	got, err := ls.ByID(p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != learn.StatusApproved {
+		t.Fatalf("proposal status after approve = %q, want approved", got.Status)
+	}
+
+	// The approved proposal no longer appears in /api/state's pending-only list.
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/state", nil))
+	var payload struct {
+		Proposals []struct {
+			ID int64 `json:"id"`
+		} `json:"proposals"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(payload.Proposals) != 0 {
+		t.Fatalf("approved proposal still listed as pending: %+v", payload.Proposals)
 	}
 }

@@ -112,9 +112,20 @@ func (s *Store) Findings(missionID int64, status string) ([]Finding, error) {
 	return s.queryFindings(q+` ORDER BY id DESC`, args...)
 }
 
-// AllFindings returns recent findings across missions for the live UI.
+// AllFindings returns recent findings across missions for the live UI,
+// capped at 200 rows (a feed, not a full export). The learn sweep must NOT
+// use this — it needs every row; see AllFindingsUnbounded.
 func (s *Store) AllFindings() ([]Finding, error) {
 	return s.queryFindings(findingsSelect + ` ORDER BY id DESC LIMIT 200`)
+}
+
+// AllFindingsUnbounded returns EVERY finding across all missions, no row cap —
+// the learn sweep's accessor. The sweep re-feeds all findings each cycle
+// (sub-threshold signature groups persist nothing between sweeps), so a capped
+// listing would silently drop old occurrences from the recurrence count. The
+// live UI uses the capped AllFindings instead.
+func (s *Store) AllFindingsUnbounded() ([]Finding, error) {
+	return s.queryFindings(findingsSelect + ` ORDER BY id DESC`)
 }
 
 // FindingsFiltered returns findings matching the given filters. missionID=0

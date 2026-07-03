@@ -811,7 +811,7 @@ func main() {
 		t := time.NewTicker(time.Duration(envInt("CORRALAI_LEARN_SWEEP_SECONDS", 60)) * time.Second)
 		defer t.Stop()
 		for range t.C {
-			fs, err := queueStore.AllFindings()
+			fs, err := queueStore.AllFindingsUnbounded()
 			if err != nil {
 				log.Printf("learn: findings: %v", err)
 				continue

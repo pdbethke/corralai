@@ -85,6 +85,42 @@ func TestAllFindingsSpansMissions(t *testing.T) {
 	}
 }
 
+// TestAllFindingsUnboundedReturnsEveryRow verifies the sweep-facing accessor
+// has NO row cap. The learn sweep re-feeds ALL findings every cycle —
+// sub-threshold signature groups persist nothing between sweeps — so a finding
+// pushed past a row limit would silently stop counting toward the recurrence
+// threshold. Contrast: AllFindings (the live-UI accessor) caps at 200 rows.
+func TestAllFindingsUnboundedReturnsEveryRow(t *testing.T) {
+	s := open(t)
+
+	const total = 205
+	for i := 0; i < total; i++ {
+		mission := int64(1 + i%2) // spread across two missions
+		if _, err := s.AddFinding(Finding{
+			MissionID: mission, Reporter: "Hawk", Type: "bug", Severity: "low", Target: "parser",
+		}); err != nil {
+			t.Fatalf("AddFinding #%d: %v", i, err)
+		}
+	}
+
+	fs, err := s.AllFindingsUnbounded()
+	if err != nil {
+		t.Fatalf("AllFindingsUnbounded: %v", err)
+	}
+	if len(fs) != total {
+		t.Fatalf("want all %d findings (no row cap), got %d", total, len(fs))
+	}
+
+	// Sanity-check the contrast: the UI accessor stays capped at 200.
+	capped, err := s.AllFindings()
+	if err != nil {
+		t.Fatalf("AllFindings: %v", err)
+	}
+	if len(capped) != 200 {
+		t.Fatalf("AllFindings cap changed: want 200 rows, got %d", len(capped))
+	}
+}
+
 func TestAddFindingValidates(t *testing.T) {
 	s := open(t)
 	good := Finding{MissionID: 1, Reporter: "Hawk", Type: "vuln", Severity: "high",

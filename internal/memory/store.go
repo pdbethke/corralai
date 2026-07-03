@@ -628,6 +628,8 @@ func (s *Store) LessonsForLearning(limit int) ([]LessonForLearning, error) {
 	if limit <= 0 {
 		limit = 200
 	}
+	// TODO: ORDER BY name is an alphabetical proxy for recency — the mem table
+	// has no timestamp column. Real fix: add a timestamp column and order by it.
 	rows, err := s.db.Query(
 		"SELECT name, body, author FROM mem WHERE type = 'lesson' ORDER BY name LIMIT ?", limit)
 	if err != nil {

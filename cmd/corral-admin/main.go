@@ -20,6 +20,7 @@
 //	corral-admin mint-observer [--ttl 24h] [--principal x]
 //	corral-admin member  list | add <email> | super <email> [--off] | create-super [email] | remove <email>
 //	corral-admin mission list | status <id> | create <directive...>
+//	corral-admin proposals list | show <id> | approve <id> | reject <id> --reason "..."
 //
 // Global flags (all verbs): --brain/CORRAL_BRAIN, --token/CORRAL_TOKEN, --json.
 package main
@@ -77,6 +78,8 @@ func main() {
 		cmdReference(rest)
 	case "analyze":
 		cmdAnalyze(rest)
+	case "proposals":
+		cmdProposals(rest)
 	case "version", "--version", "-v":
 		fmt.Println("corral-admin", version)
 	case "-h", "--help", "help":
@@ -702,6 +705,140 @@ func cmdAnalyze(args []string) {
 	})
 }
 
+// ---- proposals (the learning loop's human gate) ----
+
+// proposal mirrors learn.Proposal's JSON shape (no json tags on the source
+// struct, so field names are the Go names) — only the fields this verb renders.
+type proposal struct {
+	ID           int64  `json:"ID"`
+	Signature    string `json:"Signature"`
+	Kind         string `json:"Kind"`
+	Roles        string `json:"Roles"`
+	Guidance     string `json:"Guidance"`
+	SkillName    string `json:"SkillName"`
+	SkillBody    string `json:"SkillBody"`
+	Status       string `json:"Status"`
+	RejectReason string `json:"RejectReason"`
+	Count        int    `json:"Count"`
+	Supersedes   int64  `json:"Supersedes"`
+}
+
+func cmdProposals(args []string) {
+	if len(args) == 0 {
+		fatal(`usage: corral-admin proposals <list|show|approve|reject> ...`)
+	}
+	sub, rest := args[0], args[1:]
+	switch sub {
+	case "list":
+		fs := flag.NewFlagSet("proposals list", flag.ExitOnError)
+		c := bind(fs)
+		status := fs.String("status", "", "filter by status: pending|approved|rejected")
+		parseFlags(fs, rest)
+		a := map[string]any{}
+		if *status != "" {
+			a["status"] = *status
+		}
+		c.do("list_proposals", a, func(out json.RawMessage) {
+			var r struct {
+				Proposals []proposal `json:"proposals"`
+			}
+			_ = json.Unmarshal(out, &r)
+			cols := []string{"id", "signature", "count", "status", "skill"}
+			rows := make([][]any, len(r.Proposals))
+			for i, p := range r.Proposals {
+				rows[i] = []any{p.ID, p.Signature, p.Count, p.Status, dashEm(p.SkillName)}
+			}
+			printTable(cols, rows)
+		})
+	case "show":
+		fs := flag.NewFlagSet("proposals show", flag.ExitOnError)
+		c := bind(fs)
+		parseFlags(fs, rest)
+		if fs.NArg() < 1 {
+			fatal("usage: corral-admin proposals show <id>")
+		}
+		id, err := strconv.ParseInt(fs.Arg(0), 10, 64)
+		if err != nil {
+			fatal("proposal id must be a number: %v", err)
+		}
+		c.do("list_proposals", nil, func(out json.RawMessage) {
+			var r struct {
+				Proposals []proposal `json:"proposals"`
+			}
+			_ = json.Unmarshal(out, &r)
+			for _, p := range r.Proposals {
+				if p.ID != id {
+					continue
+				}
+				fmt.Printf("#%d  %s  (%s)\n", p.ID, p.Signature, p.Kind)
+				fmt.Printf("roles:    %s\n", dashEm(p.Roles))
+				fmt.Printf("count:    %d\n", p.Count)
+				fmt.Printf("status:   %s\n", dashEm(p.Status))
+				if p.Status == "rejected" {
+					fmt.Printf("reason:   %s\n", dashEm(p.RejectReason))
+				}
+				if p.Supersedes != 0 {
+					fmt.Printf("supersedes: #%d\n", p.Supersedes)
+				}
+				fmt.Println("\nguidance:")
+				fmt.Println(dashEm(p.Guidance))
+				if p.SkillName != "" {
+					fmt.Printf("\nskill: %s\n", p.SkillName)
+					fmt.Println(p.SkillBody)
+				}
+				return
+			}
+			fatal("no proposal #%d", id)
+		})
+	case "approve":
+		fs := flag.NewFlagSet("proposals approve", flag.ExitOnError)
+		c := bind(fs)
+		guidanceOnly := fs.Bool("guidance-only", false, "promote only the guidance, skip the skill")
+		skillOnly := fs.Bool("skill-only", false, "promote only the skill, skip the guidance")
+		parseFlags(fs, rest)
+		if fs.NArg() < 1 {
+			fatal("usage: corral-admin proposals approve <id> [--guidance-only|--skill-only]")
+		}
+		id, err := strconv.ParseInt(fs.Arg(0), 10, 64)
+		if err != nil {
+			fatal("proposal id must be a number: %v", err)
+		}
+		if *guidanceOnly && *skillOnly {
+			fatal("specify at most one of --guidance-only, --skill-only")
+		}
+		c.do("approve_proposal", map[string]any{"id": id, "guidance_only": *guidanceOnly, "skill_only": *skillOnly}, func(out json.RawMessage) {
+			var r struct {
+				PromotedGuidanceSlug string `json:"promoted_guidance_slug"`
+				SkillPath            string `json:"skill_path"`
+				SkillRev             int64  `json:"skill_rev"`
+			}
+			_ = json.Unmarshal(out, &r)
+			fmt.Printf("✓ approved proposal #%d\n", id)
+			if r.PromotedGuidanceSlug != "" {
+				fmt.Printf("  guidance → %s\n", r.PromotedGuidanceSlug)
+			}
+			if r.SkillPath != "" {
+				fmt.Printf("  skill    → %s (rev %d)\n", r.SkillPath, r.SkillRev)
+			}
+		})
+	case "reject":
+		fs := flag.NewFlagSet("proposals reject", flag.ExitOnError)
+		c := bind(fs)
+		reason := fs.String("reason", "", "why this proposal is being dismissed")
+		parseFlags(fs, rest)
+		if fs.NArg() < 1 {
+			fatal(`usage: corral-admin proposals reject <id> --reason "..."`)
+		}
+		id, err := strconv.ParseInt(fs.Arg(0), 10, 64)
+		if err != nil {
+			fatal("proposal id must be a number: %v", err)
+		}
+		c.do("reject_proposal", map[string]any{"id": id, "reason": *reason}, okMsg(fmt.Sprintf("rejected proposal #%d", id)))
+	default:
+		fatal("unknown proposals subcommand %q (list|show|approve|reject)", sub)
+	}
+}
+
 // printTable renders columns + rows as an aligned text table.
 func printTable(cols []string, rows [][]any) {
 	if len(cols) == 0 {
@@ -751,6 +888,15 @@ func okMsg(msg string) func(json.RawMessage) {
 func dash(s string) string {
 	if s == "" {
 		return "—"
+	}
+	return s
+}
+
+// dashEm renders an empty string as "-" (SQL-NULL-style dash for the
+// proposals verbs — never Go's "<nil>").
+func dashEm(s string) string {
+	if s == "" {
+		return "-"
 	}
 	return s
 }
@@ -826,6 +972,10 @@ func usage() {
   corral-admin reference add <url> | --file <path> | --text "..." --source <n> | list | search "<q>"
   corral-admin reference look <url> --note "..."   (a design "look" for the designer)
   corral-admin analyze [missions|agents|kinds|findings|replans|sprints] | --sql "SELECT ..."
+  corral-admin proposals list [--status pending|approved|rejected]
+  corral-admin proposals show <id>
+  corral-admin proposals approve <id> [--guidance-only|--skill-only]
+  corral-admin proposals reject <id> --reason "..."
 
 Global flags: --brain/CORRAL_BRAIN  --token/CORRAL_TOKEN  --json
 `)

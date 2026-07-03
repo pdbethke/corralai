@@ -5,6 +5,7 @@ package brain
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -34,6 +35,16 @@ func registerLearn(s *mcp.Server, ls *learn.Store, mem *memory.Store, arts *arti
 			return nil, listProposalsOut{Proposals: ps}, nil
 		})
 
+	// Retry-safe by CONVERGENCE, not rollback: the fan-out spans three stores
+	// (memory files, artifacts SQLite, proposals SQLite) that cannot commit
+	// atomically. Instead, every step is idempotent — memory.Add is an upsert
+	// by slug (same name rewrites the same file), and artifacts.Put keeps the
+	// current rev when the content is byte-identical — and ls.Approve runs
+	// LAST. So if a middle step fails, the proposal stays pending (the tool
+	// errors loudly), and the operator simply re-approves: already-landed
+	// steps no-op, missing steps land, no duplicate artifact revisions are
+	// minted. The status guard below closes the gate once approved, so a
+	// completed approve can never be re-run.
 	mcp.AddTool(s, &mcp.Tool{Name: "approve_proposal",
 		Description: "Promote a proposal the herd surfaced: its guidance joins vetted memory (shapes future instructions) and its skill syncs fleet-wide. Superuser only — the human gate of the learning loop."},
 		func(_ context.Context, req *mcp.CallToolRequest, in approveProposalIn) (*mcp.CallToolResult, approveProposalOut, error) {
@@ -42,10 +53,10 @@ func registerLearn(s *mcp.Server, ls *learn.Store, mem *memory.Store, arts *arti
 			}
 			p, err := ls.ByID(in.ID)
 			if err != nil {
-				return nil, approveProposalOut{}, err
+				return nil, approveProposalOut{}, fmt.Errorf("no proposal %d: %w", in.ID, err)
 			}
-			if p == nil {
-				return nil, approveProposalOut{}, fmt.Errorf("no proposal %d", in.ID)
+			if p.Status != learn.StatusPending {
+				return nil, approveProposalOut{}, fmt.Errorf("proposal #%d is already %s — only a pending proposal can be approved", p.ID, p.Status)
 			}
 
 			actorName := actorOf(req)
@@ -58,6 +69,7 @@ func registerLearn(s *mcp.Server, ls *learn.Store, mem *memory.Store, arts *arti
 					name := "guidance-" + rolesSlug + "-" + sigSlug
 					slug, _, _, err := mem.Add(name, p.Guidance, "promoted guidance ("+p.Signature+")", "guidance", "default", "", true, actorName)
 					if err != nil {
+						log.Printf("learn: approve #%d: guidance promotion (%s) FAILED, proposal stays pending — re-approve to retry: %v", p.ID, name, err)
 						return nil, approveProposalOut{}, err
 					}
 					out.PromotedGuidanceSlug = slug
@@ -68,9 +80,13 @@ func registerLearn(s *mcp.Server, ls *learn.Store, mem *memory.Store, arts *arti
 				if arts != nil {
 					path := "skills/" + p.SkillName + "/SKILL.md"
 					// updatedTS<=0 falls back to the artifact store's own clock — there
-					// is no client mtime here, only the moment of promotion.
+					// is no client mtime here, only the moment of promotion. Put is a
+					// no-op (same rev) when the stored content already equals SkillBody,
+					// which is what makes a re-approve after a partial failure converge
+					// without minting a duplicate revision.
 					rev, _, err := arts.Put(path, []byte(p.SkillBody), actorName, 0)
 					if err != nil {
+						log.Printf("learn: approve #%d: skill artifact write (%s) FAILED after guidance landed, proposal stays pending — re-approve to retry (guidance re-add converges): %v", p.ID, path, err)
 						return nil, approveProposalOut{}, err
 					}
 					out.SkillPath = path
@@ -78,12 +94,14 @@ func registerLearn(s *mcp.Server, ls *learn.Store, mem *memory.Store, arts *arti
 				}
 				if mem != nil {
 					if _, _, _, err := mem.Add(p.SkillName, p.SkillBody, "skill: "+firstLine(p.SkillBody), "skill", "default", "", true, actorName); err != nil {
+						log.Printf("learn: approve #%d: skill memory mirror (%s) FAILED mid-fan-out, proposal stays pending — re-approve to retry: %v", p.ID, p.SkillName, err)
 						return nil, approveProposalOut{}, err
 					}
 				}
 			}
 
 			if _, err := ls.Approve(in.ID); err != nil {
+				log.Printf("learn: approve #%d: fan-out landed but the status flip FAILED, proposal stays pending — re-approve to retry (all steps converge): %v", p.ID, err)
 				return nil, approveProposalOut{}, err
 			}
 			rec(opts.Telemetry, 0, "proposal_approved", actorName, p.Signature, map[string]any{
@@ -98,6 +116,13 @@ func registerLearn(s *mcp.Server, ls *learn.Store, mem *memory.Store, arts *arti
 		func(_ context.Context, req *mcp.CallToolRequest, in rejectProposalIn) (*mcp.CallToolResult, okOut, error) {
 			if !opts.isAdmin(req) {
 				return nil, okOut{}, fmt.Errorf("forbidden: superuser only")
+			}
+			p, err := ls.ByID(in.ID)
+			if err != nil {
+				return nil, okOut{}, fmt.Errorf("no proposal %d: %w", in.ID, err)
+			}
+			if p.Status != learn.StatusPending {
+				return nil, okOut{}, fmt.Errorf("proposal #%d is already %s — only a pending proposal can be rejected", p.ID, p.Status)
 			}
 			if err := ls.Reject(in.ID, in.Reason); err != nil {
 				return nil, okOut{}, err

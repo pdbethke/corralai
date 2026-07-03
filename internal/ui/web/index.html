@@ -488,7 +488,7 @@ const chatterAt = {};   // agent -> last fetch ts
 function requestChatter(n){
   const nowS = Date.now()/1000;
   if(chatterAt[n.label] && nowS - chatterAt[n.label] < 45){
-    const lines = ROLE_LINES[n.role];
+    const lines = roleQuips(n.role);
     if(lines) buzzes.push({x:n.x+6, y:n.y-15, t0:nowS, txt:lines[(Math.random()*lines.length)|0], say:true, role:n.role, life:2.5});
     return;
   }
@@ -498,7 +498,7 @@ function requestChatter(n){
     .then(j => {
       if(j && j.line) buzzes.push({x:n.x+6, y:n.y-15, t0:Date.now()/1000, txt:j.line, say:true, role:n.role, life:3.5});
       else {
-        const lines = ROLE_LINES[n.role];
+        const lines = roleQuips(n.role);
         if(lines) buzzes.push({x:n.x+6, y:n.y-15, t0:Date.now()/1000, txt:lines[(Math.random()*lines.length)|0], say:true, role:n.role, life:2.5});
       }
     }).catch(()=>{});
@@ -514,20 +514,74 @@ function requestChatter(n){
   }
   setSkin(skinName);
 })();
-// role-appropriate, bee-themed chatter — bees occasionally pipe up in character
+// role-appropriate chatter, translated into EACH skin's own universe — not
+// suppressed, translated (the corral's design intent: a builder still riffs
+// on its name/role, just in-persona). 'hive' keeps the original bee puns
+// verbatim; ranch/flock/matrix carry the same beats reworded so no skin ever
+// leaks another skin's vocabulary. matrix's builder line is a fixed, exact
+// beat ("Can we fix it, Mr. Anderson?") — a deliberate, non-random riff on
+// Bob-the-Builder translated into the construct's honorific.
 const ROLE_LINES = {
-  researcher:['bee-lining to the docs','scouting for nectar','found a sweet source','to the hive-mind!'],
-  designer:['honeycomb architecture','keep the comb clean','un-bee-lievably tidy',"what's the cell shape?"],
-  builder:['Can we fix it?','bee-uilding…','another cell capped','one more sprint'],
-  tester:['sweet, all green','no bugs in MY comb','this test is un-bee-coming','swarm tests pass'],
-  pentester:['Found a real bug here guys','swat that vuln','that bug stings','bee careful with input'],
-  perf:["the bee's knees",'slow as cold honey','56 ns/op — buzz-worthy','fast as wingbeats'],
-  integrator:['comb-ining it all','merging the swarm','the hive connects','rebase incoming'],
-  writer:['documenting the hive','needs a README, honey','spelling it bee by bee','add an example'],
-  reviewer:['looks good to bee','needs changes, drone','nit: bee consistent','did you test this?'],
-  lead:['to the hive!','re-routing the swarm','ship it, bees',"who's foraging this?"],
-  client:['make it sweeter','honey-good!','more bee-utiful please','not quite ripe'],
+  ranch: {
+    researcher:['trailing fresh sign','scouting the range','tracking down leads','riding the back forty'],
+    designer:['laying out the corral','keeping the fence lines clean',"this brand's solid","what's the layout?"],
+    builder:['Can we build it? Yes we can!','breaking this bronco in','one more rail set','nailing down the gate'],
+    tester:['clean as a whistle','no burrs in this saddle','all green on the range','herd tests pass'],
+    pentester:['found a real varmint here',"snuffing out that snake","that bite'll leave a mark",'watch for rattlers'],
+    perf:['fast as a quarter horse','slow as molasses','56 ns/op — quick on the draw','riding hard'],
+    integrator:['branding it all together','merging the herd','the corral connects','rebase incoming'],
+    writer:['writing up the trail log','needs a README, partner','spelling it out plain','add an example'],
+    reviewer:['looks good to ride','needs changes, partner','nit: keep it tidy','did you test this?'],
+    lead:['to the corral!','re-routing the herd','ship it, cowpokes',"who's wrangling this?"],
+    client:['make it sweeter','mighty fine work!','a bit more polish please','not quite ready to brand'],
+  },
+  flock: {
+    researcher:['following the scent','grazing for answers','found good pasture','to the flock-mind!'],
+    designer:['keeping the fold tidy','wool-even architecture','un-baa-lievably neat',"what's the fold shape?"],
+    builder:['Can we fix it?','ewe-ilding…','another fence post set','one more sprint'],
+    tester:['sweet, all green','no burrs in MY wool','this test is un-baa-coming','flock tests pass'],
+    pentester:['found a real wolf here','fleece that vuln','that bite stings','baa careful with input'],
+    perf:["the sheep's knees",'slow as wet wool','56 ns/op — shear speed','fast as a spring lamb'],
+    integrator:['fold-ing it all together','merging the flock','the fold connects','rebase incoming'],
+    writer:['documenting the fold','needs a README, ewe','spelling it baa by baa','add an example'],
+    reviewer:['looks good to ewe','needs changes, lamb','nit: baa consistent','did you test this?'],
+    lead:['to the fold!','re-routing the flock','ship it, sheep',"who's herding this?"],
+    client:['make it sweeter','wool-good!','more baa-utiful please','not quite ripe'],
+  },
+  matrix: {
+    researcher:['jacking into the archives','tracing the signal','found a clean thread','back to the source'],
+    designer:['architecting the construct','keeping the code clean','this pattern holds',"what's the structure?"],
+    builder:['Can we fix it, Mr. Anderson?','compiling the construct…','another module locked','one more cycle'],
+    tester:['clean run, no glitches','no bugs in this simulation','all green in the matrix','construct tests pass'],
+    pentester:['found a real exploit here','patching that vulnerability','that exploit stings','watch the code'],
+    perf:['faster than a bullet dodge','slow as lagged frames','56 ns/op — bullet time','fast as the construct'],
+    integrator:['compiling it all together','merging the construct','the signal connects','rebase incoming'],
+    writer:['documenting the construct','needs a README, operator','spelling it out in code','add an example'],
+    reviewer:['looks clean, approved','needs changes, operator','nit: keep it consistent','did you test this?'],
+    lead:['to the construct!','re-routing the signal','ship it, operators',"who's tracing this?"],
+    client:['make it sharper','impressive work!','a bit more refinement please','not quite there'],
+  },
+  hive: {
+    researcher:['bee-lining to the docs','scouting for nectar','found a sweet source','to the hive-mind!'],
+    designer:['honeycomb architecture','keep the comb clean','un-bee-lievably tidy',"what's the cell shape?"],
+    builder:['Can we fix it?','bee-uilding…','another cell capped','one more sprint'],
+    tester:['sweet, all green','no bugs in MY comb','this test is un-bee-coming','swarm tests pass'],
+    pentester:['Found a real bug here guys','swat that vuln','that bug stings','bee careful with input'],
+    perf:["the bee's knees",'slow as cold honey','56 ns/op — buzz-worthy','fast as wingbeats'],
+    integrator:['comb-ining it all','merging the swarm','the hive connects','rebase incoming'],
+    writer:['documenting the hive','needs a README, honey','spelling it bee by bee','add an example'],
+    reviewer:['looks good to bee','needs changes, drone','nit: bee consistent','did you test this?'],
+    lead:['to the hive!','re-routing the swarm','ship it, bees',"who's foraging this?"],
+    client:['make it sweeter','honey-good!','more bee-utiful please','not quite ripe'],
+  },
 };
+// roleQuips: the active skin's canned line set for a role, falling back to the
+// ranch set (never hive — hive's bee puns must never leak into another skin)
+// if the active skin is missing that role.
+function roleQuips(role){
+  const bySkin = ROLE_LINES[skinName] || ROLE_LINES.ranch;
+  return bySkin[role] || ROLE_LINES.ranch[role];
+}
 let bobSeeded = false; const bobDone = new Set();  // Bob says "Yes we can…" when he finishes a task
 // when the verify gate refuses a lazy completion it raises a verify-gate finding;
 // the caught bee owns up out loud (honest — driven by the real finding, not random).
@@ -1235,7 +1289,7 @@ async function askAgent(){
   if(!q) return;
   askBox = {agent:name, q, answer:'', loading:true}; askDraft=''; renderInspector();
   try{
-    const r = await fetch('/api/ask', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({agent:name, question:q})});
+    const r = await fetch('/api/ask?skin='+encodeURIComponent(skinName), {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({agent:name, question:q})});
     if(r.ok){ const d = await r.json(); askBox = {agent:name, q, answer:d.answer||'(no answer)', loading:false}; }
     else { askBox = {agent:name, q, answer:'(couldn’t reach the narrator — '+r.status+')', loading:false}; }
   }catch(_){ askBox = {agent:name, q, answer:'(error reaching the narrator)', loading:false}; }
@@ -1517,7 +1571,7 @@ async function askAgentWindow(name) {
   if (btn) btn.disabled = true;
 
   try {
-    const r = await fetch('/api/ask', {
+    const r = await fetch('/api/ask?skin='+encodeURIComponent(skinName), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ agent: name, question: q })

@@ -30,6 +30,16 @@ var chatterPersonas = map[string]map[string]string{
 	"hive":   {"": "a busy worker bee", "scrum": "the drill-sergeant bee", "lead": "the lead bee", "client": "the queen's client"},
 }
 
+// askGroupPhrase names the collective each skin's persona belongs to — used by
+// /api/ask to frame "in the <group>" the same way chatterPersonas frames "the
+// <persona>". Keyed to the same skin names as chatterPersonas.
+var askGroupPhrase = map[string]string{
+	"ranch":  "corral",
+	"flock":  "fold",
+	"matrix": "construct",
+	"hive":   "corralai swarm",
+}
+
 type chatterEntry struct {
 	line string
 	ts   time.Time
@@ -85,7 +95,8 @@ func (s *Server) chatter(w http.ResponseWriter, r *http.Request) {
 	}
 
 	system := fmt.Sprintf(`You are %q — %s — the %s in a corral of coding agents.
-Say ONE short line (8 words or fewer), in character, about what you are doing RIGHT NOW, grounded strictly in your recorded trail below. First person. No quotes, no emoji, no preamble.`, agent, persona, role)
+Say ONE short line (8 words or fewer), in character, about what you are doing RIGHT NOW, grounded strictly in your recorded trail below. First person. No quotes, no emoji, no preamble.
+VOICE: stay inside YOUR persona's universe even if the trail below uses other metaphors (bee/hive/herd/flock/construct/etc.) — translate, don't import them. If you riff on your name or role, do it in your persona's universe.`, agent, persona, role)
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
 	line, err := s.narrator.Ask(ctx, system, "YOUR RECORDED TRAIL:\n"+trail)

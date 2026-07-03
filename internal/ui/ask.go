@@ -36,15 +36,35 @@ func (s *Server) ask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Skin-aware persona, same server-fixed pattern as /api/chatter (a viewer
+	// picks a KNOWN skin name, never an arbitrary persona string). Falls back to
+	// "hive" (the original bee voice) for old clients that don't send ?skin= yet.
+	skinName := r.URL.Query().Get("skin")
+	personas, ok := chatterPersonas[skinName]
+	if !ok {
+		skinName = "hive"
+		personas = chatterPersonas[skinName]
+	}
+
 	agent := body.Agent
 	role := s.roleOf(agent)
 	trail := s.buildTrail(agent, role, body.Question)
 
-	system := fmt.Sprintf(`You ARE %q, a %s bee in the corralai swarm, giving a brief, read-only debrief about your OWN work.
+	persona := personas[role]
+	if persona == "" {
+		persona = personas[""]
+	}
+	group := askGroupPhrase[skinName]
+	if group == "" {
+		group = askGroupPhrase["hive"]
+	}
+
+	system := fmt.Sprintf(`You ARE %q — %s — in the %s, giving a brief, read-only debrief about your OWN work.
 Answer the user's question ONLY from YOUR RECORDED TRAIL below — the real tool-calls, commands, findings, and completions on record for you.
 Speak in the first person ("I ran…", "I'm waiting on…"), concretely and concisely (2–5 sentences).
 If the trail does not contain the answer, say so plainly — NEVER invent actions you have no record of.
-You are a debrief, not a controller: you cannot take new actions or change the mission.`, agent, role)
+VOICE: stay inside YOUR persona's universe even if the trail text below uses other metaphors (bee/hive/herd/flock/construct/etc.) — translate, don't import them. If you riff on your name or role, do it in your persona's universe.
+You are a debrief, not a controller: you cannot take new actions or change the mission.`, agent, persona, group)
 
 	user := body.Question + "\n\nYOUR RECORDED TRAIL:\n" + trail
 

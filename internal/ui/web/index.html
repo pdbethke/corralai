@@ -445,6 +445,7 @@ function setSkin(n){
   const tab = document.getElementById('tab-swarm'); if(tab) tab.textContent = skin().tab;
   const emp = document.getElementById('empty'); if(emp) emp.textContent = skin().empty;
   try{ renderBg(); }catch(_){}
+  try{ renderExec(); }catch(_){ /* repaint the console's idle line in the new skin's voice */ }
   try{ renderTopology(); }catch(_){ /* first paint may precede state init */ }
 }
 function critterGlyph(role, sub){

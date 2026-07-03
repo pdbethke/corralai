@@ -50,9 +50,15 @@ type observerTokenOut struct {
 }
 
 // registerAdmin adds the Django-style identity/role tools. whoami is open to any
-// caller; the rest manage the principal table and are superuser-gated — EXCEPT the
-// very first create_superuser, which is open when no superuser exists yet (exactly
-// like `manage.py createsuperuser` on a fresh database).
+// caller; the rest manage the principal table. create_superuser, add_member,
+// set_superuser, and remove_principal gate on isHumanAdmin (not just isAdmin):
+// principal writes are a two-hop bypass of the human gate otherwise — a
+// delegated subagent under a superuser could set_superuser a standing
+// worker's own principal, whose subsequently-clean token would then pass
+// isHumanAdmin everywhere else. EXCEPT the very first create_superuser, which
+// is open when no superuser exists yet regardless of caller (exactly like
+// `manage.py createsuperuser` on a fresh database) — the bootstrap branch
+// never consults isHumanAdmin, so dev's first-run flow is unaffected.
 func registerAdmin(s *mcp.Server, opts Options) {
 	mcp.AddTool(s, &mcp.Tool{Name: "whoami",
 		Description: "Report who the brain sees you as: your verified principal (email), whether you're a superuser, and whether you're allowed to use this brain."},
@@ -80,7 +86,7 @@ func registerAdmin(s *mcp.Server, opts Options) {
 				return nil, principalOut{}, fmt.Errorf("no email: provide one or authenticate so I can promote you")
 			}
 			bootstrap := opts.Principals.SuperuserCount() == 0
-			if !bootstrap && !opts.isAdmin(req) {
+			if !bootstrap && !opts.isHumanAdmin(req) {
 				return nil, principalOut{Email: email}, fmt.Errorf("forbidden: only a superuser can create another (a superuser already exists)")
 			}
 			if err := opts.Principals.CreateSuperuser(email, caller); err != nil {
@@ -115,7 +121,7 @@ func registerAdmin(s *mcp.Server, opts Options) {
 			if opts.Principals == nil {
 				return nil, principalOut{}, fmt.Errorf("role store unavailable (dev mode)")
 			}
-			if !opts.isAdmin(req) {
+			if !opts.isHumanAdmin(req) {
 				return nil, principalOut{Email: in.Email}, fmt.Errorf("forbidden: superuser only")
 			}
 			caller, _ := actor(req)
@@ -131,7 +137,7 @@ func registerAdmin(s *mcp.Server, opts Options) {
 			if opts.Principals == nil {
 				return nil, principalOut{}, fmt.Errorf("role store unavailable (dev mode)")
 			}
-			if !opts.isAdmin(req) {
+			if !opts.isHumanAdmin(req) {
 				return nil, principalOut{Email: in.Email}, fmt.Errorf("forbidden: superuser only")
 			}
 			ok, err := opts.Principals.SetSuperuser(in.Email, in.IsSuperuser)
@@ -178,7 +184,7 @@ func registerAdmin(s *mcp.Server, opts Options) {
 			if opts.Principals == nil {
 				return nil, principalOut{}, fmt.Errorf("role store unavailable (dev mode)")
 			}
-			if !opts.isAdmin(req) {
+			if !opts.isHumanAdmin(req) {
 				return nil, principalOut{Email: in.Email}, fmt.Errorf("forbidden: superuser only")
 			}
 			ok, err := opts.Principals.Remove(in.Email)

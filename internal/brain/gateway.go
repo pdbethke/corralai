@@ -137,7 +137,10 @@ func registerGateway(s *mcp.Server, opts Options) {
 	mcp.AddTool(s, &mcp.Tool{Name: "promote_endpoint",
 		Description: "ADMIN: promote a personal endpoint to public (team-wide, or scoped to allowed_principals), or set it back to personal. Optionally swap in a team credential — otherwise the owner's secret is shared to permitted users."},
 		func(_ context.Context, req *mcp.CallToolRequest, in promoteIn) (*mcp.CallToolResult, okMsg, error) {
-			if !opts.isAdmin(req) {
+			// isHumanAdmin, not isAdmin: promoting an endpoint to fleet-public is
+			// the same class of behavior-shaping write as publishing a skill or
+			// vetting a proposal — a delegated subagent must not do it either.
+			if !opts.isHumanAdmin(req) {
 				return nil, okMsg{}, errAdminOnly
 			}
 			ok, err := gw.Promote(in.Name, in.Public, in.AllowedPrincipals, gateway.Auth{Header: in.AuthHeader, Token: in.AuthToken})

@@ -67,8 +67,11 @@ type syncDeleteOut struct {
 
 // registerArtifacts adds the fleet skill/hook sync tools. Pull is open to any
 // allowed member (the HTTP authz gate already ensures that); push (put/delete)
-// edits the canonical fleet set that fans out to everyone, so it is SUPERUSER-only
-// — mirroring memory's promote-is-admin model.
+// edits the canonical fleet set that fans out to everyone — publishing or
+// tombstoning an EXECUTABLE skill is strictly more behavior-shaping than
+// approving a proposal, so it gates on isHumanAdmin (not just isAdmin): a
+// delegation token rolled up to a superuser must not publish into the fleet's
+// canonical set any more than it may vet its own proposals.
 func registerArtifacts(s *mcp.Server, store *artifacts.Store, opts Options) {
 	mcp.AddTool(s, &mcp.Tool{Name: "sync_head",
 		Description: "Current head revision + live artifact count of the fleet's shared skills/hooks. Cheap poll to see if a `corral sync` would pull anything."},
@@ -93,7 +96,7 @@ func registerArtifacts(s *mcp.Server, store *artifacts.Store, opts Options) {
 	mcp.AddTool(s, &mcp.Tool{Name: "sync_put",
 		Description: "Publish/replace a shared skill or hook into the fleet's canonical set (it fans out to every machine on their next sync). Superuser only."},
 		func(_ context.Context, req *mcp.CallToolRequest, in syncPutIn) (*mcp.CallToolResult, syncPutOut, error) {
-			if !opts.isAdmin(req) {
+			if !opts.isHumanAdmin(req) {
 				return nil, syncPutOut{Path: in.Path}, fmt.Errorf("forbidden: superuser only (publishing changes the whole fleet)")
 			}
 			content, err := base64.StdEncoding.DecodeString(in.ContentB64)
@@ -107,7 +110,7 @@ func registerArtifacts(s *mcp.Server, store *artifacts.Store, opts Options) {
 	mcp.AddTool(s, &mcp.Tool{Name: "sync_delete",
 		Description: "Remove a shared skill or hook from the fleet's canonical set (tombstoned so the deletion propagates). Superuser only."},
 		func(_ context.Context, req *mcp.CallToolRequest, in syncDeleteIn) (*mcp.CallToolResult, syncDeleteOut, error) {
-			if !opts.isAdmin(req) {
+			if !opts.isHumanAdmin(req) {
 				return nil, syncDeleteOut{Path: in.Path}, fmt.Errorf("forbidden: superuser only")
 			}
 			rev, ok, err := store.Delete(in.Path, identity(req, "operator"))

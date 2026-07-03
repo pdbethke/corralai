@@ -128,6 +128,24 @@ func (s *Store) CountKind(missionID int64, kind string) (int, error) {
 	return n, err
 }
 
+// MissionCompletedAt returns the ts of the latest mission_completed event for
+// missionID, if any — mission_history/replay use this to prefer event-based
+// duration once mission_completed exists, falling back to task timestamps
+// for missions recorded before this telemetry kind shipped.
+func (s *Store) MissionCompletedAt(missionID int64) (float64, bool, error) {
+	var ts float64
+	err := s.db.QueryRow(
+		`SELECT ts FROM events WHERE mission_id=? AND kind='mission_completed' ORDER BY ts DESC LIMIT 1`,
+		missionID).Scan(&ts)
+	if err == sql.ErrNoRows {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return ts, true, nil
+}
+
 // reports are the fixed, named analytic queries.
 var reports = map[string]string{
 	"missions": `SELECT mission_id, count(*) AS events, min(ts) AS started, max(ts) AS ended,

@@ -54,6 +54,30 @@ func (s *Store) ExecutionsByAgent(agent string, limit int) ([]Execution, error) 
 	return out, rows.Err()
 }
 
+// ExecutionsByMission returns every recorded execution for a mission, newest
+// first — the durable twin of what the live UI's ExecRing shows, and the
+// source the mission-history replay draws execution bursts from.
+func (s *Store) ExecutionsByMission(missionID int64) ([]Execution, error) {
+	rows, err := s.db.Query(
+		`SELECT mission_id,agent,role,command,exit_code,ok,ts FROM executions
+		 WHERE mission_id=? ORDER BY ts DESC`, missionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Execution
+	for rows.Next() {
+		var e Execution
+		var ok int
+		if err := rows.Scan(&e.MissionID, &e.Agent, &e.Role, &e.Command, &e.ExitCode, &ok, &e.TS); err != nil {
+			return nil, err
+		}
+		e.OK = ok == 1
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
 // MissionPassedVerify reports whether some execution for missionID ran a command
 // CONTAINING verify and exited 0 — the deterministic basis for the gate. An empty
 // verify is treated as "ungated" and returns true.

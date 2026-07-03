@@ -50,3 +50,17 @@ func TestMissionPassedVerify(t *testing.T) {
 		t.Fatal("mission 2 never ran 'go test' — must not pass")
 	}
 }
+
+func TestExecutionsByMission(t *testing.T) {
+	s := openTestStore(t)
+	if err := s.RecordExecution(Execution{MissionID: 1, Agent: "bee1", Command: "go build", OK: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RecordExecution(Execution{MissionID: 2, Agent: "bee2", Command: "go test", OK: true}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ExecutionsByMission(1)
+	if err != nil || len(got) != 1 || got[0].Command != "go build" {
+		t.Fatalf("got %v err=%v", got, err)
+	}
+}

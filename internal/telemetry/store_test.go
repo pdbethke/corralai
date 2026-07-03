@@ -249,3 +249,16 @@ func TestModelComparisonReport(t *testing.T) {
 		t.Errorf("C confirm_pct = %v, want NULL (no resolutions)", c.confirmPct)
 	}
 }
+
+func TestMissionCompletedAt(t *testing.T) {
+	s, _ := Open(filepath.Join(t.TempDir(), "t.duckdb"))
+	defer s.Close()
+	if _, found, err := s.MissionCompletedAt(1); err != nil || found {
+		t.Fatalf("no event yet: found=%v err=%v", found, err)
+	}
+	_ = s.Record(Event{MissionID: 1, Kind: "mission_completed"})
+	ts, found, err := s.MissionCompletedAt(1)
+	if err != nil || !found || ts <= 0 {
+		t.Fatalf("ts=%v found=%v err=%v", ts, found, err)
+	}
+}

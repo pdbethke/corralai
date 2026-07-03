@@ -177,6 +177,14 @@
   .tab:hover:not(.active) { color:var(--fg); }
   #memory { position:fixed; inset:42px 0 0 0; z-index:3; display:none; background:var(--bg); }
   #memory.show { display:block; }
+  #proposals { position:fixed; inset:42px 0 0 0; z-index:3; display:none; background:var(--bg); overflow:auto; padding:22px 0; }
+  #proposals.show { display:block; }
+  .proposals-explainer { max-width:840px; margin:0 auto 16px; padding:11px 15px; background:var(--panel);
+    border:1px solid var(--line); border-radius:8px; color:var(--muted); font-size:12.5px; line-height:1.5; }
+  .pbadge { display:inline-block; background:#f4c430; color:#15110a; font-size:10px; font-weight:700;
+    padding:0 6px; border-radius:9px; margin-left:5px; vertical-align:middle; line-height:15px; min-width:8px; text-align:center; }
+  @keyframes pbadge-pulse { 0%{ transform:scale(1); } 35%{ transform:scale(1.55); box-shadow:0 0 0 4px rgba(244,196,48,.35); } 100%{ transform:scale(1); } }
+  .pbadge.pulse { animation:pbadge-pulse .6s ease-out; }
   #mlist { overflow:auto; padding:14px 16px; max-width:760px; margin:0 auto; height:100%; }
   #mctrl { display:flex; gap:8px; margin-bottom:12px; }
   #mq { flex:1; background:var(--panel); border:1px solid var(--line); color:var(--fg);
@@ -284,6 +292,7 @@
       <a class="tab" id="tab-progress" onclick="setView('progress')">progress</a>
       <a class="tab" id="tab-topology" onclick="setView('topology')">topology</a>
       <a class="tab" id="tab-memory" onclick="setView('memory')">memory</a>
+      <a class="tab" id="tab-proposals" onclick="setView('proposals')">proposals<span id="proposals-badge" class="pbadge" style="display:none"></span></a>
     </span>
     <span class="stat" id="stat">connecting…</span>
     <span class="stat" id="whoami" title="who the brain sees you as"></span>
@@ -322,6 +331,7 @@
   <div id="exec"></div>
   <div id="progress"></div>
   <div id="topology"></div>
+  <div id="proposals"></div>
   <div id="memory">
     <div id="mlist">
       <div id="mctrl">
@@ -411,22 +421,22 @@ const buzzes = [];         // little "buzz.." sound-effect texts that float up f
 // as lassos. 'hive' keeps the original hand-drawn bees for the nostalgic.
 const SKINS = {
   ranch: { label:'🤠 ranch', brain:'🤠', worker:'🐴', roles:{scrum:'🐕', client:'🧑‍💼'}, sub:'🐎', subtitle:'— the corral', bg:'grass', tab:'corral', empty:'no agents in the corral yet', warming:'the herd is saddling up…',
-           center:'the corral', lasso:true, favicon:'🤠', proposes:'the herd proposes:',
+           center:'the corral', lasso:true, favicon:'🤠', proposes:'the herd proposes:', proposalsTab:'proposals',
            sounds:['neigh~','clop clop','*swish*','yeehaw~'],
            caught:['Caught me — no {cmd} on record!','Busted! Never ran {cmd}…','Can’t outride the brand 🤠','No proof, no pass — re-doing it'],
            brainTag:'the wrangler — MCP coordinator · task queue · verification gate' },
   flock: { label:'🐑 flock', brain:'🐕', worker:'🐑', roles:{scrum:'🐕‍🦺', client:'🧑‍🌾'}, sub:'🐑', subtitle:'— the fold', bg:'grass', tab:'fold', empty:'no agents in the fold yet', warming:'the flock is gathering…',
-           center:'the fold', lasso:false, favicon:'🐑', proposes:'the flock proposes:',
+           center:'the fold', lasso:false, favicon:'🐑', proposes:'the flock proposes:', proposalsTab:'proposals',
            sounds:['baa~','baaa..','*nibble*','baa!'],
            caught:['Caught me — no {cmd} on record!','Busted! Never ran {cmd}…','Fleeced! No {cmd} run…','No proof, no pass — re-doing it'],
            brainTag:'the sheepdog — MCP coordinator · task queue · verification gate' },
   matrix:{ label:'🕶 matrix', brain:'👁️', worker:'🕶️', roles:{scrum:'📟', client:'🥄'}, sub:'🐇', subtitle:'— the construct', bg:'rain', tab:'construct', honorific:'Mr. ', empty:'no Agents in the construct yet', warming:'loading the construct…',
-           center:'the construct', lasso:false, favicon:'🕶️', proposes:'the construct proposes:',
+           center:'the construct', lasso:false, favicon:'🕶️', proposes:'the construct proposes:', proposalsTab:'anomalies',
            sounds:['0101..','⋮⋮⋮','*dodge*','follow the 🐇'],
            caught:['There is no {cmd} on record','Busted! Never ran {cmd}…','The gate sees all 👁️','No proof, no pass — re-doing it'],
            brainTag:'the architect — MCP coordinator · task queue · verification gate' },
   hive:  { label:'🐝 hive', brain:null, worker:null, roles:{}, sub:null, subtitle:'— the hive', bg:'comb', tab:'hive', empty:'no bees in the hive yet', warming:'the bees are warming up…',
-           center:'the corral', lasso:false, favicon:'🐝', proposes:'the hive proposes:',
+           center:'the corral', lasso:false, favicon:'🐝', proposes:'the hive proposes:', proposalsTab:'proposals',
            sounds:['buzz..','bzz..','bzzz~','buzz~'],
            caught:['Caught me — no {cmd} on record!','Busted! Never ran {cmd}…','Can’t fake the buzz 🐝','No proof, no pass — re-doing it'],
            brainTag:'the queen — MCP coordinator · task queue · verification gate' },
@@ -443,10 +453,15 @@ function setSkin(n){
   document.title = 'CorralAI ' + skin().subtitle;
   const sub = document.getElementById('skinsub'); if(sub) sub.textContent = skin().subtitle;
   const tab = document.getElementById('tab-swarm'); if(tab) tab.textContent = skin().tab;
+  const ptab = document.getElementById('tab-proposals');
+  if(ptab){ const badge = document.getElementById('proposals-badge');
+    ptab.firstChild.textContent = skin().proposalsTab || 'proposals';
+    if(badge && !ptab.contains(badge)) ptab.appendChild(badge); }
   const emp = document.getElementById('empty'); if(emp) emp.textContent = skin().empty;
   try{ renderBg(); }catch(_){}
   try{ renderExec(); }catch(_){ /* repaint the console's idle line in the new skin's voice */ }
   try{ renderTopology(); }catch(_){ /* first paint may precede state init */ }
+  try{ renderProposalsTab(); }catch(_){ /* first paint may precede state init */ }
 }
 function critterGlyph(role, sub){
   const s = skin();
@@ -720,6 +735,7 @@ function apply(state){
   renderExec();
   renderProgress();
   renderTopology();
+  renderProposalsTab();
   // Tick-update open agent windows — patch .aw-body only; ask footer is never touched here
   agentWindows.forEach((_, name) => renderAgentWindowBody(name));
 }
@@ -779,13 +795,13 @@ function renderModelComparison(){
 // synthesis view: you watch the directive fill in, bees claim steps, findings
 // appear, and the reflex/lead re-planning rewrite the plan in real time.
 // renderProposals: the learning loop's human gate, made visible — pending
-// proposals the herd's sweep clustered from findings/lessons, rendered above
-// the mission review bar so the operator triages them alongside the rest of
-// the standup. Approve fans the proposal's guidance/skill out into standing
-// memory + the fleet artifact store (POST /api/proposal/approve); reject
-// dismisses it, suppressing the signature until the evidence doubles (POST
-// /api/proposal/reject). Same .tqueen-card family styling as the topology
-// header and mission review bar.
+// proposals the herd's sweep clustered from findings/lessons, rendered in
+// their OWN tab (moved off Progress in the 9+-proposals feedback: they were
+// crowding the mission review bar below the fold). Approve fans the
+// proposal's guidance/skill out into standing memory + the fleet artifact
+// store (POST /api/proposal/approve); reject dismisses it, suppressing the
+// signature until the evidence doubles (POST /api/proposal/reject). Same
+// .tqueen-card family styling as the topology header and mission review bar.
 function renderProposals(){
   const ps = (lastState && lastState.proposals) || [];
   if(!ps.length) return '';
@@ -800,6 +816,45 @@ function renderProposals(){
       + `</div>`;
   }).join('');
   return `<div class="proposals-wrap"><div class="proposals-title">${esc(skin().proposes)}</div>${cards}</div>`;
+}
+// proposalsExplainer: short, skin-flavored copy at the top of the tab — what a
+// proposal IS (recurring evidence the herd distilled), and what approving it
+// does (promotes guidance into vetted memory + syncs the skill fleet-wide).
+// The human gate of the learning loop, spelled out once instead of implied.
+// PROPOSALS_WORKER_NOUN: the singular noun for "one X's opinion" in the
+// explainer, per skin — hive is the one skin allowed the bee word; every
+// other skin gets its own vocabulary so no skin leaks another's metaphor.
+const PROPOSALS_WORKER_NOUN = { ranch:'pony', flock:'sheep', matrix:'Agent', hive:'bee' };
+function proposalsExplainer(){
+  const s = skin();
+  const who = s.tab || 'corral';
+  const one = PROPOSALS_WORKER_NOUN[skinName] || 'agent';
+  return `<div class="proposals-explainer">Proposals are recurring patterns the ${esc(who)} distilled from real findings and lessons — not one ${esc(one)}'s opinion, but evidence that showed up again and again. `
+    + `Approving one promotes its guidance into vetted memory and syncs the matching skill across the whole fleet; rejecting it sends the pattern back until the evidence doubles. This is the human gate of the learning loop.</div>`;
+}
+// renderProposalsTab: the proposals tab's full pane (explainer + cards), and the
+// live badge on the tab label itself — the count updates every /api/state tick
+// (apply() below), and a short pulse animation fires on the badge when the
+// pending count RISES, so an approval/landing lands visibly even from another tab.
+let lastProposalCount = -1;
+function renderProposalsTab(){
+  const el = document.getElementById('proposals');
+  if(el) el.innerHTML = proposalsExplainer() + (renderProposals() || '<div class="pmt">no pending proposals right now — the herd is still gathering evidence.</div>');
+  const ps = (lastState && lastState.proposals) || [];
+  const n = ps.length;
+  const badge = document.getElementById('proposals-badge');
+  if(badge){
+    if(n > 0){
+      badge.textContent = n > 99 ? '99+' : String(n);
+      badge.style.display = 'inline-block';
+      if(lastProposalCount >= 0 && n > lastProposalCount){
+        badge.classList.remove('pulse'); void badge.offsetWidth; badge.classList.add('pulse');
+      }
+    } else {
+      badge.style.display = 'none';
+    }
+  }
+  lastProposalCount = n;
 }
 function approveProposal(id){
   fetch('/api/proposal/approve', {method:'POST', headers:{'Content-Type':'application/json'},
@@ -816,8 +871,7 @@ function rejectProposal(id){
 function renderProgress(){
   const el = document.getElementById('progress');
   const missions = lastState.missions || [];
-  const proposalsHtml = renderProposals();
-  if(!missions.length){ el.innerHTML = proposalsHtml + '<div class="pmt">no missions yet — create one with <code>corral-admin mission create "…"</code></div>'; return; }
+  if(!missions.length){ el.innerHTML = '<div class="pmt">no missions yet — create one with <code>corral-admin mission create "…"</code></div>'; return; }
   const tasks = lastState.tasks || [], findings = lastState.findings || [];
   const tByM = {}, fByM = {}, replacedBy = {};
   tasks.forEach(t => { (tByM[t.mission_id] = tByM[t.mission_id] || []).push(t); if(t.supersedes) replacedBy[t.supersedes] = t; });
@@ -848,7 +902,7 @@ function renderProgress(){
       `<span class="pfrow"><b style="color:${sevColor(f.severity)}">${esc(f.severity)} ${esc(f.type)}</b> <span style="color:var(--fg)">${esc(f.target||'')}</span> <span style="color:#6b6452">· ${esc(displayName(f.reporter))} · ${esc(f.status)}</span></span>`).join('') + '</div>' : '';
     return `<div class="pmission"><div class="phdr"><span class="ppill ${pillClass}">${esc(pillText)}</span><span class="pdir">${esc(m.directive)}</span>${sprintBadge}</div><div class="psum">${esc(summary)}</div>${reviewBar}<div class="psteps">${steps}</div>${frows}</div>`;
   }).join('');
-  el.innerHTML = proposalsHtml + missionsHtml;
+  el.innerHTML = missionsHtml;
 }
 
 // sevColor: critical/high red (the alert), medium amber, low muted.
@@ -1195,15 +1249,18 @@ function setView(v){
   document.getElementById('tab-progress').classList.toggle('active', v==='progress');
   document.getElementById('tab-topology').classList.toggle('active', v==='topology');
   document.getElementById('tab-memory').classList.toggle('active', v==='memory');
+  document.getElementById('tab-proposals').classList.toggle('active', v==='proposals');
   document.getElementById('memory').classList.toggle('show', v==='memory');
   document.getElementById('progress').classList.toggle('show', v==='progress');
   document.getElementById('topology').classList.toggle('show', v==='topology');
+  document.getElementById('proposals').classList.toggle('show', v==='proposals');
   // The stage (and its canvas) stay mounted; the tab overlays simply cover them at a
   // higher z-index. Don't display:none the canvas — that zeroes its box and squishes
   // the swarm. resize() re-fits when we come back, but there's nothing to re-fit now.
   if(v==='memory' && !memInit){ memInit = true; loadScopes(); searchMem(); }
   if(v==='progress'){ renderProgress(); }
   if(v==='topology'){ renderTopology(); }
+  if(v==='proposals'){ renderProposalsTab(); }
 }
 async function loadScopes(){
   try {

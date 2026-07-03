@@ -101,8 +101,8 @@ the loop continues until the PR is approved.
   signatures (the same finding, again and again) and clusters of similar lessons
   are swept into **skill proposals**: an LLM drafts corrective guidance plus a
   reusable skill, Shep announces the pending proposal at standup, and the
-  operator approves or rejects it — from the Progress tab or
-  `corral-admin proposals`. Approval promotes the guidance into vetted memory
+  operator approves or rejects it — from its own **Proposals tab** (a live
+  count badge) or `corral-admin proposals`. Approval promotes the guidance into vetted memory
   and a versioned skill artifact; every later mission's instructions carry the
   top vetted lessons (fence-wrapped, clearly labeled, capped at 3) so the herd
   starts each mission already warned. And the loop watches its own efficacy:

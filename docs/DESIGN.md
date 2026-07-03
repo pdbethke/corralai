@@ -149,8 +149,10 @@ topology here; historical analytics via MotherDuck → Sigma.
   clusters recurring finding signatures (≥3 same Type+Target) and similar
   lessons into **proposals**; an LLM drafts corrective guidance + a reusable
   skill; Shep announces pending proposals at standup (even with an empty
-  queue); the Progress tab grows a *"the herd proposes"* card with
-  approve/reject (also `corral-admin proposals list|show|approve|reject`).
+  queue); a dedicated **Proposals tab** (live count badge, off the Progress
+  tab so a busy sweep doesn't crowd the mission view) grows a *"the herd
+  proposes"* card with approve/reject (also
+  `corral-admin proposals list|show|approve|reject`).
   Approval fans out to vetted memory (`shared=true`) + a versioned skills
   artifact; `create_mission` injects the top ≤3 vetted lessons into phase
   instructions, fence-wrapped under `LESSONS FROM THE HERD (vetted)`. If a

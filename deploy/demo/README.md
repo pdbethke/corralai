@@ -161,8 +161,9 @@ no extra command, it rides the same run:
 3. **Shep announces it.** The live console standup starts saying
    `1 skill proposal(s) awaiting the operator` — even after the task queue
    drains, so a pending proposal never dies in silence.
-4. **You are the gate.** The **Progress tab** grows a *"the herd proposes:"*
-   card — signature, occurrence count, drafted guidance, the skill — with
+4. **You are the gate.** The **Proposals tab** (a live count badge lands on
+   it the moment the sweep opens one) grows a *"the herd proposes:"* card —
+   signature, occurrence count, drafted guidance, the skill — with
    **approve / reject** buttons. (Or from the CLI:
    `corral-admin proposals list | show <id> | approve <id> | reject <id>
    --reason "..."`, with `--brain http://localhost:9019 --token demo`.)

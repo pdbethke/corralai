@@ -100,7 +100,7 @@ unless its recurrence count grows past a higher threshold.
 
 Every promotion stores its recurrence signature. If the same signature recurs
 in missions created *after* promotion, the brain increments a `recurred_after`
-counter; past a threshold the proposal reopens as a **revision draft** ("v2:
+counter; at ≥2 post-promotion recurrences the proposal reopens as a **revision draft** ("v2:
 this didn't land — here's what changed since"), back through the same human
 gate. Skills carry artifacts rev history: refinement is versioned,
 attributable, reversible.
@@ -149,7 +149,7 @@ The demo brain ships a seeded role authority (demo operator/superuser) so the
 gates are real, not mocked:
 
 1. Boot: corralai's baked seeds index; the memory tab shows them.
-2. Run 1: bees hit a natural recurrence (the empty-workspace `go mod init`
+2. Run 1: agents hit a natural recurrence (the empty-workspace `go mod init`
    stumble is reliable); the sweep opens a proposal; Shep announces it.
 3. The Proposals card appears; the operator clicks Approve.
 4. The next mission's builder instruction visibly carries the guidance; the
@@ -158,7 +158,7 @@ gates are real, not mocked:
 
 ## Implementation shape
 
-- **`internal/learn` (new package):** proposals store (own SQLite —
+- **`internal/learn` (new package):** proposals store (own SQLite, `corralai_learn.sqlite3` —
   signature, evidence JSON, drafted guidance/skill, status
   pending|approved|rejected|revision, efficacy counters, lineage), the
   deterministic sweep, the drafter. Unit-testable in isolation.

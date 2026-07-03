@@ -23,6 +23,10 @@ COPY --from=build /out/corral-admin /usr/local/bin/corral-admin
 # brain re-indexes ~/.claude/projects/*/memory on startup (memStore.Build).
 RUN mkdir -p /root/.claude/projects/default/memory
 COPY deploy/demo/seed-memory/ /root/.claude/projects/default/memory/
+# The CORRAL.md convention: seed the demo's own developer-doc corpus (CORRAL.md
+# + docs/corral/*.md) into the same memory dir, flattened alongside seed-memory,
+# so the demo boots with corralai's own pre-seeded docs already searchable.
+COPY CORRAL.md docs/corral/ /root/.claude/projects/default/memory/
 ENV CORRALAI_ADDR=0.0.0.0:9019
 EXPOSE 9019
 ENTRYPOINT ["corral"]

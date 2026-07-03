@@ -25,3 +25,13 @@ future contributions.
 2. `go build ./...`, `go vet ./...`, and `go test ./...` must pass.
 3. New `.go` files must carry the SPDX header — run `bash scripts/add-spdx.sh`.
 4. `bash scripts/check-licensing.sh` must exit 0.
+
+## Contributing knowledge, not just code
+
+`docs/corral/` is corralai's own developer-doc corpus — see [CORRAL.md](CORRAL.md)
+for the convention. Every mission cloning this repo ingests it as advisory
+memory the herd's agents can search. If you know something about this codebase
+that would help an agent (or a human) working in it, open a PR against
+`docs/corral/` exactly as you would for code — code review is the trust gate
+for knowledge here just as it is for code; nothing you add is auto-vetted, it's
+read via search until reviewed and merged.

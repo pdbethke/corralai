@@ -17,6 +17,7 @@ import (
 	"github.com/pdbethke/corralai/internal/memory"
 	"github.com/pdbethke/corralai/internal/mission"
 	"github.com/pdbethke/corralai/internal/queue"
+	"github.com/pdbethke/corralai/internal/repo"
 	"github.com/pdbethke/corralai/internal/telemetry"
 )
 
@@ -174,6 +175,15 @@ func registerMissions(s *mcp.Server, store *mission.Store, q *queue.Store, mem *
 				if err := store.SetRepo(id, in.Repo, base, branch); err != nil {
 					rollback()
 					return nil, mission.MissionView{}, fmt.Errorf("set repo: %w", err)
+				}
+				// Pre-seeding (the CORRAL.md convention): ingest this repo's own
+				// CORRAL.md + docs/corral/*.md, when present, as ADVISORY memory
+				// (shared=false) tagged to the repo — see seeddocs.go for the trust
+				// argument. Best-effort like the index below: never aborts the mission.
+				if mem != nil {
+					if host, owner, repoName, ierr := repo.RepoIdent(in.Repo); ierr == nil {
+						ingestSeedDocs(mem, dest, host+"/"+owner+"/"+repoName, "repo:"+host, "")
+					}
 				}
 				// Initial full index: walk the working copy and collect all paths, then
 				// index in a goroutine so the create_mission response is not blocked by

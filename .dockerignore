@@ -1,8 +1,12 @@
 .git
 docs
+!docs/corral
+!docs/corral/**
 deploy
 !deploy/demo/seed-memory
 .superpowers
 .playwright-mcp
 *.png
 *.md
+!CORRAL.md
+!docs/corral/*.md

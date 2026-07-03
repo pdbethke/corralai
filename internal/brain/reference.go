@@ -124,7 +124,7 @@ func registerReference(s *mcp.Server, opts Options) {
 	mcp.AddTool(s, &mcp.Tool{Name: "promote_reference",
 		Description: "ADMIN: promote a reference source to vetted=true, marking its chunks as reviewed and trustworthy. Vetted status is reset to false if the source is re-ingested."},
 		func(_ context.Context, req *mcp.CallToolRequest, in promoteReferenceIn) (*mcp.CallToolResult, okMsg, error) {
-			if !opts.isAdmin(req) {
+			if !opts.isHumanAdmin(req) {
 				return nil, okMsg{}, errAdminOnly
 			}
 			if in.Source == "" {

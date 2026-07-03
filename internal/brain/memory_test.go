@@ -14,6 +14,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/coord"
 	"github.com/pdbethke/corralai/internal/memory"
+	"github.com/pdbethke/corralai/internal/principals"
 )
 
 func TestBrainMemoryOverMCP(t *testing.T) {
@@ -112,5 +113,90 @@ func TestAddMemoryStampsAuthor(t *testing.T) {
 	b, _ := json.Marshal(res.StructuredContent)
 	if !strings.Contains(string(b), `"author":"Hawk"`) {
 		t.Fatalf("search_memory hit should carry author Hawk: %s", string(b))
+	}
+}
+
+// TestAddMemorySharedAndPromoteMemoryRequireAdmin proves shared=true writes
+// and promote_memory are admin-gated: an unauthenticated caller against a
+// Principals store with a real superuser seeded is refused; the same calls
+// against a dev-mode server (Principals nil) succeed.
+func TestAddMemorySharedAndPromoteMemoryRequireAdmin(t *testing.T) {
+	dir := t.TempDir()
+	cstore, err := coord.Open(filepath.Join(dir, "c.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cstore.Close() })
+	mstore, err := memory.Open(filepath.Join(dir, "m.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { mstore.Close() })
+	pstore, err := principals.Open(filepath.Join(dir, "p.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pstore.Close() })
+	if err := pstore.CreateSuperuser("real-admin@example.com", "test"); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+
+	// --- non-admin server (Principals seeded, unauthenticated caller) ---
+	clientT1, serverT1 := mcp.NewInMemoryTransports()
+	go func() {
+		_ = NewServer(cstore, mstore, Options{Principals: pstore}).Run(ctx, serverT1)
+	}()
+	client1 := mcp.NewClient(&mcp.Implementation{Name: "t1", Version: "0"}, nil)
+	sess1, err := client1.Connect(ctx, clientT1, nil)
+	if err != nil {
+		t.Fatalf("connect non-admin: %v", err)
+	}
+	defer sess1.Close()
+
+	res, err := sess1.CallTool(ctx, &mcp.CallToolParams{Name: "add_memory", Arguments: map[string]any{
+		"name": "team-note", "body": "shared fact", "shared": true,
+	}})
+	if err != nil {
+		t.Fatalf("add_memory shared non-admin call: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("want tool error for non-admin add_memory(shared=true), got success")
+	}
+
+	res2, err := sess1.CallTool(ctx, &mcp.CallToolParams{Name: "promote_memory", Arguments: map[string]any{
+		"name": "team-note", "shared": true,
+	}})
+	if err != nil {
+		t.Fatalf("promote_memory non-admin call: %v", err)
+	}
+	if !res2.IsError {
+		t.Fatal("want tool error for non-admin promote_memory, got success")
+	}
+
+	// --- admin server (Principals nil => unauthenticated = admin, dev mode) ---
+	clientT2, serverT2 := mcp.NewInMemoryTransports()
+	go func() {
+		_ = NewServer(cstore, mstore, Options{}).Run(ctx, serverT2)
+	}()
+	client2 := mcp.NewClient(&mcp.Implementation{Name: "t2", Version: "0"}, nil)
+	sess2, err := client2.Connect(ctx, clientT2, nil)
+	if err != nil {
+		t.Fatalf("connect admin: %v", err)
+	}
+	defer sess2.Close()
+
+	var added addOut
+	callTask(t, sess2, "add_memory", map[string]any{
+		"name": "team-note", "body": "shared fact", "shared": true,
+	}, &added)
+	if added.Slug == "" {
+		t.Fatalf("add_memory(shared=true) by admin failed: %+v", added)
+	}
+	var promoted okMsg
+	callTask(t, sess2, "promote_memory", map[string]any{"name": "team-note", "shared": false}, &promoted)
+	if !promoted.OK {
+		t.Fatalf("promote_memory by admin failed: %+v", promoted)
 	}
 }

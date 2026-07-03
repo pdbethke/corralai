@@ -103,7 +103,7 @@ func registerMemory(s *mcp.Server, mem *memory.Store, opts Options) {
 		Description: "Persist a memory entry (markdown file + reindex). Private entries (default) require a memory owner; shared=true entries (the team knowledge base) require an admin."},
 		func(_ context.Context, req *mcp.CallToolRequest, in addIn) (*mcp.CallToolResult, addOut, error) {
 			if in.Shared {
-				if !opts.isAdmin(req) {
+				if !opts.isHumanAdmin(req) {
 					return nil, addOut{}, errAdminOnly
 				}
 			} else if !opts.isMemoryOwner(req) {
@@ -121,7 +121,7 @@ func registerMemory(s *mcp.Server, mem *memory.Store, opts Options) {
 	mcp.AddTool(s, &mcp.Tool{Name: "promote_memory",
 		Description: "ADMIN: share an existing memory entry team-wide (shared=true) or make it private again (shared=false). Edits its frontmatter + reindexes."},
 		func(_ context.Context, req *mcp.CallToolRequest, in promoteMemIn) (*mcp.CallToolResult, okMsg, error) {
-			if !opts.isAdmin(req) {
+			if !opts.isHumanAdmin(req) {
 				return nil, okMsg{}, errAdminOnly
 			}
 			ok, err := mem.SetShared(in.Name, in.Shared)

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -112,5 +113,84 @@ func TestProposalApproveRejectRequireSuperuser(t *testing.T) {
 	}
 	if !promoteCalled {
 		t.Fatal("superuser approve should have called Promote")
+	}
+}
+
+// TestProposalApproveRejectRefuseSubagentToken proves the UI endpoints refuse
+// a delegation token even when its rolled-up principal is a real superuser —
+// the UI twin of TestIsHumanAdminRefusesDelegationToken (internal/brain).
+// fakeBearerVerify treats the bearer as an opaque key; a token prefixed
+// "subagent:" is verified into a TokenInfo carrying Extra["subagent"] (a
+// human token has no such prefix and no such claim), mirroring the shape a
+// real delegation token's Extra carries without needing a live Verifier.
+func TestProposalApproveRejectRefuseSubagentToken(t *testing.T) {
+	dir := t.TempDir()
+	pstore, err := principals.Open(filepath.Join(dir, "p.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pstore.Close() })
+	if err := pstore.CreateSuperuser("boss@x.com", "test"); err != nil {
+		t.Fatal(err)
+	}
+	lstore, err := learn.Open(filepath.Join(dir, "l.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { lstore.Close() })
+	p, _, err := lstore.Upsert("missing-req|go.mod", "finding", "builder", []string{"a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	promoteCalled := false
+	srv := Handler(Deps{
+		Roles: pstore,
+		Learn: lstore,
+		Promote: func(id int64) error {
+			promoteCalled = true
+			return nil
+		},
+		Reject: func(id int64, reason string) error { return nil },
+	})
+
+	subagentVerify := func(_ context.Context, token string, _ *http.Request) (*sdkauth.TokenInfo, error) {
+		if token == "" {
+			return nil, sdkauth.ErrInvalidToken
+		}
+		if strings.HasPrefix(token, "subagent:") {
+			principal := strings.TrimPrefix(token, "subagent:")
+			return &sdkauth.TokenInfo{
+				Expiration: time.Now().Add(time.Hour),
+				UserID:     principal,
+				Extra:      map[string]any{"subagent": principal + "/child"},
+			}, nil
+		}
+		return &sdkauth.TokenInfo{Expiration: time.Now().Add(time.Hour), UserID: token}, nil
+	}
+	wrap := func(h http.Handler, bearer string) http.Handler {
+		wrapped := sdkauth.RequireBearerToken(subagentVerify, nil)(h)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			r.Header.Set("Authorization", "Bearer "+bearer)
+			wrapped.ServeHTTP(w, r)
+		})
+	}
+
+	body, _ := json.Marshal(map[string]any{"id": p.ID})
+	req := httptest.NewRequest(http.MethodPost, "/api/proposal/approve", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	wrap(srv, "subagent:boss@x.com").ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body=%s", w.Code, w.Body.String())
+	}
+	if promoteCalled {
+		t.Fatal("Promote must not be called for a delegation-shaped token")
+	}
+	got, err := lstore.ByID(p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != learn.StatusPending {
+		t.Fatalf("proposal status = %q, want pending", got.Status)
 	}
 }

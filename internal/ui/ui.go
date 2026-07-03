@@ -137,7 +137,7 @@ func Handler(d Deps) http.Handler {
 // observer" (any non-observer bearer, including agent delegation tokens,
 // would otherwise promote guidance fleet-wide).
 func (s *Server) isSuperuser(r *http.Request) bool {
-	return s.roles == nil || s.roles.IsSuperuser(auth.Principal(r.Context()))
+	return (s.roles == nil || s.roles.IsSuperuser(auth.Principal(r.Context()))) && !auth.Subagent(r.Context())
 }
 
 // proposalApprove promotes a pending learning-loop proposal — the UI's

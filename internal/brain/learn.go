@@ -60,7 +60,7 @@ func registerLearn(s *mcp.Server, ls *learn.Store, mem *memory.Store, arts *arti
 	mcp.AddTool(s, &mcp.Tool{Name: "approve_proposal",
 		Description: "Promote a proposal the herd surfaced: its guidance joins vetted memory (shapes future instructions) and its skill syncs fleet-wide. Superuser only — the human gate of the learning loop."},
 		func(_ context.Context, req *mcp.CallToolRequest, in approveProposalIn) (*mcp.CallToolResult, approveProposalOut, error) {
-			if !opts.isAdmin(req) {
+			if !opts.isHumanAdmin(req) {
 				return nil, approveProposalOut{}, fmt.Errorf("forbidden: superuser only (approval shapes fleet-wide behavior)")
 			}
 			res, err := ApproveProposal(ls, mem, arts, opts.Telemetry, in.ID, actorOf(req), in.GuidanceOnly, in.SkillOnly)
@@ -75,7 +75,7 @@ func registerLearn(s *mcp.Server, ls *learn.Store, mem *memory.Store, arts *arti
 	mcp.AddTool(s, &mcp.Tool{Name: "reject_proposal",
 		Description: "Dismiss a proposal the herd surfaced. Its signature stays suppressed until the underlying evidence doubles, so rejecting noise doesn't reopen a nag loop. Superuser only."},
 		func(_ context.Context, req *mcp.CallToolRequest, in rejectProposalIn) (*mcp.CallToolResult, okOut, error) {
-			if !opts.isAdmin(req) {
+			if !opts.isHumanAdmin(req) {
 				return nil, okOut{}, fmt.Errorf("forbidden: superuser only")
 			}
 			if err := RejectProposal(ls, in.ID, in.Reason); err != nil {

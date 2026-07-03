@@ -52,6 +52,39 @@ func TestAddFindingCarriesModel(t *testing.T) {
 	}
 }
 
+// TestAllFindingsSpansMissions verifies AllFindings returns findings across
+// every mission (unlike Findings, which is mission-scoped) — the learn sweep
+// ticker needs the fleet-wide view to detect cross-mission recurrence.
+func TestAllFindingsSpansMissions(t *testing.T) {
+	s := open(t)
+
+	if _, err := s.AddFinding(Finding{
+		MissionID: 1, Reporter: "Hawk", Type: "vuln", Severity: "high", Target: "authz",
+	}); err != nil {
+		t.Fatalf("AddFinding mission 1: %v", err)
+	}
+	if _, err := s.AddFinding(Finding{
+		MissionID: 2, Reporter: "Tess", Type: "bug", Severity: "low", Target: "parser",
+	}); err != nil {
+		t.Fatalf("AddFinding mission 2: %v", err)
+	}
+
+	fs, err := s.AllFindings()
+	if err != nil {
+		t.Fatalf("AllFindings: %v", err)
+	}
+	if len(fs) != 2 {
+		t.Fatalf("want 2 findings across missions, got %d", len(fs))
+	}
+	byMission := map[int64]bool{}
+	for _, f := range fs {
+		byMission[f.MissionID] = true
+	}
+	if !byMission[1] || !byMission[2] {
+		t.Fatalf("expected findings from missions 1 and 2, got %+v", fs)
+	}
+}
+
 func TestAddFindingValidates(t *testing.T) {
 	s := open(t)
 	good := Finding{MissionID: 1, Reporter: "Hawk", Type: "vuln", Severity: "high",

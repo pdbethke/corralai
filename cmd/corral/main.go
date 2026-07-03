@@ -46,6 +46,8 @@
 //	CORRALAI_BRAIN_KEY         base64-encoded Ed25519 seed (32 bytes) for cross-swarm brain identity; takes priority over key file
 //	CORRALAI_BRAIN_KEY_FILE    path to persist the brain key seed (default ~/.claude/corralai_brain_key); created 0600 on first run
 //	CORRALAI_BRAIN_PEERS       optional allowlist "brain_id:pubB64" entries (comma or newline separated); empty => TOFU mode
+//	CORRALAI_LEARN_DB          learning-loop proposals SQLite path (default ~/.claude/corralai_learn.sqlite3)
+//	CORRALAI_LEARN_SWEEP_SECONDS  how often (seconds) the learn sweep clusters findings/lessons into proposals (default 60)
 package main
 
 import (
@@ -73,6 +75,7 @@ import (
 	"github.com/pdbethke/corralai/internal/embed"
 	"github.com/pdbethke/corralai/internal/fleet"
 	"github.com/pdbethke/corralai/internal/gateway"
+	"github.com/pdbethke/corralai/internal/learn"
 	"github.com/pdbethke/corralai/internal/limit"
 	"github.com/pdbethke/corralai/internal/llm"
 	"github.com/pdbethke/corralai/internal/memory"
@@ -472,6 +475,15 @@ func main() {
 	}
 	defer telStore.Close()
 
+	// Learning loop: findings + lessons cluster into human-gated proposals
+	// (approve into standing guidance, optionally a skill).
+	learnDB := env("CORRALAI_LEARN_DB", filepath.Join(home, ".claude", "corralai_learn.sqlite3"))
+	learnStore, err := learn.Open(learnDB)
+	if err != nil {
+		log.Fatalf("open learn store: %v", err)
+	}
+	defer learnStore.Close()
+
 	// Initialize motherduck_token before any MotherDuck operations (RegisterBrain
 	// and startFleetSync both need it for md: attach). Must happen first.
 	initMotherDuckToken()
@@ -580,6 +592,15 @@ func main() {
 	// Built once here so both consumers (fleet oracle below, ui.Deps below) share the
 	// same configured client.
 	narrator := llm.FromEnv()
+
+	// learnDrafter shares the same configured LLM client, reused by the learn
+	// sweep ticker below to phrase (never decide) proposal guidance. Left nil
+	// when no model backend is configured — proposals still open, just without
+	// a drafted guidance/skill until a human writes one.
+	var learnDrafter learn.Asker
+	if narrator.Available() {
+		learnDrafter = narrator
+	}
 
 	// Fleet oracle: natural-language → SQL → narrated answer over the MotherDuck
 	// reporting DB. Disabled when CORRALAI_MOTHERDUCK is unset or no model backend
@@ -774,12 +795,69 @@ func main() {
 		CrossSwarmKey:    crossSwarmKey,
 		FleetTarget:      fleetTarget,
 		FleetBrainID:     fleetBrainID,
+		Learn:            learnStore,
+		LearnDrafter:     learnDrafter,
 		SpawnBudget: brain.SpawnBudget{
 			MaxAgentsPerPrincipal: envInt("CORRALAI_MAX_AGENTS_PER_PRINCIPAL", 0),
 			MaxSpawnDepth:         envInt("CORRALAI_MAX_SPAWN_DEPTH", 0),
 			MaxChildrenPerParent:  envInt("CORRALAI_MAX_CHILDREN_PER_PARENT", 0),
 		},
 	})
+
+	// Learn sweep: deterministic recurrence detection over findings + lessons,
+	// feeding human-gated proposals. Degrade-never-block: any error is logged
+	// loudly and the ticker keeps running — a bad sweep must never crash the brain.
+	go func() {
+		t := time.NewTicker(time.Duration(envInt("CORRALAI_LEARN_SWEEP_SECONDS", 60)) * time.Second)
+		defer t.Stop()
+		for range t.C {
+			fs, err := queueStore.AllFindings()
+			if err != nil {
+				log.Printf("learn: findings: %v", err)
+				continue
+			}
+			signals := make([]learn.FindingSignal, 0, len(fs))
+			for _, f := range fs {
+				role := ""
+				if h, ok := hostBook.Get(f.Reporter); ok {
+					role = h.Role
+				}
+				signals = append(signals, learn.FindingSignal{
+					Type: f.Type, Target: f.Target, Role: role, Evidence: f.Evidence,
+				})
+			}
+			lessons, err := memStore.LessonsForLearning(200)
+			if err != nil {
+				log.Printf("learn: lessons: %v", err)
+				continue
+			}
+			docs := make([]learn.LessonDoc, 0, len(lessons))
+			for _, l := range lessons {
+				docs = append(docs, learn.LessonDoc{Name: l.Name, Body: l.Body, Author: l.Author})
+			}
+			opened, err := learnStore.Sweep(signals, docs)
+			if err != nil {
+				log.Printf("learn: sweep: %v", err)
+				continue
+			}
+			for _, p := range opened {
+				log.Printf("learn: proposal #%d opened (%s, %d occurrences)", p.ID, p.Signature, p.Count)
+				if err := telStore.Record(telemetry.Event{
+					Kind: "proposal_opened", Actor: "learn-sweep", Subject: p.Signature,
+					Detail: map[string]any{"proposal_id": p.ID, "count": p.Count, "kind": p.Kind},
+				}); err != nil {
+					log.Printf("learn: telemetry proposal_opened: %v", err)
+				}
+				if learnDrafter != nil {
+					pp := p
+					if err := learn.Draft(context.Background(), learnDrafter, learnStore, pp); err != nil {
+						log.Printf("learn: draft #%d: %v", pp.ID, err)
+					}
+				}
+			}
+		}
+	}()
+
 	// The brain listens on 127.0.0.1 behind a reverse proxy / tunnel: requests arrive
 	// via localhost but carry the public Host header (your CORRALAI_ALLOWED_HOSTS),
 	// which the go-sdk's localhost DNS-rebinding guard rejects with 403. That guard

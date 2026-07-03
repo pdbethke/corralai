@@ -77,6 +77,70 @@ func TestRecallLessonsSharedOnly(t *testing.T) {
 	}
 }
 
+// TestLessonsForLearning verifies LessonsForLearning returns only type=lesson
+// entries (name/body/author), never other types — the learn sweep ticker feeds
+// this straight into learn.Sweep, so a leaked reference entry would pollute
+// proposal drafting with irrelevant guidance.
+func TestLessonsForLearning(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "memory")
+	writeTyped(t, dir, "lesson-sqli", "parameterize score API queries", "lesson",
+		"Past mission: SQL injection in the score API. Lesson: always parameterize queries.", true)
+	writeTyped(t, dir, "ref-widget", "a reference about widgets", "reference",
+		"Widgets render via the gizmo pipeline.", false)
+
+	s, err := Open(filepath.Join(root, "m.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.Build([]string{dir}); err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	docs, err := s.LessonsForLearning(200)
+	if err != nil {
+		t.Fatalf("LessonsForLearning: %v", err)
+	}
+	if len(docs) != 1 {
+		t.Fatalf("want 1 lesson, got %d: %+v", len(docs), docs)
+	}
+	if docs[0].Name != "lesson-sqli" {
+		t.Errorf("Name: got %q, want %q", docs[0].Name, "lesson-sqli")
+	}
+	if docs[0].Author != "" {
+		t.Errorf("Author: got %q, want empty (writeTyped sets no author)", docs[0].Author)
+	}
+	if docs[0].Body == "" {
+		t.Error("Body must not be empty")
+	}
+}
+
+// TestLessonsForLearningLimit verifies the limit parameter is honored.
+func TestLessonsForLearningLimit(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "memory")
+	writeTyped(t, dir, "lesson-a", "a", "lesson", "Lesson A body.", true)
+	writeTyped(t, dir, "lesson-b", "b", "lesson", "Lesson B body.", true)
+
+	s, err := Open(filepath.Join(root, "m.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.Build([]string{dir}); err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	docs, err := s.LessonsForLearning(1)
+	if err != nil {
+		t.Fatalf("LessonsForLearning: %v", err)
+	}
+	if len(docs) != 1 {
+		t.Fatalf("want 1 lesson (limit honored), got %d", len(docs))
+	}
+}
+
 func TestRecallLessonsFiltersToLessons(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "memory")

@@ -611,6 +611,40 @@ func (s *Store) RecallLessons(query string, k int) ([]Hit, error) {
 	return s.Search(query, "", "lesson", k, true) // sharedOnly=true: only vetted lessons auto-recall
 }
 
+// LessonForLearning is a local, learn-package-free projection of a lesson
+// entry — name/body/author — for the sweep ticker to convert into a
+// learn.LessonDoc at the call site. This package must never import learn (the
+// dependency runs the other way: main wires memory's output into learn's
+// input), so the shape lives here instead of importing learn's type.
+type LessonForLearning struct {
+	Name, Body, Author string
+}
+
+// LessonsForLearning returns up to limit type=lesson entries (name/body/author)
+// for the learn sweep ticker to feed into learn.Sweep. Unlike RecallLessons
+// (query-relevance ranked) this is an unfiltered recency-ish listing — the
+// sweep wants the whole corpus of lessons, not a query match. limit<=0 => 200.
+func (s *Store) LessonsForLearning(limit int) ([]LessonForLearning, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	rows, err := s.db.Query(
+		"SELECT name, body, author FROM mem WHERE type = 'lesson' ORDER BY name LIMIT ?", limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []LessonForLearning{}
+	for rows.Next() {
+		var d LessonForLearning
+		if err := rows.Scan(&d.Name, &d.Body, &d.Author); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) List(scope, typ string, limit int, sharedOnly bool) ([]Hit, error) {
 	if limit <= 0 {
 		limit = 100

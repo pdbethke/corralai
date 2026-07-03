@@ -12,6 +12,7 @@ import (
 	"github.com/pdbethke/corralai/internal/attest"
 	"github.com/pdbethke/corralai/internal/coord"
 	"github.com/pdbethke/corralai/internal/gateway"
+	"github.com/pdbethke/corralai/internal/learn"
 	"github.com/pdbethke/corralai/internal/mission"
 	"github.com/pdbethke/corralai/internal/oracle"
 	"github.com/pdbethke/corralai/internal/principals"
@@ -164,6 +165,18 @@ type Options struct {
 	// FleetClaimsRateLimit overrides the per-principal fleet_claims rate limit
 	// (reads per minute). Zero uses the default (10). Exposed for tests.
 	FleetClaimsRateLimit int
+
+	// Learn, when set, enables the learning-loop proposal tools (list/approve/
+	// reject/skill) and backs the sweep ticker that clusters recurring findings
+	// and lessons into human-gated proposals. nil => the tools aren't registered
+	// and the sweep is a no-op.
+	Learn *learn.Store
+
+	// LearnDrafter is the LLM surface Learn uses to phrase (never decide)
+	// guidance and an optional skill body for a newly opened proposal. nil =>
+	// proposals open pending with no draft; a human still approves/rejects them
+	// from the raw evidence.
+	LearnDrafter learn.Asker
 }
 
 // SpawnBudget is the brain-side request-side DoS bound for spawning.

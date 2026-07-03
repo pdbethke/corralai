@@ -119,6 +119,15 @@ func (s *Store) AgentTimeline(actor string, limit int) ([]TimelineEntry, error) 
 	return out, rows.Err()
 }
 
+// CountKind returns how many events of kind have been recorded for a mission
+// — used to enforce per-mission volume guards (e.g. agent_activity's cap)
+// without keeping an in-memory counter that would reset on restart.
+func (s *Store) CountKind(missionID int64, kind string) (int, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM events WHERE mission_id=? AND kind=?`, missionID, kind).Scan(&n)
+	return n, err
+}
+
 // reports are the fixed, named analytic queries.
 var reports = map[string]string{
 	"missions": `SELECT mission_id, count(*) AS events, min(ts) AS started, max(ts) AS ended,

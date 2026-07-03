@@ -17,6 +17,32 @@ func openT(t *testing.T) *Store {
 	return s
 }
 
+func TestCountKind(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "t.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for i := 0; i < 3; i++ {
+		if err := s.Record(Event{MissionID: 7, Kind: "agent_activity", Actor: "bee1"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.Record(Event{MissionID: 8, Kind: "agent_activity", Actor: "bee2"}); err != nil {
+		t.Fatal(err)
+	}
+	n, err := s.CountKind(7, "agent_activity")
+	if err != nil || n != 3 {
+		t.Fatalf("CountKind(7): n=%d err=%v, want 3", n, err)
+	}
+	if n, _ := s.CountKind(8, "agent_activity"); n != 1 {
+		t.Fatalf("CountKind(8): got %d, want 1", n)
+	}
+	if n, _ := s.CountKind(9, "agent_activity"); n != 0 {
+		t.Fatalf("CountKind(9): got %d, want 0", n)
+	}
+}
+
 func TestRecordAndReports(t *testing.T) {
 	s := openT(t)
 	s.Record(Event{MissionID: 1, Kind: "mission_created", Actor: "operator"})

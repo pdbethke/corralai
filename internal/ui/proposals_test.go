@@ -72,7 +72,7 @@ func TestProposalApproveRejectRequireSuperuser(t *testing.T) {
 	srv := Handler(Deps{
 		Roles: pstore,
 		Learn: lstore,
-		Promote: func(id int64) error {
+		Promote: func(id int64, actor string) error {
 			promoteCalled = true
 			return nil
 		},
@@ -147,7 +147,7 @@ func TestProposalApproveRejectRefuseSubagentToken(t *testing.T) {
 	srv := Handler(Deps{
 		Roles: pstore,
 		Learn: lstore,
-		Promote: func(id int64) error {
+		Promote: func(id int64, actor string) error {
 			promoteCalled = true
 			return nil
 		},
@@ -192,5 +192,88 @@ func TestProposalApproveRejectRefuseSubagentToken(t *testing.T) {
 	}
 	if got.Status != learn.StatusPending {
 		t.Fatalf("proposal status = %q, want pending", got.Status)
+	}
+}
+
+// TestProposalApprovePassesVerifiedPrincipalAsActor proves the UI's approve
+// endpoint stops hardcoding actor "operator" when auth is on: it passes the
+// real verified principal through to Promote.
+func TestProposalApprovePassesVerifiedPrincipalAsActor(t *testing.T) {
+	dir := t.TempDir()
+	pstore, err := principals.Open(filepath.Join(dir, "p.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pstore.Close() })
+	if err := pstore.CreateSuperuser("real-admin@example.com", "test"); err != nil {
+		t.Fatal(err)
+	}
+	lstore, err := learn.Open(filepath.Join(dir, "l.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { lstore.Close() })
+	p, _, err := lstore.Upsert("missing-req|go.mod", "finding", "builder", []string{"a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var gotActor string
+	srv := Handler(Deps{
+		Roles: pstore,
+		Learn: lstore,
+		Promote: func(id int64, actor string) error {
+			gotActor = actor
+			return nil
+		},
+		Reject: func(id int64, reason string) error { return nil },
+	})
+
+	body, _ := json.Marshal(map[string]any{"id": p.ID})
+	req := httptest.NewRequest(http.MethodPost, "/api/proposal/approve", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	bearerWrap(srv, "real-admin@example.com").ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if gotActor != "real-admin@example.com" {
+		t.Fatalf("actor = %q, want the verified principal", gotActor)
+	}
+}
+
+// TestProposalApproveDevModeActorFallsBackToOperator proves the "operator"
+// fallback survives for dev mode (no bearer at all).
+func TestProposalApproveDevModeActorFallsBackToOperator(t *testing.T) {
+	dir := t.TempDir()
+	lstore, err := learn.Open(filepath.Join(dir, "l.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { lstore.Close() })
+	p, _, err := lstore.Upsert("missing-req|go.mod", "finding", "builder", []string{"a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var gotActor string
+	srv := Handler(Deps{
+		// Roles nil => dev mode: isSuperuser is open, no bearer required.
+		Learn: lstore,
+		Promote: func(id int64, actor string) error {
+			gotActor = actor
+			return nil
+		},
+		Reject: func(id int64, reason string) error { return nil },
+	})
+
+	body, _ := json.Marshal(map[string]any{"id": p.ID})
+	req := httptest.NewRequest(http.MethodPost, "/api/proposal/approve", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req) // no bearer — dev mode
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if gotActor != "operator" {
+		t.Fatalf("actor = %q, want operator fallback in dev mode", gotActor)
 	}
 }

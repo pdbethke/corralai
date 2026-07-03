@@ -467,8 +467,8 @@ func TestProposalApproveEndpointPromotesViaCallback(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	promote := func(id int64) error {
-		_, err := brain.ApproveProposal(ls, mstore, astore, nil, id, "operator", false, false)
+	promote := func(id int64, actor string) error {
+		_, err := brain.ApproveProposal(ls, mstore, astore, nil, id, actor, false, false)
 		return err
 	}
 	reject := func(id int64, reason string) error { return ls.Reject(id, reason) }

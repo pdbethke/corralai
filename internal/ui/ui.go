@@ -51,7 +51,7 @@ type Server struct {
 	oracle     *oracle.Client
 	roleModels rolemodel.Policy
 	learn      *learn.Store
-	promote    func(id int64) error
+	promote    func(id int64, actor string) error
 	reject     func(id int64, reason string) error
 }
 
@@ -98,9 +98,10 @@ type Deps struct {
 	Learn *learn.Store
 	// Promote fans a proposal's guidance/skill out into standing memory + the
 	// fleet artifact store (the same fan-out the approve_proposal MCP tool
-	// runs — see brain.ApproveProposal). Wired in cmd/corral/main.go. nil =>
-	// the approve endpoint returns 404 (proposals unavailable).
-	Promote func(id int64) error
+	// runs — see brain.ApproveProposal). actor is the verified principal
+	// (auth on) or "operator" (dev-mode fallback — see proposalApprove).
+	// Wired in cmd/corral/main.go. nil => the approve endpoint returns 404.
+	Promote func(id int64, actor string) error
 	// Reject dismisses a pending proposal, recording the reason. Wired in
 	// cmd/corral/main.go. nil => the reject endpoint returns 404.
 	Reject func(id int64, reason string) error
@@ -173,7 +174,11 @@ func (s *Server) proposalApprove(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "id required", http.StatusBadRequest)
 		return
 	}
-	if err := s.promote(body.ID); err != nil {
+	actor := auth.Principal(r.Context())
+	if actor == "" {
+		actor = "operator"
+	}
+	if err := s.promote(body.ID, actor); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

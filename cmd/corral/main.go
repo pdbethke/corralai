@@ -948,8 +948,8 @@ func main() {
 	// operator clicking "approve" in the browser and an MCP client calling
 	// approve_proposal are indistinguishable at the fan-out level. Reject is
 	// the symmetric thin wrapper over brain.RejectProposal.
-	proposalPromote := func(id int64) error {
-		_, err := brain.ApproveProposal(learnStore, memStore, artStore, telStore, id, "operator", false, false)
+	proposalPromote := func(id int64, actor string) error {
+		_, err := brain.ApproveProposal(learnStore, memStore, artStore, telStore, id, actor, false, false)
 		return err
 	}
 	proposalReject := func(id int64, reason string) error {

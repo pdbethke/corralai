@@ -241,7 +241,10 @@ func InjectLessons(plan []PhaseSpec, lessons []Lesson) []PhaseSpec {
 	if b.Len() == 0 {
 		return plan
 	}
-	preamble := fence.Untrusted("vetted lessons from prior missions", "human-vetted memory", b.String()) + "\n\n"
+	// The label is the corral-voice copy the plan mandates ("LESSONS FROM THE
+	// HERD (vetted)"); the fence.Untrusted wrapper around it is the
+	// prompt-injection control and must stay.
+	preamble := fence.Untrusted("LESSONS FROM THE HERD (vetted)", "human-vetted memory", b.String()) + "\n\n"
 	out := make([]PhaseSpec, len(plan))
 	for i, p := range plan {
 		p.Instruction = preamble + p.Instruction

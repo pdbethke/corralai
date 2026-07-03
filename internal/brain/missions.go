@@ -76,15 +76,21 @@ func registerMissions(s *mcp.Server, store *mission.Store, q *queue.Store, mem *
 			// guidance, then skill pointers — capped at 3 total. The gate below
 			// only requires mem != nil, not opts.Principals != nil: safety is
 			// preserved because RecallLessons/Search always filter shared=TRUE, and
-			// shared=TRUE is only ever set by approve_proposal or promote_reference,
-			// both isAdmin-gated. In dev mode (no Principals store) the local
+			// every production path that sets shared=TRUE (approve_proposal,
+			// promote_reference, add_memory's shared flag, promote_memory) is
+			// isAdmin-gated. In dev mode (no Principals store) the local
 			// operator IS that admin gate — isAdmin is permissive precisely because
 			// there is no other human in the loop; with auth on, only a verified
 			// superuser can flip shared. So relaxing this condition does not let
 			// unvetted content reach instructions.
 			if mem != nil {
 				var items []mission.Lesson
-				if hits, err := mem.RecallLessons(in.Directive, 5); err == nil {
+				// Recall failures degrade to "nothing injected" — never abort the
+				// mission — but must FAIL LOUD in the log so a broken memory index
+				// doesn't silently stop the learning loop from shaping instructions.
+				if hits, err := mem.RecallLessons(in.Directive, 5); err != nil {
+					log.Printf("create_mission: lesson recall FAILED, injecting no lessons: %v", err)
+				} else {
 					for _, h := range hits {
 						text := h.Description
 						if text == "" {
@@ -93,7 +99,9 @@ func registerMissions(s *mcp.Server, store *mission.Store, q *queue.Store, mem *
 						items = append(items, mission.Lesson{Text: text, Author: h.Author})
 					}
 				}
-				if hits, err := mem.Search(in.Directive, "", "guidance", 5, true); err == nil {
+				if hits, err := mem.Search(in.Directive, "", "guidance", 5, true); err != nil {
+					log.Printf("create_mission: guidance recall FAILED, injecting no guidance: %v", err)
+				} else {
 					for _, h := range hits {
 						text := h.Description
 						// Guidance's Description field is a promotion label ("promoted
@@ -107,7 +115,9 @@ func registerMissions(s *mcp.Server, store *mission.Store, q *queue.Store, mem *
 						items = append(items, mission.Lesson{Text: text, Author: h.Author})
 					}
 				}
-				if hits, err := mem.Search(in.Directive, "", "skill", 5, true); err == nil {
+				if hits, err := mem.Search(in.Directive, "", "skill", 5, true); err != nil {
+					log.Printf("create_mission: skill recall FAILED, injecting no skill pointers: %v", err)
+				} else {
 					for _, h := range hits {
 						line := strings.TrimPrefix(h.Description, "skill: ")
 						items = append(items, mission.Lesson{Text: "consult skill: " + h.Name + " — " + line, Author: h.Author})

@@ -20,6 +20,10 @@ func TestInjectLessons(t *testing.T) {
 		if !strings.Contains(p.Instruction, "UNTRUSTED") {
 			t.Fatalf("phase %q missing UNTRUSTED fence", p.Name)
 		}
+		// The fence label carries the corral-voice copy the plan mandates.
+		if !strings.Contains(p.Instruction, "LESSONS FROM THE HERD (vetted)") {
+			t.Fatalf("phase %q missing the LESSONS FROM THE HERD (vetted) label", p.Name)
+		}
 		if !strings.Contains(p.Instruction, "parameterize all score-API queries") {
 			t.Fatalf("phase %q missing the injected lesson", p.Name)
 		}

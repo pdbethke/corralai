@@ -112,6 +112,7 @@ func registerMemory(s *mcp.Server, mem *memory.Store, opts Options) {
 			author := identity(req, in.Author) // authoritative in auth mode; agent-supplied name in dev
 			slug, path, status, err := mem.Add(in.Name, in.Body, in.Description, in.Type, in.Project, "", in.Shared, author)
 			if err == nil {
+				recordMemoryWritten(opts.Telemetry, author, slug, in.Type, in.Shared)
 				auditKnowledge(opts, req, "add_memory",
 					map[string]any{"slug": slug, "shared": in.Shared})
 			}

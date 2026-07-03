@@ -22,6 +22,7 @@ var now = func() float64 { return float64(time.Now().UnixNano()) / 1e9 }
 
 // Event is one timestamped thing that happened in a mission.
 type Event struct {
+	TS        float64        // set by Record on write; populated on read by EventsForMission
 	MissionID int64
 	Kind      string         // task_claimed, finding_reported, review_changes, …
 	Actor     string         // agent / principal / "engine"
@@ -144,6 +145,34 @@ func (s *Store) MissionCompletedAt(missionID int64) (float64, bool, error) {
 		return 0, false, err
 	}
 	return ts, true, nil
+}
+
+// EventsForMission returns every recorded event for a mission, oldest first —
+// Part B's replay merges this with the durable task/finding/execution rows so
+// ambience (mission_completed, agent_activity, reviews, proposals, …) rides
+// the same timeline as the mission's own state changes.
+func (s *Store) EventsForMission(missionID int64) ([]Event, error) {
+	rows, err := s.db.Query(
+		`SELECT ts, kind, COALESCE(actor,''), COALESCE(subject,''), COALESCE(detail,'') FROM events WHERE mission_id=? ORDER BY ts ASC`,
+		missionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Event
+	for rows.Next() {
+		var e Event
+		var detail string
+		if err := rows.Scan(&e.TS, &e.Kind, &e.Actor, &e.Subject, &detail); err != nil {
+			return nil, err
+		}
+		if detail != "" {
+			_ = json.Unmarshal([]byte(detail), &e.Detail)
+		}
+		e.MissionID = missionID
+		out = append(out, e)
+	}
+	return out, rows.Err()
 }
 
 // reports are the fixed, named analytic queries.

@@ -1,0 +1,30 @@
+[
+  {
+    "kind": "execution",
+    "subject": "go build ./..."
+  },
+  {
+    "kind": "task_created",
+    "subject": "build#1"
+  },
+  {
+    "kind": "task_claimed",
+    "subject": "build#1"
+  },
+  {
+    "kind": "task_done",
+    "subject": "build#1"
+  },
+  {
+    "kind": "finding_reported",
+    "subject": "x.go"
+  },
+  {
+    "kind": "finding_resolved",
+    "subject": "x.go"
+  },
+  {
+    "kind": "mission_completed",
+    "subject": ""
+  }
+]

@@ -179,10 +179,16 @@ func registerMissions(s *mcp.Server, store *mission.Store, q *queue.Store, mem *
 				// Pre-seeding (the CORRAL.md convention): ingest this repo's own
 				// CORRAL.md + docs/corral/*.md, when present, as ADVISORY memory
 				// (shared=false) tagged to the repo — see seeddocs.go for the trust
-				// argument. Best-effort like the index below: never aborts the mission.
+				// argument. Deferred to a goroutine for the same reason the index
+				// below is: the content is attacker-suppliable (any repo a mission
+				// clones), so no read of it belongs on the create_mission response
+				// path. It gets its OWN goroutine rather than riding the index one
+				// because that one only exists when opts.Index != nil, and seeding
+				// must not silently vanish on brains without a repo code index.
+				// Best-effort + capped (see seeddocs.go): never aborts the mission.
 				if mem != nil {
 					if host, owner, repoName, ierr := repo.RepoIdent(in.Repo); ierr == nil {
-						ingestSeedDocs(mem, dest, host+"/"+owner+"/"+repoName, "repo:"+host, "")
+						go ingestSeedDocs(mem, dest, host+"/"+owner+"/"+repoName, "repo:"+host, "")
 					}
 				}
 				// Initial full index: walk the working copy and collect all paths, then

@@ -27,6 +27,10 @@ import (
 // reason without touching memory/artifacts at all.
 func TestProposalApprovalFansOut(t *testing.T) {
 	dir := t.TempDir()
+	// approve_proposal fans guidance/skill into memory via mem.Add(targetDir="")
+	// — give this test its own default-memory dir so it can't collide with
+	// another test's writes to the shared CORRALAI_MEMORY_DIR within this run.
+	t.Setenv("CORRALAI_MEMORY_DIR", filepath.Join(dir, "default-mem"))
 	cstore, err := coord.Open(filepath.Join(dir, "c.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -241,6 +245,13 @@ func TestApproveProposalRequiresSuperuser(t *testing.T) {
 func learnHarness(t *testing.T, skillName string) (*mcp.ClientSession, *learn.Store, *memory.Store, *artifacts.Store, int64) {
 	t.Helper()
 	dir := t.TempDir()
+	// approve_proposal fans guidance/skill into memory via mem.Add(targetDir="")
+	// (internal/brain/learn.go), which resolves to CORRALAI_MEMORY_DIR. Give
+	// this test its own dir so it can't see (or be seen by) entries another
+	// test in this package wrote to ITS default dir in the same run — the
+	// package TestMain only keeps writes off the real ~/.claude directory, it
+	// doesn't isolate tests from each other.
+	t.Setenv("CORRALAI_MEMORY_DIR", filepath.Join(dir, "default-mem"))
 	cstore, err := coord.Open(filepath.Join(dir, "c.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -653,6 +664,14 @@ func anySlugContains(hits []memory.Hit, want string) bool {
 // guidance candidate among the five.
 func TestCreateMissionWeavesPromotedGuidanceCapped3(t *testing.T) {
 	dir := t.TempDir()
+	// This test's cap-of-3 assertion depends on an exact, deterministic
+	// candidate count (2 lessons + 1 guidance + 2 skills). mem.Add(targetDir="")
+	// resolves through CORRALAI_MEMORY_DIR, and Store.Build reindexes every
+	// .md file present in that directory — so without a private dir here,
+	// another test in this package that also writes to the default dir in
+	// the same run (e.g. coordination_activity_test.go's "go-mod-init")
+	// would silently add extra candidates and break the cap math.
+	t.Setenv("CORRALAI_MEMORY_DIR", filepath.Join(dir, "default-mem"))
 	cstore, err := coord.Open(filepath.Join(dir, "c.sqlite3"))
 	if err != nil {
 		t.Fatal(err)

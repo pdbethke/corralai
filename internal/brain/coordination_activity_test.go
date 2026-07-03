@@ -78,7 +78,12 @@ func TestHostSeenOnlyOnFirstOrMaterialChange(t *testing.T) {
 }
 
 func TestMemoryWrittenNeverCarriesBody(t *testing.T) {
-	mem, err := memory.Open(filepath.Join(t.TempDir(), "mem.duckdb"))
+	dir := t.TempDir()
+	// mem.Add below uses targetDir="" (the default dir, CORRALAI_MEMORY_DIR).
+	// Give this test its own dir so its "go-mod-init" entry can't leak into
+	// another test's default-dir corpus within the same package test run.
+	t.Setenv("CORRALAI_MEMORY_DIR", filepath.Join(dir, "default-mem"))
+	mem, err := memory.Open(filepath.Join(dir, "mem.duckdb"))
 	if err != nil {
 		t.Fatal(err)
 	}

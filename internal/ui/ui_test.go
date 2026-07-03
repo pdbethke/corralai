@@ -438,6 +438,12 @@ func TestStateEndpointCarriesProposals(t *testing.T) {
 // remain in /api/state afterward.
 func TestProposalApproveEndpointPromotesViaCallback(t *testing.T) {
 	dir := t.TempDir()
+	// brain.ApproveProposal fans guidance/skill into memory via
+	// mem.Add(targetDir=""), which resolves through CORRALAI_MEMORY_DIR.
+	// Give this test its own default-memory dir (package TestMain already
+	// keeps it off the real ~/.claude directory, but this also isolates it
+	// from any other test in this package that hits the same path).
+	t.Setenv("CORRALAI_MEMORY_DIR", filepath.Join(dir, "default-mem"))
 	cs, err := coord.Open(filepath.Join(dir, "c.sqlite3"))
 	if err != nil {
 		t.Fatal(err)

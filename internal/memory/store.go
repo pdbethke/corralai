@@ -25,19 +25,26 @@ import (
 )
 
 var (
-	home             = mustHome()
-	DefaultDB        = filepath.Join(home, ".claude", "corralai_memory.duckdb")
-	dirGlob          = filepath.Join(home, ".claude", "projects", "*", "memory")
-	defaultMemoryDir = defaultMemDir()
-	skipNames        = map[string]bool{"MEMORY.md": true, "ARCHIVE.md": true}
-	fmRe             = regexp.MustCompile(`(?s)^---\n(.*?)\n---\n?(.*)$`)
+	home      = mustHome()
+	DefaultDB = filepath.Join(home, ".claude", "corralai_memory.duckdb")
+	dirGlob   = filepath.Join(home, ".claude", "projects", "*", "memory")
+	skipNames = map[string]bool{"MEMORY.md": true, "ARCHIVE.md": true}
+	fmRe      = regexp.MustCompile(`(?s)^---\n(.*?)\n---\n?(.*)$`)
 )
 
 func mustHome() string { h, _ := os.UserHomeDir(); return h }
 
-// defaultMemDir is where new entries are written when no target dir is given.
+// memoryDir is where new entries are written when no target dir is given.
 // Override with CORRALAI_MEMORY_DIR; otherwise a neutral per-tool location.
-func defaultMemDir() string {
+// Resolution is lazy — read on every call rather than cached at package init
+// — so tests can set CORRALAI_MEMORY_DIR (via t.Setenv, per-test) before
+// their first Add and have it take effect. A package-level var resolved at
+// init time would already have captured the unset env var by the time any
+// test runs; a cached-after-first-call resolution (e.g. sync.Once) would
+// still pin every later test in the same process to whichever value the
+// first caller saw, defeating per-test isolation. The lookup is a single
+// cheap os.Getenv, so re-reading it on each Add is not a meaningful cost.
+func memoryDir() string {
 	if d := strings.TrimSpace(os.Getenv("CORRALAI_MEMORY_DIR")); d != "" {
 		return d
 	}
@@ -716,7 +723,7 @@ var slugRe = regexp.MustCompile(`[^a-z0-9_-]+`)
 // author, when non-empty, is written into front-matter so it survives re-index.
 func (s *Store) Add(name, body, description, typ, project, targetDir string, shared bool, author string) (slug, path, status string, err error) {
 	if targetDir == "" {
-		targetDir = defaultMemoryDir
+		targetDir = memoryDir()
 	}
 	if typ == "" {
 		typ = "reference"
@@ -783,7 +790,7 @@ func (s *Store) SetShared(nameOrSlug string, shared bool) (bool, error) {
 	}
 	fmBytes, _ := yaml.Marshal(fm)
 	content := "---\n" + strings.TrimSpace(string(fmBytes)) + "\n---\n\n" + body + "\n"
-	if err := os.WriteFile(e.Path, []byte(content), 0o600); err != nil { // #nosec G703 -- targetDir is server-set (add_memory passes ""→defaultMemoryDir) and the filename is a sanitized slug ([^a-z0-9_-]); not agent-controllable
+	if err := os.WriteFile(e.Path, []byte(content), 0o600); err != nil { // #nosec G703 -- targetDir is server-set (add_memory passes ""→memoryDir()) and the filename is a sanitized slug ([^a-z0-9_-]); not agent-controllable
 		return false, err
 	}
 	_, err = s.Build(s.lastDirs)

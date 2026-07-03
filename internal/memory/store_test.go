@@ -512,3 +512,40 @@ func TestMemoryDisableSwitch(t *testing.T) {
 		t.Errorf("expected alpha-top in results, got %+v", hits)
 	}
 }
+
+// TestMemoryDirEnvOverrideAfterProcessStart proves the default-target-dir
+// resolution used by Add(targetDir="") is lazy: CORRALAI_MEMORY_DIR set via
+// t.Setenv (i.e. AFTER process/package init has already run) still redirects
+// writes. This is the seam that broke real ~/.claude/projects/default/memory
+// isolation: a package-level var resolved at init time captures the env var
+// before any test's t.Setenv takes effect, so tests calling Add with
+// targetDir="" silently wrote into the developer's real memory dir. Must be
+// the first caller of memoryDir() in this test binary — every other test in
+// this package passes an explicit targetDir to Add.
+func TestMemoryDirEnvOverrideAfterProcessStart(t *testing.T) {
+	root := t.TempDir()
+	want := filepath.Join(root, "redirected-mem")
+	t.Setenv("CORRALAI_MEMORY_DIR", want)
+
+	got := memoryDir()
+	if got != want {
+		t.Fatalf("memoryDir() = %q, want %q (CORRALAI_MEMORY_DIR set after process start must still be honored)", got, want)
+	}
+
+	dbPath := filepath.Join(root, "m.duckdb")
+	s, err := Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+
+	if _, path, _, err := s.Add("env-redirect-check", "body", "d", "note", "default", "", true, "tester"); err != nil {
+		t.Fatal(err)
+	} else if !strings.HasPrefix(path, want) {
+		t.Fatalf("Add wrote to %q, want under %q", path, want)
+	}
+
+	if _, err := os.Stat(filepath.Join(want, "env-redirect-check.md")); err != nil {
+		t.Fatalf("expected entry file under redirected dir: %v", err)
+	}
+}

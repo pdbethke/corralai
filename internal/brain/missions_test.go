@@ -18,6 +18,7 @@ import (
 	"github.com/pdbethke/corralai/internal/queue"
 	"github.com/pdbethke/corralai/internal/repo"
 	"github.com/pdbethke/corralai/internal/repoindex"
+	"github.com/pdbethke/corralai/internal/telemetry"
 )
 
 // errorRepoIndex is a fake RepoIndex whose IndexPaths always returns an error —
@@ -123,5 +124,75 @@ func TestCreateMissionIndexFailureDoesNotAbortProvisioning(t *testing.T) {
 	}
 	if mv.ID == 0 {
 		t.Fatal("expected a valid mission ID in the returned MissionView")
+	}
+}
+
+// TestReviewMissionAcceptEmitsMissionCompleted verifies that accepting a
+// review (the non-engine completion path) also emits a mission_completed
+// telemetry event, mirroring what the engine's auto-complete path does via
+// OnMissionCompleted.
+func TestReviewMissionAcceptEmitsMissionCompleted(t *testing.T) {
+	dir := t.TempDir()
+	q, err := queue.Open(filepath.Join(dir, "q.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer q.Close()
+	ms, err := mission.Open(filepath.Join(dir, "m.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ms.Close()
+	tel, err := telemetry.Open(filepath.Join(dir, "t.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tel.Close()
+
+	mid, err := mission.CreateMission(ms, q, "ship it", []mission.PhaseSpec{
+		{Name: "build", Instruction: "build it"},
+	}, true) // requires_review
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.PromoteReady(mid); err != nil {
+		t.Fatal(err)
+	}
+	tk, err := q.ClaimNext("bee1", nil, 3600)
+	if err != nil || tk == nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if _, err := q.Complete(tk.ID, "bee1", "done"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ms.SetMissionStatus(mid, "awaiting_review"); err != nil {
+		t.Fatal(err)
+	}
+
+	mv, err := mission.SubmitReview(ms, q, mid, true, "", "client")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec(tel, mid, "review_accepted", "client", "", nil)
+	if mv.Status == "done" {
+		rounds := 0
+		if full, ferr := ms.Mission(mid); ferr == nil && full != nil {
+			rounds = full.ReviewRounds
+		}
+		rec(tel, mid, "mission_completed", "engine", "", map[string]any{"status": "done", "review_rounds": rounds})
+	}
+
+	rep, err := tel.RunReport("kinds")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, row := range rep.Rows {
+		if row[0] == "mission_completed" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected a mission_completed telemetry event after review accept")
 	}
 }

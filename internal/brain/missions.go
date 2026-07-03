@@ -278,6 +278,13 @@ func registerMissions(s *mcp.Server, store *mission.Store, q *queue.Store, mem *
 				kind = "review_accepted"
 			}
 			rec(tel, in.ID, kind, identity(req, "client"), "", nil)
+			if mv.Status == "done" {
+				rounds := 0
+				if full, ferr := store.Mission(in.ID); ferr == nil && full != nil {
+					rounds = full.ReviewRounds
+				}
+				rec(tel, in.ID, "mission_completed", "engine", "", map[string]any{"status": "done", "review_rounds": rounds})
+			}
 			return nil, *mv, nil
 		})
 }

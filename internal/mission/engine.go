@@ -100,6 +100,14 @@ type Engine struct {
 	// reflex-addressed finding as still open.
 	OnFindingResolved func(f queue.Finding, outcome string)
 
+	// OnMissionCompleted, when non-nil, fires whenever the ENGINE (not the
+	// review-accept path — see mission.SubmitReview's caller) transitions a
+	// mission to "done". The caller wires it to telemetry so an auto-completed
+	// mission speaks mission_completed the same way a reviewed one does at its
+	// own call site — mission.Store never imports telemetry, so this is the
+	// engine's half of that split.
+	OnMissionCompleted func(missionID int64, status string, reviewRounds int)
+
 	// committed tracks which phase names have already been committed per mission
 	// so a re-tick after a transient error never produces duplicate commits.
 	committed map[int64]map[string]bool
@@ -216,6 +224,9 @@ func (e *Engine) Tick() error {
 			}
 		} else {
 			_ = e.m.SetMissionStatus(mi.ID, "done")
+			if e.OnMissionCompleted != nil {
+				e.OnMissionCompleted(mi.ID, "done", mi.ReviewRounds)
+			}
 			if e.Repo != nil {
 				e.finishRepoMission(mi.ID) // fast path
 			}

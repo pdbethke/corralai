@@ -169,6 +169,58 @@ func TestMissionPipelinePull(t *testing.T) {
 	}
 }
 
+// TestEngineFiresOnMissionCompleted verifies that the engine's auto-complete
+// path (no review required) fires OnMissionCompleted exactly once, with the
+// mission's id, "done" status, and its ReviewRounds count.
+func TestEngineFiresOnMissionCompleted(t *testing.T) {
+	dir := t.TempDir()
+	q, err := queue.Open(filepath.Join(dir, "q.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer q.Close()
+	m, err := Open(filepath.Join(dir, "m.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+
+	mid, err := CreateMission(m, q, "add a wishlist feature", nil, false) // default pipeline, no review
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := NewEngine(m, q)
+	var calls int
+	var gotID int64
+	var gotStatus string
+	var gotRounds int
+	e.OnMissionCompleted = func(missionID int64, status string, reviewRounds int) {
+		calls++
+		gotID, gotStatus, gotRounds = missionID, status, reviewRounds
+	}
+
+	done := false
+	for i := 0; i < 60 && !done; i++ {
+		drain(t, q)
+		_ = e.Tick()
+		if mv, _ := m.Mission(mid); mv != nil && mv.Status == "done" {
+			done = true
+		}
+	}
+	if !done {
+		t.Fatal("mission did not converge")
+	}
+	if calls != 1 {
+		t.Fatalf("OnMissionCompleted should fire exactly once, got %d calls", calls)
+	}
+	if gotID != mid || gotStatus != "done" {
+		t.Fatalf("got id=%d status=%q, want id=%d status=done", gotID, gotStatus, mid)
+	}
+	if gotRounds != 0 {
+		t.Fatalf("non-review mission should report review_rounds=0, got %d", gotRounds)
+	}
+}
+
 // TestEnginePhaseCommitAndPRForRepoMission verifies that:
 //   - every done phase produces one commit (message contains phase name)
 //   - on mission done, push fires and PRURL is stored in the mission

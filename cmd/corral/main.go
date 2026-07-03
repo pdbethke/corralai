@@ -627,6 +627,18 @@ func main() {
 			log.Printf("telemetry finding_resolved: %v", err)
 		}
 	}
+	// mission_completed: the engine finally speaks telemetry on its own
+	// auto-complete path, mirroring the review-accept emission in
+	// internal/brain/missions.go so model_comparison/mission_history never
+	// have to guess whether a mission finished.
+	engine.OnMissionCompleted = func(missionID int64, status string, reviewRounds int) {
+		if err := telStore.Record(telemetry.Event{
+			MissionID: missionID, Kind: "mission_completed", Actor: "engine",
+			Detail: map[string]any{"status": status, "review_rounds": reviewRounds},
+		}); err != nil {
+			log.Printf("telemetry mission_completed: %v", err)
+		}
+	}
 	if v := os.Getenv("CORRALAI_REFLEX_MIN_SEVERITY"); v != "" {
 		engine.ReflexMinSeverity = v
 	}

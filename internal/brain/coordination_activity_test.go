@@ -3,9 +3,13 @@
 package brain
 
 import (
+	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/pdbethke/corralai/internal/coord"
 	"github.com/pdbethke/corralai/internal/memory"
@@ -77,6 +81,59 @@ func TestHostSeenOnlyOnFirstOrMaterialChange(t *testing.T) {
 	}
 }
 
+// TestDespawnEmitsClaimReleased: despawn_subagent releases the subagent's
+// claims inside coord.Despawn's raw SQL — the ambience stream must record a
+// matching claim_released (wildcard, same nil→"*" semantics as release_claims),
+// or claims released by despawn vanish while their claim_made events remain.
+func TestDespawnEmitsClaimReleased(t *testing.T) {
+	store, err := coord.Open(filepath.Join(t.TempDir(), "c.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	tel := openTel(t)
+
+	ctx := context.Background()
+	clientT, serverT := mcp.NewInMemoryTransports()
+	go func() { _ = NewServer(store, nil, Options{Telemetry: tel}).Run(ctx, serverT) }()
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "t", Version: "0"}, nil)
+	sess, err := client.Connect(ctx, clientT, nil)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer sess.Close()
+
+	call := func(tool string, args map[string]any) {
+		t.Helper()
+		res, err := sess.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: args})
+		if err != nil || res.IsError {
+			t.Fatalf("%s: err=%v isError=%v content=%v", tool, err, res != nil && res.IsError, res)
+		}
+	}
+
+	call("spawn_subagent", map[string]any{"name": "tester", "role": "tester"})
+	call("claim_paths", map[string]any{"name": "agent/tester", "paths": []string{"a.go"}})
+	if n := kindCount(t, tel, "claim_made"); n != 1 {
+		t.Fatalf("claim_made = %d, want 1", n)
+	}
+	call("despawn_subagent", map[string]any{"name": "agent/tester"})
+
+	rep, err := tel.Query(`SELECT actor, subject FROM events WHERE kind='claim_released'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Rows) != 1 {
+		t.Fatalf("despawn must emit claim_released: got %d events, want 1", len(rep.Rows))
+	}
+	if actor := rep.Rows[0][0].(string); actor != "agent/tester" {
+		t.Fatalf("claim_released actor = %q, want %q", actor, "agent/tester")
+	}
+	if subject := rep.Rows[0][1].(string); subject != "*" {
+		t.Fatalf("claim_released subject = %q, want wildcard %q", subject, "*")
+	}
+}
+
 func TestMemoryWrittenNeverCarriesBody(t *testing.T) {
 	dir := t.TempDir()
 	// mem.Add below uses targetDir="" (the default dir, CORRALAI_MEMORY_DIR).
@@ -94,15 +151,18 @@ func TestMemoryWrittenNeverCarriesBody(t *testing.T) {
 		t.Fatal(err)
 	}
 	recordMemoryWritten(tel, "bee1", slug, "lesson", true)
-	rep, err := tel.Query(`SELECT detail FROM events WHERE kind='memory_written'`)
+	// Sweep the FULL serialized event row — every column, not just detail — so
+	// a future edit leaking the body via actor/subject/model gets caught too.
+	rep, err := tel.Query(`SELECT kind, actor, subject, model, detail FROM events WHERE kind='memory_written'`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(rep.Rows) != 1 {
 		t.Fatalf("expected 1 memory_written event, got %d", len(rep.Rows))
 	}
-	detail := rep.Rows[0][0].(string)
-	if strings.Contains(detail, "SECRET-LOOKING-BODY-TEXT") {
-		t.Fatalf("memory_written detail must never carry body text: %s", detail)
+	for i, cell := range rep.Rows[0] {
+		if s := fmt.Sprintf("%v", cell); strings.Contains(s, "SECRET-LOOKING-BODY-TEXT") {
+			t.Fatalf("memory_written column %q must never carry body text: %s", rep.Columns[i], s)
+		}
 	}
 }

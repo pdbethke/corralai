@@ -34,12 +34,18 @@ type Host struct {
 const hostTTL = 120
 
 // HostBook is the latest runtime facts per agent (keyed by name, latest-wins).
+//
+// It is also the debounce state for host_seen telemetry (see recordHostSeen),
+// and it lives only in memory: a brain restart forgets every prior sighting, so
+// the first announce round after a restart re-emits host_seen for each agent.
+// That burst is bounded by fleet size and intended — not a debounce bug.
 type HostBook struct {
 	mu    sync.RWMutex
 	items map[string]Host
 }
 
-// NewHostBook returns an initialised HostBook.
+// NewHostBook returns an initialised HostBook. State is in-memory only — see
+// the HostBook doc for the restart / host_seen re-emission consequence.
 func NewHostBook() *HostBook { return &HostBook{items: map[string]Host{}} }
 
 // Set records (or refreshes) one agent's facts.

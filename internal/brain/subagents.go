@@ -167,6 +167,12 @@ func registerSubagents(s *mcp.Server, store *coord.Store, opts Options) {
 				return nil, okOut{OK: false}, fmt.Errorf("forbidden: %q is not within your namespace", in.Name)
 			}
 			ok, err := store.Despawn(in.Name)
+			if err == nil && ok {
+				// Despawn releases the subagent's claims inside coord — mirror
+				// that in the ambience stream (wildcard, same nil→"*" semantics
+				// as release_claims) so claim_made events don't dangle unmatched.
+				recordClaimReleased(opts.Telemetry, in.Name, nil)
+			}
 			return nil, okOut{OK: ok}, err
 		})
 

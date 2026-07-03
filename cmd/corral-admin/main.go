@@ -746,7 +746,7 @@ func cmdProposals(args []string) {
 			cols := []string{"id", "signature", "count", "status", "skill"}
 			rows := make([][]any, len(r.Proposals))
 			for i, p := range r.Proposals {
-				rows[i] = []any{p.ID, p.Signature, p.Count, p.Status, dashEm(p.SkillName)}
+				rows[i] = []any{p.ID, p.Signature, p.Count, p.Status, orDash(p.SkillName)}
 			}
 			printTable(cols, rows)
 		})
@@ -771,17 +771,17 @@ func cmdProposals(args []string) {
 					continue
 				}
 				fmt.Printf("#%d  %s  (%s)\n", p.ID, p.Signature, p.Kind)
-				fmt.Printf("roles:    %s\n", dashEm(p.Roles))
+				fmt.Printf("roles:    %s\n", orDash(p.Roles))
 				fmt.Printf("count:    %d\n", p.Count)
-				fmt.Printf("status:   %s\n", dashEm(p.Status))
+				fmt.Printf("status:   %s\n", orDash(p.Status))
 				if p.Status == "rejected" {
-					fmt.Printf("reason:   %s\n", dashEm(p.RejectReason))
+					fmt.Printf("reason:   %s\n", orDash(p.RejectReason))
 				}
 				if p.Supersedes != 0 {
 					fmt.Printf("supersedes: #%d\n", p.Supersedes)
 				}
 				fmt.Println("\nguidance:")
-				fmt.Println(dashEm(p.Guidance))
+				fmt.Println(orDash(p.Guidance))
 				if p.SkillName != "" {
 					fmt.Printf("\nskill: %s\n", p.SkillName)
 					fmt.Println(p.SkillBody)
@@ -832,6 +832,9 @@ func cmdProposals(args []string) {
 		id, err := strconv.ParseInt(fs.Arg(0), 10, 64)
 		if err != nil {
 			fatal("proposal id must be a number: %v", err)
+		}
+		if *reason == "" {
+			fatal(`specify --reason "..." — say why this proposal is being dismissed`)
 		}
 		c.do("reject_proposal", map[string]any{"id": id, "reason": *reason}, okMsg(fmt.Sprintf("rejected proposal #%d", id)))
 	default:
@@ -892,9 +895,9 @@ func dash(s string) string {
 	return s
 }
 
-// dashEm renders an empty string as "-" (SQL-NULL-style dash for the
+// orDash renders an empty string as "-" (SQL-NULL-style dash for the
 // proposals verbs — never Go's "<nil>").
-func dashEm(s string) string {
+func orDash(s string) string {
 	if s == "" {
 		return "-"
 	}

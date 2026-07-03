@@ -4,9 +4,19 @@ package brain
 
 import (
 	"sync"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+// workerSessionTTL is how long a worker mark survives without being touched.
+// Both Mark and an Is hit refresh a mark, so a worker that keeps calling
+// tools stays marked for as long as it lives plus one TTL; only sessions
+// that have gone silent expire. 24h is deliberately generous — expiry exists
+// to shed DEAD sessions (the go-sdk exposes no per-session close hook the
+// brain could wire instead, and every reconnect mints a fresh session ID),
+// not to un-mark live ones.
+const workerSessionTTL = 24 * time.Hour
 
 // WorkerSessions tracks, per MCP session, whether the session has identified
 // itself as a corral-agent worker — either by ClientInfo.Name at the MCP
@@ -20,6 +30,11 @@ import (
 // corral-agent does — cannot accidentally pass the human gate in dev mode,
 // matching the rule isHumanAdmin already enforces when auth is on.
 //
+// Marks are keyed by MCP session ID and expire workerSessionTTL after their
+// last touch, swept lazily during Mark — the map cannot grow without bound
+// on a long-lived brain whose fleet reconnects (each reconnect is a fresh
+// session ID, and the SDK never tells us when the old one died).
+//
 // Known limitation: an IN-PROCESS subagent (spawn_subagent without an
 // out-of-process delegation token) shares its parent's MCP session, so
 // marking the session marks the parent too — a spawned worker and the human
@@ -28,12 +43,13 @@ import (
 // are unaffected.
 type WorkerSessions struct {
 	mu  sync.Mutex
-	ids map[string]bool
+	ids map[string]time.Time // session ID → last touched (Mark or Is hit)
+	now func() time.Time     // clock seam; tests override
 }
 
 // NewWorkerSessions returns an empty tracker.
 func NewWorkerSessions() *WorkerSessions {
-	return &WorkerSessions{ids: map[string]bool{}}
+	return &WorkerSessions{ids: map[string]time.Time{}, now: time.Now}
 }
 
 // Mark records req's MCP session as a worker session. Nil-safe: a nil
@@ -45,10 +61,23 @@ func (w *WorkerSessions) Mark(req *mcp.CallToolRequest) {
 		return
 	}
 	if id := req.Session.ID(); id != "" {
-		w.mu.Lock()
-		w.ids[id] = true
-		w.mu.Unlock()
+		w.mark(id)
 	}
+}
+
+// mark records id's touch time and lazily sweeps every expired entry — the
+// amortized cleanup that keeps the map bounded without a sweeper goroutine.
+// O(live sessions) per call, on the two rare handlers (bootstrap/report_host).
+func (w *WorkerSessions) mark(id string) {
+	t := w.now()
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for k, touched := range w.ids {
+		if t.Sub(touched) > workerSessionTTL {
+			delete(w.ids, k)
+		}
+	}
+	w.ids[id] = t
 }
 
 // Is reports whether req's session is a worker: either it named itself
@@ -70,7 +99,24 @@ func (w *WorkerSessions) Is(req *mcp.CallToolRequest) bool {
 	if id == "" {
 		return false
 	}
+	return w.isMarked(id)
+}
+
+// isMarked reports whether id carries a live mark. A hit refreshes the mark
+// (a worker still calling tools never expires while alive); an expired entry
+// is evicted on the spot and reported unmarked.
+func (w *WorkerSessions) isMarked(id string) bool {
+	t := w.now()
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.ids[id]
+	touched, ok := w.ids[id]
+	if !ok {
+		return false
+	}
+	if t.Sub(touched) > workerSessionTTL {
+		delete(w.ids, id)
+		return false
+	}
+	w.ids[id] = t
+	return true
 }

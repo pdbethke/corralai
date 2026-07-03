@@ -8,12 +8,62 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/pdbethke/corralai/internal/coord"
 	"github.com/pdbethke/corralai/internal/learn"
 )
+
+// TestWorkerSessionMarksExpire proves the tracker sheds dead sessions: the
+// go-sdk offers no exported per-session close hook, and every agent reconnect
+// mints a fresh session ID, so without expiry a long-lived brain's map grows
+// forever. Marks expire workerSessionTTL after their last touch (Mark or an
+// Is hit both refresh), swept lazily during Mark — and a session still
+// calling tools is never evicted while alive.
+func TestWorkerSessionMarksExpire(t *testing.T) {
+	base := time.Unix(1_700_000_000, 0)
+	cur := base
+	ws := NewWorkerSessions()
+	ws.now = func() time.Time { return cur }
+
+	ws.mark("stale")     // queried later, after its TTL
+	ws.mark("abandoned") // never queried again — only the lazy sweep can shed it
+	ws.mark("active")    // keeps calling tools
+
+	// Half a TTL later the active worker is still calling admin-gated tools;
+	// each Is hit refreshes its last-touched time.
+	cur = base.Add(workerSessionTTL / 2)
+	if !ws.isMarked("active") {
+		t.Fatal("an active session's mark must survive at TTL/2")
+	}
+
+	// Past the original TTL: the stale mark is gone (checked and evicted),
+	// the refreshed one survives (its TTL restarted at the Is hit).
+	cur = base.Add(workerSessionTTL + time.Minute)
+	if ws.isMarked("stale") {
+		t.Fatal("a mark untouched for over workerSessionTTL must expire")
+	}
+	if !ws.isMarked("active") {
+		t.Fatal("a refreshed mark must survive — no premature eviction of a live worker")
+	}
+
+	// The map itself shrinks: a new Mark sweeps expired entries, including
+	// ones nobody ever asks about again.
+	ws.mark("newcomer")
+	ws.mu.Lock()
+	defer ws.mu.Unlock()
+	if _, ok := ws.ids["abandoned"]; ok {
+		t.Fatal("an abandoned session's entry must be swept during Mark")
+	}
+	if _, ok := ws.ids["stale"]; ok {
+		t.Fatal("an expired, queried entry must stay evicted")
+	}
+	if len(ws.ids) != 2 { // active + newcomer
+		t.Fatalf("map must shrink to the live entries, got %d: %v", len(ws.ids), ws.ids)
+	}
+}
 
 // TestDevModeWorkerSessionRefusedAtHumanGate is the dev-mode half of the
 // human gate, end to end over real streamable-HTTP (so each connecting

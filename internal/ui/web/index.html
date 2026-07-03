@@ -351,24 +351,29 @@ new ResizeObserver(resize).observe(cv);   // re-fit when the cell changes (tab s
 resize();
 
 // ---- themed canvas backgrounds: grass (ranch/flock), honeycomb (hive) are
-// pre-rendered offscreen; matrix rain animates in draw(). All deliberately faint.
+// pre-rendered offscreen; matrix rain animates in draw(). Tuned to read clearly
+// at a glance without overpowering the nodes; light theme gets darker strokes
+// since the pale/neon colors that work on the dark theme wash out on cream.
 const bgCv = document.createElement('canvas'); const bgCtx = bgCv.getContext('2d');
 let rainDrops = [];
+function isLightTheme(){ return document.documentElement.classList.contains('light'); }
 function renderBg(){
   bgCv.width = Math.max(1, CW); bgCv.height = Math.max(1, CH);
   bgCtx.clearRect(0,0,CW,CH);
-  const kind = skin().bg;
+  const kind = skin().bg, light = isLightTheme();
   if(kind==='grass'){
+    const rgb = light ? '46,110,46' : '110,190,110';
     for(let i=0;i<Math.floor(CW*CH/9000);i++){
-      const x = Math.random()*CW, y = Math.random()*CH, h = 4+Math.random()*7;
-      bgCtx.strokeStyle = 'rgba(110,170,110,'+(0.10+Math.random()*0.12)+')'; bgCtx.lineWidth=1;
+      const x = Math.random()*CW, y = Math.random()*CH, h = 6+Math.random()*9;
+      bgCtx.strokeStyle = 'rgba('+rgb+','+(0.25+Math.random()*0.14)+')'; bgCtx.lineWidth=1.4;
       for(const dx of [-2,0,2]){
         bgCtx.beginPath(); bgCtx.moveTo(x,y); bgCtx.quadraticCurveTo(x+dx, y-h*0.6, x+dx*1.8, y-h); bgCtx.stroke();
       }
     }
   } else if(kind==='comb'){
+    const rgb = light ? '176,124,10' : '244,196,48';
     const r=16, w=r*Math.sqrt(3);
-    bgCtx.strokeStyle='rgba(244,196,48,0.07)'; bgCtx.lineWidth=1;
+    bgCtx.strokeStyle='rgba('+rgb+','+(light?0.22:0.18)+')'; bgCtx.lineWidth=1.2;
     for(let row=0; row*1.5*r<CH+2*r; row++){
       for(let col=0; col*w<CW+w; col++){
         const cx = col*w + (row%2? w/2:0), cy = row*1.5*r;
@@ -386,11 +391,12 @@ new ResizeObserver(()=>{ try{ renderBg(); }catch(_){} }).observe(cv);
 const RAIN_GLYPHS = '01コラルｱｲｳｴｵｶｷｸ<>{}#$';
 function drawRain(dt){
   bgCtx.clearRect(0,0,CW,CH); // rain redraws its own layer each frame
-  bgCtx.font='11px ui-monospace,monospace';
+  bgCtx.font='13px ui-monospace,monospace';
+  const rgb = isLightTheme() ? '10,110,50' : '90,240,130';
   for(const d of rainDrops){
     d.y += d.v*dt; if(d.y > CH+80) { d.y = -20; d.v = 40+Math.random()*90; }
-    for(let k=0;k<6;k++){
-      bgCtx.fillStyle = 'rgba(80,220,120,'+(0.16 - k*0.025)+')';
+    for(let k=0;k<8;k++){
+      bgCtx.fillStyle = 'rgba('+rgb+','+(0.45 - k*0.055)+')';
       bgCtx.fillText(RAIN_GLYPHS[(Math.random()*RAIN_GLYPHS.length)|0], d.x, d.y - k*13);
     }
   }
@@ -555,7 +561,8 @@ function hexA(hex, a){ const h=(hex||'#888').replace('#','').trim(); const n=par
 function readColors(){ const s=getComputedStyle(document.documentElement), g=k=>s.getPropertyValue(k).trim();
   C={fg:g('--fg'),muted:g('--muted'),amber:g('--amber'),red:g('--red'),line:g('--line'),green:g('--green'),panel:g('--panel')}; }
 function applyTheme(th){ document.documentElement.classList.toggle('light', th==='light');
-  const b=document.getElementById('themebtn'); if(b) b.textContent = th==='light'?'☀':'☾'; readColors(); }
+  const b=document.getElementById('themebtn'); if(b) b.textContent = th==='light'?'☀':'☾'; readColors();
+  try{ renderBg(); }catch(_){} }
 function toggleTheme(){ const th=document.documentElement.classList.contains('light')?'dark':'light';
   try{ localStorage.setItem('corral-theme', th); }catch(_){} applyTheme(th); }
 applyTheme((()=>{ try{ return localStorage.getItem('corral-theme'); }catch(_){ return null; } })()||'dark');

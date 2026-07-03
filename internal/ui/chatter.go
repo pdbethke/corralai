@@ -30,14 +30,46 @@ var chatterPersonas = map[string]map[string]string{
 	"hive":   {"": "a busy worker bee", "scrum": "the drill-sergeant bee", "lead": "the lead bee", "client": "the queen's client"},
 }
 
-// askGroupPhrase names the collective each skin's persona belongs to — used by
-// /api/ask to frame "in the <group>" the same way chatterPersonas frames "the
-// <persona>". Keyed to the same skin names as chatterPersonas.
-var askGroupPhrase = map[string]string{
+// skinGroupPhrase names the collective each skin's persona belongs to — used
+// by both /api/ask and /api/chatter to frame "in the <group>" the same way
+// chatterPersonas frames "the <persona>". Keyed to the same skin names as
+// chatterPersonas.
+var skinGroupPhrase = map[string]string{
 	"ranch":  "corral",
 	"flock":  "fold",
 	"matrix": "construct",
 	"hive":   "corralai swarm",
+}
+
+// resolveSkinPersona maps a client-requested skin+role to the server-fixed
+// persona and group phrase. The request value is a SELECTOR only — it never
+// becomes prompt text. Unknown skins fall back to "ranch" (the corral is the
+// default voice; bee vocabulary belongs to the hive skin ONLY). Roles without
+// a dedicated persona get the skin's default worker persona.
+func resolveSkinPersona(skinName, role string) (persona, group, resolved string) {
+	personas, ok := chatterPersonas[skinName]
+	if !ok {
+		skinName = "ranch"
+		personas = chatterPersonas[skinName]
+	}
+	persona = personas[role]
+	if persona == "" {
+		persona = personas[""]
+	}
+	group = skinGroupPhrase[skinName]
+	if group == "" {
+		group = skinGroupPhrase["ranch"]
+	}
+	return persona, group, skinName
+}
+
+// buildChatterPrompt is the chatter system prompt, factored pure for tests.
+// The collective follows the skin's group phrase — matrix says construct,
+// flock says fold — matching the VOICE guard in the same prompt.
+func buildChatterPrompt(agent, persona, role, group string) string {
+	return fmt.Sprintf(`You are %q — %s — the %s in the %s of coding agents.
+Say ONE short line (8 words or fewer), in character, about what you are doing RIGHT NOW, grounded strictly in your recorded trail below. First person. No quotes, no emoji, no preamble.
+VOICE: stay inside YOUR persona's universe even if the trail below uses other metaphors (bee/hive/herd/flock/construct/etc.) — translate, don't import them. If you riff on your name or role, do it in your persona's universe.`, agent, persona, role, group)
 }
 
 type chatterEntry struct {
@@ -62,8 +94,7 @@ func (s *Server) chatter(w http.ResponseWriter, r *http.Request) {
 	}
 	agent := strings.TrimSpace(r.URL.Query().Get("agent"))
 	skinName := r.URL.Query().Get("skin")
-	personas, ok := chatterPersonas[skinName]
-	if agent == "" || !ok {
+	if _, ok := chatterPersonas[skinName]; agent == "" || !ok {
 		http.Error(w, "agent and a known skin required", http.StatusBadRequest)
 		return
 	}
@@ -85,18 +116,13 @@ func (s *Server) chatter(w http.ResponseWriter, r *http.Request) {
 	defer func() { chatterMu.Lock(); chatterBusy = false; chatterMu.Unlock() }()
 
 	role := s.roleOf(agent)
-	persona := personas[role]
-	if persona == "" {
-		persona = personas[""]
-	}
+	persona, group, _ := resolveSkinPersona(skinName, role)
 	trail := s.buildTrail(agent, role, "")
 	if len(trail) > 1200 {
 		trail = trail[len(trail)-1200:]
 	}
 
-	system := fmt.Sprintf(`You are %q — %s — the %s in a corral of coding agents.
-Say ONE short line (8 words or fewer), in character, about what you are doing RIGHT NOW, grounded strictly in your recorded trail below. First person. No quotes, no emoji, no preamble.
-VOICE: stay inside YOUR persona's universe even if the trail below uses other metaphors (bee/hive/herd/flock/construct/etc.) — translate, don't import them. If you riff on your name or role, do it in your persona's universe.`, agent, persona, role)
+	system := buildChatterPrompt(agent, persona, role, group)
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
 	line, err := s.narrator.Ask(ctx, system, "YOUR RECORDED TRAIL:\n"+trail)

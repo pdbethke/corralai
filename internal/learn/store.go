@@ -129,25 +129,39 @@ func scanProposalRows(rows *sql.Rows) (*Proposal, error) {
 	return &p.Proposal, nil
 }
 
-// appendEvidence merges the existing JSON evidence array with new entries,
-// capped at maxEvidence (oldest dropped first).
-func appendEvidence(existing string, add []string) string {
-	var ev []string
-	_ = json.Unmarshal([]byte(existing), &ev)
-	ev = append(ev, add...)
+// capEvidence JSON-encodes an evidence snapshot, capped at maxEvidence
+// (oldest-within-the-snapshot dropped first).
+func capEvidence(ev []string) string {
 	if len(ev) > maxEvidence {
 		ev = ev[len(ev)-maxEvidence:]
+	}
+	if ev == nil {
+		ev = []string{}
 	}
 	b, _ := json.Marshal(ev)
 	return string(b)
 }
 
-// Upsert clusters a finding/lesson into a proposal by signature: it bumps an
-// existing pending proposal's count and evidence (created=false), or creates
-// a fresh pending one (created=true). A rejected signature stays suppressed —
-// bumping its count with no status change — until the incoming cluster total
-// reaches 2x the count it had at rejection, at which point it reopens as a
-// brand-new pending proposal.
+// Upsert clusters a finding/lesson into a proposal by signature. The caller
+// (Sweep, fed by the ticker) passes the CURRENT cluster as an absolute
+// snapshot — not an increment — because the ticker re-feeds the full
+// finding/lesson history every tick. Upsert therefore SETS count/evidence to
+// the incoming snapshot rather than adding to them; re-running the same
+// sweep on unchanged input is a no-op in effect (same values written back),
+// and a sweep with a shrunk or grown cluster reflects that exactly.
+//
+//   - A pending row for the signature: its count/evidence become the
+//     snapshot (created=false).
+//   - No pending row, but the most recent row for the signature is APPROVED:
+//     no-op (nil, false, nil) — promoted guidance already covers this
+//     signature, and post-promotion recurrence is exclusively the efficacy
+//     hook's job (RecordRecurrence via report_finding), which counts only
+//     genuinely new findings, not sweep re-feeds.
+//   - No pending row, most recent row REJECTED: suppressed (count bumped to
+//     the snapshot value, still created=false) until the snapshot reaches 2x
+//     the count at rejection, at which point it reopens as a fresh pending
+//     row.
+//   - No row at all: fresh pending row.
 func (s *Store) Upsert(signature, kind, roles string, evidence []string) (*Proposal, bool, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -155,48 +169,40 @@ func (s *Store) Upsert(signature, kind, roles string, evidence []string) (*Propo
 	}
 	defer tx.Rollback()
 
-	// Existing pending row for this signature: bump.
+	snapCount := len(evidence)
+	snapJSON := capEvidence(evidence)
+	ts := now()
+
+	// A pending row (whether the original opening or a post-promotion
+	// revision cloned by RecordRecurrence) always absorbs the snapshot —
+	// this is the ONLY branch that can run when an approved row for the same
+	// signature also exists, which is what keeps a pending revision live.
 	row := tx.QueryRow(proposalSelect+` WHERE signature=? AND status=?`, signature, StatusPending)
 	if p, err := scanProposal(row); err == nil {
-		newCount := p.Count + len(evidence)
-		newEvidence := appendEvidence(p.Evidence, evidence)
-		ts := now()
 		if _, err := tx.Exec(`UPDATE proposals SET count=?, evidence=?, updated_ts=? WHERE id=?`,
-			newCount, newEvidence, ts, p.ID); err != nil {
+			snapCount, snapJSON, ts, p.ID); err != nil {
 			return nil, false, err
 		}
 		if err := tx.Commit(); err != nil {
 			return nil, false, err
 		}
-		p.Count, p.Evidence, p.UpdatedTS = newCount, newEvidence, ts
+		p.Count, p.Evidence, p.UpdatedTS = snapCount, snapJSON, ts
 		return &p.Proposal, false, nil
 	} else if err != sql.ErrNoRows {
 		return nil, false, err
 	}
 
-	// Existing rejected row: suppressed below 2x its rejection baseline.
-	row = tx.QueryRow(proposalSelect+` WHERE signature=? AND status=? ORDER BY id DESC LIMIT 1`, signature, StatusRejected)
-	if p, err := scanProposal(row); err == nil {
-		incomingTotal := p.Count + len(evidence)
-		ts := now()
-		if incomingTotal < 2*p.rejectedCount {
-			newEvidence := appendEvidence(p.Evidence, evidence)
-			if _, err := tx.Exec(`UPDATE proposals SET count=?, evidence=?, updated_ts=? WHERE id=?`,
-				incomingTotal, newEvidence, ts, p.ID); err != nil {
-				return nil, false, err
-			}
-			if err := tx.Commit(); err != nil {
-				return nil, false, err
-			}
-			p.Count, p.Evidence, p.UpdatedTS = incomingTotal, newEvidence, ts
-			return &p.Proposal, false, nil
-		}
-		// Reopen: fresh pending row.
-		evJSON := appendEvidence("[]", evidence)
+	// No pending row: the single most recent row (any status) for this
+	// signature decides what happens next.
+	row = tx.QueryRow(proposalSelect+` WHERE signature=? ORDER BY id DESC LIMIT 1`, signature)
+	latest, err := scanProposal(row)
+	switch {
+	case err == sql.ErrNoRows:
+		// Brand-new signature: open a pending proposal.
 		res, err := tx.Exec(
 			`INSERT INTO proposals (signature,kind,roles,evidence,count,status,created_ts,updated_ts)
 			 VALUES (?,?,?,?,?,?,?,?)`,
-			signature, kind, roles, evJSON, incomingTotal, StatusPending, ts, ts,
+			signature, kind, roles, snapJSON, snapCount, StatusPending, ts, ts,
 		)
 		if err != nil {
 			return nil, false, err
@@ -208,19 +214,38 @@ func (s *Store) Upsert(signature, kind, roles string, evidence []string) (*Propo
 		if err := tx.Commit(); err != nil {
 			return nil, false, err
 		}
-		return &Proposal{ID: id, Signature: signature, Kind: kind, Roles: roles, Evidence: evJSON,
-			Count: incomingTotal, Status: StatusPending, CreatedTS: ts, UpdatedTS: ts}, true, nil
-	} else if err != sql.ErrNoRows {
+		return &Proposal{ID: id, Signature: signature, Kind: kind, Roles: roles, Evidence: snapJSON,
+			Count: snapCount, Status: StatusPending, CreatedTS: ts, UpdatedTS: ts}, true, nil
+	case err != nil:
 		return nil, false, err
+	case latest.Status == StatusApproved:
+		// Promoted guidance already covers this signature; sweep re-feeds
+		// must not reopen it. (RecordRecurrence handles genuine recurrence.)
+		if err := tx.Commit(); err != nil {
+			return nil, false, err
+		}
+		return nil, false, nil
 	}
 
-	// No existing row at all: fresh pending.
-	ts := now()
-	evJSON := appendEvidence("[]", evidence)
+	// latest.Status == StatusRejected: suppressed until the incoming
+	// snapshot reaches 2x the count it had at rejection.
+	if snapCount < 2*latest.rejectedCount {
+		if _, err := tx.Exec(`UPDATE proposals SET count=?, evidence=?, updated_ts=? WHERE id=?`,
+			snapCount, snapJSON, ts, latest.ID); err != nil {
+			return nil, false, err
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, false, err
+		}
+		latest.Count, latest.Evidence, latest.UpdatedTS = snapCount, snapJSON, ts
+		return &latest.Proposal, false, nil
+	}
+
+	// Reopen: fresh pending row.
 	res, err := tx.Exec(
 		`INSERT INTO proposals (signature,kind,roles,evidence,count,status,created_ts,updated_ts)
 		 VALUES (?,?,?,?,?,?,?,?)`,
-		signature, kind, roles, evJSON, len(evidence), StatusPending, ts, ts,
+		signature, kind, roles, snapJSON, snapCount, StatusPending, ts, ts,
 	)
 	if err != nil {
 		return nil, false, err
@@ -232,8 +257,8 @@ func (s *Store) Upsert(signature, kind, roles string, evidence []string) (*Propo
 	if err := tx.Commit(); err != nil {
 		return nil, false, err
 	}
-	return &Proposal{ID: id, Signature: signature, Kind: kind, Roles: roles, Evidence: evJSON,
-		Count: len(evidence), Status: StatusPending, CreatedTS: ts, UpdatedTS: ts}, true, nil
+	return &Proposal{ID: id, Signature: signature, Kind: kind, Roles: roles, Evidence: snapJSON,
+		Count: snapCount, Status: StatusPending, CreatedTS: ts, UpdatedTS: ts}, true, nil
 }
 
 // SetDraft records the human-authored (or human-approved-AI-drafted) guidance
@@ -328,6 +353,20 @@ func (s *Store) RecordRecurrence(signature string) (*Proposal, error) {
 			return nil, err
 		}
 		return nil, tx.Commit()
+	}
+
+	// Threshold crossed. If a pending revision for this signature is
+	// already awaiting review, don't stack another one on top of it — just
+	// reset the counter so the next recurrence starts counting fresh
+	// instead of cloning a duplicate proposal every 2 recurrences forever.
+	pendingRow := tx.QueryRow(proposalSelect+` WHERE signature=? AND status=?`, ap.Signature, StatusPending)
+	if _, perr := scanProposal(pendingRow); perr == nil {
+		if _, err := tx.Exec(`UPDATE proposals SET recurred_after=0, updated_ts=? WHERE id=?`, ts, ap.ID); err != nil {
+			return nil, err
+		}
+		return nil, tx.Commit()
+	} else if perr != sql.ErrNoRows {
+		return nil, perr
 	}
 
 	// Reopen as a revision.

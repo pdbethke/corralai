@@ -807,6 +807,15 @@ func main() {
 	// Learn sweep: deterministic recurrence detection over findings + lessons,
 	// feeding human-gated proposals. Degrade-never-block: any error is logged
 	// loudly and the ticker keeps running — a bad sweep must never crash the brain.
+	//
+	// Each tick re-reads the FULL finding/lesson history (AllFindingsUnbounded
+	// + LessonsForLearning) and feeds it to Sweep/Upsert as an absolute
+	// snapshot of the current cluster state — not a delta. That is correct by
+	// design: learn.Upsert is snapshot-based (sets count/evidence to the
+	// incoming cluster rather than summing), so re-feeding unchanged history
+	// is a no-op in effect, a grown cluster bumps the existing pending
+	// proposal to the new size, and an approved signature's re-feed is a
+	// pure no-op (see learn.Store.Upsert's doc comment).
 	go func() {
 		t := time.NewTicker(time.Duration(envInt("CORRALAI_LEARN_SWEEP_SECONDS", 60)) * time.Second)
 		defer t.Stop()

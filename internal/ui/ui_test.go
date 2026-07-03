@@ -561,3 +561,40 @@ func TestHistoryEndpoints(t *testing.T) {
 		t.Fatalf("unknown mission should 404, got %d", res3.StatusCode)
 	}
 }
+
+// TestCompletedDetailGroupsTasksByPhaseName pins the Completed tab's
+// phase/task grouping to the codebase's own precedent: mission.Store.View
+// groups tasks by t.Title against p.Name (planToTasks: "Title carries the
+// phase name so the View can group tasks back by phase"). Grouping by role
+// double-counts whenever two phases share a role — which DefaultPlan does
+// today (build-core and build are both "builder"). Structural check, same
+// style as TestAgentWindowsStructure; the DOM-level proof is the seeded
+// Playwright run in the task report.
+func TestCompletedDetailGroupsTasksByPhaseName(t *testing.T) {
+	sub, err := fs.Sub(webFS, "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := fs.ReadFile(sub, "index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(raw)
+	const fnStart = "function openMissionDetail("
+	const fnEnd = "function closeMissionDetail("
+	si := strings.Index(html, fnStart)
+	ei := strings.Index(html, fnEnd)
+	if si < 0 || ei < 0 || si >= ei {
+		t.Fatalf("could not locate openMissionDetail..closeMissionDetail range in index.html")
+	}
+	fn := html[si:ei]
+	if !strings.Contains(fn, "tasksByPhase[t.title]") {
+		t.Error("openMissionDetail must group tasks by t.title (the phase name planToTasks stamps on every task)")
+	}
+	if !strings.Contains(fn, "tasksByPhase[p.name]") {
+		t.Error("openMissionDetail must look up a phase's tasks by p.name (mirrors mission.Store.View)")
+	}
+	if strings.Contains(fn, "tasksByPhase[t.role]") || strings.Contains(fn, "tasksByPhase[p.role]") {
+		t.Error("openMissionDetail must NOT group by role — DefaultPlan reuses \"builder\" across build-core and build, so role-keyed grouping double-counts")
+	}
+}

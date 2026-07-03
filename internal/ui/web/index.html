@@ -488,7 +488,9 @@ function setSkin(n){
   try{ renderExec(); }catch(_){ /* repaint the console's idle line in the new skin's voice */ }
   try{ renderTopology(); }catch(_){ /* first paint may precede state init */ }
   try{ renderProposalsTab(); }catch(_){ /* first paint may precede state init */ }
-  try{ if(view==='completed') renderCompletedTab(); }catch(_){ /* first paint may precede state init */ }
+  // No completed-tab re-render here: its pane content is skin-neutral (only
+  // the tab label is flavored, set above), and re-rendering would refetch
+  // /api/history for nothing.
 }
 function critterGlyph(role, sub){
   const s = skin();
@@ -938,10 +940,14 @@ function openMissionDetail(id){
     const tasks = mv.tasks || [];
     const findings = mv.findings || [];
     const execs = mv.executions || [];
+    // Group tasks by t.title against p.name — planToTasks stamps the phase
+    // name on every task's Title exactly so views can regroup this way
+    // (mirrors mission.Store.View). Role would double-count: DefaultPlan
+    // gives build-core and build the same "builder" role.
     const tasksByPhase = {};
-    tasks.forEach(t => { (tasksByPhase[t.role] = tasksByPhase[t.role] || []).push(t); });
+    tasks.forEach(t => { (tasksByPhase[t.title] = tasksByPhase[t.title] || []).push(t); });
     const phaseRows = phases.length ? phases.map(p => {
-      const ts = tasksByPhase[p.role] || [];
+      const ts = tasksByPhase[p.name] || [];
       const durs = ts.filter(t=>t.done_ts && t.claimed_ts).map(t=>t.done_ts - t.claimed_ts);
       const totalDur = durs.reduce((a,b)=>a+b, 0);
       return `<tr><td>${esc(p.name)}</td><td>${esc(p.status)}</td><td>${p.done_tasks}/${p.count}</td><td>${durs.length ? fmtDuration(totalDur) : '<span class="cmd-null">—</span>'}</td></tr>`;

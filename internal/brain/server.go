@@ -96,6 +96,7 @@ func NewServer(store *coord.Store, mem *memory.Store, opts Options) *mcp.Server 
 	mcp.AddTool(s, &mcp.Tool{Name: "bootstrap",
 		Description: "Enter a coordination session in ONE call: register/refresh yourself, and get active peers, your live claims, and recently-completed work (so you don't redo a peer's finished task). Call this first."},
 		func(_ context.Context, req *mcp.CallToolRequest, in bootstrapIn) (*mcp.CallToolResult, coord.Bootstrap, error) {
+			opts.WorkerSessions.Mark(req)
 			name := identity(req, in.Name)
 			b, err := store.BootstrapSession(name, in.Program, in.Model, in.Task, in.SessionID, in.Role)
 			if err != nil {

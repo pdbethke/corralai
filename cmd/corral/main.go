@@ -768,6 +768,10 @@ func main() {
 	activityRing := brain.NewActivityRing()
 	// hostBook holds each bee's runtime facts (report_host) for the UI topology view.
 	hostBook := brain.NewHostBook()
+	// workerSessions is the dev-mode half of the human gate: marks any MCP session
+	// that identifies itself as a corral-agent worker (ClientInfo.Name or an
+	// early bootstrap/report_host call), so isHumanAdmin can refuse it.
+	workerSessions := brain.NewWorkerSessions()
 	srv := brain.NewServer(store, memStore, brain.Options{
 		Coord:            store,
 		MemoryOwners:     memOwners,
@@ -783,6 +787,7 @@ func main() {
 		ExecRing:         execRing,
 		ActivityRing:     activityRing,
 		HostBook:         hostBook,
+		WorkerSessions:   workerSessions,
 		RoleModels:       roleModels,
 		TaskLeaseSeconds: float64(envInt("CORRALAI_TASK_LEASE_SECONDS", 300)),
 		MintToken:        verifier.MintDelegation,

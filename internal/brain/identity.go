@@ -124,6 +124,14 @@ type Options struct {
 	// (host, model, jail) for the UI topology view. nil => tool not registered.
 	HostBook *HostBook
 
+	// WorkerSessions tracks, per MCP session, whether the session has
+	// identified itself as a corral-agent worker (ClientInfo.Name, or an
+	// earlier bootstrap/report_host call) — the dev-mode half of the human
+	// gate (see isHumanAdmin). nil => the dev-mode worker-session check is
+	// skipped for the marked-by-behavior signal; the live ClientInfo check
+	// still runs (WorkerSessions.Is is nil-receiver-safe).
+	WorkerSessions *WorkerSessions
+
 	// RoleModels is the declared policy mapping each role to its expected model.
 	// When set, swarm_topology annotates each host with Expected + Drift so the
 	// operator can spot a mis-assigned model at a glance. nil/empty => no
@@ -219,7 +227,10 @@ func (o Options) isAdmin(req *mcp.CallToolRequest) bool {
 // behavior (proposal approval/rejection, memory/reference promotion) must
 // gate on this, not isAdmin alone: the herd must never vet its own knowledge.
 func (o Options) isHumanAdmin(req *mcp.CallToolRequest) bool {
-	return o.isAdmin(req) && subagentOf(req) == ""
+	if !o.isAdmin(req) || subagentOf(req) != "" {
+		return false
+	}
+	return !o.WorkerSessions.Is(req)
 }
 
 // actor returns the verified principal (email) and tenant from the request's

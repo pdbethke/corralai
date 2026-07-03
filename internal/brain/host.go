@@ -170,6 +170,7 @@ func registerHost(s *mcp.Server, book *HostBook, opts Options) {
 		Name:        "report_host",
 		Description: "Announce your runtime facts (host, model, jail) so the swarm's topology view can map where every agent runs. Re-announce periodically; observability only.",
 	}, func(_ context.Context, req *mcp.CallToolRequest, in reportHostIn) (*mcp.CallToolResult, okOut, error) {
+		opts.WorkerSessions.Mark(req)
 		book.Set(Host{
 			Agent: identity(req, in.Name), Role: in.Role, Host: in.Host,
 			Model: in.Model, Backend: in.Backend, Jail: in.Jail, Net: in.Net,

@@ -17,6 +17,7 @@ import (
 	"github.com/pdbethke/corralai/internal/mission"
 	"github.com/pdbethke/corralai/internal/principals"
 	"github.com/pdbethke/corralai/internal/queue"
+	"github.com/pdbethke/corralai/internal/telemetry"
 )
 
 // TestProposalApprovalFansOut is the human gate of the learning loop, end to
@@ -466,6 +467,120 @@ func TestApproveProposalFlags(t *testing.T) {
 				t.Fatalf("status = %q, want approved", got.Status)
 			}
 		})
+	}
+}
+
+// TestRecurrenceAfterPromotionReopensProposal is the efficacy hook, end to
+// end over MCP: a proposal for "missing-req|go.mod" is approved (promoted
+// guidance is now standing), then two MORE report_finding calls of that same
+// type+target arrive — evidence the promoted guidance did NOT stop the
+// problem. One seed finding is written directly to the queue (the original
+// evidence that justified the proposal in the first place) so the first of
+// the two report_finding calls is itself already a recurrence (AddFinding
+// flags "recurring" whenever a PRIOR finding shares type+target); the first
+// report_finding call is thus the FIRST post-promotion recurrence (bumps the
+// counter, does not reopen) and the second report_finding call is the
+// SECOND post-promotion recurrence, which crosses the store's threshold of 2
+// and reopens the proposal as a new pending revision with Supersedes set.
+func TestRecurrenceAfterPromotionReopensProposal(t *testing.T) {
+	dir := t.TempDir()
+	cstore, err := coord.Open(filepath.Join(dir, "c.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cstore.Close() })
+	lstore, err := learn.Open(filepath.Join(dir, "l.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { lstore.Close() })
+	qstore, err := queue.Open(filepath.Join(dir, "q.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { qstore.Close() })
+	telstore, err := telemetry.Open(filepath.Join(dir, "t.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { telstore.Close() })
+
+	// Seed + approve the proposal for this signature — the promoted guidance
+	// that (per this test) failed to land.
+	p, _, err := lstore.Upsert("missing-req|go.mod", "finding", "builder", []string{"a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lstore.Approve(p.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Original evidence finding — this is what the proposal was clustered
+	// from, filed before the recurrence check in this test begins.
+	if _, err := qstore.AddFinding(queue.Finding{
+		MissionID: 1, Reporter: "seed", Type: "missing-req", Severity: "low", Target: "go.mod",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	clientT, serverT := mcp.NewInMemoryTransports()
+	go func() {
+		_ = NewServer(cstore, nil, Options{Learn: lstore, Queue: qstore, Telemetry: telstore}).Run(ctx, serverT)
+	}()
+	client := mcp.NewClient(&mcp.Implementation{Name: "operator", Version: "0"}, nil)
+	sess, err := client.Connect(ctx, clientT, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+
+	reportArgs := map[string]any{
+		"name": "tester", "mission_id": int64(1), "type": "missing-req",
+		"severity": "low", "target": "go.mod",
+	}
+
+	// First post-promotion recurrence: bumps the counter, does not reopen.
+	var f1 findingOut
+	callTask(t, sess, "report_finding", reportArgs, &f1)
+	if f1.ID == 0 {
+		t.Fatal("report_finding (1st) returned id=0")
+	}
+	ps, err := lstore.List("pending")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ps) != 0 {
+		t.Fatalf("after the FIRST post-promotion recurrence, want 0 pending proposals, got %d: %+v", len(ps), ps)
+	}
+
+	// Second post-promotion recurrence: crosses the threshold, reopens.
+	var f2 findingOut
+	callTask(t, sess, "report_finding", reportArgs, &f2)
+	if f2.ID == 0 {
+		t.Fatal("report_finding (2nd) returned id=0")
+	}
+	ps, err = lstore.List("pending")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ps) != 1 {
+		t.Fatalf("after the SECOND post-promotion recurrence, want 1 new pending proposal, got %d: %+v", len(ps), ps)
+	}
+	if ps[0].Supersedes != p.ID {
+		t.Fatalf("reopened proposal supersedes = %d, want %d", ps[0].Supersedes, p.ID)
+	}
+	if ps[0].Signature != "missing-req|go.mod" {
+		t.Fatalf("reopened proposal signature = %q, want missing-req|go.mod", ps[0].Signature)
+	}
+
+	// Telemetry carries the proposal_reopened event.
+	rep, err := telstore.Query(`SELECT kind FROM events WHERE kind = 'proposal_reopened'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Rows) != 1 {
+		t.Fatalf("want exactly 1 proposal_reopened telemetry event, got %d", len(rep.Rows))
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/pdbethke/corralai/internal/learn"
 	"github.com/pdbethke/corralai/internal/queue"
 	"github.com/pdbethke/corralai/internal/telemetry"
 )
@@ -143,9 +144,42 @@ type listTasksOut struct {
 	Tasks []queue.Task `json:"tasks"`
 }
 
+// notifyRecurrence closes the efficacy loop: report_finding already inserted
+// finding id via AddFinding, which flags "recurring" whenever a PRIOR finding
+// shared the same type+target — evidence a past fix or promoted guidance
+// didn't hold. On a recurring insert, tell the learn store; at the SECOND
+// recurrence since an approved proposal's promotion, the store reopens it as
+// a revision (nil, nil below the threshold). Degrade-never-block: any error
+// here is logged loudly, never returned — a learn-store hiccup must not stop
+// a finding from being filed.
+func notifyRecurrence(ls *learn.Store, tel *telemetry.Store, q *queue.Store, findingID, missionID int64, reporter, ftype, target string) {
+	if ls == nil {
+		return
+	}
+	f, ok, err := q.FindingByID(findingID)
+	if err != nil {
+		log.Printf("learn: recurrence check for finding #%d FAILED (finding still filed): %v", findingID, err)
+		return
+	}
+	if !ok || !f.Recurring {
+		return
+	}
+	sig := ftype + "|" + target
+	r, err := ls.RecordRecurrence(sig)
+	if err != nil {
+		log.Printf("learn: record recurrence for %s FAILED (finding still filed): %v", sig, err)
+		return
+	}
+	if r == nil {
+		return
+	}
+	log.Printf("learn: guidance for %s didn't land — revision proposal #%d opened", sig, r.ID)
+	rec(tel, missionID, "proposal_reopened", reporter, sig, map[string]any{"id": r.ID, "supersedes": r.Supersedes})
+}
+
 // registerTasks adds the pull-model tools: a bee claims the next ready task it
 // can serve, runs it, and completes it; list_tasks is the live work list.
-func registerTasks(s *mcp.Server, q *queue.Store, lease float64, tel *telemetry.Store, book *HostBook) {
+func registerTasks(s *mcp.Server, q *queue.Store, lease float64, tel *telemetry.Store, book *HostBook, ls *learn.Store) {
 	if lease <= 0 {
 		lease = 300
 	}
@@ -245,6 +279,7 @@ func registerTasks(s *mcp.Server, q *queue.Store, lease float64, tel *telemetry.
 			}
 			recModel(tel, in.MissionID, "finding_reported", reporter, in.Target, f.ReporterModel,
 				map[string]any{"type": in.Type, "severity": in.Severity})
+			notifyRecurrence(ls, tel, q, id, in.MissionID, reporter, in.Type, in.Target)
 			return nil, findingOut{ID: id}, nil
 		})
 

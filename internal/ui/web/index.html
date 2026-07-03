@@ -421,22 +421,22 @@ const buzzes = [];         // little "buzz.." sound-effect texts that float up f
 // as lassos. 'hive' keeps the original hand-drawn bees for the nostalgic.
 const SKINS = {
   ranch: { label:'🤠 ranch', brain:'🤠', worker:'🐴', roles:{scrum:'🐕', client:'🧑‍💼'}, sub:'🐎', subtitle:'— the corral', bg:'grass', tab:'corral', empty:'no agents in the corral yet', warming:'the herd is saddling up…',
-           center:'the corral', lasso:true, favicon:'🤠', proposes:'the herd proposes:', proposalsTab:'proposals',
+           center:'the corral', lasso:true, favicon:'🤠', proposes:'the herd proposes:', proposalsTab:'proposals', noun:'pony', nouns:'ponies',
            sounds:['neigh~','clop clop','*swish*','yeehaw~'],
            caught:['Caught me — no {cmd} on record!','Busted! Never ran {cmd}…','Can’t outride the brand 🤠','No proof, no pass — re-doing it'],
            brainTag:'the wrangler — MCP coordinator · task queue · verification gate' },
   flock: { label:'🐑 flock', brain:'🐕', worker:'🐑', roles:{scrum:'🐕‍🦺', client:'🧑‍🌾'}, sub:'🐑', subtitle:'— the fold', bg:'grass', tab:'fold', empty:'no agents in the fold yet', warming:'the flock is gathering…',
-           center:'the fold', lasso:false, favicon:'🐑', proposes:'the flock proposes:', proposalsTab:'proposals',
+           center:'the fold', lasso:false, favicon:'🐑', proposes:'the flock proposes:', proposalsTab:'proposals', noun:'sheep', nouns:'sheep',
            sounds:['baa~','baaa..','*nibble*','baa!'],
            caught:['Caught me — no {cmd} on record!','Busted! Never ran {cmd}…','Fleeced! No {cmd} run…','No proof, no pass — re-doing it'],
            brainTag:'the sheepdog — MCP coordinator · task queue · verification gate' },
   matrix:{ label:'🕶 matrix', brain:'👁️', worker:'🕶️', roles:{scrum:'📟', client:'🥄'}, sub:'🐇', subtitle:'— the construct', bg:'rain', tab:'construct', honorific:'Mr. ', empty:'no Agents in the construct yet', warming:'loading the construct…',
-           center:'the construct', lasso:false, favicon:'🕶️', proposes:'the construct proposes:', proposalsTab:'anomalies',
+           center:'the construct', lasso:false, favicon:'🕶️', proposes:'the construct proposes:', proposalsTab:'anomalies', noun:'Agent', nouns:'Agents',
            sounds:['0101..','⋮⋮⋮','*dodge*','follow the 🐇'],
            caught:['There is no {cmd} on record','Busted! Never ran {cmd}…','The gate sees all 👁️','No proof, no pass — re-doing it'],
            brainTag:'the architect — MCP coordinator · task queue · verification gate' },
   hive:  { label:'🐝 hive', brain:null, worker:null, roles:{}, sub:null, subtitle:'— the hive', bg:'comb', tab:'hive', empty:'no bees in the hive yet', warming:'the bees are warming up…',
-           center:'the corral', lasso:false, favicon:'🐝', proposes:'the hive proposes:', proposalsTab:'proposals',
+           center:'the corral', lasso:false, favicon:'🐝', proposes:'the hive proposes:', proposalsTab:'proposals', noun:'bee', nouns:'bees',
            sounds:['buzz..','bzz..','bzzz~','buzz~'],
            caught:['Caught me — no {cmd} on record!','Busted! Never ran {cmd}…','Can’t fake the buzz 🐝','No proof, no pass — re-doing it'],
            brainTag:'the queen — MCP coordinator · task queue · verification gate' },
@@ -754,11 +754,14 @@ function renderTopology(){
   const models = [...new Set(hosts.map(h=>h.backend+':'+h.model))];
   let html = '<div class="twrap">';
   html += `<div class="tsum">${hosts.length} agent${hosts.length===1?'':'s'} · ${hostKeys.length} host${hostKeys.length===1?'':'s'}${models.length?' · '+esc(models.join(' , ')):''}</div>`;
-  html += `<div class="tqueen"><b>${skin().brain||'👑'} corral brain</b> <span class="tmeta">${skin().brainTag}</span></div>`;
-  if(!hosts.length){ el.innerHTML = html + '<div class="tempty">no agents have announced yet — the bees report their host on a timer…</div></div>' + renderModelComparison(); return; }
+  // The topology pane's flavored copy (brain name, worker nouns) follows the
+  // active skin — per the standing rule, no skin's vocabulary is hardcoded.
+  html += `<div class="tqueen"><b>${skin().brain||'👑'} ${esc(skin().tab)} brain</b> <span class="tmeta">${skin().brainTag}</span></div>`;
+  if(!hosts.length){ el.innerHTML = html + `<div class="tempty">no agents have announced yet — the ${esc(skin().nouns)} report their host on a timer…</div></div>` + renderModelComparison(); return; }
   for(const host of hostKeys){
     const bees = byHost[host], os = bees[0].os||'';
-    html += `<div class="thost"><div class="thosthd">🖥 ${esc(host)} <span class="tmeta">${esc(os)} · ${bees.length} bee${bees.length===1?'':'s'}</span></div>`;
+    const nWorkers = bees.length===1 ? `1 ${esc(skin().noun)}` : `${bees.length} ${esc(skin().nouns)}`;
+    html += `<div class="thost"><div class="thosthd">🖥 ${esc(host)} <span class="tmeta">${esc(os)} · ${nWorkers}</span></div>`;
     html += bees.map(b => {
       const jail = (b.jail && b.jail!=='none')
         ? `<span class="tjail">⛨ ${esc(b.jail)}${b.net?' +net':' ·no-net'}</span>`
@@ -821,14 +824,10 @@ function renderProposals(){
 // proposal IS (recurring evidence the herd distilled), and what approving it
 // does (promotes guidance into vetted memory + syncs the skill fleet-wide).
 // The human gate of the learning loop, spelled out once instead of implied.
-// PROPOSALS_WORKER_NOUN: the singular noun for "one X's opinion" in the
-// explainer, per skin — hive is the one skin allowed the bee word; every
-// other skin gets its own vocabulary so no skin leaks another's metaphor.
-const PROPOSALS_WORKER_NOUN = { ranch:'pony', flock:'sheep', matrix:'Agent', hive:'bee' };
 function proposalsExplainer(){
   const s = skin();
   const who = s.tab || 'corral';
-  const one = PROPOSALS_WORKER_NOUN[skinName] || 'agent';
+  const one = s.noun || 'agent';   // the skin's worker noun — hive alone gets the bee word
   return `<div class="proposals-explainer">Proposals are recurring patterns the ${esc(who)} distilled from real findings and lessons — not one ${esc(one)}'s opinion, but evidence that showed up again and again. `
     + `Approving one promotes its guidance into vetted memory and syncs the matching skill across the whole fleet; rejecting it sends the pattern back until the evidence doubles. This is the human gate of the learning loop.</div>`;
 }

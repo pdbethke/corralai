@@ -522,3 +522,42 @@ func TestProposalApproveEndpointPromotesViaCallback(t *testing.T) {
 		t.Fatalf("approved proposal still listed as pending: %+v", payload.Proposals)
 	}
 }
+
+// TestHistoryEndpoints covers the Completed tab's read surface: /api/history
+// (list) and /api/history/{id} (drill-down), including the 404 for an
+// unknown mission id.
+func TestHistoryEndpoints(t *testing.T) {
+	deps := Deps{
+		History: func() ([]brain.MissionSummary, error) {
+			return []brain.MissionSummary{{ID: 1, Directive: "ship it", Status: "done"}}, nil
+		},
+		HistoryDetail: func(id int64) (*brain.MissionDetail, error) {
+			if id != 1 {
+				return nil, nil
+			}
+			return &brain.MissionDetail{MissionSummary: brain.MissionSummary{ID: 1, Directive: "ship it", Status: "done"}}, nil
+		},
+	}
+	srv := httptest.NewServer(Handler(deps))
+	defer srv.Close()
+
+	res, err := http.Get(srv.URL + "/api/history")
+	if err != nil || res.StatusCode != 200 {
+		t.Fatalf("GET /api/history: %v status=%v", err, res.StatusCode)
+	}
+	var listOut struct {
+		Missions []brain.MissionSummary `json:"missions"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&listOut); err != nil || len(listOut.Missions) != 1 {
+		t.Fatalf("decode: %v missions=%v", err, listOut.Missions)
+	}
+
+	res2, err := http.Get(srv.URL + "/api/history/1")
+	if err != nil || res2.StatusCode != 200 {
+		t.Fatalf("GET /api/history/1: %v status=%v", err, res2.StatusCode)
+	}
+	res3, _ := http.Get(srv.URL + "/api/history/999")
+	if res3.StatusCode != 404 {
+		t.Fatalf("unknown mission should 404, got %d", res3.StatusCode)
+	}
+}

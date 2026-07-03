@@ -185,6 +185,28 @@
     padding:0 6px; border-radius:9px; margin-left:5px; vertical-align:middle; line-height:15px; min-width:8px; text-align:center; }
   @keyframes pbadge-pulse { 0%{ transform:scale(1); } 35%{ transform:scale(1.55); box-shadow:0 0 0 4px rgba(244,196,48,.35); } 100%{ transform:scale(1); } }
   .pbadge.pulse { animation:pbadge-pulse .6s ease-out; }
+  /* #completed — the Completed tab: same fixed-overlay family as #proposals/
+     #progress, .cm- cards mirror .pmission, and #completed-detail mirrors
+     .pmission for the drill-down pane opened by openMissionDetail(). */
+  #completed { position:fixed; inset:42px 0 0 0; z-index:3; display:none; background:var(--bg); overflow:auto; padding:22px 0; }
+  #completed.show { display:block; }
+  .cm-card { max-width:800px; margin:0 auto 14px; padding:14px 18px; background:var(--panel); border:1px solid var(--line); border-radius:10px; cursor:pointer; }
+  .cm-hdr { display:flex; align-items:center; gap:10px; margin-bottom:3px; }
+  .cm-dir { font-size:15px; font-weight:600; color:var(--fg); }
+  .cm-pill { font-size:10px; text-transform:uppercase; letter-spacing:.5px; padding:2px 8px; border-radius:10px; flex:none; background:var(--green); color:var(--bg); }
+  .cm-sum { color:var(--muted); font-size:12px; margin:2px 0 4px; }
+  .cm-learned { font-size:11.5px; color:#4fc3d9; margin-top:4px; }
+  .cm-actions { margin-top:9px; }
+  .cm-actions button { border:none; border-radius:5px; padding:4px 12px; font-size:12px; margin-right:8px; }
+  .cm-actions .cm-details-btn { background:var(--panel); color:var(--fg); border:1px solid var(--line); cursor:pointer; }
+  .cm-actions .cm-replay-btn { background:var(--panel); color:var(--muted); border:1px solid var(--line); cursor:not-allowed; opacity:.55; }
+  #completed-detail { max-width:800px; margin:0 auto 20px; padding:16px 18px; background:var(--panel); border:1px solid var(--line); border-radius:10px; }
+  .cmd-close { float:right; cursor:pointer; color:var(--muted); font-size:13px; }
+  .cmd-section-title { color:#6b6452; font-size:11px; text-transform:uppercase; letter-spacing:.5px; margin:14px 0 6px; }
+  .cmd-table { width:100%; border-collapse:collapse; font-size:12px; margin:4px 0; }
+  .cmd-table th { color:var(--amber); font-weight:600; text-align:left; padding:3px 8px 3px 0; border-bottom:1px solid var(--line); font-size:11px; text-transform:uppercase; letter-spacing:.3px; }
+  .cmd-table td { color:var(--fg); padding:3px 8px 3px 0; border-bottom:1px solid rgba(255,255,255,.04); font-size:11.5px; }
+  .cmd-null { color:var(--muted); font-style:italic; }
   #mlist { overflow:auto; padding:14px 16px; max-width:760px; margin:0 auto; height:100%; }
   #mctrl { display:flex; gap:8px; margin-bottom:12px; }
   #mq { flex:1; background:var(--panel); border:1px solid var(--line); color:var(--fg);
@@ -293,6 +315,7 @@
       <a class="tab" id="tab-topology" onclick="setView('topology')">topology</a>
       <a class="tab" id="tab-memory" onclick="setView('memory')">memory</a>
       <a class="tab" id="tab-proposals" onclick="setView('proposals')">proposals<span id="proposals-badge" class="pbadge" style="display:none"></span></a>
+      <a class="tab" id="tab-completed" onclick="setView('completed')">completed</a>
     </span>
     <span class="stat" id="stat">connecting…</span>
     <span class="stat" id="whoami" title="who the brain sees you as"></span>
@@ -332,6 +355,7 @@
   <div id="progress"></div>
   <div id="topology"></div>
   <div id="proposals"></div>
+  <div id="completed"><div id="completed-list"></div><div id="completed-detail" style="display:none"></div></div>
   <div id="memory">
     <div id="mlist">
       <div id="mctrl">
@@ -421,22 +445,22 @@ const buzzes = [];         // little "buzz.." sound-effect texts that float up f
 // as lassos. 'hive' keeps the original hand-drawn bees for the nostalgic.
 const SKINS = {
   ranch: { label:'🤠 ranch', brain:'🤠', worker:'🐴', roles:{scrum:'🐕', client:'🧑‍💼'}, sub:'🐎', subtitle:'— the corral', bg:'grass', tab:'corral', empty:'no agents in the corral yet', warming:'the herd is saddling up…',
-           center:'the corral', lasso:true, favicon:'🤠', proposes:'the herd proposes:', proposalsTab:'proposals', noun:'pony', nouns:'ponies',
+           center:'the corral', lasso:true, favicon:'🤠', proposes:'the herd proposes:', proposalsTab:'proposals', completedTab:'completed', noun:'pony', nouns:'ponies',
            sounds:['neigh~','clop clop','*swish*','yeehaw~'],
            caught:['Caught me — no {cmd} on record!','Busted! Never ran {cmd}…','Can’t outride the brand 🤠','No proof, no pass — re-doing it'],
            brainTag:'the wrangler — MCP coordinator · task queue · verification gate' },
   flock: { label:'🐑 flock', brain:'🐕', worker:'🐑', roles:{scrum:'🐕‍🦺', client:'🧑‍🌾'}, sub:'🐑', subtitle:'— the fold', bg:'grass', tab:'fold', empty:'no agents in the fold yet', warming:'the flock is gathering…',
-           center:'the fold', lasso:false, favicon:'🐑', proposes:'the flock proposes:', proposalsTab:'proposals', noun:'sheep', nouns:'sheep',
+           center:'the fold', lasso:false, favicon:'🐑', proposes:'the flock proposes:', proposalsTab:'proposals', completedTab:'completed', noun:'sheep', nouns:'sheep',
            sounds:['baa~','baaa..','*nibble*','baa!'],
            caught:['Caught me — no {cmd} on record!','Busted! Never ran {cmd}…','Fleeced! No {cmd} run…','No proof, no pass — re-doing it'],
            brainTag:'the sheepdog — MCP coordinator · task queue · verification gate' },
   matrix:{ label:'🕶 matrix', brain:'👁️', worker:'🕶️', roles:{scrum:'📟', client:'🥄'}, sub:'🐇', subtitle:'— the construct', bg:'rain', tab:'construct', honorific:'Mr. ', empty:'no Agents in the construct yet', warming:'loading the construct…',
-           center:'the construct', lasso:false, favicon:'🕶️', proposes:'the construct proposes:', proposalsTab:'anomalies', noun:'Agent', nouns:'Agents',
+           center:'the construct', lasso:false, favicon:'🕶️', proposes:'the construct proposes:', proposalsTab:'anomalies', completedTab:'archive', noun:'Agent', nouns:'Agents',
            sounds:['0101..','⋮⋮⋮','*dodge*','follow the 🐇'],
            caught:['There is no {cmd} on record','Busted! Never ran {cmd}…','The gate sees all 👁️','No proof, no pass — re-doing it'],
            brainTag:'the architect — MCP coordinator · task queue · verification gate' },
   hive:  { label:'🐝 hive', brain:null, worker:null, roles:{}, sub:null, subtitle:'— the hive', bg:'comb', tab:'hive', empty:'no bees in the hive yet', warming:'the bees are warming up…',
-           center:'the corral', lasso:false, favicon:'🐝', proposes:'the hive proposes:', proposalsTab:'proposals', noun:'bee', nouns:'bees',
+           center:'the corral', lasso:false, favicon:'🐝', proposes:'the hive proposes:', proposalsTab:'proposals', completedTab:'completed', noun:'bee', nouns:'bees',
            sounds:['buzz..','bzz..','bzzz~','buzz~'],
            caught:['Caught me — no {cmd} on record!','Busted! Never ran {cmd}…','Can’t fake the buzz 🐝','No proof, no pass — re-doing it'],
            brainTag:'the queen — MCP coordinator · task queue · verification gate' },
@@ -457,11 +481,14 @@ function setSkin(n){
   if(ptab){ const badge = document.getElementById('proposals-badge');
     ptab.firstChild.textContent = skin().proposalsTab || 'proposals';
     if(badge && !ptab.contains(badge)) ptab.appendChild(badge); }
+  const ctab = document.getElementById('tab-completed');
+  if(ctab) ctab.textContent = skin().completedTab || 'completed';
   const emp = document.getElementById('empty'); if(emp) emp.textContent = skin().empty;
   try{ renderBg(); }catch(_){}
   try{ renderExec(); }catch(_){ /* repaint the console's idle line in the new skin's voice */ }
   try{ renderTopology(); }catch(_){ /* first paint may precede state init */ }
   try{ renderProposalsTab(); }catch(_){ /* first paint may precede state init */ }
+  try{ if(view==='completed') renderCompletedTab(); }catch(_){ /* first paint may precede state init */ }
 }
 function critterGlyph(role, sub){
   const s = skin();
@@ -867,6 +894,91 @@ function rejectProposal(id){
     .then(r => { if(!r.ok) return r.text().then(t => alert('reject failed: ' + t)); });
 }
 
+// fmtDuration: seconds -> "Xm Ys" for the Completed tab's card + detail pane.
+function fmtDuration(sec){
+  sec = Math.max(0, Math.round(sec||0));
+  return Math.floor(sec/60) + 'm ' + (sec%60) + 's';
+}
+// renderCompletedTab: the finished-mission list — every non-running mission,
+// newest first (the brain already sorts it that way), each card a directive +
+// status pill + duration/task/finding summary + best-effort learned-signature
+// chips + a details button (opens the drill-down below) and a disabled
+// ▶ replay stub (the player lands in a later task; this button is inert on
+// purpose, not a placeholder someone forgot to wire).
+function renderCompletedTab(){
+  const list = document.getElementById('completed-list');
+  if(!list) return;
+  fetch('/api/history').then(r=>r.json()).then(d=>{
+    const missions = d.missions || [];
+    if(!missions.length){ list.innerHTML = '<div class="pmt">no finished missions yet.</div>'; return; }
+    list.innerHTML = missions.map(m => `
+      <div class="cm-card" onclick="openMissionDetail(${m.id})">
+        <div class="cm-hdr"><span class="cm-dir">${esc(m.directive)}</span><span class="cm-pill">${esc(m.status)}</span></div>
+        <div class="cm-sum">${fmtDuration(m.duration_seconds)} · ${m.done_task_count}/${m.task_count} tasks · ${m.finding_count} finding${m.finding_count===1?'':'s'}</div>
+        ${(m.learned_signatures||[]).length ? `<div class="cm-learned">learned: ${(m.learned_signatures||[]).map(esc).join(', ')}</div>` : ''}
+        <div class="cm-actions">
+          <button class="cm-details-btn" onclick="event.stopPropagation(); openMissionDetail(${m.id})">details</button>
+          <button class="cm-replay-btn" disabled title="replay arrives with the player" onclick="event.stopPropagation();">▶ replay</button>
+        </div>
+      </div>`).join('');
+  }).catch(()=>{ list.innerHTML = '<div class="pmt">could not load mission history.</div>'; });
+}
+// openMissionDetail: the drill-down pane — phase/task table (with timings),
+// findings (with resolved_ts-aware outcomes), an executions summary, the
+// what-got-learned chips, and the PR link when the mission landed one.
+function openMissionDetail(id){
+  const el = document.getElementById('completed-detail');
+  if(!el) return;
+  fetch('/api/history/'+id).then(r=>{
+    if(!r.ok) throw new Error('not found');
+    return r.json();
+  }).then(d=>{
+    const mv = d.mission;
+    const phases = mv.phases || [];
+    const tasks = mv.tasks || [];
+    const findings = mv.findings || [];
+    const execs = mv.executions || [];
+    const tasksByPhase = {};
+    tasks.forEach(t => { (tasksByPhase[t.role] = tasksByPhase[t.role] || []).push(t); });
+    const phaseRows = phases.length ? phases.map(p => {
+      const ts = tasksByPhase[p.role] || [];
+      const durs = ts.filter(t=>t.done_ts && t.claimed_ts).map(t=>t.done_ts - t.claimed_ts);
+      const totalDur = durs.reduce((a,b)=>a+b, 0);
+      return `<tr><td>${esc(p.name)}</td><td>${esc(p.status)}</td><td>${p.done_tasks}/${p.count}</td><td>${durs.length ? fmtDuration(totalDur) : '<span class="cmd-null">—</span>'}</td></tr>`;
+    }).join('') : `<tr><td colspan="4" class="cmd-null">no phases recorded</td></tr>`;
+    const findingRows = findings.length ? findings.map(f => {
+      const outcome = f.resolved_ts ? `${esc(f.status)} @ ${new Date(f.resolved_ts*1000).toLocaleString()}` : esc(f.status);
+      return `<tr><td>${esc(f.type)}</td><td>${esc(f.target||'')}</td><td>${esc(f.severity)}</td><td>${outcome}</td></tr>`;
+    }).join('') : `<tr><td colspan="4" class="cmd-null">no findings</td></tr>`;
+    const execOk = execs.filter(e=>e.OK).length;
+    const execSummary = execs.length ? `${execOk}/${execs.length} passed` : 'no executions recorded';
+    const learned = (mv.learned_signatures||[]).length
+      ? `<div class="cm-learned">what got learned: ${(mv.learned_signatures||[]).map(esc).join(', ')}</div>`
+      : `<div class="cmd-null">nothing promoted from this mission (yet)</div>`;
+    const pr = mv.pr_url ? `<div style="margin-top:8px"><a href="${esc(mv.pr_url)}" target="_blank" rel="noopener">pull request ↗</a></div>` : '';
+    el.innerHTML = `
+      <span class="cmd-close" onclick="closeMissionDetail()">✕ close</span>
+      <div class="cm-hdr"><span class="cm-dir">${esc(mv.directive)}</span><span class="cm-pill">${esc(mv.status)}</span></div>
+      <div class="cm-sum">${fmtDuration(mv.duration_seconds)} · ${mv.done_task_count}/${mv.task_count} tasks · ${mv.finding_count} finding${mv.finding_count===1?'':'s'}</div>
+      <div class="cmd-section-title">phases &amp; tasks</div>
+      <table class="cmd-table"><thead><tr><th>phase</th><th>status</th><th>done</th><th>time</th></tr></thead><tbody>${phaseRows}</tbody></table>
+      <div class="cmd-section-title">findings</div>
+      <table class="cmd-table"><thead><tr><th>type</th><th>target</th><th>severity</th><th>outcome</th></tr></thead><tbody>${findingRows}</tbody></table>
+      <div class="cmd-section-title">executions</div>
+      <div class="cm-sum">${esc(execSummary)}</div>
+      <div class="cmd-section-title">learning</div>
+      ${learned}
+      ${pr}
+      <div class="cm-actions"><button class="cm-replay-btn" disabled title="replay arrives with the player">▶ replay</button></div>`;
+    el.style.display = 'block';
+    el.scrollIntoView({behavior:'smooth', block:'nearest'});
+  }).catch(()=>{ el.innerHTML = '<div class="pmt">mission not found.</div>'; el.style.display = 'block'; });
+}
+function closeMissionDetail(){
+  const el = document.getElementById('completed-detail');
+  if(el){ el.style.display = 'none'; el.innerHTML = ''; }
+}
+
 function renderProgress(){
   const el = document.getElementById('progress');
   const missions = lastState.missions || [];
@@ -1249,10 +1361,12 @@ function setView(v){
   document.getElementById('tab-topology').classList.toggle('active', v==='topology');
   document.getElementById('tab-memory').classList.toggle('active', v==='memory');
   document.getElementById('tab-proposals').classList.toggle('active', v==='proposals');
+  document.getElementById('tab-completed').classList.toggle('active', v==='completed');
   document.getElementById('memory').classList.toggle('show', v==='memory');
   document.getElementById('progress').classList.toggle('show', v==='progress');
   document.getElementById('topology').classList.toggle('show', v==='topology');
   document.getElementById('proposals').classList.toggle('show', v==='proposals');
+  document.getElementById('completed').classList.toggle('show', v==='completed');
   // The stage (and its canvas) stay mounted; the tab overlays simply cover them at a
   // higher z-index. Don't display:none the canvas — that zeroes its box and squishes
   // the swarm. resize() re-fits when we come back, but there's nothing to re-fit now.
@@ -1260,6 +1374,7 @@ function setView(v){
   if(v==='progress'){ renderProgress(); }
   if(v==='topology'){ renderTopology(); }
   if(v==='proposals'){ renderProposalsTab(); }
+  if(v==='completed'){ renderCompletedTab(); }
 }
 async function loadScopes(){
   try {

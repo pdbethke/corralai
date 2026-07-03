@@ -35,24 +35,26 @@ import (
 var webFS embed.FS
 
 type Server struct {
-	coord      *coord.Store
-	mem        *memory.Store
-	gw         *gateway.Store
-	bus        *coord.Bus
-	memOwners  map[string]bool
-	roles      *principals.Store
-	queue      *queue.Store
-	missions   *mission.Store
-	execs      *brain.ExecRing
-	acts       *brain.ActivityRing
-	hosts      *brain.HostBook
-	narrator   *llm.Client
-	tel        *telemetry.Store
-	oracle     *oracle.Client
-	roleModels rolemodel.Policy
-	learn      *learn.Store
-	promote    func(id int64, actor string) error
-	reject     func(id int64, reason string) error
+	coord           *coord.Store
+	mem             *memory.Store
+	gw              *gateway.Store
+	bus             *coord.Bus
+	memOwners       map[string]bool
+	roles           *principals.Store
+	queue           *queue.Store
+	missions        *mission.Store
+	execs           *brain.ExecRing
+	acts            *brain.ActivityRing
+	hosts           *brain.HostBook
+	narrator        *llm.Client
+	tel             *telemetry.Store
+	oracle          *oracle.Client
+	roleModels      rolemodel.Policy
+	learn           *learn.Store
+	promote         func(id int64, actor string) error
+	reject          func(id int64, reason string) error
+	historyFn       func() ([]brain.MissionSummary, error)
+	historyDetailFn func(id int64) (*brain.MissionDetail, error)
 }
 
 // Handler returns the UI routes: / (the page), /api/me (the viewer's identity +
@@ -105,10 +107,16 @@ type Deps struct {
 	// Reject dismisses a pending proposal, recording the reason. Wired in
 	// cmd/corral/main.go. nil => the reject endpoint returns 404.
 	Reject func(id int64, reason string) error
+	// History lists past (non-running) missions for the Completed tab. nil =>
+	// the tab renders empty (feature disabled, never a 500).
+	History func() ([]brain.MissionSummary, error)
+	// HistoryDetail drills into one mission's phases/tasks/findings/executions.
+	// Returns (nil, nil) for an unknown id — the handler turns that into 404.
+	HistoryDetail func(id int64) (*brain.MissionDetail, error)
 }
 
 func Handler(d Deps) http.Handler {
-	s := &Server{coord: d.Coord, mem: d.Mem, gw: d.Gateway, bus: d.Bus, memOwners: d.MemOwners, roles: d.Roles, queue: d.Queue, missions: d.Missions, execs: d.Executions, acts: d.Activity, hosts: d.Hosts, narrator: d.Narrator, tel: d.Telemetry, oracle: d.Oracle, roleModels: d.RoleModels, learn: d.Learn, promote: d.Promote, reject: d.Reject}
+	s := &Server{coord: d.Coord, mem: d.Mem, gw: d.Gateway, bus: d.Bus, memOwners: d.MemOwners, roles: d.Roles, queue: d.Queue, missions: d.Missions, execs: d.Executions, acts: d.Activity, hosts: d.Hosts, narrator: d.Narrator, tel: d.Telemetry, oracle: d.Oracle, roleModels: d.RoleModels, learn: d.Learn, promote: d.Promote, reject: d.Reject, historyFn: d.History, historyDetailFn: d.HistoryDetail}
 	mux := http.NewServeMux()
 	sub, _ := fs.Sub(webFS, "web")
 	mux.Handle("/", http.FileServer(http.FS(sub)))
@@ -126,6 +134,8 @@ func Handler(d Deps) http.Handler {
 	mux.HandleFunc("/api/review", s.review)
 	mux.HandleFunc("/api/proposal/approve", s.proposalApprove)
 	mux.HandleFunc("/api/proposal/reject", s.proposalReject)
+	mux.HandleFunc("/api/history", s.history)
+	mux.HandleFunc("/api/history/", s.historyDetail)
 	return mux
 }
 
@@ -227,6 +237,47 @@ func (s *Server) proposalReject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"ok": true})
+}
+
+// history lists past (non-running) missions for the Completed tab — a plain
+// read, so (unlike approve/reject) no ReadOnly/superuser gate: observers may
+// view finished missions same as any other GET (mirrors memStats/agentDetail).
+func (s *Server) history(w http.ResponseWriter, r *http.Request) {
+	if s.historyFn == nil {
+		writeJSON(w, map[string]any{"missions": []any{}})
+		return
+	}
+	ms, err := s.historyFn()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"missions": ms})
+}
+
+// historyDetail drills into one mission's phases/tasks/findings/executions —
+// the Completed tab's detail pane. Read-only, same as history.
+func (s *Server) historyDetail(w http.ResponseWriter, r *http.Request) {
+	if s.historyDetailFn == nil {
+		http.NotFound(w, r)
+		return
+	}
+	idStr := strings.TrimPrefix(r.URL.Path, "/api/history/")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "bad mission id", http.StatusBadRequest)
+		return
+	}
+	d, err := s.historyDetailFn(id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if d == nil {
+		http.NotFound(w, r)
+		return
+	}
+	writeJSON(w, map[string]any{"mission": d})
 }
 
 // me reports the viewer's verified identity and role so the UI can show who's

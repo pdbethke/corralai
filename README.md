@@ -178,6 +178,14 @@ readable by humans and queryable by every agent that joins.
     with a scoped, TTL-bound token minted by the brain: the subagent acts under
     its own identity, accountability rolls up to the spawning principal, and the
     token dies on schedule (depth- and fan-out-capped).
+  - **The human gate** — every admin write (approving/rejecting a learning-loop
+    proposal, sharing memory, promoting a reference or memory entry) refuses a
+    delegation token even when it rolls up to a superuser: workers propose, the
+    operator disposes. In dev mode (no OIDC configured) the same rule holds by
+    convention — a session that identifies itself as a worker (`corral-agent`,
+    or its first `bootstrap`/`report_host` call) is refused at the same gates,
+    so an agent can't accidentally vet its own knowledge just because dev mode
+    has no cryptographic identity to check.
   - **Read-only observer tokens** — minted for dashboards and demo audiences:
     the holder can watch the live swarm but every mutating call is refused.
     Hand it to an ops screen without handing over the swarm.

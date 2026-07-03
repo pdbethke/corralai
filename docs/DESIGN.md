@@ -176,6 +176,29 @@ topology here; historical analytics via MotherDuck → Sigma.
   shepherding (workspace fix + task cancels) to converge run 1 — the
   learning-loop beats themselves ran unassisted.
 
+- **P9 — the human gate (DONE 2026-07-03).** Closes a gap P8 opened: a
+  delegation token still rolls `UserID` up to its principal, so an agent
+  spawned under a superuser could `approve_proposal` on itself, and dev
+  mode's open-until-first-superuser default meant every unauthenticated
+  caller — including the herd's own agents — passed the admin gate too. One
+  rule now guards all six admin writes (`approve_proposal`, `reject_proposal`,
+  `add_memory(shared=true)`, `promote_memory`, `promote_reference`, and the
+  UI's `/api/proposal/approve|reject`): `isHumanAdmin` = `isAdmin` AND no
+  `subagent` claim on the token (`internal/brain/identity.go`); the UI gets
+  the same rule via `auth.Subagent(ctx)` beside the existing `auth.ReadOnly`.
+  Dev mode has no cryptographic identity to check, so it's a **truthfulness
+  guardrail, not a security boundary**: a session that names itself
+  `corral-agent` at the MCP handshake, or that calls `bootstrap`/
+  `report_host` (every shipped worker does; `corral-admin` never does), is
+  marked a worker for the life of that session and refused at the same six
+  gates — "the human gate: workers propose, the operator disposes." Accepted
+  limitation: in-process subagents share their parent's session/token, so
+  they're indistinguishable from the parent — the boundary is per-session,
+  and out-of-process delegation is the spawn mode that matters for autonomous
+  workers. `cmd/corral/main.go`'s UI approve closure also stopped hardcoding
+  actor `"operator"` — it passes the real verified principal when auth is on,
+  falling back to `"operator"` only in dev.
+
 ### Open threads (next)
 
 - **Change-request enforcement.** A client change-request that produces zero

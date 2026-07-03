@@ -189,6 +189,10 @@ func (s *Server) proposalApprove(w http.ResponseWriter, r *http.Request) {
 // reject button. A reason is accepted but not required (the server stores
 // whatever the client sends, including empty). Read-only observers can't
 // act; neither can a non-superuser (mirrors reject_proposal's MCP gate).
+// Deliberate scope boundary: unlike approve, reject has no actor sink yet —
+// brain.RejectProposal stamps no telemetry/log actor, so there's nothing to
+// pass the verified principal into. Thread an actor through here (and into
+// Reject/brain.RejectProposal) when reject telemetry is added.
 func (s *Server) proposalReject(w http.ResponseWriter, r *http.Request) {
 	if auth.ReadOnly(r) {
 		http.Error(w, "forbidden: read-only observer token cannot act", http.StatusForbidden)

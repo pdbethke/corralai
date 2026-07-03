@@ -7,6 +7,7 @@ import (
 	"log"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/pdbethke/corralai/internal/telemetry"
@@ -62,14 +63,64 @@ func (r *ActivityRing) Recent() []Activity {
 // record — the cap protects the telemetry log, the log protects replay.
 const agentActivityCap = 2000
 
+// activityDetailMax bounds the DURABLE copy of an activity's summary, in
+// runes. The field is agent-authored free text pitched as a one-line summary,
+// and 2000 multi-KB "lines" per mission would defeat the cap's point. The
+// live ring keeps the full line; only the recorded copy is cut.
+const activityDetailMax = 240
+
+// truncateDetail cuts s to activityDetailMax runes, marking the cut with a
+// trailing ellipsis so a truncated summary reads as truncated in replay.
+func truncateDetail(s string) string {
+	if utf8.RuneCountInString(s) <= activityDetailMax {
+		return s
+	}
+	r := []rune(s)
+	return string(r[:activityDetailMax-1]) + "…"
+}
+
+// capCache remembers which missions have been observed at the agent_activity
+// cap so post-cap reports skip the COUNT query entirely. One bool per mission
+// ever capped — naturally bounded by mission count, so no eviction needed at
+// this scale.
+type capCache struct {
+	mu sync.Mutex
+	m  map[int64]bool
+}
+
+// capped reports whether missionID was already observed at cap.
+func (c *capCache) capped(missionID int64) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.m[missionID]
+}
+
+// mark records missionID as capped, reporting whether this call was the first
+// to do so — the loud "cap reached" log keys off that so it fires exactly once.
+func (c *capCache) mark(missionID int64) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.m[missionID] {
+		return false
+	}
+	if c.m == nil {
+		c.m = map[int64]bool{}
+	}
+	c.m[missionID] = true
+	return true
+}
+
 // recordActivity emits an agent_activity telemetry event for a, gated by
 // agentActivityCap. tel or missionID==0 is a no-op (activity reported outside
 // a mission, or telemetry disabled, is observability-only and never durable).
-// Crossing the cap logs loudly exactly once so an unbounded mission's silence
-// is visible, not silent.
-func recordActivity(tel *telemetry.Store, ring *ActivityRing, missionID int64, a Activity) {
+// Crossing the cap logs loudly exactly once (per process) so an unbounded
+// mission's silence is visible, not silent.
+func recordActivity(tel *telemetry.Store, ring *ActivityRing, capped *capCache, missionID int64, a Activity) {
 	ring.Add(a)
 	if tel == nil || missionID == 0 {
+		return
+	}
+	if capped.capped(missionID) {
 		return
 	}
 	n, err := tel.CountKind(missionID, "agent_activity")
@@ -78,14 +129,17 @@ func recordActivity(tel *telemetry.Store, ring *ActivityRing, missionID int64, a
 		return
 	}
 	if n >= agentActivityCap {
-		if n == agentActivityCap {
+		// Accepted race: concurrent reporters can each read n just under the
+		// cap and land a few events past 2000 — the cap protects the log, not
+		// exact arithmetic.
+		if capped.mark(missionID) {
 			log.Printf("telemetry: agent_activity cap (%d) reached for mission %d — further activity for this mission will not be recorded", agentActivityCap, missionID)
 		}
 		return
 	}
 	if err := tel.Record(telemetry.Event{
 		MissionID: missionID, Kind: "agent_activity", Actor: a.Agent,
-		Detail: map[string]any{"role": a.Role, "tool": a.Tool, "detail": a.Detail},
+		Detail: map[string]any{"role": a.Role, "tool": a.Tool, "detail": truncateDetail(a.Detail)},
 	}); err != nil {
 		log.Printf("telemetry agent_activity: %v", err)
 	}
@@ -104,11 +158,12 @@ func registerActivity(s *mcp.Server, ring *ActivityRing, opts Options) {
 		Detail    string `json:"detail"`
 		MissionID int64  `json:"mission_id,omitempty" jsonschema:"the mission this activity belongs to, when known — enables durable recording for replay"`
 	}
+	capped := &capCache{}
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "report_activity",
 		Description: "Report a tool-call you just made (observability only) so the swarm's live console shows what every bee is doing, in every phase. Pass mission_id when you have one so it's durably recorded for replay. Best-effort: never blocks or alters your work.",
 	}, func(_ context.Context, req *mcp.CallToolRequest, in reportActivityIn) (*mcp.CallToolResult, okOut, error) {
-		recordActivity(opts.Telemetry, ring, in.MissionID, Activity{
+		recordActivity(opts.Telemetry, ring, capped, in.MissionID, Activity{
 			Agent:  identity(req, in.Name),
 			Role:   in.Role,
 			Tool:   in.Tool,

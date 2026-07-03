@@ -128,14 +128,30 @@ func Handler(d Deps) http.Handler {
 	return mux
 }
 
+// isSuperuser mirrors me()'s permissive-dev-mode rule: a nil roles store
+// (dev, no Principals configured) is wide open; otherwise the verified
+// principal must be a seeded superuser. Used to gate the proposal
+// approve/reject endpoints the same way the approve_proposal/reject_proposal
+// MCP tools gate on opts.isAdmin — approving/rejecting from the browser must
+// require exactly what approving over MCP requires, not just "not an
+// observer" (any non-observer bearer, including agent delegation tokens,
+// would otherwise promote guidance fleet-wide).
+func (s *Server) isSuperuser(r *http.Request) bool {
+	return s.roles == nil || s.roles.IsSuperuser(auth.Principal(r.Context()))
+}
+
 // proposalApprove promotes a pending learning-loop proposal — the UI's
 // approve button. It calls the Promote callback (wired in cmd/corral/main.go
 // to brain.ApproveProposal), the same fan-out the approve_proposal MCP tool
 // runs, so approving from the browser and approving over MCP behave
-// identically. Read-only observers can't act.
+// identically. Read-only observers can't act; neither can a non-superuser.
 func (s *Server) proposalApprove(w http.ResponseWriter, r *http.Request) {
 	if auth.ReadOnly(r) {
 		http.Error(w, "forbidden: read-only observer token cannot act", http.StatusForbidden)
+		return
+	}
+	if !s.isSuperuser(r) {
+		http.Error(w, "forbidden: superuser only (approval shapes fleet-wide behavior)", http.StatusForbidden)
 		return
 	}
 	if r.Method != http.MethodPost {
@@ -166,10 +182,15 @@ func (s *Server) proposalApprove(w http.ResponseWriter, r *http.Request) {
 
 // proposalReject dismisses a pending learning-loop proposal — the UI's
 // reject button. A reason is accepted but not required (the server stores
-// whatever the client sends, including empty).
+// whatever the client sends, including empty). Read-only observers can't
+// act; neither can a non-superuser (mirrors reject_proposal's MCP gate).
 func (s *Server) proposalReject(w http.ResponseWriter, r *http.Request) {
 	if auth.ReadOnly(r) {
 		http.Error(w, "forbidden: read-only observer token cannot act", http.StatusForbidden)
+		return
+	}
+	if !s.isSuperuser(r) {
+		http.Error(w, "forbidden: superuser only", http.StatusForbidden)
 		return
 	}
 	if r.Method != http.MethodPost {

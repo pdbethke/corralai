@@ -1,0 +1,25 @@
+# Standalone read-only observer for a corralai brain.
+#
+#   CORRAL_BRAIN=https://brain.example \
+#   CORRAL_TOKEN=cdt_...observer-token... \
+#   docker compose -f deploy/observe/compose.yml up --build
+#
+# Then open http://localhost:8080 — a look-don't-touch view of the swarm.
+# A superuser mints the token by calling the brain's mint_observer MCP tool.
+# See ./README.md.
+services:
+  observe:
+    build:
+      context: ../..
+      dockerfile: deploy/observe/Dockerfile
+    image: corralai-observe
+    environment:
+      # The brain to watch. Its hostname must be in the brain's
+      # CORRALAI_ALLOWED_HOSTS (the observer forwards it as the upstream Host).
+      CORRAL_BRAIN: ${CORRAL_BRAIN:?set CORRAL_BRAIN to the brain base URL}
+      # A READ-ONLY observer token. Read-only is enforced twice: the brain 403s
+      # any action, and the observer refuses non-GET methods locally.
+      CORRAL_TOKEN: ${CORRAL_TOKEN:?set CORRAL_TOKEN to a read-only observer token}
+    ports:
+      - "${OBSERVE_PORT:-8080}:8080"
+    restart: unless-stopped

@@ -1,0 +1,49 @@
+# Build output
+/bin/
+build/
+dist/
+# Root-built binaries (go build ./cmd/<x> drops these here)
+/corral
+/corral-agent
+/corral-observe
+/corral-admin
+
+# Local data / state (coordination + memory live under ~/.claude, never in-repo)
+*.sqlite3
+*.sqlite3-*
+*.duckdb
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.eggs/
+*.egg-info/
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
+.env
+deploy/demo/.env
+
+# SDD scratch (ledgers, task briefs, agent reports) — transient, not part of the repo
+/.superpowers/
+
+# Claude Code working dir (session scratch + sibling git worktrees) — never in-repo
+/.claude/
+
+# gosec scan output (regenerated on demand, never committed)
+/gosec*.json
+
+# local build outputs — never commit binaries
+/corral
+/corral-agent
+/corral-admin
+/corral-harness
+/corral-top
+/corral-observe

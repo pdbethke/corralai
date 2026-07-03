@@ -1,0 +1,17 @@
+# corral-agent on a toolchain base — for REAL execution (run_command needs a
+# shell + compilers, which distroless lacks). Heavier than Dockerfile.agent;
+# use it for the execution-sandbox demo. Pair with AGENT_ALLOW_EXEC=1.
+#
+# This base ships Go + sh + git + bubblewrap; add language runtimes (node, python,
+# …) here for multi-language missions. bwrap is the run_command isolation boundary
+# (see README "Real execution"); run the container locked down (no host mounts, no
+# creds, dropped caps) as a second layer — defense-in-depth, not the primary jail.
+FROM golang:1.26-bookworm
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends bubblewrap \
+    && rm -rf /var/lib/apt/lists/*
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -trimpath -o /usr/local/bin/corral-agent ./cmd/corral-agent
+ENTRYPOINT ["corral-agent"]

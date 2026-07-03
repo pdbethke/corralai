@@ -1,0 +1,440 @@
+# corralai demo: a real role-differentiated swarm of local-LLM agents coordinating
+# through the brain. `docker compose up` -> brain + 4 role agents (builder, tester,
+# pentester, reviewer) self-organizing on a shared workspace; open localhost:9019.
+#
+#   make demo           # the coordinated swarm (default)
+#   make demo-clobber   # the SAME agents with NO brain -> they trample each other
+#   make demo-observe   # the swarm PLUS the read-only observer at localhost:9020
+#   make demo-mission   # the FULL loop: a directive -> hive builds it -> re-plans (Progress tab)
+#
+# Agents drive themselves with the bundled Ollama container (http://ollama:11434).
+# Models persist in a named volume; set OLLAMA_MODELS_DIR=~/.ollama in .env to
+# reuse host-pulled models and skip the download. Override OLLAMA_URL to point at
+# your own Ollama instance (e.g. http://host.docker.internal:11434).
+
+name: corralai-demo
+
+x-agent-env: &agent-env
+  CORRAL_BRAIN: http://brain:9019/mcp/
+  AGENT_MODEL: ${AGENT_MODEL:-qwen2.5-coder:7b}
+  AGENT_WORKSPACE: /workspace
+  # The existing demo profiles tell the coordination/clobber story via self-
+  # assigned role work. The binary's own default is queue mode (the pull model);
+  # the mission profile overrides this to queue.
+  AGENT_MODE: ${AGENT_MODE:-demo}
+  # Real execution (write_file + run_command) is OFF by default. To let bees
+  # actually build/run/test their artifacts, set AGENT_ALLOW_EXEC=1 AND build the
+  # bees from Dockerfile.agent-exec (the default distroless image has no shell, so
+  # run_command can't run there). See the README "Real execution" section.
+  AGENT_ALLOW_EXEC: ${AGENT_ALLOW_EXEC:-0}
+  # Isolation backend for run_command (bwrap = Linux namespace jail). Network off
+  # by default; flip AGENT_EXEC_NET=1 for a build step that fetches deps.
+  AGENT_EXEC_BACKEND: ${AGENT_EXEC_BACKEND:-bwrap}
+  AGENT_EXEC_NET: ${AGENT_EXEC_NET:-0}
+  # Model is NOT hard-wired. Default is local Ollama; swap to any provider:
+  #   openai:    MODEL_BACKEND=openai OPENAI_BASE_URL=... OPENAI_API_KEY=... AGENT_MODEL=...
+  #   anthropic: MODEL_BACKEND=anthropic ANTHROPIC_API_KEY=sk-ant-... AGENT_MODEL=claude-sonnet-4-6
+  MODEL_BACKEND: ${MODEL_BACKEND:-ollama}
+  OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
+  OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-https://api.anthropic.com}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  AGENT_ROUNDS: "0"
+  # Host admission control for the reference launcher (caps concurrent children +
+  # refuses under load). AGENT_SPAWN_CHILDREN is OFF by default; set e.g.
+  # "tester:2" on ONE service to demo bounded spawning.
+  CORRAL_MAX_CONCURRENT_CHILDREN: ${CORRAL_MAX_CONCURRENT_CHILDREN:-4}
+  CORRAL_LOAD_FACTOR: ${CORRAL_LOAD_FACTOR:-2.0}
+  AGENT_SPAWN_CHILDREN: ${AGENT_SPAWN_CHILDREN:-}
+
+x-agent: &agent
+  build:
+    context: ../..
+    dockerfile: deploy/demo/Dockerfile.agent
+  volumes: ["workspace:/workspace"]
+  restart: unless-stopped
+  init: true # reap exec children — corral-agent runs as PID 1 and doesn't
+
+# Exec-capable bee: a toolchain image with bubblewrap, plus the Docker knobs the
+# INNER bwrap jail needs (nested user namespaces, mount setup, an unmasked /proc).
+# The bwrap jail — not this container — confines the model's commands. This is
+# demo-grade: a real deployment should use a VM / gVisor / rootless-podman as the
+# OUTER boundary rather than handing the container SYS_ADMIN.
+x-agent-exec: &agent-exec
+  build:
+    context: ../..
+    dockerfile: deploy/demo/Dockerfile.agent-exec
+  volumes: ["workspace:/workspace"]
+  restart: unless-stopped
+  init: true # reap bwrap zombies — each jailed command otherwise leaks a defunct entry
+  cap_add: ["SYS_ADMIN"]
+  security_opt: ["seccomp=unconfined", "apparmor=unconfined", "systempaths=unconfined"]
+
+# Same env as a normal bee, but with real execution ON BY DEFAULT (the bee
+# builds and tests its artifacts in the bwrap jail instead of narrating).
+# AGENT_ALLOW_EXEC=0 on the host flips these bees back to narrate-only.
+x-agent-env-exec: &agent-env-exec
+  <<: *agent-env
+  AGENT_ALLOW_EXEC: ${AGENT_ALLOW_EXEC:-1}
+  AGENT_EXEC_BACKEND: bwrap
+
+x-agent-deps: &agent-deps
+  brain: {condition: service_healthy}
+  ollama-pull: {condition: service_completed_successfully}
+
+services:
+  # Bundled Ollama: GPU-accelerated. Models persist in a named volume; reuse a host
+  # download by setting OLLAMA_MODELS_DIR=~/.ollama. Drop `deploy:` to run CPU-only.
+  ollama:
+    image: ollama/ollama:latest
+    volumes: ["${OLLAMA_MODELS_DIR:-ollama-models}:/root/.ollama"]
+    healthcheck:
+      test: ["CMD-SHELL", "ollama ls >/dev/null 2>&1 || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    deploy:
+      resources:
+        reservations:
+          devices: [{driver: nvidia, count: all, capabilities: [gpu]}]
+
+  # One-shot: pull the agents' model on first `up` so the demo is truly one-command.
+  # No-op once the model is cached in the volume.
+  # Pull the swarm model — but ONLY when the backend is actually Ollama. With a
+  # remote backend (MODEL_BACKEND=openai/gemini/anthropic) AGENT_MODEL names a
+  # frontier model that doesn't exist in the Ollama registry; pulling it would
+  # fail and take the whole stack down with it (every bee gates on this service).
+  ollama-pull:
+    image: ollama/ollama:latest
+    depends_on: {ollama: {condition: service_healthy}}
+    environment:
+      OLLAMA_HOST: "http://ollama:11434"
+      MODEL_BACKEND: ${MODEL_BACKEND:-ollama}
+      AGENT_MODEL: ${AGENT_MODEL:-qwen2.5-coder:7b}
+    entrypoint: ["/bin/sh", "-c"]
+    command: ['case "$$MODEL_BACKEND" in ""|ollama) exec ollama pull "$$AGENT_MODEL";; *) echo "backend $$MODEL_BACKEND: remote model, nothing to pull";; esac']
+    restart: "no"
+
+  brain:
+    build:
+      context: ../..
+      dockerfile: deploy/demo/Dockerfile.brain
+    # dev mode: no CORRALAI_OIDC_ISSUER => auth off, swarm UI open at /.
+    environment:
+      # the agents reach the brain by its compose service name, so the host guard
+      # must accept it (default is loopback-only).
+      CORRALAI_ALLOWED_HOSTS: "brain,brain:9019,localhost,localhost:9019,127.0.0.1"
+      # the brain's read-only narrator ("ask an agent") uses the SAME model as the
+      # swarm — pass the model env through so it can debrief a bee from its trail.
+      MODEL_BACKEND: ${MODEL_BACKEND:-ollama}
+      OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-https://api.anthropic.com}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      AGENT_MODEL: ${AGENT_MODEL:-qwen2.5-coder:7b}
+      CORRALAI_MAX_AGENTS_PER_PRINCIPAL: ${CORRALAI_MAX_AGENTS_PER_PRINCIPAL:-64}
+      CORRALAI_MAX_SPAWN_DEPTH: ${CORRALAI_MAX_SPAWN_DEPTH:-4}  # depth at which spawning is refused (deepest allowed = this-1)
+      CORRALAI_MAX_CHILDREN_PER_PARENT: ${CORRALAI_MAX_CHILDREN_PER_PARENT:-8}
+      CORRALAI_EMBED_URL: ${CORRALAI_EMBED_URL:-https://generativelanguage.googleapis.com/v1beta/openai/embeddings}
+      CORRALAI_EMBED_MODEL: ${CORRALAI_EMBED_MODEL:-gemini-embedding-001}
+      CORRALAI_EMBED_KEY: ${CORRALAI_EMBED_KEY:-${OPENAI_API_KEY:-}}
+      CORRALAI_REPO_WORKSPACE: /workspace
+      CORRALAI_GIT_TOKEN: ${CORRALAI_GIT_TOKEN:-}
+      CORRALAI_GITHUB_API: ${CORRALAI_GITHUB_API:-https://api.github.com}
+      # Role-model plan: declare which backend:model each role should run on.
+      # Used by demo-models to drive topology drift checks + model_comparison report.
+      CORRALAI_ROLE_MODELS: ${CORRALAI_ROLE_MODELS:-}
+    # brain-state persists the coordination/queue/memory DBs (~/.claude) across
+    # container recreation — without it a brain restart mid-mission silently
+    # wipes the mission while the bees keep polling an empty queue. The image's
+    # seeded memory survives: a named volume copies image content on first use.
+    # `make down` (-v) still resets everything.
+    volumes: ["workspace:/workspace", "brain-state:/root/.claude"]
+    ports: ["9019:9019"]
+    # Same policy as the bees: without this, a docker daemon restart brings every
+    # agent back but leaves the brain down, and the hive crash-loops against it.
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9019/healthz"]
+      interval: 3s
+      timeout: 2s
+      retries: 30
+
+  # ---- read-only observer (profile: observe) ----
+  # The standalone observer app, pointed at the demo brain. It serves the SAME
+  # swarm UI on a second port (http://localhost:9020) but as a look-don't-touch
+  # window: it refuses every non-GET method locally, so writes never reach the
+  # brain. This is the artifact you'd hand to an ops dashboard or a demo viewer.
+  # (The demo brain runs auth-off, so here the observer's own method-gating is
+  # what enforces read-only; against an auth-enabled brain a read-only token
+  # adds the second layer.) Token is a dummy because the dev brain ignores it.
+  observe:
+    build:
+      context: ../..
+      dockerfile: deploy/observe/Dockerfile
+    profiles: ["observe"]
+    environment:
+      CORRAL_BRAIN: http://brain:9019
+      CORRAL_TOKEN: demo-observer
+    ports: ["9020:8080"]
+    depends_on:
+      brain: {condition: service_healthy}
+    restart: unless-stopped
+
+  # ---- headline demo (profile: mission) — the full adaptive loop ----
+  # One command: a directive becomes a mission; a hive of QUEUE bees pulls and
+  # builds it; a LEAD bee + the reflex re-planner re-think it when findings land;
+  # watch the Progress tab at http://localhost:9019 fill in and rewrite itself.
+  # Scale the hive: `--scale mission-builder=3 --scale mission-tester=2`.
+  mission-seed:
+    build: {context: ../.., dockerfile: deploy/demo/Dockerfile.admin}
+    profiles: ["mission"]
+    environment: {CORRAL_BRAIN: "http://brain:9019", CORRAL_TOKEN: demo}
+    # Default directive is deliberately SMALL so the full loop — build, findings,
+    # re-plan, client review — converges in minutes on the bundled 7B model.
+    # `make demo-mission-epic` (or DEMO_DIRECTIVE=...) runs the ambitious parser.
+    command: ["mission", "create", "--review", "${DEMO_DIRECTIVE:-Build a Go package 'stack' with a LIFO stack of ints: New, Push, Pop, Peek, Len; Pop/Peek return an error on empty. Include table-driven unit tests; make 'go build ./...' and 'go test ./...' pass}"]
+    depends_on: {brain: {condition: service_healthy}}
+    restart: "no"
+  mission-researcher:
+    <<: *agent
+    profiles: ["mission"]
+    environment: {<<: *agent-env, AGENT_MODE: queue, AGENT_ROLE: researcher, AGENT_NAME: Sage}
+    depends_on: *agent-deps
+  mission-designer:
+    <<: *agent
+    profiles: ["mission"]
+    environment: {<<: *agent-env, AGENT_MODE: queue, AGENT_ROLE: designer, AGENT_NAME: Iris}
+    depends_on: *agent-deps
+  mission-perf:
+    <<: *agent-exec
+    profiles: ["mission"]
+    environment: {<<: *agent-env-exec, AGENT_MODE: queue, AGENT_ROLE: perf, AGENT_NAME: Bolt}
+    depends_on: *agent-deps
+  mission-integrator:
+    <<: *agent-exec
+    profiles: ["mission"]
+    environment: {<<: *agent-env-exec, AGENT_MODE: queue, AGENT_ROLE: integrator, AGENT_NAME: Knox}
+    depends_on: *agent-deps
+  mission-writer:
+    <<: *agent
+    profiles: ["mission"]
+    environment: {<<: *agent-env, AGENT_MODE: queue, AGENT_ROLE: writer, AGENT_NAME: Penny}
+    depends_on: *agent-deps
+  mission-builder:
+    <<: *agent-exec
+    profiles: ["mission"]
+    environment: {<<: *agent-env-exec, AGENT_MODE: queue, AGENT_ROLE: builder, AGENT_NAME: Bob}
+    depends_on: *agent-deps
+  mission-tester:
+    <<: *agent-exec
+    profiles: ["mission"]
+    environment: {<<: *agent-env-exec, AGENT_MODE: queue, AGENT_ROLE: tester, AGENT_NAME: Tess}
+    depends_on: *agent-deps
+  mission-pentester:
+    <<: *agent-exec
+    profiles: ["mission"]
+    environment: {<<: *agent-env-exec, AGENT_MODE: queue, AGENT_ROLE: pentester, AGENT_NAME: Hawk}
+    depends_on: *agent-deps
+  mission-reviewer:
+    <<: *agent
+    profiles: ["mission"]
+    environment: {<<: *agent-env, AGENT_MODE: queue, AGENT_ROLE: reviewer, AGENT_NAME: Quill}
+    depends_on: *agent-deps
+  mission-lead:
+    <<: *agent
+    profiles: ["mission"]
+    environment: {<<: *agent-env, AGENT_MODE: lead, AGENT_ROLE: lead, AGENT_NAME: Lead}
+    depends_on: *agent-deps
+  # The standup tier: a deterministic watcher (no model in its loop) that
+  # narrates progress in the live console, names stalled claims, and nudges
+  # their holders via send_instruction. The brain's reclaim rules remain the
+  # enforcement floor; Shep is the visible layer.
+  mission-scrum:
+    <<: *agent
+    profiles: ["mission"]
+    environment: {<<: *agent-env, AGENT_MODE: scrum, AGENT_ROLE: scrum, AGENT_NAME: Shep}
+    depends_on: *agent-deps
+  mission-client:
+    <<: *agent
+    profiles: ["mission"]
+    environment: {<<: *agent-env, AGENT_MODE: client, AGENT_ROLE: client, AGENT_NAME: Client}
+    depends_on: *agent-deps
+
+  # ---- coordinated swarm (profile: coordinated) ----
+  builder:
+    <<: *agent
+    profiles: ["coordinated"]
+    environment: {<<: *agent-env, AGENT_ROLE: builder, AGENT_NAME: Bob}
+    depends_on: *agent-deps
+  tester:
+    <<: *agent
+    profiles: ["coordinated"]
+    environment: {<<: *agent-env, AGENT_ROLE: tester, AGENT_NAME: Tess}
+    depends_on: *agent-deps
+  pentester:
+    <<: *agent
+    profiles: ["coordinated"]
+    environment: {<<: *agent-env, AGENT_ROLE: pentester, AGENT_NAME: Hawk}
+    depends_on: *agent-deps
+  reviewer:
+    <<: *agent
+    profiles: ["coordinated"]
+    environment: {<<: *agent-env, AGENT_ROLE: reviewer, AGENT_NAME: Quill}
+    depends_on: *agent-deps
+
+  # ---- multi-model demo (profile: models) — side-by-side model comparison ----
+  # The TWO finding-FILERS run on DIFFERENT backends so their findings land in
+  # fleet_telemetry with distinct `model` values → `mission_analytics
+  # {report:"model_comparison"}` (and the UI topology tab) shows a real A-vs-B table.
+  # (Only the pentester + reviewer file findings; builder/tester put work in the
+  # workspace, not the findings table — so THOSE two must be the split.)
+  #
+  # Group A  (MODELS_BACKEND_A / MODELS_MODEL_A):  pentester
+  #   Default → the OpenAI-compat backend in .env (Gemini gemini-3.5-flash).
+  # Group B  (MODELS_BACKEND_B / MODELS_MODEL_B):  reviewer + builder + tester
+  #   Default → bundled Ollama (qwen2.5-coder:7b) — works with no API key.
+  #
+  # A resolution seed (models-finalize) auto-resolves open findings after a delay
+  # so the confirmation-rate column populates immediately. In a real production run
+  # the lead agent resolves findings naturally; this seed is demo ergonomics only.
+  models-seed:
+    build: {context: ../.., dockerfile: deploy/demo/Dockerfile.admin}
+    profiles: ["models"]
+    environment: {CORRAL_BRAIN: "http://brain:9019", CORRAL_TOKEN: demo}
+    # Default directive is deliberately SMALL so the full loop — build, findings,
+    # re-plan, client review — converges in minutes on the bundled 7B model.
+    # `make demo-mission-epic` (or DEMO_DIRECTIVE=...) runs the ambitious parser.
+    command: ["mission", "create", "--review", "${DEMO_DIRECTIVE:-Build a Go package 'stack' with a LIFO stack of ints: New, Push, Pop, Peek, Len; Pop/Peek return an error on empty. Include table-driven unit tests; make 'go build ./...' and 'go test ./...' pass}"]
+    depends_on: {brain: {condition: service_healthy}}
+    restart: "no"
+
+  # Group A — pentester (a finding-FILER) on qwen2.5-coder:7b (local, no key needed).
+  # Override via MODELS_BACKEND_A / MODELS_MODEL_A (e.g. for a frontier model).
+  models-pentester:
+    <<: *agent-exec
+    profiles: ["models"]
+    environment:
+      <<: *agent-env-exec
+      AGENT_MODE: queue
+      AGENT_ROLE: pentester
+      AGENT_NAME: Hawk
+      MODEL_BACKEND: ${MODELS_BACKEND_A:-ollama}
+      AGENT_MODEL: ${MODELS_MODEL_A:-qwen2.5-coder:7b}
+    depends_on: *agent-deps
+
+  # One-shot: pull the Group B model (llama3.2:3b) for the models profile.
+  # The base ollama-pull already pulls qwen2.5-coder:7b; this pulls the second model.
+  # Same backend guard as ollama-pull: Group B may be overridden to a frontier
+  # model (MODELS_BACKEND_B=openai), in which case there is nothing to pull.
+  models-ollama-pull:
+    image: ollama/ollama:latest
+    profiles: ["models"]
+    depends_on: {ollama: {condition: service_healthy}}
+    environment:
+      OLLAMA_HOST: "http://ollama:11434"
+      MODELS_BACKEND_B: ${MODELS_BACKEND_B:-ollama}
+      MODELS_MODEL_B: ${MODELS_MODEL_B:-llama3.2:3b}
+    entrypoint: ["/bin/sh", "-c"]
+    command: ['case "$$MODELS_BACKEND_B" in ""|ollama) exec ollama pull "$$MODELS_MODEL_B";; *) echo "backend $$MODELS_BACKEND_B: remote model, nothing to pull";; esac']
+    restart: "no"
+
+  # Group B — reviewer is the OTHER finding-FILER; it runs on llama3.2:3b (local,
+  # no key needed) so model_comparison shows a real qwen-vs-llama A-vs-B side-by-side.
+  # On the non-exec base by design: reviewers READ (they don't run commands).
+  models-reviewer:
+    <<: *agent
+    profiles: ["models"]
+    environment:
+      <<: *agent-env
+      AGENT_MODE: queue
+      AGENT_ROLE: reviewer
+      AGENT_NAME: Quill
+      MODEL_BACKEND: ${MODELS_BACKEND_B:-ollama}
+      AGENT_MODEL: ${MODELS_MODEL_B:-llama3.2:3b}
+    depends_on:
+      brain: {condition: service_healthy}
+      ollama-pull: {condition: service_completed_successfully}
+      models-ollama-pull: {condition: service_completed_successfully}
+
+  # builder + tester always use qwen2.5-coder:7b — they don't file findings, so
+  # their model doesn't affect the model_comparison table. Keep them on the proven
+  # coding model so the artifact quality stays high regardless of Group B choice.
+  models-builder:
+    <<: *agent-exec
+    profiles: ["models"]
+    environment:
+      <<: *agent-env-exec
+      AGENT_MODE: queue
+      AGENT_ROLE: builder
+      AGENT_NAME: Bob
+      MODEL_BACKEND: ollama
+      AGENT_MODEL: ${AGENT_MODEL:-qwen2.5-coder:7b}
+    depends_on: *agent-deps
+
+  models-tester:
+    <<: *agent-exec
+    profiles: ["models"]
+    environment:
+      <<: *agent-env-exec
+      AGENT_MODE: queue
+      AGENT_ROLE: tester
+      AGENT_NAME: Tess
+      MODEL_BACKEND: ollama
+      AGENT_MODEL: ${AGENT_MODEL:-qwen2.5-coder:7b}
+    depends_on: *agent-deps
+
+  # Lead + client drive the mission lifecycle (same as demo-mission).
+  models-lead:
+    <<: *agent
+    profiles: ["models"]
+    environment: {<<: *agent-env, AGENT_MODE: lead, AGENT_ROLE: lead, AGENT_NAME: Lead}
+    depends_on: *agent-deps
+
+  models-client:
+    <<: *agent
+    profiles: ["models"]
+    environment: {<<: *agent-env, AGENT_MODE: client, AGENT_ROLE: client, AGENT_NAME: Client}
+    depends_on: *agent-deps
+
+  # One-shot resolution seed: waits 3 minutes then auto-resolves open findings as
+  # "addressed" so the model_comparison confirmation column populates without manual
+  # intervention. Only fires if findings are still open at T+3m; the lead may have
+  # already resolved them naturally (in which case this is a no-op).
+  models-finalize:
+    build: {context: ../.., dockerfile: deploy/demo/Dockerfile.admin}
+    profiles: ["models"]
+    environment: {CORRAL_BRAIN: "http://brain:9019", CORRAL_TOKEN: demo}
+    command: ["resolve-findings", "--delay", "3m", "--outcome", "addressed", "--limit", "20"]
+    # Anchor the 3m clock to the mission actually being seeded, so a slow Gemini
+    # cold-start doesn't leave the resolve sweep firing before findings accumulate.
+    depends_on:
+      brain: {condition: service_healthy}
+      models-seed: {condition: service_completed_successfully}
+    restart: "no"
+
+  # ---- clobber control (profile: clobber) — same brain + UI, but the agents IGNORE
+  # conflicts: three builders pile onto the SAME files and trample each other (watch
+  # the red conflicts in the UI; the shared files end up clobbered). ----
+  clobber-a:
+    <<: *agent
+    profiles: ["clobber"]
+    environment: {<<: *agent-env, CLOBBER: "1", AGENT_ROLE: builder, AGENT_NAME: Clobber-A, AGENT_ROUNDS: "3"}
+    depends_on: *agent-deps
+  clobber-b:
+    <<: *agent
+    profiles: ["clobber"]
+    environment: {<<: *agent-env, CLOBBER: "1", AGENT_ROLE: builder, AGENT_NAME: Clobber-B, AGENT_ROUNDS: "3"}
+    depends_on: *agent-deps
+  clobber-c:
+    <<: *agent
+    profiles: ["clobber"]
+    environment: {<<: *agent-env, CLOBBER: "1", AGENT_ROLE: builder, AGENT_NAME: Clobber-C, AGENT_ROUNDS: "3"}
+    depends_on: *agent-deps
+
+volumes:
+  workspace:
+  ollama-models:
+  brain-state:

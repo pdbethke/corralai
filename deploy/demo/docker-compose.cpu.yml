@@ -1,0 +1,17 @@
+# CPU override for the bundled Ollama service.
+# Removes the NVIDIA GPU reservation so the demo runs on any machine.
+# Model inference will be slower on CPU (~5-15 min for first response).
+#
+# Usage:
+#   make demo-cpu
+#   # or manually:
+#   docker compose -f docker-compose.yml -f docker-compose.cpu.yml --profile <profile> up
+
+services:
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          # !reset is required: a plain empty list does NOT override the base
+          # file's GPU reservation under compose merge (verified via `config`).
+          devices: !reset []

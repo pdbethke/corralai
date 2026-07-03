@@ -1,0 +1,1608 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CorralAI — the swarm</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐝</text></svg>">
+<style>
+  :root { --bg:#0e1116; --fg:#e6e1d8; --muted:#8a8170; --amber:#e8a838; --red:#e8503a; --line:#33405a;
+    --green:#8fdcab; --panel:#161b22; --sel:#1b2330; --card:rgba(20,25,32,.97); }
+  html.light { --bg:#f4f2ec; --fg:#2b2720; --muted:#6f6757; --amber:#b27512; --red:#c0392b; --line:#cdd1d8;
+    --green:#2f9e5e; --panel:#ebe9e1; --sel:#e2dfd4; --card:rgba(250,249,245,.98); }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--fg);
+    font:14px/1.4 ui-sans-serif,system-ui,Segoe UI,Roboto,sans-serif; overflow:hidden; }
+  /* depth: a soft vignette behind the swarm canvas so nodes read as lit on a stage */
+  body::before { content:''; position:fixed; inset:0; z-index:0; pointer-events:none;
+    background:radial-gradient(ellipse at 50% 40%, transparent 52%, rgba(0,0,0,.42) 100%); }
+  html.light body::before { background:radial-gradient(ellipse at 50% 40%, transparent 60%, rgba(40,40,60,.10) 100%); }
+  #hud { position:fixed; top:0; left:0; right:0; height:42px; box-sizing:border-box; padding:10px 14px; display:flex;
+    align-items:baseline; gap:14px; pointer-events:none; z-index:5; background:var(--bg); border-bottom:1px solid var(--line); }
+  #hud b { font-size:16px; letter-spacing:.5px; color:var(--amber); }
+  #hud .sub { color:var(--muted); }
+  #hud .stat { margin-left:auto; color:var(--muted); }
+  /* 3-column stage: left panels | swarm canvas | right action panels. The swarm
+     lives in its OWN grid cell, so the side panels can never overlap it. The
+     alternate tab views (progress/topology/memory) cover the whole stage. */
+  #stage { position:fixed; inset:42px 0 24vh 0; display:grid; grid-template-columns:300px minmax(0,1fr) 344px; z-index:1; }
+  #leftcol, #rightcol { overflow-y:auto; overflow-x:hidden; padding:12px 12px 18px; display:flex; flex-direction:column; gap:14px; background:var(--bg); }
+  #leftcol { border-right:1px solid var(--line); }
+  #rightcol { border-left:1px solid var(--line); }
+  #center { position:relative; display:flex; flex-direction:column; min-width:0; min-height:0; }
+  #legend { position:absolute; bottom:8px; left:10px; right:10px; color:var(--muted); font-size:11px; z-index:2;
+    pointer-events:none; line-height:1.9; }
+  #legend .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin:0 4px 0 10px; vertical-align:middle; }
+  #done { color:var(--muted); font-size:12px; text-align:left; flex:none; }
+  #done .row { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; opacity:.92; padding:1px 0; }
+  #done .feedhdr { color:#6b6452; font-size:11px; text-transform:uppercase; letter-spacing:.5px; margin-bottom:5px; }
+  /* clickable AGENTS roster — open a bee's detail without chasing it around the canvas */
+  #done .arow { display:flex; align-items:center; gap:7px; padding:3px 6px; border-radius:5px; cursor:pointer;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #done .arow:hover { background:var(--panel); }
+  #done .arow.arowsel { background:var(--sel); outline:1px solid var(--line); }
+  #done .arow b { flex:none; }
+  #done .adot { width:8px; height:8px; border-radius:50%; flex:none; }
+  #done .ameta { color:#6b6452; font-size:10.5px; flex:none; }
+  #done .adoing { color:var(--muted); font-size:11px; margin-left:auto; overflow:hidden; text-overflow:ellipsis; font-family:ui-monospace,monospace; }
+  #tasks { color:var(--muted); font-size:12px; text-align:left; }
+  #tasks .feedhdr { color:#6b6452; font-size:11px; text-transform:uppercase; letter-spacing:.5px; margin-bottom:5px; }
+  #tasks .trow { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding:2px 0; opacity:.95; }
+  #tasks .tdot { display:inline-block; width:8px; height:8px; border-radius:2px; margin-right:6px; vertical-align:middle; }
+  /* Fleet Oracle panel — sibling to "ask a bee", same visual language. */
+  #fleet-oracle { font-size:13px; flex:none; }
+  #fleet-oracle .fo-hdr { color:#6b6452; font-size:11px; text-transform:uppercase; letter-spacing:.5px; margin-bottom:6px; }
+  #fleet-oracle .askbox { display:flex; gap:6px; margin:4px 0 8px; }
+  #fleet-oracle .askbox input { flex:1; background:var(--panel); border:1px solid var(--line); color:var(--fg);
+    border-radius:6px; padding:6px 9px; font-size:12.5px; outline:none; }
+  #fleet-oracle .askbox input:focus { border-color:var(--amber); }
+  #fleet-oracle .askbox button { background:var(--amber); color:var(--bg); border:none; border-radius:6px;
+    padding:0 12px; cursor:pointer; font-size:12px; font-weight:600; }
+  #fleet-oracle .askbox button:disabled { opacity:.5; cursor:default; }
+  #fleet-oracle .fo-narration { color:var(--fg); font-size:13px; line-height:1.5; font-style:italic;
+    border-left:2px solid var(--amber); padding-left:9px; margin-bottom:6px; white-space:pre-wrap; }
+  #fleet-oracle .fo-q2 { color:var(--muted); font-size:12px; margin:2px 0 3px; }
+  #fleet-oracle .fo-err { color:var(--red); font-size:12px; margin-bottom:4px; }
+  #fleet-oracle details { margin-top:4px; }
+  #fleet-oracle summary { color:var(--muted); font-size:11px; cursor:pointer; text-transform:uppercase;
+    letter-spacing:.4px; user-select:none; }
+  #fleet-oracle summary:hover { color:var(--fg); }
+  #fleet-oracle .fo-table { width:100%; border-collapse:collapse; font-size:11.5px; margin-top:5px; }
+  #fleet-oracle .fo-table th { color:var(--amber); font-weight:600; text-align:left; padding:2px 6px 2px 0;
+    border-bottom:1px solid var(--line); font-size:11px; text-transform:uppercase; letter-spacing:.3px; }
+  #fleet-oracle .fo-table td { color:var(--fg); padding:2px 6px 2px 0; border-bottom:1px solid rgba(255,255,255,.04); }
+  #fleet-oracle .fo-sql { font-family:ui-monospace,monospace; font-size:11px; color:var(--muted);
+    white-space:pre-wrap; margin-top:5px; background:var(--panel); padding:7px 9px; border-radius:6px; }
+  #findings { color:var(--muted); font-size:12px; text-align:left; flex:none; }
+  #findings .feedhdr { color:#6b6452; font-size:11px; text-transform:uppercase; letter-spacing:.5px; margin-bottom:5px; }
+  #findings .frow { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding:2px 0; }
+  #findings .fsev { display:inline-block; min-width:54px; font-weight:600; text-transform:uppercase; font-size:10px; letter-spacing:.4px; }
+  #findings .frow.hi { background:rgba(232,80,58,.12); border-radius:4px; padding-left:4px; }
+  /* #exec — the live console docked along the bottom of the CENTER cell, under the
+     swarm. The bees' tool-calls + real command runs scroll past like a build log. */
+  #exec { position:fixed; left:0; right:0; bottom:0; height:24vh; overflow:auto; z-index:3;
+    background:rgba(10,13,18,.96); border-top:1px solid var(--amber); padding:0 16px 10px; text-align:left;
+    box-shadow:0 -12px 32px rgba(0,0,0,.55); }
+  /* the console header (count + filter chips) floats: sticky to the top of the
+     terminal so it stays put as the log auto-scrolls past underneath. */
+  #exec .feedhdr { position:sticky; top:0; z-index:1; padding:7px 0 6px;
+    background:linear-gradient(180deg, rgba(10,13,18,1) 78%, rgba(10,13,18,0)); }
+  html.light #exec .feedhdr { background:linear-gradient(180deg, rgba(244,242,236,1) 78%, rgba(244,242,236,0)); }
+  html.light #exec { background:rgba(244,242,236,.98); }
+  #exec .xempty { color:var(--muted); font-style:italic; font-size:12px; padding:4px 6px; }
+  #exec .feedhdr { color:#6b6452; font-size:11px; text-transform:uppercase; letter-spacing:.5px; margin-bottom:6px; }
+  #exec .xblk { padding:2px 4px 3px; border-radius:4px; }
+  #exec .xcmdline { display:flex; align-items:baseline; gap:7px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; line-height:1.5; }
+  #exec .xprompt { color:var(--green); font-family:ui-monospace,monospace; font-weight:700; }
+  #exec .xcmdline b { flex:none; }
+  #exec .xcmd { flex:none; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11.5px; color:var(--fg);
+    background:var(--panel); padding:1px 6px; border-radius:4px; }
+  #exec .xbadge { flex:none; font-weight:700; font-size:12px; }
+  #exec .xout { color:var(--muted); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11px;
+    padding-left:20px; white-space:pre-wrap; word-break:break-all; opacity:.82; line-height:1.45; }
+  #exec .xcursor { color:var(--amber); font-family:ui-monospace,monospace; padding-left:3px; animation:xblink 1.05s step-start infinite; }
+  @keyframes xblink { 50% { opacity:0; } }
+  @keyframes xflash-pass { from { background:rgba(143,220,171,.30); } to { background:transparent; } }
+  @keyframes xflash-fail { from { background:rgba(232,80,58,.30); } to { background:transparent; } }
+  #exec .xblk.xflash-pass { animation:xflash-pass 1.2s ease-out; }
+  #exec .xblk.xflash-fail { animation:xflash-fail 1.2s ease-out; }
+  #progress { position:fixed; inset:42px 0 0 0; z-index:3; display:none; background:var(--bg); overflow:auto; padding:22px 0; }
+  #progress.show { display:block; }
+  /* #topology — the ecosystem map: the brain + every host and the bees it runs. */
+  #topology { position:fixed; inset:42px 0 0 0; z-index:3; display:none; background:var(--bg); overflow:auto; padding:22px 0; }
+  #topology.show { display:block; }
+  .twrap { max-width:840px; margin:0 auto; }
+  .tsum { color:var(--muted); font-size:12px; margin:0 0 14px; text-align:center; letter-spacing:.3px; }
+  .tqueen { max-width:840px; margin:0 auto 16px; padding:13px 16px; background:linear-gradient(180deg,rgba(244,196,48,.12),var(--panel)); border:1px solid rgba(244,196,48,.5); border-radius:10px; display:flex; align-items:baseline; gap:10px; }
+  .tqueen b { color:#f4c430; font-size:14px; }
+  .thost { margin:0 0 14px; background:var(--panel); border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+  .thosthd { padding:9px 14px; background:var(--sel); border-bottom:1px solid var(--line); font-family:ui-monospace,monospace; font-size:12.5px; color:var(--fg); }
+  .tbee { display:flex; align-items:center; gap:9px; padding:7px 14px; border-bottom:1px solid var(--line); font-size:12.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .tbee:last-child { border-bottom:none; }
+  .tdotr { width:9px; height:9px; border-radius:50%; flex:none; }
+  .tbee b { flex:none; }
+  .tmeta { color:var(--muted); font-size:11px; }
+  .tmodel { color:var(--green); font-family:ui-monospace,monospace; font-size:11px; }
+  .tjail { color:var(--amber); font-size:11px; font-weight:600; }
+  .tnojail { color:var(--red); font-size:11px; }
+  .tempty { color:var(--muted); font-style:italic; text-align:center; padding:30px; }
+  .mc-wrap { max-width:840px; margin:16px auto 0; padding:0 0 18px; }
+  .mc-hdr { color:#6b6452; font-size:11px; text-transform:uppercase; letter-spacing:.5px; margin:0 0 7px; }
+  .mc-table { width:100%; border-collapse:collapse; font-size:12px; }
+  .mc-table th { color:var(--amber); font-weight:600; text-align:left; padding:3px 8px 3px 0;
+    border-bottom:1px solid var(--line); font-size:11px; text-transform:uppercase; letter-spacing:.3px; }
+  .mc-table td { color:var(--fg); padding:3px 8px 3px 0; border-bottom:1px solid rgba(255,255,255,.04); font-family:ui-monospace,monospace; font-size:11.5px; }
+  .mc-table td:first-child { color:var(--green); }
+  .mc-null { color:var(--muted); font-style:italic; }
+  .pmission { max-width:800px; margin:0 auto 20px; padding:16px 18px; background:var(--panel); border:1px solid var(--line); border-radius:10px; }
+  .phdr { display:flex; align-items:center; gap:10px; margin-bottom:3px; }
+  .pdir { font-size:16px; font-weight:600; color:var(--fg); }
+  .ppill { font-size:10px; text-transform:uppercase; letter-spacing:.5px; padding:2px 8px; border-radius:10px; flex:none; }
+  .ppill.running { background:var(--amber); color:var(--bg); }
+  .ppill.done { background:var(--green); color:var(--bg); }
+  .ppill.review { background:#4fc3d9; color:var(--bg); }
+  .psprint { font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:.4px; margin-left:auto; }
+  .preview { margin:8px 0 2px; padding:8px 11px; background:rgba(79,195,217,.12); border:1px solid #4fc3d9; border-radius:7px; font-size:12.5px; color:var(--fg); }
+  .preview button { border:none; border-radius:5px; padding:4px 12px; font-size:12px; cursor:pointer; margin-left:8px; }
+  .preview .acc { background:var(--green); color:var(--bg); }
+  .preview .chg { background:var(--panel); color:var(--fg); border:1px solid var(--line); }
+  .psum { color:var(--muted); font-size:12px; margin-bottom:10px; }
+  .pstep { display:flex; align-items:center; gap:8px; padding:3px 0; font-size:13px; border-top:1px solid rgba(127,127,127,.08); }
+  .pstatus { min-width:80px; color:var(--muted); font-size:10.5px; text-transform:uppercase; letter-spacing:.3px; }
+  .prole { color:var(--muted); font-size:12px; }
+  .prepl { color:var(--amber); font-size:12px; }
+  .pfind { margin-top:10px; display:flex; flex-direction:column; gap:3px; padding-top:8px; border-top:1px solid var(--line); }
+  .pfrow { font-size:12px; }
+  .pmt { text-align:center; color:var(--muted); margin-top:64px; font-size:13px; }
+  #c { flex:1 1 auto; min-height:0; width:100%; display:block; }
+  #empty { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    color:var(--muted); z-index:1; pointer-events:none; }
+  #tabs { pointer-events:auto; margin-left:8px; }
+  .tab { cursor:pointer; color:var(--muted); padding:3px 9px; border-radius:5px; font-size:13px; }
+  .tab.active { color:var(--bg); background:var(--amber); }
+  .tab:hover:not(.active) { color:var(--fg); }
+  #memory { position:fixed; inset:42px 0 0 0; z-index:3; display:none; background:var(--bg); }
+  #memory.show { display:block; }
+  #mlist { overflow:auto; padding:14px 16px; max-width:760px; margin:0 auto; height:100%; }
+  #mctrl { display:flex; gap:8px; margin-bottom:12px; }
+  #mq { flex:1; background:var(--panel); border:1px solid var(--line); color:var(--fg);
+    padding:8px 11px; border-radius:6px; font-size:13px; outline:none; }
+  #mq:focus { border-color:var(--amber); }
+  #mscope { background:var(--panel); border:1px solid var(--line); color:var(--fg); border-radius:6px; padding:0 6px; }
+  .mitem { padding:9px 11px; border-radius:6px; cursor:pointer; border:1px solid transparent; }
+  .mitem:hover { background:var(--panel); }
+  .mitem.sel { background:var(--sel); border-color:var(--line); }
+  .mitem .mn { color:var(--amber); font-size:13px; font-weight:600; }
+  .mitem .md { color:var(--muted); font-size:12px; margin-top:2px; line-height:1.35; }
+  .mitem .mt { color:var(--muted); font-size:11px; margin-top:3px; text-transform:uppercase; letter-spacing:.4px; }
+  #mread { overflow:auto; padding:26px 34px; }
+  #mread .title { color:var(--amber); font-size:19px; margin:0 0 4px; }
+  #mread .meta { color:var(--muted); font-size:12px; margin-bottom:18px; text-transform:uppercase; letter-spacing:.5px; }
+  #mread .body { white-space:pre-wrap; line-height:1.6; font-size:13.5px; color:var(--fg); max-width:780px; }
+  #mread .body b { color:var(--fg); }
+  #mread .body code { background:var(--panel); padding:1px 5px; border-radius:4px; font-family:ui-monospace,monospace; font-size:12.5px; }
+  #mread .wl { color:var(--amber); cursor:pointer; border-bottom:1px dotted var(--amber); }
+  #mread .empty { color:var(--muted); margin-top:48px; text-align:center; }
+  #inspector { flex:none; background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px;
+    font-size:13px; box-shadow:0 10px 34px rgba(0,0,0,.4); display:none; }
+  #inspector .askbox { display:flex; gap:6px; margin:4px 0 8px; }
+  #inspector .askbox input { flex:1; background:var(--panel); border:1px solid var(--line); color:var(--fg);
+    border-radius:6px; padding:6px 9px; font-size:12.5px; outline:none; }
+  #inspector .askbox input:focus { border-color:var(--amber); }
+  #inspector .askbox button { background:var(--amber); color:var(--bg); border:none; border-radius:6px;
+    padding:0 12px; cursor:pointer; font-size:12px; font-weight:600; }
+  #inspector .askbox button:disabled { opacity:.5; cursor:default; }
+  #inspector .askq2 { color:var(--muted); font-size:12px; margin:2px 0 3px; }
+  #inspector .askans { color:var(--fg); font-size:13px; line-height:1.5; font-style:italic;
+    border-left:2px solid var(--amber); padding-left:9px; margin-bottom:6px; white-space:pre-wrap; }
+  #inspector h3 { margin:0 0 2px; color:var(--amber); font-size:15px; word-break:break-all; }
+  #inspector .irename { cursor:pointer; color:var(--muted); font-size:12px; margin-left:2px; }
+  #inspector .irename:hover { color:var(--amber); }
+  #inspector .isub { color:var(--muted); font-size:12px; margin-bottom:10px; }
+  #inspector .isec { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.5px; margin:13px 0 5px; }
+  #inspector .irow { padding:5px 0; border-bottom:1px solid var(--line); line-height:1.4; }
+  #inspector .irow .ir { color:var(--muted); font-size:12px; }
+  #inspector .itask { color:var(--fg); line-height:1.45; }
+  #inspector .ix { float:right; cursor:pointer; color:var(--muted); font-size:14px; }
+  #inspector .ix:hover { color:var(--fg); }
+  #inspector .iconf { color:var(--red); margin-bottom:6px; }
+  #inspector .igreen { color:var(--green); }
+  .sbadge { display:inline-block; background:#1c3a2a; color:#8fdcab; border:1px solid #2e6f4a;
+    font-size:10px; padding:1px 6px; border-radius:4px; margin-left:7px; letter-spacing:.4px;
+    text-transform:uppercase; vertical-align:middle; }
+  #modal { position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:10; display:none;
+    align-items:center; justify-content:center; padding:40px; }
+  #modal.show { display:flex; }
+  #modalcard { position:relative; background:var(--bg); border:1px solid var(--line); border-radius:12px;
+    max-width:820px; width:100%; max-height:84vh; overflow:auto; padding:30px 36px;
+    box-shadow:0 24px 70px rgba(0,0,0,.55); }
+  #modalcard .mclose { position:absolute; top:14px; right:18px; cursor:pointer; color:var(--muted); font-size:18px; }
+  #modalcard .mclose:hover { color:var(--fg); }
+  #modalcard .title { color:var(--amber); font-size:20px; margin:0 0 4px; word-break:break-word; }
+  #modalcard .meta { color:var(--muted); font-size:12px; margin-bottom:20px; text-transform:uppercase; letter-spacing:.5px; }
+  #modalcard .body { white-space:pre-wrap; line-height:1.65; font-size:14px; color:var(--fg); }
+  #modalcard .body b { color:var(--fg); }
+  #modalcard .body code { background:var(--panel); padding:1px 5px; border-radius:4px; font-family:ui-monospace,monospace; font-size:12.5px; }
+  #modalcard .body .wl { color:var(--amber); cursor:pointer; border-bottom:1px dotted var(--amber); }
+  /* ---- floating agent windows ---- */
+  #windows { position:fixed; inset:0; z-index:8; pointer-events:none; }
+  .aw-win { position:absolute; width:370px; background:var(--card); border:1px solid var(--line);
+    border-radius:10px; box-shadow:0 10px 34px rgba(0,0,0,.55); display:flex; flex-direction:column;
+    pointer-events:auto; max-height:80vh; }
+  .aw-title { display:flex; align-items:center; gap:7px; padding:9px 12px; background:var(--panel);
+    border-bottom:1px solid var(--line); border-radius:10px 10px 0 0; cursor:move; user-select:none;
+    flex:none; min-width:0; }
+  .aw-title b { font-size:14px; color:var(--amber); min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .aw-title .aw-role { color:var(--muted); font-size:11.5px; flex:none; white-space:nowrap; }
+  .aw-badge { background:rgba(79,195,217,.15); border:1px solid rgba(79,195,217,.4); color:#4fc3d9;
+    font-size:9.5px; padding:1px 6px; border-radius:4px; font-family:ui-monospace,monospace;
+    letter-spacing:.3px; flex:none; white-space:nowrap; }
+  .aw-close { margin-left:auto; cursor:pointer; color:var(--muted); font-size:14px; line-height:1;
+    padding:1px 3px; border-radius:3px; flex:none; }
+  .aw-close:hover { color:var(--fg); background:rgba(232,80,58,.18); }
+  .aw-body { flex:1 1 auto; overflow-y:auto; padding:10px 14px; font-size:13px; min-height:60px; }
+  .aw-body .isec { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.5px; margin:11px 0 4px; }
+  .aw-body .irow { padding:4px 0; border-bottom:1px solid var(--line); line-height:1.4; }
+  .aw-body .ir { color:var(--muted); font-size:12px; }
+  .aw-body .itask { color:var(--fg); line-height:1.45; padding:3px 0; }
+  .aw-body .iconf { color:var(--red); }
+  .aw-body .igreen { color:var(--green); }
+  .aw-footer { flex:none; border-top:1px solid var(--line); padding:8px 10px; display:flex;
+    flex-direction:column; gap:4px; }
+  .aw-footer .aw-askbox { display:flex; gap:6px; }
+  .aw-footer .aw-askbox input { flex:1; background:var(--panel); border:1px solid var(--line); color:var(--fg);
+    border-radius:6px; padding:5px 8px; font-size:12px; outline:none; min-width:0; }
+  .aw-footer .aw-askbox input:focus { border-color:var(--amber); }
+  .aw-footer .aw-askbox button { background:var(--amber); color:var(--bg); border:none; border-radius:6px;
+    padding:0 11px; cursor:pointer; font-size:12px; font-weight:600; white-space:nowrap; }
+  .aw-footer .aw-askbox button:disabled { opacity:.5; cursor:default; }
+  .aw-footer .aw-ans { color:var(--fg); font-size:12px; line-height:1.5; font-style:italic;
+    border-left:2px solid var(--amber); padding-left:8px; white-space:pre-wrap; max-height:72px;
+    overflow-y:auto; }
+  .aw-footer .aw-q2 { color:var(--muted); font-size:11px; }
+</style>
+</head>
+<body>
+  <div id="hud">
+    <b>CorralAI</b><span class="sub" id="skinsub">— the corral</span>
+    <span id="tabs">
+      <a class="tab active" id="tab-swarm" onclick="setView('swarm')">swarm</a>
+      <a class="tab" id="tab-progress" onclick="setView('progress')">progress</a>
+      <a class="tab" id="tab-topology" onclick="setView('topology')">topology</a>
+      <a class="tab" id="tab-memory" onclick="setView('memory')">memory</a>
+    </span>
+    <span class="stat" id="stat">connecting…</span>
+    <span class="stat" id="whoami" title="who the brain sees you as"></span>
+    <select id="skinsel" onchange="setSkin(this.value)" title="critter skin" style="pointer-events:auto;margin-left:8px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:6px;font-size:11px;padding:2px 4px"></select>
+    <a class="tab" id="themebtn" onclick="toggleTheme()" title="toggle light / dark" style="pointer-events:auto;margin-left:6px">☾</a>
+  </div>
+  <div id="stage">
+    <aside id="leftcol">
+      <div id="tasks"></div>
+    </aside>
+    <main id="center">
+      <canvas id="c"></canvas>
+      <div id="legend">
+        <span class="dot" style="background:#e6c84f"></span>researcher
+        <span class="dot" style="background:#4fc3d9"></span>designer
+        <span class="dot" style="background:#5b9bd5"></span>builder
+        <span class="dot" style="background:#5ec98a"></span>tester
+        <span class="dot" style="background:#e0913a"></span>pentester
+        <span class="dot" style="background:#d96fb0"></span>perf
+        <span class="dot" style="background:#7b8cde"></span>integrator
+        <span class="dot" style="background:#9fb06a"></span>writer
+        <span class="dot" style="background:#b07cd6"></span>reviewer
+        <span class="dot" style="background:var(--muted)"></span>claimed path
+        <span class="dot" style="background:var(--red)"></span>conflict
+        <span class="dot" style="background:var(--amber)"></span>⏸ awaiting approval
+      </div>
+      <div id="empty">no agents in the corral yet</div>
+    </main>
+    <aside id="rightcol">
+      <div id="done"></div>
+      <div id="inspector"></div>
+      <div id="fleet-oracle"></div>
+      <div id="findings"></div>
+    </aside>
+  </div>
+  <div id="exec"></div>
+  <div id="progress"></div>
+  <div id="topology"></div>
+  <div id="memory">
+    <div id="mlist">
+      <div id="mctrl">
+        <input id="mq" placeholder="search the corpus…" oninput="debounceSearch()" autocomplete="off">
+        <select id="mscope" onchange="searchMem()"><option value="">all tiers</option></select>
+      </div>
+      <div id="mresults"></div>
+    </div>
+  </div>
+  <div id="windows"></div>
+  <div id="modal" onclick="if(event.target.id==='modal')closeModal()">
+    <div id="modalcard"><span class="mclose" onclick="closeModal()">✕</span><div id="modalbody"></div></div>
+  </div>
+<script>
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+// The canvas now lives in the CENTER grid cell, so it sizes to ITS box (not the
+// window). CW/CH are its CSS-pixel dimensions; all physics + drawing use them.
+let CW = 800, CH = 600;
+function resize(){
+  const r = cv.getBoundingClientRect();
+  CW = Math.max(1, r.width); CH = Math.max(1, r.height);
+  cv.width = CW*devicePixelRatio; cv.height = CH*devicePixelRatio;
+  ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
+}
+addEventListener('resize', resize);
+new ResizeObserver(resize).observe(cv);   // re-fit when the cell changes (tab switches, window)
+resize();
+
+// ---- themed canvas backgrounds: grass (ranch/flock), honeycomb (hive) are
+// pre-rendered offscreen; matrix rain animates in draw(). All deliberately faint.
+const bgCv = document.createElement('canvas'); const bgCtx = bgCv.getContext('2d');
+let rainDrops = [];
+function renderBg(){
+  bgCv.width = Math.max(1, CW); bgCv.height = Math.max(1, CH);
+  bgCtx.clearRect(0,0,CW,CH);
+  const kind = skin().bg;
+  if(kind==='grass'){
+    for(let i=0;i<Math.floor(CW*CH/9000);i++){
+      const x = Math.random()*CW, y = Math.random()*CH, h = 4+Math.random()*7;
+      bgCtx.strokeStyle = 'rgba(110,170,110,'+(0.10+Math.random()*0.12)+')'; bgCtx.lineWidth=1;
+      for(const dx of [-2,0,2]){
+        bgCtx.beginPath(); bgCtx.moveTo(x,y); bgCtx.quadraticCurveTo(x+dx, y-h*0.6, x+dx*1.8, y-h); bgCtx.stroke();
+      }
+    }
+  } else if(kind==='comb'){
+    const r=16, w=r*Math.sqrt(3);
+    bgCtx.strokeStyle='rgba(244,196,48,0.07)'; bgCtx.lineWidth=1;
+    for(let row=0; row*1.5*r<CH+2*r; row++){
+      for(let col=0; col*w<CW+w; col++){
+        const cx = col*w + (row%2? w/2:0), cy = row*1.5*r;
+        bgCtx.beginPath();
+        for(let k=0;k<6;k++){ const a=Math.PI/3*k+Math.PI/6; const px=cx+r*Math.cos(a), py=cy+r*Math.sin(a); k?bgCtx.lineTo(px,py):bgCtx.moveTo(px,py); }
+        bgCtx.closePath(); bgCtx.stroke();
+      }
+    }
+  } else if(kind==='rain'){
+    rainDrops = [];
+    for(let i=0;i<Math.floor(CW/26);i++) rainDrops.push({x:i*26+6, y:Math.random()*CH, v:40+Math.random()*90});
+  }
+}
+new ResizeObserver(()=>{ try{ renderBg(); }catch(_){} }).observe(cv);
+const RAIN_GLYPHS = '01コラルｱｲｳｴｵｶｷｸ<>{}#$';
+function drawRain(dt){
+  bgCtx.clearRect(0,0,CW,CH); // rain redraws its own layer each frame
+  bgCtx.font='11px ui-monospace,monospace';
+  for(const d of rainDrops){
+    d.y += d.v*dt; if(d.y > CH+80) { d.y = -20; d.v = 40+Math.random()*90; }
+    for(let k=0;k<6;k++){
+      bgCtx.fillStyle = 'rgba(80,220,120,'+(0.16 - k*0.025)+')';
+      bgCtx.fillText(RAIN_GLYPHS[(Math.random()*RAIN_GLYPHS.length)|0], d.x, d.y - k*13);
+    }
+  }
+}
+
+const nodes = new Map();   // id -> {id,kind,label,x,y,vx,vy,last,conflict}
+const links = [];          // {a,b,conflict}
+const bursts = [];         // execution ring-bursts: {x,y,t0,ok,timed} — fired when a bee's real command lands
+const buzzes = [];         // little "buzz.." sound-effect texts that float up from active bees
+// ---- skins: pluggable critter themes. The corral metaphor is the default —
+// workers are the herd being corralled, the brain wrangles them; claims render
+// as lassos. 'hive' keeps the original hand-drawn bees for the nostalgic.
+const SKINS = {
+  ranch: { label:'🤠 ranch', brain:'🤠', worker:'🐴', roles:{scrum:'🐕', client:'🧑‍💼'}, sub:'🐎', subtitle:'— the corral', bg:'grass', tab:'corral', empty:'no agents in the corral yet', warming:'the herd is saddling up…',
+           center:'the corral', lasso:true, favicon:'🤠',
+           sounds:['neigh~','clop clop','*swish*','yeehaw~'],
+           caught:['Caught me — no {cmd} on record!','Busted! Never ran {cmd}…','Can’t outride the brand 🤠','No proof, no pass — re-doing it'],
+           brainTag:'the wrangler — MCP coordinator · task queue · verification gate' },
+  flock: { label:'🐑 flock', brain:'🐕', worker:'🐑', roles:{scrum:'🐕‍🦺', client:'🧑‍🌾'}, sub:'🐑', subtitle:'— the fold', bg:'grass', tab:'fold', empty:'no agents in the fold yet', warming:'the flock is gathering…',
+           center:'the fold', lasso:false, favicon:'🐑',
+           sounds:['baa~','baaa..','*nibble*','baa!'],
+           caught:['Caught me — no {cmd} on record!','Busted! Never ran {cmd}…','Fleeced! No {cmd} run…','No proof, no pass — re-doing it'],
+           brainTag:'the sheepdog — MCP coordinator · task queue · verification gate' },
+  matrix:{ label:'🕶 matrix', brain:'👁️', worker:'🕶️', roles:{scrum:'📟', client:'🥄'}, sub:'🐇', subtitle:'— the construct', bg:'rain', tab:'construct', honorific:'Mr. ', empty:'no Agents in the construct yet', warming:'loading the construct…',
+           center:'the construct', lasso:false, favicon:'🕶️',
+           sounds:['0101..','⋮⋮⋮','*dodge*','follow the 🐇'],
+           caught:['There is no {cmd} on record','Busted! Never ran {cmd}…','The gate sees all 👁️','No proof, no pass — re-doing it'],
+           brainTag:'the architect — MCP coordinator · task queue · verification gate' },
+  hive:  { label:'🐝 hive', brain:null, worker:null, roles:{}, sub:null, subtitle:'— the hive', bg:'comb', tab:'hive', empty:'no bees in the hive yet', warming:'the bees are warming up…',
+           center:'the corral', lasso:false, favicon:'🐝',
+           sounds:['buzz..','bzz..','bzzz~','buzz~'],
+           caught:['Caught me — no {cmd} on record!','Busted! Never ran {cmd}…','Can’t fake the buzz 🐝','No proof, no pass — re-doing it'],
+           brainTag:'the queen — MCP coordinator · task queue · verification gate' },
+};
+let skinName = localStorage.getItem('corral-skin') || 'ranch';
+if(!SKINS[skinName]) skinName = 'ranch';
+function skin(){ return SKINS[skinName]; }
+function setSkin(n){
+  if(!SKINS[n]) return;
+  skinName = n; localStorage.setItem('corral-skin', n);
+  const fav = document.querySelector('link[rel="icon"]');
+  if(fav) fav.href = "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>" + skin().favicon + "</text></svg>";
+  const sel = document.getElementById('skinsel'); if(sel) sel.value = n;
+  document.title = 'CorralAI ' + skin().subtitle;
+  const sub = document.getElementById('skinsub'); if(sub) sub.textContent = skin().subtitle;
+  const tab = document.getElementById('tab-swarm'); if(tab) tab.textContent = skin().tab;
+  const emp = document.getElementById('empty'); if(emp) emp.textContent = skin().empty;
+  try{ renderBg(); }catch(_){}
+  try{ renderTopology(); }catch(_){ /* first paint may precede state init */ }
+}
+function critterGlyph(role, sub){
+  const s = skin();
+  if(!s.worker) return null;                    // hive: vector bees
+  return s.roles[role] || (sub ? s.sub : s.worker);
+}
+function skinSounds(){ return skin().sounds; }
+
+// drawBubble: comic bubble behind a line of text. Speech = rounded rect with a
+// pointed tail; thought = rounded rect with two trailing dots. Caught = red rim.
+function drawBubble(x, y, w, h, alpha, caught, thought){
+  const r = 8;
+  ctx.beginPath();
+  ctx.moveTo(x+r, y);
+  ctx.arcTo(x+w, y,   x+w, y+h, r); ctx.arcTo(x+w, y+h, x,   y+h, r);
+  ctx.arcTo(x,   y+h, x,   y,   r); ctx.arcTo(x,   y,   x+w, y,   r);
+  ctx.closePath();
+  ctx.fillStyle = hexA(C.panel || '#101318', .92*alpha);
+  ctx.fill();
+  ctx.strokeStyle = hexA(caught ? C.red : C.line, .9*alpha); ctx.lineWidth = caught ? 1.6 : 1; ctx.stroke();
+  if(thought){
+    ctx.fillStyle = hexA(C.line, .8*alpha);
+    ctx.beginPath(); ctx.arc(x+6, y+h+5, 2.5, 0, 7); ctx.fill();
+    ctx.beginPath(); ctx.arc(x+1, y+h+10, 1.5, 0, 7); ctx.fill();
+  } else {
+    ctx.beginPath();
+    ctx.moveTo(x+10, y+h); ctx.lineTo(x+4, y+h+8); ctx.lineTo(x+18, y+h);
+    ctx.closePath();
+    ctx.fillStyle = hexA(C.panel || '#101318', .92*alpha); ctx.fill();
+    ctx.strokeStyle = hexA(caught ? C.red : C.line, .9*alpha); ctx.stroke();
+  }
+}
+
+// requestChatter: in-character, MODEL-GENERATED speech grounded in the agent's
+// real latest activity ("you are Tess, a sheep in the flock; you just ran go
+// test…"). Server-cached + rate-limited; canned role lines are the fallback
+// when the narrator is off. Client throttles to one fetch per agent per 45s.
+const chatterAt = {};   // agent -> last fetch ts
+function requestChatter(n){
+  const nowS = Date.now()/1000;
+  if(chatterAt[n.label] && nowS - chatterAt[n.label] < 45){
+    const lines = ROLE_LINES[n.role];
+    if(lines) buzzes.push({x:n.x+6, y:n.y-15, t0:nowS, txt:lines[(Math.random()*lines.length)|0], say:true, role:n.role, life:2.5});
+    return;
+  }
+  chatterAt[n.label] = nowS;
+  fetch('/api/chatter?agent='+encodeURIComponent(n.label)+'&skin='+encodeURIComponent(skinName))
+    .then(r => r.ok ? r.json() : null)
+    .then(j => {
+      if(j && j.line) buzzes.push({x:n.x+6, y:n.y-15, t0:Date.now()/1000, txt:j.line, say:true, role:n.role, life:3.5});
+      else {
+        const lines = ROLE_LINES[n.role];
+        if(lines) buzzes.push({x:n.x+6, y:n.y-15, t0:Date.now()/1000, txt:lines[(Math.random()*lines.length)|0], say:true, role:n.role, life:2.5});
+      }
+    }).catch(()=>{});
+}
+
+// populate the skin selector + apply the persisted choice
+(function(){
+  const sel = document.getElementById('skinsel');
+  if(sel){
+    for(const k of Object.keys(SKINS)){
+      const o = document.createElement('option'); o.value = k; o.textContent = SKINS[k].label; sel.appendChild(o);
+    }
+  }
+  setSkin(skinName);
+})();
+// role-appropriate, bee-themed chatter — bees occasionally pipe up in character
+const ROLE_LINES = {
+  researcher:['bee-lining to the docs','scouting for nectar','found a sweet source','to the hive-mind!'],
+  designer:['honeycomb architecture','keep the comb clean','un-bee-lievably tidy',"what's the cell shape?"],
+  builder:['Can we fix it?','bee-uilding…','another cell capped','one more sprint'],
+  tester:['sweet, all green','no bugs in MY comb','this test is un-bee-coming','swarm tests pass'],
+  pentester:['Found a real bug here guys','swat that vuln','that bug stings','bee careful with input'],
+  perf:["the bee's knees",'slow as cold honey','56 ns/op — buzz-worthy','fast as wingbeats'],
+  integrator:['comb-ining it all','merging the swarm','the hive connects','rebase incoming'],
+  writer:['documenting the hive','needs a README, honey','spelling it bee by bee','add an example'],
+  reviewer:['looks good to bee','needs changes, drone','nit: bee consistent','did you test this?'],
+  lead:['to the hive!','re-routing the swarm','ship it, bees',"who's foraging this?"],
+  client:['make it sweeter','honey-good!','more bee-utiful please','not quite ripe'],
+};
+let bobSeeded = false; const bobDone = new Set();  // Bob says "Yes we can…" when he finishes a task
+// when the verify gate refuses a lazy completion it raises a verify-gate finding;
+// the caught bee owns up out loud (honest — driven by the real finding, not random).
+const caughtFindings = new Set();
+// caught lines live per-skin (skin().caught) — the verify-gate call-out stays in character.
+let selected = null, lastState = {active_agents:[],live_claims:[],recent_completed:[]};
+// Per-viewer display aliases (localStorage): rename a bee in the GUI WITHOUT
+// touching its real identity. The real name keys all coordination, telemetry, and
+// recorded history; displayName() is purely cosmetic, applied only at render time.
+let beeAlias = {}; try { beeAlias = JSON.parse(localStorage.getItem('beeAlias')||'{}') || {}; } catch(_){ beeAlias = {}; }
+function displayName(real){ const n = (real && beeAlias[real]) || real; return n ? (skin().honorific||'')+n : n; }
+function renameBee(real){
+  if(!real) return;
+  const v = prompt('Rename '+real+' — display only, this browser. Leave blank to reset:', beeAlias[real]||'');
+  if(v===null) return;
+  const t = v.trim();
+  if(t && t!==real) beeAlias[real]=t; else delete beeAlias[real];
+  try{ localStorage.setItem('beeAlias', JSON.stringify(beeAlias)); }catch(_){}
+  renderInspector();
+}
+let serverNow = 0, parkedGrace = 300, stateClientT = 0;
+function liveServerNow(){ return serverNow + (performance.now()/1000 - stateClientT); } // skew-free elapsed
+
+// agents are tinted by their swarm role so builder/tester/pentester/reviewer are
+// instantly distinguishable; roleless agents fall back to the default amber.
+const ROLE_COLORS = {researcher:'#e6c84f', designer:'#4fc3d9', builder:'#5b9bd5', tester:'#5ec98a', pentester:'#e0913a', perf:'#d96fb0', integrator:'#7b8cde', writer:'#9fb06a', reviewer:'#b07cd6'};
+function roleColor(role){ return ROLE_COLORS[role] || C.amber; }
+
+// ---- theme (light / dark) ----
+let C = {};
+function hexA(hex, a){ const h=(hex||'#888').replace('#','').trim(); const n=parseInt(h.length===3?h.replace(/./g,'$&$&'):h,16); return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`; }
+function readColors(){ const s=getComputedStyle(document.documentElement), g=k=>s.getPropertyValue(k).trim();
+  C={fg:g('--fg'),muted:g('--muted'),amber:g('--amber'),red:g('--red'),line:g('--line'),green:g('--green'),panel:g('--panel')}; }
+function applyTheme(th){ document.documentElement.classList.toggle('light', th==='light');
+  const b=document.getElementById('themebtn'); if(b) b.textContent = th==='light'?'☀':'☾'; readColors(); }
+function toggleTheme(){ const th=document.documentElement.classList.contains('light')?'dark':'light';
+  try{ localStorage.setItem('corral-theme', th); }catch(_){} applyTheme(th); }
+applyTheme((()=>{ try{ return localStorage.getItem('corral-theme'); }catch(_){ return null; } })()||'dark');
+function ensure(id, kind, label){
+  let n = nodes.get(id);
+  if(!n){ n = {id,kind,label, x: CW/2 + (Math.random()-.5)*200, y: CH/2 + (Math.random()-.5)*200, vx:0, vy:0, last:0, conflict:false, phase: Math.random()*6.283, dartCd: 0, working:false, trail: []}; nodes.set(id,n); }
+  return n;
+}
+
+function apply(state){
+  lastState = state;
+  serverNow = state.server_now || 0;
+  parkedGrace = state.parked_grace_seconds || 300;
+  stateClientT = performance.now()/1000;
+  const seen = new Set();
+  links.length = 0;
+  const claimsByPath = {};
+  (state.live_claims||[]).forEach(c => { (claimsByPath[c.path] = claimsByPath[c.path]||new Set()).add(c.agent); });
+
+  (state.active_agents||[]).forEach(a => {
+    const leaf = a.parent ? (a.name.split('/').pop()||a.name) : a.name;
+    const n = ensure('a:'+a.name,'agent',leaf);
+    n.last = a.last_active_ts||0; n.parent = a.parent||''; n.role = a.role||''; n.fullname = a.name;
+    n.status = a.status||'working'; n.statusSince = a.status_since||0;
+    seen.add(n.id);
+  });
+  // Subagent tree: edge parent -> child (keep the parent node alive while it has kids).
+  (state.active_agents||[]).forEach(a => {
+    if(!a.parent) return;
+    const child = nodes.get('a:'+a.name);
+    const par = ensure('a:'+a.parent,'agent', a.parent.split('/').pop()||a.parent); seen.add(par.id);
+    if(child) links.push({a:par, b:child, sub:true});
+  });
+  const agentStatus = {};
+  (state.active_agents||[]).forEach(a => { agentStatus[a.name] = {status:a.status||'working', since:a.status_since||0}; });
+  for(const n of nodes.values()) if(n.kind==='path') n.claimLast = 0;
+  (state.live_claims||[]).forEach(c => {
+    const an = ensure('a:'+c.agent,'agent',c.agent); seen.add(an.id);
+    const short = c.path.split('/').filter(Boolean).pop() || c.path;
+    const pn = ensure('p:'+c.path,'path',short);
+    pn.fullpath = c.path;
+    pn.conflict = claimsByPath[c.path].size > 1; seen.add(pn.id);
+    pn.claimLast = Math.max(pn.claimLast||0, an.last||0);
+    const holder = agentStatus[c.agent] || {status:'working', since:0};
+    const parked = c.exclusive && holder.status === 'awaiting_approval';
+    links.push({a:an, b:pn, conflict:pn.conflict, parked: parked, since: holder.since});
+  });
+  for(const id of [...nodes.keys()]) if(!seen.has(id)) nodes.delete(id);
+  if(selected && !nodes.has(selected.id)) selected = null;
+  if(selected && selected.kind!=='agent') renderInspector();  // file/path nodes only; agents use windows
+
+  const stat = document.getElementById('stat');
+  const parkedN = (state.active_agents||[]).filter(a => a.status === 'awaiting_approval').length;
+  stat.textContent = `${(state.active_agents||[]).length} agents · ${(state.live_claims||[]).length} claims` + (parkedN?` · ${parkedN} ⏸`:'');
+  document.getElementById('empty').style.display = nodes.size ? 'none' : 'flex';
+  // AGENTS roster — a stable, CLICKABLE list of every bee (the bees buzz around the
+  // canvas, so this is the reliable way to open a bee's detail). Each row shows the
+  // bee, its role, and what it's doing right now; click to inspect.
+  const feed = document.getElementById('done');
+  const latest = {};   // newest tool-call / command per agent → the "doing now" column
+  (state.recent_activity||[]).forEach(a => { if(a.agent && !latest[a.agent]) latest[a.agent] = '→ '+(a.tool||''); });
+  (state.recent_executions||[]).forEach(e => { if(e.agent && !latest[e.agent]) latest[e.agent] = '❯ '+((e.command||'').slice(0,20)); });
+  const sOrder = {working:0, awaiting_approval:1, idle:2};
+  const ags = (state.active_agents||[]).slice().sort((a,b)=>((sOrder[a.status]??3)-(sOrder[b.status]??3)) || ((a.name||'')>(b.name||'')?1:-1));
+  feed.innerHTML = '<div class="feedhdr">agents · ' + ags.length + '</div>' +
+    (ags.length ? ags.map(a => {
+      const leaf = a.parent ? (a.name.split('/').pop()||a.name) : a.name;
+      const work = a.status==='working';
+      const dot = work ? roleColor(a.role) : (a.status==='awaiting_approval' ? 'var(--amber)' : '#5b5750');
+      const doing = work ? (latest[a.name]||'…') : (a.status==='awaiting_approval' ? '⏸ awaiting approval' : 'idle');
+      const sel = agentWindows.has(a.name) ? ' arowsel' : '';  // highlight agents with open windows
+      return `<div class="arow${sel}" onclick="selectAgent('${(a.name||'').replace(/'/g,"\\'")}')" title="open ${esc(displayName(a.name))} detail">`
+        + `<span class="adot" style="background:${dot}"></span>`
+        + `<b style="color:${roleColor(a.role)}">${esc(displayName(leaf))}</b> <span class="ameta">${esc(a.role||'')}</span>`
+        + `<span class="adoing">${esc(doing)}</span></div>`;
+    }).join('') : '<div class="row" style="opacity:.6">no agents yet…</div>');
+  // Bob the Builder says "Yes we can…" the moment he finishes a task
+  (lastState.tasks||[]).forEach(t=>{
+    if(t.status==='done' && t.claimed_by==='Bob' && !bobDone.has(t.id)){
+      bobDone.add(t.id);
+      if(bobSeeded){ const bn=nodes.get('a:Bob'); if(bn) buzzes.push({x:bn.x+8, y:bn.y-14, t0:Date.now()/1000, txt:'Yes we can…', say:true, role:'builder', life:3.2}); }
+    }
+  });
+  // the verify gate caught a bee narrating "done" with no real run on record: the
+  // bee that claimed the target task owns up (the finding is the source of truth).
+  const tByKey = {}; (lastState.tasks||[]).forEach(t=>{ if(t.key) tByKey[t.key]=t; });
+  (lastState.findings||[]).forEach(f=>{
+    if(f.reporter!=='verify-gate' || caughtFindings.has(f.id)) return;
+    caughtFindings.add(f.id);
+    if(!bobSeeded) return;                                  // skip the backlog on first load
+    const t = tByKey[f.target]; const bee = t && t.claimed_by; if(!bee) return;
+    const bn = nodes.get('a:'+bee); if(!bn) return;
+    const m = /'([^']+)'/.exec(f.evidence||''); const cmd = m ? m[1] : 'a real run';
+    const line = skin().caught[(Math.random()*skin().caught.length)|0].replace('{cmd}', cmd);
+    buzzes.push({x:bn.x+8, y:bn.y-14, t0:Date.now()/1000, txt:line, say:true, role:t.role||'builder', life:3.6, caught:true});
+  });
+  bobSeeded = true;
+  renderTasks();
+  renderFindings();
+  renderExec();
+  renderProgress();
+  renderTopology();
+  // Tick-update open agent windows — patch .aw-body only; ask footer is never touched here
+  agentWindows.forEach((_, name) => renderAgentWindowBody(name));
+}
+
+// renderTopology: the ecosystem map — the brain at the hub, then every HOST and the
+// bees it runs, each with the model driving it and the jail confining its commands.
+// Fed by report_host (live, with stale eviction), so it shows the real distributed
+// shape of the swarm rather than a diagram.
+function renderTopology(){
+  const el = document.getElementById('topology');
+  if(!el) return;
+  const hosts = (lastState && lastState.topology) || [];
+  const byHost = {};
+  hosts.forEach(h => { const k=h.host||'?'; (byHost[k]=byHost[k]||[]).push(h); });
+  const hostKeys = Object.keys(byHost).sort();
+  const models = [...new Set(hosts.map(h=>h.backend+':'+h.model))];
+  let html = '<div class="twrap">';
+  html += `<div class="tsum">${hosts.length} agent${hosts.length===1?'':'s'} · ${hostKeys.length} host${hostKeys.length===1?'':'s'}${models.length?' · '+esc(models.join(' , ')):''}</div>`;
+  html += `<div class="tqueen"><b>${skin().brain||'👑'} corral brain</b> <span class="tmeta">${skin().brainTag}</span></div>`;
+  if(!hosts.length){ el.innerHTML = html + '<div class="tempty">no agents have announced yet — the bees report their host on a timer…</div></div>' + renderModelComparison(); return; }
+  for(const host of hostKeys){
+    const bees = byHost[host], os = bees[0].os||'';
+    html += `<div class="thost"><div class="thosthd">🖥 ${esc(host)} <span class="tmeta">${esc(os)} · ${bees.length} bee${bees.length===1?'':'s'}</span></div>`;
+    html += bees.map(b => {
+      const jail = (b.jail && b.jail!=='none')
+        ? `<span class="tjail">⛨ ${esc(b.jail)}${b.net?' +net':' ·no-net'}</span>`
+        : `<span class="tnojail">⚠ no jail</span>`;
+      const drift = b.drift ? ` <span style="color:var(--amber)">⚠ expected ${esc(b.expected||'?')}</span>` : '';
+      return `<div class="tbee"><span class="tdotr" style="background:${roleColor(b.role)}"></span>`
+        + `<b style="color:${roleColor(b.role)}">${esc(displayName(b.agent))}</b> <span class="tmeta">${esc(b.role||'')}</span>`
+        + ` <span class="tmodel">${esc(b.backend||'')}:${esc(b.model||'')}</span>${drift} ${jail}`
+        + ` <span class="tmeta">pid ${b.pid||'?'}</span></div>`;
+    }).join('');
+    html += '</div>';
+  }
+  el.innerHTML = html + '</div>' + renderModelComparison();
+}
+
+function renderModelComparison(){
+  const mc = lastState && lastState.model_comparison;
+  if(!mc || !mc.rows || !mc.rows.length) return '';
+  // columns: model,findings,critical,high,medium,low,addressed,dismissed,open,confirm_pct
+  const rows = mc.rows.map(r => {
+    const confirmVal = r[9]==null ? '<span class="mc-null">—</span>' : r[9]+'%';
+    return `<tr><td>${esc(String(r[0]))}</td><td>${r[1]}</td><td>${r[2]}</td><td>${r[3]}</td>`
+      + `<td>${r[4]}</td><td>${r[5]}</td><td>${r[6]}</td><td>${r[7]}</td><td>${r[8]}</td><td>${confirmVal}</td></tr>`;
+  }).join('');
+  return `<div class="mc-wrap"><div class="mc-hdr">Model comparison</div>`
+    + `<table class="mc-table"><thead><tr>`
+    + `<th>model</th><th>findings</th><th>crit</th><th>high</th><th>med</th><th>low</th>`
+    + `<th>addressed</th><th>dismissed</th><th>open</th><th>confirm%</th>`
+    + `</tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+// renderProgress: the Progress tab — each mission as the plan the brain laid out,
+// its steps (status, assignee, supersession lineage), and its findings, live. The
+// synthesis view: you watch the directive fill in, bees claim steps, findings
+// appear, and the reflex/lead re-planning rewrite the plan in real time.
+function renderProgress(){
+  const el = document.getElementById('progress');
+  const missions = lastState.missions || [];
+  if(!missions.length){ el.innerHTML = '<div class="pmt">no missions yet — create one with <code>corral-admin mission create "…"</code></div>'; return; }
+  const tasks = lastState.tasks || [], findings = lastState.findings || [];
+  const tByM = {}, fByM = {}, replacedBy = {};
+  tasks.forEach(t => { (tByM[t.mission_id] = tByM[t.mission_id] || []).push(t); if(t.supersedes) replacedBy[t.supersedes] = t; });
+  findings.forEach(f => { (fByM[f.mission_id] = fByM[f.mission_id] || []).push(f); });
+  const order = {claimed:0, ready:1, pending:2, done:3, superseded:4, cancelled:5};
+  el.innerHTML = missions.map(m => {
+    const ts = (tByM[m.id] || []).slice().sort((a,b)=>(order[a.status]??9)-(order[b.status]??9));
+    const fs = (fByM[m.id] || []);
+    const done = ts.filter(t=>t.status==='done').length;
+    const sup = ts.filter(t=>t.status==='superseded').length;
+    const openF = fs.filter(f=>f.status==='open').length;
+    const pillClass = m.status==='done'?'done':(m.status==='awaiting_review'?'review':'running');
+    const pillText = m.status==='awaiting_review'?'review':m.status;
+    const sprintBadge = (m.sprint>1) ? `<span class="psprint">sprint ${m.sprint}</span>` : '';
+    const reviewBar = (m.status==='awaiting_review')
+      ? `<div class="preview">awaiting your review<button class="acc" onclick="reviewMission(${m.id},true)">accept</button><button class="chg" onclick="reviewMission(${m.id},false)">request changes</button></div>`
+      : '';
+    const summary = `${done}/${ts.length} done` + (sup?` · ${sup} superseded`:'') +
+      (fs.length?` · ${fs.length} finding${fs.length>1?'s':''}${openF?` (${openF} open)`:''}`:'');
+    const steps = ts.map(t => {
+      const gone = (t.status==='cancelled' || t.status==='superseded');
+      const who = (t.claimed_by && !gone) ? `<span style="color:${roleColor(t.role)}">← ${esc(t.claimed_by)}</span>` : '';
+      const repl = (t.status==='superseded' && replacedBy[t.id]) ? `<span class="prepl">→ ${esc(replacedBy[t.id].key)}</span>` : '';
+      const ttl = gone ? 'text-decoration:line-through;opacity:.55;color:var(--muted)' : 'color:var(--fg)';
+      return `<div class="pstep"><span class="tdot" style="background:${taskColor(t.status)}"></span><span class="pstatus">${esc(t.status)}</span><b style="${ttl}">${esc(t.title||t.key)}</b> <span class="prole">${esc(t.role||'')}</span> ${who} ${repl}</div>`;
+    }).join('');
+    const frows = fs.length ? '<div class="pfind">' + fs.slice().sort((a,b)=>(SEV_RANK[b.severity]??0)-(SEV_RANK[a.severity]??0)).map(f =>
+      `<span class="pfrow"><b style="color:${sevColor(f.severity)}">${esc(f.severity)} ${esc(f.type)}</b> <span style="color:var(--fg)">${esc(f.target||'')}</span> <span style="color:#6b6452">· ${esc(displayName(f.reporter))} · ${esc(f.status)}</span></span>`).join('') + '</div>' : '';
+    return `<div class="pmission"><div class="phdr"><span class="ppill ${pillClass}">${esc(pillText)}</span><span class="pdir">${esc(m.directive)}</span>${sprintBadge}</div><div class="psum">${esc(summary)}</div>${reviewBar}<div class="psteps">${steps}</div>${frows}</div>`;
+  }).join('');
+}
+
+// sevColor: critical/high red (the alert), medium amber, low muted.
+function sevColor(sev){ return (sev==='critical'||sev==='high')?C.red:(sev==='medium'?C.amber:'#6b6452'); }
+const SEV_RANK = {critical:3, high:2, medium:1, low:0};
+// renderFindings: the swarm's feedback channel, made visible — open findings on
+// top, highest severity first; high/critical highlighted (the "vuln found" moment).
+function renderFindings(){
+  const fp = document.getElementById('findings');
+  const all = lastState.findings || [];
+  if(!all.length){ fp.innerHTML = ''; return; }
+  const open = all.filter(f => f.status === 'open');
+  const crit = open.filter(f => f.severity==='critical' || f.severity==='high').length;
+  const hdr = 'findings · ' + open.length + ' open' + (crit ? ` &nbsp; <b style="color:var(--red)">⚠ ${crit} high</b>` : '');
+  fp.innerHTML = '<div class="feedhdr">' + hdr + '</div>' +
+    open.slice().sort((a,b)=>(SEV_RANK[b.severity]??0)-(SEV_RANK[a.severity]??0)).slice(0,30).map(f => {
+      const hi = (f.severity==='critical'||f.severity==='high') ? ' hi' : '';
+      const tgt = f.target ? ` <span style="color:var(--fg)">${esc(f.target)}</span>` : '';
+      const rec = f.recurring ? ` <b style="color:var(--red)" title="a past fix/lesson did not hold">↻ recurring</b>` : '';
+      const mdl = f.reporter_model ? ` <span style="color:#5a7a8a;font-size:10px;font-family:ui-monospace,monospace">[${esc(f.reporter_model)}]</span>` : '';
+      return `<div class="frow${hi}"><span class="fsev" style="color:${sevColor(f.severity)}">${esc(f.severity)}</span> <span style="color:var(--muted)">${esc(f.type)}</span>${tgt}${rec} <span style="color:#6b6452">· ${esc(displayName(f.reporter))}</span>${mdl}</div>`;
+    }).join('');
+}
+
+// renderExec: the LIVE EXECUTION FEED — the bees' REAL command runs, made
+// visible. Newest on top: role-colored bee + the monospace command + an exit
+// badge (✓ pass / ✗code fail / ⏱ timed out) + the muted result summary. The
+// newest row flashes green on pass / red on fail so a fresh run catches the eye.
+let lastExecKey = '';
+let execFilter = '';   // when set, the live console isolates a single bee's lines
+function setExecFilter(n){ execFilter = (execFilter === n ? '' : n); renderExec(); }
+function execBadge(e){
+  if(e.timed_out) return `<span class="xbadge" style="color:var(--amber)" title="timed out">⏱</span>`;
+  if(e.ok)        return `<span class="xbadge" style="color:var(--green)" title="exit 0">✓</span>`;
+  return `<span class="xbadge" style="color:var(--red)" title="exit ${e.exit_code}">✗${esc(String(e.exit_code))}</span>`;
+}
+function renderExec(){
+  const ep = document.getElementById('exec');
+  // TWO streams in one console: real command runs (recent_executions — exit-coded)
+  // and every other bee tool-call (recent_activity — search_memory, write_file,
+  // claim_paths, report_finding…). Merging them means the console is alive in EVERY
+  // phase, not just the exec phases that run shell commands.
+  const execs = ((lastState && lastState.recent_executions) || []).map(e => Object.assign({_k:'exec'}, e));
+  const acts  = ((lastState && lastState.recent_activity)   || []).map(a => Object.assign({_k:'act'},  a));
+  if(!execs.length && !acts.length){ ep.innerHTML = '<div class="feedhdr">live console · 0</div><div class="xempty">▌ '+skin().warming+'</div>'; lastExecKey=''; return; }
+  // A fresh EXECUTION still fires the canvas ring-burst from the bee that ran it
+  // (green pass / red fail / amber timeout) so the eye jumps canvas↔console.
+  if(execs.length){
+    const top=execs[0], key=(top.ts||0)+'|'+(top.agent||'')+'|'+(top.command||'');
+    if(key!==lastExecKey){ lastExecKey=key; if(top.agent){ const an=nodes.get('a:'+top.agent);
+      if(an) bursts.push({x:an.x, y:an.y, t0:Date.now()/1000, ok:!!top.ok, timed:!!top.timed_out}); } }
+  }
+  const everything = execs.concat(acts);
+  // Filter chips — isolate one bee's stream. Bees are listed newest-active first so
+  // the busy ones surface; if the filtered bee scrolled out of the ring, drop it.
+  const bees = []; const seen = {};
+  everything.sort((a,b)=>(b.ts||0)-(a.ts||0)).forEach(e => { if(e.agent && !seen[e.agent]){ seen[e.agent]=1; bees.push({name:e.agent, role:e.role}); } });
+  if(execFilter && !seen[execFilter]) execFilter = '';   // the isolated bee aged out of the window
+  const chip = (name, role, on) => `<span onclick="setExecFilter('${name.replace(/'/g,"\\'")}')" style="cursor:pointer;padding:1px 6px;margin-left:5px;border-radius:8px;font-size:10.5px;${on?`background:${role?roleColor(role):'#6b6452'};color:#15110a;font-weight:700`:`color:${role?roleColor(role):'var(--muted)'};border:1px solid ${hexA(role?roleColor(role):'#6b6452',.5)}`}">${esc(displayName(name))}</span>`;
+  const allChip = `<span onclick="setExecFilter('')" style="cursor:pointer;padding:1px 6px;margin-left:8px;border-radius:8px;font-size:10.5px;${execFilter?'color:var(--muted);border:1px solid '+hexA('#6b6452',.5):'background:#6b6452;color:#15110a;font-weight:700'}">all</span>`;
+  const chips = allChip + bees.map(b => chip(b.name, b.role, execFilter===b.name)).join('');
+  // Terminal order: oldest at the top, newest at the BOTTOM, auto-scroll — a live
+  // log of the hive (or the isolated bee) scrolling past as the work happens.
+  const filtered = execFilter ? everything.filter(e => e.agent===execFilter) : everything;
+  const merged = filtered.slice().sort((a,b)=>(a.ts||0)-(b.ts||0)).slice(-24);
+  ep.innerHTML = '<div class="feedhdr">live console · ' + (execFilter ? esc(execFilter)+' · '+filtered.length : everything.length) + ' ' + chips + '</div>' +
+    (merged.length ? '' : `<div class="xempty">▌ no recent lines from ${esc(execFilter)} — still working…</div>`) +
+    merged.map(e => {
+      if(e._k==='exec'){
+        const out = (e.summary||'').split('\n').filter(Boolean).map(l=>`<div class="xout">${esc(l)}</div>`).join('');
+        return `<div class="xblk"><div class="xcmdline"><span class="xprompt">❯</span> <b style="color:${roleColor(e.role)}">${esc(displayName(e.agent))}</b> <code class="xcmd">${esc(e.command||'')}</code> ${execBadge(e)}</div>${out}</div>`;
+      }
+      const d = (e.detail||'').replace(/^\{|\}$/g,''); const det = d.length>64 ? d.slice(0,63)+'…' : d;
+      return `<div class="xblk"><div class="xcmdline"><span class="xprompt" style="color:#6b6452">→</span> <b style="color:${roleColor(e.role)}">${esc(displayName(e.agent))}</b> <span style="color:var(--amber)">${esc(e.tool||'')}</span> <code class="xcmd" style="color:var(--muted)">${esc(det)}</code></div></div>`;
+    }).join('') + '<div class="xcursor">▌</div>';
+  ep.scrollTop = ep.scrollHeight;   // keep the newest line in view, like a tailing log
+}
+
+// taskColor: pending grey, ready amber (waiting for a bee), claimed blue (a bee
+// is on it), done green.
+function taskColor(s){ return s==='done'?C.green:(s==='claimed'?'#5b9bd5':(s==='ready'?C.amber:'#6b6452')); }
+// renderTasks: the live mission task list + which bee owns each task (the pull
+// model, made watchable). Sorted so in-flight work is on top.
+function renderTasks(){
+  const tp = document.getElementById('tasks');
+  const tasks = lastState.tasks || [];
+  if(!tasks.length){ tp.innerHTML = ''; return; }
+  const order = {claimed:0, ready:1, pending:2, done:3, superseded:4, cancelled:5};
+  const counts = tasks.reduce((m,t)=>{ m[t.status]=(m[t.status]||0)+1; return m; }, {});
+  // lineage: map a superseded task's id → the task that replaced it.
+  const replacedBy = {};
+  tasks.forEach(t => { if(t.supersedes) replacedBy[t.supersedes] = t; });
+  const hdr = ['claimed','ready','done','superseded','cancelled'].filter(s=>counts[s]).map(s=>counts[s]+' '+s).join(' · ');
+  tp.innerHTML = '<div class="feedhdr">tasks · ' + tasks.length + (hdr?' &nbsp; '+hdr:'') + '</div>' +
+    tasks.slice().sort((a,b)=>(order[a.status]??9)-(order[b.status]??9)).slice(0,50).map(t => {
+      const gone = (t.status==='cancelled' || t.status==='superseded');
+      const who = t.claimed_by && !gone ? ` <span style="color:${roleColor(t.role)}">← ${esc(t.claimed_by)}</span>` : '';
+      const repl = (t.status==='superseded' && replacedBy[t.id]) ? ` <span style="color:var(--amber)">→ ${esc(replacedBy[t.id].key)}</span>` : '';
+      const titleStyle = gone ? 'color:var(--muted);text-decoration:line-through' : 'color:var(--fg)';
+      return `<div class="trow"${gone?' style="opacity:.6"':''}><span class="tdot" style="background:${taskColor(t.status)}"></span><b style="${titleStyle}">${esc(t.title||t.key)}</b> <span style="color:var(--muted)">${esc(t.role||'')}</span>${who}${repl}</div>`;
+    }).join('');
+}
+function esc(s){ return (s||'').replace(/[&<>]/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[m])); }
+
+// simple force layout
+function step(){
+  const arr = [...nodes.values()];
+  const cx = CW/2, cy = CH/2;
+  for(const n of arr){
+    let fx=(cx-n.x)*0.0015, fy=(cy-n.y)*0.0015;     // gravity
+    for(const m of arr){ if(m===n) continue;
+      let dx=n.x-m.x, dy=n.y-m.y, d2=dx*dx+dy*dy+0.01, d=Math.sqrt(d2);
+      const rep = 2600/d2; fx += dx/d*rep; fy += dy/d*rep; }   // repulsion
+    n.vx=(n.vx+fx)*0.82; n.vy=(n.vy+fy)*0.82;
+  }
+  for(const l of links){
+    let dx=l.b.x-l.a.x, dy=l.b.y-l.a.y, d=Math.sqrt(dx*dx+dy*dy)+0.01, f=(d-90)*0.01;
+    l.a.vx+=dx/d*f; l.a.vy+=dy/d*f; l.b.vx-=dx/d*f; l.b.vy-=dy/d*f; }
+  // busy bees never stand still: a continuous organic wander keeps every bee in
+  // motion (layered sines = a wandering flight path), and a WORKING bee is frenetic
+  // — bigger amplitude plus occasional forage "darts" to a new spot. Idle bees still
+  // hover gently. Motion amplitude IS the honesty signal: the harder a bee moves,
+  // the more it's actually doing.
+  const tt = Date.now()/1000;
+  for(const n of arr){
+    if(n.kind==='agent'){
+      const e = n.working ? 1 : 0.36, ph = n.phase||0;
+      n.vx += (Math.sin(tt*2.3+ph) + 0.6*Math.sin(tt*5.7+ph*1.7)) * 0.17 * e;
+      n.vy += (Math.cos(tt*1.9+ph*1.3) + 0.6*Math.sin(tt*4.9+ph*0.7)) * 0.17 * e;
+      if(n.working && (n.dartCd=(n.dartCd||0)-1) <= 0){    // forage: zip to a new flower
+        const a=Math.random()*6.283, k=1.6+Math.random()*1.9;
+        n.vx+=Math.cos(a)*k; n.vy+=Math.sin(a)*k; n.dartCd=32+Math.random()*64;
+      }
+    }
+    n.x+=n.vx; n.y+=n.vy;
+  }
+}
+
+// drawBee: a little role-colored bee — striped body, flapping wings, antennae.
+// The queen (the brain at the heart of the corral) gets a crown.
+function drawBee(x, y, r, color, t, queen){
+  const wf = 0.5 + 0.5*Math.abs(Math.sin(t*6));          // wing flap — a busy flutter
+  ctx.fillStyle = hexA('#dbe9ff', .52); ctx.strokeStyle = hexA('#ffffff', .4); ctx.lineWidth = 0.7;  // wings
+  ctx.beginPath(); ctx.ellipse(x - r*0.72, y - r*0.38, r*1.08*wf, r*0.62, -0.7, 0, 7); ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.ellipse(x + r*0.72, y - r*0.38, r*1.08*wf, r*0.62,  0.7, 0, 7); ctx.fill(); ctx.stroke();
+  ctx.save();                                            // striped body (clip)
+  ctx.beginPath(); ctx.ellipse(x, y, r*0.92, r*1.2, 0, 0, 7); ctx.clip();
+  ctx.fillStyle = color; ctx.fillRect(x - r*1.3, y - r*1.4, r*2.6, r*2.8);
+  ctx.fillStyle = hexA('#1c1208', .82);
+  for(const dy of [-0.5, 0, 0.5]) ctx.fillRect(x - r*1.3, y + dy*r*1.2 - r*0.16, r*2.6, r*0.32);
+  ctx.restore();
+  ctx.beginPath(); ctx.ellipse(x, y, r*0.92, r*1.2, 0, 0, 7);
+  ctx.strokeStyle = hexA('#1c1208', .5); ctx.lineWidth = 1; ctx.stroke();
+  ctx.beginPath(); ctx.arc(x, y - r*1.25, r*0.42, 0, 7); ctx.fillStyle = '#241a10'; ctx.fill(); // head
+  ctx.strokeStyle = '#241a10'; ctx.lineWidth = 1;        // antennae
+  ctx.beginPath(); ctx.moveTo(x - r*0.2, y - r*1.55); ctx.lineTo(x - r*0.55, y - r*2.1);
+  ctx.moveTo(x + r*0.2, y - r*1.55); ctx.lineTo(x + r*0.55, y - r*2.1); ctx.stroke();
+  if(queen){                                             // a little gold crown
+    const cw = r*1.8, cy = y - r*2.15;
+    ctx.fillStyle = '#f4c430';
+    ctx.beginPath(); ctx.moveTo(x - cw/2, cy);
+    ctx.lineTo(x - cw/2, cy - r*0.55); ctx.lineTo(x - cw*0.25, cy - r*0.12);
+    ctx.lineTo(x, cy - r*0.78); ctx.lineTo(x + cw*0.25, cy - r*0.12);
+    ctx.lineTo(x + cw/2, cy - r*0.55); ctx.lineTo(x + cw/2, cy);
+    ctx.closePath(); ctx.fill();
+  }
+}
+
+// drawCritter: the themed node renderer. Emoji skins get a role-colored halo
+// ring (role color survives any skin) + a gently bobbing critter; the hive
+// skin falls through to the original hand-drawn bee.
+function drawCritter(x, y, r, color, t, isBrain, role, sub){
+  const g = isBrain ? skin().brain : critterGlyph(role, sub);
+  if(!g){ drawBee(x, y, r, color, t, isBrain); return; }
+  ctx.beginPath(); ctx.arc(x, y, r*1.35, 0, 7);
+  ctx.strokeStyle = hexA(color, .85); ctx.lineWidth = isBrain ? 2 : 1.5; ctx.stroke();
+  const bob = Math.sin(t*3 + x)*r*0.12;
+  ctx.font = (r*2.1) + 'px serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText(g, x, y + bob); ctx.textAlign='left'; ctx.textBaseline='alphabetic';
+}
+
+let lastFrameT = Date.now()/1000;
+function draw(){
+  step();
+  ctx.clearRect(0,0,CW,CH);
+  const frameT = Date.now()/1000, dt = Math.min(0.1, frameT-lastFrameT); lastFrameT = frameT;
+  if(skin().bg==='rain') drawRain(dt);
+  if(bgCv.width>1) ctx.drawImage(bgCv, 0, 0, CW, CH);
+  for(const l of links){
+    let parkedLabel = null;
+    if(l.parked){
+      const remaining = parkedGrace - (liveServerNow() - (l.since||0));
+      const open = remaining <= 0;
+      ctx.strokeStyle = hexA(open ? C.red : C.amber, .85);
+      ctx.lineWidth = 2; ctx.setLineDash(open ? [2,4] : [5,4]);
+      parkedLabel = open ? 'lease open to peers' : 'parked ' + Math.ceil(remaining) + 's';
+    } else if(l.sub){ ctx.strokeStyle=hexA(C.amber,.35); ctx.lineWidth=1; ctx.setLineDash([3,3]); }
+    else if(skin().lasso && !l.sub && !l.conflict){
+      // ranch skin: a claim is a thrown lasso — rope-colored line, loop at the file end
+      ctx.strokeStyle = hexA('#c9a86a', .8); ctx.lineWidth = 1.4; ctx.setLineDash([]);
+    }
+    else { ctx.strokeStyle = l.conflict ? hexA(C.red,.7) : hexA(C.line,.7); ctx.lineWidth = l.conflict ? 2 : 1; ctx.setLineDash([]); }
+    ctx.beginPath(); ctx.moveTo(l.a.x,l.a.y); ctx.lineTo(l.b.x,l.b.y); ctx.stroke();
+    if(skin().lasso && !l.sub && !l.conflict && !l.parked){
+      ctx.beginPath(); ctx.arc(l.b.x, l.b.y, 8, 0, 7);
+      ctx.strokeStyle = hexA('#c9a86a', .75); ctx.lineWidth = 1.4; ctx.stroke();
+    }
+    if(parkedLabel){
+      ctx.setLineDash([]);
+      ctx.fillStyle = hexA(C.fg, .85); ctx.font='10px ui-sans-serif';
+      ctx.fillText(parkedLabel, (l.a.x+l.b.x)/2 + 4, (l.a.y+l.b.y)/2 - 4);
+    }
+  }
+  ctx.setLineDash([]);
+  const now = Date.now()/1000, t = now;
+  // the queen — the brain at the heart of the corral, with her crown
+  if(nodes.size){
+    const qx=CW/2, qy=CH/2;
+    const qglow = 34 + 7*Math.sin(t*1.4);
+    ctx.beginPath(); ctx.arc(qx,qy, qglow, 0, 7); ctx.fillStyle=hexA(C.amber,.10); ctx.fill();
+    drawCritter(qx, qy, 16, C.amber, t*0.7, true);
+    ctx.fillStyle=hexA(C.muted,.85); ctx.font='11px ui-sans-serif'; ctx.textAlign='center';
+    ctx.fillText(skin().center, qx, qy+38); ctx.textAlign='left';
+  }
+  for(const n of nodes.values()){
+    if(n.kind==='agent'){
+      const sub = !!n.parent;                              // subagent = smaller child node
+      const fresh = Math.max(0, 1-(now-n.last)/300);      // 0..1 recency
+      const working = (n.status === 'working');           // actually doing work right now
+      n.working = working;                                 // feed the busy-bee physics (next step)
+      const core = sub ? 5 : 8;
+      const ac = roleColor(n.role);
+      // flight trail: a working bee leaves a fading honey-colored path so the eye
+      // tracks its motion — the busiest bees draw the longest streaks.
+      if(working){ n.trail.push(n.x, n.y); if(n.trail.length>20) n.trail.splice(0,2); }
+      else if(n.trail.length){ n.trail.splice(0,2); }
+      if(n.trail.length>=4){
+        ctx.beginPath(); ctx.moveTo(n.trail[0], n.trail[1]);
+        for(let k=2;k<n.trail.length;k+=2) ctx.lineTo(n.trail[k], n.trail[k+1]);
+        ctx.strokeStyle=hexA(ac,0.20); ctx.lineWidth=2; ctx.stroke();
+      }
+      // glow: bright + pulsing when working, faint when idle — so the eye finds the busy bees
+      const pulse = (sub?9:14) + (working ? 3*Math.sin(t*3 + n.x) : 0);
+      ctx.beginPath(); ctx.arc(n.x,n.y, pulse + (working?6:1)*fresh, 0, 7);
+      ctx.fillStyle = hexA(ac, working ? (0.16+0.22*fresh) : 0.05); ctx.fill();
+      // idle critters dim out; only the working ones are full color and lit
+      ctx.globalAlpha = working ? 1 : 0.38;
+      drawCritter(n.x, n.y, core, ac, t + n.x*0.6, false, n.role, sub);
+      ctx.globalAlpha = 1;
+      // ONLY working agents talk — the animation tells the truth. Speech is
+      // model-generated in-character from the agent's REAL latest activity
+      // (see requestChatter); the canned role lines are the offline fallback.
+      if(working && Math.random()<0.013){
+        if(Math.random()<0.5){ requestChatter(n); }
+        else buzzes.push({x:n.x+core*0.7, y:n.y-core*1.7, t0:now, txt:skinSounds()[(Math.random()*skinSounds().length)|0], life:1.5});
+      }
+      const dn = displayName(n.label); const lbl = n.role ? dn+' ['+n.role+']' : dn;
+      const parkedNode = n.status === 'awaiting_approval';
+      if(parkedNode){
+        ctx.beginPath(); ctx.arc(n.x,n.y, core+4, 0, 7);
+        ctx.strokeStyle=hexA(C.amber,.95); ctx.lineWidth=2; ctx.setLineDash([2,2]); ctx.stroke(); ctx.setLineDash([]);
+      }
+      ctx.fillStyle = working ? C.fg : hexA(C.fg,.42); ctx.font=(sub?'11px':'12px')+' ui-sans-serif';
+      ctx.fillText((parkedNode?'⏸ ':'')+lbl, n.x+core+4, n.y+4);
+    } else {
+      // active-work pulse: a file glows green while the agent holding it is fresh
+      const cfresh = Math.max(0, 1-(now-(n.claimLast||0))/180);
+      if(n.conflict){
+        // contested file: a pulsing red alarm so collisions (the clobber!) are unmistakable
+        const cp = 9 + 4*Math.abs(Math.sin(t*4 + n.x));
+        ctx.beginPath(); ctx.arc(n.x,n.y, cp+5, 0, 7); ctx.fillStyle = hexA(C.red, 0.18); ctx.fill();
+        ctx.beginPath(); ctx.arc(n.x,n.y, cp, 0, 7); ctx.strokeStyle = hexA(C.red,.9); ctx.lineWidth = 2; ctx.stroke();
+      } else if(cfresh>0.02){
+        ctx.beginPath(); ctx.arc(n.x,n.y, 6 + 5*cfresh + 2.5*Math.sin(t*4+n.x), 0, 7);
+        ctx.fillStyle = hexA(C.green, 0.10+0.28*cfresh); ctx.fill();
+      }
+      ctx.beginPath(); ctx.arc(n.x,n.y, 5, 0, 7);
+      ctx.fillStyle = n.conflict ? C.red : (cfresh>0.02 ? C.green : C.muted); ctx.fill();
+      ctx.fillStyle = n.conflict ? C.red : C.muted; ctx.font='11px ui-monospace,monospace'; ctx.fillText(n.label, n.x+9, n.y+3);
+    }
+    if(n===selected){ ctx.beginPath(); ctx.arc(n.x,n.y, n.kind==='agent'?(n.parent?12:17):11, 0, 7); ctx.strokeStyle=C.fg; ctx.lineWidth=1.5; ctx.stroke(); }
+  }
+  // execution bursts: an expanding ring blooms from a bee when its REAL command
+  // lands — green on a passing build/test, red on failure, amber on timeout.
+  for(let i=bursts.length-1; i>=0; i--){
+    const b=bursts[i], age=now-b.t0;
+    if(age>1.2 || age<0){ bursts.splice(i,1); continue; }
+    const p=age/1.2, r=9+48*p, col=b.timed?C.amber:(b.ok?C.green:C.red);
+    ctx.beginPath(); ctx.arc(b.x,b.y, r, 0, 7);
+    ctx.strokeStyle=hexA(col,.6*(1-p)); ctx.lineWidth=3*(1-p)+0.5; ctx.stroke();
+  }
+  // active critters murmur — and SAY things in character. Spoken lines get a
+  // speech bubble; ambient murmurs get a thought bubble (cloud + dot tail).
+  for(let i=buzzes.length-1; i>=0; i--){
+    const b=buzzes[i], life=b.life||1.5, age=now-b.t0;
+    if(age>life || age<0){ buzzes.splice(i,1); continue; }
+    const p=age/life, alpha=Math.min(1,(1-p)*1.4);
+    if(b.say){
+      const txt = '“'+b.txt+'”';
+      ctx.font = b.caught ? 'bold 13px ui-sans-serif' : '12px ui-sans-serif';
+      const w = ctx.measureText(txt).width;
+      const bx = b.x + (b.caught?0:2*Math.sin(age*4)), by = b.y - 26*p;
+      drawBubble(bx-8, by-16, w+16, 23, alpha, b.caught, false);
+      ctx.fillStyle = hexA(b.caught ? C.red : roleColor(b.role), .96*alpha);
+      ctx.font = b.caught ? 'bold 13px ui-sans-serif' : '12px ui-sans-serif';
+      ctx.fillText(txt, bx, by);
+    } else {
+      ctx.font='italic 11px ui-sans-serif';
+      const w = ctx.measureText(b.txt).width;
+      const bx = b.x + 5*Math.sin(age*7), by = b.y - 20*p;
+      drawBubble(bx-7, by-14, w+14, 20, alpha*0.8, false, true);
+      ctx.fillStyle=hexA(C.amber, .8*alpha);
+      ctx.font='italic 11px ui-sans-serif';
+      ctx.fillText(b.txt, bx, by);
+    }
+  }
+  requestAnimationFrame(draw);
+}
+requestAnimationFrame(draw);
+
+const es = new EventSource('/events');
+es.onmessage = e => { try { apply(JSON.parse(e.data)); } catch(_){} };
+es.onerror = () => { document.getElementById('stat').textContent = 'reconnecting…'; };
+
+// Identity chip: who the brain sees you as + role (superuser controls hang off this).
+let ME = { principal:'', is_superuser:false };
+fetch('/api/me').then(r=>r.json()).then(m=>{
+  ME = m;
+  const el = document.getElementById('whoami');
+  if (!el) return;
+  if (m.principal) {
+    el.textContent = '· ' + m.principal + (m.readonly ? ' 👁 observer' : m.is_superuser ? ' ◆ superuser' : '');
+    el.style.color = m.readonly ? 'var(--muted)' : m.is_superuser ? 'var(--amber)' : '';
+  } else {
+    el.textContent = '· local (dev)';
+  }
+}).catch(()=>{});
+
+// ---- view switching + memory browser ----
+let view = 'swarm', memInit = false, _t, _sel;
+function setView(v){
+  view = v;
+  document.getElementById('tab-swarm').classList.toggle('active', v==='swarm');
+  document.getElementById('tab-progress').classList.toggle('active', v==='progress');
+  document.getElementById('tab-topology').classList.toggle('active', v==='topology');
+  document.getElementById('tab-memory').classList.toggle('active', v==='memory');
+  document.getElementById('memory').classList.toggle('show', v==='memory');
+  document.getElementById('progress').classList.toggle('show', v==='progress');
+  document.getElementById('topology').classList.toggle('show', v==='topology');
+  // The stage (and its canvas) stay mounted; the tab overlays simply cover them at a
+  // higher z-index. Don't display:none the canvas — that zeroes its box and squishes
+  // the swarm. resize() re-fits when we come back, but there's nothing to re-fit now.
+  if(v==='memory' && !memInit){ memInit = true; loadScopes(); searchMem(); }
+  if(v==='progress'){ renderProgress(); }
+  if(v==='topology'){ renderTopology(); }
+}
+async function loadScopes(){
+  try {
+    const s = await (await fetch('/api/memory/stats')).json();
+    const sel = document.getElementById('mscope');
+    Object.entries(s.by_project||{}).sort((a,b)=>b[1]-a[1]).forEach(([k,n])=>{
+      const o = document.createElement('option'); o.value=k; o.textContent=`${k} (${n})`; sel.appendChild(o);
+    });
+  } catch(_){}
+}
+function debounceSearch(){ clearTimeout(_t); _t = setTimeout(searchMem, 220); }
+async function searchMem(){
+  const q = document.getElementById('mq').value, scope = document.getElementById('mscope').value;
+  const res = document.getElementById('mresults');
+  res.innerHTML = '<div class="mitem md">searching…</div>';
+  try {
+    const r = await fetch(`/api/memory/search?q=${encodeURIComponent(q)}&scope=${encodeURIComponent(scope)}&limit=60`);
+    if(r.status === 403){ res.innerHTML = '<div class="mitem md">not authorized to browse this corpus</div>'; return; }
+    const hits = (await r.json()).hits || [];
+    res.innerHTML = hits.length ? '' : '<div class="mitem md">no entries</div>';
+    hits.forEach(h => {
+      const d = document.createElement('div'); d.className = 'mitem'; d.onclick = () => openEntryModal(h.slug);
+      d.innerHTML = `<div class="mn">${esc(h.name||h.slug)}${h.shared?'<span class="sbadge">shared</span>':''}</div><div class="md">${esc(h.description||'')}</div><div class="mt">${esc(h.project)} · ${esc(h.type)}</div>`;
+      res.appendChild(d);
+    });
+  } catch(_){
+    // Usually a transient blip (the brain restarting). Say so plainly and retry once.
+    res.innerHTML = '<div class="mitem md">couldn’t reach the brain — retrying…</div>';
+    clearTimeout(_t); _t = setTimeout(searchMem, 1200);
+  }
+}
+async function openEntryModal(name){
+  const m = document.getElementById('modal'), b = document.getElementById('modalbody');
+  b.innerHTML = '<div class="meta">loading…</div>'; m.classList.add('show');
+  try {
+    const e = await (await fetch('/api/memory/get?name=' + encodeURIComponent(name))).json();
+    b.innerHTML = `<div class="title">${esc(e.name||e.slug)}${e.shared?'<span class="sbadge">shared</span>':''}</div><div class="meta">${esc(e.project)} · ${esc(e.type)} · ${esc(e.slug)}</div><div class="body">${fmtBody(e.body||'')}</div>`;
+    document.getElementById('modalcard').scrollTop = 0;
+  } catch(_){ b.innerHTML = '<div class="meta">error loading entry</div>'; }
+}
+function closeModal(){ document.getElementById('modal').classList.remove('show'); }
+addEventListener('keydown', e => { if(e.key==='Escape') closeModal(); });
+function fmtBody(s){
+  let h = esc(s);
+  h = h.replace(/\[\[([a-z0-9_-]+)\]\]/gi, (m,n)=>`<span class="wl" onclick="openEntryModal('${n}')">${n}</span>`);
+  h = h.replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
+  h = h.replace(/`([^`]+)`/g, '<code>$1</code>');
+  return h;
+}
+
+// ---- click-to-inspect an agent or file ----
+cv.addEventListener('click', ev => {
+  // node coords are canvas-local now; convert the click from viewport → canvas space.
+  const rect = cv.getBoundingClientRect(), mx = ev.clientX-rect.left, my = ev.clientY-rect.top;
+  let best=null, bd=1e9;
+  for(const n of nodes.values()){
+    const r = n.kind==='agent'?16:9, dx=n.x-mx, dy=n.y-my, d=Math.sqrt(dx*dx+dy*dy);
+    if(d < r+6 && d < bd){ best=n; bd=d; }
+  }
+  if(best && best.kind==='agent'){
+    openAgentWindow(best.fullname||best.label);
+  } else {
+    selected = best; agentDetail = null; askDraft=''; askFocused=false; renderInspector();
+  }
+});
+// double-click a bee to rename it (display-only alias). The inspector's ✎ is the
+// easy target; this is the direct-on-canvas shortcut.
+cv.addEventListener('dblclick', ev => {
+  const rect = cv.getBoundingClientRect(), mx = ev.clientX-rect.left, my = ev.clientY-rect.top;
+  let best=null, bd=1e9;
+  for(const n of nodes.values()){ if(n.kind!=='agent') continue; const dx=n.x-mx, dy=n.y-my, d=Math.sqrt(dx*dx+dy*dy); if(d<22 && d<bd){ best=n; bd=d; } }
+  if(best) renameBee(best.fullname||best.label);
+});
+function ago(ts){ if(!ts) return '—'; const s=Math.max(0,Date.now()/1000-ts); return s<60?Math.round(s)+'s':s<3600?Math.round(s/60)+'m':Math.round(s/3600)+'h'; }
+let agentDetail = null;
+// "ask an agent" — read-only debrief state. askDraft/askFocused preserve the input
+// across the inspector's live re-renders; askBox holds the last Q+A for a bee.
+let askDraft = '', askFocused = false, askBox = {agent:null, q:'', answer:'', loading:false};
+async function askAgent(){
+  if(!selected || selected.kind!=='agent') return;
+  const name = selected.fullname || selected.label;
+  const el = document.getElementById('askq'); const q = (el ? el.value : askDraft).trim();
+  if(!q) return;
+  askBox = {agent:name, q, answer:'', loading:true}; askDraft=''; renderInspector();
+  try{
+    const r = await fetch('/api/ask', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({agent:name, question:q})});
+    if(r.ok){ const d = await r.json(); askBox = {agent:name, q, answer:d.answer||'(no answer)', loading:false}; }
+    else { askBox = {agent:name, q, answer:'(couldn’t reach the narrator — '+r.status+')', loading:false}; }
+  }catch(_){ askBox = {agent:name, q, answer:'(error reaching the narrator)', loading:false}; }
+  renderInspector();
+}
+async function fetchAgentDetail(){
+  if(!selected || selected.kind!=='agent'){ agentDetail=null; return; }
+  const name = selected.fullname || selected.label;
+  try{ const r = await fetch('/api/agent?name='+encodeURIComponent(name));
+    if(r.ok){ const d = await r.json(); if(selected && (selected.fullname||selected.label)===name){ agentDetail=d; renderInspector(); } }
+  }catch(_){}
+}
+// Select an agent/subagent node by its full coordination name (from the tree list).
+function selectAgent(fn){ openAgentWindow(fn); }
+// reviewMission: the human client's verdict from the Progress tab — accept the
+// deliverable, or request changes (which opens the next sprint).
+function reviewMission(id, accept){
+  let feedback = '';
+  if(!accept){
+    feedback = prompt('What changes do you want for the next sprint?') || '';
+    if(!feedback.trim()) return;
+  }
+  fetch('/api/review', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({id, accept, feedback})})
+    .then(r => { if(!r.ok) return r.text().then(t => alert('review failed: ' + t)); });
+}
+function summ(d){ try{ const o=JSON.parse(d); if(o.summary) return o.summary;
+  if(o.paths!=null) return (Array.isArray(o.paths)?o.paths.length+' path(s)':o.paths)+(o.conflicts?' · '+o.conflicts+' conflict':'');
+  if(o.released!=null) return o.released+' released'; if(o.task) return o.task; return ''; }catch(_){ return ''; } }
+const MODELS = {
+  'opus':{label:'Claude Opus',provider:'Anthropic',note:'most capable'},
+  'sonnet':{label:'Claude Sonnet',provider:'Anthropic',note:'balanced speed/quality'},
+  'haiku':{label:'Claude Haiku',provider:'Anthropic',note:'fastest'},
+  'fable':{label:'Fable 5',provider:'Anthropic'},
+  'gpt-4o':{label:'GPT-4o',provider:'OpenAI'}, 'gpt-4.1':{label:'GPT-4.1',provider:'OpenAI'},
+  'o3':{label:'o3',provider:'OpenAI',note:'reasoning'}, 'gpt-5':{label:'GPT-5',provider:'OpenAI'},
+  'gemini':{label:'Gemini',provider:'Google'},
+};
+function modelInfo(m){ if(!m) return null; const k=m.toLowerCase();
+  if(MODELS[k]) return MODELS[k];
+  for(const key in MODELS){ if(k.includes(key)) return MODELS[key]; }
+  return {label:m}; }
+// ---- Floating agent windows ----
+// Each entry: { el, bodyEl, detailData, askBox }
+// The ask footer (input + button + answer slot) lives in el, OUTSIDE bodyEl,
+// so tick calls to renderAgentWindowBody() never touch or recreate the input.
+const agentWindows = new Map();
+let awZ = 100;                  // z-index counter — raised on any window interaction
+let activeWinDrag = null;       // { el, ox, oy } — set on mousedown, cleared on mouseup
+
+// Global drag move + end (shared across all windows to avoid per-window listener spam)
+document.addEventListener('mousemove', ev => {
+  if (!activeWinDrag) return;
+  let nx = ev.clientX - activeWinDrag.ox;
+  let ny = ev.clientY - activeWinDrag.oy;
+  // Clamp: keep the window fully visible (min 40px top so title stays reachable)
+  nx = Math.max(0, Math.min(window.innerWidth - activeWinDrag.el.offsetWidth, nx));
+  ny = Math.max(40, Math.min(window.innerHeight - 60, ny));
+  activeWinDrag.el.style.left = nx + 'px';
+  activeWinDrag.el.style.top = ny + 'px';
+});
+document.addEventListener('mouseup', () => { activeWinDrag = null; });
+
+function openAgentWindow(name) {
+  if (agentWindows.has(name)) {
+    // Raise the existing window and focus its input
+    const win = agentWindows.get(name);
+    awZ++;
+    win.el.style.zIndex = awZ;
+    const inp = win.el.querySelector('.aw-ask-input');
+    if (inp) inp.focus();
+    return;
+  }
+
+  const layer = document.getElementById('windows');
+  // Cascade-offset so new windows don't stack exactly
+  const numWin = agentWindows.size;
+  const offset = (numWin % 8) * 30;
+  const left = Math.min(90 + offset, window.innerWidth - 390);
+  const top = Math.min(80 + offset, window.innerHeight - 340);
+
+  const el = document.createElement('div');
+  el.className = 'aw-win';
+  el.style.left = left + 'px';
+  el.style.top = top + 'px';
+  awZ++;
+  el.style.zIndex = awZ;
+
+  // Build title bar from current state (set once; not re-rendered on tick)
+  const a = (lastState.active_agents || []).find(x => x.name === name) || {};
+  // The model/backend live in topology (report_host / HostBook), not active_agents.
+  const topo = (lastState.topology || []).find(x => x.agent === name) || {};
+  const model = a.model || topo.model || '';
+  const leaf = a.parent ? (name.split('/').pop() || name) : name;
+  const dn = displayName(leaf);
+  const role = a.role || topo.role || '';
+  const mi = modelInfo(model);
+  // Always emit the badge span (hidden if the model isn't known yet — report_host
+  // populates topology on a timer); renderAgentWindowBody fills it in on a later tick.
+  const modelBadge = `<span class="aw-badge"${model ? '' : ' style="display:none"'} title="${esc((topo.backend ? topo.backend + ' · ' : '') + model)}">${esc(model ? (mi && mi.label ? mi.label : model) : '')}</span>`;
+
+  // Title bar + body + persistent ask footer — footer is NEVER inside bodyEl
+  el.innerHTML =
+    `<div class="aw-title">` +
+      `<b>${esc(dn)}</b>` +
+      (role ? `<span class="aw-role">${esc(role)}</span>` : '') +
+      modelBadge +
+      `<span class="aw-close" title="close">✕</span>` +
+    `</div>` +
+    `<div class="aw-body"><div class="ir" style="font-style:italic;font-size:12px">loading…</div></div>` +
+    `<div class="aw-footer">` +
+      `<div class="aw-askbox">` +
+        `<input class="aw-ask-input" id="aw-ask-${name.replace(/[^a-zA-Z0-9_-]/g,'_')}" ` +
+          `placeholder="what have you done? what's blocking you?" autocomplete="off">` +
+        `<button class="aw-ask-btn">ask</button>` +
+      `</div>` +
+      `<div class="aw-answer-slot"></div>` +
+    `</div>`;
+
+  layer.appendChild(el);
+
+  const bodyEl = el.querySelector('.aw-body');
+  const win = { el, bodyEl, detailData: null, askBox: { q: '', answer: '', loading: false } };
+  agentWindows.set(name, win);
+
+  // Raise to front on any interaction with this window
+  el.addEventListener('mousedown', () => { awZ++; win.el.style.zIndex = awZ; }, true);
+
+  // Wire close button (created once, persists — title bar innerHTML never changes after this)
+  el.querySelector('.aw-close').addEventListener('click', ev => {
+    ev.stopPropagation();
+    agentWindows.delete(name);
+    el.remove();
+  });
+
+  // Drag — title bar mousedown starts the drag; close-btn click is excluded
+  const titleBar = el.querySelector('.aw-title');
+  titleBar.addEventListener('mousedown', ev => {
+    if (ev.target.classList.contains('aw-close')) return;
+    activeWinDrag = { el, ox: ev.clientX - el.offsetLeft, oy: ev.clientY - el.offsetTop };
+    ev.preventDefault();
+  });
+
+  // Per-window ask — Enter or button click
+  const askInput = el.querySelector('.aw-ask-input');
+  const askBtn = el.querySelector('.aw-ask-btn');
+  askBtn.addEventListener('click', () => askAgentWindow(name));
+  askInput.addEventListener('keydown', ev => {
+    if (ev.key === 'Enter') { ev.preventDefault(); askAgentWindow(name); }
+  });
+
+  askInput.focus();
+
+  // Fetch per-agent detail (/api/agent?name=) on open, then render body
+  fetchWindowDetail(name);
+}
+
+async function fetchWindowDetail(name) {
+  const win = agentWindows.get(name);
+  if (!win) return;
+  try {
+    const r = await fetch('/api/agent?name=' + encodeURIComponent(name));
+    if (r.ok) {
+      const d = await r.json();
+      if (agentWindows.has(name)) {
+        agentWindows.get(name).detailData = d;
+        renderAgentWindowBody(name);
+      }
+    } else {
+      if (agentWindows.has(name)) {
+        agentWindows.get(name).bodyEl.innerHTML =
+          '<div class="ir" style="font-style:italic;font-size:12px">couldn\'t reach the brain — retrying…</div>';
+        setTimeout(() => fetchWindowDetail(name), 3000);
+      }
+    }
+  } catch(_) {
+    if (agentWindows.has(name)) {
+      agentWindows.get(name).bodyEl.innerHTML =
+        '<div class="ir" style="font-style:italic;font-size:12px">couldn\'t reach the brain — retrying…</div>';
+      setTimeout(() => fetchWindowDetail(name), 3000);
+    }
+  }
+}
+
+// renderAgentWindowBody: patches ONLY .aw-body — the ask footer is NOT touched.
+// Called both on open (after fetchWindowDetail) and on every SSE tick via apply().
+function renderAgentWindowBody(name) {
+  const win = agentWindows.get(name);
+  if (!win) return;
+
+  const st = lastState;
+  const a = (st.active_agents || []).find(x => x.name === name) || {};
+  // Fill the title-bar model badge once topology (report_host) knows this agent's model.
+  // Touches only the title span — never the ask input — so focus/drag are unaffected.
+  const topo = (st.topology || []).find(x => x.agent === name) || {};
+  const badgeModel = a.model || topo.model || '';
+  const badgeEl = win.el.querySelector('.aw-badge');
+  if (badgeEl && badgeModel && !badgeEl.textContent.trim()) {
+    const bmi = modelInfo(badgeModel);
+    badgeEl.textContent = (bmi && bmi.label) ? bmi.label : badgeModel;
+    badgeEl.title = (topo.backend ? topo.backend + ' · ' : '') + badgeModel;
+    badgeEl.style.display = '';
+  }
+  const claims = (st.live_claims || []).filter(c => c.agent === name);
+  const done = (st.recent_completed || []).filter(d => d.agent_name === name);
+  const kids = (st.active_agents || []).filter(x => x.parent === name);
+
+  let h = '';
+
+  if (a.parent) {
+    const pn = a.parent;
+    h += `<div class="irow"><span class="ir">subagent of </span><span style="cursor:pointer;color:var(--amber)" onclick="openAgentWindow('${esc(pn)}')">${esc(pn.split('/').pop() || pn)}</span></div>`;
+  }
+  if (kids.length) {
+    h += `<div class="isec">subagents (${kids.length})</div>`;
+    kids.forEach(k => {
+      const kLeaf = k.name.split('/').pop() || k.name;
+      h += `<div class="irow" style="cursor:pointer" onclick="openAgentWindow('${esc(k.name)}')"><span style="color:var(--amber)">${esc(displayName(kLeaf))}</span>${k.role ? ` <span class="ir">· ${esc(k.role)}</span>` : ''}</div>`;
+    });
+  }
+
+  h += `<div class="isec">stats</div>`;
+  h += `<div class="irow">active for <b>${ago(a.registered_ts)}</b> · last seen <b>${ago(a.last_active_ts)} ago</b></div>`;
+  h += `<div class="irow">holding <b>${claims.length}</b> · completed <b>${done.length}</b></div>`;
+
+  if (a.task) h += `<div class="isec">working on</div><div class="itask">${esc(a.task)}</div>`;
+
+  if (claims.length) {
+    h += `<div class="isec">holding</div>`;
+    claims.forEach(c => {
+      const conf = (st.live_claims || []).filter(x => x.path === c.path).length > 1;
+      h += `<div class="irow"><span class="${conf ? 'iconf' : 'igreen'}">${esc(c.path)}</span>${c.reason ? ` <span class="ir">— ${esc(c.reason)}</span>` : ''}</div>`;
+    });
+  }
+  if (done.length) {
+    h += `<div class="isec">what they've done</div>`;
+    done.forEach(d => { h += `<div class="irow ir">✓ ${esc(d.summary)}</div>`; });
+  }
+
+  const ad = win.detailData;
+  if (ad) {
+    h += `<div class="isec">live activity</div>`;
+    if (!(ad.activity && ad.activity.length)) h += `<div class="irow ir">no recorded actions yet</div>`;
+    (ad.activity || []).slice(0, 8).forEach(act => {
+      h += `<div class="irow"><span class="igreen">${esc(act.action)}</span> <span class="ir">${ago(act.ts)} ago${summ(act.detail) ? ' · ' + esc(summ(act.detail)) : ''}</span></div>`;
+    });
+    if (ad.memory) {
+      h += `<div class="isec">memory it can recall (${ad.memory.total}${ad.memory.shared_only ? ' shared' : ''})</div>`;
+      (ad.memory.sample || []).slice(0, 5).forEach(m => {
+        h += `<div class="irow" style="cursor:pointer" onclick="openEntryModal('${m.slug}')"><span style="color:var(--amber)">${esc(m.name || m.slug)}</span></div>`;
+      });
+    }
+    if (ad.capabilities) {
+      h += `<div class="isec">mcp endpoints it can use (${ad.capabilities.length})</div>`;
+      if (!ad.capabilities.length) h += `<div class="irow ir">none available to it yet</div>`;
+      ad.capabilities.forEach(e => { h += `<div class="irow"><span style="color:var(--amber)">${esc(e.name)}</span>${e.public ? ' <span class="ir">public</span>' : ''}</div>`; });
+    }
+  } else if (!h.includes('loading')) {
+    // detailData not yet loaded — show placeholder without overwriting a real retry message
+    h += `<div class="isec">live activity</div><div class="irow ir">fetching…</div>`;
+  }
+
+  // ONLY the body is updated — the ask footer (input/button/answer) is untouched
+  win.bodyEl.innerHTML = h;
+}
+
+async function askAgentWindow(name) {
+  const win = agentWindows.get(name);
+  if (!win) return;
+  const inp = win.el.querySelector('.aw-ask-input');
+  const ansSlot = win.el.querySelector('.aw-answer-slot');
+  const btn = win.el.querySelector('.aw-ask-btn');
+  const q = inp ? inp.value.trim() : '';
+  if (!q) return;
+
+  win.askBox = { q, answer: '', loading: true };
+  const nameLeaf = name.split('/').pop() || name;
+  if (ansSlot) ansSlot.innerHTML = `<div class="aw-ans ir">…${esc(displayName(nameLeaf))} is checking its trail</div>`;
+  if (btn) btn.disabled = true;
+
+  try {
+    const r = await fetch('/api/ask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agent: name, question: q })
+    });
+    if (r.ok) {
+      const d = await r.json();
+      win.askBox = { q, answer: d.answer || '(no answer)', loading: false };
+    } else {
+      win.askBox = { q, answer: '(couldn\'t reach the narrator — ' + r.status + ')', loading: false };
+    }
+  } catch(_) {
+    win.askBox = { q, answer: '(error reaching the narrator)', loading: false };
+  }
+
+  // Re-check the window still exists (user may have closed it while waiting)
+  if (agentWindows.has(name)) {
+    const w = agentWindows.get(name);
+    const slot = w.el.querySelector('.aw-answer-slot');
+    const b = w.el.querySelector('.aw-ask-btn');
+    if (slot) slot.innerHTML = `<div class="aw-q2">▸ ${esc(w.askBox.q)}</div><div class="aw-ans">${esc(w.askBox.answer)}</div>`;
+    if (b) b.disabled = false;
+    // Clear input and restore focus — answer slot is NOT in .aw-body, so it's permanent
+    const i = w.el.querySelector('.aw-ask-input');
+    if (i) { i.value = ''; i.focus(); }
+  }
+}
+
+function renderInspector(){
+  const el=document.getElementById('inspector');
+  if(!selected){ el.style.display='none'; return; }
+  const st=lastState;
+  let h=`<span class="ix" onclick="selected=null;renderInspector()">✕</span>`;
+  if(selected.kind==='agent'){
+    const name=selected.fullname||selected.label;
+    const a=(st.active_agents||[]).find(x=>x.name===name)||{};
+    const claims=(st.live_claims||[]).filter(c=>c.agent===name);
+    const done=(st.recent_completed||[]).filter(d=>d.agent_name===name);
+    const kids=(st.active_agents||[]).filter(x=>x.parent===name);
+    h+=`<h3>${esc(displayName(selected.label))} <span class="irename" title="rename (display only, this browser)" onclick="renameBee('${(name||'').replace(/'/g,"\\'")}')">✎</span>${a.role?` <span style="color:var(--amber);font-size:12px">[${esc(a.role)}]</span>`:''}</h3><div class="isub">${esc(a.program||'agent')}${a.model?' · '+esc(a.model):''}${beeAlias[name]?` · really ${esc(name)}`:''}</div>`;
+    if(a.parent) h+=`<div class="irow ir">subagent of <span class="p" style="cursor:pointer" onclick="selectAgent('${esc(a.parent)}')">${esc(a.parent.split('/').pop()||a.parent)}</span></div>`;
+    if(kids.length){ h+=`<div class="isec">subagents (${kids.length})</div>`;
+      kids.forEach(k=>{ const leaf=k.name.split('/').pop()||k.name; h+=`<div class="irow" style="cursor:pointer" onclick="selectAgent('${esc(k.name)}')"><span class="p">${esc(displayName(leaf))}</span>${k.role?` <span class="ir">· ${esc(k.role)}</span>`:''}</div>`; }); }
+    h+=`<div class="isec">stats</div>`;
+    h+=`<div class="irow">active for <b>${ago(a.registered_ts)}</b> · last seen <b>${ago(a.last_active_ts)} ago</b></div>`;
+    h+=`<div class="irow">holding <b>${claims.length}</b> · completed <b>${done.length}</b></div>`;
+    const mi=modelInfo(a.model);
+    if(mi){ h+=`<div class="isec">model</div><div class="irow"><span class="p">${esc(mi.label)}</span>${mi.provider?` <span class="ir">· ${esc(mi.provider)}</span>`:''}${mi.note?`<div class="ir">${esc(mi.note)}</div>`:''}</div>`; }
+    if(a.task) h+=`<div class="isec">working on</div><div class="itask">${esc(a.task)}</div>`;
+    // ASK — a READ-ONLY debrief: the brain narrates as this bee from its recorded
+    // trail. It cannot instruct or change the bee, so it can't derail the build.
+    h+=`<div class="isec">ask ${esc(displayName(selected.label))} <span class="ir">· read-only debrief</span></div>`;
+    h+=`<div class="askbox"><input id="askq" placeholder="what have you done? what's blocking you?" oninput="askDraft=this.value" onfocus="askFocused=true" onblur="askFocused=false" onkeydown="if(event.key==='Enter'){event.preventDefault();askAgent()}"><button onclick="askAgent()" ${askBox.loading?'disabled':''}>ask</button></div>`;
+    if(askBox.agent===name){
+      if(askBox.loading) h+=`<div class="askans ir">…${esc(displayName(name))} is checking its trail</div>`;
+      else if(askBox.q) h+=`<div class="askq2">▸ ${esc(askBox.q)}</div><div class="askans">${esc(askBox.answer)}</div>`;
+    }
+    if(claims.length){ h+=`<div class="isec">holding</div>`; claims.forEach(c=>{ const conf=(st.live_claims||[]).filter(x=>x.path===c.path).length>1; h+=`<div class="irow"><span class="${conf?'iconf':'igreen'}">${esc(c.path)}</span>${c.reason?` <span class="ir">— ${esc(c.reason)}</span>`:''}</div>`; }); }
+    if(done.length){ h+=`<div class="isec">what they've done</div>`; done.forEach(d=>h+=`<div class="irow ir">✓ ${esc(d.summary)}</div>`); }
+    if(agentDetail){
+      const ad=agentDetail;
+      h+=`<div class="isec">live activity</div>`;
+      if(!(ad.activity&&ad.activity.length)) h+=`<div class="irow ir">no recorded actions yet</div>`;
+      (ad.activity||[]).slice(0,8).forEach(a=>{ h+=`<div class="irow"><span class="igreen">${esc(a.action)}</span> <span class="ir">${ago(a.ts)} ago${summ(a.detail)?' · '+esc(summ(a.detail)):''}</span></div>`; });
+      if(ad.memory){
+        h+=`<div class="isec">memory it can recall (${ad.memory.total}${ad.memory.shared_only?' shared':''})</div>`;
+        (ad.memory.sample||[]).slice(0,5).forEach(m=>{ h+=`<div class="irow" style="cursor:pointer" onclick="openEntryModal('${m.slug}')"><span class="p">${esc(m.name||m.slug)}</span></div>`; });
+      }
+      if(ad.capabilities){
+        h+=`<div class="isec">mcp endpoints it can use (${ad.capabilities.length})</div>`;
+        if(!ad.capabilities.length) h+=`<div class="irow ir">none available to it yet</div>`;
+        ad.capabilities.forEach(e=>h+=`<div class="irow"><span class="p">${esc(e.name)}</span>${e.public?' <span class="ir">public</span>':''}</div>`);
+      }
+    }
+  } else {
+    const path=selected.fullpath||selected.label;
+    const holders=(st.live_claims||[]).filter(c=>c.path===path);
+    h+=`<h3>${esc(selected.label)}</h3><div class="isub">${esc(path)}</div>`;
+    if(holders.length>1) h+=`<div class="iconf">⚠ conflict — ${holders.length} agents working here</div>`;
+    h+=`<div class="isec">held by</div>`;
+    holders.forEach(c=>h+=`<div class="irow"><b>${esc(c.agent)}</b>${c.reason?` <span class="ir">— ${esc(c.reason)}</span>`:''}</div>`);
+  }
+  el.innerHTML=h; el.style.display='block';
+  const aq=document.getElementById('askq'); // preserve the question across live re-renders
+  if(aq){ aq.value=askDraft; if(askFocused){ aq.focus(); const v=aq.value; aq.value=''; aq.value=v; } }
+}
+
+// Fleet oracle panel — "ask the fleet" read-only NL→SQL→narrate panel.
+// foState mirrors the askBox/askDraft pattern from the ask-a-bee panel.
+let foDraft = '', foFocused = false;
+let foState = {q:'', narration:'', columns:[], rows:[], sql:'', loading:false, err:''};
+async function askFleet(){
+  const el = document.getElementById('foq'); const q = (el ? el.value : foDraft).trim();
+  if(!q) return;
+  foState = {q, narration:'', columns:[], rows:[], sql:'', loading:true, err:''};
+  foDraft = ''; renderFleetOracle();
+  try{
+    const r = await fetch('/api/ask_fleet', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({question:q})});
+    if(r.ok){
+      const d = await r.json();
+      foState = {q, narration:d.narration||'', columns:d.columns||[], rows:d.rows||[], sql:d.sql||'', loading:false, err:''};
+    } else {
+      const t = await r.text();
+      if(r.status===503){ foState = {q:'', narration:'', columns:[], rows:[], sql:'', loading:false, err:''}; renderFleetOracle(); return; }
+      foState = {q, narration:'', columns:[], rows:[], sql:'', loading:false, err:'oracle error ('+r.status+'): '+t.trim()};
+    }
+  }catch(e){ foState = {q, narration:'', columns:[], rows:[], sql:'', loading:false, err:'error reaching fleet oracle'}; }
+  renderFleetOracle();
+}
+async function checkFleetOracleAvailable(){
+  // GET probe answers 200 {enabled} either way — no red 503 in the console.
+  try{
+    const r = await fetch('/api/ask_fleet');
+    if(!r.ok) return false;
+    const j = await r.json();
+    return !!j.enabled;
+  }catch(_){ return false; }
+}
+let foAvailable = false;
+checkFleetOracleAvailable().then(ok => { foAvailable = ok; renderFleetOracle(); });
+function renderFleetOracle(){
+  const panel = document.getElementById('fleet-oracle');
+  if(!panel) return;
+  if(!foAvailable){ panel.innerHTML=''; return; }
+  let h = `<div class="fo-hdr">ask the fleet <span style="color:var(--muted);font-size:10px">· read-only</span></div>`;
+  h += `<div class="askbox"><input id="foq" placeholder="how many missions are running?" oninput="foDraft=this.value" onfocus="foFocused=true" onblur="foFocused=false" onkeydown="if(event.key==='Enter'){event.preventDefault();askFleet()}"><button onclick="askFleet()" ${foState.loading?'disabled':''}>ask</button></div>`;
+  if(foState.loading){
+    h += `<div class="fo-narration ir">…querying the fleet</div>`;
+  } else if(foState.err){
+    h += `<div class="fo-err">${esc(foState.err)}</div>`;
+  } else if(foState.q){
+    h += `<div class="fo-q2">▸ ${esc(foState.q)}</div>`;
+    if(foState.narration) h += `<div class="fo-narration">${esc(foState.narration)}</div>`;
+    if(foState.columns && foState.columns.length){
+      h += `<details><summary>results (${(foState.rows||[]).length} rows)</summary>`;
+      h += `<table class="fo-table"><thead><tr>${foState.columns.map(c=>`<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>`;
+      (foState.rows||[]).forEach(row=>{ h += `<tr>${row.map(cell=>`<td>${esc(String(cell??''))}</td>`).join('')}</tr>`; });
+      h += `</tbody></table></details>`;
+    }
+    if(foState.sql) h += `<details><summary>show query</summary><div class="fo-sql">${esc(foState.sql)}</div></details>`;
+  }
+  panel.innerHTML = h;
+  const fq = document.getElementById('foq');
+  if(fq){ fq.value=foDraft; if(foFocused){ fq.focus(); const v=fq.value; fq.value=''; fq.value=v; } }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,19 @@
+# Host-workspace override: bind the swarm's shared workspace to a HOST
+# directory so a host-side harness bee (corral-harness — e.g. a Claude Code
+# bee on a Pro/Max subscription) works the SAME files as the container bees.
+#
+# Usage:
+#   export HOST_WORKSPACE=$PWD/swarm-ws && mkdir -p "$HOST_WORKSPACE" && chmod 777 "$HOST_WORKSPACE"
+#   docker compose -f docker-compose.yml -f docker-compose.hostws.yml \
+#     --profile mission up --build --scale mission-builder=0   # host bee takes the builder role
+#
+# chmod 777: container bees write as root, the host bee as you — the shared
+# dir must be writable by both. Demo-grade; don't point this at real data.
+
+volumes:
+  workspace:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${HOST_WORKSPACE:?set HOST_WORKSPACE to an existing host directory}

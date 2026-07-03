@@ -1,0 +1,70 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  validate:
+    # Fast correctness gate on a GitHub-hosted runner: vet + the full test
+    # suite (coordination, memory, principals, auth). Runs on PRs too so a
+    # red build blocks the deploy and shows on the PR.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go vet ./...
+      - run: go test ./...
+      - name: Install gosec
+        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+      - name: Security gate
+        run: bash scripts/check-security.sh
+
+  deploy:
+    # Runs ON the deploy host (a self-hosted runner, as the deploy user), so it
+    # updates the canonical clone + rebuilds + restarts in place — no SSH key
+    # leaves the host. Skipped on PRs.
+    needs: validate
+    if: github.event_name != 'pull_request'
+    runs-on: [self-hosted, corralai]
+    steps:
+      - name: Build + restart the brain
+        run: |
+          set -euo pipefail
+          export PATH=$PATH:/usr/local/go/bin
+          cd ~/corralai
+          echo "::group::pull"
+          # --ff-only fails loudly if the box clone diverged (a local hot-fix),
+          # instead of silently discarding it — keep a paper trail.
+          git pull --ff-only
+          git log -1 --oneline
+          echo "::endgroup::"
+          echo "::group::build (CGO/duckdb)"
+          # Build to a staging file while the old binary keeps running (you
+          # can't overwrite a running executable — ETXTBSY), then swap.
+          CGO_ENABLED=1 go build -trimpath -o corral.new ./cmd/corral
+          echo "::endgroup::"
+          sudo systemctl stop corral
+          mv -f corral.new corral
+          sudo systemctl start corral
+          echo "::group::health"
+          # systemctl is-active lies for Restart=always units — probe HTTP.
+          ok=0
+          for i in $(seq 1 10); do
+            if curl -fsS --max-time 5 http://127.0.0.1:9019/healthz >/dev/null; then
+              echo "corral healthy after restart"; ok=1; break
+            fi
+            sleep 1
+          done
+          if [ "$ok" -ne 1 ]; then
+            echo "::error::corral failed /healthz after deploy"
+            journalctl -u corral -n 40 --no-pager || true
+            exit 1
+          fi
+          echo "::endgroup::"

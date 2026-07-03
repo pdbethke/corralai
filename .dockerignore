@@ -1,0 +1,8 @@
+.git
+docs
+deploy
+!deploy/demo/seed-memory
+.superpowers
+.playwright-mcp
+*.png
+*.md

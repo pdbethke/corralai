@@ -1,0 +1,12 @@
+# corral-admin (the operator client) — used by the demo's one-shot mission seed.
+# Pure Go (no CGO), ships static on distroless.
+FROM golang:1.26 AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -trimpath -o /out/corral-admin ./cmd/corral-admin
+
+FROM gcr.io/distroless/static-debian12
+COPY --from=build /out/corral-admin /corral-admin
+ENTRYPOINT ["/corral-admin"]

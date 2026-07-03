@@ -1,0 +1,12 @@
+# The reference agent (corral-agent). Pure Go (no CGO) — it only speaks MCP +
+# HTTP — so it builds static and ships on distroless.
+FROM golang:1.26 AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -trimpath -o /out/corral-agent ./cmd/corral-agent
+
+FROM gcr.io/distroless/static-debian12
+COPY --from=build /out/corral-agent /corral-agent
+ENTRYPOINT ["/corral-agent"]

@@ -67,7 +67,14 @@ func scrumFacts(tasks []scrumTask, agents []scrumAgent, nowTS float64, stallAfte
 		}
 	}
 	if total == 0 {
-		return "", nil
+		// An empty queue with proposals pending is the learning loop's natural
+		// steady state — exactly when the operator isn't watching the UI and
+		// needs the standup nudge. Only true idle (no tasks AND no proposals)
+		// stays silent.
+		if pendingProposals == 0 {
+			return "", nil
+		}
+		return fmt.Sprintf("standup: %d skill proposal(s) awaiting the operator", pendingProposals), nil
 	}
 
 	idleByRole := map[string][]string{}

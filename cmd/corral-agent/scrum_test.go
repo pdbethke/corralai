@@ -77,3 +77,21 @@ func TestScrumFactsAnnouncesPendingProposals(t *testing.T) {
 		t.Fatalf("standup should announce pending proposals, got %q", standup)
 	}
 }
+
+// TestScrumFactsAnnouncesProposalsWhenQueueEmpty: proposals pending while the
+// queue is quiescent is the learning loop's natural steady state — precisely
+// when the operator isn't watching the UI and needs the nudge. An empty task
+// list must NOT silence the proposal announcement; only true idle (no tasks
+// AND no proposals — TestScrumFactsQuietWhenEmpty above) stays quiet.
+func TestScrumFactsAnnouncesProposalsWhenQueueEmpty(t *testing.T) {
+	standup, nudges := scrumFacts(nil, nil, 10_000, 240, 2)
+	if standup == "" {
+		t.Fatal("2 pending proposals with an empty queue should still produce a standup")
+	}
+	if !strings.Contains(standup, "2 skill proposal(s) awaiting the operator") {
+		t.Fatalf("proposals-only standup should announce the count, got %q", standup)
+	}
+	if len(nudges) != 0 {
+		t.Fatalf("no tasks → no nudges, got %v", nudges)
+	}
+}

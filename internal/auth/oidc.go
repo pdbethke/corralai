@@ -161,6 +161,21 @@ func ReadOnly(r *http.Request) bool {
 	return false
 }
 
+// Subagent reports whether the request's verified bearer is a delegation
+// token minted for a subagent (Extra["subagent"] non-empty) rather than a
+// human's own OIDC token. UI action handlers that must be human-only gate on
+// this alongside isSuperuser — the exact rule internal/brain's isHumanAdmin
+// enforces over MCP: a delegation token always rolls UserID up to its
+// principal (so it still passes a superuser check), but it must never pass
+// as the human who clicked approve.
+func Subagent(ctx context.Context) bool {
+	if ti := sdkauth.TokenInfoFromContext(ctx); ti != nil && ti.Extra != nil {
+		s, _ := ti.Extra["subagent"].(string)
+		return s != ""
+	}
+	return false
+}
+
 // NewVerifier builds a verifier per non-empty Pair. Empty list => disabled (dev).
 func NewVerifier(ctx context.Context, pairs []Pair) (*Verifier, error) {
 	var ps []Pair

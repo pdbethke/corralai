@@ -211,6 +211,17 @@ func (o Options) isAdmin(req *mcp.CallToolRequest) bool {
 	return o.Principals.IsSuperuser(p)
 }
 
+// isHumanAdmin is the human gate: isAdmin PLUS proof the caller isn't a
+// delegated subagent riding on a superuser's rolled-up authorization. A
+// delegation token always carries Extra["subagent"] (oidc.go's
+// verifyDelegation), so an agent spawned under a superuser principal passes
+// isAdmin — the gap this closes. Every admin write that shapes fleet-wide
+// behavior (proposal approval/rejection, memory/reference promotion) must
+// gate on this, not isAdmin alone: the herd must never vet its own knowledge.
+func (o Options) isHumanAdmin(req *mcp.CallToolRequest) bool {
+	return o.isAdmin(req) && subagentOf(req) == ""
+}
+
 // actor returns the verified principal (email) and tenant from the request's
 // bearer token, or empty strings when unauthenticated (dev mode / no claim).
 func actor(req *mcp.CallToolRequest) (principal, tenant string) {

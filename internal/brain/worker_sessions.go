@@ -52,6 +52,19 @@ func NewWorkerSessions() *WorkerSessions {
 	return &WorkerSessions{ids: map[string]time.Time{}, now: time.Now}
 }
 
+// initLocked lazily fills the zero-value fields (nil ids map, nil now clock)
+// so a bare WorkerSessions{} — e.g. a struct literal in a config that forgot
+// NewWorkerSessions — never panics (a nil map write or a nil func call both
+// would). Callers must hold w.mu.
+func (w *WorkerSessions) initLocked() {
+	if w.ids == nil {
+		w.ids = map[string]time.Time{}
+	}
+	if w.now == nil {
+		w.now = time.Now
+	}
+}
+
 // Mark records req's MCP session as a worker session. Nil-safe: a nil
 // receiver, nil req, or nil req.Session is a no-op — dev-mode marking is
 // opportunistic instrumentation on the bootstrap/report_host handlers, never
@@ -69,9 +82,10 @@ func (w *WorkerSessions) Mark(req *mcp.CallToolRequest) {
 // amortized cleanup that keeps the map bounded without a sweeper goroutine.
 // O(live sessions) per call, on the two rare handlers (bootstrap/report_host).
 func (w *WorkerSessions) mark(id string) {
-	t := w.now()
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	w.initLocked()
+	t := w.now()
 	for k, touched := range w.ids {
 		if t.Sub(touched) > workerSessionTTL {
 			delete(w.ids, k)
@@ -106,9 +120,10 @@ func (w *WorkerSessions) Is(req *mcp.CallToolRequest) bool {
 // (a worker still calling tools never expires while alive); an expired entry
 // is evicted on the spot and reported unmarked.
 func (w *WorkerSessions) isMarked(id string) bool {
-	t := w.now()
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	w.initLocked()
+	t := w.now()
 	touched, ok := w.ids[id]
 	if !ok {
 		return false

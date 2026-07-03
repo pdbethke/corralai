@@ -197,7 +197,15 @@ topology here; historical analytics via MotherDuck → Sigma.
   and out-of-process delegation is the spawn mode that matters for autonomous
   workers. `cmd/corral/main.go`'s UI approve closure also stopped hardcoding
   actor `"operator"` — it passes the real verified principal when auth is on,
-  falling back to `"operator"` only in dev.
+  falling back to `"operator"` only in dev. Honesty note: the dev-mode UI's
+  `/api/proposal/approve|reject` endpoints are plain HTTP with no MCP
+  session, so they sit OUTSIDE the per-session worker-mark boundary
+  entirely — a script that wanted to pose as the operator there would need
+  to skip announcing itself over the UI's own auth (`isSuperuser`'s
+  permissive-dev-mode rule), the same class of deliberate evasion dev mode
+  already concedes by design elsewhere (see the `WorkerSessions` doc
+  comment): this gate cannot stop a caller who lies, only one who doesn't
+  bother to.
 
 ### Open threads (next)
 

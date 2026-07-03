@@ -65,6 +65,18 @@ func TestWorkerSessionMarksExpire(t *testing.T) {
 	}
 }
 
+// TestZeroValueWorkerSessionsDoesNotPanic proves a bare WorkerSessions{}
+// (nil ids map, nil now clock — e.g. a struct literal that forgot
+// NewWorkerSessions) lazily initializes instead of panicking on a nil-map
+// write or a nil-func call.
+func TestZeroValueWorkerSessionsDoesNotPanic(t *testing.T) {
+	var ws WorkerSessions
+	ws.mark("s1")
+	if !ws.isMarked("s1") {
+		t.Fatal("a zero-value WorkerSessions must still track a mark once lazily initialized")
+	}
+}
+
 // TestDevModeWorkerSessionRefusedAtHumanGate is the dev-mode half of the
 // human gate, end to end over real streamable-HTTP (so each connecting
 // client is a genuinely distinct MCP session — required to prove per-session

@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"regexp"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -15,6 +16,14 @@ import (
 	"github.com/pdbethke/corralai/internal/memory"
 	"github.com/pdbethke/corralai/internal/telemetry"
 )
+
+// validSkillName is the choke point for LLM-drafted skill names before they
+// ever reach an artifact path ("skills/"+SkillName+"/SKILL.md"): lowercase
+// alphanumeric + hyphens, starting alphanumeric, no "..", "/", or other path
+// characters — so a drafted name like "../hooks/pre-commit" can never escape
+// the skills/ namespace on a naive sync_pull client. Capped at 64 characters
+// (a sane ceiling for a skill slug, not a real limit anyone should hit).
+var validSkillName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
 
 // registerLearn adds the learning loop's proposal tools: list_proposals is
 // open to any authorized caller (read-only), while approve_proposal and
@@ -125,6 +134,14 @@ func ApproveProposal(l *learn.Store, mem *memory.Store, arts *artifacts.Store, t
 	}
 
 	if !guidanceOnly && p.SkillName != "" {
+		if !validSkillName.MatchString(p.SkillName) {
+			// Loud + pending, not silently dropped: an operator can inspect
+			// and reject the proposal from here, but nothing gets written
+			// to an artifact path built from an unvalidated LLM-drafted name.
+			err := fmt.Errorf("proposal #%d: skill name %q is invalid — must match ^[a-z0-9][a-z0-9-]*$ (max 64 chars); the herd drafted something that can't become a skill path, reject or re-draft it", p.ID, p.SkillName)
+			log.Printf("learn: approve #%d: REFUSED — %v", p.ID, err)
+			return ApproveResult{}, err
+		}
 		if arts != nil {
 			path := "skills/" + p.SkillName + "/SKILL.md"
 			// updatedTS<=0 falls back to the artifact store's own clock — there

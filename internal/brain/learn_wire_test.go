@@ -470,6 +470,56 @@ func TestApproveProposalFlags(t *testing.T) {
 	}
 }
 
+// TestApproveProposalRejectsTraversalSkillName reproduces review finding #3:
+// ApproveProposal built "skills/"+p.SkillName+"/SKILL.md" straight from
+// LLM-drafted output, so a drafted SkillName of "../hooks/pre-commit" would
+// escape the skills/ namespace on a naive sync_pull client. The choke point
+// in ApproveProposal must refuse loudly, leave the proposal pending (an
+// operator can still reject it), and write NOTHING to the artifact store —
+// while a normal valid name is unaffected.
+func TestApproveProposalRejectsTraversalSkillName(t *testing.T) {
+	sess, lstore, _, astore, id := learnHarness(t, "../hooks/pre-commit")
+
+	res, err := sess.CallTool(context.Background(), &mcp.CallToolParams{Name: "approve_proposal", Arguments: map[string]any{"id": id}})
+	if err != nil {
+		t.Fatalf("approve_proposal call: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("approve_proposal with a path-traversal skill name was accepted; want refusal")
+	}
+
+	got, err := lstore.ByID(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != learn.StatusPending {
+		t.Fatalf("proposal status = %q, want pending (invalid skill name must not approve)", got.Status)
+	}
+	if astore.Count() != 0 || astore.HeadRev() != 0 {
+		t.Fatalf("artifact store was written to (count=%d headRev=%d); want nothing written for an invalid skill name", astore.Count(), astore.HeadRev())
+	}
+}
+
+// TestApproveProposalAcceptsValidSkillName is the positive twin of the
+// traversal-name test above: a normal lowercase-hyphen skill name must
+// promote exactly as before the finding #3 fix.
+func TestApproveProposalAcceptsValidSkillName(t *testing.T) {
+	sess, lstore, _, astore, id := learnHarness(t, "init-go-workspace")
+
+	var ap approveProposalOut
+	callTask(t, sess, "approve_proposal", map[string]any{"id": id}, &ap)
+	if !ap.OK || ap.SkillPath == "" || astore.HeadRev() != 1 {
+		t.Fatalf("valid skill name should promote cleanly: %+v headRev=%d", ap, astore.HeadRev())
+	}
+	got, err := lstore.ByID(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != learn.StatusApproved {
+		t.Fatalf("status = %q, want approved", got.Status)
+	}
+}
+
 // TestRecurrenceAfterPromotionReopensProposal is the efficacy hook, end to
 // end over MCP: a proposal for "missing-req|go.mod" is approved (promoted
 // guidance is now standing), then two MORE report_finding calls of that same

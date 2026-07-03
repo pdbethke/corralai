@@ -143,6 +143,37 @@ topology here; historical analytics via MotherDuck → Sigma.
   tracks the model; the mechanism (sprint increment, re-gate, review buttons) is
   verified regardless.
 
+- **P8 — the learning loop (DONE 2026-07-03).** The herd gets smarter between
+  missions, with a human as the only promotion gate: a periodic sweep
+  (`internal/learn`, `CORRALAI_LEARN_SWEEP_SECONDS`, default 60s / demo 10s)
+  clusters recurring finding signatures (≥3 same Type+Target) and similar
+  lessons into **proposals**; an LLM drafts corrective guidance + a reusable
+  skill; Shep announces pending proposals at standup (even with an empty
+  queue); the Progress tab grows a *"the herd proposes"* card with
+  approve/reject (also `corral-admin proposals list|show|approve|reject`).
+  Approval fans out to vetted memory (`shared=true`) + a versioned skills
+  artifact; `create_mission` injects the top ≤3 vetted lessons into phase
+  instructions, fence-wrapped under `LESSONS FROM THE HERD (vetted)`. If a
+  promoted signature recurs (≥2 reports post-approval), a revision proposal
+  reopens against it. Repo missions ingest `CORRAL.md` + `docs/corral/*.md` as
+  *advisory* (`shared=false`) memory — code review is the trust gate for
+  repo-shipped knowledge; the operator click is the gate for herd-proposed
+  knowledge. **Verified live** (demo stack, qwen2.5-coder:7b, no keys): run 1's
+  empty-workspace `go build` failures produced `regression|build-core#1`
+  findings → sweep opened proposal #1 at 3 occurrences → model drafted the
+  `go-build-diagnosis` skill → Shep's standup announced `1 skill proposal(s)
+  awaiting the operator` → approved via the UI card → guidance + skill landed
+  in vetted memory and the artifact store (rev 1) → the same signature kept
+  recurring mid-fix-cycle, and the efficacy watchdog opened revision proposal
+  #2 against the approved one → a second mission's instructions carried the
+  fenced `LESSONS FROM THE HERD (vetted)` block (cap 3, lessons-first
+  priority; in the dev-mode demo the herd's own auto-vetted lessons filled
+  all three slots ahead of the promoted guidance — with auth on, only
+  human-promoted entries are vetted, so the mix skews to the operator's
+  picks). Known caveat, same class as P7's: the 7B builder needed operator
+  shepherding (workspace fix + task cancels) to converge run 1 — the
+  learning-loop beats themselves ran unassisted.
+
 ### Open threads (next)
 
 - **Change-request enforcement.** A client change-request that produces zero

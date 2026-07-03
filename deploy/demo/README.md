@@ -145,6 +145,63 @@ DEMO_DIRECTIVE="build a tic-tac-toe game" \
 > artifacts fast — that's the config for `make demo-mission-epic`'s parser.
 > The choreography is the show either way.
 
+## Watch it learn (the learning loop)
+
+`make demo-mission` also shows the herd **getting smarter between missions** —
+no extra command, it rides the same run:
+
+1. **The herd stumbles, repeatedly.** The empty demo workspace makes the first
+   `go build` fail, so the verify gate files the same finding signature
+   (`regression|build-core#1`) over and over as the fix cycle grinds.
+2. **The sweep notices.** At ≥3 findings with the same signature, the learn
+   sweep opens a **proposal** and has the swarm's model draft corrective
+   guidance plus a reusable skill. (The demo brain sweeps every 10s —
+   `CORRALAI_LEARN_SWEEP_SECONDS`, a demo-profile setting; the product default
+   is 60s.) Watch the brain log: `learn: proposal #1 opened (…, 3 occurrences)`.
+3. **Shep announces it.** The live console standup starts saying
+   `1 skill proposal(s) awaiting the operator` — even after the task queue
+   drains, so a pending proposal never dies in silence.
+4. **You are the gate.** The **Progress tab** grows a *"the herd proposes:"*
+   card — signature, occurrence count, drafted guidance, the skill — with
+   **approve / reject** buttons. (Or from the CLI:
+   `corral-admin proposals list | show <id> | approve <id> | reject <id>
+   --reason "..."`, with `--brain http://localhost:9019 --token demo`.)
+   Nothing is promoted until a human clicks.
+5. **Approval fans out.** The guidance lands in **vetted memory**
+   (`shared=true`) and the skill becomes a versioned artifact
+   (`skills/<name>/SKILL.md`) that agents sync.
+6. **The next mission is born knowing it.** Create a second directive —
+   ```bash
+   docker compose -f docker-compose.yml run --rm mission-seed \
+     mission create --review "Build a Go package 'queue' with a FIFO queue of ints ..."
+   ```
+   — and its task instructions carry the top vetted lessons in a clearly
+   labeled `LESSONS FROM THE HERD (vetted)` block (capped at 3, fence-wrapped
+   so guidance can't impersonate instructions). Whether the herd *applies*
+   the lesson tracks the model — the default 7B still stumbles; a frontier
+   model puts the lesson to work. The plumbing — what got promoted, what got
+   injected, what recurred — is fully visible either way.
+7. **The loop watches itself.** If the same signature keeps recurring *after*
+   promotion, a **revision proposal** reopens against the approved one — the
+   operator sees that the lesson didn't take, with the new evidence attached.
+
+### Ask the brain about the codebase (the corpus, queried)
+
+The learning loop's output and the repo's own developer docs share one memory.
+This repo ships a `CORRAL.md` + `docs/corral/*.md` knowledge corpus, and any
+MCP coding agent (Claude Code, Cursor, Gemini CLI, …) can query it — point a
+`.mcp.json` at the demo brain:
+
+```json
+{ "mcpServers": { "corral": { "type": "http", "url": "http://localhost:9019/mcp/" } } }
+```
+
+then ask your agent things like *"search the corral memory: how does the
+verify gate work?"* — `search_memory` returns the repo's docs, the herd's
+lessons, and any promoted guidance in one ranked list. Same corpus the herd
+itself searches before working. See "The knowledge corpus (CORRAL.md)" in the
+root README for the pattern.
+
 ## Model comparison — A vs B side-by-side (the `model_comparison` report)
 
 ```bash
@@ -365,6 +422,7 @@ the outer boundary instead of trusting the container boundary. Set
 | `OLLAMA_MODELS_DIR` | `ollama-models` (volume) | set to `~/.ollama` to reuse a host download and skip the pull |
 | `AGENT_ROLE` | per service | `builder` \| `tester` \| `pentester` \| `reviewer` |
 | `AGENT_ROUNDS` | `0` (forever) | passes over the backlog |
+| `CORRALAI_LEARN_SWEEP_SECONDS` | `10` (demo) / `60` (product) | how often the learn sweep clusters findings/lessons into proposals |
 | `CORRALAI_EMBED_URL` | _(unset)_ | (optional) embedding endpoint — enables reference RAG; off by default |
 | `CORRALAI_EMBED_KEY` | _(unset)_ | (optional) API key for the embed endpoint |
 

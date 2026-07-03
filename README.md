@@ -97,10 +97,41 @@ the loop continues until the PR is approved.
   *model* — on later work, so knowledge compounds instead of dying with each
   context. Lessons are **trust-tiered**: searchable, but never auto-promoted into an
   authoritative instruction (see the security model).
+- **The learning loop — the herd proposes, a human approves.** Recurring failure
+  signatures (the same finding, again and again) and clusters of similar lessons
+  are swept into **skill proposals**: an LLM drafts corrective guidance plus a
+  reusable skill, Shep announces the pending proposal at standup, and the
+  operator approves or rejects it — from the Progress tab or
+  `corral-admin proposals`. Approval promotes the guidance into vetted memory
+  and a versioned skill artifact; every later mission's instructions carry the
+  top vetted lessons (fence-wrapped, clearly labeled, capped at 3) so the herd
+  starts each mission already warned. And the loop watches its own efficacy:
+  if the same signature keeps recurring *after* promotion, a revision proposal
+  reopens for the human to reconsider.
 - **Reference RAG — upload your own grounding material** (text · URLs · **PDFs** ·
   design "looks"); it's chunked and **vector-embedded** (any OpenAI-compatible
   embedding endpoint, so it's never tied to one machine) for agents to query. Runs
   on **embedded DuckDB — no Postgres, no separate vector database to operate**.
+
+### The knowledge corpus (CORRAL.md)
+
+A repo that runs with corralai can carry its working knowledge as a markdown
+corpus in the repo itself: `CORRAL.md` at the root as the entry point,
+`docs/corral/*.md` as the corpus. This is a team development pattern, not just
+a feature — the same corpus serves four readers. Developers read it as
+onboarding docs. Any developer's coding agent queries it conversationally: point
+`.mcp.json` at the brain and ask about the codebase (`search_memory` finds the
+corpus alongside everything else the herd knows). The herd itself searches it
+before working and extends memory as it learns. And it grows the way code does —
+through ordinary pull requests, where **code review is the trust gate for
+knowledge exactly as it is for code**. On a repo mission the brain ingests the
+corpus as *advisory* memory (searchable, never auto-injected), so a repo you
+don't control can't smuggle authority in by shipping a file.
+
+The learning loop closes the circle: skills the swarm proposes and a human
+approves land in the same corpus — herd-discovered knowledge and
+developer-written knowledge accumulate in one place, under one review gate,
+readable by humans and queryable by every agent that joins.
 
 **Coordinate — one swarm or many.**
 

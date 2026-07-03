@@ -146,6 +146,10 @@ services:
       # Role-model plan: declare which backend:model each role should run on.
       # Used by demo-models to drive topology drift checks + model_comparison report.
       CORRALAI_ROLE_MODELS: ${CORRALAI_ROLE_MODELS:-}
+      # Demo-profile choice, not a code default: the learn sweep normally ticks
+      # every 60s (cmd/corral/main.go default). A demo audience shouldn't wait a
+      # full minute between sweeps to see a proposal open — tighten it here only.
+      CORRALAI_LEARN_SWEEP_SECONDS: ${CORRALAI_LEARN_SWEEP_SECONDS:-10}
     # brain-state persists the coordination/queue/memory DBs (~/.claude) across
     # container recreation — without it a brain restart mid-mission silently
     # wipes the mission while the bees keep polling an empty queue. The image's

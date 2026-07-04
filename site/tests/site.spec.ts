@@ -228,3 +228,31 @@ test('the page has no obvious accessibility footguns', async ({ page }) => {
     ).toBeTruthy();
   }
 });
+
+test('body text meets WCAG AA contrast against the page background', async ({ page }) => {
+  await page.goto('/');
+  // Cheap, dependency-free contrast check (no axe-core in this toolchain):
+  // relative-luminance contrast ratio between the paragraph's computed color
+  // and the page's computed background, per WCAG 2.1 formula. AA for normal
+  // body text requires >= 4.5.
+  const ratio = await page.evaluate(() => {
+    function luminance(rgb: [number, number, number]): number {
+      const [r, g, b] = rgb.map((c) => {
+        const s = c / 255;
+        return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+      });
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    }
+    function parseRgb(css: string): [number, number, number] {
+      const m = css.match(/\d+/g)!.map(Number);
+      return [m[0], m[1], m[2]];
+    }
+    const p = document.querySelector('.pitch') as HTMLElement;
+    const fg = parseRgb(getComputedStyle(p).color);
+    const bg = parseRgb(getComputedStyle(document.body).backgroundColor);
+    const lFg = luminance(fg) + 0.05;
+    const lBg = luminance(bg) + 0.05;
+    return lFg > lBg ? lFg / lBg : lBg / lFg;
+  });
+  expect(ratio, `contrast ratio ${ratio.toFixed(2)} is below WCAG AA's 4.5 minimum`).toBeGreaterThanOrEqual(4.5);
+});

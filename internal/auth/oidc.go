@@ -209,6 +209,20 @@ func NewVerifier(ctx context.Context, pairs []Pair) (*Verifier, error) {
 func (vf *Verifier) Enabled() bool { return vf.enabled }
 func (vf *Verifier) Count() int    { return len(vf.vs) }
 
+// pickPrincipal chooses the identity claim to authorize on. Human tokens carry
+// email (or preferred_username); machine/service tokens (client_credentials)
+// carry neither, so we fall back to the OAuth client identity (client_id, then
+// the standard azp). The Authorizer's allowlist still gates whatever this
+// returns, so an unlisted client_id is rejected exactly like an unlisted email.
+func pickPrincipal(email, preferredUsername, clientID, azp string) string {
+	for _, v := range []string{email, preferredUsername, clientID, azp} {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 // VerifyToken is a go-sdk TokenVerifier: it accepts a token if any configured
 // verifier validates it, extracting the principal (email) and tenant claims into
 // TokenInfo so handlers can attribute actions to the verified identity.
@@ -225,14 +239,13 @@ func (vf *Verifier) VerifyToken(ctx context.Context, token string, _ *http.Reque
 		var c struct {
 			Email             string `json:"email"`
 			PreferredUsername string `json:"preferred_username"`
+			ClientID          string `json:"client_id"` // service-account tokens carry no email
+			AZP               string `json:"azp"`       // standard OIDC "authorized party"
 			TenantID          string `json:"tenant_id"`
 			TenantRole        string `json:"tenant_role"`
 		}
 		_ = idt.Claims(&c)
-		principal := c.Email
-		if principal == "" {
-			principal = c.PreferredUsername
-		}
+		principal := pickPrincipal(c.Email, c.PreferredUsername, c.ClientID, c.AZP)
 		exp := idt.Expiry
 		if exp.IsZero() {
 			exp = time.Now().Add(time.Hour)

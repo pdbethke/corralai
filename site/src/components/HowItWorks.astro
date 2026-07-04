@@ -1,0 +1,23 @@
+---
+// SPDX-License-Identifier: Elastic-2.0
+---
+<section class="section" id="how-it-works">
+  <h2>How the herd works</h2>
+  <p>
+    A directive becomes a mission; the brain decomposes it into a
+    dependency-ordered task queue; the agents pull ready tasks and execute
+    them; their structured findings feed a two-tier re-planner; the mission
+    converges when the client accepts.
+  </p>
+  <pre class="flow">CLIENT (you, or a modeled product-owner agent)
+  │ directive ↓                 ↑ accept / feedback → next sprint
+  ▼                             │
+LEAD ── research → design → build-core → build → test ∥ secops ∥ perf → integrate → docs → retro
+(orchestrates,        the dev team (one role per phase)
+ re-plans, reworks)          SCRUM (standups · stall call-outs · nudges)
+  └── findings → reflex fix+verify  ∥  lead supersede / re-architect → converge</pre>
+</section>
+
+<style>
+  .flow { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; overflow-x: auto; font-size: 0.8rem; color: var(--muted); }
+</style>

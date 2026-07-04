@@ -2,6 +2,12 @@
 // SPDX-License-Identifier: Elastic-2.0
 import '../styles/global.css';
 import Hero from '../components/Hero.astro';
+import HowItWorks from '../components/HowItWorks.astro';
+import LearningLoop from '../components/LearningLoop.astro';
+import KnowledgeCorpus from '../components/KnowledgeCorpus.astro';
+import WatchItBack from '../components/WatchItBack.astro';
+import Quickstart from '../components/Quickstart.astro';
+import SiteFooter from '../components/SiteFooter.astro';
 ---
 <html lang="en">
 <head>
@@ -9,8 +15,15 @@ import Hero from '../components/Hero.astro';
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <title>Corralai — the herd performs live</title>
+  <meta name="description" content="Coordinated multi-agent, multi-model AI development, watchable live." />
 </head>
 <body>
   <Hero />
+  <HowItWorks />
+  <LearningLoop />
+  <KnowledgeCorpus />
+  <WatchItBack />
+  <Quickstart />
+  <SiteFooter />
 </body>
 </html>

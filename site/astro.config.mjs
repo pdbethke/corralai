@@ -36,6 +36,7 @@ export default defineConfig({
           ],
         },
         { label: 'Running it', slug: 'docs/running-it' },
+        { label: 'Publishing recordings', slug: 'docs/publishing-recordings' },
         {
           label: 'The UI, tab by tab',
           items: [

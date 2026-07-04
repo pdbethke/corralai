@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -362,9 +363,32 @@ func registerTasks(s *mcp.Server, q *queue.Store, lease float64, tel *telemetry.
 			return nil, okOut{OK: ok}, err
 		})
 
+	// checkStaffedRole is the bug-#23 guard: a task whose role the mission has
+	// never staffed can never be claimed, and MissionDone's zero-open-tasks bar
+	// then holds the mission open forever (the role deadlock — a re-planning
+	// lead LLM invents "performance" where the pipeline staffs "perf"). Refuse
+	// loudly, naming the valid roles, so the lead can self-correct on retry.
+	checkStaffedRole := func(missionID int64, role string) error {
+		roles, err := q.MissionRoles(missionID)
+		if err != nil || len(roles) == 0 {
+			return err // nothing to validate against — let it through
+		}
+		for _, r := range roles {
+			if r == role {
+				return nil
+			}
+		}
+		return fmt.Errorf("refused: this mission staffs no %q agents — a task with that role would never be claimed and would deadlock the mission; use one of: %s", role, strings.Join(roles, ", "))
+	}
+
 	mcp.AddTool(s, &mcp.Tool{Name: "supersede_task",
-		Description: "Replace a stale task with a reworked one (old → superseded; the replacement carries the lineage). Pending dependents are rewritten to wait on the replacement, so the plan stays valid."},
+		Description: "Replace a stale task with a reworked one (old → superseded; the replacement carries the lineage). Pending dependents are rewritten to wait on the replacement, so the plan stays valid. The role must be one the mission already staffs."},
 		func(_ context.Context, req *mcp.CallToolRequest, in taskSpecIn) (*mcp.CallToolResult, supersedeOut, error) {
+			if mid, err := q.MissionOfTask(in.OldID); err == nil && mid != 0 {
+				if err := checkStaffedRole(mid, in.Role); err != nil {
+					return nil, supersedeOut{}, err
+				}
+			}
 			newID, err := q.SupersedeTask(in.OldID, in.spec())
 			if err != nil {
 				return nil, supersedeOut{}, err
@@ -374,10 +398,13 @@ func registerTasks(s *mcp.Server, q *queue.Store, lease float64, tel *telemetry.
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "enqueue_task",
-		Description: "Add a new task to a running mission (rework the lead decided is needed). It joins the queue and the hive picks it up."},
+		Description: "Add a new task to a running mission (rework the lead decided is needed). It joins the queue and the hive picks it up. The role must be one the mission already staffs."},
 		func(_ context.Context, req *mcp.CallToolRequest, in taskSpecIn) (*mcp.CallToolResult, okOut, error) {
 			if in.MissionID == 0 {
 				return nil, okOut{}, fmt.Errorf("mission_id required")
+			}
+			if err := checkStaffedRole(in.MissionID, in.Role); err != nil {
+				return nil, okOut{}, err
 			}
 			err := q.Enqueue(in.MissionID, []queue.TaskSpec{in.spec()})
 			if err == nil {

@@ -21,6 +21,7 @@ REDERIVE=""
 I_KNOW=0
 YES=0
 BEARER=""
+PLATFORM_INFERENCE="local ollama"
 
 usage(){ cat <<'EOF'
 Usage: scripts/export-golden-run.sh [--mission N] [--brain-url URL] [--bearer TOKEN]
@@ -44,6 +45,16 @@ Usage: scripts/export-golden-run.sh [--mission N] [--brain-url URL] [--bearer TO
   --slug NAME     Shorthand for --out site/src/data/recordings/NAME.json —
                    the recordings-gallery layout. The meta sidecar travels
                    with it as always.
+  --platform-inference "STR"
+                   What ran the models for this recording (default
+                   "local ollama"; e.g. "vendor cloud (subscription CLIs)").
+                   The meta gains a platform object {inference, gpu, cpu,
+                   ram, host} — gpu/cpu/ram probed from THIS host at export
+                   time (nvidia-smi, /proc), host as GOOS/GOARCH. The gpu is
+                   omitted for pure vendor-cloud runs (the local GPU did no
+                   inference). Probed values are echoed with the manifest:
+                   the same deny discipline applies — model/hardware names
+                   only, never hostnames or usernames.
   --rederive-meta PATH.json
                    Offline mode: no brain contact, no export. Recomputes the
                    models field of PATH's existing .meta.json sidecar from
@@ -61,6 +72,7 @@ while [ $# -gt 0 ]; do
     --yes) YES=1; shift ;;
     --out) OUT_JSON="$2"; shift 2 ;;
     --slug) SLUG="$2"; shift 2 ;;
+    --platform-inference) PLATFORM_INFERENCE="$2"; shift 2 ;;
     --rederive-meta) REDERIVE="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown arg: $1" >&2; usage; exit 1 ;;
@@ -141,6 +153,58 @@ python3 scripts/scrub-golden-run.py deny "$TMP_JSON" "$(whoami)" "$(hostname)"
 # ---- HUMAN-REVIEW MANIFEST (the ceiling) ----
 python3 scripts/scrub-golden-run.py manifest "$TMP_JSON"
 
+# ---- PLATFORM (probed on THIS host; part of the human review) ----
+# {inference, gpu, cpu, ram, host} — hardware/model names only, echoed below
+# so the reviewer can eyeball it under the same deny discipline as the
+# manifest (no hostnames, no usernames). The gpu probe is skipped for pure
+# vendor-cloud runs: the local GPU ran no inference for those.
+PLATFORM_JSON="$(python3 - "$PLATFORM_INFERENCE" <<'PYEOF'
+import json, platform as plat, re, subprocess, sys
+
+inference = sys.argv[1]
+out = {"inference": inference}
+
+if not inference.startswith("vendor cloud"):
+    try:
+        gpu = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=10).stdout.strip().splitlines()
+        if gpu:
+            name, mem = (p.strip() for p in gpu[0].split(",", 1))
+            mib = float(re.sub(r"[^0-9.]", "", mem))
+            out["gpu"] = f"{name} {round(mib / 1024)}GB"
+    except Exception:
+        pass  # no NVIDIA GPU / no nvidia-smi -> omit, never guess
+
+try:
+    with open("/proc/cpuinfo", encoding="utf-8") as f:
+        for line in f:
+            if line.lower().startswith("model name"):
+                out["cpu"] = re.sub(r"\s+Processor$", "", line.split(":", 1)[1].strip())
+                break
+except OSError:
+    pass
+
+try:
+    with open("/proc/meminfo", encoding="utf-8") as f:
+        kb = int(next(l for l in f if l.startswith("MemTotal")).split()[1])
+    gib = kb / 1048576
+    # marketing size: the nearest stick-count capacity, not the OS-visible total
+    sizes = [2, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024]
+    out["ram"] = f"{min(sizes, key=lambda s: abs(s - gib))}GB"
+except (OSError, StopIteration):
+    pass
+
+goos = plat.system().lower()
+goarch = {"x86_64": "amd64", "aarch64": "arm64", "arm64": "arm64"}.get(plat.machine(), plat.machine())
+out["host"] = f"{goos}/{goarch}"
+print(json.dumps(out))
+PYEOF
+)"
+echo "--- platform (probed; review with the manifest) ---"
+echo "$PLATFORM_JSON"
+echo "--- end platform ---"
+
 if [ "$YES" -ne 1 ]; then
   echo
   read -r -p "Reviewed the manifest above — write $OUT_JSON? [y/N] " ans
@@ -169,6 +233,7 @@ meta = {
     'finding_count': m.get('finding_count', 0),
     'duration_seconds': m.get('duration_seconds', 0),
     'models': json.loads('''$MODELS_JSON'''),
+    'platform': json.loads('''$PLATFORM_JSON'''),
 }
 with open('$OUT_META', 'w') as f:
     json.dump(meta, f, indent=2)

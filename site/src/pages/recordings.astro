@@ -6,7 +6,17 @@ import analytics from '../data/analytics.json';
 // Enumerate committed recordings by glob — no manifest file to drift.
 const streamModules = import.meta.glob('../data/recordings/*.json', { eager: true });
 const streams: Record<string, unknown> = {};
-const cards: { slug: string; directive: string; models: string[]; task_count: number; done_task_count: number; finding_count: number; minutes: number; result?: { url: string; label: string } }[] = [];
+const cards: { slug: string; directive: string; models: string[]; task_count: number; done_task_count: number; finding_count: number; minutes: number; result?: { url: string; label: string }; platform?: string }[] = [];
+
+// One quiet line from meta.platform — e.g. "RTX 5070 · Ryzen 9 5900 · 128GB ·
+// local ollama". Marketing shorthand for the card; the meta keeps full names.
+// Older recordings without a platform field simply omit the line.
+function platformLine(p: any): string | undefined {
+  if (!p || !p.inference) return undefined;
+  const gpu = p.gpu?.replace(/^NVIDIA (GeForce )?|^AMD (Radeon )?/, '').replace(/\s+\d+GB$/, '');
+  const cpu = p.cpu?.replace(/^(AMD|Intel(\(R\))?) /, '').replace(/ \d+-Core.*$/, '');
+  return [gpu, cpu, p.ram, p.inference].filter(Boolean).join(' · ');
+}
 for (const [p, mod] of Object.entries(streamModules)) {
   if (p.endsWith('.meta.json')) continue;
   const slug = p.split('/').pop()!.replace(/\.json$/, '');
@@ -27,6 +37,7 @@ for (const [p, mod] of Object.entries(streamModules)) {
     // result field; its card simply omits the link (honest omission —
     // Task 10 populates this for new runs).
     result: meta.result && meta.result.url && meta.result.label ? meta.result : undefined,
+    platform: platformLine(meta.platform),
   });
 }
 cards.sort((a, b) => a.slug.localeCompare(b.slug));
@@ -54,6 +65,7 @@ const maxModelFindings = Math.max(1, ...analytics.findings_by_model.map((r: any)
           <span class="directive">{c.directive}</span>
           {c.models.length > 0 && <span class="models">{c.models.join(' + ')}</span>}
           <span class="stats">{c.task_count} tasks ({c.done_task_count} done) · {c.finding_count} findings · {c.minutes}m</span>
+          {c.platform && <span class="platform">recorded on {c.platform}</span>}
           {c.result && (
             <a class="result-link" href={c.result.url} target="_blank" rel="noopener noreferrer">
               {c.result.label} →
@@ -141,6 +153,7 @@ const maxModelFindings = Math.max(1, ...analytics.findings_by_model.map((r: any)
   .directive { font-weight: 600; }
   .models { color: var(--amber); font-size: 0.85rem; }
   .stats { color: var(--muted); font-size: 0.85rem; }
+  .platform { color: var(--muted); font-size: 0.78rem; }
   .result-link { color: var(--amber); font-size: 0.85rem; text-decoration: underline; }
   .back { margin-top: 8px; }
   /* full-width dark player viewport — same framing tokens as the hero (Task 1) */

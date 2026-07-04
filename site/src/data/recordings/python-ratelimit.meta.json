@@ -10,5 +10,12 @@
   "result": {
     "url": "https://github.com/pdbethke/corral-run-python-ratelimit",
     "label": "Browse the code this herd wrote"
+  },
+  "platform": {
+    "inference": "local ollama",
+    "gpu": "NVIDIA GeForce RTX 5070 12GB",
+    "cpu": "AMD Ryzen 9 5900 12-Core",
+    "ram": "128GB",
+    "host": "linux/amd64"
   }
 }

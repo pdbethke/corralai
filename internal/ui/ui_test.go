@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
@@ -560,6 +561,65 @@ func TestHistoryEndpoints(t *testing.T) {
 	res3, _ := http.Get(srv.URL + "/api/history/999")
 	if res3.StatusCode != 404 {
 		t.Fatalf("unknown mission should 404, got %d", res3.StatusCode)
+	}
+}
+
+// TestHistoryDetailExecutionsSnakeCase pins /api/history/{id}'s executions to
+// snake_case keys — the API is snake_case everywhere else, and index.html's
+// history/replay JS reads e.ok / e.ts / e.mission_id, not the Go struct's
+// PascalCase field names.
+func TestHistoryDetailExecutionsSnakeCase(t *testing.T) {
+	deps := Deps{
+		History: func() ([]brain.MissionSummary, error) { return nil, nil },
+		HistoryDetail: func(id int64) (*brain.MissionDetail, error) {
+			return &brain.MissionDetail{
+				MissionSummary: brain.MissionSummary{ID: id, Directive: "ship it", Status: "done"},
+				Executions: []queue.Execution{
+					{MissionID: id, Agent: "bob", Role: "builder", Command: "go test ./...", ExitCode: 0, OK: true, TS: 1234},
+				},
+			}, nil
+		},
+	}
+	srv := httptest.NewServer(Handler(deps))
+	defer srv.Close()
+
+	res, err := http.Get(srv.URL + "/api/history/1")
+	if err != nil || res.StatusCode != 200 {
+		t.Fatalf("GET /api/history/1: %v status=%v", err, res.StatusCode)
+	}
+	body, _ := io.ReadAll(res.Body)
+
+	var payload struct {
+		Mission struct {
+			Executions []struct {
+				MissionID int64  `json:"mission_id"`
+				Agent     string `json:"agent"`
+				Role      string `json:"role"`
+				Command   string `json:"command"`
+				ExitCode  int    `json:"exit_code"`
+				OK        bool   `json:"ok"`
+				TS        int64  `json:"ts"`
+			} `json:"executions"`
+		} `json:"mission"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("decode: %v body=%s", err, body)
+	}
+	if len(payload.Mission.Executions) != 1 {
+		t.Fatalf("expected 1 execution, got %d body=%s", len(payload.Mission.Executions), body)
+	}
+	e := payload.Mission.Executions[0]
+	if e.MissionID != 1 || e.Agent != "bob" || e.Role != "builder" || e.Command != "go test ./..." || e.ExitCode != 0 || !e.OK || e.TS != 1234 {
+		t.Fatalf("execution decoded wrong via snake_case tags: %+v", e)
+	}
+
+	// Belt-and-suspenders: the raw JSON must not carry PascalCase keys, which
+	// would mean the struct's json tags regressed.
+	raw := string(body)
+	for _, bad := range []string{`"MissionID"`, `"Agent"`, `"OK"`, `"TS"`, `"ExitCode"`, `"Command"`, `"Role"`} {
+		if strings.Contains(raw, bad) {
+			t.Fatalf("raw response still contains PascalCase key %s: %s", bad, raw)
+		}
 	}
 }
 

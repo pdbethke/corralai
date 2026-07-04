@@ -5,13 +5,13 @@ package queue
 // Execution is one shell command a swarm agent ran, recorded durably so the
 // verification gate can ask "did <verify> ever pass for this mission?".
 type Execution struct {
-	MissionID int64
-	Agent     string
-	Role      string
-	Command   string
-	ExitCode  int
-	OK        bool
-	TS        int64 // Unix seconds
+	MissionID int64  `json:"mission_id"`
+	Agent     string `json:"agent"`
+	Role      string `json:"role"`
+	Command   string `json:"command"`
+	ExitCode  int    `json:"exit_code"`
+	OK        bool   `json:"ok"`
+	TS        int64  `json:"ts"` // Unix seconds
 }
 
 // RecordExecution durably stores one execution.

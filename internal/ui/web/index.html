@@ -982,7 +982,7 @@ function openMissionDetail(id){
       const outcome = f.resolved_ts ? `${esc(f.status)} @ ${new Date(f.resolved_ts*1000).toLocaleString()}` : esc(f.status);
       return `<tr><td>${esc(f.type)}</td><td>${esc(f.target||'')}</td><td>${esc(f.severity)}</td><td>${outcome}</td></tr>`;
     }).join('') : `<tr><td colspan="4" class="cmd-null">no findings</td></tr>`;
-    const execOk = execs.filter(e=>e.OK).length;
+    const execOk = execs.filter(e=>e.ok).length;
     const execSummary = execs.length ? `${execOk}/${execs.length} passed` : 'no executions recorded';
     const learned = (mv.learned_signatures||[]).length
       ? `<div class="cm-learned">what got learned: ${(mv.learned_signatures||[]).map(esc).join(', ')}</div>`

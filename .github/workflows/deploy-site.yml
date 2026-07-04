@@ -1,0 +1,81 @@
+# SPDX-License-Identifier: Elastic-2.0
+#
+# Deploys the corralai.dev marketing/docs site (site/) to Cloudflare Pages.
+# Independent of the main Deploy workflow (deploy.yml), which builds and
+# restarts the brain on the self-hosted runner — this job never touches
+# that pipeline and runs entirely on ubuntu-latest.
+#
+# Path-filtered on site/** plus internal/ui/web/replay-player.js, since the
+# site vendors a synced copy of the replay player (see
+# scripts/sync-site-assets.sh) — a change to the source file needs a site
+# redeploy even though nothing under site/ changed.
+name: Deploy site
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - "internal/ui/web/replay-player.js"
+      - ".github/workflows/deploy-site.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "site/**"
+      - "internal/ui/web/replay-player.js"
+  workflow_dispatch:
+    # Manual trigger — fire the first deploy by hand once the Cloudflare
+    # secrets exist (see the human handoff in task-6-report.md), without
+    # needing a throwaway site/** commit.
+
+jobs:
+  test:
+    # Same correctness gate as the main Deploy workflow — a site change can
+    # never ship against a red Go suite, since golden-run.json and
+    # replay-player.js both come from Go-side code.
+    name: Round up the Go test suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go vet ./...
+      - run: go test ./... -count=1
+
+  deploy:
+    name: Drive the site to Cloudflare Pages
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      - name: Check the player hasn't drifted from the herd
+        # Belt-and-suspenders: `npm run build` already runs this via
+        # `prebuild`, but failing here — before npm ci — gives a faster,
+        # clearer signal that a stale committed copy can never ship.
+        run: bash scripts/sync-site-assets.sh --check
+      - name: Corral dependencies
+        working-directory: site
+        run: npm ci
+      - name: Saddle up Playwright's browser
+        # test:e2e (below) drives a real Chromium against the built site —
+        # the runner image ships no browsers, so without this step the herd
+        # never gets out of the gate.
+        working-directory: site
+        run: npx playwright install --with-deps chromium
+      - name: Build + smoke-test the site
+        working-directory: site
+        run: npm run test:e2e
+      - name: Deploy to Cloudflare Pages
+        working-directory: site
+        run: npx wrangler@latest pages deploy dist --project-name=corralai-dev --branch=main
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

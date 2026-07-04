@@ -18,6 +18,7 @@
 //	corral-admin status                          # active agents, claims, recent work
 //	corral-admin whoami                          # who the brain sees you as
 //	corral-admin mint-observer [--ttl 24h] [--principal x]
+//	corral-admin mint-worker   [--role builder] [--name x] [--ttl 168h]
 //	corral-admin member  list | add <email> | super <email> [--off] | create-super [email] | remove <email>
 //	corral-admin mission list | status <id> | create <directive...>
 //	corral-admin proposals list | show <id> | approve <id> | reject <id> --reason "..."
@@ -64,6 +65,8 @@ func main() {
 		cmdWhoami(rest)
 	case "mint-observer":
 		cmdMintObserver(rest)
+	case "mint-worker":
+		cmdMintWorker(rest)
 	case "member":
 		cmdMember(rest)
 	case "mission":
@@ -967,6 +970,7 @@ func usage() {
   corral-admin status                          active agents, claims, recent work
   corral-admin whoami                          who the brain sees you as
   corral-admin mint-observer [--ttl 24h] [--principal x]
+  corral-admin mint-worker   [--role builder] [--name x] [--ttl 168h]  (delegation token for a pod/floor worker)
   corral-admin member  list | add <email> | super <email> [--off] | create-super [email] | remove <email>
   corral-admin mission list | status <id> | create <directive...>
   corral-admin review <id> --accept | --changes "..."

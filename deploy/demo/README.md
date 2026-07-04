@@ -343,7 +343,7 @@ Code agent runs on your Claude Pro/Max subscription, not API billing):
 
 ```bash
 go install github.com/pdbethke/corralai/cmd/corral-harness@latest   # or go build ./cmd/corral-harness
-CORRAL_BRAIN=http://localhost:9019 BEE_NAME=Cody BEE_ROLE=builder \
+CORRAL_BRAIN=http://localhost:9019 AGENT_NAME=Cody AGENT_ROLE=builder \
 HARNESS_CMD='claude -p {prompt} --mcp-config {mcp_config} --allowedTools "mcp__corral,Read,Write,Edit,Bash" --permission-mode acceptEdits' \
 corral-harness
 ```
@@ -368,7 +368,7 @@ docker compose -f docker-compose.yml -f docker-compose.hostws.yml \
   --profile mission up --build --scale mission-builder=0     # no container builder
 
 # in another terminal — the Max-plan builder:
-cd "$HOST_WORKSPACE" && CORRAL_BRAIN=http://localhost:9019 BEE_NAME=Cody BEE_ROLE=builder \
+cd "$HOST_WORKSPACE" && CORRAL_BRAIN=http://localhost:9019 AGENT_NAME=Cody AGENT_ROLE=builder \
 HARNESS_CMD='claude -p {prompt} --mcp-config {mcp_config} --allowedTools "mcp__corral,Read,Write,Edit,Bash" --permission-mode acceptEdits' \
 HARNESS_DESC='claude-code (Max subscription)' corral-harness
 ```

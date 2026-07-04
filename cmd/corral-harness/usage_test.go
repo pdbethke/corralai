@@ -6,9 +6,9 @@ import "testing"
 func TestUsageTextMentionsEveryEnvVar(t *testing.T) {
 	out := usageText()
 	for _, want := range []string{
-		"CORRAL_BRAIN", "BEE_NAME", "BEE_ROLE", "BEE_WORKSPACE", "HARNESS_CMD",
-		"HARNESS_DESC", "BEE_ROUNDS", "HARNESS_TIMEOUT_SECONDS", "HARNESS_IDLE_SECONDS",
-		"BEE_PROMPT_FILE",
+		"CORRAL_BRAIN", "AGENT_NAME", "AGENT_ROLE", "AGENT_WORKSPACE", "HARNESS_CMD",
+		"HARNESS_DESC", "AGENT_ROUNDS", "HARNESS_TIMEOUT_SECONDS", "HARNESS_IDLE_SECONDS",
+		"AGENT_PROMPT_FILE",
 	} {
 		if !contains(out, want) {
 			t.Errorf("usageText() missing env var %q\n---\n%s", want, out)

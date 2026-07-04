@@ -16,20 +16,20 @@ Usage:
 
 Env:
   CORRAL_BRAIN   brain URL (default http://localhost:9019)
-  BEE_NAME       swarm name (default Harness)
-  BEE_ROLE       role to serve (default builder)
-  BEE_MODEL      the model driving this harness (e.g. gpt-5.1-codex); adds a
+  AGENT_NAME       swarm name (default Harness)
+  AGENT_ROLE       role to serve (default builder)
+  AGENT_MODEL      the model driving this harness (e.g. gpt-5.1-codex); adds a
                  report_host step so findings attribute to it in model_comparison
-  BEE_BACKEND    the backend/vendor for BEE_MODEL (e.g. openai, anthropic, gemini)
-  BEE_WORKSPACE  working directory for the harness (default .)
+  AGENT_BACKEND    the backend/vendor for AGENT_MODEL (e.g. openai, anthropic, gemini)
+  AGENT_WORKSPACE  working directory for the harness (default .)
   HARNESS_CMD    command template; placeholders: {prompt} {mcp_config} {brain}
                  e.g. claude -p {prompt} --mcp-config {mcp_config} \
                       --allowedTools "mcp__corral__*,Read,Write,Edit,Bash" \
                       --permission-mode acceptEdits
   HARNESS_DESC   how to announce this harness (default derived from HARNESS_CMD)
-  BEE_ROUNDS     max tasks to run, 0 = forever (default 0)
+  AGENT_ROUNDS     max tasks to run, 0 = forever (default 0)
   HARNESS_TIMEOUT_SECONDS  per-invocation kill deadline (default 900)
   HARNESS_IDLE_SECONDS     backoff when the queue is empty (default 30)
-  BEE_PROMPT_FILE optional file replacing the built-in bee prompt; the same
+  AGENT_PROMPT_FILE optional file replacing the built-in bee prompt; the same
                  placeholders are substituted into it
 ```

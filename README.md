@@ -176,7 +176,7 @@ build, reconstructed, every time.
   Code agent claimed research → design → gated build, wrote real files, ran
   `go build`/`go test`, and satisfied the verification gate.
   ```bash
-  CORRAL_BRAIN=http://localhost:9019 BEE_NAME=Cody BEE_ROLE=builder \
+  CORRAL_BRAIN=http://localhost:9019 AGENT_NAME=Cody AGENT_ROLE=builder \
   HARNESS_CMD='claude -p {prompt} --mcp-config {mcp_config} --allowedTools "mcp__corral,Read,Write,Edit,Bash" --permission-mode acceptEdits' \
   corral-harness
   ```

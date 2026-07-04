@@ -53,7 +53,7 @@ func TestBeePromptCarriesTheContract(t *testing.T) {
 // Model attribution: findings are stamped from the HostBook, which only
 // report_host feeds. A harness bee that never calls report_host files
 // findings that show as "(not recorded)" in model_comparison — so when the
-// operator declares BEE_MODEL/BEE_BACKEND, the prompt must instruct the
+// operator declares AGENT_MODEL/AGENT_BACKEND, the prompt must instruct the
 // harness to announce them.
 func TestBeePromptAnnouncesDeclaredModel(t *testing.T) {
 	p := beePrompt("Cody", "reviewer", "host-1", "codex (headless harness)", "gpt-5.1-codex", "openai")

@@ -15,21 +15,21 @@
 // prints IDLE and the launcher backs off. Configuration is all env:
 //
 //	CORRAL_BRAIN   brain URL (default http://localhost:9019)
-//	BEE_NAME       swarm name (default Harness)
-//	BEE_ROLE       role to serve (default builder)
-//	BEE_MODEL      the model driving this harness (e.g. gpt-5.1-codex); adds a
+//	AGENT_NAME       swarm name (default Harness)
+//	AGENT_ROLE       role to serve (default builder)
+//	AGENT_MODEL      the model driving this harness (e.g. gpt-5.1-codex); adds a
 //	               report_host step so findings attribute to it in model_comparison
-//	BEE_BACKEND    the backend/vendor for BEE_MODEL (e.g. openai, anthropic, gemini)
-//	BEE_WORKSPACE  working directory for the harness (default .)
+//	AGENT_BACKEND    the backend/vendor for AGENT_MODEL (e.g. openai, anthropic, gemini)
+//	AGENT_WORKSPACE  working directory for the harness (default .)
 //	HARNESS_CMD    command template; placeholders: {prompt} {mcp_config} {brain}
 //	               e.g. claude -p {prompt} --mcp-config {mcp_config} \
 //	                    --allowedTools "mcp__corral__*,Read,Write,Edit,Bash" \
 //	                    --permission-mode acceptEdits
 //	HARNESS_DESC   how to announce this harness (default derived from HARNESS_CMD)
-//	BEE_ROUNDS     max tasks to run, 0 = forever (default 0)
+//	AGENT_ROUNDS     max tasks to run, 0 = forever (default 0)
 //	HARNESS_TIMEOUT_SECONDS  per-invocation kill deadline (default 900)
 //	HARNESS_IDLE_SECONDS     backoff when the queue is empty (default 30)
-//	BEE_PROMPT_FILE optional file replacing the built-in bee prompt; the same
+//	AGENT_PROMPT_FILE optional file replacing the built-in bee prompt; the same
 //	               placeholders are substituted into it
 package main
 
@@ -67,21 +67,21 @@ Usage:
 
 Env:
   CORRAL_BRAIN   brain URL (default http://localhost:9019)
-  BEE_NAME       swarm name (default Harness)
-  BEE_ROLE       role to serve (default builder)
-  BEE_MODEL      the model driving this harness (e.g. gpt-5.1-codex); adds a
+  AGENT_NAME       swarm name (default Harness)
+  AGENT_ROLE       role to serve (default builder)
+  AGENT_MODEL      the model driving this harness (e.g. gpt-5.1-codex); adds a
                  report_host step so findings attribute to it in model_comparison
-  BEE_BACKEND    the backend/vendor for BEE_MODEL (e.g. openai, anthropic, gemini)
-  BEE_WORKSPACE  working directory for the harness (default .)
+  AGENT_BACKEND    the backend/vendor for AGENT_MODEL (e.g. openai, anthropic, gemini)
+  AGENT_WORKSPACE  working directory for the harness (default .)
   HARNESS_CMD    command template; placeholders: {prompt} {mcp_config} {brain}
                  e.g. claude -p {prompt} --mcp-config {mcp_config} \
                       --allowedTools "mcp__corral__*,Read,Write,Edit,Bash" \
                       --permission-mode acceptEdits
   HARNESS_DESC   how to announce this harness (default derived from HARNESS_CMD)
-  BEE_ROUNDS     max tasks to run, 0 = forever (default 0)
+  AGENT_ROUNDS     max tasks to run, 0 = forever (default 0)
   HARNESS_TIMEOUT_SECONDS  per-invocation kill deadline (default 900)
   HARNESS_IDLE_SECONDS     backoff when the queue is empty (default 30)
-  BEE_PROMPT_FILE optional file replacing the built-in bee prompt; the same
+  AGENT_PROMPT_FILE optional file replacing the built-in bee prompt; the same
                  placeholders are substituted into it
 `
 }
@@ -94,7 +94,7 @@ func mcpConfig(brain string) string {
 
 // beePrompt is the one-task bee contract, phrased for a harness that has its
 // own file/exec tools and sees the brain as the MCP server named "corral".
-// When the operator declares the harness's model (BEE_MODEL / BEE_BACKEND),
+// When the operator declares the harness's model (AGENT_MODEL / AGENT_BACKEND),
 // the prompt gains a report_host step: finding attribution is stamped from
 // the HostBook, which ONLY report_host feeds — without it a harness bee's
 // findings show as "(not recorded)" in model_comparison.
@@ -174,9 +174,9 @@ func main() {
 		}
 	}
 	brain := env("CORRAL_BRAIN", "http://localhost:9019")
-	name := env("BEE_NAME", "Harness")
-	role := env("BEE_ROLE", "builder")
-	ws := env("BEE_WORKSPACE", ".")
+	name := env("AGENT_NAME", "Harness")
+	role := env("AGENT_ROLE", "builder")
+	ws := env("AGENT_WORKSPACE", ".")
 	tmpl := os.Getenv("HARNESS_CMD")
 	if tmpl == "" {
 		fmt.Fprintln(os.Stderr, `HARNESS_CMD required — the headless-agent command template, e.g.:
@@ -184,7 +184,7 @@ func main() {
 		os.Exit(2)
 	}
 	desc := env("HARNESS_DESC", splitCmd(tmpl)[0]+" (headless harness)")
-	rounds := envInt("BEE_ROUNDS", 0)
+	rounds := envInt("AGENT_ROUNDS", 0)
 	timeout := time.Duration(envInt("HARNESS_TIMEOUT_SECONDS", 900)) * time.Second
 	idle := time.Duration(envInt("HARNESS_IDLE_SECONDS", 30)) * time.Second
 
@@ -197,11 +197,11 @@ func main() {
 	defer os.Remove(cfgPath)
 
 	instance, _ := os.Hostname()
-	prompt := beePrompt(name, role, instance, desc, os.Getenv("BEE_MODEL"), os.Getenv("BEE_BACKEND"))
-	if pf := os.Getenv("BEE_PROMPT_FILE"); pf != "" {
-		b, err := os.ReadFile(pf) // #nosec G304 G703 -- BEE_PROMPT_FILE is the operator's own prompt-override path (launcher config, same trust domain as HARNESS_CMD itself), not tainted input
+	prompt := beePrompt(name, role, instance, desc, os.Getenv("AGENT_MODEL"), os.Getenv("AGENT_BACKEND"))
+	if pf := os.Getenv("AGENT_PROMPT_FILE"); pf != "" {
+		b, err := os.ReadFile(pf) // #nosec G304 G703 -- AGENT_PROMPT_FILE is the operator's own prompt-override path (launcher config, same trust domain as HARNESS_CMD itself), not tainted input
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "read BEE_PROMPT_FILE:", err)
+			fmt.Fprintln(os.Stderr, "read AGENT_PROMPT_FILE:", err)
 			os.Exit(1)
 		}
 		prompt = string(b)

@@ -939,8 +939,9 @@ function fmtBody(s){
 
 // ---- click-to-inspect an agent or file ----
 cv.addEventListener('click', ev => {
-  // node coords are canvas-local now; convert the click from viewport → canvas space.
-  const rect = cv.getBoundingClientRect(), mx = ev.clientX-rect.left, my = ev.clientY-rect.top;
+  // node coords are WORLD coords; the view may be zoomed/panned, so convert
+  // through the shared inverse transform, not raw canvas-local pixels.
+  const p = canvasToWorld(ev), mx = p.x, my = p.y;
   let best=null, bd=1e9;
   for(const n of nodes.values()){
     const r = n.kind==='agent'?16:9, dx=n.x-mx, dy=n.y-my, d=Math.sqrt(dx*dx+dy*dy);
@@ -955,7 +956,7 @@ cv.addEventListener('click', ev => {
 // double-click a bee to rename it (display-only alias). The inspector's ✎ is the
 // easy target; this is the direct-on-canvas shortcut.
 cv.addEventListener('dblclick', ev => {
-  const rect = cv.getBoundingClientRect(), mx = ev.clientX-rect.left, my = ev.clientY-rect.top;
+  const p = canvasToWorld(ev), mx = p.x, my = p.y;
   let best=null, bd=1e9;
   for(const n of nodes.values()){ if(n.kind!=='agent') continue; const dx=n.x-mx, dy=n.y-my, d=Math.sqrt(dx*dx+dy*dy); if(d<22 && d<bd){ best=n; bd=d; } }
   if(best) renameBee(best.fullname||best.label);

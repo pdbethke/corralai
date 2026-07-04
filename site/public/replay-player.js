@@ -60,6 +60,186 @@ addEventListener('resize', resize);
 new ResizeObserver(resize).observe(cv);   // re-fit when the cell changes (tab switches, window)
 resize();
 
+// ---- view transform: wheel-zoom + drag-pan over the corral ----
+// screen = world*viewScale + viewOffset. All node physics/layout stay in
+// world coordinates (CW/CH space); draw() applies the transform once per
+// frame via ctx.setTransform, and every consumer of a canvas mouse event
+// must go through canvasToWorld() for hit-testing (see index.html).
+let viewScale = 1, viewOX = 0, viewOY = 0;
+const VIEW_MIN = 0.4, VIEW_MAX = 4;
+let viewDidPan = false;   // set by a completed drag-pan; eats the click that follows
+function screenToWorld(sx, sy){ return { x: (sx - viewOX)/viewScale, y: (sy - viewOY)/viewScale }; }
+function canvasToWorld(ev){
+  const r = cv.getBoundingClientRect();
+  return screenToWorld(ev.clientX - r.left, ev.clientY - r.top);
+}
+function getViewTransform(){ return { scale: viewScale, x: viewOX, y: viewOY }; }
+function resetView(){ viewScale = 1; viewOX = 0; viewOY = 0; }
+function zoomAt(sx, sy, factor){
+  const ns = Math.min(VIEW_MAX, Math.max(VIEW_MIN, viewScale * factor));
+  // keep the world point under the cursor fixed: it maps to the same screen
+  // px before and after the scale change, so the offset absorbs the delta.
+  viewOX = sx - (sx - viewOX) * (ns / viewScale);
+  viewOY = sy - (sy - viewOY) * (ns / viewScale);
+  viewScale = ns;
+}
+cv.addEventListener('wheel', ev => {
+  ev.preventDefault();
+  dismissViewHint();
+  const r = cv.getBoundingClientRect();
+  // Trackpad pinch arrives as the SAME 'wheel' event with ctrlKey set (the
+  // browser's own convention for "prevent page zoom, handle it yourself").
+  // It tends to report much larger per-tick deltaY than a physical wheel
+  // notch, so it gets a gentler coefficient to land at a comparable feel.
+  const k = ev.ctrlKey ? 0.008 : 0.0015;
+  zoomAt(ev.clientX - r.left, ev.clientY - r.top, Math.exp(-ev.deltaY * k));
+}, { passive: false });
+// drag-to-pan: only engages after a small movement threshold, so plain
+// clicks (agent windows, inspector) keep working untouched; a completed pan
+// eats the click that the browser fires after mouseup (capture phase runs
+// before index.html's bubble-phase hit-test).
+let panFrom = null;
+cv.addEventListener('mousedown', ev => { panFrom = { x: ev.clientX, y: ev.clientY, ox: viewOX, oy: viewOY }; });
+addEventListener('mousemove', ev => {
+  if(!panFrom) return;
+  const dx = ev.clientX - panFrom.x, dy = ev.clientY - panFrom.y;
+  if(!viewDidPan && Math.hypot(dx, dy) < 4) return;   // threshold: not a pan yet
+  viewDidPan = true;
+  dismissViewHint();
+  viewOX = panFrom.ox + dx; viewOY = panFrom.oy + dy;
+});
+addEventListener('mouseup', () => { panFrom = null; });
+cv.addEventListener('click', ev => {
+  if(viewDidPan){ viewDidPan = false; ev.stopImmediatePropagation(); ev.stopPropagation(); }
+}, true);
+// double-click on EMPTY space resets to the 1x fit; a double-click on an
+// agent stays the rename shortcut (index.html's own dblclick hit-test) —
+// the two are disjoint by the same hit radius the rename handler uses.
+// (No keyboard binding: neither file has canvas keyboard idioms to match.)
+cv.addEventListener('dblclick', ev => {
+  const p = canvasToWorld(ev);
+  for(const n of nodes.values()){
+    if(n.kind !== 'agent') continue;
+    if(Math.hypot(n.x - p.x, n.y - p.y) < 22) return;  // rename territory — leave it alone
+  }
+  resetView();
+});
+
+// ---- touch: one-finger drag-pan, two-finger pinch-to-zoom ----
+// A LinkedIn click from a phone/tablet has no wheel and no mouse, so touch
+// gets its own gesture handling over the SAME transform + click-eater flag
+// (a tap that ends a pan still fires a synthetic 'click', which the capture-
+// phase listener above already eats via viewDidPan).
+let touchMode = null;      // 'pan' | 'pinch' | null
+let touchPanFrom = null;
+let pinchStartDist = 0, pinchStartScale = 1;
+function touchDist(a, b){ return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY); }
+function touchMidCanvas(a, b){
+  const r = cv.getBoundingClientRect();
+  return { x: (a.clientX + b.clientX) / 2 - r.left, y: (a.clientY + b.clientY) / 2 - r.top };
+}
+cv.addEventListener('touchstart', ev => {
+  dismissViewHint();
+  if(ev.touches.length === 1){
+    touchMode = 'pan';
+    const t = ev.touches[0];
+    touchPanFrom = { x: t.clientX, y: t.clientY, ox: viewOX, oy: viewOY };
+  } else if(ev.touches.length === 2){
+    touchMode = 'pinch';
+    pinchStartDist = touchDist(ev.touches[0], ev.touches[1]) || 1;
+    pinchStartScale = viewScale;
+  }
+}, { passive: true });
+cv.addEventListener('touchmove', ev => {
+  if(touchMode === 'pan' && ev.touches.length === 1){
+    ev.preventDefault();
+    const t = ev.touches[0];
+    const dx = t.clientX - touchPanFrom.x, dy = t.clientY - touchPanFrom.y;
+    if(!viewDidPan && Math.hypot(dx, dy) < 4) return;
+    viewDidPan = true;
+    viewOX = touchPanFrom.ox + dx; viewOY = touchPanFrom.oy + dy;
+  } else if(touchMode === 'pinch' && ev.touches.length === 2){
+    ev.preventDefault();
+    const dist = touchDist(ev.touches[0], ev.touches[1]) || 1;
+    const mid = touchMidCanvas(ev.touches[0], ev.touches[1]);
+    const targetScale = pinchStartScale * (dist / pinchStartDist);
+    zoomAt(mid.x, mid.y, targetScale / viewScale);
+  }
+}, { passive: false });
+cv.addEventListener('touchend', ev => {
+  if(ev.touches.length === 0){
+    touchMode = null; touchPanFrom = null;
+  } else if(ev.touches.length === 1){
+    // dropped from a pinch to a single finger — restart the pan baseline
+    // from here rather than jumping using the old pinch anchor.
+    touchMode = 'pan';
+    const t = ev.touches[0];
+    touchPanFrom = { x: t.clientX, y: t.clientY, ox: viewOX, oy: viewOY };
+  }
+});
+
+// ---- on-screen zoom controls + discoverability hint ----
+// Trackpad-less mice and plain touch taps have no wheel/pinch gesture, so a
+// visible +/−/reset cluster is the accessible fallback — keyboard-focusable
+// real <button>s with aria-labels, driving the IDENTICAL zoomAt/resetView
+// transform (+/− anchor on the canvas CENTER, since there's no cursor to
+// anchor on). Injected here, not in index.html/Hero.astro, so every embed
+// (product/replay/site/observer) gets it for free from the shared renderer.
+(function initViewControls(){
+  const host = cv.parentElement;
+  if(!host) return;
+  if(getComputedStyle(host).position === 'static') host.style.position = 'relative';
+
+  const style = document.createElement('style');
+  style.textContent = `
+/* Top-right, not bottom-right: index.html's #legend already owns the
+   bottom-right corner of the canvas (bottom:8px; right:10px), and a
+   z-index fight there would either hide the legend or crowd the buttons. */
+.view-controls { position:absolute; right:10px; top:10px; z-index:5; display:flex; gap:6px; }
+.view-controls button {
+  width:28px; height:28px; padding:0; border-radius:6px; border:1px solid rgba(255,255,255,.25);
+  background:rgba(20,20,20,.55); color:#eee; font-size:15px; line-height:1; cursor:pointer;
+  display:flex; align-items:center; justify-content:center; backdrop-filter:blur(2px);
+}
+.view-controls button:hover, .view-controls button:focus-visible {
+  background:rgba(40,40,40,.75); border-color:rgba(255,255,255,.5); outline:none;
+}
+html.light .view-controls button { background:rgba(255,255,255,.7); color:#2b2720; border-color:rgba(0,0,0,.18); }
+html.light .view-controls button:hover, html.light .view-controls button:focus-visible {
+  background:rgba(255,255,255,.92); border-color:rgba(0,0,0,.35);
+}
+.view-hint {
+  position:absolute; right:10px; top:44px; z-index:5; font-size:11px; color:#eee;
+  background:rgba(20,20,20,.55); padding:3px 8px; border-radius:5px; pointer-events:none;
+  opacity:1; transition:opacity 1.1s ease; white-space:nowrap;
+}
+.view-hint.hide { opacity:0; }
+html.light .view-hint { background:rgba(255,255,255,.75); color:#2b2720; }
+`;
+  document.head.appendChild(style);
+
+  const controls = document.createElement('div');
+  controls.className = 'view-controls';
+  controls.innerHTML =
+    '<button type="button" aria-label="Zoom out">−</button>' +
+    '<button type="button" aria-label="Reset zoom">⤢</button>' +
+    '<button type="button" aria-label="Zoom in">+</button>';
+  const [outBtn, resetBtn, inBtn] = controls.querySelectorAll('button');
+  outBtn.title = 'Zoom out'; resetBtn.title = 'Reset view'; inBtn.title = 'Zoom in';
+  outBtn.addEventListener('click', () => { dismissViewHint(); zoomAt(CW/2, CH/2, 1/1.3); });
+  inBtn.addEventListener('click', () => { dismissViewHint(); zoomAt(CW/2, CH/2, 1.3); });
+  resetBtn.addEventListener('click', () => { dismissViewHint(); resetView(); });
+  host.appendChild(controls);
+
+  const hint = document.createElement('div');
+  hint.className = 'view-hint';
+  hint.textContent = 'scroll or pinch to zoom · drag to pan';
+  host.appendChild(hint);
+  window.dismissViewHint = () => { hint.classList.add('hide'); };
+  setTimeout(() => hint.classList.add('hide'), 4000);
+})();
+function dismissViewHint(){ if(window.dismissViewHint) window.dismissViewHint(); }
+
 // ---- themed canvas backgrounds: grass (ranch/flock), honeycomb (hive) are
 // pre-rendered offscreen; matrix rain animates in draw(). Tuned to read clearly
 // at a glance without overpowering the nodes; light theme gets darker strokes
@@ -435,8 +615,15 @@ function drawCritter(x, y, r, color, t, isBrain, role, sub){
 let lastFrameT = Date.now()/1000;
 function draw(){
   step();
-  ctx.clearRect(0,0,CW,CH);
+  // clear in DEVICE space (identity-ish base transform), THEN apply the
+  // world transform once for everything that lives in the corral — the
+  // background included (natural zoom: the pasture is part of the world;
+  // beyond its edge the panel color shows, which reads as "the pasture
+  // ends", not as a glitch). Per-node math stays untouched.
+  ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+  ctx.clearRect(0, 0, CW, CH);
   const frameT = Date.now()/1000, dt = Math.min(0.1, frameT-lastFrameT); lastFrameT = frameT;
+  ctx.setTransform(devicePixelRatio*viewScale, 0, 0, devicePixelRatio*viewScale, devicePixelRatio*viewOX, devicePixelRatio*viewOY);
   if(skin().bg==='rain') drawRain(dt);
   if(bgCv.width>1) ctx.drawImage(bgCv, 0, 0, CW, CH);
   for(const l of links){

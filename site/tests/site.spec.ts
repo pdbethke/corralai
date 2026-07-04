@@ -294,3 +294,80 @@ test('the OG image asset exists and is a real local file, not a placeholder', as
   expect(width, 'og:image must be exactly 1200px wide (matches og:image:width)').toBe(1200);
   expect(height, 'og:image must be exactly 630px tall (matches og:image:height)').toBe(630);
 });
+
+test('the hero canvas zooms at the cursor, pans on drag, and resets on double-click', async ({ page }) => {
+  await page.goto('/');
+  await expect(async () => {
+    const max = await page.locator('#replay-scrub').getAttribute('max');
+    expect(Number(max)).toBeGreaterThan(0);
+  }).toPass({ timeout: 5000 });
+
+  const canvas = page.locator('#c');
+  // The hero canvas can render below the fold on the default 1280x720
+  // viewport; mouse.move/wheel operate in viewport coordinates, so scroll
+  // it fully into view first or the synthetic wheel event lands on nothing.
+  await canvas.scrollIntoViewIfNeeded();
+  const box = (await canvas.boundingBox())!;
+  const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
+
+  // wheel-zoom in at the center — getViewTransform is a top-level function
+  // declaration in the classic-script player, so it lands on window.
+  await page.mouse.move(cx, cy);
+  await page.mouse.wheel(0, -400);
+  const zoomed = await page.evaluate(() => (window as any).getViewTransform());
+  expect(zoomed.scale, 'wheel up must zoom in past 1x').toBeGreaterThan(1);
+  expect(zoomed.scale, 'zoom must clamp at 4x').toBeLessThanOrEqual(4);
+
+  // drag-to-pan: offset moves by the drag delta
+  await page.mouse.move(cx, cy);
+  await page.mouse.down();
+  await page.mouse.move(cx + 80, cy + 40, { steps: 5 });
+  await page.mouse.up();
+  const panned = await page.evaluate(() => (window as any).getViewTransform());
+  expect(Math.round(panned.x - zoomed.x), 'drag must pan the view horizontally').toBe(80);
+  expect(Math.round(panned.y - zoomed.y), 'drag must pan the view vertically').toBe(40);
+
+  // double-click empty space (the far corner, away from any node) resets
+  await page.mouse.dblclick(box.x + 10, box.y + 10);
+  const reset = await page.evaluate(() => (window as any).getViewTransform());
+  expect(reset).toEqual({ scale: 1, x: 0, y: 0 });
+});
+
+test('the on-screen zoom controls drive the same transform and the hint fades', async ({ page }) => {
+  await page.goto('/');
+  await expect(async () => {
+    const max = await page.locator('#replay-scrub').getAttribute('max');
+    expect(Number(max)).toBeGreaterThan(0);
+  }).toPass({ timeout: 5000 });
+
+  const zoomIn = page.getByRole('button', { name: 'Zoom in' });
+  const zoomOut = page.getByRole('button', { name: 'Zoom out' });
+  const reset = page.getByRole('button', { name: 'Reset zoom' });
+  await expect(zoomIn).toBeVisible();
+  await expect(zoomOut).toBeVisible();
+  await expect(reset).toBeVisible();
+
+  // the hint is visible on first paint, and clicking a control dismisses it
+  // immediately (not just after its timeout) — same discoverability affordance
+  // a wheel/drag interaction dismisses.
+  const hint = page.locator('.view-hint');
+  await expect(hint).toBeVisible();
+  await expect(hint).toHaveText(/scroll or pinch to zoom.*drag to pan/);
+
+  await zoomIn.click();
+  const afterIn = await page.evaluate(() => (window as any).getViewTransform());
+  expect(afterIn.scale, 'the + button must zoom in past 1x').toBeGreaterThan(1);
+  await expect(hint).toHaveClass(/hide/);
+
+  await zoomIn.click(); await zoomIn.click(); await zoomIn.click(); await zoomIn.click(); await zoomIn.click();
+  const clamped = await page.evaluate(() => (window as any).getViewTransform());
+  expect(clamped.scale, '+ must clamp at 4x same as the wheel').toBeLessThanOrEqual(4);
+
+  await zoomOut.click();
+  const afterOut = await page.evaluate(() => (window as any).getViewTransform());
+  expect(afterOut.scale, 'the - button must zoom back out').toBeLessThan(clamped.scale);
+
+  await reset.click();
+  const afterReset = await page.evaluate(() => (window as any).getViewTransform());
+  expect(afterReset).toEqual({ scale: 1, x: 0, y: 0 });
+});

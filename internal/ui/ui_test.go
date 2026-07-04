@@ -692,17 +692,47 @@ func TestReplayPlayerStructure(t *testing.T) {
 		`function replayStep()`,
 		`function applyReplayEvent(ev)`,
 		`function seekReplay(target)`,
+		// zoom/pan (Task 11 of the site-docs-expansion plan): the view
+		// transform lives in the SHARED renderer so live, replay, and the
+		// static site embed all get it; hit-tests consume canvasToWorld.
+		`function zoomAt(sx, sy, factor)`,
+		`function screenToWorld(sx, sy)`,
+		`function canvasToWorld(ev)`,
+		`function resetView()`,
+		`function getViewTransform()`,
+		`cv.addEventListener('wheel'`,
+		// on-screen zoom controls + touch/pinch (addendum): trackpad-less
+		// mice, touch-only phones/tablets, and a11y users all need a
+		// non-wheel path to the same transform.
+		`aria-label="Zoom in"`,
+		`aria-label="Zoom out"`,
+		`aria-label="Reset zoom"`,
+		`cv.addEventListener('touchstart'`,
+		`cv.addEventListener('touchmove'`,
+		`view-hint`,
 	}
 	for _, m := range playerMarkers {
 		if !strings.Contains(player, m) {
 			t.Errorf("replay-player.js missing required replay marker: %q", m)
 		}
 	}
-	indexMarkers := []string{`id="replay"`, `id="replay-scrub"`, `<script src="/replay-player.js"></script>`}
+	indexMarkers := []string{
+		`id="replay"`, `id="replay-scrub"`, `<script src="/replay-player.js"></script>`,
+		// both canvas hit-tests must read world coordinates, not raw
+		// canvas-local pixels — otherwise clicking a zoomed/panned agent
+		// opens the wrong node (or nothing).
+		`canvasToWorld(ev)`,
+	}
 	for _, m := range indexMarkers {
 		if !strings.Contains(indexHTML, m) {
 			t.Errorf("index.html missing required marker: %q", m)
 		}
+	}
+	// The draw loop must apply the world transform once per frame (not
+	// per-node math): scale+offset baked into one setTransform call that
+	// multiplies devicePixelRatio.
+	if !strings.Contains(player, "devicePixelRatio*viewScale") {
+		t.Error("draw() must apply the view transform via ctx.setTransform(devicePixelRatio*viewScale, ...) once per frame")
 	}
 	// The extraction must not silently start a live connection from a
 	// brain-less file, and the product page must still start one.

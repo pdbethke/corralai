@@ -19,6 +19,16 @@
 //                                   standalone embed can supply a two-line
 //                                   version — see docs/superpowers/plans/
 //                                   2026-07-03-corralai-dev-site.md Task 4.
+//                                   GOTCHA: if the embedding page's script
+//                                   uses a templating mechanism that wraps
+//                                   the script body in a closure (e.g.
+//                                   Astro's `define:vars`), a plain
+//                                   `function setView(v){}` declaration is
+//                                   scoped to that closure, NOT global — this
+//                                   file's own top-level `setView('replay')`
+//                                   call will throw ReferenceError. Assign
+//                                   `window.setView = function(v){...}`
+//                                   explicitly in that case.
 //
 // Optional, null-guarded (safe to omit entirely): #empty, #stat, #skinsel,
 // #skinsub, #tab-swarm, #tab-proposals, #proposals-badge, #tab-completed,
@@ -30,7 +40,11 @@
 // embeds must never call connectSSE().
 // To play a replay (works with no brain at all): `startReplay(streamOrUrl)`
 // where streamOrUrl is either a URL string (GETted as {events:[...]}) or an
-// already-resolved {events:[...]} object/array.
+// already-resolved {events:[...]} object/array. Replay is genuinely
+// backend-free end to end: requestChatter() (the in-character speech bubbles)
+// short-circuits to its canned-line fallback whenever `inReplay` is true, so
+// no /api/chatter call is ever made while replaying — a static embed with no
+// backend at all will never see a failed network request or console error.
 
 const cv = document.getElementById('c'), ctx = cv.getContext('2d');
 // The canvas now lives in the CENTER grid cell, so it sizes to ITS box (not the
@@ -191,11 +205,15 @@ function drawBubble(x, y, w, h, alpha, caught, thought){
 // requestChatter: in-character, MODEL-GENERATED speech grounded in the agent's
 // real latest activity ("you are Tess, a sheep in the flock; you just ran go
 // test…"). Server-cached + rate-limited; canned role lines are the fallback
-// when the narrator is off. Client throttles to one fetch per agent per 45s.
+// when the narrator is off, AND the only path taken during replay (see
+// `inReplay` below) — replaying a recorded mission must never touch a brain
+// endpoint, matching startReplay()'s "EMBED-FRIENDLY BY CONSTRUCTION" promise
+// that a static, backend-less embed never calls out to a live server. Client
+// throttles to one fetch per agent per 45s outside replay.
 const chatterAt = {};   // agent -> last fetch ts
 function requestChatter(n){
   const nowS = Date.now()/1000;
-  if(chatterAt[n.label] && nowS - chatterAt[n.label] < 45){
+  if(inReplay || (chatterAt[n.label] && nowS - chatterAt[n.label] < 45)){
     const lines = roleQuips(n.role);
     if(lines) buzzes.push({x:n.x+6, y:n.y-15, t0:nowS, txt:lines[(Math.random()*lines.length)|0], say:true, role:n.role, life:2.5});
     return;
@@ -581,6 +599,12 @@ let es = null; // lazy: the embedding page calls `es = connectSSE()` itself for 
 // JSON file's contents and get the identical player. openReplay(missionId)
 // is just the live-corral convenience wrapper around that URL form.
 let replayEvents = [], replayIdx = 0, replayPlaying = false, replaySpeed = 1, replayTimer = null, replaySSEPaused = false;
+// inReplay: true from startReplay() through stopReplaySession() — the single
+// switch that keeps replay genuinely backend-free (see requestChatter above).
+// Distinct from replaySSEPaused, which only means anything when a live SSE
+// connection existed to pause; a static embed never has one, so inReplay is
+// the flag that also works with no brain running at all.
+let inReplay = false;
 
 function startReplay(streamOrUrl){
   const load = (typeof streamOrUrl === 'string')
@@ -590,6 +614,7 @@ function startReplay(streamOrUrl){
     replayEvents = events;
     replayIdx = 0;
     replayPlaying = false;
+    inReplay = true;
     if(replayTimer){ clearTimeout(replayTimer); replayTimer = null; }
     nodes.clear(); links.length = 0; bursts.length = 0; buzzes.length = 0;
     if(es && !replaySSEPaused){ es.close(); replaySSEPaused = true; } // live mode paused while replaying
@@ -610,6 +635,7 @@ function openReplay(missionId){
 // visible control). closeReplay() is just the exit button's path into it.
 function stopReplaySession(){
   replayPlaying = false;
+  inReplay = false;
   if(replayTimer){ clearTimeout(replayTimer); replayTimer = null; }
   const btn = document.getElementById('replay-playbtn');
   if(btn) btn.textContent = '▶ play';

@@ -106,7 +106,11 @@ test('the deny-list scan flags the Important-1 parity rules (non-private IPv4, a
 
 test('every committed recording passes the deny-list scan', async () => {
   const fs = await import('node:fs');
-  const files = fs.readdirSync('src/data/recordings').filter((f) => f.endsWith('.json') && !f.endsWith('.meta.json'));
+  // Streams AND the human-written .analysis.md sidecars — anything under
+  // recordings/ ships to the public page, so everything gets the same scan.
+  const files = fs
+    .readdirSync('src/data/recordings')
+    .filter((f) => (f.endsWith('.json') && !f.endsWith('.meta.json')) || f.endsWith('.analysis.md'));
   expect(files.length, 'expected at least one committed recording').toBeGreaterThanOrEqual(1);
   for (const f of files) {
     const text = fs.readFileSync(`src/data/recordings/${f}`, 'utf-8');

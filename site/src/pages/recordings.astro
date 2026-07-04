@@ -5,6 +5,15 @@ import analytics from '../data/analytics.json';
 
 // Enumerate committed recordings by glob — no manifest file to drift.
 const streamModules = import.meta.glob('../data/recordings/*.json', { eager: true });
+// Optional per-recording analysis: a sibling <slug>.analysis.md written in
+// the corral's voice from the run's own evidence (feature #41 will have the
+// herd draft these from its own tape). Astro's md pipeline renders it at
+// build time; the e2e deny-scan glob covers these files like the streams.
+const analysisModules = import.meta.glob('../data/recordings/*.analysis.md', { eager: true });
+const analyses: Record<string, any> = {};
+for (const [p, mod] of Object.entries(analysisModules)) {
+  analyses[p.split('/').pop()!.replace(/\.analysis\.md$/, '')] = (mod as any).Content;
+}
 const streams: Record<string, unknown> = {};
 const cards: { slug: string; directive: string; models: string[]; task_count: number; done_task_count: number; finding_count: number; minutes: number; result?: { url: string; label: string }; platform?: string }[] = [];
 
@@ -66,6 +75,7 @@ const maxModelFindings = Math.max(1, ...analytics.findings_by_model.map((r: any)
           {c.models.length > 0 && <span class="models">{c.models.join(' + ')}</span>}
           <span class="stats">{c.task_count} tasks ({c.done_task_count} done) · {c.finding_count} findings · {c.minutes}m</span>
           {c.platform && <span class="platform">recorded on {c.platform}</span>}
+          {analyses[c.slug] && <span class="has-analysis">analysis below ↓</span>}
           {c.result && (
             <a class="result-link" href={c.result.url} target="_blank" rel="noopener noreferrer">
               {c.result.label} →
@@ -95,6 +105,17 @@ const maxModelFindings = Math.max(1, ...analytics.findings_by_model.map((r: any)
       </select>
     </div>
   </div>
+
+  {Object.keys(analyses).length > 0 && (
+    <div class="section" id="analysis-section">
+      {Object.entries(analyses).map(([slug, Content]) => (
+        <div class="analysis-panel" data-analysis-slug={slug} hidden>
+          <h2>Analysis</h2>
+          <Content />
+        </div>
+      ))}
+    </div>
+  )}
 
   <div class="section" id="analytics">
     <h2>Across the recordings</h2>
@@ -154,6 +175,10 @@ const maxModelFindings = Math.max(1, ...analytics.findings_by_model.map((r: any)
   .models { color: var(--amber); font-size: 0.85rem; }
   .stats { color: var(--muted); font-size: 0.85rem; }
   .platform { color: var(--muted); font-size: 0.78rem; }
+  .has-analysis { color: var(--amber); font-size: 0.78rem; }
+  .analysis-panel { border-left: 3px solid var(--amber); padding-left: 16px; }
+  .analysis-panel :global(h1), .analysis-panel :global(h2) { font-size: 1.15rem; }
+  .analysis-panel :global(p), .analysis-panel :global(li) { color: var(--fg); font-size: 0.95rem; }
   .result-link { color: var(--amber); font-size: 0.85rem; text-decoration: underline; }
   .back { margin-top: 8px; }
   /* full-width dark player viewport — same framing tokens as the hero (Task 1) */
@@ -197,6 +222,10 @@ const maxModelFindings = Math.max(1, ...analytics.findings_by_model.map((r: any)
     const activate = (btn) => {
       document.querySelectorAll('.card.active').forEach((c) => c.classList.remove('active'));
       btn.classList.add('active');
+      // Show the selected recording's analysis (if it has one) below the player.
+      for (const panel of document.querySelectorAll('.analysis-panel')) {
+        panel.hidden = panel.dataset.analysisSlug !== btn.dataset.slug;
+      }
       // startReplay already accepts a resolved {events:[...]} object — no
       // player change needed; this is the same call shape as the hero.
       startReplay(streams[btn.dataset.slug]).then(() => {

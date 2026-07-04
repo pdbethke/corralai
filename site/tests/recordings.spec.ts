@@ -27,6 +27,25 @@ test('the gallery renders a card per recording, plays one, shows analytics, and 
   expect(backendApiCalls, `unexpected /api/* calls from a backend-free page: ${backendApiCalls.join(', ')}`).toHaveLength(0);
 });
 
+test('a recording with an .analysis.md shows the affordance and reveals the analysis on selection', async ({ page }) => {
+  const fs = await import('node:fs');
+  const slugs = fs
+    .readdirSync('src/data/recordings')
+    .filter((f) => f.endsWith('.analysis.md'))
+    .map((f) => f.replace(/\.analysis\.md$/, ''));
+  test.skip(slugs.length === 0, 'no analysis sidecars committed');
+
+  await page.goto('/recordings/');
+  const card = page.locator(`.card[data-slug="${slugs[0]}"]`);
+  await expect(card.locator('.has-analysis')).toBeVisible();
+
+  const panel = page.locator(`.analysis-panel[data-analysis-slug="${slugs[0]}"]`);
+  await expect(panel).toBeHidden();
+  await card.click();
+  await expect(panel).toBeVisible();
+  await expect(panel.locator('h2').first()).toContainText('Analysis');
+});
+
 test('every recording card corresponds to a committed stream + meta pair', async () => {
   const fs = await import('node:fs');
   const files = fs.readdirSync('src/data/recordings');

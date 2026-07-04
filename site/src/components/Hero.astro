@@ -14,8 +14,10 @@ const minutes = Math.round((meta.duration_seconds || 0) / 60);
       problems, and iterates with the client until it's accepted.
     </p>
     <p class="caption">
-      Real recorded mission: {meta.task_count} tasks ({meta.done_task_count} done),
-      {meta.finding_count} findings, {minutes}m — replaying at 4× below.
+      {/* single line: Astro collapses a text→newline→expression boundary to
+          ZERO chars (not a space), which rendered "done),56 findings" when
+          this wrapped after the comma */}
+      Real recorded mission: {meta.task_count} tasks ({meta.done_task_count} done), {meta.finding_count} findings, {minutes}m — replaying at 4× below.
     </p>
     <div class="ctas">
       <a class="cta" href="https://github.com/pdbethke/corralai">View on GitHub</a>

@@ -784,6 +784,52 @@ func TestReplayPlayerStructure(t *testing.T) {
 	if !strings.Contains(setViewFn, "stopReplaySession()") {
 		t.Error("setView must call stopReplaySession() when navigating to a non-replay view — otherwise switching tabs mid-replay leaves the timer running and SSE closed with no visible control")
 	}
+
+	// Replay must be genuinely backend-free: requestChatter()'s /api/chatter
+	// fetch fires from draw()'s random chatter roll regardless of mode, so
+	// without a guard a backend-less static embed logs a 404 console error
+	// every time a replayed agent's roll lands. The `inReplay` flag (true
+	// from startReplay's resolved path through stopReplaySession) is the
+	// single switch that short-circuits requestChatter to its canned-line
+	// fallback during playback. A regression on any of these four points
+	// re-breaks the corralai.dev embed's zero-network-error guarantee.
+	if !strings.Contains(player, "let inReplay = false") {
+		t.Error("replay-player.js missing the `inReplay` flag declaration — the switch that keeps replay backend-free (no /api/chatter during playback)")
+	}
+	if !strings.Contains(startFn, "inReplay = true") {
+		t.Error("startReplay's resolved path must set `inReplay = true` — otherwise requestChatter has no way to know playback is active and will fetch /api/chatter from a backend-less embed")
+	}
+	const stopStart = "function stopReplaySession(){"
+	tsi := strings.Index(player, stopStart)
+	if tsi < 0 {
+		t.Fatalf("could not locate stopReplaySession in replay-player.js")
+	}
+	tei := strings.Index(player[tsi:], "\n}")
+	if tei < 0 {
+		t.Fatalf("could not locate the end of stopReplaySession in replay-player.js")
+	}
+	stopFn := player[tsi : tsi+tei]
+	if !strings.Contains(stopFn, "inReplay = false") {
+		t.Error("stopReplaySession must clear `inReplay` — leaving it set would suppress live-mode chatter forever after one replay")
+	}
+	const chatterStart = "function requestChatter(n){"
+	csi := strings.Index(player, chatterStart)
+	if csi < 0 {
+		t.Fatalf("could not locate requestChatter in replay-player.js")
+	}
+	cei := strings.Index(player[csi:], "\n}")
+	if cei < 0 {
+		t.Fatalf("could not locate the end of requestChatter in replay-player.js")
+	}
+	chatterFn := player[csi : csi+cei]
+	fetchIdx := strings.Index(chatterFn, "fetch('/api/chatter")
+	guardIdx := strings.Index(chatterFn, "inReplay")
+	if fetchIdx < 0 {
+		t.Fatalf("could not locate the /api/chatter fetch inside requestChatter — if the endpoint moved, update this test's markers")
+	}
+	if guardIdx < 0 || guardIdx > fetchIdx {
+		t.Error("requestChatter must check `inReplay` BEFORE its /api/chatter fetch (short-circuit to the canned-line fallback) — otherwise replay in a backend-less embed logs a failed request per chatter roll")
+	}
 }
 
 // TestReplayEndpoint asserts the read-only /api/replay endpoint: a valid

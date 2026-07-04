@@ -2,7 +2,7 @@
 
 // Package fleet replicates the brain's action stream to a remote DuckDB /
 // MotherDuck database so the whole agent fleet — local and across machines — can
-// be observed analytically (e.g. a Sigma dashboard on MotherDuck).
+// be observed analytically (e.g. any BI dashboard on MotherDuck).
 //
 // This is the "observe analytically" half of the design: coordination stays
 // transactional in SQLite; the *record* of what agents did is appended to

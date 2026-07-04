@@ -23,7 +23,7 @@ Two jobs, opposite database needs — never conflate them:
 |---|---|---|---|
 | **Coordination** | live locks, presence — OLTP | **SQLite** (pure-Go, `modernc.org/sqlite`) | frequent small concurrent writes, read-your-writes, low-latency mutual exclusion |
 | **Memory** | searchable knowledge corpus — OLAP | **DuckDB** (`go-duckdb`, CGO) | FTS now, vectors later (VSS); source of truth = markdown files |
-| **Observe / analytics** | fleet action-stream + shared memory across machines | **MotherDuck** (DuckDB cloud) | hybrid local+cloud; Sigma dashboards on top |
+| **Observe / analytics** | fleet action-stream + shared memory across machines | **MotherDuck** (DuckDB cloud) | hybrid local+cloud; any BI tool on top |
 
 **MotherDuck is for remembering and watching the swarm, NOT for locking it.** A
 warehouse is the wrong tool for a live lock manager (cloud latency, OLAP semantics).
@@ -45,7 +45,7 @@ consumers without bespoke auth each time.
 The brain serves a real-time topology view (force-directed graph: agents = nodes,
 claims = agent→path edges, presence = pulse, actions = motion) fed by a WebSocket,
 static assets embedded via `go:embed` (UI ships inside the single binary). Live
-topology here; historical analytics via MotherDuck → Sigma.
+topology here; historical analytics via MotherDuck → any BI tool (Metabase, Grafana, Looker, …).
 
 ## Stack
 
@@ -80,7 +80,7 @@ topology here; historical analytics via MotherDuck → Sigma.
   `fleet_actions`, tagged by `brain` (federation-ready across machines). The brain
   runs it on a ticker when `CORRALAI_MOTHERDUCK` is set. Verified: unit test
   (incremental) + live (HTTP action → audit → sync → remote `[brainA] BlueLake
-  register`). **Sigma dashboard = connect Sigma to the MotherDuck `fleet_actions`
+  register`). **Dashboards = connect any BI tool to the MotherDuck `fleet_actions`
   table** (no code). Real MotherDuck differs only by DSN `md:` + token. (Syncing the
   memory *corpus* to MotherDuck too is a later add.)
 - **P4 — swarm-diagram UI (DONE).** `internal/ui`: a dependency-free force-directed

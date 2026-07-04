@@ -1,0 +1,10 @@
+{
+  "directive": "Build a Python package 'ratelimit' implementing a token-bucket rate limiter: a RateLimiter class with allow(key) and configurable capacity and refill rate, plus docstrings, a usage README, and unittest tests; make 'python3 -m unittest' pass",
+  "task_count": 11,
+  "done_task_count": 11,
+  "finding_count": 1,
+  "duration_seconds": 222.84375166893005,
+  "models": [
+    "ollama:qwen2.5-coder:7b"
+  ]
+}

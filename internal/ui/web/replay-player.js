@@ -32,9 +32,9 @@
 //
 // Optional, null-guarded (safe to omit entirely): #empty, #stat, #skinsel,
 // #skinsub, #tab-swarm, #tab-proposals, #proposals-badge, #tab-completed,
-// #themebtn — and the replay-cockpit panels #exec, #tasks, #findings (when
-// present, replay populates them from the tape; the canvas-only hero omits
-// them and loses nothing).
+// #themebtn — and the replay-cockpit panels #exec, #tasks, #agents, #findings
+// (when present, replay populates them from the tape; the canvas-only hero
+// omits them and loses nothing).
 //
 // To start a live SSE-driven view (the product page only — a static replay
 // embed never calls this): `es = connectSSE();`
@@ -824,19 +824,64 @@ let inReplay = false;
 // Honest limits of the tape: execution beats carry ok/exit_code but not the
 // live feed's timed_out flag or multi-line output summary, and there is no
 // recent_activity tool-call stream — the cockpit shows what was recorded,
-// never invents the rest.
+// never invents the rest. The agents roster's "doing now" column is
+// reconstructed from claims + executions (the tape has no agent_activity
+// tool-call beat), so it shows the last real command or the claimed task,
+// not a live tool call.
 let replayExecLines = [];   // {agent, role, command, ok, exitCode}
 let replayTasks = new Map(); // key -> {key, title, role, status, claimedBy}
 let replayFindings = [];    // {reporter, target, type, severity, model, resolved}
-let replaySeenBeats = new Set(); // dedupe: findings ride the tape twice (queue+telemetry merge)
+let replayAgents = new Map(); // name -> {name, role, held:Set<taskKey>, lastCmd}
+let replaySeenBeats = new Set(); // dedupe: findings ride the tape TWICE (queue+telemetry merge), and resolutions repeat across replan cycles
 function resetReplayPanels(){
-  replayExecLines = []; replayTasks = new Map(); replayFindings = []; replaySeenBeats = new Set();
+  replayExecLines = []; replayTasks = new Map(); replayFindings = [];
+  replayAgents = new Map(); replaySeenBeats = new Set();
 }
 function clearReplayPanelDOM(){
-  for(const id of ['exec','tasks','findings']){
+  // 'done' is the product's live roster id — cleared here too so the SSE
+  // snapshot repaints it fresh on replay exit (no stale-tape flash), same as
+  // the other panels; the site cockpit uses 'agents'.
+  for(const id of ['exec','tasks','findings','agents','done']){
     const el = document.getElementById(id);
     if(el) el.innerHTML = '';
   }
+}
+function replayAgentEnsure(name, role){
+  let a = replayAgents.get(name);
+  if(!a){ a = {name, role: role || '', held: new Set(), lastCmd: ''}; replayAgents.set(name, a); }
+  if(role) a.role = role;
+  return a;
+}
+function replayAgentHold(name, role, taskKey, held){
+  const a = replayAgentEnsure(name, role);
+  if(held) a.held.add(taskKey); else a.held.delete(taskKey);
+}
+// renderReplayAgents: the roster of workers the tape shows, reconstructed from
+// task claims + executions — mirrors the product's live agents list (#done):
+// role-colored dot when working (holds a claim), name + role + the "doing now"
+// column (last real command, else the claimed task). System actors that only
+// FILE findings (verify-gate, reflex-replanner, lead, client) never claim or
+// run a command, so they never enter the roster — same as live active_agents.
+function renderReplayAgents(){
+  // The site cockpit names the roster #agents; the PRODUCT UI's live roster is
+  // the legacy id #done (renders "agents · N" from apply()). Populate whichever
+  // exists so replay drives the roster in BOTH hosts — in the product this also
+  // fixes the roster going stale during replay (apply() is paused), exactly
+  // like the console/tasks/findings panels.
+  const ap = document.getElementById('agents') || document.getElementById('done');
+  if(!ap) return;
+  const ags = Array.from(replayAgents.values());
+  if(!ags.length){ ap.innerHTML = '<div class="feedhdr">agents · 0</div><div class="row" style="opacity:.6">no agents yet…</div>'; return; }
+  ags.sort((a,b)=>((b.held.size>0?0:1)-(a.held.size>0?0:1)) || ((displayName(a.name)>displayName(b.name))?1:-1));
+  ap.innerHTML = '<div class="feedhdr">agents · ' + ags.length + '</div>' +
+    ags.map(a => {
+      const work = a.held.size > 0;
+      const dot = work ? roleColor(a.role) : '#5b5750';
+      const doing = work
+        ? (a.lastCmd ? '❯ ' + esc(a.lastCmd.slice(0,22)) : 'on ' + esc(Array.from(a.held)[0] || ''))
+        : 'idle';
+      return '<div class="arow"><span class="adot" style="background:' + dot + '"></span><b style="color:' + roleColor(a.role) + '">' + esc(displayName(a.name)) + '</b> <span class="ameta">' + esc(a.role || '') + '</span><span class="adoing">' + doing + '</span></div>';
+    }).join('');
 }
 function renderReplayConsole(){
   const ep = document.getElementById('exec');
@@ -888,6 +933,7 @@ function renderReplayPanels(){
   if(!inReplay) return; // the live page's panels belong to apply()/SSE
   renderReplayConsole();
   renderReplayTasks();
+  renderReplayAgents();
   renderReplayFindings();
 }
 
@@ -937,6 +983,15 @@ function closeReplay(){
   setView('swarm'); // setView runs stopReplaySession() for every non-replay view
 }
 function toggleReplayPlay(){
+  // Pressing play while the playhead is parked at the very end restarts from
+  // the top (replay again) instead of sitting dead on the last frame — same
+  // rebuild-from-0 the scrub uses, so canvas + panels both reset.
+  if(!replayPlaying && replayIdx >= replayEvents.length){
+    replayIdx = 0;
+    nodes.clear(); links.length = 0; bursts.length = 0; buzzes.length = 0;
+    resetReplayPanels();
+    renderReplayScrub();
+  }
   replayPlaying = !replayPlaying;
   const btn = document.getElementById('replay-playbtn');
   if(btn) btn.textContent = replayPlaying ? '⏸ pause' : '▶ play';
@@ -981,6 +1036,7 @@ function applyReplayEvent(ev){
         const t = replayTasks.get(ev.subject) || {key: ev.subject, title: d.title || '', role: d.role || ''};
         t.status = 'claimed'; t.claimedBy = ev.actor || ''; t.role = d.role || t.role;
         replayTasks.set(ev.subject, t);
+        if(ev.actor) replayAgentHold(ev.actor, d.role, ev.subject, true);
       }
       break;
     }
@@ -988,6 +1044,7 @@ function applyReplayEvent(ev){
       if(ev.subject){
         const t = replayTasks.get(ev.subject);
         if(t) t.status = ev.kind.slice(5); // done | cancelled | superseded
+        if(ev.actor) replayAgentHold(ev.actor, d.role, ev.subject, false);
       }
       break;
     }
@@ -1000,12 +1057,17 @@ function applyReplayEvent(ev){
         replayExecLines.push({agent: ev.actor || '', role: d.role || '', command: ev.subject || '', ok: !!d.ok, exitCode: d.exit_code == null ? '' : d.exit_code});
         if(replayExecLines.length > 200) replayExecLines.shift();
       }
+      // roster: an execution proves the actor is a real worker + records the
+      // last command (its "doing now"), even if the claim beat was missed.
+      if(ev.actor){ const a = replayAgentEnsure(ev.actor, d.role); a.lastCmd = ev.subject || a.lastCmd; }
       break;
     }
     case 'finding_reported': {
-      // findings ride the tape TWICE (queue + telemetry merge — same dedupe
-      // convention as Task 9's analytics flattener).
-      const k = 'f|' + (ev.subject||'') + '|' + (d.severity||'') + '|' + Math.round(ev.ts);
+      // Findings ride the tape TWICE (queue + telemetry merge) — dedupe the
+      // ~2ms double on (subject, severity, type, second-rounded ts). Each
+      // DISTINCT report is appended (the reflex re-planner legitimately
+      // re-raises the same subject seconds later — that reopens a finding).
+      const k = 'f|' + (ev.subject||'') + '|' + (d.severity||'') + '|' + (d.type||'') + '|' + Math.round(ev.ts);
       if(!replaySeenBeats.has(k)){
         replaySeenBeats.add(k);
         replayFindings.push({reporter: ev.actor || '', target: ev.subject || '', type: d.type || '', severity: d.severity || '', model: ev.model || '', resolved: false});
@@ -1013,8 +1075,18 @@ function applyReplayEvent(ev){
       break;
     }
     case 'finding_resolved': {
-      for(let i = replayFindings.length - 1; i >= 0; i--){
-        if(replayFindings[i].target === ev.subject && !replayFindings[i].resolved){ replayFindings[i].resolved = true; break; }
+      // Resolutions ALSO ride twice AND repeat across replan cycles — dedupe
+      // the double on (subject, second-rounded ts), then resolve the OLDEST
+      // still-open finding for that subject (FIFO create→resolve pairing).
+      // This mirrors the product's live renderFindings, which shows only
+      // status==='open' rows: a finding stays visible until its resolution
+      // beat fires, and a re-raise brings it back.
+      const rk = 'r|' + (ev.subject||'') + '|' + Math.round(ev.ts);
+      if(!replaySeenBeats.has(rk)){
+        replaySeenBeats.add(rk);
+        for(let i = 0; i < replayFindings.length; i++){
+          if(replayFindings[i].target === ev.subject && !replayFindings[i].resolved){ replayFindings[i].resolved = true; break; }
+        }
       }
       break;
     }

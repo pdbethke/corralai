@@ -182,6 +182,15 @@ test('replay-player.js does not clobber the site title', async ({ page }) => {
   await expect(page).toHaveTitle('Corralai — the herd performs live');
 });
 
+test('the landing hero stays canvas-only and clean — the skin selector is the /recordings cockpit only', async ({ page }) => {
+  // The cockpit (Task 12) exposes a critter-skin selector; the hero must not.
+  // The shared IIFE only populates a #skinsel when one is present in the DOM,
+  // so the hero's absence of that element is what keeps it the clean default.
+  await page.goto('/');
+  await expect(page.locator('#skinsel')).toHaveCount(0);
+  await expect(page.locator('#exec, #tasks, #agents, #findings')).toHaveCount(0);
+});
+
 test('the GitHub link resolves and points at the real repo, everywhere it appears', async ({ page, request }) => {
   await page.goto('/');
   const links = page.locator('a[href*="github.com/pdbethke/corralai"]');

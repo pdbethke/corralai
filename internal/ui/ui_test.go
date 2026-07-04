@@ -722,6 +722,7 @@ func TestReplayPlayerStructure(t *testing.T) {
 		`function renderReplayPanels()`,
 		`function renderReplayConsole()`,
 		`function renderReplayTasks()`,
+		`function renderReplayAgents()`,
 		`function renderReplayFindings()`,
 		`function resetReplayPanels()`,
 		`const SEV_RANK`,
@@ -738,6 +739,7 @@ func TestReplayPlayerStructure(t *testing.T) {
 	for _, guard := range []string{
 		`document.getElementById('exec')`,
 		`document.getElementById('tasks')`,
+		`document.getElementById('agents')`,
 		`document.getElementById('findings')`,
 	} {
 		if !strings.Contains(player, guard) {

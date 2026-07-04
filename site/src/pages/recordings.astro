@@ -94,7 +94,10 @@ const maxModelFindings = Math.max(1, ...analytics.findings_by_model.map((r: any)
         <canvas id="c"></canvas>
         <div id="empty">pick a recording above</div>
       </div>
-      <aside id="findings"></aside>
+      <aside id="side">
+        <div id="agents"></div>
+        <div id="findings"></div>
+      </aside>
     </div>
     <div id="exec"></div>
   </div>
@@ -108,6 +111,11 @@ const maxModelFindings = Math.max(1, ...analytics.findings_by_model.map((r: any)
         <option value="1">1×</option><option value="2">2×</option><option value="4" selected>4×</option>
         <option value="8">8×</option><option value="16">16×</option>
       </select>
+      <!-- skin selector: reuses the product's SKINS/setSkin from the shared
+           renderer (the IIFE in replay-player.js auto-populates this #skinsel).
+           Client-side render only — flips the replay's vocabulary/background
+           (ranch → matrix rain → hive) with zero SSE/api dependency. -->
+      <select id="skinsel" onchange="pickSkin(this.value)" title="critter skin"></select>
     </div>
   </div>
 
@@ -196,32 +204,46 @@ const maxModelFindings = Math.max(1, ...analytics.findings_by_model.map((r: any)
     border-top-left-radius: 12px; border-top-right-radius: 12px;
     box-shadow: 0 18px 44px rgba(30,20,0,.22); overflow: hidden;
   }
-  @media (max-width: 900px) { #cockpit { grid-template-columns: 1fr; } #tasks, #findings { max-height: 160px; } }
+  @media (max-width: 900px) { #cockpit { grid-template-columns: 1fr; } #tasks, #side { max-height: 200px; } }
   #stage { position: relative; height: 56vh; min-height: 360px; background: var(--stage-panel); }
-  #tasks, #findings {
+  #tasks, #side {
     background: var(--stage-bg); color: var(--stage-fg); overflow-y: auto;
     padding: 10px 12px; font-size: 12px; border-right: 1px solid var(--stage-line);
   }
-  #findings { border-right: none; border-left: 1px solid var(--stage-line); }
+  /* the right column stacks the agents roster over the findings panel — the
+     same two panels the product UI shows on the right (agents + findings). */
+  #side { border-right: none; border-left: 1px solid var(--stage-line); padding: 0; }
+  #agents, #findings { padding: 10px 12px; }
+  #agents { border-bottom: 1px solid var(--stage-line); }
+  /* The panel CONTENT (.arow/.feedhdr/.xblk/.trow/.frow …) is injected at
+     RUNTIME by the shared replay renderers, so those elements never carry
+     Astro's scope attribute — the rules MUST be :global or they silently
+     don't apply (the panels would fall back to inherited tokens + inline
+     styles only). The container ids above (#tasks/#side/#agents/#exec) are
+     real template elements, so their scoped id rules apply normally. */
+  :global(#cockpit .arow) { display: flex; align-items: baseline; gap: 6px; padding: 2px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  :global(#cockpit .adot) { flex: none; align-self: center; width: 7px; height: 7px; border-radius: 50%; }
+  :global(#cockpit .ameta) { color: var(--stage-muted); font-size: 11px; }
+  :global(#cockpit .adoing) { color: var(--stage-muted); font-size: 11px; margin-left: auto; padding-left: 10px; overflow: hidden; text-overflow: ellipsis; font-family: ui-monospace, monospace; }
   #exec {
     background: var(--stage-bg); color: var(--stage-fg); border: 1px solid var(--stage-line); border-top: none;
     height: 180px; overflow-y: auto; padding: 10px 14px;
     font-size: 12px;
   }
   /* the cockpit panels reuse the product console's class vocabulary — same
-     names the shared renderers emit, styled for the dark stage */
-  .feedhdr { color: var(--stage-muted); font-size: 11px; letter-spacing: .4px; margin-bottom: 6px; }
-  .xblk { margin-bottom: 3px; }
-  .xcmdline { display: flex; align-items: baseline; gap: 7px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.5; }
-  .xprompt { color: var(--stage-amber); }
-  .xcmd { font-family: ui-monospace, monospace; color: var(--stage-fg); }
-  .xbadge { font-weight: 700; }
-  .xempty, .xcursor { color: var(--stage-muted); }
-  .trow { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 2px 0; }
-  .tdot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; }
-  .frow { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 2px 0; }
-  .frow.hi { font-weight: 600; }
-  .fsev { font-weight: 700; }
+     names the shared renderers emit, styled for the dark stage (global: see note above) */
+  :global(#cockpit .feedhdr), :global(#exec .feedhdr) { color: var(--stage-muted); font-size: 11px; letter-spacing: .4px; margin-bottom: 6px; }
+  :global(#exec .xblk) { margin-bottom: 3px; }
+  :global(#exec .xcmdline) { display: flex; align-items: baseline; gap: 7px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.5; }
+  :global(#exec .xprompt) { color: var(--stage-amber); }
+  :global(#exec .xcmd) { font-family: ui-monospace, monospace; color: var(--stage-fg); }
+  :global(#exec .xbadge) { font-weight: 700; }
+  :global(#exec .xempty), :global(#exec .xcursor) { color: var(--stage-muted); }
+  :global(#tasks .trow) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 2px 0; }
+  :global(#tasks .tdot) { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; }
+  :global(#findings .frow) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 2px 0; }
+  :global(#findings .frow.hi) { font-weight: 600; }
+  :global(#findings .fsev) { font-weight: 700; }
   /* the shared renderers emit var(--green)/--red/--fg/--muted inline — on this
      daylight page those would resolve to light-page tokens inside a dark
      stage, so re-scope them onto the cockpit subtree (CSS inheritance does
@@ -241,6 +263,8 @@ const maxModelFindings = Math.max(1, ...analytics.findings_by_model.map((r: any)
   #replay .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   #replay .row button { background: var(--stage-panel); color: var(--stage-fg); border: 1px solid var(--stage-line); border-radius: 5px; padding: 4px 12px; font-size: 12px; cursor: pointer; }
   #replay .row button:hover { border-color: var(--stage-amber); }
+  #replay .row select { background: var(--stage-panel); color: var(--stage-fg); border: 1px solid var(--stage-line); border-radius: 5px; padding: 3px 6px; font-size: 12px; }
+  #replay .row select:hover { border-color: var(--stage-amber); }
   #replay-scrub { flex: 1; min-width: 160px; }
   #replay-label { color: var(--stage-muted); font-size: 11.5px; min-width: 70px; text-align: center; }
   #replay-title { color: var(--stage-amber); font-size: 12px; font-weight: 600; margin-right: 4px; }
@@ -291,6 +315,17 @@ const maxModelFindings = Math.max(1, ...analytics.findings_by_model.map((r: any)
       });
     }
   });
+  // pickSkin: flip the replay's critter skin (ranch/matrix/hive) — reuses the
+  // shared setSkin, then RESETS the persisted key back to 'ranch'. setSkin
+  // persists to localStorage, and the landing hero shares this origin — so a
+  // matrix/hive pick here is session-only eye candy that never leaks into the
+  // hero (which stays the clean default skin). setSkin already applied the
+  // visuals; we only undo the persistence and restore this page's title.
+  window.pickSkin = function (v) {
+    setSkin(v);
+    try { localStorage.setItem('corral-skin', 'ranch'); } catch (_) {}
+    document.title = 'Corralai — recordings';
+  };
   // replay-player.js's setSkin() clobbers document.title at script-load time
   // (same as on the landing page) — restore this page's own title.
   document.title = 'Corralai — recordings';

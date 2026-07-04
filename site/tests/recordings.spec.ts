@@ -87,6 +87,118 @@ test('the cockpit panels replay the tape: console lines appear and track the scr
   await expect(page.locator('#findings .feedhdr')).toContainText('findings ·');
 });
 
+// Helper: open a recording by slug and wait for its tape to load.
+async function openRecording(page: any, slug: string) {
+  await page.goto('/recordings/');
+  await page.locator(`.card[data-slug="${slug}"]`).click();
+  await expect(async () => {
+    expect(Number(await page.locator('#replay-scrub').getAttribute('max'))).toBeGreaterThan(0);
+  }).toPass({ timeout: 5000 });
+}
+const seekTo = (page: any, target: number) =>
+  page.locator('#replay-scrub').evaluate(
+    (el: HTMLInputElement, t: number) => { el.value = String(t); el.dispatchEvent(new Event('input')); },
+    target,
+  );
+
+test('findings PERSIST as the tape plays: open findings stay visible and severity-ranked, not zeroed', async ({ page }) => {
+  // js-lru-cache leaves findings open across the run (the ollama herd doesn't
+  // resolve everything) — the golden run resolves fast, so it's the wrong
+  // fixture for a persistence assertion. Reconstructed open-count must be > 0
+  // for a meaningful stretch, mirroring the product's live renderFindings.
+  await openRecording(page, 'js-lru-cache');
+  const max = Number(await page.locator('#replay-scrub').getAttribute('max'));
+  const openCount = async () => {
+    const txt = await page.locator('#findings .feedhdr').innerText();
+    const m = txt.match(/findings · (\d+) open/);
+    return m ? Number(m[1]) : 0;
+  };
+  let sawOpen = 0;
+  for (const frac of [0.25, 0.5, 0.75]) {
+    await seekTo(page, Math.floor(max * frac));
+    const n = await openCount();
+    if (n > 0) sawOpen++;
+    // whenever the header says N open, exactly that many severity rows render
+    if (n > 0) expect(await page.locator('#findings .frow').count()).toBe(n);
+  }
+  expect(sawOpen, 'findings must stay OPEN across the tape (persist), not collapse to 0').toBeGreaterThan(0);
+
+  // Rebuild-from-0 still applies to findings: seeking back to the very start
+  // must clear the accumulated open set.
+  await seekTo(page, 0);
+  expect(await page.locator('#findings .frow').count()).toBe(0);
+});
+
+test('the agents roster reconstructs the herd from claims + executions', async ({ page }) => {
+  await openRecording(page, 'golden-run');
+  const max = Number(await page.locator('#replay-scrub').getAttribute('max'));
+  await seekTo(page, Math.floor(max * 0.8));
+  await expect(page.locator('#agents .feedhdr')).toContainText('agents ·');
+  // the golden run's herd has many named workers (Bob, Tess, Sage, …) each
+  // with a role — assert several rows, each carrying a role label.
+  const rows = page.locator('#agents .arow');
+  expect(await rows.count(), 'expected multiple agents in the roster').toBeGreaterThan(2);
+  await expect(page.locator('#agents .ameta').first()).not.toBeEmpty();
+
+  // Regression guard: the panel classes (.arow/.feedhdr/…) are injected at
+  // RUNTIME by the shared renderer, so they carry no Astro scope attribute —
+  // the CSS must be :global or it silently doesn't apply. Assert the layout
+  // rule actually took (flex row), not the unstyled block fallback.
+  const display = await rows.first().evaluate((el) => getComputedStyle(el).display);
+  expect(display, 'cockpit panel classes must be :global — runtime elements get no scope attr').toBe('flex');
+
+  // seek back to 0 rebuilds the roster from scratch
+  await seekTo(page, 0);
+  expect(await page.locator('#agents .arow').count(), 'roster must rebuild from 0').toBe(0);
+});
+
+test('the console surfaces BOTH the builder and the tester (command from subject, not detail.command)', async ({ page }) => {
+  // python-ratelimit: Bob (builder) ran 5 commands, Tess (tester) ran 3 — the
+  // console reads the command from the beat's `subject`, so both actors appear.
+  await openRecording(page, 'python-ratelimit');
+  const max = Number(await page.locator('#replay-scrub').getAttribute('max'));
+  await seekTo(page, max);
+  const actors = await page.locator('#exec .xcmdline b').allInnerTexts();
+  const set = new Set(actors.map((a) => a.trim()));
+  expect(set.has('Bob'), 'the builder Bob must appear in the console').toBeTruthy();
+  expect(set.has('Tess'), 'the tester Tess must appear in the console too').toBeTruthy();
+  // commands are real text (from subject), not empty
+  await expect(page.locator('#exec .xcmd').first()).not.toBeEmpty();
+});
+
+test('pressing play at the end restarts from the top instead of sitting dead', async ({ page }) => {
+  await openRecording(page, 'python-ratelimit');
+  const scrub = page.locator('#replay-scrub');
+  const max = Number(await scrub.getAttribute('max'));
+  await seekTo(page, max);
+  await expect(page.locator('#replay-label')).toContainText(`${max} / ${max}`);
+  await page.locator('#replay-playbtn').click(); // play at end → restart from 0
+  await expect(async () => {
+    const v = Number(await scrub.inputValue());
+    expect(v, 'play-at-end must rewind to the start and play forward').toBeLessThan(max);
+  }).toPass({ timeout: 3000 });
+});
+
+test('the cockpit skin selector re-voices the replay client-side and never leaks into the hero', async ({ page }) => {
+  await openRecording(page, 'golden-run');
+  const skinsel = page.locator('#skinsel');
+  await expect(skinsel).toBeVisible();
+  await expect(skinsel).toHaveValue('ranch'); // default ranch
+  await expect(skinsel.locator('option')).toHaveCount(4); // ranch, flock, matrix, hive
+
+  await skinsel.selectOption('matrix');
+  // matrix re-voices the replay title (SKINS.matrix.replay) — pure client render
+  await expect(page.locator('#replay-title')).toContainText('construct');
+  // the page keeps its own title, not the product's skin subtitle
+  await expect(page).toHaveTitle('Corralai — recordings');
+  // persistence is reset to ranch so the choice is session-only and never
+  // leaks into the landing hero (shared origin)
+  const persisted = await page.evaluate(() => {
+    try { return localStorage.getItem('corral-skin'); } catch (_) { return null; }
+  });
+  expect(persisted, 'the site keeps the persisted skin at ranch so the hero stays clean').toBe('ranch');
+});
+
 test('every recording card corresponds to a committed stream + meta pair', async () => {
   const fs = await import('node:fs');
   const files = fs.readdirSync('src/data/recordings');

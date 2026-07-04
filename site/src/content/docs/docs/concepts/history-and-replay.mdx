@@ -1,6 +1,47 @@
 ---
 title: Mission history + replay
-description: How past missions are recorded and how to step back through one after it finishes.
+description: Every mission is recorded; any finished mission can be replayed exactly as it happened.
 ---
 
-Content for this page lands in a later task of the corralai.dev v2 plan.
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+{/* Source: docs/DESIGN.md P10; internal/brain/history.go, internal/brain/replay.go, internal/ui/ui.go */}
+
+Every finished mission gets a **Completed tab** entry: directive, status,
+duration, task/finding counts, and a best-effort learned-linkage (promoted
+proposals whose signature matches one of the mission's findings) —
+`/api/history` lists all of them, `/api/history/{id}` drills into one
+mission's phases, tasks, findings, and executions.
+
+## Replay reconstructs from durable rows
+
+A **▶ replay** button rebuilds the whole build from durable rows only:
+`BuildReplayStream` merges task lifecycle events (created/claimed/
+done/cancelled/superseded), findings, and executions — plus the telemetry
+event log where present — into one time-ordered stream, served at
+`/api/replay?mission=N`. No positions are ever recorded; the replay client
+recomputes layout itself through the same render path the live canvas uses,
+at 1×–16× with a scrub bar, so the same recording looks right at any window
+size, and live SSE simply pauses while replaying.
+
+## Honest fidelity limits, today
+
+Global-ambience telemetry — `claim_made`/`claim_released`/`host_seen`/
+`memory_written` — is recorded with `mission_id=0` by design and is
+deliberately excluded from this merge; a mission's replay is built from its
+task/finding/execution/mission-event rows alone. A mission recorded before
+richer telemetry shipped, or one with no telemetry at all, still replays
+correctly from those rows (graceful degradation) — it just won't show the
+ambience layer until `mission_id` is threaded through everywhere that emits
+it, an open follow-up, not something this page claims already works.
+
+This is not a demo-only feature: the landing page's hero **is** a real
+recorded mission, replaying through the identical player the product UI uses
+on its own Completed tab — see [the UI tour's Completed
+page](/docs/ui-tour/completed-and-replay/) for the same replay bar inside the
+actual product.
+
+`corral-observe`, a credentialed reverse proxy for remote viewing, forwards
+this same UI — history and replay included — to anyone holding a read-only
+observer token; `corral-top` is a lighter terminal viewport over the
+adjacent live `/api/state` snapshot. See their pages in the [CLI
+reference](/docs/cli/corral-top/).

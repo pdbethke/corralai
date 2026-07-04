@@ -1,6 +1,68 @@
 ---
 title: Trust & security
-description: What corralai will and won't let an agent do, and how that boundary is enforced.
+description: The trust model, the human gate, observer tokens, delegation, and sandbox jails — with honest scope framing.
 ---
 
-Content for this page lands in a later task of the corralai.dev v2 plan.
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+{/* Source: docs/DESIGN.md P9 + security model; docs/superpowers/specs/2026-07-03-human-gate-design.md; README.md security model section; internal/brain/identity.go, internal/sandbox */}
+
+## The human gate
+
+Nothing that changes what future missions do — a memory promotion, a skill
+proposal, a fleet-published skill, a superuser grant — happens without a
+human approving it. One rule, `isHumanAdmin`, guards **thirteen** admin write
+paths (`approve_proposal`, `reject_proposal`, `add_memory(shared=true)`,
+`promote_memory`, `promote_reference`, the UI's proposal-approve/reject
+endpoints, `sync_put`/`sync_delete`, `promote_endpoint`, and the four
+principal-management writes): `isAdmin` **and** no `subagent` claim on the
+token. This is the same gate described in [mission
+lifecycle](/docs/concepts/mission-lifecycle/) and [the learning
+loop](/docs/concepts/memory-and-learning-loop/), stated here as the security
+property it actually is — an agent cannot unilaterally make itself, or a
+later agent, more trusted.
+
+In dev mode there's no cryptographic identity to check, so the same rule
+becomes a **truthfulness guardrail, not a security boundary**: a session that
+names itself `corral-agent` at the MCP handshake, or that calls
+`bootstrap`/`report_host` (every shipped worker does; `corral-admin` never
+does), is marked a worker for that session's life and refused at the same
+gates — workers propose, the operator disposes.
+
+## Delegation, and its documented limit
+
+An agent can spawn an out-of-process subagent with a scoped, TTL-bound
+delegation token: the subagent acts under its own identity, accountability
+rolls up to the spawning principal, and the token dies on schedule
+(depth- and fan-out-capped). **In-process subagents share their parent's
+session and token**, so they're indistinguishable from the parent at the
+gate — the boundary is per-session, and out-of-process delegation is the
+spawn mode that actually matters for autonomous workers. This is a disclosed
+limitation, not a hidden gap: it's why the human gate is described as
+per-session enforcement, not per-agent.
+
+## Observer tokens
+
+A **read-only observer token**, minted via `mint_observer` (or
+`corral-admin mint-observer`), grants view-only access to a brain's live
+state. `corral-observe` uses exactly this token shape, and as defense in
+depth refuses non-GET methods locally even if handed a non-read-only token by
+mistake. Full write access is scoped to authenticated members and superusers
+via the brain's own principal store, seeded day-0 from
+`CORRALAI_ALLOWED_PRINCIPALS`/`CORRALAI_ADMIN_PRINCIPALS` and canonical in the
+database after.
+
+## Sandbox jails
+
+Agent-executed commands run inside a sandbox boundary (`internal/sandbox`) —
+a `bwrap` namespace jail on Linux, workspace-confined with secret-free env —
+rather than directly against the operator's own filesystem. The demo's
+`CLOBBER=1` mode (see [claims & leases](/docs/concepts/claims-and-leases/))
+still runs inside this same sandbox; it only disables coordination claims,
+not the sandbox itself.
+
+## Honest scope
+
+Corralai coordinates agents and enforces process gates — it does not itself
+guarantee the correctness of any given agent's code, model output, or
+judgment. The verify gate, findings, and human review exist because of that
+limit, not instead of it.

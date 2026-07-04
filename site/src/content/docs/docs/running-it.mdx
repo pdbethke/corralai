@@ -1,6 +1,44 @@
 ---
 title: Running it
-description: Standing up a corral end to end, from config to a finished mission.
+description: Dev mode vs auth-on, the demo compose profiles, and deploying a brain behind a tunnel.
 ---
 
-Content for this page lands in a later task of the corralai.dev v2 plan.
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+{/* Source: cmd/corral/main.go env doc block (via cross-link); deploy/demo/README.md, deploy/demo/Makefile */}
+
+## Dev mode vs auth-on
+
+With `CORRALAI_OIDC_ISSUER` unset, the brain runs with auth disabled — any
+caller is trusted. This is for local development only. Setting
+`CORRALAI_OIDC_ISSUER` to any OIDC provider (Keycloak, Auth0, Okta, Dex,
+Authentik, or others) turns auth on: callers must present a valid token for
+that issuer and the configured `CORRALAI_OIDC_AUDIENCE`. Dev mode and
+auth-on run the exact same code paths, so "works on my machine" and "works
+with auth" don't drift apart. See the full env reference on [corral's CLI
+page](/docs/cli/corral/) — every variable there is generated straight from
+the binary's own source comment, not hand-copied.
+
+## The demo compose profiles
+
+`deploy/demo/` brings up the brain plus a small herd of agents against a
+bundled local model, no API keys required. `make demo-mission` is the full
+adaptive-loop showcase (Progress tab: directive → build → re-plan → client
+review → converge); other profiles isolate one thing at a time —
+`coordinated` for the base herd, `clobber` for the same herd with claims
+turned off (a demo of what NOT coordinating looks like), `observe` to add a
+read-only observer console, and `models` for a two-model comparison run. See
+[Getting started](/docs/getting-started/) for the walkthrough.
+
+## Deploying a brain behind a tunnel
+
+The brain listens on `CORRALAI_ADDR` (default `127.0.0.1:9019`) and expects
+to be reached through a reverse tunnel or proxy that terminates TLS and
+forwards to that local address — the general pattern is: run `corral` bound
+to loopback, run a tunnel client (any provider) pointed at that same loopback
+address, and set `CORRALAI_ALLOWED_HOSTS` to the public hostname(s) the
+tunnel exposes so the brain's Host-header check accepts them. Corralai
+supports built-in TLS via `CORRALAI_TLS_CERT`/`CORRALAI_TLS_KEY`, or
+`CORRALAI_TLS_AUTOCERT_DOMAINS` for automatic Let's Encrypt certificates, as
+alternatives to a tunnel for a brain with a public IP. This page describes
+the pattern only — specific tunnel providers, hostnames, and ports are a
+deployment's own operational detail, not part of this doc.

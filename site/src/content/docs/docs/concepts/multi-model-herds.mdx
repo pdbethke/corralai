@@ -1,6 +1,52 @@
 ---
 title: Multi-model herds
-description: Running a corral where different agents are wrangled by different model providers.
+description: Role-based model policy, harness workers bringing their own auth, and model comparison.
 ---
 
-Content for this page lands in a later task of the corralai.dev v2 plan.
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+{/* Source: README.md multi-model + harness sections; internal/rolemodel/rolemodel.go, internal/brain/subagents.go, internal/brain/host.go; docs/DESIGN.md P3 */}
+
+## A role-model policy
+
+Different roles can run different models: `CORRALAI_ROLE_MODELS` maps
+`role=backend:model` pairs — e.g. a pentester and a reviewer on two distinct
+models so `model_comparison` has something real to compare, while builder and
+tester share a cheaper default. When a role's spawn happens and its assigned
+model is already live in the pool, the spawn call resolves the new
+subagent onto it (**apply-on-spawn**); when it isn't yet connected, the child
+inherits the default instead and the gap shows up as **drift** on
+`swarm_topology` rather than a blocked spawn. See [corral's env
+reference](/docs/cli/corral/) for the rest of the brain's environment
+variables.
+
+## Bring your own model, bring your own auth
+
+`corral-harness` workers bring their own model *and* their own auth — e.g. a
+Claude Code agent running on a Claude Pro/Max subscription instead of
+per-call API billing. The herd "contract" is nothing but MCP tool calls
+against the brain (`bootstrap → claim_task → work → complete_task`);
+`corral-agent` is merely the reference implementation of that same contract,
+wired to a local Ollama model by default (`MODEL_BACKEND=ollama`,
+`AGENT_MODEL=qwen2.5-coder:7b`) or any OpenAI-compatible endpoint
+(`MODEL_BACKEND=openai`, e.g. Gemini or OpenRouter). Neither binary is
+special-cased brain-side — both are ordinary MCP clients.
+
+## Comparing models on the same work
+
+`corral-admin analyze` can report on `model_comparison` across a mission's
+agents once more than one model has done work in it — findings raised (by
+severity) and how they were resolved (addressed vs. dismissed vs. still
+open), broken out per model, so an A-vs-B run isn't just a vibe.
+
+## The fleet view
+
+Beyond a single mission, `CORRALAI_MOTHERDUCK` turns on a DuckDB bridge that
+incrementally rolls the coordination audit/action stream from many brains
+into one MotherDuck database, tagged by brain — federation-ready across
+machines. `ask_fleet` is a natural-language oracle over that same rolled-up
+history ("what did agent X do across every mission? who ingested that
+document?"), running its own locked-down DuckDB connection with the local
+filesystem disabled — it can read the MotherDuck-attached fleet tables and
+nothing else on disk. This is real today, not a roadmap slide, though it's
+optional: unset `CORRALAI_MOTHERDUCK` and a brain runs standalone with no
+loss of single-brain function.

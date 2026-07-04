@@ -1,0 +1,16 @@
+/* SPDX-License-Identifier: Elastic-2.0 */
+/* Same amber-on-dark palette as the product UI (internal/ui/web/index.html) —
+   the site and the embedded live player must not visually clash. */
+:root {
+  --bg: #0e1116; --fg: #e6e1d8; --muted: #8a8170; --amber: #e8a838; --red: #e8503a;
+  --line: #33405a; --green: #8fdcab; --panel: #161b22; --sel: #1b2330; --card: rgba(20,25,32,.97);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 16px/1.5 ui-sans-serif, system-ui, Segoe UI, Roboto, sans-serif;
+}
+a { color: var(--amber); }
+h1, h2, h3 { color: var(--fg); }
+.section { max-width: 860px; margin: 0 auto; padding: 48px 20px; }

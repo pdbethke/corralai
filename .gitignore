@@ -47,3 +47,8 @@ deploy/demo/.env
 /corral-harness
 /corral-top
 /corral-observe
+
+# site/ — Astro npm project (isolated from the Go module)
+site/node_modules/
+site/dist/
+site/.astro/

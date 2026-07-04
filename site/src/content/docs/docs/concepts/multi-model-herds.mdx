@@ -36,7 +36,8 @@ special-cased brain-side — both are ordinary MCP clients.
 `corral-admin analyze` can report on `model_comparison` across a mission's
 agents once more than one model has done work in it — findings raised (by
 severity) and how they were resolved (addressed vs. dismissed vs. still
-open), broken out per model, so an A-vs-B run isn't just a vibe.
+open — the open count is derived as raised minus resolved, floored at zero),
+broken out per model, so an A-vs-B run isn't just a vibe.
 
 ## The fleet view
 

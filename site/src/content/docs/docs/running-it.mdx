@@ -23,10 +23,11 @@ the binary's own source comment, not hand-copied.
 `deploy/demo/` brings up the brain plus a small herd of agents against a
 bundled local model, no API keys required. `make demo-mission` is the full
 adaptive-loop showcase (Progress tab: directive → build → re-plan → client
-review → converge); other profiles isolate one thing at a time —
-`coordinated` for the base herd, `clobber` for the same herd with claims
-turned off (a demo of what NOT coordinating looks like), `observe` to add a
-read-only observer console, and `models` for a two-model comparison run. See
+review → converge); the other targets isolate one thing at a time —
+`make demo` for the base coordinated herd, `make demo-clobber` for the same
+herd with claims turned off (a demo of what NOT coordinating looks like),
+`make demo-observe` to add a read-only observer console, and
+`make demo-models` for a two-model comparison run. See
 [Getting started](/docs/getting-started/) for the walkthrough.
 
 ## Deploying a brain behind a tunnel

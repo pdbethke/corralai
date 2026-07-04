@@ -538,8 +538,16 @@ const SEV_RANK = {critical:3, high:2, medium:1, low:0};
 // ---- theme (light / dark) ----
 let C = {};
 function hexA(hex, a){ const h=(hex||'#888').replace('#','').trim(); const n=parseInt(h.length===3?h.replace(/./g,'$&$&'):h,16); return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`; }
+// C drives EVERY swarm-canvas draw — agent labels, selection ring, conflict/
+// quorum halos, claimed-path dots+labels, burst rings, speech/thought bubbles.
+// The canvas is a permanently-dark stage in BOTH chrome themes (see #center),
+// so C MUST source from the theme-invariant --stage-* palette, NOT the chrome
+// --fg/--muted/… tokens. Reading the chrome set painted near-black label text
+// and rings on the dark stage in light mode = invisible nodes. --stage-* is
+// dark in both themes (never overridden by html.light), so labels/rings stay
+// legible whichever chrome theme is active.
 function readColors(){ const s=getComputedStyle(document.documentElement), g=k=>s.getPropertyValue(k).trim();
-  C={fg:g('--fg'),muted:g('--muted'),amber:g('--amber'),red:g('--red'),line:g('--line'),green:g('--green'),panel:g('--panel')}; }
+  C={fg:g('--stage-fg'),muted:g('--stage-muted'),amber:g('--stage-amber'),red:g('--stage-red'),line:g('--stage-line'),green:g('--stage-green'),panel:g('--stage-panel')}; }
 function applyTheme(th){ document.documentElement.classList.toggle('light', th==='light');
   const b=document.getElementById('themebtn');
   if(b){ b.textContent = th==='light'?'☀':'☾'; b.setAttribute('aria-label', th==='light'?'Switch to dark theme':'Switch to light theme'); }

@@ -783,6 +783,54 @@ func TestReplayPlayerStructure(t *testing.T) {
 	if !strings.Contains(player, "devicePixelRatio*viewScale") {
 		t.Error("draw() must apply the view transform via ctx.setTransform(devicePixelRatio*viewScale, ...) once per frame")
 	}
+
+	// The canvas is a PERMANENTLY-DARK stage in both chrome themes (light/dark
+	// toggle themes only the surrounding chrome, never #center). C — the color
+	// object that drives EVERY node/label/ring/halo/bubble the renderer paints
+	// on that stage — must therefore read the theme-invariant --stage-* palette,
+	// NOT the chrome --fg/--muted/… tokens. Reading the chrome set painted the
+	// LIGHT palette (near-black label text, rings) onto the dark stage in light
+	// mode → invisible agents the moment one is on canvas (the 0-agent
+	// screenshot's blind spot). This marker locks readColors() to --stage-*.
+	const rcStart = "function readColors(){"
+	rci := strings.Index(player, rcStart)
+	if rci < 0 {
+		t.Fatalf("could not locate readColors in replay-player.js")
+	}
+	// readColors is a compact 1-2 line function; bound the slice at the next
+	// top-level `\nfunction ` so we inspect only its body (its own form ends in
+	// `; }`, not a bare `\n}`, so a naive `\n}` end-marker over-captures).
+	rce := strings.Index(player[rci+len(rcStart):], "\nfunction ")
+	if rce < 0 {
+		t.Fatalf("could not locate the end of readColors in replay-player.js")
+	}
+	readColorsFn := player[rci : rci+len(rcStart)+rce]
+	for _, tok := range []string{"--stage-fg", "--stage-muted", "--stage-amber", "--stage-red", "--stage-line", "--stage-green", "--stage-panel"} {
+		if !strings.Contains(readColorsFn, tok) {
+			t.Errorf("readColors() must source C from the theme-invariant stage palette, but is missing %q — canvas node/label colors would flip to the chrome light palette on the dark stage and vanish in light mode", tok)
+		}
+	}
+	// Guard against a regression back to the chrome tokens: readColors must not
+	// read the bare chrome --fg/--muted (only their --stage- prefixed forms).
+	for _, bad := range []string{"g('--fg')", "g('--muted')", "g('--amber')", "g('--red')", "g('--green')", "g('--line')", "g('--panel')"} {
+		if strings.Contains(readColorsFn, bad) {
+			t.Errorf("readColors() reads chrome token %s — the canvas layer must use the --stage-* palette so nodes stay legible on the always-dark stage in light mode", bad)
+		}
+	}
+	// The stage palette readColors() depends on must be fully DEFINED in
+	// index.html's :root and — critically — NOT redefined under html.light, so
+	// it stays dark in both themes.
+	for _, decl := range []string{"--stage-fg:", "--stage-muted:", "--stage-amber:", "--stage-red:", "--stage-line:", "--stage-green:", "--stage-panel:", "--stage-bg:"} {
+		if !strings.Contains(indexHTML, decl) {
+			t.Errorf("index.html must define %s (the always-dark canvas palette readColors reads)", decl)
+		}
+	}
+	if li := strings.Index(indexHTML, "html.light {"); li >= 0 {
+		lightBlock := indexHTML[li : li+strings.Index(indexHTML[li:], "}")]
+		if strings.Contains(lightBlock, "--stage-") {
+			t.Error("html.light must NOT override any --stage-* token — the canvas stage stays dark in both themes; overriding it there would re-introduce the light-on-dark invisibility")
+		}
+	}
 	// The extraction must not silently start a live connection from a
 	// brain-less file, and the product page must still start one.
 	if strings.Contains(player, "let es = connectSSE()") {

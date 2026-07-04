@@ -6,5 +6,9 @@
   "duration_seconds": 222.84375166893005,
   "models": [
     "ollama:qwen2.5-coder:7b"
-  ]
+  ],
+  "result": {
+    "url": "https://github.com/pdbethke/corral-run-python-ratelimit",
+    "label": "Browse the code this herd wrote"
+  }
 }

@@ -231,7 +231,8 @@ topology here; historical analytics via MotherDuck → Sigma.
   package 'stack' with a LIFO stack of ints: New, Push, Pop, Peek, Len;
   Pop/Peek return an error on empty. Include table-driven unit tests..."
   ran end to end through real MCP flows (39 tasks, 34 done; 40 findings
-  raised and addressed across two rework rounds; 44 recorded executions) and
+  raised and resolved over repeated fix/verify cycles — the queue's `-r2`
+  rework generation superseded five original tasks; 44 recorded executions) and
   finished `done` in 19m 39s. It appeared in the Completed tab with correct
   duration/counts; **details** rendered phases, findings (type/target/
   severity/outcome), executions (6/44 passed), and an honest "nothing
@@ -265,6 +266,20 @@ topology here; historical analytics via MotherDuck → Sigma.
   replay stream despite the brain-side recording/cap logic being correct and
   tested. Small, well-scoped fix: thread `missionID` into that call at both
   sites in `main.go`.
+- **Lead re-planning can mint an unclaimable role — silent mission deadlock.**
+  Also found during P10's live verification: the lead's rework generation
+  created `secops#1-r2` with role `security` instead of `pentester` — a
+  free-typed role name no running agent registers as. `ClaimNextAs` filters
+  by exact role match, so the task sat `ready` forever; the queue never
+  drains, the mission never leaves `running`, and (because
+  `MissionHistoryList` skips `running` missions) it never even surfaces in
+  the Completed tab — a silent stall with no finding, no log, no visible
+  anomaly. The live run was unblocked by hand-editing the task's `role`
+  column in `corralai_queue.sqlite3`. Fix belongs brain-side (per the
+  standing enforcement directive): validate the role of every enqueued/
+  superseding task against the known role set (registered agents + the
+  phase-template roles) and refuse or coerce loudly, rather than trusting
+  the lead model's free text. Tracked as a follow-up.
 - **Change-request enforcement.** A client change-request that produces zero
   rework tasks should not silently re-gate to `awaiting_review` — the engine
   could require at least one enqueued task (or an explicit lead dismissal with

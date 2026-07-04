@@ -5,6 +5,7 @@ package ui
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
@@ -596,5 +597,105 @@ func TestCompletedDetailGroupsTasksByPhaseName(t *testing.T) {
 	}
 	if strings.Contains(fn, "tasksByPhase[t.role]") || strings.Contains(fn, "tasksByPhase[p.role]") {
 		t.Error("openMissionDetail must NOT group by role — DefaultPlan reuses \"builder\" across build-core and build, so role-keyed grouping double-counts")
+	}
+}
+
+// TestReplayPlayerStructure is a structural/grep check (mirrors
+// TestAgentWindowsStructure) over the served HTML for the replay player: the
+// required client globals/functions, the embed-friendly startReplay(streamOrUrl)
+// indirection (per the binding design constraint: the player's data source is
+// injected, not hard-coupled to a brain/SSE endpoint), and that none of the
+// read-only replay functions issue a POST/mutating fetch.
+func TestReplayPlayerStructure(t *testing.T) {
+	sub, err := fs.Sub(webFS, "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := fs.ReadFile(sub, "index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(raw)
+	markers := []string{
+		`id="replay"`,
+		`id="replay-scrub"`,
+		`let replayEvents = [], replayIdx = 0, replayPlaying = false, replaySpeed = 1`,
+		`function startReplay(streamOrUrl)`,
+		`function openReplay(missionId)`,
+		`function closeReplay()`,
+		`function replayStep()`,
+		`function applyReplayEvent(ev)`,
+		`function seekReplay(target)`,
+	}
+	for _, m := range markers {
+		if !strings.Contains(html, m) {
+			t.Errorf("index.html missing required replay marker: %q", m)
+		}
+	}
+	// Embed-friendliness: startReplay must accept a URL OR an already-resolved
+	// events object/array — that's what lets a static embed hand it a baked
+	// JSON file instead of a live /api/replay URL.
+	const fnStart = "function startReplay(streamOrUrl){"
+	const fnEnd = "// openReplay:"
+	si := strings.Index(html, fnStart)
+	ei := strings.Index(html, fnEnd)
+	if si < 0 || ei < 0 || si >= ei {
+		t.Fatalf("could not locate startReplay..openReplay range in index.html")
+	}
+	startFn := html[si:ei]
+	if !strings.Contains(startFn, "typeof streamOrUrl === 'string'") {
+		t.Error("startReplay must branch on typeof streamOrUrl — a URL is fetched, a plain object/array is used as-is (no hard-coupling to /api/replay)")
+	}
+	if strings.Contains(startFn, "/api/replay") {
+		t.Error("startReplay itself must not hard-code /api/replay — that URL belongs only in openReplay's wrapper call")
+	}
+	// Read-only by construction: none of the replay functions may call a
+	// mutating endpoint.
+	const rStart = "// ---- replay player ----"
+	const rEnd = "// Identity chip:"
+	rsi := strings.Index(html, rStart)
+	rei := strings.Index(html, rEnd)
+	if rsi < 0 || rei < 0 || rsi >= rei {
+		t.Fatalf("could not locate the replay player block in index.html")
+	}
+	replayBlock := html[rsi:rei]
+	if strings.Contains(replayBlock, "method:'POST'") || strings.Contains(replayBlock, `method: 'POST'`) {
+		t.Error("replay player block must be read-only — no POST/mutating fetch")
+	}
+}
+
+// TestReplayEndpoint asserts the read-only /api/replay endpoint: a valid
+// mission returns its reconstructed beat stream as JSON, a store error
+// surfaces as 500, and a missing/non-numeric mission param 400s — exactly
+// the same request-shape as /api/history/{id}, just fed by Deps.Replay
+// (wired to brain.BuildReplayStream in cmd/corral/main.go).
+func TestReplayEndpoint(t *testing.T) {
+	deps := Deps{
+		Replay: func(missionID int64) ([]brain.ReplayEvent, error) {
+			if missionID != 5 {
+				return nil, fmt.Errorf("no such mission")
+			}
+			return []brain.ReplayEvent{{TS: 1, Kind: "task_claimed", Subject: "build"}}, nil
+		},
+	}
+	srv := httptest.NewServer(Handler(deps))
+	defer srv.Close()
+
+	res, err := http.Get(srv.URL + "/api/replay?mission=5")
+	if err != nil || res.StatusCode != 200 {
+		t.Fatalf("GET /api/replay?mission=5: %v status=%v", err, res.StatusCode)
+	}
+	var out struct {
+		Events []brain.ReplayEvent `json:"events"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil || len(out.Events) != 1 {
+		t.Fatalf("decode: %v events=%v", err, out.Events)
+	}
+
+	if res2, _ := http.Get(srv.URL + "/api/replay?mission=999"); res2.StatusCode != 500 {
+		t.Fatalf("store error should surface as 500, got %d", res2.StatusCode)
+	}
+	if res3, _ := http.Get(srv.URL + "/api/replay"); res3.StatusCode != 400 {
+		t.Fatalf("missing mission param should 400, got %d", res3.StatusCode)
 	}
 }

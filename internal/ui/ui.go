@@ -55,6 +55,7 @@ type Server struct {
 	reject          func(id int64, reason string) error
 	historyFn       func() ([]brain.MissionSummary, error)
 	historyDetailFn func(id int64) (*brain.MissionDetail, error)
+	replayFn        func(missionID int64) ([]brain.ReplayEvent, error)
 }
 
 // Handler returns the UI routes: / (the page), /api/me (the viewer's identity +
@@ -113,10 +114,13 @@ type Deps struct {
 	// HistoryDetail drills into one mission's phases/tasks/findings/executions.
 	// Returns (nil, nil) for an unknown id — the handler turns that into 404.
 	HistoryDetail func(id int64) (*brain.MissionDetail, error)
+	// Replay reconstructs a mission's whole build from durable rows for
+	// playback on the canvas. nil => /api/replay is disabled (404).
+	Replay func(missionID int64) ([]brain.ReplayEvent, error)
 }
 
 func Handler(d Deps) http.Handler {
-	s := &Server{coord: d.Coord, mem: d.Mem, gw: d.Gateway, bus: d.Bus, memOwners: d.MemOwners, roles: d.Roles, queue: d.Queue, missions: d.Missions, execs: d.Executions, acts: d.Activity, hosts: d.Hosts, narrator: d.Narrator, tel: d.Telemetry, oracle: d.Oracle, roleModels: d.RoleModels, learn: d.Learn, promote: d.Promote, reject: d.Reject, historyFn: d.History, historyDetailFn: d.HistoryDetail}
+	s := &Server{coord: d.Coord, mem: d.Mem, gw: d.Gateway, bus: d.Bus, memOwners: d.MemOwners, roles: d.Roles, queue: d.Queue, missions: d.Missions, execs: d.Executions, acts: d.Activity, hosts: d.Hosts, narrator: d.Narrator, tel: d.Telemetry, oracle: d.Oracle, roleModels: d.RoleModels, learn: d.Learn, promote: d.Promote, reject: d.Reject, historyFn: d.History, historyDetailFn: d.HistoryDetail, replayFn: d.Replay}
 	mux := http.NewServeMux()
 	sub, _ := fs.Sub(webFS, "web")
 	mux.Handle("/", http.FileServer(http.FS(sub)))
@@ -136,6 +140,7 @@ func Handler(d Deps) http.Handler {
 	mux.HandleFunc("/api/proposal/reject", s.proposalReject)
 	mux.HandleFunc("/api/history", s.history)
 	mux.HandleFunc("/api/history/", s.historyDetail)
+	mux.HandleFunc("/api/replay", s.replay)
 	return mux
 }
 
@@ -278,6 +283,31 @@ func (s *Server) historyDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"mission": d})
+}
+
+// replay reconstructs one mission's whole build for client-side playback —
+// the Completed tab's ▶ replay button. Read-only, same gating as
+// history/historyDetail (a finished mission's recorded beats are no more
+// sensitive than its summary/detail view already exposed): a missing/
+// non-numeric mission param 400s, a store error 500s, nil Deps.Replay 404s
+// (feature disabled).
+func (s *Server) replay(w http.ResponseWriter, r *http.Request) {
+	if s.replayFn == nil {
+		http.NotFound(w, r)
+		return
+	}
+	idStr := r.URL.Query().Get("mission")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if idStr == "" || err != nil {
+		http.Error(w, "mission query param required", http.StatusBadRequest)
+		return
+	}
+	events, err := s.replayFn(id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"events": events})
 }
 
 // me reports the viewer's verified identity and role so the UI can show who's

@@ -199,8 +199,20 @@
   .cm-actions { margin-top:9px; }
   .cm-actions button { border:none; border-radius:5px; padding:4px 12px; font-size:12px; margin-right:8px; }
   .cm-actions .cm-details-btn { background:var(--panel); color:var(--fg); border:1px solid var(--line); cursor:pointer; }
-  .cm-actions .cm-replay-btn { background:var(--panel); color:var(--muted); border:1px solid var(--line); cursor:not-allowed; opacity:.55; }
   #completed-detail { max-width:800px; margin:0 auto 20px; padding:16px 18px; background:var(--panel); border:1px solid var(--line); border-radius:10px; }
+  /* #replay — the player's control bar. Unlike #completed/#progress (full-
+     screen overlays), replay must NOT cover the canvas: the whole point is
+     watching the recorded beats drive the same swarm renderer. So this is a
+     thin fixed bar docked to the bottom, the canvas stays visible above it. */
+  #replay { position:fixed; left:0; right:0; bottom:0; z-index:5; display:none; background:var(--panel);
+    border-top:1px solid var(--line); padding:9px 16px; box-shadow:0 -2px 10px rgba(0,0,0,.25); }
+  #replay.show { display:block; }
+  #replay .row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  #replay .row button { background:var(--panel); color:var(--fg); border:1px solid var(--line); border-radius:5px; padding:4px 12px; font-size:12px; cursor:pointer; }
+  #replay .row button:hover { border-color:var(--amber); }
+  #replay-scrub { flex:1; min-width:160px; }
+  #replay-label { color:var(--muted); font-size:11.5px; min-width:70px; text-align:center; }
+  #replay-title { color:var(--amber); font-size:12px; font-weight:600; margin-right:4px; }
   .cmd-close { float:right; cursor:pointer; color:var(--muted); font-size:13px; }
   .cmd-section-title { color:#6b6452; font-size:11px; text-transform:uppercase; letter-spacing:.5px; margin:14px 0 6px; }
   .cmd-table { width:100%; border-collapse:collapse; font-size:12px; margin:4px 0; }
@@ -356,6 +368,19 @@
   <div id="topology"></div>
   <div id="proposals"></div>
   <div id="completed"><div id="completed-list"></div><div id="completed-detail" style="display:none"></div></div>
+  <div id="replay">
+    <div class="row">
+      <span id="replay-title"></span>
+      <button id="replay-playbtn" onclick="toggleReplayPlay()">▶ play</button>
+      <input type="range" id="replay-scrub" min="0" max="0" value="0" oninput="seekReplay(+this.value)">
+      <span id="replay-label">0 / 0</span>
+      <select onchange="setReplaySpeed(+this.value)" title="playback speed">
+        <option value="1">1×</option><option value="2">2×</option><option value="4">4×</option>
+        <option value="8">8×</option><option value="16">16×</option>
+      </select>
+      <button onclick="closeReplay()">✕ exit replay</button>
+    </div>
+  </div>
   <div id="memory">
     <div id="mlist">
       <div id="mctrl">
@@ -448,22 +473,22 @@ const SKINS = {
            center:'the corral', lasso:true, favicon:'🤠', proposes:'the herd proposes:', proposalsTab:'proposals', completedTab:'completed', noun:'pony', nouns:'ponies',
            sounds:['neigh~','clop clop','*swish*','yeehaw~'],
            caught:['Caught me — no {cmd} on record!','Busted! Never ran {cmd}…','Can’t outride the brand 🤠','No proof, no pass — re-doing it'],
-           brainTag:'the wrangler — MCP coordinator · task queue · verification gate' },
+           brainTag:'the wrangler — MCP coordinator · task queue · verification gate', replay:'🤠 riding the tape back' },
   flock: { label:'🐑 flock', brain:'🐕', worker:'🐑', roles:{scrum:'🐕‍🦺', client:'🧑‍🌾'}, sub:'🐑', subtitle:'— the fold', bg:'grass', tab:'fold', empty:'no agents in the fold yet', warming:'the flock is gathering…',
            center:'the fold', lasso:false, favicon:'🐑', proposes:'the flock proposes:', proposalsTab:'proposals', completedTab:'completed', noun:'sheep', nouns:'sheep',
            sounds:['baa~','baaa..','*nibble*','baa!'],
            caught:['Caught me — no {cmd} on record!','Busted! Never ran {cmd}…','Fleeced! No {cmd} run…','No proof, no pass — re-doing it'],
-           brainTag:'the sheepdog — MCP coordinator · task queue · verification gate' },
+           brainTag:'the sheepdog — MCP coordinator · task queue · verification gate', replay:'🐑 reliving the fold' },
   matrix:{ label:'🕶 matrix', brain:'👁️', worker:'🕶️', roles:{scrum:'📟', client:'🥄'}, sub:'🐇', subtitle:'— the construct', bg:'rain', tab:'construct', honorific:'Mr. ', empty:'no Agents in the construct yet', warming:'loading the construct…',
            center:'the construct', lasso:false, favicon:'🕶️', proposes:'the construct proposes:', proposalsTab:'anomalies', completedTab:'archive', noun:'Agent', nouns:'Agents',
            sounds:['0101..','⋮⋮⋮','*dodge*','follow the 🐇'],
            caught:['There is no {cmd} on record','Busted! Never ran {cmd}…','The gate sees all 👁️','No proof, no pass — re-doing it'],
-           brainTag:'the architect — MCP coordinator · task queue · verification gate' },
+           brainTag:'the architect — MCP coordinator · task queue · verification gate', replay:'🕶️ replaying the construct' },
   hive:  { label:'🐝 hive', brain:null, worker:null, roles:{}, sub:null, subtitle:'— the hive', bg:'comb', tab:'hive', empty:'no bees in the hive yet', warming:'the bees are warming up…',
            center:'the corral', lasso:false, favicon:'🐝', proposes:'the hive proposes:', proposalsTab:'proposals', completedTab:'completed', noun:'bee', nouns:'bees',
            sounds:['buzz..','bzz..','bzzz~','buzz~'],
            caught:['Caught me — no {cmd} on record!','Busted! Never ran {cmd}…','Can’t fake the buzz 🐝','No proof, no pass — re-doing it'],
-           brainTag:'the queen — MCP coordinator · task queue · verification gate' },
+           brainTag:'the queen — MCP coordinator · task queue · verification gate', replay:'🐝 replaying the hive' },
 };
 let skinName = localStorage.getItem('corral-skin') || 'ranch';
 if(!SKINS[skinName]) skinName = 'ranch';
@@ -484,6 +509,8 @@ function setSkin(n){
   const ctab = document.getElementById('tab-completed');
   if(ctab) ctab.textContent = skin().completedTab || 'completed';
   const emp = document.getElementById('empty'); if(emp) emp.textContent = skin().empty;
+  const rtitle = document.getElementById('replay-title');
+  if(rtitle) rtitle.textContent = skin().replay || SKINS.ranch.replay;
   try{ renderBg(); }catch(_){}
   try{ renderExec(); }catch(_){ /* repaint the console's idle line in the new skin's voice */ }
   try{ renderTopology(); }catch(_){ /* first paint may precede state init */ }
@@ -904,9 +931,8 @@ function fmtDuration(sec){
 // renderCompletedTab: the finished-mission list — every non-running mission,
 // newest first (the brain already sorts it that way), each card a directive +
 // status pill + duration/task/finding summary + best-effort learned-signature
-// chips + a details button (opens the drill-down below) and a disabled
-// ▶ replay stub (the player lands in a later task; this button is inert on
-// purpose, not a placeholder someone forgot to wire).
+// chips + a details button (opens the drill-down below) and a live
+// ▶ replay button that calls openReplay(m.id) (the player, wired here).
 function renderCompletedTab(){
   const list = document.getElementById('completed-list');
   if(!list) return;
@@ -920,7 +946,7 @@ function renderCompletedTab(){
         ${(m.learned_signatures||[]).length ? `<div class="cm-learned">learned: ${(m.learned_signatures||[]).map(esc).join(', ')}</div>` : ''}
         <div class="cm-actions">
           <button class="cm-details-btn" onclick="event.stopPropagation(); openMissionDetail(${m.id})">details</button>
-          <button class="cm-replay-btn" disabled title="replay arrives with the player" onclick="event.stopPropagation();">▶ replay</button>
+          <button class="cm-details-btn" title="replay this mission's build" onclick="event.stopPropagation(); openReplay(${m.id});">▶ replay</button>
         </div>
       </div>`).join('');
   }).catch(()=>{ list.innerHTML = '<div class="pmt">could not load mission history.</div>'; });
@@ -975,7 +1001,7 @@ function openMissionDetail(id){
       <div class="cmd-section-title">learning</div>
       ${learned}
       ${pr}
-      <div class="cm-actions"><button class="cm-replay-btn" disabled title="replay arrives with the player">▶ replay</button></div>`;
+      <div class="cm-actions"><button class="cm-details-btn" title="replay this mission's build" onclick="openReplay(${mv.id});">▶ replay</button></div>`;
     el.style.display = 'block';
     el.scrollIntoView({behavior:'smooth', block:'nearest'});
   }).catch(()=>{ el.innerHTML = '<div class="pmt">mission not found.</div>'; el.style.display = 'block'; });
@@ -1340,9 +1366,141 @@ function draw(){
 }
 requestAnimationFrame(draw);
 
-const es = new EventSource('/events');
-es.onmessage = e => { try { apply(JSON.parse(e.data)); } catch(_){} };
-es.onerror = () => { document.getElementById('stat').textContent = 'reconnecting…'; };
+// connectSSE: opens (or re-opens) the live /events stream. Factored out so
+// closeReplay() can restore the exact same wiring it tears down — no
+// duplicated onmessage/onerror pair to drift out of sync.
+function connectSSE(){
+  const src = new EventSource('/events');
+  src.onmessage = e => { try { apply(JSON.parse(e.data)); } catch(_){} };
+  src.onerror = () => { document.getElementById('stat').textContent = 'reconnecting…'; };
+  return src;
+}
+let es = connectSSE(); // `let`, not `const` — replay mode closes and later reopens this
+
+// ---- replay player ----
+// Replays a mission's recorded beat stream through the SAME apply-adjacent
+// canvas machinery (nodes/links/bursts/buzzes, drawn by the one draw() loop
+// above) that the live SSE feed drives — positions are never recorded, they
+// recompute via the live force layout exactly like a live agent would.
+//
+// EMBED-FRIENDLY BY CONSTRUCTION: startReplay(streamOrUrl) is the only entry
+// point that touches replay state, and it takes either a URL (fetched with a
+// plain GET — what the live corral UI uses: '/api/replay?mission='+id) OR an
+// already-resolved {events:[...]} object / bare array. Nothing below this
+// point calls a brain/SSE endpoint directly or assumes one exists — a static
+// corralai.dev embed with no brain running can hand startReplay() a baked
+// JSON file's contents and get the identical player. openReplay(missionId)
+// is just the live-corral convenience wrapper around that URL form.
+let replayEvents = [], replayIdx = 0, replayPlaying = false, replaySpeed = 1, replayTimer = null, replaySSEPaused = false;
+
+function startReplay(streamOrUrl){
+  const load = (typeof streamOrUrl === 'string')
+    ? fetch(streamOrUrl).then(r => r.json()).then(d => d.events || [])
+    : Promise.resolve((streamOrUrl && streamOrUrl.events) || streamOrUrl || []);
+  return load.then(events => {
+    replayEvents = events;
+    replayIdx = 0;
+    replayPlaying = false;
+    if(replayTimer){ clearTimeout(replayTimer); replayTimer = null; }
+    nodes.clear(); links.length = 0; bursts.length = 0; buzzes.length = 0;
+    if(es && !replaySSEPaused){ es.close(); replaySSEPaused = true; } // live mode paused while replaying
+    setView('replay');
+    renderReplayScrub();
+  });
+}
+// openReplay: the live-corral entry point — wraps startReplay with the
+// concrete /api/replay?mission=N URL. Called from the Completed tab's
+// ▶ replay button.
+function openReplay(missionId){
+  startReplay('/api/replay?mission=' + missionId).catch(()=>{});
+}
+function closeReplay(){
+  replayPlaying = false;
+  if(replayTimer){ clearTimeout(replayTimer); replayTimer = null; }
+  if(replaySSEPaused){ es = connectSSE(); replaySSEPaused = false; } // resume live: the events handler pushes a fresh snapshot immediately on connect
+  setView('swarm');
+}
+function toggleReplayPlay(){
+  replayPlaying = !replayPlaying;
+  const btn = document.getElementById('replay-playbtn');
+  if(btn) btn.textContent = replayPlaying ? '⏸ pause' : '▶ play';
+  if(replayPlaying) replayStep();
+}
+function setReplaySpeed(x){ replaySpeed = x || 1; }
+function replayStep(){
+  if(replayIdx >= replayEvents.length){
+    replayPlaying = false;
+    const btn = document.getElementById('replay-playbtn'); if(btn) btn.textContent = '▶ play';
+    return;
+  }
+  applyReplayEvent(replayEvents[replayIdx++]);
+  renderReplayScrub();
+  if(replayPlaying) replayTimer = setTimeout(replayStep, Math.max(16, 250 / replaySpeed));
+}
+// seekReplay: deterministic scrub — rebuild all canvas state from the start
+// of the stream up to the target index. No incremental/differential seek;
+// re-walking the whole prefix is what keeps a seek back and a seek forward
+// produce byte-identical state to just having played there.
+function seekReplay(target){
+  if(replayTimer){ clearTimeout(replayTimer); replayTimer = null; }
+  replayIdx = 0;
+  nodes.clear(); links.length = 0; bursts.length = 0; buzzes.length = 0;
+  while(replayIdx < target && replayIdx < replayEvents.length) applyReplayEvent(replayEvents[replayIdx++]);
+  renderReplayScrub();
+  if(replayPlaying) replayTimer = setTimeout(replayStep, Math.max(16, 250 / replaySpeed));
+}
+// applyReplayEvent: the read-only translation from one ReplayEvent (brain.go's
+// merged, sorted beat stream) into the live canvas's node/link/burst/buzz
+// vocabulary. Unrecognized/telemetry-only kinds (proposal/review/
+// mission_completed/agent_activity, plus finding_resolved) are ignored —
+// graceful degradation, never a thrown error.
+function applyReplayEvent(ev){
+  const now = Date.now()/1000; // same clock draw()'s bursts/buzzes compare against
+  const agentId = ev.actor ? 'a:'+ev.actor : null;
+  const pathId = ev.subject ? 'p:'+ev.subject : null;
+  const an = agentId ? nodes.get(agentId) : null;
+  switch(ev.kind){
+    case 'task_claimed': {
+      if(!agentId) break;
+      const a = ensure(agentId, 'agent', ev.actor);
+      a.role = (ev.detail && ev.detail.role) || a.role || '';
+      a.status = 'working'; a.last = now; a.working = true;
+      if(pathId){
+        const short = (ev.subject||'').split('/').filter(Boolean).pop() || ev.subject;
+        const p = ensure(pathId, 'path', short);
+        p.claimLast = now;
+        links.push({a: a, b: p});
+      }
+      break;
+    }
+    case 'task_done': case 'task_cancelled': case 'task_superseded': {
+      if(an){ an.status = 'idle'; an.working = false; }
+      for(let i=links.length-1; i>=0; i--){ if(links[i].b && links[i].b.id === pathId) links.splice(i,1); }
+      break;
+    }
+    case 'execution': {
+      bursts.push({x: an ? an.x : CW/2, y: an ? an.y : CH/2, t0: now, ok: !!(ev.detail && ev.detail.ok)});
+      break;
+    }
+    case 'finding_reported': {
+      const sev = (ev.detail && ev.detail.severity) || '';
+      const x = (an ? an.x : CW/2) + 8, y = (an ? an.y : CH/2) - 14;
+      buzzes.push({x, y, t0: now, txt: (sev ? sev+': ' : '') + (ev.subject||''), life: 3.2});
+      break;
+    }
+    case 'task_created':
+    default:
+      break; // no visual for queue-entry-only beats — mirrors the live view (unclaimed tasks aren't nodes)
+  }
+}
+function renderReplayScrub(){
+  const scrub = document.getElementById('replay-scrub');
+  if(!scrub) return;
+  scrub.max = replayEvents.length;
+  scrub.value = replayIdx;
+  const label = document.getElementById('replay-label');
+  if(label) label.textContent = replayIdx + ' / ' + replayEvents.length;
+}
 
 // Identity chip: who the brain sees you as + role (superuser controls hang off this).
 let ME = { principal:'', is_superuser:false };
@@ -1373,6 +1531,7 @@ function setView(v){
   document.getElementById('topology').classList.toggle('show', v==='topology');
   document.getElementById('proposals').classList.toggle('show', v==='proposals');
   document.getElementById('completed').classList.toggle('show', v==='completed');
+  document.getElementById('replay').classList.toggle('show', v==='replay');
   // The stage (and its canvas) stay mounted; the tab overlays simply cover them at a
   // higher z-index. Don't display:none the canvas — that zeroes its box and squishes
   // the swarm. resize() re-fits when we come back, but there's nothing to re-fit now.

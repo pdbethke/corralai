@@ -108,6 +108,14 @@ go build -o "$SCRATCH/corral-bin" ./cmd/corral
 if [ -n "${OG_SEED_CMD:-}" ]; then
   # Seeders only touch the paths the env hands them, so they keep the
   # operator's toolchain env (go caches etc.) and just gain the scratch vars.
+  #
+  # !! SAFETY: restoring the real HOME below is safe ONLY for seeders that
+  # never derive paths from $HOME. Any seeder that computes ~/.claude/* paths
+  # — memory seeding especially — MUST keep the scratch HOME (HOME="$FAKEHOME")
+  # instead, because memStore.Build(nil) walks the fixed
+  # ~/.claude/projects/*/memory glob at startup regardless of
+  # CORRALAI_MEMORY_DIR. This exact mistake leaked demo memory files into the
+  # operator's real HOME during the Task 7 UI-tour capture (see ticket #26).
   env "${SAFE_ENV[@]}" HOME="$HOME" bash -c "$OG_SEED_CMD"
 fi
 

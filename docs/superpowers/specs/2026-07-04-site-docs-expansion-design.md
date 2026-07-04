@@ -43,3 +43,14 @@ Light-default is the norm for major OSS sites (react.dev, go.dev, rust-lang.org,
 - Versioned docs, i18n, search analytics.
 - Rewriting the product's usage strings beyond what the generator exposes as inadequate.
 - Blog.
+
+## Part D — Recordings gallery (amended 2026-07-04, user request)
+
+A `/recordings` page: a mix of real recorded missions, not just the one golden run.
+
+- **Data:** `site/src/data/recordings/<slug>.json` + `<slug>.meta.json`, each produced by the SAME export pipeline (deny gate + human manifest — no exceptions); a build-time index enumerates them (Astro glob import, no manifest file to drift).
+- **Meta gains a models field:** the exporter derives the distinct backend:model values seen in the stream (per-role where recoverable) so cards can honestly say what built it — the point is showing DIFFERENT models at work (e.g. the all-local 7B run vs a mixed-model run per CORRALAI_ROLE_MODELS).
+- **Page:** card grid (directive, models, task/finding counts, duration) → click opens the replay player full-width loading that stream (startReplay already takes a stream object — no player changes expected).
+- **Hero unchanged:** the landing keeps its featured golden run; the gallery holds the mix, linked from the landing ("more recordings").
+- **Content for launch:** record at least two contrasting runs (the existing golden run + one with a distinct model mix via the demo's MODELS_* knobs); each through the full gate + human manifest review.
+- Copy discipline, zero-external-requests, and privacy posture identical to the rest of the site.

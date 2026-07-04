@@ -8,14 +8,33 @@ import KnowledgeCorpus from '../components/KnowledgeCorpus.astro';
 import WatchItBack from '../components/WatchItBack.astro';
 import Quickstart from '../components/Quickstart.astro';
 import SiteFooter from '../components/SiteFooter.astro';
+
+const title = 'Corralai — the herd performs live';
+const description = 'Give one directive; watch a herd of AI agents plan, build, verify, and re-plan a real mission live — every run recorded and replayable.';
+const ogTitle = 'Corralai — watch AI agents build, live';
+const url = 'https://corralai.dev/';
 ---
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-  <title>Corralai — the herd performs live</title>
-  <meta name="description" content="Coordinated multi-agent, multi-model AI development, watchable live." />
+  <title>{title}</title>
+  <meta name="description" content={description} />
+  <link rel="canonical" href={url} />
+
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content={ogTitle} />
+  <meta property="og:description" content={description} />
+  <meta property="og:url" content={url} />
+  <meta property="og:image" content="https://corralai.dev/og-image.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content={ogTitle} />
+  <meta name="twitter:description" content={description} />
+  <meta name="twitter:image" content="https://corralai.dev/og-image.png" />
 </head>
 <body>
   <Hero />

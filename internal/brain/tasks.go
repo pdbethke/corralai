@@ -6,9 +6,12 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
+	"sync"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/pdbethke/corralai/internal/coord"
 	"github.com/pdbethke/corralai/internal/learn"
 	"github.com/pdbethke/corralai/internal/queue"
 	"github.com/pdbethke/corralai/internal/telemetry"
@@ -177,11 +180,64 @@ func notifyRecurrence(ls *learn.Store, tel *telemetry.Store, q *queue.Store, fin
 	rec(tel, missionID, "proposal_reopened", reporter, sig, map[string]any{"id": r.ID, "supersedes": r.Supersedes})
 }
 
+// escalationRefusals is the bug-#40 tripwire: after this many verify-gate
+// refusals of the SAME task from the SAME bee, the brain force-releases the
+// stale path leases (holders with no claimed task) that starve remediation,
+// says so loudly, and resets the counter. A-2 died at 21+ silent refusals and
+// C-1 at 35 — both with a long-done agent's 3600s lease pinning the artifact.
+const escalationRefusals = 5
+
 // registerTasks adds the pull-model tools: a bee claims the next ready task it
 // can serve, runs it, and completes it; list_tasks is the live work list.
-func registerTasks(s *mcp.Server, q *queue.Store, lease float64, tel *telemetry.Store, book *HostBook, ls *learn.Store) {
+func registerTasks(s *mcp.Server, store *coord.Store, q *queue.Store, lease float64, tel *telemetry.Store, book *HostBook, ls *learn.Store) {
 	if lease <= 0 {
 		lease = 300
+	}
+
+	// Refusal counts per (task, bee). In-memory on purpose: a brain restart
+	// resetting the tally is harmless — a live loop re-trips it in minutes —
+	// and the deterministic escalation stays free of new persistent state.
+	type refusalKey struct {
+		task int64
+		bee  string
+	}
+	var refusalMu sync.Mutex
+	refusals := map[refusalKey]int{}
+
+	// escalateRefusalLoop is bug-#40 part 2: convert a silent verify-refusal
+	// livelock into visible, recoverable state. Force-release path leases whose
+	// holder has no claimed task (they are done or dead — their leases only
+	// starve whoever must fix the failing verify), and shout in telemetry +
+	// the audit trail so the standup surfaces it.
+	escalateRefusalLoop := func(t *queue.Task, bee string, count int) {
+		holders, err := store.LiveClaimHolders()
+		if err != nil {
+			log.Printf("escalation: LiveClaimHolders: %v", err)
+			return
+		}
+		released := []string{}
+		for _, holder := range holders {
+			if holder == bee {
+				continue // the refused bee's own leases are live work, not the wedge
+			}
+			holds, err := q.HoldsClaimedTask(holder)
+			if err != nil {
+				log.Printf("escalation: HoldsClaimedTask(%q): %v", holder, err)
+				continue
+			}
+			if holds {
+				continue
+			}
+			if n, err := store.ReleaseClaims(holder, nil); err == nil && n > 0 {
+				recordClaimReleased(tel, holder, nil)
+				released = append(released, holder)
+			}
+		}
+		detail := map[string]any{"task_id": t.ID, "bee": bee, "refusals": count, "released_holders": released}
+		log.Printf("ESCALATION (bug #40): task #%d (%s) refused %d times for %s — force-released stale leases of %v",
+			t.ID, t.Key, count, bee, released)
+		rec(tel, t.MissionID, "verify_refusal_escalation", "brain", t.Key, detail)
+		store.Audit("brain", "escalation", detail)
 	}
 
 	mcp.AddTool(s, &mcp.Tool{Name: "claim_task",
@@ -235,6 +291,19 @@ func registerTasks(s *mcp.Server, q *queue.Store, lease float64, tel *telemetry.
 						return nil, completeTaskOut{}, fmt.Errorf("gate finding: %w", err)
 					}
 					rec(tel, t.MissionID, "finding_reported", "verify-gate", t.Key, map[string]any{"type": "regression", "severity": "high"})
+					// Bug #40: count the refusal; on the Nth, escalate (release
+					// stale leases + shout) and reset so it can fire again.
+					refusalMu.Lock()
+					k := refusalKey{task: in.ID, bee: bee}
+					refusals[k]++
+					count := refusals[k]
+					if count >= escalationRefusals {
+						delete(refusals, k)
+					}
+					refusalMu.Unlock()
+					if count >= escalationRefusals {
+						escalateRefusalLoop(t, bee, count)
+					}
 					return nil, completeTaskOut{OK: false,
 						Message: "refused: no successful '" + t.Verify + "' run is on record for this mission — run it, fix the failures, then complete"}, nil
 				}
@@ -242,6 +311,18 @@ func registerTasks(s *mcp.Server, q *queue.Store, lease float64, tel *telemetry.
 			ok, err := q.Complete(in.ID, bee, in.Result)
 			if err != nil {
 				return nil, completeTaskOut{}, err
+			}
+			if ok {
+				// Bug #40 part 1: a completed bee's path leases are dead weight —
+				// the work that justified them is done, and A-2/C-1 both livelocked
+				// on exactly such a lease. Same cleanup despawn already does.
+				refusalMu.Lock()
+				delete(refusals, refusalKey{task: in.ID, bee: bee})
+				refusalMu.Unlock()
+				if n, rerr := store.ReleaseClaims(bee, nil); rerr == nil && n > 0 {
+					recordClaimReleased(tel, bee, nil)
+					log.Printf("queue: released %d path lease(s) of %s on task #%d completion", n, bee, in.ID)
+				}
 			}
 			mid, _ := q.MissionOfTask(in.ID)
 			if ok {
@@ -362,9 +443,32 @@ func registerTasks(s *mcp.Server, q *queue.Store, lease float64, tel *telemetry.
 			return nil, okOut{OK: ok}, err
 		})
 
+	// checkStaffedRole is the bug-#23 guard: a task whose role the mission has
+	// never staffed can never be claimed, and MissionDone's zero-open-tasks bar
+	// then holds the mission open forever (the role deadlock — a re-planning
+	// lead LLM invents "performance" where the pipeline staffs "perf"). Refuse
+	// loudly, naming the valid roles, so the lead can self-correct on retry.
+	checkStaffedRole := func(missionID int64, role string) error {
+		roles, err := q.MissionRoles(missionID)
+		if err != nil || len(roles) == 0 {
+			return err // nothing to validate against — let it through
+		}
+		for _, r := range roles {
+			if r == role {
+				return nil
+			}
+		}
+		return fmt.Errorf("refused: this mission staffs no %q agents — a task with that role would never be claimed and would deadlock the mission; use one of: %s", role, strings.Join(roles, ", "))
+	}
+
 	mcp.AddTool(s, &mcp.Tool{Name: "supersede_task",
-		Description: "Replace a stale task with a reworked one (old → superseded; the replacement carries the lineage). Pending dependents are rewritten to wait on the replacement, so the plan stays valid."},
+		Description: "Replace a stale task with a reworked one (old → superseded; the replacement carries the lineage). Pending dependents are rewritten to wait on the replacement, so the plan stays valid. The role must be one the mission already staffs."},
 		func(_ context.Context, req *mcp.CallToolRequest, in taskSpecIn) (*mcp.CallToolResult, supersedeOut, error) {
+			if mid, err := q.MissionOfTask(in.OldID); err == nil && mid != 0 {
+				if err := checkStaffedRole(mid, in.Role); err != nil {
+					return nil, supersedeOut{}, err
+				}
+			}
 			newID, err := q.SupersedeTask(in.OldID, in.spec())
 			if err != nil {
 				return nil, supersedeOut{}, err
@@ -374,10 +478,13 @@ func registerTasks(s *mcp.Server, q *queue.Store, lease float64, tel *telemetry.
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "enqueue_task",
-		Description: "Add a new task to a running mission (rework the lead decided is needed). It joins the queue and the hive picks it up."},
+		Description: "Add a new task to a running mission (rework the lead decided is needed). It joins the queue and the hive picks it up. The role must be one the mission already staffs."},
 		func(_ context.Context, req *mcp.CallToolRequest, in taskSpecIn) (*mcp.CallToolResult, okOut, error) {
 			if in.MissionID == 0 {
 				return nil, okOut{}, fmt.Errorf("mission_id required")
+			}
+			if err := checkStaffedRole(in.MissionID, in.Role); err != nil {
+				return nil, okOut{}, err
 			}
 			err := q.Enqueue(in.MissionID, []queue.TaskSpec{in.spec()})
 			if err == nil {

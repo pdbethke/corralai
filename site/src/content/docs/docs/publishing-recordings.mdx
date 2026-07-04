@@ -1,0 +1,103 @@
+---
+title: Publishing recordings
+description: The pipeline from a converged mission to a public, replayable recording — deny gate, human manifest, result repos, and the analysis doc.
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+{/* Source of truth: scripts/export-golden-run.sh, scripts/scrub-golden-run.py, site/tests/site.spec.ts (deny glob), site/scripts/build-analytics.mjs */}
+
+Every card on [the recordings gallery](/recordings/) is a real mission that
+ran to convergence and then walked through this pipeline. Nothing on that
+page is synthesized for marketing; the pipeline exists so that honesty is
+cheap and leaks are hard.
+
+## The five artifacts
+
+A published recording is up to five pieces, all keyed by one slug:
+
+1. **The tape** — `site/src/data/recordings/<slug>.json`, the mission's raw
+   `/api/replay` event stream, plus its `.meta.json` sidecar (directive,
+   task/finding counts, duration, `models`, `platform`, `result`).
+2. **Analytics** — rebuilt at site build time by
+   `site/scripts/build-analytics.mjs` (DuckDB over every committed tape); no
+   hand-maintained numbers.
+3. **The analysis doc** — an optional `<slug>.analysis.md` sibling: what the
+   herd was asked, how it went, the honest warts, what we learned. Rendered
+   below the player when the recording is selected.
+4. **The result repo** — the run's unedited workspace, pushed to a public
+   repo the card links to ("browse what it built").
+5. **The platform line** — probed at export time (`--platform-inference`,
+   nvidia-smi, `/proc`): what hardware and inference actually ran the herd.
+
+## The pipeline
+
+### 1. Record a mission
+
+Run one to convergence — a demo stack (`make demo-mission` in `deploy/demo/`)
+or a real brain. The brain records the replay stream as a side effect of
+coordination; there is no separate "recording mode".
+
+### 2. Export through the gate
+
+```bash
+bash scripts/export-golden-run.sh --slug <slug>
+```
+
+Two layers, in order, both in the script — see it for the full behavior:
+
+- **The deny-list scan** (`scripts/scrub-golden-run.py`) is the floor: it
+  fails the export loudly on username/hostname/private-IP/credential-shaped
+  content. It always runs and cannot be skipped.
+- **The human manifest** is the ceiling: the script prints every path-like
+  string, URL, and actor name found in the stream, plus the probed platform
+  values, and waits for a human `y`. The scan catches what a regex can
+  catch; the manifest exists because a human recognizes *their own* private
+  detail in a way no pattern can. Everything in a demo-shaped run should
+  read synthetic (role names, `/work`-rooted paths) — anything that doesn't
+  is the reason this step is interactive. Never `--yes` on a first export.
+
+Exporting from an authed production brain needs `--bearer` **and**
+`--i-know`: recorded actors there can be real principal emails, which is
+exactly what the manifest review must catch before it ships.
+
+The same deny discipline follows the files after export: the site's e2e
+suite scans every committed tape *and* every `.analysis.md` on every run.
+
+### 3. The result repo
+
+Preserve the converged workspace, review it by eye (same standard as the
+manifest — it ships verbatim), then push it with a README stating it was
+built by a corralai herd, unedited, linking back to the gallery. Three
+target options:
+
+- **GitHub via `gh` CLI** — the interactive operator path: authenticate
+  once, `gh repo create <owner>/corral-run-<slug> --public --source . --push`.
+- **GitHub via a fine-grained PAT** — the automation/CI path: a token
+  scoped to *only* the `corral-run-*` repos (contents: read/write, nothing
+  else), so the pipeline holds least-privilege credentials per the
+  [trust model](/docs/concepts/trust-and-security/). Both GitHub paths
+  drive the same API.
+- **Any self-hosted forge (e.g. Gitea)** — the pipeline is plain
+  `git push`, so a private or team forge works unchanged. Same
+  least-privilege pattern, stated generically: a dedicated bot account
+  owning only its own namespace, a token with repository-write scope and
+  nothing broader, branch protection on anything shared.
+
+Public GitHub is the showcase path — the gallery links resolve for anyone.
+A self-hosted forge is the private/team path: same artifacts, scoped
+audience.
+
+### 4. Analysis + linking
+
+Write (or, once [#41] lands, have the herd draft) `<slug>.analysis.md`, and
+set `meta.result` to the repo's `{url, label}` so the card grows its link.
+The analysis is human-gated with everything else — it ships in the same
+review as the manifest materials.
+
+### 5. Commit
+
+Commit the tape + meta + analysis together; CI rebuilds analytics and
+deploys the site. The gallery enumerates recordings by glob — committing
+the files *is* publishing them.
+
+[#41]: https://github.com/pdbethke/corralai/issues

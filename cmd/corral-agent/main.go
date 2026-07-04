@@ -47,6 +47,25 @@ func env(k, d string) string {
 	return d
 }
 
+func usageText() string {
+	return `corral-agent — reference LLM-driven agent for the demo (local Ollama by default)
+
+Usage:
+  corral-agent            connect to the brain and work the queue
+  corral-agent --version  print the build version and exit
+  corral-agent -h         print this help and exit
+
+Env:
+  CORRAL_BRAIN       brain URL (default http://127.0.0.1:9019/mcp/)
+  AGENT_ROLE         builder | tester | pentester | reviewer (default builder)
+  AGENT_NAME         display name in the swarm UI (default same as AGENT_ROLE)
+  AGENT_WORKSPACE    working directory for edits (default $TMPDIR/corral-demo-ws)
+  MODEL_BACKEND      ollama (default) | openai (Gemini/OpenRouter/local, any OpenAI-compatible endpoint)
+  AGENT_MODEL        model name passed to the backend (default qwen2.5-coder:7b)
+  CLOBBER            set "1" to ignore coordination conflicts and edit anyway (demo of what NOT coordinating looks like)
+`
+}
+
 // ---- Ollama (function-calling chat) ----
 
 type omsg struct {
@@ -128,6 +147,10 @@ func main() {
 	for _, a := range os.Args[1:] {
 		if a == "--version" || a == "-version" || a == "version" || a == "-v" {
 			fmt.Println("corral-agent", version)
+			return
+		}
+		if a == "-h" || a == "--help" || a == "help" {
+			fmt.Print(usageText())
 			return
 		}
 	}
@@ -244,7 +267,9 @@ func main() {
 	ctrl := admission.FromEnv()
 	spawnConfiguredChildren(ctrl, brain, name, brainURL)
 
-	tools := agentTools()
+	// The simulated edit_file only ships to the ticket-demo modes; queue-mode
+	// mission bees get write_file only (see agentTools).
+	tools := agentTools(env("AGENT_MODE", "queue") != "queue")
 
 	// queue mode (default): pull tasks and execute them. lead mode: the judgment
 	// tier — read open findings + the plan and re-architect via the mutation tools.
@@ -996,7 +1021,14 @@ func dispatch(name, role, ws string, brain func(string, map[string]any) string, 
 	}
 }
 
-func agentTools() []any {
+// agentTools builds the model-facing tool list. includeSimEdit gates the
+// SIMULATED edit_file (dispatch appends "// [name] <one-line summary>" to the
+// target file — the coordinated/clobber demos' visible-trample mechanism):
+// ticket mode needs it, but a queue-mode mission bee that picks it over
+// write_file corrupts its own artifact with squashed comment lines, and a
+// verify-gated task ("go build") then livelocks — the gate can never pass.
+// Mission bees write real files with write_file only.
+func agentTools(includeSimEdit bool) []any {
 	fn := func(name, desc string, props map[string]any, req ...string) any {
 		if req == nil {
 			req = []string{} // a no-arg tool must still send required:[] (a list), not null —
@@ -1008,17 +1040,20 @@ func agentTools() []any {
 		}}
 	}
 	strArr := map[string]any{"type": "array", "items": map[string]any{"type": "string"}}
-	editFile := fn("edit_file", "Make a change to a file (records the edit in the workspace).",
-		map[string]any{"path": map[string]any{"type": "string"}, "change": map[string]any{"type": "string", "description": "what you changed"}}, "path", "change")
 	str := map[string]any{"type": "string"}
-	return []any{
+	tools := []any{
 		fn("write_file", "Write the FULL content of a file in the workspace — a real file, the actual artifact (not a note). Use this to build.",
 			map[string]any{"path": str, "content": str}, "path", "content"),
 		fn("run_command", "Run a shell command in the workspace (build, run the tests, execute the program) and get its exit code + output. VERIFY your work with real execution rather than assuming it works.",
 			map[string]any{"command": str}, "command"),
 		fn("claim_paths", "Lease files/dirs before editing so peers don't collide. Returns {granted, conflicts}.",
 			map[string]any{"paths": strArr, "reason": map[string]any{"type": "string"}}, "paths"),
-		editFile,
+	}
+	if includeSimEdit {
+		tools = append(tools, fn("edit_file", "Record a change note on a file (appends an attributed one-line comment — the demo's visible edit marker, NOT a code editor).",
+			map[string]any{"path": map[string]any{"type": "string"}, "change": map[string]any{"type": "string", "description": "what you changed"}}, "path", "change"))
+	}
+	tools = append(tools,
 		fn("mark_done", "Record that you finished work on some paths so peers don't redo it.",
 			map[string]any{"summary": map[string]any{"type": "string"}, "paths": strArr}, "summary"),
 		fn("release_claims", "Release your leases when done so peers can take the files.",
@@ -1045,7 +1080,8 @@ func agentTools() []any {
 				"evidence":         map[string]any{"type": "string", "description": "what you observed"},
 				"suggested_action": map[string]any{"type": "string", "description": "how to fix it"},
 			}, "type", "severity"),
-	}
+	)
+	return tools
 }
 
 func jsons(v any) string { b, _ := json.Marshal(v); return string(b) }

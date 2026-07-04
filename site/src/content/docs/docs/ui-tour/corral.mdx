@@ -1,0 +1,68 @@
+---
+title: The corral (canvas view)
+description: The main canvas where agents, tasks, and claims show up as they happen.
+---
+
+The corral is the default tab: every active agent renders as a moving node,
+connected by a line to each file path it currently holds a claim on. Click
+any agent — on the canvas, or in the roster on the right — to open its
+floating detail window: what it's working on, which paths it holds, its
+recent activity, and the memory entries it can recall.
+
+## Anatomy of the cockpit
+
+The corral isn't just the canvas — it's five regions working together, all
+fed by the same `/api/state` snapshot:
+
+- **Header stats** (top center) — a running `N agents · N claims` count, plus
+  a `· N ⏸` suffix whenever an agent is parked awaiting approval.
+- **Left rail — tasks** — every task in every active mission's queue, newest
+  work first, each row showing its phase, role, and (once claimed or done)
+  the agent's name behind a `←` arrow.
+- **Canvas (center)** — the live force-directed graph: an agent node per
+  active agent, a path node per claimed file, and a line between them for
+  every live claim. Two agents claiming the same path draw two lines to one
+  path node — the shared node *is* the conflict.
+- **Right rail — agents & findings** — a roster of every active agent with
+  its most recent command line, and below it the findings panel: every open
+  finding, highest severity first, with a `⚠ N high` counter when anything
+  critical or high-severity is open.
+- **Bottom — live console** — the real command lines agents actually ran
+  (`report_execution`), newest lines at the bottom like a tailing log, with a
+  ✓/✗/⏱ result badge on each and per-agent filter chips so you can isolate
+  one agent's stream.
+
+![The corral cockpit mid-mission: header reads "5 agents · 5 claims · 1 ⏸"; the left rail lists 22 tasks ("1 CLAIMED · 1 READY · 3 DONE") including build claimed by Nell and three done rows credited to Wren, Tavo, and Nell; the canvas shows five agent nodes — Wren the researcher, Piper the tester, Nell the builder, Rook the pentester, and Tavo the designer — with claim lines to retry-notes.md, retry_test.go, retry.go, and retry-design.md, a red conflict line where Nell and Rook both hold retry.go, and an amber dashed ring on Rook marking it "awaiting approval"; the right rail lists all five agents with their latest command and a findings panel reading "FINDINGS · 4 OPEN ⚠ 2 HIGH" with one finding at each severity — critical, high, medium, and low — all on internal/ingest files; the bottom strip reads "LIVE CONSOLE · 8" with ALL/WREN/PIPER/NELL/ROOK/TAVO filter chips and real scrolled command lines including a failing `go vet` and a passing `go test`](../../../../assets/ui-tour/corral.png)
+
+## The agent-detail window
+
+Click any agent to open its floating detail window: what it's working on,
+which paths it holds, its recent activity, and — at the bottom — the memory
+entries it can recall.
+
+![A floating agent-detail window for Nell (builder, ollama:local-7b) showing it has been active 3 minutes, is working on "build: add exponential backoff to the ingest retry helper", holds a claim on internal/ingest/retry.go, and lists "MEMORY IT CAN RECALL (5)" with five obviously-synthetic demo entries: demo-corral-tour-lesson-ci-order, demo-corral-tour-lesson-fake-fixture, demo-corral-tour-lesson-retry-jitter, demo-corral-tour-note-scratch-brain, and demo-corral-tour-note-table-tests](../../../../assets/ui-tour/agent-window.png)
+
+The memory-recall list above isn't scoped to Nell specifically — every
+agent's window fetches it from the same call
+(`s.mem.List(...)` inside `agentDetail` in `internal/ui/ui.go`) that backs
+the Memory tab, capped at 8 entries and filtered only by the *viewer's* own
+visibility (private vs. shared). So an agent can only ever recall what the
+brain's own memory store actually holds — never anything else, and never
+more than what the person looking at the window is themselves allowed to
+see.
+
+## Matrix skin
+
+The header's skin selector (`#skinsel`, defined by the `SKINS` table in
+`internal/ui/web/replay-player.js`) re-voices the same live mission in a
+different vocabulary. Switching to `matrix` renames the corral to "the
+construct" and its tabs (`proposals` → `anomalies`, `completed` → `archive`),
+prefixes every agent's displayed name with "Mr. ", swaps the ranch/grass
+background for falling green glyphs (`renderBg`'s `rain` case, drawn by
+`drawRain`), and reworks each role's in-character chatter lines
+(`ROLE_LINES.matrix`) into construct-flavored quips. None of that touches the
+underlying mission: `setSkin()` only rewrites DOM text and re-renders the
+canvas background — the same tasks, claims, findings, and live-console lines
+are still there underneath, just relabeled.
+
+![The same seeded scene as above, switched to the matrix skin: the header reads "CorralAI — the construct" with tabs relabeled "anomalies" and "archive", a falling-green-glyph background behind the canvas, every agent name prefixed "Mr." (Mr. Nell, Mr. Piper, Mr. Tavo, Mr. Wren, Mr. Rook), and the identical five claims, four findings, and eight live-console lines from the ranch-skin screenshot above](../../../../assets/ui-tour/corral-matrix-skin.png)

@@ -33,11 +33,39 @@ func TestExpandSubstitutesWholeToken(t *testing.T) {
 }
 
 func TestBeePromptCarriesTheContract(t *testing.T) {
-	p := beePrompt("Cody", "builder", "host-1", "claude (headless harness)")
+	p := beePrompt("Cody", "builder", "host-1", "claude (headless harness)", "", "")
 	for _, must := range []string{
 		"bootstrap", "claim_task", "complete_task", "claim_paths",
 		"report_finding", "report_execution", "search_memory", "add_memory",
 		"IDLE", `"roles":["builder"]`, `"instance":"host-1"`, "EXACTLY ONE task",
+	} {
+		if !strings.Contains(p, must) {
+			t.Fatalf("bee prompt missing %q:\n%s", must, p)
+		}
+	}
+	// Without a declared model there must be no report_host step — the brain
+	// would record an empty model for the bee.
+	if strings.Contains(p, "report_host") {
+		t.Fatalf("bee prompt must not mention report_host when no model is declared:\n%s", p)
+	}
+}
+
+// Model attribution: findings are stamped from the HostBook, which only
+// report_host feeds. A harness bee that never calls report_host files
+// findings that show as "(not recorded)" in model_comparison — so when the
+// operator declares AGENT_MODEL/AGENT_BACKEND, the prompt must instruct the
+// harness to announce them.
+func TestBeePromptAnnouncesDeclaredModel(t *testing.T) {
+	p := beePrompt("Cody", "reviewer", "host-1", "codex (headless harness)", "gpt-5.1-codex", "openai")
+	for _, must := range []string{
+		"report_host",
+		`"model":"gpt-5.1-codex"`,
+		`"backend":"openai"`,
+		// jail is a REQUIRED report_host param — without it in the example the
+		// first call errors and the harness burns a retry (seen live: Gemini
+		// CLI got "params must have required property 'jail'" and had to
+		// self-correct).
+		`"jail":"none"`,
 	} {
 		if !strings.Contains(p, must) {
 			t.Fatalf("bee prompt missing %q:\n%s", must, p)

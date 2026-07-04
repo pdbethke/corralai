@@ -157,3 +157,37 @@ func TestSetupExecNetworkOptIn(t *testing.T) {
 		t.Fatal("AGENT_EXEC_NET=1 must map to execRuntime.network=true")
 	}
 }
+
+// The simulated edit_file (append "// [name] <one-line>" — the clobber demo's
+// visible-trample mechanism) must NOT be offered to queue-mode mission bees:
+// a model that picks it over write_file corrupts real artifacts with squashed
+// comment lines, and the mission's verify gate ("go build") can then never
+// pass — a livelock observed live in the demo-models profile (build-core
+// refused 15+ times while stack.go filled with "// [Bob] …" lines).
+func TestQueueToolsOmitSimulatedEditFile(t *testing.T) {
+	names := func(tools []any) map[string]bool {
+		out := map[string]bool{}
+		for _, tl := range tools {
+			b, _ := json.Marshal(tl)
+			var v struct {
+				Function struct {
+					Name string `json:"name"`
+				} `json:"function"`
+			}
+			_ = json.Unmarshal(b, &v)
+			out[v.Function.Name] = true
+		}
+		return out
+	}
+	q := names(agentTools(false))
+	if q["edit_file"] {
+		t.Fatal("queue-mode tools must not include the simulated edit_file")
+	}
+	if !q["write_file"] || !q["run_command"] {
+		t.Fatal("queue-mode tools must keep write_file + run_command")
+	}
+	d := names(agentTools(true))
+	if !d["edit_file"] {
+		t.Fatal("demo/ticket-mode tools must keep the simulated edit_file (the clobber demo depends on it)")
+	}
+}

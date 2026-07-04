@@ -1,0 +1,12 @@
+---
+title: Progress
+description: The tab that tracks a mission's tasks from queued through verified.
+---
+
+The Progress tab lists every mission — running or done — with its full task
+queue underneath, grouped in dependency order and colored by status. This is
+the queue [claims and verify](/docs/concepts/queue-and-verify/) act on: a
+task shown as "claimed" has an active claim on it right now; one shown as
+"pending" is waiting on a dependency that hasn't finished yet.
+
+![The Progress tab showing two missions: "migrate the queue storage to duckdb" (DONE, 11/11 tasks, one low-severity finding) with its full research→design→build→test→secops→perf→integrate→docs→retro chain complete, and "add exponential backoff to the ingest retry helper" (RUNNING, 3/11 tasks) with research/design/build-core done, "build" claimed by Nell, and the remaining test/secops/perf/integrate/docs/retro tasks still pending](../../../../assets/ui-tour/progress.png)

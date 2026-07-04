@@ -123,3 +123,42 @@ func TestBuildReplayStreamDegradesGracefullyWithNoTelemetry(t *testing.T) {
 		t.Fatal("a mission with only task rows must still yield a playable (non-empty) stream")
 	}
 }
+
+// TestBuildReplayStreamCarriesModel: model identity must ride through the
+// stream from BOTH sources that know it — the queue's findings table
+// (reporter_model/reporter_backend) and the telemetry event log's model
+// column — so an exported recording is self-describing about what models
+// built it (site Part D derives meta.models and per-model analytics from
+// the committed stream alone; it never sees the brain's telemetry DB).
+func TestBuildReplayStreamCarriesModel(t *testing.T) {
+	q, tel, mid := seedReplayMission(t)
+	if _, err := q.AddFinding(queue.Finding{MissionID: mid, Reporter: "bee2", Type: "bug",
+		Severity: "high", Target: "y.go", ReporterModel: "qwen2.5-coder:7b", ReporterBackend: "ollama"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tel.Record(telemetry.Event{MissionID: mid, Kind: "finding_reported",
+		Actor: "bee2", Subject: "y.go", Model: "qwen2.5-coder:7b"}); err != nil {
+		t.Fatal(err)
+	}
+	events, err := BuildReplayStream(q, tel, mid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var queueSide, telSide bool
+	for _, ev := range events {
+		if ev.Kind != "finding_reported" || ev.Subject != "y.go" || ev.Model != "qwen2.5-coder:7b" {
+			continue
+		}
+		if b, _ := ev.Detail["backend"].(string); b == "ollama" {
+			queueSide = true // queue-derived: has reporter_backend in detail
+		} else {
+			telSide = true // telemetry-derived: model column only
+		}
+	}
+	if !queueSide {
+		t.Error("queue-derived finding_reported must carry Model + detail.backend from reporter_model/reporter_backend")
+	}
+	if !telSide {
+		t.Error("telemetry-derived finding_reported must carry Model from the telemetry model column")
+	}
+}

@@ -370,6 +370,28 @@ func activeClaimsTx(tx *sql.Tx, n float64) ([]activeClaim, error) {
 	return scanActiveClaims(rows)
 }
 
+// LiveClaimHolders returns the distinct agents holding live (unreleased,
+// unexpired) path leases. The bug-#40 escalation checks each holder against
+// the task queue: one with no claimed task is stale, and its leases are
+// force-released so they stop starving the bees still working.
+func (s *Store) LiveClaimHolders() ([]string, error) {
+	rows, err := s.db.Query(
+		"SELECT DISTINCT agent_name FROM claims WHERE released_ts IS NULL AND expires_ts > ? ORDER BY agent_name", now())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		out = append(out, name)
+	}
+	return out, rows.Err()
+}
+
 // ClaimPaths leases paths. Exclusive claims are ENFORCED: if an enforcing exclusive
 // holder overlaps, the path is NOT granted and the conflict is reported. The whole
 // check+insert runs in one transaction so a race yields exactly one winner.

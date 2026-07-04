@@ -32,7 +32,9 @@
 //
 // Optional, null-guarded (safe to omit entirely): #empty, #stat, #skinsel,
 // #skinsub, #tab-swarm, #tab-proposals, #proposals-badge, #tab-completed,
-// #themebtn.
+// #themebtn — and the replay-cockpit panels #exec, #tasks, #agents, #findings
+// (when present, replay populates them from the tape; the canvas-only hero
+// omits them and loses nothing).
 //
 // To start a live SSE-driven view (the product page only — a static replay
 // embed never calls this): `es = connectSSE();`
@@ -60,19 +62,211 @@ addEventListener('resize', resize);
 new ResizeObserver(resize).observe(cv);   // re-fit when the cell changes (tab switches, window)
 resize();
 
+// ---- view transform: wheel-zoom + drag-pan over the corral ----
+// screen = world*viewScale + viewOffset. All node physics/layout stay in
+// world coordinates (CW/CH space); draw() applies the transform once per
+// frame via ctx.setTransform, and every consumer of a canvas mouse event
+// must go through canvasToWorld() for hit-testing (see index.html).
+let viewScale = 1, viewOX = 0, viewOY = 0;
+const VIEW_MIN = 0.4, VIEW_MAX = 4;
+let viewDidPan = false;   // set by a completed drag-pan; eats the click that follows
+function screenToWorld(sx, sy){ return { x: (sx - viewOX)/viewScale, y: (sy - viewOY)/viewScale }; }
+function canvasToWorld(ev){
+  const r = cv.getBoundingClientRect();
+  return screenToWorld(ev.clientX - r.left, ev.clientY - r.top);
+}
+function getViewTransform(){ return { scale: viewScale, x: viewOX, y: viewOY }; }
+function resetView(){ viewScale = 1; viewOX = 0; viewOY = 0; }
+function zoomAt(sx, sy, factor){
+  const ns = Math.min(VIEW_MAX, Math.max(VIEW_MIN, viewScale * factor));
+  // keep the world point under the cursor fixed: it maps to the same screen
+  // px before and after the scale change, so the offset absorbs the delta.
+  viewOX = sx - (sx - viewOX) * (ns / viewScale);
+  viewOY = sy - (sy - viewOY) * (ns / viewScale);
+  viewScale = ns;
+}
+cv.addEventListener('wheel', ev => {
+  ev.preventDefault();
+  dismissViewHint();
+  const r = cv.getBoundingClientRect();
+  // Trackpad pinch arrives as the SAME 'wheel' event with ctrlKey set (the
+  // browser's own convention for "prevent page zoom, handle it yourself").
+  // It tends to report much larger per-tick deltaY than a physical wheel
+  // notch, so it gets a gentler coefficient to land at a comparable feel.
+  const k = ev.ctrlKey ? 0.008 : 0.0015;
+  zoomAt(ev.clientX - r.left, ev.clientY - r.top, Math.exp(-ev.deltaY * k));
+}, { passive: false });
+// drag-to-pan: only engages after a small movement threshold, so plain
+// clicks (agent windows, inspector) keep working untouched. A completed pan
+// fires a trailing 'click'; the hit-test in index.html ignores it by asking
+// viewJustPanned() at the top of its handler (a shared flag, NOT a capture-
+// phase propagation trick — that only worked by script load-order accident
+// and a reorder/extra listener would silently break it).
+let panFrom = null;
+cv.addEventListener('mousedown', ev => { panFrom = { x: ev.clientX, y: ev.clientY, ox: viewOX, oy: viewOY }; });
+addEventListener('mousemove', ev => {
+  if(!panFrom) return;
+  const dx = ev.clientX - panFrom.x, dy = ev.clientY - panFrom.y;
+  if(!viewDidPan && Math.hypot(dx, dy) < 4) return;   // threshold: not a pan yet
+  viewDidPan = true;
+  dismissViewHint();
+  viewOX = panFrom.ox + dx; viewOY = panFrom.oy + dy;
+});
+// Clear pan state on the GLOBAL mouseup — it always fires, even when the
+// release lands OFF the canvas (routine: mousemove/mouseup are window-level
+// so a pan continues past the edge, and the zoom controls sit right at that
+// edge). A canvas 'click' only fires when mouseup also lands on cv, so
+// clearing viewDidPan there leaked the flag when the release was off-canvas
+// and silently ate the NEXT legit click. Deferring the reset to a macrotask
+// keeps it true through the pan's OWN trailing click (dispatched right after
+// this mouseup, before the timer) while a later unrelated click sees false.
+addEventListener('mouseup', () => { panFrom = null; setTimeout(() => { viewDidPan = false; }, 0); });
+// The one authority index.html's canvas hit-test consults to skip a pan's
+// trailing click — robust to listener/registration order by construction.
+function viewJustPanned(){ return viewDidPan; }
+// double-click on EMPTY space resets to the 1x fit; a double-click on an
+// agent stays the rename shortcut (index.html's own dblclick hit-test) —
+// the two are disjoint by the same hit radius the rename handler uses.
+// (No keyboard binding: neither file has canvas keyboard idioms to match.)
+cv.addEventListener('dblclick', ev => {
+  const p = canvasToWorld(ev);
+  for(const n of nodes.values()){
+    if(n.kind !== 'agent') continue;
+    if(Math.hypot(n.x - p.x, n.y - p.y) < 22) return;  // rename territory — leave it alone
+  }
+  resetView();
+});
+
+// ---- touch: one-finger drag-pan, two-finger pinch-to-zoom ----
+// A LinkedIn click from a phone/tablet has no wheel and no mouse, so touch
+// gets its own gesture handling over the SAME transform + click-eater flag
+// (a tap that ends a pan still fires a synthetic 'click', which the capture-
+// phase listener above already eats via viewDidPan).
+let touchMode = null;      // 'pan' | 'pinch' | null
+let touchPanFrom = null;
+let pinchStartDist = 0, pinchStartScale = 1;
+function touchDist(a, b){ return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY); }
+function touchMidCanvas(a, b){
+  const r = cv.getBoundingClientRect();
+  return { x: (a.clientX + b.clientX) / 2 - r.left, y: (a.clientY + b.clientY) / 2 - r.top };
+}
+cv.addEventListener('touchstart', ev => {
+  dismissViewHint();
+  if(ev.touches.length === 1){
+    touchMode = 'pan';
+    const t = ev.touches[0];
+    touchPanFrom = { x: t.clientX, y: t.clientY, ox: viewOX, oy: viewOY };
+  } else if(ev.touches.length === 2){
+    touchMode = 'pinch';
+    pinchStartDist = touchDist(ev.touches[0], ev.touches[1]) || 1;
+    pinchStartScale = viewScale;
+  }
+}, { passive: true });
+cv.addEventListener('touchmove', ev => {
+  if(touchMode === 'pan' && ev.touches.length === 1){
+    ev.preventDefault();
+    const t = ev.touches[0];
+    const dx = t.clientX - touchPanFrom.x, dy = t.clientY - touchPanFrom.y;
+    if(!viewDidPan && Math.hypot(dx, dy) < 4) return;
+    viewDidPan = true;
+    viewOX = touchPanFrom.ox + dx; viewOY = touchPanFrom.oy + dy;
+  } else if(touchMode === 'pinch' && ev.touches.length === 2){
+    ev.preventDefault();
+    const dist = touchDist(ev.touches[0], ev.touches[1]) || 1;
+    const mid = touchMidCanvas(ev.touches[0], ev.touches[1]);
+    const targetScale = pinchStartScale * (dist / pinchStartDist);
+    zoomAt(mid.x, mid.y, targetScale / viewScale);
+  }
+}, { passive: false });
+cv.addEventListener('touchend', ev => {
+  if(ev.touches.length === 0){
+    touchMode = null; touchPanFrom = null;
+    // Same leak guard as the mouse path: a touch-pan sets viewDidPan but
+    // preventDefault suppresses the synthetic mouseup that would clear it, so
+    // clear it here (deferred, for symmetry) or the NEXT tap-to-open is eaten.
+    setTimeout(() => { viewDidPan = false; }, 0);
+  } else if(ev.touches.length === 1){
+    // dropped from a pinch to a single finger — restart the pan baseline
+    // from here rather than jumping using the old pinch anchor.
+    touchMode = 'pan';
+    const t = ev.touches[0];
+    touchPanFrom = { x: t.clientX, y: t.clientY, ox: viewOX, oy: viewOY };
+  }
+});
+
+// ---- on-screen zoom controls + discoverability hint ----
+// Trackpad-less mice and plain touch taps have no wheel/pinch gesture, so a
+// visible +/−/reset cluster is the accessible fallback — keyboard-focusable
+// real <button>s with aria-labels, driving the IDENTICAL zoomAt/resetView
+// transform (+/− anchor on the canvas CENTER, since there's no cursor to
+// anchor on). Injected here, not in index.html/Hero.astro, so every embed
+// (product/replay/site/observer) gets it for free from the shared renderer.
+(function initViewControls(){
+  const host = cv.parentElement;
+  if(!host) return;
+  if(getComputedStyle(host).position === 'static') host.style.position = 'relative';
+
+  const style = document.createElement('style');
+  style.textContent = `
+/* Top-right, not bottom-right: index.html's #legend already owns the
+   bottom-right corner of the canvas (bottom:8px; right:10px), and a
+   z-index fight there would either hide the legend or crowd the buttons. */
+.view-controls { position:absolute; right:10px; top:10px; z-index:5; display:flex; gap:6px; }
+.view-controls button {
+  width:28px; height:28px; padding:0; border-radius:6px; border:1px solid rgba(255,255,255,.25);
+  background:rgba(20,20,20,.55); color:#eee; font-size:15px; line-height:1; cursor:pointer;
+  display:flex; align-items:center; justify-content:center; backdrop-filter:blur(2px);
+}
+.view-controls button:hover, .view-controls button:focus-visible {
+  background:rgba(40,40,40,.75); border-color:rgba(255,255,255,.5); outline:none;
+}
+/* No html.light override here on purpose — the stage stays dark in BOTH
+   chrome themes (see index.html's #center), so these overlay controls keep
+   their dark-glass styling regardless of the toggle. */
+.view-hint {
+  position:absolute; right:10px; top:44px; z-index:5; font-size:11px; color:#eee;
+  background:rgba(20,20,20,.55); padding:3px 8px; border-radius:5px; pointer-events:none;
+  opacity:1; transition:opacity 1.1s ease; white-space:nowrap;
+}
+.view-hint.hide { opacity:0; }
+`;
+  document.head.appendChild(style);
+
+  const controls = document.createElement('div');
+  controls.className = 'view-controls';
+  controls.innerHTML =
+    '<button type="button" aria-label="Zoom out">−</button>' +
+    '<button type="button" aria-label="Reset zoom">⤢</button>' +
+    '<button type="button" aria-label="Zoom in">+</button>';
+  const [outBtn, resetBtn, inBtn] = controls.querySelectorAll('button');
+  outBtn.title = 'Zoom out'; resetBtn.title = 'Reset view'; inBtn.title = 'Zoom in';
+  outBtn.addEventListener('click', () => { dismissViewHint(); zoomAt(CW/2, CH/2, 1/1.3); });
+  inBtn.addEventListener('click', () => { dismissViewHint(); zoomAt(CW/2, CH/2, 1.3); });
+  resetBtn.addEventListener('click', () => { dismissViewHint(); resetView(); });
+  host.appendChild(controls);
+
+  const hint = document.createElement('div');
+  hint.className = 'view-hint';
+  hint.textContent = 'scroll or pinch to zoom · drag to pan';
+  host.appendChild(hint);
+  window.dismissViewHint = () => { hint.classList.add('hide'); };
+  setTimeout(() => hint.classList.add('hide'), 4000);
+})();
+function dismissViewHint(){ if(window.dismissViewHint) window.dismissViewHint(); }
+
 // ---- themed canvas backgrounds: grass (ranch/flock), honeycomb (hive) are
-// pre-rendered offscreen; matrix rain animates in draw(). Tuned to read clearly
-// at a glance without overpowering the nodes; light theme gets darker strokes
-// since the pale/neon colors that work on the dark theme wash out on cream.
+// pre-rendered offscreen; matrix rain animates in draw(). The stage is always
+// dark (see index.html's #center — framed dark viewport in BOTH chrome
+// themes), so these are tuned once for a dark ground and do NOT fork on the
+// chrome's light/dark toggle.
 const bgCv = document.createElement('canvas'); const bgCtx = bgCv.getContext('2d');
 let rainDrops = [];
-function isLightTheme(){ return document.documentElement.classList.contains('light'); }
 function renderBg(){
   bgCv.width = Math.max(1, CW); bgCv.height = Math.max(1, CH);
   bgCtx.clearRect(0,0,CW,CH);
-  const kind = skin().bg, light = isLightTheme();
+  const kind = skin().bg;
   if(kind==='grass'){
-    const rgb = light ? '46,110,46' : '110,190,110';
+    const rgb = '110,190,110';
     for(let i=0;i<Math.floor(CW*CH/9000);i++){
       const x = Math.random()*CW, y = Math.random()*CH, h = 6+Math.random()*9;
       bgCtx.strokeStyle = 'rgba('+rgb+','+(0.25+Math.random()*0.14)+')'; bgCtx.lineWidth=1.4;
@@ -81,9 +275,9 @@ function renderBg(){
       }
     }
   } else if(kind==='comb'){
-    const rgb = light ? '176,124,10' : '244,196,48';
+    const rgb = '244,196,48';
     const r=16, w=r*Math.sqrt(3);
-    bgCtx.strokeStyle='rgba('+rgb+','+(light?0.22:0.18)+')'; bgCtx.lineWidth=1.2;
+    bgCtx.strokeStyle='rgba('+rgb+',0.18)'; bgCtx.lineWidth=1.2;
     for(let row=0; row*1.5*r<CH+2*r; row++){
       for(let col=0; col*w<CW+w; col++){
         const cx = col*w + (row%2? w/2:0), cy = row*1.5*r;
@@ -102,7 +296,7 @@ const RAIN_GLYPHS = '01コラルｱｲｳｴｵｶｷｸ<>{}#$';
 function drawRain(dt){
   bgCtx.clearRect(0,0,CW,CH); // rain redraws its own layer each frame
   bgCtx.font='13px ui-monospace,monospace';
-  const rgb = isLightTheme() ? '10,110,50' : '90,240,130';
+  const rgb = '90,240,130';
   for(const d of rainDrops){
     d.y += d.v*dt; if(d.y > CH+80) { d.y = -20; d.v = 40+Math.random()*90; }
     for(let k=0;k<8;k++){
@@ -336,17 +530,36 @@ function liveServerNow(){ return serverNow + (performance.now()/1000 - stateClie
 const ROLE_COLORS = {researcher:'#e6c84f', designer:'#4fc3d9', builder:'#5b9bd5', tester:'#5ec98a', pentester:'#e0913a', perf:'#d96fb0', integrator:'#7b8cde', writer:'#9fb06a', reviewer:'#b07cd6'};
 function roleColor(role){ return ROLE_COLORS[role] || C.amber; }
 
+// severity color/rank — shared by the live findings panel (index.html) and
+// the replay cockpit's findings renderer below.
+function sevColor(sev){ return (sev==='critical'||sev==='high')?C.red:(sev==='medium'?C.amber:'#6b6452'); }
+const SEV_RANK = {critical:3, high:2, medium:1, low:0};
+
 // ---- theme (light / dark) ----
 let C = {};
 function hexA(hex, a){ const h=(hex||'#888').replace('#','').trim(); const n=parseInt(h.length===3?h.replace(/./g,'$&$&'):h,16); return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`; }
+// C drives EVERY swarm-canvas draw — agent labels, selection ring, conflict/
+// quorum halos, claimed-path dots+labels, burst rings, speech/thought bubbles.
+// The canvas is a permanently-dark stage in BOTH chrome themes (see #center),
+// so C MUST source from the theme-invariant --stage-* palette, NOT the chrome
+// --fg/--muted/… tokens. Reading the chrome set painted near-black label text
+// and rings on the dark stage in light mode = invisible nodes. --stage-* is
+// dark in both themes (never overridden by html.light), so labels/rings stay
+// legible whichever chrome theme is active.
 function readColors(){ const s=getComputedStyle(document.documentElement), g=k=>s.getPropertyValue(k).trim();
-  C={fg:g('--fg'),muted:g('--muted'),amber:g('--amber'),red:g('--red'),line:g('--line'),green:g('--green'),panel:g('--panel')}; }
+  C={fg:g('--stage-fg'),muted:g('--stage-muted'),amber:g('--stage-amber'),red:g('--stage-red'),line:g('--stage-line'),green:g('--stage-green'),panel:g('--stage-panel')}; }
 function applyTheme(th){ document.documentElement.classList.toggle('light', th==='light');
-  const b=document.getElementById('themebtn'); if(b) b.textContent = th==='light'?'☀':'☾'; readColors();
+  const b=document.getElementById('themebtn');
+  if(b){ b.textContent = th==='light'?'☀':'☾'; b.setAttribute('aria-label', th==='light'?'Switch to dark theme':'Switch to light theme'); }
+  readColors();
   try{ renderBg(); }catch(_){} }
 function toggleTheme(){ const th=document.documentElement.classList.contains('light')?'dark':'light';
   try{ localStorage.setItem('corral-theme', th); }catch(_){} applyTheme(th); }
-applyTheme((()=>{ try{ return localStorage.getItem('corral-theme'); }catch(_){ return null; } })()||'dark');
+// Default: an explicit prior choice wins; otherwise follow the OS/browser's
+// prefers-color-scheme on first load, falling back to dark if that API is
+// unavailable (matches the chrome's own dark-first design).
+applyTheme((()=>{ try{ return localStorage.getItem('corral-theme'); }catch(_){ return null; } })()
+  || (()=>{ try{ return matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'; }catch(_){ return 'dark'; } })());
 function ensure(id, kind, label){
   let n = nodes.get(id);
   if(!n){ n = {id,kind,label, x: CW/2 + (Math.random()-.5)*200, y: CH/2 + (Math.random()-.5)*200, vx:0, vy:0, last:0, conflict:false, phase: Math.random()*6.283, dartCd: 0, working:false, trail: []}; nodes.set(id,n); }
@@ -435,8 +648,15 @@ function drawCritter(x, y, r, color, t, isBrain, role, sub){
 let lastFrameT = Date.now()/1000;
 function draw(){
   step();
-  ctx.clearRect(0,0,CW,CH);
+  // clear in DEVICE space (identity-ish base transform), THEN apply the
+  // world transform once for everything that lives in the corral — the
+  // background included (natural zoom: the pasture is part of the world;
+  // beyond its edge the panel color shows, which reads as "the pasture
+  // ends", not as a glitch). Per-node math stays untouched.
+  ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+  ctx.clearRect(0, 0, CW, CH);
   const frameT = Date.now()/1000, dt = Math.min(0.1, frameT-lastFrameT); lastFrameT = frameT;
+  ctx.setTransform(devicePixelRatio*viewScale, 0, 0, devicePixelRatio*viewScale, devicePixelRatio*viewOX, devicePixelRatio*viewOY);
   if(skin().bg==='rain') drawRain(dt);
   if(bgCv.width>1) ctx.drawImage(bgCv, 0, 0, CW, CH);
   for(const l of links){
@@ -606,6 +826,129 @@ let replayEvents = [], replayIdx = 0, replayPlaying = false, replaySpeed = 1, re
 // the flag that also works with no brain running at all.
 let inReplay = false;
 
+// ---- replay cockpit: the tape drives the console/tasks/findings panels ----
+// The live panels render from lastState via apply() (SSE) — which is paused
+// during replay, so in the product they used to freeze on stale live content
+// while the canvas played the tape. These replay-side renderers accumulate
+// state from applyReplayEvent and paint the SAME panel DOM (#exec, #tasks,
+// #findings — all optional, null-guarded) from the tape instead. People want
+// to see action: the whole viewport replays, not just the canvas.
+// Honest limits of the tape: execution beats carry ok/exit_code but not the
+// live feed's timed_out flag or multi-line output summary, and there is no
+// recent_activity tool-call stream — the cockpit shows what was recorded,
+// never invents the rest. The agents roster's "doing now" column is
+// reconstructed from claims + executions (the tape has no agent_activity
+// tool-call beat), so it shows the last real command or the claimed task,
+// not a live tool call.
+let replayExecLines = [];   // {agent, role, command, ok, exitCode}
+let replayTasks = new Map(); // key -> {key, title, role, status, claimedBy}
+let replayFindings = [];    // {reporter, target, type, severity, model, resolved}
+let replayAgents = new Map(); // name -> {name, role, held:Set<taskKey>, lastCmd}
+let replaySeenBeats = new Set(); // dedupe: findings ride the tape TWICE (queue+telemetry merge), and resolutions repeat across replan cycles
+function resetReplayPanels(){
+  replayExecLines = []; replayTasks = new Map(); replayFindings = [];
+  replayAgents = new Map(); replaySeenBeats = new Set();
+}
+function clearReplayPanelDOM(){
+  // 'done' is the product's live roster id — cleared here too so the SSE
+  // snapshot repaints it fresh on replay exit (no stale-tape flash), same as
+  // the other panels; the site cockpit uses 'agents'.
+  for(const id of ['exec','tasks','findings','agents','done']){
+    const el = document.getElementById(id);
+    if(el) el.innerHTML = '';
+  }
+}
+function replayAgentEnsure(name, role){
+  let a = replayAgents.get(name);
+  if(!a){ a = {name, role: role || '', held: new Set(), lastCmd: ''}; replayAgents.set(name, a); }
+  if(role) a.role = role;
+  return a;
+}
+function replayAgentHold(name, role, taskKey, held){
+  const a = replayAgentEnsure(name, role);
+  if(held) a.held.add(taskKey); else a.held.delete(taskKey);
+}
+// renderReplayAgents: the roster of workers the tape shows, reconstructed from
+// task claims + executions — mirrors the product's live agents list (#done):
+// role-colored dot when working (holds a claim), name + role + the "doing now"
+// column (last real command, else the claimed task). System actors that only
+// FILE findings (verify-gate, reflex-replanner, lead, client) never claim or
+// run a command, so they never enter the roster — same as live active_agents.
+function renderReplayAgents(){
+  // The site cockpit names the roster #agents; the PRODUCT UI's live roster is
+  // the legacy id #done (renders "agents · N" from apply()). Populate whichever
+  // exists so replay drives the roster in BOTH hosts — in the product this also
+  // fixes the roster going stale during replay (apply() is paused), exactly
+  // like the console/tasks/findings panels.
+  const ap = document.getElementById('agents') || document.getElementById('done');
+  if(!ap) return;
+  const ags = Array.from(replayAgents.values());
+  if(!ags.length){ ap.innerHTML = '<div class="feedhdr">agents · 0</div><div class="row" style="opacity:.6">no agents yet…</div>'; return; }
+  ags.sort((a,b)=>((b.held.size>0?0:1)-(a.held.size>0?0:1)) || ((displayName(a.name)>displayName(b.name))?1:-1));
+  ap.innerHTML = '<div class="feedhdr">agents · ' + ags.length + '</div>' +
+    ags.map(a => {
+      const work = a.held.size > 0;
+      const dot = work ? roleColor(a.role) : '#5b5750';
+      const doing = work
+        ? (a.lastCmd ? '❯ ' + esc(a.lastCmd.slice(0,22)) : 'on ' + esc(Array.from(a.held)[0] || ''))
+        : 'idle';
+      return '<div class="arow"><span class="adot" style="background:' + dot + '"></span><b style="color:' + roleColor(a.role) + '">' + esc(displayName(a.name)) + '</b> <span class="ameta">' + esc(a.role || '') + '</span><span class="adoing">' + doing + '</span></div>';
+    }).join('');
+}
+function renderReplayConsole(){
+  const ep = document.getElementById('exec');
+  if(!ep) return;
+  const tail = replayExecLines.slice(-24);
+  ep.innerHTML = '<div class="feedhdr">console · replaying the tape · ' + replayExecLines.length + '</div>' +
+    (tail.length ? '' : '<div class="xempty">▌ no commands on the tape yet…</div>') +
+    tail.map(e => {
+      const badge = e.ok
+        ? '<span class="xbadge" style="color:var(--green)" title="exit 0">✓</span>'
+        : '<span class="xbadge" style="color:var(--red)" title="exit ' + esc(String(e.exitCode)) + '">✗' + esc(String(e.exitCode)) + '</span>';
+      return '<div class="xblk"><div class="xcmdline"><span class="xprompt">❯</span> <b style="color:' + roleColor(e.role) + '">' + esc(displayName(e.agent)) + '</b> <code class="xcmd">' + esc(e.command || '') + '</code> ' + badge + '</div></div>';
+    }).join('') + '<div class="xcursor">▌</div>';
+  ep.scrollTop = ep.scrollHeight; // tail like the live console
+}
+function renderReplayTasks(){
+  const tp = document.getElementById('tasks');
+  if(!tp) return;
+  const tasks = Array.from(replayTasks.values());
+  if(!tasks.length){ tp.innerHTML = ''; return; }
+  const order = {claimed:0, queued:1, done:2, superseded:3, cancelled:4};
+  const counts = tasks.reduce((m,t)=>{ m[t.status]=(m[t.status]||0)+1; return m; }, {});
+  const hdr = ['claimed','queued','done','superseded','cancelled'].filter(s=>counts[s]).map(s=>counts[s]+' '+s).join(' · ');
+  tp.innerHTML = '<div class="feedhdr">tasks · ' + tasks.length + (hdr ? ' &nbsp; ' + hdr : '') + '</div>' +
+    tasks.slice().sort((a,b)=>(order[a.status]??9)-(order[b.status]??9)).slice(0,50).map(t => {
+      const gone = (t.status==='cancelled' || t.status==='superseded');
+      const dot = t.status==='done' ? C.green : (t.status==='claimed' ? '#5b9bd5' : '#6b6452');
+      const who = t.claimedBy && !gone ? ' <span style="color:' + roleColor(t.role) + '">← ' + esc(displayName(t.claimedBy)) + '</span>' : '';
+      const titleStyle = gone ? 'color:var(--muted);text-decoration:line-through' : 'color:var(--fg)';
+      return '<div class="trow"' + (gone ? ' style="opacity:.6"' : '') + '><span class="tdot" style="background:' + dot + '"></span><b style="' + titleStyle + '">' + esc(t.title || t.key) + '</b> <span style="color:var(--muted)">' + esc(t.role || '') + '</span>' + who + '</div>';
+    }).join('');
+}
+function renderReplayFindings(){
+  const fp = document.getElementById('findings');
+  if(!fp) return;
+  if(!replayFindings.length){ fp.innerHTML = ''; return; }
+  const open = replayFindings.filter(f => !f.resolved);
+  const crit = open.filter(f => f.severity==='critical' || f.severity==='high').length;
+  const hdr = 'findings · ' + open.length + ' open' + (crit ? ' &nbsp; <b style="color:var(--red)">⚠ ' + crit + ' high</b>' : '');
+  fp.innerHTML = '<div class="feedhdr">' + hdr + '</div>' +
+    open.slice().sort((a,b)=>(SEV_RANK[b.severity]??0)-(SEV_RANK[a.severity]??0)).slice(0,30).map(f => {
+      const hi = (f.severity==='critical' || f.severity==='high') ? ' hi' : '';
+      const tgt = f.target ? ' <span style="color:var(--fg)">' + esc(f.target) + '</span>' : '';
+      const mdl = f.model ? ' <span style="color:#5a7a8a;font-size:10px;font-family:ui-monospace,monospace">[' + esc(f.model) + ']</span>' : '';
+      return '<div class="frow' + hi + '"><span class="fsev" style="color:' + sevColor(f.severity) + '">' + esc(f.severity) + '</span> <span style="color:var(--muted)">' + esc(f.type) + '</span>' + tgt + ' <span style="color:#6b6452">· ' + esc(displayName(f.reporter)) + '</span>' + mdl + '</div>';
+    }).join('');
+}
+function renderReplayPanels(){
+  if(!inReplay) return; // the live page's panels belong to apply()/SSE
+  renderReplayConsole();
+  renderReplayTasks();
+  renderReplayAgents();
+  renderReplayFindings();
+}
+
 function startReplay(streamOrUrl){
   const load = (typeof streamOrUrl === 'string')
     ? fetch(streamOrUrl).then(r => r.json()).then(d => d.events || [])
@@ -617,6 +960,7 @@ function startReplay(streamOrUrl){
     inReplay = true;
     if(replayTimer){ clearTimeout(replayTimer); replayTimer = null; }
     nodes.clear(); links.length = 0; bursts.length = 0; buzzes.length = 0;
+    resetReplayPanels();
     if(es && !replaySSEPaused){ es.close(); replaySSEPaused = true; } // live mode paused while replaying
     setView('replay');
     renderReplayScrub();
@@ -639,12 +983,27 @@ function stopReplaySession(){
   if(replayTimer){ clearTimeout(replayTimer); replayTimer = null; }
   const btn = document.getElementById('replay-playbtn');
   if(btn) btn.textContent = '▶ play';
+  // Relinquish the panels: clear replay content so the live snapshot (pushed
+  // immediately on SSE reconnect) repaints from a blank panel, never leaving
+  // a flash of stale TAPE content posing as live state. inReplay is already
+  // false at this point, so no replay render can race the repaint.
+  resetReplayPanels();
+  clearReplayPanelDOM();
   if(replaySSEPaused){ es = connectSSE(); replaySSEPaused = false; } // resume live: the events handler pushes a fresh snapshot immediately on connect
 }
 function closeReplay(){
   setView('swarm'); // setView runs stopReplaySession() for every non-replay view
 }
 function toggleReplayPlay(){
+  // Pressing play while the playhead is parked at the very end restarts from
+  // the top (replay again) instead of sitting dead on the last frame — same
+  // rebuild-from-0 the scrub uses, so canvas + panels both reset.
+  if(!replayPlaying && replayIdx >= replayEvents.length){
+    replayIdx = 0;
+    nodes.clear(); links.length = 0; bursts.length = 0; buzzes.length = 0;
+    resetReplayPanels();
+    renderReplayScrub();
+  }
   replayPlaying = !replayPlaying;
   const btn = document.getElementById('replay-playbtn');
   if(btn) btn.textContent = replayPlaying ? '⏸ pause' : '▶ play';
@@ -669,6 +1028,7 @@ function seekReplay(target){
   if(replayTimer){ clearTimeout(replayTimer); replayTimer = null; }
   replayIdx = 0;
   nodes.clear(); links.length = 0; bursts.length = 0; buzzes.length = 0;
+  resetReplayPanels();
   while(replayIdx < target && replayIdx < replayEvents.length) applyReplayEvent(replayEvents[replayIdx++]);
   renderReplayScrub();
   if(replayPlaying) replayTimer = setTimeout(replayStep, Math.max(16, 250 / replaySpeed));
@@ -677,6 +1037,73 @@ function seekReplay(target){
 // merged, sorted beat stream) into the live canvas's node/link/burst/buzz
 // vocabulary.
 function applyReplayEvent(ev){
+  // ---- cockpit accumulation (panels) — before the canvas switch below ----
+  const d = ev.detail || {};
+  switch(ev.kind){
+    case 'task_created':
+      if(ev.subject) replayTasks.set(ev.subject, {key: ev.subject, title: d.title || '', role: d.role || '', status: 'queued', claimedBy: ''});
+      break;
+    case 'task_claimed': {
+      if(ev.subject){
+        const t = replayTasks.get(ev.subject) || {key: ev.subject, title: d.title || '', role: d.role || ''};
+        t.status = 'claimed'; t.claimedBy = ev.actor || ''; t.role = d.role || t.role;
+        replayTasks.set(ev.subject, t);
+        if(ev.actor) replayAgentHold(ev.actor, d.role, ev.subject, true);
+      }
+      break;
+    }
+    case 'task_done': case 'task_cancelled': case 'task_superseded': {
+      if(ev.subject){
+        const t = replayTasks.get(ev.subject);
+        if(t) t.status = ev.kind.slice(5); // done | cancelled | superseded
+        if(ev.actor) replayAgentHold(ev.actor, d.role, ev.subject, false);
+      }
+      break;
+    }
+    case 'execution': {
+      // dedupe on (actor, command, second-rounded ts) — cheap insurance in
+      // case a stream ever carries a beat from both merge sources.
+      const k = 'x|' + (ev.actor||'') + '|' + (ev.subject||'') + '|' + Math.round(ev.ts);
+      if(!replaySeenBeats.has(k)){
+        replaySeenBeats.add(k);
+        replayExecLines.push({agent: ev.actor || '', role: d.role || '', command: ev.subject || '', ok: !!d.ok, exitCode: d.exit_code == null ? '' : d.exit_code});
+        if(replayExecLines.length > 200) replayExecLines.shift();
+      }
+      // roster: an execution proves the actor is a real worker + records the
+      // last command (its "doing now"), even if the claim beat was missed.
+      if(ev.actor){ const a = replayAgentEnsure(ev.actor, d.role); a.lastCmd = ev.subject || a.lastCmd; }
+      break;
+    }
+    case 'finding_reported': {
+      // Findings ride the tape TWICE (queue + telemetry merge) — dedupe the
+      // ~2ms double on (subject, severity, type, second-rounded ts). Each
+      // DISTINCT report is appended (the reflex re-planner legitimately
+      // re-raises the same subject seconds later — that reopens a finding).
+      const k = 'f|' + (ev.subject||'') + '|' + (d.severity||'') + '|' + (d.type||'') + '|' + Math.round(ev.ts);
+      if(!replaySeenBeats.has(k)){
+        replaySeenBeats.add(k);
+        replayFindings.push({reporter: ev.actor || '', target: ev.subject || '', type: d.type || '', severity: d.severity || '', model: ev.model || '', resolved: false});
+      }
+      break;
+    }
+    case 'finding_resolved': {
+      // Resolutions ALSO ride twice AND repeat across replan cycles — dedupe
+      // the double on (subject, second-rounded ts), then resolve the OLDEST
+      // still-open finding for that subject (FIFO create→resolve pairing).
+      // This mirrors the product's live renderFindings, which shows only
+      // status==='open' rows: a finding stays visible until its resolution
+      // beat fires, and a re-raise brings it back.
+      const rk = 'r|' + (ev.subject||'') + '|' + Math.round(ev.ts);
+      if(!replaySeenBeats.has(rk)){
+        replaySeenBeats.add(rk);
+        for(let i = 0; i < replayFindings.length; i++){
+          if(replayFindings[i].target === ev.subject && !replayFindings[i].resolved){ replayFindings[i].resolved = true; break; }
+        }
+      }
+      break;
+    }
+  }
+  // ---- canvas translation (unchanged below this line) ----
   const now = Date.now()/1000; // same clock draw()'s bursts/buzzes compare against
   const agentId = ev.actor ? 'a:'+ev.actor : null;
   const pathId = ev.subject ? 'p:'+ev.subject : null;
@@ -723,6 +1150,7 @@ function applyReplayEvent(ev){
   }
 }
 function renderReplayScrub(){
+  renderReplayPanels();
   // apply() (the SSE path) normally owns #empty's "no agents yet" caption —
   // but apply() never runs during replay (SSE paused) or in a static embed
   // (no SSE at all), so the replay pipeline refreshes it here, at the single

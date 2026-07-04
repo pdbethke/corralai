@@ -1,17 +1,24 @@
 ---
 // SPDX-License-Identifier: Elastic-2.0
-import golden from '../data/golden-run.json';
-import meta from '../data/golden-run.meta.json';
+import golden from '../data/recordings/golden-run.json';
+import meta from '../data/recordings/golden-run.meta.json';
 
 const minutes = Math.round((meta.duration_seconds || 0) / 60);
 ---
 <section id="hero">
   <div class="hero-copy">
-    <h1>The herd performs live.</h1>
+    <h1>Watch a herd of AI agents build software. Live. On the record.</h1>
     <p class="pitch">
-      Give a headless brain one directive and it turns it into a mission that a
-      team of AI agents plans, builds, verifies, re-plans when they hit
-      problems, and iterates with the client until it's accepted.
+      This hero is a real recorded mission — not a demo reel. Give a headless
+      brain one directive and it turns it into a mission that a team of AI
+      agents plans, builds, verifies, re-plans when they hit problems, and
+      iterates with the client until it's accepted. Every run is recorded and
+      replayable, exactly like the one playing below.
+    </p>
+    <p class="proof-row">
+      <span>Runs free on a local 7B model — no API keys</span>
+      <span aria-hidden="true">·</span>
+      <span>Agents propose, you approve — code merges by reviewed PR, admin actions sit behind a human gate</span>
     </p>
     <p class="caption">
       {/* single line: Astro collapses a text→newline→expression boundary to
@@ -23,10 +30,16 @@ const minutes = Math.round((meta.duration_seconds || 0) / 60);
       <a class="cta" href="https://github.com/pdbethke/corralai">View on GitHub</a>
       <a class="cta secondary" id="watch-demo-cta" href="#" style="display:none">Watch the demo</a>
     </div>
+    <p class="star-invite">
+      Free, source-available, and getting better with every run —
+      <a href="https://github.com/pdbethke/corralai">a star helps other people find it</a>.
+    </p>
   </div>
-  <div id="stage">
-    <canvas id="c"></canvas>
-    <div id="empty">no agents in the corral yet</div>
+  <div id="stage-frame">
+    <div id="stage">
+      <canvas id="c"></canvas>
+      <div id="empty">no agents in the corral yet</div>
+    </div>
   </div>
   <div id="replay">
     <div class="row">
@@ -43,26 +56,43 @@ const minutes = Math.round((meta.duration_seconds || 0) / 60);
 </section>
 
 <style>
-  /* Same #replay bar as the product UI (internal/ui/web/index.html) — the
-     embed must feel identical, not like a marketing mockup of it. */
   #hero { position: relative; }
   .hero-copy { max-width: 860px; margin: 0 auto; padding: 56px 20px 24px; text-align: center; }
   .hero-copy h1 { font-size: 2.4rem; margin: 0 0 12px; color: var(--amber); }
   .pitch { font-size: 1.15rem; color: var(--fg); max-width: 720px; margin: 0 auto 14px; }
+  .proof-row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; color: var(--fg); font-size: 0.95rem; font-weight: 600; margin: 0 0 10px; }
+  .proof-row span[aria-hidden] { color: var(--muted); font-weight: 400; }
   .caption { color: var(--muted); font-size: 0.9rem; margin-bottom: 20px; }
   .ctas { display: flex; gap: 12px; justify-content: center; }
-  .cta { background: var(--amber); color: var(--bg); padding: 10px 20px; border-radius: 6px; font-weight: 600; text-decoration: none; }
+  .cta { background: var(--amber); color: #fff; padding: 10px 20px; border-radius: 6px; font-weight: 600; text-decoration: none; }
   .cta.secondary { background: var(--panel); color: var(--fg); border: 1px solid var(--line); }
-  #stage { position: relative; height: 60vh; min-height: 380px; background: var(--panel); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+  .star-invite { color: var(--muted); font-size: 0.85rem; margin-top: 14px; }
+  /* The framed dark viewport: grass, rain, and glowing nodes need a dark
+     canvas even on a light page — bordered and shadowed so it reads as a
+     window onto the corral, not an unstyled leftover dark section. The
+     #replay control bar underneath stays on the same --stage-* tokens so
+     the whole player (canvas + controls) reads as one dark instrument. */
+  #stage-frame { max-width: 1040px; margin: 0 auto; padding: 0 20px; }
+  #stage {
+    position: relative; height: 60vh; min-height: 380px;
+    background: var(--stage-panel); border: 1px solid var(--stage-line);
+    border-radius: 12px; box-shadow: 0 18px 44px rgba(30,20,0,.22);
+    overflow: hidden;
+  }
   #c { width: 100%; height: 100%; display: block; }
-  #empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); pointer-events: none; }
-  #replay { position: relative; background: var(--panel); border-bottom: 1px solid var(--line); padding: 9px 16px; }
-  #replay .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; max-width: 860px; margin: 0 auto; }
-  #replay .row button { background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: 5px; padding: 4px 12px; font-size: 12px; cursor: pointer; }
-  #replay .row button:hover { border-color: var(--amber); }
+  #empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--stage-muted); pointer-events: none; }
+  #replay {
+    position: relative; background: var(--stage-panel); color: var(--stage-fg);
+    border: 1px solid var(--stage-line); border-top: none;
+    border-bottom-left-radius: 12px; border-bottom-right-radius: 12px;
+    padding: 9px 16px; max-width: 1040px; margin: 0 auto;
+  }
+  #replay .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  #replay .row button { background: var(--stage-panel); color: var(--stage-fg); border: 1px solid var(--stage-line); border-radius: 5px; padding: 4px 12px; font-size: 12px; cursor: pointer; }
+  #replay .row button:hover { border-color: var(--stage-amber); }
   #replay-scrub { flex: 1; min-width: 160px; }
-  #replay-label { color: var(--muted); font-size: 11.5px; min-width: 70px; text-align: center; }
-  #replay-title { color: var(--amber); font-size: 12px; font-weight: 600; margin-right: 4px; }
+  #replay-label { color: var(--stage-muted); font-size: 11.5px; min-width: 70px; text-align: center; }
+  #replay-title { color: var(--stage-amber); font-size: 12px; font-weight: 600; margin-right: 4px; }
 </style>
 
 <script src="/replay-player.js" is:inline></script>

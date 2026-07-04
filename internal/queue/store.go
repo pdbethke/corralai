@@ -465,6 +465,42 @@ func (s *Store) Reap(present map[string]bool) (int, error) {
 	return n, nil
 }
 
+// HoldsClaimedTask reports whether the agent currently holds any claimed task.
+// It is the staleness oracle for the bug-#40 escalation: a path-claim holder
+// with no claimed task is done (or dead) with the work that justified the
+// lease, and its leases only starve the peers still working.
+func (s *Store) HoldsClaimedTask(agent string) (bool, error) {
+	var one int
+	err := s.db.QueryRow(`SELECT 1 FROM tasks WHERE status=? AND claimed_by=? LIMIT 1`, StatusClaimed, agent).Scan(&one)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// MissionRoles returns the distinct roles among a mission's existing tasks —
+// the staffed pipeline. enqueue_task/supersede_task validate a new task's role
+// against this set: a role the mission has never staffed (an LLM-invented name
+// like "performance" for "perf") would enqueue a task no agent can ever claim,
+// and MissionDone's zero-open-tasks bar would then hold the mission open
+// forever (bug #23, the role deadlock).
+func (s *Store) MissionRoles(missionID int64) ([]string, error) {
+	rows, err := s.db.Query(`SELECT DISTINCT role FROM tasks WHERE mission_id=? ORDER BY role`, missionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var r string
+		if err := rows.Scan(&r); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // MissionDone reports whether a mission has tasks and none are still open
 // (pending/ready/claimed). Terminal statuses — done, cancelled, superseded — do
 // not block completion, so a mission whose remaining work the lead cancelled or

@@ -1,0 +1,44 @@
+---
+title: The task queue + verify gate
+description: How tasks are queued for agents and how the verify gate keeps bad work from landing.
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+{/* Source: docs/corral/verify-gate.md; internal/queue/store.go, internal/brain/tasks.go, internal/queue/executions.go, internal/queue/supersede.go */}
+
+A queued task can carry a `Verify` command — e.g. `"go build"` or
+`"go test"` — set on phases like `build-core`, `test`, and `integrate` in the
+default mission plan. A task with a non-empty `Verify` is **gated**:
+`complete_task` refuses to close it until a matching passing run is on
+record. Tasks with no `Verify` command are trusted on the agent's own
+completion report — for genuinely unverifiable work, like a design write-up
+or a research summary.
+
+Tasks are pulled from the queue in dependency order: a task with unmet
+dependencies, or one already under an active
+[claim](/docs/concepts/claims-and-leases/) by another agent, is never handed
+out twice.
+
+## How the gate checks
+
+`complete_task`, when the task has a `Verify` string, looks for any recorded
+execution on the mission whose command contains that string and exited 0. If
+none exists, completion is refused with an explanation and a suggested
+action: run the command, fix the failures, then complete.
+
+## report_execution is how runs get recorded
+
+Agents don't complete tasks and hope — they run the verify command
+themselves and call the `report_execution` tool with the command, exit code,
+and pass/fail flag. That both feeds the live activity view and durably
+records the run, keyed to the agent's currently-claimed mission. Only after a
+passing `report_execution` for the gating command can `complete_task`
+succeed. A failing run instead leaves the task in the queue with the failure
+captured as a **finding** — which feeds the
+[re-planning loop](/docs/concepts/mission-lifecycle/), not a silent retry.
+
+## Supersede inherits the gate
+
+When a task is replaced, the replacement inherits the old task's `Verify`
+string whenever the new spec doesn't set its own — so re-planning around a
+stale task never accidentally drops its verification requirement.

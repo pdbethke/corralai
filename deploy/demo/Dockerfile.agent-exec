@@ -2,13 +2,14 @@
 # shell + compilers, which distroless lacks). Heavier than Dockerfile.agent;
 # use it for the execution-sandbox demo. Pair with AGENT_ALLOW_EXEC=1.
 #
-# This base ships Go + sh + git + bubblewrap; add language runtimes (node, python,
-# …) here for multi-language missions. bwrap is the run_command isolation boundary
-# (see README "Real execution"); run the container locked down (no host mounts, no
-# creds, dropped caps) as a second layer — defense-in-depth, not the primary jail.
+# This base ships Go + python3 (from bookworm) + sh + git + bubblewrap; nodejs is
+# added below so multi-language missions (Python/JS directives) can build AND run
+# their tests. bwrap is the run_command isolation boundary (see README "Real
+# execution"); run the container locked down (no host mounts, no creds, dropped
+# caps) as a second layer — defense-in-depth, not the primary jail.
 FROM golang:1.26-bookworm
 WORKDIR /app
-RUN apt-get update && apt-get install -y --no-install-recommends bubblewrap \
+RUN apt-get update && apt-get install -y --no-install-recommends bubblewrap nodejs \
     && rm -rf /var/lib/apt/lists/*
 COPY go.mod go.sum ./
 RUN go mod download

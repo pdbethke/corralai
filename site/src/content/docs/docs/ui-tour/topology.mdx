@@ -1,0 +1,17 @@
+---
+title: Topology
+description: The ecosystem map — every host, the model driving each agent on it, and its exec-isolation jail.
+---
+
+{/* Verified against internal/brain/host.go (HostBook / report_host / swarm_topology)
+    and the #topology render in internal/ui/web/index.html: this tab is the
+    ecosystem map (host → model → jail per agent), not a task-dependency
+    graph — that view is Progress. */}
+
+The Topology tab is the corral's ecosystem map: every host machine, the
+agents running on it, and — for each agent — the model backing it and the
+exec-isolation jail confining its commands. It's observability, not control:
+useful for seeing at a glance which host is carrying the load, or whether an
+agent is running with network access it shouldn't need.
+
+![The Topology tab showing 7 agents across 3 hosts, all on ollama:local-7b: wrangler-1 running Ada (builder), Tavo (designer), and Wren (researcher), each bwrap-jailed with no network; wrangler-2 running Boa (tester), Nell (builder), and Piper (tester), also bwrap-jailed with no network; and wrangler-3 running Rook (pentester) inside a container jail with network access](../../../../assets/ui-tour/topology.png)

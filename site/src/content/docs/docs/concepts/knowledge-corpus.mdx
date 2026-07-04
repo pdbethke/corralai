@@ -1,0 +1,36 @@
+---
+title: The knowledge corpus (CORRAL.md)
+description: A repo's own working knowledge, read by developers, coding agents, and the herd alike.
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+{/* Source: docs/corral/memory-etiquette.md; site/src/components/KnowledgeCorpus.astro */}
+
+A repo that runs with corralai can carry its working knowledge as a markdown
+corpus in the repo itself: `CORRAL.md` at the root as the entry point,
+`docs/corral/*.md` as the corpus. The same corpus serves four readers —
+developers read it as onboarding docs, any developer's coding agent queries
+it conversationally, the herd itself searches it before working and extends
+memory as it learns, and it grows the way code does — through ordinary pull
+requests, where code review is the same gate that [vetted
+memory](/docs/concepts/memory-and-learning-loop/) passes through.
+
+## Advisory, not injected
+
+The corpus is ingested as `shared=false`, tagged to its repo — it's found by
+`search_memory`, the same way a herd-written lesson is, but it never
+auto-injects into phase instructions the way vetted, human-promoted guidance
+does. Repo-shipped knowledge earns its trust through code review at write
+time; herd-proposed knowledge earns it through the operator's approval click
+at learn time — two different gates for two different origins of guidance,
+landing in the same searchable place.
+
+## The loop closes here
+
+Skills the herd proposes and a human approves land in the same searchable
+memory as this corpus — herd-discovered knowledge and developer-written
+knowledge accumulate side by side, queryable by every agent that joins.
+
+This site's own docs are built the same way this page describes: sourced
+from `README.md`, `docs/DESIGN.md`, and `docs/corral/*.md`, restructured for
+a sidebar rather than duplicated by hand.

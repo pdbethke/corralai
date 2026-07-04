@@ -467,3 +467,54 @@ func TestListFindingsByModel(t *testing.T) {
 		t.Fatalf("no by_model: want 3, got %d", len(lfall.Findings))
 	}
 }
+
+// Bug #23 (role deadlock): the lead's re-planning LLM sometimes enqueues a
+// task for a role name it invented ("performance" instead of "perf"). No
+// agent serves that role, the task can never be claimed, MissionDone requires
+// zero open tasks — so one typo'd role deadlocks the whole mission. The brain
+// must refuse a role that is not already part of the mission's own task plan,
+// loudly enough that the lead can self-correct with a valid role.
+func TestEnqueueTaskRefusesUnstaffedRole(t *testing.T) {
+	dir := t.TempDir()
+	cstore, _ := coord.Open(filepath.Join(dir, "c.sqlite3"))
+	t.Cleanup(func() { cstore.Close() })
+	q, _ := queue.Open(filepath.Join(dir, "q.sqlite3"))
+	t.Cleanup(func() { q.Close() })
+	q.Enqueue(9, []queue.TaskSpec{
+		{Key: "build", Role: "builder", Title: "build", Instruction: "b"},
+		{Key: "perf", Role: "perf", Title: "perf", Instruction: "p"},
+	})
+
+	ctx := context.Background()
+	clientT, serverT := mcp.NewInMemoryTransports()
+	go func() { _ = NewServer(cstore, nil, Options{Queue: q}).Run(ctx, serverT) }()
+	client := mcp.NewClient(&mcp.Implementation{Name: "lead", Version: "0"}, nil)
+	sess, _ := client.Connect(ctx, clientT, nil)
+	defer sess.Close()
+
+	// An invented role is refused with the valid roles named in the error.
+	res, err := sess.CallTool(ctx, &mcp.CallToolParams{Name: "enqueue_task",
+		Arguments: map[string]any{"mission_id": 9, "key": "perf-2", "role": "performance", "title": "perf", "instruction": "again"}})
+	if err != nil {
+		t.Fatalf("call: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("an unstaffed role was accepted; want a tool error")
+	}
+	text := ""
+	for _, c := range res.Content {
+		if tc, ok := c.(*mcp.TextContent); ok {
+			text += tc.Text
+		}
+	}
+	if !strings.Contains(text, "perf") || !strings.Contains(text, "performance") {
+		t.Fatalf("refusal must name the bad role and the valid ones, got: %s", text)
+	}
+
+	// A role the mission already staffs is still accepted.
+	var enq okOut
+	callTask(t, sess, "enqueue_task", map[string]any{"mission_id": 9, "key": "perf-3", "role": "perf", "title": "perf", "instruction": "again"}, &enq)
+	if !enq.OK {
+		t.Fatal("a staffed role must still be accepted")
+	}
+}

@@ -1,10 +1,16 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
-/* Same amber-on-dark palette as the product UI (internal/ui/web/index.html) —
-   the site and the embedded live player must not visually clash. */
+/* Daylight palette: warm cream/parchment ground, dark-ink text, the same
+   amber accent read in daylight instead of on a terminal-dark background.
+   --stage-* stay dark — the replay hero is a product-shown-in-a-dark-window
+   viewport, framed against the light page, not itself restyled. Kept as
+   custom properties (not hand-picked per component) so a future
+   prefers-color-scheme dark variant is a token swap, not a rewrite. */
 :root {
-  --bg: #0e1116; --fg: #e6e1d8; --muted: #8a8170; --amber: #e8a838; --red: #e8503a;
-  --line: #33405a; --green: #8fdcab; --panel: #161b22; --sel: #1b2330; --card: rgba(20,25,32,.97);
-  color-scheme: dark;
+  --bg: #faf3e6; --fg: #241f18; --muted: #6b6152; --amber: #8f5e08; --red: #b8341f;
+  --line: #ddd0b3; --green: #3f7a52; --panel: #f2e9d6; --sel: #ece0c4; --card: rgba(255,251,242,.97);
+  --stage-bg: #0e1116; --stage-fg: #e6e1d8; --stage-muted: #8a8170; --stage-amber: #e8a838;
+  --stage-red: #e8503a; --stage-green: #8fdcab; --stage-line: #33405a; --stage-panel: #161b22;
+  color-scheme: light;
 }
 * { box-sizing: border-box; }
 html, body {

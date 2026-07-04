@@ -692,16 +692,143 @@ func TestReplayPlayerStructure(t *testing.T) {
 		`function replayStep()`,
 		`function applyReplayEvent(ev)`,
 		`function seekReplay(target)`,
+		// zoom/pan (Task 11 of the site-docs-expansion plan): the view
+		// transform lives in the SHARED renderer so live, replay, and the
+		// static site embed all get it; hit-tests consume canvasToWorld.
+		`function zoomAt(sx, sy, factor)`,
+		`function screenToWorld(sx, sy)`,
+		`function canvasToWorld(ev)`,
+		`function resetView()`,
+		`function getViewTransform()`,
+		`cv.addEventListener('wheel'`,
+		// on-screen zoom controls + touch/pinch (addendum): trackpad-less
+		// mice, touch-only phones/tablets, and a11y users all need a
+		// non-wheel path to the same transform.
+		`aria-label="Zoom in"`,
+		`aria-label="Zoom out"`,
+		`aria-label="Reset zoom"`,
+		`cv.addEventListener('touchstart'`,
+		`cv.addEventListener('touchmove'`,
+		`view-hint`,
+		// the pan-flag clears on the GLOBAL mouseup (fires even off-canvas),
+		// deferred so the pan's own trailing click still reads it; index.html
+		// consults viewJustPanned() rather than a fragile capture-phase eater.
+		`function viewJustPanned()`,
+		`setTimeout(() => { viewDidPan = false; }, 0)`,
+		// replay cockpit (Task 12): the tape drives console/tasks/findings
+		// panels through null-guarded optional DOM ids, same contract as
+		// #empty/#stat — present in the product and the site cockpit,
+		// absent in the canvas-only hero.
+		`function renderReplayPanels()`,
+		`function renderReplayConsole()`,
+		`function renderReplayTasks()`,
+		`function renderReplayAgents()`,
+		`function renderReplayFindings()`,
+		`function resetReplayPanels()`,
+		`const SEV_RANK`,
+		`function sevColor(sev)`,
 	}
 	for _, m := range playerMarkers {
 		if !strings.Contains(player, m) {
 			t.Errorf("replay-player.js missing required replay marker: %q", m)
 		}
 	}
-	indexMarkers := []string{`id="replay"`, `id="replay-scrub"`, `<script src="/replay-player.js"></script>`}
+	// The cockpit renderers must be null-guarded (optional DOM) and
+	// inReplay-gated (never clobber the live panels while SSE owns them),
+	// and every replay entry/reset path must reset the panel state.
+	for _, guard := range []string{
+		`document.getElementById('exec')`,
+		`document.getElementById('tasks')`,
+		`document.getElementById('agents')`,
+		`document.getElementById('findings')`,
+	} {
+		if !strings.Contains(player, guard) {
+			t.Errorf("replay-player.js cockpit missing optional-DOM lookup %q", guard)
+		}
+	}
+	if !strings.Contains(player, "if(!inReplay) return;") {
+		t.Error("renderReplayPanels must be inReplay-gated — a live page's panels belong to apply()/SSE, not the tape")
+	}
+	for _, fn := range []string{"function startReplay(streamOrUrl){", "function seekReplay(target){", "function stopReplaySession(){"} {
+		fi := strings.Index(player, fn)
+		if fi < 0 {
+			t.Fatalf("could not locate %s in replay-player.js", fn)
+		}
+		end := strings.Index(player[fi:], "\n}")
+		if end < 0 {
+			t.Fatalf("could not locate the end of %s", fn)
+		}
+		if !strings.Contains(player[fi:fi+end], "resetReplayPanels(") {
+			t.Errorf("%s must reset the cockpit panel state (resetReplayPanels) — seek/restart/stop each rebuild or relinquish the panels", fn)
+		}
+	}
+	indexMarkers := []string{
+		`id="replay"`, `id="replay-scrub"`, `<script src="/replay-player.js"></script>`,
+		// both canvas hit-tests must read world coordinates, not raw
+		// canvas-local pixels — otherwise clicking a zoomed/panned agent
+		// opens the wrong node (or nothing).
+		`canvasToWorld(ev)`,
+		// the click hit-test must skip a pan's trailing click by consulting
+		// the shared flag directly (robust to listener order).
+		`if(viewJustPanned()) return;`,
+	}
 	for _, m := range indexMarkers {
 		if !strings.Contains(indexHTML, m) {
 			t.Errorf("index.html missing required marker: %q", m)
+		}
+	}
+	// The draw loop must apply the world transform once per frame (not
+	// per-node math): scale+offset baked into one setTransform call that
+	// multiplies devicePixelRatio.
+	if !strings.Contains(player, "devicePixelRatio*viewScale") {
+		t.Error("draw() must apply the view transform via ctx.setTransform(devicePixelRatio*viewScale, ...) once per frame")
+	}
+
+	// The canvas is a PERMANENTLY-DARK stage in both chrome themes (light/dark
+	// toggle themes only the surrounding chrome, never #center). C — the color
+	// object that drives EVERY node/label/ring/halo/bubble the renderer paints
+	// on that stage — must therefore read the theme-invariant --stage-* palette,
+	// NOT the chrome --fg/--muted/… tokens. Reading the chrome set painted the
+	// LIGHT palette (near-black label text, rings) onto the dark stage in light
+	// mode → invisible agents the moment one is on canvas (the 0-agent
+	// screenshot's blind spot). This marker locks readColors() to --stage-*.
+	const rcStart = "function readColors(){"
+	rci := strings.Index(player, rcStart)
+	if rci < 0 {
+		t.Fatalf("could not locate readColors in replay-player.js")
+	}
+	// readColors is a compact 1-2 line function; bound the slice at the next
+	// top-level `\nfunction ` so we inspect only its body (its own form ends in
+	// `; }`, not a bare `\n}`, so a naive `\n}` end-marker over-captures).
+	rce := strings.Index(player[rci+len(rcStart):], "\nfunction ")
+	if rce < 0 {
+		t.Fatalf("could not locate the end of readColors in replay-player.js")
+	}
+	readColorsFn := player[rci : rci+len(rcStart)+rce]
+	for _, tok := range []string{"--stage-fg", "--stage-muted", "--stage-amber", "--stage-red", "--stage-line", "--stage-green", "--stage-panel"} {
+		if !strings.Contains(readColorsFn, tok) {
+			t.Errorf("readColors() must source C from the theme-invariant stage palette, but is missing %q — canvas node/label colors would flip to the chrome light palette on the dark stage and vanish in light mode", tok)
+		}
+	}
+	// Guard against a regression back to the chrome tokens: readColors must not
+	// read the bare chrome --fg/--muted (only their --stage- prefixed forms).
+	for _, bad := range []string{"g('--fg')", "g('--muted')", "g('--amber')", "g('--red')", "g('--green')", "g('--line')", "g('--panel')"} {
+		if strings.Contains(readColorsFn, bad) {
+			t.Errorf("readColors() reads chrome token %s — the canvas layer must use the --stage-* palette so nodes stay legible on the always-dark stage in light mode", bad)
+		}
+	}
+	// The stage palette readColors() depends on must be fully DEFINED in
+	// index.html's :root and — critically — NOT redefined under html.light, so
+	// it stays dark in both themes.
+	for _, decl := range []string{"--stage-fg:", "--stage-muted:", "--stage-amber:", "--stage-red:", "--stage-line:", "--stage-green:", "--stage-panel:", "--stage-bg:"} {
+		if !strings.Contains(indexHTML, decl) {
+			t.Errorf("index.html must define %s (the always-dark canvas palette readColors reads)", decl)
+		}
+	}
+	if li := strings.Index(indexHTML, "html.light {"); li >= 0 {
+		lightBlock := indexHTML[li : li+strings.Index(indexHTML[li:], "}")]
+		if strings.Contains(lightBlock, "--stage-") {
+			t.Error("html.light must NOT override any --stage-* token — the canvas stage stays dark in both themes; overriding it there would re-introduce the light-on-dark invisibility")
 		}
 	}
 	// The extraction must not silently start a live connection from a

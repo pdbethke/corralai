@@ -104,14 +104,19 @@ test('the deny-list scan flags the Important-1 parity rules (non-private IPv4, a
   expect(gluedSlash).toHaveLength(0);
 });
 
-test('the committed golden-run.json passes the deny-list scan', async () => {
-  // golden-run.json is bundled via the Astro data import, not served as a
-  // static asset — this test reads the committed source artifact straight
-  // off disk, independent of how Astro packages it into dist/.
+test('every committed recording passes the deny-list scan', async () => {
   const fs = await import('node:fs');
-  const text = fs.readFileSync('src/data/golden-run.json', 'utf-8');
-  const offenses = scanDeny(text);
-  expect(offenses, `golden-run.json failed the deny-list scan:\n${offenses.join('\n')}`).toHaveLength(0);
+  // Streams AND the human-written .analysis.md sidecars — anything under
+  // recordings/ ships to the public page, so everything gets the same scan.
+  const files = fs
+    .readdirSync('src/data/recordings')
+    .filter((f) => (f.endsWith('.json') && !f.endsWith('.meta.json')) || f.endsWith('.analysis.md'));
+  expect(files.length, 'expected at least one committed recording').toBeGreaterThanOrEqual(1);
+  for (const f of files) {
+    const text = fs.readFileSync(`src/data/recordings/${f}`, 'utf-8');
+    const offenses = scanDeny(text);
+    expect(offenses, `${f} failed the deny-list scan:\n${offenses.join('\n')}`).toHaveLength(0);
+  }
 });
 
 test('zero non-local network requests across the whole page session, including same-origin /api/*', async ({ page }) => {
@@ -177,6 +182,15 @@ test('replay-player.js does not clobber the site title', async ({ page }) => {
   await expect(page).toHaveTitle('Corralai — the herd performs live');
 });
 
+test('the landing hero stays canvas-only and clean — the skin selector is the /recordings cockpit only', async ({ page }) => {
+  // The cockpit (Task 12) exposes a critter-skin selector; the hero must not.
+  // The shared IIFE only populates a #skinsel when one is present in the DOM,
+  // so the hero's absence of that element is what keeps it the clean default.
+  await page.goto('/');
+  await expect(page.locator('#skinsel')).toHaveCount(0);
+  await expect(page.locator('#exec, #tasks, #agents, #findings')).toHaveCount(0);
+});
+
 test('the GitHub link resolves and points at the real repo, everywhere it appears', async ({ page, request }) => {
   await page.goto('/');
   const links = page.locator('a[href*="github.com/pdbethke/corralai"]');
@@ -227,4 +241,202 @@ test('the page has no obvious accessibility footguns', async ({ page }) => {
       `link ${i} has no visible text and no aria-label`
     ).toBeTruthy();
   }
+});
+
+test('body text meets WCAG AA contrast against the page background', async ({ page }) => {
+  await page.goto('/');
+  // Cheap, dependency-free contrast check (no axe-core in this toolchain):
+  // relative-luminance contrast ratio between the paragraph's computed color
+  // and the page's computed background, per WCAG 2.1 formula. AA for normal
+  // body text requires >= 4.5.
+  const ratio = await page.evaluate(() => {
+    function luminance(rgb: [number, number, number]): number {
+      const [r, g, b] = rgb.map((c) => {
+        const s = c / 255;
+        return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+      });
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    }
+    function parseRgb(css: string): [number, number, number] {
+      const m = css.match(/\d+/g)!.map(Number);
+      return [m[0], m[1], m[2]];
+    }
+    const p = document.querySelector('.pitch') as HTMLElement;
+    const fg = parseRgb(getComputedStyle(p).color);
+    const bg = parseRgb(getComputedStyle(document.body).backgroundColor);
+    const lFg = luminance(fg) + 0.05;
+    const lBg = luminance(bg) + 0.05;
+    return lFg > lBg ? lFg / lBg : lBg / lFg;
+  });
+  expect(ratio, `contrast ratio ${ratio.toFixed(2)} is below WCAG AA's 4.5 minimum`).toBeGreaterThanOrEqual(4.5);
+});
+
+test('the page carries OpenGraph + Twitter card metadata for link previews', async ({ page }) => {
+  await page.goto('/');
+  const og = async (prop: string) => page.locator(`meta[property="${prop}"]`).getAttribute('content');
+  expect((await og('og:title'))?.length, 'og:title missing').toBeGreaterThan(0);
+  expect((await og('og:title'))!.length, 'og:title should fit a LinkedIn card title (<=60 chars)').toBeLessThanOrEqual(60);
+  expect(await og('og:description')).toBeTruthy();
+  expect(await og('og:url')).toBe('https://corralai.dev/');
+  const ogImage = await og('og:image');
+  expect(ogImage).toBe('https://corralai.dev/og-image.png');
+  expect(await page.locator('meta[name="twitter:card"]').getAttribute('content')).toBe('summary_large_image');
+  expect(await page.locator('link[rel="canonical"]').getAttribute('href')).toBe('https://corralai.dev/');
+});
+
+test('the OG image asset exists and is a real local file, not a placeholder', async ({ page, request }) => {
+  await page.goto('/');
+  const res = await request.get('/og-image.png');
+  expect(res.status()).toBe(200);
+  const bytes = await res.body();
+  expect(bytes.length, 'og-image.png looks empty/placeholder').toBeGreaterThan(10_000);
+
+  // Decode the actual pixel dimensions from the PNG header so a bad
+  // recapture fails CI, not just human review. A PNG's first chunk is
+  // always IHDR: 8-byte signature + 4-byte length + 4-byte type, then
+  // width and height as big-endian uint32s at offsets 16 and 20.
+  const signature = bytes.subarray(0, 8).toString('hex');
+  expect(signature, 'og-image.png is not a PNG').toBe('89504e470d0a1a0a');
+  expect(bytes.subarray(12, 16).toString('ascii'), 'first PNG chunk should be IHDR').toBe('IHDR');
+  const width = bytes.readUInt32BE(16);
+  const height = bytes.readUInt32BE(20);
+  expect(width, 'og:image must be exactly 1200px wide (matches og:image:width)').toBe(1200);
+  expect(height, 'og:image must be exactly 630px tall (matches og:image:height)').toBe(630);
+});
+
+test('the hero canvas zooms at the cursor, pans on drag, and resets on double-click', async ({ page }) => {
+  await page.goto('/');
+  await expect(async () => {
+    const max = await page.locator('#replay-scrub').getAttribute('max');
+    expect(Number(max)).toBeGreaterThan(0);
+  }).toPass({ timeout: 5000 });
+
+  const canvas = page.locator('#c');
+  // The hero canvas can render below the fold on the default 1280x720
+  // viewport; mouse.move/wheel operate in viewport coordinates, so scroll
+  // it fully into view first or the synthetic wheel event lands on nothing.
+  await canvas.scrollIntoViewIfNeeded();
+  const box = (await canvas.boundingBox())!;
+  const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
+
+  // wheel-zoom in at the center — getViewTransform is a top-level function
+  // declaration in the classic-script player, so it lands on window.
+  await page.mouse.move(cx, cy);
+  await page.mouse.wheel(0, -400);
+  const zoomed = await page.evaluate(() => (window as any).getViewTransform());
+  expect(zoomed.scale, 'wheel up must zoom in past 1x').toBeGreaterThan(1);
+  expect(zoomed.scale, 'zoom must clamp at 4x').toBeLessThanOrEqual(4);
+
+  // drag-to-pan: offset moves by the drag delta
+  await page.mouse.move(cx, cy);
+  await page.mouse.down();
+  await page.mouse.move(cx + 80, cy + 40, { steps: 5 });
+  await page.mouse.up();
+  const panned = await page.evaluate(() => (window as any).getViewTransform());
+  expect(Math.round(panned.x - zoomed.x), 'drag must pan the view horizontally').toBe(80);
+  expect(Math.round(panned.y - zoomed.y), 'drag must pan the view vertically').toBe(40);
+
+  // double-click empty space (the far corner, away from any node) resets
+  await page.mouse.dblclick(box.x + 10, box.y + 10);
+  const reset = await page.evaluate(() => (window as any).getViewTransform());
+  expect(reset).toEqual({ scale: 1, x: 0, y: 0 });
+});
+
+test('the on-screen zoom controls drive the same transform and the hint fades', async ({ page }) => {
+  await page.goto('/');
+  await expect(async () => {
+    const max = await page.locator('#replay-scrub').getAttribute('max');
+    expect(Number(max)).toBeGreaterThan(0);
+  }).toPass({ timeout: 5000 });
+
+  const zoomIn = page.getByRole('button', { name: 'Zoom in' });
+  const zoomOut = page.getByRole('button', { name: 'Zoom out' });
+  const reset = page.getByRole('button', { name: 'Reset zoom' });
+  await expect(zoomIn).toBeVisible();
+  await expect(zoomOut).toBeVisible();
+  await expect(reset).toBeVisible();
+
+  // the hint is visible on first paint, and clicking a control dismisses it
+  // immediately (not just after its timeout) — same discoverability affordance
+  // a wheel/drag interaction dismisses.
+  const hint = page.locator('.view-hint');
+  await expect(hint).toBeVisible();
+  await expect(hint).toHaveText(/scroll or pinch to zoom.*drag to pan/);
+
+  await zoomIn.click();
+  const afterIn = await page.evaluate(() => (window as any).getViewTransform());
+  expect(afterIn.scale, 'the + button must zoom in past 1x').toBeGreaterThan(1);
+  await expect(hint).toHaveClass(/hide/);
+
+  await zoomIn.click(); await zoomIn.click(); await zoomIn.click(); await zoomIn.click(); await zoomIn.click();
+  const clamped = await page.evaluate(() => (window as any).getViewTransform());
+  expect(clamped.scale, '+ must clamp at 4x same as the wheel').toBeLessThanOrEqual(4);
+
+  await zoomOut.click();
+  const afterOut = await page.evaluate(() => (window as any).getViewTransform());
+  expect(afterOut.scale, 'the - button must zoom back out').toBeLessThan(clamped.scale);
+
+  await reset.click();
+  const afterReset = await page.evaluate(() => (window as any).getViewTransform());
+  expect(afterReset).toEqual({ scale: 1, x: 0, y: 0 });
+});
+
+test('a drag-pan released OFF-canvas does not eat the next legit click', async ({ page }) => {
+  // Regression: viewJustPanned() used to be cleared only inside a canvas
+  // 'click' listener, which never fires when the pan's mouseup lands off the
+  // canvas (routine — mousemove/mouseup are window-level, and the zoom
+  // controls sit at the edge). The flag leaked and silently swallowed the
+  // NEXT click. index.html's real consumer opens an agent window; here we
+  // install the identical guard (skip when viewJustPanned()) as a probe.
+  await page.goto('/');
+  await expect(async () => {
+    const max = await page.locator('#replay-scrub').getAttribute('max');
+    expect(Number(max)).toBeGreaterThan(0);
+  }).toPass({ timeout: 5000 });
+
+  const canvas = page.locator('#c');
+  await canvas.scrollIntoViewIfNeeded();
+  const box = (await canvas.boundingBox())!;
+  const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
+
+  await page.evaluate(() => {
+    (window as any).__honored = 0;
+    (window as any).__ateAfterPan = 0;   // clicks the guard correctly suppressed
+    document.getElementById('c')!.addEventListener('click', () => {
+      if ((window as any).viewJustPanned()) { (window as any).__ateAfterPan++; return; }
+      (window as any).__honored++;
+    });
+  });
+  await page.evaluate(() => (window as any).resetView());
+
+  // drag past the threshold and RELEASE OFF the canvas (to its right).
+  await page.mouse.move(cx, cy);
+  await page.mouse.down();
+  await page.mouse.move(cx + 60, cy + 20, { steps: 4 });
+  await page.mouse.move(box.x + box.width + 40, cy, { steps: 4 });
+  await page.mouse.up();
+
+  // the flag must have cleared on the global mouseup even with no canvas
+  // click to clear it — otherwise the next click is eaten.
+  await expect(async () => {
+    expect(await page.evaluate(() => (window as any).viewJustPanned())).toBe(false);
+  }).toPass({ timeout: 1000 });
+
+  // now a plain click on the canvas must be honored (probe fires 1/1).
+  await page.mouse.click(cx, cy);
+  const honored = await page.evaluate(() => (window as any).__honored);
+  expect(honored, 'the click after an off-canvas pan release must be honored').toBe(1);
+
+  // complementary guarantee: a pan RELEASED ON-canvas still has its own
+  // trailing click suppressed (the guard sees the flag before the timer).
+  await page.evaluate(() => { (window as any).__honored = 0; (window as any).resetView(); });
+  await page.mouse.move(cx, cy);
+  await page.mouse.down();
+  await page.mouse.move(cx + 70, cy + 25, { steps: 5 });
+  await page.mouse.up();   // releases on-canvas → fires a trailing click
+  await page.waitForTimeout(20);
+  const suppressed = await page.evaluate(() => (window as any).__ateAfterPan);
+  const honoredOnCanvas = await page.evaluate(() => (window as any).__honored);
+  expect(suppressed, "the on-canvas pan's own trailing click must be suppressed").toBeGreaterThanOrEqual(1);
+  expect(honoredOnCanvas, "the pan's trailing click must not be honored").toBe(0);
 });

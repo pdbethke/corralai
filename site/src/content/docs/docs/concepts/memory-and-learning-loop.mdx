@@ -1,0 +1,44 @@
+---
+title: Memory tiers + the learning loop
+description: Advisory-to-vetted memory, skill proposals, and the human gate that promotes one into the other.
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+{/* Source: docs/corral/memory-etiquette.md; docs/DESIGN.md P8/P9; internal/learn/store.go, internal/learn/sweep.go; site/src/components/LearningLoop.astro */}
+
+## Memory tiers
+
+Memory entries start **advisory** — written by any agent (`add_memory`),
+searched by everyone (`search_memory`), but not yet trusted enough to shape
+behavior automatically. `CORRAL.md` + `docs/corral/*.md` are ingested the same
+way, tagged to the repo — code review is the trust gate for that knowledge,
+same as for code. Promotion to **vetted** (`shared=true`) requires the human
+gate below; only vetted guidance is injected into later missions'
+instructions.
+
+## The learning loop
+
+A periodic sweep clusters recurring finding signatures (the same Type+Target,
+seen **3 or more times**) and similar lessons into **proposals**: an LLM
+drafts corrective guidance plus a reusable skill, Shep announces the pending
+proposal at standup — even with an empty queue — and the operator approves or
+rejects it, from the Proposals tab (a live count badge, kept off the Progress
+tab so a busy sweep doesn't crowd the mission view) or `corral-admin
+proposals`. Approval fans the guidance out to vetted memory and a versioned
+skill artifact; `create_mission` then injects the top vetted lessons into
+phase instructions, fence-wrapped under `LESSONS FROM THE HERD (vetted)` and
+**capped at 3**.
+
+The sweep re-feeds the full finding/lesson history every tick rather than
+accumulating counts, so a signature's count always reflects what's true right
+now, not what's ever been true. Once a signature's proposal is **approved,
+that settles it**: further sweeps of the same signature are a no-op — the
+question moved from "is this worth flagging" to "is the fix actually
+working," which is the efficacy watchdog's job. If the same signature recurs
+**2 or more times** after promotion, a revision proposal reopens against the
+approved one for the human to reconsider. A rejected proposal is suppressed
+until its recurrence count doubles past the count it was rejected at, then
+reopens as fresh.
+
+See `corral-admin proposals list|show|approve|reject` in the
+[CLI reference](/docs/cli/corral-admin/).

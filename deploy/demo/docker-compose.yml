@@ -297,9 +297,10 @@ services:
   # workspace, not the findings table — so THOSE two must be the split.)
   #
   # Group A  (MODELS_BACKEND_A / MODELS_MODEL_A):  pentester
-  #   Default → the OpenAI-compat backend in .env (Gemini gemini-3.5-flash).
-  # Group B  (MODELS_BACKEND_B / MODELS_MODEL_B):  reviewer + builder + tester
-  #   Default → bundled Ollama (qwen2.5-coder:7b) — works with no API key.
+  #   Default → bundled Ollama qwen2.5-coder:7b — works with no API key.
+  # Group B  (MODELS_BACKEND_B / MODELS_MODEL_B):  reviewer
+  #   Default → bundled Ollama llama3.2:3b — also key-free.
+  # builder/tester (and the rest of the staffing below) stay on qwen.
   #
   # A resolution seed (models-finalize) auto-resolves open findings after a delay
   # so the confirmation-rate column populates immediately. In a real production run
@@ -388,6 +389,45 @@ services:
       AGENT_NAME: Tess
       MODEL_BACKEND: ollama
       AGENT_MODEL: ${AGENT_MODEL:-qwen2.5-coder:7b}
+    depends_on: *agent-deps
+
+  # The rest of the mission's staffing — the seeded mission plan opens with
+  # research -> design and closes with perf/integrate/docs, so WITHOUT these
+  # roles the very first task can never be claimed and the mission deadlocks
+  # at t=0 (nothing runs, no findings, no model_comparison rows — ever).
+  # All five stay on qwen2.5-coder:7b so pentester (A) and reviewer (B) remain
+  # the only two models in the A-vs-B comparison. (perf can file findings too;
+  # on qwen it lands in Group A's row rather than muddying the split.)
+  models-researcher:
+    <<: *agent
+    profiles: ["models"]
+    environment: {<<: *agent-env, AGENT_MODE: queue, AGENT_ROLE: researcher, AGENT_NAME: Sage}
+    depends_on: *agent-deps
+  models-designer:
+    <<: *agent
+    profiles: ["models"]
+    environment: {<<: *agent-env, AGENT_MODE: queue, AGENT_ROLE: designer, AGENT_NAME: Iris}
+    depends_on: *agent-deps
+  models-perf:
+    <<: *agent-exec
+    profiles: ["models"]
+    environment: {<<: *agent-env-exec, AGENT_MODE: queue, AGENT_ROLE: perf, AGENT_NAME: Bolt}
+    depends_on: *agent-deps
+  models-integrator:
+    <<: *agent-exec
+    profiles: ["models"]
+    environment: {<<: *agent-env-exec, AGENT_MODE: queue, AGENT_ROLE: integrator, AGENT_NAME: Knox}
+    depends_on: *agent-deps
+  models-writer:
+    <<: *agent
+    profiles: ["models"]
+    environment: {<<: *agent-env, AGENT_MODE: queue, AGENT_ROLE: writer, AGENT_NAME: Penny}
+    depends_on: *agent-deps
+  # Same deterministic standup watcher as demo-mission: nudges stalled claims.
+  models-scrum:
+    <<: *agent
+    profiles: ["models"]
+    environment: {<<: *agent-env, AGENT_MODE: scrum, AGENT_ROLE: scrum, AGENT_NAME: Shep}
     depends_on: *agent-deps
 
   # Lead + client drive the mission lifecycle (same as demo-mission).

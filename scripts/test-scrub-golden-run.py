@@ -106,6 +106,31 @@ class DenyListPlantedViolations(unittest.TestCase):
             '/etc/some/config/file',
         )
 
+    def test_windows_drive_letter_path_plain(self):
+        # Anything drive-lettered in a Linux-container demo export is
+        # suspicious enough to deny outright.
+        self._assert_caught(
+            r'saved to C:\Users\pat\proj today', 'Windows drive-letter path',
+            r'C:\Users\pat\proj',
+        )
+
+    def test_windows_drive_letter_path_json_escaped(self):
+        # Inside raw JSON text backslashes arrive doubled — must still trip.
+        text = '{"note":"saved to C:\\\\Users\\\\pat\\\\proj"}'
+        offenses = scrub.scan_deny(text, '', '')
+        self.assertTrue(
+            any('Windows drive-letter path' in label for label, _ in offenses),
+            f'JSON-escaped drive path missed: {offenses}',
+        )
+
+    def test_unc_backslash_users_path(self):
+        # Drive-letter-less backslash paths through Users/home segments are
+        # host-identifying too.
+        self._assert_caught(
+            r'copied \Users\pat\stuff over', 'Windows backslash home path',
+            r'\Users\pat',
+        )
+
 
 class DenyListControls(unittest.TestCase):
     """Things that must NOT trip the deny-list."""
@@ -233,6 +258,24 @@ class ManifestShape(unittest.TestCase):
         self.assertIn('2 unique actor name(s):', out)
         self.assertIn('builder-1', out)
         self.assertIn('reviewer-1', out)
+
+    def test_manifest_surfaces_backslash_paths(self):
+        # Windows-style paths must reach the human-review manifest even
+        # though the deny gate also catches drive-lettered ones.
+        text = json.dumps({'events': [{'ts': 1, 'kind': 'x', 'actor': 'builder-1',
+                                        'detail': {'note': 'saved to D:\\proj\\out\\bin'}}]})
+        path = _write(text)
+        try:
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                scrub.cmd_manifest(path)
+            out = buf.getvalue()
+        finally:
+            os.remove(path)
+        self.assertIn('path-like string(s):', out)
+        self.assertIn('D:', out)
+        self.assertIn('proj', out)
+        self.assertNotIn('0 path-like string(s):', out)
 
     def test_manifest_no_pathlike_single_segment_names(self):
         # go.mod alone has no slash -> not path-like (requires >=2 segments)

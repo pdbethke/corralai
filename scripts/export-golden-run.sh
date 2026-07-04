@@ -16,7 +16,6 @@ cd "$(dirname "$0")/.."
 BRAIN_URL="${BRAIN_URL:-http://127.0.0.1:9019}"
 MISSION_ID=""
 OUT_JSON="site/src/data/golden-run.json"
-OUT_META="site/src/data/golden-run.meta.json"
 I_KNOW=0
 YES=0
 BEARER=""
@@ -37,7 +36,9 @@ Usage: scripts/export-golden-run.sh [--mission N] [--brain-url URL] [--bearer TO
                    after you've reviewed the manifest once for this exact
                    mission — e.g. a scripted re-export of an already-vetted
                    run. Never use --yes on a mission you haven't reviewed.
-  --out PATH      Default: site/src/data/golden-run.json
+  --out PATH      Default: site/src/data/golden-run.json. The metadata
+                   sidecar always travels with it: PATH with .json swapped
+                   for .meta.json (so the pair never drifts apart).
 EOF
 }
 
@@ -53,6 +54,10 @@ while [ $# -gt 0 ]; do
     *) echo "unknown arg: $1" >&2; usage; exit 1 ;;
   esac
 done
+
+# The sidecar is derived from --out, never independently settable — a
+# mismatched json/meta pair would quietly desync the site's hero stats.
+OUT_META="${OUT_JSON%.json}.meta.json"
 
 if [ -n "$BEARER" ] && [ "$I_KNOW" -ne 1 ]; then
   echo "FAIL: --bearer (authed brain) requires --i-know — an authed brain's recorded actors" >&2

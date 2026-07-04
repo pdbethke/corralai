@@ -163,6 +163,34 @@ func TestDefaultPlanVerify(t *testing.T) {
 	}
 }
 
+// The verify gate must follow the directive's language: a Python or Node
+// mission gated on "go build" can never close build-core (there is nothing
+// for go to build), deadlocking the mission at its first gated phase.
+func TestDefaultPlanVerifyFollowsDirectiveLanguage(t *testing.T) {
+	cases := []struct {
+		directive   string
+		build, test string
+	}{
+		{"Build a Python package 'ratelimit' with unittest tests; make 'python3 -m unittest' pass", "python3", "python3 -m unittest"},
+		{"Build a JavaScript (Node.js) module 'lru' with node:test tests; make 'node --test' pass", "node", "node --test"},
+		{"Build a Go package 'stack' with table-driven tests; make 'go test ./...' pass", "go build", "go test"},
+		{"build a dashboard", "go build", "go test"}, // no language named -> Go stays the default
+	}
+	for _, c := range cases {
+		verify := map[string]string{}
+		for _, p := range DefaultPlan(c.directive) {
+			verify[p.Name] = p.Verify
+		}
+		if verify["build-core"] != c.build || verify["build"] != c.build || verify["integrate"] != c.build {
+			t.Errorf("%q: build phases verify = %q/%q/%q, want %q",
+				c.directive, verify["build-core"], verify["build"], verify["integrate"], c.build)
+		}
+		if verify["test"] != c.test {
+			t.Errorf("%q: test phase verify = %q, want %q", c.directive, verify["test"], c.test)
+		}
+	}
+}
+
 func TestReopenForReview(t *testing.T) {
 	dir := t.TempDir()
 	s := openMissionStore(t, dir)

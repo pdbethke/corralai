@@ -141,12 +141,30 @@ func Open(path string) (*Store, error) {
 func (s *Store) Close() error { return s.db.Close() }
 func now() float64            { return float64(time.Now().UnixNano()) / 1e9 }
 
+// verifyCommands picks the build/test verify gates from the directive's own
+// language. The gate is substring-matched against successful executions
+// (queue.MissionPassedVerify), so a Python mission gated on "go build" would
+// deadlock at build-core forever — nothing in a Python workspace can make
+// `go build` exit 0. Go remains the default when no language is named.
+func verifyCommands(directive string) (build, test string) {
+	d := strings.ToLower(directive)
+	switch {
+	case strings.Contains(d, "python"):
+		return "python3", "python3 -m unittest"
+	case strings.Contains(d, "javascript"), strings.Contains(d, "node.js"), strings.Contains(d, "nodejs"):
+		return "node", "node --test"
+	default:
+		return "go build", "go test"
+	}
+}
+
 // DefaultPlan is the standard SDLC pipeline for a directive: build, then
 // independent test ∥ secops (both off the build), then a learning retrospective.
 // Each instruction is memory-aware: read prior notes, record findings — that's the
 // collaboration + learning loop. Independence is structural (distinct roles/agents).
 func DefaultPlan(directive string) []PhaseSpec {
 	d := directive
+	verifyBuild, verifyTest := verifyCommands(directive)
 	return []PhaseSpec{
 		{Name: "research", Role: "researcher", Count: 1,
 			Instruction: "Research the requirements for: " + d + ". Clarify scope: the concrete features, constraints, and the data or sources needed, plus key domain facts. Search shared memory and any reference material first. Record the REQUIREMENTS in SHARED memory for the designer to design from."},
@@ -156,17 +174,17 @@ func DefaultPlan(directive string) []PhaseSpec {
 		// fast (visible progress — one giant build task used to hold the whole
 		// hive idle behind a single bee for 20+ minutes on a 7B model), then a
 		// completion pass fills in the rest against the same design.
-		{Name: "build-core", Role: "builder", Count: 1, DependsOn: []string{"design"}, Verify: "go build",
+		{Name: "build-core", Role: "builder", Count: 1, DependsOn: []string{"design"}, Verify: verifyBuild,
 			Instruction: "Build the SMALLEST WORKING CORE of: " + d + ". FIRST read the designer's design from SHARED memory and implement against it (don't redesign). Core = the minimum slice that compiles and does the central thing; leave secondary features for the completion pass. Use write_file with full file contents. Record what the core covers — and what it deliberately leaves out — in SHARED memory."},
-		{Name: "build", Role: "builder", Count: 1, DependsOn: []string{"build-core"}, Verify: "go build",
+		{Name: "build", Role: "builder", Count: 1, DependsOn: []string{"build-core"}, Verify: verifyBuild,
 			Instruction: "Complete the build of: " + d + ". Read the design AND the core-build notes from SHARED memory, then fill in the remaining features and edge cases on top of the existing core (extend, don't rewrite). Use write_file with full file contents. Record what you built and any deviations in SHARED memory so the verifiers have full context."},
-		{Name: "test", Role: "tester", Count: 2, DependsOn: []string{"build"}, Verify: "go test",
+		{Name: "test", Role: "tester", Count: 2, DependsOn: []string{"build"}, Verify: verifyTest,
 			Instruction: "Independently verify the feature built for: " + d + ". Read the build notes for intent — but you did NOT build it, so test adversarially: edge cases, error paths, broken assumptions. Record every failure in SHARED memory."},
 		{Name: "secops", Role: "pentester", Count: 1, DependsOn: []string{"build"},
 			Instruction: "Attack the feature built for: " + d + ". Read the build and test notes, then attempt injection, auth bypass, resource abuse, and data exposure. Record any vulnerability in SHARED memory with a severity."},
 		{Name: "perf", Role: "perf", Count: 1, DependsOn: []string{"build"},
 			Instruction: "Profile the feature built for: " + d + ". Read the build notes, find hot paths and inefficiencies, and optimize what you safely can. Record what you optimized — or a finding with a severity if a perf problem needs a dedicated fix — in SHARED memory."},
-		{Name: "integrate", Role: "integrator", Count: 1, DependsOn: []string{"test", "secops", "perf"}, Verify: "go build",
+		{Name: "integrate", Role: "integrator", Count: 1, DependsOn: []string{"test", "secops", "perf"}, Verify: verifyBuild,
 			Instruction: "Assemble the work for: " + d + " into one coherent, working whole. Read the build/test/secops/perf notes from SHARED memory, wire the pieces together, resolve cross-file integration, and confirm it runs end to end. Record integration status and any remaining gaps in SHARED memory."},
 		{Name: "docs", Role: "writer", Count: 1, DependsOn: []string{"integrate"},
 			Instruction: "Document the feature for: " + d + ". Read the integration and build notes from SHARED memory and produce a clear README / usage / API reference. Record the docs (or where they live) in SHARED memory."},

@@ -72,3 +72,48 @@ test('a full /docs session — navigate, search via Pagefind, click a result —
     `unexpected external requests during a /docs search session: ${external.join(', ')}`
   ).toHaveLength(0);
 });
+
+test('Pagefind search finds "claims" and navigates to the claims & leases page', async ({
+  page,
+}) => {
+  // Same offline discipline as the "mission" search test above, but on a
+  // term that exercises a real concepts page filled in by Task 3, and it
+  // asserts the specific result rather than just "a" result.
+  const external: string[] = [];
+  page.on('request', (req) => {
+    const url = new URL(req.url());
+    if (url.hostname !== 'localhost' && url.hostname !== '127.0.0.1') external.push(req.url());
+  });
+
+  await page.goto('/docs/getting-started/');
+
+  await page.getByRole('button', { name: 'Search' }).click();
+  const dialog = page.locator('dialog[aria-label="Search"]');
+  await expect(dialog).toBeVisible();
+
+  const searchInput = dialog.locator('input.pagefind-ui__search-input');
+  await searchInput.fill('claims');
+
+  const result = dialog.locator('a.pagefind-ui__result-link', { hasText: /Claims/i }).first();
+  await expect(result).toBeVisible({ timeout: 5000 });
+  await result.click();
+
+  await expect(page).toHaveURL(/claims-and-leases/);
+  expect(
+    external,
+    `Pagefind search made an external request: ${external.join(', ')}`
+  ).toHaveLength(0);
+});
+
+test('the UI-tour pages have no obvious accessibility footguns', async ({ page }) => {
+  await page.goto('/docs/ui-tour/corral/');
+  const h1Count = await page.locator('h1').count();
+  expect(h1Count, 'expected exactly one <h1> on the docs page').toBe(1);
+  const images = page.locator('img');
+  const imgCount = await images.count();
+  expect(imgCount, 'expected the corral UI-tour page to have screenshots').toBeGreaterThan(0);
+  for (let i = 0; i < imgCount; i++) {
+    const alt = await images.nth(i).getAttribute('alt');
+    expect(alt, `image ${i} is missing alt text`).toBeTruthy();
+  }
+});

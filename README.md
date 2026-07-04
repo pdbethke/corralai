@@ -436,4 +436,6 @@ Contributions are welcome under a one-time [CLA](CLA.md); see
 ---
 **[corralai.dev](https://corralai.dev)** (live at cutover — see
 `docs/DESIGN.md`'s P11 entry) — a live-replay one-pager (`site/`, Astro,
-Cloudflare Pages) · github.com/pdbethke/corralai
+Cloudflare Pages) · github.com/pdbethke/corralai. Same cutover ships full
+docs — concepts, a UI tour, and a generated CLI reference — at
+[corralai.dev/docs](https://corralai.dev/docs).

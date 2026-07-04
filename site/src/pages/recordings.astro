@@ -1,0 +1,213 @@
+---
+// SPDX-License-Identifier: Elastic-2.0
+import '../styles/global.css';
+import analytics from '../data/analytics.json';
+
+// Enumerate committed recordings by glob — no manifest file to drift.
+const streamModules = import.meta.glob('../data/recordings/*.json', { eager: true });
+const streams: Record<string, unknown> = {};
+const cards: { slug: string; directive: string; models: string[]; task_count: number; done_task_count: number; finding_count: number; minutes: number; result?: { url: string; label: string } }[] = [];
+for (const [p, mod] of Object.entries(streamModules)) {
+  if (p.endsWith('.meta.json')) continue;
+  const slug = p.split('/').pop()!.replace(/\.json$/, '');
+  const metaMod = streamModules[p.replace(/\.json$/, '.meta.json')] as any;
+  if (!metaMod) throw new Error(`recording ${slug} has no .meta.json sidecar`);
+  const meta = metaMod.default ?? metaMod;
+  streams[slug] = (mod as any).default ?? mod;
+  cards.push({
+    slug,
+    directive: meta.directive || '(no directive recorded)',
+    models: meta.models || [],
+    task_count: meta.task_count || 0,
+    done_task_count: meta.done_task_count || 0,
+    finding_count: meta.finding_count || 0,
+    minutes: Math.round((meta.duration_seconds || 0) / 60),
+    // Optional: {url, label} — when present, the card grows a "browse what
+    // it built" link (opens in a new tab). The legacy golden run has no
+    // result field; its card simply omits the link (honest omission —
+    // Task 10 populates this for new runs).
+    result: meta.result && meta.result.url && meta.result.label ? meta.result : undefined,
+  });
+}
+cards.sort((a, b) => a.slug.localeCompare(b.slug));
+const maxModelFindings = Math.max(1, ...analytics.findings_by_model.map((r: any) => r.findings));
+---
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <title>Corralai — recordings</title>
+  <meta name="description" content="A gallery of real recorded corralai missions — different directives, different model mixes, every one replayable." />
+</head>
+<body>
+  <div class="section">
+    <h1>Recordings</h1>
+    <p>
+      Real recorded missions — every one exported through the same deny-list +
+      human-manifest privacy gate as the landing page's hero. Pick a card to
+      replay it on the corral canvas below.
+    </p>
+    <div class="cards">
+      {cards.map((c) => (
+        <div class="card" role="button" tabindex="0" data-slug={c.slug}>
+          <span class="directive">{c.directive}</span>
+          {c.models.length > 0 && <span class="models">{c.models.join(' + ')}</span>}
+          <span class="stats">{c.task_count} tasks ({c.done_task_count} done) · {c.finding_count} findings · {c.minutes}m</span>
+          {c.result && (
+            <a class="result-link" href={c.result.url} target="_blank" rel="noopener noreferrer">
+              {c.result.label} →
+            </a>
+          )}
+        </div>
+      ))}
+    </div>
+    <p class="back"><a href="/">← back to the corral</a></p>
+  </div>
+
+  <div id="stage-frame">
+    <div id="stage">
+      <canvas id="c"></canvas>
+      <div id="empty">pick a recording above</div>
+    </div>
+  </div>
+  <div id="replay">
+    <div class="row">
+      <span id="replay-title"></span>
+      <button id="replay-playbtn" onclick="toggleReplayPlay()">▶ play</button>
+      <input type="range" id="replay-scrub" min="0" max="0" value="0" oninput="seekReplay(+this.value)">
+      <span id="replay-label">0 / 0</span>
+      <select onchange="setReplaySpeed(+this.value)" title="playback speed">
+        <option value="1">1×</option><option value="2">2×</option><option value="4" selected>4×</option>
+        <option value="8">8×</option><option value="16">16×</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="section" id="analytics">
+    <h2>Across the recordings</h2>
+    <p class="how">
+      Computed at build time with DuckDB over the committed streams above —
+      the public face of the product's <code>model_comparison</code> report.
+      MotherDuck stays product-side (fleet sync + the cross-brain oracle,
+      credentialed) and is never wired into this site.
+    </p>
+
+    <h3>Findings by model</h3>
+    <table>
+      <thead><tr><th>model</th><th>findings</th><th></th></tr></thead>
+      <tbody>
+        {analytics.findings_by_model.map((r: any) => (
+          <tr>
+            <td>{r.model}</td>
+            <td class="num">{r.findings}</td>
+            <td class="barcell"><div class="bar" style={`width:${Math.round((r.findings / maxModelFindings) * 100)}%`}></div></td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+
+    <h3>Findings by severity, per recording</h3>
+    <table>
+      <thead><tr><th>recording</th><th>severity</th><th>count</th></tr></thead>
+      <tbody>
+        {analytics.findings_by_severity.map((r: any) => (
+          <tr><td>{r.slug}</td><td>{r.severity}</td><td class="num">{r.n}</td></tr>
+        ))}
+      </tbody>
+    </table>
+
+    <h3>Task durations, per recording</h3>
+    <table>
+      <thead><tr><th>recording</th><th>tasks</th><th>avg (s)</th><th>max (s)</th></tr></thead>
+      <tbody>
+        {analytics.task_durations.map((r: any) => (
+          <tr><td>{r.slug}</td><td class="num">{r.tasks}</td><td class="num">{r.avg_seconds}</td><td class="num">{r.max_seconds}</td></tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
+</body>
+</html>
+
+<style>
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; margin: 20px 0; }
+  .card {
+    display: flex; flex-direction: column; gap: 8px; text-align: left; cursor: pointer;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px;
+    font: inherit; color: var(--fg);
+  }
+  .card:hover, .card.active { border-color: var(--amber); }
+  .directive { font-weight: 600; }
+  .models { color: var(--amber); font-size: 0.85rem; }
+  .stats { color: var(--muted); font-size: 0.85rem; }
+  .result-link { color: var(--amber); font-size: 0.85rem; text-decoration: underline; }
+  .back { margin-top: 8px; }
+  /* full-width dark player viewport — same framing tokens as the hero (Task 1) */
+  #stage-frame { max-width: 1040px; margin: 0 auto; padding: 0 20px; }
+  #stage {
+    position: relative; height: 60vh; min-height: 380px;
+    background: var(--stage-panel); border: 1px solid var(--stage-line);
+    border-radius: 12px; box-shadow: 0 18px 44px rgba(30,20,0,.22); overflow: hidden;
+  }
+  #c { width: 100%; height: 100%; display: block; }
+  #empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--stage-muted); pointer-events: none; }
+  #replay {
+    position: relative; background: var(--stage-panel); color: var(--stage-fg);
+    border: 1px solid var(--stage-line); border-top: none;
+    border-bottom-left-radius: 12px; border-bottom-right-radius: 12px;
+    padding: 9px 16px; max-width: 1040px; margin: 0 auto;
+  }
+  #replay .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  #replay .row button { background: var(--stage-panel); color: var(--stage-fg); border: 1px solid var(--stage-line); border-radius: 5px; padding: 4px 12px; font-size: 12px; cursor: pointer; }
+  #replay .row button:hover { border-color: var(--stage-amber); }
+  #replay-scrub { flex: 1; min-width: 160px; }
+  #replay-label { color: var(--stage-muted); font-size: 11.5px; min-width: 70px; text-align: center; }
+  #replay-title { color: var(--stage-amber); font-size: 12px; font-weight: 600; margin-right: 4px; }
+  #analytics table { width: 100%; border-collapse: collapse; margin: 12px 0 28px; }
+  #analytics th, #analytics td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+  #analytics .num { text-align: right; font-variant-numeric: tabular-nums; }
+  #analytics .barcell { width: 40%; }
+  #analytics .bar { height: 12px; background: var(--amber); border-radius: 3px; min-width: 2px; }
+  #analytics .how { color: var(--muted); font-size: 0.9rem; }
+</style>
+
+<script src="/replay-player.js" is:inline></script>
+<script define:vars={{ streams }} is:inline>
+  // Same minimal DOM contract as Hero.astro (see replay-player.js's header).
+  window.setView = function (v) {
+    const bar = document.getElementById('replay');
+    if (bar) bar.classList.toggle('show', v === 'replay');
+  };
+  window.addEventListener('DOMContentLoaded', () => {
+    setReplaySpeed(4);
+    const activate = (btn) => {
+      document.querySelectorAll('.card.active').forEach((c) => c.classList.remove('active'));
+      btn.classList.add('active');
+      // startReplay already accepts a resolved {events:[...]} object — no
+      // player change needed; this is the same call shape as the hero.
+      startReplay(streams[btn.dataset.slug]).then(() => {
+        // replayPlaying is a top-level `let` in replay-player.js (a classic
+        // script, so it lands on window) — guard so switching recordings
+        // mid-play never toggles playback OFF.
+        if (!window.replayPlaying) toggleReplayPlay();
+        document.getElementById('stage-frame').scrollIntoView({ behavior: 'smooth' });
+      });
+    };
+    for (const btn of document.querySelectorAll('.card')) {
+      btn.addEventListener('click', (ev) => {
+        // The optional "browse what it built" link is a real <a> inside the
+        // card (for a11y + opening in a new tab) — let its own click through
+        // without also triggering the replay.
+        if (ev.target.closest('a')) return;
+        activate(btn);
+      });
+      btn.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); activate(btn); }
+      });
+    }
+  });
+  // replay-player.js's setSkin() clobbers document.title at script-load time
+  // (same as on the landing page) — restore this page's own title.
+  document.title = 'Corralai — recordings';
+</script>

@@ -18,6 +18,7 @@ type ReplayEvent struct {
 	Kind    string         `json:"kind"`
 	Actor   string         `json:"actor,omitempty"`
 	Subject string         `json:"subject,omitempty"`
+	Model   string         `json:"model,omitempty"` // model that filed this beat, when known (findings, telemetry) — Part D's recordings derive meta.models and per-model analytics from this
 	Detail  map[string]any `json:"detail,omitempty"`
 }
 
@@ -60,8 +61,13 @@ func BuildReplayStream(q *queue.Store, tel *telemetry.Store, missionID int64) ([
 		return nil, err
 	}
 	for _, f := range findings {
-		out = append(out, ReplayEvent{TS: f.CreatedTS, Kind: "finding_reported", Actor: f.Reporter, Subject: f.Target,
-			Detail: map[string]any{"type": f.Type, "severity": f.Severity}})
+		fev := ReplayEvent{TS: f.CreatedTS, Kind: "finding_reported", Actor: f.Reporter, Subject: f.Target,
+			Model:  f.ReporterModel,
+			Detail: map[string]any{"type": f.Type, "severity": f.Severity}}
+		if f.ReporterBackend != "" {
+			fev.Detail["backend"] = f.ReporterBackend
+		}
+		out = append(out, fev)
 		if f.ResolvedTS > 0 {
 			out = append(out, ReplayEvent{TS: f.ResolvedTS, Kind: "finding_resolved", Subject: f.Target,
 				Detail: map[string]any{"status": f.Status}})
@@ -83,7 +89,7 @@ func BuildReplayStream(q *queue.Store, tel *telemetry.Store, missionID int64) ([
 			return nil, err
 		}
 		for _, e := range evs {
-			out = append(out, ReplayEvent{TS: e.TS, Kind: e.Kind, Actor: e.Actor, Subject: e.Subject, Detail: e.Detail})
+			out = append(out, ReplayEvent{TS: e.TS, Kind: e.Kind, Actor: e.Actor, Subject: e.Subject, Model: e.Model, Detail: e.Detail})
 		}
 	}
 

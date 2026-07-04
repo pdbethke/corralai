@@ -51,3 +51,9 @@ filesystem disabled — it can read the MotherDuck-attached fleet tables and
 nothing else on disk. This is real today, not a roadmap slide, though it's
 optional: unset `CORRALAI_MOTHERDUCK` and a brain runs standalone with no
 loss of single-brain function.
+
+This fleet-oracle surface is product-side and credentialed: it is never
+wired into the public site. The site's own [recordings page](/recordings/)
+computes its per-model and per-severity numbers at build time with plain
+DuckDB over committed recording streams instead — the public, uncredentialed
+face of the same `model_comparison` idea above.

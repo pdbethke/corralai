@@ -153,7 +153,7 @@ func (s *Store) MissionCompletedAt(missionID int64) (float64, bool, error) {
 // the same timeline as the mission's own state changes.
 func (s *Store) EventsForMission(missionID int64) ([]Event, error) {
 	rows, err := s.db.Query(
-		`SELECT ts, kind, COALESCE(actor,''), COALESCE(subject,''), COALESCE(detail,'') FROM events WHERE mission_id=? ORDER BY ts ASC`,
+		`SELECT ts, kind, COALESCE(actor,''), COALESCE(subject,''), COALESCE(model,''), COALESCE(detail,'') FROM events WHERE mission_id=? ORDER BY ts ASC`,
 		missionID)
 	if err != nil {
 		return nil, err
@@ -163,7 +163,7 @@ func (s *Store) EventsForMission(missionID int64) ([]Event, error) {
 	for rows.Next() {
 		var e Event
 		var detail string
-		if err := rows.Scan(&e.TS, &e.Kind, &e.Actor, &e.Subject, &detail); err != nil {
+		if err := rows.Scan(&e.TS, &e.Kind, &e.Actor, &e.Subject, &e.Model, &detail); err != nil {
 			return nil, err
 		}
 		if detail != "" {

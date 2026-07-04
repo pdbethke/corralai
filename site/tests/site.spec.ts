@@ -104,14 +104,15 @@ test('the deny-list scan flags the Important-1 parity rules (non-private IPv4, a
   expect(gluedSlash).toHaveLength(0);
 });
 
-test('the committed golden-run.json passes the deny-list scan', async () => {
-  // golden-run.json is bundled via the Astro data import, not served as a
-  // static asset — this test reads the committed source artifact straight
-  // off disk, independent of how Astro packages it into dist/.
+test('every committed recording passes the deny-list scan', async () => {
   const fs = await import('node:fs');
-  const text = fs.readFileSync('src/data/golden-run.json', 'utf-8');
-  const offenses = scanDeny(text);
-  expect(offenses, `golden-run.json failed the deny-list scan:\n${offenses.join('\n')}`).toHaveLength(0);
+  const files = fs.readdirSync('src/data/recordings').filter((f) => f.endsWith('.json') && !f.endsWith('.meta.json'));
+  expect(files.length, 'expected at least one committed recording').toBeGreaterThanOrEqual(1);
+  for (const f of files) {
+    const text = fs.readFileSync(`src/data/recordings/${f}`, 'utf-8');
+    const offenses = scanDeny(text);
+    expect(offenses, `${f} failed the deny-list scan:\n${offenses.join('\n')}`).toHaveLength(0);
+  }
 });
 
 test('zero non-local network requests across the whole page session, including same-origin /api/*', async ({ page }) => {

@@ -138,6 +138,24 @@ def cmd_manifest(path):
     print('--- end manifest ---')
 
 
+def cmd_models(path):
+    """Prints a sorted JSON array of distinct model labels seen in the stream
+    (backend:model when the event carries a backend in detail, bare model
+    otherwise). A bare label that is the suffix of a qualified one is the SAME
+    model seen from the telemetry side (no backend column there) — collapsed,
+    so one model never lists twice."""
+    data = json.load(open(path, encoding='utf-8'))
+    models = set()
+    for ev in data.get('events', []):
+        m = (ev.get('model') or '').strip()
+        if not m:
+            continue
+        backend = ((ev.get('detail') or {}).get('backend') or '').strip()
+        models.add(backend + ':' + m if backend else m)
+    models = {m for m in models if not any(o != m and o.endswith(':' + m) for o in models)}
+    print(json.dumps(sorted(models)))
+
+
 if __name__ == '__main__':
     if len(sys.argv) < 3:
         print(__doc__, file=sys.stderr)
@@ -149,6 +167,8 @@ if __name__ == '__main__':
         cmd_deny(sys.argv[2], who, host)
     elif cmd == 'manifest':
         cmd_manifest(sys.argv[2])
+    elif cmd == 'models':
+        cmd_models(sys.argv[2])
     else:
         print(__doc__, file=sys.stderr)
         sys.exit(2)

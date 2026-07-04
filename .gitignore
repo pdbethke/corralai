@@ -52,3 +52,8 @@ deploy/demo/.env
 site/node_modules/
 site/dist/
 site/.astro/
+site/test-results/
+site/playwright-report/
+
+# Playwright MCP debug artifacts (console logs, page snapshots) — scratch only
+/.playwright-mcp/

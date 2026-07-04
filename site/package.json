@@ -11,9 +11,13 @@
     "prebuild": "bash ../scripts/sync-site-assets.sh --check",
     "build": "ASTRO_TELEMETRY_DISABLED=1 astro build",
     "preview": "ASTRO_TELEMETRY_DISABLED=1 astro preview",
-    "astro": "ASTRO_TELEMETRY_DISABLED=1 astro"
+    "astro": "ASTRO_TELEMETRY_DISABLED=1 astro",
+    "test:e2e": "npm run build && npx playwright test"
   },
   "dependencies": {
     "astro": "7.0.6"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.61.1"
   }
 }

@@ -162,7 +162,8 @@ loopback problem (the brain is public HTTPS).
 # 1. build the harness once
 go build -o /usr/local/bin/corral-harness ./cmd/corral-harness
 
-# 2. mint a worker token (spawn_subagent, long TTL) → save to ./worker-token
+# 2. mint a worker token (needs your operator auth once) → save to ./worker-token
+corral-admin --brain https://brain.corralai.dev mint-worker --role builder --ttl 168h > worker-token
 
 # 3. run the auth-proxy locally, pointed at the public brain
 docker run -d --name corral-floor-proxy -p 9019:9019 \

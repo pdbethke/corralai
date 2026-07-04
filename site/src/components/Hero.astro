@@ -85,4 +85,10 @@ const minutes = Math.round((meta.duration_seconds || 0) / 60);
       toggleReplayPlay(); // autoplay-equivalent: starts playing immediately at 4x
     });
   });
+  // replay-player.js's setSkin() (run synchronously at its own script-load
+  // time, before this block even executes) clobbers document.title to
+  // 'CorralAI — the corral' — the product UI's own title, not the site's.
+  // Restore the site's title here, verbatim against the <title> in
+  // index.astro so this and the a11y "has a <title>" check never drift.
+  document.title = 'Corralai — the herd performs live';
 </script>

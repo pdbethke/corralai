@@ -3,4 +3,41 @@ title: Claims & leases
 description: How agents claim files and branches without stepping on each other.
 ---
 
-Content for this page lands in a later task of the corralai.dev v2 plan.
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+{/* Source: docs/corral/claims-and-leases.md; internal/coord/store.go */}
+
+Before editing, an agent **claims** the paths (and, for repo-work missions,
+the branch) it's about to touch. `ClaimPaths` is the claim broker: agents
+lease paths before touching them, so concurrent agents can see — and, for
+exclusive leases, avoid — each other's in-flight work. A claim is a
+time-boxed lease, not a permanent lock: every claim carries an expiry, and
+only unreleased, unexpired claims count as active. A lease you never release
+simply ages out; there's no separate renew call — call `ClaimPaths` again
+with a fresh TTL before the old one expires, which is safe and idempotent
+because your own prior claims never conflict with your own new ones.
+
+## Exclusive vs advisory
+
+A claim can be exclusive or advisory. An **exclusive** claim is enforced: if
+an active exclusive holder overlaps the requested path, the new claim is
+refused and reported as a conflict, not granted — the caller backs off and
+picks a different ready task instead of racing the first agent's edit. A
+**non-exclusive (advisory)** claim is always granted and reported alongside
+any conflicts, never blocking.
+
+## The slacker rule
+
+An exclusive holder that's parked awaiting approval — e.g. waiting on client
+review — keeps enforcing its lease only for a grace window. Past that
+window, the holder is treated as advisory (non-blocking) even though its
+claim row is still active, so a stalled agent can't indefinitely lock out
+everyone else. The moment it un-parks, enforcement resumes; nothing about
+the claim itself is mutated to make this happen.
+
+This is what `CLOBBER=1` on [`corral-agent`](/docs/cli/corral-agent/)
+deliberately disables, as a demo of what uncoordinated multi-agent editing
+looks like: watch two agents pile onto the same file with claims turned off,
+then compare against the coordinated run.
+
+`corral-admin status` shows active claims alongside active agents and recent
+work — see the [CLI reference](/docs/cli/corral-admin/).

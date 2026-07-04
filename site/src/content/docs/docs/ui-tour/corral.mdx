@@ -3,4 +3,12 @@ title: The corral (canvas view)
 description: The main canvas where agents, tasks, and claims show up as they happen.
 ---
 
-Content for this page lands in a later task of the corralai.dev v2 plan.
+The corral is the default tab: every active agent renders as a moving node,
+connected by a line to each file path it currently holds a claim on. Click
+any agent — on the canvas, or in the roster on the right — to open its
+floating detail window: what it's working on, which paths it holds, its
+recent activity, and the memory entries it can recall.
+
+![The corral canvas mid-mission: five agent nodes — Wren the researcher, Tavo the designer, Nell the builder, Piper the tester, and Rook the pentester — connected by claim lines to file paths including internal/ingest/retry.go, retry-notes.md, and retry-design.md. A red line marks a claim conflict where two agents hold overlapping claims on retry.go, with the corral landmark, chat bubbles, and grass decoration in the background](../../../../assets/ui-tour/corral.png)
+
+![A floating agent-detail window for Nell (builder, local-7b) showing it has been active 4 minutes, is working on "add exponential backoff to the ingest retry helper", holds a claim on internal/ingest/retry.go, and can recall two memory entries — "always run go vet before go test in CI" and "prefer table-driven tests for the queue package"](../../../../assets/ui-tour/agent-window.png)

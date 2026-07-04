@@ -3,4 +3,11 @@ title: Proposals
 description: The tab where the learning loop's proposed skills and lessons wait for review.
 ---
 
-Content for this page lands in a later task of the corralai.dev v2 plan.
+The Proposals tab shows every pending skill proposal, with the live count
+badge that also appears on the tab itself. Approving here (or via
+`corral-admin proposals approve <id>`) promotes the proposal's guidance into
+vetted memory and syncs the matching skill fleet-wide — see [the learning
+loop](/docs/concepts/memory-and-learning-loop/). Rejecting sends the pattern
+back until the evidence doubles. This is the human gate of the learning loop.
+
+![The Proposals tab showing one pending proposal, "retries-without-backoff|ingest", with its guidance — "When a retry loop is added, always include jittered exponential backoff — unbounded retries have caused a burst-load thundering herd on the ingest endpoint more than once." — a "backoff-on-retry" skill chip, and approve/reject buttons](../../../../assets/ui-tour/proposals.png)

@@ -61,6 +61,11 @@ func TestBeePromptAnnouncesDeclaredModel(t *testing.T) {
 		"report_host",
 		`"model":"gpt-5.1-codex"`,
 		`"backend":"openai"`,
+		// jail is a REQUIRED report_host param — without it in the example the
+		// first call errors and the harness burns a retry (seen live: Gemini
+		// CLI got "params must have required property 'jail'" and had to
+		// self-correct).
+		`"jail":"none"`,
 	} {
 		if !strings.Contains(p, must) {
 			t.Fatalf("bee prompt missing %q:\n%s", must, p)

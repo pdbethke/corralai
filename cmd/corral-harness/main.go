@@ -101,7 +101,7 @@ func mcpConfig(brain string) string {
 func beePrompt(name, role, instance, desc, model, backend string) string {
 	announce := ""
 	if model != "" {
-		announce = fmt.Sprintf("\n   Then call report_host with {\"name\":%q,\"role\":%q,\"host\":%q,\"model\":%q,\"backend\":%q} so topology and finding attribution know what drives you.",
+		announce = fmt.Sprintf("\n   Then call report_host with {\"name\":%q,\"role\":%q,\"host\":%q,\"model\":%q,\"backend\":%q,\"jail\":\"none\"} so topology and finding attribution know what drives you.",
 			name, role, instance, model, backend)
 	}
 	return fmt.Sprintf(`You are %q, a %s bee in a corralai swarm. The MCP server "corral" is the swarm's brain. Work EXACTLY ONE task, then stop.

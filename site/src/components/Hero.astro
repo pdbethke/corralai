@@ -7,11 +7,18 @@ const minutes = Math.round((meta.duration_seconds || 0) / 60);
 ---
 <section id="hero">
   <div class="hero-copy">
-    <h1>The herd performs live.</h1>
+    <h1>Watch a herd of AI agents build software. Live. On the record.</h1>
     <p class="pitch">
-      Give a headless brain one directive and it turns it into a mission that a
-      team of AI agents plans, builds, verifies, re-plans when they hit
-      problems, and iterates with the client until it's accepted.
+      This hero is a real recorded mission — not a demo reel. Give a headless
+      brain one directive and it turns it into a mission that a team of AI
+      agents plans, builds, verifies, re-plans when they hit problems, and
+      iterates with the client until it's accepted. Every run is recorded and
+      replayable, exactly like the one playing below.
+    </p>
+    <p class="proof-row">
+      <span>Runs free on a local 7B model — no API keys</span>
+      <span aria-hidden="true">·</span>
+      <span>Agents propose, you approve — nothing merges without a human</span>
     </p>
     <p class="caption">
       {/* single line: Astro collapses a text→newline→expression boundary to
@@ -23,6 +30,10 @@ const minutes = Math.round((meta.duration_seconds || 0) / 60);
       <a class="cta" href="https://github.com/pdbethke/corralai">View on GitHub</a>
       <a class="cta secondary" id="watch-demo-cta" href="#" style="display:none">Watch the demo</a>
     </div>
+    <p class="star-invite">
+      Free, source-available, and getting better with every run —
+      <a href="https://github.com/pdbethke/corralai">a star helps other people find it</a>.
+    </p>
   </div>
   <div id="stage-frame">
     <div id="stage">
@@ -49,10 +60,13 @@ const minutes = Math.round((meta.duration_seconds || 0) / 60);
   .hero-copy { max-width: 860px; margin: 0 auto; padding: 56px 20px 24px; text-align: center; }
   .hero-copy h1 { font-size: 2.4rem; margin: 0 0 12px; color: var(--amber); }
   .pitch { font-size: 1.15rem; color: var(--fg); max-width: 720px; margin: 0 auto 14px; }
+  .proof-row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; color: var(--fg); font-size: 0.95rem; font-weight: 600; margin: 0 0 10px; }
+  .proof-row span[aria-hidden] { color: var(--muted); font-weight: 400; }
   .caption { color: var(--muted); font-size: 0.9rem; margin-bottom: 20px; }
   .ctas { display: flex; gap: 12px; justify-content: center; }
   .cta { background: var(--amber); color: #fff; padding: 10px 20px; border-radius: 6px; font-weight: 600; text-decoration: none; }
   .cta.secondary { background: var(--panel); color: var(--fg); border: 1px solid var(--line); }
+  .star-invite { color: var(--muted); font-size: 0.85rem; margin-top: 14px; }
   /* The framed dark viewport: grass, rain, and glowing nodes need a dark
      canvas even on a light page — bordered and shadowed so it reads as a
      window onto the corral, not an unstyled leftover dark section. The

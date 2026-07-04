@@ -256,3 +256,24 @@ test('body text meets WCAG AA contrast against the page background', async ({ pa
   });
   expect(ratio, `contrast ratio ${ratio.toFixed(2)} is below WCAG AA's 4.5 minimum`).toBeGreaterThanOrEqual(4.5);
 });
+
+test('the page carries OpenGraph + Twitter card metadata for link previews', async ({ page }) => {
+  await page.goto('/');
+  const og = async (prop: string) => page.locator(`meta[property="${prop}"]`).getAttribute('content');
+  expect((await og('og:title'))?.length, 'og:title missing').toBeGreaterThan(0);
+  expect((await og('og:title'))!.length, 'og:title should fit a LinkedIn card title (<=60 chars)').toBeLessThanOrEqual(60);
+  expect(await og('og:description')).toBeTruthy();
+  expect(await og('og:url')).toBe('https://corralai.dev/');
+  const ogImage = await og('og:image');
+  expect(ogImage).toBe('https://corralai.dev/og-image.png');
+  expect(await page.locator('meta[name="twitter:card"]').getAttribute('content')).toBe('summary_large_image');
+  expect(await page.locator('link[rel="canonical"]').getAttribute('href')).toBe('https://corralai.dev/');
+});
+
+test('the OG image asset exists and is a real local file, not a placeholder', async ({ page, request }) => {
+  await page.goto('/');
+  const res = await request.get('/og-image.png');
+  expect(res.status()).toBe(200);
+  const bytes = await res.body();
+  expect(bytes.length, 'og-image.png looks empty/placeholder').toBeGreaterThan(10_000);
+});

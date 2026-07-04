@@ -18,6 +18,9 @@ Env:
   CORRAL_BRAIN   brain URL (default http://localhost:9019)
   BEE_NAME       swarm name (default Harness)
   BEE_ROLE       role to serve (default builder)
+  BEE_MODEL      the model driving this harness (e.g. gpt-5.1-codex); adds a
+                 report_host step so findings attribute to it in model_comparison
+  BEE_BACKEND    the backend/vendor for BEE_MODEL (e.g. openai, anthropic, gemini)
   BEE_WORKSPACE  working directory for the harness (default .)
   HARNESS_CMD    command template; placeholders: {prompt} {mcp_config} {brain}
                  e.g. claude -p {prompt} --mcp-config {mcp_config} \

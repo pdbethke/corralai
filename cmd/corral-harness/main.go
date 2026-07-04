@@ -17,6 +17,9 @@
 //	CORRAL_BRAIN   brain URL (default http://localhost:9019)
 //	BEE_NAME       swarm name (default Harness)
 //	BEE_ROLE       role to serve (default builder)
+//	BEE_MODEL      the model driving this harness (e.g. gpt-5.1-codex); adds a
+//	               report_host step so findings attribute to it in model_comparison
+//	BEE_BACKEND    the backend/vendor for BEE_MODEL (e.g. openai, anthropic, gemini)
 //	BEE_WORKSPACE  working directory for the harness (default .)
 //	HARNESS_CMD    command template; placeholders: {prompt} {mcp_config} {brain}
 //	               e.g. claude -p {prompt} --mcp-config {mcp_config} \
@@ -66,6 +69,9 @@ Env:
   CORRAL_BRAIN   brain URL (default http://localhost:9019)
   BEE_NAME       swarm name (default Harness)
   BEE_ROLE       role to serve (default builder)
+  BEE_MODEL      the model driving this harness (e.g. gpt-5.1-codex); adds a
+                 report_host step so findings attribute to it in model_comparison
+  BEE_BACKEND    the backend/vendor for BEE_MODEL (e.g. openai, anthropic, gemini)
   BEE_WORKSPACE  working directory for the harness (default .)
   HARNESS_CMD    command template; placeholders: {prompt} {mcp_config} {brain}
                  e.g. claude -p {prompt} --mcp-config {mcp_config} \
@@ -88,10 +94,19 @@ func mcpConfig(brain string) string {
 
 // beePrompt is the one-task bee contract, phrased for a harness that has its
 // own file/exec tools and sees the brain as the MCP server named "corral".
-func beePrompt(name, role, instance, desc string) string {
+// When the operator declares the harness's model (BEE_MODEL / BEE_BACKEND),
+// the prompt gains a report_host step: finding attribution is stamped from
+// the HostBook, which ONLY report_host feeds — without it a harness bee's
+// findings show as "(not recorded)" in model_comparison.
+func beePrompt(name, role, instance, desc, model, backend string) string {
+	announce := ""
+	if model != "" {
+		announce = fmt.Sprintf("\n   Then call report_host with {\"name\":%q,\"role\":%q,\"host\":%q,\"model\":%q,\"backend\":%q} so topology and finding attribution know what drives you.",
+			name, role, instance, model, backend)
+	}
 	return fmt.Sprintf(`You are %q, a %s bee in a corralai swarm. The MCP server "corral" is the swarm's brain. Work EXACTLY ONE task, then stop.
 
-1. Call bootstrap with {"name":%q,"role":%q,"program":%q} to enter the swarm.
+1. Call bootstrap with {"name":%q,"role":%q,"program":%q} to enter the swarm.%s
 2. Call claim_task with {"name":%q,"roles":[%q],"instance":%q}.
    - If it returns task:null, print exactly IDLE and stop. Do not invent work.
 3. Do the task in the current directory with YOUR OWN tools (write real files,
@@ -106,7 +121,7 @@ func beePrompt(name, role, instance, desc string) string {
 6. Call complete_task with {"id":<the task id>,"result":"<one-line summary>"}.
    If it refuses, satisfy the stated reason and try once more.
 7. Print a one-line summary of what you did.`,
-		name, role, name, role, desc, name, role, instance)
+		name, role, name, role, desc, announce, name, role, instance)
 }
 
 func expand(tmpl string, sub map[string]string) string {
@@ -182,7 +197,7 @@ func main() {
 	defer os.Remove(cfgPath)
 
 	instance, _ := os.Hostname()
-	prompt := beePrompt(name, role, instance, desc)
+	prompt := beePrompt(name, role, instance, desc, os.Getenv("BEE_MODEL"), os.Getenv("BEE_BACKEND"))
 	if pf := os.Getenv("BEE_PROMPT_FILE"); pf != "" {
 		b, err := os.ReadFile(pf) // #nosec G304 G703 -- BEE_PROMPT_FILE is the operator's own prompt-override path (launcher config, same trust domain as HARNESS_CMD itself), not tainted input
 		if err != nil {

@@ -661,24 +661,30 @@ func TestCompletedDetailGroupsTasksByPhaseName(t *testing.T) {
 }
 
 // TestReplayPlayerStructure is a structural/grep check (mirrors
-// TestAgentWindowsStructure) over the served HTML for the replay player: the
-// required client globals/functions, the embed-friendly startReplay(streamOrUrl)
-// indirection (per the binding design constraint: the player's data source is
-// injected, not hard-coupled to a brain/SSE endpoint), and that none of the
-// read-only replay functions issue a POST/mutating fetch.
+// TestAgentWindowsStructure) over the served replay-player.js (and, for the
+// pieces that stayed in index.html — the <script src> wiring, the live-SSE
+// bootstrap, and setView — over index.html) for the required client
+// globals/functions, the embed-friendly startReplay(streamOrUrl) indirection
+// (per the binding design constraint: the player's data source is injected,
+// not hard-coupled to a brain/SSE endpoint), and that none of the read-only
+// replay functions issue a POST/mutating fetch.
 func TestReplayPlayerStructure(t *testing.T) {
 	sub, err := fs.Sub(webFS, "web")
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, err := fs.ReadFile(sub, "index.html")
+	rawPlayer, err := fs.ReadFile(sub, "replay-player.js")
 	if err != nil {
 		t.Fatal(err)
 	}
-	html := string(raw)
-	markers := []string{
-		`id="replay"`,
-		`id="replay-scrub"`,
+	player := string(rawPlayer)
+	rawIndex, err := fs.ReadFile(sub, "index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexHTML := string(rawIndex)
+
+	playerMarkers := []string{
 		`let replayEvents = [], replayIdx = 0, replayPlaying = false, replaySpeed = 1`,
 		`function startReplay(streamOrUrl)`,
 		`function openReplay(missionId)`,
@@ -687,76 +693,94 @@ func TestReplayPlayerStructure(t *testing.T) {
 		`function applyReplayEvent(ev)`,
 		`function seekReplay(target)`,
 	}
-	for _, m := range markers {
-		if !strings.Contains(html, m) {
-			t.Errorf("index.html missing required replay marker: %q", m)
+	for _, m := range playerMarkers {
+		if !strings.Contains(player, m) {
+			t.Errorf("replay-player.js missing required replay marker: %q", m)
 		}
 	}
+	indexMarkers := []string{`id="replay"`, `id="replay-scrub"`, `<script src="/replay-player.js"></script>`}
+	for _, m := range indexMarkers {
+		if !strings.Contains(indexHTML, m) {
+			t.Errorf("index.html missing required marker: %q", m)
+		}
+	}
+	// The extraction must not silently start a live connection from a
+	// brain-less file, and the product page must still start one.
+	if strings.Contains(player, "let es = connectSSE()") {
+		t.Error("replay-player.js must not auto-invoke connectSSE at load — a static embed has no brain to connect to; the embedding page opts in via `es = connectSSE()`")
+	}
+	if !strings.Contains(indexHTML, "es = connectSSE();") {
+		t.Error("index.html must still start live SSE (`es = connectSSE();`) now that connectSSE moved to replay-player.js")
+	}
+
 	// Embed-friendliness: startReplay must accept a URL OR an already-resolved
 	// events object/array — that's what lets a static embed hand it a baked
 	// JSON file instead of a live /api/replay URL.
 	const fnStart = "function startReplay(streamOrUrl){"
 	const fnEnd = "// openReplay:"
-	si := strings.Index(html, fnStart)
-	ei := strings.Index(html, fnEnd)
+	si := strings.Index(player, fnStart)
+	ei := strings.Index(player, fnEnd)
 	if si < 0 || ei < 0 || si >= ei {
-		t.Fatalf("could not locate startReplay..openReplay range in index.html")
+		t.Fatalf("could not locate startReplay..openReplay range in replay-player.js")
 	}
-	startFn := html[si:ei]
+	startFn := player[si:ei]
 	if !strings.Contains(startFn, "typeof streamOrUrl === 'string'") {
 		t.Error("startReplay must branch on typeof streamOrUrl — a URL is fetched, a plain object/array is used as-is (no hard-coupling to /api/replay)")
 	}
 	if strings.Contains(startFn, "/api/replay") {
 		t.Error("startReplay itself must not hard-code /api/replay — that URL belongs only in openReplay's wrapper call")
 	}
+
 	// Read-only by construction: none of the replay functions may call a
-	// mutating endpoint.
+	// mutating endpoint. In replay-player.js the block runs to EOF (it was
+	// the last thing extracted).
 	const rStart = "// ---- replay player ----"
-	const rEnd = "// Identity chip:"
-	rsi := strings.Index(html, rStart)
-	rei := strings.Index(html, rEnd)
-	if rsi < 0 || rei < 0 || rsi >= rei {
-		t.Fatalf("could not locate the replay player block in index.html")
+	rsi := strings.Index(player, rStart)
+	if rsi < 0 {
+		t.Fatalf("could not locate the replay player block in replay-player.js")
 	}
-	replayBlock := html[rsi:rei]
+	replayBlock := player[rsi:]
 	if strings.Contains(replayBlock, "method:'POST'") || strings.Contains(replayBlock, `method: 'POST'`) {
 		t.Error("replay player block must be read-only — no POST/mutating fetch")
 	}
+
 	// The "#empty" caption ("no agents yet") is normally refreshed only inside
-	// apply() (SSE-driven). During replay — and in the static-embed path where
-	// apply() never runs at all — the replay pipeline must refresh it itself,
-	// null-guarded for embeds that don't render the element. renderReplayScrub
-	// is the single choke point every replay state change funnels through
-	// (startReplay, replayStep, seekReplay).
+	// apply() (SSE-driven, stayed in index.html). During replay — and in the
+	// static-embed path where apply() never runs at all — the replay pipeline
+	// must refresh it itself, null-guarded for embeds that don't render the
+	// element.
 	const scrubStart = "function renderReplayScrub(){"
-	ssi := strings.Index(html, scrubStart)
+	ssi := strings.Index(player, scrubStart)
 	if ssi < 0 {
-		t.Fatalf("could not locate renderReplayScrub in index.html")
+		t.Fatalf("could not locate renderReplayScrub in replay-player.js")
 	}
-	sei := strings.Index(html[ssi:], "\n}")
+	sei := strings.Index(player[ssi:], "\n}")
 	if sei < 0 {
-		t.Fatalf("could not locate the end of renderReplayScrub in index.html")
+		t.Fatalf("could not locate the end of renderReplayScrub in replay-player.js")
 	}
-	scrubFn := html[ssi : ssi+sei]
+	scrubFn := player[ssi : ssi+sei]
 	if !strings.Contains(scrubFn, "getElementById('empty')") || !strings.Contains(scrubFn, "nodes.size") {
 		t.Error("renderReplayScrub must refresh #empty's display from nodes.size — apply() never runs during replay/static-embed, so the stale caption would sit over replayed agents")
 	}
-	// Leaving replay via any tab must not orphan the session (timer running,
-	// SSE closed, no visible control): setView tears the session down whenever
-	// the target view isn't replay, via the idempotent stopReplaySession().
-	if !strings.Contains(html, "function stopReplaySession()") {
-		t.Error("index.html missing stopReplaySession() — the idempotent replay teardown (stop timer, resume SSE)")
+
+	// Leaving replay via any tab must not orphan the session: setView tears
+	// the session down whenever the target view isn't replay, via the
+	// idempotent stopReplaySession(). stopReplaySession moved to
+	// replay-player.js; setView (a full multi-tab dispatcher) stayed in
+	// index.html — both are checked in their new homes.
+	if !strings.Contains(player, "function stopReplaySession()") {
+		t.Error("replay-player.js missing stopReplaySession() — the idempotent replay teardown (stop timer, resume SSE)")
 	}
 	const svStart = "function setView(v){"
-	vsi := strings.Index(html, svStart)
+	vsi := strings.Index(indexHTML, svStart)
 	if vsi < 0 {
 		t.Fatalf("could not locate setView in index.html")
 	}
-	vei := strings.Index(html[vsi:], "\n}")
+	vei := strings.Index(indexHTML[vsi:], "\n}")
 	if vei < 0 {
 		t.Fatalf("could not locate the end of setView in index.html")
 	}
-	setViewFn := html[vsi : vsi+vei]
+	setViewFn := indexHTML[vsi : vsi+vei]
 	if !strings.Contains(setViewFn, "stopReplaySession()") {
 		t.Error("setView must call stopReplaySession() when navigating to a non-replay view — otherwise switching tabs mid-replay leaves the timer running and SSE closed with no visible control")
 	}

@@ -371,3 +371,63 @@ test('the on-screen zoom controls drive the same transform and the hint fades', 
   const afterReset = await page.evaluate(() => (window as any).getViewTransform());
   expect(afterReset).toEqual({ scale: 1, x: 0, y: 0 });
 });
+
+test('a drag-pan released OFF-canvas does not eat the next legit click', async ({ page }) => {
+  // Regression: viewJustPanned() used to be cleared only inside a canvas
+  // 'click' listener, which never fires when the pan's mouseup lands off the
+  // canvas (routine — mousemove/mouseup are window-level, and the zoom
+  // controls sit at the edge). The flag leaked and silently swallowed the
+  // NEXT click. index.html's real consumer opens an agent window; here we
+  // install the identical guard (skip when viewJustPanned()) as a probe.
+  await page.goto('/');
+  await expect(async () => {
+    const max = await page.locator('#replay-scrub').getAttribute('max');
+    expect(Number(max)).toBeGreaterThan(0);
+  }).toPass({ timeout: 5000 });
+
+  const canvas = page.locator('#c');
+  await canvas.scrollIntoViewIfNeeded();
+  const box = (await canvas.boundingBox())!;
+  const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
+
+  await page.evaluate(() => {
+    (window as any).__honored = 0;
+    (window as any).__ateAfterPan = 0;   // clicks the guard correctly suppressed
+    document.getElementById('c')!.addEventListener('click', () => {
+      if ((window as any).viewJustPanned()) { (window as any).__ateAfterPan++; return; }
+      (window as any).__honored++;
+    });
+  });
+  await page.evaluate(() => (window as any).resetView());
+
+  // drag past the threshold and RELEASE OFF the canvas (to its right).
+  await page.mouse.move(cx, cy);
+  await page.mouse.down();
+  await page.mouse.move(cx + 60, cy + 20, { steps: 4 });
+  await page.mouse.move(box.x + box.width + 40, cy, { steps: 4 });
+  await page.mouse.up();
+
+  // the flag must have cleared on the global mouseup even with no canvas
+  // click to clear it — otherwise the next click is eaten.
+  await expect(async () => {
+    expect(await page.evaluate(() => (window as any).viewJustPanned())).toBe(false);
+  }).toPass({ timeout: 1000 });
+
+  // now a plain click on the canvas must be honored (probe fires 1/1).
+  await page.mouse.click(cx, cy);
+  const honored = await page.evaluate(() => (window as any).__honored);
+  expect(honored, 'the click after an off-canvas pan release must be honored').toBe(1);
+
+  // complementary guarantee: a pan RELEASED ON-canvas still has its own
+  // trailing click suppressed (the guard sees the flag before the timer).
+  await page.evaluate(() => { (window as any).__honored = 0; (window as any).resetView(); });
+  await page.mouse.move(cx, cy);
+  await page.mouse.down();
+  await page.mouse.move(cx + 70, cy + 25, { steps: 5 });
+  await page.mouse.up();   // releases on-canvas → fires a trailing click
+  await page.waitForTimeout(20);
+  const suppressed = await page.evaluate(() => (window as any).__ateAfterPan);
+  const honoredOnCanvas = await page.evaluate(() => (window as any).__honored);
+  expect(suppressed, "the on-canvas pan's own trailing click must be suppressed").toBeGreaterThanOrEqual(1);
+  expect(honoredOnCanvas, "the pan's trailing click must not be honored").toBe(0);
+});

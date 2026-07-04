@@ -939,6 +939,10 @@ function fmtBody(s){
 
 // ---- click-to-inspect an agent or file ----
 cv.addEventListener('click', ev => {
+  // A drag-pan fires a trailing click; ignore it (asking the shared flag
+  // directly, not relying on the pan handler's event-propagation order) so
+  // panning never opens an agent window or moves the inspector selection.
+  if(viewJustPanned()) return;
   // node coords are WORLD coords; the view may be zoomed/panned, so convert
   // through the shared inverse transform, not raw canvas-local pixels.
   const p = canvasToWorld(ev), mx = p.x, my = p.y;

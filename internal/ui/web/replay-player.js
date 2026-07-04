@@ -95,9 +95,11 @@ cv.addEventListener('wheel', ev => {
   zoomAt(ev.clientX - r.left, ev.clientY - r.top, Math.exp(-ev.deltaY * k));
 }, { passive: false });
 // drag-to-pan: only engages after a small movement threshold, so plain
-// clicks (agent windows, inspector) keep working untouched; a completed pan
-// eats the click that the browser fires after mouseup (capture phase runs
-// before index.html's bubble-phase hit-test).
+// clicks (agent windows, inspector) keep working untouched. A completed pan
+// fires a trailing 'click'; the hit-test in index.html ignores it by asking
+// viewJustPanned() at the top of its handler (a shared flag, NOT a capture-
+// phase propagation trick — that only worked by script load-order accident
+// and a reorder/extra listener would silently break it).
 let panFrom = null;
 cv.addEventListener('mousedown', ev => { panFrom = { x: ev.clientX, y: ev.clientY, ox: viewOX, oy: viewOY }; });
 addEventListener('mousemove', ev => {
@@ -108,10 +110,18 @@ addEventListener('mousemove', ev => {
   dismissViewHint();
   viewOX = panFrom.ox + dx; viewOY = panFrom.oy + dy;
 });
-addEventListener('mouseup', () => { panFrom = null; });
-cv.addEventListener('click', ev => {
-  if(viewDidPan){ viewDidPan = false; ev.stopImmediatePropagation(); ev.stopPropagation(); }
-}, true);
+// Clear pan state on the GLOBAL mouseup — it always fires, even when the
+// release lands OFF the canvas (routine: mousemove/mouseup are window-level
+// so a pan continues past the edge, and the zoom controls sit right at that
+// edge). A canvas 'click' only fires when mouseup also lands on cv, so
+// clearing viewDidPan there leaked the flag when the release was off-canvas
+// and silently ate the NEXT legit click. Deferring the reset to a macrotask
+// keeps it true through the pan's OWN trailing click (dispatched right after
+// this mouseup, before the timer) while a later unrelated click sees false.
+addEventListener('mouseup', () => { panFrom = null; setTimeout(() => { viewDidPan = false; }, 0); });
+// The one authority index.html's canvas hit-test consults to skip a pan's
+// trailing click — robust to listener/registration order by construction.
+function viewJustPanned(){ return viewDidPan; }
 // double-click on EMPTY space resets to the 1x fit; a double-click on an
 // agent stays the rename shortcut (index.html's own dblclick hit-test) —
 // the two are disjoint by the same hit radius the rename handler uses.
@@ -169,6 +179,10 @@ cv.addEventListener('touchmove', ev => {
 cv.addEventListener('touchend', ev => {
   if(ev.touches.length === 0){
     touchMode = null; touchPanFrom = null;
+    // Same leak guard as the mouse path: a touch-pan sets viewDidPan but
+    // preventDefault suppresses the synthetic mouseup that would clear it, so
+    // clear it here (deferred, for symmetry) or the NEXT tap-to-open is eaten.
+    setTimeout(() => { viewDidPan = false; }, 0);
   } else if(ev.touches.length === 1){
     // dropped from a pinch to a single finger — restart the pan baseline
     // from here rather than jumping using the old pinch anchor.

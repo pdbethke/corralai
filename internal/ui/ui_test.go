@@ -710,6 +710,11 @@ func TestReplayPlayerStructure(t *testing.T) {
 		`cv.addEventListener('touchstart'`,
 		`cv.addEventListener('touchmove'`,
 		`view-hint`,
+		// the pan-flag clears on the GLOBAL mouseup (fires even off-canvas),
+		// deferred so the pan's own trailing click still reads it; index.html
+		// consults viewJustPanned() rather than a fragile capture-phase eater.
+		`function viewJustPanned()`,
+		`setTimeout(() => { viewDidPan = false; }, 0)`,
 	}
 	for _, m := range playerMarkers {
 		if !strings.Contains(player, m) {
@@ -722,6 +727,9 @@ func TestReplayPlayerStructure(t *testing.T) {
 		// canvas-local pixels — otherwise clicking a zoomed/panned agent
 		// opens the wrong node (or nothing).
 		`canvasToWorld(ev)`,
+		// the click hit-test must skip a pan's trailing click by consulting
+		// the shared flag directly (robust to listener order).
+		`if(viewJustPanned()) return;`,
 	}
 	for _, m := range indexMarkers {
 		if !strings.Contains(indexHTML, m) {

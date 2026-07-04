@@ -1414,11 +1414,20 @@ function startReplay(streamOrUrl){
 function openReplay(missionId){
   startReplay('/api/replay?mission=' + missionId).catch(()=>{});
 }
-function closeReplay(){
+// stopReplaySession: the idempotent replay teardown — stop the step timer,
+// reset the play button, resume live SSE if this session paused it. Called
+// by setView() on ANY navigation to a non-replay view, so switching tabs
+// mid-replay can never orphan the session (timer running, SSE closed, no
+// visible control). closeReplay() is just the exit button's path into it.
+function stopReplaySession(){
   replayPlaying = false;
   if(replayTimer){ clearTimeout(replayTimer); replayTimer = null; }
+  const btn = document.getElementById('replay-playbtn');
+  if(btn) btn.textContent = '▶ play';
   if(replaySSEPaused){ es = connectSSE(); replaySSEPaused = false; } // resume live: the events handler pushes a fresh snapshot immediately on connect
-  setView('swarm');
+}
+function closeReplay(){
+  setView('swarm'); // setView runs stopReplaySession() for every non-replay view
 }
 function toggleReplayPlay(){
   replayPlaying = !replayPlaying;
@@ -1451,9 +1460,7 @@ function seekReplay(target){
 }
 // applyReplayEvent: the read-only translation from one ReplayEvent (brain.go's
 // merged, sorted beat stream) into the live canvas's node/link/burst/buzz
-// vocabulary. Unrecognized/telemetry-only kinds (proposal/review/
-// mission_completed/agent_activity, plus finding_resolved) are ignored —
-// graceful degradation, never a thrown error.
+// vocabulary.
 function applyReplayEvent(ev){
   const now = Date.now()/1000; // same clock draw()'s bursts/buzzes compare against
   const agentId = ev.actor ? 'a:'+ev.actor : null;
@@ -1488,12 +1495,26 @@ function applyReplayEvent(ev){
       buzzes.push({x, y, t0: now, txt: (sev ? sev+': ' : '') + (ev.subject||''), life: 3.2});
       break;
     }
+    // Graceful no-ops, deliberately: task_created has no visual because the
+    // live view doesn't render unclaimed queue entries as nodes either;
+    // finding_resolved and the telemetry-only kinds (proposal/review/
+    // mission_completed/agent_activity) are ambience the canvas has no
+    // vocabulary for yet. Unknown future kinds land here too — graceful
+    // degradation, never a thrown error.
     case 'task_created':
+    case 'finding_resolved':
     default:
-      break; // no visual for queue-entry-only beats — mirrors the live view (unclaimed tasks aren't nodes)
+      break;
   }
 }
 function renderReplayScrub(){
+  // apply() (the SSE path) normally owns #empty's "no agents yet" caption —
+  // but apply() never runs during replay (SSE paused) or in a static embed
+  // (no SSE at all), so the replay pipeline refreshes it here, at the single
+  // choke point every replay state change funnels through (startReplay,
+  // replayStep, seekReplay). Null-guarded: an embed may not render #empty.
+  const emp = document.getElementById('empty');
+  if(emp) emp.style.display = nodes.size ? 'none' : 'flex';
   const scrub = document.getElementById('replay-scrub');
   if(!scrub) return;
   scrub.max = replayEvents.length;
@@ -1520,6 +1541,7 @@ fetch('/api/me').then(r=>r.json()).then(m=>{
 let view = 'swarm', memInit = false, _t, _sel;
 function setView(v){
   view = v;
+  if(v !== 'replay') stopReplaySession(); // leaving replay by ANY route ends the session cleanly (no-op otherwise)
   document.getElementById('tab-swarm').classList.toggle('active', v==='swarm');
   document.getElementById('tab-progress').classList.toggle('active', v==='progress');
   document.getElementById('tab-topology').classList.toggle('active', v==='topology');

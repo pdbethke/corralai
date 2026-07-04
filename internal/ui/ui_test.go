@@ -662,6 +662,44 @@ func TestReplayPlayerStructure(t *testing.T) {
 	if strings.Contains(replayBlock, "method:'POST'") || strings.Contains(replayBlock, `method: 'POST'`) {
 		t.Error("replay player block must be read-only — no POST/mutating fetch")
 	}
+	// The "#empty" caption ("no agents yet") is normally refreshed only inside
+	// apply() (SSE-driven). During replay — and in the static-embed path where
+	// apply() never runs at all — the replay pipeline must refresh it itself,
+	// null-guarded for embeds that don't render the element. renderReplayScrub
+	// is the single choke point every replay state change funnels through
+	// (startReplay, replayStep, seekReplay).
+	const scrubStart = "function renderReplayScrub(){"
+	ssi := strings.Index(html, scrubStart)
+	if ssi < 0 {
+		t.Fatalf("could not locate renderReplayScrub in index.html")
+	}
+	sei := strings.Index(html[ssi:], "\n}")
+	if sei < 0 {
+		t.Fatalf("could not locate the end of renderReplayScrub in index.html")
+	}
+	scrubFn := html[ssi : ssi+sei]
+	if !strings.Contains(scrubFn, "getElementById('empty')") || !strings.Contains(scrubFn, "nodes.size") {
+		t.Error("renderReplayScrub must refresh #empty's display from nodes.size — apply() never runs during replay/static-embed, so the stale caption would sit over replayed agents")
+	}
+	// Leaving replay via any tab must not orphan the session (timer running,
+	// SSE closed, no visible control): setView tears the session down whenever
+	// the target view isn't replay, via the idempotent stopReplaySession().
+	if !strings.Contains(html, "function stopReplaySession()") {
+		t.Error("index.html missing stopReplaySession() — the idempotent replay teardown (stop timer, resume SSE)")
+	}
+	const svStart = "function setView(v){"
+	vsi := strings.Index(html, svStart)
+	if vsi < 0 {
+		t.Fatalf("could not locate setView in index.html")
+	}
+	vei := strings.Index(html[vsi:], "\n}")
+	if vei < 0 {
+		t.Fatalf("could not locate the end of setView in index.html")
+	}
+	setViewFn := html[vsi : vsi+vei]
+	if !strings.Contains(setViewFn, "stopReplaySession()") {
+		t.Error("setView must call stopReplaySession() when navigating to a non-replay view — otherwise switching tabs mid-replay leaves the timer running and SSE closed with no visible control")
+	}
 }
 
 // TestReplayEndpoint asserts the read-only /api/replay endpoint: a valid

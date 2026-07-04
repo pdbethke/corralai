@@ -111,6 +111,16 @@ if [ -n "${OG_SEED_CMD:-}" ]; then
   env "${SAFE_ENV[@]}" HOME="$HOME" bash -c "$OG_SEED_CMD"
 fi
 
+# If something is ALREADY answering on $ADDR (e.g. the operator's real brain),
+# our scratch child would die on bind failure while the health poll below
+# happily blessed the incumbent — and the capture would shoot the personal
+# brain. Refuse up front rather than trust whatever is listening.
+if curl -sf "http://$ADDR/healthz" > /dev/null 2>&1; then
+  echo "REFUSING: something is already listening on $ADDR — likely a real brain." >&2
+  echo "Stop it (or use --brain-url ... --i-vetted-this-brain) and re-run." >&2
+  exit 2
+fi
+
 env -i "${SAFE_ENV[@]}" "$SCRATCH/corral-bin" > "$SCRATCH/corral.log" 2>&1 &
 BRAIN_PID=$!
 for _ in $(seq 1 50); do
@@ -121,6 +131,13 @@ if ! curl -sf "http://$ADDR/healthz" > /dev/null 2>&1; then
   echo "brain never became healthy; log follows:" >&2
   cat "$SCRATCH/corral.log" >&2
   exit 1
+fi
+# Belt to the pre-launch check's suspenders: the healthy responder must be OUR
+# child, not an incumbent that raced onto the port after the check above.
+if ! kill -0 "$BRAIN_PID" 2>/dev/null; then
+  echo "REFUSING: port $ADDR answered healthz but our scratch brain (pid $BRAIN_PID) is dead —" >&2
+  echo "a brain we didn't launch owns the port. Not capturing it." >&2
+  exit 2
 fi
 
 if [ -n "${OG_DRIVE_CMD:-}" ]; then

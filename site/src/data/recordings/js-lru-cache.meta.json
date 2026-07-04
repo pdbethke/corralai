@@ -13,5 +13,9 @@
     "cpu": "AMD Ryzen 9 5900 12-Core",
     "ram": "128GB",
     "host": "linux/amd64"
+  },
+  "result": {
+    "url": "https://github.com/pdbethke/corral-run-js-lru-cache",
+    "label": "Browse the code this herd wrote"
   }
 }

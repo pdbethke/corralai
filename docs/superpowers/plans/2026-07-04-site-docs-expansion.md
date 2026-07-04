@@ -1846,6 +1846,1632 @@ EOF
 
 ---
 
+### Task 9: Recordings gallery + build-time DuckDB analytics
+
+**Files:**
+- Modify: `internal/brain/replay.go` (ReplayEvent gains `Model`; findings/telemetry loops populate it)
+- Modify: `internal/telemetry/store.go:154-176` (`EventsForMission` selects the `model` column)
+- Test: `internal/brain/replay_test.go` (new `TestBuildReplayStreamCarriesModel`)
+- Modify: `scripts/scrub-golden-run.py` (new `models` subcommand)
+- Modify: `scripts/export-golden-run.sh` (`--slug`, `--rederive-meta`, `models` field in the meta sidecar, new default `--out`)
+- Move: `site/src/data/golden-run.json` → `site/src/data/recordings/golden-run.json` (and `.meta.json` alongside)
+- Modify: `site/src/components/Hero.astro` (import paths only)
+- Modify: `site/tests/site.spec.ts` (deny-list test globs every recording)
+- Create: `site/scripts/build-analytics.mjs`
+- Modify: `site/package.json` (`@duckdb/node-api` devDependency; `prebuild`/`predev` chain)
+- Modify: `.gitignore` (add `site/src/data/analytics.json`)
+- Create: `site/src/pages/recordings.astro`
+- Modify: `site/src/components/WatchItBack.astro` ("more recordings" link)
+- Modify: `site/src/components/SiteFooter.astro` (truthful built-on line)
+- Modify: `site/src/content/docs/concepts/multi-model-herds.mdx` (fleet-oracle/MotherDuck paragraph)
+- Test: `site/tests/recordings.spec.ts`
+
+**Interfaces:**
+- Consumes: `startReplay(streamOrUrl)` from `replay-player.js` (already accepts a resolved `{events:[...]}` object — no player change); Task 1's `--stage-*` tokens for the full-width player frame; the export pipeline from the v1 plan's Task 2 (`scripts/export-golden-run.sh` + `scripts/scrub-golden-run.py`, flags as shipped: `--mission/--brain-url/--bearer/--i-know/--yes/--out`, meta sidecar derived from `--out`).
+- Produces: `ReplayEvent.Model string` (JSON `model,omitempty`) plus `Detail["backend"]` on queue-derived finding events (Task 10's recording carries these); `scripts/export-golden-run.sh --slug NAME` (writes `site/src/data/recordings/NAME.json` + `.meta.json`, meta now including `"models": [...]`) and `--rederive-meta PATH.json` (recomputes `models` for an already-committed stream); `python3 scripts/scrub-golden-run.py models FILE` (prints a sorted JSON array of `backend:model` labels); `site/src/data/analytics.json` (build-generated, gitignored: `{findings_by_severity:[{slug,severity,n}], findings_by_model:[{model,findings}], task_durations:[{slug,tasks,avg_seconds,max_seconds}]}`); the `/recordings/` page Task 10 populates and screenshots — and Task 12 later upgrades into the full cockpit (this task ships it canvas-only; the cockpit panel DOM ids are added by Task 12, whose renderers null-guard so the dependency is safe in both directions).
+
+Ground truth this task is built on (verified in source): `ReplayEvent` (`internal/brain/replay.go:16-22`) has NO model field today; `telemetry.Event` HAS a `Model` column (`internal/telemetry/store.go:30`) but `EventsForMission` (`store.go:156`) doesn't select it, so it never reaches the stream; queue findings carry `ReporterModel`/`ReporterBackend` (`internal/queue/findings.go:39`) but `BuildReplayStream`'s findings loop drops both. So the spec's "derive models from the stream" is impossible against the code as shipped — this task fixes the product (TDD) so streams are self-describing, which the build-time analytics REQUIRE anyway (the site build sees only committed JSON, never the brain's telemetry DB).
+
+- [ ] **Step 1: Write the failing Go test**
+
+Append to `internal/brain/replay_test.go`:
+
+```go
+// TestBuildReplayStreamCarriesModel: model identity must ride through the
+// stream from BOTH sources that know it — the queue's findings table
+// (reporter_model/reporter_backend) and the telemetry event log's model
+// column — so an exported recording is self-describing about what models
+// built it (site Part D derives meta.models and per-model analytics from
+// the committed stream alone; it never sees the brain's telemetry DB).
+func TestBuildReplayStreamCarriesModel(t *testing.T) {
+	q, tel, mid := seedReplayMission(t)
+	if _, err := q.AddFinding(queue.Finding{MissionID: mid, Reporter: "bee2", Type: "bug",
+		Severity: "high", Target: "y.go", ReporterModel: "qwen2.5-coder:7b", ReporterBackend: "ollama"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tel.Record(telemetry.Event{MissionID: mid, Kind: "finding_reported",
+		Actor: "bee2", Subject: "y.go", Model: "qwen2.5-coder:7b"}); err != nil {
+		t.Fatal(err)
+	}
+	events, err := BuildReplayStream(q, tel, mid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var queueSide, telSide bool
+	for _, ev := range events {
+		if ev.Kind != "finding_reported" || ev.Subject != "y.go" || ev.Model != "qwen2.5-coder:7b" {
+			continue
+		}
+		if b, _ := ev.Detail["backend"].(string); b == "ollama" {
+			queueSide = true // queue-derived: has reporter_backend in detail
+		} else {
+			telSide = true // telemetry-derived: model column only
+		}
+	}
+	if !queueSide {
+		t.Error("queue-derived finding_reported must carry Model + detail.backend from reporter_model/reporter_backend")
+	}
+	if !telSide {
+		t.Error("telemetry-derived finding_reported must carry Model from the telemetry model column")
+	}
+}
+```
+
+- [ ] **Step 2: Run it to confirm it fails**
+
+```bash
+go test ./internal/brain/... -run TestBuildReplayStreamCarriesModel -v
+```
+
+Expected: FAIL at compile — `ev.Model undefined (type ReplayEvent has no field or method Model)` — which is the point.
+
+- [ ] **Step 3: Thread model through the stream**
+
+In `internal/brain/replay.go`, add the field to the struct:
+
+```go
+type ReplayEvent struct {
+	TS      float64        `json:"ts"`
+	Kind    string         `json:"kind"`
+	Actor   string         `json:"actor,omitempty"`
+	Subject string         `json:"subject,omitempty"`
+	Model   string         `json:"model,omitempty"` // model that filed this beat, when known (findings, telemetry) — Part D's recordings derive meta.models and per-model analytics from this
+	Detail  map[string]any `json:"detail,omitempty"`
+}
+```
+
+Replace the findings loop's first append (`replay.go:63-64`) with:
+
+```go
+	for _, f := range findings {
+		fev := ReplayEvent{TS: f.CreatedTS, Kind: "finding_reported", Actor: f.Reporter, Subject: f.Target,
+			Model:  f.ReporterModel,
+			Detail: map[string]any{"type": f.Type, "severity": f.Severity}}
+		if f.ReporterBackend != "" {
+			fev.Detail["backend"] = f.ReporterBackend
+		}
+		out = append(out, fev)
+		if f.ResolvedTS > 0 {
+			out = append(out, ReplayEvent{TS: f.ResolvedTS, Kind: "finding_resolved", Subject: f.Target,
+				Detail: map[string]any{"status": f.Status}})
+		}
+	}
+```
+
+In the telemetry loop, add `Model: e.Model`:
+
+```go
+		for _, e := range evs {
+			out = append(out, ReplayEvent{TS: e.TS, Kind: e.Kind, Actor: e.Actor, Subject: e.Subject, Model: e.Model, Detail: e.Detail})
+		}
+```
+
+In `internal/telemetry/store.go`, `EventsForMission` (lines 154-176) — add the model column to the SELECT and the scan:
+
+```go
+	rows, err := s.db.Query(
+		`SELECT ts, kind, COALESCE(actor,''), COALESCE(subject,''), COALESCE(model,''), COALESCE(detail,'') FROM events WHERE mission_id=? ORDER BY ts ASC`,
+		missionID)
+```
+
+```go
+		if err := rows.Scan(&e.TS, &e.Kind, &e.Actor, &e.Subject, &e.Model, &detail); err != nil {
+			return nil, err
+		}
+```
+
+- [ ] **Step 4: Run the test + the full Go suite**
+
+```bash
+go test ./internal/brain/... -run TestBuildReplayStream -v
+go test ./... -count=1
+```
+
+Expected: PASS (the golden-order fixture test compares `(kind,subject)` pairs only, so the new field can't break it).
+
+- [ ] **Step 5: Add the `models` subcommand to `scripts/scrub-golden-run.py`**
+
+Add this function alongside `cmd_deny` (line 105) and `cmd_manifest` (line 116):
+
+```python
+def cmd_models(path):
+    """Prints a sorted JSON array of distinct model labels seen in the stream
+    (backend:model when the event carries a backend in detail, bare model
+    otherwise). A bare label that is the suffix of a qualified one is the SAME
+    model seen from the telemetry side (no backend column there) — collapsed,
+    so one model never lists twice."""
+    data = json.load(open(path, encoding='utf-8'))
+    models = set()
+    for ev in data.get('events', []):
+        m = (ev.get('model') or '').strip()
+        if not m:
+            continue
+        backend = ((ev.get('detail') or {}).get('backend') or '').strip()
+        models.add(backend + ':' + m if backend else m)
+    models = {m for m in models if not any(o != m and o.endswith(':' + m) for o in models)}
+    print(json.dumps(sorted(models)))
+```
+
+And wire it into the dispatcher at the bottom, after the existing `elif cmd == 'manifest':` branch (line 150):
+
+```python
+    elif cmd == 'models':
+        cmd_models(sys.argv[2])
+```
+
+Quick check against fixtures:
+
+```bash
+printf '{"events":[{"ts":1,"kind":"finding_reported","model":"qwen2.5-coder:7b","detail":{"backend":"ollama"}},{"ts":2,"kind":"finding_reported","model":"qwen2.5-coder:7b"},{"ts":3,"kind":"finding_reported","model":"llama3.2:3b","detail":{"backend":"ollama"}}]}' > /tmp/models-test.json
+python3 scripts/scrub-golden-run.py models /tmp/models-test.json
+```
+
+Expected: `["ollama:llama3.2:3b", "ollama:qwen2.5-coder:7b"]` — the bare duplicate collapsed into the qualified label.
+
+- [ ] **Step 6: Extend `scripts/export-golden-run.sh`**
+
+Four edits, exact:
+
+(a) The defaults block — new default `--out` (the golden run moves into `recordings/` in Step 7) plus the two new flag variables:
+
+```bash
+BRAIN_URL="${BRAIN_URL:-http://127.0.0.1:9019}"
+MISSION_ID=""
+OUT_JSON="site/src/data/recordings/golden-run.json"
+SLUG=""
+REDERIVE=""
+I_KNOW=0
+YES=0
+BEARER=""
+```
+
+(b) Usage text — add these lines to the `usage()` heredoc after the `--out PATH` entry:
+
+```
+  --slug NAME     Shorthand for --out site/src/data/recordings/NAME.json —
+                   the recordings-gallery layout. The meta sidecar travels
+                   with it as always.
+  --rederive-meta PATH.json
+                   Offline mode: no brain contact, no export. Recomputes the
+                   models field of PATH's existing .meta.json sidecar from
+                   the committed stream (for recordings exported before the
+                   models field existed). All other meta fields are kept.
+```
+
+(c) Arg parsing — add two cases to the `while` loop before `-h|--help`:
+
+```bash
+    --slug) SLUG="$2"; shift 2 ;;
+    --rederive-meta) REDERIVE="$2"; shift 2 ;;
+```
+
+And immediately after the loop (before the `OUT_META=` derivation):
+
+```bash
+[ -n "$SLUG" ] && OUT_JSON="site/src/data/recordings/$SLUG.json"
+
+if [ -n "$REDERIVE" ]; then
+  META="${REDERIVE%.json}.meta.json"
+  [ -f "$REDERIVE" ] && [ -f "$META" ] || { echo "FAIL: need both $REDERIVE and $META" >&2; exit 1; }
+  MODELS_JSON="$(python3 scripts/scrub-golden-run.py models "$REDERIVE")"
+  python3 - "$META" "$MODELS_JSON" <<'PYEOF'
+import json, sys
+meta_path, models = sys.argv[1], json.loads(sys.argv[2])
+meta = json.load(open(meta_path, encoding='utf-8'))
+meta['models'] = models
+with open(meta_path, 'w', encoding='utf-8') as f:
+    json.dump(meta, f, indent=2)
+    f.write('\n')
+print('rederived models for', meta_path, '->', models)
+PYEOF
+  exit 0
+fi
+```
+
+(d) The meta-writing python at the end of the script — derive `models` from the just-exported stream and include it (insert the `MODELS_JSON=` line before the existing `curl .../api/history` meta pipeline, and add the `'models'` key to the `meta = {...}` dict; everything else unchanged):
+
+```bash
+MODELS_JSON="$(python3 scripts/scrub-golden-run.py models "$TMP_JSON")"
+
+curl "${curl_auth[@]}" "$BRAIN_URL/api/history" | python3 -c "
+import json, sys
+missions = json.load(sys.stdin).get('missions') or []
+m = next((x for x in missions if x.get('id') == $MISSION_ID), {})
+meta = {
+    'directive': m.get('directive', ''),
+    'task_count': m.get('task_count', 0),
+    'done_task_count': m.get('done_task_count', 0),
+    'finding_count': m.get('finding_count', 0),
+    'duration_seconds': m.get('duration_seconds', 0),
+    'models': json.loads('''$MODELS_JSON'''),
+}
+with open('$OUT_META', 'w') as f:
+    json.dump(meta, f, indent=2)
+    f.write('\n')
+"
+```
+
+- [ ] **Step 7: Move the golden run into `recordings/` and rederive its meta**
+
+```bash
+mkdir -p site/src/data/recordings
+git mv site/src/data/golden-run.json site/src/data/recordings/golden-run.json
+git mv site/src/data/golden-run.meta.json site/src/data/recordings/golden-run.meta.json
+bash scripts/export-golden-run.sh --rederive-meta site/src/data/recordings/golden-run.json
+```
+
+Expected: `rederived models for site/src/data/recordings/golden-run.meta.json -> []` — the existing golden run was recorded BEFORE Step 3's model threading, so its stream honestly carries no model info; an empty list is the truthful value, not a bug (the card simply omits the models line, and analytics bucket its findings under `(not recorded)`, mirroring `model_comparison`'s own `(no model)` convention in `internal/telemetry/store.go:188`).
+
+Update `site/src/components/Hero.astro`'s two imports (paths only, nothing else changes in that file):
+
+```astro
+import golden from '../data/recordings/golden-run.json';
+import meta from '../data/recordings/golden-run.meta.json';
+```
+
+Update `site/tests/site.spec.ts`'s deny-list test to cover EVERY committed recording (replace the whole `'the committed golden-run.json passes the deny-list scan'` test):
+
+```ts
+test('every committed recording passes the deny-list scan', async () => {
+  const fs = await import('node:fs');
+  const files = fs.readdirSync('src/data/recordings').filter((f) => f.endsWith('.json') && !f.endsWith('.meta.json'));
+  expect(files.length, 'expected at least one committed recording').toBeGreaterThanOrEqual(1);
+  for (const f of files) {
+    const text = fs.readFileSync(`src/data/recordings/${f}`, 'utf-8');
+    const offenses = scanDeny(text);
+    expect(offenses, `${f} failed the deny-list scan:\n${offenses.join('\n')}`).toHaveLength(0);
+  }
+});
+```
+
+- [ ] **Step 8: The DuckDB build-analytics step**
+
+```bash
+cd site && npm install --save-dev --save-exact @duckdb/node-api && cd ..
+```
+
+Create `site/scripts/build-analytics.mjs`:
+
+```js
+// SPDX-License-Identifier: Elastic-2.0
+// site/scripts/build-analytics.mjs — build-time DuckDB aggregates over every
+// committed recording stream in src/data/recordings/, written to
+// src/data/analytics.json (generated + gitignored; regenerated by the
+// predev/prebuild npm hooks, never hand-edited).
+//
+// DuckDB binding choice (the spec said "CLI or node binding — decide by what
+// installs cleanly in CI's ubuntu image"): the official Node binding,
+// @duckdb/node-api. It installs through the same `npm ci` as every other
+// site dependency (prebuilt binaries, exact-pinned via package-lock), so CI
+// needs no extra curl/apt step the way the standalone CLI would. MotherDuck
+// is deliberately NOT involved here — it stays product-side (fleet sync +
+// the cross-brain oracle, credentialed); this script reads only committed
+// local JSON, preserving the site's zero-external posture at build time too.
+import { DuckDBInstance } from '@duckdb/node-api';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+
+const RECORDINGS_DIR = path.join(import.meta.dirname, '..', 'src', 'data', 'recordings');
+const OUT = path.join(import.meta.dirname, '..', 'src', 'data', 'analytics.json');
+
+// ---- flatten every stream to one row per event ----
+const rows = [];
+const seenFindings = new Set();
+for (const f of fs.readdirSync(RECORDINGS_DIR).sort()) {
+  if (!f.endsWith('.json') || f.endsWith('.meta.json')) continue;
+  const slug = f.replace(/\.json$/, '');
+  const { events = [] } = JSON.parse(fs.readFileSync(path.join(RECORDINGS_DIR, f), 'utf-8'));
+  for (const ev of events) {
+    const d = ev.detail || {};
+    // A finding appears TWICE in a stream — once from the queue's findings
+    // table, once from the telemetry event log (BuildReplayStream merges
+    // both sources). Dedupe by (slug, subject, severity, second-rounded ts)
+    // so analytics count findings, not stream beats. Stream order puts the
+    // queue-derived beat (which carries detail.backend) first, so the
+    // surviving row is the backend-qualified one — deterministic.
+    if (ev.kind === 'finding_reported') {
+      const key = `${slug}|${ev.subject || ''}|${d.severity || ''}|${Math.round(ev.ts)}`;
+      if (seenFindings.has(key)) continue;
+      seenFindings.add(key);
+    }
+    rows.push({
+      slug, ts: ev.ts, kind: ev.kind || '', subject: ev.subject || '',
+      model: ev.model || '', backend: String(d.backend || ''), severity: String(d.severity || ''),
+    });
+  }
+}
+if (rows.length === 0) {
+  console.error('no recordings found under', RECORDINGS_DIR);
+  process.exit(1);
+}
+const ndjson = path.join(os.tmpdir(), `corralai-analytics-${process.pid}.ndjson`);
+fs.writeFileSync(ndjson, rows.map((r) => JSON.stringify(r)).join('\n'));
+
+// ---- DuckDB aggregates ----
+const instance = await DuckDBInstance.create(':memory:');
+const conn = await instance.connect();
+await conn.run(`CREATE TABLE ev AS SELECT * FROM read_json_auto('${ndjson}', format='newline_delimited')`);
+
+async function q(sql) {
+  const reader = await conn.runAndReadAll(sql);
+  // DuckDB counts come back as BigInt; JSON.stringify rejects BigInt.
+  return reader.getRowObjects().map((row) =>
+    Object.fromEntries(Object.entries(row).map(([k, v]) => [k, typeof v === 'bigint' ? Number(v) : v]))
+  );
+}
+
+const findings_by_severity = await q(`
+  SELECT slug, COALESCE(NULLIF(severity,''),'(none)') AS severity, count(*) AS n
+  FROM ev WHERE kind='finding_reported' GROUP BY slug, severity ORDER BY slug, severity`);
+const findings_by_model = await q(`
+  SELECT CASE WHEN model='' THEN '(not recorded)'
+              WHEN backend='' THEN model
+              ELSE backend || ':' || model END AS model,
+         count(*) AS findings
+  FROM ev WHERE kind='finding_reported' GROUP BY 1 ORDER BY findings DESC, model`);
+const task_durations = await q(`
+  WITH claimed AS (SELECT slug, subject, min(ts) AS t0 FROM ev WHERE kind='task_claimed' GROUP BY slug, subject),
+       done    AS (SELECT slug, subject, max(ts) AS t1 FROM ev WHERE kind='task_done'    GROUP BY slug, subject)
+  SELECT claimed.slug AS slug, count(*) AS tasks,
+         round(avg(t1 - t0), 1) AS avg_seconds, round(max(t1 - t0), 1) AS max_seconds
+  FROM claimed JOIN done USING (slug, subject)
+  WHERE t1 >= t0 GROUP BY claimed.slug ORDER BY claimed.slug`);
+
+fs.writeFileSync(OUT, JSON.stringify({
+  generated_note: 'built by site/scripts/build-analytics.mjs (DuckDB) — do not hand-edit',
+  findings_by_severity, findings_by_model, task_durations,
+}, null, 2) + '\n');
+fs.rmSync(ndjson);
+console.log('wrote', OUT, `(${rows.length} events across ${new Set(rows.map((r) => r.slug)).size} recording(s))`);
+```
+
+Wire it into `site/package.json`'s scripts (analytics must exist before both `astro build` AND `astro dev`):
+
+```json
+  "predev": "node scripts/build-analytics.mjs",
+  "prebuild": "bash ../scripts/sync-site-assets.sh --check && node scripts/build-analytics.mjs",
+```
+
+Add to `.gitignore`:
+
+```
+site/src/data/analytics.json
+```
+
+Run it once and inspect:
+
+```bash
+cd site && node scripts/build-analytics.mjs && cat src/data/analytics.json && cd ..
+```
+
+Expected: `wrote .../analytics.json (NNN events across 1 recording(s))`; `findings_by_model` shows one `(not recorded)` row (the pre-model-threading golden run); `findings_by_severity` and `task_durations` show real numbers for `golden-run`.
+
+- [ ] **Step 9: The `/recordings` page**
+
+Create `site/src/pages/recordings.astro`:
+
+```astro
+---
+// SPDX-License-Identifier: Elastic-2.0
+import '../styles/global.css';
+import analytics from '../data/analytics.json';
+
+// Enumerate committed recordings by glob — no manifest file to drift.
+const streamModules = import.meta.glob('../data/recordings/*.json', { eager: true });
+const streams: Record<string, unknown> = {};
+const cards: { slug: string; directive: string; models: string[]; task_count: number; done_task_count: number; finding_count: number; minutes: number }[] = [];
+for (const [p, mod] of Object.entries(streamModules)) {
+  if (p.endsWith('.meta.json')) continue;
+  const slug = p.split('/').pop()!.replace(/\.json$/, '');
+  const metaMod = streamModules[p.replace(/\.json$/, '.meta.json')] as any;
+  if (!metaMod) throw new Error(`recording ${slug} has no .meta.json sidecar`);
+  const meta = metaMod.default ?? metaMod;
+  streams[slug] = (mod as any).default ?? mod;
+  cards.push({
+    slug,
+    directive: meta.directive || '(no directive recorded)',
+    models: meta.models || [],
+    task_count: meta.task_count || 0,
+    done_task_count: meta.done_task_count || 0,
+    finding_count: meta.finding_count || 0,
+    minutes: Math.round((meta.duration_seconds || 0) / 60),
+  });
+}
+cards.sort((a, b) => a.slug.localeCompare(b.slug));
+const maxModelFindings = Math.max(1, ...analytics.findings_by_model.map((r: any) => r.findings));
+---
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <title>Corralai — recordings</title>
+  <meta name="description" content="A gallery of real recorded corralai missions — different directives, different model mixes, every one replayable." />
+</head>
+<body>
+  <div class="section">
+    <h1>Recordings</h1>
+    <p>
+      Real recorded missions — every one exported through the same deny-list +
+      human-manifest privacy gate as the landing page's hero. Pick a card to
+      replay it on the corral canvas below.
+    </p>
+    <div class="cards">
+      {cards.map((c) => (
+        <button class="card" data-slug={c.slug}>
+          <span class="directive">{c.directive}</span>
+          {c.models.length > 0 && <span class="models">{c.models.join(' + ')}</span>}
+          <span class="stats">{c.task_count} tasks ({c.done_task_count} done) · {c.finding_count} findings · {c.minutes}m</span>
+        </button>
+      ))}
+    </div>
+    <p class="back"><a href="/">← back to the corral</a></p>
+  </div>
+
+  <div id="stage-frame">
+    <div id="stage">
+      <canvas id="c"></canvas>
+      <div id="empty">pick a recording above</div>
+    </div>
+  </div>
+  <div id="replay">
+    <div class="row">
+      <span id="replay-title"></span>
+      <button id="replay-playbtn" onclick="toggleReplayPlay()">▶ play</button>
+      <input type="range" id="replay-scrub" min="0" max="0" value="0" oninput="seekReplay(+this.value)">
+      <span id="replay-label">0 / 0</span>
+      <select onchange="setReplaySpeed(+this.value)" title="playback speed">
+        <option value="1">1×</option><option value="2">2×</option><option value="4" selected>4×</option>
+        <option value="8">8×</option><option value="16">16×</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="section" id="analytics">
+    <h2>Across the recordings</h2>
+    <p class="how">
+      Computed at build time with DuckDB over the committed streams above —
+      the public face of the product's <code>model_comparison</code> report.
+      MotherDuck stays product-side (fleet sync + the cross-brain oracle,
+      credentialed) and is never wired into this site.
+    </p>
+
+    <h3>Findings by model</h3>
+    <table>
+      <thead><tr><th>model</th><th>findings</th><th></th></tr></thead>
+      <tbody>
+        {analytics.findings_by_model.map((r: any) => (
+          <tr>
+            <td>{r.model}</td>
+            <td class="num">{r.findings}</td>
+            <td class="barcell"><div class="bar" style={`width:${Math.round((r.findings / maxModelFindings) * 100)}%`}></div></td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+
+    <h3>Findings by severity, per recording</h3>
+    <table>
+      <thead><tr><th>recording</th><th>severity</th><th>count</th></tr></thead>
+      <tbody>
+        {analytics.findings_by_severity.map((r: any) => (
+          <tr><td>{r.slug}</td><td>{r.severity}</td><td class="num">{r.n}</td></tr>
+        ))}
+      </tbody>
+    </table>
+
+    <h3>Task durations, per recording</h3>
+    <table>
+      <thead><tr><th>recording</th><th>tasks</th><th>avg (s)</th><th>max (s)</th></tr></thead>
+      <tbody>
+        {analytics.task_durations.map((r: any) => (
+          <tr><td>{r.slug}</td><td class="num">{r.tasks}</td><td class="num">{r.avg_seconds}</td><td class="num">{r.max_seconds}</td></tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
+</body>
+</html>
+
+<style>
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; margin: 20px 0; }
+  .card {
+    display: flex; flex-direction: column; gap: 8px; text-align: left; cursor: pointer;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px;
+    font: inherit; color: var(--fg);
+  }
+  .card:hover, .card.active { border-color: var(--amber); }
+  .directive { font-weight: 600; }
+  .models { color: var(--amber); font-size: 0.85rem; }
+  .stats { color: var(--muted); font-size: 0.85rem; }
+  .back { margin-top: 8px; }
+  /* full-width dark player viewport — same framing tokens as the hero (Task 1) */
+  #stage-frame { max-width: 1040px; margin: 0 auto; padding: 0 20px; }
+  #stage {
+    position: relative; height: 60vh; min-height: 380px;
+    background: var(--stage-panel); border: 1px solid var(--stage-line);
+    border-radius: 12px; box-shadow: 0 18px 44px rgba(30,20,0,.22); overflow: hidden;
+  }
+  #c { width: 100%; height: 100%; display: block; }
+  #empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--stage-muted); pointer-events: none; }
+  #replay {
+    position: relative; background: var(--stage-panel); color: var(--stage-fg);
+    border: 1px solid var(--stage-line); border-top: none;
+    border-bottom-left-radius: 12px; border-bottom-right-radius: 12px;
+    padding: 9px 16px; max-width: 1040px; margin: 0 auto;
+  }
+  #replay .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  #replay .row button { background: var(--stage-panel); color: var(--stage-fg); border: 1px solid var(--stage-line); border-radius: 5px; padding: 4px 12px; font-size: 12px; cursor: pointer; }
+  #replay .row button:hover { border-color: var(--stage-amber); }
+  #replay-scrub { flex: 1; min-width: 160px; }
+  #replay-label { color: var(--stage-muted); font-size: 11.5px; min-width: 70px; text-align: center; }
+  #replay-title { color: var(--stage-amber); font-size: 12px; font-weight: 600; margin-right: 4px; }
+  #analytics table { width: 100%; border-collapse: collapse; margin: 12px 0 28px; }
+  #analytics th, #analytics td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+  #analytics .num { text-align: right; font-variant-numeric: tabular-nums; }
+  #analytics .barcell { width: 40%; }
+  #analytics .bar { height: 12px; background: var(--amber); border-radius: 3px; min-width: 2px; }
+  #analytics .how { color: var(--muted); font-size: 0.9rem; }
+</style>
+
+<script src="/replay-player.js" is:inline></script>
+<script define:vars={{ streams }} is:inline>
+  // Same minimal DOM contract as Hero.astro (see replay-player.js's header).
+  window.setView = function (v) {
+    const bar = document.getElementById('replay');
+    if (bar) bar.classList.toggle('show', v === 'replay');
+  };
+  window.addEventListener('DOMContentLoaded', () => {
+    setReplaySpeed(4);
+    for (const btn of document.querySelectorAll('.card')) {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.card.active').forEach((c) => c.classList.remove('active'));
+        btn.classList.add('active');
+        // startReplay already accepts a resolved {events:[...]} object — no
+        // player change needed; this is the same call shape as the hero.
+        startReplay(streams[btn.dataset.slug]).then(() => {
+          // replayPlaying is a top-level `let` in replay-player.js (a classic
+          // script, so it lands on window) — guard so switching recordings
+          // mid-play never toggles playback OFF.
+          if (!window.replayPlaying) toggleReplayPlay();
+          document.getElementById('stage-frame').scrollIntoView({ behavior: 'smooth' });
+        });
+      });
+    }
+  });
+  // replay-player.js's setSkin() clobbers document.title at script-load time
+  // (same as on the landing page) — restore this page's own title.
+  document.title = 'Corralai — recordings';
+</script>
+```
+
+- [ ] **Step 10: Landing links + the truthful built-on line**
+
+In `site/src/components/WatchItBack.astro`, after the existing `.callout` paragraph (`<p class="callout">This hero IS that player — the exact same code, replaying a real mission.</p>`), add:
+
+```astro
+  <p><a href="/recordings/">More recordings → a gallery of real missions, different model mixes, all replayable.</a></p>
+```
+
+Replace `site/src/components/SiteFooter.astro`'s footer block with:
+
+```astro
+<footer class="section" id="site-footer">
+  <p>
+    <a href="https://github.com/pdbethke/corralai">github.com/pdbethke/corralai</a>
+    · Elastic License 2.0 · built by a herd, wrangled by a human.
+  </p>
+  <p class="built-on">
+    Built on DuckDB (mission telemetry, and the analytics on the
+    <a href="/recordings/">recordings page</a>) and MotherDuck (fleet sync +
+    the cross-brain oracle, product-side).
+  </p>
+</footer>
+
+<style>
+  .built-on { color: var(--muted); font-size: 0.85rem; }
+</style>
+```
+
+(Both claims verified in source: `internal/telemetry/store.go` opens `sql.Open("duckdb", ...)`; `CORRALAI_MOTHERDUCK` is the fleet-sync target in `cmd/corral/main.go`'s env block. Text only — no external assets, no badge services.)
+
+In `site/src/content/docs/concepts/multi-model-herds.mdx`, append (the spec's MotherDuck amendment requires the fleet-oracle story on this page):
+
+```mdx
+## The fleet oracle (DuckDB + MotherDuck)
+
+Mission telemetry is a DuckDB event log per brain; `CORRALAI_MOTHERDUCK`
+points fleet sync at a MotherDuck database so multiple brains contribute to
+one cross-brain ledger — the fleet oracle that `model_comparison` and the
+other `corral-admin analyze` reports read from. This surface is
+product-side and credentialed: it is never wired into the public site,
+whose [recordings-page analytics](/recordings/) are computed at build time
+with plain DuckDB over the committed recording streams instead.
+```
+
+- [ ] **Step 11: Write `site/tests/recordings.spec.ts`**
+
+```ts
+// SPDX-License-Identifier: Elastic-2.0
+import { test, expect } from '@playwright/test';
+
+test('the gallery renders a card per recording, plays one, shows analytics, and stays on-domain', async ({ page }) => {
+  const external: string[] = [];
+  const backendApiCalls: string[] = [];
+  page.on('request', (req) => {
+    const url = new URL(req.url());
+    if (url.hostname !== 'localhost' && url.hostname !== '127.0.0.1') external.push(req.url());
+    if (url.pathname.startsWith('/api/')) backendApiCalls.push(req.url());
+  });
+
+  await page.goto('/recordings/');
+  const cards = page.locator('.card');
+  expect(await cards.count(), 'expected at least one recording card').toBeGreaterThanOrEqual(1);
+
+  await cards.first().click();
+  await expect(async () => {
+    const max = await page.locator('#replay-scrub').getAttribute('max');
+    expect(Number(max)).toBeGreaterThan(0);
+  }).toPass({ timeout: 5000 });
+
+  await expect(page.locator('#analytics table').first()).toBeVisible();
+  await expect(page.locator('#analytics .bar').first()).toBeVisible();
+
+  expect(external, `unexpected external requests: ${external.join(', ')}`).toHaveLength(0);
+  expect(backendApiCalls, `unexpected /api/* calls from a backend-free page: ${backendApiCalls.join(', ')}`).toHaveLength(0);
+});
+
+test('every recording card corresponds to a committed stream + meta pair', async () => {
+  const fs = await import('node:fs');
+  const files = fs.readdirSync('src/data/recordings');
+  const streamFiles = files.filter((f) => f.endsWith('.json') && !f.endsWith('.meta.json'));
+  for (const f of streamFiles) {
+    const metaName = f.replace(/\.json$/, '.meta.json');
+    expect(files, `${f} is missing its ${metaName} sidecar`).toContain(metaName);
+    const meta = JSON.parse(fs.readFileSync(`src/data/recordings/${metaName}`, 'utf-8'));
+    expect(Array.isArray(meta.models), `${metaName} must carry a models array (may be empty for pre-model-threading recordings)`).toBe(true);
+  }
+});
+```
+
+- [ ] **Step 12: Full verification**
+
+```bash
+go test ./... -count=1
+bash scripts/check-security.sh
+cd site && npm run test:e2e && cd ..
+bash scripts/sync-site-assets.sh --check && bash scripts/gen-cli-docs.sh --check
+```
+
+Expected: all green — including the moved-golden-run deny-list glob, the hero (unchanged behavior, new import paths), and the two new recordings tests. Note: this task never touches `internal/ui/web/replay-player.js` (the player never reads `ev.model`), so the sync check is trivially unaffected — run it anyway as part of the standing gate.
+
+- [ ] **Step 13: Commit**
+
+```bash
+git add internal/brain/replay.go internal/brain/replay_test.go internal/telemetry/store.go scripts/scrub-golden-run.py scripts/export-golden-run.sh site/src/data/recordings site/src/components/Hero.astro site/src/components/WatchItBack.astro site/src/components/SiteFooter.astro site/src/content/docs/concepts/multi-model-herds.mdx site/src/pages/recordings.astro site/scripts/build-analytics.mjs site/package.json site/package-lock.json site/tests/site.spec.ts site/tests/recordings.spec.ts .gitignore
+git commit -m "$(cat <<'EOF'
+feat(site,brain): recordings gallery + build-time DuckDB analytics
+
+Model identity now rides through the replay stream (ReplayEvent.Model +
+detail.backend, from reporter_model/reporter_backend and the telemetry model
+column — TDD'd), so exported recordings are self-describing about what
+built them. The exporter gains --slug (recordings/ layout), a models field
+in the meta sidecar, and --rederive-meta for pre-threading recordings (the
+golden run's honest value: []). /recordings renders a card grid from an
+Astro glob (no manifest to drift), replays any recording through the
+unchanged player, and shows build-time DuckDB aggregates (official node
+binding — installs via npm ci, no extra CI step): findings by severity per
+recording, per-model finding counts (the public face of model_comparison),
+task-duration profiles — hand-rolled inline bars, zero external requests,
+e2e-enforced. Landing gains the more-recordings link and the truthful
+built-on-DuckDB+MotherDuck line; the multi-model docs page tells the
+fleet-oracle story (MotherDuck stays product-side, never wired into the site).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+EOF
+)"
+```
+
+---
+
+### Task 10: Record the mixed-model run + populate the gallery
+
+**Files:**
+- Create: `site/src/data/recordings/mixed-herd.json` (produced by the export pipeline, never hand-written)
+- Create: `site/src/data/recordings/mixed-herd.meta.json` (produced alongside)
+
+**Interfaces:**
+- Consumes: Task 9's entire pipeline — `ReplayEvent.Model` threading (the brain image the demo builds MUST include Task 9's commit, or the new recording carries no model info and this task's verification fails), `--slug`, the `models` meta field, the glob-driven gallery, and `build-analytics.mjs`. Also `deploy/demo/Makefile`'s `demo-models` target (verified as shipped): `MODELS_BACKEND_A ?= ollama` / `MODELS_MODEL_A ?= qwen2.5-coder:7b` / `MODELS_BACKEND_B ?= ollama` / `MODELS_MODEL_B ?= llama3.2:3b` (Makefile lines 8-13), wired as `MODELS_ROLE_MODELS = pentester=A,reviewer=B,builder=ollama:qwen2.5-coder:7b,tester=ollama:qwen2.5-coder:7b` into `CORRALAI_ROLE_MODELS` at lines 17 and 68.
+- Produces: the second gallery entry — a genuinely different model mix than the all-qwen golden run — plus the final screenshots. Nothing later depends on it; this is the closing content task.
+
+- [ ] **Step 1: Stash the demo `.env` (the demo-dev gotcha)**
+
+```bash
+[ -f deploy/demo/.env ] && mv deploy/demo/.env deploy/demo/.env.stashed-by-task10 && echo stashed
+```
+
+`deploy/demo/.env`'s presence masks the key-free, first-time-reviewer behavior this recording must reflect (memory `corralai-demo-dev-env`). The export script stashes it itself, but the demo BRING-UP must also run without it. Restore in Step 7.
+
+- [ ] **Step 2: Run the mixed-model demo mission**
+
+```bash
+cd deploy/demo
+make demo-models
+```
+
+This is the Makefile's own A/B split — pentester on `ollama:qwen2.5-coder:7b` (Group A), reviewer on `ollama:llama3.2:3b` (Group B), builder/tester on qwen — key-free, and a genuinely different mix than the all-qwen golden run. First run pulls both models (~4.7 GB + ~2.0 GB, allow ~5-15 min; watch `docker compose -f docker-compose.yml logs -f ollama-pull models-ollama-pull`). Watch `http://localhost:9019` until the mission converges (`awaiting_review`/`done` on the Progress tab).
+
+For the recording to demonstrate a real multi-model comparison, BOTH finding-filing roles (pentester AND reviewer) must have filed at least one finding — model identity rides on finding events, so a run where only one of them filed anything yields a one-model `models` list no matter what was configured. Check the Topology tab's `model_comparison` table shows **two model rows** before exporting. If it shows only one, the mission didn't exercise both filers: create a second mission against the same running brain (`go run ./cmd/corral-admin mission create "..."` from the repo root) or `make down && make demo-models` and let a fresh mission run, until two rows appear.
+
+- [ ] **Step 3: Export through the FULL gate**
+
+From the repo root, in a second terminal:
+
+```bash
+bash scripts/export-golden-run.sh --slug mixed-herd
+```
+
+The deny-list scan runs automatically (the floor); the human-review manifest prints (the ceiling) — **the controller must surface this manifest to the human** and only answer `y` after the human has reviewed every path, URL, and actor name by eye (everything should be synthetic demo-shaped: builder/tester/pentester/reviewer names, `/work`-rooted paths). Never `--yes` on a first export of a mission.
+
+Expected: `OK: deny-list scan clean`, the manifest, the confirmation, then `wrote site/src/data/recordings/mixed-herd.json and site/src/data/recordings/mixed-herd.meta.json`.
+
+- [ ] **Step 4: Verify the meta carries the real mix**
+
+```bash
+cat site/src/data/recordings/mixed-herd.meta.json
+```
+
+Expected: a `"models"` array with **at least two distinct entries** — e.g. `["ollama:llama3.2:3b", "ollama:qwen2.5-coder:7b"]`. If it has fewer than two, the stream didn't capture findings from both models (see Step 2's two-rows check) — do NOT ship a "mixed" recording whose own data can't show the mix; go back to Step 2.
+
+- [ ] **Step 5: Rebuild analytics and verify the multi-model comparison is real**
+
+```bash
+cd site && node scripts/build-analytics.mjs && cat src/data/analytics.json && cd ..
+```
+
+Expected: `... across 2 recording(s)`; `findings_by_model` now shows at least two real model rows (plus the golden run's `(not recorded)` bucket); `findings_by_severity` and `task_durations` each list both slugs.
+
+- [ ] **Step 6: Full e2e + gate suite**
+
+```bash
+cd site && npm run test:e2e && cd ..
+go test ./... -count=1
+bash scripts/sync-site-assets.sh --check && bash scripts/gen-cli-docs.sh --check
+```
+
+Expected: all green — the recordings deny-list glob now covers both streams; the gallery e2e sees two cards.
+
+- [ ] **Step 7: Tear down + restore**
+
+```bash
+cd deploy/demo && make down && cd ../..
+[ -f deploy/demo/.env.stashed-by-task10 ] && mv deploy/demo/.env.stashed-by-task10 deploy/demo/.env && echo restored
+```
+
+- [ ] **Step 8: Final screenshots for the human**
+
+```bash
+cd site && npm run preview -- --port 4321 &
+sleep 2
+```
+
+Playwright browser tool: capture `/recordings/` showing both cards + the analytics tables with the real two-model comparison (`/tmp/corralai-v2-recordings.png`), and the mixed-herd recording mid-replay after clicking its card (`/tmp/corralai-v2-mixed-replay.png`). Then:
+
+```bash
+kill %1
+```
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add site/src/data/recordings/mixed-herd.json site/src/data/recordings/mixed-herd.meta.json
+git commit -m "$(cat <<'EOF'
+feat(site): mixed-herd recording — the gallery's first real multi-model run
+
+Recorded via the demo's own demo-models A/B split (pentester on
+qwen2.5-coder:7b, reviewer on llama3.2:3b, key-free), exported through the
+full deny-list + human-manifest gate, meta.models carrying both models
+derived from the stream itself. The recordings-page analytics now show a
+real per-model comparison instead of a single (not recorded) bucket.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+EOF
+)"
+```
+
+---
+
+### Task 11: Canvas zoom/pan in the shared renderer
+
+**Files:**
+- Modify: `internal/ui/web/replay-player.js` (view transform state, wheel-zoom, drag-pan, reset, coordinate helpers, draw-loop transform)
+- Modify: `internal/ui/web/index.html:941-962` (the two hit-test handlers switch to world coordinates)
+- Modify: `internal/ui/ui_test.go` (`TestReplayPlayerStructure` gains zoom/pan markers)
+- Modify: `site/public/replay-player.js` (hash-synced copy, refreshed in the same commit)
+- Modify: `site/tests/site.spec.ts` (deterministic zoom/pan/reset e2e)
+- Create: `cmd/seedreplay/main.go` (throwaway — same program as Task 2 Step 5, re-created for the product-side verification and deleted again before commit)
+
+**Interfaces:**
+- Consumes: the shared canvas machinery in `replay-player.js` — `cv`/`ctx` (line 49), `CW`/`CH` + the per-frame base transform `ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0)` (`resize()`, line 57), the one `draw()` loop (line 436: `clearRect` → optional `drawRain(dt)` → `ctx.drawImage(bgCv, 0, 0, CW, CH)` → links/nodes/bursts/buzzes, ALL in world coordinates), and the ONLY canvas-coordinate consumers anywhere: `index.html`'s `cv.addEventListener('click', ...)` (line 941, agent/file hit-test via `ev.clientX-rect.left`) and `cv.addEventListener('dblclick', ...)` (line 957, rename-bee hit-test). Audited: neither file has a canvas mousemove/hover hit-test; bubbles (`buzzes`), `bursts`, trails, and the queen are all placed from node world coordinates inside `draw()`, so they inherit the transform for free; the `#empty` caption is a DOM overlay, unaffected.
+- Produces (test-asserted by the extended `TestReplayPlayerStructure`, used by `index.html` and the e2e): `zoomAt(sx, sy, factor)`, `screenToWorld(sx, sy) -> {x,y}`, `canvasToWorld(ev) -> {x,y}` (event → world, the helper both `index.html` handlers call), `resetView()`, `getViewTransform() -> {scale, x, y}` (read-only — a top-level `function` declaration, so it lands on `window` for the Playwright e2e; the `let` state variables deliberately don't).
+
+Scope note: this changes the SHARED renderer — product live view, product replay, and the site hero/recordings pages all inherit it through the one file + the hash sync. It has zero SSE/API dependencies (pure view math), so it behaves identically in all three modes by construction.
+
+- [ ] **Step 1: Extend `TestReplayPlayerStructure` first (fails red)**
+
+In `internal/ui/ui_test.go`, add to the existing `playerMarkers` slice:
+
+```go
+		// zoom/pan (Task 11 of the site-docs-expansion plan): the view
+		// transform lives in the SHARED renderer so live, replay, and the
+		// static site embed all get it; hit-tests consume canvasToWorld.
+		`function zoomAt(sx, sy, factor)`,
+		`function screenToWorld(sx, sy)`,
+		`function canvasToWorld(ev)`,
+		`function resetView()`,
+		`function getViewTransform()`,
+		`cv.addEventListener('wheel'`,
+```
+
+And to the existing `indexMarkers` slice:
+
+```go
+		// both canvas hit-tests must read world coordinates, not raw
+		// canvas-local pixels — otherwise clicking a zoomed/panned agent
+		// opens the wrong node (or nothing).
+		`canvasToWorld(ev)`,
+```
+
+Also add, after the existing marker loops (inside the same test function):
+
+```go
+	// The draw loop must apply the world transform once per frame (not
+	// per-node math): scale+offset baked into one setTransform call that
+	// multiplies devicePixelRatio.
+	if !strings.Contains(player, "devicePixelRatio*viewScale") {
+		t.Error("draw() must apply the view transform via ctx.setTransform(devicePixelRatio*viewScale, ...) once per frame")
+	}
+```
+
+- [ ] **Step 2: Run it to confirm it fails**
+
+```bash
+go test ./internal/ui/... -run TestReplayPlayerStructure -v
+```
+
+Expected: FAIL on every new marker.
+
+- [ ] **Step 3: Add the view transform to `replay-player.js`**
+
+Insert immediately after the `resize()` wiring (after line 61, `resize();`):
+
+```js
+// ---- view transform: wheel-zoom + drag-pan over the corral ----
+// screen = world*viewScale + viewOffset. All node physics/layout stay in
+// world coordinates (CW/CH space); draw() applies the transform once per
+// frame via ctx.setTransform, and every consumer of a canvas mouse event
+// must go through canvasToWorld() for hit-testing (see index.html).
+let viewScale = 1, viewOX = 0, viewOY = 0;
+const VIEW_MIN = 0.4, VIEW_MAX = 4;
+let viewDidPan = false;   // set by a completed drag-pan; eats the click that follows
+function screenToWorld(sx, sy){ return { x: (sx - viewOX)/viewScale, y: (sy - viewOY)/viewScale }; }
+function canvasToWorld(ev){
+  const r = cv.getBoundingClientRect();
+  return screenToWorld(ev.clientX - r.left, ev.clientY - r.top);
+}
+function getViewTransform(){ return { scale: viewScale, x: viewOX, y: viewOY }; }
+function resetView(){ viewScale = 1; viewOX = 0; viewOY = 0; }
+function zoomAt(sx, sy, factor){
+  const ns = Math.min(VIEW_MAX, Math.max(VIEW_MIN, viewScale * factor));
+  // keep the world point under the cursor fixed: it maps to the same screen
+  // px before and after the scale change, so the offset absorbs the delta.
+  viewOX = sx - (sx - viewOX) * (ns / viewScale);
+  viewOY = sy - (sy - viewOY) * (ns / viewScale);
+  viewScale = ns;
+}
+cv.addEventListener('wheel', ev => {
+  ev.preventDefault();
+  const r = cv.getBoundingClientRect();
+  zoomAt(ev.clientX - r.left, ev.clientY - r.top, Math.exp(-ev.deltaY * 0.0015));
+}, { passive: false });
+// drag-to-pan: only engages after a small movement threshold, so plain
+// clicks (agent windows, inspector) keep working untouched; a completed pan
+// eats the click that the browser fires after mouseup (capture phase runs
+// before index.html's bubble-phase hit-test).
+let panFrom = null;
+cv.addEventListener('mousedown', ev => { panFrom = { x: ev.clientX, y: ev.clientY, ox: viewOX, oy: viewOY }; });
+addEventListener('mousemove', ev => {
+  if(!panFrom) return;
+  const dx = ev.clientX - panFrom.x, dy = ev.clientY - panFrom.y;
+  if(!viewDidPan && Math.hypot(dx, dy) < 4) return;   // threshold: not a pan yet
+  viewDidPan = true;
+  viewOX = panFrom.ox + dx; viewOY = panFrom.oy + dy;
+});
+addEventListener('mouseup', () => { panFrom = null; });
+cv.addEventListener('click', ev => {
+  if(viewDidPan){ viewDidPan = false; ev.stopImmediatePropagation(); ev.stopPropagation(); }
+}, true);
+// double-click on EMPTY space resets to the 1x fit; a double-click on an
+// agent stays the rename shortcut (index.html's own dblclick hit-test) —
+// the two are disjoint by the same hit radius the rename handler uses.
+// (No keyboard binding: neither file has canvas keyboard idioms to match.)
+cv.addEventListener('dblclick', ev => {
+  const p = canvasToWorld(ev);
+  for(const n of nodes.values()){
+    if(n.kind !== 'agent') continue;
+    if(Math.hypot(n.x - p.x, n.y - p.y) < 22) return;  // rename territory — leave it alone
+  }
+  resetView();
+});
+```
+
+Note the ordering constraint this placement satisfies: the `dblclick` handler references `nodes`, which is declared lower in the file (line 115) — safe because handlers run on user events, long after the whole script has evaluated. The `wheel`/`mousedown` handlers only touch the `let`s declared right here.
+
+- [ ] **Step 4: Apply the transform in `draw()`**
+
+Replace the top of `draw()` (lines 436-441):
+
+```js
+function draw(){
+  step();
+  // clear in DEVICE space (identity-ish base transform), THEN apply the
+  // world transform once for everything that lives in the corral — the
+  // background included (natural zoom: the pasture is part of the world;
+  // beyond its edge the panel color shows, which reads as "the pasture
+  // ends", not as a glitch). Per-node math stays untouched.
+  ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+  ctx.clearRect(0, 0, CW, CH);
+  const frameT = Date.now()/1000, dt = Math.min(0.1, frameT-lastFrameT); lastFrameT = frameT;
+  ctx.setTransform(devicePixelRatio*viewScale, 0, 0, devicePixelRatio*viewScale, devicePixelRatio*viewOX, devicePixelRatio*viewOY);
+  if(skin().bg==='rain') drawRain(dt);
+  if(bgCv.width>1) ctx.drawImage(bgCv, 0, 0, CW, CH);
+```
+
+Everything below that point in `draw()` (links, queen, nodes, bursts, buzzes) is already world-space and needs no change — the whole audit of screen-space leaks came up empty (see Interfaces). `resize()`'s own `setTransform` stays as-is; `draw()` overrides it every frame anyway.
+
+- [ ] **Step 5: Convert `index.html`'s two hit-tests to world coordinates**
+
+Replace the coordinate lines only. Click handler (line 941-943):
+
+```js
+cv.addEventListener('click', ev => {
+  // node coords are WORLD coords; the view may be zoomed/panned, so convert
+  // through the shared inverse transform, not raw canvas-local pixels.
+  const p = canvasToWorld(ev), mx = p.x, my = p.y;
+```
+
+Dblclick handler (line 957-958):
+
+```js
+cv.addEventListener('dblclick', ev => {
+  const p = canvasToWorld(ev), mx = p.x, my = p.y;
+```
+
+(Bodies of both handlers unchanged — `mx`/`my` keep their names, so the hit-test math below each line is untouched.)
+
+- [ ] **Step 6: Sync the site copy + run the structural test**
+
+```bash
+bash scripts/sync-site-assets.sh
+go test ./internal/ui/... -run TestReplayPlayerStructure -v
+go test ./... -count=1
+```
+
+Expected: `synced internal/ui/web/replay-player.js -> site/public/replay-player.js`, then PASS, PASS.
+
+- [ ] **Step 7: Deterministic e2e on the site build**
+
+Append to `site/tests/site.spec.ts`:
+
+```ts
+test('the hero canvas zooms at the cursor, pans on drag, and resets on double-click', async ({ page }) => {
+  await page.goto('/');
+  await expect(async () => {
+    const max = await page.locator('#replay-scrub').getAttribute('max');
+    expect(Number(max)).toBeGreaterThan(0);
+  }).toPass({ timeout: 5000 });
+
+  const canvas = page.locator('#c');
+  const box = (await canvas.boundingBox())!;
+  const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
+
+  // wheel-zoom in at the center — getViewTransform is a top-level function
+  // declaration in the classic-script player, so it lands on window.
+  await page.mouse.move(cx, cy);
+  await page.mouse.wheel(0, -400);
+  const zoomed = await page.evaluate(() => (window as any).getViewTransform());
+  expect(zoomed.scale, 'wheel up must zoom in past 1x').toBeGreaterThan(1);
+  expect(zoomed.scale, 'zoom must clamp at 4x').toBeLessThanOrEqual(4);
+
+  // drag-to-pan: offset moves by the drag delta
+  await page.mouse.move(cx, cy);
+  await page.mouse.down();
+  await page.mouse.move(cx + 80, cy + 40, { steps: 5 });
+  await page.mouse.up();
+  const panned = await page.evaluate(() => (window as any).getViewTransform());
+  expect(Math.round(panned.x - zoomed.x), 'drag must pan the view horizontally').toBe(80);
+  expect(Math.round(panned.y - zoomed.y), 'drag must pan the view vertically').toBe(40);
+
+  // double-click empty space (the far corner, away from any node) resets
+  await page.mouse.dblclick(box.x + 10, box.y + 10);
+  const reset = await page.evaluate(() => (window as any).getViewTransform());
+  expect(reset).toEqual({ scale: 1, x: 0, y: 0 });
+});
+```
+
+```bash
+cd site && npm run test:e2e && cd ..
+```
+
+Expected: PASS, including all pre-existing tests (the pan click-eater must not have broken the existing hero interactions — the zero-external and scrub tests exercise the replay bar, which sits outside the canvas and is untouched).
+
+- [ ] **Step 8: Product-side live verification (seeded scratch brain) + screenshots**
+
+Re-create `cmd/seedreplay/main.go` exactly as written in Task 2 Step 5 (throwaway, same fallback rule if helper names differ), then:
+
+```bash
+export SCRATCH=$(mktemp -d)
+export CORRALAI_DB="$SCRATCH/coord.sqlite3"
+export CORRALAI_MEMORY_DB="$SCRATCH/memory.duckdb"
+export CORRALAI_PRINCIPALS_DB="$SCRATCH/principals.sqlite3"
+export CORRALAI_GATEWAY_DB="$SCRATCH/gateway.sqlite3"
+export CORRALAI_ARTIFACTS_DB="$SCRATCH/artifacts.sqlite3"
+export CORRALAI_OIDC_ISSUER=""
+go run ./cmd/seedreplay
+go run ./cmd/corral &
+sleep 2
+```
+
+Playwright browser tool against `http://127.0.0.1:9019/`:
+1. Wheel-zoom into a cluster of agents on the live canvas; screenshot the close-up → `/tmp/corralai-task11-product-zoom.png`.
+2. While zoomed, CLICK a zoomed agent and confirm its floating agent-detail window opens (this is the inverse-transform correctness check — the whole point of `canvasToWorld`).
+3. Drag-pan, then double-click empty grass and confirm the view snaps back to 1x.
+
+Then the site build:
+
+```bash
+cd site && npm run preview -- --port 4321 &
+sleep 2
+```
+
+Navigate to `http://localhost:4321/`, let the replay start, wheel-zoom into a cluster mid-replay, screenshot → `/tmp/corralai-task11-site-zoom.png`. Then tear down everything:
+
+```bash
+kill %1
+cd .. && kill %1
+rm -rf "$SCRATCH" cmd/seedreplay
+```
+
+- [ ] **Step 9: Full gate + commit**
+
+```bash
+go test ./... -count=1
+bash scripts/check-security.sh
+bash scripts/sync-site-assets.sh --check
+bash scripts/gen-cli-docs.sh --check
+cd site && npm run test:e2e && cd ..
+```
+
+Expected: all green — the sync check passes because Step 6 refreshed the copy, committed together below.
+
+```bash
+git add internal/ui/web/replay-player.js internal/ui/web/index.html internal/ui/ui_test.go site/public/replay-player.js site/tests/site.spec.ts
+git commit -m "$(cat <<'EOF'
+feat(ui): wheel-zoom + drag-pan on the corral canvas, shared across live/replay/site
+
+Zoom anchors at the cursor (screen = world*scale + offset; the offset
+absorbs the scale delta so the point under the wheel stays fixed), clamped
+0.4x-4x. Drag-to-pan engages past a 4px threshold and eats the trailing
+click in capture phase, so click-to-open-agent-window is untouched.
+Double-click on empty space resets to 1x (double-click on an agent stays
+the rename shortcut — disjoint by the same hit radius). Both index.html
+hit-tests now go through the shared canvasToWorld inverse transform — the
+correctness core, verified live by clicking a zoomed agent. The background
+zooms with the world (natural: the pasture is part of the corral; its edge
+reads as the pasture ending). Pure view math, no SSE/API dependencies —
+identical in live mode, replay, and the static embed; site copy hash-synced
+in this commit; TestReplayPlayerStructure extended; deterministic
+zoom/pan/reset e2e via the read-only getViewTransform() probe.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+EOF
+)"
+```
+
+---
+
+### Task 12: The replay cockpit — replay events drive the full viewport
+
+**Files:**
+- Modify: `internal/ui/web/replay-player.js` (replay-side panel state + renderers, wired into the existing replay choke points)
+- Modify: `internal/ui/web/index.html` (move `sevColor`/`SEV_RANK` out — lines 750-751 — nothing else)
+- Modify: `internal/ui/ui_test.go` (`TestReplayPlayerStructure` gains cockpit markers)
+- Modify: `site/public/replay-player.js` (hash-synced copy, refreshed in the same commit)
+- Modify: `site/src/pages/recordings.astro` (cockpit DOM + CSS around Task 9's player)
+- Modify: `site/tests/recordings.spec.ts` (cockpit e2e: console lines appear, count tracks scrub position)
+
+**Interfaces:**
+- Consumes: the replay pipeline's existing choke points in `replay-player.js` — `startReplay()` (state reset at line 619: `nodes.clear(); links.length = 0; ...`), `seekReplay()` (same reset at line 671, then a rebuild-from-0 walk), `applyReplayEvent(ev)` (the one translation point for every beat), `renderReplayScrub()` (called by startReplay/replayStep/seekReplay — the single per-step render funnel), `stopReplaySession()` (line 636, where live SSE resumes and its "fresh snapshot immediately on connect" repaints the live panels), and the `inReplay` flag (line 607). Shared helpers already in the file: `esc()`, `roleColor()`, `displayName()`. Stream shapes (verified in `internal/brain/replay.go` + Task 9's additions): `execution` beats carry `actor`, `subject`=command, `detail.{ok, exit_code, role}` (NO `timed_out`/`summary` — those are live-state-only fields the tape doesn't record); `task_created` carries `subject`=key + `detail.{role,title}`; `task_claimed` adds `actor`; `task_done/cancelled/superseded` carry `actor`+`subject`; `finding_reported` carries `actor`, `subject`=target, `detail.{type,severity}` (+ `ev.model`/`detail.backend` after Task 9); `finding_resolved` carries `subject` + `detail.status`.
+- Produces (test-asserted, consumed by the product page implicitly and the recordings page explicitly): `renderReplayPanels()`, `renderReplayConsole()`, `renderReplayTasks()`, `renderReplayFindings()`, `resetReplayPanels()` — all null-guarded on optional DOM ids `#exec`, `#tasks`, `#findings` (the same optional-contract pattern as `#empty`/`#stat`), all no-ops unless `inReplay` is true. The DOM-contract header comment gains these three ids in its "Optional, null-guarded" list.
+
+**Extract-vs-mirror decision (judged per the coordinator's instruction):** MIRROR with shared helpers, not extract. The live renderers (`renderExec` at `index.html:783`, `renderTasks` at 830, `renderFindings` at 754) are entangled with live-only features the tape cannot feed: the console's filter chips + `recent_activity` tool-call stream + `lastExecKey` burst wiring + multi-line `summary` output; the task list's supersede-lineage arrows keyed on live `t.id`/`t.supersedes`; the findings panel's `recurring`/`status==='open'` fields. Extracting them would either drag `lastState` shapes into the shared file (entangling the embed with a brain it doesn't have) or fork every renderer internally on a mode flag (worse than two small renderers). Instead the replay renderers reuse the shared helpers and the SAME CSS vocabulary (`feedhdr`, `xblk`/`xcmdline`/`xprompt`/`xcmd`/`xbadge`, `trow`/`tdot`, `frow`/`fsev`) so the cockpit is visually the product console, while the live renderers stay untouched. `sevColor`/`SEV_RANK` move from `index.html` into `replay-player.js` (both files' renderers need them; leaving a copy in each would throw `Identifier 'SEV_RANK' has already been declared` at load, since both scripts share the page's top-level scope).
+
+- [ ] **Step 1: Extend `TestReplayPlayerStructure` first (fails red)**
+
+Add to the `playerMarkers` slice in `internal/ui/ui_test.go`:
+
+```go
+		// replay cockpit (Task 12): the tape drives console/tasks/findings
+		// panels through null-guarded optional DOM ids, same contract as
+		// #empty/#stat — present in the product and the site cockpit,
+		// absent in the canvas-only hero.
+		`function renderReplayPanels()`,
+		`function renderReplayConsole()`,
+		`function renderReplayTasks()`,
+		`function renderReplayFindings()`,
+		`function resetReplayPanels()`,
+		`const SEV_RANK`,
+		`function sevColor(sev)`,
+```
+
+And after the marker loops, add:
+
+```go
+	// The cockpit renderers must be null-guarded (optional DOM) and
+	// inReplay-gated (never clobber the live panels while SSE owns them),
+	// and every replay entry/reset path must reset the panel state.
+	for _, guard := range []string{
+		`document.getElementById('exec')`,
+		`document.getElementById('tasks')`,
+		`document.getElementById('findings')`,
+	} {
+		if !strings.Contains(player, guard) {
+			t.Errorf("replay-player.js cockpit missing optional-DOM lookup %q", guard)
+		}
+	}
+	if !strings.Contains(player, "if(!inReplay) return;") {
+		t.Error("renderReplayPanels must be inReplay-gated — a live page's panels belong to apply()/SSE, not the tape")
+	}
+	for _, fn := range []string{"function startReplay(streamOrUrl){", "function seekReplay(target){", "function stopReplaySession(){"} {
+		fi := strings.Index(player, fn)
+		if fi < 0 {
+			t.Fatalf("could not locate %s in replay-player.js", fn)
+		}
+		end := strings.Index(player[fi:], "\n}")
+		if end < 0 {
+			t.Fatalf("could not locate the end of %s", fn)
+		}
+		if !strings.Contains(player[fi:fi+end], "resetReplayPanels(") {
+			t.Errorf("%s must reset the cockpit panel state (resetReplayPanels) — seek/restart/stop each rebuild or relinquish the panels", fn)
+		}
+	}
+```
+
+- [ ] **Step 2: Run it to confirm it fails**
+
+```bash
+go test ./internal/ui/... -run TestReplayPlayerStructure -v
+```
+
+Expected: FAIL on every new marker.
+
+- [ ] **Step 3: Move `sevColor`/`SEV_RANK` into the shared file**
+
+Delete `index.html` lines 750-751:
+
+```js
+function sevColor(sev){ return (sev==='critical'||sev==='high')?C.red:(sev==='medium'?C.amber:'#6b6452'); }
+const SEV_RANK = {critical:3, high:2, medium:1, low:0};
+```
+
+Add them to `replay-player.js` immediately after `roleColor` (line 337) — identical text, plus a one-line comment:
+
+```js
+// severity color/rank — shared by the live findings panel (index.html) and
+// the replay cockpit's findings renderer below.
+function sevColor(sev){ return (sev==='critical'||sev==='high')?C.red:(sev==='medium'?C.amber:'#6b6452'); }
+const SEV_RANK = {critical:3, high:2, medium:1, low:0};
+```
+
+- [ ] **Step 4: The cockpit state + renderers (inside the replay block, so the existing no-POST scan covers them)**
+
+Insert after the `let inReplay = false;` declaration (line 607):
+
+```js
+// ---- replay cockpit: the tape drives the console/tasks/findings panels ----
+// The live panels render from lastState via apply() (SSE) — which is paused
+// during replay, so in the product they used to freeze on stale live content
+// while the canvas played the tape. These replay-side renderers accumulate
+// state from applyReplayEvent and paint the SAME panel DOM (#exec, #tasks,
+// #findings — all optional, null-guarded) from the tape instead. People want
+// to see action: the whole viewport replays, not just the canvas.
+// Honest limits of the tape: execution beats carry ok/exit_code but not the
+// live feed's timed_out flag or multi-line output summary, and there is no
+// recent_activity tool-call stream — the cockpit shows what was recorded,
+// never invents the rest.
+let replayExecLines = [];   // {agent, role, command, ok, exitCode}
+let replayTasks = new Map(); // key -> {key, title, role, status, claimedBy}
+let replayFindings = [];    // {reporter, target, type, severity, model, resolved}
+let replaySeenBeats = new Set(); // dedupe: findings ride the tape twice (queue+telemetry merge)
+function resetReplayPanels(){
+  replayExecLines = []; replayTasks = new Map(); replayFindings = []; replaySeenBeats = new Set();
+}
+function clearReplayPanelDOM(){
+  for(const id of ['exec','tasks','findings']){
+    const el = document.getElementById(id);
+    if(el) el.innerHTML = '';
+  }
+}
+function renderReplayConsole(){
+  const ep = document.getElementById('exec');
+  if(!ep) return;
+  const tail = replayExecLines.slice(-24);
+  ep.innerHTML = '<div class="feedhdr">console · replaying the tape · ' + replayExecLines.length + '</div>' +
+    (tail.length ? '' : '<div class="xempty">▌ no commands on the tape yet…</div>') +
+    tail.map(e => {
+      const badge = e.ok
+        ? '<span class="xbadge" style="color:var(--green)" title="exit 0">✓</span>'
+        : '<span class="xbadge" style="color:var(--red)" title="exit ' + esc(String(e.exitCode)) + '">✗' + esc(String(e.exitCode)) + '</span>';
+      return '<div class="xblk"><div class="xcmdline"><span class="xprompt">❯</span> <b style="color:' + roleColor(e.role) + '">' + esc(displayName(e.agent)) + '</b> <code class="xcmd">' + esc(e.command || '') + '</code> ' + badge + '</div></div>';
+    }).join('') + '<div class="xcursor">▌</div>';
+  ep.scrollTop = ep.scrollHeight; // tail like the live console
+}
+function renderReplayTasks(){
+  const tp = document.getElementById('tasks');
+  if(!tp) return;
+  const tasks = Array.from(replayTasks.values());
+  if(!tasks.length){ tp.innerHTML = ''; return; }
+  const order = {claimed:0, queued:1, done:2, superseded:3, cancelled:4};
+  const counts = tasks.reduce((m,t)=>{ m[t.status]=(m[t.status]||0)+1; return m; }, {});
+  const hdr = ['claimed','queued','done','superseded','cancelled'].filter(s=>counts[s]).map(s=>counts[s]+' '+s).join(' · ');
+  tp.innerHTML = '<div class="feedhdr">tasks · ' + tasks.length + (hdr ? ' &nbsp; ' + hdr : '') + '</div>' +
+    tasks.slice().sort((a,b)=>(order[a.status]??9)-(order[b.status]??9)).slice(0,50).map(t => {
+      const gone = (t.status==='cancelled' || t.status==='superseded');
+      const dot = t.status==='done' ? C.green : (t.status==='claimed' ? '#5b9bd5' : '#6b6452');
+      const who = t.claimedBy && !gone ? ' <span style="color:' + roleColor(t.role) + '">← ' + esc(displayName(t.claimedBy)) + '</span>' : '';
+      const titleStyle = gone ? 'color:var(--muted);text-decoration:line-through' : 'color:var(--fg)';
+      return '<div class="trow"' + (gone ? ' style="opacity:.6"' : '') + '><span class="tdot" style="background:' + dot + '"></span><b style="' + titleStyle + '">' + esc(t.title || t.key) + '</b> <span style="color:var(--muted)">' + esc(t.role || '') + '</span>' + who + '</div>';
+    }).join('');
+}
+function renderReplayFindings(){
+  const fp = document.getElementById('findings');
+  if(!fp) return;
+  if(!replayFindings.length){ fp.innerHTML = ''; return; }
+  const open = replayFindings.filter(f => !f.resolved);
+  const crit = open.filter(f => f.severity==='critical' || f.severity==='high').length;
+  const hdr = 'findings · ' + open.length + ' open' + (crit ? ' &nbsp; <b style="color:var(--red)">⚠ ' + crit + ' high</b>' : '');
+  fp.innerHTML = '<div class="feedhdr">' + hdr + '</div>' +
+    open.slice().sort((a,b)=>(SEV_RANK[b.severity]??0)-(SEV_RANK[a.severity]??0)).slice(0,30).map(f => {
+      const hi = (f.severity==='critical' || f.severity==='high') ? ' hi' : '';
+      const tgt = f.target ? ' <span style="color:var(--fg)">' + esc(f.target) + '</span>' : '';
+      const mdl = f.model ? ' <span style="color:#5a7a8a;font-size:10px;font-family:ui-monospace,monospace">[' + esc(f.model) + ']</span>' : '';
+      return '<div class="frow' + hi + '"><span class="fsev" style="color:' + sevColor(f.severity) + '">' + esc(f.severity) + '</span> <span style="color:var(--muted)">' + esc(f.type) + '</span>' + tgt + ' <span style="color:#6b6452">· ' + esc(displayName(f.reporter)) + '</span>' + mdl + '</div>';
+    }).join('');
+}
+function renderReplayPanels(){
+  if(!inReplay) return; // the live page's panels belong to apply()/SSE
+  renderReplayConsole();
+  renderReplayTasks();
+  renderReplayFindings();
+}
+```
+
+- [ ] **Step 5: Accumulate cockpit state in `applyReplayEvent`**
+
+Add the accumulation at the TOP of `applyReplayEvent(ev)`'s body (before the existing `switch` — the canvas cases below stay byte-identical):
+
+```js
+function applyReplayEvent(ev){
+  // ---- cockpit accumulation (panels) — before the canvas switch below ----
+  const d = ev.detail || {};
+  switch(ev.kind){
+    case 'task_created':
+      if(ev.subject) replayTasks.set(ev.subject, {key: ev.subject, title: d.title || '', role: d.role || '', status: 'queued', claimedBy: ''});
+      break;
+    case 'task_claimed': {
+      if(ev.subject){
+        const t = replayTasks.get(ev.subject) || {key: ev.subject, title: d.title || '', role: d.role || ''};
+        t.status = 'claimed'; t.claimedBy = ev.actor || ''; t.role = d.role || t.role;
+        replayTasks.set(ev.subject, t);
+      }
+      break;
+    }
+    case 'task_done': case 'task_cancelled': case 'task_superseded': {
+      if(ev.subject){
+        const t = replayTasks.get(ev.subject);
+        if(t) t.status = ev.kind.slice(5); // done | cancelled | superseded
+      }
+      break;
+    }
+    case 'execution': {
+      // dedupe on (actor, command, second-rounded ts) — cheap insurance in
+      // case a stream ever carries a beat from both merge sources.
+      const k = 'x|' + (ev.actor||'') + '|' + (ev.subject||'') + '|' + Math.round(ev.ts);
+      if(!replaySeenBeats.has(k)){
+        replaySeenBeats.add(k);
+        replayExecLines.push({agent: ev.actor || '', role: d.role || '', command: ev.subject || '', ok: !!d.ok, exitCode: d.exit_code == null ? '' : d.exit_code});
+        if(replayExecLines.length > 200) replayExecLines.shift();
+      }
+      break;
+    }
+    case 'finding_reported': {
+      // findings ride the tape TWICE (queue + telemetry merge — same dedupe
+      // convention as Task 9's analytics flattener).
+      const k = 'f|' + (ev.subject||'') + '|' + (d.severity||'') + '|' + Math.round(ev.ts);
+      if(!replaySeenBeats.has(k)){
+        replaySeenBeats.add(k);
+        replayFindings.push({reporter: ev.actor || '', target: ev.subject || '', type: d.type || '', severity: d.severity || '', model: ev.model || '', resolved: false});
+      }
+      break;
+    }
+    case 'finding_resolved': {
+      for(let i = replayFindings.length - 1; i >= 0; i--){
+        if(replayFindings[i].target === ev.subject && !replayFindings[i].resolved){ replayFindings[i].resolved = true; break; }
+      }
+      break;
+    }
+  }
+  // ---- canvas translation (unchanged below this line) ----
+  const now = Date.now()/1000; // same clock draw()'s bursts/buzzes compare against
+```
+
+(The rest of the function — `agentId`/`pathId`/the canvas `switch` — is untouched.)
+
+- [ ] **Step 6: Wire reset + render into the existing choke points**
+
+In `startReplay()`, extend the reset line (619):
+
+```js
+    nodes.clear(); links.length = 0; bursts.length = 0; buzzes.length = 0;
+    resetReplayPanels();
+```
+
+In `seekReplay()`, extend the reset line (671) identically:
+
+```js
+  nodes.clear(); links.length = 0; bursts.length = 0; buzzes.length = 0;
+  resetReplayPanels();
+```
+
+In `renderReplayScrub()` — the single funnel every replay state change already flows through (startReplay, replayStep, seekReplay) — add as its FIRST line:
+
+```js
+function renderReplayScrub(){
+  renderReplayPanels();
+```
+
+(Seek performance note: `seekReplay`'s rebuild walk calls `applyReplayEvent` in a tight loop and only then calls `renderReplayScrub()` once — so a 600-event scrub does 600 cheap accumulations and ONE panel paint, same pattern the canvas already uses.)
+
+In `stopReplaySession()`, before the SSE-resume line (642), add:
+
+```js
+  // Relinquish the panels: clear replay content so the live snapshot (pushed
+  // immediately on SSE reconnect) repaints from a blank panel, never leaving
+  // a flash of stale TAPE content posing as live state. inReplay is already
+  // false at this point, so no replay render can race the repaint.
+  resetReplayPanels();
+  clearReplayPanelDOM();
+```
+
+And update the DOM-contract header comment (the "Optional, null-guarded" list near the top of the file) to include the three new ids:
+
+```
+// Optional, null-guarded (safe to omit entirely): #empty, #stat, #skinsel,
+// #skinsub, #tab-swarm, #tab-proposals, #proposals-badge, #tab-completed,
+// #themebtn — and the replay-cockpit panels #exec, #tasks, #findings (when
+// present, replay populates them from the tape; the canvas-only hero omits
+// them and loses nothing).
+```
+
+- [ ] **Step 7: Sync + Go suite**
+
+```bash
+bash scripts/sync-site-assets.sh
+go test ./internal/ui/... -run TestReplayPlayerStructure -v
+go test ./... -count=1
+```
+
+Expected: sync copy refreshed, PASS, PASS. (The new renderers live inside the replay block, so the existing "no POST/mutating fetch" scan now covers them automatically — they are DOM-only by construction.)
+
+- [ ] **Step 8: The site cockpit on `/recordings`**
+
+In `site/src/pages/recordings.astro`, replace Task 9's player block (`#stage-frame` + `#replay`) with the cockpit layout — the canvas keeps its dark frame; the three panels join it inside the same dark stage. The hero (`Hero.astro`) is deliberately NOT touched: it stays canvas-only, and the null guards are what make that free.
+
+```astro
+  <div id="stage-frame">
+    <div id="cockpit">
+      <aside id="tasks"></aside>
+      <div id="stage">
+        <canvas id="c"></canvas>
+        <div id="empty">pick a recording above</div>
+      </div>
+      <aside id="findings"></aside>
+    </div>
+    <div id="exec"></div>
+  </div>
+  <div id="replay">
+    ...(Task 9's replay-bar markup, unchanged)...
+  </div>
+```
+
+Add to the page's `<style>` (alongside Task 9's rules; `#stage` loses its own border-radius corners where it now sits inside the cockpit grid — replace Task 9's `#stage-frame`/`#stage` rules with these):
+
+```css
+  #stage-frame {
+    max-width: 1240px; margin: 0 auto; padding: 0 20px;
+  }
+  #cockpit {
+    display: grid; grid-template-columns: 220px 1fr 260px;
+    background: var(--stage-bg); border: 1px solid var(--stage-line);
+    border-top-left-radius: 12px; border-top-right-radius: 12px;
+    box-shadow: 0 18px 44px rgba(30,20,0,.22); overflow: hidden;
+  }
+  @media (max-width: 900px) { #cockpit { grid-template-columns: 1fr; } #tasks, #findings { max-height: 160px; } }
+  #stage { position: relative; height: 56vh; min-height: 360px; background: var(--stage-panel); }
+  #tasks, #findings {
+    background: var(--stage-bg); color: var(--stage-fg); overflow-y: auto;
+    padding: 10px 12px; font-size: 12px; border-right: 1px solid var(--stage-line);
+  }
+  #findings { border-right: none; border-left: 1px solid var(--stage-line); }
+  #exec {
+    background: var(--stage-bg); color: var(--stage-fg); border: 1px solid var(--stage-line); border-top: none;
+    height: 180px; overflow-y: auto; padding: 10px 14px;
+    font-size: 12px;
+  }
+  /* the cockpit panels reuse the product console's class vocabulary — same
+     names the shared renderers emit, styled for the dark stage */
+  .feedhdr { color: var(--stage-muted); font-size: 11px; letter-spacing: .4px; margin-bottom: 6px; }
+  .xblk { margin-bottom: 3px; }
+  .xcmdline { display: flex; align-items: baseline; gap: 7px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.5; }
+  .xprompt { color: var(--stage-amber); }
+  .xcmd { font-family: ui-monospace, monospace; color: var(--stage-fg); }
+  .xbadge { font-weight: 700; }
+  .xempty, .xcursor { color: var(--stage-muted); }
+  .trow { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 2px 0; }
+  .tdot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; }
+  .frow { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 2px 0; }
+  .frow.hi { font-weight: 600; }
+  .fsev { font-weight: 700; }
+```
+
+One correction to the CSS custom properties the renderers emit: the shared renderers use `var(--green)`, `var(--red)`, `var(--muted)`, `var(--fg)` inline — on the recordings page those resolve to the LIGHT page tokens inside a dark stage. Scope the dark values onto the cockpit in the same `<style>`:
+
+```css
+  #cockpit, #exec {
+    --fg: var(--stage-fg); --muted: var(--stage-muted);
+    --green: #8fdcab; --red: #e8503a; --amber: var(--stage-amber);
+  }
+```
+
+(Custom properties inherit, so the cockpit subtree sees dark-canvas values while the rest of the page keeps daylight tokens — no renderer change needed, which is the point of emitting `var()` references instead of literals.)
+
+- [ ] **Step 9: Cockpit e2e**
+
+Append to `site/tests/recordings.spec.ts`:
+
+```ts
+test('the cockpit panels replay the tape: console lines appear and track the scrub position', async ({ page }) => {
+  await page.goto('/recordings/');
+  await page.locator('.card').first().click();
+  await expect(async () => {
+    const max = await page.locator('#replay-scrub').getAttribute('max');
+    expect(Number(max)).toBeGreaterThan(0);
+  }).toPass({ timeout: 5000 });
+
+  const scrub = page.locator('#replay-scrub');
+  const max = Number(await scrub.getAttribute('max'));
+  const seek = (target: number) =>
+    scrub.evaluate((el, t) => { (el as HTMLInputElement).value = String(t); el.dispatchEvent(new Event('input')); }, target);
+
+  // Mid-tape: the console has lines, tasks and findings headers render.
+  await seek(Math.floor(max / 2));
+  const midConsole = await page.locator('#exec .xblk').count();
+  expect(midConsole, 'expected console lines mid-tape').toBeGreaterThan(0);
+  await expect(page.locator('#tasks .feedhdr')).toContainText('tasks ·');
+
+  // The console header's total count grows with the scrub position — the
+  // rendered tail is capped at 24 rows, so assert on the header's running
+  // total, which reflects every execution beat accumulated so far.
+  const headerCount = async () => {
+    const txt = await page.locator('#exec .feedhdr').innerText();
+    return Number(txt.split('·').pop()!.trim());
+  };
+  const midTotal = await headerCount();
+  await seek(max);
+  const endTotal = await headerCount();
+  expect(endTotal, 'console total must grow from mid-tape to end-of-tape').toBeGreaterThan(midTotal);
+
+  // Seek BACK rebuilds from zero: an early position must show fewer than the end.
+  await seek(Math.floor(max / 10));
+  const earlyTotal = await headerCount();
+  expect(earlyTotal, 'seeking back must rebuild the panels from zero, not keep accumulating').toBeLessThan(endTotal);
+
+  // Findings accumulate by end-of-tape (the golden run has real findings).
+  await seek(max);
+  await expect(page.locator('#findings .feedhdr')).toContainText('findings ·');
+});
+```
+
+```bash
+cd site && npm run test:e2e && cd ..
+```
+
+Expected: PASS, including every earlier test — the hero specs prove the canvas-only embed still works with the cockpit ids absent (that IS the null-guard test, running against real DOM).
+
+- [ ] **Step 10: Product-side live verification (seeded scratch brain)**
+
+Re-create `cmd/seedreplay/main.go` per Task 2 Step 5 (throwaway; the Task 7 variant with a completed mission is the better fit here — the Completed tab needs a finished mission to replay), start the scratch brain as in Task 11 Step 8, then with the Playwright browser tool against `http://127.0.0.1:9019/`:
+
+1. Open the completed tab → open the finished mission → press ▶ replay; confirm the CONSOLE (`#exec`) fills with tape lines (❯-prefixed, ✓/✗ badges) and the tasks/findings asides track the tape while it plays — screenshot → `/tmp/corralai-task12-product-cockpit.png`.
+2. Scrub backward and confirm the console total DROPS (rebuild-from-0, not accumulation).
+3. Exit replay (✕) and confirm the panels repaint LIVE state — the console header reads `live console ·` (renderExec's header, not the cockpit's `console · replaying the tape ·`) with no flash of leftover tape rows — screenshot → `/tmp/corralai-task12-product-live-restored.png`.
+
+Tear down: kill the brain, `rm -rf "$SCRATCH" cmd/seedreplay`.
+
+- [ ] **Step 11: Full gate + commit**
+
+```bash
+go test ./... -count=1
+bash scripts/check-security.sh
+bash scripts/sync-site-assets.sh --check
+bash scripts/gen-cli-docs.sh --check
+cd site && npm run test:e2e && cd ..
+```
+
+Expected: all green.
+
+```bash
+git add internal/ui/web/replay-player.js internal/ui/web/index.html internal/ui/ui_test.go site/public/replay-player.js site/src/pages/recordings.astro site/tests/recordings.spec.ts
+git commit -m "$(cat <<'EOF'
+feat(ui,site): the replay cockpit — the tape drives the full viewport
+
+Replay used to animate only the canvas while the console/tasks/findings
+panels froze on stale live state (SSE paused). Now applyReplayEvent
+accumulates replay-side panel state (execution beats -> console lines with
+ok/fail badges; task lifecycle beats -> a live task list; finding beats ->
+an accumulating findings panel with severity ranking and per-model tags)
+and null-guarded renderers paint the same optional panel DOM (#exec,
+#tasks, #findings — same contract pattern as #empty/#stat). Seek rebuilds
+the panels from zero exactly like the canvas; exit clears them so the SSE
+snapshot repaints live state with no stale-tape flash. Mirrored renderers
+with shared helpers (esc/roleColor/displayName + sevColor/SEV_RANK moved
+to the shared file) rather than extracting the live renderers — those are
+entangled with live-only shapes the tape doesn't carry (activity stream,
+filter chips, summaries, supersede lineage), and the tape's honest limits
+are documented, not papered over. The recordings page becomes the full
+cockpit (tasks | canvas | findings + console, dark-stage-scoped tokens);
+the landing hero stays canvas-only. Structural markers, cockpit e2e
+(console count tracks scrub position both directions), product Playwright
+check, site copy hash-synced.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+EOF
+)"
+```
+
+---
+
 ## Self-Review
 
 **1. Spec coverage.**
@@ -1868,6 +3494,39 @@ EOF
 - **The addendum's og:image capture note says it "can reuse the UI-tour screenshot task's seeded brain session (one setup, many captures)."** Resolution: kept Task 2 (OG image) and Task 7 (UI tour) as two independent seeded-brain sessions instead, because Task 2 is sequenced immediately after Task 1 (per the addendum's own sequencing instruction) while Task 7 runs much later after the concepts pages — sharing one live brain process across five non-adjacent tasks would violate each task's "produces a self-contained, independently testable deliverable" requirement (writing-plans' Task Right-Sizing rule) and would leave a scratch brain process spanning a long, interruptible span of work. The setup cost (seed program + `go run ./cmd/corral` + teardown) is a few minutes each time and is deliberately cheap by design (throwaway seed program, `mktemp -d` scratch paths) — paying it twice is the right trade against holding a background process alive across four intervening tasks.
 - **corral-admin's usage text was already judged adequate**, not thin — the spec's "if a binary's usage text is too thin, fix it" clause is satisfied by fixing `corral-agent` and `corral-harness` (Task 4), the two binaries with zero structured `-h` output; `corral-top`/`corral-observe`'s Go-default `flag.Usage` output was judged sufficient since both already carry a full synopsis in their doc comments that the generator surfaces separately as the "Usage" fenced block's context via the page's own generated header line — no code change needed for those two.
 - **Exact Astro/Starlight version pins were not hardcoded** in Task 3 (mirroring the v1 plan's own precedent for `astro` itself) — `--save-exact` plus the committed `package-lock.json` is the pinning mechanism, since Starlight (like Astro) releases frequently and a plan-embedded version number would go stale immediately.
+
+## Self-Review Addendum (Tasks 9–12, appended per the Part D, zoom, and cockpit amendments)
+
+**1. Spec coverage (Part D + the zoom request).**
+- Recordings data layout (`site/src/data/recordings/<slug>{.json,.meta.json}`, Astro glob, no manifest file) → Task 9 Steps 7/9. Covered.
+- Meta `models` field derived from the stream → Task 9 Steps 5/6 — with the prerequisite product fix (Step 1-4), since the stream as shipped carries no model info at all (see ambiguities below). Covered.
+- Card grid → full-width `startReplay(streamObject)` player → Task 9 Step 9 (no player change, per the spec's own expectation — verified: `startReplay` already branches on `typeof streamOrUrl`). Covered.
+- Hero unchanged / "more recordings" link / truthful DuckDB+MotherDuck line (text only) → Task 9 Steps 7 (import paths only) and 10. Covered.
+- Build-time DuckDB analytics (three aggregates, hand-rolled bars, no CDN lib, CLI-vs-binding decision documented, runs in CI ubuntu) → Task 9 Step 8 (binding: `@duckdb/node-api`, choice documented in the script header). Covered.
+- MotherDuck stays product-side + fleet-oracle story on the multi-model docs page → Task 9 Step 10. Covered. Public MotherDuck share explicitly NOT planned (separate follow-up spec per the amendment).
+- Two contrasting runs through the full gate → golden run (entry #1, Task 9 Step 7) + mixed-herd (Task 10, `make demo-models`, full deny + human manifest). Covered.
+- E2E: gallery renders / recording opens and plays / analytics present / zero-external holds → Task 9 Step 11; deny-list extended to every recording → Task 9 Step 7. Covered.
+- Zoom/pan (Task 11): cursor-anchored wheel-zoom with clamp, threshold drag-pan that preserves click-to-open, empty-space double-click reset, inverse-transform hit-tests (full audit: the only canvas-coordinate consumers are `index.html:941/957`), one `setTransform` per frame, background zooms with the world (choice noted), works in live/replay/static embed, `TestReplayPlayerStructure` extended, Playwright on both product (scratch brain, zoomed-click correctness) and site dist (cluster close-up screenshots), sync refreshed in the same commit. Covered.
+- Replay cockpit (Task 12): extract-vs-mirror judged explicitly (mirror with shared helpers; reasons documented in the task), null-guarded optional DOM ids on the same contract pattern as `#empty`/`#stat`, panels populated from the tape (console with ok/fail coloring, task list reflecting current replay state, findings accumulating with severity ranking), seek/rebuild-from-0 resets panels (test-asserted per choke-point function), product stale-panels gap fixed with an explicit no-stale-flash teardown (clear-then-let-the-snapshot-repaint, verified live in Step 10), recordings page becomes the full cockpit while the hero stays canvas-only, structural + site e2e (console count tracks scrub position in BOTH directions) + product Playwright check, sync/zero-external/SPDX/trailer all per Global Constraints. Covered.
+
+**2. Placeholder scan (new tasks).** Complete code in every step; the one execution-time judgment (Task 11 Step 8 re-creates Task 2's throwaway seed program) points at the exact prior step rather than saying "similar to" — the code is fully spelled out there and the fallback rule travels with it.
+
+**3. Type/name consistency (new tasks).** `models` (meta field) is produced by Task 9 Step 6, consumed by Step 9's cards, Step 11's sidecar test, and Task 10 Step 4. `scripts/scrub-golden-run.py models` is invoked identically in Steps 5, 6(c), and 6(d). `viewScale`/`viewOX`/`viewOY` in Task 11 Step 3 match Step 4's `setTransform` args and Step 1's structural marker (`devicePixelRatio*viewScale`); `canvasToWorld(ev)` matches Step 5's index.html usage and Step 1's `indexMarkers` entry; `getViewTransform()` matches Step 7's e2e probe. `analytics.json`'s three keys (`findings_by_severity`, `findings_by_model`, `task_durations`) match between Step 8's writer and Step 9's page.
+
+**Ambiguities resolved (Tasks 9–11):**
+- **Model info does NOT ride through the replay stream as shipped** — `telemetry.Event` has a `Model` column but `EventsForMission` (`internal/telemetry/store.go:156`) doesn't SELECT it, and `BuildReplayStream`'s findings loop drops `ReporterModel`/`ReporterBackend`. The coordinator's either/or ("stream if it carries model, else the mission_history/model_comparison surface") resolves to a third, better option: thread model through the stream as a TDD'd product change (Task 9 Steps 1-4). Required regardless of preference — the build-time analytics see only committed JSON, never the brain's telemetry DB, so per-model finding counts are impossible without a self-describing stream.
+- **The existing golden run predates model threading**, so its rederived `models` is honestly `[]` (`--rederive-meta` added for exactly this) — the card omits the models line and analytics bucket its findings as `(not recorded)`, mirroring `model_comparison`'s own `(no model)` convention. No fabricated "all-qwen" claim for a stream that can't prove it.
+- **The golden-run move into `recordings/` landed in Task 9, not Task 10** (the coordinator's summary put "golden run becomes entry #1" under Task 10): Task 9's e2e needs at least one committed recording to render a card and play it, and the move is a mechanical refactor (git mv + two import paths + one test glob), while Task 10 stays purely record-the-mix + populate + verify.
+- **One finding, two stream beats** — `BuildReplayStream` merges the queue's findings table AND the telemetry log, so every finding appears twice; raw counting would double the analytics. The flattener dedupes by `(slug, subject, severity, second-rounded ts)`, deterministically keeping the queue-derived (backend-qualified) beat. Same duplication surfaces as a bare-vs-qualified model label in `models` derivation — collapsed by the suffix rule in `cmd_models`.
+- **DuckDB CLI vs node binding**: the official node binding `@duckdb/node-api` — installs through the same `npm ci` as every other site dependency (prebuilt binaries, exact-pinned via package-lock), so CI's ubuntu image needs no extra curl/apt step the way the standalone CLI would. Documented in `build-analytics.mjs`'s header per the spec.
+- **`demo-models`, not hand-rolled env** — the Makefile already ships the A/B target (`make demo-models`: pentester=qwen2.5-coder:7b, reviewer=llama3.2:3b, key-free); Task 10 uses it as-is instead of exporting MODELS_* by hand. Because model identity rides on finding events, Task 10 gates the export on the Topology tab's `model_comparison` showing two rows first — a "mixed" run where only one role filed findings cannot honestly demonstrate the mix.
+- **Zoom reset affordance kept minimal**: double-click on empty space only, no keyboard binding — neither `replay-player.js` nor `index.html` has any canvas keyboard idiom to match, and the coordinator's "keyboard 0 maybe" was explicitly optional. Double-click-on-agent stays the existing rename shortcut; the two are disjoint by the rename handler's own 22px hit radius.
+- **Background zooms with the world** (the "natural" option): the pasture/comb/rain is part of the corral, and its visible edge when panned reads as the pasture ending, not a glitch. Noted in the draw() comment per the coordinator's instruction; the cheaper fixed-background variant is a two-line change (move the `drawImage` above the second `setTransform`) if it looks wrong in Step 8's live check.
+- **Pan-vs-click disambiguation** uses a 4px movement threshold plus a capture-phase click-eater in the player itself — chosen over patching `index.html`'s click handler with pan-awareness, because the site embed (which has no `index.html` handlers) must get the same behavior from the shared file alone.
+- **Cockpit: mirror, not extract** — `renderExec`/`renderTasks`/`renderFindings` read live-state shapes the tape doesn't carry (`recent_activity` tool calls, `summary` output, `timed_out`, `recurring`, `t.id`/`t.supersedes` lineage) and carry live-only UX (filter chips, `lastExecKey` burst wiring); extraction would either drag `lastState` into the brain-less embed or mode-fork every renderer. The replay renderers share helpers (`esc`/`roleColor`/`displayName`, plus `sevColor`/`SEV_RANK` moved into the shared file — they CANNOT be duplicated: both scripts share the page's top-level scope, so a second `const SEV_RANK` throws at load) and the same CSS class vocabulary, so the cockpit looks like the product console while the live renderers stay untouched. The tape's honest limits (no timed-out badge, no output summaries, no tool-call stream) are documented in the code comment, not padded with invented content.
+- **Cockpit reuses the product's panel ids (`#exec`/`#tasks`/`#findings`) rather than replay-specific ones** — in the product, replay painting the very panels that used to sit stale is precisely the gap being fixed; `inReplay` gating + the SSE-resume snapshot are what make the shared ids safe (replay never renders while live owns them, and teardown clears the panels before live repaints — no stale-tape flash, verified live in Task 12 Step 10).
+- **Task 12 sequenced after Task 9; dependency noted both ways** — Task 9 ships `/recordings` canvas-only (its Produces note says so); Task 12 adds the cockpit DOM there. Run out of order, the null guards make Task 12's shared-file changes inert on a Task 9-less tree, and Task 9 without Task 12 simply has no panels. The hero deliberately never gets the cockpit (canvas-only stays cleaner), which doubles as the permanent real-DOM exercise of the null guards.
+- **Cockpit token scoping on the site**: the shared renderers emit `var(--green)`/`var(--red)`/`var(--fg)`/`var(--muted)` inline; on the daylight recordings page those would resolve to light-page values inside the dark stage, so the page re-scopes those custom properties on the cockpit subtree (`#cockpit, #exec { --fg: var(--stage-fg); ... }`) — CSS inheritance does the work, no renderer fork.
 
 Plan complete and saved to `docs/superpowers/plans/2026-07-04-site-docs-expansion.md`. Two execution options:
 

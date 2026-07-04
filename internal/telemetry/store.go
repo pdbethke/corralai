@@ -22,7 +22,7 @@ var now = func() float64 { return float64(time.Now().UnixNano()) / 1e9 }
 
 // Event is one timestamped thing that happened in a mission.
 type Event struct {
-	TS        float64        // set by Record on write; populated on read by EventsForMission
+	TS        float64 // set by Record on write; populated on read by EventsForMission
 	MissionID int64
 	Kind      string         // task_claimed, finding_reported, review_changes, …
 	Actor     string         // agent / principal / "engine"

@@ -207,8 +207,64 @@ topology here; historical analytics via MotherDuck → Sigma.
   comment): this gate cannot stop a caller who lies, only one who doesn't
   bother to.
 
+- **P10 — mission history + replay (DONE 2026-07-03).** Every finished mission
+  gets a **Completed tab** (`mission_history` read surface, mirroring
+  `mission_analytics`'s shape) — directive, status, duration (task-timestamp
+  derived until a mission speaks `mission_completed`, then event-based),
+  task/finding counts, best-effort learned-linkage (promoted proposals whose
+  signature matches the mission's findings), and a detail drill-down
+  (phases/tasks/findings/executions). A **▶ replay** button reconstructs the
+  whole build from durable rows only — `internal/brain/replay.go` merges task
+  lifecycle, findings, executions, and (when present) the telemetry event log
+  into one time-ordered stream — and plays it back on the same corral canvas
+  through the existing render path at 1×–16×, scrub bar included; live SSE
+  pauses while replaying; positions are recomputed, never recorded; a mission
+  with no ambience telemetry still replays from its durable rows alone
+  (graceful degradation). Recording got richer alongside it: `mission_completed`
+  (the engine finally speaks telemetry, on both its auto-complete and
+  review-accept paths), `findings.resolved_ts` (the row is no longer
+  timeline-blind), `agent_activity` (capped at 2,000/mission with a loud log
+  at cap), `claim_made`/`claim_released`, `host_seen` (first sighting +
+  material change only), and `memory_written` (metadata only — slug/type/shared,
+  never the body). **Verified live** (demo stack, qwen2.5-coder:7b, no keys,
+  no pre-seeded mission — recorded fresh for this check): mission "Build a Go
+  package 'stack' with a LIFO stack of ints: New, Push, Pop, Peek, Len;
+  Pop/Peek return an error on empty. Include table-driven unit tests..."
+  ran end to end through real MCP flows (39 tasks, 34 done; 40 findings
+  raised and addressed across two rework rounds; 44 recorded executions) and
+  finished `done` in 19m 39s. It appeared in the Completed tab with correct
+  duration/counts; **details** rendered phases, findings (type/target/
+  severity/outcome), executions (6/44 passed), and an honest "nothing
+  promoted from this mission (yet)" for the learned-linkage slot; **▶ replay**
+  reconstructed all 423 durable events, the scrub bar and 16× speed both
+  worked (16× rendered the whole build in a few seconds), scrubbing back to
+  an earlier point re-rendered the correct in-progress node/link state, and
+  **Exit replay** reopened the live `/events` SSE (confirmed in the network
+  panel). Honesty correction made from this run: `agent_activity` never
+  actually reached this mission's replay stream, because `cmd/corral-agent`'s
+  automatic `report_activity` call (`main.go`, both tool-loop sites) never
+  passes the `mission_id` it already holds — `recordActivity` treats
+  `missionID==0` as "outside a mission" and no-ops before it ever calls
+  `tel.Record`. `claim_made`/`claim_released`/`host_seen`/`memory_written`
+  are recorded with a hardcoded `mission_id=0` by design (`internal/brain/
+  coordination_activity.go`'s own doc comments call them "global ambience,
+  not part of the Part B replay merge") — they were never meant to appear in
+  a mission-scoped replay. Net effect: today, every mission's replay is built
+  from task/finding/execution/mission-event rows only; the "richer ambience"
+  originally drafted for the README was walked back to match what actually
+  showed up on screen. Wiring `mission_id` through `report_activity`'s call
+  sites is a small, well-scoped follow-up, not a design flaw — the brain-side
+  plumbing and the cap are already correct and tested.
+
 ### Open threads (next)
 
+- **`report_activity` never carries `mission_id`.** Found during P10's live
+  verification: `cmd/corral-agent/main.go`'s automatic `report_activity` call
+  (fired after every bee tool-call) omits `mission_id`, even though `runTask`
+  has it in scope — so `agent_activity` never actually reaches a mission's
+  replay stream despite the brain-side recording/cap logic being correct and
+  tested. Small, well-scoped fix: thread `missionID` into that call at both
+  sites in `main.go`.
 - **Change-request enforcement.** A client change-request that produces zero
   rework tasks should not silently re-gate to `awaiting_review` — the engine
   could require at least one enqueued task (or an explicit lead dismissal with

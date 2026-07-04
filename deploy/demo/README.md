@@ -186,6 +186,31 @@ no extra command, it rides the same run:
    promotion, a **revision proposal** reopens against the approved one — the
    operator sees that the lesson didn't take, with the new evidence attached.
 
+## Watch it back (mission history + replay)
+
+`make demo-mission` records everything durably as it runs — so once it
+finishes, you can replay it:
+
+1. **Open the Completed tab.** `http://localhost:9019` → **completed**. The
+   mission you just ran appears with its directive, duration, and
+   task/finding counts.
+2. **Drill in.** Click **details** — phases with their status, findings with
+   outcomes, the PR link if the mission targeted a repo.
+3. **Replay it.** Click **▶ replay**. The live view pauses (the `/events`
+   feed disconnects) and the whole build plays back on the same canvas:
+   agents spawning as they first claim work, execution bursts landing,
+   findings surfacing and resolving — reconstructed entirely from durable
+   rows, not a recording.
+4. **Scrub and speed up.** Drag the scrub bar to jump anywhere in the run, or
+   push the speed selector to **16×** to watch a whole mission converge in
+   seconds.
+5. **Exit replay** to resume the live feed — nothing about replay mode
+   touches the running swarm; it's read-only by construction.
+
+Missions run before this shipped still replay too — durable task/finding/
+execution rows are all replay needs; positions are recomputed on the fly,
+never stored.
+
 ### Ask the brain about the codebase (the corpus, queried)
 
 The learning loop's output and the repo's own developer docs share one memory.

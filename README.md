@@ -133,6 +133,22 @@ approves land in the same corpus — herd-discovered knowledge and
 developer-written knowledge accumulate in one place, under one review gate,
 readable by humans and queryable by every agent that joins.
 
+### Watch it back (mission history + replay)
+
+Nothing about a finished mission is thrown away: every task's claim and
+completion, every finding and its resolution, every command a bee actually
+ran, and the event log itself survive indefinitely. A **Completed tab** lists
+past missions — directive, duration, task/finding counts, and (best-effort)
+what got learned from them — with a detail view per mission and a **▶ replay**
+button. Replay is read-only: it reconstructs the whole build from durable rows
+and plays it back on the same corral canvas, at up to **16×**, with a scrub
+bar — pause live traffic, watch history move. It works on missions that ran
+before this shipped (positions are recomputed, not stored, so nothing needed
+to be recorded in advance for the shapes to replay). The merged stream is
+built entirely from durable task/finding/execution rows plus the event log
+(`mission_completed`, review state) when the mission spoke it — the same
+build, reconstructed, every time.
+
 **Coordinate — one swarm or many.**
 
 - **Coordination substrate** (SQLite, transactional) — atomic exclusive

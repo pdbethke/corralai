@@ -276,4 +276,16 @@ test('the OG image asset exists and is a real local file, not a placeholder', as
   expect(res.status()).toBe(200);
   const bytes = await res.body();
   expect(bytes.length, 'og-image.png looks empty/placeholder').toBeGreaterThan(10_000);
+
+  // Decode the actual pixel dimensions from the PNG header so a bad
+  // recapture fails CI, not just human review. A PNG's first chunk is
+  // always IHDR: 8-byte signature + 4-byte length + 4-byte type, then
+  // width and height as big-endian uint32s at offsets 16 and 20.
+  const signature = bytes.subarray(0, 8).toString('hex');
+  expect(signature, 'og-image.png is not a PNG').toBe('89504e470d0a1a0a');
+  expect(bytes.subarray(12, 16).toString('ascii'), 'first PNG chunk should be IHDR').toBe('IHDR');
+  const width = bytes.readUInt32BE(16);
+  const height = bytes.readUInt32BE(20);
+  expect(width, 'og:image must be exactly 1200px wide (matches og:image:width)').toBe(1200);
+  expect(height, 'og:image must be exactly 630px tall (matches og:image:height)').toBe(630);
 });

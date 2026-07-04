@@ -1,0 +1,7 @@
+{
+  "directive": "Build a Go package 'stack' with a LIFO stack of ints: New, Push, Pop, Peek, Len; Pop/Peek return an error on empty. Include table-driven unit tests; make 'go build ./...' and 'go test ./...' pass",
+  "task_count": 63,
+  "done_task_count": 62,
+  "finding_count": 56,
+  "duration_seconds": 1053.1903946399689
+}

@@ -1,0 +1,51 @@
+# SPDX-License-Identifier: Elastic-2.0
+#
+# Pod worker image: corral-harness + a bwrap jail + all four frontier vendor
+# CLIs. Each running container picks its vendor via HARNESS_CMD (compose), so
+# one image serves every role. Vendor creds are mounted at /seed/<vendor> and
+# copied into writable homes by the entrypoint (the CLIs refresh their tokens).
+#
+# SIZE/SECURITY: this bundles four npm CLIs — it is a fat, demo-grade image. The
+# cap_add: SYS_ADMIN in compose is for the INNER bwrap jail (the model's commands
+# run confined there); a hardened deployment wants a VM/gVisor OUTER boundary
+# instead of a privileged container. Codex's exec runs with its own sandbox OFF
+# (see compose note) — the corral jail is the only boundary for that vendor.
+
+# ---- build corral-harness from the repo ----
+FROM golang:1.26-bookworm AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -trimpath -o /out/corral-harness ./cmd/corral-harness
+
+# ---- runtime ----
+FROM node:22-bookworm-slim
+# Toolchain the jailed builds need + bubblewrap (the jail) + git (jail → repo).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      bubblewrap git ca-certificates curl python3 build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Vendor CLIs (subscription/OAuth mode — NO api keys). Versions pinned; bump
+# deliberately. (@anthropic-ai/claude-code provides `claude`.)
+RUN npm install -g --no-fund --no-audit \
+      @anthropic-ai/claude-code \
+      @google/gemini-cli \
+      @openai/codex \
+      @github/copilot \
+    && npm cache clean --force
+
+# gh CLI (copilot rides gh auth).
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+      -o /usr/share/keyrings/githubcli.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/githubcli.gpg] https://cli.github.com/packages stable main" \
+      > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update && apt-get install -y --no-install-recommends gh \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=build /out/corral-harness /usr/local/bin/corral-harness
+COPY deploy/pod/worker-entrypoint.sh /usr/local/bin/worker-entrypoint
+RUN chmod +x /usr/local/bin/worker-entrypoint
+
+WORKDIR /workspace
+ENTRYPOINT ["/usr/local/bin/worker-entrypoint"]

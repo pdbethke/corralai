@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: Elastic-2.0
+# Auth-injecting reverse proxy for the corral pod.
+#
+# Workers connect here tokenless; this adds the worker bearer token (mounted at
+# /run/worker-token from the box credstore) and forwards to the host brain.
+# ${BRAIN_UPSTREAM} is substituted at container start by nginx's envsubst.
+#
+# The token is read into a variable via perl/lua-free trick: nginx can't read a
+# file into a header directly, so the entrypoint bakes it in. See entrypoint
+# note in the Dockerfile — this template expects TOKEN already substituted.
+
+server {
+    listen 9019;
+
+    # Large bodies + long-lived MCP/SSE streams: the brain speaks SSE for the
+    # live event feed, so disable buffering and let connections idle.
+    proxy_buffering            off;
+    proxy_read_timeout         3600s;
+    proxy_send_timeout         3600s;
+    client_max_body_size       32m;
+
+    location / {
+        proxy_pass          ${BRAIN_UPSTREAM};
+        proxy_http_version  1.1;
+        proxy_set_header    Authorization "Bearer ${WORKER_TOKEN}";
+        proxy_set_header    Host          $host;
+        proxy_set_header    Connection    "";
+        # Preserve the real client for the brain's CF-Connecting-IP logic / logs.
+        proxy_set_header    X-Forwarded-For $remote_addr;
+    }
+}

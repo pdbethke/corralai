@@ -57,3 +57,4 @@ site/playwright-report/
 
 # Playwright MCP debug artifacts (console logs, page snapshots) — scratch only
 /.playwright-mcp/
+.worktrees/

@@ -46,23 +46,31 @@ generalized from read-only to read-write.
   the worker token and to watch the UI. **No new Authentik, not Tannhäuser.**
 - **Worker → brain:** the minted **bearer token** the proxy holds. No IdP.
 
-### Mint the worker token  ⚙ verify on the box
-The worker is a non-human principal with normal (non-admin) rights — it must
-pass tasks but the human gate still refuses it shared-memory/skill writes.
+### Mint the worker token
+The worker token is a **delegation token from `spawn_subagent`** — TTL-bound,
+identity-scoped, and NOT coupled to any parent process (it lives for its TTL
+whether or not a parent runs; despawn is explicit). Because delegation tokens
+carry `Extra["subagent"]`, the human gate correctly refuses them admin writes —
+a worker can pass tasks but cannot self-vet skills/memory. (`mint-observer` is
+read-only and will NOT work here.) Delegation must be enabled on the brain
+(`delegation.conf` on the prod box — already set).
+
+Authenticate as yourself (OIDC), then call `spawn_subagent` with a long TTL:
+
+```json
+{ "name": "pod-builder", "role": "builder", "out_of_process": true, "ttl_seconds": 604800 }
+```
+
+Save the returned `token` to the file the proxy mounts:
 
 ```bash
-# authenticate as yourself (OIDC device/browser flow) to get an operator token,
-# then mint a scoped worker token. Confirm the exact verb — mint-observer is
-# READ-ONLY and will NOT work for workers; a worker needs a read-write token.
-corral-admin --brain https://brain.corralai.dev mint-worker --role builder --ttl 168h   # ⚙ verify verb
-# save the printed token, root-only:
 install -m600 -D /dev/stdin /etc/corral-pod/worker-token   # paste token, Ctrl-D
 ```
 
-If no `mint-worker` verb exists yet, the fallback is the same bootstrap path the
-container agents use (`corral-agent` gets `CORRAL_TOKEN` from a bootstrap
-response) — capture one worker token that way. **This is the single most
-important thing to nail down first;** nothing else in the pod works without it.
+One token can serve all four workers (they share the proxy), or mint one per
+role for cleaner attribution. **A thin `corral-admin mint-worker` wrapper around
+`spawn_subagent` (long TTL) would make this a one-liner — worth adding; see the
+floor variant below, which needs the same mint.**
 
 ## The credential ceremony (the headless-box dance)
 
@@ -137,6 +145,46 @@ docker compose down                # workers stop; the brain (systemd) is untouc
   stops responding while holding claims (a stall the brain's #40 lease-release +
   refusal-escalation fixes partially cover, but a dead worker files no
   refusals). Watch windows on long missions.
+
+## Floor variant: workstation workers → prod brain
+
+The guaranteed-for-a-demo path, and the safety net for the pod. Identical on
+screen (the audience sees `brain.corralai.dev` doing work; where the workers sit
+is invisible), but nothing to build or auth on the box — the vendor CLIs are
+already installed and logged in on your workstation.
+
+It reuses two pieces from the pod and drops the rest: **the auth-proxy** (run it
+locally, upstream `https://brain.corralai.dev`) and **the token mint** (same
+`spawn_subagent` call). No docker image, no credential ceremony, no
+loopback problem (the brain is public HTTPS).
+
+```bash
+# 1. build the harness once
+go build -o /usr/local/bin/corral-harness ./cmd/corral-harness
+
+# 2. mint a worker token (spawn_subagent, long TTL) → save to ./worker-token
+
+# 3. run the auth-proxy locally, pointed at the public brain
+docker run -d --name corral-floor-proxy -p 9019:9019 \
+  -v "$PWD/nginx.conf.template:/etc/nginx/templates/default.conf.template:ro" \
+  -v "$PWD/worker-token:/run/worker-token:ro" \
+  -e BRAIN_UPSTREAM=https://brain.corralai.dev \
+  --entrypoint /bin/sh nginx:1.27-alpine \
+  -c 'export WORKER_TOKEN="$(cat /run/worker-token)"; exec /docker-entrypoint.sh nginx -g "daemon off;"'
+  # NOTE: proxy_pass to an https upstream needs proxy_ssl_server_name on; add it
+  #       to nginx.conf.template's location block for the floor. ⚙ verify
+
+# 4. launch the four workers on the workstation (CLIs already authed), each
+#    pointing at the local proxy:
+export CORRAL_BRAIN=http://localhost:9019 AGENT_WORKSPACE="$PWD/floor-ws"
+mkdir -p "$AGENT_WORKSPACE"
+AGENT_NAME=Claude AGENT_ROLE=builder  AGENT_MODEL=claude-opus-4-6 AGENT_BACKEND=anthropic \
+  HARNESS_CMD='claude -p {prompt} --mcp-config {mcp_config} --allowedTools mcp__corral__*,Read,Write,Edit,Bash --permission-mode acceptEdits' corral-harness &
+# tester=gemini, pentester=codex, reviewer=copilot — same as the pod services.
+```
+
+Then open `brain.corralai.dev`, launch a mission, watch the herd. **This is the
+Saturday-afternoon floor; stand it up before betting the demo on the pod.**
 
 ## What this is not (yet)
 

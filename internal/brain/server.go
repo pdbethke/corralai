@@ -160,7 +160,9 @@ func NewServer(store *coord.Store, mem *memory.Store, opts Options) *mcp.Server 
 	mcp.AddTool(s, &mcp.Tool{Name: "release_claims", Description: "Release your leases (specific paths, or all of yours if omitted)."},
 		func(_ context.Context, req *mcp.CallToolRequest, in releaseIn) (*mcp.CallToolResult, releaseOut, error) {
 			n, err := store.ReleaseClaims(identity(req, in.Name), in.Paths)
-			recordClaimReleased(opts.Telemetry, identity(req, in.Name), in.Paths)
+			if err == nil {
+				recordClaimReleased(opts.Telemetry, identity(req, in.Name), in.Paths)
+			}
 			return nil, releaseOut{Released: n}, err
 		})
 

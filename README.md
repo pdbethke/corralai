@@ -136,7 +136,7 @@ readable by humans and queryable by every agent that joins.
 ### Watch it back (mission history + replay)
 
 Nothing about a finished mission is thrown away: every task's claim and
-completion, every finding and its resolution, every command a bee actually
+completion, every finding and its resolution, every command an agent actually
 ran, and the event log itself survive indefinitely. A **Completed tab** lists
 past missions — directive, duration, task/finding counts, and (best-effort)
 what got learned from them — with a detail view per mission and a **▶ replay**

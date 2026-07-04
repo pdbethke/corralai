@@ -4,6 +4,7 @@ package brain
 
 import (
 	"context"
+	"log"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -83,7 +84,9 @@ func summarize(mi mission.Mission, q *queue.Store, tel *telemetry.Store, approve
 	}
 	end := lastDone
 	if tel != nil {
-		if ts, found, err := tel.MissionCompletedAt(mi.ID); err == nil && found {
+		if ts, found, err := tel.MissionCompletedAt(mi.ID); err != nil {
+			log.Printf("history: MissionCompletedAt(%d): %v", mi.ID, err)
+		} else if found {
 			end = ts
 		}
 	}

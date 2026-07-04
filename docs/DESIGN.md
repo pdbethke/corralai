@@ -261,7 +261,7 @@ topology here; historical analytics via MotherDuck → Sigma.
 
 - **`report_activity` never carries `mission_id`.** Found during P10's live
   verification: `cmd/corral-agent/main.go`'s automatic `report_activity` call
-  (fired after every bee tool-call) omits `mission_id`, even though `runTask`
+  (fired after every agent tool-call) omits `mission_id`, even though `runTask`
   has it in scope — so `agent_activity` never actually reaches a mission's
   replay stream despite the brain-side recording/cap logic being correct and
   tested. Small, well-scoped fix: thread `missionID` into that call at both

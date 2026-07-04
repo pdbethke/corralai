@@ -205,7 +205,7 @@ finishes, you can replay it:
    push the speed selector to **16×** to watch a whole mission converge in
    seconds.
 5. **Exit replay** to resume the live feed — nothing about replay mode
-   touches the running swarm; it's read-only by construction.
+   touches the running herd; it's read-only by construction.
 
 Missions run before this shipped still replay too — durable task/finding/
 execution rows are all replay needs; positions are recomputed on the fly,

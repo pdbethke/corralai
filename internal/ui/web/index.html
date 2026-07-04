@@ -1148,7 +1148,7 @@ function renderTasks(){
       return `<div class="trow"${gone?' style="opacity:.6"':''}><span class="tdot" style="background:${taskColor(t.status)}"></span><b style="${titleStyle}">${esc(t.title||t.key)}</b> <span style="color:var(--muted)">${esc(t.role||'')}</span>${who}${repl}</div>`;
     }).join('');
 }
-function esc(s){ return (s||'').replace(/[&<>]/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[m])); }
+function esc(s){ return (s||'').replace(/[&<>"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
 
 // simple force layout
 function step(){

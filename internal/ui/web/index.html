@@ -7,9 +7,16 @@
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐝</text></svg>">
 <style>
   :root { --bg:#0e1116; --fg:#e6e1d8; --muted:#8a8170; --amber:#e8a838; --red:#e8503a; --line:#33405a;
-    --green:#8fdcab; --panel:#161b22; --sel:#1b2330; --card:rgba(20,25,32,.97); }
-  html.light { --bg:#f4f2ec; --fg:#2b2720; --muted:#6f6757; --amber:#b27512; --red:#c0392b; --line:#cdd1d8;
-    --green:#2f9e5e; --panel:#ebe9e1; --sel:#e2dfd4; --card:rgba(250,249,245,.98); }
+    --green:#8fdcab; --panel:#161b22; --sel:#1b2330; --card:rgba(20,25,32,.97);
+    /* --stage-* are the CANVAS's own palette — the corral/comb/matrix rain always
+       render on a dark stage, in BOTH chrome themes (grass/glow/rain need the dark
+       ground to read). These are deliberately NOT redefined under html.light: the
+       stage is the one thing the toggle must never touch, framed like the site's
+       dark hero viewport sitting on a light page. */
+    --stage-bg:#0e1116; --stage-fg:#e6e1d8; --stage-muted:#8a8170; --stage-amber:#e8a838;
+    --stage-red:#e8503a; --stage-green:#8fdcab; --stage-line:#33405a; --stage-panel:#161b22; }
+  html.light { --bg:#faf3e6; --fg:#241f18; --muted:#6b6152; --amber:#8f5e08; --red:#b8341f; --line:#ddd0b3;
+    --green:#3f7a52; --panel:#f2e9d6; --sel:#ece0c4; --card:rgba(255,251,242,.98); }
   * { box-sizing:border-box; }
   html,body { margin:0; height:100%; background:var(--bg); color:var(--fg);
     font:14px/1.4 ui-sans-serif,system-ui,Segoe UI,Roboto,sans-serif; overflow:hidden; }
@@ -29,8 +36,13 @@
   #leftcol, #rightcol { overflow-y:auto; overflow-x:hidden; padding:12px 12px 18px; display:flex; flex-direction:column; gap:14px; background:var(--bg); }
   #leftcol { border-right:1px solid var(--line); }
   #rightcol { border-left:1px solid var(--line); }
-  #center { position:relative; display:flex; flex-direction:column; min-width:0; min-height:0; }
-  #legend { position:absolute; bottom:8px; left:10px; right:10px; color:var(--muted); font-size:11px; z-index:2;
+  /* the stage is always dark, framed against the surrounding chrome (which
+     flips light/dark with the toggle) — a dark viewport on a light page in
+     light mode, mirroring the site's dark hero-in-a-window treatment. */
+  #center { position:relative; display:flex; flex-direction:column; min-width:0; min-height:0;
+    background:var(--stage-bg); box-shadow:inset 0 0 0 1px var(--stage-line); }
+  html.light #center { box-shadow:inset 0 0 0 1px var(--stage-line), 0 8px 28px rgba(40,30,10,.18); }
+  #legend { position:absolute; bottom:8px; left:10px; right:10px; color:var(--stage-muted); font-size:11px; z-index:2;
     pointer-events:none; line-height:1.9; }
   #legend .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin:0 4px 0 10px; vertical-align:middle; }
   #done { color:var(--muted); font-size:12px; text-align:left; flex:none; }
@@ -170,7 +182,7 @@
   .pmt { text-align:center; color:var(--muted); margin-top:64px; font-size:13px; }
   #c { flex:1 1 auto; min-height:0; width:100%; display:block; }
   #empty { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
-    color:var(--muted); z-index:1; pointer-events:none; }
+    color:var(--stage-muted); z-index:1; pointer-events:none; }
   #tabs { pointer-events:auto; margin-left:8px; }
   .tab { cursor:pointer; color:var(--muted); padding:3px 9px; border-radius:5px; font-size:13px; }
   .tab.active { color:var(--bg); background:var(--amber); }
@@ -332,7 +344,7 @@
     <span class="stat" id="stat">connecting…</span>
     <span class="stat" id="whoami" title="who the brain sees you as"></span>
     <select id="skinsel" onchange="setSkin(this.value)" title="critter skin" style="pointer-events:auto;margin-left:8px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:6px;font-size:11px;padding:2px 4px"></select>
-    <a class="tab" id="themebtn" onclick="toggleTheme()" title="toggle light / dark" style="pointer-events:auto;margin-left:6px">☾</a>
+    <button type="button" class="tab" id="themebtn" onclick="toggleTheme()" title="toggle light / dark" aria-label="Switch to light theme" style="pointer-events:auto;margin-left:6px;background:none;border:none;font:inherit">☾</button>
   </div>
   <div id="stage">
     <aside id="leftcol">
@@ -350,9 +362,9 @@
         <span class="dot" style="background:#7b8cde"></span>integrator
         <span class="dot" style="background:#9fb06a"></span>writer
         <span class="dot" style="background:#b07cd6"></span>reviewer
-        <span class="dot" style="background:var(--muted)"></span>claimed path
-        <span class="dot" style="background:var(--red)"></span>conflict
-        <span class="dot" style="background:var(--amber)"></span>⏸ awaiting approval
+        <span class="dot" style="background:var(--stage-muted)"></span>claimed path
+        <span class="dot" style="background:var(--stage-red)"></span>conflict
+        <span class="dot" style="background:var(--stage-amber)"></span>⏸ awaiting approval
       </div>
       <div id="empty">no agents in the corral yet</div>
     </main>

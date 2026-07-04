@@ -220,17 +220,15 @@ cv.addEventListener('touchend', ev => {
 .view-controls button:hover, .view-controls button:focus-visible {
   background:rgba(40,40,40,.75); border-color:rgba(255,255,255,.5); outline:none;
 }
-html.light .view-controls button { background:rgba(255,255,255,.7); color:#2b2720; border-color:rgba(0,0,0,.18); }
-html.light .view-controls button:hover, html.light .view-controls button:focus-visible {
-  background:rgba(255,255,255,.92); border-color:rgba(0,0,0,.35);
-}
+/* No html.light override here on purpose — the stage stays dark in BOTH
+   chrome themes (see index.html's #center), so these overlay controls keep
+   their dark-glass styling regardless of the toggle. */
 .view-hint {
   position:absolute; right:10px; top:44px; z-index:5; font-size:11px; color:#eee;
   background:rgba(20,20,20,.55); padding:3px 8px; border-radius:5px; pointer-events:none;
   opacity:1; transition:opacity 1.1s ease; white-space:nowrap;
 }
 .view-hint.hide { opacity:0; }
-html.light .view-hint { background:rgba(255,255,255,.75); color:#2b2720; }
 `;
   document.head.appendChild(style);
 
@@ -257,18 +255,18 @@ html.light .view-hint { background:rgba(255,255,255,.75); color:#2b2720; }
 function dismissViewHint(){ if(window.dismissViewHint) window.dismissViewHint(); }
 
 // ---- themed canvas backgrounds: grass (ranch/flock), honeycomb (hive) are
-// pre-rendered offscreen; matrix rain animates in draw(). Tuned to read clearly
-// at a glance without overpowering the nodes; light theme gets darker strokes
-// since the pale/neon colors that work on the dark theme wash out on cream.
+// pre-rendered offscreen; matrix rain animates in draw(). The stage is always
+// dark (see index.html's #center — framed dark viewport in BOTH chrome
+// themes), so these are tuned once for a dark ground and do NOT fork on the
+// chrome's light/dark toggle.
 const bgCv = document.createElement('canvas'); const bgCtx = bgCv.getContext('2d');
 let rainDrops = [];
-function isLightTheme(){ return document.documentElement.classList.contains('light'); }
 function renderBg(){
   bgCv.width = Math.max(1, CW); bgCv.height = Math.max(1, CH);
   bgCtx.clearRect(0,0,CW,CH);
-  const kind = skin().bg, light = isLightTheme();
+  const kind = skin().bg;
   if(kind==='grass'){
-    const rgb = light ? '46,110,46' : '110,190,110';
+    const rgb = '110,190,110';
     for(let i=0;i<Math.floor(CW*CH/9000);i++){
       const x = Math.random()*CW, y = Math.random()*CH, h = 6+Math.random()*9;
       bgCtx.strokeStyle = 'rgba('+rgb+','+(0.25+Math.random()*0.14)+')'; bgCtx.lineWidth=1.4;
@@ -277,9 +275,9 @@ function renderBg(){
       }
     }
   } else if(kind==='comb'){
-    const rgb = light ? '176,124,10' : '244,196,48';
+    const rgb = '244,196,48';
     const r=16, w=r*Math.sqrt(3);
-    bgCtx.strokeStyle='rgba('+rgb+','+(light?0.22:0.18)+')'; bgCtx.lineWidth=1.2;
+    bgCtx.strokeStyle='rgba('+rgb+',0.18)'; bgCtx.lineWidth=1.2;
     for(let row=0; row*1.5*r<CH+2*r; row++){
       for(let col=0; col*w<CW+w; col++){
         const cx = col*w + (row%2? w/2:0), cy = row*1.5*r;
@@ -298,7 +296,7 @@ const RAIN_GLYPHS = '01コラルｱｲｳｴｵｶｷｸ<>{}#$';
 function drawRain(dt){
   bgCtx.clearRect(0,0,CW,CH); // rain redraws its own layer each frame
   bgCtx.font='13px ui-monospace,monospace';
-  const rgb = isLightTheme() ? '10,110,50' : '90,240,130';
+  const rgb = '90,240,130';
   for(const d of rainDrops){
     d.y += d.v*dt; if(d.y > CH+80) { d.y = -20; d.v = 40+Math.random()*90; }
     for(let k=0;k<8;k++){
@@ -543,11 +541,17 @@ function hexA(hex, a){ const h=(hex||'#888').replace('#','').trim(); const n=par
 function readColors(){ const s=getComputedStyle(document.documentElement), g=k=>s.getPropertyValue(k).trim();
   C={fg:g('--fg'),muted:g('--muted'),amber:g('--amber'),red:g('--red'),line:g('--line'),green:g('--green'),panel:g('--panel')}; }
 function applyTheme(th){ document.documentElement.classList.toggle('light', th==='light');
-  const b=document.getElementById('themebtn'); if(b) b.textContent = th==='light'?'☀':'☾'; readColors();
+  const b=document.getElementById('themebtn');
+  if(b){ b.textContent = th==='light'?'☀':'☾'; b.setAttribute('aria-label', th==='light'?'Switch to dark theme':'Switch to light theme'); }
+  readColors();
   try{ renderBg(); }catch(_){} }
 function toggleTheme(){ const th=document.documentElement.classList.contains('light')?'dark':'light';
   try{ localStorage.setItem('corral-theme', th); }catch(_){} applyTheme(th); }
-applyTheme((()=>{ try{ return localStorage.getItem('corral-theme'); }catch(_){ return null; } })()||'dark');
+// Default: an explicit prior choice wins; otherwise follow the OS/browser's
+// prefers-color-scheme on first load, falling back to dark if that API is
+// unavailable (matches the chrome's own dark-first design).
+applyTheme((()=>{ try{ return localStorage.getItem('corral-theme'); }catch(_){ return null; } })()
+  || (()=>{ try{ return matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'; }catch(_){ return 'dark'; } })());
 function ensure(id, kind, label){
   let n = nodes.get(id);
   if(!n){ n = {id,kind,label, x: CW/2 + (Math.random()-.5)*200, y: CH/2 + (Math.random()-.5)*200, vx:0, vy:0, last:0, conflict:false, phase: Math.random()*6.283, dartCd: 0, working:false, trail: []}; nodes.set(id,n); }

@@ -108,6 +108,16 @@ the loop continues until the PR is approved.
   starts each mission already warned. And the loop watches its own efficacy:
   if the same signature keeps recurring *after* promotion, a revision proposal
   reopens for the human to reconsider.
+- **Shared skills + hooks — capability, not just knowledge.** Approved skills (and
+  guardrail **hooks**) are versioned in the brain's **artifact store** and sync
+  across the whole fleet: a `corral sync` pulls every changed skill/hook, so what
+  one machine's herd learns, every machine's herd can *do*. It's team-shared
+  capability for an agent fleet — **memory *and* skills**, both human-gated:
+  publishing to the fleet is superuser-only (a worker proposes, it can't publish),
+  and hooks are *staged for human review* rather than auto-applied, because
+  executable guardrails should never silently activate. Corralai even ships a
+  [`using-corralai`](skills/using-corralai/SKILL.md) skill that teaches any coding
+  agent to drive the herd.
 - **Reference RAG — upload your own grounding material** (text · URLs · **PDFs** ·
   design "looks"); it's chunked and **vector-embedded** (any OpenAI-compatible
   embedding endpoint, so it's never tied to one machine) for agents to query. Runs
@@ -148,6 +158,13 @@ to be recorded in advance for the shapes to replay). The merged stream is
 built entirely from durable task/finding/execution rows plus the event log
 (`mission_completed`, review state) when the mission spoke it — the same
 build, reconstructed, every time.
+
+**See it live at [corralai.dev](https://corralai.dev).** The hero is a real
+recorded mission replaying in your browser; the **recordings gallery** holds
+more — different languages and model mixes, each labeled with the hardware it
+ran on and honest per-run analytics — and every published run links to a
+**result repo** so you can browse the actual code the herd wrote. Full docs at
+[corralai.dev/docs](https://corralai.dev/docs).
 
 **Coordinate — one swarm or many.**
 

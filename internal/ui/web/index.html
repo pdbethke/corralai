@@ -746,9 +746,8 @@ function renderProgress(){
   el.innerHTML = missionsHtml;
 }
 
-// sevColor: critical/high red (the alert), medium amber, low muted.
-function sevColor(sev){ return (sev==='critical'||sev==='high')?C.red:(sev==='medium'?C.amber:'#6b6452'); }
-const SEV_RANK = {critical:3, high:2, medium:1, low:0};
+// sevColor/SEV_RANK moved to replay-player.js (shared top-level scope with
+// this file — both live and replay findings renderers need them).
 // renderFindings: the swarm's feedback channel, made visible — open findings on
 // top, highest severity first; high/critical highlighted (the "vuln found" moment).
 function renderFindings(){

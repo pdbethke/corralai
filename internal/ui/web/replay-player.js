@@ -32,7 +32,9 @@
 //
 // Optional, null-guarded (safe to omit entirely): #empty, #stat, #skinsel,
 // #skinsub, #tab-swarm, #tab-proposals, #proposals-badge, #tab-completed,
-// #themebtn.
+// #themebtn — and the replay-cockpit panels #exec, #tasks, #findings (when
+// present, replay populates them from the tape; the canvas-only hero omits
+// them and loses nothing).
 //
 // To start a live SSE-driven view (the product page only — a static replay
 // embed never calls this): `es = connectSSE();`
@@ -530,6 +532,11 @@ function liveServerNow(){ return serverNow + (performance.now()/1000 - stateClie
 const ROLE_COLORS = {researcher:'#e6c84f', designer:'#4fc3d9', builder:'#5b9bd5', tester:'#5ec98a', pentester:'#e0913a', perf:'#d96fb0', integrator:'#7b8cde', writer:'#9fb06a', reviewer:'#b07cd6'};
 function roleColor(role){ return ROLE_COLORS[role] || C.amber; }
 
+// severity color/rank — shared by the live findings panel (index.html) and
+// the replay cockpit's findings renderer below.
+function sevColor(sev){ return (sev==='critical'||sev==='high')?C.red:(sev==='medium'?C.amber:'#6b6452'); }
+const SEV_RANK = {critical:3, high:2, medium:1, low:0};
+
 // ---- theme (light / dark) ----
 let C = {};
 function hexA(hex, a){ const h=(hex||'#888').replace('#','').trim(); const n=parseInt(h.length===3?h.replace(/./g,'$&$&'):h,16); return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`; }
@@ -807,6 +814,83 @@ let replayEvents = [], replayIdx = 0, replayPlaying = false, replaySpeed = 1, re
 // the flag that also works with no brain running at all.
 let inReplay = false;
 
+// ---- replay cockpit: the tape drives the console/tasks/findings panels ----
+// The live panels render from lastState via apply() (SSE) — which is paused
+// during replay, so in the product they used to freeze on stale live content
+// while the canvas played the tape. These replay-side renderers accumulate
+// state from applyReplayEvent and paint the SAME panel DOM (#exec, #tasks,
+// #findings — all optional, null-guarded) from the tape instead. People want
+// to see action: the whole viewport replays, not just the canvas.
+// Honest limits of the tape: execution beats carry ok/exit_code but not the
+// live feed's timed_out flag or multi-line output summary, and there is no
+// recent_activity tool-call stream — the cockpit shows what was recorded,
+// never invents the rest.
+let replayExecLines = [];   // {agent, role, command, ok, exitCode}
+let replayTasks = new Map(); // key -> {key, title, role, status, claimedBy}
+let replayFindings = [];    // {reporter, target, type, severity, model, resolved}
+let replaySeenBeats = new Set(); // dedupe: findings ride the tape twice (queue+telemetry merge)
+function resetReplayPanels(){
+  replayExecLines = []; replayTasks = new Map(); replayFindings = []; replaySeenBeats = new Set();
+}
+function clearReplayPanelDOM(){
+  for(const id of ['exec','tasks','findings']){
+    const el = document.getElementById(id);
+    if(el) el.innerHTML = '';
+  }
+}
+function renderReplayConsole(){
+  const ep = document.getElementById('exec');
+  if(!ep) return;
+  const tail = replayExecLines.slice(-24);
+  ep.innerHTML = '<div class="feedhdr">console · replaying the tape · ' + replayExecLines.length + '</div>' +
+    (tail.length ? '' : '<div class="xempty">▌ no commands on the tape yet…</div>') +
+    tail.map(e => {
+      const badge = e.ok
+        ? '<span class="xbadge" style="color:var(--green)" title="exit 0">✓</span>'
+        : '<span class="xbadge" style="color:var(--red)" title="exit ' + esc(String(e.exitCode)) + '">✗' + esc(String(e.exitCode)) + '</span>';
+      return '<div class="xblk"><div class="xcmdline"><span class="xprompt">❯</span> <b style="color:' + roleColor(e.role) + '">' + esc(displayName(e.agent)) + '</b> <code class="xcmd">' + esc(e.command || '') + '</code> ' + badge + '</div></div>';
+    }).join('') + '<div class="xcursor">▌</div>';
+  ep.scrollTop = ep.scrollHeight; // tail like the live console
+}
+function renderReplayTasks(){
+  const tp = document.getElementById('tasks');
+  if(!tp) return;
+  const tasks = Array.from(replayTasks.values());
+  if(!tasks.length){ tp.innerHTML = ''; return; }
+  const order = {claimed:0, queued:1, done:2, superseded:3, cancelled:4};
+  const counts = tasks.reduce((m,t)=>{ m[t.status]=(m[t.status]||0)+1; return m; }, {});
+  const hdr = ['claimed','queued','done','superseded','cancelled'].filter(s=>counts[s]).map(s=>counts[s]+' '+s).join(' · ');
+  tp.innerHTML = '<div class="feedhdr">tasks · ' + tasks.length + (hdr ? ' &nbsp; ' + hdr : '') + '</div>' +
+    tasks.slice().sort((a,b)=>(order[a.status]??9)-(order[b.status]??9)).slice(0,50).map(t => {
+      const gone = (t.status==='cancelled' || t.status==='superseded');
+      const dot = t.status==='done' ? C.green : (t.status==='claimed' ? '#5b9bd5' : '#6b6452');
+      const who = t.claimedBy && !gone ? ' <span style="color:' + roleColor(t.role) + '">← ' + esc(displayName(t.claimedBy)) + '</span>' : '';
+      const titleStyle = gone ? 'color:var(--muted);text-decoration:line-through' : 'color:var(--fg)';
+      return '<div class="trow"' + (gone ? ' style="opacity:.6"' : '') + '><span class="tdot" style="background:' + dot + '"></span><b style="' + titleStyle + '">' + esc(t.title || t.key) + '</b> <span style="color:var(--muted)">' + esc(t.role || '') + '</span>' + who + '</div>';
+    }).join('');
+}
+function renderReplayFindings(){
+  const fp = document.getElementById('findings');
+  if(!fp) return;
+  if(!replayFindings.length){ fp.innerHTML = ''; return; }
+  const open = replayFindings.filter(f => !f.resolved);
+  const crit = open.filter(f => f.severity==='critical' || f.severity==='high').length;
+  const hdr = 'findings · ' + open.length + ' open' + (crit ? ' &nbsp; <b style="color:var(--red)">⚠ ' + crit + ' high</b>' : '');
+  fp.innerHTML = '<div class="feedhdr">' + hdr + '</div>' +
+    open.slice().sort((a,b)=>(SEV_RANK[b.severity]??0)-(SEV_RANK[a.severity]??0)).slice(0,30).map(f => {
+      const hi = (f.severity==='critical' || f.severity==='high') ? ' hi' : '';
+      const tgt = f.target ? ' <span style="color:var(--fg)">' + esc(f.target) + '</span>' : '';
+      const mdl = f.model ? ' <span style="color:#5a7a8a;font-size:10px;font-family:ui-monospace,monospace">[' + esc(f.model) + ']</span>' : '';
+      return '<div class="frow' + hi + '"><span class="fsev" style="color:' + sevColor(f.severity) + '">' + esc(f.severity) + '</span> <span style="color:var(--muted)">' + esc(f.type) + '</span>' + tgt + ' <span style="color:#6b6452">· ' + esc(displayName(f.reporter)) + '</span>' + mdl + '</div>';
+    }).join('');
+}
+function renderReplayPanels(){
+  if(!inReplay) return; // the live page's panels belong to apply()/SSE
+  renderReplayConsole();
+  renderReplayTasks();
+  renderReplayFindings();
+}
+
 function startReplay(streamOrUrl){
   const load = (typeof streamOrUrl === 'string')
     ? fetch(streamOrUrl).then(r => r.json()).then(d => d.events || [])
@@ -818,6 +902,7 @@ function startReplay(streamOrUrl){
     inReplay = true;
     if(replayTimer){ clearTimeout(replayTimer); replayTimer = null; }
     nodes.clear(); links.length = 0; bursts.length = 0; buzzes.length = 0;
+    resetReplayPanels();
     if(es && !replaySSEPaused){ es.close(); replaySSEPaused = true; } // live mode paused while replaying
     setView('replay');
     renderReplayScrub();
@@ -840,6 +925,12 @@ function stopReplaySession(){
   if(replayTimer){ clearTimeout(replayTimer); replayTimer = null; }
   const btn = document.getElementById('replay-playbtn');
   if(btn) btn.textContent = '▶ play';
+  // Relinquish the panels: clear replay content so the live snapshot (pushed
+  // immediately on SSE reconnect) repaints from a blank panel, never leaving
+  // a flash of stale TAPE content posing as live state. inReplay is already
+  // false at this point, so no replay render can race the repaint.
+  resetReplayPanels();
+  clearReplayPanelDOM();
   if(replaySSEPaused){ es = connectSSE(); replaySSEPaused = false; } // resume live: the events handler pushes a fresh snapshot immediately on connect
 }
 function closeReplay(){
@@ -870,6 +961,7 @@ function seekReplay(target){
   if(replayTimer){ clearTimeout(replayTimer); replayTimer = null; }
   replayIdx = 0;
   nodes.clear(); links.length = 0; bursts.length = 0; buzzes.length = 0;
+  resetReplayPanels();
   while(replayIdx < target && replayIdx < replayEvents.length) applyReplayEvent(replayEvents[replayIdx++]);
   renderReplayScrub();
   if(replayPlaying) replayTimer = setTimeout(replayStep, Math.max(16, 250 / replaySpeed));
@@ -878,6 +970,56 @@ function seekReplay(target){
 // merged, sorted beat stream) into the live canvas's node/link/burst/buzz
 // vocabulary.
 function applyReplayEvent(ev){
+  // ---- cockpit accumulation (panels) — before the canvas switch below ----
+  const d = ev.detail || {};
+  switch(ev.kind){
+    case 'task_created':
+      if(ev.subject) replayTasks.set(ev.subject, {key: ev.subject, title: d.title || '', role: d.role || '', status: 'queued', claimedBy: ''});
+      break;
+    case 'task_claimed': {
+      if(ev.subject){
+        const t = replayTasks.get(ev.subject) || {key: ev.subject, title: d.title || '', role: d.role || ''};
+        t.status = 'claimed'; t.claimedBy = ev.actor || ''; t.role = d.role || t.role;
+        replayTasks.set(ev.subject, t);
+      }
+      break;
+    }
+    case 'task_done': case 'task_cancelled': case 'task_superseded': {
+      if(ev.subject){
+        const t = replayTasks.get(ev.subject);
+        if(t) t.status = ev.kind.slice(5); // done | cancelled | superseded
+      }
+      break;
+    }
+    case 'execution': {
+      // dedupe on (actor, command, second-rounded ts) — cheap insurance in
+      // case a stream ever carries a beat from both merge sources.
+      const k = 'x|' + (ev.actor||'') + '|' + (ev.subject||'') + '|' + Math.round(ev.ts);
+      if(!replaySeenBeats.has(k)){
+        replaySeenBeats.add(k);
+        replayExecLines.push({agent: ev.actor || '', role: d.role || '', command: ev.subject || '', ok: !!d.ok, exitCode: d.exit_code == null ? '' : d.exit_code});
+        if(replayExecLines.length > 200) replayExecLines.shift();
+      }
+      break;
+    }
+    case 'finding_reported': {
+      // findings ride the tape TWICE (queue + telemetry merge — same dedupe
+      // convention as Task 9's analytics flattener).
+      const k = 'f|' + (ev.subject||'') + '|' + (d.severity||'') + '|' + Math.round(ev.ts);
+      if(!replaySeenBeats.has(k)){
+        replaySeenBeats.add(k);
+        replayFindings.push({reporter: ev.actor || '', target: ev.subject || '', type: d.type || '', severity: d.severity || '', model: ev.model || '', resolved: false});
+      }
+      break;
+    }
+    case 'finding_resolved': {
+      for(let i = replayFindings.length - 1; i >= 0; i--){
+        if(replayFindings[i].target === ev.subject && !replayFindings[i].resolved){ replayFindings[i].resolved = true; break; }
+      }
+      break;
+    }
+  }
+  // ---- canvas translation (unchanged below this line) ----
   const now = Date.now()/1000; // same clock draw()'s bursts/buzzes compare against
   const agentId = ev.actor ? 'a:'+ev.actor : null;
   const pathId = ev.subject ? 'p:'+ev.subject : null;
@@ -924,6 +1066,7 @@ function applyReplayEvent(ev){
   }
 }
 function renderReplayScrub(){
+  renderReplayPanels();
   // apply() (the SSE path) normally owns #empty's "no agents yet" caption —
   // but apply() never runs during replay (SSE paused) or in a static embed
   // (no SSE at all), so the replay pipeline refreshes it here, at the single

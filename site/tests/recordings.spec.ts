@@ -46,6 +46,47 @@ test('a recording with an .analysis.md shows the affordance and reveals the anal
   await expect(panel.locator('h2').first()).toContainText('Analysis');
 });
 
+test('the cockpit panels replay the tape: console lines appear and track the scrub position', async ({ page }) => {
+  await page.goto('/recordings/');
+  await page.locator('.card').first().click();
+  await expect(async () => {
+    const max = await page.locator('#replay-scrub').getAttribute('max');
+    expect(Number(max)).toBeGreaterThan(0);
+  }).toPass({ timeout: 5000 });
+
+  const scrub = page.locator('#replay-scrub');
+  const max = Number(await scrub.getAttribute('max'));
+  const seek = (target: number) =>
+    scrub.evaluate((el, t) => { (el as HTMLInputElement).value = String(t); el.dispatchEvent(new Event('input')); }, target);
+
+  // Mid-tape: the console has lines, tasks and findings headers render.
+  await seek(Math.floor(max / 2));
+  const midConsole = await page.locator('#exec .xblk').count();
+  expect(midConsole, 'expected console lines mid-tape').toBeGreaterThan(0);
+  await expect(page.locator('#tasks .feedhdr')).toContainText('tasks ·');
+
+  // The console header's total count grows with the scrub position — the
+  // rendered tail is capped at 24 rows, so assert on the header's running
+  // total, which reflects every execution beat accumulated so far.
+  const headerCount = async () => {
+    const txt = await page.locator('#exec .feedhdr').innerText();
+    return Number(txt.split('·').pop()!.trim());
+  };
+  const midTotal = await headerCount();
+  await seek(max);
+  const endTotal = await headerCount();
+  expect(endTotal, 'console total must grow from mid-tape to end-of-tape').toBeGreaterThan(midTotal);
+
+  // Seek BACK rebuilds from zero: an early position must show fewer than the end.
+  await seek(Math.floor(max / 10));
+  const earlyTotal = await headerCount();
+  expect(earlyTotal, 'seeking back must rebuild the panels from zero, not keep accumulating').toBeLessThan(endTotal);
+
+  // Findings accumulate by end-of-tape (the golden run has real findings).
+  await seek(max);
+  await expect(page.locator('#findings .feedhdr')).toContainText('findings ·');
+});
+
 test('every recording card corresponds to a committed stream + meta pair', async () => {
   const fs = await import('node:fs');
   const files = fs.readdirSync('src/data/recordings');

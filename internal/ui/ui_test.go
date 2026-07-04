@@ -715,10 +715,49 @@ func TestReplayPlayerStructure(t *testing.T) {
 		// consults viewJustPanned() rather than a fragile capture-phase eater.
 		`function viewJustPanned()`,
 		`setTimeout(() => { viewDidPan = false; }, 0)`,
+		// replay cockpit (Task 12): the tape drives console/tasks/findings
+		// panels through null-guarded optional DOM ids, same contract as
+		// #empty/#stat — present in the product and the site cockpit,
+		// absent in the canvas-only hero.
+		`function renderReplayPanels()`,
+		`function renderReplayConsole()`,
+		`function renderReplayTasks()`,
+		`function renderReplayFindings()`,
+		`function resetReplayPanels()`,
+		`const SEV_RANK`,
+		`function sevColor(sev)`,
 	}
 	for _, m := range playerMarkers {
 		if !strings.Contains(player, m) {
 			t.Errorf("replay-player.js missing required replay marker: %q", m)
+		}
+	}
+	// The cockpit renderers must be null-guarded (optional DOM) and
+	// inReplay-gated (never clobber the live panels while SSE owns them),
+	// and every replay entry/reset path must reset the panel state.
+	for _, guard := range []string{
+		`document.getElementById('exec')`,
+		`document.getElementById('tasks')`,
+		`document.getElementById('findings')`,
+	} {
+		if !strings.Contains(player, guard) {
+			t.Errorf("replay-player.js cockpit missing optional-DOM lookup %q", guard)
+		}
+	}
+	if !strings.Contains(player, "if(!inReplay) return;") {
+		t.Error("renderReplayPanels must be inReplay-gated — a live page's panels belong to apply()/SSE, not the tape")
+	}
+	for _, fn := range []string{"function startReplay(streamOrUrl){", "function seekReplay(target){", "function stopReplaySession(){"} {
+		fi := strings.Index(player, fn)
+		if fi < 0 {
+			t.Fatalf("could not locate %s in replay-player.js", fn)
+		}
+		end := strings.Index(player[fi:], "\n}")
+		if end < 0 {
+			t.Fatalf("could not locate the end of %s", fn)
+		}
+		if !strings.Contains(player[fi:fi+end], "resetReplayPanels(") {
+			t.Errorf("%s must reset the cockpit panel state (resetReplayPanels) — seek/restart/stop each rebuild or relinquish the panels", fn)
 		}
 	}
 	indexMarkers := []string{

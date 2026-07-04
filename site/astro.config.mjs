@@ -48,21 +48,18 @@ export default defineConfig({
           ],
         },
         {
-          // CLI reference pages don't exist yet — Task 4 generates them
-          // mechanically from each binary's --help output. Starlight
-          // validates `slug` entries against the content collection at
-          // build time, so these use raw `link` entries instead of `slug`
-          // until Task 4 adds the actual pages (at which point Task 4
-          // should switch these back to `slug` entries to get Starlight's
-          // prev/next + active-link handling).
+          // Generated mechanically by scripts/gen-cli-docs.sh from each
+          // binary's own -h output — never hand-written. Now that Task 4 has
+          // written the pages, these are real `slug` entries (not `link`),
+          // which gets Starlight's prev/next + active-link handling.
           label: 'CLI reference',
           items: [
-            { label: 'corral', link: '/docs/cli/corral/' },
-            { label: 'corral-admin', link: '/docs/cli/corral-admin/' },
-            { label: 'corral-agent', link: '/docs/cli/corral-agent/' },
-            { label: 'corral-harness', link: '/docs/cli/corral-harness/' },
-            { label: 'corral-observe', link: '/docs/cli/corral-observe/' },
-            { label: 'corral-top', link: '/docs/cli/corral-top/' },
+            { label: 'corral', slug: 'docs/cli/corral' },
+            { label: 'corral-admin', slug: 'docs/cli/corral-admin' },
+            { label: 'corral-agent', slug: 'docs/cli/corral-agent' },
+            { label: 'corral-harness', slug: 'docs/cli/corral-harness' },
+            { label: 'corral-observe', slug: 'docs/cli/corral-observe' },
+            { label: 'corral-top', slug: 'docs/cli/corral-top' },
           ],
         },
       ],

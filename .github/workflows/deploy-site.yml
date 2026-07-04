@@ -51,6 +51,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
       - uses: actions/setup-node@v4
         with:
           # Astro 7 requires >=22.12.0 (site/package.json engines) — 20 would
@@ -63,6 +67,8 @@ jobs:
         # `prebuild`, but failing here — before npm ci — gives a faster,
         # clearer signal that a stale committed copy can never ship.
         run: bash scripts/sync-site-assets.sh --check
+      - name: Check the CLI reference hasn't drifted from the real binaries
+        run: bash scripts/gen-cli-docs.sh --check
       - name: Corral dependencies
         working-directory: site
         run: npm ci

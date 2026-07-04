@@ -47,6 +47,25 @@ func env(k, d string) string {
 	return d
 }
 
+func usageText() string {
+	return `corral-agent — reference LLM-driven agent for the demo (local Ollama by default)
+
+Usage:
+  corral-agent            connect to the brain and work the queue
+  corral-agent --version  print the build version and exit
+  corral-agent -h         print this help and exit
+
+Env:
+  CORRAL_BRAIN       brain URL (default http://127.0.0.1:9019/mcp/)
+  AGENT_ROLE         builder | tester | pentester | reviewer (default builder)
+  AGENT_NAME         display name in the swarm UI (default same as AGENT_ROLE)
+  AGENT_WORKSPACE    working directory for edits (default $TMPDIR/corral-demo-ws)
+  MODEL_BACKEND      ollama (default) | openai (Gemini/OpenRouter/local, any OpenAI-compatible endpoint)
+  AGENT_MODEL        model name passed to the backend (default qwen2.5-coder:7b)
+  CLOBBER            set "1" to ignore coordination conflicts and edit anyway (demo of what NOT coordinating looks like)
+`
+}
+
 // ---- Ollama (function-calling chat) ----
 
 type omsg struct {
@@ -128,6 +147,10 @@ func main() {
 	for _, a := range os.Args[1:] {
 		if a == "--version" || a == "-version" || a == "version" || a == "-v" {
 			fmt.Println("corral-agent", version)
+			return
+		}
+		if a == "-h" || a == "--help" || a == "help" {
+			fmt.Print(usageText())
 			return
 		}
 	}

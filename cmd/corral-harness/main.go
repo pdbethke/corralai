@@ -55,6 +55,31 @@ func envInt(k string, d int) int {
 	return d
 }
 
+func usageText() string {
+	return `corral-harness — loops a headless coding agent (Claude Code, Gemini CLI, Codex, ...) as a swarm bee over MCP
+
+Usage:
+  corral-harness         claim one task, work it, complete it, exit
+  corral-harness -h      print this help and exit
+
+Env:
+  CORRAL_BRAIN   brain URL (default http://localhost:9019)
+  BEE_NAME       swarm name (default Harness)
+  BEE_ROLE       role to serve (default builder)
+  BEE_WORKSPACE  working directory for the harness (default .)
+  HARNESS_CMD    command template; placeholders: {prompt} {mcp_config} {brain}
+                 e.g. claude -p {prompt} --mcp-config {mcp_config} \
+                      --allowedTools "mcp__corral__*,Read,Write,Edit,Bash" \
+                      --permission-mode acceptEdits
+  HARNESS_DESC   how to announce this harness (default derived from HARNESS_CMD)
+  BEE_ROUNDS     max tasks to run, 0 = forever (default 0)
+  HARNESS_TIMEOUT_SECONDS  per-invocation kill deadline (default 900)
+  HARNESS_IDLE_SECONDS     backoff when the queue is empty (default 30)
+  BEE_PROMPT_FILE optional file replacing the built-in bee prompt; the same
+                 placeholders are substituted into it
+`
+}
+
 // mcpConfig is the de-facto standard .mcp.json shape understood by Claude
 // Code, Gemini CLI, Cursor, and friends.
 func mcpConfig(brain string) string {
@@ -127,6 +152,12 @@ func splitCmd(s string) []string {
 }
 
 func main() {
+	for _, a := range os.Args[1:] {
+		if a == "-h" || a == "--help" || a == "help" {
+			fmt.Print(usageText())
+			return
+		}
+	}
 	brain := env("CORRAL_BRAIN", "http://localhost:9019")
 	name := env("BEE_NAME", "Harness")
 	role := env("BEE_ROLE", "builder")

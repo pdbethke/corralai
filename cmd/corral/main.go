@@ -54,6 +54,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/tls"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -106,6 +107,37 @@ func showVersion(args []string) bool {
 		}
 	}
 	return false
+}
+
+// showHelp reports whether the args ask for usage. Checked before the server
+// starts: without it, `corral -h` fell through into main()'s server startup
+// and hung forever instead of exiting — the exact "docs generator can't
+// capture text a binary refuses to print" bug the CLI reference generator
+// exists to catch, just with a hang instead of empty output.
+func showHelp(args []string) bool {
+	for _, a := range args {
+		if a == "-h" || a == "--help" || a == "help" {
+			return true
+		}
+	}
+	return false
+}
+
+// usageText is a short summary plus a pointer to the full env-var reference
+// already documented in this file's top-of-file doc comment (kept there as
+// the single source of truth scripts/gen-cli-docs.sh extracts from).
+func usageText() string {
+	return `corral — the CorralAI brain: an OIDC-authenticated, MCP-native coordination server
+
+Usage:
+  corral            serve /mcp/ + /healthz on $CORRALAI_ADDR
+  corral --version  print the build version and exit
+  corral -h         print this help and exit
+
+Configuration is entirely environment variables — see CORRALAI_ADDR,
+CORRALAI_DB, and the rest of the // Env: block at the top of this binary's
+main.go (also reproduced in the generated CLI reference).
+`
 }
 
 func envInt(k string, def int) int {
@@ -357,6 +389,10 @@ func main() {
 	if showVersion(os.Args[1:]) {
 		log.SetFlags(0)
 		log.Println("corral", version)
+		return
+	}
+	if showHelp(os.Args[1:]) {
+		fmt.Print(usageText())
 		return
 	}
 	home, _ := os.UserHomeDir()

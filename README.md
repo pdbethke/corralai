@@ -434,4 +434,6 @@ Contributions are welcome under a one-time [CLA](CLA.md); see
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
-**corralai.dev** · github.com/pdbethke/corralai
+**[corralai.dev](https://corralai.dev)** (live at cutover — see
+`docs/DESIGN.md`'s P11 entry) — a live-replay one-pager (`site/`, Astro,
+Cloudflare Pages) · github.com/pdbethke/corralai

@@ -257,6 +257,34 @@ topology here; historical analytics via MotherDuck → Sigma.
   sites is a small, well-scoped follow-up, not a design flaw — the brain-side
   plumbing and the cap are already correct and tested.
 
+- **P11 — corralai.dev (build complete 2026-07-03; live cutover pending
+  human credentials).** A static one-pager (`site/`, Astro, Cloudflare
+  Pages, custom domain) whose hero is not a mockup: it's
+  `internal/ui/web/replay-player.js` — extracted verbatim from the product
+  UI, documented with a DOM contract — embedding a real, privacy-scrubbed
+  recorded mission (`scripts/export-golden-run.sh`, gated by an automated
+  deny-list scan plus a human-reviewed manifest before anything is written
+  or committed). `site/public/replay-player.js` is a hash-checked copy of
+  the product's file (`scripts/sync-site-assets.sh --check`, wired into the
+  site build) — no silent drift between what plays on the product and what
+  plays on the marketing page. Every other section's copy traces verbatim to
+  README.md. Deployed via an independent GitHub Actions workflow
+  (`.github/workflows/deploy-site.yml`, ubuntu-latest, gated on the same Go
+  test suite the main Deploy workflow runs) publishing to Cloudflare Pages.
+  Verified locally (`npm run test:e2e` against the built `dist/`: hero
+  canvas renders and autoplays the golden run, scrub bar reflects the real
+  event count, zero non-local network requests across the whole page
+  session including mid-session scrubbing, the committed golden-run.json
+  passes a belt-and-suspenders JS re-implementation of
+  `scripts/scrub-golden-run.py`'s deny-list, the GitHub link resolves and
+  appears in both the hero and the footer, a quick accessibility pass).
+  The Cloudflare Pages deploy and the `corralai.dev` custom-domain attach
+  are blocked on human credentials (`wrangler login`, a dashboard-minted
+  API token, `gh secret set`) — see task-6-report.md's human handoff and
+  task-7-report.md's cutover runbook for the exact commands to run once
+  those secrets exist. Nothing in this entry is claimed live; it records
+  what's built and verified pre-cutover.
+
 ### Open threads (next)
 
 - **`report_activity` never carries `mission_id`.** Found during P10's live

@@ -16,8 +16,93 @@ LEAD ── research → design → build-core → build → test ∥ secops ∥
 (orchestrates,        the dev team (one role per phase)
  re-plans, reworks)          SCRUM (standups · stall call-outs · nudges)
   └── findings → reflex fix+verify  ∥  lead supersede / re-architect → converge</pre>
+
+  <div class="tech-grid">
+    <div class="tech">
+      <h3>Cross-model review, decorrelated by construction</h3>
+      <p>
+        Most agent-swarm frameworks run one LLM in every role — parallelism
+        with <em>correlated</em> blind spots, because the "reviewer" shares
+        the builder's failure modes when it's the same model underneath.
+        Corral lets each role run a genuinely different model — a Claude
+        builder, a Gemini reviewer, a local model for the cheap passes — all
+        coordinating through one brain, so review becomes adversarial and
+        decorrelated by construction, not by hoping the temperature setting
+        helps. Bring anything OpenAI-compatible, or a local model: no vendor
+        lock-in.
+      </p>
+      <a href="/docs/concepts/multi-model-herds/">Multi-model herds →</a>
+    </div>
+    <div class="tech">
+      <h3>The verify gate — a quality floor, not a vibe</h3>
+      <p>
+        A task isn't "done" because an agent says so. The verification gate
+        refuses completion until a real command — <code>go test</code>,
+        <code>pytest</code>, <code>npm test</code>, <code>cargo test</code>,
+        anything — is on record with a passing exit code. A failing build
+        becomes a finding, not an assumption.
+      </p>
+      <a href="/docs/concepts/queue-and-verify/">The task queue + verify gate →</a>
+    </div>
+    <div class="tech">
+      <h3>Two-tier re-planning</h3>
+      <p>
+        Findings don't just pile up in a backlog. High-severity findings
+        trigger a <strong>reflex tier</strong> that deterministically spawns
+        fix-and-reverify tasks — no LLM in the loop, fast and predictable.
+        Judgment calls — superseding stale work, reopening something thought
+        done, re-architecting a bad approach — go to an <strong>LLM lead
+        tier</strong>, with full task lineage so nothing disappears silently.
+        Convergence is bounded: caps and loop-until-dry keep a stuck mission
+        from re-planning forever.
+      </p>
+      <a href="/docs/concepts/mission-lifecycle/">Mission lifecycle →</a>
+    </div>
+    <div class="tech">
+      <h3>Path claims and leases — the coordination substrate</h3>
+      <p>
+        A dozen agents working the same repo need a way to not step on each
+        other. The coordination layer is transactional SQLite: atomic
+        exclusive claims on paths and branches, time-boxed with a TTL, a
+        presence/lease reaper that reclaims work from an agent that went
+        quiet, and a durable completed-work log. No file gets two writers; no
+        claim outlives its holder.
+      </p>
+      <a href="/docs/concepts/claims-and-leases/">Claims &amp; leases →</a>
+    </div>
+    <div class="tech">
+      <h3>Jail → repo — the only way code leaves</h3>
+      <p>
+        Every agent's shell commands run inside a <code>bwrap</code> jail: no
+        network by default, workspace-confined, a secret-free environment —
+        the git/forge token lives only in the brain, never handed to an
+        agent. The only egress is a pull request the brain opens and watches;
+        a <code>CHANGES_REQUESTED</code> review reopens rework automatically.
+        Because every consequential action funnels through the brain, it's
+        also the forensic record — attributed to a verified principal, and
+        the subject of the record doesn't control the ledger.
+      </p>
+      <a href="/docs/concepts/trust-and-security/">Trust &amp; security →</a>
+    </div>
+    <div class="tech">
+      <h3>And it learns</h3>
+      <p>
+        Recurring findings don't just get fixed once — they get swept into
+        skill proposals a human approves, so every later mission starts
+        already warned. See how the learning loop works below.
+      </p>
+      <a href="#learning-loop">The learning loop ↓</a>
+    </div>
+  </div>
 </section>
 
 <style>
   .flow { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; overflow-x: auto; font-size: 0.8rem; color: var(--muted); }
+  .tech-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 18px; margin-top: 28px; }
+  .tech { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px; }
+  .tech h3 { margin: 0 0 8px; font-size: 1.05rem; color: var(--amber); }
+  .tech p { margin: 0 0 10px; font-size: 0.92rem; color: var(--fg); }
+  .tech a { font-size: 0.85rem; font-weight: 600; text-decoration: none; }
+  .tech a:hover { text-decoration: underline; }
+  .tech code { background: var(--sel); border-radius: 4px; padding: 1px 5px; font-size: 0.85em; }
 </style>

@@ -53,7 +53,7 @@ func openThoughtFixtures(t *testing.T, recordStory bool) (*mission.Store, *telem
 func TestRecordThoughtVerbatimUnderCap(t *testing.T) {
 	m, tel, mid, _ := openThoughtFixtures(t, true)
 	text := "I should check the schema before writing the migration."
-	recordThought(tel, m, Thought{Agent: "bee1", Role: "builder", MissionID: mid, Text: text})
+	recordThought(tel, m, nil, Thought{Agent: "bee1", Role: "builder", MissionID: mid, Text: text})
 
 	evs, err := tel.EventsForMission(mid)
 	if err != nil {
@@ -80,7 +80,7 @@ func TestRecordThoughtVerbatimUnderCap(t *testing.T) {
 func TestRecordThoughtTruncatesOverCapPreservingPrefix(t *testing.T) {
 	m, tel, mid, _ := openThoughtFixtures(t, true)
 	long := strings.Repeat("reasoning ", 100) // far over 600 chars
-	recordThought(tel, m, Thought{Agent: "bee1", Role: "builder", MissionID: mid, Text: long})
+	recordThought(tel, m, nil, Thought{Agent: "bee1", Role: "builder", MissionID: mid, Text: long})
 
 	evs, err := tel.EventsForMission(mid)
 	if err != nil {
@@ -104,7 +104,7 @@ func TestRecordThoughtTruncatesOverCapPreservingPrefix(t *testing.T) {
 
 func TestRecordThoughtNoOpWhenRecordStoryOff(t *testing.T) {
 	m, tel, mid, _ := openThoughtFixtures(t, false) // default: opt-in off
-	recordThought(tel, m, Thought{Agent: "bee1", Role: "builder", MissionID: mid, Text: "a thought"})
+	recordThought(tel, m, nil, Thought{Agent: "bee1", Role: "builder", MissionID: mid, Text: "a thought"})
 
 	evs, err := tel.EventsForMission(mid)
 	if err != nil {
@@ -117,7 +117,7 @@ func TestRecordThoughtNoOpWhenRecordStoryOff(t *testing.T) {
 
 func TestRecordThoughtRecordsWhenRecordStoryOn(t *testing.T) {
 	m, tel, mid, _ := openThoughtFixtures(t, true)
-	recordThought(tel, m, Thought{Agent: "bee1", Role: "builder", MissionID: mid, Text: "a thought"})
+	recordThought(tel, m, nil, Thought{Agent: "bee1", Role: "builder", MissionID: mid, Text: "a thought"})
 
 	evs, err := tel.EventsForMission(mid)
 	if err != nil {
@@ -136,7 +136,7 @@ func TestRecordThoughtRecordsWhenRecordStoryOn(t *testing.T) {
 func TestRecordThoughtRoutesToTelemetryNotCoordination(t *testing.T) {
 	m, tel, mid, missionDBPath := openThoughtFixtures(t, true)
 	text := "coordination store must never see this text"
-	recordThought(tel, m, Thought{Agent: "bee1", Role: "builder", MissionID: mid, Text: text})
+	recordThought(tel, m, nil, Thought{Agent: "bee1", Role: "builder", MissionID: mid, Text: text})
 
 	// Telemetry (DuckDB) got it.
 	evs, err := tel.EventsForMission(mid)
@@ -185,6 +185,37 @@ func TestRecordThoughtRoutesToTelemetryNotCoordination(t *testing.T) {
 	}
 	if n != 0 {
 		t.Fatalf("coordination SQLite phases table must not carry thought text, found %d matching rows", n)
+	}
+}
+
+// TestRecordThoughtCapsPerMission confirms thoughtCap is enforced: once a
+// mission has recorded thoughtCap thoughts, further report_thought calls
+// no-op rather than growing the telemetry log further. This is the "don't
+// kill the db" backstop for a misbehaving agent that opts into record_story
+// and loops report_thought.
+func TestRecordThoughtCapsPerMission(t *testing.T) {
+	m, tel, mid, _ := openThoughtFixtures(t, true)
+	capped := &capCache{}
+
+	for i := 0; i < thoughtCap; i++ {
+		recordThought(tel, m, capped, Thought{Agent: "bee1", Role: "builder", MissionID: mid, Text: "a thought"})
+	}
+	evs, err := tel.EventsForMission(mid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evs) != thoughtCap {
+		t.Fatalf("want %d telemetry events at cap, got %d", thoughtCap, len(evs))
+	}
+
+	// One more, past the cap: must not be recorded.
+	recordThought(tel, m, capped, Thought{Agent: "bee1", Role: "builder", MissionID: mid, Text: "one thought too many"})
+	evs, err = tel.EventsForMission(mid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evs) != thoughtCap {
+		t.Fatalf("want %d telemetry events after exceeding cap, got %d — cap not enforced", thoughtCap, len(evs))
 	}
 }
 

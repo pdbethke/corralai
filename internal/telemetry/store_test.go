@@ -17,6 +17,38 @@ func openT(t *testing.T) *Store {
 	return s
 }
 
+// TestCountForMissionAndPruneMission covers the DB relief valve's (#66)
+// telemetry footprint count and destructive delete: CountForMission must
+// count only the target mission's events, and PruneMission must remove
+// exactly that mission's events, leaving a sibling mission untouched.
+func TestCountForMissionAndPruneMission(t *testing.T) {
+	s := openT(t)
+	for i := 0; i < 3; i++ {
+		if err := s.Record(Event{MissionID: 1, Kind: "task_claimed", Actor: "bee1"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.Record(Event{MissionID: 2, Kind: "task_claimed", Actor: "bee2"}); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := s.CountForMission(1)
+	if err != nil || n != 3 {
+		t.Fatalf("CountForMission(1): n=%d err=%v, want 3", n, err)
+	}
+
+	if err := s.PruneMission(1); err != nil {
+		t.Fatalf("PruneMission(1): %v", err)
+	}
+
+	if n, err := s.CountForMission(1); err != nil || n != 0 {
+		t.Fatalf("mission 1 not fully pruned: n=%d err=%v", n, err)
+	}
+	if n, err := s.CountForMission(2); err != nil || n != 1 {
+		t.Fatalf("mission 2 was affected by mission 1's prune: n=%d err=%v, want 1", n, err)
+	}
+}
+
 func TestCountKind(t *testing.T) {
 	s, err := Open(filepath.Join(t.TempDir(), "t.duckdb"))
 	if err != nil {

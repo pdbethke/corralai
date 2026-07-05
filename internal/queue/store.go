@@ -193,6 +193,48 @@ func (s *Store) DeleteMissionTasks(missionID int64) error {
 	return err
 }
 
+// FootprintCounts returns how many tasks, findings, and executions a mission
+// holds in the coordination store — its contribution to this DB's storage
+// footprint. Used by the DB relief valve's FOOTPRINT endpoint (#66) so an
+// operator can see what a mission is costing before deciding to export+prune it.
+func (s *Store) FootprintCounts(missionID int64) (tasks, findings, executions int, err error) {
+	if err = s.db.QueryRow(`SELECT COUNT(*) FROM tasks WHERE mission_id=?`, missionID).Scan(&tasks); err != nil {
+		return 0, 0, 0, err
+	}
+	if err = s.db.QueryRow(`SELECT COUNT(*) FROM findings WHERE mission_id=?`, missionID).Scan(&findings); err != nil {
+		return 0, 0, 0, err
+	}
+	if err = s.db.QueryRow(`SELECT COUNT(*) FROM executions WHERE mission_id=?`, missionID).Scan(&executions); err != nil {
+		return 0, 0, 0, err
+	}
+	return tasks, findings, executions, nil
+}
+
+// PruneMission deletes ALL of a mission's rows (tasks, findings, executions)
+// from the coordination store in one transaction — the coordination half of
+// the DB relief valve's PRUNE action (#66). DESTRUCTIVE and irreversible:
+// callers must export the mission's replay tape (BuildReplayStream, which
+// reads these same rows) BEFORE calling this, and must gate the call to a
+// human admin — see internal/brain's PruneMission and the /api/mission/prune
+// HTTP handler.
+func (s *Store) PruneMission(missionID int64) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, stmt := range []string{
+		`DELETE FROM tasks WHERE mission_id=?`,
+		`DELETE FROM findings WHERE mission_id=?`,
+		`DELETE FROM executions WHERE mission_id=?`,
+	} {
+		if _, err := tx.Exec(stmt, missionID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 // PromoteReady flips pending → ready for every task whose dependencies are all
 // done. Idempotent; returns how many it promoted. Reads are fully drained before
 // writes so the single connection is never used concurrently.

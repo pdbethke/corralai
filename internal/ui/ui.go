@@ -156,6 +156,8 @@ func Handler(d Deps) http.Handler {
 	mux.HandleFunc("/api/history/", s.historyDetail)
 	mux.HandleFunc("/api/replay", s.replay)
 	mux.HandleFunc("/api/leaderboard", s.leaderboard)
+	mux.HandleFunc("/api/mission/footprint", s.footprint)
+	mux.HandleFunc("/api/mission/prune", s.prune)
 	return mux
 }
 
@@ -338,6 +340,93 @@ func (s *Server) replay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"events": events})
+}
+
+// footprint reports a mission's storage footprint — coordination rows
+// (tasks/findings/executions, from the queue store) plus telemetry events
+// (including thought beats) — the DB relief valve's read-only view (#66).
+// Enough for an operator to see what a mission is costing before deciding to
+// export its story (GET /api/replay?mission=N) and prune it. Omit ?mission=
+// for the footprint across every mission. Read-only, same trust tier as
+// /api/history and /api/replay — available to any bearer, including a
+// read-only observer.
+func (s *Server) footprint(w http.ResponseWriter, r *http.Request) {
+	if s.queue == nil {
+		http.NotFound(w, r)
+		return
+	}
+	idStr := r.URL.Query().Get("mission")
+	if idStr == "" {
+		if s.missions == nil {
+			http.NotFound(w, r)
+			return
+		}
+		all, err := brain.MissionFootprintAll(s.missions, s.queue, s.tel)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, map[string]any{"missions": all})
+		return
+	}
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "bad mission id", http.StatusBadRequest)
+		return
+	}
+	fp, err := brain.MissionFootprintOf(s.queue, s.tel, id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, fp)
+}
+
+// prune DESTRUCTIVELY deletes a mission's records from BOTH the coordination
+// store (tasks/findings/executions) and telemetry (events) — reclaiming the
+// storage the footprint endpoint reports. The DB relief valve's write half
+// (#66): export the mission's tape first (GET /api/replay?mission=N,
+// archived to a static file), THEN prune — the lifecycle export -> prune ->
+// reclaim. Human-gated exactly like proposalApprove/proposalReject: a
+// read-only observer token, or a delegation/worker token (a subagent riding a
+// superuser's rolled-up authorization), is refused — only a verified human
+// superuser may prune. It never touches a published static recording (those
+// are separate files under site/src/data/recordings/*.json, outside either
+// live store).
+func (s *Server) prune(w http.ResponseWriter, r *http.Request) {
+	if auth.ReadOnly(r) {
+		http.Error(w, "forbidden: read-only observer token cannot act", http.StatusForbidden)
+		return
+	}
+	if !s.isSuperuser(r) {
+		http.Error(w, "forbidden: superuser only (prune is destructive and irreversible)", http.StatusForbidden)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.queue == nil {
+		http.NotFound(w, r)
+		return
+	}
+	var body struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+	if body.ID == 0 {
+		http.Error(w, "id required", http.StatusBadRequest)
+		return
+	}
+	pruned, err := brain.PruneMission(s.queue, s.tel, body.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true, "pruned": pruned})
 }
 
 // me reports the viewer's verified identity and role so the UI can show who's

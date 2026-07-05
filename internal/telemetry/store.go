@@ -175,6 +175,24 @@ func (s *Store) EventsForMission(missionID int64) ([]Event, error) {
 	return out, rows.Err()
 }
 
+// CountForMission returns how many telemetry events are recorded for a
+// mission — the telemetry half of the DB relief valve's FOOTPRINT count (#66).
+func (s *Store) CountForMission(missionID int64) (int, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM events WHERE mission_id=?`, missionID).Scan(&n)
+	return n, err
+}
+
+// PruneMission deletes every telemetry event recorded for a mission — the
+// telemetry half of the DB relief valve's PRUNE action (#66). DESTRUCTIVE and
+// irreversible: callers must export the mission's replay tape (which reads
+// these same rows via EventsForMission) BEFORE calling this, and must gate
+// the call to a human admin — see internal/brain's PruneMission.
+func (s *Store) PruneMission(missionID int64) error {
+	_, err := s.db.Exec(`DELETE FROM events WHERE mission_id=?`, missionID)
+	return err
+}
+
 // ActorRoleCount is a (actor, role) grouped count of events of one kind —
 // the leaderboard's source for a rework/refusal signal it can attribute to an
 // agent+role without a second join (role travels in the event's detail JSON

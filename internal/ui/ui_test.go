@@ -20,6 +20,7 @@ import (
 	"github.com/pdbethke/corralai/internal/learn"
 	"github.com/pdbethke/corralai/internal/memory"
 	"github.com/pdbethke/corralai/internal/mission"
+	"github.com/pdbethke/corralai/internal/principals"
 	"github.com/pdbethke/corralai/internal/queue"
 	"github.com/pdbethke/corralai/internal/telemetry"
 )
@@ -1134,5 +1135,219 @@ func TestReplayEndpoint(t *testing.T) {
 	}
 	if res3, _ := http.Get(srv.URL + "/api/replay"); res3.StatusCode != 400 {
 		t.Fatalf("missing mission param should 400, got %d", res3.StatusCode)
+	}
+}
+
+// seedMissionWithFootprint builds a real mission across the queue/mission/
+// telemetry stores with one task (from the default plan), one finding, one
+// execution, and one telemetry event — enough to exercise the FOOTPRINT and
+// PRUNE endpoints (#66's DB relief valve) against real, non-zero counts.
+func seedMissionWithFootprint(t *testing.T, q *queue.Store, m *mission.Store, tel *telemetry.Store) int64 {
+	t.Helper()
+	mid, err := mission.CreateMission(m, q, "ship it", []mission.PhaseSpec{{Name: "build", Role: "builder", Instruction: "x"}}, false)
+	if err != nil {
+		t.Fatalf("CreateMission: %v", err)
+	}
+	if _, err := q.AddFinding(queue.Finding{MissionID: mid, Reporter: "tester", Type: "bug", Severity: "low"}); err != nil {
+		t.Fatalf("AddFinding: %v", err)
+	}
+	if err := q.RecordExecution(queue.Execution{MissionID: mid, Agent: "bob", Role: "builder", Command: "go build ./...", ExitCode: 0, OK: true, TS: 1}); err != nil {
+		t.Fatalf("RecordExecution: %v", err)
+	}
+	if tel != nil {
+		if err := tel.Record(telemetry.Event{MissionID: mid, Kind: "mission_created", Actor: "engine"}); err != nil {
+			t.Fatalf("tel.Record: %v", err)
+		}
+	}
+	return mid
+}
+
+// TestFootprintEndpoint covers GET /api/mission/footprint: per-mission counts
+// spanning BOTH stores (coordination tasks/findings/executions + telemetry
+// events), and the no-param list-across-missions form. Read-only — no auth
+// gate to exercise here (mirrors /api/history and /api/replay).
+func TestFootprintEndpoint(t *testing.T) {
+	dir := t.TempDir()
+	q, err := queue.Open(filepath.Join(dir, "q.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer q.Close()
+	m, err := mission.Open(filepath.Join(dir, "m.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	tel, err := telemetry.Open(filepath.Join(dir, "t.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tel.Close()
+
+	mid := seedMissionWithFootprint(t, q, m, tel)
+
+	srv := httptest.NewServer(Handler(Deps{Queue: q, Missions: m, Telemetry: tel}))
+	defer srv.Close()
+
+	res, err := http.Get(fmt.Sprintf("%s/api/mission/footprint?mission=%d", srv.URL, mid))
+	if err != nil || res.StatusCode != 200 {
+		t.Fatalf("GET footprint?mission=%d: %v status=%v", mid, err, res.StatusCode)
+	}
+	var fp brain.MissionFootprint
+	if err := json.NewDecoder(res.Body).Decode(&fp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if fp.MissionID != mid || fp.Tasks != 1 || fp.Findings != 1 || fp.Executions != 1 || fp.TelemetryEvents != 1 {
+		t.Fatalf("footprint = %+v, want 1 task/finding/execution/telemetry event for mission %d", fp, mid)
+	}
+	if fp.TotalRows != 4 {
+		t.Fatalf("total_rows = %d, want 4", fp.TotalRows)
+	}
+
+	// No ?mission= => the fleet-wide list, containing this mission.
+	res2, err := http.Get(srv.URL + "/api/mission/footprint")
+	if err != nil || res2.StatusCode != 200 {
+		t.Fatalf("GET footprint (list): %v status=%v", err, res2.StatusCode)
+	}
+	var listOut struct {
+		Missions []brain.MissionFootprint `json:"missions"`
+	}
+	if err := json.NewDecoder(res2.Body).Decode(&listOut); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	found := false
+	for _, m := range listOut.Missions {
+		if m.MissionID == mid && m.TotalRows == 4 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("mission %d not found with total_rows=4 in fleet-wide list: %+v", mid, listOut.Missions)
+	}
+}
+
+// TestPruneEndpointClearsBothStores proves PRUNE actually deletes a mission's
+// rows from BOTH the coordination store (queue: tasks/findings/executions)
+// AND telemetry (events) — verified by re-querying each store directly after
+// the call, not just trusting the HTTP response.
+func TestPruneEndpointClearsBothStores(t *testing.T) {
+	dir := t.TempDir()
+	q, err := queue.Open(filepath.Join(dir, "q.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer q.Close()
+	m, err := mission.Open(filepath.Join(dir, "m.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	tel, err := telemetry.Open(filepath.Join(dir, "t.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tel.Close()
+
+	mid := seedMissionWithFootprint(t, q, m, tel)
+
+	// Roles is nil (dev mode) => isSuperuser is permissive, same as every
+	// other admin-write test in this file that doesn't wire a Verifier.
+	srv := httptest.NewServer(Handler(Deps{Queue: q, Missions: m, Telemetry: tel}))
+	defer srv.Close()
+
+	// GET is rejected (POST only), mirroring proposal approve/reject and review.
+	if res, _ := http.Get(fmt.Sprintf("%s/api/mission/prune?id=%d", srv.URL, mid)); res.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("GET /api/mission/prune status = %d, want 405", res.StatusCode)
+	}
+
+	body, _ := json.Marshal(map[string]any{"id": mid})
+	res, err := http.Post(srv.URL+"/api/mission/prune", "application/json", bytes.NewReader(body))
+	if err != nil || res.StatusCode != 200 {
+		t.Fatalf("POST /api/mission/prune: %v status=%v", err, res.StatusCode)
+	}
+	var out struct {
+		OK     bool                   `json:"ok"`
+		Pruned brain.MissionFootprint `json:"pruned"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !out.OK || out.Pruned.TotalRows != 4 {
+		t.Fatalf("prune response = %+v, want ok=true and the pre-prune footprint (4 rows)", out)
+	}
+
+	// Re-query BOTH stores directly: everything for this mission must be gone.
+	tasks, findings, execs, err := q.FootprintCounts(mid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tasks != 0 || findings != 0 || execs != 0 {
+		t.Fatalf("coordination store not cleared: tasks=%d findings=%d executions=%d", tasks, findings, execs)
+	}
+	n, err := tel.CountForMission(mid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("telemetry store not cleared: %d events remain", n)
+	}
+}
+
+// TestPruneEndpointRefusesWithoutOperatorAuth proves the human gate: with a
+// real principals store configured (auth ON) and no verified superuser
+// principal on the request (dev's permissive nil-Roles fallback no longer
+// applies), prune is refused — mirroring proposalApprove/proposalReject's
+// isSuperuser gate. This is the check that stands between "captured richly"
+// and "an unauthenticated/non-admin caller can destroy a mission's story".
+func TestPruneEndpointRefusesWithoutOperatorAuth(t *testing.T) {
+	dir := t.TempDir()
+	q, err := queue.Open(filepath.Join(dir, "q.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer q.Close()
+	m, err := mission.Open(filepath.Join(dir, "m.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	tel, err := telemetry.Open(filepath.Join(dir, "t.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tel.Close()
+	roles, err := principals.Open(filepath.Join(dir, "p.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer roles.Close()
+	// Seed a superuser so the store is non-empty (bootstrap already used) —
+	// the request below still carries no verified principal at all, so it
+	// must be refused regardless of who else is a superuser.
+	if err := roles.CreateSuperuser("owner@example.com", "test"); err != nil {
+		t.Fatal(err)
+	}
+
+	mid := seedMissionWithFootprint(t, q, m, tel)
+
+	srv := httptest.NewServer(Handler(Deps{Queue: q, Missions: m, Telemetry: tel, Roles: roles}))
+	defer srv.Close()
+
+	body, _ := json.Marshal(map[string]any{"id": mid})
+	res, err := http.Post(srv.URL+"/api/mission/prune", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.StatusCode != http.StatusForbidden {
+		t.Fatalf("POST /api/mission/prune without a verified superuser: status = %d, want 403", res.StatusCode)
+	}
+
+	// Nothing was touched.
+	tasks, findings, execs, err := q.FootprintCounts(mid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tasks == 0 || findings == 0 || execs == 0 {
+		t.Fatalf("refused prune must not have deleted anything: tasks=%d findings=%d executions=%d", tasks, findings, execs)
 	}
 }

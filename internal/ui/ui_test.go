@@ -788,6 +788,22 @@ func TestReplayPlayerStructure(t *testing.T) {
 		`e.kind === 'thought'`,
 		`xthoughtico`,
 		`xthoughttext`,
+		// replay console per-agent filter (addendum to Task 12): the tape-side
+		// twin of index.html's live execFilter/setExecFilter chips — isolates
+		// one actor's thought+action stream, survives scrub/seek (NOT reset by
+		// resetReplayPanels, since it's a display filter over accumulated
+		// beats, not accumulated state itself).
+		`let replayExecFilter = ''`,
+		`function setReplayExecFilter(n)`,
+		`function replayConsoleChip(name, role, on)`,
+		`e.agent === replayExecFilter`,
+		`xchip`,
+		// replay agent-inspector-window reconstruction (Task: replay popups):
+		// the tape drives holding/completed/working-on/last-command/
+		// last-activity via the SAME replayAgents state the roster uses.
+		`function replayAgentTouch(name, role, ts, kind, desc)`,
+		`function refreshReplayAgentWindows()`,
+		`lastTaskTitle`,
 	}
 	for _, m := range playerMarkers {
 		if !strings.Contains(player, m) {
@@ -1017,6 +1033,71 @@ func TestReplayPlayerStructure(t *testing.T) {
 	}
 	if guardIdx < 0 || guardIdx > fetchIdx {
 		t.Error("requestChatter must check `inReplay` BEFORE its /api/chatter fetch (short-circuit to the canned-line fallback) — otherwise replay in a backend-less embed logs a failed request per chatter roll")
+	}
+}
+
+// TestReplayAgentWindowStructure covers the product-only agent inspector
+// window's replay path (clicking an agent during replay opens its window
+// showing state reconstructed from the tape, not a live SSE fetch). Agent
+// windows (#windows/agentWindows) exist only in index.html — the site
+// cockpit has no click-to-open window at all — so this is index.html-only,
+// unlike TestReplayPlayerStructure's shared-file coverage.
+func TestReplayAgentWindowStructure(t *testing.T) {
+	sub, err := fs.Sub(webFS, "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := fs.ReadFile(sub, "index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(raw)
+
+	for _, m := range []string{
+		`function renderReplayAgentWindowBody(name)`,
+		`function replayActivityLabel(ra)`,
+		`replayAgents.get(name)`,
+		`replayTasks.get(k)`,
+	} {
+		if !strings.Contains(html, m) {
+			t.Errorf("index.html missing required replay-agent-window marker: %q", m)
+		}
+	}
+
+	// renderAgentWindowBody must check inReplay and delegate to the tape
+	// reconstruction BEFORE it ever reads lastState — the live SSE snapshot
+	// must never drive the window's content while inReplay is true.
+	const bodyStart = "function renderAgentWindowBody(name) {"
+	const bodyEnd = "async function askAgentWindow("
+	bsi := strings.Index(html, bodyStart)
+	bei := strings.Index(html, bodyEnd)
+	if bsi < 0 || bei < 0 || bsi >= bei {
+		t.Fatalf("could not locate renderAgentWindowBody..askAgentWindow range in index.html")
+	}
+	bodyFn := html[bsi:bei]
+	inReplayIdx := strings.Index(bodyFn, "inReplay")
+	replayCallIdx := strings.Index(bodyFn, "renderReplayAgentWindowBody(name)")
+	lastStateIdx := strings.Index(bodyFn, "const st = lastState;")
+	if inReplayIdx < 0 || replayCallIdx < 0 || lastStateIdx < 0 {
+		t.Fatalf("renderAgentWindowBody is missing one of the expected branch points (inReplay / renderReplayAgentWindowBody / lastState read)")
+	}
+	if !(inReplayIdx < replayCallIdx && replayCallIdx < lastStateIdx) {
+		t.Error("renderAgentWindowBody must check inReplay and return via renderReplayAgentWindowBody BEFORE reading lastState — otherwise a replay-opened window mixes tape and live state")
+	}
+
+	// openAgentWindow must not fetch live agent detail while replaying — the
+	// tape has no /api/agent equivalent, and fetching it risks answering for
+	// whatever mission the live brain currently happens to be running.
+	const openStart = "function openAgentWindow(name) {"
+	const openEnd = "async function fetchWindowDetail("
+	osi := strings.Index(html, openStart)
+	oei := strings.Index(html, openEnd)
+	if osi < 0 || oei < 0 || osi >= oei {
+		t.Fatalf("could not locate openAgentWindow..fetchWindowDetail range in index.html")
+	}
+	openFn := html[osi:oei]
+	if !strings.Contains(openFn, "if (inReplay) {") {
+		t.Error("openAgentWindow must branch on inReplay before deciding whether to fetchWindowDetail (live) or renderAgentWindowBody directly (replay, tape-only)")
 	}
 }
 

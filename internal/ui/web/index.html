@@ -1126,14 +1126,21 @@ function openAgentWindow(name) {
   awZ++;
   el.style.zIndex = awZ;
 
-  // Build title bar from current state (set once; not re-rendered on tick)
-  const a = (lastState.active_agents || []).find(x => x.name === name) || {};
+  // Build title bar from current state (set once; not re-rendered on tick).
+  // During replay `lastState` is whatever live snapshot happened to be on
+  // screen when the user entered replay (SSE is paused, not cleared) — using
+  // it here would risk labeling the window with a stale/unrelated agent's
+  // role. inReplay routes the title bar to the reconstructed tape state
+  // instead (replayAgents, from replay-player.js); the model badge has no
+  // tape equivalent (BuildReplayStream doesn't carry a per-agent model), so
+  // it stays hidden in replay rather than showing a live-snapshot guess.
+  const a = inReplay ? {} : ((lastState.active_agents || []).find(x => x.name === name) || {});
   // The model/backend live in topology (report_host / HostBook), not active_agents.
-  const topo = (lastState.topology || []).find(x => x.agent === name) || {};
+  const topo = inReplay ? {} : ((lastState.topology || []).find(x => x.agent === name) || {});
   const model = a.model || topo.model || '';
   const leaf = a.parent ? (name.split('/').pop() || name) : name;
   const dn = displayName(leaf);
-  const role = a.role || topo.role || '';
+  const role = inReplay ? ((replayAgents.get(name) || {}).role || '') : (a.role || topo.role || '');
   const mi = modelInfo(model);
   // Always emit the badge span (hidden if the model isn't known yet — report_host
   // populates topology on a timer); renderAgentWindowBody fills it in on a later tick.
@@ -1191,8 +1198,17 @@ function openAgentWindow(name) {
 
   askInput.focus();
 
-  // Fetch per-agent detail (/api/agent?name=) on open, then render body
-  fetchWindowDetail(name);
+  // During replay there is no live brain to ask (requestChatter's own "never
+  // touch a brain endpoint while replaying" rule, extended here) — render
+  // straight from the reconstructed tape state instead of fetching
+  // /api/agent, which would either 404 against a since-recorded mission or,
+  // worse, silently answer for whatever mission the live brain is CURRENTLY
+  // running. Live mode is unchanged: fetch detail, then render.
+  if (inReplay) {
+    renderAgentWindowBody(name);
+  } else {
+    fetchWindowDetail(name);
+  }
 }
 
 async function fetchWindowDetail(name) {
@@ -1222,11 +1238,59 @@ async function fetchWindowDetail(name) {
   }
 }
 
+// replayActivityLabel: one-line description of a replay-reconstructed
+// agent's most recent beat (see replay-player.js's replayAgentTouch), for the
+// inspector window's "last activity" line — verbatim from the tape, never
+// invented.
+function replayActivityLabel(ra) {
+  const kind = ra.lastKind || '', desc = ra.lastDesc || '';
+  if (kind === 'exec') return '❯ ' + desc;
+  if (kind === 'thought') return '💭 ' + desc;
+  if (kind === 'claimed') return 'claimed ' + desc;
+  if (kind === 'task_done') return 'finished ' + desc;
+  if (kind === 'task_cancelled') return 'cancelled ' + desc;
+  if (kind === 'task_superseded') return 'superseded ' + desc;
+  return desc;
+}
+// renderReplayAgentWindowBody: the agent inspector window's content DURING
+// REPLAY — built from the SAME reconstructed tape state the replay cockpit's
+// roster uses (replayAgents/replayTasks, both in replay-player.js), not live
+// SSE. Mirrors renderAgentWindowBody's live sections where the tape has an
+// equivalent (holding/working-on/completed/last-command/last-activity all
+// reconstruct cleanly from task_claimed/task_done/execution/thought beats)
+// and is HONEST about what it doesn't have: BuildReplayStream never recorded
+// per-agent memory-recall samples, MCP endpoint lists, or equipped skills
+// (those are live-only /api/agent fields), so this never fabricates or
+// backfills them from a stale live snapshot — it labels the gap instead.
+function renderReplayAgentWindowBody(name) {
+  const ra = replayAgents.get(name);
+  const heldKeys = ra ? Array.from(ra.held) : [];
+  const holdingTasks = heldKeys.map(k => replayTasks.get(k) || { key: k, title: k });
+
+  let h = `<div class="isec">stats <span class="ir">· reconstructed from the tape</span></div>`;
+  h += `<div class="irow">holding <b>${holdingTasks.length}</b> · completed <b>${(ra && ra.completed) || 0}</b></div>`;
+  if (ra && ra.lastTaskTitle) h += `<div class="isec">working on</div><div class="itask">${esc(ra.lastTaskTitle)}</div>`;
+  if (holdingTasks.length) {
+    h += `<div class="isec">holding</div>`;
+    holdingTasks.forEach(t => { h += `<div class="irow"><span class="igreen">${esc(t.title || t.key)}</span></div>`; });
+  }
+  if (ra && ra.lastCmd) h += `<div class="isec">last command</div><div class="irow ir">❯ ${esc(ra.lastCmd)}</div>`;
+  if (ra && ra.lastTs) h += `<div class="isec">last activity</div><div class="irow ir">${esc(replayActivityLabel(ra))}</div>`;
+  h += `<div class="isec">memory / mcp / skills <span class="ir">· not recorded per agent on the tape — see the live view for this</span></div>`;
+  return h;
+}
+
 // renderAgentWindowBody: patches ONLY .aw-body — the ask footer is NOT touched.
-// Called both on open (after fetchWindowDetail) and on every SSE tick via apply().
+// Called both on open (after fetchWindowDetail) and on every SSE tick via apply()
+// (live) or renderReplayPanels()'s refreshReplayAgentWindows() (replay).
 function renderAgentWindowBody(name) {
   const win = agentWindows.get(name);
   if (!win) return;
+
+  if (inReplay) {
+    win.bodyEl.innerHTML = renderReplayAgentWindowBody(name);
+    return;
+  }
 
   const st = lastState;
   const a = (st.active_agents || []).find(x => x.name === name) || {};

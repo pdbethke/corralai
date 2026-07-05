@@ -175,6 +175,40 @@ func (s *Store) EventsForMission(missionID int64) ([]Event, error) {
 	return out, rows.Err()
 }
 
+// ActorRoleCount is a (actor, role) grouped count of events of one kind —
+// the leaderboard's source for a rework/refusal signal it can attribute to an
+// agent+role without a second join (role travels in the event's detail JSON
+// for kinds like task_reissued; see internal/brain/tasks.go).
+type ActorRoleCount struct {
+	Actor string
+	Role  string
+	Count int
+}
+
+// CountByActorAndDetailRole groups events of kind by actor and detail.role —
+// used by the model×role leaderboard to source a rework count from
+// task_reissued events (a bee re-claiming its own lost-reply task is not
+// rework by a peer, but a reissue burst for a role/model is still a useful
+// friction signal). Rows with a null actor are excluded.
+func (s *Store) CountByActorAndDetailRole(kind string) ([]ActorRoleCount, error) {
+	rows, err := s.db.Query(
+		`SELECT actor, COALESCE(json_extract_string(detail,'$.role'),'') AS role, count(*) AS n
+		 FROM events WHERE kind=? AND actor IS NOT NULL GROUP BY actor, role`, kind)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ActorRoleCount
+	for rows.Next() {
+		var c ActorRoleCount
+		if err := rows.Scan(&c.Actor, &c.Role, &c.Count); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 // reports are the fixed, named analytic queries.
 var reports = map[string]string{
 	"missions": `SELECT mission_id, count(*) AS events, min(ts) AS started, max(ts) AS ended,

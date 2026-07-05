@@ -155,6 +155,7 @@ func Handler(d Deps) http.Handler {
 	mux.HandleFunc("/api/history", s.history)
 	mux.HandleFunc("/api/history/", s.historyDetail)
 	mux.HandleFunc("/api/replay", s.replay)
+	mux.HandleFunc("/api/leaderboard", s.leaderboard)
 	return mux
 }
 
@@ -261,6 +262,21 @@ func (s *Server) proposalReject(w http.ResponseWriter, r *http.Request) {
 // history lists past (non-running) missions for the Completed tab — a plain
 // read, so (unlike approve/reject) no ReadOnly/superuser gate: observers may
 // view finished missions same as any other GET (mirrors memStats/agentDetail).
+// leaderboard returns the model×role performance matrix (#52): per-cell task
+// completions, average duration, verify-gate pass rate, findings raised/
+// resolved, rework count, and a sample count so a thin cell isn't mistaken
+// for a confident verdict. Read-only, observer-safe like /api/state; a nil
+// queue store (dev mode without one configured) renders an empty matrix
+// rather than erroring.
+func (s *Server) leaderboard(w http.ResponseWriter, r *http.Request) {
+	lb, err := brain.BuildLeaderboard(s.queue, s.hosts, s.tel)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, lb)
+}
+
 func (s *Server) history(w http.ResponseWriter, r *http.Request) {
 	if s.historyFn == nil {
 		writeJSON(w, map[string]any{"missions": []any{}})

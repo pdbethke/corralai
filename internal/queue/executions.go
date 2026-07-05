@@ -78,6 +78,30 @@ func (s *Store) ExecutionsByMission(missionID int64) ([]Execution, error) {
 	return out, rows.Err()
 }
 
+// AllExecutions returns every recorded execution across all missions, oldest
+// first — the leaderboard's source for per-agent verify-gate pass rates. Like
+// AllFindingsUnbounded, this is a full export (no row cap): a confidence count
+// derived from a capped feed would silently understate sample size.
+func (s *Store) AllExecutions() ([]Execution, error) {
+	rows, err := s.db.Query(
+		`SELECT mission_id,agent,role,command,exit_code,ok,ts FROM executions ORDER BY ts ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Execution
+	for rows.Next() {
+		var e Execution
+		var ok int
+		if err := rows.Scan(&e.MissionID, &e.Agent, &e.Role, &e.Command, &e.ExitCode, &ok, &e.TS); err != nil {
+			return nil, err
+		}
+		e.OK = ok == 1
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
 // MissionPassedVerify reports whether some execution for missionID ran a command
 // CONTAINING verify and exited 0 — the deterministic basis for the gate. An empty
 // verify is treated as "ungated" and returns true.

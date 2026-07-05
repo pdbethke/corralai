@@ -189,7 +189,7 @@ const escalationRefusals = 5
 
 // registerTasks adds the pull-model tools: a bee claims the next ready task it
 // can serve, runs it, and completes it; list_tasks is the live work list.
-func registerTasks(s *mcp.Server, store *coord.Store, q *queue.Store, lease float64, tel *telemetry.Store, book *HostBook, ls *learn.Store) {
+func registerTasks(s *mcp.Server, store *coord.Store, q *queue.Store, lease float64, tel *telemetry.Store, book *HostBook, ls *learn.Store, health *HealthBook) {
 	if lease <= 0 {
 		lease = 300
 	}
@@ -252,6 +252,9 @@ func registerTasks(s *mcp.Server, store *coord.Store, q *queue.Store, lease floa
 				return nil, claimTaskOut{}, err
 			}
 			if t != nil {
+				// Health signal (#72): a claim is activity, but not yet progress —
+				// claimsSinceSuccess only clears on a real complete_task.
+				health.RecordClaim(bee)
 				if t.Reissued {
 					// The bee didn't know it held this — the earlier claim reply was
 					// lost (or a sibling died). Say so loudly: this is the trail that
@@ -313,6 +316,9 @@ func registerTasks(s *mcp.Server, store *coord.Store, q *queue.Store, lease floa
 				return nil, completeTaskOut{}, err
 			}
 			if ok {
+				// Health signal (#72): a genuine completion is forward progress —
+				// clear the claimed-but-not-progressing counters.
+				health.RecordSuccess(bee)
 				// Bug #40 part 1: a completed bee's path leases are dead weight —
 				// the work that justified them is done, and A-2/C-1 both livelocked
 				// on exactly such a lease. Same cleanup despawn already does.

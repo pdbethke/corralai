@@ -124,6 +124,12 @@ type Options struct {
 	// (host, model, jail) for the UI topology view. nil => tool not registered.
 	HostBook *HostBook
 
+	// Health, when set, tracks per-agent claim/complete/reclaim activity so
+	// claim_task/complete_task/the idle-reclaim heartbeat path can feed the
+	// health heuristic (see health.go). nil => /api/state's health field
+	// degrades to "idle" for every agent (HealthBook.Health is nil-safe).
+	Health *HealthBook
+
 	// WorkerSessions tracks, per MCP session, whether the session has
 	// identified itself as a corral-agent worker (ClientInfo.Name, or an
 	// earlier bootstrap/report_host call) — the dev-mode half of the human

@@ -47,6 +47,7 @@ type Server struct {
 	execs           *brain.ExecRing
 	acts            *brain.ActivityRing
 	hosts           *brain.HostBook
+	health          *brain.HealthBook
 	narrator        *llm.Client
 	tel             *telemetry.Store
 	oracle          *oracle.Client
@@ -84,6 +85,10 @@ type Deps struct {
 	// Hosts is the brain's per-agent runtime facts; the UI renders it as the
 	// topology view (where each bee runs). nil => topology empty.
 	Hosts *brain.HostBook
+	// Health is the brain's per-agent inferred-health tracker (working|idle|
+	// failing — see internal/brain/health.go, #72); /api/state surfaces it
+	// per active agent. nil => every agent reports "idle" (degrade-never-block).
+	Health *brain.HealthBook
 	// Narrator is the brain's read-only LLM used to debrief a bee from its recorded
 	// trail (the "ask an agent" feature). nil => the ask endpoint is disabled.
 	Narrator *llm.Client
@@ -128,7 +133,7 @@ type Deps struct {
 }
 
 func Handler(d Deps) http.Handler {
-	s := &Server{coord: d.Coord, mem: d.Mem, gw: d.Gateway, bus: d.Bus, memOwners: d.MemOwners, roles: d.Roles, queue: d.Queue, missions: d.Missions, execs: d.Executions, acts: d.Activity, hosts: d.Hosts, narrator: d.Narrator, tel: d.Telemetry, oracle: d.Oracle, roleModels: d.RoleModels, learn: d.Learn, promote: d.Promote, reject: d.Reject, historyFn: d.History, historyDetailFn: d.HistoryDetail, replayFn: d.Replay, artifacts: d.Artifacts}
+	s := &Server{coord: d.Coord, mem: d.Mem, gw: d.Gateway, bus: d.Bus, memOwners: d.MemOwners, roles: d.Roles, queue: d.Queue, missions: d.Missions, execs: d.Executions, acts: d.Activity, hosts: d.Hosts, health: d.Health, narrator: d.Narrator, tel: d.Telemetry, oracle: d.Oracle, roleModels: d.RoleModels, learn: d.Learn, promote: d.Promote, reject: d.Reject, historyFn: d.History, historyDetailFn: d.HistoryDetail, replayFn: d.Replay, artifacts: d.Artifacts}
 	mux := http.NewServeMux()
 	sub, _ := fs.Sub(webFS, "web")
 	mux.Handle("/", http.FileServer(http.FS(sub)))
@@ -538,6 +543,7 @@ type stateView struct {
 	Executions      []brain.Execution     `json:"recent_executions"`          // newest-first, capped at 40 by the ring
 	Activity        []brain.Activity      `json:"recent_activity"`            // newest-first tool-calls across all phases
 	Topology        []brain.AnnotatedHost `json:"topology"`                   // per-agent runtime facts (where each bee runs) + drift annotation
+	Health          []brain.HealthAgent   `json:"health"`                     // per-agent inferred health (working|idle|failing, #72)
 	ModelComparison *telemetry.Report     `json:"model_comparison,omitempty"` // per-model finding volume + confirmation rate
 	Proposals       []proposalView        `json:"proposals"`                  // pending learning-loop proposals awaiting the operator
 }
@@ -594,6 +600,12 @@ func (s *Server) snapshot() stateView {
 			topology = brain.AnnotateHosts(hs, s.roleModels)
 		}
 	}
+	health := []brain.HealthAgent{}
+	if s.health != nil {
+		for _, a := range st.ActiveAgents {
+			health = append(health, s.health.Health(a.Name))
+		}
+	}
 	var modelComparison *telemetry.Report
 	if s.tel != nil {
 		if mc, err := s.tel.RunReport("model_comparison"); err == nil {
@@ -611,7 +623,7 @@ func (s *Server) snapshot() stateView {
 			}
 		}
 	}
-	return stateView{Status: st, Tasks: tasks, Findings: findings, Missions: missions, Executions: executions, Activity: activity, Topology: topology, ModelComparison: modelComparison, Proposals: proposals}
+	return stateView{Status: st, Tasks: tasks, Findings: findings, Missions: missions, Executions: executions, Activity: activity, Topology: topology, Health: health, ModelComparison: modelComparison, Proposals: proposals}
 }
 
 func (s *Server) state(w http.ResponseWriter, _ *http.Request) {

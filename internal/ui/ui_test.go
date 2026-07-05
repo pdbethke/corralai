@@ -115,6 +115,57 @@ func TestStateEndpointCarriesExecutions(t *testing.T) {
 	}
 }
 
+// /api/state must surface the brain's inferred per-agent health (#72) so the
+// operator (and later, staffing math) can see a claiming-but-not-completing
+// worker without waiting for a rendered UI.
+func TestStateEndpointCarriesHealth(t *testing.T) {
+	cs, err := coord.Open(filepath.Join(t.TempDir(), "c.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+	if _, err := cs.BootstrapSession("Ada", "", "", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cs.BootstrapSession("Copilot-1", "", "", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	hb := brain.NewHealthBook()
+	hb.RecordClaim("Ada")
+	hb.RecordSuccess("Ada") // Ada is actively completing work
+	hb.RecordClaim("Copilot-1")
+	// Force-reclaimed (idle heartbeat, expired lease) is direct, immediate
+	// stall evidence — the #72 tonight-scenario signal, no clock skew needed.
+	hb.RecordReclaimed("Copilot-1")
+
+	h := Handler(Deps{Coord: cs, MemOwners: map[string]bool{}, Health: hb})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/state", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d", rec.Code)
+	}
+	var payload struct {
+		Health []struct {
+			Agent  string `json:"agent"`
+			Health string `json:"health"`
+		} `json:"health"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	byAgent := map[string]string{}
+	for _, h := range payload.Health {
+		byAgent[h.Agent] = h.Health
+	}
+	if byAgent["Ada"] != "working" {
+		t.Fatalf("Ada health = %q, want working", byAgent["Ada"])
+	}
+	if byAgent["Copilot-1"] != "failing" {
+		t.Fatalf("Copilot-1 health = %q, want failing (stale claim, no completion)", byAgent["Copilot-1"])
+	}
+}
+
 // The frontend reads server_now, parked_grace_seconds, and per-agent status from
 // /api/state. This pins that JSON contract.
 func TestStateEndpointCarriesParkedFields(t *testing.T) {

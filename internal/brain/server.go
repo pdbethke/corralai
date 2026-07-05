@@ -131,6 +131,9 @@ func NewServer(store *coord.Store, mem *memory.Store, opts Options) *mcp.Server 
 							log.Printf("queue: %s heartbeats idle while holding expired claim on task #%d (%s) — requeued", actor, t.ID, t.Key)
 							rec(opts.Telemetry, t.MissionID, "task_reclaimed", actor, t.Key,
 								map[string]any{"role": t.Role, "reason": "idle heartbeat, lease expired"})
+							// Health signal (#72): a force-reclaim is direct evidence the
+							// claim made no progress before it lapsed.
+							opts.Health.RecordReclaimed(actor)
 						}
 					}
 				}
@@ -239,7 +242,7 @@ func NewServer(store *coord.Store, mem *memory.Store, opts Options) *mcp.Server 
 		registerRepoSearch(s, opts)
 	}
 	if opts.Queue != nil {
-		registerTasks(s, store, opts.Queue, opts.TaskLeaseSeconds, opts.Telemetry, opts.HostBook, opts.Learn)
+		registerTasks(s, store, opts.Queue, opts.TaskLeaseSeconds, opts.Telemetry, opts.HostBook, opts.Learn, opts.Health)
 	}
 	if opts.Reference != nil && opts.Embedder != nil {
 		registerReference(s, opts)

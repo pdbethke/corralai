@@ -816,6 +816,9 @@ func main() {
 	activityRing := brain.NewActivityRing()
 	// hostBook holds each bee's runtime facts (report_host) for the UI topology view.
 	hostBook := brain.NewHostBook()
+	// healthBook infers per-agent health (working|idle|failing) from claim/
+	// complete/reclaim activity — see internal/brain/health.go (#72).
+	healthBook := brain.NewHealthBook()
 	// workerSessions is the dev-mode half of the human gate: marks any MCP session
 	// that identifies itself as a corral-agent worker (ClientInfo.Name or an
 	// early bootstrap/report_host call), so isHumanAdmin can refuse it.
@@ -835,6 +838,7 @@ func main() {
 		ExecRing:         execRing,
 		ActivityRing:     activityRing,
 		HostBook:         hostBook,
+		Health:           healthBook,
 		WorkerSessions:   workerSessions,
 		RoleModels:       roleModels,
 		TaskLeaseSeconds: float64(envInt("CORRALAI_TASK_LEASE_SECONDS", 300)),
@@ -1012,7 +1016,7 @@ func main() {
 	replayStream := func(missionID int64) ([]brain.ReplayEvent, error) {
 		return brain.BuildReplayStream(queueStore, telStore, missionID)
 	}
-	uiHandler := verifier.Wrap(authz(ui.Handler(ui.Deps{Coord: store, Mem: memStore, Gateway: gwStore, Bus: bus, MemOwners: memOwners, Roles: princStore, Queue: queueStore, Missions: missionStore, Executions: execRing, Activity: activityRing, Hosts: hostBook, Narrator: narrator, Telemetry: telStore, Oracle: fleetOracle, RoleModels: roleModels, Learn: learnStore, Promote: proposalPromote, Reject: proposalReject, History: historyList, HistoryDetail: historyDetail, Replay: replayStream, Artifacts: artStore})))
+	uiHandler := verifier.Wrap(authz(ui.Handler(ui.Deps{Coord: store, Mem: memStore, Gateway: gwStore, Bus: bus, MemOwners: memOwners, Roles: princStore, Queue: queueStore, Missions: missionStore, Executions: execRing, Activity: activityRing, Hosts: hostBook, Health: healthBook, Narrator: narrator, Telemetry: telStore, Oracle: fleetOracle, RoleModels: roleModels, Learn: learnStore, Promote: proposalPromote, Reject: proposalReject, History: historyList, HistoryDetail: historyDetail, Replay: replayStream, Artifacts: artStore})))
 	if verifier.Enabled() {
 		log.Printf("ui: bearer-gated (view via `corral-observe`)")
 	} else {

@@ -873,10 +873,11 @@ function resetReplayPanels(){
   replayAgents = new Map(); replaySeenBeats = new Set();
 }
 function clearReplayPanelDOM(){
-  // 'done' is the product's live roster id — cleared here too so the SSE
-  // snapshot repaints it fresh on replay exit (no stale-tape flash), same as
-  // the other panels; the site cockpit uses 'agents'.
-  for(const id of ['exec','tasks','findings','agents','done']){
+  // 'agents' is the canonical roster id, shared by the product UI and the
+  // site cockpit (internal/ui/web/cockpit-shell.html) — cleared here too so
+  // the SSE snapshot repaints it fresh on replay exit (no stale-tape flash),
+  // same as the other panels.
+  for(const id of ['exec','tasks','findings','agents']){
     const el = document.getElementById(id);
     if(el) el.innerHTML = '';
   }
@@ -901,18 +902,17 @@ function replayAgentTouch(name, role, ts, kind, desc){
   return a;
 }
 // renderReplayAgents: the roster of workers the tape shows, reconstructed from
-// task claims + executions — mirrors the product's live agents list (#done):
+// task claims + executions — mirrors the product's live agents list (#agents):
 // role-colored dot when working (holds a claim), name + role + the "doing now"
 // column (last real command, else the claimed task). System actors that only
 // FILE findings (verify-gate, reflex-replanner, lead, client) never claim or
 // run a command, so they never enter the roster — same as live active_agents.
 function renderReplayAgents(){
-  // The site cockpit names the roster #agents; the PRODUCT UI's live roster is
-  // the legacy id #done (renders "agents · N" from apply()). Populate whichever
-  // exists so replay drives the roster in BOTH hosts — in the product this also
-  // fixes the roster going stale during replay (apply() is paused), exactly
-  // like the console/tasks/findings panels.
-  const ap = document.getElementById('agents') || document.getElementById('done');
+  // #agents is the canonical roster id, shared by the product UI and the site
+  // cockpit (see internal/ui/web/cockpit-shell.html) — in the product this
+  // also fixes the roster going stale during replay (apply() is paused),
+  // exactly like the console/tasks/findings panels.
+  const ap = document.getElementById('agents');
   if(!ap) return;
   const ags = Array.from(replayAgents.values());
   if(!ags.length){ ap.innerHTML = '<div class="feedhdr">agents · 0</div><div class="row" style="opacity:.6">no agents yet…</div>'; return; }

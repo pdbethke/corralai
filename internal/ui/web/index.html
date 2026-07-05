@@ -45,18 +45,18 @@
   #legend { position:absolute; bottom:8px; left:10px; right:10px; color:var(--stage-muted); font-size:11px; z-index:2;
     pointer-events:none; line-height:1.9; }
   #legend .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin:0 4px 0 10px; vertical-align:middle; }
-  #done { color:var(--muted); font-size:12px; text-align:left; flex:none; }
-  #done .row { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; opacity:.92; padding:1px 0; }
-  #done .feedhdr { color:#6b6452; font-size:11px; text-transform:uppercase; letter-spacing:.5px; margin-bottom:5px; }
+  #agents { color:var(--muted); font-size:12px; text-align:left; flex:none; }
+  #agents .row { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; opacity:.92; padding:1px 0; }
+  #agents .feedhdr { color:#6b6452; font-size:11px; text-transform:uppercase; letter-spacing:.5px; margin-bottom:5px; }
   /* clickable AGENTS roster — open a bee's detail without chasing it around the canvas */
-  #done .arow { display:flex; align-items:center; gap:7px; padding:3px 6px; border-radius:5px; cursor:pointer;
+  #agents .arow { display:flex; align-items:center; gap:7px; padding:3px 6px; border-radius:5px; cursor:pointer;
     white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  #done .arow:hover { background:var(--panel); }
-  #done .arow.arowsel { background:var(--sel); outline:1px solid var(--line); }
-  #done .arow b { flex:none; }
-  #done .adot { width:8px; height:8px; border-radius:50%; flex:none; }
-  #done .ameta { color:#6b6452; font-size:10.5px; flex:none; }
-  #done .adoing { color:var(--muted); font-size:11px; margin-left:auto; overflow:hidden; text-overflow:ellipsis; font-family:ui-monospace,monospace; }
+  #agents .arow:hover { background:var(--panel); }
+  #agents .arow.arowsel { background:var(--sel); outline:1px solid var(--line); }
+  #agents .arow b { flex:none; }
+  #agents .adot { width:8px; height:8px; border-radius:50%; flex:none; }
+  #agents .ameta { color:#6b6452; font-size:10.5px; flex:none; }
+  #agents .adoing { color:var(--muted); font-size:11px; margin-left:auto; overflow:hidden; text-overflow:ellipsis; font-family:ui-monospace,monospace; }
   #tasks { color:var(--muted); font-size:12px; text-align:left; }
   #tasks .feedhdr { color:#6b6452; font-size:11px; text-transform:uppercase; letter-spacing:.5px; margin-bottom:5px; }
   #tasks .trow { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding:2px 0; opacity:.95; }
@@ -371,7 +371,9 @@
   </div>
   <div id="stage">
     <aside id="leftcol">
+      <!-- COCKPIT-SHELL:TASKS:BEGIN -->
       <div id="tasks"></div>
+      <!-- COCKPIT-SHELL:TASKS:END -->
     </aside>
     <main id="center">
       <canvas id="c"></canvas>
@@ -392,13 +394,19 @@
       <div id="empty">no agents in the corral yet</div>
     </main>
     <aside id="rightcol">
-      <div id="done"></div>
+      <!-- COCKPIT-SHELL:AGENTS:BEGIN -->
+      <div id="agents"></div>
+      <!-- COCKPIT-SHELL:AGENTS:END -->
       <div id="inspector"></div>
       <div id="fleet-oracle"></div>
+      <!-- COCKPIT-SHELL:FINDINGS:BEGIN -->
       <div id="findings"></div>
+      <!-- COCKPIT-SHELL:FINDINGS:END -->
     </aside>
   </div>
+  <!-- COCKPIT-SHELL:EXEC:BEGIN -->
   <div id="exec"></div>
+  <!-- COCKPIT-SHELL:EXEC:END -->
   <div id="progress"></div>
   <div id="topology"></div>
   <div id="proposals"></div>
@@ -481,7 +489,7 @@ function apply(state){
   // AGENTS roster — a stable, CLICKABLE list of every bee (the bees buzz around the
   // canvas, so this is the reliable way to open a bee's detail). Each row shows the
   // bee, its role, and what it's doing right now; click to inspect.
-  const feed = document.getElementById('done');
+  const feed = document.getElementById('agents');
   const latest = {};   // newest tool-call / command per agent → the "doing now" column
   (state.recent_activity||[]).forEach(a => { if(a.agent && !latest[a.agent]) latest[a.agent] = '→ '+(a.tool||''); });
   (state.recent_executions||[]).forEach(e => { if(e.agent && !latest[e.agent]) latest[e.agent] = '❯ '+((e.command||'').slice(0,20)); });

@@ -1,0 +1,47 @@
+<!-- SPDX-License-Identifier: Elastic-2.0 -->
+<!-- cockpit-shell.html — the shared cockpit PANEL markup (markup only, no
+     CSS/JS), single source of truth for the four panels every replay surface
+     populates via internal/ui/web/replay-player.js: the tasks list, the
+     agents roster, the findings feed, and the exec console.
+
+     Canonical ids (decided here, used everywhere — no aliases):
+       #tasks    — task list
+       #agents   — agent roster (renamed from the product's legacy #done;
+                   site/src/pages/recordings.astro had already settled on
+                   #agents, so the product followed rather than the other
+                   way around)
+       #findings — findings feed
+       #exec     — live/replayed console
+
+     Deliberately OUT of this fragment: the #hud tab bar (internal/ui/web/
+     index.html) and any surrounding grid/aside/canvas chrome — the product's
+     3-column #stage (leftcol/center/rightcol) and the site's #cockpit grid
+     (site/src/pages/recordings.astro, site/src/components/Hero.astro) differ
+     on purpose (different tab sets, different canvas legend, different
+     theming — see those files' CSS), so only the four panel containers
+     themselves are shared, not their wrapper layout or styling.
+
+     Consumed two ways:
+       1. internal/ui/web/index.html splices this content, verbatim, between
+          matching <!-- COCKPIT-SHELL:<NAME>:BEGIN/END --> marker pairs (one
+          pair per panel below, since the product's 3-column layout keeps
+          #tasks / #agents+#findings / #exec in three different places in the
+          DOM — there is no single contiguous span to wrap).
+       2. site/src/pages/recordings.astro and site/src/components/Hero.astro
+          import this whole file via Vite's `?raw` import and inject the
+          relevant marker's content with set:html.
+     scripts/sync-site-assets.sh is the drift gate: default mode splices this
+     file's sections into index.html; --check mode fails loudly if they've
+     drifted apart. -->
+<!-- COCKPIT-SHELL:TASKS:BEGIN -->
+<div id="tasks"></div>
+<!-- COCKPIT-SHELL:TASKS:END -->
+<!-- COCKPIT-SHELL:AGENTS:BEGIN -->
+<div id="agents"></div>
+<!-- COCKPIT-SHELL:AGENTS:END -->
+<!-- COCKPIT-SHELL:FINDINGS:BEGIN -->
+<div id="findings"></div>
+<!-- COCKPIT-SHELL:FINDINGS:END -->
+<!-- COCKPIT-SHELL:EXEC:BEGIN -->
+<div id="exec"></div>
+<!-- COCKPIT-SHELL:EXEC:END -->

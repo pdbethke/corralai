@@ -182,13 +182,17 @@ test('replay-player.js does not clobber the site title', async ({ page }) => {
   await expect(page).toHaveTitle('Corralai — a headless brain for a herd of AI agents');
 });
 
-test('the landing hero stays canvas-only and clean — the skin selector is the /recordings cockpit only', async ({ page }) => {
-  // The cockpit (Task 12) exposes a critter-skin selector; the hero must not.
-  // The shared IIFE only populates a #skinsel when one is present in the DOM,
-  // so the hero's absence of that element is what keeps it the clean default.
+test('the landing hero shows the full cockpit but never the skin selector — that stays /recordings-only', async ({ page }) => {
+  // Superseded by the "wow cockpit" redesign: the hero now renders the full
+  // cockpit shell (tasks/agents/findings/exec, shared with /recordings via
+  // internal/ui/web/cockpit-shell.html — see site/src/lib/cockpitShell.ts),
+  // not a bare canvas, so those four panels are now expected on the hero.
+  // The critter-skin selector stays /recordings-only, though: the shared
+  // IIFE only populates a #skinsel when one is present in the DOM, and the
+  // hero deliberately omits that element to keep the clean default skin.
   await page.goto('/');
   await expect(page.locator('#skinsel')).toHaveCount(0);
-  await expect(page.locator('#exec, #tasks, #agents, #findings')).toHaveCount(0);
+  await expect(page.locator('#exec, #tasks, #agents, #findings')).toHaveCount(4);
 });
 
 test('the GitHub link resolves and points at the real repo, everywhere it appears', async ({ page, request }) => {

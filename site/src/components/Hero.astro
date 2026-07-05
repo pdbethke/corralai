@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Elastic-2.0
 import golden from '../data/recordings/golden-run.json';
 import meta from '../data/recordings/golden-run.meta.json';
+import { cockpitTasks, cockpitAgents, cockpitFindings, cockpitExec } from '../lib/cockpitShell';
 
 const minutes = Math.round((meta.duration_seconds || 0) / 60);
 ---
@@ -41,10 +42,18 @@ const minutes = Math.round((meta.duration_seconds || 0) / 60);
     </p>
   </div>
   <div id="stage-frame">
-    <div id="stage">
-      <canvas id="c"></canvas>
-      <div id="empty">no agents in the corral yet</div>
+    <div id="cockpit">
+      <aside class="cockpit-tasks" set:html={cockpitTasks} />
+      <div id="stage">
+        <canvas id="c"></canvas>
+        <div id="empty">no agents in the corral yet</div>
+      </div>
+      <aside class="cockpit-side">
+        <div class="cockpit-agents" set:html={cockpitAgents} />
+        <div class="cockpit-findings" set:html={cockpitFindings} />
+      </aside>
     </div>
+    <div class="cockpit-exec" set:html={cockpitExec} />
   </div>
   <div id="replay">
     <div class="row">
@@ -76,13 +85,68 @@ const minutes = Math.round((meta.duration_seconds || 0) / 60);
      canvas even on a light page — bordered and shadowed so it reads as a
      window onto the corral, not an unstyled leftover dark section. The
      #replay control bar underneath stays on the same --stage-* tokens so
-     the whole player (canvas + controls) reads as one dark instrument. */
+     the whole player (canvas + controls) reads as one dark instrument.
+     Task 1 (the "wow cockpit"): the hero now shows the FULL cockpit — tasks,
+     canvas, agents+findings, and the exec console — not a bare canvas, using
+     the exact same #cockpit grid shape as /recordings (site/src/pages/
+     recordings.astro), just narrower to match the hero's own max-width. The
+     four panels themselves are the shared markup from internal/ui/web/
+     cockpit-shell.html (via site/src/lib/cockpitShell.ts) — this file only
+     owns the surrounding grid/theming, same split as recordings.astro. */
   #stage-frame { max-width: 1040px; margin: 0 auto; padding: 0 20px; }
-  #stage {
-    position: relative; height: 60vh; min-height: 380px;
-    background: var(--stage-panel); border: 1px solid var(--stage-line);
-    border-radius: 12px; box-shadow: 0 18px 44px rgba(30,20,0,.22);
-    overflow: hidden;
+  #cockpit {
+    display: grid; grid-template-columns: 200px 1fr 240px;
+    background: var(--stage-bg); border: 1px solid var(--stage-line);
+    border-top-left-radius: 12px; border-top-right-radius: 12px;
+    box-shadow: 0 18px 44px rgba(30,20,0,.22); overflow: hidden;
+  }
+  @media (max-width: 860px) { #cockpit { grid-template-columns: 1fr; } .cockpit-tasks, .cockpit-side { max-height: 180px; } }
+  #stage { position: relative; height: 60vh; min-height: 380px; background: var(--stage-panel); }
+  .cockpit-tasks, .cockpit-side {
+    background: var(--stage-bg); color: var(--stage-fg); overflow-y: auto;
+    padding: 10px 12px; font-size: 12px; border-right: 1px solid var(--stage-line);
+  }
+  /* the right column stacks the agents roster over the findings panel, same
+     as the product UI's own #rightcol (internal/ui/web/index.html). */
+  .cockpit-side { border-right: none; border-left: 1px solid var(--stage-line); padding: 0; }
+  .cockpit-agents, .cockpit-findings { padding: 10px 12px; }
+  .cockpit-agents { border-bottom: 1px solid var(--stage-line); }
+  /* The panel CONTENT (.arow/.feedhdr/.xblk/.trow/.frow …) is injected at
+     RUNTIME by the shared replay renderer (replay-player.js), so those
+     elements never carry Astro's scope attribute — the rules MUST be
+     :global or they silently don't apply. */
+  :global(#cockpit .arow) { display: flex; align-items: baseline; gap: 6px; padding: 2px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  :global(#cockpit .adot) { flex: none; align-self: center; width: 7px; height: 7px; border-radius: 50%; }
+  :global(#cockpit .ameta) { color: var(--stage-muted); font-size: 11px; }
+  :global(#cockpit .adoing) { color: var(--stage-muted); font-size: 11px; margin-left: auto; padding-left: 10px; overflow: hidden; text-overflow: ellipsis; font-family: ui-monospace, monospace; }
+  .cockpit-exec {
+    background: var(--stage-bg); color: var(--stage-fg); border: 1px solid var(--stage-line); border-top: none;
+    height: 160px; overflow-y: auto; padding: 10px 14px; font-size: 12px;
+  }
+  :global(#cockpit .feedhdr), :global(.cockpit-exec .feedhdr) { color: var(--stage-muted); font-size: 11px; letter-spacing: .4px; margin-bottom: 6px; }
+  :global(.cockpit-exec .xblk) { margin-bottom: 3px; }
+  :global(.cockpit-exec .xcmdline) { display: flex; align-items: baseline; gap: 7px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.5; }
+  :global(.cockpit-exec .xprompt) { color: var(--stage-amber); }
+  :global(.cockpit-exec .xcmd) { font-family: ui-monospace, monospace; color: var(--stage-fg); }
+  :global(.cockpit-exec .xbadge) { font-weight: 700; }
+  :global(.cockpit-exec .xempty), :global(.cockpit-exec .xcursor) { color: var(--stage-muted); }
+  /* thought beats — reasoning must read as visibly distinct from an action
+     (see internal/ui/web/replay-player.js's renderReplayLine): italic muted
+     text with a 💭 affix, no monospace command chrome or exit badge. */
+  :global(.cockpit-exec .xthoughtline) { white-space: normal; overflow-wrap: anywhere; }
+  :global(.cockpit-exec .xthoughtico) { flex: none; opacity: .85; }
+  :global(.cockpit-exec .xthoughttext) { color: var(--stage-muted); font-style: italic; font-size: 11.5px; line-height: 1.5; }
+  :global(.cockpit-tasks .trow) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 2px 0; }
+  :global(.cockpit-tasks .tdot) { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; }
+  :global(.cockpit-findings .frow) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 2px 0; }
+  :global(.cockpit-findings .frow.hi) { font-weight: 600; }
+  :global(.cockpit-findings .fsev) { font-weight: 700; }
+  /* the shared renderers emit var(--green)/--red/--fg/--muted inline — on
+     this daylight page those would resolve to light-page tokens inside a
+     dark stage, so re-scope them onto the cockpit subtree. */
+  #cockpit, .cockpit-exec {
+    --fg: var(--stage-fg); --muted: var(--stage-muted);
+    --green: #8fdcab; --red: #e8503a; --amber: var(--stage-amber);
   }
   #c { width: 100%; height: 100%; display: block; }
   #empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--stage-muted); pointer-events: none; }

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Elastic-2.0
 import '../styles/global.css';
 import analytics from '../data/analytics.json';
+import { cockpitTasks, cockpitAgents, cockpitFindings, cockpitExec } from '../lib/cockpitShell';
 
 // Enumerate committed recordings by glob — no manifest file to drift.
 const streamModules = import.meta.glob('../data/recordings/*.json', { eager: true });
@@ -89,17 +90,17 @@ const maxModelFindings = Math.max(1, ...analytics.findings_by_model.map((r: any)
 
   <div id="stage-frame">
     <div id="cockpit">
-      <aside id="tasks"></aside>
+      <aside class="cockpit-tasks" set:html={cockpitTasks} />
       <div id="stage">
         <canvas id="c"></canvas>
         <div id="empty">pick a recording above</div>
       </div>
-      <aside id="side">
-        <div id="agents"></div>
-        <div id="findings"></div>
+      <aside class="cockpit-side">
+        <div class="cockpit-agents" set:html={cockpitAgents} />
+        <div class="cockpit-findings" set:html={cockpitFindings} />
       </aside>
     </div>
-    <div id="exec"></div>
+    <div class="cockpit-exec" set:html={cockpitExec} />
   </div>
   <div id="replay">
     <div class="row">
@@ -204,58 +205,63 @@ const maxModelFindings = Math.max(1, ...analytics.findings_by_model.map((r: any)
     border-top-left-radius: 12px; border-top-right-radius: 12px;
     box-shadow: 0 18px 44px rgba(30,20,0,.22); overflow: hidden;
   }
-  @media (max-width: 900px) { #cockpit { grid-template-columns: 1fr; } #tasks, #side { max-height: 200px; } }
+  @media (max-width: 900px) { #cockpit { grid-template-columns: 1fr; } .cockpit-tasks, .cockpit-side { max-height: 200px; } }
   #stage { position: relative; height: 56vh; min-height: 360px; background: var(--stage-panel); }
-  #tasks, #side {
+  .cockpit-tasks, .cockpit-side {
     background: var(--stage-bg); color: var(--stage-fg); overflow-y: auto;
     padding: 10px 12px; font-size: 12px; border-right: 1px solid var(--stage-line);
   }
   /* the right column stacks the agents roster over the findings panel — the
      same two panels the product UI shows on the right (agents + findings). */
-  #side { border-right: none; border-left: 1px solid var(--stage-line); padding: 0; }
-  #agents, #findings { padding: 10px 12px; }
-  #agents { border-bottom: 1px solid var(--stage-line); }
+  .cockpit-side { border-right: none; border-left: 1px solid var(--stage-line); padding: 0; }
+  .cockpit-agents, .cockpit-findings { padding: 10px 12px; }
+  .cockpit-agents { border-bottom: 1px solid var(--stage-line); }
   /* The panel CONTENT (.arow/.feedhdr/.xblk/.trow/.frow …) is injected at
      RUNTIME by the shared replay renderers, so those elements never carry
      Astro's scope attribute — the rules MUST be :global or they silently
      don't apply (the panels would fall back to inherited tokens + inline
-     styles only). The container ids above (#tasks/#side/#agents/#exec) are
-     real template elements, so their scoped id rules apply normally. */
+     styles only). The WRAPPER classes above (.cockpit-tasks/.cockpit-side/
+     .cockpit-agents/.cockpit-exec) are real template elements owned by this
+     page, so their scoped class rules apply normally — the #tasks/#agents/
+     #findings/#exec ids INSIDE them come from the shared fragment
+     (internal/ui/web/cockpit-shell.html, via site/src/lib/cockpitShell.ts)
+     and are targeted with :global for the same reason as the injected
+     content classes. */
   :global(#cockpit .arow) { display: flex; align-items: baseline; gap: 6px; padding: 2px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   :global(#cockpit .adot) { flex: none; align-self: center; width: 7px; height: 7px; border-radius: 50%; }
   :global(#cockpit .ameta) { color: var(--stage-muted); font-size: 11px; }
   :global(#cockpit .adoing) { color: var(--stage-muted); font-size: 11px; margin-left: auto; padding-left: 10px; overflow: hidden; text-overflow: ellipsis; font-family: ui-monospace, monospace; }
-  #exec {
+  .cockpit-exec {
     background: var(--stage-bg); color: var(--stage-fg); border: 1px solid var(--stage-line); border-top: none;
     height: 180px; overflow-y: auto; padding: 10px 14px;
     font-size: 12px;
   }
   /* the cockpit panels reuse the product console's class vocabulary — same
      names the shared renderers emit, styled for the dark stage (global: see note above) */
-  :global(#cockpit .feedhdr), :global(#exec .feedhdr) { color: var(--stage-muted); font-size: 11px; letter-spacing: .4px; margin-bottom: 6px; }
-  :global(#exec .xblk) { margin-bottom: 3px; }
-  :global(#exec .xcmdline) { display: flex; align-items: baseline; gap: 7px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.5; }
-  :global(#exec .xprompt) { color: var(--stage-amber); }
-  :global(#exec .xcmd) { font-family: ui-monospace, monospace; color: var(--stage-fg); }
-  :global(#exec .xbadge) { font-weight: 700; }
-  :global(#exec .xempty), :global(#exec .xcursor) { color: var(--stage-muted); }
+  :global(#cockpit .feedhdr), :global(.cockpit-exec .feedhdr) { color: var(--stage-muted); font-size: 11px; letter-spacing: .4px; margin-bottom: 6px; }
+  :global(.cockpit-exec .xblk) { margin-bottom: 3px; }
+  :global(.cockpit-exec .xcmdline) { display: flex; align-items: baseline; gap: 7px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.5; }
+  :global(.cockpit-exec .xprompt) { color: var(--stage-amber); }
+  :global(.cockpit-exec .xcmd) { font-family: ui-monospace, monospace; color: var(--stage-fg); }
+  :global(.cockpit-exec .xbadge) { font-weight: 700; }
+  :global(.cockpit-exec .xempty), :global(.cockpit-exec .xcursor) { color: var(--stage-muted); }
   /* thought beats — reasoning must read as visibly distinct from an action
      (see internal/ui/web/replay-player.js's renderReplayLine): italic muted
      text with a 💭 affix, no monospace command chrome or exit badge. Text is
      verbatim from the tape — never truncated/rewritten here. */
-  :global(#exec .xthoughtline) { white-space: normal; overflow-wrap: anywhere; }
-  :global(#exec .xthoughtico) { flex: none; opacity: .85; }
-  :global(#exec .xthoughttext) { color: var(--stage-muted); font-style: italic; font-size: 11.5px; line-height: 1.5; }
-  :global(#tasks .trow) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 2px 0; }
-  :global(#tasks .tdot) { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; }
-  :global(#findings .frow) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 2px 0; }
-  :global(#findings .frow.hi) { font-weight: 600; }
-  :global(#findings .fsev) { font-weight: 700; }
+  :global(.cockpit-exec .xthoughtline) { white-space: normal; overflow-wrap: anywhere; }
+  :global(.cockpit-exec .xthoughtico) { flex: none; opacity: .85; }
+  :global(.cockpit-exec .xthoughttext) { color: var(--stage-muted); font-style: italic; font-size: 11.5px; line-height: 1.5; }
+  :global(.cockpit-tasks .trow) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 2px 0; }
+  :global(.cockpit-tasks .tdot) { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; }
+  :global(.cockpit-findings .frow) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 2px 0; }
+  :global(.cockpit-findings .frow.hi) { font-weight: 600; }
+  :global(.cockpit-findings .fsev) { font-weight: 700; }
   /* the shared renderers emit var(--green)/--red/--fg/--muted inline — on this
      daylight page those would resolve to light-page tokens inside a dark
      stage, so re-scope them onto the cockpit subtree (CSS inheritance does
      the rest; no renderer change needed). */
-  #cockpit, #exec {
+  #cockpit, .cockpit-exec {
     --fg: var(--stage-fg); --muted: var(--stage-muted);
     --green: #8fdcab; --red: #e8503a; --amber: var(--stage-amber);
   }

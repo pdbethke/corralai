@@ -1,46 +1,98 @@
 ---
 // SPDX-License-Identifier: Elastic-2.0
-import { Image } from 'astro:assets';
+import { Image, getImage } from 'astro:assets';
 import corral from '../assets/ui-tour/corral.png';
 import matrixSkin from '../assets/ui-tour/corral-matrix-skin.png';
 import topology from '../assets/ui-tour/topology.png';
 import proposals from '../assets/ui-tour/proposals.png';
 import agentClusterZoom from '../assets/proof-band/agent-cluster-zoom.png';
 import productUiLight from '../assets/proof-band/product-ui-light.png';
+
+// Deliverable 3 ("wow cockpit"): the grid thumbnails below are 700/560px —
+// too small to read cockpit detail — so every figure is also click-to-
+// enlarge. getImage() here produces each shot at its own NATIVE resolution
+// (width: <img>.width, never upscaled) for the lightbox to show, entirely at
+// build time — no separate runtime fetch, no external lightbox library.
+const shots = await Promise.all(
+  [
+    {
+      img: corral,
+      alt: "The corral canvas view: 5 agents (researcher, tester, builder, designer, pentester) shown as moving nodes connected to the file paths they've claimed, a live console of real commands at the bottom, and an open findings panel on the right showing a critical and a high-severity finding.",
+      caption: 'The default view — every agent, every claim, every finding, live.',
+      width: 700,
+    },
+    {
+      img: agentClusterZoom,
+      alt: 'A zoomed-in crop of the corral canvas showing a builder and pentester agent connected by a red line to a contested file (retry.go), and a designer agent working a separate path — the conflict is visible as a shared node with two claim lines.',
+      caption: 'Zoomed in: a claim conflict on <code>retry.go</code> is visible as a shared node with two lines into it.',
+      width: 560,
+    },
+    {
+      img: matrixSkin,
+      alt: "The same corral canvas re-skinned as 'the construct', matrix-style green falling characters replacing the grass, agents renamed with an Mr./Ms. prefix and the mission renamed anomalies/archive — a purely cosmetic critter-skin swap with identical live data underneath.",
+      caption: 'A cosmetic skin swap ("the construct") over the exact same live data — same brain, same state, different costume.',
+      width: 700,
+    },
+    {
+      img: productUiLight,
+      alt: 'The product console in its light chrome theme: a cream-and-amber toolbar and side panels around the same permanently-dark canvas stage, shown here with no agents yet running.',
+      caption: 'The chrome has a light theme too — the canvas stage stays dark either way, by design.',
+      width: 700,
+    },
+    {
+      img: topology,
+      alt: 'The Topology tab: an ecosystem map showing 3 host machines running 7 agents total, each labeled with its backing model (ollama:local-7b) and its exec-isolation jail (bwrap, no network, or container with network).',
+      caption: 'Topology: which host is running which agent, on which model, inside which jail.',
+      width: 700,
+    },
+    {
+      img: proposals,
+      alt: "The Proposals tab showing one pending skill proposal, 'retries-without-backoff', with its drafted guidance, a linked skill artifact, and approve/reject buttons for the human operator.",
+      caption: "A pending skill proposal, waiting on the one gate a delegation token can't pass: a human.",
+      width: 700,
+    },
+  ].map(async (s) => {
+    const full = await getImage({ src: s.img, width: s.img.width });
+    return { ...s, full: full.src, fullW: s.img.width, fullH: s.img.height };
+  })
+);
 ---
 <section class="section wide" id="proof-band">
   <h2>What the console actually looks like</h2>
   <p>
     Every screenshot below is the real product chrome — no mockups. Same
     screenshots we use in the docs' UI tour, plus two new crops for this page.
+    Click any shot to see it full size.
   </p>
   <div class="shots">
-    <figure>
-      <Image src={corral} alt="The corral canvas view: 5 agents (researcher, tester, builder, designer, pentester) shown as moving nodes connected to the file paths they've claimed, a live console of real commands at the bottom, and an open findings panel on the right showing a critical and a high-severity finding." width={700} />
-      <figcaption>The default view — every agent, every claim, every finding, live.</figcaption>
-    </figure>
-    <figure>
-      <Image src={agentClusterZoom} alt="A zoomed-in crop of the corral canvas showing a builder and pentester agent connected by a red line to a contested file (retry.go), and a designer agent working a separate path — the conflict is visible as a shared node with two claim lines." width={560} />
-      <figcaption>Zoomed in: a claim conflict on <code>retry.go</code> is visible as a shared node with two lines into it.</figcaption>
-    </figure>
-    <figure>
-      <Image src={matrixSkin} alt="The same corral canvas re-skinned as 'the construct', matrix-style green falling characters replacing the grass, agents renamed with an Mr./Ms. prefix and the mission renamed anomalies/archive — a purely cosmetic critter-skin swap with identical live data underneath." width={700} />
-      <figcaption>A cosmetic skin swap ("the construct") over the exact same live data — same brain, same state, different costume.</figcaption>
-    </figure>
-    <figure>
-      <Image src={productUiLight} alt="The product console in its light chrome theme: a cream-and-amber toolbar and side panels around the same permanently-dark canvas stage, shown here with no agents yet running." width={700} />
-      <figcaption>The chrome has a light theme too — the canvas stage stays dark either way, by design.</figcaption>
-    </figure>
-    <figure>
-      <Image src={topology} alt="The Topology tab: an ecosystem map showing 3 host machines running 7 agents total, each labeled with its backing model (ollama:local-7b) and its exec-isolation jail (bwrap, no network, or container with network)." width={700} />
-      <figcaption>Topology: which host is running which agent, on which model, inside which jail.</figcaption>
-    </figure>
-    <figure>
-      <Image src={proposals} alt="The Proposals tab showing one pending skill proposal, 'retries-without-backoff', with its drafted guidance, a linked skill artifact, and approve/reject buttons for the human operator." width={700} />
-      <figcaption>A pending skill proposal, waiting on the one gate a delegation token can't pass: a human.</figcaption>
-    </figure>
+    {shots.map((s, i) => (
+      <figure>
+        <button
+          type="button"
+          class="shot-btn"
+          data-lightbox-trigger
+          data-full={s.full}
+          data-full-w={s.fullW}
+          data-full-h={s.fullH}
+          data-caption={s.caption.replace(/<[^>]+>/g, '')}
+          aria-label={`Enlarge: ${s.caption.replace(/<[^>]+>/g, '')}`}
+        >
+          <Image src={s.img} alt={s.alt} width={s.width} />
+        </button>
+        <figcaption set:html={s.caption} />
+      </figure>
+    ))}
   </div>
 </section>
+
+<div id="lightbox" role="dialog" aria-modal="true" aria-labelledby="lightbox-caption" hidden>
+  <div id="lightbox-backdrop" data-lightbox-close></div>
+  <div id="lightbox-card">
+    <button type="button" id="lightbox-close" data-lightbox-close aria-label="Close enlarged image">✕</button>
+    <img id="lightbox-img" src="" alt="" />
+    <p id="lightbox-caption"></p>
+  </div>
+</div>
 
 <style>
   .wide { max-width: 1100px; }
@@ -48,4 +100,100 @@ import productUiLight from '../assets/proof-band/product-ui-light.png';
   .shots figure { margin: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
   .shots :global(img) { display: block; width: 100%; height: auto; }
   .shots figcaption { padding: 10px 14px; color: var(--muted); font-size: 0.85rem; }
+  .shots figcaption :global(code) { background: var(--sel); padding: 1px 5px; border-radius: 4px; }
+  /* the thumbnail IS the enlarge control — a real <button> around the image
+     so it's keyboard-reachable (Tab + Enter/Space) and has a visible focus
+     ring, not a div with a synthetic click handler. */
+  .shot-btn {
+    display: block; width: 100%; padding: 0; margin: 0; border: none; background: none;
+    cursor: zoom-in; font: inherit; text-align: left;
+  }
+  .shot-btn:focus-visible { outline: 3px solid var(--amber); outline-offset: -3px; }
+
+  /* ---- lightbox ---- */
+  #lightbox[hidden] { display: none; }
+  #lightbox {
+    position: fixed; inset: 0; z-index: 50; display: flex; align-items: center;
+    justify-content: center; padding: 32px;
+  }
+  #lightbox-backdrop {
+    position: absolute; inset: 0; background: rgba(20, 15, 5, 0.72);
+  }
+  #lightbox-card {
+    position: relative; z-index: 1; max-width: min(92vw, 1200px); max-height: 92vh;
+    background: var(--bg); border: 1px solid var(--line); border-radius: 12px;
+    padding: 18px 18px 14px; box-shadow: 0 30px 80px rgba(0,0,0,.5);
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  #lightbox-img {
+    display: block; max-width: 100%; max-height: 76vh; width: auto; height: auto;
+    border-radius: 6px; margin: 0 auto; background: var(--stage-bg);
+  }
+  #lightbox-caption { margin: 0; color: var(--muted); font-size: 0.9rem; text-align: center; }
+  #lightbox-close {
+    position: absolute; top: 8px; right: 8px; width: 32px; height: 32px;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--panel); color: var(--fg); border: 1px solid var(--line);
+    border-radius: 50%; cursor: pointer; font-size: 15px; line-height: 1;
+  }
+  #lightbox-close:hover { border-color: var(--amber); color: var(--amber); }
+  #lightbox-close:focus-visible { outline: 3px solid var(--amber); outline-offset: 2px; }
+
+  /* Dark-mode viewers: the site itself is light-only (see global.css), but
+     the lightbox's own chrome should still hold up if the OS is forced dark
+     — reuse the same --stage-* dark tokens the hero's canvas frame already
+     leans on, so nothing here invents a new palette. */
+  @media (prefers-color-scheme: dark) {
+    #lightbox-card { background: var(--stage-panel); border-color: var(--stage-line); }
+    #lightbox-caption { color: var(--stage-muted); }
+    #lightbox-close { background: var(--stage-bg); color: var(--stage-fg); border-color: var(--stage-line); }
+  }
 </style>
+
+<script is:inline>
+  // Self-contained click-to-enlarge lightbox — no external library, no
+  // network request (the full-res image was already built into the page by
+  // getImage() at build time; this just swaps which <img> shows it).
+  (function () {
+    const lightbox = document.getElementById('lightbox');
+    const img = document.getElementById('lightbox-img');
+    const caption = document.getElementById('lightbox-caption');
+    if (!lightbox || !img || !caption) return;
+
+    let lastFocused = null;
+
+    function openFrom(btn) {
+      lastFocused = document.activeElement;
+      img.src = btn.dataset.full;
+      img.alt = btn.dataset.caption || '';
+      const w = btn.dataset.fullW, h = btn.dataset.fullH;
+      if (w) img.width = Number(w);
+      if (h) img.height = Number(h);
+      caption.textContent = btn.dataset.caption || '';
+      lightbox.hidden = false;
+      document.body.style.overflow = 'hidden';
+      document.getElementById('lightbox-close').focus();
+      document.addEventListener('keydown', onKeydown, true);
+    }
+
+    function close() {
+      lightbox.hidden = true;
+      document.body.style.overflow = '';
+      document.removeEventListener('keydown', onKeydown, true);
+      // Restore focus to whatever thumbnail opened this — standard modal
+      // a11y practice, so keyboard users never lose their place on close.
+      if (lastFocused && typeof lastFocused.focus === 'function') lastFocused.focus();
+    }
+
+    function onKeydown(ev) {
+      if (ev.key === 'Escape') { ev.preventDefault(); close(); }
+    }
+
+    document.querySelectorAll('[data-lightbox-trigger]').forEach((btn) => {
+      btn.addEventListener('click', () => openFrom(btn));
+    });
+    document.querySelectorAll('[data-lightbox-close]').forEach((el) => {
+      el.addEventListener('click', close);
+    });
+  })();
+</script>

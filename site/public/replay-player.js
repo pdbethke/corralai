@@ -1282,6 +1282,166 @@ function renderReplayScrub(){
   const label = document.getElementById('replay-label');
   if(label) label.textContent = replayIdx + ' / ' + replayEvents.length;
 }
+// ===========================================================================
+// Cockpit view tabs for the replay / demo surface (the marketing-site cockpit).
+// The LIVE product renders these views from lastState (see index.html's
+// render*), driven by /api/state + /api/*. The demo has no brain, so here we
+// reduce the FULL recorded tape (replayEvents, set by startReplay) into the
+// progress / topology / completed panels — so the site's tabs switch to REAL
+// recorded data, exactly like the app. memory / skills / proposals were never
+// recorded (they come from live /api/* on the product), so they render a
+// clearly-labeled sample. Only the site assigns setView = cockpitView; the
+// product's own setView is untouched, so these functions are inert there.
+// ===========================================================================
+function cvStatusColor(s){
+  if(s === 'done') return '#3fb950';
+  if(s === 'claimed') return 'var(--stage-amber, #d9a441)';
+  return 'var(--stage-muted, #8b8378)';
+}
+// cvReduce: fold the whole recorded tape into the shape the panels need. Pure
+// over replayEvents — independent of the scrub position, so a tab always shows
+// the complete recorded mission, not a partial frame.
+function cvReduce(){
+  const evs = (typeof replayEvents !== 'undefined' && replayEvents) || [];
+  const tasks = new Map();   // key -> {key,title,role,status,claimedBy,order}
+  const agents = new Map();  // name -> {name,role,done,claims}
+  const fseen = new Set();
+  let findings = 0, critHigh = 0, order = 0;
+  let directive = '', missionDone = false, firstTs = 0, lastTs = 0;
+  const ensureAgent = (name, role) => {
+    let a = agents.get(name);
+    if(!a){ a = {name, role: role || '', done: 0, claims: 0}; agents.set(name, a); }
+    if(role) a.role = role;
+    return a;
+  };
+  for(const ev of evs){
+    const d = ev.detail || {};
+    if(ev.ts){ if(firstTs === 0 || ev.ts < firstTs) firstTs = ev.ts; if(ev.ts > lastTs) lastTs = ev.ts; }
+    switch(ev.kind){
+      case 'mission_created': directive = d.directive || d.title || d.text || directive; break;
+      case 'mission_completed': missionDone = true; break;
+      case 'task_created':
+        if(ev.subject && !tasks.has(ev.subject))
+          tasks.set(ev.subject, {key: ev.subject, title: d.title || '', role: d.role || '', status: 'queued', claimedBy: '', order: order++});
+        break;
+      case 'task_claimed':
+        if(ev.subject){
+          const t = tasks.get(ev.subject) || {key: ev.subject, title: d.title || '', role: d.role || '', status: 'queued', claimedBy: '', order: order++};
+          t.status = 'claimed'; t.claimedBy = ev.actor || t.claimedBy; t.role = d.role || t.role;
+          tasks.set(ev.subject, t);
+          if(ev.actor) ensureAgent(ev.actor, d.role).claims++;
+        }
+        break;
+      case 'task_done': case 'task_superseded': case 'task_cancelled':
+        if(ev.subject){
+          const t = tasks.get(ev.subject); if(t) t.status = ev.kind.slice(5);
+          if(ev.kind === 'task_done' && ev.actor) ensureAgent(ev.actor, d.role).done++;
+        }
+        break;
+      case 'finding_reported': {
+        const k = (ev.subject||'') + '|' + (d.severity||'') + '|' + (d.type||'') + '|' + Math.round(ev.ts||0);
+        if(!fseen.has(k)){ fseen.add(k); findings++; if(d.severity === 'critical' || d.severity === 'high') critHigh++; }
+        break;
+      }
+    }
+  }
+  return { tasks, agents, findings, critHigh, directive, missionDone, durationSec: Math.max(0, lastTs - firstTs) };
+}
+function cvFmtDuration(sec){ sec = Math.max(0, Math.round(sec)); return Math.floor(sec/60) + 'm ' + (sec%60) + 's'; }
+function cvSampleTag(){ return '<span class="cv-sample" title="representative data — this view is populated live from the brain in the product; the recording did not capture it">sample</span>'; }
+
+function renderReplayProgress(){
+  const el = document.getElementById('progress'); if(!el) return;
+  const r = cvReduce();
+  const tasks = Array.from(r.tasks.values());
+  const done = tasks.filter(t => t.status === 'done').length;
+  const sup = tasks.filter(t => t.status === 'superseded').length;
+  const order = {claimed:0, queued:1, ready:1, pending:1, done:3, superseded:4, cancelled:5};
+  tasks.sort((a,b) => (order[a.status]??9) - (order[b.status]??9) || a.order - b.order);
+  const dir = r.directive || 'the recorded mission';
+  const pill = r.missionDone ? '<span class="cv-pill done">done</span>' : '<span class="cv-pill run">running</span>';
+  const summary = `${done}/${tasks.length} done` + (sup ? ` · ${sup} superseded` : '') + (r.findings ? ` · ${r.findings} finding${r.findings>1?'s':''}` : '');
+  const steps = tasks.map(t => {
+    const gone = (t.status === 'cancelled' || t.status === 'superseded');
+    const who = (t.claimedBy && !gone) ? `<span style="color:${roleColor(t.role)}">← ${esc(displayName(t.claimedBy))}</span>` : '';
+    const ttl = gone ? 'text-decoration:line-through;opacity:.55' : '';
+    return `<div class="cv-step"><span class="cv-dot" style="background:${cvStatusColor(t.status)}"></span>`
+      + `<span class="cv-status">${esc(t.status)}</span><b style="${ttl}">${esc(t.title || t.key)}</b> `
+      + `<span class="cv-role">${esc(t.role||'')}</span> ${who}</div>`;
+  }).join('');
+  el.innerHTML = `<div class="cv-pane"><div class="cv-mission"><div class="cv-mhdr">${pill}<span class="cv-dir">${esc(dir)}</span></div>`
+    + `<div class="cv-sum">${esc(summary)}</div><div class="cv-steps">${steps}</div></div></div>`;
+}
+function renderReplayTopology(){
+  const el = document.getElementById('topology'); if(!el) return;
+  const r = cvReduce();
+  const ags = Array.from(r.agents.values()).sort((a,b) => (a.role||'').localeCompare(b.role||'') || a.name.localeCompare(b.name));
+  const brainName = (typeof skin === 'function' && skin().tab) ? skin().tab : 'corral';
+  let html = `<div class="cv-pane"><div class="cv-tsum">${ags.length} agent${ags.length===1?'':'s'} in the herd · one shared brain</div>`;
+  html += `<div class="cv-hub"><b>👑 ${esc(brainName)} brain</b> <span class="cv-meta">deterministic coordinator — plans, gates, coordinates</span></div>`;
+  html += ags.map(a =>
+    `<div class="cv-agent"><span class="cv-dot" style="background:${roleColor(a.role)}"></span>`
+    + `<b style="color:${roleColor(a.role)}">${esc(displayName(a.name))}</b> <span class="cv-role">${esc(a.role||'')}</span>`
+    + ` <span class="cv-meta">${a.done} done · ${a.claims} claimed</span></div>`).join('');
+  html += `<div class="cv-note">${cvSampleTag()} host / model / jail detail is reported live by each worker — the product's topology shows it; this recording captured the herd's roles and throughput.</div>`;
+  el.innerHTML = html + '</div>';
+}
+function renderReplayCompleted(){
+  const el = document.getElementById('completed'); if(!el) return;
+  const r = cvReduce();
+  const tasks = Array.from(r.tasks.values());
+  const done = tasks.filter(t => t.status === 'done').length;
+  const pill = r.missionDone ? '<span class="cv-pill done">done</span>' : '<span class="cv-pill run">running</span>';
+  const dir = r.directive || 'the recorded mission';
+  el.innerHTML = `<div class="cv-pane"><div class="cv-mission"><div class="cv-mhdr">${pill}<span class="cv-dir">${esc(dir)}</span></div>`
+    + `<div class="cv-sum">${cvFmtDuration(r.durationSec)} · ${done}/${tasks.length} tasks · ${r.findings} finding${r.findings===1?'':'s'}${r.critHigh?` (${r.critHigh} high)`:''}</div>`
+    + `<div class="cv-note">This is the mission that plays in the cockpit — the full recorded run, replayable end to end.</div></div></div>`;
+}
+function renderSampleMemory(){
+  const el = document.getElementById('memory'); if(!el) return;
+  const rows = [
+    ['decision', 'retry backoff must be jittered', 'to avoid thundering-herd on a shared dependency'],
+    ['lesson', 'context cancellation beats a fixed deadline', 'so a caller can abort a slow retry loop'],
+    ['reference', 'table-driven tests for max-retries', 'cover 0, 1, N and the exhausted case'],
+  ];
+  el.innerHTML = `<div class="cv-pane"><div class="cv-explain">${cvSampleTag()} The shared corpus every agent reads from and writes back to — it grows as the herd learns. Populated live from the brain in the product.</div>`
+    + rows.map(([k,t,w]) => `<div class="cv-memrow"><span class="cv-kind">${esc(k)}</span><b>${esc(t)}</b><div class="cv-meta">${esc(w)}</div></div>`).join('') + '</div>';
+}
+function renderSampleSkills(){
+  const el = document.getElementById('skills'); if(!el) return;
+  const skills = [
+    ['go-retry-backoff', 'skills/go/retry-backoff', 'exponential backoff with jitter + context cancellation'],
+    ['table-tests', 'skills/go/table-tests', 'idiomatic table-driven test scaffolding'],
+    ['egress-scan', 'skills/security/egress-scan', 'vet output for secrets before it ships'],
+  ];
+  el.innerHTML = `<div class="cv-pane"><div class="cv-explain">${cvSampleTag()} Skills the fleet shares — synced by every member, versioned in the brain so one change propagates to all.</div>`
+    + skills.map(([n,p,d]) => `<div class="cv-skrow"><b>${esc(n)}</b> <span class="cv-meta">${esc(p)}</span><div class="cv-meta">${esc(d)}</div></div>`).join('') + '</div>';
+}
+function renderSampleProposals(){
+  const el = document.getElementById('proposals'); if(!el) return;
+  el.innerHTML = `<div class="cv-pane"><div class="cv-explain">${cvSampleTag()} The learning loop's human gate — the herd clusters findings into proposals; you approve what becomes standing memory or a shared skill.</div>`
+    + `<div class="cv-prop"><div class="cv-mhdr"><span class="cv-sig">retry without jitter → thundering herd</span><span class="cv-count">3×</span></div>`
+    + `<div class="cv-meta">Add jitter to backoff; the pentester flagged it across two missions.</div>`
+    + `<div class="cv-pactions"><button class="cv-acc" disabled>approve</button><button class="cv-rej" disabled>dismiss</button></div></div></div>`;
+}
+// cockpitView: the site's tab switcher. Normalizes 'replay' → swarm (the stage
+// is the swarm surface here), toggles the active tab + the shown panel + the
+// replay bar, and renders the selected view from the recorded tape.
+function cockpitView(v){
+  if(v === 'replay') v = 'swarm';
+  const tabs = ['swarm','progress','topology','memory','skills','proposals','completed'];
+  tabs.forEach(t => { const el = document.getElementById('tab-' + t); if(el) el.classList.toggle('active', t === v); });
+  const panels = ['progress','topology','memory','skills','proposals','completed'];
+  panels.forEach(p => { const el = document.getElementById(p); if(el) el.classList.toggle('show', p === v); });
+  const bar = document.getElementById('replay'); if(bar) bar.classList.toggle('show', v === 'swarm');
+  if(v === 'progress') renderReplayProgress();
+  else if(v === 'topology') renderReplayTopology();
+  else if(v === 'completed') renderReplayCompleted();
+  else if(v === 'memory') renderSampleMemory();
+  else if(v === 'skills') renderSampleSkills();
+  else if(v === 'proposals') renderSampleProposals();
+}
+
 // Export inline handlers to window so they work reliably when the player
 // is loaded as a classic script by an Astro component.
 window.setSkin = setSkin;
@@ -1291,3 +1451,4 @@ window.toggleReplayPlay = toggleReplayPlay;
 window.seekReplay = seekReplay;
 window.setReplaySpeed = setReplaySpeed;
 window.closeReplay = closeReplay;
+window.cockpitView = cockpitView;

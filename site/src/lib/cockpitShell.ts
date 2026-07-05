@@ -22,6 +22,7 @@ function section(name: string): string {
 }
 
 export const cockpitHud = section('HUD');
+export const cockpitViews = section('VIEWS');
 export const cockpitTasks = section('TASKS');
 export const cockpitAgents = section('AGENTS');
 export const cockpitFindings = section('FINDINGS');

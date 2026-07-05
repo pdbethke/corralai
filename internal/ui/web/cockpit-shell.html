@@ -63,3 +63,22 @@
 <!-- COCKPIT-SHELL:EXEC:BEGIN -->
 <div id="exec"></div>
 <!-- COCKPIT-SHELL:EXEC:END -->
+<!-- COCKPIT-SHELL:VIEWS:BEGIN -->
+<!-- The tab-switched view panels. On the live product these are filled from
+     lastState (see index.html's render*); on the replay/demo surface the shared
+     replay-player.js reduces the recorded tape into progress/topology/completed
+     and renders a labeled sample for memory/skills/proposals (never recorded —
+     they come from live /api/* on the product). This VIEWS fragment is imported
+     by the site only (cockpitViews in cockpitShell.ts); it is intentionally NOT
+     in sync-site-assets.sh's SECTIONS, because index.html already carries its
+     own copies of these panels with live-only structure (the memory search box
+     etc.) that the demo must not show. -->
+<div class="cockpit-views">
+  <div id="progress" class="cview"></div>
+  <div id="topology" class="cview"></div>
+  <div id="memory" class="cview"></div>
+  <div id="skills" class="cview"></div>
+  <div id="proposals" class="cview"></div>
+  <div id="completed" class="cview"></div>
+</div>
+<!-- COCKPIT-SHELL:VIEWS:END -->

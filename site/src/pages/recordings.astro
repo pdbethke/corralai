@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Elastic-2.0
 import '../styles/global.css';
 import analytics from '../data/analytics.json';
-import { cockpitHud, cockpitTasks, cockpitAgents, cockpitFindings, cockpitExec } from '../lib/cockpitShell';
+import { cockpitHud, cockpitViews, cockpitTasks, cockpitAgents, cockpitFindings, cockpitExec } from '../lib/cockpitShell';
 
 // Enumerate committed recordings by glob — no manifest file to drift.
 const streamModules = import.meta.glob('../data/recordings/*.json', { eager: true });
@@ -100,6 +100,7 @@ const maxModelFindings = Math.max(1, ...analytics.findings_by_model.map((r: any)
         <div class="cockpit-agents" set:html={cockpitAgents} />
         <div class="cockpit-findings" set:html={cockpitFindings} />
       </aside>
+      <div set:html={cockpitViews} />
     </div>
     <div class="cockpit-exec" set:html={cockpitExec} />
   </div>
@@ -201,10 +202,42 @@ const maxModelFindings = Math.max(1, ...analytics.findings_by_model.map((r: any)
      (Task 12) so replay drives the whole viewport, not just the canvas. */
   #stage-frame { max-width: 1240px; margin: 0 auto; padding: 0 20px; }
   #cockpit {
-    display: grid; grid-template-columns: 220px 1fr 260px;
+    display: grid; grid-template-columns: 220px 1fr 260px; position: relative;
     background: var(--stage-bg); border: 1px solid var(--stage-line); border-top: none;
     box-shadow: 0 18px 44px rgba(30,20,0,.22); overflow: hidden;
   }
+  /* Tab-switched view panels overlay the cockpit body, driven by the shared
+     cockpitView() in replay-player.js — progress/topology/completed from the
+     selected recording's tape, a labeled sample for the never-recorded rest. */
+  :global(#cockpit .cview) { display: none; }
+  :global(#cockpit .cview.show) {
+    display: block; position: absolute; inset: 0; z-index: 6; overflow: auto;
+    background: var(--stage-bg); color: var(--stage-fg); padding: 16px 18px;
+    font-size: 13px; line-height: 1.5;
+  }
+  :global(#cockpit .cv-pane) { max-width: 820px; }
+  :global(#cockpit .cv-mission), :global(#cockpit .cv-prop), :global(#cockpit .cv-hub) {
+    border: 1px solid var(--stage-line); border-radius: 8px; padding: 12px 14px; margin-bottom: 12px; background: var(--stage-panel);
+  }
+  :global(#cockpit .cv-mhdr) { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+  :global(#cockpit .cv-dir), :global(#cockpit .cv-sig) { font-weight: 600; color: var(--stage-fg); }
+  :global(#cockpit .cv-pill) { font-size: 11px; padding: 1px 8px; border-radius: 999px; text-transform: uppercase; letter-spacing: .5px; }
+  :global(#cockpit .cv-pill.done) { background: #1f6f2e; color: #d6ffdf; }
+  :global(#cockpit .cv-pill.run) { background: var(--stage-amber); color: var(--stage-bg); }
+  :global(#cockpit .cv-sum) { color: var(--stage-muted); margin-bottom: 10px; }
+  :global(#cockpit .cv-step), :global(#cockpit .cv-agent) { display: flex; align-items: baseline; gap: 8px; padding: 3px 0; flex-wrap: wrap; }
+  :global(#cockpit .cv-memrow), :global(#cockpit .cv-skrow) { display: block; padding: 8px 0; border-bottom: 1px solid var(--stage-line); }
+  :global(#cockpit .cv-dot) { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; align-self: center; }
+  :global(#cockpit .cv-status), :global(#cockpit .cv-role), :global(#cockpit .cv-meta) { color: var(--stage-muted); font-size: 12px; }
+  :global(#cockpit .cv-kind) { display: inline-block; font-size: 11px; color: var(--stage-amber); text-transform: uppercase; letter-spacing: .5px; margin-right: 8px; }
+  :global(#cockpit .cv-explain), :global(#cockpit .cv-note), :global(#cockpit .cv-tsum) { color: var(--stage-muted); font-size: 12px; margin-bottom: 12px; }
+  :global(#cockpit .cv-note) { margin-top: 12px; }
+  :global(#cockpit .cv-count) { margin-left: auto; color: var(--stage-muted); font-size: 12px; }
+  :global(#cockpit .cv-sample) {
+    display: inline-block; font-size: 10px; text-transform: uppercase; letter-spacing: .6px;
+    background: var(--stage-line); color: var(--stage-fg); border-radius: 4px; padding: 1px 6px; margin-right: 8px; vertical-align: middle;
+  }
+  :global(#cockpit .cv-pactions button) { margin-right: 8px; margin-top: 8px; font-size: 12px; padding: 3px 10px; border-radius: 5px; border: 1px solid var(--stage-line); background: var(--stage-panel); color: var(--stage-muted); opacity: .6; }
   :global(#stage-frame #hud) {
     position: relative; inset: auto; height: 42px; display: flex; align-items: baseline; gap: 14px;
     padding: 10px 14px; background: var(--stage-bg); color: var(--stage-fg);
@@ -306,9 +339,12 @@ const maxModelFindings = Math.max(1, ...analytics.findings_by_model.map((r: any)
 <script src="/replay-player.js" is:inline></script>
 <script define:vars={{ streams }} is:inline>
   // Same minimal DOM contract as Hero.astro (see replay-player.js's header).
+  // Real tabs: cockpitView() (replay-player.js) switches the cockpit to the
+  // selected view, reducing the active recording's tape into progress/topology/
+  // completed and a labeled sample for the never-recorded memory/skills/
+  // proposals — the same shared code the hero uses.
   window.setView = function (v) {
-    const bar = document.getElementById('replay');
-    if (bar) bar.classList.toggle('show', v === 'replay');
+    if (typeof cockpitView === 'function') cockpitView(v);
   };
   window.addEventListener('DOMContentLoaded', () => {
     setReplaySpeed(4);

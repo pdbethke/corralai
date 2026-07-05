@@ -16,7 +16,10 @@
 //
 //	CORRAL_BRAIN   brain URL (default http://localhost:9019)
 //	AGENT_NAME       swarm name (default Harness)
-//	AGENT_ROLE       role to serve (default builder)
+//	AGENT_ROLE       role(s) to serve (default builder): a single role, a
+//	               comma-separated list (e.g. "researcher,designer,tester") to
+//	               claim any ready task in that set, or "any"/"*"/empty to
+//	               claim ANY ready task as a pure generalist
 //	AGENT_MODEL      the model driving this harness (e.g. gpt-5.1-codex); adds a
 //	               report_host step so findings attribute to it in model_comparison
 //	AGENT_BACKEND    the backend/vendor for AGENT_MODEL (e.g. openai, anthropic, gemini)
@@ -35,12 +38,15 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/pdbethke/corralai/internal/agentrole"
 )
 
 func env(k, d string) string {
@@ -68,7 +74,10 @@ Usage:
 Env:
   CORRAL_BRAIN   brain URL (default http://localhost:9019)
   AGENT_NAME       swarm name (default Harness)
-  AGENT_ROLE       role to serve (default builder)
+  AGENT_ROLE       role(s) to serve (default builder): a single role, a
+                 comma-separated list (e.g. "researcher,designer,tester") to
+                 claim any ready task in that set, or "any"/"*"/empty to
+                 claim ANY ready task as a pure generalist
   AGENT_MODEL      the model driving this harness (e.g. gpt-5.1-codex); adds a
                  report_host step so findings attribute to it in model_comparison
   AGENT_BACKEND    the backend/vendor for AGENT_MODEL (e.g. openai, anthropic, gemini)
@@ -98,16 +107,25 @@ func mcpConfig(brain string) string {
 // the prompt gains a report_host step: finding attribution is stamped from
 // the HostBook, which ONLY report_host feeds — without it a harness bee's
 // findings show as "(not recorded)" in model_comparison.
-func beePrompt(name, role, instance, desc, model, backend string) string {
+//
+// rs is the parsed AGENT_ROLE (internal/agentrole): a single role, a list, or
+// a generalist ("any"). Its ClaimArg() feeds claim_task's "roles" — an empty
+// array for a generalist, which the brain treats the same as an omitted
+// roles arg (claim any ready task; internal/queue/store.go ClaimNextAs only
+// filters `if len(roles) > 0`) — so a small herd of multi-role bees can cover
+// every planned role instead of deadlocking on the first one nobody staffs.
+func beePrompt(name string, rs agentrole.Set, instance, desc, model, backend string) string {
+	roleDisplay := rs.Display()
+	rolesJSON, _ := json.Marshal(rs.ClaimArg())
 	announce := ""
 	if model != "" {
 		announce = fmt.Sprintf("\n   Then call report_host with {\"name\":%q,\"role\":%q,\"host\":%q,\"model\":%q,\"backend\":%q,\"jail\":\"none\"} so topology and finding attribution know what drives you.",
-			name, role, instance, model, backend)
+			name, roleDisplay, instance, model, backend)
 	}
 	return fmt.Sprintf(`You are %q, a %s bee in a corralai swarm. The MCP server "corral" is the swarm's brain. Work EXACTLY ONE task, then stop.
 
 1. Call bootstrap with {"name":%q,"role":%q,"program":%q} to enter the swarm.%s
-2. Call claim_task with {"name":%q,"roles":[%q],"instance":%q}.
+2. Call claim_task with {"name":%q,"roles":%s,"instance":%q}.
    - If it returns task:null, print exactly IDLE and stop. Do not invent work.
 3. Do the task in the current directory with YOUR OWN tools (write real files,
    run real commands). Before writing a file, call claim_paths on it; if a peer
@@ -121,7 +139,7 @@ func beePrompt(name, role, instance, desc, model, backend string) string {
 6. Call complete_task with {"id":<the task id>,"result":"<one-line summary>"}.
    If it refuses, satisfy the stated reason and try once more.
 7. Print a one-line summary of what you did.`,
-		name, role, name, role, desc, announce, name, role, instance)
+		name, roleDisplay, name, roleDisplay, desc, announce, name, string(rolesJSON), instance)
 }
 
 func expand(tmpl string, sub map[string]string) string {
@@ -174,8 +192,9 @@ func main() {
 		}
 	}
 	brain := env("CORRAL_BRAIN", "http://localhost:9019")
+	rs := agentrole.Parse(env("AGENT_ROLE", "builder"))
+	role := rs.Display() // e.g. "builder", "researcher+designer", or "generalist"
 	name := env("AGENT_NAME", "Harness")
-	role := env("AGENT_ROLE", "builder")
 	ws := env("AGENT_WORKSPACE", ".")
 	tmpl := os.Getenv("HARNESS_CMD")
 	if tmpl == "" {
@@ -197,7 +216,7 @@ func main() {
 	defer os.Remove(cfgPath)
 
 	instance, _ := os.Hostname()
-	prompt := beePrompt(name, role, instance, desc, os.Getenv("AGENT_MODEL"), os.Getenv("AGENT_BACKEND"))
+	prompt := beePrompt(name, rs, instance, desc, os.Getenv("AGENT_MODEL"), os.Getenv("AGENT_BACKEND"))
 	if pf := os.Getenv("AGENT_PROMPT_FILE"); pf != "" {
 		b, err := os.ReadFile(pf) // #nosec G304 G703 -- AGENT_PROMPT_FILE is the operator's own prompt-override path (launcher config, same trust domain as HARNESS_CMD itself), not tainted input
 		if err != nil {

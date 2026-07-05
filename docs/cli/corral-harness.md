@@ -17,7 +17,10 @@ Usage:
 Env:
   CORRAL_BRAIN   brain URL (default http://localhost:9019)
   AGENT_NAME       swarm name (default Harness)
-  AGENT_ROLE       role to serve (default builder)
+  AGENT_ROLE       role(s) to serve (default builder): a single role, a
+                 comma-separated list (e.g. "researcher,designer,tester") to
+                 claim any ready task in that set, or "any"/"*"/empty to
+                 claim ANY ready task as a pure generalist
   AGENT_MODEL      the model driving this harness (e.g. gpt-5.1-codex); adds a
                  report_host step so findings attribute to it in model_comparison
   AGENT_BACKEND    the backend/vendor for AGENT_MODEL (e.g. openai, anthropic, gemini)

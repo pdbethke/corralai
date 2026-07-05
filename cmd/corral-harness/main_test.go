@@ -5,6 +5,8 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"github.com/pdbethke/corralai/internal/agentrole"
 )
 
 func TestSplitCmdQuoting(t *testing.T) {
@@ -33,7 +35,7 @@ func TestExpandSubstitutesWholeToken(t *testing.T) {
 }
 
 func TestBeePromptCarriesTheContract(t *testing.T) {
-	p := beePrompt("Cody", "builder", "host-1", "claude (headless harness)", "", "")
+	p := beePrompt("Cody", agentrole.Parse("builder"), "host-1", "claude (headless harness)", "", "")
 	for _, must := range []string{
 		"bootstrap", "claim_task", "complete_task", "claim_paths",
 		"report_finding", "report_execution", "search_memory", "add_memory",
@@ -50,13 +52,42 @@ func TestBeePromptCarriesTheContract(t *testing.T) {
 	}
 }
 
+// Multi-role: a comma-separated AGENT_ROLE claims any ready task across the
+// whole set (#23/#39 — a small herd covering all planned roles).
+func TestBeePromptMultiRoleClaimsWholeSet(t *testing.T) {
+	p := beePrompt("Cody", agentrole.Parse("researcher, designer,tester"), "host-1", "claude (headless harness)", "", "")
+	for _, must := range []string{
+		`"roles":["researcher","designer","tester"]`,
+		"researcher+designer+tester", // role display in the "you are a %s bee" line and bootstrap's role field
+	} {
+		if !strings.Contains(p, must) {
+			t.Fatalf("multi-role bee prompt missing %q:\n%s", must, p)
+		}
+	}
+}
+
+// Generalist: AGENT_ROLE=any/*/empty must OMIT the roles filter — an empty
+// array reaches the brain's documented "claim any ready task" behaviour the
+// same as omitting the key (internal/queue/store.go ClaimNextAs).
+func TestBeePromptAnyRoleOmitsFilter(t *testing.T) {
+	for _, raw := range []string{"any", "*", ""} {
+		p := beePrompt("Cody", agentrole.Parse(raw), "host-1", "claude (headless harness)", "", "")
+		if !strings.Contains(p, `"roles":[]`) {
+			t.Fatalf("AGENT_ROLE=%q: bee prompt must claim with an empty roles filter, got:\n%s", raw, p)
+		}
+		if !strings.Contains(p, "generalist") {
+			t.Fatalf("AGENT_ROLE=%q: bee prompt must announce as generalist:\n%s", raw, p)
+		}
+	}
+}
+
 // Model attribution: findings are stamped from the HostBook, which only
 // report_host feeds. A harness bee that never calls report_host files
 // findings that show as "(not recorded)" in model_comparison — so when the
 // operator declares AGENT_MODEL/AGENT_BACKEND, the prompt must instruct the
 // harness to announce them.
 func TestBeePromptAnnouncesDeclaredModel(t *testing.T) {
-	p := beePrompt("Cody", "reviewer", "host-1", "codex (headless harness)", "gpt-5.1-codex", "openai")
+	p := beePrompt("Cody", agentrole.Parse("reviewer"), "host-1", "codex (headless harness)", "gpt-5.1-codex", "openai")
 	for _, must := range []string{
 		"report_host",
 		`"model":"gpt-5.1-codex"`,

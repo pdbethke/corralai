@@ -21,6 +21,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/pdbethke/corralai/internal/admission"
+	"github.com/pdbethke/corralai/internal/agentrole"
 	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
@@ -57,8 +58,13 @@ Usage:
 
 Env:
   CORRAL_BRAIN       brain URL (default http://127.0.0.1:9019/mcp/)
-  AGENT_ROLE         builder | tester | pentester | reviewer (default builder)
-  AGENT_NAME         display name in the swarm UI (default same as AGENT_ROLE)
+  AGENT_ROLE         role(s) to serve (default builder): a single role
+                     (builder | tester | pentester | reviewer | ...), a
+                     comma-separated list (e.g. "researcher,designer,tester")
+                     to claim any ready task in that set, or "any"/"*"/empty
+                     to claim ANY ready task as a pure generalist
+  AGENT_NAME         display name in the swarm UI (default same as AGENT_ROLE,
+                     e.g. "researcher+designer" or "generalist")
   AGENT_WORKSPACE    working directory for edits (default $TMPDIR/corral-demo-ws)
   MODEL_BACKEND      ollama (default) | openai (Gemini/OpenRouter/local, any OpenAI-compatible endpoint)
   AGENT_MODEL        model name passed to the backend (default qwen2.5-coder:7b)
@@ -156,9 +162,19 @@ func main() {
 	}
 	var (
 		brainURL = env("CORRAL_BRAIN", "http://127.0.0.1:9019/mcp/")
-		role     = env("AGENT_ROLE", "builder") // builder | tester | pentester | reviewer
-		name     = env("AGENT_NAME", role)
-		ws       = env("AGENT_WORKSPACE", filepath.Join(os.TempDir(), "corral-demo-ws"))
+		// rs is the parsed AGENT_ROLE: a single role, a comma-list, or a
+		// generalist ("any"/"*"/empty). role is its display form — unchanged
+		// for a single role, "+"-joined for a list, "generalist" for any —
+		// used everywhere the old single-role string was (bootstrap, logs,
+		// report_host, AGENT_NAME's default). Only claim_task's actual
+		// filter (rs.ClaimArg(), wired in runQueueLoop) needs the real set:
+		// a small herd of multi-role bees can then cover every role a
+		// mission plans instead of deadlocking on the first one nobody
+		// staffs (#23/#39).
+		rs   = agentrole.Parse(env("AGENT_ROLE", "builder"))
+		role = rs.Display()
+		name = env("AGENT_NAME", role)
+		ws   = env("AGENT_WORKSPACE", filepath.Join(os.TempDir(), "corral-demo-ws"))
 	)
 	backend := newBackend() // MODEL_BACKEND: ollama (default) | openai (Gemini/OpenRouter/local) — NOT hard-wired
 	modelDesc := env("MODEL_BACKEND", "ollama") + ":" + env("AGENT_MODEL", "qwen2.5-coder:7b")
@@ -276,7 +292,7 @@ func main() {
 	// demo mode: self-assigned role work (the existing demo profiles).
 	switch env("AGENT_MODE", "queue") {
 	case "queue":
-		runQueueLoop(ctx, backend, name, role, ws, brain, tools)
+		runQueueLoop(ctx, backend, name, role, rs, ws, brain, tools)
 		return
 	case "lead":
 		runLeadLoop(ctx, backend, name, brain)
@@ -310,10 +326,13 @@ func main() {
 	fmt.Printf("\n[%s/%s] done.\n", name, role)
 }
 
-// runQueueLoop is the bee's pull loop: claim the next ready task for this role,
-// execute it, complete it, repeat; idle-poll (heart-beating) when the queue is
-// empty. Runs until the process is stopped — a worker, not a one-shot.
-func runQueueLoop(ctx context.Context, backend Backend, name, role, ws string, brain func(string, map[string]any) string, tools []any) {
+// runQueueLoop is the bee's pull loop: claim the next ready task for this
+// worker's role set, execute it, complete it, repeat; idle-poll
+// (heart-beating) when the queue is empty. Runs until the process is
+// stopped — a worker, not a one-shot. role is the display string (for logs
+// and reporting); rs.ClaimArg() is the actual claim_task filter — a list for
+// multi-role, or empty for a generalist (claims any ready task).
+func runQueueLoop(ctx context.Context, backend Backend, name, role string, rs agentrole.Set, ws string, brain func(string, map[string]any) string, tools []any) {
 	poll := 3 * time.Second
 	if v := os.Getenv("AGENT_POLL_SECONDS"); v != "" {
 		var n int
@@ -346,7 +365,7 @@ func runQueueLoop(ctx context.Context, backend Backend, name, role, ws string, b
 			} `json:"task"`
 			Error string `json:"error"`
 		}
-		raw := brain("claim_task", map[string]any{"roles": []string{role}, "instance": instance})
+		raw := brain("claim_task", map[string]any{"roles": rs.ClaimArg(), "instance": instance})
 		// NEVER silently equate a failed claim with an empty queue: a lost reply
 		// here is how a claim gets orphaned while the bee heartbeats idle.
 		if err := json.Unmarshal([]byte(raw), &out); err != nil {

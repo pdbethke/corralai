@@ -17,8 +17,13 @@ Usage:
 
 Env:
   CORRAL_BRAIN       brain URL (default http://127.0.0.1:9019/mcp/)
-  AGENT_ROLE         builder | tester | pentester | reviewer (default builder)
-  AGENT_NAME         display name in the swarm UI (default same as AGENT_ROLE)
+  AGENT_ROLE         role(s) to serve (default builder): a single role
+                     (builder | tester | pentester | reviewer | ...), a
+                     comma-separated list (e.g. "researcher,designer,tester")
+                     to claim any ready task in that set, or "any"/"*"/empty
+                     to claim ANY ready task as a pure generalist
+  AGENT_NAME         display name in the swarm UI (default same as AGENT_ROLE,
+                     e.g. "researcher+designer" or "generalist")
   AGENT_WORKSPACE    working directory for edits (default $TMPDIR/corral-demo-ws)
   MODEL_BACKEND      ollama (default) | openai (Gemini/OpenRouter/local, any OpenAI-compatible endpoint)
   AGENT_MODEL        model name passed to the backend (default qwen2.5-coder:7b)

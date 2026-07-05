@@ -31,7 +31,7 @@ type phaseSpecIn struct {
 }
 type createMissionIn struct {
 	Directive      string        `json:"directive" jsonschema:"the high-level goal, e.g. 'add a wishlist feature'"`
-	Plan           []phaseSpecIn `json:"plan,omitempty" jsonschema:"optional custom phases; omit for the default research -> design -> build -> verify -> integrate -> docs -> retro pipeline"`
+	Plan           []phaseSpecIn `json:"plan,omitempty" jsonschema:"optional custom phases; omit to let the brain scale the plan to the directive's complexity (lean build->test, standard design->build->test->integrate->docs, or the full research->design->build->verify->integrate->docs->retro pipeline)"`
 	RequiresReview bool          `json:"requires_review,omitempty" jsonschema:"if true, the mission waits for a client review (accept or feedback) instead of auto-completing — enables sprints"`
 	Repo           string        `json:"repo,omitempty" jsonschema:"git repo URL to build in (omit for a workspace-only mission)"`
 	Base           string        `json:"base,omitempty" jsonschema:"base branch to branch from (default main)"`
@@ -71,8 +71,14 @@ func registerMissions(s *mcp.Server, store *mission.Store, q *queue.Store, mem *
 			}
 			// Learning loop: materialize the plan, then inject lessons recalled from
 			// memory so past mistakes actively shape this mission's instructions.
+			// ScaledPlan scales the plan's ceremony to the directive's own
+			// complexity (lean/standard/full) — a trivial greenfield ask still
+			// gets built AND tested, it just doesn't pay for a research phase,
+			// a pentester, a perf pass, and a separate integrator it doesn't
+			// warrant. Substantial or security/infra-touching directives still
+			// get the complete researcher…reviewer arc (DefaultPlan).
 			if len(specs) == 0 {
-				specs = mission.DefaultPlan(in.Directive)
+				specs = mission.ScaledPlan(in.Directive)
 			}
 			// Learning loop: inject VETTED items only — lessons, then promoted
 			// guidance, then skill pointers — capped at 3 total. The gate below

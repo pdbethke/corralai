@@ -44,6 +44,11 @@ type RepoOps interface {
 	// OpenPR creates a change request for the given repoURL.
 	OpenPR(ctx context.Context, repoURL, head, base, title, body string) (string, error)
 	ChangedFiles(ctx context.Context, dir string) ([]string, error)
+	// ChangedFilesRange returns the mission's cumulative changed-file set — the
+	// diff between base and HEAD, not just the most recent commit. The egress
+	// scan gate uses this (not ChangedFiles) so a secret committed in an
+	// earlier phase is still caught at push time, not just the last phase's diff.
+	ChangedFilesRange(ctx context.Context, dir, base string) ([]string, error)
 	// ListReviews returns reviews for the given repoURL+PR number.
 	ListReviews(ctx context.Context, repoURL string, pr int, etag string) ([]ReviewInfo, string, bool, error)
 	// ListReviewComments returns inline comments for the given repoURL+PR number.
@@ -55,6 +60,26 @@ type RepoOps interface {
 	// AuthLogin returns the bot's login on the forge that hosts repoURL, so the
 	// review self-filter uses the correct per-forge identity.
 	AuthLogin(ctx context.Context, repoURL string) (string, error)
+}
+
+// EgressFinding mirrors egress.Finding so the mission package never imports
+// internal/egress directly (same structural decoupling as ReviewInfo mirroring
+// repo.Review). Severity is "block" (a detected secret — the auto-PR must be
+// withheld) or "advisory" (surfaced as a finding but does not stop the push).
+type EgressFinding struct {
+	Path     string
+	Line     int
+	Rule     string
+	Sample   string
+	Severity string // "block" | "advisory"
+}
+
+// EgressScanner vets a mission's changed files right before they leave the
+// brain (push + PR open) — the forge-agnostic egress gate. It runs regardless
+// of which forge the mission targets. A nil Engine.Egress disables scanning
+// entirely, leaving the push/PR flow for clean output unchanged.
+type EgressScanner interface {
+	Scan(ctx context.Context, dir string, files []string) []EgressFinding
 }
 
 // Indexer is the interface the mission engine uses to index files changed by
@@ -88,6 +113,13 @@ type Engine struct {
 	Repo      RepoOps
 	Workspace string
 
+	// Egress, when non-nil, scans a mission's cumulative changed-file set for
+	// secrets (blocking) and advisory issues (Go dep vulns, incompatible
+	// license files) right before push+PR — the last brain-side checkpoint
+	// before the herd's output leaves for the forge. Nil disables the gate
+	// entirely; a clean change set then proceeds exactly as before.
+	Egress EgressScanner
+
 	// Index, when non-nil, indexes the files changed by each gate-passed commit
 	// and drops the per-mission index when the mission completes. Nil means skip
 	// indexing (search is an aid, not a gate — never blocks Tick).
@@ -118,6 +150,14 @@ type Engine struct {
 	prAttempts map[int64]int
 	prGaveUp   map[int64]bool
 
+	// egressBlocked records missions whose changed files tripped a blocking
+	// egress finding (a detected secret). Permanent, unlike prGaveUp's retry
+	// cap: a secret doesn't disappear on the next tick, so retrying push/PR
+	// would just re-detect it forever. A human must intervene (fix the mission's
+	// working copy / rotate the credential) — this map only prevents the
+	// reconcile loop from hammering the same blocked mission every tick.
+	egressBlocked map[int64]bool
+
 	// etags caches the ETag returned by GitHub's ListReviews per mission, enabling
 	// 304-Not-Modified short-circuits that cost ~0 API quota.
 	etags map[int64]string
@@ -146,6 +186,7 @@ func NewEngine(m *Store, q *queue.Store) *Engine {
 		committed:         map[int64]map[string]bool{},
 		prAttempts:        map[int64]int{},
 		prGaveUp:          map[int64]bool{},
+		egressBlocked:     map[int64]bool{},
 		etags:             map[int64]string{},
 		botLogins:         map[string]string{},
 	}
@@ -297,6 +338,49 @@ func (e *Engine) commitDonePhases(m *Mission) {
 	}
 }
 
+// runEgressGate scans the mission's cumulative changed-file set (base...HEAD,
+// not just the last commit) right before push+PR — the last brain-side
+// checkpoint before the herd's output leaves for the forge. Every finding is
+// filed as a queue.Finding so it is visible the same way any other finding is
+// (UI feed, learn sweep, resolve_finding). It returns true iff a BLOCKING
+// finding (a detected secret) was seen, in which case the mission is parked in
+// egressBlocked and push/PR is withheld — loud (logged) and blocking, per the
+// egress-scan gate contract. Advisory findings (dep vulns, license issues) are
+// filed but never withhold the push.
+func (e *Engine) runEgressGate(m *Mission) bool {
+	files, err := e.Repo.ChangedFilesRange(context.Background(), e.workdir(m), m.Base)
+	if err != nil {
+		log.Printf("mission %d: egress: changed-files: %v (scan skipped, not blocked)", m.ID, err)
+		return false
+	}
+	if len(files) == 0 {
+		return false
+	}
+	findings := e.Egress.Scan(context.Background(), e.workdir(m), files)
+	blocked := false
+	for _, f := range findings {
+		sev := "high"
+		if f.Severity == "block" {
+			sev = "critical"
+			blocked = true
+		}
+		_, ferr := e.q.AddFinding(queue.Finding{
+			MissionID: m.ID, Reporter: "egress-scan", Type: "vuln", Severity: sev,
+			Target:          f.Path,
+			Evidence:        fmt.Sprintf("line %d: %s: %s", f.Line, f.Rule, f.Sample),
+			SuggestedAction: "remove the offending content (and rotate any exposed credential) before this mission can ship",
+		})
+		if ferr != nil {
+			log.Printf("mission %d: egress: record finding: %v", m.ID, ferr)
+		}
+	}
+	if blocked {
+		e.egressBlocked[m.ID] = true
+		log.Printf("mission %d: EGRESS BLOCKED — secret(s) detected in changed files; push/PR withheld (%d finding(s))", m.ID, len(findings))
+	}
+	return blocked
+}
+
 // finishRepoMission pushes the mission's branch and opens a PR. Errors are
 // logged (never crash Tick) and the local branch is always preserved.
 //
@@ -306,14 +390,17 @@ func (e *Engine) commitDonePhases(m *Mission) {
 // in prGaveUp and skipped silently until the process restarts or the PRURL is
 // set out of band.
 func (e *Engine) finishRepoMission(id int64) {
-	if e.prGaveUp[id] {
-		return // already exhausted retries — no work, no log
+	if e.prGaveUp[id] || e.egressBlocked[id] {
+		return // already exhausted retries, or blocked on a detected secret — no work, no log
 	}
 	m, err := e.m.Mission(id)
 	if err != nil || m == nil || m.Repo == "" {
 		return
 	}
 	e.commitDonePhases(m) // catch any final phase not yet committed
+	if e.Egress != nil && e.runEgressGate(m) {
+		return // blocked: findings filed, push/PR withheld
+	}
 	if err := e.Repo.Push(context.Background(), e.workdir(m), m.Branch); err != nil {
 		log.Printf("mission %d: push: %v (local branch preserved)", id, err)
 		e.recordPRFailure(id)

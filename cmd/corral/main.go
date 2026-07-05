@@ -73,6 +73,7 @@ import (
 	"github.com/pdbethke/corralai/internal/auth"
 	"github.com/pdbethke/corralai/internal/brain"
 	"github.com/pdbethke/corralai/internal/coord"
+	"github.com/pdbethke/corralai/internal/egress"
 	"github.com/pdbethke/corralai/internal/embed"
 	"github.com/pdbethke/corralai/internal/fleet"
 	"github.com/pdbethke/corralai/internal/gateway"
@@ -698,8 +699,10 @@ func main() {
 		repoEng = repo.NewWithForges(tok, forges)
 		engine.Repo = &repoAdapter{e: repoEng}
 		engine.Workspace = repoWorkspace
+		engine.Egress = egressAdapter{}
 		log.Printf("repo: engine enabled (workspace %s, forges %d, github token set=%v)", // #nosec G706 -- operator-controlled config, not user input
 			repoWorkspace, len(forges), tok != "")
+		log.Printf("egress: gate enabled — changed files scanned for secrets (blocking) + advisory dep/license issues before push+PR")
 	} else {
 		log.Printf("repo: disabled (set CORRALAI_GIT_TOKEN or CORRALAI_REPO_ENABLE=1 to enable repo-work missions)")
 	}
@@ -1063,6 +1066,23 @@ func (a *repoAdapter) OpenPR(ctx context.Context, repoURL, head, base, title, bo
 }
 func (a *repoAdapter) ChangedFiles(ctx context.Context, dir string) ([]string, error) {
 	return a.e.ChangedFiles(ctx, dir)
+}
+func (a *repoAdapter) ChangedFilesRange(ctx context.Context, dir, base string) ([]string, error) {
+	return a.e.ChangedFilesRange(ctx, dir, base)
+}
+
+// egressAdapter wires internal/egress into mission.EgressScanner — the same
+// single-conversion-point pattern as repoAdapter, keeping the mission package
+// from importing internal/egress directly.
+type egressAdapter struct{}
+
+func (egressAdapter) Scan(ctx context.Context, dir string, files []string) []mission.EgressFinding {
+	findings := egress.Scan(ctx, dir, files)
+	out := make([]mission.EgressFinding, len(findings))
+	for i, f := range findings {
+		out[i] = mission.EgressFinding{Path: f.Path, Line: f.Line, Rule: f.Rule, Sample: f.Sample, Severity: f.Severity}
+	}
+	return out
 }
 func (a *repoAdapter) ListReviews(ctx context.Context, repoURL string, pr int, etag string) ([]mission.ReviewInfo, string, bool, error) {
 	revs, newEtag, notMod, err := a.e.ListReviews(ctx, repoURL, pr, etag)

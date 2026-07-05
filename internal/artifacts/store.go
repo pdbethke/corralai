@@ -224,3 +224,28 @@ func (s *Store) Count() int {
 	_ = s.db.QueryRow(`SELECT COUNT(*) FROM artifacts WHERE deleted=0`).Scan(&n)
 	return n
 }
+
+// ListKind returns every live (non-tombstone) artifact of the given kind
+// ('skill' or 'hook'), WITH content, ordered by path. Used by the UI's fleet
+// skills listing (/api/skills) — a small, cheap read (skill files are short
+// markdown, not the multi-MB blobs sync deals with in bulk).
+func (s *Store) ListKind(kind string) ([]Artifact, error) {
+	rows, err := s.db.Query(`
+		SELECT path, kind, content, sha256, rev, updated_ts, updated_by, deleted
+		FROM artifacts WHERE kind=? AND deleted=0 ORDER BY path ASC`, kind)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Artifact
+	for rows.Next() {
+		var a Artifact
+		var del int
+		if err := rows.Scan(&a.Path, &a.Kind, &a.Content, &a.Sha256, &a.Rev, &a.UpdatedTS, &a.UpdatedBy, &del); err != nil {
+			return nil, err
+		}
+		a.Deleted = del == 1
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}

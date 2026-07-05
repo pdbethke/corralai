@@ -212,6 +212,20 @@
   .cm-actions button { border:none; border-radius:5px; padding:4px 12px; font-size:12px; margin-right:8px; }
   .cm-actions .cm-details-btn { background:var(--panel); color:var(--fg); border:1px solid var(--line); cursor:pointer; }
   #completed-detail { max-width:800px; margin:0 auto 20px; padding:16px 18px; background:var(--panel); border:1px solid var(--line); border-radius:10px; }
+  /* #skills — the Skills tab: fleet-wide shared skills (kind='skill' in the
+     artifact store), same fixed-overlay + card family as #proposals/#completed.
+     "We share skills, not just memories" made visible: this is the whole
+     fleet's canonical set, not one agent's — see the honest-limit note on
+     the inspector's ".isk" section below. */
+  #skills { position:fixed; inset:42px 0 0 0; z-index:3; display:none; background:var(--bg); overflow:auto; padding:22px 0; }
+  #skills.show { display:block; }
+  .skills-explainer { max-width:840px; margin:0 auto 16px; padding:11px 15px; background:var(--panel);
+    border:1px solid var(--line); border-radius:8px; color:var(--muted); font-size:12.5px; line-height:1.5; }
+  .sk-card { max-width:840px; margin:0 auto 10px; padding:12px 16px; background:var(--panel); border:1px solid var(--line); border-radius:10px; }
+  .sk-name { font-size:14px; font-weight:600; color:var(--fg); font-family:ui-monospace,monospace; }
+  .sk-path { color:var(--muted); font-size:11px; margin-left:8px; }
+  .sk-desc { color:var(--muted); font-size:12.5px; margin-top:4px; }
+  .isk-item { cursor:default; }
   /* #replay — the player's control bar. Unlike #completed/#progress (full-
      screen overlays), replay must NOT cover the canvas: the whole point is
      watching the recorded beats drive the same swarm renderer. So this is a
@@ -338,6 +352,7 @@
       <a class="tab" id="tab-progress" onclick="setView('progress')">progress</a>
       <a class="tab" id="tab-topology" onclick="setView('topology')">topology</a>
       <a class="tab" id="tab-memory" onclick="setView('memory')">memory</a>
+      <a class="tab" id="tab-skills" onclick="setView('skills')">skills</a>
       <a class="tab" id="tab-proposals" onclick="setView('proposals')">proposals<span id="proposals-badge" class="pbadge" style="display:none"></span></a>
       <a class="tab" id="tab-completed" onclick="setView('completed')">completed</a>
     </span>
@@ -379,6 +394,7 @@
   <div id="progress"></div>
   <div id="topology"></div>
   <div id="proposals"></div>
+  <div id="skills"></div>
   <div id="completed"><div id="completed-list"></div><div id="completed-detail" style="display:none"></div></div>
   <div id="replay">
     <div class="row">
@@ -633,6 +649,28 @@ function rejectProposal(id){
     .then(r => { if(!r.ok) return r.text().then(t => alert('reject failed: ' + t)); });
 }
 
+// renderSkillsTab: the fleet's shared skills — "we share skills, not just
+// memories" made visible. Fetches /api/skills (kind='skill' rows in the
+// artifact store, the same store `corral sync` reads/writes) and lists each
+// as name + path + one-line description. This is the WHOLE FLEET's canonical
+// set (what every synced member CAN use), not any one agent's — same honest
+// scope as the fleet-skills section in the agent inspector below.
+function renderSkillsTab(){
+  const el = document.getElementById('skills');
+  if(!el) return;
+  fetch('/api/skills').then(r=>r.json()).then(d=>{
+    const skills = d.skills || [];
+    const explainer = `<div class="skills-explainer">Skills the fleet shares — synced by every member via <code>corral sync</code>, versioned in the brain so a change to one propagates to all. This is the canonical set available fleet-wide, not any one agent's private equip list.</div>`;
+    if(!skills.length){ el.innerHTML = explainer + '<div class="pmt">no shared skills yet — publish one with `corral sync` to seed the fleet.</div>'; return; }
+    const cards = skills.map(sk => `
+      <div class="sk-card">
+        <span class="sk-name">${esc(sk.name)}</span><span class="sk-path">${esc(sk.path)}</span>
+        ${sk.description ? `<div class="sk-desc">${esc(sk.description)}</div>` : ''}
+      </div>`).join('');
+    el.innerHTML = explainer + cards;
+  }).catch(()=>{ el.innerHTML = '<div class="pmt">could not load the fleet\'s skills.</div>'; });
+}
+
 // fmtDuration: seconds -> "Xm Ys" for the Completed tab's card + detail pane.
 function fmtDuration(sec){
   sec = Math.max(0, Math.round(sec||0));
@@ -882,11 +920,13 @@ function setView(v){
   document.getElementById('tab-progress').classList.toggle('active', v==='progress');
   document.getElementById('tab-topology').classList.toggle('active', v==='topology');
   document.getElementById('tab-memory').classList.toggle('active', v==='memory');
+  document.getElementById('tab-skills').classList.toggle('active', v==='skills');
   document.getElementById('tab-proposals').classList.toggle('active', v==='proposals');
   document.getElementById('tab-completed').classList.toggle('active', v==='completed');
   document.getElementById('memory').classList.toggle('show', v==='memory');
   document.getElementById('progress').classList.toggle('show', v==='progress');
   document.getElementById('topology').classList.toggle('show', v==='topology');
+  document.getElementById('skills').classList.toggle('show', v==='skills');
   document.getElementById('proposals').classList.toggle('show', v==='proposals');
   document.getElementById('completed').classList.toggle('show', v==='completed');
   document.getElementById('replay').classList.toggle('show', v==='replay');
@@ -896,6 +936,7 @@ function setView(v){
   if(v==='memory' && !memInit){ memInit = true; loadScopes(); searchMem(); }
   if(v==='progress'){ renderProgress(); }
   if(v==='topology'){ renderTopology(); }
+  if(v==='skills'){ renderSkillsTab(); }
   if(v==='proposals'){ renderProposalsTab(); }
   if(v==='completed'){ renderCompletedTab(); }
 }
@@ -1246,6 +1287,15 @@ function renderAgentWindowBody(name) {
       if (!ad.capabilities.length) h += `<div class="irow ir">none available to it yet</div>`;
       ad.capabilities.forEach(e => { h += `<div class="irow"><span style="color:var(--amber)">${esc(e.name)}</span>${e.public ? ' <span class="ir">public</span>' : ''}</div>`; });
     }
+    // HONEST LIMIT: the brain doesn't track which skills THIS agent equipped
+    // (that dedup/equip bookkeeping is client-side — see internal/artifacts/
+    // store.go's package doc). So this shows the fleet's canonical skill set,
+    // labeled as such, rather than implying per-agent equip data we don't have.
+    if (ad.skills) {
+      h += `<div class="isec">skills it has (${ad.skills.length}) <span class="ir">· fleet skills — synced to every member</span></div>`;
+      if (!ad.skills.length) h += `<div class="irow ir">no shared skills published yet</div>`;
+      ad.skills.forEach(sk => { h += `<div class="irow isk-item"><span style="color:var(--amber)">${esc(sk.name)}</span>${sk.description ? ` <span class="ir">— ${esc(sk.description)}</span>` : ''}</div>`; });
+    }
   } else if (!h.includes('loading')) {
     // detailData not yet loaded — show placeholder without overwriting a real retry message
     h += `<div class="isec">live activity</div><div class="irow ir">fetching…</div>`;
@@ -1342,6 +1392,14 @@ function renderInspector(){
         h+=`<div class="isec">mcp endpoints it can use (${ad.capabilities.length})</div>`;
         if(!ad.capabilities.length) h+=`<div class="irow ir">none available to it yet</div>`;
         ad.capabilities.forEach(e=>h+=`<div class="irow"><span class="p">${esc(e.name)}</span>${e.public?' <span class="ir">public</span>':''}</div>`);
+      }
+      // HONEST LIMIT: no per-agent equip tracking in the brain (dedup/equip
+      // state is client-side — see internal/artifacts/store.go) — this is the
+      // fleet's canonical skill set, labeled as such, not this agent's own.
+      if(ad.skills){
+        h+=`<div class="isec">skills it has (${ad.skills.length}) <span class="ir">· fleet skills — synced to every member</span></div>`;
+        if(!ad.skills.length) h+=`<div class="irow ir">no shared skills published yet</div>`;
+        ad.skills.forEach(sk=>h+=`<div class="irow isk-item"><span class="p">${esc(sk.name)}</span>${sk.description?` <span class="ir">— ${esc(sk.description)}</span>`:''}</div>`);
       }
     }
   } else {

@@ -179,7 +179,7 @@ test('replay-player.js does not clobber the site title', async ({ page }) => {
   // at script-load time. Hero.astro's inline script restores the site's
   // title afterward — assert the restored value wins, not the clobbered one.
   await page.goto('/');
-  await expect(page).toHaveTitle('Corralai — the herd performs live');
+  await expect(page).toHaveTitle('Corralai — a headless brain for a herd of AI agents');
 });
 
 test('the landing hero stays canvas-only and clean — the skin selector is the /recordings cockpit only', async ({ page }) => {

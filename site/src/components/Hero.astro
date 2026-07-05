@@ -7,13 +7,16 @@ const minutes = Math.round((meta.duration_seconds || 0) / 60);
 ---
 <section id="hero">
   <div class="hero-copy">
-    <h1>Watch a herd of AI agents build software. Live. On the record.</h1>
+    <h1>A headless brain that corrals a herd of AI agents — any model — into one mission.</h1>
     <p class="pitch">
-      This hero is a real recorded mission — not a demo reel. Give a headless
-      brain one directive and it turns it into a mission that a team of AI
-      agents plans, builds, verifies, re-plans when they hit problems, and
-      iterates with the client until it's accepted. Every run is recorded and
-      replayable, exactly like the one playing below.
+      Corral is coordination infrastructure, not a demo reel. Give it one
+      directive and it decomposes the work into a mission, hands tasks to a
+      herd of agents that can each run a <em>different</em> model — local 7B
+      to frontier, no vendor lock-in — inside real fences: every command runs
+      jailed, and the only way code leaves is a reviewed pull request. The
+      herd verifies its own work against a deterministic gate, re-plans when
+      it hits problems, and writes what it learns back to shared memory for
+      next time. Every admin action sits behind a human gate.
     </p>
     <p class="proof-row">
       <span>Runs free on a local 7B model — no API keys</span>
@@ -24,7 +27,7 @@ const minutes = Math.round((meta.duration_seconds || 0) / 60);
       {/* single line: Astro collapses a text→newline→expression boundary to
           ZERO chars (not a space), which rendered "done),56 findings" when
           this wrapped after the comma */}
-      Real recorded mission: {meta.task_count} tasks ({meta.done_task_count} done), {meta.finding_count} findings, {minutes}m — replaying at 4× below.
+      And here it is doing exactly that: a real recorded mission — {meta.task_count} tasks ({meta.done_task_count} done), {meta.finding_count} findings, {minutes}m — replaying at 4× below.
     </p>
     <div class="ctas">
       <a class="cta" href="https://github.com/pdbethke/corralai">View on GitHub</a>
@@ -120,5 +123,5 @@ const minutes = Math.round((meta.duration_seconds || 0) / 60);
   // 'CorralAI — the corral' — the product UI's own title, not the site's.
   // Restore the site's title here, verbatim against the <title> in
   // index.astro so this and the a11y "has a <title>" check never drift.
-  document.title = 'Corralai — the herd performs live';
+  document.title = 'Corralai — a headless brain for a herd of AI agents';
 </script>

@@ -1,0 +1,26 @@
+---
+// SPDX-License-Identifier: Elastic-2.0
+---
+<section class="section" id="teams-infra">
+  <h2>Dev infrastructure for a fleet, not a toy for a laptop</h2>
+  <p>
+    Corral isn't scoped to one machine's one swarm. Approved skills and
+    guardrail hooks sync across a whole fleet — <code>corral sync</code>
+    pulls every changed skill/hook, so what one machine's herd learns, every
+    machine's herd can <em>do</em>. Publishing to the fleet is superuser-only
+    (a worker proposes, it can't publish), and hooks are staged for human
+    review rather than auto-applied, because executable guardrails should
+    never silently activate.
+  </p>
+  <p>
+    Optional fleet analytics (MotherDuck) roll missions and telemetry from
+    many brains into one place, with an "ask the fleet" natural-language
+    oracle over the audit trail — and independent swarms can observe each
+    other's claims to avoid colliding on the same work, without ceding
+    control to a shared master. Auth was designed in from day zero: OIDC
+    against any provider, a principal allowlist, signed delegation tokens for
+    spawned subagents, and a human gate that even a superuser's delegation
+    token can't bypass for admin writes.
+  </p>
+  <p><a href="/docs/running-it/">Running it as a team →</a></p>
+</section>

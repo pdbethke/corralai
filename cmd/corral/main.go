@@ -1012,7 +1012,7 @@ func main() {
 	replayStream := func(missionID int64) ([]brain.ReplayEvent, error) {
 		return brain.BuildReplayStream(queueStore, telStore, missionID)
 	}
-	uiHandler := verifier.Wrap(authz(ui.Handler(ui.Deps{Coord: store, Mem: memStore, Gateway: gwStore, Bus: bus, MemOwners: memOwners, Roles: princStore, Queue: queueStore, Missions: missionStore, Executions: execRing, Activity: activityRing, Hosts: hostBook, Narrator: narrator, Telemetry: telStore, Oracle: fleetOracle, RoleModels: roleModels, Learn: learnStore, Promote: proposalPromote, Reject: proposalReject, History: historyList, HistoryDetail: historyDetail, Replay: replayStream})))
+	uiHandler := verifier.Wrap(authz(ui.Handler(ui.Deps{Coord: store, Mem: memStore, Gateway: gwStore, Bus: bus, MemOwners: memOwners, Roles: princStore, Queue: queueStore, Missions: missionStore, Executions: execRing, Activity: activityRing, Hosts: hostBook, Narrator: narrator, Telemetry: telStore, Oracle: fleetOracle, RoleModels: roleModels, Learn: learnStore, Promote: proposalPromote, Reject: proposalReject, History: historyList, HistoryDetail: historyDetail, Replay: replayStream, Artifacts: artStore})))
 	if verifier.Enabled() {
 		log.Printf("ui: bearer-gated (view via `corral-observe`)")
 	} else {

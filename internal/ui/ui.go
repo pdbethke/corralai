@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pdbethke/corralai/internal/artifacts"
 	"github.com/pdbethke/corralai/internal/auth"
 	"github.com/pdbethke/corralai/internal/brain"
 	"github.com/pdbethke/corralai/internal/coord"
@@ -56,6 +57,7 @@ type Server struct {
 	historyFn       func() ([]brain.MissionSummary, error)
 	historyDetailFn func(id int64) (*brain.MissionDetail, error)
 	replayFn        func(missionID int64) ([]brain.ReplayEvent, error)
+	artifacts       *artifacts.Store
 }
 
 // Handler returns the UI routes: / (the page), /api/me (the viewer's identity +
@@ -117,10 +119,16 @@ type Deps struct {
 	// Replay reconstructs a mission's whole build from durable rows for
 	// playback on the canvas. nil => /api/replay is disabled (404).
 	Replay func(missionID int64) ([]brain.ReplayEvent, error)
+	// Artifacts is the fleet's shared skill/hook store — the same one `corral
+	// sync` reads/writes. The UI only ever READS it (/api/skills, the Skills
+	// tab, the agent inspector's fleet-skills section) — publishing stays an
+	// MCP-only, isHumanAdmin-gated action (see internal/brain/artifacts.go).
+	// nil => the Skills tab and inspector section render empty, never a 500.
+	Artifacts *artifacts.Store
 }
 
 func Handler(d Deps) http.Handler {
-	s := &Server{coord: d.Coord, mem: d.Mem, gw: d.Gateway, bus: d.Bus, memOwners: d.MemOwners, roles: d.Roles, queue: d.Queue, missions: d.Missions, execs: d.Executions, acts: d.Activity, hosts: d.Hosts, narrator: d.Narrator, tel: d.Telemetry, oracle: d.Oracle, roleModels: d.RoleModels, learn: d.Learn, promote: d.Promote, reject: d.Reject, historyFn: d.History, historyDetailFn: d.HistoryDetail, replayFn: d.Replay}
+	s := &Server{coord: d.Coord, mem: d.Mem, gw: d.Gateway, bus: d.Bus, memOwners: d.MemOwners, roles: d.Roles, queue: d.Queue, missions: d.Missions, execs: d.Executions, acts: d.Activity, hosts: d.Hosts, narrator: d.Narrator, tel: d.Telemetry, oracle: d.Oracle, roleModels: d.RoleModels, learn: d.Learn, promote: d.Promote, reject: d.Reject, historyFn: d.History, historyDetailFn: d.HistoryDetail, replayFn: d.Replay, artifacts: d.Artifacts}
 	mux := http.NewServeMux()
 	sub, _ := fs.Sub(webFS, "web")
 	mux.Handle("/", http.FileServer(http.FS(sub)))
@@ -131,6 +139,7 @@ func Handler(d Deps) http.Handler {
 	mux.HandleFunc("/api/memory/search", s.memSearch)
 	mux.HandleFunc("/api/memory/get", s.memGet)
 	mux.HandleFunc("/api/agent", s.agentDetail)
+	mux.HandleFunc("/api/skills", s.skills)
 	mux.HandleFunc("/api/instruct", s.instruct)
 	mux.HandleFunc("/api/ask", s.ask)
 	mux.HandleFunc("/api/ask_fleet", s.askFleet)
@@ -426,6 +435,19 @@ func (s *Server) agentDetail(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		out["capabilities"] = caps
+	}
+	// HONEST LIMIT: the brain does not track which skills a given agent has
+	// actually equipped/synced — that dedup/equip state lives CLIENT-side
+	// (see internal/artifacts/store.go's package doc: sync is bidirectional,
+	// but conflict/equip bookkeeping is the client's, not the brain's). So
+	// this can only report the FLEET's canonical skill set — what every
+	// synced member CAN use, not what this one agent HAS pulled. The UI
+	// labels it accordingly ("fleet skills — synced to every member")
+	// rather than implying per-agent knowledge the brain doesn't have.
+	if s.artifacts != nil {
+		if arts, err := s.artifacts.ListKind("skill"); err == nil {
+			out["skills"] = toSkillViews(arts)
+		}
 	}
 	writeJSON(w, out)
 }

@@ -1,0 +1,51 @@
+---
+// SPDX-License-Identifier: Elastic-2.0
+import { Image } from 'astro:assets';
+import corral from '../assets/ui-tour/corral.png';
+import matrixSkin from '../assets/ui-tour/corral-matrix-skin.png';
+import topology from '../assets/ui-tour/topology.png';
+import proposals from '../assets/ui-tour/proposals.png';
+import agentClusterZoom from '../assets/proof-band/agent-cluster-zoom.png';
+import productUiLight from '../assets/proof-band/product-ui-light.png';
+---
+<section class="section wide" id="proof-band">
+  <h2>What the console actually looks like</h2>
+  <p>
+    Every screenshot below is the real product chrome — no mockups. Same
+    screenshots we use in the docs' UI tour, plus two new crops for this page.
+  </p>
+  <div class="shots">
+    <figure>
+      <Image src={corral} alt="The corral canvas view: 5 agents (researcher, tester, builder, designer, pentester) shown as moving nodes connected to the file paths they've claimed, a live console of real commands at the bottom, and an open findings panel on the right showing a critical and a high-severity finding." width={700} />
+      <figcaption>The default view — every agent, every claim, every finding, live.</figcaption>
+    </figure>
+    <figure>
+      <Image src={agentClusterZoom} alt="A zoomed-in crop of the corral canvas showing a builder and pentester agent connected by a red line to a contested file (retry.go), and a designer agent working a separate path — the conflict is visible as a shared node with two claim lines." width={560} />
+      <figcaption>Zoomed in: a claim conflict on <code>retry.go</code> is visible as a shared node with two lines into it.</figcaption>
+    </figure>
+    <figure>
+      <Image src={matrixSkin} alt="The same corral canvas re-skinned as 'the construct', matrix-style green falling characters replacing the grass, agents renamed with an Mr./Ms. prefix and the mission renamed anomalies/archive — a purely cosmetic critter-skin swap with identical live data underneath." width={700} />
+      <figcaption>A cosmetic skin swap ("the construct") over the exact same live data — same brain, same state, different costume.</figcaption>
+    </figure>
+    <figure>
+      <Image src={productUiLight} alt="The product console in its light chrome theme: a cream-and-amber toolbar and side panels around the same permanently-dark canvas stage, shown here with no agents yet running." width={700} />
+      <figcaption>The chrome has a light theme too — the canvas stage stays dark either way, by design.</figcaption>
+    </figure>
+    <figure>
+      <Image src={topology} alt="The Topology tab: an ecosystem map showing 3 host machines running 7 agents total, each labeled with its backing model (ollama:local-7b) and its exec-isolation jail (bwrap, no network, or container with network)." width={700} />
+      <figcaption>Topology: which host is running which agent, on which model, inside which jail.</figcaption>
+    </figure>
+    <figure>
+      <Image src={proposals} alt="The Proposals tab showing one pending skill proposal, 'retries-without-backoff', with its drafted guidance, a linked skill artifact, and approve/reject buttons for the human operator." width={700} />
+      <figcaption>A pending skill proposal, waiting on the one gate a delegation token can't pass: a human.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<style>
+  .wide { max-width: 1100px; }
+  .shots { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin-top: 24px; }
+  .shots figure { margin: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .shots :global(img) { display: block; width: 100%; height: auto; }
+  .shots figcaption { padding: 10px 14px; color: var(--muted); font-size: 0.85rem; }
+</style>

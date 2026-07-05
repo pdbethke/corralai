@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -156,5 +157,68 @@ func TestRunTaskPropagatesModelUnreachable(t *testing.T) {
 	}
 	if err != nil && !strings.Contains(err.Error(), "404") && !strings.Contains(err.Error(), "model unreachable") {
 		t.Errorf("error message should mention the cause; got %v", err)
+	}
+}
+
+// scriptedBackend replays a fixed sequence of tool calls, one per Chat call,
+// then falls back to a plain "done" answer with no tool call (ends the loop).
+type scriptedBackend struct {
+	calls []otoolcal
+	i     int
+}
+
+func (b *scriptedBackend) Chat(messages []omsg, tools []any) (omsg, error) {
+	if b.i < len(b.calls) {
+		tc := b.calls[b.i]
+		b.i++
+		return omsg{Role: "assistant", ToolCalls: []otoolcal{tc}}, nil
+	}
+	return omsg{Role: "assistant", Content: "done"}, nil
+}
+
+func toolCall(name string, args map[string]any) otoolcal {
+	b, _ := json.Marshal(args)
+	var tc otoolcal
+	tc.Function.Name = name
+	tc.Function.Arguments = b
+	return tc
+}
+
+// TestRunTaskStampsReportThought verifies runTask scopes a model-issued
+// report_thought call the same way it already scopes report_finding: the
+// model only supplies the reasoning text, and the harness stamps mission_id,
+// role, and name onto it before it reaches the brain — the model can't know
+// (and shouldn't need to know) its own mission_id.
+func TestRunTaskStampsReportThought(t *testing.T) {
+	backend := &scriptedBackend{calls: []otoolcal{
+		toolCall("report_thought", map[string]any{"text": "the retry loop never backs off; checking the interval"}),
+	}}
+	var captured map[string]any
+	brain := func(tool string, args map[string]any) string {
+		if tool == "report_thought" {
+			captured = args
+		}
+		return `{"ok":true}`
+	}
+
+	_, err := runTask(context.Background(), backend, "Ada", "builder",
+		t.TempDir(), brain, nil, 99, 7, "test task", "do nothing", nil, nil)
+	if err != nil {
+		t.Fatalf("runTask: %v", err)
+	}
+	if captured == nil {
+		t.Fatal("report_thought was never forwarded to the brain")
+	}
+	if captured["mission_id"] != int64(99) && captured["mission_id"] != float64(99) {
+		t.Errorf("mission_id must be stamped from the task, got %v", captured["mission_id"])
+	}
+	if captured["role"] != "builder" {
+		t.Errorf("role must be stamped, got %v", captured["role"])
+	}
+	if captured["name"] != "Ada" {
+		t.Errorf("name must be stamped, got %v", captured["name"])
+	}
+	if captured["text"] != "the retry loop never backs off; checking the interval" {
+		t.Errorf("the model's own reasoning text must pass through unchanged, got %v", captured["text"])
 	}
 }

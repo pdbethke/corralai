@@ -39,6 +39,7 @@ func TestBeePromptCarriesTheContract(t *testing.T) {
 	for _, must := range []string{
 		"bootstrap", "claim_task", "complete_task", "claim_paths",
 		"report_finding", "report_execution", "search_memory", "add_memory",
+		"report_thought", "ACTUAL reasoning", "never fabricated",
 		"IDLE", `"roles":["builder"]`, `"instance":"host-1"`, "EXACTLY ONE task",
 	} {
 		if !strings.Contains(p, must) {

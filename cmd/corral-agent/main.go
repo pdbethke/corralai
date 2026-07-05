@@ -563,6 +563,13 @@ Coordinate so you never clobber a peer:
 If you discover a vulnerability, bug, design flaw, or missing requirement, call
 report_finding with a type and a severity (low|medium|high|critical) — this is how
 the swarm learns and re-plans, so report it rather than only mentioning it.
+As you work, call report_thought a few times with a short, SUBSTANTIVE sentence of
+your ACTUAL reasoning — what you're examining, deciding, or finding (e.g. "the
+ratelimit test fails because the bucket refills too slowly; checking the interval").
+Report your real reasoning in your own words, never a fabricated or performative
+narration — it's recorded verbatim for the story engine, so its only value is
+being true. Skip status filler ("working on it") and skip it entirely if a step
+has nothing substantive to say.
 Lean on the hive-mind: search_memory FIRST — across EVERY agent and past mission,
 someone may have already solved this or hit it before ("have I seen this vuln /
 did I patch it?"). And add_memory LIBERALLY as you go — decisions, dead-ends,
@@ -608,6 +615,14 @@ Task: %s
 			args["mission_id"] = missionID
 			args["task_id"] = taskID
 		}
+		if callName == "report_thought" { // the harness scopes the thought; the model only supplies the text
+			if args == nil {
+				args = map[string]any{}
+			}
+			args["mission_id"] = missionID
+			args["role"] = role
+			args["name"] = name
+		}
 		if !ok {
 			if c := oneline(m.Content); c != "" {
 				last = c
@@ -633,7 +648,7 @@ Task: %s
 		// not just the exec phases. run_command already reports via report_execution
 		// (it carries the exit code and feeds the verification gate) — and the report_*
 		// tools are themselves observability, so skip them to avoid a feedback loop.
-		if callName != "run_command" && callName != "report_execution" && callName != "report_activity" && callName != "heartbeat" {
+		if callName != "run_command" && callName != "report_execution" && callName != "report_activity" && callName != "report_thought" && callName != "heartbeat" {
 			brain("report_activity", map[string]any{"role": role, "tool": callName, "detail": oneline(jsons(args))})
 		}
 		messages = append(messages,
@@ -712,7 +727,7 @@ Ticket %s: %s (file: %s).`, name, role, job, coord, t.id, t.title, t.hint)
 		// not just the exec phases. run_command already reports via report_execution
 		// (it carries the exit code and feeds the verification gate) — and the report_*
 		// tools are themselves observability, so skip them to avoid a feedback loop.
-		if callName != "run_command" && callName != "report_execution" && callName != "report_activity" && callName != "heartbeat" {
+		if callName != "run_command" && callName != "report_execution" && callName != "report_activity" && callName != "report_thought" && callName != "heartbeat" {
 			brain("report_activity", map[string]any{"role": role, "tool": callName, "detail": oneline(jsons(args))})
 		}
 		messages = append(messages,
@@ -967,7 +982,7 @@ func dispatch(name, role, ws string, brain func(string, map[string]any) string, 
 	switch tool {
 	case "claim_paths", "mark_done", "release_claims", "list_active", "check_instructions", "coordination_status", "report_finding",
 		"cancel_task", "reopen_task", "supersede_task", "enqueue_task", "resolve_finding", "review_mission", "search_reference",
-		"search_memory", "add_memory":
+		"search_memory", "add_memory", "report_thought":
 		// set status working on claim so the swarm shows it live
 		if tool == "claim_paths" {
 			brain("heartbeat", map[string]any{"status": "working"})
@@ -1099,6 +1114,8 @@ func agentTools(includeSimEdit bool) []any {
 				"evidence":         map[string]any{"type": "string", "description": "what you observed"},
 				"suggested_action": map[string]any{"type": "string", "description": "how to fix it"},
 			}, "type", "severity"),
+		fn("report_thought", "Report a short, substantive piece of YOUR OWN reasoning — what you're examining, deciding, or finding right now, in your own words. This feeds the swarm's story engine (a scrubbable debugger of how the work actually happened), so it must be your REAL reasoning, never a fabricated or dramatized narration. It's a silent no-op unless the mission opted in, so call it freely at genuine decision/finding points — not on every step, and not status filler like 'working on it'.",
+			map[string]any{"text": str}, "text"),
 	)
 	return tools
 }

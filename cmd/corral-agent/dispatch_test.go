@@ -191,3 +191,28 @@ func TestQueueToolsOmitSimulatedEditFile(t *testing.T) {
 		t.Fatal("demo/ticket-mode tools must keep the simulated edit_file (the clobber demo depends on it)")
 	}
 }
+
+// The model must be OFFERED report_thought (in both queue and ticket modes) —
+// otherwise the narration guidance in runTask's system prompt asks for a tool
+// the model can never call.
+func TestAgentToolsIncludesReportThought(t *testing.T) {
+	names := func(tools []any) map[string]bool {
+		out := map[string]bool{}
+		for _, tl := range tools {
+			b, _ := json.Marshal(tl)
+			var v struct {
+				Function struct {
+					Name string `json:"name"`
+				} `json:"function"`
+			}
+			_ = json.Unmarshal(b, &v)
+			out[v.Function.Name] = true
+		}
+		return out
+	}
+	for _, includeSimEdit := range []bool{false, true} {
+		if !names(agentTools(includeSimEdit))["report_thought"] {
+			t.Fatalf("agentTools(%v) must include report_thought", includeSimEdit)
+		}
+	}
+}

@@ -1282,4 +1282,12 @@ function renderReplayScrub(){
   const label = document.getElementById('replay-label');
   if(label) label.textContent = replayIdx + ' / ' + replayEvents.length;
 }
-
+// Export inline handlers to window so they work reliably when the player
+// is loaded as a classic script by an Astro component.
+window.setSkin = setSkin;
+window.toggleTheme = toggleTheme;
+window.setReplayExecFilter = setReplayExecFilter;
+window.toggleReplayPlay = toggleReplayPlay;
+window.seekReplay = seekReplay;
+window.setReplaySpeed = setReplaySpeed;
+window.closeReplay = closeReplay;

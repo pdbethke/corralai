@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Elastic-2.0
 import '../styles/global.css';
 import analytics from '../data/analytics.json';
-import { cockpitTasks, cockpitAgents, cockpitFindings, cockpitExec } from '../lib/cockpitShell';
+import { cockpitHud, cockpitTasks, cockpitAgents, cockpitFindings, cockpitExec } from '../lib/cockpitShell';
 
 // Enumerate committed recordings by glob — no manifest file to drift.
 const streamModules = import.meta.glob('../data/recordings/*.json', { eager: true });
@@ -89,6 +89,7 @@ const maxModelFindings = Math.max(1, ...analytics.findings_by_model.map((r: any)
   </div>
 
   <div id="stage-frame">
+    <div class="cockpit-hud" set:html={cockpitHud} />
     <div id="cockpit">
       <aside class="cockpit-tasks" set:html={cockpitTasks} />
       <div id="stage">
@@ -201,10 +202,23 @@ const maxModelFindings = Math.max(1, ...analytics.findings_by_model.map((r: any)
   #stage-frame { max-width: 1240px; margin: 0 auto; padding: 0 20px; }
   #cockpit {
     display: grid; grid-template-columns: 220px 1fr 260px;
-    background: var(--stage-bg); border: 1px solid var(--stage-line);
-    border-top-left-radius: 12px; border-top-right-radius: 12px;
+    background: var(--stage-bg); border: 1px solid var(--stage-line); border-top: none;
     box-shadow: 0 18px 44px rgba(30,20,0,.22); overflow: hidden;
   }
+  :global(#stage-frame #hud) {
+    position: relative; inset: auto; height: 42px; display: flex; align-items: baseline; gap: 14px;
+    padding: 10px 14px; background: var(--stage-bg); color: var(--stage-fg);
+    border: 1px solid var(--stage-line); border-bottom: 1px solid var(--stage-line);
+    border-top-left-radius: 12px; border-top-right-radius: 12px;
+    box-sizing: border-box;
+  }
+  :global(#stage-frame #hud b) { font-size: 16px; letter-spacing: .5px; color: var(--stage-amber); }
+  :global(#stage-frame #hud .sub), :global(#stage-frame #hud .stat) { color: var(--stage-muted); font-size: 14px; }
+  :global(#stage-frame #hud .stat) { margin-left: auto; }
+  :global(#stage-frame #hud .tab) { color: var(--stage-muted); text-decoration: none; cursor: pointer; padding: 2px 6px; border-radius: 4px; font-size: 14px; }
+  :global(#stage-frame #hud .tab.active) { color: var(--stage-bg); background: var(--stage-amber); pointer-events: none; }
+  :global(#stage-frame #hud .tab:hover:not(.active)) { color: var(--stage-fg); }
+  :global(#stage-frame #hud select) { background: var(--stage-panel); color: var(--stage-fg); border: 1px solid var(--stage-line); border-radius: 6px; font-size: 11px; padding: 2px 4px; cursor: pointer; }
   @media (max-width: 900px) { #cockpit { grid-template-columns: 1fr; } .cockpit-tasks, .cockpit-side { max-height: 200px; } }
   #stage { position: relative; height: 56vh; min-height: 360px; background: var(--stage-panel); }
   .cockpit-tasks, .cockpit-side {

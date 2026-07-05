@@ -33,6 +33,24 @@
      scripts/sync-site-assets.sh is the drift gate: default mode splices this
      file's sections into index.html; --check mode fails loudly if they've
      drifted apart. -->
+<!-- COCKPIT-SHELL:HUD:BEGIN -->
+<div id="hud">
+  <b>CorralAI</b><span class="sub" id="skinsub">— the corral</span>
+  <span id="tabs">
+    <a class="tab active" id="tab-swarm" onclick="setView('swarm')">swarm</a>
+    <a class="tab" id="tab-progress" onclick="setView('progress')">progress</a>
+    <a class="tab" id="tab-topology" onclick="setView('topology')">topology</a>
+    <a class="tab" id="tab-memory" onclick="setView('memory')">memory</a>
+    <a class="tab" id="tab-skills" onclick="setView('skills')">skills</a>
+    <a class="tab" id="tab-proposals" onclick="setView('proposals')">proposals<span id="proposals-badge" class="pbadge" style="display:none"></span></a>
+    <a class="tab" id="tab-completed" onclick="setView('completed')">completed</a>
+  </span>
+  <span class="stat" id="stat">connecting…</span>
+  <span class="stat" id="whoami" title="who the brain sees you as"></span>
+  <select id="skinsel" onchange="setSkin(this.value)" title="critter skin" style="pointer-events:auto;margin-left:8px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:6px;font-size:11px;padding:2px 4px"></select>
+  <button type="button" class="tab" id="themebtn" onclick="toggleTheme()" title="toggle light / dark" aria-label="Switch to light theme" style="pointer-events:auto;margin-left:6px;background:none;border:none;font:inherit">☾</button>
+</div>
+<!-- COCKPIT-SHELL:HUD:END -->
 <!-- COCKPIT-SHELL:TASKS:BEGIN -->
 <div id="tasks"></div>
 <!-- COCKPIT-SHELL:TASKS:END -->

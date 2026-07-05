@@ -59,3 +59,6 @@ site/src/data/analytics.json
 # Playwright MCP debug artifacts (console logs, page snapshots) — scratch only
 /.playwright-mcp/
 .worktrees/
+
+# Cloudflare wrangler local cache
+.wrangler/

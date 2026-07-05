@@ -21,6 +21,7 @@ function section(name: string): string {
   return raw.slice(bi + begin.length, ei).trim();
 }
 
+export const cockpitHud = section('HUD');
 export const cockpitTasks = section('TASKS');
 export const cockpitAgents = section('AGENTS');
 export const cockpitFindings = section('FINDINGS');

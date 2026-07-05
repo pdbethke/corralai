@@ -23,7 +23,7 @@ DST="site/public/replay-player.js"
 
 SHELL_SRC="internal/ui/web/cockpit-shell.html"
 INDEX="internal/ui/web/index.html"
-SECTIONS=(TASKS AGENTS FINDINGS EXEC)
+SECTIONS=(HUD TASKS AGENTS FINDINGS EXEC)
 
 if [ ! -f "$SRC" ]; then
   echo "FAIL: $SRC does not exist" >&2

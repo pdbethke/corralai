@@ -82,6 +82,36 @@ endpoint DEFINITION, keep each brain's secret local / in a secret manager — ne
 sync secrets via the artifacts store. Work = elevate the gateway to a first-class
 Resources tab (sibling to Skills), not new plumbing.
 
+## Architecture invariants — the boundary that must not be re-litigated
+Crystallized 2026-07-05 from the "how do I use FastAPI without breaking 'one app'"
+thread. **The boundary is the brain's API. Writes go through it; reads share the
+analytical store read-only; foreign runtimes live on the client side of it.**
+
+1. **The brain's API is the WRITE boundary.** Every mutation goes through the
+   brain's API/MCP — never a second process writing the brain's databases
+   directly. This preserves the single source of truth, the invariants, the human
+   gate, and per-action attribution (the whole trust story depends on the brain
+   being the sole writer). Share through the API, never the database — the
+   "integration database" anti-pattern is banned.
+2. **The analytical store is a READ-ONLY shared surface.** Reads share freely. A
+   local DuckDB *file* is single-writer-per-process, but **MotherDuck is
+   multi-client cloud** — so any consumer (a FastAPI analytics service, the "ask
+   the fleet" oracle, the site's build-time `model_comparison` report, the
+   leaderboard/eval APIs #52/#53) can connect READ-ONLY and query. No write
+   contention, no authority bypass (reads can't corrupt truth). Read/write
+   asymmetry: brain owns writes via API; MotherDuck is the shared read surface.
+3. **Right DB for the job.** SQLite = transactional coordination (OLTP:
+   tasks/claims/leases). DuckDB/MotherDuck = analytics (OLAP:
+   memory/telemetry/fleet stream). DuckDB is the WRONG tool for a transactional
+   app backend (columnar, single-writer) and the RIGHT tool for read/analytics
+   services.
+4. **The core is ONE Go binary; other runtimes stay on the CLIENT side.** Tools in
+   other languages (FastAPI/FastMCP, REST→MCP converters) are a user's peripheral
+   or an optional add-on the brain proxies to — never a dependency compiled into
+   the core. No Python sidecar in core; if a native converter is ever needed,
+   write a lean version in Go in the same binary. (The brain is already cgo via
+   DuckDB — one contained dep; libpython is a whole ecosystem, a bad trade.)
+
 ## Known blind spots (surfaced 2026-07-05 — see tickets if promoted)
 Cost governance / budget caps · concurrent multi-mission scheduling & resource
 contention · mid-mission human steering (gate is terminal, not interactive) ·

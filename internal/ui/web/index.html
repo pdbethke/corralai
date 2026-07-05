@@ -112,6 +112,14 @@
   #exec .xbadge { flex:none; font-weight:700; font-size:12px; }
   #exec .xout { color:var(--muted); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11px;
     padding-left:20px; white-space:pre-wrap; word-break:break-all; opacity:.82; line-height:1.45; }
+  /* thought beats (the story engine's replay payoff): reasoning must read as
+     visibly distinct from an action at a glance — italic, muted, no
+     monospace command chrome or exit badge, a 💭 affix instead of the ❯
+     prompt. The text itself is never truncated/ellipsized by CSS — it's the
+     agent's verbatim words (see internal/brain/thought.go). */
+  #exec .xthoughtline { white-space:normal; overflow-wrap:anywhere; }
+  #exec .xthoughtico { flex:none; opacity:.85; }
+  #exec .xthoughttext { color:var(--muted); font-style:italic; font-size:11.5px; line-height:1.5; }
   #exec .xcursor { color:var(--amber); font-family:ui-monospace,monospace; padding-left:3px; animation:xblink 1.05s step-start infinite; }
   @keyframes xblink { 50% { opacity:0; } }
   @keyframes xflash-pass { from { background:rgba(143,220,171,.30); } to { background:transparent; } }

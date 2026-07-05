@@ -727,6 +727,16 @@ func TestReplayPlayerStructure(t *testing.T) {
 		`function resetReplayPanels()`,
 		`const SEV_RANK`,
 		`function sevColor(sev)`,
+		// thought rendering (the story engine's replay payoff): thought
+		// beats share the console feed with execution beats — interleaved by
+		// ts, same accumulate-then-paint/rebuild-from-0 pattern the other
+		// panels use — but render through a visibly distinct code path so
+		// reasoning never looks like an action.
+		`case 'thought':`,
+		`function renderReplayLine(e)`,
+		`e.kind === 'thought'`,
+		`xthoughtico`,
+		`xthoughttext`,
 	}
 	for _, m := range playerMarkers {
 		if !strings.Contains(player, m) {

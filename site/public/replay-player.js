@@ -840,13 +840,22 @@ let inReplay = false;
 // reconstructed from claims + executions (the tape has no agent_activity
 // tool-call beat), so it shows the last real command or the claimed task,
 // not a live tool call.
-let replayExecLines = [];   // {agent, role, command, ok, exitCode}
+// replayConsoleLines: the console's single chronological feed — execution
+// beats AND thought beats interleaved exactly as the tape emits them (both
+// are appended here, in the same order applyReplayEvent processes the
+// already-ts-sorted stream, so no separate ts-merge is needed: append order
+// IS chronological order, for a full play-through and for a seek's
+// rebuild-from-0 alike). Each entry is tagged `kind` so the renderer can
+// style reasoning distinctly from action — see renderReplayConsole.
+//   exec:    {kind:'exec', agent, role, command, ok, exitCode}
+//   thought: {kind:'thought', agent, role, text}
+let replayConsoleLines = [];
 let replayTasks = new Map(); // key -> {key, title, role, status, claimedBy}
 let replayFindings = [];    // {reporter, target, type, severity, model, resolved}
 let replayAgents = new Map(); // name -> {name, role, held:Set<taskKey>, lastCmd}
 let replaySeenBeats = new Set(); // dedupe: findings ride the tape TWICE (queue+telemetry merge), and resolutions repeat across replan cycles
 function resetReplayPanels(){
-  replayExecLines = []; replayTasks = new Map(); replayFindings = [];
+  replayConsoleLines = []; replayTasks = new Map(); replayFindings = [];
   replayAgents = new Map(); replaySeenBeats = new Set();
 }
 function clearReplayPanelDOM(){
@@ -895,18 +904,34 @@ function renderReplayAgents(){
       return '<div class="arow"><span class="adot" style="background:' + dot + '"></span><b style="color:' + roleColor(a.role) + '">' + esc(displayName(a.name)) + '</b> <span class="ameta">' + esc(a.role || '') + '</span><span class="adoing">' + doing + '</span></div>';
     }).join('');
 }
+// renderReplayLine: one console row, action or reasoning. Actions render
+// exactly as before (❯ prompt, agent, command, ✓/✗ exit badge). Thoughts
+// render VISIBLY DIFFERENT — a 💭 affix, no prompt/badge chrome, italic
+// muted text — so a viewer instantly tells "the herd is reasoning" from
+// "the herd just ran something" at a glance, never confusing the two.
+// The thought text is rendered VERBATIM from the tape (only esc()'d for
+// HTML safety) — never truncated, rewritten, or summarized here; that
+// invariant is the whole point of the story engine (see internal/brain/
+// thought.go's header comment).
+function renderReplayLine(e){
+  if(e.kind === 'thought'){
+    return '<div class="xblk xthought"><div class="xcmdline xthoughtline">' +
+      '<span class="xthoughtico" title="reasoning, not an action">💭</span> ' +
+      '<b style="color:' + roleColor(e.role) + '">' + esc(displayName(e.agent)) + '</b> ' +
+      '<span class="xthoughttext">·thinking· ' + esc(e.text || '') + '</span></div></div>';
+  }
+  const badge = e.ok
+    ? '<span class="xbadge" style="color:var(--green)" title="exit 0">✓</span>'
+    : '<span class="xbadge" style="color:var(--red)" title="exit ' + esc(String(e.exitCode)) + '">✗' + esc(String(e.exitCode)) + '</span>';
+  return '<div class="xblk"><div class="xcmdline"><span class="xprompt">❯</span> <b style="color:' + roleColor(e.role) + '">' + esc(displayName(e.agent)) + '</b> <code class="xcmd">' + esc(e.command || '') + '</code> ' + badge + '</div></div>';
+}
 function renderReplayConsole(){
   const ep = document.getElementById('exec');
   if(!ep) return;
-  const tail = replayExecLines.slice(-24);
-  ep.innerHTML = '<div class="feedhdr">console · replaying the tape · ' + replayExecLines.length + '</div>' +
+  const tail = replayConsoleLines.slice(-24);
+  ep.innerHTML = '<div class="feedhdr">console · replaying the tape · ' + replayConsoleLines.length + '</div>' +
     (tail.length ? '' : '<div class="xempty">▌ no commands on the tape yet…</div>') +
-    tail.map(e => {
-      const badge = e.ok
-        ? '<span class="xbadge" style="color:var(--green)" title="exit 0">✓</span>'
-        : '<span class="xbadge" style="color:var(--red)" title="exit ' + esc(String(e.exitCode)) + '">✗' + esc(String(e.exitCode)) + '</span>';
-      return '<div class="xblk"><div class="xcmdline"><span class="xprompt">❯</span> <b style="color:' + roleColor(e.role) + '">' + esc(displayName(e.agent)) + '</b> <code class="xcmd">' + esc(e.command || '') + '</code> ' + badge + '</div></div>';
-    }).join('') + '<div class="xcursor">▌</div>';
+    tail.map(renderReplayLine).join('') + '<div class="xcursor">▌</div>';
   ep.scrollTop = ep.scrollHeight; // tail like the live console
 }
 function renderReplayTasks(){
@@ -1066,12 +1091,23 @@ function applyReplayEvent(ev){
       const k = 'x|' + (ev.actor||'') + '|' + (ev.subject||'') + '|' + Math.round(ev.ts);
       if(!replaySeenBeats.has(k)){
         replaySeenBeats.add(k);
-        replayExecLines.push({agent: ev.actor || '', role: d.role || '', command: ev.subject || '', ok: !!d.ok, exitCode: d.exit_code == null ? '' : d.exit_code});
-        if(replayExecLines.length > 200) replayExecLines.shift();
+        replayConsoleLines.push({kind: 'exec', agent: ev.actor || '', role: d.role || '', command: ev.subject || '', ok: !!d.ok, exitCode: d.exit_code == null ? '' : d.exit_code});
+        if(replayConsoleLines.length > 200) replayConsoleLines.shift();
       }
       // roster: an execution proves the actor is a real worker + records the
       // last command (its "doing now"), even if the claim beat was missed.
       if(ev.actor){ const a = replayAgentEnsure(ev.actor, d.role); a.lastCmd = ev.subject || a.lastCmd; }
+      break;
+    }
+    // thought: internal/brain/replay.go merges these straight from telemetry
+    // (kind="thought", actor=agent, detail={role,text}, subject unused) — a
+    // single source, never doubled like findings, so no dedupe key is
+    // needed. Appended to the SAME console feed as execution beats, so the
+    // rebuilt-at-scrub-T order interleaves reasoning with action exactly as
+    // the herd produced it.
+    case 'thought': {
+      replayConsoleLines.push({kind: 'thought', agent: ev.actor || '', role: d.role || '', text: d.text || ''});
+      if(replayConsoleLines.length > 200) replayConsoleLines.shift();
       break;
     }
     case 'finding_reported': {
@@ -1141,10 +1177,13 @@ function applyReplayEvent(ev){
     // live view doesn't render unclaimed queue entries as nodes either;
     // finding_resolved and the telemetry-only kinds (proposal/review/
     // mission_completed/agent_activity) are ambience the canvas has no
-    // vocabulary for yet. Unknown future kinds land here too — graceful
-    // degradation, never a thrown error.
+    // vocabulary for yet. thought is likewise a no-op HERE — its payoff is
+    // the console feed (renderReplayConsole), handled above; the canvas has
+    // no glyph for "an agent is thinking" (yet). Unknown future kinds land
+    // here too — graceful degradation, never a thrown error.
     case 'task_created':
     case 'finding_resolved':
+    case 'thought':
     default:
       break;
   }

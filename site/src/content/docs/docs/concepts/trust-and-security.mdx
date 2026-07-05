@@ -60,6 +60,19 @@ rather than directly against the operator's own filesystem. The demo's
 still runs inside this same sandbox; it only disables coordination claims,
 not the sandbox itself.
 
+## Egress scan
+
+Before the brain pushes a mission's branch and opens a pull request, it scans the
+cumulative changed files for problems the herd must not ship (`internal/egress`).
+Committed **secrets** — API keys, tokens, private-key blocks — are **blocking**:
+the push is withheld, a critical finding is filed, and the mission is parked until
+an operator intervenes. New or vulnerable dependencies and license conflicts are
+flagged as advisory findings. This is the last brain-side checkpoint before code
+leaves for *any* forge — the forge-agnostic floor beneath GitHub's own secret
+scanning, which self-hosted Gitea and GitLab don't get. Containment runs both
+ways: the [jail](#sandbox-jails) bounds what an agent can *do*; the egress scan
+vets what it can *ship*.
+
 ## Honest scope
 
 Corralai coordinates agents and enforces process gates — it does not itself

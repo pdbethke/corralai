@@ -228,7 +228,7 @@ ran on and honest per-run analytics — and every published run links to a
 ## Security model
 
 The headline feature, not a footnote. Full write-up in **[SECURITY.md](SECURITY.md)**;
-the short version is two pillars:
+the short version is three pillars:
 
 - **Prevention (the fences).** Agents' shell commands run in a `bwrap` jail (no
   network by default, workspace-confined, secret-free env). The git/forge token
@@ -250,6 +250,15 @@ the short version is two pillars:
   single trusted egress — the brain records every consequential action, attributed
   to a verified principal. Agents can't forge or erase their own trail; the subject
   of the record doesn't control the ledger.
+- **Egress control (the exit).** The output is vetted before it ships. Right before
+  the brain pushes the herd's branch and opens a PR, it scans the mission's
+  *cumulative* changed files for committed **secrets** (API-key/token/private-key
+  patterns) — a match is **blocking**: the push is withheld, a critical finding is
+  filed, and the mission is parked. New or vulnerable dependencies and license
+  conflicts are flagged (advisory). Crucially this runs on **every forge** — the
+  floor GitHub's own secret-scanning doesn't cover on GitLab or self-hosted Gitea.
+  So containment is complete: the agents are bounded on the way *in* (the jail),
+  and their output is vetted on the way *out*.
 
 Every security core was adversarially red-teamed, and the tests ship with the repo.
 The codebase also runs clean through static + supply-chain scanners: **`gosec`** (0

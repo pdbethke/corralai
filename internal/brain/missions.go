@@ -35,6 +35,7 @@ type createMissionIn struct {
 	RequiresReview bool          `json:"requires_review,omitempty" jsonschema:"if true, the mission waits for a client review (accept or feedback) instead of auto-completing — enables sprints"`
 	Repo           string        `json:"repo,omitempty" jsonschema:"git repo URL to build in (omit for a workspace-only mission)"`
 	Base           string        `json:"base,omitempty" jsonschema:"base branch to branch from (default main)"`
+	RecordStory    bool          `json:"record_story,omitempty" jsonschema:"opt in to the story engine: agents' report_thought calls are durably recorded for replay (default false — off, no telemetry cost)"`
 }
 type missionIDIn struct {
 	ID int64 `json:"id"`
@@ -136,6 +137,11 @@ func registerMissions(s *mcp.Server, store *mission.Store, q *queue.Store, mem *
 			id, err := mission.CreateMission(store, q, in.Directive, specs, in.RequiresReview)
 			if err != nil {
 				return nil, mission.MissionView{}, err
+			}
+			if in.RecordStory {
+				if err := store.SetRecordStory(id, true); err != nil {
+					log.Printf("create_mission %d: set record_story: %v", id, err)
+				}
 			}
 			// Repo provisioning: clone + checkout a mission branch when requested.
 			// rollback drops BOTH the mission (phases+row) and its queue tasks so a

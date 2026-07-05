@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS missions (
   status TEXT NOT NULL DEFAULT 'running',   -- running | awaiting_review | done | failed
   sprint INTEGER NOT NULL DEFAULT 1,
   requires_review INTEGER NOT NULL DEFAULT 0,
+  record_story INTEGER NOT NULL DEFAULT 0,
   created_ts REAL NOT NULL, updated_ts REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS phases (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -59,6 +60,10 @@ type Mission struct {
 	ReviewRounds    int     `json:"review_rounds,omitempty"`
 	ReviewWatermark string  `json:"review_watermark,omitempty"`
 	ReviewParked    bool    `json:"review_parked,omitempty"`
+	// RecordStory is the per-mission opt-in (default false) for the story
+	// engine: only when true does report_thought record anything for this
+	// mission, so a normal mission pays no telemetry cost for thought beats.
+	RecordStory bool `json:"record_story,omitempty"`
 }
 
 type Phase struct {
@@ -129,6 +134,7 @@ func Open(path string) (*Store, error) {
 		`ALTER TABLE missions ADD COLUMN review_rounds INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE missions ADD COLUMN review_watermark VARCHAR NOT NULL DEFAULT ''`,
 		`ALTER TABLE missions ADD COLUMN review_parked INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE missions ADD COLUMN record_story INTEGER NOT NULL DEFAULT 0`,
 	} {
 		if _, err := db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			_ = db.Close()
@@ -333,7 +339,7 @@ func (s *Store) ListMissions() ([]Mission, error) {
 	return s.queryMissions("ORDER BY id DESC LIMIT 50")
 }
 func (s *Store) queryMissions(where string) ([]Mission, error) {
-	rows, err := s.db.Query(`SELECT id,directive,status,sprint,requires_review,created_ts,updated_ts,repo,base,branch,pr_url,review_rounds,review_watermark,review_parked FROM missions ` + where) // #nosec G202 -- not injectable: where is a constant string literal from internal callers only (WHERE status=..., ORDER BY id, etc.); no user input reaches this parameter
+	rows, err := s.db.Query(`SELECT id,directive,status,sprint,requires_review,created_ts,updated_ts,repo,base,branch,pr_url,review_rounds,review_watermark,review_parked,record_story FROM missions ` + where) // #nosec G202 -- not injectable: where is a constant string literal from internal callers only (WHERE status=..., ORDER BY id, etc.); no user input reaches this parameter
 	if err != nil {
 		return nil, err
 	}
@@ -343,11 +349,13 @@ func (s *Store) queryMissions(where string) ([]Mission, error) {
 		var m Mission
 		var rr int
 		var parked int
-		if err := rows.Scan(&m.ID, &m.Directive, &m.Status, &m.Sprint, &rr, &m.CreatedTS, &m.UpdatedTS, &m.Repo, &m.Base, &m.Branch, &m.PRURL, &m.ReviewRounds, &m.ReviewWatermark, &parked); err != nil {
+		var story int
+		if err := rows.Scan(&m.ID, &m.Directive, &m.Status, &m.Sprint, &rr, &m.CreatedTS, &m.UpdatedTS, &m.Repo, &m.Base, &m.Branch, &m.PRURL, &m.ReviewRounds, &m.ReviewWatermark, &parked, &story); err != nil {
 			return nil, err
 		}
 		m.RequiresReview = rr == 1
 		m.ReviewParked = parked != 0
+		m.RecordStory = story != 0
 		out = append(out, m)
 	}
 	return out, rows.Err()
@@ -436,8 +444,9 @@ func (s *Store) Mission(id int64) (*Mission, error) {
 	var m Mission
 	var rr int
 	var parked int
-	err := s.db.QueryRow(`SELECT id,directive,status,sprint,requires_review,created_ts,updated_ts,repo,base,branch,pr_url,review_rounds,review_watermark,review_parked FROM missions WHERE id=?`, id).
-		Scan(&m.ID, &m.Directive, &m.Status, &m.Sprint, &rr, &m.CreatedTS, &m.UpdatedTS, &m.Repo, &m.Base, &m.Branch, &m.PRURL, &m.ReviewRounds, &m.ReviewWatermark, &parked)
+	var story int
+	err := s.db.QueryRow(`SELECT id,directive,status,sprint,requires_review,created_ts,updated_ts,repo,base,branch,pr_url,review_rounds,review_watermark,review_parked,record_story FROM missions WHERE id=?`, id).
+		Scan(&m.ID, &m.Directive, &m.Status, &m.Sprint, &rr, &m.CreatedTS, &m.UpdatedTS, &m.Repo, &m.Base, &m.Branch, &m.PRURL, &m.ReviewRounds, &m.ReviewWatermark, &parked, &story)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -446,7 +455,20 @@ func (s *Store) Mission(id int64) (*Mission, error) {
 	}
 	m.RequiresReview = rr == 1
 	m.ReviewParked = parked != 0
+	m.RecordStory = story != 0
 	return &m, nil
+}
+
+// SetRecordStory sets a mission's story-engine opt-in (default false at
+// creation). Follows the SetRepo/SetPRURL pattern: a small, focused setter
+// rather than widening CreateMission's signature for every callsite.
+func (s *Store) SetRecordStory(id int64, on bool) error {
+	v := 0
+	if on {
+		v = 1
+	}
+	_, err := s.db.Exec(`UPDATE missions SET record_story=?, updated_ts=? WHERE id=?`, v, now(), id)
+	return err
 }
 
 // DeleteMission removes a mission and its phases. Used to roll back a

@@ -229,6 +229,7 @@ func NewServer(store *coord.Store, mem *memory.Store, opts Options) *mcp.Server 
 	}
 	if opts.Missions != nil {
 		registerMissions(s, opts.Missions, opts.Queue, mem, opts.Telemetry, opts)
+		registerThought(s, opts.Missions, opts)
 	}
 	if opts.Repo != nil && opts.Queue != nil && opts.Missions != nil {
 		registerRepoFiles(s, opts.Queue, opts.Missions, opts.Repo, opts.Workspace)

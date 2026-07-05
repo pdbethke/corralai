@@ -162,3 +162,50 @@ func TestBuildReplayStreamCarriesModel(t *testing.T) {
 		t.Error("telemetry-derived finding_reported must carry Model from the telemetry model column")
 	}
 }
+
+// TestBuildReplayStreamIncludesThoughtBeatInOrder verifies the story engine's
+// replay surface (task 64's foundation): a recorded thought rides the same
+// merged, timestamp-sorted stream as task/finding/execution beats, with a
+// distinct "thought" kind carrying actor/role/ts/text — purely additive,
+// no existing beat kind or field is touched.
+func TestBuildReplayStreamIncludesThoughtBeatInOrder(t *testing.T) {
+	q, tel, mid := seedReplayMission(t)
+	if err := tel.Record(telemetry.Event{
+		MissionID: mid, Kind: "thought", Actor: "bee1",
+		Detail: map[string]any{"role": "builder", "text": "let me check the schema first"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	events, err := BuildReplayStream(q, tel, mid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found *ReplayEvent
+	for i := range events {
+		if events[i].Kind == "thought" {
+			found = &events[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("expected a thought beat in the replay stream")
+	}
+	if found.Actor != "bee1" {
+		t.Fatalf("thought actor = %q, want bee1", found.Actor)
+	}
+	if role, _ := found.Detail["role"].(string); role != "builder" {
+		t.Fatalf("thought role = %q, want builder", role)
+	}
+	if text, _ := found.Detail["text"].(string); text != "let me check the schema first" {
+		t.Fatalf("thought text = %q, want verbatim", text)
+	}
+	if found.TS <= 0 {
+		t.Fatal("thought beat must carry a positive ts")
+	}
+	// Order: the stream must remain fully time-sorted with the new beat mixed in.
+	for i := 1; i < len(events); i++ {
+		if events[i].TS < events[i-1].TS {
+			t.Fatalf("stream must stay time-ordered with a thought beat present: event %d (ts=%v) precedes event %d (ts=%v)", i, events[i].TS, i-1, events[i-1].TS)
+		}
+	}
+}

@@ -239,6 +239,13 @@ const maxModelFindings = Math.max(1, ...analytics.findings_by_model.map((r: any)
   :global(#exec .xcmd) { font-family: ui-monospace, monospace; color: var(--stage-fg); }
   :global(#exec .xbadge) { font-weight: 700; }
   :global(#exec .xempty), :global(#exec .xcursor) { color: var(--stage-muted); }
+  /* thought beats — reasoning must read as visibly distinct from an action
+     (see internal/ui/web/replay-player.js's renderReplayLine): italic muted
+     text with a 💭 affix, no monospace command chrome or exit badge. Text is
+     verbatim from the tape — never truncated/rewritten here. */
+  :global(#exec .xthoughtline) { white-space: normal; overflow-wrap: anywhere; }
+  :global(#exec .xthoughtico) { flex: none; opacity: .85; }
+  :global(#exec .xthoughttext) { color: var(--stage-muted); font-style: italic; font-size: 11.5px; line-height: 1.5; }
   :global(#tasks .trow) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 2px 0; }
   :global(#tasks .tdot) { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; }
   :global(#findings .frow) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 2px 0; }

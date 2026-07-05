@@ -199,6 +199,65 @@ test('the cockpit skin selector re-voices the replay client-side and never leaks
   expect(persisted, 'the site keeps the persisted skin at ranch so the hero stays clean').toBe('ranch');
 });
 
+test('thought beats render distinctly from actions in the console, interleaved by ts, and rebuild on scrub-back', async ({ page }) => {
+  // No committed recording carries kind="thought" beats yet (the story
+  // engine's narration is new — see internal/brain/thought.go), so this
+  // seeds a small synthetic tape directly into the shared player, exactly
+  // the way Hero.astro / recordings.astro already feed it a resolved
+  // {events:[...]} object (startReplay accepts either a URL or that shape).
+  await page.goto('/recordings/');
+  await page.evaluate(() => {
+    (window as any).startReplay({
+      events: [
+        { ts: 1, kind: 'task_created', subject: 't1', detail: { role: 'builder', title: 'wire the loop' } },
+        { ts: 2, kind: 'task_claimed', actor: 'Bob', subject: 't1', detail: { role: 'builder', title: 'wire the loop' } },
+        { ts: 3, kind: 'thought', actor: 'Bob', detail: { role: 'builder', text: 'Checking the interface before I write the loop — want to match its retry contract exactly.' } },
+        { ts: 4, kind: 'execution', actor: 'Bob', subject: 'go test ./internal/loop/...', detail: { ok: true, exit_code: 0, role: 'builder' } },
+        { ts: 5, kind: 'thought', actor: 'Bob', detail: { role: 'builder', text: 'Green. Moving on to the retry backoff case next.' } },
+      ],
+    });
+  });
+  await expect(async () => {
+    expect(Number(await page.locator('#replay-scrub').getAttribute('max'))).toBe(5);
+  }).toPass({ timeout: 5000 });
+
+  // Full tape: two thought rows + one exec row, in tape order (thought,
+  // exec, thought) — the console feed interleaves by ts, not by kind.
+  const scrub = page.locator('#replay-scrub');
+  const seek = (t: number) => scrub.evaluate((el, v) => { (el as HTMLInputElement).value = String(v); el.dispatchEvent(new Event('input')); }, t);
+  await seek(5);
+  const blocks = page.locator('#exec .xblk');
+  await expect(blocks).toHaveCount(3);
+  const kinds = await blocks.evaluateAll((els) => els.map((el) => (el.classList.contains('xthought') ? 'thought' : 'exec')));
+  expect(kinds, 'thought and exec beats must interleave in tape order').toEqual(['thought', 'exec', 'thought']);
+
+  // Visually distinct: a thought row carries the 💭 affix + italic muted
+  // text and NONE of the action chrome (❯ prompt, <code> command, ✓/✗ badge).
+  const thoughtRow = blocks.nth(0);
+  await expect(thoughtRow.locator('.xthoughtico')).toContainText('💭');
+  await expect(thoughtRow.locator('.xthoughttext')).toBeVisible();
+  expect(await thoughtRow.locator('.xprompt').count(), 'a thought row must not carry the action ❯ prompt').toBe(0);
+  expect(await thoughtRow.locator('.xcmd').count(), 'a thought row must not carry an action command').toBe(0);
+  expect(await thoughtRow.locator('.xbadge').count(), 'a thought row must not carry an exit badge').toBe(0);
+  const style = await thoughtRow.locator('.xthoughttext').evaluate((el) => getComputedStyle(el).fontStyle);
+  expect(style, 'thought text must render italic, distinct from action lines').toBe('italic');
+
+  // HONESTY: the rendered text is the agent's words verbatim — not
+  // truncated, summarized, or rewritten by the UI.
+  await expect(thoughtRow.locator('.xthoughttext')).toContainText(
+    'Checking the interface before I write the loop — want to match its retry contract exactly.',
+  );
+
+  // Scrub-back rebuilds from zero: seeking before the first thought must
+  // show fewer console lines, same rebuild-from-0 contract the other panels
+  // already guarantee.
+  await seek(2);
+  await expect(page.locator('#exec .xblk')).toHaveCount(0);
+  await seek(3);
+  await expect(page.locator('#exec .xblk')).toHaveCount(1);
+  await expect(page.locator('#exec .xblk').first()).toHaveClass(/xthought/);
+});
+
 test('every recording card corresponds to a committed stream + meta pair', async () => {
   const fs = await import('node:fs');
   const files = fs.readdirSync('src/data/recordings');

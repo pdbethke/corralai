@@ -36,6 +36,10 @@ type fakeRepo struct {
 	notModified       bool                // ListReviews returns 304 when true
 	listCommentCalls  int                 // counts ListReviewComments calls
 	authLoginRepoURLs []string            // records each repoURL passed to AuthLogin
+
+	// egress-gate fields
+	rangeFiles []string // returned by ChangedFilesRange; nil = fall back to ["calc.go"]
+	rangeCalls []string // records each base passed to ChangedFilesRange
 }
 
 func (f *fakeRepo) Commit(_ context.Context, _, msg string) (bool, error) {
@@ -63,6 +67,17 @@ func (f *fakeRepo) OpenPR(_ context.Context, repoURL, _, _, _, _ string) (string
 	return repoURL + "/pull/1", nil
 }
 func (f *fakeRepo) ChangedFiles(_ context.Context, _ string) ([]string, error) {
+	return []string{"calc.go"}, nil
+}
+
+// rangeFiles, when non-nil, is returned by ChangedFilesRange (the egress
+// gate's changed-file source); nil falls back to the same fixed list as
+// ChangedFiles, so existing tests that never set it are unaffected.
+func (f *fakeRepo) ChangedFilesRange(_ context.Context, _, base string) ([]string, error) {
+	f.rangeCalls = append(f.rangeCalls, base)
+	if f.rangeFiles != nil {
+		return f.rangeFiles, nil
+	}
 	return []string{"calc.go"}, nil
 }
 

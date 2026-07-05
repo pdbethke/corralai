@@ -852,8 +852,22 @@ let inReplay = false;
 let replayConsoleLines = [];
 let replayTasks = new Map(); // key -> {key, title, role, status, claimedBy}
 let replayFindings = [];    // {reporter, target, type, severity, model, resolved}
-let replayAgents = new Map(); // name -> {name, role, held:Set<taskKey>, lastCmd}
+// name -> {name, role, held:Set<taskKey>, lastCmd, completed, lastTaskTitle,
+//          lastTs, lastKind, lastDesc}. The trailing five fields (added for
+//          the agent INSPECTOR WINDOW reconstruction, product-only — see
+//          index.html's renderReplayAgentWindowBody) feed "completed",
+//          "working on", and "last activity"; the roster (renderReplayAgents,
+//          below) only ever reads held/lastCmd, so this is additive.
+let replayAgents = new Map();
 let replaySeenBeats = new Set(); // dedupe: findings ride the tape TWICE (queue+telemetry merge), and resolutions repeat across replan cycles
+// replayExecFilter: isolate one actor's stream in the console (both #exec in
+// the product and the site cockpit) — the tape-side twin of index.html's live
+// `execFilter`/`setExecFilter`. NOT reset by resetReplayPanels(): it's a
+// display filter over the accumulated beats, not accumulated state itself, so
+// it must survive a scrub/seek's rebuild-from-0 (the whole point of the
+// addendum — isolate BOB, then scrub around and stay isolated on BOB).
+let replayExecFilter = '';
+function setReplayExecFilter(n){ replayExecFilter = (replayExecFilter === n ? '' : n); renderReplayConsole(); }
 function resetReplayPanels(){
   replayConsoleLines = []; replayTasks = new Map(); replayFindings = [];
   replayAgents = new Map(); replaySeenBeats = new Set();
@@ -869,13 +883,22 @@ function clearReplayPanelDOM(){
 }
 function replayAgentEnsure(name, role){
   let a = replayAgents.get(name);
-  if(!a){ a = {name, role: role || '', held: new Set(), lastCmd: ''}; replayAgents.set(name, a); }
+  if(!a){ a = {name, role: role || '', held: new Set(), lastCmd: '', completed: 0, lastTaskTitle: '', lastTs: 0, lastKind: '', lastDesc: ''}; replayAgents.set(name, a); }
   if(role) a.role = role;
   return a;
 }
 function replayAgentHold(name, role, taskKey, held){
   const a = replayAgentEnsure(name, role);
   if(held) a.held.add(taskKey); else a.held.delete(taskKey);
+}
+// replayAgentTouch: records the LATEST beat (by ts) for an actor, across
+// every kind that counts as "activity" (claim/done/execution/thought) — feeds
+// the inspector window's "last activity" line. Ties (equal ts) keep the
+// newest-applied beat, which is what a rebuild-from-0 walk always wants.
+function replayAgentTouch(name, role, ts, kind, desc){
+  const a = replayAgentEnsure(name, role);
+  if((ts||0) >= (a.lastTs||0)){ a.lastTs = ts||0; a.lastKind = kind; a.lastDesc = desc || ''; }
+  return a;
 }
 // renderReplayAgents: the roster of workers the tape shows, reconstructed from
 // task claims + executions — mirrors the product's live agents list (#done):
@@ -925,12 +948,31 @@ function renderReplayLine(e){
     : '<span class="xbadge" style="color:var(--red)" title="exit ' + esc(String(e.exitCode)) + '">✗' + esc(String(e.exitCode)) + '</span>';
   return '<div class="xblk"><div class="xcmdline"><span class="xprompt">❯</span> <b style="color:' + roleColor(e.role) + '">' + esc(displayName(e.agent)) + '</b> <code class="xcmd">' + esc(e.command || '') + '</code> ' + badge + '</div></div>';
 }
+// replay filter chips: "all" + one per actor seen SO FAR in the accumulated
+// console feed (execution AND thought beats alike, both tagged `agent`) —
+// the tape-side twin of index.html's live chip() in renderExec(). Isolating
+// one actor is how a busy multi-agent tape actually reads as a story: BOB's
+// chip shows BOB's 💭 reasoning interleaved with BOB's ❯ commands, nothing
+// from TESS.
+function replayConsoleChip(name, role, on){
+  return '<span class="xchip" onclick="setReplayExecFilter(\'' + name.replace(/'/g,"\\'") + '\')" style="cursor:pointer;padding:1px 6px;margin-left:5px;border-radius:8px;font-size:10.5px;' +
+    (on ? 'background:' + (role?roleColor(role):'#6b6452') + ';color:#15110a;font-weight:700'
+        : 'color:' + (role?roleColor(role):'var(--muted)') + ';border:1px solid ' + hexA(role?roleColor(role):'#6b6452', .5)) +
+    '">' + esc(displayName(name)) + '</span>';
+}
 function renderReplayConsole(){
   const ep = document.getElementById('exec');
   if(!ep) return;
-  const tail = replayConsoleLines.slice(-24);
-  ep.innerHTML = '<div class="feedhdr">console · replaying the tape · ' + replayConsoleLines.length + '</div>' +
-    (tail.length ? '' : '<div class="xempty">▌ no commands on the tape yet…</div>') +
+  const seen = {}; const actors = [];
+  replayConsoleLines.forEach(e => { if(e.agent && !seen[e.agent]){ seen[e.agent] = e.role || ''; actors.push({name: e.agent, role: e.role || ''}); } });
+  if(replayExecFilter && !seen.hasOwnProperty(replayExecFilter)) replayExecFilter = ''; // the isolated actor hasn't spoken yet at this scrub position
+  const allChip = '<span class="xchip" onclick="setReplayExecFilter(\'\')" style="cursor:pointer;padding:1px 6px;margin-left:8px;border-radius:8px;font-size:10.5px;' +
+    (replayExecFilter ? 'color:var(--muted);border:1px solid ' + hexA('#6b6452', .5) : 'background:#6b6452;color:#15110a;font-weight:700') + '">all</span>';
+  const chips = allChip + actors.map(a => replayConsoleChip(a.name, a.role, replayExecFilter === a.name)).join('');
+  const filtered = replayExecFilter ? replayConsoleLines.filter(e => e.agent === replayExecFilter) : replayConsoleLines;
+  const tail = filtered.slice(-24);
+  ep.innerHTML = '<div class="feedhdr">console · replaying the tape · ' + (replayExecFilter ? esc(displayName(replayExecFilter)) + ' · ' + filtered.length : replayConsoleLines.length) + ' ' + chips + '</div>' +
+    (tail.length ? '' : '<div class="xempty">▌ no commands on the tape yet' + (replayExecFilter ? ' from ' + esc(displayName(replayExecFilter)) : '') + '…</div>') +
     tail.map(renderReplayLine).join('') + '<div class="xcursor">▌</div>';
   ep.scrollTop = ep.scrollHeight; // tail like the live console
 }
@@ -966,12 +1008,25 @@ function renderReplayFindings(){
       return '<div class="frow' + hi + '"><span class="fsev" style="color:' + sevColor(f.severity) + '">' + esc(f.severity) + '</span> <span style="color:var(--muted)">' + esc(f.type) + '</span>' + tgt + ' <span style="color:#6b6452">· ' + esc(displayName(f.reporter)) + '</span>' + mdl + '</div>';
     }).join('');
 }
+// refreshReplayAgentWindows: re-paints any OPEN agent inspector windows from
+// the reconstructed tape state at the current scrub position — the product-
+// only floating windows (index.html's agentWindows/renderAgentWindowBody)
+// live outside this shared file's DOM contract, so this is guarded to a
+// no-op wherever they don't exist (the site cockpit, the canvas-only hero).
+// renderAgentWindowBody itself checks `inReplay` and reads replayAgents/
+// replayTasks (this file's state) rather than the live lastState snapshot —
+// see index.html's renderReplayAgentWindowBody.
+function refreshReplayAgentWindows(){
+  if(typeof agentWindows === 'undefined' || typeof renderAgentWindowBody !== 'function') return;
+  agentWindows.forEach((_, name) => renderAgentWindowBody(name));
+}
 function renderReplayPanels(){
   if(!inReplay) return; // the live page's panels belong to apply()/SSE
   renderReplayConsole();
   renderReplayTasks();
   renderReplayAgents();
   renderReplayFindings();
+  refreshReplayAgentWindows();
 }
 
 function startReplay(streamOrUrl){
@@ -1014,6 +1069,15 @@ function stopReplaySession(){
   // false at this point, so no replay render can race the repaint.
   resetReplayPanels();
   clearReplayPanelDOM();
+  // Any agent window opened DURING replay was rendered from the tape (never
+  // fetched /api/agent — see index.html's openAgentWindow) and its
+  // detailData is still null. Leaving replay without this would leave that
+  // window stuck showing "fetching…" forever, since nothing else ever
+  // triggers the live fetch. Kick it once per open window, symmetric with
+  // fetchWindowDetail's own retry loop for a transient failure.
+  if(typeof agentWindows !== 'undefined' && typeof fetchWindowDetail === 'function'){
+    agentWindows.forEach((win, name) => { win.detailData = null; fetchWindowDetail(name); });
+  }
   if(replaySSEPaused){ es = connectSSE(); replaySSEPaused = false; } // resume live: the events handler pushes a fresh snapshot immediately on connect
 }
 function closeReplay(){
@@ -1073,7 +1137,12 @@ function applyReplayEvent(ev){
         const t = replayTasks.get(ev.subject) || {key: ev.subject, title: d.title || '', role: d.role || ''};
         t.status = 'claimed'; t.claimedBy = ev.actor || ''; t.role = d.role || t.role;
         replayTasks.set(ev.subject, t);
-        if(ev.actor) replayAgentHold(ev.actor, d.role, ev.subject, true);
+        if(ev.actor){
+          replayAgentHold(ev.actor, d.role, ev.subject, true);
+          const title = d.title || ev.subject;
+          const a = replayAgentEnsure(ev.actor, d.role); a.lastTaskTitle = title;
+          replayAgentTouch(ev.actor, d.role, ev.ts, 'claimed', title);
+        }
       }
       break;
     }
@@ -1081,7 +1150,12 @@ function applyReplayEvent(ev){
       if(ev.subject){
         const t = replayTasks.get(ev.subject);
         if(t) t.status = ev.kind.slice(5); // done | cancelled | superseded
-        if(ev.actor) replayAgentHold(ev.actor, d.role, ev.subject, false);
+        if(ev.actor){
+          replayAgentHold(ev.actor, d.role, ev.subject, false);
+          const title = (t && t.title) || ev.subject;
+          if(ev.kind === 'task_done'){ const a = replayAgentEnsure(ev.actor, d.role); a.completed = (a.completed||0) + 1; }
+          replayAgentTouch(ev.actor, d.role, ev.ts, ev.kind, title);
+        }
       }
       break;
     }
@@ -1096,7 +1170,10 @@ function applyReplayEvent(ev){
       }
       // roster: an execution proves the actor is a real worker + records the
       // last command (its "doing now"), even if the claim beat was missed.
-      if(ev.actor){ const a = replayAgentEnsure(ev.actor, d.role); a.lastCmd = ev.subject || a.lastCmd; }
+      if(ev.actor){
+        const a = replayAgentEnsure(ev.actor, d.role); a.lastCmd = ev.subject || a.lastCmd;
+        replayAgentTouch(ev.actor, d.role, ev.ts, 'exec', (ev.subject||'') + (d.ok ? ' ✓' : ' ✗'));
+      }
       break;
     }
     // thought: internal/brain/replay.go merges these straight from telemetry
@@ -1108,6 +1185,7 @@ function applyReplayEvent(ev){
     case 'thought': {
       replayConsoleLines.push({kind: 'thought', agent: ev.actor || '', role: d.role || '', text: d.text || ''});
       if(replayConsoleLines.length > 200) replayConsoleLines.shift();
+      if(ev.actor) replayAgentTouch(ev.actor, d.role, ev.ts, 'thought', d.text || '');
       break;
     }
     case 'finding_reported': {

@@ -69,8 +69,13 @@ test('the cockpit panels replay the tape: console lines appear and track the scr
   // rendered tail is capped at 24 rows, so assert on the header's running
   // total, which reflects every execution beat accumulated so far.
   const headerCount = async () => {
+    // The header now also carries per-agent filter chips (an unfiltered
+    // header is "console · replaying the tape · N <chips…>") — pull the
+    // leading run-total digits out with a regex rather than assuming the
+    // count is the last '·'-delimited segment, which the chips broke.
     const txt = await page.locator('#exec .feedhdr').innerText();
-    return Number(txt.split('·').pop()!.trim());
+    const m = txt.match(/replaying the tape\s*·\s*(\d+)/);
+    return m ? Number(m[1]) : NaN;
   };
   const midTotal = await headerCount();
   await seek(max);
@@ -256,6 +261,62 @@ test('thought beats render distinctly from actions in the console, interleaved b
   await seek(3);
   await expect(page.locator('#exec .xblk')).toHaveCount(1);
   await expect(page.locator('#exec .xblk').first()).toHaveClass(/xthought/);
+});
+
+test('the console per-agent filter isolates one actor\'s thoughts AND commands, and survives scrub/seek', async ({ page }) => {
+  // Synthetic two-actor tape: Bob (builder) and Tess (tester) interleave
+  // thoughts and executions. The filter chips must let a viewer isolate
+  // Bob's whole stream (reasoning + action) and hide Tess's entirely — the
+  // launch-relevant "follow one agent's story on a busy tape" addendum.
+  await page.goto('/recordings/');
+  await page.evaluate(() => {
+    (window as any).startReplay({
+      events: [
+        { ts: 1, kind: 'task_created', subject: 't1', detail: { role: 'builder', title: 'wire the loop' } },
+        { ts: 2, kind: 'task_claimed', actor: 'Bob', subject: 't1', detail: { role: 'builder', title: 'wire the loop' } },
+        { ts: 3, kind: 'thought', actor: 'Bob', detail: { role: 'builder', text: 'Bob is thinking about the retry loop.' } },
+        { ts: 4, kind: 'execution', actor: 'Bob', subject: 'go build ./...', detail: { ok: true, exit_code: 0, role: 'builder' } },
+        { ts: 5, kind: 'thought', actor: 'Tess', detail: { role: 'tester', text: 'Tess is thinking about coverage.' } },
+        { ts: 6, kind: 'execution', actor: 'Tess', subject: 'go test ./...', detail: { ok: true, exit_code: 0, role: 'tester' } },
+        { ts: 7, kind: 'thought', actor: 'Bob', detail: { role: 'builder', text: 'Bob wraps up the loop.' } },
+      ],
+    });
+  });
+  await expect(async () => {
+    expect(Number(await page.locator('#replay-scrub').getAttribute('max'))).toBe(7);
+  }).toPass({ timeout: 5000 });
+
+  const scrub = page.locator('#replay-scrub');
+  const seek = (t: number) => scrub.evaluate((el, v) => { (el as HTMLInputElement).value = String(v); el.dispatchEvent(new Event('input')); }, t);
+  await seek(7);
+
+  // Both actors' chips render (plus "all"), and by default every beat shows.
+  const chips = page.locator('#exec .xchip');
+  await expect(chips).toHaveCount(3); // all, Bob, Tess
+  await expect(page.locator('#exec .xblk')).toHaveCount(5); // 3 Bob beats + 2 Tess beats
+
+  // Click Bob's chip: only Bob's thoughts + commands remain, Tess vanishes.
+  await page.locator('#exec .xchip', { hasText: 'Bob' }).click();
+  await expect(page.locator('#exec .xblk')).toHaveCount(3);
+  const bobTexts = await page.locator('#exec .xblk').allInnerTexts();
+  expect(bobTexts.join(' ')).toContain('Bob is thinking about the retry loop');
+  expect(bobTexts.join(' ')).toContain('go build');
+  expect(bobTexts.join(' ')).toContain('Bob wraps up the loop');
+  for (const t of bobTexts) {
+    expect(t, 'Tess must not appear in a Bob-filtered feed').not.toContain('Tess');
+  }
+
+  // The filter survives a scrub/seek rebuild-from-0: seek back to mid-tape,
+  // Bob's isolation still applies (Tess's beats at ts 5/6 stay hidden).
+  await seek(4);
+  await expect(page.locator('#exec .xblk')).toHaveCount(2); // Bob's claim-adjacent thought + build, not yet Tess's
+  const midTexts = (await page.locator('#exec .xblk').allInnerTexts()).join(' ');
+  expect(midTexts).not.toContain('Tess');
+
+  // "all" chip restores the full merged feed.
+  await page.locator('#exec .xchip', { hasText: 'all' }).click();
+  await seek(7);
+  await expect(page.locator('#exec .xblk')).toHaveCount(5);
 });
 
 test('every recording card corresponds to a committed stream + meta pair', async () => {

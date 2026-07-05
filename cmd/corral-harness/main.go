@@ -136,10 +136,18 @@ func beePrompt(name string, rs agentrole.Set, instance, desc, model, backend str
    recorded, so also call report_execution with the command and exit code.
 5. Report any vulnerability/bug/design flaw/missing requirement via
    report_finding (with severity).
-6. Call complete_task with {"id":<the task id>,"result":"<one-line summary>"}.
+6. As you work, call report_thought a few times with {"name":%q,"mission_id":<the
+   claimed task's mission_id>,"text":"<a short, substantive sentence>"} — your
+   ACTUAL reasoning at real decision/finding points (what you're examining,
+   deciding, or finding — e.g. "the ratelimit test fails because the bucket
+   refills too slowly; checking the interval"). This is your own reasoning in
+   your own words, verbatim, never fabricated or dramatized for effect — it's a
+   silent no-op unless this mission opted in, so call it freely, but skip status
+   filler like "working on it" and skip steps with nothing substantive to say.
+7. Call complete_task with {"id":<the task id>,"result":"<one-line summary>"}.
    If it refuses, satisfy the stated reason and try once more.
-7. Print a one-line summary of what you did.`,
-		name, roleDisplay, name, roleDisplay, desc, announce, name, string(rolesJSON), instance)
+8. Print a one-line summary of what you did.`,
+		name, roleDisplay, name, roleDisplay, desc, announce, name, string(rolesJSON), instance, name)
 }
 
 func expand(tmpl string, sub map[string]string) string {

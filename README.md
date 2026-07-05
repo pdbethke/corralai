@@ -159,6 +159,16 @@ built entirely from durable task/finding/execution rows plus the event log
 (`mission_completed`, review state) when the mission spoke it — the same
 build, reconstructed, every time.
 
+**And it's not just *what* they did — it's *why*.** With story capture on, the
+replay streams each agent's own **reasoning**, verbatim, interleaved with its
+commands (*"the retry test is flaky because the backoff refills too slowly"* →
+`go test ✗`) — so you watch the herd *think*, not just move. Scrub to any moment
+and **click an agent** to inspect its reconstructed state; **filter the console
+to one agent** to follow a single thread. The captured reasoning is the agent's
+real words, never synthesized — which is exactly what turns the replay into a
+*debugger*: scrub back to the moment a model's reasoning went wrong and watch how
+it cascaded to the others.
+
 **See it live at [corralai.dev](https://corralai.dev).** The hero is a real
 recorded mission replaying in your browser; the **recordings gallery** holds
 more — different languages and model mixes, each labeled with the hardware it

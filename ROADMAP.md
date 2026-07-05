@@ -26,6 +26,18 @@ Go binary.**
 - Mission history + read-only replay; the corralai.dev site + recordings gallery
 - Shared memory, skills, and hooks (fleet-synced); OIDC identity
 - Fleet analytics to MotherDuck
+- **The story engine** — the replay streams the agents' *real, captured reasoning*
+  alongside their commands; click any agent mid-scrub to inspect its reconstructed
+  state; filter the console per agent. Watch the herd **think**, not just move.
+- **Egress scan** — the herd's output is vetted before it ships (committed secrets
+  are *blocking*; new/vulnerable deps and license conflicts are advisory), on any
+  forge — containment on the way *out*, not just the way in.
+- **Complexity-aware planning** + **multi-role workers** — the plan scales to the
+  task (no nine-role ceremony for a one-liner), and a small herd covers every role
+  without deadlocking.
+- **Model×role telemetry** — the brain computes each model's per-role performance
+  (sample-weighted, honest about thin data) and infers per-agent health from the
+  attributed ledger — the data layer the leaderboard and self-staffing read from.
 
 ## Now — make it operable and unbreakable
 - **The front door.** A first-class *"what should the herd build?"* composer, with
@@ -59,9 +71,6 @@ model mix, watch the board, approve the merges.
   fair.
 - **Mid-mission steering.** Pause, redirect, or re-scope a running mission — not
   just approve/reject at the ends.
-- **Output vetting.** A forge-agnostic egress scan (secrets / dependencies /
-  license) before the PR — the floor GitHub's own tooling doesn't cover on every
-  forge.
 - **Memory hygiene.** The shared corpus stays *fresh*, not merely growing.
 
 ## The through-line

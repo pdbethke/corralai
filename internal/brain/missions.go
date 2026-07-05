@@ -299,4 +299,51 @@ func registerMissions(s *mcp.Server, store *mission.Store, q *queue.Store, mem *
 			}
 			return nil, *mv, nil
 		})
+
+	// pause_mission / resume_mission / cancel_mission are #58's mid-mission
+	// human steering: today's human gate was TERMINAL only (review_mission,
+	// above) and the composer was PRE-launch (create_mission) — there was no
+	// way to intervene on a mission while it runs. Each is isHumanAdmin-gated
+	// exactly like approve_proposal/reject_proposal: a delegation/worker token
+	// riding a superuser's rolled-up authorization must never pause/cancel a
+	// mission out from under the fleet. See SteerMission for the semantics
+	// and the claim-path enforcement (queue.Store.HaltMission).
+	mcp.AddTool(s, &mcp.Tool{Name: "pause_mission",
+		Description: "Pause a running mission: the brain hands out no NEW tasks for it (in-flight claims still finish). Superuser only — mid-mission human steering."},
+		func(_ context.Context, req *mcp.CallToolRequest, in missionIDIn) (*mcp.CallToolResult, mission.Mission, error) {
+			if !opts.isHumanAdmin(req) {
+				return nil, mission.Mission{}, fmt.Errorf("forbidden: superuser only (pausing a mission is an operator action)")
+			}
+			mi, err := SteerMission(store, q, tel, in.ID, SteerPause, actorOf(req))
+			if err != nil {
+				return nil, mission.Mission{}, err
+			}
+			return nil, *mi, nil
+		})
+
+	mcp.AddTool(s, &mcp.Tool{Name: "resume_mission",
+		Description: "Resume a paused mission: restores normal task dispatch. Superuser only."},
+		func(_ context.Context, req *mcp.CallToolRequest, in missionIDIn) (*mcp.CallToolResult, mission.Mission, error) {
+			if !opts.isHumanAdmin(req) {
+				return nil, mission.Mission{}, fmt.Errorf("forbidden: superuser only (resuming a mission is an operator action)")
+			}
+			mi, err := SteerMission(store, q, tel, in.ID, SteerResume, actorOf(req))
+			if err != nil {
+				return nil, mission.Mission{}, err
+			}
+			return nil, *mi, nil
+		})
+
+	mcp.AddTool(s, &mcp.Tool{Name: "cancel_mission",
+		Description: "Cancel a mission for good: no more tasks are handed out and it leaves the active set. Irreversible — there is no resume from cancelled. Superuser only."},
+		func(_ context.Context, req *mcp.CallToolRequest, in missionIDIn) (*mcp.CallToolResult, mission.Mission, error) {
+			if !opts.isHumanAdmin(req) {
+				return nil, mission.Mission{}, fmt.Errorf("forbidden: superuser only (cancelling a mission is an operator action)")
+			}
+			mi, err := SteerMission(store, q, tel, in.ID, SteerCancel, actorOf(req))
+			if err != nil {
+				return nil, mission.Mission{}, err
+			}
+			return nil, *mi, nil
+		})
 }

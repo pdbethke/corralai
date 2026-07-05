@@ -19,7 +19,7 @@
 //	corral-admin whoami                          # who the brain sees you as
 //	corral-admin mint-observer [--ttl 24h] [--principal x]
 //	corral-admin member  list | add <email> | super <email> [--off] | create-super [email] | remove <email>
-//	corral-admin mission list | status <id> | create <directive...>
+//	corral-admin mission list | status <id> | create <directive...> | pause <id> | resume <id> | cancel <id>
 //	corral-admin proposals list | show <id> | approve <id> | reject <id> --reason "..."
 //
 // Global flags (all verbs): --brain/CORRAL_BRAIN, --token/CORRAL_TOKEN, --json.
@@ -352,7 +352,7 @@ func memberArg(args []string, name string) (*conn, string) {
 
 func cmdMission(args []string) {
 	if len(args) == 0 {
-		fatal("usage: corral-admin mission <list|status|create> ...")
+		fatal("usage: corral-admin mission <list|status|create|pause|resume|cancel> ...")
 	}
 	sub, rest := args[0], args[1:]
 	switch sub {
@@ -404,9 +404,40 @@ func cmdMission(args []string) {
 			_ = json.Unmarshal(out, &r)
 			fmt.Printf("✓ created mission #%d: %s\n", r.ID, directive)
 		})
+	case "pause":
+		cmdMissionSteer("pause_mission", "pause", rest)
+	case "resume":
+		cmdMissionSteer("resume_mission", "resume", rest)
+	case "cancel":
+		cmdMissionSteer("cancel_mission", "cancel", rest)
 	default:
-		fatal("unknown mission subcommand %q (list|status|create)", sub)
+		fatal("unknown mission subcommand %q (list|status|create|pause|resume|cancel)", sub)
 	}
+}
+
+// cmdMissionSteer is #58's mid-mission human steering, shared by
+// pause/resume/cancel: each is a thin wrapper over the brain's
+// pause_mission/resume_mission/cancel_mission MCP tools (isHumanAdmin-gated —
+// a non-superuser operator token is refused server-side, same as prune).
+func cmdMissionSteer(tool, verb string, rest []string) {
+	fs := flag.NewFlagSet("mission "+verb, flag.ExitOnError)
+	c := bind(fs)
+	parseFlags(fs, rest)
+	if fs.NArg() < 1 {
+		fatal("usage: corral-admin mission %s <id>", verb)
+	}
+	id, err := strconv.ParseInt(fs.Arg(0), 10, 64)
+	if err != nil {
+		fatal("mission id must be a number: %v", err)
+	}
+	c.do(tool, map[string]any{"id": id}, func(out json.RawMessage) {
+		var r struct {
+			ID     int64  `json:"id"`
+			Status string `json:"status"`
+		}
+		_ = json.Unmarshal(out, &r)
+		fmt.Printf("✓ mission #%d is now %s\n", r.ID, r.Status)
+	})
 }
 
 // ---- findings ----
@@ -968,7 +999,7 @@ func usage() {
   corral-admin whoami                          who the brain sees you as
   corral-admin mint-observer [--ttl 24h] [--principal x]
   corral-admin member  list | add <email> | super <email> [--off] | create-super [email] | remove <email>
-  corral-admin mission list | status <id> | create <directive...>
+  corral-admin mission list | status <id> | create <directive...> | pause <id> | resume <id> | cancel <id>
   corral-admin review <id> --accept | --changes "..."
   corral-admin findings [--mission N] [--status open]
   corral-admin resolve-findings [--delay 2m] [--mission N] [--outcome addressed|dismissed]

@@ -158,6 +158,9 @@ func Handler(d Deps) http.Handler {
 	mux.HandleFunc("/api/leaderboard", s.leaderboard)
 	mux.HandleFunc("/api/mission/footprint", s.footprint)
 	mux.HandleFunc("/api/mission/prune", s.prune)
+	mux.HandleFunc("/api/mission/pause", s.steer(brain.SteerPause))
+	mux.HandleFunc("/api/mission/resume", s.steer(brain.SteerResume))
+	mux.HandleFunc("/api/mission/cancel", s.steer(brain.SteerCancel))
 	return mux
 }
 
@@ -427,6 +430,57 @@ func (s *Server) prune(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"ok": true, "pruned": pruned})
+}
+
+// steer returns the handler for one of #58's mid-mission human-steering
+// verbs (pause/resume/cancel) — today's human gate was TERMINAL only
+// (proposalApprove/proposalReject/review) and the composer was PRE-launch
+// (create_mission); there was no way to intervene on a RUNNING mission. Each
+// verb is gated exactly like prune: a read-only observer token, or a
+// delegation/worker token, is refused — only a verified human superuser may
+// steer a mission. The action is recorded (attributed to the verified
+// principal) in telemetry by brain.SteerMission so it surfaces in
+// history/replay.
+func (s *Server) steer(action string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if auth.ReadOnly(r) {
+			http.Error(w, "forbidden: read-only observer token cannot act", http.StatusForbidden)
+			return
+		}
+		if !s.isSuperuser(r) {
+			http.Error(w, "forbidden: superuser only (mission steering is an operator action)", http.StatusForbidden)
+			return
+		}
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		if s.missions == nil || s.queue == nil {
+			http.NotFound(w, r)
+			return
+		}
+		var body struct {
+			ID int64 `json:"id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "bad json", http.StatusBadRequest)
+			return
+		}
+		if body.ID == 0 {
+			http.Error(w, "id required", http.StatusBadRequest)
+			return
+		}
+		actor := auth.Principal(r.Context())
+		if actor == "" {
+			actor = "operator"
+		}
+		mi, err := brain.SteerMission(s.missions, s.queue, s.tel, body.ID, action, actor)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true, "mission": mi})
+	}
 }
 
 // me reports the viewer's verified identity and role so the UI can show who's

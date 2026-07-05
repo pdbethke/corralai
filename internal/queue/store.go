@@ -124,6 +124,11 @@ CREATE TABLE IF NOT EXISTS executions (
   ts         INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS ix_executions_mission ON executions(mission_id);
+
+CREATE TABLE IF NOT EXISTS mission_halts (
+  mission_id INTEGER PRIMARY KEY,
+  reason     TEXT NOT NULL   -- 'paused' | 'cancelled'
+);
 `
 
 // Open returns a Store backed by a SQLite file (WAL). MaxOpenConns=1 serializes
@@ -227,12 +232,47 @@ func (s *Store) PruneMission(missionID int64) error {
 		`DELETE FROM tasks WHERE mission_id=?`,
 		`DELETE FROM findings WHERE mission_id=?`,
 		`DELETE FROM executions WHERE mission_id=?`,
+		`DELETE FROM mission_halts WHERE mission_id=?`,
 	} {
 		if _, err := tx.Exec(stmt, missionID); err != nil {
 			return err
 		}
 	}
 	return tx.Commit()
+}
+
+// HaltMission marks a mission halted for the given reason ("paused" or
+// "cancelled") — the claim path's ClaimNextAs excludes a halted mission's
+// tasks from the ready-task pool, so the brain hands out no NEW work for it.
+// In-flight (already-claimed) tasks are untouched and may still finish.
+// Idempotent: re-halting with a different reason simply overwrites it (used
+// by cancel to supersede an existing pause). Human-gated by the caller (see
+// mission.PauseMission/CancelMission and the /api/mission/pause|cancel
+// handlers) — mirrors PruneMission's contract.
+func (s *Store) HaltMission(missionID int64, reason string) error {
+	_, err := s.db.Exec(
+		`INSERT INTO mission_halts(mission_id, reason) VALUES(?,?)
+		 ON CONFLICT(mission_id) DO UPDATE SET reason=excluded.reason`,
+		missionID, reason)
+	return err
+}
+
+// UnhaltMission clears a mission's halt — resume. No-op if the mission was
+// not halted.
+func (s *Store) UnhaltMission(missionID int64) error {
+	_, err := s.db.Exec(`DELETE FROM mission_halts WHERE mission_id=?`, missionID)
+	return err
+}
+
+// MissionHaltReason returns a mission's current halt reason ("paused" or
+// "cancelled"), or "" when the mission is not halted.
+func (s *Store) MissionHaltReason(missionID int64) (string, error) {
+	var reason string
+	err := s.db.QueryRow(`SELECT reason FROM mission_halts WHERE mission_id=?`, missionID).Scan(&reason)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return reason, err
 }
 
 // PromoteReady flips pending → ready for every task whose dependencies are all
@@ -342,7 +382,14 @@ func (s *Store) ClaimNextAs(bee, instance string, roles []string, leaseSeconds f
 		}
 	}
 
-	q := `SELECT id,mission_id,key,role,title,instruction,depends_on,created_ts FROM tasks WHERE status=?`
+	// mission_id NOT IN mission_halts is the claim-path enforcement of #58's
+	// pause/cancel: a paused or cancelled mission's ready tasks simply never
+	// win this SELECT, so the brain hands out no NEW work for it. Tasks
+	// already claimed before the halt are untouched (they live in status
+	// StatusClaimed, not StatusReady, so this WHERE never sees them) and may
+	// still finish — only new dispatch stops.
+	q := `SELECT id,mission_id,key,role,title,instruction,depends_on,created_ts FROM tasks
+		WHERE status=? AND mission_id NOT IN (SELECT mission_id FROM mission_halts)`
 	args := []any{StatusReady}
 	if len(roles) > 0 {
 		// role IN (roles..., '') — a role-typed bee also serves untagged tasks.

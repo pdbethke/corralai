@@ -28,7 +28,7 @@ const schema = `
 CREATE TABLE IF NOT EXISTS missions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   directive TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'running',   -- running | awaiting_review | done | failed
+  status TEXT NOT NULL DEFAULT 'running',   -- running | paused | cancelled | awaiting_review | done | failed
   sprint INTEGER NOT NULL DEFAULT 1,
   requires_review INTEGER NOT NULL DEFAULT 0,
   record_story INTEGER NOT NULL DEFAULT 0,
@@ -384,6 +384,75 @@ func (s *Store) Phases(missionID int64) ([]Phase, error) {
 func (s *Store) SetMissionStatus(id int64, status string) error {
 	_, err := s.db.Exec(`UPDATE missions SET status=?, updated_ts=? WHERE id=?`, status, now(), id)
 	return err
+}
+
+// PauseMission is #58's mid-mission human steering: an operator halts a
+// RUNNING mission so the brain hands out no NEW tasks for it (the claim path
+// enforces this — see queue.Store.HaltMission/ClaimNextAs); in-flight claims
+// may still finish. Only a running mission can be paused (pausing an
+// awaiting_review/done/cancelled mission is a no-op state and refused so the
+// caller notices a stale assumption rather than silently doing nothing).
+// Human-gated by the caller (see brain.SteerMission / the
+// /api/mission/pause handler) exactly like PruneMission's contract.
+func PauseMission(m *Store, q *queue.Store, id int64) (*Mission, error) {
+	mi, err := m.Mission(id)
+	if err != nil || mi == nil {
+		return nil, fmt.Errorf("no mission %d", id)
+	}
+	if mi.Status != "running" {
+		return nil, fmt.Errorf("mission %d is %s, not running — cannot pause", id, mi.Status)
+	}
+	if err := q.HaltMission(id, "paused"); err != nil {
+		return nil, err
+	}
+	if err := m.SetMissionStatus(id, "paused"); err != nil {
+		return nil, err
+	}
+	return m.Mission(id)
+}
+
+// ResumeMission restores normal flow for a paused mission: the claim path's
+// halt is cleared and the mission returns to "running" so PromoteReady/
+// ClaimNextAs treat it exactly as before the pause. Only a paused mission can
+// be resumed.
+func ResumeMission(m *Store, q *queue.Store, id int64) (*Mission, error) {
+	mi, err := m.Mission(id)
+	if err != nil || mi == nil {
+		return nil, fmt.Errorf("no mission %d", id)
+	}
+	if mi.Status != "paused" {
+		return nil, fmt.Errorf("mission %d is %s, not paused — cannot resume", id, mi.Status)
+	}
+	if err := q.UnhaltMission(id); err != nil {
+		return nil, err
+	}
+	if err := m.SetMissionStatus(id, "running"); err != nil {
+		return nil, err
+	}
+	return m.Mission(id)
+}
+
+// CancelMission stops a mission for good: the claim path halts it (same
+// enforcement as pause, reason "cancelled") and its status flips to
+// "cancelled" — it leaves the active set (RunningMissions no longer returns
+// it) and, unlike a pause, there is no resume back from here. Allowed from
+// any non-terminal state (running, paused, or awaiting_review); refused once
+// already done or cancelled.
+func CancelMission(m *Store, q *queue.Store, id int64) (*Mission, error) {
+	mi, err := m.Mission(id)
+	if err != nil || mi == nil {
+		return nil, fmt.Errorf("no mission %d", id)
+	}
+	if mi.Status == "done" || mi.Status == "cancelled" {
+		return nil, fmt.Errorf("mission %d is already %s — cannot cancel", id, mi.Status)
+	}
+	if err := q.HaltMission(id, "cancelled"); err != nil {
+		return nil, err
+	}
+	if err := m.SetMissionStatus(id, "cancelled"); err != nil {
+		return nil, err
+	}
+	return m.Mission(id)
 }
 
 // BumpSprint increments a mission's sprint counter (a new client-feedback round)

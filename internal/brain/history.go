@@ -102,7 +102,10 @@ func summarize(mi mission.Mission, q *queue.Store, tel *telemetry.Store, approve
 	}, nil
 }
 
-// MissionHistoryList returns every non-running mission, newest created first.
+// MissionHistoryList returns every non-active mission, newest created first.
+// "running" AND "paused" are both excluded (#58): a paused mission is still
+// active — steering it (resume/cancel) is done from the live view, not the
+// Completed tab — only cancelled/done/awaiting_review missions belong here.
 func MissionHistoryList(m *mission.Store, q *queue.Store, tel *telemetry.Store, l *learn.Store) ([]MissionSummary, error) {
 	all, err := m.ListMissions()
 	if err != nil {
@@ -114,7 +117,7 @@ func MissionHistoryList(m *mission.Store, q *queue.Store, tel *telemetry.Store, 
 	}
 	out := make([]MissionSummary, 0, len(all))
 	for _, mi := range all {
-		if mi.Status == "running" {
+		if mi.Status == "running" || mi.Status == "paused" {
 			continue
 		}
 		sm, err := summarize(mi, q, tel, approved)

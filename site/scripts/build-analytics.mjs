@@ -164,6 +164,7 @@ function flattenRows(recordingsDir) {
         ts: ev.ts,
         kind: ev.kind || '',
         subject: ev.subject || '',
+        actor: ev.actor || '',
         model: ev.model || '',
         backend: String(d.backend || ''),
         severity: String(d.severity || ''),
@@ -190,7 +191,14 @@ async function buildAnalyticsFromRecordings(recordingsDir, outPath) {
       SELECT slug, COALESCE(NULLIF(severity,''),'(none)') AS severity, count(*) AS n
       FROM ev WHERE kind='finding_reported' GROUP BY slug, severity ORDER BY slug, severity`);
     const findings_by_model = await q(conn, `
-      SELECT CASE WHEN model='' THEN '(not recorded)'
+      SELECT CASE
+                  -- deterministic brain components file findings too (the verify
+                  -- gate refusing, the stall watchdog, the reflex re-planner);
+                  -- they are NOT models, so bucket them honestly rather than
+                  -- lumping them under "(not recorded)", which reads as an
+                  -- attribution gap the models had.
+                  WHEN actor IN ('verify-gate','stall-watchdog','reflex-replanner','lead','client','engine','scrum','brain') THEN 'corral gate / system'
+                  WHEN model='' THEN '(not recorded)'
                   WHEN backend='' THEN model
                   ELSE backend || ':' || model END AS model,
              count(*) AS findings

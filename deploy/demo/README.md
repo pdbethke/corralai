@@ -356,6 +356,23 @@ headless agent — the brain can't tell the difference, and the topology view,
 subscription's usage limits: the economical shape is one or two frontier-harness
 agents on the judgment roles (builder/reviewer/lead) alongside free local agents.
 
+### Two GPUs, two models (split the herd)
+
+Run part of the herd on a **second Ollama backend** — a second GPU, a second
+host, any reachable endpoint — with a different model, and watch two models
+coordinate on one mission (the topology view and `model_comparison` report treat
+them as one herd). `docker-compose.split.yml` puts the verify roles (tester,
+pentester, reviewer) on the second backend; the builder stays on the default:
+
+```bash
+# a second Ollama reachable on the host at :11435, serving a bigger coder model
+SPLIT_OLLAMA_URL=http://host.docker.internal:11435 SPLIT_MODEL=qwen2.5-coder:14b \
+  docker compose -f docker-compose.yml -f docker-compose.split.yml --profile mission up -d
+```
+
+Point `SPLIT_OLLAMA_URL` at wherever your second backend lives, and edit the
+overlay's service list to split roles however you like.
+
 ### A Max-plan agent in the wow demo (verified)
 
 Run the mission demo with the container builder replaced by a **host-side Claude

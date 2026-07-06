@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: Elastic-2.0
+#
+# docker-compose.split.yml — run PART of the mission herd on a SECOND Ollama
+# backend, with a different (often larger) model. A concrete demonstration of
+# the model-agnostic substrate: different roles driven by different models — on
+# a second GPU, a second host, or any reachable Ollama endpoint — coordinating
+# on ONE mission, with the topology view and the `model_comparison` report
+# treating them as the same herd.
+#
+# Here the finding/verify roles (tester, pentester, reviewer) go to the second
+# backend while the builder and the rest stay on the demo's default Ollama.
+# Adjust the service list to taste (e.g. put the builder on the bigger model
+# instead).
+#
+# Configure via env — the defaults assume a second Ollama reachable on the host
+# at :11435 serving qwen2.5-coder:14b, but point them anywhere:
+#   SPLIT_OLLAMA_URL   the second backend    (default http://host.docker.internal:11435)
+#   SPLIT_MODEL        the model it serves   (default qwen2.5-coder:14b)
+#
+# Usage (from deploy/demo):
+#   SPLIT_OLLAMA_URL=http://host.docker.internal:11435 SPLIT_MODEL=qwen2.5-coder:14b \
+#     docker compose -f docker-compose.yml -f docker-compose.split.yml --profile mission up -d
+#
+# `host.docker.internal:host-gateway` lets the demo-network containers reach a
+# host-published port; if your second Ollama runs elsewhere, set SPLIT_OLLAMA_URL
+# to its address (the extra_hosts entry is then simply unused).
+x-split-backend: &split
+  extra_hosts: ["host.docker.internal:host-gateway"]
+  environment:
+    OLLAMA_URL: "${SPLIT_OLLAMA_URL:-http://host.docker.internal:11435}"
+    AGENT_MODEL: "${SPLIT_MODEL:-qwen2.5-coder:14b}"
+
+services:
+  mission-tester:    { <<: *split }
+  mission-pentester: { <<: *split }
+  mission-reviewer:  { <<: *split }

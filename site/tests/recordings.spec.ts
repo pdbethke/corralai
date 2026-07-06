@@ -238,6 +238,63 @@ test('clicking a roster agent opens the faithful floating inspector window (tape
   expect(apiCalls, `the tape-only inspector must never call the brain: ${apiCalls.join(', ')}`).toHaveLength(0);
 });
 
+test('the inspector window populates LIVE as the tape PLAYS forward (not just on scrub)', async ({ page }) => {
+  // Prove the window repaints on every playback tick (replayStep →
+  // renderReplayScrub → renderReplayPanels → refreshReplayWindows), not only
+  // on a manual seek. A small synthetic single-actor tape makes the growth
+  // deterministic: Bob claims + finishes two tasks, running a command each.
+  const apiCalls: string[] = [];
+  page.on('request', (req) => {
+    if (new URL(req.url()).pathname.startsWith('/api/')) apiCalls.push(req.url());
+  });
+
+  await page.goto('/recordings/');
+  await page.evaluate(() => {
+    (window as any).startReplay({
+      events: [
+        { ts: 1, kind: 'task_created', subject: 't1', detail: { role: 'builder', title: 'wire the loop' } },
+        { ts: 2, kind: 'task_claimed', actor: 'Bob', subject: 't1', detail: { role: 'builder', title: 'wire the loop' } },
+        { ts: 3, kind: 'execution', actor: 'Bob', subject: 'go build ./...', detail: { ok: true, exit_code: 0, role: 'builder' } },
+        { ts: 4, kind: 'task_done', actor: 'Bob', subject: 't1', detail: { role: 'builder' } },
+        { ts: 5, kind: 'task_created', subject: 't2', detail: { role: 'builder', title: 'add retry backoff' } },
+        { ts: 6, kind: 'task_claimed', actor: 'Bob', subject: 't2', detail: { role: 'builder', title: 'add retry backoff' } },
+        { ts: 7, kind: 'execution', actor: 'Bob', subject: 'go test ./...', detail: { ok: true, exit_code: 0, role: 'builder' } },
+        { ts: 8, kind: 'task_done', actor: 'Bob', subject: 't2', detail: { role: 'builder' } },
+      ],
+    });
+  });
+  await expect(async () => {
+    expect(Number(await page.locator('#replay-scrub').getAttribute('max'))).toBe(8);
+  }).toPass({ timeout: 5000 });
+
+  const scrub = page.locator('#replay-scrub');
+  const seek = (t: number) => scrub.evaluate((el, v) => { (el as HTMLInputElement).value = String(v); el.dispatchEvent(new Event('input')); }, t);
+
+  // Park just after Bob claims t1 (paused: startReplay leaves replayPlaying
+  // false), open his window, and capture the early state.
+  await seek(2);
+  const row = page.locator('#agents .arow', { hasText: 'Bob' });
+  await expect(row).toBeVisible();
+  await row.click();
+  const body = page.locator('.aw-win .aw-body');
+  await expect(body).toBeVisible();
+  await expect(body).toContainText('holding 1');
+  await expect(body).toContainText('completed 0');
+  await expect(body).toContainText('wire the loop');
+
+  // Now PLAY forward from here (fast) — the window must grow on the timer
+  // ticks, with no interaction and no scrub.
+  await page.evaluate(() => { (window as any).setReplaySpeed(16); (window as any).toggleReplayPlay(); });
+
+  // As the tape advances, completed climbs to 2 and the working-on flips to
+  // the second task — all driven purely by playback repaints.
+  await expect(body).toContainText('completed 2', { timeout: 5000 });
+  await expect(body).toContainText('add retry backoff');
+  await expect(body).toContainText('go test ./...');
+
+  expect(apiCalls, `live-updating window must stay tape-only: ${apiCalls.join(', ')}`).toHaveLength(0);
+});
+
 test('the console surfaces BOTH the builder and the tester (command from subject, not detail.command)', async ({ page }) => {
   // python-ratelimit: Bob (builder) ran 5 commands, Tess (tester) ran 3 — the
   // console reads the command from the beat's `subject`, so both actors appear.

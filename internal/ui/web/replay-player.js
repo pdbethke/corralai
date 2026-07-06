@@ -371,12 +371,20 @@ const SKINS = {
            caught:['Caught me — no {cmd} on record!','Busted! Never ran {cmd}…','Can’t fake the buzz 🐝','No proof, no pass — re-doing it'],
            brainTag:'the queen — MCP coordinator · task queue · verification gate', replay:'🐝 replaying the hive' },
 };
-let skinName = localStorage.getItem('corral-skin') || 'ranch';
+// A host page can PIN the skin by setting data-skin-lock on <html> before this
+// script loads. The marketing landing hero uses this so it always renders the
+// branded 'ranch' look, regardless of a skin the visitor picked on /recordings
+// — that pick persists under the shared corral-skin key on the same origin, so
+// without the lock it would leak into the hero on the next load. When locked we
+// also skip persistence: switching a skin on a locked page previews it but
+// never overwrites the choice made on an unlocked page.
+const SKIN_LOCK = (function(){ try{ return document.documentElement.getAttribute('data-skin-lock') || ''; }catch(_){ return ''; } })();
+let skinName = SKIN_LOCK || localStorage.getItem('corral-skin') || 'ranch';
 if(!SKINS[skinName]) skinName = 'ranch';
 function skin(){ return SKINS[skinName]; }
 function setSkin(n){
   if(!SKINS[n]) return;
-  skinName = n; localStorage.setItem('corral-skin', n);
+  skinName = n; if(!SKIN_LOCK) localStorage.setItem('corral-skin', n);
   // Drive the visual palette: data-skin on <html> lets CSS override the
   // theme-invariant --stage-* tokens per skin (see the site's global.css and
   // the product's own stylesheet), so the canvas + HUD + panels + console +
@@ -868,6 +876,12 @@ const REPLAY_SPEED_KEY = 'corralai-replay-speed';
 const DEFAULT_REPLAY_SPEED = 2;
 const REPLAY_SPEEDS = [1, 2, 4, 8, 16];
 let replayEvents = [], replayIdx = 0, replayPlaying = false, replaySpeed = DEFAULT_REPLAY_SPEED, replayTimer = null, replaySSEPaused = false;
+// cvCurrentView: which cockpit tab is open (cockpitView sets it). The scrub
+// choke point (renderReplayScrub) reads it to re-derive whichever position-
+// dependent lens is showing — progress/topology/completed reconstruct at the
+// playhead just like the swarm canvas and files tree, so one scrubber drives
+// the WHOLE cockpit through time, not only the canvas.
+let cvCurrentView = 'swarm';
 function storedReplaySpeed(){
   try {
     const n = Number(localStorage.getItem(REPLAY_SPEED_KEY));
@@ -1778,6 +1792,13 @@ function renderReplayPanels(){
   renderReplayAgents();
   renderReplayFindings();
   renderReplayFiles();   // file-tree lens — scrub-driven, fills in / lights up as the tape plays
+  // The reduced full-screen lenses are playhead-driven too (cvReduce bounds to
+  // replayIdx). Re-derive only the OPEN one so scrubbing moves it in lockstep
+  // with the canvas and the files tree — rendering all three every tick would
+  // re-fold the prefix three times per event for no visible gain.
+  if(cvCurrentView === 'progress') renderReplayProgress();
+  else if(cvCurrentView === 'topology') renderReplayTopology();
+  else if(cvCurrentView === 'completed') renderReplayCompleted();
   refreshReplayAgentWindows();
   refreshReplayWindows();
 }
@@ -2101,7 +2122,14 @@ function cvStatusColor(s){
 // over replayEvents — independent of the scrub position, so a tab always shows
 // the complete recorded mission, not a partial frame.
 function cvReduce(){
-  const evs = (typeof replayEvents !== 'undefined' && replayEvents) || [];
+  const all = (typeof replayEvents !== 'undefined' && replayEvents) || [];
+  // Reduce only the tape UP TO the playhead, so the progress/topology/completed
+  // lenses reconstruct the mission AS IT STOOD at the current scrub position —
+  // the same playhead the swarm canvas and files tree already honor. After a
+  // full play-through replayIdx === all.length, so this is the whole tape (the
+  // final state); at rest before playing it is 0 (nothing has happened yet).
+  const upto = (typeof replayIdx === 'number') ? Math.min(replayIdx, all.length) : all.length;
+  const evs = all.slice(0, upto);
   const tasks = new Map();   // key -> {key,title,role,status,claimedBy,order}
   const agents = new Map();  // name -> {name,role,done,claims}
   const fseen = new Set();
@@ -2228,14 +2256,19 @@ function renderSampleProposals(){
 // replay bar, and renders the selected view from the recorded tape.
 function cockpitView(v){
   if(v === 'replay') v = 'swarm';
+  cvCurrentView = v;
   const tabs = ['swarm','progress','topology','memory','skills','proposals','files','completed'];
   tabs.forEach(t => { const el = document.getElementById('tab-' + t); if(el) el.classList.toggle('active', t === v); });
   const panels = ['progress','topology','memory','skills','proposals','files','completed'];
   panels.forEach(p => { const el = document.getElementById(p); if(el) el.classList.toggle('show', p === v); });
-  // The scrub bar shows for the swarm canvas AND the files lens — both track
-  // the playhead, so both want the transport (the other tabs reduce the whole
-  // tape and are position-independent).
-  const bar = document.getElementById('replay'); if(bar) bar.classList.toggle('show', v === 'swarm' || v === 'files');
+  // The scrub bar is the WHOLE cockpit's transport: it shows for every lens
+  // that reconstructs at the playhead — the swarm canvas, the files tree, and
+  // the reduced progress/topology/completed views (all now bounded to replayIdx
+  // via cvReduce). Only the sample panels (memory/skills/proposals), which show
+  // a static labeled sample the tape never recorded, are position-independent
+  // and hide the transport.
+  const timeline = (v === 'swarm' || v === 'files' || v === 'progress' || v === 'topology' || v === 'completed');
+  const bar = document.getElementById('replay'); if(bar) bar.classList.toggle('show', timeline);
   if(v === 'progress') renderReplayProgress();
   else if(v === 'topology') renderReplayTopology();
   else if(v === 'completed') renderReplayCompleted();

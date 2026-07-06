@@ -281,6 +281,13 @@ const minutes = Math.round((meta.duration_seconds || 0) / 60);
   #replay-title { color: var(--stage-amber); font-size: 12px; font-weight: 600; margin-right: 4px; }
 </style>
 
+<!-- Pin the branded 'ranch' skin BEFORE the player loads: replay-player.js
+     applies a persisted skin synchronously at its own load, and the skin the
+     visitor may have picked on /recordings persists under the same corral-skin
+     key on this origin. data-skin-lock makes the hero ignore that persisted
+     pick (and not overwrite it) so the landing page always leads with the
+     brand look. Must run before the player <script src>. -->
+<script is:inline>document.documentElement.setAttribute('data-skin-lock', 'ranch');</script>
 <script src="/replay-player.js" is:inline></script>
 <script define:vars={{ golden }} is:inline>
   // The site's minimal DOM contract implementation (see replay-player.js's

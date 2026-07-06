@@ -439,8 +439,8 @@
       <button id="replay-playbtn" onclick="toggleReplayPlay()">▶ play</button>
       <input type="range" id="replay-scrub" min="0" max="0" value="0" oninput="seekReplay(+this.value)">
       <span id="replay-label">0 / 0</span>
-      <select onchange="setReplaySpeed(+this.value)" title="playback speed">
-        <option value="1">1×</option><option value="2">2×</option><option value="4">4×</option>
+      <select data-replay-speed onchange="setReplaySpeed(+this.value)" title="playback speed">
+        <option value="1">1×</option><option value="2" selected>2×</option><option value="4">4×</option>
         <option value="8">8×</option><option value="16">16×</option>
       </select>
       <button onclick="closeReplay()">✕ exit replay</button>

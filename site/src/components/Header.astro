@@ -36,7 +36,7 @@ import Logo from './Logo.astro';
       </a>
       <label class="sh-speed" title="Replay playback speed">
         <span class="sh-speed-label">Speed</span>
-        <select id="sh-replay-speed" aria-label="Replay playback speed">
+        <select id="sh-replay-speed" data-replay-speed aria-label="Replay playback speed">
           <option value="1">1×</option>
           <option value="2" selected>2×</option>
           <option value="4">4×</option>
@@ -44,7 +44,7 @@ import Logo from './Logo.astro';
           <option value="16">16×</option>
         </select>
       </label>
-      <button id="sh-theme-toggle" class="sh-theme" type="button" aria-label="Toggle light / dark theme" title="Toggle light / dark">
+      <button id="sh-theme-toggle" class="sh-theme" type="button" data-site-theme-toggle aria-label="Toggle light / dark theme" title="Toggle light / dark">
         <span class="sh-tt-icon" aria-hidden="true">🌙</span>
       </button>
     </div>
@@ -181,47 +181,4 @@ import Logo from './Logo.astro';
   }
 </style>
 
-<script is:inline>
-  (function () {
-    var THEME_KEY = 'corralai-site-theme';
-    var SPEED_KEY = 'corralai-replay-speed';
-    var SPEEDS = [1, 2, 4, 8, 16];
-    var DEFAULT_SPEED = 2;
-    function storedSpeed() {
-      try {
-        var n = Number(localStorage.getItem(SPEED_KEY));
-        return SPEEDS.indexOf(n) >= 0 ? n : DEFAULT_SPEED;
-      } catch (e) { return DEFAULT_SPEED; }
-    }
-    function paint() {
-      var b = document.getElementById('sh-theme-toggle');
-      if (!b) return;
-      var dark = document.documentElement.getAttribute('data-theme') === 'dark';
-      var icon = b.querySelector('.sh-tt-icon');
-      if (icon) icon.textContent = dark ? '☀️' : '🌙';
-    }
-    function wire() {
-      paint();
-      var b = document.getElementById('sh-theme-toggle');
-      if (b) {
-        b.addEventListener('click', function () {
-          var next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
-          document.documentElement.setAttribute('data-theme', next);
-          try { localStorage.setItem(THEME_KEY, next); } catch (e) {}
-          paint();
-        });
-      }
-      var speed = document.getElementById('sh-replay-speed');
-      if (speed) {
-        speed.value = String(storedSpeed());
-        speed.addEventListener('change', function () {
-          var v = Number(this.value);
-          try { localStorage.setItem(SPEED_KEY, String(v)); } catch (e) {}
-          if (typeof window.setReplaySpeed === 'function') window.setReplaySpeed(v);
-        });
-      }
-    }
-    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', wire);
-    else wire();
-  })();
-</script>
+<script src="/site-controls.js" is:inline></script>

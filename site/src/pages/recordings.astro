@@ -3,6 +3,7 @@
 import '../styles/global.css';
 import { cockpitHud, cockpitViews, cockpitTasks, cockpitAgents, cockpitFindings, cockpitExec } from '../lib/cockpitShell';
 import Header from '../components/Header.astro';
+import ReplayBarControls from '../components/ReplayBarControls.astro';
 
 const generatedAnalyticsModules = import.meta.glob('../data/generated/analytics.json', { eager: true });
 const legacyAnalyticsModules = import.meta.glob('../data/analytics.json', { eager: true });
@@ -133,6 +134,7 @@ const maxModelFindings = Math.max(1, ...analytics.findings_by_model.map((r: any)
         <button id="replay-playbtn" onclick="toggleReplayPlay()">▶ play</button>
         <input type="range" id="replay-scrub" min="0" max="0" value="0" oninput="seekReplay(+this.value)">
         <span id="replay-label">0 / 0</span>
+        <ReplayBarControls />
       </div>
     </div>
   </div>

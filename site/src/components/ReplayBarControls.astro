@@ -1,0 +1,73 @@
+---
+// SPDX-License-Identifier: Elastic-2.0
+// Cockpit-local replay controls: speed dropdown + light/dark theme toggle.
+// Mirrors the header's #sh-replay-speed / #sh-theme-toggle; site-controls.js
+// keeps every [data-replay-speed] / [data-site-theme-toggle] in sync.
+---
+<div class="replay-bar-controls">
+  <label class="rbc-speed" title="Replay playback speed">
+    <select id="replay-speed" data-replay-speed aria-label="Replay playback speed">
+      <option value="1">1×</option>
+      <option value="2" selected>2×</option>
+      <option value="4">4×</option>
+      <option value="8">8×</option>
+      <option value="16">16×</option>
+    </select>
+  </label>
+  <button
+    id="replay-theme-toggle"
+    class="rbc-theme"
+    type="button"
+    data-site-theme-toggle
+    aria-label="Toggle light / dark theme"
+    title="Toggle light / dark"
+  >
+    <span class="rbc-tt-icon" aria-hidden="true">🌙</span>
+  </button>
+</div>
+
+<style>
+  .replay-bar-controls {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+    flex: none;
+  }
+  .rbc-speed select {
+    appearance: none;
+    background: var(--stage-panel);
+    color: var(--stage-fg);
+    border: 1px solid var(--stage-line);
+    border-radius: 5px;
+    padding: 4px 22px 4px 8px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: border-color 0.12s ease;
+    background-image: linear-gradient(45deg, transparent 50%, var(--stage-muted) 50%),
+      linear-gradient(135deg, var(--stage-muted) 50%, transparent 50%);
+    background-position: calc(100% - 10px) calc(50% + 1px), calc(100% - 6px) calc(50% + 1px);
+    background-size: 4px 4px, 4px 4px;
+    background-repeat: no-repeat;
+  }
+  .rbc-speed select:hover,
+  .rbc-speed select:focus-visible { border-color: var(--stage-amber); outline: none; }
+  .rbc-theme {
+    width: 30px;
+    height: 30px;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--stage-panel);
+    color: var(--stage-fg);
+    border: 1px solid var(--stage-line);
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    padding: 0;
+    transition: border-color 0.12s ease;
+  }
+  .rbc-theme:hover { border-color: var(--stage-amber); }
+</style>

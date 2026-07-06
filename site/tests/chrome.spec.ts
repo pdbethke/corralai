@@ -57,6 +57,52 @@ test('the header theme toggle flips the persisted site theme', async ({ page }) 
   expect(persisted, 'the theme choice must persist').toBe(after);
 });
 
+test('the cockpit replay bar exposes theme + speed controls synced with the header', async ({ page }) => {
+  await page.goto('/');
+  const bottomTheme = page.locator('#replay-theme-toggle');
+  const bottomSpeed = page.locator('#replay-speed');
+  const headerTheme = page.locator('#sh-theme-toggle');
+  const headerSpeed = page.locator('#sh-replay-speed');
+
+  await expect(bottomTheme).toBeVisible();
+  await expect(bottomSpeed).toBeVisible();
+
+  const html = page.locator('html');
+  const before = await html.getAttribute('data-theme');
+  await bottomTheme.click();
+  const after = await html.getAttribute('data-theme');
+  expect(after, 'bottom theme toggle must switch data-theme').not.toBe(before);
+  expect(await page.evaluate(() => localStorage.getItem('corralai-site-theme'))).toBe(after);
+
+  const headerIcon = await headerTheme.locator('.sh-tt-icon').textContent();
+  const bottomIcon = await bottomTheme.locator('.rbc-tt-icon').textContent();
+  expect(headerIcon).toBe(bottomIcon);
+
+  await bottomSpeed.selectOption('8');
+  await expect(headerSpeed).toHaveValue('8');
+  await expect(bottomSpeed).toHaveValue('8');
+  expect(await page.evaluate(() => localStorage.getItem('corralai-replay-speed'))).toBe('8');
+
+  await headerSpeed.selectOption('4');
+  await expect(bottomSpeed).toHaveValue('4');
+});
+
+test('the recordings cockpit replay bar exposes synced theme + speed controls', async ({ page }) => {
+  await page.goto('/recordings/');
+  await expect(page.locator('#replay-theme-toggle')).toBeVisible();
+  await expect(page.locator('#replay-speed')).toBeVisible();
+
+  await page.locator('#replay-theme-toggle').click();
+  const theme = await page.locator('html').getAttribute('data-theme');
+  expect(theme).toBeTruthy();
+  const headerIcon = await page.locator('#sh-theme-toggle .sh-tt-icon').textContent();
+  const bottomIcon = await page.locator('#replay-theme-toggle .rbc-tt-icon').textContent();
+  expect(headerIcon).toBe(bottomIcon);
+
+  await page.locator('#replay-speed').selectOption('16');
+  await expect(page.locator('#sh-replay-speed')).toHaveValue('16');
+});
+
 test('the header replay speed control defaults to 2x and affects playback', async ({ page }) => {
   await page.goto('/');
   const speed = page.locator('#sh-replay-speed');

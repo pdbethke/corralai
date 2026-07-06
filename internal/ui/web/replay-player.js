@@ -1854,8 +1854,9 @@ function toggleReplayPlay(){
 function setReplaySpeed(x){
   const n = Number(x);
   replaySpeed = REPLAY_SPEEDS.includes(n) ? n : DEFAULT_REPLAY_SPEED;
-  const sel = document.getElementById('sh-replay-speed');
-  if(sel) sel.value = String(replaySpeed);
+  document.querySelectorAll('[data-replay-speed]').forEach(function(sel){
+    sel.value = String(replaySpeed);
+  });
   try { localStorage.setItem(REPLAY_SPEED_KEY, String(replaySpeed)); } catch(e) {}
   const stat = document.getElementById('stat');
   if(stat && /replaying/.test(stat.textContent)) stat.textContent = 'replaying · ' + replaySpeed + '×';

@@ -1,6 +1,7 @@
 ---
 // SPDX-License-Identifier: Elastic-2.0
 import { cockpitHud, cockpitViews, cockpitTasks, cockpitAgents, cockpitFindings, cockpitExec } from '../lib/cockpitShell';
+import ReplayBarControls from './ReplayBarControls.astro';
 
 const generatedRecordings = import.meta.glob('../data/generated/recordings/*.json', { eager: true });
 const legacyRecordings = import.meta.glob('../data/recordings/*.json', { eager: true });
@@ -96,6 +97,7 @@ const minutes = Math.round((meta.duration_seconds || 0) / 60);
         <button id="replay-playbtn" onclick="toggleReplayPlay()">▶ play</button>
         <input type="range" id="replay-scrub" min="0" max="0" value="0" oninput="seekReplay(+this.value)">
         <span id="replay-label">0 / 0</span>
+        <ReplayBarControls />
       </div>
     </div>
   </div>
@@ -299,7 +301,7 @@ const minutes = Math.round((meta.duration_seconds || 0) / 60);
     // no live brain here, so pin it to an honest static label for the replay.
     const stat = document.getElementById('stat');
     if (stat) {
-      const speedSel = document.getElementById('sh-replay-speed');
+      const speedSel = document.querySelector('[data-replay-speed]');
       const speed = speedSel ? speedSel.value : '2';
       stat.textContent = 'replaying · ' + speed + '×';
     }

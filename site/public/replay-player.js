@@ -1250,7 +1250,7 @@ function renderReplayFileNode(node, depth){
     html += '<div class="ft-row ft-file' + (held ? '' : ' ft-released') + '" style="padding-left:' + pad + 'px" ' +
       'title="' + esc(rec.path) + (held ? ' — held by ' : ' — last touched by ') + esc(displayName(who)) + '">' +
       '<span class="ft-dot" style="background:' + (held ? col : 'transparent') + ';border:1.5px solid ' + col + '"></span>' +
-      '<span class="ft-fname" style="color:' + (held ? col : 'var(--stage-muted,#8a8170)') + '">' + esc(f.name) + '</span>' +
+      '<span class="ft-fname" style="color:' + (held ? col : 'var(--stage-fg,#e6e1d8)') + '">' + esc(f.name) + '</span>' +
       (who ? '<span class="ft-who">' + esc(displayName(who)) + (role ? ' · ' + esc(role) : '') + (held ? '' : ' · released') + '</span>' : '') +
       '</div>';
   }

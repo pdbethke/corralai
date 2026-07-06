@@ -401,18 +401,24 @@ among free local ones.
 
 | Harness | Auth it brings | `HARNESS_CMD` template | Status |
 |---|---|---|---|
-| **Claude Code** | Claude Pro/Max subscription | `claude -p {prompt} --mcp-config {mcp_config} --allowedTools "mcp__corral,Read,Write,Edit,Bash" --permission-mode acceptEdits` | ✅ **verified live** — claimed research → design → gated build, wrote real files, passed the `go build`/`go test` gate |
-| **Gemini CLI** | Google account / Gemini Code Assist | `gemini -p {prompt} --yolo` — Gemini reads MCP servers from `~/.gemini/settings.json`, so add the brain there (`{mcp_config}` shows the shape); `--yolo` auto-approves tools, so contain it | ⚠️ untested — same contract, flags may drift by version |
-| **Codex CLI** | ChatGPT Plus/Pro subscription | `codex exec {prompt} --full-auto` — MCP servers live in `~/.codex/config.toml` (`[mcp_servers.corral]` with the brain URL) | ⚠️ untested |
+| **Claude Code** | Claude Pro/Max subscription | `claude -p {prompt} --mcp-config {mcp_config} --allowedTools "mcp__corral,Read,Write,Edit,Bash" --permission-mode acceptEdits` — add `--model sonnet` (or any tier) to pin the bee OFF the model you're using interactively, so the two don't fight over one subscription's rolling limit | ✅ **verified live** — built a full recursive-descent parser + tests through the gate |
+| **Gemini CLI** | Google account / Gemini Code Assist | `gemini -p {prompt} --yolo` — Gemini reads MCP from `~/.gemini/settings.json`; add `"mcpServers":{"corral":{"httpUrl":"http://127.0.0.1:9019/mcp/"}}` (note **`httpUrl`**, not the generic `type`/`url` shape). `--yolo` auto-approves tools, so contain it | ✅ **verified live** (all-frontier calc run) |
+| **Codex CLI** | ChatGPT Plus/Pro subscription | `codex exec {prompt} --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check` — MCP in `~/.codex/config.toml` (`[mcp_servers.corral]` `url=...`). The sandbox **must** be bypassed (or given network access): its default egress block kills the MCP HTTP call (`user cancelled MCP tool call`). `--skip-git-repo-check` for a non-repo workspace | ✅ **verified live** — ran as pentester + second builder |
+| **Copilot CLI** | GitHub Copilot Pro | `copilot -p {prompt} --additional-mcp-config @{mcp_config} --allow-all-tools --allow-all-paths` — takes the generated `{mcp_config}` file directly via `@`, or reads `~/.copilot/mcp-config.json` | ✅ **verified** — claimed + completed a task; watch the AI-credit balance |
 | **cursor-agent** | Cursor subscription | `cursor-agent -p {prompt} --force` — MCP servers from `~/.cursor/mcp.json` | ⚠️ untested |
 | **corral-agent** | Ollama (free) or any API key | not a harness template — the reference agent, `deploy/demo` runs it for you | ✅ the demo itself |
 
-The untested rows follow the same shape: a headless/print mode, tool
-auto-approval scoped as tightly as the harness allows, and the brain registered
-as an MCP server named `corral` (some harnesses take a config flag, most read a
-settings file — the generated `{mcp_config}` file is the standard shape to copy
-from). If you verify one, a PR updating its row with the exact working
-invocation is very welcome.
+All four subscription harnesses above ran together as one herd in the
+**all-frontier** recording on [corralai.dev/recordings](https://corralai.dev/recordings)
+(Claude building, Gemini testing, Codex pentesting) — a Go calc parser built
+and gated in ~13 minutes, no API keys. Every harness follows the same shape: a
+headless/print mode, tool auto-approval scoped as tightly as it allows, and the
+brain registered as an MCP server named `corral` (some take a config flag, most
+read a settings file — the generated `{mcp_config}` is the standard shape to
+copy from). The one non-obvious gotcha per vendor is in the table: Gemini wants
+`httpUrl`, Codex needs its sandbox bypassed or it can't reach the brain, and a
+Claude bee should be pinned to a different `--model` than your interactive
+session. Any remaining untested row is welcome as a PR.
 
 > **Full-auto safety, again:** a headless agent approves its own tool calls, so
 > give it the same courtesy the exec agents get — run it in a container, a VM, or

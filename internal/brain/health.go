@@ -3,8 +3,14 @@
 package brain
 
 import (
+	"fmt"
+	"log"
 	"sync"
 	"time"
+
+	"github.com/pdbethke/corralai/internal/coord"
+	"github.com/pdbethke/corralai/internal/queue"
+	"github.com/pdbethke/corralai/internal/telemetry"
 )
 
 // Health signal for #72: tonight a Copilot worker was out-of-quota and
@@ -173,4 +179,103 @@ func (b *HealthBook) Health(agent string) HealthAgent {
 	}
 	out.Health = "working" // claimed recently, within grace — presume still on it
 	return out
+}
+
+// DetectRoleStalls scans ready tasks and files one missing-req finding per task
+// when the task has aged past threshold with no eligible active agent role.
+// Returns how many NEW findings were filed this sweep.
+func DetectRoleStalls(q *queue.Store, active []coord.Agent, threshold time.Duration, tel *telemetry.Store) (int, error) {
+	if q == nil {
+		return 0, nil
+	}
+	activeCount := len(active)
+	activeRoles := map[string]bool{}
+	for _, a := range active {
+		if a.Role != "" {
+			activeRoles[a.Role] = true
+		}
+	}
+	tasks, err := q.Active()
+	if err != nil {
+		return 0, err
+	}
+	nowTS := float64(time.Now().UnixNano()) / 1e9
+	if threshold < 0 {
+		threshold = 0
+	}
+	thresholdS := threshold.Seconds()
+	cache := map[int64]map[string]bool{}
+	filed := 0
+
+	openTargets := func(missionID int64) map[string]bool {
+		if m, ok := cache[missionID]; ok {
+			return m
+		}
+		m := map[string]bool{}
+		fs, ferr := q.Findings(missionID, queue.FindingOpen)
+		if ferr != nil {
+			log.Printf("stall-watchdog: findings(%d): %v", missionID, ferr)
+			cache[missionID] = m
+			return m
+		}
+		for _, f := range fs {
+			if f.Reporter == "stall-watchdog" && f.Type == "missing-req" && f.Target != "" {
+				m[f.Target] = true
+			}
+		}
+		cache[missionID] = m
+		return m
+	}
+
+	for _, t := range tasks {
+		if t.Status != queue.StatusReady {
+			continue
+		}
+		ageS := nowTS - t.CreatedTS
+		if ageS < thresholdS {
+			continue
+		}
+		eligible := false
+		if t.Role == "" {
+			eligible = activeCount > 0
+		} else {
+			eligible = activeRoles[t.Role]
+		}
+		if eligible {
+			continue
+		}
+		if openTargets(t.MissionID)[t.Key] {
+			continue
+		}
+		if _, err := q.AddFinding(queue.Finding{
+			MissionID:       t.MissionID,
+			TaskID:          t.ID,
+			Reporter:        "stall-watchdog",
+			Type:            "missing-req",
+			Severity:        "high",
+			Target:          t.Key,
+			Evidence:        fmt.Sprintf("ready task %q (role=%q) has no eligible active agent after %.0fs", t.Key, t.Role, ageS),
+			SuggestedAction: "staff this role, retarget the task role, or supersede/cancel the task",
+		}); err != nil {
+			return filed, err
+		}
+		cache[t.MissionID][t.Key] = true
+		filed++
+		if tel != nil {
+			if err := tel.Record(telemetry.Event{
+				MissionID: t.MissionID,
+				Kind:      "task_stalled",
+				Actor:     "stall-watchdog",
+				Subject:   t.Key,
+				Detail: map[string]any{
+					"task_id":     t.ID,
+					"role":        t.Role,
+					"age_seconds": int64(ageS),
+				},
+			}); err != nil {
+				log.Printf("telemetry task_stalled: %v", err)
+			}
+		}
+	}
+	return filed, nil
 }

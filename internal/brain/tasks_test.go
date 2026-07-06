@@ -98,10 +98,18 @@ func TestVerificationGate(t *testing.T) {
 	if err := q.Enqueue(9, []queue.TaskSpec{{Key: "test#1", Role: "tester", Title: "test", Instruction: "verify", Verify: "go test"}}); err != nil {
 		t.Fatal(err)
 	}
+	// A historical pass before this task's claim must NOT satisfy the gate.
+	if err := q.RecordExecution(queue.Execution{MissionID: 9, Agent: "Tess", Command: "go test ./...", ExitCode: 0, OK: true, TS: 1}); err != nil {
+		t.Fatalf("RecordExecution(pre-claim): %v", err)
+	}
 	q.PromoteReady(9)
 	ct, err := q.ClaimNext("Tess", []string{"tester"}, 300)
 	if err != nil || ct == nil {
 		t.Fatalf("ClaimNext: %v %v", ct, err)
+	}
+	// After claim, latest verify fails — gate must refuse.
+	if err := q.RecordExecution(queue.Execution{MissionID: 9, Agent: "Tess", Command: "go test ./...", ExitCode: 1, OK: false, TS: int64(ct.ClaimedTS) + 1}); err != nil {
+		t.Fatalf("RecordExecution(post-claim fail): %v", err)
 	}
 
 	ctx := context.Background()
@@ -114,7 +122,7 @@ func TestVerificationGate(t *testing.T) {
 	}
 	defer sess.Close()
 
-	// (a) No passing `go test` recorded → completion REFUSED + a regression finding.
+	// (a) No passing `go test` in current claim window → completion REFUSED + a regression finding.
 	var out completeTaskOut
 	callTask(t, sess, "complete_task", map[string]any{"name": "Tess", "id": ct.ID, "result": "looks fine"}, &out)
 	if out.OK {
@@ -131,8 +139,8 @@ func TestVerificationGate(t *testing.T) {
 		t.Fatalf("expected one verify-gate regression finding, got %+v", fs)
 	}
 
-	// (b) Record a passing `go test`, then completion SUCCEEDS.
-	if err := q.RecordExecution(queue.Execution{MissionID: 9, Agent: "Tess", Command: "go test ./...", ExitCode: 0, OK: true, TS: 1}); err != nil {
+	// (b) Record a passing `go test` after the claim, then completion SUCCEEDS.
+	if err := q.RecordExecution(queue.Execution{MissionID: 9, Agent: "Tess", Command: "go test ./...", ExitCode: 0, OK: true, TS: int64(ct.ClaimedTS) + 2}); err != nil {
 		t.Fatalf("RecordExecution: %v", err)
 	}
 	callTask(t, sess, "complete_task", map[string]any{"name": "Tess", "id": ct.ID, "result": "tested, green"}, &out)

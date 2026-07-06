@@ -651,6 +651,7 @@ func main() {
 		log.Printf("fleet oracle disabled (needs CORRALAI_MOTHERDUCK + a model backend)")
 	}
 	missionTick := time.Duration(envInt("CORRALAI_MISSION_TICK_SECONDS", 3)) * time.Second
+	taskStallThreshold := time.Duration(envInt("CORRALAI_TASK_STALL_SECONDS", 300)) * time.Second
 	engine := mission.NewEngine(missionStore, queueStore)
 	// Engine-side finding resolutions (reflex auto-address) must reach the same
 	// telemetry event log as the resolve_finding MCP tool, or model_comparison
@@ -742,7 +743,9 @@ func main() {
 		defer t.Stop()
 		for range t.C {
 			var present map[string]bool
+			active := []coord.Agent{}
 			if st, err := store.CoordinationStatus(coord.PresenceWindow); err == nil && st != nil {
+				active = st.ActiveAgents
 				present = make(map[string]bool, len(st.ActiveAgents))
 				for _, a := range st.ActiveAgents {
 					present[a.Name] = true
@@ -752,6 +755,11 @@ func main() {
 				log.Printf("queue: reap: %v", err)
 			} else if n > 0 {
 				log.Printf("queue: reaped %d stale task claim(s)", n)
+			}
+			if n, err := brain.DetectRoleStalls(queueStore, active, taskStallThreshold, telStore); err != nil {
+				log.Printf("queue: stall watchdog: %v", err)
+			} else if n > 0 {
+				log.Printf("queue: stall watchdog filed %d role-stall finding(s)", n)
 			}
 		}
 	}()

@@ -518,3 +518,46 @@ func TestEnqueueTaskRefusesUnstaffedRole(t *testing.T) {
 		t.Fatal("a staffed role must still be accepted")
 	}
 }
+
+// If active agent roles are known, enqueue/supersede validation should use the
+// live role set (present agents), not just historical mission-plan roles.
+func TestEnqueueTaskUsesActiveRolesWhenPresent(t *testing.T) {
+	dir := t.TempDir()
+	cstore, _ := coord.Open(filepath.Join(dir, "c.sqlite3"))
+	t.Cleanup(func() { cstore.Close() })
+	q, _ := queue.Open(filepath.Join(dir, "q.sqlite3"))
+	t.Cleanup(func() { q.Close() })
+	// Mission plan includes "perf", but no perf agent is currently present.
+	q.Enqueue(7, []queue.TaskSpec{
+		{Key: "build", Role: "builder", Title: "build", Instruction: "b"},
+		{Key: "perf", Role: "perf", Title: "perf", Instruction: "p"},
+	})
+	if err := cstore.Register("Ada", "test", "", "", "", "builder"); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	clientT, serverT := mcp.NewInMemoryTransports()
+	go func() { _ = NewServer(cstore, nil, Options{Queue: q}).Run(ctx, serverT) }()
+	client := mcp.NewClient(&mcp.Implementation{Name: "lead", Version: "0"}, nil)
+	sess, _ := client.Connect(ctx, clientT, nil)
+	defer sess.Close()
+
+	res, err := sess.CallTool(ctx, &mcp.CallToolParams{Name: "enqueue_task",
+		Arguments: map[string]any{"mission_id": 7, "key": "perf-2", "role": "perf", "title": "perf", "instruction": "again"}})
+	if err != nil {
+		t.Fatalf("call: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("enqueue_task accepted role with no active agents; want refusal")
+	}
+	text := ""
+	for _, c := range res.Content {
+		if tc, ok := c.(*mcp.TextContent); ok {
+			text += tc.Text
+		}
+	}
+	if !strings.Contains(text, "no active") || !strings.Contains(text, "builder") {
+		t.Fatalf("refusal should mention active roles and correction path, got: %s", text)
+	}
+}

@@ -6,6 +6,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
+	"sort"
 	"strings"
 	"sync"
 
@@ -280,7 +282,8 @@ func registerTasks(s *mcp.Server, store *coord.Store, q *queue.Store, lease floa
 				return nil, completeTaskOut{}, terr
 			}
 			if t != nil && t.Verify != "" {
-				passed, err := q.MissionPassedVerify(t.MissionID, t.Verify)
+				since := int64(math.Ceil(t.ClaimedTS))
+				passed, err := q.MissionPassedVerifySince(t.MissionID, t.Verify, since)
 				if err != nil {
 					return nil, completeTaskOut{}, err
 				}
@@ -288,7 +291,7 @@ func registerTasks(s *mcp.Server, store *coord.Store, q *queue.Store, lease floa
 					if _, err := q.AddFinding(queue.Finding{
 						MissionID: t.MissionID, TaskID: in.ID, Reporter: "verify-gate",
 						Type: "regression", Severity: "high", Target: t.Key,
-						Evidence:        "no successful '" + t.Verify + "' execution recorded for this mission",
+						Evidence:        "latest '" + t.Verify + "' run since this task was claimed is not successful",
 						SuggestedAction: "run '" + t.Verify + "' and fix the failures, then complete",
 					}); err != nil {
 						return nil, completeTaskOut{}, fmt.Errorf("gate finding: %w", err)
@@ -308,7 +311,7 @@ func registerTasks(s *mcp.Server, store *coord.Store, q *queue.Store, lease floa
 						escalateRefusalLoop(t, bee, count)
 					}
 					return nil, completeTaskOut{OK: false,
-						Message: "refused: no successful '" + t.Verify + "' run is on record for this mission — run it, fix the failures, then complete"}, nil
+						Message: "refused: latest '" + t.Verify + "' run since this task was claimed is not successful — run it, fix the failures, then complete"}, nil
 				}
 			}
 			ok, err := q.Complete(in.ID, bee, in.Result)
@@ -455,6 +458,31 @@ func registerTasks(s *mcp.Server, store *coord.Store, q *queue.Store, lease floa
 	// lead LLM invents "performance" where the pipeline staffs "perf"). Refuse
 	// loudly, naming the valid roles, so the lead can self-correct on retry.
 	checkStaffedRole := func(missionID int64, role string) error {
+		if role == "" {
+			return nil // generic tasks are claimable by any role
+		}
+		if store != nil {
+			if active, err := store.ListActive(coord.PresenceWindow); err == nil {
+				activeRoles := map[string]bool{}
+				for _, a := range active {
+					r := strings.TrimSpace(a.Role)
+					if r != "" {
+						activeRoles[r] = true
+					}
+				}
+				if len(activeRoles) > 0 {
+					if activeRoles[role] {
+						return nil
+					}
+					valid := make([]string, 0, len(activeRoles))
+					for r := range activeRoles {
+						valid = append(valid, r)
+					}
+					sort.Strings(valid)
+					return fmt.Errorf("refused: no active %q agent is registered right now — enqueuing this role would stall; active roles: %s", role, strings.Join(valid, ", "))
+				}
+			}
+		}
 		roles, err := q.MissionRoles(missionID)
 		if err != nil || len(roles) == 0 {
 			return err // nothing to validate against — let it through

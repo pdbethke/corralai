@@ -260,10 +260,15 @@ func iterEntries(dirs []string, rules []tierRule) []entry {
 	return out
 }
 
-// Build re-indexes the corpus. nil dirs => all ~/.claude/projects/*/memory.
+// Build re-indexes the corpus. nil dirs indexes only explicitly configured dirs:
+// CORRALAI_MEMORY_DIR (single dir) when set, otherwise nothing.
 func (s *Store) Build(dirs []string) (int, error) {
 	if dirs == nil {
-		dirs, _ = filepath.Glob(dirGlob)
+		if d := strings.TrimSpace(os.Getenv("CORRALAI_MEMORY_DIR")); d != "" {
+			dirs = []string{d}
+		} else {
+			dirs = []string{}
+		}
 	}
 	s.lastDirs = dirs
 	rows := iterEntries(dirs, s.tiers)

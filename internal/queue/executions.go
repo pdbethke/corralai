@@ -2,6 +2,11 @@
 
 package queue
 
+import (
+	"database/sql"
+	"strings"
+)
+
 // Execution is one shell command a swarm agent ran, recorded durably so the
 // verification gate can ask "did <verify> ever pass for this mission?".
 type Execution struct {
@@ -102,17 +107,33 @@ func (s *Store) AllExecutions() ([]Execution, error) {
 	return out, rows.Err()
 }
 
-// MissionPassedVerify reports whether some execution for missionID ran a command
-// CONTAINING verify and exited 0 — the deterministic basis for the gate. An empty
-// verify is treated as "ungated" and returns true.
+// MissionPassedVerify reports whether a mission's current verify state passes.
+// See MissionPassedVerifySince for matching semantics.
 func (s *Store) MissionPassedVerify(missionID int64, verify string) (bool, error) {
+	return s.MissionPassedVerifySince(missionID, verify, 0)
+}
+
+// MissionPassedVerifySince reports whether the latest matching execution in the
+// mission at/after sinceTS exited 0. Command matching is strict: command equals
+// verify, or command starts with verify+" " (prefix with args). Empty verify is
+// "ungated" and returns true.
+func (s *Store) MissionPassedVerifySince(missionID int64, verify string, sinceTS int64) (bool, error) {
 	if verify == "" {
 		return true, nil
 	}
-	var n int
+	verify = strings.TrimSpace(verify)
+	if verify == "" {
+		return true, nil
+	}
+	var ok int
 	err := s.db.QueryRow(
-		`SELECT COUNT(*) FROM executions WHERE mission_id=? AND ok=1 AND instr(command, ?)>0`,
-		missionID, verify,
-	).Scan(&n)
-	return n > 0, err
+		`SELECT ok FROM executions
+		 WHERE mission_id=? AND ts>=? AND (command=? OR command LIKE ?)
+		 ORDER BY ts DESC, id DESC LIMIT 1`,
+		missionID, sinceTS, verify, verify+" %",
+	).Scan(&ok)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return ok == 1, err
 }

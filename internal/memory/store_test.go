@@ -549,3 +549,57 @@ func TestMemoryDirEnvOverrideAfterProcessStart(t *testing.T) {
 		t.Fatalf("expected entry file under redirected dir: %v", err)
 	}
 }
+
+func TestBuildNilSkipsPersonalGlobByDefault(t *testing.T) {
+	root := t.TempDir()
+	mem := filepath.Join(root, "project-a", "memory")
+	writeEntry(t, mem, "personal-note", "private", "", "do not auto-index")
+	oldGlob := dirGlob
+	dirGlob = filepath.Join(root, "*", "memory")
+	t.Cleanup(func() { dirGlob = oldGlob })
+
+	s, err := Open(filepath.Join(root, "m.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+
+	n, err := s.Build(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("Build(nil) indexed %d entries, want 0 when CORRALAI_MEMORY_DIR is unset", n)
+	}
+	if hits, err := s.List("", "", 10, false); err != nil {
+		t.Fatal(err)
+	} else if len(hits) != 0 {
+		t.Fatalf("Build(nil) should index nothing by default, got %+v", hits)
+	}
+}
+
+func TestBuildNilUsesCORRALAI_MEMORY_DIR(t *testing.T) {
+	root := t.TempDir()
+	mem := filepath.Join(root, "optin-memory")
+	writeEntry(t, mem, "team-note", "shared note", "", "safe to index")
+	t.Setenv("CORRALAI_MEMORY_DIR", mem)
+
+	s, err := Open(filepath.Join(root, "m.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+
+	n, err := s.Build(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("Build(nil) indexed %d entries, want 1 from CORRALAI_MEMORY_DIR", n)
+	}
+	if hits, err := s.List("", "", 10, false); err != nil {
+		t.Fatal(err)
+	} else if len(hits) != 1 || hits[0].Slug != "team-note" {
+		t.Fatalf("Build(nil) should index only opt-in dir entry, got %+v", hits)
+	}
+}

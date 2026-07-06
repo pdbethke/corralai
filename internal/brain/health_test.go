@@ -186,3 +186,66 @@ func TestTaskToolsFeedHealthBook(t *testing.T) {
 		t.Fatalf("Cleo health = %q, want idle for a genuinely idle agent", got)
 	}
 }
+
+func TestDetectRoleStallsFilesFindingOnce(t *testing.T) {
+	dir := t.TempDir()
+	q, err := queue.Open(filepath.Join(dir, "q.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { q.Close() })
+	if err := q.Enqueue(42, []queue.TaskSpec{{Key: "perf-1", Role: "perf", Title: "perf", Instruction: "measure"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.PromoteReady(42); err != nil {
+		t.Fatal(err)
+	}
+	active := []coord.Agent{{Name: "Ada", Role: "builder"}}
+
+	n, err := DetectRoleStalls(q, active, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("first watchdog sweep filed %d findings, want 1", n)
+	}
+	fs, err := q.Findings(42, queue.FindingOpen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fs) != 1 || fs[0].Reporter != "stall-watchdog" || fs[0].Type != "missing-req" || fs[0].Target != "perf-1" {
+		t.Fatalf("unexpected stall finding: %+v", fs)
+	}
+
+	// Repeated sweeps should not spam duplicate open findings for same task.
+	n, err = DetectRoleStalls(q, active, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("second watchdog sweep filed %d findings, want 0 duplicates", n)
+	}
+}
+
+func TestDetectRoleStallsSkipsEligibleRole(t *testing.T) {
+	dir := t.TempDir()
+	q, err := queue.Open(filepath.Join(dir, "q.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { q.Close() })
+	if err := q.Enqueue(7, []queue.TaskSpec{{Key: "test-1", Role: "tester", Title: "test", Instruction: "run tests"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.PromoteReady(7); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := DetectRoleStalls(q, []coord.Agent{{Name: "Tess", Role: "tester"}}, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("watchdog should not file findings when an eligible agent is present, got %d", n)
+	}
+}

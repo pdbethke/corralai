@@ -252,6 +252,10 @@ const maxModelFindings = Math.max(1, ...analytics.findings_by_model.map((r: any)
   :global(#stage-frame #hud .tab.active) { color: var(--stage-bg); background: var(--stage-amber); pointer-events: none; }
   :global(#stage-frame #hud .tab:hover:not(.active)) { color: var(--stage-fg); }
   :global(#stage-frame #hud select) { background: var(--stage-panel); color: var(--stage-fg); border: 1px solid var(--stage-line); border-radius: 6px; font-size: 11px; padding: 2px 4px; cursor: pointer; }
+  /* The ☾ theme toggle is a product feature (toggles html.light); the site
+     themes via prefers-color-scheme and its cockpit is dark-always, so it's a
+     no-op here — hide it rather than ship a dead control. */
+  :global(#stage-frame #hud #themebtn) { display: none; }
   @media (max-width: 900px) { #cockpit { grid-template-columns: 1fr; } .cockpit-tasks, .cockpit-side { max-height: 200px; } }
   #stage { position: relative; height: 56vh; min-height: 360px; background: var(--stage-panel); }
   .cockpit-tasks, .cockpit-side {

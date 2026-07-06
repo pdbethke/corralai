@@ -392,12 +392,13 @@ func cmdMission(args []string) {
 		fs := flag.NewFlagSet("mission create", flag.ExitOnError)
 		c := bind(fs)
 		review := fs.Bool("review", false, "require a client review (accept/feedback) instead of auto-completing — enables sprints")
+		recordStory := fs.Bool("record-story", false, "opt this mission into the story engine: agents' report_thought reasoning is durably recorded for replay (default off — no telemetry cost)")
 		parseFlags(fs, rest)
 		if fs.NArg() < 1 {
-			fatal("usage: corral-admin mission create [--review] <directive...>")
+			fatal("usage: corral-admin mission create [--review] [--record-story] <directive...>")
 		}
 		directive := strings.Join(fs.Args(), " ")
-		c.do("create_mission", map[string]any{"directive": directive, "requires_review": *review}, func(out json.RawMessage) {
+		c.do("create_mission", map[string]any{"directive": directive, "requires_review": *review, "record_story": *recordStory}, func(out json.RawMessage) {
 			var r struct {
 				ID int64 `json:"id"`
 			}

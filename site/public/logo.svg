@@ -1,0 +1,16 @@
+<!-- SPDX-License-Identifier: Elastic-2.0 -->
+<!-- Horizontal CorralAI lockup: the corral mark + wordmark, amber on a
+     transparent ground (reads on the dark header and on light OG/social
+     cards). "Corral" in the ink tone, "AI" in amber  the same split the
+     cockpit HUD uses. System font, no webfont dependency. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 44" role="img" aria-label="CorralAI">
+  <g>
+    <path d="M29.5 10.47 A11 11 0 1 1 18.5 10.47" fill="none" stroke="#e8a838" stroke-width="2.6" stroke-linecap="round" transform="translate(0 4)"/>
+    <circle cx="19.6" cy="26.2" r="1.9" fill="#e8a838"/>
+    <circle cx="24" cy="22.8" r="1.9" fill="#e8a838"/>
+    <circle cx="28.4" cy="26.2" r="1.9" fill="#e8a838"/>
+  </g>
+  <text x="46" y="30" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="23" font-weight="700" letter-spacing="-0.3">
+    <tspan fill="#241f18">Corral</tspan><tspan fill="#e8a838">AI</tspan>
+  </text>
+</svg>

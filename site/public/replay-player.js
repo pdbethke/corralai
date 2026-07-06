@@ -600,7 +600,7 @@ function hexA(hex, a){ const h=(hex||'#888').replace('#','').trim(); const n=par
 // and rings on the dark stage in light mode = invisible nodes. --stage-* is
 // dark in both themes (never overridden by html.light), so labels/rings stay
 // legible whichever chrome theme is active.
-function readColors(){ const s=getComputedStyle(document.documentElement), g=k=>s.getPropertyValue(k).trim();
+function readColors(){ const s=getComputedStyle(document.getElementById('stage-frame')||document.documentElement), g=k=>s.getPropertyValue(k).trim();
   C={fg:g('--stage-fg'),muted:g('--stage-muted'),amber:g('--stage-amber'),red:g('--stage-red'),line:g('--stage-line'),green:g('--stage-green'),panel:g('--stage-panel')}; }
 function applyTheme(th){ document.documentElement.classList.toggle('light', th==='light');
   const b=document.getElementById('themebtn');
@@ -2282,6 +2282,11 @@ function cockpitView(v){
 // is loaded as a classic script by an Astro component.
 window.setSkin = setSkin;
 window.toggleTheme = toggleTheme;
+// refreshStageColors: re-sample the --stage-* palette and repaint the canvas.
+// The demo window's own light/dark toggle (site-controls.js, data-cockpit-theme)
+// changes those tokens live; the HTML chrome re-themes via CSS on its own, but
+// the canvas caches its colors in C, so it must be told to re-read and repaint.
+window.refreshStageColors = function(){ try{ readColors(); }catch(_){} try{ renderBg(); }catch(_){} };
 window.setReplayExecFilter = setReplayExecFilter;
 window.toggleReplayPlay = toggleReplayPlay;
 window.seekReplay = seekReplay;

@@ -23,7 +23,7 @@ const url = 'https://corralai.dev/';
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <!-- No-flash theme: set data-theme before first paint from saved choice / OS. -->
   <script is:inline>
-    (function () { try { var t = localStorage.getItem('corralai-site-theme'); if (!t) t = (window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light'; document.documentElement.setAttribute('data-theme', t); } catch (e) {} })();
+    (function () { try { var t = localStorage.getItem('corralai-site-theme'); if (!t) t = (window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light'; document.documentElement.setAttribute('data-theme', t); var ct = localStorage.getItem('corralai-cockpit-theme'); if (ct) document.documentElement.setAttribute('data-cockpit-theme', ct); } catch (e) {} })();
   </script>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <title>{title}</title>

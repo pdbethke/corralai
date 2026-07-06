@@ -52,25 +52,24 @@
 :root[data-skin="matrix"] #replay-title { text-shadow: 0 0 6px currentColor; }
 /* keep the renderer-emitted var(--green) in-key with each skin's palette */
 :root[data-skin="matrix"] #cockpit, :root[data-skin="matrix"] .cockpit-exec { --green: var(--stage-green); }
-/* ── Light chrome, dark screen ─────────────────────────────────────────────
-   In daylight (the page NOT in dark mode) the replay cockpit's CHROME — the
-   HUD bar, the tasks/agents/findings panels, the exec console, the file tree
-   and the reduced progress/topology/completed lenses — follows the page into
-   light by remapping its --stage-* tokens onto the daylight palette. The
-   animated canvas stays a DARK screen: #stage re-asserts the dark stage tokens
-   below, and readColors() samples :root (left dark), so the grass/rain/nodes
-   paint dark as before — a lit instrument in a light room, not a light page
-   with a dark hole cut into it. Immersive skins (matrix/hive/flock) keep their
-   own palette and are excluded, so only the default 'ranch' cockpit takes the
-   daylight chrome. Dark mode is untouched (the whole instrument stays dark). */
-:root:not([data-theme="dark"]):not([data-skin="matrix"]):not([data-skin="hive"]):not([data-skin="flock"]) #stage-frame {
-  --stage-bg: var(--bg); --stage-fg: var(--fg); --stage-muted: var(--muted);
-  --stage-line: var(--line); --stage-panel: var(--panel);
-  --stage-amber: var(--amber); --stage-red: var(--red); --stage-green: var(--green);
-}
-:root:not([data-theme="dark"]):not([data-skin="matrix"]):not([data-skin="hive"]):not([data-skin="flock"]) #stage-frame #stage {
-  --stage-bg: #0e1116; --stage-fg: #e6e1d8; --stage-muted: #8a8170; --stage-amber: #e8a838;
-  --stage-red: #e8503a; --stage-green: #8fdcab; --stage-line: #33405a; --stage-panel: #161b22;
+/* ── Demo-window light/dark (independent of the page) ──────────────────────
+   The cockpit is its OWN instrument with its OWN light/dark, separate from the
+   site's: the site's toggle drives the page tokens (--bg/--fg/... via
+   data-theme, above), while the replay bar's moon toggle stamps
+   data-cockpit-theme on :root and drives the --stage-* family here. The whole
+   demo window follows — chrome AND canvas: readColors() samples --stage-* from
+   :root, so the swarm canvas repaints in the demo window's own theme too. The
+   light values are LITERAL daylight (not var(--bg)) precisely so the demo
+   window's light is independent of whatever theme the page is in. Default (no
+   attribute) is the signature dark. Immersive skins (matrix/hive/flock) keep
+   their own palette and are excluded, so only 'ranch' takes daylight.
+   SCOPED to #stage-frame: the --stage-* family also styles the always-dark
+   site header, so the remap must stay inside the cockpit. readColors() samples
+   #stage-frame (not :root) precisely so the canvas picks up this scoped value. */
+:root[data-cockpit-theme="light"]:not([data-skin="matrix"]):not([data-skin="hive"]):not([data-skin="flock"]) #stage-frame {
+  --stage-bg: #faf3e6; --stage-fg: #241f18; --stage-muted: #6b6152;
+  --stage-line: #c9b892; --stage-panel: #f2e9d6;
+  --stage-amber: #8f5e08; --stage-red: #b8341f; --stage-green: #3f7a52;
 }
 * { box-sizing: border-box; }
 html, body {

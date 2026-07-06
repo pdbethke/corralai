@@ -1,8 +1,11 @@
 ---
 // SPDX-License-Identifier: Elastic-2.0
-// Cockpit-local replay controls: speed dropdown + light/dark theme toggle.
-// Mirrors the header's #sh-replay-speed / #sh-theme-toggle; site-controls.js
-// keeps every [data-replay-speed] / [data-site-theme-toggle] in sync.
+// Cockpit-local replay controls: speed dropdown + the DEMO WINDOW's own
+// light/dark toggle. The speed mirrors the header's #sh-replay-speed. The
+// theme toggle is DELIBERATELY not the site toggle: it carries
+// data-cockpit-theme-toggle (not data-site-theme-toggle), so it themes only
+// the cockpit (data-cockpit-theme → --stage-*), independent of the site's own
+// light/dark (the header moon). site-controls.js wires both, separately.
 ---
 <div class="replay-bar-controls">
   <label class="rbc-speed" title="Replay playback speed">
@@ -18,11 +21,11 @@
     id="replay-theme-toggle"
     class="rbc-theme"
     type="button"
-    data-site-theme-toggle
-    aria-label="Toggle light / dark theme"
-    title="Toggle light / dark"
+    data-cockpit-theme-toggle
+    aria-label="Toggle the demo window's light / dark"
+    title="Light / dark — this demo window only"
   >
-    <span class="rbc-tt-icon" aria-hidden="true">🌙</span>
+    <span class="rbc-ct-icon" aria-hidden="true">🌙</span>
   </button>
 </div>
 

@@ -57,7 +57,7 @@ test('the header theme toggle flips the persisted site theme', async ({ page }) 
   expect(persisted, 'the theme choice must persist').toBe(after);
 });
 
-test('the cockpit replay bar exposes theme + speed controls synced with the header', async ({ page }) => {
+test('the replay bar themes the DEMO WINDOW independently of the site; speed still syncs with the header', async ({ page }) => {
   await page.goto('/');
   const bottomTheme = page.locator('#replay-theme-toggle');
   const bottomSpeed = page.locator('#replay-speed');
@@ -68,16 +68,23 @@ test('the cockpit replay bar exposes theme + speed controls synced with the head
   await expect(bottomSpeed).toBeVisible();
 
   const html = page.locator('html');
-  const before = await html.getAttribute('data-theme');
+  // The replay-bar moon is the DEMO WINDOW's own control: it flips
+  // data-cockpit-theme, persists corralai-cockpit-theme, and must NOT touch the
+  // site's data-theme (that's the header moon's job).
+  const siteBefore = await html.getAttribute('data-theme');
+  const cockpitBefore = await html.getAttribute('data-cockpit-theme');
   await bottomTheme.click();
-  const after = await html.getAttribute('data-theme');
-  expect(after, 'bottom theme toggle must switch data-theme').not.toBe(before);
-  expect(await page.evaluate(() => localStorage.getItem('corralai-site-theme'))).toBe(after);
+  const cockpitAfter = await html.getAttribute('data-cockpit-theme');
+  expect(cockpitAfter, 'replay-bar toggle must switch data-cockpit-theme').not.toBe(cockpitBefore);
+  expect(await page.evaluate(() => localStorage.getItem('corralai-cockpit-theme'))).toBe(cockpitAfter);
+  expect(await html.getAttribute('data-theme'), 'demo-window toggle must NOT change the site theme').toBe(siteBefore);
 
-  const headerIcon = await headerTheme.locator('.sh-tt-icon').textContent();
-  const bottomIcon = await bottomTheme.locator('.rbc-tt-icon').textContent();
-  expect(headerIcon).toBe(bottomIcon);
+  // And the header moon themes the site WITHOUT touching the demo window.
+  await headerTheme.click();
+  expect(await html.getAttribute('data-theme'), 'header toggle must switch the site theme').not.toBe(siteBefore);
+  expect(await html.getAttribute('data-cockpit-theme'), 'site toggle must NOT change the demo window').toBe(cockpitAfter);
 
+  // Speed, by contrast, IS shared between the header and the replay bar.
   await bottomSpeed.selectOption('8');
   await expect(headerSpeed).toHaveValue('8');
   await expect(bottomSpeed).toHaveValue('8');
@@ -87,17 +94,16 @@ test('the cockpit replay bar exposes theme + speed controls synced with the head
   await expect(bottomSpeed).toHaveValue('4');
 });
 
-test('the recordings cockpit replay bar exposes synced theme + speed controls', async ({ page }) => {
+test('the recordings replay bar themes the demo window independently; speed still syncs', async ({ page }) => {
   await page.goto('/recordings/');
   await expect(page.locator('#replay-theme-toggle')).toBeVisible();
   await expect(page.locator('#replay-speed')).toBeVisible();
 
+  const html = page.locator('html');
+  const siteBefore = await html.getAttribute('data-theme');
   await page.locator('#replay-theme-toggle').click();
-  const theme = await page.locator('html').getAttribute('data-theme');
-  expect(theme).toBeTruthy();
-  const headerIcon = await page.locator('#sh-theme-toggle .sh-tt-icon').textContent();
-  const bottomIcon = await page.locator('#replay-theme-toggle .rbc-tt-icon').textContent();
-  expect(headerIcon).toBe(bottomIcon);
+  expect(await html.getAttribute('data-cockpit-theme')).toBe('light');
+  expect(await html.getAttribute('data-theme'), 'demo-window toggle must NOT change the site theme').toBe(siteBefore);
 
   await page.locator('#replay-speed').selectOption('16');
   await expect(page.locator('#sh-replay-speed')).toHaveValue('16');

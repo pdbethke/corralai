@@ -1,0 +1,17 @@
+{
+  "directive": "Build a Go package 'lru' \u2014 a generic (Go 1.18+ type-parameter) LRU cache: New(capacity int), Get(key) (val, ok), Put(key, val), Len(), evicting the least-recently-used entry when over capacity; Get and Put both count as a use. Include table-driven tests covering eviction order, updating an existing key, capacity edges (0 and 1), and Get-miss. Make 'go mod init lru' first, then 'go build ./...' and 'go test ./...' both pass from the root.",
+  "task_count": 8,
+  "done_task_count": 8,
+  "finding_count": 8,
+  "duration_seconds": 495.9,
+  "models": [
+    "ollama:qwen2.5-coder:7b",
+    "anthropic:claude-sonnet",
+    "google:gemini-2.5-pro",
+    "openai:gpt-5-codex"
+  ],
+  "platform": {
+    "inference": "mixed \u2014 local Ollama + frontier vendor CLIs",
+    "host": "linux/amd64"
+  }
+}

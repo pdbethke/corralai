@@ -298,9 +298,9 @@ const maxModelFindings = Math.max(1, ...analytics.findings_by_model.map((r: any)
      (internal/ui/web/cockpit-shell.html, via site/src/lib/cockpitShell.ts)
      and are targeted with :global for the same reason as the injected
      content classes. */
-  :global(#cockpit .arow) { display: flex; align-items: baseline; gap: 6px; padding: 2px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  :global(#cockpit .arow), :global(#agents .arow), :global(.cockpit-agents .arow) { display: flex; align-items: baseline; gap: 6px; padding: 2px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   :global(#cockpit .adot) { flex: none; align-self: center; width: 7px; height: 7px; border-radius: 50%; }
-  :global(#cockpit .ameta) { color: var(--stage-muted); font-size: 11px; }
+  :global(#cockpit .ameta), :global(#agents .ameta), :global(.cockpit-agents .ameta) { color: var(--stage-muted); font-size: 11px; }
   :global(#cockpit .adoing) { color: var(--stage-muted); font-size: 11px; margin-left: auto; padding-left: 10px; overflow: hidden; text-overflow: ellipsis; font-family: ui-monospace, monospace; }
   .cockpit-exec {
     background: var(--stage-bg); color: var(--stage-fg); border: 1px solid var(--stage-line); border-top: none;
@@ -309,7 +309,7 @@ const maxModelFindings = Math.max(1, ...analytics.findings_by_model.map((r: any)
   }
   /* the cockpit panels reuse the product console's class vocabulary — same
      names the shared renderers emit, styled for the dark stage (global: see note above) */
-  :global(#cockpit .feedhdr), :global(.cockpit-exec .feedhdr) { color: var(--stage-muted); font-size: 11px; letter-spacing: .4px; margin-bottom: 6px; }
+  :global(#cockpit .feedhdr), :global(#agents .feedhdr), :global(.cockpit-agents .feedhdr), :global(.cockpit-exec .feedhdr) { color: var(--stage-muted); font-size: 11px; letter-spacing: .4px; margin-bottom: 6px; }
   :global(.cockpit-exec .xblk) { margin-bottom: 3px; }
   :global(.cockpit-exec .xcmdline) { display: flex; align-items: baseline; gap: 7px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.5; }
   :global(.cockpit-exec .xprompt) { color: var(--stage-amber); }

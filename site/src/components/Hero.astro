@@ -196,15 +196,15 @@ const minutes = Math.round((meta.duration_seconds || 0) / 60);
      RUNTIME by the shared replay renderer (replay-player.js), so those
      elements never carry Astro's scope attribute — the rules MUST be
      :global or they silently don't apply. */
-  :global(#cockpit .arow) { display: flex; align-items: baseline; gap: 6px; padding: 2px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  :global(#cockpit .arow), :global(#agents .arow), :global(.cockpit-agents .arow) { display: flex; align-items: baseline; gap: 6px; padding: 2px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   :global(#cockpit .adot) { flex: none; align-self: center; width: 7px; height: 7px; border-radius: 50%; }
-  :global(#cockpit .ameta) { color: var(--stage-muted); font-size: 11px; }
+  :global(#cockpit .ameta), :global(#agents .ameta), :global(.cockpit-agents .ameta) { color: var(--stage-muted); font-size: 11px; }
   :global(#cockpit .adoing) { color: var(--stage-muted); font-size: 11px; margin-left: auto; padding-left: 10px; overflow: hidden; text-overflow: ellipsis; font-family: ui-monospace, monospace; }
   .cockpit-exec {
     background: var(--stage-bg); color: var(--stage-fg); border: 1px solid var(--stage-line); border-top: none;
     height: 160px; overflow-y: auto; padding: 10px 14px; font-size: 12px;
   }
-  :global(#cockpit .feedhdr), :global(.cockpit-exec .feedhdr) { color: var(--stage-muted); font-size: 11px; letter-spacing: .4px; margin-bottom: 6px; }
+  :global(#cockpit .feedhdr), :global(#agents .feedhdr), :global(.cockpit-agents .feedhdr), :global(.cockpit-exec .feedhdr) { color: var(--stage-muted); font-size: 11px; letter-spacing: .4px; margin-bottom: 6px; }
   :global(.cockpit-exec .xblk) { margin-bottom: 3px; }
   :global(.cockpit-exec .xcmdline) { display: flex; align-items: baseline; gap: 7px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.5; }
   :global(.cockpit-exec .xprompt) { color: var(--stage-amber); }

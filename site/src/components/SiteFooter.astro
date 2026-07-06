@@ -1,10 +1,23 @@
 ---
 // SPDX-License-Identifier: Elastic-2.0
+const REPO = 'https://github.com/pdbethke/corralai';
+// The brain reports itself as this MCP server version (internal/brain/server.go);
+// surfaced here as the honest v0.x framing the roadmap + README carry.
+const VERSION = 'v0.1';
 ---
 <footer class="section" id="site-footer">
-  <p>
-    <a href="https://github.com/pdbethke/corralai">github.com/pdbethke/corralai</a>
-    · Elastic License 2.0 · built by a herd, wrangled by a human.
+  <nav class="foot-links" aria-label="Footer">
+    <a href={REPO} target="_blank" rel="noopener noreferrer">GitHub</a>
+    <a href="/docs/getting-started/">Docs</a>
+    <a href={`${REPO}/blob/main/ROADMAP.md`} target="_blank" rel="noopener noreferrer">Roadmap</a>
+    <a href={`${REPO}/blob/main/SECURITY.md`} target="_blank" rel="noopener noreferrer">Security</a>
+    <a href={`${REPO}/blob/main/LICENSE`} target="_blank" rel="noopener noreferrer">License</a>
+  </nav>
+  <p class="foot-meta">
+    <a href={REPO} target="_blank" rel="noopener noreferrer">github.com/pdbethke/corralai</a>
+    · Source-available under the <a href={`${REPO}/blob/main/LICENSE`} target="_blank" rel="noopener noreferrer">Elastic License 2.0</a>
+    · <span class="foot-version">{VERSION}</span>
+    · built by a herd, wrangled by a human.
   </p>
   <p class="built-on">
     Built on DuckDB (mission telemetry, and the analytics on the
@@ -14,5 +27,22 @@
 </footer>
 
 <style>
+  #site-footer { border-top: 1px solid var(--line); }
+  .foot-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 20px;
+    margin-bottom: 12px;
+    font-weight: 600;
+    font-size: 0.9rem;
+  }
+  .foot-links a { text-decoration: none; }
+  .foot-links a:hover { text-decoration: underline; }
+  .foot-meta { color: var(--muted); font-size: 0.9rem; margin: 0 0 8px; }
+  .foot-version {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--amber);
+    font-size: 0.82rem;
+  }
   .built-on { color: var(--muted); font-size: 0.85rem; }
 </style>

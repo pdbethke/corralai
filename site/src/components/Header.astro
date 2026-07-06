@@ -1,0 +1,167 @@
+---
+// SPDX-License-Identifier: Elastic-2.0
+// The site header: a sticky, always-dark "corral" bar (the --stage-* palette,
+// same instrument tone as the cockpit viewport) carrying the CorralAI logo,
+// primary nav, a GitHub star CTA, and the light/dark toggle. It supersedes the
+// standalone floating ThemeToggle on the hand-authored pages (/, /recordings)
+// — the toggle now lives here, wired to the same 'corralai-site-theme' key the
+// per-page no-flash <head> script reads. /docs uses Starlight's own chrome
+// (with a matching logo via the SiteTitle override), so this component is for
+// the marketing pages only.
+const REPO = 'https://github.com/pdbethke/corralai';
+interface Props {
+  /** which primary nav item is the current page */
+  active?: 'home' | 'docs' | 'recordings';
+}
+const { active } = Astro.props;
+import Logo from './Logo.astro';
+---
+<header class="site-header">
+  <div class="sh-inner">
+    <a class="sh-brand" href="/" aria-label="Corralai — home">
+      <Logo size={24} />
+    </a>
+    <nav class="sh-nav" aria-label="Primary">
+      <a href="/" aria-current={active === 'home' ? 'page' : undefined}>Home</a>
+      <a href="/docs/getting-started/" aria-current={active === 'docs' ? 'page' : undefined}>Docs</a>
+      <a href="/recordings/" aria-current={active === 'recordings' ? 'page' : undefined}>Recordings</a>
+      <a href={REPO} target="_blank" rel="noopener noreferrer">GitHub</a>
+    </nav>
+    <div class="sh-right">
+      <a class="sh-star" href={REPO} target="_blank" rel="noopener noreferrer">
+        <svg class="sh-staricon" viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
+          <path d="M12 2.5l2.9 6.06 6.6.78-4.9 4.5 1.3 6.56L12 17.9l-5.9 3.5 1.3-6.56-4.9-4.5 6.6-.78z"/>
+        </svg>
+        <span>Star</span>
+      </a>
+      <button id="sh-theme-toggle" class="sh-theme" type="button" aria-label="Toggle light / dark theme" title="Toggle light / dark">
+        <span class="sh-tt-icon" aria-hidden="true">🌙</span>
+      </button>
+    </div>
+  </div>
+</header>
+
+<style>
+  .site-header {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    /* always the dark instrument palette, in both site themes — one tone with
+       the cockpit viewport it frames below it. */
+    background: color-mix(in srgb, var(--stage-bg) 92%, transparent);
+    -webkit-backdrop-filter: saturate(140%) blur(8px);
+    backdrop-filter: saturate(140%) blur(8px);
+    border-bottom: 1px solid var(--stage-line);
+    box-shadow: 0 1px 0 rgba(0, 0, 0, 0.25);
+    /* re-scope the logo tokens to the dark palette so the wordmark reads light
+       + amber on the bar regardless of the page theme. */
+    --fg: var(--stage-fg);
+    --amber: var(--stage-amber);
+  }
+  .sh-inner {
+    max-width: 1180px;
+    margin: 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 10px 20px;
+  }
+  .sh-brand {
+    display: inline-flex;
+    align-items: center;
+    text-decoration: none;
+    border-radius: 8px;
+    padding: 2px 4px;
+  }
+  .sh-brand:focus-visible { outline: 2px solid var(--stage-amber); outline-offset: 2px; }
+  .sh-nav {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: 12px;
+    flex: 1 1 auto;
+    flex-wrap: wrap;
+  }
+  .sh-nav a {
+    color: var(--stage-muted);
+    text-decoration: none;
+    font-size: 14px;
+    font-weight: 500;
+    padding: 6px 10px;
+    border-radius: 7px;
+    transition: color 0.12s ease, background 0.12s ease;
+  }
+  .sh-nav a:hover { color: var(--stage-fg); background: var(--stage-panel); }
+  .sh-nav a[aria-current='page'] { color: var(--stage-bg); background: var(--stage-amber); }
+  .sh-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: none;
+  }
+  .sh-star {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--stage-fg);
+    background: var(--stage-panel);
+    border: 1px solid var(--stage-line);
+    border-radius: 8px;
+    padding: 6px 12px;
+    font-size: 13px;
+    font-weight: 600;
+    text-decoration: none;
+    transition: border-color 0.12s ease, color 0.12s ease;
+  }
+  .sh-star:hover { border-color: var(--stage-amber); color: var(--stage-amber); }
+  .sh-staricon { color: var(--stage-amber); }
+  .sh-theme {
+    width: 34px;
+    height: 34px;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--stage-panel);
+    color: var(--stage-fg);
+    border: 1px solid var(--stage-line);
+    cursor: pointer;
+    font-size: 15px;
+    line-height: 1;
+    transition: border-color 0.12s ease;
+  }
+  .sh-theme:hover { border-color: var(--stage-amber); }
+  @media (max-width: 560px) {
+    .sh-inner { flex-wrap: wrap; gap: 8px 12px; padding: 8px 14px; }
+    .sh-nav { order: 3; width: 100%; margin-left: 0; justify-content: flex-start; }
+    .sh-right { margin-left: auto; }
+    .sh-star span { display: none; }
+    .sh-star { padding: 6px 10px; }
+  }
+</style>
+
+<script is:inline>
+  (function () {
+    var KEY = 'corralai-site-theme';
+    function paint() {
+      var b = document.getElementById('sh-theme-toggle');
+      if (!b) return;
+      var dark = document.documentElement.getAttribute('data-theme') === 'dark';
+      var icon = b.querySelector('.sh-tt-icon');
+      if (icon) icon.textContent = dark ? '☀️' : '🌙';
+    }
+    function wire() {
+      paint();
+      var b = document.getElementById('sh-theme-toggle');
+      if (!b) return;
+      b.addEventListener('click', function () {
+        var next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+        document.documentElement.setAttribute('data-theme', next);
+        try { localStorage.setItem(KEY, next); } catch (e) {}
+        paint();
+      });
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', wire);
+    else wire();
+  })();
+</script>

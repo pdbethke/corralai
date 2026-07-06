@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Elastic-2.0
 import '../styles/global.css';
 import { cockpitHudNoSkin, cockpitViews, cockpitTasks, cockpitAgents, cockpitFindings, cockpitExec } from '../lib/cockpitShell';
-import ThemeToggle from '../components/ThemeToggle.astro';
+import Header from '../components/Header.astro';
 
 const generatedAnalyticsModules = import.meta.glob('../data/generated/analytics.json', { eager: true });
 const legacyAnalyticsModules = import.meta.glob('../data/analytics.json', { eager: true });
@@ -81,7 +81,7 @@ const maxModelFindings = Math.max(1, ...analytics.findings_by_model.map((r: any)
   <meta name="description" content="A gallery of real recorded corralai missions — different directives, different model mixes, every one replayable." />
 </head>
 <body>
-  <ThemeToggle />
+  <Header active="recordings" />
   <div class="section">
     <h1>Recordings</h1>
     <p>

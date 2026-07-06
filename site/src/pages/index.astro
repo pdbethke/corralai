@@ -10,7 +10,7 @@ import WatchItBack from '../components/WatchItBack.astro';
 import TeamsInfra from '../components/TeamsInfra.astro';
 import Quickstart from '../components/Quickstart.astro';
 import SiteFooter from '../components/SiteFooter.astro';
-import ThemeToggle from '../components/ThemeToggle.astro';
+import Header from '../components/Header.astro';
 
 const title = 'Corralai — a headless brain for a herd of AI agents';
 const description = 'A headless brain orchestrates a herd of AI agents across any model — local to frontier — to plan, build, verify, and re-plan real missions behind real fences, human-gated. Every run recorded and replayable.';
@@ -44,7 +44,7 @@ const url = 'https://corralai.dev/';
   <meta name="twitter:image" content="https://corralai.dev/og-image.png" />
 </head>
 <body>
-  <ThemeToggle />
+  <Header active="home" />
   <Hero />
   <HowItWorks />
   <ProofBand />

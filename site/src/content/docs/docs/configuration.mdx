@@ -1,0 +1,90 @@
+---
+title: Configuration
+description: The environment variables that configure a corralai brain — storage paths, auth, repo work, the fleet, and the knobs the demo and recordings pipeline read.
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+{/* Source: cmd/corral/main.go // Env: doc block (the authoritative list is the
+    generated CLI reference at /docs/cli/corral/); this page is the
+    task-oriented tour of the load-bearing ones. */}
+
+A corralai brain is configured **entirely through environment variables** —
+there is no config file to hand-edit, so dev mode and a production deployment
+run the exact same code paths. Everything below is optional; a brain with no
+environment set at all boots in dev mode against sensible `~/.claude/*`
+defaults.
+
+:::note
+The **complete, always-current list** is generated straight from the binary's
+own source comment — see [the `corral` CLI reference](/docs/cli/corral/). This
+page is the guided tour of the knobs you reach for most.
+:::
+
+## Where state lives
+
+Every store defaults under `~/.claude/`; point them elsewhere to relocate a
+brain's data or to isolate a test/demo brain.
+
+| Variable | What it is | Default |
+| --- | --- | --- |
+| `CORRALAI_ADDR` | Listen address (loopback by default; front it with a tunnel/proxy) | `127.0.0.1:9019` |
+| `CORRALAI_DB` | Coordination SQLite (missions, tasks, claims) | `~/.claude/corralai_coord.sqlite3` |
+| `CORRALAI_MEMORY_DB` | Memory DuckDB (the searchable knowledge store) | `~/.claude/corralai_memory.duckdb` |
+| `CORRALAI_MEMORY_DIR` | Where **new** memory entries are written (markdown files) | `~/.claude/projects/default/memory` |
+| `CORRALAI_RECORDINGS_DB` | Recordings DuckDB for scrubbed replay exports | `~/.claude/corralai_recordings.duckdb` |
+
+:::caution
+`CORRALAI_MEMORY_DIR` controls where new memory is **written**. It does not, by
+itself, scope what an existing brain **indexes** on startup — keep a demo or
+test brain pointed at a scratch directory (and a scratch `HOME`) so it never
+picks up a personal memory corpus.
+:::
+
+## Reliability & stall detection
+
+| Variable | What it is | Default |
+| --- | --- | --- |
+| `CORRALAI_TASK_STALL_SECONDS` | How long a claimed-but-untouched task may sit before the brain treats it as stalled and lets the herd reclaim it | `300` |
+
+This is the knob behind *graceful degradation over deadlock*: a worker that
+claims a task and then dies (crash, quota blip) must never strand the mission —
+after the stall window its lease is reclaimable by the rest of the herd.
+
+## Auth & access
+
+With `CORRALAI_OIDC_ISSUER` **unset**, auth is disabled (dev mode — any caller
+is trusted). Set it to any OIDC provider to turn auth on.
+
+| Variable | What it is |
+| --- | --- |
+| `CORRALAI_OIDC_ISSUER` / `CORRALAI_OIDC_AUDIENCE` | The primary trusted OIDC issuer + expected audience (empty issuer ⇒ auth off) |
+| `CORRALAI_OIDC_CLIENTS` | Extra trusted clients, `"issuer\|aud,issuer\|aud"` |
+| `CORRALAI_ALLOWED_PRINCIPALS` | Day-0 seed of member emails (the DB is canonical afterward) |
+| `CORRALAI_ADMIN_PRINCIPALS` | Day-0 seed of superuser emails |
+| `CORRALAI_ALLOWED_HOSTS` | Accepted `Host` headers (add the public hostname a tunnel exposes) |
+| `CORRALAI_MEMORY_OWNERS` | Emails allowed to read/write memory |
+
+## Repo work (jail → PR)
+
+| Variable | What it is |
+| --- | --- |
+| `CORRALAI_GIT_TOKEN` | Forge PAT for clone + PR; empty ⇒ repo engine off unless `CORRALAI_REPO_ENABLE=1` |
+| `CORRALAI_FORGES` | Multi-forge config (GitHub / GitLab / Gitea) — each token is only ever used against its own host |
+| `CORRALAI_REPO_WORKSPACE` | Root dir for per-mission working copies |
+
+The token lives **only** in the brain — it is scrubbed from the environment,
+injected into a push URL for one call, and never written to `.git/config`. See
+[Trust & security](/docs/concepts/trust-and-security/).
+
+## Models & the fleet
+
+| Variable | What it is |
+| --- | --- |
+| `MODEL_BACKEND` / `OPENAI_BASE_URL` | Bring your own model — point at any OpenAI-compatible endpoint (local Ollama to frontier) |
+| `CORRALAI_EMBED_URL` | Embeddings endpoint for reference RAG + semantic code search |
+| `CORRALAI_MOTHERDUCK` | Fleet-sync target (`md:<db>` or a `.duckdb` path); empty ⇒ sync off |
+| `CORRALAI_BRAIN_ID` | Tag for this brain's rows in the fleet (default: hostname) |
+
+See [Running it](/docs/running-it/) for how these come together in dev vs.
+auth-on, and [Multi-model herds](/docs/concepts/multi-model-herds/) for the
+model story.

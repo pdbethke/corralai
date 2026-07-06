@@ -1,0 +1,23 @@
+---
+// SPDX-License-Identifier: Elastic-2.0
+// Overrides Starlight's SiteTitle so /docs carries the same CorralAI lockup as
+// the marketing header, and clicking it returns to the site home (not just the
+// docs index) — one continuous site. The Logo reads its palette from --amber /
+// --fg, which the marketing global.css defines but Starlight pages don't load,
+// so we bind them to Starlight's own theme variables here (which flip
+// automatically in the docs' dark mode).
+import Logo from './Logo.astro';
+---
+<a href="/" class="docs-site-title" aria-label="Corralai — home">
+  <Logo size={24} />
+</a>
+
+<style>
+  .docs-site-title {
+    display: inline-flex;
+    align-items: center;
+    text-decoration: none;
+    --amber: var(--sl-color-text-accent);
+    --fg: var(--sl-color-text);
+  }
+</style>

@@ -1,0 +1,70 @@
+---
+title: Limitations & roadmap
+description: Where corralai is honestly at (v0.1), what it deliberately does not claim, and where it's heading next.
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+{/* Source: ROADMAP.md + SECURITY.md ("What this does not claim"). Honest v0.x
+    framing for a Wednesday-launch audience. */}
+
+Corralai is **v0.1** — solo-maintained and moving fast. The foundations are in
+place; most of what's ahead is *surfacing* them, not re-architecting. This page
+is the honest version: what it can't do yet, and what's next.
+
+## What v0.1 is
+
+- The **adaptive loop** works end to end: a directive → a mission → the herd
+  plans, builds, verifies against a deterministic gate, re-plans on findings,
+  and converges.
+- **Multi-model, multi-forge**, key-free on a local 7B if you want it.
+- The **`bwrap` jail**, the **human gate** on admin actions and merges, and a
+  fully **attributed action ledger**.
+- The **learning loop** (findings → human-approved skills), **shared memory /
+  skills / hooks**, and durable **mission history + replay** — the recordings
+  you can watch on this site are real exported runs.
+- Embedded **DuckDB analytics** and optional **MotherDuck** fleet sync.
+
+## What it does *not* claim yet
+
+Honesty is part of the design (see the full [Trust & security](/docs/concepts/trust-and-security/)
+page and `SECURITY.md`):
+
+- **It does not make an LLM immune to instructions in the content it reads.**
+  Fencing untrusted data is hardening, not a guarantee — the *control* is that
+  unvetted content can never reach an authoritative position, and a fooled
+  agent is contained (jailed, credential-less, PR-reviewed).
+- **It does not defend against a malicious insider holding a valid key.**
+  Cross-swarm attestation stops identity *forgery*, not an authorized brain
+  publishing false claims (mitigated by advisory-only semantics, TTLs, and
+  revocation).
+- **It assumes a single trust domain.** Cross-swarm coordination assumes all
+  participating swarms share one owner; it is not multi-tenant isolation.
+- **It has not been battle-tested at scale.** The properties are proven by
+  design review and adversarial tests, not (yet) by a hostile production
+  adversary.
+
+Operationally, v0.1 is a **single-operator** system: many-missions-at-once,
+budget caps, and mid-mission steering are roadmap items, not shipped features.
+
+## Where it's heading
+
+From the [roadmap](https://github.com/pdbethke/corralai/blob/main/ROADMAP.md)
+(directional, not committed):
+
+- **The front door.** A first-class *"what should the herd build?"* composer
+  with an optional clarify step and a pre-flight feasibility check.
+- **Reliability hardening.** Graceful degradation over deadlock — staffing
+  gaps, refusal storms, and stale claims must never strand a mission.
+- **Resumability.** A mission survives a crash or quota blip and resumes from
+  durable state.
+- **The operator surface.** Assign models to roles from a panel; an earned
+  per-role model leaderboard; a VS Code cockpit docked beside the diff.
+- **Ready for teams.** Cost governance, concurrency & multi-tenancy, and
+  mid-mission steering.
+
+The through-line: every capability is the same pattern — brain-mediated,
+human-gated, attributed, *share the capability and hold the credential* — and
+increasingly just a query over one attributed ledger.
+
+Want to shape it? Issues and verified-harness PRs are welcome on
+[GitHub](https://github.com/pdbethke/corralai).

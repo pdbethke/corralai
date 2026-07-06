@@ -1,0 +1,102 @@
+---
+title: MCP tools reference
+description: The brain is an MCP server — the herd, the operator, and any MCP-native client reach it through these tools. Grouped by what they do.
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+{/* Source: internal/brain/*.go mcp.AddTool registrations (server.go, admin.go,
+    memory.go, reference.go, recordings.go, history.go, analytics.go,
+    gateway.go, host.go, inbox.go, reposync.go, reposearch.go, repofiles.go,
+    executions.go, askfleet.go, fleetclaims.go). Descriptions paraphrase each
+    tool's own registered Description. */}
+
+The corral brain is **MCP-native**: `corral` serves `/mcp/` (and `/healthz`) on
+`$CORRALAI_ADDR`. Everything the herd does — claim work, run commands, read and
+write shared knowledge, push to a repo — is an MCP tool call to the brain,
+which records it as an attributed side effect. An MCP-native client (an agent,
+an operator's CLI, an IDE) points its `.mcp.json` at the brain's endpoint and
+gets the tools below.
+
+Access is enforced per call: workers get the coordination + work tools;
+admin/superuser tools are gated; some (like sharing a recording) are
+human-gated and refuse delegated subagent tokens. This is a guide, not the wire
+spec — the authoritative schema is whatever the running brain advertises via
+`tools/list`.
+
+## Coordination — join the herd, claim work
+
+- **`bootstrap`** — enter a coordination session in one call: register yourself and get active peers, your live claims, and recently-completed work. Call this first.
+- **`heartbeat`** — refresh your presence (and optionally report status: `working` / `awaiting_approval` / `idle`).
+- **`claim_paths`** — lease files/dirs/branches. Exclusive claims are *enforced* — always check `granted` before acting; pass `exclusive:false` for an advisory lease.
+- **`release_claims`** — release your leases (specific paths, or all of yours).
+- **`fleet_claims`** — see who across the fleet holds a lease on a subject.
+- **`spawn_subagent`** — spawn a governed out-of-process worker under a scoped, TTL-bound delegation token.
+
+## Missions — start, inspect, replay
+
+- **`create_mission`** — turn a directive (optionally against a repo) into a mission the herd plans and executes.
+- **`mission_history`** — past missions: a list (directive, status, duration, counts, what-got-learned) or, given an id, the full drill-down.
+- **`mission_replay`** — replay one mission's recorded event stream, oldest-first.
+- **`mission_analytics`** — analyze the mission event log (DuckDB): a named report (`missions` / `agents` / `kinds` / `findings` / `replans` / `sprints` / `model_comparison`) or an ad-hoc read-only `SELECT`.
+
+## Working in a repo — the jail → PR path
+
+- **`repo_snapshot`** — snapshot your mission's working copy.
+- **`repo_push`** — hand code back through the brain (which holds the credential) as a reviewed PR — the only way code leaves the jail.
+- **`read_repo`** / **`repo_tree`** / **`repo_grep`** — read a file, list files, or literal-search across the working copy.
+- **`repo_search`** — semantic/hybrid code search over the working copy; returns `path:line` ranges ranked by meaning.
+- **`report_execution`** — record a command execution (the attributed action ledger + the replay console read from these).
+
+## Knowledge — memory & reference corpus
+
+- **`search_memory`** / **`get_memory`** / **`list_memory`** — search (BM25), fetch, or list the memory you can see (your own + the shared team knowledge base).
+- **`add_memory`** — persist a memory entry. Private by default (needs a memory owner); `shared=true` (the team knowledge base) needs an admin.
+- **`promote_memory`** — *(admin)* share an existing entry team-wide, or make it private again.
+- **`add_reference`** / **`search_reference`** / **`list_references`** — ingest a URL or raw text into the reference corpus, semantically search it, or list sources. Hits are fenced as **untrusted** data with provenance.
+- **`promote_reference`** — *(admin)* mark a reference source vetted/trustworthy.
+
+## The learning loop — human-gated
+
+- **`approve_proposal`** / **`reject_proposal`** — act on the learning loop's clustered findings → proposed skills. Approving is what turns a run's lessons into authoritative, reusable knowledge; both sit behind the human gate.
+
+## Recordings — export & share replays
+
+- **`list_recordings`** — list exported replay recordings (ACL-scoped; dev mode open).
+- **`query_recordings`** — analyze recordings in DuckDB (named report or superuser ad-hoc read-only SQL).
+- **`get_recording_replay`** — return one recording's replay event stream by slug or mission id.
+- **`share_recording`** — share a recording with a team catalog or everyone. **Human-gated** — delegated subagent tokens are refused.
+
+## Topology & the console — observability
+
+- **`report_host`** — announce your runtime facts (host, model, jail) so the topology view can map where every agent runs.
+- **`swarm_topology`** — the live topology: each active worker with its host, model, jail, and any model-drift from the configured role policy.
+- **`send_instruction`** / **`check_instructions`** / **`ack_instruction`** — the operator↔agent inbox: send a nudge, read yours, acknowledge one.
+
+## The fleet oracle
+
+- **`ask_fleet`** — a natural-language question about the whole fleet's state (missions, tasks, telemetry across all swarms). Read-only; the generated SQL runs inside a locked-down DuckDB connection — see [Trust & security](/docs/concepts/trust-and-security/).
+
+## The MCP gateway — share *reach*
+
+Register any upstream MCP server with the brain; the herd then shares
+*capability* while the brain holds the *credential*.
+
+- **`register_endpoint`** — register your personal upstream MCP server (the `auth_token` is held by the brain, never returned).
+- **`list_my_endpoints`** / **`list_all_endpoints`** — list yours (or, *admin*, every registered upstream, owner + public flag, no secrets).
+- **`promote_endpoint`** — *(admin)* promote a personal endpoint to public (team-wide or scoped), optionally swapping in a team credential.
+- **`set_endpoint_enabled`** / **`remove_endpoint`** — enable/disable or delete an endpoint you own (or any, as admin).
+- **`list_capabilities`** — the upstreams you may use and their tools. Discover here, then call.
+- **`call_capability`** — call a tool on an upstream you may use, proxied and audited by the brain.
+
+## Identity & administration — superuser
+
+- **`whoami`** — who the brain sees you as: your verified principal, superuser flag, and whether you're allowed to use this brain.
+- **`create_superuser`** — create/promote a superuser (the *first* is free to bootstrap; after that, superuser-only).
+- **`list_principals`** / **`add_member`** / **`set_superuser`** / **`remove_principal`** — *(superuser)* list everyone, allow a member, flip a superuser flag, or revoke access.
+- **`mint_observer`** — *(superuser)* mint a **read-only** observer token: the holder can watch the swarm but cannot act (no claims, instructions, or tool calls).
+
+---
+
+See [Mission lifecycle](/docs/concepts/mission-lifecycle/) for how these tools
+compose into a running mission, and [Trust & security](/docs/concepts/trust-and-security/)
+for the boundaries every one of them is enforced against.

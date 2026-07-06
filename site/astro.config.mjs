@@ -20,7 +20,19 @@ export default defineConfig({
       // its default theme. Verified in Task 3 Step 5 and re-verified in
       // Task 8's e2e docs-session network interception.
       customCss: ['./src/styles/starlight-tokens.css'],
+      // Show the CorralAI lockup in the docs header (links back to the site
+      // home), so /docs and the marketing pages read as one continuous site.
+      components: {
+        SiteTitle: './src/components/StarlightSiteTitle.astro',
+      },
       sidebar: [
+        {
+          label: 'Site',
+          items: [
+            { label: 'Home', link: '/' },
+            { label: 'Recordings', link: '/recordings/' },
+          ],
+        },
         { label: 'Getting started', slug: 'docs/getting-started' },
         {
           label: 'Concepts',
@@ -36,6 +48,8 @@ export default defineConfig({
           ],
         },
         { label: 'Running it', slug: 'docs/running-it' },
+        { label: 'Configuration', slug: 'docs/configuration' },
+        { label: 'MCP tools reference', slug: 'docs/mcp-tools' },
         { label: 'Publishing recordings', slug: 'docs/publishing-recordings' },
         {
           label: 'The UI, tab by tab',
@@ -63,6 +77,7 @@ export default defineConfig({
             { label: 'corral-top', slug: 'docs/cli/corral-top' },
           ],
         },
+        { label: 'Limitations & roadmap', slug: 'docs/limitations' },
       ],
     }),
   ],

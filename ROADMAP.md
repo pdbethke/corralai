@@ -28,7 +28,11 @@ Go binary.**
 - Fleet analytics to MotherDuck
 - **The story engine** — the replay streams the agents' *real, captured reasoning*
   alongside their commands; click any agent mid-scrub to inspect its reconstructed
-  state; filter the console per agent. Watch the herd **think**, not just move.
+  state; **click any task** for its causal chain (what triggered it, what it
+  unblocked, the commands that ran under it); a **file-tree lens** reconstructs the
+  paths the herd touched, filling in as the tape plays; and **one scrub bar drives
+  the whole cockpit** — canvas, progress, and files — through the same moment in
+  time. Filter the console per agent. Watch the herd **think**, not just move.
 - **Egress scan** — the herd's output is vetted before it ships (committed secrets
   are *blocking*; new/vulnerable deps and license conflicts are advisory), on any
   forge — containment on the way *out*, not just the way in.

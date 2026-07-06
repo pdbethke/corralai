@@ -163,9 +163,13 @@ build, reconstructed, every time.
 replay streams each agent's own **reasoning**, verbatim, interleaved with its
 commands (*"the retry test is flaky because the backoff refills too slowly"* →
 `go test ✗`) — so you watch the herd *think*, not just move. Scrub to any moment
-and **click an agent** to inspect its reconstructed state; **filter the console
-to one agent** to follow a single thread. The captured reasoning is the agent's
-real words, never synthesized — which is exactly what turns the replay into a
+and **click an agent** to inspect its reconstructed state, or **click a task** to
+read its causal chain — what triggered it, what it unblocked, and the commands
+that ran under it. A **file-tree lens** reconstructs the paths the herd touched,
+filling in as the tape plays, and **one scrub bar moves the whole cockpit** —
+canvas, progress, and files — to the same instant. **Filter the console to one
+agent** to follow a single thread. The captured reasoning is the agent's real
+words, never synthesized — which is exactly what turns the replay into a
 *debugger*: scrub back to the moment a model's reasoning went wrong and watch how
 it cascaded to the others.
 

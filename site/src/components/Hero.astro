@@ -10,7 +10,7 @@ const hasGeneratedRecordings = Object.keys(generatedRecordings).some(
 );
 const preferredRecordings = hasGeneratedRecordings ? generatedRecordings : legacyRecordings;
 const fallbackRecordings = hasGeneratedRecordings ? legacyRecordings : {};
-const heroSlug = (process.env.CORRALAI_HERO_SLUG || 'hero-multimodel').trim() || 'hero-multimodel';
+const heroSlug = (process.env.CORRALAI_HERO_SLUG || 'go-stack-replan').trim() || 'go-stack-replan';
 
 function readRecordingModule(modules: Record<string, any>, slug: string, suffix: string) {
   const key = Object.keys(modules).find((p) => p.endsWith(`/${slug}${suffix}`));

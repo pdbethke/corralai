@@ -166,8 +166,19 @@ test('the agents roster reconstructs the herd from claims + executions', async (
   // RUNTIME by the shared renderer, so they carry no Astro scope attribute —
   // the CSS must be :global or it silently doesn't apply. Assert the layout
   // rule actually took (flex row), not the unstyled block fallback.
-  const display = await rows.first().evaluate((el) => getComputedStyle(el).display);
-  expect(display, 'cockpit panel classes must be :global — runtime elements get no scope attr').toBe('flex');
+  // The roster is rebuilt via innerHTML on seek/step, so a handle grabbed with
+  // rows.first() can be detached before .evaluate() runs — getComputedStyle()
+  // then returns '' on the orphaned node, a flake unrelated to the CSS itself.
+  // Re-resolve the locator each attempt so we read a live node; the invariant
+  // under test is that the :global rule applies (display: flex, not the
+  // unstyled block fallback).
+  await expect(async () => {
+    const display = await page
+      .locator('#agents .arow')
+      .first()
+      .evaluate((el) => getComputedStyle(el).display);
+    expect(display, 'cockpit panel classes must be :global — runtime elements get no scope attr').toBe('flex');
+  }).toPass({ timeout: 5000 });
 
   // seek back to 0 rebuilds the roster from scratch
   await seekTo(page, 0);

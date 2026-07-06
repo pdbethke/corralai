@@ -57,12 +57,11 @@ test('the header theme toggle flips the persisted site theme', async ({ page }) 
   expect(persisted, 'the theme choice must persist').toBe(after);
 });
 
-test('the replay bar themes the DEMO WINDOW independently of the site; speed still syncs with the header', async ({ page }) => {
+test('the replay bar themes the DEMO WINDOW independently of the site; the HUD speed control persists', async ({ page }) => {
   await page.goto('/');
   const bottomTheme = page.locator('#replay-theme-toggle');
-  const hudSpeed = page.locator('#hud-speed'); // speed control now lives in the top HUD, shown while replaying
+  const hudSpeed = page.locator('#hud-speed'); // the only replay-speed control now — top HUD, shown while replaying
   const headerTheme = page.locator('#sh-theme-toggle');
-  const headerSpeed = page.locator('#sh-replay-speed');
 
   await expect(bottomTheme).toBeVisible();
   await expect(hudSpeed).toBeVisible();
@@ -84,14 +83,13 @@ test('the replay bar themes the DEMO WINDOW independently of the site; speed sti
   expect(await html.getAttribute('data-theme'), 'header toggle must switch the site theme').not.toBe(siteBefore);
   expect(await html.getAttribute('data-cockpit-theme'), 'site toggle must NOT change the demo window').toBe(cockpitAfter);
 
-  // Speed, by contrast, IS shared between the header and the cockpit HUD control.
+  // Speed lives only in the cockpit HUD now (the site header no longer carries
+  // it); changing it persists.
   await hudSpeed.selectOption('8');
-  await expect(headerSpeed).toHaveValue('8');
   await expect(hudSpeed).toHaveValue('8');
   expect(await page.evaluate(() => localStorage.getItem('corralai-replay-speed'))).toBe('8');
-
-  await headerSpeed.selectOption('4');
-  await expect(hudSpeed).toHaveValue('4');
+  // and the site header has no speed control anymore
+  await expect(page.locator('#sh-replay-speed')).toHaveCount(0);
 });
 
 test('the recordings replay bar themes the demo window independently; speed still syncs', async ({ page }) => {
@@ -109,19 +107,20 @@ test('the recordings replay bar themes the demo window independently; speed stil
   expect(await html.getAttribute('data-theme'), 'demo-window toggle must NOT change the site theme').toBe(siteBefore);
 
   await hudSpeed.selectOption('16');
-  await expect(page.locator('#sh-replay-speed')).toHaveValue('16');
+  await expect(hudSpeed).toHaveValue('16');
+  expect(await page.evaluate(() => localStorage.getItem('corralai-replay-speed'))).toBe('16');
 });
 
-test('the header replay speed control defaults to 2x and affects playback', async ({ page }) => {
+test('the cockpit HUD speed control defaults to 2x and affects playback', async ({ page }) => {
   await page.goto('/');
-  const speed = page.locator('#sh-replay-speed');
-  await expect(speed).toBeVisible();
-  await expect(speed).toHaveValue('2');
-
+  // the HUD speed control appears once the hero tape starts playing
   await expect(async () => {
     const max = await page.locator('#replay-scrub').getAttribute('max');
     expect(Number(max)).toBeGreaterThan(0);
   }).toPass({ timeout: 5000 });
+  const speed = page.locator('#hud-speed');
+  await expect(speed).toBeVisible();
+  await expect(speed).toHaveValue('2');
 
   const startIdx = await page.evaluate(() => Number(document.getElementById('replay-scrub')!.value));
   await speed.selectOption('1');
@@ -146,12 +145,12 @@ test('the header replay speed control defaults to 2x and affects playback', asyn
   expect(persisted).toBe('8');
 });
 
-test('the recordings page exposes the same header replay speed control', async ({ page }) => {
+test('the site header carries no replay-speed control (it lives in the cockpit HUD)', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('header.site-header')).toBeVisible();
+  await expect(page.locator('#sh-replay-speed')).toHaveCount(0);
   await page.goto('/recordings/');
-  const speed = page.locator('#sh-replay-speed');
-  await expect(speed).toBeVisible();
-  await speed.selectOption('4');
-  expect(await page.evaluate(() => localStorage.getItem('corralai-replay-speed'))).toBe('4');
+  await expect(page.locator('#sh-replay-speed')).toHaveCount(0);
 });
 
 test('the recordings page carries the same site header', async ({ page }) => {

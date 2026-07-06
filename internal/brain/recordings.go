@@ -43,7 +43,7 @@ type shareRecordingIn struct {
 	TeamID     string `json:"team_id,omitempty" jsonschema:"required when visibility=team"`
 }
 type shareRecordingOut struct {
-	OK      bool                  `json:"ok"`
+	OK      bool                    `json:"ok"`
 	Mission *recordings.MissionMeta `json:"mission,omitempty"`
 }
 

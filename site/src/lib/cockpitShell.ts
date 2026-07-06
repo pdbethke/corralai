@@ -21,7 +21,13 @@ function section(name: string): string {
   return raw.slice(bi + begin.length, ei).trim();
 }
 
-export const cockpitHud = section('HUD');
+const hudSection = section('HUD');
+export const cockpitHud = hudSection;
+/** Landing hero: full HUD minus #skinsel (selector lives on /recordings only). */
+export const cockpitHudNoSkin = hudSection.replace(
+  /<select id="skinsel"[\s\S]*?<\/select>\s*/,
+  '',
+);
 export const cockpitViews = section('VIEWS');
 export const cockpitTasks = section('TASKS');
 export const cockpitAgents = section('AGENTS');

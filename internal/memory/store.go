@@ -219,7 +219,7 @@ func entryType(fm map[string]any, filename string) string {
 }
 
 func parseEntry(path, encodedDir string, rules []tierRule) entry {
-	raw, _ := os.ReadFile(path) // #nosec G304 -- path is a server-configured location (db/config/own file), not attacker input
+	raw, _ := os.ReadFile(path) // #nosec G703,G304 -- path is a server-configured location (db/config/own file), not attacker input
 	text := string(raw)
 	fm := map[string]any{}
 	body := strings.TrimSpace(text)

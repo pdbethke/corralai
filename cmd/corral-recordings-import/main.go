@@ -58,7 +58,7 @@ func main() {
 	if path == "" {
 		path = recordings.DefaultDB
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil { // #nosec G703 -- db path is operator-chosen via --db, CORRALAI_RECORDINGS_DB, or fixed DefaultDB; not remote attacker input
 		fmt.Fprintf(os.Stderr, "mkdir db dir: %v\n", err)
 		os.Exit(1)
 	}

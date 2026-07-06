@@ -1,7 +1,7 @@
 ---
 // SPDX-License-Identifier: Elastic-2.0
 import '../styles/global.css';
-import { cockpitHud, cockpitViews, cockpitTasks, cockpitAgents, cockpitFindings, cockpitExec } from '../lib/cockpitShell';
+import { cockpitHudNoSkin, cockpitViews, cockpitTasks, cockpitAgents, cockpitFindings, cockpitExec } from '../lib/cockpitShell';
 import ThemeToggle from '../components/ThemeToggle.astro';
 
 const generatedAnalyticsModules = import.meta.glob('../data/generated/analytics.json', { eager: true });
@@ -109,7 +109,7 @@ const maxModelFindings = Math.max(1, ...analytics.findings_by_model.map((r: any)
   </div>
 
   <div id="stage-frame">
-    <div class="cockpit-hud" set:html={cockpitHud} />
+    <div class="cockpit-hud" set:html={cockpitHudNoSkin} />
     <div id="cockpit">
       <aside class="cockpit-tasks" set:html={cockpitTasks} />
       <div id="stage">

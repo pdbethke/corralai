@@ -1,6 +1,6 @@
 ---
 // SPDX-License-Identifier: Elastic-2.0
-import { cockpitHud, cockpitViews, cockpitTasks, cockpitAgents, cockpitFindings, cockpitExec } from '../lib/cockpitShell';
+import { cockpitHudNoSkin, cockpitViews, cockpitTasks, cockpitAgents, cockpitFindings, cockpitExec } from '../lib/cockpitShell';
 
 const generatedRecordings = import.meta.glob('../data/generated/recordings/*.json', { eager: true });
 const legacyRecordings = import.meta.glob('../data/recordings/*.json', { eager: true });
@@ -68,7 +68,7 @@ const minutes = Math.round((meta.duration_seconds || 0) / 60);
     </p>
   </div>
   <div id="stage-frame">
-    <div class="cockpit-hud" set:html={cockpitHud} />
+    <div class="cockpit-hud" set:html={cockpitHudNoSkin} />
     <div id="cockpit">
       <aside class="cockpit-tasks" set:html={cockpitTasks} />
       <div id="stage">

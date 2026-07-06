@@ -737,7 +737,7 @@ func TestReplayPlayerStructure(t *testing.T) {
 	indexHTML := string(rawIndex)
 
 	playerMarkers := []string{
-		`let replayEvents = [], replayIdx = 0, replayPlaying = false, replaySpeed = 1`,
+		`let replayEvents = [], replayIdx = 0, replayPlaying = false, replaySpeed = DEFAULT_REPLAY_SPEED`,
 		`function startReplay(streamOrUrl)`,
 		`function openReplay(missionId)`,
 		`function closeReplay()`,

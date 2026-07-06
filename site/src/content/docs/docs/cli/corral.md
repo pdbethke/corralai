@@ -27,6 +27,7 @@ main.go (also reproduced in the generated CLI reference).
 CORRALAI_ADDR              listen address (default 127.0.0.1:9019)
 CORRALAI_DB                coordination SQLite path (default ~/.claude/corralai_coord.sqlite3)
 CORRALAI_MEMORY_DB         memory DuckDB path (default ~/.claude/corralai_memory.duckdb)
+CORRALAI_RECORDINGS_DB     recordings DuckDB path for scrubbed replay exports (default ~/.claude/corralai_recordings.duckdb)
 CORRALAI_MEMORY_DIR        where new memory entries are written (default ~/.claude/projects/default/memory)
 CORRALAI_PROJECT_TIERS     optional path->tier rules "substr=tier,substr=tier"; front-matter project: wins, else "default"
 CORRALAI_OIDC_ISSUER       OIDC issuer URL (any OIDC provider: Keycloak, Auth0, Okta, Dex, Authentik, …); empty => AUTH DISABLED (dev)

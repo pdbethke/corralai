@@ -123,17 +123,21 @@ const maxModelFindings = Math.max(1, ...analytics.findings_by_model.map((r: any)
       <div set:html={cockpitViews} />
     </div>
     <div class="cockpit-exec" set:html={cockpitExec} />
-  </div>
-  <div id="replay">
-    <div class="row">
-      <span id="replay-title"></span>
-      <button id="replay-playbtn" onclick="toggleReplayPlay()">▶ play</button>
-      <input type="range" id="replay-scrub" min="0" max="0" value="0" oninput="seekReplay(+this.value)">
-      <span id="replay-label">0 / 0</span>
-      <select onchange="setReplaySpeed(+this.value)" title="playback speed">
-        <option value="1">1×</option><option value="2">2×</option><option value="4" selected>4×</option>
-        <option value="8">8×</option><option value="16">16×</option>
-      </select>
+    <!-- The scrubber/controls bar is the LAST panel of the instrument, kept
+         INSIDE #stage-frame so it shares the exact same content width and
+         aligned left/right borders as the console/cockpit above it (a former
+         sibling floated 40px wider — the misaligned bottom edge). -->
+    <div id="replay">
+      <div class="row">
+        <span id="replay-title"></span>
+        <button id="replay-playbtn" onclick="toggleReplayPlay()">▶ play</button>
+        <input type="range" id="replay-scrub" min="0" max="0" value="0" oninput="seekReplay(+this.value)">
+        <span id="replay-label">0 / 0</span>
+        <select onchange="setReplaySpeed(+this.value)" title="playback speed">
+          <option value="1">1×</option><option value="2">2×</option><option value="4" selected>4×</option>
+          <option value="8">8×</option><option value="16">16×</option>
+        </select>
+      </div>
     </div>
   </div>
 
@@ -342,7 +346,11 @@ const maxModelFindings = Math.max(1, ...analytics.findings_by_model.map((r: any)
   :global(.cockpit-exec .xthoughtline) { white-space: normal; overflow-wrap: anywhere; }
   :global(.cockpit-exec .xthoughtico) { flex: none; opacity: .85; }
   :global(.cockpit-exec .xthoughttext) { color: var(--stage-muted); font-style: italic; font-size: 11.5px; line-height: 1.5; }
-  :global(.cockpit-tasks .trow) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 2px 0; }
+  :global(.cockpit-tasks .trow) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 2px 4px; border-radius: 5px; }
+  /* completed / superseded tasks dim as the tape advances (live on play +
+     scrub) — they stay in the list (the scrubber is the temporal truth). */
+  :global(.cockpit-tasks .trow.tdim) { opacity: .5; }
+  :global(.cockpit-tasks .trow:hover) { background: var(--stage-panel); opacity: 1; }
   :global(.cockpit-tasks .tdot) { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; }
   :global(.cockpit-findings .frow) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 2px 0; }
   :global(.cockpit-findings .frow.hi) { font-weight: 600; }
@@ -357,11 +365,14 @@ const maxModelFindings = Math.max(1, ...analytics.findings_by_model.map((r: any)
   }
   #c { width: 100%; height: 100%; display: block; }
   #empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--stage-muted); pointer-events: none; }
+  /* Bottom panel of the instrument — a child of #stage-frame, so it inherits
+     the same content width (and 20px side gutters) as the console/cockpit and
+     its left/right borders line up exactly. No own max-width/margin. */
   #replay {
     position: relative; background: var(--stage-panel); color: var(--stage-fg);
     border: 1px solid var(--stage-line); border-top: none;
     border-bottom-left-radius: 12px; border-bottom-right-radius: 12px;
-    padding: 9px 16px; max-width: 1240px; margin: 0 auto;
+    padding: 9px 16px;
   }
   #replay .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   #replay .row button { background: var(--stage-panel); color: var(--stage-fg); border: 1px solid var(--stage-line); border-radius: 5px; padding: 4px 12px; font-size: 12px; cursor: pointer; }

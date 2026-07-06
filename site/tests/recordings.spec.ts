@@ -545,6 +545,190 @@ test('the files lens reconstructs the touched directory tree, colored by claimin
   expect(apiCalls, `the files lens must reconstruct from the tape alone: ${apiCalls.join(', ')}`).toHaveLength(0);
 });
 
+// A small synthetic tape carrying task LINEAGE (depends_on + instruction),
+// two workers, and a command each — deterministic ground truth for the task
+// storytelling modal + the dim-completed behavior. Seeded straight into the
+// shared player exactly like the thought/files tests (startReplay accepts a
+// resolved {events} object), so it's tape-only by construction.
+const LINEAGE_TAPE = {
+  events: [
+    { ts: 1, kind: 'task_created', subject: 't1', detail: { role: 'builder', title: 'wire the loop', instruction: 'implement the retry loop', depends_on: [] } },
+    { ts: 2, kind: 'task_created', subject: 't2', detail: { role: 'tester', title: 'cover the loop', instruction: 'add table-driven tests', depends_on: ['t1'] } },
+    { ts: 3, kind: 'task_claimed', actor: 'Bob', subject: 't1', detail: { role: 'builder', title: 'wire the loop' } },
+    { ts: 4, kind: 'execution', actor: 'Bob', subject: 'go build ./...', detail: { ok: true, exit_code: 0, role: 'builder' } },
+    { ts: 5, kind: 'task_done', actor: 'Bob', subject: 't1', detail: { role: 'builder' } },
+    { ts: 6, kind: 'task_claimed', actor: 'Tess', subject: 't2', detail: { role: 'tester', title: 'cover the loop' } },
+    { ts: 7, kind: 'execution', actor: 'Tess', subject: 'go test ./...', detail: { ok: true, exit_code: 0, role: 'tester' } },
+    { ts: 8, kind: 'task_done', actor: 'Tess', subject: 't2', detail: { role: 'tester' } },
+  ],
+};
+
+async function seedLineageTape(page: any) {
+  await page.goto('/recordings/');
+  await page.evaluate((tape: any) => (window as any).startReplay(tape), LINEAGE_TAPE);
+  await expect(async () => {
+    expect(Number(await page.locator('#replay-scrub').getAttribute('max'))).toBe(8);
+  }).toPass({ timeout: 5000 });
+}
+const seekIdx = (page: any, t: number) =>
+  page.locator('#replay-scrub').evaluate(
+    (el: HTMLInputElement, v: number) => { el.value = String(v); el.dispatchEvent(new Event('input')); },
+    t,
+  );
+
+test('a task ROW opens the storytelling modal — what was done, who did it, and a clickable NEXT link that walks the causal chain', async ({ page }) => {
+  const apiCalls: string[] = [];
+  page.on('request', (req) => { if (new URL(req.url()).pathname.startsWith('/api/')) apiCalls.push(req.url()); });
+
+  await seedLineageTape(page);
+  await seekIdx(page, 8); // whole story reconstructed
+
+  // Click the t1 task ROW → its story modal (the .aw-win chrome, task variant).
+  await page.locator('#tasks .trow', { hasText: 'wire the loop' }).click();
+  const t1 = page.locator('.aw-win.aw-task').filter({ hasText: 'implement the retry loop' });
+  await expect(t1).toBeVisible();
+  // WHAT was done: the instruction + the command Bob ran while holding it.
+  await expect(t1).toContainText('implement the retry loop');
+  await expect(t1).toContainText('go build ./...');
+  // WHO did it: the assigned worker, as a clickable chain link.
+  await expect(t1.locator('.aw-chain', { hasText: 'Bob' })).toBeVisible();
+  // WHAT CAME NEXT: t1 unblocked t2 — a clickable link into the next task.
+  await expect(t1).toContainText('what came next');
+  const nextLink = t1.locator('.aw-chain', { hasText: 'cover the loop' });
+  await expect(nextLink).toBeVisible();
+
+  // Walk the chain forward: click NEXT → the t2 modal opens, and it shows the
+  // reverse link ("what triggered it" → back to t1), proving lineage both ways.
+  await nextLink.click();
+  const t2 = page.locator('.aw-win.aw-task').filter({ hasText: 'add table-driven tests' });
+  await expect(t2).toBeVisible();
+  await expect(t2).toContainText('what triggered it');
+  await expect(t2.locator('.aw-chain', { hasText: 'wire the loop' })).toBeVisible();
+  await expect(t2.locator('.aw-chain', { hasText: 'Tess' })).toBeVisible();
+  await expect(t2).toContainText('go test ./...');
+
+  expect(apiCalls, `the task modal must reconstruct from the tape alone: ${apiCalls.join(', ')}`).toHaveLength(0);
+});
+
+test('a task NODE in the swarm canvas opens the same storytelling modal (nodes stay clickable as they drift)', async ({ page }) => {
+  await seedLineageTape(page);
+  await seekIdx(page, 8);
+  await page.locator('#c').scrollIntoViewIfNeeded(); // canvas sits below the fold
+
+  // Click the canvas TASK node ("p:<key>"). Nodes drift under the force layout,
+  // so read the live world position and click, retrying until it lands (the hit
+  // radius tolerates the small per-frame drift).
+  await expect(async () => {
+    const pos = await page.evaluate(() => {
+      const rect = document.getElementById('c')!.getBoundingClientRect();
+      const nm = (window as any).replayNodes as Map<string, any>;
+      for (const n of nm.values()) {
+        if (n.kind === 'path') return { x: rect.left + n.x, y: rect.top + n.y };
+      }
+      return null;
+    });
+    expect(pos, 'expected at least one task node on the canvas').not.toBeNull();
+    await page.mouse.click(pos!.x, pos!.y);
+    await expect(page.locator('.aw-win.aw-task')).toBeVisible({ timeout: 600 });
+  }).toPass({ timeout: 8000 });
+});
+
+test('a canvas AGENT node opens its .aw-win inspector (only roster rows did before)', async ({ page }) => {
+  await seedLineageTape(page);
+  await seekIdx(page, 8);
+  await page.locator('#c').scrollIntoViewIfNeeded(); // canvas sits below the fold
+
+  await expect(async () => {
+    const pos = await page.evaluate(() => {
+      const rect = document.getElementById('c')!.getBoundingClientRect();
+      const nm = (window as any).replayNodes as Map<string, any>;
+      for (const n of nm.values()) {
+        if (n.kind === 'agent') return { x: rect.left + n.x, y: rect.top + n.y };
+      }
+      return null;
+    });
+    expect(pos, 'expected at least one agent node on the canvas').not.toBeNull();
+    await page.mouse.click(pos!.x, pos!.y);
+    // an AGENT inspector window (not the task variant) must appear
+    await expect(page.locator('.aw-win:not(.aw-task)')).toBeVisible({ timeout: 600 });
+  }).toPass({ timeout: 8000 });
+});
+
+test('completed / superseded tasks DIM in the left list as the tape advances (live on scrub), and are never removed', async ({ page }) => {
+  await seedLineageTape(page);
+
+  // Early: both tasks just created, none finished → nothing dimmed.
+  await seekIdx(page, 2);
+  await expect(page.locator('#tasks .trow')).toHaveCount(2);
+  await expect(page.locator('#tasks .trow.tdim')).toHaveCount(0);
+
+  // After t1 finishes: exactly one row dims, but both rows stay in the list.
+  await seekIdx(page, 5);
+  await expect(page.locator('#tasks .trow.tdim')).toHaveCount(1);
+  await expect(page.locator('#tasks .trow')).toHaveCount(2);
+
+  // End of tape: both finished → both dim, still both present.
+  await seekIdx(page, 8);
+  await expect(page.locator('#tasks .trow.tdim')).toHaveCount(2);
+  await expect(page.locator('#tasks .trow')).toHaveCount(2);
+  // The dim is a real reduced-opacity, not just a class name.
+  const op = await page.locator('#tasks .trow.tdim').first().evaluate((el) => Number(getComputedStyle(el).opacity));
+  expect(op).toBeLessThan(1);
+
+  // Scrub back to the start rebuilds from zero — the dim clears with the list.
+  await seekIdx(page, 2);
+  await expect(page.locator('#tasks .trow.tdim')).toHaveCount(0);
+});
+
+// Folded in from an aborted agent's scratch repro (site/tests/_repro.spec.ts):
+// the two assertions worth keeping, now as real tests.
+test('hero: clicking a roster agent mid-autoplay opens the floating window', async ({ page }) => {
+  await page.goto('/');
+  await expect(async () => {
+    expect(Number(await page.locator('#replay-scrub').getAttribute('max'))).toBeGreaterThan(0);
+  }).toPass({ timeout: 8000 });
+  // let autoplay run so the roster is mid-rebuild — the click must still land
+  await page.waitForTimeout(1200);
+  const row = page.locator('#agents .arow').first();
+  await expect(row).toBeVisible();
+  await row.click();
+  await expect(page.locator('.aw-win')).toBeVisible({ timeout: 2000 });
+});
+
+test('recordings: a roster row is the SAME DOM node across a playback tick (stable, reconciled in place)', async ({ page }) => {
+  await page.goto('/recordings/');
+  await page.locator('.card').first().click();
+  await expect(async () => {
+    expect(Number(await page.locator('#replay-scrub').getAttribute('max'))).toBeGreaterThan(0);
+  }).toPass({ timeout: 8000 });
+  const scrub = page.locator('#replay-scrub');
+  const max = Number(await scrub.getAttribute('max'));
+  const seek = (t: number) => scrub.evaluate((el, v) => { (el as HTMLInputElement).value = String(v); el.dispatchEvent(new Event('input')); }, t);
+  await seek(Math.floor(max * 0.5));
+  await page.locator('#agents .arow').first().evaluate((el) => ((window as any).__n = el));
+  await seek(Math.floor(max * 0.6));
+  const same = await page.locator('#agents .arow').first().evaluate((el) => el === (window as any).__n);
+  expect(same, 'the roster must reconcile rows in place — a stable node, never re-created per tick').toBe(true);
+});
+
+test('the cockpit body is bounded and the task list scrolls inside it (never grows the page)', async ({ page }) => {
+  await page.goto('/recordings/');
+  await page.locator('.card').first().click();
+  await expect(async () => {
+    expect(Number(await page.locator('#replay-scrub').getAttribute('max'))).toBeGreaterThan(0);
+  }).toPass({ timeout: 5000 });
+  // The task column is a bounded, independently-scrolling pane (overflow auto),
+  // and the cockpit body height is capped (grid-template-rows minmax), so a
+  // 60-task run scrolls the list rather than stretching the whole cockpit.
+  const overflow = await page.locator('.cockpit-tasks').evaluate((el) => getComputedStyle(el).overflowY);
+  expect(overflow).toBe('auto');
+  const bounded = await page.locator('#cockpit').evaluate((el) => {
+    const rows = getComputedStyle(el).gridTemplateRows;
+    return rows && rows !== 'none' && rows !== '';
+  });
+  expect(bounded, 'the cockpit body must be bounded to a fixed row track').toBe(true);
+});
+
 test('every recording card corresponds to an active stream + meta pair', async () => {
   const files = fs.readdirSync(RECORDINGS_DIR);
   const streamFiles = files.filter((f) => f.endsWith('.json') && !f.endsWith('.meta.json'));

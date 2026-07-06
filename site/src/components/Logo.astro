@@ -1,12 +1,12 @@
 ---
 // SPDX-License-Identifier: Elastic-2.0
-// The CorralAI lockup — the corral mark (an amber ring left open at the top:
-// the gate; holding three dots: the herd) beside the wordmark. The mark is
-// inline so it inherits currentColor (amber in the dark header, the accent in
-// /docs); the wordmark is real HTML text so it renders crisp and stays
-// selectable/searchable. Standalone SVG deliverables live in site/public/
-// (logo.svg, logo-mark.svg, favicon.svg). Purely presentational — callers wrap
-// it in the appropriate link and supply the accessible name.
+// The CorralAI lockup — the corral horseshoe mark (an amber ring open at the
+// top: the gate; bulged calkin tips; holding three dots: the herd) beside the
+// wordmark. The mark is inline so it inherits currentColor (amber in the dark
+// header, the accent in /docs); the wordmark is real HTML text so it renders
+// crisp and stays selectable/searchable. Standalone SVG deliverables live in
+// site/public/ (logo.svg, logo-mark.svg, favicon.svg). Purely presentational —
+// callers wrap it in the appropriate link and supply the accessible name.
 interface Props {
   /** mark height in px; the wordmark scales with it */
   size?: number;
@@ -15,10 +15,12 @@ const { size = 26 } = Astro.props;
 ---
 <span class="cai-logo" style={`--cai-mark:${size}px`} aria-hidden="true">
   <svg class="cai-mark" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <path d="M21.5 6.47 A11 11 0 1 1 10.5 6.47" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
-    <circle cx="11.6" cy="18.2" r="1.9" fill="currentColor"/>
-    <circle cx="16" cy="14.8" r="1.9" fill="currentColor"/>
-    <circle cx="20.4" cy="18.2" r="1.9" fill="currentColor"/>
+    <path d="M21.5 6.47 A11 11 0 1 1 10.5 6.47" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round"/>
+    <circle cx="21.5" cy="6.47" r="1.9" fill="currentColor"/>
+    <circle cx="10.5" cy="6.47" r="1.9" fill="currentColor"/>
+    <circle cx="11.6" cy="18.4" r="1.9" fill="currentColor"/>
+    <circle cx="16" cy="15" r="1.9" fill="currentColor"/>
+    <circle cx="20.4" cy="18.4" r="1.9" fill="currentColor"/>
   </svg>
   <span class="cai-word">Corral<span class="cai-ai">AI</span></span>
 </span>

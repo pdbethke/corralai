@@ -223,6 +223,11 @@ const maxModelFindings = Math.max(1, ...analytics.findings_by_model.map((r: any)
   #stage-frame { max-width: 1240px; margin: 0 auto; padding: 0 20px; }
   #cockpit {
     display: grid; grid-template-columns: 220px 1fr 260px; position: relative;
+    /* Bound the cockpit body to the stage's own height so the left task list
+       and right roster/findings columns SCROLL inside a fixed viewport rather
+       than growing the whole page as the task count climbs (63+ on a real
+       run). The row tracks the stage's own max(56vh, 360px). */
+    grid-template-rows: minmax(360px, 56vh);
     background: var(--stage-bg); border: 1px solid var(--stage-line); border-top: none;
     box-shadow: 0 18px 44px rgba(30,20,0,.22); overflow: hidden;
   }
@@ -252,6 +257,20 @@ const maxModelFindings = Math.max(1, ...analytics.findings_by_model.map((r: any)
   :global(#cockpit .cv-kind) { display: inline-block; font-size: 11px; color: var(--stage-amber); text-transform: uppercase; letter-spacing: .5px; margin-right: 8px; }
   :global(#cockpit .cv-explain), :global(#cockpit .cv-note), :global(#cockpit .cv-tsum) { color: var(--stage-muted); font-size: 12px; margin-bottom: 12px; }
   :global(#cockpit .cv-note) { margin-top: 12px; }
+  /* files lens — the tree nodes are injected at RUNTIME by renderReplayFiles
+     (replay-player.js), so they carry no Astro scope attribute: these MUST be
+     :global or they silently don't apply (same rule as .arow/.feedhdr). */
+  :global(#cockpit .ft-note) { color: var(--stage-muted); font-size: 12px; margin: 0 0 12px; }
+  :global(#cockpit .ft-empty) { color: var(--stage-muted); font-size: 13px; font-style: italic; padding: 8px 0; }
+  :global(#cockpit .ft-tree) { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; line-height: 1.65; }
+  :global(#cockpit .ft-row) { display: flex; align-items: center; gap: 7px; white-space: nowrap; }
+  :global(#cockpit .ft-dir) { color: var(--stage-muted); }
+  :global(#cockpit .ft-caret) { color: var(--stage-muted); font-size: 10px; }
+  :global(#cockpit .ft-dname) { color: var(--stage-fg); font-weight: 600; }
+  :global(#cockpit .ft-badge) { color: var(--stage-amber); font-size: 10.5px; margin-left: 6px; }
+  :global(#cockpit .ft-dot) { width: 9px; height: 9px; border-radius: 2px; flex: 0 0 auto; box-sizing: border-box; }
+  :global(#cockpit .ft-who) { color: var(--stage-muted); font-size: 11px; margin-left: 6px; }
+  :global(#cockpit .ft-file.ft-released) { opacity: .6; }
   :global(#cockpit .cv-count) { margin-left: auto; color: var(--stage-muted); font-size: 12px; }
   :global(#cockpit .cv-sample) {
     display: inline-block; font-size: 10px; text-transform: uppercase; letter-spacing: .6px;
@@ -276,10 +295,15 @@ const maxModelFindings = Math.max(1, ...analytics.findings_by_model.map((r: any)
      themes via prefers-color-scheme and its cockpit is dark-always, so it's a
      no-op here — hide it rather than ship a dead control. */
   :global(#stage-frame #hud #themebtn) { display: none; }
-  @media (max-width: 900px) { #cockpit { grid-template-columns: 1fr; } .cockpit-tasks, .cockpit-side { max-height: 200px; } }
+  /* On narrow screens the cockpit stacks to a single column, so drop the fixed
+     body-height track and let each panel keep its own scroll cap instead. */
+  @media (max-width: 900px) { #cockpit { grid-template-columns: 1fr; grid-template-rows: none; } .cockpit-tasks, .cockpit-side { max-height: 200px; } }
   #stage { position: relative; height: 56vh; min-height: 360px; background: var(--stage-panel); }
   .cockpit-tasks, .cockpit-side {
     background: var(--stage-bg); color: var(--stage-fg); overflow-y: auto;
+    /* min-height:0 lets these grid items shrink below their content so the
+       overflow-y scroll actually engages inside the bounded row. */
+    min-height: 0;
     padding: 10px 12px; font-size: 12px; border-right: 1px solid var(--stage-line);
   }
   /* the right column stacks the agents roster over the findings panel — the

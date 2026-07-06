@@ -78,10 +78,18 @@ func (s *Store) Record(e Event) error {
 		b, _ := json.Marshal(e.Detail)
 		detail = string(b)
 	}
+	// ts is stamped with the wall clock by default; a non-zero e.TS is honored
+	// instead, so a caller (e.g. a test placing beats deterministically inside
+	// a mission's replay window) can control the timestamp. Production callers
+	// never set e.TS, so this preserves the append-with-now behavior exactly.
+	ts := e.TS
+	if ts == 0 {
+		ts = now()
+	}
 	_, err := s.db.Exec(
 		`INSERT INTO events (id, ts, mission_id, kind, actor, subject, model, detail)
 		 VALUES (nextval('event_id'), ?, ?, ?, ?, ?, ?, ?)`,
-		now(), e.MissionID, e.Kind, e.Actor, e.Subject, e.Model, detail)
+		ts, e.MissionID, e.Kind, e.Actor, e.Subject, e.Model, detail)
 	return err
 }
 
@@ -170,6 +178,46 @@ func (s *Store) EventsForMission(missionID int64) ([]Event, error) {
 			_ = json.Unmarshal([]byte(detail), &e.Detail)
 		}
 		e.MissionID = missionID
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// GlobalAmbienceBetween returns global-ambience events (mission_id=0) of the
+// given kinds whose timestamps fall within [lo, hi], oldest first. These beats
+// (claim_made/claim_released, recorded by internal/coord with no mission to
+// join on) carry no mission_id, so Part B's v2 replay merge folds them into a
+// mission's stream by TIME-WINDOW inclusion — the file-tree replay lens
+// reconstructs "who touched which path, when" from them (paths only; the tape
+// never captures file contents). Returns nothing for an empty kind list or an
+// inverted window. The kinds are parameterized, never interpolated.
+func (s *Store) GlobalAmbienceBetween(kinds []string, lo, hi float64) ([]Event, error) {
+	if len(kinds) == 0 || hi < lo {
+		return nil, nil
+	}
+	ph := strings.TrimSuffix(strings.Repeat("?,", len(kinds)), ",")
+	args := make([]any, 0, len(kinds)+2)
+	for _, k := range kinds {
+		args = append(args, k)
+	}
+	args = append(args, lo, hi)
+	// #nosec G202 -- not injectable: ph is only literal "?," placeholder markers (one per kind); every value (kinds, lo, hi) is bound through ? placeholders in args.
+	q := `SELECT ts, kind, COALESCE(actor,''), COALESCE(subject,''), COALESCE(model,''), COALESCE(detail,'') FROM events WHERE mission_id=0 AND kind IN (` + ph + `) AND ts BETWEEN ? AND ? ORDER BY ts ASC`
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Event
+	for rows.Next() {
+		var e Event
+		var detail string
+		if err := rows.Scan(&e.TS, &e.Kind, &e.Actor, &e.Subject, &e.Model, &detail); err != nil {
+			return nil, err
+		}
+		if detail != "" {
+			_ = json.Unmarshal([]byte(detail), &e.Detail)
+		}
 		out = append(out, e)
 	}
 	return out, rows.Err()

@@ -22,6 +22,28 @@ type kindSubject struct {
 	Subject string `json:"subject"`
 }
 
+// windowOf mirrors replaySpan: the [lo,hi] span over positive timestamps only
+// (an execution beat can carry ts=0). Tests place global ambience relative to
+// this so it lands inside — or clearly outside — the real inclusion window.
+func windowOf(evs []ReplayEvent) (lo, hi float64, ok bool) {
+	for _, e := range evs {
+		if e.TS <= 0 {
+			continue
+		}
+		if !ok {
+			lo, hi, ok = e.TS, e.TS, true
+			continue
+		}
+		if e.TS < lo {
+			lo = e.TS
+		}
+		if e.TS > hi {
+			hi = e.TS
+		}
+	}
+	return
+}
+
 func seedReplayMission(t *testing.T) (*queue.Store, *telemetry.Store, int64) {
 	t.Helper()
 	dir := t.TempDir()
@@ -160,6 +182,124 @@ func TestBuildReplayStreamCarriesModel(t *testing.T) {
 	}
 	if !telSide {
 		t.Error("telemetry-derived finding_reported must carry Model from the telemetry model column")
+	}
+}
+
+// TestBuildReplayStreamFoldsGlobalClaimsByTimeWindow verifies the v2 file-tree
+// lens foundation: global path-claim ambience (claim_made/claim_released,
+// recorded by internal/coord with mission_id=0) is folded into a mission's
+// replay stream when — and only when — its timestamp falls inside the mission's
+// active [lo,hi] window. A claim beyond the window (a different mission's, or
+// after this one wrapped) must NOT bleed in.
+func TestBuildReplayStreamFoldsGlobalClaimsByTimeWindow(t *testing.T) {
+	q, tel, mid := seedReplayMission(t)
+
+	// Discover the mission's active window from the v1 stream (before adding
+	// any global ambience), so we can place claim beats precisely in/out of it.
+	base, err := BuildReplayStream(q, tel, mid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lo, hi, ok := windowOf(base)
+	if !ok || hi <= lo {
+		t.Fatalf("expected a non-degenerate mission window, got [%v,%v] ok=%v", lo, hi, ok)
+	}
+	mid_ts := (lo + hi) / 2
+
+	// Two claims INSIDE the window (must fold in), one release inside, and one
+	// claim well OUTSIDE (must be excluded). mission_id=0 = global ambience.
+	inside := []telemetry.Event{
+		{TS: mid_ts, MissionID: 0, Kind: "claim_made", Actor: "Bob", Subject: "internal/brain/replay.go",
+			Detail: map[string]any{"path": "internal/brain/replay.go", "exclusive": true}},
+		{TS: mid_ts, MissionID: 0, Kind: "claim_made", Actor: "Tess", Subject: "internal/brain/replay_test.go",
+			Detail: map[string]any{"path": "internal/brain/replay_test.go"}},
+		{TS: mid_ts, MissionID: 0, Kind: "claim_released", Actor: "Bob", Subject: "internal/brain/replay.go",
+			Detail: map[string]any{"path": "internal/brain/replay.go"}},
+	}
+	for _, e := range inside {
+		if err := tel.Record(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tel.Record(telemetry.Event{TS: hi + 1000, MissionID: 0, Kind: "claim_made", Actor: "Ghost",
+		Subject: "some/other/mission.go", Detail: map[string]any{"path": "some/other/mission.go"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := BuildReplayStream(q, tel, mid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var made, released int
+	var sawGhost bool
+	var carriedPath, carriedActor bool
+	for _, e := range out {
+		switch e.Kind {
+		case "claim_made":
+			made++
+			if e.Subject == "some/other/mission.go" {
+				sawGhost = true
+			}
+			if e.Actor == "Bob" && e.Subject == "internal/brain/replay.go" {
+				carriedActor = true
+				if p, _ := e.Detail["path"].(string); p == "internal/brain/replay.go" {
+					carriedPath = true
+				}
+			}
+		case "claim_released":
+			released++
+		}
+	}
+	if made != 2 {
+		t.Fatalf("expected 2 in-window claim_made beats folded in, got %d", made)
+	}
+	if released != 1 {
+		t.Fatalf("expected 1 in-window claim_released beat folded in, got %d", released)
+	}
+	if sawGhost {
+		t.Fatal("a claim beat outside the mission window must NOT be folded in")
+	}
+	if !carriedActor || !carriedPath {
+		t.Fatal("folded claim beats must carry the claiming actor and detail.path for the file-tree lens")
+	}
+	// The merged stream must stay time-ordered with the folded beats present.
+	for i := 1; i < len(out); i++ {
+		if out[i].TS < out[i-1].TS {
+			t.Fatalf("stream must stay time-ordered with folded claim beats: event %d (ts=%v) precedes %d (ts=%v)", i, out[i].TS, i-1, out[i-1].TS)
+		}
+	}
+}
+
+// TestBuildReplayStreamExcludesGlobalNonClaimAmbience guards that folding is
+// scoped to path claims only — host_seen/memory_written stay out of the stream
+// even when they fall inside the mission window (they don't map onto a tree).
+func TestBuildReplayStreamExcludesGlobalNonClaimAmbience(t *testing.T) {
+	q, tel, mid := seedReplayMission(t)
+	base, err := BuildReplayStream(q, tel, mid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lo, hi, ok := windowOf(base)
+	if !ok {
+		t.Fatal("expected a non-empty mission window")
+	}
+	mid_ts := (lo + hi) / 2
+	for _, e := range []telemetry.Event{
+		{TS: mid_ts, MissionID: 0, Kind: "host_seen", Actor: "Bob", Subject: "host-1"},
+		{TS: mid_ts, MissionID: 0, Kind: "memory_written", Actor: "Bob", Subject: "slug-1"},
+	} {
+		if err := tel.Record(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, err := BuildReplayStream(q, tel, mid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range out {
+		if e.Kind == "host_seen" || e.Kind == "memory_written" {
+			t.Fatalf("non-claim global ambience (%s) must not be folded into the mission stream", e.Kind)
+		}
 	}
 }
 

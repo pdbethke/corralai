@@ -131,6 +131,23 @@
   /* #topology — the ecosystem map: the brain + every host and the bees it runs. */
   #topology { position:fixed; inset:42px 0 0 0; z-index:3; display:none; background:var(--bg); overflow:auto; padding:22px 0; }
   #topology.show { display:block; }
+  /* #files — the file-tree replay lens: the directory tree the herd touched,
+     reconstructed from the tape's path claims, each file colored by its
+     claiming agent (renderReplayFiles, shared from replay-player.js). */
+  #files { position:fixed; inset:42px 0 0 0; z-index:3; display:none; background:var(--bg); overflow:auto; padding:22px 18px; }
+  #files.show { display:block; }
+  #files .cv-pane { max-width:840px; margin:0 auto; }
+  #files .ft-note { color:var(--muted); font-size:12px; margin:0 0 12px; }
+  #files .ft-empty { color:var(--muted); font-size:13px; font-style:italic; padding:8px 0; }
+  #files .ft-tree { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12.5px; line-height:1.65; }
+  #files .ft-row { display:flex; align-items:center; gap:7px; white-space:nowrap; }
+  #files .ft-dir { color:var(--muted); }
+  #files .ft-caret { color:var(--muted); font-size:10px; }
+  #files .ft-dname { color:var(--fg); font-weight:600; }
+  #files .ft-badge { color:#f4c430; font-size:10.5px; margin-left:6px; }
+  #files .ft-dot { width:9px; height:9px; border-radius:2px; flex:0 0 auto; box-sizing:border-box; }
+  #files .ft-who { color:var(--muted); font-size:11px; margin-left:6px; }
+  #files .ft-file.ft-released { opacity:.6; }
   .twrap { max-width:840px; margin:0 auto; }
   .tsum { color:var(--muted); font-size:12px; margin:0 0 14px; text-align:center; letter-spacing:.3px; }
   .tqueen { max-width:840px; margin:0 auto 16px; padding:13px 16px; background:linear-gradient(180deg,rgba(244,196,48,.12),var(--panel)); border:1px solid rgba(244,196,48,.5); border-radius:10px; display:flex; align-items:baseline; gap:10px; }
@@ -363,6 +380,7 @@
   <a class="tab" id="tab-memory" onclick="setView('memory')">memory</a>
   <a class="tab" id="tab-skills" onclick="setView('skills')">skills</a>
   <a class="tab" id="tab-proposals" onclick="setView('proposals')">proposals<span id="proposals-badge" class="pbadge" style="display:none"></span></a>
+  <a class="tab" id="tab-files" onclick="setView('files')">files</a>
   <a class="tab" id="tab-completed" onclick="setView('completed')">completed</a>
   </span>
   <span class="stat" id="stat">connecting…</span>
@@ -413,6 +431,7 @@
   <div id="topology"></div>
   <div id="proposals"></div>
   <div id="skills"></div>
+  <div id="files"></div>
   <div id="completed"><div id="completed-list"></div><div id="completed-detail" style="display:none"></div></div>
   <div id="replay">
     <div class="row">
@@ -940,12 +959,14 @@ function setView(v){
   document.getElementById('tab-memory').classList.toggle('active', v==='memory');
   document.getElementById('tab-skills').classList.toggle('active', v==='skills');
   document.getElementById('tab-proposals').classList.toggle('active', v==='proposals');
+  document.getElementById('tab-files').classList.toggle('active', v==='files');
   document.getElementById('tab-completed').classList.toggle('active', v==='completed');
   document.getElementById('memory').classList.toggle('show', v==='memory');
   document.getElementById('progress').classList.toggle('show', v==='progress');
   document.getElementById('topology').classList.toggle('show', v==='topology');
   document.getElementById('skills').classList.toggle('show', v==='skills');
   document.getElementById('proposals').classList.toggle('show', v==='proposals');
+  document.getElementById('files').classList.toggle('show', v==='files');
   document.getElementById('completed').classList.toggle('show', v==='completed');
   document.getElementById('replay').classList.toggle('show', v==='replay');
   // The stage (and its canvas) stay mounted; the tab overlays simply cover them at a
@@ -956,6 +977,11 @@ function setView(v){
   if(v==='topology'){ renderTopology(); }
   if(v==='skills'){ renderSkillsTab(); }
   if(v==='proposals'){ renderProposalsTab(); }
+  // files: the file-tree lens is reconstructed from the replay tape's path
+  // claims (renderReplayFiles, shared from replay-player.js). It's populated
+  // while a recording plays in the cockpit; live (non-replay) it shows an
+  // honest empty state until a replay is opened.
+  if(v==='files' && typeof renderReplayFiles==='function'){ renderReplayFiles(); }
   if(v==='completed'){ renderCompletedTab(); }
 }
 async function loadScopes(){

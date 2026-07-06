@@ -463,6 +463,79 @@ test('the console per-agent filter isolates one actor\'s thoughts AND commands, 
   await expect(page.locator('#exec .xblk')).toHaveCount(5);
 });
 
+test('the files lens reconstructs the touched directory tree, colored by claiming agent, scrubs, and stays tape-only', async ({ page }) => {
+  // Synthetic tape with path-claim beats (claim_made/claim_released) — the v2
+  // merge folds these into a real recording's stream, but no committed golden
+  // carries them yet, so seed them directly the way the other synthetic tests
+  // do. Bob (builder) and Tess (tester) claim files under internal/loop; Bob
+  // also grabs cmd/main.go then RELEASES it, so it stays in the tree dimmed.
+  const apiCalls: string[] = [];
+  page.on('request', (req) => {
+    if (new URL(req.url()).pathname.startsWith('/api/')) apiCalls.push(req.url());
+  });
+
+  await page.goto('/recordings/');
+  await page.evaluate(() => {
+    (window as any).startReplay({
+      events: [
+        { ts: 1, kind: 'task_claimed', actor: 'Bob', subject: 't1', detail: { role: 'builder', title: 'wire the loop' } },
+        { ts: 2, kind: 'claim_made', actor: 'Bob', subject: 'internal/loop/run.go', detail: { path: 'internal/loop/run.go', exclusive: true } },
+        { ts: 3, kind: 'task_claimed', actor: 'Tess', subject: 't2', detail: { role: 'tester', title: 'cover the loop' } },
+        { ts: 4, kind: 'claim_made', actor: 'Tess', subject: 'internal/loop/run_test.go', detail: { path: 'internal/loop/run_test.go' } },
+        { ts: 5, kind: 'claim_made', actor: 'Bob', subject: 'cmd/main.go', detail: { path: 'cmd/main.go', exclusive: true } },
+        { ts: 6, kind: 'claim_released', actor: 'Bob', subject: 'cmd/main.go', detail: { path: 'cmd/main.go' } },
+      ],
+    });
+  });
+  await expect(async () => {
+    expect(Number(await page.locator('#replay-scrub').getAttribute('max'))).toBe(6);
+  }).toPass({ timeout: 5000 });
+
+  // Switch to the files tab — its panel shows and the scrub transport stays up
+  // (the lens is playhead-driven, like the swarm canvas).
+  await page.evaluate(() => (window as any).setView('files'));
+  await expect(page.locator('#files')).toHaveClass(/show/);
+  await expect(page.locator('#replay')).toHaveClass(/show/);
+
+  const scrub = page.locator('#replay-scrub');
+  const seek = (t: number) =>
+    scrub.evaluate((el, v) => { (el as HTMLInputElement).value = String(v); el.dispatchEvent(new Event('input')); }, t);
+
+  // Before the first claim the tree is empty (rebuild-from-0 contract).
+  await seek(1);
+  await expect(page.locator('#files .ft-file')).toHaveCount(0);
+  await expect(page.locator('#files .ft-empty')).toBeVisible();
+
+  // Scrub forward: the tree fills in as claims accumulate.
+  await seek(6);
+  await expect(page.locator('#files .ft-file')).toHaveCount(3); // run.go, run_test.go, cmd/main.go
+  await expect(page.locator('#files .ft-dir')).not.toHaveCount(0); // internal/, loop/, cmd/ reconstructed
+  await expect(page.locator('#files')).toContainText('run.go');
+  await expect(page.locator('#files')).toContainText('internal');
+
+  // Colored by the claiming agent: each actively-held file's dot is filled with
+  // its owner's role color, and the builder's differs from the tester's.
+  const dotColors = await page
+    .locator('#files .ft-file:not(.ft-released) .ft-dot')
+    .evaluateAll((els) => els.map((el) => getComputedStyle(el).backgroundColor));
+  expect(dotColors.length, 'expected at least two actively-held colored files').toBeGreaterThanOrEqual(2);
+  for (const c of dotColors) {
+    expect(c, 'a held file dot must be filled with the claiming agent color').not.toBe('rgba(0, 0, 0, 0)');
+  }
+  expect(new Set(dotColors).size, 'builder and tester files must be colored differently').toBeGreaterThan(1);
+
+  // A released path stays in the tree (still "touched") but dimmed, not filled.
+  const released = page.locator('#files .ft-file.ft-released');
+  await expect(released).toHaveCount(1);
+  await expect(released).toContainText('main.go');
+
+  // Seek back rebuilds from zero, exactly like the other panels.
+  await seek(1);
+  await expect(page.locator('#files .ft-file')).toHaveCount(0);
+
+  expect(apiCalls, `the files lens must reconstruct from the tape alone: ${apiCalls.join(', ')}`).toHaveLength(0);
+});
+
 test('every recording card corresponds to an active stream + meta pair', async () => {
   const files = fs.readdirSync(RECORDINGS_DIR);
   const streamFiles = files.filter((f) => f.endsWith('.json') && !f.endsWith('.meta.json'));

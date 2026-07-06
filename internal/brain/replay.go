@@ -29,11 +29,15 @@ type ReplayEvent struct {
 // contributes nothing from telemetry; the stream still plays from
 // tasks/findings/executions alone (graceful degradation) — a mission with
 // only queued tasks (no claims yet) still yields task_created beats.
-// Global-ambience telemetry kinds (claim_made/claim_released/host_seen/
-// memory_written, mission_id=0) are deliberately excluded from this v1
-// mission-scoped merge — canvas links derive from task claim windows
-// instead; time-window inclusion of global ambience is a flagged v2
-// improvement, not implemented here.
+//
+// Global-ambience path-claim beats (claim_made/claim_released, recorded by
+// internal/coord with mission_id=0 — there is no mission to join on) are folded
+// in by TIME-WINDOW inclusion (v2): any claim beat whose timestamp falls inside
+// the mission's active [lo,hi] span is part of what the herd touched during
+// this build, so it rides the same merged, sorted stream. This powers the
+// file-tree replay lens ("who touched which path, when" — paths only; the tape
+// never captures file contents). The remaining global-ambience kinds
+// (host_seen/memory_written) stay excluded — they don't map onto a file tree.
 func BuildReplayStream(q *queue.Store, tel *telemetry.Store, missionID int64) ([]ReplayEvent, error) {
 	var out []ReplayEvent
 
@@ -91,6 +95,21 @@ func BuildReplayStream(q *queue.Store, tel *telemetry.Store, missionID int64) ([
 		for _, e := range evs {
 			out = append(out, ReplayEvent{TS: e.TS, Kind: e.Kind, Actor: e.Actor, Subject: e.Subject, Model: e.Model, Detail: e.Detail})
 		}
+
+		// v2: fold GLOBAL path-claim ambience into this mission's stream by
+		// time-window inclusion. claim_made/claim_released carry mission_id=0
+		// (internal/coord has no mission to join on), so they're selected by
+		// the mission's active [lo,hi] span instead — computed from every
+		// mission-scoped beat gathered above. See this function's header.
+		if lo, hi, ok := replaySpan(out); ok {
+			amb, err := tel.GlobalAmbienceBetween([]string{"claim_made", "claim_released"}, lo, hi)
+			if err != nil {
+				return nil, err
+			}
+			for _, e := range amb {
+				out = append(out, ReplayEvent{TS: e.TS, Kind: e.Kind, Actor: e.Actor, Subject: e.Subject, Model: e.Model, Detail: e.Detail})
+			}
+		}
 	}
 
 	sort.SliceStable(out, func(i, j int) bool {
@@ -100,4 +119,26 @@ func BuildReplayStream(q *queue.Store, tel *telemetry.Store, missionID int64) ([
 		return out[i].Kind < out[j].Kind
 	})
 	return out, nil
+}
+
+// replaySpan reports the [lo,hi] timestamp span of a beat slice (positive
+// timestamps only), used to define a mission's active window for time-window
+// inclusion of global ambience. ok is false when no beat carries a ts.
+func replaySpan(evs []ReplayEvent) (lo, hi float64, ok bool) {
+	for _, e := range evs {
+		if e.TS <= 0 {
+			continue
+		}
+		if !ok {
+			lo, hi, ok = e.TS, e.TS, true
+			continue
+		}
+		if e.TS < lo {
+			lo = e.TS
+		}
+		if e.TS > hi {
+			hi = e.TS
+		}
+	}
+	return
 }

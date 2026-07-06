@@ -868,9 +868,19 @@ let replaySeenBeats = new Set(); // dedupe: findings ride the tape TWICE (queue+
 // addendum — isolate BOB, then scrub around and stay isolated on BOB).
 let replayExecFilter = '';
 function setReplayExecFilter(n){ replayExecFilter = (replayExecFilter === n ? '' : n); renderReplayConsole(); }
+// replayFiles: the file-tree lens's reconstructed state — path -> {path,
+// holder, lastActor, touches}. Folded in by the v2 replay merge (internal/
+// brain/replay.go pulls global claim_made/claim_released beats into the mission
+// stream by time-window inclusion). `holder` is the actor CURRENTLY holding the
+// claim ('' once released); `lastActor` is whoever last touched it, so a
+// released path stays in the tree (dimmed) — the lens shows "who touched what,
+// when" (paths only; the tape never captures file contents). Accumulated in
+// applyReplayEvent, so it rebuilds-from-0 on scrub exactly like the panels.
+let replayFiles = new Map();
 function resetReplayPanels(){
   replayConsoleLines = []; replayTasks = new Map(); replayFindings = [];
   replayAgents = new Map(); replaySeenBeats = new Set();
+  replayFiles = new Map();
 }
 function clearReplayPanelDOM(){
   // 'agents' is the canonical roster id, shared by the product UI and the
@@ -916,25 +926,102 @@ function renderReplayAgents(){
   if(!ap) return;
   ensureSiteReplayStyles();   // site-only (no-op in the product): roster hover/arowsel + .aw-win chrome
   const ags = Array.from(replayAgents.values());
-  if(!ags.length){ ap.innerHTML = '<div class="feedhdr">agents · 0</div><div class="row" style="opacity:.6">no agents yet…</div>'; return; }
-  ags.sort((a,b)=>((b.held.size>0?0:1)-(a.held.size>0?0:1)) || ((displayName(a.name)>displayName(b.name))?1:-1));
-  ap.innerHTML = '<div class="feedhdr">agents · ' + ags.length + '</div>' +
-    ags.map(a => {
-      const work = a.held.size > 0;
-      const dot = work ? roleColor(a.role) : '#5b5750';
-      const doing = work
-        ? (a.lastCmd ? '❯ ' + esc(a.lastCmd.slice(0,22)) : 'on ' + esc(Array.from(a.held)[0] || ''))
-        : 'idle';
-      // clickable roster row → agent detail, exactly like the product's live
-      // roster (index.html's renderAgents): onclick + cursor:pointer + title,
-      // plus the .arowsel selected-state highlight when this agent's inspector
-      // window is open. replayAgentClick routes to the product's native
-      // floating window where it exists, and to the ported site window
-      // (openReplayAgentWindow, below) on the backend-free site.
-      const clickName = (a.name || '').replace(/'/g, "\\'");
-      const sel = (typeof replayWindows !== 'undefined' && replayWindows.has(a.name)) ? ' arowsel' : '';
-      return '<div class="arow' + sel + '" style="cursor:pointer" onclick="replayAgentClick(\'' + clickName + '\')" title="open ' + esc(displayName(a.name)) + ' detail"><span class="adot" style="background:' + dot + '"></span><b style="color:' + roleColor(a.role) + '">' + esc(displayName(a.name)) + '</b> <span class="ameta">' + esc(a.role || '') + '</span><span class="adoing">' + doing + '</span></div>';
-    }).join('');
+
+  // STABLE, IN-PLACE reconciliation — do NOT blow the roster away with a fresh
+  // innerHTML every tape tick. The panel repaints on every playback frame and
+  // on every scrub; rebuilding innerHTML detaches and re-creates each .arow,
+  // so a row can be replaced out from under a user mid-click (the click then
+  // lands on an orphaned node and the inspector window never opens — the
+  // launch-blocker bug). Instead we reuse a persistent node per agent, keyed by
+  // name, patch only the bits that change (dot / name color / role / "doing" /
+  // selected-state), and keep a stable alphabetical order so existing rows
+  // never reposition frame-to-frame. Node identity (and its click listener)
+  // survives every tick, so clicking an agent reliably opens the .aw-win.
+
+  // Header — reused in place so it never churns.
+  let hdr = ap.firstElementChild;
+  if(!hdr || !hdr.classList.contains('feedhdr')){
+    ap.textContent = '';
+    hdr = document.createElement('div');
+    hdr.className = 'feedhdr';
+    ap.appendChild(hdr);
+  }
+
+  if(!ags.length){
+    hdr.textContent = 'agents · 0';
+    while(hdr.nextSibling) hdr.nextSibling.remove();
+    const ph = document.createElement('div');
+    ph.className = 'row'; ph.style.opacity = '.6'; ph.textContent = 'no agents yet…';
+    ap.appendChild(ph);
+    return;
+  }
+  hdr.textContent = 'agents · ' + ags.length;
+
+  // Stable order: alphabetical by display name, INDEPENDENT of working state,
+  // so a row never jumps when its agent starts/stops holding a task.
+  ags.sort((a,b)=>{ const an = displayName(a.name), bn = displayName(b.name); return an < bn ? -1 : an > bn ? 1 : 0; });
+
+  // Index the rows already in the DOM by their agent key.
+  const existing = new Map();
+  ap.querySelectorAll(':scope > .arow').forEach(el => existing.set(el.dataset.agent, el));
+  // Clear any non-.arow leftovers after the header (e.g. the "no agents…" row).
+  let n = hdr.nextSibling;
+  while(n){ const next = n.nextSibling; if(n.nodeType !== 1 || !n.classList.contains('arow')) n.remove(); n = next; }
+
+  const wanted = new Set(ags.map(a => a.name));
+  existing.forEach((el, name) => { if(!wanted.has(name)){ el.remove(); existing.delete(name); } });
+
+  // Reconcile in order: reuse or create, patch, and place after the previous
+  // node only if it isn't already there (a stable set never triggers a move).
+  let prev = hdr;
+  for(const a of ags){
+    let el = existing.get(a.name);
+    if(!el){ el = buildReplayAgentRow(a.name); existing.set(a.name, el); }
+    patchReplayAgentRow(el, a);
+    if(prev.nextSibling !== el) ap.insertBefore(el, prev.nextSibling);
+    prev = el;
+  }
+}
+// buildReplayAgentRow: create ONE persistent roster row for an agent. The click
+// listener is bound to the stable node (not a re-parsed inline onclick), so it
+// survives every repaint — replayAgentClick routes to the product's native
+// floating window where it exists, and to the ported site window
+// (openReplayAgentWindow) on the backend-free site.
+function buildReplayAgentRow(name){
+  const el = document.createElement('div');
+  el.className = 'arow';
+  el.dataset.agent = name;
+  el.style.cursor = 'pointer';
+  el.title = 'open ' + displayName(name) + ' detail';
+  const dot = document.createElement('span'); dot.className = 'adot';
+  const b = document.createElement('b');
+  const meta = document.createElement('span'); meta.className = 'ameta';
+  const doing = document.createElement('span'); doing.className = 'adoing';
+  el.append(dot, b, document.createTextNode(' '), meta, doing);
+  el.addEventListener('click', () => replayAgentClick(name));
+  return el;
+}
+// patchReplayAgentRow: update ONLY the changed bits of an existing roster row,
+// caching each value on the node's dataset so a steady frame writes nothing to
+// the DOM at all (no churn, no reflow) — the row node stays identical.
+function patchReplayAgentRow(el, a){
+  const work = a.held.size > 0;
+  const dotColor = work ? roleColor(a.role) : '#5b5750';
+  const nameColor = roleColor(a.role);
+  const dn = displayName(a.name);
+  const role = a.role || '';
+  const doing = work
+    ? (a.lastCmd ? '❯ ' + a.lastCmd.slice(0,22) : 'on ' + (Array.from(a.held)[0] || ''))
+    : 'idle';
+  const cls = 'arow' + ((typeof replayWindows !== 'undefined' && replayWindows.has(a.name)) ? ' arowsel' : '');
+  const d = el.dataset;
+  if(d._cls !== cls){ el.className = cls; d._cls = cls; }
+  if(d._dot !== dotColor){ el.querySelector('.adot').style.background = dotColor; d._dot = dotColor; }
+  const b = el.querySelector('b');
+  if(d._nc !== nameColor){ b.style.color = nameColor; d._nc = nameColor; }
+  if(d._dn !== dn){ b.textContent = dn; d._dn = dn; }
+  if(d._role !== role){ el.querySelector('.ameta').textContent = role; d._role = role; }
+  if(d._doing !== doing){ el.querySelector('.adoing').textContent = doing; d._doing = doing; }
 }
 // renderReplayLine: one console row, action or reasoning. Actions render
 // exactly as before (❯ prompt, agent, command, ✓/✗ exit badge). Thoughts
@@ -1016,6 +1103,94 @@ function renderReplayFindings(){
       const mdl = f.model ? ' <span style="color:#5a7a8a;font-size:10px;font-family:ui-monospace,monospace">[' + esc(f.model) + ']</span>' : '';
       return '<div class="frow' + hi + '"><span class="fsev" style="color:' + sevColor(f.severity) + '">' + esc(f.severity) + '</span> <span style="color:var(--muted)">' + esc(f.type) + '</span>' + tgt + ' <span style="color:#6b6452">· ' + esc(displayName(f.reporter)) + '</span>' + mdl + '</div>';
     }).join('');
+}
+// ===========================================================================
+// File-tree replay lens (the "files" cockpit tab). Reconstructs the directory
+// tree the herd touched from the tape's claim_made/claim_released beats (folded
+// into the mission stream by the v2 merge — internal/brain/replay.go), coloring
+// each file by its claiming agent (the same roleColor the roster/console use).
+// Scrub-driven: rebuilt from replayFiles at the CURRENT playhead on every step/
+// seek (renderReplayPanels calls this), so the tree fills in and lights up as
+// the tape plays, and dims a path when its claim is released. HONESTY: this is
+// "who touched which path, when" — never a diff or file contents (the tape
+// doesn't capture them), so the header/note say exactly that.
+// ===========================================================================
+// buildReplayFileTree: fold the flat path set into a nested dir tree; each leaf
+// carries its {path,holder,lastActor,touches} record for the renderer.
+function buildReplayFileTree(files){
+  const root = {name: '', dirs: new Map(), files: []};
+  for(const f of files){
+    const parts = (f.path || '').split('/').filter(Boolean);
+    if(!parts.length) continue;
+    let node = root;
+    for(let i = 0; i < parts.length - 1; i++){
+      const seg = parts[i];
+      if(!node.dirs.has(seg)) node.dirs.set(seg, {name: seg, dirs: new Map(), files: []});
+      node = node.dirs.get(seg);
+    }
+    node.files.push({name: parts[parts.length - 1], rec: f});
+  }
+  return root;
+}
+// replayFileHeldCount: currently-held leaves anywhere under a node — the dir's
+// "N held" summary, so a collapsed branch still shows it's active.
+function replayFileHeldCount(node){
+  let n = node.files.reduce((s, f) => s + (f.rec.holder ? 1 : 0), 0);
+  node.dirs.forEach(d => { n += replayFileHeldCount(d); });
+  return n;
+}
+// replayFileAgentColor: the claiming agent's color — resolved from the roster's
+// reconstructed role (replayAgents), so a file matches its owner's dot/name
+// everywhere else in the cockpit. Roleless actors fall back to amber, exactly
+// like roleColor() does throughout.
+function replayFileAgentColor(actor){
+  const a = actor && replayAgents.get(actor);
+  return roleColor(a && a.role);
+}
+function renderReplayFileNode(node, depth){
+  let html = '';
+  const dirs = Array.from(node.dirs.values()).sort((a, b) => a.name.localeCompare(b.name));
+  for(const d of dirs){
+    const held = replayFileHeldCount(d);
+    const pad = 6 + depth * 14;
+    html += '<div class="ft-row ft-dir" style="padding-left:' + pad + 'px">' +
+      '<span class="ft-caret">▸</span><span class="ft-dname">' + esc(d.name) + '/</span>' +
+      (held ? '<span class="ft-badge">' + held + ' held</span>' : '') + '</div>';
+    html += renderReplayFileNode(d, depth + 1);
+  }
+  const files = node.files.slice().sort((a, b) => a.name.localeCompare(b.name));
+  for(const f of files){
+    const rec = f.rec;
+    const held = !!rec.holder;
+    const who = rec.holder || rec.lastActor || '';
+    const col = replayFileAgentColor(who);
+    const role = (who && replayAgents.get(who) && replayAgents.get(who).role) || '';
+    const pad = 6 + depth * 14;
+    html += '<div class="ft-row ft-file' + (held ? '' : ' ft-released') + '" style="padding-left:' + pad + 'px" ' +
+      'title="' + esc(rec.path) + (held ? ' — held by ' : ' — last touched by ') + esc(displayName(who)) + '">' +
+      '<span class="ft-dot" style="background:' + (held ? col : 'transparent') + ';border:1.5px solid ' + col + '"></span>' +
+      '<span class="ft-fname" style="color:' + (held ? col : 'var(--stage-muted,#8a8170)') + '">' + esc(f.name) + '</span>' +
+      (who ? '<span class="ft-who">' + esc(displayName(who)) + (role ? ' · ' + esc(role) : '') + (held ? '' : ' · released') + '</span>' : '') +
+      '</div>';
+  }
+  return html;
+}
+function renderReplayFiles(){
+  const el = document.getElementById('files');
+  if(!el) return;
+  const files = Array.from(replayFiles.values());
+  const touched = files.length;
+  const held = files.filter(f => f.holder).length;
+  if(!touched){
+    el.innerHTML = '<div class="cv-pane"><div class="feedhdr">files · 0 touched</div>' +
+      '<div class="ft-empty">▌ no file claims on the tape yet — as agents claim paths, the tree fills in and lights up in each agent\u2019s color\u2026</div></div>';
+    return;
+  }
+  const tree = buildReplayFileTree(files);
+  el.innerHTML = '<div class="cv-pane">' +
+    '<div class="feedhdr">files · ' + touched + ' touched' + (held ? ' · ' + held + ' held now' : '') + '</div>' +
+    '<div class="ft-note">who touched which path, when — reconstructed from the herd\u2019s file claims. Paths only; the tape doesn\u2019t capture file contents.</div>' +
+    '<div class="ft-tree">' + renderReplayFileNode(tree, 0) + '</div></div>';
 }
 // refreshReplayAgentWindows: re-paints any OPEN agent inspector windows from
 // the reconstructed tape state at the current scrub position — the product-
@@ -1256,6 +1431,7 @@ function renderReplayPanels(){
   renderReplayTasks();
   renderReplayAgents();
   renderReplayFindings();
+  renderReplayFiles();   // file-tree lens — scrub-driven, fills in / lights up as the tape plays
   refreshReplayAgentWindows();
   refreshReplayWindows();
 }
@@ -1428,6 +1604,43 @@ function applyReplayEvent(ev){
       if(!replaySeenBeats.has(k)){
         replaySeenBeats.add(k);
         replayFindings.push({reporter: ev.actor || '', target: ev.subject || '', type: d.type || '', severity: d.severity || '', model: ev.model || '', resolved: false});
+      }
+      break;
+    }
+    // claim_made / claim_released: the file-tree lens. These are GLOBAL
+    // ambience beats (mission_id=0) folded into the stream by the v2 merge
+    // (internal/brain/replay.go) via time-window inclusion. The path travels
+    // in BOTH detail.path and subject (see internal/brain/coordination_
+    // activity.go); prefer detail.path, fall back to subject. HONESTY: this is
+    // "who touched which path, when" — never a diff or file contents.
+    case 'claim_made': {
+      const path = (d.path || ev.subject || '').trim();
+      if(path && path !== '*'){
+        const f = replayFiles.get(path) || {path, holder: '', lastActor: '', touches: 0};
+        f.holder = ev.actor || '';
+        if(ev.actor) f.lastActor = ev.actor;
+        f.touches++;
+        replayFiles.set(path, f);
+      }
+      break;
+    }
+    case 'claim_released': {
+      const path = (d.path || ev.subject || '').trim();
+      const actor = ev.actor || '';
+      if(!path || path === '*'){
+        // empty/wildcard release: clear every hold this actor still has.
+        replayFiles.forEach(f => { if(f.holder === actor) f.holder = ''; });
+      } else {
+        const f = replayFiles.get(path);
+        if(f){
+          // only the current holder can release it (guards against a stale
+          // release from another actor clearing someone else's hold).
+          if(!actor || f.holder === actor) f.holder = '';
+        } else if(actor){
+          // released a path whose claim_made predates the window: still record
+          // that this actor touched it, so the node appears (dimmed).
+          replayFiles.set(path, {path, holder: '', lastActor: actor, touches: 0});
+        }
       }
       break;
     }
@@ -1660,17 +1873,21 @@ function renderSampleProposals(){
 // replay bar, and renders the selected view from the recorded tape.
 function cockpitView(v){
   if(v === 'replay') v = 'swarm';
-  const tabs = ['swarm','progress','topology','memory','skills','proposals','completed'];
+  const tabs = ['swarm','progress','topology','memory','skills','proposals','files','completed'];
   tabs.forEach(t => { const el = document.getElementById('tab-' + t); if(el) el.classList.toggle('active', t === v); });
-  const panels = ['progress','topology','memory','skills','proposals','completed'];
+  const panels = ['progress','topology','memory','skills','proposals','files','completed'];
   panels.forEach(p => { const el = document.getElementById(p); if(el) el.classList.toggle('show', p === v); });
-  const bar = document.getElementById('replay'); if(bar) bar.classList.toggle('show', v === 'swarm');
+  // The scrub bar shows for the swarm canvas AND the files lens — both track
+  // the playhead, so both want the transport (the other tabs reduce the whole
+  // tape and are position-independent).
+  const bar = document.getElementById('replay'); if(bar) bar.classList.toggle('show', v === 'swarm' || v === 'files');
   if(v === 'progress') renderReplayProgress();
   else if(v === 'topology') renderReplayTopology();
   else if(v === 'completed') renderReplayCompleted();
   else if(v === 'memory') renderSampleMemory();
   else if(v === 'skills') renderSampleSkills();
   else if(v === 'proposals') renderSampleProposals();
+  else if(v === 'files') renderReplayFiles();   // reconstructed at the current playhead
 }
 
 // Export inline handlers to window so they work reliably when the player

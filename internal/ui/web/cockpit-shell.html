@@ -43,6 +43,7 @@
     <a class="tab" id="tab-memory" onclick="setView('memory')">memory</a>
     <a class="tab" id="tab-skills" onclick="setView('skills')">skills</a>
     <a class="tab" id="tab-proposals" onclick="setView('proposals')">proposals<span id="proposals-badge" class="pbadge" style="display:none"></span></a>
+    <a class="tab" id="tab-files" onclick="setView('files')">files</a>
     <a class="tab" id="tab-completed" onclick="setView('completed')">completed</a>
   </span>
   <span class="stat" id="stat">connecting…</span>
@@ -79,6 +80,14 @@
   <div id="memory" class="cview"></div>
   <div id="skills" class="cview"></div>
   <div id="proposals" class="cview"></div>
+  <!-- files: the file-tree replay lens — reconstructs the directory tree the
+       herd touched from claim_made/claim_released beats, each node colored by
+       the claiming agent, filling in / lighting up as the tape scrubs. Unlike
+       the other cview panels (which reduce the WHOLE tape), this one tracks the
+       current scrub position (renderReplayFiles, driven by renderReplayPanels).
+       Paths only — "who touched what, when" — never file contents (the tape
+       doesn't capture them). -->
+  <div id="files" class="cview"></div>
   <div id="completed" class="cview"></div>
 </div>
 <!-- COCKPIT-SHELL:VIEWS:END -->

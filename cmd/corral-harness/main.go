@@ -43,11 +43,42 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/pdbethke/corralai/internal/agentrole"
 )
+
+// announceHost registers this bee's model with the brain DETERMINISTICALLY, on a
+// timer — instead of trusting the wrapped LLM to call report_host (some vendor
+// CLIs skip it, or botch its params). host_seen is what attributes this agent's
+// findings AND, via replay's model stamping, its tasks to the right model in the
+// "work by model" view. Best-effort: a nil/absent HostBook makes report_host a
+// no-op, and a connect failure just leaves this bee unattributed, never blocks.
+func announceHost(brain, name, role, model, backend string) {
+	endpoint := strings.TrimRight(brain, "/") + "/mcp/"
+	ctx := context.Background()
+	cl := mcp.NewClient(&mcp.Implementation{Name: "corral-harness", Version: "0"}, nil)
+	sess, err := cl.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: endpoint}, nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[%s] report_host connect failed (unattributed): %v\n", name, err)
+		return
+	}
+	defer sess.Close()
+	host, _ := os.Hostname()
+	for {
+		if _, err := sess.CallTool(ctx, &mcp.CallToolParams{Name: "report_host", Arguments: map[string]any{
+			"name": name, "role": role, "host": host,
+			"model": model, "backend": backend, "jail": "none", "net": true,
+			"os": runtime.GOOS + "/" + runtime.GOARCH, "pid": os.Getpid(),
+		}}); err != nil {
+			fmt.Fprintf(os.Stderr, "[%s] report_host failed: %v\n", name, err)
+		}
+		time.Sleep(30 * time.Second)
+	}
+}
 
 func env(k, d string) string {
 	if v := os.Getenv(k); v != "" {
@@ -236,6 +267,9 @@ func main() {
 	sub := map[string]string{"prompt": prompt, "mcp_config": cfgPath, "brain": brain}
 
 	fmt.Printf("[%s/%s] harness bee online — %s → %s\n", name, role, desc, brain)
+	if model := os.Getenv("AGENT_MODEL"); model != "" {
+		go announceHost(brain, name, role, model, os.Getenv("AGENT_BACKEND"))
+	}
 	for round := 1; rounds == 0 || round <= rounds; round++ {
 		argv := make([]string, 0, 8)
 		for _, tok := range splitCmd(tmpl) {

@@ -30,3 +30,58 @@ html, body {
 a { color: var(--amber); }
 h1, h2, h3 { color: var(--fg); }
 .section { max-width: 860px; margin: 0 auto; padding: 48px 20px; }
+
+/* Runtime-injected cockpit panel classes come from shared HTML/JS fragments,
+   so they never carry Astro component scope attributes. Keep these selectors
+   unscoped to guarantee consistent layout in SSR and Playwright CI. */
+#cockpit .arow, #agents .arow, .cockpit-agents .arow {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 2px 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#cockpit .adot, #agents .adot, .cockpit-agents .adot {
+  flex: none;
+  align-self: center;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+#cockpit .ameta, #agents .ameta, .cockpit-agents .ameta {
+  color: var(--stage-muted);
+  font-size: 11px;
+}
+#cockpit .adoing, #agents .adoing, .cockpit-agents .adoing {
+  color: var(--stage-muted);
+  font-size: 11px;
+  margin-left: auto;
+  padding-left: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: ui-monospace, monospace;
+}
+#cockpit .feedhdr, #agents .feedhdr, .cockpit-agents .feedhdr, .cockpit-exec .feedhdr {
+  color: var(--stage-muted);
+  font-size: 11px;
+  letter-spacing: 0.4px;
+  margin-bottom: 6px;
+}
+.cockpit-tasks .trow, .cockpit-findings .frow {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 2px 0;
+}
+.cockpit-tasks .tdot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 6px;
+}
+.cockpit-findings .frow.hi { font-weight: 600; }
+.cockpit-findings .fsev { font-weight: 700; }
+

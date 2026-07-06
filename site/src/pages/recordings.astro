@@ -68,6 +68,8 @@ for (const [p, mod] of Object.entries(streamModules)) {
 }
 cards.sort((a, b) => a.slug.localeCompare(b.slug));
 const maxModelFindings = Math.max(1, ...analytics.findings_by_model.map((r: any) => r.findings));
+const tasksByModel = analytics.tasks_by_model ?? [];
+const maxModelTasks = Math.max(1, ...tasksByModel.map((r: any) => r.tasks));
 ---
 <html lang="en">
 <head>
@@ -158,6 +160,24 @@ const maxModelFindings = Math.max(1, ...analytics.findings_by_model.map((r: any)
       MotherDuck stays product-side (fleet sync + the cross-brain oracle,
       credentialed) and is never wired into this site.
     </p>
+
+    <h3>Work by model — tasks completed</h3>
+    <p class="muted">Who actually <em>built, tested, and fixed</em> — task completions grouped by the
+      model behind the agent. This is where a mixed-model run shows its hand: every model that
+      carried a role appears here, unlike findings-by-model below (which is often the deterministic
+      gate doing the reporting).</p>
+    <table>
+      <thead><tr><th>model</th><th>tasks</th><th></th></tr></thead>
+      <tbody>
+        {tasksByModel.map((r: any) => (
+          <tr>
+            <td>{r.model}</td>
+            <td class="num">{r.tasks}</td>
+            <td class="barcell"><div class="bar" style={`width:${Math.round((r.tasks / maxModelTasks) * 100)}%`}></div></td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
 
     <h3>Findings by model</h3>
     <table>

@@ -210,6 +210,18 @@ async function buildAnalyticsFromRecordings(recordingsDir, outPath) {
              round(avg(t1 - t0), 1) AS avg_seconds, round(max(t1 - t0), 1) AS max_seconds
       FROM claimed JOIN done USING (slug, subject)
       WHERE t1 >= t0 GROUP BY claimed.slug ORDER BY claimed.slug`);
+    // Which MODEL did the work — task completions grouped by the completing
+    // agent's model. Unlike findings-by-model (who *filed* findings, often the
+    // gate), this is who *built/tested/fixed*, so every model that carried a
+    // role shows up — the point of a mixed-model run.
+    const tasks_by_model = await q(conn, `
+      SELECT CASE
+                  WHEN actor IN ('verify-gate','stall-watchdog','reflex-replanner','lead','client','engine','scrum','brain') THEN 'corral gate / system'
+                  WHEN model='' THEN '(not recorded)'
+                  WHEN backend='' THEN model
+                  ELSE backend || ':' || model END AS model,
+             count(*) AS tasks
+      FROM ev WHERE kind='task_done' GROUP BY 1 ORDER BY tasks DESC, model`);
 
     fs.mkdirSync(path.dirname(outPath), { recursive: true });
     fs.writeFileSync(
@@ -218,6 +230,7 @@ async function buildAnalyticsFromRecordings(recordingsDir, outPath) {
         generated_note: 'built by site/scripts/build-analytics.mjs (DuckDB) — do not hand-edit',
         findings_by_severity,
         findings_by_model,
+        tasks_by_model,
         task_durations,
       }, null, 2) + '\n',
     );

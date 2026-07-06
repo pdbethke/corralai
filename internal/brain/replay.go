@@ -47,8 +47,27 @@ func BuildReplayStream(q *queue.Store, tel *telemetry.Store, missionID int64) ([
 	}
 	for _, t := range tasks {
 		if t.CreatedTS > 0 {
-			out = append(out, ReplayEvent{TS: t.CreatedTS, Kind: "task_created", Subject: t.Key,
-				Detail: map[string]any{"role": t.Role, "title": t.Title}})
+			// task_created carries the task's LINEAGE, so a recording can tell
+			// the whole story of a task from the tape alone (the site's task
+			// storytelling modal — see internal/ui/web/replay-player.js's
+			// buildReplayTaskStories): depends_on is the upstream cause (the
+			// task keys that had to finish first — and, reversed, the
+			// downstream tasks this one unblocked); instruction is what the
+			// task actually asked for; supersedes is the id of the task this
+			// one replaced when the herd re-planned. All optional — a mission
+			// with no dependencies simply omits depends_on, and the modal is
+			// honest about a field the tape didn't capture.
+			detail := map[string]any{"role": t.Role, "title": t.Title}
+			if len(t.DependsOn) > 0 {
+				detail["depends_on"] = t.DependsOn
+			}
+			if t.Instruction != "" {
+				detail["instruction"] = t.Instruction
+			}
+			if t.Supersedes > 0 {
+				detail["supersedes"] = t.Supersedes
+			}
+			out = append(out, ReplayEvent{TS: t.CreatedTS, Kind: "task_created", Subject: t.Key, Detail: detail})
 		}
 		if t.ClaimedTS > 0 {
 			out = append(out, ReplayEvent{TS: t.ClaimedTS, Kind: "task_claimed", Actor: t.ClaimedBy, Subject: t.Key,

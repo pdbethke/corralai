@@ -303,6 +303,69 @@ func TestBuildReplayStreamExcludesGlobalNonClaimAmbience(t *testing.T) {
 	}
 }
 
+// TestBuildReplayStreamCarriesTaskLineage verifies that a task_created beat
+// carries the task's lineage — depends_on (the upstream cause / reversed, the
+// downstream tasks it unblocks), instruction (what the task asked for), and
+// supersedes (the re-plan link) — so the site's task storytelling modal can
+// reconstruct "what triggered this / what came next" from the tape alone.
+// A task with no dependencies simply omits the field (honest omission).
+func TestBuildReplayStreamCarriesTaskLineage(t *testing.T) {
+	dir := t.TempDir()
+	q, err := queue.Open(filepath.Join(dir, "q.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer q.Close()
+	m, err := mission.Open(filepath.Join(dir, "m.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	mid, err := mission.CreateMission(m, q, "lineage", []mission.PhaseSpec{{Name: "build", Instruction: "seed"}}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := q.Enqueue(mid, []queue.TaskSpec{
+		{Key: "build-core", Role: "builder", Title: "build the core", Instruction: "write the LIFO stack"},
+		{Key: "test", Role: "tester", Title: "cover it", Instruction: "table-driven tests", DependsOn: []string{"build-core"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	events, err := BuildReplayStream(q, nil, mid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawDeps, sawInstr, sawBareCreated bool
+	for _, ev := range events {
+		if ev.Kind != "task_created" {
+			continue
+		}
+		if ev.Subject == "test" {
+			deps, _ := ev.Detail["depends_on"].([]string)
+			if len(deps) == 1 && deps[0] == "build-core" {
+				sawDeps = true
+			}
+			if instr, _ := ev.Detail["instruction"].(string); instr == "table-driven tests" {
+				sawInstr = true
+			}
+		}
+		if ev.Subject == "build-core" {
+			if _, ok := ev.Detail["depends_on"]; !ok {
+				sawBareCreated = true // a dependency-free task omits the field
+			}
+		}
+	}
+	if !sawDeps {
+		t.Error("task_created for a dependent task must carry detail.depends_on with the upstream key")
+	}
+	if !sawInstr {
+		t.Error("task_created must carry detail.instruction (what the task asked for)")
+	}
+	if !sawBareCreated {
+		t.Error("a task with no dependencies must OMIT depends_on (honest omission), not emit an empty array")
+	}
+}
+
 // TestBuildReplayStreamIncludesThoughtBeatInOrder verifies the story engine's
 // replay surface (task 64's foundation): a recorded thought rides the same
 // merged, timestamp-sorted stream as task/finding/execution beats, with a

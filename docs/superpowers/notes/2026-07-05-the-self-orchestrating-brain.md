@@ -176,6 +176,65 @@ automatically-and-smarter. Ship the flag; grow into the planner.
   — this note is what finally *uses* that data intelligently instead of charting
   it. Self-staffing is the capstone.
 
+## Adjacent replay/cockpit ideas (captured same session)
+
+Two ideas surfaced alongside this that are worth not losing — both hinge on the
+story engine, so they're reasons to capture story runs by default:
+
+- **Searchable past reasoning over MCP.** Recordings are already exposed over
+  HTTP (`/api/replay`); an MCP tool is the agent-facing twin. NOT raw-tape
+  browsing (too noisy/heavy — an agent would drown and burn context) but
+  **searchable `report_thought` beats**: an agent asks "how did the herd approach
+  X before?" and gets relevant *reasoning snippets*. Slots between `search_memory`
+  (curated lessons — the distilled *what*) and the `history` tool (structured
+  past missions) by adding the raw *how-they-thought* dimension. Composes with
+  the oracle (`ask_fleet`) once thoughts are indexed. Guardrails: read-only,
+  swarm-scoped, rate-limited like `ask_fleet`.
+
+- **File-tree "files" view in the cockpit.** A third replay lens (swarm /
+  topology / **files**): a file tree where each file lights up in the claiming
+  agent's colour as they work it, scrubbable on the same replay timeline. Reuses
+  all the replay infra. And it's CHEAPER than first thought — the capture already
+  exists: `coordination_activity.go` records `claim_made`/`claim_released` beats
+  with `{path, actor}` on every claim. `BuildReplayStream` (`replay.go:32`)
+  *deliberately excludes* them (they're global, `mission_id=0`) and the code
+  flags "time-window inclusion of global ambience is a **flagged v2 improvement,
+  not implemented here**." So the backend is: implement that v2 (fold global
+  claim beats within the mission's time window into the merge). Then a "files"
+  tab reconstructs the tree from `claim_made` paths, coloured by actor. Two
+  focused pieces (a known backend v2 + a cockpit tab), not a from-scratch capture.
+
+## The handoff IS the thesis — make it visible (2026-07-06)
+
+Coordinated specialists that *hand off* is the whole product; parallel agents are
+a commodity. Load-bearing finding from a real run (`go-stack-pass`): **the handoff
+is real and role-routed, it's just invisible.**
+
+- `verify-gate`/`Iris` file a **finding** → the brain creates a `fix` task tagged
+  `role: builder` (Bob claims it) AND a `re-verify` task tagged `role: tester`
+  (**Tess claims it**). Testers genuinely catch what builders miss; the brain
+  routes fixes and re-verifies to the right role. Roles are NOT theatre.
+- **This routing is 100% DETERMINISTIC** — the reflex-replanner's templated
+  `Sprintf` re-plan (`replan.go`) + keyword `ScaledPlan`. **The brain is NOT
+  LLM-powered.** Honest positioning: claim "distinct roles that genuinely hand
+  off" (true, data-backed); do NOT claim "an LLM brain orchestrating the herd"
+  (false today — that's the thesis above, not built). Getting this wrong is the
+  one thing that'd get us dinged.
+
+Two gaps keep the (real) handoff off-screen:
+1. **No narration.** The Shep narrator (`llm.FromEnv()`, `cmd/corral/main.go:631`)
+   exists but only serves ask-a-bee debriefs + the oracle — it does NOT emit into
+   the mission tape. **Feature:** trigger it on coordination events (finding→fix,
+   re-verify pass) to emit handoff beats ("Iris flagged a build bug → Bob's
+   fixing → Tess re-verifying → green") as telemetry that lands in `/api/replay`,
+   attributed to Shep, rendered distinctly in the console. Additive — does NOT
+   touch the gate. **Build this first.** It's the thesis, made legible.
+2. **Only the builder thinks.** In `go-stack-pass`, all 9 `report_thought` beats
+   were Bob's — Tess/Iris worked (claimed, filed findings, re-verified) but never
+   thought out loud, so "watch the herd think" reads as "watch Bob think." Tune
+   the tester/reviewer prompts to report_thought at their real decision points so
+   the *team's* reasoning shows, not just the builder's.
+
 ## Not blocked on any of this
 
 The immediate tonight-item — a trivial Ollama capture run to get real

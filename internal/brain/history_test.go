@@ -3,9 +3,14 @@
 package brain
 
 import (
+	"context"
+	"encoding/json"
 	"path/filepath"
 	"testing"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/pdbethke/corralai/internal/coord"
 	"github.com/pdbethke/corralai/internal/learn"
 	"github.com/pdbethke/corralai/internal/mission"
 	"github.com/pdbethke/corralai/internal/queue"
@@ -84,5 +89,73 @@ func TestMissionHistoryDetailUnknownMission(t *testing.T) {
 	got, err := MissionHistoryDetail(m, q, nil, nil, 999)
 	if err != nil || got != nil {
 		t.Fatalf("expected (nil,nil) for unknown mission, got %v err=%v", got, err)
+	}
+}
+
+func TestMissionReplayToolReturnsEvents(t *testing.T) {
+	dir := t.TempDir()
+	c, err := coord.Open(filepath.Join(dir, "c.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { c.Close() })
+	q, err := queue.Open(filepath.Join(dir, "q.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { q.Close() })
+	m, err := mission.Open(filepath.Join(dir, "m.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { m.Close() })
+	tel, err := telemetry.Open(filepath.Join(dir, "t.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { tel.Close() })
+
+	mid, err := mission.CreateMission(m, q, "replay me", []mission.PhaseSpec{{Name: "build", Instruction: "do the thing"}}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.PromoteReady(mid); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.ClaimNext("bee1", nil, 300); err != nil {
+		t.Fatal(err)
+	}
+	if err := tel.Record(telemetry.Event{MissionID: mid, Kind: "mission_completed", Actor: "engine"}); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	clientT, serverT := mcp.NewInMemoryTransports()
+	go func() {
+		_ = NewServer(c, nil, Options{Missions: m, Queue: q, Telemetry: tel}).Run(ctx, serverT)
+	}()
+	client := mcp.NewClient(&mcp.Implementation{Name: "smoke", Version: "0"}, nil)
+	sess, err := client.Connect(ctx, clientT, nil)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer sess.Close()
+
+	res, err := sess.CallTool(ctx, &mcp.CallToolParams{
+		Name: "mission_replay", Arguments: map[string]any{"id": mid},
+	})
+	if err != nil {
+		t.Fatalf("mission_replay: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("mission_replay tool error: %v", res.Content)
+	}
+	var out missionReplayOut
+	b, _ := json.Marshal(res.StructuredContent)
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatalf("decode mission_replay result: %v (%s)", err, b)
+	}
+	if len(out.Events) == 0 {
+		t.Fatal("mission_replay must return a non-empty replay stream")
 	}
 }

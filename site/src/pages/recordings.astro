@@ -1,17 +1,31 @@
 ---
 // SPDX-License-Identifier: Elastic-2.0
 import '../styles/global.css';
-import analytics from '../data/analytics.json';
 import { cockpitHud, cockpitViews, cockpitTasks, cockpitAgents, cockpitFindings, cockpitExec } from '../lib/cockpitShell';
 import ThemeToggle from '../components/ThemeToggle.astro';
 
-// Enumerate committed recordings by glob — no manifest file to drift.
-const streamModules = import.meta.glob('../data/recordings/*.json', { eager: true });
+const generatedAnalyticsModules = import.meta.glob('../data/generated/analytics.json', { eager: true });
+const legacyAnalyticsModules = import.meta.glob('../data/analytics.json', { eager: true });
+const analyticsModule = Object.values(generatedAnalyticsModules)[0] ?? Object.values(legacyAnalyticsModules)[0];
+if (!analyticsModule) throw new Error('missing analytics.json (generated and legacy)');
+const analytics = (analyticsModule as any).default ?? analyticsModule;
+
+// Prefer generated recordings materialized from DuckDB during prebuild; fall
+// back to committed JSON tapes when no generated bundle exists.
+const generatedStreamModules = import.meta.glob('../data/generated/recordings/*.json', { eager: true });
+const legacyStreamModules = import.meta.glob('../data/recordings/*.json', { eager: true });
+const hasGeneratedStreams = Object.keys(generatedStreamModules).some(
+  (p) => p.endsWith('.json') && !p.endsWith('.meta.json'),
+);
+const streamModules = hasGeneratedStreams ? generatedStreamModules : legacyStreamModules;
 // Optional per-recording analysis: a sibling <slug>.analysis.md written in
 // the corral's voice from the run's own evidence (feature #41 will have the
 // herd draft these from its own tape). Astro's md pipeline renders it at
 // build time; the e2e deny-scan glob covers these files like the streams.
-const analysisModules = import.meta.glob('../data/recordings/*.analysis.md', { eager: true });
+const analysisModules = {
+  ...import.meta.glob('../data/recordings/*.analysis.md', { eager: true }),
+  ...import.meta.glob('../data/generated/recordings/*.analysis.md', { eager: true }),
+};
 const analyses: Record<string, any> = {};
 for (const [p, mod] of Object.entries(analysisModules)) {
   analyses[p.split('/').pop()!.replace(/\.analysis\.md$/, '')] = (mod as any).Content;
@@ -142,7 +156,7 @@ const maxModelFindings = Math.max(1, ...analytics.findings_by_model.map((r: any)
   <div class="section" id="analytics">
     <h2>Across the recordings</h2>
     <p class="how">
-      Computed at build time with DuckDB over the committed streams above —
+      Computed at build time with DuckDB over the recordings rendered above —
       the public face of the product's <code>model_comparison</code> report.
       MotherDuck stays product-side (fleet sync + the cross-brain oracle,
       credentialed) and is never wired into this site.

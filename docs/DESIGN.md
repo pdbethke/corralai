@@ -287,6 +287,7 @@ topology here; historical analytics via MotherDuck → any BI tool (Metabase, Gr
 
 ### Open threads (next)
 
+- **Team-shared recordings foundation (DuckDB + ACL + MCP share).** Add first-class recording visibility to `recordings_missions` (`private|team|public`, `team_id`, `shared_by`, `shared_ts`, `source_brain_id`) and wire a human-gated `share_recording` MCP tool with list/replay ACL filtering (`superuser: all`, member: own-private + team + public). Follow-ons: sync the shared catalog to MotherDuck, then layer Sigma analytics over shared recordings, and package this as a Teams app SKU/commercial license tier.
 - **`report_activity` never carries `mission_id`.** Found during P10's live
   verification: `cmd/corral-agent/main.go`'s automatic `report_activity` call
   (fired after every agent tool-call) omits `mission_id`, even though `runTask`

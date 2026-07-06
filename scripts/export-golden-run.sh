@@ -22,6 +22,8 @@ I_KNOW=0
 YES=0
 BEARER=""
 PLATFORM_INFERENCE="local ollama"
+DUCKDB_ONLY=0
+RECORDINGS_DB="${CORRALAI_RECORDINGS_DB:-$HOME/.claude/corralai_recordings.duckdb}"
 
 usage(){ cat <<'EOF'
 Usage: scripts/export-golden-run.sh [--mission N] [--brain-url URL] [--bearer TOKEN]
@@ -55,6 +57,11 @@ Usage: scripts/export-golden-run.sh [--mission N] [--brain-url URL] [--bearer TO
                    inference). Probed values are echoed with the manifest:
                    the same deny discipline applies — model/hardware names
                    only, never hostnames or usernames.
+  --duckdb-only    Skip writing site JSON/.meta files and only upsert the
+                   scrubbed replay into recordings DuckDB.
+  --recordings-db PATH
+                   Recordings DuckDB path (default
+                   $CORRALAI_RECORDINGS_DB or ~/.claude/corralai_recordings.duckdb).
   --rederive-meta PATH.json
                    Offline mode: no brain contact, no export. Recomputes the
                    models field of PATH's existing .meta.json sidecar from
@@ -73,6 +80,8 @@ while [ $# -gt 0 ]; do
     --out) OUT_JSON="$2"; shift 2 ;;
     --slug) SLUG="$2"; shift 2 ;;
     --platform-inference) PLATFORM_INFERENCE="$2"; shift 2 ;;
+    --duckdb-only) DUCKDB_ONLY=1; shift ;;
+    --recordings-db) RECORDINGS_DB="$2"; shift 2 ;;
     --rederive-meta) REDERIVE="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown arg: $1" >&2; usage; exit 1 ;;
@@ -101,6 +110,7 @@ fi
 # The sidecar is derived from --out, never independently settable — a
 # mismatched json/meta pair would quietly desync the site's hero stats.
 OUT_META="${OUT_JSON%.json}.meta.json"
+RECORDING_SLUG="$(basename "${OUT_JSON%.json}")"
 
 if [ -n "$BEARER" ] && [ "$I_KNOW" -ne 1 ]; then
   echo "FAIL: --bearer (authed brain) requires --i-know — an authed brain's recorded actors" >&2
@@ -112,6 +122,7 @@ fi
 #      the key-free, first-time-reviewer behavior this export must reflect) ----
 STASHED=""
 TMP_JSON=""
+TMP_META=""
 if [ -f deploy/demo/.env ]; then
   STASHED="deploy/demo/.env.stashed-by-export-golden-run"
   mv deploy/demo/.env "$STASHED"
@@ -121,6 +132,7 @@ fi
 # first, and the stashed .env would never make it back to the corral.
 cleanup(){
   [ -n "$TMP_JSON" ] && rm -f "$TMP_JSON"
+  [ -n "$TMP_META" ] && rm -f "$TMP_META"
   if [ -n "$STASHED" ] && [ -f "$STASHED" ]; then mv "$STASHED" deploy/demo/.env; fi
 }
 trap cleanup EXIT
@@ -207,7 +219,11 @@ echo "--- end platform ---"
 
 if [ "$YES" -ne 1 ]; then
   echo
-  read -r -p "Reviewed the manifest above — write $OUT_JSON? [y/N] " ans
+  if [ "$DUCKDB_ONLY" -eq 1 ]; then
+    read -r -p "Reviewed the manifest above — upsert slug '$RECORDING_SLUG' into $RECORDINGS_DB? [y/N] " ans
+  else
+    read -r -p "Reviewed the manifest above — write $OUT_JSON (+ DuckDB upsert)? [y/N] " ans
+  fi
   case "$ans" in
     y|Y|yes|YES) ;;
     *) echo "aborted — nothing written"; exit 1 ;;
@@ -217,12 +233,9 @@ else
 fi
 
 # ---- write the final JSON + metadata sidecar ----
-mkdir -p "$(dirname "$OUT_JSON")"
-cp "$TMP_JSON" "$OUT_JSON"
-
 MODELS_JSON="$(python3 scripts/scrub-golden-run.py models "$TMP_JSON")"
 
-curl "${curl_auth[@]}" "$BRAIN_URL/api/history" | python3 -c "
+META_JSON="$(curl "${curl_auth[@]}" "$BRAIN_URL/api/history" | python3 -c "
 import json, sys
 missions = json.load(sys.stdin).get('missions') or []
 m = next((x for x in missions if x.get('id') == $MISSION_ID), {})
@@ -235,8 +248,28 @@ meta = {
     'models': json.loads('''$MODELS_JSON'''),
     'platform': json.loads('''$PLATFORM_JSON'''),
 }
-with open('$OUT_META', 'w') as f:
-    json.dump(meta, f, indent=2)
+print(json.dumps(meta))
+")"
+
+if [ "$DUCKDB_ONLY" -ne 1 ]; then
+  mkdir -p "$(dirname "$OUT_JSON")"
+  cp "$TMP_JSON" "$OUT_JSON"
+  python3 - "$OUT_META" "$META_JSON" <<'PYEOF'
+import json, sys
+path, payload = sys.argv[1], json.loads(sys.argv[2])
+with open(path, 'w', encoding='utf-8') as f:
+    json.dump(payload, f, indent=2)
     f.write('\n')
-"
-echo "wrote $OUT_JSON and $OUT_META"
+PYEOF
+  echo "wrote $OUT_JSON and $OUT_META"
+fi
+
+TMP_META="$(mktemp)"
+printf '%s\n' "$META_JSON" > "$TMP_META"
+mkdir -p "$(dirname "$RECORDINGS_DB")"
+go run ./cmd/corral-recordings-import \
+  --db "$RECORDINGS_DB" \
+  --slug "$RECORDING_SLUG" \
+  --mission-id "$MISSION_ID" \
+  --replay "$TMP_JSON" \
+  --meta "$TMP_META"

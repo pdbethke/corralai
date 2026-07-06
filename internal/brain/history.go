@@ -4,6 +4,7 @@ package brain
 
 import (
 	"context"
+	"fmt"
 	"log"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -180,6 +181,13 @@ type missionHistoryOut struct {
 	Mission  *MissionDetail   `json:"mission,omitempty"`
 }
 
+type missionReplayIn struct {
+	ID int64 `json:"id" jsonschema:"mission id to replay"`
+}
+type missionReplayOut struct {
+	Events []ReplayEvent `json:"events"`
+}
+
 // registerHistory adds the mission_history read-only tool: past missions
 // (list) or one mission's full drill-down (detail). Mirrors mission_analytics'
 // report/ad-hoc branch shape. Registered only when Missions+Queue are set.
@@ -202,5 +210,21 @@ func registerHistory(s *mcp.Server, opts Options) {
 				return nil, missionHistoryOut{}, err
 			}
 			return nil, missionHistoryOut{Missions: ms}, nil
+		})
+
+	// mission_replay is the MCP twin of /api/replay: fetch one past mission's
+	// replay stream (the merged, time-ordered event tape agents can introspect).
+	// Read-only and available on the same wiring boundary as mission_history.
+	mcp.AddTool(s, &mcp.Tool{Name: "mission_replay",
+		Description: "Replay one mission's recorded event stream (tasks/findings/executions/telemetry), oldest-first."},
+		func(_ context.Context, _ *mcp.CallToolRequest, in missionReplayIn) (*mcp.CallToolResult, missionReplayOut, error) {
+			if in.ID == 0 {
+				return nil, missionReplayOut{}, fmt.Errorf("id required")
+			}
+			evs, err := BuildReplayStream(opts.Queue, opts.Telemetry, in.ID)
+			if err != nil {
+				return nil, missionReplayOut{}, err
+			}
+			return nil, missionReplayOut{Events: evs}, nil
 		})
 }

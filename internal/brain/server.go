@@ -250,6 +250,9 @@ func NewServer(store *coord.Store, mem *memory.Store, opts Options) *mcp.Server 
 	if opts.Telemetry != nil {
 		registerAnalytics(s, opts)
 	}
+	if opts.Recordings != nil {
+		registerRecordings(s, opts)
+	}
 	registerHistory(s, opts)
 	if opts.Oracle != nil && opts.Oracle.Enabled() {
 		registerAskFleet(s, opts)

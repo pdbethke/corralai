@@ -55,6 +55,7 @@ site/.astro/
 site/test-results/
 site/playwright-report/
 site/src/data/analytics.json
+site/src/data/generated/
 
 # Playwright MCP debug artifacts (console logs, page snapshots) — scratch only
 /.playwright-mcp/

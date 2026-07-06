@@ -11,6 +11,7 @@
 //	CORRALAI_ADDR              listen address (default 127.0.0.1:9019)
 //	CORRALAI_DB                coordination SQLite path (default ~/.claude/corralai_coord.sqlite3)
 //	CORRALAI_MEMORY_DB         memory DuckDB path (default ~/.claude/corralai_memory.duckdb)
+//	CORRALAI_RECORDINGS_DB     recordings DuckDB path for scrubbed replay exports (default ~/.claude/corralai_recordings.duckdb)
 //	CORRALAI_MEMORY_DIR        where new memory entries are written (default ~/.claude/projects/default/memory)
 //	CORRALAI_PROJECT_TIERS     optional path->tier rules "substr=tier,substr=tier"; front-matter project: wins, else "default"
 //	CORRALAI_OIDC_ISSUER       OIDC issuer URL (any OIDC provider: Keycloak, Auth0, Okta, Dex, Authentik, …); empty => AUTH DISABLED (dev)
@@ -85,6 +86,7 @@ import (
 	"github.com/pdbethke/corralai/internal/oracle"
 	"github.com/pdbethke/corralai/internal/principals"
 	"github.com/pdbethke/corralai/internal/queue"
+	"github.com/pdbethke/corralai/internal/recordings"
 	"github.com/pdbethke/corralai/internal/reference"
 	"github.com/pdbethke/corralai/internal/repo"
 	"github.com/pdbethke/corralai/internal/repoindex"
@@ -511,6 +513,12 @@ func main() {
 		log.Fatalf("open telemetry store: %v", err)
 	}
 	defer telStore.Close()
+	recDB := env("CORRALAI_RECORDINGS_DB", filepath.Join(home, ".claude", "corralai_recordings.duckdb"))
+	recStore, err := recordings.Open(recDB)
+	if err != nil {
+		log.Fatalf("open recordings store: %v", err)
+	}
+	defer recStore.Close()
 
 	// Learning loop: findings + lessons cluster into human-gated proposals
 	// (approve into standing guidance, optionally a skill).
@@ -846,6 +854,7 @@ func main() {
 		Reference:        refStore,
 		Embedder:         embedder,
 		Telemetry:        telStore,
+		Recordings:       recStore,
 		ExecRing:         execRing,
 		ActivityRing:     activityRing,
 		HostBook:         hostBook,

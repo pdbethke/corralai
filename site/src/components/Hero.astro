@@ -1,8 +1,34 @@
 ---
 // SPDX-License-Identifier: Elastic-2.0
-import golden from '../data/recordings/golden-run.json';
-import meta from '../data/recordings/golden-run.meta.json';
 import { cockpitHud, cockpitViews, cockpitTasks, cockpitAgents, cockpitFindings, cockpitExec } from '../lib/cockpitShell';
+
+const generatedRecordings = import.meta.glob('../data/generated/recordings/*.json', { eager: true });
+const legacyRecordings = import.meta.glob('../data/recordings/*.json', { eager: true });
+const hasGeneratedRecordings = Object.keys(generatedRecordings).some(
+  (p) => p.endsWith('.json') && !p.endsWith('.meta.json'),
+);
+const preferredRecordings = hasGeneratedRecordings ? generatedRecordings : legacyRecordings;
+const fallbackRecordings = hasGeneratedRecordings ? legacyRecordings : {};
+const heroSlug = (process.env.CORRALAI_HERO_SLUG || 'golden-run').trim() || 'golden-run';
+
+function readRecordingModule(modules: Record<string, any>, slug: string, suffix: string) {
+  const key = Object.keys(modules).find((p) => p.endsWith(`/${slug}${suffix}`));
+  if (!key) return undefined;
+  const mod = modules[key];
+  return mod?.default ?? mod;
+}
+
+const golden =
+  readRecordingModule(preferredRecordings, heroSlug, '.json') ??
+  readRecordingModule(fallbackRecordings, heroSlug, '.json');
+const meta =
+  readRecordingModule(preferredRecordings, heroSlug, '.meta.json') ??
+  readRecordingModule(fallbackRecordings, heroSlug, '.meta.json');
+if (!golden || !meta) {
+  throw new Error(
+    `hero recording slug "${heroSlug}" not found in generated or legacy recordings`,
+  );
+}
 
 const minutes = Math.round((meta.duration_seconds || 0) / 60);
 ---

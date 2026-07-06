@@ -17,6 +17,7 @@ import (
 	"github.com/pdbethke/corralai/internal/oracle"
 	"github.com/pdbethke/corralai/internal/principals"
 	"github.com/pdbethke/corralai/internal/queue"
+	"github.com/pdbethke/corralai/internal/recordings"
 	"github.com/pdbethke/corralai/internal/reference"
 	"github.com/pdbethke/corralai/internal/repo"
 	"github.com/pdbethke/corralai/internal/repoindex"
@@ -78,6 +79,10 @@ type Options struct {
 	// Telemetry, when set, records the mission event timeline (created, claimed,
 	// completed, findings, re-plans, reviews) for DuckDB analysis. nil => off.
 	Telemetry *telemetry.Store
+
+	// Recordings, when set, exposes scrubbed exported replay recordings as a
+	// queryable DuckDB store (list/query/get replay). nil => tools off.
+	Recordings *recordings.Store
 
 	// Egress guards outbound gateway connections against SSRF (blocks private/
 	// loopback/link-local targets unless allowlisted). nil => a default block guard.

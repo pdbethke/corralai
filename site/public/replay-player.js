@@ -137,6 +137,42 @@ cv.addEventListener('dblclick', ev => {
   resetView();
 });
 
+// ---- SITE-ONLY canvas click-to-inspect (product owns its own in index.html) ----
+// On the backend-free site there's no index.html canvas handler, so wire the
+// swarm canvas here: click an AGENT node → open its .aw-win inspector; click a
+// TASK node (the claimed-task node, id "p:<taskkey>") → open its storytelling
+// modal. Guarded to the site (openAgentWindow is product-only) and to replay,
+// and it defers to viewJustPanned() so a drag-pan never opens a window. Nodes
+// drift under the force layout, but hit-testing is done in WORLD coords at
+// click time, so they stay clickable wherever they float.
+function replayCanvasHit(ev){
+  const p = canvasToWorld(ev);
+  let best = null, bd = 1e9;
+  for(const n of nodes.values()){
+    const r = n.kind === 'agent' ? 16 : 9;
+    const d = Math.hypot(n.x - p.x, n.y - p.y);
+    if(d < r + 6 && d < bd){ best = n; bd = d; }
+  }
+  return best;
+}
+cv.addEventListener('click', ev => {
+  if(typeof openAgentWindow === 'function') return; // product owns canvas clicks
+  if(!inReplay) return;
+  if(viewJustPanned()) return;
+  const best = replayCanvasHit(ev);
+  if(!best) return;
+  if(best.kind === 'agent') replayAgentClick(best.fullname || best.label);
+  else if(best.kind === 'path') replayTaskClick(best.id.slice(2)); // "p:<taskkey>" → taskkey
+});
+// Pointer affordance: show a pointer cursor when hovering a clickable node
+// (site + replay only). Cheap hit-test on move; leaves the pan/zoom cursor
+// alone otherwise.
+cv.addEventListener('mousemove', ev => {
+  if(typeof openAgentWindow === 'function' || !inReplay){ return; }
+  if(panFrom){ return; } // mid-drag: don't fight the pan
+  cv.style.cursor = replayCanvasHit(ev) ? 'pointer' : '';
+});
+
 // ---- touch: one-finger drag-pan, two-finger pinch-to-zoom ----
 // A LinkedIn click from a phone/tablet has no wheel and no mouse, so touch
 // gets its own gesture handling over the SAME transform + click-eater flag
@@ -1085,18 +1121,30 @@ function renderReplayConsole(){
 function renderReplayTasks(){
   const tp = document.getElementById('tasks');
   if(!tp) return;
+  ensureReplayTaskStyles();   // task-row hover/dim + modal chrome
   const tasks = Array.from(replayTasks.values());
   if(!tasks.length){ tp.innerHTML = ''; return; }
   const order = {claimed:0, queued:1, done:2, superseded:3, cancelled:4};
   const counts = tasks.reduce((m,t)=>{ m[t.status]=(m[t.status]||0)+1; return m; }, {});
   const hdr = ['claimed','queued','done','superseded','cancelled'].filter(s=>counts[s]).map(s=>counts[s]+' '+s).join(' · ');
+  // Every task row is clickable → opens its storytelling modal. The list is
+  // rebuilt via innerHTML on every playback tick / scrub, so an inline onclick
+  // (re-parsed onto each fresh node) is the robust binding here — a listener
+  // bound to a node would be detached out from under a mid-tick click.
   tp.innerHTML = '<div class="feedhdr">tasks · ' + tasks.length + (hdr ? ' &nbsp; ' + hdr : '') + '</div>' +
     tasks.slice().sort((a,b)=>(order[a.status]??9)-(order[b.status]??9)).slice(0,50).map(t => {
       const gone = (t.status==='cancelled' || t.status==='superseded');
-      const dot = t.status==='done' ? C.green : (t.status==='claimed' ? '#5b9bd5' : '#6b6452');
+      const done = (t.status==='done');
+      // DIM completed AND superseded/cancelled tasks as they finish — live on
+      // both play and scrub (renderReplayTasks runs on every step/seek). They
+      // are NOT removed: the scrubber is the temporal source of truth, so a
+      // finished task stays in the list, just dimmed.
+      const dim = done || gone;
+      const dot = done ? C.green : (t.status==='claimed' ? '#5b9bd5' : '#6b6452');
       const who = t.claimedBy && !gone ? ' <span style="color:' + roleColor(t.role) + '">← ' + esc(displayName(t.claimedBy)) + '</span>' : '';
       const titleStyle = gone ? 'color:var(--muted);text-decoration:line-through' : 'color:var(--fg)';
-      return '<div class="trow"' + (gone ? ' style="opacity:.6"' : '') + '><span class="tdot" style="background:' + dot + '"></span><b style="' + titleStyle + '">' + esc(t.title || t.key) + '</b> <span style="color:var(--muted)">' + esc(t.role || '') + '</span>' + who + '</div>';
+      const key = (t.key || '').replace(/'/g,"\\'");
+      return '<div class="trow' + (dim ? ' tdim' : '') + '" role="button" tabindex="0" title="open this task\u2019s story" onclick="replayTaskClick(\'' + key + '\')" style="cursor:pointer"><span class="tdot" style="background:' + dot + '"></span><b style="' + titleStyle + '">' + esc(t.title || t.key) + '</b> <span style="color:var(--muted)">' + esc(t.role || '') + '</span>' + who + '</div>';
     }).join('');
 }
 function renderReplayFindings(){
@@ -1433,6 +1481,285 @@ function renderReplayWindowBody(name){
 // populated by the site's openReplayAgentWindow.
 function refreshReplayWindows(){
   replayWindows.forEach((_, name) => renderReplayWindowBody(name));
+}
+
+// ===========================================================================
+// Task storytelling modal — the centerpiece of the replay screen. Every task
+// (a row in the left list, a node in the swarm canvas) is clickable and opens
+// a floating .aw-win (the SAME chrome as the agent inspector, so the two read
+// as one visual language) that reconstructs the task's whole STORY — purely
+// from the recorded tape:
+//   WHAT was done   — the title/instruction + the commands the worker ran
+//                     while holding it (❯ cmd ✓/✗) + findings it produced.
+//   WHO did it      — the assigned worker(s), clickable to their inspector.
+//   WHAT TRIGGERED  — the upstream cause: the task's depends_on parents and,
+//                     when the herd re-planned, the task it superseded.
+//   WHAT CAME NEXT  — the downstream tasks it unblocked (reverse depends_on),
+//                     clickable to walk the causal chain.
+//   TIMING/STATUS   — created / claimed / finished, relative to mission start.
+// HONESTY: the tape links findings/commands to a WORKER + TIME, not directly
+// to a task, so those are matched by "who held this task, when" and labeled as
+// such; and a field the tape never captured (no instruction, no dependency) is
+// stated plainly, never invented — this repo has a verbatim-honesty gate.
+// ===========================================================================
+
+// buildReplayTaskStories: fold the WHOLE recorded tape (replayEvents) into a
+// per-task story map — independent of the scrub position, so a modal always
+// tells the complete arc of a task, not a partial frame. Returns {tasks, base}
+// where base is the mission's first timestamp (for relative timing).
+function buildReplayTaskStories(){
+  const evs = (typeof replayEvents !== 'undefined' && replayEvents) || [];
+  const tasks = new Map();
+  let base = 0;
+  const ensureT = (key) => {
+    let t = tasks.get(key);
+    if(!t){ t = {key, title:'', role:'', instruction:'', deps:[], supersedes:0, status:'queued', claimedBy:'', actors:new Set(), createdTs:0, claimedTs:0, doneTs:0, doneKind:'', commands:[], findings:[], next:[]}; tasks.set(key, t); }
+    return t;
+  };
+  for(const ev of evs){
+    if(ev.ts && (base === 0 || ev.ts < base)) base = ev.ts;
+    const d = ev.detail || {};
+    switch(ev.kind){
+      case 'task_created': {
+        if(!ev.subject) break;
+        const t = ensureT(ev.subject);
+        if(d.title) t.title = d.title;
+        if(d.role) t.role = d.role;
+        if(d.instruction) t.instruction = d.instruction;
+        if(Array.isArray(d.depends_on)) t.deps = d.depends_on.slice();
+        if(d.supersedes) t.supersedes = d.supersedes;
+        if(ev.ts) t.createdTs = ev.ts;
+        break;
+      }
+      case 'task_claimed': {
+        if(!ev.subject) break;
+        const t = ensureT(ev.subject);
+        t.status = 'claimed';
+        if(ev.actor){ t.claimedBy = ev.actor; t.actors.add(ev.actor); }
+        if(d.role) t.role = d.role;
+        if(d.title && !t.title) t.title = d.title;
+        if(ev.ts) t.claimedTs = ev.ts;
+        break;
+      }
+      case 'task_done': case 'task_cancelled': case 'task_superseded': {
+        if(!ev.subject) break;
+        const t = ensureT(ev.subject);
+        t.status = ev.kind.slice(5); // done | cancelled | superseded
+        t.doneKind = ev.kind;
+        if(ev.actor) t.actors.add(ev.actor);
+        if(ev.ts) t.doneTs = ev.ts;
+        break;
+      }
+    }
+  }
+  // downstream = reverse of depends_on (who was unblocked by this task).
+  tasks.forEach(t => t.deps.forEach(dep => { const p = tasks.get(dep); if(p) p.next.push(t.key); }));
+  // commands + findings attach to the task their WORKER held at that instant —
+  // the tape links them to actor+time, never to a task key, so this is the
+  // honest reconstruction (labeled as such in the UI).
+  for(const ev of evs){
+    const d = ev.detail || {};
+    if(ev.kind === 'execution' && ev.actor){
+      const t = ownerTaskAt(tasks, ev.actor, ev.ts);
+      if(t) t.commands.push({command: ev.subject || '', ok: !!d.ok, exitCode: d.exit_code == null ? '' : d.exit_code, ts: ev.ts});
+    } else if(ev.kind === 'finding_reported' && ev.actor){
+      const t = ownerTaskAt(tasks, ev.actor, ev.ts);
+      if(t) t.findings.push({type: d.type || '', severity: d.severity || '', target: ev.subject || '', ts: ev.ts});
+    }
+  }
+  return {tasks, base};
+}
+// ownerTaskAt: which task was `actor` holding at time `ts` — the claimed task
+// whose [claimedTs, doneTs] window contains ts (latest claim wins on overlap).
+// Returns null when the beat carries no usable ts (ts=0) or no window matches,
+// so an unattributable command/finding is simply left off, never guessed onto
+// the wrong task.
+function ownerTaskAt(tasks, actor, ts){
+  if(!ts) return null;
+  let best = null;
+  tasks.forEach(t => {
+    if(!(t.claimedBy === actor || t.actors.has(actor))) return;
+    if(!t.claimedTs || t.claimedTs > ts) return;
+    if(t.doneTs && ts > t.doneTs) return;
+    if(!best || t.claimedTs > best.claimedTs) best = t;
+  });
+  return best;
+}
+function fmtReplayRelTs(ts, base){
+  if(!ts || !base) return '—';
+  const s = Math.max(0, Math.round(ts - base));
+  return s < 60 ? s + 's' : Math.floor(s/60) + 'm ' + (s%60) + 's';
+}
+function replayTaskStatusPill(status){
+  const map = {done:['done','#1f6f2e','#d6ffdf'], claimed:['in progress','var(--stage-amber,#e8a838)','var(--stage-bg,#0e1116)'],
+    queued:['queued','var(--stage-line,#33405a)','var(--stage-fg,#e6e1d8)'], superseded:['superseded','#6b4b8a','#ecdcff'], cancelled:['cancelled','#7a3a3a','#ffdcd6']};
+  const [label, bg, fg] = map[status] || [status, 'var(--stage-line,#33405a)', 'var(--stage-fg,#e6e1d8)'];
+  return '<span class="aw-pill" style="background:' + bg + ';color:' + fg + '">' + esc(label) + '</span>';
+}
+
+const replayTaskWindows = new Map(); // key -> {el, bodyEl}
+
+// replayTaskClick: the task-row / task-node entry point (exported to window so
+// the innerHTML-rebuilt task list's inline onclick always resolves it).
+function replayTaskClick(key){ if(!key) return; openReplayTaskWindow(key); }
+
+// ensureReplayTaskStyles: task-modal-specific CSS, injected once on BOTH the
+// site and the product (unguarded — unlike ensureSiteReplayStyles, which the
+// product owns). The base .aw-win chrome already exists in both (index.html's
+// <style> in the product, ensureSiteReplayStyles on the site); this only adds
+// the task-story extras (status pill, chain links, command/finding rows).
+function ensureReplayTaskStyles(){
+  if(document.getElementById('replay-task-style')) return;
+  const s = document.createElement('style');
+  s.id = 'replay-task-style';
+  s.textContent = `
+.aw-win.aw-task { width: 430px; }
+.aw-win.aw-task .aw-title b { color: var(--stage-fg,#e6e1d8); }
+.aw-pill { font-size:9.5px; text-transform:uppercase; letter-spacing:.4px; padding:1px 7px; border-radius:999px; flex:none; white-space:nowrap; }
+.aw-body .aw-instr { color: var(--stage-fg,#e6e1d8); line-height:1.5; padding:2px 0 4px; }
+.aw-body .aw-honest { color: var(--stage-muted,#8a8170); font-style:italic; font-size:11.5px; line-height:1.45; padding:2px 0; }
+.aw-body .aw-cmdrow { font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11.5px; line-height:1.55; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.aw-body .aw-cmdrow .aw-prompt { color: var(--stage-amber,#e8a838); }
+.aw-body .aw-cmd { color: var(--stage-fg,#e6e1d8); }
+.aw-body .aw-ok { color: var(--stage-green,#8fdcab); font-weight:700; }
+.aw-body .aw-bad { color: var(--stage-red,#e8503a); font-weight:700; }
+.aw-body .aw-frow { line-height:1.5; padding:1px 0; }
+.aw-body .aw-fsev { font-weight:700; }
+.aw-body .aw-chain { color: var(--stage-amber,#e8a838); cursor:pointer; text-decoration:underline dotted; }
+.aw-body .aw-chain:hover { color: var(--stage-fg,#e6e1d8); }
+.aw-body .aw-timing { color: var(--stage-muted,#8a8170); font-size:11.5px; line-height:1.6; }
+`;
+  document.head.appendChild(s);
+}
+
+// openReplayTaskWindow: the task-story modal — a floating .aw-win (same chrome
+// as the agent inspector), body reconstructed from the tape. Draggable, z-raise
+// on interaction, close button. Reuses the shared #replay-windows layer and the
+// rwZ/rwDrag drag machinery (openReplayAgentWindow's twin).
+function openReplayTaskWindow(key){
+  ensureSiteReplayStyles();   // base .aw-win chrome (site); no-op in the product
+  ensureReplayTaskStyles();
+  if(replayTaskWindows.has(key)){
+    const w = replayTaskWindows.get(key); rwZ++; w.el.style.zIndex = rwZ;
+    renderReplayTaskWindowBody(key);
+    return;
+  }
+  let layer = document.getElementById('replay-windows');
+  if(!layer){ layer = document.createElement('div'); layer.id = 'replay-windows'; document.body.appendChild(layer); }
+  const num = replayWindows.size + replayTaskWindows.size;
+  const offset = (num % 8) * 30;
+  const left = Math.min(120 + offset, window.innerWidth - 450);
+  const top = Math.min(80 + offset, window.innerHeight - 360);
+
+  const el = document.createElement('div');
+  el.className = 'aw-win aw-task';
+  el.style.left = left + 'px'; el.style.top = top + 'px';
+  rwZ++; el.style.zIndex = rwZ;
+  el.innerHTML =
+    '<div class="aw-title">' +
+      '<b class="aw-tasktitle">task</b>' +
+      '<span class="aw-role aw-taskstatus"></span>' +
+      '<span class="aw-close" title="close" aria-label="close">✕</span>' +
+    '</div>' +
+    '<div class="aw-body"><div class="aw-honest">reconstructing the story…</div></div>';
+  layer.appendChild(el);
+
+  const bodyEl = el.querySelector('.aw-body');
+  replayTaskWindows.set(key, { el, bodyEl });
+
+  el.addEventListener('mousedown', () => { rwZ++; el.style.zIndex = rwZ; }, true);
+  el.querySelector('.aw-close').addEventListener('click', ev => {
+    ev.stopPropagation();
+    replayTaskWindows.delete(key);
+    el.remove();
+  });
+  const titleBar = el.querySelector('.aw-title');
+  titleBar.addEventListener('mousedown', ev => {
+    if(ev.target.classList.contains('aw-close')) return;
+    rwDrag = { el, ox: ev.clientX - el.offsetLeft, oy: ev.clientY - el.offsetTop };
+    ev.preventDefault();
+  });
+
+  renderReplayTaskWindowBody(key);
+}
+
+// renderReplayTaskWindowBody: paint the task's story into an open modal from
+// the full-tape reconstruction. Chain links (trigger/next) and the assigned
+// worker(s) are clickable — the whole point is to WALK the causal chain.
+function renderReplayTaskWindowBody(key){
+  const win = replayTaskWindows.get(key);
+  if(!win) return;
+  const {tasks, base} = buildReplayTaskStories();
+  const t = tasks.get(key);
+  // title bar
+  const titleEl = win.el.querySelector('.aw-tasktitle');
+  const statusEl = win.el.querySelector('.aw-taskstatus');
+  if(!t){
+    if(titleEl) titleEl.textContent = key;
+    if(statusEl) statusEl.innerHTML = '';
+    win.bodyEl.innerHTML = '<div class="aw-honest">This task isn\u2019t on the recorded tape.</div>';
+    return;
+  }
+  if(titleEl) titleEl.textContent = t.title || t.key;
+  if(statusEl) statusEl.innerHTML = replayTaskStatusPill(t.status);
+
+  const chainTask = (k) => { const o = tasks.get(k); const lbl = (o && (o.title || o.key)) || k; return '<span class="aw-chain" onclick="replayTaskClick(\'' + String(k).replace(/'/g,"\\'") + '\')">' + esc(lbl) + '</span>'; };
+  const chainAgent = (name) => '<span class="aw-chain" onclick="replayAgentClick(\'' + String(name).replace(/'/g,"\\'") + '\')">' + esc(displayName(name)) + '</span>';
+
+  let h = '';
+  h += '<div class="irow ir">' + esc(t.key) + (t.role ? ' · ' + esc(t.role) : '') + '</div>';
+
+  // WHAT was done
+  h += '<div class="isec">what was done</div>';
+  if(t.instruction) h += '<div class="aw-instr">' + esc(t.instruction) + '</div>';
+  else h += '<div class="aw-honest">The tape recorded this task\u2019s title but not a full instruction.</div>';
+  if(t.commands.length){
+    h += '<div class="isec">commands <span class="ir">· run by ' + (t.claimedBy ? esc(displayName(t.claimedBy)) : 'its worker') + ' while holding this task</span></div>';
+    t.commands.slice(0, 12).forEach(c => {
+      const badge = c.ok ? '<span class="aw-ok" title="exit 0">✓</span>' : '<span class="aw-bad" title="exit ' + esc(String(c.exitCode)) + '">✗' + esc(String(c.exitCode)) + '</span>';
+      h += '<div class="aw-cmdrow"><span class="aw-prompt">❯</span> <span class="aw-cmd">' + esc(c.command) + '</span> ' + badge + '</div>';
+    });
+    if(t.commands.length > 12) h += '<div class="ir">…and ' + (t.commands.length - 12) + ' more</div>';
+  } else {
+    h += '<div class="aw-honest">No commands on the tape are attributable to this task (the tape links commands to a worker + time, not to a task key).</div>';
+  }
+  if(t.findings.length){
+    h += '<div class="isec">findings <span class="ir">· reported while holding this task</span></div>';
+    t.findings.slice(0, 8).forEach(f => {
+      h += '<div class="aw-frow"><span class="aw-fsev" style="color:' + sevColor(f.severity) + '">' + esc(f.severity || 'finding') + '</span> <span class="ir">' + esc(f.type) + '</span>' + (f.target ? ' <span style="color:var(--stage-fg,#e6e1d8)">' + esc(f.target) + '</span>' : '') + '</div>';
+    });
+  }
+
+  // WHO did it
+  h += '<div class="isec">who did it</div>';
+  const actors = Array.from(t.actors);
+  if(actors.length) h += '<div class="irow">' + actors.map(chainAgent).join(', ') + '</div>';
+  else h += '<div class="aw-honest">No worker ever claimed this task on the tape' + (t.status === 'queued' ? ' — it stayed queued.' : '.') + '</div>';
+
+  // WHAT TRIGGERED it
+  h += '<div class="isec">what triggered it</div>';
+  const triggers = [];
+  if(t.deps.length) triggers.push('depended on ' + t.deps.map(chainTask).join(', ') + ' finishing first');
+  if(t.supersedes) triggers.push('re-planned — it replaced an earlier task (the tape records the superseded task\u2019s id, not its key)');
+  if(triggers.length) h += '<div class="irow">' + triggers.join('<br>') + '</div>';
+  else h += '<div class="aw-honest">No upstream dependency or re-plan link is recorded on the tape for this task — it was part of the seed plan.</div>';
+
+  // WHAT CAME NEXT
+  h += '<div class="isec">what came next</div>';
+  if(t.next.length) h += '<div class="irow">unblocked ' + t.next.map(chainTask).join(', ') + '</div>';
+  else h += '<div class="aw-honest">Nothing downstream depended on this task on the tape.</div>';
+
+  // TIMING / STATUS
+  h += '<div class="isec">timing</div><div class="aw-timing">';
+  h += 'created ' + fmtReplayRelTs(t.createdTs, base);
+  if(t.claimedTs) h += ' · claimed ' + fmtReplayRelTs(t.claimedTs, base);
+  if(t.doneTs) h += ' · ' + esc(t.status) + ' ' + fmtReplayRelTs(t.doneTs, base);
+  h += ' <span class="ir">(from mission start)</span></div>';
+
+  win.bodyEl.innerHTML = h;
+}
+function refreshReplayTaskWindows(){
+  replayTaskWindows.forEach((_, key) => renderReplayTaskWindowBody(key));
 }
 
 function renderReplayPanels(){
@@ -1912,3 +2239,9 @@ window.closeReplay = closeReplay;
 window.cockpitView = cockpitView;
 window.replayAgentClick = replayAgentClick;
 window.openReplayAgentWindow = openReplayAgentWindow;
+window.replayTaskClick = replayTaskClick;
+window.openReplayTaskWindow = openReplayTaskWindow;
+// The swarm-canvas node map, exposed so the site canvas hit-test (and e2e) can
+// resolve a node's world position. A top-level `const` in a classic script is
+// NOT a window property by default; publish the reference explicitly.
+window.replayNodes = nodes;

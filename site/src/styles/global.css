@@ -22,6 +22,36 @@
   --line: #2a3344; --green: #8fdcab; --panel: #161b22; --sel: #1c2534; --card: rgba(22,27,34,.97);
   color-scheme: dark;
 }
+/* Cockpit SKINS — visual palettes for the replay instrument, switched from the
+   cockpit HUD's #skinsel (replay-player.js setSkin() sets data-skin on <html>).
+   Each skin overrides only the theme-invariant --stage-* tokens, so the swarm
+   canvas (which reads them via readColors()), the HUD, panels, console, agent
+   windows, cview lenses and the file-tree tab all re-theme in one move — and it
+   stays independent of the page's light/dark chrome. 'ranch' is the default
+   amber-on-dark palette (the :root values above), so it needs no override. */
+:root[data-skin="matrix"] {
+  --stage-bg: #000600; --stage-fg: #7df0a3; --stage-muted: #2ea043; --stage-amber: #39ff14;
+  --stage-red: #ff5f56; --stage-green: #39ff14; --stage-line: #0f5a2a; --stage-panel: #001a0d;
+}
+:root[data-skin="flock"] {
+  --stage-bg: #0c1418; --stage-fg: #e3edf2; --stage-muted: #7d94a0; --stage-amber: #68c2d8;
+  --stage-red: #e8503a; --stage-green: #8fdcab; --stage-line: #25404d; --stage-panel: #12202a;
+}
+:root[data-skin="hive"] {
+  --stage-bg: #14100a; --stage-fg: #f2e4c8; --stage-muted: #9c8a63; --stage-amber: #f0b429;
+  --stage-red: #e8503a; --stage-green: #c9d66a; --stage-line: #4a3d1f; --stage-panel: #1e1810;
+}
+/* matrix goes full phosphor-terminal: mono type across the instrument + a soft
+   green bloom on the accents so it reads as the CRT view devs asked for. */
+:root[data-skin="matrix"] #stage-frame,
+:root[data-skin="matrix"] #replay {
+  font-family: ui-monospace, SFMono-Regular, Menlo, "Cascadia Code", "Fira Code", monospace;
+}
+:root[data-skin="matrix"] #stage-frame #hud b,
+:root[data-skin="matrix"] #stage-frame #hud .tab.active,
+:root[data-skin="matrix"] #replay-title { text-shadow: 0 0 6px currentColor; }
+/* keep the renderer-emitted var(--green) in-key with each skin's palette */
+:root[data-skin="matrix"] #cockpit, :root[data-skin="matrix"] .cockpit-exec { --green: var(--stage-green); }
 * { box-sizing: border-box; }
 html, body {
   margin: 0; background: var(--bg); color: var(--fg);

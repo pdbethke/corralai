@@ -1,7 +1,7 @@
 ---
 // SPDX-License-Identifier: Elastic-2.0
 import '../styles/global.css';
-import { cockpitHudNoSkin, cockpitViews, cockpitTasks, cockpitAgents, cockpitFindings, cockpitExec } from '../lib/cockpitShell';
+import { cockpitHud, cockpitViews, cockpitTasks, cockpitAgents, cockpitFindings, cockpitExec } from '../lib/cockpitShell';
 import Header from '../components/Header.astro';
 
 const generatedAnalyticsModules = import.meta.glob('../data/generated/analytics.json', { eager: true });
@@ -109,7 +109,7 @@ const maxModelFindings = Math.max(1, ...analytics.findings_by_model.map((r: any)
   </div>
 
   <div id="stage-frame">
-    <div class="cockpit-hud" set:html={cockpitHudNoSkin} />
+    <div class="cockpit-hud" set:html={cockpitHud} />
     <div id="cockpit">
       <aside class="cockpit-tasks" set:html={cockpitTasks} />
       <div id="stage">
@@ -134,11 +134,6 @@ const maxModelFindings = Math.max(1, ...analytics.findings_by_model.map((r: any)
         <option value="1">1×</option><option value="2">2×</option><option value="4" selected>4×</option>
         <option value="8">8×</option><option value="16">16×</option>
       </select>
-      <!-- skin selector: reuses the product's SKINS/setSkin from the shared
-           renderer (the IIFE in replay-player.js auto-populates this #skinsel).
-           Client-side render only — flips the replay's vocabulary/background
-           (ranch → matrix rain → hive) with zero SSE/api dependency. -->
-      <select id="skinsel" onchange="pickSkin(this.value)" title="critter skin"></select>
     </div>
   </div>
 
@@ -426,17 +421,15 @@ const maxModelFindings = Math.max(1, ...analytics.findings_by_model.map((r: any)
       });
     }
   });
-  // pickSkin: flip the replay's critter skin (ranch/matrix/hive) — reuses the
-  // shared setSkin, then RESETS the persisted key back to 'ranch'. setSkin
-  // persists to localStorage, and the landing hero shares this origin — so a
-  // matrix/hive pick here is session-only eye candy that never leaks into the
-  // hero (which stays the clean default skin). setSkin already applied the
-  // visuals; we only undo the persistence and restore this page's title.
-  window.pickSkin = function (v) {
-    setSkin(v);
-    try { localStorage.setItem('corral-skin', 'ranch'); } catch (_) {}
-    document.title = 'Corralai — recordings';
-  };
+  // The cockpit HUD's #skinsel calls the shared setSkin, which repaints the
+  // whole instrument in the picked visual palette (matrix → green phosphor,
+  // etc.) and persists the choice so it carries across the demo. setSkin also
+  // clobbers document.title with the product's skin subtitle, so wrap it to
+  // restore this page's own title after each pick.
+  if (typeof window.setSkin === 'function') {
+    const _setSkin = window.setSkin;
+    window.setSkin = function (v) { _setSkin(v); document.title = 'Corralai — recordings'; };
+  }
   // replay-player.js's setSkin() clobbers document.title at script-load time
   // (same as on the landing page) — restore this page's own title.
   document.title = 'Corralai — recordings';

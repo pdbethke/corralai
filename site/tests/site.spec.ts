@@ -182,17 +182,41 @@ test('replay-player.js does not clobber the site title', async ({ page }) => {
   await expect(page).toHaveTitle('Corralai — a headless brain for a herd of AI agents');
 });
 
-test('the landing hero shows the full cockpit but never the skin selector — that stays /recordings-only', async ({ page }) => {
-  // Superseded by the "wow cockpit" redesign: the hero now renders the full
-  // cockpit shell (tasks/agents/findings/exec, shared with /recordings via
-  // internal/ui/web/cockpit-shell.html — see site/src/lib/cockpitShell.ts),
-  // not a bare canvas, so those four panels are now expected on the hero.
-  // The critter-skin selector stays /recordings-only, though: the shared
-  // IIFE only populates a #skinsel when one is present in the DOM, and the
-  // hero deliberately omits that element to keep the clean default skin.
+test('the landing hero shows the full cockpit AND the skin/theme selector, defaulting to ranch', async ({ page }) => {
+  // The hero renders the full cockpit shell (tasks/agents/findings/exec, shared
+  // with /recordings via internal/ui/web/cockpit-shell.html — see
+  // site/src/lib/cockpitShell.ts), not a bare canvas, so those four panels are
+  // expected. The visual skin/theme selector now ships in the cockpit HUD on
+  // the hero too (the previously-suppressed #skinsel is restored) so the demo
+  // exposes the matrix view devs asked for; it defaults to the clean ranch skin.
   await page.goto('/');
-  await expect(page.locator('#skinsel')).toHaveCount(0);
+  const skinsel = page.locator('#skinsel');
+  await expect(skinsel).toBeVisible();
+  await expect(skinsel).toHaveValue('ranch');
+  await expect(skinsel.locator('option')).toHaveCount(4); // ranch, flock, matrix, hive
   await expect(page.locator('#exec, #tasks, #agents, #findings')).toHaveCount(4);
+});
+
+test('the hero skin selector applies a real visual palette (matrix → green phosphor) and keeps the page title', async ({ page }) => {
+  await page.goto('/');
+  const skinsel = page.locator('#skinsel');
+  await expect(skinsel).toBeVisible();
+
+  // Switching to matrix sets data-skin on <html>, which re-themes the cockpit
+  // via the --stage-* token overrides (see site/src/styles/global.css).
+  await skinsel.selectOption('matrix');
+  await expect(page.locator('html')).toHaveAttribute('data-skin', 'matrix');
+  const bg = await page.evaluate(() =>
+    getComputedStyle(document.documentElement).getPropertyValue('--stage-bg').trim(),
+  );
+  expect(bg, 'matrix must repaint the stage near-black').toMatch(/#000|rgb\(0, ?[0-9], ?0\)|^#00/);
+  const accent = await page.evaluate(() =>
+    getComputedStyle(document.documentElement).getPropertyValue('--stage-amber').trim(),
+  );
+  expect(accent.toLowerCase(), 'matrix accent must be phosphor green').toContain('#39ff14');
+
+  // The picked skin repaints but must not steal the branded page title.
+  await expect(page).toHaveTitle('Corralai — a headless brain for a herd of AI agents');
 });
 
 test('the GitHub link resolves and points at the real repo, everywhere it appears', async ({ page, request }) => {

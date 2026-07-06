@@ -341,6 +341,12 @@ function skin(){ return SKINS[skinName]; }
 function setSkin(n){
   if(!SKINS[n]) return;
   skinName = n; localStorage.setItem('corral-skin', n);
+  // Drive the visual palette: data-skin on <html> lets CSS override the
+  // theme-invariant --stage-* tokens per skin (see the site's global.css and
+  // the product's own stylesheet), so the canvas + HUD + panels + console +
+  // agent windows + file-tree all re-theme in one move (matrix → green
+  // phosphor, etc.). readColors() re-samples them for the next canvas paint.
+  try{ document.documentElement.setAttribute('data-skin', n); }catch(_){}
   const fav = document.querySelector('link[rel="icon"]');
   if(fav) fav.href = "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>" + skin().favicon + "</text></svg>";
   const sel = document.getElementById('skinsel'); if(sel) sel.value = n;
@@ -356,6 +362,10 @@ function setSkin(n){
   const emp = document.getElementById('empty'); if(emp) emp.textContent = skin().empty;
   const rtitle = document.getElementById('replay-title');
   if(rtitle) rtitle.textContent = skin().replay || SKINS.ranch.replay;
+  // guard: the load-time skin IIFE runs before `let C` is initialized (TDZ),
+  // so readColors() throws that first time — harmless, applyTheme() below reads
+  // colors once C exists; every later user-driven setSkin re-tints for real.
+  try{ readColors(); }catch(_){}
   try{ renderBg(); }catch(_){}
   try{ renderExec(); }catch(_){ /* repaint the console's idle line in the new skin's voice */ }
   try{ renderTopology(); }catch(_){ /* first paint may precede state init */ }

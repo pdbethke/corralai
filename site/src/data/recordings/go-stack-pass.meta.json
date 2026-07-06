@@ -1,0 +1,17 @@
+{
+  "directive": "Build a Go module named 'stack'. FIRST run 'go mod init stack' at the repo root to create go.mod, so 'go build ./...' works. Then implement package stack in stack.go at the module root: a LIFO stack of ints with New, Push, Pop, Peek, Len; Pop and Peek return an error when empty. Add table-driven tests in stack_test.go. Make 'go build ./...' and 'go test ./...' both pass from the root.",
+  "task_count": 20,
+  "done_task_count": 10,
+  "finding_count": 8,
+  "duration_seconds": 261.77,
+  "models": [
+    "ollama:qwen2.5-coder:14b"
+  ],
+  "platform": {
+    "inference": "local ollama",
+    "gpu": "NVIDIA GeForce RTX 5070 12GB",
+    "cpu": "AMD Ryzen 9 5900 12-Core",
+    "ram": "128GB",
+    "host": "linux/amd64"
+  }
+}

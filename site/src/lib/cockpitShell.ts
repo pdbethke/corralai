@@ -22,12 +22,10 @@ function section(name: string): string {
 }
 
 const hudSection = section('HUD');
+/** Full cockpit HUD — includes the #skinsel visual-theme selector and the
+ *  #themebtn. Both the landing hero (Hero.astro) and /recordings embed this so
+ *  the skin selector is visible + functional in the demo. */
 export const cockpitHud = hudSection;
-/** Landing hero: full HUD minus #skinsel (selector lives on /recordings only). */
-export const cockpitHudNoSkin = hudSection.replace(
-  /<select id="skinsel"[\s\S]*?<\/select>\s*/,
-  '',
-);
 export const cockpitViews = section('VIEWS');
 export const cockpitTasks = section('TASKS');
 export const cockpitAgents = section('AGENTS');

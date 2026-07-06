@@ -5,8 +5,8 @@ test('hero renders the canvas and the replay bar starts playing', async ({ page 
   await page.goto('/');
   await expect(page.locator('#c')).toBeVisible();
   await expect(page.locator('#replay')).toBeVisible();
-  // The scrub bar's max should reflect the baked golden-run event count
-  // (>0) shortly after load — proves startReplay(golden) actually ran.
+  // The scrub bar's max should reflect the baked hero recording's event
+  // count (>0) shortly after load — proves startReplay(golden) actually ran.
   await expect(async () => {
     const max = await page.locator('#replay-scrub').getAttribute('max');
     expect(Number(max)).toBeGreaterThan(0);

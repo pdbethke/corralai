@@ -1,6 +1,6 @@
 ---
 // SPDX-License-Identifier: Elastic-2.0
-import { cockpitHudNoSkin, cockpitViews, cockpitTasks, cockpitAgents, cockpitFindings, cockpitExec } from '../lib/cockpitShell';
+import { cockpitHud, cockpitViews, cockpitTasks, cockpitAgents, cockpitFindings, cockpitExec } from '../lib/cockpitShell';
 
 const generatedRecordings = import.meta.glob('../data/generated/recordings/*.json', { eager: true });
 const legacyRecordings = import.meta.glob('../data/recordings/*.json', { eager: true });
@@ -9,7 +9,7 @@ const hasGeneratedRecordings = Object.keys(generatedRecordings).some(
 );
 const preferredRecordings = hasGeneratedRecordings ? generatedRecordings : legacyRecordings;
 const fallbackRecordings = hasGeneratedRecordings ? legacyRecordings : {};
-const heroSlug = (process.env.CORRALAI_HERO_SLUG || 'golden-run').trim() || 'golden-run';
+const heroSlug = (process.env.CORRALAI_HERO_SLUG || 'go-stack-14b').trim() || 'go-stack-14b';
 
 function readRecordingModule(modules: Record<string, any>, slug: string, suffix: string) {
   const key = Object.keys(modules).find((p) => p.endsWith(`/${slug}${suffix}`));
@@ -68,7 +68,7 @@ const minutes = Math.round((meta.duration_seconds || 0) / 60);
     </p>
   </div>
   <div id="stage-frame">
-    <div class="cockpit-hud" set:html={cockpitHudNoSkin} />
+    <div class="cockpit-hud" set:html={cockpitHud} />
     <div id="cockpit">
       <aside class="cockpit-tasks" set:html={cockpitTasks} />
       <div id="stage">
@@ -289,6 +289,15 @@ const minutes = Math.round((meta.duration_seconds || 0) / 60);
     const stat = document.getElementById('stat');
     if (stat) stat.textContent = 'replaying · 4×';
   };
+  // The cockpit HUD's #skinsel calls the shared setSkin, which repaints the
+  // canvas/panels in the picked palette (matrix → green phosphor, etc.) AND
+  // clobbers document.title with the product's skin subtitle — restore the
+  // site's own title after each pick so the tab stays branded.
+  const HERO_TITLE = 'Corralai — a headless brain for a herd of AI agents';
+  if (typeof window.setSkin === 'function') {
+    const _setSkin = window.setSkin;
+    window.setSkin = function (v) { _setSkin(v); document.title = HERO_TITLE; };
+  }
   window.addEventListener('DOMContentLoaded', () => {
     setReplaySpeed(4);
     startReplay(golden).then(() => {

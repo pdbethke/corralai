@@ -326,26 +326,35 @@ test('pressing play at the end restarts from the top instead of sitting dead', a
   }).toPass({ timeout: 3000 });
 });
 
-test('the cockpit skin selector re-voices the replay client-side and never leaks into the hero', async ({ page }) => {
+test('the cockpit skin selector lives in the HUD, applies a real visual palette (matrix → green), and persists', async ({ page }) => {
   const slug = RECORDING_SLUGS.find((s) => s === 'golden-run') || RECORDING_SLUGS[0];
   test.skip(!slug, 'no recordings available');
   await openRecording(page, slug!);
+
+  // The selector is restored to the cockpit HUD (previously suppressed by
+  // cockpitHudNoSkin) — it must be VISIBLE and sit inside #hud.
   const skinsel = page.locator('#skinsel');
   await expect(skinsel).toBeVisible();
+  await expect(page.locator('#hud #skinsel')).toHaveCount(1);
   await expect(skinsel).toHaveValue('ranch'); // default ranch
   await expect(skinsel.locator('option')).toHaveCount(4); // ranch, flock, matrix, hive
 
   await skinsel.selectOption('matrix');
-  // matrix re-voices the replay title (SKINS.matrix.replay) — pure client render
+  // matrix re-voices the replay title (SKINS.matrix.replay)…
   await expect(page.locator('#replay-title')).toContainText('construct');
+  // …AND applies the matrix visual palette: data-skin on <html> + green tokens.
+  await expect(page.locator('html')).toHaveAttribute('data-skin', 'matrix');
+  const accent = await page.evaluate(() =>
+    getComputedStyle(document.documentElement).getPropertyValue('--stage-amber').trim().toLowerCase(),
+  );
+  expect(accent, 'matrix accent must be phosphor green').toContain('#39ff14');
   // the page keeps its own title, not the product's skin subtitle
   await expect(page).toHaveTitle('Corralai — recordings');
-  // persistence is reset to ranch so the choice is session-only and never
-  // leaks into the landing hero (shared origin)
+  // the pick persists so the matrix view carries across the demo
   const persisted = await page.evaluate(() => {
     try { return localStorage.getItem('corral-skin'); } catch (_) { return null; }
   });
-  expect(persisted, 'the site keeps the persisted skin at ranch so the hero stays clean').toBe('ranch');
+  expect(persisted, 'the skin choice persists across the demo').toBe('matrix');
 });
 
 test('thought beats render distinctly from actions in the console, interleaved by ts, and rebuild on scrub-back', async ({ page }) => {

@@ -129,6 +129,44 @@ func BuildReplayStream(q *queue.Store, tel *telemetry.Store, missionID int64) ([
 				out = append(out, ReplayEvent{TS: e.TS, Kind: e.Kind, Actor: e.Actor, Subject: e.Subject, Model: e.Model, Detail: e.Detail})
 			}
 		}
+
+		// Attribute every beat to the MODEL behind its actor. report_host emits
+		// host_seen (global, mission_id=0) carrying each agent's model+backend.
+		// Findings already stamp reporter_model at report time, but task and
+		// execution beats don't — so a model that only builds/tests would never
+		// show in the "work by model" view. Fold the agent→model map in and
+		// stamp any beat that doesn't already carry one (system actors like the
+		// verify-gate never report_host, so they stay honestly unattributed).
+		if lo, hi, ok := replaySpan(out); ok {
+			seen, err := tel.GlobalAmbienceBetween([]string{"host_seen"}, lo-3600, hi+60)
+			if err != nil {
+				return nil, err
+			}
+			model, backend := map[string]string{}, map[string]string{}
+			for _, e := range seen {
+				if m, _ := e.Detail["model"].(string); m != "" {
+					model[e.Actor] = m
+				}
+				if b, _ := e.Detail["backend"].(string); b != "" {
+					backend[e.Actor] = b
+				}
+			}
+			for i := range out {
+				if out[i].Model == "" {
+					if m, ok := model[out[i].Actor]; ok {
+						out[i].Model = m
+					}
+				}
+				if b, ok := backend[out[i].Actor]; ok {
+					if out[i].Detail == nil {
+						out[i].Detail = map[string]any{}
+					}
+					if _, has := out[i].Detail["backend"]; !has {
+						out[i].Detail["backend"] = b
+					}
+				}
+			}
+		}
 	}
 
 	sort.SliceStable(out, func(i, j int) bool {

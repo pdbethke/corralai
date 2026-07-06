@@ -199,7 +199,7 @@ services:
     # Default directive is deliberately SMALL so the full loop — build, findings,
     # re-plan, client review — converges in minutes on the bundled 7B model.
     # `make demo-mission-epic` (or DEMO_DIRECTIVE=...) runs the ambitious parser.
-    command: ["mission", "create", "--review", "${DEMO_DIRECTIVE:-Build a Go package 'stack' with a LIFO stack of ints: New, Push, Pop, Peek, Len; Pop/Peek return an error on empty. Include table-driven unit tests; make 'go build ./...' and 'go test ./...' pass}"]
+    command: ["mission", "create", "--review", "--record-story", "${DEMO_DIRECTIVE:-Build a Go package 'stack' with a LIFO stack of ints: New, Push, Pop, Peek, Len; Pop/Peek return an error on empty. Include table-driven unit tests; make 'go build ./...' and 'go test ./...' pass}"]
     depends_on: {brain: {condition: service_healthy}}
     restart: "no"
   mission-researcher:
@@ -312,7 +312,7 @@ services:
     # Default directive is deliberately SMALL so the full loop — build, findings,
     # re-plan, client review — converges in minutes on the bundled 7B model.
     # `make demo-mission-epic` (or DEMO_DIRECTIVE=...) runs the ambitious parser.
-    command: ["mission", "create", "--review", "${DEMO_DIRECTIVE:-Build a Go package 'stack' with a LIFO stack of ints: New, Push, Pop, Peek, Len; Pop/Peek return an error on empty. Include table-driven unit tests; make 'go build ./...' and 'go test ./...' pass}"]
+    command: ["mission", "create", "--review", "--record-story", "${DEMO_DIRECTIVE:-Build a Go package 'stack' with a LIFO stack of ints: New, Push, Pop, Peek, Len; Pop/Peek return an error on empty. Include table-driven unit tests; make 'go build ./...' and 'go test ./...' pass}"]
     depends_on: {brain: {condition: service_healthy}}
     restart: "no"
 

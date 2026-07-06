@@ -34,6 +34,16 @@ import Logo from './Logo.astro';
         </svg>
         <span>Star</span>
       </a>
+      <label class="sh-speed" title="Replay playback speed">
+        <span class="sh-speed-label">Speed</span>
+        <select id="sh-replay-speed" aria-label="Replay playback speed">
+          <option value="1">1×</option>
+          <option value="2" selected>2×</option>
+          <option value="4">4×</option>
+          <option value="8">8×</option>
+          <option value="16">16×</option>
+        </select>
+      </label>
       <button id="sh-theme-toggle" class="sh-theme" type="button" aria-label="Toggle light / dark theme" title="Toggle light / dark">
         <span class="sh-tt-icon" aria-hidden="true">🌙</span>
       </button>
@@ -115,6 +125,37 @@ import Logo from './Logo.astro';
   }
   .sh-star:hover { border-color: var(--stage-amber); color: var(--stage-amber); }
   .sh-staricon { color: var(--stage-amber); }
+  .sh-speed {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--stage-muted);
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .sh-speed-label { display: none; }
+  .sh-speed select {
+    appearance: none;
+    background: var(--stage-panel);
+    color: var(--stage-fg);
+    border: 1px solid var(--stage-line);
+    border-radius: 8px;
+    padding: 6px 24px 6px 10px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: border-color 0.12s ease;
+    background-image: linear-gradient(45deg, transparent 50%, var(--stage-muted) 50%),
+      linear-gradient(135deg, var(--stage-muted) 50%, transparent 50%);
+    background-position: calc(100% - 14px) calc(50% + 1px), calc(100% - 9px) calc(50% + 1px);
+    background-size: 5px 5px, 5px 5px;
+    background-repeat: no-repeat;
+  }
+  .sh-speed select:hover,
+  .sh-speed select:focus-visible { border-color: var(--stage-amber); outline: none; }
+  @media (min-width: 720px) {
+    .sh-speed-label { display: inline; }
+  }
   .sh-theme {
     width: 34px;
     height: 34px;
@@ -142,7 +183,16 @@ import Logo from './Logo.astro';
 
 <script is:inline>
   (function () {
-    var KEY = 'corralai-site-theme';
+    var THEME_KEY = 'corralai-site-theme';
+    var SPEED_KEY = 'corralai-replay-speed';
+    var SPEEDS = [1, 2, 4, 8, 16];
+    var DEFAULT_SPEED = 2;
+    function storedSpeed() {
+      try {
+        var n = Number(localStorage.getItem(SPEED_KEY));
+        return SPEEDS.indexOf(n) >= 0 ? n : DEFAULT_SPEED;
+      } catch (e) { return DEFAULT_SPEED; }
+    }
     function paint() {
       var b = document.getElementById('sh-theme-toggle');
       if (!b) return;
@@ -153,13 +203,23 @@ import Logo from './Logo.astro';
     function wire() {
       paint();
       var b = document.getElementById('sh-theme-toggle');
-      if (!b) return;
-      b.addEventListener('click', function () {
-        var next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
-        document.documentElement.setAttribute('data-theme', next);
-        try { localStorage.setItem(KEY, next); } catch (e) {}
-        paint();
-      });
+      if (b) {
+        b.addEventListener('click', function () {
+          var next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+          document.documentElement.setAttribute('data-theme', next);
+          try { localStorage.setItem(THEME_KEY, next); } catch (e) {}
+          paint();
+        });
+      }
+      var speed = document.getElementById('sh-replay-speed');
+      if (speed) {
+        speed.value = String(storedSpeed());
+        speed.addEventListener('change', function () {
+          var v = Number(this.value);
+          try { localStorage.setItem(SPEED_KEY, String(v)); } catch (e) {}
+          if (typeof window.setReplaySpeed === 'function') window.setReplaySpeed(v);
+        });
+      }
     }
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', wire);
     else wire();

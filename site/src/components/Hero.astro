@@ -60,7 +60,7 @@ const minutes = Math.round((meta.duration_seconds || 0) / 60);
       {/* single line: Astro collapses a text→newline→expression boundary to
           ZERO chars (not a space), which rendered "done),56 findings" when
           this wrapped after the comma */}
-      And here it is doing exactly that: a real recorded mission — {meta.task_count} tasks ({meta.done_task_count} done), {meta.finding_count} findings, {minutes}m — replaying at 4× below.
+      And here it is doing exactly that: a real recorded mission — {meta.task_count} tasks ({meta.done_task_count} done), {meta.finding_count} findings, {minutes}m — replaying at 2× below.
     </p>
     <div class="ctas">
       <a class="cta" href="https://github.com/pdbethke/corralai">View on GitHub</a>
@@ -96,10 +96,6 @@ const minutes = Math.round((meta.duration_seconds || 0) / 60);
         <button id="replay-playbtn" onclick="toggleReplayPlay()">▶ play</button>
         <input type="range" id="replay-scrub" min="0" max="0" value="0" oninput="seekReplay(+this.value)">
         <span id="replay-label">0 / 0</span>
-        <select onchange="setReplaySpeed(+this.value)" title="playback speed">
-          <option value="1">1×</option><option value="2">2×</option><option value="4" selected>4×</option>
-          <option value="8">8×</option><option value="16">16×</option>
-        </select>
       </div>
     </div>
   </div>
@@ -302,7 +298,11 @@ const minutes = Math.round((meta.duration_seconds || 0) / 60);
     // The HUD's #stat defaults to the live cockpit's "connecting…" — there is
     // no live brain here, so pin it to an honest static label for the replay.
     const stat = document.getElementById('stat');
-    if (stat) stat.textContent = 'replaying · 4×';
+    if (stat) {
+      const speedSel = document.getElementById('sh-replay-speed');
+      const speed = speedSel ? speedSel.value : '2';
+      stat.textContent = 'replaying · ' + speed + '×';
+    }
   };
   // The cockpit HUD's #skinsel calls the shared setSkin, which repaints the
   // canvas/panels in the picked palette (matrix → green phosphor, etc.) AND
@@ -314,9 +314,8 @@ const minutes = Math.round((meta.duration_seconds || 0) / 60);
     window.setSkin = function (v) { _setSkin(v); document.title = HERO_TITLE; };
   }
   window.addEventListener('DOMContentLoaded', () => {
-    setReplaySpeed(4);
     startReplay(golden).then(() => {
-      toggleReplayPlay(); // autoplay-equivalent: starts playing immediately at 4x
+      toggleReplayPlay(); // autoplay-equivalent: starts playing immediately at header speed
     });
   });
   // replay-player.js's setSkin() (run synchronously at its own script-load

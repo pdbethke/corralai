@@ -57,6 +57,48 @@ test('the header theme toggle flips the persisted site theme', async ({ page }) 
   expect(persisted, 'the theme choice must persist').toBe(after);
 });
 
+test('the header replay speed control defaults to 2x and affects playback', async ({ page }) => {
+  await page.goto('/');
+  const speed = page.locator('#sh-replay-speed');
+  await expect(speed).toBeVisible();
+  await expect(speed).toHaveValue('2');
+
+  await expect(async () => {
+    const max = await page.locator('#replay-scrub').getAttribute('max');
+    expect(Number(max)).toBeGreaterThan(0);
+  }).toPass({ timeout: 5000 });
+
+  const startIdx = await page.evaluate(() => Number(document.getElementById('replay-scrub')!.value));
+  await speed.selectOption('1');
+  await page.waitForTimeout(450);
+  const slowIdx = await page.evaluate(() => Number(document.getElementById('replay-scrub')!.value));
+  const slowDelta = slowIdx - startIdx;
+
+  await page.evaluate((idx) => {
+    const scrub = document.getElementById('replay-scrub') as HTMLInputElement;
+    scrub.value = String(idx);
+    scrub.dispatchEvent(new Event('input'));
+  }, startIdx);
+  await speed.selectOption('16');
+  await page.waitForTimeout(450);
+  const fastIdx = await page.evaluate(() => Number(document.getElementById('replay-scrub')!.value));
+  const fastDelta = fastIdx - startIdx;
+
+  expect(fastDelta, '16× must advance the scrubber faster than 1×').toBeGreaterThan(slowDelta);
+
+  await speed.selectOption('8');
+  const persisted = await page.evaluate(() => localStorage.getItem('corralai-replay-speed'));
+  expect(persisted).toBe('8');
+});
+
+test('the recordings page exposes the same header replay speed control', async ({ page }) => {
+  await page.goto('/recordings/');
+  const speed = page.locator('#sh-replay-speed');
+  await expect(speed).toBeVisible();
+  await speed.selectOption('4');
+  expect(await page.evaluate(() => localStorage.getItem('corralai-replay-speed'))).toBe('4');
+});
+
 test('the recordings page carries the same site header', async ({ page }) => {
   await page.goto('/recordings/');
   const header = page.locator('header.site-header');

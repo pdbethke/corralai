@@ -133,10 +133,6 @@ const maxModelFindings = Math.max(1, ...analytics.findings_by_model.map((r: any)
         <button id="replay-playbtn" onclick="toggleReplayPlay()">▶ play</button>
         <input type="range" id="replay-scrub" min="0" max="0" value="0" oninput="seekReplay(+this.value)">
         <span id="replay-label">0 / 0</span>
-        <select onchange="setReplaySpeed(+this.value)" title="playback speed">
-          <option value="1">1×</option><option value="2">2×</option><option value="4" selected>4×</option>
-          <option value="8">8×</option><option value="16">16×</option>
-        </select>
       </div>
     </div>
   </div>
@@ -401,7 +397,6 @@ const maxModelFindings = Math.max(1, ...analytics.findings_by_model.map((r: any)
     if (typeof cockpitView === 'function') cockpitView(v);
   };
   window.addEventListener('DOMContentLoaded', () => {
-    setReplaySpeed(4);
     const activate = (btn) => {
       document.querySelectorAll('.card.active').forEach((c) => c.classList.remove('active'));
       btn.classList.add('active');

@@ -864,7 +864,16 @@ let es = null; // lazy: the embedding page calls `es = connectSSE()` itself for 
 // corralai.dev embed with no brain running can hand startReplay() a baked
 // JSON file's contents and get the identical player. openReplay(missionId)
 // is just the live-corral convenience wrapper around that URL form.
-let replayEvents = [], replayIdx = 0, replayPlaying = false, replaySpeed = 1, replayTimer = null, replaySSEPaused = false;
+const REPLAY_SPEED_KEY = 'corralai-replay-speed';
+const DEFAULT_REPLAY_SPEED = 2;
+const REPLAY_SPEEDS = [1, 2, 4, 8, 16];
+let replayEvents = [], replayIdx = 0, replayPlaying = false, replaySpeed = DEFAULT_REPLAY_SPEED, replayTimer = null, replaySSEPaused = false;
+function storedReplaySpeed(){
+  try {
+    const n = Number(localStorage.getItem(REPLAY_SPEED_KEY));
+    return REPLAY_SPEEDS.includes(n) ? n : DEFAULT_REPLAY_SPEED;
+  } catch(e) { return DEFAULT_REPLAY_SPEED; }
+}
 // inReplay: true from startReplay() through stopReplaySession() — the single
 // switch that keeps replay genuinely backend-free (see requestChatter above).
 // Distinct from replaySSEPaused, which only means anything when a live SSE
@@ -1842,7 +1851,15 @@ function toggleReplayPlay(){
   if(btn) btn.textContent = replayPlaying ? '⏸ pause' : '▶ play';
   if(replayPlaying) replayStep();
 }
-function setReplaySpeed(x){ replaySpeed = x || 1; }
+function setReplaySpeed(x){
+  const n = Number(x);
+  replaySpeed = REPLAY_SPEEDS.includes(n) ? n : DEFAULT_REPLAY_SPEED;
+  const sel = document.getElementById('sh-replay-speed');
+  if(sel) sel.value = String(replaySpeed);
+  try { localStorage.setItem(REPLAY_SPEED_KEY, String(replaySpeed)); } catch(e) {}
+  const stat = document.getElementById('stat');
+  if(stat && /replaying/.test(stat.textContent)) stat.textContent = 'replaying · ' + replaySpeed + '×';
+}
 function replayStep(){
   if(replayIdx >= replayEvents.length){
     replayPlaying = false;
@@ -2245,3 +2262,4 @@ window.openReplayTaskWindow = openReplayTaskWindow;
 // resolve a node's world position. A top-level `const` in a classic script is
 // NOT a window property by default; publish the reference explicitly.
 window.replayNodes = nodes;
+setReplaySpeed(storedReplaySpeed());

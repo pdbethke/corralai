@@ -1,0 +1,17 @@
+{
+  "directive": "Build a Go package 'stack' with a LIFO stack of ints: New, Push, Pop, Peek, Len; Pop/Peek return an error on empty. Include table-driven unit tests; make 'go build ./...' and 'go test ./...' pass",
+  "task_count": 60,
+  "done_task_count": 58,
+  "finding_count": 83,
+  "duration_seconds": 2938.6887979507446,
+  "models": [
+    "ollama:qwen2.5-coder:7b"
+  ],
+  "platform": {
+    "inference": "local ollama",
+    "gpu": "NVIDIA GeForce RTX 5070 12GB",
+    "cpu": "AMD Ryzen 9 5900 12-Core",
+    "ram": "128GB",
+    "host": "linux/amd64"
+  }
+}

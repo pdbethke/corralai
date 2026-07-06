@@ -201,11 +201,12 @@ ran on and honest per-run analytics — and every published run links to a
 - **Harness-agnostic** — the herd "contract" is nothing but MCP calls against the
   brain (`bootstrap → claim_task → work → complete_task`), and `corral-agent` is
   merely its reference implementation. **`corral-harness`** loops any headless
-  coding agent as a herd member — Claude Code, Gemini CLI, Codex — each bringing its own
-  tool loop, sandbox, and **its own auth**: a Claude Code agent runs on a Claude
-  Pro/Max subscription, no API billing. Verified end-to-end: a headless Claude
-  Code agent claimed research → design → gated build, wrote real files, ran
-  `go build`/`go test`, and satisfied the verification gate.
+  coding agent as a herd member — Claude Code, Gemini CLI, Codex, and GitHub
+  Copilot CLI — each bringing its own tool loop, sandbox, and **its own auth**:
+  they run on their own Pro/Max/Plus subscriptions, no API billing. Verified
+  end-to-end: all four coordinated on one real mission — a Go recursive-descent
+  parser built, tested, and gated with no API keys ([the all-frontier tape](https://corralai.dev/recordings))
+  — and mixed in the *same* mission with a local 7B ([the mixtape](https://corralai.dev/recordings)).
   ```bash
   CORRAL_BRAIN=http://localhost:9019 AGENT_NAME=Cody AGENT_ROLE=builder \
   HARNESS_CMD='claude -p {prompt} --mcp-config {mcp_config} --allowedTools "mcp__corral,Read,Write,Edit,Bash" --permission-mode acceptEdits' \

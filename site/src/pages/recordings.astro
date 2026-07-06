@@ -66,7 +66,12 @@ for (const [p, mod] of Object.entries(streamModules)) {
     platform: platformLine(meta.platform),
   });
 }
-cards.sort((a, b) => a.slug.localeCompare(b.slug));
+// Lead with the thesis tape (the mixtape — local + frontier in one mission),
+// then the rest alphabetically. The spread reads best mixtape-first.
+const LEAD = 'mixtape';
+cards.sort((a, b) =>
+  (a.slug === LEAD ? -1 : b.slug === LEAD ? 1 : 0) || a.slug.localeCompare(b.slug),
+);
 const maxModelFindings = Math.max(1, ...analytics.findings_by_model.map((r: any) => r.findings));
 const tasksByModel = analytics.tasks_by_model ?? [];
 const maxModelTasks = Math.max(1, ...tasksByModel.map((r: any) => r.tasks));
@@ -88,9 +93,20 @@ const maxModelTasks = Math.max(1, ...tasksByModel.map((r: any) => r.tasks));
   <div class="section">
     <h1>Recordings</h1>
     <p>
-      Real recorded missions — every one exported through the same deny-list +
-      human-manifest privacy gate as the landing page's hero. Pick a card to
-      replay it on the corral canvas below.
+      Three real missions, chosen to make one point: <strong>the brain doesn't
+      care what's behind an agent.</strong> One tape runs entirely on a local 7B
+      (Qwen, on a single RTX 5070). One runs entirely on frontier CLIs (Claude,
+      Gemini, Codex) — each on its own subscription, no API keys. And the
+      <strong>mixtape</strong> puts them in the <em>same</em> mission: a cheap
+      local model doing the design, frontier models building and hardening, one
+      deterministic gate holding all of them honest. No vendor lock-in, no
+      orchestration rewrite to swap a model.
+    </p>
+    <p>
+      Every one was exported through the same deny-list + human-manifest privacy
+      gate as the landing hero. Open any tab in a replay and scrub — the
+      <strong>work-by-model</strong> table below shows which model did what.
+      Pick a card to replay it on the corral canvas.
     </p>
     <div class="cards">
       {cards.map((c) => (

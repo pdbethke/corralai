@@ -433,6 +433,9 @@ const maxModelTasks = Math.max(1, ...tasksByModel.map((r: any) => r.tasks));
   // proposals — the same shared code the hero uses.
   window.setView = function (v) {
     if (typeof cockpitView === 'function') cockpitView(v);
+    // No live brain here — pin #stat to "replaying"; the speed sits in #hud-speed.
+    const stat = document.getElementById('stat');
+    if (stat) stat.textContent = 'replaying';
   };
   window.addEventListener('DOMContentLoaded', () => {
     const activate = (btn) => {

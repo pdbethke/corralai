@@ -60,12 +60,12 @@ test('the header theme toggle flips the persisted site theme', async ({ page }) 
 test('the replay bar themes the DEMO WINDOW independently of the site; speed still syncs with the header', async ({ page }) => {
   await page.goto('/');
   const bottomTheme = page.locator('#replay-theme-toggle');
-  const bottomSpeed = page.locator('#replay-speed');
+  const hudSpeed = page.locator('#hud-speed'); // speed control now lives in the top HUD, shown while replaying
   const headerTheme = page.locator('#sh-theme-toggle');
   const headerSpeed = page.locator('#sh-replay-speed');
 
   await expect(bottomTheme).toBeVisible();
-  await expect(bottomSpeed).toBeVisible();
+  await expect(hudSpeed).toBeVisible();
 
   const html = page.locator('html');
   // The replay-bar moon is the DEMO WINDOW's own control: it flips
@@ -84,20 +84,23 @@ test('the replay bar themes the DEMO WINDOW independently of the site; speed sti
   expect(await html.getAttribute('data-theme'), 'header toggle must switch the site theme').not.toBe(siteBefore);
   expect(await html.getAttribute('data-cockpit-theme'), 'site toggle must NOT change the demo window').toBe(cockpitAfter);
 
-  // Speed, by contrast, IS shared between the header and the replay bar.
-  await bottomSpeed.selectOption('8');
+  // Speed, by contrast, IS shared between the header and the cockpit HUD control.
+  await hudSpeed.selectOption('8');
   await expect(headerSpeed).toHaveValue('8');
-  await expect(bottomSpeed).toHaveValue('8');
+  await expect(hudSpeed).toHaveValue('8');
   expect(await page.evaluate(() => localStorage.getItem('corralai-replay-speed'))).toBe('8');
 
   await headerSpeed.selectOption('4');
-  await expect(bottomSpeed).toHaveValue('4');
+  await expect(hudSpeed).toHaveValue('4');
 });
 
 test('the recordings replay bar themes the demo window independently; speed still syncs', async ({ page }) => {
   await page.goto('/recordings/');
   await expect(page.locator('#replay-theme-toggle')).toBeVisible();
-  await expect(page.locator('#replay-speed')).toBeVisible();
+  // The HUD speed control shows only while a tape is playing; pick a card first.
+  await page.locator('.card[data-slug]').first().click();
+  const hudSpeed = page.locator('#hud-speed');
+  await expect(hudSpeed).toBeVisible();
 
   const html = page.locator('html');
   const siteBefore = await html.getAttribute('data-theme');
@@ -105,7 +108,7 @@ test('the recordings replay bar themes the demo window independently; speed stil
   expect(await html.getAttribute('data-cockpit-theme')).toBe('light');
   expect(await html.getAttribute('data-theme'), 'demo-window toggle must NOT change the site theme').toBe(siteBefore);
 
-  await page.locator('#replay-speed').selectOption('16');
+  await hudSpeed.selectOption('16');
   await expect(page.locator('#sh-replay-speed')).toHaveValue('16');
 });
 

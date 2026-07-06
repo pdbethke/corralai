@@ -47,6 +47,7 @@
     <a class="tab" id="tab-completed" onclick="setView('completed')">completed</a>
   </span>
   <span class="stat" id="stat">connecting…</span>
+  <select id="hud-speed" data-replay-speed onchange="setReplaySpeed(+this.value)" title="playback speed" aria-label="Replay playback speed" style="pointer-events:auto;margin-left:6px;background:var(--stage-panel);color:var(--stage-fg);border:1px solid var(--stage-line);border-radius:6px;font-size:11px;padding:2px 4px;display:none"><option value="1">1×</option><option value="2" selected>2×</option><option value="4">4×</option><option value="8">8×</option><option value="16">16×</option></select>
   <span class="stat" id="whoami" title="who the brain sees you as"></span>
   <select id="skinsel" onchange="setSkin(this.value)" title="critter skin" style="pointer-events:auto;margin-left:8px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:6px;font-size:11px;padding:2px 4px"></select>
   <button type="button" class="tab" id="themebtn" onclick="toggleTheme()" title="toggle light / dark" aria-label="Switch to light theme" style="pointer-events:auto;margin-left:6px;background:none;border:none;font:inherit">☾</button>

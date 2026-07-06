@@ -8,15 +8,8 @@
 // light/dark (the header moon). site-controls.js wires both, separately.
 ---
 <div class="replay-bar-controls">
-  <label class="rbc-speed" title="Replay playback speed">
-    <select id="replay-speed" data-replay-speed aria-label="Replay playback speed">
-      <option value="1">1×</option>
-      <option value="2" selected>2×</option>
-      <option value="4">4×</option>
-      <option value="8">8×</option>
-      <option value="16">16×</option>
-    </select>
-  </label>
+  <!-- Playback speed moved to the top HUD ("replaying [ N× ]", #hud-speed); the
+       bottom bar keeps just the demo-window light/dark toggle. -->
   <button
     id="replay-theme-toggle"
     class="rbc-theme"

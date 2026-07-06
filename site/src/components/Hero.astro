@@ -305,13 +305,10 @@ const minutes = Math.round((meta.duration_seconds || 0) / 60);
   window.setView = function (v) {
     if (typeof cockpitView === 'function') cockpitView(v);
     // The HUD's #stat defaults to the live cockpit's "connecting…" — there is
-    // no live brain here, so pin it to an honest static label for the replay.
+    // no live brain here, so pin it to an honest static label. The speed number
+    // now lives in the #hud-speed dropdown right beside it ("replaying [ 2× ]").
     const stat = document.getElementById('stat');
-    if (stat) {
-      const speedSel = document.querySelector('[data-replay-speed]');
-      const speed = speedSel ? speedSel.value : '2';
-      stat.textContent = 'replaying · ' + speed + '×';
-    }
+    if (stat) stat.textContent = 'replaying';
   };
   // The cockpit HUD's #skinsel calls the shared setSkin, which repaints the
   // canvas/panels in the picked palette (matrix → green phosphor, etc.) AND

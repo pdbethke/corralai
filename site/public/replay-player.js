@@ -1494,7 +1494,16 @@ function renderReplayWindowBody(name){
   }
   if(ra && ra.lastCmd){ h += '<div class="isec">last command</div><div class="irow ir">❯ ' + esc(ra.lastCmd) + '</div>'; }
   if(ra && ra.lastTs){ h += '<div class="isec">last activity</div><div class="irow ir">' + esc(replayWindowActivityLabel(ra)) + '</div>'; }
-  h += '<div class="isec">memory / mcp / skills <span class="ir">· not recorded per agent on the tape — see the live view for this</span></div>';
+  // The tape doesn't capture each agent's per-agent memory / MCP / skills state
+  // — but the LIVE view does. Show the real section shape (the same three the
+  // running app renders), each flagged live-only, so a viewer sees exactly what
+  // WOULD populate here in a live mission instead of hitting one flat dead end.
+  h += '<div class="isec">memory it can recall <span class="ir">· live view only</span></div>';
+  h += '<div class="irow ir">the shared pool of knowledge every agent reads — and writes back to</div>';
+  h += '<div class="isec">mcp endpoints it can use <span class="ir">· live view only</span></div>';
+  h += '<div class="irow ir">the tools this agent is wired into</div>';
+  h += '<div class="isec">skills it has <span class="ir">· fleet skills, synced to every member — live view only</span></div>';
+  h += '<div class="irow ir">the playbooks the herd has learned and shared</div>';
   win.bodyEl.innerHTML = h;
 }
 
@@ -1812,6 +1821,9 @@ function startReplay(streamOrUrl){
     replayIdx = 0;
     replayPlaying = false;
     inReplay = true;
+    // The playback-speed control lives in the top HUD ("replaying [ N× ]"), shown
+    // only while a tape is loaded (hidden during live coordination).
+    { const hs = document.getElementById('hud-speed'); if(hs) hs.style.display = ''; }
     if(replayTimer){ clearTimeout(replayTimer); replayTimer = null; }
     nodes.clear(); links.length = 0; bursts.length = 0; buzzes.length = 0;
     resetReplayPanels();
@@ -1834,6 +1846,7 @@ function openReplay(missionId){
 function stopReplaySession(){
   replayPlaying = false;
   inReplay = false;
+  { const hs = document.getElementById('hud-speed'); if(hs) hs.style.display = 'none'; }
   if(replayTimer){ clearTimeout(replayTimer); replayTimer = null; }
   const btn = document.getElementById('replay-playbtn');
   if(btn) btn.textContent = '▶ play';
@@ -1880,7 +1893,7 @@ function setReplaySpeed(x){
   });
   try { localStorage.setItem(REPLAY_SPEED_KEY, String(replaySpeed)); } catch(e) {}
   const stat = document.getElementById('stat');
-  if(stat && /replaying/.test(stat.textContent)) stat.textContent = 'replaying · ' + replaySpeed + '×';
+  if(stat && /replaying/.test(stat.textContent)) stat.textContent = 'replaying'; // speed now shows in the #hud-speed dropdown beside it
 }
 function replayStep(){
   if(replayIdx >= replayEvents.length){

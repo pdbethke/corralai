@@ -914,6 +914,7 @@ function renderReplayAgents(){
   // exactly like the console/tasks/findings panels.
   const ap = document.getElementById('agents');
   if(!ap) return;
+  ensureSiteReplayStyles();   // site-only (no-op in the product): roster hover/arowsel + .aw-win chrome
   const ags = Array.from(replayAgents.values());
   if(!ags.length){ ap.innerHTML = '<div class="feedhdr">agents · 0</div><div class="row" style="opacity:.6">no agents yet…</div>'; return; }
   ags.sort((a,b)=>((b.held.size>0?0:1)-(a.held.size>0?0:1)) || ((displayName(a.name)>displayName(b.name))?1:-1));
@@ -924,7 +925,15 @@ function renderReplayAgents(){
       const doing = work
         ? (a.lastCmd ? '❯ ' + esc(a.lastCmd.slice(0,22)) : 'on ' + esc(Array.from(a.held)[0] || ''))
         : 'idle';
-      return '<div class="arow"><span class="adot" style="background:' + dot + '"></span><b style="color:' + roleColor(a.role) + '">' + esc(displayName(a.name)) + '</b> <span class="ameta">' + esc(a.role || '') + '</span><span class="adoing">' + doing + '</span></div>';
+      // clickable roster row → agent detail, exactly like the product's live
+      // roster (index.html's renderAgents): onclick + cursor:pointer + title,
+      // plus the .arowsel selected-state highlight when this agent's inspector
+      // window is open. replayAgentClick routes to the product's native
+      // floating window where it exists, and to the ported site window
+      // (openReplayAgentWindow, below) on the backend-free site.
+      const clickName = (a.name || '').replace(/'/g, "\\'");
+      const sel = (typeof replayWindows !== 'undefined' && replayWindows.has(a.name)) ? ' arowsel' : '';
+      return '<div class="arow' + sel + '" style="cursor:pointer" onclick="replayAgentClick(\'' + clickName + '\')" title="open ' + esc(displayName(a.name)) + ' detail"><span class="adot" style="background:' + dot + '"></span><b style="color:' + roleColor(a.role) + '">' + esc(displayName(a.name)) + '</b> <span class="ameta">' + esc(a.role || '') + '</span><span class="adoing">' + doing + '</span></div>';
     }).join('');
 }
 // renderReplayLine: one console row, action or reasoning. Actions render
@@ -1020,6 +1029,227 @@ function refreshReplayAgentWindows(){
   if(typeof agentWindows === 'undefined' || typeof renderAgentWindowBody !== 'function') return;
   agentWindows.forEach((_, name) => renderAgentWindowBody(name));
 }
+
+// ===========================================================================
+// Site replay agent-inspector WINDOW — a faithful port of the product's
+// floating .aw-win (internal/ui/web/index.html). The live product opens a
+// draggable inspector window when you click a roster row (index.html's
+// selectAgent → openAgentWindow → renderAgentWindowBody); a static site embed
+// has NONE of that machinery — agentWindows / openAgentWindow /
+// renderAgentWindowBody all live in index.html and are treated as product-only
+// throughout this file (see the typeof-guards above). This is the site's
+// equivalent: the SAME .aw-win chrome (draggable header, role, close button,
+// an ask box) reproduced verbatim in class names + layout so it looks
+// identical, with its body reconstructed PURELY from the recorded tape
+// (replayAgents / replayTasks) — never a /api/* call, honoring this page's
+// backend-free-by-contract promise (recordings.spec.ts fails on any /api/*).
+//
+// Deliberately NON-colliding with the product: distinct identifiers
+// (replayWindows vs agentWindows, openReplayAgentWindow vs openAgentWindow) so
+// loading this shared file into index.html — which declares its own — never
+// double-declares. replayAgentClick() dispatches to the product's native
+// window when present and only falls back to this port on the site, so the
+// product's behavior is completely untouched.
+// ===========================================================================
+const replayWindows = new Map();   // name -> {el, bodyEl}
+let rwZ = 100;                      // z-index counter, raised on any interaction
+let rwDrag = null;                  // {el, ox, oy} — set on title-bar mousedown
+
+// Shared drag move/end (one pair of listeners for all windows). Inert in the
+// product: rwDrag is only ever set by the site's openReplayAgentWindow.
+addEventListener('mousemove', ev => {
+  if(!rwDrag) return;
+  let nx = ev.clientX - rwDrag.ox, ny = ev.clientY - rwDrag.oy;
+  nx = Math.max(0, Math.min(window.innerWidth - rwDrag.el.offsetWidth, nx));
+  ny = Math.max(0, Math.min(window.innerHeight - 60, ny));
+  rwDrag.el.style.left = nx + 'px';
+  rwDrag.el.style.top = ny + 'px';
+});
+addEventListener('mouseup', () => { rwDrag = null; });
+
+// replayAgentClick: the roster-row / canvas click entry point. Product first
+// (its native floating window, unchanged), site fallback (this port).
+function replayAgentClick(name){
+  if(!name) return;
+  if(typeof openAgentWindow === 'function'){ openAgentWindow(name); return; }
+  openReplayAgentWindow(name);
+}
+
+// ensureSiteReplayStyles: inject the roster affordance + .aw-win chrome CSS
+// ONCE, and ONLY on a site embed. The product ships its own copies in
+// index.html's <style>, so re-injecting there would duplicate/override them —
+// hence the openAgentWindow guard. Styled off the theme-invariant --stage-*
+// palette (dark in both site themes) with hard dark fallbacks, so the window
+// reads as the same dark instrument as the product's wherever it floats.
+function ensureSiteReplayStyles(){
+  if(typeof openAgentWindow === 'function') return;   // product owns these already
+  if(document.getElementById('replay-aw-style')) return;
+  const s = document.createElement('style');
+  s.id = 'replay-aw-style';
+  s.textContent = `
+#replay-windows { position:fixed; inset:0; z-index:1200; pointer-events:none; }
+.arow.arowsel { background:var(--stage-line,#33405a); outline:1px solid var(--stage-line,#33405a); border-radius:5px; }
+.arow:hover { background:var(--stage-panel,#161b22); border-radius:5px; }
+.aw-win { position:absolute; width:370px; background:var(--stage-panel,#161b22); color:var(--stage-fg,#e6e1d8);
+  border:1px solid var(--stage-line,#33405a); border-radius:10px; box-shadow:0 10px 34px rgba(0,0,0,.55);
+  display:flex; flex-direction:column; pointer-events:auto; max-height:80vh;
+  font:13px/1.5 ui-sans-serif,system-ui,sans-serif; }
+.aw-title { display:flex; align-items:center; gap:7px; padding:9px 12px; background:var(--stage-bg,#0e1116);
+  border-bottom:1px solid var(--stage-line,#33405a); border-radius:10px 10px 0 0; cursor:move; user-select:none;
+  flex:none; min-width:0; }
+.aw-title b { font-size:14px; color:var(--stage-amber,#e8a838); min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.aw-title .aw-role { color:var(--stage-muted,#8a8170); font-size:11.5px; flex:none; white-space:nowrap; }
+.aw-badge { background:rgba(79,195,217,.15); border:1px solid rgba(79,195,217,.4); color:#4fc3d9;
+  font-size:9.5px; padding:1px 6px; border-radius:4px; font-family:ui-monospace,monospace; letter-spacing:.3px; flex:none; white-space:nowrap; }
+.aw-close { margin-left:auto; cursor:pointer; color:var(--stage-muted,#8a8170); font-size:14px; line-height:1; padding:1px 3px; border-radius:3px; flex:none; }
+.aw-close:hover { color:var(--stage-fg,#e6e1d8); background:rgba(232,80,58,.18); }
+.aw-body { flex:1 1 auto; overflow-y:auto; padding:10px 14px; font-size:13px; min-height:60px; }
+.aw-body .isec { color:var(--stage-muted,#8a8170); font-size:11px; text-transform:uppercase; letter-spacing:.5px; margin:11px 0 4px; }
+.aw-body .irow { padding:4px 0; border-bottom:1px solid var(--stage-line,#33405a); line-height:1.4; }
+.aw-body .ir { color:var(--stage-muted,#8a8170); font-size:12px; }
+.aw-body .itask { color:var(--stage-fg,#e6e1d8); line-height:1.45; padding:3px 0; }
+.aw-body .igreen { color:var(--stage-green,#8fdcab); }
+.aw-body .iconf { color:var(--stage-red,#e8503a); }
+.aw-footer { flex:none; border-top:1px solid var(--stage-line,#33405a); padding:8px 10px; display:flex; flex-direction:column; gap:4px; }
+.aw-footer .aw-askbox { display:flex; gap:6px; }
+.aw-footer .aw-askbox input { flex:1; background:var(--stage-bg,#0e1116); border:1px solid var(--stage-line,#33405a); color:var(--stage-fg,#e6e1d8); border-radius:6px; padding:5px 8px; font-size:12px; outline:none; min-width:0; }
+.aw-footer .aw-askbox input:focus { border-color:var(--stage-amber,#e8a838); }
+.aw-footer .aw-askbox button { background:var(--stage-amber,#e8a838); color:var(--stage-bg,#0e1116); border:none; border-radius:6px; padding:0 11px; cursor:pointer; font-size:12px; font-weight:600; white-space:nowrap; }
+.aw-footer .aw-askbox button:disabled { opacity:.5; cursor:default; }
+.aw-footer .aw-ans { color:var(--stage-fg,#e6e1d8); font-size:12px; line-height:1.5; font-style:italic; border-left:2px solid var(--stage-amber,#e8a838); padding-left:8px; white-space:pre-wrap; max-height:72px; overflow-y:auto; }
+.aw-footer .aw-q2 { color:var(--stage-muted,#8a8170); font-size:11px; }
+`;
+  document.head.appendChild(s);
+}
+
+// openReplayAgentWindow: the site's openAgentWindow — same cascade offset,
+// z-raise, draggable title bar, close button and ask footer as the product's,
+// but its body is renderReplayWindowBody (tape state) and its ask never
+// touches the network.
+function openReplayAgentWindow(name){
+  ensureSiteReplayStyles();
+  if(replayWindows.has(name)){
+    const w = replayWindows.get(name); rwZ++; w.el.style.zIndex = rwZ;
+    const inp = w.el.querySelector('.aw-ask-input'); if(inp) inp.focus();
+    return;
+  }
+  let layer = document.getElementById('replay-windows');
+  if(!layer){ layer = document.createElement('div'); layer.id = 'replay-windows'; document.body.appendChild(layer); }
+  const numWin = replayWindows.size;
+  const offset = (numWin % 8) * 30;
+  const left = Math.min(90 + offset, window.innerWidth - 390);
+  const top = Math.min(90 + offset, window.innerHeight - 340);
+
+  const el = document.createElement('div');
+  el.className = 'aw-win';
+  el.style.left = left + 'px'; el.style.top = top + 'px';
+  rwZ++; el.style.zIndex = rwZ;
+
+  const ra = replayAgents.get(name) || {};
+  const role = ra.role || '';
+  const leaf = name.split('/').pop() || name;
+  el.innerHTML =
+    '<div class="aw-title">' +
+      '<b>' + esc(displayName(leaf)) + '</b>' +
+      (role ? '<span class="aw-role">' + esc(role) + '</span>' : '') +
+      '<span class="aw-close" title="close" aria-label="close">✕</span>' +
+    '</div>' +
+    '<div class="aw-body"><div class="ir" style="font-style:italic;font-size:12px">loading…</div></div>' +
+    '<div class="aw-footer">' +
+      '<div class="aw-askbox">' +
+        '<input class="aw-ask-input" placeholder="what have you done? what\'s blocking you?" autocomplete="off">' +
+        '<button class="aw-ask-btn">ask</button>' +
+      '</div>' +
+      '<div class="aw-answer-slot"></div>' +
+    '</div>';
+  layer.appendChild(el);
+
+  const bodyEl = el.querySelector('.aw-body');
+  const win = { el, bodyEl };
+  replayWindows.set(name, win);
+
+  el.addEventListener('mousedown', () => { rwZ++; win.el.style.zIndex = rwZ; }, true);
+  el.querySelector('.aw-close').addEventListener('click', ev => {
+    ev.stopPropagation();
+    replayWindows.delete(name);
+    el.remove();
+    try{ renderReplayAgents(); }catch(_){}   // drop the .arowsel highlight
+  });
+
+  const titleBar = el.querySelector('.aw-title');
+  titleBar.addEventListener('mousedown', ev => {
+    if(ev.target.classList.contains('aw-close')) return;
+    rwDrag = { el, ox: ev.clientX - el.offsetLeft, oy: ev.clientY - el.offsetTop };
+    ev.preventDefault();
+  });
+
+  // The ask box is part of the product window's chrome, so it's here for
+  // visual parity — but the herd only talks on a LIVE brain, and this page is
+  // backend-free by contract (no /api/* ever). So it answers with an honest
+  // static line rather than calling /api/ask.
+  const askInput = el.querySelector('.aw-ask-input');
+  const askBtn = el.querySelector('.aw-ask-btn');
+  const doAsk = () => {
+    const q = askInput ? askInput.value.trim() : '';
+    if(!q) return;
+    const slot = el.querySelector('.aw-answer-slot');
+    if(slot) slot.innerHTML = '<div class="aw-q2">▸ ' + esc(q) + '</div><div class="aw-ans">This is a recording — ' + esc(displayName(leaf)) + ' only answers on a live brain. Run the corral to ask it yourself.</div>';
+    if(askInput){ askInput.value = ''; askInput.focus(); }
+  };
+  askBtn.addEventListener('click', doAsk);
+  askInput.addEventListener('keydown', ev => { if(ev.key === 'Enter'){ ev.preventDefault(); doAsk(); } });
+
+  renderReplayWindowBody(name);
+  try{ renderReplayAgents(); }catch(_){}   // paint the .arowsel highlight
+  askInput.focus();
+}
+
+// replayWindowActivityLabel: one-line description of the agent's most recent
+// beat (twin of index.html's replayActivityLabel) — verbatim from the tape.
+function replayWindowActivityLabel(ra){
+  const kind = ra.lastKind || '', desc = ra.lastDesc || '';
+  if(kind === 'exec') return '❯ ' + desc;
+  if(kind === 'thought') return '💭 ' + desc;
+  if(kind === 'claimed') return 'claimed ' + desc;
+  if(kind === 'task_done') return 'finished ' + desc;
+  if(kind === 'task_cancelled') return 'cancelled ' + desc;
+  if(kind === 'task_superseded') return 'superseded ' + desc;
+  return desc;
+}
+
+// renderReplayWindowBody: the site window's body, reconstructed from the tape —
+// mirrors index.html's renderReplayAgentWindowBody (holding / working-on /
+// completed / last-command / last-activity), and is HONEST about what the tape
+// never recorded (per-agent memory / mcp / skills — live-only /api/agent
+// fields), labeling that gap instead of fabricating it.
+function renderReplayWindowBody(name){
+  const win = replayWindows.get(name);
+  if(!win) return;
+  const ra = replayAgents.get(name);
+  const heldKeys = ra ? Array.from(ra.held) : [];
+  const holdingTasks = heldKeys.map(k => replayTasks.get(k) || { key: k, title: k });
+
+  let h = '<div class="isec">stats <span class="ir">· reconstructed from the tape</span></div>';
+  h += '<div class="irow">holding <b>' + holdingTasks.length + '</b> · completed <b>' + ((ra && ra.completed) || 0) + '</b></div>';
+  if(ra && ra.lastTaskTitle){ h += '<div class="isec">working on</div><div class="itask">' + esc(ra.lastTaskTitle) + '</div>'; }
+  if(holdingTasks.length){
+    h += '<div class="isec">holding</div>';
+    holdingTasks.forEach(t => { h += '<div class="irow"><span class="igreen">' + esc(t.title || t.key) + '</span></div>'; });
+  }
+  if(ra && ra.lastCmd){ h += '<div class="isec">last command</div><div class="irow ir">❯ ' + esc(ra.lastCmd) + '</div>'; }
+  if(ra && ra.lastTs){ h += '<div class="isec">last activity</div><div class="irow ir">' + esc(replayWindowActivityLabel(ra)) + '</div>'; }
+  h += '<div class="isec">memory / mcp / skills <span class="ir">· not recorded per agent on the tape — see the live view for this</span></div>';
+  win.bodyEl.innerHTML = h;
+}
+
+// refreshReplayWindows: repaint every open site window from the reconstructed
+// tape state at the current scrub position (twin of refreshReplayAgentWindows
+// for the product). Inert in the product — replayWindows is only ever
+// populated by the site's openReplayAgentWindow.
+function refreshReplayWindows(){
+  replayWindows.forEach((_, name) => renderReplayWindowBody(name));
+}
+
 function renderReplayPanels(){
   if(!inReplay) return; // the live page's panels belong to apply()/SSE
   renderReplayConsole();
@@ -1027,6 +1257,7 @@ function renderReplayPanels(){
   renderReplayAgents();
   renderReplayFindings();
   refreshReplayAgentWindows();
+  refreshReplayWindows();
 }
 
 function startReplay(streamOrUrl){
@@ -1452,3 +1683,5 @@ window.seekReplay = seekReplay;
 window.setReplaySpeed = setReplaySpeed;
 window.closeReplay = closeReplay;
 window.cockpitView = cockpitView;
+window.replayAgentClick = replayAgentClick;
+window.openReplayAgentWindow = openReplayAgentWindow;

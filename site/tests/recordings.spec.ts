@@ -185,6 +185,59 @@ test('the agents roster reconstructs the herd from claims + executions', async (
   expect(await page.locator('#agents .arow').count(), 'roster must rebuild from 0').toBe(0);
 });
 
+test('clicking a roster agent opens the faithful floating inspector window (tape-only, no /api/*, survives scrub)', async ({ page }) => {
+  const slug = RECORDING_SLUGS.find((s) => s === 'golden-run') || RECORDING_SLUGS[0];
+  test.skip(!slug, 'no recordings available');
+
+  // HARD CONSTRAINT: the window must reconstruct detail from the tape alone —
+  // never a brain call. Fail the test on ANY /api/* request the click triggers.
+  const apiCalls: string[] = [];
+  page.on('request', (req) => {
+    if (new URL(req.url()).pathname.startsWith('/api/')) apiCalls.push(req.url());
+  });
+
+  await openRecording(page, slug!);
+  const scrub = page.locator('#replay-scrub');
+  const max = Number(await scrub.getAttribute('max'));
+
+  // Park the playhead at the end so playback stops and the roster is static.
+  await seekTo(page, max);
+  await expect(page.locator('#replay-label')).toContainText(`${max} / ${max}`);
+
+  const firstRow = page.locator('#agents .arow').first();
+  await expect(firstRow).toBeVisible();
+  const name = (await firstRow.locator('b').innerText()).trim();
+  const role = (await firstRow.locator('.ameta').innerText()).trim();
+
+  // Click the row → the ported .aw-win floating window appears (mirrors the
+  // product's selectAgent → openAgentWindow).
+  await firstRow.click();
+  const win = page.locator('.aw-win');
+  await expect(win).toBeVisible();
+  await expect(win.locator('.aw-title b')).toHaveText(name);
+  if (role) await expect(win.locator('.aw-role')).toHaveText(role);
+
+  // The clicked row picks up the .arowsel selected-state, exactly like the app.
+  await expect(page.locator('#agents .arow.arowsel')).toHaveCount(1);
+
+  // Body is reconstructed from the tape: the stats section is always present.
+  await expect(win.locator('.aw-body')).toContainText('holding');
+  await expect(win.locator('.aw-body')).toContainText('completed');
+  // The ask box is present (visual parity) but is backend-free by contract.
+  await expect(win.locator('.aw-ask-input')).toBeVisible();
+
+  // Survives a scrub: seek elsewhere; the window stays open and repaints.
+  await seekTo(page, Math.floor(max * 0.4));
+  await expect(win).toBeVisible();
+  await expect(win.locator('.aw-body')).toContainText('holding');
+
+  // Close button removes it.
+  await win.locator('.aw-close').click();
+  await expect(page.locator('.aw-win')).toHaveCount(0);
+
+  expect(apiCalls, `the tape-only inspector must never call the brain: ${apiCalls.join(', ')}`).toHaveLength(0);
+});
+
 test('the console surfaces BOTH the builder and the tester (command from subject, not detail.command)', async ({ page }) => {
   // python-ratelimit: Bob (builder) ran 5 commands, Tess (tester) ran 3 — the
   // console reads the command from the beat's `subject`, so both actors appear.

@@ -34,13 +34,15 @@ const minutes = Math.round((meta.duration_seconds || 0) / 60);
 ---
 <section id="hero">
   <div class="hero-copy">
-    <h1>A headless brain that corrals a herd of AI agents — any model — into one mission, over a shared pool of knowledge that grows as they learn.</h1>
+    <h1>A headless brain that corrals a herd of AI agents — mixing any models, local and frontier — into one mission, over a shared pool of knowledge that grows as they learn.</h1>
     <p class="pitch">
       Corral is coordination infrastructure, not a demo reel. Give it one
       directive and it decomposes the work into a mission, hands tasks to a
-      herd of agents that can each run a <em>different</em> model — local 7B
-      to frontier, no vendor lock-in — inside real fences: every command runs
-      jailed, and the only way code leaves is a reviewed pull request. The
+      herd of agents that can each run a <em>different</em> model — cheap local
+      agents (Ollama, 7B and up) for the grunt work, frontier agents for the
+      hard reasoning, side by side in the same mission, with no vendor
+      lock-in — inside real fences: every command runs jailed, and the only
+      way code leaves is a reviewed pull request. The
       herd verifies its own work against a deterministic gate, re-plans when
       it hits problems, and — the part that compounds — every agent draws on
       one shared pool of memory and skills and writes back what it learns, so
@@ -48,9 +50,11 @@ const minutes = Math.round((meta.duration_seconds || 0) / 60);
       behind a human gate.
     </p>
     <p class="proof-row">
-      <span>Runs free on a local 7B model — no API keys</span>
+      <span>Any model — local or frontier — mixed in one mission</span>
       <span aria-hidden="true">·</span>
-      <span>Agents propose, you approve — code merges by reviewed PR, admin actions sit behind a human gate</span>
+      <span>Bring your own billing: metered API keys <em>or</em> a subscription CLI (Codex, Claude Max)</span>
+      <span aria-hidden="true">·</span>
+      <span>Agents propose, you approve — reviewed-PR merges, human-gated admin</span>
     </p>
     <p class="caption">
       {/* single line: Astro collapses a text→newline→expression boundary to

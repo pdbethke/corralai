@@ -1,0 +1,50 @@
+---
+// SPDX-License-Identifier: Elastic-2.0
+// Site light/dark toggle. The marketing pages are daylight-by-default; this lets
+// a visitor flip to a dark palette (harmonized with the cockpit's always-dark
+// viewport) and persists the choice. Pairs with the no-flash <head> script each
+// page carries, which sets data-theme before first paint from localStorage /
+// prefers-color-scheme. Starlight /docs have their own toggle; this covers the
+// hand-authored pages (/, /recordings).
+---
+<button id="theme-toggle" class="theme-toggle" type="button" aria-label="Toggle light / dark theme" title="Toggle light / dark">
+  <span class="tt-icon" aria-hidden="true">🌙</span>
+</button>
+<style>
+  .theme-toggle {
+    position: fixed; top: 14px; right: 16px; z-index: 60;
+    width: 38px; height: 38px; border-radius: 999px;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: var(--card); color: var(--fg);
+    border: 1px solid var(--line); cursor: pointer;
+    box-shadow: 0 2px 10px rgba(30,20,0,.12); font-size: 17px; line-height: 1;
+    transition: transform .12s ease, box-shadow .12s ease;
+  }
+  .theme-toggle:hover { transform: translateY(-1px); box-shadow: 0 4px 14px rgba(30,20,0,.18); }
+  .theme-toggle:active { transform: translateY(0); }
+  @media (max-width: 640px) { .theme-toggle { top: 10px; right: 10px; width: 34px; height: 34px; font-size: 15px; } }
+</style>
+<script is:inline>
+  (function () {
+    var KEY = 'corralai-site-theme';
+    function icon() {
+      var b = document.getElementById('theme-toggle');
+      if (!b) return;
+      var dark = document.documentElement.getAttribute('data-theme') === 'dark';
+      b.querySelector('.tt-icon').textContent = dark ? '☀️' : '🌙';
+    }
+    function wire() {
+      icon();
+      var b = document.getElementById('theme-toggle');
+      if (!b) return;
+      b.addEventListener('click', function () {
+        var next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+        document.documentElement.setAttribute('data-theme', next);
+        try { localStorage.setItem(KEY, next); } catch (e) {}
+        icon();
+      });
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', wire);
+    else wire();
+  })();
+</script>

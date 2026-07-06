@@ -10,6 +10,7 @@ import WatchItBack from '../components/WatchItBack.astro';
 import TeamsInfra from '../components/TeamsInfra.astro';
 import Quickstart from '../components/Quickstart.astro';
 import SiteFooter from '../components/SiteFooter.astro';
+import ThemeToggle from '../components/ThemeToggle.astro';
 
 const title = 'Corralai — a headless brain for a herd of AI agents';
 const description = 'A headless brain orchestrates a herd of AI agents across any model — local to frontier — to plan, build, verify, and re-plan real missions behind real fences, human-gated. Every run recorded and replayable.';
@@ -20,6 +21,10 @@ const url = 'https://corralai.dev/';
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- No-flash theme: set data-theme before first paint from saved choice / OS. -->
+  <script is:inline>
+    (function () { try { var t = localStorage.getItem('corralai-site-theme'); if (!t) t = (window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light'; document.documentElement.setAttribute('data-theme', t); } catch (e) {} })();
+  </script>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <title>{title}</title>
   <meta name="description" content={description} />
@@ -39,6 +44,7 @@ const url = 'https://corralai.dev/';
   <meta name="twitter:image" content="https://corralai.dev/og-image.png" />
 </head>
 <body>
+  <ThemeToggle />
   <Hero />
   <HowItWorks />
   <ProofBand />

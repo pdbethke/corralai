@@ -12,6 +12,16 @@
   --stage-red: #e8503a; --stage-green: #8fdcab; --stage-line: #33405a; --stage-panel: #161b22;
   color-scheme: light;
 }
+/* Dark mode — the page adopts the cockpit's own dark palette (the --stage-*
+   tokens), so in dark the whole site reads as one dark instrument rather than a
+   light page with a dark window cut into it. Opt-in via the toggle (persisted);
+   the no-flash head script + prefers-color-scheme set the initial value. The
+   --stage-* tokens are unchanged (the replay viewport is dark in both modes). */
+:root[data-theme="dark"] {
+  --bg: #0e1116; --fg: #e6e1d8; --muted: #8a8170; --amber: #e8a838; --red: #e8503a;
+  --line: #2a3344; --green: #8fdcab; --panel: #161b22; --sel: #1c2534; --card: rgba(22,27,34,.97);
+  color-scheme: dark;
+}
 * { box-sizing: border-box; }
 html, body {
   margin: 0; background: var(--bg); color: var(--fg);

@@ -3,6 +3,7 @@
 import '../styles/global.css';
 import analytics from '../data/analytics.json';
 import { cockpitHud, cockpitViews, cockpitTasks, cockpitAgents, cockpitFindings, cockpitExec } from '../lib/cockpitShell';
+import ThemeToggle from '../components/ThemeToggle.astro';
 
 // Enumerate committed recordings by glob — no manifest file to drift.
 const streamModules = import.meta.glob('../data/recordings/*.json', { eager: true });
@@ -57,11 +58,16 @@ const maxModelFindings = Math.max(1, ...analytics.findings_by_model.map((r: any)
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- No-flash theme: set data-theme before first paint from saved choice / OS. -->
+  <script is:inline>
+    (function () { try { var t = localStorage.getItem('corralai-site-theme'); if (!t) t = (window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light'; document.documentElement.setAttribute('data-theme', t); } catch (e) {} })();
+  </script>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <title>Corralai — recordings</title>
   <meta name="description" content="A gallery of real recorded corralai missions — different directives, different model mixes, every one replayable." />
 </head>
 <body>
+  <ThemeToggle />
   <div class="section">
     <h1>Recordings</h1>
     <p>

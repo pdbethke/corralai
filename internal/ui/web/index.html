@@ -1065,6 +1065,8 @@ function uploadLookbookItem() {
   });
 }
 
+let currentLookbookItems = [];
+
 function loadLookbookItems() {
   const container = document.getElementById('lb-gallery-container');
   if (!container) return;
@@ -1072,6 +1074,7 @@ function loadLookbookItems() {
   fetch('/api/lookbook')
     .then(r => r.json())
     .then(items => {
+      currentLookbookItems = items || [];
       if (!items || items.length === 0) {
         container.innerHTML = '<div class="pmt" style="grid-column: 1/-1;">No reference designs in your Lookbook yet. Upload one on the left!</div>';
         return;
@@ -1080,16 +1083,16 @@ function loadLookbookItems() {
       container.innerHTML = items.map(item => `
         <div class="lb-card">
           <div class="lb-card-thumb-wrap" onclick="zoomLookbook(${item.id})">
-            <img class="lb-card-thumb" src="/api/lookbook/image?id=${item.id}" alt="\${esc(item.name)}">
+            <img class="lb-card-thumb" src="/api/lookbook/image?id=${item.id}" alt="${esc(item.name)}">
           </div>
           <div class="lb-card-body">
-            <h3 class="lb-card-title">\${esc(item.name)}</h3>
-            <p class="lb-card-desc">\${esc(item.description)}</p>
+            <h3 class="lb-card-title">${esc(item.name)}</h3>
+            <p class="lb-card-desc">${esc(item.description)}</p>
             <div class="lb-card-actions">
-              <button class="lb-card-btn" onclick="copyLookbookGuidelines(\\\`\${esc(item.description).replace(/\`/g, '\\\\`').replace(/\\$/g, '\\\\$')}\\\`)">
+              <button class="lb-card-btn" onclick="copyLookbookItemGuidelines(${item.id})">
                 📋 Copy Prompt
               </button>
-              <button class="lb-card-btn delete" onclick="deleteLookbookItem(\${item.id})">
+              <button class="lb-card-btn delete" onclick="deleteLookbookItem(${item.id})">
                 🗑 Delete
               </button>
             </div>
@@ -1121,6 +1124,13 @@ function deleteLookbookItem(id) {
     .catch(err => {
       alert("Failed to delete: " + err.message);
     });
+}
+
+function copyLookbookItemGuidelines(id) {
+  const item = currentLookbookItems.find(i => i.id === id);
+  if (item) {
+    copyLookbookGuidelines(item.description);
+  }
 }
 
 function copyLookbookGuidelines(text) {
@@ -1423,7 +1433,6 @@ function renderTasks(){
     }).join('');
 }
 es = connectSSE();
-renderLaunchTab();
 
 // Identity chip: who the brain sees you as + role (superuser controls hang off this).
 let ME = { principal:'', is_superuser:false };
@@ -2315,6 +2324,7 @@ function letCorralChoose() {
     alert('Error choosing agents: ' + err);
   });
 }
+renderLaunchTab();
 </script>
 </body>
 </html>

@@ -247,7 +247,7 @@ func main() {
 			// transport error here is how a claim once got orphaned into a
 			// mission-wide deadlock. Callers still receive the error-shaped JSON.
 			fmt.Printf("[%s] ⚠ brain call %s failed: %v\n", name, tool, err)
-			
+
 			errStr := err.Error()
 			if strings.Contains(errStr, "connection closed") ||
 				strings.Contains(errStr, "client is closing") ||
@@ -258,7 +258,7 @@ func main() {
 				fmt.Printf("[%s] FATAL: connection to brain is dead. Exiting to trigger container restart.\n", name)
 				os.Exit(2)
 			}
-			
+
 			return fmt.Sprintf(`{"error":%q}`, err.Error())
 		}
 		if res.IsError {

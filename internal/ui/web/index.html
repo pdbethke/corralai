@@ -370,6 +370,153 @@
     overflow-y:auto; }
   .aw-footer .aw-q2 { color:var(--muted); font-size:11px; }
 
+  /* Active Swarm Builds styling */
+  .active-builds-section {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 14px 18px;
+    margin-bottom: 20px;
+    max-width: 800px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+  .active-builds-title {
+    font-size: 11.5px;
+    font-weight: 700;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .active-builds-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .active-build-card {
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 10px 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    transition: border-color 0.2s, box-shadow 0.2s;
+  }
+  .active-build-card:hover {
+    border-color: var(--amber);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  }
+  .active-build-info {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: 1;
+    min-width: 0;
+  }
+  .active-build-indicator {
+    position: relative;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .active-build-indicator.running {
+    background-color: var(--green);
+    box-shadow: 0 0 8px var(--green);
+  }
+  .active-build-indicator.running::after {
+    content: '';
+    position: absolute;
+    top: -4px; left: -4px; right: -4px; bottom: -4px;
+    border-radius: 50%;
+    border: 2px solid var(--green);
+    animation: active-pulse 1.8s infinite ease-in-out;
+  }
+  .active-build-indicator.paused {
+    background-color: var(--red);
+    box-shadow: 0 0 8px var(--red);
+  }
+  .active-build-indicator.awaiting_review {
+    background-color: var(--amber);
+    box-shadow: 0 0 8px var(--amber);
+  }
+  .active-build-indicator.awaiting_review::after {
+    content: '';
+    position: absolute;
+    top: -4px; left: -4px; right: -4px; bottom: -4px;
+    border-radius: 50%;
+    border: 2px solid var(--amber);
+    animation: active-pulse 1.8s infinite ease-in-out;
+  }
+  @keyframes active-pulse {
+    0% { transform: scale(0.6); opacity: 1; }
+    100% { transform: scale(1.6); opacity: 0; }
+  }
+  .active-build-details {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+  .active-build-meta {
+    font-size: 10.5px;
+    color: var(--muted);
+    font-weight: 500;
+  }
+  .active-build-dir {
+    font-size: 12.5px;
+    color: var(--fg);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .active-build-status-badge {
+    font-size: 9.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    padding: 2px 6px;
+    border-radius: 4px;
+    letter-spacing: 0.5px;
+  }
+  .active-build-status-badge.running {
+    background: rgba(46, 204, 113, 0.1);
+    color: var(--green);
+    border: 1px solid rgba(46, 204, 113, 0.2);
+  }
+  .active-build-status-badge.paused {
+    background: rgba(231, 76, 60, 0.1);
+    color: var(--red);
+    border: 1px solid rgba(231, 76, 60, 0.2);
+  }
+  .active-build-status-badge.awaiting_review {
+    background: rgba(241, 196, 15, 0.1);
+    color: var(--amber);
+    border: 1px solid rgba(241, 196, 15, 0.2);
+  }
+  .active-build-go-btn {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    color: var(--fg);
+    border-radius: 6px;
+    padding: 6px 12px;
+    font-size: 11.5px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.2s, border-color 0.2s, color 0.2s;
+  }
+  .active-build-go-btn:hover {
+    background: var(--bg);
+    border-color: var(--amber);
+    color: var(--amber);
+  }
+
   /* Mission Composer */
   .mcomposer { max-width:800px; margin:0 auto 20px; padding:18px 20px; background:var(--panel); border:1px dashed var(--line); border-radius:10px; }
   .mc-title { font-size:15px; font-weight:600; color:var(--fg); margin-bottom:12px; display:flex; align-items:center; gap:8px; }
@@ -453,8 +600,8 @@
   <div id="hud">
   <b>CorralAI</b><span class="sub" id="skinsub">— the corral</span>
   <span id="tabs">
-  <a class="tab active" id="tab-swarm" onclick="setView('swarm')">swarm</a>
-  <a class="tab" id="tab-launch" onclick="setView('launch')">launch</a>
+  <a class="tab active" id="tab-launch" onclick="setView('launch')">launch</a>
+  <a class="tab" id="tab-swarm" onclick="setView('swarm')">swarm</a>
   <a class="tab" id="tab-progress" onclick="setView('progress')">progress</a>
   <a class="tab" id="tab-topology" onclick="setView('topology')">topology</a>
   <a class="tab" id="tab-memory" onclick="setView('memory')">memory</a>
@@ -509,7 +656,7 @@
   <!-- COCKPIT-SHELL:EXEC:BEGIN -->
   <div id="exec"></div>
   <!-- COCKPIT-SHELL:EXEC:END -->
-  <div id="launch"></div>
+  <div id="launch" class="show"></div>
   <div id="progress"></div>
   <div id="topology"></div>
   <div id="proposals"></div>
@@ -1112,11 +1259,67 @@ function renderProgress(){
   el.innerHTML = missionsHtml;
 }
 
+function renderActiveMissions(activeDiv) {
+  if (!lastState || !lastState.missions) {
+    activeDiv.style.display = 'none';
+    return;
+  }
+  const active = lastState.missions.filter(m => m.status === 'running' || m.status === 'paused' || m.status === 'awaiting_review');
+  if (active.length === 0) {
+    activeDiv.style.display = 'none';
+    return;
+  }
+  
+  activeDiv.style.display = 'block';
+  activeDiv.innerHTML = `
+    <div class="active-builds-section">
+      <div class="active-builds-title">⚡ Swarm Builds In Progress</div>
+      <div class="active-builds-list">
+        ${active.map(m => {
+          let statusText = m.status;
+          if (m.status === 'awaiting_review') statusText = 'Awaiting Operator';
+          
+          return `
+            <div class="active-build-card">
+              <div class="active-build-info">
+                <span class="active-build-indicator ${m.status}"></span>
+                <div class="active-build-details">
+                  <div class="active-build-meta">Mission #${m.id} · Sprint ${m.sprint || 1}</div>
+                  <div class="active-build-dir" title="${esc(m.directive)}">${esc(m.directive)}</div>
+                </div>
+              </div>
+              <div style="display:flex; align-items:center; gap:12px;">
+                <span class="active-build-status-badge ${m.status}">${statusText}</span>
+                <button class="active-build-go-btn" onclick="setView('progress')">Go to Live Swarm Progress →</button>
+              </div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    </div>
+  `;
+}
+
 function renderLaunchTab(force) {
   const el = document.getElementById('launch');
   if (!el) return;
-  if (force || !el.innerHTML.trim()) {
-    el.innerHTML = renderComposer();
+  
+  let activeDiv = document.getElementById('mc-active-missions');
+  let formDiv = document.getElementById('mc-composer-form');
+  if (!activeDiv || !formDiv) {
+    el.innerHTML = `
+      <div id="mc-active-missions" style="max-width:800px; margin: 0 auto 20px auto;"></div>
+      <div id="mc-composer-form"></div>
+    `;
+    activeDiv = document.getElementById('mc-active-missions');
+    formDiv = document.getElementById('mc-composer-form');
+    force = true;
+  }
+  
+  renderActiveMissions(activeDiv);
+  
+  if (force || !formDiv.innerHTML.trim()) {
+    formDiv.innerHTML = renderComposer();
   }
 }
 
@@ -1220,6 +1423,7 @@ function renderTasks(){
     }).join('');
 }
 es = connectSSE();
+renderLaunchTab();
 
 // Identity chip: who the brain sees you as + role (superuser controls hang off this).
 let ME = { principal:'', is_superuser:false };
@@ -1236,7 +1440,7 @@ fetch('/api/me').then(r=>r.json()).then(m=>{
 }).catch(()=>{});
 
 // ---- view switching + memory browser ----
-let view = 'swarm', memInit = false, _t, _sel;
+let view = 'launch', memInit = false, _t, _sel;
 function setView(v){
   view = v;
   if(v !== 'replay') stopReplaySession(); // leaving replay by ANY route ends the session cleanly (no-op otherwise)

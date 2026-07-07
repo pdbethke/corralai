@@ -897,6 +897,14 @@ func (s *Server) createMission(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if s.missions != nil {
+		running, err := s.missions.RunningMissions()
+		if err == nil && len(running) > 0 {
+			http.Error(w, fmt.Sprintf("Conflict: Swarm mission #%d is already running in this workspace. Wait for it to finish or cancel/pause it before launching a new one.", running[0].ID), http.StatusConflict)
+			return
+		}
+	}
+
 	// Update role models if provided
 	if len(body.RoleModels) > 0 && s.roleModels != nil {
 		for k, v := range body.RoleModels {

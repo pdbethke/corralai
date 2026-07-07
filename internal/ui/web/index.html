@@ -2211,6 +2211,12 @@ function submitMission() {
     alert('Please enter a directive.');
     return;
   }
+  const active = (lastState.missions || []).filter(m => m.status === 'running' || m.status === 'paused' || m.status === 'awaiting_review');
+  if (active.length > 0) {
+    if (!confirm(`Warning: Swarm mission #${active[0].id} is currently active in this workspace. Launching another mission concurrently might cause file write conflicts. Proceed anyway?`)) {
+      return;
+    }
+  }
   const reqReview = document.getElementById('mc-review').checked;
   const roleModels = {};
   for (const [r, agent] of Object.entries(mcAssignments)) {

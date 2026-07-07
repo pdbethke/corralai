@@ -141,6 +141,11 @@ type Engine struct {
 	// engine's half of that split.
 	OnMissionCompleted func(missionID int64, status string, reviewRounds int)
 
+	// OnReflexCapExhausted, when non-nil, fires whenever the ENGINE hits the
+	// task cap limit on auto-remediation, letting the caller record telemetry
+	// and pause the mission to prevent infinite loops.
+	OnReflexCapExhausted func(missionID int64, cap int, f queue.Finding)
+
 	// committed tracks which phase names have already been committed per mission
 	// so a re-tick after a transient error never produces duplicate commits.
 	committed map[int64]map[string]bool

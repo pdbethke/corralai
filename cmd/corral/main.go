@@ -696,6 +696,21 @@ func main() {
 			log.Printf("telemetry mission_completed: %v", err)
 		}
 	}
+	engine.OnReflexCapExhausted = func(missionID int64, cap int, f queue.Finding) {
+		log.Printf("mission %d: reflex task cap reached on finding %d (%s) — pausing mission to prevent loop", missionID, f.ID, f.Type)
+		if err := telStore.Record(telemetry.Event{
+			MissionID: missionID, Kind: "reflex_cap_exhausted", Actor: "reflex-replanner",
+			Subject: f.Target, Model: f.ReporterModel,
+			Detail: map[string]any{
+				"cap": cap, "finding_id": f.ID, "type": f.Type, "severity": f.Severity,
+			},
+		}); err != nil {
+			log.Printf("telemetry reflex_cap_exhausted: %v", err)
+		}
+		if err := missionStore.SetMissionStatus(missionID, "paused"); err != nil {
+			log.Printf("mission %d: failed to pause mission on cap exhaustion: %v", missionID, err)
+		}
+	}
 	if v := os.Getenv("CORRALAI_REFLEX_MIN_SEVERITY"); v != "" {
 		engine.ReflexMinSeverity = v
 	}

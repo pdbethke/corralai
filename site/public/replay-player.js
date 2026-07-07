@@ -1996,6 +1996,11 @@ function applyReplayEvent(ev){
       }
       break;
     }
+    case 'reflex_cap_exhausted': {
+      replayConsoleLines.push({kind: 'thought', agent: ev.actor || 'reflex-replanner', role: 'coordinator', text: `⚠️ Reflex task cap of ${d.cap || 50} reached on finding #${d.finding_id} (${d.type || ''}). Pausing/parking mission to prevent infinite loop. Human intervention required.`});
+      if(replayConsoleLines.length > 200) replayConsoleLines.shift();
+      break;
+    }
     // claim_made / claim_released: the file-tree lens. These are GLOBAL
     // ambience beats (mission_id=0) folded into the stream by the v2 merge
     // (internal/brain/replay.go) via time-window inclusion. The path travels

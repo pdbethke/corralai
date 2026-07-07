@@ -125,6 +125,9 @@ func (e *Engine) replan(missionID int64) error {
 		if reflexCount+len(specs) > e.ReflexMaxTasks {
 			log.Printf("mission %d: reflex task cap (%d) reached — finding %d (%s/%s) not auto-remediated",
 				missionID, e.ReflexMaxTasks, f.ID, f.Type, f.Severity)
+			if e.OnReflexCapExhausted != nil {
+				e.OnReflexCapExhausted(missionID, e.ReflexMaxTasks, f)
+			}
 			break
 		}
 		if err := e.q.Enqueue(missionID, specs); err != nil {

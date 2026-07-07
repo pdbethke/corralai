@@ -150,6 +150,7 @@ services:
       # every 60s (cmd/corral/main.go default). A demo audience shouldn't wait a
       # full minute between sweeps to see a proposal open — tighten it here only.
       CORRALAI_LEARN_SWEEP_SECONDS: ${CORRALAI_LEARN_SWEEP_SECONDS:-10}
+      CORRALAI_GATEWAY_ALLOWED_HOSTS: ${CORRALAI_GATEWAY_ALLOWED_HOSTS:-172.19.0.1}
     # brain-state persists the coordination/queue/memory DBs (~/.claude) across
     # container recreation — without it a brain restart mid-mission silently
     # wipes the mission while the bees keep polling an empty queue. The image's

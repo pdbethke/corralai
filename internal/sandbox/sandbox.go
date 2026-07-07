@@ -10,6 +10,7 @@ package sandbox
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -86,7 +87,7 @@ func Run(ctx context.Context, command string, opts Options) Result {
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
 
-	runErr := cmd.Run()
+	runErr := runCommand(cmd)
 	res := Result{Output: buf.String()}
 	if ctx.Err() == context.DeadlineExceeded {
 		res.TimedOut = true
@@ -134,3 +135,60 @@ func (c *capped) String() string {
 	}
 	return s
 }
+
+// RunInteractive executes command under the isolation backend, piping stdin/stdout to ws.
+func RunInteractive(ctx context.Context, command string, opts Options, ws io.ReadWriter) Result {
+	if opts.Timeout <= 0 {
+		opts.Timeout = 300 * time.Second
+	}
+	if opts.MaxOutput <= 0 {
+		opts.MaxOutput = 64 << 10
+	}
+	env := opts.Env
+	if env == nil {
+		env = MinimalEnv()
+	}
+
+	if opts.Backend == nil {
+		return Result{ExitCode: -1, Err: "execution disabled: no isolation backend"}
+	}
+	argv, werr := opts.Backend.Wrap(command, opts, env)
+	if werr != nil {
+		return Result{ExitCode: -1, Err: werr.Error()}
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, opts.Timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.Dir = opts.Workspace
+	cmd.Env = env
+	setProcGroup(cmd)
+	cmd.Cancel = func() error { return killProcGroup(cmd) }
+	cmd.WaitDelay = 2 * time.Second
+
+	var buf capped
+	buf.max = opts.MaxOutput
+
+	cmd.Stdin = ws
+	cmd.Stdout = io.MultiWriter(&buf, ws)
+	cmd.Stderr = io.MultiWriter(&buf, ws)
+
+	runErr := runCommand(cmd)
+	res := Result{Output: buf.String()}
+	if ctx.Err() == context.DeadlineExceeded {
+		res.TimedOut = true
+		res.ExitCode = -1
+		res.Err = "timed out after " + opts.Timeout.String()
+		return res
+	}
+	if cmd.ProcessState != nil {
+		res.ExitCode = cmd.ProcessState.ExitCode()
+	}
+	if runErr != nil && res.ExitCode == 0 {
+		res.ExitCode = -1
+		res.Err = runErr.Error()
+	}
+	return res
+}
+

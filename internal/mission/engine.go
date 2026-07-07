@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/pdbethke/corralai/internal/queue"
+	"github.com/pdbethke/corralai/internal/rolemodel"
 )
 
 // ReviewInfo is the mission-package mirror of repo.Review, declared here so the
@@ -170,6 +171,10 @@ type Engine struct {
 	// non-empty; each poll retries a still-empty key, so a transient AuthLogin
 	// failure only disables the guard for that one cycle.
 	botLogins map[string]string
+
+	// Staffing coordinates dynamic role allocations
+	Staffing *StaffingManager
+	staffed  map[int64]bool
 }
 
 // maxPRAttempts bounds how many times the reconcile loop retries push/PR for a
@@ -189,6 +194,7 @@ func NewEngine(m *Store, q *queue.Store) *Engine {
 		egressBlocked:     map[int64]bool{},
 		etags:             map[int64]string{},
 		botLogins:         map[string]string{},
+		staffed:           map[int64]bool{},
 	}
 }
 
@@ -233,6 +239,46 @@ func (e *Engine) Tick() error {
 		return err
 	}
 	for _, mi := range missions {
+		// Dynamic role staffing: Sense ➔ Judge ➔ Clamp
+		if e.Staffing != nil && !e.staffed[mi.ID] && e.Staffing.LLM != nil && e.Staffing.LLM.Available() {
+			log.Printf("mission %d: starting dynamic staffing...", mi.ID)
+			resources := e.Staffing.Sense()
+			stats := e.Staffing.Perf.GetRoleModelStats()
+
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			assignments, loadOrder, err := e.Staffing.Judge(ctx, mi.Directive, resources, stats, 3, 3)
+			cancel()
+
+			if err != nil {
+				log.Printf("mission %d: dynamic staffing judge failed: %v (using default policy)", mi.ID, err)
+			} else {
+				clamped := e.Staffing.Clamp(assignments, resources)
+				log.Printf("mission %d: dynamic staffing complete. Clamped Assignments: %+v, Load Order: %v", mi.ID, clamped, loadOrder)
+
+				for role, model := range clamped {
+					backend := "ollama"
+					if isCloudModel(model) {
+						if strings.Contains(strings.ToLower(model), "claude") {
+							backend = "anthropic"
+						} else if strings.Contains(strings.ToLower(model), "gpt") {
+							backend = "openai"
+						} else if strings.Contains(strings.ToLower(model), "gemini") {
+							backend = "openai"
+						}
+					}
+					if colonIdx := strings.Index(model, ":"); colonIdx >= 0 {
+						backend = model[:colonIdx]
+						model = model[colonIdx+1:]
+					}
+					e.Staffing.RoleModels[role] = rolemodel.ModelRef{
+						Backend: backend,
+						Model:   model,
+					}
+				}
+				e.staffed[mi.ID] = true
+			}
+		}
+
 		// Reflex re-planning first: open findings spawn remediation tasks before
 		// we promote/complete, so a finding on the last task revives the mission.
 		if err := e.replan(mi.ID); err != nil {

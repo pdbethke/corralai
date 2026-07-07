@@ -539,4 +539,23 @@ func registerTasks(s *mcp.Server, store *coord.Store, q *queue.Store, lease floa
 			}
 			return nil, okOut{OK: ok}, err
 		})
+
+	type isInterceptedIn struct {
+		Name string `json:"name"`
+	}
+	type isInterceptedOut struct {
+		Intercept bool `json:"intercept"`
+	}
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "is_intercepted",
+		Description: "Check if the operator has requested to intercept this agent's next execution to perform human-in-the-loop takeover.",
+	}, func(_ context.Context, req *mcp.CallToolRequest, in isInterceptedIn) (*mcp.CallToolResult, isInterceptedOut, error) {
+		agent := identity(req, in.Name)
+		var intercept bool
+		if book != nil {
+			intercept = book.IsInterceptPending(agent)
+		}
+		return nil, isInterceptedOut{Intercept: intercept}, nil
+	})
 }

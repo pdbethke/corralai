@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 )
 
 // Isolator wraps an untrusted command in an OS-level isolation boundary. It wraps
@@ -27,15 +28,45 @@ type Config struct {
 	UnsafeHost bool   // required to select "none"
 }
 
+// Resolves a default backend for the current operating system when Backend is empty.
+func defaultBackend() string {
+	switch runtime.GOOS {
+	case "linux":
+		return "bwrap"
+	case "darwin":
+		return "sandbox-exec"
+	case "windows":
+		return "windows-job"
+	default:
+		return "none"
+	}
+}
+
 // Resolve picks and preflights a backend. It NEVER falls back to a weaker
 // backend: if the requested backend can't isolate, it returns an error and the
 // caller must refuse to execute.
 func Resolve(cfg Config) (Isolator, error) {
-	switch cfg.Backend {
-	case "", "bwrap":
+	backend := cfg.Backend
+	if backend == "" {
+		backend = defaultBackend()
+	}
+	switch backend {
+	case "bwrap":
 		iso, err := newBwrapIsolator()
 		if err != nil {
 			return nil, fmt.Errorf("bwrap backend unavailable: %w", err)
+		}
+		return iso, nil
+	case "sandbox-exec":
+		iso, err := newSandboxExecIsolator()
+		if err != nil {
+			return nil, fmt.Errorf("sandbox-exec backend unavailable: %w", err)
+		}
+		return iso, nil
+	case "windows-job":
+		iso, err := newWindowsJobIsolator()
+		if err != nil {
+			return nil, fmt.Errorf("windows-job backend unavailable: %w", err)
 		}
 		return iso, nil
 	case "none":

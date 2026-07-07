@@ -1,3 +1,5 @@
+//go:build cgo
+
 // SPDX-License-Identifier: Elastic-2.0
 
 package repoindex

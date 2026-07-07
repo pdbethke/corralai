@@ -23,3 +23,7 @@ func killProcGroup(cmd *exec.Cmd) error {
 	}
 	return nil
 }
+
+func runCommand(cmd *exec.Cmd) error {
+	return cmd.Run()
+}

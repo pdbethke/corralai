@@ -1,5 +1,7 @@
 # CORRAL.md
 
+> **Visibility and accountability enhance, rather than restrict, performance.**
+
 Entry point to corralai's own developer-doc corpus — the convention any repo
 built with corralai can adopt.
 
@@ -29,6 +31,7 @@ Two kinds of knowledge feed a mission:
 - [docs/corral/claims-and-leases.md](docs/corral/claims-and-leases.md) — the path/branch claim broker.
 - [docs/corral/mission-lifecycle.md](docs/corral/mission-lifecycle.md) — directive to sprint, end to end.
 - [docs/corral/demo-map.md](docs/corral/demo-map.md) — the demo's make targets and UI tabs.
+- [docs/corral/sakana-fugu-analysis.md](docs/corral/sakana-fugu-analysis.md) — dynamic orchestrator models vs. Corralai.
 
 Anyone can add to this corpus via a normal pull request — see
 [CONTRIBUTING.md](CONTRIBUTING.md).

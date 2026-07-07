@@ -9,7 +9,7 @@
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -X main.version=$(VERSION)
-BINS    := corral corral-agent corral-observe corral-admin
+BINS    := corral corral-agent corral-observe corral-admin corral-desktop
 
 .PHONY: build install test vet tidy clean
 

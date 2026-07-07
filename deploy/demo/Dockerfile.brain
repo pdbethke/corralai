@@ -14,7 +14,7 @@ RUN CGO_ENABLED=1 go build -trimpath -o /out/corral ./cmd/corral
 RUN CGO_ENABLED=0 go build -trimpath -o /out/corral-admin ./cmd/corral-admin
 
 FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libstdc++6 curl git \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libstdc++6 curl git chromium \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/corral /usr/local/bin/corral
 COPY --from=build /out/corral-admin /usr/local/bin/corral-admin

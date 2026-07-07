@@ -128,6 +128,8 @@
   #exec .xblk.xflash-fail { animation:xflash-fail 1.2s ease-out; }
   #progress { position:fixed; inset:42px 0 0 0; z-index:3; display:none; background:var(--bg); overflow:auto; padding:22px 0; }
   #progress.show { display:block; }
+  #launch { position:fixed; inset:42px 0 0 0; z-index:3; display:none; background:var(--bg); overflow:auto; padding:22px 0; }
+  #launch.show { display:block; }
   /* #topology — the ecosystem map: the brain + every host and the bees it runs. */
   #topology { position:fixed; inset:42px 0 0 0; z-index:3; display:none; background:var(--bg); overflow:auto; padding:22px 0; }
   #topology.show { display:block; }
@@ -367,6 +369,83 @@
     border-left:2px solid var(--amber); padding-left:8px; white-space:pre-wrap; max-height:72px;
     overflow-y:auto; }
   .aw-footer .aw-q2 { color:var(--muted); font-size:11px; }
+
+  /* Mission Composer */
+  .mcomposer { max-width:800px; margin:0 auto 20px; padding:18px 20px; background:var(--panel); border:1px dashed var(--line); border-radius:10px; }
+  .mc-title { font-size:15px; font-weight:600; color:var(--fg); margin-bottom:12px; display:flex; align-items:center; gap:8px; }
+  .mc-grid { display:grid; grid-template-columns: 1fr 1fr; gap:16px; margin-bottom:12px; }
+  .mc-left { display:flex; flex-direction:column; gap:10px; }
+  .mc-left textarea { background:var(--bg); color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:8px 10px; font-size:13px; font-family:inherit; resize:vertical; min-height:80px; }
+  .mc-right { display:flex; flex-direction:column; gap:8px; background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:10px; }
+  .mc-sec-title { font-size:11.5px; font-weight:700; color:var(--muted); text-transform:uppercase; letter-spacing:.5px; margin-bottom:4px; }
+  .agent-pool { display:flex; flex-wrap:wrap; gap:6px; }
+  .drag-agent { display:inline-block; background:rgba(244,196,48,.1); border:1px solid var(--amber); color:var(--amber); font-size:11px; padding:2px 8px; border-radius:12px; cursor:grab; font-family:ui-monospace,monospace; user-select:none; }
+  .drag-agent:active { cursor:grabbing; }
+  .roles-setup { display:flex; flex-direction:column; gap:6px; }
+  .role-dropzone { background:var(--panel); border:1px dashed var(--line); border-radius:6px; padding:6px 10px; display:flex; align-items:center; justify-content:space-between; font-size:12.5px; min-height:28px; }
+  .role-dropzone.dragover { border-color:var(--amber); background:rgba(244,196,48,.05); }
+  .role-name { font-weight:600; color:var(--fg); text-transform:capitalize; }
+  .role-assigned { font-family:ui-monospace,monospace; font-size:11.5px; padding:2px 8px; border-radius:10px; background:rgba(127,127,127,.15); color:var(--muted); }
+  .role-assigned.has-agent { background:rgba(79,195,217,.15); border:1px solid #4fc3d9; color:#4fc3d9; }
+  .mc-actions { display:flex; align-items:center; justify-content:space-between; margin-top:12px; }
+  .mc-checkbox { display:flex; align-items:center; gap:6px; font-size:12.5px; color:var(--muted); cursor:pointer; }
+  .mc-btn { background:var(--amber); color:var(--bg); border:none; border-radius:6px; padding:6px 16px; font-size:13px; font-weight:600; cursor:pointer; }
+  .mc-btn:hover { filter: brightness(1.1); }
+  .mc-btn-sec { background:var(--panel); color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:6px 14px; font-size:13px; font-weight:600; cursor:pointer; margin-right:8px; }
+  .mc-btn-sec:hover { background:var(--bg); }
+
+  .mc-sliders { display:flex; flex-direction:column; gap:8px; margin-bottom:12px; }
+  .mc-slider-row { display:flex; align-items:center; gap:10px; font-size:12.5px; }
+  .mc-slider-label { min-width:90px; color:var(--fg); font-weight:500; }
+  .mc-slider-row input[type="range"] { flex:1; accent-color:var(--amber); }
+  .mc-slider-val { min-width:70px; text-align:right; font-weight:600; color:var(--amber); }
+
+  /* Lookbook Styles */
+  #lookbook { display:none; padding:18px 22px; overflow-y:auto; position:absolute; top:36px; left:0; right:0; bottom:0; z-index:100; background:var(--bg); }
+  #lookbook.show { display:block; }
+  .lb-container { max-width:1200px; margin:0 auto; display:grid; grid-template-columns: 320px 1fr; gap:24px; }
+  .lb-sidebar { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px; display:flex; flex-direction:column; gap:14px; height:fit-content; }
+  .lb-sidebar h2 { font-size:15px; font-weight:600; color:var(--fg); margin:0 0 4px; }
+  .lb-sidebar p { font-size:12px; color:var(--muted); margin:0; line-height:1.4; }
+  .lb-field { display:flex; flex-direction:column; gap:6px; }
+  .lb-field label { font-size:11.5px; font-weight:700; color:var(--muted); text-transform:uppercase; letter-spacing:.5px; }
+  .lb-field input[type="text"], .lb-field textarea { background:var(--bg); color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:8px 10px; font-size:13px; font-family:inherit; outline:none; }
+  .lb-field input[type="text"]:focus, .lb-field textarea:focus { border-color:var(--amber); }
+  .lb-field textarea { resize:vertical; min-height:80px; }
+  
+  .lb-file-drop { border:2px dashed var(--line); border-radius:8px; padding:20px 10px; text-align:center; cursor:pointer; background:rgba(127,127,127,.03); transition:all 0.2s ease; display:flex; flex-direction:column; align-items:center; gap:8px; }
+  .lb-file-drop:hover { border-color:var(--amber); background:rgba(244,196,48,.03); }
+  .lb-file-drop .icon { font-size:24px; color:var(--muted); }
+  .lb-file-drop span { font-size:12px; color:var(--muted); }
+  
+  .lb-preview { width:100%; max-height:160px; border-radius:6px; object-fit:cover; border:1px solid var(--line); margin-top:8px; display:none; }
+  
+  .lb-btn { background:var(--amber); color:var(--bg); border:none; border-radius:6px; padding:8px 16px; font-size:13px; font-weight:600; cursor:pointer; width:100%; transition:filter 0.2s; }
+  .lb-btn:hover { filter: brightness(1.1); }
+  
+  .lb-main { display:flex; flex-direction:column; gap:16px; }
+  .lb-main-hdr { display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--line); padding-bottom:10px; margin-bottom:4px; }
+  .lb-main-title { font-size:18px; font-weight:600; color:var(--fg); }
+  .lb-gallery { display:grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap:16px; }
+  
+  .lb-card { background:var(--panel); border:1px solid var(--line); border-radius:10px; overflow:hidden; display:flex; flex-direction:column; transition:transform 0.2s ease, box-shadow 0.2s ease; }
+  .lb-card:hover { transform: translateY(-3px); box-shadow: 0 6px 16px rgba(0,0,0,0.12); }
+  .lb-card-thumb-wrap { width:100%; height:160px; background:#000; overflow:hidden; position:relative; cursor:zoom-in; border-bottom:1px solid var(--line); }
+  .lb-card-thumb { width:100%; height:100%; object-fit:cover; transition:transform 0.3s ease; }
+  .lb-card:hover .lb-card-thumb { transform: scale(1.05); }
+  .lb-card-body { padding:12px; flex:1; display:flex; flex-direction:column; gap:8px; }
+  .lb-card-title { font-size:14px; font-weight:600; color:var(--fg); margin:0; }
+  .lb-card-desc { font-size:12px; color:var(--muted); line-height:1.45; overflow-y:auto; max-height:80px; flex:1; margin:0; font-style:italic; }
+  .lb-card-actions { display:flex; gap:8px; border-top:1px solid var(--line); padding-top:10px; margin-top:4px; }
+  .lb-card-btn { background:var(--bg); color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:5px 10px; font-size:11px; font-weight:600; cursor:pointer; flex:1; display:flex; align-items:center; justify-content:center; gap:4px; }
+  .lb-card-btn:hover { background:var(--panel); border-color:var(--amber); color:var(--amber); }
+  .lb-card-btn.delete { color:var(--red); }
+  .lb-card-btn.delete:hover { background:rgba(232,80,58,.08); border-color:var(--red); color:var(--red); }
+  
+  /* Zoom Modal overlay */
+  .lb-modal { display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.85); z-index:2000; align-items:center; justify-content:center; cursor:zoom-out; }
+  .lb-modal.show { display:flex; }
+  .lb-modal-img { max-width:90%; max-height:90%; border-radius:8px; border:2px solid var(--line); box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
 </style>
 </head>
 <body>
@@ -375,6 +454,7 @@
   <b>CorralAI</b><span class="sub" id="skinsub">— the corral</span>
   <span id="tabs">
   <a class="tab active" id="tab-swarm" onclick="setView('swarm')">swarm</a>
+  <a class="tab" id="tab-launch" onclick="setView('launch')">launch</a>
   <a class="tab" id="tab-progress" onclick="setView('progress')">progress</a>
   <a class="tab" id="tab-topology" onclick="setView('topology')">topology</a>
   <a class="tab" id="tab-memory" onclick="setView('memory')">memory</a>
@@ -382,6 +462,7 @@
   <a class="tab" id="tab-proposals" onclick="setView('proposals')">proposals<span id="proposals-badge" class="pbadge" style="display:none"></span></a>
   <a class="tab" id="tab-files" onclick="setView('files')">files</a>
   <a class="tab" id="tab-completed" onclick="setView('completed')">completed</a>
+  <a class="tab" id="tab-lookbook" onclick="setView('lookbook')">lookbook</a>
   </span>
   <span class="stat" id="stat">connecting…</span>
   <select id="hud-speed" data-replay-speed onchange="setReplaySpeed(+this.value)" title="playback speed" aria-label="Replay playback speed" style="pointer-events:auto;margin-left:6px;background:var(--stage-panel);color:var(--stage-fg);border:1px solid var(--stage-line);border-radius:6px;font-size:11px;padding:2px 4px;display:none"><option value="1">1×</option><option value="2" selected>2×</option><option value="4">4×</option><option value="8">8×</option><option value="16">16×</option></select>
@@ -428,12 +509,14 @@
   <!-- COCKPIT-SHELL:EXEC:BEGIN -->
   <div id="exec"></div>
   <!-- COCKPIT-SHELL:EXEC:END -->
+  <div id="launch"></div>
   <div id="progress"></div>
   <div id="topology"></div>
   <div id="proposals"></div>
   <div id="skills"></div>
   <div id="files"></div>
   <div id="completed"><div id="completed-list"></div><div id="completed-detail" style="display:none"></div></div>
+  <div id="lookbook"></div>
   <div id="replay">
     <div class="row">
       <span id="replay-title"></span>
@@ -550,6 +633,7 @@ function apply(state){
   renderTasks();
   renderFindings();
   renderExec();
+  renderLaunchTab();
   renderProgress();
   renderTopology();
   renderProposalsTab();
@@ -578,7 +662,15 @@ function renderTopology(){
   for(const host of hostKeys){
     const bees = byHost[host], os = bees[0].os||'';
     const nWorkers = bees.length===1 ? `1 ${esc(skin().noun)}` : `${bees.length} ${esc(skin().nouns)}`;
-    html += `<div class="thost"><div class="thosthd">🖥 ${esc(host)} <span class="tmeta">${esc(os)} · ${nWorkers}</span></div>`;
+    const localAgentsSet = new Set();
+    bees.forEach(b => {
+      if(b.local_agents){
+        b.local_agents.forEach(la => localAgentsSet.add(la));
+      }
+    });
+    const localAgentsList = [...localAgentsSet].sort();
+    const localAgentsStr = localAgentsList.length ? ` · Installed agents: ${localAgentsList.join(', ')}` : '';
+    html += `<div class="thost"><div class="thosthd">🖥 ${esc(host)} <span class="tmeta">${esc(os)} · ${nWorkers}${esc(localAgentsStr)}</span></div>`;
     html += bees.map(b => {
       const jail = (b.jail && b.jail!=='none')
         ? `<span class="tjail">⛨ ${esc(b.jail)}${b.net?' +net':' ·no-net'}</span>`
@@ -706,6 +798,194 @@ function renderSkillsTab(){
   }).catch(()=>{ el.innerHTML = '<div class="pmt">could not load the fleet\'s skills.</div>'; });
 }
 
+// ---- Lookbook Functions ----
+let lbUploadedBase64 = "", lbUploadedMime = "";
+
+function renderLookbookTab() {
+  const el = document.getElementById('lookbook');
+  if (!el) return;
+
+  el.innerHTML = `
+    <div class="lb-container">
+      <div class="lb-sidebar">
+        <h2>Emulation Lookbook</h2>
+        <p>Upload screenshot references of UI styling or component looks you want the swarm agents to emulate.</p>
+        
+        <div class="lb-field">
+          <label for="lb-name">Design Name</label>
+          <input type="text" id="lb-name" placeholder="e.g. Sleek Glassmorphic Form" required>
+        </div>
+
+        <div class="lb-field">
+          <label for="lb-desc">Emulation Guidelines</label>
+          <textarea id="lb-desc" placeholder="Instructions/properties: e.g. dark background with glow, HSL colors, container border-radius 12px, backdrop-filter..." required></textarea>
+        </div>
+
+        <div class="lb-field">
+          <label>Mockup Image</label>
+          <label class="lb-file-drop" for="lb-file-input">
+            <span class="icon">📁</span>
+            <span>Click or Drag & Drop Image</span>
+            <input type="file" id="lb-file-input" accept="image/png, image/jpeg, image/webp, image/gif" style="display:none" onchange="previewLookbookUpload(event)">
+          </label>
+          <img id="lb-preview-img" class="lb-preview" alt="Upload preview">
+        </div>
+
+        <button class="lb-btn" onclick="uploadLookbookItem()">Add to Lookbook</button>
+      </div>
+
+      <div class="lb-main">
+        <div class="lb-main-hdr">
+          <div class="lb-main-title">Reference UI Designs</div>
+        </div>
+        <div class="lb-gallery" id="lb-gallery-container">
+          <div class="pmt">Loading lookbook...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Full Image Zoom Overlay Modal -->
+    <div class="lb-modal" id="lb-zoom-modal" onclick="this.classList.remove('show')">
+      <img class="lb-modal-img" id="lb-zoom-img" alt="Zoomed reference design">
+    </div>
+  `;
+
+  loadLookbookItems();
+}
+
+function previewLookbookUpload(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(evt) {
+    const dataUrl = evt.target.result;
+    const commaIdx = dataUrl.indexOf(',');
+    lbUploadedBase64 = dataUrl.substring(commaIdx + 1);
+    lbUploadedMime = file.type;
+
+    const preview = document.getElementById('lb-preview-img');
+    if (preview) {
+      preview.src = dataUrl;
+      preview.style.display = 'block';
+    }
+  };
+  reader.readAsDataURL(file);
+}
+
+function uploadLookbookItem() {
+  const nameInput = document.getElementById('lb-name');
+  const descInput = document.getElementById('lb-desc');
+  if (!nameInput || !descInput) return;
+
+  const name = nameInput.value.trim();
+  const desc = descInput.value.trim();
+
+  if (!name || !desc) {
+    alert("Please enter both a Design Name and Emulation Guidelines.");
+    return;
+  }
+  if (!lbUploadedBase64) {
+    alert("Please select or drop a mockup image to emulate.");
+    return;
+  }
+
+  fetch('/api/lookbook/upload', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: name,
+      description: desc,
+      mime_type: lbUploadedMime,
+      data: lbUploadedBase64
+    })
+  }).then(r => {
+    if (!r.ok) return r.text().then(t => { throw new Error(t) });
+    return r.json();
+  }).then(() => {
+    // Reset form fields
+    nameInput.value = "";
+    descInput.value = "";
+    lbUploadedBase64 = "";
+    lbUploadedMime = "";
+    const preview = document.getElementById('lb-preview-img');
+    if (preview) preview.style.display = 'none';
+    const fileInput = document.getElementById('lb-file-input');
+    if (fileInput) fileInput.value = "";
+
+    loadLookbookItems();
+  }).catch(err => {
+    alert("Failed to upload: " + err.message);
+  });
+}
+
+function loadLookbookItems() {
+  const container = document.getElementById('lb-gallery-container');
+  if (!container) return;
+
+  fetch('/api/lookbook')
+    .then(r => r.json())
+    .then(items => {
+      if (!items || items.length === 0) {
+        container.innerHTML = '<div class="pmt" style="grid-column: 1/-1;">No reference designs in your Lookbook yet. Upload one on the left!</div>';
+        return;
+      }
+
+      container.innerHTML = items.map(item => `
+        <div class="lb-card">
+          <div class="lb-card-thumb-wrap" onclick="zoomLookbook(${item.id})">
+            <img class="lb-card-thumb" src="/api/lookbook/image?id=${item.id}" alt="\${esc(item.name)}">
+          </div>
+          <div class="lb-card-body">
+            <h3 class="lb-card-title">\${esc(item.name)}</h3>
+            <p class="lb-card-desc">\${esc(item.description)}</p>
+            <div class="lb-card-actions">
+              <button class="lb-card-btn" onclick="copyLookbookGuidelines(\\\`\${esc(item.description).replace(/\`/g, '\\\\`').replace(/\\$/g, '\\\\$')}\\\`)">
+                📋 Copy Prompt
+              </button>
+              <button class="lb-card-btn delete" onclick="deleteLookbookItem(\${item.id})">
+                🗑 Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      `).join('');
+    })
+    .catch(() => {
+      container.innerHTML = '<div class="pmt" style="grid-column: 1/-1;">Could not load lookbook items.</div>';
+    });
+}
+
+function zoomLookbook(id) {
+  const modal = document.getElementById('lb-zoom-modal');
+  const img = document.getElementById('lb-zoom-img');
+  if (modal && img) {
+    img.src = '/api/lookbook/image?id=' + id;
+    modal.classList.add('show');
+  }
+}
+
+function deleteLookbookItem(id) {
+  if (!confirm("Are you sure you want to delete this lookbook design item?")) return;
+  fetch('/api/lookbook/delete?id=' + id, { method: 'POST' })
+    .then(r => {
+      if (!r.ok) throw new Error("delete failed");
+      loadLookbookItems();
+    })
+    .catch(err => {
+      alert("Failed to delete: " + err.message);
+    });
+}
+
+function copyLookbookGuidelines(text) {
+  navigator.clipboard.writeText("Please emulate the following design style when building this task:\\n" + text)
+    .then(() => {
+      alert("Style Guidelines copied to clipboard! You can paste this directly into your directive or task instruction.");
+    })
+    .catch(() => {
+      alert("Could not copy guidelines to clipboard.");
+    });
+}
+
 // fmtDuration: seconds -> "Xm Ys" for the Completed tab's card + detail pane.
 function fmtDuration(sec){
   sec = Math.max(0, Math.round(sec||0));
@@ -797,7 +1077,7 @@ function closeMissionDetail(){
 function renderProgress(){
   const el = document.getElementById('progress');
   const missions = lastState.missions || [];
-  if(!missions.length){ el.innerHTML = '<div class="pmt">no missions yet — create one with <code>corral-admin mission create "…"</code></div>'; return; }
+  if(!missions.length){ el.innerHTML = '<div class="pmt">no active missions running in the corral.</div>'; return; }
   const tasks = lastState.tasks || [], findings = lastState.findings || [];
   const tByM = {}, fByM = {}, replacedBy = {};
   tasks.forEach(t => { (tByM[t.mission_id] = tByM[t.mission_id] || []).push(t); if(t.supersedes) replacedBy[t.supersedes] = t; });
@@ -815,8 +1095,9 @@ function renderProgress(){
     const reviewBar = (m.status==='awaiting_review')
       ? `<div class="preview">awaiting your review<button class="acc" onclick="reviewMission(${m.id},true)">accept</button><button class="chg" onclick="reviewMission(${m.id},false)">request changes</button></div>`
       : '';
-    const summary = `${done}/${ts.length} done` + (sup?` · ${sup} superseded`:'') +
-      (fs.length?` · ${fs.length} finding${fs.length>1?'s':''}${openF?` (${openF} open)`:''}`:'');
+    const summary = `${fmtDuration(m.duration_seconds)} · ${done}/${ts.length} tasks`
+      + (sup ? ` (${sup} superseded)` : '')
+      + (openF ? ` · ${openF} open finding${openF===1?'':'s'}` : '');
     const steps = ts.map(t => {
       const gone = (t.status==='cancelled' || t.status==='superseded');
       const who = (t.claimed_by && !gone) ? `<span style="color:${roleColor(t.role)}">← ${esc(t.claimed_by)}</span>` : '';
@@ -826,9 +1107,17 @@ function renderProgress(){
     }).join('');
     const frows = fs.length ? '<div class="pfind">' + fs.slice().sort((a,b)=>(SEV_RANK[b.severity]??0)-(SEV_RANK[a.severity]??0)).map(f =>
       `<span class="pfrow"><b style="color:${sevColor(f.severity)}">${esc(f.severity)} ${esc(f.type)}</b> <span style="color:var(--fg)">${esc(f.target||'')}</span> <span style="color:#6b6452">· ${esc(displayName(f.reporter))} · ${esc(f.status)}</span></span>`).join('') + '</div>' : '';
-    return `<div class="pmission"><div class="phdr"><span class="ppill ${pillClass}">${esc(pillText)}</span><span class="pdir">${esc(m.directive)}</span>${sprintBadge}</div><div class="psum">${esc(summary)}</div>${reviewBar}<div class="psteps">${steps}</div>${frows}</div>`;
+    return `<div class="pmission" onclick="openMissionDetail(${m.id})"><div class="phdr"><span class="ppill ${pillClass}">${esc(pillText)}</span><span class="pdir">${esc(m.directive)}</span>${sprintBadge}</div><div class="psum">${esc(summary)}</div>${reviewBar}<div class="psteps">${steps}</div>${frows}</div>`;
   }).join('');
   el.innerHTML = missionsHtml;
+}
+
+function renderLaunchTab(force) {
+  const el = document.getElementById('launch');
+  if (!el) return;
+  if (force || !el.innerHTML.trim()) {
+    el.innerHTML = renderComposer();
+  }
 }
 
 // sevColor/SEV_RANK moved to replay-player.js (shared top-level scope with
@@ -952,6 +1241,7 @@ function setView(v){
   view = v;
   if(v !== 'replay') stopReplaySession(); // leaving replay by ANY route ends the session cleanly (no-op otherwise)
   document.getElementById('tab-swarm').classList.toggle('active', v==='swarm');
+  document.getElementById('tab-launch').classList.toggle('active', v==='launch');
   document.getElementById('tab-progress').classList.toggle('active', v==='progress');
   document.getElementById('tab-topology').classList.toggle('active', v==='topology');
   document.getElementById('tab-memory').classList.toggle('active', v==='memory');
@@ -959,18 +1249,22 @@ function setView(v){
   document.getElementById('tab-proposals').classList.toggle('active', v==='proposals');
   document.getElementById('tab-files').classList.toggle('active', v==='files');
   document.getElementById('tab-completed').classList.toggle('active', v==='completed');
+  document.getElementById('tab-lookbook').classList.toggle('active', v==='lookbook');
   document.getElementById('memory').classList.toggle('show', v==='memory');
+  document.getElementById('launch').classList.toggle('show', v==='launch');
   document.getElementById('progress').classList.toggle('show', v==='progress');
   document.getElementById('topology').classList.toggle('show', v==='topology');
   document.getElementById('skills').classList.toggle('show', v==='skills');
   document.getElementById('proposals').classList.toggle('show', v==='proposals');
   document.getElementById('files').classList.toggle('show', v==='files');
   document.getElementById('completed').classList.toggle('show', v==='completed');
+  document.getElementById('lookbook').classList.toggle('show', v==='lookbook');
   document.getElementById('replay').classList.toggle('show', v==='replay');
   // The stage (and its canvas) stay mounted; the tab overlays simply cover them at a
   // higher z-index. Don't display:none the canvas — that zeroes its box and squishes
   // the swarm. resize() re-fits when we come back, but there's nothing to re-fit now.
   if(v==='memory' && !memInit){ memInit = true; loadScopes(); searchMem(); }
+  if(v==='launch'){ renderLaunchTab(); }
   if(v==='progress'){ renderProgress(); }
   if(v==='topology'){ renderTopology(); }
   if(v==='skills'){ renderSkillsTab(); }
@@ -981,6 +1275,7 @@ function setView(v){
   // honest empty state until a replay is opened.
   if(v==='files' && typeof renderReplayFiles==='function'){ renderReplayFiles(); }
   if(v==='completed'){ renderCompletedTab(); }
+  if(v==='lookbook'){ renderLookbookTab(); }
 }
 async function loadScopes(){
   try {
@@ -1586,6 +1881,229 @@ function renderFleetOracle(){
   panel.innerHTML = h;
   const fq = document.getElementById('foq');
   if(fq){ fq.value=foDraft; if(foFocused){ fq.focus(); const v=fq.value; fq.value=''; fq.value=v; } }
+}
+
+let mcAssignments = {};
+function mcAllowDrop(ev) {
+  ev.preventDefault();
+  ev.currentTarget.classList.add('dragover');
+}
+function mcDragLeave(ev) {
+  ev.currentTarget.classList.remove('dragover');
+}
+function mcDrag(ev) {
+  ev.dataTransfer.setData("text/plain", ev.target.dataset.agent);
+}
+function mcDrop(ev) {
+  ev.preventDefault();
+  ev.currentTarget.classList.remove('dragover');
+  const agent = ev.dataTransfer.getData("text/plain");
+  const role = ev.currentTarget.dataset.role;
+  mcAssign(role, agent);
+}
+function mcAssign(role, agent) {
+  mcAssignments[role] = agent;
+  const el = document.getElementById(`mc-assigned-${role}`);
+  if(el){
+    el.textContent = agent;
+    el.classList.add('has-agent');
+  }
+}
+function getLocalAgents() {
+  const agents = new Set();
+  const topo = (lastState && lastState.topology) || [];
+  topo.forEach(h => {
+    if (h.local_agents) {
+      h.local_agents.forEach(la => agents.add(la));
+    }
+  });
+  if (agents.size === 0) {
+    return ["claude", "aider", "copilot", "ollama"];
+  }
+  return [...agents].sort();
+}
+function renderComposer() {
+  const agents = getLocalAgents();
+  const agentPoolHtml = agents.map(a => `
+    <span class="drag-agent" draggable="true" ondragstart="mcDrag(event)" data-agent="${esc(a)}">${esc(a)}</span>
+  `).join('');
+
+  const roles = ['builder', 'tester', 'reviewer', 'pentester'];
+  const rolesHtml = roles.map(r => {
+    const assigned = mcAssignments[r] || '';
+    const valClass = assigned ? 'has-agent' : '';
+    const valText = assigned ? assigned : 'drag agent here';
+    return `
+      <div class="role-dropzone" data-role="${r}" ondragover="mcAllowDrop(event)" ondragleave="mcDragLeave(event)" ondrop="mcDrop(event)">
+        <span class="role-name">${esc(r)}</span>
+        <span class="role-assigned ${valClass}" id="mc-assigned-${r}">${esc(valText)}</span>
+      </div>
+    `;
+  }).join('');
+
+  const dirVal = document.getElementById('mc-directive') ? document.getElementById('mc-directive').value : '';
+  const reviewChecked = document.getElementById('mc-review') ? document.getElementById('mc-review').checked : true;
+
+  const thoroughnessLabel = {
+    1: "Fast/Lean",
+    2: "Optimized",
+    3: "Standard",
+    4: "Thorough",
+    5: "Max Smarts",
+  }[mcThoroughness];
+
+  const footprintLabel = {
+    1: "RAM Saving",
+    2: "Low VRAM",
+    3: "Balanced",
+    4: "High Perf",
+    5: "Max GPU Util",
+  }[mcFootprint];
+
+  return `
+    <div class="mcomposer">
+      <div class="mc-title">🚀 Mission Composer &amp; Role Assignment</div>
+      <div class="mc-grid">
+        <div class="mc-left">
+          <textarea id="mc-directive" placeholder="Describe the goal of your mission (e.g. 'Build a secure Go CLI database tool')...">${esc(dirVal)}</textarea>
+          
+          <div class="mc-sliders">
+            <div class="mc-slider-row">
+              <span class="mc-slider-label">Thoroughness</span>
+              <input type="range" id="mc-thoroughness" min="1" max="5" value="${mcThoroughness}" oninput="updateSliderVal('thoroughness', this.value)">
+              <span class="mc-slider-val" id="mc-val-thoroughness">${thoroughnessLabel}</span>
+            </div>
+            <div class="mc-slider-row">
+              <span class="mc-slider-label">Footprint</span>
+              <input type="range" id="mc-footprint" min="1" max="5" value="${mcFootprint}" oninput="updateSliderVal('footprint', this.value)">
+              <span class="mc-slider-val" id="mc-val-footprint">${footprintLabel}</span>
+            </div>
+          </div>
+
+          <div class="mc-actions">
+            <label class="mc-checkbox">
+              <input type="checkbox" id="mc-review" ${reviewChecked ? 'checked' : ''}> Requires operator approval (Sprints)
+            </label>
+            <div>
+              <button class="mc-btn-sec" onclick="letCorralChoose()">Let Corral Choose</button>
+              <button class="mc-btn" onclick="submitMission()">Launch Mission</button>
+            </div>
+          </div>
+        </div>
+        <div class="mc-right">
+          <div class="mc-sec-title">Available Local Agents (Drag them!)</div>
+          <div class="agent-pool">${agentPoolHtml}</div>
+          <div style="margin-top: 10px;"></div>
+          <div class="mc-sec-title">Roles Setup</div>
+          <div class="roles-setup">${rolesHtml}</div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+function submitMission() {
+  const dir = document.getElementById('mc-directive').value.trim();
+  if(!dir) {
+    alert('Please enter a directive.');
+    return;
+  }
+  const reqReview = document.getElementById('mc-review').checked;
+  const roleModels = {};
+  for (const [r, agent] of Object.entries(mcAssignments)) {
+    if (agent) {
+      roleModels[r] = {backend: 'ollama', model: agent};
+    }
+  }
+
+  fetch('/api/mission/create', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      directive: dir,
+      requires_review: reqReview,
+      role_models: roleModels
+    })
+  })
+  .then(r => r.json())
+  .then(d => {
+    if (d.ok) {
+      document.getElementById('mc-directive').value = '';
+      mcAssignments = {};
+      renderLaunchTab(true);
+      alert('Mission launched successfully!');
+      setView('progress');
+    } else {
+      alert('Failed to launch: ' + d.error);
+    }
+  })
+  .catch(err => alert('Error launching mission: ' + err));
+}
+
+let mcThoroughness = 3;
+let mcFootprint = 3;
+
+function updateSliderVal(slider, val) {
+  const labels = {
+    thoroughness: {
+      1: "Fast/Lean",
+      2: "Optimized",
+      3: "Standard",
+      4: "Thorough",
+      5: "Max Smarts",
+    },
+    footprint: {
+      1: "RAM Saving",
+      2: "Low VRAM",
+      3: "Balanced",
+      4: "High Perf",
+      5: "Max GPU Util",
+    }
+  };
+  if (slider === 'thoroughness') {
+    mcThoroughness = +val;
+  } else if (slider === 'footprint') {
+    mcFootprint = +val;
+  }
+  const el = document.getElementById(`mc-val-${slider}`);
+  if (el) {
+    el.textContent = labels[slider][val];
+  }
+}
+
+function letCorralChoose() {
+  const dir = document.getElementById('mc-directive').value.trim();
+  if(!dir) {
+    alert('Please enter a directive so Corral knows what goal to analyze.');
+    return;
+  }
+  const btn = document.querySelector('.mc-btn-sec');
+  const originalText = btn.textContent;
+  btn.textContent = 'analyzing...';
+  btn.disabled = true;
+
+  const url = '/api/mission/propose_staffing?directive=' + encodeURIComponent(dir) +
+              '&thoroughness=' + mcThoroughness +
+              '&footprint=' + mcFootprint;
+
+  fetch(url)
+  .then(r => r.json())
+  .then(d => {
+    btn.textContent = originalText;
+    btn.disabled = false;
+    if (d.ok && d.assignments) {
+      mcAssignments = {};
+      for (const [role, agent] of Object.entries(d.assignments)) {
+        mcAssign(role, agent);
+      }
+    } else {
+      alert('Corral could not automatically staff: ' + (d.error || 'unknown error'));
+    }
+  })
+  .catch(err => {
+    btn.textContent = originalText;
+    btn.disabled = false;
+    alert('Error choosing agents: ' + err);
+  });
 }
 </script>
 </body>

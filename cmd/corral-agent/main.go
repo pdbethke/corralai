@@ -23,6 +23,9 @@ import (
 	"github.com/pdbethke/corralai/internal/admission"
 	"github.com/pdbethke/corralai/internal/agentrole"
 	"github.com/pdbethke/corralai/internal/sandbox"
+	"net/http"
+	"os/exec"
+	"golang.org/x/net/websocket"
 )
 
 // makeBrainCall wraps the agent's brain closure (which returns raw JSON strings)
@@ -176,6 +179,7 @@ func main() {
 		name = env("AGENT_NAME", role)
 		ws   = env("AGENT_WORKSPACE", filepath.Join(os.TempDir(), "corral-demo-ws"))
 	)
+	globalBrainURL = brainURL
 	backend := newBackend() // MODEL_BACKEND: ollama (default) | openai (Gemini/OpenRouter/local) — NOT hard-wired
 	modelDesc := env("MODEL_BACKEND", "ollama") + ":" + env("AGENT_MODEL", "qwen2.5-coder:7b")
 	// clobber: the agent STILL connects to the brain (so it's visible in the swarm
@@ -275,6 +279,7 @@ func main() {
 				"model": env("AGENT_MODEL", "qwen2.5-coder:7b"), "backend": env("MODEL_BACKEND", "ollama"),
 				"jail": jail, "net": execRuntime.network,
 				"os": runtime.GOOS + "/" + runtime.GOARCH, "pid": os.Getpid(),
+				"local_agents": scanLocalAgents(),
 			})
 			time.Sleep(20 * time.Second)
 		}
@@ -361,6 +366,7 @@ func runQueueLoop(ctx context.Context, backend Backend, name, role string, rs ag
 				MissionID   int64  `json:"mission_id"`
 				Title       string `json:"title"`
 				Instruction string `json:"instruction"`
+				Verify      string `json:"verify"`
 				Reissued    bool   `json:"reissued"`
 			} `json:"task"`
 			Error string `json:"error"`
@@ -386,7 +392,11 @@ func runQueueLoop(ctx context.Context, backend Backend, name, role string, rs ag
 		// that doesn't spontaneously exec loops forever against the verify gate —
 		// each fresh attempt starts a conversation that never hears WHY the last
 		// one was refused (observed live: 41 refusal cycles on gemini-flash).
-		instruction := withRefusalFeedback(out.Task.Instruction, refusalMsg[out.Task.ID])
+		instruction := out.Task.Instruction
+		if out.Task.Verify != "" {
+			instruction += fmt.Sprintf("\n\nVERIFICATION REQUIREMENT: You MUST run the command %q using the run_command tool in the workspace before completing this task, and verify it succeeds.", out.Task.Verify)
+		}
+		instruction = withRefusalFeedback(instruction, refusalMsg[out.Task.ID])
 		taskStart := time.Now()
 		summary, taskErr := runTask(ctx, backend, name, role, ws, brain, tools, out.Task.MissionID, out.Task.ID, out.Task.Title, instruction, mir, bc)
 		fmt.Printf("[%s/%s] task #%d ran %s\n", name, role, out.Task.ID, time.Since(taskStart).Round(time.Second))
@@ -554,12 +564,23 @@ func handleTaskError(taskID, missionID int64, modelDesc string, err error, brain
 // connection-refused on the very first Chat call — the queue loop uses this to
 // release the claim instead of completing with an error string.
 func runTask(ctx context.Context, backend Backend, name, role, ws string, brain func(string, map[string]any) string, tools []any, missionID, taskID int64, title, instruction string, mir *mirror, bc brainCall) (string, error) {
+	extraPrompt := ""
+	if role == "tester" {
+		extraPrompt = `
+TESTER SPECIAL CAPABILITY: You have access to a Playwright browser automation MCP server.
+To discover the available browser tools:
+1. Call 'list_capabilities'.
+2. Identify the 'playwright' capability server and the specific tool names (e.g. 'playwright/navigate', 'playwright/click', 'playwright/screenshot').
+3. Invoke any browser automation tools using 'call_capability' with the server='playwright', tool='<tool_name>' (e.g. 'navigate', 'click', 'screenshot'), and appropriate arguments.
+Use the browser to test and verify the local web dashboard, verify UI layouts, or inspect rendered web interfaces as part of your testing tasks.`
+	}
 	sys := fmt.Sprintf(`You are %q, the %s in a swarm of coding agents sharing ONE codebase, working a task from the mission queue.
 Coordinate so you never clobber a peer:
 - call claim_paths to lease a file BEFORE you write it.
 - if claim_paths reports a conflict, back off that file.
 - write REAL files with write_file (the actual artifact), and VERIFY with
   run_command (build it, run the tests, execute it) — don't assume it works.
+- on Go tasks, you MUST initialize Go modules by running 'go mod init <name>' (e.g., 'go mod init stack') via run_command before building or testing if 'go.mod' is missing.
 If you discover a vulnerability, bug, design flaw, or missing requirement, call
 report_finding with a type and a severity (low|medium|high|critical) — this is how
 the swarm learns and re-plans, so report it rather than only mentioning it.
@@ -577,7 +598,8 @@ gotchas, and lessons (type 'lesson'). Storage is unlimited and the whole swarm
 searches what you write, so err on the side of recording over rationing.
 Take minimal real steps for THIS task, then stop.
 Task: %s
-%s`, name, role, title, instruction)
+%s
+%s`, name, role, title, instruction, extraPrompt)
 	// Determine the effective working directory for this task. For repo missions,
 	// mir.ensure pulls a .git-free snapshot into <ws>/m<id> on the first task and
 	// returns that directory; subsequent tasks on the same mission reuse it. For
@@ -595,7 +617,7 @@ Task: %s
 
 	messages := []omsg{{Role: "system", Content: sys}, {Role: "user", Content: "Begin. Take the first step."}}
 	last := "completed"
-	for step := 0; step < 8; step++ {
+	for step := 0; step < 15; step++ {
 		brain("heartbeat", map[string]any{"status": "working"}) // stay present during long work
 		m, err := backend.Chat(messages, tools)
 		if err != nil {
@@ -953,6 +975,7 @@ type execState struct {
 }
 
 var execRuntime execState
+var globalBrainURL string
 
 // setupExec resolves + preflights the isolation backend once. Default-deny: if
 // exec is requested but can't be isolated, it stays disabled with a loud reason.
@@ -1032,10 +1055,58 @@ func dispatch(name, role, ws string, brain func(string, map[string]any) string, 
 		if command == "" {
 			return `{"error":"command required"}`
 		}
-		res := sandbox.Run(context.Background(), command, sandbox.Options{
-			Workspace: ws, Timeout: 120 * time.Second,
-			Backend: execRuntime.backend, Network: execRuntime.network,
-		})
+
+		intercepted := false
+		if brain != nil {
+			respStr := brain("is_intercepted", map[string]any{"name": name})
+			var parsed struct {
+				Intercept bool `json:"intercept"`
+			}
+			if json.Unmarshal([]byte(respStr), &parsed) == nil {
+				intercepted = parsed.Intercept
+			}
+		}
+
+		var res sandbox.Result
+		if intercepted {
+			fmt.Printf("[%s] ⚡ Human Takeover: Intercepting command: %q\n", name, command)
+			wsURL := toWSURL(globalBrainURL) + "/api/terminal/ws?agent=" + name + "&role=agent"
+			wsConfig, werr := websocket.NewConfig(wsURL, globalBrainURL)
+			if werr == nil {
+				if token := os.Getenv("CORRALAI_BRAIN_KEY"); token != "" {
+					wsConfig.Header.Set("Authorization", "Bearer "+token)
+				}
+				wsConn, werr := websocket.DialConfig(wsConfig)
+				if werr == nil {
+					defer wsConn.Close()
+					res = sandbox.RunInteractive(context.Background(), command, sandbox.Options{
+						Workspace: ws, Timeout: 300 * time.Second,
+						Backend: execRuntime.backend, Network: execRuntime.network,
+					}, wsConn)
+					if brain != nil {
+						go disableIntercept(globalBrainURL, name)
+					}
+				} else {
+					fmt.Printf("[%s] ⚠ WebSocket connection failed: %v. Running normally.\n", name, werr)
+					res = sandbox.Run(context.Background(), command, sandbox.Options{
+						Workspace: ws, Timeout: 120 * time.Second,
+						Backend: execRuntime.backend, Network: execRuntime.network,
+					})
+				}
+			} else {
+				fmt.Printf("[%s] ⚠ WebSocket config failed: %v. Running normally.\n", name, werr)
+				res = sandbox.Run(context.Background(), command, sandbox.Options{
+					Workspace: ws, Timeout: 120 * time.Second,
+					Backend: execRuntime.backend, Network: execRuntime.network,
+				})
+			}
+		} else {
+			res = sandbox.Run(context.Background(), command, sandbox.Options{
+				Workspace: ws, Timeout: 120 * time.Second,
+				Backend: execRuntime.backend, Network: execRuntime.network,
+			})
+		}
+
 		// Report the run to the brain so the swarm UI's live execution feed can show
 		// it. Best-effort: this is observability, never blocks or alters the result.
 		if brain != nil {
@@ -1152,3 +1223,47 @@ func execSummary(res sandbox.Result) string {
 	}
 	return out
 }
+
+func toWSURL(httpURL string) string {
+	u := httpURL
+	u = strings.Replace(u, "https://", "wss://", 1)
+	u = strings.Replace(u, "http://", "ws://", 1)
+	return u
+}
+
+func disableIntercept(brainURL, agent string) {
+	url := fmt.Sprintf("%s/api/mission/intercept?agent=%s&enable=false", brainURL, agent)
+	req, err := http.NewRequest("GET", url, nil)
+	if err == nil {
+		if token := os.Getenv("CORRALAI_BRAIN_KEY"); token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		resp, rerr := (&http.Client{}).Do(req)
+		if rerr == nil {
+			_ = resp.Body.Close()
+		}
+	}
+}
+
+func scanLocalAgents() []string {
+	var found []string
+	known := []string{
+		"claude",     // Claude CLI
+		"aider",      // Aider
+		"gh",         // GitHub CLI (Copilot)
+		"copilot",    // Copilot CLI
+		"gpt-pilot",  // GPT Pilot
+		"mentat",     // Mentat
+		"supermaven", // Supermaven
+		"ollama",     // Ollama
+		"codex",      // Codex
+	}
+	for _, k := range known {
+		if _, err := exec.LookPath(k); err == nil {
+			found = append(found, k)
+		}
+	}
+	return found
+}
+
+

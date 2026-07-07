@@ -8,6 +8,7 @@ package ui
 
 import (
 	"embed"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -29,7 +30,9 @@ import (
 	"github.com/pdbethke/corralai/internal/principals"
 	"github.com/pdbethke/corralai/internal/queue"
 	"github.com/pdbethke/corralai/internal/rolemodel"
+	"github.com/pdbethke/corralai/internal/taskartifacts"
 	"github.com/pdbethke/corralai/internal/telemetry"
+	"golang.org/x/net/websocket"
 )
 
 //go:embed web
@@ -52,6 +55,7 @@ type Server struct {
 	tel             *telemetry.Store
 	oracle          *oracle.Client
 	roleModels      rolemodel.Policy
+	staffing        *mission.StaffingManager
 	learn           *learn.Store
 	promote         func(id int64, actor string) error
 	reject          func(id int64, reason string) error
@@ -59,6 +63,7 @@ type Server struct {
 	historyDetailFn func(id int64) (*brain.MissionDetail, error)
 	replayFn        func(missionID int64) ([]brain.ReplayEvent, error)
 	artifacts       *artifacts.Store
+	taskArtifacts   *taskartifacts.Store
 }
 
 // Handler returns the UI routes: / (the page), /api/me (the viewer's identity +
@@ -103,6 +108,7 @@ type Deps struct {
 	// each host with expected model + drift when this is non-nil. nil => no drift
 	// annotations (degrade-never-block).
 	RoleModels rolemodel.Policy
+	Staffing   *mission.StaffingManager
 	// Learn is the learning-loop proposals store; /api/state surfaces pending
 	// proposals from it for the proposals card. nil => the card stays empty.
 	Learn *learn.Store
@@ -130,10 +136,13 @@ type Deps struct {
 	// MCP-only, isHumanAdmin-gated action (see internal/brain/artifacts.go).
 	// nil => the Skills tab and inspector section render empty, never a 500.
 	Artifacts *artifacts.Store
+
+	// TaskArtifacts is the dedicated database store for task execution and UI artifacts.
+	TaskArtifacts *taskartifacts.Store
 }
 
 func Handler(d Deps) http.Handler {
-	s := &Server{coord: d.Coord, mem: d.Mem, gw: d.Gateway, bus: d.Bus, memOwners: d.MemOwners, roles: d.Roles, queue: d.Queue, missions: d.Missions, execs: d.Executions, acts: d.Activity, hosts: d.Hosts, health: d.Health, narrator: d.Narrator, tel: d.Telemetry, oracle: d.Oracle, roleModels: d.RoleModels, learn: d.Learn, promote: d.Promote, reject: d.Reject, historyFn: d.History, historyDetailFn: d.HistoryDetail, replayFn: d.Replay, artifacts: d.Artifacts}
+	s := &Server{coord: d.Coord, mem: d.Mem, gw: d.Gateway, bus: d.Bus, memOwners: d.MemOwners, roles: d.Roles, queue: d.Queue, missions: d.Missions, execs: d.Executions, acts: d.Activity, hosts: d.Hosts, health: d.Health, narrator: d.Narrator, tel: d.Telemetry, oracle: d.Oracle, roleModels: d.RoleModels, staffing: d.Staffing, learn: d.Learn, promote: d.Promote, reject: d.Reject, historyFn: d.History, historyDetailFn: d.HistoryDetail, replayFn: d.Replay, artifacts: d.Artifacts, taskArtifacts: d.TaskArtifacts}
 	mux := http.NewServeMux()
 	sub, _ := fs.Sub(webFS, "web")
 	mux.Handle("/", http.FileServer(http.FS(sub)))
@@ -161,6 +170,17 @@ func Handler(d Deps) http.Handler {
 	mux.HandleFunc("/api/mission/pause", s.steer(brain.SteerPause))
 	mux.HandleFunc("/api/mission/resume", s.steer(brain.SteerResume))
 	mux.HandleFunc("/api/mission/cancel", s.steer(brain.SteerCancel))
+	mux.HandleFunc("/api/mission/intercept", s.intercept)
+	mux.HandleFunc("/api/mission/create", s.createMission)
+	mux.HandleFunc("/api/mission/propose_staffing", s.proposeStaffing)
+	mux.Handle("/api/terminal/ws", websocket.Handler(Registry.ServeWS))
+
+	// Swarm Design Lookbook API routes
+	mux.HandleFunc("/api/lookbook", s.lookbookList)
+	mux.HandleFunc("/api/lookbook/upload", s.lookbookUpload)
+	mux.HandleFunc("/api/lookbook/delete", s.lookbookDelete)
+	mux.HandleFunc("/api/lookbook/image", s.lookbookImage)
+
 	return mux
 }
 
@@ -827,3 +847,267 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 }
+
+func (s *Server) intercept(w http.ResponseWriter, r *http.Request) {
+	agent := r.URL.Query().Get("agent")
+	enable := r.URL.Query().Get("enable") == "true"
+	if agent == "" {
+		http.Error(w, "agent required", 400)
+		return
+	}
+	if s.hosts != nil {
+		s.hosts.SetInterceptPending(agent, enable)
+	}
+	if !enable {
+		Registry.mu.Lock()
+		if sess, ok := Registry.sessions[agent]; ok {
+			select {
+			case <-sess.Done:
+			default:
+				close(sess.Done)
+			}
+			delete(Registry.sessions, agent)
+		}
+		Registry.mu.Unlock()
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(`{"ok":true}`))
+}
+
+func (s *Server) createMission(w http.ResponseWriter, r *http.Request) {
+	if auth.ReadOnly(r) {
+		http.Error(w, "forbidden: read-only observer token cannot act", http.StatusForbidden)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Directive      string                    `json:"directive"`
+		RequiresReview bool                      `json:"requires_review"`
+		RoleModels     map[string]rolemodel.ModelRef `json:"role_models"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+	if body.Directive == "" {
+		http.Error(w, "directive required", http.StatusBadRequest)
+		return
+	}
+
+	// Update role models if provided
+	if len(body.RoleModels) > 0 && s.roleModels != nil {
+		for k, v := range body.RoleModels {
+			s.roleModels[k] = v
+		}
+	}
+
+	plan := mission.ScaledPlan(body.Directive)
+	id, err := mission.CreateMission(s.missions, s.queue, body.Directive, plan, body.RequiresReview)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, map[string]any{"id": id, "ok": true})
+}
+
+func (s *Server) proposeStaffing(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "GET only", http.StatusMethodNotAllowed)
+		return
+	}
+	directive := r.URL.Query().Get("directive")
+	if directive == "" {
+		http.Error(w, "directive required", http.StatusBadRequest)
+		return
+	}
+
+	thoroughness, _ := strconv.Atoi(r.URL.Query().Get("thoroughness"))
+	if thoroughness <= 0 {
+		thoroughness = 3
+	}
+	footprint, _ := strconv.Atoi(r.URL.Query().Get("footprint"))
+	if footprint <= 0 {
+		footprint = 3
+	}
+
+	if s.staffing == nil || s.staffing.LLM == nil || !s.staffing.LLM.Available() {
+		writeJSON(w, map[string]any{
+			"ok": true,
+			"assignments": map[string]string{
+				"builder":   "qwen2.5-coder:7b",
+				"tester":    "llama3.2:3b",
+				"reviewer":  "qwen2.5-coder:7b",
+				"pentester": "llama3.2:3b",
+			},
+		})
+		return
+	}
+
+	resources := s.staffing.Sense()
+	stats := s.staffing.Perf.GetRoleModelStats()
+	assignments, _, err := s.staffing.Judge(r.Context(), directive, resources, stats, thoroughness, footprint)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	clamped := s.staffing.Clamp(assignments, resources)
+	writeJSON(w, map[string]any{
+		"ok":          true,
+		"assignments": clamped,
+	})
+}
+
+func (s *Server) lookbookList(w http.ResponseWriter, r *http.Request) {
+	if s.taskArtifacts == nil {
+		http.Error(w, "Lookbook database not configured", http.StatusServiceUnavailable)
+		return
+	}
+	items, err := s.taskArtifacts.GetLookbookItems()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	type itemMeta struct {
+		ID          int64   `json:"id"`
+		Name        string  `json:"name"`
+		Description string  `json:"description"`
+		MimeType    string  `json:"mime_type"`
+		Size        int     `json:"size"`
+		CreatedTS   float64 `json:"created_ts"`
+	}
+
+	out := []itemMeta{}
+	for _, item := range items {
+		out = append(out, itemMeta{
+			ID:          item.ID,
+			Name:        item.Name,
+			Description: item.Description,
+			MimeType:    item.MimeType,
+			Size:        len(item.Data),
+			CreatedTS:   item.CreatedTS,
+		})
+	}
+	writeJSON(w, out)
+}
+
+func (s *Server) lookbookUpload(w http.ResponseWriter, r *http.Request) {
+	if s.taskArtifacts == nil {
+		http.Error(w, "Lookbook database not configured", http.StatusServiceUnavailable)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var body struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		MimeType    string `json:"mime_type"`
+		Data        string `json:"data"` // base64 encoded
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	dataBytes, err := base64.StdEncoding.DecodeString(body.Data)
+	if err != nil {
+		http.Error(w, "invalid base64 payload: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// 5MB limit
+	if len(dataBytes) > 5*1024*1024 {
+		http.Error(w, "payload exceeds 5MB size limit", http.StatusBadRequest)
+		return
+	}
+
+	// Basic MIME check
+	detected := http.DetectContentType(dataBytes)
+	allowed := false
+	for _, prefix := range []string{"image/png", "image/jpeg", "image/gif", "image/webp"} {
+		if strings.HasPrefix(detected, prefix) {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		http.Error(w, "unsupported image type: "+detected, http.StatusBadRequest)
+		return
+	}
+
+	id, err := s.taskArtifacts.SaveLookbookItem(body.Name, body.Description, body.MimeType, dataBytes)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, map[string]any{"id": id, "ok": true})
+}
+
+func (s *Server) lookbookDelete(w http.ResponseWriter, r *http.Request) {
+	if s.taskArtifacts == nil {
+		http.Error(w, "Lookbook database not configured", http.StatusServiceUnavailable)
+		return
+	}
+	idStr := r.URL.Query().Get("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil || id <= 0 {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.taskArtifacts.DeleteLookbookItem(id); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+func (s *Server) lookbookImage(w http.ResponseWriter, r *http.Request) {
+	if s.taskArtifacts == nil {
+		http.Error(w, "Lookbook database not configured", http.StatusServiceUnavailable)
+		return
+	}
+	idStr := r.URL.Query().Get("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil || id <= 0 {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+
+	items, err := s.taskArtifacts.GetLookbookItems()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	var found *taskartifacts.LookbookItem
+	for i := range items {
+		if items[i].ID == id {
+			found = &items[i]
+			break
+		}
+	}
+
+	if found == nil {
+		http.Error(w, "image not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", found.MimeType)
+	w.Header().Set("Content-Length", strconv.Itoa(len(found.Data)))
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	_, _ = w.Write(found.Data)
+}
+
+
+
+

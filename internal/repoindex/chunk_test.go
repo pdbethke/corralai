@@ -86,6 +86,9 @@ func assertHasSymbol(t *testing.T, cs []LineChunk, sym string) {
 }
 
 func TestChunkSymbolsGo(t *testing.T) {
+	if !supported("go") {
+		t.Skip("skipping; tree-sitter symbols require CGO")
+	}
 	src := "package main\n\nimport \"fmt\"\n\nfunc Foo() { fmt.Println(\"x\") }\n\ntype Bar struct{ N int }\n\nfunc (b Bar) M() int { return b.N }\n"
 	cs, err := chunkSymbols(src, "go")
 	if err != nil {
@@ -123,6 +126,9 @@ func TestChunkSymbolsGo(t *testing.T) {
 }
 
 func TestChunkSymbolsPythonAndTS(t *testing.T) {
+	if !supported("go") {
+		t.Skip("skipping; tree-sitter symbols require CGO")
+	}
 	py := "import os\n\ndef greet(name):\n    return f\"hi {name}\"\n\nclass Dog:\n    def bark(self):\n        return \"woof\"\n"
 	cs, err := chunkSymbols(py, "python")
 	if err != nil {
@@ -141,6 +147,9 @@ func TestChunkSymbolsPythonAndTS(t *testing.T) {
 }
 
 func TestChunkSymbolsOversizedWindowed(t *testing.T) {
+	if !supported("go") {
+		t.Skip("skipping; tree-sitter symbols require CGO")
+	}
 	// A function whose body exceeds the oversize threshold (2*window=120 lines) is split into
 	// multiple sub-chunks, all tagged with the same Symbol; union of ranges covers the function.
 	var b strings.Builder
@@ -168,6 +177,9 @@ func TestChunkSymbolsOversizedWindowed(t *testing.T) {
 // All 12 languages capture symbols today; this test FAILS (t.Fatalf), not skips, if any
 // grammar ever stops capturing — so the "12 languages" coverage claim can't silently rot in CI.
 func TestSymbolChunkingAcrossLanguages(t *testing.T) {
+	if !supported("go") {
+		t.Skip("skipping; tree-sitter symbols require CGO")
+	}
 	cases := []struct{ lang, src, sym string }{
 		{"rust", "fn add(a: i32) -> i32 { a }\n", "add"},
 		{"java", "class A { void run() {} }\n", "run"},
@@ -199,6 +211,9 @@ func TestSymbolChunkingAcrossLanguages(t *testing.T) {
 // TestDecoratedPythonCapture verifies that @decorator + def and decorated class methods
 // are captured as symbol chunks (T3 carry-over from T2 review).
 func TestDecoratedPythonCapture(t *testing.T) {
+	if !supported("go") {
+		t.Skip("skipping; tree-sitter symbols require CGO")
+	}
 	// Top-level decorated functions: @property + def and @staticmethod + def.
 	// Decorated class method: class Cls with @classmethod def cm.
 	src := "@property\ndef foo(self):\n    pass\n\n@staticmethod\ndef bar():\n    pass\n\nclass Cls:\n    @classmethod\n    def cm(cls):\n        pass\n"

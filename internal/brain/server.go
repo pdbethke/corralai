@@ -261,6 +261,8 @@ func NewServer(store *coord.Store, mem *memory.Store, opts Options) *mcp.Server 
 		registerFleetClaims(s, opts)
 	}
 	registerExecutions(s, opts.ExecRing, opts.Queue)
+	registerTaskArtifacts(s, opts.Queue, opts.TaskArtifacts)
+	registerBrowser(s, opts.Queue, opts.TaskArtifacts, opts.Browser)
 	registerActivity(s, opts.ActivityRing, opts)
 	registerHost(s, opts.HostBook, opts)
 	return s

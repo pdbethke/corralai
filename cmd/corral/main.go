@@ -91,6 +91,7 @@ import (
 	"github.com/pdbethke/corralai/internal/repo"
 	"github.com/pdbethke/corralai/internal/repoindex"
 	"github.com/pdbethke/corralai/internal/rolemodel"
+	"github.com/pdbethke/corralai/internal/taskartifacts"
 	"github.com/pdbethke/corralai/internal/telemetry"
 	"github.com/pdbethke/corralai/internal/ui"
 )
@@ -529,6 +530,16 @@ func main() {
 	}
 	defer learnStore.Close()
 
+	taskArtDB := env("CORRALAI_TASK_ARTIFACTS_DB", filepath.Join(home, ".claude", "corralai_task_artifacts.sqlite3"))
+	taskArtStore, err := taskartifacts.Open(taskArtDB)
+	if err != nil {
+		log.Fatalf("open task artifacts store: %v", err)
+	}
+	defer taskArtStore.Close()
+
+	browserMgr := brain.NewBrowserManager()
+	defer browserMgr.Close()
+
 	// Initialize motherduck_token before any MotherDuck operations (RegisterBrain
 	// and startFleetSync both need it for md: attach). Must happen first.
 	initMotherDuckToken()
@@ -842,6 +853,17 @@ func main() {
 	// that identifies itself as a corral-agent worker (ClientInfo.Name or an
 	// early bootstrap/report_host call), so isHumanAdmin can refuse it.
 	workerSessions := brain.NewWorkerSessions()
+
+	engine.Staffing = &mission.StaffingManager{
+		Perf: &perfTracker{
+			q:   queueStore,
+			hb:  hostBook,
+			tel: telStore,
+		},
+		LLM:        &llmAdapter{client: narrator},
+		RoleModels: roleModels,
+	}
+
 	srv := brain.NewServer(store, memStore, brain.Options{
 		Coord:            store,
 		MemoryOwners:     memOwners,
@@ -851,6 +873,8 @@ func main() {
 		Artifacts:        artStore,
 		Missions:         missionStore,
 		Queue:            queueStore,
+		TaskArtifacts:    taskArtStore,
+		Browser:          browserMgr,
 		Reference:        refStore,
 		Embedder:         embedder,
 		Telemetry:        telStore,
@@ -1036,7 +1060,7 @@ func main() {
 	replayStream := func(missionID int64) ([]brain.ReplayEvent, error) {
 		return brain.BuildReplayStream(queueStore, telStore, missionID)
 	}
-	uiHandler := verifier.Wrap(authz(ui.Handler(ui.Deps{Coord: store, Mem: memStore, Gateway: gwStore, Bus: bus, MemOwners: memOwners, Roles: princStore, Queue: queueStore, Missions: missionStore, Executions: execRing, Activity: activityRing, Hosts: hostBook, Health: healthBook, Narrator: narrator, Telemetry: telStore, Oracle: fleetOracle, RoleModels: roleModels, Learn: learnStore, Promote: proposalPromote, Reject: proposalReject, History: historyList, HistoryDetail: historyDetail, Replay: replayStream, Artifacts: artStore})))
+	uiHandler := verifier.Wrap(authz(ui.Handler(ui.Deps{Coord: store, Mem: memStore, Gateway: gwStore, Bus: bus, MemOwners: memOwners, Roles: princStore, Queue: queueStore, Missions: missionStore, Executions: execRing, Activity: activityRing, Hosts: hostBook, Health: healthBook, Narrator: narrator, Telemetry: telStore, Oracle: fleetOracle, RoleModels: roleModels, Staffing: engine.Staffing, Learn: learnStore, Promote: proposalPromote, Reject: proposalReject, History: historyList, HistoryDetail: historyDetail, Replay: replayStream, Artifacts: artStore, TaskArtifacts: taskArtStore})))
 	if verifier.Enabled() {
 		log.Printf("ui: bearer-gated (view via `corral-observe`)")
 	} else {
@@ -1132,3 +1156,40 @@ func (a *repoAdapter) PostComment(ctx context.Context, repoURL string, pr int, b
 func (a *repoAdapter) AuthLogin(ctx context.Context, repoURL string) (string, error) {
 	return a.e.AuthLogin(ctx, repoURL)
 }
+
+type perfTracker struct {
+	q   *queue.Store
+	hb  *brain.HostBook
+	tel *telemetry.Store
+}
+
+func (p *perfTracker) GetRoleModelStats() []mission.ModelStats {
+	lb, err := brain.BuildLeaderboard(p.q, p.hb, p.tel)
+	if err != nil {
+		return nil
+	}
+	var stats []mission.ModelStats
+	for _, cell := range lb.Cells {
+		stats = append(stats, mission.ModelStats{
+			Model:           cell.Model,
+			Role:            cell.Role,
+			TasksCompleted:  cell.TasksCompleted,
+			AvgTaskDuration: cell.AvgTaskDuration,
+			ExecPassRatePct: cell.ExecPassRatePct,
+		})
+	}
+	return stats
+}
+
+type llmAdapter struct {
+	client *llm.Client
+}
+
+func (a *llmAdapter) Generate(ctx context.Context, system, prompt string) (string, error) {
+	return a.client.Ask(ctx, system, prompt)
+}
+
+func (a *llmAdapter) Available() bool {
+	return a.client.Available()
+}
+

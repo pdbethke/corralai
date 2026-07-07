@@ -22,6 +22,7 @@ import (
 	"github.com/pdbethke/corralai/internal/repo"
 	"github.com/pdbethke/corralai/internal/repoindex"
 	"github.com/pdbethke/corralai/internal/rolemodel"
+	"github.com/pdbethke/corralai/internal/taskartifacts"
 	"github.com/pdbethke/corralai/internal/telemetry"
 )
 
@@ -60,6 +61,12 @@ type Options struct {
 	// model). Required alongside Missions for create_mission to enqueue work and
 	// for the claim_task/complete_task/list_tasks tools. nil => no task tools.
 	Queue *queue.Store
+
+	// TaskArtifacts is the dedicated database store for task execution artifacts.
+	TaskArtifacts *taskartifacts.Store
+
+	// Browser is the Go-native headless browser manager.
+	Browser *BrowserManager
 
 	// TaskLeaseSeconds is the claim lease a bee gets on claim_task — the fallback
 	// requeue window when presence is unavailable. 0 => 300s.

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -231,6 +232,9 @@ func (h headerRT) RoundTrip(r *http.Request) (*http.Response, error) {
 	if h.header != "" && h.value != "" {
 		r.Header.Set(h.header, h.value)
 	}
+	if r.URL.Host == "172.19.0.1:9021" {
+		r.Host = "localhost:9021"
+	}
 	return h.base.RoundTrip(r)
 }
 
@@ -245,6 +249,9 @@ func upstreamConnect(ctx context.Context, e gateway.Endpoint, auth gateway.Auth,
 		Transport: headerRT{header: auth.Header, value: auth.Token, base: base},
 	}
 	c := mcp.NewClient(&mcp.Implementation{Name: "corralai-gateway", Version: "0.1.0"}, nil)
+	if strings.Contains(e.Endpoint, "/sse") {
+		return c.Connect(ctx, &mcp.SSEClientTransport{Endpoint: e.Endpoint, HTTPClient: hc}, nil)
+	}
 	return c.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: e.Endpoint, HTTPClient: hc}, nil)
 }
 

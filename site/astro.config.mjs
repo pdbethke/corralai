@@ -73,6 +73,7 @@ export default defineConfig({
             { label: 'corral', slug: 'docs/cli/corral' },
             { label: 'corral-admin', slug: 'docs/cli/corral-admin' },
             { label: 'corral-agent', slug: 'docs/cli/corral-agent' },
+            { label: 'corral-desktop', slug: 'docs/cli/corral-desktop' },
             { label: 'corral-harness', slug: 'docs/cli/corral-harness' },
             { label: 'corral-observe', slug: 'docs/cli/corral-observe' },
             { label: 'corral-top', slug: 'docs/cli/corral-top' },

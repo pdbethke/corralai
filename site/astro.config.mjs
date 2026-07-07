@@ -59,6 +59,7 @@ export default defineConfig({
             { label: 'Topology', slug: 'docs/ui-tour/topology' },
             { label: 'Memory', slug: 'docs/ui-tour/memory' },
             { label: 'Proposals', slug: 'docs/ui-tour/proposals' },
+            { label: 'Lookbook', slug: 'docs/ui-tour/lookbook' },
             { label: 'Completed + replay + agent windows', slug: 'docs/ui-tour/completed-and-replay' },
           ],
         },

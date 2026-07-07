@@ -38,6 +38,7 @@
   <b>CorralAI</b><span class="sub" id="skinsub">— the corral</span>
   <span id="tabs">
     <a class="tab active" id="tab-swarm" onclick="setView('swarm')">swarm</a>
+    <a class="tab" id="tab-launch" onclick="setView('launch')">launch</a>
     <a class="tab" id="tab-progress" onclick="setView('progress')">progress</a>
     <a class="tab" id="tab-topology" onclick="setView('topology')">topology</a>
     <a class="tab" id="tab-memory" onclick="setView('memory')">memory</a>
@@ -45,6 +46,7 @@
     <a class="tab" id="tab-proposals" onclick="setView('proposals')">proposals<span id="proposals-badge" class="pbadge" style="display:none"></span></a>
     <a class="tab" id="tab-files" onclick="setView('files')">files</a>
     <a class="tab" id="tab-completed" onclick="setView('completed')">completed</a>
+    <a class="tab" id="tab-lookbook" onclick="setView('lookbook')">lookbook</a>
   </span>
   <span class="stat" id="stat">connecting…</span>
   <select id="hud-speed" data-replay-speed onchange="setReplaySpeed(+this.value)" title="playback speed" aria-label="Replay playback speed" style="pointer-events:auto;margin-left:6px;background:var(--stage-panel);color:var(--stage-fg);border:1px solid var(--stage-line);border-radius:6px;font-size:11px;padding:2px 4px;display:none"><option value="1">1×</option><option value="2" selected>2×</option><option value="4">4×</option><option value="8">8×</option><option value="16">16×</option></select>

@@ -1,0 +1,37 @@
+---
+title: Emulation lookbook
+description: The tab for managing UI screenshots and guidelines for swarm styling emulation.
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+
+The **Lookbook** tab is a premium interface in the Corral Cockpit. It acts as a shared visual design library where swarm operators can upload layout mockups, screenshots, or design systems (PNG or JPEG format) and associate them with specific visual guidelines. 
+
+Swarm agents can then reference these designs and emulated guidelines during task executions to match target looks.
+
+---
+
+## Anatomy of the Lookbook
+
+The interface is split into two main sections:
+
+### 1. The Design Upload Sidebar
+Located on the left, this glassmorphic card allows you to upload new designs:
+- **Mockup File Selection:** Offers a drag-and-drop file target area. Select or drop any PNG or JPEG mockup under 5MB.
+- **Mockup Name:** Give the design a clear title (e.g., "Sleek Dark Mode Dashboard").
+- **Visual Emulation Guidelines:** A text area where you write the styling rules, color palettes, and component behaviors you want the coding agents to emulate (e.g., "Use high-contrast borders, dark background `#09090b`, and neon-cyan hover borders").
+- **Live Preview:** Renders the selected image inside a thumbnail frame before uploading.
+
+### 2. The Emulation Gallery
+Displays all uploaded designs in a clean, responsive grid layout:
+- **Thumbnail View:** Renders each design mockup. Clicking a thumbnail opens a high-resolution, full-screen **Zoom Modal** viewer.
+- **Copy Emulation Prompt:** Click the **Copy Prompt** button to instantly copy the design guidelines formatted as a prompt instruction prefix for agent tasks to your clipboard.
+- **Remove Design:** Operators can click the **Delete** button to instantly delete a design from the persistent artifacts store.
+
+---
+
+## Under the Hood
+
+All uploaded lookbook items are stored in a dedicated `lookbook_items` table inside the isolated task-artifacts database file (`corralai_task_artifacts.sqlite3`). 
+
+The raw image binary blobs are served on-demand by the brain using efficient HTTP streaming with active `Cache-Control` headers, ensuring the cockpit UI remains fast and lightweight.

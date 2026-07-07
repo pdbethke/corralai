@@ -47,6 +47,16 @@ spec — the authoritative schema is whatever the running brain advertises via
 - **`repo_search`** — semantic/hybrid code search over the working copy; returns `path:line` ranges ranked by meaning.
 - **`report_execution`** — record a command execution (the attributed action ledger + the replay console read from these).
 
+## Headless browser — web app automation & verification
+
+Built-in headless browser tools powered by Go-native `rod` allowing agents to interact with and verify running web applications directly:
+
+- **`browser_navigate`** — navigate the browser session to a target URL.
+- **`browser_click`** — simulate clicking an element on the page matched by CSS selector.
+- **`browser_input`** — enter text into a text input element matched by CSS selector.
+- **`browser_get_html`** — retrieve the current raw HTML source of the active page.
+- **`browser_screenshot`** — capture a full-page PNG screenshot of the current page and save it directly as a task artifact. Gated: the calling agent must hold the active task lease claim.
+
 ## Knowledge — memory & reference corpus
 
 - **`search_memory`** / **`get_memory`** / **`list_memory`** — search (BM25), fetch, or list the memory you can see (your own + the shared team knowledge base).

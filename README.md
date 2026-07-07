@@ -118,10 +118,9 @@ the loop continues until the PR is approved.
   executable guardrails should never silently activate. Corralai even ships a
   [`using-corralai`](skills/using-corralai/SKILL.md) skill that teaches any coding
   agent to drive the herd.
-- **Reference RAG — upload your own grounding material** (text · URLs · **PDFs** ·
-  design "looks"); it's chunked and **vector-embedded** (any OpenAI-compatible
-  embedding endpoint, so it's never tied to one machine) for agents to query. Runs
-  on **embedded DuckDB — no Postgres, no separate vector database to operate**.
+- **Reference RAG — upload your own grounding material** (text · URLs · **PDFs**); it's chunked and **vector-embedded** (any OpenAI-compatible embedding endpoint, so it's never tied to one machine) for agents to query. Runs on **embedded DuckDB — no Postgres, no separate vector database to operate**.
+- **Swarm Design Lookbook:** A premium cockpit interface for uploading design screenshot mockups (PNG/JPEG) alongside visual layout guidelines. Built-in **one-click prompt emulation** makes it effortless to copy styling guidelines and instruct coding agents to match the exact look and feel of mockups.
+- **Go-Native Headless Browser:** Built-in headless browser MCP tools powered by `github.com/go-rod/rod` compile directly into the Go binary. Swarm agents can statefully navigate, click, input text, and take screenshots of running web applications natively inside Docker or on host systems, with **zero Node.js or Playwright installation required**.
 
 ### The knowledge corpus (CORRAL.md)
 
@@ -274,6 +273,7 @@ the short version is three pillars:
   floor GitHub's own secret-scanning doesn't cover on GitLab or self-hosted Gitea.
   So containment is complete: the agents are bounded on the way *in* (the jail),
   and their output is vetted on the way *out*.
+- **Isolated & Secure Artifacts Storage.** Rather than mixing task outputs (like agent-captured screenshots or files) into the primary queue database, Corralai decouples them into an isolated `corralai_task_artifacts.sqlite3` database. Uploads are strictly validated via multiple security gates: verifying that the uploading agent holds an active lease on the target task, running magic byte inspection to enforce a strict MIME allowlist (blocking malicious executable/HTML scripts), restricting size to 5MB, and sanitizing paths to prevent directory traversal.
 
 Every security core was adversarially red-teamed, and the tests ship with the repo.
 The codebase also runs clean through static + supply-chain scanners: **`gosec`** (0

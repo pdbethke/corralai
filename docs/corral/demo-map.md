@@ -2,7 +2,7 @@
 
 `deploy/demo/Makefile` wraps `docker compose -f docker-compose.yml` with
 per-scenario profiles. The UI is always at `http://localhost:9019`, with tabs
-`swarm` / `progress` / `topology` / `memory` (`internal/ui/web/index.html`).
+`swarm` / `progress` / `topology` / `memory` / `lookbook` (`internal/ui/web/index.html`).
 
 ## Make targets and what each shows
 

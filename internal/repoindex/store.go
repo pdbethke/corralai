@@ -24,8 +24,6 @@ type FileInput struct {
 	Text string
 }
 
-
-
 func (s *Store) Close() error { return s.db.Close() }
 
 func (s *Store) SetEmbedder(e *embed.Client) { s.embedder = e }
@@ -35,8 +33,6 @@ func (s *Store) countRows(missionID int64) int {
 	_ = s.db.QueryRow(`SELECT count(*) FROM chunks WHERE mission_id=?`, missionID).Scan(&n)
 	return n
 }
-
-
 
 // dropChunksForPath removes all indexed chunks for a single (mission, path) pair.
 // Used by IndexPaths when a file is deleted, unreadable, binary, or oversized so
@@ -71,8 +67,6 @@ func (s *Store) IndexPaths(missionID int64, dir string, paths []string) error {
 	}
 	return s.IndexFiles(missionID, files)
 }
-
-
 
 // nowUnix mirrors the other stores' timestamp helper.
 func nowUnix() float64 { return float64(timeNow().UnixNano()) / 1e9 }

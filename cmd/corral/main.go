@@ -1192,4 +1192,3 @@ func (a *llmAdapter) Generate(ctx context.Context, system, prompt string) (strin
 func (a *llmAdapter) Available() bool {
 	return a.client.Available()
 }
-

@@ -42,8 +42,6 @@ func chunkFile(path, text string) []LineChunk {
 	return cs
 }
 
-
-
 // subLines joins lines[from-1 : to] (1-indexed, inclusive) from a pre-split slice.
 func subLines(lines []string, from, to int) string {
 	if from < 1 {

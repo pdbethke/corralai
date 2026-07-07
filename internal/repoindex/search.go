@@ -46,8 +46,6 @@ func (s *Store) Search(missionID int64, query string, k int) ([]Hit, error) {
 	return mergeHits(kw, sem, k), nil
 }
 
-
-
 func scanHits(rows *sql.Rows, via string) ([]Hit, error) {
 	defer rows.Close()
 	var out []Hit

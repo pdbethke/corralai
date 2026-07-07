@@ -161,7 +161,7 @@ func (s *Store) searchKeyword(query, scope, typ string, limit int, sharedOnly bo
 	}
 	var where []string
 	var args []any
-	
+
 	// Fall back to pure-Go SQL standard LIKE queries
 	var ors []string
 	for _, t := range strings.Fields(strings.ToLower(query)) {
@@ -183,7 +183,7 @@ func (s *Store) searchKeyword(query, scope, typ string, limit int, sharedOnly bo
 	if sharedOnly {
 		where = append(where, "shared = 1")
 	}
-	
+
 	q := "SELECT slug, name, project, type, description, shared, author, 0.0 AS score FROM mem"
 	if len(where) > 0 {
 		q += " WHERE " + strings.Join(where, " AND ")

@@ -23,9 +23,9 @@ import (
 	"github.com/pdbethke/corralai/internal/admission"
 	"github.com/pdbethke/corralai/internal/agentrole"
 	"github.com/pdbethke/corralai/internal/sandbox"
+	"golang.org/x/net/websocket"
 	"net/http"
 	"os/exec"
-	"golang.org/x/net/websocket"
 )
 
 // makeBrainCall wraps the agent's brain closure (which returns raw JSON strings)
@@ -1265,5 +1265,3 @@ func scanLocalAgents() []string {
 	}
 	return found
 }
-
-

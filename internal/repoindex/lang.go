@@ -39,8 +39,6 @@ var extLang = map[string]string{
 	".bash": "bash",
 }
 
-
-
 // defTypes maps tree-sitter node type → kind label for top-level definitions per language.
 // Node types were verified by parsing sample code with each grammar (Task 2 + Task 3 probes).
 func defTypes(lang string) map[string]string {

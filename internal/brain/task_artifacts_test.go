@@ -55,8 +55,8 @@ func TestTaskArtifactsSecurity(t *testing.T) {
 
 	ws := NewWorkerSessions()
 	srv := NewServer(cstore, nil, Options{
-		Queue:         qstore,
-		TaskArtifacts: artstore,
+		Queue:          qstore,
+		TaskArtifacts:  artstore,
 		WorkerSessions: ws,
 	})
 	handler := mcp.NewStreamableHTTPHandler(

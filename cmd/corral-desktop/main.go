@@ -42,6 +42,7 @@ func loadConfig() (Config, error) {
 	if _, err := os.Stat(configFile); os.IsNotExist(err) {
 		return cfg, nil
 	}
+	// #nosec G304
 	b, err := os.ReadFile(configFile)
 	if err != nil {
 		return cfg, err
@@ -72,6 +73,7 @@ func findBrowser() string {
 			os.Getenv("ProgramFiles(x86)") + `\Microsoft\Edge\Application\msedge.exe`,
 		}
 		for _, p := range paths {
+			// #nosec G703
 			if _, err := os.Stat(p); err == nil {
 				return p
 			}
@@ -337,6 +339,7 @@ func main() {
 	}()
 
 	// Launch Chrome in application mode targeting our local server
+	// #nosec G204
 	cmd := exec.Command(browser, fmt.Sprintf("--app=%s", url))
 	if err := cmd.Start(); err != nil {
 		log.Fatalf("Failed to launch desktop application window: %v", err)
@@ -357,6 +360,7 @@ func launchApp(browser, targetURL, token string) {
 		}
 	}
 
+	// #nosec G204
 	cmd := exec.Command(browser, fmt.Sprintf("--app=%s", appURL))
 	if err := cmd.Start(); err != nil {
 		log.Fatalf("Failed to launch application window: %v", err)

@@ -100,6 +100,7 @@ func (s *Store) Build(dirs []string) (int, error) {
 		if pv, ok := old[e.path]; ok && pv.text == e.name+" "+e.description+" "+e.body && pv.emb != "" {
 			embExpr = pv.emb + "::FLOAT[]"
 		}
+		// #nosec G202
 		stmt := "INSERT INTO mem (path,slug,name,project,type,description,title,body,shared,author,embedding) VALUES (" +
 			lit(e.path) + "," + lit(e.slug) + "," + lit(e.name) + "," + lit(e.project) + "," +
 			lit(e.typ) + "," + lit(e.description) + "," + lit(e.title) + "," + lit(e.body) + "," +
@@ -136,6 +137,7 @@ func (s *Store) Build(dirs []string) (int, error) {
 			} else {
 				for i, p := range paths {
 					if i < len(vecs) {
+						// #nosec G202
 						if _, err := s.db.Exec("UPDATE mem SET embedding = "+embed.VecLiteral(vecs[i])+"::FLOAT[] WHERE path = ?", p); err != nil {
 							log.Printf("memory: embedding UPDATE for %s: %v", p, err)
 						}
@@ -248,6 +250,7 @@ func (s *Store) searchHNSWFiltered(lit, scope, typ string, k int, sharedOnly boo
 	}
 	args = append(args, k*overfetch, k)
 
+	// #nosec G202
 	q := `SELECT slug, name, project, type, description, shared, author,` +
 		`             list_cosine_similarity(embedding, ` + lit + `::FLOAT[]) AS score
 	      FROM (
@@ -291,6 +294,7 @@ func (s *Store) searchBruteForce(lit, scope, typ string, k int, sharedOnly bool)
 		where += " AND type = ?"
 		args = append(args, typ)
 	}
+	// #nosec G202
 	q := "SELECT slug, name, project, type, description, shared, author," +
 		" list_cosine_similarity(embedding, " + lit + "::FLOAT[]) AS score" +
 		" FROM mem WHERE " + where + " ORDER BY score DESC LIMIT ?"

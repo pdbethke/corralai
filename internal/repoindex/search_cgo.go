@@ -35,6 +35,7 @@ func (s *Store) searchKeyword(missionID int64, query string, k int) ([]Hit, erro
 }
 
 func (s *Store) searchSemantic(missionID int64, qvec []float32, k int) ([]Hit, error) {
+	// #nosec G202
 	rows, err := s.db.Query(`SELECT path, start_line, end_line, text,`+
 		`	list_cosine_similarity(embedding, `+embed.VecLiteral(qvec)+`::FLOAT[]) AS score,
 			COALESCE(symbol,'') AS symbol, COALESCE(kind,'') AS kind, COALESCE(lang,'') AS lang

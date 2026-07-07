@@ -37,7 +37,7 @@ func (r *InterceptRegistry) ServeWS(wsConn *websocket.Conn) {
 		sess = &InterceptSession{Done: make(chan struct{})}
 		r.sessions[agent] = sess
 	}
-	
+
 	if role == "agent" {
 		sess.AgentConn = wsConn
 	} else if role == "operator" {

@@ -223,4 +223,3 @@ func (b *HostBook) IsInterceptPending(agent string) bool {
 	}
 	return b.interceptPending[agent]
 }
-

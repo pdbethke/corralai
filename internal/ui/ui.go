@@ -884,8 +884,8 @@ func (s *Server) createMission(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Directive      string                    `json:"directive"`
-		RequiresReview bool                      `json:"requires_review"`
+		Directive      string                        `json:"directive"`
+		RequiresReview bool                          `json:"requires_review"`
 		RoleModels     map[string]rolemodel.ModelRef `json:"role_models"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -1107,7 +1107,3 @@ func (s *Server) lookbookImage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	_, _ = w.Write(found.Data)
 }
-
-
-
-

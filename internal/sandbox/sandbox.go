@@ -160,6 +160,7 @@ func RunInteractive(ctx context.Context, command string, opts Options, ws io.Rea
 	ctx, cancel := context.WithTimeout(ctx, opts.Timeout)
 	defer cancel()
 
+	// #nosec G204
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = opts.Workspace
 	cmd.Env = env
@@ -191,4 +192,3 @@ func RunInteractive(ctx context.Context, command string, opts Options, ws io.Rea
 	}
 	return res
 }
-

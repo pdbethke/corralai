@@ -124,8 +124,6 @@ type entry struct {
 	shared                                                           bool
 }
 
-
-
 func bsql(b bool) string {
 	if b {
 		return "TRUE"
@@ -217,8 +215,6 @@ func iterEntries(dirs []string, rules []tierRule) []entry {
 	}
 	return out
 }
-
-
 
 func mergeHits(kw, sem []Hit, limit int) []Hit {
 	norm := func(hs []Hit) {

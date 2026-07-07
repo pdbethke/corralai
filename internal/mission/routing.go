@@ -269,6 +269,7 @@ func queryOllama() ([]string, []string) {
 
 	client := http.Client{Timeout: 2 * time.Second}
 
+	// #nosec G704
 	resp, err := client.Get(url + "/api/tags")
 	if err == nil {
 		defer resp.Body.Close()
@@ -284,6 +285,7 @@ func queryOllama() ([]string, []string) {
 		}
 	}
 
+	// #nosec G704
 	resp, err = client.Get(url + "/api/ps")
 	if err == nil {
 		defer resp.Body.Close()

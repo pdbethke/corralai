@@ -10,10 +10,10 @@ import (
 )
 
 var (
-	kernel32                      = syscall.NewLazyDLL("kernel32.dll")
-	procCreateJobObjectW          = kernel32.NewProc("CreateJobObjectW")
-	procSetInformationJobObject   = kernel32.NewProc("SetInformationJobObject")
-	procAssignProcessToJobObject  = kernel32.NewProc("AssignProcessToJobObject")
+	kernel32                     = syscall.NewLazyDLL("kernel32.dll")
+	procCreateJobObjectW         = kernel32.NewProc("CreateJobObjectW")
+	procSetInformationJobObject  = kernel32.NewProc("SetInformationJobObject")
+	procAssignProcessToJobObject = kernel32.NewProc("AssignProcessToJobObject")
 )
 
 const (

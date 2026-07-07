@@ -44,7 +44,7 @@ func (sandboxExecIsolator) Wrap(command string, opts Options, env []string) ([]s
 	sb.WriteString("(allow signal*)\n")
 	sb.WriteString("(allow sysctl*)\n")
 	sb.WriteString("(allow file-read*)\n")
-	
+
 	// Writable paths
 	sb.WriteString("(allow file-write* (subpath \"/private/tmp\"))\n")
 	sb.WriteString("(allow file-write* (subpath \"/tmp\"))\n")

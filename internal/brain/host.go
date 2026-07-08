@@ -160,7 +160,7 @@ func AnnotateHosts(hosts []Host, p *rolemodel.Policy) []AnnotatedHost {
 
 // topologyOut is the response shape for swarm_topology.
 type topologyOut struct {
-	Hosts  []AnnotatedHost  `json:"hosts"`
+	Hosts  []AnnotatedHost               `json:"hosts"`
 	Policy map[string]rolemodel.ModelRef `json:"policy"` // snapshot of the declared policy (may be nil/empty)
 }
 

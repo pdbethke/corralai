@@ -24,6 +24,10 @@ export default defineConfig({
       // home), so /docs and the marketing pages read as one continuous site.
       components: {
         SiteTitle: './src/components/StarlightSiteTitle.astro',
+        // Adds the marketing site-nav (Home/Recordings/Field notes) inline in the
+        // docs header so /docs isn't a nav dead end. Reuses Starlight's own
+        // search/theme/social so nothing is lost.
+        Header: './src/components/StarlightHeader.astro',
       },
       sidebar: [
         {
@@ -31,6 +35,7 @@ export default defineConfig({
           items: [
             { label: 'Home', link: '/' },
             { label: 'Recordings', link: '/recordings/' },
+            { label: 'Field notes', link: '/field-notes/' },
           ],
         },
         { label: 'Getting started', slug: 'docs/getting-started' },

@@ -30,6 +30,52 @@ herd with claims turned off (a demo of what NOT coordinating looks like),
 `make demo-models` for a two-model comparison run. See
 [Getting started](/docs/getting-started/) for the walkthrough.
 
+## The verify gate needs a sandbox (Ubuntu 24.04+)
+
+The brain certifies a gated task by **running its verify command itself** — in a
+jail, against its own working copy, reading the real exit code — rather than
+trusting what a worker reports (see [Trust & security](/docs/concepts/trust-and-security/)).
+That jail is [bubblewrap](https://github.com/containers/bubblewrap) by default,
+and bubblewrap needs unprivileged user namespaces.
+
+On **Ubuntu 24.04+**, unprivileged user namespaces are restricted by default
+(`kernel.apparmor_restrict_unprivileged_userns=1`). If the brain can't get a
+sandbox it does **not** crash and does **not** silently trust the worker without
+saying so — it logs, loudly, and falls back to the recorded-execution lookup:
+
+```
+verify-gate: NO isolation backend (bwrap ... Permission denied);
+gated completion falls back to worker-reported executions — set CORRALAI_GATE_EXEC_BACKEND
+```
+
+To get the independent gate, install bubblewrap and grant it (and it alone) the
+`userns` permission with a small AppArmor profile — this keeps the rest of the
+host hardened:
+
+```sh
+sudo apt install -y bubblewrap
+sudo tee /etc/apparmor.d/bwrap >/dev/null <<'PROF'
+abi <abi/4.0>,
+include <tunables/global>
+profile bwrap /usr/bin/bwrap flags=(unconfined) {
+  userns,
+  include if exists <local/bwrap>
+}
+PROF
+sudo apparmor_parser -r /etc/apparmor.d/bwrap
+```
+
+Restart the brain and confirm the log now reads
+`verify-gate: independent verification enabled (backend bwrap)`. The profile in
+`/etc/apparmor.d/` reloads automatically on boot.
+
+Alternatives to bubblewrap: set `CORRALAI_GATE_EXEC_BACKEND=container` to run the
+verify command in a container instead (needs a runtime and an image carrying the
+project's toolchain), or — only on a host that is already a disposable sandbox —
+`CORRALAI_GATE_EXEC_BACKEND=none` with `CORRALAI_GATE_EXEC_UNSAFE_HOST=1`. Lifting
+the restriction globally (`kernel.apparmor_restrict_unprivileged_userns=0`) also
+works but weakens every process on the host, so prefer the per-binary profile.
+
 ## Deploying a brain behind a tunnel
 
 The brain listens on `CORRALAI_ADDR` (default `127.0.0.1:9019`) and expects

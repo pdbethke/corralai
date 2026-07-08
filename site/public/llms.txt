@@ -1,0 +1,32 @@
+# Corralai
+
+> A headless "brain" orchestrates a herd of AI agents across any model — mix local and frontier in one mission — to plan, build, verify, and re-plan real software missions behind real fences, human-gated. Every run is recorded and replayable.
+
+Corralai is a Go multi-agent orchestrator (source-available, Elastic License 2.0). The load-bearing idea: correctness is certified by **execution, not judgment** — the brain runs the verify command itself in a jail and reads the real exit code; anything ambiguous goes to a **human gate**. Agents run credential-less in bubblewrap jails, and the only way work leaves the jail is a reviewed pull request. It is v0.1, solo-maintained, and moving fast.
+
+## Docs
+- [Getting started](https://corralai.dev/docs/getting-started/): install, your first mission, the key-free local demo
+- [Running it](https://corralai.dev/docs/running-it/): dev vs auth-on, the demo profiles, the verify-gate sandbox setup, deploying behind a tunnel
+- [Configuration](https://corralai.dev/docs/configuration/): environment variables and knobs
+- [MCP tools reference](https://corralai.dev/docs/mcp-tools/): the brain's Model Context Protocol tool surface
+- [CLI reference](https://corralai.dev/docs/cli/corral/): every binary's flags, generated from its own -h output
+- [Limitations & roadmap](https://corralai.dev/docs/limitations/): what v0.1 does, and what it deliberately does not claim
+
+## Concepts
+- [Mission lifecycle](https://corralai.dev/docs/concepts/mission-lifecycle/): directive → plan → build → verify → re-plan → converge
+- [The task queue + verify gate](https://corralai.dev/docs/concepts/queue-and-verify/): the deterministic, execution-based gate
+- [Claims & leases](https://corralai.dev/docs/concepts/claims-and-leases/): how the herd coordinates work without collisions
+- [Memory tiers + the learning loop](https://corralai.dev/docs/concepts/memory-and-learning-loop/): findings become human-approved skills
+- [Mission history + replay](https://corralai.dev/docs/concepts/history-and-replay/): every run recorded and scrubbable
+- [Multi-model herds](https://corralai.dev/docs/concepts/multi-model-herds/): mix local and frontier models in one mission
+- [The knowledge corpus](https://corralai.dev/docs/concepts/knowledge-corpus/): bring-your-own reference RAG
+- [Trust & security](https://corralai.dev/docs/concepts/trust-and-security/): jails, the deterministic gate, the human gate, and content fencing
+
+## Field notes
+- [Why we built a brain, not a bot](https://corralai.dev/field-notes/why-we-built-it/): the contain / certify / query thesis, and why it sits on one queryable ledger
+- [Fugu, and the knife it leaves unwashed](https://corralai.dev/field-notes/fugu/): on Sakana's Fugu orchestrator and the containment seam it leaves open
+- [We caught our own gate cheating](https://corralai.dev/field-notes/we-caught-our-own-gate-cheating/): finding and fixing a self-certification bug in the open
+
+## More
+- [Source on GitHub](https://github.com/pdbethke/corralai): the code, Elastic License 2.0
+- [Recordings](https://corralai.dev/recordings/): replayable golden runs of real missions

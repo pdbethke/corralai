@@ -17,3 +17,36 @@
 body {
   font: 16px/1.5 ui-sans-serif, system-ui, Segoe UI, Roboto, sans-serif;
 }
+
+/* Make the docs header the same always-dark "instrument" bar as the marketing
+   site header (src/components/Header.astro), in BOTH docs light and dark modes.
+   Starlight is a separate framework with its own --sl-color-* tokens, so rather
+   than fight each child (search box, theme select, social icons, nav), we
+   re-scope those tokens to the --stage-* dark palette ON THE HEADER ELEMENT
+   ONLY — every built-in inside it then renders light-on-dark for free, while the
+   rest of the page keeps following the daylight/dark theme. */
+header.header {
+  background: #0e1116; /* --stage-bg */
+  border-bottom: 1px solid #33405a; /* --stage-line */
+
+  --sl-color-bg: #0e1116;
+  --sl-color-bg-nav: #0e1116;
+  --sl-color-black: #0e1116;
+  --sl-color-white: #e6e1d8; /* --stage-fg */
+  --sl-color-text: #e6e1d8;
+  --sl-color-text-invert: #0e1116; /* dark text on the amber active pill */
+  --sl-color-gray-1: #e6e1d8;
+  --sl-color-gray-2: #b8b09c;
+  --sl-color-gray-3: #8a8170; /* --stage-muted */
+  --sl-color-gray-4: #5c5647;
+  --sl-color-gray-5: #33405a; /* --stage-line */
+  --sl-color-gray-6: #161b22; /* --stage-panel */
+  --sl-color-gray-7: #12161c;
+  --sl-color-text-accent: #e8a838; /* --stage-amber */
+  --sl-color-accent: #e8a838;
+  --sl-color-accent-low: #33405a;
+  --sl-color-hairline: #33405a;
+  --sl-color-hairline-light: #33405a;
+  --sl-color-hairline-shade: #33405a;
+  color-scheme: dark;
+}

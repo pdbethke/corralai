@@ -1,0 +1,104 @@
+---
+// SPDX-License-Identifier: Elastic-2.0
+// Renders one field note. Marketing chrome (Header + SiteFooter), the MDX body
+// rendered via astro:content's render(). One <h1> here (the note title); the
+// note body starts at <h2>, so the a11y "single h1" rule holds.
+import '../../styles/global.css';
+import Header from '../../components/Header.astro';
+import SiteFooter from '../../components/SiteFooter.astro';
+import { getCollection, render } from 'astro:content';
+
+export async function getStaticPaths() {
+  const notes = await getCollection('fieldNotes', ({ data }) => !data.draft);
+  return notes.map((note) => ({ params: { slug: note.id }, props: { note } }));
+}
+
+const { note } = Astro.props;
+const { Content } = await render(note);
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const d = note.data.pubDate;
+const dateStr = `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+
+const url = `https://corralai.dev/field-notes/${note.id}/`;
+const title = `${note.data.title} — Corralai field notes`;
+---
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script is:inline>
+    (function () { try { var t = localStorage.getItem('corralai-site-theme') || 'light'; document.documentElement.setAttribute('data-theme', t); var ct = localStorage.getItem('corralai-cockpit-theme'); if (ct) document.documentElement.setAttribute('data-cockpit-theme', ct); } catch (e) {} })();
+  </script>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <title>{title}</title>
+  <meta name="description" content={note.data.description} />
+  <link rel="canonical" href={url} />
+  <meta property="og:type" content="article" />
+  <meta property="og:title" content={note.data.title} />
+  <meta property="og:description" content={note.data.description} />
+  <meta property="og:url" content={url} />
+  <meta property="og:image" content="https://corralai.dev/og-image.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content={note.data.title} />
+  <meta name="twitter:description" content={note.data.description} />
+  <meta name="twitter:image" content="https://corralai.dev/og-image.png" />
+</head>
+<body>
+  <Header active="notes" />
+  <main class="note-wrap">
+    <p class="note-back"><a href="/field-notes/">← Field notes</a></p>
+    <article class="note">
+      <header class="note-head">
+        <time datetime={d.toISOString()}>{dateStr}</time>
+        <h1>{note.data.title}</h1>
+      </header>
+      <div class="note-body">
+        <Content />
+      </div>
+    </article>
+  </main>
+  <SiteFooter />
+</body>
+</html>
+
+<style>
+  .note-wrap { max-width: 720px; margin: 0 auto; padding: 40px 20px 56px; }
+  .note-back { margin: 0 0 28px; }
+  .note-back a { font-size: 14px; font-weight: 600; text-decoration: none; }
+  .note-head { margin-bottom: 32px; }
+  .note-head time { display: block; font-size: 13px; color: var(--muted); margin-bottom: 12px; }
+  .note-head h1 { font-size: clamp(28px, 5vw, 42px); line-height: 1.12; margin: 0; color: var(--fg); }
+
+  /* Prose. Tokens only (theme-aware); links amber, rules and code panels use the
+     muted line color so the note reads as one system with the rest of the site. */
+  .note-body { color: var(--fg); font-size: 17px; line-height: 1.7; }
+  .note-body :global(h2) { font-size: 24px; line-height: 1.25; margin: 40px 0 14px; color: var(--fg); }
+  .note-body :global(h3) { font-size: 19px; margin: 30px 0 10px; color: var(--fg); }
+  .note-body :global(p) { margin: 0 0 18px; }
+  .note-body :global(ul), .note-body :global(ol) { margin: 0 0 18px; padding-left: 1.3em; }
+  .note-body :global(li) { margin: 0 0 8px; }
+  .note-body :global(a) { color: var(--amber); text-underline-offset: 2px; }
+  .note-body :global(strong) { color: var(--fg); font-weight: 700; }
+  .note-body :global(em) { font-style: italic; }
+  .note-body :global(hr) {
+    border: 0;
+    border-top: 1px solid color-mix(in srgb, var(--muted) 30%, transparent);
+    margin: 34px 0;
+  }
+  .note-body :global(code) {
+    font-family: ui-monospace, SFMono-Regular, Menlo, "Cascadia Code", monospace;
+    font-size: 0.88em;
+    background: color-mix(in srgb, var(--muted) 16%, transparent);
+    padding: 0.12em 0.36em;
+    border-radius: 5px;
+  }
+  .note-body :global(blockquote) {
+    margin: 0 0 18px;
+    padding: 4px 0 4px 18px;
+    border-left: 3px solid var(--amber);
+    color: var(--muted);
+  }
+</style>

@@ -1,0 +1,93 @@
+---
+title: "Why we built a brain, not a bot"
+description: "Agentic coding got real in 2026 — and stayed a black box. We wanted the opposite: a herd you can contain, certify, and query. This is the founding why, and why the whole thing sits on one queryable ledger."
+pubDate: 2026-07-03
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+
+*The first of these notes. Where the idea came from, and the one design choice everything else hangs off.*
+
+---
+
+By early 2026 the agentic coding question stopped being *can it*. Models plan,
+call tools, edit files, react to failures, and finish real work. The open
+question became *can you live with it* — can you see what it did, know who did
+it, trust that it was safe, and get better at running it over time.
+
+Mostly, you can't. You paste a task into a box, things happen behind a wall, and
+you hope. When it works you don't know why; when it doesn't you can't tell where
+it went wrong. The agent is a black box that occasionally hands you a diff.
+
+We didn't want a smarter box. We wanted an **operator's console** — a headless
+brain that runs a herd of agents the way an operator runs a system: everything
+contained, everything certified, everything inspectable. Three commitments fell
+out of that, and they're the whole design.
+
+## 1. Contain it
+
+An agent that can reach your keys, your storage, or your production is a liability
+no matter how good it is. So in Corralai every agent runs in an unprivileged
+**`bwrap` jail** — credential-less, unable to push anything on its own. The only
+way work leaves the jail is a **reviewed pull request**. Never a write to live
+storage, never a direct deploy. Admin actions and merges pass a **human gate**.
+
+The point isn't that a jailed model can't be fooled — it can. The point is that a
+fooled agent is *contained*: watched, credential-less, and boxed. You get the
+capability without handing over the knife.
+
+## 2. Certify it — deterministically
+
+Here's the line we drew on purpose: **the thing that decides whether the work is
+correct is not itself a model.** The LLMs do the cognition — planning, staffing,
+re-planning when a finding lands. But a mission doesn't *converge* until a real,
+recorded run passes a **deterministic gate**. No amount of model confidence
+substitutes for a green run.
+
+We say it in-house as *a judge may not certify herself*. A builder doesn't get to
+declare its own build good. The correctness call lives outside the models,
+where you can read it.
+
+## 3. Make it queryable
+
+This is the one that actually shapes everything, and it's the part people miss.
+
+The herd's entire working life — every plan, every edit, every finding, every
+lesson it learns, every telemetry point — lands in an **embedded [DuckDB](https://duckdb.org)
+substrate**. Not scattered across logs and a vector store and a task tracker: one
+attributed, columnar, **SQL-queryable** ledger. "What did the reviewer flag on
+this mission?" "Which agent touched this file, and what unblocked it?" "Show me
+every finding that became a skill." Those aren't features we had to build one at a
+time — they're *queries*, because the substrate is a real database.
+
+That's the sentence we keep coming back to: the operator surface is
+**increasingly just a query over one attributed ledger.**
+
+And because it's DuckDB, it scales the boring way. A single mission runs the
+database embedded, in-process, zero-ops. When you want a whole **fleet** of swarms
+in one view, **[MotherDuck](https://motherduck.com)** syncs those local ledgers to
+the cloud — same tables, same SQL, no new data model. Small enough to live inside
+one mission; big enough to query a fleet. The learning loop rides the same rails:
+findings become human-approved skills, and every step of that is a row you can
+audit.
+
+You can't operate what you can't see. You can't *improve* what you can't query. So
+we made the herd's whole life a database, and pointed the console at it.
+
+## The shape of it
+
+Contain, certify, query. A corral is the right name for it: you put a fence around
+something powerful so it becomes useful instead of dangerous. The fence is the
+jail. The gate is the certifier. And the ledger is how you watch the whole herd at
+once — and get better at running it.
+
+That's why this exists. The next note is about where the rest of the field is
+heading — [Sakana's Fugu](/field-notes/fugu/), the best orchestration paper of the
+year, and the one thing its own name forgets.
+
+---
+
+*Corralai is v0.1, solo-maintained, and public. Read the
+[docs](/docs/getting-started/) or the code on
+[GitHub](https://github.com/pdbethke/corralai). Field notes are opinions, not
+announcements.*

@@ -1,0 +1,142 @@
+---
+// SPDX-License-Identifier: Elastic-2.0
+// Field notes index — the marketing-side essay list. Same chrome as / and
+// /recordings (Header + SiteFooter), NOT Starlight. Cards link to
+// /field-notes/<id>/, rendered by [...slug].astro.
+import '../../styles/global.css';
+import Header from '../../components/Header.astro';
+import SiteFooter from '../../components/SiteFooter.astro';
+import { getCollection } from 'astro:content';
+import { Image } from 'astro:assets';
+// Shep + the herd, title band cropped off (the baked-in "Corral AI" lockup lived
+// there). Optimized to webp at build time — a local asset, no external request.
+import bannerImg from '../../assets/field-notes/mind-the-herd.jpg';
+
+const notes = (await getCollection('fieldNotes', ({ data }) => !data.draft)).sort(
+  (a, b) => b.data.pubDate.getTime() - a.data.pubDate.getTime(),
+);
+
+// A stable, locale-independent date string (no Intl locale drift across the
+// build host) — "8 Jul 2026".
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const fmt = (d: Date) => `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+
+const title = 'Field notes — Corralai';
+const description = 'Notes from the corral: where we think out loud about multi-agent orchestration, model composition, and the fences that make it safe.';
+const url = 'https://corralai.dev/field-notes/';
+---
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script is:inline>
+    (function () { try { var t = localStorage.getItem('corralai-site-theme') || 'light'; document.documentElement.setAttribute('data-theme', t); var ct = localStorage.getItem('corralai-cockpit-theme'); if (ct) document.documentElement.setAttribute('data-cockpit-theme', ct); } catch (e) {} })();
+  </script>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <title>{title}</title>
+  <meta name="description" content={description} />
+  <link rel="canonical" href={url} />
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="Field notes — Corralai" />
+  <meta property="og:description" content={description} />
+  <meta property="og:url" content={url} />
+  <meta property="og:image" content="https://corralai.dev/og-image.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Field notes — Corralai" />
+  <meta name="twitter:description" content={description} />
+  <meta name="twitter:image" content="https://corralai.dev/og-image.png" />
+</head>
+<body>
+  <Header active="notes" />
+  <main class="fn-wrap">
+    <Image
+      src={bannerImg}
+      alt="A Sheltie named Shep minding a herd of cabled electric sheep on a sunny hillside — the corral at work."
+      class="fn-banner"
+      widths={[760, 1120, 1408]}
+      sizes="(max-width: 800px) 100vw, 760px"
+      loading="eager"
+    />
+    <header class="fn-head">
+      <p class="fn-eyebrow">Field notes</p>
+      <h1>Thinking out loud from the corral</h1>
+      <p class="fn-lede">{description}</p>
+    </header>
+
+    {notes.length === 0 ? (
+      <p class="fn-empty">No notes yet. Check back soon.</p>
+    ) : (
+      <ul class="fn-list">
+        {notes.map((note) => (
+          <li class="fn-card">
+            <a href={`/field-notes/${note.id}/`}>
+              <time datetime={note.data.pubDate.toISOString()}>{fmt(note.data.pubDate)}</time>
+              <h2>{note.data.title}</h2>
+              <p>{note.data.description}</p>
+              <span class="fn-more">Read the note →</span>
+            </a>
+          </li>
+        ))}
+      </ul>
+    )}
+  </main>
+  <SiteFooter />
+</body>
+</html>
+
+<style>
+  .fn-wrap {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 64px 20px 48px;
+  }
+  .fn-banner {
+    display: block;
+    width: 100%;
+    height: auto;
+    border-radius: 14px;
+    margin-bottom: 34px;
+    border: 1px solid color-mix(in srgb, var(--muted) 22%, transparent);
+  }
+  .fn-head { margin-bottom: 40px; }
+  .fn-eyebrow {
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--amber);
+    margin: 0 0 10px;
+  }
+  .fn-head h1 {
+    font-size: clamp(28px, 5vw, 40px);
+    line-height: 1.1;
+    margin: 0 0 14px;
+    color: var(--fg);
+  }
+  .fn-lede { color: var(--muted); font-size: 17px; line-height: 1.55; margin: 0; }
+  .fn-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 18px; }
+  .fn-card a {
+    display: block;
+    text-decoration: none;
+    border: 1px solid color-mix(in srgb, var(--muted) 28%, transparent);
+    border-radius: 12px;
+    padding: 22px 24px;
+    transition: border-color 0.14s ease, transform 0.14s ease;
+  }
+  .fn-card a:hover {
+    border-color: var(--amber);
+    transform: translateY(-1px);
+  }
+  .fn-card time {
+    display: block;
+    font-size: 13px;
+    color: var(--muted);
+    margin-bottom: 8px;
+  }
+  .fn-card h2 { font-size: 21px; line-height: 1.25; margin: 0 0 8px; color: var(--fg); }
+  .fn-card p { color: var(--muted); font-size: 15px; line-height: 1.55; margin: 0 0 12px; }
+  .fn-more { font-size: 14px; font-weight: 600; color: var(--amber); }
+  .fn-empty { color: var(--muted); }
+</style>

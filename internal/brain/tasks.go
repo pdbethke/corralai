@@ -290,8 +290,9 @@ func registerTasks(s *mcp.Server, store *coord.Store, q *queue.Store, lease floa
 				// not certify herself"). Without a runner (legacy / non-repo missions) we
 				// fall back to the recorded-execution lookup.
 				var passed bool
-				if verify != nil {
-					ok, _ := verify(ctx, mission.MissionDir(workspace, t.MissionID), t.Verify)
+				dir := mission.MissionDir(workspace, t.MissionID)
+				if verify != nil && workingCopyExists(dir) {
+					ok, _ := verify(ctx, dir, t.Verify)
 					exit := 0
 					if !ok {
 						exit = 1

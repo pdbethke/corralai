@@ -224,6 +224,78 @@ func TestVerifyGateRunsCommandNotSelfReport(t *testing.T) {
 	}
 }
 
+// TestNewSandboxVerifyReportsRealExit locks the production runner's core mapping:
+// exit 0 => certified, any nonzero => not. Pure execution, read the exit code.
+func TestNewSandboxVerifyReportsRealExit(t *testing.T) {
+	iso, err := sandbox.Resolve(sandbox.Config{Backend: "none", UnsafeHost: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := NewSandboxVerify(iso)
+	ws := t.TempDir()
+	if ok, _ := v(context.Background(), ws, "exit 0"); !ok {
+		t.Fatal("exit 0 must certify ok=true")
+	}
+	if ok, _ := v(context.Background(), ws, "exit 7"); ok {
+		t.Fatal("a nonzero exit must certify ok=false")
+	}
+}
+
+// TestVerifyGateFallsBackToLookupWithoutWorkingCopy: when the brain has no
+// working copy for a mission (a non-repo mission), it cannot independently run
+// the verify command, so the gate must fall back to the recorded-execution
+// lookup rather than fail the task — the independent runner must NOT be called.
+func TestVerifyGateFallsBackToLookupWithoutWorkingCopy(t *testing.T) {
+	dir := t.TempDir()
+	cstore, err := coord.Open(filepath.Join(dir, "c.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cstore.Close() })
+	q, err := queue.Open(filepath.Join(dir, "q.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { q.Close() })
+
+	const mid = 43
+	ws := t.TempDir() // deliberately do NOT create MissionDir(ws, mid): no working copy.
+	if err := q.Enqueue(mid, []queue.TaskSpec{{Key: "t#1", Role: "tester", Title: "t", Instruction: "go", Verify: "go test"}}); err != nil {
+		t.Fatal(err)
+	}
+	q.PromoteReady(mid)
+	ct, err := q.ClaimNext("Tess", []string{"tester"}, 300)
+	if err != nil || ct == nil {
+		t.Fatalf("ClaimNext: %v %v", ct, err)
+	}
+	// A recorded pass in the claim window drives the legacy lookup path.
+	if err := q.RecordExecution(queue.Execution{MissionID: mid, Agent: "Tess", Command: "go test", ExitCode: 0, OK: true, TS: int64(ct.ClaimedTS) + 1}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A verifier that must NOT be consulted — there is no working copy to run in.
+	verify := func(_ context.Context, wd, _ string) (bool, string) {
+		t.Errorf("independent verify must not run without a working copy (dir=%s)", wd)
+		return false, "should not be called"
+	}
+
+	ctx := context.Background()
+	clientT, serverT := mcp.NewInMemoryTransports()
+	go func() { _ = NewServer(cstore, nil, Options{Queue: q, Workspace: ws, Verify: verify}).Run(ctx, serverT) }()
+	client := mcp.NewClient(&mcp.Implementation{Name: "bee", Version: "0"}, nil)
+	sess, err := client.Connect(ctx, clientT, nil)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer sess.Close()
+
+	var out completeTaskOut
+	callTask(t, sess, "complete_task", map[string]any{"name": "Tess", "id": ct.ID, "result": "green"}, &out)
+	if !out.OK {
+		t.Fatalf("without a working copy the gate must fall back to the recorded-execution lookup: %+v", out)
+	}
+}
+
 func callTask(t *testing.T, sess *mcp.ClientSession, name string, args map[string]any, out any) {
 	t.Helper()
 	res, err := sess.CallTool(context.Background(), &mcp.CallToolParams{Name: name, Arguments: args})

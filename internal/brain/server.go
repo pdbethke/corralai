@@ -242,7 +242,7 @@ func NewServer(store *coord.Store, mem *memory.Store, opts Options) *mcp.Server 
 		registerRepoSearch(s, opts)
 	}
 	if opts.Queue != nil {
-		registerTasks(s, store, opts.Queue, opts.TaskLeaseSeconds, opts.Telemetry, opts.HostBook, opts.Learn, opts.Health)
+		registerTasks(s, store, opts.Queue, opts.TaskLeaseSeconds, opts.Telemetry, opts.HostBook, opts.Learn, opts.Health, opts.Workspace, opts.Verify)
 	}
 	if opts.Reference != nil && opts.Embedder != nil {
 		registerReference(s, opts)

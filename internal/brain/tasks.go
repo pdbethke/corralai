@@ -10,11 +10,13 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/pdbethke/corralai/internal/coord"
 	"github.com/pdbethke/corralai/internal/learn"
+	"github.com/pdbethke/corralai/internal/mission"
 	"github.com/pdbethke/corralai/internal/queue"
 	"github.com/pdbethke/corralai/internal/telemetry"
 )
@@ -191,7 +193,7 @@ const escalationRefusals = 5
 
 // registerTasks adds the pull-model tools: a bee claims the next ready task it
 // can serve, runs it, and completes it; list_tasks is the live work list.
-func registerTasks(s *mcp.Server, store *coord.Store, q *queue.Store, lease float64, tel *telemetry.Store, book *HostBook, ls *learn.Store, health *HealthBook) {
+func registerTasks(s *mcp.Server, store *coord.Store, q *queue.Store, lease float64, tel *telemetry.Store, book *HostBook, ls *learn.Store, health *HealthBook, workspace string, verify VerifyFunc) {
 	if lease <= 0 {
 		lease = 300
 	}
@@ -272,20 +274,44 @@ func registerTasks(s *mcp.Server, store *coord.Store, q *queue.Store, lease floa
 
 	mcp.AddTool(s, &mcp.Tool{Name: "complete_task",
 		Description: "Mark a task you claimed as done, with a short result. Optionally attach structured findings you discovered (vulns, bugs, design flaws). Idempotent; only the claimer can complete it."},
-		func(_ context.Context, req *mcp.CallToolRequest, in completeTaskIn) (*mcp.CallToolResult, completeTaskOut, error) {
+		func(ctx context.Context, req *mcp.CallToolRequest, in completeTaskIn) (*mcp.CallToolResult, completeTaskOut, error) {
 			bee := identity(req, in.Name)
 			// Verification gate: a gated task (one with a Verify command) cannot close
-			// unless a recorded execution of that command exited 0. Otherwise refuse and
-			// raise a regression finding for the reflex re-planner.
+			// unless that command exits 0. Otherwise refuse and raise a regression
+			// finding for the reflex re-planner.
 			t, terr := q.TaskByID(in.ID)
 			if terr != nil {
 				return nil, completeTaskOut{}, terr
 			}
 			if t != nil && t.Verify != "" {
-				since := int64(math.Ceil(t.ClaimedTS))
-				passed, err := q.MissionPassedVerifySince(t.MissionID, t.Verify, since)
-				if err != nil {
-					return nil, completeTaskOut{}, err
+				// Workstream A: when a Verify runner is wired, the BRAIN runs the check
+				// itself against its own working copy and certifies on the real exit code
+				// — the worker's self-reported execution row is NOT trusted ("a judge may
+				// not certify herself"). Without a runner (legacy / non-repo missions) we
+				// fall back to the recorded-execution lookup.
+				var passed bool
+				dir := mission.MissionDir(workspace, t.MissionID)
+				if verify != nil && workingCopyExists(dir) {
+					ok, _ := verify(ctx, dir, t.Verify)
+					exit := 0
+					if !ok {
+						exit = 1
+					}
+					// The gate's own run is the authoritative, queryable ledger row.
+					if rerr := q.RecordExecution(queue.Execution{
+						MissionID: t.MissionID, Agent: "verify-gate", Command: t.Verify,
+						ExitCode: exit, OK: ok, TS: time.Now().Unix(),
+					}); rerr != nil {
+						return nil, completeTaskOut{}, fmt.Errorf("verify-gate record: %w", rerr)
+					}
+					passed = ok
+				} else {
+					since := int64(math.Ceil(t.ClaimedTS))
+					p, err := q.MissionPassedVerifySince(t.MissionID, t.Verify, since)
+					if err != nil {
+						return nil, completeTaskOut{}, err
+					}
+					passed = p
 				}
 				if !passed {
 					if _, err := q.AddFinding(queue.Finding{

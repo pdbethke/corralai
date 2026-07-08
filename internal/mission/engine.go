@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"time"
 
@@ -113,6 +114,12 @@ type Engine struct {
 	// (MissionDir(Workspace, id) = <Workspace>/m<id>).
 	Repo      RepoOps
 	Workspace string
+
+	// Verify, when non-nil, re-runs the mission's own verify commands against the
+	// FINAL working copy before convergence (#42) — so a mission cannot reach
+	// "done" on an earlier per-task pass while the final tree is actually broken.
+	// It is the same runner the completion gate uses; nil disables the check.
+	Verify func(ctx context.Context, dir, command string) (ok bool, detail string)
 
 	// Egress, when non-nil, scans a mission's cumulative changed-file set for
 	// secrets (blocking) and advisory issues (Go dep vulns, incompatible
@@ -315,6 +322,14 @@ func (e *Engine) Tick() error {
 				_ = e.m.SetMissionStatus(mi.ID, "awaiting_review")
 			}
 		} else {
+			// #42: a drained queue is not the same as a correct final state — a
+			// later edit can break an earlier per-task pass. Before converging, the
+			// brain re-runs the mission's verify commands against the FINAL working
+			// copy. On failure, hold the mission back (a loud finding drives the
+			// reflex re-planner) instead of shipping a broken tree.
+			if e.Verify != nil && !e.finalStateOK(&mi) {
+				continue
+			}
 			_ = e.m.SetMissionStatus(mi.ID, "done")
 			if e.OnMissionCompleted != nil {
 				e.OnMissionCompleted(mi.ID, "done", mi.ReviewRounds)
@@ -344,6 +359,64 @@ func (e *Engine) Tick() error {
 
 // workdir returns the per-mission working-copy path.
 func (e *Engine) workdir(m *Mission) string { return MissionDir(e.Workspace, m.ID) }
+
+// finalStateOK re-runs each distinct verify command the mission's tasks declared
+// against the mission's FINAL working copy (#42). It returns true when every
+// command exits 0 — or when there is no working copy to run against (mirrors the
+// completion gate's fallback) or there is nothing to verify. On the first failure
+// it files a loud, deduplicated final-state regression finding and returns false,
+// holding the mission back for the reflex re-planner.
+func (e *Engine) finalStateOK(m *Mission) bool {
+	dir := e.workdir(m)
+	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+		return true // no brain-owned working copy — cannot independently verify
+	}
+	tasks, err := e.q.List(m.ID)
+	if err != nil {
+		log.Printf("mission %d: final-verify list: %v", m.ID, err)
+		return true // never block convergence on an infrastructure error
+	}
+	seen := map[string]bool{}
+	for _, t := range tasks {
+		cmd := strings.TrimSpace(t.Verify)
+		if cmd == "" || seen[cmd] {
+			continue
+		}
+		seen[cmd] = true
+		if ok, detail := e.Verify(context.Background(), dir, cmd); !ok {
+			e.fileFinalStateFinding(m.ID, cmd, detail)
+			return false
+		}
+	}
+	return true
+}
+
+// fileFinalStateFinding records a final-state regression finding once per failing
+// command (deduped against open findings so a held-back mission doesn't spam the
+// ledger or over-count the reflex cap every tick).
+func (e *Engine) fileFinalStateFinding(missionID int64, cmd, detail string) {
+	target := "final-state:" + cmd
+	if open, err := e.q.Findings(missionID, queue.FindingOpen); err == nil {
+		for _, f := range open {
+			if f.Reporter == "verify-gate" && f.Target == target {
+				return
+			}
+		}
+	}
+	if len(detail) > 200 {
+		detail = detail[:200]
+	}
+	if _, err := e.q.AddFinding(queue.Finding{
+		MissionID: missionID, Reporter: "verify-gate", Type: "regression", Severity: "high",
+		Target:          target,
+		Evidence:        "final-state re-run of '" + cmd + "' failed: " + detail,
+		SuggestedAction: "run '" + cmd + "' against the final tree and fix the failures, then it can converge",
+	}); err != nil {
+		log.Printf("mission %d: final-state finding: %v", missionID, err)
+		return
+	}
+	log.Printf("mission %d: final-state verify FAILED (%s) — held back from done", missionID, cmd)
+}
 
 // commitDonePhases commits any phase that became done since the last tick.
 // Phase status is derived from tasks via View (the phases table itself is not

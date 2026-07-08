@@ -91,6 +91,7 @@ import (
 	"github.com/pdbethke/corralai/internal/repo"
 	"github.com/pdbethke/corralai/internal/repoindex"
 	"github.com/pdbethke/corralai/internal/rolemodel"
+	"github.com/pdbethke/corralai/internal/sandbox"
 	"github.com/pdbethke/corralai/internal/taskartifacts"
 	"github.com/pdbethke/corralai/internal/telemetry"
 	"github.com/pdbethke/corralai/internal/ui"
@@ -879,6 +880,22 @@ func main() {
 		RoleModels: roleModels,
 	}
 
+	// The completion gate certifies gated tasks by RUNNING the verify command in a
+	// jail against the brain's own working copy — never trusting a worker's self-
+	// reported exit code ("a judge may not certify herself"). If no isolation
+	// backend is available, fall back loudly to the recorded-execution lookup.
+	var verifyGate brain.VerifyFunc
+	if gateBackend, gerr := sandbox.Resolve(sandbox.Config{
+		Backend:    os.Getenv("CORRALAI_GATE_EXEC_BACKEND"),
+		UnsafeHost: os.Getenv("CORRALAI_GATE_EXEC_UNSAFE_HOST") == "1",
+	}); gerr == nil {
+		verifyGate = brain.NewSandboxVerify(gateBackend)
+		engine.Verify = verifyGate // #42: same runner re-verifies final-state at convergence
+		log.Printf("verify-gate: independent verification enabled (backend %s)", gateBackend.Name())
+	} else {
+		log.Printf("verify-gate: NO isolation backend (%v); gated completion falls back to worker-reported executions — set CORRALAI_GATE_EXEC_BACKEND", gerr)
+	}
+
 	srv := brain.NewServer(store, memStore, brain.Options{
 		Coord:            store,
 		MemoryOwners:     memOwners,
@@ -905,6 +922,7 @@ func main() {
 		MintObserver:     verifier.MintObserver,
 		Repo:             repoEng,
 		Workspace:        repoWorkspace,
+		Verify:           verifyGate,
 		Index:            repoIdx,
 		Oracle:           fleetOracle,
 		CrossSwarm:       crossSwarmEnabled,

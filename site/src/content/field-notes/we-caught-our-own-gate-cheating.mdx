@@ -1,0 +1,57 @@
+---
+title: "We caught our own gate cheating"
+description: "The whole pitch here is a deterministic gate you don't have to trust. Then a pre-launch audit found the gate trusting the one thing it never should: the worker's word. Here's the bug, the failing test, and the fix — while nobody's watching."
+pubDate: 2026-07-08
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+
+*Field note. The most on-brand thing we could do is tell you when we get it wrong. So: we got one wrong.*
+
+---
+
+## Who watches the watchmen?
+
+The oldest question about any system that checks other systems. *Quis custodiet ipsos custodes* — who guards the guards? Corralai's answer has always been a little cheeky: **nobody has to, if the guard is too dumb to be corrupted.**
+
+That's the whole design of the verify gate. It doesn't judge your work — judging is a job for something smart, and anything smart enough to judge is smart enough to be wrong, or talked into it. The gate just *runs the check the plan specified and reads the exit code.* `go build` exits 0 or it doesn't. There's nothing to argue with. It's a big dumb bouncer at the door of "done" — and a big dumb bouncer is exactly what keeps the slick hustlers out of the club. You can't sweet-talk a turnstile.
+
+We wrote that principle on the tin: *a judge may not certify herself.* A builder doesn't get to declare its own build good.
+
+And then we found out our bouncer had been taking bribes.
+
+## The bug
+
+Getting ready for a wider release, we ran a reliability audit over the engine — five passes, each hunting one class of failure. One came back with a five-alarm finding, and it landed right on the load-bearing wall.
+
+The gate was deterministic, all right. It was a plain database lookup — no AI, no judgment, exactly as advertised. But look at what it was looking *up*: the latest recorded execution of the verify command, and whether that row said `ok`.
+
+Where did that row come from? **The worker reported it.** The agent doing the work called a "here's what I ran" tool with a `command`, an `exit_code`, and an `ok` flag — as plain JSON — and the brain wrote it down and, later, believed it. Nothing checked that the command had actually run. Nothing stopped a builder from reporting `exit_code: 0` on a build it never ran, or knew was broken, and then closing its own task on the strength of its own say-so.
+
+The turnstile was reading a ticket the guest printed at home.
+
+Our deterministic gate was real — and it was certifying on evidence the certified party supplied. A judge *was* certifying herself. The exact thing the whole system exists to prevent.
+
+## The fix
+
+The fix is almost embarrassingly simple, which is how you know the principle was right and only the wiring was wrong. **The brain runs the command itself.**
+
+The brain already owns the working copy — it's where the herd's changes live. So at the gate, instead of looking up a row the worker wrote, the brain executes the verify command in a jail, against its own copy of the code, and reads the *real* exit code. The worker's self-report is no longer consulted for certification. It can't be. The bouncer stopped reading printed-at-home tickets and started scanning them at the door.
+
+And because we don't ship claims we can't back, we did it test-first. The first thing we wrote wasn't the fix — it was a test that *proves the hole*: a worker reports a clean pass, the actual command fails, and the test asserts the gate must refuse. Against the old code that test fails: the task completes on the lie. Against the fixed gate it passes: the brain runs the command, sees it fail, and refuses. The bug now has a permanent tripwire; it can't come back without turning that test red.
+
+We're honest that this lands in stages. The core — the gate can now certify independently, and refuses self-certification — is done and tested. Wiring it through every production path, and adding a final re-check of the *whole* result before anything ships, are the next two steps, and we'll say when they're done too.
+
+## The part that actually matters
+
+Here's the thing we keep coming back to. Almost nobody is watching this repo yet. We could have fixed this quietly and no one would ever have known the gate spent a while trusting the wrong thing.
+
+But *who watches the watchmen* and *nobody's watching the repo* have the same answer. You don't build the honest thing because you're being watched. You build it so it's honest **unwatched** — the same reason the bouncer is incorruptible whether or not the owner is in the room. A gate that only certifies correctly when someone's auditing it isn't a gate; it's a performance. And a team that only fixes its bugs when someone's looking isn't building trust; it's managing appearances.
+
+So we're writing it down now, into the quiet, because that's when it counts. When people do show up and dig — and on a project like this, someone always digs — we'd rather they find a repo whose history says *"caught our own gate cheating, wrote a test, said so out loud"* than a clean surface with something underneath it.
+
+The bouncer's honest again. Here's the [commit](https://github.com/pdbethke/corralai), the failing test included.
+
+---
+
+*Corralai is v0.1, solo-maintained, and public. Field notes are opinions — and, occasionally, confessions.*

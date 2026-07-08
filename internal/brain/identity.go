@@ -3,6 +3,7 @@
 package brain
 
 import (
+	"context"
 	"strings"
 	"time"
 
@@ -25,6 +26,13 @@ import (
 	"github.com/pdbethke/corralai/internal/taskartifacts"
 	"github.com/pdbethke/corralai/internal/telemetry"
 )
+
+// VerifyFunc independently runs a task's verify command against the brain's OWN
+// working copy (dir) and reports the true pass/fail — the brain, not the worker,
+// owns this bit. It is pure execution, not analysis: run the command, read the
+// exit code. A judge may not certify herself. nil => the gate falls back to the
+// recorded-execution lookup (legacy / non-repo missions).
+type VerifyFunc func(ctx context.Context, dir, command string) (ok bool, detail string)
 
 // RepoIndex is the interface the brain uses to index and search a mission's
 // working-copy code. *repoindex.Store satisfies it; tests inject a fake.
@@ -108,6 +116,13 @@ type Options struct {
 	Repo *repo.Engine
 	// Workspace is where repo clones live (the brain owns the working copy).
 	Workspace string
+
+	// Verify, when set, makes the completion gate RUN the task's verify command
+	// itself (in a jail, cwd = MissionDir(Workspace, mission)) and certify on the
+	// real exit code — instead of trusting a worker-reported execution row. This
+	// is what makes the gate independent ("a judge may not certify herself").
+	// nil => the gate falls back to the recorded-execution lookup.
+	Verify VerifyFunc
 
 	// Index, when set, enables repo_search and per-mission code indexing.
 	// Declared as the RepoIndex interface so tests can inject a fake without

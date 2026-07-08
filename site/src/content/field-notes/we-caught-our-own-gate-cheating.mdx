@@ -40,7 +40,7 @@ The brain already owns the working copy — it's where the herd's changes live. 
 
 And because we don't ship claims we can't back, we did it test-first. The first thing we wrote wasn't the fix — it was a test that *proves the hole*: a worker reports a clean pass, the actual command fails, and the test asserts the gate must refuse. Against the old code that test fails: the task completes on the lie. Against the fixed gate it passes: the brain runs the command, sees it fail, and refuses. The bug now has a permanent tripwire; it can't come back without turning that test red.
 
-We're honest that this lands in stages. The core — the gate can now certify independently, and refuses self-certification — is done and tested. Wiring it through every production path, and adding a final re-check of the *whole* result before anything ships, are the next two steps, and we'll say when they're done too.
+We did it in stages, and all three have now landed: the gate certifies independently and refuses self-certification; that same jailed runner is wired through production; and the brain re-checks the *whole* result against the final tree before anything ships — so a pass-then-break can't sneak out the back either. Each step has its own test. A judge who runs the check herself, on the real thing, at the end.
 
 ## The part that actually matters
 

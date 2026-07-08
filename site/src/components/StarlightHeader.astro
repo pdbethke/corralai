@@ -1,0 +1,93 @@
+---
+// SPDX-License-Identifier: Elastic-2.0
+// Overrides Starlight's Header so /docs is no longer a nav dead end: it keeps the
+// full docs header (site title, search, theme, social) AND adds the marketing
+// site-nav inline, so Home / Recordings / Field notes are one click away — /docs
+// reads as one continuous site with /, /recordings, /field-notes. The nav
+// reuses Starlight's own built-in components (virtual: imports resolve to the
+// configured overrides/defaults) so search + theme + social behave exactly as
+// stock. On narrow viewports the inline nav collapses; the same destinations
+// live in the sidebar "Site" group (see astro.config) for the mobile menu.
+import Search from 'virtual:starlight/components/Search';
+import SocialIcons from 'virtual:starlight/components/SocialIcons';
+import ThemeSelect from 'virtual:starlight/components/ThemeSelect';
+import SiteTitle from 'virtual:starlight/components/SiteTitle';
+import config from 'virtual:starlight/user-config';
+
+const shouldRenderSearch =
+	config.pagefind ||
+	config.components.Search !== '@astrojs/starlight/components/Search.astro';
+---
+
+<div class="header sl-flex">
+	<div class="title-wrapper sl-flex">
+		<SiteTitle />
+	</div>
+	<nav class="docs-sitenav sl-hidden md:sl-flex" aria-label="Site">
+		<a href="/">Home</a>
+		<a href="/docs/getting-started/" aria-current="page">Docs</a>
+		<a href="/recordings/">Recordings</a>
+		<a href="/field-notes/">Field notes</a>
+	</nav>
+	<div class="search-wrapper sl-flex print:hidden">
+		{shouldRenderSearch && <Search />}
+	</div>
+	<div class="sl-hidden md:sl-flex right-group">
+		<div class="sl-flex social-icons">
+			<SocialIcons />
+		</div>
+		<ThemeSelect />
+	</div>
+</div>
+
+<style>
+	.header {
+		gap: var(--sl-nav-gap);
+		justify-content: space-between;
+		align-items: center;
+		height: 100%;
+	}
+	.title-wrapper {
+		overflow: clip;
+		padding: 0.25rem;
+		margin: -0.25rem;
+		min-width: 0;
+	}
+	.docs-sitenav {
+		gap: 0.15rem;
+		align-items: center;
+		flex: none;
+	}
+	.docs-sitenav a {
+		color: var(--sl-color-gray-2);
+		text-decoration: none;
+		font-size: var(--sl-text-sm);
+		font-weight: 600;
+		padding: 0.3rem 0.6rem;
+		border-radius: 0.4rem;
+		white-space: nowrap;
+		transition: color 0.12s ease, background 0.12s ease;
+	}
+	.docs-sitenav a:hover {
+		color: var(--sl-color-white);
+		background: var(--sl-color-gray-6);
+	}
+	.docs-sitenav a[aria-current='page'] {
+		color: var(--sl-color-text-invert);
+		background: var(--sl-color-text-accent);
+	}
+	.search-wrapper {
+		flex: 1 1 auto;
+		justify-content: flex-end;
+	}
+	.right-group,
+	.social-icons {
+		gap: 1rem;
+		align-items: center;
+	}
+	.social-icons::after {
+		content: '';
+		height: 2rem;
+		border-inline-end: 1px solid var(--sl-color-gray-5);
+	}
+</style>

@@ -1,0 +1,142 @@
+---
+title: "Fugu, and the knife it leaves unwashed"
+description: "Sakana's Fugu makes the case that orchestrating frontier models is its own scaling axis. It also leaves out the one thing its own name is about — containing the poison. Field notes on where we agree, and where we diverge."
+pubDate: 2026-07-08
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+
+*Field notes are where we think out loud about the space we're building in. First one: the best orchestration paper of the year, and the seam it leaves open.*
+
+---
+
+The name is doing more work than the abstract lets on.
+
+*Fugu* is pufferfish — the delicacy that kills you if the chef gets it wrong. The
+toxin sits in the liver and there's no antidote; in Japan you need a license to
+serve it. The whole art is **technique under a safety constraint**. Handle the
+poison correctly and it's a delicacy. Handle it wrong and it's just poison.
+
+Sakana AI's [Fugu report](https://sakana.ai/fugu) is, genuinely, one of the
+sharpest arguments we've read for the thing we've been building toward: that
+**orchestrating a team of frontier models is its own axis of capability** —
+separate from, and complementary to, training bigger models. Fugu learns to route
+each query to the model best suited for it, and Fugu-Ultra composes whole
+multi-agent workflows on the fly. The evidence is real: state-of-the-art on
+agentic coding benchmarks, built entirely by *coordinating* existing models
+rather than training a new one.
+
+We agree with almost all of it. Which is exactly why the omission stands out.
+
+## What Fugu gets right
+
+Three things the paper nails, and we'd sign our names to:
+
+- **Orchestration is a scaling axis.** You don't need the largest training run to
+  reach the frontier if you can identify, combine, and amplify the complementary
+  strengths of models that already exist. Newer models drop into the pool as they
+  ship. This is the whole premise, and Fugu is the strongest public evidence for
+  it so far.
+- **Specialization is real and fine-grained.** One model plans; another debugs;
+  a third does the math. The paper's best passages are the *build-and-debug*
+  traces — one model builds, a **different** model is brought in at the critical
+  moment to refute and expose. That adversarial hand-off is where the gains come
+  from. (It's also, not coincidentally, a rule we already run: a builder does not
+  get to certify its own build.)
+- **The synthesizer shouldn't be fixed.** Fugu's cleverest finding is that most
+  multi-agent systems bottleneck on *one* hard-wired model doing the final
+  synthesis — so they can never beat that model's blind spots. Fugu picks the
+  aggregator per task. That's the right instinct, and it's on our roadmap too.
+
+If the paper stopped there it would just be a paper we admire. But its own name
+raises a question it doesn't answer.
+
+## The knife it leaves unwashed
+
+Here's what stopped us, and it's an absence rather than a claim. Search the
+thirty-one pages for *sandbox*, *egress*, *jail*, *untrusted* — the words aren't
+there. Fugu's orchestrator decides *which* powerful model touches your
+repository, your tools, and your environment. What *contains* that model once it
+does — the boundary between "it edited a file" and "it exfiltrated your keys" —
+is simply out of scope. The only isolation the paper discusses is *between
+agents* (keeping one worker's context from biasing another), not between an
+agent and your machine.
+
+That's a fair thing to leave out of a research paper about routing. But it's a
+striking thing to leave out of a system named after the one dish where
+*containing the toxin is the entire craft*. Thirty-one pages on the capability;
+none on the containment.
+
+That's not a cheap shot — it's a real architectural fork, and it's the one we
+took the other way. In Corralai, containment isn't delegated; it *is* the
+product:
+
+- Every agent runs in an unprivileged **`bwrap` jail**, credential-less, unable
+  to reach your keys or push anything on its own.
+- The only way out of the jail is a **reviewed pull request** — never a write to
+  live storage, never a direct deploy.
+- Admin actions and merges pass a **human gate**. Every action lands in an
+  **attributed ledger** you can read back.
+- Untrusted content is fenced so it can't reach an authoritative position — and a
+  fooled agent is *contained*, not trusted.
+
+We're careful about what that buys you: fencing is hardening, not a guarantee,
+and we say so [on the tin](/docs/concepts/trust-and-security/). The point isn't
+that Corralai makes a model immune to a bad instruction. It's that when a model
+*does* the wrong thing — and eventually one will — it's licensed, watched, and
+boxed. The chef doesn't get to serve the liver unsupervised.
+
+## The deeper divergence
+
+The sandbox gap is the visible one. Underneath it is a philosophical fork worth
+naming.
+
+Fugu's orchestrator is a **trained black box** — a learned head reading the
+model's own hidden states to decide who runs next. Impressive, and genuinely
+hard to build. But you can't inspect *why* it routed the way it did, and the
+thing making the correctness call is itself a learned model.
+
+We drew that line somewhere else on purpose. In Corralai, the **correctness gate
+is deterministic** — a mission doesn't converge until a real, recorded run
+passes, and no amount of model confidence substitutes for that. The LLMs do the
+*cognition* — planning, staffing, re-planning on findings. The **gate** that
+certifies the work is not itself an LLM. A judge may not certify herself.
+
+Both systems compose frontier models. Fugu asks you to trust a learned router.
+Corralai asks you to trust a jail, a gate, and a ledger you can read. Different
+bets about where the trust should live.
+
+## Where the field is heading — honestly
+
+We won't pretend the roadmap is shipped. But Fugu is strong evidence for exactly
+where we've been pointing:
+
+- **An earned model leaderboard.** Fugu builds its routing from *measured* worker
+  performance on verifiable tasks. We already have the hard part — a deterministic
+  gate emitting pass/fail. Turning that signal into a per-role, per-domain earned
+  ranking is a roadmap item, and Fugu says it works.
+- **A selectable synthesis seat.** Picking *who closes the work* by the shape of
+  the task, instead of a fixed reviewer — the aggregator insight, applied to our
+  reviewer role.
+- **Re-staffing at phase boundaries.** Fugu's per-step model switching argues
+  against pinning one model to a role for a whole mission. Our two-tier
+  re-planning is the natural place to re-pick.
+
+These are directions, not features. When they ship, they'll ship the way
+everything here does: brain-mediated, human-gated, attributed.
+
+## The rhyme
+
+We named this thing after a corral for the same reason Sakana named theirs after
+a pufferfish: both are about **containing something powerful and dangerous so it
+can be useful**. A corral holds the herd. A license lets a chef handle the toxin.
+
+The difference is just where you put the fence. Fugu built a brilliant chef and
+handed him the knife. We built the licensed kitchen first.
+
+---
+
+*Corralai is v0.1, solo-maintained, and public. The security model is
+[documented](/docs/concepts/trust-and-security/) and the code is on
+[GitHub](https://github.com/pdbethke/corralai). Field notes are opinions, not
+announcements.*

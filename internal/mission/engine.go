@@ -300,6 +300,10 @@ func (e *Engine) Tick() error {
 			log.Printf("mission %d: promote: %v", mi.ID, err)
 			continue
 		}
+		// Sweep tasks whose dependencies can never be satisfied (a cancelled/
+		// superseded/missing dep) — converting an otherwise-invisible DAG deadlock
+		// into a visible, cancelled task + a loud finding before the done-check.
+		e.sweepBlockedDeps(mi.ID)
 		// Commit any newly-done phases before checking for mission completion so
 		// the final phase's commit lands even if MissionDone fires on this tick.
 		if e.Repo != nil && mi.Repo != "" {
@@ -389,6 +393,70 @@ func (e *Engine) finalStateOK(m *Mission) bool {
 		}
 	}
 	return true
+}
+
+// sweepBlockedDeps cancels pending tasks whose dependencies can never be
+// satisfied — a dep that is cancelled/superseded, or was never created — filing a
+// loud, deduplicated finding for each. PromoteReady only promotes a task once
+// every dep is `done`, so such a task would otherwise sit `pending` forever
+// (MissionDone never converges; DetectRoleStalls only sees `ready` tasks). This
+// turns that invisible hang into a visible failure the mission can move past.
+func (e *Engine) sweepBlockedDeps(missionID int64) {
+	tasks, err := e.q.List(missionID)
+	if err != nil {
+		log.Printf("mission %d: dep-sweep list: %v", missionID, err)
+		return
+	}
+	status := make(map[string]string, len(tasks))
+	for _, t := range tasks {
+		status[t.Key] = t.Status
+	}
+	for _, t := range tasks {
+		if t.Status != queue.StatusPending {
+			continue
+		}
+		for _, dep := range t.DependsOn {
+			st, exists := status[dep]
+			// Unsatisfiable = the dep doesn't exist, or is terminal-but-not-done
+			// (cancelled/superseded). A dep still pending/ready/claimed may yet
+			// complete, so it is not swept here; if it later becomes orphaned
+			// itself, a subsequent tick catches this task in turn.
+			if !exists || st == queue.StatusCancelled || st == queue.StatusSuperseded {
+				e.fileBlockedDepFinding(missionID, t.Key, dep, exists)
+				if _, err := e.q.CancelTask(t.ID); err != nil {
+					log.Printf("mission %d: dep-sweep cancel %s: %v", missionID, t.Key, err)
+				}
+				break
+			}
+		}
+	}
+}
+
+// fileBlockedDepFinding records a blocked-dependency finding once per stuck task
+// (deduped against open findings so a mission doesn't spam the ledger every tick).
+func (e *Engine) fileBlockedDepFinding(missionID int64, taskKey, dep string, depExists bool) {
+	target := "blocked-dep:" + taskKey
+	if open, err := e.q.Findings(missionID, queue.FindingOpen); err == nil {
+		for _, f := range open {
+			if f.Reporter == "dep-sweep" && f.Target == target {
+				return
+			}
+		}
+	}
+	why := "was cancelled or superseded"
+	if !depExists {
+		why = "does not exist in the mission"
+	}
+	if _, err := e.q.AddFinding(queue.Finding{
+		MissionID: missionID, Reporter: "dep-sweep", Type: "missing-req", Severity: "high",
+		Target:          target,
+		Evidence:        "task '" + taskKey + "' depends on '" + dep + "', which " + why + " — it can never run, so it was cancelled",
+		SuggestedAction: "re-plan without the dead dependency, or restore/replace '" + dep + "'",
+	}); err != nil {
+		log.Printf("mission %d: blocked-dep finding: %v", missionID, err)
+		return
+	}
+	log.Printf("mission %d: dep-sweep cancelled '%s' — dependency '%s' can never be satisfied", missionID, taskKey, dep)
 }
 
 // fileFinalStateFinding records a final-state regression finding once per failing

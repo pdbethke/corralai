@@ -291,6 +291,86 @@ func TestEngineHoldsBackWhenFinalStateVerifyFails(t *testing.T) {
 	}
 }
 
+// TestEngineSweepsBlockedDependencies is the graceful-degradation guarantee for a
+// DAG deadlock: a pending task whose dependency can never be satisfied (cancelled/
+// superseded/missing) is invisibly stuck forever (PromoteReady never promotes it,
+// MissionDone never converges, DetectRoleStalls can't see non-ready tasks). The
+// engine must sweep it — cancel it and file a loud finding — so the hang becomes a
+// visible failure.
+func TestEngineSweepsBlockedDependencies(t *testing.T) {
+	dir := t.TempDir()
+	q, err := queue.Open(filepath.Join(dir, "q.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer q.Close()
+	m, err := Open(filepath.Join(dir, "m.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+
+	mid, err := CreateMission(m, q, "build a thing", nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := NewEngine(m, q)
+
+	// Find a pending task that depends on another, and cancel that dependency so it
+	// can never become done — orphaning the dependent.
+	tasks, err := q.List(mid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dependent queue.Task
+	for _, tk := range tasks {
+		if len(tk.DependsOn) > 0 {
+			dependent = tk
+			break
+		}
+	}
+	if dependent.ID == 0 {
+		t.Fatal("expected the default plan to contain a task with a dependency")
+	}
+	depKey := dependent.DependsOn[0]
+	var depID int64
+	for _, tk := range tasks {
+		if tk.Key == depKey {
+			depID = tk.ID
+		}
+	}
+	if depID == 0 {
+		t.Fatalf("dependency task %q not found", depKey)
+	}
+	if _, err := q.CancelTask(depID); err != nil {
+		t.Fatal(err)
+	}
+
+	// One tick: the sweep must cancel the now-orphaned dependent and record it.
+	if err := e.Tick(); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	tk, err := q.TaskByID(dependent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tk.Status != queue.StatusCancelled {
+		t.Fatalf("orphaned task %q should be swept to cancelled, got %q", dependent.Key, tk.Status)
+	}
+	fs, _ := q.Findings(mid, queue.FindingOpen)
+	found := false
+	for _, f := range fs {
+		if f.Reporter == "dep-sweep" && strings.HasPrefix(f.Target, "blocked-dep") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected a dep-sweep blocked-dependency finding, got %+v", fs)
+	}
+}
+
 // TestEnginePhaseCommitAndPRForRepoMission verifies that:
 //   - every done phase produces one commit (message contains phase name)
 //   - on mission done, push fires and PRURL is stored in the mission

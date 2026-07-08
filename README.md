@@ -4,10 +4,9 @@
 [![License: Elastic 2.0](https://img.shields.io/badge/license-Elastic--2.0-e8a838)](LICENSE)
 [![docs](https://img.shields.io/badge/docs-corralai.dev-2f6f4e)](https://corralai.dev/docs/getting-started/)
 
-> **Status: early (v0.1).** Solo-maintained, moving fast, tested honestly — every
-> demo claim in this README was run before it was written, and the
-> [open threads](docs/DESIGN.md#open-threads-next) list what's known-rough.
-> Expect sharp edges; issues and verified-harness PRs are very welcome.
+> **One directive → a herd of AI agents that plan, build, verify, and re-plan** —
+> across any model (local 7B to frontier), behind real fences, human-gated, with
+> every run recorded and replayable.
 
 **Coordinated multi-agent, multi-model.** Give a headless brain one directive —
 *"build me a World Cup scores dashboard"* — and it turns it into a mission that a
@@ -16,7 +15,7 @@ team of AI agents plans, builds, verifies, **re-plans when they hit problems**, 
 models* — a Claude builder, a Gemini reviewer, a local model for the cheap passes —
 all coordinating through one brain, behind real fences. All watchable live.
 
-Three things make it different from the pile of agent-swarm demos:
+Four things make it different from the pile of agent-swarm demos:
 
 1. **It's multi-model, not just multi-agent.** Most swarm frameworks run one LLM in
    N roles — parallelism with *correlated* blind spots, because the "reviewer"
@@ -40,10 +39,23 @@ Three things make it different from the pile of agent-swarm demos:
    funnels through the brain, every agent action is **recorded and attributable**.
    Prevention *and* forensics — see **[SECURITY.md](SECURITY.md)**, which points at
    the adversarial tests you can run yourself to check the claims.
+4. **It certifies by execution, not opinion.** Most swarms "verify" by asking a
+   model *"does this look done?"* — or just trust the builder's own report.
+   Corralai's gate **runs the actual check** (`go test`, the build) itself and
+   reads the exit code; a mission doesn't converge until a *real, recorded run*
+   passes. The correctness call is a deterministic bit, not a judgment — **a judge
+   may not certify herself**. Calls that genuinely can't be reduced to pass/fail
+   (taste, architecture) go to a **human gate**. That's the line between "AI that
+   *says* it's done" and "AI you can *check*."
 
 The name is the metaphor: the **corral** is the enclosure agents work in, the
 **fences** are the security boundaries, and the brain corrals a herd of (possibly
 different) models — it coordinates and contains, it doesn't do the work itself.
+
+> **Where it's at:** v0.1, solo-maintained, and tested honestly — every demo claim
+> in this README was run before it was written, and the
+> [open threads](docs/DESIGN.md#open-threads-next) name what's still rough. Issues
+> and verified-harness PRs are welcome.
 
 ## The adaptive loop
 

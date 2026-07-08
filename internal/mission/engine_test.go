@@ -371,6 +371,56 @@ func TestEngineSweepsBlockedDependencies(t *testing.T) {
 	}
 }
 
+// TestEngineFailsMissionWithNoProgress is the universal give-up backstop: a
+// running mission that makes no forward progress for NoProgressTicks consecutive
+// ticks while nothing is claimed (no agent actively holding work) must reach the
+// terminal `failed` state — not hang in "running" forever — and say so.
+func TestEngineFailsMissionWithNoProgress(t *testing.T) {
+	dir := t.TempDir()
+	q, err := queue.Open(filepath.Join(dir, "q.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer q.Close()
+	m, err := Open(filepath.Join(dir, "m.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+
+	mid, err := CreateMission(m, q, "build a thing", nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	e := NewEngine(m, q)
+	e.NoProgressTicks = 3
+	var terminalStatus string
+	e.OnMissionCompleted = func(_ int64, status string, _ int) {
+		if status != "done" {
+			terminalStatus = status
+		}
+	}
+
+	// No agents ever claim anything; nothing progresses. The backstop must give up.
+	for i := 0; i < 6; i++ {
+		if err := e.Tick(); err != nil {
+			t.Fatalf("tick: %v", err)
+		}
+	}
+
+	mv, err := m.Mission(mid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mv.Status != "failed" {
+		t.Fatalf("a mission with no progress and nothing claimable must reach the terminal failed state, got %q", mv.Status)
+	}
+	if terminalStatus != "failed" {
+		t.Fatalf("a failed mission must fire OnMissionCompleted with 'failed', got %q", terminalStatus)
+	}
+}
+
 // TestEnginePhaseCommitAndPRForRepoMission verifies that:
 //   - every done phase produces one commit (message contains phase name)
 //   - on mission done, push fires and PRURL is stored in the mission

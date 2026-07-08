@@ -38,12 +38,38 @@ func (sandboxExecIsolator) Wrap(command string, opts Options, env []string) ([]s
 		return nil, errors.New("sandbox-exec: workspace required")
 	}
 
+	// HOME comes from the (already minimal, secret-free) env. We deny reads of
+	// it below so a command can't lift the operator's credentials.
+	home := ""
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "HOME=") {
+			home = strings.TrimPrefix(kv, "HOME=")
+			break
+		}
+	}
+
 	var sb strings.Builder
 	sb.WriteString("(version 1)\n(deny default)\n")
 	sb.WriteString("(allow process*)\n")
 	sb.WriteString("(allow signal*)\n")
 	sb.WriteString("(allow sysctl*)\n")
 	sb.WriteString("(allow file-read*)\n")
+
+	// Read confinement: the broad file-read* above lets a command read system
+	// libraries/tools (as the Linux bwrap jail does via its /usr bind), but we
+	// then DENY the operator's secret stores so a hijacked agent can't read
+	// them — matching bwrap, which never binds $HOME into the jail. Last
+	// matching rule wins in SBPL, so these denies override the allow, and the
+	// workspace re-allow below overrides the $HOME deny when the workspace
+	// lives under $HOME. Without this, ~/.ssh, ~/.aws, keychains, and corral's
+	// own tokens were all readable — a regression from the Linux backend.
+	if home != "" {
+		sb.WriteString(fmt.Sprintf("(deny file-read* (subpath %q))\n", home))
+	}
+	sb.WriteString("(deny file-read* (subpath \"/Library/Keychains\"))\n")
+	sb.WriteString("(deny file-read* (subpath \"/private/var/db/dslocal\"))\n")
+	// Re-allow reads of the workspace itself (even if it lives under $HOME).
+	sb.WriteString(fmt.Sprintf("(allow file-read* (subpath %q))\n", opts.Workspace))
 
 	// Writable paths
 	sb.WriteString("(allow file-write* (subpath \"/private/tmp\"))\n")

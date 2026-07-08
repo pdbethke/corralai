@@ -143,7 +143,7 @@ type AnnotatedHost struct {
 // AnnotateHosts decorates each Host with Expected and Drift fields derived from
 // the given role-model policy. A nil or empty policy produces no annotations
 // (Expected="", Drift=false — degrade-never-block).
-func AnnotateHosts(hosts []Host, p rolemodel.Policy) []AnnotatedHost {
+func AnnotateHosts(hosts []Host, p *rolemodel.Policy) []AnnotatedHost {
 	out := make([]AnnotatedHost, len(hosts))
 	for i, h := range hosts {
 		expected, drift := rolemodel.Reconcile(h.Role, h.Model, p)
@@ -161,7 +161,7 @@ func AnnotateHosts(hosts []Host, p rolemodel.Policy) []AnnotatedHost {
 // topologyOut is the response shape for swarm_topology.
 type topologyOut struct {
 	Hosts  []AnnotatedHost  `json:"hosts"`
-	Policy rolemodel.Policy `json:"policy"` // the declared policy (may be nil/empty)
+	Policy map[string]rolemodel.ModelRef `json:"policy"` // snapshot of the declared policy (may be nil/empty)
 }
 
 // registerHost registers the report_host and swarm_topology MCP tools against
@@ -202,7 +202,7 @@ func registerHost(s *mcp.Server, book *HostBook, opts Options) {
 	}, func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, topologyOut, error) {
 		hosts := book.List()
 		annotated := AnnotateHosts(hosts, opts.RoleModels)
-		return nil, topologyOut{Hosts: annotated, Policy: opts.RoleModels}, nil
+		return nil, topologyOut{Hosts: annotated, Policy: opts.RoleModels.Snapshot()}, nil
 	})
 }
 

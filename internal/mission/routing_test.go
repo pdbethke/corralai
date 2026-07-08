@@ -56,7 +56,7 @@ func TestStaffingJudgeAndClamp(t *testing.T) {
 			{Model: "qwen2.5-coder:14b", Role: "builder", TasksCompleted: 10, AvgTaskDuration: 15.0, ExecPassRatePct: 90.0},
 		},
 	}
-	policy := make(rolemodel.Policy)
+	policy := rolemodel.New()
 
 	mgr := &StaffingManager{
 		Perf:       perf,

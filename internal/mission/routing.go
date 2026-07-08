@@ -57,7 +57,7 @@ type WorkstationResources struct {
 type StaffingManager struct {
 	Perf       PerformanceTracker
 	LLM        LLMClient
-	RoleModels rolemodel.Policy
+	RoleModels *rolemodel.Policy
 }
 
 func (s *StaffingManager) Sense() WorkstationResources {

@@ -16,6 +16,43 @@ import (
 	"github.com/pdbethke/corralai/internal/taskartifacts"
 )
 
+func TestGuardNavigateURL(t *testing.T) {
+	const brain = "127.0.0.1:9019"
+	cases := []struct {
+		name    string
+		url     string
+		blocked bool
+	}{
+		// allowed: the app under test on localhost (a DIFFERENT port than the brain)
+		{"localhost app", "http://127.0.0.1:3000/dashboard", false},
+		{"localhost name", "http://localhost:8080/", false},
+		{"private lan", "http://192.168.1.50:5173/", false},
+		{"public https", "https://example.com/", false},
+		// blocked: cloud metadata (IMDS) — IAM credential theft
+		{"aws imds", "http://169.254.169.254/latest/meta-data/iam/", true},
+		{"ecs imds", "http://169.254.170.2/v2/credentials", true},
+		{"gcp metadata host", "http://metadata.google.internal/computeMetadata/v1/", true},
+		{"alibaba imds", "http://100.100.100.100/latest/meta-data/", true},
+		// blocked: the brain's own admin/MCP surface (loopback on the brain port)
+		{"brain loopback ip", "http://127.0.0.1:9019/api/state", true},
+		{"brain localhost", "http://localhost:9019/mcp/", true},
+		// blocked: dangerous schemes
+		{"file scheme", "file:///etc/passwd", true},
+		{"chrome scheme", "chrome://settings", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := guardNavigateURL(c.url, brain)
+			if c.blocked && err == nil {
+				t.Errorf("expected %q to be BLOCKED, but it was allowed", c.url)
+			}
+			if !c.blocked && err != nil {
+				t.Errorf("expected %q to be ALLOWED, but it was blocked: %v", c.url, err)
+			}
+		})
+	}
+}
+
 func TestBrowserToolsRegistration(t *testing.T) {
 	dir := t.TempDir()
 
@@ -37,7 +74,7 @@ func TestBrowserToolsRegistration(t *testing.T) {
 	}
 	defer artstore.Close()
 
-	bm := NewBrowserManager()
+	bm := NewBrowserManager("127.0.0.1:9019")
 	defer bm.Close()
 
 	ws := NewWorkerSessions()

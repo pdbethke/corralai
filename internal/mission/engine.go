@@ -275,10 +275,10 @@ func (e *Engine) Tick() error {
 						backend = model[:colonIdx]
 						model = model[colonIdx+1:]
 					}
-					e.Staffing.RoleModels[role] = rolemodel.ModelRef{
+					e.Staffing.RoleModels.Set(role, rolemodel.ModelRef{
 						Backend: backend,
 						Model:   model,
-					}
+					}) // threadsafe: the UI writes this same policy from the mission-create handler
 				}
 				e.staffed[mi.ID] = true
 			}

@@ -54,7 +54,7 @@ type Server struct {
 	narrator        *llm.Client
 	tel             *telemetry.Store
 	oracle          *oracle.Client
-	roleModels      rolemodel.Policy
+	roleModels      *rolemodel.Policy
 	staffing        *mission.StaffingManager
 	learn           *learn.Store
 	promote         func(id int64, actor string) error
@@ -107,7 +107,7 @@ type Deps struct {
 	// RoleModels is the declared role-to-model policy; the UI topology annotates
 	// each host with expected model + drift when this is non-nil. nil => no drift
 	// annotations (degrade-never-block).
-	RoleModels rolemodel.Policy
+	RoleModels *rolemodel.Policy
 	Staffing   *mission.StaffingManager
 	// Learn is the learning-loop proposals store; /api/state surfaces pending
 	// proposals from it for the proposals card. nil => the card stays empty.
@@ -173,7 +173,7 @@ func Handler(d Deps) http.Handler {
 	mux.HandleFunc("/api/mission/intercept", s.intercept)
 	mux.HandleFunc("/api/mission/create", s.createMission)
 	mux.HandleFunc("/api/mission/propose_staffing", s.proposeStaffing)
-	mux.Handle("/api/terminal/ws", websocket.Handler(Registry.ServeWS))
+	mux.Handle("/api/terminal/ws", s.guardTerminalWS(websocket.Handler(Registry.ServeWS)))
 
 	// Swarm Design Lookbook API routes
 	mux.HandleFunc("/api/lookbook", s.lookbookList)
@@ -194,6 +194,31 @@ func Handler(d Deps) http.Handler {
 // would otherwise promote guidance fleet-wide).
 func (s *Server) isSuperuser(r *http.Request) bool {
 	return (s.roles == nil || s.roles.IsSuperuser(auth.Principal(r.Context()))) && !auth.Subagent(r.Context())
+}
+
+// guardTerminalWS authorizes the /api/terminal/ws upgrade BEFORE it hands the
+// connection to the intercept Registry. The "operator" side is a human taking
+// interactive control of an agent's stdin — as consequential as any mutating
+// action — so it is gated to a superuser with a non-read-only token, exactly
+// like proposalApprove / steer / prune. Without this a read-only observer (or
+// any authenticated non-superuser) could open role=operator and type commands
+// straight into an agent's shell. The "agent" side is the corral-agent process
+// streaming its OWN terminal (authenticated as a worker, never a superuser), so
+// it passes through — reaching the mux at all already required a valid bearer.
+func (s *Server) guardTerminalWS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("role") == "operator" {
+			if auth.ReadOnly(r) {
+				http.Error(w, "forbidden: read-only observer cannot take control of an agent", http.StatusForbidden)
+				return
+			}
+			if !s.isSuperuser(r) {
+				http.Error(w, "forbidden: superuser only (interactive agent control)", http.StatusForbidden)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // proposalApprove promotes a pending learning-loop proposal — the UI's
@@ -908,7 +933,7 @@ func (s *Server) createMission(w http.ResponseWriter, r *http.Request) {
 	// Update role models if provided
 	if len(body.RoleModels) > 0 && s.roleModels != nil {
 		for k, v := range body.RoleModels {
-			s.roleModels[k] = v
+			s.roleModels.Set(k, v) // threadsafe: the engine writes this same policy from its Tick goroutine
 		}
 	}
 

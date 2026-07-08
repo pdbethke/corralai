@@ -87,8 +87,8 @@ func actorOr(principal, fallback string) string {
 // NOT be force-spawned. Attribution (swarm_topology Drift) and reconcile still
 // flag the gap; the operator resolves it by ensuring the model is running
 // before the role's agent spawns. This is intentional for v1.
-func resolveSpawnModel(pol rolemodel.Policy, book *HostBook, role string, now int64) (rolemodel.ModelRef, bool) {
-	if book == nil || len(pol) == 0 || role == "" {
+func resolveSpawnModel(pol *rolemodel.Policy, book *HostBook, role string, now int64) (rolemodel.ModelRef, bool) {
+	if book == nil || pol.Len() == 0 || role == "" {
 		return rolemodel.ModelRef{}, false
 	}
 	pool := book.AvailableModels(hostTTL, now)

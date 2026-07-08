@@ -19,8 +19,8 @@ func TestDemoModelsParse(t *testing.T) {
 	if len(bad) > 0 {
 		t.Fatalf("unexpected malformed entries: %v", bad)
 	}
-	if len(p) != 4 {
-		t.Fatalf("expected 4 roles, got %d", len(p))
+	if p.Len() != 4 {
+		t.Fatalf("expected 4 roles, got %d", p.Len())
 	}
 	cases := []struct{ role, backend, model string }{
 		{"pentester", "ollama", "qwen2.5-coder:7b"},

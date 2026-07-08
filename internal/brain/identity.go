@@ -154,7 +154,7 @@ type Options struct {
 	// When set, swarm_topology annotates each host with Expected + Drift so the
 	// operator can spot a mis-assigned model at a glance. nil/empty => no
 	// annotations (Expected="", Drift=false — degrade-never-block).
-	RoleModels rolemodel.Policy
+	RoleModels *rolemodel.Policy
 
 	// SpawnBudget bounds spawn_subagent: standing live agents per principal, spawn
 	// tree depth, and children per parent. Zero fields take the defaults (64/4/8);

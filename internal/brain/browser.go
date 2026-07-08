@@ -6,7 +6,10 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
+	"net/url"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/go-rod/rod"
@@ -19,15 +22,102 @@ import (
 )
 
 type BrowserManager struct {
-	mu      sync.Mutex
-	browser *rod.Browser
-	pages   map[string]*rod.Page // agentName -> page
+	mu       sync.Mutex
+	browser  *rod.Browser
+	pages    map[string]*rod.Page // agentName -> page
+	selfAddr string               // the brain's own listen host:port (blocked as an SSRF target)
 }
 
-func NewBrowserManager() *BrowserManager {
+// NewBrowserManager builds the agent browser. selfAddr is the brain's own
+// listen address (CORRALAI_ADDR) — the browser refuses to navigate there so a
+// hijacked agent can't loop back into the brain's admin/MCP surface.
+func NewBrowserManager(selfAddr string) *BrowserManager {
 	return &BrowserManager{
-		pages: make(map[string]*rod.Page),
+		pages:    make(map[string]*rod.Page),
+		selfAddr: selfAddr,
 	}
+}
+
+// metadataHosts are cloud instance-metadata (IMDS) hostnames — never a
+// legitimate target for the agent browser.
+var metadataHosts = map[string]bool{
+	"metadata.google.internal": true,
+	"metadata":                 true,
+}
+
+// blockedHost reports whether host (a hostname or IP literal, no port) is an
+// SSRF-sensitive target the agent browser must never reach: cloud-metadata
+// endpoints (IMDS) and link-local addresses (169.254.0.0/16, fe80::/10).
+// Loopback and private ranges are deliberately ALLOWED so a tester can drive
+// the app the herd just built on localhost — the brain's own address is blocked
+// separately, by host:port (see isBrainAddr).
+func blockedHost(host string) bool {
+	h := strings.ToLower(strings.TrimSuffix(host, "."))
+	if metadataHosts[h] || h == "100.100.100.100" /* Alibaba IMDS */ {
+		return true
+	}
+	if ip := net.ParseIP(h); ip != nil {
+		if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+			return true
+		}
+	}
+	return false
+}
+
+// isBrainAddr reports whether u targets the brain's own listen address — a
+// loopback host on the brain's port. The app under test runs on a DIFFERENT
+// port, so this blocks the brain without impeding legitimate localhost testing.
+func isBrainAddr(u *url.URL, selfAddr string) bool {
+	if selfAddr == "" {
+		return false
+	}
+	_, selfPort, err := net.SplitHostPort(selfAddr)
+	if err != nil || selfPort == "" {
+		return false
+	}
+	port := u.Port()
+	if port == "" {
+		switch strings.ToLower(u.Scheme) {
+		case "https":
+			port = "443"
+		case "http":
+			port = "80"
+		}
+	}
+	if port != selfPort {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "localhost" {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return true
+	}
+	return false
+}
+
+// guardNavigateURL validates a navigation target for the agent browser. Only
+// http/https is allowed (blocks file://, chrome://, data:, etc.); cloud-metadata
+// and link-local hosts and the brain's own address are refused. Applied to the
+// requested URL AND re-applied to the final URL after redirects.
+func guardNavigateURL(raw, selfAddr string) error {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return fmt.Errorf("invalid url: %w", err)
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https":
+	default:
+		return fmt.Errorf("blocked url scheme %q — the agent browser only navigates http/https", u.Scheme)
+	}
+	if blockedHost(u.Hostname()) {
+		return fmt.Errorf("blocked: %q is a cloud-metadata / link-local endpoint, off-limits to the agent browser", u.Hostname())
+	}
+	if isBrainAddr(u, selfAddr) {
+		return fmt.Errorf("blocked: the brain's own address is off-limits to the agent browser")
+	}
+	return nil
 }
 
 func (bm *BrowserManager) getPage(agent string) (*rod.Page, error) {
@@ -46,6 +136,7 @@ func (bm *BrowserManager) getPage(agent string) (*rod.Page, error) {
 
 		bm.browser = rod.New().ControlURL(u)
 		if err := bm.browser.Connect(); err != nil {
+			bm.browser = nil // don't leave a non-nil, unconnected browser — the next call must relaunch
 			return nil, fmt.Errorf("failed to connect to chromium: %w", err)
 		}
 	}
@@ -85,6 +176,15 @@ func registerBrowser(s *mcp.Server, q *queue.Store, artStore *taskartifacts.Stor
 		Description: "Navigate the headless browser to a specified URL.",
 	}, func(_ context.Context, req *mcp.CallToolRequest, in browserNavigateIn) (*mcp.CallToolResult, okOut, error) {
 		agent := identity(req, in.Name)
+
+		// SSRF guard: refuse metadata / link-local / file:// / the brain's own
+		// address BEFORE opening a page. Loopback+private stay allowed so the
+		// tester can drive the app the herd just built on localhost.
+		if err := guardNavigateURL(in.URL, bm.selfAddr); err != nil {
+			log.Printf("browser: agent %q navigation refused: %v", agent, err)
+			return nil, okOut{OK: false}, err
+		}
+
 		page, err := bm.getPage(agent)
 		if err != nil {
 			return nil, okOut{OK: false}, err
@@ -95,6 +195,16 @@ func registerBrowser(s *mcp.Server, q *queue.Store, artStore *taskartifacts.Stor
 		}
 		if err := page.WaitLoad(); err != nil {
 			return nil, okOut{OK: false}, fmt.Errorf("wait load failed: %w", err)
+		}
+
+		// Re-check the FINAL url: a redirect could have landed on a blocked
+		// host (metadata/brain). Leave no blocked content on the page.
+		if info, ierr := page.Info(); ierr == nil {
+			if err := guardNavigateURL(info.URL, bm.selfAddr); err != nil {
+				_ = page.Navigate("about:blank")
+				log.Printf("browser: agent %q navigation blocked after redirect to %s", agent, info.URL)
+				return nil, okOut{OK: false}, fmt.Errorf("navigation blocked after redirect: %w", err)
+			}
 		}
 
 		log.Printf("browser: agent %q navigated to %s", agent, in.URL)

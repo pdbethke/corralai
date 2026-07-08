@@ -537,7 +537,7 @@ func main() {
 	}
 	defer taskArtStore.Close()
 
-	browserMgr := brain.NewBrowserManager()
+	browserMgr := brain.NewBrowserManager(addr)
 	defer browserMgr.Close()
 
 	// Initialize motherduck_token before any MotherDuck operations (RegisterBrain
@@ -847,8 +847,8 @@ func main() {
 	for _, bad := range badRoleModels {
 		log.Printf("role-models: malformed entry (skipped): %q", bad)
 	}
-	if len(roleModels) > 0 {
-		log.Printf("role-models: %d role(s) configured (apply-on-spawn + topology drift enabled)", len(roleModels))
+	if roleModels.Len() > 0 {
+		log.Printf("role-models: %d role(s) configured (apply-on-spawn + topology drift enabled)", roleModels.Len())
 	} else {
 		log.Printf("role-models: none configured (set CORRALAI_ROLE_MODELS to enable apply-on-spawn)")
 	}

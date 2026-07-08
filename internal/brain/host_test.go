@@ -24,7 +24,8 @@ func TestTopologyShowsExpectedAndDrift(t *testing.T) {
 	book.Set(Host{Agent: "Quill", Role: "reviewer", Model: "ollama-x", Backend: "ollama", TS: 9_999_999_999})
 
 	// Policy: reviewer=claude-opus → drift expected
-	p := rolemodel.Policy{"reviewer": rolemodel.ModelRef{Model: "claude-opus"}}
+	p := rolemodel.New()
+	p.Set("reviewer", rolemodel.ModelRef{Model: "claude-opus"})
 
 	ctx := context.Background()
 	clientT, serverT := mcp.NewInMemoryTransports()

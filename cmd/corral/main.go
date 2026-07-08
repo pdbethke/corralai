@@ -890,6 +890,7 @@ func main() {
 		UnsafeHost: os.Getenv("CORRALAI_GATE_EXEC_UNSAFE_HOST") == "1",
 	}); gerr == nil {
 		verifyGate = brain.NewSandboxVerify(gateBackend)
+		engine.Verify = verifyGate // #42: same runner re-verifies final-state at convergence
 		log.Printf("verify-gate: independent verification enabled (backend %s)", gateBackend.Name())
 	} else {
 		log.Printf("verify-gate: NO isolation backend (%v); gated completion falls back to worker-reported executions — set CORRALAI_GATE_EXEC_BACKEND", gerr)

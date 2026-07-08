@@ -1,5 +1,9 @@
 # Corralai
 
+[![CI](https://github.com/pdbethke/corralai/actions/workflows/deploy.yml/badge.svg?branch=main)](https://github.com/pdbethke/corralai/actions/workflows/deploy.yml)
+[![License: Elastic 2.0](https://img.shields.io/badge/license-Elastic--2.0-e8a838)](LICENSE)
+[![docs](https://img.shields.io/badge/docs-corralai.dev-2f6f4e)](https://corralai.dev/docs/getting-started/)
+
 > **Status: early (v0.1).** Solo-maintained, moving fast, tested honestly — every
 > demo claim in this README was run before it was written, and the
 > [open threads](docs/DESIGN.md#open-threads-next) list what's known-rough.

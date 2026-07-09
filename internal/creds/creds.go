@@ -11,7 +11,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
+
+	"github.com/zalando/go-keyring"
 )
 
 var errReadOnly = errors.New("creds: backend is read-only")
@@ -117,6 +120,53 @@ func Redact(secret string) string {
 	return fmt.Sprintf("%s…(%d chars)", secret[:4], len(secret))
 }
 
+// credsDir is where the age store + fallback identity live: CORRAL_CREDS_DIR, else
+// the OS user config dir + "corral".
+func credsDir() (string, error) {
+	if d := os.Getenv("CORRAL_CREDS_DIR"); d != "" {
+		return d, nil
+	}
+	base, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(base, "corral"), nil
+}
+
+// keyringUsable probes the OS keyring with a harmless lookup of a key that is
+// never expected to exist. On a headless Linux host with no Secret Service
+// daemon, the underlying D-Bus call fails with a connection error rather than
+// go-keyring's ErrNotFound sentinel; go-keyring does not export a distinct
+// sentinel for "backend unavailable" (verified against the pinned
+// github.com/zalando/go-keyring v0.2.8: keyring_unix.go's secretServiceProvider
+// simply propagates whatever error ss.NewSecretService()/dbus returns). So we
+// take the conservative reading: ErrNotFound means the keyring backend answered
+// and is usable; any other error (including "no backend available") means it
+// is not, and the chain must fall back to the age file rather than error out.
+func keyringUsable() bool {
+	_, err := keyring.Get("corral", "__corral_probe__")
+	return err == nil || errors.Is(err, keyring.ErrNotFound)
+}
+
+// Open builds the default resolution chain: environment → OS keyring → age file.
+// A missing store is not an error (an unconfigured operator simply has no secrets).
+func Open() (*Store, error) {
+	dir, err := credsDir()
+	if err != nil {
+		return nil, err
+	}
+	chain := []backend{envBackend{}}
+	if keyringUsable() {
+		chain = append(chain, newKeyring("corral"))
+	}
+	id, err := resolveIdentity(dir)
+	if err != nil {
+		return nil, err
+	}
+	chain = append(chain, newAgeFile(filepath.Join(dir, "creds.age"), id))
+	return newStore(chain...), nil
+}
+
 // envBackend reads canonical secrets from the process environment. Read-only.
 type envBackend struct{}
 
@@ -124,9 +174,9 @@ func (envBackend) get(name string) (string, bool, error) {
 	v, ok := os.LookupEnv(name)
 	return v, ok && v != "", nil
 }
-func (envBackend) set(string, string) error    { return errReadOnly }
-func (envBackend) remove(string) error         { return errReadOnly }
-func (envBackend) writable() bool              { return false }
+func (envBackend) set(string, string) error { return errReadOnly }
+func (envBackend) remove(string) error      { return errReadOnly }
+func (envBackend) writable() bool           { return false }
 func (envBackend) names() ([]string, error) {
 	var out []string
 	for _, n := range canonicalNames {

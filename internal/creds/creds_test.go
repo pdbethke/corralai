@@ -6,12 +6,14 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/zalando/go-keyring"
 )
 
 // memBackend is a writable in-memory backend for exercising Store.
 type memBackend struct{ m map[string]string }
 
-func newMem() *memBackend { return &memBackend{m: map[string]string{}} }
+func newMem() *memBackend                                { return &memBackend{m: map[string]string{}} }
 func (b *memBackend) get(n string) (string, bool, error) { v, ok := b.m[n]; return v, ok, nil }
 func (b *memBackend) set(n, v string) error              { b.m[n] = v; return nil }
 func (b *memBackend) remove(n string) error              { delete(b.m, n); return nil }
@@ -114,5 +116,26 @@ func TestEnvBackend(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("env names() should include the set canonical key, got %v", names)
+	}
+}
+
+func TestOpenChainEnvOverridesStored(t *testing.T) {
+	keyring.MockInit()
+	t.Setenv("CORRAL_CREDS_DIR", t.TempDir())
+	s, err := Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Set("OPENROUTER_API_KEY", "stored"); err != nil {
+		t.Fatal(err)
+	}
+	if v, ok, _ := s.Get("OPENROUTER_API_KEY"); !ok || v != "stored" {
+		t.Fatalf("stored get = %q ok=%v", v, ok)
+	}
+	// env wins.
+	t.Setenv("OPENROUTER_API_KEY", "fromenv")
+	s2, _ := Open()
+	if v, _, _ := s2.Get("OPENROUTER_API_KEY"); v != "fromenv" {
+		t.Fatalf("env must override stored, got %q", v)
 	}
 }

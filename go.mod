@@ -9,6 +9,7 @@ require (
 	github.com/marcboeker/go-duckdb/v2 v2.4.3
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/smacker/go-tree-sitter v0.0.0-20240827094217-dd81d9e9be82
+	github.com/zalando/go-keyring v0.2.8
 	golang.org/x/crypto v0.53.0
 	golang.org/x/time v0.15.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -52,7 +53,6 @@ require (
 	github.com/ysmood/got v0.40.0 // indirect
 	github.com/ysmood/gson v0.7.3 // indirect
 	github.com/ysmood/leakless v0.9.0 // indirect
-	github.com/zalando/go-keyring v0.2.8 // indirect
 	github.com/zeebo/xxh3 v1.0.2 // indirect
 	golang.org/x/exp v0.0.0-20250408133849-7e4ce0ab07d0 // indirect
 	golang.org/x/mod v0.36.0 // indirect

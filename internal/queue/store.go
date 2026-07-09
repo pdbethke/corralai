@@ -590,6 +590,28 @@ func (s *Store) MissionRoles(missionID int64) ([]string, error) {
 	return out, rows.Err()
 }
 
+// MissionTaskKeys returns the set of task keys in a mission (any status). It
+// backs the enqueue/supersede dep-key guard: a DependsOn key that names no
+// existing task is an orphan dependency — the task would never promote (an
+// invisible DAG hang that only the reactive sweep later cancels), so the brain
+// refuses to create it. Mirrors MissionRoles.
+func (s *Store) MissionTaskKeys(missionID int64) ([]string, error) {
+	rows, err := s.db.Query(`SELECT key FROM tasks WHERE mission_id=?`, missionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			return nil, err
+		}
+		out = append(out, k)
+	}
+	return out, rows.Err()
+}
+
 // MissionDone reports whether a mission has tasks and none are still open
 // (pending/ready/claimed). Terminal statuses — done, cancelled, superseded — do
 // not block completion, so a mission whose remaining work the lead cancelled or

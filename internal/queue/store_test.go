@@ -54,6 +54,31 @@ func TestEnqueueAndPromoteReady(t *testing.T) {
 	}
 }
 
+func TestMissionTaskKeys(t *testing.T) {
+	s := open(t)
+	if err := s.Enqueue(1, []TaskSpec{
+		{Key: "build", Role: "builder", Title: "build", Instruction: "b"},
+		{Key: "test", Role: "tester", Title: "test", Instruction: "t", DependsOn: []string{"build"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// A different mission's keys must not leak in.
+	if err := s.Enqueue(2, []TaskSpec{{Key: "other", Role: "builder", Title: "o", Instruction: "o"}}); err != nil {
+		t.Fatal(err)
+	}
+	keys, err := s.MissionTaskKeys(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, k := range keys {
+		got[k] = true
+	}
+	if !got["build"] || !got["test"] || got["other"] || len(keys) != 2 {
+		t.Fatalf("MissionTaskKeys(1) = %v, want exactly [build test]", keys)
+	}
+}
+
 func TestClaimNextConcurrentNoDoubleClaim(t *testing.T) {
 	s := open(t)
 	const N = 50

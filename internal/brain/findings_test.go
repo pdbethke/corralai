@@ -562,6 +562,53 @@ func TestEnqueueTaskUsesActiveRolesWhenPresent(t *testing.T) {
 	}
 }
 
+// enqueue_task must refuse a task whose dependency key names no task in the
+// mission — an orphan dep that would never promote (an invisible DAG hang the
+// reactive sweep only cleans up after the fact). Validate at the source.
+func TestEnqueueTaskRefusesOrphanDependency(t *testing.T) {
+	dir := t.TempDir()
+	q, _ := queue.Open(filepath.Join(dir, "q.sqlite3"))
+	t.Cleanup(func() { q.Close() })
+	q.Enqueue(7, []queue.TaskSpec{{Key: "build", Role: "builder", Title: "b", Instruction: "b"}})
+
+	ctx := context.Background()
+	clientT, serverT := mcp.NewInMemoryTransports()
+	go func() { _ = NewServer(nil, nil, Options{Queue: q}).Run(ctx, serverT) }()
+	client := mcp.NewClient(&mcp.Implementation{Name: "lead", Version: "0"}, nil)
+	sess, _ := client.Connect(ctx, clientT, nil)
+	defer sess.Close()
+
+	// depends on "nope" — no such task in mission 7.
+	res, err := sess.CallTool(ctx, &mcp.CallToolParams{Name: "enqueue_task",
+		Arguments: map[string]any{"mission_id": 7, "key": "pkg", "role": "builder", "title": "pkg", "instruction": "p", "depends_on": []string{"nope"}}})
+	if err != nil {
+		t.Fatalf("call: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("enqueue_task accepted an orphan dependency; want refusal")
+	}
+	text := ""
+	for _, c := range res.Content {
+		if tc, ok := c.(*mcp.TextContent); ok {
+			text += tc.Text
+		}
+	}
+	if !strings.Contains(text, "nope") {
+		t.Fatalf("refusal should name the missing dependency, got: %s", text)
+	}
+	// And nothing was enqueued.
+	if tasks, _ := q.List(7); len(tasks) != 1 {
+		t.Fatalf("orphan-dep task must not be enqueued; mission has %d tasks, want 1", len(tasks))
+	}
+
+	// A dep on an existing task ("build") is accepted.
+	var enq okOut
+	callTask(t, sess, "enqueue_task", map[string]any{"mission_id": 7, "key": "pkg2", "role": "builder", "title": "pkg2", "instruction": "p", "depends_on": []string{"build"}}, &enq)
+	if !enq.OK {
+		t.Fatal("enqueue_task refused a dependency that exists; want accepted")
+	}
+}
+
 // A present generalist worker claims any ready task, so enqueue_task for any
 // role it could claim must be accepted — the guard must not read the collapsed
 // "generalist" Role string as one opaque role that covers nothing.

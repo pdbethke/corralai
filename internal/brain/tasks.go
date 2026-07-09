@@ -534,11 +534,44 @@ func registerTasks(s *mcp.Server, store *coord.Store, q *queue.Store, lease floa
 		return fmt.Errorf("refused: this mission staffs no %q agents — a task with that role would never be claimed and would deadlock the mission; use one of: %s", role, strings.Join(roles, ", "))
 	}
 
+	// checkDepsExist refuses a task whose DependsOn references a key that names no
+	// task in the mission: an orphan dependency never promotes (PromoteReady can't
+	// satisfy it), so the task hangs invisibly until the reactive sweep cancels it.
+	// Stopping it at creation — naming the missing key(s) so the lead can enqueue
+	// the dependency first — is the source-side complement to that sweep.
+	checkDepsExist := func(missionID int64, deps []string) error {
+		if len(deps) == 0 {
+			return nil
+		}
+		keys, err := q.MissionTaskKeys(missionID)
+		if err != nil {
+			return err
+		}
+		have := make(map[string]bool, len(keys))
+		for _, k := range keys {
+			have[k] = true
+		}
+		var missing []string
+		for _, d := range deps {
+			if d != "" && !have[d] {
+				missing = append(missing, d)
+			}
+		}
+		if len(missing) > 0 {
+			sort.Strings(missing)
+			return fmt.Errorf("refused: depends_on names task(s) not in this mission: %s — enqueue the dependency first, or fix the key; an orphan dependency never promotes", strings.Join(missing, ", "))
+		}
+		return nil
+	}
+
 	mcp.AddTool(s, &mcp.Tool{Name: "supersede_task",
 		Description: "Replace a stale task with a reworked one (old → superseded; the replacement carries the lineage). Pending dependents are rewritten to wait on the replacement, so the plan stays valid. The role must be one the mission already staffs."},
 		func(_ context.Context, req *mcp.CallToolRequest, in taskSpecIn) (*mcp.CallToolResult, supersedeOut, error) {
 			if mid, err := q.MissionOfTask(in.OldID); err == nil && mid != 0 {
 				if err := checkStaffedRole(mid, in.Role); err != nil {
+					return nil, supersedeOut{}, err
+				}
+				if err := checkDepsExist(mid, in.DependsOn); err != nil {
 					return nil, supersedeOut{}, err
 				}
 			}
@@ -557,6 +590,9 @@ func registerTasks(s *mcp.Server, store *coord.Store, q *queue.Store, lease floa
 				return nil, okOut{}, fmt.Errorf("mission_id required")
 			}
 			if err := checkStaffedRole(in.MissionID, in.Role); err != nil {
+				return nil, okOut{}, err
+			}
+			if err := checkDepsExist(in.MissionID, in.DependsOn); err != nil {
 				return nil, okOut{}, err
 			}
 			err := q.Enqueue(in.MissionID, []queue.TaskSpec{in.spec()})

@@ -65,3 +65,42 @@ func TestParseTrimsWhitespaceAroundEntries(t *testing.T) {
 		t.Fatalf("Roles = %v, want %v", s.Roles, want)
 	}
 }
+
+// Coverage must reverse Display(): the string a worker registers into its
+// single coord.Agent.Role field ("a+b", "generalist", "builder") has to parse
+// back into the role Set that worker actually claims against, so the brain's
+// coverage checks stop reading the collapsed Display string as one opaque role.
+func TestCoverageReversesDisplay(t *testing.T) {
+	for _, raw := range []string{"builder", "researcher, designer, tester", "any", "*", ""} {
+		want := Parse(raw)
+		got := Coverage(want.Display())
+		if got.Any != want.Any || !reflect.DeepEqual(got.ClaimArg(), want.ClaimArg()) {
+			t.Fatalf("Coverage(%q.Display()=%q) = %+v, want %+v", raw, want.Display(), got, want)
+		}
+	}
+}
+
+// An empty Role field is an unregistered worker, NOT a generalist — Display()
+// never emits empty, so Coverage("") must cover nothing rather than wildcard.
+func TestCoverageEmptyIsNoCoverage(t *testing.T) {
+	s := Coverage("")
+	if s.Any {
+		t.Fatal("Coverage(\"\") must not be Any — empty Role is unregistered, not generalist")
+	}
+	if s.Covers("builder") {
+		t.Fatal("Coverage(\"\") must cover nothing")
+	}
+}
+
+func TestCovers(t *testing.T) {
+	if !Coverage("generalist").Covers("perf") {
+		t.Fatal("a generalist must cover every role")
+	}
+	multi := Coverage("researcher+designer")
+	if !multi.Covers("designer") || !multi.Covers("researcher") {
+		t.Fatal("a multi-role worker must cover each of its roles")
+	}
+	if multi.Covers("tester") {
+		t.Fatal("a multi-role worker must not cover a role it does not list")
+	}
+}

@@ -14,6 +14,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/pdbethke/corralai/internal/agentrole"
 	"github.com/pdbethke/corralai/internal/coord"
 	"github.com/pdbethke/corralai/internal/learn"
 	"github.com/pdbethke/corralai/internal/mission"
@@ -490,11 +491,23 @@ func registerTasks(s *mcp.Server, store *coord.Store, q *queue.Store, lease floa
 		if store != nil {
 			if active, err := store.ListActive(coord.PresenceWindow); err == nil {
 				activeRoles := map[string]bool{}
+				hasGeneralist := false
 				for _, a := range active {
-					r := strings.TrimSpace(a.Role)
-					if r != "" {
+					// Role holds a collapsed Display string: a generalist claims
+					// any ready task, and a multi-role worker registers "a+b".
+					// Expand it so a task whose role a present generalist/multi-role
+					// worker actually covers isn't falsely refused.
+					cov := agentrole.Coverage(a.Role)
+					if cov.Any {
+						hasGeneralist = true
+						continue
+					}
+					for _, r := range cov.Roles {
 						activeRoles[r] = true
 					}
+				}
+				if hasGeneralist {
+					return nil // a generalist covers this role — it will be claimed
 				}
 				if len(activeRoles) > 0 {
 					if activeRoles[role] {

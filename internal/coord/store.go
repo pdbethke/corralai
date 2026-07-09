@@ -392,6 +392,33 @@ func (s *Store) LiveClaimHolders() ([]string, error) {
 	return out, rows.Err()
 }
 
+// ReapAbsentClaims releases every live claim held by an agent NOT in the present
+// set — a crashed/disconnected holder whose exclusive path lease would otherwise
+// strand peers until the full TTL (up to an hour). It is the coord-lease sibling
+// of the queue task reaper. A nil present set means presence is unavailable, so
+// it reaps nothing (never releases a live agent's lease on a transient presence
+// outage). Returns the names whose claims were released.
+func (s *Store) ReapAbsentClaims(present map[string]bool) ([]string, error) {
+	if present == nil {
+		return nil, nil
+	}
+	holders, err := s.LiveClaimHolders()
+	if err != nil {
+		return nil, err
+	}
+	var reaped []string
+	for _, h := range holders {
+		if present[h] {
+			continue
+		}
+		if _, err := s.ReleaseClaims(h, nil); err != nil {
+			return reaped, err
+		}
+		reaped = append(reaped, h)
+	}
+	return reaped, nil
+}
+
 // ClaimPaths leases paths. Exclusive claims are ENFORCED: if an enforcing exclusive
 // holder overlaps, the path is NOT granted and the conflict is reported. The whole
 // check+insert runs in one transaction so a race yields exactly one winner.

@@ -791,6 +791,14 @@ func main() {
 			} else if n > 0 {
 				log.Printf("queue: reaped %d stale task claim(s)", n)
 			}
+			// Coord-lease sibling of the queue reaper: release path leases held by
+			// crashed/absent agents so a dead holder's exclusive lease can't strand
+			// peers until its TTL (up to an hour).
+			if reaped, err := store.ReapAbsentClaims(present); err != nil {
+				log.Printf("coord: claim reap: %v", err)
+			} else if len(reaped) > 0 {
+				log.Printf("coord: released path leases of %d absent agent(s): %v", len(reaped), reaped)
+			}
 			if n, err := brain.DetectRoleStalls(queueStore, active, taskStallThreshold, telStore); err != nil {
 				log.Printf("queue: stall watchdog: %v", err)
 			} else if n > 0 {

@@ -536,6 +536,9 @@
   .role-assigned.has-agent { background:rgba(79,195,217,.15); border:1px solid #4fc3d9; color:#4fc3d9; }
   .mc-actions { display:flex; align-items:center; justify-content:space-between; margin-top:12px; }
   .mc-checkbox { display:flex; align-items:center; gap:6px; font-size:12.5px; color:var(--muted); cursor:pointer; }
+  .mc-endpoints, .mc-lookbooks { display:flex; flex-direction:column; gap:4px; }
+  .mc-check { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--muted); cursor:pointer; }
+  .mc-empty { font-size:11.5px; color:var(--muted); font-style:italic; }
   .mc-btn { background:var(--amber); color:var(--bg); border:none; border-radius:6px; padding:6px 16px; font-size:13px; font-weight:600; cursor:pointer; }
   .mc-btn:hover { filter: brightness(1.1); }
   .mc-btn-sec { background:var(--panel); color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:6px 14px; font-size:13px; font-weight:600; cursor:pointer; margin-right:8px; }
@@ -1477,7 +1480,7 @@ function setView(v){
   // higher z-index. Don't display:none the canvas — that zeroes its box and squishes
   // the swarm. resize() re-fits when we come back, but there's nothing to re-fit now.
   if(v==='memory' && !memInit){ memInit = true; loadScopes(); searchMem(); }
-  if(v==='launch'){ renderLaunchTab(); }
+  if(v==='launch'){ if(!composeOptsLoaded){ loadComposeOptions(); } renderLaunchTab(); }
   if(v==='progress'){ renderProgress(); }
   if(v==='topology'){ renderTopology(); }
   if(v==='skills'){ renderSkillsTab(); }
@@ -2097,6 +2100,28 @@ function renderFleetOracle(){
 }
 
 let mcAssignments = {};
+let composeOpts = { endpoints: [], lookbook: [] };
+let composeOptsLoaded = false;
+function loadComposeOptions() {
+  fetch('/api/mission/compose-options').then(r => r.json()).then(d => {
+    composeOpts = d || { endpoints: [], lookbook: [] };
+    composeOptsLoaded = true;
+    renderLaunchTab(true); // re-render the composer with the pickers populated
+  }).catch(() => {});
+}
+// agentBackend: local_agents is a bare []string of names with no backend
+// field in the topology, so we derive the backend from the name via a
+// small heuristic; anything unrecognized (including real local models)
+// defaults to ollama.
+function agentBackend(name) {
+  const n = (name || '').toLowerCase();
+  if (n.includes('claude')) return 'anthropic';
+  if (n.includes('gemini')) return 'google';
+  if (n.includes('codex') || n.includes('gpt')) return 'openai';
+  if (n.includes('copilot')) return 'github';
+  if (n.includes('aider')) return 'ollama';
+  return 'ollama';
+}
 function mcAllowDrop(ev) {
   ev.preventDefault();
   ev.currentTarget.classList.add('dragover');
@@ -2106,16 +2131,18 @@ function mcDragLeave(ev) {
 }
 function mcDrag(ev) {
   ev.dataTransfer.setData("text/plain", ev.target.dataset.agent);
+  ev.dataTransfer.setData("application/x-backend", ev.target.dataset.backend || agentBackend(ev.target.dataset.agent));
 }
 function mcDrop(ev) {
   ev.preventDefault();
   ev.currentTarget.classList.remove('dragover');
   const agent = ev.dataTransfer.getData("text/plain");
+  const backend = ev.dataTransfer.getData("application/x-backend") || agentBackend(agent);
   const role = ev.currentTarget.dataset.role;
-  mcAssign(role, agent);
+  mcAssign(role, agent, backend);
 }
-function mcAssign(role, agent) {
-  mcAssignments[role] = agent;
+function mcAssign(role, agent, backend) {
+  mcAssignments[role] = {agent, backend: backend || agentBackend(agent)};
   const el = document.getElementById(`mc-assigned-${role}`);
   if(el){
     el.textContent = agent;
@@ -2138,12 +2165,12 @@ function getLocalAgents() {
 function renderComposer() {
   const agents = getLocalAgents();
   const agentPoolHtml = agents.map(a => `
-    <span class="drag-agent" draggable="true" ondragstart="mcDrag(event)" data-agent="${esc(a)}">${esc(a)}</span>
+    <span class="drag-agent" draggable="true" ondragstart="mcDrag(event)" data-agent="${esc(a)}" data-backend="${esc(agentBackend(a))}">${esc(a)}</span>
   `).join('');
 
   const roles = ['builder', 'tester', 'reviewer', 'pentester'];
   const rolesHtml = roles.map(r => {
-    const assigned = mcAssignments[r] || '';
+    const assigned = mcAssignments[r] ? mcAssignments[r].agent : '';
     const valClass = assigned ? 'has-agent' : '';
     const valText = assigned ? assigned : 'drag agent here';
     return `
@@ -2172,6 +2199,14 @@ function renderComposer() {
     4: "High Perf",
     5: "Max GPU Util",
   }[mcFootprint];
+
+  const endpointsHtml = composeOpts.endpoints.map(e => `
+    <label class="mc-check"><input type="checkbox" class="mc-endpoint" value="${esc(e.name)}"> ${esc(e.name)}</label>
+  `).join('') || '<span class="mc-empty">no MCP endpoints available</span>';
+
+  const lookbookHtml = composeOpts.lookbook.map(l => `
+    <label class="mc-check"><input type="checkbox" class="mc-lookbook" value="${esc(String(l.id))}"> ${esc(l.name)}</label>
+  `).join('') || '<span class="mc-empty">no lookbook items</span>';
 
   return `
     <div class="mcomposer">
@@ -2209,6 +2244,10 @@ function renderComposer() {
           <div style="margin-top: 10px;"></div>
           <div class="mc-sec-title">Roles Setup</div>
           <div class="roles-setup">${rolesHtml}</div>
+          <div class="mc-sec-title">MCP Endpoints (the herd may consume)</div>
+          <div class="mc-endpoints">${endpointsHtml}</div>
+          <div class="mc-sec-title">Lookbook Directives</div>
+          <div class="mc-lookbooks">${lookbookHtml}</div>
         </div>
       </div>
     </div>
@@ -2228,11 +2267,13 @@ function submitMission() {
   }
   const reqReview = document.getElementById('mc-review').checked;
   const roleModels = {};
-  for (const [r, agent] of Object.entries(mcAssignments)) {
-    if (agent) {
-      roleModels[r] = {backend: 'ollama', model: agent};
+  for (const [r, a] of Object.entries(mcAssignments)) {
+    if (a && a.agent) {
+      roleModels[r] = {backend: a.backend || 'ollama', model: a.agent};
     }
   }
+  const mcpEndpoints = [...document.querySelectorAll('.mc-endpoint:checked')].map(c => c.value);
+  const lookbookIds = [...document.querySelectorAll('.mc-lookbook:checked')].map(c => parseInt(c.value, 10));
 
   fetch('/api/mission/create', {
     method: 'POST',
@@ -2240,7 +2281,9 @@ function submitMission() {
     body: JSON.stringify({
       directive: dir,
       requires_review: reqReview,
-      role_models: roleModels
+      role_models: roleModels,
+      mcp_endpoints: mcpEndpoints,
+      lookbook_ids: lookbookIds
     })
   })
   .then(r => r.json())

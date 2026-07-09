@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -173,6 +174,7 @@ func Handler(d Deps) http.Handler {
 	mux.HandleFunc("/api/mission/intercept", s.intercept)
 	mux.HandleFunc("/api/mission/create", s.createMission)
 	mux.HandleFunc("/api/mission/propose_staffing", s.proposeStaffing)
+	mux.HandleFunc("/api/mission/compose-options", s.composeOptions)
 	mux.Handle("/api/terminal/ws", s.guardTerminalWS(websocket.Handler(Registry.ServeWS)))
 
 	// Swarm Design Lookbook API routes
@@ -182,6 +184,41 @@ func Handler(d Deps) http.Handler {
 	mux.HandleFunc("/api/lookbook/image", s.lookbookImage)
 
 	return mux
+}
+
+// composeOptions feeds the Mission Composer's endpoint + lookbook pickers: the
+// endpoints the caller may consume and the lookbook items available to attach.
+func (s *Server) composeOptions(w http.ResponseWriter, r *http.Request) {
+	type epView struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}
+	type lbView struct {
+		ID          int64  `json:"id"`
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}
+	eps := []epView{}
+	if s.gw != nil {
+		if usable, err := s.gw.Usable(auth.Principal(r.Context())); err == nil {
+			for _, e := range usable {
+				eps = append(eps, epView{Name: e.Name, Description: e.Description})
+			}
+		} else {
+			log.Printf("compose-options: endpoints: %v", err)
+		}
+	}
+	lbs := []lbView{}
+	if s.taskArtifacts != nil {
+		if metas, err := s.taskArtifacts.GetLookbookItemsMeta(); err == nil {
+			for _, mta := range metas {
+				lbs = append(lbs, lbView{ID: mta.ID, Name: mta.Name, Description: mta.Description})
+			}
+		} else {
+			log.Printf("compose-options: lookbook: %v", err)
+		}
+	}
+	writeJSON(w, map[string]any{"endpoints": eps, "lookbook": lbs})
 }
 
 // isSuperuser mirrors me()'s permissive-dev-mode rule: a nil roles store
@@ -912,6 +949,8 @@ func (s *Server) createMission(w http.ResponseWriter, r *http.Request) {
 		Directive      string                        `json:"directive"`
 		RequiresReview bool                          `json:"requires_review"`
 		RoleModels     map[string]rolemodel.ModelRef `json:"role_models"`
+		MCPEndpoints   []string                      `json:"mcp_endpoints"`
+		LookbookIDs    []int64                       `json:"lookbook_ids"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "bad json", http.StatusBadRequest)
@@ -930,6 +969,16 @@ func (s *Server) createMission(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Resolve + validate the herd's endpoints and lookbook directives BEFORE
+	// mutating any shared state (the role-models policy below) — reject bad
+	// herd inputs first so a 400 never leaves a partial mutation behind.
+	principal := auth.Principal(r.Context())
+	endpointNames, guidelines, herdErr := brain.ResolveHerdInputs(s.gw, s.taskArtifacts, principal, body.MCPEndpoints, body.LookbookIDs)
+	if herdErr != nil {
+		http.Error(w, herdErr.Error(), http.StatusBadRequest)
+		return
+	}
+
 	// Update role models if provided
 	if len(body.RoleModels) > 0 && s.roleModels != nil {
 		for k, v := range body.RoleModels {
@@ -937,13 +986,18 @@ func (s *Server) createMission(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	plan := mission.ScaledPlan(body.Directive)
+	plan := mission.InjectHerdContext(mission.ScaledPlan(body.Directive), guidelines, endpointNames)
 	id, err := mission.CreateMission(s.missions, s.queue, body.Directive, plan, body.RequiresReview)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
+	herd := mission.Herd{RoleModels: body.RoleModels, Endpoints: endpointNames, LookbookIDs: body.LookbookIDs}
+	if !herd.IsEmpty() {
+		if err := s.missions.SaveHerd(id, herd); err != nil {
+			log.Printf("mission %d: SaveHerd: %v", id, err) // non-fatal: the run proceeds
+		}
+	}
 	writeJSON(w, map[string]any{"id": id, "ok": true})
 }
 

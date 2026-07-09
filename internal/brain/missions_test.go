@@ -9,15 +9,18 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/pdbethke/corralai/internal/coord"
+	"github.com/pdbethke/corralai/internal/gateway"
 	"github.com/pdbethke/corralai/internal/mission"
 	"github.com/pdbethke/corralai/internal/queue"
 	"github.com/pdbethke/corralai/internal/repo"
 	"github.com/pdbethke/corralai/internal/repoindex"
+	"github.com/pdbethke/corralai/internal/taskartifacts"
 	"github.com/pdbethke/corralai/internal/telemetry"
 )
 
@@ -257,5 +260,183 @@ func TestResolveReviewToolResolvesParkedMission(t *testing.T) {
 	}
 	if mv, _ := ms.Mission(mid); mv == nil || mv.Status != "done" {
 		t.Fatalf("mission should be done after resolve_review, got %v", mv)
+	}
+}
+
+// TestCreateMissionMCPPersistsAndInjectsHerd is the MCP-tool mirror of
+// ui.TestCreateMissionPersistsAndInjectsHerd (Task 3): create_mission over
+// the MCP transport must resolve+validate mcp_endpoints/lookbook_ids exactly
+// like the HTTP composer, inject them into the plan via InjectHerdContext,
+// and persist the resulting Herd (minus RoleModels — that field is
+// HTTP-composer-only, not carried by this tool).
+func TestCreateMissionMCPPersistsAndInjectsHerd(t *testing.T) {
+	dir := t.TempDir()
+	cstore, err := coord.Open(filepath.Join(dir, "c.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cstore.Close() })
+	m, err := mission.Open(filepath.Join(dir, "m.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { m.Close() })
+	q, err := queue.Open(filepath.Join(dir, "q.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { q.Close() })
+	gw, err := gateway.Open(filepath.Join(dir, "g.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { gw.Close() })
+	ta, err := taskartifacts.Open(filepath.Join(dir, "ta.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ta.Close() })
+
+	// An endpoint usable by the anonymous (dev) principal "".
+	if err := gw.Register(gateway.Endpoint{Name: "prod-db", Transport: "stdio", Endpoint: "x", Enabled: true}, gateway.Auth{}, ""); err != nil {
+		t.Fatal(err)
+	}
+	lbID, err := ta.SaveLookbookItem("neon", "Emulate the neon mock.", "image/png", []byte("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	clientT, serverT := mcp.NewInMemoryTransports()
+	go func() {
+		_ = NewServer(cstore, nil, Options{
+			Missions:      m,
+			Queue:         q,
+			Gateway:       gw,
+			TaskArtifacts: ta,
+		}).Run(ctx, serverT)
+	}()
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "t", Version: "0"}, nil)
+	sess, err := client.Connect(ctx, clientT, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+
+	res, err := sess.CallTool(ctx, &mcp.CallToolParams{
+		Name: "create_mission",
+		Arguments: map[string]any{
+			"directive":     "build a dashboard",
+			"mcp_endpoints": []string{"prod-db"},
+			"lookbook_ids":  []int64{lbID},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create_mission: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("create_mission with a valid herd must not error, got: %q", toolErrText(res))
+	}
+	var mv mission.MissionView
+	b, _ := json.Marshal(res.StructuredContent)
+	if err := json.Unmarshal(b, &mv); err != nil {
+		t.Fatalf("decode MissionView: %v", err)
+	}
+	if mv.ID == 0 {
+		t.Fatal("expected a valid mission ID in the returned MissionView")
+	}
+
+	herd, ok, err := m.Herd(mv.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected a herd to be persisted")
+	}
+	if len(herd.Endpoints) != 1 || herd.Endpoints[0] != "prod-db" {
+		t.Fatalf("expected endpoints [prod-db], got %v", herd.Endpoints)
+	}
+	if len(herd.LookbookIDs) != 1 || herd.LookbookIDs[0] != lbID {
+		t.Fatalf("expected lookbook ids [%d], got %v", lbID, herd.LookbookIDs)
+	}
+	if herd.RoleModels != nil {
+		t.Fatalf("create_mission MCP tool must not carry role_models, got %v", herd.RoleModels)
+	}
+
+	tasks, err := q.List(mv.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) == 0 {
+		t.Fatal("expected at least one task")
+	}
+	found := false
+	for _, tk := range tasks {
+		if strings.Contains(tk.Instruction, "prod-db") && strings.Contains(tk.Instruction, "neon") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected a builder task instruction to mention both the endpoint and the lookbook item")
+	}
+}
+
+// TestCreateMissionMCPUnknownEndpointRejected mirrors the HTTP composer's
+// validation: an mcp_endpoints entry the caller cannot see must refuse the
+// whole create_mission call rather than silently dropping it.
+func TestCreateMissionMCPUnknownEndpointRejected(t *testing.T) {
+	dir := t.TempDir()
+	cstore, err := coord.Open(filepath.Join(dir, "c.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cstore.Close() })
+	m, err := mission.Open(filepath.Join(dir, "m.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { m.Close() })
+	q, err := queue.Open(filepath.Join(dir, "q.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { q.Close() })
+	gw, err := gateway.Open(filepath.Join(dir, "g.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { gw.Close() })
+
+	ctx := context.Background()
+	clientT, serverT := mcp.NewInMemoryTransports()
+	go func() {
+		_ = NewServer(cstore, nil, Options{
+			Missions: m,
+			Queue:    q,
+			Gateway:  gw,
+		}).Run(ctx, serverT)
+	}()
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "t", Version: "0"}, nil)
+	sess, err := client.Connect(ctx, clientT, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+
+	res, err := sess.CallTool(ctx, &mcp.CallToolParams{
+		Name: "create_mission",
+		Arguments: map[string]any{
+			"directive":     "build a dashboard",
+			"mcp_endpoints": []string{"nonexistent"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create_mission call: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("create_mission must refuse an unknown/inaccessible mcp endpoint")
 	}
 }

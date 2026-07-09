@@ -42,14 +42,21 @@ Go binary.**
 - **Model×role telemetry** — the brain computes each model's per-role performance
   (sample-weighted, honest about thin data) and infers per-agent health from the
   attributed ledger — the data layer the leaderboard and self-staffing read from.
+- **Graceful degradation over deadlock** — no mission strands or falsely
+  certifies: the verify gate certifies by *execution* (not worker self-report) at
+  every task and re-checks the final tree; orphaned/blocked-dep tasks are swept
+  and dep keys validated at the source; a no-progress backstop and reflex-cap fail
+  a non-converging mission instead of hanging; stale claims are reaped, a
+  force-reclaimed worker backs off (self-heal, not quarantine), and generalist /
+  multi-role workers no longer trip false stall alarms; a drained queue that still
+  holds an open critical/high finding routes to a **needs-review** human gate
+  rather than shipping a known defect.
 
 ## Now — make it operable and unbreakable
 - **The front door.** A first-class *"what should the herd build?"* composer, with
   an optional brain-led clarify step (→ a crisp directive with explicit acceptance
   criteria) and a pre-flight feasibility check (roles the plan needs vs. workers
   available). Specifying well is also a reliability fix.
-- **Reliability hardening.** Graceful degradation over deadlock — role-staffing
-  gaps, refusal storms, and stale claims must never strand a mission.
 - **Resumability.** A mission survives a crash or quota blip and resumes from
   durable state instead of starting over.
 - **Dogfooding.** Use corral to build corral — the forcing function for all of it.

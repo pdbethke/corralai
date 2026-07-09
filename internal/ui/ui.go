@@ -1000,33 +1000,12 @@ func (s *Server) lookbookList(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Lookbook database not configured", http.StatusServiceUnavailable)
 		return
 	}
-	items, err := s.taskArtifacts.GetLookbookItems()
+	items, err := s.taskArtifacts.GetLookbookItemsMeta()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
-	type itemMeta struct {
-		ID          int64   `json:"id"`
-		Name        string  `json:"name"`
-		Description string  `json:"description"`
-		MimeType    string  `json:"mime_type"`
-		Size        int     `json:"size"`
-		CreatedTS   float64 `json:"created_ts"`
-	}
-
-	out := []itemMeta{}
-	for _, item := range items {
-		out = append(out, itemMeta{
-			ID:          item.ID,
-			Name:        item.Name,
-			Description: item.Description,
-			MimeType:    item.MimeType,
-			Size:        len(item.Data),
-			CreatedTS:   item.CreatedTS,
-		})
-	}
-	writeJSON(w, out)
+	writeJSON(w, items)
 }
 
 func (s *Server) lookbookUpload(w http.ResponseWriter, r *http.Request) {
@@ -1038,11 +1017,20 @@ func (s *Server) lookbookUpload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
+	// A read-only observer token may view the swarm but never act — the UI mux
+	// (unlike /mcp) isn't wrapped in denyReadOnly, so writes guard themselves.
+	if auth.ReadOnly(r) {
+		http.Error(w, "forbidden: read-only observer token cannot act", http.StatusForbidden)
+		return
+	}
+	// Cap the request body BEFORE reading/decoding — the 5MB check below runs after
+	// a full read + base64 decode, so without this a huge upload OOMs the brain.
+	// 8MiB leaves room for a 5MB image's base64 (~6.7MB) plus the JSON envelope.
+	r.Body = http.MaxBytesReader(w, r.Body, 8<<20)
 
 	var body struct {
 		Name        string `json:"name"`
 		Description string `json:"description"`
-		MimeType    string `json:"mime_type"`
 		Data        string `json:"data"` // base64 encoded
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -1062,7 +1050,9 @@ func (s *Server) lookbookUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Basic MIME check
+	// Validate by the actual bytes, and store the DETECTED type — never a
+	// client-supplied mime_type. Serving a client-controlled Content-Type back on
+	// the brain's own origin is a stored-XSS vector (see lookbookImage).
 	detected := http.DetectContentType(dataBytes)
 	allowed := false
 	for _, prefix := range []string{"image/png", "image/jpeg", "image/gif", "image/webp"} {
@@ -1076,7 +1066,7 @@ func (s *Server) lookbookUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id, err := s.taskArtifacts.SaveLookbookItem(body.Name, body.Description, body.MimeType, dataBytes)
+	id, err := s.taskArtifacts.SaveLookbookItem(body.Name, body.Description, detected, dataBytes)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -1088,6 +1078,10 @@ func (s *Server) lookbookUpload(w http.ResponseWriter, r *http.Request) {
 func (s *Server) lookbookDelete(w http.ResponseWriter, r *http.Request) {
 	if s.taskArtifacts == nil {
 		http.Error(w, "Lookbook database not configured", http.StatusServiceUnavailable)
+		return
+	}
+	if auth.ReadOnly(r) {
+		http.Error(w, "forbidden: read-only observer token cannot act", http.StatusForbidden)
 		return
 	}
 	idStr := r.URL.Query().Get("id")
@@ -1116,26 +1110,23 @@ func (s *Server) lookbookImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	items, err := s.taskArtifacts.GetLookbookItems()
+	found, err := s.taskArtifacts.GetLookbookItem(id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
-	var found *taskartifacts.LookbookItem
-	for i := range items {
-		if items[i].ID == id {
-			found = &items[i]
-			break
-		}
-	}
-
 	if found == nil {
 		http.Error(w, "image not found", http.StatusNotFound)
 		return
 	}
 
+	// MimeType is the server-detected type (see lookbookUpload). nosniff stops the
+	// browser MIME-sniffing the blob into active content, and an inline
+	// disposition keeps it a passive image — belt-and-suspenders against a
+	// stored-XSS via a crafted image/HTML polyglot.
 	w.Header().Set("Content-Type", found.MimeType)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Disposition", "inline")
 	w.Header().Set("Content-Length", strconv.Itoa(len(found.Data)))
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	_, _ = w.Write(found.Data)

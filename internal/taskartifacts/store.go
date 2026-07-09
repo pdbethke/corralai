@@ -157,6 +157,57 @@ func (s *Store) GetLookbookItems() ([]LookbookItem, error) {
 	return out, rows.Err()
 }
 
+// GetLookbookItem retrieves a single lookbook item (data included) by ID, or nil
+// when no such row exists. Used by the image endpoint so serving one image does
+// not load every item's BLOB into memory.
+func (s *Store) GetLookbookItem(id int64) (*LookbookItem, error) {
+	var li LookbookItem
+	err := s.db.QueryRow(`
+		SELECT id, name, description, mime_type, data, created_ts
+		FROM lookbook_items WHERE id = ?`, id).
+		Scan(&li.ID, &li.Name, &li.Description, &li.MimeType, &li.Data, &li.CreatedTS)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &li, nil
+}
+
+// LookbookItemMeta is a lookbook item WITHOUT its (potentially large) BLOB — the
+// list view needs only metadata and the byte size, never the image data.
+type LookbookItemMeta struct {
+	ID          int64   `json:"id"`
+	Name        string  `json:"name"`
+	Description string  `json:"description"`
+	MimeType    string  `json:"mime_type"`
+	Size        int     `json:"size"`
+	CreatedTS   float64 `json:"created_ts"`
+}
+
+// GetLookbookItemsMeta lists lookbook items without loading their BLOB data — it
+// selects length(data) as the size, so listing many large mockups never pulls
+// every image's bytes into memory.
+func (s *Store) GetLookbookItemsMeta() ([]LookbookItemMeta, error) {
+	rows, err := s.db.Query(`
+		SELECT id, name, description, mime_type, length(data), created_ts
+		FROM lookbook_items ORDER BY id DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []LookbookItemMeta{}
+	for rows.Next() {
+		var m LookbookItemMeta
+		if err := rows.Scan(&m.ID, &m.Name, &m.Description, &m.MimeType, &m.Size, &m.CreatedTS); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
 // DeleteLookbookItem deletes a lookbook item by ID.
 func (s *Store) DeleteLookbookItem(id int64) error {
 	_, err := s.db.Exec(`DELETE FROM lookbook_items WHERE id = ?`, id)

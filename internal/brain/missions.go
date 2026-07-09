@@ -300,6 +300,28 @@ func registerMissions(s *mcp.Server, store *mission.Store, q *queue.Store, mem *
 			return nil, *mv, nil
 		})
 
+	mcp.AddTool(s, &mcp.Tool{Name: "resolve_review",
+		Description: "Resolve a mission parked at needs-review: the convergence findings-gate withheld certification because an open critical/high finding never became a task. Dismiss or address those findings first (resolve_finding), then call this to certify the mission done. Refused while any blocking finding is still open — a judge may not certify a result it knows still holds a critical defect."},
+		func(_ context.Context, req *mcp.CallToolRequest, in missionIDIn) (*mcp.CallToolResult, mission.MissionView, error) {
+			blockSev := opts.ConvergeBlockSeverity
+			if blockSev == "" {
+				blockSev = "high" // engine default (mission.NewEngine)
+			}
+			mv, err := mission.ResolveNeedsReview(store, q, in.ID, blockSev)
+			if err != nil {
+				return nil, mission.MissionView{}, err
+			}
+			rec(tel, in.ID, "review_resolved", identity(req, "operator"), "", nil)
+			if mv.Status == "done" {
+				rounds := 0
+				if full, ferr := store.Mission(in.ID); ferr == nil && full != nil {
+					rounds = full.ReviewRounds
+				}
+				rec(tel, in.ID, "mission_completed", "engine", "", map[string]any{"status": "done", "review_rounds": rounds})
+			}
+			return nil, *mv, nil
+		})
+
 	// pause_mission / resume_mission / cancel_mission are #58's mid-mission
 	// human steering: today's human gate was TERMINAL only (review_mission,
 	// above) and the composer was PRE-launch (create_mission) — there was no

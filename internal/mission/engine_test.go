@@ -291,6 +291,117 @@ func TestEngineHoldsBackWhenFinalStateVerifyFails(t *testing.T) {
 	}
 }
 
+// TestEngineRoutesToNeedsReviewOnOpenCriticalFinding: a drained queue is not a
+// clean bill of health. If an open finding at/above `high` remains — e.g. a
+// critical `design-flaw`, which reflexRules deems non-actionable so it never
+// becomes a task and never blocks MissionDone — the brain must NOT certify the
+// mission "done". It routes to the human-gate `needs-review` terminal state
+// instead: a judge may not certify a result it knows still holds a critical
+// defect.
+func TestEngineRoutesToNeedsReviewOnOpenCriticalFinding(t *testing.T) {
+	dir := t.TempDir()
+	q, err := queue.Open(filepath.Join(dir, "q.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer q.Close()
+	m, err := Open(filepath.Join(dir, "m.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+
+	mid, err := CreateMission(m, q, "add a wishlist feature", nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A non-actionable but critical finding: reflexRules returns actionable=false
+	// for design-flaw, so replan never turns it into a task and never marks it
+	// addressed — it stays open right through convergence.
+	if _, err := q.AddFinding(queue.Finding{
+		MissionID: mid, Reporter: "reviewer", Type: "design-flaw", Severity: "critical",
+		Target: "architecture", Evidence: "the auth model is fundamentally unsound",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	e := NewEngine(m, q)
+	var gotStatus string
+	var completedCalls int
+	e.OnMissionCompleted = func(_ int64, status string, _ int) {
+		completedCalls++
+		gotStatus = status
+	}
+
+	settled := false
+	for i := 0; i < 60 && !settled; i++ {
+		drain(t, q)
+		_ = e.Tick()
+		if mv, _ := m.Mission(mid); mv != nil && mv.Status != "running" {
+			settled = true
+		}
+	}
+	mv, _ := m.Mission(mid)
+	if mv == nil {
+		t.Fatal("mission missing")
+	}
+	if mv.Status == "done" {
+		t.Fatal("mission certified done despite an open critical finding — the gate must withhold certification")
+	}
+	if mv.Status != "needs-review" {
+		t.Fatalf("mission status = %q, want needs-review", mv.Status)
+	}
+	if gotStatus != "needs-review" || completedCalls != 1 {
+		t.Fatalf("OnMissionCompleted got status=%q calls=%d, want needs-review/1", gotStatus, completedCalls)
+	}
+}
+
+// TestEngineConvergesDoneWhenOnlyLowFindingsOpen: the needs-review gate must not
+// over-fire — an open finding BELOW the blocking threshold (e.g. a low-severity
+// note) does not withhold certification; the mission still converges to done.
+func TestEngineConvergesDoneWhenOnlyLowFindingsOpen(t *testing.T) {
+	dir := t.TempDir()
+	q, err := queue.Open(filepath.Join(dir, "q.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer q.Close()
+	m, err := Open(filepath.Join(dir, "m.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+
+	mid, err := CreateMission(m, q, "add a wishlist feature", nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.AddFinding(queue.Finding{
+		MissionID: mid, Reporter: "reviewer", Type: "note", Severity: "low",
+		Target: "style", Evidence: "consider a shorter variable name",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	e := NewEngine(m, q)
+	done := false
+	for i := 0; i < 60 && !done; i++ {
+		drain(t, q)
+		_ = e.Tick()
+		if mv, _ := m.Mission(mid); mv != nil && mv.Status == "done" {
+			done = true
+		}
+	}
+	if !done {
+		mv, _ := m.Mission(mid)
+		got := "<nil>"
+		if mv != nil {
+			got = mv.Status
+		}
+		t.Fatalf("a low-severity finding must not block convergence; status = %q", got)
+	}
+}
+
 // TestEngineSweepsBlockedDependencies is the graceful-degradation guarantee for a
 // DAG deadlock: a pending task whose dependency can never be satisfied (cancelled/
 // superseded/missing) is invisibly stuck forever (PromoteReady never promotes it,

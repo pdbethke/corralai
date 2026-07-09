@@ -4,6 +4,7 @@ package mission
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/pdbethke/corralai/internal/rolemodel"
@@ -92,5 +93,33 @@ func TestStaffingJudgeAndClamp(t *testing.T) {
 	// pentester is a cloud model, should remain unchanged
 	if clamped["pentester"] != "claude-3-5-sonnet" {
 		t.Errorf("expected pentester to remain claude-3-5-sonnet, got %q", clamped["pentester"])
+	}
+}
+
+// TestBuildLeaderboardBrief is the exploration guard's deterministic core: the
+// staffing brief must be honest about thin data (so an n=2 winner isn't treated
+// as a ranking) and surface untested eligible models as probe candidates (so the
+// planner can explore instead of ossifying around an early leader).
+func TestBuildLeaderboardBrief(t *testing.T) {
+	// Cold start: no stats → say so, don't fabricate a ranking.
+	if got := buildLeaderboardBrief(nil, []string{"qwen2.5-coder:7b"}, 5); !strings.Contains(got, "cold start") {
+		t.Fatalf("empty stats should announce cold start, got %q", got)
+	}
+
+	stats := []ModelStats{
+		{Model: "qwen2.5-coder:7b", Role: "builder", TasksCompleted: 20, ExecPassRatePct: 95},
+		{Model: "llama3.2:3b", Role: "builder", TasksCompleted: 2, ExecPassRatePct: 100}, // thin data
+	}
+	eligible := []string{"qwen2.5-coder:7b", "llama3.2:3b", "deepseek-coder:6.7b"} // deepseek untested for builder
+	brief := buildLeaderboardBrief(stats, eligible, 5)
+
+	if !strings.Contains(brief, "qwen2.5-coder:7b as builder") || !strings.Contains(brief, "confident") {
+		t.Fatalf("a 20-task cell should read as confident:\n%s", brief)
+	}
+	if !strings.Contains(brief, "THIN") {
+		t.Fatalf("a 2-task cell must be flagged THIN, not treated as a ranking:\n%s", brief)
+	}
+	if !strings.Contains(brief, "deepseek-coder:6.7b") || !strings.Contains(strings.ToLower(brief), "probe") {
+		t.Fatalf("an untested eligible model must surface as a probe candidate:\n%s", brief)
 	}
 }

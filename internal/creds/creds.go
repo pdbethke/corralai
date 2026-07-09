@@ -66,7 +66,14 @@ func (s *Store) Remove(name string) error {
 		if !b.writable() {
 			continue
 		}
-		if _, ok, _ := b.get(name); ok {
+		_, ok, err := b.get(name)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		if ok {
 			if err := b.remove(name); err != nil && firstErr == nil {
 				firstErr = err
 			}
@@ -102,11 +109,12 @@ func Redact(secret string) string {
 	if secret == "" {
 		return "(empty)"
 	}
-	head := secret
-	if len(head) > 4 {
-		head = head[:4]
+	// Only reveal a 4-char prefix when the secret is comfortably longer than
+	// that prefix; otherwise a short secret would show most or all of itself.
+	if len(secret) <= 8 {
+		return fmt.Sprintf("****(%d)", len(secret))
 	}
-	return fmt.Sprintf("%s…(%d chars)", head, len(secret))
+	return fmt.Sprintf("%s…(%d chars)", secret[:4], len(secret))
 }
 
 // envBackend reads canonical secrets from the process environment. Read-only.

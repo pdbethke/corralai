@@ -78,6 +78,20 @@ func TestRedactNeverLeaks(t *testing.T) {
 	}
 }
 
+func TestRedactShortSecretsNeverLeak(t *testing.T) {
+	for _, s := range []string{"a", "ab", "abcd", "secret7", "eightchr"} { // len 1..8
+		r := Redact(s)
+		if strings.Contains(r, s) {
+			t.Fatalf("Redact(%q) = %q leaked the value", s, r)
+		}
+	}
+	// A long secret still keeps a 4-char prefix for identification.
+	long := "sk-proj-abcdef1234567890"
+	if r := Redact(long); !strings.HasPrefix(r, "sk-p") || strings.Contains(r, "1234567890") {
+		t.Fatalf("Redact(long) = %q, want a 4-char prefix without the tail", r)
+	}
+}
+
 func TestEnvBackend(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "envval")
 	b := envBackend{}

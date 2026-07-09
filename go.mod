@@ -3,6 +3,7 @@ module github.com/pdbethke/corralai
 go 1.26.4
 
 require (
+	filippo.io/age v1.3.1
 	github.com/coreos/go-oidc/v3 v3.19.0
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
 	github.com/marcboeker/go-duckdb/v2 v2.4.3
@@ -15,6 +16,7 @@ require (
 )
 
 require (
+	filippo.io/hpke v0.4.0 // indirect
 	github.com/apache/arrow-go/v18 v18.4.1 // indirect
 	github.com/duckdb/duckdb-go-bindings v0.1.21 // indirect
 	github.com/duckdb/duckdb-go-bindings/darwin-amd64 v0.1.21 // indirect

@@ -74,6 +74,54 @@ func TestHealthBookReclaimedIsImmediatelyFailing(t *testing.T) {
 	}
 }
 
+// ThrottleClaim is the self-heal backoff: an agent whose task was just
+// force-reclaimed (failing, making no progress) is denied a claim for a cooldown
+// window so it can't re-enter a tight reclaim loop and starve healthy workers —
+// but the window EXPIRES into a probation claim, and a success clears the state,
+// so it self-heals rather than being permanently quarantined.
+func TestHealthBookThrottleClaimBacksOffReclaimedAgent(t *testing.T) {
+	nowPtr, clock := fakeClock(time.Unix(4_000_000, 0))
+	hb := NewHealthBook()
+	hb.now = clock
+	cooldown := 30 * time.Second
+
+	// A healthy agent that was never reclaimed is never throttled.
+	hb.RecordClaim("Ada")
+	if hb.ThrottleClaim("Ada", cooldown) {
+		t.Fatal("a non-reclaimed agent must not be throttled")
+	}
+
+	// A force-reclaimed agent is throttled during the cooldown window...
+	hb.RecordReclaimed("Flaky")
+	if !hb.ThrottleClaim("Flaky", cooldown) {
+		t.Fatal("a just-reclaimed agent must be throttled during cooldown")
+	}
+	// ...and gets a probation claim once the cooldown elapses.
+	*nowPtr = nowPtr.Add(cooldown + time.Second)
+	if hb.ThrottleClaim("Flaky", cooldown) {
+		t.Fatal("after the cooldown elapses the agent must get a probation claim")
+	}
+
+	// A success clears the reclaim state → never throttled again (self-heal).
+	hb.RecordReclaimed("Flaky")
+	hb.RecordSuccess("Flaky")
+	if hb.ThrottleClaim("Flaky", cooldown) {
+		t.Fatal("a recovered agent (success after reclaim) must not be throttled")
+	}
+}
+
+func TestThrottleClaimNilSafeAndDisabled(t *testing.T) {
+	var hb *HealthBook
+	if hb.ThrottleClaim("x", 30*time.Second) {
+		t.Fatal("nil HealthBook must never throttle (degrade-never-block)")
+	}
+	hb2 := NewHealthBook()
+	hb2.RecordReclaimed("y")
+	if hb2.ThrottleClaim("y", 0) {
+		t.Fatal("cooldown 0 disables throttling")
+	}
+}
+
 func TestHealthBookIdleAgentIsNeverFlagged(t *testing.T) {
 	// A genuinely idle worker — present, polling, but no ready work for it to
 	// claim — must NOT be flagged failing even a long time later. Under-flag,

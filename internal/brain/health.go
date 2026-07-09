@@ -68,6 +68,7 @@ type healthState struct {
 	lastSuccess           int64
 	claimsSinceSuccess    int
 	reclaimedSinceSuccess int
+	lastReclaim           int64 // unix ts of the most recent force-reclaim (backs ThrottleClaim)
 }
 
 // HealthBook tracks per-agent claim/complete/reclaim activity so the brain
@@ -134,6 +135,28 @@ func (b *HealthBook) RecordReclaimed(agent string) {
 	defer b.mu.Unlock()
 	st := b.getLocked(agent)
 	st.reclaimedSinceSuccess++
+	st.lastReclaim = b.now().Unix()
+}
+
+// ThrottleClaim reports whether agent should be DENIED a claim right now — the
+// self-heal backoff. An agent with a force-reclaim since its last success (a
+// failing worker making no progress) is held off for `cooldown` after that
+// reclaim, so it can't re-enter a tight reclaim loop and starve healthy workers.
+// The window expires into a probation claim (a fresh RecordClaim/RecordSuccess
+// then clears the state), so this throttles churn without permanently
+// quarantining a worker that recovers. cooldown<=0 disables it; a nil book never
+// throttles (degrade-never-block, like the other HealthBook methods).
+func (b *HealthBook) ThrottleClaim(agent string, cooldown time.Duration) bool {
+	if b == nil || agent == "" || cooldown <= 0 {
+		return false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	st, ok := b.items[agent]
+	if !ok || st.reclaimedSinceSuccess == 0 || st.lastReclaim == 0 {
+		return false // never reclaimed since its last success — not in a churn loop
+	}
+	return b.now().Unix()-st.lastReclaim < int64(cooldown.Seconds())
 }
 
 // Health classifies agent per the heuristic documented on this file. An

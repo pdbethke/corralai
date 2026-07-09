@@ -296,6 +296,44 @@ func TestVerifyGateFallsBackToLookupWithoutWorkingCopy(t *testing.T) {
 	}
 }
 
+// claim_task must apply the self-heal backoff: an agent whose task was just
+// force-reclaimed (failing) is denied a claim during the cooldown — the ready
+// task stays available for a healthy peer instead of the failing worker
+// re-grabbing it in a tight reclaim loop.
+func TestClaimTaskThrottlesReclaimedAgent(t *testing.T) {
+	dir := t.TempDir()
+	q, _ := queue.Open(filepath.Join(dir, "q.sqlite3"))
+	t.Cleanup(func() { q.Close() })
+	q.Enqueue(7, []queue.TaskSpec{{Key: "build", Role: "builder", Title: "b", Instruction: "b"}})
+	q.PromoteReady(7)
+
+	book := NewHealthBook()
+	book.RecordReclaimed("Flaky") // its expired claim was just force-reclaimed → failing
+
+	ctx := context.Background()
+	clientT, serverT := mcp.NewInMemoryTransports()
+	go func() {
+		_ = NewServer(nil, nil, Options{Queue: q, Health: book, ReclaimBackoffSeconds: 30}).Run(ctx, serverT)
+	}()
+	client := mcp.NewClient(&mcp.Implementation{Name: "bee", Version: "0"}, nil)
+	sess, _ := client.Connect(ctx, clientT, nil)
+	defer sess.Close()
+
+	// Flaky is throttled → no task even though one is ready.
+	var out claimTaskOut
+	callTask(t, sess, "claim_task", map[string]any{"name": "Flaky", "roles": []string{"builder"}}, &out)
+	if out.Task != nil {
+		t.Fatalf("a just-reclaimed agent must be throttled (task:null) during cooldown, got %q", out.Task.Key)
+	}
+
+	// A healthy peer still claims the ready task (it was not consumed).
+	var out2 claimTaskOut
+	callTask(t, sess, "claim_task", map[string]any{"name": "Ada", "roles": []string{"builder"}}, &out2)
+	if out2.Task == nil || out2.Task.Key != "build" {
+		t.Fatalf("a healthy agent must still claim the ready task, got %v", out2.Task)
+	}
+}
+
 func callTask(t *testing.T, sess *mcp.ClientSession, name string, args map[string]any, out any) {
 	t.Helper()
 	res, err := sess.CallTool(context.Background(), &mcp.CallToolParams{Name: name, Arguments: args})

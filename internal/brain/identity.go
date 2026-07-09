@@ -85,6 +85,14 @@ type Options struct {
 	// lease must also have expired). 0 => 30s.
 	IdleReclaimGraceSeconds float64
 
+	// ReclaimBackoffSeconds is the self-heal cooldown: after an agent's task is
+	// force-reclaimed (a failing worker making no progress), claim_task denies
+	// that agent a new claim for this long, so it can't re-enter a tight reclaim
+	// loop and starve healthy workers. The window expires into a probation claim
+	// and a success clears it. 0 => 30s; set negative (or via "none" upstream) to
+	// disable.
+	ReclaimBackoffSeconds float64
+
 	// ConvergeBlockSeverity mirrors mission.Engine.ConvergeBlockSeverity: the
 	// lowest open-finding severity that parks a converging mission at
 	// "needs-review". The resolve_review tool re-checks against this same

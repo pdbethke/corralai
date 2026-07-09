@@ -934,7 +934,8 @@ func main() {
 		WorkerSessions:        workerSessions,
 		RoleModels:            roleModels,
 		TaskLeaseSeconds:      float64(envInt("CORRALAI_TASK_LEASE_SECONDS", 300)),
-		ConvergeBlockSeverity: engine.ConvergeBlockSeverity, // resolve_review re-checks the same gate the engine parks on
+		ReclaimBackoffSeconds: float64(envInt("CORRALAI_RECLAIM_BACKOFF_SECONDS", 30)), // self-heal claim backoff; negative disables
+		ConvergeBlockSeverity: engine.ConvergeBlockSeverity,                            // resolve_review re-checks the same gate the engine parks on
 		MintToken:             verifier.MintDelegation,
 		MintObserver:          verifier.MintObserver,
 		Repo:                  repoEng,

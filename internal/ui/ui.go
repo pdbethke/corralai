@@ -174,6 +174,7 @@ func Handler(d Deps) http.Handler {
 	mux.HandleFunc("/api/mission/intercept", s.intercept)
 	mux.HandleFunc("/api/mission/create", s.createMission)
 	mux.HandleFunc("/api/mission/propose_staffing", s.proposeStaffing)
+	mux.HandleFunc("/api/mission/compose-options", s.composeOptions)
 	mux.Handle("/api/terminal/ws", s.guardTerminalWS(websocket.Handler(Registry.ServeWS)))
 
 	// Swarm Design Lookbook API routes
@@ -183,6 +184,37 @@ func Handler(d Deps) http.Handler {
 	mux.HandleFunc("/api/lookbook/image", s.lookbookImage)
 
 	return mux
+}
+
+// composeOptions feeds the Mission Composer's endpoint + lookbook pickers: the
+// endpoints the caller may consume and the lookbook items available to attach.
+func (s *Server) composeOptions(w http.ResponseWriter, r *http.Request) {
+	type epView struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}
+	type lbView struct {
+		ID          int64  `json:"id"`
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}
+	eps := []epView{}
+	if s.gw != nil {
+		if usable, err := s.gw.Usable(auth.Principal(r.Context())); err == nil {
+			for _, e := range usable {
+				eps = append(eps, epView{Name: e.Name, Description: e.Description})
+			}
+		}
+	}
+	lbs := []lbView{}
+	if s.taskArtifacts != nil {
+		if metas, err := s.taskArtifacts.GetLookbookItemsMeta(); err == nil {
+			for _, mta := range metas {
+				lbs = append(lbs, lbView{ID: mta.ID, Name: mta.Name, Description: mta.Description})
+			}
+		}
+	}
+	writeJSON(w, map[string]any{"endpoints": eps, "lookbook": lbs})
 }
 
 // isSuperuser mirrors me()'s permissive-dev-mode rule: a nil roles store

@@ -974,31 +974,10 @@ func (s *Server) createMission(w http.ResponseWriter, r *http.Request) {
 
 	// Resolve + validate the herd's endpoints and lookbook directives.
 	principal := auth.Principal(r.Context())
-	var endpointNames []string
-	if len(body.MCPEndpoints) > 0 && s.gw != nil {
-		usable, _ := s.gw.Usable(principal)
-		ok := map[string]bool{}
-		for _, e := range usable {
-			ok[e.Name] = true
-		}
-		for _, name := range body.MCPEndpoints {
-			if !ok[name] {
-				http.Error(w, fmt.Sprintf("unknown or inaccessible MCP endpoint %q", name), http.StatusBadRequest)
-				return
-			}
-			endpointNames = append(endpointNames, name)
-		}
-	}
-	var guidelines []string
-	if len(body.LookbookIDs) > 0 && s.taskArtifacts != nil {
-		for _, id := range body.LookbookIDs {
-			item, err := s.taskArtifacts.GetLookbookItem(id)
-			if err != nil || item == nil {
-				http.Error(w, fmt.Sprintf("unknown lookbook item %d", id), http.StatusBadRequest)
-				return
-			}
-			guidelines = append(guidelines, item.Name+": "+item.Description)
-		}
+	endpointNames, guidelines, herdErr := brain.ResolveHerdInputs(s.gw, s.taskArtifacts, principal, body.MCPEndpoints, body.LookbookIDs)
+	if herdErr != nil {
+		http.Error(w, herdErr.Error(), http.StatusBadRequest)
+		return
 	}
 
 	plan := mission.InjectHerdContext(mission.ScaledPlan(body.Directive), guidelines, endpointNames)

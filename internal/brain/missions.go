@@ -147,34 +147,14 @@ func registerMissions(s *mcp.Server, store *mission.Store, q *queue.Store, mem *
 			// mirrors the HTTP composer's Server.createMission (internal/ui/ui.go).
 			// NOTE: unlike the HTTP path, this tool does not accept role_models —
 			// that's an HTTP-composer-only field.
-			var endpointNames []string
-			if len(in.MCPEndpoints) > 0 && opts.Gateway != nil {
-				// actor(), not actorOf(): actorOf falls back to "lead" for an
-				// unauthenticated/dev caller, which would never match a
-				// dev-registered endpoint's owner "" — the same principal
-				// list_capabilities (gateway.go) resolves Usable() against.
-				who, _ := actor(req)
-				usable, _ := opts.Gateway.Usable(who)
-				ok := map[string]bool{}
-				for _, e := range usable {
-					ok[e.Name] = true
-				}
-				for _, name := range in.MCPEndpoints {
-					if !ok[name] {
-						return nil, mission.MissionView{}, fmt.Errorf("unknown or inaccessible MCP endpoint %q", name)
-					}
-					endpointNames = append(endpointNames, name)
-				}
-			}
-			var guidelines []string
-			if len(in.LookbookIDs) > 0 && opts.TaskArtifacts != nil {
-				for _, lbID := range in.LookbookIDs {
-					item, ierr := opts.TaskArtifacts.GetLookbookItem(lbID)
-					if ierr != nil || item == nil {
-						return nil, mission.MissionView{}, fmt.Errorf("unknown lookbook item %d", lbID)
-					}
-					guidelines = append(guidelines, item.Name+": "+item.Description)
-				}
+			// actor(), not actorOf(): actorOf falls back to "lead" for an
+			// unauthenticated/dev caller, which would never match a
+			// dev-registered endpoint's owner "" — the same principal
+			// list_capabilities (gateway.go) resolves Usable() against.
+			who, _ := actor(req)
+			endpointNames, guidelines, herdErr := ResolveHerdInputs(opts.Gateway, opts.TaskArtifacts, who, in.MCPEndpoints, in.LookbookIDs)
+			if herdErr != nil {
+				return nil, mission.MissionView{}, herdErr
 			}
 			specs = mission.InjectHerdContext(specs, guidelines, endpointNames)
 			id, err := mission.CreateMission(store, q, in.Directive, specs, in.RequiresReview)

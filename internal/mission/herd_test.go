@@ -52,3 +52,18 @@ func TestHerdRoundTrip(t *testing.T) {
 		t.Fatalf("upsert did not overwrite: %+v", got2)
 	}
 }
+
+func TestHerdIsEmpty(t *testing.T) {
+	if !(Herd{}).IsEmpty() {
+		t.Fatal("zero-value herd should be empty")
+	}
+	if (Herd{RoleModels: map[string]rolemodel.ModelRef{"builder": {Backend: "anthropic", Model: "claude-opus"}}}).IsEmpty() {
+		t.Fatal("herd with role models should not be empty")
+	}
+	if (Herd{Endpoints: []string{"prod-db"}}).IsEmpty() {
+		t.Fatal("herd with endpoints should not be empty")
+	}
+	if (Herd{LookbookIDs: []int64{3}}).IsEmpty() {
+		t.Fatal("herd with lookbook ids should not be empty")
+	}
+}

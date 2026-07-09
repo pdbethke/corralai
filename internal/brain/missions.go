@@ -161,8 +161,11 @@ func registerMissions(s *mcp.Server, store *mission.Store, q *queue.Store, mem *
 			if err != nil {
 				return nil, mission.MissionView{}, err
 			}
-			if err := store.SaveHerd(id, mission.Herd{Endpoints: endpointNames, LookbookIDs: in.LookbookIDs}); err != nil {
-				log.Printf("mission %d: SaveHerd: %v", id, err) // non-fatal: the run proceeds
+			herd := mission.Herd{Endpoints: endpointNames, LookbookIDs: in.LookbookIDs}
+			if !herd.IsEmpty() {
+				if err := store.SaveHerd(id, herd); err != nil {
+					log.Printf("mission %d: SaveHerd: %v", id, err) // non-fatal: the run proceeds
+				}
 			}
 			if in.RecordStory {
 				if err := store.SetRecordStory(id, true); err != nil {

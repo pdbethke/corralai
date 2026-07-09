@@ -20,6 +20,13 @@ type Herd struct {
 	LookbookIDs []int64                       `json:"lookbook_ids"`
 }
 
+// IsEmpty reports whether a herd carries no per-mission overrides — no role
+// models, no endpoints, no lookbook attachments. Callers skip SaveHerd for an
+// empty herd so "no mission_herds row" stays the honest signal for "no override".
+func (h Herd) IsEmpty() bool {
+	return len(h.RoleModels) == 0 && len(h.Endpoints) == 0 && len(h.LookbookIDs) == 0
+}
+
 // SaveHerd upserts a mission's herd config. Idempotent per mission_id.
 func (s *Store) SaveHerd(missionID int64, h Herd) error {
 	rm, err := json.Marshal(h.RoleModels)

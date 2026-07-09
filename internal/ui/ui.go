@@ -204,6 +204,8 @@ func (s *Server) composeOptions(w http.ResponseWriter, r *http.Request) {
 			for _, e := range usable {
 				eps = append(eps, epView{Name: e.Name, Description: e.Description})
 			}
+		} else {
+			log.Printf("compose-options: endpoints: %v", err)
 		}
 	}
 	lbs := []lbView{}
@@ -212,6 +214,8 @@ func (s *Server) composeOptions(w http.ResponseWriter, r *http.Request) {
 			for _, mta := range metas {
 				lbs = append(lbs, lbView{ID: mta.ID, Name: mta.Name, Description: mta.Description})
 			}
+		} else {
+			log.Printf("compose-options: lookbook: %v", err)
 		}
 	}
 	writeJSON(w, map[string]any{"endpoints": eps, "lookbook": lbs})
@@ -965,19 +969,21 @@ func (s *Server) createMission(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Update role models if provided
-	if len(body.RoleModels) > 0 && s.roleModels != nil {
-		for k, v := range body.RoleModels {
-			s.roleModels.Set(k, v) // threadsafe: the engine writes this same policy from its Tick goroutine
-		}
-	}
-
-	// Resolve + validate the herd's endpoints and lookbook directives.
+	// Resolve + validate the herd's endpoints and lookbook directives BEFORE
+	// mutating any shared state (the role-models policy below) — reject bad
+	// herd inputs first so a 400 never leaves a partial mutation behind.
 	principal := auth.Principal(r.Context())
 	endpointNames, guidelines, herdErr := brain.ResolveHerdInputs(s.gw, s.taskArtifacts, principal, body.MCPEndpoints, body.LookbookIDs)
 	if herdErr != nil {
 		http.Error(w, herdErr.Error(), http.StatusBadRequest)
 		return
+	}
+
+	// Update role models if provided
+	if len(body.RoleModels) > 0 && s.roleModels != nil {
+		for k, v := range body.RoleModels {
+			s.roleModels.Set(k, v) // threadsafe: the engine writes this same policy from its Tick goroutine
+		}
 	}
 
 	plan := mission.InjectHerdContext(mission.ScaledPlan(body.Directive), guidelines, endpointNames)
@@ -986,10 +992,11 @@ func (s *Server) createMission(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if err := s.missions.SaveHerd(id, mission.Herd{
-		RoleModels: body.RoleModels, Endpoints: endpointNames, LookbookIDs: body.LookbookIDs,
-	}); err != nil {
-		log.Printf("mission %d: SaveHerd: %v", id, err) // non-fatal: the run proceeds
+	herd := mission.Herd{RoleModels: body.RoleModels, Endpoints: endpointNames, LookbookIDs: body.LookbookIDs}
+	if !herd.IsEmpty() {
+		if err := s.missions.SaveHerd(id, herd); err != nil {
+			log.Printf("mission %d: SaveHerd: %v", id, err) // non-fatal: the run proceeds
+		}
 	}
 	writeJSON(w, map[string]any{"id": id, "ok": true})
 }

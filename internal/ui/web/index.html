@@ -2205,7 +2205,7 @@ function renderComposer() {
   `).join('') || '<span class="mc-empty">no MCP endpoints available</span>';
 
   const lookbookHtml = composeOpts.lookbook.map(l => `
-    <label class="mc-check"><input type="checkbox" class="mc-lookbook" value="${l.id}"> ${esc(l.name)}</label>
+    <label class="mc-check"><input type="checkbox" class="mc-lookbook" value="${esc(String(l.id))}"> ${esc(l.name)}</label>
   `).join('') || '<span class="mc-empty">no lookbook items</span>';
 
   return `

@@ -28,7 +28,7 @@ const schema = `
 CREATE TABLE IF NOT EXISTS missions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   directive TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'running',   -- running | paused | cancelled | awaiting_review | done | failed
+  status TEXT NOT NULL DEFAULT 'running',   -- running | paused | cancelled | awaiting_review | needs-review | done | failed
   sprint INTEGER NOT NULL DEFAULT 1,
   requires_review INTEGER NOT NULL DEFAULT 0,
   record_story INTEGER NOT NULL DEFAULT 0,
@@ -504,6 +504,47 @@ func SubmitReview(m *Store, q *queue.Store, id int64, accept bool, feedback, rep
 		if err := m.SetMissionStatus(id, "running"); err != nil {
 			return nil, err
 		}
+	}
+	return m.View(id, q)
+}
+
+// ResolveNeedsReview is the human-gate resolution path for a mission the
+// convergence findings-gate parked at "needs-review" (see
+// Engine.blockingFindingOpen). The human reviews the open critical/high
+// findings and either dismisses them (not real) or acts on them; once every
+// finding at/above blockSeverity is cleared, this certifies the mission "done"
+// (the engine's reconcile pass then push+PRs any repo mission, exactly as for a
+// review-accepted mission). While a blocker is still open it refuses, naming the
+// count, so the caller can't certify a result that still holds a known defect.
+// Only a needs-review mission is resolvable — any other state is a stale
+// assumption and refused, mirroring the Pause/Resume/Cancel guards. Shared by
+// the resolve_review MCP tool and the UI's resolution handler.
+func ResolveNeedsReview(m *Store, q *queue.Store, id int64, blockSeverity string) (*MissionView, error) {
+	mi, err := m.Mission(id)
+	if err != nil || mi == nil {
+		return nil, fmt.Errorf("no mission %d", id)
+	}
+	if mi.Status != "needs-review" {
+		return nil, fmt.Errorf("mission %d is %s, not needs-review — nothing to resolve", id, mi.Status)
+	}
+	if blockSeverity != "" && q != nil {
+		minRank := queue.SeverityRank(blockSeverity)
+		fs, err := q.Findings(id, queue.FindingOpen)
+		if err != nil {
+			return nil, err
+		}
+		open := 0
+		for _, f := range fs {
+			if queue.SeverityRank(f.Severity) >= minRank {
+				open++
+			}
+		}
+		if open > 0 {
+			return nil, fmt.Errorf("mission %d still has %d open finding(s) at/above %q — dismiss or address them before resolving", id, open, blockSeverity)
+		}
+	}
+	if err := m.SetMissionStatus(id, "done"); err != nil {
+		return nil, err
 	}
 	return m.View(id, q)
 }

@@ -85,6 +85,13 @@ type Options struct {
 	// lease must also have expired). 0 => 30s.
 	IdleReclaimGraceSeconds float64
 
+	// ConvergeBlockSeverity mirrors mission.Engine.ConvergeBlockSeverity: the
+	// lowest open-finding severity that parks a converging mission at
+	// "needs-review". The resolve_review tool re-checks against this same
+	// threshold so the human can't certify a mission the engine would still
+	// hold. "" => "high" (the engine default).
+	ConvergeBlockSeverity string
+
 	// Reference is the bring-your-own reference corpus (RAG); Embedder is the
 	// remote embeddings client. Both required for the reference tools — nil =>
 	// the reference engine is disabled (no embeddings endpoint configured).

@@ -109,6 +109,15 @@ type Engine struct {
 	ReflexMinSeverity string
 	ReflexMaxTasks    int
 
+	// ConvergeBlockSeverity is the lowest OPEN-finding severity that withholds
+	// mission certification at convergence (low|medium|high|critical). A drained
+	// queue is not a clean bill of health: reflexRules deems some finding types
+	// (design-flaw, note) non-actionable, so a critical one of those never becomes
+	// a task and never blocks MissionDone. Rather than certify a result it knows
+	// still holds such a defect, the engine routes the mission to the human-gate
+	// `needs-review` terminal state. "" disables the gate. Default: "high".
+	ConvergeBlockSeverity string
+
 	// NoProgressTicks is the deterministic give-up backstop: a running mission that
 	// makes no forward progress (no task reaches a terminal state, no task is
 	// added, no finding changes) for this many consecutive ticks WHILE nothing is
@@ -210,20 +219,21 @@ const maxPRAttempts = 5
 
 func NewEngine(m *Store, q *queue.Store) *Engine {
 	return &Engine{
-		m:                 m,
-		q:                 q,
-		ReflexMinSeverity: "high",
-		ReflexMaxTasks:    50,
-		NoProgressTicks:   240, // generous backstop; the "nothing claimed" guard keeps it off slow-but-healthy work
-		committed:         map[int64]map[string]bool{},
-		noProgress:        map[int64]int{},
-		lastFingerprint:   map[int64]string{},
-		prAttempts:        map[int64]int{},
-		prGaveUp:          map[int64]bool{},
-		egressBlocked:     map[int64]bool{},
-		etags:             map[int64]string{},
-		botLogins:         map[string]string{},
-		staffed:           map[int64]bool{},
+		m:                     m,
+		q:                     q,
+		ReflexMinSeverity:     "high",
+		ReflexMaxTasks:        50,
+		ConvergeBlockSeverity: "high",
+		NoProgressTicks:       240, // generous backstop; the "nothing claimed" guard keeps it off slow-but-healthy work
+		committed:             map[int64]map[string]bool{},
+		noProgress:            map[int64]int{},
+		lastFingerprint:       map[int64]string{},
+		prAttempts:            map[int64]int{},
+		prGaveUp:              map[int64]bool{},
+		egressBlocked:         map[int64]bool{},
+		etags:                 map[int64]string{},
+		botLogins:             map[string]string{},
+		staffed:               map[int64]bool{},
 	}
 }
 
@@ -237,6 +247,30 @@ func (e *Engine) hasOpenChangeRequests(missionID int64) bool {
 	}
 	for _, f := range fs {
 		if f.Type == "change-request" {
+			return true
+		}
+	}
+	return false
+}
+
+// blockingFindingOpen reports whether the mission has an open finding at or above
+// ConvergeBlockSeverity — the gate that keeps the engine from certifying a
+// mission "done" while a known critical/high defect stands. Returns false when
+// the gate is disabled (empty threshold) or the findings query fails, so a
+// transient DB error degrades to the prior (permissive) convergence behaviour
+// rather than wedging every mission at needs-review.
+func (e *Engine) blockingFindingOpen(missionID int64) bool {
+	if e.ConvergeBlockSeverity == "" {
+		return false
+	}
+	minRank := queue.SeverityRank(e.ConvergeBlockSeverity)
+	fs, err := e.q.Findings(missionID, queue.FindingOpen)
+	if err != nil {
+		log.Printf("mission %d: converge findings-gate query: %v", missionID, err)
+		return false
+	}
+	for _, f := range fs {
+		if queue.SeverityRank(f.Severity) >= minRank {
 			return true
 		}
 	}
@@ -358,6 +392,19 @@ func (e *Engine) Tick() error {
 			// copy. On failure, hold the mission back (a loud finding drives the
 			// reflex re-planner) instead of shipping a broken tree.
 			if e.Verify != nil && !e.finalStateOK(&mi) {
+				continue
+			}
+			// A drained, verifying queue can still hold an open finding at/above the
+			// blocking severity that never became a task (reflexRules leaves
+			// design-flaw/note non-actionable). Rather than certify a result it knows
+			// still holds that defect, route to the human-gate `needs-review` terminal
+			// state — and do NOT push/PR. The human dismisses the finding (then
+			// ResolveNeedsReview converges it) or reworks. #findings-gate.
+			if e.blockingFindingOpen(mi.ID) {
+				_ = e.m.SetMissionStatus(mi.ID, "needs-review")
+				if e.OnMissionCompleted != nil {
+					e.OnMissionCompleted(mi.ID, "needs-review", mi.ReviewRounds)
+				}
 				continue
 			}
 			_ = e.m.SetMissionStatus(mi.ID, "done")

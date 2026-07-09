@@ -717,6 +717,12 @@ func main() {
 	if n := envInt("CORRALAI_REFLEX_MAX_TASKS", 0); n > 0 {
 		engine.ReflexMaxTasks = n
 	}
+	if v := os.Getenv("CORRALAI_CONVERGE_BLOCK_SEVERITY"); v != "" {
+		engine.ConvergeBlockSeverity = v // "" (or "none") to disable the needs-review findings gate
+		if v == "none" {
+			engine.ConvergeBlockSeverity = ""
+		}
+	}
 
 	// Repo-work mode: the brain clones, commits, and opens PRs on behalf of the
 	// swarm. Token is ONLY read here — it lives in repo.Engine and is never written
@@ -907,40 +913,41 @@ func main() {
 	}
 
 	srv := brain.NewServer(store, memStore, brain.Options{
-		Coord:            store,
-		MemoryOwners:     memOwners,
-		Principals:       princStore,
-		Gateway:          gwStore,
-		Egress:           egress,
-		Artifacts:        artStore,
-		Missions:         missionStore,
-		Queue:            queueStore,
-		TaskArtifacts:    taskArtStore,
-		Browser:          browserMgr,
-		Reference:        refStore,
-		Embedder:         embedder,
-		Telemetry:        telStore,
-		Recordings:       recStore,
-		ExecRing:         execRing,
-		ActivityRing:     activityRing,
-		HostBook:         hostBook,
-		Health:           healthBook,
-		WorkerSessions:   workerSessions,
-		RoleModels:       roleModels,
-		TaskLeaseSeconds: float64(envInt("CORRALAI_TASK_LEASE_SECONDS", 300)),
-		MintToken:        verifier.MintDelegation,
-		MintObserver:     verifier.MintObserver,
-		Repo:             repoEng,
-		Workspace:        repoWorkspace,
-		Verify:           verifyGate,
-		Index:            repoIdx,
-		Oracle:           fleetOracle,
-		CrossSwarm:       crossSwarmEnabled,
-		CrossSwarmKey:    crossSwarmKey,
-		FleetTarget:      fleetTarget,
-		FleetBrainID:     fleetBrainID,
-		Learn:            learnStore,
-		LearnDrafter:     learnDrafter,
+		Coord:                 store,
+		MemoryOwners:          memOwners,
+		Principals:            princStore,
+		Gateway:               gwStore,
+		Egress:                egress,
+		Artifacts:             artStore,
+		Missions:              missionStore,
+		Queue:                 queueStore,
+		TaskArtifacts:         taskArtStore,
+		Browser:               browserMgr,
+		Reference:             refStore,
+		Embedder:              embedder,
+		Telemetry:             telStore,
+		Recordings:            recStore,
+		ExecRing:              execRing,
+		ActivityRing:          activityRing,
+		HostBook:              hostBook,
+		Health:                healthBook,
+		WorkerSessions:        workerSessions,
+		RoleModels:            roleModels,
+		TaskLeaseSeconds:      float64(envInt("CORRALAI_TASK_LEASE_SECONDS", 300)),
+		ConvergeBlockSeverity: engine.ConvergeBlockSeverity, // resolve_review re-checks the same gate the engine parks on
+		MintToken:             verifier.MintDelegation,
+		MintObserver:          verifier.MintObserver,
+		Repo:                  repoEng,
+		Workspace:             repoWorkspace,
+		Verify:                verifyGate,
+		Index:                 repoIdx,
+		Oracle:                fleetOracle,
+		CrossSwarm:            crossSwarmEnabled,
+		CrossSwarmKey:         crossSwarmKey,
+		FleetTarget:           fleetTarget,
+		FleetBrainID:          fleetBrainID,
+		Learn:                 learnStore,
+		LearnDrafter:          learnDrafter,
 		SpawnBudget: brain.SpawnBudget{
 			MaxAgentsPerPrincipal: envInt("CORRALAI_MAX_AGENTS_PER_PRINCIPAL", 0),
 			MaxSpawnDepth:         envInt("CORRALAI_MAX_SPAWN_DEPTH", 0),

@@ -43,6 +43,13 @@ CREATE TABLE IF NOT EXISTS phases (
   status TEXT NOT NULL DEFAULT 'pending',     -- pending | running | done | failed
   position INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX IF NOT EXISTS ix_phases_mission ON phases(mission_id);
+CREATE TABLE IF NOT EXISTS mission_herds (
+  mission_id   INTEGER PRIMARY KEY,
+  role_models  TEXT NOT NULL DEFAULT '{}',
+  endpoints    TEXT NOT NULL DEFAULT '[]',
+  lookbook_ids TEXT NOT NULL DEFAULT '[]',
+  created_ts   REAL NOT NULL
+);
 `
 
 type Mission struct {

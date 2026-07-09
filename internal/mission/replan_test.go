@@ -227,6 +227,35 @@ func TestReplanCapStopsRunaway(t *testing.T) {
 	}
 }
 
+// TestReflexCapFailsMissionNotOscillatingPause: exhausting the reflex cap means
+// the mission can't converge (N remediation cycles, still open findings). It must
+// reach the terminal `failed` state, not a pause that resume just re-hits (the
+// paused-forever oscillation from the audit).
+func TestReflexCapFailsMissionNotOscillatingPause(t *testing.T) {
+	e, q, m := reflexEngine(t)
+	mid, err := CreateMission(m, q, "trivial", []PhaseSpec{
+		{Name: "build", Role: "builder", Instruction: "build it"},
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.ReflexMaxTasks = 2 // room for exactly one finding's fix+verify
+	// Two distinct actionable findings: the first fills the cap, the second trips it.
+	q.AddFinding(queue.Finding{MissionID: mid, Reporter: "Hawk", Type: "vuln", Severity: "critical", Target: "a"})
+	q.AddFinding(queue.Finding{MissionID: mid, Reporter: "Hawk", Type: "vuln", Severity: "critical", Target: "b"})
+
+	if err := e.replan(mid); err != nil {
+		t.Fatal(err)
+	}
+	mi, err := m.Mission(mid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mi.Status != "failed" {
+		t.Fatalf("a mission that exhausts the reflex cap must reach the terminal failed state, got %q", mi.Status)
+	}
+}
+
 // The full adaptive loop: a HIGH vuln → tick spawns fix (ready) + verify
 // (pending); fix done → tick promotes verify; verify done → mission converges.
 func TestReflexLoopViaTick(t *testing.T) {

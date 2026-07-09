@@ -128,6 +128,12 @@ func (e *Engine) replan(missionID int64) error {
 			if e.OnReflexCapExhausted != nil {
 				e.OnReflexCapExhausted(missionID, e.ReflexMaxTasks, f)
 			}
+			// Non-converging: the cap's worth of remediation cycles ran and findings
+			// are still open. Degrade to the terminal `failed` state rather than a
+			// pause that resume just re-hits (the paused-forever oscillation). #5.
+			if mi, merr := e.m.Mission(missionID); merr == nil && mi != nil {
+				e.failMission(mi, "reflex cap exhausted — mission is not converging")
+			}
 			break
 		}
 		if err := e.q.Enqueue(missionID, specs); err != nil {

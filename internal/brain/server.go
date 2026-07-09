@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -242,7 +243,14 @@ func NewServer(store *coord.Store, mem *memory.Store, opts Options) *mcp.Server 
 		registerRepoSearch(s, opts)
 	}
 	if opts.Queue != nil {
-		registerTasks(s, store, opts.Queue, opts.TaskLeaseSeconds, opts.Telemetry, opts.HostBook, opts.Learn, opts.Health, opts.Workspace, opts.Verify)
+		reclaimBackoff := 30 * time.Second // self-heal default
+		if opts.ReclaimBackoffSeconds != 0 {
+			reclaimBackoff = time.Duration(opts.ReclaimBackoffSeconds * float64(time.Second))
+			if reclaimBackoff < 0 {
+				reclaimBackoff = 0 // negative => disabled
+			}
+		}
+		registerTasks(s, store, opts.Queue, opts.TaskLeaseSeconds, reclaimBackoff, opts.Telemetry, opts.HostBook, opts.Learn, opts.Health, opts.Workspace, opts.Verify)
 	}
 	if opts.Reference != nil && opts.Embedder != nil {
 		registerReference(s, opts)

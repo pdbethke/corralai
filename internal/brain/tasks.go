@@ -194,7 +194,7 @@ const escalationRefusals = 5
 
 // registerTasks adds the pull-model tools: a bee claims the next ready task it
 // can serve, runs it, and completes it; list_tasks is the live work list.
-func registerTasks(s *mcp.Server, store *coord.Store, q *queue.Store, lease float64, tel *telemetry.Store, book *HostBook, ls *learn.Store, health *HealthBook, workspace string, verify VerifyFunc) {
+func registerTasks(s *mcp.Server, store *coord.Store, q *queue.Store, lease float64, claimBackoff time.Duration, tel *telemetry.Store, book *HostBook, ls *learn.Store, health *HealthBook, workspace string, verify VerifyFunc) {
 	if lease <= 0 {
 		lease = 300
 	}
@@ -251,6 +251,17 @@ func registerTasks(s *mcp.Server, store *coord.Store, q *queue.Store, lease floa
 			bee := identity(req, in.Name)
 			if bee == "" {
 				return nil, claimTaskOut{}, fmt.Errorf("name required (who is claiming)")
+			}
+			// Self-heal backoff (#4): a bee whose task was just force-reclaimed is
+			// held off a new claim for a cooldown, so a failing worker can't re-enter
+			// a tight reclaim loop and starve healthy peers. Return task:null (the
+			// documented "nothing ready" reply) — the harness already sleeps its poll
+			// interval on that, which IS the backoff. The window self-heals into a
+			// probation claim; a completion clears the state.
+			if health.ThrottleClaim(bee, claimBackoff) {
+				log.Printf("claim_task: throttling %s — a recent claim of theirs was force-reclaimed (self-heal backoff %s)", bee, claimBackoff)
+				rec(tel, 0, "claim_throttled", bee, "", map[string]any{"backoff_seconds": int64(claimBackoff.Seconds())})
+				return nil, claimTaskOut{}, nil
 			}
 			t, err := q.ClaimNextAs(bee, in.Instance, in.Roles, lease)
 			if err != nil {

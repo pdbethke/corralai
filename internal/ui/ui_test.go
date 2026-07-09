@@ -4,6 +4,7 @@ package ui
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -22,8 +23,51 @@ import (
 	"github.com/pdbethke/corralai/internal/mission"
 	"github.com/pdbethke/corralai/internal/principals"
 	"github.com/pdbethke/corralai/internal/queue"
+	"github.com/pdbethke/corralai/internal/taskartifacts"
 	"github.com/pdbethke/corralai/internal/telemetry"
 )
+
+// TestLookbookServesDetectedTypeWithNosniff verifies the stored-XSS fix: an
+// uploaded image is served with the server-DETECTED Content-Type (never a
+// client-supplied one) plus X-Content-Type-Options: nosniff.
+func TestLookbookServesDetectedTypeWithNosniff(t *testing.T) {
+	store, err := taskartifacts.Open(filepath.Join(t.TempDir(), "a.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	h := Handler(Deps{TaskArtifacts: store, MemOwners: map[string]bool{}})
+
+	// The 8-byte PNG signature → http.DetectContentType classifies it image/png.
+	png := []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR")
+	payload, _ := json.Marshal(map[string]string{
+		"name": "mock",
+		"data": base64.StdEncoding.EncodeToString(png),
+	})
+	uw := httptest.NewRecorder()
+	h.ServeHTTP(uw, httptest.NewRequest(http.MethodPost, "/api/lookbook/upload", bytes.NewReader(payload)))
+	if uw.Code != http.StatusOK {
+		t.Fatalf("upload: got %d, body %s", uw.Code, uw.Body.String())
+	}
+	var res struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal(uw.Body.Bytes(), &res); err != nil || res.ID == 0 {
+		t.Fatalf("upload response: %s", uw.Body.String())
+	}
+
+	iw := httptest.NewRecorder()
+	h.ServeHTTP(iw, httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/lookbook/image?id=%d", res.ID), nil))
+	if iw.Code != http.StatusOK {
+		t.Fatalf("image: got %d", iw.Code)
+	}
+	if ct := iw.Header().Get("Content-Type"); !strings.HasPrefix(ct, "image/png") {
+		t.Fatalf("Content-Type = %q, want detected image/png", ct)
+	}
+	if iw.Header().Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatal("served image missing X-Content-Type-Options: nosniff")
+	}
+}
 
 // TestAgentWindowsStructure asserts that the served HTML contains all the
 // structural markers required by the draggable multi-agent windows design:

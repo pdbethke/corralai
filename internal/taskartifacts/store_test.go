@@ -8,6 +8,54 @@ import (
 	"testing"
 )
 
+func TestLookbookStore(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "a.sqlite3"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer store.Close()
+
+	id1, err := store.SaveLookbookItem("mock1", "desc1", "image/png", []byte("PNGDATA-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SaveLookbookItem("mock2", "desc2", "image/jpeg", []byte("JPEGDATA-longer-2")); err != nil {
+		t.Fatal(err)
+	}
+
+	// GetLookbookItem: single row, data included.
+	it, err := store.GetLookbookItem(id1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if it == nil || it.Name != "mock1" || string(it.Data) != "PNGDATA-1" || it.MimeType != "image/png" {
+		t.Fatalf("GetLookbookItem(%d) = %+v", id1, it)
+	}
+	// A missing id returns (nil, nil), not an error.
+	miss, err := store.GetLookbookItem(9999)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if miss != nil {
+		t.Fatalf("missing id should be nil, got %+v", miss)
+	}
+
+	// GetLookbookItemsMeta: metadata + byte size, newest-first, no data loaded.
+	metas, err := store.GetLookbookItemsMeta()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(metas) != 2 {
+		t.Fatalf("want 2 metas, got %d", len(metas))
+	}
+	if metas[0].Name != "mock2" || metas[0].Size != len("JPEGDATA-longer-2") {
+		t.Fatalf("meta[0] = %+v (want mock2, size 17)", metas[0])
+	}
+	if metas[1].Name != "mock1" || metas[1].Size != len("PNGDATA-1") {
+		t.Fatalf("meta[1] = %+v (want mock1, size 9)", metas[1])
+	}
+}
+
 func TestTaskArtifactsStore(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "artifacts.sqlite3")

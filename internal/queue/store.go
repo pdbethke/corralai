@@ -351,10 +351,16 @@ func (s *Store) ClaimNextAs(bee, instance string, roles []string, leaseSeconds f
 		t0 := now()
 		var t Task
 		var depJSON string
+		// mission_id NOT IN mission_halts closes the leaky-pause gap: a halted
+		// (paused/cancelled) mission's claimed task must NOT be re-issued — that
+		// would re-dispatch work the halt was meant to stop. A genuinely in-flight
+		// claim still finishes via Complete (unaffected); the bee re-acquires a
+		// re-issue on resume. Cancel, being terminal, never re-issues at all.
 		err := tx.QueryRow(
 			`SELECT id,mission_id,key,role,title,instruction,depends_on,created_ts FROM tasks
 			 WHERE status=? AND claimed_by=?
 			   AND ((claimed_instance=? AND ?!='') OR claim_expires_ts < ?)
+			   AND mission_id NOT IN (SELECT mission_id FROM mission_halts)
 			 ORDER BY claimed_ts, id LIMIT 1`,
 			StatusClaimed, bee, instance, instance, t0,
 		).Scan(&t.ID, &t.MissionID, &t.Key, &t.Role, &t.Title, &t.Instruction, &depJSON, &t.CreatedTS)

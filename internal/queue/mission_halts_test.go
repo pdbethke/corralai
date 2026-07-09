@@ -68,6 +68,78 @@ func TestClaimNextExcludesCancelledMission(t *testing.T) {
 	}
 }
 
+// TestHaltedMissionNotReissuedInstanceMatch closes the leaky-pause gap: the
+// self-heal re-issue path (a bee re-polling after a lost claim reply) runs
+// BEFORE the halt filter, so a paused mission's already-claimed task could be
+// re-issued to the bee — re-dispatching work the pause was meant to stop. A halt
+// must stop re-issue too; only a genuinely in-flight claim finishes (via
+// Complete, which is unaffected). The bee re-acquires on resume.
+func TestHaltedMissionNotReissuedInstanceMatch(t *testing.T) {
+	s := open(t)
+	if err := s.Enqueue(1, []TaskSpec{{Key: "build", Role: "builder", Title: "build", Instruction: "x"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.PromoteReady(1); err != nil {
+		t.Fatal(err)
+	}
+	first, err := s.ClaimNextAs("Bob", "host-1", []string{"builder"}, 300)
+	if err != nil || first == nil {
+		t.Fatalf("first claim: %v %v", first, err)
+	}
+	// Operator pauses the mission; Bob's claim reply was lost, so he re-polls.
+	if err := s.HaltMission(1, "paused"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ClaimNextAs("Bob", "host-1", []string{"builder"}, 300)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != nil {
+		t.Fatalf("paused mission re-issued task %q (Reissued=%v) — a halt must stop re-dispatch too", got.Key, got.Reissued)
+	}
+
+	// Resume restores the re-issue (the bee gets its own claim back).
+	if err := s.UnhaltMission(1); err != nil {
+		t.Fatal(err)
+	}
+	again, err := s.ClaimNextAs("Bob", "host-1", []string{"builder"}, 300)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again == nil || again.ID != first.ID || !again.Reissued {
+		t.Fatalf("after resume the bee must get its own claim re-issued, got %v", again)
+	}
+}
+
+// TestHaltedMissionNotReissuedExpiredLease covers the other re-issue branch: an
+// EXPIRED-lease claim on a cancelled mission must not be re-dispatched either.
+func TestHaltedMissionNotReissuedExpiredLease(t *testing.T) {
+	defer restoreNow()
+	clock := 1000.0
+	now = func() float64 { return clock }
+
+	s := open(t)
+	if err := s.Enqueue(1, []TaskSpec{{Key: "build", Role: "builder", Title: "build", Instruction: "x"}}); err != nil {
+		t.Fatal(err)
+	}
+	s.PromoteReady(1)
+	if _, err := s.ClaimNextAs("Ada", "host-1", []string{"builder"}, 300); err != nil { // lease until 1300
+		t.Fatal(err)
+	}
+	s.HaltMission(1, "cancelled")
+
+	clock = 2000 // lease expired
+	// A different instance (Ada's claim orphaned) polls; the expired-lease re-issue
+	// branch must not hand out a cancelled mission's task.
+	got, err := s.ClaimNextAs("Ada", "host-2", []string{"builder"}, 300)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != nil {
+		t.Fatalf("cancelled mission re-issued an expired-lease task %q — cancel must stop all dispatch", got.Key)
+	}
+}
+
 // TestClaimNextUnaffectedForOtherMissions proves the halt is per-mission,
 // not global: a second, un-halted mission's ready task is claimed normally
 // while the first stays paused.

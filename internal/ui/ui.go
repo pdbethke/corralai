@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -912,6 +913,8 @@ func (s *Server) createMission(w http.ResponseWriter, r *http.Request) {
 		Directive      string                        `json:"directive"`
 		RequiresReview bool                          `json:"requires_review"`
 		RoleModels     map[string]rolemodel.ModelRef `json:"role_models"`
+		MCPEndpoints   []string                      `json:"mcp_endpoints"`
+		LookbookIDs    []int64                       `json:"lookbook_ids"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "bad json", http.StatusBadRequest)
@@ -937,13 +940,46 @@ func (s *Server) createMission(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	plan := mission.ScaledPlan(body.Directive)
+	// Resolve + validate the herd's endpoints and lookbook directives.
+	principal := auth.Principal(r.Context())
+	var endpointNames []string
+	if len(body.MCPEndpoints) > 0 && s.gw != nil {
+		usable, _ := s.gw.Usable(principal)
+		ok := map[string]bool{}
+		for _, e := range usable {
+			ok[e.Name] = true
+		}
+		for _, name := range body.MCPEndpoints {
+			if !ok[name] {
+				http.Error(w, fmt.Sprintf("unknown or inaccessible MCP endpoint %q", name), http.StatusBadRequest)
+				return
+			}
+			endpointNames = append(endpointNames, name)
+		}
+	}
+	var guidelines []string
+	if len(body.LookbookIDs) > 0 && s.taskArtifacts != nil {
+		for _, id := range body.LookbookIDs {
+			item, err := s.taskArtifacts.GetLookbookItem(id)
+			if err != nil || item == nil {
+				http.Error(w, fmt.Sprintf("unknown lookbook item %d", id), http.StatusBadRequest)
+				return
+			}
+			guidelines = append(guidelines, item.Name+": "+item.Description)
+		}
+	}
+
+	plan := mission.InjectHerdContext(mission.ScaledPlan(body.Directive), guidelines, endpointNames)
 	id, err := mission.CreateMission(s.missions, s.queue, body.Directive, plan, body.RequiresReview)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
+	if err := s.missions.SaveHerd(id, mission.Herd{
+		RoleModels: body.RoleModels, Endpoints: endpointNames, LookbookIDs: body.LookbookIDs,
+	}); err != nil {
+		log.Printf("mission %d: SaveHerd: %v", id, err) // non-fatal: the run proceeds
+	}
 	writeJSON(w, map[string]any{"id": id, "ok": true})
 }
 

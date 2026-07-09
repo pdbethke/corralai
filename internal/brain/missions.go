@@ -36,6 +36,8 @@ type createMissionIn struct {
 	Repo           string        `json:"repo,omitempty" jsonschema:"git repo URL to build in (omit for a workspace-only mission)"`
 	Base           string        `json:"base,omitempty" jsonschema:"base branch to branch from (default main)"`
 	RecordStory    bool          `json:"record_story,omitempty" jsonschema:"opt in to the story engine: agents' report_thought calls are durably recorded for replay (default false — off, no telemetry cost)"`
+	MCPEndpoints   []string      `json:"mcp_endpoints,omitempty" jsonschema:"gateway endpoint names to attach to this mission's herd — each must be usable by the calling principal"`
+	LookbookIDs    []int64       `json:"lookbook_ids,omitempty" jsonschema:"lookbook item ids whose name+description are injected as design directives"`
 }
 type missionIDIn struct {
 	ID int64 `json:"id"`
@@ -140,9 +142,47 @@ func registerMissions(s *mcp.Server, store *mission.Store, q *queue.Store, mem *
 				}
 				specs = mission.InjectLessons(specs, items)
 			}
+			// Herd composition: resolve + validate the requested MCP endpoints and
+			// lookbook items, then inject them into every phase's instruction —
+			// mirrors the HTTP composer's Server.createMission (internal/ui/ui.go).
+			// NOTE: unlike the HTTP path, this tool does not accept role_models —
+			// that's an HTTP-composer-only field.
+			var endpointNames []string
+			if len(in.MCPEndpoints) > 0 && opts.Gateway != nil {
+				// actor(), not actorOf(): actorOf falls back to "lead" for an
+				// unauthenticated/dev caller, which would never match a
+				// dev-registered endpoint's owner "" — the same principal
+				// list_capabilities (gateway.go) resolves Usable() against.
+				who, _ := actor(req)
+				usable, _ := opts.Gateway.Usable(who)
+				ok := map[string]bool{}
+				for _, e := range usable {
+					ok[e.Name] = true
+				}
+				for _, name := range in.MCPEndpoints {
+					if !ok[name] {
+						return nil, mission.MissionView{}, fmt.Errorf("unknown or inaccessible MCP endpoint %q", name)
+					}
+					endpointNames = append(endpointNames, name)
+				}
+			}
+			var guidelines []string
+			if len(in.LookbookIDs) > 0 && opts.TaskArtifacts != nil {
+				for _, lbID := range in.LookbookIDs {
+					item, ierr := opts.TaskArtifacts.GetLookbookItem(lbID)
+					if ierr != nil || item == nil {
+						return nil, mission.MissionView{}, fmt.Errorf("unknown lookbook item %d", lbID)
+					}
+					guidelines = append(guidelines, item.Name+": "+item.Description)
+				}
+			}
+			specs = mission.InjectHerdContext(specs, guidelines, endpointNames)
 			id, err := mission.CreateMission(store, q, in.Directive, specs, in.RequiresReview)
 			if err != nil {
 				return nil, mission.MissionView{}, err
+			}
+			if err := store.SaveHerd(id, mission.Herd{Endpoints: endpointNames, LookbookIDs: in.LookbookIDs}); err != nil {
+				log.Printf("mission %d: SaveHerd: %v", id, err) // non-fatal: the run proceeds
 			}
 			if in.RecordStory {
 				if err := store.SetRecordStory(id, true); err != nil {

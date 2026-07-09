@@ -184,16 +184,24 @@ func (b *HealthBook) Health(agent string) HealthAgent {
 // DetectRoleStalls scans ready tasks and files one missing-req finding per task
 // when the task has aged past threshold with no eligible active agent role.
 // Returns how many NEW findings were filed this sweep.
-func DetectRoleStalls(q *queue.Store, active []coord.Agent, threshold time.Duration, tel *telemetry.Store) (int, error) {
+func DetectRoleStalls(q *queue.Store, active []coord.Agent, book *HealthBook, threshold time.Duration, tel *telemetry.Store) (int, error) {
 	if q == nil {
 		return 0, nil
 	}
 	activeCount := len(active)
 	activeRoles := map[string]bool{}
 	for _, a := range active {
-		if a.Role != "" {
-			activeRoles[a.Role] = true
+		if a.Role == "" {
+			continue
 		}
+		// A FAILING agent (a claim of theirs was force-reclaimed, or it claimed
+		// long ago with no completion) does not count as role coverage — otherwise
+		// a dead-but-heart-beating worker keeps its role "covered" and its reclaim
+		// loop stays invisible forever. Only a healthy live agent covers a role.
+		if book != nil && book.Health(a.Name).Health == "failing" {
+			continue
+		}
+		activeRoles[a.Role] = true
 	}
 	tasks, err := q.Active()
 	if err != nil {

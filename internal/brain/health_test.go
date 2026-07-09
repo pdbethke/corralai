@@ -202,7 +202,7 @@ func TestDetectRoleStallsFilesFindingOnce(t *testing.T) {
 	}
 	active := []coord.Agent{{Name: "Ada", Role: "builder"}}
 
-	n, err := DetectRoleStalls(q, active, 0, nil)
+	n, err := DetectRoleStalls(q, active, nil, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +218,7 @@ func TestDetectRoleStallsFilesFindingOnce(t *testing.T) {
 	}
 
 	// Repeated sweeps should not spam duplicate open findings for same task.
-	n, err = DetectRoleStalls(q, active, 0, nil)
+	n, err = DetectRoleStalls(q, active, nil, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,11 +241,41 @@ func TestDetectRoleStallsSkipsEligibleRole(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	n, err := DetectRoleStalls(q, []coord.Agent{{Name: "Tess", Role: "tester"}}, 0, nil)
+	n, err := DetectRoleStalls(q, []coord.Agent{{Name: "Tess", Role: "tester"}}, nil, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if n != 0 {
 		t.Fatalf("watchdog should not file findings when an eligible agent is present, got %d", n)
+	}
+}
+
+// TestDetectRoleStallsFlagsFailingOnlyCoverage: a role whose only present agent is
+// FAILING (a claim of theirs was force-reclaimed — a reclaim-looping dead worker)
+// is not really covered. The watchdog must surface the stall instead of treating
+// that worker as healthy staffing (the invisible reclaim loop from the audit).
+func TestDetectRoleStallsFlagsFailingOnlyCoverage(t *testing.T) {
+	dir := t.TempDir()
+	q, err := queue.Open(filepath.Join(dir, "q.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { q.Close() })
+	if err := q.Enqueue(7, []queue.TaskSpec{{Key: "test-1", Role: "tester", Title: "test", Instruction: "run tests"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.PromoteReady(7); err != nil {
+		t.Fatal(err)
+	}
+
+	book := NewHealthBook()
+	book.RecordReclaimed("Tess") // a claim of Tess's was force-reclaimed → failing
+
+	n, err := DetectRoleStalls(q, []coord.Agent{{Name: "Tess", Role: "tester"}}, book, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n < 1 {
+		t.Fatalf("a role covered only by a failing agent must be flagged as stalled, got %d findings", n)
 	}
 }

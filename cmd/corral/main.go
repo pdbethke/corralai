@@ -400,6 +400,13 @@ func main() {
 		fmt.Print(usageText())
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "secret" {
+		if err := runSecret(os.Args[2:], os.Stdin, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "corral secret:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	home, _ := os.UserHomeDir()
 	addr := env("CORRALAI_ADDR", "127.0.0.1:9019")
 	dbPath := env("CORRALAI_DB", filepath.Join(home, ".claude", "corralai_coord.sqlite3"))

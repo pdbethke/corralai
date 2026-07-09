@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pdbethke/corralai/internal/agentrole"
 	"github.com/pdbethke/corralai/internal/coord"
 	"github.com/pdbethke/corralai/internal/queue"
 	"github.com/pdbethke/corralai/internal/telemetry"
@@ -190,6 +191,7 @@ func DetectRoleStalls(q *queue.Store, active []coord.Agent, book *HealthBook, th
 	}
 	activeCount := len(active)
 	activeRoles := map[string]bool{}
+	hasGeneralist := false
 	for _, a := range active {
 		if a.Role == "" {
 			continue
@@ -201,7 +203,18 @@ func DetectRoleStalls(q *queue.Store, active []coord.Agent, book *HealthBook, th
 		if book != nil && book.Health(a.Name).Health == "failing" {
 			continue
 		}
-		activeRoles[a.Role] = true
+		// The Role field holds a collapsed Display string: a generalist covers
+		// every role, and a multi-role worker registers "a+b". Expand it so a
+		// task whose role a present generalist/multi-role worker actually claims
+		// isn't falsely flagged as unstaffed.
+		cov := agentrole.Coverage(a.Role)
+		if cov.Any {
+			hasGeneralist = true
+			continue
+		}
+		for _, r := range cov.Roles {
+			activeRoles[r] = true
+		}
 	}
 	tasks, err := q.Active()
 	if err != nil {
@@ -247,7 +260,7 @@ func DetectRoleStalls(q *queue.Store, active []coord.Agent, book *HealthBook, th
 		if t.Role == "" {
 			eligible = activeCount > 0
 		} else {
-			eligible = activeRoles[t.Role]
+			eligible = hasGeneralist || activeRoles[t.Role]
 		}
 		if eligible {
 			continue

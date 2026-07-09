@@ -561,3 +561,59 @@ func TestEnqueueTaskUsesActiveRolesWhenPresent(t *testing.T) {
 		t.Fatalf("refusal should mention active roles and correction path, got: %s", text)
 	}
 }
+
+// A present generalist worker claims any ready task, so enqueue_task for any
+// role it could claim must be accepted — the guard must not read the collapsed
+// "generalist" Role string as one opaque role that covers nothing.
+func TestEnqueueTaskAcceptsRoleCoveredByGeneralist(t *testing.T) {
+	dir := t.TempDir()
+	cstore, _ := coord.Open(filepath.Join(dir, "c.sqlite3"))
+	t.Cleanup(func() { cstore.Close() })
+	q, _ := queue.Open(filepath.Join(dir, "q.sqlite3"))
+	t.Cleanup(func() { q.Close() })
+	q.Enqueue(7, []queue.TaskSpec{{Key: "seed", Role: "builder", Title: "b", Instruction: "b"}})
+	// Only a generalist is present — no explicit "perf" agent.
+	if err := cstore.Register("Gigi", "test", "", "", "", "generalist"); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	clientT, serverT := mcp.NewInMemoryTransports()
+	go func() { _ = NewServer(cstore, nil, Options{Queue: q}).Run(ctx, serverT) }()
+	client := mcp.NewClient(&mcp.Implementation{Name: "lead", Version: "0"}, nil)
+	sess, _ := client.Connect(ctx, clientT, nil)
+	defer sess.Close()
+
+	var enq okOut
+	callTask(t, sess, "enqueue_task", map[string]any{"mission_id": 7, "key": "perf-1", "role": "perf", "title": "perf", "instruction": "p"}, &enq)
+	if !enq.OK {
+		t.Fatal("enqueue_task refused a role a present generalist covers; want accepted")
+	}
+}
+
+// A multi-role worker registers a "+"-joined Role. The enqueue guard must
+// expand it so a task whose role is one of that worker's roles is accepted.
+func TestEnqueueTaskAcceptsRoleCoveredByMultiRole(t *testing.T) {
+	dir := t.TempDir()
+	cstore, _ := coord.Open(filepath.Join(dir, "c.sqlite3"))
+	t.Cleanup(func() { cstore.Close() })
+	q, _ := queue.Open(filepath.Join(dir, "q.sqlite3"))
+	t.Cleanup(func() { q.Close() })
+	q.Enqueue(7, []queue.TaskSpec{{Key: "seed", Role: "builder", Title: "b", Instruction: "b"}})
+	if err := cstore.Register("Remy", "test", "", "", "", "researcher+perf"); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	clientT, serverT := mcp.NewInMemoryTransports()
+	go func() { _ = NewServer(cstore, nil, Options{Queue: q}).Run(ctx, serverT) }()
+	client := mcp.NewClient(&mcp.Implementation{Name: "lead", Version: "0"}, nil)
+	sess, _ := client.Connect(ctx, clientT, nil)
+	defer sess.Close()
+
+	var enq okOut
+	callTask(t, sess, "enqueue_task", map[string]any{"mission_id": 7, "key": "perf-1", "role": "perf", "title": "perf", "instruction": "p"}, &enq)
+	if !enq.OK {
+		t.Fatal("enqueue_task refused a role a present researcher+perf worker covers; want accepted")
+	}
+}

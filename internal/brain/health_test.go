@@ -250,6 +250,58 @@ func TestDetectRoleStallsSkipsEligibleRole(t *testing.T) {
 	}
 }
 
+// A generalist worker (Role="generalist") claims any ready task, so it covers
+// every role. The watchdog must not file a bogus stall finding for a role that a
+// present generalist actually covers.
+func TestDetectRoleStallsSkipsGeneralistCoverage(t *testing.T) {
+	dir := t.TempDir()
+	q, err := queue.Open(filepath.Join(dir, "q.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { q.Close() })
+	if err := q.Enqueue(7, []queue.TaskSpec{{Key: "perf-1", Role: "perf", Title: "perf", Instruction: "measure"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.PromoteReady(7); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := DetectRoleStalls(q, []coord.Agent{{Name: "Gigi", Role: "generalist"}}, nil, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("a generalist covers every role; want 0 stall findings, got %d", n)
+	}
+}
+
+// A multi-role worker registers a "+"-joined Role ("researcher+perf"). The
+// watchdog must expand that into its constituent roles, not treat the whole
+// string as one opaque role, so a perf task is seen as covered.
+func TestDetectRoleStallsSkipsMultiRoleCoverage(t *testing.T) {
+	dir := t.TempDir()
+	q, err := queue.Open(filepath.Join(dir, "q.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { q.Close() })
+	if err := q.Enqueue(7, []queue.TaskSpec{{Key: "perf-1", Role: "perf", Title: "perf", Instruction: "measure"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.PromoteReady(7); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := DetectRoleStalls(q, []coord.Agent{{Name: "Remy", Role: "researcher+perf"}}, nil, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("a researcher+perf worker covers perf; want 0 stall findings, got %d", n)
+	}
+}
+
 // TestDetectRoleStallsFlagsFailingOnlyCoverage: a role whose only present agent is
 // FAILING (a claim of theirs was force-reclaimed — a reclaim-looping dead worker)
 // is not really covered. The watchdog must surface the stall instead of treating

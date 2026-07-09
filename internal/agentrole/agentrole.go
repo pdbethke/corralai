@@ -63,6 +63,49 @@ func (s Set) ClaimArg() []string {
 	return s.Roles
 }
 
+// Coverage reverses Display(): given the "+"-joined / "generalist" free-text
+// value a worker registers into its single coord.Agent.Role field, it reports
+// the role Set that worker actually claims against. The brain's coverage checks
+// (stall watchdog, enqueue guard) store only this collapsed string, so without
+// re-expanding it a multi-role worker ("a+b") or a generalist looks like one
+// opaque role named "a+b"/"generalist" and its real coverage is invisible.
+// An empty value covers NOTHING (not Any): Display() never emits empty, so an
+// empty Role field is an unregistered worker, not a generalist.
+func Coverage(role string) Set {
+	role = strings.TrimSpace(role)
+	if role == "" {
+		return Set{}
+	}
+	if strings.EqualFold(role, "generalist") {
+		return Set{Any: true}
+	}
+	var roles []string
+	for _, r := range strings.Split(role, "+") {
+		r = strings.TrimSpace(r)
+		if r != "" {
+			roles = append(roles, r)
+		}
+	}
+	if len(roles) == 0 {
+		return Set{}
+	}
+	return Set{Roles: roles}
+}
+
+// Covers reports whether this Set claims the given role. A generalist (Any)
+// covers every role; an explicit list covers exactly its entries.
+func (s Set) Covers(role string) bool {
+	if s.Any {
+		return true
+	}
+	for _, r := range s.Roles {
+		if r == role {
+			return true
+		}
+	}
+	return false
+}
+
 // Display is how this worker's role(s) should read in banners, logs, and
 // the bootstrap/report_host free-text role field: the single role
 // unchanged, a "+"-joined list for multi-role, or "generalist" for

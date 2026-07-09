@@ -698,7 +698,9 @@ func main() {
 		}
 	}
 	engine.OnReflexCapExhausted = func(missionID int64, cap int, f queue.Finding) {
-		log.Printf("mission %d: reflex task cap reached on finding %d (%s) — pausing mission to prevent loop", missionID, f.ID, f.Type)
+		// Telemetry only; the engine transitions the non-converging mission to the
+		// terminal `failed` state itself (reliability #5) — no oscillating pause.
+		log.Printf("mission %d: reflex task cap reached on finding %d (%s) — mission is not converging", missionID, f.ID, f.Type)
 		if err := telStore.Record(telemetry.Event{
 			MissionID: missionID, Kind: "reflex_cap_exhausted", Actor: "reflex-replanner",
 			Subject: f.Target, Model: f.ReporterModel,
@@ -707,9 +709,6 @@ func main() {
 			},
 		}); err != nil {
 			log.Printf("telemetry reflex_cap_exhausted: %v", err)
-		}
-		if err := missionStore.SetMissionStatus(missionID, "paused"); err != nil {
-			log.Printf("mission %d: failed to pause mission on cap exhaustion: %v", missionID, err)
 		}
 	}
 	if v := os.Getenv("CORRALAI_REFLEX_MIN_SEVERITY"); v != "" {
@@ -769,6 +768,12 @@ func main() {
 	log.Printf("missions: orchestration engine ticking every %s (reflex re-planner: >=%s, cap %d)",
 		missionTick, engine.ReflexMinSeverity, engine.ReflexMaxTasks)
 
+	// healthBook infers per-agent health (working|idle|failing) from claim/
+	// complete/reclaim activity — see internal/brain/health.go (#72). Declared
+	// before the reaper because the stall watchdog consults it so a failing agent
+	// doesn't count as role coverage.
+	healthBook := brain.NewHealthBook()
+
 	// Reaper: requeue the tasks of bees that have gone (crashed / disconnected) so
 	// the hive self-heals. Presence (coord) is authoritative — a live, heart-beating
 	// bee keeps its task; the claim lease is only the fallback if presence is
@@ -791,7 +796,15 @@ func main() {
 			} else if n > 0 {
 				log.Printf("queue: reaped %d stale task claim(s)", n)
 			}
-			if n, err := brain.DetectRoleStalls(queueStore, active, taskStallThreshold, telStore); err != nil {
+			// Coord-lease sibling of the queue reaper: release path leases held by
+			// crashed/absent agents so a dead holder's exclusive lease can't strand
+			// peers until its TTL (up to an hour).
+			if reaped, err := store.ReapAbsentClaims(present); err != nil {
+				log.Printf("coord: claim reap: %v", err)
+			} else if len(reaped) > 0 {
+				log.Printf("coord: released path leases of %d absent agent(s): %v", len(reaped), reaped)
+			}
+			if n, err := brain.DetectRoleStalls(queueStore, active, healthBook, taskStallThreshold, telStore); err != nil {
 				log.Printf("queue: stall watchdog: %v", err)
 			} else if n > 0 {
 				log.Printf("queue: stall watchdog filed %d role-stall finding(s)", n)
@@ -862,9 +875,6 @@ func main() {
 	activityRing := brain.NewActivityRing()
 	// hostBook holds each bee's runtime facts (report_host) for the UI topology view.
 	hostBook := brain.NewHostBook()
-	// healthBook infers per-agent health (working|idle|failing) from claim/
-	// complete/reclaim activity — see internal/brain/health.go (#72).
-	healthBook := brain.NewHealthBook()
 	// workerSessions is the dev-mode half of the human gate: marks any MCP session
 	// that identifies itself as a corral-agent worker (ClientInfo.Name or an
 	// early bootstrap/report_host call), so isHumanAdmin can refuse it.

@@ -313,6 +313,12 @@ func (e *Engine) Tick() error {
 		if err := e.replan(mi.ID); err != nil {
 			log.Printf("mission %d: replan: %v", mi.ID, err)
 		}
+		// replan may have transitioned the mission to a terminal state (the reflex
+		// cap failing it). Don't promote / converge / PR a mission that's no longer
+		// running.
+		if cur, err := e.m.Mission(mi.ID); err != nil || cur == nil || cur.Status != "running" {
+			continue
+		}
 		if _, err := e.q.PromoteReady(mi.ID); err != nil {
 			log.Printf("mission %d: promote: %v", mi.ID, err)
 			continue

@@ -1,0 +1,53 @@
+---
+title: "What we took from Fugu — and why"
+description: "We dinged Fugu for shipping the capability without the containment. Fair's fair: here's what it got right, the idea we took from it, and the one honest line about how we took it — the insight, not the mechanism."
+pubDate: 2026-07-09
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+
+*Field note. The honest complement to an earlier one: if you're going to skewer someone's blind spot in public, you also credit what they nailed — and admit what you borrowed.*
+
+---
+
+A while back we wrote [a note](/field-notes/fugu/) that dinged Sakana's **Fugu** for shipping a brilliant orchestrator with no sandbox — the capability without the containment, from a system named after the one dish where containment is the whole craft. We stand by it.
+
+But intellectual honesty cuts both ways. Fugu is the best orchestration paper of the year, and criticizing its one gap while quietly lifting its good ideas would be exactly the kind of thing we'd call out in someone else. So: here's what Fugu got right, the idea we took, and one honest line about *how* we took it.
+
+## The idea we took: route each task to the model that's actually best at it
+
+Most agent swarms run one model in N roles, or hardcode a role→model map and never revisit it. Fugu's core argument is sharper: frontier models have real, fine-grained specializations, and the orchestrator's actual job is to **route each task to the best-suited model — learned from measured performance, not vibes.** One model plans; a different one debugs; a third does the math.
+
+That's right. And it's the thing we took.
+
+## Why it slotted in: we were already measuring who's good at what
+
+We didn't have to bolt on a scoreboard, because corralai already keeps one. Every completed task and every verify-gate result is attributed to the model that produced it — so there's a standing, **gate-earned model×role leaderboard**. "Best builder" isn't an opinion; it's *which model demonstrably passed the gate building, most often.* Fugu's paper validated routing off measured worker performance; we already had the measurements, and ours are earned from reality — a real test that really passed — not a model's say-so.
+
+So the staffing planner now reads that leaderboard and assigns each role its earned-best model, clamped to what your hardware can actually load. Route-to-best, grounded in the gate.
+
+## The part we added ourselves
+
+One thing the paper made us think hard about — and this bit is *ours*, so credit where it's due. If you always staff the current leader, the leaderboard **ossifies**: whoever got lucky in the first few runs stays on top, and you never find out whether the untested model is better. Fugu sidesteps this during *training* — it evolves its router. But we don't train anything. So we had to bake exploration into the *live* planner: it now sees which model×role cells are untested, is told to occasionally **probe** one instead of the incumbent, and to treat thin data — an n=2 "winner" — as a data point, not a ranking.
+
+The route-to-best idea is Fugu's. The explore-in-production guard is ours, borrowed from the oldest lesson in reinforcement learning: a policy that only ever exploits stops learning.
+
+## The one honest line: we took the insight, not the mechanism
+
+Here's the part that matters, and it's the same fork as the first note. Fugu implements routing as a **trained black box** — a learned head reading hidden states, which you can't inspect and which is, itself, a model deciding. We took the *idea* and kept our implementation the way everything else in corralai works:
+
+- the model **proposes** a staffing plan,
+- deterministic Go **clamps** it (never exceed your VRAM, never assign an unpulled model, always keep a builder, a tester, and the gate),
+- and the evidence it reasons over is **earned from the verify gate** — reality, not confidence.
+
+Same insight, opposite trust model. Every input to the staffing decision is something you can read.
+
+## Why say all this out loud
+
+Because the honesty *is* the product. We published a note owning a bug we found in our own gate. We published one dinging Fugu's containment gap. This is the third leg of the same posture: **crediting the lab we critiqued, for the ideas we borrowed.** You don't get to skewer someone's blind spot and then lift their good work without attribution — not if "you can trust what we tell you" is the whole pitch.
+
+We read the best orchestration paper of the year, took what was right, left what was wrong, and told you which was which. Fugu and corral are both, in the end, about containing something powerful enough to be dangerous. We took their routing. We kept our fences.
+
+---
+
+*Corralai is v0.1, solo-maintained, and public. The staffing planner and the gate-earned leaderboard are in the [code](https://github.com/pdbethke/corralai); field notes are opinions, and occasionally, credits.*

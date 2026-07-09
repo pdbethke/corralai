@@ -5,6 +5,7 @@ package creds
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -49,7 +50,11 @@ func (b *ageFile) load() (map[string]string, error) {
 }
 
 func (b *ageFile) save(m map[string]string) error {
-	if err := os.MkdirAll(filepath.Dir(b.path), 0o700); err != nil {
+	dir := filepath.Dir(b.path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
 		return err
 	}
 	raw, err := json.Marshal(m)
@@ -67,7 +72,10 @@ func (b *ageFile) save(m map[string]string) error {
 	if err := w.Close(); err != nil {
 		return err
 	}
-	return os.WriteFile(b.path, buf.Bytes(), 0o600)
+	if err := os.WriteFile(b.path, buf.Bytes(), 0o600); err != nil {
+		return err
+	}
+	return os.Chmod(b.path, 0o600)
 }
 
 func (b *ageFile) get(name string) (string, bool, error) {
@@ -129,6 +137,9 @@ func loadOrCreateIdentity(idPath string) (*age.X25519Identity, error) {
 	if err := os.WriteFile(idPath, []byte(id.String()), 0o600); err != nil {
 		return nil, err
 	}
+	if err := os.Chmod(idPath, 0o600); err != nil {
+		return nil, err
+	}
 	return id, nil
 }
 
@@ -136,15 +147,21 @@ func loadOrCreateIdentity(idPath string) (*age.X25519Identity, error) {
 // AGE-SECRET-KEY-…) → systemd credential ($CREDENTIALS_DIRECTORY/age-identity) →
 // a 0600 key file in credsDir. This is the master-protection chain from the spec.
 func resolveIdentity(credsDir string) (*age.X25519Identity, error) {
-	if v := os.Getenv("CORRAL_AGE_IDENTITY"); strings.HasPrefix(strings.TrimSpace(v), "AGE-SECRET-KEY-") {
-		return age.ParseX25519Identity(strings.TrimSpace(v))
+	if v := strings.TrimSpace(os.Getenv("CORRAL_AGE_IDENTITY")); v != "" {
+		if !strings.HasPrefix(v, "AGE-SECRET-KEY-") {
+			return nil, fmt.Errorf("CORRAL_AGE_IDENTITY is set but is not a valid age identity")
+		}
+		return age.ParseX25519Identity(v) // parse err returned, not swallowed
 	}
 	if d := os.Getenv("CREDENTIALS_DIRECTORY"); d != "" {
-		if raw, err := os.ReadFile(filepath.Join(d, "age-identity")); err == nil { // #nosec G304 -- systemd cred dir
-			if id, perr := age.ParseX25519Identity(strings.TrimSpace(string(raw))); perr == nil {
-				return id, nil
-			}
+		raw, err := os.ReadFile(filepath.Join(d, "age-identity")) // #nosec G304 -- systemd cred dir
+		switch {
+		case err == nil:
+			return age.ParseX25519Identity(strings.TrimSpace(string(raw))) // parse err returned, not swallowed
+		case !os.IsNotExist(err):
+			return nil, err // exists but unreadable -> fail closed
 		}
+		// not present -> fall through
 	}
 	return loadOrCreateIdentity(filepath.Join(credsDir, "identity.age"))
 }

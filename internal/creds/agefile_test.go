@@ -77,3 +77,90 @@ func TestLoadOrCreateIdentityPersistsAndPerms(t *testing.T) {
 		t.Fatal("loadOrCreateIdentity must persist + reload the same identity")
 	}
 }
+
+func TestResolveIdentityCorruptSystemdCredFailsClosed(t *testing.T) {
+	credsDir := t.TempDir()
+	systemdDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(systemdDir, "age-identity"), []byte("not-a-valid-key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CREDENTIALS_DIRECTORY", systemdDir)
+	t.Setenv("CORRAL_AGE_IDENTITY", "")
+
+	if _, err := resolveIdentity(credsDir); err == nil {
+		t.Fatal("resolveIdentity must return an error when the systemd cred file is corrupt, not silently generate a new identity")
+	}
+	if _, err := os.Stat(filepath.Join(credsDir, "identity.age")); !os.IsNotExist(err) {
+		t.Fatal("resolveIdentity must NOT orphan the store by generating a new identity.age when the systemd cred is corrupt")
+	}
+}
+
+func TestResolveIdentityValidSystemdCred(t *testing.T) {
+	credsDir := t.TempDir()
+	systemdDir := t.TempDir()
+	id, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(systemdDir, "age-identity"), []byte(id.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CREDENTIALS_DIRECTORY", systemdDir)
+	t.Setenv("CORRAL_AGE_IDENTITY", "")
+
+	got, err := resolveIdentity(credsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Recipient().String() != id.Recipient().String() {
+		t.Fatalf("resolveIdentity returned a different identity than the systemd cred file provided")
+	}
+}
+
+func TestResolveIdentityValidEnvVar(t *testing.T) {
+	credsDir := t.TempDir()
+	id, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CREDENTIALS_DIRECTORY", "")
+	t.Setenv("CORRAL_AGE_IDENTITY", id.String())
+
+	got, err := resolveIdentity(credsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Recipient().String() != id.Recipient().String() {
+		t.Fatal("resolveIdentity returned a different identity than CORRAL_AGE_IDENTITY provided")
+	}
+}
+
+func TestResolveIdentityMalformedEnvVarFailsClosed(t *testing.T) {
+	credsDir := t.TempDir()
+	t.Setenv("CREDENTIALS_DIRECTORY", "")
+	t.Setenv("CORRAL_AGE_IDENTITY", "garbage-not-an-age-key")
+
+	if _, err := resolveIdentity(credsDir); err == nil {
+		t.Fatal("resolveIdentity must return an error when CORRAL_AGE_IDENTITY is set but malformed, not silently ignore it")
+	}
+	if _, err := os.Stat(filepath.Join(credsDir, "identity.age")); !os.IsNotExist(err) {
+		t.Fatal("resolveIdentity must NOT generate a new identity.age when CORRAL_AGE_IDENTITY is malformed")
+	}
+}
+
+func TestResolveIdentityFallsThroughToKeyfileWhenUnset(t *testing.T) {
+	credsDir := t.TempDir()
+	t.Setenv("CREDENTIALS_DIRECTORY", "")
+	t.Setenv("CORRAL_AGE_IDENTITY", "")
+
+	id, err := resolveIdentity(credsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id == nil {
+		t.Fatal("resolveIdentity should have generated and returned a fresh identity")
+	}
+	if _, err := os.Stat(filepath.Join(credsDir, "identity.age")); err != nil {
+		t.Fatalf("resolveIdentity should have persisted a new identity.age in credsDir: %v", err)
+	}
+}

@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -70,16 +71,67 @@ func (s *StaffingManager) Sense() WorkstationResources {
 	return res
 }
 
+// minConfidentSamples is the completed-task count below which a leaderboard cell
+// is "thin" — a data point, not a verdict. Below it the planner is told not to
+// treat the cell as a ranking (cold-start honesty).
+const minConfidentSamples = 5
+
+// buildLeaderboardBrief renders the earned model×role evidence for the staffing
+// planner: each cell labeled by confidence (so thin data isn't mistaken for a
+// ranking), plus untested eligible models per role (probe candidates) so the
+// planner can EXPLORE instead of always exploiting an early leader. Deterministic
+// — the LLM reasons over this signal; Go just makes it honest. Output is stable
+// (roles and models sorted) so the same evidence yields the same brief.
+func buildLeaderboardBrief(stats []ModelStats, eligibleModels []string, minSamples int) string {
+	if len(stats) == 0 {
+		return "No historical performance data yet (cold start) — staff from sensible defaults and treat this mission as evidence-gathering, not as optimizing a ranking that doesn't exist."
+	}
+	haveData := map[string]map[string]bool{} // role -> model -> seen
+	var b strings.Builder
+	b.WriteString("Earned leaderboard (from the verify gate; [confidence] in brackets):\n")
+	for _, c := range stats {
+		conf := "THIN: insufficient evidence, do NOT treat as a ranking"
+		if c.TasksCompleted >= minSamples {
+			conf = "confident"
+		}
+		b.WriteString(fmt.Sprintf("- %s as %s: %d tasks, %.0f%% pass, %.1fs avg [%s]\n",
+			c.Model, c.Role, c.TasksCompleted, c.ExecPassRatePct, c.AvgTaskDuration, conf))
+		if haveData[c.Role] == nil {
+			haveData[c.Role] = map[string]bool{}
+		}
+		haveData[c.Role][c.Model] = true
+	}
+	roles := make([]string, 0, len(haveData))
+	for r := range haveData {
+		roles = append(roles, r)
+	}
+	sort.Strings(roles)
+	var probes strings.Builder
+	for _, role := range roles {
+		var untested []string
+		for _, m := range eligibleModels {
+			if !haveData[role][m] {
+				untested = append(untested, m)
+			}
+		}
+		sort.Strings(untested)
+		if len(untested) > 0 {
+			probes.WriteString(fmt.Sprintf("- %s: untested → %s\n", role, strings.Join(untested, ", ")))
+		}
+	}
+	if probes.Len() > 0 {
+		b.WriteString("\nUntested eligible models (probe candidates — occasionally staff one instead of the leader to keep the leaderboard learning):\n")
+		b.WriteString(probes.String())
+	}
+	return b.String()
+}
+
 func (s *StaffingManager) Judge(ctx context.Context, directive string, resources WorkstationResources, stats []ModelStats, thoroughness int, footprint int) (map[string]string, []string, error) {
 	if s.LLM == nil || !s.LLM.Available() {
 		return nil, nil, fmt.Errorf("LLM client not available")
 	}
 
-	var statsBuf strings.Builder
-	for _, cell := range stats {
-		statsBuf.WriteString(fmt.Sprintf("- Model: %s, Role: %s, TasksCompleted: %d, AvgDuration: %.1fs, PassRate: %.1f%%\n",
-			cell.Model, cell.Role, cell.TasksCompleted, cell.AvgTaskDuration, cell.ExecPassRatePct))
-	}
+	brief := buildLeaderboardBrief(stats, resources.PulledModels, minConfidentSamples)
 
 	systemPrompt := `You are the Corralai swarm staffing planner. Analyze the directive, workstation hardware resources, available local/cloud models, and historical performance stats. Propose the optimal role-to-model staffing assignment and load order to run the swarm.
 
@@ -96,10 +148,11 @@ Respond ONLY with a valid JSON object matching this schema:
 
 Constraints:
 1. Local models in the load order should fit in available GPU VRAM. Estimate VRAM for a local model as parameter_size * 0.7 GB.
-2. Prioritize models that have high success rates or low average duration in historical stats.
-3. If no stats are available (cold-start), use default models (e.g. qwen2.5-coder:7b, llama3.2:3b).
+2. Prefer models with high pass rates / low duration — but ONLY for cells marked [confident]. A cell marked [THIN] is a single data point, not a ranking; do not overfit it.
+3. If no stats are available (cold-start), use default models (e.g. qwen2.5-coder:7b, llama3.2:3b) and treat the mission as evidence-gathering.
 4. Always allocate builder and tester roles.
-5. If a local model is not pulled, do not assign it unless it is a cloud model API (e.g. gemini, claude, gpt).`
+5. If a local model is not pulled, do not assign it unless it is a cloud model API (e.g. gemini, claude, gpt).
+6. EXPLORE, don't ossify: when a role has untested eligible models (probe candidates), occasionally staff one instead of the current leader so the leaderboard keeps learning — especially when the leader's evidence is thin or the alternatives are entirely unmeasured.`
 
 	prompt := fmt.Sprintf(`Directive: %s
 Available Resources:
@@ -114,7 +167,7 @@ Optimization Weights (1-5 range):
 - Resource Footprint: %d/5 (higher means minimize GPU memory footprint, potentially sharing one model; lower means utilize full available VRAM)
 
 Historical Leaderboard:
-%s`, directive, resources.CPUCores, resources.TotalRAMGB, resources.GPUVRAMGB, resources.PulledModels, resources.LoadedModels, thoroughness, footprint, statsBuf.String())
+%s`, directive, resources.CPUCores, resources.TotalRAMGB, resources.GPUVRAMGB, resources.PulledModels, resources.LoadedModels, thoroughness, footprint, brief)
 
 	resp, err := s.LLM.Generate(ctx, systemPrompt, prompt)
 	if err != nil {

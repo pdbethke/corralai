@@ -86,4 +86,6 @@ CORRALAI_CERTIFY_KEY       hex-encoded Ed25519 seed (32 bytes) `corral certify` 
 CORRALAI_CERTIFY_KEY_FILE  path to persist the certify signing key seed (default ~/.claude/corralai_certify_key); created 0600 on first run
 CORRALAI_BRAIN_TOKEN       `corral certify`'s bearer token to authenticate to a brain (via `corral secret set`); distinct
                            from CORRALAI_BRAIN_KEY above (that's an Ed25519 IDENTITY SEED, not a bearer token — do not reuse it)
+CORRALAI_REKOR_URL         Sigstore Rekor instance report_build anchors signed build attestations to (default https://rekor.sigstore.dev);
+                           `corral certify verify` checks the same default unless --rekor-url overrides it
 ```

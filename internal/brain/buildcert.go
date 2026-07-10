@@ -58,6 +58,12 @@ type reportBuildOut struct {
 	// LogIndex is the anchored entry's position in the transparency log.
 	// Only meaningful when Anchored is true; zero otherwise.
 	LogIndex int64 `json:"log_index,omitempty"`
+	// Rekor is the marshaled transparency.Entry (JSON) — the inclusion-proof
+	// evidence a verifier needs to confirm anchoring OFFLINE, with no round
+	// trip back to this brain or to Rekor itself. Only set when Anchored is
+	// true; empty otherwise. corral certify's --out embeds this verbatim so
+	// an exported record is completely self-verifying.
+	Rekor string `json:"rekor,omitempty"`
 }
 
 // registerBuildCert registers the report_build tool — corral certify's ingest
@@ -188,6 +194,7 @@ func registerBuildCert(s *mcp.Server, opts Options) {
 			}
 			if anchored {
 				out.LogIndex = logIndex
+				out.Rekor = rekorJSON
 			}
 			return nil, out, nil
 		})

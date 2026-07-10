@@ -15,7 +15,14 @@ import (
 	"time"
 
 	"github.com/pdbethke/corralai/internal/certify"
+	"github.com/pdbethke/corralai/internal/transparency"
 )
+
+// defaultRekorURL is the public Sigstore Rekor instance used when neither
+// --rekor-url nor $CORRALAI_REKOR_URL is given — the same default the brain
+// wires up in main.go, so an unqualified `corral certify verify` checks the
+// same log a default-configured brain anchors to.
+const defaultRekorURL = "https://rekor.sigstore.dev"
 
 // certRecord is the shape a `corral certify --out` file (and report_build's
 // tool response) carries: everything needed to verify a build attestation
@@ -29,6 +36,15 @@ type certRecord struct {
 	Steps     []map[string]any `json:"steps"`
 	Head      string           `json:"head"`
 	PublicKey string           `json:"public_key,omitempty"`
+	// Rekor is the marshaled transparency.Entry (JSON), present when
+	// Anchored is true — the inclusion-proof evidence verify checks against
+	// the TUF-rooted Rekor public key, entirely offline.
+	Rekor string `json:"rekor,omitempty"`
+	// Anchored reports whether Signature was submitted to and included in a
+	// public transparency log. false means "signed but not (yet, or ever)
+	// publicly witnessed" — a materially weaker claim; verify treats it as a
+	// failure unless the operator explicitly opts in with --allow-unanchored.
+	Anchored bool `json:"anchored,omitempty"`
 }
 
 // pubkeyFetcher fetches a brain's certify public key. The real
@@ -60,6 +76,24 @@ func httpPubkeyFetcher(brainURL string) (string, error) {
 	return strings.TrimSpace(string(b)), nil
 }
 
+// witnessFactory builds a transparency.Witness to verify a record's Rekor
+// inclusion proof against, given the rekor instance URL. The real
+// implementation (newRekorVerifyWitness) fetches the Sigstore TUF trust
+// root and talks to Rekor; tests inject one that returns
+// transparency.NewFakeWitness() so no network call is needed to exercise
+// runCertifyVerify's Rekor step.
+type witnessFactory func(rekorURL string) (transparency.Witness, error)
+
+// newRekorVerifyWitness is the real witnessFactory: it constructs a
+// transparency.Witness whose VerifyInclusion checks entirely offline against
+// the TUF-rooted Rekor public key. Verification never needs the signer's
+// public key (only Anchor does), so no WithSignerPublicKey option is passed
+// here — the trust anchor for the Rekor step is the TUF root fetched inside
+// NewRekorWitness, never anything from the record.
+func newRekorVerifyWitness(rekorURL string) (transparency.Witness, error) {
+	return transparency.NewRekorWitness(rekorURL)
+}
+
 // runCertifyVerify implements `corral certify verify <record-file>
 // [--pubkey <hex>|--brain <url>]`: it independently verifies a corral
 // certify record — no trust in the brain's in-process state, and no trust
@@ -73,14 +107,19 @@ func httpPubkeyFetcher(brainURL string) (string, error) {
 // record would be "verified" against itself. If neither --pubkey nor
 // --brain is given, verification refuses outright. All of (1) the Ed25519
 // signature over the canonical statement, (2) the ledger's hash chain +
-// head, and (3) the statement's subject digest binding to that exact head
+// head, (3) the statement's subject digest binding to that exact head, and
+// (4) — when the record claims to be anchored — the Rekor inclusion proof,
 // must pass; the first failing check is named on stderr and the exit code
-// is non-zero.
-func runCertifyVerify(args []string, fetch pubkeyFetcher, stdout, stderr io.Writer) int {
+// is non-zero. An unanchored record ("signed" but never publicly witnessed)
+// is ALSO a failure by default: --allow-unanchored is required to accept it,
+// so a caller can't mistake corral's own signature for third-party proof.
+func runCertifyVerify(args []string, fetch pubkeyFetcher, newWitness witnessFactory, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("certify verify", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	pubkeyFlag := fs.String("pubkey", "", "hex-encoded Ed25519 public key to verify against")
 	brainFlag := fs.String("brain", "", "fetch the public key from this brain's /api/certify/pubkey")
+	rekorURLFlag := fs.String("rekor-url", "", "Rekor instance to verify the inclusion proof against (default $CORRALAI_REKOR_URL or "+defaultRekorURL+")")
+	allowUnanchored := fs.Bool("allow-unanchored", false, "accept a signed-but-not-publicly-witnessed record (weaker: no third-party transparency guarantee)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -181,7 +220,49 @@ func runCertifyVerify(args []string, fetch pubkeyFetcher, stdout, stderr io.Writ
 		return 1
 	}
 
-	fmt.Fprintln(stdout, "verified")
+	// Check 4: public transparency. "Signed" (checks 1-3) is a claim about
+	// what the brain says; "publicly witnessed" is an independently
+	// checkable claim that a third party can confirm without trusting the
+	// brain at all. A record that was never anchored is a materially weaker
+	// artifact — trust corral's own signature and nothing else — so it is
+	// rejected by default rather than silently passed off as equivalent.
+	if !rec.Anchored {
+		fmt.Fprintln(stderr, "corral certify verify: signed, NOT publicly witnessed (this build's attestation was never submitted to, or never included in, a public transparency log)")
+		if !*allowUnanchored {
+			fmt.Fprintln(stderr, "corral certify verify: FAILED (pass --allow-unanchored to accept a signed-but-unwitnessed record)")
+			return 1
+		}
+		fmt.Fprintln(stderr, "corral certify verify: caveat: --allow-unanchored set — accepting signature-only trust, no third-party transparency guarantee")
+		fmt.Fprintln(stdout, "verified (signed, NOT publicly witnessed)")
+		return 0
+	}
+
+	var entry transparency.Entry
+	if err := json.Unmarshal([]byte(rec.Rekor), &entry); err != nil {
+		fmt.Fprintf(stderr, "corral certify verify: FAILED (rekor: record's transparency entry is malformed: %v)\n", err)
+		return 1
+	}
+
+	rekorURL := strings.TrimSpace(*rekorURLFlag)
+	if rekorURL == "" {
+		rekorURL = strings.TrimSpace(os.Getenv("CORRALAI_REKOR_URL"))
+	}
+	if rekorURL == "" {
+		rekorURL = defaultRekorURL
+	}
+	witness, err := newWitness(rekorURL)
+	if err != nil {
+		fmt.Fprintf(stderr, "corral certify verify: FAILED (rekor: constructing witness for %s: %v)\n", rekorURL, err)
+		return 1
+	}
+	ok, detail := witness.VerifyInclusion(entry, []byte(rec.Signature))
+	if !ok {
+		fmt.Fprintf(stderr, "corral certify verify: FAILED (rekor: %s)\n", detail)
+		return 1
+	}
+
+	integrated := time.Unix(entry.IntegratedTime, 0).UTC().Format(time.RFC3339)
+	fmt.Fprintf(stdout, "verified (publicly witnessed %s, Rekor #%d)\n", integrated, entry.LogIndex)
 	return 0
 }
 

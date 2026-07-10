@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
@@ -15,7 +16,52 @@ import (
 	"testing"
 
 	"github.com/pdbethke/corralai/internal/certify"
+	"github.com/pdbethke/corralai/internal/transparency"
 )
+
+// fakeWitnessFactory is a witnessFactory that always returns a fresh
+// transparency.NewFakeWitness(), so verify tests never touch the network
+// (fakeWitness.VerifyInclusion is a pure function of its inputs, so any
+// instance — not necessarily the one that anchored the entry — works).
+func fakeWitnessFactory(string) (transparency.Witness, error) {
+	return transparency.NewFakeWitness(), nil
+}
+
+func failWitnessFactory(t *testing.T) witnessFactory {
+	return func(string) (transparency.Witness, error) {
+		t.Fatal("witness factory should not be called for an unanchored record")
+		return nil, nil
+	}
+}
+
+// buildAnchoredTestRecord builds on buildTestRecord by additionally anchoring
+// the record's DSSE envelope to a fakeWitness and embedding the resulting
+// transparency.Entry + anchored=true, mirroring what report_build/--out
+// produce for an anchored build.
+func buildAnchoredTestRecord(t *testing.T) (pubHex string, raw []byte) {
+	t.Helper()
+	pubHex, raw = buildTestRecord(t)
+	var rec map[string]any
+	if err := json.Unmarshal(raw, &rec); err != nil {
+		t.Fatal(err)
+	}
+	w := transparency.NewFakeWitness()
+	entry, err := w.Anchor(context.Background(), []byte(rec["signature"].(string)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entryJSON, err := json.Marshal(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec["rekor"] = string(entryJSON)
+	rec["anchored"] = true
+	out, err := json.Marshal(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pubHex, out
+}
 
 // buildTestRecord builds an in-process, fully valid certRecord — mirroring
 // what report_build/--out produce — signed under a fresh keypair, and
@@ -96,7 +142,7 @@ func TestRunCertifyVerify_ValidRecordPasses(t *testing.T) {
 	path := writeRecord(t, raw)
 	var stdout, stderr bytes.Buffer
 
-	code := runCertifyVerify([]string{"--pubkey", pubHex, path}, failFetcher(t), &stdout, &stderr)
+	code := runCertifyVerify([]string{"--pubkey", pubHex, "--allow-unanchored", path}, failFetcher(t), failWitnessFactory(t), &stdout, &stderr)
 
 	if code != 0 {
 		t.Fatalf("expected exit 0, got %d (stderr=%s)", code, stderr.String())
@@ -118,7 +164,7 @@ func TestRunCertifyVerify_UsesRecordEmbeddedPublicKeyWhenNoFlagsGiven(t *testing
 	path := writeRecord(t, raw)
 	var stdout, stderr bytes.Buffer
 
-	code := runCertifyVerify([]string{path}, failFetcher(t), &stdout, &stderr)
+	code := runCertifyVerify([]string{path}, failFetcher(t), failWitnessFactory(t), &stdout, &stderr)
 
 	if code == 0 {
 		t.Fatalf("expected a non-zero exit when no --pubkey/--brain is given (the record's embedded public_key must not be a trust anchor), got 0")
@@ -188,7 +234,7 @@ func TestRunCertifyVerify_TamperedPredicateFailsAtSignature(t *testing.T) {
 	path := writeRecord(t, tampered)
 	var stdout, stderr bytes.Buffer
 
-	code := runCertifyVerify([]string{"--pubkey", pubHex, path}, failFetcher(t), &stdout, &stderr)
+	code := runCertifyVerify([]string{"--pubkey", pubHex, path}, failFetcher(t), failWitnessFactory(t), &stdout, &stderr)
 
 	if code == 0 {
 		t.Fatal("expected verify to FAIL on a tampered predicate")
@@ -215,7 +261,7 @@ func TestRunCertifyVerify_TamperedStepFailsAtLedger(t *testing.T) {
 	path := writeRecord(t, tampered)
 	var stdout, stderr bytes.Buffer
 
-	code := runCertifyVerify([]string{"--pubkey", pubHex, path}, failFetcher(t), &stdout, &stderr)
+	code := runCertifyVerify([]string{"--pubkey", pubHex, path}, failFetcher(t), failWitnessFactory(t), &stdout, &stderr)
 
 	if code == 0 {
 		t.Fatal("expected verify to FAIL on a tampered step")
@@ -239,7 +285,7 @@ func TestRunCertifyVerify_FetchesPubkeyFromBrain(t *testing.T) {
 		return pubHex, nil
 	}
 
-	code := runCertifyVerify([]string{"--brain", "https://brain.example", path}, fetch, &stdout, &stderr)
+	code := runCertifyVerify([]string{"--brain", "https://brain.example", "--allow-unanchored", path}, fetch, failWitnessFactory(t), &stdout, &stderr)
 
 	if code != 0 {
 		t.Fatalf("expected exit 0, got %d (stderr=%s)", code, stderr.String())
@@ -251,7 +297,7 @@ func TestRunCertifyVerify_FetchesPubkeyFromBrain(t *testing.T) {
 
 func TestRunCertifyVerify_MissingRecordFileIsAnError(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code := runCertifyVerify([]string{"--pubkey", "aa", filepath.Join(t.TempDir(), "nope.json")}, failFetcher(t), &stdout, &stderr)
+	code := runCertifyVerify([]string{"--pubkey", "aa", filepath.Join(t.TempDir(), "nope.json")}, failFetcher(t), failWitnessFactory(t), &stdout, &stderr)
 	if code == 0 {
 		t.Fatal("expected a non-zero exit for a missing record file")
 	}
@@ -277,12 +323,111 @@ func TestCertifyDispatchesVerifySubcommand(t *testing.T) {
 	post := &fakePoster{}
 	var stdout, stderr bytes.Buffer
 
-	code := runCertify([]string{"verify", "--pubkey", realPub, path}, run, post, &stdout, &stderr)
+	code := runCertify([]string{"verify", "--pubkey", realPub, "--allow-unanchored", path}, run, post, &stdout, &stderr)
 
 	if code != 0 {
 		t.Fatalf("expected exit 0 via certify's verify dispatch, got %d (stderr=%s)", code, stderr.String())
 	}
 	if post.called {
 		t.Error("verify must not go through the normal build-report path")
+	}
+}
+
+// TestRunCertifyVerify_AnchoredRecordPasses proves a fully-anchored record —
+// signature, ledger, and subject all valid, PLUS a Rekor inclusion proof that
+// verifies — passes with no --allow-unanchored needed, and names the Rekor
+// log index/time on stdout.
+func TestRunCertifyVerify_AnchoredRecordPasses(t *testing.T) {
+	pubHex, raw := buildAnchoredTestRecord(t)
+	path := writeRecord(t, raw)
+	var stdout, stderr bytes.Buffer
+
+	code := runCertifyVerify([]string{"--pubkey", pubHex, path}, failFetcher(t), fakeWitnessFactory, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d (stderr=%s)", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Rekor #") {
+		t.Errorf("expected the Rekor log index named on stdout, got %q", stdout.String())
+	}
+}
+
+// TestRunCertifyVerify_TamperedInclusionProofFailsAtRekorStep proves a
+// record whose stored transparency.Entry has been tampered (so
+// VerifyInclusion no longer matches) fails at the Rekor step, non-zero exit,
+// naming "rekor" on stderr.
+func TestRunCertifyVerify_TamperedInclusionProofFailsAtRekorStep(t *testing.T) {
+	pubHex, raw := buildAnchoredTestRecord(t)
+	var rec map[string]any
+	if err := json.Unmarshal(raw, &rec); err != nil {
+		t.Fatal(err)
+	}
+	var entry map[string]any
+	if err := json.Unmarshal([]byte(rec["rekor"].(string)), &entry); err != nil {
+		t.Fatal(err)
+	}
+	// Corrupt the inclusion proof bytes without touching the envelope — the
+	// exact tamper a forger of the transparency evidence (not the build
+	// itself) would produce.
+	entry["InclusionProof"] = base64.StdEncoding.EncodeToString([]byte("not the real proof"))
+	entryJSON, err := json.Marshal(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec["rekor"] = string(entryJSON)
+	tampered, err := json.Marshal(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := writeRecord(t, tampered)
+	var stdout, stderr bytes.Buffer
+
+	code := runCertifyVerify([]string{"--pubkey", pubHex, path}, failFetcher(t), fakeWitnessFactory, &stdout, &stderr)
+
+	if code == 0 {
+		t.Fatal("expected verify to FAIL on a tampered inclusion proof")
+	}
+	if !strings.Contains(stderr.String(), "rekor") {
+		t.Errorf("expected the Rekor step to be named as the failure, got %q", stderr.String())
+	}
+}
+
+// TestRunCertifyVerify_UnanchoredRecordFailsWithoutAllowFlag proves an
+// unwitnessed (anchored=false) record is rejected by default — trustless
+// certify's whole point is that "signed" and "publicly witnessed" are
+// different claims, and verify must not silently conflate them.
+func TestRunCertifyVerify_UnanchoredRecordFailsWithoutAllowFlag(t *testing.T) {
+	pubHex, raw := buildTestRecord(t) // anchored=false (zero value)
+	path := writeRecord(t, raw)
+	var stdout, stderr bytes.Buffer
+
+	code := runCertifyVerify([]string{"--pubkey", pubHex, path}, failFetcher(t), failWitnessFactory(t), &stdout, &stderr)
+
+	if code == 0 {
+		t.Fatal("expected verify to FAIL on an unanchored record without --allow-unanchored")
+	}
+	if !strings.Contains(stderr.String(), "NOT publicly witnessed") {
+		t.Errorf("expected stderr to explain the record was signed but not witnessed, got %q", stderr.String())
+	}
+	if strings.Contains(stdout.String(), "verified") {
+		t.Errorf("expected no \"verified\" on stdout without --allow-unanchored, got %q", stdout.String())
+	}
+}
+
+// TestRunCertifyVerify_UnanchoredRecordPassesWithAllowFlag proves the same
+// unanchored record is accepted, with a clear caveat, when the operator
+// explicitly opts in via --allow-unanchored.
+func TestRunCertifyVerify_UnanchoredRecordPassesWithAllowFlag(t *testing.T) {
+	pubHex, raw := buildTestRecord(t)
+	path := writeRecord(t, raw)
+	var stdout, stderr bytes.Buffer
+
+	code := runCertifyVerify([]string{"--pubkey", pubHex, "--allow-unanchored", path}, failFetcher(t), failWitnessFactory(t), &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("expected exit 0 with --allow-unanchored, got %d (stderr=%s)", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "NOT publicly witnessed") {
+		t.Errorf("expected a clear caveat on stderr even when continuing, got %q", stderr.String())
 	}
 }

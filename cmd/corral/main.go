@@ -54,6 +54,8 @@
 //	CORRALAI_CERTIFY_KEY_FILE  path to persist the certify signing key seed (default ~/.claude/corralai_certify_key); created 0600 on first run
 //	CORRALAI_BRAIN_TOKEN       `corral certify`'s bearer token to authenticate to a brain (via `corral secret set`); distinct
 //	                           from CORRALAI_BRAIN_KEY above (that's an Ed25519 IDENTITY SEED, not a bearer token — do not reuse it)
+//	CORRALAI_REKOR_URL         Sigstore Rekor instance report_build anchors signed build attestations to (default https://rekor.sigstore.dev);
+//	                           `corral certify verify` checks the same default unless --rekor-url overrides it
 package main
 
 import (
@@ -101,6 +103,7 @@ import (
 	"github.com/pdbethke/corralai/internal/sandbox"
 	"github.com/pdbethke/corralai/internal/taskartifacts"
 	"github.com/pdbethke/corralai/internal/telemetry"
+	"github.com/pdbethke/corralai/internal/transparency"
 	"github.com/pdbethke/corralai/internal/ui"
 )
 
@@ -607,6 +610,26 @@ func main() {
 		log.Fatalf("load certify signing key: %v", err)
 	}
 
+	// The transparency witness report_build anchors each signed DSSE
+	// envelope to (Sigstore Rekor, by default the public instance). Anchoring
+	// is an ADDITIONAL trustless guarantee on top of the signature, never a
+	// build-blocking gate: if construction fails (e.g. the TUF trust root is
+	// unreachable at startup), log it loudly and leave witness nil — records
+	// simply come out anchored=false, exactly like a witness that goes
+	// unreachable later. The brain must never crash over this.
+	var certifyWitness transparency.Witness
+	if len(certifyKey) == ed25519.PrivateKeySize {
+		w, werr := transparency.NewRekorWitness(
+			env("CORRALAI_REKOR_URL", "https://rekor.sigstore.dev"),
+			transparency.WithSignerPublicKey(certifyKey.Public().(ed25519.PublicKey)),
+		)
+		if werr != nil {
+			log.Printf("transparency witness: could not construct (build attestations will NOT be publicly witnessed, anchored=false): %v", werr)
+		} else {
+			certifyWitness = w
+		}
+	}
+
 	browserMgr := brain.NewBrowserManager(addr)
 	defer browserMgr.Close()
 
@@ -1020,6 +1043,7 @@ func main() {
 		LearnDrafter:          learnDrafter,
 		BuildStore:            buildStore,
 		CertifyKey:            certifyKey,
+		Witness:               certifyWitness,
 		SpawnBudget: brain.SpawnBudget{
 			MaxAgentsPerPrincipal: envInt("CORRALAI_MAX_AGENTS_PER_PRINCIPAL", 0),
 			MaxSpawnDepth:         envInt("CORRALAI_MAX_SPAWN_DEPTH", 0),

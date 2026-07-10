@@ -45,6 +45,13 @@ type buildResult struct {
 	Statement map[string]any   `json:"statement"`
 	PublicKey string           `json:"public_key"`
 	Steps     []map[string]any `json:"steps"`
+	// Anchored + Rekor carry the transparency-witness evidence report_build
+	// produced: whether the DSSE envelope was publicly witnessed, and (when
+	// true) the marshaled transparency.Entry a verifier needs to confirm
+	// that offline. --out writes both so the exported record is completely
+	// self-verifying — see runCertifyVerify's Rekor step.
+	Anchored bool   `json:"anchored"`
+	Rekor    string `json:"rekor,omitempty"`
 }
 
 // cmdRunner is how runCertify executes shell work: cheap git-context lookups
@@ -204,7 +211,7 @@ func runCertify(args []string, run cmdRunner, post buildPoster, stdout, stderr i
 	// (independent, offline verification of an already-produced record) —
 	// dispatch it before anything else parses args as certify's own flags.
 	if len(args) > 0 && args[0] == "verify" {
-		return runCertifyVerify(args[1:], httpPubkeyFetcher, stdout, stderr)
+		return runCertifyVerify(args[1:], httpPubkeyFetcher, newRekorVerifyWitness, stdout, stderr)
 	}
 
 	flagArgs, checkArgv := splitCertifyArgs(args)
@@ -299,6 +306,8 @@ func runCertify(args []string, run cmdRunner, post buildPoster, stdout, stderr i
 			"steps":      result.Steps,
 			"head":       result.Head,
 			"public_key": result.PublicKey,
+			"rekor":      result.Rekor,
+			"anchored":   result.Anchored,
 		}
 		b, err := json.MarshalIndent(record, "", "  ")
 		if err != nil {

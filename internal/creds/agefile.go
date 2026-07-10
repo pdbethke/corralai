@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"filippo.io/age"
 )
@@ -18,12 +19,45 @@ import (
 // age-encrypted file. Only ciphertext touches disk.
 type ageFile struct {
 	path string
-	id   *age.X25519Identity
+
+	id      *age.X25519Identity
+	resolve func() (*age.X25519Identity, error)
+	idOnce  sync.Once
+	idErr   error
 }
 
-func newAgeFile(path string, id *age.X25519Identity) *ageFile { return &ageFile{path: path, id: id} }
+// newAgeFile builds a backend with an already-resolved identity — used by
+// tests and anywhere the identity is known up front.
+func newAgeFile(path string, id *age.X25519Identity) *ageFile {
+	return &ageFile{path: path, id: id}
+}
+
+// newAgeFileLazy builds a backend that only resolves its identity (via
+// resolve) the first time it is actually read from or written to. This keeps
+// resolveIdentity — and any plaintext identity.age it might mint — from ever
+// running for an operator whose secrets are satisfied by an earlier tier
+// (env, OS keyring) in the chain.
+func newAgeFileLazy(path string, resolve func() (*age.X25519Identity, error)) *ageFile {
+	return &ageFile{path: path, resolve: resolve}
+}
+
+// identity returns the concrete age identity, resolving it lazily (and only
+// once) via the configured resolver if one wasn't supplied up front.
+func (b *ageFile) identity() (*age.X25519Identity, error) {
+	if b.id != nil {
+		return b.id, nil
+	}
+	b.idOnce.Do(func() {
+		b.id, b.idErr = b.resolve()
+	})
+	return b.id, b.idErr
+}
 
 func (b *ageFile) load() (map[string]string, error) {
+	id, err := b.identity()
+	if err != nil {
+		return nil, err
+	}
 	f, err := os.Open(b.path) // #nosec G304 -- path is the operator's own creds dir
 	if os.IsNotExist(err) {
 		return map[string]string{}, nil
@@ -32,7 +66,7 @@ func (b *ageFile) load() (map[string]string, error) {
 		return nil, err
 	}
 	defer f.Close()
-	r, err := age.Decrypt(f, b.id)
+	r, err := age.Decrypt(f, id)
 	if err != nil {
 		return nil, err
 	}
@@ -50,6 +84,10 @@ func (b *ageFile) load() (map[string]string, error) {
 }
 
 func (b *ageFile) save(m map[string]string) error {
+	id, err := b.identity()
+	if err != nil {
+		return err
+	}
 	dir := filepath.Dir(b.path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
@@ -62,7 +100,7 @@ func (b *ageFile) save(m map[string]string) error {
 		return err
 	}
 	var buf bytes.Buffer
-	w, err := age.Encrypt(&buf, b.id.Recipient())
+	w, err := age.Encrypt(&buf, id.Recipient())
 	if err != nil {
 		return err
 	}
@@ -72,7 +110,16 @@ func (b *ageFile) save(m map[string]string) error {
 	if err := w.Close(); err != nil {
 		return err
 	}
-	if err := os.WriteFile(b.path, buf.Bytes(), 0o600); err != nil {
+	// Atomic replace: write ciphertext to a temp file in the same directory,
+	// then rename over the real path. A crash or disk-full before the rename
+	// leaves the existing store untouched instead of a torn, corrupted
+	// read-modify-write of the whole map.
+	tmp := b.path + ".tmp"
+	if err := os.WriteFile(tmp, buf.Bytes(), 0o600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, b.path); err != nil {
+		os.Remove(tmp)
 		return err
 	}
 	return os.Chmod(b.path, 0o600)

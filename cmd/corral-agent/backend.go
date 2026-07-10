@@ -110,8 +110,9 @@ func agentSecret(name string) string {
 }
 
 // scrubSecretEnv resolves-and-caches, then unsets, the sensitive env vars
-// corral-agent reads via agentSecret — OPENAI_API_KEY, ANTHROPIC_API_KEY,
-// CORRALAI_BRAIN_KEY — once, at startup. It must run AFTER anything that
+// corral-agent reads via agentSecret — the full creds.CanonicalNames set
+// (OPENAI_API_KEY, GEMINI_API_KEY, ANTHROPIC_API_KEY, OPENROUTER_API_KEY,
+// CORRALAI_BRAIN_KEY) — once, at startup. It must run AFTER anything that
 // needs the env-sourced value has had a chance to resolve it (newBackend()
 // runs first and captures provider keys into the Backend struct directly),
 // but callers of agentSecret("CORRALAI_BRAIN_KEY") happen later, on demand,
@@ -120,7 +121,7 @@ func agentSecret(name string) string {
 // bearer token out of the environment of any child process the agent spawns
 // via jailed exec.
 func scrubSecretEnv() {
-	for _, name := range []string{"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "CORRALAI_BRAIN_KEY"} {
+	for _, name := range creds.CanonicalNames {
 		v := agentSecret(name) // resolve (env still present) before scrubbing
 		scrubbedSecrets.Store(name, v)
 		os.Unsetenv(name)

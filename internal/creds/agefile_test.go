@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"filippo.io/age"
+	"github.com/zalando/go-keyring"
 )
 
 func TestAgeFileRoundTripEncryptedAtRest(t *testing.T) {
@@ -145,6 +146,57 @@ func TestResolveIdentityMalformedEnvVarFailsClosed(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(credsDir, "identity.age")); !os.IsNotExist(err) {
 		t.Fatal("resolveIdentity must NOT generate a new identity.age when CORRAL_AGE_IDENTITY is malformed")
+	}
+}
+
+func TestAgeFileLazyDoesNotResolveUntilFirstUse(t *testing.T) {
+	dir := t.TempDir()
+	id, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	b := newAgeFileLazy(filepath.Join(dir, "creds.age"), func() (*age.X25519Identity, error) {
+		calls++
+		return id, nil
+	})
+	if calls != 0 {
+		t.Fatalf("resolver called %d times at construction, want 0", calls)
+	}
+	if _, _, err := b.get("OPENAI_API_KEY"); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("resolver called %d times after first get, want 1", calls)
+	}
+	if _, _, err := b.get("OPENAI_API_KEY"); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("resolver called %d times after second get, want 1 (cached)", calls)
+	}
+}
+
+func TestOpenWithKeyringDoesNotMintIdentityFile(t *testing.T) {
+	keyring.MockInit() // in-memory; never touches the OS keychain
+	dir := t.TempDir()
+	t.Setenv("CORRAL_CREDS_DIR", dir)
+	t.Setenv("CREDENTIALS_DIRECTORY", "")
+	t.Setenv("CORRAL_AGE_IDENTITY", "")
+
+	st, err := Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Set("OPENAI_API_KEY", "sk-keyring-only"); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := st.Get("OPENAI_API_KEY")
+	if err != nil || !ok || got != "sk-keyring-only" {
+		t.Fatalf("Get = %q ok=%v err=%v", got, ok, err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "identity.age")); !os.IsNotExist(statErr) {
+		t.Fatal("identity.age was minted even though the keyring satisfied the Set/Get — age tier should never have been touched")
 	}
 }
 

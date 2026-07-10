@@ -14,14 +14,17 @@ import (
 	"path/filepath"
 	"sort"
 
+	"filippo.io/age"
 	"github.com/zalando/go-keyring"
 )
 
 var errReadOnly = errors.New("creds: backend is read-only")
 
-// canonicalNames are the provider/token secrets corral knows by convention, named
-// after their env var so an env override is transparent.
-var canonicalNames = []string{
+// CanonicalNames are the provider/token secrets corral knows by convention,
+// named after their env var so an env override is transparent. Exported so
+// callers outside the package (e.g. cmd/corral-agent's env-scrub) can act on
+// the same list without duplicating it.
+var CanonicalNames = []string{
 	"OPENAI_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY",
 	"OPENROUTER_API_KEY", "CORRALAI_BRAIN_KEY",
 }
@@ -106,8 +109,11 @@ func (s *Store) List() ([]string, error) {
 	return out, nil
 }
 
-// Redact returns a non-reversible fingerprint of a secret for logs/errors: the
-// first 4 characters plus the length. Never returns the value.
+// Redact returns a non-reversible fingerprint of a secret for logs/errors:
+// for secrets longer than 8 characters, the first 4 characters plus the
+// total length; for secrets of 8 characters or fewer, just the length
+// (masked, so a short secret doesn't reveal most or all of itself). Never
+// returns the value.
 func Redact(secret string) string {
 	if secret == "" {
 		return "(empty)"
@@ -159,11 +165,9 @@ func Open() (*Store, error) {
 	if keyringUsable() {
 		chain = append(chain, newKeyring("corral"))
 	}
-	id, err := resolveIdentity(dir)
-	if err != nil {
-		return nil, err
-	}
-	chain = append(chain, newAgeFile(filepath.Join(dir, "creds.age"), id))
+	chain = append(chain, newAgeFileLazy(filepath.Join(dir, "creds.age"), func() (*age.X25519Identity, error) {
+		return resolveIdentity(dir)
+	}))
 	return newStore(chain...), nil
 }
 
@@ -179,7 +183,7 @@ func (envBackend) remove(string) error      { return errReadOnly }
 func (envBackend) writable() bool           { return false }
 func (envBackend) names() ([]string, error) {
 	var out []string
-	for _, n := range canonicalNames {
+	for _, n := range CanonicalNames {
 		if v := os.Getenv(n); v != "" {
 			out = append(out, n)
 		}

@@ -45,14 +45,24 @@ func Open(dsn string) (*Store, error) {
 		signature VARCHAR,
 		statement JSON,
 		steps JSON,
+		rekor JSON,
+		anchored BOOLEAN,
 		created_ts DOUBLE)`); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
-	// Idempotent for any dev DB created before `steps` existed. DuckDB
-	// supports IF NOT EXISTS on ADD COLUMN; the fresh CREATE TABLE above
-	// already covers brand-new stores, so this is a no-op there.
+	// Idempotent for any dev DB created before `steps`/`rekor`/`anchored`
+	// existed. DuckDB supports IF NOT EXISTS on ADD COLUMN; the fresh CREATE
+	// TABLE above already covers brand-new stores, so these are a no-op there.
 	if _, err := db.Exec(`ALTER TABLE build_records ADD COLUMN IF NOT EXISTS steps JSON`); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if _, err := db.Exec(`ALTER TABLE build_records ADD COLUMN IF NOT EXISTS rekor JSON`); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if _, err := db.Exec(`ALTER TABLE build_records ADD COLUMN IF NOT EXISTS anchored BOOLEAN`); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -69,14 +79,24 @@ func (s *Store) Close() error { return s.db.Close() }
 // Save inserts a signed build record — including the full ledger `steps`
 // that produced `head`, so a stored record can be independently re-verified
 // with certify.VerifyLedger without trusting the brain's in-process state —
-// and returns its assigned id.
-func (s *Store) Save(repo, commit, branch, actor, head, sig, statementJSON, stepsJSON string) (int64, error) {
+// plus the transparency-witness evidence (rekorJSON, the marshaled
+// transparency.Entry; anchored, whether anchoring actually succeeded) and
+// returns its assigned id. rekorJSON=="" / anchored==false records a build
+// that was signed but never reached (or wasn't offered) a transparency log —
+// report_build degrades to this rather than failing the build.
+func (s *Store) Save(repo, commit, branch, actor, head, sig, statementJSON, stepsJSON, rekorJSON string, anchored bool) (int64, error) {
 	var id int64
+	var rekorArg any
+	if rekorJSON == "" {
+		rekorArg = nil
+	} else {
+		rekorArg = rekorJSON
+	}
 	err := s.db.QueryRow(
-		`INSERT INTO build_records (id, repo, commit_sha, branch, actor, head, signature, statement, steps, created_ts)
-		 VALUES (nextval('build_record_id'), ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO build_records (id, repo, commit_sha, branch, actor, head, signature, statement, steps, rekor, anchored, created_ts)
+		 VALUES (nextval('build_record_id'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 RETURNING id`,
-		repo, commit, branch, actor, head, sig, statementJSON, stepsJSON, now()).Scan(&id)
+		repo, commit, branch, actor, head, sig, statementJSON, stepsJSON, rekorArg, anchored, now()).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("buildstore: save: %w", err)
 	}
@@ -84,14 +104,18 @@ func (s *Store) Save(repo, commit, branch, actor, head, sig, statementJSON, step
 }
 
 // Get returns the stored SLSA statement (parsed to a map, with the ledger
-// steps folded in under "steps" and the signature under "signature") for
-// id, plus false if no record with that id exists.
+// steps folded in under "steps", the signature under "signature", the
+// transparency-witness evidence under "rekor" (a JSON-encoded string, "" if
+// never anchored), and whether it was anchored under "anchored") for id,
+// plus false if no record with that id exists.
 func (s *Store) Get(id int64) (map[string]any, bool, error) {
 	var statement any
 	var steps any
 	var sig string
+	var rekor any
+	var anchored sql.NullBool
 	err := s.db.QueryRow(
-		`SELECT statement, steps, signature FROM build_records WHERE id = ?`, id).Scan(&statement, &steps, &sig)
+		`SELECT statement, steps, signature, rekor, anchored FROM build_records WHERE id = ?`, id).Scan(&statement, &steps, &sig, &rekor, &anchored)
 	if err == sql.ErrNoRows {
 		return nil, false, nil
 	}
@@ -108,6 +132,23 @@ func (s *Store) Get(id int64) (map[string]any, bool, error) {
 	}
 	m["steps"] = stepsVal
 	m["signature"] = sig
+	m["rekor"] = ""
+	if rekor != nil {
+		// rekor is stored as a JSON column; the driver may hand back an
+		// already-decoded Go value, a JSON string, or JSON bytes (same
+		// variability jsonColumnToAny normalizes for `steps`). Re-encode to
+		// the flat JSON string the "rekor" map key promises callers.
+		rekorVal, err := jsonColumnToAny(rekor)
+		if err != nil {
+			return nil, false, fmt.Errorf("buildstore: get: decoding stored rekor: %w", err)
+		}
+		rekorBytes, err := json.Marshal(rekorVal)
+		if err != nil {
+			return nil, false, fmt.Errorf("buildstore: get: re-encoding stored rekor: %w", err)
+		}
+		m["rekor"] = string(rekorBytes)
+	}
+	m["anchored"] = anchored.Valid && anchored.Bool
 	return m, true, nil
 }
 

@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -47,6 +48,16 @@ type reportBuildOut struct {
 	Statement map[string]any   `json:"statement"`
 	PublicKey string           `json:"public_key"`
 	Steps     []map[string]any `json:"steps"`
+
+	// Anchored reports whether the DSSE envelope was successfully anchored to
+	// the transparency witness (opts.Witness). false covers both "no witness
+	// configured" and "the witness was configured but unreachable" — the
+	// build is still certified (signed + stored) either way; anchoring is an
+	// additional trustless guarantee, never a build-blocking gate.
+	Anchored bool `json:"anchored"`
+	// LogIndex is the anchored entry's position in the transparency log.
+	// Only meaningful when Anchored is true; zero otherwise.
+	LogIndex int64 `json:"log_index,omitempty"`
 }
 
 // registerBuildCert registers the report_build tool — corral certify's ingest
@@ -56,7 +67,7 @@ type reportBuildOut struct {
 func registerBuildCert(s *mcp.Server, opts Options) {
 	mcp.AddTool(s, &mcp.Tool{Name: "report_build",
 		Description: "Certify a build: turn a raw build record (repo, commit, command, exit code) into a signed, tamper-evident, stored accountability record. This is corral certify's ingest endpoint."},
-		func(_ context.Context, req *mcp.CallToolRequest, in reportBuildIn) (*mcp.CallToolResult, reportBuildOut, error) {
+		func(ctx context.Context, req *mcp.CallToolRequest, in reportBuildIn) (*mcp.CallToolResult, reportBuildOut, error) {
 			actor := actorOf(req)
 
 			steps := []certify.Step{
@@ -123,25 +134,61 @@ func registerBuildCert(s *mcp.Server, opts Options) {
 				return nil, reportBuildOut{}, fmt.Errorf("report_build: decoding steps for response: %w", err)
 			}
 
-			id, err := opts.BuildStore.Save(in.Repo, in.Commit, in.Branch, actor, head, string(envelope), string(canonical), string(stepsJSON))
+			// Anchor the signed envelope to the transparency witness — an
+			// ADDITIONAL trustless guarantee (a public, third-party-checkable
+			// record that this attestation existed at this time), never a
+			// build-blocking gate: an unreachable log must degrade the
+			// record to anchored=false, not fail the build. opts.Witness ==
+			// nil means anchoring is disabled entirely (same outcome).
+			var rekorJSON string
+			var anchored bool
+			var logIndex int64
+			if opts.Witness != nil {
+				entry, anchorErr := opts.Witness.Anchor(ctx, envelope)
+				if anchorErr != nil {
+					// Loud but keyless: never log the envelope's signing
+					// key material (there is none here — envelope/entry are
+					// both public artifacts — but keep the message scoped
+					// to repo/commit for consistency with the rest of the
+					// brain's warning style).
+					log.Printf("report_build: transparency witness unreachable for %s@%s, degrading to anchored=false: %v", in.Repo, in.Commit, anchorErr)
+				} else {
+					entryJSON, marshalErr := json.Marshal(entry)
+					if marshalErr != nil {
+						log.Printf("report_build: encoding transparency entry for %s@%s, degrading to anchored=false: %v", in.Repo, in.Commit, marshalErr)
+					} else {
+						rekorJSON = string(entryJSON)
+						anchored = true
+						logIndex = entry.LogIndex
+					}
+				}
+			}
+
+			id, err := opts.BuildStore.Save(in.Repo, in.Commit, in.Branch, actor, head, string(envelope), string(canonical), string(stepsJSON), rekorJSON, anchored)
 			if err != nil {
 				return nil, reportBuildOut{}, err
 			}
 
 			rec(opts.Telemetry, 0, "build_certified", actor, in.Repo+"@"+in.Commit, map[string]any{
-				"repo":   in.Repo,
-				"commit": in.Commit,
-				"head":   head,
+				"repo":     in.Repo,
+				"commit":   in.Commit,
+				"head":     head,
+				"anchored": anchored,
 			})
 
 			pub, _ := opts.CertifyKey.Public().(ed25519.PublicKey)
-			return nil, reportBuildOut{
+			out := reportBuildOut{
 				ID:        id,
 				Head:      head,
 				Signature: string(envelope),
 				Statement: stmt,
 				PublicKey: hex.EncodeToString(pub),
 				Steps:     stepsOut,
-			}, nil
+				Anchored:  anchored,
+			}
+			if anchored {
+				out.LogIndex = logIndex
+			}
+			return nil, out, nil
 		})
 }

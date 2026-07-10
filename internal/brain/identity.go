@@ -27,6 +27,7 @@ import (
 	"github.com/pdbethke/corralai/internal/rolemodel"
 	"github.com/pdbethke/corralai/internal/taskartifacts"
 	"github.com/pdbethke/corralai/internal/telemetry"
+	"github.com/pdbethke/corralai/internal/transparency"
 )
 
 // VerifyFunc independently runs a task's verify command against the brain's OWN
@@ -245,6 +246,16 @@ type Options struct {
 	// leaves the brain process and must never appear in a log or error
 	// string. Required alongside BuildStore for report_build to function.
 	CertifyKey ed25519.PrivateKey
+
+	// Witness, when set, is the transparency log report_build anchors each
+	// signed DSSE envelope to (Sigstore Rekor or a hermetic fake in tests) —
+	// the trustless tier's third-party-checkable evidence that an
+	// attestation existed at a given time. nil disables anchoring entirely;
+	// records are still signed and stored, just saved with anchored=false.
+	// A configured Witness that's unreachable at call time degrades the
+	// SAME way (anchored=false) rather than failing the build — anchoring
+	// is additive, never a build-blocking gate.
+	Witness transparency.Witness
 }
 
 // SpawnBudget is the brain-side request-side DoS bound for spawning.

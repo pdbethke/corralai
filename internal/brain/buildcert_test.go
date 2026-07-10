@@ -7,6 +7,7 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -14,6 +15,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/buildstore"
 	"github.com/pdbethke/corralai/internal/certify"
+	"github.com/pdbethke/corralai/internal/transparency"
 )
 
 // TestReportBuild drives report_build over the in-memory MCP transport (mirrors
@@ -295,5 +297,179 @@ func TestReportBuildDisabledWithoutValidKey(t *testing.T) {
 	// session) must never happen.
 	if err == nil && res != nil && !res.IsError {
 		t.Fatalf("report_build must be unregistered when CertifyKey is missing/invalid, got a successful result: %+v", res)
+	}
+}
+
+// failingWitness is a real (not mocked) transparency.Witness implementation
+// whose Anchor always errors — it stands in for a transparency log that's
+// down or unreachable, exercising report_build's graceful-degradation path.
+type failingWitness struct{}
+
+func (failingWitness) Anchor(context.Context, []byte) (transparency.Entry, error) {
+	return transparency.Entry{}, errors.New("transparency log unreachable")
+}
+
+func (failingWitness) VerifyInclusion(transparency.Entry, []byte) (bool, string) {
+	return false, "failingWitness never anchors"
+}
+
+// TestReportBuildAnchorsToWitness drives report_build with a hermetic
+// transparency.NewFakeWitness() configured and confirms the response AND the
+// stored buildstore record both carry the anchoring evidence — the
+// trustless tier's third-party-checkable guarantee.
+func TestReportBuildAnchorsToWitness(t *testing.T) {
+	dir := t.TempDir()
+	bs, err := buildstore.Open(filepath.Join(dir, "build.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bs.Close()
+
+	_, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	clientT, serverT := mcp.NewInMemoryTransports()
+	go func() {
+		_ = NewServer(nil, nil, Options{
+			BuildStore: bs,
+			CertifyKey: priv,
+			Witness:    transparency.NewFakeWitness(),
+		}).Run(ctx, serverT)
+	}()
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "t", Version: "0"}, nil)
+	sess, err := client.Connect(ctx, clientT, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+
+	res, err := sess.CallTool(ctx, &mcp.CallToolParams{
+		Name: "report_build",
+		Arguments: map[string]any{
+			"repo":      "pdbethke/corralai",
+			"commit":    "abc123",
+			"command":   "go test ./...",
+			"exit_code": 0,
+		},
+	})
+	if err != nil {
+		t.Fatalf("report_build: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("report_build returned a tool error: %q", toolErrText(res))
+	}
+
+	var out reportBuildOut
+	b, err := json.Marshal(res.StructuredContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatalf("decode reportBuildOut: %v", err)
+	}
+	if !out.Anchored {
+		t.Fatal("expected anchored=true in the response when a witness is configured and succeeds")
+	}
+	// LogIndex is a valid field (0 is the fake witness's first index), so
+	// just confirm it round-tripped rather than asserting non-zero.
+
+	stored, found, err := bs.Get(out.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found {
+		t.Fatalf("record %d not found in the build store", out.ID)
+	}
+	if stored["anchored"] != true {
+		t.Fatalf("stored anchored = %v, want true", stored["anchored"])
+	}
+	rekorStr, ok := stored["rekor"].(string)
+	if !ok || rekorStr == "" {
+		t.Fatalf("expected a non-empty stored rekor, got %v (%T)", stored["rekor"], stored["rekor"])
+	}
+}
+
+// TestReportBuildDegradesOnWitnessOutage confirms the load-bearing
+// graceful-degradation contract: when the transparency witness is
+// configured but unreachable, report_build must STILL succeed (never fail
+// the build because the log is down), returning anchored=false and storing
+// the record the same way.
+func TestReportBuildDegradesOnWitnessOutage(t *testing.T) {
+	dir := t.TempDir()
+	bs, err := buildstore.Open(filepath.Join(dir, "build.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bs.Close()
+
+	_, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	clientT, serverT := mcp.NewInMemoryTransports()
+	go func() {
+		_ = NewServer(nil, nil, Options{
+			BuildStore: bs,
+			CertifyKey: priv,
+			Witness:    failingWitness{},
+		}).Run(ctx, serverT)
+	}()
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "t", Version: "0"}, nil)
+	sess, err := client.Connect(ctx, clientT, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+
+	res, err := sess.CallTool(ctx, &mcp.CallToolParams{
+		Name: "report_build",
+		Arguments: map[string]any{
+			"repo":      "pdbethke/corralai",
+			"commit":    "abc123",
+			"command":   "go test ./...",
+			"exit_code": 0,
+		},
+	})
+	if err != nil {
+		t.Fatalf("report_build must NOT fail when the transparency witness is unreachable: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("report_build returned a tool error when the witness was down (must degrade gracefully instead): %q", toolErrText(res))
+	}
+
+	var out reportBuildOut
+	b, err := json.Marshal(res.StructuredContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatalf("decode reportBuildOut: %v", err)
+	}
+	if out.Anchored {
+		t.Fatal("expected anchored=false when the witness errors")
+	}
+	if out.ID == 0 {
+		t.Fatal("expected the build record to still be saved despite the witness outage")
+	}
+
+	stored, found, err := bs.Get(out.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found {
+		t.Fatalf("record %d not found in the build store", out.ID)
+	}
+	if stored["anchored"] != false {
+		t.Fatalf("stored anchored = %v, want false", stored["anchored"])
+	}
+	if stored["rekor"] != "" {
+		t.Fatalf("stored rekor = %q, want empty on witness outage", stored["rekor"])
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"encoding/hex"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -21,7 +22,8 @@ func TestSaveGetRoundTrip(t *testing.T) {
 
 	stmt := `{"predicateType":"https://slsa.dev/provenance/v1","subject":[{"name":"corral"}]}`
 	steps := `[{"seq":0,"kind":"context","hash":"abc"}]`
-	id, err := s.Save("pdbethke/corralai", "abc123", "feat/x", "peter", "deadbeef", "sig-bytes-hex", stmt, steps)
+	rekor := `{"log_index":42,"log_id":"rekor-log"}`
+	id, err := s.Save("pdbethke/corralai", "abc123", "feat/x", "peter", "deadbeef", "sig-bytes-hex", stmt, steps, rekor, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,6 +40,20 @@ func TestSaveGetRoundTrip(t *testing.T) {
 	}
 	if got["predicateType"] != "https://slsa.dev/provenance/v1" {
 		t.Fatalf("statement not round-tripped correctly: %v", got)
+	}
+	if got["anchored"] != true {
+		t.Fatalf("expected anchored=true round-tripped, got %v (%T)", got["anchored"], got["anchored"])
+	}
+	rekorStr, ok := got["rekor"].(string)
+	if !ok || rekorStr == "" {
+		t.Fatalf("expected a non-empty rekor string, got %v (%T)", got["rekor"], got["rekor"])
+	}
+	var rekorMap map[string]any
+	if err := json.Unmarshal([]byte(rekorStr), &rekorMap); err != nil {
+		t.Fatalf("stored rekor is not valid JSON: %v", err)
+	}
+	if rekorMap["log_id"] != "rekor-log" {
+		t.Fatalf("stored rekor content mismatch: %v", rekorMap)
 	}
 	rawSteps, ok := got["steps"]
 	if !ok {
@@ -70,11 +86,11 @@ func TestSaveAssignsIncreasingIDs(t *testing.T) {
 	}
 	defer s.Close()
 
-	id1, err := s.Save("r", "c1", "b", "a", "h1", "sig1", `{"n":1}`, `[]`)
+	id1, err := s.Save("r", "c1", "b", "a", "h1", "sig1", `{"n":1}`, `[]`, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	id2, err := s.Save("r", "c2", "b", "a", "h2", "sig2", `{"n":2}`, `[]`)
+	id2, err := s.Save("r", "c2", "b", "a", "h2", "sig2", `{"n":2}`, `[]`, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}

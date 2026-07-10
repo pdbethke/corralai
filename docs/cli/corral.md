@@ -14,6 +14,12 @@ Usage:
   corral                          serve /mcp/ + /healthz on $CORRALAI_ADDR
   corral secret set|get|list|rm   manage provider keys + tokens in the secure keystore
                                   (env → OS keyring → age-encrypted file; set reads stdin, never argv)
+  corral certify --brain <url> [flags] -- <command>...
+                                  run <command>, sign + record the result as a tamper-evident
+                                  build attestation on the brain (report_build); exits with
+                                  <command>'s own exit code
+                                  flags: --produced-by a,b   --out <file>
+                                         --repo/--commit/--branch (default: read via git)
   corral --version                print the build version and exit
   corral -h                       print this help and exit
 
@@ -67,4 +73,7 @@ CORRALAI_BRAIN_KEY_FILE    path to persist the brain key seed (default ~/.claude
 CORRALAI_BRAIN_PEERS       optional allowlist "brain_id:pubB64" entries (comma or newline separated); empty => TOFU mode
 CORRALAI_LEARN_DB          learning-loop proposals SQLite path (default ~/.claude/corralai_learn.sqlite3)
 CORRALAI_LEARN_SWEEP_SECONDS  how often (seconds) the learn sweep clusters findings/lessons into proposals (default 60)
+CORRALAI_BUILD_DB          `corral certify` signed build-record ledger DuckDB path (default ~/.claude/corralai_build.duckdb)
+CORRALAI_CERTIFY_KEY       hex-encoded Ed25519 seed (32 bytes) `corral certify` build attestations are signed with; takes priority over key file
+CORRALAI_CERTIFY_KEY_FILE  path to persist the certify signing key seed (default ~/.claude/corralai_certify_key); created 0600 on first run
 ```

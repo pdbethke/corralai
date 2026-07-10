@@ -49,6 +49,9 @@
 //	CORRALAI_BRAIN_PEERS       optional allowlist "brain_id:pubB64" entries (comma or newline separated); empty => TOFU mode
 //	CORRALAI_LEARN_DB          learning-loop proposals SQLite path (default ~/.claude/corralai_learn.sqlite3)
 //	CORRALAI_LEARN_SWEEP_SECONDS  how often (seconds) the learn sweep clusters findings/lessons into proposals (default 60)
+//	CORRALAI_BUILD_DB          `corral certify` signed build-record ledger DuckDB path (default ~/.claude/corralai_build.duckdb)
+//	CORRALAI_CERTIFY_KEY       hex-encoded Ed25519 seed (32 bytes) `corral certify` build attestations are signed with; takes priority over key file
+//	CORRALAI_CERTIFY_KEY_FILE  path to persist the certify signing key seed (default ~/.claude/corralai_certify_key); created 0600 on first run
 package main
 
 import (
@@ -73,6 +76,7 @@ import (
 	"github.com/pdbethke/corralai/internal/attest"
 	"github.com/pdbethke/corralai/internal/auth"
 	"github.com/pdbethke/corralai/internal/brain"
+	"github.com/pdbethke/corralai/internal/buildstore"
 	"github.com/pdbethke/corralai/internal/coord"
 	"github.com/pdbethke/corralai/internal/egress"
 	"github.com/pdbethke/corralai/internal/embed"
@@ -138,6 +142,12 @@ Usage:
   corral                          serve /mcp/ + /healthz on $CORRALAI_ADDR
   corral secret set|get|list|rm   manage provider keys + tokens in the secure keystore
                                   (env → OS keyring → age-encrypted file; set reads stdin, never argv)
+  corral certify --brain <url> [flags] -- <command>...
+                                  run <command>, sign + record the result as a tamper-evident
+                                  build attestation on the brain (report_build); exits with
+                                  <command>'s own exit code
+                                  flags: --produced-by a,b   --out <file>
+                                         --repo/--commit/--branch (default: read via git)
   corral --version                print the build version and exit
   corral -h                       print this help and exit
 
@@ -409,6 +419,9 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "certify" {
+		os.Exit(runCertify(os.Args[2:], realRunner{}, mcpPoster{}, os.Stdout, os.Stderr))
+	}
 	home, _ := os.UserHomeDir()
 	addr := env("CORRALAI_ADDR", "127.0.0.1:9019")
 	dbPath := env("CORRALAI_DB", filepath.Join(home, ".claude", "corralai_coord.sqlite3"))
@@ -546,6 +559,21 @@ func main() {
 		log.Fatalf("open task artifacts store: %v", err)
 	}
 	defer taskArtStore.Close()
+
+	// corral certify's signed build-record ledger + its Ed25519 signing key.
+	// Both must be valid together (server.go's registerBuildCert guard) or
+	// report_build stays disabled rather than sign with a garbage key.
+	buildDB := env("CORRALAI_BUILD_DB", filepath.Join(home, ".claude", "corralai_build.duckdb"))
+	buildStore, err := buildstore.Open(buildDB)
+	if err != nil {
+		log.Fatalf("open build-record store: %v", err)
+	}
+	defer buildStore.Close()
+	certifyKeyFile := env("CORRALAI_CERTIFY_KEY_FILE", filepath.Join(home, ".claude", "corralai_certify_key"))
+	certifyKey, err := buildstore.LoadOrCreateSigningKey(certifyKeyFile)
+	if err != nil {
+		log.Fatalf("load certify signing key: %v", err)
+	}
 
 	browserMgr := brain.NewBrowserManager(addr)
 	defer browserMgr.Close()
@@ -958,6 +986,8 @@ func main() {
 		FleetBrainID:          fleetBrainID,
 		Learn:                 learnStore,
 		LearnDrafter:          learnDrafter,
+		BuildStore:            buildStore,
+		CertifyKey:            certifyKey,
 		SpawnBudget: brain.SpawnBudget{
 			MaxAgentsPerPrincipal: envInt("CORRALAI_MAX_AGENTS_PER_PRINCIPAL", 0),
 			MaxSpawnDepth:         envInt("CORRALAI_MAX_SPAWN_DEPTH", 0),

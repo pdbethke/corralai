@@ -200,6 +200,13 @@ func splitCertifyArgs(args []string) (flags, checkArgv []string) {
 // proof"), and a failure to reach the brain never masks or flips a real
 // build result.
 func runCertify(args []string, run cmdRunner, post buildPoster, stdout, stderr io.Writer) int {
+	// `corral certify verify <record-file> ...` is a distinct sub-subcommand
+	// (independent, offline verification of an already-produced record) —
+	// dispatch it before anything else parses args as certify's own flags.
+	if len(args) > 0 && args[0] == "verify" {
+		return runCertifyVerify(args[1:], httpPubkeyFetcher, stdout, stderr)
+	}
+
 	flagArgs, checkArgv := splitCertifyArgs(args)
 
 	fs := flag.NewFlagSet("certify", flag.ContinueOnError)

@@ -170,6 +170,13 @@ Usage:
                                   <command>'s own exit code
                                   flags: --produced-by a,b   --out <file>
                                          --repo/--commit/--branch (default: read via git)
+  corral certify verify <record-file> [--pubkey <hex>|--brain <url>]
+                                  independently verify a --out (or report_build) record: the
+                                  Ed25519 signature, the ledger's hash chain, and that the
+                                  statement is bound to that exact ledger head — no brain
+                                  round trip needed if --pubkey or the record's own
+                                  public_key is used; prints "verified" and exits 0, or names
+                                  the failing check on stderr and exits non-zero
   corral --version                print the build version and exit
   corral -h                       print this help and exit
 

@@ -96,7 +96,7 @@ func (b *ageFile) save(m map[string]string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	if err := os.Chmod(dir, 0o700); err != nil {
+	if err := os.Chmod(dir, 0o700); err != nil { // #nosec G302 -- 0700 is correct for a private DIRECTORY (needs the traverse bit); the store file below is 0600
 		return err
 	}
 	raw, err := json.Marshal(m)
@@ -222,7 +222,7 @@ func resolveIdentity(credsDir string) (*age.X25519Identity, error) {
 		return age.ParseX25519Identity(v) // parse err returned, not swallowed
 	}
 	if d := os.Getenv("CREDENTIALS_DIRECTORY"); d != "" {
-		raw, err := os.ReadFile(filepath.Join(d, "age-identity")) // #nosec G304 -- systemd cred dir
+		raw, err := os.ReadFile(filepath.Join(d, "age-identity")) // #nosec G703,G304 -- reads a fixed-name systemd credential from $CREDENTIALS_DIRECTORY (operator-trusted env), not attacker input
 		switch {
 		case err == nil:
 			return age.ParseX25519Identity(strings.TrimSpace(string(raw))) // parse err returned, not swallowed

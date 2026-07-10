@@ -4,6 +4,7 @@ package brain
 
 import (
 	"context"
+	"crypto/ed25519"
 	"strings"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/artifacts"
 	"github.com/pdbethke/corralai/internal/attest"
+	"github.com/pdbethke/corralai/internal/buildstore"
 	"github.com/pdbethke/corralai/internal/coord"
 	"github.com/pdbethke/corralai/internal/gateway"
 	"github.com/pdbethke/corralai/internal/learn"
@@ -233,6 +235,16 @@ type Options struct {
 	// proposals open pending with no draft; a human still approves/rejects them
 	// from the raw evidence.
 	LearnDrafter learn.Asker
+
+	// BuildStore, when set, enables the report_build tool — corral certify's
+	// ingest endpoint (a raw build record in, a signed tamper-evident
+	// accountability record out). nil => the tool is not registered.
+	BuildStore *buildstore.Store
+
+	// CertifyKey signs the ledger head report_build stores. This key never
+	// leaves the brain process and must never appear in a log or error
+	// string. Required alongside BuildStore for report_build to function.
+	CertifyKey ed25519.PrivateKey
 }
 
 // SpawnBudget is the brain-side request-side DoS bound for spawning.

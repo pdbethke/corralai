@@ -273,5 +273,8 @@ func NewServer(store *coord.Store, mem *memory.Store, opts Options) *mcp.Server 
 	registerBrowser(s, opts.Queue, opts.TaskArtifacts, opts.Browser)
 	registerActivity(s, opts.ActivityRing, opts)
 	registerHost(s, opts.HostBook, opts)
+	if opts.BuildStore != nil {
+		registerBuildCert(s, opts)
+	}
 	return s
 }

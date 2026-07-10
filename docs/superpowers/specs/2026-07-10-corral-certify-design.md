@@ -79,12 +79,33 @@ record as a local artifact), `--repo`/`--commit` (auto-detected from git; overri
 - **Recall** — `corral certify --get <id>` / a brain endpoint to fetch a stored record; the
   existing replay surfaces it (a certified build is a short "mission" of one gate).
 
-### Signing (honest MVP)
+### Signing (independently verifiable v1)
 
-- **v1: the brain signs** the ledger head with a brain-held key (Ed25519). Central trust,
-  fits the server model. The CLI never holds a signing key.
-- **Hardening (out of scope):** DSSE envelope + Sigstore/cosign, and public **Rekor
-  anchoring** so not even the operator can rewrite history.
+The persisted artifact MUST be verifiable by an independent party, not just at creation
+time — otherwise "tamper-evident / independently-verified" is an overclaim (caught in the
+whole-branch review). So v1 signs the **full canonical statement**, persists the ledger
+steps, and **publishes the verifying key**:
+
+- **The brain signs the full canonical statement** (Ed25519 over deterministic JSON of the
+  in-toto/SLSA statement — a DSSE-style detached signature), NOT just the head. This binds
+  the *whole* predicate: exit code, command, duration, and `produced_by`. Signing only the
+  head left the predicate unsigned and editable.
+- **The ledger steps are persisted** alongside `{statement, signature}`, so an independent
+  party can run `VerifyLedger(steps, head)` against stored data and confirm the head honestly
+  chains the build events — the tamper-detection primitive is runnable post-hoc, not only
+  in-process.
+- **The certify public key is published** (a `public_key` field on the `report_build`
+  response + an unauthenticated `GET /api/certify/pubkey` HTTP route) so a third party can
+  obtain the key to verify without brain credentials.
+- **`VerifyStatement(canonical, sigHex, pub)` ships** as the verification primitive: verify
+  the signature over the stored statement bytes, recompute the head from the stored steps,
+  and confirm `statement.subject[0].digest.sha256 == head`. That is independent verification.
+- The signing key lives only in the brain; the CLI never holds it. This is **central-trust**:
+  a holder of the published key can verify the brain's own records honestly bind what ran.
+- **Still deferred to the next spec (trustless tier):** external **witness anchoring** — ship
+  the chain head to an append-only timestamped log (the shared MotherDuck warehouse / Sigstore
+  **Rekor**) so tampering is detectable even if you *don't* trust the brain. Central-trust v1
+  is honestly labeled as such; we do not claim trustless verification until witnessing ships.
 
 ## What it reuses vs. builds
 

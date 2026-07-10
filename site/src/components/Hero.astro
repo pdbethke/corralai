@@ -35,27 +35,26 @@ const minutes = Math.round((meta.duration_seconds || 0) / 60);
 ---
 <section id="hero">
   <div class="hero-copy">
-    <h1>A headless brain that corrals a herd of AI agents — mixing any models, local and frontier — into one mission, over a shared pool of knowledge that grows as they learn.</h1>
+    <h1>The accountability layer for AI agents — a headless brain corrals a herd of any models, contains them, and certifies what they ship by running the actual check, with a human at the gate.</h1>
     <p class="pitch">
-      Corral is coordination infrastructure, not a demo reel. Give it one
-      directive and it decomposes the work into a mission, hands tasks to a
-      herd of agents that can each run a <em>different</em> model — cheap local
-      agents (Ollama, 7B and up) for the grunt work, frontier agents for the
-      hard reasoning, side by side in the same mission, with no vendor
-      lock-in — inside real fences: every command runs jailed, and the only
-      way code leaves is a reviewed pull request. The
-      herd verifies its own work against a deterministic gate, re-plans when
-      it hits problems, and — the part that compounds — every agent draws on
-      one shared pool of memory and skills and writes back what it learns, so
-      the whole herd gets sharper with every mission. Every admin action sits
-      behind a human gate.
+      Corral isn't a better builder — that race belongs to the model labs. It's
+      what makes what agents ship <em>trustworthy to run</em>: <strong>attributable,
+      verifiable, contained, answerable.</strong> Give it one directive and a herd
+      of agents — each on a <em>different</em> model, no vendor lock-in — builds it
+      inside real fences (every command jailed, the only exit a reviewed pull
+      request), and the brain <strong>certifies the result by running the check
+      itself</strong>, not by trusting the agent's word — a judge may not certify
+      herself. It compounds: the herd learns from its gate-verified mistakes and
+      routes each task to the model its own track record proves is best. And every
+      run exports as a signed <a href="https://slsa.dev/">provenance attestation</a>
+      — the audit trail an auditor already expects.
     </p>
     <p class="proof-row">
-      <span>Any model — local or frontier — mixed in one mission</span>
+      <span>Certify by execution — a real recorded pass, not a self-report</span>
       <span aria-hidden="true">·</span>
-      <span>Bring your own billing: metered API keys <em>or</em> a subscription CLI (Codex, Claude Max)</span>
+      <span>Every action attributed on a trail the agent can't erase</span>
       <span aria-hidden="true">·</span>
-      <span>Agents propose, you approve — reviewed-PR merges, human-gated admin</span>
+      <span>Any model, no lock-in — agents propose, you approve, human-gated merges</span>
     </p>
     <p class="caption">
       {/* single line: Astro collapses a text→newline→expression boundary to
@@ -314,7 +313,7 @@ const minutes = Math.round((meta.duration_seconds || 0) / 60);
   // canvas/panels in the picked palette (matrix → green phosphor, etc.) AND
   // clobbers document.title with the product's skin subtitle — restore the
   // site's own title after each pick so the tab stays branded.
-  const HERO_TITLE = 'Corralai — a headless brain for a herd of AI agents';
+  const HERO_TITLE = 'Corralai — AI accountability, by execution';
   if (typeof window.setSkin === 'function') {
     const _setSkin = window.setSkin;
     window.setSkin = function (v) { _setSkin(v); document.title = HERO_TITLE; };
@@ -329,5 +328,5 @@ const minutes = Math.round((meta.duration_seconds || 0) / 60);
   // 'CorralAI — the corral' — the product UI's own title, not the site's.
   // Restore the site's title here, verbatim against the <title> in
   // index.astro so this and the a11y "has a <title>" check never drift.
-  document.title = 'Corralai — a headless brain for a herd of AI agents';
+  document.title = 'Corralai — AI accountability, by execution';
 </script>

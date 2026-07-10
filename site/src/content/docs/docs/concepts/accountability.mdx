@@ -1,0 +1,84 @@
+---
+title: AI accountability
+description: What "accountable" means for AI agents — attributable, verifiable, contained, answerable — and how corralai makes each one a built-in control rather than a policy bolted on top.
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+{/* Source: README.md lede; concepts/trust-and-security, queue-and-verify, history-and-replay; the in-toto/SLSA attestation spike */}
+
+Everyone is racing to make AI agents *smarter*. Corralai makes them **trustworthy
+to run**. It isn't a better builder — that race belongs to the model labs — it's the
+**accountability layer for AI agents**: the thing that makes what agents ship
+something you can *check, contain, attribute, and answer for*.
+
+That matters because the bottleneck is moving. As models get good enough to run
+autonomously, the question stops being *"can it?"* and becomes *"can you trust it to,
+unattended, at fleet scale — and prove it afterward?"* That's an operator's problem,
+not a model's, and it's exactly the problem operations built on accountability —
+banking, healthcare, government, anything audited — have to solve before they can put
+an agent to work at all.
+
+## Accountable = attributable + verifiable + contained + answerable
+
+"Accountable" has a definition, and in corralai each property is a **built-in
+control**, not a policy layer bolted on top:
+
+- **Verifiable — certify by execution, not opinion.** The gate **runs the actual
+  check** (`go test`, the build) itself and reads the exit code; a mission doesn't
+  converge until a *real, recorded run* passes. The correctness call is a
+  deterministic bit, not a judgment — *a judge may not certify herself*. See
+  [The task queue + verify gate](/docs/concepts/queue-and-verify/).
+- **Contained — an agent can be hijacked, so bound the blast radius.** Every command
+  runs in a `bwrap` jail (no network by default, workspace-confined, secret-free
+  env); the git/forge token lives only in the brain; the output is scanned for
+  committed secrets before it ships, on every forge. Full-auto, bounded. See
+  [Trust & security](/docs/concepts/trust-and-security/).
+- **Attributable — every action on a trail the agent can't erase.** All traffic
+  funnels through the brain, the single trusted egress, so every consequential action
+  is recorded and tied to a verified principal. The subject of the record doesn't
+  control the ledger.
+- **Answerable — a human gate on what can't be reduced to pass/fail.** Taste,
+  architecture, an open critical finding — anything the gate can't certify goes to a
+  **human** to accept or send back. Autonomy where it's provable, a person where it's
+  a judgment.
+
+## Accountability that compounds
+
+It doesn't stay still. The herd gets **smarter** — it learns from its gate-verified
+mistakes into a human-approved memory that shapes future missions (see
+[Memory + the learning loop](/docs/concepts/memory-and-learning-loop/)) — and **more
+efficient** — it routes each task to the model its own track record proves is best.
+Two loops, one ground truth: the verify gate. The gate is why both are trustworthy —
+only vetted findings compound, and the efficiency metrics rest on *real recorded
+passes*, not self-reports.
+
+## The evidence: a signed provenance attestation
+
+Every run can be exported as a signed [in-toto](https://in-toto.io/) statement
+carrying an [SLSA provenance](https://slsa.dev/provenance/v1) predicate — the same
+standard your software supply-chain tooling already speaks. It records what was built,
+**by which model** (models are named as materials), and — the part no self-reporting
+agent tool can produce — the **actual commands that ran and that they passed**, plus
+the human sign-off and the full finding trail. Agent-produced changes carry the same
+verifiable provenance an auditor already expects for human-produced ones — arguably
+*better*, because the check was real.
+
+## The audit view: scrub how the herd decided
+
+The attestation is the machine-verifiable half; the **replay cockpit** is the
+human-legible half. Every run is recorded and replayable: scrub to any moment, watch
+the herd's *real reasoning* alongside its commands, and click any task to see what
+triggered it, what it unblocked, and the gate run underneath. A supervisor, a
+reviewer, or an auditor doesn't read a log — they *watch how the decision was made*.
+Legibility is a compliance feature. See
+[Mission history + replay](/docs/concepts/history-and-replay/).
+
+## Who this is for
+
+Teams that can't just turn agents loose — regulated engineering (change control under
+SOX / GxP / an ATO), security-conscious orgs, or anyone who has to *answer for* what
+an automated system shipped. The move-fast agent tools are structurally unable to lead
+with this: their whole pitch is remove-the-friction, and accountability *is* friction,
+deliberately. Corralai builds the friction as a first-class feature — contained,
+certified, attributed, human-gated — because that's what makes autonomy safe enough to
+actually use.

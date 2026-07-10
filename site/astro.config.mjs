@@ -42,6 +42,7 @@ export default defineConfig({
         {
           label: 'Concepts',
           items: [
+            { label: 'AI accountability', slug: 'docs/concepts/accountability' },
             { label: 'Mission lifecycle', slug: 'docs/concepts/mission-lifecycle' },
             { label: 'The task queue + verify gate', slug: 'docs/concepts/queue-and-verify' },
             { label: 'Claims & leases', slug: 'docs/concepts/claims-and-leases' },

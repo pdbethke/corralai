@@ -4,53 +4,59 @@
 [![License: Elastic 2.0](https://img.shields.io/badge/license-Elastic--2.0-e8a838)](LICENSE)
 [![docs](https://img.shields.io/badge/docs-corralai.dev-2f6f4e)](https://corralai.dev/docs/getting-started/)
 
-> **One directive → a herd of AI agents that plan, build, verify, and re-plan** —
-> across any model (local 7B to frontier), behind real fences, human-gated, with
-> every run recorded and replayable.
+> **AI accountability, by execution.** One directive → a herd of AI agents that
+> plan, build, and ship real work — across any model, behind real fences,
+> **certified by running the actual check**, with a human at the gate. Every run
+> recorded, replayable, and exportable as a signed provenance attestation.
 
-**Coordinated multi-agent, multi-model.** Give a headless brain one directive —
-*"build me a World Cup scores dashboard"* — and it turns it into a mission that a
-team of AI agents plans, builds, verifies, **re-plans when they hit problems**, and
-**iterates with the client** until it's accepted. The agents can be *different
-models* — a Claude builder, a Gemini reviewer, a local model for the cheap passes —
-all coordinating through one brain, behind real fences. All watchable live.
+Everyone is racing to make AI agents *smarter*. Corralai makes them **trustworthy
+to run**. Give a headless brain one directive — *"build me a World Cup scores
+dashboard"* — and a herd of agents, across any model, builds it behind real fences,
+and the brain **certifies the result by running the check itself**, not by trusting
+the agent's word. It's the **accountability layer for AI agents**: not a better
+builder — that race belongs to the model labs — but the layer that makes what agents
+ship something you can *check, contain, attribute, and answer for*.
 
-Four things make it different from the pile of agent-swarm demos:
+Because that's what "accountable" means, and each property is a built-in control,
+not a policy bolted on top:
 
-1. **It's multi-model, not just multi-agent.** Most swarm frameworks run one LLM in
-   N roles — parallelism with *correlated* blind spots, because the "reviewer"
-   shares the "builder's" failure modes when it's the same model. Corralai lets each
-   role run a *different* model and coordinates them through one brain, so review
-   becomes genuinely **adversarial and decorrelated — cross-model review by
-   construction**. No lock-in: bring Claude, Gemini, GPT, anything
-   OpenAI-compatible, or a local model.
-2. **It's adaptive, over a shared memory.** No central orchestrator drives the
-   agents step-by-step. The brain holds the shared state — a task queue, path
-   claims, findings, and a **persistent, searchable memory** — and the agents pull
-   work, coordinate through it, and *reshape the plan as they learn*. What one agent
-   learns it writes back to the shared memory (trust-tiered, so unvetted notes can't
-   pose as authoritative), so knowledge **compounds across agents, models, and
-   missions** instead of dying with each throwaway context. A high-severity finding
-   rewrites the plan; a client rejection opens the next sprint.
-3. **It's built to be contained.** Autonomous agents that write and run code are a
-   security problem. Corralai starts from *"an agent can be hijacked"* and answers
-   it structurally: every agent runs behind **fences** (jails, a credential
-   boundary, sandboxed queries, trust-tiered knowledge), and because all traffic
-   funnels through the brain, every agent action is **recorded and attributable**.
-   Prevention *and* forensics — see **[SECURITY.md](SECURITY.md)**, which points at
-   the adversarial tests you can run yourself to check the claims.
-4. **It certifies by execution, not opinion.** Most swarms "verify" by asking a
-   model *"does this look done?"* — or just trust the builder's own report.
-   Corralai's gate **runs the actual check** (`go test`, the build) itself and
-   reads the exit code; a mission doesn't converge until a *real, recorded run*
-   passes. The correctness call is a deterministic bit, not a judgment — **a judge
-   may not certify herself**. Calls that genuinely can't be reduced to pass/fail
-   (taste, architecture) go to a **human gate**. That's the line between "AI that
-   *says* it's done" and "AI you can *check*."
+1. **Verifiable — certify by execution, not opinion.** Most swarms "verify" by
+   asking a model *"does this look done?"* — or just trust the builder's own report.
+   Corralai's gate **runs the actual check** (`go test`, the build) itself and reads
+   the exit code; a mission doesn't converge until a *real, recorded run* passes. The
+   correctness call is a deterministic bit, not a judgment — **a judge may not
+   certify herself**. That's the line between "AI that *says* it's done" and "AI you
+   can *check*."
+2. **Contained — an agent can be hijacked; bound the blast radius.** Autonomous
+   agents that write and run code are a security problem. Corralai answers it
+   structurally: every agent runs behind **fences** (a jail, a credential boundary,
+   sandboxed queries, trust-tiered knowledge), and the output is scanned for secrets
+   before it ships. Full-auto, bounded — see **[SECURITY.md](SECURITY.md)** and the
+   adversarial tests you can run yourself to check the claims.
+3. **Attributable — every action on a trail the agent can't erase.** All traffic
+   funnels through the brain, the single trusted egress, so every consequential
+   action is **recorded and tied to a verified principal**. The subject of the record
+   doesn't control the ledger — the forensic trail an auditor (or you) needs.
+4. **Answerable — a human gate on what can't be reduced to pass/fail.** Taste,
+   architecture, an open critical finding — anything the gate can't certify goes to a
+   **human** to accept or send back. Autonomy where it's provable, a person where
+   it's a judgment.
+
+And it **compounds**. The herd gets *smarter* — it learns from its gate-verified
+mistakes into a human-approved memory that shapes future missions — and *more
+efficient* — it routes each task to the model its own track record proves is best.
+Two loops, one ground truth: the verify gate. It's also **multi-model by design**, so
+review is decorrelated (a Gemini reviewer doesn't share a Claude builder's blind
+spots) and there's no vendor lock-in. And every run **exports as an
+[in-toto/SLSA](https://slsa.dev/) provenance attestation** — a signed, standards-shaped
+record of what was built, by which model, and that it *actually passed* — so
+agent-produced changes carry the same verifiable provenance your auditor already
+expects.
 
 The name is the metaphor: the **corral** is the enclosure agents work in, the
 **fences** are the security boundaries, and the brain corrals a herd of (possibly
-different) models — it coordinates and contains, it doesn't do the work itself.
+different) models — it coordinates, contains, and *certifies*; it doesn't do the work
+itself.
 
 > **Where it's at:** v0.1, solo-maintained, and tested honestly — every demo claim
 > in this README was run before it was written, and the

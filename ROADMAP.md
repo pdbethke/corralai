@@ -6,12 +6,15 @@
 > [`docs/superpowers/notes/2026-07-05-corral-as-an-operator-system.md`](docs/superpowers/notes/2026-07-05-corral-as-an-operator-system.md).
 > No dates — priorities shift with what real use surfaces.
 
-Corral's arc is from *impressive demo* to *usable system* — the environment where
-you **run a team of AI agents across any model**. The foundations are already in
-place (per-action attribution, the jail + human gate, the learning loop, durable
-replay, embedded DuckDB analytics, MCP, jail→repo). Most of what's ahead is
-**surfacing** that foundation, not re-architecting it — which is the best place to
-be standing at the start of the hard part.
+Corral's arc is from *impressive demo* to **the accountability layer for AI
+agents** — the environment where you run a team of agents across any model *and can
+trust, contain, certify, and answer for what they ship*. Not a better builder (that
+race belongs to the model labs) — the layer above it that makes agent work
+provable. The foundations are already in place, and they *are* the accountability
+controls: per-action attribution, the jail + egress scan, the human gate, certify-
+by-execution, the learning loop, durable replay, embedded DuckDB analytics. Most of
+what's ahead is **surfacing and sharpening** that — signed provenance attestations,
+a decision-tree audit view, metrics-driven routing — not re-architecting it.
 
 A guiding invariant runs through all of it: **the brain's API is the boundary —
 writes go through it, reads share the analytical store read-only, every kind of

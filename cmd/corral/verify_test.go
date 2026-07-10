@@ -295,6 +295,33 @@ func TestRunCertifyVerify_FetchesPubkeyFromBrain(t *testing.T) {
 	}
 }
 
+// TestRunCertifyVerify_AcceptsRecordFileBeforeOrAfterFlags proves the
+// usage-documented order (`verify FILE --pubkey HEX`, file first) reaches
+// verification just like the reverse order (`verify --pubkey HEX FILE`) —
+// go's flag.Parse stops at the first non-flag argument, so a leading
+// positional would otherwise swallow the remaining flags and die at the
+// usage-error path (exit 2) before ever inspecting the record.
+func TestRunCertifyVerify_AcceptsRecordFileBeforeOrAfterFlags(t *testing.T) {
+	pubHex, raw := buildTestRecord(t)
+	path := writeRecord(t, raw)
+
+	var stdoutFileFirst, stderrFileFirst bytes.Buffer
+	codeFileFirst := runCertifyVerify([]string{path, "--pubkey", pubHex, "--allow-unanchored"}, failFetcher(t), failWitnessFactory(t), &stdoutFileFirst, &stderrFileFirst)
+
+	var stdoutFlagsFirst, stderrFlagsFirst bytes.Buffer
+	codeFlagsFirst := runCertifyVerify([]string{"--pubkey", pubHex, "--allow-unanchored", path}, failFetcher(t), failWitnessFactory(t), &stdoutFlagsFirst, &stderrFlagsFirst)
+
+	if codeFlagsFirst != 0 {
+		t.Fatalf("flags-first order: expected exit 0, got %d (stderr=%s)", codeFlagsFirst, stderrFlagsFirst.String())
+	}
+	if codeFileFirst != codeFlagsFirst {
+		t.Fatalf("file-first order: expected the same exit code as flags-first (%d), got %d (stderr=%s)", codeFlagsFirst, codeFileFirst, stderrFileFirst.String())
+	}
+	if !strings.Contains(stdoutFileFirst.String(), "verified") {
+		t.Errorf("file-first order: expected \"verified\" on stdout, got stdout=%q stderr=%q", stdoutFileFirst.String(), stderrFileFirst.String())
+	}
+}
+
 func TestRunCertifyVerify_MissingRecordFileIsAnError(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := runCertifyVerify([]string{"--pubkey", "aa", filepath.Join(t.TempDir(), "nope.json")}, failFetcher(t), failWitnessFactory(t), &stdout, &stderr)

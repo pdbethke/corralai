@@ -2,17 +2,25 @@
 # SPDX-License-Identifier: Elastic-2.0
 #
 # scripts/demo-certify-trustless.sh — the certify-trustless-tier demo tape:
-# certify a real check, verify it (publicly witnessed), tamper the exported
-# record, and watch verify catch it. This is the sequence the LinkedIn
+# certify a real check, verify it (publicly witnessed), then tamper the
+# exported record TWO different ways and watch verify catch each at the
+# right layer:
+#   - tamper the signed content  -> the DSSE SIGNATURE check catches it (Check 1)
+#   - tamper the transparency evidence, leaving the signature valid
+#                                -> the REKOR inclusion check catches it (Check 4)
+# The second tamper is the trustless money-shot: even a record whose signature
+# still verifies cannot fake the public log. This is the sequence the LinkedIn
 # article's recording is built from — each step below is commented so it
 # reads as narration when played back.
 #
 # PREREQUISITES (this script needs a live brain + network; it is NOT run in
 # CI and has no assertions of its own beyond "the commands behave as
 # narrated" — read the printed output):
-#   - A running corral brain reachable at $CORRAL_BRAIN, built from this
-#     branch, with CORRALAI_BUILD_DB and CORRALAI_CERTIFY_KEY_FILE set so
-#     report_build is enabled (see cmd/corral/main.go's env var docs).
+#   - A running corral brain reachable at $CORRAL_BRAIN, built with the
+#     trustless tier. report_build is ON BY DEFAULT — the build-record DB and
+#     certify signing key auto-create under ~/.claude on first run (override
+#     via CORRALAI_BUILD_DB / CORRALAI_CERTIFY_KEY_FILE; see main.go's env docs).
+#     Verified live against brain.corralai.dev 2026-07-10 (Rekor #2138328104).
 #   - That brain able to reach the public internet (rekor.sigstore.dev by
 #     default, or CORRALAI_REKOR_URL if you've pointed it at a different
 #     Rekor instance) — Anchor and the TUF trust-root fetch both need it.
@@ -37,6 +45,8 @@ CORRAL="${CORRAL:-corral}"
 WORKDIR="$(mktemp -d)"
 trap 'rm -rf "$WORKDIR"' EXIT
 RECORD="$WORKDIR/record.json"
+PRISTINE="$WORKDIR/pristine.json"   # untouched copy of the good record, for the Rekor-layer tamper
+RECORD2="$WORKDIR/record-rekor-tamper.json"
 
 echo "=== 1. Certify a passing check ==="
 echo "corral certify runs the check ITSELF (streaming its output live),"
@@ -46,6 +56,7 @@ echo "  - anchors that envelope to a public transparency log (Rekor),"
 echo "  - hands back a record — with the Rekor evidence embedded — to --out."
 echo
 "$CORRAL" certify --brain "$CORRAL_BRAIN" --out "$RECORD" -- true
+cp "$RECORD" "$PRISTINE"   # keep a good copy — step 4 tampers the transparency evidence on this
 echo
 echo "--- record.json (trimmed) ---"
 python3 -c "
@@ -62,7 +73,7 @@ echo "binding to that ledger, and — because the record claims anchored=true �
 echo "the Rekor inclusion proof against the Sigstore TUF trust root. Nothing"
 echo "here trusts the brain's in-process state or the record's own claims."
 echo
-"$CORRAL" certify verify "$RECORD" --brain "$CORRAL_BRAIN"
+"$CORRAL" certify verify --brain "$CORRAL_BRAIN" "$RECORD"
 echo
 echo "^ that line names the Rekor log index and the time the log integrated"
 echo "  the entry — a third party can confirm this independently at"
@@ -94,11 +105,47 @@ echo "Re-verify: this MUST fail — the DSSE signature no longer covers the"
 echo "rewritten payload, so the very first check (signature) catches it."
 echo "The broken link is named explicitly, not just 'verification failed'."
 echo
-if "$CORRAL" certify verify "$RECORD" --brain "$CORRAL_BRAIN"; then
+if "$CORRAL" certify verify --brain "$CORRAL_BRAIN" "$RECORD"; then
     echo "!!! expected verify to FAIL on the tampered record — it did not." >&2
     exit 1
 fi
 echo
 echo "^ verify exited non-zero and named 'signature' as the broken link —"
-echo "  tampering the predicate after the fact does not survive re-verification,"
-echo "  the whole point of a signed, publicly-witnessed accountability record."
+echo "  tampering the predicate after the fact does not survive re-verification."
+echo
+
+echo "=== 4. The trustless money-shot: tamper the PUBLIC-LOG evidence ==="
+echo "Suppose an attacker somehow kept the signature valid. The record still"
+echo "carries its Sigstore Rekor inclusion proof — the cryptographic evidence"
+echo "that this exact envelope was witnessed by a public, append-only log. Here"
+echo "we corrupt ONLY that inclusion proof (the DSSE signature is left intact),"
+echo "so checks 1-3 still pass and only the Rekor step can catch it."
+echo
+python3 -c "
+import base64, json
+rec = json.load(open('$PRISTINE'))
+if not rec.get('anchored') or not rec.get('rekor'):
+    raise SystemExit('record is not anchored (no Rekor evidence) — is the brain '
+                     'configured with a witness + able to reach rekor.sigstore.dev?')
+entry = json.loads(rec['rekor'])            # 'rekor' is a JSON *string* (marshaled transparency.Entry)
+proof = bytearray(base64.b64decode(entry['InclusionProof']))
+proof[0] ^= 0xff                            # flip one byte of the inclusion proof; signature untouched
+entry['InclusionProof'] = base64.b64encode(bytes(proof)).decode()
+rec['rekor'] = json.dumps(entry)
+json.dump(rec, open('$RECORD2', 'w'), indent=2)
+"
+echo "--- record with a corrupted Rekor inclusion proof written (signature intact) ---"
+echo
+echo "Re-verify: the DSSE signature, ledger, and subject binding all still pass —"
+echo "but the Rekor inclusion proof no longer validates against the Sigstore TUF"
+echo "trust root, so verify fails at the transparency layer. You cannot forge the"
+echo "public log's word that a record was (or wasn't) witnessed."
+echo
+if "$CORRAL" certify verify --brain "$CORRAL_BRAIN" "$RECORD2"; then
+    echo "!!! expected verify to FAIL on the corrupted Rekor proof — it did not." >&2
+    exit 1
+fi
+echo
+echo "^ verify exited non-zero at the REKOR step — the trustless property in action:"
+echo "  verification trusts the public transparency log + the published key, not the"
+echo "  brain, and a tampered witness proof does not survive that check."

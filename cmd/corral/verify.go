@@ -114,6 +114,14 @@ func newRekorVerifyWitness(rekorURL string) (transparency.Witness, error) {
 // is ALSO a failure by default: --allow-unanchored is required to accept it,
 // so a caller can't mistake corral's own signature for third-party proof.
 func runCertifyVerify(args []string, fetch pubkeyFetcher, newWitness witnessFactory, stdout, stderr io.Writer) int {
+	// Accept the record-file before OR after flags: Go's flag.Parse stops at the
+	// first non-flag arg, so a leading positional (the natural `verify FILE --brain URL`
+	// order the usage documents) would otherwise swallow the remaining flags. Rotate a
+	// leading positional to the end; a leading flag is left as-is.
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		args = append(args[1:], args[0])
+	}
+
 	fs := flag.NewFlagSet("certify verify", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	pubkeyFlag := fs.String("pubkey", "", "hex-encoded Ed25519 public key to verify against")

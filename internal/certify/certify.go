@@ -194,3 +194,46 @@ func VerifySig(head, sigHex string, pub ed25519.PublicKey) bool {
 	}
 	return ed25519.Verify(pub, []byte(head), sig)
 }
+
+// CanonicalStatement returns deterministic JSON bytes for stmt.
+//
+// json.Marshal is deterministic here because every value inside a statement
+// built by BuildAttestation is JSON-native: map[string]any and
+// map[string]string encode with keys sorted lexicographically by
+// encoding/json, []string and []map[string]any preserve their original
+// order, and there are no Go structs whose field order could vary from
+// their declaration. That means two calls to CanonicalStatement on
+// equivalent maps always produce byte-identical output, which is what lets
+// a detached Ed25519 signature over these bytes be verified independently
+// later. Do not introduce a Go struct or a third-party canonicalizer here;
+// the plain map shape is what makes this guarantee hold.
+func CanonicalStatement(stmt map[string]any) ([]byte, error) {
+	return json.Marshal(stmt)
+}
+
+// SignStatement signs the canonical JSON encoding of stmt with priv and
+// returns the hex-encoded signature along with the exact canonical bytes
+// that were signed. Callers must persist canonical as-is (not a re-marshal)
+// so that VerifyStatement can later verify over the identical bytes. It
+// returns an error (never panics) if stmt cannot be marshaled.
+func SignStatement(stmt map[string]any, priv ed25519.PrivateKey) (sigHex string, canonical []byte, err error) {
+	canonical, err = CanonicalStatement(stmt)
+	if err != nil {
+		return "", nil, err
+	}
+	sigHex = hex.EncodeToString(ed25519.Sign(priv, canonical))
+	return sigHex, canonical, nil
+}
+
+// VerifyStatement reports whether sigHex is a valid Ed25519 signature of the
+// canonical bytes under pub. It verifies over the stored canonical bytes
+// directly (not a re-marshal of any statement), which sidesteps any
+// float/int re-serialization ambiguity. It returns false (not an error) on
+// a malformed sigHex.
+func VerifyStatement(canonical []byte, sigHex string, pub ed25519.PublicKey) bool {
+	sig, err := hex.DecodeString(sigHex)
+	if err != nil {
+		return false
+	}
+	return ed25519.Verify(pub, canonical, sig)
+}

@@ -62,6 +62,18 @@ Go binary.**
   age-encrypted file) with a `corral secret` CLI — the GCP-ADC pattern in the one
   binary. Secrets never touch argv, logs, or plaintext-at-rest; the age identity
   fails closed. Security-reviewed adversarially before shipping.
+- **`corral certify` — the accountability wedge.** One line in a pipeline
+  (`corral certify -- <check>`) runs the check *itself* and mints a signed,
+  tamper-evident, **independently-verifiable** record of what ran — certify **by
+  execution** (a real exit code, not a self-report), in the in-toto/SLSA provenance
+  format, with the models that produced the change carried as provenance materials.
+  Stored in DuckDB (the same schema federates to MotherDuck by swapping the DSN).
+  Ships with `corral certify verify` — verify a record against the brain's **published**
+  key (`GET /api/certify/pubkey`), never a key embedded in the record itself. The
+  signing key lives only in the brain; the verify path refuses without an external
+  trust anchor. Central-trust v1 (a holder of the published key can confirm the brain's
+  records honestly bind what ran); the trustless tier is next. Adversarially reviewed —
+  the review caught and closed a silent-pass and a circular-trust-anchor bug before merge.
 
 ## Now — make it operable and unbreakable
 - **The front door.** The Mission Composer (above) is the first cut. Still ahead: an
@@ -94,6 +106,28 @@ model mix, watch the board, approve the merges.
 - **Mid-mission steering.** Pause, redirect, or re-scope a running mission — not
   just approve/reject at the ends.
 - **Memory hygiene.** The shared corpus stays *fresh*, not merely growing.
+
+## Accountability — prove what any agent ships
+`corral certify` (shipped, above) is the first brick of a second arc: corral not only
+*runs* a herd, it becomes the way a team **accounts** for what its agents — the herd's,
+or a dev's own — actually produced. The engine that already contains, certifies, and
+records is exactly the engine that can *attest*.
+- **The trustless tier — witness anchoring.** Ship the ledger head to an external,
+  append-only, timestamped witness (a shared MotherDuck warehouse, or Sigstore **Rekor**)
+  so tampering is detectable *even if you don't trust the brain*. Central-trust today
+  becomes tamper-evident-against-everyone next. (Honest all the way: evident, never
+  "proof" — you can't make a party's own machine tamper-proof, only detectable.)
+- **One-command agent onboarding.** Independent, dev-driven agents (starting with
+  **Claude Code**, richest hooks) join with `corral hooks install` — deterministic passive
+  telemetry to the brain via the agent's own hooks, no behavior change, no reliance on the
+  model *choosing* to report. Capture is deterministic — the same principle as certify-by-
+  execution: don't trust the agent's word, capture it. The `corral certify` CLI is the
+  agent-agnostic floor beneath it (it wraps the *check*, not the agent).
+- **The MotherDuck accountability warehouse.** Signed records from every dev, CI runner,
+  and project federate into one shared, queryable warehouse — the *same* DuckDB schema,
+  a DSN flip. Read-only **shares** hand a client, an auditor, or a conference room a live,
+  verifiable slice with zero infra. The firehose stays local and cheap; only signed
+  summaries federate.
 
 ## The through-line
 Every capability above is the **same pattern** — brain-mediated, human-gated,

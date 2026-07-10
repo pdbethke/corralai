@@ -44,7 +44,15 @@ func Open(dsn string) (*Store, error) {
 		head VARCHAR,
 		signature VARCHAR,
 		statement JSON,
+		steps JSON,
 		created_ts DOUBLE)`); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	// Idempotent for any dev DB created before `steps` existed. DuckDB
+	// supports IF NOT EXISTS on ADD COLUMN; the fresh CREATE TABLE above
+	// already covers brand-new stores, so this is a no-op there.
+	if _, err := db.Exec(`ALTER TABLE build_records ADD COLUMN IF NOT EXISTS steps JSON`); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -58,27 +66,32 @@ func Open(dsn string) (*Store, error) {
 // Close closes the underlying database.
 func (s *Store) Close() error { return s.db.Close() }
 
-// Save inserts a signed build record and returns its assigned id.
-func (s *Store) Save(repo, commit, branch, actor, head, sig, statementJSON string) (int64, error) {
+// Save inserts a signed build record — including the full ledger `steps`
+// that produced `head`, so a stored record can be independently re-verified
+// with certify.VerifyLedger without trusting the brain's in-process state —
+// and returns its assigned id.
+func (s *Store) Save(repo, commit, branch, actor, head, sig, statementJSON, stepsJSON string) (int64, error) {
 	var id int64
 	err := s.db.QueryRow(
-		`INSERT INTO build_records (id, repo, commit_sha, branch, actor, head, signature, statement, created_ts)
-		 VALUES (nextval('build_record_id'), ?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO build_records (id, repo, commit_sha, branch, actor, head, signature, statement, steps, created_ts)
+		 VALUES (nextval('build_record_id'), ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 RETURNING id`,
-		repo, commit, branch, actor, head, sig, statementJSON, now()).Scan(&id)
+		repo, commit, branch, actor, head, sig, statementJSON, stepsJSON, now()).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("buildstore: save: %w", err)
 	}
 	return id, nil
 }
 
-// Get returns the stored SLSA statement (parsed to a map) and signature for
+// Get returns the stored SLSA statement (parsed to a map, with the ledger
+// steps folded in under "steps" and the signature under "signature") for
 // id, plus false if no record with that id exists.
 func (s *Store) Get(id int64) (map[string]any, bool, error) {
 	var statement any
+	var steps any
 	var sig string
 	err := s.db.QueryRow(
-		`SELECT statement, signature FROM build_records WHERE id = ?`, id).Scan(&statement, &sig)
+		`SELECT statement, steps, signature FROM build_records WHERE id = ?`, id).Scan(&statement, &steps, &sig)
 	if err == sql.ErrNoRows {
 		return nil, false, nil
 	}
@@ -89,6 +102,11 @@ func (s *Store) Get(id int64) (map[string]any, bool, error) {
 	if err != nil {
 		return nil, false, fmt.Errorf("buildstore: get: decoding stored statement: %w", err)
 	}
+	stepsVal, err := jsonColumnToAny(steps)
+	if err != nil {
+		return nil, false, fmt.Errorf("buildstore: get: decoding stored steps: %w", err)
+	}
+	m["steps"] = stepsVal
 	m["signature"] = sig
 	return m, true, nil
 }
@@ -114,6 +132,29 @@ func statementToMap(v any) (map[string]any, error) {
 		return m, nil
 	default:
 		return nil, fmt.Errorf("unexpected statement column type %T", v)
+	}
+}
+
+// jsonColumnToAny normalizes a DuckDB JSON column's driver representation
+// (already-decoded Go value, JSON string, or JSON bytes) to a plain Go value
+// (e.g. []any for the `steps` array column). Unlike statementToMap it does
+// not assume an object at the top level.
+func jsonColumnToAny(v any) (any, error) {
+	switch t := v.(type) {
+	case string:
+		var out any
+		if err := json.Unmarshal([]byte(t), &out); err != nil {
+			return nil, err
+		}
+		return out, nil
+	case []byte:
+		var out any
+		if err := json.Unmarshal(t, &out); err != nil {
+			return nil, err
+		}
+		return out, nil
+	default:
+		return t, nil
 	}
 }
 

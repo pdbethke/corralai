@@ -20,7 +20,8 @@ func TestSaveGetRoundTrip(t *testing.T) {
 	defer s.Close()
 
 	stmt := `{"predicateType":"https://slsa.dev/provenance/v1","subject":[{"name":"corral"}]}`
-	id, err := s.Save("pdbethke/corralai", "abc123", "feat/x", "peter", "deadbeef", "sig-bytes-hex", stmt)
+	steps := `[{"seq":0,"kind":"context","hash":"abc"}]`
+	id, err := s.Save("pdbethke/corralai", "abc123", "feat/x", "peter", "deadbeef", "sig-bytes-hex", stmt, steps)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,6 +38,18 @@ func TestSaveGetRoundTrip(t *testing.T) {
 	}
 	if got["predicateType"] != "https://slsa.dev/provenance/v1" {
 		t.Fatalf("statement not round-tripped correctly: %v", got)
+	}
+	rawSteps, ok := got["steps"]
+	if !ok {
+		t.Fatal("expected a \"steps\" key in the returned map")
+	}
+	stepsList, ok := rawSteps.([]any)
+	if !ok || len(stepsList) != 1 {
+		t.Fatalf("steps not round-tripped correctly: %v (%T)", rawSteps, rawSteps)
+	}
+	stepObj, ok := stepsList[0].(map[string]any)
+	if !ok || stepObj["kind"] != "context" {
+		t.Fatalf("steps[0] not round-tripped correctly: %v", stepsList[0])
 	}
 
 	// Absent id.
@@ -57,11 +70,11 @@ func TestSaveAssignsIncreasingIDs(t *testing.T) {
 	}
 	defer s.Close()
 
-	id1, err := s.Save("r", "c1", "b", "a", "h1", "sig1", `{"n":1}`)
+	id1, err := s.Save("r", "c1", "b", "a", "h1", "sig1", `{"n":1}`, `[]`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	id2, err := s.Save("r", "c2", "b", "a", "h2", "sig2", `{"n":2}`)
+	id2, err := s.Save("r", "c2", "b", "a", "h2", "sig2", `{"n":2}`, `[]`)
 	if err != nil {
 		t.Fatal(err)
 	}

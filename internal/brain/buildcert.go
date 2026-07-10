@@ -4,6 +4,8 @@ package brain
 
 import (
 	"context"
+	"crypto/ed25519"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 
@@ -26,13 +28,49 @@ type reportBuildIn struct {
 }
 
 // reportBuildOut is the signed, tamper-evident accountability record
-// report_build hands back: the ledger head, its Ed25519 signature, the
-// stored SLSA/in-toto statement, and the assigned build_records id.
+// report_build hands back: the ledger head, the Ed25519 signature over the
+// FULL canonical statement (binding the predicate, not just the head), the
+// stored SLSA/in-toto statement, the assigned build_records id, and the
+// certify public key a third party needs to verify Signature independently.
 type reportBuildOut struct {
 	ID        int64          `json:"id"`
 	Head      string         `json:"head"`
 	Signature string         `json:"signature"`
 	Statement map[string]any `json:"statement"`
+	PublicKey string         `json:"public_key"`
+}
+
+// storableStep mirrors certify.Step but round-trips Hash under "hash".
+// certify.Step marks Hash `json:"-"` deliberately — stepHash's own
+// computation must exclude a step's hash from its input, or the hash would
+// be self-referential — but that same tag means a plain json.Marshal of
+// []certify.Step silently drops Hash. A persisted step without its hash can
+// never be re-chained by an independent verifier (certify.VerifyLedger
+// checks stepHash(s) against s.Hash), so the stored shape carries it
+// explicitly.
+type storableStep struct {
+	Seq     int            `json:"seq"`
+	TS      float64        `json:"ts"`
+	Kind    string         `json:"kind"`
+	Actor   string         `json:"actor"`
+	Model   string         `json:"model"`
+	Subject string         `json:"subject"`
+	Detail  map[string]any `json:"detail"`
+	Prev    string         `json:"prev"`
+	Hash    string         `json:"hash"`
+}
+
+// storableSteps converts a built ledger to its persisted JSON shape (see
+// storableStep).
+func storableSteps(steps []certify.Step) []storableStep {
+	out := make([]storableStep, len(steps))
+	for i, s := range steps {
+		out[i] = storableStep{
+			Seq: s.Seq, TS: s.TS, Kind: s.Kind, Actor: s.Actor, Model: s.Model,
+			Subject: s.Subject, Detail: s.Detail, Prev: s.Prev, Hash: s.Hash,
+		}
+	}
+	return out
 }
 
 // registerBuildCert registers the report_build tool — corral certify's ingest
@@ -68,7 +106,7 @@ func registerBuildCert(s *mcp.Server, opts Options) {
 					},
 				},
 			}
-			_, head := certify.BuildLedger(steps)
+			built, head := certify.BuildLedger(steps)
 
 			br := certify.BuildRecord{
 				Repo:         in.Repo,
@@ -83,14 +121,24 @@ func registerBuildCert(s *mcp.Server, opts Options) {
 			}
 			stmt := certify.BuildAttestation(br, head)
 
-			sig := certify.Sign(head, opts.CertifyKey)
-
-			stmtJSON, err := json.Marshal(stmt)
+			// Sign the FULL canonical statement (not just the head): a
+			// head-only signature leaves the predicate (repo/commit/command/
+			// exit code) freely editable in storage without invalidating the
+			// signature. SignStatement returns the exact canonical bytes
+			// that were signed; those bytes — not a re-marshal — are what
+			// gets persisted, so a later VerifyStatement call checks the
+			// identical bytes the signature covers.
+			sigHex, canonical, err := certify.SignStatement(stmt, opts.CertifyKey)
 			if err != nil {
-				return nil, reportBuildOut{}, fmt.Errorf("report_build: marshaling statement: %w", err)
+				return nil, reportBuildOut{}, fmt.Errorf("report_build: signing statement: %w", err)
 			}
 
-			id, err := opts.BuildStore.Save(in.Repo, in.Commit, in.Branch, actor, head, sig, string(stmtJSON))
+			stepsJSON, err := json.Marshal(storableSteps(built))
+			if err != nil {
+				return nil, reportBuildOut{}, fmt.Errorf("report_build: marshaling steps: %w", err)
+			}
+
+			id, err := opts.BuildStore.Save(in.Repo, in.Commit, in.Branch, actor, head, sigHex, string(canonical), string(stepsJSON))
 			if err != nil {
 				return nil, reportBuildOut{}, err
 			}
@@ -101,6 +149,13 @@ func registerBuildCert(s *mcp.Server, opts Options) {
 				"head":   head,
 			})
 
-			return nil, reportBuildOut{ID: id, Head: head, Signature: sig, Statement: stmt}, nil
+			pub, _ := opts.CertifyKey.Public().(ed25519.PublicKey)
+			return nil, reportBuildOut{
+				ID:        id,
+				Head:      head,
+				Signature: sigHex,
+				Statement: stmt,
+				PublicKey: hex.EncodeToString(pub),
+			}, nil
 		})
 }

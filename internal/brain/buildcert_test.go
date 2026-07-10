@@ -5,7 +5,9 @@ package brain
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -122,8 +124,10 @@ func TestReportBuild(t *testing.T) {
 		t.Fatalf("resolvedDependencies[0].uri = %v, want %q", dep["uri"], "model:claude-opus")
 	}
 
-	if !certify.VerifySig(out.Head, out.Signature, pub) {
-		t.Fatal("signature does not verify against the ledger head under the brain's public key")
+	// public_key in the response must be the brain's certify public key.
+	wantPub := hex.EncodeToString(pub)
+	if out.PublicKey != wantPub {
+		t.Fatalf("response public_key = %q, want %q", out.PublicKey, wantPub)
 	}
 
 	stored, found, err := bs.Get(out.ID)
@@ -137,15 +141,87 @@ func TestReportBuild(t *testing.T) {
 		t.Fatalf("stored signature %v != returned signature %v", stored["signature"], out.Signature)
 	}
 
-	// Tamper with the statement: flip the digest, VerifyLedger-equivalent
-	// check via re-signing should no longer match — a corrupted statement
-	// must not silently verify.
-	tamperedHead := out.Head[:len(out.Head)-1] + "0"
-	if out.Head[len(out.Head)-1] == '0' {
-		tamperedHead = out.Head[:len(out.Head)-1] + "1"
+	// The stored "statement" column IS the canonical bytes SignStatement
+	// signed — re-marshal it exactly as buildstore does (no re-marshal of a
+	// decoded map, which could reorder/re-encode and break byte-identity)
+	// and confirm it verifies against the returned signature and pubkey.
+	storedStmtOnly := map[string]any{}
+	for k, v := range stored {
+		if k == "signature" || k == "steps" {
+			continue
+		}
+		storedStmtOnly[k] = v
 	}
-	if certify.VerifySig(tamperedHead, out.Signature, pub) {
-		t.Fatal("a tampered head must NOT verify against the original signature")
+	storedCanonical, err := certify.CanonicalStatement(storedStmtOnly)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !certify.VerifyStatement(storedCanonical, out.Signature, pub) {
+		t.Fatal("VerifyStatement must succeed over the stored canonical statement bytes under the brain's public key")
+	}
+
+	// Tamper with the stored statement: mutate a byte and confirm
+	// VerifyStatement now fails — the persisted artifact is tamper-evident,
+	// not just the in-process value.
+	tampered := append([]byte(nil), storedCanonical...)
+	tampered[0] ^= 0xFF
+	if certify.VerifyStatement(tampered, out.Signature, pub) {
+		t.Fatal("a tampered stored statement must NOT verify against the original signature")
+	}
+
+	// The stored steps must be a valid, independently re-verifiable ledger
+	// whose recomputed head matches out.Head and the statement's subject
+	// digest — i.e. a verifier working ONLY from what's in buildstore (no
+	// trust in the brain's in-process state) can confirm both the ledger
+	// integrity and that the statement is bound to that exact ledger.
+	rawSteps, ok := stored["steps"].([]any)
+	if !ok {
+		t.Fatalf("stored steps is not a list: %v (%T)", stored["steps"], stored["steps"])
+	}
+	// certify.Step tags Hash `json:"-"` (deliberate: a step's own hash must
+	// never be part of the input to computing that hash), so a plain
+	// json.Unmarshal into certify.Step can't recover Hash. The brain stores
+	// it explicitly under "hash" (storableStep in buildcert.go); reconstruct
+	// certify.Step by hand, mirroring what an independent verifier (Task 7's
+	// CLI) would do reading this record back with no access to brain
+	// internals.
+	storedLedger := make([]certify.Step, len(rawSteps))
+	for i, raw := range rawSteps {
+		m, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("stored step %d is not an object: %v", i, raw)
+		}
+		detail, _ := m["detail"].(map[string]any)
+		seq, _ := m["seq"].(float64)
+		ts, _ := m["ts"].(float64)
+		storedLedger[i] = certify.Step{
+			Seq:     int(seq),
+			TS:      ts,
+			Kind:    fmt.Sprint(m["kind"]),
+			Actor:   fmt.Sprint(m["actor"]),
+			Model:   fmt.Sprint(m["model"]),
+			Subject: fmt.Sprint(m["subject"]),
+			Detail:  detail,
+			Prev:    fmt.Sprint(m["prev"]),
+			Hash:    fmt.Sprint(m["hash"]),
+		}
+	}
+	ok2, msg := certify.VerifyLedger(storedLedger, out.Head)
+	if !ok2 {
+		t.Fatalf("VerifyLedger over stored steps failed: %s", msg)
+	}
+
+	subjects, ok = stored["subject"].([]any)
+	if !ok || len(subjects) != 1 {
+		t.Fatalf("stored statement missing subject: %v", stored["subject"])
+	}
+	subj, ok = subjects[0].(map[string]any)
+	if !ok {
+		t.Fatalf("stored subject[0] is not an object: %v", subjects[0])
+	}
+	digest, ok = subj["digest"].(map[string]any)
+	if !ok || digest["sha256"] != out.Head {
+		t.Fatalf("stored statement.subject[0].digest.sha256 = %v, want ledger head %v", digest["sha256"], out.Head)
 	}
 }
 

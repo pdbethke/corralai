@@ -56,6 +56,7 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/tls"
 	"fmt"
@@ -1109,6 +1110,16 @@ func main() {
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("ok"))
 	})
+	// /api/certify/pubkey: publish the certify Ed25519 public key so a third
+	// party holding only a persisted build_records row (no brain
+	// credentials) can independently verify it with certify.VerifyStatement.
+	// Unauthenticated like /healthz — that's the whole point. Only mounted
+	// when certifyKey is a valid, fully-loaded Ed25519 private key (same
+	// guard registerBuildCert uses); an invalid/missing key means the brain
+	// never signs statements, so there is no key worth publishing.
+	if len(certifyKey) == ed25519.PrivateKeySize {
+		mux.HandleFunc("/api/certify/pubkey", brain.CertifyPubkeyHandler(certifyKey.Public().(ed25519.PublicKey)))
+	}
 	// A read-only observer token may view the swarm but never act: /mcp (the whole
 	// tool surface) is an action surface, so reject it outright.
 	denyReadOnly := func(h http.Handler) http.Handler {

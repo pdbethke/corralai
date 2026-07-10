@@ -140,32 +140,52 @@ func TestReportBuild(t *testing.T) {
 		t.Fatalf("stored signature %v != returned signature %v", stored["signature"], out.Signature)
 	}
 
-	// The stored "statement" column IS the canonical bytes SignStatement
-	// signed — re-marshal it exactly as buildstore does (no re-marshal of a
-	// decoded map, which could reorder/re-encode and break byte-identity)
-	// and confirm it verifies against the returned signature and pubkey.
-	storedStmtOnly := map[string]any{}
-	for k, v := range stored {
-		if k == "signature" || k == "steps" {
-			continue
-		}
-		storedStmtOnly[k] = v
+	// The stored "signature" column IS the DSSE envelope SignDSSE produced —
+	// it carries its own embedded copy of the canonical statement, so
+	// verifying it needs no separate canonical-bytes column. Confirm it
+	// verifies under the brain's public key and that the embedded statement
+	// matches what the tool response reported.
+	storedStmt, ok, err := certify.VerifyDSSE([]byte(out.Signature), pub)
+	if err != nil {
+		t.Fatalf("VerifyDSSE returned error: %v", err)
 	}
-	storedCanonical, err := certify.CanonicalStatement(storedStmtOnly)
+	if !ok {
+		t.Fatal("VerifyDSSE must succeed over the stored DSSE envelope under the brain's public key")
+	}
+	gotSubjJSON, err := json.Marshal(storedStmt["subject"])
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !certify.VerifyStatement(storedCanonical, out.Signature, pub) {
-		t.Fatal("VerifyStatement must succeed over the stored canonical statement bytes under the brain's public key")
+	wantSubjJSON, err := json.Marshal(out.Statement["subject"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotSubjJSON) != string(wantSubjJSON) {
+		t.Fatalf("envelope-embedded statement subject = %s, want %s", gotSubjJSON, wantSubjJSON)
 	}
 
-	// Tamper with the stored statement: mutate a byte and confirm
-	// VerifyStatement now fails — the persisted artifact is tamper-evident,
-	// not just the in-process value.
-	tampered := append([]byte(nil), storedCanonical...)
-	tampered[0] ^= 0xFF
-	if certify.VerifyStatement(tampered, out.Signature, pub) {
-		t.Fatal("a tampered stored statement must NOT verify against the original signature")
+	// Tamper with the stored envelope: flip a byte in its payload and confirm
+	// VerifyDSSE now fails — the persisted artifact is tamper-evident, not
+	// just the in-process value.
+	tampered := append([]byte(nil), stored["signature"].(string)...)
+	var envMap map[string]any
+	if err := json.Unmarshal(tampered, &envMap); err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte(envMap["payload"].(string))
+	idx := len(payload) / 2
+	if payload[idx] == 'A' {
+		payload[idx] = 'B'
+	} else {
+		payload[idx] = 'A'
+	}
+	envMap["payload"] = string(payload)
+	tamperedEnvelope, err := json.Marshal(envMap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := certify.VerifyDSSE(tamperedEnvelope, pub); ok {
+		t.Fatal("a tampered stored envelope must NOT verify against the original signature")
 	}
 
 	// The stored steps must be a valid, independently re-verifiable ledger

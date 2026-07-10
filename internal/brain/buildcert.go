@@ -28,16 +28,18 @@ type reportBuildIn struct {
 }
 
 // reportBuildOut is the signed, tamper-evident accountability record
-// report_build hands back: the ledger head, the Ed25519 signature over the
-// FULL canonical statement (binding the predicate, not just the head), the
-// stored SLSA/in-toto statement, the assigned build_records id, the
-// certify public key a third party needs to verify Signature independently,
-// and Steps (certify.MarshalSteps output, decoded to a generic slice so the
-// MCP tool's auto-derived JSON schema sees an array of objects rather than
-// treating a json.RawMessage's underlying []byte as an array of integers) —
-// carrying the full ledger in the response means a caller (corral certify's
-// --out) can build a completely self-verifying record with no further
-// round trip to the brain.
+// report_build hands back: the ledger head, a DSSE envelope (JSON, as text)
+// carrying the Ed25519 signature over the FULL canonical statement (binding
+// the predicate, not just the head) and its own embedded copy of the
+// statement, the stored SLSA/in-toto statement (kept for human readability;
+// the envelope is the source of truth for verification), the assigned
+// build_records id, the certify public key a third party needs to verify
+// Signature independently, and Steps (certify.MarshalSteps output, decoded
+// to a generic slice so the MCP tool's auto-derived JSON schema sees an
+// array of objects rather than treating a json.RawMessage's underlying
+// []byte as an array of integers) — carrying the full ledger in the
+// response means a caller (corral certify's --out) can build a completely
+// self-verifying record with no further round trip to the brain.
 type reportBuildOut struct {
 	ID        int64            `json:"id"`
 	Head      string           `json:"head"`
@@ -95,16 +97,21 @@ func registerBuildCert(s *mcp.Server, opts Options) {
 			}
 			stmt := certify.BuildAttestation(br, head)
 
-			// Sign the FULL canonical statement (not just the head): a
-			// head-only signature leaves the predicate (repo/commit/command/
-			// exit code) freely editable in storage without invalidating the
-			// signature. SignStatement returns the exact canonical bytes
-			// that were signed; those bytes — not a re-marshal — are what
-			// gets persisted, so a later VerifyStatement call checks the
-			// identical bytes the signature covers.
-			sigHex, canonical, err := certify.SignStatement(stmt, opts.CertifyKey)
+			// Sign the FULL canonical statement (not just the head) as a DSSE
+			// envelope: a head-only signature leaves the predicate
+			// (repo/commit/command/exit code) freely editable in storage
+			// without invalidating the signature. The envelope embeds its
+			// own copy of the canonical statement bytes it signed, so a
+			// later VerifyDSSE call checks the identical bytes the
+			// signature covers with no separate canonical-bytes column to
+			// keep in sync.
+			envelope, err := certify.SignDSSE(stmt, opts.CertifyKey, "brain")
 			if err != nil {
 				return nil, reportBuildOut{}, fmt.Errorf("report_build: signing statement: %w", err)
+			}
+			canonical, err := certify.CanonicalStatement(stmt)
+			if err != nil {
+				return nil, reportBuildOut{}, fmt.Errorf("report_build: canonicalizing statement: %w", err)
 			}
 
 			stepsJSON, err := certify.MarshalSteps(built)
@@ -116,7 +123,7 @@ func registerBuildCert(s *mcp.Server, opts Options) {
 				return nil, reportBuildOut{}, fmt.Errorf("report_build: decoding steps for response: %w", err)
 			}
 
-			id, err := opts.BuildStore.Save(in.Repo, in.Commit, in.Branch, actor, head, sigHex, string(canonical), string(stepsJSON))
+			id, err := opts.BuildStore.Save(in.Repo, in.Commit, in.Branch, actor, head, string(envelope), string(canonical), string(stepsJSON))
 			if err != nil {
 				return nil, reportBuildOut{}, err
 			}
@@ -131,7 +138,7 @@ func registerBuildCert(s *mcp.Server, opts Options) {
 			return nil, reportBuildOut{
 				ID:        id,
 				Head:      head,
-				Signature: sigHex,
+				Signature: string(envelope),
 				Statement: stmt,
 				PublicKey: hex.EncodeToString(pub),
 				Steps:     stepsOut,

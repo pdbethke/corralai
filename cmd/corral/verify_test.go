@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"os"
@@ -34,14 +35,18 @@ func buildTestRecord(t *testing.T) (pubHex string, raw []byte) {
 	stmt := certify.BuildAttestation(certify.BuildRecord{
 		Repo: "pdbethke/corralai", Commit: "abc123", Command: "go test ./...", ExitCode: 0,
 	}, head)
-	sigHex, canonical, err := certify.SignStatement(stmt, priv)
+	envelope, err := certify.SignDSSE(stmt, priv, "brain")
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Decode the canonical bytes back to a generic map — mirroring what the
-	// MCP round trip / a JSON file read produces — so re-marshaling via
-	// certify.CanonicalStatement in the verifier reproduces the same bytes
-	// SignStatement signed (proven byte-stable by internal/brain's own test).
+	// Decode the canonical statement back to a generic map for the record's
+	// human-readable "statement" field — mirroring what the MCP round trip /
+	// a JSON file read produces. Verification itself never uses this field;
+	// it checks the envelope's own embedded statement (see verify.go).
+	canonical, err := certify.CanonicalStatement(stmt)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var stmtDecoded map[string]any
 	if err := json.Unmarshal(canonical, &stmtDecoded); err != nil {
 		t.Fatal(err)
@@ -58,7 +63,7 @@ func buildTestRecord(t *testing.T) (pubHex string, raw []byte) {
 
 	rec := certRecord{
 		Statement: stmtDecoded,
-		Signature: sigHex,
+		Signature: string(envelope),
 		Steps:     stepsDecoded,
 		Head:      head,
 		PublicKey: hex.EncodeToString(pub),
@@ -126,17 +131,55 @@ func TestRunCertifyVerify_UsesRecordEmbeddedPublicKeyWhenNoFlagsGiven(t *testing
 	}
 }
 
+// TestRunCertifyVerify_TamperedPredicateFailsAtSignature proves a forger
+// can't get a pass by editing the record's cosmetic "statement" field alone
+// (verification never reads it) NOR by editing the predicate embedded
+// inside the DSSE envelope's own payload without re-signing — either way,
+// the signature check must catch the mutation.
 func TestRunCertifyVerify_TamperedPredicateFailsAtSignature(t *testing.T) {
 	pubHex, raw := buildTestRecord(t)
 	var rec map[string]any
 	if err := json.Unmarshal(raw, &rec); err != nil {
 		t.Fatal(err)
 	}
+
+	// Mutating the record's cosmetic "statement" field must have no effect
+	// on verification — it's not the source of truth.
 	stmt := rec["statement"].(map[string]any)
 	predicate := stmt["predicate"].(map[string]any)
 	buildDef := predicate["buildDefinition"].(map[string]any)
 	externalParams := buildDef["externalParameters"].(map[string]any)
-	externalParams["command"] = "rm -rf /" // tamper: mutate the predicate, leave the signature alone
+	externalParams["command"] = "rm -rf /"
+
+	// The real tamper: mutate the predicate INSIDE the DSSE envelope's own
+	// payload, leaving the signature bytes alone — this is what an actual
+	// forger of the signed artifact would have to do.
+	var env map[string]any
+	if err := json.Unmarshal([]byte(rec["signature"].(string)), &env); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := base64.StdEncoding.DecodeString(env["payload"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var envStmt map[string]any
+	if err := json.Unmarshal(payload, &envStmt); err != nil {
+		t.Fatal(err)
+	}
+	envPredicate := envStmt["predicate"].(map[string]any)
+	envBuildDef := envPredicate["buildDefinition"].(map[string]any)
+	envExternalParams := envBuildDef["externalParameters"].(map[string]any)
+	envExternalParams["command"] = "rm -rf /"
+	tamperedPayload, err := json.Marshal(envStmt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env["payload"] = base64.StdEncoding.EncodeToString(tamperedPayload)
+	tamperedEnvelope, err := json.Marshal(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec["signature"] = string(tamperedEnvelope)
 
 	tampered, err := json.Marshal(rec)
 	if err != nil {

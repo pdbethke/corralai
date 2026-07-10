@@ -1143,7 +1143,7 @@ func main() {
 	})
 	// /api/certify/pubkey: publish the certify Ed25519 public key so a third
 	// party holding only a persisted build_records row (no brain
-	// credentials) can independently verify it with certify.VerifyStatement.
+	// credentials) can independently verify it with certify.VerifyDSSE.
 	// Unauthenticated like /healthz — that's the whole point. Only mounted
 	// when certifyKey is a valid, fully-loaded Ed25519 private key (same
 	// guard registerBuildCert uses); an invalid/missing key means the brain

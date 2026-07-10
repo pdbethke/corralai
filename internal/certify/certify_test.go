@@ -5,6 +5,7 @@ package certify
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -52,7 +53,7 @@ func TestSignVerify(t *testing.T) {
 	}
 }
 
-func TestSignVerifyStatement(t *testing.T) {
+func TestSignVerifyDSSE(t *testing.T) {
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	otherPub, _, _ := ed25519.GenerateKey(rand.Reader)
 
@@ -62,44 +63,61 @@ func TestSignVerifyStatement(t *testing.T) {
 		ProducedBy: []string{"anthropic:claude-opus"},
 	}, head)
 
-	sig, canonical, err := SignStatement(stmt, priv)
+	env, err := SignDSSE(stmt, priv, "brain")
 	if err != nil {
-		t.Fatalf("SignStatement returned error: %v", err)
-	}
-	if !VerifyStatement(canonical, sig, pub) {
-		t.Fatal("valid signature over canonical statement must verify")
+		t.Fatalf("SignDSSE returned error: %v", err)
 	}
 
-	// Mutate a byte in the predicate region (the exit code digit) and confirm
-	// the signature no longer verifies over the tampered bytes.
-	mutated := make([]byte, len(canonical))
-	copy(mutated, canonical)
-	idx := -1
-	needle := []byte(`"exitCode":0`)
-	for i := 0; i+len(needle) <= len(mutated); i++ {
-		match := true
-		for j := range needle {
-			if mutated[i+j] != needle[j] {
-				match = false
-				break
-			}
-		}
-		if match {
-			idx = i
-			break
-		}
+	got, ok, err := VerifyDSSE(env, pub)
+	if err != nil {
+		t.Fatalf("VerifyDSSE returned error: %v", err)
 	}
-	if idx == -1 {
-		t.Fatalf("could not locate exitCode field in canonical bytes: %s", canonical)
+	if !ok {
+		t.Fatal("valid DSSE envelope must verify")
 	}
-	// Flip "exitCode":0 -> "exitCode":1
-	mutated[idx+len(needle)-1] = '1'
-	if VerifyStatement(mutated, sig, pub) {
-		t.Fatal("mutated canonical bytes must not verify")
+	gotSubj, wantSubj := got["subject"], stmt["subject"]
+	gotSubjJSON, err := json.Marshal(gotSubj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantSubjJSON, err := json.Marshal(wantSubj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotSubjJSON) != string(wantSubjJSON) {
+		t.Fatalf("VerifyDSSE statement subject = %s, want %s", gotSubjJSON, wantSubjJSON)
 	}
 
-	if VerifyStatement(canonical, sig, otherPub) {
-		t.Fatal("signature must not verify under the wrong public key")
+	// Tamper: flip a byte in the envelope's base64 payload field.
+	var envMap map[string]any
+	if err := json.Unmarshal(env, &envMap); err != nil {
+		t.Fatal(err)
+	}
+	payload, ok := envMap["payload"].(string)
+	if !ok || payload == "" {
+		t.Fatalf("envelope missing payload: %v", envMap)
+	}
+	payloadBytes := []byte(payload)
+	// Flip a character that is not the trailing base64 padding, to guarantee
+	// the decoded bytes actually change.
+	idx := len(payloadBytes) / 2
+	if payloadBytes[idx] == 'A' {
+		payloadBytes[idx] = 'B'
+	} else {
+		payloadBytes[idx] = 'A'
+	}
+	envMap["payload"] = string(payloadBytes)
+	tampered, err := json.Marshal(envMap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := VerifyDSSE(tampered, pub); ok {
+		t.Fatal("a tampered envelope payload must not verify")
+	}
+
+	// Wrong key must not verify.
+	if _, ok, _ := VerifyDSSE(env, otherPub); ok {
+		t.Fatal("envelope must not verify under the wrong public key")
 	}
 }
 

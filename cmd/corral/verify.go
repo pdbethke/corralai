@@ -19,7 +19,10 @@ import (
 
 // certRecord is the shape a `corral certify --out` file (and report_build's
 // tool response) carries: everything needed to verify a build attestation
-// completely offline except, optionally, the public key.
+// completely offline except, optionally, the public key. Signature is a DSSE
+// envelope (JSON, as text) that embeds its own copy of the signed statement;
+// Statement is kept alongside it purely for human readability — verification
+// checks the envelope's embedded statement, never this field.
 type certRecord struct {
 	Statement map[string]any   `json:"statement"`
 	Signature string           `json:"signature"`
@@ -134,14 +137,19 @@ func runCertifyVerify(args []string, fetch pubkeyFetcher, stdout, stderr io.Writ
 		fmt.Fprintln(stderr, "corral certify verify: warning: record's embedded public_key does not match the trusted key — the record claims a different signer")
 	}
 
-	// Check 1: the Ed25519 signature over the canonical statement — binds
-	// the FULL predicate (repo/commit/command/exit code), not just the head.
-	canonical, err := certify.CanonicalStatement(rec.Statement)
+	// Check 1: the DSSE envelope's Ed25519 signature — binds the FULL
+	// predicate (repo/commit/command/exit code), not just the head. The
+	// envelope (rec.Signature) carries its own embedded copy of the
+	// statement it signed; that embedded copy — not rec.Statement, which is
+	// kept only for human readability — is what checks 2 and 3 below verify
+	// against, so a forger can't get a pass by leaving the envelope alone
+	// and editing the record's separate "statement" field.
+	envelopeStmt, ok, err := certify.VerifyDSSE([]byte(rec.Signature), pub)
 	if err != nil {
-		fmt.Fprintf(stderr, "corral certify verify: FAILED (statement: %v)\n", err)
+		fmt.Fprintf(stderr, "corral certify verify: FAILED (signature: %v)\n", err)
 		return 1
 	}
-	if !certify.VerifyStatement(canonical, rec.Signature, pub) {
+	if !ok {
 		fmt.Fprintln(stderr, "corral certify verify: FAILED (signature does not verify against the statement)")
 		return 1
 	}
@@ -164,9 +172,11 @@ func runCertifyVerify(args []string, fetch pubkeyFetcher, stdout, stderr io.Writ
 
 	// Check 3: the statement is bound to THIS exact ledger — its subject
 	// digest must equal the ledger head, or a valid statement could be
-	// paired with an unrelated (even individually valid) ledger.
-	subjDigest, ok := statementSubjectDigest(rec.Statement)
-	if !ok || subjDigest != rec.Head {
+	// paired with an unrelated (even individually valid) ledger. Checked
+	// against envelopeStmt (the envelope's own embedded statement), the same
+	// source of truth as check 1 — not rec.Statement.
+	subjDigest, subjOK := statementSubjectDigest(envelopeStmt)
+	if !subjOK || subjDigest != rec.Head {
 		fmt.Fprintf(stderr, "corral certify verify: FAILED (statement subject digest %q does not match ledger head %q)\n", subjDigest, rec.Head)
 		return 1
 	}

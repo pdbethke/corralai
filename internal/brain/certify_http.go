@@ -13,7 +13,7 @@ import (
 // /healthz): the whole point of publishing the key is to let a third party
 // — someone with only a persisted build_records row, no brain credentials —
 // independently verify a corral certify signature with
-// certify.VerifyStatement. Only the public key is ever handled here; the
+// certify.VerifyDSSE. Only the public key is ever handled here; the
 // private signing key never reaches this code path.
 func CertifyPubkeyHandler(pub ed25519.PublicKey) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {

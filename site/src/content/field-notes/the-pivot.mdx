@@ -1,0 +1,68 @@
+---
+title: "Is any of this worth it?"
+description: "I lay awake asking whether a very cool thing was a useful thing. By morning the answer was no — not the way we'd been aiming it. We can't win as a builder. But the engine we built to contain agents and run their checks isn't a builder's engine at all. It's an accountability engine. Here's the pivot, and the working proof it produced."
+pubDate: 2026-07-10
+draft: false
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+
+*Field note. The honest ones are the only ones worth writing. This is the one where I nearly talked myself into shelving the whole thing — and what I found when I didn't.*
+
+---
+
+## The 3am question
+
+A few nights ago I lay awake asking the question every founder eventually has to answer at knifepoint: **is any of this actually worth it?**
+
+Corralai is a genuinely cool thing to watch. A headless brain takes one directive, a herd of AI agents plans and builds and verifies and re-plans, and you can scrub the whole run back like a tape and click any moment to see what an agent was thinking. People smile when they see it.
+
+But "people smile" is not a business, and it's barely a reason. The AI landscape is moving at a speed that makes every demo feel disposable by Friday. Everyone is building a way to build. The frontier labs are building it. The IDEs are building it. Your cloud is building it. If the pitch is "corral builds software a little better," then I'm one solo maintainer standing in front of a stampede, holding a very nice lantern.
+
+So I asked the mean version of the question. Not "is it cool" — *is it useful, to someone, in a way that survives the stampede?* And for a few hours the honest answer was: not like this.
+
+## The thing I couldn't stop looking at
+
+What I couldn't shake, though, was a specific piece of the machine. Not the building. The **gate**.
+
+Corral's whole personality is a rule we wrote on the tin — *a judge may not certify herself.* A builder doesn't get to declare its own build good. So the engine was never really about building; it was about **containing** agents behind real fences, **running their checks itself** instead of taking their word, and **recording every step** in an attributed ledger you can replay. (We're so serious about that "runs the check itself" part that when a pre-launch audit caught our *own* gate trusting a worker's self-report, we [wrote it up and shipped the fix in the open](/field-notes/we-caught-our-own-gate-cheating/) rather than quietly patch it.)
+
+Lying there, I finally heard what I'd built. An engine that contains, executes, and records — that is not a builder's engine. **Nobody needs a fourth way to write code. But everybody is about to need a way to prove what the code-writing did.**
+
+Because here's what actually changed under everyone's feet: the thing writing your code is now an agent. A non-deterministic actor that pulls dependencies, runs commands, and commits changes at machine speed. The five years before this taught us the hard way that a signature proves *who*, not *what* — SolarWinds signed malware because the build system was poisoned; the xz backdoor rode in on a trusted maintainer. Now put an agent in that chain, one confident enough to invent a package name an attacker has already registered, and the question "who produced this, and did the checks actually pass?" stops being paperwork. It becomes the whole game.
+
+That's not a builder problem. That's an **accountability** problem. And I'd accidentally spent a year building the engine for it.
+
+## The pivot
+
+So we turned the ship. Not "corral builds better." **Corral is how you account for what your agents build.**
+
+Same engine, aimed at the load-bearing wall instead of the shiny one. The containment, the execution-verified gate, the attributed ledger, the replay — every one of those is an accountability primitive that was hiding inside a builder costume.
+
+And I made myself a rule for the pivot, because a pivot dressed up as a revolution is just a second lie: **we did not invent any of this.** Software provenance is a real, mature field — SLSA, in-toto, Sigstore. We don't reinvent those rails; we run on them. What we do that I couldn't find sold as one owned, open-source, self-hostable binary is the specific combination: run the verification *ourselves* (not trust a self-report), record *which model* produced the change, sign it, and anchor it to a **public transparency log** — so the record is checkable by anyone, trusting the log and the math, not trusting my server.
+
+## The part that turns doubt into something you can hold
+
+Here's why I didn't shelve it. The pivot produced a real artifact the same week, not a manifesto.
+
+It's one line you drop into a pipeline:
+
+```
+corral certify -- go test ./... && go build ./...
+```
+
+It runs the check itself, records what produced the change, signs a provenance statement, and anchors it to Sigstore's public Rekor log. And then anyone can verify it — against a *published* key, not my word. Tamper with the record to hide a failed test, and verification fails and names the broken link.
+
+I'm not asking you to take that on faith either. A few hours ago I certified a build against our production brain, and it landed in the public transparency log as **Rekor entry #2138328104** — a real, permanent, publicly-witnessed record you can look up at [search.sigstore.dev](https://search.sigstore.dev) right now, with zero corral credentials. That's the difference between "trust me" and "check it yourself," and it's the entire point.
+
+The honest limits, because we don't ship claims we can't back: it's **tamper-evident, not tamper-proof** — you can't make any machine impossible to tamper with, only make tampering *detectable* against a public witness (which is exactly what git and Certificate Transparency give you). It's v0.1. It attests the CI step, not a hermetic build farm. Read the code, run it, break it — it's all in the open.
+
+## What the 3am question was actually asking
+
+I think the question was never really "is it worth it." It was "am I building the impressive thing or the *useful* thing," and I'd been afraid of the answer.
+
+The impressive thing was a herd of agents you could watch think. The useful thing was underneath it the whole time: **when a machine writes your software, you should be able to prove what it did — and so should anyone you have to answer to.** We stopped trying to be impressive. We started trying to be checkable.
+
+That's a thing I can defend at 3am. More soon on why it matters for the agentic supply chain specifically — but for now, the shortest version is the demo: certify a build, then verify it yourself, against a log I don't control.
+
+corral is open-source. Come [break it](https://github.com/pdbethke/corralai).

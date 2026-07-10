@@ -251,6 +251,106 @@ func TestReportBuild(t *testing.T) {
 	}
 }
 
+// TestReportBuildStoresGitLinkFields locks Task 2: report_build must thread
+// the commit_message/commit_author/commit_date/commit_signature params
+// through to the stored record verbatim, and derive pass from exit_code == 0
+// (denormalized so the dashboard's status filter is a cheap column read).
+func TestReportBuildStoresGitLinkFields(t *testing.T) {
+	dir := t.TempDir()
+	bs, err := buildstore.Open(filepath.Join(dir, "build.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bs.Close()
+
+	_, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	clientT, serverT := mcp.NewInMemoryTransports()
+	go func() {
+		_ = NewServer(nil, nil, Options{
+			BuildStore: bs,
+			CertifyKey: priv,
+		}).Run(ctx, serverT)
+	}()
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "t", Version: "0"}, nil)
+	sess, err := client.Connect(ctx, clientT, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+
+	res, err := sess.CallTool(ctx, &mcp.CallToolParams{
+		Name: "report_build",
+		Arguments: map[string]any{
+			"repo":           "pdbethke/corralai",
+			"commit":         "abc123",
+			"branch":         "feat/x",
+			"command":        "go test ./...",
+			"exit_code":      0,
+			"commit_message": "fix the thing",
+			"commit_author":  "Peter <peter@example.com>",
+			"commit_date":    "2026-07-09T12:00:00-05:00",
+			"commit_signature": map[string]any{
+				"signed":    true,
+				"signer":    "Peter <peter@example.com>",
+				"mechanism": "gpg",
+				"verified":  "good",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("report_build: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("report_build returned a tool error: %q", toolErrText(res))
+	}
+
+	var out reportBuildOut
+	b, err := json.Marshal(res.StructuredContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatalf("decode reportBuildOut: %v", err)
+	}
+
+	stored, found, err := bs.Get(out.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found {
+		t.Fatalf("record %d not found in the build store", out.ID)
+	}
+	if stored["commit_message"] != "fix the thing" {
+		t.Fatalf("stored commit_message = %v, want %q", stored["commit_message"], "fix the thing")
+	}
+	if stored["commit_author"] != "Peter <peter@example.com>" {
+		t.Fatalf("stored commit_author = %v, want %q", stored["commit_author"], "Peter <peter@example.com>")
+	}
+	if stored["commit_date"] != "2026-07-09T12:00:00-05:00" {
+		t.Fatalf("stored commit_date = %v, want %q", stored["commit_date"], "2026-07-09T12:00:00-05:00")
+	}
+	sigStr, ok := stored["commit_signature"].(string)
+	if !ok || sigStr == "" {
+		t.Fatalf("expected a non-empty stored commit_signature, got %v (%T)", stored["commit_signature"], stored["commit_signature"])
+	}
+	var sigMap map[string]any
+	if err := json.Unmarshal([]byte(sigStr), &sigMap); err != nil {
+		t.Fatalf("stored commit_signature is not valid JSON: %v", err)
+	}
+	if sigMap["verified"] != "good" {
+		t.Fatalf("stored commit_signature.verified = %v, want %q", sigMap["verified"], "good")
+	}
+	if stored["pass"] != true {
+		t.Fatalf("stored pass = %v, want true for exit_code == 0", stored["pass"])
+	}
+}
+
 // TestReportBuildDisabledWithoutValidKey locks the misconfig guard: a brain
 // configured with a BuildStore but a missing/invalid CertifyKey must NOT
 // register report_build (ed25519.Sign panics on a malformed key — that panic

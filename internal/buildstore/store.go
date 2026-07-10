@@ -66,6 +66,31 @@ func Open(dsn string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	// The git-link columns (Task 2): commit message/author/date pulled from
+	// `git show` at certify time, the parsed `git verify-commit` outcome, and
+	// pass (execution exit_code == 0) — a cheap denormalized column so the
+	// dashboard's status filter doesn't need to unpack `statement`/`steps` JSON
+	// per row. Idempotent for the same reason as steps/rekor/anchored above.
+	if _, err := db.Exec(`ALTER TABLE build_records ADD COLUMN IF NOT EXISTS commit_message VARCHAR`); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if _, err := db.Exec(`ALTER TABLE build_records ADD COLUMN IF NOT EXISTS commit_author VARCHAR`); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if _, err := db.Exec(`ALTER TABLE build_records ADD COLUMN IF NOT EXISTS commit_date VARCHAR`); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if _, err := db.Exec(`ALTER TABLE build_records ADD COLUMN IF NOT EXISTS commit_signature JSON`); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if _, err := db.Exec(`ALTER TABLE build_records ADD COLUMN IF NOT EXISTS pass BOOLEAN`); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if _, err := db.Exec(`CREATE SEQUENCE IF NOT EXISTS build_record_id START 1`); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -80,11 +105,17 @@ func (s *Store) Close() error { return s.db.Close() }
 // that produced `head`, so a stored record can be independently re-verified
 // with certify.VerifyLedger without trusting the brain's in-process state —
 // plus the transparency-witness evidence (rekorJSON, the marshaled
-// transparency.Entry; anchored, whether anchoring actually succeeded) and
-// returns its assigned id. rekorJSON=="" / anchored==false records a build
-// that was signed but never reached (or wasn't offered) a transparency log —
-// report_build degrades to this rather than failing the build.
-func (s *Store) Save(repo, commit, branch, actor, head, sig, statementJSON, stepsJSON, rekorJSON string, anchored bool) (int64, error) {
+// transparency.Entry; anchored, whether anchoring actually succeeded), the
+// git-link fields captured at certify time (commitMessage, commitAuthor,
+// commitDate, commitSignatureJSON — the parsed `git verify-commit` outcome,
+// a `{signed,signer,mechanism,verified}` object as JSON text, "" if git
+// context was unavailable), and pass (the record's execution exit_code == 0,
+// denormalized here so the dashboard's status filter is a cheap column read
+// rather than an unpack of statement/steps JSON) — and returns its assigned
+// id. rekorJSON=="" / anchored==false records a build that was signed but
+// never reached (or wasn't offered) a transparency log — report_build
+// degrades to this rather than failing the build.
+func (s *Store) Save(repo, commit, branch, actor, head, sig, statementJSON, stepsJSON, rekorJSON string, anchored bool, commitMessage, commitAuthor, commitDate, commitSignatureJSON string, pass bool) (int64, error) {
 	var id int64
 	var rekorArg any
 	if rekorJSON == "" {
@@ -92,11 +123,17 @@ func (s *Store) Save(repo, commit, branch, actor, head, sig, statementJSON, step
 	} else {
 		rekorArg = rekorJSON
 	}
+	var commitSigArg any
+	if commitSignatureJSON == "" {
+		commitSigArg = nil
+	} else {
+		commitSigArg = commitSignatureJSON
+	}
 	err := s.db.QueryRow(
-		`INSERT INTO build_records (id, repo, commit_sha, branch, actor, head, signature, statement, steps, rekor, anchored, created_ts)
-		 VALUES (nextval('build_record_id'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO build_records (id, repo, commit_sha, branch, actor, head, signature, statement, steps, rekor, anchored, commit_message, commit_author, commit_date, commit_signature, pass, created_ts)
+		 VALUES (nextval('build_record_id'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 RETURNING id`,
-		repo, commit, branch, actor, head, sig, statementJSON, stepsJSON, rekorArg, anchored, now()).Scan(&id)
+		repo, commit, branch, actor, head, sig, statementJSON, stepsJSON, rekorArg, anchored, commitMessage, commitAuthor, commitDate, commitSigArg, pass, now()).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("buildstore: save: %w", err)
 	}
@@ -106,16 +143,23 @@ func (s *Store) Save(repo, commit, branch, actor, head, sig, statementJSON, step
 // Get returns the stored SLSA statement (parsed to a map, with the ledger
 // steps folded in under "steps", the signature under "signature", the
 // transparency-witness evidence under "rekor" (a JSON-encoded string, "" if
-// never anchored), and whether it was anchored under "anchored") for id,
-// plus false if no record with that id exists.
+// never anchored), whether it was anchored under "anchored", the git-link
+// fields under "commit_message"/"commit_author"/"commit_date" (plain
+// strings) and "commit_signature" (a JSON-encoded string, "" if git context
+// was unavailable at certify time), and "pass" (whether the execution
+// exited 0)) for id, plus false if no record with that id exists.
 func (s *Store) Get(id int64) (map[string]any, bool, error) {
 	var statement any
 	var steps any
 	var sig string
 	var rekor any
 	var anchored sql.NullBool
+	var commitMessage, commitAuthor, commitDate sql.NullString
+	var commitSignature any
+	var pass sql.NullBool
 	err := s.db.QueryRow(
-		`SELECT statement, steps, signature, rekor, anchored FROM build_records WHERE id = ?`, id).Scan(&statement, &steps, &sig, &rekor, &anchored)
+		`SELECT statement, steps, signature, rekor, anchored, commit_message, commit_author, commit_date, commit_signature, pass FROM build_records WHERE id = ?`, id).
+		Scan(&statement, &steps, &sig, &rekor, &anchored, &commitMessage, &commitAuthor, &commitDate, &commitSignature, &pass)
 	if err == sql.ErrNoRows {
 		return nil, false, nil
 	}
@@ -149,6 +193,25 @@ func (s *Store) Get(id int64) (map[string]any, bool, error) {
 		m["rekor"] = string(rekorBytes)
 	}
 	m["anchored"] = anchored.Valid && anchored.Bool
+	m["commit_message"] = commitMessage.String
+	m["commit_author"] = commitAuthor.String
+	m["commit_date"] = commitDate.String
+	m["commit_signature"] = ""
+	if commitSignature != nil {
+		// commit_signature is a JSON column (same driver-representation
+		// variability as rekor above); re-encode to the flat JSON string the
+		// "commit_signature" map key promises callers.
+		sigVal, err := jsonColumnToAny(commitSignature)
+		if err != nil {
+			return nil, false, fmt.Errorf("buildstore: get: decoding stored commit_signature: %w", err)
+		}
+		sigBytes, err := json.Marshal(sigVal)
+		if err != nil {
+			return nil, false, fmt.Errorf("buildstore: get: re-encoding stored commit_signature: %w", err)
+		}
+		m["commit_signature"] = string(sigBytes)
+	}
+	m["pass"] = pass.Valid && pass.Bool
 	return m, true, nil
 }
 

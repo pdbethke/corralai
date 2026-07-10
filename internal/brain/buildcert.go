@@ -26,6 +26,15 @@ type reportBuildIn struct {
 	DurationS    float64  `json:"duration_s,omitempty" jsonschema:"how long the command ran, in seconds"`
 	OutputDigest string   `json:"output_digest,omitempty" jsonschema:"a digest of the command's output"`
 	ProducedBy   []string `json:"produced_by,omitempty" jsonschema:"models that produced the change under certification"`
+
+	// The git-link fields (Task 2): pulled from `git show`/`git verify-commit`
+	// by corral certify at capture time and posted verbatim — the brain never
+	// re-derives or re-verifies the signature here (that's display-time
+	// re-verification, out of scope for this handler; YAGNI for now).
+	CommitMessage   string         `json:"commit_message,omitempty" jsonschema:"the commit's subject line"`
+	CommitAuthor    string         `json:"commit_author,omitempty" jsonschema:"the commit author, \"name <email>\""`
+	CommitDate      string         `json:"commit_date,omitempty" jsonschema:"the commit's authored/committed date, ISO-8601"`
+	CommitSignature map[string]any `json:"commit_signature,omitempty" jsonschema:"the parsed git verify-commit outcome: {signed, signer, mechanism, verified}"`
 }
 
 // reportBuildOut is the signed, tamper-evident accountability record
@@ -170,7 +179,23 @@ func registerBuildCert(s *mcp.Server, opts Options) {
 				}
 			}
 
-			id, err := opts.BuildStore.Save(in.Repo, in.Commit, in.Branch, actor, head, string(envelope), string(canonical), string(stepsJSON), rekorJSON, anchored)
+			// pass mirrors the "execution" step's own ok field above — it's
+			// the same exit_code == 0 check, denormalized to a queryable
+			// column so the dashboard doesn't have to unpack steps/statement
+			// JSON per row for a cheap status filter.
+			pass := in.ExitCode == 0
+
+			var commitSignatureJSON string
+			if len(in.CommitSignature) > 0 {
+				b, err := json.Marshal(in.CommitSignature)
+				if err != nil {
+					return nil, reportBuildOut{}, fmt.Errorf("report_build: marshaling commit_signature: %w", err)
+				}
+				commitSignatureJSON = string(b)
+			}
+
+			id, err := opts.BuildStore.Save(in.Repo, in.Commit, in.Branch, actor, head, string(envelope), string(canonical), string(stepsJSON), rekorJSON, anchored,
+				in.CommitMessage, in.CommitAuthor, in.CommitDate, commitSignatureJSON, pass)
 			if err != nil {
 				return nil, reportBuildOut{}, err
 			}

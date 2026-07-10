@@ -14,6 +14,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 
@@ -32,6 +33,16 @@ type buildRecord struct {
 	DurationS    float64  `json:"duration_s,omitempty"`
 	OutputDigest string   `json:"output_digest,omitempty"`
 	ProducedBy   []string `json:"produced_by,omitempty"`
+
+	// The git-link fields (Task 2): captured via run.GitOutput/GitVerifyCommit
+	// at the resolved commit sha, extending the accountability chain to "who
+	// signed the code." CommitSignature is always set (never nil) — even an
+	// unsigned or git-unavailable commit gets an honest {signed:false,
+	// verified:"unsigned"} record, never a silently-dropped field.
+	CommitMessage   string         `json:"commit_message,omitempty"`
+	CommitAuthor    string         `json:"commit_author,omitempty"`
+	CommitDate      string         `json:"commit_date,omitempty"`
+	CommitSignature map[string]any `json:"commit_signature,omitempty"`
 }
 
 // buildResult is the signed, tamper-evident accountability record the brain
@@ -63,6 +74,16 @@ type cmdRunner interface {
 	// trimmed stdout. A failure (e.g. not a git repo) is reported via err;
 	// callers treat that as "context unavailable", not a fatal error.
 	GitOutput(args ...string) (string, error)
+	// GitVerifyCommit runs `git verify-commit --raw <sha>` and returns its
+	// raw output (the GPG/SSH status lines verify-commit emits — on stdout
+	// for some mechanisms, stderr for others, so both are captured) and
+	// whether the command exited zero. Unlike GitOutput, the raw text is
+	// returned even on a nonzero exit: a BADSIG / no-public-key verdict is
+	// only visible in that text, discarding it on error would make "bad
+	// signature" indistinguishable from "unsigned". A failure to run git at
+	// all (not a repo, git/gpg unavailable) is reported via err — callers
+	// treat that as "signature status unavailable", never fatal.
+	GitVerifyCommit(sha string) (raw string, exitZero bool, err error)
 	// RunCommand runs argv, streaming its stdout/stderr live to the given
 	// writers while also capturing the combined output for the build digest.
 	// err is non-nil only when the command could not be run at all (e.g. not
@@ -88,6 +109,23 @@ func (realRunner) GitOutput(args ...string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+func (realRunner) GitVerifyCommit(sha string) (string, bool, error) {
+	cmd := exec.Command("git", "verify-commit", "--raw", sha) // #nosec G204 -- fixed "git" binary; sha is corral's own resolved commit, not attacker input
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		return strings.TrimSpace(string(out)), true, nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		// git ran and reported a real verdict (or "not signed") via its exit
+		// code — the raw text is what parseVerifyCommitRaw needs, not err.
+		return strings.TrimSpace(string(out)), false, nil
+	}
+	// git itself could not be run (not found, not a repo, etc.) — signature
+	// status is genuinely unavailable, never fatal to certify.
+	return "", false, err
 }
 
 func (realRunner) RunCommand(argv []string, stdout, stderr io.Writer) (int, time.Duration, []byte, error) {
@@ -141,6 +179,18 @@ func (mcpPoster) Post(ctx context.Context, brainURL string, rec buildRecord) (bu
 	}
 	if len(rec.ProducedBy) > 0 {
 		args["produced_by"] = rec.ProducedBy
+	}
+	if rec.CommitMessage != "" {
+		args["commit_message"] = rec.CommitMessage
+	}
+	if rec.CommitAuthor != "" {
+		args["commit_author"] = rec.CommitAuthor
+	}
+	if rec.CommitDate != "" {
+		args["commit_date"] = rec.CommitDate
+	}
+	if len(rec.CommitSignature) > 0 {
+		args["commit_signature"] = rec.CommitSignature
 	}
 
 	res, err := cl.CallTool(ctx, "report_build", args)
@@ -256,6 +306,32 @@ func runCertify(args []string, run cmdRunner, post buildPoster, stdout, stderr i
 		}
 	}
 
+	// Git-link capture (Task 2): message/author/date via `git show` at the
+	// resolved commit sha, and the parsed `git verify-commit --raw` outcome —
+	// extending the accountability chain to "who signed the code." Any of
+	// these that fail (e.g. certify run outside a git checkout, or against a
+	// --commit not present locally) degrade to empty/unsigned rather than
+	// failing certify: the check already ran and its result is the point.
+	commitMessage := ""
+	if commit != "" {
+		if v, err := run.GitOutput("show", "-s", "--format=%s", commit); err == nil {
+			commitMessage = v
+		}
+	}
+	commitAuthor := ""
+	if commit != "" {
+		if v, err := run.GitOutput("show", "-s", "--format=%an <%ae>", commit); err == nil {
+			commitAuthor = v
+		}
+	}
+	commitDate := ""
+	if commit != "" {
+		if v, err := run.GitOutput("show", "-s", "--format=%cI", commit); err == nil {
+			commitDate = v
+		}
+	}
+	commitSignature := captureCommitSignature(run, commit)
+
 	var producedBy []string
 	if v := strings.TrimSpace(*producedByFlag); v != "" {
 		for _, p := range strings.Split(v, ",") {
@@ -282,6 +358,11 @@ func runCertify(args []string, run cmdRunner, post buildPoster, stdout, stderr i
 		DurationS:    dur.Seconds(),
 		OutputDigest: "sha256:" + hex.EncodeToString(sum[:]),
 		ProducedBy:   producedBy,
+
+		CommitMessage:   commitMessage,
+		CommitAuthor:    commitAuthor,
+		CommitDate:      commitDate,
+		CommitSignature: commitSignature,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -321,4 +402,108 @@ func runCertify(args []string, run cmdRunner, post buildPoster, stdout, stderr i
 	}
 
 	return exitCode
+}
+
+// gpgStatusLineRe matches a GPG "--status-fd"-style status line for a given
+// tag (e.g. GOODSIG, BADSIG, NO_PUBKEY, ERRSIG): "[GNUPG:] <TAG> <keyid>
+// [rest...]". The captured group is everything after the keyid — the
+// human-readable signer identity for GOODSIG/BADSIG, empty for tags that
+// don't carry one (NO_PUBKEY, ERRSIG).
+func gpgStatusLineRe(tag string) *regexp.Regexp {
+	return regexp.MustCompile(`(?m)^\[GNUPG:\] ` + tag + ` [0-9A-Fa-f]+ ?(.*)$`)
+}
+
+// sshGoodSigRe matches the plain-text form `git verify-commit` prints for an
+// SSH-signed commit (via ssh-keygen -Y verify, which doesn't speak the GPG
+// status-fd protocol): `Good "git" signature for <signer> with ...`.
+var sshGoodSigRe = regexp.MustCompile(`Good "git" signature for (\S+)`)
+
+// captureCommitSignature runs `git verify-commit --raw <sha>` via run and
+// parses the result into the honest {signed, signer, mechanism, verified}
+// shape report_build expects. Any failure to run git at all (not a repo,
+// git/gpg unavailable, sha not resolvable) degrades to {signed:false,
+// verified:"unsigned"} — signature status being unavailable is never fatal
+// to certify.
+func captureCommitSignature(run cmdRunner, sha string) map[string]any {
+	if sha == "" {
+		return map[string]any{"signed": false, "verified": "unsigned"}
+	}
+	raw, exitZero, err := run.GitVerifyCommit(sha)
+	if err != nil {
+		return map[string]any{"signed": false, "verified": "unsigned"}
+	}
+	return parseVerifyCommitRaw(raw, exitZero)
+}
+
+// parseVerifyCommitRaw classifies the raw output of `git verify-commit
+// --raw` into the {signed, signer, mechanism, verified} shape. The honesty
+// contract (never faked green): an unsigned commit or output we can't
+// positively classify as GOOD/BAD/unknown-key comes back verified:"unsigned"
+// (or the specific bad/unknown-key verdict) — it is NEVER reported as
+// "good" unless the raw text actually says so.
+func parseVerifyCommitRaw(raw string, exitZero bool) map[string]any {
+	raw = strings.TrimSpace(raw)
+	mechanism := inferSignatureMechanism(raw)
+
+	if signer, ok := gpgStatusSigner(raw, "GOODSIG"); ok && exitZero {
+		return signatureResult("good", signer, mechanism)
+	}
+	if exitZero {
+		if m := sshGoodSigRe.FindStringSubmatch(raw); m != nil {
+			return signatureResult("good", m[1], mechanism)
+		}
+	}
+	if raw == "" {
+		// verify-commit exited nonzero with no status output at all — the
+		// commit simply isn't signed, not a verification failure.
+		return map[string]any{"signed": false, "verified": "unsigned"}
+	}
+	if signer, ok := gpgStatusSigner(raw, "NO_PUBKEY"); ok {
+		return signatureResult("unknown-key", signer, mechanism)
+	}
+	if signer, ok := gpgStatusSigner(raw, "BADSIG"); ok {
+		return signatureResult("bad", signer, mechanism)
+	}
+	if signer, ok := gpgStatusSigner(raw, "ERRSIG"); ok {
+		// ERRSIG covers several distinct GPG failure modes (unknown key,
+		// unsupported algorithm, ...) that all mean "couldn't be positively
+		// verified" — never promote this to "bad" (that implies a
+		// deliberately forged signature) or "good".
+		return signatureResult("unknown-key", signer, mechanism)
+	}
+	// Non-empty output we can't positively classify — never invent "good";
+	// treat conservatively as unsigned rather than guess at a verdict.
+	return map[string]any{"signed": false, "verified": "unsigned"}
+}
+
+func gpgStatusSigner(raw, tag string) (string, bool) {
+	m := gpgStatusLineRe(tag).FindStringSubmatch(raw)
+	if m == nil {
+		return "", false
+	}
+	return strings.TrimSpace(m[1]), true
+}
+
+func inferSignatureMechanism(raw string) string {
+	switch {
+	case strings.Contains(raw, "gitsign"):
+		return "gitsign"
+	case strings.Contains(raw, `"git" signature`):
+		return "ssh"
+	case strings.Contains(raw, "[GNUPG:]"):
+		return "gpg"
+	default:
+		return ""
+	}
+}
+
+func signatureResult(verified, signer, mechanism string) map[string]any {
+	m := map[string]any{"signed": true, "verified": verified}
+	if signer != "" {
+		m["signer"] = signer
+	}
+	if mechanism != "" {
+		m["mechanism"] = mechanism
+	}
+	return m
 }

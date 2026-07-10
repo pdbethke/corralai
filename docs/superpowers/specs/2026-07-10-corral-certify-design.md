@@ -93,10 +93,36 @@ the keystore auth, the telemetry store + replay. **Builds (small):** the `certif
 subcommand, `internal/attest`, the brain ingest endpoint + `build_records` store, and the
 Ed25519 head-signing.
 
+## The vision this wedge rides on — the MotherDuck accountability warehouse
+
+`corral certify` is the **writer**. The product it unlocks is the **accountability
+warehouse for a distributed dev shop**: every dev, every CI runner, every project runs
+`corral certify`, and the signed build records federate into one shared, queryable,
+shareable warehouse.
+
+Corral's telemetry, memory, reference, and recordings stores are **already DuckDB**
+(`go-duckdb/v2`). So the build-record store is DuckDB-native too — and the *same schema*
+federates to a shared **MotherDuck** warehouse by swapping the DSN (a local `.duckdb` path
+→ an `md:` connection string). No second system; a config flip.
+
+That flip is what makes "distributed dev shop" real: no per-shop server everyone VPNs into
+— MotherDuck is the hub. The shop lead queries "what did my whole team ship this sprint,
+and did it pass?"; a client gets a **read-only share** proving the whole vendor team's work;
+compliance/gov query the lineage in SQL and replay any run. Because each record is a
+**signed, tamper-evident ledger head**, the warehouse is cryptographic proof that
+federates — not self-reported logs a vendor could doctor.
+
+Honesty guardrail: we build the DuckDB-native store *now* (real); MotherDuck federation +
+shares are the **next spec**, not claimed as shipped until the flip runs. Lead with it in
+the roadmap and the story; claim it in the product only once it works.
+
 ## Out of scope (the vision layers on top of this wedge)
 
 - **Offline mode** — emit the record as a CI artifact when the brain's unreachable (fast-follow).
-- **The team dashboard / multi-project org rollout** — many devs, many apps, one server.
+- **MotherDuck federation + read-only shares** — the DSN flip, the shared warehouse, the
+  cross-source rollup, the client/auditor share links. The next spec; the store is built
+  DuckDB-native now so this is a config flip, not a rewrite.
+- **The team dashboard / multi-project org rollout** — many devs, many apps, one warehouse.
 - **Remote *presentation* mode** — the shareable, presenter-friendly playback for gov
   conferences / supervisor oversight.
 - **DSSE/Sigstore/Rekor** signing upgrade.

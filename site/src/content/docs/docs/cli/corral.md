@@ -20,6 +20,13 @@ Usage:
                                   <command>'s own exit code
                                   flags: --produced-by a,b   --out <file>
                                          --repo/--commit/--branch (default: read via git)
+  corral certify verify <record-file> [--pubkey <hex>|--brain <url>]
+                                  independently verify a --out (or report_build) record: the
+                                  Ed25519 signature, the ledger's hash chain, and that the
+                                  statement is bound to that exact ledger head — no brain
+                                  round trip needed if --pubkey or the record's own
+                                  public_key is used; prints "verified" and exits 0, or names
+                                  the failing check on stderr and exits non-zero
   corral --version                print the build version and exit
   corral -h                       print this help and exit
 
@@ -76,4 +83,6 @@ CORRALAI_LEARN_SWEEP_SECONDS  how often (seconds) the learn sweep clusters findi
 CORRALAI_BUILD_DB          `corral certify` signed build-record ledger DuckDB path (default ~/.claude/corralai_build.duckdb)
 CORRALAI_CERTIFY_KEY       hex-encoded Ed25519 seed (32 bytes) `corral certify` build attestations are signed with; takes priority over key file
 CORRALAI_CERTIFY_KEY_FILE  path to persist the certify signing key seed (default ~/.claude/corralai_certify_key); created 0600 on first run
+CORRALAI_BRAIN_TOKEN       `corral certify`'s bearer token to authenticate to a brain (via `corral secret set`); distinct
+                           from CORRALAI_BRAIN_KEY above (that's an Ed25519 IDENTITY SEED, not a bearer token — do not reuse it)
 ```

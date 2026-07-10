@@ -4,10 +4,10 @@
 [![License: Elastic 2.0](https://img.shields.io/badge/license-Elastic--2.0-e8a838)](LICENSE)
 [![docs](https://img.shields.io/badge/docs-corralai.dev-2f6f4e)](https://corralai.dev/docs/getting-started/)
 
-> **AI accountability, by execution.** One directive → a herd of AI agents that
-> plan, build, and ship real work — across any model, behind real fences,
-> **certified by running the actual check**, with a human at the gate. Every run
-> recorded, replayable, and exportable as a signed provenance attestation.
+> **Accountability for the agents you run.** One directive → a herd of AI agents
+> that plan, build, and ship real work — across any model, behind real fences,
+> **certified by running the actual check** (a judge may not certify herself), with a
+> human at the gate. Every run recorded and replayable.
 
 Everyone is racing to make AI agents *smarter*. Corralai makes them **trustworthy
 to run**. Give a headless brain one directive — *"build me a World Cup scores
@@ -47,11 +47,12 @@ mistakes into a human-approved memory that shapes future missions — and *more
 efficient* — it routes each task to the model its own track record proves is best.
 Two loops, one ground truth: the verify gate. It's also **multi-model by design**, so
 review is decorrelated (a Gemini reviewer doesn't share a Claude builder's blind
-spots) and there's no vendor lock-in. And every run **exports as an
-[in-toto/SLSA](https://slsa.dev/) provenance attestation** — a signed, standards-shaped
-record of what was built, by which model, and that it *actually passed* — so
-agent-produced changes carry the same verifiable provenance your auditor already
-expects.
+spots) and there's no vendor lock-in. And we've **prototyped exporting a run as a
+signed [in-toto/SLSA](https://slsa.dev/) provenance attestation** — a standards-shaped
+record of what was built, by which model, and that it *actually passed*, bound to a
+tamper-evident hash-linked ledger of every step; wiring it into every run is next (see
+the [roadmap](ROADMAP.md)). The aim: agent-produced changes carry the same verifiable
+provenance your auditor already expects.
 
 The name is the metaphor: the **corral** is the enclosure agents work in, the
 **fences** are the security boundaries, and the brain corrals a herd of (possibly

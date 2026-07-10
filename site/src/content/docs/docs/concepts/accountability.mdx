@@ -52,19 +52,21 @@ Two loops, one ground truth: the verify gate. The gate is why both are trustwort
 only vetted findings compound, and the efficiency metrics rest on *real recorded
 passes*, not self-reports.
 
-## The evidence: a signed provenance attestation
+## The evidence: a signed provenance attestation (prototyped)
 
-Every run can be exported as a signed [in-toto](https://in-toto.io/) statement
-carrying an [SLSA provenance](https://slsa.dev/provenance/v1) predicate — the same
-standard your software supply-chain tooling already speaks. It records what was built,
+A run already records everything an audit needs. We've **prototyped** turning that
+into a signed [in-toto](https://in-toto.io/) statement carrying an
+[SLSA provenance](https://slsa.dev/provenance/v1) predicate — the same standard your
+software supply-chain tooling already speaks — and wiring it into every run is on the
+[roadmap](https://github.com/pdbethke/corralai/blob/main/ROADMAP.md). It records what was built,
 **by which model** (models are named as materials), and — the part no self-reporting
 agent tool can produce — the **actual commands that ran and that they passed**, plus
 the human sign-off and the full finding trail. Agent-produced changes carry the same
 verifiable provenance an auditor already expects for human-produced ones — arguably
 *better*, because the check was real.
 
-And it's **tamper-evident**: the run's build steps form a hash-linked, signed ledger —
-each step committing to the hash of the one before it, the way [git](https://git-scm.com/),
+The prototype is also **tamper-evident**: the run's build steps form a hash-linked,
+signed ledger — each step committing to the hash of the one before it, the way [git](https://git-scm.com/),
 [Certificate Transparency](https://certificate.transparency.dev/), and
 [Sigstore Rekor](https://docs.sigstore.dev/logging/overview/) do. Alter, insert, remove, or
 reorder any step — make a *failed* check look like it passed — and the signed head breaks.

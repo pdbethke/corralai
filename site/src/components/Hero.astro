@@ -35,7 +35,7 @@ const minutes = Math.round((meta.duration_seconds || 0) / 60);
 ---
 <section id="hero">
   <div class="hero-copy">
-    <h1>The accountability layer for AI agents — a headless brain corrals a herd of any models, contains them, and certifies what they ship by running the actual check, with a human at the gate.</h1>
+    <h1>Accountability for the agents you run — a headless brain corrals a herd of any models, contains them, and certifies what they ship by running the actual check, with a human at the gate.</h1>
     <p class="pitch">
       Corral isn't a better builder — that race belongs to the model labs. It's
       what makes what agents ship <em>trustworthy to run</em>: <strong>attributable,
@@ -45,9 +45,10 @@ const minutes = Math.round((meta.duration_seconds || 0) / 60);
       request), and the brain <strong>certifies the result by running the check
       itself</strong>, not by trusting the agent's word — a judge may not certify
       herself. It compounds: the herd learns from its gate-verified mistakes and
-      routes each task to the model its own track record proves is best. And every
-      run exports as a signed <a href="https://slsa.dev/">provenance attestation</a>
-      — the audit trail an auditor already expects.
+      routes each task to the model its own track record proves is best. And we've
+      prototyped exporting a run as a signed
+      <a href="https://slsa.dev/">provenance attestation</a> with a tamper-evident
+      ledger — the audit trail an auditor expects; wiring it into every run is next.
     </p>
     <p class="proof-row">
       <span>Certify by execution — a real recorded pass, not a self-report</span>
@@ -313,7 +314,7 @@ const minutes = Math.round((meta.duration_seconds || 0) / 60);
   // canvas/panels in the picked palette (matrix → green phosphor, etc.) AND
   // clobbers document.title with the product's skin subtitle — restore the
   // site's own title after each pick so the tab stays branded.
-  const HERO_TITLE = 'Corralai — AI accountability, by execution';
+  const HERO_TITLE = 'Corralai — accountability for the agents you run';
   if (typeof window.setSkin === 'function') {
     const _setSkin = window.setSkin;
     window.setSkin = function (v) { _setSkin(v); document.title = HERO_TITLE; };
@@ -328,5 +329,5 @@ const minutes = Math.round((meta.duration_seconds || 0) / 60);
   // 'CorralAI — the corral' — the product UI's own title, not the site's.
   // Restore the site's title here, verbatim against the <title> in
   // index.astro so this and the a11y "has a <title>" check never drift.
-  document.title = 'Corralai — AI accountability, by execution';
+  document.title = 'Corralai — accountability for the agents you run';
 </script>

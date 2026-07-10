@@ -101,6 +101,13 @@ func TestRunCertifyVerify_ValidRecordPasses(t *testing.T) {
 	}
 }
 
+// TestRunCertifyVerify_UsesRecordEmbeddedPublicKeyWhenNoFlagsGiven guards
+// against the circular-trust-anchor bug: a record's own embedded
+// public_key must NEVER be usable to verify that same record — an attacker
+// who forges a record just signs it with their own key and writes that key
+// into public_key, and every check would pass. With neither --pubkey nor
+// --brain given, verify must refuse (non-zero exit, no "verified" on
+// stdout) rather than fall back to the record's self-reported key.
 func TestRunCertifyVerify_UsesRecordEmbeddedPublicKeyWhenNoFlagsGiven(t *testing.T) {
 	_, raw := buildTestRecord(t)
 	path := writeRecord(t, raw)
@@ -108,8 +115,14 @@ func TestRunCertifyVerify_UsesRecordEmbeddedPublicKeyWhenNoFlagsGiven(t *testing
 
 	code := runCertifyVerify([]string{path}, failFetcher(t), &stdout, &stderr)
 
-	if code != 0 {
-		t.Fatalf("expected exit 0 using the record's own public_key, got %d (stderr=%s)", code, stderr.String())
+	if code == 0 {
+		t.Fatalf("expected a non-zero exit when no --pubkey/--brain is given (the record's embedded public_key must not be a trust anchor), got 0")
+	}
+	if strings.Contains(stdout.String(), "verified") {
+		t.Errorf("expected no \"verified\" on stdout when falling back to the record's own key is refused, got %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "--pubkey") || !strings.Contains(stderr.String(), "--brain") {
+		t.Errorf("expected stderr to point at --pubkey/--brain, got %q", stderr.String())
 	}
 }
 

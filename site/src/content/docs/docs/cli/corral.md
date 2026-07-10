@@ -23,10 +23,11 @@ Usage:
   corral certify verify <record-file> [--pubkey <hex>|--brain <url>]
                                   independently verify a --out (or report_build) record: the
                                   Ed25519 signature, the ledger's hash chain, and that the
-                                  statement is bound to that exact ledger head — no brain
-                                  round trip needed if --pubkey or the record's own
-                                  public_key is used; prints "verified" and exits 0, or names
-                                  the failing check on stderr and exits non-zero
+                                  statement is bound to that exact ledger head — requires a
+                                  trusted key via --pubkey or --brain (a record's own
+                                  embedded public_key is never a trust anchor); prints
+                                  "verified" and exits 0, or names the failing check on
+                                  stderr and exits non-zero
   corral --version                print the build version and exit
   corral -h                       print this help and exit
 

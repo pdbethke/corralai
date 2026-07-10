@@ -39,18 +39,23 @@ how `gh`/`aws`/`gcloud` do it.
 
 1. **No plaintext secret at rest in the file backend.** The store is age-encrypted;
    only ciphertext touches disk. File mode `0600`, parent dir `0700`.
-2. **Master-key (age identity) protection — the crux.** The file is encrypted to an
-   age identity (X25519). That identity is protected, in order:
-   - **OS keyring** entry (`corral/age-identity`) where a keyring exists — the file
-     is useless without keyring access. Desktop default.
-   - **A key file** (`0600`) or **env** (`CORRAL_AGE_IDENTITY`) on headless hosts.
-     Documented as the SSH-private-key-grade trust boundary (a `0600` key protecting
-     the store).
-   - **systemd credential** (`age-identity`) on our systemd deploys — so
-     `systemd-creds` protects ONE master, and all provider keys live in the portable
-     encrypted file. (systemd-creds is now just an identity source, not the store.)
-   A passphrase-derived identity (age scrypt) is offered for interactive desktops
-   but NOT used for auto-starting services (no interactive unlock).
+2. **Two distinct at-rest boundaries — be honest about which applies where.**
+   The age file is NOT the desktop path. Because the OS keyring is the first
+   *writable* tier, a host WITH a keyring stores each secret **directly in the OS
+   keyring** (OS-native encryption + access control); the age file is never written
+   and — post lazy-identity — no age identity is minted at all. The age-encrypted
+   file is the **headless / no-keyring** path (servers, containers, CI without a
+   Secret Service daemon). There, the store is encrypted to an X25519 identity whose
+   own protection is, in order:
+   - **env** `CORRAL_AGE_IDENTITY` (a literal `AGE-SECRET-KEY-…`) — for CI/containers.
+   - **systemd credential** (`$CREDENTIALS_DIRECTORY/age-identity`) on systemd deploys
+     — `systemd-creds` protects ONE master, all provider keys ride the portable file.
+   - **a `0600` key file** beside the store as the last resort — an SSH-private-key-
+     grade trust boundary (a `0600` private key protecting the encrypted store), NOT
+     "keyring-guarded." Public docs/README MUST describe it as such and must not imply
+     the encrypted file is protected by the OS keyring on a headless host.
+   `resolveIdentity` **fails closed**: a present-but-malformed identity source errors
+   rather than silently minting a new identity that would orphan an existing store.
 3. **OS keyring uses OS-native encryption + access control** — we store secrets
    there directly (service `corral`, key = the secret name); the OS owns at-rest.
 4. **Never log secret values.** All log/error paths redact; a `Redact(s)` helper

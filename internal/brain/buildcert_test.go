@@ -209,6 +209,24 @@ func TestReportBuild(t *testing.T) {
 	if !ok || digest["sha256"] != out.Head {
 		t.Fatalf("stored statement.subject[0].digest.sha256 = %v, want ledger head %v", digest["sha256"], out.Head)
 	}
+
+	// out.Steps (the response's own "steps" field, not the DB row) must be
+	// an independently verifiable ledger too — an --out record built purely
+	// from the tool response (Task 7's CLI path) needs no brain round-trip.
+	if len(out.Steps) == 0 {
+		t.Fatal("expected report_build's response to carry a non-empty steps field")
+	}
+	stepsBytes, err := json.Marshal(out.Steps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	respLedger, err := certify.UnmarshalSteps(stepsBytes)
+	if err != nil {
+		t.Fatalf("certify.UnmarshalSteps(out.Steps): %v", err)
+	}
+	if ok3, msg := certify.VerifyLedger(respLedger, out.Head); !ok3 {
+		t.Fatalf("VerifyLedger over response steps failed: %s", msg)
+	}
 }
 
 // TestReportBuildDisabledWithoutValidKey locks the misconfig guard: a brain

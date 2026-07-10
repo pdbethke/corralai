@@ -66,6 +66,10 @@ func stubResult() buildResult {
 			"predicateType": "https://slsa.dev/provenance/v1",
 			"head":          "deadbeef",
 		},
+		PublicKey: "pubkey-hex",
+		Steps: []map[string]any{
+			{"seq": 0.0, "kind": "execution", "hash": "deadbeef", "prev": strings.Repeat("0", 68)},
+		},
 	}
 }
 
@@ -182,6 +186,56 @@ func TestRunCertify_OutWritesStatement(t *testing.T) {
 	}
 	if got["head"] != "deadbeef" {
 		t.Errorf("statement head = %v, want deadbeef", got["head"])
+	}
+}
+
+// TestRunCertify_OutWritesFullSelfVerifyingRecord locks sub-change 5: --out
+// must write the COMPLETE record {statement, signature, steps, head,
+// public_key} — not just the bare statement — so `corral certify verify`
+// can check it with no brain round trip at all.
+func TestRunCertify_OutWritesFullSelfVerifyingRecord(t *testing.T) {
+	run := &fakeRunner{exitCode: 0, output: []byte("ok\n")}
+	post := &fakePoster{result: stubResult()}
+	var stdout, stderr bytes.Buffer
+	outPath := filepath.Join(t.TempDir(), "record.json")
+
+	code := runCertify([]string{
+		"--brain", "https://brain.example",
+		"--repo", "pdbethke/corralai",
+		"--commit", "abc123",
+		"--branch", "main",
+		"--out", outPath,
+		"--", "go", "test", "./...",
+	}, run, post, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("unexpected exit code %d: %s", code, stderr.String())
+	}
+	raw, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("expected %s to be written: %v", outPath, err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("--out file is not valid JSON: %v", err)
+	}
+	for _, key := range []string{"statement", "signature", "steps", "head", "public_key"} {
+		if _, ok := got[key]; !ok {
+			t.Errorf("--out record missing %q key: %v", key, got)
+		}
+	}
+	if got["head"] != "deadbeef" {
+		t.Errorf("head = %v, want deadbeef", got["head"])
+	}
+	if got["signature"] != "sig-hex" {
+		t.Errorf("signature = %v, want sig-hex", got["signature"])
+	}
+	if got["public_key"] != "pubkey-hex" {
+		t.Errorf("public_key = %v, want pubkey-hex", got["public_key"])
+	}
+	steps, ok := got["steps"].([]any)
+	if !ok || len(steps) != 1 {
+		t.Errorf("steps = %v, want a 1-element array", got["steps"])
 	}
 }
 

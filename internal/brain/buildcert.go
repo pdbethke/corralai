@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -29,14 +30,21 @@ type reportBuildIn struct {
 // reportBuildOut is the signed, tamper-evident accountability record
 // report_build hands back: the ledger head, the Ed25519 signature over the
 // FULL canonical statement (binding the predicate, not just the head), the
-// stored SLSA/in-toto statement, the assigned build_records id, and the
-// certify public key a third party needs to verify Signature independently.
+// stored SLSA/in-toto statement, the assigned build_records id, the
+// certify public key a third party needs to verify Signature independently,
+// and Steps (certify.MarshalSteps output, decoded to a generic slice so the
+// MCP tool's auto-derived JSON schema sees an array of objects rather than
+// treating a json.RawMessage's underlying []byte as an array of integers) —
+// carrying the full ledger in the response means a caller (corral certify's
+// --out) can build a completely self-verifying record with no further
+// round trip to the brain.
 type reportBuildOut struct {
-	ID        int64          `json:"id"`
-	Head      string         `json:"head"`
-	Signature string         `json:"signature"`
-	Statement map[string]any `json:"statement"`
-	PublicKey string         `json:"public_key"`
+	ID        int64            `json:"id"`
+	Head      string           `json:"head"`
+	Signature string           `json:"signature"`
+	Statement map[string]any   `json:"statement"`
+	PublicKey string           `json:"public_key"`
+	Steps     []map[string]any `json:"steps"`
 }
 
 // registerBuildCert registers the report_build tool — corral certify's ingest
@@ -103,6 +111,10 @@ func registerBuildCert(s *mcp.Server, opts Options) {
 			if err != nil {
 				return nil, reportBuildOut{}, fmt.Errorf("report_build: marshaling steps: %w", err)
 			}
+			var stepsOut []map[string]any
+			if err := json.Unmarshal(stepsJSON, &stepsOut); err != nil {
+				return nil, reportBuildOut{}, fmt.Errorf("report_build: decoding steps for response: %w", err)
+			}
 
 			id, err := opts.BuildStore.Save(in.Repo, in.Commit, in.Branch, actor, head, sigHex, string(canonical), string(stepsJSON))
 			if err != nil {
@@ -122,6 +134,7 @@ func registerBuildCert(s *mcp.Server, opts Options) {
 				Signature: sigHex,
 				Statement: stmt,
 				PublicKey: hex.EncodeToString(pub),
+				Steps:     stepsOut,
 			}, nil
 		})
 }

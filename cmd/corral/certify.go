@@ -35,12 +35,16 @@ type buildRecord struct {
 }
 
 // buildResult is the signed, tamper-evident accountability record the brain
-// hands back — mirrors internal/brain's reportBuildOut.
+// hands back — mirrors internal/brain's reportBuildOut. PublicKey and Steps
+// carry everything `corral certify verify` needs offline: the ledger and
+// the certify public key, with no brain round trip.
 type buildResult struct {
-	ID        int64          `json:"id"`
-	Head      string         `json:"head"`
-	Signature string         `json:"signature"`
-	Statement map[string]any `json:"statement"`
+	ID        int64            `json:"id"`
+	Head      string           `json:"head"`
+	Signature string           `json:"signature"`
+	Statement map[string]any   `json:"statement"`
+	PublicKey string           `json:"public_key"`
+	Steps     []map[string]any `json:"steps"`
 }
 
 // cmdRunner is how runCertify executes shell work: cheap git-context lookups
@@ -279,12 +283,22 @@ func runCertify(args []string, run cmdRunner, post buildPoster, stdout, stderr i
 	fmt.Fprintf(stdout, "certified build %d: head=%s\n", result.ID, result.Head)
 
 	if *outPath != "" {
-		b, err := json.MarshalIndent(result.Statement, "", "  ")
+		// The FULL record — not just the bare statement — so `corral certify
+		// verify <file>` can check it completely offline: no brain round
+		// trip needed to recover the signature, the ledger, or the pubkey.
+		record := map[string]any{
+			"statement":  result.Statement,
+			"signature":  result.Signature,
+			"steps":      result.Steps,
+			"head":       result.Head,
+			"public_key": result.PublicKey,
+		}
+		b, err := json.MarshalIndent(record, "", "  ")
 		if err != nil {
-			fmt.Fprintf(stderr, "corral certify: marshaling statement: %v\n", err)
+			fmt.Fprintf(stderr, "corral certify: marshaling record: %v\n", err)
 			return exitCode
 		}
-		if err := os.WriteFile(*outPath, b, 0o644); err != nil { // #nosec G306 -- the signed statement is meant to be shared/attached to CI artifacts, not secret
+		if err := os.WriteFile(*outPath, b, 0o644); err != nil { // #nosec G306 -- the signed record is meant to be shared/attached to CI artifacts, not secret
 			fmt.Fprintf(stderr, "corral certify: writing %s: %v\n", *outPath, err)
 			return exitCode
 		}

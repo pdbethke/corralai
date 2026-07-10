@@ -170,6 +170,290 @@ func TestLoadOrCreateSigningKeyPersistsAndReloads(t *testing.T) {
 	}
 }
 
+// statementWithProducers builds a minimal SLSA-shaped statement JSON whose
+// predicate.buildDefinition.resolvedDependencies carries the given model
+// URIs, matching internal/certify.BuildAttestation's shape.
+func statementWithProducers(models ...string) string {
+	deps := make([]map[string]any, 0, len(models))
+	for _, m := range models {
+		deps = append(deps, map[string]any{"uri": "model:" + m})
+	}
+	stmt := map[string]any{
+		"_type":         "https://in-toto.io/Statement/v1",
+		"predicateType": "https://slsa.dev/provenance/v1",
+		"predicate": map[string]any{
+			"buildDefinition": map[string]any{
+				"resolvedDependencies": deps,
+			},
+		},
+	}
+	b, err := json.Marshal(stmt)
+	if err != nil {
+		panic(err)
+	}
+	return string(b)
+}
+
+func TestList(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(filepath.Join(dir, "build.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	// Control created_ts so ordering/Since/Until are deterministic instead of
+	// racing wall-clock `now`.
+	orig := now
+	defer func() { now = orig }()
+	var ts float64 = 1000
+	now = func() float64 {
+		v := ts
+		ts += 10
+		return v
+	}
+
+	signedSig := `{"signed":true,"verified":"good","signer":"Peter","mechanism":"gpg"}`
+	unsignedSig := `{"signed":false}`
+
+	// id1: ts=1000, repoA, alice, pass, anchored, signed, produced_by [claude-opus]
+	id1, err := s.Save("repoA", "c1", "main", "alice", "h1", "sig1",
+		statementWithProducers("claude-opus"), "[]", "", true,
+		"m1", "alice", "d1", signedSig, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// id2: ts=1010, repoA, bob, fail, not anchored, unsigned, no produced_by
+	id2, err := s.Save("repoA", "c2", "main", "bob", "h2", "sig2",
+		statementWithProducers(), "[]", "", false,
+		"m2", "bob", "d2", unsignedSig, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// id3: ts=1020, repoB, alice, pass, anchored, no commit_signature (empty)
+	id3, err := s.Save("repoB", "c3", "main", "alice", "h3", "sig3",
+		statementWithProducers("claude-sonnet", "gpt-5"), "[]", "", true,
+		"m3", "alice", "d3", "", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// id4: ts=1030, repoA, alice, fail, anchored, signed
+	id4, err := s.Save("repoA", "c4", "main", "alice", "h4", "sig4",
+		statementWithProducers(), "[]", "", true,
+		"m4", "alice", "d4", signedSig, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = id2
+	_ = id4
+
+	// Empty table (fresh store) → empty slice, no error.
+	emptyStore, err := Open(filepath.Join(dir, "empty.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer emptyStore.Close()
+	got, err := emptyStore.List(ListFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected empty slice for empty table, got %v", got)
+	}
+
+	// No filter: all 4, newest-first (id4, id3, id2, id1).
+	all, err := s.List(ListFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 4 {
+		t.Fatalf("expected 4 records, got %d", len(all))
+	}
+	wantOrder := []int64{id4, id3, id2, id1}
+	for i, w := range wantOrder {
+		if all[i].ID != w {
+			t.Fatalf("order[%d]: want id %d, got %d (full: %+v)", i, w, all[i].ID, all)
+		}
+	}
+	for i := 1; i < len(all); i++ {
+		if all[i].CreatedTS > all[i-1].CreatedTS {
+			t.Fatalf("expected DESC created_ts ordering, got %v then %v", all[i-1].CreatedTS, all[i].CreatedTS)
+		}
+	}
+
+	// Summary field population, checked against id1.
+	var s1 *Summary
+	for i := range all {
+		if all[i].ID == id1 {
+			s1 = &all[i]
+		}
+	}
+	if s1 == nil {
+		t.Fatal("id1 missing from List results")
+	}
+	if s1.Repo != "repoA" || s1.Commit != "c1" || s1.Branch != "main" || s1.Actor != "alice" {
+		t.Fatalf("id1 fields mismatch: %+v", s1)
+	}
+	if !s1.Pass {
+		t.Fatalf("id1 expected Pass=true, got %+v", s1)
+	}
+	if !s1.Anchored {
+		t.Fatalf("id1 expected Anchored=true, got %+v", s1)
+	}
+	if !s1.CommitSigned {
+		t.Fatalf("id1 expected CommitSigned=true, got %+v", s1)
+	}
+	if len(s1.ProducedBy) != 1 || s1.ProducedBy[0] != "claude-opus" {
+		t.Fatalf("id1 expected ProducedBy [claude-opus], got %+v", s1.ProducedBy)
+	}
+	if s1.CreatedTS != 1000 {
+		t.Fatalf("id1 expected CreatedTS 1000, got %v", s1.CreatedTS)
+	}
+
+	// id2: unsigned commit, no produced_by, not anchored, fail.
+	var s2 *Summary
+	for i := range all {
+		if all[i].ID == id2 {
+			s2 = &all[i]
+		}
+	}
+	if s2 == nil {
+		t.Fatal("id2 missing from List results")
+	}
+	if s2.Pass {
+		t.Fatalf("id2 expected Pass=false, got %+v", s2)
+	}
+	if s2.Anchored {
+		t.Fatalf("id2 expected Anchored=false, got %+v", s2)
+	}
+	if s2.CommitSigned {
+		t.Fatalf("id2 expected CommitSigned=false, got %+v", s2)
+	}
+	if len(s2.ProducedBy) != 0 {
+		t.Fatalf("id2 expected empty ProducedBy, got %+v", s2.ProducedBy)
+	}
+
+	// id3: empty commit_signature (NULL) → CommitSigned=false, no error; two producers.
+	var s3 *Summary
+	for i := range all {
+		if all[i].ID == id3 {
+			s3 = &all[i]
+		}
+	}
+	if s3 == nil {
+		t.Fatal("id3 missing from List results")
+	}
+	if s3.CommitSigned {
+		t.Fatalf("id3 expected CommitSigned=false (no commit_signature), got %+v", s3)
+	}
+	if len(s3.ProducedBy) != 2 || s3.ProducedBy[0] != "claude-sonnet" || s3.ProducedBy[1] != "gpt-5" {
+		t.Fatalf("id3 expected ProducedBy [claude-sonnet gpt-5], got %+v", s3.ProducedBy)
+	}
+
+	// Filter: Repo exact match.
+	byRepo, err := s.List(ListFilter{Repo: "repoB"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(byRepo) != 1 || byRepo[0].ID != id3 {
+		t.Fatalf("Repo filter: expected only id3, got %+v", byRepo)
+	}
+
+	// Filter: Actor exact match.
+	byActor, err := s.List(ListFilter{Actor: "bob"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(byActor) != 1 || byActor[0].ID != id2 {
+		t.Fatalf("Actor filter: expected only id2, got %+v", byActor)
+	}
+
+	// Filter: Status=pass.
+	pass, err := s.List(ListFilter{Status: "pass"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pass) != 2 {
+		t.Fatalf("Status=pass: expected 2 records, got %+v", pass)
+	}
+	for _, r := range pass {
+		if !r.Pass {
+			t.Fatalf("Status=pass returned a failing record: %+v", r)
+		}
+	}
+
+	// Filter: Status=fail.
+	fail, err := s.List(ListFilter{Status: "fail"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fail) != 2 {
+		t.Fatalf("Status=fail: expected 2 records, got %+v", fail)
+	}
+	for _, r := range fail {
+		if r.Pass {
+			t.Fatalf("Status=fail returned a passing record: %+v", r)
+		}
+	}
+
+	// Filter: Anchored true/false.
+	anchoredTrue := true
+	anchored, err := s.List(ListFilter{Anchored: &anchoredTrue})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(anchored) != 3 {
+		t.Fatalf("Anchored=true: expected 3 records, got %+v", anchored)
+	}
+	anchoredFalse := false
+	notAnchored, err := s.List(ListFilter{Anchored: &anchoredFalse})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(notAnchored) != 1 || notAnchored[0].ID != id2 {
+		t.Fatalf("Anchored=false: expected only id2, got %+v", notAnchored)
+	}
+
+	// Filter: Since/Until bounds (inclusive), narrowing to id2+id3 (ts 1010,1020).
+	bounded, err := s.List(ListFilter{Since: 1010, Until: 1020})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bounded) != 2 {
+		t.Fatalf("Since/Until: expected 2 records, got %+v", bounded)
+	}
+	for _, r := range bounded {
+		if r.ID != id2 && r.ID != id3 {
+			t.Fatalf("Since/Until: unexpected record %+v", r)
+		}
+	}
+
+	// Pagination: Limit=2 Offset=0 → newest two (id4, id3); Offset=2 → next two (id2, id1).
+	page1, err := s.List(ListFilter{Limit: 2, Offset: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page1) != 2 || page1[0].ID != id4 || page1[1].ID != id3 {
+		t.Fatalf("page1: expected [id4 id3], got %+v", page1)
+	}
+	page2, err := s.List(ListFilter{Limit: 2, Offset: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page2) != 2 || page2[0].ID != id2 || page2[1].ID != id1 {
+		t.Fatalf("page2: expected [id2 id1], got %+v", page2)
+	}
+
+	// Default Limit (0 → 100) returns everything when under the cap.
+	def, err := s.List(ListFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(def) != 4 {
+		t.Fatalf("default limit: expected 4 records, got %d", len(def))
+	}
+}
+
 func TestLoadOrCreateSigningKeyEnvOverride(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "unused.key")

@@ -215,6 +215,196 @@ func (s *Store) Get(id int64) (map[string]any, bool, error) {
 	return m, true, nil
 }
 
+// ListFilter narrows Store.List's result set. Zero-value fields are treated
+// as "no filter": Repo/Actor exact-match only when non-empty, Status filters
+// on the stored `pass` column when "pass"/"fail" (any other value, including
+// "", means all), Anchored filters only when non-nil (true vs false is a
+// real filter, so this can't be a plain bool), Since/Until bound created_ts
+// only when non-zero, and Limit<=0 defaults to 100.
+type ListFilter struct {
+	Repo, Actor string
+	Status      string // "pass" | "fail" | "" (all)
+	Anchored    *bool
+	Since       float64
+	Until       float64
+	Limit       int
+	Offset      int
+}
+
+// Summary is the cheap, per-row projection of a build_records row the
+// records dashboard lists — deliberately not the full statement/steps.
+type Summary struct {
+	ID           int64
+	Repo         string
+	Commit       string
+	Branch       string
+	Actor        string
+	Pass         bool
+	Anchored     bool
+	CommitSigned bool
+	ProducedBy   []string
+	CreatedTS    float64
+}
+
+// List returns build_records rows matching f, newest-first, paginated by
+// f.Limit/f.Offset (default Limit 100). All filter values are passed as `?`
+// placeholders — never string-concatenated into the query. CommitSigned is
+// read from the commit_signature JSON column's "signed" field (false, no
+// error, when that column is NULL/empty). ProducedBy is pulled from the
+// statement JSON's predicate.buildDefinition.resolvedDependencies entries
+// (each entry's "uri", e.g. "model:claude-opus", with the "model:" prefix
+// stripped) — the only part of the statement this cheap projection decodes.
+func (s *Store) List(f ListFilter) ([]Summary, error) {
+	limit := f.Limit
+	if limit <= 0 {
+		limit = 100
+	}
+
+	var conditions []string
+	var args []any
+
+	if f.Repo != "" {
+		conditions = append(conditions, "repo = ?")
+		args = append(args, f.Repo)
+	}
+	if f.Actor != "" {
+		conditions = append(conditions, "actor = ?")
+		args = append(args, f.Actor)
+	}
+	switch f.Status {
+	case "pass":
+		conditions = append(conditions, "pass = ?")
+		args = append(args, true)
+	case "fail":
+		conditions = append(conditions, "pass = ?")
+		args = append(args, false)
+	}
+	if f.Anchored != nil {
+		conditions = append(conditions, "anchored = ?")
+		args = append(args, *f.Anchored)
+	}
+	if f.Since != 0 {
+		conditions = append(conditions, "created_ts >= ?")
+		args = append(args, f.Since)
+	}
+	if f.Until != 0 {
+		conditions = append(conditions, "created_ts <= ?")
+		args = append(args, f.Until)
+	}
+
+	query := `SELECT id, repo, commit_sha, branch, actor, pass, anchored, commit_signature, statement, created_ts FROM build_records`
+	if len(conditions) > 0 {
+		// #nosec G202 -- conditions are fixed "<column> = ?"/"<column> >= ?"
+		// fragments chosen from a hardcoded set above, never built from filter
+		// values; every actual value flows through args as a `?` placeholder.
+		query += " WHERE " + strings.Join(conditions, " AND ")
+	}
+	query += " ORDER BY created_ts DESC LIMIT ? OFFSET ?"
+	args = append(args, limit, f.Offset)
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("buildstore: list: %w", err)
+	}
+	defer rows.Close()
+
+	out := []Summary{}
+	for rows.Next() {
+		var sm Summary
+		var pass, anchored sql.NullBool
+		var commitSignature any
+		var statement any
+		if err := rows.Scan(&sm.ID, &sm.Repo, &sm.Commit, &sm.Branch, &sm.Actor, &pass, &anchored, &commitSignature, &statement, &sm.CreatedTS); err != nil {
+			return nil, fmt.Errorf("buildstore: list: scanning row: %w", err)
+		}
+		sm.Pass = pass.Valid && pass.Bool
+		sm.Anchored = anchored.Valid && anchored.Bool
+
+		signed, err := commitSignatureSigned(commitSignature)
+		if err != nil {
+			return nil, fmt.Errorf("buildstore: list: decoding commit_signature for id %d: %w", sm.ID, err)
+		}
+		sm.CommitSigned = signed
+
+		producedBy, err := producedByFromStatement(statement)
+		if err != nil {
+			return nil, fmt.Errorf("buildstore: list: decoding statement for id %d: %w", sm.ID, err)
+		}
+		sm.ProducedBy = producedBy
+
+		out = append(out, sm)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("buildstore: list: %w", err)
+	}
+	return out, nil
+}
+
+// commitSignatureSigned reads just the "signed" field of a stored
+// commit_signature JSON column, tolerating the driver's representation
+// variability (nil, already-decoded map, JSON string, or JSON bytes) and a
+// NULL/empty column (→ false, no error).
+func commitSignatureSigned(v any) (bool, error) {
+	if v == nil {
+		return false, nil
+	}
+	decoded, err := jsonColumnToAny(v)
+	if err != nil {
+		return false, err
+	}
+	m, ok := decoded.(map[string]any)
+	if !ok {
+		return false, nil
+	}
+	signed, _ := m["signed"].(bool)
+	return signed, nil
+}
+
+// producedByFromStatement extracts the model URIs named in the statement's
+// predicate.buildDefinition.resolvedDependencies (the shape
+// certify.BuildAttestation writes), stripping the "model:" prefix. Returns
+// nil (not an error) when the statement, predicate, buildDefinition, or
+// resolvedDependencies is absent or empty — this is a best-effort cheap
+// projection, not a full statement decode.
+func producedByFromStatement(v any) ([]string, error) {
+	if v == nil {
+		return nil, nil
+	}
+	decoded, err := jsonColumnToAny(v)
+	if err != nil {
+		return nil, err
+	}
+	stmt, ok := decoded.(map[string]any)
+	if !ok {
+		return nil, nil
+	}
+	predicate, ok := stmt["predicate"].(map[string]any)
+	if !ok {
+		return nil, nil
+	}
+	buildDef, ok := predicate["buildDefinition"].(map[string]any)
+	if !ok {
+		return nil, nil
+	}
+	deps, ok := buildDef["resolvedDependencies"].([]any)
+	if !ok || len(deps) == 0 {
+		return nil, nil
+	}
+	var out []string
+	for _, d := range deps {
+		dep, ok := d.(map[string]any)
+		if !ok {
+			continue
+		}
+		uri, ok := dep["uri"].(string)
+		if !ok || uri == "" {
+			continue
+		}
+		out = append(out, strings.TrimPrefix(uri, "model:"))
+	}
+	return out, nil
+}
+
 // statementToMap normalizes the driver's representation of the JSON column:
 // go-duckdb decodes JSON directly to map[string]any for some paths, and to
 // its raw string form (still needing json.Unmarshal) for others; handle both.

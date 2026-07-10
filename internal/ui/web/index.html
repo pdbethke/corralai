@@ -1373,7 +1373,7 @@ function openRecordDetail(id){
 
     el.innerHTML = `
       <span class="cmd-close" onclick="closeRecordDetail()">✕ close</span>
-      <div class="cm-hdr"><span class="cm-dir">${esc(d.repo||'—')} @ ${shortSha(d.commit)}</span><span class="cm-pill" style="background:${d.all_ok?'var(--green)':'var(--red)'}">${d.all_ok?'verified':'FAILED'}</span></div>
+      <div class="cm-hdr"><span class="cm-dir">${esc(d.repo||'—')} @ ${shortSha(d.commit)}</span><span class="cm-pill" style="background:${d.all_ok?'var(--green)':(nonRekorOK && !d.anchored?'var(--amber)':'var(--red)')}">${d.all_ok?'verified':(nonRekorOK && !d.anchored?'passed &middot; unwitnessed':'FAILED')}</span></div>
       <div class="cm-sum">branch ${esc(d.branch||'—')} &middot; actor ${esc(d.actor||'—')}</div>
       ${chain}
       <div class="cmd-section-title">the four checks (brain's own re-verification)</div>

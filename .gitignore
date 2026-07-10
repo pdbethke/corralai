@@ -63,3 +63,4 @@ site/src/data/generated/
 
 # Cloudflare wrangler local cache
 .wrangler/
+private/

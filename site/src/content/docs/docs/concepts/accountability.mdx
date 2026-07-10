@@ -63,6 +63,16 @@ the human sign-off and the full finding trail. Agent-produced changes carry the 
 verifiable provenance an auditor already expects for human-produced ones — arguably
 *better*, because the check was real.
 
+And it's **tamper-evident**: the run's build steps form a hash-linked, signed ledger —
+each step committing to the hash of the one before it, the way [git](https://git-scm.com/),
+[Certificate Transparency](https://certificate.transparency.dev/), and
+[Sigstore Rekor](https://docs.sigstore.dev/logging/overview/) do. Alter, insert, remove, or
+reorder any step — make a *failed* check look like it passed — and the signed head breaks.
+The attestation's subject is that head, so the "what was built" statement is bound to the
+un-fakeable "how it was built" record. (It's the tamper-evident core of a blockchain,
+without the consensus overhead you don't need; the head can be anchored in a public
+transparency log so not even the operator can rewrite history.)
+
 ## The audit view: scrub how the herd decided
 
 The attestation is the machine-verifiable half; the **replay cockpit** is the

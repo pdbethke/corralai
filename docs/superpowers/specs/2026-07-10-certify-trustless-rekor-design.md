@@ -95,13 +95,20 @@ append-only log with its own transparency guarantees) **+ the published signing 
 corral's brain. What Rekor gives: the entry existed at time T and the log is append-only and
 publicly auditable. What it does **not** give: it doesn't prove the *content* is true, only that
 *this signed statement* was witnessed at that time and hasn't been altered since. We claim
-tamper-**evident** (detectable), never tamper-**proof**. Air-gapped deployments point
-`CORRALAI_REKOR_URL` at a private Rekor (still append-only + witnessed, just not the public one).
+tamper-**evident** (detectable), never tamper-**proof**. **v1 verifies only against the public
+Sigstore TUF trust root** — `RekorWitness` always resolves the log's verifying key(s) from that
+root, regardless of `CORRALAI_REKOR_URL`. Pointing `CORRALAI_REKOR_URL` at a private/non-public
+Rekor instance does **not** get you air-gap today: `Anchor` submits to whatever URL you point it
+at, but `VerifyInclusion` fails **closed** — a private log's logID/key isn't in the public TUF
+root, so the check reports "no TUF-rooted public key for this transparency log" rather than
+silently trusting it. True air-gap (a private Rekor + a custom, non-Sigstore trust root the
+witness verifies against) is captured in the out-of-scope/v2 list below, not delivered here.
 
 ## Out of scope — v2 backlog (captured, not built)
 - **Keyless (Fulcio/OIDC) signing** — no long-lived key; the brain's OIDC identity (Zitadel) →
   Fulcio short-lived cert. The "no keys to steal" gold standard; bigger lift.
-- **Private-Rekor air-gap productization** — beyond the configurable URL: bundling/operating a
+- **Private-Rekor air-gap productization** — a custom, non-Sigstore trust root the witness can
+  verify against (v1 only fetches the public Sigstore TUF root), plus bundling/operating a
   private Rekor for IL4-5.
 - **Alternate/secondary witnesses** — the MotherDuck warehouse as a co-witness; other logs.
 - **Batched/deferred anchoring** — anchor N records in one entry; retry queue for `unanchored`.
@@ -130,4 +137,6 @@ wrapper thin so the blast radius of the Rekor client stays contained.
   friendly verification + hermetic tests.
 - **`verify` rejects unanchored by default** (`--allow-unanchored` to override) — honest that an
   unwitnessed record is weaker.
-- **Public `rekor.sigstore.dev` default**, `CORRALAI_REKOR_URL` for private/air-gap.
+- **Public `rekor.sigstore.dev` default**; `CORRALAI_REKOR_URL` lets you point `Anchor` at a
+  different instance, but v1 verification is hard-wired to the public Sigstore TUF trust root, so
+  a non-public Rekor there fails closed at `verify` today — true air-gap is v2 (see out-of-scope).

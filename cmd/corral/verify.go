@@ -125,7 +125,7 @@ func runCertifyVerify(args []string, fetch pubkeyFetcher, newWitness witnessFact
 	}
 	rest := fs.Args()
 	if len(rest) != 1 {
-		fmt.Fprintln(stderr, "corral certify verify: usage: corral certify verify <record-file> [--pubkey <hex>|--brain <url>]")
+		fmt.Fprintln(stderr, "corral certify verify: usage: corral certify verify <record-file> [--pubkey <hex>|--brain <url>] [--rekor-url <url>] [--allow-unanchored]")
 		return 2
 	}
 	recordPath := rest[0]

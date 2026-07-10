@@ -74,6 +74,15 @@ func NewRekorWitness(rekorURL string, opts ...RekorOption) (Witness, error) {
 	// Fetch Rekor's public key(s) from the Sigstore TUF trust root. This is
 	// the trust anchor: we verify inclusion proofs and SETs against THIS key,
 	// not against anything the Rekor instance hands back inline.
+	//
+	// Coupling note: this witness ALWAYS resolves keys from the PUBLIC
+	// Sigstore TUF trust root, regardless of rekorURL — so it only verifies
+	// entries anchored to the public Sigstore Rekor. Pointing rekorURL at a
+	// non-public Rekor instance does not make this witness trust that
+	// instance's key; VerifyInclusion will fail closed ("no TUF-rooted public
+	// key for this transparency log") because a private log's logID/key isn't
+	// in the public root. True air-gap / private-Rekor support needs a
+	// custom-trust-root option and is v2, not this file today.
 	tr, err := root.FetchTrustedRoot()
 	if err != nil {
 		return nil, fmt.Errorf("transparency: fetching Sigstore TUF trusted root: %w", err)
@@ -283,7 +292,10 @@ func (w *rekorWitness) VerifyInclusion(entry Entry, dsseEnvelope []byte) (bool, 
 		return false, "log entry does not wrap the given envelope (payload hash mismatch)"
 	}
 
-	return true, "rekor inclusion proof and SET verified against the TUF trust root"
+	if len(entry.SET) > 0 {
+		return true, "rekor inclusion proof and SET verified against the TUF trust root"
+	}
+	return true, "rekor inclusion proof verified against the TUF trust root (no SET present)"
 }
 
 // envelopePayloadSHA256 decodes a DSSE envelope's base64 payload and returns

@@ -100,6 +100,16 @@ steps, and **publishes the verifying key**:
 - **`VerifyStatement(canonical, sigHex, pub)` ships** as the verification primitive: verify
   the signature over the stored statement bytes, recompute the head from the stored steps,
   and confirm `statement.subject[0].digest.sha256 == head`. That is independent verification.
+  - **Canonicalization constraint (maintainer caution):** independent verification relies on
+    `json.Marshal` being deterministic for the statement — true because every value is JSON-native
+    (maps sort keys; numbers format stably). Any future predicate field MUST stay JSON-native:
+    no integers ≥ 1e21 (scientific-notation drift), no non-JSON-native types. Break that and
+    re-marshal-based verification breaks. Keep signing/verifying over the STORED canonical bytes.
+- **Trust anchor is external, never the record itself.** `corral certify verify` requires the
+  verifying key from an out-of-band source — `--pubkey <hex>` or `--brain <url>` (`GET
+  /api/certify/pubkey`). It REFUSES (non-zero) with no `--pubkey`/`--brain`; a `public_key`
+  embedded in a record is only a mismatch *hint*, never the anchor (a record can't authenticate
+  itself — that would be circular and trivially forgeable).
 - The signing key lives only in the brain; the CLI never holds it. This is **central-trust**:
   a holder of the published key can verify the brain's own records honestly bind what ran.
 - **Still deferred to the next spec (trustless tier):** external **witness anchoring** — ship

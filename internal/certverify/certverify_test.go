@@ -83,6 +83,26 @@ func anchor(t *testing.T, rec Record) Record {
 	return rec
 }
 
+// witnessFactory returns a newWitness func that always hands back the given
+// witness, mirroring how a real caller would wrap a lazily-constructed
+// transparency.Witness for VerifyRecord.
+func witnessFactory(w transparency.Witness) func() (transparency.Witness, error) {
+	return func() (transparency.Witness, error) {
+		return w, nil
+	}
+}
+
+// failWitnessFactory returns a newWitness func that fails the test if it is
+// ever called — used to lock in the offline-fast-fail guarantee: an
+// anchored record with an earlier check already failing must never reach
+// the rekor step, so the witness must never be constructed.
+func failWitnessFactory(t *testing.T) func() (transparency.Witness, error) {
+	return func() (transparency.Witness, error) {
+		t.Fatal("newWitness should not be called when an earlier check already failed")
+		return nil, nil
+	}
+}
+
 func checkByName(checks []Check, name string) (Check, bool) {
 	for _, c := range checks {
 		if c.Name == name {
@@ -97,7 +117,7 @@ func TestVerifyRecordAllChecksPass(t *testing.T) {
 	rec = anchor(t, rec)
 	w := transparency.NewFakeWitness()
 
-	checks, allOK := VerifyRecord(rec, pub, w, false)
+	checks, allOK := VerifyRecord(rec, pub, witnessFactory(w), false)
 	if !allOK {
 		t.Fatalf("expected allOK, got checks=%+v", checks)
 	}
@@ -120,7 +140,7 @@ func TestVerifyRecordTamperedSignatureFails(t *testing.T) {
 	// Corrupt the DSSE envelope so it no longer verifies against pub.
 	rec.Signature = rec.Signature[:len(rec.Signature)-2] + "00"
 
-	checks, allOK := VerifyRecord(rec, pub, w, false)
+	checks, allOK := VerifyRecord(rec, pub, witnessFactory(w), false)
 	if allOK {
 		t.Fatalf("expected !allOK for tampered signature, got checks=%+v", checks)
 	}
@@ -147,7 +167,7 @@ func TestVerifyRecordTamperedInclusionProofFails(t *testing.T) {
 	}
 	rec.Rekor = string(entryJSON)
 
-	checks, allOK := VerifyRecord(rec, pub, w, false)
+	checks, allOK := VerifyRecord(rec, pub, witnessFactory(w), false)
 	if allOK {
 		t.Fatalf("expected !allOK for tampered inclusion proof, got checks=%+v", checks)
 	}
@@ -167,9 +187,8 @@ func TestVerifyRecordTamperedInclusionProofFails(t *testing.T) {
 func TestVerifyRecordUnanchoredFailsByDefault(t *testing.T) {
 	rec, pub := buildTestRecord(t)
 	// rec.Anchored is false; not anchored, no witness call expected.
-	w := transparency.NewFakeWitness()
 
-	checks, allOK := VerifyRecord(rec, pub, w, false)
+	checks, allOK := VerifyRecord(rec, pub, failWitnessFactory(t), false)
 	if allOK {
 		t.Fatalf("expected !allOK for unanchored record without --allow-unanchored, got checks=%+v", checks)
 	}
@@ -179,11 +198,36 @@ func TestVerifyRecordUnanchoredFailsByDefault(t *testing.T) {
 	}
 }
 
+// TestVerifyRecordAnchoredTamperedSignatureNeverBuildsWitness locks in the
+// offline-fast-fail guarantee: an ANCHORED record whose signature check
+// fails must be rejected at check 1 WITHOUT ever constructing the rekor
+// witness — no network call for a record that was always going to fail.
+// failWitnessFactory calls t.Fatal if invoked, so this test would fail loud
+// if VerifyRecord regressed to eagerly building the witness before checks
+// 1-3 run.
+func TestVerifyRecordAnchoredTamperedSignatureNeverBuildsWitness(t *testing.T) {
+	rec, pub := buildTestRecord(t)
+	rec = anchor(t, rec) // rec.Anchored = true
+
+	// Corrupt the DSSE envelope so check 1 (signature) fails.
+	rec.Signature = rec.Signature[:len(rec.Signature)-2] + "00"
+
+	checks, allOK := VerifyRecord(rec, pub, failWitnessFactory(t), false)
+	if allOK {
+		t.Fatalf("expected !allOK for tampered signature, got checks=%+v", checks)
+	}
+	c, ok := checkByName(checks, "signature")
+	if !ok || c.OK {
+		t.Fatalf("expected signature check to fail, got %+v (found=%v)", c, ok)
+	}
+	// If we get here without failWitnessFactory's t.Fatal firing, the
+	// witness factory was never invoked — the true assertion of this test.
+}
+
 func TestVerifyRecordUnanchoredAllowedWithFlag(t *testing.T) {
 	rec, pub := buildTestRecord(t)
-	w := transparency.NewFakeWitness()
 
-	checks, allOK := VerifyRecord(rec, pub, w, true)
+	checks, allOK := VerifyRecord(rec, pub, failWitnessFactory(t), true)
 	if !allOK {
 		t.Fatalf("expected allOK for unanchored record with allowUnanchored=true, got checks=%+v", checks)
 	}

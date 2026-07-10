@@ -184,27 +184,18 @@ func runCertifyVerify(args []string, fetch pubkeyFetcher, newWitness witnessFact
 		fmt.Fprintln(stderr, "corral certify verify: warning: record's embedded public_key does not match the trusted key — the record claims a different signer")
 	}
 
-	// Resolve the Rekor witness up front (needed only for an anchored
-	// record's check, but constructing it here keeps the failure path
-	// identical to before the refactor: a witness-construction error is
-	// reported and fails verification only when the record is actually
-	// anchored — see below).
+	// The Rekor witness is resolved LAZILY: VerifyRecord only calls this
+	// factory when checks 1-3 (signature, ledger, subject) have all passed
+	// AND the record is anchored — never for a locally-invalid record. That
+	// keeps a bad signature/ledger/subject failing fast, entirely offline,
+	// instead of paying for a network round-trip (TUF root fetch + Rekor)
+	// whose result couldn't change the outcome.
 	rekorURL := strings.TrimSpace(*rekorURLFlag)
 	if rekorURL == "" {
 		rekorURL = strings.TrimSpace(os.Getenv("CORRALAI_REKOR_URL"))
 	}
 	if rekorURL == "" {
 		rekorURL = defaultRekorURL
-	}
-
-	var witness transparency.Witness
-	if rec.Anchored {
-		var werr error
-		witness, werr = newWitness(rekorURL)
-		if werr != nil {
-			fmt.Fprintf(stderr, "corral certify verify: FAILED (rekor: constructing witness for %s: %v)\n", rekorURL, werr)
-			return 1
-		}
 	}
 
 	crec := certverify.Record{
@@ -215,7 +206,9 @@ func runCertifyVerify(args []string, fetch pubkeyFetcher, newWitness witnessFact
 		Rekor:     rec.Rekor,
 		Anchored:  rec.Anchored,
 	}
-	checks, allOK := certverify.VerifyRecord(crec, pub, witness, *allowUnanchored)
+	checks, allOK := certverify.VerifyRecord(crec, pub, func() (transparency.Witness, error) {
+		return newWitness(rekorURL)
+	}, *allowUnanchored)
 
 	// Checks run in a fixed order (signature, ledger, subject, rekor); the
 	// CLI reports the FIRST failing one on stderr and exits non-zero,
@@ -238,9 +231,11 @@ func runCertifyVerify(args []string, fetch pubkeyFetcher, newWitness witnessFact
 		return 1
 	}
 	if !allOK {
-		// Defensive: VerifyRecord's contract is allOK iff every check above
-		// passed, so this is unreachable, but never report success on a
-		// false allOK.
+		// unreachable: VerifyRecord's contract is allOK iff every check
+		// above passed, and the loop above already returns on the first
+		// failing check, so this branch can never actually run. Kept only
+		// as a defensive guard against ever falling through to the success
+		// path below on a false allOK.
 		fmt.Fprintln(stderr, "corral certify verify: FAILED (verification did not pass)")
 		return 1
 	}

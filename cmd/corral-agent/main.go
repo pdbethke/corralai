@@ -181,6 +181,11 @@ func main() {
 	)
 	globalBrainURL = brainURL
 	backend := newBackend() // MODEL_BACKEND: ollama (default) | openai (Gemini/OpenRouter/local) — NOT hard-wired
+	// Provider keys and the brain token are resolved (env or keystore) by now —
+	// newBackend() already captured them into the Backend struct, and
+	// scrubSecretEnv caches CORRALAI_BRAIN_KEY for later on-demand reads. Scrub
+	// the env now so none of it leaks into a jailed child process this agent spawns.
+	scrubSecretEnv()
 	modelDesc := env("MODEL_BACKEND", "ollama") + ":" + env("AGENT_MODEL", "qwen2.5-coder:7b")
 	// clobber: the agent STILL connects to the brain (so it's visible in the swarm
 	// UI), but its prompt tells it to IGNORE conflicts and edit anyway — so you watch
@@ -1085,7 +1090,7 @@ func dispatch(name, role, ws string, brain func(string, map[string]any) string, 
 			wsURL := toWSURL(globalBrainURL) + "/api/terminal/ws?agent=" + name + "&role=agent"
 			wsConfig, werr := websocket.NewConfig(wsURL, globalBrainURL)
 			if werr == nil {
-				if token := os.Getenv("CORRALAI_BRAIN_KEY"); token != "" {
+				if token := agentSecret("CORRALAI_BRAIN_KEY"); token != "" {
 					wsConfig.Header.Set("Authorization", "Bearer "+token)
 				}
 				wsConn, werr := websocket.DialConfig(wsConfig)
@@ -1247,7 +1252,7 @@ func disableIntercept(brainURL, agent string) {
 	url := fmt.Sprintf("%s/api/mission/intercept?agent=%s&enable=false", brainURL, agent)
 	req, err := http.NewRequest("GET", url, nil)
 	if err == nil {
-		if token := os.Getenv("CORRALAI_BRAIN_KEY"); token != "" {
+		if token := agentSecret("CORRALAI_BRAIN_KEY"); token != "" {
 			req.Header.Set("Authorization", "Bearer "+token)
 		}
 		resp, rerr := (&http.Client{}).Do(req)

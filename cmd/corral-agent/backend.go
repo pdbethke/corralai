@@ -11,7 +11,10 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/pdbethke/corralai/internal/creds"
 )
 
 // ErrModelUnreachable is returned by a Backend when the model endpoint responds
@@ -43,17 +46,85 @@ func newBackend() Backend {
 	case "openai", "gemini", "openrouter":
 		return &openaiBackend{
 			base:  env("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-			key:   os.Getenv("OPENAI_API_KEY"),
+			key:   agentSecret("OPENAI_API_KEY"),
 			model: model,
 		}
 	case "anthropic", "claude":
 		return &anthropicBackend{
 			base:  env("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
-			key:   os.Getenv("ANTHROPIC_API_KEY"),
+			key:   agentSecret("ANTHROPIC_API_KEY"),
 			model: model, // e.g. claude-sonnet-4-6 / claude-haiku-4-5-20251001 / claude-opus-4-8
 		}
 	default: // ollama
 		return &ollamaBackend{url: env("OLLAMA_URL", "http://127.0.0.1:11434"), model: model}
+	}
+}
+
+// credsStore is the memoized creds.Store used by agentSecret. It is opened
+// once, lazily, on first secret resolution — not at package init — so tests
+// that set CORRAL_CREDS_DIR/CREDENTIALS_DIRECTORY before the first call see
+// a store scoped to their temp dir.
+var (
+	credsStoreOnce sync.Once
+	credsStore     *creds.Store
+
+	// scrubbedSecrets holds the resolved value of any secret that scrubSecretEnv
+	// has already unset from the environment. Once a name lands here, agentSecret
+	// answers from this cache instead of re-querying the store — after scrubbing,
+	// the env tier of the chain is gone by design, so a fresh store.Get would
+	// silently lose an env-sourced value (or fall through to a stale keyring/age
+	// entry). Only the three names scrubSecretEnv scrubs ever populate this.
+	scrubbedSecrets sync.Map // name string -> value string
+)
+
+// agentSecret resolves a named secret (provider API key, brain bearer token)
+// through the creds keystore chain (env → OS keyring → age file). Env always
+// wins inside the chain, so this is a backward-compatible drop-in for
+// os.Getenv on the sites that used to read secrets directly. Degrade-never-
+// block: any resolve error (or unset name) returns "" rather than aborting
+// agent startup — the caller already handles "" as "no key configured."
+func agentSecret(name string) string {
+	if v, ok := scrubbedSecrets.Load(name); ok {
+		return v.(string)
+	}
+	credsStoreOnce.Do(func() {
+		st, err := creds.Open()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "agent: open creds store: %v\n", err)
+			return
+		}
+		credsStore = st
+	})
+	if credsStore == nil {
+		return ""
+	}
+	v, ok, err := credsStore.Get(name)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent: resolve %s from creds store: %v\n", name, err)
+		return ""
+	}
+	if !ok {
+		return ""
+	}
+	return v
+}
+
+// scrubSecretEnv resolves-and-caches, then unsets, the sensitive env vars
+// corral-agent reads via agentSecret — the full creds.CanonicalNames set
+// (OPENAI_API_KEY, GEMINI_API_KEY, ANTHROPIC_API_KEY, OPENROUTER_API_KEY,
+// CORRALAI_BRAIN_KEY) — once, at startup. It must run AFTER anything that
+// needs the env-sourced value has had a chance to resolve it (newBackend()
+// runs first and captures provider keys into the Backend struct directly),
+// but callers of agentSecret("CORRALAI_BRAIN_KEY") happen later, on demand,
+// during the agent's run loop — so the resolved brain token is cached here
+// and served from cache post-scrub. This keeps provider keys and the brain
+// bearer token out of the environment of any child process the agent spawns
+// via jailed exec.
+func scrubSecretEnv() {
+	for _, name := range creds.CanonicalNames {
+		v := agentSecret(name) // resolve (env still present) before scrubbing
+		scrubbedSecrets.Store(name, v)
+		os.Unsetenv(name)
 	}
 }
 

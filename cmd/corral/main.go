@@ -109,6 +109,25 @@ func env(k, def string) string {
 	return def
 }
 
+// subcommand reports which known corral subcommand args (shaped like
+// os.Args[1:]) names, or "" if none. It is checked BEFORE showVersion/
+// showHelp scan every arg for -v/-h/version: those scans previously ran
+// first and saw INTO the checked command's own argv, so `corral certify --
+// go test -v ./...` matched the -v after "--" and printed the version,
+// exiting 0 WITHOUT ever running the check — a silent false pass. Dispatch
+// by args[0] alone sidesteps that: only the subcommand name itself is
+// examined, never anything after it.
+func subcommand(args []string) string {
+	if len(args) == 0 {
+		return ""
+	}
+	switch args[0] {
+	case "certify", "secret":
+		return args[0]
+	}
+	return ""
+}
+
 // showVersion reports whether the args ask for the version.
 func showVersion(args []string) bool {
 	for _, a := range args {
@@ -404,6 +423,18 @@ func initMotherDuckToken() {
 var version = "dev"
 
 func main() {
+	// Dispatch known subcommands BEFORE the version/help scan — see
+	// subcommand's doc comment for why the order matters (silent-green fix).
+	switch subcommand(os.Args[1:]) {
+	case "secret":
+		if err := runSecret(os.Args[2:], os.Stdin, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "corral secret:", err)
+			os.Exit(1)
+		}
+		return
+	case "certify":
+		os.Exit(runCertify(os.Args[2:], realRunner{}, mcpPoster{}, os.Stdout, os.Stderr))
+	}
 	if showVersion(os.Args[1:]) {
 		log.SetFlags(0)
 		log.Println("corral", version)
@@ -412,16 +443,6 @@ func main() {
 	if showHelp(os.Args[1:]) {
 		fmt.Print(usageText())
 		return
-	}
-	if len(os.Args) > 1 && os.Args[1] == "secret" {
-		if err := runSecret(os.Args[2:], os.Stdin, os.Stdout); err != nil {
-			fmt.Fprintln(os.Stderr, "corral secret:", err)
-			os.Exit(1)
-		}
-		return
-	}
-	if len(os.Args) > 1 && os.Args[1] == "certify" {
-		os.Exit(runCertify(os.Args[2:], realRunner{}, mcpPoster{}, os.Stdout, os.Stderr))
 	}
 	home, _ := os.UserHomeDir()
 	addr := env("CORRALAI_ADDR", "127.0.0.1:9019")

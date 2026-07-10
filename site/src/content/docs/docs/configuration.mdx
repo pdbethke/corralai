@@ -85,6 +85,30 @@ injected into a push URL for one call, and never written to `.git/config`. See
 | `CORRALAI_MOTHERDUCK` | Fleet-sync target (`md:<db>` or a `.duckdb` path); empty ⇒ sync off |
 | `CORRALAI_BRAIN_ID` | Tag for this brain's rows in the fleet (default: hostname) |
 
+### Secrets & keys
+
+Provider API keys and the worker token are configured with the embedded
+**keystore** rather than left in a plaintext env file:
+
+```sh
+corral secret set OPENAI_API_KEY       # value read from stdin — never a CLI arg
+corral secret set OPENROUTER_API_KEY   # one OpenRouter key covers gemini + gpt + claude
+corral secret list                     # names only, never values
+corral secret rm  GEMINI_API_KEY
+```
+
+Each secret resolves through **env var → OS keyring → an age-encrypted file**
+(first hit wins, so an env var always overrides a stored value). On a desktop the
+OS keychain (macOS Keychain, Windows Credential Manager, Linux Secret Service)
+holds it directly. On a headless server it's an age-encrypted store under your
+config dir (`CORRAL_CREDS_DIR` to override), whose encryption identity comes from
+`CORRAL_AGE_IDENTITY`, a systemd credential (`age-identity`), or a `0600` key file
+— and **fails closed** if that source is present but malformed, so it never
+silently orphans your store. Secret values are redacted to a fingerprint in every
+log and error, and `corral-agent` reads `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` /
+`CORRALAI_BRAIN_KEY` through the keystore — so they need never sit in the process
+environment at all.
+
 See [Running it](/docs/running-it/) for how these come together in dev vs.
 auth-on, and [Multi-model herds](/docs/concepts/multi-model-herds/) for the
 model story.

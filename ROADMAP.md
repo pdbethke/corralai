@@ -51,10 +51,21 @@ Go binary.**
   multi-role workers no longer trip false stall alarms; a drained queue that still
   holds an open critical/high finding routes to a **needs-review** human gate
   rather than shipping a known defect.
+- **Per-mission herd composer.** A visual **Mission Composer** builds each mission's
+  team before launch: drag a model/agent onto each role, pick the **MCP endpoints**
+  the herd may consume, and attach **lookbook** design directives. The choice is
+  stored *per mission* (role→agent map + endpoints + lookbook) and injected into the
+  herd's instructions — so a mission carries its own team, not a global default.
+  (v1 runs one mission at a time; concurrent, differently-composed missions are next.)
+- **Portable credential keystore.** Provider keys + the worker token, configured once
+  and stored securely, cross-platform: an embedded resolver (env → OS keyring →
+  age-encrypted file) with a `corral secret` CLI — the GCP-ADC pattern in the one
+  binary. Secrets never touch argv, logs, or plaintext-at-rest; the age identity
+  fails closed. Security-reviewed adversarially before shipping.
 
 ## Now — make it operable and unbreakable
-- **The front door.** A first-class *"what should the herd build?"* composer, with
-  an optional brain-led clarify step (→ a crisp directive with explicit acceptance
+- **The front door.** The Mission Composer (above) is the first cut. Still ahead: an
+  optional brain-led clarify step (→ a crisp directive with explicit acceptance
   criteria) and a pre-flight feasibility check (roles the plan needs vs. workers
   available). Specifying well is also a reliability fix.
 - **Resumability.** A mission survives a crash or quota blip and resumes from

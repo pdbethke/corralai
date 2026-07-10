@@ -19,6 +19,17 @@ inherits the default instead and the gap shows up as **drift** on
 reference](/docs/cli/corral/) for the rest of the brain's environment
 variables.
 
+## Composing a mission's herd
+
+`CORRALAI_ROLE_MODELS` sets a *global* default; the cockpit's **Mission Composer**
+builds a herd **per mission** instead. Drag a model/agent onto each role, select
+which **MCP endpoints** (from the gateway) the herd may consume, and attach
+**lookbook** design directives — then launch. Those choices are persisted against
+that mission — its own role→agent map, endpoints, and lookbook — and the endpoint +
+lookbook context is injected into the herd's task instructions, so each mission
+carries its own team and reach rather than the process-wide default. (v1 runs one
+mission at a time; concurrent, differently-composed missions are on the roadmap.)
+
 ## Bring your own model, bring your own auth
 
 `corral-harness` workers bring their own model *and* their own auth — e.g. a

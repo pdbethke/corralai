@@ -135,9 +135,11 @@ func usageText() string {
 	return `corral — the CorralAI brain: an OIDC-authenticated, MCP-native coordination server
 
 Usage:
-  corral            serve /mcp/ + /healthz on $CORRALAI_ADDR
-  corral --version  print the build version and exit
-  corral -h         print this help and exit
+  corral                          serve /mcp/ + /healthz on $CORRALAI_ADDR
+  corral secret set|get|list|rm   manage provider keys + tokens in the secure keystore
+                                  (env → OS keyring → age-encrypted file; set reads stdin, never argv)
+  corral --version                print the build version and exit
+  corral -h                       print this help and exit
 
 Configuration is entirely environment variables — see CORRALAI_ADDR,
 CORRALAI_DB, and the rest of the // Env: block at the top of this binary's

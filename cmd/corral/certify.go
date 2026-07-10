@@ -12,14 +12,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"os/exec"
 	"strings"
 	"time"
 
-	"github.com/modelcontextprotocol/go-sdk/mcp"
-
+	"github.com/pdbethke/corralai/internal/brainclient"
 	"github.com/pdbethke/corralai/internal/creds"
 )
 
@@ -100,46 +98,6 @@ func (realRunner) RunCommand(argv []string, stdout, stderr io.Writer) (int, time
 	return 0, dur, combined.Bytes(), nil
 }
 
-// bearer injects the operator's brain token on every request. Mirrors
-// cmd/corral-admin/client.go's bearer — corral-admin's client package isn't
-// importable here (separate `main` package), so the small MCP-dial pattern
-// is duplicated rather than factored into a shared internal package for one
-// caller on each side.
-type bearer struct {
-	token string
-	next  http.RoundTripper
-}
-
-func (b bearer) RoundTrip(r *http.Request) (*http.Response, error) {
-	r2 := r.Clone(r.Context())
-	if b.token != "" {
-		r2.Header.Set("Authorization", "Bearer "+b.token)
-	}
-	return b.next.RoundTrip(r2)
-}
-
-// dialBrain opens an authenticated MCP session to the brain's /mcp endpoint.
-func dialBrain(ctx context.Context, brainURL, token string) (*mcp.ClientSession, error) {
-	endpoint := strings.TrimRight(brainURL, "/") + "/mcp"
-	hc := &http.Client{Timeout: 30 * time.Second, Transport: bearer{token, http.DefaultTransport}}
-	tr := &mcp.StreamableClientTransport{Endpoint: endpoint, HTTPClient: hc, DisableStandaloneSSE: true}
-	cl := mcp.NewClient(&mcp.Implementation{Name: "corral-certify", Version: version}, nil)
-	sess, err := cl.Connect(ctx, tr, nil)
-	if err != nil {
-		return nil, fmt.Errorf("connect to brain %s: %w", brainURL, err)
-	}
-	return sess, nil
-}
-
-func firstText(res *mcp.CallToolResult) string {
-	for _, c := range res.Content {
-		if tc, ok := c.(*mcp.TextContent); ok {
-			return tc.Text
-		}
-	}
-	return ""
-}
-
 // mcpPoster is buildPoster backed by a real MCP call to the brain's
 // report_build tool. The bearer token is resolved fresh on every Post from
 // the credential keystore (env -> OS keyring -> age file) — never logged,
@@ -151,11 +109,11 @@ func (mcpPoster) Post(ctx context.Context, brainURL string, rec buildRecord) (bu
 	if err != nil {
 		return buildResult{}, fmt.Errorf("resolve brain token: %w", err)
 	}
-	sess, err := dialBrain(ctx, brainURL, token)
+	cl, err := brainclient.Dial(ctx, brainURL, token)
 	if err != nil {
 		return buildResult{}, err
 	}
-	defer func() { _ = sess.Close() }()
+	defer func() { _ = cl.Close() }()
 
 	args := map[string]any{
 		"repo":      rec.Repo,
@@ -174,11 +132,11 @@ func (mcpPoster) Post(ctx context.Context, brainURL string, rec buildRecord) (bu
 		args["produced_by"] = rec.ProducedBy
 	}
 
-	res, err := sess.CallTool(ctx, &mcp.CallToolParams{Name: "report_build", Arguments: args})
+	res, err := cl.CallTool(ctx, "report_build", args)
 	if err != nil {
 		return buildResult{}, err
 	}
-	text := firstText(res)
+	text := brainclient.FirstText(res)
 	if res.IsError {
 		msg := strings.TrimSpace(text)
 		if msg == "" {

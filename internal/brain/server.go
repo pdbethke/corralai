@@ -7,6 +7,7 @@ package brain
 
 import (
 	"context"
+	"crypto/ed25519"
 	"fmt"
 	"log"
 	"time"
@@ -274,7 +275,14 @@ func NewServer(store *coord.Store, mem *memory.Store, opts Options) *mcp.Server 
 	registerActivity(s, opts.ActivityRing, opts)
 	registerHost(s, opts.HostBook, opts)
 	if opts.BuildStore != nil {
-		registerBuildCert(s, opts)
+		if len(opts.CertifyKey) == ed25519.PrivateKeySize {
+			registerBuildCert(s, opts)
+		} else {
+			// Fail loud, not quiet: a build store with no (or malformed)
+			// signing key is a config mistake, not a silent no-op. Never log
+			// the key's bytes — only its absence/invalidity.
+			log.Printf("report_build disabled: build store configured but CORRALAI signing key is missing/invalid")
+		}
 	}
 	return s
 }

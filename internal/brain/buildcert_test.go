@@ -99,6 +99,29 @@ func TestReportBuild(t *testing.T) {
 		t.Fatalf("statement.subject[0].digest.sha256 = %v, want ledger head %v", digest["sha256"], out.Head)
 	}
 
+	// produced_by must land in the SLSA provenance's resolvedDependencies
+	// (materials) — predicate.buildDefinition.resolvedDependencies — so a
+	// verifier can see which model produced the change under certification.
+	predicate, ok := out.Statement["predicate"].(map[string]any)
+	if !ok {
+		t.Fatalf("statement.predicate is not an object: %v", out.Statement["predicate"])
+	}
+	buildDef, ok := predicate["buildDefinition"].(map[string]any)
+	if !ok {
+		t.Fatalf("predicate.buildDefinition is not an object: %v", predicate["buildDefinition"])
+	}
+	resolvedDeps, ok := buildDef["resolvedDependencies"].([]any)
+	if !ok || len(resolvedDeps) != 1 {
+		t.Fatalf("expected exactly one resolvedDependency, got %v", buildDef["resolvedDependencies"])
+	}
+	dep, ok := resolvedDeps[0].(map[string]any)
+	if !ok {
+		t.Fatalf("resolvedDependencies[0] is not an object: %v", resolvedDeps[0])
+	}
+	if dep["uri"] != "model:claude-opus" {
+		t.Fatalf("resolvedDependencies[0].uri = %v, want %q", dep["uri"], "model:claude-opus")
+	}
+
 	if !certify.VerifySig(out.Head, out.Signature, pub) {
 		t.Fatal("signature does not verify against the ledger head under the brain's public key")
 	}
@@ -123,5 +146,54 @@ func TestReportBuild(t *testing.T) {
 	}
 	if certify.VerifySig(tamperedHead, out.Signature, pub) {
 		t.Fatal("a tampered head must NOT verify against the original signature")
+	}
+}
+
+// TestReportBuildDisabledWithoutValidKey locks the misconfig guard: a brain
+// configured with a BuildStore but a missing/invalid CertifyKey must NOT
+// register report_build (ed25519.Sign panics on a malformed key — that panic
+// must never reach the MCP request goroutine). The tool call must come back
+// as a clean "unknown tool" error, not a crash.
+func TestReportBuildDisabledWithoutValidKey(t *testing.T) {
+	dir := t.TempDir()
+	bs, err := buildstore.Open(filepath.Join(dir, "build.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bs.Close()
+
+	ctx := context.Background()
+	clientT, serverT := mcp.NewInMemoryTransports()
+	go func() {
+		// Deliberately omit CertifyKey: BuildStore is set, but the signing
+		// key is nil/invalid — the guard must skip registration rather than
+		// let ed25519.Sign panic on the first call.
+		_ = NewServer(nil, nil, Options{
+			BuildStore: bs,
+		}).Run(ctx, serverT)
+	}()
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "t", Version: "0"}, nil)
+	sess, err := client.Connect(ctx, clientT, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+
+	res, err := sess.CallTool(ctx, &mcp.CallToolParams{
+		Name: "report_build",
+		Arguments: map[string]any{
+			"repo":      "pdbethke/corralai",
+			"commit":    "abc123",
+			"command":   "go test ./...",
+			"exit_code": 0,
+		},
+	})
+	// The go-sdk MCP client surfaces an unknown tool either as a returned
+	// error or as an IsError result, depending on version — accept either,
+	// but a panic (which would abort the goroutine and hang/close the
+	// session) must never happen.
+	if err == nil && res != nil && !res.IsError {
+		t.Fatalf("report_build must be unregistered when CertifyKey is missing/invalid, got a successful result: %+v", res)
 	}
 }

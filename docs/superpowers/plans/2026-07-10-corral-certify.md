@@ -4,7 +4,7 @@
 
 **Goal:** `corral certify -- <check>` runs the check itself, then the brain builds a tamper-evident + SLSA-provenance record, signs it, and stores it — an independently-verified, recallable accountability record for any build.
 
-**Architecture:** A thin `corral certify` subcommand captures git/CI context, runs the check (exit-passthrough), and POSTs a raw build record to the brain over MCP (authed with `CORRALAI_BRAIN_KEY`). The brain's `report_build` tool builds a hash-linked ledger + in-toto/SLSA attestation via a new `internal/attest` package, signs the head with a persisted Ed25519 key, stores it, and returns the signed statement. Signing lives only in the brain.
+**Architecture:** A thin `corral certify` subcommand captures git/CI context, runs the check (exit-passthrough), and POSTs a raw build record to the brain over MCP (authed with `CORRALAI_BRAIN_KEY`). The brain's `report_build` tool builds a hash-linked ledger + in-toto/SLSA attestation via a new `internal/certify` package, signs the head with a persisted Ed25519 key, stores it, and returns the signed statement. Signing lives only in the brain.
 
 **Tech Stack:** Go 1.26; stdlib `crypto/ed25519`, `crypto/sha256`, `os/exec`; the go-sdk MCP client/server; **`go-duckdb` for storage — the same engine `internal/telemetry` already uses.** The build-record store is DuckDB-native so the identical schema federates to a shared **MotherDuck** warehouse later by swapping the DSN (a local `.duckdb` path → an `md:` connection string) — a config flip, not a rewrite. This is the "distributed dev shop accountability warehouse" the vision rides on; building the store DuckDB-native now means we don't pay twice.
 
@@ -20,8 +20,8 @@
 
 ## File Structure
 
-- `internal/attest/attest.go` — `Step`, `Ledger`, `BuildRecord`, `Statement`; `BuildLedger`, `VerifyLedger`, `BuildAttestation`; Ed25519 `Sign`/`Verify`.
-- `internal/attest/attest_test.go`.
+- `internal/certify/certify.go` — `Step`, `Ledger`, `BuildRecord`, `Statement`; `BuildLedger`, `VerifyLedger`, `BuildAttestation`; Ed25519 `Sign`/`Verify`.
+- `internal/certify/certify_test.go`.
 - `internal/brain/buildcert.go` — the `report_build` MCP tool + the persisted signing key loader.
 - `internal/brain/buildcert_test.go`.
 - `internal/queue` or `internal/buildstore/store.go` — `SaveBuild`/`GetBuild` (build_records table).
@@ -31,9 +31,9 @@
 
 ---
 
-### Task 1: `internal/attest` — ledger, attestation, Ed25519 signing
+### Task 1: `internal/certify` — ledger, attestation, Ed25519 signing
 
-**Files:** Create `internal/attest/attest.go`, `internal/attest/attest_test.go`
+**Files:** Create `internal/certify/certify.go`, `internal/certify/certify_test.go`
 
 **Interfaces — Produces:**
 - `type Step struct { Seq int; TS float64; Kind, Actor, Model, Subject string; Detail map[string]any; Prev, Hash string }`
@@ -43,12 +43,12 @@
 - `func BuildAttestation(r BuildRecord, head string) map[string]any` — in-toto Statement v1 + SLSA Provenance v1 predicate; `subject[0].digest.sha256 = head`; models in `resolvedDependencies`; certification (command/exit/pass) in `byproducts`.
 - `func Sign(head string, priv ed25519.PrivateKey) string` (hex) and `func VerifySig(head, sigHex string, pub ed25519.PublicKey) bool`.
 
-- [ ] **Step 1: Write the failing test** `internal/attest/attest_test.go`:
+- [ ] **Step 1: Write the failing test** `internal/certify/certify_test.go`:
 
 ```go
 // SPDX-License-Identifier: Elastic-2.0
 
-package attest
+package certify
 
 import (
 	"crypto/ed25519"
@@ -100,16 +100,16 @@ func TestSignVerify(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run it, verify it fails.** `go test ./internal/attest/ -v` → FAIL (undefined).
+- [ ] **Step 2: Run it, verify it fails.** `go test ./internal/certify/ -v` → FAIL (undefined).
 
-- [ ] **Step 3: Implement `internal/attest/attest.go`.** Port the spike (`scratch/attestation-spike/chainlib.py` + `gen.py`) to Go. Ledger: `hash = sha256(json.Marshal(step-without-Hash))` with `Prev` chained (marshal a deterministic struct — use a fixed field order via a helper struct, since Go map marshaling is sorted by key so `json.Marshal(map)` is deterministic). Attestation mirrors the spike's structure. `Sign` = `hex(ed25519.Sign(priv, []byte(head)))`; `VerifySig` decodes hex and `ed25519.Verify`.
+- [ ] **Step 3: Implement `internal/certify/certify.go`.** Port the spike (`scratch/attestation-spike/chainlib.py` + `gen.py`) to Go. Ledger: `hash = sha256(json.Marshal(step-without-Hash))` with `Prev` chained (marshal a deterministic struct — use a fixed field order via a helper struct, since Go map marshaling is sorted by key so `json.Marshal(map)` is deterministic). Attestation mirrors the spike's structure. `Sign` = `hex(ed25519.Sign(priv, []byte(head)))`; `VerifySig` decodes hex and `ed25519.Verify`.
 
-- [ ] **Step 4: Run it, verify it passes.** `go test ./internal/attest/ -v` → PASS.
+- [ ] **Step 4: Run it, verify it passes.** `go test ./internal/certify/ -v` → PASS.
 
 - [ ] **Step 5: Commit.**
 ```bash
-git add internal/attest/
-git commit -m "feat(attest): tamper-evident ledger + SLSA attestation + Ed25519 signing"
+git add internal/certify/
+git commit -m "feat(certify): tamper-evident ledger + SLSA attestation + Ed25519 signing"
 ```
 
 ---
@@ -145,14 +145,14 @@ git commit -m "feat(buildstore): signed build-record store + persisted Ed25519 s
 **Files:** Create `internal/brain/buildcert.go`, `internal/brain/buildcert_test.go`; modify `internal/brain/server.go` (register it) + `internal/brain/identity.go` (Options: `BuildStore *buildstore.Store`, `CertifyKey ed25519.PrivateKey`).
 
 **Interfaces:**
-- Consumes: `internal/attest`, `internal/buildstore`.
+- Consumes: `internal/certify`, `internal/buildstore`.
 - Produces: MCP tool `report_build` accepting `{repo, commit, branch, command, exit_code, duration_s, output_digest, produced_by[]}` → builds ledger+attestation → signs head → stores → returns `{id, head, signature, statement}`. Emits a telemetry `build_certified` event. Actor = `actorOf(req)` (the CI principal).
 
-- [ ] **Step 1: Write the failing test** `internal/brain/buildcert_test.go` — over the in-memory MCP transport (mirror `missions_test.go`): open a temp `buildstore`, generate a keypair, `NewServer(nil,nil,Options{BuildStore:bs, CertifyKey:priv})`, call `report_build` with a passing build, assert the returned `statement.subject.digest.sha256 == head`, `attest.VerifySig(head, signature, pub)` is true, the record is in the store, and a tampered statement fails `VerifyLedger`.
+- [ ] **Step 1: Write the failing test** `internal/brain/buildcert_test.go` — over the in-memory MCP transport (mirror `missions_test.go`): open a temp `buildstore`, generate a keypair, `NewServer(nil,nil,Options{BuildStore:bs, CertifyKey:priv})`, call `report_build` with a passing build, assert the returned `statement.subject.digest.sha256 == head`, `certify.VerifySig(head, signature, pub)` is true, the record is in the store, and a tampered statement fails `VerifyLedger`.
 
 - [ ] **Step 2: Run it, verify it fails.**
 
-- [ ] **Step 3: Implement `internal/brain/buildcert.go`** — the tool handler assembles `attest.Step`s (context step + execution step), `BuildLedger` → head, `BuildAttestation`, `attest.Sign(head, opts.CertifyKey)`, `opts.BuildStore.Save(...)`, `rec(tel, 0, "build_certified", actorOf(req), repo+"@"+commit, {...})`, return the signed statement. Guard `opts.BuildStore == nil` (tool off). Register in `server.go` when `opts.BuildStore != nil`.
+- [ ] **Step 3: Implement `internal/brain/buildcert.go`** — the tool handler assembles `certify.Step`s (context step + execution step), `BuildLedger` → head, `BuildAttestation`, `certify.Sign(head, opts.CertifyKey)`, `opts.BuildStore.Save(...)`, `rec(tel, 0, "build_certified", actorOf(req), repo+"@"+commit, {...})`, return the signed statement. Guard `opts.BuildStore == nil` (tool off). Register in `server.go` when `opts.BuildStore != nil`.
 
 - [ ] **Step 4: Run it, verify it passes.** `go test ./internal/brain/ -run TestReportBuild` → PASS.
 

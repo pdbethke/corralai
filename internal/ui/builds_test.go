@@ -158,6 +158,7 @@ func TestBuildDetailEndpoint(t *testing.T) {
 		Branch        string           `json:"branch"`
 		Actor         string           `json:"actor"`
 		Head          string           `json:"head"`
+		Pass          bool             `json:"pass"`
 		Anchored      bool             `json:"anchored"`
 		CommitMessage string           `json:"commit_message"`
 		Checks        []map[string]any `json:"checks"`
@@ -175,6 +176,9 @@ func TestBuildDetailEndpoint(t *testing.T) {
 	}
 	if !detail.Anchored {
 		t.Fatalf("expected anchored=true")
+	}
+	if !detail.Pass {
+		t.Fatalf("expected pass=true for a good record: %+v", detail)
 	}
 	if !detail.AllOK {
 		t.Fatalf("expected all_ok=true for a good record: %+v", detail.Checks)

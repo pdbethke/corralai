@@ -530,6 +530,7 @@ func (s *Server) buildDetail(w http.ResponseWriter, r *http.Request) {
 
 	repo, commit, branch, actor := buildDefinitionFields(m)
 	head, _ := statementHead(m)
+	pass, _ := m["pass"].(bool)
 	sig, _ := m["signature"].(string)
 	anchored, _ := m["anchored"].(bool)
 	rekor, _ := m["rekor"].(string)
@@ -557,6 +558,7 @@ func (s *Server) buildDetail(w http.ResponseWriter, r *http.Request) {
 		"branch":           branch,
 		"actor":            actor,
 		"head":             head,
+		"pass":             pass,
 		"anchored":         anchored,
 		"produced_by":      producedBy(m),
 		"commit_message":   m["commit_message"],

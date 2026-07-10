@@ -284,10 +284,17 @@ to consume it; regenerate CLI docs.
   package (exported: `Dial(ctx, brainURL, token) (*Client, error)`, `(*Client) CallTool(...)`,
   `FirstText(res)`); make BOTH `cmd/corral/certify.go` and `cmd/corral-admin/client.go` consume it. One
   copy, both callers. Keep behavior identical; existing corral-admin tests must stay green.
-- **Verify surface (makes "independently verifiable" tangible):** add `corral certify verify <statement-file> --sig <hex|file> [--pubkey <hex>|--brain <url>]` — reads the statement, fetches the pubkey from
-  `GET /api/certify/pubkey` if `--brain` given (else `--pubkey`), and runs `certify.VerifyStatement`; exit 0
-  on verify, non-0 on mismatch. Small, and it is the proof the artifact is independently verifiable. Add a
-  test with an in-process statement+sig+pubkey.
+- **#6 (DRY — Task 6 review finding):** hoist the ledger-step (de)serialization into `internal/certify`
+  as `func MarshalSteps(steps []Step) ([]byte, error)` and `func UnmarshalSteps(b []byte) ([]Step, error)`
+  (they know `Step.Hash` is `json:"-"` and round-trip `Hash`/`Prev` explicitly via an internal storable
+  shape). Refactor `internal/brain/buildcert.go` to use `certify.MarshalSteps` (replacing its local
+  `storableStep`), and the `verify` subcommand below uses `certify.UnmarshalSteps` — one implementation,
+  three callers (brain, CLI, tests) instead of three copies. Keep the brain test green.
+- **Complete `--out` record (so verify works offline):** add `steps` (`certify.MarshalSteps(built)`) to the
+  `report_build` tool result (one field beside the existing `id/head/signature/statement/public_key`), and have
+  `runCertify`'s `--out` write the full self-verifying record `{statement, signature, steps, head, public_key}`
+  — so `corral certify verify <that file> --pubkey <hex>` works with no brain round-trip.
+- **Verify surface (makes "independently verifiable" tangible):** add `corral certify verify <record-file> [--pubkey <hex>|--brain <url>]` — `<record-file>` is a stored/exported record JSON carrying `{statement (canonical bytes), signature, steps, head}` (the shape `report_build` returns / `--out` writes). It: (1) fetches the pubkey from `GET /api/certify/pubkey` if `--brain` given, else `--pubkey`; (2) `certify.VerifyStatement(canonicalStatement, signature, pub)`; (3) `certify.UnmarshalSteps(steps)` then `certify.VerifyLedger(steps, head)`; (4) confirms `statement.subject[0].digest.sha256 == head`. ALL must pass → exit 0 + print "verified"; any failure → non-0 naming which check failed. This is the full independent-verification path. Test: build an in-process record and assert verify passes, plus a tampered-predicate case and a tampered-step case each failing.
 
 - [ ] **Step 1: Failing tests** for the dispatch-order fix, the token-env resolution, the brainclient
   hoist (a `brainclient` unit test), and `certify verify`.

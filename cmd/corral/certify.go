@@ -197,17 +197,23 @@ func (mcpPoster) Post(ctx context.Context, brainURL string, rec buildRecord) (bu
 // brainToken resolves the bearer token `corral certify` authenticates to the
 // brain with, from the same portable credential keystore `corral secret`
 // manages (env -> OS keyring -> age file).
+//
+// This deliberately reads CORRALAI_BRAIN_TOKEN, NOT CORRALAI_BRAIN_KEY:
+// main.go documents CORRALAI_BRAIN_KEY as the Ed25519 IDENTITY SEED for
+// cross-swarm brain identity (a private key), a completely different
+// secret from an HTTP bearer token. Reusing it here would collide two
+// unrelated secrets under one name.
 func brainToken() (string, error) {
 	s, err := creds.Open()
 	if err != nil {
 		return "", err
 	}
-	v, ok, err := s.Get("CORRALAI_BRAIN_KEY")
+	v, ok, err := s.Get("CORRALAI_BRAIN_TOKEN")
 	if err != nil {
 		return "", err
 	}
 	if !ok {
-		return "", fmt.Errorf("no CORRALAI_BRAIN_KEY configured (run: corral secret set CORRALAI_BRAIN_KEY)")
+		return "", fmt.Errorf("no CORRALAI_BRAIN_TOKEN configured (run: corral secret set CORRALAI_BRAIN_TOKEN)")
 	}
 	return v, nil
 }

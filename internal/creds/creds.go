@@ -26,7 +26,7 @@ var errReadOnly = errors.New("creds: backend is read-only")
 // the same list without duplicating it.
 var CanonicalNames = []string{
 	"OPENAI_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY",
-	"OPENROUTER_API_KEY", "CORRALAI_BRAIN_KEY",
+	"OPENROUTER_API_KEY", "CORRALAI_BRAIN_KEY", "CORRALAI_BRAIN_TOKEN",
 }
 
 // backend is one storage tier of the chain.

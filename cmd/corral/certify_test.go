@@ -231,3 +231,31 @@ func TestRunCertify_PostFailureStillReturnsCheckExitCode(t *testing.T) {
 		t.Fatalf("post failure must not mask a failing check's exit code, got %d", code2)
 	}
 }
+
+// TestBrainTokenResolvesFromCorralaiBrainToken locks sub-change 3: the CLI
+// bearer token must come from CORRALAI_BRAIN_TOKEN, NOT CORRALAI_BRAIN_KEY
+// (which main.go documents as the Ed25519 *identity seed* — reusing it as a
+// bearer token would be an env collision between two different secrets).
+func TestBrainTokenResolvesFromCorralaiBrainToken(t *testing.T) {
+	t.Setenv("CORRAL_CREDS_DIR", t.TempDir())
+	t.Setenv("CORRALAI_BRAIN_KEY", "not-a-token-this-is-the-identity-seed")
+	t.Setenv("CORRALAI_BRAIN_TOKEN", "the-real-bearer-token")
+
+	tok, err := brainToken()
+	if err != nil {
+		t.Fatalf("brainToken: %v", err)
+	}
+	if tok != "the-real-bearer-token" {
+		t.Fatalf("brainToken = %q, want the-real-bearer-token (must read CORRALAI_BRAIN_TOKEN, not CORRALAI_BRAIN_KEY)", tok)
+	}
+}
+
+func TestBrainTokenMissingIsAnError(t *testing.T) {
+	t.Setenv("CORRAL_CREDS_DIR", t.TempDir())
+	t.Setenv("CORRALAI_BRAIN_TOKEN", "")
+	t.Setenv("CORRALAI_BRAIN_KEY", "")
+
+	if _, err := brainToken(); err == nil {
+		t.Fatal("expected an error when CORRALAI_BRAIN_TOKEN is unset")
+	}
+}

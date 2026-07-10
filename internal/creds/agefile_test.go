@@ -156,18 +156,37 @@ func TestAgeFileLazyDoesNotResolveUntilFirstUse(t *testing.T) {
 		t.Fatal(err)
 	}
 	calls := 0
-	b := newAgeFileLazy(filepath.Join(dir, "creds.age"), func() (*age.X25519Identity, error) {
+	path := filepath.Join(dir, "creds.age")
+	b := newAgeFileLazy(path, func() (*age.X25519Identity, error) {
 		calls++
 		return id, nil
 	})
 	if calls != 0 {
 		t.Fatalf("resolver called %d times at construction, want 0", calls)
 	}
-	if _, _, err := b.get("OPENAI_API_KEY"); err != nil {
+	// The age file does not exist yet: get() is a pure existence check and
+	// must NOT resolve the identity (that would mint a plaintext identity.age
+	// for an operator who never needed the age tier at all).
+	if _, ok, err := b.get("OPENAI_API_KEY"); err != nil || ok {
+		t.Fatalf("get on nonexistent file = ok=%v err=%v, want ok=false err=nil", ok, err)
+	}
+	if calls != 0 {
+		t.Fatalf("resolver called %d times after get() on nonexistent file, want 0", calls)
+	}
+	// A set() genuinely needs to encrypt, so it resolves — and only then.
+	if err := b.set("OPENAI_API_KEY", "sk-headless-secret"); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 1 {
-		t.Fatalf("resolver called %d times after first get, want 1", calls)
+		t.Fatalf("resolver called %d times after set(), want 1", calls)
+	}
+	// Now that the file exists, get() must decrypt it, resolving the identity
+	// once and reusing it thereafter (sync.Once caching), not resolving again.
+	if v, ok, err := b.get("OPENAI_API_KEY"); err != nil || !ok || v != "sk-headless-secret" {
+		t.Fatalf("get after set = %q ok=%v err=%v", v, ok, err)
+	}
+	if calls != 1 {
+		t.Fatalf("resolver called %d times after get() on existing file, want 1 (cached)", calls)
 	}
 	if _, _, err := b.get("OPENAI_API_KEY"); err != nil {
 		t.Fatal(err)
@@ -197,6 +216,35 @@ func TestOpenWithKeyringDoesNotMintIdentityFile(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(dir, "identity.age")); !os.IsNotExist(statErr) {
 		t.Fatal("identity.age was minted even though the keyring satisfied the Set/Get — age tier should never have been touched")
+	}
+}
+
+func TestOpenWithKeyringDoesNotMintIdentityFileAcrossAllCommands(t *testing.T) {
+	keyring.MockInit() // in-memory; never touches the OS keychain
+	dir := t.TempDir()
+	t.Setenv("CORRAL_CREDS_DIR", dir)
+	t.Setenv("CREDENTIALS_DIRECTORY", "")
+	t.Setenv("CORRAL_AGE_IDENTITY", "")
+
+	st, err := Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Set("OPENAI_API_KEY", "sk-keyring-only"); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := st.Get("OPENAI_API_KEY")
+	if err != nil || !ok || got != "sk-keyring-only" {
+		t.Fatalf("Get = %q ok=%v err=%v", got, ok, err)
+	}
+	if _, err := st.List(); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Remove("OPENAI_API_KEY"); err != nil {
+		t.Fatal(err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "identity.age")); !os.IsNotExist(statErr) {
+		t.Fatal("identity.age was minted by List/Remove even though the keyring satisfied the Set/Get — age tier should never have been touched")
 	}
 }
 

@@ -53,11 +53,11 @@ func (b *ageFile) identity() (*age.X25519Identity, error) {
 	return b.id, b.idErr
 }
 
+// load reads and decrypts the store, returning an empty map if the file does
+// not exist yet. Identity resolution is deferred until we know decryption is
+// actually necessary — an existence check (get/names/remove on a nonexistent
+// file) must never mint a plaintext identity.age for a keyring-only operator.
 func (b *ageFile) load() (map[string]string, error) {
-	id, err := b.identity()
-	if err != nil {
-		return nil, err
-	}
 	f, err := os.Open(b.path) // #nosec G304 -- path is the operator's own creds dir
 	if os.IsNotExist(err) {
 		return map[string]string{}, nil
@@ -66,6 +66,10 @@ func (b *ageFile) load() (map[string]string, error) {
 		return nil, err
 	}
 	defer f.Close()
+	id, err := b.identity()
+	if err != nil {
+		return nil, err
+	}
 	r, err := age.Decrypt(f, id)
 	if err != nil {
 		return nil, err
@@ -110,12 +114,29 @@ func (b *ageFile) save(m map[string]string) error {
 	if err := w.Close(); err != nil {
 		return err
 	}
-	// Atomic replace: write ciphertext to a temp file in the same directory,
-	// then rename over the real path. A crash or disk-full before the rename
-	// leaves the existing store untouched instead of a torn, corrupted
-	// read-modify-write of the whole map.
-	tmp := b.path + ".tmp"
-	if err := os.WriteFile(tmp, buf.Bytes(), 0o600); err != nil {
+	// Atomic replace: write ciphertext to a unique temp file in the same
+	// directory, then rename over the real path. A crash or disk-full before
+	// the rename leaves the existing store untouched instead of a torn,
+	// corrupted read-modify-write of the whole map. A unique temp name (rather
+	// than a fixed "<path>.tmp") avoids two concurrent writers clobbering each
+	// other's in-flight write.
+	tmpFile, err := os.CreateTemp(dir, "creds-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmp := tmpFile.Name()
+	if err := tmpFile.Chmod(0o600); err != nil {
+		tmpFile.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if _, err := tmpFile.Write(buf.Bytes()); err != nil {
+		tmpFile.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := tmpFile.Close(); err != nil {
+		os.Remove(tmp)
 		return err
 	}
 	if err := os.Rename(tmp, b.path); err != nil {

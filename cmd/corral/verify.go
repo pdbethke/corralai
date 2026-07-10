@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pdbethke/corralai/internal/certify"
+	"github.com/pdbethke/corralai/internal/certverify"
 	"github.com/pdbethke/corralai/internal/transparency"
 )
 
@@ -184,73 +184,11 @@ func runCertifyVerify(args []string, fetch pubkeyFetcher, newWitness witnessFact
 		fmt.Fprintln(stderr, "corral certify verify: warning: record's embedded public_key does not match the trusted key — the record claims a different signer")
 	}
 
-	// Check 1: the DSSE envelope's Ed25519 signature — binds the FULL
-	// predicate (repo/commit/command/exit code), not just the head. The
-	// envelope (rec.Signature) carries its own embedded copy of the
-	// statement it signed; that embedded copy — not rec.Statement, which is
-	// kept only for human readability — is what checks 2 and 3 below verify
-	// against, so a forger can't get a pass by leaving the envelope alone
-	// and editing the record's separate "statement" field.
-	envelopeStmt, ok, err := certify.VerifyDSSE([]byte(rec.Signature), pub)
-	if err != nil {
-		fmt.Fprintf(stderr, "corral certify verify: FAILED (signature: %v)\n", err)
-		return 1
-	}
-	if !ok {
-		fmt.Fprintln(stderr, "corral certify verify: FAILED (signature does not verify against the statement)")
-		return 1
-	}
-
-	// Check 2: the ledger's hash chain recomputes to the recorded head.
-	stepsJSON, err := json.Marshal(rec.Steps)
-	if err != nil {
-		fmt.Fprintf(stderr, "corral certify verify: FAILED (steps: %v)\n", err)
-		return 1
-	}
-	steps, err := certify.UnmarshalSteps(stepsJSON)
-	if err != nil {
-		fmt.Fprintf(stderr, "corral certify verify: FAILED (steps: %v)\n", err)
-		return 1
-	}
-	if ok, msg := certify.VerifyLedger(steps, rec.Head); !ok {
-		fmt.Fprintf(stderr, "corral certify verify: FAILED (ledger: %s)\n", msg)
-		return 1
-	}
-
-	// Check 3: the statement is bound to THIS exact ledger — its subject
-	// digest must equal the ledger head, or a valid statement could be
-	// paired with an unrelated (even individually valid) ledger. Checked
-	// against envelopeStmt (the envelope's own embedded statement), the same
-	// source of truth as check 1 — not rec.Statement.
-	subjDigest, subjOK := statementSubjectDigest(envelopeStmt)
-	if !subjOK || subjDigest != rec.Head {
-		fmt.Fprintf(stderr, "corral certify verify: FAILED (statement subject digest %q does not match ledger head %q)\n", subjDigest, rec.Head)
-		return 1
-	}
-
-	// Check 4: public transparency. "Signed" (checks 1-3) is a claim about
-	// what the brain says; "publicly witnessed" is an independently
-	// checkable claim that a third party can confirm without trusting the
-	// brain at all. A record that was never anchored is a materially weaker
-	// artifact — trust corral's own signature and nothing else — so it is
-	// rejected by default rather than silently passed off as equivalent.
-	if !rec.Anchored {
-		fmt.Fprintln(stderr, "corral certify verify: signed, NOT publicly witnessed (this build's attestation was never submitted to, or never included in, a public transparency log)")
-		if !*allowUnanchored {
-			fmt.Fprintln(stderr, "corral certify verify: FAILED (pass --allow-unanchored to accept a signed-but-unwitnessed record)")
-			return 1
-		}
-		fmt.Fprintln(stderr, "corral certify verify: caveat: --allow-unanchored set — accepting signature-only trust, no third-party transparency guarantee")
-		fmt.Fprintln(stdout, "verified (signed, NOT publicly witnessed)")
-		return 0
-	}
-
-	var entry transparency.Entry
-	if err := json.Unmarshal([]byte(rec.Rekor), &entry); err != nil {
-		fmt.Fprintf(stderr, "corral certify verify: FAILED (rekor: record's transparency entry is malformed: %v)\n", err)
-		return 1
-	}
-
+	// Resolve the Rekor witness up front (needed only for an anchored
+	// record's check, but constructing it here keeps the failure path
+	// identical to before the refactor: a witness-construction error is
+	// reported and fails verification only when the record is actually
+	// anchored — see below).
 	rekorURL := strings.TrimSpace(*rekorURLFlag)
 	if rekorURL == "" {
 		rekorURL = strings.TrimSpace(os.Getenv("CORRALAI_REKOR_URL"))
@@ -258,37 +196,72 @@ func runCertifyVerify(args []string, fetch pubkeyFetcher, newWitness witnessFact
 	if rekorURL == "" {
 		rekorURL = defaultRekorURL
 	}
-	witness, err := newWitness(rekorURL)
-	if err != nil {
-		fmt.Fprintf(stderr, "corral certify verify: FAILED (rekor: constructing witness for %s: %v)\n", rekorURL, err)
+
+	var witness transparency.Witness
+	if rec.Anchored {
+		var werr error
+		witness, werr = newWitness(rekorURL)
+		if werr != nil {
+			fmt.Fprintf(stderr, "corral certify verify: FAILED (rekor: constructing witness for %s: %v)\n", rekorURL, werr)
+			return 1
+		}
+	}
+
+	crec := certverify.Record{
+		Statement: rec.Statement,
+		Signature: rec.Signature,
+		Steps:     rec.Steps,
+		Head:      rec.Head,
+		Rekor:     rec.Rekor,
+		Anchored:  rec.Anchored,
+	}
+	checks, allOK := certverify.VerifyRecord(crec, pub, witness, *allowUnanchored)
+
+	// Checks run in a fixed order (signature, ledger, subject, rekor); the
+	// CLI reports the FIRST failing one on stderr and exits non-zero,
+	// matching the pre-refactor behavior exactly.
+	for _, c := range checks {
+		if c.OK {
+			continue
+		}
+		switch c.Name {
+		case "rekor":
+			if !rec.Anchored {
+				fmt.Fprintln(stderr, "corral certify verify: signed, NOT publicly witnessed (this build's attestation was never submitted to, or never included in, a public transparency log)")
+				fmt.Fprintln(stderr, "corral certify verify: FAILED (pass --allow-unanchored to accept a signed-but-unwitnessed record)")
+			} else {
+				fmt.Fprintf(stderr, "corral certify verify: FAILED (rekor: %s)\n", c.Detail)
+			}
+		default:
+			fmt.Fprintf(stderr, "corral certify verify: FAILED (%s: %s)\n", c.Name, c.Detail)
+		}
 		return 1
 	}
-	ok, detail := witness.VerifyInclusion(entry, []byte(rec.Signature))
-	if !ok {
-		fmt.Fprintf(stderr, "corral certify verify: FAILED (rekor: %s)\n", detail)
+	if !allOK {
+		// Defensive: VerifyRecord's contract is allOK iff every check above
+		// passed, so this is unreachable, but never report success on a
+		// false allOK.
+		fmt.Fprintln(stderr, "corral certify verify: FAILED (verification did not pass)")
 		return 1
 	}
 
+	if !rec.Anchored {
+		fmt.Fprintln(stderr, "corral certify verify: signed, NOT publicly witnessed (this build's attestation was never submitted to, or never included in, a public transparency log)")
+		fmt.Fprintln(stderr, "corral certify verify: caveat: --allow-unanchored set — accepting signature-only trust, no third-party transparency guarantee")
+		fmt.Fprintln(stdout, "verified (signed, NOT publicly witnessed)")
+		return 0
+	}
+
+	var entry transparency.Entry
+	if err := json.Unmarshal([]byte(rec.Rekor), &entry); err != nil {
+		// certverify already validated Rekor unmarshals cleanly (else the
+		// rekor check above would have failed); this is unreachable in
+		// practice but kept as a defensive guard against formatting the
+		// success message with a zero-value entry.
+		fmt.Fprintf(stderr, "corral certify verify: FAILED (rekor: record's transparency entry is malformed: %v)\n", err)
+		return 1
+	}
 	integrated := time.Unix(entry.IntegratedTime, 0).UTC().Format(time.RFC3339)
 	fmt.Fprintf(stdout, "verified (publicly witnessed %s, Rekor #%d)\n", integrated, entry.LogIndex)
 	return 0
-}
-
-// statementSubjectDigest extracts statement.subject[0].digest.sha256 from a
-// decoded in-toto statement map.
-func statementSubjectDigest(stmt map[string]any) (string, bool) {
-	subjects, ok := stmt["subject"].([]any)
-	if !ok || len(subjects) == 0 {
-		return "", false
-	}
-	subj, ok := subjects[0].(map[string]any)
-	if !ok {
-		return "", false
-	}
-	digest, ok := subj["digest"].(map[string]any)
-	if !ok {
-		return "", false
-	}
-	sha, ok := digest["sha256"].(string)
-	return sha, ok
 }

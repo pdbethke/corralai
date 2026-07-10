@@ -609,6 +609,15 @@ func main() {
 	if err != nil {
 		log.Fatalf("load certify signing key: %v", err)
 	}
+	// certifyPub is the published half of certifyKey — the external trust
+	// anchor /api/builds/{id} hands to certverify.VerifyRecord (never a key
+	// derived from a stored record itself). nil (zero-value) only if
+	// certifyKey somehow came back malformed, in which case the detail
+	// endpoint's signature check fails closed rather than panicking.
+	var certifyPub ed25519.PublicKey
+	if len(certifyKey) == ed25519.PrivateKeySize {
+		certifyPub, _ = certifyKey.Public().(ed25519.PublicKey)
+	}
 
 	// The transparency witness report_build anchors each signed DSSE
 	// envelope to (Sigstore Rekor, by default the public instance). Anchoring
@@ -1216,7 +1225,7 @@ func main() {
 	replayStream := func(missionID int64) ([]brain.ReplayEvent, error) {
 		return brain.BuildReplayStream(queueStore, telStore, missionID)
 	}
-	uiHandler := verifier.Wrap(authz(ui.Handler(ui.Deps{Coord: store, Mem: memStore, Gateway: gwStore, Bus: bus, MemOwners: memOwners, Roles: princStore, Queue: queueStore, Missions: missionStore, Executions: execRing, Activity: activityRing, Hosts: hostBook, Health: healthBook, Narrator: narrator, Telemetry: telStore, Oracle: fleetOracle, RoleModels: roleModels, Staffing: engine.Staffing, Learn: learnStore, Promote: proposalPromote, Reject: proposalReject, History: historyList, HistoryDetail: historyDetail, Replay: replayStream, Artifacts: artStore, TaskArtifacts: taskArtStore})))
+	uiHandler := verifier.Wrap(authz(ui.Handler(ui.Deps{Coord: store, Mem: memStore, Gateway: gwStore, Bus: bus, MemOwners: memOwners, Roles: princStore, Queue: queueStore, Missions: missionStore, Executions: execRing, Activity: activityRing, Hosts: hostBook, Health: healthBook, Narrator: narrator, Telemetry: telStore, Oracle: fleetOracle, RoleModels: roleModels, Staffing: engine.Staffing, Learn: learnStore, Promote: proposalPromote, Reject: proposalReject, History: historyList, HistoryDetail: historyDetail, Replay: replayStream, Artifacts: artStore, TaskArtifacts: taskArtStore, BuildStore: buildStore, CertifyPub: certifyPub, Witness: certifyWitness})))
 	if verifier.Enabled() {
 		log.Printf("ui: bearer-gated (view via `corral-observe`)")
 	} else {

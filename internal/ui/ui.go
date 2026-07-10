@@ -7,6 +7,7 @@
 package ui
 
 import (
+	"crypto/ed25519"
 	"embed"
 	"encoding/base64"
 	"encoding/json"
@@ -21,6 +22,8 @@ import (
 	"github.com/pdbethke/corralai/internal/artifacts"
 	"github.com/pdbethke/corralai/internal/auth"
 	"github.com/pdbethke/corralai/internal/brain"
+	"github.com/pdbethke/corralai/internal/buildstore"
+	"github.com/pdbethke/corralai/internal/certverify"
 	"github.com/pdbethke/corralai/internal/coord"
 	"github.com/pdbethke/corralai/internal/gateway"
 	"github.com/pdbethke/corralai/internal/learn"
@@ -33,6 +36,7 @@ import (
 	"github.com/pdbethke/corralai/internal/rolemodel"
 	"github.com/pdbethke/corralai/internal/taskartifacts"
 	"github.com/pdbethke/corralai/internal/telemetry"
+	"github.com/pdbethke/corralai/internal/transparency"
 	"golang.org/x/net/websocket"
 )
 
@@ -65,6 +69,9 @@ type Server struct {
 	replayFn        func(missionID int64) ([]brain.ReplayEvent, error)
 	artifacts       *artifacts.Store
 	taskArtifacts   *taskartifacts.Store
+	buildStore      *buildstore.Store
+	certifyPub      ed25519.PublicKey
+	witness         transparency.Witness
 }
 
 // Handler returns the UI routes: / (the page), /api/me (the viewer's identity +
@@ -140,10 +147,27 @@ type Deps struct {
 
 	// TaskArtifacts is the dedicated database store for task execution and UI artifacts.
 	TaskArtifacts *taskartifacts.Store
+
+	// BuildStore is corral certify's signed build-record ledger (Task 3);
+	// /api/builds and /api/builds/{id} read from it. nil => /api/builds
+	// returns an empty list and /api/builds/{id} 404s (feature disabled,
+	// never a 500).
+	BuildStore *buildstore.Store
+	// CertifyPub is the published Ed25519 public key /api/builds/{id} uses
+	// to re-verify a record's signature — the same external trust anchor
+	// `corral certify verify` uses, never derived from the record itself.
+	// nil => the signature check fails closed rather than trusting an
+	// embedded key.
+	CertifyPub ed25519.PublicKey
+	// Witness is the transparency witness /api/builds/{id} uses to confirm
+	// an anchored record's Rekor inclusion proof. nil => the rekor check
+	// fails with "no transparency witness configured" for any anchored
+	// record (an unanchored record never needs it).
+	Witness transparency.Witness
 }
 
 func Handler(d Deps) http.Handler {
-	s := &Server{coord: d.Coord, mem: d.Mem, gw: d.Gateway, bus: d.Bus, memOwners: d.MemOwners, roles: d.Roles, queue: d.Queue, missions: d.Missions, execs: d.Executions, acts: d.Activity, hosts: d.Hosts, health: d.Health, narrator: d.Narrator, tel: d.Telemetry, oracle: d.Oracle, roleModels: d.RoleModels, staffing: d.Staffing, learn: d.Learn, promote: d.Promote, reject: d.Reject, historyFn: d.History, historyDetailFn: d.HistoryDetail, replayFn: d.Replay, artifacts: d.Artifacts, taskArtifacts: d.TaskArtifacts}
+	s := &Server{coord: d.Coord, mem: d.Mem, gw: d.Gateway, bus: d.Bus, memOwners: d.MemOwners, roles: d.Roles, queue: d.Queue, missions: d.Missions, execs: d.Executions, acts: d.Activity, hosts: d.Hosts, health: d.Health, narrator: d.Narrator, tel: d.Telemetry, oracle: d.Oracle, roleModels: d.RoleModels, staffing: d.Staffing, learn: d.Learn, promote: d.Promote, reject: d.Reject, historyFn: d.History, historyDetailFn: d.HistoryDetail, replayFn: d.Replay, artifacts: d.Artifacts, taskArtifacts: d.TaskArtifacts, buildStore: d.BuildStore, certifyPub: d.CertifyPub, witness: d.Witness}
 	mux := http.NewServeMux()
 	sub, _ := fs.Sub(webFS, "web")
 	mux.Handle("/", http.FileServer(http.FS(sub)))
@@ -176,6 +200,10 @@ func Handler(d Deps) http.Handler {
 	mux.HandleFunc("/api/mission/propose_staffing", s.proposeStaffing)
 	mux.HandleFunc("/api/mission/compose-options", s.composeOptions)
 	mux.Handle("/api/terminal/ws", s.guardTerminalWS(websocket.Handler(Registry.ServeWS)))
+
+	// Records dashboard: the certify build ledger (Task 3/4).
+	mux.HandleFunc("/api/builds", s.builds)
+	mux.HandleFunc("/api/builds/", s.buildDetail)
 
 	// Swarm Design Lookbook API routes
 	mux.HandleFunc("/api/lookbook", s.lookbookList)
@@ -425,6 +453,198 @@ func (s *Server) replay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"events": events})
+}
+
+// builds lists build_records rows for the records dashboard, narrowed by
+// query params repo/actor/status/anchored/limit/offset — a thin translation
+// of the query string into buildstore.ListFilter. A malformed anchored=
+// value is ignored (treated as "no filter") rather than erroring, matching
+// the read-only, never-500-on-bad-input style of the other GET endpoints
+// here. A nil BuildStore (feature not configured) renders an empty list,
+// never a panic.
+func (s *Server) builds(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "GET only", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.buildStore == nil {
+		writeJSON(w, []buildstore.Summary{})
+		return
+	}
+	q := r.URL.Query()
+	f := buildstore.ListFilter{
+		Repo:   q.Get("repo"),
+		Actor:  q.Get("actor"),
+		Status: q.Get("status"),
+	}
+	if v := q.Get("anchored"); v == "true" || v == "false" {
+		b := v == "true"
+		f.Anchored = &b
+	}
+	if v, err := strconv.Atoi(q.Get("limit")); err == nil {
+		f.Limit = v
+	}
+	if v, err := strconv.Atoi(q.Get("offset")); err == nil {
+		f.Offset = v
+	}
+	summaries, err := s.buildStore.List(f)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, summaries)
+}
+
+// buildDetail is the server-VERIFIED (not independently verified — see the
+// package doc note below) detail view for a single build_records row: the
+// brain re-runs certverify.VerifyRecord against its own stored record, the
+// same four checks `corral certify verify` runs offline. This is an
+// operator convenience, not a substitute for independent verification —
+// verify_command in the response always points a third party at the
+// independent path (the CLI against the published key + Rekor, not this
+// dashboard's word for it).
+func (s *Server) buildDetail(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "GET only", http.StatusMethodNotAllowed)
+		return
+	}
+	idStr := strings.TrimPrefix(r.URL.Path, "/api/builds/")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if idStr == "" || err != nil {
+		http.Error(w, "bad build id", http.StatusBadRequest)
+		return
+	}
+	if s.buildStore == nil {
+		http.NotFound(w, r)
+		return
+	}
+	m, ok, err := s.buildStore.Get(id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+
+	repo, commit, branch, actor := buildDefinitionFields(m)
+	head, _ := statementHead(m)
+	sig, _ := m["signature"].(string)
+	anchored, _ := m["anchored"].(bool)
+	rekor, _ := m["rekor"].(string)
+	var steps []map[string]any
+	if raw, ok := m["steps"].([]any); ok {
+		for _, s := range raw {
+			if step, ok := s.(map[string]any); ok {
+				steps = append(steps, step)
+			}
+		}
+	}
+	rec := certverify.Record{Statement: m, Signature: sig, Steps: steps, Head: head, Rekor: rekor, Anchored: anchored}
+
+	checks, allOK := certverify.VerifyRecord(rec, s.certifyPub, func() (transparency.Witness, error) {
+		if s.witness == nil {
+			return nil, fmt.Errorf("no transparency witness configured")
+		}
+		return s.witness, nil
+	}, false)
+
+	writeJSON(w, map[string]any{
+		"id":               id,
+		"repo":             repo,
+		"commit":           commit,
+		"branch":           branch,
+		"actor":            actor,
+		"head":             head,
+		"anchored":         anchored,
+		"produced_by":      producedBy(m),
+		"commit_message":   m["commit_message"],
+		"commit_author":    m["commit_author"],
+		"commit_date":      m["commit_date"],
+		"commit_signature": m["commit_signature"],
+		"checks":           checks,
+		"all_ok":           allOK,
+		"verify_command":   fmt.Sprintf("corral certify verify <record.json> --brain %s", brainBaseURL(r)),
+	})
+}
+
+// buildDefinitionFields pulls repo/commit/branch/actor out of a Get() map's
+// merged-in statement — predicate.buildDefinition.externalParameters for the
+// first three, predicate.buildDefinition.internalParameters.actor for the
+// last (the shape certify.BuildAttestation writes). Missing/malformed
+// pieces come back as "" rather than erroring — this is a best-effort
+// display projection, not a verification step (VerifyRecord below is the
+// verification step).
+func buildDefinitionFields(m map[string]any) (repo, commit, branch, actor string) {
+	predicate, _ := m["predicate"].(map[string]any)
+	buildDef, _ := predicate["buildDefinition"].(map[string]any)
+	ext, _ := buildDef["externalParameters"].(map[string]any)
+	repo, _ = ext["repo"].(string)
+	commit, _ = ext["commit"].(string)
+	branch, _ = ext["branch"].(string)
+	internal, _ := buildDef["internalParameters"].(map[string]any)
+	actor, _ = internal["actor"].(string)
+	return repo, commit, branch, actor
+}
+
+// statementHead pulls the ledger head out of a Get() map's merged-in
+// statement — subject[0].digest.sha256, the same field
+// certverify.VerifyRecord's subject check reads.
+func statementHead(m map[string]any) (string, bool) {
+	subjects, ok := m["subject"].([]any)
+	if !ok || len(subjects) == 0 {
+		return "", false
+	}
+	subj, ok := subjects[0].(map[string]any)
+	if !ok {
+		return "", false
+	}
+	digest, ok := subj["digest"].(map[string]any)
+	if !ok {
+		return "", false
+	}
+	sha, ok := digest["sha256"].(string)
+	return sha, ok
+}
+
+// producedBy pulls the model URIs out of a Get() map's merged-in statement —
+// predicate.buildDefinition.resolvedDependencies, "model:" prefix stripped.
+// Mirrors buildstore's own producedByFromStatement (unexported there); kept
+// duplicated rather than exported across a package boundary for one helper.
+func producedBy(m map[string]any) []string {
+	predicate, _ := m["predicate"].(map[string]any)
+	buildDef, _ := predicate["buildDefinition"].(map[string]any)
+	deps, _ := buildDef["resolvedDependencies"].([]any)
+	out := []string{}
+	for _, d := range deps {
+		dep, ok := d.(map[string]any)
+		if !ok {
+			continue
+		}
+		uri, _ := dep["uri"].(string)
+		if uri == "" {
+			continue
+		}
+		out = append(out, strings.TrimPrefix(uri, "model:"))
+	}
+	return out
+}
+
+// brainBaseURL best-effort reconstructs this brain's own base URL from the
+// incoming request, for embedding in verify_command so a third party knows
+// which brain (and thus which published certify key) to fetch the record
+// from independently. Falls back to a placeholder when scheme can't be
+// inferred (e.g. behind a proxy that doesn't set anything usable).
+func brainBaseURL(r *http.Request) string {
+	if r.Host == "" {
+		return "<brain-url>"
+	}
+	scheme := "https"
+	if r.TLS == nil {
+		scheme = "http"
+	}
+	return scheme + "://" + r.Host
 }
 
 // footprint reports a mission's storage footprint — coordination rows

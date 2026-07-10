@@ -237,3 +237,55 @@ func VerifyStatement(canonical []byte, sigHex string, pub ed25519.PublicKey) boo
 	}
 	return ed25519.Verify(pub, canonical, sig)
 }
+
+// storableStep mirrors Step but round-trips Hash under "hash". Step marks
+// Hash `json:"-"` deliberately — stepHash's own computation must exclude a
+// step's hash from its input, or the hash would be self-referential — but
+// that same tag means a plain json.Marshal of []Step silently drops Hash. A
+// persisted step without its hash can never be re-chained by an independent
+// verifier (VerifyLedger checks stepHash(s) against s.Hash), so the stored
+// shape carries it explicitly.
+type storableStep struct {
+	Seq     int            `json:"seq"`
+	TS      float64        `json:"ts"`
+	Kind    string         `json:"kind"`
+	Actor   string         `json:"actor"`
+	Model   string         `json:"model"`
+	Subject string         `json:"subject"`
+	Detail  map[string]any `json:"detail"`
+	Prev    string         `json:"prev"`
+	Hash    string         `json:"hash"`
+}
+
+// MarshalSteps converts a built ledger (Seq/Prev/Hash already assigned by
+// BuildLedger) to its persisted JSON shape, carrying Hash explicitly (see
+// storableStep) so a later UnmarshalSteps + VerifyLedger round trip works
+// with no access to the process that built the ledger.
+func MarshalSteps(steps []Step) ([]byte, error) {
+	out := make([]storableStep, len(steps))
+	for i, s := range steps {
+		out[i] = storableStep{
+			Seq: s.Seq, TS: s.TS, Kind: s.Kind, Actor: s.Actor, Model: s.Model,
+			Subject: s.Subject, Detail: s.Detail, Prev: s.Prev, Hash: s.Hash,
+		}
+	}
+	return json.Marshal(out)
+}
+
+// UnmarshalSteps is MarshalSteps's inverse: it reconstructs []Step from the
+// persisted storableStep JSON, recovering Hash (which Step's own json tag
+// excludes) so the result satisfies VerifyLedger.
+func UnmarshalSteps(b []byte) ([]Step, error) {
+	var in []storableStep
+	if err := json.Unmarshal(b, &in); err != nil {
+		return nil, err
+	}
+	out := make([]Step, len(in))
+	for i, s := range in {
+		out[i] = Step{
+			Seq: s.Seq, TS: s.TS, Kind: s.Kind, Actor: s.Actor, Model: s.Model,
+			Subject: s.Subject, Detail: s.Detail, Prev: s.Prev, Hash: s.Hash,
+		}
+	}
+	return out, nil
+}

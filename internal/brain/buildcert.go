@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -38,39 +37,6 @@ type reportBuildOut struct {
 	Signature string         `json:"signature"`
 	Statement map[string]any `json:"statement"`
 	PublicKey string         `json:"public_key"`
-}
-
-// storableStep mirrors certify.Step but round-trips Hash under "hash".
-// certify.Step marks Hash `json:"-"` deliberately — stepHash's own
-// computation must exclude a step's hash from its input, or the hash would
-// be self-referential — but that same tag means a plain json.Marshal of
-// []certify.Step silently drops Hash. A persisted step without its hash can
-// never be re-chained by an independent verifier (certify.VerifyLedger
-// checks stepHash(s) against s.Hash), so the stored shape carries it
-// explicitly.
-type storableStep struct {
-	Seq     int            `json:"seq"`
-	TS      float64        `json:"ts"`
-	Kind    string         `json:"kind"`
-	Actor   string         `json:"actor"`
-	Model   string         `json:"model"`
-	Subject string         `json:"subject"`
-	Detail  map[string]any `json:"detail"`
-	Prev    string         `json:"prev"`
-	Hash    string         `json:"hash"`
-}
-
-// storableSteps converts a built ledger to its persisted JSON shape (see
-// storableStep).
-func storableSteps(steps []certify.Step) []storableStep {
-	out := make([]storableStep, len(steps))
-	for i, s := range steps {
-		out[i] = storableStep{
-			Seq: s.Seq, TS: s.TS, Kind: s.Kind, Actor: s.Actor, Model: s.Model,
-			Subject: s.Subject, Detail: s.Detail, Prev: s.Prev, Hash: s.Hash,
-		}
-	}
-	return out
 }
 
 // registerBuildCert registers the report_build tool — corral certify's ingest
@@ -133,7 +99,7 @@ func registerBuildCert(s *mcp.Server, opts Options) {
 				return nil, reportBuildOut{}, fmt.Errorf("report_build: signing statement: %w", err)
 			}
 
-			stepsJSON, err := json.Marshal(storableSteps(built))
+			stepsJSON, err := certify.MarshalSteps(built)
 			if err != nil {
 				return nil, reportBuildOut{}, fmt.Errorf("report_build: marshaling steps: %w", err)
 			}

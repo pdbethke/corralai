@@ -5,6 +5,7 @@ package certify
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"strings"
 	"testing"
 )
 
@@ -119,5 +120,62 @@ func TestCanonicalStatementDeterministic(t *testing.T) {
 	}
 	if string(a) != string(b) {
 		t.Fatalf("CanonicalStatement not deterministic:\n%s\nvs\n%s", a, b)
+	}
+}
+
+// TestMarshalUnmarshalStepsRoundTrip locks the DRY hoist of the persisted
+// ledger-step shape: Step.Hash is deliberately json:"-" (its own hash must
+// never be part of the input to computing that hash), so a plain
+// json.Marshal/Unmarshal of []Step silently drops Hash. MarshalSteps must
+// round-trip Hash/Prev explicitly so UnmarshalSteps's output still verifies.
+func TestMarshalUnmarshalStepsRoundTrip(t *testing.T) {
+	steps := []Step{
+		{Kind: "context", Actor: "ci", Subject: "repo@abc123", Detail: map[string]any{"repo": "r"}},
+		{Kind: "execution", Actor: "ci", Subject: "go test ./...", Detail: map[string]any{"exit_code": 0.0, "ok": true}},
+	}
+	built, head := BuildLedger(steps)
+
+	b, err := MarshalSteps(built)
+	if err != nil {
+		t.Fatalf("MarshalSteps: %v", err)
+	}
+
+	got, err := UnmarshalSteps(b)
+	if err != nil {
+		t.Fatalf("UnmarshalSteps: %v", err)
+	}
+	if len(got) != len(built) {
+		t.Fatalf("got %d steps, want %d", len(got), len(built))
+	}
+	for i := range built {
+		if got[i].Hash != built[i].Hash {
+			t.Errorf("step %d: Hash = %q, want %q", i, got[i].Hash, built[i].Hash)
+		}
+		if got[i].Prev != built[i].Prev {
+			t.Errorf("step %d: Prev = %q, want %q", i, got[i].Prev, built[i].Prev)
+		}
+	}
+	if ok, msg := VerifyLedger(got, head); !ok {
+		t.Fatalf("round-tripped steps must still verify: %s", msg)
+	}
+}
+
+// TestUnmarshalStepsTamperDetected proves a byte-level tamper of the
+// marshaled steps is caught by VerifyLedger after UnmarshalSteps — the
+// round trip itself must not silently repair or ignore corruption.
+func TestUnmarshalStepsTamperDetected(t *testing.T) {
+	built, head := BuildLedger([]Step{{Kind: "execution", Subject: "go build"}})
+	b, err := MarshalSteps(built)
+	if err != nil {
+		t.Fatalf("MarshalSteps: %v", err)
+	}
+	tampered := strings.Replace(string(b), `"go build"`, `"go BUILD"`, 1)
+
+	got, err := UnmarshalSteps([]byte(tampered))
+	if err != nil {
+		t.Fatalf("UnmarshalSteps: %v", err)
+	}
+	if ok, _ := VerifyLedger(got, head); ok {
+		t.Fatal("tampered steps must fail verification")
 	}
 }

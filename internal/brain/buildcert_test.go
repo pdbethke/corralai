@@ -7,7 +7,6 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -181,30 +180,17 @@ func TestReportBuild(t *testing.T) {
 	// certify.Step tags Hash `json:"-"` (deliberate: a step's own hash must
 	// never be part of the input to computing that hash), so a plain
 	// json.Unmarshal into certify.Step can't recover Hash. The brain stores
-	// it explicitly under "hash" (storableStep in buildcert.go); reconstruct
-	// certify.Step by hand, mirroring what an independent verifier (Task 7's
-	// CLI) would do reading this record back with no access to brain
-	// internals.
-	storedLedger := make([]certify.Step, len(rawSteps))
-	for i, raw := range rawSteps {
-		m, ok := raw.(map[string]any)
-		if !ok {
-			t.Fatalf("stored step %d is not an object: %v", i, raw)
-		}
-		detail, _ := m["detail"].(map[string]any)
-		seq, _ := m["seq"].(float64)
-		ts, _ := m["ts"].(float64)
-		storedLedger[i] = certify.Step{
-			Seq:     int(seq),
-			TS:      ts,
-			Kind:    fmt.Sprint(m["kind"]),
-			Actor:   fmt.Sprint(m["actor"]),
-			Model:   fmt.Sprint(m["model"]),
-			Subject: fmt.Sprint(m["subject"]),
-			Detail:  detail,
-			Prev:    fmt.Sprint(m["prev"]),
-			Hash:    fmt.Sprint(m["hash"]),
-		}
+	// it via certify.MarshalSteps (Hash carried explicitly under "hash");
+	// reconstruct with certify.UnmarshalSteps, mirroring what an independent
+	// verifier (Task 7's CLI) would do reading this record back with no
+	// access to brain internals.
+	rawStepsJSON, err := json.Marshal(rawSteps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	storedLedger, err := certify.UnmarshalSteps(rawStepsJSON)
+	if err != nil {
+		t.Fatalf("certify.UnmarshalSteps: %v", err)
 	}
 	ok2, msg := certify.VerifyLedger(storedLedger, out.Head)
 	if !ok2 {

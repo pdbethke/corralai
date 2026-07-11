@@ -169,6 +169,31 @@ publicly-witnessed signing — the hardening), TUF (key rotation + rollback), OW
 NIST SSDF (the dev process). See the companion spec *own-supply-chain hardening* for how corralai
 holds *its own* releases to these + publishes the evidence.
 
+## Client ecosystem — purpose-built windows into the daemon (the platform payoff)
+
+Because the daemon is a headless API and the clients are thin, a **client is any purpose-built
+consumer of the daemon's API** — not just "the cockpit." One backbone, many windows, each shipped
+and versioned independently, each a lens for an audience:
+
+- **CISO / audit client** (read-only, `corral-observe` lineage) — certified records, the
+  verify/chain, attestations, and the security-posture evidence. The "prove it" console.
+- **Dev client** (`corral-admin`/`corral-desktop`) — missions, builds, replay; the day-to-day.
+- **Presentation client** — the scrubber/replay as a clean, narratable, slide-friendly "watch it
+  back" surface for a board, a gov conference, a customer demo.
+- **Prometheus exporter** — NOT a UI: a thin client that consumes the API and re-exposes it as a
+  `/metrics` endpoint for Grafana/alerting. Proof that "client" generalizes past the browser.
+- **Future windows** — Slack/Teams notifier, SIEM/webhook forwarder, a public trust/status page.
+
+**Still DRY, at the right layer.** The shared core is **the daemon API + a component library**
+(the record model, `replay-player.js`, the verify/chain renderer, the records table); each client
+*composes* those for its audience — it does not re-implement them. So the "one bundle" of §1 is more
+precisely **one component/data core, from which purpose-built bundles (and non-UI exporters) are
+assembled.** The daemon serves the API (and, for UI clients, the bundle(s)); the windows multiply
+without touching the daemon. This is the line between "our webapp" and "an accountability platform,"
+and it maps straight onto the pivot: the CISO window is the accountability face, the exporter is the
+ops integration, the presentation window is the gov-conference demo — all against one signed,
+Rekor-witnessed backbone.
+
 ## Migration — incremental, cockpit never breaks
 1. **Add the bundle endpoints** (`/console/manifest.json`, `/console/asset/*`) to the brain,
    served from the existing embed. `/` still serves the SPA (no behavior change yet).

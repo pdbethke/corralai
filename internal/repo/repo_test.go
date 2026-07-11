@@ -5,6 +5,9 @@ package repo
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -125,5 +128,62 @@ func TestTokenURLInjectionAndRedaction(t *testing.T) {
 	}
 	if e0 := New("", ""); e0.redact("nothing to scrub") != "nothing to scrub" {
 		t.Fatal("empty-token redact must be a passthrough")
+	}
+}
+
+// TestEngineListOpenPRs verifies that Engine.ListOpenPRs (which takes a
+// repoURL) routes through the forge registry to a githubProvider pointed at
+// the test server, and parses the PR list into PRRef values.
+func TestEngineListOpenPRs(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/repos/o/r/pulls" && r.Method == http.MethodGet {
+			json.NewEncoder(w).Encode([]map[string]any{
+				{
+					"number": 7,
+					"head":   map[string]any{"sha": "deadbeef", "ref": "corralai/m1"},
+					"base":   map[string]any{"ref": "main"},
+				},
+			})
+			return
+		}
+		w.WriteHeader(404)
+	}))
+	defer srv.Close()
+
+	e := New("tok", srv.URL)
+	prs, err := e.ListOpenPRs(context.Background(), "https://github.com/o/r", "main")
+	if err != nil {
+		t.Fatalf("Engine.ListOpenPRs via registry: %v", err)
+	}
+	if len(prs) != 1 {
+		t.Fatalf("expected 1 PR, got %d", len(prs))
+	}
+	pr := prs[0]
+	if pr.Number != 7 || pr.HeadSHA != "deadbeef" || pr.HeadRef != "corralai/m1" || pr.Base != "main" {
+		t.Errorf("PRRef fields wrong: %+v", pr)
+	}
+}
+
+// TestEngineSetCommitStatus verifies that Engine.SetCommitStatus routes
+// through the forge registry to a githubProvider pointed at the test server.
+func TestEngineSetCommitStatus(t *testing.T) {
+	var hit bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/repos/o/r/statuses/deadbeef" && r.Method == http.MethodPost {
+			hit = true
+			w.WriteHeader(201)
+			return
+		}
+		w.WriteHeader(404)
+	}))
+	defer srv.Close()
+
+	e := New("tok", srv.URL)
+	err := e.SetCommitStatus(context.Background(), "https://github.com/o/r", "deadbeef", "corral/gate", "success", "http://x", "passed")
+	if err != nil {
+		t.Fatalf("Engine.SetCommitStatus via registry: %v", err)
+	}
+	if !hit {
+		t.Fatal("expected the test server to receive the commit-status POST")
 	}
 }

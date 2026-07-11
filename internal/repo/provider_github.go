@@ -54,3 +54,13 @@ func (p *githubProvider) PostComment(ctx context.Context, owner, repo string, pr
 func (p *githubProvider) AuthLogin(ctx context.Context) (string, error) {
 	return p.rc.rcAuthLogin(ctx)
 }
+
+// ListOpenPRs delegates to the shared restClient implementation.
+func (p *githubProvider) ListOpenPRs(ctx context.Context, owner, repo, base string) ([]PRRef, error) {
+	return p.rc.rcListOpenPRs(ctx, owner, repo, base)
+}
+
+// SetCommitStatus delegates to the shared restClient implementation.
+func (p *githubProvider) SetCommitStatus(ctx context.Context, owner, repo, sha, context, state, targetURL, description string) error {
+	return p.rc.rcSetCommitStatus(ctx, owner, repo, sha, context, state, targetURL, description)
+}

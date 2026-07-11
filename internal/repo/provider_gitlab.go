@@ -21,6 +21,7 @@ package repo
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -290,4 +291,16 @@ func (p *gitlabProvider) AuthLogin(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return out.Username, nil
+}
+
+// ListOpenPRs is not yet implemented for GitLab. Callers get an honest
+// errors.ErrUnsupported rather than a silent no-op.
+func (p *gitlabProvider) ListOpenPRs(ctx context.Context, owner, repo, base string) ([]PRRef, error) {
+	return nil, fmt.Errorf("gitlab: ListOpenPRs: %w", errors.ErrUnsupported)
+}
+
+// SetCommitStatus is not yet implemented for GitLab. Callers get an honest
+// errors.ErrUnsupported rather than a silent no-op.
+func (p *gitlabProvider) SetCommitStatus(ctx context.Context, owner, repo, sha, context, state, targetURL, description string) error {
+	return fmt.Errorf("gitlab: SetCommitStatus: %w", errors.ErrUnsupported)
 }

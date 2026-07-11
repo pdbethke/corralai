@@ -168,6 +168,25 @@ func (e *Engine) AuthLogin(ctx context.Context, repoURL string) (string, error) 
 	return p.AuthLogin(ctx)
 }
 
+// ListOpenPRs returns open PRs for repoURL targeting base (all bases if
+// base == "").
+func (e *Engine) ListOpenPRs(ctx context.Context, repoURL, base string) ([]PRRef, error) {
+	p, owner, repo, err := e.resolveProvider(repoURL)
+	if err != nil {
+		return nil, err
+	}
+	return p.ListOpenPRs(ctx, owner, repo, base)
+}
+
+// SetCommitStatus posts a commit status for repoURL@sha.
+func (e *Engine) SetCommitStatus(ctx context.Context, repoURL, sha, context, state, targetURL, description string) error {
+	p, owner, repo, err := e.resolveProvider(repoURL)
+	if err != nil {
+		return err
+	}
+	return p.SetCommitStatus(ctx, owner, repo, sha, context, state, targetURL, description)
+}
+
 // resolveProvider parses repoURL to get (host, owner, repo), looks up the
 // forge config for host, and returns the Provider + owner + repo.
 func (e *Engine) resolveProvider(repoURL string) (Provider, string, string, error) {

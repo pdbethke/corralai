@@ -15,7 +15,7 @@ func extractSignatures(text, lang string) ([]Signature, error) {
 	switch lang {
 	case "go":
 		return extractGoSignatures(text)
-	// "python" wired in Task 3
+		// "python" wired in Task 3
 	}
 	return nil, ErrUnsupportedLang
 }
@@ -55,20 +55,48 @@ func extractGoSignatures(text string) ([]Signature, error) {
 		if n == nil {
 			continue
 		}
-		if n.Type() != "function_declaration" {
+		switch n.Type() {
+		case "function_declaration":
+			out = append(out, goCallable(n, "func", "", src))
+		case "method_declaration":
+			recv := goReceiver(n.ChildByFieldName("receiver"), src)
+			out = append(out, goCallable(n, "method", recv, src))
+		default:
 			continue
 		}
-		sig := Signature{
-			Name:   fieldText(n, "name", src),
-			Kind:   "func",
-			Params: goParams(n.ChildByFieldName("parameters"), src),
-			Line:   int(n.StartPoint().Row) + 1,
-		}
-		sig.Results = goResults(n.ChildByFieldName("result"), src)
-		sig.Exported = exported(sig.Name)
-		out = append(out, sig)
 	}
 	return out, nil
+}
+
+// goCallable builds a Signature shared by function_declaration and
+// method_declaration nodes, which agree on name/parameters/result shape.
+func goCallable(n *sitter.Node, kind, receiver string, src []byte) Signature {
+	sig := Signature{
+		Name:     fieldText(n, "name", src),
+		Kind:     kind,
+		Receiver: receiver,
+		Params:   goParams(n.ChildByFieldName("parameters"), src),
+		Line:     int(n.StartPoint().Row) + 1,
+	}
+	sig.Results = goResults(n.ChildByFieldName("result"), src)
+	sig.Exported = exported(sig.Name)
+	return sig
+}
+
+// goReceiver extracts the receiver type ("*Engine", "Store", ...) from a
+// method_declaration's receiver field: a parameter_list holding exactly one
+// parameter_declaration.
+func goReceiver(recv *sitter.Node, src []byte) string {
+	if recv == nil {
+		return ""
+	}
+	for i := 0; i < int(recv.NamedChildCount()); i++ {
+		pd := recv.NamedChild(i)
+		if pd != nil && pd.Type() == "parameter_declaration" {
+			return fieldText(pd, "type", src)
+		}
+	}
+	return ""
 }
 
 // fieldText returns the source text of n's named field, or "".
@@ -90,7 +118,14 @@ func goParams(list *sitter.Node, src []byte) []Param {
 	var out []Param
 	for i := 0; i < int(list.NamedChildCount()); i++ {
 		pd := list.NamedChild(i)
-		if pd == nil || pd.Type() != "parameter_declaration" {
+		if pd == nil {
+			continue
+		}
+		if pd.Type() == "variadic_parameter_declaration" {
+			out = append(out, Param{Name: fieldText(pd, "name", src), Type: "..." + fieldText(pd, "type", src)})
+			continue
+		}
+		if pd.Type() != "parameter_declaration" {
 			continue
 		}
 		typ := fieldText(pd, "type", src)

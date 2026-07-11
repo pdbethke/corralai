@@ -62,3 +62,24 @@ func noResult() {}
 	}
 	assertSignatures(t, want, got)
 }
+
+func TestExtractSignaturesGoMethods(t *testing.T) {
+	src := `package p
+
+func (e *Engine) CheckoutPR(ctx Ctx, pr int, sha string) error { return nil }
+
+func (s Store) get(a, b string) (Row, bool) { return Row{}, false }
+
+func Variadic(prefix string, rest ...int) {}
+`
+	got, err := ExtractSignatures(src, "go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Signature{
+		{Name: "CheckoutPR", Kind: "method", Receiver: "*Engine", Params: []Param{{"ctx", "Ctx"}, {"pr", "int"}, {"sha", "string"}}, Results: []string{"error"}, Exported: true, Line: 3},
+		{Name: "get", Kind: "method", Receiver: "Store", Params: []Param{{"a", "string"}, {"b", "string"}}, Results: []string{"Row", "bool"}, Exported: false, Line: 5},
+		{Name: "Variadic", Kind: "func", Params: []Param{{"prefix", "string"}, {"rest", "...int"}}, Results: nil, Exported: true, Line: 7},
+	}
+	assertSignatures(t, want, got)
+}

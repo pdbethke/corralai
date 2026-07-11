@@ -36,7 +36,12 @@ var sessionMetaRE = regexp.MustCompile(`corral-console-session" content="([0-9a-
 func fetchIndexAndSecret(t *testing.T, con http.Handler) (body, secret string) {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	con.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	// Host must be a literal loopback form to pass hostGate — a real browser
+	// against this console always is (127.0.0.1/localhost), so the fixture
+	// mirrors that rather than httptest's "example.com" default.
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "127.0.0.1:8080"
+	con.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET /: status %d, body=%s", rec.Code, rec.Body.String())
 	}
@@ -145,6 +150,82 @@ func TestAPIRefusedWithoutSessionOrForeignOrigin(t *testing.T) {
 	}
 }
 
+func TestLoopbackHostAllowsRealLoopbackForms(t *testing.T) {
+	d := newFakeDaemon(t)
+	srv := d.server(t)
+	con := mustNewOptions(t, srv.URL, "tok123", true, false)
+
+	for _, host := range []string{"127.0.0.1:8080", "localhost:8080", "[::1]:8080"} {
+		t.Run(host, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "http://"+host+"/", nil)
+			req.Host = host
+			rec := httptest.NewRecorder()
+			con.ServeHTTP(rec, req)
+			if rec.Code == http.StatusForbidden {
+				t.Fatalf("Host %q was refused by the loopback gate: %d %s", host, rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+// TestReboundHostRefusedBeforeSecretLeaks is the DNS-rebinding regression
+// test: a request whose Host header is a rebound non-loopback name (what a
+// browser sends after evil.com's DNS is rebound to 127.0.0.1) must be
+// refused by the console's own Host gate BEFORE bundleHandler ever runs —
+// otherwise the injected per-session secret becomes readable same-origin by
+// the attacker's page, defeating the CSRF gate downstream.
+func TestReboundHostRefusedBeforeSecretLeaks(t *testing.T) {
+	d := newFakeDaemon(t)
+	srv := d.server(t)
+	con := mustNewOptions(t, srv.URL, "tok123", true, false)
+
+	const reboundHost = "evil.com:8080"
+	req := httptest.NewRequest(http.MethodGet, "http://"+reboundHost+"/", nil)
+	req.Host = reboundHost
+	rec := httptest.NewRecorder()
+	con.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("GET / with rebound Host %q: status %d, want 403", reboundHost, rec.Code)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "corral-console-session") {
+		t.Fatal("response to a rebound Host leaked the session-secret meta tag")
+	}
+}
+
+func TestReboundHostRefusedOnAPIRoute(t *testing.T) {
+	d := newFakeDaemon(t)
+	srv := d.server(t)
+	con := mustNewOptions(t, srv.URL, "tok123", false, false)
+	_, secret := fetchIndexAndSecret(t, con)
+
+	const reboundHost = "evil.com"
+	req := apiRequest(http.MethodPost, "http://"+reboundHost+"/api/instruct", "http://"+reboundHost, secret)
+	req.Host = reboundHost
+	rec := httptest.NewRecorder()
+	con.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("POST /api/instruct with rebound Host %q: status %d, want 403", reboundHost, rec.Code)
+	}
+	if d.apiHits != 0 {
+		t.Fatalf("request reached the brain (%d hits); the host gate must refuse before proxying", d.apiHits)
+	}
+}
+
+func TestSameOriginRequiresMatchingScheme(t *testing.T) {
+	// Host matches, but the Origin claims https while the request itself is
+	// plain http (r.TLS == nil) — sameOrigin must not admit this: it would
+	// let a scheme-confused Origin (e.g. an https page whose host happens to
+	// collide with the console's Host string) ride as same-origin.
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8080/api/ping", nil)
+	req.Header.Set("Origin", "https://127.0.0.1:8080")
+	if sameOrigin(req) {
+		t.Fatal("sameOrigin admitted an Origin whose scheme (https) does not match the request's scheme (http)")
+	}
+}
+
 func TestReadOnlyRefusesWrites(t *testing.T) {
 	d := newFakeDaemon(t)
 	srv := d.server(t)
@@ -218,7 +299,9 @@ func TestHealthReflectsUpstream(t *testing.T) {
 	con := mustNewOptions(t, srv.URL, "tok123", true, false)
 
 	rec := httptest.NewRecorder()
-	con.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, HealthPath, nil))
+	req := httptest.NewRequest(http.MethodGet, HealthPath, nil)
+	req.Host = "127.0.0.1:8080"
+	con.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("health with brain up: status %d, want 200", rec.Code)
 	}

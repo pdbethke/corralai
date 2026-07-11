@@ -214,6 +214,8 @@ func TestVersionLess(t *testing.T) {
 		{"dev", "dev", false},
 		{"dev", "dev2", true},
 		{"v1", "v1", false},
+		{"v2", "v10", true},
+		{"v10", "v2", false},
 	}
 	for _, c := range cases {
 		if got := versionLess(c.a, c.b); got != c.want {

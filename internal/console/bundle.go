@@ -292,9 +292,9 @@ func versionLess(a, b string) bool {
 		if sa == sb {
 			continue
 		}
-		na, aerr := strconv.Atoi(sa)
-		nb, berr := strconv.Atoi(sb)
-		if aerr == nil && berr == nil {
+		na, aok := segmentNumber(sa)
+		nb, bok := segmentNumber(sb)
+		if aok && bok {
 			return na < nb
 		}
 		return sa < sb
@@ -304,6 +304,26 @@ func versionLess(a, b string) bool {
 
 func splitVersion(v string) []string {
 	return strings.FieldsFunc(v, func(r rune) bool { return r == '.' || r == '-' || r == '+' })
+}
+
+// segmentNumber extracts the trailing numeric run of a version segment,
+// tolerating a leading non-numeric prefix (e.g. "v10" -> 10, "v2" -> 2) so
+// bare vN single-segment tags compare numerically instead of falling back to
+// a lexicographic compare where "v2" > "v10". Returns (0, false) if the
+// segment has no numeric tail at all (e.g. "dev").
+func segmentNumber(s string) (int, bool) {
+	i := 0
+	for i < len(s) && (s[i] < '0' || s[i] > '9') {
+		i++
+	}
+	if i == len(s) {
+		return 0, false
+	}
+	n, err := strconv.Atoi(s[i:])
+	if err != nil {
+		return 0, false
+	}
+	return n, true
 }
 
 // defaultCacheRoot is cacheRoot's default: os.UserCacheDir()/corral,

@@ -32,6 +32,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"mime"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -127,7 +128,45 @@ func NewWithOptions(brainRaw, token string, readOnly, allowUnsigned bool) (http.
 	// Everything else: the locally cached, signature-verified bundle. The
 	// daemon never serves "/" to this browser.
 	mux.Handle("/", bundleHandler(dir, manifest, sessionSecret))
-	return mux, nil
+	// hostGate wraps the ENTIRE mux — including bundleHandler, which has no
+	// CSRF gate of its own and injects the per-session secret into the
+	// served entry document. Without this, a DNS-rebound Host (attacker
+	// domain rebound to 127.0.0.1) would still be "same-origin" from the
+	// browser's perspective and could read that secret via GET /, then ride
+	// both csrfGate checks on the strength of it. See hostGate/loopbackHost.
+	return hostGate(mux), nil
+}
+
+// hostGate refuses any request whose Host header is not a literal loopback
+// name/IP with 403, before next runs. The console is a LOCAL thin client —
+// reached only via 127.0.0.1/localhost on the operator's own machine — so
+// this is the DNS-rebinding defense: a browser that's been rebound to
+// evil.com -> 127.0.0.1 still sends Host: evil.com, and that's refused here
+// before bundleHandler or the proxy ever sees the request.
+func hostGate(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !loopbackHost(r) {
+			http.Error(w, "console: request Host is not loopback — refused (DNS-rebinding guard)", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// loopbackHost reports whether r.Host's hostname (port and IPv6 brackets
+// stripped) is "localhost" (case-insensitive) or a loopback IP
+// (127.0.0.0/8, ::1).
+func loopbackHost(r *http.Request) bool {
+	h := r.Host
+	if host, _, err := net.SplitHostPort(h); err == nil {
+		h = host
+	}
+	h = strings.TrimPrefix(strings.TrimSuffix(h, "]"), "[")
+	if strings.EqualFold(h, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(h)
+	return ip != nil && ip.IsLoopback()
 }
 
 // csrfGate enforces the console's confused-deputy defenses on every
@@ -153,9 +192,12 @@ func csrfGate(secret string, next http.Handler) http.Handler {
 }
 
 // sameOrigin reports whether the request's Origin (or Referer, if Origin is
-// absent) host matches the console's own Host — i.e. this request
+// absent) host AND scheme match the console's own — i.e. this request
 // originated from a page the console itself served, not a third-party
 // site. Fails closed: no Origin and no Referer is refused, not admitted.
+// The scheme check matters even with matching hosts: without it, an
+// https:// Origin would be accepted for a plain http request, which is
+// never how this local console is actually reached.
 func sameOrigin(r *http.Request) bool {
 	src := r.Header.Get("Origin")
 	if src == "" {
@@ -168,7 +210,11 @@ func sameOrigin(r *http.Request) bool {
 	if err != nil || u.Host == "" {
 		return false
 	}
-	return u.Host == r.Host
+	reqScheme := "http"
+	if r.TLS != nil {
+		reqScheme = "https"
+	}
+	return u.Host == r.Host && u.Scheme == reqScheme
 }
 
 // validSession constant-time-compares the request's session header against

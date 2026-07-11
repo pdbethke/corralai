@@ -6,6 +6,7 @@ package repoindex
 
 import (
 	"context"
+	"strings"
 	"unicode"
 
 	sitter "github.com/smacker/go-tree-sitter"
@@ -15,7 +16,8 @@ func extractSignatures(text, lang string) ([]Signature, error) {
 	switch lang {
 	case "go":
 		return extractGoSignatures(text)
-		// "python" wired in Task 3
+	case "python":
+		return extractPythonSignatures(text)
 	}
 	return nil, ErrUnsupportedLang
 }
@@ -161,4 +163,81 @@ func goResults(res *sitter.Node, src []byte) []string {
 		return out
 	}
 	return []string{res.Content(src)}
+}
+
+// extractPythonSignatures walks top-level function_definition nodes (unwrapping
+// decorated_definition, mirroring chunk_cgo.go's handling) and builds the
+// callable surface. Python has no Go-style exported rule: a leading "_" is
+// unexported, everything else is exported (the community convention).
+func extractPythonSignatures(text string) ([]Signature, error) {
+	tree, src, err := parseTS(text, "python")
+	if err != nil {
+		return nil, err
+	}
+	defer tree.Close()
+	root := tree.RootNode()
+	var out []Signature
+	for i := 0; i < int(root.NamedChildCount()); i++ {
+		n := root.NamedChild(i)
+		if n == nil {
+			continue
+		}
+		// unwrap `decorated_definition` (mirror chunk_cgo.go's handling)
+		def := n
+		if n.Type() == "decorated_definition" {
+			for j := 0; j < int(n.NamedChildCount()); j++ {
+				inner := n.NamedChild(j)
+				if inner != nil && inner.Type() == "function_definition" {
+					def = inner
+					break
+				}
+			}
+		}
+		if def.Type() != "function_definition" {
+			continue
+		}
+		name := fieldText(def, "name", src)
+		sig := Signature{
+			Name:     name,
+			Kind:     "func",
+			Params:   pyParams(def.ChildByFieldName("parameters"), src),
+			Line:     int(def.StartPoint().Row) + 1,
+			Exported: !strings.HasPrefix(name, "_"),
+		}
+		if rt := def.ChildByFieldName("return_type"); rt != nil {
+			sig.Results = []string{rt.Content(src)}
+		}
+		out = append(out, sig)
+	}
+	return out, nil
+}
+
+// pyParams flattens a Python `parameters` node. A plain `identifier` is an
+// untyped param (Type:""); a `typed_parameter` carries name + type.
+func pyParams(params *sitter.Node, src []byte) []Param {
+	if params == nil {
+		return nil
+	}
+	var out []Param
+	for i := 0; i < int(params.NamedChildCount()); i++ {
+		p := params.NamedChild(i)
+		if p == nil {
+			continue
+		}
+		switch p.Type() {
+		case "identifier":
+			out = append(out, Param{Name: p.Content(src), Type: ""})
+		case "typed_parameter":
+			// name is the first identifier child; type is the "type" field
+			nm := ""
+			for j := 0; j < int(p.NamedChildCount()); j++ {
+				if c := p.NamedChild(j); c != nil && c.Type() == "identifier" {
+					nm = c.Content(src)
+					break
+				}
+			}
+			out = append(out, Param{Name: nm, Type: fieldText(p, "type", src)})
+		}
+	}
+	return out
 }

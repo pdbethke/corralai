@@ -5,6 +5,7 @@
 package repoindex
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 )
@@ -82,4 +83,29 @@ func Variadic(prefix string, rest ...int) {}
 		{Name: "Variadic", Kind: "func", Params: []Param{{"prefix", "string"}, {"rest", "...int"}}, Results: nil, Exported: true, Line: 7},
 	}
 	assertSignatures(t, want, got)
+}
+
+func TestExtractSignaturesPython(t *testing.T) {
+	src := "def add(a, b):\n    return a + b\n\n" +
+		"def fetch(ctx, url: str) -> bytes:\n    return b''\n\n" +
+		"async def _hidden(x):\n    return x\n"
+	got, err := ExtractSignatures(src, "python")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Signature{
+		{Name: "add", Kind: "func", Params: []Param{{"a", ""}, {"b", ""}}, Exported: true, Line: 1},
+		{Name: "fetch", Kind: "func", Params: []Param{{"ctx", ""}, {"url", "str"}}, Results: []string{"bytes"}, Exported: true, Line: 4},
+		{Name: "_hidden", Kind: "func", Params: []Param{{"x", ""}}, Exported: false, Line: 7},
+	}
+	assertSignatures(t, want, got)
+}
+
+func TestExtractSignaturesUnwiredLang(t *testing.T) {
+	// cobol has no extractor wired (even though it's not a repoindex grammar);
+	// the contract is an explicit ErrUnsupportedLang, never a silent empty.
+	_, err := ExtractSignatures("       IDENTIFICATION DIVISION.", "cobol")
+	if !errors.Is(err, ErrUnsupportedLang) {
+		t.Fatalf("want ErrUnsupportedLang, got %v", err)
+	}
 }

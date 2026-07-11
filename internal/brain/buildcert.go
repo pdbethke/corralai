@@ -83,144 +83,153 @@ func registerBuildCert(s *mcp.Server, opts Options) {
 	mcp.AddTool(s, &mcp.Tool{Name: "report_build",
 		Description: "Certify a build: turn a raw build record (repo, commit, command, exit code) into a signed, tamper-evident, stored accountability record. This is corral certify's ingest endpoint."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in reportBuildIn) (*mcp.CallToolResult, reportBuildOut, error) {
-			actor := actorOf(req)
-
-			steps := []certify.Step{
-				{
-					Kind:    "context",
-					Actor:   actor,
-					Subject: in.Repo + "@" + in.Commit,
-					Detail: map[string]any{
-						"repo":   in.Repo,
-						"commit": in.Commit,
-						"branch": in.Branch,
-					},
-				},
-				{
-					Kind:    "execution",
-					Actor:   actor,
-					Subject: in.Command,
-					Detail: map[string]any{
-						"exit_code":     in.ExitCode,
-						"ok":            in.ExitCode == 0,
-						"duration_s":    in.DurationS,
-						"output_digest": in.OutputDigest,
-					},
-				},
-			}
-			built, head := certify.BuildLedger(steps)
-
-			br := certify.BuildRecord{
-				Repo:         in.Repo,
-				Commit:       in.Commit,
-				Branch:       in.Branch,
-				Actor:        actor,
-				Command:      in.Command,
-				ExitCode:     in.ExitCode,
-				DurationS:    in.DurationS,
-				OutputDigest: in.OutputDigest,
-				ProducedBy:   in.ProducedBy,
-			}
-			stmt := certify.BuildAttestation(br, head)
-
-			// Sign the FULL canonical statement (not just the head) as a DSSE
-			// envelope: a head-only signature leaves the predicate
-			// (repo/commit/command/exit code) freely editable in storage
-			// without invalidating the signature. The envelope embeds its
-			// own copy of the canonical statement bytes it signed, so a
-			// later VerifyDSSE call checks the identical bytes the
-			// signature covers with no separate canonical-bytes column to
-			// keep in sync.
-			envelope, err := certify.SignDSSE(stmt, opts.CertifyKey, "brain")
-			if err != nil {
-				return nil, reportBuildOut{}, fmt.Errorf("report_build: signing statement: %w", err)
-			}
-			canonical, err := certify.CanonicalStatement(stmt)
-			if err != nil {
-				return nil, reportBuildOut{}, fmt.Errorf("report_build: canonicalizing statement: %w", err)
-			}
-
-			stepsJSON, err := certify.MarshalSteps(built)
-			if err != nil {
-				return nil, reportBuildOut{}, fmt.Errorf("report_build: marshaling steps: %w", err)
-			}
-			var stepsOut []map[string]any
-			if err := json.Unmarshal(stepsJSON, &stepsOut); err != nil {
-				return nil, reportBuildOut{}, fmt.Errorf("report_build: decoding steps for response: %w", err)
-			}
-
-			// Anchor the signed envelope to the transparency witness — an
-			// ADDITIONAL trustless guarantee (a public, third-party-checkable
-			// record that this attestation existed at this time), never a
-			// build-blocking gate: an unreachable log must degrade the
-			// record to anchored=false, not fail the build. opts.Witness ==
-			// nil means anchoring is disabled entirely (same outcome).
-			var rekorJSON string
-			var anchored bool
-			var logIndex int64
-			if opts.Witness != nil {
-				entry, anchorErr := opts.Witness.Anchor(ctx, envelope)
-				if anchorErr != nil {
-					// Loud but keyless: never log the envelope's signing
-					// key material (there is none here — envelope/entry are
-					// both public artifacts — but keep the message scoped
-					// to repo/commit for consistency with the rest of the
-					// brain's warning style).
-					log.Printf("report_build: transparency witness unreachable for %s@%s, degrading to anchored=false: %v", in.Repo, in.Commit, anchorErr)
-				} else {
-					entryJSON, marshalErr := json.Marshal(entry)
-					if marshalErr != nil {
-						log.Printf("report_build: encoding transparency entry for %s@%s, degrading to anchored=false: %v", in.Repo, in.Commit, marshalErr)
-					} else {
-						rekorJSON = string(entryJSON)
-						anchored = true
-						logIndex = entry.LogIndex
-					}
-				}
-			}
-
-			// pass mirrors the "execution" step's own ok field above — it's
-			// the same exit_code == 0 check, denormalized to a queryable
-			// column so the dashboard doesn't have to unpack steps/statement
-			// JSON per row for a cheap status filter.
-			pass := in.ExitCode == 0
-
-			var commitSignatureJSON string
-			if len(in.CommitSignature) > 0 {
-				b, err := json.Marshal(in.CommitSignature)
-				if err != nil {
-					return nil, reportBuildOut{}, fmt.Errorf("report_build: marshaling commit_signature: %w", err)
-				}
-				commitSignatureJSON = string(b)
-			}
-
-			id, err := opts.BuildStore.Save(in.Repo, in.Commit, in.Branch, actor, head, string(envelope), string(canonical), string(stepsJSON), rekorJSON, anchored,
-				in.CommitMessage, in.CommitAuthor, in.CommitDate, commitSignatureJSON, pass)
-			if err != nil {
-				return nil, reportBuildOut{}, err
-			}
-
-			rec(opts.Telemetry, 0, "build_certified", actor, in.Repo+"@"+in.Commit, map[string]any{
-				"repo":     in.Repo,
-				"commit":   in.Commit,
-				"head":     head,
-				"anchored": anchored,
-			})
-
-			pub, _ := opts.CertifyKey.Public().(ed25519.PublicKey)
-			out := reportBuildOut{
-				ID:        id,
-				Head:      head,
-				Signature: string(envelope),
-				Statement: stmt,
-				PublicKey: hex.EncodeToString(pub),
-				Steps:     stepsOut,
-				Anchored:  anchored,
-			}
-			if anchored {
-				out.LogIndex = logIndex
-				out.Rekor = rekorJSON
-			}
-			return nil, out, nil
+			out, err := certifyBuild(ctx, opts, in, actorOf(req))
+			return nil, out, err
 		})
+}
+
+// certifyBuild is the signing seam: turn a raw build record into a signed,
+// tamper-evident, stored accountability record — build the ledger,
+// attestation, DSSE envelope, optional transparency anchoring, and persist
+// it to opts.BuildStore. This is report_build's handler body, extracted so
+// the gate runner (Task 4) can call it directly, in-process, with no MCP
+// round-trip — the two callers must produce byte-identical records.
+func certifyBuild(ctx context.Context, opts Options, in reportBuildIn, actor string) (reportBuildOut, error) {
+	steps := []certify.Step{
+		{
+			Kind:    "context",
+			Actor:   actor,
+			Subject: in.Repo + "@" + in.Commit,
+			Detail: map[string]any{
+				"repo":   in.Repo,
+				"commit": in.Commit,
+				"branch": in.Branch,
+			},
+		},
+		{
+			Kind:    "execution",
+			Actor:   actor,
+			Subject: in.Command,
+			Detail: map[string]any{
+				"exit_code":     in.ExitCode,
+				"ok":            in.ExitCode == 0,
+				"duration_s":    in.DurationS,
+				"output_digest": in.OutputDigest,
+			},
+		},
+	}
+	built, head := certify.BuildLedger(steps)
+
+	br := certify.BuildRecord{
+		Repo:         in.Repo,
+		Commit:       in.Commit,
+		Branch:       in.Branch,
+		Actor:        actor,
+		Command:      in.Command,
+		ExitCode:     in.ExitCode,
+		DurationS:    in.DurationS,
+		OutputDigest: in.OutputDigest,
+		ProducedBy:   in.ProducedBy,
+	}
+	stmt := certify.BuildAttestation(br, head)
+
+	// Sign the FULL canonical statement (not just the head) as a DSSE
+	// envelope: a head-only signature leaves the predicate
+	// (repo/commit/command/exit code) freely editable in storage
+	// without invalidating the signature. The envelope embeds its
+	// own copy of the canonical statement bytes it signed, so a
+	// later VerifyDSSE call checks the identical bytes the
+	// signature covers with no separate canonical-bytes column to
+	// keep in sync.
+	envelope, err := certify.SignDSSE(stmt, opts.CertifyKey, "brain")
+	if err != nil {
+		return reportBuildOut{}, fmt.Errorf("report_build: signing statement: %w", err)
+	}
+	canonical, err := certify.CanonicalStatement(stmt)
+	if err != nil {
+		return reportBuildOut{}, fmt.Errorf("report_build: canonicalizing statement: %w", err)
+	}
+
+	stepsJSON, err := certify.MarshalSteps(built)
+	if err != nil {
+		return reportBuildOut{}, fmt.Errorf("report_build: marshaling steps: %w", err)
+	}
+	var stepsOut []map[string]any
+	if err := json.Unmarshal(stepsJSON, &stepsOut); err != nil {
+		return reportBuildOut{}, fmt.Errorf("report_build: decoding steps for response: %w", err)
+	}
+
+	// Anchor the signed envelope to the transparency witness — an
+	// ADDITIONAL trustless guarantee (a public, third-party-checkable
+	// record that this attestation existed at this time), never a
+	// build-blocking gate: an unreachable log must degrade the
+	// record to anchored=false, not fail the build. opts.Witness ==
+	// nil means anchoring is disabled entirely (same outcome).
+	var rekorJSON string
+	var anchored bool
+	var logIndex int64
+	if opts.Witness != nil {
+		entry, anchorErr := opts.Witness.Anchor(ctx, envelope)
+		if anchorErr != nil {
+			// Loud but keyless: never log the envelope's signing
+			// key material (there is none here — envelope/entry are
+			// both public artifacts — but keep the message scoped
+			// to repo/commit for consistency with the rest of the
+			// brain's warning style).
+			log.Printf("report_build: transparency witness unreachable for %s@%s, degrading to anchored=false: %v", in.Repo, in.Commit, anchorErr)
+		} else {
+			entryJSON, marshalErr := json.Marshal(entry)
+			if marshalErr != nil {
+				log.Printf("report_build: encoding transparency entry for %s@%s, degrading to anchored=false: %v", in.Repo, in.Commit, marshalErr)
+			} else {
+				rekorJSON = string(entryJSON)
+				anchored = true
+				logIndex = entry.LogIndex
+			}
+		}
+	}
+
+	// pass mirrors the "execution" step's own ok field above — it's
+	// the same exit_code == 0 check, denormalized to a queryable
+	// column so the dashboard doesn't have to unpack steps/statement
+	// JSON per row for a cheap status filter.
+	pass := in.ExitCode == 0
+
+	var commitSignatureJSON string
+	if len(in.CommitSignature) > 0 {
+		b, err := json.Marshal(in.CommitSignature)
+		if err != nil {
+			return reportBuildOut{}, fmt.Errorf("report_build: marshaling commit_signature: %w", err)
+		}
+		commitSignatureJSON = string(b)
+	}
+
+	id, err := opts.BuildStore.Save(in.Repo, in.Commit, in.Branch, actor, head, string(envelope), string(canonical), string(stepsJSON), rekorJSON, anchored,
+		in.CommitMessage, in.CommitAuthor, in.CommitDate, commitSignatureJSON, pass)
+	if err != nil {
+		return reportBuildOut{}, err
+	}
+
+	rec(opts.Telemetry, 0, "build_certified", actor, in.Repo+"@"+in.Commit, map[string]any{
+		"repo":     in.Repo,
+		"commit":   in.Commit,
+		"head":     head,
+		"anchored": anchored,
+	})
+
+	pub, _ := opts.CertifyKey.Public().(ed25519.PublicKey)
+	out := reportBuildOut{
+		ID:        id,
+		Head:      head,
+		Signature: string(envelope),
+		Statement: stmt,
+		PublicKey: hex.EncodeToString(pub),
+		Steps:     stepsOut,
+		Anchored:  anchored,
+	}
+	if anchored {
+		out.LogIndex = logIndex
+		out.Rekor = rekorJSON
+	}
+	return out, nil
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/pdbethke/corralai/internal/attest"
 	"github.com/pdbethke/corralai/internal/buildstore"
 	"github.com/pdbethke/corralai/internal/coord"
+	"github.com/pdbethke/corralai/internal/gate"
 	"github.com/pdbethke/corralai/internal/gateway"
 	"github.com/pdbethke/corralai/internal/learn"
 	"github.com/pdbethke/corralai/internal/mission"
@@ -25,6 +26,7 @@ import (
 	"github.com/pdbethke/corralai/internal/repo"
 	"github.com/pdbethke/corralai/internal/repoindex"
 	"github.com/pdbethke/corralai/internal/rolemodel"
+	"github.com/pdbethke/corralai/internal/sandbox"
 	"github.com/pdbethke/corralai/internal/taskartifacts"
 	"github.com/pdbethke/corralai/internal/telemetry"
 	"github.com/pdbethke/corralai/internal/transparency"
@@ -256,6 +258,33 @@ type Options struct {
 	// SAME way (anchored=false) rather than failing the build — anchoring
 	// is additive, never a build-blocking gate.
 	Witness transparency.Witness
+
+	// GatePolicies declares which repos/branches the merge gate (repo-gate
+	// control plane) covers — parsed from CORRALAI_GATE_POLICIES. Empty/nil
+	// is the feature's off switch: StartGate is then a complete no-op and
+	// no poller ever starts (zero behavior change for existing brains).
+	GatePolicies []gate.Policy
+
+	// GateBackend is the SAME sandbox isolation backend NewSandboxVerify
+	// runs the independent verify-gate check under (see main.go — never
+	// construct a second Isolator). StartGate's jailAdapter runs every
+	// untrusted PR check under this backend. nil => StartGate refuses to
+	// start the poller at all, logging loudly, rather than ever running a
+	// PR check unsandboxed.
+	GateBackend sandbox.Isolator
+
+	// GateDB is the DuckDB DSN for the gate dedupe/index store. "" => a
+	// sane on-disk default under the brain's home directory.
+	GateDB string
+
+	// GatePollInterval is how often StartGate's poller checks configured
+	// repos for new PR heads. <=0 => a 2-minute default.
+	GatePollInterval time.Duration
+
+	// GateRecordURL builds the /api/gate/run link the gate runner posts as
+	// a commit status's target_url. nil => a relative-path default
+	// ("/api/gate/run?repo=...&sha=...").
+	GateRecordURL func(repo, sha string) string
 }
 
 // SpawnBudget is the brain-side request-side DoS bound for spawning.

@@ -56,6 +56,12 @@
 //	                           from CORRALAI_BRAIN_KEY above (that's an Ed25519 IDENTITY SEED, not a bearer token — do not reuse it)
 //	CORRALAI_REKOR_URL         Sigstore Rekor instance report_build anchors signed build attestations to (default https://rekor.sigstore.dev);
 //	                           `corral certify verify` checks the same default unless --rekor-url overrides it
+//	CORRALAI_GATE_POLICIES     repo merge gate: ";"-separated policies "repo=owner/name,base=main,cmd=go test ./...,net=false";
+//	                           empty => the repo gate is OFF (no poller starts); GitHub-only for v1
+//	CORRALAI_GATE_DB           repo gate dedupe/index store DuckDB path (default ~/.claude/corralai_gate.duckdb)
+//	CORRALAI_GATE_POLL_SECONDS how often (seconds) the repo gate polls covered repos for new PR heads (default 120)
+//	CORRALAI_GATE_EXEC_BACKEND / _EXEC_UNSAFE_HOST  same jail backend used by the independent verify-gate (see below);
+//	                           the repo gate reuses it — a missing backend disables the repo gate too, loudly, never unsandboxed
 package main
 
 import (
@@ -86,6 +92,7 @@ import (
 	"github.com/pdbethke/corralai/internal/egress"
 	"github.com/pdbethke/corralai/internal/embed"
 	"github.com/pdbethke/corralai/internal/fleet"
+	"github.com/pdbethke/corralai/internal/gate"
 	"github.com/pdbethke/corralai/internal/gateway"
 	"github.com/pdbethke/corralai/internal/learn"
 	"github.com/pdbethke/corralai/internal/limit"
@@ -1001,19 +1008,38 @@ func main() {
 	// jail against the brain's own working copy — never trusting a worker's self-
 	// reported exit code ("a judge may not certify herself"). If no isolation
 	// backend is available, fall back loudly to the recorded-execution lookup.
+	// execBackend is hoisted (rather than scoped to the `if` below) because
+	// the repo-gate control plane (StartGate, below) reuses this EXACT same
+	// Isolator for its jail adapter — never a second one. A nil execBackend
+	// means both the verify-gate AND the repo gate degrade (independent
+	// verification falls back to worker-reported executions; the repo gate
+	// refuses to start rather than ever run an untrusted PR check unsandboxed).
+	var execBackend sandbox.Isolator
 	var verifyGate brain.VerifyFunc
-	if gateBackend, gerr := sandbox.Resolve(sandbox.Config{
+	if b, gerr := sandbox.Resolve(sandbox.Config{
 		Backend:    os.Getenv("CORRALAI_GATE_EXEC_BACKEND"),
 		UnsafeHost: os.Getenv("CORRALAI_GATE_EXEC_UNSAFE_HOST") == "1",
 	}); gerr == nil {
-		verifyGate = brain.NewSandboxVerify(gateBackend)
+		execBackend = b
+		verifyGate = brain.NewSandboxVerify(execBackend)
 		engine.Verify = verifyGate // #42: same runner re-verifies final-state at convergence
-		log.Printf("verify-gate: independent verification enabled (backend %s)", gateBackend.Name())
+		log.Printf("verify-gate: independent verification enabled (backend %s)", execBackend.Name())
 	} else {
 		log.Printf("verify-gate: NO isolation backend (%v); gated completion falls back to worker-reported executions — set CORRALAI_GATE_EXEC_BACKEND", gerr)
 	}
 
-	srv := brain.NewServer(store, memStore, brain.Options{
+	// Repo gate (merge gate): CORRALAI_GATE_POLICIES declares which repos
+	// get an independent, jailed check run against every new open-PR head.
+	// Empty var => feature off (ParsePolicies returns nil, nil). Malformed
+	// entries are logged and skipped — one bad entry must not take down
+	// every other repo's gate (degrade-never-block).
+	gatePolicies, badGatePolicies := gate.ParsePolicies(os.Getenv("CORRALAI_GATE_POLICIES"))
+	for _, bad := range badGatePolicies {
+		log.Printf("gate: malformed CORRALAI_GATE_POLICIES entry (skipped): %q", bad)
+	}
+	gateDB := env("CORRALAI_GATE_DB", filepath.Join(home, ".claude", "corralai_gate.duckdb"))
+
+	brainOpts := brain.Options{
 		Coord:                 store,
 		MemoryOwners:          memOwners,
 		Principals:            princStore,
@@ -1058,7 +1084,12 @@ func main() {
 			MaxSpawnDepth:         envInt("CORRALAI_MAX_SPAWN_DEPTH", 0),
 			MaxChildrenPerParent:  envInt("CORRALAI_MAX_CHILDREN_PER_PARENT", 0),
 		},
-	})
+		GatePolicies:     gatePolicies,
+		GateBackend:      execBackend,
+		GateDB:           gateDB,
+		GatePollInterval: time.Duration(envInt("CORRALAI_GATE_POLL_SECONDS", 120)) * time.Second,
+	}
+	srv := brain.NewServer(store, memStore, brainOpts)
 
 	// Learn sweep: deterministic recurrence detection over findings + lessons,
 	// feeding human-gated proposals. Degrade-never-block: any error is logged
@@ -1232,6 +1263,19 @@ func main() {
 		log.Printf("ui: OPEN — dev (no auth)")
 	}
 	mux.Handle("/", uiHandler)
+
+	// Repo gate (merge gate): starts the poller (if configured + a jail
+	// backend is available) and, only then, wires the read endpoint —
+	// GET /api/gate/run — behind the EXACT SAME auth wrapper (verifier.Wrap
+	// + authz) every other /api/* route uses, so a stored gate run is no
+	// more exposed than /api/state is. StartGate itself decides whether the
+	// feature is on; a nil store here just means "off" (or "disabled for
+	// want of a jail backend") — nothing more to wire.
+	if gateStore, gerr := brain.StartGate(context.Background(), brainOpts); gerr != nil {
+		log.Fatalf("gate: %v", gerr)
+	} else if gateStore != nil {
+		mux.Handle("/api/gate/run", verifier.Wrap(authz(brain.GateRunHandler(gateStore))))
+	}
 
 	// Outermost on every route: Host allowlist + per-IP rate limit.
 	root := hostAllow(allowedHosts, ipLim.ByIP(ipHeader, mux))

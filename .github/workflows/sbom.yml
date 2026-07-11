@@ -1,0 +1,54 @@
+# SBOM — generate a Software Bill of Materials (SPDX) on every main push and
+# attach it to each published release. Part of corralai's "publish the evidence"
+# supply-chain posture (SECURITY.md).
+name: SBOM
+on:
+  push:
+    branches: ["main"]
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  sbom:
+    name: Generate SBOM (SPDX)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: corralai.spdx.json
+          artifact-name: corralai.spdx.json
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-spdx
+          path: corralai.spdx.json
+          retention-days: 90
+
+  # On a published release, also attach the SBOM to the release assets.
+  attach-to-release:
+    if: github.event_name == 'release'
+    needs: sbom
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # attach the SBOM asset to the release
+    steps:
+      - name: Download SBOM
+        uses: actions/download-artifact@v4
+        with:
+          name: sbom-spdx
+      - name: Attach SBOM to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: corralai.spdx.json

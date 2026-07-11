@@ -1,0 +1,12 @@
+{
+  "standard": "OWASP ASVS",
+  "version": "4.0.3",
+  "requirements": [
+    {"ref": "V2.1.1", "level": "L1", "mode": "executable", "intent": "User-set passwords are at least 12 characters in length."},
+    {"ref": "V3.3.1", "level": "L1", "mode": "executable", "intent": "Logout and session expiration invalidate the session token."},
+    {"ref": "V4.1.1", "level": "L1", "mode": "attested",   "intent": "The application enforces access-control rules at a trusted service layer, not only in client-side code."},
+    {"ref": "V7.1.1", "level": "L1", "mode": "executable", "intent": "The application does not log credentials, session tokens, or payment details."},
+    {"ref": "V8.3.4", "level": "L1", "mode": "attested",   "intent": "Sensitive data is not sent in URL query strings; it is carried in the request body or headers."},
+    {"ref": "V14.4.1","level": "L1", "mode": "executable", "intent": "Every HTTP response sets a Content-Type header with a safe, explicit character set."}
+  ]
+}

@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -65,6 +66,12 @@ type fakeDaemon struct {
 	sigMode         string // "valid" (default), "missing", "tampered", "wrongkey"
 	manifestTamper  bool   // serve manifest.json bytes that differ from what was signed
 	assetTamperPath string // corrupt this one asset's served bytes
+	// realSig, when non-nil, is served verbatim for /console/manifest.sig
+	// instead of a freshly-computed signature — used by newRealBundleDaemon
+	// to serve the actual COMMITTED signature (internal/ui/console.manifest.sig)
+	// over the actual internal/ui/web/ bundle, so Part B's e2e test proves the
+	// real production signing artifact verifies, not just a same-run re-sign.
+	realSig []byte
 
 	apiHits   int32
 	assetHits int32
@@ -152,7 +159,12 @@ func (d *fakeDaemon) handler() http.Handler {
 	mux.HandleFunc("/console/manifest.sig", func(w http.ResponseWriter, r *http.Request) {
 		d.mu.Lock()
 		mode := d.sigMode
+		realSig := d.realSig
 		d.mu.Unlock()
+		if realSig != nil {
+			_, _ = w.Write(realSig)
+			return
+		}
 		if mode == "missing" {
 			http.NotFound(w, r)
 			return
@@ -213,9 +225,123 @@ func (d *fakeDaemon) handler() http.Handler {
 		_, _ = w.Write([]byte("pong"))
 	})
 
+	// /api/state and /events stand in for the real ui.Server's endpoints of
+	// the same name (the SPA's actual state-poll and SSE-heartbeat targets —
+	// see internal/ui/web/index.html and replay-player.js) — enough for the
+	// e2e cookie-only test to assert the console's csrfGate lets a
+	// browser-shaped request THROUGH to "the brain", without standing up the
+	// full ui.Server (which needs live stores).
+	mux.HandleFunc("/api/state", func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&d.apiHits, 1)
+		d.mu.Lock()
+		d.lastAuth = r.Header.Get("Authorization")
+		d.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	})
+	mux.HandleFunc("/events", func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&d.apiHits, 1)
+		d.mu.Lock()
+		d.lastAuth = r.Header.Get("Authorization")
+		d.mu.Unlock()
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {}\n\n"))
+	})
+
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("ok"))
 	})
 
 	return mux
 }
+
+// realBundleAssets walks the ACTUAL internal/ui/web/ tree (the same files
+// go:embed'd into the daemon binary) and returns one fakeAsset per file, so a
+// fakeDaemon can serve the real production console bundle instead of a
+// synthetic stub — see newRealBundleDaemon.
+func realBundleAssets(t *testing.T) []fakeAsset {
+	t.Helper()
+	root := filepath.Join(repoRoot(t), "internal", "ui", "web")
+	var out []fakeAsset
+	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(root, p)
+		if err != nil {
+			return err
+		}
+		data, err := os.ReadFile(p) // #nosec G304 -- p is produced by WalkDir over this repo's own committed internal/ui/web/ tree, not attacker-controlled input
+		if err != nil {
+			return err
+		}
+		out = append(out, fakeAsset{path: filepath.ToSlash(rel), data: data})
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk internal/ui/web: %v", err)
+	}
+	if len(out) == 0 {
+		t.Fatal("internal/ui/web/ yielded no assets — fixture path likely wrong")
+	}
+	return out
+}
+
+// committedManifestSig reads the actual COMMITTED detached signature
+// (internal/ui/console.manifest.sig) — the same bytes ui.Server's
+// consoleManifestSigHandler serves in production — trimmed the same way
+// ui.consoleManifestSig trims it.
+func committedManifestSig(t *testing.T) []byte {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(repoRoot(t), "internal", "ui", "console.manifest.sig"))
+	if err != nil {
+		t.Fatalf("read internal/ui/console.manifest.sig: %v", err)
+	}
+	return []byte(strings.TrimSpace(string(raw)))
+}
+
+// newRealBundleDaemon is a fakeDaemon that serves the REAL, production
+// internal/ui/web/ bundle (real index.html and all) at version "dev", signed
+// with the actual committed dev signature — not a synthetic stub. Part B's
+// e2e test uses this so it drives the console's bundleHandler + csrfGate
+// against the actual served entry document a real browser would load,
+// closing the gap that let three prior task-level reviews miss the
+// header-vs-cookie bug: every earlier test used a synthetic bundle and a
+// manually-set header, never a browser-shaped, cookie-only request through
+// the real SPA.
+func newRealBundleDaemon(t *testing.T) *fakeDaemon {
+	t.Helper()
+	d := &fakeDaemon{
+		seed:    devSeed(t),
+		version: devConsoleSignedVersionForTest,
+		assets:  realBundleAssets(t),
+		sigMode: "valid",
+		realSig: committedManifestSig(t),
+	}
+	// Sanity: the manifest this fixture computes from disk must be
+	// byte-identical to what the daemon actually signs and serves
+	// (ui.CanonicalManifestBytes) — otherwise the committed signature above
+	// would fail to verify against it, and this fixture would be testing
+	// nothing real. Fail loudly here rather than let that show up as an
+	// opaque "signature INVALID" further down.
+	want, err := ui.CanonicalManifestBytes(devConsoleSignedVersionForTest)
+	if err != nil {
+		t.Fatalf("ui.CanonicalManifestBytes: %v", err)
+	}
+	got, err := json.Marshal(d.manifest())
+	if err != nil {
+		t.Fatalf("marshal fixture manifest: %v", err)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("fixture manifest bytes diverge from ui.CanonicalManifestBytes — internal/ui/web/ fixture is stale:\ngot:  %s\nwant: %s", got, want)
+	}
+	return d
+}
+
+// devConsoleSignedVersionForTest mirrors ui's unexported
+// devConsoleSignedVersion ("dev") — the version the committed
+// console.manifest.sig was produced for.
+const devConsoleSignedVersionForTest = "dev"

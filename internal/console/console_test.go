@@ -5,7 +5,6 @@ package console
 import (
 	"net/http"
 	"net/http/httptest"
-	"regexp"
 	"strings"
 	"testing"
 )
@@ -29,11 +28,11 @@ func mustNewOptions(t *testing.T, brainURL, token string, readOnly, allowUnsigne
 	return h
 }
 
-var sessionMetaRE = regexp.MustCompile(`corral-console-session" content="([0-9a-f]+)"`)
-
-// fetchIndexAndSecret GETs "/" off con and extracts the per-session secret
-// the entry document's injected <meta> tag carries.
-func fetchIndexAndSecret(t *testing.T, con http.Handler) (body, secret string) {
+// fetchIndexCookie GETs "/" off con and extracts the *http.Cookie the entry
+// document's response sets carrying the per-session secret (consoleSessionCookie)
+// — the mechanism transports that can't set headers (EventSource, WebSocket)
+// actually rely on. Fails the test if no such cookie is set.
+func fetchIndexCookie(t *testing.T, con http.Handler) (body string, cookie *http.Cookie) {
 	t.Helper()
 	rec := httptest.NewRecorder()
 	// Host must be a literal loopback form to pass hostGate — a real browser
@@ -46,11 +45,23 @@ func fetchIndexAndSecret(t *testing.T, con http.Handler) (body, secret string) {
 		t.Fatalf("GET /: status %d, body=%s", rec.Code, rec.Body.String())
 	}
 	body = rec.Body.String()
-	m := sessionMetaRE.FindStringSubmatch(body)
-	if m == nil {
-		t.Fatalf("served index.html has no session-secret meta tag: %s", body)
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == consoleSessionCookie {
+			cookie = c
+		}
 	}
-	return body, m[1]
+	if cookie == nil {
+		t.Fatalf("served entry document response set no %q cookie (Set-Cookie headers: %v)", consoleSessionCookie, rec.Result().Header["Set-Cookie"])
+	}
+	return body, cookie
+}
+
+// fetchIndexAndSecret is fetchIndexCookie, returning just the secret value —
+// the shape most existing (header-path) tests want.
+func fetchIndexAndSecret(t *testing.T, con http.Handler) (body, secret string) {
+	t.Helper()
+	body, cookie := fetchIndexCookie(t, con)
+	return body, cookie.Value
 }
 
 // apiRequest builds a request against con at target (the console's own
@@ -188,9 +199,10 @@ func TestReboundHostRefusedBeforeSecretLeaks(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("GET / with rebound Host %q: status %d, want 403", reboundHost, rec.Code)
 	}
-	body := rec.Body.String()
-	if strings.Contains(body, "corral-console-session") {
-		t.Fatal("response to a rebound Host leaked the session-secret meta tag")
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == consoleSessionCookie {
+			t.Fatal("response to a rebound Host leaked the session-secret cookie")
+		}
 	}
 }
 
@@ -341,4 +353,153 @@ func TestLocalDialHost(t *testing.T) {
 			t.Fatalf("LocalDialHost(%q) = %q, want %q", in, got, want)
 		}
 	}
+}
+
+// --- Part B: the real end-to-end regression test ---
+//
+// Every test above proves the CSRF gate's own logic is sound using a
+// SYNTHETIC bundle and a request that manually sets consoleSessionHeader.
+// That's exactly the blind spot that let the real bug through three prior
+// task-level reviews: the actual SPA (EventSource, WebSocket, bare fetch())
+// never sends that header at all. These tests instead drive the REAL,
+// production internal/ui/web/ bundle (newRealBundleDaemon — real index.html,
+// signed with the actual committed dev signature) through the console's own
+// entry-document response, and issue follow-up requests carrying ONLY the
+// cookie the browser would actually have received — no manually-set session
+// header anywhere below.
+
+// TestRealEntryDocSetsSessionCookie is the Part B "cookie is set on entry-doc
+// load" check: GET / (loopback Host) against the REAL served bundle must set
+// a Set-Cookie for consoleSessionCookie that is HttpOnly, SameSite=Strict,
+// Path=/, and NOT Secure (the console is plain http:// — Secure would
+// silently suppress the cookie and re-break the cockpit).
+func TestRealEntryDocSetsSessionCookie(t *testing.T) {
+	d := newRealBundleDaemon(t)
+	srv := d.server(t)
+	con := mustNewOptions(t, srv.URL, "tok123", false, false)
+
+	body, cookie := fetchIndexCookie(t, con)
+	if !strings.Contains(body, "CorralAI") {
+		t.Fatalf("served entry document doesn't look like the real internal/ui/web/index.html: %s", body[:min(200, len(body))])
+	}
+	if cookie.Value == "" {
+		t.Fatal("session cookie value is empty")
+	}
+	if !cookie.HttpOnly {
+		t.Error("session cookie is not HttpOnly")
+	}
+	if cookie.SameSite != http.SameSiteStrictMode {
+		t.Errorf("session cookie SameSite = %v, want Strict", cookie.SameSite)
+	}
+	if cookie.Path != "/" {
+		t.Errorf("session cookie Path = %q, want /", cookie.Path)
+	}
+	if cookie.Secure {
+		t.Error("session cookie is Secure — this console is plain http:// and Secure would suppress it, re-breaking the cockpit")
+	}
+}
+
+// TestCookieOnlyRequestPassesGate is the Part B killer test: a browser-shaped
+// request — same-origin Origin, loopback Host, the session cookie the real
+// served entry document set, and CRUCIALLY no consoleSessionHeader at all —
+// must NOT be refused by csrfGate, for both /api/state (the SPA's plain
+// fetch() calls) and /events (EventSource, which physically cannot set a
+// custom header). Before the fix (header-only validSession, no cookie ever
+// set) this fails with 403 on both.
+func TestCookieOnlyRequestPassesGate(t *testing.T) {
+	d := newRealBundleDaemon(t)
+	srv := d.server(t)
+	con := mustNewOptions(t, srv.URL, "tok123", false, false)
+	_, cookie := fetchIndexCookie(t, con)
+
+	const origin = "http://127.0.0.1:8080"
+	for _, path := range []string{"/api/state", "/events"} {
+		t.Run(path, func(t *testing.T) {
+			before := d.apiHits
+			req := httptest.NewRequest(http.MethodGet, origin+path, nil)
+			req.Header.Set("Origin", origin)
+			req.AddCookie(cookie)
+			// Deliberately NOT setting consoleSessionHeader — the real SPA
+			// (bare fetch()/EventSource) never does.
+			rec := httptest.NewRecorder()
+			con.ServeHTTP(rec, req)
+			if rec.Code == http.StatusForbidden {
+				t.Fatalf("GET %s cookie-only (no session header): status 403, want passed through to upstream; body=%s", path, rec.Body.String())
+			}
+			if d.apiHits != before+1 {
+				t.Fatalf("GET %s cookie-only: apiHits %d -> %d, want +1 (request should have reached the fake upstream)", path, before, d.apiHits)
+			}
+		})
+	}
+}
+
+// TestCookieOnlyRequestStillFailsClosed proves the cookie addition didn't
+// weaken csrfGate's other two defenses: a cross-origin request carrying the
+// valid cookie is still refused (sameOrigin still bites), and a request with
+// neither cookie nor header is still refused.
+func TestCookieOnlyRequestStillFailsClosed(t *testing.T) {
+	d := newRealBundleDaemon(t)
+	srv := d.server(t)
+	con := mustNewOptions(t, srv.URL, "tok123", false, false)
+	_, cookie := fetchIndexCookie(t, con)
+	const origin = "http://127.0.0.1:8080"
+
+	t.Run("valid cookie, foreign origin", func(t *testing.T) {
+		before := d.apiHits
+		req := httptest.NewRequest(http.MethodGet, origin+"/api/state", nil)
+		req.Header.Set("Origin", "http://evil.com")
+		req.AddCookie(cookie)
+		rec := httptest.NewRecorder()
+		con.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, want 403 (cross-origin must still be refused even with a valid cookie)", rec.Code)
+		}
+		if d.apiHits != before {
+			t.Fatalf("request reached the brain (hits %d -> %d); cross-origin must be refused before proxying", before, d.apiHits)
+		}
+	})
+
+	t.Run("no cookie, no header, valid origin", func(t *testing.T) {
+		before := d.apiHits
+		req := httptest.NewRequest(http.MethodGet, origin+"/api/state", nil)
+		req.Header.Set("Origin", origin)
+		rec := httptest.NewRecorder()
+		con.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, want 403 (no credential at all must still be refused)", rec.Code)
+		}
+		if d.apiHits != before {
+			t.Fatalf("request reached the brain (hits %d -> %d); missing credential must be refused before proxying", before, d.apiHits)
+		}
+	})
+}
+
+// TestSessionCookieNeverReachesUpstream confirms the ordering the fix must
+// not disturb: proxy.Director strips the Cookie header AFTER csrfGate has
+// already validated it, so the daemon itself never sees the console's
+// session cookie (or any browser cookie) even on a request the gate admits.
+func TestSessionCookieNeverReachesUpstream(t *testing.T) {
+	d := newRealBundleDaemon(t)
+	srv := d.server(t)
+	con := mustNewOptions(t, srv.URL, "tok123", false, false)
+	_, cookie := fetchIndexCookie(t, con)
+
+	const origin = "http://127.0.0.1:8080"
+	req := httptest.NewRequest(http.MethodGet, origin+"/api/state", nil)
+	req.Header.Set("Origin", origin)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	con.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/state: status %d, want 200", rec.Code)
+	}
+	if d.lastAuth != "Bearer tok123" {
+		t.Fatalf("upstream Authorization = %q, want the injected bearer — proxying must still work", d.lastAuth)
+	}
+	// The fake upstream doesn't echo the Cookie header back, but proxy.go's
+	// Director unconditionally calls r.Header.Del("Cookie") — this test's
+	// value is documentary/regression: if that Del is ever moved BEFORE
+	// csrfGate runs, TestCookieOnlyRequestPassesGate above starts failing
+	// (the gate would see no cookie either), catching the ordering bug at
+	// this test rather than only in production.
 }

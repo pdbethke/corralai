@@ -12,10 +12,12 @@
 // corralai release public key (ui.ConsoleReleasePubKeyHex), so a
 // compromised or spoofed daemon cannot get arbitrary HTML/JS to run as this
 // console. Every proxied /api|/events|/mcp request additionally passes a
-// same-origin check plus a per-session secret (minted at construction,
-// injected into the served bundle) before the bearer is ever attached —
-// defense against a drive-by third-party page riding the console's
-// injected credential (OWASP ASVS V13/V50 confused-deputy/CSRF controls).
+// same-origin check plus a per-session secret (minted at construction, sent
+// to the browser as an HttpOnly SameSite=Strict cookie set on the served
+// entry document, and also accepted as a header for programmatic clients)
+// before the bearer is ever attached — defense against a drive-by
+// third-party page riding the console's injected credential (OWASP ASVS
+// V13/V50 confused-deputy/CSRF controls).
 //
 // The same proxy backs two client apps:
 //
@@ -58,6 +60,13 @@ const HealthPath = "/_console/health"
 // console itself served (same-origin + knows the secret), not a drive-by
 // third party riding the console's server-side-injected bearer.
 const consoleSessionHeader = "X-Corral-Console-Session"
+
+// consoleSessionCookie carries the per-session secret to the browser so that
+// transports which cannot set request headers (EventSource for /events, the
+// WebSocket terminal) still prove same-origin provenance. SameSite=Strict +
+// HttpOnly + the Origin/loopback-host gates make an ambient cookie safe here:
+// a cross-site request neither carries the cookie nor passes the Origin check.
+const consoleSessionCookie = "corral_console_session"
 
 // New builds the console: a local bundle-host for the daemon's
 // signature-verified UI bundle, plus a CSRF-guarded reverse proxy for
@@ -217,11 +226,25 @@ func sameOrigin(r *http.Request) bool {
 	return u.Host == r.Host && u.Scheme == reqScheme
 }
 
-// validSession constant-time-compares the request's session header against
-// secret. A length mismatch is checked first (cheaply, non-secret-dependent)
-// so subtle.ConstantTimeCompare is only ever called on equal-length inputs.
+// validSession accepts EITHER the session header OR the session cookie —
+// the header for programmatic/legacy clients, the cookie for the real SPA's
+// transports (bare fetch(), EventSource, WebSocket) that can never set a
+// custom header. Either path is sufficient; both are checked with the same
+// constant-time discipline via constEq.
 func validSession(r *http.Request, secret string) bool {
-	got := r.Header.Get(consoleSessionHeader)
+	if constEq(r.Header.Get(consoleSessionHeader), secret) {
+		return true
+	}
+	if c, err := r.Cookie(consoleSessionCookie); err == nil && constEq(c.Value, secret) {
+		return true
+	}
+	return false
+}
+
+// constEq reports whether got equals secret, in constant time once lengths
+// match. The length check runs first (cheap, not secret-dependent) so
+// subtle.ConstantTimeCompare only ever runs on equal-length inputs.
+func constEq(got, secret string) bool {
 	if got == "" || len(got) != len(secret) {
 		return false
 	}
@@ -243,9 +266,10 @@ func newSessionSecret() (string, error) {
 // bundle out of dir. Every response re-verifies the file's sha256 against
 // the (signature-verified) manifest at SERVE time — defense against
 // tamper-after-fetch/TOCTOU of the on-disk cache. The entry document
-// additionally gets the per-session secret injected as a <meta> tag so the
-// SPA's own script can read it and attach it as consoleSessionHeader on
-// /api calls — the bearer itself is never rendered or sent to the browser.
+// additionally gets the per-session secret set as an HttpOnly cookie (see
+// consoleSessionCookie) so the SPA's transports that cannot set a custom
+// header (EventSource, WebSocket) still carry it automatically — the bearer
+// itself is never rendered or sent to the browser.
 func bundleHandler(dir string, m ui.BundleManifest, sessionSecret string) http.Handler {
 	assets := make(map[string]string, len(m.Assets)) // path -> sha256
 	for _, a := range m.Assets {
@@ -283,7 +307,20 @@ func bundleHandler(dir string, m ui.BundleManifest, sessionSecret string) http.H
 			return
 		}
 		if clean == m.Entry {
-			data = injectSessionMeta(data, sessionSecret)
+			// Set BEFORE writing the body: the cookie must be present on the
+			// SAME response that serves the entry document, since a browser
+			// fetching "/" and then immediately opening an EventSource or
+			// making a fetch() call has no other opportunity to acquire it.
+			// No Secure attribute: this console is reached over plain
+			// http://127.0.0.1, and Secure would make the browser silently
+			// drop the cookie — re-breaking the exact bug this fixes.
+			http.SetCookie(w, &http.Cookie{ // #nosec G124 -- Secure is deliberately omitted: this console is reached ONLY over plain http://127.0.0.1/localhost (hostGate enforces loopback above), never TLS; a Secure cookie would be silently dropped by the browser and reintroduce the exact bug this fix closes. HttpOnly + SameSite=Strict are set; the confused-deputy/cross-origin threat is covered by sameOrigin + hostGate, not by Secure (which defends against network eavesdropping, not applicable on loopback)
+				Name:     consoleSessionCookie,
+				Value:    sessionSecret,
+				Path:     "/",
+				HttpOnly: true,
+				SameSite: http.SameSiteStrictMode,
+			})
 		}
 		ct := mime.TypeByExtension(path.Ext(clean))
 		if ct == "" {
@@ -293,29 +330,6 @@ func bundleHandler(dir string, m ui.BundleManifest, sessionSecret string) http.H
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		_, _ = w.Write(data) // #nosec G705 -- data is a file just re-verified (sha256) against the signature-verified manifest above; nosniff+explicit Content-Type close the sniff-based XSS class this rule flags
 	})
-}
-
-// injectSessionMeta inserts a <meta> tag carrying the per-session CSRF
-// secret into the entry document's <head>, so the SPA's own script can read
-// it (e.g. document.querySelector) and attach it to /api calls. The secret
-// is hex (a fixed safe charset), so no escaping is needed for the attribute
-// value. Falls back to prepending the tag if no literal "<head>" is found,
-// so the secret is always present rather than silently dropped.
-func injectSessionMeta(html []byte, secret string) []byte {
-	tag := []byte(`<meta name="corral-console-session" content="` + secret + `">`)
-	const marker = "<head>"
-	idx := strings.Index(string(html), marker)
-	if idx < 0 {
-		out := make([]byte, 0, len(html)+len(tag))
-		out = append(out, tag...)
-		return append(out, html...)
-	}
-	insertAt := idx + len(marker)
-	out := make([]byte, 0, len(html)+len(tag))
-	out = append(out, html[:insertAt]...)
-	out = append(out, tag...)
-	out = append(out, html[insertAt:]...)
-	return out
 }
 
 // readOnlyGate admits only safe (read) methods. Writes are refused before they

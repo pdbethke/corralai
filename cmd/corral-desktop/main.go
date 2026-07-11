@@ -312,6 +312,7 @@ func main() {
 			http.Error(w, fmt.Sprintf("Failed to save config: %v", err), 500)
 			return
 		}
+		cfg = newCfg // update the in-memory config /done launches with — saveConfig alone only persists to disk
 
 		w.Header().Set("Content-Type", "text/html")
 		_, _ = io.WriteString(w, `

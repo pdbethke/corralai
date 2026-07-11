@@ -1,9 +1,21 @@
 // SPDX-License-Identifier: Elastic-2.0
 
-// Package console serves the credentialed window onto a corralai brain: a thin
-// reverse proxy that injects a bearer token and forwards to the brain's live
-// swarm UI (/, /api/*, /events). The browser talks only to the console, so the
-// token never reaches it.
+// Package console is the thin client half of the corralai daemon/client UI
+// architecture: it fetches, signature-verifies and caches the daemon's
+// versioned console bundle (internal/ui's BundleManifest), serves that
+// bundle locally, and forwards only /api, /events and /mcp to the daemon
+// with a server-side-injected bearer credential. The browser never sees the
+// bearer — it only ever talks to this local console.
+//
+// The bundle is the trust anchor: fetchBundle refuses to cache or serve
+// anything whose detached signature doesn't verify against the PINNED
+// corralai release public key (ui.ConsoleReleasePubKeyHex), so a
+// compromised or spoofed daemon cannot get arbitrary HTML/JS to run as this
+// console. Every proxied /api|/events|/mcp request additionally passes a
+// same-origin check plus a per-session secret (minted at construction,
+// injected into the served bundle) before the bearer is ever attached —
+// defense against a drive-by third-party page riding the console's
+// injected credential (OWASP ASVS V13/V50 confused-deputy/CSRF controls).
 //
 // The same proxy backs two client apps:
 //
@@ -15,27 +27,67 @@
 package console
 
 import (
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/hex"
 	"fmt"
+	"mime"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"os/exec"
+	"path"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/pdbethke/corralai/internal/ui"
 )
 
 // HealthPath is the console's own health endpoint: a real end-to-end check that
 // the brain is reachable through the credentialed path the UI traffic takes.
 const HealthPath = "/_console/health"
 
-// New builds the reverse proxy to the brain at brainRaw, injecting token as a
-// bearer credential on every forwarded request. When readOnly is true, non-GET
-// methods are refused before they ever reach the brain.
+// consoleSessionHeader is the header the served bundle's own script must
+// attach to /api|/events|/mcp requests, carrying the per-session secret
+// minted at construction. It is NOT the bearer — it never authorizes
+// anything at the daemon; it only proves the request came from a page this
+// console itself served (same-origin + knows the secret), not a drive-by
+// third party riding the console's server-side-injected bearer.
+const consoleSessionHeader = "X-Corral-Console-Session"
+
+// New builds the console: a local bundle-host for the daemon's
+// signature-verified UI bundle, plus a CSRF-guarded reverse proxy for
+// /api, /events and /mcp. Same signature as before the daemon/client split;
+// requires a valid bundle signature. See NewWithOptions for the dev-only
+// --allow-unsigned-console escape hatch.
 func New(brainRaw, token string, readOnly bool) (http.Handler, error) {
+	return NewWithOptions(brainRaw, token, readOnly, false)
+}
+
+// NewWithOptions is New with the unsigned-bundle escape hatch exposed:
+// allowUnsigned, when true, tolerates a daemon that serves no
+// manifest.sig (dev only — wired by callers as --allow-unsigned-console).
+// A signature that IS present but fails to verify is ALWAYS refused
+// regardless of allowUnsigned — see fetchBundle.
+func NewWithOptions(brainRaw, token string, readOnly, allowUnsigned bool) (http.Handler, error) {
 	target, err := url.Parse(brainRaw)
 	if err != nil || target.Scheme == "" || target.Host == "" {
 		return nil, fmt.Errorf("invalid brain URL %q (want e.g. https://brain.example)", brainRaw)
+	}
+
+	// Fail fast: the client needs the daemon reachable anyway, and this is
+	// also where a poisoned/forged/unsigned bundle gets refused.
+	dir, manifest, err := fetchBundle(brainRaw, token, defaultCacheRoot(), allowUnsigned)
+	if err != nil {
+		return nil, fmt.Errorf("console: fetch UI bundle: %w", err)
+	}
+
+	sessionSecret, err := newSessionSecret()
+	if err != nil {
+		return nil, fmt.Errorf("console: mint session secret: %w", err)
 	}
 
 	proxy := httputil.NewSingleHostReverseProxy(target)
@@ -44,12 +96,21 @@ func New(brainRaw, token string, readOnly bool) (http.Handler, error) {
 	proxy.Director = func(r *http.Request) {
 		base(r)
 		r.Host = target.Host                           // satisfy the brain's Host allowlist
-		r.Header.Set("Authorization", "Bearer "+token) // overrides anything the browser sent
+		r.Header.Set("Authorization", "Bearer "+token) // overrides anything the browser sent; injected server-side ONLY
 		r.Header.Del("Cookie")                         // browser cookies are meaningless upstream
 	}
 	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, err error) {
 		http.Error(w, "console: upstream brain unreachable: "+err.Error(), http.StatusBadGateway)
 	}
+
+	// The proxied surface: CSRF-guarded (checked BEFORE the bearer is ever
+	// attached, i.e. before proxy.ServeHTTP runs) and, in read-only mode,
+	// write-refusing.
+	var apiHandler http.Handler = proxy
+	if readOnly {
+		apiHandler = readOnlyGate(apiHandler)
+	}
+	apiHandler = csrfGate(sessionSecret, apiHandler)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc(HealthPath, func(w http.ResponseWriter, _ *http.Request) {
@@ -59,12 +120,156 @@ func New(brainRaw, token string, readOnly bool) (http.Handler, error) {
 		}
 		_, _ = w.Write([]byte("ok"))
 	})
-	if readOnly {
-		mux.Handle("/", readOnlyGate(proxy))
-	} else {
-		mux.Handle("/", proxy)
-	}
+	mux.Handle("/api/", apiHandler)
+	mux.Handle("/events", apiHandler)
+	mux.Handle("/mcp", apiHandler)
+	mux.Handle("/mcp/", apiHandler)
+	// Everything else: the locally cached, signature-verified bundle. The
+	// daemon never serves "/" to this browser.
+	mux.Handle("/", bundleHandler(dir, manifest, sessionSecret))
 	return mux, nil
+}
+
+// csrfGate enforces the console's confused-deputy defenses on every
+// proxied /api|/events|/mcp request: the Origin (or, absent that, Referer)
+// must match the console's own local origin, AND the request must carry
+// the per-session secret minted at construction. A drive-by third-party
+// page that gets a victim's browser to hit http://127.0.0.1:PORT/api/...
+// can neither guess the secret nor forge a same-origin Origin header, so it
+// can't ride the server-side-injected bearer. Both checks happen before
+// next (the proxy) ever runs — i.e. before the bearer is attached.
+func csrfGate(secret string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !sameOrigin(r) {
+			http.Error(w, "console: request Origin/Referer does not match this console — refused", http.StatusForbidden)
+			return
+		}
+		if !validSession(r, secret) {
+			http.Error(w, "console: missing or invalid session credential — refused", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// sameOrigin reports whether the request's Origin (or Referer, if Origin is
+// absent) host matches the console's own Host — i.e. this request
+// originated from a page the console itself served, not a third-party
+// site. Fails closed: no Origin and no Referer is refused, not admitted.
+func sameOrigin(r *http.Request) bool {
+	src := r.Header.Get("Origin")
+	if src == "" {
+		src = r.Header.Get("Referer")
+	}
+	if src == "" {
+		return false
+	}
+	u, err := url.Parse(src)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	return u.Host == r.Host
+}
+
+// validSession constant-time-compares the request's session header against
+// secret. A length mismatch is checked first (cheaply, non-secret-dependent)
+// so subtle.ConstantTimeCompare is only ever called on equal-length inputs.
+func validSession(r *http.Request, secret string) bool {
+	got := r.Header.Get(consoleSessionHeader)
+	if got == "" || len(got) != len(secret) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(got), []byte(secret)) == 1
+}
+
+// newSessionSecret mints a fresh, unguessable per-construction secret: 32
+// bytes of crypto/rand, hex-encoded. It is NOT the bearer and is safe to
+// hand to the browser.
+func newSessionSecret() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// bundleHandler serves the locally cached, already signature-verified UI
+// bundle out of dir. Every response re-verifies the file's sha256 against
+// the (signature-verified) manifest at SERVE time — defense against
+// tamper-after-fetch/TOCTOU of the on-disk cache. The entry document
+// additionally gets the per-session secret injected as a <meta> tag so the
+// SPA's own script can read it and attach it as consoleSessionHeader on
+// /api calls — the bearer itself is never rendered or sent to the browser.
+func bundleHandler(dir string, m ui.BundleManifest, sessionSecret string) http.Handler {
+	assets := make(map[string]string, len(m.Assets)) // path -> sha256
+	for _, a := range m.Assets {
+		assets[a.Path] = a.SHA256
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		p := strings.TrimPrefix(r.URL.Path, "/")
+		if p == "" {
+			p = m.Entry
+		}
+		clean := path.Clean(p)
+		if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || path.IsAbs(clean) {
+			http.NotFound(w, r)
+			return
+		}
+		wantSHA, ok := assets[clean]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(clean))) // #nosec G304 -- clean was validated above to reject "..", absolute paths, and any path.Clean escape, and must additionally match a path key in the signature-verified manifest (the assets map) before this line runs; dir is this process's own cache directory, not attacker-controlled
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		if sha256Hex(data) != wantSHA {
+			// Cache tampered on disk after fetchBundle verified it — refuse
+			// to serve rather than trust a file that no longer matches the
+			// signed manifest.
+			http.Error(w, "console: cached asset failed integrity re-check", http.StatusInternalServerError)
+			return
+		}
+		if clean == m.Entry {
+			data = injectSessionMeta(data, sessionSecret)
+		}
+		ct := mime.TypeByExtension(path.Ext(clean))
+		if ct == "" {
+			ct = "application/octet-stream"
+		}
+		w.Header().Set("Content-Type", ct)
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		_, _ = w.Write(data) // #nosec G705 -- data is a file just re-verified (sha256) against the signature-verified manifest above; nosniff+explicit Content-Type close the sniff-based XSS class this rule flags
+	})
+}
+
+// injectSessionMeta inserts a <meta> tag carrying the per-session CSRF
+// secret into the entry document's <head>, so the SPA's own script can read
+// it (e.g. document.querySelector) and attach it to /api calls. The secret
+// is hex (a fixed safe charset), so no escaping is needed for the attribute
+// value. Falls back to prepending the tag if no literal "<head>" is found,
+// so the secret is always present rather than silently dropped.
+func injectSessionMeta(html []byte, secret string) []byte {
+	tag := []byte(`<meta name="corral-console-session" content="` + secret + `">`)
+	const marker = "<head>"
+	idx := strings.Index(string(html), marker)
+	if idx < 0 {
+		out := make([]byte, 0, len(html)+len(tag))
+		out = append(out, tag...)
+		return append(out, html...)
+	}
+	insertAt := idx + len(marker)
+	out := make([]byte, 0, len(html)+len(tag))
+	out = append(out, html[:insertAt]...)
+	out = append(out, tag...)
+	out = append(out, html[insertAt:]...)
+	return out
 }
 
 // readOnlyGate admits only safe (read) methods. Writes are refused before they

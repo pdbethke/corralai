@@ -36,12 +36,12 @@ func (s shellIsolator) Name() string     { return "shell-test-double" }
 func TestJailAdapterPassesExitCodeThrough(t *testing.T) {
 	j := jailAdapter{backend: shellIsolator{}}
 
-	exit, _, err := j.Run(context.Background(), "exit 0", t.TempDir(), false)
+	exit, _, err := j.Run(context.Background(), "exit 0", t.TempDir(), false, 5*time.Second)
 	if err != nil || exit != 0 {
 		t.Fatalf("pass case: exit=%d err=%v, want exit=0 err=nil", exit, err)
 	}
 
-	exit, _, err = j.Run(context.Background(), "exit 7", t.TempDir(), false)
+	exit, _, err = j.Run(context.Background(), "exit 7", t.TempDir(), false, 5*time.Second)
 	if err != nil {
 		t.Fatalf("nonzero-exit case must not itself be an error (a completed run with a real nonzero exit): %v", err)
 	}
@@ -61,7 +61,7 @@ func TestJailAdapterSurfacesTimeoutAsError(t *testing.T) {
 	// jailAdapter.Run (see the Err != "" branch).
 	broken := brokenIsolator{}
 	j2 := jailAdapter{backend: broken}
-	exit, _, err := j2.Run(context.Background(), "true", t.TempDir(), false)
+	exit, _, err := j2.Run(context.Background(), "true", t.TempDir(), false, 5*time.Second)
 	if err == nil {
 		t.Fatalf("expected a non-nil error when the backend fails to wrap the command")
 	}
@@ -90,7 +90,7 @@ func (e *wrapError) Error() string { return e.msg }
 // jailAdapter must surface that as an error rather than swallowing it.
 func TestJailAdapterNilBackendNeverRunsUnsandboxed(t *testing.T) {
 	j := jailAdapter{backend: nil}
-	exit, _, err := j.Run(context.Background(), "exit 0", t.TempDir(), false)
+	exit, _, err := j.Run(context.Background(), "exit 0", t.TempDir(), false, 5*time.Second)
 	if err == nil {
 		t.Fatalf("expected an error with a nil backend, got nil (would look like a pass)")
 	}

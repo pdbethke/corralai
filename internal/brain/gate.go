@@ -54,8 +54,8 @@ func (c certifierAdapter) Certify(ctx context.Context, repoName, commit, command
 // negative, or timed-out result to 0.
 type jailAdapter struct{ backend sandbox.Isolator }
 
-func (j jailAdapter) Run(ctx context.Context, command, workspace string, network bool) (int, string, error) {
-	res := sandbox.Run(ctx, command, sandbox.Options{Workspace: workspace, Network: network, Backend: j.backend})
+func (j jailAdapter) Run(ctx context.Context, command, workspace string, network bool, timeout time.Duration) (int, string, error) {
+	res := sandbox.Run(ctx, command, sandbox.Options{Workspace: workspace, Network: network, Backend: j.backend, Timeout: timeout})
 	if res.TimedOut {
 		return res.ExitCode, res.Output, fmt.Errorf("gate: check timed out")
 	}

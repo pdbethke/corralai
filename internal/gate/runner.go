@@ -27,9 +27,13 @@ type Checkouter interface {
 
 // Jail runs command against workspace inside the bwrap sandbox — the only
 // place untrusted PR code is ever executed. network gates whether the jail
-// gets network access (per Policy.AllowNet).
+// gets network access (per Policy.AllowNet). timeout is the hard deadline
+// the jail kills the process past (per Policy.TimeoutS, or
+// DefaultGateTimeout — see Runner.Run) — without it, a policy has no way to
+// override the sandbox package's own 60s default, which times out any real
+// test suite and permanently blocks merge.
 type Jail interface {
-	Run(ctx context.Context, command, workspace string, network bool) (exitCode int, output string, err error)
+	Run(ctx context.Context, command, workspace string, network bool, timeout time.Duration) (exitCode int, output string, err error)
 }
 
 // Certifier signs a gate run's outcome via the Task-3 certify seam
@@ -82,7 +86,11 @@ func (r *Runner) Run(ctx context.Context, repoURL string, p Policy, pr PRRef) er
 		return r.fail(ctx, repoURL, p, pr, target, "error", "checkout: "+err.Error())
 	}
 
-	exit, output, runErr := r.Jail.Run(ctx, strings.Join(p.CheckCmd, " "), dest, p.AllowNet)
+	timeout := DefaultGateTimeout
+	if p.TimeoutS > 0 {
+		timeout = time.Duration(p.TimeoutS) * time.Second
+	}
+	exit, output, runErr := r.Jail.Run(ctx, strings.Join(p.CheckCmd, " "), dest, p.AllowNet, timeout)
 	if runErr != nil {
 		return r.fail(ctx, repoURL, p, pr, target, "error", "jail: "+runErr.Error())
 	}

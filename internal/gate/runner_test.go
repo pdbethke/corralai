@@ -24,15 +24,20 @@ func (f *fakeCheckouter) CheckoutPR(ctx context.Context, repoURL string, pr int,
 }
 
 // fakeJail is a Jail test double returning a fixed exit code/output/error.
+// It also captures the timeout it was called with, so tests can assert the
+// runner computed the right effective timeout from the policy.
 type fakeJail struct {
 	exitCode int
 	output   string
 	err      error
 	calls    int
+
+	lastTimeout time.Duration
 }
 
-func (f *fakeJail) Run(ctx context.Context, command, workspace string, network bool) (int, string, error) {
+func (f *fakeJail) Run(ctx context.Context, command, workspace string, network bool, timeout time.Duration) (int, string, error) {
 	f.calls++
+	f.lastTimeout = timeout
 	return f.exitCode, f.output, f.err
 }
 
@@ -188,5 +193,46 @@ func TestRunnerCheckoutErrorNeverPostsSuccess(t *testing.T) {
 	}
 	if run.Passed {
 		t.Fatalf("FAIL-CLOSED VIOLATION: stored Passed=true on a checkout error: %+v", run)
+	}
+}
+
+// TestRunnerPassesPolicyTimeoutToJail is the fix-#1 regression: a policy
+// declaring TimeoutS must reach the jail as that many seconds — not the
+// sandbox package's hardcoded 60s default, which times out any real test
+// suite and permanently blocks merge.
+func TestRunnerPassesPolicyTimeoutToJail(t *testing.T) {
+	checkout := &fakeCheckouter{}
+	jail := &fakeJail{exitCode: 0}
+	cert := &fakeCertifier{recordID: 1}
+	status := &fakeStatusPoster{}
+	r := newTestRunner(t, checkout, jail, cert, status)
+
+	pol := testPolicy()
+	pol.TimeoutS = 5
+	if err := r.Run(context.Background(), "https://github.com/o/r", pol, testPR()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if jail.lastTimeout != 5*time.Second {
+		t.Fatalf("jail timeout = %v, want 5s", jail.lastTimeout)
+	}
+}
+
+// TestRunnerUsesDefaultTimeoutWhenPolicyTimeoutSUnset: a policy with
+// TimeoutS left at its zero value must fall back to DefaultGateTimeout, not
+// 0 (which would mean "no time at all") and not the sandbox package's own
+// default (which the runner must never rely on implicitly).
+func TestRunnerUsesDefaultTimeoutWhenPolicyTimeoutSUnset(t *testing.T) {
+	checkout := &fakeCheckouter{}
+	jail := &fakeJail{exitCode: 0}
+	cert := &fakeCertifier{recordID: 1}
+	status := &fakeStatusPoster{}
+	r := newTestRunner(t, checkout, jail, cert, status)
+
+	pol := testPolicy() // TimeoutS is 0 (unset)
+	if err := r.Run(context.Background(), "https://github.com/o/r", pol, testPR()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if jail.lastTimeout != DefaultGateTimeout {
+		t.Fatalf("jail timeout = %v, want default %v", jail.lastTimeout, DefaultGateTimeout)
 	}
 }

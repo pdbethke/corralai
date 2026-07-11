@@ -56,7 +56,10 @@
 //	                           from CORRALAI_BRAIN_KEY above (that's an Ed25519 IDENTITY SEED, not a bearer token — do not reuse it)
 //	CORRALAI_REKOR_URL         Sigstore Rekor instance report_build anchors signed build attestations to (default https://rekor.sigstore.dev);
 //	                           `corral certify verify` checks the same default unless --rekor-url overrides it
-//	CORRALAI_GATE_POLICIES     repo merge gate: ";"-separated policies "repo=owner/name,base=main,cmd=go test ./...,net=false";
+//	CORRALAI_GATE_POLICIES     repo merge gate: ";"-separated policies "repo=owner/name,base=main,net=false,timeout=600,cmd=go test ./...";
+//	                           cmd= MUST be the last field — everything after it is the command verbatim (commas
+//	                           allowed, never split) so "cmd=go test -run A,B ./..." isn't silently truncated;
+//	                           timeout= is seconds, defaults to gate.DefaultGateTimeout (600s) when omitted;
 //	                           empty => the repo gate is OFF (no poller starts); GitHub-only for v1
 //	CORRALAI_GATE_DB           repo gate dedupe/index store DuckDB path (default ~/.claude/corralai_gate.duckdb)
 //	CORRALAI_GATE_POLL_SECONDS how often (seconds) the repo gate polls covered repos for new PR heads (default 120)

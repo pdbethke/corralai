@@ -4,11 +4,12 @@ package gate
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
 func TestParsePoliciesSingleEntry(t *testing.T) {
-	pols, bad := ParsePolicies("repo=owner/name,base=main,cmd=go test ./...,net=false")
+	pols, bad := ParsePolicies("repo=owner/name,base=main,net=false,cmd=go test ./...")
 	if len(bad) != 0 {
 		t.Fatalf("unexpected bad entries: %v", bad)
 	}
@@ -25,7 +26,7 @@ func TestParsePoliciesSingleEntry(t *testing.T) {
 }
 
 func TestParsePoliciesMultipleEntriesSemicolonSeparated(t *testing.T) {
-	pols, bad := ParsePolicies("repo=o/a,base=main,cmd=make test;repo=o/b,base=main,cmd=make check,net=true")
+	pols, bad := ParsePolicies("repo=o/a,base=main,cmd=make test;repo=o/b,base=main,net=true,cmd=make check")
 	if len(bad) != 0 {
 		t.Fatalf("unexpected bad entries: %v", bad)
 	}
@@ -80,5 +81,65 @@ func TestParsePoliciesDefaultsBaseAndContext(t *testing.T) {
 	}
 	if pols[0].Context != "corral/gate" {
 		t.Fatalf("expected default context 'corral/gate', got %q", pols[0].Context)
+	}
+}
+
+// TestParsePoliciesTimeoutParsesToSeconds: an explicit timeout= field parses
+// into Policy.TimeoutS as an int number of seconds.
+func TestParsePoliciesTimeoutParsesToSeconds(t *testing.T) {
+	pols, bad := ParsePolicies("repo=o/r,base=main,timeout=120,cmd=true")
+	if len(bad) != 0 {
+		t.Fatalf("unexpected bad entries: %v", bad)
+	}
+	if len(pols) != 1 || pols[0].TimeoutS != 120 {
+		t.Fatalf("got %+v, want TimeoutS=120", pols)
+	}
+}
+
+// TestParsePoliciesOmittedTimeoutIsZero: no timeout= field means TimeoutS
+// stays 0 — the runner is the one that turns 0 into DefaultGateTimeout, not
+// the parser.
+func TestParsePoliciesOmittedTimeoutIsZero(t *testing.T) {
+	pols, bad := ParsePolicies("repo=o/r,cmd=true")
+	if len(bad) != 0 {
+		t.Fatalf("unexpected bad entries: %v", bad)
+	}
+	if len(pols) != 1 || pols[0].TimeoutS != 0 {
+		t.Fatalf("got %+v, want TimeoutS=0", pols)
+	}
+}
+
+// TestParsePoliciesCmdWithCommaIsPreservedVerbatim is the fix-#2 regression:
+// a cmd containing a comma (e.g. "go test -run A,B ./...") must NOT be
+// silently truncated at the first comma — that would run a weaker command
+// than the operator declared and could manufacture a wrongful "success".
+// cmd= must be the LAST field in an entry; everything after "cmd=" is the
+// command verbatim, commas included.
+func TestParsePoliciesCmdWithCommaIsPreservedVerbatim(t *testing.T) {
+	pols, bad := ParsePolicies("repo=o/r,base=main,cmd=go test -run A,B ./...")
+	if len(bad) != 0 {
+		t.Fatalf("unexpected bad entries: %v", bad)
+	}
+	if len(pols) != 1 {
+		t.Fatalf("got %d policies, want 1: %+v", len(pols), pols)
+	}
+	got := strings.Join(pols[0].CheckCmd, " ")
+	want := "go test -run A,B ./..."
+	if got != want {
+		t.Fatalf("cmd = %q, want %q (comma must survive, never truncated)", got, want)
+	}
+}
+
+// TestParsePoliciesCmdMustBeLastEntryHasNoCmdFieldIsBad: an entry with no
+// cmd= at all is rejected loudly (bad), never silently accepted with an
+// empty/default command — a missing check must never look like a passing
+// gate.
+func TestParsePoliciesCmdMustBeLastEntryHasNoCmdFieldIsBad(t *testing.T) {
+	pols, bad := ParsePolicies("repo=o/r,base=main,net=true")
+	if len(pols) != 0 {
+		t.Fatalf("expected no policies from an entry with no cmd=, got %+v", pols)
+	}
+	if len(bad) != 1 {
+		t.Fatalf("expected the malformed (cmd-less) entry reported, got %v", bad)
 	}
 }

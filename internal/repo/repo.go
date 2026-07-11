@@ -291,6 +291,35 @@ func (e *Engine) Clone(ctx context.Context, repoURL, base, destDir string) error
 	return err
 }
 
+// CheckoutPR shallow-fetches a PR head ref into destDir and checks out sha.
+// GitHub/Gitea expose the head at refs/pull/<n>/head. Fails closed if the
+// fetched head does not match the expected sha — the gate runner (Task 4)
+// relies on this to never run untrusted jail code against a ref it didn't
+// ask for.
+func (e *Engine) CheckoutPR(ctx context.Context, repoURL string, pr int, sha, destDir string) error {
+	if _, err := e.git(ctx, "", "init", destDir); err != nil {
+		return err
+	}
+	if _, err := e.git(ctx, destDir, "remote", "add", "origin", e.tokenURL(repoURL)); err != nil {
+		return err
+	}
+	ref := fmt.Sprintf("refs/pull/%d/head", pr)
+	if _, err := e.git(ctx, destDir, "fetch", "--depth", "1", "origin", ref); err != nil {
+		return err
+	}
+	if _, err := e.git(ctx, destDir, "checkout", "--detach", "FETCH_HEAD"); err != nil {
+		return err
+	}
+	got, err := e.git(ctx, destDir, "rev-parse", "HEAD")
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(got) != sha {
+		return fmt.Errorf("checkout PR #%d: fetched head %s != expected %s", pr, strings.TrimSpace(got), sha)
+	}
+	return nil
+}
+
 func (e *Engine) Checkout(ctx context.Context, dir, branch string) error {
 	_, err := e.git(ctx, dir, "checkout", "-b", branch)
 	return err

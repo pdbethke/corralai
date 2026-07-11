@@ -131,6 +131,64 @@ func TestTokenURLInjectionAndRedaction(t *testing.T) {
 	}
 }
 
+// TestCheckoutPRFetchesHeadAndLandsOnSHA stands up a bare repo, exposes a
+// commit at refs/pull/1/head (the GitHub/Gitea PR-head convention), and
+// asserts CheckoutPR fetches that ref and leaves the working copy detached
+// at exactly the expected sha (the fail-closed check inside CheckoutPR).
+func TestCheckoutPRFetchesHeadAndLandsOnSHA(t *testing.T) {
+	bare := makeBareRepoWithCommit(t)
+	bareDir := strings.TrimPrefix(bare, "file://")
+
+	out, err := exec.Command("git", "--git-dir", bareDir, "rev-parse", "main").CombinedOutput()
+	if err != nil {
+		t.Fatalf("rev-parse main: %v\n%s", err, out)
+	}
+	sha := strings.TrimSpace(string(out))
+
+	if out, err := exec.Command("git", "--git-dir", bareDir, "update-ref", "refs/pull/1/head", sha).CombinedOutput(); err != nil {
+		t.Fatalf("update-ref refs/pull/1/head: %v\n%s", err, out)
+	}
+
+	dest := filepath.Join(t.TempDir(), "work")
+	e := New("", "") // no token (file:// remote)
+	ctx := context.Background()
+	if err := e.CheckoutPR(ctx, bare, 1, sha, dest); err != nil {
+		t.Fatalf("CheckoutPR: %v", err)
+	}
+
+	got, err := exec.Command("git", "-C", dest, "rev-parse", "HEAD").CombinedOutput()
+	if err != nil {
+		t.Fatalf("rev-parse HEAD: %v\n%s", err, got)
+	}
+	if strings.TrimSpace(string(got)) != sha {
+		t.Fatalf("dest HEAD = %s, want %s", strings.TrimSpace(string(got)), sha)
+	}
+}
+
+// TestCheckoutPRFailsClosedOnShaMismatch asserts CheckoutPR errors out
+// (rather than silently succeeding) when the caller's expected sha doesn't
+// match what the PR-head ref actually resolves to.
+func TestCheckoutPRFailsClosedOnShaMismatch(t *testing.T) {
+	bare := makeBareRepoWithCommit(t)
+	bareDir := strings.TrimPrefix(bare, "file://")
+
+	out, err := exec.Command("git", "--git-dir", bareDir, "rev-parse", "main").CombinedOutput()
+	if err != nil {
+		t.Fatalf("rev-parse main: %v\n%s", err, out)
+	}
+	sha := strings.TrimSpace(string(out))
+	if out, err := exec.Command("git", "--git-dir", bareDir, "update-ref", "refs/pull/1/head", sha).CombinedOutput(); err != nil {
+		t.Fatalf("update-ref refs/pull/1/head: %v\n%s", err, out)
+	}
+
+	dest := filepath.Join(t.TempDir(), "work")
+	e := New("", "")
+	ctx := context.Background()
+	if err := e.CheckoutPR(ctx, bare, 1, "0000000000000000000000000000000000000000", dest); err == nil {
+		t.Fatal("expected CheckoutPR to fail closed on sha mismatch, got nil error")
+	}
+}
+
 // TestEngineListOpenPRs verifies that Engine.ListOpenPRs (which takes a
 // repoURL) routes through the forge registry to a githubProvider pointed at
 // the test server, and parses the PR list into PRRef values.

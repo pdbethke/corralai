@@ -137,10 +137,35 @@ Honesty is part of the model.
 
 ---
 
-## Reporting a vulnerability
+## Reporting a vulnerability (coordinated disclosure)
 
 Please report suspected vulnerabilities **privately** — do not open a public issue. Use the
 repository's **GitHub Security Advisories** ("Report a vulnerability") so a fix can be prepared
 before disclosure. Include reproduction steps and, ideally, a failing test in the style above.
 
+We follow **coordinated disclosure** (aligned with ISO/IEC 29147 *disclosure* and 30111 *handling*):
+
+- **Acknowledgement:** within **3 business days**.
+- **Triage + initial assessment:** within **10 business days**.
+- **Fix & disclosure:** coordinated with the reporter; a public advisory + credit (unless you
+  prefer anonymity) once a fix is available, targeting **90 days** or sooner for severe issues.
+- **Safe harbor:** we will not pursue or support legal action against researchers who act in good
+  faith, avoid privacy violations and service disruption, and give us reasonable time to remediate
+  before public disclosure.
+
 Corralai is source-available under the **Elastic License 2.0**; see `LICENSE`.
+
+## Supply-chain security posture (our own methods)
+
+We hold corralai's *own* build and distribution to the standards it helps others meet, and publish
+the evidence:
+
+- **Provenance:** releases target SLSA build provenance; the console UI bundle and release artifacts
+  are signed and (as the transparency work lands) anchored to a public log — the same in-toto/SLSA +
+  Sigstore/Rekor machinery `corral certify` provides.
+- **Scoring:** an **OpenSSF Scorecard** runs on every push to `main` (see the badge in the README).
+- **SBOM:** an SPDX Software Bill of Materials is generated in CI.
+- **Vulnerabilities:** `govulncheck` gates every merge (`scripts/check-security.sh`); `gosec`
+  static analysis runs alongside it.
+- **Dev process:** mapped to NIST **SSDF (SP 800-218)**; the local console is verified against
+  **OWASP ASVS**. See `docs/superpowers/specs/2026-07-10-own-supply-chain-hardening-design.md`.

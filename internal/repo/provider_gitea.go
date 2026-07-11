@@ -23,6 +23,8 @@ package repo
 
 import (
 	"context"
+	"errors"
+	"fmt"
 )
 
 // giteaProvider implements Provider for Gitea (GitHub-API-compatible REST).
@@ -81,4 +83,16 @@ func (p *giteaProvider) PostComment(ctx context.Context, owner, repo string, prN
 // AuthLogin delegates to the shared restClient implementation.
 func (p *giteaProvider) AuthLogin(ctx context.Context) (string, error) {
 	return p.rc.rcAuthLogin(ctx)
+}
+
+// ListOpenPRs is not yet implemented for Gitea. Callers get an honest
+// errors.ErrUnsupported rather than a silent no-op.
+func (p *giteaProvider) ListOpenPRs(ctx context.Context, owner, repo, base string) ([]PRRef, error) {
+	return nil, fmt.Errorf("gitea: ListOpenPRs: %w", errors.ErrUnsupported)
+}
+
+// SetCommitStatus is not yet implemented for Gitea. Callers get an honest
+// errors.ErrUnsupported rather than a silent no-op.
+func (p *giteaProvider) SetCommitStatus(ctx context.Context, owner, repo, sha, context, state, targetURL, description string) error {
+	return fmt.Errorf("gitea: SetCommitStatus: %w", errors.ErrUnsupported)
 }

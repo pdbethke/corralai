@@ -39,6 +39,11 @@ type Provider interface {
 	// AuthLogin returns the authenticated user's login name.
 	AuthLogin(ctx context.Context) (string, error)
 
+	// ListOpenPRs returns open change requests targeting base (all bases if base == "").
+	ListOpenPRs(ctx context.Context, owner, repo, base string) ([]PRRef, error)
+	// SetCommitStatus posts a commit status to sha. state ∈ {"pending","success","failure","error"}.
+	SetCommitStatus(ctx context.Context, owner, repo, sha, context, state, targetURL, description string) error
+
 	// ChangeRequestPath returns the URL path segment used in CR web URLs,
 	// e.g. "pull" for GitHub/Gitea, "merge_requests" for GitLab.
 	ChangeRequestPath() string
@@ -46,6 +51,14 @@ type Provider interface {
 	// PushCredURL returns the HTTPS remote URL with credentials injected for a
 	// one-shot git push. The returned URL must NEVER be stored or logged.
 	PushCredURL(repoURL, token string) string
+}
+
+// PRRef identifies an open change request and its current head.
+type PRRef struct {
+	Number  int
+	HeadSHA string
+	HeadRef string
+	Base    string
 }
 
 // restClient is a shared HTTP helper used by all concrete Provider implementations.
@@ -304,4 +317,50 @@ func (rc *restClient) rcAuthLogin(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return out.Login, nil
+}
+
+// rcListOpenPRs lists open PRs via the GitHub REST shape.
+func (rc *restClient) rcListOpenPRs(ctx context.Context, owner, repo, base string) ([]PRRef, error) {
+	url := rc.base + "/repos/" + owner + "/" + repo + "/pulls?state=open&per_page=100"
+	if base != "" {
+		url += "&base=" + base
+	}
+	b, _, err := rc.get(ctx, url, "")
+	if err != nil {
+		return nil, err
+	}
+	var raw []struct {
+		Number int `json:"number"`
+		Head   struct {
+			SHA string `json:"sha"`
+			Ref string `json:"ref"`
+		} `json:"head"`
+		Base struct {
+			Ref string `json:"ref"`
+		} `json:"base"`
+	}
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return nil, err
+	}
+	out := make([]PRRef, 0, len(raw))
+	for _, r := range raw {
+		out = append(out, PRRef{Number: r.Number, HeadSHA: r.Head.SHA, HeadRef: r.Head.Ref, Base: r.Base.Ref})
+	}
+	return out, nil
+}
+
+// rcSetCommitStatus posts a commit status via the GitHub REST shape.
+func (rc *restClient) rcSetCommitStatus(ctx context.Context, owner, repo, sha, context, state, targetURL, description string) error {
+	payload, _ := json.Marshal(map[string]any{
+		"state": state, "context": context, "target_url": targetURL, "description": description,
+	})
+	url := rc.base + "/repos/" + owner + "/" + repo + "/statuses/" + sha
+	b, resp, err := rc.doPost(ctx, url, payload)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("set commit status: %s: %s", resp.Status, rc.redact(string(b)))
+	}
+	return nil
 }

@@ -168,6 +168,25 @@ func (e *Engine) AuthLogin(ctx context.Context, repoURL string) (string, error) 
 	return p.AuthLogin(ctx)
 }
 
+// ListOpenPRs returns open PRs for repoURL targeting base (all bases if
+// base == "").
+func (e *Engine) ListOpenPRs(ctx context.Context, repoURL, base string) ([]PRRef, error) {
+	p, owner, repo, err := e.resolveProvider(repoURL)
+	if err != nil {
+		return nil, err
+	}
+	return p.ListOpenPRs(ctx, owner, repo, base)
+}
+
+// SetCommitStatus posts a commit status for repoURL@sha.
+func (e *Engine) SetCommitStatus(ctx context.Context, repoURL, sha, context, state, targetURL, description string) error {
+	p, owner, repo, err := e.resolveProvider(repoURL)
+	if err != nil {
+		return err
+	}
+	return p.SetCommitStatus(ctx, owner, repo, sha, context, state, targetURL, description)
+}
+
 // resolveProvider parses repoURL to get (host, owner, repo), looks up the
 // forge config for host, and returns the Provider + owner + repo.
 func (e *Engine) resolveProvider(repoURL string) (Provider, string, string, error) {
@@ -270,6 +289,35 @@ func (e *Engine) Clone(ctx context.Context, repoURL, base, destDir string) error
 	// CRITICAL: never leave the token in the working copy's config (jail-readable).
 	_, err := e.git(ctx, destDir, "remote", "set-url", "origin", repoURL)
 	return err
+}
+
+// CheckoutPR shallow-fetches a PR head ref into destDir and checks out sha.
+// GitHub/Gitea expose the head at refs/pull/<n>/head. Fails closed if the
+// fetched head does not match the expected sha — the gate runner (Task 4)
+// relies on this to never run untrusted jail code against a ref it didn't
+// ask for.
+func (e *Engine) CheckoutPR(ctx context.Context, repoURL string, pr int, sha, destDir string) error {
+	if _, err := e.git(ctx, "", "init", destDir); err != nil {
+		return err
+	}
+	ref := fmt.Sprintf("refs/pull/%d/head", pr)
+	// CRITICAL: fetch by ad-hoc token URL on the command line only — never via
+	// "remote add", which would persist the token URL in the jail-readable
+	// destDir/.git/config (mirrors Clone's invariant; see package doc).
+	if _, err := e.git(ctx, destDir, "fetch", "--depth", "1", e.tokenURL(repoURL), ref); err != nil {
+		return err
+	}
+	if _, err := e.git(ctx, destDir, "checkout", "--detach", "FETCH_HEAD"); err != nil {
+		return err
+	}
+	got, err := e.git(ctx, destDir, "rev-parse", "HEAD")
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(got) != sha {
+		return fmt.Errorf("checkout PR #%d: fetched head %s != expected %s", pr, strings.TrimSpace(got), sha)
+	}
+	return nil
 }
 
 func (e *Engine) Checkout(ctx context.Context, dir, branch string) error {

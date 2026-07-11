@@ -251,6 +251,50 @@ func TestReportBuild(t *testing.T) {
 	}
 }
 
+// TestCertifyBuildSignsAndStores drives certifyBuild directly — no MCP
+// round-trip — confirming the extracted function alone produces a complete
+// signed, stored record. This is the seam the gate runner (Task 4) calls
+// in-process instead of going through report_build's MCP tool.
+func TestCertifyBuildSignsAndStores(t *testing.T) {
+	dir := t.TempDir()
+	bs, err := buildstore.Open(filepath.Join(dir, "build.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bs.Close()
+
+	_, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	opts := Options{
+		BuildStore: bs,
+		CertifyKey: priv,
+	}
+
+	out, err := certifyBuild(context.Background(), opts, reportBuildIn{
+		Repo: "o/r", Commit: "abc", Command: "true", ExitCode: 0,
+	}, "gate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.ID == 0 || out.Head == "" || out.Signature == "" || out.PublicKey == "" {
+		t.Fatalf("incomplete record: %+v", out)
+	}
+
+	stored, found, err := bs.Get(out.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found {
+		t.Fatalf("record %d not found in the build store", out.ID)
+	}
+	if stored["signature"] != out.Signature {
+		t.Fatalf("stored signature %v != returned signature %v", stored["signature"], out.Signature)
+	}
+}
+
 // TestReportBuildStoresGitLinkFields locks Task 2: report_build must thread
 // the commit_message/commit_author/commit_date/commit_signature params
 // through to the stored record verbatim, and derive pass from exit_code == 0

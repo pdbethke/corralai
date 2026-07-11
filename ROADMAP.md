@@ -85,6 +85,19 @@ Go binary.**
   reviewed end-to-end — the whole-branch review caught that the real SPA's
   header-incapable transports (SSE/WebSocket) couldn't satisfy a header-based gate; the
   fix (the session cookie) was then verified in a live browser.
+- **The repo gate — corral as a required, signed merge check (control-plane v1).** `corral
+  certify`, *inverted*: instead of a developer voluntarily certifying in their own CI, the
+  **brain** polls covered repos' open PRs and, on each new head commit, checks it out, runs
+  the repo's declared check **in the bwrap jail** (untrusted PR code), signs the result via
+  the same tamper-evident certify path, and posts `corral/gate = pass|fail` to that commit —
+  a status the org's branch protection **requires**, so a red or missing verdict blocks the
+  merge. Certify **by execution**, enforced: no self-report, fail-closed (a `success` is only
+  ever posted on a real exit-0), and the gated SHA is provably the merged SHA. This is the
+  **separation-of-duties control a CISO is already required to prove**, mechanized. v1 is
+  GitHub + opt-in (`CORRALAI_GATE_POLICIES`; zero change to a brain that doesn't set it).
+  Honest about scope: the **posture verifier** (proving branch protection can't be silently
+  disabled), the **GitHub App check-run** (an un-forgeable green), and **self-hosted
+  GitLab/Gitea** (the forge a bank actually runs) are the next cut, not this one.
 
 ## Now — make it operable and unbreakable
 - **The front door.** The Mission Composer (above) is the first cut. Still ahead: an

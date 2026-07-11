@@ -5,6 +5,9 @@ package repo
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -125,5 +128,163 @@ func TestTokenURLInjectionAndRedaction(t *testing.T) {
 	}
 	if e0 := New("", ""); e0.redact("nothing to scrub") != "nothing to scrub" {
 		t.Fatal("empty-token redact must be a passthrough")
+	}
+}
+
+// TestCheckoutPRFetchesHeadAndLandsOnSHA stands up a bare repo, exposes a
+// commit at refs/pull/1/head (the GitHub/Gitea PR-head convention), and
+// asserts CheckoutPR fetches that ref and leaves the working copy detached
+// at exactly the expected sha (the fail-closed check inside CheckoutPR).
+func TestCheckoutPRFetchesHeadAndLandsOnSHA(t *testing.T) {
+	bare := makeBareRepoWithCommit(t)
+	bareDir := strings.TrimPrefix(bare, "file://")
+
+	out, err := exec.Command("git", "--git-dir", bareDir, "rev-parse", "main").CombinedOutput()
+	if err != nil {
+		t.Fatalf("rev-parse main: %v\n%s", err, out)
+	}
+	sha := strings.TrimSpace(string(out))
+
+	if out, err := exec.Command("git", "--git-dir", bareDir, "update-ref", "refs/pull/1/head", sha).CombinedOutput(); err != nil {
+		t.Fatalf("update-ref refs/pull/1/head: %v\n%s", err, out)
+	}
+
+	dest := filepath.Join(t.TempDir(), "work")
+	e := New("", "") // no token (file:// remote)
+	ctx := context.Background()
+	if err := e.CheckoutPR(ctx, bare, 1, sha, dest); err != nil {
+		t.Fatalf("CheckoutPR: %v", err)
+	}
+
+	got, err := exec.Command("git", "-C", dest, "rev-parse", "HEAD").CombinedOutput()
+	if err != nil {
+		t.Fatalf("rev-parse HEAD: %v\n%s", err, got)
+	}
+	if strings.TrimSpace(string(got)) != sha {
+		t.Fatalf("dest HEAD = %s, want %s", strings.TrimSpace(string(got)), sha)
+	}
+}
+
+// TestCheckoutPRFailsClosedOnShaMismatch asserts CheckoutPR errors out
+// (rather than silently succeeding) when the caller's expected sha doesn't
+// match what the PR-head ref actually resolves to.
+func TestCheckoutPRFailsClosedOnShaMismatch(t *testing.T) {
+	bare := makeBareRepoWithCommit(t)
+	bareDir := strings.TrimPrefix(bare, "file://")
+
+	out, err := exec.Command("git", "--git-dir", bareDir, "rev-parse", "main").CombinedOutput()
+	if err != nil {
+		t.Fatalf("rev-parse main: %v\n%s", err, out)
+	}
+	sha := strings.TrimSpace(string(out))
+	if out, err := exec.Command("git", "--git-dir", bareDir, "update-ref", "refs/pull/1/head", sha).CombinedOutput(); err != nil {
+		t.Fatalf("update-ref refs/pull/1/head: %v\n%s", err, out)
+	}
+
+	dest := filepath.Join(t.TempDir(), "work")
+	e := New("", "")
+	ctx := context.Background()
+	if err := e.CheckoutPR(ctx, bare, 1, "0000000000000000000000000000000000000000", dest); err == nil {
+		t.Fatal("expected CheckoutPR to fail closed on sha mismatch, got nil error")
+	}
+}
+
+// TestCheckoutPRDoesNotPersistTokenInConfig is the regression guard for the
+// credential-exfil finding: CheckoutPR must fetch the PR head by an ad-hoc
+// (possibly token-carrying) URL WITHOUT ever persisting an "origin" remote
+// pointed at that URL into destDir/.git/config — the gate runner bind-mounts
+// destDir into the bwrap jail where untrusted PR code runs, and a persisted
+// remote config is jail-readable. Mirrors TestTokenNeverPersistedInConfig for
+// Clone.
+func TestCheckoutPRDoesNotPersistTokenInConfig(t *testing.T) {
+	bare := makeBareRepoWithCommit(t)
+	bareDir := strings.TrimPrefix(bare, "file://")
+
+	out, err := exec.Command("git", "--git-dir", bareDir, "rev-parse", "main").CombinedOutput()
+	if err != nil {
+		t.Fatalf("rev-parse main: %v\n%s", err, out)
+	}
+	sha := strings.TrimSpace(string(out))
+	if out, err := exec.Command("git", "--git-dir", bareDir, "update-ref", "refs/pull/1/head", sha).CombinedOutput(); err != nil {
+		t.Fatalf("update-ref refs/pull/1/head: %v\n%s", err, out)
+	}
+
+	dest := filepath.Join(t.TempDir(), "work")
+	// token set (as it would be for a real forge), remote is file:// so
+	// tokenURL never injects it — but a buggy CheckoutPR would still write
+	// a plain "remote add origin <url>" into .git/config, which is exactly
+	// what this test guards against regardless of injection.
+	e := New("supersecrettoken", "")
+	ctx := context.Background()
+	if err := e.CheckoutPR(ctx, bare, 1, sha, dest); err != nil {
+		t.Fatalf("CheckoutPR: %v", err)
+	}
+
+	cfg, err := os.ReadFile(filepath.Join(dest, ".git", "config"))
+	if err != nil {
+		t.Fatalf("read .git/config: %v", err)
+	}
+	if strings.Contains(string(cfg), "[remote \"origin\"]") {
+		t.Fatalf("CheckoutPR must not persist an origin remote (jail-readable!):\n%s", cfg)
+	}
+	if strings.Contains(string(cfg), "@") {
+		t.Fatalf(".git/config contains a credential-shaped URL (jail-readable!):\n%s", cfg)
+	}
+}
+
+// TestEngineListOpenPRs verifies that Engine.ListOpenPRs (which takes a
+// repoURL) routes through the forge registry to a githubProvider pointed at
+// the test server, and parses the PR list into PRRef values.
+func TestEngineListOpenPRs(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/repos/o/r/pulls" && r.Method == http.MethodGet {
+			json.NewEncoder(w).Encode([]map[string]any{
+				{
+					"number": 7,
+					"head":   map[string]any{"sha": "deadbeef", "ref": "corralai/m1"},
+					"base":   map[string]any{"ref": "main"},
+				},
+			})
+			return
+		}
+		w.WriteHeader(404)
+	}))
+	defer srv.Close()
+
+	e := New("tok", srv.URL)
+	prs, err := e.ListOpenPRs(context.Background(), "https://github.com/o/r", "main")
+	if err != nil {
+		t.Fatalf("Engine.ListOpenPRs via registry: %v", err)
+	}
+	if len(prs) != 1 {
+		t.Fatalf("expected 1 PR, got %d", len(prs))
+	}
+	pr := prs[0]
+	if pr.Number != 7 || pr.HeadSHA != "deadbeef" || pr.HeadRef != "corralai/m1" || pr.Base != "main" {
+		t.Errorf("PRRef fields wrong: %+v", pr)
+	}
+}
+
+// TestEngineSetCommitStatus verifies that Engine.SetCommitStatus routes
+// through the forge registry to a githubProvider pointed at the test server.
+func TestEngineSetCommitStatus(t *testing.T) {
+	var hit bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/repos/o/r/statuses/deadbeef" && r.Method == http.MethodPost {
+			hit = true
+			w.WriteHeader(201)
+			return
+		}
+		w.WriteHeader(404)
+	}))
+	defer srv.Close()
+
+	e := New("tok", srv.URL)
+	err := e.SetCommitStatus(context.Background(), "https://github.com/o/r", "deadbeef", "corral/gate", "success", "http://x", "passed")
+	if err != nil {
+		t.Fatalf("Engine.SetCommitStatus via registry: %v", err)
+	}
+	if !hit {
+		t.Fatal("expected the test server to receive the commit-status POST")
 	}
 }

@@ -8,6 +8,7 @@ package repo
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -337,5 +338,30 @@ func TestEngineOpenPRDelegatesViaForgeRegistry(t *testing.T) {
 	}
 	if url != "https://github.com/o/r/pull/7" {
 		t.Fatalf("url = %q, want https://github.com/o/r/pull/7", url)
+	}
+}
+
+// TestGithubSetCommitStatus verifies SetCommitStatus posts the correct
+// payload to the GitHub commit-status endpoint.
+func TestGithubSetCommitStatus(t *testing.T) {
+	var gotPath, gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.Method + " " + r.URL.Path
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.WriteHeader(201)
+	}))
+	defer srv.Close()
+	p := &githubProvider{rc: restClient{base: srv.URL, accept: "application/vnd.github+json"}}
+	if err := p.SetCommitStatus(context.Background(), "o", "r", "deadbeef", "corral/gate", "success", "http://x", "passed"); err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "POST /repos/o/r/statuses/deadbeef" {
+		t.Errorf("path = %q", gotPath)
+	}
+	for _, want := range []string{`"state":"success"`, `"context":"corral/gate"`, `"target_url":"http://x"`, `"description":"passed"`} {
+		if !strings.Contains(gotBody, want) {
+			t.Errorf("body %q missing %q", gotBody, want)
+		}
 	}
 }

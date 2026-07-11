@@ -300,11 +300,11 @@ func (e *Engine) CheckoutPR(ctx context.Context, repoURL string, pr int, sha, de
 	if _, err := e.git(ctx, "", "init", destDir); err != nil {
 		return err
 	}
-	if _, err := e.git(ctx, destDir, "remote", "add", "origin", e.tokenURL(repoURL)); err != nil {
-		return err
-	}
 	ref := fmt.Sprintf("refs/pull/%d/head", pr)
-	if _, err := e.git(ctx, destDir, "fetch", "--depth", "1", "origin", ref); err != nil {
+	// CRITICAL: fetch by ad-hoc token URL on the command line only — never via
+	// "remote add", which would persist the token URL in the jail-readable
+	// destDir/.git/config (mirrors Clone's invariant; see package doc).
+	if _, err := e.git(ctx, destDir, "fetch", "--depth", "1", e.tokenURL(repoURL), ref); err != nil {
 		return err
 	}
 	if _, err := e.git(ctx, destDir, "checkout", "--detach", "FETCH_HEAD"); err != nil {

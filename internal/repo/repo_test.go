@@ -189,6 +189,49 @@ func TestCheckoutPRFailsClosedOnShaMismatch(t *testing.T) {
 	}
 }
 
+// TestCheckoutPRDoesNotPersistTokenInConfig is the regression guard for the
+// credential-exfil finding: CheckoutPR must fetch the PR head by an ad-hoc
+// (possibly token-carrying) URL WITHOUT ever persisting an "origin" remote
+// pointed at that URL into destDir/.git/config — the gate runner bind-mounts
+// destDir into the bwrap jail where untrusted PR code runs, and a persisted
+// remote config is jail-readable. Mirrors TestTokenNeverPersistedInConfig for
+// Clone.
+func TestCheckoutPRDoesNotPersistTokenInConfig(t *testing.T) {
+	bare := makeBareRepoWithCommit(t)
+	bareDir := strings.TrimPrefix(bare, "file://")
+
+	out, err := exec.Command("git", "--git-dir", bareDir, "rev-parse", "main").CombinedOutput()
+	if err != nil {
+		t.Fatalf("rev-parse main: %v\n%s", err, out)
+	}
+	sha := strings.TrimSpace(string(out))
+	if out, err := exec.Command("git", "--git-dir", bareDir, "update-ref", "refs/pull/1/head", sha).CombinedOutput(); err != nil {
+		t.Fatalf("update-ref refs/pull/1/head: %v\n%s", err, out)
+	}
+
+	dest := filepath.Join(t.TempDir(), "work")
+	// token set (as it would be for a real forge), remote is file:// so
+	// tokenURL never injects it — but a buggy CheckoutPR would still write
+	// a plain "remote add origin <url>" into .git/config, which is exactly
+	// what this test guards against regardless of injection.
+	e := New("supersecrettoken", "")
+	ctx := context.Background()
+	if err := e.CheckoutPR(ctx, bare, 1, sha, dest); err != nil {
+		t.Fatalf("CheckoutPR: %v", err)
+	}
+
+	cfg, err := os.ReadFile(filepath.Join(dest, ".git", "config"))
+	if err != nil {
+		t.Fatalf("read .git/config: %v", err)
+	}
+	if strings.Contains(string(cfg), "[remote \"origin\"]") {
+		t.Fatalf("CheckoutPR must not persist an origin remote (jail-readable!):\n%s", cfg)
+	}
+	if strings.Contains(string(cfg), "@") {
+		t.Fatalf(".git/config contains a credential-shaped URL (jail-readable!):\n%s", cfg)
+	}
+}
+
 // TestEngineListOpenPRs verifies that Engine.ListOpenPRs (which takes a
 // repoURL) routes through the forge registry to a githubProvider pointed at
 // the test server, and parses the PR list into PRRef values.

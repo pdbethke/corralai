@@ -239,6 +239,38 @@
   .cm-actions button { border:none; border-radius:5px; padding:4px 12px; font-size:12px; margin-right:8px; }
   .cm-actions .cm-details-btn { background:var(--panel); color:var(--fg); border:1px solid var(--line); cursor:pointer; }
   #completed-detail { max-width:800px; margin:0 auto 20px; padding:16px 18px; background:var(--panel); border:1px solid var(--line); border-radius:10px; }
+  /* #records — the Records tab: the default landing view, a team rollup of
+     certified builds (GET /api/builds) + a per-build verify/attribution/
+     commit detail panel (GET /api/builds/{id}). Same fixed-overlay family as
+     #completed/#proposals; the table/detail mirror .cmd-table/#completed-detail. */
+  #records { position:fixed; inset:42px 0 0 0; z-index:3; display:none; background:var(--bg); overflow:auto; padding:22px 0; }
+  #records.show { display:block; }
+  .records-explainer { max-width:920px; margin:0 auto 14px; padding:11px 15px; background:var(--panel);
+    border:1px solid var(--line); border-radius:8px; color:var(--muted); font-size:12.5px; line-height:1.5; }
+  #records-filters { max-width:920px; margin:0 auto 12px; display:flex; gap:8px; }
+  #records-filters input, #records-filters select { background:var(--panel); border:1px solid var(--line); color:var(--fg);
+    padding:6px 10px; border-radius:6px; font-size:12.5px; outline:none; }
+  #records-filters input:focus, #records-filters select:focus { border-color:var(--amber); }
+  #records-filters input { flex:1; }
+  #records-list { max-width:920px; margin:0 auto; }
+  .rec-table { width:100%; border-collapse:collapse; font-size:12px; }
+  .rec-table th { color:var(--amber); font-weight:600; text-align:left; padding:5px 10px 5px 0; border-bottom:1px solid var(--line); font-size:11px; text-transform:uppercase; letter-spacing:.3px; }
+  .rec-table td { color:var(--fg); padding:6px 10px 6px 0; border-bottom:1px solid rgba(255,255,255,.04); font-size:12px; }
+  .rec-table tr { cursor:pointer; }
+  .rec-table tr:hover td { background:var(--panel); }
+  .rec-pill { font-size:10px; text-transform:uppercase; letter-spacing:.5px; padding:2px 8px; border-radius:10px; flex:none; color:var(--bg); }
+  .rec-pill.pass { background:var(--green); }
+  .rec-pill.fail { background:var(--red); }
+  .rec-yes { color:var(--green); }
+  .rec-no { color:var(--muted); }
+  #records-detail { max-width:920px; margin:0 auto 20px; padding:16px 18px; background:var(--panel); border:1px solid var(--line); border-radius:10px; }
+  .rec-chain { font-family:ui-monospace,monospace; font-size:12.5px; line-height:1.7; margin:6px 0 14px; }
+  .rec-chain .rec-no { text-decoration:line-through; }
+  .rec-check-row { display:flex; align-items:baseline; gap:8px; padding:3px 0; font-size:12px; }
+  .rec-check-row .rec-check-name { font-family:ui-monospace,monospace; min-width:80px; }
+  .rec-verify { background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:10px 12px; margin-top:6px; }
+  .rec-verify code { display:block; white-space:pre-wrap; word-break:break-all; font-size:11.5px; color:var(--fg); margin:6px 0; }
+  .rec-verify-note { color:var(--muted); font-size:11.5px; line-height:1.5; }
   /* #skills — the Skills tab: fleet-wide shared skills (kind='skill' in the
      artifact store), same fixed-overlay + card family as #proposals/#completed.
      "We share skills, not just memories" made visible: this is the whole
@@ -603,7 +635,8 @@
   <div id="hud">
   <b>CorralAI</b><span class="sub" id="skinsub">— the corral</span>
   <span id="tabs">
-  <a class="tab active" id="tab-launch" onclick="setView('launch')">launch</a>
+  <a class="tab active" id="tab-records" onclick="setView('records')">records</a>
+  <a class="tab" id="tab-launch" onclick="setView('launch')">launch</a>
   <a class="tab" id="tab-swarm" onclick="setView('swarm')">swarm</a>
   <a class="tab" id="tab-progress" onclick="setView('progress')">progress</a>
   <a class="tab" id="tab-topology" onclick="setView('topology')">topology</a>
@@ -659,7 +692,7 @@
   <!-- COCKPIT-SHELL:EXEC:BEGIN -->
   <div id="exec"></div>
   <!-- COCKPIT-SHELL:EXEC:END -->
-  <div id="launch" class="show"></div>
+  <div id="launch"></div>
   <div id="progress"></div>
   <div id="topology"></div>
   <div id="proposals"></div>
@@ -667,6 +700,22 @@
   <div id="files"></div>
   <div id="completed"><div id="completed-list"></div><div id="completed-detail" style="display:none"></div></div>
   <div id="lookbook"></div>
+  <div id="records" class="show">
+    <div class="records-explainer">Every certified build, team-wide — the accountability front door. Each row is a
+      build_record the brain stored when its checks passed. Click a row to see the chain (commit signature → check
+      → public witness) and the exact command to verify it yourself, independent of this dashboard.</div>
+    <div id="records-filters">
+      <input id="rec-repo" placeholder="filter by repo…" oninput="debounceRecords()" autocomplete="off">
+      <input id="rec-actor" placeholder="filter by actor…" oninput="debounceRecords()" autocomplete="off">
+      <select id="rec-status" onchange="renderRecordsTab()">
+        <option value="">all statuses</option>
+        <option value="pass">pass only</option>
+        <option value="fail">fail only</option>
+      </select>
+    </div>
+    <div id="records-list"></div>
+    <div id="records-detail" style="display:none"></div>
+  </div>
   <div id="replay">
     <div class="row">
       <span id="replay-title"></span>
@@ -1234,6 +1283,137 @@ function closeMissionDetail(){
   if(el){ el.style.display = 'none'; el.innerHTML = ''; }
 }
 
+// shortSha: first 7 chars of a commit sha, or an em dash if the record has none.
+function shortSha(sha){ return sha ? esc(sha).slice(0,7) : '—'; }
+
+// debounceRecords: text-input filters (repo/actor) re-query after a short
+// pause rather than on every keystroke — mirrors debounceSearch's pattern
+// for the Memory tab's search box.
+function debounceRecords(){ clearTimeout(_rt); _rt = setTimeout(renderRecordsTab, 220); }
+
+// renderRecordsTab: the Records tab's list — GET /api/builds narrowed by the
+// repo/actor/status filter controls, newest-first (the API already sorts
+// DESC). This is the accountability front door / default landing view: a
+// team-wide rollup of every certified build, not any one agent's or
+// mission's. Row click opens the per-build detail (openRecordDetail).
+function renderRecordsTab(){
+  const list = document.getElementById('records-list');
+  if(!list) return;
+  const repo = (document.getElementById('rec-repo')||{}).value || '';
+  const actor = (document.getElementById('rec-actor')||{}).value || '';
+  const status = (document.getElementById('rec-status')||{}).value || '';
+  const params = new URLSearchParams();
+  if(repo) params.set('repo', repo);
+  if(actor) params.set('actor', actor);
+  if(status) params.set('status', status);
+  fetch('/api/builds' + (params.toString() ? '?'+params.toString() : '')).then(r=>r.json()).then(rows=>{
+    rows = rows || [];
+    if(!rows.length){ list.innerHTML = '<div class="pmt">no certified builds yet — a build_record shows up here once a mission runs `corral certify` and the checks pass.</div>'; return; }
+    const body = rows.map(rec => `
+      <tr onclick="openRecordDetail(${rec.ID})">
+        <td>${esc(rec.Repo||'—')}</td>
+        <td style="font-family:ui-monospace,monospace" title="open for the full commit message">${shortSha(rec.Commit)}</td>
+        <td>${esc(rec.Actor||'—')}</td>
+        <td>${(rec.ProducedBy||[]).map(esc).join(', ') || '<span class="rec-no">—</span>'}</td>
+        <td><span class="rec-pill ${rec.Pass?'pass':'fail'}">${rec.Pass?'pass':'fail'}</span></td>
+        <td>${rec.CommitSigned ? '<span class="rec-yes">✓</span>' : '<span class="rec-no">–</span>'}</td>
+        <td>${rec.Anchored ? '<span class="rec-yes">✓</span>' : '<span class="rec-no">–</span>'}</td>
+        <td>${ago(rec.CreatedTS)} ago</td>
+      </tr>`).join('');
+    list.innerHTML = `<table class="rec-table"><thead><tr>
+      <th>repo</th><th>commit</th><th>actor</th><th>produced by</th><th>status</th><th>commit signed</th><th>anchored</th><th>when</th>
+      </tr></thead><tbody>${body}</tbody></table>`;
+  }).catch(()=>{ list.innerHTML = '<div class="pmt">could not load records.</div>'; });
+}
+
+// openRecordDetail: the per-build drill-down — GET /api/builds/{id}, which
+// re-runs certverify.VerifyRecord server-side against the brain's OWN stored
+// record. That is an operator convenience, not independent verification —
+// this panel says so explicitly and always surfaces verify_command, the
+// offline CLI path a third party (not trusting this dashboard) actually runs.
+function openRecordDetail(id){
+  const el = document.getElementById('records-detail');
+  if(!el) return;
+  fetch('/api/builds/'+id).then(r=>{
+    if(!r.ok) throw new Error('not found');
+    return r.json();
+  }).then(d=>{
+    const checks = d.checks || [];
+    const byName = {};
+    checks.forEach(c => { byName[c.Name] = c; });
+    let commitSig = null;
+    try { commitSig = d.commit_signature ? JSON.parse(d.commit_signature) : null; } catch(_){ commitSig = null; }
+    const nonRekorOK = checks.filter(c=>c.Name!=='rekor').length > 0 && checks.filter(c=>c.Name!=='rekor').every(c=>c.OK);
+    const rekorCheck = byName['rekor'];
+    const rekorOK = !!(d.anchored && rekorCheck && rekorCheck.OK);
+
+    // The chain line: three links, each greyed out honestly when the
+    // underlying claim isn't there — an unsigned commit, a failing check, or
+    // an unanchored (never publicly witnessed) record are all real, common
+    // states, not errors to hide.
+    const link1 = commitSig && commitSig.signed
+      ? `commit <code>${shortSha(d.commit)}</code> signed by <span class="rec-yes">${esc(commitSig.signer||'unknown signer')} ✓</span>`
+      : `commit <code>${shortSha(d.commit)}</code> <span class="rec-no">unsigned</span>`;
+    // link2 reflects the BUILD OUTCOME (d.pass — the real exit code stored
+    // with the record), never the crypto checks. "check passed" must mean
+    // the CI check passed, not that the signature/ledger/subject math
+    // verified — a failed-but-signed build is real and common, not an error
+    // to hide.
+    const link2 = d.pass
+      ? `check <span class="rec-yes">passed ✓</span>`
+      : `check <span class="rec-no">failed ✗</span>`;
+    const link3 = rekorOK
+      ? `publicly witnessed <span class="rec-yes">✓</span>`
+      : `<span class="rec-no">not publicly witnessed${d.anchored ? '' : ' (unanchored)'}</span>`;
+    const chain = `<div class="rec-chain">${link1} &middot; ${link2} &middot; ${link3}</div>`;
+
+    // Record-integrity pill: is the signed record cryptographically intact +
+    // publicly witnessed? Orthogonal to the build outcome above — a failed
+    // build can still be a perfectly intact, honestly-witnessed record of
+    // that failure. Labels say "record" explicitly so a reader never parses
+    // this as "the build passed".
+    const integrityColor = d.all_ok ? 'var(--green)' : (nonRekorOK && !d.anchored ? 'var(--amber)' : 'var(--red)');
+    const integrityLabel = d.all_ok ? 'record verified' : (nonRekorOK && !d.anchored ? 'verified &middot; unwitnessed' : 'record INVALID');
+
+    const checkRows = checks.length ? checks.map(c => `
+      <div class="rec-check-row">
+        <span class="rec-check-name">${c.OK ? '<span class="rec-yes">✓</span>' : '<span class="rec-no" style="color:var(--red)">✗</span>'} ${esc(c.Name)}</span>
+        <span class="cm-sum" style="margin:0">${esc(c.Detail||(c.OK?'ok':''))}</span>
+      </div>`).join('') : '<div class="cmd-null">no checks recorded</div>';
+
+    const producedBy = (d.produced_by||[]).map(esc).join(', ') || '<span class="rec-no">—</span>';
+    const commitDate = d.commit_date ? new Date(d.commit_date).toLocaleString() : '';
+
+    el.innerHTML = `
+      <span class="cmd-close" onclick="closeRecordDetail()">✕ close</span>
+      <div class="cm-hdr"><span class="cm-dir">${esc(d.repo||'—')} @ ${shortSha(d.commit)}</span><span class="cm-pill" style="background:${d.pass?'var(--green)':'var(--red)'}; font-weight:700">${d.pass?'PASS':'FAIL'}</span><span class="cm-pill" style="background:${integrityColor}">${integrityLabel}</span></div>
+      <div class="cm-sum">branch ${esc(d.branch||'—')} &middot; actor ${esc(d.actor||'—')}</div>
+      ${chain}
+      <div class="cmd-section-title">the four checks (brain's own re-verification)</div>
+      ${checkRows}
+      <div class="cmd-section-title">commit</div>
+      <div class="cm-sum">${esc(d.commit_message||'(no commit message recorded)')}</div>
+      <div class="cm-sum">${esc(d.commit_author||'—')}${commitDate ? ' &middot; '+esc(commitDate) : ''}</div>
+      <div class="cmd-section-title">attribution</div>
+      <div class="cm-sum">produced by: ${producedBy}</div>
+      <div class="cmd-section-title">verify it yourself</div>
+      <div class="rec-verify">
+        <div class="rec-verify-note">The checks above are the brain's OWN re-verification of its own stored
+          record — an operator convenience, not independent verification. To verify this build independently
+          (against the published signing key and the public Rekor transparency log, not this dashboard's word
+          for it), run:</div>
+        <code>${esc(d.verify_command||'')}</code>
+        <div class="rec-verify-note"><a href="/api/certify/pubkey" target="_blank" rel="noopener">the published signing public key ↗</a></div>
+      </div>`;
+    el.style.display = 'block';
+    el.scrollIntoView({behavior:'smooth', block:'nearest'});
+  }).catch(()=>{ el.innerHTML = '<div class="pmt">record not found.</div>'; el.style.display = 'block'; });
+}
+function closeRecordDetail(){
+  const el = document.getElementById('records-detail');
+  if(el){ el.style.display = 'none'; el.innerHTML = ''; }
+}
+
 function renderProgress(){
   const el = document.getElementById('progress');
   const missions = lastState.missions || [];
@@ -1452,10 +1632,11 @@ fetch('/api/me').then(r=>r.json()).then(m=>{
 }).catch(()=>{});
 
 // ---- view switching + memory browser ----
-let view = 'launch', memInit = false, _t, _sel;
+let view = 'records', memInit = false, _t, _sel, _rt;
 function setView(v){
   view = v;
   if(v !== 'replay') stopReplaySession(); // leaving replay by ANY route ends the session cleanly (no-op otherwise)
+  document.getElementById('tab-records').classList.toggle('active', v==='records');
   document.getElementById('tab-swarm').classList.toggle('active', v==='swarm');
   document.getElementById('tab-launch').classList.toggle('active', v==='launch');
   document.getElementById('tab-progress').classList.toggle('active', v==='progress');
@@ -1475,6 +1656,7 @@ function setView(v){
   document.getElementById('files').classList.toggle('show', v==='files');
   document.getElementById('completed').classList.toggle('show', v==='completed');
   document.getElementById('lookbook').classList.toggle('show', v==='lookbook');
+  document.getElementById('records').classList.toggle('show', v==='records');
   document.getElementById('replay').classList.toggle('show', v==='replay');
   // The stage (and its canvas) stay mounted; the tab overlays simply cover them at a
   // higher z-index. Don't display:none the canvas — that zeroes its box and squishes
@@ -1492,6 +1674,7 @@ function setView(v){
   if(v==='files' && typeof renderReplayFiles==='function'){ renderReplayFiles(); }
   if(v==='completed'){ renderCompletedTab(); }
   if(v==='lookbook'){ renderLookbookTab(); }
+  if(v==='records'){ renderRecordsTab(); }
 }
 async function loadScopes(){
   try {
@@ -2368,6 +2551,7 @@ function letCorralChoose() {
   });
 }
 renderLaunchTab();
+renderRecordsTab(); // Records is the default landing view — render it once at load.
 </script>
 </body>
 </html>

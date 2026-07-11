@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -23,11 +24,22 @@ type fakeRunner struct {
 	output     []byte
 	runErr     error
 
+	// verify-commit double: gitVerifyRaw/gitVerifyExitZero stand in for a real
+	// `git verify-commit --raw` invocation's output/exit status; gitVerifyErr
+	// stands in for git being entirely unavailable (not a repo, no git binary).
+	gitVerifyRaw      string
+	gitVerifyExitZero bool
+	gitVerifyErr      error
+
 	ranArgv []string
 }
 
 func (f *fakeRunner) GitOutput(args ...string) (string, error) {
 	return f.gitOutputs[strings.Join(args, " ")], nil
+}
+
+func (f *fakeRunner) GitVerifyCommit(sha string) (string, bool, error) {
+	return f.gitVerifyRaw, f.gitVerifyExitZero, f.gitVerifyErr
 }
 
 func (f *fakeRunner) RunCommand(argv []string, stdout, stderr io.Writer) (int, time.Duration, []byte, error) {
@@ -236,6 +248,174 @@ func TestRunCertify_OutWritesFullSelfVerifyingRecord(t *testing.T) {
 	steps, ok := got["steps"].([]any)
 	if !ok || len(steps) != 1 {
 		t.Errorf("steps = %v, want a 1-element array", got["steps"])
+	}
+}
+
+// TestRunCertify_GitLinkCaptureGoodSig locks Task 2: a GOODSIG commit must
+// come back with commit_signature.verified=="good" and the signer captured,
+// alongside the commit message/author/date pulled via git show.
+func TestRunCertify_GitLinkCaptureGoodSig(t *testing.T) {
+	run := &fakeRunner{
+		exitCode: 0,
+		output:   []byte("ok\n"),
+		gitOutputs: map[string]string{
+			"show -s --format=%s abc123":        "fix the thing",
+			"show -s --format=%an <%ae> abc123": "Peter Bethke <peter@example.com>",
+			"show -s --format=%cI abc123":       "2026-07-09T12:00:00-05:00",
+		},
+		gitVerifyRaw:      "[GNUPG:] GOODSIG 1234567890ABCDEF Peter Bethke <peter@example.com>",
+		gitVerifyExitZero: true,
+	}
+	post := &fakePoster{result: stubResult()}
+	var stdout, stderr bytes.Buffer
+
+	code := runCertify([]string{
+		"--brain", "https://brain.example",
+		"--repo", "pdbethke/corralai",
+		"--commit", "abc123",
+		"--branch", "main",
+		"--", "go", "test", "./...",
+	}, run, post, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("unexpected exit code %d: %s", code, stderr.String())
+	}
+	if post.rec.CommitMessage != "fix the thing" {
+		t.Errorf("commit_message = %q, want %q", post.rec.CommitMessage, "fix the thing")
+	}
+	if post.rec.CommitAuthor != "Peter Bethke <peter@example.com>" {
+		t.Errorf("commit_author = %q, want %q", post.rec.CommitAuthor, "Peter Bethke <peter@example.com>")
+	}
+	if post.rec.CommitDate != "2026-07-09T12:00:00-05:00" {
+		t.Errorf("commit_date = %q, want %q", post.rec.CommitDate, "2026-07-09T12:00:00-05:00")
+	}
+	sig := post.rec.CommitSignature
+	if sig["verified"] != "good" {
+		t.Fatalf("commit_signature.verified = %v, want %q (sig=%v)", sig["verified"], "good", sig)
+	}
+	if sig["signed"] != true {
+		t.Errorf("commit_signature.signed = %v, want true", sig["signed"])
+	}
+	if sig["signer"] != "Peter Bethke <peter@example.com>" {
+		t.Errorf("commit_signature.signer = %v, want %q", sig["signer"], "Peter Bethke <peter@example.com>")
+	}
+	if sig["mechanism"] != "gpg" {
+		t.Errorf("commit_signature.mechanism = %v, want %q", sig["mechanism"], "gpg")
+	}
+}
+
+// TestRunCertify_GitLinkCaptureUnsigned confirms an unsigned commit (verify-
+// commit exits nonzero with no GOODSIG/status output) is recorded as
+// verified=="unsigned" — never treated as a failure, certify still succeeds.
+func TestRunCertify_GitLinkCaptureUnsigned(t *testing.T) {
+	run := &fakeRunner{
+		exitCode:          0,
+		output:            []byte("ok\n"),
+		gitVerifyRaw:      "",
+		gitVerifyExitZero: false,
+	}
+	post := &fakePoster{result: stubResult()}
+	var stdout, stderr bytes.Buffer
+
+	code := runCertify([]string{
+		"--brain", "https://brain.example",
+		"--repo", "pdbethke/corralai",
+		"--commit", "abc123",
+		"--branch", "main",
+		"--", "go", "test", "./...",
+	}, run, post, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("an unsigned commit must not fail certify, got exit %d: %s", code, stderr.String())
+	}
+	sig := post.rec.CommitSignature
+	if sig["verified"] != "unsigned" {
+		t.Fatalf("commit_signature.verified = %v, want %q", sig["verified"], "unsigned")
+	}
+	if sig["signed"] != false {
+		t.Errorf("commit_signature.signed = %v, want false", sig["signed"])
+	}
+}
+
+// TestRunCertify_GitLinkCaptureBadSigAndUnknownKey lock the honesty
+// contract beyond the good/unsigned pair: a BADSIG verdict must never be
+// reported as "good", and a signature from an unrecognized key must be
+// "unknown-key", not silently promoted to "good".
+func TestRunCertify_GitLinkCaptureBadSigAndUnknownKey(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{"bad", "[GNUPG:] BADSIG 1234567890ABCDEF Mallory <mallory@example.com>", "bad"},
+		{"unknown-key", "[GNUPG:] NO_PUBKEY 1234567890ABCDEF", "unknown-key"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			run := &fakeRunner{
+				exitCode:          0,
+				output:            []byte("ok\n"),
+				gitVerifyRaw:      tc.raw,
+				gitVerifyExitZero: false,
+			}
+			post := &fakePoster{result: stubResult()}
+			var stdout, stderr bytes.Buffer
+
+			code := runCertify([]string{
+				"--brain", "https://brain.example",
+				"--repo", "pdbethke/corralai",
+				"--commit", "abc123",
+				"--branch", "main",
+				"--", "go", "test", "./...",
+			}, run, post, &stdout, &stderr)
+
+			if code != 0 {
+				t.Fatalf("must not fail certify, got exit %d: %s", code, stderr.String())
+			}
+			sig := post.rec.CommitSignature
+			if sig["verified"] != tc.want {
+				t.Fatalf("commit_signature.verified = %v, want %q", sig["verified"], tc.want)
+			}
+			if sig["signed"] != true {
+				t.Errorf("commit_signature.signed = %v, want true (a signature was present, just not trustworthy)", sig["signed"])
+			}
+			if sig["verified"] == "good" {
+				t.Fatal("must never report a BADSIG/unknown-key verdict as good")
+			}
+		})
+	}
+}
+
+// TestRunCertify_GitLinkCaptureGitUnavailable confirms a git-unavailable
+// environment (not a repo, git missing) degrades to unsigned and never
+// makes certify fatal — the check already ran; recording signature status
+// is best-effort telemetry, not a gate.
+func TestRunCertify_GitLinkCaptureGitUnavailable(t *testing.T) {
+	run := &fakeRunner{
+		exitCode:     0,
+		output:       []byte("ok\n"),
+		gitVerifyErr: errors.New("exec: \"git\": executable file not found in $PATH"),
+	}
+	post := &fakePoster{result: stubResult()}
+	var stdout, stderr bytes.Buffer
+
+	code := runCertify([]string{
+		"--brain", "https://brain.example",
+		"--repo", "pdbethke/corralai",
+		"--commit", "abc123",
+		"--branch", "main",
+		"--", "go", "test", "./...",
+	}, run, post, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("git being unavailable must never make certify fatal, got exit %d: %s", code, stderr.String())
+	}
+	if !post.called {
+		t.Fatal("expected the build to still be posted despite git verify-commit being unavailable")
+	}
+	sig := post.rec.CommitSignature
+	if sig["verified"] != "unsigned" {
+		t.Fatalf("commit_signature.verified = %v, want %q", sig["verified"], "unsigned")
 	}
 }
 

@@ -59,6 +59,7 @@ export default defineConfig({
         {
           label: 'The UI, tab by tab',
           items: [
+            { label: 'Records (default landing view)', slug: 'docs/ui-tour/records' },
             { label: 'The corral (canvas view)', slug: 'docs/ui-tour/corral' },
             { label: 'Progress', slug: 'docs/ui-tour/progress' },
             { label: 'Topology', slug: 'docs/ui-tour/topology' },

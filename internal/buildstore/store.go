@@ -66,6 +66,31 @@ func Open(dsn string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	// The git-link columns (Task 2): commit message/author/date pulled from
+	// `git show` at certify time, the parsed `git verify-commit` outcome, and
+	// pass (execution exit_code == 0) — a cheap denormalized column so the
+	// dashboard's status filter doesn't need to unpack `statement`/`steps` JSON
+	// per row. Idempotent for the same reason as steps/rekor/anchored above.
+	if _, err := db.Exec(`ALTER TABLE build_records ADD COLUMN IF NOT EXISTS commit_message VARCHAR`); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if _, err := db.Exec(`ALTER TABLE build_records ADD COLUMN IF NOT EXISTS commit_author VARCHAR`); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if _, err := db.Exec(`ALTER TABLE build_records ADD COLUMN IF NOT EXISTS commit_date VARCHAR`); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if _, err := db.Exec(`ALTER TABLE build_records ADD COLUMN IF NOT EXISTS commit_signature JSON`); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if _, err := db.Exec(`ALTER TABLE build_records ADD COLUMN IF NOT EXISTS pass BOOLEAN`); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if _, err := db.Exec(`CREATE SEQUENCE IF NOT EXISTS build_record_id START 1`); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -80,11 +105,17 @@ func (s *Store) Close() error { return s.db.Close() }
 // that produced `head`, so a stored record can be independently re-verified
 // with certify.VerifyLedger without trusting the brain's in-process state —
 // plus the transparency-witness evidence (rekorJSON, the marshaled
-// transparency.Entry; anchored, whether anchoring actually succeeded) and
-// returns its assigned id. rekorJSON=="" / anchored==false records a build
-// that was signed but never reached (or wasn't offered) a transparency log —
-// report_build degrades to this rather than failing the build.
-func (s *Store) Save(repo, commit, branch, actor, head, sig, statementJSON, stepsJSON, rekorJSON string, anchored bool) (int64, error) {
+// transparency.Entry; anchored, whether anchoring actually succeeded), the
+// git-link fields captured at certify time (commitMessage, commitAuthor,
+// commitDate, commitSignatureJSON — the parsed `git verify-commit` outcome,
+// a `{signed,signer,mechanism,verified}` object as JSON text, "" if git
+// context was unavailable), and pass (the record's execution exit_code == 0,
+// denormalized here so the dashboard's status filter is a cheap column read
+// rather than an unpack of statement/steps JSON) — and returns its assigned
+// id. rekorJSON=="" / anchored==false records a build that was signed but
+// never reached (or wasn't offered) a transparency log — report_build
+// degrades to this rather than failing the build.
+func (s *Store) Save(repo, commit, branch, actor, head, sig, statementJSON, stepsJSON, rekorJSON string, anchored bool, commitMessage, commitAuthor, commitDate, commitSignatureJSON string, pass bool) (int64, error) {
 	var id int64
 	var rekorArg any
 	if rekorJSON == "" {
@@ -92,11 +123,17 @@ func (s *Store) Save(repo, commit, branch, actor, head, sig, statementJSON, step
 	} else {
 		rekorArg = rekorJSON
 	}
+	var commitSigArg any
+	if commitSignatureJSON == "" {
+		commitSigArg = nil
+	} else {
+		commitSigArg = commitSignatureJSON
+	}
 	err := s.db.QueryRow(
-		`INSERT INTO build_records (id, repo, commit_sha, branch, actor, head, signature, statement, steps, rekor, anchored, created_ts)
-		 VALUES (nextval('build_record_id'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO build_records (id, repo, commit_sha, branch, actor, head, signature, statement, steps, rekor, anchored, commit_message, commit_author, commit_date, commit_signature, pass, created_ts)
+		 VALUES (nextval('build_record_id'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 RETURNING id`,
-		repo, commit, branch, actor, head, sig, statementJSON, stepsJSON, rekorArg, anchored, now()).Scan(&id)
+		repo, commit, branch, actor, head, sig, statementJSON, stepsJSON, rekorArg, anchored, commitMessage, commitAuthor, commitDate, commitSigArg, pass, now()).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("buildstore: save: %w", err)
 	}
@@ -106,16 +143,23 @@ func (s *Store) Save(repo, commit, branch, actor, head, sig, statementJSON, step
 // Get returns the stored SLSA statement (parsed to a map, with the ledger
 // steps folded in under "steps", the signature under "signature", the
 // transparency-witness evidence under "rekor" (a JSON-encoded string, "" if
-// never anchored), and whether it was anchored under "anchored") for id,
-// plus false if no record with that id exists.
+// never anchored), whether it was anchored under "anchored", the git-link
+// fields under "commit_message"/"commit_author"/"commit_date" (plain
+// strings) and "commit_signature" (a JSON-encoded string, "" if git context
+// was unavailable at certify time), and "pass" (whether the execution
+// exited 0)) for id, plus false if no record with that id exists.
 func (s *Store) Get(id int64) (map[string]any, bool, error) {
 	var statement any
 	var steps any
 	var sig string
 	var rekor any
 	var anchored sql.NullBool
+	var commitMessage, commitAuthor, commitDate sql.NullString
+	var commitSignature any
+	var pass sql.NullBool
 	err := s.db.QueryRow(
-		`SELECT statement, steps, signature, rekor, anchored FROM build_records WHERE id = ?`, id).Scan(&statement, &steps, &sig, &rekor, &anchored)
+		`SELECT statement, steps, signature, rekor, anchored, commit_message, commit_author, commit_date, commit_signature, pass FROM build_records WHERE id = ?`, id).
+		Scan(&statement, &steps, &sig, &rekor, &anchored, &commitMessage, &commitAuthor, &commitDate, &commitSignature, &pass)
 	if err == sql.ErrNoRows {
 		return nil, false, nil
 	}
@@ -149,7 +193,216 @@ func (s *Store) Get(id int64) (map[string]any, bool, error) {
 		m["rekor"] = string(rekorBytes)
 	}
 	m["anchored"] = anchored.Valid && anchored.Bool
+	m["commit_message"] = commitMessage.String
+	m["commit_author"] = commitAuthor.String
+	m["commit_date"] = commitDate.String
+	m["commit_signature"] = ""
+	if commitSignature != nil {
+		// commit_signature is a JSON column (same driver-representation
+		// variability as rekor above); re-encode to the flat JSON string the
+		// "commit_signature" map key promises callers.
+		sigVal, err := jsonColumnToAny(commitSignature)
+		if err != nil {
+			return nil, false, fmt.Errorf("buildstore: get: decoding stored commit_signature: %w", err)
+		}
+		sigBytes, err := json.Marshal(sigVal)
+		if err != nil {
+			return nil, false, fmt.Errorf("buildstore: get: re-encoding stored commit_signature: %w", err)
+		}
+		m["commit_signature"] = string(sigBytes)
+	}
+	m["pass"] = pass.Valid && pass.Bool
 	return m, true, nil
+}
+
+// ListFilter narrows Store.List's result set. Zero-value fields are treated
+// as "no filter": Repo/Actor exact-match only when non-empty, Status filters
+// on the stored `pass` column when "pass"/"fail" (any other value, including
+// "", means all), Anchored filters only when non-nil (true vs false is a
+// real filter, so this can't be a plain bool), Since/Until bound created_ts
+// only when non-zero, and Limit<=0 defaults to 100.
+type ListFilter struct {
+	Repo, Actor string
+	Status      string // "pass" | "fail" | "" (all)
+	Anchored    *bool
+	Since       float64
+	Until       float64
+	Limit       int
+	Offset      int
+}
+
+// Summary is the cheap, per-row projection of a build_records row the
+// records dashboard lists — deliberately not the full statement/steps.
+type Summary struct {
+	ID           int64
+	Repo         string
+	Commit       string
+	Branch       string
+	Actor        string
+	Pass         bool
+	Anchored     bool
+	CommitSigned bool
+	ProducedBy   []string
+	CreatedTS    float64
+}
+
+// List returns build_records rows matching f, newest-first, paginated by
+// f.Limit/f.Offset (default Limit 100). All filter values are passed as `?`
+// placeholders — never string-concatenated into the query. CommitSigned is
+// read from the commit_signature JSON column's "signed" field (false, no
+// error, when that column is NULL/empty). ProducedBy is pulled from the
+// statement JSON's predicate.buildDefinition.resolvedDependencies entries
+// (each entry's "uri", e.g. "model:claude-opus", with the "model:" prefix
+// stripped) — the only part of the statement this cheap projection decodes.
+func (s *Store) List(f ListFilter) ([]Summary, error) {
+	limit := f.Limit
+	if limit <= 0 {
+		limit = 100
+	}
+
+	var conditions []string
+	var args []any
+
+	if f.Repo != "" {
+		conditions = append(conditions, "repo = ?")
+		args = append(args, f.Repo)
+	}
+	if f.Actor != "" {
+		conditions = append(conditions, "actor = ?")
+		args = append(args, f.Actor)
+	}
+	switch f.Status {
+	case "pass":
+		conditions = append(conditions, "pass = ?")
+		args = append(args, true)
+	case "fail":
+		conditions = append(conditions, "pass = ?")
+		args = append(args, false)
+	}
+	if f.Anchored != nil {
+		conditions = append(conditions, "anchored = ?")
+		args = append(args, *f.Anchored)
+	}
+	if f.Since != 0 {
+		conditions = append(conditions, "created_ts >= ?")
+		args = append(args, f.Since)
+	}
+	if f.Until != 0 {
+		conditions = append(conditions, "created_ts <= ?")
+		args = append(args, f.Until)
+	}
+
+	query := `SELECT id, repo, commit_sha, branch, actor, pass, anchored, commit_signature, statement, created_ts FROM build_records`
+	if len(conditions) > 0 {
+		// #nosec G202 -- conditions are fixed "<column> = ?"/"<column> >= ?"
+		// fragments chosen from a hardcoded set above, never built from filter
+		// values; every actual value flows through args as a `?` placeholder.
+		query += " WHERE " + strings.Join(conditions, " AND ")
+	}
+	query += " ORDER BY created_ts DESC LIMIT ? OFFSET ?"
+	args = append(args, limit, f.Offset)
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("buildstore: list: %w", err)
+	}
+	defer rows.Close()
+
+	out := []Summary{}
+	for rows.Next() {
+		var sm Summary
+		var pass, anchored sql.NullBool
+		var commitSignature any
+		var statement any
+		if err := rows.Scan(&sm.ID, &sm.Repo, &sm.Commit, &sm.Branch, &sm.Actor, &pass, &anchored, &commitSignature, &statement, &sm.CreatedTS); err != nil {
+			return nil, fmt.Errorf("buildstore: list: scanning row: %w", err)
+		}
+		sm.Pass = pass.Valid && pass.Bool
+		sm.Anchored = anchored.Valid && anchored.Bool
+
+		signed, err := commitSignatureSigned(commitSignature)
+		if err != nil {
+			return nil, fmt.Errorf("buildstore: list: decoding commit_signature for id %d: %w", sm.ID, err)
+		}
+		sm.CommitSigned = signed
+
+		producedBy, err := producedByFromStatement(statement)
+		if err != nil {
+			return nil, fmt.Errorf("buildstore: list: decoding statement for id %d: %w", sm.ID, err)
+		}
+		sm.ProducedBy = producedBy
+
+		out = append(out, sm)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("buildstore: list: %w", err)
+	}
+	return out, nil
+}
+
+// commitSignatureSigned reads just the "signed" field of a stored
+// commit_signature JSON column, tolerating the driver's representation
+// variability (nil, already-decoded map, JSON string, or JSON bytes) and a
+// NULL/empty column (→ false, no error).
+func commitSignatureSigned(v any) (bool, error) {
+	if v == nil {
+		return false, nil
+	}
+	decoded, err := jsonColumnToAny(v)
+	if err != nil {
+		return false, err
+	}
+	m, ok := decoded.(map[string]any)
+	if !ok {
+		return false, nil
+	}
+	signed, _ := m["signed"].(bool)
+	return signed, nil
+}
+
+// producedByFromStatement extracts the model URIs named in the statement's
+// predicate.buildDefinition.resolvedDependencies (the shape
+// certify.BuildAttestation writes), stripping the "model:" prefix. Returns
+// nil (not an error) when the statement, predicate, buildDefinition, or
+// resolvedDependencies is absent or empty — this is a best-effort cheap
+// projection, not a full statement decode.
+func producedByFromStatement(v any) ([]string, error) {
+	if v == nil {
+		return nil, nil
+	}
+	decoded, err := jsonColumnToAny(v)
+	if err != nil {
+		return nil, err
+	}
+	stmt, ok := decoded.(map[string]any)
+	if !ok {
+		return nil, nil
+	}
+	predicate, ok := stmt["predicate"].(map[string]any)
+	if !ok {
+		return nil, nil
+	}
+	buildDef, ok := predicate["buildDefinition"].(map[string]any)
+	if !ok {
+		return nil, nil
+	}
+	deps, ok := buildDef["resolvedDependencies"].([]any)
+	if !ok || len(deps) == 0 {
+		return nil, nil
+	}
+	var out []string
+	for _, d := range deps {
+		dep, ok := d.(map[string]any)
+		if !ok {
+			continue
+		}
+		uri, ok := dep["uri"].(string)
+		if !ok || uri == "" {
+			continue
+		}
+		out = append(out, strings.TrimPrefix(uri, "model:"))
+	}
+	return out, nil
 }
 
 // statementToMap normalizes the driver's representation of the JSON column:

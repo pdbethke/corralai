@@ -1,0 +1,58 @@
+---
+title: Records (default landing view)
+description: The team-wide rollup of certified builds, and the honest boundary between the brain's own check and independent verification.
+---
+
+Records is the cockpit's default landing view — the accountability front
+door. Where the corral canvas shows a mission *in flight*, Records shows
+what actually got **certified**: every `corral certify` build_record the
+brain has stored, team-wide, newest first.
+
+## The table
+
+The list is `GET /api/builds`, one row per certified build:
+
+- **repo** and **commit** (short SHA — open the row for the full commit
+  message)
+- **actor** and **produced by** (the models/agents `corral certify` recorded
+  as having produced the build)
+- a **pass/fail pill**
+- **commit signed** (a git `verify-commit` signature was present and valid)
+- **anchored** (the build's attestation was submitted to, and included in, a
+  public Rekor transparency log)
+
+Filter by repo, actor, or status (pass/fail/all) with the controls above the
+table — each re-queries `/api/builds` with the matching query params, so
+filtering a large fleet-wide history stays a server-side query, not a
+client-side scan.
+
+## The detail panel
+
+Clicking a row fetches `GET /api/builds/{id}` and opens the chain line:
+
+```
+commit abc1234 signed by alice ✓ · check passed ✓ · publicly witnessed ✓
+```
+
+Any missing link is greyed out honestly rather than hidden — an unsigned
+commit, a failing check, or a record that was never anchored to a public
+transparency log are all real states a build can be in, and the panel says
+which one this build is in plainly.
+
+Below the chain line: the **four checks** `certverify.VerifyRecord` runs
+(signature, ledger, subject, rekor), each shown green or red with its own
+detail text; the commit's message, author, and date; and the attribution
+list (which models/agents `corral certify` recorded as producing the
+build).
+
+## Verify it yourself
+
+The detail panel's checks are the brain re-running its own verification
+against its own stored record — a convenience for the person looking at the
+dashboard, not a substitute for independent verification. The panel says so
+directly, and always shows the exact `corral certify verify` command (plus
+a link to the published signing key at `/api/certify/pubkey`) a third party
+would run offline, against the published key and the public Rekor log, to
+verify the build without trusting this dashboard's word for it. **The
+dashboard is a self-view; the CLI against the published key is the
+trustless path.**

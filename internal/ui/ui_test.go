@@ -1395,3 +1395,43 @@ func TestPruneEndpointRefusesWithoutOperatorAuth(t *testing.T) {
 		t.Fatalf("refused prune must not have deleted anything: tasks=%d findings=%d executions=%d", tasks, findings, execs)
 	}
 }
+
+// TestRootIsHeadlessDaemonIdentity proves the daemon no longer serves the SPA
+// at "/" (Task 3 of the daemon/client refactor): "/" and any unmatched path
+// return a plain-text identity string, not the embedded index.html. The SPA
+// is reached only via the signed /console/* bundle (Task 1), rendered by a
+// client that hosts it locally (Task 2) — corral-desktop included (no more
+// daemon-served browser app).
+func TestRootIsHeadlessDaemonIdentity(t *testing.T) {
+	h := Handler(Deps{MemOwners: map[string]bool{}})
+
+	for _, path := range []string{"/", "/some/arbitrary/non-route/path"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s: status = %d, want 200", path, rec.Code)
+		}
+		ct := rec.Header().Get("Content-Type")
+		if !strings.HasPrefix(ct, "text/plain") {
+			t.Errorf("GET %s: Content-Type = %q, want text/plain prefix", path, ct)
+		}
+		body := rec.Body.String()
+		if !strings.Contains(body, "daemon") {
+			t.Errorf("GET %s: body %q must contain %q", path, body, "daemon")
+		}
+		if strings.Contains(body, "<!DOCTYPE html>") || strings.Contains(body, "<html") {
+			t.Errorf("GET %s: body must not contain the SPA's HTML: %q", path, body)
+		}
+	}
+
+	// /console/manifest.json must still be reachable and JSON — the bundle
+	// resource survives the "/" flip untouched.
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/console/manifest.json", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /console/manifest.json: status = %d, want 200", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Errorf("GET /console/manifest.json: Content-Type = %q, want application/json prefix", ct)
+	}
+}

@@ -16,6 +16,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/pdbethke/corralai/internal/console"
 )
 
 type Config struct {
@@ -249,7 +251,7 @@ const configHTML = `
                 <input type="password" id="token" name="token" placeholder="Enter authorization token" value="{{.Token}}">
             </div>
             
-            <button type="submit">Connect Swarm</button>
+            <button type="submit">Connect</button>
         </form>
         
         <div class="footer">
@@ -323,7 +325,7 @@ func main() {
 		w.Header().Set("Content-Type", "text/html")
 		_, _ = io.WriteString(w, `
 			<div style="background:#09090b;color:#fafafa;font-family:sans-serif;height:100vh;display:flex;justify-content:center;align-items:center;flex-direction:column;">
-				<h2>Connecting to Swarm...</h2>
+				<h2>Connecting…</h2>
 				<p style="color:#a1a1aa;">The application is launching. You can close this tab.</p>
 			</div>
 		`)
@@ -348,20 +350,37 @@ func main() {
 	_ = cmd.Wait()
 }
 
-func launchApp(browser, targetURL, token string) {
-	// If a token is configured, we pass it via cookie or URL parameter if supported,
-	// or we can append it as a fragment/query parameter so the UI page parses it
-	appURL := targetURL
-	if token != "" {
-		if strings.Contains(appURL, "?") {
-			appURL += "&token=" + token
-		} else {
-			appURL += "?token=" + token
-		}
+// desktopBrowserURL is the address the browser is pointed at: always the
+// LOCAL console host, never the daemon, and never carrying the bearer token.
+func desktopBrowserURL(localAddr string) string { return "http://" + localAddr }
+
+// launchApp renders the daemon's UI the same way corral-admin does: it runs
+// the thin bundle-host console.New on a local loopback listener (mirrors
+// cmd/corral-admin/main.go's cmdUI) and points the browser at THAT local
+// address — never at the daemon directly. The bearer token stays server-side
+// inside the console process; it never enters a URL, browser history, or a
+// daemon access log (the defect this replaces: the old launchApp appended
+// "?token=" + token to a daemon URL).
+func launchApp(browser, brainURL, token string) {
+	h, err := console.New(brainURL, token, false) // read-write: desktop action controls work
+	if err != nil {
+		// Fail loudly: an unreachable daemon or an unsigned/forged bundle is
+		// exactly what should stop desktop, not silently degrade.
+		log.Fatalf("Failed to start local console for %s: %v", brainURL, err)
 	}
 
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		log.Fatalf("Failed to bind local console listener: %v", err)
+	}
+	srv := &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second}
+	go func() {
+		_ = srv.Serve(listener)
+	}()
+
+	localURL := desktopBrowserURL(listener.Addr().String())
 	// #nosec G204
-	cmd := exec.Command(browser, fmt.Sprintf("--app=%s", appURL))
+	cmd := exec.Command(browser, fmt.Sprintf("--app=%s", localURL))
 	if err := cmd.Start(); err != nil {
 		log.Fatalf("Failed to launch application window: %v", err)
 	}

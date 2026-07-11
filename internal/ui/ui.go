@@ -191,7 +191,15 @@ func Handler(d Deps) http.Handler {
 	s := &Server{coord: d.Coord, mem: d.Mem, gw: d.Gateway, bus: d.Bus, memOwners: d.MemOwners, roles: d.Roles, queue: d.Queue, missions: d.Missions, execs: d.Executions, acts: d.Activity, hosts: d.Hosts, health: d.Health, narrator: d.Narrator, tel: d.Telemetry, oracle: d.Oracle, roleModels: d.RoleModels, staffing: d.Staffing, learn: d.Learn, promote: d.Promote, reject: d.Reject, historyFn: d.History, historyDetailFn: d.HistoryDetail, replayFn: d.Replay, artifacts: d.Artifacts, taskArtifacts: d.TaskArtifacts, buildStore: d.BuildStore, certifyPub: d.CertifyPub, witness: d.Witness}
 	mux := http.NewServeMux()
 	sub, _ := fs.Sub(webFS, "web")
-	mux.Handle("/", http.FileServer(http.FS(sub)))
+	// "/" no longer serves the SPA (Task 3 of the daemon/client refactor):
+	// the daemon is headless. The SPA is reached only via the signed
+	// /console/* bundle (Task 1), hosted locally by a client (Task 2). This
+	// catch-all just identifies the daemon for anyone who lands on it
+	// directly, for any path the more-specific routes below don't claim.
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		fmt.Fprint(w, "corral daemon — headless. Connect a client: corral-observe (read-only), corral-admin, or corral-desktop.")
+	})
 	s.consoleSub = sub
 
 	// /console/*: the versioned, signed bundle resource thin clients fetch

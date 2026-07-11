@@ -95,14 +95,79 @@ architecture instead of a script.
   `sync-site-assets.sh` drift-gate remains the DRY guarantee there. (Runtime DRY via the daemon
   bundle; build-time DRY via the drift gate. One source of truth either way.)
 
-### 4. Trust/security seam
-- The bundle is served only to **authenticated** clients (bearer), so the daemon is not an open
-  web server handing HTML to anyone; the browser only ever touches the operator's `localhost`.
-- No new auth surface on the daemon — the bundle endpoints validate the same bearer JWT as
-  `/api/*`. Read-only `corral-observe` still refuses non-GET at the client, so the read-only
-  guarantee is unchanged.
-- The daemon no longer renders for a browser → no XSS/session surface on the daemon itself; the
-  presentation host (client) owns that, on the operator's own machine.
+### 4. Trust/security seam — the bundle is SIGNED; the daemon is not trusted to vouch for it
+The client executes the bundle's JS in the operator's browser with the bearer token in the loop,
+so a poisoned bundle = arbitrary code with API access. A per-asset sha256 in the manifest is only
+**integrity-in-transit from a trusted source** — it does NOT stop a compromised or **forged
+daemon** (open-source: anyone can run one) from serving a *consistent* malicious manifest+bundle.
+Two independent layers close this, both anchored **externally** to the daemon:
+
+**(a) Bundle authenticity — release-signed, client-pinned.** The **corralai release process**
+signs the manifest (which covers every asset via its hash) with the **corralai release key**. The
+**client pins the corralai release *public* key** (baked into the client binary at build) and
+**verifies the manifest signature BEFORE rendering** — a poisoned/forged bundle isn't validly
+signed → refused. The anchor is the *release* key, NOT the daemon's own key (daemon-signs would be
+the circular-anchor bug). A running daemon only *serves* the pre-signed bundle it was built with;
+it cannot mint a valid one. Being open-source is a *feature* (Kerckhoffs): security rests on the
+signing key, not code secrecy.
+- **v1:** a detached Ed25519 signature over the manifest; the client pins the corralai release
+  public key (build-time constant, overridable via config for private forks/dev keys).
+- **Hardening (dogfooding — reuse `internal/transparency`):** sign the bundle keyless via
+  Sigstore/cosign + anchor to **Rekor**, verified against the TUF-rooted corralai identity — i.e.
+  the UI bundle becomes an artifact `corral certify` itself would produce, verified the same way
+  `corral certify verify` verifies a build. The accountability tool secures its own distribution
+  with its own accountability.
+
+**(b) Daemon authenticity — the client verifies *which* daemon it talks to.** A forged daemon
+serving the *genuine* signed UI but a malicious *backend* is a separate threat. The client verifies
+the daemon's identity — TLS cert pinning, and/or the brain's published identity key (`internal/attest`
+Ed25519), and/or the operator-configured OIDC issuer — so a client only talks to a daemon the
+operator explicitly trusts.
+
+**(c) Hijacked daemon (the honest hard limit).** If the *legitimate* daemon is compromised in
+place, the client — correctly identifying and trusting it — connects, sends its bearer, and reveals
+its IP to the attacker now controlling it. **No client can hide from a server it must talk to; no
+crypto fixes a compromised trusted server.** We do NOT claim otherwise. What the design guarantees
+instead: (1) **the accountability MISSION survives** — records are Rekor-anchored and the client
+verifies them **against the public log, not the daemon**, so a hijacked daemon **cannot forge a
+record a client will accept** nor rewrite witnessed history; its worst is *denial*, not *forgery*
+(trust the log, not the server — the whole thesis). (2) **Scoped, short-lived credentials** cap the
+blast radius (`corral-observe` read-only; `cdt_` delegation tokens TTL-bound + identity-scoped) — a
+harvested token is low-value and expiring. (3) **Identity pinning detects a key/cert swap.** (4) The
+**headless split shrinks the hijack surface** — a daemon serving no webapp, no session, no rendered
+page is a smaller target than one that does. (5) IP/connection metadata exposure is inherent to
+client-server and is a network-layer concern (VPN/Tor), outside corral's remit — stated, not hidden.
+
+**Baseline (unchanged):** the bundle endpoints require the same bearer as `/api/*` (no new auth
+surface); the browser only ever touches the operator's `localhost`; read-only `corral-observe`
+still refuses non-GET at the client; the daemon renders nothing → no XSS/session surface on the
+daemon itself.
+
+**(d) v1 hardening requirements — mapped to published standards.** The client/daemon MUST, in v1:
+- **Rollback protection** — the client rejects a bundle whose version is *older* than the last it
+  accepted from that daemon (anti-downgrade; a compromised daemon can't serve a known-vulnerable
+  old-but-validly-signed bundle). *[TUF]*
+- **Console CSRF / confused-deputy defense** — the local console enforces an **`Origin`/`Referer`
+  allowlist** (its own localhost origin only) AND a **per-session secret** (a random value the
+  served bundle carries and a drive-by site cannot obtain) on every proxied `/api` request, so a
+  hostile site the operator visits can't ride the injected bearer via `fetch('http://127.0.0.1:…')`.
+  *[OWASP ASVS; Top 10 CSRF]*
+- **Serve-time integrity** — re-check each cached asset's sha256 at *serve* time (not only fetch);
+  cache dir is `0700` (TOCTOU defense).
+- **TLS enforced** — client→daemon is HTTPS with full cert verification (no `InsecureSkipVerify`);
+  daemon-identity (§4b) rides on the verified cert.
+- **Token scoping (defense in depth)** — read-only is BOTH the client gate AND a read-only-scoped
+  token; a gate bug alone must not grant writes. The token is bound to its daemon (never sent to
+  another).
+- **No token to the browser** — the bearer stays server-side in the client; a test asserts it never
+  crosses into the rendered bundle. *(invariant)*
+- **Bundle size cap** — the client caps total bundle bytes (DoS defense vs. a malicious daemon).
+- **`--allow-unsigned-console`** is a loud, warned, dev-only escape hatch, absent from release builds.
+
+**Standards this design tracks:** SLSA (release/bundle build provenance), Sigstore + Rekor (keyless,
+publicly-witnessed signing — the hardening), TUF (key rotation + rollback), OWASP ASVS (the console),
+NIST SSDF (the dev process). See the companion spec *own-supply-chain hardening* for how corralai
+holds *its own* releases to these + publishes the evidence.
 
 ## Migration — incremental, cockpit never breaks
 1. **Add the bundle endpoints** (`/console/manifest.json`, `/console/asset/*`) to the brain,
@@ -115,8 +180,12 @@ architecture instead of a script.
 Each step is independently shippable and testable; the cockpit works throughout.
 
 ## Out of scope (later)
-- **Signing/verifying the bundle** (so a client can prove the UI it fetched is the daemon's
-  genuine console) — a nice future tie-in to the certify machinery; not v1.
+- **Rekor-anchored bundle signing (the dogfooding hardening)** — v1 signs the manifest with a
+  detached Ed25519 signature verified against a pinned corralai release key; the keyless
+  Sigstore/cosign + Rekor-anchored version (reusing `internal/transparency`, verified like `corral
+  certify verify`) is the follow-up.
+- **Full daemon-identity pinning UX** — v1 relies on TLS + the operator configuring a trusted
+  daemon; first-class cert/identity-key pinning + trust-on-first-use is a follow-up.
 - **Offline client cache** as a first-class feature (v1 caches by version but assumes the daemon
   is reachable, which a client needs anyway).
 - **A native (non-browser) desktop shell** — v1 `corral-desktop` stays an app-mode browser.

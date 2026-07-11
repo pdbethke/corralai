@@ -72,6 +72,22 @@ type Server struct {
 	buildStore      *buildstore.Store
 	certifyPub      ed25519.PublicKey
 	witness         transparency.Witness
+
+	// consoleSub is the same fs.Sub(webFS,"web") the FileServer at "/"
+	// serves from — the /console/asset/{path...} endpoint reads from this
+	// SAME tree so it can never drift from what "/" serves.
+	consoleSub fs.FS
+	// consoleManifestJSON is the cached JSON bytes of this Server's
+	// BundleManifest, built ONCE at Handler construction (never
+	// recomputed per-request — see buildManifest's doc comment).
+	consoleManifestJSON []byte
+	// consoleSig is the detached signature bytes /console/manifest.sig
+	// serves, copied from the package-level embedded consoleManifestSig at
+	// Handler construction. Kept as a Server field (rather than reading
+	// the package var directly in the handler) so a Server built without
+	// Handler() — e.g. a zero-value &Server{} in a test — can exercise the
+	// "no signature configured" 404 path without mutating global state.
+	consoleSig []byte
 }
 
 // Handler returns the UI routes: / (the page), /api/me (the viewer's identity +
@@ -164,6 +180,11 @@ type Deps struct {
 	// fails with "no transparency witness configured" for any anchored
 	// record (an unanchored record never needs it).
 	Witness transparency.Witness
+
+	// Version is the daemon's own build version (cmd/corral's `version`
+	// var). Stamped into the /console/manifest.json bundle manifest — see
+	// console_bundle.go. Empty => the manifest's Version field is "".
+	Version string
 }
 
 func Handler(d Deps) http.Handler {
@@ -171,6 +192,23 @@ func Handler(d Deps) http.Handler {
 	mux := http.NewServeMux()
 	sub, _ := fs.Sub(webFS, "web")
 	mux.Handle("/", http.FileServer(http.FS(sub)))
+	s.consoleSub = sub
+
+	// /console/*: the versioned, signed bundle resource thin clients fetch
+	// instead of "/" (Task 1 of the daemon/client refactor — additive,
+	// "/" above is untouched). Built ONCE here and cached on s, not
+	// recomputed per request.
+	if manifest, err := buildManifest(sub, d.Version); err != nil {
+		log.Printf("console bundle: buildManifest: %v", err)
+	} else if b, err := json.Marshal(manifest); err != nil {
+		log.Printf("console bundle: marshal manifest: %v", err)
+	} else {
+		s.consoleManifestJSON = b
+	}
+	s.consoleSig = consoleManifestSig
+	mux.HandleFunc("/console/manifest.json", s.consoleManifestHandler)
+	mux.HandleFunc("/console/manifest.sig", s.consoleManifestSigHandler)
+	mux.HandleFunc("GET /console/asset/{path...}", s.consoleAsset)
 	mux.HandleFunc("/api/me", s.me)
 	mux.HandleFunc("/api/state", s.state)
 	mux.HandleFunc("/events", s.events)

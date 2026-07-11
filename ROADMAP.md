@@ -74,6 +74,17 @@ Go binary.**
   trust anchor. Central-trust v1 (a holder of the published key can confirm the brain's
   records honestly bind what ran); the trustless tier is next. Adversarially reviewed —
   the review caught and closed a silent-pass and a circular-trust-anchor bug before merge.
+- **Headless daemon + thin rendering clients.** The brain emits no UI. It hosts the
+  console as a versioned, **release-signed** `/console` bundle; each client
+  (`corral-admin`, read-only `corral-observe`, `corral-desktop`) fetches that bundle,
+  **verifies its signature against a pinned corralai key** before rendering, caches it
+  by version, serves it locally, and reverse-proxies only `/api|/events|/mcp` to the
+  daemon with a bearer that **never crosses to the browser**. One UI, many purpose-built
+  windows into one daemon. The proxy is guarded by a loopback host-gate (DNS-rebinding),
+  a same-origin check, and a per-session `SameSite=Strict` secret cookie. Adversarially
+  reviewed end-to-end — the whole-branch review caught that the real SPA's
+  header-incapable transports (SSE/WebSocket) couldn't satisfy a header-based gate; the
+  fix (the session cookie) was then verified in a live browser.
 
 ## Now — make it operable and unbreakable
 - **The front door.** The Mission Composer (above) is the first cut. Still ahead: an

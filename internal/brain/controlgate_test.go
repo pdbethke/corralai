@@ -66,18 +66,20 @@ func seedRunner(t *testing.T, reader fileReader, cert controlgate.Certifier, pos
 		t.Fatal(err)
 	}
 	r := &controlRunner{
-		byRepo:   map[string]string{"o/r": "owner@x"},
-		Base:     map[string]string{"go.mod": "module control\ngo 1.26\n"},
-		TestCmd:  []string{"go", "test", "./"},
-		Checkout: fakeCheckout{},
-		Reader:   reader,
-		Cert:     cert,
-		Status:   poster,
-		Spec:     spec,
-		Jail:     fakeJail{},
-		RunStore: runStore,
-		Record:   func(_, sha string) string { return "/rec/" + sha },
-		Now:      func() time.Time { return time.Unix(1_700_000_000, 0).UTC() },
+		byRepo:          map[string]string{"o/r": "owner@x"},
+		Base:            map[string]string{"go.mod": "module control\ngo 1.26\n"},
+		TestCmd:         []string{"go", "test", "./"},
+		Checkout:        fakeCheckout{},
+		Reader:          reader,
+		Cert:            cert,
+		Status:          poster,
+		Spec:            spec,
+		Jail:            fakeJail{},
+		RunStore:        runStore,
+		Record:          func(_, sha string) string { return "/rec/" + sha },
+		Now:             func() time.Time { return time.Unix(1_700_000_000, 0).UTC() },
+		attempts:        make(map[string]int),
+		MaxCertAttempts: controlCertMaxAttempts,
 	}
 	return r, spec
 }
@@ -160,6 +162,39 @@ func TestControlRunner_CertifyError_NoPost(t *testing.T) {
 		if c.state == "success" {
 			t.Fatal("must not post success when signing failed (no unsigned green)")
 		}
+	}
+}
+
+func TestControlRunner_CertifyError_BoundedRetry(t *testing.T) {
+	poster := &fakePoster{}
+	reader := fakeReader{files: map[string]string{"a.go": "package control\n// ok"}}
+	r, spec := seedRunner(t, reader, fakeCert{err: errors.New("sign failed")}, poster)
+	defer spec.Close()
+	r.MaxCertAttempts = 2
+	vet(t, spec, "owner@x", "g1", "a.go", "package control\n// t", "a.go")
+
+	// Attempt 1 (below cap): transient — returns err to signal retry, posts no
+	// terminal status, and does NOT record the SHA (so the poller retries it).
+	if err := r.Run(context.Background(), "https://github.com/o/r", policy(), pr()); err == nil {
+		t.Fatal("attempt 1 (below cap) must return an error to signal retry")
+	}
+	for _, c := range poster.calls {
+		if c.state == "error" || c.state == "success" {
+			t.Fatalf("attempt 1 must stay pending (no terminal status), got %+v", c)
+		}
+	}
+	if _, ok, _ := r.RunStore.GetBySHA("o/r", "abc"); ok {
+		t.Fatal("attempt 1 must NOT record the SHA (retry next poll)")
+	}
+
+	// Attempt 2 (at cap): a PERSISTENT signing failure is terminal — post `error`
+	// and record the SHA so the poller stops re-checking-out + re-running the jail.
+	_ = r.Run(context.Background(), "https://github.com/o/r", policy(), pr())
+	if got := poster.last(); got.state != "error" {
+		t.Fatalf("attempt 2 (at cap) must post a terminal error, got %+v", got)
+	}
+	if _, ok, _ := r.RunStore.GetBySHA("o/r", "abc"); !ok {
+		t.Fatal("attempt 2 (at cap) must record the SHA so the poller stops re-running")
 	}
 }
 

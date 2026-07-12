@@ -20,7 +20,8 @@ import (
 // uses — never a back door around vetting.
 func runControl(args []string, out io.Writer) error {
 	if len(args) == 0 || args[0] != "seed" {
-		return fmt.Errorf("usage: corral control seed --spec-db <path> --owner <principal> --goal <id> --target <repo-path> --code-path <flat> --test-path <flat> --test-file <path> [--kill-rate <float>]")
+		return fmt.Errorf("usage: corral control seed --spec-db <path> --owner <principal> --goal <id> --target <repo-path> --code-path <flat> --test-path <flat> --test-file <path> [--kill-rate <float>]\n" +
+			"note: the brain must be stopped (it holds the control store open); or author via the stage_control / promote_control MCP tools while the brain runs")
 	}
 	fs := flag.NewFlagSet("control seed", flag.ContinueOnError)
 	specDB := fs.String("spec-db", "", "controlspec DuckDB path")
@@ -49,7 +50,7 @@ func runControl(args []string, out io.Writer) error {
 	}
 	s, err := controlspec.OpenStore(*specDB)
 	if err != nil {
-		return err
+		return fmt.Errorf("open control store (is the brain running? it holds this DB open — stop it, or use the stage_control MCP tool): %w", err)
 	}
 	defer s.Close()
 	now := time.Now().UTC()

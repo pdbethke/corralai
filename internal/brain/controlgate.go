@@ -230,6 +230,11 @@ func StartControlGate(ctx context.Context, opts Options) (*gate.Store, *controls
 	}
 	poller := &gate.Poller{Policies: policies, List: opts.Repo, Store: runStore, Run: runner.Run, Interval: interval}
 	log.Printf("control-gate: ENABLED — %d polic(ies), polling every %s", len(policies), interval)
+	owners := make([]string, 0, len(opts.ControlPolicies))
+	for _, cp := range opts.ControlPolicies {
+		owners = append(owners, cp.Owner)
+	}
+	log.Printf("control-gate: owner(s) %v — these MUST match the authenticated principals that author controls", owners)
 	go poller.Loop(ctx)
 	return runStore, spec, nil
 }

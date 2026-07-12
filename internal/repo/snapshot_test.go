@@ -127,6 +127,40 @@ func TestHeadSHAUnbornBranch(t *testing.T) {
 	}
 }
 
+// TestApplyFiles_RefusesSymlinkEscape covers the write-side symlink-traversal fix
+// (mirrors ReadFile's os.Root read confinement, read.go): a hostile target repo can
+// commit a symlink (cfg -> /root/.ssh); repo_push with Path "cfg/authorized_keys"
+// must not write outside the working copy through it.
+func TestApplyFiles_RefusesSymlinkEscape(t *testing.T) {
+	dir := t.TempDir()
+	outside := t.TempDir()
+	victim := filepath.Join(outside, "secret")
+	if err := os.WriteFile(victim, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// a committed symlink inside the repo pointing OUTSIDE (as git would check out)
+	if err := os.Symlink(outside, filepath.Join(dir, "cfg")); err != nil {
+		t.Fatal(err)
+	}
+
+	e := &Engine{}
+	applied, _ := e.ApplyFiles(dir, []FileWrite{{Path: "cfg/secret", Content: "PWNED"}})
+	if len(applied) != 0 {
+		t.Fatalf("symlink-escape write must be refused, got applied=%v", applied)
+	}
+	if b, _ := os.ReadFile(victim); string(b) != "original" {
+		t.Fatal("SECURITY: victim file overwritten through a symlink (arbitrary write)")
+	}
+	// a normal write still works and lands INSIDE dir
+	applied2, err := e.ApplyFiles(dir, []FileWrite{{Path: "sub/ok.txt", Content: "hi"}})
+	if err != nil || len(applied2) != 1 {
+		t.Fatalf("normal write should succeed: applied=%v err=%v", applied2, err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "sub", "ok.txt")); string(b) != "hi" {
+		t.Fatalf("normal write content wrong: %q", b)
+	}
+}
+
 // untarGz is a test-only helper that expands a gzip'd tar into dir.
 func untarGz(dir string, data []byte) error {
 	return extractTarGz(dir, data) // exported-for-test? no — same package, use unexported helper

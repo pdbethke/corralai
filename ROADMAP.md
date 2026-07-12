@@ -98,6 +98,21 @@ Go binary.**
   Honest about scope: the **posture verifier** (proving branch protection can't be silently
   disabled), the **GitHub App check-run** (an un-forgeable green), and **self-hosted
   GitLab/Gitea** (the forge a bank actually runs) are the next cut, not this one.
+- **The control gate — the flipside of agentic development is agentic testing.** The merge
+  gate above runs the *repo's own* declared check; the control gate runs the **control
+  owner's independently-vetted tests** against each PR head — the person accountable for code
+  they didn't write (a CISO in a bank, an eng lead or QA/platform lead elsewhere) sets the
+  bar, and the code author can't grade their own homework. Per open PR the brain checks out
+  head, runs the owner's vetted tests in the bwrap jail, signs the verdict, and posts a
+  **distinct `corral/control-gate` required check** — fail-closed (green only on a signed
+  all-pass; a missing target, a failing control, or zero vetted controls → red). "Control
+  owner" is the industry-standard GRC term (NIST 800-53 / ISO 27001 / SOC 2), and it maps
+  corral onto the recognized **owner → operator → assessor** separation of duties: *a judge
+  may not certify herself.* Wired v1 (`CORRALAI_CONTROL_GATE`, off by default), Go-only,
+  **run+post** — the tests are seeded by an operator via `corral control seed` standing in for
+  the owner. Next: the owner's authoring/vetting surface (goal → agent-drafted candidate →
+  mutation-adequacy score → human approval), then the first live-gated PR — and only then the
+  field note ships (don't advertise unbuilt).
 
 ## Now — make it operable and unbreakable
 - **The front door.** The Mission Composer (above) is the first cut. Still ahead: an

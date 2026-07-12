@@ -98,3 +98,29 @@ func TestListVetted(t *testing.T) {
 		t.Fatalf("vetted test leaked across owners: %+v", o)
 	}
 }
+
+func TestRecipeRoundTrip(t *testing.T) {
+	s, _ := OpenStore(filepath.Join(t.TempDir(), "cs.db"))
+	defer s.Close()
+	now := time.Unix(1_700_000_000, 0).UTC()
+	gt := GateTest{Owner: "ciso@bankz", Goal: "g1", Target: "internal/auth/login.go",
+		Test: "package control\n// t", KillRate: 1,
+		CodePath: "login.go", TestPath: "login_control_test.go", CreatedTS: now}
+	if err := s.SaveCandidate(gt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Promote("ciso@bankz", "g1", "internal/auth/login.go", now); err != nil {
+		t.Fatal(err)
+	}
+	v, err := s.ListVetted("ciso@bankz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(v) != 1 || v[0].CodePath != "login.go" || v[0].TestPath != "login_control_test.go" {
+		t.Fatalf("recipe did not round-trip through ListVetted: %+v", v)
+	}
+	got, ok, _ := s.GetVetted("ciso@bankz", "g1", "internal/auth/login.go")
+	if !ok || got.CodePath != "login.go" || got.TestPath != "login_control_test.go" {
+		t.Fatalf("recipe wrong from GetVetted: %+v", got)
+	}
+}

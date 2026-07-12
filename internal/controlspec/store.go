@@ -208,3 +208,41 @@ func (s *Store) ListPending(owner string) ([]GateTest, error) {
 	}
 	return pending, nil
 }
+
+// ListVetted returns all CISO-approved gate tests owned by owner, ordered by
+// (goal, target) — the counterpart to ListPending, and the set the running
+// gate tier executes against head code. A different owner's tests are never
+// included — the owner scoping this store exists to provide.
+func (s *Store) ListVetted(owner string) ([]GateTest, error) {
+	rows, err := s.db.Query(
+		`SELECT goal, target, test, kill_rate, survived, discarded, vetted, created_ts, vetted_ts, verdicts
+		 FROM gate_tests WHERE owner = ? AND vetted = TRUE ORDER BY goal, target`,
+		owner)
+	if err != nil {
+		return nil, fmt.Errorf("controlspec: list vetted: %w", err)
+	}
+	defer rows.Close()
+
+	var vetted []GateTest
+	for rows.Next() {
+		gt := GateTest{Owner: owner}
+		var survived, discarded string
+		var createdTS, vettedTS sql.NullTime
+		if err := rows.Scan(&gt.Goal, &gt.Target, &gt.Test, &gt.KillRate, &survived, &discarded, &gt.Vetted, &createdTS, &vettedTS, &gt.VerdictsJSON); err != nil {
+			return nil, fmt.Errorf("controlspec: list vetted: scan: %w", err)
+		}
+		if err := json.Unmarshal([]byte(survived), &gt.Survived); err != nil {
+			return nil, fmt.Errorf("controlspec: list vetted: unmarshal survived: %w", err)
+		}
+		if err := json.Unmarshal([]byte(discarded), &gt.Discarded); err != nil {
+			return nil, fmt.Errorf("controlspec: list vetted: unmarshal discarded: %w", err)
+		}
+		gt.CreatedTS = createdTS.Time.UTC()
+		gt.VettedTS = vettedTS.Time.UTC()
+		vetted = append(vetted, gt)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("controlspec: list vetted: %w", err)
+	}
+	return vetted, nil
+}

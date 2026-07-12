@@ -76,3 +76,25 @@ func TestGateTestsPromoteReject(t *testing.T) {
 		t.Fatal("rejected test must be gone")
 	}
 }
+
+func TestListVetted(t *testing.T) {
+	s, _ := OpenStore(filepath.Join(t.TempDir(), "cs.db"))
+	defer s.Close()
+	now := time.Unix(1_700_000_000, 0).UTC()
+	_ = s.SaveCandidate(GateTest{Owner: "ciso@bankz", Goal: "g1", Target: "t1", Test: "x", KillRate: 1, CreatedTS: now})
+	_ = s.SaveCandidate(GateTest{Owner: "ciso@bankz", Goal: "g2", Target: "t2", Test: "y", KillRate: 1, CreatedTS: now})
+	// vet only g1
+	_, _ = s.Promote("ciso@bankz", "g1", "t1", now)
+
+	v, err := s.ListVetted("ciso@bankz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(v) != 1 || v[0].Goal != "g1" || !v[0].Vetted {
+		t.Fatalf("ListVetted should return only the promoted g1: %+v", v)
+	}
+	// owner isolation
+	if o, _ := s.ListVetted("dev@bankz"); len(o) != 0 {
+		t.Fatalf("vetted test leaked across owners: %+v", o)
+	}
+}

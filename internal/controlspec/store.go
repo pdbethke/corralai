@@ -223,6 +223,22 @@ func (s *Store) GetVetted(owner, goal, target string) (GateTest, bool, error) {
 	return gt, true, nil
 }
 
+// GetCandidate returns the UNVETTED candidate for (owner, goal, target) —
+// the vetted=FALSE twin of GetVetted, for the owner-review surface.
+func (s *Store) GetCandidate(owner, goal, target string) (GateTest, bool, error) {
+	row := s.db.QueryRow(
+		`SELECT `+gateTestCols+` FROM gate_tests WHERE owner = ? AND goal = ? AND target = ? AND vetted = FALSE`,
+		owner, goal, target)
+	gt, err := scanGateTest(row, owner)
+	if err == sql.ErrNoRows {
+		return GateTest{}, false, nil
+	}
+	if err != nil {
+		return GateTest{}, false, fmt.Errorf("controlspec: get candidate: %w", err)
+	}
+	return gt, true, nil
+}
+
 // ListPending returns all unvetted candidate gate tests owned by owner,
 // ordered by (goal, target). A different owner's candidates are never
 // included — the owner scoping this store exists to provide.

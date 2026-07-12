@@ -70,19 +70,16 @@ func stageControl(ctx context.Context, store *controlspec.Store, stage stager,
 }
 
 // getControl returns one PENDING (unvetted) candidate by (goal,target) for the
-// owner to read as code. ListPending returns full rows (test + survivors +
-// verdicts); GetVetted can't serve unvetted rows, so we filter ListPending.
+// owner to read as code — the test source, kill rate, survivors, and triage.
 func getControl(store *controlspec.Store, owner, goal, target string) (controlspec.GateTest, error) {
-	pend, err := store.ListPending(owner)
+	gt, ok, err := store.GetCandidate(owner, goal, target)
 	if err != nil {
 		return controlspec.GateTest{}, err
 	}
-	for _, gt := range pend {
-		if gt.Goal == goal && gt.Target == target {
-			return gt, nil
-		}
+	if !ok {
+		return controlspec.GateTest{}, fmt.Errorf("controltools: no pending candidate %s@%s", goal, target)
 	}
-	return controlspec.GateTest{}, fmt.Errorf("controltools: no pending candidate %s@%s", goal, target)
+	return gt, nil
 }
 
 type stageControlIn struct {

@@ -689,12 +689,15 @@ func (e *Engine) commitDonePhases(m *Mission) {
 // finding (a detected secret) was seen, in which case the mission is parked in
 // egressBlocked and push/PR is withheld — loud (logged) and blocking, per the
 // egress-scan gate contract. Advisory findings (dep vulns, license issues) are
-// filed but never withhold the push.
+// filed but never withhold the push. If the changed-file diff itself cannot be
+// computed, the gate fails closed (returns true / blocked) rather than letting
+// an unscanned push through.
 func (e *Engine) runEgressGate(m *Mission) bool {
 	files, err := e.Repo.ChangedFilesRange(context.Background(), e.workdir(m), m.Base)
 	if err != nil {
-		log.Printf("mission %d: egress: changed-files: %v (scan skipped, not blocked)", m.ID, err)
-		return false
+		log.Printf("mission %d: egress: changed-files failed: %v — BLOCKING push (fail-closed: cannot scan what we can't diff)", m.ID, err)
+		e.egressBlocked[m.ID] = true
+		return true
 	}
 	if len(files) == 0 {
 		return false

@@ -70,6 +70,12 @@ type GateTest struct {
 	// interprets it — it's persisted and returned exactly as given, and the
 	// control-owner surface decodes it with testgen.Verdict. Empty string when unset.
 	VerdictsJSON string
+	// CodePath/TestPath are the workspace recipe: where the target's head
+	// content and the vetted test land inside the minimal jail workspace when
+	// the gate re-runs this test. Target is the REAL repo-relative path to
+	// read head content from; CodePath is the flat filename the test expects.
+	CodePath string
+	TestPath string
 }
 
 // Bundle is a named, versioned set of Requirements from a published

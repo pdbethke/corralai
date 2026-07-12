@@ -14,6 +14,8 @@ Usage:
   corral                          serve /mcp/ + /healthz on $CORRALAI_ADDR
   corral secret set|get|list|rm   manage provider keys + tokens in the secure keystore
                                   (env → OS keyring → age-encrypted file; set reads stdin, never argv)
+  corral control seed [flags]     seed one vetted control test into the control-gate store
+                                  (--spec-db --owner --goal --target --code-path --test-path --test-file)
   corral certify --brain <url> [flags] -- <command>...
                                   run <command>, sign + record the result as a tamper-evident
                                   build attestation on the brain (report_build); exits with
@@ -88,4 +90,18 @@ CORRALAI_BRAIN_TOKEN       `corral certify`'s bearer token to authenticate to a 
                            from CORRALAI_BRAIN_KEY above (that's an Ed25519 IDENTITY SEED, not a bearer token — do not reuse it)
 CORRALAI_REKOR_URL         Sigstore Rekor instance report_build anchors signed build attestations to (default https://rekor.sigstore.dev);
                            `corral certify verify` checks the same default unless --rekor-url overrides it
+CORRALAI_GATE_POLICIES     repo merge gate: ";"-separated policies "repo=owner/name,base=main,net=false,timeout=600,cmd=go test ./...";
+                           cmd= MUST be the last field — everything after it is the command verbatim (commas
+                           allowed, never split) so "cmd=go test -run A,B ./..." isn't silently truncated;
+                           timeout= is seconds, defaults to gate.DefaultGateTimeout (600s) when omitted;
+                           empty => the repo gate is OFF (no poller starts); GitHub-only for v1
+CORRALAI_GATE_DB           repo gate dedupe/index store DuckDB path (default ~/.claude/corralai_gate.duckdb)
+CORRALAI_GATE_POLL_SECONDS how often (seconds) the repo gate polls covered repos for new PR heads (default 120)
+CORRALAI_GATE_EXEC_BACKEND / _EXEC_UNSAFE_HOST  same jail backend used by the independent verify-gate (see below);
+                           the repo gate reuses it — a missing backend disables the repo gate too, loudly, never unsandboxed
+CORRALAI_CONTROL_GATE     control gate: ";"-separated "repo=owner/name,owner=<principal>,lang=go,base=main"
+                           — runs the owner's VETTED tests against PR heads, posts corral/control-gate
+CORRALAI_CONTROL_GATE_SPEC_DB  control-gate vetted-tests store (default ~/.claude/corralai_control_spec.duckdb)
+CORRALAI_CONTROL_GATE_DB       control-gate dedupe/index store (default ~/.claude/corralai_control_gate.duckdb)
+CORRALAI_CONTROL_GATE_POLL_SECONDS  how often the control gate polls for new PR heads (default 120)
 ```

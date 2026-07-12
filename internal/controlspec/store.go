@@ -43,10 +43,20 @@ func OpenStore(dsn string) (*Store, error) {
 		survived VARCHAR NOT NULL, discarded VARCHAR NOT NULL,
 		vetted BOOLEAN NOT NULL, created_ts TIMESTAMP NOT NULL, vetted_ts TIMESTAMP,
 		verdicts VARCHAR NOT NULL DEFAULT '',
+		code_path VARCHAR NOT NULL DEFAULT '', test_path VARCHAR NOT NULL DEFAULT '',
 		PRIMARY KEY (owner, goal, target)
 	)`); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("controlspec: creating gate_tests table: %w", err)
+	}
+	for _, alter := range []string{
+		`ALTER TABLE gate_tests ADD COLUMN IF NOT EXISTS code_path VARCHAR DEFAULT ''`,
+		`ALTER TABLE gate_tests ADD COLUMN IF NOT EXISTS test_path VARCHAR DEFAULT ''`,
+	} {
+		if _, err := db.Exec(alter); err != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("controlspec: migrating gate_tests: %w", err)
+		}
 	}
 	return &Store{db: db}, nil
 }
@@ -134,9 +144,9 @@ func (s *Store) SaveCandidate(gt GateTest) error {
 		return fmt.Errorf("controlspec: save candidate: marshal discarded: %w", err)
 	}
 	_, err = s.db.Exec(
-		`INSERT OR REPLACE INTO gate_tests (owner, goal, target, test, kill_rate, survived, discarded, vetted, created_ts, vetted_ts, verdicts)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, FALSE, ?, NULL, ?)`,
-		gt.Owner, gt.Goal, gt.Target, gt.Test, gt.KillRate, string(survived), string(discarded), gt.CreatedTS, gt.VerdictsJSON)
+		`INSERT OR REPLACE INTO gate_tests (owner, goal, target, test, kill_rate, survived, discarded, vetted, created_ts, vetted_ts, verdicts, code_path, test_path)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, FALSE, ?, NULL, ?, ?, ?)`,
+		gt.Owner, gt.Goal, gt.Target, gt.Test, gt.KillRate, string(survived), string(discarded), gt.CreatedTS, gt.VerdictsJSON, gt.CodePath, gt.TestPath)
 	if err != nil {
 		return fmt.Errorf("controlspec: save candidate: %w", err)
 	}
@@ -152,9 +162,9 @@ func (s *Store) GetVetted(owner, goal, target string) (GateTest, bool, error) {
 	var survived, discarded string
 	var createdTS, vettedTS sql.NullTime
 	err := s.db.QueryRow(
-		`SELECT test, kill_rate, survived, discarded, vetted, created_ts, vetted_ts, verdicts
+		`SELECT test, kill_rate, survived, discarded, vetted, created_ts, vetted_ts, verdicts, code_path, test_path
 		 FROM gate_tests WHERE owner = ? AND goal = ? AND target = ? AND vetted = TRUE`,
-		owner, goal, target).Scan(&gt.Test, &gt.KillRate, &survived, &discarded, &gt.Vetted, &createdTS, &vettedTS, &gt.VerdictsJSON)
+		owner, goal, target).Scan(&gt.Test, &gt.KillRate, &survived, &discarded, &gt.Vetted, &createdTS, &vettedTS, &gt.VerdictsJSON, &gt.CodePath, &gt.TestPath)
 	if err == sql.ErrNoRows {
 		return GateTest{}, false, nil
 	}
@@ -177,7 +187,7 @@ func (s *Store) GetVetted(owner, goal, target string) (GateTest, bool, error) {
 // included — the owner scoping this store exists to provide.
 func (s *Store) ListPending(owner string) ([]GateTest, error) {
 	rows, err := s.db.Query(
-		`SELECT goal, target, test, kill_rate, survived, discarded, vetted, created_ts, vetted_ts, verdicts
+		`SELECT goal, target, test, kill_rate, survived, discarded, vetted, created_ts, vetted_ts, verdicts, code_path, test_path
 		 FROM gate_tests WHERE owner = ? AND vetted = FALSE ORDER BY goal, target`,
 		owner)
 	if err != nil {
@@ -190,7 +200,7 @@ func (s *Store) ListPending(owner string) ([]GateTest, error) {
 		gt := GateTest{Owner: owner}
 		var survived, discarded string
 		var createdTS, vettedTS sql.NullTime
-		if err := rows.Scan(&gt.Goal, &gt.Target, &gt.Test, &gt.KillRate, &survived, &discarded, &gt.Vetted, &createdTS, &vettedTS, &gt.VerdictsJSON); err != nil {
+		if err := rows.Scan(&gt.Goal, &gt.Target, &gt.Test, &gt.KillRate, &survived, &discarded, &gt.Vetted, &createdTS, &vettedTS, &gt.VerdictsJSON, &gt.CodePath, &gt.TestPath); err != nil {
 			return nil, fmt.Errorf("controlspec: list pending: scan: %w", err)
 		}
 		if err := json.Unmarshal([]byte(survived), &gt.Survived); err != nil {
@@ -215,7 +225,7 @@ func (s *Store) ListPending(owner string) ([]GateTest, error) {
 // included — the owner scoping this store exists to provide.
 func (s *Store) ListVetted(owner string) ([]GateTest, error) {
 	rows, err := s.db.Query(
-		`SELECT goal, target, test, kill_rate, survived, discarded, vetted, created_ts, vetted_ts, verdicts
+		`SELECT goal, target, test, kill_rate, survived, discarded, vetted, created_ts, vetted_ts, verdicts, code_path, test_path
 		 FROM gate_tests WHERE owner = ? AND vetted = TRUE ORDER BY goal, target`,
 		owner)
 	if err != nil {
@@ -228,7 +238,7 @@ func (s *Store) ListVetted(owner string) ([]GateTest, error) {
 		gt := GateTest{Owner: owner}
 		var survived, discarded string
 		var createdTS, vettedTS sql.NullTime
-		if err := rows.Scan(&gt.Goal, &gt.Target, &gt.Test, &gt.KillRate, &survived, &discarded, &gt.Vetted, &createdTS, &vettedTS, &gt.VerdictsJSON); err != nil {
+		if err := rows.Scan(&gt.Goal, &gt.Target, &gt.Test, &gt.KillRate, &survived, &discarded, &gt.Vetted, &createdTS, &vettedTS, &gt.VerdictsJSON, &gt.CodePath, &gt.TestPath); err != nil {
 			return nil, fmt.Errorf("controlspec: list vetted: scan: %w", err)
 		}
 		if err := json.Unmarshal([]byte(survived), &gt.Survived); err != nil {

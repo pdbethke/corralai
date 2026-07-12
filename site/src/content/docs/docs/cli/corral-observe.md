@@ -17,6 +17,8 @@ Usage of ./corral-observe:
     	open the console in your browser (local use)
   -ping
     	health self-check: probe the health endpoint and exit 0 (healthy) or 1
+  -rod string
+    	Set the default value of options used by rod.
   -token string
     	read-only observer token (or CORRAL_TOKEN)
   -version

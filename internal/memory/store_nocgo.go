@@ -20,6 +20,7 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
+	db.SetMaxOpenConns(1)
 
 	s := &Store{db: db}
 	// Try creating FTS5 virtual table or fall back to standard SQL queries.
@@ -43,14 +44,25 @@ func (s *Store) count() int {
 }
 
 func (s *Store) EnsureBuilt() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.count() == 0 {
-		_, err := s.Build(nil)
+		_, err := s.buildLocked(nil)
 		return err
 	}
 	return nil
 }
 
+// Build reindexes dirs; it is the public, locking entry point.
 func (s *Store) Build(dirs []string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buildLocked(dirs)
+}
+
+// buildLocked is Build's body with no locking of its own — callers must
+// already hold s.mu (EnsureBuilt/Add/SetShared use this to avoid re-lock deadlock).
+func (s *Store) buildLocked(dirs []string) (int, error) {
 	if dirs == nil {
 		if d := strings.TrimSpace(os.Getenv("CORRALAI_MEMORY_DIR")); d != "" {
 			dirs = []string{d}

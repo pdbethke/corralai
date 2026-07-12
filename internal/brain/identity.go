@@ -14,6 +14,7 @@ import (
 	"github.com/pdbethke/corralai/internal/attest"
 	"github.com/pdbethke/corralai/internal/buildstore"
 	"github.com/pdbethke/corralai/internal/controlgate"
+	"github.com/pdbethke/corralai/internal/controlspec"
 	"github.com/pdbethke/corralai/internal/coord"
 	"github.com/pdbethke/corralai/internal/gate"
 	"github.com/pdbethke/corralai/internal/gateway"
@@ -30,6 +31,7 @@ import (
 	"github.com/pdbethke/corralai/internal/sandbox"
 	"github.com/pdbethke/corralai/internal/taskartifacts"
 	"github.com/pdbethke/corralai/internal/telemetry"
+	"github.com/pdbethke/corralai/internal/testgen"
 	"github.com/pdbethke/corralai/internal/transparency"
 )
 
@@ -293,6 +295,14 @@ type Options struct {
 	ControlSpecDB       string // vetted-tests store DSN (controlspec)
 	ControlGateDB       string // dedup run-store DSN (separate from the merge gate's)
 	ControlPollInterval time.Duration
+
+	// ControlSpec, when set, is a shared controlspec store handle opened once by
+	// the brain and used by BOTH the control gate (ListVetted) and the control
+	// MCP tools — one open R/W handle avoids a DuckDB single-writer lock conflict.
+	ControlSpec *controlspec.Store
+	// ControlModel is the LLM the authoring tools use for the writer + reviewer
+	// seats (llm.FromEnv()); nil disables stage_control.
+	ControlModel testgen.LLM
 }
 
 // SpawnBudget is the brain-side request-side DoS bound for spawning.

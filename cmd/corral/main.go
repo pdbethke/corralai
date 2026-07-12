@@ -66,6 +66,8 @@
 //	CORRALAI_GATE_EXEC_BACKEND / _EXEC_UNSAFE_HOST  same jail backend used by the independent verify-gate (see below);
 //	                           the repo gate reuses it — a missing backend disables the repo gate too, loudly, never unsandboxed
 //	CORRALAI_CONTROL_GATE     control gate: ";"-separated "repo=owner/name,owner=<principal>,lang=go,base=main"
+//	                          — owner= MUST equal the control owner's authenticated principal (the identity they
+//	                          author controls under), else the gate finds no vetted controls
 //	                           — runs the owner's VETTED tests against PR heads, posts corral/control-gate
 //	CORRALAI_CONTROL_GATE_SPEC_DB  control-gate vetted-tests store (default ~/.claude/corralai_control_spec.duckdb)
 //	CORRALAI_CONTROL_GATE_DB       control-gate dedupe/index store (default ~/.claude/corralai_control_gate.duckdb)
@@ -97,6 +99,7 @@ import (
 	"github.com/pdbethke/corralai/internal/brain"
 	"github.com/pdbethke/corralai/internal/buildstore"
 	"github.com/pdbethke/corralai/internal/controlgate"
+	"github.com/pdbethke/corralai/internal/controlspec"
 	"github.com/pdbethke/corralai/internal/coord"
 	"github.com/pdbethke/corralai/internal/egress"
 	"github.com/pdbethke/corralai/internal/embed"
@@ -119,6 +122,7 @@ import (
 	"github.com/pdbethke/corralai/internal/sandbox"
 	"github.com/pdbethke/corralai/internal/taskartifacts"
 	"github.com/pdbethke/corralai/internal/telemetry"
+	"github.com/pdbethke/corralai/internal/testgen"
 	"github.com/pdbethke/corralai/internal/transparency"
 	"github.com/pdbethke/corralai/internal/ui"
 )
@@ -1065,6 +1069,16 @@ func main() {
 	}
 	controlSpecDB := env("CORRALAI_CONTROL_GATE_SPEC_DB", filepath.Join(home, ".claude", "corralai_control_spec.duckdb"))
 	controlGateDB := env("CORRALAI_CONTROL_GATE_DB", filepath.Join(home, ".claude", "corralai_control_gate.duckdb"))
+	controlSpecStore, err := controlspec.OpenStore(controlSpecDB)
+	if err != nil {
+		log.Fatalf("control spec store: %v", err)
+	}
+	defer controlSpecStore.Close()
+
+	var controlModel testgen.LLM
+	if narrator.Available() {
+		controlModel = narrator
+	}
 
 	brainOpts := brain.Options{
 		Coord:                 store,
@@ -1118,6 +1132,8 @@ func main() {
 
 		ControlPolicies:     controlPolicies,
 		ControlSpecDB:       controlSpecDB,
+		ControlSpec:         controlSpecStore,
+		ControlModel:        controlModel,
 		ControlGateDB:       controlGateDB,
 		ControlPollInterval: time.Duration(envInt("CORRALAI_CONTROL_GATE_POLL_SECONDS", 120)) * time.Second,
 	}

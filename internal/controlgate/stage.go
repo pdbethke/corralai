@@ -12,6 +12,7 @@ package controlgate
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
@@ -47,6 +48,9 @@ func StageCandidate(ctx context.Context, writer, reviewer testgen.LLM, jail adeq
 	if err != nil {
 		return controlspec.GateTest{}, err
 	}
+	if !res.Report.CompliantPass {
+		return controlspec.GateTest{}, fmt.Errorf("controlgate: authored test does not pass on compliant code — invalid candidate, not staging")
+	}
 
 	// Recover the surviving mutants' code (by ID) from the valid scored set.
 	byID := make(map[string]adequacy.Mutant, len(res.Mutants))
@@ -74,6 +78,7 @@ func StageCandidate(ctx context.Context, writer, reviewer testgen.LLM, jail adeq
 		Test: res.Test, KillRate: res.Report.KillRate(),
 		Survived: res.Report.Survived, Discarded: res.Discarded,
 		VerdictsJSON: string(vj), CreatedTS: req.Now,
+		CodePath: req.CodePath, TestPath: req.TestPath,
 	}
 	if err := store.SaveCandidate(gt); err != nil {
 		return controlspec.GateTest{}, err

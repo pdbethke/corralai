@@ -39,3 +39,36 @@ func TestGateTestsSaveGetPending(t *testing.T) {
 		t.Fatalf("candidate leaked across owners: %+v", p)
 	}
 }
+
+func TestGateTestsPromoteReject(t *testing.T) {
+	s, _ := OpenStore(filepath.Join(t.TempDir(), "cs.db"))
+	defer s.Close()
+	now := time.Unix(1_700_000_000, 0).UTC()
+	vetTime := time.Unix(1_700_000_500, 0).UTC()
+	gt := GateTest{Owner: "ciso@bankz", Goal: "g1", Target: "t1", Test: "x", KillRate: 1, CreatedTS: now}
+	_ = s.SaveCandidate(gt)
+
+	// Promote an existing unvetted candidate → ok, then it's vetted + gettable + not pending.
+	ok, err := s.Promote("ciso@bankz", "g1", "t1", vetTime)
+	if err != nil || !ok {
+		t.Fatalf("promote: ok=%v err=%v", ok, err)
+	}
+	got, ok, _ := s.GetVetted("ciso@bankz", "g1", "t1")
+	if !ok || !got.Vetted || !got.VettedTS.Equal(vetTime) {
+		t.Fatalf("after promote: %+v ok=%v", got, ok)
+	}
+	if p, _ := s.ListPending("ciso@bankz"); len(p) != 0 {
+		t.Fatalf("promoted test still pending: %+v", p)
+	}
+	// Promote when there is no UNVETTED row → ok=false (already vetted / absent).
+	if ok, _ := s.Promote("ciso@bankz", "g1", "t1", vetTime); ok {
+		t.Fatal("re-promoting an already-vetted test should report ok=false")
+	}
+	// Reject removes it entirely.
+	if ok, _ := s.Reject("ciso@bankz", "g1", "t1"); !ok {
+		t.Fatal("reject of an existing test should report ok=true")
+	}
+	if _, ok, _ := s.GetVetted("ciso@bankz", "g1", "t1"); ok {
+		t.Fatal("rejected test must be gone")
+	}
+}

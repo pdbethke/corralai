@@ -49,6 +49,11 @@ type Requirement struct {
 // Vetted to true. GetVetted only ever returns a vetted row, so an unvetted
 // candidate is invisible to the gate. CreatedTS/VettedTS are caller-stamped
 // and persisted exactly as given — the store never calls time.Now() itself.
+//
+// Survived/Discarded are JSON-encoded on the way into the store: a nil
+// slice encodes as "null" (json.Marshal([]string(nil)) == "null"), not "[]".
+// That's harmless here — it round-trips symmetrically back to a nil slice on
+// read — but it's worth knowing if you compare the stored JSON by eye.
 type GateTest struct {
 	Owner     string
 	Goal      string

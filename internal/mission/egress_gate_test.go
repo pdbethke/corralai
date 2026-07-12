@@ -4,6 +4,7 @@ package mission
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -181,6 +182,55 @@ func TestEgressGate_ScansCumulativeChangedFiles(t *testing.T) {
 	}
 	if len(egressFake.lastFiles) != 2 || egressFake.lastFiles[0] != "phase1.go" || egressFake.lastFiles[1] != "phase2.go" {
 		t.Fatalf("expected the scanner to receive the cumulative file set, got: %v", egressFake.lastFiles)
+	}
+}
+
+// TestEgressGate_ChangedFilesRangeErrorBlocksPush verifies M-1: when the
+// changed-file diff itself cannot be computed, the gate must fail CLOSED
+// (withhold push/PR) rather than let an unscanned push through. Before the
+// fix, an error from ChangedFilesRange returned "not blocked" and the push
+// proceeded unscanned.
+func TestEgressGate_ChangedFilesRangeErrorBlocksPush(t *testing.T) {
+	ms, q, mid := setupEgressMission(t)
+
+	fake := &fakeRepo{rangeErr: errors.New("git diff failed: ambiguous argument")}
+	egressFake := &fakeEgress{}
+	e := NewEngine(ms, q)
+	e.Repo = fake
+	e.Egress = egressFake
+	e.Workspace = t.TempDir()
+
+	if err := e.Tick(); err != nil {
+		t.Fatalf("tick 1: %v", err)
+	}
+	drain(t, q)
+	if err := e.Tick(); err != nil {
+		t.Fatalf("tick 2: %v", err)
+	}
+
+	if egressFake.calls != 0 {
+		t.Fatalf("expected the scanner to never run when the diff can't be computed, got %d calls", egressFake.calls)
+	}
+	if fake.pushCalls != 0 {
+		t.Fatalf("expected Push to be withheld when ChangedFilesRange errors (fail-closed), got %d calls", fake.pushCalls)
+	}
+	if fake.prCalls != 0 {
+		t.Fatalf("expected OpenPR to be withheld when ChangedFilesRange errors (fail-closed), got %d calls", fake.prCalls)
+	}
+	mi, err := ms.Mission(mid)
+	if err != nil || mi == nil {
+		t.Fatalf("mission lookup: %v", err)
+	}
+	if mi.PRURL != "" {
+		t.Fatalf("expected no PRURL to be set, got %q", mi.PRURL)
+	}
+
+	// Sticky like the planted-secret case: a further tick must not retry.
+	if err := e.Tick(); err != nil {
+		t.Fatalf("tick 3: %v", err)
+	}
+	if fake.pushCalls != 0 {
+		t.Fatalf("expected Push to remain withheld after a further tick, got %d calls", fake.pushCalls)
 	}
 }
 

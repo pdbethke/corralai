@@ -293,6 +293,27 @@ func (e *Engine) Run(ctx context.Context, interval time.Duration) {
 	}
 }
 
+// staffedModelRef derives the model reference for a clamped assignment. Clamped
+// values are model IDENTIFIERS — an Ollama name:tag (qwen2.5-coder:7b) or a cloud
+// model name — NEVER "backend:model", so we must not split on ':' (doing so
+// corrupted every local tag). Cloud models map to their provider backend; every-
+// thing else is an Ollama tag kept whole.
+func staffedModelRef(model string) rolemodel.ModelRef {
+	backend := "ollama"
+	if isCloudModel(model) {
+		lower := strings.ToLower(model)
+		switch {
+		case strings.Contains(lower, "claude"):
+			backend = "anthropic"
+		case strings.Contains(lower, "gpt"):
+			backend = "openai"
+		case strings.Contains(lower, "gemini"):
+			backend = "openai" // NOTE: audit L-item — engine vs backend.go gemini mapping disagree; out of scope for this task, keep as-is
+		}
+	}
+	return rolemodel.ModelRef{Backend: backend, Model: model}
+}
+
 // Tick advances every running mission one step: promote dependency-ready tasks,
 // then complete the mission if every task is done. Exported so it can be driven
 // deterministically in tests.
@@ -319,24 +340,7 @@ func (e *Engine) Tick() error {
 				log.Printf("mission %d: dynamic staffing complete. Clamped Assignments: %+v, Load Order: %v", mi.ID, clamped, loadOrder)
 
 				for role, model := range clamped {
-					backend := "ollama"
-					if isCloudModel(model) {
-						if strings.Contains(strings.ToLower(model), "claude") {
-							backend = "anthropic"
-						} else if strings.Contains(strings.ToLower(model), "gpt") {
-							backend = "openai"
-						} else if strings.Contains(strings.ToLower(model), "gemini") {
-							backend = "openai"
-						}
-					}
-					if colonIdx := strings.Index(model, ":"); colonIdx >= 0 {
-						backend = model[:colonIdx]
-						model = model[colonIdx+1:]
-					}
-					e.Staffing.RoleModels.Set(role, rolemodel.ModelRef{
-						Backend: backend,
-						Model:   model,
-					}) // threadsafe: the UI writes this same policy from the mission-create handler
+					e.Staffing.RoleModels.Set(role, staffedModelRef(model)) // threadsafe: the UI writes this same policy from the mission-create handler
 				}
 				e.staffed[mi.ID] = true
 			}
@@ -685,12 +689,15 @@ func (e *Engine) commitDonePhases(m *Mission) {
 // finding (a detected secret) was seen, in which case the mission is parked in
 // egressBlocked and push/PR is withheld — loud (logged) and blocking, per the
 // egress-scan gate contract. Advisory findings (dep vulns, license issues) are
-// filed but never withhold the push.
+// filed but never withhold the push. If the changed-file diff itself cannot be
+// computed, the gate fails closed (returns true / blocked) rather than letting
+// an unscanned push through.
 func (e *Engine) runEgressGate(m *Mission) bool {
 	files, err := e.Repo.ChangedFilesRange(context.Background(), e.workdir(m), m.Base)
 	if err != nil {
-		log.Printf("mission %d: egress: changed-files: %v (scan skipped, not blocked)", m.ID, err)
-		return false
+		log.Printf("mission %d: egress: changed-files failed: %v — BLOCKING push (fail-closed: cannot scan what we can't diff)", m.ID, err)
+		e.egressBlocked[m.ID] = true
+		return true
 	}
 	if len(files) == 0 {
 		return false

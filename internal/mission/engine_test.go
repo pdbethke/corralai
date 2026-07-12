@@ -41,6 +41,7 @@ type fakeRepo struct {
 	// egress-gate fields
 	rangeFiles []string // returned by ChangedFilesRange; nil = fall back to ["calc.go"]
 	rangeCalls []string // records each base passed to ChangedFilesRange
+	rangeErr   error    // when set, ChangedFilesRange returns this error instead
 }
 
 func (f *fakeRepo) Commit(_ context.Context, _, msg string) (bool, error) {
@@ -76,6 +77,9 @@ func (f *fakeRepo) ChangedFiles(_ context.Context, _ string) ([]string, error) {
 // ChangedFiles, so existing tests that never set it are unaffected.
 func (f *fakeRepo) ChangedFilesRange(_ context.Context, _, base string) ([]string, error) {
 	f.rangeCalls = append(f.rangeCalls, base)
+	if f.rangeErr != nil {
+		return nil, f.rangeErr
+	}
 	if f.rangeFiles != nil {
 		return f.rangeFiles, nil
 	}

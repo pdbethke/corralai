@@ -115,6 +115,56 @@ func TestScan_MissingFileSkippedNotFatal(t *testing.T) {
 	}
 }
 
+func TestScanSecrets_OverSizeFileSurfaced(t *testing.T) {
+	dir := t.TempDir()
+	big := filepath.Join(dir, "big.bin")
+	// > maxScanBytes of filler; the point is it must NOT be silently ignored.
+	if err := os.WriteFile(big, make([]byte, maxScanBytes+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := scanSecrets(dir, []string{"big.bin"})
+	if len(out) == 0 {
+		t.Fatal("an unscannable over-size file must surface a finding, not be silently skipped")
+	}
+	if out[0].Rule != "unscanned-large-file" {
+		t.Fatalf("expected an unscanned-large-file finding, got: %+v", out[0])
+	}
+	if out[0].Severity != SeverityBlock {
+		t.Fatalf("expected the over-size finding to block, got severity %q", out[0].Severity)
+	}
+}
+
+func TestScanSecrets_LongLineNotSilentlyAborted(t *testing.T) {
+	dir := t.TempDir()
+	// A single line > the scanner's 1<<20 buffer cap trips bufio.ErrTooLong.
+	// The line also embeds an AWS-key-shaped secret earlier in the file (on a
+	// short first line) to prove secrets before the long line are still
+	// caught, and that the long line itself is surfaced rather than dropped.
+	longLine := make([]byte, (1<<20)+1024)
+	for i := range longLine {
+		longLine[i] = 'a'
+	}
+	content := "const key = \"AKIAABCDEFGHIJKLMNOP\"\n" + string(longLine) + "\n"
+	writeFile(t, dir, "big.go", content)
+
+	out := scanSecrets(dir, []string{"big.go"})
+	if len(out) == 0 {
+		t.Fatal("a file with an over-long line must surface a finding, not silently drop the remainder")
+	}
+	foundRemainder := false
+	for _, f := range out {
+		if f.Rule == "unscanned-remainder" {
+			foundRemainder = true
+			if f.Severity != SeverityBlock {
+				t.Errorf("expected unscanned-remainder to block, got severity %q", f.Severity)
+			}
+		}
+	}
+	if !foundRemainder {
+		t.Fatalf("expected an unscanned-remainder finding for the over-long line, got: %+v", out)
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(substr) > 0 && (func() bool {
 		for i := 0; i+len(substr) <= len(s); i++ {

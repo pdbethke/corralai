@@ -12,7 +12,26 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
+
+// forgeHTTPClient is the shared client for forge REST calls. It bounds request
+// time and, on a redirect that crosses to a different host, strips the auth
+// headers Go doesn't (notably GitLab's custom PRIVATE-TOKEN) so a forge redirect
+// or open-redirect can't exfiltrate the token.
+var forgeHTTPClient = &http.Client{
+	Timeout: 30 * time.Second,
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return fmt.Errorf("stopped after 10 redirects")
+		}
+		if len(via) > 0 && req.URL.Host != via[0].URL.Host {
+			req.Header.Del("PRIVATE-TOKEN")
+			req.Header.Del("Authorization")
+		}
+		return nil
+	},
+}
 
 // Provider is the forge-specific REST surface. One implementation per forge
 // type (github, gitea, gitlab). The Engine selects the right Provider for a
@@ -123,7 +142,7 @@ func (rc *restClient) get(ctx context.Context, url, etag string) (body []byte, r
 	if etag != "" {
 		req.Header.Set("If-None-Match", etag)
 	}
-	resp, err = http.DefaultClient.Do(req)
+	resp, err = forgeHTTPClient.Do(req)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -151,7 +170,7 @@ func (rc *restClient) doPost(ctx context.Context, url string, payload []byte) ([
 		req.Header.Set("Accept", rc.accept)
 	}
 	rc.setAuthHeader(req)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := forgeHTTPClient.Do(req)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 
 	"gopkg.in/yaml.v3"
 
@@ -54,6 +55,7 @@ func lit(s string) string {
 }
 
 type Store struct {
+	mu        sync.RWMutex // guards db mutation/build state below (lastDirs + the FTS/embedding rebuild, plus the ANN index fields below); writers (Build/EnsureBuilt/Add/SetShared) take Lock, Search takes RLock so concurrent searches don't race a concurrent build's write to annActive/annDim/the HNSW index. Open pins SetMaxOpenConns(1) alongside this
 	db        *sql.DB
 	fts       bool
 	lastDirs  []string        // dirs of the last Build, so Add/SetShared reindex the right corpus
@@ -384,6 +386,8 @@ var slugRe = regexp.MustCompile(`[^a-z0-9_-]+`)
 // reindexes. shared=true marks it team-visible (the shared knowledge base).
 // author, when non-empty, is written into front-matter so it survives re-index.
 func (s *Store) Add(name, body, description, typ, project, targetDir string, shared bool, author string) (slug, path, status string, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if targetDir == "" {
 		targetDir = memoryDir()
 	}
@@ -423,13 +427,15 @@ func (s *Store) Add(name, body, description, typ, project, targetDir string, sha
 		buildDirs = []string{targetDir}
 		s.lastDirs = buildDirs
 	}
-	_, err = s.Build(buildDirs)
+	_, err = s.buildLocked(buildDirs)
 	return
 }
 
 // SetShared flips an existing entry's shared flag (admin promote/unshare): it edits
 // the entry's markdown frontmatter (source of truth) and reindexes.
 func (s *Store) SetShared(nameOrSlug string, shared bool) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	e, err := s.Get(nameOrSlug, false)
 	if err != nil || e == nil {
 		return false, err
@@ -455,7 +461,7 @@ func (s *Store) SetShared(nameOrSlug string, shared bool) (bool, error) {
 	if err := os.WriteFile(e.Path, []byte(content), 0o600); err != nil { // #nosec G703 -- targetDir is server-set (add_memory passes ""→memoryDir()) and the filename is a sanitized slug ([^a-z0-9_-]); not agent-controllable
 		return false, err
 	}
-	_, err = s.Build(s.lastDirs)
+	_, err = s.buildLocked(s.lastDirs)
 	return true, err
 }
 

@@ -17,6 +17,7 @@ func TestGateTestsSaveGetPending(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0).UTC()
 	gt := GateTest{Owner: "ciso@bankz", Goal: "asvs-v2.1.1", Target: "bankz/app:auth.go",
 		Test: "package target\n// test", KillRate: 0.83, Survived: []string{"m2"}, Discarded: []string{"m5"}, CreatedTS: now}
+	gt.VerdictsJSON = `[{"MutantID":"m2","RealGap":true,"Rationale":"misses empty grants"}]`
 	if err := s.SaveCandidate(gt); err != nil {
 		t.Fatal(err)
 	}
@@ -33,6 +34,9 @@ func TestGateTestsSaveGetPending(t *testing.T) {
 	if len(pend) != 1 || pend[0].Goal != "asvs-v2.1.1" || pend[0].KillRate != 0.83 ||
 		len(pend[0].Survived) != 1 || pend[0].Survived[0] != "m2" || pend[0].Vetted {
 		t.Fatalf("pending wrong: %+v", pend)
+	}
+	if pend[0].VerdictsJSON != gt.VerdictsJSON {
+		t.Fatalf("verdicts json not round-tripped: %q", pend[0].VerdictsJSON)
 	}
 	// owner isolation
 	if p, _ := s.ListPending("dev@bankz"); len(p) != 0 {

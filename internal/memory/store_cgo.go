@@ -163,6 +163,14 @@ func (s *Store) buildLocked(dirs []string) (int, error) {
 }
 
 func (s *Store) Search(query, scope, typ string, limit int, sharedOnly bool) ([]Hit, error) {
+	// RLock excludes a concurrent Build/EnsureBuilt/Add/SetShared (all take
+	// Lock) so searchSemantic's unlocked reads of s.annActive/s.annDim and the
+	// HNSW index below can't race ensureANN's write to those fields (H-2
+	// residual race). RLock is held across the whole method — DB access is
+	// already serialized by SetMaxOpenConns(1), and RLock still allows
+	// concurrent Search calls to proceed together, just not alongside a build.
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	kw, err := s.searchKeyword(query, scope, typ, limit, sharedOnly)
 	if err != nil {
 		return nil, err

@@ -55,7 +55,7 @@ func lit(s string) string {
 }
 
 type Store struct {
-	mu        sync.Mutex // guards db mutation/build state below (lastDirs + the FTS/embedding rebuild); Open pins SetMaxOpenConns(1) alongside this
+	mu        sync.RWMutex // guards db mutation/build state below (lastDirs + the FTS/embedding rebuild, plus the ANN index fields below); writers (Build/EnsureBuilt/Add/SetShared) take Lock, Search takes RLock so concurrent searches don't race a concurrent build's write to annActive/annDim/the HNSW index. Open pins SetMaxOpenConns(1) alongside this
 	db        *sql.DB
 	fts       bool
 	lastDirs  []string        // dirs of the last Build, so Add/SetShared reindex the right corpus

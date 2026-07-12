@@ -10,6 +10,7 @@ package sandbox
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -103,6 +104,27 @@ func Run(ctx context.Context, command string, opts Options) Result {
 		res.Err = runErr.Error()
 	}
 	return res
+}
+
+// RunGuarded is THE single home of the "a failed run must not read as
+// success" invariant that callers rely on: it runs command exactly as Run
+// does, but returns a non-nil error whenever the run could not complete
+// cleanly (Result.TimedOut, or Result.Err set — e.g. a nil backend or a
+// Wrap failure). On err == nil, the returned Result reflects a genuine
+// process exit — a timeout or start failure can NEVER be mistaken for exit
+// 0 by a caller that only checks err. The Result is always returned
+// alongside the error (ExitCode/Output passthrough) so callers that want
+// the raw fields — e.g. for logging — still have them.
+//
+// Both jailAdapter (internal/brain/gate.go) and bwrapJail
+// (internal/adequacy/jail.go) delegate to this so the interpretation lives
+// in exactly one place and can't drift between the two callers.
+func RunGuarded(ctx context.Context, command string, opts Options) (Result, error) {
+	res := Run(ctx, command, opts)
+	if res.TimedOut || res.Err != "" {
+		return res, fmt.Errorf("sandbox: %s", res.Err)
+	}
+	return res, nil
 }
 
 // capped is an io.Writer that stops storing past max bytes (so a runaway command

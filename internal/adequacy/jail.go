@@ -22,7 +22,10 @@ import (
 // RunTest reports passed=true ONLY on a genuine sandbox.Result.ExitCode == 0.
 // A nil backend, a timed-out run, or a run that could not be started at all
 // (sandbox.Result.Err set) NEVER reads as passed — RunTest returns a non-nil
-// error in those cases instead of (true, nil) or a silently-false pass.
+// error in those cases instead of (true, nil) or a silently-false pass. That
+// interpretation itself lives in sandbox.RunGuarded, the single home of the
+// "a failed run must not read as success" invariant shared with
+// internal/brain/gate.go's jailAdapter.
 type bwrapJail struct {
 	backend sandbox.Isolator
 	timeout time.Duration
@@ -70,18 +73,14 @@ func (j bwrapJail) RunTest(ctx context.Context, files map[string]string, testCmd
 		}
 	}
 
-	res := sandbox.Run(ctx, strings.Join(testCmd, " "), sandbox.Options{
+	res, err := sandbox.RunGuarded(ctx, strings.Join(testCmd, " "), sandbox.Options{
 		Workspace: dir,
 		Backend:   j.backend,
 		Network:   false,
 		Timeout:   j.timeout,
 	})
-
-	if res.TimedOut {
-		return false, fmt.Errorf("adequacy: test command timed out: %s", res.Err)
-	}
-	if res.Err != "" {
-		return false, fmt.Errorf("adequacy: test command could not run: %s", res.Err)
+	if err != nil {
+		return false, err
 	}
 	return res.ExitCode == 0, nil
 }

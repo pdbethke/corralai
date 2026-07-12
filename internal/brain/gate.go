@@ -51,18 +51,16 @@ func (c certifierAdapter) Certify(ctx context.Context, repoName, commit, command
 // timeout or a non-empty Result.Err is ALSO surfaced as a non-nil error,
 // so the runner takes its "error" exit (never "success") regardless of
 // what happens to be sitting in ExitCode. Run never remaps a nonzero,
-// negative, or timed-out result to 0.
+// negative, or timed-out result to 0. The "failed run must not read as
+// success" interpretation itself lives in sandbox.RunGuarded — this
+// adapter is just transport glue over it (see also
+// internal/adequacy/jail.go's bwrapJail, which delegates to the same
+// RunGuarded).
 type jailAdapter struct{ backend sandbox.Isolator }
 
 func (j jailAdapter) Run(ctx context.Context, command, workspace string, network bool, timeout time.Duration) (int, string, error) {
-	res := sandbox.Run(ctx, command, sandbox.Options{Workspace: workspace, Network: network, Backend: j.backend, Timeout: timeout})
-	if res.TimedOut {
-		return res.ExitCode, res.Output, fmt.Errorf("gate: check timed out")
-	}
-	if res.Err != "" {
-		return res.ExitCode, res.Output, fmt.Errorf("gate: %s", res.Err)
-	}
-	return res.ExitCode, res.Output, nil
+	res, err := sandbox.RunGuarded(ctx, command, sandbox.Options{Workspace: workspace, Network: network, Backend: j.backend, Timeout: timeout})
+	return res.ExitCode, res.Output, err
 }
 
 // StartGate wires and starts the repo merge gate: the gate.Store, the

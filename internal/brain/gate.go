@@ -102,9 +102,7 @@ func StartGate(ctx context.Context, opts Options) (*gate.Store, error) {
 
 	recordURL := opts.GateRecordURL
 	if recordURL == nil {
-		recordURL = func(repoName, sha string) string {
-			return "/api/gate/run?repo=" + url.QueryEscape(repoName) + "&sha=" + url.QueryEscape(sha)
-		}
+		recordURL = defaultGateRecordURL
 	}
 
 	runner := &gate.Runner{
@@ -132,6 +130,13 @@ func StartGate(ctx context.Context, opts Options) (*gate.Store, error) {
 	log.Printf("gate: ENABLED — %d polic(ies) configured, polling every %s", len(opts.GatePolicies), interval)
 	go poller.Loop(ctx)
 	return store, nil
+}
+
+// defaultGateRecordURL builds the /api/gate/run status target_url for a
+// (repo, sha), shared by StartGate and StartControlGate so their default
+// wiring can never drift.
+func defaultGateRecordURL(repoName, sha string) string {
+	return "/api/gate/run?repo=" + url.QueryEscape(repoName) + "&sha=" + url.QueryEscape(sha)
 }
 
 // gateRunResponse is the JSON shape /api/gate/run returns for a known

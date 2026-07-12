@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"log"
 	"os"
 	"strings"
 	"time"
@@ -103,7 +104,9 @@ func (r *Runner) Run(ctx context.Context, repoURL string, p Policy, pr PRRef) er
 	}
 
 	passed := exit == 0
-	_ = r.Store.Save(Run{Repo: p.Repo, HeadSHA: pr.HeadSHA, PR: pr.Number, Passed: passed, RecordID: recordID, RanAt: r.Now()})
+	if err := r.Store.Save(Run{Repo: p.Repo, HeadSHA: pr.HeadSHA, PR: pr.Number, Passed: passed, RecordID: recordID, RanAt: r.Now()}); err != nil {
+		log.Printf("gate: save dedupe %s@%s: %v", p.Repo, pr.HeadSHA, err)
+	}
 	state := "failure"
 	if passed {
 		state = "success"
@@ -114,10 +117,11 @@ func (r *Runner) Run(ctx context.Context, repoURL string, p Policy, pr PRRef) er
 // fail is the single path for every internal-error exit: it always stores
 // Passed=false and always posts a non-success state, which is what keeps
 // the fail-closed invariant a structural property of Run rather than
-// something each call site has to remember to uphold.
+// something each call site has to remember to uphold. Delegates to
+// FailClosed so the merge runner and the control runner (internal/brain's
+// controlRunner.fail) can never drift on this invariant.
 func (r *Runner) fail(ctx context.Context, repoURL string, p Policy, pr PRRef, target, state, msg string) error {
-	_ = r.Store.Save(Run{Repo: p.Repo, HeadSHA: pr.HeadSHA, PR: pr.Number, Passed: false, RecordID: 0, RanAt: r.Now()})
-	return r.Status.SetCommitStatus(ctx, repoURL, pr.HeadSHA, p.Context, state, target, msg)
+	return FailClosed(ctx, r.Store, r.Status, repoURL, p.Repo, pr, p.Context, target, state, msg, r.Now)
 }
 
 // gateDesc renders the short commit-status description for a gate outcome.

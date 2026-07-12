@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"net/url"
 	"os"
 	"time"
 
@@ -47,7 +46,7 @@ type controlRunner struct {
 	Checkout gate.Checkouter
 	Reader   fileReader
 	Cert     controlgate.Certifier
-	Status   controlgate.StatusPoster
+	Status   gate.StatusPoster
 	Spec     *controlspec.Store
 	Jail     adequacy.Jail
 	RunStore *gate.Store
@@ -129,7 +128,9 @@ func (r *controlRunner) Run(ctx context.Context, repoURL string, p gate.Policy, 
 		return r.fail(ctx, repoURL, p, pr, target, "error", "sign (gave up after retries): "+err.Error())
 	}
 	delete(r.attempts, key) // signed OK — clear any prior transient-failure count
-	_ = r.RunStore.Save(gate.Run{Repo: p.Repo, HeadSHA: pr.HeadSHA, PR: pr.Number, Passed: res.Pass, RecordID: 0, RanAt: r.Now()})
+	if err := r.RunStore.Save(gate.Run{Repo: p.Repo, HeadSHA: pr.HeadSHA, PR: pr.Number, Passed: res.Pass, RecordID: 0, RanAt: r.Now()}); err != nil {
+		log.Printf("control-gate: save dedupe %s@%s: %v", p.Repo, pr.HeadSHA, err)
+	}
 	return nil
 }
 
@@ -186,9 +187,7 @@ func StartControlGate(ctx context.Context, opts Options) (*gate.Store, *controls
 
 	record := opts.GateRecordURL
 	if record == nil {
-		record = func(repoName, sha string) string {
-			return "/api/gate/run?repo=" + url.QueryEscape(repoName) + "&sha=" + url.QueryEscape(sha)
-		}
+		record = defaultGateRecordURL
 	}
 
 	// v1 assumes one language/scaffold per brain (all control policies share it);
@@ -240,8 +239,8 @@ func StartControlGate(ctx context.Context, opts Options) (*gate.Store, *controls
 }
 
 // fail posts a non-success status (unsigned — a failure needs no signature)
-// and records the SHA so the poller doesn't re-run it. Mirrors gate.Runner.fail.
+// and records the SHA so the poller doesn't re-run it. Delegates to
+// gate.FailClosed so this stays byte-identical to gate.Runner.fail.
 func (r *controlRunner) fail(ctx context.Context, repoURL string, p gate.Policy, pr gate.PRRef, target, state, msg string) error {
-	_ = r.RunStore.Save(gate.Run{Repo: p.Repo, HeadSHA: pr.HeadSHA, PR: pr.Number, Passed: false, RanAt: r.Now()})
-	return r.Status.SetCommitStatus(ctx, repoURL, pr.HeadSHA, p.Context, state, target, msg)
+	return gate.FailClosed(ctx, r.RunStore, r.Status, repoURL, p.Repo, pr, p.Context, target, state, msg, r.Now)
 }

@@ -37,7 +37,7 @@ type PostRequest struct {
 // PostControlGate signs the control-gate verdict FIRST, then posts the corral/control-gate
 // status. THE LOAD-BEARING INVARIANT: no unsigned green — if Certify fails,
 // PostControlGate returns the error and never calls SetCommitStatus.
-func PostControlGate(ctx context.Context, cert Certifier, poster StatusPoster, req PostRequest, res ControlResult) error {
+func PostControlGate(ctx context.Context, cert Certifier, poster StatusPoster, req PostRequest, res ControlResult) (int64, error) {
 	state, exit := "success", 0
 	if !res.Pass {
 		state, exit = "failure", 1
@@ -46,11 +46,15 @@ func PostControlGate(ctx context.Context, cert Certifier, poster StatusPoster, r
 	sum := sha256.Sum256(b)
 	digest := "sha256:" + hex.EncodeToString(sum[:])
 
-	if _, _, err := cert.Certify(ctx, req.RepoURL, req.HeadSHA, "corral/control-gate", exit, digest); err != nil {
+	recordID, _, err := cert.Certify(ctx, req.RepoURL, req.HeadSHA, "corral/control-gate", exit, digest)
+	if err != nil {
 		// Never post a status without a signed record behind it — return and let the poller retry.
-		return fmt.Errorf("controlgate: certify verdict (not posting unsigned): %w", err)
+		return 0, fmt.Errorf("controlgate: certify verdict (not posting unsigned): %w", err)
 	}
-	return poster.SetCommitStatus(ctx, req.RepoURL, req.HeadSHA, req.Context, state, req.RecordURL(req.HeadSHA), describeResult(res))
+	if err := poster.SetCommitStatus(ctx, req.RepoURL, req.HeadSHA, req.Context, state, req.RecordURL(req.HeadSHA), describeResult(res)); err != nil {
+		return recordID, err
+	}
+	return recordID, nil
 }
 
 // describeResult renders a ControlResult as a human-readable status

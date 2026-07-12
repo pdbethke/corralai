@@ -53,10 +53,11 @@ type controlRunner struct {
 	Record   func(repo, sha string) string
 	Now      func() time.Time
 	// attempts counts consecutive certify failures per "repo@sha" so the runner
-	// can give up after MaxCertAttempts. It is in-memory only (reset on brain
-	// restart — acceptable: rare, still bounded per process, and a restart may
-	// itself fix the signing config). Accessed only from the single poller
-	// goroutine, so it needs no lock.
+	// can give up after MaxCertAttempts. It is in-memory, reset on restart; a
+	// force-pushed old SHA's key is not actively evicted, so under sustained
+	// signing failure + churn the map can grow — acceptable for a bounded-failure
+	// guard, revisit with size-cap/TTL eviction if it ever matters. Accessed only
+	// from the single poller goroutine, so it needs no lock.
 	attempts        map[string]int
 	MaxCertAttempts int
 }
@@ -115,7 +116,8 @@ func (r *controlRunner) Run(ctx context.Context, repoURL string, p gate.Policy, 
 		RecordURL: func(sha string) string { return r.Record(p.Repo, sha) },
 	}
 	key := p.Repo + "@" + pr.HeadSHA
-	if err := controlgate.PostControlGate(ctx, r.Cert, r.Status, req, res); err != nil {
+	recordID, err := controlgate.PostControlGate(ctx, r.Cert, r.Status, req, res)
+	if err != nil {
 		// No unsigned green: certify failed, nothing was posted. Below the cap,
 		// do NOT record the SHA — leave it for the next poll to retry (a transient
 		// signing blip self-heals). At the cap, a persistent failure is terminal:
@@ -128,7 +130,7 @@ func (r *controlRunner) Run(ctx context.Context, repoURL string, p gate.Policy, 
 		return r.fail(ctx, repoURL, p, pr, target, "error", "sign (gave up after retries): "+err.Error())
 	}
 	delete(r.attempts, key) // signed OK — clear any prior transient-failure count
-	if err := r.RunStore.Save(gate.Run{Repo: p.Repo, HeadSHA: pr.HeadSHA, PR: pr.Number, Passed: res.Pass, RecordID: 0, RanAt: r.Now()}); err != nil {
+	if err := r.RunStore.Save(gate.Run{Repo: p.Repo, HeadSHA: pr.HeadSHA, PR: pr.Number, Passed: res.Pass, RecordID: recordID, RanAt: r.Now()}); err != nil {
 		log.Printf("control-gate: save dedupe %s@%s: %v", p.Repo, pr.HeadSHA, err)
 	}
 	return nil

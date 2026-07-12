@@ -89,7 +89,12 @@ func scanSecrets(dir string, files []string) []Finding {
 	for _, rel := range files {
 		full := filepath.Join(dir, rel)
 		info, err := os.Stat(full)
-		if err != nil || info.IsDir() || info.Size() > maxScanBytes {
+		if err != nil || info.IsDir() {
+			continue
+		}
+		if info.Size() > maxScanBytes {
+			out = append(out, Finding{Path: rel, Rule: "unscanned-large-file",
+				Sample: "file exceeds scan size limit — not scanned for secrets", Severity: SeverityBlock})
 			continue
 		}
 		f, err := os.Open(full) // #nosec G304 -- dir is the mission's own working copy; rel comes from the mission's own git diff, not external input
@@ -110,6 +115,10 @@ func scanSecrets(dir string, files []string) []Finding {
 					})
 				}
 			}
+		}
+		if err := scanner.Err(); err != nil {
+			out = append(out, Finding{Path: rel, Rule: "unscanned-remainder",
+				Sample: "line too long to scan — remainder of file not scanned: " + err.Error(), Severity: SeverityBlock})
 		}
 		_ = f.Close()
 	}

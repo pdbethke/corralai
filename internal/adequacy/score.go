@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Elastic-2.0
 
 // Package adequacy implements the deterministic mutation-testing adequacy
-// scorer for the CISO-gate control loop: it measures how well a candidate
+// scorer for the control-gate control loop: it measures how well a candidate
 // test "bites" by running it against compliant code (must pass) and against
 // a set of goal-violating mutants (each catch = a kill), reporting the kill
 // rate and the surviving (uncaught) mutants.

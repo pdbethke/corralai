@@ -56,7 +56,7 @@ func parseVerdicts(resp string) []Verdict {
 // a third generative agent, distinct from the writer (writeTestSystem) and
 // the generator (genMutantsSystem). It classifies each surviving mutant the
 // candidate test failed to catch as a real coverage GAP or an EQUIVALENT
-// mutant, turning raw survivors into curated feedback for the CISO.
+// mutant, turning raw survivors into curated feedback for the control owner.
 const reviewSystem = `You are a TEST-REVIEWER. You are given a security GOAL, the compliant code, a candidate test, and MUTATIONS that violate the goal but the test did NOT catch. For EACH mutation decide:
 - GAP: the mutation genuinely violates the goal and the test SHOULD have caught it — a real coverage gap.
 - EQUIVALENT: the mutation does not actually violate the goal under any legitimate input (or is behaviourally equivalent to the compliant code) — not a real gap.

@@ -11,7 +11,7 @@ import (
 	"github.com/pdbethke/corralai/internal/testgen"
 )
 
-// Request is the input to the authoring-tier loop: a CISO goal to guard,
+// Request is the input to the authoring-tier loop: a control-owner goal to guard,
 // the target source under that goal, and the workspace/command scaffolding
 // needed to compile and run a candidate test against it.
 type Request struct {
@@ -50,7 +50,7 @@ type Result struct {
 // LOAD-BEARING: a mutant that fails to compile is discarded by compileVerify
 // BEFORE it ever reaches adequacy.Score — feeding a broken mutant to Score
 // would count its `go build` failure as a "kill" the test never actually
-// earned, inflating the kill rate and corrupting the CISO's adequacy signal.
+// earned, inflating the kill rate and corrupting the control owner's adequacy signal.
 func Author(ctx context.Context, m testgen.LLM, jail adequacy.Jail, req Request) (Result, error) {
 	sigs, err := repoindex.ExtractSignatures(req.Code, req.Lang)
 	if err != nil {

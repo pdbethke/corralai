@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: Elastic-2.0
 
-// Package cisogate is the composition tier that ties the CISO-gate loop
+// Package controlgate is the composition tier that ties the control-gate loop
 // together: it authors a candidate test (internal/authoring), triages the
 // mutants that survived it with an INDEPENDENT reviewer seat
-// (internal/testgen), and stages the result — unvetted — for CISO review
+// (internal/testgen), and stages the result — unvetted — for control-owner review
 // (internal/controlspec). Nothing in this package auto-promotes a
 // candidate to gating; that's the human-gate surface (Task 2's Promote),
 // out of scope here.
-package cisogate
+package controlgate
 
 import (
 	"context"
@@ -22,7 +22,7 @@ import (
 
 // StageRequest is the input to StageCandidate: the authoring-tier request
 // (Goal/Code/Lang/CodePath/TestPath/Base/NMutants/BuildCmd/TestCmd) plus the
-// CISO-facing identity of the resulting candidate — who owns it, which
+// control-owner-facing identity of the resulting candidate — who owns it, which
 // durable control-spec Goal it verifies, and what target it's staged
 // against. Now is caller-stamped: StageCandidate never calls time.Now()
 // itself, which keeps the composition deterministic under test.
@@ -36,7 +36,7 @@ type StageRequest struct {
 
 // StageCandidate authors a candidate test, triages its surviving mutants
 // with an INDEPENDENT reviewer seat, and stores the candidate UNVETTED for
-// CISO review. Returns the stored (unvetted) GateTest.
+// control-owner review. Returns the stored (unvetted) GateTest.
 //
 // INDEPENDENCE: writer and reviewer are separate testgen.LLM seats — the
 // reviewer never sees the writer's prompt, and vice versa. That separation

@@ -75,6 +75,62 @@ func TestRunNilBackendDisabled(t *testing.T) {
 	}
 }
 
+// TestRunGuardedNilBackendErrors: RunGuarded is THE single home of the "a
+// failed run must not read as success" invariant. A nil backend produces
+// Result.Err (via Run), and RunGuarded must surface that as a non-nil error
+// rather than letting a caller mistake it for a clean pass.
+func TestRunGuardedNilBackendErrors(t *testing.T) {
+	res, err := RunGuarded(context.Background(), "echo hi", Options{Workspace: t.TempDir()})
+	if err == nil {
+		t.Fatalf("expected a non-nil error for a nil backend, got nil (res=%+v)", res)
+	}
+	// The Result must still be returned (ExitCode passthrough) even on error.
+	if res.ExitCode != -1 {
+		t.Fatalf("ExitCode = %d, want -1 passed through from Run", res.ExitCode)
+	}
+}
+
+// TestRunGuardedTimeoutErrors mirrors TestRunTimesOut: a timed-out run must
+// come back as a non-nil error from RunGuarded, never as (res, nil).
+func TestRunGuardedTimeoutErrors(t *testing.T) {
+	res, err := RunGuarded(context.Background(), "sleep 10", Options{Workspace: t.TempDir(), Timeout: 300 * time.Millisecond, Backend: noneIsolator{}})
+	if err == nil {
+		t.Fatalf("expected a non-nil error for a timed-out run, got nil (res=%+v)", res)
+	}
+	if !res.TimedOut {
+		t.Fatalf("expected the returned Result to still report TimedOut, got %+v", res)
+	}
+}
+
+// TestRunGuardedCleanExitSucceeds: a genuine exit-0 run must come back as
+// (res, nil) with the real ExitCode/Output — RunGuarded must not itself
+// introduce a false negative on a clean pass.
+func TestRunGuardedCleanExitSucceeds(t *testing.T) {
+	res, err := RunGuarded(context.Background(), "echo hello world", Options{Workspace: t.TempDir(), Backend: noneIsolator{}})
+	if err != nil {
+		t.Fatalf("unexpected error on a clean exit-0 run: %v (res=%+v)", err, res)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("ExitCode = %d, want 0 (%s)", res.ExitCode, res.Err)
+	}
+	if !strings.Contains(res.Output, "hello world") {
+		t.Fatalf("output = %q, want it to contain 'hello world'", res.Output)
+	}
+}
+
+// TestRunGuardedNonzeroExitIsNotAnError: a genuine nonzero exit is a
+// completed run, not a "could not complete cleanly" failure — RunGuarded
+// must pass it through as (res, nil), matching Run's own semantics.
+func TestRunGuardedNonzeroExitIsNotAnError(t *testing.T) {
+	res, err := RunGuarded(context.Background(), "exit 3", Options{Workspace: t.TempDir(), Backend: noneIsolator{}})
+	if err != nil {
+		t.Fatalf("unexpected error on a genuine nonzero exit: %v", err)
+	}
+	if res.ExitCode != 3 {
+		t.Fatalf("ExitCode = %d, want 3", res.ExitCode)
+	}
+}
+
 func lastSeg(p string) string {
 	parts := strings.Split(strings.TrimRight(p, "/"), "/")
 	return parts[len(parts)-1]

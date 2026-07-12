@@ -22,6 +22,14 @@ type fileReader interface {
 	ReadFile(dir, path string) (string, error)
 }
 
+// controlCertMaxAttempts bounds how many consecutive times a single PR head may
+// re-run because signing (certify) failed before the runner gives up and posts a
+// terminal `error`. Without a cap, a PERSISTENT signing misconfiguration would
+// re-checkout + re-run every vetted test in the jail on every poll forever while
+// the check sat stuck at `pending` — real compute burn for no progress. A few
+// retries still absorb a transient signing blip.
+const controlCertMaxAttempts = 3
+
 // controlRunner gates one PR head against a control owner's VETTED tests:
 // checkout head → ListVetted(owner) → read each target's head content → run
 // the vetted tests in the jail → sign + post corral/control-gate.
@@ -29,7 +37,9 @@ type fileReader interface {
 // FAIL-CLOSED (under test): success is posted ONLY on an all-pass verdict that
 // was signed first. Missing target → that control fails; zero vetted → failure;
 // jail/checkout error → non-success (unsigned); certify error → nothing posted
-// and the SHA is NOT recorded (retried next poll).
+// and the SHA is NOT recorded, so the poll RETRIES — but only up to
+// MaxCertAttempts times, after which a persistent signing failure is terminal
+// (`error` posted + SHA recorded) rather than an unbounded re-run loop.
 type controlRunner struct {
 	byRepo   map[string]string // repo ("owner/name") -> control-owner principal
 	Base     map[string]string // the workspace scaffold (from langScaffold)
@@ -43,6 +53,13 @@ type controlRunner struct {
 	RunStore *gate.Store
 	Record   func(repo, sha string) string
 	Now      func() time.Time
+	// attempts counts consecutive certify failures per "repo@sha" so the runner
+	// can give up after MaxCertAttempts. It is in-memory only (reset on brain
+	// restart — acceptable: rare, still bounded per process, and a restart may
+	// itself fix the signing config). Accessed only from the single poller
+	// goroutine, so it needs no lock.
+	attempts        map[string]int
+	MaxCertAttempts int
 }
 
 func (r *controlRunner) Run(ctx context.Context, repoURL string, p gate.Policy, pr gate.PRRef) error {
@@ -98,11 +115,20 @@ func (r *controlRunner) Run(ctx context.Context, repoURL string, p gate.Policy, 
 		Context:   p.Context,
 		RecordURL: func(sha string) string { return r.Record(p.Repo, sha) },
 	}
+	key := p.Repo + "@" + pr.HeadSHA
 	if err := controlgate.PostControlGate(ctx, r.Cert, r.Status, req, res); err != nil {
-		// No unsigned green: certify failed, nothing was posted. Do NOT record
-		// the SHA — leave it for the next poll to retry.
-		return err
+		// No unsigned green: certify failed, nothing was posted. Below the cap,
+		// do NOT record the SHA — leave it for the next poll to retry (a transient
+		// signing blip self-heals). At the cap, a persistent failure is terminal:
+		// post `error` and record the SHA so we stop re-running the jail forever.
+		r.attempts[key]++
+		if r.attempts[key] < r.MaxCertAttempts {
+			return err
+		}
+		delete(r.attempts, key)
+		return r.fail(ctx, repoURL, p, pr, target, "error", "sign (gave up after retries): "+err.Error())
 	}
+	delete(r.attempts, key) // signed OK — clear any prior transient-failure count
 	_ = r.RunStore.Save(gate.Run{Repo: p.Repo, HeadSHA: pr.HeadSHA, PR: pr.Number, Passed: res.Pass, RecordID: 0, RanAt: r.Now()})
 	return nil
 }
@@ -168,18 +194,20 @@ func StartControlGate(ctx context.Context, opts Options) (*gate.Store, *controls
 	}
 
 	runner := &controlRunner{
-		byRepo:   byRepo,
-		Base:     base,
-		TestCmd:  testCmd,
-		Checkout: opts.Repo,
-		Reader:   opts.Repo,
-		Cert:     certifierAdapter{opts: opts},
-		Status:   opts.Repo,
-		Spec:     spec,
-		Jail:     adequacy.NewJail(opts.GateBackend, gate.DefaultGateTimeout),
-		RunStore: runStore,
-		Record:   record,
-		Now:      time.Now,
+		byRepo:          byRepo,
+		Base:            base,
+		TestCmd:         testCmd,
+		Checkout:        opts.Repo,
+		Reader:          opts.Repo,
+		Cert:            certifierAdapter{opts: opts},
+		Status:          opts.Repo,
+		Spec:            spec,
+		Jail:            adequacy.NewJail(opts.GateBackend, gate.DefaultGateTimeout),
+		RunStore:        runStore,
+		Record:          record,
+		Now:             time.Now,
+		attempts:        make(map[string]int),
+		MaxCertAttempts: controlCertMaxAttempts,
 	}
 
 	interval := opts.ControlPollInterval

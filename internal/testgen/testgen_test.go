@@ -17,9 +17,11 @@ type fakeLLM struct {
 	resp               string
 	err                error
 	gotSystem, gotUser string
+	called             bool
 }
 
 func (f *fakeLLM) Ask(ctx context.Context, system, user string) (string, error) {
+	f.called = true
 	f.gotSystem, f.gotUser = system, user
 	return f.resp, f.err
 }

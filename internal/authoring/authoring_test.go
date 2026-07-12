@@ -74,6 +74,12 @@ func TestAuthor(t *testing.T) {
 	if kr := res.Report.KillRate(); kr < 0.49 || kr > 0.51 {
 		t.Errorf("kill rate = %v, want 0.5 (m2 must not inflate it)", kr)
 	}
+	// Result.Mutants must be the valid, compile-verified mutants that were
+	// scored — [m1 m3], NOT the discarded non-compiling m2 — so a caller can
+	// recover a survivor's (m3's) code by ID.
+	if len(res.Mutants) != 2 || res.Mutants[0].ID != "m1" || res.Mutants[1].ID != "m3" {
+		t.Fatalf("Result.Mutants should be the valid scored mutants [m1 m3], got %+v", res.Mutants)
+	}
 }
 
 func TestAuthorUnsupportedLang(t *testing.T) {

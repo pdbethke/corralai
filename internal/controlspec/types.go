@@ -65,6 +65,11 @@ type GateTest struct {
 	Vetted    bool
 	CreatedTS time.Time
 	VettedTS  time.Time
+	// VerdictsJSON is an opaque JSON blob of the reviewer's per-mutant
+	// []Verdict decisions (StageCandidate, Task 3): the store never
+	// interprets it — it's persisted and returned exactly as given, and the
+	// CISO surface decodes it with testgen.Verdict. Empty string when unset.
+	VerdictsJSON string
 }
 
 // Bundle is a named, versioned set of Requirements from a published

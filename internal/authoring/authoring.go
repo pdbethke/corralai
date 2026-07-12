@@ -35,6 +35,10 @@ type Result struct {
 	Test      string
 	Report    adequacy.Report
 	Discarded []string
+	// Mutants is the valid, compile-verified mutants that were scored — the
+	// invalid/non-compiling ones are in Discarded. Lets a caller recover a
+	// surviving mutant's code by its ID for reviewer triage.
+	Mutants []adequacy.Mutant
 }
 
 // Author runs the authoring-tier loop: extract the target's signature
@@ -74,5 +78,5 @@ func Author(ctx context.Context, m testgen.LLM, jail adequacy.Jail, req Request)
 	if err != nil {
 		return Result{}, fmt.Errorf("authoring: score: %w", err)
 	}
-	return Result{Test: test, Report: rep, Discarded: discarded}, nil
+	return Result{Test: test, Report: rep, Discarded: discarded, Mutants: valid}, nil
 }

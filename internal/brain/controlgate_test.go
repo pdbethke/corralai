@@ -162,3 +162,15 @@ func TestControlRunner_CertifyError_NoPost(t *testing.T) {
 		}
 	}
 }
+
+func TestStartControlGate_OffSwitches(t *testing.T) {
+	// no policies → complete no-op
+	if rs, cs, err := StartControlGate(context.Background(), Options{}); rs != nil || cs != nil || err != nil {
+		t.Fatalf("empty policies must be a no-op: %v %v %v", rs, cs, err)
+	}
+	// policies but nil backend → disabled (fail-closed: never run unsandboxed)
+	opts := Options{ControlPolicies: []controlgate.ControlPolicy{{Repo: "o/r", Owner: "x", Lang: "go"}}}
+	if rs, cs, _ := StartControlGate(context.Background(), opts); rs != nil || cs != nil {
+		t.Fatal("nil GateBackend must disable the control gate")
+	}
+}

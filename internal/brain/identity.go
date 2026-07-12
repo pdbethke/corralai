@@ -13,6 +13,7 @@ import (
 	"github.com/pdbethke/corralai/internal/artifacts"
 	"github.com/pdbethke/corralai/internal/attest"
 	"github.com/pdbethke/corralai/internal/buildstore"
+	"github.com/pdbethke/corralai/internal/controlgate"
 	"github.com/pdbethke/corralai/internal/coord"
 	"github.com/pdbethke/corralai/internal/gate"
 	"github.com/pdbethke/corralai/internal/gateway"
@@ -285,6 +286,13 @@ type Options struct {
 	// a commit status's target_url. nil => a relative-path default
 	// ("/api/gate/run?repo=...&sha=...").
 	GateRecordURL func(repo, sha string) string
+
+	// Control gate (v1 run+post): the control owner's vetted tests, run against
+	// each PR head and posted as a distinct corral/control-gate required check.
+	ControlPolicies     []controlgate.ControlPolicy
+	ControlSpecDB       string // vetted-tests store DSN (controlspec)
+	ControlGateDB       string // dedup run-store DSN (separate from the merge gate's)
+	ControlPollInterval time.Duration
 }
 
 // SpawnBudget is the brain-side request-side DoS bound for spawning.

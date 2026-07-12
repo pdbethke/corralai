@@ -198,6 +198,23 @@ func TestControlRunner_CertifyError_BoundedRetry(t *testing.T) {
 	}
 }
 
+func TestControlSpecStore_SharesProvided(t *testing.T) {
+	provided, err := controlspec.OpenStore(filepath.Join(t.TempDir(), "cs.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer provided.Close()
+	s, owns, err := controlSpecStore(Options{ControlSpec: provided})
+	if err != nil || s != provided || owns {
+		t.Fatalf("must reuse the provided store (owns=false), got owns=%v err=%v same=%v", owns, err, s == provided)
+	}
+	s2, owns2, err := controlSpecStore(Options{ControlSpecDB: filepath.Join(t.TempDir(), "cs2.db")})
+	if err != nil || s2 == nil || !owns2 {
+		t.Fatalf("unset → open its own (owns=true), got owns=%v err=%v", owns2, err)
+	}
+	s2.Close()
+}
+
 func TestStartControlGate_OffSwitches(t *testing.T) {
 	// no policies → complete no-op
 	if rs, cs, err := StartControlGate(context.Background(), Options{}); rs != nil || cs != nil || err != nil {

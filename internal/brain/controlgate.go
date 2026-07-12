@@ -133,6 +133,22 @@ func (r *controlRunner) Run(ctx context.Context, repoURL string, p gate.Policy, 
 	return nil
 }
 
+// controlSpecStore returns the controlspec store StartControlGate + the control
+// tools share. If opts.ControlSpec is set it is reused (owns=false — the caller
+// owns its lifetime); otherwise a new store is opened at opts.ControlSpecDB
+// (owns=true — StartControlGate must close it on a later error).
+func controlSpecStore(opts Options) (store *controlspec.Store, owns bool, err error) {
+	if opts.ControlSpec != nil {
+		return opts.ControlSpec, false, nil
+	}
+	dsn := opts.ControlSpecDB
+	if dsn == "" {
+		dsn = "corralai_control_spec.duckdb"
+	}
+	s, err := controlspec.OpenStore(dsn)
+	return s, true, err
+}
+
 // StartControlGate wires and starts the control gate: the controlspec store
 // (vetted tests), a separate gate.Store (SHA dedup, distinct from the merge
 // gate so their dedup keys never collide), an adequacy jail over the shared
@@ -152,11 +168,7 @@ func StartControlGate(ctx context.Context, opts Options) (*gate.Store, *controls
 		return nil, nil, nil
 	}
 
-	specDSN := opts.ControlSpecDB
-	if specDSN == "" {
-		specDSN = "corralai_control_spec.duckdb"
-	}
-	spec, err := controlspec.OpenStore(specDSN)
+	spec, ownsSpec, err := controlSpecStore(opts)
 	if err != nil {
 		return nil, nil, fmt.Errorf("control-gate: open spec store: %w", err)
 	}
@@ -166,7 +178,9 @@ func StartControlGate(ctx context.Context, opts Options) (*gate.Store, *controls
 	}
 	runStore, err := gate.OpenStore(runDSN)
 	if err != nil {
-		_ = spec.Close()
+		if ownsSpec {
+			_ = spec.Close()
+		}
 		return nil, nil, fmt.Errorf("control-gate: open run store: %w", err)
 	}
 

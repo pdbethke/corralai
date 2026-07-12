@@ -14,6 +14,8 @@ Usage:
   corral                          serve /mcp/ + /healthz on $CORRALAI_ADDR
   corral secret set|get|list|rm   manage provider keys + tokens in the secure keystore
                                   (env → OS keyring → age-encrypted file; set reads stdin, never argv)
+  corral control seed [flags]     seed one vetted control test into the control-gate store
+                                  (--spec-db --owner --goal --target --code-path --test-path --test-file)
   corral certify --brain <url> [flags] -- <command>...
                                   run <command>, sign + record the result as a tamper-evident
                                   build attestation on the brain (report_build); exits with

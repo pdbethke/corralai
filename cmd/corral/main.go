@@ -143,7 +143,7 @@ func subcommand(args []string) string {
 		return ""
 	}
 	switch args[0] {
-	case "certify", "secret":
+	case "certify", "secret", "control":
 		return args[0]
 	}
 	return ""
@@ -183,6 +183,8 @@ Usage:
   corral                          serve /mcp/ + /healthz on $CORRALAI_ADDR
   corral secret set|get|list|rm   manage provider keys + tokens in the secure keystore
                                   (env → OS keyring → age-encrypted file; set reads stdin, never argv)
+  corral control seed [flags]     seed one vetted control test into the control-gate store
+                                  (--spec-db --owner --goal --target --code-path --test-path --test-file)
   corral certify --brain <url> [flags] -- <command>...
                                   run <command>, sign + record the result as a tamper-evident
                                   build attestation on the brain (report_build); exits with
@@ -463,6 +465,12 @@ func main() {
 		return
 	case "certify":
 		os.Exit(runCertify(os.Args[2:], realRunner{}, mcpPoster{}, os.Stdout, os.Stderr))
+	case "control":
+		if err := runControl(os.Args[2:], os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "corral control:", err)
+			os.Exit(1)
+		}
+		return
 	}
 	if showVersion(os.Args[1:]) {
 		log.SetFlags(0)

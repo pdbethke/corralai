@@ -65,6 +65,11 @@
 //	CORRALAI_GATE_POLL_SECONDS how often (seconds) the repo gate polls covered repos for new PR heads (default 120)
 //	CORRALAI_GATE_EXEC_BACKEND / _EXEC_UNSAFE_HOST  same jail backend used by the independent verify-gate (see below);
 //	                           the repo gate reuses it — a missing backend disables the repo gate too, loudly, never unsandboxed
+//	CORRALAI_CONTROL_GATE     control gate: ";"-separated "repo=owner/name,owner=<principal>,lang=go,base=main"
+//	                           — runs the owner's VETTED tests against PR heads, posts corral/control-gate
+//	CORRALAI_CONTROL_GATE_SPEC_DB  control-gate vetted-tests store (default ~/.claude/corralai_control_spec.duckdb)
+//	CORRALAI_CONTROL_GATE_DB       control-gate dedupe/index store (default ~/.claude/corralai_control_gate.duckdb)
+//	CORRALAI_CONTROL_GATE_POLL_SECONDS  how often the control gate polls for new PR heads (default 120)
 package main
 
 import (
@@ -91,6 +96,7 @@ import (
 	"github.com/pdbethke/corralai/internal/auth"
 	"github.com/pdbethke/corralai/internal/brain"
 	"github.com/pdbethke/corralai/internal/buildstore"
+	"github.com/pdbethke/corralai/internal/controlgate"
 	"github.com/pdbethke/corralai/internal/coord"
 	"github.com/pdbethke/corralai/internal/egress"
 	"github.com/pdbethke/corralai/internal/embed"
@@ -1042,6 +1048,16 @@ func main() {
 	}
 	gateDB := env("CORRALAI_GATE_DB", filepath.Join(home, ".claude", "corralai_gate.duckdb"))
 
+	// Control gate (v1): CORRALAI_CONTROL_GATE declares repo→owner control
+	// gates; empty => feature off. Runs each owner's VETTED tests against PR
+	// heads and posts corral/control-gate. Reuses execBackend for the jail.
+	controlPolicies, badControl := controlgate.ParseControlPolicies(os.Getenv("CORRALAI_CONTROL_GATE"))
+	for _, bad := range badControl {
+		log.Printf("control-gate: malformed CORRALAI_CONTROL_GATE entry (skipped): %q", bad)
+	}
+	controlSpecDB := env("CORRALAI_CONTROL_GATE_SPEC_DB", filepath.Join(home, ".claude", "corralai_control_spec.duckdb"))
+	controlGateDB := env("CORRALAI_CONTROL_GATE_DB", filepath.Join(home, ".claude", "corralai_control_gate.duckdb"))
+
 	brainOpts := brain.Options{
 		Coord:                 store,
 		MemoryOwners:          memOwners,
@@ -1091,6 +1107,11 @@ func main() {
 		GateBackend:      execBackend,
 		GateDB:           gateDB,
 		GatePollInterval: time.Duration(envInt("CORRALAI_GATE_POLL_SECONDS", 120)) * time.Second,
+
+		ControlPolicies:     controlPolicies,
+		ControlSpecDB:       controlSpecDB,
+		ControlGateDB:       controlGateDB,
+		ControlPollInterval: time.Duration(envInt("CORRALAI_CONTROL_GATE_POLL_SECONDS", 120)) * time.Second,
 	}
 	srv := brain.NewServer(store, memStore, brainOpts)
 
@@ -1278,6 +1299,13 @@ func main() {
 		log.Fatalf("gate: %v", gerr)
 	} else if gateStore != nil {
 		mux.Handle("/api/gate/run", verifier.Wrap(authz(brain.GateRunHandler(gateStore))))
+	}
+
+	// Control gate: same StartX pattern as the repo gate above, but v1 has
+	// no read endpoint yet (Task 6 wires `corral control` CLI dispatch).
+	// Degrade-never-block: log and continue rather than failing brain startup.
+	if _, _, cerr := brain.StartControlGate(context.Background(), brainOpts); cerr != nil {
+		log.Printf("control-gate: %v", cerr)
 	}
 
 	// Outermost on every route: Host allowlist + per-IP rate limit.

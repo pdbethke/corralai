@@ -18,6 +18,11 @@ import (
 	"github.com/pdbethke/corralai/internal/testgen"
 )
 
+// maxControlMutants bounds how many seeded violations stage_control will score.
+// Each mutant costs two jail spawns (build + test); a generous adequacy sample
+// is well under this. Caps the compute an admin request can trigger.
+const maxControlMutants = 20
+
 // stager stages a candidate from a fully-built request. In production it's a
 // closure over controlgate.StageCandidate bound to the model + jail; tests stub it.
 type stager func(ctx context.Context, req controlgate.StageRequest) (controlspec.GateTest, error)
@@ -50,6 +55,9 @@ func stageControl(ctx context.Context, store *controlspec.Store, stage stager,
 	if nMutants <= 0 {
 		nMutants = 5
 	}
+	if nMutants > maxControlMutants {
+		nMutants = maxControlMutants
+	}
 	req := controlgate.StageRequest{
 		Request: authoring.Request{
 			Goal: g.Intent, Code: code, Lang: lang, CodePath: codePath, TestPath: testPath,
@@ -63,6 +71,9 @@ func stageControl(ctx context.Context, store *controlspec.Store, stage stager,
 	}
 	var verdicts []testgen.Verdict
 	if gt.VerdictsJSON != "" {
+		// VerdictsJSON is the brain's own json.Marshal output (stage.go) — a
+		// trusted same-process round-trip; a decode failure is not reachable
+		// from external input, so an empty Triage on the impossible error is safe.
 		_ = json.Unmarshal([]byte(gt.VerdictsJSON), &verdicts)
 	}
 	return stageControlOut{Goal: goalID, Target: target, KillRate: gt.KillRate,

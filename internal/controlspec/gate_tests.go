@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Elastic-2.0
 
-// Package controlspec: the human-gate transitions on top of the gate_tests
-// store Task 1 built. A saved GateTest starts unvetted (SaveCandidate always
-// forces vetted=false); Promote and Reject are the only two ways a candidate
-// leaves that unvetted state — the CISO's approval or rejection, reusing
-// corral's memory-vetting cycle (shared → SetShared) for this domain.
+// gate_tests.go: the human-gate transitions on top of the gate_tests store
+// Task 1 built. A saved GateTest starts unvetted (SaveCandidate always forces
+// vetted=false); Promote and Reject are the only two ways a candidate leaves
+// that unvetted state — the CISO's approval or rejection, reusing corral's
+// memory-vetting cycle (shared → SetShared) for this domain.
 package controlspec
 
 import (

@@ -97,6 +97,7 @@ import (
 	"github.com/pdbethke/corralai/internal/brain"
 	"github.com/pdbethke/corralai/internal/buildstore"
 	"github.com/pdbethke/corralai/internal/controlgate"
+	"github.com/pdbethke/corralai/internal/controlspec"
 	"github.com/pdbethke/corralai/internal/coord"
 	"github.com/pdbethke/corralai/internal/egress"
 	"github.com/pdbethke/corralai/internal/embed"
@@ -1065,6 +1066,10 @@ func main() {
 	}
 	controlSpecDB := env("CORRALAI_CONTROL_GATE_SPEC_DB", filepath.Join(home, ".claude", "corralai_control_spec.duckdb"))
 	controlGateDB := env("CORRALAI_CONTROL_GATE_DB", filepath.Join(home, ".claude", "corralai_control_gate.duckdb"))
+	controlSpecStore, err := controlspec.OpenStore(controlSpecDB)
+	if err != nil {
+		log.Fatalf("control spec store: %v", err)
+	}
 
 	brainOpts := brain.Options{
 		Coord:                 store,
@@ -1118,6 +1123,8 @@ func main() {
 
 		ControlPolicies:     controlPolicies,
 		ControlSpecDB:       controlSpecDB,
+		ControlSpec:         controlSpecStore,
+		ControlModel:        narrator,
 		ControlGateDB:       controlGateDB,
 		ControlPollInterval: time.Duration(envInt("CORRALAI_CONTROL_GATE_POLL_SECONDS", 120)) * time.Second,
 	}

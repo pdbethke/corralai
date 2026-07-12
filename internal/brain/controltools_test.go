@@ -8,8 +8,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
 	"github.com/pdbethke/corralai/internal/controlgate"
 	"github.com/pdbethke/corralai/internal/controlspec"
+	"github.com/pdbethke/corralai/internal/coord"
+	"github.com/pdbethke/corralai/internal/memory"
+	"github.com/pdbethke/corralai/internal/principals"
 )
 
 func TestStageControl(t *testing.T) {
@@ -67,5 +72,58 @@ func TestGetControl(t *testing.T) {
 	}
 	if _, err := getControl(store, "o@x", "nope", "x"); err == nil {
 		t.Fatal("absent candidate must error")
+	}
+}
+
+// TestPromoteControlRequiresAdmin proves promote_control is admin-gated the
+// same way promote_memory is (verbatim copy of that gate): an unauthenticated
+// caller against a Principals store with a real superuser seeded is refused a
+// tool error.
+func TestPromoteControlRequiresAdmin(t *testing.T) {
+	dir := t.TempDir()
+	cstore, err := coord.Open(filepath.Join(dir, "c.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cstore.Close() })
+	mstore, err := memory.Open(filepath.Join(dir, "m.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { mstore.Close() })
+	pstore, err := principals.Open(filepath.Join(dir, "p.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pstore.Close() })
+	if err := pstore.CreateSuperuser("real-admin@example.com", "test"); err != nil {
+		t.Fatal(err)
+	}
+	cspec, err := controlspec.OpenStore(filepath.Join(dir, "cs.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cspec.Close() })
+
+	ctx := context.Background()
+	clientT, serverT := mcp.NewInMemoryTransports()
+	go func() {
+		_ = NewServer(cstore, mstore, Options{Principals: pstore, ControlSpec: cspec}).Run(ctx, serverT)
+	}()
+	client := mcp.NewClient(&mcp.Implementation{Name: "t1", Version: "0"}, nil)
+	sess, err := client.Connect(ctx, clientT, nil)
+	if err != nil {
+		t.Fatalf("connect non-admin: %v", err)
+	}
+	defer sess.Close()
+
+	res, err := sess.CallTool(ctx, &mcp.CallToolParams{Name: "promote_control", Arguments: map[string]any{
+		"goal": "some-goal", "target": "some/target.go",
+	}})
+	if err != nil {
+		t.Fatalf("promote_control non-admin call: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("want tool error for non-admin promote_control, got success")
 	}
 }

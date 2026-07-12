@@ -232,6 +232,9 @@ func NewServer(store *coord.Store, mem *memory.Store, opts Options) *mcp.Server 
 	if opts.Learn != nil {
 		registerLearn(s, opts.Learn, mem, opts.Artifacts, opts)
 	}
+	if opts.ControlSpec != nil {
+		registerControlTools(s, opts)
+	}
 	if opts.Missions != nil {
 		registerMissions(s, opts.Missions, opts.Queue, mem, opts.Telemetry, opts)
 		registerThought(s, opts.Missions, opts)

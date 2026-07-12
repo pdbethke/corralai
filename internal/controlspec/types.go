@@ -40,6 +40,28 @@ type Requirement struct {
 	Intent string `json:"intent"`
 }
 
+// GateTest is one candidate CISO test for a (Owner, Goal, Target) triple:
+// the executable test plus the adequacy evidence (KillRate, Survived,
+// Discarded mutants) that justified authoring it. A saved GateTest is always
+// unvetted (Vetted=false) regardless of what the caller sets on the struct —
+// SaveCandidate enforces that a fresh or re-authored candidate must be
+// re-approved by a human before it can gate; only Promote (Task 2) flips
+// Vetted to true. GetVetted only ever returns a vetted row, so an unvetted
+// candidate is invisible to the gate. CreatedTS/VettedTS are caller-stamped
+// and persisted exactly as given — the store never calls time.Now() itself.
+type GateTest struct {
+	Owner     string
+	Goal      string
+	Target    string
+	Test      string
+	KillRate  float64
+	Survived  []string
+	Discarded []string
+	Vetted    bool
+	CreatedTS time.Time
+	VettedTS  time.Time
+}
+
 // Bundle is a named, versioned set of Requirements from a published
 // standard (e.g. OWASP ASVS 4.0.3) — the CISO's starter library, loaded via
 // LoadBundle and turned into goals via ImportBundle.

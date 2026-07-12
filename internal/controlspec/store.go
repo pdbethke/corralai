@@ -153,32 +153,73 @@ func (s *Store) SaveCandidate(gt GateTest) error {
 	return nil
 }
 
+// gateTestCols is the gate_tests column list, in the order scanGateTest reads.
+// Interpolated into SQL as a constant literal only — never caller input.
+const gateTestCols = `goal, target, test, kill_rate, survived, discarded, ` +
+	`vetted, created_ts, vetted_ts, verdicts, code_path, test_path`
+
+// rowScanner is satisfied by both *sql.Row (QueryRow) and *sql.Rows.
+type rowScanner interface{ Scan(dest ...any) error }
+
+// scanGateTest decodes one gate_tests row selected as gateTestCols.
+func scanGateTest(sc rowScanner, owner string) (GateTest, error) {
+	gt := GateTest{Owner: owner}
+	var survived, discarded string
+	var createdTS, vettedTS sql.NullTime
+	if err := sc.Scan(&gt.Goal, &gt.Target, &gt.Test, &gt.KillRate, &survived, &discarded,
+		&gt.Vetted, &createdTS, &vettedTS, &gt.VerdictsJSON, &gt.CodePath, &gt.TestPath); err != nil {
+		return GateTest{}, err
+	}
+	if err := json.Unmarshal([]byte(survived), &gt.Survived); err != nil {
+		return GateTest{}, err
+	}
+	if err := json.Unmarshal([]byte(discarded), &gt.Discarded); err != nil {
+		return GateTest{}, err
+	}
+	gt.CreatedTS = createdTS.Time.UTC()
+	gt.VettedTS = vettedTS.Time.UTC()
+	return gt, nil
+}
+
+// listGateTests is the shared body for ListPending/ListVetted. whereVetted is
+// an internal constant literal ("vetted = FALSE"/"vetted = TRUE"), never input.
+func (s *Store) listGateTests(op, whereVetted, owner string) ([]GateTest, error) {
+	rows, err := s.db.Query(
+		`SELECT `+gateTestCols+` FROM gate_tests WHERE owner = ? AND `+whereVetted+` ORDER BY goal, target`, // #nosec G202 -- not injectable: gateTestCols and whereVetted are constant literals from internal callers only; owner uses ? placeholder
+		owner)
+	if err != nil {
+		return nil, fmt.Errorf("controlspec: %s: %w", op, err)
+	}
+	defer rows.Close()
+	var out []GateTest
+	for rows.Next() {
+		gt, err := scanGateTest(rows, owner)
+		if err != nil {
+			return nil, fmt.Errorf("controlspec: %s: scan: %w", op, err)
+		}
+		out = append(out, gt)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("controlspec: %s: %w", op, err)
+	}
+	return out, nil
+}
+
 // GetVetted looks up the vetted gate test for (owner, goal, target),
 // returning (GateTest{}, false, nil) when no such row exists — including
 // when the row exists but is still unvetted, which is the human gate this
 // store exists to enforce.
 func (s *Store) GetVetted(owner, goal, target string) (GateTest, bool, error) {
-	gt := GateTest{Owner: owner, Goal: goal, Target: target}
-	var survived, discarded string
-	var createdTS, vettedTS sql.NullTime
-	err := s.db.QueryRow(
-		`SELECT test, kill_rate, survived, discarded, vetted, created_ts, vetted_ts, verdicts, code_path, test_path
-		 FROM gate_tests WHERE owner = ? AND goal = ? AND target = ? AND vetted = TRUE`,
-		owner, goal, target).Scan(&gt.Test, &gt.KillRate, &survived, &discarded, &gt.Vetted, &createdTS, &vettedTS, &gt.VerdictsJSON, &gt.CodePath, &gt.TestPath)
+	row := s.db.QueryRow(
+		`SELECT `+gateTestCols+` FROM gate_tests WHERE owner = ? AND goal = ? AND target = ? AND vetted = TRUE`,
+		owner, goal, target)
+	gt, err := scanGateTest(row, owner)
 	if err == sql.ErrNoRows {
 		return GateTest{}, false, nil
 	}
 	if err != nil {
 		return GateTest{}, false, fmt.Errorf("controlspec: get vetted: %w", err)
 	}
-	if err := json.Unmarshal([]byte(survived), &gt.Survived); err != nil {
-		return GateTest{}, false, fmt.Errorf("controlspec: get vetted: unmarshal survived: %w", err)
-	}
-	if err := json.Unmarshal([]byte(discarded), &gt.Discarded); err != nil {
-		return GateTest{}, false, fmt.Errorf("controlspec: get vetted: unmarshal discarded: %w", err)
-	}
-	gt.CreatedTS = createdTS.Time.UTC()
-	gt.VettedTS = vettedTS.Time.UTC()
 	return gt, true, nil
 }
 
@@ -186,37 +227,7 @@ func (s *Store) GetVetted(owner, goal, target string) (GateTest, bool, error) {
 // ordered by (goal, target). A different owner's candidates are never
 // included — the owner scoping this store exists to provide.
 func (s *Store) ListPending(owner string) ([]GateTest, error) {
-	rows, err := s.db.Query(
-		`SELECT goal, target, test, kill_rate, survived, discarded, vetted, created_ts, vetted_ts, verdicts, code_path, test_path
-		 FROM gate_tests WHERE owner = ? AND vetted = FALSE ORDER BY goal, target`,
-		owner)
-	if err != nil {
-		return nil, fmt.Errorf("controlspec: list pending: %w", err)
-	}
-	defer rows.Close()
-
-	var pending []GateTest
-	for rows.Next() {
-		gt := GateTest{Owner: owner}
-		var survived, discarded string
-		var createdTS, vettedTS sql.NullTime
-		if err := rows.Scan(&gt.Goal, &gt.Target, &gt.Test, &gt.KillRate, &survived, &discarded, &gt.Vetted, &createdTS, &vettedTS, &gt.VerdictsJSON, &gt.CodePath, &gt.TestPath); err != nil {
-			return nil, fmt.Errorf("controlspec: list pending: scan: %w", err)
-		}
-		if err := json.Unmarshal([]byte(survived), &gt.Survived); err != nil {
-			return nil, fmt.Errorf("controlspec: list pending: unmarshal survived: %w", err)
-		}
-		if err := json.Unmarshal([]byte(discarded), &gt.Discarded); err != nil {
-			return nil, fmt.Errorf("controlspec: list pending: unmarshal discarded: %w", err)
-		}
-		gt.CreatedTS = createdTS.Time.UTC()
-		gt.VettedTS = vettedTS.Time.UTC()
-		pending = append(pending, gt)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("controlspec: list pending: %w", err)
-	}
-	return pending, nil
+	return s.listGateTests("list pending", "vetted = FALSE", owner)
 }
 
 // ListVetted returns all control-owner-approved gate tests owned by owner, ordered by
@@ -224,35 +235,5 @@ func (s *Store) ListPending(owner string) ([]GateTest, error) {
 // gate tier executes against head code. A different owner's tests are never
 // included — the owner scoping this store exists to provide.
 func (s *Store) ListVetted(owner string) ([]GateTest, error) {
-	rows, err := s.db.Query(
-		`SELECT goal, target, test, kill_rate, survived, discarded, vetted, created_ts, vetted_ts, verdicts, code_path, test_path
-		 FROM gate_tests WHERE owner = ? AND vetted = TRUE ORDER BY goal, target`,
-		owner)
-	if err != nil {
-		return nil, fmt.Errorf("controlspec: list vetted: %w", err)
-	}
-	defer rows.Close()
-
-	var vetted []GateTest
-	for rows.Next() {
-		gt := GateTest{Owner: owner}
-		var survived, discarded string
-		var createdTS, vettedTS sql.NullTime
-		if err := rows.Scan(&gt.Goal, &gt.Target, &gt.Test, &gt.KillRate, &survived, &discarded, &gt.Vetted, &createdTS, &vettedTS, &gt.VerdictsJSON, &gt.CodePath, &gt.TestPath); err != nil {
-			return nil, fmt.Errorf("controlspec: list vetted: scan: %w", err)
-		}
-		if err := json.Unmarshal([]byte(survived), &gt.Survived); err != nil {
-			return nil, fmt.Errorf("controlspec: list vetted: unmarshal survived: %w", err)
-		}
-		if err := json.Unmarshal([]byte(discarded), &gt.Discarded); err != nil {
-			return nil, fmt.Errorf("controlspec: list vetted: unmarshal discarded: %w", err)
-		}
-		gt.CreatedTS = createdTS.Time.UTC()
-		gt.VettedTS = vettedTS.Time.UTC()
-		vetted = append(vetted, gt)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("controlspec: list vetted: %w", err)
-	}
-	return vetted, nil
+	return s.listGateTests("list vetted", "vetted = TRUE", owner)
 }

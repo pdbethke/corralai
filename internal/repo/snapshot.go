@@ -101,6 +101,12 @@ func (e *Engine) Snapshot(dir string) ([]byte, map[string]string, error) {
 // so a remote bee cannot overwrite .git/config and trigger a git hook or corrupt
 // the credential surface.
 func (e *Engine) ApplyFiles(dir string, writes []FileWrite) ([]string, error) {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+
 	var applied []string
 	for _, w := range writes {
 		// Mirror ReadFile's guard: never write into .git / node_modules / vendor.
@@ -112,19 +118,35 @@ func (e *Engine) ApplyFiles(dir string, writes []FileWrite) ([]string, error) {
 		if skip(first) {
 			continue // never write into protected dirs; leave out of applied
 		}
-		full, err := safeJoin(dir, w.Path)
-		if err != nil {
-			continue // escape — skip, leave out of applied
+		if err := writeConfined(root, filepath.FromSlash(clean), strings.NewReader(w.Content), 0); err != nil {
+			continue // escape (symlink or otherwise) or IO failure — skip, leave out of applied
 		}
-		if err := os.MkdirAll(filepath.Dir(full), 0o700); err != nil {
-			return applied, err
-		}
-		if err := os.WriteFile(full, []byte(w.Content), 0o600); err != nil {
-			return applied, err
-		}
-		applied = append(applied, filepath.ToSlash(w.Path))
+		applied = append(applied, clean)
 	}
 	return applied, nil
+}
+
+// writeConfined writes from r into relPath INSIDE root. os.Root confines the write
+// to the root and REFUSES any symlinked path component (a hostile cloned repo can
+// commit `cfg -> /root/.ssh`), so a symlink cannot redirect the write outside dir —
+// the write-side counterpart to ReadFile's os.Root read confinement (read.go). The
+// string-only safeJoin this replaces on the write path is symlink-defeatable. limit<=0 = unbounded.
+func writeConfined(root *os.Root, relPath string, r io.Reader, limit int64) error {
+	if d := filepath.Dir(relPath); d != "." && d != "" {
+		if err := root.MkdirAll(d, 0o700); err != nil {
+			return err
+		}
+	}
+	f, err := root.OpenFile(relPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if limit > 0 {
+		r = io.LimitReader(r, limit)
+	}
+	_, err = io.Copy(f, r)
+	return err
 }
 
 // HeadSHA is the working copy's current commit (empty string on an unborn branch).
@@ -145,13 +167,21 @@ func (e *Engine) HeadSHA(ctx context.Context, dir string) (string, error) {
 	return strings.TrimSpace(out), nil
 }
 
-// extractTarGz expands a gzip'd tar (from Snapshot) into dir, rejecting path escapes.
+// extractTarGz expands a gzip'd tar (from Snapshot) into dir, rejecting path escapes
+// (including symlink components, via os.Root).
 func extractTarGz(dir string, data []byte) error {
 	gz, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {
 		return err
 	}
 	tr := tar.NewReader(gz)
+
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+
 	for {
 		h, err := tr.Next()
 		if err == io.EOF {
@@ -160,22 +190,9 @@ func extractTarGz(dir string, data []byte) error {
 		if err != nil {
 			return err
 		}
-		full, err := safeJoin(dir, h.Name)
-		if err != nil {
-			continue
-		}
-		if err := os.MkdirAll(filepath.Dir(full), 0o700); err != nil {
+		if err := writeConfined(root, filepath.Clean(h.Name), tr, snapshotCap); err != nil {
 			return err
 		}
-		f, err := os.OpenFile(full, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600) // #nosec G304 -- path is a server-configured location (db/config/own file), not attacker input
-		if err != nil {
-			return err
-		}
-		if _, err := io.Copy(f, io.LimitReader(tr, snapshotCap)); err != nil {
-			_ = f.Close()
-			return err
-		}
-		_ = f.Close()
 	}
 	return nil
 }

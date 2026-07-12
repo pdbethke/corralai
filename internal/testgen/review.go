@@ -2,7 +2,14 @@
 
 package testgen
 
-import "strings"
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/pdbethke/corralai/internal/adequacy"
+)
 
 // Verdict is the reviewer's classification of one surviving mutant: a real
 // coverage GAP the candidate test should have caught, or an EQUIVALENT
@@ -43,4 +50,39 @@ func parseVerdicts(resp string) []Verdict {
 		})
 	}
 	return out
+}
+
+// reviewSystem instructs the model to act as an independent TEST-REVIEWER —
+// a third generative agent, distinct from the writer (writeTestSystem) and
+// the generator (genMutantsSystem). It classifies each surviving mutant the
+// candidate test failed to catch as a real coverage GAP or an EQUIVALENT
+// mutant, turning raw survivors into curated feedback for the CISO.
+const reviewSystem = `You are a TEST-REVIEWER. You are given a security GOAL, the compliant code, a candidate test, and MUTATIONS that violate the goal but the test did NOT catch. For EACH mutation decide:
+- GAP: the mutation genuinely violates the goal and the test SHOULD have caught it — a real coverage gap.
+- EQUIVALENT: the mutation does not actually violate the goal under any legitimate input (or is behaviourally equivalent to the compliant code) — not a real gap.
+Return ONE line per mutation, EXACTLY: "MUTANT <id>: <GAP|EQUIVALENT>: <one-line rationale>". No other prose.`
+
+// TriageSurvivors asks m to classify each surviving mutant — one the
+// candidate test failed to kill — as a real coverage GAP or an EQUIVALENT
+// mutant. Survivors that reach here already escaped the writer's and
+// generator's judgment; this is an independent third read, not a rubber
+// stamp. Empty survivors short-circuit before any model call.
+func TriageSurvivors(ctx context.Context, m LLM, goal, code, test string, survivors []adequacy.Mutant) ([]Verdict, error) {
+	if len(survivors) == 0 {
+		return nil, nil
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "GOAL:\n%s\n\nCOMPLIANT CODE:\n%s\n\nCANDIDATE TEST:\n%s\n\nUNCAUGHT MUTATIONS:\n", goal, code, test)
+	for _, s := range survivors {
+		fmt.Fprintf(&b, "MUTANT %s:\n%s\n\n", s.ID, s.Code)
+	}
+	resp, err := m.Ask(ctx, reviewSystem, b.String())
+	if err != nil {
+		return nil, err
+	}
+	verdicts := parseVerdicts(resp)
+	if len(verdicts) == 0 {
+		return nil, errors.New("testgen: reviewer returned no parseable verdicts")
+	}
+	return verdicts, nil
 }

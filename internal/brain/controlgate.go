@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"net/url"
 	"os"
 	"time"
 
@@ -47,17 +46,18 @@ type controlRunner struct {
 	Checkout gate.Checkouter
 	Reader   fileReader
 	Cert     controlgate.Certifier
-	Status   controlgate.StatusPoster
+	Status   gate.StatusPoster
 	Spec     *controlspec.Store
 	Jail     adequacy.Jail
 	RunStore *gate.Store
 	Record   func(repo, sha string) string
 	Now      func() time.Time
 	// attempts counts consecutive certify failures per "repo@sha" so the runner
-	// can give up after MaxCertAttempts. It is in-memory only (reset on brain
-	// restart — acceptable: rare, still bounded per process, and a restart may
-	// itself fix the signing config). Accessed only from the single poller
-	// goroutine, so it needs no lock.
+	// can give up after MaxCertAttempts. It is in-memory, reset on restart; a
+	// force-pushed old SHA's key is not actively evicted, so under sustained
+	// signing failure + churn the map can grow — acceptable for a bounded-failure
+	// guard, revisit with size-cap/TTL eviction if it ever matters. Accessed only
+	// from the single poller goroutine, so it needs no lock.
 	attempts        map[string]int
 	MaxCertAttempts int
 }
@@ -116,7 +116,8 @@ func (r *controlRunner) Run(ctx context.Context, repoURL string, p gate.Policy, 
 		RecordURL: func(sha string) string { return r.Record(p.Repo, sha) },
 	}
 	key := p.Repo + "@" + pr.HeadSHA
-	if err := controlgate.PostControlGate(ctx, r.Cert, r.Status, req, res); err != nil {
+	recordID, err := controlgate.PostControlGate(ctx, r.Cert, r.Status, req, res)
+	if err != nil {
 		// No unsigned green: certify failed, nothing was posted. Below the cap,
 		// do NOT record the SHA — leave it for the next poll to retry (a transient
 		// signing blip self-heals). At the cap, a persistent failure is terminal:
@@ -129,7 +130,9 @@ func (r *controlRunner) Run(ctx context.Context, repoURL string, p gate.Policy, 
 		return r.fail(ctx, repoURL, p, pr, target, "error", "sign (gave up after retries): "+err.Error())
 	}
 	delete(r.attempts, key) // signed OK — clear any prior transient-failure count
-	_ = r.RunStore.Save(gate.Run{Repo: p.Repo, HeadSHA: pr.HeadSHA, PR: pr.Number, Passed: res.Pass, RecordID: 0, RanAt: r.Now()})
+	if err := r.RunStore.Save(gate.Run{Repo: p.Repo, HeadSHA: pr.HeadSHA, PR: pr.Number, Passed: res.Pass, RecordID: recordID, RanAt: r.Now()}); err != nil {
+		log.Printf("control-gate: save dedupe %s@%s: %v", p.Repo, pr.HeadSHA, err)
+	}
 	return nil
 }
 
@@ -186,9 +189,7 @@ func StartControlGate(ctx context.Context, opts Options) (*gate.Store, *controls
 
 	record := opts.GateRecordURL
 	if record == nil {
-		record = func(repoName, sha string) string {
-			return "/api/gate/run?repo=" + url.QueryEscape(repoName) + "&sha=" + url.QueryEscape(sha)
-		}
+		record = defaultGateRecordURL
 	}
 
 	// v1 assumes one language/scaffold per brain (all control policies share it);
@@ -240,8 +241,8 @@ func StartControlGate(ctx context.Context, opts Options) (*gate.Store, *controls
 }
 
 // fail posts a non-success status (unsigned — a failure needs no signature)
-// and records the SHA so the poller doesn't re-run it. Mirrors gate.Runner.fail.
+// and records the SHA so the poller doesn't re-run it. Delegates to
+// gate.FailClosed so this stays byte-identical to gate.Runner.fail.
 func (r *controlRunner) fail(ctx context.Context, repoURL string, p gate.Policy, pr gate.PRRef, target, state, msg string) error {
-	_ = r.RunStore.Save(gate.Run{Repo: p.Repo, HeadSHA: pr.HeadSHA, PR: pr.Number, Passed: false, RanAt: r.Now()})
-	return r.Status.SetCommitStatus(ctx, repoURL, pr.HeadSHA, p.Context, state, target, msg)
+	return gate.FailClosed(ctx, r.RunStore, r.Status, repoURL, p.Repo, pr, p.Context, target, state, msg, r.Now)
 }

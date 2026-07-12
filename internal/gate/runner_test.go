@@ -58,11 +58,13 @@ func (f *fakeCertifier) Certify(ctx context.Context, repo, commit, command strin
 // state, so tests can assert "success" was never among them.
 type fakeStatusPoster struct {
 	states []string
+	descs  []string
 	err    error
 }
 
 func (f *fakeStatusPoster) SetCommitStatus(ctx context.Context, repoURL, sha, context, state, targetURL, description string) error {
 	f.states = append(f.states, state)
+	f.descs = append(f.descs, description)
 	return f.err
 }
 

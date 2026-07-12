@@ -99,6 +99,26 @@ func TestListVetted(t *testing.T) {
 	}
 }
 
+func TestGetCandidate(t *testing.T) {
+	s, _ := OpenStore(filepath.Join(t.TempDir(), "cs.db"))
+	defer s.Close()
+	now := time.Unix(1_700_000_000, 0).UTC()
+	_ = s.SaveCandidate(GateTest{Owner: "o@x", Goal: "g1", Target: "a.go", Test: "T1", CodePath: "a.go", TestPath: "a_test.go", KillRate: 1, CreatedTS: now})
+	got, ok, err := s.GetCandidate("o@x", "g1", "a.go")
+	if err != nil || !ok || got.Test != "T1" || got.CodePath != "a.go" {
+		t.Fatalf("GetCandidate should return the unvetted row: %+v ok=%v err=%v", got, ok, err)
+	}
+	// vetted rows are NOT candidates
+	_, _ = s.Promote("o@x", "g1", "a.go", now)
+	if _, ok, _ := s.GetCandidate("o@x", "g1", "a.go"); ok {
+		t.Fatal("a promoted (vetted) row must not be returned by GetCandidate")
+	}
+	// absent → (false, nil)
+	if _, ok, _ := s.GetCandidate("o@x", "nope", "x"); ok {
+		t.Fatal("absent candidate must be ok=false")
+	}
+}
+
 func TestRecipeRoundTrip(t *testing.T) {
 	s, _ := OpenStore(filepath.Join(t.TempDir(), "cs.db"))
 	defer s.Close()

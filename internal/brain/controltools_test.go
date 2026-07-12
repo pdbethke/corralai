@@ -56,6 +56,24 @@ func TestStageControl(t *testing.T) {
 	}
 }
 
+func TestStageControl_ClampsMutantCeiling(t *testing.T) {
+	store, _ := controlspec.OpenStore(filepath.Join(t.TempDir(), "cs.db"))
+	defer store.Close()
+	now := time.Unix(1_700_000_000, 0).UTC()
+	_ = store.SaveGoal(controlspec.Goal{ID: "g1", Owner: "o@x", Intent: "x", CreatedTS: now})
+	var gotReq controlgate.StageRequest
+	stage := func(_ context.Context, req controlgate.StageRequest) (controlspec.GateTest, error) {
+		gotReq = req
+		return controlspec.GateTest{Owner: req.Owner, Goal: req.GoalID, Target: req.Target, CreatedTS: req.Now}, nil
+	}
+	if _, err := stageControl(context.Background(), store, stage, "o@x", "g1", "a.go", "c", "go", "a.go", "a_test.go", 10000, now); err != nil {
+		t.Fatal(err)
+	}
+	if gotReq.NMutants != maxControlMutants {
+		t.Fatalf("n_mutants=10000 must clamp to %d, got %d", maxControlMutants, gotReq.NMutants)
+	}
+}
+
 func TestGetControl(t *testing.T) {
 	store, err := controlspec.OpenStore(filepath.Join(t.TempDir(), "cs.db"))
 	if err != nil {

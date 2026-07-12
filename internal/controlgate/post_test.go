@@ -35,11 +35,16 @@ func TestPostControlGate(t *testing.T) {
 	req := PostRequest{RepoURL: "github.com/o/r", HeadSHA: "abc", Context: "corral/control-gate",
 		RecordURL: func(sha string) string { return "https://brain/rec/" + sha }}
 
-	// PASS → success, exit 0, status posted with the description + record URL.
+	// PASS → success, exit 0, status posted with the description + record URL,
+	// and the signed recordID (the fake Certifier returns 7) propagates.
 	cert, poster := &fakeCert{}, &fakePoster{}
 	passRes := ControlResult{Pass: true, Results: []ControlTestResult{{Goal: "g1", Target: "t1", Passed: true}}}
-	if err := PostControlGate(context.Background(), cert, poster, req, passRes); err != nil {
+	recordID, err := PostControlGate(context.Background(), cert, poster, req, passRes)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if recordID != 7 {
+		t.Errorf("recordID = %d, want 7 (propagated from Certify)", recordID)
 	}
 	if cert.gotExit != 0 || cert.gotDigest == "" {
 		t.Errorf("certify args: exit=%d digest=%q", cert.gotExit, cert.gotDigest)
@@ -51,14 +56,14 @@ func TestPostControlGate(t *testing.T) {
 	// FAIL → failure, exit 1.
 	cert2, poster2 := &fakeCert{}, &fakePoster{}
 	failRes := ControlResult{Pass: false, Results: []ControlTestResult{{Goal: "g1", Target: "t1", Passed: false}}}
-	_ = PostControlGate(context.Background(), cert2, poster2, req, failRes)
+	_, _ = PostControlGate(context.Background(), cert2, poster2, req, failRes)
 	if cert2.gotExit != 1 || poster2.state != "failure" {
 		t.Errorf("fail path: exit=%d state=%q", cert2.gotExit, poster2.state)
 	}
 
 	// NO UNSIGNED GREEN: a certify error → error returned AND status NOT posted.
 	cert3, poster3 := &fakeCert{err: errors.New("sign failed")}, &fakePoster{}
-	if err := PostControlGate(context.Background(), cert3, poster3, req, passRes); err == nil {
+	if _, err := PostControlGate(context.Background(), cert3, poster3, req, passRes); err == nil {
 		t.Fatal("certify error must return an error")
 	}
 	if poster3.called {

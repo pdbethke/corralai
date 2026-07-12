@@ -48,3 +48,20 @@ func TestLoadAndImportASVS(t *testing.T) {
 		t.Fatalf("re-import changed count: %d", len(list))
 	}
 }
+
+func TestImportBundleAtomicCount(t *testing.T) {
+	s, _ := OpenStore(filepath.Join(t.TempDir(), "cs.db"))
+	defer s.Close()
+	b := Bundle{Standard: "OWASP ASVS", Version: "4.0.3", Requirements: []Requirement{
+		{Ref: "V2.1.1", Intent: "passwords >= 12", Level: "L1", Mode: "executable"},
+		{Ref: "V4.1.1", Intent: "deny by default", Level: "L1", Mode: "executable"},
+	}}
+	n, err := ImportBundle(s, "o@x", b, time.Unix(1_700_000_000, 0).UTC())
+	if err != nil || n != 2 {
+		t.Fatalf("import: n=%d err=%v", n, err)
+	}
+	goals, _ := s.ListGoals("o@x")
+	if len(goals) != 2 {
+		t.Fatalf("expected 2 goals, got %d", len(goals))
+	}
+}

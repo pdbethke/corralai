@@ -101,24 +101,55 @@ separate required check running only CISO-vetted tests, so lousy dev tests can't
 
 ### 4d. The roles  *(orchestrator-staffed off the earned leaderboard unless the CISO pins a seat)*
 - **test-writer** (capable model): drafts executable tests from a goal + the 4a signature map.
-- **test-reviewer** (independent model, **tier-2**): vets *faithfulness* to intent and — critically
-  — *overreach* (a false-red on compliant code trains devs to route around the gate; worse than a
-  hole).
-- **tester** (cheap, deterministic): runs the *approved* tests. This is the shipped repo-gate runner.
+- **violation-generator** (capable model, authoring-time only): given the goal + code + signature,
+  emits diverse same-signature mutations that genuinely violate the goal — the mutants 4e runs the
+  test against to measure adequacy. Distinct from the writer (a model that *breaks* the goal to test
+  the *test* must not be the one that wrote the test). Spike-validated 2026-07-12.
+- **test-reviewer** (independent model, **tier-2**): vets *faithfulness* to intent, *overreach* (a
+  false-red on compliant code trains devs to route around the gate; worse than a hole), and triages
+  each **uncaught mutant** (real coverage gap vs equivalent mutant) into the CISO's adequacy report.
+- **tester** (cheap, deterministic): runs the *approved* tests per-commit. This is the shipped
+  repo-gate runner. (The expensive mutation run that scores adequacy happens once, at authoring time, in 4e.)
 - **Depends on:** the existing role→model routing / leaderboard; role-pinning override for the CISO.
 
-### 4e. Seeded-violation validator  *(new; the "prove it bites" guard)*
-- **Does:** plant a known violation of the goal into a throwaway copy of the code and confirm the
-  drafted test goes **red**. A test that can't catch a planted violation is rejected before it can
-  ever gate. Certify-by-execution, turned on the test itself.
-- **Depends on:** the bwrap jail (untrusted-code containment, reuse the repo gate's jail path).
+### 4e. Mutation-testing adequacy validator  *(the "prove it bites" guard — SPIKE-VALIDATED 2026-07-12)*
+- **Does:** don't just check the test compiles — *measure that it bites, by execution.* A
+  **violation-generator** (a capable model given the goal + code + signature) produces N diverse,
+  same-signature **mutations** that genuinely violate the goal; the drafted test is run against each
+  in the bwrap jail. The **mutation kill rate** (mutants the test catches) *is the test's
+  ADEQUACY SCORE* — this is mutation testing, and it is the by-execution answer to "how good is this
+  test." A test that catches nothing is rejected outright.
+- **Spike-validated (2026-07-12):** a capable model wrote biting tests from goal+code+signatures
+  (5/6 mutants caught across two ASVS controls) and separately generated diverse, genuine,
+  same-signature violations — the loop runs unattended. The spike also surfaced the hard part below.
+- **Uncaught-mutant triage (the honest hard part):** an uncaught mutant means EITHER the **test is
+  inadequate** (a real coverage gap — strengthen/regenerate) OR the **mutant is equivalent** (doesn't
+  violate the goal under any legitimate input — discard). Distinguishing them is undecidable in
+  general, so an uncaught mutant is never auto-resolved: the **test-reviewer triages** it
+  (probable-gap vs probable-equivalent), and anything it can't confidently call goes to the **CISO**.
+  This lands exactly on the human-eye-at-meaningful-gates invariant.
+- **Depends on:** the bwrap jail (reuse the repo gate's jail path); a capable model for the
+  violation-generator; the reviewer (4d) for triage.
 
-### 4f. Human approval cycle  *(reuse `internal/memory` vetting VERBATIM)*
-- **Does:** a drafted+validated test is `unvetted` and **cannot gate** until the **CISO views it as
-  code and promotes it** — exactly `shared=false` → `SetShared`; only vetted is authoritative. The
-  CISO sees the seeded-violation + reviewer **evidence** alongside the test, so approval is a fast,
-  informed yes/no at the intent level.
-- **Depends on:** the memory store's shared/promote machinery; the CISO principal.
+### 4f. The adequacy feedback loop + human approval  *(reuse `internal/memory` vetting VERBATIM)*
+This is where it stops being a gate and becomes a **control loop**: an adequacy signal, a feedback
+path, a human-set setpoint, and a signed decision.
+- **Raw → triaged → decision.** The **tester/validator (4e)** produces the raw signal (kill rate +
+  the list of uncaught mutants). The **test-reviewer (4d)** *triages* it — real gap vs equivalent
+  mutant, plus faithfulness/overreach — into a **curated** recommendation (a CISO drowning in raw
+  mutants stops reading). The **CISO** gets the curated report and decides: **approve**, **send back
+  to strengthen** (the writer regenerates to cover the gap), or **accept a documented gap** with eyes
+  open.
+- **The CISO sets the setpoint.** They declare the adequacy bar (e.g. "≥90% kill rate; escalate to me
+  any uncaught mutant the reviewer can't confidently call equivalent"). The system auto-clears what
+  meets the bar and escalates only the exceptions — control *without* triage-drowning.
+- **Human gate = the memory vetting cycle, verbatim.** A drafted+validated test is `unvetted` and
+  **cannot gate** until the CISO promotes it (`shared=false` → `SetShared`; only vetted is
+  authoritative). The CISO approves at the intent level, *informed by the adequacy report*.
+- **Continuous, not one-time.** The adequacy score is re-measured on drift; when a refactor drops a
+  test's kill rate below the CISO's bar, that is feedback the CISO receives — not a silent erosion.
+- **Depends on:** the memory store's shared/promote machinery; the CISO principal; 4d (reviewer),
+  4e (validator).
 
 ### 4g. The CISO gate dimension  *(rides the shipped repo gate)*
 - **Does:** a **distinct required check context** (e.g. `corral/ciso-gate`) that runs only the
@@ -134,12 +165,14 @@ separate required check running only CISO-vetted tests, so lousy dev tests can't
 
 ## 5. Data flow
 
-**Authoring tier — rare, expensive, human-gated:**
+**Authoring tier — rare, expensive, human-gated (a control loop):**
 ```
 adopt bundle / edit goal  →  4a extract current signature surface
-  →  test-writer drafts test  →  (tier-2) reviewer vets faithfulness+overreach
-  →  seeded-violation proves it bites  →  CISO reviews AS CODE + evidence → promotes (vetted)
-  →  pin (goal-version × code-shape fingerprint)
+  →  test-writer drafts test
+  →  4e violation-generator mutates the code → run test vs each mutant → KILL RATE (adequacy score)
+  →  reviewer triages faithfulness/overreach + each uncaught mutant (real gap | equivalent)
+  →  CISO gets the CURATED adequacy report → {approve | send back to strengthen → re-draft | accept documented gap}
+  →  on approve: promote (vetted)  →  pin (goal-version × code-shape fingerprint)
 ```
 **Running tier — per-commit, cheap, deterministic:**
 ```
@@ -160,10 +193,22 @@ commit, and when the org moved** — "compliant with ASVS 4.0 through March, ado
 signed per-commit evidence. Separation-of-duties across the SDLC, mechanized, and provable to an
 auditor against a standard they already recognize (ASVS / SSDF / PCI / CIS).
 
+**And it reaches down to test *quality*.** The mutation kill rate (§4e) and the CISO's decision are
+signed too, so the record says not just "tests passed" but "**the CISO knowingly certified this
+control at 83% adequacy, with one documented-equivalent mutant, on this date**." Test adequacy
+becomes a tracked, tamper-evident metric — an auditor can see the org's control *strength* over time,
+not merely that a checkbox was green. This is the answer to "you're only as good as your tests,"
+made provable.
+
 ## 8. Error handling & honest edges
 - Fail-closed inherited from the repo gate.
 - **Overreach** (false-red) is a first-class reviewer target, not an afterthought.
-- A generated test that can't pass seeded-violation is **rejected**, not shipped (loud, not silent).
+- A generated test with a **zero kill rate** (catches no injected violation) is **rejected**, not
+  shipped (loud, not silent).
+- **Equivalent-mutant undecidability is a design constraint, not a bug:** an uncaught mutant is never
+  silently dropped OR silently treated as a gap — it is triaged (reviewer) and, when unresolved,
+  escalated to the CISO. Test adequacy can **drift** as code changes; the loop re-measures and
+  reports a drop below the CISO's bar rather than letting it erode unseen.
 - The CISO never sees a test gate without having approved it (the human-eye invariant); a
   not-yet-approved goal is *reported as uncovered*, never silently skipped.
 - Standard-raise transitions carry a human-set grace window.

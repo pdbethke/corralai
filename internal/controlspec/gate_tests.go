@@ -3,7 +3,7 @@
 // gate_tests.go: the human-gate transitions on top of the gate_tests store
 // Task 1 built. A saved GateTest starts unvetted (SaveCandidate always forces
 // vetted=false); Promote and Reject are the only two ways a candidate leaves
-// that unvetted state — the CISO's approval or rejection, reusing corral's
+// that unvetted state — the control owner's approval or rejection, reusing corral's
 // memory-vetting cycle (shared → SetShared) for this domain.
 package controlspec
 
@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// Promote marks an UNVETTED candidate vetted (the CISO's approval — only a
+// Promote marks an UNVETTED candidate vetted (the control owner's approval — only a
 // vetted test may gate). Returns ok=false when there is no unvetted row to
 // promote (already vetted, or absent). now is caller-stamped — the store
 // never calls time.Now() itself, which keeps it deterministic under test.

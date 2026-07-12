@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Elastic-2.0
 
-// Package testgen turns a CISO goal, target source, and its signature
+// Package testgen turns a control-owner goal, target source, and its signature
 // surface into a candidate Go test via an LLM test-writer. WriteTest is
 // generation-only: it does not compile or run the result. A non-compiling
 // or inadequate test is caught later by adequacy scoring, not here.

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Elastic-2.0
 
-// Package controlspec is corralai's owner-scoped store for CISO test goals:
-// the durable control-spec that a CISO's gate is judged against. It's a
+// Package controlspec is corralai's owner-scoped store for control-owner test goals:
+// the durable control-spec that a control owner's gate is judged against. It's a
 // thin DuckDB table (`control_goals`) keyed on (owner, id) so one owner's
 // goals never leak into another's lookups or lists — the isolation that
 // makes goals dev-untouchable once the auth gate (Plan 3) sits in front of
@@ -209,7 +209,7 @@ func (s *Store) ListPending(owner string) ([]GateTest, error) {
 	return pending, nil
 }
 
-// ListVetted returns all CISO-approved gate tests owned by owner, ordered by
+// ListVetted returns all control-owner-approved gate tests owned by owner, ordered by
 // (goal, target) — the counterpart to ListPending, and the set the running
 // gate tier executes against head code. A different owner's tests are never
 // included — the owner scoping this store exists to provide.

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Elastic-2.0
 
-// Package authoring composes the corral CISO-gate authoring loop: signature
+// Package authoring composes the corral control-gate authoring loop: signature
 // extraction, mutant generation, and adequacy scoring converge here into the
 // test-authoring pipeline that produces and validates guard tests.
 package authoring
@@ -19,7 +19,7 @@ import (
 // test command's `go build` step fail before the test itself ever runs, so
 // `go test` would exit non-zero for a reason that has nothing to do with the
 // candidate test catching anything — that gets miscounted as a KILL, which
-// inflates the kill rate and corrupts the CISO's adequacy signal. Filtering
+// inflates the kill rate and corrupts the control owner's adequacy signal. Filtering
 // mutants down to ones that genuinely compile keeps every subsequent kill
 // attributable to the test, not to a broken mutant.
 //

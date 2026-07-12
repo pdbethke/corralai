@@ -4,8 +4,8 @@ package controlspec
 
 import "time"
 
-// Goal is one durable CISO test goal: a control the CISO wants gated on,
-// scoped to the owner (the CISO/org) who set it. Owner+ID together identify
+// Goal is one durable control-owner test goal: a control the owner wants gated on,
+// scoped to the owner (the control owner/org) who set it. Owner+ID together identify
 // a goal; a goal set by one owner never appears in another owner's list or
 // lookups — that owner scoping is what makes goals dev-untouchable once the
 // auth gate (Plan 3) is wired in front of this store.
@@ -40,7 +40,7 @@ type Requirement struct {
 	Intent string `json:"intent"`
 }
 
-// GateTest is one candidate CISO test for a (Owner, Goal, Target) triple:
+// GateTest is one candidate control-owner test for a (Owner, Goal, Target) triple:
 // the executable test plus the adequacy evidence (KillRate, Survived,
 // Discarded mutants) that justified authoring it. A saved GateTest is always
 // unvetted (Vetted=false) regardless of what the caller sets on the struct —
@@ -68,12 +68,12 @@ type GateTest struct {
 	// VerdictsJSON is an opaque JSON blob of the reviewer's per-mutant
 	// []Verdict decisions (StageCandidate, Task 3): the store never
 	// interprets it — it's persisted and returned exactly as given, and the
-	// CISO surface decodes it with testgen.Verdict. Empty string when unset.
+	// control-owner surface decodes it with testgen.Verdict. Empty string when unset.
 	VerdictsJSON string
 }
 
 // Bundle is a named, versioned set of Requirements from a published
-// standard (e.g. OWASP ASVS 4.0.3) — the CISO's starter library, loaded via
+// standard (e.g. OWASP ASVS 4.0.3) — the control owner's starter library, loaded via
 // LoadBundle and turned into goals via ImportBundle.
 type Bundle struct {
 	Standard     string        `json:"standard"`

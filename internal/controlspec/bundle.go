@@ -11,13 +11,13 @@ import (
 )
 
 // bundleFS embeds the starter control-spec bundles shipped with corralai —
-// the CISO's ready-made standard libraries, loaded by name via LoadBundle.
+// the control owner's ready-made standard libraries, loaded by name via LoadBundle.
 //
 // HONESTY NOTE: bundles/asvs-l1.json is a faithful PARAPHRASE of OWASP ASVS
 // 4.0.3 Level 1 requirements, written for this bundle format — it is not a
 // verbatim reproduction of the published standard. Verify each Intent string
 // against the official ASVS 4.0.3 text (github.com/OWASP/ASVS) before this
-// bundle (or any bundle derived from it) ships as a real, CISO-facing
+// bundle (or any bundle derived from it) ships as a real, control-owner-facing
 // control library.
 //
 //go:embed bundles/*.json

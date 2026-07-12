@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/repoindex"
 )
 
@@ -61,4 +62,35 @@ func WriteTest(ctx context.Context, m LLM, goal, code string, sigs []repoindex.S
 		return "", errors.New("testgen: writer returned no code")
 	}
 	return test, nil
+}
+
+// genMutantsSystem instructs the model to act as a SEEDED-VIOLATION
+// GENERATOR — a second, independent generative agent from the writer above.
+// A model that wrote the test must not be the one that breaks the goal to
+// test it; keeping the two prompts and calls separate preserves that
+// independence.
+const genMutantsSystem = `You are a SEEDED-VIOLATION GENERATOR. Given a GOAL, compliant code, and its signature surface, produce mutations that GENUINELY VIOLATE the goal.
+Each mutation MUST keep the EXACT same signature and package (it compiles as a drop-in replacement) and must genuinely violate the goal — vary HOW they violate it. No no-ops, no compile errors, no tests.
+Return ONLY the mutations, each a COMPLETE file, in this exact format:
+===MUTATION_1===
+<complete file>
+===MUTATION_2===
+<complete file>
+(continue for the requested count)`
+
+// GenerateMutants asks m for n distinct same-signature goal-violating
+// mutations of code and parses them into []adequacy.Mutant. Like WriteTest,
+// it is generation-only: it does not compile, run, or score the mutants —
+// that's adequacy's job.
+func GenerateMutants(ctx context.Context, m LLM, goal, code string, sigs []repoindex.Signature, n int) ([]adequacy.Mutant, error) {
+	instr := fmt.Sprintf("Produce exactly %d distinct mutations.", n)
+	resp, err := m.Ask(ctx, genMutantsSystem, buildUser(goal, code, sigs, instr))
+	if err != nil {
+		return nil, err
+	}
+	muts := parseMutants(resp)
+	if len(muts) == 0 {
+		return nil, errors.New("testgen: generator returned no parseable mutations")
+	}
+	return muts, nil
 }

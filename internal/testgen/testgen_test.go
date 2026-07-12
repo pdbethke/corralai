@@ -47,3 +47,23 @@ func TestWriteTestEmptyResponseErrors(t *testing.T) {
 		t.Fatal("empty model response must error")
 	}
 }
+
+func TestGenerateMutants(t *testing.T) {
+	f := &fakeLLM{resp: "===MUTATION_1===\npackage target\nfunc F() int { return 9 }\n===MUTATION_2===\npackage target\nfunc F() int { return 8 }\n"}
+	muts, err := GenerateMutants(context.Background(), f, "F returns >0", "package target\nfunc F() int { return 1 }", nil, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(muts) != 2 || muts[0].ID != "m1" {
+		t.Fatalf("mutants wrong: %+v", muts)
+	}
+	if !strings.Contains(f.gotUser, "2 distinct") { // instruction carried the count
+		t.Errorf("generator prompt missing the count instruction: %s", f.gotUser)
+	}
+}
+
+func TestGenerateMutantsNoneErrors(t *testing.T) {
+	if _, err := GenerateMutants(context.Background(), &fakeLLM{resp: "no markers here"}, "g", "c", nil, 3); err == nil {
+		t.Fatal("unparseable response must error")
+	}
+}

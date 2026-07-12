@@ -108,10 +108,14 @@ Go binary.**
   all-pass; a missing target, a failing control, or zero vetted controls → red). "Control
   owner" is the industry-standard GRC term (NIST 800-53 / ISO 27001 / SOC 2), and it maps
   corral onto the recognized **owner → operator → assessor** separation of duties: *a judge
-  may not certify herself.* Wired v1 (`CORRALAI_CONTROL_GATE`, off by default), Go-only,
-  **run+post** — the tests are seeded by an operator via `corral control seed` standing in for
-  the owner. Next: the owner's authoring/vetting surface (goal → agent-drafted candidate →
-  mutation-adequacy score → human approval), then the first live-gated PR — and only then the
+  may not certify herself.* Wired v1 (`CORRALAI_CONTROL_GATE`, off by default), Go-only.
+  The owner's **authoring/vetting loop is wired too** — seven admin-gated, audited MCP tools:
+  `import_control_bundle` (ASVS → goals), `stage_control` (an independent agent authors a test
+  and scores its **mutation-adequacy** kill-rate), `list_pending_controls`/`get_control` to
+  review, and `promote_control` — the **recorded, attributed human approval**. A candidate is
+  always stored unvetted; only a human admin's `promote_control` vets it into the store the gate
+  runs — separation of duties, mechanized end to end. Next: the **first live-gated PR whose
+  control was authored (not seeded)**, then multi-language + a cockpit panel — and only then the
   field note ships (don't advertise unbuilt).
 
 ## Now — make it operable and unbreakable

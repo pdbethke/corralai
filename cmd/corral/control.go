@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/pdbethke/corralai/internal/controlspec"
@@ -35,6 +36,12 @@ func runControl(args []string, out io.Writer) error {
 	}
 	if *specDB == "" || *owner == "" || *goal == "" || *target == "" || *codePath == "" || *testPath == "" || *testFile == "" {
 		return fmt.Errorf("all of --spec-db --owner --goal --target --code-path --test-path --test-file are required")
+	}
+	if *codePath == *testPath {
+		return fmt.Errorf("--code-path and --test-path must differ (the test would overwrite the code in the workspace)")
+	}
+	if !strings.HasSuffix(*testPath, "_test.go") {
+		return fmt.Errorf("--test-path must end in _test.go, else `go test` finds no tests and the control passes vacuously: %q", *testPath)
 	}
 	src, err := os.ReadFile(*testFile) // #nosec G304 -- operator-supplied path in a local admin CLI
 	if err != nil {

@@ -47,22 +47,22 @@ func LoadBundle(name string) (Bundle, error) {
 // later multi-bundle plan can derive the prefix from b.Standard instead.
 func ImportBundle(s *Store, owner string, b Bundle, now time.Time) (int, error) {
 	std := strings.TrimSpace(b.Standard + " " + b.Version)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("controlspec: import bundle: begin: %w", err)
+	}
+	defer tx.Rollback() // no-op after a successful Commit
 	n := 0
 	for _, r := range b.Requirements {
-		g := Goal{
-			ID:        "asvs-" + strings.ToLower(r.Ref),
-			Owner:     owner,
-			Standard:  std,
-			Ref:       r.Ref,
-			Intent:    r.Intent,
-			Level:     r.Level,
-			Mode:      r.Mode,
-			CreatedTS: now,
-		}
-		if err := s.SaveGoal(g); err != nil {
-			return n, err
+		g := Goal{ID: "asvs-" + strings.ToLower(r.Ref), Owner: owner, Standard: std,
+			Ref: r.Ref, Intent: r.Intent, Level: r.Level, Mode: r.Mode, CreatedTS: now}
+		if err := goalUpsert(tx, g); err != nil {
+			return 0, fmt.Errorf("controlspec: import bundle: %w", err) // rollback via defer; 0 written
 		}
 		n++
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("controlspec: import bundle: commit: %w", err)
 	}
 	return n, nil
 }

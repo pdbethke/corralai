@@ -52,6 +52,7 @@ func OpenStore(dsn string) (*Store, error) {
 	for _, alter := range []string{
 		`ALTER TABLE gate_tests ADD COLUMN IF NOT EXISTS code_path VARCHAR DEFAULT ''`,
 		`ALTER TABLE gate_tests ADD COLUMN IF NOT EXISTS test_path VARCHAR DEFAULT ''`,
+		`ALTER TABLE gate_tests ADD COLUMN IF NOT EXISTS verdicts VARCHAR DEFAULT ''`,
 	} {
 		if _, err := db.Exec(alter); err != nil {
 			_ = db.Close()
@@ -64,16 +65,28 @@ func OpenStore(dsn string) (*Store, error) {
 // Close closes the underlying database.
 func (s *Store) Close() error { return s.db.Close() }
 
+// sqlExec is satisfied by *sql.DB and *sql.Tx.
+type sqlExec interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
+// goalUpsert is the shared control_goals upsert body, taking an executor so
+// it works identically inside or outside a transaction (SaveGoal uses the
+// bare *sql.DB; ImportBundle's atomic loop uses a *sql.Tx).
+func goalUpsert(x sqlExec, g Goal) error {
+	_, err := x.Exec(
+		`INSERT OR REPLACE INTO control_goals (owner, id, standard, ref, intent, level, mode, created_ts)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		g.Owner, g.ID, g.Standard, g.Ref, g.Intent, g.Level, g.Mode, g.CreatedTS)
+	return err
+}
+
 // SaveGoal upserts a goal row keyed on (Owner, ID). CreatedTS is persisted
 // exactly as given — the store never calls time.Now() itself; the caller is
 // responsible for stamping it, which keeps this store deterministic under
 // test.
 func (s *Store) SaveGoal(g Goal) error {
-	_, err := s.db.Exec(
-		`INSERT OR REPLACE INTO control_goals (owner, id, standard, ref, intent, level, mode, created_ts)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		g.Owner, g.ID, g.Standard, g.Ref, g.Intent, g.Level, g.Mode, g.CreatedTS)
-	if err != nil {
+	if err := goalUpsert(s.db, g); err != nil {
 		return fmt.Errorf("controlspec: save goal: %w", err)
 	}
 	return nil

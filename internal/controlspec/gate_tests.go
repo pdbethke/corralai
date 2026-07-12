@@ -23,7 +23,10 @@ func (s *Store) Promote(owner, goal, target string, now time.Time) (bool, error)
 	if err != nil {
 		return false, fmt.Errorf("controlspec: promote: %w", err)
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("controlspec: promote: rows affected: %w", err)
+	}
 	return n > 0, nil
 }
 
@@ -36,6 +39,9 @@ func (s *Store) Reject(owner, goal, target string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("controlspec: reject: %w", err)
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("controlspec: reject: rows affected: %w", err)
+	}
 	return n > 0, nil
 }

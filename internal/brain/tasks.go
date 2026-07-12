@@ -295,6 +295,14 @@ func registerTasks(s *mcp.Server, store *coord.Store, q *queue.Store, lease floa
 			if terr != nil {
 				return nil, completeTaskOut{}, terr
 			}
+			// Only the claimer may complete a task or trip its verify-gate. Check
+			// ownership UP FRONT so a non-claimer can't burn the verify jail, file a
+			// spurious regression finding, or fire the refusal-escalation on another
+			// agent's task (q.Complete's own claimer check happens too late — after
+			// those side effects already ran).
+			if t != nil && t.ClaimedBy != "" && t.ClaimedBy != bee {
+				return nil, completeTaskOut{OK: false, Message: "not the claimer of this task"}, nil
+			}
 			if t != nil && t.Verify != "" {
 				// Workstream A: when a Verify runner is wired, the BRAIN runs the check
 				// itself against its own working copy and certifies on the real exit code

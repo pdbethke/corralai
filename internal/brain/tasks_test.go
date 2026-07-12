@@ -152,6 +152,73 @@ func TestVerificationGate(t *testing.T) {
 	}
 }
 
+// TestCompleteTaskNonClaimerCannotTripVerifyGate is the M-4 regression guard:
+// a non-claimer's complete_task call must be refused BEFORE the verify-gate
+// runs, so it can never burn the jail, file a spurious regression finding, or
+// count toward the claimer's refusal-escalation.
+func TestCompleteTaskNonClaimerCannotTripVerifyGate(t *testing.T) {
+	dir := t.TempDir()
+	cstore, err := coord.Open(filepath.Join(dir, "c.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cstore.Close() })
+	q, err := queue.Open(filepath.Join(dir, "q.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { q.Close() })
+
+	const mid = 44
+	if err := q.Enqueue(mid, []queue.TaskSpec{{Key: "t#1", Role: "tester", Title: "t", Instruction: "go", Verify: "go test"}}); err != nil {
+		t.Fatal(err)
+	}
+	q.PromoteReady(mid)
+	ct, err := q.ClaimNext("Tess", []string{"tester"}, 300)
+	if err != nil || ct == nil {
+		t.Fatalf("ClaimNext: %v %v", ct, err)
+	}
+	// No passing verify on record post-claim — if the gate ran, it would refuse
+	// and file a regression finding. It must never run for a non-claimer.
+
+	// A verifier that must NOT be consulted — the ownership guard must short-circuit first.
+	verify := func(_ context.Context, wd, _ string) (bool, string) {
+		t.Errorf("verify-gate must not run for a non-claimer (dir=%s)", wd)
+		return false, "should not be called"
+	}
+
+	ctx := context.Background()
+	clientT, serverT := mcp.NewInMemoryTransports()
+	go func() { _ = NewServer(cstore, nil, Options{Queue: q, Verify: verify}).Run(ctx, serverT) }()
+	client := mcp.NewClient(&mcp.Implementation{Name: "bee", Version: "0"}, nil)
+	sess, err := client.Connect(ctx, clientT, nil)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer sess.Close()
+
+	// Bob is not the claimer (Tess is) — must be refused up front.
+	var out completeTaskOut
+	callTask(t, sess, "complete_task", map[string]any{"name": "Bob", "id": ct.ID, "result": "trust me"}, &out)
+	if out.OK {
+		t.Fatal("non-claimer must not be able to complete another bee's task")
+	}
+	if tk, _ := q.TaskByID(ct.ID); tk.Status == queue.StatusDone {
+		t.Fatal("task must NOT be done")
+	}
+	fs, _ := q.Findings(mid, queue.FindingOpen)
+	if len(fs) != 0 {
+		t.Fatalf("non-claimer's blocked completion must not file a verify-gate finding, got %+v", fs)
+	}
+
+	// The actual claimer still hits the (real, empty-record) gate and is refused
+	// for the legitimate reason — ownership guard does not swallow that path.
+	callTask(t, sess, "complete_task", map[string]any{"name": "Tess", "id": ct.ID, "result": "looks fine"}, &out)
+	if out.OK {
+		t.Fatal("claimer with no passing verify on record must still be refused by the gate")
+	}
+}
+
 // TestVerifyGateRunsCommandNotSelfReport is the Workstream-A guarantee: the gate
 // must certify on the brain's OWN independent run of the verify command, not on
 // an exit code the worker self-reports. A builder that claims "it passed" while

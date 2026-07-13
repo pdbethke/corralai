@@ -241,6 +241,8 @@ func delegationKey() []byte {
 		if b, err := os.ReadFile(filepath.Join(d, "delegation-secret")); err == nil { // #nosec G703,G304 -- reads a fixed-name systemd credential from $CREDENTIALS_DIRECTORY (operator-trusted env), not attacker input
 			if s := strings.TrimSpace(string(b)); len(s) >= 32 {
 				return []byte(s)
+			} else if len(s) > 0 {
+				log.Printf("delegation: systemd credential too short (<32 bytes) — ignoring, falling back")
 			}
 		}
 	}

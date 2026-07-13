@@ -36,8 +36,11 @@ func TestValidateReadOnly_Reject(t *testing.T) {
 		`SELECT * FROM arrow_scan('x')`,
 		`SELECT * FROM sniff_csv('x')`,
 		`SELECT * FROM duckdb_settings()`,
-		// metadata table
+		// metadata tables/identifiers reached WITHOUT a call — leak attached-db paths;
+		// the engine lockdown does not block these, so the validator must.
 		`SELECT * FROM sqlite_master`,
+		`SELECT path FROM duckdb_databases`,
+		`SELECT database_name FROM duckdb_databases`,
 		// non-SELECT statement keywords
 		`ATTACH 'x.db' AS y`,
 		`COPY (SELECT 1) TO '/tmp/x'`,

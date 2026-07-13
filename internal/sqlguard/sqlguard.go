@@ -31,9 +31,12 @@ var (
 	// arrow_scan(...), sniff_csv(...), duckdb_settings() are caught.
 	bannedFuncCalls = regexp.MustCompile(`\b(read_[a-z0-9_]*|glob|parquet_scan|arrow_scan|sniff_csv|getenv|duckdb_[a-z0-9_]*)\s*\(`)
 
-	// Metadata table/prefix identifiers that legit analytics never reference (sqlite
-	// scanner tables, duckdb_* metadata used WITHOUT a call, e.g. FROM sqlite_master).
-	bannedMetaIdents = regexp.MustCompile(`\b(sqlite_[a-z0-9_]+)\b`)
+	// Metadata table/identifiers that legit analytics never reference and that the
+	// engine lockdown does NOT block — reached WITHOUT a call, e.g. `FROM
+	// sqlite_master` or `FROM duckdb_databases` (leaks attached-db names + on-disk
+	// paths). Matched at a word boundary (no paren required); the call forms are
+	// also covered by bannedFuncCalls.
+	bannedMetaIdents = regexp.MustCompile(`\b(sqlite_[a-z0-9_]+|duckdb_[a-z0-9_]+)\b`)
 )
 
 // ValidateReadOnly normalizes userSQL (strips comments, collapses whitespace),

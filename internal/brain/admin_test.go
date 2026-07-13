@@ -275,6 +275,76 @@ func TestCreateSuperuserBootstrapUnaffected(t *testing.T) {
 	}
 }
 
+// TestMintObserverRequiresHumanAdmin proves mint_observer gates on isHumanAdmin,
+// not just isAdmin: a REAL minted delegation token for a subagent spawned under a
+// superuser principal (so it rolls UserID up to the superuser and passes isAdmin)
+// must be refused mint_observer — otherwise a delegated/worker principal could
+// mint standing read-only observer tokens for anyone, a privileged write the herd
+// must never self-authorize. Mirrors TestSetSuperuserRefusesRealDelegationToken.
+func TestMintObserverRequiresHumanAdmin(t *testing.T) {
+	dir := t.TempDir()
+	cstore, err := coord.Open(filepath.Join(dir, "c.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cstore.Close() })
+	pstore, err := principals.Open(filepath.Join(dir, "p.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pstore.Close() })
+	if err := pstore.CreateSuperuser("boss@x.com", "test"); err != nil {
+		t.Fatal(err)
+	}
+
+	vf := &auth.Verifier{}
+	vf.EnableDelegation([]byte("test-delegation-key-that-is-32-bytes!!"))
+	tok, err := vf.MintDelegation("boss@x.com", "boss@x.com/child", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// MintObserver is wired (non-nil) so the tool reaches the auth gate rather
+	// than the "unavailable" short-circuit; it must never actually be called.
+	minted := false
+	srv := NewServer(cstore, nil, Options{
+		Principals: pstore,
+		MintObserver: func(string, time.Duration) (string, error) {
+			minted = true
+			return "observer-token", nil
+		},
+	})
+	mcpHandler := mcp.NewStreamableHTTPHandler(
+		func(*http.Request) *mcp.Server { return srv },
+		&mcp.StreamableHTTPOptions{DisableLocalhostProtection: true},
+	)
+	handler := sdkauth.RequireBearerToken(vf.VerifyToken, nil)(mcpHandler)
+	ts := httptest.NewServer(handler)
+	t.Cleanup(ts.Close)
+	ctx := context.Background()
+
+	cl := mcp.NewClient(&mcp.Implementation{Name: "delegated-subagent", Version: "0"}, nil)
+	sess, err := cl.Connect(ctx, &mcp.StreamableClientTransport{
+		Endpoint:   ts.URL,
+		HTTPClient: &http.Client{Transport: bearerRT{token: tok}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("connect delegated subagent: %v", err)
+	}
+	t.Cleanup(func() { sess.Close() })
+
+	res, err := sess.CallTool(ctx, &mcp.CallToolParams{Name: "mint_observer", Arguments: map[string]any{}})
+	if err != nil {
+		t.Fatalf("mint_observer (delegation token) call: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("a delegation token rolled up to a superuser must be refused mint_observer")
+	}
+	if minted {
+		t.Fatal("MintObserver must not run when the caller fails the human-admin gate")
+	}
+}
+
 // bearerRT injects an Authorization: Bearer header on every request — the
 // minimal transport needed to drive a real bearer-verified MCP session in a
 // test without pulling in the full oidc client-credential flow.

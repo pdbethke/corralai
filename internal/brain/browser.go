@@ -81,6 +81,40 @@ var metadataHosts = map[string]bool{
 	"metadata":                 true,
 }
 
+// lookupIP resolves a hostname to its IP addresses. It's a package var so the
+// test suite can inject a fake resolver — the suite does no real DNS.
+var lookupIP = net.DefaultResolver.LookupIPAddr
+
+// imdsLiterals are cloud instance-metadata (IMDS) IP literals that are NOT
+// caught by the link-local check: the Alibaba IMDS (100.100.100.100, a public
+// literal) and the AWS IPv6 IMDS (fd00:ec2::254, a unique-local address). The
+// canonical AWS/GCP/ECS IMDS (169.254.0.0/16) is already link-local, but the
+// well-known .254 is listed for clarity/defence-in-depth.
+var imdsLiterals = map[string]bool{
+	"169.254.169.254": true, // AWS / GCP / Azure IMDS (also link-local)
+	"100.100.100.100": true, // Alibaba Cloud IMDS
+	"fd00:ec2::254":   true, // AWS IPv6 IMDS
+}
+
+// metadataOrLinkLocal reports whether ip is a cloud-metadata (IMDS) or
+// link-local address the agent browser must never reach. It deliberately does
+// NOT flag loopback or private ranges — those stay allowed so a tester can
+// drive the app the herd just built on localhost. This is the browser-specific
+// predicate (narrower than netguard.UnsafeIP, which blocks loopback/private).
+func metadataOrLinkLocal(ip net.IP) bool {
+	if ip == nil {
+		return false
+	}
+	if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+		return true
+	}
+	// Normalise to the canonical string form for the literal set.
+	if imdsLiterals[ip.String()] {
+		return true
+	}
+	return false
+}
+
 // blockedHost reports whether host (a hostname or IP literal, no port) is an
 // SSRF-sensitive target the agent browser must never reach: cloud-metadata
 // endpoints (IMDS) and link-local addresses (169.254.0.0/16, fe80::/10).
@@ -123,12 +157,22 @@ func isBrainAddr(u *url.URL, selfAddr string) bool {
 	if port != selfPort {
 		return false
 	}
+	selfHost, _, _ := net.SplitHostPort(selfAddr)
 	host := strings.ToLower(u.Hostname())
+	// The brain's own listen host (e.g. a non-loopback bind like 10.0.0.5) is
+	// off-limits, not just localhost/loopback.
+	if selfHost != "" && host == strings.ToLower(selfHost) {
+		return true
+	}
 	if host == "localhost" {
 		return true
 	}
-	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
-		return true
+	if ip := net.ParseIP(host); ip != nil {
+		// Loopback and the unspecified address (0.0.0.0 / ::) both route back to
+		// a locally-bound brain on this port.
+		if ip.IsLoopback() || ip.IsUnspecified() {
+			return true
+		}
 	}
 	return false
 }
@@ -152,6 +196,34 @@ func guardNavigateURL(raw, selfAddr string) error {
 	}
 	if isBrainAddr(u, selfAddr) {
 		return fmt.Errorf("blocked: the brain's own address is off-limits to the agent browser")
+	}
+	// Resolve the host and reject if ANY resolved IP is a cloud-metadata /
+	// link-local address. blockedHost above is LEXICAL-only, so a public DNS
+	// alias for the metadata IP (e.g. http://169-254-169-254.sslip.io/) would
+	// otherwise slip through and reach IMDS. A literal IP host is checked
+	// directly (no DNS needed).
+	//
+	// NOTE (deferred hardening): Chromium resolves the host independently of
+	// this check, so a DNS rebind between here and the fetch is still possible.
+	// The durable, TOCTOU-proof fix is launching rod behind a guarded proxy
+	// (launcher.Set("proxy-server", …)) that re-applies this predicate at
+	// connect time. Resolve-and-check closes the free public-DNS-alias bypass
+	// now; the proxy is tracked as a follow-on.
+	host := u.Hostname()
+	if ip := net.ParseIP(host); ip != nil {
+		if metadataOrLinkLocal(ip) {
+			return fmt.Errorf("blocked: %q is a cloud-metadata / link-local address, off-limits to the agent browser", host)
+		}
+		return nil
+	}
+	ips, err := lookupIP(context.Background(), host)
+	if err != nil {
+		return fmt.Errorf("blocked: cannot resolve %q: %w", host, err)
+	}
+	for _, ipa := range ips {
+		if metadataOrLinkLocal(ipa.IP) {
+			return fmt.Errorf("blocked: %q resolves to a cloud-metadata / link-local address, off-limits to the agent browser", host)
+		}
 	}
 	return nil
 }

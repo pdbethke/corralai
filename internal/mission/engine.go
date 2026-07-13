@@ -781,15 +781,22 @@ func (e *Engine) runEgressGate(m *Mission) bool {
 		e.egressBlocked[m.ID] = true
 		return true
 	}
-	if len(files) == 0 {
-		return false
-	}
 	dir := e.workdir(m)
 	// Working-tree scan (line-addressable, on-disk-only content) PLUS a full
 	// branch-history scan (git log -p base..HEAD): a secret committed in an
 	// earlier phase and then deleted leaves a clean tree but still ships in the
 	// push, so scanning the current tree alone misses it. Belt-and-suspenders.
-	findings := e.Egress.Scan(context.Background(), dir, files)
+	//
+	// The history scan must run even when the NET changed-file set is empty
+	// (files == nil / len 0): a branch that adds a secret in one phase and
+	// deletes it in a later one nets to zero changed files, but the secret
+	// still ships as part of the pushed history. Skipping the scan in that
+	// case (as an early `len(files) == 0 → return false` used to do) let that
+	// exact case through unscanned.
+	var findings []EgressFinding
+	if len(files) > 0 {
+		findings = e.Egress.Scan(context.Background(), dir, files)
+	}
 	if diff, derr := e.Repo.DiffAddedLines(context.Background(), dir, m.Base); derr != nil {
 		// A history diff we can't compute is a scan we can't complete — fail
 		// closed rather than push an unscanned branch (same posture as the

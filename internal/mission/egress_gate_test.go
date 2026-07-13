@@ -170,6 +170,55 @@ func TestEgressGate_HistoryOnlySecretBlocksPush(t *testing.T) {
 	}
 }
 
+// TestEgressGate_NetZeroChangedFilesStillScansHistory verifies the residual
+// gap flagged in the efbd99e audit follow-up: a branch whose NET effect is
+// zero changed files (e.g. a secret added in one phase and deleted in a
+// later one) must not skip the history scan. Before the fix, `len(files) ==
+// 0` returned "not blocked" immediately, so DiffAddedLines/ScanText never
+// ran and the branch — which still ships the secret-bearing commit in its
+// history — would push clean.
+func TestEgressGate_NetZeroChangedFilesStillScansHistory(t *testing.T) {
+	ms, q, _ := setupEgressMission(t)
+
+	fake := &fakeRepo{
+		rangeFiles: []string{}, // net-zero: nothing changed base...HEAD
+		diffText:   "+AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI (added then deleted)",
+	}
+	egressFake := &fakeEgress{
+		textFindings: []EgressFinding{
+			{Path: "config.env", Line: 0, Rule: "AWS Secret Access Key", Sample: "wJal...KEY (redacted)", Severity: "block"},
+		},
+	}
+	e := NewEngine(ms, q)
+	e.Repo = fake
+	e.Egress = egressFake
+	e.Workspace = t.TempDir()
+
+	if err := e.Tick(); err != nil {
+		t.Fatalf("tick 1: %v", err)
+	}
+	drain(t, q)
+	if err := e.Tick(); err != nil {
+		t.Fatalf("tick 2: %v", err)
+	}
+
+	if egressFake.calls != 0 {
+		t.Fatalf("expected the working-tree Scan to be skipped when the net changed-file set is empty, got %d calls", egressFake.calls)
+	}
+	if egressFake.textCalls == 0 {
+		t.Fatal("expected ScanText (history scan) to run even when len(files) == 0")
+	}
+	if fake.diffCalls == 0 {
+		t.Fatal("expected DiffAddedLines to be invoked even when len(files) == 0")
+	}
+	if fake.pushCalls != 0 {
+		t.Fatalf("expected Push to be withheld on a net-zero add-then-delete secret, got %d calls", fake.pushCalls)
+	}
+	if fake.prCalls != 0 {
+		t.Fatalf("expected OpenPR to be withheld on a net-zero add-then-delete secret, got %d calls", fake.prCalls)
+	}
+}
+
 // TestEgressGate_HistoryDiffErrorBlocksPush verifies fail-closed posture: if the
 // branch-history diff can't be computed, the gate blocks rather than pushing an
 // unscanned branch.

@@ -317,7 +317,13 @@ func govulnEnv() []string {
 		"GOTOOLCHAIN=local", // never fetch+exec a different Go toolchain
 		"GOFLAGS=-mod=readonly",
 		"CGO_ENABLED=0", // no cgo compiler invocation
-		"GONOSUMDB=*",
+		// No-network hardening for tooling run against untrusted mission source:
+		// GOPROXY=off forbids module fetches (govulncheck/go list can't pull an
+		// attacker-named module) and GOSUMDB=off avoids sum-db network lookups.
+		// Fail-safe: a missing dep just makes the advisory vuln scan skip.
+		// (Replaces the long-removed no-op GONOSUMDB.)
+		"GOPROXY=off",
+		"GOSUMDB=off",
 	)
 }
 

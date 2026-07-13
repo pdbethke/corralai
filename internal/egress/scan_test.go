@@ -361,7 +361,7 @@ func TestGovulnEnv(t *testing.T) {
 
 	env := govulnEnv()
 
-	want := []string{"GOTOOLCHAIN=local", "CGO_ENABLED=0", "GOFLAGS=-mod=readonly"}
+	want := []string{"GOTOOLCHAIN=local", "CGO_ENABLED=0", "GOFLAGS=-mod=readonly", "GOPROXY=off", "GOSUMDB=off"}
 	for _, w := range want {
 		found := false
 		for _, e := range env {
@@ -378,6 +378,10 @@ func TestGovulnEnv(t *testing.T) {
 	for _, e := range env {
 		if contains(e, "SECRETVALUE") {
 			t.Fatalf("govulnEnv() leaked a secret env var into the child process: %q", e)
+		}
+		// GONOSUMDB is a long-removed no-op — it must not reappear.
+		if contains(e, "GONOSUMDB") {
+			t.Errorf("govulnEnv() sets the dead no-op GONOSUMDB: %q", e)
 		}
 	}
 }

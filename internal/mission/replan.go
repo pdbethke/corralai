@@ -113,6 +113,13 @@ func (e *Engine) replan(missionID int64) error {
 		if queue.SeverityRank(f.Severity) < minRank {
 			continue // below threshold: recorded, not auto-remediated (left for #4)
 		}
+		// A dep-sweep blocker (cancelled work chain) is a STRUCTURAL failure, not an
+		// auto-remediable defect. Leave it OPEN so the convergence gate holds the
+		// mission at needs-review (the human gate) instead of auto-addressing it into
+		// a false convergence that opens a PR over dead work.
+		if f.Reporter == "dep-sweep" {
+			continue
+		}
 		specs, actionable := reflexRules(f)
 		if !actionable {
 			continue

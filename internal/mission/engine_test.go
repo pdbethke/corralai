@@ -486,6 +486,97 @@ func TestEngineSweepsBlockedDependencies(t *testing.T) {
 	}
 }
 
+// TestBlockedDepChainRoutesToNeedsReviewNotPR guards against a false convergence:
+// a dep-sweep blocker (cancelled dependency) files a high-severity finding that
+// replan must NOT auto-remediate/address, so blockingFindingOpen keeps holding the
+// mission at needs-review instead of falling through to done + OpenPR.
+func TestBlockedDepChainRoutesToNeedsReviewNotPR(t *testing.T) {
+	dir := t.TempDir()
+	q, err := queue.Open(filepath.Join(dir, "q.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer q.Close()
+	m, err := Open(filepath.Join(dir, "m.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+
+	mid, err := CreateMission(m, q, "build a thing", nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.SetRepo(mid, "https://github.com/o/r", "main", "corralai/m1"); err != nil {
+		t.Fatal(err)
+	}
+
+	repo := &fakeRepo{}
+	e := NewEngine(m, q)
+	e.Repo = repo
+	e.Workspace = t.TempDir()
+
+	// Find a pending task that depends on another, and cancel that dependency so it
+	// can never become done — orphaning the dependent (same setup as
+	// TestEngineSweepsBlockedDependencies).
+	tasks, err := q.List(mid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dependent queue.Task
+	for _, tk := range tasks {
+		if len(tk.DependsOn) > 0 {
+			dependent = tk
+			break
+		}
+	}
+	if dependent.ID == 0 {
+		t.Fatal("expected the default plan to contain a task with a dependency")
+	}
+	depKey := dependent.DependsOn[0]
+	var depID int64
+	for _, tk := range tasks {
+		if tk.Key == depKey {
+			depID = tk.ID
+		}
+	}
+	if depID == 0 {
+		t.Fatalf("dependency task %q not found", depKey)
+	}
+	if _, err := q.CancelTask(depID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Drive to convergence: sweep cancels the orphan and files the dep-sweep
+	// finding, then subsequent ticks/replans must not auto-address it away.
+	var mi *Mission
+	for i := 0; i < 60; i++ {
+		if err := e.Tick(); err != nil {
+			t.Fatalf("tick %d: %v", i, err)
+		}
+		drain(t, q)
+		mi, err = m.Mission(mid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if mi.Status == "done" || mi.Status == "needs-review" || mi.Status == "failed" {
+			break
+		}
+	}
+	if mi == nil {
+		t.Fatal("mission never converged")
+	}
+	if mi.Status == "done" {
+		t.Fatalf("mission converged to done despite a cancelled dependency chain")
+	}
+	if repo.prCalls != 0 {
+		t.Fatalf("opened %d PR(s) despite a blocked dep chain; want 0 (should be needs-review)", repo.prCalls)
+	}
+	if mi.Status != "needs-review" {
+		t.Fatalf("status = %q, want needs-review", mi.Status)
+	}
+}
+
 // TestEngineFailsMissionWithNoProgress is the universal give-up backstop: a
 // running mission that makes no forward progress for NoProgressTicks consecutive
 // ticks while nothing is claimed (no agent actively holding work) must reach the

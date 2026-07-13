@@ -9,7 +9,6 @@
 package telemetry
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -347,20 +346,18 @@ func (s *Store) RunReport(name string) (Report, error) {
 // with sqlguard.ValidateReadOnly as defense-in-depth (normalized + construct-
 // banning, not a bare prefix check). Safe because telemetry only ever queries
 // its own in-db events table (no read_csv/ATTACH/COPY/glob).
+// Query runs an operator ad-hoc read-only SELECT/WITH against the event log.
+// It validates via sqlguard but does NOT apply the DuckDB filesystem lockdown:
+// this store's connection pool also serves the append-only WRITE path, and
+// `SET disabled_filesystems`/`lock_configuration` take effect database-wide,
+// which would fatally break the next checkpoint (audit-log loss + crash). The
+// lockdown-as-real-wall belongs on a dedicated read-only handle (see oracle);
+// here sqlguard.ValidateReadOnly is the wall. This is an admin-gated surface.
 func (s *Store) Query(q string) (Report, error) {
-	ctx := context.Background()
-	conn, err := s.db.Conn(ctx)
-	if err != nil {
-		return Report{}, err
-	}
-	defer conn.Close()
-	if err := sqlguard.ApplyLockdown(ctx, conn); err != nil {
-		return Report{}, err
-	}
 	if err := sqlguard.ValidateReadOnly(q); err != nil {
 		return Report{}, err
 	}
-	rows, err := conn.QueryContext(ctx, q)
+	rows, err := s.db.Query(q)
 	if err != nil {
 		return Report{}, err
 	}

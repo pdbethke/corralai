@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -199,6 +200,9 @@ func NewVerifier(ctx context.Context, pairs []Pair) (*Verifier, error) {
 		}
 		cfg := &oidc.Config{ClientID: p.Audience}
 		if p.Audience == "" {
+			if os.Getenv("CORRALAI_OIDC_ALLOW_EMPTY_AUDIENCE") != "1" {
+				return nil, fmt.Errorf("auth: OIDC issuer %q configured with no audience; set an audience or CORRALAI_OIDC_ALLOW_EMPTY_AUDIENCE=1 to opt in to skipping the aud check", p.Issuer)
+			}
 			cfg.SkipClientIDCheck = true
 		}
 		v.vs = append(v.vs, provider.Verifier(cfg))

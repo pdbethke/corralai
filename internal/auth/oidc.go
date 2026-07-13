@@ -209,16 +209,24 @@ func NewVerifier(ctx context.Context, pairs []Pair) (*Verifier, error) {
 func (vf *Verifier) Enabled() bool { return vf.enabled }
 func (vf *Verifier) Count() int    { return len(vf.vs) }
 
-// pickPrincipal chooses the identity claim to authorize on. Human tokens carry
-// email (or preferred_username); machine/service tokens (client_credentials)
-// carry neither, so we fall back to the OAuth client identity (client_id, then
-// the standard azp). The Authorizer's allowlist still gates whatever this
-// returns, so an unlisted client_id is rejected exactly like an unlisted email.
-func pickPrincipal(email, preferredUsername, clientID, azp string) string {
-	for _, v := range []string{email, preferredUsername, clientID, azp} {
-		if v != "" {
-			return v
-		}
+// pickPrincipal maps verified claims to an allowlist principal. Human claims
+// (a verified email, else preferred_username) are returned bare; machine claims
+// (client_id/azp) are NAMESPACED as "client:<id>" so a service account can never
+// match a human email allowlist entry. An unverified email is not trusted.
+// The Authorizer's allowlist still gates whatever this returns, so an unlisted
+// client is rejected exactly like an unlisted email.
+func pickPrincipal(email string, emailVerified bool, preferredUsername, clientID, azp string) string {
+	if email != "" && emailVerified {
+		return email
+	}
+	if preferredUsername != "" {
+		return preferredUsername
+	}
+	if clientID != "" {
+		return "client:" + clientID
+	}
+	if azp != "" {
+		return "client:" + azp
 	}
 	return ""
 }
@@ -238,6 +246,7 @@ func (vf *Verifier) VerifyToken(ctx context.Context, token string, _ *http.Reque
 		}
 		var c struct {
 			Email             string `json:"email"`
+			EmailVerified     bool   `json:"email_verified"` // an unverified email is not a trusted principal
 			PreferredUsername string `json:"preferred_username"`
 			ClientID          string `json:"client_id"` // service-account tokens carry no email
 			AZP               string `json:"azp"`       // standard OIDC "authorized party"
@@ -245,7 +254,7 @@ func (vf *Verifier) VerifyToken(ctx context.Context, token string, _ *http.Reque
 			TenantRole        string `json:"tenant_role"`
 		}
 		_ = idt.Claims(&c)
-		principal := pickPrincipal(c.Email, c.PreferredUsername, c.ClientID, c.AZP)
+		principal := pickPrincipal(c.Email, c.EmailVerified, c.PreferredUsername, c.ClientID, c.AZP)
 		exp := idt.Expiry
 		if exp.IsZero() {
 			exp = time.Now().Add(time.Hour)

@@ -35,3 +35,33 @@ func TestFindOpenPRQueryEscaping(t *testing.T) {
 		t.Fatalf("state param = %q, want %q", gotState, "open")
 	}
 }
+
+// TestListOpenPRsQueryEscaping proves rcListOpenPRs URL-escapes the base
+// query param instead of raw string-concatenating it (the batch-2 escape fix
+// at rcFindOpenPR missed this call site). A base branch containing query
+// metacharacters (&, space) must round-trip to the forge intact.
+func TestListOpenPRsQueryEscaping(t *testing.T) {
+	var gotBase, gotState, gotPerPage string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBase = r.URL.Query().Get("base")
+		gotState = r.URL.Query().Get("state")
+		gotPerPage = r.URL.Query().Get("per_page")
+		_, _ = w.Write([]byte("[]"))
+	}))
+	defer srv.Close()
+
+	p := newTestGitHubProvider(srv.URL, "tok")
+	base := "release/2.0 & main"
+	if _, err := p.rc.rcListOpenPRs(context.Background(), "o", "r", base); err != nil {
+		t.Fatalf("rcListOpenPRs: %v", err)
+	}
+	if gotBase != base {
+		t.Fatalf("base param mangled: got %q, want %q", gotBase, base)
+	}
+	if gotState != "open" {
+		t.Fatalf("state param = %q, want %q", gotState, "open")
+	}
+	if gotPerPage != "100" {
+		t.Fatalf("per_page param = %q, want %q", gotPerPage, "100")
+	}
+}

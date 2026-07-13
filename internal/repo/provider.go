@@ -10,18 +10,57 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
+
+	"github.com/pdbethke/corralai/internal/netguard"
 )
 
+// forgeGuard defends every dial forgeHTTPClient makes against SSRF: by
+// default it blocks loopback/private (RFC1918, ULA)/link-local (incl. the
+// cloud metadata address 169.254.169.254) targets. Because CheckRedirect only
+// strips auth headers on a cross-host hop — it never refuses the dial — a
+// forge base URL or a forge-side (open) redirect could otherwise reach an
+// internal address unguarded. An operator can sanction a self-hosted forge on
+// a private network via CORRALAI_FORGE_ALLOWED_HOSTS (comma-separated
+// hostnames/IPs). It's a package var (not inlined into forgeHTTPClient's
+// initializer) so tests can substitute an allowlist that covers the httptest
+// loopback servers they spin up.
+var forgeGuard = netguard.NewGuard(splitForgeAllowlist(os.Getenv("CORRALAI_FORGE_ALLOWED_HOSTS")))
+
+// splitForgeAllowlist parses a comma-separated env value into trimmed,
+// non-empty items. (cmd/corral has an equivalent splitList, but that's
+// package main and not importable here.)
+func splitForgeAllowlist(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // forgeHTTPClient is the shared client for forge REST calls. It bounds request
-// time and, on a redirect that crosses to a different host, strips the auth
-// headers Go doesn't (notably GitLab's custom PRIVATE-TOKEN) so a forge redirect
-// or open-redirect can't exfiltrate the token.
+// time, dials through forgeGuard (SSRF defense — see above), and on a redirect
+// that crosses to a different host, strips the auth headers Go doesn't
+// (notably GitLab's custom PRIVATE-TOKEN) so a forge redirect or open-redirect
+// can't exfiltrate the token.
 var forgeHTTPClient = &http.Client{
 	Timeout: 30 * time.Second,
+	Transport: &http.Transport{
+		// Read forgeGuard afresh on every dial (rather than binding
+		// forgeGuard.DialContext once) so it re-validates each hop of a
+		// redirect chain, and so a test can swap forgeGuard after this var
+		// is initialized.
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return forgeGuard.DialContext(ctx, network, addr)
+		},
+	},
 	CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		if len(via) >= 10 {
 			return fmt.Errorf("stopped after 10 redirects")
@@ -344,11 +383,15 @@ func (rc *restClient) rcAuthLogin(ctx context.Context) (string, error) {
 
 // rcListOpenPRs lists open PRs via the GitHub REST shape.
 func (rc *restClient) rcListOpenPRs(ctx context.Context, owner, repo, base string) ([]PRRef, error) {
-	url := rc.base + "/repos/" + owner + "/" + repo + "/pulls?state=open&per_page=100"
+	// Escape the query params — a base branch can carry characters ("&",
+	// space, "#") that would otherwise break out of the raw-concatenated
+	// query string (mirrors the rcFindOpenPR escape fix above).
+	q := url.Values{"state": {"open"}, "per_page": {"100"}}
 	if base != "" {
-		url += "&base=" + base
+		q.Set("base", base)
 	}
-	b, _, err := rc.get(ctx, url, "")
+	reqURL := rc.base + "/repos/" + owner + "/" + repo + "/pulls?" + q.Encode()
+	b, _, err := rc.get(ctx, reqURL, "")
 	if err != nil {
 		return nil, err
 	}

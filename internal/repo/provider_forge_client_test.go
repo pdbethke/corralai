@@ -5,8 +5,20 @@ package repo
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/pdbethke/corralai/internal/netguard"
 )
+
+// init allowlists the loopback addresses httptest.NewServer binds to (127.0.0.1
+// and ::1), so this package's many httptest-backed forge tests keep dialing
+// their local test servers under the SSRF dial-guard. forgeGuard is a package
+// var precisely so tests can substitute this allowlist; production defaults to
+// deny (see the CORRALAI_FORGE_ALLOWED_HOSTS-driven init in provider.go).
+func init() {
+	forgeGuard = netguard.NewGuard([]string{"127.0.0.1", "::1", "localhost"})
+}
 
 // TestForgeClient_StripsTokenOnCrossHostRedirect confirms that forgeHTTPClient
 // strips the GitLab-style PRIVATE-TOKEN header (which Go's redirect handling
@@ -76,5 +88,29 @@ func TestForgeClient_StopsAfterTenRedirects(t *testing.T) {
 	}
 	if hitCount > 11 {
 		t.Fatalf("redirect cap did not stop the client in time: got %d hits", hitCount)
+	}
+}
+
+// TestForgeClient_BlocksLinkLocalRedirect confirms the forge client's dial
+// guard refuses a redirect to a link-local/cloud-metadata address (SSRF).
+// CheckRedirect only strips auth headers on a cross-host hop — it never
+// refused the dial itself, so a forge (or an open redirect on the forge) could
+// point the client at 169.254.169.254 and it would connect unguarded. The
+// forge test server itself is on 127.0.0.1, which the package init() above
+// allowlists, so only the redirect target is exercised against the guard's
+// default-deny policy.
+func TestForgeClient_BlocksLinkLocalRedirect(t *testing.T) {
+	forge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://169.254.169.254/latest/meta-data/", http.StatusFound)
+	}))
+	defer forge.Close()
+
+	req, _ := http.NewRequest("GET", forge.URL, nil)
+	_, err := forgeHTTPClient.Do(req)
+	if err == nil {
+		t.Fatal("expected forgeHTTPClient to refuse a redirect to a link-local address")
+	}
+	if !strings.Contains(err.Error(), "SSRF guard") {
+		t.Fatalf("expected the SSRF dial-guard to have blocked the redirect, got a different error: %v", err)
 	}
 }

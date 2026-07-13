@@ -65,16 +65,25 @@ var forgeHTTPClient = &http.Client{
 	},
 }
 
-// forgeTransport clones http.DefaultTransport and overrides ONLY its DialContext
-// with the SSRF guard. Cloning (rather than a bare &http.Transport{}) preserves
-// Proxy: http.ProxyFromEnvironment, HTTP/2 (ForceAttemptHTTP2), and the tuned
-// sub-timeouts (TLSHandshakeTimeout, ExpectContinueTimeout, IdleConnTimeout) a
-// bare Transport silently dropped (F3). The guard still applies on every dial
-// when no proxy is set — DialContext reads forgeGuard afresh each call so it
-// re-validates each hop of a redirect chain and a test can swap forgeGuard after
-// this var is initialized.
+// forgeTransport clones http.DefaultTransport and overrides its DialContext
+// (SSRF guard) and Proxy. Cloning (rather than a bare &http.Transport{})
+// preserves HTTP/2 (ForceAttemptHTTP2) and the tuned sub-timeouts
+// (TLSHandshakeTimeout, ExpectContinueTimeout, IdleConnTimeout) a bare
+// Transport silently dropped (F3). The guard still applies on every dial —
+// DialContext reads forgeGuard afresh each call so it re-validates each hop of
+// a redirect chain and a test can swap forgeGuard after this var is
+// initialized.
+//
+// Proxy disabled so the SSRF DialContext guard validates the real forge host,
+// not a proxy; a deployment that needs a forge egress proxy must reconcile it
+// with the guard. (Clone() carries Proxy: http.ProxyFromEnvironment forward;
+// left as-is, http.Transport dials the proxy via DialContext instead of the
+// forge host, so forgeGuard would validate the proxy's IP — not the ultimate
+// destination — defeating the SSRF check whenever an HTTP(S)_PROXY env var is
+// set. The brain uses no forge egress proxy today.)
 func forgeTransport() *http.Transport {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.Proxy = nil
 	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 		return forgeGuard.DialContext(ctx, network, addr)
 	}

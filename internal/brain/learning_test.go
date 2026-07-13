@@ -65,8 +65,16 @@ func TestLearningLoopInjectsLessons(t *testing.T) {
 	}
 	defer sess.Close()
 
+	// The build-plan sizer (ScaledPlan) is retired: create_mission no longer
+	// synthesizes a plan for an omitted one, so tests must supply an explicit
+	// plan.
 	var mv mission.MissionView
-	callTask(t, sess, "create_mission", map[string]any{"directive": "build a scores dashboard"}, &mv)
+	callTask(t, sess, "create_mission", map[string]any{
+		"directive": "build a scores dashboard",
+		"plan": []map[string]any{
+			{"name": "build", "role": "builder", "instruction": "Build a scores dashboard."},
+		},
+	}, &mv)
 	if mv.ID == 0 {
 		t.Fatal("no mission id")
 	}

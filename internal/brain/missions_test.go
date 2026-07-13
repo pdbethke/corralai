@@ -110,6 +110,9 @@ func TestCreateMissionIndexFailureDoesNotAbortProvisioning(t *testing.T) {
 		Arguments: map[string]any{
 			"directive": "do something useful",
 			"repo":      srcDir,
+			"plan": []map[string]any{
+				{"name": "build", "role": "builder", "instruction": "do something useful"},
+			},
 		},
 	})
 	if err != nil {
@@ -330,6 +333,9 @@ func TestCreateMissionMCPPersistsAndInjectsHerd(t *testing.T) {
 			"directive":     "build a dashboard",
 			"mcp_endpoints": []string{"prod-db"},
 			"lookbook_ids":  []int64{lbID},
+			"plan": []map[string]any{
+				{"name": "build", "role": "builder", "instruction": "build a dashboard"},
+			},
 		},
 	})
 	if err != nil {

@@ -763,8 +763,16 @@ func TestCreateMissionWeavesPromotedGuidanceCapped3(t *testing.T) {
 	// entry (1) = 3, both skills dropped. The approved guidance text
 	// "go mod init" MUST survive — it is the only guidance candidate, so no
 	// ranking tie-break decides whether it makes the cap.
+	// The build-plan sizer (ScaledPlan) is retired: create_mission no longer
+	// synthesizes a plan for an omitted one, so tests must supply an explicit
+	// plan.
 	var mv mission.MissionView
-	callTask(t, sess, "create_mission", map[string]any{"directive": "init a new go project tool"}, &mv)
+	callTask(t, sess, "create_mission", map[string]any{
+		"directive": "init a new go project tool",
+		"plan": []map[string]any{
+			{"name": "build", "role": "builder", "instruction": "Init the go project tool."},
+		},
+	}, &mv)
 	if mv.ID == 0 {
 		t.Fatalf("create_mission returned no id: %+v", mv)
 	}

@@ -1259,36 +1259,13 @@ func (s *Server) createMission(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Resolve + validate the herd's endpoints and lookbook directives BEFORE
-	// mutating any shared state (the role-models policy below) — reject bad
-	// herd inputs first so a 400 never leaves a partial mutation behind.
-	principal := auth.Principal(r.Context())
-	endpointNames, guidelines, herdErr := brain.ResolveHerdInputs(s.gw, s.taskArtifacts, principal, body.MCPEndpoints, body.LookbookIDs)
-	if herdErr != nil {
-		http.Error(w, herdErr.Error(), http.StatusBadRequest)
-		return
-	}
-
-	// Update role models if provided
-	if len(body.RoleModels) > 0 && s.roleModels != nil {
-		for k, v := range body.RoleModels {
-			s.roleModels.Set(k, v) // threadsafe: the engine writes this same policy from its Tick goroutine
-		}
-	}
-
-	plan := mission.InjectHerdContext(mission.ScaledPlan(body.Directive), guidelines, endpointNames)
-	id, err := mission.CreateMission(s.missions, s.queue, body.Directive, plan, body.RequiresReview)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	herd := mission.Herd{RoleModels: body.RoleModels, Endpoints: endpointNames, LookbookIDs: body.LookbookIDs}
-	if !herd.IsEmpty() {
-		if err := s.missions.SaveHerd(id, herd); err != nil {
-			log.Printf("mission %d: SaveHerd: %v", id, err) // non-fatal: the run proceeds
-		}
-	}
-	writeJSON(w, map[string]any{"id": id, "ok": true})
+	// The build-plan sizer (ScaledPlan) is retired: builder missions no longer
+	// exist and this endpoint doesn't yet accept an explicit plan, so there is
+	// nothing to build a mission from. Fail closed rather than silently
+	// synthesizing a build arc, before resolving herd inputs or mutating any
+	// shared state (role-models policy). Phase 3 removes this handler/route
+	// entirely.
+	http.Error(w, "build missions are retired", http.StatusBadRequest)
 }
 
 func (s *Server) proposeStaffing(w http.ResponseWriter, r *http.Request) {

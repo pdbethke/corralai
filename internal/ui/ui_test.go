@@ -412,7 +412,8 @@ func TestStateEndpointCarriesMissions(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ms.Close()
-	if _, err := mission.CreateMission(ms, q, "build me a world cup dashboard", nil, false); err != nil {
+	plan := []mission.PhaseSpec{{Name: "build", Role: "builder", Count: 1, Instruction: "build me a world cup dashboard"}}
+	if _, err := mission.CreateMission(ms, q, "build me a world cup dashboard", plan, false); err != nil {
 		t.Fatal(err)
 	}
 

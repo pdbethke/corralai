@@ -40,7 +40,7 @@ func TestStaffingPanicIsRecoveredAndLatchesGiveUp(t *testing.T) {
 	}
 	defer m.Close()
 
-	missionID, err := CreateMission(m, q, "add a wishlist feature", nil, false)
+	missionID, err := CreateMission(m, q, "add a wishlist feature", fullDAGTestPlan("add a wishlist feature"), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func TestFailMissionEvictsStaffBookkeeping(t *testing.T) {
 	}
 	defer m.Close()
 
-	missionID, err := CreateMission(m, q, "add a wishlist feature", nil, false)
+	missionID, err := CreateMission(m, q, "add a wishlist feature", fullDAGTestPlan("add a wishlist feature"), false)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -8,7 +8,10 @@ import (
 )
 
 func TestInjectLessons(t *testing.T) {
-	plan := DefaultPlan("build a dashboard")
+	plan := []PhaseSpec{
+		{Name: "research", Instruction: "Research the requirements for: build a dashboard."},
+		{Name: "build", Instruction: "Build the dashboard.", DependsOn: []string{"research"}},
+	}
 	out := InjectLessons(plan, []Lesson{
 		{Text: "parameterize all score-API queries", Author: "admin"},
 		{Text: "cache the leaderboard", Author: "admin"},
@@ -35,7 +38,7 @@ func TestInjectLessons(t *testing.T) {
 }
 
 func TestInjectLessonsNoop(t *testing.T) {
-	plan := DefaultPlan("x")
+	plan := []PhaseSpec{{Name: "research", Instruction: "Research the requirements for: x."}}
 	out := InjectLessons(plan, nil)
 	if out[0].Instruction != plan[0].Instruction {
 		t.Fatal("no lessons => instructions unchanged")

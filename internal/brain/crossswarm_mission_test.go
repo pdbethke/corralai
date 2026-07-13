@@ -117,7 +117,7 @@ func TestCreateMission_PublishesCrossSwarmClaim(t *testing.T) {
 
 	res, err := sess.CallTool(context.Background(), &mcp.CallToolParams{
 		Name:      "create_mission",
-		Arguments: map[string]any{"directive": "add a feature", "repo": srcDir},
+		Arguments: map[string]any{"directive": "add a feature", "repo": srcDir, "plan": []map[string]any{{"name": "build", "role": "builder", "instruction": "add a feature"}}},
 	})
 	if err != nil {
 		t.Fatalf("create_mission: %v", err)
@@ -172,7 +172,7 @@ func TestCreateMission_AdvisorySurfacesPeerClaimWithoutBlocking(t *testing.T) {
 
 	res, err := sess.CallTool(context.Background(), &mcp.CallToolParams{
 		Name:      "create_mission",
-		Arguments: map[string]any{"directive": "add a feature", "repo": srcDir},
+		Arguments: map[string]any{"directive": "add a feature", "repo": srcDir, "plan": []map[string]any{{"name": "build", "role": "builder", "instruction": "add a feature"}}},
 	})
 	if err != nil {
 		t.Fatalf("create_mission: %v", err)
@@ -250,7 +250,7 @@ func TestCreateMission_NoCrossSwarmWhenDisabled(t *testing.T) {
 
 	res, err := sess.CallTool(ctx, &mcp.CallToolParams{
 		Name:      "create_mission",
-		Arguments: map[string]any{"directive": "add a feature", "repo": srcDir},
+		Arguments: map[string]any{"directive": "add a feature", "repo": srcDir, "plan": []map[string]any{{"name": "build", "role": "builder", "instruction": "add a feature"}}},
 	})
 	if err != nil {
 		t.Fatalf("create_mission: %v", err)

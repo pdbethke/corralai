@@ -12,6 +12,27 @@ import (
 	"github.com/pdbethke/corralai/internal/queue"
 )
 
+// fullDAGTestPlan is a fixture standing in for the retired DefaultPlan: the
+// same research->design->build-core->build->(test,secops,perf)->integrate->
+// docs->retro DAG shape (dependency-gating, multiple downstream fan-out, and a
+// couple of Verify-gated phases) that these engine tests were written against.
+// The build-plan sizer itself is gone; this is test-only scaffolding to keep
+// exercising the engine's dependency/verify-gate machinery.
+func fullDAGTestPlan(directive string) []PhaseSpec {
+	return []PhaseSpec{
+		{Name: "research", Role: "researcher", Count: 1, Instruction: "research: " + directive},
+		{Name: "design", Role: "designer", Count: 1, DependsOn: []string{"research"}, Instruction: "design: " + directive},
+		{Name: "build-core", Role: "builder", Count: 1, DependsOn: []string{"design"}, Verify: "go build", Instruction: "build-core: " + directive},
+		{Name: "build", Role: "builder", Count: 1, DependsOn: []string{"build-core"}, Verify: "go build", Instruction: "build: " + directive},
+		{Name: "test", Role: "tester", Count: 2, DependsOn: []string{"build"}, Verify: "go test", Instruction: "test: " + directive},
+		{Name: "secops", Role: "pentester", Count: 1, DependsOn: []string{"build"}, Instruction: "secops: " + directive},
+		{Name: "perf", Role: "perf", Count: 1, DependsOn: []string{"build"}, Instruction: "perf: " + directive},
+		{Name: "integrate", Role: "integrator", Count: 1, DependsOn: []string{"test", "secops", "perf"}, Verify: "go build", Instruction: "integrate: " + directive},
+		{Name: "docs", Role: "writer", Count: 1, DependsOn: []string{"integrate"}, Instruction: "docs: " + directive},
+		{Name: "retro", Role: "reviewer", Count: 1, DependsOn: []string{"docs"}, Instruction: "retro: " + directive},
+	}
+}
+
 func status(t *testing.T, m *Store, q *queue.Store, mid int64, name string) string {
 	t.Helper()
 	mv, err := m.View(mid, q)
@@ -60,7 +81,7 @@ func TestMissionPipelinePull(t *testing.T) {
 	}
 	defer m.Close()
 
-	mid, err := CreateMission(m, q, "add a wishlist feature", nil, false) // default pipeline
+	mid, err := CreateMission(m, q, "add a wishlist feature", fullDAGTestPlan("add a wishlist feature"), false) // default pipeline
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +134,7 @@ func TestEngineFiresOnMissionCompleted(t *testing.T) {
 	}
 	defer m.Close()
 
-	mid, err := CreateMission(m, q, "add a wishlist feature", nil, false) // default pipeline, no review
+	mid, err := CreateMission(m, q, "add a wishlist feature", fullDAGTestPlan("add a wishlist feature"), false) // default pipeline, no review
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +187,7 @@ func TestEngineHoldsBackWhenFinalStateVerifyFails(t *testing.T) {
 	}
 	defer m.Close()
 
-	mid, err := CreateMission(m, q, "add a wishlist feature", nil, false)
+	mid, err := CreateMission(m, q, "add a wishlist feature", fullDAGTestPlan("add a wishlist feature"), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +244,7 @@ func TestEngineRoutesToNeedsReviewOnOpenCriticalFinding(t *testing.T) {
 	}
 	defer m.Close()
 
-	mid, err := CreateMission(m, q, "add a wishlist feature", nil, false)
+	mid, err := CreateMission(m, q, "add a wishlist feature", fullDAGTestPlan("add a wishlist feature"), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,7 +305,7 @@ func TestEngineConvergesDoneWhenOnlyLowFindingsOpen(t *testing.T) {
 	}
 	defer m.Close()
 
-	mid, err := CreateMission(m, q, "add a wishlist feature", nil, false)
+	mid, err := CreateMission(m, q, "add a wishlist feature", fullDAGTestPlan("add a wishlist feature"), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,7 +354,7 @@ func TestEngineSweepsBlockedDependencies(t *testing.T) {
 	}
 	defer m.Close()
 
-	mid, err := CreateMission(m, q, "build a thing", nil, false)
+	mid, err := CreateMission(m, q, "build a thing", fullDAGTestPlan("build a thing"), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -411,7 +432,7 @@ func TestBlockedDepChainRoutesToNeedsReviewNotPR(t *testing.T) {
 	}
 	defer m.Close()
 
-	mid, err := CreateMission(m, q, "build a thing", nil, false)
+	mid, err := CreateMission(m, q, "build a thing", fullDAGTestPlan("build a thing"), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -496,7 +517,7 @@ func TestEngineFailsMissionWithNoProgress(t *testing.T) {
 	}
 	defer m.Close()
 
-	mid, err := CreateMission(m, q, "build a thing", nil, false)
+	mid, err := CreateMission(m, q, "build a thing", fullDAGTestPlan("build a thing"), false)
 	if err != nil {
 		t.Fatal(err)
 	}

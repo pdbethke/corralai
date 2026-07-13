@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/pdbethke/corralai/internal/gateway"
@@ -18,6 +17,15 @@ import (
 	"github.com/pdbethke/corralai/internal/taskartifacts"
 )
 
+// TestCreateMissionPersistsAndInjectsHerd used to prove the HTTP composer
+// persisted a herd and injected it into the default (ScaledPlan) build's
+// tasks. The build-plan sizer is retired and this endpoint doesn't (yet)
+// accept an explicit plan, so create_mission over HTTP now has nothing to
+// build a mission from and must fail closed instead of silently
+// synthesizing a build arc. Phase 3 reworks this handler; herd persist+inject
+// is still covered end to end over MCP (missions_test.go's
+// TestCreateMissionMCPPersistsAndInjectsHerd), which does accept an explicit
+// plan.
 func TestCreateMissionPersistsAndInjectsHerd(t *testing.T) {
 	dir := t.TempDir()
 	m, _ := mission.Open(filepath.Join(dir, "m.sqlite3"))
@@ -45,36 +53,8 @@ func TestCreateMissionPersistsAndInjectsHerd(t *testing.T) {
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
-	}
-	var out struct {
-		ID int64 `json:"id"`
-		OK bool  `json:"ok"`
-	}
-	json.Unmarshal(rec.Body.Bytes(), &out)
-	if !out.OK || out.ID == 0 {
-		t.Fatalf("bad response: %s", rec.Body.String())
-	}
-
-	// Herd persisted.
-	h, ok, _ := m.Herd(out.ID)
-	if !ok || len(h.Endpoints) != 1 || h.Endpoints[0] != "prod-db" || len(h.LookbookIDs) != 1 {
-		t.Fatalf("herd not persisted: %+v ok=%v", h, ok)
-	}
-	// Context injected into a builder task instruction.
-	tasks, _ := q.List(out.ID)
-	sawEndpoint, sawLookbook := false, false
-	for _, tk := range tasks {
-		if strings.Contains(tk.Instruction, "prod-db") {
-			sawEndpoint = true
-		}
-		if tk.Role == "builder" && strings.Contains(tk.Instruction, "neon dashboard") {
-			sawLookbook = true
-		}
-	}
-	if !sawEndpoint || !sawLookbook {
-		t.Fatalf("injection missing: endpoint=%v lookbook=%v", sawEndpoint, sawLookbook)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400 (build missions are retired): %s", rec.Code, rec.Body.String())
 	}
 }
 

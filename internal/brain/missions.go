@@ -71,16 +71,11 @@ func registerMissions(s *mcp.Server, store *mission.Store, q *queue.Store, mem *
 					Instruction: p.Instruction, DependsOn: p.DependsOn, Count: p.Count,
 				})
 			}
-			// Learning loop: materialize the plan, then inject lessons recalled from
-			// memory so past mistakes actively shape this mission's instructions.
-			// ScaledPlan scales the plan's ceremony to the directive's own
-			// complexity (lean/standard/full) — a trivial greenfield ask still
-			// gets built AND tested, it just doesn't pay for a research phase,
-			// a pentester, a perf pass, and a separate integrator it doesn't
-			// warrant. Substantial or security/infra-touching directives still
-			// get the complete researcher…reviewer arc (DefaultPlan).
+			// The build-plan sizer (ScaledPlan) is retired: builder missions no
+			// longer exist, so there is nothing to synthesize when the caller
+			// omits a plan. Fail closed rather than silently building.
 			if len(specs) == 0 {
-				specs = mission.ScaledPlan(in.Directive)
+				return nil, mission.MissionView{}, fmt.Errorf("build missions are retired: an explicit, non-empty plan is required")
 			}
 			// Learning loop: inject VETTED items only — lessons, then promoted
 			// guidance, then skill pointers — capped at 3 total. The gate below

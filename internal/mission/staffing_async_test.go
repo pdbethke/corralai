@@ -44,7 +44,7 @@ func TestStaffingDoesNotReprobeEveryTickOnFailure(t *testing.T) {
 	}
 	defer m.Close()
 
-	if _, err := CreateMission(m, q, "add a wishlist feature", nil, false); err != nil {
+	if _, err := CreateMission(m, q, "add a wishlist feature", fullDAGTestPlan("add a wishlist feature"), false); err != nil {
 		t.Fatal(err)
 	}
 

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -220,8 +221,11 @@ func (rc *restClient) rcOpenPR(ctx context.Context, owner, repo, head, base, tit
 
 // rcFindOpenPR returns the html_url of the first open PR whose head matches, or "".
 func (rc *restClient) rcFindOpenPR(ctx context.Context, owner, repo, head string) (string, error) {
-	url := rc.base + "/repos/" + owner + "/" + repo + "/pulls?head=" + owner + ":" + head + "&state=open"
-	b, _, err := rc.get(ctx, url, "")
+	// Escape the query params — a branch/ref (head) can carry characters that
+	// would otherwise break out of the query string ("&", space, "#").
+	q := url.Values{"head": {owner + ":" + head}, "state": {"open"}}
+	reqURL := rc.base + "/repos/" + owner + "/" + repo + "/pulls?" + q.Encode()
+	b, _, err := rc.get(ctx, reqURL, "")
 	if err != nil {
 		return "", err
 	}

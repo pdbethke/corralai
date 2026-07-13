@@ -17,6 +17,10 @@ func TestUnsafeIP(t *testing.T) {
 	}{
 		{"169.254.169.254", true}, {"127.0.0.1", true}, {"10.0.0.5", true},
 		{"192.168.1.1", true}, {"::1", true}, {"fe80::1", true}, {"0.0.0.0", true},
+		// Alibaba IMDS is a PUBLIC 100.64/10 CGNAT literal — not IsPrivate() in Go,
+		// so it must be blocked explicitly (F2). AWS IPv6 IMDS is ULA (already
+		// unsafe) but listed defensively.
+		{"100.100.100.100", true}, {"fd00:ec2::254", true},
 		{"8.8.8.8", false}, {"1.1.1.1", false}, {"93.184.216.34", false},
 	}
 	for _, c := range cases {

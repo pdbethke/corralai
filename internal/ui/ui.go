@@ -1212,10 +1212,10 @@ func (s *Server) proposeStaffing(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{
 			"ok": true,
 			"assignments": map[string]string{
-				"builder":   "qwen2.5-coder:7b",
-				"tester":    "llama3.2:3b",
-				"reviewer":  "qwen2.5-coder:7b",
-				"pentester": "llama3.2:3b",
+				"security-breaker":     "qwen2.5-coder:7b",
+				"correctness-reviewer": "qwen2.5-coder:7b",
+				"exploit-attempter":    "qwen2.5-coder:7b",
+				"edge-hunter":          "llama3.2:3b",
 			},
 		})
 		return

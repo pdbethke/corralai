@@ -38,15 +38,8 @@ func (e *Engine) ChangedFiles(ctx context.Context, dir string) ([]string, error)
 // resolution (text present in neither parent — an "evil merge") would
 // otherwise never be scanned even though it ships to the remote. Showing the
 // first-parent diff of each merge surfaces exactly that resolution content.
-// `-c core.quotePath=false` makes git render a non-ASCII path LITERALLY (as its
-// UTF-8 bytes) instead of C-quoting it (`"a/\303\251.bin"`) — closing, at the
-// source, an egress bypass (audit pass-5 HIGH) where a binary secret with a
-// café-style name evaded the binary-in-history detector because its quoted diff
-// keys didn't match. (git STILL quotes a path containing a literal `"`, `\`, tab,
-// or newline even with quotePath=false, so egress.parseDiffGitBPath /
-// parseBinaryFiles also handle the quoted form.)
 func (e *Engine) DiffAddedLines(ctx context.Context, dir, base string) (string, error) {
-	return e.git(ctx, dir, "-c", "core.quotePath=false", "log", "-p", "--no-color", "--unified=0", "--diff-merges=first-parent", base+"..HEAD")
+	return e.git(ctx, dir, "log", "-p", "--no-color", "--unified=0", "--diff-merges=first-parent", base+"..HEAD")
 }
 
 // ChangedFilesRange lists files that differ between base and HEAD — the

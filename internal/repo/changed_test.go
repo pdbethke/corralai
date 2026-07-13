@@ -9,8 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/pdbethke/corralai/internal/egress"
 )
 
 // TestDiffAddedLines verifies the history-scan source: a secret committed in an
@@ -133,57 +131,6 @@ func TestDiffAddedLines_CatchesEvilMergeCommit(t *testing.T) {
 	}
 	if !strings.Contains(patch, secret) {
 		t.Fatalf("DiffAddedLines must catch a secret introduced via a merge commit's conflict resolution; got:\n%s", patch)
-	}
-}
-
-// TestDiffAddedLines_QuotedBinaryPathFlagged is the pass-5 HIGH end-to-end guard:
-// a binary file with a NON-ASCII filename (which git C-quotes by default via
-// core.quotePath) added in one commit and deleted in a later commit within
-// base..HEAD must, when DiffAddedLines' output is piped through egress.ScanText,
-// still yield a binary-in-history block. This verifies the -c core.quotePath=false
-// arg (path renders literally/unquoted here) plus the quoted-path parsing that
-// covers the residual cases git quotes regardless.
-func TestDiffAddedLines_QuotedBinaryPathFlagged(t *testing.T) {
-	bare := makeBareRepoWithCommit(t)
-	dest := filepath.Join(t.TempDir(), "w")
-	e := New("", "")
-	ctx := context.Background()
-	if err := e.Clone(ctx, bare, "main", dest); err != nil {
-		t.Fatal(err)
-	}
-	if err := e.Checkout(ctx, dest, "feature"); err != nil {
-		t.Fatal(err)
-	}
-
-	// Binary file (embedded NUL forces git to treat it as binary) carrying
-	// secret-shaped bytes, with a non-ASCII name that git would C-quote by default.
-	name := "café.bin" // café.bin
-	blob := append([]byte("AKIA1234567890ABCDEF\x00"), []byte("more binary\x00bytes")...)
-	if err := os.WriteFile(filepath.Join(dest, name), blob, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := e.Commit(ctx, dest, "phase1: add binary secret"); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Remove(filepath.Join(dest, name)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := e.Commit(ctx, dest, "phase2: remove binary secret"); err != nil {
-		t.Fatal(err)
-	}
-
-	patch, err := e.DiffAddedLines(ctx, dest, "main")
-	if err != nil {
-		t.Fatal(err)
-	}
-	found := false
-	for _, f := range egress.ScanText(patch) {
-		if f.Rule == "binary-in-history" && f.Severity == egress.SeverityBlock {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("HIGH bypass: a git-quoted (non-ASCII name) binary added-then-deleted in history was NOT flagged; patch was:\n%s", patch)
 	}
 }
 

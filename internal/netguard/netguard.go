@@ -43,12 +43,32 @@ func (g *Guard) AllowCount() int {
 	return len(g.allow)
 }
 
+// imdsLiterals are cloud instance-metadata (IMDS) IP literals not otherwise
+// caught by the private/link-local checks. The Alibaba IMDS 100.100.100.100 is
+// a PUBLIC 100.64/10 (CGNAT) literal — Go's net.IP.IsPrivate() does NOT cover
+// 100.64/10, so without this it would dial. The AWS IPv6 IMDS fd00:ec2::254 is
+// a unique-local address already flagged by IsPrivate(); it is listed for
+// clarity/defence-in-depth. Mirrors the browser's imdsLiterals set.
+var imdsLiterals = []net.IP{
+	net.ParseIP("100.100.100.100"), // Alibaba Cloud IMDS
+	net.ParseIP("fd00:ec2::254"),   // AWS IPv6 IMDS
+}
+
 // UnsafeIP reports whether ip is loopback, private, unspecified, link-local
-// (unicast or multicast), interface-local multicast, or otherwise multicast.
+// (unicast or multicast), interface-local multicast, otherwise multicast, or a
+// known cloud-metadata (IMDS) literal not covered by those (Alibaba 100.64/10).
 func UnsafeIP(ip net.IP) bool {
-	return ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() ||
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() ||
 		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() ||
-		ip.IsInterfaceLocalMulticast()
+		ip.IsInterfaceLocalMulticast() {
+		return true
+	}
+	for _, imds := range imdsLiterals {
+		if imds != nil && imds.Equal(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // DialContext resolves the host, rejects private/loopback/link-local targets

@@ -135,31 +135,51 @@ func scanSecrets(dir string, files []string) []Finding {
 // ScanText walks every commit's added lines, catching a secret even when a
 // later hunk removes it.
 //
-// It considers only `+`-prefixed content lines (an add), stripping the leading
-// `+`, and SKIPS `+++ ` file-header lines (which also start with `+` but are
-// not data). The path is best-effort from the nearest preceding `+++ b/…`
-// header; the line number is unknown (0) because a history patch has no single
-// on-disk line. Findings are SeverityBlock — a detected secret must not ship.
+// It is HUNK-STRUCTURE-AWARE rather than prefix-guessing, which closes a
+// header-spoof bypass (audit F1): a `+++ `/`--- ` line is a file header ONLY in
+// the file-header region (before a file's first `@@`). Inside a hunk BODY every
+// `+`-prefixed line is ADDED CONTENT — so an added line whose own content begins
+// with `++ ` renders as `+++ <secret>` and MUST still be scanned (strip exactly
+// one leading `+`), not mistaken for a `+++ b/…` header. State: a `diff --git `
+// line starts a new file (expecting headers), an `@@ ` line switches to
+// hunk-body mode, `-`/` `/`\` lines in a hunk body are skipped.
+//
+// The path is best-effort from the file-header-region `+++ b/…` line; the line
+// number is unknown (0) because a history patch has no single on-disk line.
+// Findings are SeverityBlock — a detected secret must not ship.
 func ScanText(text string) []Finding {
 	var out []Finding
 	curPath := ""
+	inHunk := false // false = file-header region; true = hunk body (added lines are content)
 	scanner := bufio.NewScanner(strings.NewReader(text))
 	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
 	for scanner.Scan() {
 		line := scanner.Text()
-		// File header: "+++ b/path" (or "+++ /dev/null" for a deletion). Track the
-		// current path and never scan the header itself as content.
-		if strings.HasPrefix(line, "+++ ") {
-			curPath = parsePatchPath(line)
+		switch {
+		case strings.HasPrefix(line, "diff --git "):
+			// New file: reset to the file-header region (headers not yet seen).
+			inHunk = false
+			curPath = ""
+			continue
+		case strings.HasPrefix(line, "@@ "):
+			// Hunk boundary: everything until the next diff/@@ is hunk body.
+			inHunk = true
 			continue
 		}
-		if strings.HasPrefix(line, "---") {
-			continue // old-file header ("--- a/path" or "--- /dev/null")
+		if !inHunk {
+			// File-header region: "+++ b/path" (or "+++ /dev/null") is a header,
+			// not content. Track the path; skip "--- a/…" and all other metadata.
+			if strings.HasPrefix(line, "+++ ") {
+				curPath = parsePatchPath(line)
+			}
+			continue
 		}
+		// Hunk body: a leading '+' means ADDED CONTENT (including a "+++ …" line
+		// that is really "++ …" content). '-'/' '/'\' are removed/context/no-newline.
 		if !strings.HasPrefix(line, "+") {
-			continue // context, removed line, commit/diff metadata — not an add
+			continue
 		}
-		added := line[1:] // strip the leading '+'
+		added := line[1:] // strip exactly one leading '+'
 		for _, r := range secretRules {
 			if loc := r.re.FindStringIndex(added); loc != nil {
 				out = append(out, Finding{
@@ -297,7 +317,13 @@ func govulnEnv() []string {
 		"GOTOOLCHAIN=local", // never fetch+exec a different Go toolchain
 		"GOFLAGS=-mod=readonly",
 		"CGO_ENABLED=0", // no cgo compiler invocation
-		"GONOSUMDB=*",
+		// No-network hardening for tooling run against untrusted mission source:
+		// GOPROXY=off forbids module fetches (govulncheck/go list can't pull an
+		// attacker-named module) and GOSUMDB=off avoids sum-db network lookups.
+		// Fail-safe: a missing dep just makes the advisory vuln scan skip.
+		// (Replaces the long-removed no-op GONOSUMDB.)
+		"GOPROXY=off",
+		"GOSUMDB=off",
 	)
 }
 

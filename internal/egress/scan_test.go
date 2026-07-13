@@ -219,6 +219,88 @@ func TestScanText_CatchesHistoryOnlySecret(t *testing.T) {
 	}
 }
 
+// TestScanText_CatchesPlusPlusContentSpoof is the F1 regression: an ADDED line
+// whose CONTENT begins with "++ " renders in a git-log-p hunk body as
+// "+++ <secret>" (the diff's own leading "+" prepended). The old prefix-guessing
+// ScanText misclassified that as a "+++ b/…" file header and SKIPPED it, so a
+// committed-then-deleted (net-zero) secret evaded the gate. A hunk-structure-aware
+// scanner strips exactly one leading "+" inside a hunk body and scans "++ <secret>".
+func TestScanText_CatchesPlusPlusContentSpoof(t *testing.T) {
+	// Shape mirrors real `git log -p --unified=0` for a file whose sole added line
+	// is `++ aws_secret_access_key=…` (verified against git): the add renders as
+	// `+++ aws_secret_access_key=…` INSIDE the hunk body (after the @@).
+	patch := "" +
+		"commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n" +
+		"Author: x <x@example.com>\n\n    add\n\n" +
+		"diff --git a/f b/f\n" +
+		"new file mode 100644\n" +
+		"index 0000000..1111111\n" +
+		"--- /dev/null\n" +
+		"+++ b/f\n" +
+		"@@ -0,0 +1 @@\n" +
+		"+++ aws_secret_access_key=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n"
+
+	found := false
+	for _, f := range ScanText(patch) {
+		if f.Rule == "AWS Secret Access Key" {
+			found = true
+			if f.Severity != SeverityBlock {
+				t.Errorf("spoofed-header secret finding must block, got severity %q", f.Severity)
+			}
+			if contains(f.Sample, "wJalrXUtnFEMI") {
+				t.Errorf("finding leaked the raw secret: %q", f.Sample)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("F1 bypass: `++ `-prefixed added content rendered as `+++ …` was NOT scanned — header-spoof secret-scan bypass")
+	}
+}
+
+// TestScanText_CatchesDashDashAdjacencyVariant is the F1 sibling case: a removed
+// line whose content starts with "-- " renders as "--- …" and an adjacent added
+// line whose content starts with "++ " renders as "+++ …", mimicking the
+// "--- a/…" / "+++ b/…" header PAIR. Inside a hunk body the added line is still
+// content and must be scanned.
+func TestScanText_CatchesDashDashAdjacencyVariant(t *testing.T) {
+	patch := "" +
+		"diff --git a/f b/f\n" +
+		"--- a/f\n" +
+		"+++ b/f\n" +
+		"@@ -1 +1 @@\n" +
+		"-- old placeholder line\n" +
+		"+++ aws_secret_access_key=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n"
+
+	found := false
+	for _, f := range ScanText(patch) {
+		if f.Rule == "AWS Secret Access Key" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("F1 variant: `++ ` add adjacent to a `-- ` remove (mimicking the ---/+++ header pair) was NOT scanned")
+	}
+}
+
+// TestScanText_RealFileHeaderNotScannedAsContent verifies a genuine "+++ b/…"
+// file header (in the file-header region, before the first @@) is NOT scanned as
+// content even when the path itself is secret-shaped — headers are structural.
+func TestScanText_RealFileHeaderNotScannedAsContent(t *testing.T) {
+	// The AKIA-shaped token appears ONLY in a real +++ b/ file-header path.
+	patch := "" +
+		"diff --git a/AKIAABCDEFGHIJKLMNOP b/AKIAABCDEFGHIJKLMNOP\n" +
+		"--- a/AKIAABCDEFGHIJKLMNOP\n" +
+		"+++ b/AKIAABCDEFGHIJKLMNOP\n" +
+		"@@ -1 +1 @@\n" +
+		"-removed\n" +
+		"+harmless\n"
+	for _, f := range ScanText(patch) {
+		if f.Rule == "AWS Access Key ID" {
+			t.Fatalf("ScanText scanned a real +++ b/ file header as content: %+v", f)
+		}
+	}
+}
+
 // TestScanText_IgnoresFileHeaderAndContext verifies ScanText does not treat the
 // `+++ b/…` file header as an added content line (it starts with `+` but is not
 // data) and does not scan removed (`-`) or context lines.
@@ -279,7 +361,7 @@ func TestGovulnEnv(t *testing.T) {
 
 	env := govulnEnv()
 
-	want := []string{"GOTOOLCHAIN=local", "CGO_ENABLED=0", "GOFLAGS=-mod=readonly"}
+	want := []string{"GOTOOLCHAIN=local", "CGO_ENABLED=0", "GOFLAGS=-mod=readonly", "GOPROXY=off", "GOSUMDB=off"}
 	for _, w := range want {
 		found := false
 		for _, e := range env {
@@ -296,6 +378,10 @@ func TestGovulnEnv(t *testing.T) {
 	for _, e := range env {
 		if contains(e, "SECRETVALUE") {
 			t.Fatalf("govulnEnv() leaked a secret env var into the child process: %q", e)
+		}
+		// GONOSUMDB is a long-removed no-op — it must not reappear.
+		if contains(e, "GONOSUMDB") {
+			t.Errorf("govulnEnv() sets the dead no-op GONOSUMDB: %q", e)
 		}
 	}
 }

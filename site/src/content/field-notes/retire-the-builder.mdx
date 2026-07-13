@@ -1,6 +1,6 @@
 ---
 title: "Killing the part I was proudest of"
-description: "A pivot you don't commit to is just a mood. Three days ago I wrote that corral was an accountability engine, not a builder. Then an old friend — a CISO — looked at it and said the quiet part: it reads like a mish-mosh. He was right, and the fix was the thing I'd been avoiding. We're deleting the builder. Here's why the demo everyone loved had to go, and what corral actually is now."
+description: "A pivot you don't commit to is just a mood. Three days ago I wrote that corral was an accountability engine, not a builder. Then a friend — a data scientist — read the code and said the quiet part: it's a mish-mosh of things that already exist. He was right, and the fix was the thing I'd been avoiding. We're deleting the builder. Here's why the demo everyone loved had to go, and what corral actually is now."
 pubDate: 2026-07-13
 draft: false
 ---
@@ -21,7 +21,7 @@ A pivot you don't commit to is a mood. This is the note where I commit.
 
 ## The friend who said the quiet part
 
-What forced it was an old friend of mine — someone I've known for years, who now runs security at a company whose name you'd recognize. A CISO. I showed him the whole thing, proud, the way you show someone a machine you've been up too late building.
+What forced it was a friend of mine — a data scientist, someone who's forgotten more about models than I'll ever learn. Not a suit; a person who reads the actual code. I walked him through the whole thing, proud, the way you show someone a machine you've been up too late building.
 
 He was kind about it. And then he said the sentence that doesn't leave you: *"It seems like a mish-mosh of a few different things that already exist."*
 
@@ -61,7 +61,9 @@ That last distinction is the whole business. Everyone has *logs* — "trust me, 
 
 It even wants to be a command, not a cathedral: point it at a change, get back a signed verdict. The org platform — the warehouse, the cross-repo view, the dashboards — is the part you *add* once the command has earned its place.
 
-There's a loop in here I love, and it's borrowed. We [took the route-to-the-fittest idea from Sakana's Fugu](/field-notes/what-we-took-from-fugu/): keep staffing the agents that perform, drop the ones that don't. The difference — the [knife that Fugu leaves unwashed](/field-notes/fugu/) — is that our notion of "fittest" isn't self-reported. It's **gate-earned**: an agent earns the next job by catching real findings that our own execution-verified gate *certified* it caught. The fitness signal is signed. Same evolution, honest fuel.
+There's a loop in here I love, and I didn't invent it — a *different* old friend handed it to me. He's a CISO at a company whose name you'd recognize, and one day he passed me the [Sakana Fugu paper](/field-notes/what-we-took-from-fugu/) with something like "this, but for the thing you're doing." So one friend told me what was wrong (a mish-mosh) and the other handed me a piece of what was right — and, without meaning to, showed me *who this is for.* Because "can you prove what your code actually did" isn't a curiosity to him. It's his whole job.
+
+What we took from Fugu is route-to-the-fittest: keep staffing the agents that perform, drop the ones that don't. The difference — the [knife that Fugu leaves unwashed](/field-notes/fugu/) — is that our notion of "fittest" isn't self-reported. It's **gate-earned**: an agent earns the next job by catching real findings our own execution-verified gate *certified* it caught. The fitness signal is signed. Same evolution, honest fuel.
 
 ## The honest part
 

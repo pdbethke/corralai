@@ -344,6 +344,18 @@ func (s *Store) List(scope, typ string, limit int, sharedOnly bool) ([]Hit, erro
 	return s.scanHits(q, args)
 }
 
+// hitColumns is the canonical SELECT-column list shared by every query that
+// scans rows into a Hit (List, keyword search, and both semantic scanners).
+const hitColumns = "slug, name, project, type, description, shared, author"
+
+// scanHit scans the 7 hitColumns plus a trailing score column into a Hit.
+// Callers pass a SELECT built from hitColumns + ", <score-expr> AS score".
+func scanHit(rows *sql.Rows) (Hit, error) {
+	var h Hit
+	err := rows.Scan(&h.Slug, &h.Name, &h.Project, &h.Type, &h.Description, &h.Shared, &h.Author, &h.Score)
+	return h, err
+}
+
 func (s *Store) scanHits(q string, args []any) ([]Hit, error) {
 	rows, err := s.db.Query(q, args...)
 	if err != nil {

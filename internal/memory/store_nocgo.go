@@ -235,7 +235,7 @@ func (s *Store) searchSemantic(qv []float32, scope, typ string, limit int, share
 		args = append(args, typ)
 	}
 
-	q := "SELECT slug, name, project, type, description, shared, author, embedding FROM mem WHERE " + where
+	q := "SELECT " + hitColumns + ", embedding FROM mem WHERE " + where
 	rows, err := s.db.Query(q, args...)
 	if err != nil {
 		return nil, err

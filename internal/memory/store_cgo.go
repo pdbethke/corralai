@@ -279,10 +279,10 @@ func (s *Store) searchHNSWFiltered(lit, scope, typ string, k int, sharedOnly boo
 	args = append(args, k*overfetch, k)
 
 	// #nosec G202
-	q := `SELECT slug, name, project, type, description, shared, author,` +
+	q := `SELECT ` + hitColumns + `,` +
 		`             list_cosine_similarity(embedding, ` + lit + `::FLOAT[]) AS score
 	      FROM (
-	          SELECT slug, name, project, type, description, shared, author, embedding
+	          SELECT ` + hitColumns + `, embedding
 	          FROM mem
 	          WHERE ` + innerWhere + `
 	          ORDER BY array_cosine_distance(embedding, ` + lit + `::FLOAT[` + dimStr + `])
@@ -298,8 +298,8 @@ func (s *Store) searchHNSWFiltered(lit, scope, typ string, k int, sharedOnly boo
 	defer rows.Close()
 	out := []Hit{}
 	for rows.Next() {
-		var h Hit
-		if err := rows.Scan(&h.Slug, &h.Name, &h.Project, &h.Type, &h.Description, &h.Shared, &h.Author, &h.Score); err != nil {
+		h, err := scanHit(rows)
+		if err != nil {
 			return nil, err
 		}
 		h.Via = "semantic"
@@ -323,7 +323,7 @@ func (s *Store) searchBruteForce(lit, scope, typ string, k int, sharedOnly bool)
 		args = append(args, typ)
 	}
 	// #nosec G202
-	q := "SELECT slug, name, project, type, description, shared, author," +
+	q := "SELECT " + hitColumns + "," +
 		" list_cosine_similarity(embedding, " + lit + "::FLOAT[]) AS score" +
 		" FROM mem WHERE " + where + " ORDER BY score DESC LIMIT ?"
 	args = append(args, k)
@@ -334,8 +334,8 @@ func (s *Store) searchBruteForce(lit, scope, typ string, k int, sharedOnly bool)
 	defer rows.Close()
 	out := []Hit{}
 	for rows.Next() {
-		var h Hit
-		if err := rows.Scan(&h.Slug, &h.Name, &h.Project, &h.Type, &h.Description, &h.Shared, &h.Author, &h.Score); err != nil {
+		h, err := scanHit(rows)
+		if err != nil {
 			return nil, err
 		}
 		h.Via = "semantic"

@@ -4,14 +4,16 @@
 package recordings
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
+
+	"github.com/pdbethke/corralai/internal/sqlguard"
 
 	_ "github.com/marcboeker/go-duckdb/v2"
 )
@@ -353,46 +355,28 @@ func (s *Store) ReplayByMissionID(missionID int64) ([]Event, error) {
 	return s.ReplayBySlug(meta.Slug)
 }
 
-var (
-	lineComment  = regexp.MustCompile(`--[^\n]*`)
-	blockComment = regexp.MustCompile(`(?s)/\*.*?\*/`)
-	wsRun        = regexp.MustCompile(`\s+`)
-	bannedSubstr = []string{
-		"attach", "copy", " install ", " load ", "pragma", " set ", " call ", " export ",
-		"read_", "glob(", "sqlite_", "getenv", "parquet_scan", "duckdb_", "sniff_csv",
-		"sniff", "arrow_scan", " delete ", " update ", " insert ", " create ", " alter ", " drop ", " truncate ",
-	}
-)
-
-func validateSelect(userSQL string) error {
-	s := blockComment.ReplaceAllString(userSQL, " ")
-	s = lineComment.ReplaceAllString(s, " ")
-	s = wsRun.ReplaceAllString(s, " ")
-	s = strings.TrimSpace(s)
-	low := strings.ToLower(s)
-	padded := " " + low + " "
-	if !strings.HasPrefix(low, "select ") && !strings.HasPrefix(low, "with ") {
-		return fmt.Errorf("only SELECT/WITH queries are allowed")
-	}
-	if i := strings.IndexByte(strings.TrimRight(s, "; "), ';'); i >= 0 {
-		return fmt.Errorf("multiple statements are not allowed")
-	}
-	for _, b := range bannedSubstr {
-		if strings.Contains(padded, b) {
-			return fmt.Errorf("query uses a disallowed construct (%q)", strings.TrimSpace(b))
-		}
-	}
-	return nil
-}
-
+// Query runs read-only ad-hoc analysis on a dedicated, locked-down connection:
+// sqlguard.ApplyLockdown (the real wall — no local filesystem, no extension
+// autoload, config frozen) is applied to the SAME conn the query then runs on,
+// with sqlguard.ValidateReadOnly as defense-in-depth. Safe because recordings
+// only ever queries its own in-db tables (no read_csv/ATTACH/COPY/glob).
 func (s *Store) Query(sqlText string, rowCap int) (Report, error) {
 	if rowCap <= 0 {
 		rowCap = 1000
 	}
-	if err := validateSelect(sqlText); err != nil {
+	ctx := context.Background()
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
 		return Report{}, err
 	}
-	rows, err := s.db.Query(sqlText)
+	defer conn.Close()
+	if err := sqlguard.ApplyLockdown(ctx, conn); err != nil {
+		return Report{}, err
+	}
+	if err := sqlguard.ValidateReadOnly(sqlText); err != nil {
+		return Report{}, err
+	}
+	rows, err := conn.QueryContext(ctx, sqlText)
 	if err != nil {
 		return Report{}, err
 	}

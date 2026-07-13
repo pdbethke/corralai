@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pdbethke/corralai/internal/sqlguard"
+
 	_ "github.com/marcboeker/go-duckdb/v2"
 )
 
@@ -212,11 +214,11 @@ func TestValidateSelectRejects(t *testing.T) {
 		`SEL/**/ECT * FROM read_text('/x')`, // obfuscation defeated by normalization
 	}
 	for _, s := range bad {
-		if err := validateSelect(s); err == nil {
-			t.Fatalf("validateSelect should reject: %q", s)
+		if err := sqlguard.ValidateReadOnly(s); err == nil {
+			t.Fatalf("sqlguard.ValidateReadOnly should reject: %q", s)
 		}
 	}
-	if err := validateSelect(`WITH t AS (SELECT 1 x) SELECT * FROM t`); err != nil {
+	if err := sqlguard.ValidateReadOnly(`WITH t AS (SELECT 1 x) SELECT * FROM t`); err != nil {
 		t.Fatalf("a plain CTE SELECT should pass: %v", err)
 	}
 }

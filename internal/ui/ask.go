@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pdbethke/corralai/internal/auth"
 	"github.com/pdbethke/corralai/internal/coord"
 )
 
@@ -21,6 +22,13 @@ import (
 func (s *Server) ask(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	// A read-only observer may VIEW the swarm but never act; invoking the
+	// narrator model is an action (cost + a model call the observer's MCP
+	// ask_fleet equivalent is already denied). Gate before touching the model.
+	if auth.ReadOnly(r) {
+		http.Error(w, "forbidden: read-only observer token cannot act", http.StatusForbidden)
 		return
 	}
 	if s.narrator == nil || !s.narrator.Available() {

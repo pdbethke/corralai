@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/pdbethke/corralai/internal/auth"
 )
 
 // askFleet is the read-only fleet-oracle endpoint. It accepts a natural-language
@@ -27,6 +29,13 @@ func (s *Server) askFleet(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	// A read-only observer may probe (GET, above) but never run the NL→SQL
+	// oracle — it invokes a model and the MCP ask_fleet tool is already behind
+	// denyReadOnly. Gate before touching the oracle.
+	if auth.ReadOnly(r) {
+		http.Error(w, "forbidden: read-only observer token cannot act", http.StatusForbidden)
 		return
 	}
 	if s.oracle == nil || !s.oracle.Enabled() {

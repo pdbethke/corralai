@@ -19,7 +19,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 	"time"
 
@@ -149,22 +148,18 @@ func scanSecrets(dir string, files []string) []Finding {
 // number is unknown (0) because a history patch has no single on-disk line.
 // Findings are SeverityBlock — a detected secret must not ship.
 //
-// It ALSO closes a binary-blob evasion (audit pass-4 F1): a binary file both
-// ADDED and DELETED within base..HEAD renders only as `Binary files … differ`
-// (no `+`-content lines to scan) AND is gone from the final tree (invisible to
-// the working-tree scan) — so a secret in its bytes would ship in the pushed
-// history undetected. ScanText tracks, per path, whether the range added it and
-// whether it deleted it (both derivable from the `Binary files …` line's
-// /dev/null side), and emits a `binary-in-history` block finding for any path
-// that was BOTH added AND deleted (net-removed → unscannable). A binary only
-// added-and-kept, only deleted (pre-existing), or modified stays in the final
-// tree and is NOT flagged — keeping this low-noise.
+// Accepted gap: a binary blob that is committed and later deleted within
+// base..HEAD renders only as `Binary files … differ` (no `+`-content lines to
+// scan) and is gone from the final tree, so it is NOT scanned here or by the
+// working-tree Scan — a secret hidden in such a blob would ship undetected.
+// This narrow, exotic vector is an accepted limitation (a prior
+// binary-in-history detector was reverted as fragile/false-positive-prone for
+// the cost); the human PR-review gate plus these text/merge scans cover the
+// realistic cases.
 func ScanText(text string) []Finding {
 	var out []Finding
 	curPath := ""
-	curBinPath := ""              // path from the current file's `diff --git` line (for binary classification)
-	bin := map[string]*binState{} // path -> whether the range added and/or deleted it as a binary
-	inHunk := false               // false = file-header region; true = hunk body (added lines are content)
+	inHunk := false // false = file-header region; true = hunk body (added lines are content)
 	scanner := bufio.NewScanner(strings.NewReader(text))
 	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
 	for scanner.Scan() {
@@ -174,34 +169,10 @@ func ScanText(text string) []Finding {
 			// New file: reset to the file-header region (headers not yet seen).
 			inHunk = false
 			curPath = ""
-			// Binary diffs carry NO `+++`/`---`/`@@` lines — capture the path here
-			// (the `diff --git a/<p> b/<p>` line) so a `Binary files …` line below
-			// can be attributed to it.
-			curBinPath = parseDiffGitBPath(line)
 			continue
 		case strings.HasPrefix(line, "@@ "):
 			// Hunk boundary: everything until the next diff/@@ is hunk body.
 			inHunk = true
-			continue
-		case strings.HasPrefix(line, "Binary files ") && strings.HasSuffix(line, " differ"):
-			// Binary diff metadata (never a `+`/`-`/space-prefixed hunk content line,
-			// so it can't be spoofed by added content). Classify by the /dev/null side.
-			lp, added, deleted := parseBinaryFiles(line)
-			if added || deleted {
-				p := curBinPath
-				if p == "" {
-					p = lp
-				}
-				if p != "" {
-					st := bin[p]
-					if st == nil {
-						st = &binState{}
-						bin[p] = st
-					}
-					st.added = st.added || added
-					st.deleted = st.deleted || deleted
-				}
-			}
 			continue
 		}
 		if !inHunk {
@@ -231,86 +202,7 @@ func ScanText(text string) []Finding {
 		out = append(out, Finding{Path: curPath, Rule: "unscanned-remainder",
 			Sample: "line too long to scan — remainder of patch not scanned: " + err.Error(), Severity: SeverityBlock})
 	}
-	// A binary both ADDED and DELETED in the range is net-removed: never a `+`-line
-	// to secret-scan, and gone from the final tree (working-tree scan can't see it).
-	// Flag it for manual review. Sorted for deterministic finding order.
-	evaded := make([]string, 0, len(bin))
-	for p, st := range bin {
-		if st.added && st.deleted {
-			evaded = append(evaded, p)
-		}
-	}
-	sort.Strings(evaded)
-	for _, p := range evaded {
-		out = append(out, Finding{
-			Path: p, Line: 0, Rule: "binary-in-history",
-			Sample:   "a binary file was added then removed in this branch's history and could not be scanned for secrets — review manually",
-			Severity: SeverityBlock,
-		})
-	}
 	return out
-}
-
-// binState tracks, for one path, whether base..HEAD added it and/or deleted it as
-// a binary blob — the two facts that together identify the history-evasion case.
-type binState struct {
-	added   bool
-	deleted bool
-}
-
-// parseDiffGitBPath best-effort extracts the b-side path from a `diff --git a/<p>
-// b/<p>` line. git C-QUOTES a path containing a non-ASCII byte, `"`, `\`, tab, or
-// newline (`diff --git "a/\303\251.bin" "b/\303\251.bin"`), so the b-side reads
-// ` "b/…"` rather than ` b/…`; probe for the quoted form too and trim the trailing
-// quote (audit pass-5 HIGH: without this the quoted key never matched, letting a
-// non-ASCII-named binary secret evade the add+delete block). Uses the LAST match
-// so a path containing the marker still resolves; the add and delete commits emit
-// a byte-identical `diff --git` line, so consistent extraction guarantees matching
-// keys. The `\ooo` octal escapes are NOT decoded — add & delete only need the SAME
-// key, which consistent (un)quoting achieves. Returns "" if no b-side is found.
-func parseDiffGitBPath(line string) string {
-	rest := strings.TrimPrefix(line, "diff --git ")
-	if i := strings.LastIndex(rest, ` "b/`); i >= 0 { // quoted b-side (core.quotePath)
-		return strings.TrimSuffix(strings.TrimSpace(rest[i+len(` "b/`):]), `"`)
-	}
-	if i := strings.LastIndex(rest, " b/"); i >= 0 {
-		return strings.TrimSpace(rest[i+len(" b/"):])
-	}
-	return ""
-}
-
-// parseBinaryFiles classifies a `Binary files <A> and <B> differ` line by which
-// side is /dev/null: `/dev/null and b/<p>` = ADD, `a/<p> and /dev/null` = DELETE,
-// both real = MODIFY (neither). The returned path is the non-/dev/null side with
-// its a//b/ prefix stripped (a fallback for when the `diff --git` path is absent).
-func parseBinaryFiles(line string) (path string, added, deleted bool) {
-	mid := strings.TrimSuffix(strings.TrimPrefix(line, "Binary files "), " differ")
-	// The a-side (left) is /dev/null for an ADD; the b-side (right) is /dev/null
-	// for a DELETE. Anchor on the /dev/null side via prefix/suffix rather than
-	// splitting on " and " — a filename can itself contain " and " (e.g.
-	// `x and y.bin`), which would otherwise misclassify a delete as a MODIFY and
-	// let a crafted-name binary evade the add+delete block. Check the ADD (a-side
-	// /dev/null) form first so an added file whose name ends in ` and /dev/null`
-	// isn't mistaken for a delete.
-	switch {
-	case strings.HasPrefix(mid, "/dev/null and "):
-		return stripSidePrefix(strings.TrimPrefix(mid, "/dev/null and "), "b/"), true, false
-	case strings.HasSuffix(mid, " and /dev/null"):
-		return stripSidePrefix(strings.TrimSuffix(mid, " and /dev/null"), "a/"), false, true
-	default:
-		return "", false, false // both real (MODIFY) or unparseable — not an add/delete evasion
-	}
-}
-
-// stripSidePrefix normalizes the non-/dev/null token of a `Binary files …` line
-// to a stable key: strip a leading `"` FIRST (git C-quotes a non-ASCII/special
-// path, so the token reads `"b/…"` rather than `b/…`), THEN the a//b/ prefix. The
-// add token `"b/<p>"` and delete token `"a/<p>"` both reduce to `<p>"` → matching
-// keys (audit pass-5 HIGH). The trailing `"` and any `\ooo` octal escapes are left
-// as-is: only add & delete need the SAME key, not a fully C-decoded path.
-func stripSidePrefix(tok, ab string) string {
-	tok = strings.TrimPrefix(tok, `"`)
-	return strings.TrimPrefix(tok, ab)
 }
 
 // parsePatchPath extracts the file path from a unified-diff "+++ b/path" header,

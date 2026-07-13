@@ -16,8 +16,7 @@ corral-admin — operator client for a corralai brain
   corral-admin whoami                          who the brain sees you as
   corral-admin mint-observer [--ttl 24h] [--principal x]
   corral-admin member  list | add <email> | super <email> [--off] | create-super [email] | remove <email>
-  corral-admin mission list | status <id> | create <directive...> | pause <id> | resume <id> | cancel <id>
-  corral-admin review <id> --accept | --changes "..."
+  corral-admin mission list | status <id> | pause <id> | resume <id> | cancel <id>
   corral-admin findings [--mission N] [--status open]
   corral-admin resolve-findings [--delay 2m] [--mission N] [--outcome addressed|dismissed]
   corral-admin reference add <url> | --file <path> | --text "..." --source <n> | list | search "<q>"

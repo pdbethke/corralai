@@ -259,6 +259,12 @@ func (vf *Verifier) VerifyToken(ctx context.Context, token string, _ *http.Reque
 		}
 		_ = idt.Claims(&c)
 		principal := pickPrincipal(c.Email, c.EmailVerified, c.PreferredUsername, c.ClientID, c.AZP)
+		if principal == "" {
+			// Verified signature/issuer/audience but no usable identity claim.
+			// Never fall through to an empty UserID: with an empty allowlist,
+			// Allowed("") returns true and this would authenticate as anonymous.
+			return nil, sdkauth.ErrInvalidToken
+		}
 		exp := idt.Expiry
 		if exp.IsZero() {
 			exp = time.Now().Add(time.Hour)

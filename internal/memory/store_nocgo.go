@@ -135,6 +135,7 @@ func (s *Store) buildLocked(dirs []string) (int, error) {
 				if err != nil {
 					log.Printf("memory: embedding tx begin: %v", err)
 				} else {
+					defer tx.Rollback() // no-op after a successful Commit; defense-in-depth against a future early-return
 					for i, p := range paths {
 						if i < len(vecs) {
 							strVec := serializeVector(vecs[i])

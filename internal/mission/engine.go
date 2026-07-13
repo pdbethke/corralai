@@ -52,6 +52,12 @@ type RepoOps interface {
 	// scan gate uses this (not ChangedFiles) so a secret committed in an
 	// earlier phase is still caught at push time, not just the last phase's diff.
 	ChangedFilesRange(ctx context.Context, dir, base string) ([]string, error)
+	// DiffAddedLines returns the raw `git log -p base..HEAD` patch text — every
+	// commit's added lines across the whole branch history. The egress gate
+	// scans this so a secret committed in an earlier phase and then DELETED
+	// (clean final tree, absent from the net base...HEAD diff and from a squash)
+	// is still caught, because the push ships the full history.
+	DiffAddedLines(ctx context.Context, dir, base string) (string, error)
 	// ListReviews returns reviews for the given repoURL+PR number.
 	ListReviews(ctx context.Context, repoURL string, pr int, etag string) ([]ReviewInfo, string, bool, error)
 	// ListReviewComments returns inline comments for the given repoURL+PR number.
@@ -83,6 +89,10 @@ type EgressFinding struct {
 // entirely, leaving the push/PR flow for clean output unchanged.
 type EgressScanner interface {
 	Scan(ctx context.Context, dir string, files []string) []EgressFinding
+	// ScanText scans the added lines of a `git log -p` patch (branch history)
+	// for secrets — the history-aware companion to Scan's working-tree read, so
+	// a commit-then-delete secret can't evade the gate. Findings are block-only.
+	ScanText(text string) []EgressFinding
 }
 
 // Indexer is the interface the mission engine uses to index files changed by
@@ -752,7 +762,9 @@ func (e *Engine) commitDonePhases(m *Mission) {
 }
 
 // runEgressGate scans the mission's cumulative changed-file set (base...HEAD,
-// not just the last commit) right before push+PR — the last brain-side
+// not just the last commit) AND the full branch history's added lines
+// (git log -p base..HEAD, so a secret committed then deleted still can't ship)
+// right before push+PR — the last brain-side
 // checkpoint before the herd's output leaves for the forge. Every finding is
 // filed as a queue.Finding so it is visible the same way any other finding is
 // (UI feed, learn sweep, resolve_finding). It returns true iff a BLOCKING
@@ -772,7 +784,22 @@ func (e *Engine) runEgressGate(m *Mission) bool {
 	if len(files) == 0 {
 		return false
 	}
-	findings := e.Egress.Scan(context.Background(), e.workdir(m), files)
+	dir := e.workdir(m)
+	// Working-tree scan (line-addressable, on-disk-only content) PLUS a full
+	// branch-history scan (git log -p base..HEAD): a secret committed in an
+	// earlier phase and then deleted leaves a clean tree but still ships in the
+	// push, so scanning the current tree alone misses it. Belt-and-suspenders.
+	findings := e.Egress.Scan(context.Background(), dir, files)
+	if diff, derr := e.Repo.DiffAddedLines(context.Background(), dir, m.Base); derr != nil {
+		// A history diff we can't compute is a scan we can't complete — fail
+		// closed rather than push an unscanned branch (same posture as the
+		// changed-files failure above).
+		log.Printf("mission %d: egress: history diff failed: %v — BLOCKING push (fail-closed: cannot scan branch history)", m.ID, derr)
+		e.egressBlocked[m.ID] = true
+		return true
+	} else {
+		findings = append(findings, e.Egress.ScanText(diff)...)
+	}
 	blocked := false
 	for _, f := range findings {
 		sev := "high"

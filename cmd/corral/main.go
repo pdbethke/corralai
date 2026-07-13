@@ -1413,6 +1413,9 @@ func (a *repoAdapter) ChangedFiles(ctx context.Context, dir string) ([]string, e
 func (a *repoAdapter) ChangedFilesRange(ctx context.Context, dir, base string) ([]string, error) {
 	return a.e.ChangedFilesRange(ctx, dir, base)
 }
+func (a *repoAdapter) DiffAddedLines(ctx context.Context, dir, base string) (string, error) {
+	return a.e.DiffAddedLines(ctx, dir, base)
+}
 
 // egressAdapter wires internal/egress into mission.EgressScanner — the same
 // single-conversion-point pattern as repoAdapter, keeping the mission package
@@ -1420,7 +1423,12 @@ func (a *repoAdapter) ChangedFilesRange(ctx context.Context, dir, base string) (
 type egressAdapter struct{}
 
 func (egressAdapter) Scan(ctx context.Context, dir string, files []string) []mission.EgressFinding {
-	findings := egress.Scan(ctx, dir, files)
+	return convertEgressFindings(egress.Scan(ctx, dir, files))
+}
+func (egressAdapter) ScanText(text string) []mission.EgressFinding {
+	return convertEgressFindings(egress.ScanText(text))
+}
+func convertEgressFindings(findings []egress.Finding) []mission.EgressFinding {
 	out := make([]mission.EgressFinding, len(findings))
 	for i, f := range findings {
 		out[i] = mission.EgressFinding{Path: f.Path, Line: f.Line, Rule: f.Rule, Sample: f.Sample, Severity: f.Severity}

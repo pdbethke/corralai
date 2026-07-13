@@ -165,6 +165,79 @@ func TestScanSecrets_LongLineNotSilentlyAborted(t *testing.T) {
 	}
 }
 
+// TestScanText_CatchesHistoryOnlySecret verifies the history-scan path: a
+// secret that a git-log-p patch ADDS in one commit (a `+`-prefixed line) is
+// caught even when a later hunk REMOVES it (a `-`-prefixed line), so the net
+// diff/working tree is clean. ScanText walks every added line, not the net.
+func TestScanText_CatchesHistoryOnlySecret(t *testing.T) {
+	// Shape mirrors `git log -p --no-color --unified=0 base..HEAD`: two commits,
+	// the first ADDS the secret, the second REMOVES it (clean final tree).
+	patch := "" +
+		"commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n" +
+		"Author: x <x@example.com>\n\n    add config\n\n" +
+		"diff --git a/config.env b/config.env\n" +
+		"new file mode 100644\n" +
+		"index 0000000..1111111\n" +
+		"--- /dev/null\n" +
+		"+++ b/config.env\n" +
+		"@@ -0,0 +1 @@\n" +
+		"+AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n" +
+		"commit bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n" +
+		"Author: x <x@example.com>\n\n    delete config\n\n" +
+		"diff --git a/config.env b/config.env\n" +
+		"deleted file mode 100644\n" +
+		"index 1111111..0000000\n" +
+		"--- a/config.env\n" +
+		"+++ /dev/null\n" +
+		"@@ -1 +0,0 @@\n" +
+		"-AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n"
+
+	findings := ScanText(patch)
+	if len(findings) == 0 {
+		t.Fatal("expected a finding for the history-only secret, got none")
+	}
+	found := false
+	for _, f := range findings {
+		if f.Severity != SeverityBlock {
+			t.Errorf("history finding must be blocking, got severity %q", f.Severity)
+		}
+		if f.Rule == "AWS Secret Access Key" {
+			found = true
+			if f.Path != "config.env" {
+				t.Errorf("expected path resolved from +++ b/ header to be config.env, got %q", f.Path)
+			}
+			if f.Sample == "" {
+				t.Error("finding must carry a (redacted) sample")
+			}
+			if contains(f.Sample, "wJalrXUtnFEMI") {
+				t.Errorf("finding leaked the raw secret: %q", f.Sample)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected an AWS Secret Access Key finding for the added line, got: %+v", findings)
+	}
+}
+
+// TestScanText_IgnoresFileHeaderAndContext verifies ScanText does not treat the
+// `+++ b/…` file header as an added content line (it starts with `+` but is not
+// data) and does not scan removed (`-`) or context lines.
+func TestScanText_IgnoresFileHeaderAndContext(t *testing.T) {
+	// The only place the secret string appears is a REMOVED line — no `+` add.
+	patch := "" +
+		"diff --git a/x.txt b/x.txt\n" +
+		"--- a/x.txt\n" +
+		"+++ b/x.txt\n" +
+		"@@ -1 +1 @@\n" +
+		"-const key = \"AKIAABCDEFGHIJKLMNOP\"\n" +
+		"+const key = loadFromEnv()\n"
+	for _, f := range ScanText(patch) {
+		if f.Rule == "AWS Access Key ID" {
+			t.Fatalf("ScanText flagged a removed line as an added secret: %+v", f)
+		}
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(substr) > 0 && (func() bool {
 		for i := 0; i+len(substr) <= len(s); i++ {

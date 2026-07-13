@@ -61,15 +61,21 @@ func (s *Store) ReopenTask(id int64) (bool, error) {
 //   - The replacement INHERITS the old task's verify gate when the spec doesn't
 //     set one — re-planning must not silently drop the mission's guarantees.
 func (s *Store) SupersedeTask(oldID int64, spec TaskSpec) (int64, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
 	var missionID int64
 	var oldKey, oldVerify string
-	if err := s.db.QueryRow(`SELECT mission_id, key, verify FROM tasks WHERE id=?`, oldID).Scan(&missionID, &oldKey, &oldVerify); err != nil {
+	if err := tx.QueryRow(`SELECT mission_id, key, verify FROM tasks WHERE id=?`, oldID).Scan(&missionID, &oldKey, &oldVerify); err != nil {
 		return 0, err
 	}
 	if spec.Key == "" {
 		spec.Key = oldKey
 	}
-	uk, err := s.uniqueKey(missionID, spec.Key)
+	uk, err := s.uniqueKeyTx(tx, missionID, spec.Key)
 	if err != nil {
 		return 0, err
 	}
@@ -78,13 +84,16 @@ func (s *Store) SupersedeTask(oldID int64, spec TaskSpec) (int64, error) {
 		spec.Verify = oldVerify
 	}
 
-	// Read pending dependents before any write (single connection).
+	// Read pending dependents inside the same tx as the rewrite below, so the
+	// read-decide-write sequence is atomic: nothing can enqueue or change a
+	// dependent between the read and the commit and be missed (the TOCTOU
+	// that could otherwise orphan a dependency on the superseded key).
 	type dep struct {
 		id   int64
 		deps []string
 	}
 	var dependents []dep
-	rows, err := s.db.Query(`SELECT id, depends_on FROM tasks WHERE mission_id=? AND status=?`, missionID, StatusPending)
+	rows, err := tx.Query(`SELECT id, depends_on FROM tasks WHERE mission_id=? AND status=?`, missionID, StatusPending)
 	if err != nil {
 		return 0, err
 	}
@@ -109,12 +118,6 @@ func (s *Store) SupersedeTask(oldID int64, spec TaskSpec) (int64, error) {
 		return 0, err
 	}
 	_ = rows.Close()
-
-	tx, err := s.db.Begin()
-	if err != nil {
-		return 0, err
-	}
-	defer tx.Rollback()
 
 	if _, err := tx.Exec(
 		`UPDATE tasks SET status=?, claimed_by=NULL, claim_expires_ts=NULL WHERE id=?`,
@@ -159,13 +162,15 @@ func (s *Store) SupersedeTask(oldID int64, spec TaskSpec) (int64, error) {
 	return newID, nil
 }
 
-// uniqueKey returns base if unused in the mission, else base-r2, base-r3, …
+// uniqueKeyTx returns base if unused in the mission, else base-r2, base-r3, …
 // (bounded; the queue caps out long before 10k replacements of one task).
-func (s *Store) uniqueKey(missionID int64, base string) (string, error) {
+// Takes tx (never s.db) so callers inside SupersedeTask's transaction don't
+// deadlock the single-connection pool.
+func (s *Store) uniqueKeyTx(tx *sql.Tx, missionID int64, base string) (string, error) {
 	key := base
 	for i := 2; i < 10000; i++ {
 		var n int
-		if err := s.db.QueryRow(`SELECT COUNT(*) FROM tasks WHERE mission_id=? AND key=?`, missionID, key).Scan(&n); err != nil {
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM tasks WHERE mission_id=? AND key=?`, missionID, key).Scan(&n); err != nil {
 			return "", err
 		}
 		if n == 0 {
@@ -189,6 +194,20 @@ func (s *Store) CancelTaskGuarded(id int64, cascade bool) (cancelled []int64, bl
 		return nil, nil, fmt.Errorf("task %d not found", id)
 	}
 
+	// Fetch the mission's tasks ONCE and index direct dependents by dependency
+	// key, so the BFS below walks in memory instead of re-scanning the whole
+	// mission per frontier node (was O(nodes x mission-size)).
+	all, err := s.List(t.MissionID)
+	if err != nil {
+		return nil, nil, err
+	}
+	dependentsOf := map[string][]Task{}
+	for _, x := range all {
+		for _, d := range x.DependsOn {
+			dependentsOf[d] = append(dependentsOf[d], x)
+		}
+	}
+
 	// Walk the dependent subtree (keys -> live dependents), breadth-first.
 	type node struct {
 		id  int64
@@ -201,21 +220,12 @@ func (s *Store) CancelTaskGuarded(id int64, cascade bool) (cancelled []int64, bl
 		cur := frontier[0]
 		frontier = frontier[1:]
 		subtree = append(subtree, cur)
-		ts, lerr := s.List(t.MissionID)
-		if lerr != nil {
-			return nil, nil, lerr
-		}
-		for _, x := range ts {
+		for _, x := range dependentsOf[cur.key] {
 			if seen[x.ID] || x.Status == StatusDone || x.Status == StatusCancelled || x.Status == StatusSuperseded {
 				continue
 			}
-			for _, d := range x.DependsOn {
-				if d == cur.key {
-					seen[x.ID] = true
-					frontier = append(frontier, node{x.ID, x.Key})
-					break
-				}
-			}
+			seen[x.ID] = true
+			frontier = append(frontier, node{x.ID, x.Key})
 		}
 	}
 	dependents := subtree[1:] // everything but the root
@@ -290,11 +300,23 @@ func (s *Store) RetargetDependents(missionID int64, fromKey, toKey string) (int,
 		if !changed {
 			continue
 		}
-		b, _ := json.Marshal(deps)
-		if _, err := s.db.Exec(`UPDATE tasks SET depends_on=? WHERE id=?`, string(b), x.ID); err != nil {
+		// Conditional write: only overwrite depends_on if it still matches the
+		// snapshot we read it from (x.DependsOn, marshaled the same way it was
+		// stored). A row whose deps changed underneath between the s.List
+		// snapshot above and this Exec matches 0 rows and is skipped, not
+		// clobbered — closes the lost-update window (audit finding M).
+		oldJSON, _ := json.Marshal(x.DependsOn)
+		newJSON, _ := json.Marshal(deps)
+		res, err := s.db.Exec(
+			`UPDATE tasks SET depends_on=? WHERE id=? AND depends_on=?`,
+			string(newJSON), x.ID, string(oldJSON),
+		)
+		if err != nil {
 			return n, err
 		}
-		n++
+		if aff, _ := res.RowsAffected(); aff == 1 {
+			n++ // only count rows we actually changed
+		}
 	}
 	return n, nil
 }

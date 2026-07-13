@@ -4,6 +4,7 @@ package brain
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -19,6 +20,19 @@ func ownsInbox(req *mcp.CallToolRequest, name string, opts Options) bool {
 		return true
 	}
 	return opts.isAdmin(req) || strings.EqualFold(p, name)
+}
+
+// canInstruct reports whether the caller may steer target (an agent name): only
+// within its OWN namespace (itself or its "p/..." subagents), or as an admin.
+// Unauthenticated (dev) => allowed. This mirrors the registration/claim
+// namespacing invariant (see identity/inNamespace) so one principal can never
+// queue instructions into another principal's agent inbox.
+func canInstruct(req *mcp.CallToolRequest, target string, opts Options) bool {
+	p, _ := actor(req)
+	if p == "" {
+		return true
+	}
+	return opts.isAdmin(req) || inNamespace(target, p)
 }
 
 type sendInstructionIn struct {
@@ -48,6 +62,9 @@ func registerInbox(s *mcp.Server, store *coord.Store, opts Options) {
 	mcp.AddTool(s, &mcp.Tool{Name: "send_instruction",
 		Description: "Issue an instruction to another agent (by its swarm name). It queues until that agent picks it up via check_instructions."},
 		func(_ context.Context, req *mcp.CallToolRequest, in sendInstructionIn) (*mcp.CallToolResult, sendInstructionOut, error) {
+			if !canInstruct(req, in.Target, opts) {
+				return nil, sendInstructionOut{OK: false}, fmt.Errorf("forbidden: you may only instruct agents in your own namespace")
+			}
 			issuer := identity(req, "agent")
 			id, err := store.SendInstruction(issuer, in.Target, in.Text)
 			return nil, sendInstructionOut{ID: id, OK: err == nil}, err

@@ -147,12 +147,21 @@ func (s *Store) buildLocked(dirs []string) (int, error) {
 			if vecs, err := s.embedder.Embed(texts); err != nil {
 				log.Printf("memory: embed %d entries: %v", len(texts), err)
 			} else {
-				for i, p := range paths {
-					if i < len(vecs) {
-						// #nosec G202
-						if _, err := s.db.Exec("UPDATE mem SET embedding = "+embed.VecLiteral(vecs[i])+"::FLOAT[] WHERE path = ?", p); err != nil {
-							log.Printf("memory: embedding UPDATE for %s: %v", p, err)
+				tx, err := s.db.Begin()
+				if err != nil {
+					log.Printf("memory: embedding tx begin: %v", err)
+				} else {
+					defer tx.Rollback() // no-op after a successful Commit; defense-in-depth against a future early-return
+					for i, p := range paths {
+						if i < len(vecs) {
+							// #nosec G202
+							if _, err := tx.Exec("UPDATE mem SET embedding = "+embed.VecLiteral(vecs[i])+"::FLOAT[] WHERE path = ?", p); err != nil {
+								log.Printf("memory: embedding UPDATE for %s: %v", p, err)
+							}
 						}
+					}
+					if err := tx.Commit(); err != nil {
+						log.Printf("memory: embedding tx commit: %v", err)
 					}
 				}
 			}
@@ -271,10 +280,10 @@ func (s *Store) searchHNSWFiltered(lit, scope, typ string, k int, sharedOnly boo
 	args = append(args, k*overfetch, k)
 
 	// #nosec G202
-	q := `SELECT slug, name, project, type, description, shared, author,` +
+	q := `SELECT ` + hitColumns + `,` +
 		`             list_cosine_similarity(embedding, ` + lit + `::FLOAT[]) AS score
 	      FROM (
-	          SELECT slug, name, project, type, description, shared, author, embedding
+	          SELECT ` + hitColumns + `, embedding
 	          FROM mem
 	          WHERE ` + innerWhere + `
 	          ORDER BY array_cosine_distance(embedding, ` + lit + `::FLOAT[` + dimStr + `])
@@ -290,8 +299,8 @@ func (s *Store) searchHNSWFiltered(lit, scope, typ string, k int, sharedOnly boo
 	defer rows.Close()
 	out := []Hit{}
 	for rows.Next() {
-		var h Hit
-		if err := rows.Scan(&h.Slug, &h.Name, &h.Project, &h.Type, &h.Description, &h.Shared, &h.Author, &h.Score); err != nil {
+		h, err := scanHit(rows)
+		if err != nil {
 			return nil, err
 		}
 		h.Via = "semantic"
@@ -315,7 +324,7 @@ func (s *Store) searchBruteForce(lit, scope, typ string, k int, sharedOnly bool)
 		args = append(args, typ)
 	}
 	// #nosec G202
-	q := "SELECT slug, name, project, type, description, shared, author," +
+	q := "SELECT " + hitColumns + "," +
 		" list_cosine_similarity(embedding, " + lit + "::FLOAT[]) AS score" +
 		" FROM mem WHERE " + where + " ORDER BY score DESC LIMIT ?"
 	args = append(args, k)
@@ -326,8 +335,8 @@ func (s *Store) searchBruteForce(lit, scope, typ string, k int, sharedOnly bool)
 	defer rows.Close()
 	out := []Hit{}
 	for rows.Next() {
-		var h Hit
-		if err := rows.Scan(&h.Slug, &h.Name, &h.Project, &h.Type, &h.Description, &h.Shared, &h.Author, &h.Score); err != nil {
+		h, err := scanHit(rows)
+		if err != nil {
 			return nil, err
 		}
 		h.Via = "semantic"

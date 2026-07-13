@@ -15,6 +15,7 @@
 //	CORRALAI_MEMORY_DIR        where new memory entries are written (default ~/.claude/projects/default/memory)
 //	CORRALAI_PROJECT_TIERS     optional path->tier rules "substr=tier,substr=tier"; front-matter project: wins, else "default"
 //	CORRALAI_OIDC_ISSUER       OIDC issuer URL (any OIDC provider: Keycloak, Auth0, Okta, Dex, Authentik, …); empty => AUTH DISABLED (dev)
+//	CORRALAI_ALLOW_INSECURE    set "1" to allow auth-disabled startup on a non-loopback CORRALAI_ADDR (refused otherwise, H-3)
 //	CORRALAI_OIDC_AUDIENCE     expected token aud (the client_id)
 //	CORRALAI_OIDC_CLIENTS      extra trusted clients "issuer|aud,issuer|aud"
 //	CORRALAI_ALLOWED_PRINCIPALS day-0 SEED of member emails (DB is canonical after; empty => any authenticated)
@@ -224,16 +225,24 @@ func envInt(k string, def int) int {
 // delegationKey resolves the HMAC key for subagent delegation tokens:
 // CORRALAI_DELEGATION_SECRET, else a systemd credential (delegation-secret), else
 // a random ephemeral key (tokens then don't survive a restart — fine for the
-// short-lived subagents they're meant for).
+// short-lived subagents they're meant for). Any explicit secret (env or systemd
+// credential) must be at least 32 bytes — anything shorter makes the HMAC-SHA256
+// signature forgeable; an operator-set secret this weak is a misconfiguration we
+// fail loud on rather than silently falling back to a random key.
 func delegationKey() []byte {
 	if v := os.Getenv("CORRALAI_DELEGATION_SECRET"); v != "" {
 		scrubSecrets([]string{"CORRALAI_DELEGATION_SECRET"}) // consumed; scrub before any in-process reader can see it
+		if len(v) < 32 {
+			log.Fatalf("CORRALAI_DELEGATION_SECRET too short (%d bytes) — need >= 32 for a forgery-resistant HMAC key", len(v))
+		}
 		return []byte(v)
 	}
 	if d := os.Getenv("CREDENTIALS_DIRECTORY"); d != "" {
 		if b, err := os.ReadFile(filepath.Join(d, "delegation-secret")); err == nil { // #nosec G703,G304 -- reads a fixed-name systemd credential from $CREDENTIALS_DIRECTORY (operator-trusted env), not attacker input
-			if s := strings.TrimSpace(string(b)); len(s) >= 16 {
+			if s := strings.TrimSpace(string(b)); len(s) >= 32 {
 				return []byte(s)
+			} else if len(s) > 0 {
+				log.Printf("delegation: systemd credential too short (<32 bytes) — ignoring, falling back")
 			}
 		}
 	}
@@ -452,6 +461,30 @@ func initMotherDuckToken() {
 		_ = os.Setenv("motherduck_token", tok)              // DuckDB reads lowercase when attaching md:
 		scrubSecrets([]string{"CORRALAI_MOTHERDUCK_TOKEN"}) // scrub uppercase; lowercase stays for md: attach
 	}
+}
+
+// insecureBindRefused returns an error when the brain would run auth-DISABLED
+// while bound to a non-loopback interface — an open control plane. Loopback
+// binds (dev) and CORRALAI_ALLOW_INSECURE=1 (explicit opt-in) are allowed.
+func insecureBindRefused(authEnabled bool, addr string, allowInsecure bool) error {
+	if authEnabled || allowInsecure {
+		return nil
+	}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	if host == "" { // e.g. ":9019" — binds all interfaces
+		return fmt.Errorf("auth is disabled and CORRALAI_ADDR %q binds all interfaces; set CORRALAI_OIDC_ISSUER or CORRALAI_ALLOW_INSECURE=1", addr)
+	}
+	if ip := net.ParseIP(host); ip != nil && !ip.IsLoopback() {
+		return fmt.Errorf("auth is disabled and CORRALAI_ADDR %q is not loopback; set CORRALAI_OIDC_ISSUER or CORRALAI_ALLOW_INSECURE=1", addr)
+	}
+	if host != "localhost" && net.ParseIP(host) == nil {
+		// a hostname we can't classify — be conservative, refuse unless overridden
+		return fmt.Errorf("auth is disabled and CORRALAI_ADDR host %q is not a loopback literal; set CORRALAI_OIDC_ISSUER or CORRALAI_ALLOW_INSECURE=1", host)
+	}
+	return nil
 }
 
 // version is set at build time via -ldflags "-X main.version=...".
@@ -983,6 +1016,11 @@ func main() {
 	verifier, err := auth.NewVerifier(context.Background(), pairs)
 	if err != nil {
 		log.Fatalf("oidc verifier: %v", err)
+	}
+	// H-3: auth-DISABLED + bound to a non-loopback interface is an open control
+	// plane. Refuse to start unless the operator explicitly opts in.
+	if err := insecureBindRefused(verifier.Enabled(), addr, os.Getenv("CORRALAI_ALLOW_INSECURE") == "1"); err != nil {
+		log.Fatalf("%v", err)
 	}
 	// Subagent delegation tokens (out-of-process subagents authenticate with these).
 	// Key from CORRALAI_DELEGATION_SECRET / systemd cred, else a random ephemeral key

@@ -136,7 +136,7 @@ func TestShareRecordingRefusesDelegationToken(t *testing.T) {
 	}
 
 	vf := &auth.Verifier{}
-	vf.EnableDelegation([]byte("test-delegation-key"))
+	vf.EnableDelegation([]byte("test-delegation-key-that-is-32-bytes!!"))
 	tok, err := vf.MintDelegation("boss@x.com", "boss@x.com/child", time.Hour)
 	if err != nil {
 		t.Fatal(err)

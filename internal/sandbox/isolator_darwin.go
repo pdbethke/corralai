@@ -53,16 +53,22 @@ func (sandboxExecIsolator) Wrap(command string, opts Options, env []string) ([]s
 	sb.WriteString("(allow process*)\n")
 	sb.WriteString("(allow signal*)\n")
 	sb.WriteString("(allow sysctl*)\n")
-	sb.WriteString("(allow file-read*)\n")
 
-	// Read confinement: the broad file-read* above lets a command read system
-	// libraries/tools (as the Linux bwrap jail does via its /usr bind), but we
-	// then DENY the operator's secret stores so a hijacked agent can't read
-	// them — matching bwrap, which never binds $HOME into the jail. Last
-	// matching rule wins in SBPL, so these denies override the allow, and the
-	// workspace re-allow below overrides the $HOME deny when the workspace
-	// lives under $HOME. Without this, ~/.ssh, ~/.aws, keychains, and corral's
-	// own tokens were all readable — a regression from the Linux backend.
+	// Deny-by-default reads (matching Linux bwrap). Allow ONLY the toolchain
+	// paths a build/test needs plus the workspace — not the whole host FS.
+	// macOS /etc is a symlink to /private/etc, so allow the real /private
+	// paths.
+	for _, p := range []string{"/usr", "/bin", "/sbin", "/System/Library", "/Library/Developer", "/opt/homebrew", "/private/etc/ssl", "/private/etc/ca-certificates"} {
+		sb.WriteString(fmt.Sprintf("(allow file-read* (subpath %q))\n", p))
+	}
+
+	// Belt-and-braces: explicitly deny the operator's secret stores so a
+	// hijacked agent can't read them even if a future change widens the
+	// allowlist above — matching bwrap, which never binds $HOME into the
+	// jail. Last matching rule wins in SBPL, so these denies override any
+	// allow above, and the workspace re-allow below overrides the $HOME deny
+	// when the workspace lives under $HOME. Now redundant with deny-by-default
+	// but kept as defense in depth.
 	if home != "" {
 		sb.WriteString(fmt.Sprintf("(deny file-read* (subpath %q))\n", home))
 	}

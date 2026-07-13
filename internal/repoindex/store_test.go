@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/pdbethke/corralai/internal/embed"
@@ -45,6 +46,68 @@ func fakeEmbedServer(t *testing.T) *embed.Client {
 	}))
 	t.Cleanup(srv.Close)
 	return embed.NewFor(srv.URL, "fake", "")
+}
+
+// fakeCountingEmbedServer is the fakeEmbedServer body with a request counter
+// threaded through the httptest handler, so callers can assert on the number
+// of embed HTTP round-trips made by a single IndexFiles call (audit N+1 fix).
+func fakeCountingEmbedServer(t *testing.T, calls *int32) *embed.Client {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(calls, 1)
+		var in struct {
+			Input []string `json:"input"`
+		}
+		json.NewDecoder(r.Body).Decode(&in)
+		type emb struct {
+			Embedding []float32 `json:"embedding"`
+		}
+		out := struct {
+			Data []emb `json:"data"`
+		}{}
+		for _, s := range in.Input {
+			ls := strings.ToLower(s)
+			v := []float32{0, 0, 1}
+			if strings.Contains(ls, "auth") || strings.Contains(ls, "login") || strings.Contains(ls, "security") {
+				v = []float32{1, 0, 0}
+			} else if strings.Contains(ls, "parse") || strings.Contains(ls, "url") {
+				v = []float32{0, 1, 0}
+			}
+			out.Data = append(out.Data, emb{Embedding: v})
+		}
+		json.NewEncoder(w).Encode(out)
+	}))
+	t.Cleanup(srv.Close)
+	return embed.NewFor(srv.URL, "fake", "")
+}
+
+// TestIndexFilesBatchesEmbedCalls verifies the audit N+1 fix: IndexFiles must
+// make exactly one embed HTTP call for a multi-file batch, not one per file.
+func TestIndexFilesBatchesEmbedCalls(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(filepath.Join(dir, "rc.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+
+	var calls int32
+	s.SetEmbedder(fakeCountingEmbedServer(t, &calls))
+
+	files := []FileInput{
+		{Path: "a.go", Text: "package a\nfunc A(){}"},
+		{Path: "b.go", Text: "package b\nfunc B(){}"},
+		{Path: "c.go", Text: "package c\nfunc C(){}"},
+	}
+	if err := s.IndexFiles(1, files); err != nil {
+		t.Fatal(err)
+	}
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("embed HTTP calls = %d for 3 files; want 1 (batched)", got)
+	}
+	if n := s.countRows(1); n == 0 {
+		t.Fatal("expected chunks stored for all 3 files")
+	}
 }
 
 func TestIndexAndIdempotentAndDrop(t *testing.T) {

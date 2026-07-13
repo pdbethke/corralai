@@ -82,7 +82,7 @@ func TestIsHumanAdminRefusesDelegationToken(t *testing.T) {
 
 	// A real delegation token minted for a subagent under that superuser.
 	vf := &auth.Verifier{}
-	vf.EnableDelegation([]byte("test-delegation-key"))
+	vf.EnableDelegation([]byte("test-delegation-key-that-is-32-bytes!!"))
 	tok, err := vf.MintDelegation("boss@x.com", "boss@x.com/child", time.Hour)
 	if err != nil {
 		t.Fatal(err)

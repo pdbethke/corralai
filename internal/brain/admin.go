@@ -51,7 +51,7 @@ type observerTokenOut struct {
 
 // registerAdmin adds the Django-style identity/role tools. whoami is open to any
 // caller; the rest manage the principal table. create_superuser, add_member,
-// set_superuser, and remove_principal gate on isHumanAdmin (not just isAdmin):
+// set_superuser, remove_principal, and mint_observer gate on isHumanAdmin (not just isAdmin):
 // principal writes are a two-hop bypass of the human gate otherwise — a
 // delegated subagent under a superuser could set_superuser a standing
 // worker's own principal, whose subsequently-clean token would then pass
@@ -156,7 +156,11 @@ func registerAdmin(s *mcp.Server, opts Options) {
 			if opts.MintObserver == nil {
 				return nil, observerTokenOut{}, fmt.Errorf("observer tokens unavailable: delegation is not enabled on this brain")
 			}
-			if !opts.isAdmin(req) {
+			// isHumanAdmin, not isAdmin: minting a standing token is a privileged
+			// write, so a delegated subagent / worker session rolled up to a
+			// superuser must not self-authorize it — same gate as every other
+			// principal-table write (see registerAdmin's isHumanAdmin note).
+			if !opts.isHumanAdmin(req) {
 				return nil, observerTokenOut{}, fmt.Errorf("forbidden: superuser only")
 			}
 			principal := in.Principal

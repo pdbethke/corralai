@@ -49,6 +49,7 @@ CORRALAI_RECORDINGS_DB     recordings DuckDB path for scrubbed replay exports (d
 CORRALAI_MEMORY_DIR        where new memory entries are written (default ~/.claude/projects/default/memory)
 CORRALAI_PROJECT_TIERS     optional path->tier rules "substr=tier,substr=tier"; front-matter project: wins, else "default"
 CORRALAI_OIDC_ISSUER       OIDC issuer URL (any OIDC provider: Keycloak, Auth0, Okta, Dex, Authentik, …); empty => AUTH DISABLED (dev)
+CORRALAI_ALLOW_INSECURE    set "1" to allow auth-disabled startup on a non-loopback CORRALAI_ADDR (refused otherwise, H-3)
 CORRALAI_OIDC_AUDIENCE     expected token aud (the client_id)
 CORRALAI_OIDC_CLIENTS      extra trusted clients "issuer|aud,issuer|aud"
 CORRALAI_ALLOWED_PRINCIPALS day-0 SEED of member emails (DB is canonical after; empty => any authenticated)

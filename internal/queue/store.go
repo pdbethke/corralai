@@ -369,11 +369,15 @@ func (s *Store) ClaimNextAs(bee, instance string, roles []string, leaseSeconds f
 		}
 		if err == nil {
 			exp := t0 + leaseSeconds
-			if _, err := tx.Exec(
-				`UPDATE tasks SET claimed_ts=?, claim_expires_ts=?, claimed_instance=? WHERE id=?`,
-				t0, exp, instance, t.ID,
-			); err != nil {
+			res, err := tx.Exec(
+				`UPDATE tasks SET claimed_ts=?, claim_expires_ts=?, claimed_instance=? WHERE id=? AND status=?`,
+				t0, exp, instance, t.ID, StatusClaimed,
+			)
+			if err != nil {
 				return nil, err
+			}
+			if n, _ := res.RowsAffected(); n != 1 {
+				return nil, nil // lost the race — task no longer claimed as expected
 			}
 			if err := tx.Commit(); err != nil {
 				return nil, err
@@ -420,11 +424,15 @@ func (s *Store) ClaimNextAs(bee, instance string, roles []string, leaseSeconds f
 
 	ts := now()
 	exp := ts + leaseSeconds
-	if _, err := tx.Exec(
-		`UPDATE tasks SET status=?, claimed_by=?, claimed_ts=?, claim_expires_ts=?, claimed_instance=? WHERE id=?`,
-		StatusClaimed, bee, ts, exp, instance, t.ID,
-	); err != nil {
+	res, err := tx.Exec(
+		`UPDATE tasks SET status=?, claimed_by=?, claimed_ts=?, claim_expires_ts=?, claimed_instance=? WHERE id=? AND status=?`,
+		StatusClaimed, bee, ts, exp, instance, t.ID, StatusReady,
+	)
+	if err != nil {
 		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return nil, nil // lost the race to claim — task no longer ready
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err

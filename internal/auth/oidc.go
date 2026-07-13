@@ -20,7 +20,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -74,7 +76,10 @@ type Verifier struct {
 // these tokens alongside JWTs). In dev (no OIDC) auth is off and a subagent token
 // needs no verification, so this is just a no-op-until-prod key install.
 func (vf *Verifier) EnableDelegation(key []byte) {
-	if len(key) == 0 {
+	if len(key) < 32 {
+		if len(key) > 0 {
+			log.Printf("auth: delegation key too short (%d bytes) — need >= 32; delegation stays disabled", len(key))
+		}
 		return
 	}
 	vf.delegKey = key
@@ -199,6 +204,9 @@ func NewVerifier(ctx context.Context, pairs []Pair) (*Verifier, error) {
 		}
 		cfg := &oidc.Config{ClientID: p.Audience}
 		if p.Audience == "" {
+			if os.Getenv("CORRALAI_OIDC_ALLOW_EMPTY_AUDIENCE") != "1" {
+				return nil, fmt.Errorf("auth: OIDC issuer %q configured with no audience; set an audience or CORRALAI_OIDC_ALLOW_EMPTY_AUDIENCE=1 to opt in to skipping the aud check", p.Issuer)
+			}
 			cfg.SkipClientIDCheck = true
 		}
 		v.vs = append(v.vs, provider.Verifier(cfg))
@@ -209,16 +217,28 @@ func NewVerifier(ctx context.Context, pairs []Pair) (*Verifier, error) {
 func (vf *Verifier) Enabled() bool { return vf.enabled }
 func (vf *Verifier) Count() int    { return len(vf.vs) }
 
-// pickPrincipal chooses the identity claim to authorize on. Human tokens carry
-// email (or preferred_username); machine/service tokens (client_credentials)
-// carry neither, so we fall back to the OAuth client identity (client_id, then
-// the standard azp). The Authorizer's allowlist still gates whatever this
-// returns, so an unlisted client_id is rejected exactly like an unlisted email.
-func pickPrincipal(email, preferredUsername, clientID, azp string) string {
-	for _, v := range []string{email, preferredUsername, clientID, azp} {
-		if v != "" {
-			return v
-		}
+// pickPrincipal maps verified claims to an allowlist principal. Human claims
+// (a verified email, else preferred_username) are returned bare; machine claims
+// (client_id/azp) are NAMESPACED as "client:<id>" so a service account can never
+// match a human email allowlist entry. An unverified email is not trusted.
+// A preferred_username that itself starts with "client:" is rejected as a
+// human-controlled claim (never returned bare): honoring it would let a
+// human-issued token collide with the machine namespace and match a
+// service-account allowlist entry. It falls through to the machine claims
+// below instead. The Authorizer's allowlist still gates whatever this
+// returns, so an unlisted client is rejected exactly like an unlisted email.
+func pickPrincipal(email string, emailVerified bool, preferredUsername, clientID, azp string) string {
+	if email != "" && emailVerified {
+		return email
+	}
+	if preferredUsername != "" && !strings.HasPrefix(preferredUsername, "client:") {
+		return preferredUsername
+	}
+	if clientID != "" {
+		return "client:" + clientID
+	}
+	if azp != "" {
+		return "client:" + azp
 	}
 	return ""
 }
@@ -238,6 +258,7 @@ func (vf *Verifier) VerifyToken(ctx context.Context, token string, _ *http.Reque
 		}
 		var c struct {
 			Email             string `json:"email"`
+			EmailVerified     bool   `json:"email_verified"` // an unverified email is not a trusted principal
 			PreferredUsername string `json:"preferred_username"`
 			ClientID          string `json:"client_id"` // service-account tokens carry no email
 			AZP               string `json:"azp"`       // standard OIDC "authorized party"
@@ -245,7 +266,13 @@ func (vf *Verifier) VerifyToken(ctx context.Context, token string, _ *http.Reque
 			TenantRole        string `json:"tenant_role"`
 		}
 		_ = idt.Claims(&c)
-		principal := pickPrincipal(c.Email, c.PreferredUsername, c.ClientID, c.AZP)
+		principal := pickPrincipal(c.Email, c.EmailVerified, c.PreferredUsername, c.ClientID, c.AZP)
+		if principal == "" {
+			// Verified signature/issuer/audience but no usable identity claim.
+			// Never fall through to an empty UserID: with an empty allowlist,
+			// Allowed("") returns true and this would authenticate as anonymous.
+			return nil, sdkauth.ErrInvalidToken
+		}
 		exp := idt.Expiry
 		if exp.IsZero() {
 			exp = time.Now().Add(time.Hour)

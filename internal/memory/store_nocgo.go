@@ -131,12 +131,21 @@ func (s *Store) buildLocked(dirs []string) (int, error) {
 			if vecs, err := s.embedder.Embed(texts); err != nil {
 				log.Printf("memory: embed %d entries: %v", len(texts), err)
 			} else {
-				for i, p := range paths {
-					if i < len(vecs) {
-						strVec := serializeVector(vecs[i])
-						if _, err := s.db.Exec("UPDATE mem SET embedding = ? WHERE path = ?", strVec, p); err != nil {
-							log.Printf("memory: embedding UPDATE for %s: %v", p, err)
+				tx, err := s.db.Begin()
+				if err != nil {
+					log.Printf("memory: embedding tx begin: %v", err)
+				} else {
+					defer tx.Rollback() // no-op after a successful Commit; defense-in-depth against a future early-return
+					for i, p := range paths {
+						if i < len(vecs) {
+							strVec := serializeVector(vecs[i])
+							if _, err := tx.Exec("UPDATE mem SET embedding = ? WHERE path = ?", strVec, p); err != nil {
+								log.Printf("memory: embedding UPDATE for %s: %v", p, err)
+							}
 						}
+					}
+					if err := tx.Commit(); err != nil {
+						log.Printf("memory: embedding tx commit: %v", err)
 					}
 				}
 			}
@@ -227,7 +236,7 @@ func (s *Store) searchSemantic(qv []float32, scope, typ string, limit int, share
 		args = append(args, typ)
 	}
 
-	q := "SELECT slug, name, project, type, description, shared, author, embedding FROM mem WHERE " + where
+	q := "SELECT " + hitColumns + ", embedding FROM mem WHERE " + where
 	rows, err := s.db.Query(q, args...)
 	if err != nil {
 		return nil, err

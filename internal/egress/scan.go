@@ -259,11 +259,20 @@ type binState struct {
 }
 
 // parseDiffGitBPath best-effort extracts the b-side path from a `diff --git a/<p>
-// b/<p>` line. Uses the LAST " b/" so a path containing " b/" still resolves; the
-// add and delete commits emit an identical `diff --git` line, so the key matches.
-// Returns "" if no b-side is found.
+// b/<p>` line. git C-QUOTES a path containing a non-ASCII byte, `"`, `\`, tab, or
+// newline (`diff --git "a/\303\251.bin" "b/\303\251.bin"`), so the b-side reads
+// ` "b/…"` rather than ` b/…`; probe for the quoted form too and trim the trailing
+// quote (audit pass-5 HIGH: without this the quoted key never matched, letting a
+// non-ASCII-named binary secret evade the add+delete block). Uses the LAST match
+// so a path containing the marker still resolves; the add and delete commits emit
+// a byte-identical `diff --git` line, so consistent extraction guarantees matching
+// keys. The `\ooo` octal escapes are NOT decoded — add & delete only need the SAME
+// key, which consistent (un)quoting achieves. Returns "" if no b-side is found.
 func parseDiffGitBPath(line string) string {
 	rest := strings.TrimPrefix(line, "diff --git ")
+	if i := strings.LastIndex(rest, ` "b/`); i >= 0 { // quoted b-side (core.quotePath)
+		return strings.TrimSuffix(strings.TrimSpace(rest[i+len(` "b/`):]), `"`)
+	}
 	if i := strings.LastIndex(rest, " b/"); i >= 0 {
 		return strings.TrimSpace(rest[i+len(" b/"):])
 	}
@@ -285,12 +294,23 @@ func parseBinaryFiles(line string) (path string, added, deleted bool) {
 	// isn't mistaken for a delete.
 	switch {
 	case strings.HasPrefix(mid, "/dev/null and "):
-		return strings.TrimPrefix(strings.TrimPrefix(mid, "/dev/null and "), "b/"), true, false
+		return stripSidePrefix(strings.TrimPrefix(mid, "/dev/null and "), "b/"), true, false
 	case strings.HasSuffix(mid, " and /dev/null"):
-		return strings.TrimPrefix(strings.TrimSuffix(mid, " and /dev/null"), "a/"), false, true
+		return stripSidePrefix(strings.TrimSuffix(mid, " and /dev/null"), "a/"), false, true
 	default:
 		return "", false, false // both real (MODIFY) or unparseable — not an add/delete evasion
 	}
+}
+
+// stripSidePrefix normalizes the non-/dev/null token of a `Binary files …` line
+// to a stable key: strip a leading `"` FIRST (git C-quotes a non-ASCII/special
+// path, so the token reads `"b/…"` rather than `b/…`), THEN the a//b/ prefix. The
+// add token `"b/<p>"` and delete token `"a/<p>"` both reduce to `<p>"` → matching
+// keys (audit pass-5 HIGH). The trailing `"` and any `\ooo` octal escapes are left
+// as-is: only add & delete need the SAME key, not a fully C-decoded path.
+func stripSidePrefix(tok, ab string) string {
+	tok = strings.TrimPrefix(tok, `"`)
+	return strings.TrimPrefix(tok, ab)
 }
 
 // parsePatchPath extracts the file path from a unified-diff "+++ b/path" header,

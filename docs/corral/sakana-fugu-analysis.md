@@ -2,6 +2,14 @@
 
 This document records the architectural comparison and analysis of the **Sakana Fugu Technical Report** (Sakana AI, June 2026) and its implications/opportunities for the **Corralai** multi-agent substrate.
 
+> **RETIRED FLOW — reference only.** Some rows below describe the build-from-directive
+> architecture (builder/reviewer/tester/pentester roles, the two-tier *reflex*
+> re-planner in `replan.go`) that was **retired in the 2026-07-13 re-focus** to a
+> reactive audit/certification gate — `replan.go` and those coder roles no longer
+> exist. The route-to-the-fittest idea this analysis draws from Fugu is retained and
+> re-pointed at *verifier* roles; see
+> [`docs/superpowers/specs/2026-07-13-corral-refocus-audit-not-builder-design.md`](../superpowers/specs/2026-07-13-corral-refocus-audit-not-builder-design.md).
+
 ---
 
 ## 1. Overview of Sakana Fugu

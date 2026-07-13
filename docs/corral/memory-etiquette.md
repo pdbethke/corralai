@@ -7,11 +7,11 @@ across missions and agents. Two rules make it worth having.
 
 Before starting a phase, search first: `search_memory` (BM25 full-text,
 `internal/brain/memory.go`) over everything you can see — your own entries plus
-the shared knowledge base. `create_mission` already does this automatically for
-you: it calls `mem.RecallLessons` and searches `guidance`/`skill` types on the
-directive, injecting up to 3 vetted hits into phase instructions
-(`internal/brain/missions.go`). But mid-mission, search again — memory grows as
-the mission runs.
+the shared knowledge base. (In the now-retired build-from-directive path,
+`create_mission` did this automatically — calling `mem.RecallLessons` and
+injecting up to 3 vetted hits into phase instructions; that verb was removed in
+the 2026-07-13 re-focus, so recall is explicit now.) Search again as you work —
+memory grows as work runs.
 
 ## Write lessons liberally
 

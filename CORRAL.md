@@ -2,6 +2,13 @@
 
 > **Visibility and accountability enhance, rather than restrict, performance.**
 
+> **RETIRED FLOW.** The "plans, builds, verifies, and re-plans" description
+> below is the build-from-directive mission loop, which is being retired as
+> corral re-focuses to a reactive audit/certification gate (the repo gate +
+> control gate are the current live surface — see `README.md`'s "What runs
+> today"). Kept for reference pending a rewrite; see
+> `docs/superpowers/specs/2026-07-13-corral-refocus-audit-not-builder-design.md`.
+
 Entry point to corralai's own developer-doc corpus — the convention any repo
 built with corralai can adopt.
 

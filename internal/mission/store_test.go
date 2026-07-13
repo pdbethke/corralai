@@ -33,6 +33,15 @@ func openMissionStore(t *testing.T, dir string) *Store {
 	return s
 }
 
+// testPlan is a minimal fixture plan used by tests that need a non-empty plan
+// to hand CreateMission — the build-plan sizer (DefaultPlan/ScaledPlan) is
+// retired, so CreateMission no longer synthesizes one.
+func testPlan(directive string) []PhaseSpec {
+	return []PhaseSpec{
+		{Name: "build", Role: "builder", Count: 1, Instruction: "Build: " + directive},
+	}
+}
+
 // queueHasTaskForPhase reports whether the queue holds at least one task for
 // missionID whose Title equals phaseName (planToTasks sets Title = phase name).
 func queueHasTaskForPhase(t *testing.T, q *queue.Store, missionID int64, phaseName string) bool {
@@ -57,7 +66,7 @@ func TestMissionRepoFields(t *testing.T) {
 	}
 	t.Cleanup(func() { s.Close() })
 	q := openQueue(t, dir)
-	id, err := CreateMission(s, q, "build calc", DefaultPlan("build calc"), false)
+	id, err := CreateMission(s, q, "build calc", testPlan("build calc"), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +98,7 @@ func TestReviewStateAndOpenPRFilter(t *testing.T) {
 	t.Cleanup(func() { s.Close() })
 	q := openQueue(t, dir)
 
-	id, err := CreateMission(s, q, "build calc", DefaultPlan("build calc"), false)
+	id, err := CreateMission(s, q, "build calc", testPlan("build calc"), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,52 +159,11 @@ func TestReviewStateAndOpenPRFilter(t *testing.T) {
 	}
 }
 
-func TestDefaultPlanVerify(t *testing.T) {
-	want := map[string]string{"build-core": "go build", "build": "go build", "test": "go test", "integrate": "go build"}
-	for _, p := range DefaultPlan("a calc package") {
-		if v, gated := want[p.Name]; gated {
-			if p.Verify != v {
-				t.Fatalf("phase %s Verify = %q, want %q", p.Name, p.Verify, v)
-			}
-		} else if p.Verify != "" {
-			t.Fatalf("phase %s should be ungated, got Verify=%q", p.Name, p.Verify)
-		}
-	}
-}
-
-// The verify gate must follow the directive's language: a Python or Node
-// mission gated on "go build" can never close build-core (there is nothing
-// for go to build), deadlocking the mission at its first gated phase.
-func TestDefaultPlanVerifyFollowsDirectiveLanguage(t *testing.T) {
-	cases := []struct {
-		directive   string
-		build, test string
-	}{
-		{"Build a Python package 'ratelimit' with unittest tests; make 'python3 -m unittest' pass", "python3", "python3 -m unittest"},
-		{"Build a JavaScript (Node.js) module 'lru' with node:test tests; make 'node --test' pass", "node", "node --test"},
-		{"Build a Go package 'stack' with table-driven tests; make 'go test ./...' pass", "go build", "go test"},
-		{"build a dashboard", "go build", "go test"}, // no language named -> Go stays the default
-	}
-	for _, c := range cases {
-		verify := map[string]string{}
-		for _, p := range DefaultPlan(c.directive) {
-			verify[p.Name] = p.Verify
-		}
-		if verify["build-core"] != c.build || verify["build"] != c.build || verify["integrate"] != c.build {
-			t.Errorf("%q: build phases verify = %q/%q/%q, want %q",
-				c.directive, verify["build-core"], verify["build"], verify["integrate"], c.build)
-		}
-		if verify["test"] != c.test {
-			t.Errorf("%q: test phase verify = %q, want %q", c.directive, verify["test"], c.test)
-		}
-	}
-}
-
 func TestReopenForReview(t *testing.T) {
 	dir := t.TempDir()
 	s := openMissionStore(t, dir)
 	q := openQueue(t, dir)
-	id, _ := CreateMission(s, q, "build calc", DefaultPlan("build calc"), false)
+	id, _ := CreateMission(s, q, "build calc", testPlan("build calc"), false)
 	s.SetMissionStatus(id, "done")
 
 	before, _ := s.Phases(id)

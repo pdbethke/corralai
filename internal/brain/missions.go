@@ -5,280 +5,29 @@ package brain
 import (
 	"context"
 	"fmt"
-	"io/fs"
-	"log"
-	"os"
-	"path/filepath"
-	"strings"
-	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/pdbethke/corralai/internal/memory"
 	"github.com/pdbethke/corralai/internal/mission"
 	"github.com/pdbethke/corralai/internal/queue"
-	"github.com/pdbethke/corralai/internal/repo"
 	"github.com/pdbethke/corralai/internal/telemetry"
 )
 
-type phaseSpecIn struct {
-	Name        string   `json:"name"`
-	Role        string   `json:"role,omitempty"`
-	Program     string   `json:"program,omitempty" jsonschema:"agent type for this phase (e.g. gemini) — heterogeneous verification"`
-	Instruction string   `json:"instruction"`
-	DependsOn   []string `json:"depends_on,omitempty"`
-	Count       int      `json:"count,omitempty"`
-}
-type createMissionIn struct {
-	Directive      string        `json:"directive" jsonschema:"the high-level goal, e.g. 'add a wishlist feature'"`
-	Plan           []phaseSpecIn `json:"plan,omitempty" jsonschema:"optional custom phases; omit to let the brain scale the plan to the directive's complexity (lean build->test, standard design->build->test->integrate->docs, or the full research->design->build->verify->integrate->docs->retro pipeline)"`
-	RequiresReview bool          `json:"requires_review,omitempty" jsonschema:"if true, the mission waits for a client review (accept or feedback) instead of auto-completing — enables sprints"`
-	Repo           string        `json:"repo,omitempty" jsonschema:"git repo URL to build in (omit for a workspace-only mission)"`
-	Base           string        `json:"base,omitempty" jsonschema:"base branch to branch from (default main)"`
-	RecordStory    bool          `json:"record_story,omitempty" jsonschema:"opt in to the story engine: agents' report_thought calls are durably recorded for replay (default false — off, no telemetry cost)"`
-	MCPEndpoints   []string      `json:"mcp_endpoints,omitempty" jsonschema:"gateway endpoint names to attach to this mission's herd — each must be usable by the calling principal"`
-	LookbookIDs    []int64       `json:"lookbook_ids,omitempty" jsonschema:"lookbook item ids whose name+description are injected as design directives"`
-}
 type missionIDIn struct {
 	ID int64 `json:"id"`
 }
-type reviewMissionIn struct {
-	ID       int64  `json:"id" jsonschema:"the mission to review"`
-	Accept   bool   `json:"accept" jsonschema:"true to accept the deliverable (mission done); false to request changes"`
-	Feedback string `json:"feedback,omitempty" jsonschema:"the change request when accept=false — what needs to be different"`
-}
-
 type listMissionsOut struct {
 	Missions []mission.Mission `json:"missions"`
 }
 
-// registerMissions adds the orchestration tools: turn a directive into a mission
-// the brain drives — spawning a fresh, independent set of role agents per phase
-// (build, then test ∥ secops, then a learning retro), each reading + recording in
-// shared memory. Available to any allowed caller (the command surface); audited via
-// the per-mission orchestrator.
+// registerMissions adds the mission lifecycle tools: status/listing, the
+// findings-gate resolution path, and mid-mission human steering
+// (pause/resume/cancel). Mission creation (the former create_mission
+// build verb) is retired — missions are created via mission.CreateMission by
+// whatever slice-2 caller re-scopes that entry point. Available to any allowed
+// caller (the command surface); audited via the per-mission orchestrator.
 func registerMissions(s *mcp.Server, store *mission.Store, q *queue.Store, mem *memory.Store, tel *telemetry.Store, opts Options) {
-	mcp.AddTool(s, &mcp.Tool{Name: "create_mission",
-		Description: "Launch a mission from a directive: the brain orchestrates independent agents to build it, then OTHER agents to test it and a secops agent to attack it, then a retrospective — sharing memory throughout. Omit plan for the default pipeline."},
-		func(ctx context.Context, req *mcp.CallToolRequest, in createMissionIn) (*mcp.CallToolResult, mission.MissionView, error) {
-			if in.Directive == "" {
-				return nil, mission.MissionView{}, fmt.Errorf("directive required")
-			}
-			specs := make([]mission.PhaseSpec, 0, len(in.Plan))
-			for _, p := range in.Plan {
-				specs = append(specs, mission.PhaseSpec{
-					Name: p.Name, Role: p.Role, Program: p.Program,
-					Instruction: p.Instruction, DependsOn: p.DependsOn, Count: p.Count,
-				})
-			}
-			// Learning loop: materialize the plan, then inject lessons recalled from
-			// memory so past mistakes actively shape this mission's instructions.
-			// ScaledPlan scales the plan's ceremony to the directive's own
-			// complexity (lean/standard/full) — a trivial greenfield ask still
-			// gets built AND tested, it just doesn't pay for a research phase,
-			// a pentester, a perf pass, and a separate integrator it doesn't
-			// warrant. Substantial or security/infra-touching directives still
-			// get the complete researcher…reviewer arc (DefaultPlan).
-			if len(specs) == 0 {
-				specs = mission.ScaledPlan(in.Directive)
-			}
-			// Learning loop: inject VETTED items only — lessons, then promoted
-			// guidance, then skill pointers — capped at 3 total. The gate below
-			// only requires mem != nil, not opts.Principals != nil: safety is
-			// preserved because RecallLessons/Search always filter shared=TRUE, and
-			// every production path that sets shared=TRUE (approve_proposal,
-			// promote_reference, add_memory's shared flag, promote_memory) is
-			// isAdmin-gated. In dev mode (no Principals store) the local
-			// operator IS that admin gate — isAdmin is permissive precisely because
-			// there is no other human in the loop; with auth on, only a verified
-			// superuser can flip shared. So relaxing this condition does not let
-			// unvetted content reach instructions.
-			if mem != nil {
-				var items []mission.Lesson
-				// Recall failures degrade to "nothing injected" — never abort the
-				// mission — but must FAIL LOUD in the log so a broken memory index
-				// doesn't silently stop the learning loop from shaping instructions.
-				if hits, err := mem.RecallLessons(in.Directive, 5); err != nil {
-					log.Printf("create_mission: lesson recall FAILED, injecting no lessons: %v", err)
-				} else {
-					for _, h := range hits {
-						text := h.Description
-						if text == "" {
-							text = h.Name
-						}
-						items = append(items, mission.Lesson{Text: text, Author: h.Author})
-					}
-				}
-				if hits, err := mem.Search(in.Directive, "", "guidance", 5, true); err != nil {
-					log.Printf("create_mission: guidance recall FAILED, injecting no guidance: %v", err)
-				} else {
-					for _, h := range hits {
-						text := h.Description
-						// Guidance's Description field is a promotion label ("promoted
-						// guidance (<signature>)"), not the guidance text itself — the
-						// text lives in Body. Fetch it; fall back to Description if the
-						// lookup fails so a transient error degrades gracefully instead
-						// of dropping the item.
-						if e, gerr := mem.Get(h.Slug, true); gerr == nil && e != nil && strings.TrimSpace(e.Body) != "" {
-							text = strings.TrimSpace(e.Body)
-						}
-						items = append(items, mission.Lesson{Text: text, Author: h.Author})
-					}
-				}
-				if hits, err := mem.Search(in.Directive, "", "skill", 5, true); err != nil {
-					log.Printf("create_mission: skill recall FAILED, injecting no skill pointers: %v", err)
-				} else {
-					for _, h := range hits {
-						line := strings.TrimPrefix(h.Description, "skill: ")
-						items = append(items, mission.Lesson{Text: "consult skill: " + h.Name + " — " + line, Author: h.Author})
-					}
-				}
-				// Injection cap: at most 3 items reach any instruction. Capping here
-				// (before InjectLessons) keeps InjectLessons' existing signature and
-				// fencing behavior untouched — priority order is already
-				// lessons -> guidance -> skill from the append order above.
-				if len(items) > 3 {
-					items = items[:3]
-				}
-				specs = mission.InjectLessons(specs, items)
-			}
-			// Herd composition: resolve + validate the requested MCP endpoints and
-			// lookbook items, then inject them into every phase's instruction —
-			// mirrors the HTTP composer's Server.createMission (internal/ui/ui.go).
-			// NOTE: unlike the HTTP path, this tool does not accept role_models —
-			// that's an HTTP-composer-only field.
-			// actor(), not actorOf(): actorOf falls back to "lead" for an
-			// unauthenticated/dev caller, which would never match a
-			// dev-registered endpoint's owner "" — the same principal
-			// list_capabilities (gateway.go) resolves Usable() against.
-			who, _ := actor(req)
-			endpointNames, guidelines, herdErr := ResolveHerdInputs(opts.Gateway, opts.TaskArtifacts, who, in.MCPEndpoints, in.LookbookIDs)
-			if herdErr != nil {
-				return nil, mission.MissionView{}, herdErr
-			}
-			specs = mission.InjectHerdContext(specs, guidelines, endpointNames)
-			id, err := mission.CreateMission(store, q, in.Directive, specs, in.RequiresReview)
-			if err != nil {
-				return nil, mission.MissionView{}, err
-			}
-			herd := mission.Herd{Endpoints: endpointNames, LookbookIDs: in.LookbookIDs}
-			if !herd.IsEmpty() {
-				if err := store.SaveHerd(id, herd); err != nil {
-					log.Printf("mission %d: SaveHerd: %v", id, err) // non-fatal: the run proceeds
-				}
-			}
-			if in.RecordStory {
-				if err := store.SetRecordStory(id, true); err != nil {
-					log.Printf("create_mission %d: set record_story: %v", id, err)
-				}
-			}
-			// Repo provisioning: clone + checkout a mission branch when requested.
-			// rollback drops BOTH the mission (phases+row) and its queue tasks so a
-			// failed provisioning never leaves a half-created mission or orphan tasks.
-			var crossSwarmNote string
-			if in.Repo != "" {
-				// dest is captured by reference so rollback removes the clone dir once
-				// it's known; before then it's "" and os.RemoveAll("") is a no-op.
-				var dest string
-				rollback := func() {
-					_ = store.DeleteMission(id)
-					if q != nil {
-						_ = q.DeleteMissionTasks(id)
-					}
-					// Remove any clone dir left on disk when Clone succeeded but a later
-					// step failed (no-op when the dir was never created).
-					_ = os.RemoveAll(dest)
-				}
-				if opts.Repo == nil || opts.Workspace == "" {
-					rollback()
-					return nil, mission.MissionView{}, fmt.Errorf("repo missions not enabled on this brain")
-				}
-				base := in.Base
-				if base == "" {
-					base = "main"
-				}
-				branch := fmt.Sprintf("corralai/m%d", id)
-				dest = mission.MissionDir(opts.Workspace, id)
-				if err := opts.Repo.Clone(ctx, in.Repo, base, dest); err != nil {
-					rollback()
-					return nil, mission.MissionView{}, fmt.Errorf("clone %s: %w", in.Repo, err)
-				}
-				if err := opts.Repo.Checkout(ctx, dest, branch); err != nil {
-					rollback()
-					return nil, mission.MissionView{}, fmt.Errorf("checkout: %w", err)
-				}
-				if err := store.SetRepo(id, in.Repo, base, branch); err != nil {
-					rollback()
-					return nil, mission.MissionView{}, fmt.Errorf("set repo: %w", err)
-				}
-				// Pre-seeding (the CORRAL.md convention): ingest this repo's own
-				// CORRAL.md + docs/corral/*.md, when present, as ADVISORY memory
-				// (shared=false) tagged to the repo — see seeddocs.go for the trust
-				// argument. Deferred to a goroutine for the same reason the index
-				// below is: the content is attacker-suppliable (any repo a mission
-				// clones), so no read of it belongs on the create_mission response
-				// path. It gets its OWN goroutine rather than riding the index one
-				// because that one only exists when opts.Index != nil, and seeding
-				// must not silently vanish on brains without a repo code index.
-				// Best-effort + capped (see seeddocs.go): never aborts the mission.
-				if mem != nil {
-					if host, owner, repoName, ierr := repo.RepoIdent(in.Repo); ierr == nil {
-						go ingestSeedDocs(mem, dest, host+"/"+owner+"/"+repoName, "repo:"+host, "")
-					}
-				}
-				// Initial full index: walk the working copy and collect all paths, then
-				// index in a goroutine so the create_mission response is not blocked by
-				// potentially minutes of embed HTTP calls over the whole repo.
-				// Fire-and-forget: a search-index failure must never abort a provisioned
-				// mission; search is an aid, not a gate. The store serializes writes via
-				// SetMaxOpenConns(1), so the goroutine and the engine Tick are safe.
-				if opts.Index != nil {
-					var all []string
-					// The callback always returns nil by design (per-file errors are
-					// skipped), so WalkDir's own return is intentionally discarded.
-					_ = filepath.WalkDir(dest, func(p string, d fs.DirEntry, err error) error {
-						if err != nil {
-							return nil
-						}
-						if d.IsDir() {
-							if d.Name() == ".git" || d.Name() == "node_modules" || d.Name() == "vendor" {
-								return filepath.SkipDir
-							}
-							return nil
-						}
-						rel, _ := filepath.Rel(dest, p)
-						all = append(all, filepath.ToSlash(rel))
-						return nil
-					})
-					go func(missionID int64, dir string, paths []string) {
-						if err := opts.Index.IndexPaths(missionID, dir, paths); err != nil {
-							log.Printf("mission %d: initial index: %v", missionID, err)
-						}
-					}(id, dest, all)
-				}
-				// Cross-swarm coordination (advisory dedup): surface any verified peer
-				// claim on this repo, then publish THIS brain's claim so peers observe
-				// it. Brain-internal + best-effort — never blocks or fails the mission.
-				crossSwarmNote = crossSwarmMissionClaim(opts, in.Repo, time.Now())
-			}
-			rec(tel, id, "mission_created", actorOf(req), "", map[string]any{"directive": in.Directive, "review": in.RequiresReview})
-			mv, err := store.View(id, q)
-			if err != nil || mv == nil {
-				return nil, mission.MissionView{}, err
-			}
-			// When a peer already claims this repo, surface the advisory note as a text
-			// content block. The structured MissionView is still returned (the SDK
-			// populates StructuredContent from the Out value regardless of Content).
-			// SDK coupling: relies on go-sdk populating StructuredContent from the Out
-			// (second) return even when the first (CallToolResult) return is non-nil —
-			// validated by TestCreateMission_AdvisorySurfacesPeerClaimWithoutBlocking;
-			// a future SDK change to that behaviour would break this silently.
-			if crossSwarmNote != "" {
-				return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: crossSwarmNote}}}, *mv, nil
-			}
-			return nil, *mv, nil
-		})
-
 	mcp.AddTool(s, &mcp.Tool{Name: "mission_status",
 		Description: "Full status of a mission: each phase, its role, status, and the agents working it."},
 		func(_ context.Context, _ *mcp.CallToolRequest, in missionIDIn) (*mcp.CallToolResult, mission.MissionView, error) {
@@ -299,28 +48,6 @@ func registerMissions(s *mcp.Server, store *mission.Store, q *queue.Store, mem *
 				ms = []mission.Mission{}
 			}
 			return nil, listMissionsOut{Missions: ms}, err
-		})
-
-	mcp.AddTool(s, &mcp.Tool{Name: "review_mission",
-		Description: "Client review of a mission awaiting review: accept to complete it, or request changes with feedback — which opens a change-request the lead turns into the next sprint's rework. Used by the human operator or a client agent."},
-		func(_ context.Context, req *mcp.CallToolRequest, in reviewMissionIn) (*mcp.CallToolResult, mission.MissionView, error) {
-			mv, err := mission.SubmitReview(store, q, in.ID, in.Accept, in.Feedback, identity(req, "client"))
-			if err != nil {
-				return nil, mission.MissionView{}, err
-			}
-			kind := "review_changes"
-			if in.Accept {
-				kind = "review_accepted"
-			}
-			rec(tel, in.ID, kind, identity(req, "client"), "", nil)
-			if mv.Status == "done" {
-				rounds := 0
-				if full, ferr := store.Mission(in.ID); ferr == nil && full != nil {
-					rounds = full.ReviewRounds
-				}
-				rec(tel, in.ID, "mission_completed", "engine", "", map[string]any{"status": "done", "review_rounds": rounds})
-			}
-			return nil, *mv, nil
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "resolve_review",
@@ -346,8 +73,8 @@ func registerMissions(s *mcp.Server, store *mission.Store, q *queue.Store, mem *
 		})
 
 	// pause_mission / resume_mission / cancel_mission are #58's mid-mission
-	// human steering: today's human gate was TERMINAL only (review_mission,
-	// above) and the composer was PRE-launch (create_mission) — there was no
+	// human steering: today's human gate was TERMINAL only (resolve_review,
+	// above) and mission creation was PRE-launch only — there was no
 	// way to intervene on a mission while it runs. Each is isHumanAdmin-gated
 	// exactly like approve_proposal/reject_proposal: a delegation/worker token
 	// riding a superuser's rolled-up authorization must never pause/cancel a

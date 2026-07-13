@@ -424,7 +424,9 @@ func TestRepoSyncPushApplyCommit(t *testing.T) {
 	}
 
 	// Step 4: drive Commit directly through the repo.Engine (crosses the apply→commit
-	// seam). This mirrors what mission.Engine.commitDonePhases does on Tick().
+	// seam). This mirrors the per-phase commit the mission engine used to make
+	// on Tick() in the retired build-from-directive loop (that commitDonePhases
+	// method has since been deleted).
 	committed, err := eng.Commit(ctx, workDir, "build: seam test directive")
 	if err != nil {
 		t.Fatalf("Commit after push: %v", err)

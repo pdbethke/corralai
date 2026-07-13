@@ -206,6 +206,11 @@ services:
     # Default directive is deliberately SMALL so the full loop — build, findings,
     # re-plan, client review — converges in minutes on the bundled 7B model.
     # `make demo-mission-epic` (or DEMO_DIRECTIVE=...) runs the ambitious parser.
+    # RETIRED: `mission create` (and the `--review` flag's `corral-admin review`
+    # verb) were removed in the 2026-07-13 re-focus to a reactive audit/
+    # certification gate — this container now errors on start. Kept as reference
+    # pending a gate-oriented demo re-point; see
+    # docs/superpowers/specs/2026-07-13-corral-refocus-audit-not-builder-design.md
     command: ["mission", "create", "--review", "--record-story", "${DEMO_DIRECTIVE:-Build a Go package 'stack' with a LIFO stack of ints: New, Push, Pop, Peek, Len; Pop/Peek return an error on empty. Include table-driven unit tests; make 'go build ./...' and 'go test ./...' pass}"]
     depends_on: {brain: {condition: service_healthy}}
     restart: "no"
@@ -271,6 +276,9 @@ services:
   mission-client:
     <<: *agent
     profiles: ["mission"]
+    # RETIRED: AGENT_MODE=client was removed from cmd/corral-agent's mode switch
+    # in the 2026-07-13 re-focus; an unrecognized AGENT_MODE now falls through to
+    # default role-work (roleWork(role)) instead of the client-review loop.
     environment: {<<: *agent-env, AGENT_MODE: client, AGENT_ROLE: client, AGENT_NAME: Client}
     depends_on: *agent-deps
 
@@ -319,6 +327,11 @@ services:
     # Default directive is deliberately SMALL so the full loop — build, findings,
     # re-plan, client review — converges in minutes on the bundled 7B model.
     # `make demo-mission-epic` (or DEMO_DIRECTIVE=...) runs the ambitious parser.
+    # RETIRED: `mission create` (and the `--review` flag's `corral-admin review`
+    # verb) were removed in the 2026-07-13 re-focus to a reactive audit/
+    # certification gate — this container now errors on start. Kept as reference
+    # pending a gate-oriented demo re-point; see
+    # docs/superpowers/specs/2026-07-13-corral-refocus-audit-not-builder-design.md
     command: ["mission", "create", "--review", "--record-story", "${DEMO_DIRECTIVE:-Build a Go package 'stack' with a LIFO stack of ints: New, Push, Pop, Peek, Len; Pop/Peek return an error on empty. Include table-driven unit tests; make 'go build ./...' and 'go test ./...' pass}"]
     depends_on: {brain: {condition: service_healthy}}
     restart: "no"

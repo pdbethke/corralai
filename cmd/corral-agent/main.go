@@ -319,9 +319,6 @@ func main() {
 	case "lead":
 		runLeadLoop(ctx, backend, name, brain)
 		return
-	case "client":
-		runClientLoop(ctx, backend, name, brain)
-		return
 	case "scrum":
 		// The standup tier: deterministic watcher — narrates progress, names
 		// stalls, nudges slackers. No model in the loop.
@@ -899,89 +896,6 @@ func leadTools() []any {
 	}
 }
 
-// runClientLoop is the stakeholder: per mission awaiting review, it reviews the
-// deliverable against the directive and decides — accept (done) or request
-// changes (next sprint) — via review_mission. The modeled product owner.
-func runClientLoop(ctx context.Context, backend Backend, name string, brain func(string, map[string]any) string) {
-	poll := 3 * time.Second
-	if v := os.Getenv("AGENT_POLL_SECONDS"); v != "" {
-		var n int
-		if _, _ = fmt.Sscanf(v, "%d", &n); n > 0 {
-			poll = time.Duration(n) * time.Second
-		}
-	}
-	tools := clientTools()
-	fmt.Printf("[%s/client] watching for deliverables to review\n", name)
-	for {
-		var ml struct {
-			Missions []struct {
-				ID        int64  `json:"id"`
-				Status    string `json:"status"`
-				Directive string `json:"directive"`
-			} `json:"missions"`
-		}
-		_ = json.Unmarshal([]byte(brain("list_missions", nil)), &ml)
-		acted := false
-		for _, m := range ml.Missions {
-			if m.Status != "awaiting_review" {
-				continue
-			}
-			acted = true
-			brain("heartbeat", map[string]any{"status": "working"})
-			statusJSON := brain("mission_status", map[string]any{"id": m.ID})
-			fmt.Printf("\n[%s/client] reviewing mission #%d: %s\n", name, m.ID, m.Directive)
-			runClientReview(ctx, backend, name, brain, tools, m.ID, m.Directive, statusJSON)
-		}
-		if !acted {
-			brain("heartbeat", map[string]any{"status": "idle"}) // #nosec G118 -- the agent's queue/lead poll loops run for the process lifetime by design (AGENT_ROUNDS=0 = forever); not a runaway; graceful ctx shutdown is a robustness nicety, not a vuln
-			time.Sleep(poll)
-		}
-	}
-}
-
-// runClientReview drives one LLM verdict on a deliverable.
-func runClientReview(ctx context.Context, backend Backend, name string, brain func(string, map[string]any) string, tools []any, missionID int64, directive, statusJSON string) {
-	sys := `You are the CLIENT for a swarm of coding agents — the stakeholder who asked for this. You are reviewing the deliverable. Be reasonable but demanding: if it meets the ask, call review_mission with accept=true. If something important is missing or wrong, call review_mission with accept=false and a SPECIFIC, actionable change request. Make exactly one decision, then stop.`
-	user := "What you asked for: " + directive + "\n\nWhat the team produced (mission status):\n" + statusJSON + "\n\nReview it now."
-	messages := []omsg{{Role: "system", Content: sys}, {Role: "user", Content: user}}
-	for step := 0; step < 4; step++ {
-		m, err := backend.Chat(messages, tools)
-		if err != nil {
-			fmt.Printf("   ! client model: %v\n", err)
-			return
-		}
-		callName, args, ok := extractCall(m)
-		if callName == "review_mission" { // the harness scopes the verdict to this mission
-			if args == nil {
-				args = map[string]any{}
-			}
-			args["id"] = missionID
-		}
-		if !ok {
-			fmt.Printf("   · client deliberating: %s\n", oneline(m.Content))
-			messages = append(messages, omsg{Role: "assistant", Content: m.Content},
-				omsg{Role: "user", Content: "Decide now: call review_mission to accept or request changes."})
-			continue
-		}
-		result := dispatch(name, "client", "", brain, callName, args)
-		fmt.Printf("   ⚖ %s(%s)  ⇒  %s\n", callName, oneline(jsons(args)), oneline(result))
-		return // one verdict per review
-	}
-}
-
-// clientTools is the single decision the client makes.
-func clientTools() []any {
-	return []any{
-		map[string]any{"type": "function", "function": map[string]any{
-			"name": "review_mission", "description": "Accept the deliverable (mission done) or request changes with specific feedback (opens the next sprint).",
-			"parameters": map[string]any{"type": "object", "properties": map[string]any{
-				"accept":   map[string]any{"type": "boolean", "description": "true to accept, false to request changes"},
-				"feedback": map[string]any{"type": "string", "description": "the specific change request when accept is false"},
-			}, "required": []string{"accept"}},
-		}},
-	}
-}
-
 // execState is resolved once at startup; run_command consults it. The bee itself
 // is never jailed — this governs only the subprocess run_command spawns.
 type execState struct {
@@ -1021,7 +935,7 @@ func setupExec() {
 func dispatch(name, role, ws string, brain func(string, map[string]any) string, tool string, args map[string]any) string {
 	switch tool {
 	case "claim_paths", "mark_done", "release_claims", "list_active", "check_instructions", "coordination_status", "report_finding",
-		"cancel_task", "reopen_task", "supersede_task", "enqueue_task", "resolve_finding", "review_mission", "search_reference",
+		"cancel_task", "reopen_task", "supersede_task", "enqueue_task", "resolve_finding", "search_reference",
 		"search_memory", "add_memory", "report_thought":
 		// set status working on claim so the swarm shows it live
 		if tool == "claim_paths" {

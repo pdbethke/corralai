@@ -1,9 +1,18 @@
 ---
 name: using-corralai
-description: "Use when driving a corralai brain — the multi-agent 'herd' orchestrator where one directive becomes a mission a team of AI agents plans, builds, verifies, re-plans on findings, and iterates until you accept. Covers composing a good directive (the crisp verify gate that makes or breaks a run), the CLI (corral / corral-admin / corral-agent / corral-harness / corral-observe / corral-top), the mission lifecycle, the human gate, memory + the CORRAL.md knowledge corpus, and watching/replaying a run. Invoke whenever the user mentions corral, the herd, a mission, wrangling agents, or wants to run/observe/steer a build through corralai."
+description: "Use when driving or observing a corralai brain — the multi-agent 'herd' orchestrator. NOTE: the build-from-directive mission loop this skill documents is being RETIRED as corral re-focuses to a reactive audit/certification gate (see docs/superpowers/specs/2026-07-13-corral-refocus-audit-not-builder-design.md); the repo gate + control gate are the live surface today, and the mission engine is retained dormant. Still covers the CLI (corral / corral-admin / corral-agent / corral-harness / corral-observe / corral-top), the human gate, memory + the CORRAL.md knowledge corpus, and watching/replaying a run. Invoke whenever the user mentions corral, the herd, a mission, the gate, wrangling agents, or wants to run/observe/steer corralai."
 ---
 
 # Using corralai
+
+> **RETIRED FLOW.** This skill describes the build-from-directive mission loop
+> below (directive -> herd builds -> re-plans on findings -> client review),
+> which is being retired as corral re-focuses to a reactive audit/certification
+> gate (the repo gate + control gate are the current live surface — see
+> `README.md`'s "What runs today"). `make demo-mission` and the
+> `corral-admin mission create` verb it depended on are no longer runnable.
+> Kept for reference pending a rewrite; see
+> `docs/superpowers/specs/2026-07-13-corral-refocus-audit-not-builder-design.md`.
 
 corralai turns **one directive** into a **mission** that a **herd** of role-differentiated
 AI agents executes: a headless **brain** decomposes it into a dependency-ordered task

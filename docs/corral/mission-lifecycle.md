@@ -1,5 +1,14 @@
 # mission-lifecycle
 
+> **RETIRED FLOW.** This document describes the build-from-directive mission
+> loop (directive -> plan -> queue -> build -> reflex/lead re-planning ->
+> client review), which is being retired as corral re-focuses to a reactive
+> audit/certification gate (the repo gate + control gate are the current live
+> surface — see `README.md`'s "What runs today"). Some symbols referenced below
+> (e.g. `internal/mission/replan.go`) have already been deleted. Kept for
+> reference pending a rewrite; see
+> `docs/superpowers/specs/2026-07-13-corral-refocus-audit-not-builder-design.md`.
+
 ## Directive -> plan -> queue
 
 `create_mission` (`internal/brain/missions.go`) takes a directive and either a

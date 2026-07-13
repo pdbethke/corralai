@@ -11,9 +11,9 @@ import (
 )
 
 // Steer actions — #58's mid-mission human steering. Until now the human gate
-// was TERMINAL only (approve/reject a finished/awaiting-review mission via
-// review_mission) and the composer was PRE-launch (plan a mission before it
-// starts); there was no way to intervene on a mission while it runs. These
+// was TERMINAL only (resolve_review certifying a finished mission) and the
+// composer was PRE-launch (plan a mission before it starts); there was no way
+// to intervene on a mission while it runs. These
 // three verbs give an operator that control:
 //
 //   - pause:  the brain hands out no NEW tasks for the mission (the claim

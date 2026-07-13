@@ -154,64 +154,14 @@ func Open(path string) (*Store, error) {
 func (s *Store) Close() error { return s.db.Close() }
 func now() float64            { return float64(time.Now().UnixNano()) / 1e9 }
 
-// verifyCommands picks the build/test verify gates from the directive's own
-// language. The gate is substring-matched against successful executions
-// (queue.MissionPassedVerify), so a Python mission gated on "go build" would
-// deadlock at build-core forever — nothing in a Python workspace can make
-// `go build` exit 0. Go remains the default when no language is named.
-func verifyCommands(directive string) (build, test string) {
-	d := strings.ToLower(directive)
-	switch {
-	case strings.Contains(d, "python"):
-		return "python3", "python3 -m unittest"
-	case strings.Contains(d, "javascript"), strings.Contains(d, "node.js"), strings.Contains(d, "nodejs"):
-		return "node", "node --test"
-	default:
-		return "go build", "go test"
-	}
-}
-
-// DefaultPlan is the standard SDLC pipeline for a directive: build, then
-// independent test ∥ secops (both off the build), then a learning retrospective.
-// Each instruction is memory-aware: read prior notes, record findings — that's the
-// collaboration + learning loop. Independence is structural (distinct roles/agents).
-func DefaultPlan(directive string) []PhaseSpec {
-	d := directive
-	verifyBuild, verifyTest := verifyCommands(directive)
-	return []PhaseSpec{
-		{Name: "research", Role: "researcher", Count: 1,
-			Instruction: "Research the requirements for: " + d + ". Clarify scope: the concrete features, constraints, and the data or sources needed, plus key domain facts. Search shared memory and any reference material first. Record the REQUIREMENTS in SHARED memory for the designer to design from."},
-		{Name: "design", Role: "designer", Count: 1, DependsOn: []string{"research"},
-			Instruction: "Design the solution for: " + d + ". FIRST read the researcher's requirements from SHARED memory, and use search_reference to consult the reference corpus — especially any design 'looks' the user saved (honor their style). Decide the architecture, the data model, the component/UI breakdown, and the overall approach. Record the DESIGN in SHARED memory — concrete enough that builders implement against it without guessing. Do NOT write the implementation."},
-		// Build is split into two chained slices: a small compiling core lands
-		// fast (visible progress — one giant build task used to hold the whole
-		// hive idle behind a single bee for 20+ minutes on a 7B model), then a
-		// completion pass fills in the rest against the same design.
-		{Name: "build-core", Role: "builder", Count: 1, DependsOn: []string{"design"}, Verify: verifyBuild,
-			Instruction: "Build the SMALLEST WORKING CORE of: " + d + ". FIRST read the designer's design from SHARED memory and implement against it (don't redesign). Core = the minimum slice that compiles and does the central thing; leave secondary features for the completion pass. Use write_file with full file contents. Record what the core covers — and what it deliberately leaves out — in SHARED memory."},
-		{Name: "build", Role: "builder", Count: 1, DependsOn: []string{"build-core"}, Verify: verifyBuild,
-			Instruction: "Complete the build of: " + d + ". Read the design AND the core-build notes from SHARED memory, then fill in the remaining features and edge cases on top of the existing core (extend, don't rewrite). Use write_file with full file contents. Record what you built and any deviations in SHARED memory so the verifiers have full context."},
-		{Name: "test", Role: "tester", Count: 2, DependsOn: []string{"build"}, Verify: verifyTest,
-			Instruction: "Independently verify the feature built for: " + d + ". Read the build notes for intent — but you did NOT build it, so test adversarially: edge cases, error paths, broken assumptions. Record every failure in SHARED memory."},
-		{Name: "secops", Role: "pentester", Count: 1, DependsOn: []string{"build"},
-			Instruction: "Attack the feature built for: " + d + ". Read the build and test notes, then attempt injection, auth bypass, resource abuse, and data exposure. Record any vulnerability in SHARED memory with a severity."},
-		{Name: "perf", Role: "perf", Count: 1, DependsOn: []string{"build"},
-			Instruction: "Profile the feature built for: " + d + ". Read the build notes, find hot paths and inefficiencies, and optimize what you safely can. Record what you optimized — or a finding with a severity if a perf problem needs a dedicated fix — in SHARED memory."},
-		{Name: "integrate", Role: "integrator", Count: 1, DependsOn: []string{"test", "secops", "perf"}, Verify: verifyBuild,
-			Instruction: "Assemble the work for: " + d + " into one coherent, working whole. Read the build/test/secops/perf notes from SHARED memory, wire the pieces together, resolve cross-file integration, and confirm it runs end to end. Record integration status and any remaining gaps in SHARED memory."},
-		{Name: "docs", Role: "writer", Count: 1, DependsOn: []string{"integrate"},
-			Instruction: "Document the feature for: " + d + ". Read the integration and build notes from SHARED memory and produce a clear README / usage / API reference. Record the docs (or where they live) in SHARED memory."},
-		{Name: "retro", Role: "reviewer", Count: 1, DependsOn: []string{"docs"},
-			Instruction: "Synthesize the mission for: " + d + ". Review the design/build/test/secops/perf/integration/docs notes in SHARED memory and decide if it's shippable. Then, for each thing that broke or surprised you, record a concrete LESSON with add_memory (type 'lesson', shared true): the context/trigger, what went wrong, and the corrective guidance — so future missions apply it and don't repeat it."},
-	}
-}
-
 // CreateMission persists a mission + its phases (the plan record for reporting)
 // and enqueues the mission's tasks into the queue (the executable work the hive
-// pulls). Empty plan => DefaultPlan.
+// pulls). The build-plan sizer (ScaledPlan/DefaultPlan) is retired — callers
+// must supply an explicit, non-empty plan; an empty plan fails closed rather
+// than synthesizing a build arc.
 func CreateMission(s *Store, q *queue.Store, directive string, plan []PhaseSpec, requiresReview bool) (int64, error) {
 	if len(plan) == 0 {
-		plan = DefaultPlan(directive)
+		return 0, fmt.Errorf("build missions are retired: an explicit, non-empty plan is required")
 	}
 	n := now()
 	rr := 0
@@ -460,59 +410,6 @@ func CancelMission(m *Store, q *queue.Store, id int64) (*Mission, error) {
 		return nil, err
 	}
 	return m.Mission(id)
-}
-
-// BumpSprint increments a mission's sprint counter (a new client-feedback round)
-// and returns the new sprint number.
-func (s *Store) BumpSprint(id int64) (int64, error) {
-	if _, err := s.db.Exec(`UPDATE missions SET sprint=sprint+1, updated_ts=? WHERE id=?`, now(), id); err != nil {
-		return 0, err
-	}
-	var sp int64
-	err := s.db.QueryRow(`SELECT sprint FROM missions WHERE id=?`, id).Scan(&sp)
-	return sp, err
-}
-
-// SprintCap bounds client-feedback rounds so a never-satisfied client can't loop
-// the swarm forever.
-const SprintCap = 5
-
-// SubmitReview applies a client verdict on a mission. Accept completes it;
-// otherwise the feedback becomes a change-request finding (which the lead routes
-// into the next sprint's rework), the sprint bumps, and the mission returns to
-// running. Shared by the review_mission MCP tool and the UI's /api/review.
-func SubmitReview(m *Store, q *queue.Store, id int64, accept bool, feedback, reporter string) (*MissionView, error) {
-	mi, err := m.Mission(id)
-	if err != nil || mi == nil {
-		return nil, fmt.Errorf("no mission %d", id)
-	}
-	if accept {
-		if err := m.SetMissionStatus(id, "done"); err != nil {
-			return nil, err
-		}
-	} else {
-		if mi.Sprint >= SprintCap {
-			return nil, fmt.Errorf("sprint cap (%d) reached for mission %d — accept it or revise the directive", SprintCap, id)
-		}
-		if reporter == "" {
-			reporter = "client"
-		}
-		if q != nil {
-			if _, err := q.AddFinding(queue.Finding{
-				MissionID: id, Reporter: reporter, Type: "change-request", Severity: "high",
-				Target: "deliverable", Evidence: feedback, SuggestedAction: "address the client's feedback",
-			}); err != nil {
-				return nil, err
-			}
-		}
-		if _, err := m.BumpSprint(id); err != nil {
-			return nil, err
-		}
-		if err := m.SetMissionStatus(id, "running"); err != nil {
-			return nil, err
-		}
-	}
-	return m.View(id, q)
 }
 
 // ResolveNeedsReview is the human-gate resolution path for a mission the

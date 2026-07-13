@@ -102,7 +102,6 @@ import (
 	"github.com/pdbethke/corralai/internal/controlgate"
 	"github.com/pdbethke/corralai/internal/controlspec"
 	"github.com/pdbethke/corralai/internal/coord"
-	"github.com/pdbethke/corralai/internal/egress"
 	"github.com/pdbethke/corralai/internal/embed"
 	"github.com/pdbethke/corralai/internal/fleet"
 	"github.com/pdbethke/corralai/internal/gate"
@@ -835,18 +834,6 @@ func main() {
 	missionTick := time.Duration(envInt("CORRALAI_MISSION_TICK_SECONDS", 3)) * time.Second
 	taskStallThreshold := time.Duration(envInt("CORRALAI_TASK_STALL_SECONDS", 300)) * time.Second
 	engine := mission.NewEngine(missionStore, queueStore)
-	// Engine-side finding resolutions (reflex auto-address) must reach the same
-	// telemetry event log as the resolve_finding MCP tool, or model_comparison
-	// reports them as forever-open.
-	engine.OnFindingResolved = func(f queue.Finding, outcome string) {
-		if err := telStore.Record(telemetry.Event{
-			MissionID: f.MissionID, Kind: "finding_resolved", Actor: "reflex-replanner",
-			Subject: f.Target, Model: f.ReporterModel,
-			Detail: map[string]any{"outcome": outcome, "finding_id": f.ID, "backend": f.ReporterBackend},
-		}); err != nil {
-			log.Printf("telemetry finding_resolved: %v", err)
-		}
-	}
 	// mission_completed: the engine finally speaks telemetry on its own
 	// auto-complete path, mirroring the review-accept emission in
 	// internal/brain/missions.go so model_comparison/mission_history never
@@ -858,26 +845,6 @@ func main() {
 		}); err != nil {
 			log.Printf("telemetry mission_completed: %v", err)
 		}
-	}
-	engine.OnReflexCapExhausted = func(missionID int64, cap int, f queue.Finding) {
-		// Telemetry only; the engine transitions the non-converging mission to the
-		// terminal `failed` state itself (reliability #5) — no oscillating pause.
-		log.Printf("mission %d: reflex task cap reached on finding %d (%s) — mission is not converging", missionID, f.ID, f.Type)
-		if err := telStore.Record(telemetry.Event{
-			MissionID: missionID, Kind: "reflex_cap_exhausted", Actor: "reflex-replanner",
-			Subject: f.Target, Model: f.ReporterModel,
-			Detail: map[string]any{
-				"cap": cap, "finding_id": f.ID, "type": f.Type, "severity": f.Severity,
-			},
-		}); err != nil {
-			log.Printf("telemetry reflex_cap_exhausted: %v", err)
-		}
-	}
-	if v := os.Getenv("CORRALAI_REFLEX_MIN_SEVERITY"); v != "" {
-		engine.ReflexMinSeverity = v
-	}
-	if n := envInt("CORRALAI_REFLEX_MAX_TASKS", 0); n > 0 {
-		engine.ReflexMaxTasks = n
 	}
 	if v := os.Getenv("CORRALAI_CONVERGE_BLOCK_SEVERITY"); v != "" {
 		engine.ConvergeBlockSeverity = v // "" (or "none") to disable the needs-review findings gate
@@ -900,12 +867,9 @@ func main() {
 		// they are scrubbed after New() so no downstream reader can retrieve them.
 		forges := repo.ForgesFromEnv()
 		repoEng = repo.NewWithForges(tok, forges)
-		engine.Repo = &repoAdapter{e: repoEng}
 		engine.Workspace = repoWorkspace
-		engine.Egress = egressAdapter{}
 		log.Printf("repo: engine enabled (workspace %s, forges %d, github token set=%v)", // #nosec G706 -- operator-controlled config, not user input
 			repoWorkspace, len(forges), tok != "")
-		log.Printf("egress: gate enabled — changed files scanned for secrets (blocking) + advisory dep/license issues before push+PR")
 	} else {
 		log.Printf("repo: disabled (set CORRALAI_GIT_TOKEN or CORRALAI_REPO_ENABLE=1 to enable repo-work missions)")
 	}
@@ -932,9 +896,15 @@ func main() {
 		log.Printf("repo code index disabled (repo engine not active)")
 	}
 
-	go engine.Run(context.Background(), missionTick)
-	log.Printf("missions: orchestration engine ticking every %s (reflex re-planner: >=%s, cap %d)",
-		missionTick, engine.ReflexMinSeverity, engine.ReflexMaxTasks)
+	// The mission Tick loop is deliberately NOT started: corral has retired the
+	// build-from-directive path (see docs/superpowers/specs/2026-07-13-corral-refocus-audit-not-builder-design.md).
+	// The engine + its lifecycle plumbing (dep-gating, give-up backstop, the
+	// findings-gate) are retained as the slice-2 verification-engine seed —
+	// engine.Verify, engine.OnMissionCompleted, and the findings-gate below
+	// are still live and used by the reaper/UI/gate wiring — but nothing
+	// calls engine.Run/Tick anymore. The repo-gate + control-gate (started
+	// below) are the daemon's primary running surface now.
+	log.Printf("missions: engine loaded as verification seed (Tick loop disabled; the gate is the primary surface)")
 
 	// healthBook infers per-agent health (working|idle|failing) from claim/
 	// complete/reclaim activity — see internal/brain/health.go (#72). Declared
@@ -979,24 +949,6 @@ func main() {
 			}
 		}
 	}()
-
-	// Review-poll ticker: when the repo engine is active, periodically check all
-	// open PRs that are in CHANGES_REQUESTED state and enqueue a response task for
-	// any unhandled review. Runs on a separate, slower cadence than the mission Tick
-	// so it doesn't amplify GitHub API calls on busy swarms.
-	if repoEng != nil {
-		reviewInterval := time.Duration(envInt("CORRALAI_REVIEW_POLL_SEC", 60)) * time.Second
-		log.Printf("review: polling PRs for CHANGES_REQUESTED every %s", reviewInterval)
-		go func() {
-			t := time.NewTicker(reviewInterval)
-			defer t.Stop()
-			for range t.C {
-				if err := engine.ReviewPoll(); err != nil {
-					log.Printf("review poll: %v", err)
-				}
-			}
-		}()
-	}
 
 	// Primary client from CORRALAI_OIDC_ISSUER/_AUDIENCE, plus any additional
 	// trusted clients in CORRALAI_OIDC_CLIENTS="issuer|audience,issuer|audience"
@@ -1063,7 +1015,10 @@ func main() {
 	// early bootstrap/report_host call), so isHumanAdmin can refuse it.
 	workerSessions := brain.NewWorkerSessions()
 
-	engine.Staffing = &mission.StaffingManager{
+	// Standalone — NOT routed through the engine: Sense→Judge→Clamp staffing is
+	// the product's differentiator and must survive independent of any running
+	// build-Tick loop. The UI drives it mission-free via proposeStaffing.
+	staffingMgr := &mission.StaffingManager{
 		Perf: &perfTracker{
 			q:   queueStore,
 			hb:  hostBook,
@@ -1352,7 +1307,7 @@ func main() {
 	replayStream := func(missionID int64) ([]brain.ReplayEvent, error) {
 		return brain.BuildReplayStream(queueStore, telStore, missionID)
 	}
-	uiHandler := verifier.Wrap(authz(ui.Handler(ui.Deps{Coord: store, Mem: memStore, Gateway: gwStore, Bus: bus, MemOwners: memOwners, Roles: princStore, Queue: queueStore, Missions: missionStore, Executions: execRing, Activity: activityRing, Hosts: hostBook, Health: healthBook, Narrator: narrator, Telemetry: telStore, Oracle: fleetOracle, RoleModels: roleModels, Staffing: engine.Staffing, Learn: learnStore, Promote: proposalPromote, Reject: proposalReject, History: historyList, HistoryDetail: historyDetail, Replay: replayStream, Artifacts: artStore, TaskArtifacts: taskArtStore, BuildStore: buildStore, CertifyPub: certifyPub, Witness: certifyWitness, Version: version})))
+	uiHandler := verifier.Wrap(authz(ui.Handler(ui.Deps{Coord: store, Mem: memStore, Gateway: gwStore, Bus: bus, MemOwners: memOwners, Roles: princStore, Queue: queueStore, Missions: missionStore, Executions: execRing, Activity: activityRing, Hosts: hostBook, Health: healthBook, Narrator: narrator, Telemetry: telStore, Oracle: fleetOracle, RoleModels: roleModels, Staffing: staffingMgr, Learn: learnStore, Promote: proposalPromote, Reject: proposalReject, History: historyList, HistoryDetail: historyDetail, Replay: replayStream, Artifacts: artStore, TaskArtifacts: taskArtStore, BuildStore: buildStore, CertifyPub: certifyPub, Witness: certifyWitness, Version: version})))
 	if verifier.Enabled() {
 		log.Printf("ui: bearer-gated (view via `corral-observe`)")
 	} else {
@@ -1360,7 +1315,9 @@ func main() {
 	}
 	mux.Handle("/", uiHandler)
 
-	// Repo gate (merge gate): starts the poller (if configured + a jail
+	// Repo gate (merge gate) — THE DAEMON'S PRIMARY RUNNING SURFACE now that the
+	// mission Tick loop above is disabled. StartGate logs its own clear
+	// "gate: ENABLED/DISABLED" headline; starts the poller (if configured + a jail
 	// backend is available) and, only then, wires the read endpoint —
 	// GET /api/gate/run — behind the EXACT SAME auth wrapper (verifier.Wrap
 	// + authz) every other /api/* route uses, so a stored gate run is no
@@ -1373,9 +1330,11 @@ func main() {
 		mux.Handle("/api/gate/run", verifier.Wrap(authz(brain.GateRunHandler(gateStore))))
 	}
 
-	// Control gate: same StartX pattern as the repo gate above, but v1 has
-	// no read endpoint yet (Task 6 wires `corral control` CLI dispatch).
-	// Degrade-never-block: log and continue rather than failing brain startup.
+	// Control gate — the other half of the daemon's primary surface. Same StartX
+	// pattern as the repo gate above (its own "control-gate: ENABLED/DISABLED"
+	// headline log), but v1 has no read endpoint yet (Task 6 wires `corral
+	// control` CLI dispatch). Degrade-never-block: log and continue rather than
+	// failing brain startup.
 	if _, _, cerr := brain.StartControlGate(context.Background(), brainOpts); cerr != nil {
 		log.Printf("control-gate: %v", cerr)
 	}
@@ -1397,84 +1356,6 @@ func main() {
 	if err := listen(httpSrv); err != nil {
 		log.Fatal(err)
 	}
-}
-
-// repoAdapter wraps *repo.Engine and satisfies mission.RepoOps. The two
-// packages use identical field sets (ReviewInfo/ReviewCommentInfo mirror
-// repo.Review/repo.ReviewComment) but are separate types so neither package
-// imports the other. This adapter is the single conversion point.
-//
-// After the multi-forge refactor, REST methods take repoURL (not owner/repo):
-// the Engine resolves the forge Provider from the URL's host internally.
-type repoAdapter struct{ e *repo.Engine }
-
-func (a *repoAdapter) Commit(ctx context.Context, dir, msg string) (bool, error) {
-	return a.e.Commit(ctx, dir, msg)
-}
-func (a *repoAdapter) Push(ctx context.Context, dir, branch string) error {
-	return a.e.Push(ctx, dir, branch)
-}
-func (a *repoAdapter) OpenPR(ctx context.Context, repoURL, head, base, title, body string) (string, error) {
-	return a.e.OpenPR(ctx, repoURL, head, base, title, body)
-}
-func (a *repoAdapter) ChangedFiles(ctx context.Context, dir string) ([]string, error) {
-	return a.e.ChangedFiles(ctx, dir)
-}
-func (a *repoAdapter) ChangedFilesRange(ctx context.Context, dir, base string) ([]string, error) {
-	return a.e.ChangedFilesRange(ctx, dir, base)
-}
-func (a *repoAdapter) DiffAddedLines(ctx context.Context, dir, base string) (string, error) {
-	return a.e.DiffAddedLines(ctx, dir, base)
-}
-
-// egressAdapter wires internal/egress into mission.EgressScanner — the same
-// single-conversion-point pattern as repoAdapter, keeping the mission package
-// from importing internal/egress directly.
-type egressAdapter struct{}
-
-func (egressAdapter) Scan(ctx context.Context, dir string, files []string) []mission.EgressFinding {
-	return convertEgressFindings(egress.Scan(ctx, dir, files))
-}
-func (egressAdapter) ScanText(text string) []mission.EgressFinding {
-	return convertEgressFindings(egress.ScanText(text))
-}
-func convertEgressFindings(findings []egress.Finding) []mission.EgressFinding {
-	out := make([]mission.EgressFinding, len(findings))
-	for i, f := range findings {
-		out[i] = mission.EgressFinding{Path: f.Path, Line: f.Line, Rule: f.Rule, Sample: f.Sample, Severity: f.Severity}
-	}
-	return out
-}
-func (a *repoAdapter) ListReviews(ctx context.Context, repoURL string, pr int, etag string) ([]mission.ReviewInfo, string, bool, error) {
-	revs, newEtag, notMod, err := a.e.ListReviews(ctx, repoURL, pr, etag)
-	if err != nil || notMod {
-		return nil, newEtag, notMod, err
-	}
-	out := make([]mission.ReviewInfo, len(revs))
-	for i, rv := range revs {
-		out[i] = mission.ReviewInfo{ID: rv.ID, State: rv.State, Body: rv.Body, SubmittedAt: rv.SubmittedAt, User: rv.User}
-	}
-	return out, newEtag, false, nil
-}
-func (a *repoAdapter) ListReviewComments(ctx context.Context, repoURL string, pr int) ([]mission.ReviewCommentInfo, error) {
-	cs, err := a.e.ListReviewComments(ctx, repoURL, pr)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]mission.ReviewCommentInfo, len(cs))
-	for i, c := range cs {
-		out[i] = mission.ReviewCommentInfo{Path: c.Path, Line: c.Line, Body: c.Body, User: c.User}
-	}
-	return out, nil
-}
-func (a *repoAdapter) GetPR(ctx context.Context, repoURL string, pr int) (string, bool, error) {
-	return a.e.GetPR(ctx, repoURL, pr)
-}
-func (a *repoAdapter) PostComment(ctx context.Context, repoURL string, pr int, body string) error {
-	return a.e.PostComment(ctx, repoURL, pr, body)
-}
-func (a *repoAdapter) AuthLogin(ctx context.Context, repoURL string) (string, error) {
-	return a.e.AuthLogin(ctx, repoURL)
 }
 
 type perfTracker struct {

@@ -1,5 +1,13 @@
 # demo-map
 
+> **`make demo-mission` and `make demo-mission-epic` are RETIRED and no longer
+> run** — they invoke `corral-admin mission create`, a verb removed in the
+> 2026-07-13 re-focus to a reactive audit/certification gate (mission creation
+> has no MCP or CLI entry point today). `make demo` / `demo-cpu` / `demo-clobber`
+> / `demo-observe` / `demo-models` below are unaffected. See
+> `deploy/demo/README.md` and
+> `docs/superpowers/specs/2026-07-13-corral-refocus-audit-not-builder-design.md`.
+
 `deploy/demo/Makefile` wraps `docker compose -f docker-compose.yml` with
 per-scenario profiles. The UI is always at `http://localhost:9019`, with tabs
 `swarm` / `progress` / `topology` / `memory` / `lookbook` (`internal/ui/web/index.html`).

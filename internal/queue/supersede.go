@@ -300,11 +300,23 @@ func (s *Store) RetargetDependents(missionID int64, fromKey, toKey string) (int,
 		if !changed {
 			continue
 		}
-		b, _ := json.Marshal(deps)
-		if _, err := s.db.Exec(`UPDATE tasks SET depends_on=? WHERE id=?`, string(b), x.ID); err != nil {
+		// Conditional write: only overwrite depends_on if it still matches the
+		// snapshot we read it from (x.DependsOn, marshaled the same way it was
+		// stored). A row whose deps changed underneath between the s.List
+		// snapshot above and this Exec matches 0 rows and is skipped, not
+		// clobbered — closes the lost-update window (audit finding M).
+		oldJSON, _ := json.Marshal(x.DependsOn)
+		newJSON, _ := json.Marshal(deps)
+		res, err := s.db.Exec(
+			`UPDATE tasks SET depends_on=? WHERE id=? AND depends_on=?`,
+			string(newJSON), x.ID, string(oldJSON),
+		)
+		if err != nil {
 			return n, err
 		}
-		n++
+		if aff, _ := res.RowsAffected(); aff == 1 {
+			n++ // only count rows we actually changed
+		}
 	}
 	return n, nil
 }

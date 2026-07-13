@@ -190,3 +190,43 @@ func TestRetargetDependents(t *testing.T) {
 		t.Fatal("retarget onto a missing key must be refused")
 	}
 }
+
+// RetargetDependents' write is conditional (UPDATE ... WHERE depends_on=<old
+// snapshot>), so the returned count must equal the number of rows actually
+// rewritten — not just the number of rows that matched fromKey in the
+// snapshot. This pins that contract (a true concurrent-interleave isn't
+// reproducible under the pool-of-1 test store, but a marshal mismatch between
+// the snapshot's oldJSON and the stored depends_on would silently make every
+// retarget a no-op — this test catches that: count would come back 0 instead
+// of 2).
+func TestRetargetDependentsCountMatchesChanges(t *testing.T) {
+	s := open(t)
+	seedPipeline(t, s)
+	// build-v2 must exist as a retarget target (RetargetDependents refuses an
+	// unknown target key); give it no deps so the cycle guard passes too.
+	if err := s.Enqueue(1, []TaskSpec{
+		{Key: "build-v2", Role: "builder", Title: "build-v2", Instruction: "rework"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := s.RetargetDependents(1, "build", "build-v2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 { // test + docs both depended on build
+		t.Fatalf("retargeted %d, want 2", n)
+	}
+	for _, k := range []string{"test", "docs"} {
+		d := taskByKey(t, s, k)
+		found := false
+		for _, dep := range d.DependsOn {
+			if dep == "build-v2" {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("%s not retargeted to build-v2, deps=%v", k, d.DependsOn)
+		}
+	}
+}

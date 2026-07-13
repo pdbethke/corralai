@@ -3,6 +3,7 @@
 package mission
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -198,6 +199,72 @@ func TestReplanDeduplicatesRecurringFindings(t *testing.T) {
 		t.Fatalf("post-remediation recurrence should spawn a fresh pair, got %d tasks", len(tasks))
 	}
 	_ = f1
+}
+
+// fmtTarget produces a distinct finding target per remediation cycle so each
+// AddFinding in TestReflexCapExcludesCompletedRemediation is a fresh, unique
+// remediation (not deduplicated as an in-flight recurrence).
+func fmtTarget(i int) string {
+	return fmt.Sprintf("target-%d", i)
+}
+
+// drainReflex claims and completes every ready fix-*/verify-* task for the
+// mission, driving a full fix→verify remediation cycle to DONE.
+func drainReflex(t *testing.T, q *queue.Store, missionID int64) {
+	t.Helper()
+	for {
+		if _, err := q.PromoteReady(missionID); err != nil {
+			t.Fatal(err)
+		}
+		task, err := q.ClaimNext("drainer", []string{"builder", "tester", "pentester"}, 300)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if task == nil {
+			return
+		}
+		if _, err := q.Complete(task.ID, "drainer", "done"); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestReflexCapExcludesCompletedRemediation is the TDD guard for audit finding
+// M: the reflex cap must bound IN-FLIGHT remediation, not lifetime throughput.
+// A mission that legitimately completes many fix→verify cycles accumulates
+// DONE reflex tasks past the cap; a subsequent finding must not falsely fail
+// the mission because of that completed history.
+func TestReflexCapExcludesCompletedRemediation(t *testing.T) {
+	e, q, m := reflexEngine(t)
+	mid, err := CreateMission(m, q, "converge", []PhaseSpec{{Name: "build", Role: "coder", Instruction: "x"}}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.ReflexMaxTasks = 2 // tiny cap
+
+	// Drive 3 full fix→verify remediation cycles to DONE (well past the cap of 2),
+	// then assert a NEW finding does NOT fail the mission — completed reflex tasks
+	// must not count toward the in-flight cap.
+	for i := 0; i < 3; i++ {
+		if _, err := q.AddFinding(queue.Finding{MissionID: mid, Reporter: "r", Type: "bug", Severity: "high", Target: fmtTarget(i), Evidence: "e"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := e.replan(mid); err != nil {
+			t.Fatal(err)
+		}
+		drainReflex(t, q, mid) // claim+complete every ready fix-*/verify-* task
+	}
+	// One more finding; with 6 DONE reflex tasks and cap=2, the buggy code fails the mission here.
+	if _, err := q.AddFinding(queue.Finding{MissionID: mid, Reporter: "r", Type: "bug", Severity: "high", Target: "final", Evidence: "e"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.replan(mid); err != nil {
+		t.Fatal(err)
+	}
+	mi, _ := m.Mission(mid)
+	if mi.Status == "failed" {
+		t.Fatalf("mission falsely failed: completed remediation counted toward the reflex cap")
+	}
 }
 
 func TestReplanThresholdLeavesLowSevOpen(t *testing.T) {

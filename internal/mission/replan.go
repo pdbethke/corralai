@@ -89,9 +89,19 @@ func (e *Engine) replan(missionID int64) error {
 	if err != nil {
 		return err
 	}
+	// Count only OPEN reflex tasks. The cap bounds IN-FLIGHT, non-converging
+	// remediation — a mission that legitimately completed many fix→verify cycles
+	// must not be failed for its lifetime throughput. Terminal reflex tasks
+	// (done/cancelled/superseded) are converged history, not runaway.
 	reflexCount := 0
 	for _, t := range existing {
-		if isReflexTask(t.Key) {
+		if !isReflexTask(t.Key) {
+			continue
+		}
+		switch t.Status {
+		case queue.StatusDone, queue.StatusCancelled, queue.StatusSuperseded:
+			// terminal — do not count
+		default:
 			reflexCount++
 		}
 	}

@@ -6,8 +6,18 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
+
+// rlimitPreludeDarwin is prepended to every sandbox-exec command as a coarse
+// fork-bomb and disk-write guard, mirroring rlimitPrelude in
+// isolator_linux.go (same -u/-f values, kept in sync by hand since the two
+// files live under different //go:build tags and can't share a const). The
+// 2>/dev/null is intentional: sh inside the jail may reject a limit on some
+// macOS configurations; we tolerate failures silently. Best-effort only —
+// sandbox-exec has no cgroup-equivalent hard backstop on macOS.
+const rlimitPreludeDarwin = "ulimit -u 1024 2>/dev/null; ulimit -f 4194304 2>/dev/null; "
 
 type sandboxExecIsolator struct{}
 
@@ -58,7 +68,7 @@ func (sandboxExecIsolator) Wrap(command string, opts Options, env []string) ([]s
 	// paths a build/test needs plus the workspace — not the whole host FS.
 	// macOS /etc is a symlink to /private/etc, so allow the real /private
 	// paths.
-	for _, p := range []string{"/usr", "/bin", "/sbin", "/System/Library", "/Library/Developer", "/opt/homebrew", "/private/etc/ssl", "/private/etc/ca-certificates"} {
+	for _, p := range []string{"/usr", "/usr/local", "/bin", "/sbin", "/System/Library", "/Library/Developer", "/opt/homebrew", "/private/etc/ssl", "/private/etc/ca-certificates"} {
 		sb.WriteString(fmt.Sprintf("(allow file-read* (subpath %q))\n", p))
 	}
 
@@ -77,10 +87,19 @@ func (sandboxExecIsolator) Wrap(command string, opts Options, env []string) ([]s
 	// Re-allow reads of the workspace itself (even if it lives under $HOME).
 	sb.WriteString(fmt.Sprintf("(allow file-read* (subpath %q))\n", opts.Workspace))
 
-	// Writable paths
-	sb.WriteString("(allow file-write* (subpath \"/private/tmp\"))\n")
-	sb.WriteString("(allow file-write* (subpath \"/tmp\"))\n")
-	sb.WriteString("(allow file-write* (subpath \"/var/tmp\"))\n")
+	// Writable paths. Unlike bwrap (which gives the jail its own private
+	// tmpfs at /tmp via --tmpfs), sandbox-exec has no per-run tmpfs primitive:
+	// SBPL grants access to real host paths, so there is no way to hand the
+	// command an isolated /tmp short of a bind-mount facility macOS doesn't
+	// expose here. We therefore do NOT allow writes to the shared host
+	// /tmp, /var/tmp, or /private/tmp — a command that wants scratch space
+	// gets a per-run directory under the workspace instead (tmpDir below),
+	// and we point TMPDIR at it so well-behaved toolchains (go, node, mktemp,
+	// python's tempfile) pick it up automatically. This is a WEAKER guarantee
+	// than bwrap's tmpfs for tools that hardcode "/tmp/..." instead of
+	// honoring TMPDIR — those will simply fail closed (deny-by-default) here
+	// rather than write to a shared host path.
+	tmpDir := filepath.Join(opts.Workspace, ".corral-tmp")
 	sb.WriteString(fmt.Sprintf("(allow file-write* (subpath %q))\n", opts.Workspace))
 
 	if opts.Network {
@@ -90,6 +109,7 @@ func (sandboxExecIsolator) Wrap(command string, opts Options, env []string) ([]s
 
 	profile := sb.String()
 
-	argv := []string{"sandbox-exec", "-p", profile, "sh", "-c", command}
+	tmpPrelude := fmt.Sprintf("mkdir -p %q 2>/dev/null; export TMPDIR=%q; ", tmpDir, tmpDir)
+	argv := []string{"sandbox-exec", "-p", profile, "sh", "-c", rlimitPreludeDarwin + tmpPrelude + command}
 	return argv, nil
 }

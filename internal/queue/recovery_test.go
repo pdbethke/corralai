@@ -129,6 +129,26 @@ func TestCancelGuardedRefusesWithLiveDependents(t *testing.T) {
 	}
 }
 
+// A deeper chain (build-core -> build -> test, build -> docs) exercises the
+// in-memory BFS walk (not just a single hop) after the N+1 List-per-node
+// refactor — the whole dependent subtree must still cascade.
+func TestCancelGuardedCascadeDeepChain(t *testing.T) {
+	s := open(t)
+	seedPipeline(t, s)
+	root := taskByKey(t, s, "build-core")
+	cancelled, blocked, err := s.CancelTaskGuarded(root.ID, true /* cascade */)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(blocked) != 0 {
+		t.Fatalf("cascade should not report blocked: %v", blocked)
+	}
+	// build-core, build, test, docs all cancelled
+	if len(cancelled) < 4 {
+		t.Fatalf("cascade cancelled %d, want >=4 (whole chain)", len(cancelled))
+	}
+}
+
 // The one-step recovery the lead reached for (and hallucinated tool names
 // trying to find): re-point dependents of one key at another.
 func TestRetargetDependents(t *testing.T) {

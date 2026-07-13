@@ -194,6 +194,20 @@ func (s *Store) CancelTaskGuarded(id int64, cascade bool) (cancelled []int64, bl
 		return nil, nil, fmt.Errorf("task %d not found", id)
 	}
 
+	// Fetch the mission's tasks ONCE and index direct dependents by dependency
+	// key, so the BFS below walks in memory instead of re-scanning the whole
+	// mission per frontier node (was O(nodes x mission-size)).
+	all, err := s.List(t.MissionID)
+	if err != nil {
+		return nil, nil, err
+	}
+	dependentsOf := map[string][]Task{}
+	for _, x := range all {
+		for _, d := range x.DependsOn {
+			dependentsOf[d] = append(dependentsOf[d], x)
+		}
+	}
+
 	// Walk the dependent subtree (keys -> live dependents), breadth-first.
 	type node struct {
 		id  int64
@@ -206,21 +220,12 @@ func (s *Store) CancelTaskGuarded(id int64, cascade bool) (cancelled []int64, bl
 		cur := frontier[0]
 		frontier = frontier[1:]
 		subtree = append(subtree, cur)
-		ts, lerr := s.List(t.MissionID)
-		if lerr != nil {
-			return nil, nil, lerr
-		}
-		for _, x := range ts {
+		for _, x := range dependentsOf[cur.key] {
 			if seen[x.ID] || x.Status == StatusDone || x.Status == StatusCancelled || x.Status == StatusSuperseded {
 				continue
 			}
-			for _, d := range x.DependsOn {
-				if d == cur.key {
-					seen[x.ID] = true
-					frontier = append(frontier, node{x.ID, x.Key})
-					break
-				}
-			}
+			seen[x.ID] = true
+			frontier = append(frontier, node{x.ID, x.Key})
 		}
 	}
 	dependents := subtree[1:] // everything but the root

@@ -24,7 +24,7 @@ func (s *Server) ask(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
-	// A read-only observer may VIEW the swarm but never act; invoking the
+	// A read-only observer may VIEW the herd but never act; invoking the
 	// narrator model is an action (cost + a model call the observer's MCP
 	// ask_fleet equivalent is already denied). Gate before touching the model.
 	if auth.ReadOnly(r) {

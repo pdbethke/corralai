@@ -364,6 +364,14 @@ func (e *Engine) staffMission(missionID int64, directive string) {
 		delete(e.staffInflight, missionID)
 		e.staffMu.Unlock()
 	}()
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("mission %d: staffing panic recovered: %v", missionID, r)
+			e.staffMu.Lock()
+			e.staffGaveUp[missionID] = true
+			e.staffMu.Unlock()
+		}
+	}()
 	resources := e.Staffing.Sense()
 	stats := e.Staffing.Perf.GetRoleModelStats()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -624,6 +632,11 @@ func (e *Engine) failMission(m *Mission, reason string) {
 	}
 	delete(e.noProgress, m.ID)
 	delete(e.lastFingerprint, m.ID)
+	e.staffMu.Lock()
+	delete(e.staffed, m.ID)
+	delete(e.staffAttempts, m.ID)
+	delete(e.staffGaveUp, m.ID)
+	e.staffMu.Unlock()
 }
 
 // sweepBlockedDeps cancels pending tasks whose dependencies can never be
@@ -871,6 +884,11 @@ func (e *Engine) finishRepoMission(id int64) {
 	delete(e.committed, id) // mission is complete — release its per-phase commit set
 	delete(e.prAttempts, id)
 	delete(e.prGaveUp, id) // keep the retry maps bounded
+	e.staffMu.Lock()
+	delete(e.staffed, id)
+	delete(e.staffAttempts, id)
+	delete(e.staffGaveUp, id)
+	e.staffMu.Unlock()
 	log.Printf("mission %d: PR opened: %s", id, url)
 }
 

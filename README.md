@@ -300,10 +300,10 @@ Corralai is a **headless server with thin client apps**, like a backup system:
 
 | Binary | Role | CGO | Ships as |
 |--------|------|-----|----------|
-| **`corral`** | the **brain** — MCP coordination, task queue, missions + re-planner, memory, reference RAG, repo-work + multi-forge, fleet oracle, embedded swarm UI; owns the databases | yes | `deploy/demo/Dockerfile.brain` |
-| **`corral-agent`** | the reference **agent** — model-agnostic worker; `queue` / `lead` / `client` / `scrum` modes | no | `deploy/demo/Dockerfile.agent` (distroless) |
+| **`corral`** | the **brain** — MCP coordination, task queue, the retained (not-Tick-started) mission engine, memory, reference RAG, repo-work + multi-forge, fleet oracle, embedded swarm UI; owns the databases | yes | `deploy/demo/Dockerfile.brain` |
+| **`corral-agent`** | the reference **agent** — model-agnostic worker; `queue` / `lead` / `scrum` modes | no | `deploy/demo/Dockerfile.agent` (distroless) |
 | **`corral-observe`** | the **observer** — read-only credentialed window onto a brain's live UI | no | `deploy/observe/Dockerfile` (distroless) |
-| **`corral-admin`** | the **operator** — privileged live console **plus** command verbs (instruct, missions, review, findings, reference, members, analytics, mint-observer) over MCP | no | binary / `go install` |
+| **`corral-admin`** | the **operator** — privileged live console **plus** command verbs (instruct, mission, findings, resolve-findings, reference, member, proposals, analyze, mint-observer) over MCP | no | binary / `go install` |
 | **`corral-harness`** | the **harness-agent launcher** — loops any headless coding agent (Claude Code, Gemini CLI, Codex, …) as a swarm agent on ITS auth (e.g. a Claude Max subscription, no API billing) | no | binary / `go install` |
 
 The observer and admin consoles share one reverse-proxy core (`internal/console`),
@@ -386,7 +386,10 @@ requirements, and Go is the boring, correct answer to them:
 **What the swarm builds is a different axis entirely — any language the models
 know.** The agents' tools are `write_file` and `run_command` (or, for harness agents
 like Claude Code, their own editors and shells): nothing about the pipeline is
-Go-specific. The demo directive happens to be a Go package; make it yours:
+Go-specific. The `DEMO_DIRECTIVE` + `make demo-mission` invocations below describe
+that retired build-from-directive demo (see the Quickstart note above) and are
+**not runnable today** — they're kept here to illustrate the language-agnostic
+intent for whoever re-points the demo at the gate:
 
 ```bash
 DEMO_DIRECTIVE="Build a FastAPI service exposing /healthz and /quote with pytest tests; 'pytest' must pass" make demo-mission
@@ -406,16 +409,16 @@ go run ./cmd/corral     # MCP /mcp/ · health /healthz · swarm UI / · on 127.0
 ```
 
 Open `http://127.0.0.1:9019/` for the live swarm + **Progress** tab (dev: auth
-off). To watch the whole loop end-to-end on one command (bundled GPU Ollama):
+off).
 
-```bash
-cd deploy/demo
-make demo-mission       # directive → team builds it → re-plans → client review → converge
-```
-
-The mission demo brings up the brain plus the full role team (builder, tester,
-pentester, reviewer, plus a lead and a client agent), seeds a real directive, and
-you watch it converge in the Progress tab. See **[deploy/demo/README.md](deploy/demo/README.md)**.
+> **`make demo-mission` describes the retired build-from-directive loop and does
+> not run today.** It seeded a mission via `corral-admin mission create`, a verb
+> removed in the 2026-07-13 re-focus to a reactive audit/certification gate (see
+> [`docs/superpowers/specs/2026-07-13-corral-refocus-audit-not-builder-design.md`](docs/superpowers/specs/2026-07-13-corral-refocus-audit-not-builder-design.md)).
+> The current live surface is the gate described above ("What runs today") — a
+> gate-oriented demo is a later slice, not shipped yet. See
+> **[deploy/demo/README.md](deploy/demo/README.md)** for the full retirement note
+> on that pipeline.
 
 Common knobs: `CORRALAI_OIDC_ISSUER`/`_AUDIENCE` (cross-machine auth) ·
 `CORRALAI_GIT_TOKEN` + `CORRALAI_FORGES` (repo-work / multi-forge) ·

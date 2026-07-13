@@ -1,5 +1,17 @@
 # corralai demo — watch a local-LLM swarm coordinate
 
+> **RETIRED FLOW — reference only.** This whole file documents the
+> build-from-directive mission demo (`make demo-mission` and the
+> `corral-admin mission create` / `corral-admin review` verbs it depended on),
+> which was retired in the 2026-07-13 re-focus to a reactive audit/certification
+> gate. `mission create` and the `review` verb no longer exist in
+> `cmd/corral-admin`, so **`make demo-mission` errors today** (see
+> `docker-compose.yml`'s seed service for exactly where). This content is kept
+> for reference pending a gate-oriented demo — see
+> [`docs/superpowers/specs/2026-07-13-corral-refocus-audit-not-builder-design.md`](../../docs/superpowers/specs/2026-07-13-corral-refocus-audit-not-builder-design.md).
+> `make demo` (the simpler swarm-coordination warm-up, no mission seed) is
+> unaffected by this retirement.
+
 A real, role-differentiated swarm of coding agents — **builder, tester, pentester,
 reviewer** — each driven by a local Ollama model, coordinating through the corral
 brain on a shared codebase.

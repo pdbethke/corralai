@@ -30,7 +30,10 @@ type ReviewCommentInfo struct {
 }
 
 // RepoOps is the interface the mission engine uses to interact with a git
-// repository. *repo.Engine satisfies it via the repoAdapter in cmd/corral;
+// repository. *repo.Engine could satisfy it via an adapter in cmd/corral (the
+// cmd/corral/main.go repoAdapter that did this was deleted in the
+// retire-the-builder pass since nothing instantiates it anymore — Engine.Repo
+// is never set — but the interface is retained for the slice-2 gate re-wire);
 // tests use a fakeRepo spy.
 //
 // REST methods (OpenPR, ListReviews, etc.) take a repoURL so the engine can
@@ -130,6 +133,9 @@ type Engine struct {
 	// Repo, when non-nil, enables per-phase commits and push+PR on mission done.
 	// Workspace is the root directory under which per-mission working copies live
 	// (MissionDir(Workspace, id) = <Workspace>/m<id>).
+	// dormant — retained for the slice-2 verification engine: no caller sets
+	// Engine.Repo since cmd/corral/main.go's repoAdapter was deleted
+	// (retire-the-builder pass).
 	Repo      RepoOps
 	Workspace string
 
@@ -144,6 +150,8 @@ type Engine struct {
 	// license files) right before push+PR — the last brain-side checkpoint
 	// before the herd's output leaves for the forge. Nil disables the gate
 	// entirely; a clean change set then proceeds exactly as before.
+	// dormant — retained for the slice-2 verification engine: no caller sets
+	// this (distinct from brain.Options.Egress, which is live and unrelated).
 	Egress EgressScanner
 
 	// Index, when non-nil, indexes the files changed by each gate-passed commit

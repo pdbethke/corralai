@@ -1358,66 +1358,6 @@ func main() {
 	}
 }
 
-// repoAdapter wraps *repo.Engine and satisfies mission.RepoOps. The two
-// packages use identical field sets (ReviewInfo/ReviewCommentInfo mirror
-// repo.Review/repo.ReviewComment) but are separate types so neither package
-// imports the other. This adapter is the single conversion point.
-//
-// After the multi-forge refactor, REST methods take repoURL (not owner/repo):
-// the Engine resolves the forge Provider from the URL's host internally.
-type repoAdapter struct{ e *repo.Engine }
-
-func (a *repoAdapter) Commit(ctx context.Context, dir, msg string) (bool, error) {
-	return a.e.Commit(ctx, dir, msg)
-}
-func (a *repoAdapter) Push(ctx context.Context, dir, branch string) error {
-	return a.e.Push(ctx, dir, branch)
-}
-func (a *repoAdapter) OpenPR(ctx context.Context, repoURL, head, base, title, body string) (string, error) {
-	return a.e.OpenPR(ctx, repoURL, head, base, title, body)
-}
-func (a *repoAdapter) ChangedFiles(ctx context.Context, dir string) ([]string, error) {
-	return a.e.ChangedFiles(ctx, dir)
-}
-func (a *repoAdapter) ChangedFilesRange(ctx context.Context, dir, base string) ([]string, error) {
-	return a.e.ChangedFilesRange(ctx, dir, base)
-}
-func (a *repoAdapter) DiffAddedLines(ctx context.Context, dir, base string) (string, error) {
-	return a.e.DiffAddedLines(ctx, dir, base)
-}
-
-func (a *repoAdapter) ListReviews(ctx context.Context, repoURL string, pr int, etag string) ([]mission.ReviewInfo, string, bool, error) {
-	revs, newEtag, notMod, err := a.e.ListReviews(ctx, repoURL, pr, etag)
-	if err != nil || notMod {
-		return nil, newEtag, notMod, err
-	}
-	out := make([]mission.ReviewInfo, len(revs))
-	for i, rv := range revs {
-		out[i] = mission.ReviewInfo{ID: rv.ID, State: rv.State, Body: rv.Body, SubmittedAt: rv.SubmittedAt, User: rv.User}
-	}
-	return out, newEtag, false, nil
-}
-func (a *repoAdapter) ListReviewComments(ctx context.Context, repoURL string, pr int) ([]mission.ReviewCommentInfo, error) {
-	cs, err := a.e.ListReviewComments(ctx, repoURL, pr)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]mission.ReviewCommentInfo, len(cs))
-	for i, c := range cs {
-		out[i] = mission.ReviewCommentInfo{Path: c.Path, Line: c.Line, Body: c.Body, User: c.User}
-	}
-	return out, nil
-}
-func (a *repoAdapter) GetPR(ctx context.Context, repoURL string, pr int) (string, bool, error) {
-	return a.e.GetPR(ctx, repoURL, pr)
-}
-func (a *repoAdapter) PostComment(ctx context.Context, repoURL string, pr int, body string) error {
-	return a.e.PostComment(ctx, repoURL, pr, body)
-}
-func (a *repoAdapter) AuthLogin(ctx context.Context, repoURL string) (string, error) {
-	return a.e.AuthLogin(ctx, repoURL)
-}
-
 type perfTracker struct {
 	q   *queue.Store
 	hb  *brain.HostBook

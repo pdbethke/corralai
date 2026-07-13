@@ -5,6 +5,15 @@ description: "Use when driving a corralai brain — the multi-agent 'herd' orche
 
 # Using corralai
 
+> **RETIRED FLOW.** This skill describes the build-from-directive mission loop
+> below (directive -> herd builds -> re-plans on findings -> client review),
+> which is being retired as corral re-focuses to a reactive audit/certification
+> gate (the repo gate + control gate are the current live surface — see
+> `README.md`'s "What runs today"). `make demo-mission` and the
+> `corral-admin mission create` verb it depended on are no longer runnable.
+> Kept for reference pending a rewrite; see
+> `docs/superpowers/specs/2026-07-13-corral-refocus-audit-not-builder-design.md`.
+
 corralai turns **one directive** into a **mission** that a **herd** of role-differentiated
 AI agents executes: a headless **brain** decomposes it into a dependency-ordered task
 queue; agents pull ready tasks and build; their structured **findings** feed a two-tier

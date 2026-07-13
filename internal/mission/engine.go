@@ -52,6 +52,12 @@ type RepoOps interface {
 	// scan gate uses this (not ChangedFiles) so a secret committed in an
 	// earlier phase is still caught at push time, not just the last phase's diff.
 	ChangedFilesRange(ctx context.Context, dir, base string) ([]string, error)
+	// DiffAddedLines returns the raw `git log -p base..HEAD` patch text — every
+	// commit's added lines across the whole branch history. The egress gate
+	// scans this so a secret committed in an earlier phase and then DELETED
+	// (clean final tree, absent from the net base...HEAD diff and from a squash)
+	// is still caught, because the push ships the full history.
+	DiffAddedLines(ctx context.Context, dir, base string) (string, error)
 	// ListReviews returns reviews for the given repoURL+PR number.
 	ListReviews(ctx context.Context, repoURL string, pr int, etag string) ([]ReviewInfo, string, bool, error)
 	// ListReviewComments returns inline comments for the given repoURL+PR number.
@@ -83,6 +89,10 @@ type EgressFinding struct {
 // entirely, leaving the push/PR flow for clean output unchanged.
 type EgressScanner interface {
 	Scan(ctx context.Context, dir string, files []string) []EgressFinding
+	// ScanText scans the added lines of a `git log -p` patch (branch history)
+	// for secrets — the history-aware companion to Scan's working-tree read, so
+	// a commit-then-delete secret can't evade the gate. Findings are block-only.
+	ScanText(text string) []EgressFinding
 }
 
 // Indexer is the interface the mission engine uses to index files changed by
@@ -354,6 +364,14 @@ func (e *Engine) staffMission(missionID int64, directive string) {
 		delete(e.staffInflight, missionID)
 		e.staffMu.Unlock()
 	}()
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("mission %d: staffing panic recovered: %v", missionID, r)
+			e.staffMu.Lock()
+			e.staffGaveUp[missionID] = true
+			e.staffMu.Unlock()
+		}
+	}()
 	resources := e.Staffing.Sense()
 	stats := e.Staffing.Perf.GetRoleModelStats()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -614,6 +632,11 @@ func (e *Engine) failMission(m *Mission, reason string) {
 	}
 	delete(e.noProgress, m.ID)
 	delete(e.lastFingerprint, m.ID)
+	e.staffMu.Lock()
+	delete(e.staffed, m.ID)
+	delete(e.staffAttempts, m.ID)
+	delete(e.staffGaveUp, m.ID)
+	e.staffMu.Unlock()
 }
 
 // sweepBlockedDeps cancels pending tasks whose dependencies can never be
@@ -752,7 +775,9 @@ func (e *Engine) commitDonePhases(m *Mission) {
 }
 
 // runEgressGate scans the mission's cumulative changed-file set (base...HEAD,
-// not just the last commit) right before push+PR — the last brain-side
+// not just the last commit) AND the full branch history's added lines
+// (git log -p base..HEAD, so a secret committed then deleted still can't ship)
+// right before push+PR — the last brain-side
 // checkpoint before the herd's output leaves for the forge. Every finding is
 // filed as a queue.Finding so it is visible the same way any other finding is
 // (UI feed, learn sweep, resolve_finding). It returns true iff a BLOCKING
@@ -769,10 +794,32 @@ func (e *Engine) runEgressGate(m *Mission) bool {
 		e.egressBlocked[m.ID] = true
 		return true
 	}
-	if len(files) == 0 {
-		return false
+	dir := e.workdir(m)
+	// Working-tree scan (line-addressable, on-disk-only content) PLUS a full
+	// branch-history scan (git log -p base..HEAD): a secret committed in an
+	// earlier phase and then deleted leaves a clean tree but still ships in the
+	// push, so scanning the current tree alone misses it. Belt-and-suspenders.
+	//
+	// The history scan must run even when the NET changed-file set is empty
+	// (files == nil / len 0): a branch that adds a secret in one phase and
+	// deletes it in a later one nets to zero changed files, but the secret
+	// still ships as part of the pushed history. Skipping the scan in that
+	// case (as an early `len(files) == 0 → return false` used to do) let that
+	// exact case through unscanned.
+	var findings []EgressFinding
+	if len(files) > 0 {
+		findings = e.Egress.Scan(context.Background(), dir, files)
 	}
-	findings := e.Egress.Scan(context.Background(), e.workdir(m), files)
+	if diff, derr := e.Repo.DiffAddedLines(context.Background(), dir, m.Base); derr != nil {
+		// A history diff we can't compute is a scan we can't complete — fail
+		// closed rather than push an unscanned branch (same posture as the
+		// changed-files failure above).
+		log.Printf("mission %d: egress: history diff failed: %v — BLOCKING push (fail-closed: cannot scan branch history)", m.ID, derr)
+		e.egressBlocked[m.ID] = true
+		return true
+	} else {
+		findings = append(findings, e.Egress.ScanText(diff)...)
+	}
 	blocked := false
 	for _, f := range findings {
 		sev := "high"
@@ -837,6 +884,11 @@ func (e *Engine) finishRepoMission(id int64) {
 	delete(e.committed, id) // mission is complete — release its per-phase commit set
 	delete(e.prAttempts, id)
 	delete(e.prGaveUp, id) // keep the retry maps bounded
+	e.staffMu.Lock()
+	delete(e.staffed, id)
+	delete(e.staffAttempts, id)
+	delete(e.staffGaveUp, id)
+	e.staffMu.Unlock()
 	log.Printf("mission %d: PR opened: %s", id, url)
 }
 

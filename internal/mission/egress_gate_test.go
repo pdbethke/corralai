@@ -13,10 +13,13 @@ import (
 
 // fakeEgress is an EgressScanner spy used in tests.
 type fakeEgress struct {
-	findings  []EgressFinding
-	calls     int
-	lastDir   string
-	lastFiles []string
+	findings     []EgressFinding
+	calls        int
+	lastDir      string
+	lastFiles    []string
+	textFindings []EgressFinding // returned by ScanText (history scan)
+	textCalls    int             // number of ScanText invocations
+	lastText     string          // last patch text passed to ScanText
 }
 
 func (f *fakeEgress) Scan(_ context.Context, dir string, files []string) []EgressFinding {
@@ -24,6 +27,12 @@ func (f *fakeEgress) Scan(_ context.Context, dir string, files []string) []Egres
 	f.lastDir = dir
 	f.lastFiles = files
 	return f.findings
+}
+
+func (f *fakeEgress) ScanText(text string) []EgressFinding {
+	f.textCalls++
+	f.lastText = text
+	return f.textFindings
 }
 
 func setupEgressMission(t *testing.T) (*Store, *queue.Store, int64) {
@@ -113,6 +122,129 @@ func TestEgressGate_PlantedSecretBlocksPushAndPR(t *testing.T) {
 	}
 	if fake.pushCalls != 0 {
 		t.Fatalf("expected Push to remain withheld after a further tick, got %d calls", fake.pushCalls)
+	}
+}
+
+// TestEgressGate_HistoryOnlySecretBlocksPush verifies the history-scan path: a
+// clean WORKING TREE (Scan finds nothing) but a secret in the branch HISTORY
+// (ScanText returns a block finding off the `git log -p` patch) must still
+// withhold Push/OpenPR — a commit-then-delete secret can't evade the gate.
+func TestEgressGate_HistoryOnlySecretBlocksPush(t *testing.T) {
+	ms, q, _ := setupEgressMission(t)
+
+	fake := &fakeRepo{diffText: "some git log -p patch text"}
+	egressFake := &fakeEgress{
+		// Working tree is clean; the secret only lives in history.
+		findings: nil,
+		textFindings: []EgressFinding{
+			{Path: "config.env", Line: 0, Rule: "AWS Secret Access Key", Sample: "wJal...KEY (redacted)", Severity: "block"},
+		},
+	}
+	e := NewEngine(ms, q)
+	e.Repo = fake
+	e.Egress = egressFake
+	e.Workspace = t.TempDir()
+
+	if err := e.Tick(); err != nil {
+		t.Fatalf("tick 1: %v", err)
+	}
+	drain(t, q)
+	if err := e.Tick(); err != nil {
+		t.Fatalf("tick 2: %v", err)
+	}
+
+	if egressFake.textCalls == 0 {
+		t.Fatal("expected ScanText (history scan) to be invoked")
+	}
+	if fake.diffCalls == 0 {
+		t.Fatal("expected DiffAddedLines to be invoked to feed the history scan")
+	}
+	if egressFake.lastText != "some git log -p patch text" {
+		t.Fatalf("expected the DiffAddedLines patch to be passed to ScanText, got %q", egressFake.lastText)
+	}
+	if fake.pushCalls != 0 {
+		t.Fatalf("expected Push to be withheld on a history-only secret, got %d calls", fake.pushCalls)
+	}
+	if fake.prCalls != 0 {
+		t.Fatalf("expected OpenPR to be withheld on a history-only secret, got %d calls", fake.prCalls)
+	}
+}
+
+// TestEgressGate_NetZeroChangedFilesStillScansHistory verifies the residual
+// gap flagged in the efbd99e audit follow-up: a branch whose NET effect is
+// zero changed files (e.g. a secret added in one phase and deleted in a
+// later one) must not skip the history scan. Before the fix, `len(files) ==
+// 0` returned "not blocked" immediately, so DiffAddedLines/ScanText never
+// ran and the branch — which still ships the secret-bearing commit in its
+// history — would push clean.
+func TestEgressGate_NetZeroChangedFilesStillScansHistory(t *testing.T) {
+	ms, q, _ := setupEgressMission(t)
+
+	fake := &fakeRepo{
+		rangeFiles: []string{}, // net-zero: nothing changed base...HEAD
+		diffText:   "+AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI (added then deleted)",
+	}
+	egressFake := &fakeEgress{
+		textFindings: []EgressFinding{
+			{Path: "config.env", Line: 0, Rule: "AWS Secret Access Key", Sample: "wJal...KEY (redacted)", Severity: "block"},
+		},
+	}
+	e := NewEngine(ms, q)
+	e.Repo = fake
+	e.Egress = egressFake
+	e.Workspace = t.TempDir()
+
+	if err := e.Tick(); err != nil {
+		t.Fatalf("tick 1: %v", err)
+	}
+	drain(t, q)
+	if err := e.Tick(); err != nil {
+		t.Fatalf("tick 2: %v", err)
+	}
+
+	if egressFake.calls != 0 {
+		t.Fatalf("expected the working-tree Scan to be skipped when the net changed-file set is empty, got %d calls", egressFake.calls)
+	}
+	if egressFake.textCalls == 0 {
+		t.Fatal("expected ScanText (history scan) to run even when len(files) == 0")
+	}
+	if fake.diffCalls == 0 {
+		t.Fatal("expected DiffAddedLines to be invoked even when len(files) == 0")
+	}
+	if fake.pushCalls != 0 {
+		t.Fatalf("expected Push to be withheld on a net-zero add-then-delete secret, got %d calls", fake.pushCalls)
+	}
+	if fake.prCalls != 0 {
+		t.Fatalf("expected OpenPR to be withheld on a net-zero add-then-delete secret, got %d calls", fake.prCalls)
+	}
+}
+
+// TestEgressGate_HistoryDiffErrorBlocksPush verifies fail-closed posture: if the
+// branch-history diff can't be computed, the gate blocks rather than pushing an
+// unscanned branch.
+func TestEgressGate_HistoryDiffErrorBlocksPush(t *testing.T) {
+	ms, q, _ := setupEgressMission(t)
+
+	fake := &fakeRepo{diffErr: errors.New("git log failed")}
+	egressFake := &fakeEgress{} // working-tree scan is clean
+	e := NewEngine(ms, q)
+	e.Repo = fake
+	e.Egress = egressFake
+	e.Workspace = t.TempDir()
+
+	if err := e.Tick(); err != nil {
+		t.Fatalf("tick 1: %v", err)
+	}
+	drain(t, q)
+	if err := e.Tick(); err != nil {
+		t.Fatalf("tick 2: %v", err)
+	}
+
+	if fake.pushCalls != 0 {
+		t.Fatalf("expected Push to be withheld when the history diff errors (fail-closed), got %d calls", fake.pushCalls)
+	}
+	if fake.prCalls != 0 {
+		t.Fatalf("expected OpenPR to be withheld when the history diff errors (fail-closed), got %d calls", fake.prCalls)
 	}
 }
 

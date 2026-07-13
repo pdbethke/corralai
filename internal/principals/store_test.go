@@ -27,6 +27,19 @@ func TestEmptyIsOpen(t *testing.T) {
 	}
 }
 
+func TestHasSuperuser(t *testing.T) {
+	s := open(t)
+	if has, err := s.HasSuperuser(); err != nil || has {
+		t.Fatalf("fresh store should report no superuser: has=%v err=%v", has, err)
+	}
+	if err := s.CreateSuperuser("a@x.com", "bootstrap"); err != nil {
+		t.Fatal(err)
+	}
+	if has, err := s.HasSuperuser(); err != nil || !has {
+		t.Fatalf("after CreateSuperuser should report a superuser: has=%v err=%v", has, err)
+	}
+}
+
 func TestSeedAndStrict(t *testing.T) {
 	s := open(t)
 	n, err := s.Seed([]string{"Boss@X.com"}, []string{"member@x.com"})

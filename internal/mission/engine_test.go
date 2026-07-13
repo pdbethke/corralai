@@ -42,6 +42,11 @@ type fakeRepo struct {
 	rangeFiles []string // returned by ChangedFilesRange; nil = fall back to ["calc.go"]
 	rangeCalls []string // records each base passed to ChangedFilesRange
 	rangeErr   error    // when set, ChangedFilesRange returns this error instead
+
+	// history-scan fields
+	diffText  string // returned by DiffAddedLines
+	diffCalls int    // number of DiffAddedLines invocations
+	diffErr   error  // when set, DiffAddedLines returns this error instead
 }
 
 func (f *fakeRepo) Commit(_ context.Context, _, msg string) (bool, error) {
@@ -84,6 +89,16 @@ func (f *fakeRepo) ChangedFilesRange(_ context.Context, _, base string) ([]strin
 		return f.rangeFiles, nil
 	}
 	return []string{"calc.go"}, nil
+}
+
+// DiffAddedLines returns the fake's diffText (the `git log -p` history patch the
+// egress gate scans for secrets); diffErr, when set, is returned instead.
+func (f *fakeRepo) DiffAddedLines(_ context.Context, _, _ string) (string, error) {
+	f.diffCalls++
+	if f.diffErr != nil {
+		return "", f.diffErr
+	}
+	return f.diffText, nil
 }
 
 // fakeIndexer is an Indexer spy used in tests.

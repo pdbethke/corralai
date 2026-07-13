@@ -4,6 +4,8 @@ package brain
 
 import (
 	"context"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -39,8 +41,37 @@ func TestBrowserManagerSweepsIdlePages(t *testing.T) {
 	}
 }
 
+// fakeResolver installs a deterministic lookupIP for the duration of the test —
+// the suite does no real DNS. Unlisted hosts return an error (unresolvable).
+func fakeResolver(t *testing.T, m map[string][]string) {
+	t.Helper()
+	orig := lookupIP
+	t.Cleanup(func() { lookupIP = orig })
+	lookupIP = func(_ context.Context, host string) ([]net.IPAddr, error) {
+		ips, ok := m[host]
+		if !ok {
+			return nil, fmt.Errorf("fakeResolver: no record for %q", host)
+		}
+		out := make([]net.IPAddr, 0, len(ips))
+		for _, s := range ips {
+			out = append(out, net.IPAddr{IP: net.ParseIP(s)})
+		}
+		return out, nil
+	}
+}
+
 func TestGuardNavigateURL(t *testing.T) {
 	const brain = "127.0.0.1:9019"
+	// Deterministic DNS: the key bypass is a public-DNS alias whose A record is
+	// the cloud metadata IP (e.g. 169-254-169-254.sslip.io).
+	fakeResolver(t, map[string][]string{
+		"localhost":       {"127.0.0.1"},
+		"example.com":     {"93.184.216.34"},
+		"public.test":     {"93.184.216.34"},
+		"imds-alias.test": {"169.254.169.254"}, // DNS alias → AWS IMDS
+		"ipv6-imds.test":  {"fd00:ec2::254"},   // DNS alias → AWS IPv6 IMDS
+		"mixed.test":      {"93.184.216.34", "169.254.169.254"},
+	})
 	cases := []struct {
 		name    string
 		url     string
@@ -51,17 +82,57 @@ func TestGuardNavigateURL(t *testing.T) {
 		{"localhost name", "http://localhost:8080/", false},
 		{"private lan", "http://192.168.1.50:5173/", false},
 		{"public https", "https://example.com/", false},
+		{"public dns host", "http://public.test/", false},
 		// blocked: cloud metadata (IMDS) — IAM credential theft
 		{"aws imds", "http://169.254.169.254/latest/meta-data/iam/", true},
 		{"ecs imds", "http://169.254.170.2/v2/credentials", true},
 		{"gcp metadata host", "http://metadata.google.internal/computeMetadata/v1/", true},
 		{"alibaba imds", "http://100.100.100.100/latest/meta-data/", true},
+		{"aws ipv6 imds literal", "http://[fd00:ec2::254]/latest/", true},
+		// blocked: the DNS-alias bypass — a public hostname resolving to metadata/link-local
+		{"dns alias to imds", "http://imds-alias.test/latest/meta-data/", true},
+		{"dns alias to ipv6 imds", "http://ipv6-imds.test/latest/", true},
+		{"dns alias one-of-many is imds", "http://mixed.test/", true},
 		// blocked: the brain's own admin/MCP surface (loopback on the brain port)
 		{"brain loopback ip", "http://127.0.0.1:9019/api/state", true},
 		{"brain localhost", "http://localhost:9019/mcp/", true},
 		// blocked: dangerous schemes
 		{"file scheme", "file:///etc/passwd", true},
 		{"chrome scheme", "chrome://settings", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := guardNavigateURL(c.url, brain)
+			if c.blocked && err == nil {
+				t.Errorf("expected %q to be BLOCKED, but it was allowed", c.url)
+			}
+			if !c.blocked && err != nil {
+				t.Errorf("expected %q to be ALLOWED, but it was blocked: %v", c.url, err)
+			}
+		})
+	}
+}
+
+// TestGuardNavigateURLSelfAddrNonLoopback proves the brain is blocked when it
+// listens on a non-loopback address: the URL host equal to selfAddr's host (on
+// the brain port) is refused, and the unspecified addresses 0.0.0.0/:: are
+// refused too.
+func TestGuardNavigateURLSelfAddrNonLoopback(t *testing.T) {
+	const brain = "10.0.0.5:9019"
+	fakeResolver(t, map[string][]string{
+		"app.internal": {"93.184.216.34"},
+	})
+	cases := []struct {
+		name    string
+		url     string
+		blocked bool
+	}{
+		{"self host on brain port", "http://10.0.0.5:9019/api/state", true},
+		{"unspecified v4 on brain port", "http://0.0.0.0:9019/", true},
+		{"unspecified v6 on brain port", "http://[::]:9019/", true},
+		// a DIFFERENT host, and the same host on a DIFFERENT port, stay allowed
+		{"self host other port", "http://10.0.0.5:3000/", false},
+		{"other private host", "http://app.internal:3000/", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

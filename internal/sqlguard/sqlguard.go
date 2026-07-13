@@ -90,6 +90,24 @@ func ValidateReadOnly(userSQL string) error {
 // already-locked state and return success — the conn is already the wall we want.
 // (Callers like oracle that add their OWN pre-lockdown SETs use a dedicated pinned
 // conn locked exactly once, so they never hit the reuse path.)
+//
+// This skip is sound only because of two invariants — pin them here so a future
+// change to either doesn't silently reopen the skip as a bypass:
+//  1. lock_configuration is set to true ONLY by this function (nothing else in
+//     this codebase, or in a caller, ever SETs it). So lock_configuration=true
+//     can ONLY mean "ApplyLockdown already ran on this exact conn" — it is not a
+//     signal any other code path could have produced.
+//  2. disabled_filesystems (like the other settings this function locks) is a
+//     DuckDB DATABASE-WIDE setting, not per-connection. So even though the skip
+//     check runs on the specific *sql.Conn handed in, lock_configuration=true on
+//     THAT conn proves the FS lockdown already ran for the whole *sql.DB — there
+//     is no way for one conn on a DB to be locked while another conn on the SAME
+//     DB still has local filesystem access.
+//
+// If either invariant stops holding (something else sets lock_configuration, or
+// a future DuckDB makes one of these settings connection-scoped), this skip must
+// be revisited — it would then risk treating an unrelated "locked" signal as
+// proof the FS wall is up.
 func ApplyLockdown(ctx context.Context, conn *sql.Conn) error {
 	var locked string
 	if err := conn.QueryRowContext(ctx, `SELECT CAST(current_setting('lock_configuration') AS VARCHAR)`).Scan(&locked); err == nil && locked == "true" {

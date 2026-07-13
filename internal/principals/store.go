@@ -105,11 +105,29 @@ func (s *Store) Count() int {
 	return n
 }
 
+// superuserCount runs the shared COUNT(*) query behind both SuperuserCount
+// and HasSuperuser, which otherwise ran the byte-identical query with
+// different error handling (DRY audit follow-up).
+func (s *Store) superuserCount() (int, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM principals WHERE is_superuser=1`).Scan(&n)
+	return n, err
+}
+
 // SuperuserCount returns the number of superusers.
 func (s *Store) SuperuserCount() int {
-	var n int
-	_ = s.db.QueryRow(`SELECT COUNT(*) FROM principals WHERE is_superuser=1`).Scan(&n)
+	n, _ := s.superuserCount()
 	return n
+}
+
+// HasSuperuser reports whether at least one superuser is seeded. Unlike
+// SuperuserCount (which swallows query errors behind a 0), it surfaces the
+// error so a caller relying on the result for a security warning (e.g. the
+// startup "auth enabled but nobody is admin yet" check) can't mistake a
+// broken query for "definitely empty".
+func (s *Store) HasSuperuser() (bool, error) {
+	n, err := s.superuserCount()
+	return n > 0, err
 }
 
 func (s *Store) exists(email string) bool {

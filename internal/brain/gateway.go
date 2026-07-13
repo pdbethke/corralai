@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -228,12 +229,38 @@ type headerRT struct {
 	base          http.RoundTripper
 }
 
+// gatewayHostRewriteFrom/To implement an optional docker-bridge host rewrite for
+// upstream requests, config-driven via CORRALAI_GATEWAY_HOST_REWRITE="from=to"
+// (e.g. "172.19.0.1:9021=localhost:9021" for a specific docker network layout).
+// Unset => no rewrite. This replaces what used to be a single hardcoded pair —
+// a different docker network/bridge IP no longer requires a code change.
+var gatewayHostRewriteFrom, gatewayHostRewriteTo = parseHostRewrite(os.Getenv("CORRALAI_GATEWAY_HOST_REWRITE"))
+
+// parseHostRewrite parses "from=to" into its two halves. Any malformed or empty
+// value (missing "=", empty from/to) disables the rewrite entirely — fail safe
+// to "no rewrite", never a partial/garbled one.
+func parseHostRewrite(v string) (from, to string) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return "", ""
+	}
+	parts := strings.SplitN(v, "=", 2)
+	if len(parts) != 2 {
+		return "", ""
+	}
+	from, to = strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+	if from == "" || to == "" {
+		return "", ""
+	}
+	return from, to
+}
+
 func (h headerRT) RoundTrip(r *http.Request) (*http.Response, error) {
 	if h.header != "" && h.value != "" {
 		r.Header.Set(h.header, h.value)
 	}
-	if r.URL.Host == "172.19.0.1:9021" {
-		r.Host = "localhost:9021"
+	if gatewayHostRewriteFrom != "" && r.URL.Host == gatewayHostRewriteFrom {
+		r.Host = gatewayHostRewriteTo
 	}
 	return h.base.RoundTrip(r)
 }

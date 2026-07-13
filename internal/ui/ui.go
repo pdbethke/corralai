@@ -847,6 +847,10 @@ func (s *Server) instruct(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden: read-only observer token cannot act", http.StatusForbidden)
 		return
 	}
+	if !s.isSuperuser(r) {
+		http.Error(w, "forbidden: superuser only (instructing an agent is an operator action)", http.StatusForbidden)
+		return
+	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
@@ -1178,7 +1182,25 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// intercept is the HTTP twin of guardTerminalWS's operator-role gate: taking
+// interactive control of (or tearing down) a live agent session is as
+// consequential as typing into its shell, so it requires the same
+// non-read-only, superuser bearer — never a bare authenticated request. Before
+// this gate existed, ANY authenticated caller (including a read-only observer)
+// could stall or kill any agent's session.
 func (s *Server) intercept(w http.ResponseWriter, r *http.Request) {
+	if auth.ReadOnly(r) {
+		http.Error(w, "forbidden: read-only observer cannot take control of an agent", http.StatusForbidden)
+		return
+	}
+	if !s.isSuperuser(r) {
+		http.Error(w, "forbidden: superuser only (interactive agent control)", http.StatusForbidden)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
 	agent := r.URL.Query().Get("agent")
 	enable := r.URL.Query().Get("enable") == "true"
 	if agent == "" {
@@ -1345,6 +1367,14 @@ func (s *Server) lookbookUpload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden: read-only observer token cannot act", http.StatusForbidden)
 		return
 	}
+	// Adding a fleet-shared design directive is an operator action, mirroring
+	// the isHumanAdmin gate on memory/reference promotion — any authenticated
+	// member being able to add one would let a non-admin steer every agent's
+	// design guidance.
+	if !s.isSuperuser(r) {
+		http.Error(w, "forbidden: superuser only (lookbook is a fleet-shared design directive)", http.StatusForbidden)
+		return
+	}
 	// Cap the request body BEFORE reading/decoding — the 5MB check below runs after
 	// a full read + base64 decode, so without this a huge upload OOMs the brain.
 	// 8MiB leaves room for a 5MB image's base64 (~6.7MB) plus the JSON envelope.
@@ -1404,6 +1434,16 @@ func (s *Server) lookbookDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	if auth.ReadOnly(r) {
 		http.Error(w, "forbidden: read-only observer token cannot act", http.StatusForbidden)
+		return
+	}
+	// Removing a fleet-shared design directive is an operator action — same
+	// gate as the upload side.
+	if !s.isSuperuser(r) {
+		http.Error(w, "forbidden: superuser only (lookbook is a fleet-shared design directive)", http.StatusForbidden)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
 	idStr := r.URL.Query().Get("id")

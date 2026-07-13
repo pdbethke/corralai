@@ -6,8 +6,56 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+// TestDiffAddedLines verifies the history-scan source: a secret committed in an
+// earlier phase and then DELETED (clean working tree) is still present in the
+// full-history patch (`git log -p base..HEAD`), so the egress gate can catch it.
+func TestDiffAddedLines(t *testing.T) {
+	bare := makeBareRepoWithCommit(t) // helper from repo_test.go
+	dest := filepath.Join(t.TempDir(), "w")
+	e := New("", "")
+	ctx := context.Background()
+	if err := e.Clone(ctx, bare, "main", dest); err != nil {
+		t.Fatal(err)
+	}
+	_ = e.Checkout(ctx, dest, "feature")
+
+	const secret = "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+	// Phase 1: commit the secret.
+	if err := os.WriteFile(filepath.Join(dest, "config.env"), []byte(secret+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Commit(ctx, dest, "phase1: add config"); err != nil {
+		t.Fatal(err)
+	}
+	// Phase 2: delete it — the final working tree is clean.
+	if err := os.Remove(filepath.Join(dest, "config.env")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Commit(ctx, dest, "phase2: remove config"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Working tree no longer contains the secret.
+	if _, err := os.ReadFile(filepath.Join(dest, "config.env")); !os.IsNotExist(err) {
+		t.Fatalf("expected config.env to be deleted from the working tree, err=%v", err)
+	}
+
+	// But the full-history patch DOES contain the added secret line.
+	patch, err := e.DiffAddedLines(ctx, dest, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(patch, secret) {
+		t.Fatalf("DiffAddedLines must contain the history-only secret; got:\n%s", patch)
+	}
+	if !strings.Contains(patch, "+++ b/config.env") {
+		t.Fatalf("DiffAddedLines patch should carry a +++ b/ file header; got:\n%s", patch)
+	}
+}
 
 func TestChangedFiles(t *testing.T) {
 	bare := makeBareRepoWithCommit(t) // helper from repo_test.go

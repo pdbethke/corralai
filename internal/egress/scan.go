@@ -21,6 +21,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
 // Severity levels for a Finding. "block" means the finding is loud AND must
@@ -125,6 +127,67 @@ func scanSecrets(dir string, files []string) []Finding {
 	return out
 }
 
+// ScanText runs the curated secret rules over the ADDED lines of a `git log -p`
+// patch (the output of repo.Engine.DiffAddedLines). It is the history-aware
+// companion to scanSecrets: scanSecrets reads the CURRENT working tree, so a
+// secret committed in an earlier phase and then deleted (clean final tree) is
+// missed — yet the push ships the whole branch history, so the secret leaves.
+// ScanText walks every commit's added lines, catching a secret even when a
+// later hunk removes it.
+//
+// It considers only `+`-prefixed content lines (an add), stripping the leading
+// `+`, and SKIPS `+++ ` file-header lines (which also start with `+` but are
+// not data). The path is best-effort from the nearest preceding `+++ b/…`
+// header; the line number is unknown (0) because a history patch has no single
+// on-disk line. Findings are SeverityBlock — a detected secret must not ship.
+func ScanText(text string) []Finding {
+	var out []Finding
+	curPath := ""
+	scanner := bufio.NewScanner(strings.NewReader(text))
+	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
+	for scanner.Scan() {
+		line := scanner.Text()
+		// File header: "+++ b/path" (or "+++ /dev/null" for a deletion). Track the
+		// current path and never scan the header itself as content.
+		if strings.HasPrefix(line, "+++ ") {
+			curPath = parsePatchPath(line)
+			continue
+		}
+		if strings.HasPrefix(line, "---") {
+			continue // old-file header ("--- a/path" or "--- /dev/null")
+		}
+		if !strings.HasPrefix(line, "+") {
+			continue // context, removed line, commit/diff metadata — not an add
+		}
+		added := line[1:] // strip the leading '+'
+		for _, r := range secretRules {
+			if loc := r.re.FindStringIndex(added); loc != nil {
+				out = append(out, Finding{
+					Path: curPath, Line: 0, Rule: r.name,
+					Sample: redact(added[loc[0]:loc[1]]), Severity: SeverityBlock,
+				})
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		out = append(out, Finding{Path: curPath, Rule: "unscanned-remainder",
+			Sample: "line too long to scan — remainder of patch not scanned: " + err.Error(), Severity: SeverityBlock})
+	}
+	return out
+}
+
+// parsePatchPath extracts the file path from a unified-diff "+++ b/path" header,
+// stripping the "+++ " prefix and a leading "b/" if present. Returns "" for
+// "/dev/null" (a deletion's new-side header).
+func parsePatchPath(header string) string {
+	p := strings.TrimSpace(strings.TrimPrefix(header, "+++ "))
+	if p == "/dev/null" {
+		return ""
+	}
+	p = strings.TrimPrefix(p, "b/")
+	return p
+}
+
 // redact reduces a matched secret to a safe-to-log excerpt: first/last 4
 // characters plus a length marker. Never logs the raw secret.
 func redact(match string) string {
@@ -199,6 +262,15 @@ func scanGoVuln(ctx context.Context, dir string, files []string) []Finding {
 	defer cancel()
 	cmd := exec.CommandContext(runCtx, bin, "./...") // #nosec G204 -- bin resolved via LookPath, fixed arg
 	cmd.Dir = dir
+	// govulnEnv scrubs the brain's secret env before this runs against
+	// untrusted mission source (audit M): no cmd.Env here previously meant
+	// govulncheck inherited CORRAL_TOKEN and every other brain secret, and
+	// GOTOOLCHAIN=auto would let hostile go.mod content fetch+execute an
+	// arbitrary Go toolchain outside the jail. Residual: go/packages still
+	// type-checks the target code as part of vuln analysis, and this still
+	// runs on the brain host rather than inside the bwrap jail — running
+	// govulncheck fully inside the jail is the deeper fix, deferred.
+	cmd.Env = govulnEnv()
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
 	_ = cmd.Run() // non-zero exit is expected when vulnerabilities are found; we parse output either way
@@ -213,6 +285,20 @@ func scanGoVuln(ctx context.Context, dir string, files []string) []Finding {
 		})
 	}
 	return findings
+}
+
+// govulnEnv builds the hardened, secret-free environment scanGoVuln runs
+// govulncheck under: sandbox.MinimalEnv() (PATH/HOME/LANG/LC_ALL/TMPDIR only
+// — no CORRAL_TOKEN or other brain secrets) plus flags that freeze the
+// toolchain and forbid module/cgo mutation, since the mission workdir this
+// runs against is untrusted (hostile go.mod/#cgo content, outside the jail).
+func govulnEnv() []string {
+	return append(sandbox.MinimalEnv(),
+		"GOTOOLCHAIN=local", // never fetch+exec a different Go toolchain
+		"GOFLAGS=-mod=readonly",
+		"CGO_ENABLED=0", // no cgo compiler invocation
+		"GONOSUMDB=*",
+	)
 }
 
 func touchesGoModule(files []string) bool {

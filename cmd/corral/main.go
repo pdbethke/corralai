@@ -1022,6 +1022,16 @@ func main() {
 	if err := insecureBindRefused(verifier.Enabled(), addr, os.Getenv("CORRALAI_ALLOW_INSECURE") == "1"); err != nil {
 		log.Fatalf("%v", err)
 	}
+	// Warn (don't fail-closed — bootstrap needs the open-when-empty behavior) when
+	// auth is on but nobody has been promoted to superuser yet: every authenticated
+	// principal is treated as admin in that window.
+	if verifier.Enabled() {
+		if hasSuperuser, err := princStore.HasSuperuser(); err != nil {
+			log.Printf("auth: WARNING — could not check for a seeded superuser: %v", err)
+		} else if !hasSuperuser {
+			log.Printf("auth: WARNING — OIDC enabled but no superuser is seeded; every authenticated principal is treated as admin until you set CORRALAI_ADMIN_PRINCIPALS or run create_superuser")
+		}
+	}
 	// Subagent delegation tokens (out-of-process subagents authenticate with these).
 	// Key from CORRALAI_DELEGATION_SECRET / systemd cred, else a random ephemeral key
 	// (tokens then don't survive a restart — fine for short-lived subagents).
@@ -1413,6 +1423,9 @@ func (a *repoAdapter) ChangedFiles(ctx context.Context, dir string) ([]string, e
 func (a *repoAdapter) ChangedFilesRange(ctx context.Context, dir, base string) ([]string, error) {
 	return a.e.ChangedFilesRange(ctx, dir, base)
 }
+func (a *repoAdapter) DiffAddedLines(ctx context.Context, dir, base string) (string, error) {
+	return a.e.DiffAddedLines(ctx, dir, base)
+}
 
 // egressAdapter wires internal/egress into mission.EgressScanner — the same
 // single-conversion-point pattern as repoAdapter, keeping the mission package
@@ -1420,7 +1433,12 @@ func (a *repoAdapter) ChangedFilesRange(ctx context.Context, dir, base string) (
 type egressAdapter struct{}
 
 func (egressAdapter) Scan(ctx context.Context, dir string, files []string) []mission.EgressFinding {
-	findings := egress.Scan(ctx, dir, files)
+	return convertEgressFindings(egress.Scan(ctx, dir, files))
+}
+func (egressAdapter) ScanText(text string) []mission.EgressFinding {
+	return convertEgressFindings(egress.ScanText(text))
+}
+func convertEgressFindings(findings []egress.Finding) []mission.EgressFinding {
 	out := make([]mission.EgressFinding, len(findings))
 	for i, f := range findings {
 		out[i] = mission.EgressFinding{Path: f.Path, Line: f.Line, Rule: f.Rule, Sample: f.Sample, Severity: f.Severity}

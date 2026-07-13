@@ -1,6 +1,6 @@
 ---
 title: "Killing the part I was proudest of"
-description: "A pivot you don't commit to is just a mood. Three days ago I wrote that corral was an accountability engine, not a builder. Then a friend — a data scientist — read the code and said the quiet part: it's a mish-mosh of things that already exist. He was right, and the fix was the thing I'd been avoiding. We're deleting the builder. Here's why the demo everyone loved had to go, and what corral actually is now."
+description: "A pivot you don't commit to is just a mood. Three days ago I wrote that corral was an accountability engine, not a builder. Then a friend reviewed the code and emailed me the bottom line: an interesting mashup of the LLM 'harness' and 'router' worlds, with a couple of fun/novel features. He was right — and the couple of novel features were the only part with no incumbent. So we're deleting the builder. Here's why the demo everyone loved had to go, and what corral actually is now."
 pubDate: 2026-07-13
 draft: false
 ---
@@ -19,15 +19,15 @@ It wasn't, quite. Because the thing that made the pivot *real* — deleting the 
 
 A pivot you don't commit to is a mood. This is the note where I commit.
 
-## The friend who said the quiet part
+## The email that said the quiet part
 
-What forced it was a friend of mine — a data scientist, someone who's forgotten more about models than I'll ever learn. Not a suit; a person who reads the actual code. I walked him through the whole thing, proud, the way you show someone a machine you've been up too late building.
+What forced it was a short email. A friend of mine — a data scientist, the kind who reads the actual code instead of the pitch — had reviewed CorralAI on his own time. The note said he'd send full comments over the weekend, but here was the bottom line:
 
-He was kind about it. And then he said the sentence that doesn't leave you: *"It seems like a mish-mosh of a few different things that already exist."*
+> *"It's an interesting mashup of what's going on in the LLM 'harness' and 'router' worlds, with a couple of fun/novel features."*
 
-He was right, and I knew he was right before he finished the sentence, because I'd been failing the same test for weeks without noticing. Here's the test: **I could not tell you what one of my own core features was for without giving four different answers.** Was `create_mission` — the "type a directive, watch the herd build it" front door — a coding tool? A CI runner? A demo? A compliance thing? Yes. All of them. Which is another way of saying: none of them, load-bearingly.
+Kind. Also exactly right — and it didn't leave me, because *mashup* was the word for the thing I'd been failing to name for weeks. I'd been quietly failing a simple test: **I could not tell you what one of my own core features was for without giving four different answers.** Was `create_mission` — the "type a directive, watch the herd build it" front door — a coding tool? A CI runner? A demo? A compliance thing? Yes. All of them. Which is another way of saying: none of them, load-bearingly.
 
-That's the mish-mosh smell, and it has a specific cause. It wasn't that I had three bad ideas glued together. It's that I had **one good idea and one commodity idea, and I couldn't bring myself to delete the commodity.**
+He'd pegged it precisely. A **harness** for running agents. A **router** for picking models. And a couple of novel features. The trouble wasn't that any one piece was bad — the harness world and the router world are real and crowded and fine. It's that I had **a pile of commodity with a couple of novel things buried in it, and I couldn't bring myself to delete the commodity to let the novel breathe.**
 
 ## The commodity was the builder
 
@@ -41,9 +41,9 @@ Stack those with no spine and you get exactly what he saw. But there was one thi
 
 Once I said it out loud, the whole thing reorganized itself. Every piece I was proud of — the swarm of role-separated agents, the replayable recordings, the signed ledger, the scrubbing that lets you hand a record to an outside auditor without leaking a secret — every one of them was an **accountability instrument.** I'd built an audit system and dressed it up as a builder so it would demo better.
 
-The builder wasn't one of three products. **The builder was the gravitational center pulling everything toward "IDE."** It's what made the swarm look like coders, the recordings look like a sizzle reel, the memory look like build-context. Remove it, and nothing else needs re-aiming — everything just *relaxes into* being an audit, because there's nothing else left for it to serve.
+The builder wasn't one product among several. **The builder was the gravitational center pulling everything toward "IDE."** It's what made the swarm look like coders, the recordings look like a sizzle reel, the memory look like build-context. Remove it, and nothing else needs re-aiming — everything just *relaxes into* being an audit, because there's nothing else left for it to serve.
 
-The mish-mosh wasn't three things. It was one thing wearing a builder costume.
+That's the trick with a mashup. It wasn't a pile of half-built products. It was a couple of genuinely novel features wearing a builder costume so they'd demo better — and the costume was the confusion.
 
 ## So we're deleting it
 

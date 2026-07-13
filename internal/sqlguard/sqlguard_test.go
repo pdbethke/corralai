@@ -41,6 +41,17 @@ func TestValidateReadOnly_Reject(t *testing.T) {
 		`SELECT * FROM sqlite_master`,
 		`SELECT path FROM duckdb_databases`,
 		`SELECT database_name FROM duckdb_databases`,
+		// metadata table-functions + config/schema views that run under the engine
+		// lockdown and disclose paths/config/schema (audited bypass class).
+		`SELECT * FROM pragma_table_info('events')`,
+		`SELECT * FROM pragma_database_list()`,
+		`SELECT * FROM pg_settings`,
+		`SELECT name, value FROM pg_settings WHERE name LIKE '%token%'`,
+		`SELECT * FROM information_schema.tables`,
+		`SELECT table_name FROM information_schema.columns`,
+		// replacement scan reading a file via a bare string-literal table source
+		`SELECT * FROM '/etc/passwd'`,
+		`SELECT a.* FROM events e JOIN '/etc/passwd' a ON true`,
 		// non-SELECT statement keywords
 		`ATTACH 'x.db' AS y`,
 		`COPY (SELECT 1) TO '/tmp/x'`,

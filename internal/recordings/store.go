@@ -4,7 +4,6 @@
 package recordings
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -360,23 +359,20 @@ func (s *Store) ReplayByMissionID(missionID int64) ([]Event, error) {
 // autoload, config frozen) is applied to the SAME conn the query then runs on,
 // with sqlguard.ValidateReadOnly as defense-in-depth. Safe because recordings
 // only ever queries its own in-db tables (no read_csv/ATTACH/COPY/glob).
+// Query runs an operator ad-hoc read-only SELECT/WITH against the recordings
+// store. It validates via sqlguard but does NOT apply the DuckDB filesystem
+// lockdown — this store's pool also serves writes, and the lockdown is
+// database-wide, so it would fatally break the next checkpoint. sqlguard's
+// validator is the wall here (admin-gated surface); the DB-level lockdown
+// belongs on a dedicated read-only handle (see oracle).
 func (s *Store) Query(sqlText string, rowCap int) (Report, error) {
 	if rowCap <= 0 {
 		rowCap = 1000
 	}
-	ctx := context.Background()
-	conn, err := s.db.Conn(ctx)
-	if err != nil {
-		return Report{}, err
-	}
-	defer conn.Close()
-	if err := sqlguard.ApplyLockdown(ctx, conn); err != nil {
-		return Report{}, err
-	}
 	if err := sqlguard.ValidateReadOnly(sqlText); err != nil {
 		return Report{}, err
 	}
-	rows, err := conn.QueryContext(ctx, sqlText)
+	rows, err := s.db.Query(sqlText)
 	if err != nil {
 		return Report{}, err
 	}

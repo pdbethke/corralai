@@ -28,15 +28,22 @@ var (
 	// Dangerous filesystem/network/metadata FUNCTION calls — matched only as a call
 	// `name(` so `AS read_count` / a column `getenv_x` is not a false positive, while
 	// read_csv('/etc/passwd'), glob(...), getenv(...), parquet_scan(...),
-	// arrow_scan(...), sniff_csv(...), duckdb_settings() are caught.
-	bannedFuncCalls = regexp.MustCompile(`\b(read_[a-z0-9_]*|glob|parquet_scan|arrow_scan|sniff_csv|getenv|duckdb_[a-z0-9_]*)\s*\(`)
+	// arrow_scan(...), sniff_csv(...), duckdb_settings(), pragma_table_info(...) are
+	// caught. NOTE: `pragma_*` needs its own alternative because bannedKeywords'
+	// `\bpragma\b` does NOT fire on `pragma_table_info` (no word boundary before `_`).
+	bannedFuncCalls = regexp.MustCompile(`\b(read_[a-z0-9_]*|glob|parquet_scan|arrow_scan|sniff_csv|getenv|duckdb_[a-z0-9_]*|pragma_[a-z0-9_]*)\s*\(`)
 
 	// Metadata table/identifiers that legit analytics never reference and that the
 	// engine lockdown does NOT block — reached WITHOUT a call, e.g. `FROM
-	// sqlite_master` or `FROM duckdb_databases` (leaks attached-db names + on-disk
-	// paths). Matched at a word boundary (no paren required); the call forms are
-	// also covered by bannedFuncCalls.
-	bannedMetaIdents = regexp.MustCompile(`\b(sqlite_[a-z0-9_]+|duckdb_[a-z0-9_]+)\b`)
+	// sqlite_master` / `FROM duckdb_databases` (attached-db names + on-disk paths),
+	// `FROM pg_settings` (config disclosure), `FROM information_schema.tables`
+	// (cross-attached-db schema enumeration). Word-boundary, no paren required.
+	bannedMetaIdents = regexp.MustCompile(`\b(sqlite_[a-z0-9_]+|duckdb_[a-z0-9_]+|pg_[a-z0-9_]+|information_schema)\b`)
+
+	// A bare string literal used as a table source (`FROM '/etc/passwd'` /
+	// `JOIN '…'`) is a DuckDB replacement-scan that reads a file — reject it (the
+	// function-call denylist never sees a read_*( here).
+	bannedFromLiteral = regexp.MustCompile(`\b(from|join)\s+'`)
 )
 
 // ValidateReadOnly normalizes userSQL (strips comments, collapses whitespace),
@@ -63,6 +70,9 @@ func ValidateReadOnly(userSQL string) error {
 	}
 	if m := bannedMetaIdents.FindString(low); m != "" {
 		return fmt.Errorf("query uses a disallowed construct (%q)", m)
+	}
+	if bannedFromLiteral.MatchString(low) {
+		return fmt.Errorf("query reads from a string-literal table source (replacement scan) — not allowed")
 	}
 	return nil
 }

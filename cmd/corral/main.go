@@ -102,7 +102,6 @@ import (
 	"github.com/pdbethke/corralai/internal/controlgate"
 	"github.com/pdbethke/corralai/internal/controlspec"
 	"github.com/pdbethke/corralai/internal/coord"
-	"github.com/pdbethke/corralai/internal/egress"
 	"github.com/pdbethke/corralai/internal/embed"
 	"github.com/pdbethke/corralai/internal/fleet"
 	"github.com/pdbethke/corralai/internal/gate"
@@ -900,12 +899,9 @@ func main() {
 		// they are scrubbed after New() so no downstream reader can retrieve them.
 		forges := repo.ForgesFromEnv()
 		repoEng = repo.NewWithForges(tok, forges)
-		engine.Repo = &repoAdapter{e: repoEng}
 		engine.Workspace = repoWorkspace
-		engine.Egress = egressAdapter{}
 		log.Printf("repo: engine enabled (workspace %s, forges %d, github token set=%v)", // #nosec G706 -- operator-controlled config, not user input
 			repoWorkspace, len(forges), tok != "")
-		log.Printf("egress: gate enabled — changed files scanned for secrets (blocking) + advisory dep/license issues before push+PR")
 	} else {
 		log.Printf("repo: disabled (set CORRALAI_GIT_TOKEN or CORRALAI_REPO_ENABLE=1 to enable repo-work missions)")
 	}
@@ -979,24 +975,6 @@ func main() {
 			}
 		}
 	}()
-
-	// Review-poll ticker: when the repo engine is active, periodically check all
-	// open PRs that are in CHANGES_REQUESTED state and enqueue a response task for
-	// any unhandled review. Runs on a separate, slower cadence than the mission Tick
-	// so it doesn't amplify GitHub API calls on busy swarms.
-	if repoEng != nil {
-		reviewInterval := time.Duration(envInt("CORRALAI_REVIEW_POLL_SEC", 60)) * time.Second
-		log.Printf("review: polling PRs for CHANGES_REQUESTED every %s", reviewInterval)
-		go func() {
-			t := time.NewTicker(reviewInterval)
-			defer t.Stop()
-			for range t.C {
-				if err := engine.ReviewPoll(); err != nil {
-					log.Printf("review poll: %v", err)
-				}
-			}
-		}()
-	}
 
 	// Primary client from CORRALAI_OIDC_ISSUER/_AUDIENCE, plus any additional
 	// trusted clients in CORRALAI_OIDC_CLIENTS="issuer|audience,issuer|audience"
@@ -1427,24 +1405,6 @@ func (a *repoAdapter) DiffAddedLines(ctx context.Context, dir, base string) (str
 	return a.e.DiffAddedLines(ctx, dir, base)
 }
 
-// egressAdapter wires internal/egress into mission.EgressScanner — the same
-// single-conversion-point pattern as repoAdapter, keeping the mission package
-// from importing internal/egress directly.
-type egressAdapter struct{}
-
-func (egressAdapter) Scan(ctx context.Context, dir string, files []string) []mission.EgressFinding {
-	return convertEgressFindings(egress.Scan(ctx, dir, files))
-}
-func (egressAdapter) ScanText(text string) []mission.EgressFinding {
-	return convertEgressFindings(egress.ScanText(text))
-}
-func convertEgressFindings(findings []egress.Finding) []mission.EgressFinding {
-	out := make([]mission.EgressFinding, len(findings))
-	for i, f := range findings {
-		out[i] = mission.EgressFinding{Path: f.Path, Line: f.Line, Rule: f.Rule, Sample: f.Sample, Severity: f.Severity}
-	}
-	return out
-}
 func (a *repoAdapter) ListReviews(ctx context.Context, repoURL string, pr int, etag string) ([]mission.ReviewInfo, string, bool, error) {
 	revs, newEtag, notMod, err := a.e.ListReviews(ctx, repoURL, pr, etag)
 	if err != nil || notMod {

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -15,6 +16,28 @@ import (
 	"github.com/pdbethke/corralai/internal/queue"
 	"github.com/pdbethke/corralai/internal/taskartifacts"
 )
+
+// TestBrowserManagerSweepsIdlePages proves BrowserManager.pages can't grow
+// unbounded: mirrors WorkerSessions' lazy-TTL-sweep-on-access pattern. A live
+// *rod.Page needs Chromium, so this drives the bookkeeping directly via the
+// clock seam and nil-page-safe sentinel entries — no real tab launched.
+func TestBrowserManagerSweepsIdlePages(t *testing.T) {
+	bm := NewBrowserManager("127.0.0.1:9019")
+	base := time.Unix(1_000_000, 0)
+	bm.now = func() time.Time { return base }
+
+	bm.trackForTest("old", base.Add(-2*browserPageTTL))
+	bm.trackForTest("fresh", base)
+
+	bm.sweepIdle(base)
+
+	if _, ok := bm.pages["old"]; ok {
+		t.Fatal("stale agent 'old' not evicted")
+	}
+	if _, ok := bm.pages["fresh"]; !ok {
+		t.Fatal("fresh agent wrongly evicted")
+	}
+}
 
 func TestGuardNavigateURL(t *testing.T) {
 	const brain = "127.0.0.1:9019"

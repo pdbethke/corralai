@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/launcher"
@@ -21,11 +22,19 @@ import (
 	"github.com/pdbethke/corralai/internal/taskartifacts"
 )
 
+// browserPageTTL is how long an agent's page survives without being touched.
+// getPage refreshes lastTouch on every call, so an agent still driving the
+// browser never expires while active; only agents that have gone silent
+// (finished a task, crashed, whatever) get their tab closed and forgotten.
+const browserPageTTL = 30 * time.Minute
+
 type BrowserManager struct {
-	mu       sync.Mutex
-	browser  *rod.Browser
-	pages    map[string]*rod.Page // agentName -> page
-	selfAddr string               // the brain's own listen host:port (blocked as an SSRF target)
+	mu        sync.Mutex
+	browser   *rod.Browser
+	pages     map[string]*rod.Page // agentName -> page
+	lastTouch map[string]time.Time // agentName -> last getPage touch
+	now       func() time.Time     // clock seam; tests override
+	selfAddr  string               // the brain's own listen host:port (blocked as an SSRF target)
 }
 
 // NewBrowserManager builds the agent browser. selfAddr is the brain's own
@@ -33,9 +42,36 @@ type BrowserManager struct {
 // hijacked agent can't loop back into the brain's admin/MCP surface.
 func NewBrowserManager(selfAddr string) *BrowserManager {
 	return &BrowserManager{
-		pages:    make(map[string]*rod.Page),
-		selfAddr: selfAddr,
+		pages:     make(map[string]*rod.Page),
+		lastTouch: make(map[string]time.Time),
+		now:       time.Now,
+		selfAddr:  selfAddr,
 	}
+}
+
+// sweepIdle closes and forgets any agent's page untouched for longer than
+// browserPageTTL. Called under bm.mu from getPage — amortized cleanup that
+// keeps the tab count bounded without a sweeper goroutine (mirrors
+// WorkerSessions.mark). Nil-page-safe so bookkeeping is testable without
+// launching Chromium.
+func (bm *BrowserManager) sweepIdle(nowT time.Time) {
+	for agent, ts := range bm.lastTouch {
+		if nowT.Sub(ts) > browserPageTTL {
+			if p := bm.pages[agent]; p != nil {
+				_ = p.Close()
+			}
+			delete(bm.pages, agent)
+			delete(bm.lastTouch, agent)
+		}
+	}
+}
+
+// trackForTest registers agent as having a page (a nil sentinel — sweepIdle
+// is nil-page-safe) touched at at, for testing the eviction bookkeeping
+// without launching a real Chromium tab. Test-only.
+func (bm *BrowserManager) trackForTest(agent string, at time.Time) {
+	bm.pages[agent] = nil
+	bm.lastTouch[agent] = at
 }
 
 // metadataHosts are cloud instance-metadata (IMDS) hostnames — never a
@@ -124,6 +160,8 @@ func (bm *BrowserManager) getPage(agent string) (*rod.Page, error) {
 	bm.mu.Lock()
 	defer bm.mu.Unlock()
 
+	bm.sweepIdle(bm.now())
+
 	if bm.browser == nil {
 		l := launcher.New().
 			Headless(true).
@@ -150,6 +188,7 @@ func (bm *BrowserManager) getPage(agent string) (*rod.Page, error) {
 		}
 		bm.pages[agent] = page
 	}
+	bm.lastTouch[agent] = bm.now()
 	return page, nil
 }
 

@@ -51,20 +51,39 @@ func Open(path string) (*Store, error) {
 	return s, nil
 }
 
+// staged holds one file's chunks plus its slice offset/length into the single
+// batched embedding call's result, so vectors can be re-associated per file.
+type staged struct {
+	f      FileInput
+	chunks []LineChunk
+	off, n int
+}
+
 func (s *Store) IndexFiles(missionID int64, files []FileInput) error {
+	var items []staged
+	var allTexts []string
 	for _, f := range files {
-		chunks := chunkFile(f.Path, f.Text)
-		var vecs [][]float32
-		if s.embedder != nil && len(chunks) > 0 {
-			texts := make([]string, len(chunks))
-			for i, c := range chunks {
-				texts[i] = c.Text
-			}
-			if v, err := s.embedder.Embed(texts); err == nil {
-				vecs = v
-			} else {
-				log.Printf("repoindex: embed %s: %v", f.Path, err)
-			}
+		cs := chunkFile(f.Path, f.Text)
+		off := len(allTexts)
+		for _, c := range cs {
+			allTexts = append(allTexts, c.Text)
+		}
+		items = append(items, staged{f: f, chunks: cs, off: off, n: len(cs)})
+	}
+	var vecs [][]float32
+	if s.embedder != nil && len(allTexts) > 0 {
+		if v, err := s.embedder.Embed(allTexts); err == nil {
+			vecs = v
+		} else {
+			log.Printf("repoindex: embed %d chunks: %v", len(allTexts), err)
+		}
+	}
+	for _, it := range items {
+		f := it.f
+		chunks := it.chunks
+		var fileVecs [][]float32
+		if vecs != nil && it.off+it.n <= len(vecs) {
+			fileVecs = vecs[it.off : it.off+it.n]
 		}
 		tx, err := s.db.Begin()
 		if err != nil {
@@ -79,8 +98,8 @@ func (s *Store) IndexFiles(missionID int64, files []FileInput) error {
 		txOK := true
 		for i, c := range chunks {
 			embCol := "NULL"
-			if i < len(vecs) && len(vecs[i]) > 0 {
-				embCol = embed.VecLiteral(vecs[i]) + "::FLOAT[]"
+			if i < len(fileVecs) && len(fileVecs[i]) > 0 {
+				embCol = embed.VecLiteral(fileVecs[i]) + "::FLOAT[]"
 			}
 			q := `INSERT INTO chunks (id, mission_id, path, seq, start_line, end_line, text, embedding, ts, symbol, kind, lang)
 				VALUES (nextval('repocode_id'), ?, ?, ?, ?, ?, ?, ` + embCol + `, ?, ?, ?, ?)`

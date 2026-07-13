@@ -12,11 +12,52 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
 	_ "github.com/marcboeker/go-duckdb/v2"
 )
+
+var (
+	telLineComment  = regexp.MustCompile(`--[^\n]*`)
+	telBlockComment = regexp.MustCompile(`(?s)/\*.*?\*/`)
+	telWSRun        = regexp.MustCompile(`\s+`)
+	// banned normalized substrings — defense-in-depth against a SELECT that
+	// reaches out to the filesystem/network or otherwise escapes read-only intent.
+	// Mirrors internal/recordings' and internal/oracle's ad-hoc-SQL guards.
+	telBannedSubstr = []string{
+		"attach", "copy", " install ", " load ", "pragma", " set ", " call ", " export ",
+		"read_", "glob(", "sqlite_", "getenv", "parquet_scan", "duckdb_", "sniff_csv",
+		"sniff", "arrow_scan", " delete ", " update ", " insert ", " create ", " alter ", " drop ", " truncate ",
+	}
+)
+
+// validateReadOnly is defense-in-depth over the ad-hoc Query path: normalize
+// (strip comments, collapse whitespace), require a single SELECT/WITH statement,
+// and reject the banned constructs. A SELECT prefix alone is NOT enough — e.g.
+// "SELECT * FROM read_csv('/etc/passwd')" begins with SELECT yet reads a file.
+func validateReadOnly(userSQL string) error {
+	s := telBlockComment.ReplaceAllString(userSQL, " ")
+	s = telLineComment.ReplaceAllString(s, " ")
+	s = telWSRun.ReplaceAllString(s, " ")
+	s = strings.TrimSpace(s)
+	low := strings.ToLower(s)
+	if !strings.HasPrefix(low, "select ") && !strings.HasPrefix(low, "with ") {
+		return fmt.Errorf("only a single read-only SELECT/WITH query is allowed")
+	}
+	// reject any inner ';' (a single trailing one is fine)
+	if i := strings.IndexByte(strings.TrimRight(s, "; "), ';'); i >= 0 {
+		return fmt.Errorf("only a single read-only SELECT/WITH query is allowed")
+	}
+	padded := " " + low + " "
+	for _, b := range telBannedSubstr {
+		if strings.Contains(padded, b) {
+			return fmt.Errorf("query uses a disallowed construct (%q)", strings.TrimSpace(b))
+		}
+	}
+	return nil
+}
 
 var now = func() float64 { return float64(time.Now().UnixNano()) / 1e9 }
 
@@ -337,11 +378,12 @@ func (s *Store) RunReport(name string) (Report, error) {
 	return s.scan(q)
 }
 
-// Query runs read-only ad-hoc analysis (SELECT/WITH only — no writes, no attach).
+// Query runs read-only ad-hoc analysis (SELECT/WITH only — no writes, no attach,
+// no file/network reach-out). The guard is normalized + construct-banning, not a
+// bare prefix check (see validateReadOnly).
 func (s *Store) Query(q string) (Report, error) {
-	t := strings.ToLower(strings.TrimSpace(q))
-	if !(strings.HasPrefix(t, "select") || strings.HasPrefix(t, "with")) || strings.Contains(q, ";") {
-		return Report{}, fmt.Errorf("only a single read-only SELECT/WITH query is allowed")
+	if err := validateReadOnly(q); err != nil {
+		return Report{}, err
 	}
 	return s.scan(q)
 }

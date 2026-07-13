@@ -4,8 +4,39 @@ package telemetry
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+// TestQueryRejectsFileAndExtensionFunctions proves the ad-hoc Query guard is not
+// merely a SELECT-prefix check: a query that begins with SELECT but reaches out
+// to the filesystem/network or other non-read-only DuckDB constructs (read_csv,
+// getenv, attach, copy, …) must be rejected at the guard — never handed to the
+// engine. A prefix-only guard let "SELECT * FROM read_csv('/etc/passwd')" through.
+func TestQueryRejectsFileAndExtensionFunctions(t *testing.T) {
+	s := openT(t)
+	bad := []string{
+		`SELECT * FROM read_csv('/etc/passwd')`,
+		`SELECT getenv('HOME')`,
+		`SELECT * FROM glob('/*')`,
+		`WITH x AS (SELECT * FROM read_parquet('http://evil/x')) SELECT * FROM x`,
+		`SELECT/* sneak */ * FROM read_text('/etc/hosts')`,
+		`ATTACH 'x.db'; SELECT 1`, // not even a SELECT prefix
+	}
+	for _, q := range bad {
+		_, err := s.Query(q)
+		if err == nil {
+			t.Fatalf("Query must reject %q, got nil error", q)
+		}
+		if !strings.Contains(err.Error(), "disallowed") && !strings.Contains(err.Error(), "only a single read-only") {
+			t.Fatalf("Query(%q) rejected for the wrong reason: %v", q, err)
+		}
+	}
+	// A legitimate read-only aggregate still works.
+	if _, err := s.Query("SELECT count(*) FROM events"); err != nil {
+		t.Fatalf("a plain read-only SELECT must still pass: %v", err)
+	}
+}
 
 func openT(t *testing.T) *Store {
 	t.Helper()

@@ -1020,7 +1020,10 @@ func main() {
 	// early bootstrap/report_host call), so isHumanAdmin can refuse it.
 	workerSessions := brain.NewWorkerSessions()
 
-	engine.Staffing = &mission.StaffingManager{
+	// Standalone — NOT routed through the engine: Sense→Judge→Clamp staffing is
+	// the product's differentiator and must survive independent of any running
+	// build-Tick loop. The UI drives it mission-free via proposeStaffing.
+	staffingMgr := &mission.StaffingManager{
 		Perf: &perfTracker{
 			q:   queueStore,
 			hb:  hostBook,
@@ -1309,7 +1312,7 @@ func main() {
 	replayStream := func(missionID int64) ([]brain.ReplayEvent, error) {
 		return brain.BuildReplayStream(queueStore, telStore, missionID)
 	}
-	uiHandler := verifier.Wrap(authz(ui.Handler(ui.Deps{Coord: store, Mem: memStore, Gateway: gwStore, Bus: bus, MemOwners: memOwners, Roles: princStore, Queue: queueStore, Missions: missionStore, Executions: execRing, Activity: activityRing, Hosts: hostBook, Health: healthBook, Narrator: narrator, Telemetry: telStore, Oracle: fleetOracle, RoleModels: roleModels, Staffing: engine.Staffing, Learn: learnStore, Promote: proposalPromote, Reject: proposalReject, History: historyList, HistoryDetail: historyDetail, Replay: replayStream, Artifacts: artStore, TaskArtifacts: taskArtStore, BuildStore: buildStore, CertifyPub: certifyPub, Witness: certifyWitness, Version: version})))
+	uiHandler := verifier.Wrap(authz(ui.Handler(ui.Deps{Coord: store, Mem: memStore, Gateway: gwStore, Bus: bus, MemOwners: memOwners, Roles: princStore, Queue: queueStore, Missions: missionStore, Executions: execRing, Activity: activityRing, Hosts: hostBook, Health: healthBook, Narrator: narrator, Telemetry: telStore, Oracle: fleetOracle, RoleModels: roleModels, Staffing: staffingMgr, Learn: learnStore, Promote: proposalPromote, Reject: proposalReject, History: historyList, HistoryDetail: historyDetail, Replay: replayStream, Artifacts: artStore, TaskArtifacts: taskArtStore, BuildStore: buildStore, CertifyPub: certifyPub, Witness: certifyWitness, Version: version})))
 	if verifier.Enabled() {
 		log.Printf("ui: bearer-gated (view via `corral-observe`)")
 	} else {

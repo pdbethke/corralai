@@ -6,12 +6,9 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"strings"
-	"sync"
 	"time"
 
 	"github.com/pdbethke/corralai/internal/queue"
-	"github.com/pdbethke/corralai/internal/rolemodel"
 )
 
 // ReviewInfo is the mission-package mirror of repo.Review, declared here so the
@@ -174,34 +171,7 @@ type Engine struct {
 	// the consecutive count of no-progress ticks and the last progress fingerprint.
 	noProgress      map[int64]int
 	lastFingerprint map[int64]string
-
-	// Staffing coordinates dynamic role allocations. The per-mission Judge call
-	// is a 30s-bounded blocking LLM round-trip, so it runs OFF the tick goroutine
-	// (see staffMission) — one mission's staffing must never head-of-line block
-	// every other mission's promote/converge/PR work. Because a goroutine now
-	// touches the staffing bookkeeping, all four maps below are guarded by staffMu.
-	//
-	//   staffed       — once-per-mission-on-success latch (staffing done, don't redo)
-	//   staffInflight — a staffMission goroutine is currently running for this id
-	//   staffAttempts — count of failed Judge probes per mission
-	//   staffGaveUp   — hit maxStaffAttempts; stop probing, use the default policy
-	//
-	// staffWG lets tests deterministically await the async pass (waitStaffingIdle);
-	// Tick Add()s before dispatch and the worker Done()s on exit.
-	Staffing      *StaffingManager
-	staffMu       sync.Mutex
-	staffed       map[int64]bool
-	staffInflight map[int64]bool
-	staffAttempts map[int64]int
-	staffGaveUp   map[int64]bool
-	staffWG       sync.WaitGroup
 }
-
-// maxStaffAttempts bounds how many times a mission's dynamic-staffing Judge probe
-// is retried before the engine gives up and falls back to the default role policy:
-// a permanently-failing probe (bad LLM endpoint, malformed response) backs off
-// instead of burning a 30s round-trip every tick.
-const maxStaffAttempts = 3
 
 func NewEngine(m *Store, q *queue.Store) *Engine {
 	return &Engine{
@@ -211,10 +181,6 @@ func NewEngine(m *Store, q *queue.Store) *Engine {
 		NoProgressTicks:       240, // generous backstop; the "nothing claimed" guard keeps it off slow-but-healthy work
 		noProgress:            map[int64]int{},
 		lastFingerprint:       map[int64]string{},
-		staffed:               map[int64]bool{},
-		staffInflight:         map[int64]bool{},
-		staffAttempts:         map[int64]int{},
-		staffGaveUp:           map[int64]bool{},
 	}
 }
 
@@ -258,83 +224,6 @@ func (e *Engine) Run(ctx context.Context, interval time.Duration) {
 	}
 }
 
-// staffedModelRef derives the model reference for a clamped assignment. Clamped
-// values are model IDENTIFIERS — an Ollama name:tag (qwen2.5-coder:7b) or a cloud
-// model name — NEVER "backend:model", so we must not split on ':' (doing so
-// corrupted every local tag). Cloud models map to their provider backend; every-
-// thing else is an Ollama tag kept whole.
-func staffedModelRef(model string) rolemodel.ModelRef {
-	backend := "ollama"
-	if isCloudModel(model) {
-		lower := strings.ToLower(model)
-		switch {
-		case strings.Contains(lower, "claude"):
-			backend = "anthropic"
-		case strings.Contains(lower, "gpt"):
-			backend = "openai"
-		case strings.Contains(lower, "gemini"):
-			backend = "openai" // NOTE: audit L-item — engine vs backend.go gemini mapping disagree; out of scope for this task, keep as-is
-		}
-	}
-	return rolemodel.ModelRef{Backend: backend, Model: model}
-}
-
-// staffMission runs the Sense→Judge→Clamp staffing pass for one mission OFF the
-// tick goroutine. On success it latches staffed[id] (once-per-mission-on-success);
-// on failure it counts an attempt and, after maxStaffAttempts, latches staffGaveUp
-// and falls back to the default role policy (never applying a nil assignment map),
-// so a failing probe never re-runs the 30s Judge every tick or stalls the tick
-// loop. All staffing-bookkeeping access is under staffMu.
-func (e *Engine) staffMission(missionID int64, directive string) {
-	defer e.staffWG.Done()
-	defer func() {
-		e.staffMu.Lock()
-		delete(e.staffInflight, missionID)
-		e.staffMu.Unlock()
-	}()
-	defer func() {
-		if r := recover(); r != nil {
-			log.Printf("mission %d: staffing panic recovered: %v", missionID, r)
-			e.staffMu.Lock()
-			e.staffGaveUp[missionID] = true
-			e.staffMu.Unlock()
-		}
-	}()
-	resources := e.Staffing.Sense()
-	stats := e.Staffing.Perf.GetRoleModelStats()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	assignments, loadOrder, err := e.Staffing.Judge(ctx, directive, resources, stats, 3, 3)
-	cancel()
-	if err != nil {
-		e.staffMu.Lock()
-		e.staffAttempts[missionID]++
-		attempts := e.staffAttempts[missionID]
-		if attempts >= maxStaffAttempts {
-			e.staffGaveUp[missionID] = true
-		}
-		e.staffMu.Unlock()
-		if attempts >= maxStaffAttempts {
-			log.Printf("mission %d: dynamic staffing gave up after %d attempts — using default policy", missionID, attempts)
-		} else {
-			log.Printf("mission %d: dynamic staffing judge failed (attempt %d): %v", missionID, attempts, err)
-		}
-		return
-	}
-	clamped := e.Staffing.Clamp(assignments, resources)
-	log.Printf("mission %d: dynamic staffing complete. Clamped: %+v, Load Order: %v", missionID, clamped, loadOrder)
-	for role, model := range clamped {
-		e.Staffing.RoleModels.Set(role, staffedModelRef(model)) // threadsafe: the UI writes this same policy from the mission-create handler
-	}
-	e.staffMu.Lock()
-	e.staffed[missionID] = true
-	e.staffMu.Unlock()
-}
-
-// waitStaffingIdle blocks until no staffMission goroutine is in flight. Test-only
-// sync hook: Tick dispatches staffing asynchronously, so a deterministic test must
-// await the pass before asserting on it. Unexported by design.
-func (e *Engine) waitStaffingIdle() { e.staffWG.Wait() }
-
 // Tick advances every running mission one step: promote dependency-ready tasks,
 // then complete the mission if every task is done. Exported so it can be driven
 // deterministically in tests.
@@ -344,24 +233,6 @@ func (e *Engine) Tick() error {
 		return err
 	}
 	for _, mi := range missions {
-		// Dynamic role staffing: Sense ➔ Judge ➔ Clamp, run at most once per
-		// mission and OFF the tick goroutine (the Judge call is a 30s-bounded LLM
-		// round-trip). Dispatch is guarded by staffMu + a bounded attempt cap so a
-		// failing Judge backs off and gives up instead of re-probing every tick or
-		// head-of-line blocking every other mission behind a 30s stall.
-		if e.Staffing != nil && e.Staffing.LLM != nil && e.Staffing.LLM.Available() {
-			e.staffMu.Lock()
-			skip := e.staffed[mi.ID] || e.staffInflight[mi.ID] || e.staffGaveUp[mi.ID]
-			if !skip {
-				e.staffInflight[mi.ID] = true
-				e.staffWG.Add(1)
-			}
-			e.staffMu.Unlock()
-			if !skip {
-				go e.staffMission(mi.ID, mi.Directive)
-			}
-		}
-
 		if _, err := e.q.PromoteReady(mi.ID); err != nil {
 			log.Printf("mission %d: promote: %v", mi.ID, err)
 			continue
@@ -475,11 +346,6 @@ func (e *Engine) failMission(m *Mission, reason string) {
 	}
 	delete(e.noProgress, m.ID)
 	delete(e.lastFingerprint, m.ID)
-	e.staffMu.Lock()
-	delete(e.staffed, m.ID)
-	delete(e.staffAttempts, m.ID)
-	delete(e.staffGaveUp, m.ID)
-	e.staffMu.Unlock()
 }
 
 // sweepBlockedDeps cancels pending tasks whose dependencies can never be

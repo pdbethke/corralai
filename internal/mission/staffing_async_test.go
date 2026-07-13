@@ -5,17 +5,15 @@ package mission
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"sync/atomic"
 	"testing"
 
-	"github.com/pdbethke/corralai/internal/queue"
 	"github.com/pdbethke/corralai/internal/rolemodel"
 )
 
 // countingFailLLM always fails Judge's Generate call and counts how many times it
-// was invoked. calls is touched by the async staffing goroutine and read by the
-// test, so it uses atomics to stay race-clean.
+// was invoked. calls is read via atomics so a -race run stays clean even if a
+// caller drives Staff concurrently.
 type countingFailLLM struct {
 	calls int64
 }
@@ -27,41 +25,23 @@ func (c *countingFailLLM) Generate(ctx context.Context, system, prompt string) (
 
 func (c *countingFailLLM) Available() bool { return true }
 
-// TestStaffingDoesNotReprobeEveryTickOnFailure asserts that a permanently-failing
-// staffing Judge is retried at most maxStaffAttempts times across many ticks —
-// not once per tick — so a bad probe backs off and gives up instead of burning a
-// 30s LLM round-trip every tick and head-of-line blocking other missions.
-func TestStaffingDoesNotReprobeEveryTickOnFailure(t *testing.T) {
-	dir := t.TempDir()
-	q, err := queue.Open(filepath.Join(dir, "q.sqlite3"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer q.Close()
-	m, err := Open(filepath.Join(dir, "m.sqlite3"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer m.Close()
-
-	if _, err := CreateMission(m, q, "add a wishlist feature", fullDAGTestPlan("add a wishlist feature"), false); err != nil {
-		t.Fatal(err)
-	}
-
-	e := NewEngine(m, q)
+// TestStaffGivesUpAfterMaxAttempts asserts that a permanently-failing staffing
+// Judge is retried at most maxStaffAttempts times per Staff call — not
+// indefinitely — so a bad probe backs off and gives up instead of burning a 30s
+// LLM round-trip forever.
+func TestStaffGivesUpAfterMaxAttempts(t *testing.T) {
 	llm := &countingFailLLM{}
-	e.Staffing = &StaffingManager{
+	mgr := &StaffingManager{
 		LLM:        llm,
 		Perf:       &fakePerf{},
 		RoleModels: rolemodel.New(),
 	}
 
-	for i := 0; i < 10; i++ {
-		_ = e.Tick()
-		e.waitStaffingIdle() // block until the async staffing pass settles
+	if err := mgr.Staff("add a wishlist feature"); err == nil {
+		t.Fatal("expected Staff to return an error when the Judge backend always fails")
 	}
 
-	if got := atomic.LoadInt64(&llm.calls); got > maxStaffAttempts {
-		t.Fatalf("staffing probed %d times across 10 ticks; want <= %d (backoff/give-up)", got, maxStaffAttempts)
+	if got := atomic.LoadInt64(&llm.calls); got != maxStaffAttempts {
+		t.Fatalf("staffing probed %d times; want exactly %d (bounded retry then give-up)", got, maxStaffAttempts)
 	}
 }

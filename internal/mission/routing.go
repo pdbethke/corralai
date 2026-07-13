@@ -61,6 +61,77 @@ type StaffingManager struct {
 	RoleModels *rolemodel.Policy
 }
 
+// maxStaffAttempts bounds how many times Staff retries a failing Judge probe
+// before giving up: a permanently-failing probe (bad LLM endpoint, malformed
+// response) backs off instead of burning a 30s round-trip indefinitely.
+const maxStaffAttempts = 3
+
+// staffedModelRef derives the model reference for a clamped assignment. Clamped
+// values are model IDENTIFIERS — an Ollama name:tag (qwen2.5-coder:7b) or a cloud
+// model name — NEVER "backend:model", so we must not split on ':' (doing so
+// corrupted every local tag). Cloud models map to their provider backend; every-
+// thing else is an Ollama tag kept whole.
+func staffedModelRef(model string) rolemodel.ModelRef {
+	backend := "ollama"
+	if isCloudModel(model) {
+		lower := strings.ToLower(model)
+		switch {
+		case strings.Contains(lower, "claude"):
+			backend = "anthropic"
+		case strings.Contains(lower, "gpt"):
+			backend = "openai"
+		case strings.Contains(lower, "gemini"):
+			backend = "openai" // NOTE: audit L-item — engine vs backend.go gemini mapping disagree; out of scope for this task, keep as-is
+		}
+	}
+	return rolemodel.ModelRef{Backend: backend, Model: model}
+}
+
+// Staff runs one bounded Sense→Judge→Clamp staffing pass for directive and
+// applies the clamped result to RoleModels — the standalone equivalent of the
+// old engine build-Tick's staffMission driver (now that staffing survives
+// without a running engine). It retries a failing Judge probe up to
+// maxStaffAttempts times, each bounded by a 30s timeout, and recovers from a
+// panicking LLM backend so a broken probe can never take the caller down; it
+// gives up (returning the last error) rather than retrying forever.
+func (s *StaffingManager) Staff(directive string) error {
+	var lastErr error
+	for attempt := 1; attempt <= maxStaffAttempts; attempt++ {
+		if err := s.staffOnce(directive); err != nil {
+			lastErr = err
+			log.Printf("staffing: judge probe failed (attempt %d/%d): %v", attempt, maxStaffAttempts, err)
+			continue
+		}
+		return nil
+	}
+	return fmt.Errorf("staffing: gave up after %d attempts: %w", maxStaffAttempts, lastErr)
+}
+
+// staffOnce runs a single Sense→Judge→Clamp pass and, on success, applies the
+// clamped assignments to RoleModels. A panic inside Judge (e.g. a broken LLM
+// backend) is recovered and surfaced as an error rather than crashing the caller.
+func (s *StaffingManager) staffOnce(directive string) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("staffing panic recovered: %v", r)
+		}
+	}()
+	resources := s.Sense()
+	stats := s.Perf.GetRoleModelStats()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	assignments, loadOrder, jErr := s.Judge(ctx, directive, resources, stats, 3, 3)
+	if jErr != nil {
+		return jErr
+	}
+	clamped := s.Clamp(assignments, resources)
+	log.Printf("staffing complete. Clamped: %+v, Load Order: %v", clamped, loadOrder)
+	for role, model := range clamped {
+		s.RoleModels.Set(role, staffedModelRef(model)) // threadsafe: the UI writes this same policy from the mission-create handler
+	}
+	return nil
+}
+
 func (s *StaffingManager) Sense() WorkstationResources {
 	res := WorkstationResources{
 		CPUCores: runtime.NumCPU(),
@@ -133,15 +204,15 @@ func (s *StaffingManager) Judge(ctx context.Context, directive string, resources
 
 	brief := buildLeaderboardBrief(stats, resources.PulledModels, minConfidentSamples)
 
-	systemPrompt := `You are the Corralai swarm staffing planner. Analyze the directive, workstation hardware resources, available local/cloud models, and historical performance stats. Propose the optimal role-to-model staffing assignment and load order to run the swarm.
+	systemPrompt := `You are the Corralai swarm staffing planner. Analyze the directive, workstation hardware resources, available local/cloud models, and historical performance stats. Propose the optimal role-to-model staffing assignment and load order to run an adversarial-verification swarm that BREAKS the change under review in order to CERTIFY it — not one that builds it.
 
 Respond ONLY with a valid JSON object matching this schema:
 {
   "role_assignments": {
-    "builder": "model_name",
-    "tester": "model_name",
-    "pentester": "model_name",
-    "reviewer": "model_name"
+    "security-breaker": "model_name",
+    "correctness-reviewer": "model_name",
+    "exploit-attempter": "model_name",
+    "edge-hunter": "model_name"
   },
   "load_order": ["model_name", ...]
 }
@@ -150,7 +221,7 @@ Constraints:
 1. Local models in the load order should fit in available GPU VRAM. Estimate VRAM for a local model as parameter_size * 0.7 GB.
 2. Prefer models with high pass rates / low duration — but ONLY for cells marked [confident]. A cell marked [THIN] is a single data point, not a ranking; do not overfit it.
 3. If no stats are available (cold-start), use default models (e.g. qwen2.5-coder:7b, llama3.2:3b) and treat the mission as evidence-gathering.
-4. Always allocate builder and tester roles.
+4. Always allocate security-breaker and correctness-reviewer roles.
 5. If a local model is not pulled, do not assign it unless it is a cloud model API (e.g. gemini, claude, gpt).
 6. EXPLORE, don't ossify: when a role has untested eligible models (probe candidates), occasionally staff one instead of the current leader so the leaderboard keeps learning — especially when the leader's evidence is thin or the alternatives are entirely unmeasured.`
 
@@ -249,11 +320,11 @@ func (s *StaffingManager) Clamp(assignments map[string]string, resources Worksta
 		}
 	}
 
-	if clamped["builder"] == "" {
-		clamped["builder"] = defaultModel
+	if clamped["security-breaker"] == "" {
+		clamped["security-breaker"] = defaultModel
 	}
-	if clamped["tester"] == "" {
-		clamped["tester"] = defaultModel
+	if clamped["correctness-reviewer"] == "" {
+		clamped["correctness-reviewer"] = defaultModel
 	}
 
 	return clamped

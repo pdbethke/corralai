@@ -45,16 +45,16 @@ func TestStaffingJudgeAndClamp(t *testing.T) {
 	llm := &fakeLLM{
 		response: `{
 			"role_assignments": {
-				"builder": "qwen2.5-coder:14b",
-				"tester": "qwen2.5-coder:7b",
-				"pentester": "claude-3-5-sonnet"
+				"security-breaker": "qwen2.5-coder:14b",
+				"correctness-reviewer": "qwen2.5-coder:7b",
+				"exploit-attempter": "claude-3-5-sonnet"
 			},
 			"load_order": ["qwen2.5-coder:14b", "qwen2.5-coder:7b"]
 		}`,
 	}
 	perf := &fakePerf{
 		stats: []ModelStats{
-			{Model: "qwen2.5-coder:14b", Role: "builder", TasksCompleted: 10, AvgTaskDuration: 15.0, ExecPassRatePct: 90.0},
+			{Model: "qwen2.5-coder:14b", Role: "security-breaker", TasksCompleted: 10, AvgTaskDuration: 15.0, ExecPassRatePct: 90.0},
 		},
 	}
 	policy := rolemodel.New()
@@ -72,7 +72,7 @@ func TestStaffingJudgeAndClamp(t *testing.T) {
 		PulledModels: []string{"qwen2.5-coder:14b", "qwen2.5-coder:7b"},
 	}
 
-	assignments, _, err := mgr.Judge(context.Background(), "build a dashboard", resources, perf.GetRoleModelStats(), 3, 3)
+	assignments, _, err := mgr.Judge(context.Background(), "certify a dashboard change", resources, perf.GetRoleModelStats(), 3, 3)
 	if err != nil {
 		t.Fatalf("Judge: %v", err)
 	}
@@ -84,15 +84,15 @@ func TestStaffingJudgeAndClamp(t *testing.T) {
 
 	// Since 14b (9.8G) + 7b (4.9G) = 14.7G, which is > 12.0GB GPU VRAM,
 	// Clamp should consolidate local roles to default model (qwen2.5-coder:7b).
-	if clamped["builder"] != "qwen2.5-coder:7b" {
-		t.Errorf("expected builder clamped to default qwen2.5-coder:7b due to VRAM limits, got %q", clamped["builder"])
+	if clamped["security-breaker"] != "qwen2.5-coder:7b" {
+		t.Errorf("expected security-breaker clamped to default qwen2.5-coder:7b due to VRAM limits, got %q", clamped["security-breaker"])
 	}
-	if clamped["tester"] != "qwen2.5-coder:7b" {
-		t.Errorf("expected tester clamped to qwen2.5-coder:7b, got %q", clamped["tester"])
+	if clamped["correctness-reviewer"] != "qwen2.5-coder:7b" {
+		t.Errorf("expected correctness-reviewer clamped to qwen2.5-coder:7b, got %q", clamped["correctness-reviewer"])
 	}
-	// pentester is a cloud model, should remain unchanged
-	if clamped["pentester"] != "claude-3-5-sonnet" {
-		t.Errorf("expected pentester to remain claude-3-5-sonnet, got %q", clamped["pentester"])
+	// exploit-attempter is a cloud model, should remain unchanged
+	if clamped["exploit-attempter"] != "claude-3-5-sonnet" {
+		t.Errorf("expected exploit-attempter to remain claude-3-5-sonnet, got %q", clamped["exploit-attempter"])
 	}
 }
 

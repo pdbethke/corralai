@@ -32,8 +32,14 @@ func (e *Engine) ChangedFiles(ctx context.Context, dir string) ([]string, error)
 // context lines (only real adds/removes remain); `--no-color` keeps the text
 // machine-parseable. The output is redact()ed like all e.git output, which only
 // masks the configured forge token, never a planted secret.
+//
+// `--diff-merges=first-parent` is REQUIRED: `git log -p` omits merge-commit
+// diffs by default, so a secret smuggled in only via a merge's conflict
+// resolution (text present in neither parent — an "evil merge") would
+// otherwise never be scanned even though it ships to the remote. Showing the
+// first-parent diff of each merge surfaces exactly that resolution content.
 func (e *Engine) DiffAddedLines(ctx context.Context, dir, base string) (string, error) {
-	return e.git(ctx, dir, "log", "-p", "--no-color", "--unified=0", base+"..HEAD")
+	return e.git(ctx, dir, "log", "-p", "--no-color", "--unified=0", "--diff-merges=first-parent", base+"..HEAD")
 }
 
 // ChangedFilesRange lists files that differ between base and HEAD — the

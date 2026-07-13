@@ -51,16 +51,8 @@ func splitForgeAllowlist(s string) []string {
 // (notably GitLab's custom PRIVATE-TOKEN) so a forge redirect or open-redirect
 // can't exfiltrate the token.
 var forgeHTTPClient = &http.Client{
-	Timeout: 30 * time.Second,
-	Transport: &http.Transport{
-		// Read forgeGuard afresh on every dial (rather than binding
-		// forgeGuard.DialContext once) so it re-validates each hop of a
-		// redirect chain, and so a test can swap forgeGuard after this var
-		// is initialized.
-		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			return forgeGuard.DialContext(ctx, network, addr)
-		},
-	},
+	Timeout:   30 * time.Second,
+	Transport: forgeTransport(),
 	CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		if len(via) >= 10 {
 			return fmt.Errorf("stopped after 10 redirects")
@@ -71,6 +63,22 @@ var forgeHTTPClient = &http.Client{
 		}
 		return nil
 	},
+}
+
+// forgeTransport clones http.DefaultTransport and overrides ONLY its DialContext
+// with the SSRF guard. Cloning (rather than a bare &http.Transport{}) preserves
+// Proxy: http.ProxyFromEnvironment, HTTP/2 (ForceAttemptHTTP2), and the tuned
+// sub-timeouts (TLSHandshakeTimeout, ExpectContinueTimeout, IdleConnTimeout) a
+// bare Transport silently dropped (F3). The guard still applies on every dial
+// when no proxy is set — DialContext reads forgeGuard afresh each call so it
+// re-validates each hop of a redirect chain and a test can swap forgeGuard after
+// this var is initialized.
+func forgeTransport() *http.Transport {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		return forgeGuard.DialContext(ctx, network, addr)
+	}
+	return tr
 }
 
 // Provider is the forge-specific REST surface. One implementation per forge

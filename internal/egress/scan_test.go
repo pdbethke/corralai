@@ -466,6 +466,47 @@ func TestScanText_BinaryModifiedNotFlagged(t *testing.T) {
 	}
 }
 
+// TestScanText_FlagsBinaryQuotedPath is the pass-5 HIGH regression: a binary
+// whose filename has a non-ASCII byte (or ", \, tab, control char) is C-QUOTED by
+// git in the `diff --git`/`Binary files` lines (git's default core.quotePath). The
+// ADD line's b-side reads ` "b/…"` and the DELETE line's a-side reads `"a/…"`; if
+// the parser fails to (a) find the quoted ` "b/` on the diff --git line, or (b)
+// strip the leading `"` from the Binary-files token, the add key and delete key
+// diverge → no add+delete match → a secret-carrying blob with a café-style name
+// ships unflagged. Both commits emit a byte-identical `diff --git` line, so a
+// correct extraction produces matching keys and a single binary-in-history block.
+func TestScanText_FlagsBinaryQuotedPath(t *testing.T) {
+	// git renders the non-ASCII path with octal escapes inside quotes, e.g.
+	// "a/\303\251.bin" for é.bin. The bytes here are the literal backslash-octal
+	// text git emits, not the decoded UTF-8.
+	patch := "" +
+		"commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n" +
+		"Author: x <x@example.com>\n\n    add blob\n\n" +
+		"diff --git \"a/\\303\\251.bin\" \"b/\\303\\251.bin\"\n" +
+		"new file mode 100644\n" +
+		"index 0000000..abcdef1\n" +
+		"Binary files /dev/null and \"b/\\303\\251.bin\" differ\n" +
+		"commit bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n" +
+		"Author: x <x@example.com>\n\n    remove blob\n\n" +
+		"diff --git \"a/\\303\\251.bin\" \"b/\\303\\251.bin\"\n" +
+		"deleted file mode 100644\n" +
+		"index abcdef1..0000000\n" +
+		"Binary files \"a/\\303\\251.bin\" and /dev/null differ\n"
+
+	found := false
+	for _, f := range ScanText(patch) {
+		if f.Rule == "binary-in-history" {
+			found = true
+			if f.Severity != SeverityBlock {
+				t.Errorf("binary-in-history finding must block, got severity %q", f.Severity)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("HIGH bypass: a git-quoted (non-ASCII name) binary added-then-deleted in history was NOT flagged — a secret blob could ship unscanned")
+	}
+}
+
 func TestGovulnEnv(t *testing.T) {
 	t.Setenv("CORRAL_TOKEN", "SECRETVALUE")
 

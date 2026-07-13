@@ -30,6 +30,28 @@ func TestUnsafeIP(t *testing.T) {
 	}
 }
 
+// TestIsIMDSLiteral covers the exported canonical IMDS-literal set (the single
+// source the agent browser also consults). Only the non-link-local IMDS literals
+// belong here; 169.254.169.254 is link-local (caught by each consumer's link-local
+// predicate, not by this set).
+func TestIsIMDSLiteral(t *testing.T) {
+	cases := []struct {
+		ip   string
+		imds bool
+	}{
+		{"100.100.100.100", true}, // Alibaba IMDS (public 100.64/10)
+		{"fd00:ec2::254", true},   // AWS IPv6 IMDS (ULA)
+		{"169.254.169.254", false},
+		{"8.8.8.8", false},
+		{"93.184.216.34", false},
+	}
+	for _, c := range cases {
+		if got := IsIMDSLiteral(net.ParseIP(c.ip)); got != c.imds {
+			t.Errorf("IsIMDSLiteral(%s)=%v want %v", c.ip, got, c.imds)
+		}
+	}
+}
+
 func TestDialContext_BlocksLoopbackByDefault(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

@@ -834,18 +834,6 @@ func main() {
 	missionTick := time.Duration(envInt("CORRALAI_MISSION_TICK_SECONDS", 3)) * time.Second
 	taskStallThreshold := time.Duration(envInt("CORRALAI_TASK_STALL_SECONDS", 300)) * time.Second
 	engine := mission.NewEngine(missionStore, queueStore)
-	// Engine-side finding resolutions (reflex auto-address) must reach the same
-	// telemetry event log as the resolve_finding MCP tool, or model_comparison
-	// reports them as forever-open.
-	engine.OnFindingResolved = func(f queue.Finding, outcome string) {
-		if err := telStore.Record(telemetry.Event{
-			MissionID: f.MissionID, Kind: "finding_resolved", Actor: "reflex-replanner",
-			Subject: f.Target, Model: f.ReporterModel,
-			Detail: map[string]any{"outcome": outcome, "finding_id": f.ID, "backend": f.ReporterBackend},
-		}); err != nil {
-			log.Printf("telemetry finding_resolved: %v", err)
-		}
-	}
 	// mission_completed: the engine finally speaks telemetry on its own
 	// auto-complete path, mirroring the review-accept emission in
 	// internal/brain/missions.go so model_comparison/mission_history never
@@ -908,8 +896,15 @@ func main() {
 		log.Printf("repo code index disabled (repo engine not active)")
 	}
 
-	go engine.Run(context.Background(), missionTick)
-	log.Printf("missions: orchestration engine ticking every %s", missionTick)
+	// The mission Tick loop is deliberately NOT started: corral has retired the
+	// build-from-directive path (see docs/superpowers/specs/2026-07-13-corral-refocus-audit-not-builder-design.md).
+	// The engine + its lifecycle plumbing (dep-gating, give-up backstop, the
+	// findings-gate) are retained as the slice-2 verification-engine seed —
+	// engine.Verify, engine.OnMissionCompleted, and the findings-gate below
+	// are still live and used by the reaper/UI/gate wiring — but nothing
+	// calls engine.Run/Tick anymore. The repo-gate + control-gate (started
+	// below) are the daemon's primary running surface now.
+	log.Printf("missions: engine loaded as verification seed (Tick loop disabled; the gate is the primary surface)")
 
 	// healthBook infers per-agent health (working|idle|failing) from claim/
 	// complete/reclaim activity — see internal/brain/health.go (#72). Declared
@@ -1320,7 +1315,9 @@ func main() {
 	}
 	mux.Handle("/", uiHandler)
 
-	// Repo gate (merge gate): starts the poller (if configured + a jail
+	// Repo gate (merge gate) — THE DAEMON'S PRIMARY RUNNING SURFACE now that the
+	// mission Tick loop above is disabled. StartGate logs its own clear
+	// "gate: ENABLED/DISABLED" headline; starts the poller (if configured + a jail
 	// backend is available) and, only then, wires the read endpoint —
 	// GET /api/gate/run — behind the EXACT SAME auth wrapper (verifier.Wrap
 	// + authz) every other /api/* route uses, so a stored gate run is no
@@ -1333,9 +1330,11 @@ func main() {
 		mux.Handle("/api/gate/run", verifier.Wrap(authz(brain.GateRunHandler(gateStore))))
 	}
 
-	// Control gate: same StartX pattern as the repo gate above, but v1 has
-	// no read endpoint yet (Task 6 wires `corral control` CLI dispatch).
-	// Degrade-never-block: log and continue rather than failing brain startup.
+	// Control gate — the other half of the daemon's primary surface. Same StartX
+	// pattern as the repo gate above (its own "control-gate: ENABLED/DISABLED"
+	// headline log), but v1 has no read endpoint yet (Task 6 wires `corral
+	// control` CLI dispatch). Degrade-never-block: log and continue rather than
+	// failing brain startup.
 	if _, _, cerr := brain.StartControlGate(context.Background(), brainOpts); cerr != nil {
 		log.Printf("control-gate: %v", cerr)
 	}

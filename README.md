@@ -5,18 +5,29 @@
 [![docs](https://img.shields.io/badge/docs-corralai.dev-2f6f4e)](https://corralai.dev/docs/getting-started/)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/pdbethke/corralai/badge)](https://securityscorecards.dev/viewer/?uri=github.com/pdbethke/corralai)
 
-> **One directive → a herd of AI agents that plan, build, verify, and re-plan** —
-> across any model (local 7B to frontier), behind real fences, human-gated, with
-> every run recorded and replayable.
+> **A true audit for software change** — an adversarial, role-separated herd of AI
+> agents certifies a change **by execution** (not opinion), across any model (local
+> 7B to frontier), behind real fences, human-gated, with every run recorded and
+> replayable.
 
-**Coordinated multi-agent, multi-model.** Give a headless brain one directive —
-*"build me a World Cup scores dashboard"* — and it turns it into a mission that a
-team of AI agents plans, builds, verifies, **re-plans when they hit problems**, and
-**iterates with the client** until it's accepted. The agents can be *different
-models* — a Claude builder, a Gemini reviewer, a local model for the cheap passes —
-all coordinating through one brain, behind real fences. All watchable live.
+**Corral is re-focusing from a builder to a reactive audit / certification gate —
+the CISO's tool, not another way to generate code.** The build-from-directive path
+("give the brain a directive and a herd builds it") has been **retired**; see the
+design spec
+[`docs/superpowers/specs/2026-07-13-corral-refocus-audit-not-builder-design.md`](docs/superpowers/specs/2026-07-13-corral-refocus-audit-not-builder-design.md)
+for the full reasoning. What's actually running today: a headless brain daemon
+whose primary surface is its **gate** — a repo (merge) gate and a control gate that
+poll open PRs, run checks **in a jail** (never trusting a self-report), and post a
+signed `corral/gate` / `corral/control-gate` status that branch protection can
+require. The mission engine that used to drive a build-and-iterate loop is still in
+the codebase, but its Tick loop is **not started** — it's retained, dormant, as the
+seed for the next slice: an adversarial verification engine (staffed with
+security/correctness/exploit-hunting roles instead of coder/builder roles) rather
+than a code-generation one. A standalone `corral certify <change>` CLI and the
+staffed adversarial-verification flow described in the spec are **designed, not yet
+built** — don't expect them from this README; this is the honest floor.
 
-Four things make it different from the pile of agent-swarm demos:
+What still stands from the original build:
 
 1. **It's multi-model, not just multi-agent.** Most swarm frameworks run one LLM in
    N roles — parallelism with *correlated* blind spots, because the "reviewer"
@@ -25,88 +36,60 @@ Four things make it different from the pile of agent-swarm demos:
    becomes genuinely **adversarial and decorrelated — cross-model review by
    construction**. No lock-in: bring Claude, Gemini, GPT, anything
    OpenAI-compatible, or a local model.
-2. **It's adaptive, over a shared memory.** No central orchestrator drives the
-   agents step-by-step. The brain holds the shared state — a task queue, path
-   claims, findings, and a **persistent, searchable memory** — and the agents pull
-   work, coordinate through it, and *reshape the plan as they learn*. What one agent
-   learns it writes back to the shared memory (trust-tiered, so unvetted notes can't
-   pose as authoritative), so knowledge **compounds across agents, models, and
-   missions** instead of dying with each throwaway context. A high-severity finding
-   rewrites the plan; a client rejection opens the next sprint.
-3. **It's built to be contained.** Autonomous agents that write and run code are a
+2. **It's built to be contained.** Autonomous agents that write and run code are a
    security problem. Corralai starts from *"an agent can be hijacked"* and answers
    it structurally: every agent runs behind **fences** (jails, a credential
    boundary, sandboxed queries, trust-tiered knowledge), and because all traffic
    funnels through the brain, every agent action is **recorded and attributable**.
    Prevention *and* forensics — see **[SECURITY.md](SECURITY.md)**, which points at
    the adversarial tests you can run yourself to check the claims.
-4. **It certifies by execution, not opinion.** Most swarms "verify" by asking a
-   model *"does this look done?"* — or just trust the builder's own report.
-   Corralai's gate **runs the actual check** (`go test`, the build) itself and
-   reads the exit code; a mission doesn't converge until a *real, recorded run*
-   passes. The correctness call is a deterministic bit, not a judgment — **a judge
-   may not certify herself**. Calls that genuinely can't be reduced to pass/fail
-   (taste, architecture) go to a **human gate**. That's the line between "AI that
-   *says* it's done" and "AI you can *check*."
+3. **It certifies by execution, not opinion.** The repo gate and control gate
+   **run the actual check** (`go test`, the build, the control owner's vetted
+   tests) themselves, in the jail, and read the exit code — never a worker's
+   self-report. The correctness call is a deterministic bit, not a judgment —
+   **a judge may not certify herself**. That's the line between "AI that *says*
+   it's done" and "AI you can *check*."
 
 The name is the metaphor: the **corral** is the enclosure agents work in, the
 **fences** are the security boundaries, and the brain corrals a herd of (possibly
 different) models — it coordinates and contains, it doesn't do the work itself.
 
-> **Where it's at:** v0.1, solo-maintained, and tested honestly — every demo claim
-> in this README was run before it was written, and the
+> **Where it's at:** v0.1, solo-maintained, mid re-focus, and tested honestly —
+> every claim in this README was run before it was written, and the
 > [open threads](docs/DESIGN.md#open-threads-next) name what's still rough. Issues
 > and verified-harness PRs are welcome.
 
-## The adaptive loop
+## What runs today
 
-A directive becomes a mission; the brain decomposes it into a dependency-ordered
-task **queue**; the agents **pull** ready tasks and execute them; their
-**structured findings** feed a two-tier re-planner; the mission **converges** when
-the client accepts.
+**The gate is the primary surface, not a mission loop.** The build-from-directive
+mission loop described in older write-ups of this project — a directive becomes a
+mission, a dev-team of roles builds it phase by phase, the brain commits and opens
+a PR, review feedback reopens a sprint — has been **retired**. The mission engine
+(`internal/mission`) that used to drive that loop still exists in the codebase —
+its dependency-ordered task queue, findings, and the human-gated needs-review path
+are retained as the seed for the next slice — but its Tick loop is **not started**
+by the daemon. What the daemon actually runs continuously:
 
-```
- CLIENT (you, or a modeled product-owner agent)
-   │ directive ↓                 ↑ accept / feedback → next sprint
-   ▼                             │
- LEAD ── research → design → build-core → build → test ∥ secops ∥ perf → integrate → docs → retro
- (orchestrates,        the dev team (one role per phase)
-  re-plans, reworks)          SCRUM (standups · stall call-outs · nudges)
-   └── findings → reflex fix+verify  ∥  lead supersede / re-architect → converge
-```
+- **The repo gate (merge gate).** A poller watches each covered repo's open PRs;
+  on a new head commit it checks the PR out, runs the repo's declared check **in
+  the bwrap jail** (never a self-report), signs the result, and posts a
+  `corral/gate` status that branch protection can require.
+- **The control gate.** The same poll-and-jail pattern, but it runs the **control
+  owner's** independently-vetted tests against the PR head (not the repo's own
+  check) and posts a distinct `corral/control-gate` status — the person
+  accountable for code they didn't write sets the bar.
+- **Multi-forge primitives** (`internal/repo`) back both gates: clone, checkout,
+  commit/push, and PR/review calls against **GitHub, GitLab, and Gitea**, including
+  self-hosted instances (`CORRALAI_FORGES` maps a host to its type, API base, and
+  token) — each forge's token stays isolated to its own host.
 
-- **A whole dev team, modeled as roles:** researcher · designer · builder ·
-  tester · pentester · perf · integrator · writer · reviewer · lead · client ·
-  **scrum master** (a deterministic standup tier — narrates progress in the live
-  console, names stalled claims, nudges their holders; the brain's reclaim rules
-  stay the enforcement floor).
-- **Two-tier re-planning:** a *reflex* tier deterministically spawns fix +
-  re-verify tasks for high-severity findings; an *LLM lead* tier handles judgment
-  — superseding stale work, reopening done work, re-architecting — with full task
-  lineage. Convergence is bounded (caps + loop-until-dry).
-- **Sprints + client feedback:** review-enabled missions await client acceptance;
-  feedback opens the next sprint (a human via the UI / `corral-admin`, or an
-  autonomous client agent).
-- **Live Progress tab** — watch the plan fill in, agents claim steps, findings
-  appear, and the plan get rewritten, in real time (SSE).
+The **staffing** system (role→agent/model assignment, dependency-aware dispatch)
+is retained and re-pointed at verifier roles for the next slice, rather than
+coder/builder roles — see the design spec linked above for where that's headed.
 
-## What it does
+## Learn together — a shared memory
 
-**Ship real code.** A repo-work mission clones a target repository, the agents
-work in an isolated snapshot, the brain commits their changes to a branch and
-**opens a pull request** — then watches for review. A `CHANGES_REQUESTED` review
-(or, on GitLab, an unresolved discussion) automatically enqueues rework tasks and
-the loop continues until the PR is approved.
-
-- **Multi-forge:** the same engine targets **GitHub, GitLab, and Gitea**,
-  including self-hosted instances (`CORRALAI_FORGES` maps a host to its type, API
-  base, and token). The forge is selected by the repo's host; each forge's token
-  stays isolated to its own host.
-- **Semantic code index** — a per-mission index over the target repo (symbol-aware
-  chunking via tree-sitter across 12 languages) gives the agents BM25 + vector
-  code search so they ground changes in the real code, not guesses.
-
-**Learn together — a shared memory.**
+**A shared memory the whole herd reads and writes.**
 
 - **Shared memory** (DuckDB, full-text + optional HNSW vector) — a multi-tier,
   searchable corpus the *whole swarm* reads and writes; the source of truth is plain
@@ -136,7 +119,13 @@ the loop continues until the PR is approved.
   [`using-corralai`](skills/using-corralai/SKILL.md) skill that teaches any coding
   agent to drive the herd.
 - **Reference RAG — upload your own grounding material** (text · URLs · **PDFs**); it's chunked and **vector-embedded** (any OpenAI-compatible embedding endpoint, so it's never tied to one machine) for agents to query. Runs on **embedded DuckDB — no Postgres, no separate vector database to operate**.
-- **Compose the herd — per mission.** A visual **Mission Composer** lets you build each mission's team before you launch it: drag a model/agent onto each role, pick which **MCP endpoints** the herd may consume, and attach **lookbook** design directives. The choices are stored *per mission* — its own role→agent map, endpoints, and lookbook — and injected into the herd's task instructions, so every mission carries its own team and context instead of a single global default.
+- **Compose the herd — per mission.** A visual **Mission Composer** builds a
+  mission's team — drag a model/agent onto each role, pick which **MCP
+  endpoints** the herd may consume, and attach **lookbook** design directives —
+  and persists the choice (role→agent map, endpoints, lookbook) for the mission.
+  With mission creation retired as a build verb, this is retained wiring rather
+  than a live "launch a build" flow; it's staged to re-point at composing a
+  *verification* team for the next slice.
 - **Swarm Design Lookbook:** A premium cockpit interface for uploading design screenshot mockups (PNG/JPEG) alongside visual layout guidelines. Built-in **one-click prompt emulation** makes it effortless to copy styling guidelines and instruct coding agents to match the exact look and feel of mockups.
 - **Go-Native Headless Browser:** Built-in headless browser MCP tools powered by `github.com/go-rod/rod` compile directly into the Go binary. Swarm agents can statefully navigate, click, input text, and take screenshots of running web applications natively inside Docker or on host systems, with **zero Node.js or Playwright installation required**.
 
@@ -282,15 +271,13 @@ the short version is three pillars:
   single trusted egress — the brain records every consequential action, attributed
   to a verified principal. Agents can't forge or erase their own trail; the subject
   of the record doesn't control the ledger.
-- **Egress control (the exit).** The output is vetted before it ships. Right before
-  the brain pushes the herd's branch and opens a PR, it scans the mission's
-  *cumulative* changed files for committed **secrets** (API-key/token/private-key
-  patterns) — a match is **blocking**: the push is withheld, a critical finding is
-  filed, and the mission is parked. New or vulnerable dependencies and license
-  conflicts are flagged (advisory). Crucially this runs on **every forge** — the
-  floor GitHub's own secret-scanning doesn't cover on GitLab or self-hosted Gitea.
-  So containment is complete: the agents are bounded on the way *in* (the jail),
-  and their output is vetted on the way *out*.
+- **Egress control (the exit).** The mission engine's egress scanner (committed
+  **secrets** are blocking; new/vulnerable deps and license conflicts are
+  advisory) is retained in the codebase as part of the verification-engine seed,
+  but with the mission Tick loop disabled it isn't wired into a running pipeline
+  today. The gates cover the exit path that *is* live: the repo gate and control
+  gate run their checks in the jail before signing a status, so nothing merges
+  on an unverified report.
 - **Isolated & Secure Artifacts Storage.** Rather than mixing task outputs (like agent-captured screenshots or files) into the primary queue database, Corralai decouples them into an isolated `corralai_task_artifacts.sqlite3` database. Uploads are strictly validated via multiple security gates: verifying that the uploading agent holds an active lease on the target task, running magic byte inspection to enforce a strict MIME allowlist (blocking malicious executable/HTML scripts), restricting size to 5MB, and sanitizing paths to prevent directory traversal.
 - **Portable, secure key storage.** Provider API keys (OpenAI, Gemini, Anthropic, OpenRouter, …) and the worker token never sit in plaintext or leak into a process listing. `corral secret set NAME` reads the value from **stdin, never a CLI argument** (so it can't leak in `ps` or shell history), and the embedded keystore resolves each secret through **env var → OS keyring → an age-encrypted file** — your OS keychain on a desktop, an age-encrypted store on a headless server (the encryption identity fails closed and is protected by a systemd credential or a `0600` key, never plaintext beside the store). Every log and error redacts secret values to a fingerprint; nothing is embedded in the binary. It's the GCP-ADC pattern, shipped in the one binary.
 

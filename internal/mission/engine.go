@@ -151,13 +151,6 @@ type Engine struct {
 	// indexing (search is an aid, not a gate — never blocks Tick).
 	Index Indexer
 
-	// OnFindingResolved, when non-nil, fires whenever the ENGINE transitions a
-	// finding (the reflex re-planner auto-addressing one). The caller wires it
-	// to telemetry so engine-side resolutions land in the same event log as the
-	// resolve_finding MCP tool — without this, model_comparison counts every
-	// reflex-addressed finding as still open.
-	OnFindingResolved func(f queue.Finding, outcome string)
-
 	// OnMissionCompleted, when non-nil, fires whenever the ENGINE (not the
 	// human-gate resolve path — see mission.ResolveNeedsReview's caller)
 	// transitions a mission to a terminal state ("done", or "failed" via the

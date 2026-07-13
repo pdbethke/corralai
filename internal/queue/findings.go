@@ -85,23 +85,6 @@ func (s *Store) AddFinding(f Finding) (int64, error) {
 	return res.LastInsertId()
 }
 
-// OpenRemediationExists reports whether the mission already has an in-flight
-// (not yet done) reflex fix task for a finding of this type+target. The reflex
-// re-planner uses it to deduplicate recurring findings: nine reports of the
-// same broken go.mod should ride ONE fix/re-verify pair, not spawn nine.
-// Reflex task keys are finding-id-scoped ("fix-f<ID>"), so the finding table
-// links a remediation task back to the type+target it was spawned for.
-func (s *Store) OpenRemediationExists(missionID int64, ftype, target string) (bool, error) {
-	var n int
-	err := s.db.QueryRow(
-		`SELECT COUNT(*) FROM tasks t
-		 JOIN findings f ON t.key = 'fix-f' || f.id AND t.mission_id = f.mission_id
-		 WHERE t.mission_id=? AND f.type=? AND f.target=? AND t.status != ?`,
-		missionID, ftype, target, StatusDone,
-	).Scan(&n)
-	return n > 0, err
-}
-
 // Findings lists a mission's findings, newest first; empty status = all.
 func (s *Store) Findings(missionID int64, status string) ([]Finding, error) {
 	q := findingsSelect + ` WHERE mission_id=?`

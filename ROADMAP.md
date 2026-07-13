@@ -6,6 +6,16 @@
 > [`docs/superpowers/notes/2026-07-05-corral-as-an-operator-system.md`](docs/superpowers/notes/2026-07-05-corral-as-an-operator-system.md).
 > No dates — priorities shift with what real use surfaces.
 
+> **Re-focus in progress (2026-07-13):** corral is retiring the build-from-directive
+> path and re-centering on being a **reactive audit / certification gate** — the
+> CISO's tool, not another builder. Full reasoning:
+> [`docs/superpowers/specs/2026-07-13-corral-refocus-audit-not-builder-design.md`](docs/superpowers/specs/2026-07-13-corral-refocus-audit-not-builder-design.md).
+> Below, items describing the old build-and-iterate loop are marked **[retired]**;
+> everything else in "Shipped" is accountability/gate infrastructure carried
+> forward as-is. Honesty note: the `corral certify <change>` CLI and the staffed
+> adversarial-verification flow the spec describes are **design, not shipped** —
+> only the repo gate + control gate (below) actually run today.
+
 Corral's arc is from *impressive demo* to *usable system* — the environment where
 you **run a team of AI agents across any model**. The foundations are already in
 place (per-action attribution, the jail + human gate, the learning loop, durable
@@ -19,8 +29,12 @@ sharing lends the *capability* and holds the *credential*, and the core stays on
 Go binary.**
 
 ## Shipped
-- The adaptive loop: a directive → a mission → the herd builds → verifies against
-  a deterministic gate → re-plans on findings → converges
+- **[retired]** ~~The adaptive loop: a directive → a mission → the herd builds →
+  verifies against a deterministic gate → re-plans on findings → converges~~ — the
+  build-from-directive loop is retired (see the re-focus note above). The mission
+  engine's lifecycle plumbing (dependency-ordered queue, findings, human-gated
+  needs-review) is retained in the codebase as a dormant seed for an adversarial
+  *verification* engine; its Tick loop is not started by the daemon today.
 - The learning loop (findings → human-approved skills) behind the human gate
 - Multi-model, multi-forge; the `bwrap` jail; the attributed action ledger
 - Mission history + read-only replay; the corralai.dev site + recordings gallery
@@ -33,12 +47,14 @@ Go binary.**
   paths the herd touched, filling in as the tape plays; and **one scrub bar drives
   the whole cockpit** — canvas, progress, and files — through the same moment in
   time. Filter the console per agent. Watch the herd **think**, not just move.
-- **Egress scan** — the herd's output is vetted before it ships (committed secrets
-  are *blocking*; new/vulnerable deps and license conflicts are advisory), on any
-  forge — containment on the way *out*, not just the way in.
-- **Complexity-aware planning** + **multi-role workers** — the plan scales to the
-  task (no nine-role ceremony for a one-liner), and a small herd covers every role
-  without deadlocking.
+- **[retired — code retained, not wired]** Egress scan — the mission engine's
+  scanner (committed secrets *blocking*; new/vulnerable deps and license
+  conflicts advisory) is still in the codebase but has no running caller now that
+  the Tick loop is disabled. The gates (below) are the live exit-side control.
+- **[retired]** ~~Complexity-aware planning~~ — the build-plan sizer this
+  described was deleted with the build path. **Multi-role workers** (a small
+  herd covering every role without deadlocking) is retained — staffing is
+  re-pointed at verifier roles, not deleted.
 - **Model×role telemetry** — the brain computes each model's per-role performance
   (sample-weighted, honest about thin data) and infers per-agent health from the
   attributed ledger — the data layer the leaderboard and self-staffing read from.

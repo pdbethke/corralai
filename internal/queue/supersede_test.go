@@ -73,6 +73,28 @@ func TestSupersedeTaskLineage(t *testing.T) {
 	}
 }
 
+// The dependents read and the supersede rewrite must share one transaction
+// (the read-decide-write is atomic): every former dependent is rewritten to
+// the replacement key and none is left orphaned on the superseded key.
+func TestSupersedeReadsDependentsInTx(t *testing.T) {
+	s := open(t)
+	seedPipeline(t, s) // build-core -> build -> {test, docs}
+	old := taskByKey(t, s, "build")
+	newID, err := s.SupersedeTask(old.ID, TaskSpec{Key: "build-v2", Role: "coder", Title: "rebuild", Instruction: "x"})
+	if err != nil || newID == 0 {
+		t.Fatalf("supersede: %v", err)
+	}
+	// every former dependent of 'build' now depends on 'build-v2', none orphaned on 'build'
+	for _, k := range []string{"test", "docs"} {
+		d := taskByKey(t, s, k)
+		for _, dep := range d.DependsOn {
+			if dep == "build" {
+				t.Fatalf("%s still depends on superseded 'build' — orphaned", k)
+			}
+		}
+	}
+}
+
 func TestSupersedeRewritesPendingDependents(t *testing.T) {
 	s := open(t)
 	// ui depends on build; the lead supersedes build → ui must now wait on the

@@ -11,7 +11,7 @@ We could not answer "what is `create_mission` for?" without four plausible answe
 
 Every component we built is already an **accountability instrument**; we had dis-integrated them into buckets:
 
-- **swarm / role-based agents** → accountable verification (role-*separated*, so no one certifies their own work)
+- **herd / role-based agents** → accountable verification (role-*separated*, so no one certifies their own work)
 - **recordings / replay** → the tamper-evident, re-watchable **evidence** of exactly what was checked and how
 - **`certify` / `certverify` / `transparency` / `attest`** → the **signed, hash-chained, independently-verifiable** record (verified against an *external* anchor, so even the org running corral can't forge it; optional Rekor witness)
 - **scrub pipeline** → the record is **shareable** — deny-list + human-review manifest strips the org's secrets/paths/actors so it can go to an outside auditor
@@ -24,7 +24,7 @@ Nothing here is mish-mosh. It was an **audit system** the whole time, wrapped ar
 
 ### Identity (locked)
 
-> **Corral is a true audit for software change.** The CISO's reactive, org-owned control point: swap the freeform "build me X" box for the org's change stream; turn an adversarial, role-separated agent swarm loose on every change — executing the owner's vetted controls *and* trying to break it; certify by execution what survives; emit a **signed, hash-chained, independently-verifiable, scrubbable** record — *shareable evidence, not a trust-me log* — and gate the merge on it.
+> **Corral is a true audit for software change.** The CISO's reactive, org-owned control point: swap the freeform "build me X" box for the org's change stream; turn an adversarial, role-separated agent herd loose on every change — executing the owner's vetted controls *and* trying to break it; certify by execution what survives; emit a **signed, hash-chained, independently-verifiable, scrubbable** record — *shareable evidence, not a trust-me log* — and gate the merge on it.
 >
 > With a **developer plug-in layer** (shared standards, vetted controls, design conformance) that drives adoption and *enriches* the audit — every dev feature accountability-native, never a standalone dev product.
 >
@@ -34,12 +34,12 @@ Nothing here is mish-mosh. It was an **audit system** the whole time, wrapped ar
 
 - **We never win the builder race.** "Our herd builds it" is undifferentiated against Cursor/Devin/Copilot/Claude Code, who own distribution and models. Entering that race is losing it.
 - **Reactive is the high ground, not a downgrade.** Being *after* the builders makes corral **downstream of and agnostic to all of them** — it sits at the one chokepoint the org controls (the merge). Let them fight over who *writes* the code; corral certifies whatever they produce.
-- **The buyer is the control owner (CISO/compliance/audit), not the developer.** Budgeted, board-level, less-crowded market — and a tailwind that *strengthens every time the builders get better*: as AI floods machine-written code into every repo, "who wrote this and was it really checked?" becomes *nobody knows*, and a cryptographically true audit of an adversarial swarm's verdict is the one thing they can't get elsewhere and that SSDF/PCI/SOC2/FedRAMP actually want — **evidence, not attestation.**
+- **The buyer is the control owner (CISO/compliance/audit), not the developer.** Budgeted, board-level, less-crowded market — and a tailwind that *strengthens every time the builders get better*: as AI floods machine-written code into every repo, "who wrote this and was it really checked?" becomes *nobody knows*, and a cryptographically true audit of an adversarial herd's verdict is the one thing they can't get elsewhere and that SSDF/PCI/SOC2/FedRAMP actually want — **evidence, not attestation.**
 - **Signed = a category difference.** Everyone has logs ("trust me, this happened"). A signed, hash-chained, independently-verifiable record is *evidence* ("verify the signatures"). Scrubbable makes it safe to hand outside the building.
 
 ## The one change: eliminate the building part
 
-This is a re-**focus**, not a rewrite — we keep ~90% of what's built. **The building part is the only gravitational center**; it's what pulled the swarm toward "coders," memory toward "build context," recordings toward "demo," the whole thing toward "IDE." Remove it and every remaining component relaxes into accountability, because there's nothing else left for it to serve.
+This is a re-**focus**, not a rewrite — we keep ~90% of what's built. **The building part is the only gravitational center**; it's what pulled the herd toward "coders," memory toward "build context," recordings toward "demo," the whole thing toward "IDE." Remove it and every remaining component relaxes into accountability, because there's nothing else left for it to serve.
 
 ### Delete (the builder)
 - Build-from-directive: the freeform directive → plan → **herd-writes-the-code** flow.
@@ -50,13 +50,13 @@ This is a re-**focus**, not a rewrite — we keep ~90% of what's built. **The bu
 > This also **dissolves the security finding** that started the whole thread: an ungated "any authenticated agent can launch a build" verb doesn't exist in this world. Certification runs are triggered by the poller watching PRs or by the control owner — never by an arbitrary agent. `create_mission` isn't *gated*; it's *deleted*.
 
 ### Keep (already accountability) — re-pointed from *make* to *prove*
-- **Swarm / roles / staffing** — **staffing is retained wholesale**; the Sense→Judge→Clamp orchestration is untouched. Only the *roster* changes: roles flip from coder/builder to **security-breaker, correctness-reviewer, exploit-attempter, edge-hunter**. (Proven live: this session's own 6-pass, role-separated adversarial review found three real HIGHs in freshly-shipped code — that *is* the product.)
+- **Herd / roles / staffing** — **staffing is retained wholesale**; the Sense→Judge→Clamp orchestration is untouched. Only the *roster* changes: roles flip from coder/builder to **security-breaker, correctness-reviewer, exploit-attempter, edge-hunter**. (Proven live: this session's own 6-pass, role-separated adversarial review found three real HIGHs in freshly-shipped code — that *is* the product.)
 - **Gate-earned routing IS the staffing logic** (one of the "1–2 novel," and *stronger* in the audit frame): staffing routes each role to the agent/model that has **earned** it — the ones the **DuckDB leaderboard** shows catch real findings, efficiently. The gate produces the trust signal → DuckDB records efficiency/effectiveness → staffing consumes it → best-earned agents get the next certification. A compounding loop, not a side feature. **Lineage:** the route-to-the-fittest / continuous-re-evaluation idea is borrowed from **Sakana's Fugu** — but the differentiation (the field note "Fugu, and the knife it leaves unwashed") is that **corral's fitness signal is *gate-earned*: certified by execution and signed, not self-reported.** Same evolutionary routing, a *trustworthy* fitness underneath it.
 - **jail** (execute controls) · **certify/certverify/transparency/attest** (signed chain) · **recordings + scrub** (shareable evidence) · **control-gate poller + authoring/vetting loop** (the gate + the owner's controls) · **warehouse** (aggregate) · **gate-earned routing** (trust with a receipt) · **UI / replay-player / recordings gallery / cockpit** (audit **review** + **archive**, same pixels/new noun).
 
 ### Developer plug-in layer (accountability-native — the adoption + enrichment path)
 The two-sided play: CISO buys the gate top-down (mandate); devs plug in bottom-up (value) → land-and-expand. **Discipline test for every dev feature: does it serve the audit, or is it a standalone dev product?**
-- **Shared memory** → the org's *codified standards + accumulated findings* the swarm reviews against, growing *from* the gate. (✗ if it's "Confluence, but ours.")
+- **Shared memory** → the org's *codified standards + accumulated findings* the herd reviews against, growing *from* the gate. (✗ if it's "Confluence, but ours.")
 - **Shared skills** → a "skill" is a **vetted control / review procedure** the gate runs. (✗ if dev-productivity macros.)
 - **Lookbook** → the **design standard the gate certifies conformance to**. (✗ if an inspiration board.)
 
@@ -69,7 +69,7 @@ The input stops being **a unit of work-to-do** (a feature) and becomes **a unit 
 
 Because corral is reactive, headless, and not a workspace, its atom is a **command**:
 
-- **`corral certify <change>`** (a PR / commit / diff) → runs the adversarial swarm + the owner's vetted controls in the jail → emits a **signed, scrubbable audit record**. That is the whole unit. It runs in CI, a git hook, or a control owner's shell — **no server, no UI required.**
+- **`corral certify <change>`** (a PR / commit / diff) → runs the adversarial herd + the owner's vetted controls in the jail → emits a **signed, scrubbable audit record**. That is the whole unit. It runs in CI, a git hook, or a control owner's shell — **no server, no UI required.**
 - This is the proven **signed-attestation-CLI** model (cosign / trivy / syft): a CLI that emits independently-verifiable records, with an *optional* platform to aggregate. It's exactly the category "true audit for software change" belongs in.
 
 Two layers fall out cleanly:
@@ -89,7 +89,7 @@ This is already the plumbing: `certify` (DuckDB-native signed records) → `flee
 
 ## Open decisions (not resolved here)
 - **Brand/metaphor:** the corral/herd/wrangle **ranch** metaphor is a *builder* brand (extends to code identifiers per prior direction). An audit product may strain it. Reopen vs. leave — a real downstream call, deferred.
-- **Renames:** mission → *certification / audit-run*; herd → *swarm / panel*; directive → *the change under review*. Scope + timing TBD.
+- **Renames:** mission → *certification / audit-run*; directive → *the change under review*. Scope + timing TBD. **`herd`/corral/wrangle STAYS** — the ranch metaphor is reaffirmed (2026-07-13); the earlier "herd → swarm/panel" idea is dropped, and "swarm" is retired everywhere (metaphor violation).
 - **First implementation slice:** what to delete/re-point first (likely: elevate the control-gate poller to the primary surface, retire the build-mission path) — belongs in the implementation plan, not this doc.
 
 ## Non-goals (YAGNI)

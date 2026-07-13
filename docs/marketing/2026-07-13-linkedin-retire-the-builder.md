@@ -21,7 +21,7 @@ That's the gap. In the AI-code era you don't need another way to *write* code �
 A gate that sits *downstream* of every builder — human, Copilot, Cursor, Devin, doesn't matter — at the one chokepoint you actually control: the merge. It does one job:
 
 1. It doesn't *trust* a green. It **re-earns** it — by re-running the checks itself, in a sandbox, instead of taking a worker's word.
-2. It turns a **role-separated adversarial swarm** on the change — a security breaker, a correctness reviewer, an exploit-attempter, an edge-case hunter — because *a judge may not certify herself*, and one static check is not the same as something actively trying to break your diff.
+2. It turns a **role-separated adversarial herd** on the change — a security breaker, a correctness reviewer, an exploit-attempter, an edge-case hunter — because *a judge may not certify herself*, and one static check is not the same as something actively trying to break your diff.
 3. It emits a **signed, hash-chained, independently-verifiable record** of exactly what was checked and what survived — evidence you *verify*, not a log you *trust* — and **scrubbable**, so you can hand it to an outside auditor with your secrets stripped.
 4. It won't let the branch merge without it.
 

@@ -178,6 +178,69 @@ func TestMemoryEmbedOnBuildAndPreserve(t *testing.T) {
 	}
 }
 
+// TestMemoryEmbeddingWriteBackAtomic asserts the embedding write-back (audit
+// N+1: one UPDATE per row after Build's insert phase) lands atomically: every
+// row that should have an embedding gets one after the first Build, a second
+// Build re-embeds nothing (WHERE embedding IS NULL is empty), and both
+// entries remain retrievable via semantic search.
+func TestMemoryEmbeddingWriteBackAtomic(t *testing.T) {
+	embeds := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Input []string `json:"input"`
+		}
+		json.NewDecoder(r.Body).Decode(&in)
+		embeds += len(in.Input)
+		data := []map[string]any{}
+		for range in.Input {
+			data = append(data, map[string]any{"embedding": []float64{1, 0, 0}})
+		}
+		json.NewEncoder(w).Encode(map[string]any{"data": data})
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	writeEntry(t, dir, "e1", "d1", "proj", "body one")
+	writeEntry(t, dir, "e2", "d2", "proj", "body two")
+
+	s, err := Open(filepath.Join(dir, "m.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	s.SetEmbedder(embed.NewFor(srv.URL, "m", ""))
+
+	if _, err := s.Build([]string{dir}); err != nil {
+		t.Fatalf("first build: %v", err)
+	}
+	if embeds != 2 {
+		t.Fatalf("want 2 embed calls after first build, got %d", embeds)
+	}
+
+	var remaining int
+	if err := s.db.QueryRow("SELECT count(*) FROM mem WHERE embedding IS NULL").Scan(&remaining); err != nil {
+		t.Fatal(err)
+	}
+	if remaining != 0 {
+		t.Fatalf("want 0 rows with NULL embedding after first build, got %d", remaining)
+	}
+
+	if _, err := s.Build([]string{dir}); err != nil {
+		t.Fatalf("second build: %v", err)
+	}
+	if embeds != 2 {
+		t.Fatalf("second build re-embedded rows: total embed calls went to %d, want still 2", embeds)
+	}
+
+	hits, err := s.Search("body", "", "", 10, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 2 {
+		t.Fatalf("want both entries retrievable via search, got %d hits: %+v", len(hits), hits)
+	}
+}
+
 func TestMemoryNilEmbedderNoError(t *testing.T) {
 	dir := t.TempDir()
 	s, err := Open(filepath.Join(dir, "m.duckdb"))

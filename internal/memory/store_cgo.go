@@ -147,12 +147,20 @@ func (s *Store) buildLocked(dirs []string) (int, error) {
 			if vecs, err := s.embedder.Embed(texts); err != nil {
 				log.Printf("memory: embed %d entries: %v", len(texts), err)
 			} else {
-				for i, p := range paths {
-					if i < len(vecs) {
-						// #nosec G202
-						if _, err := s.db.Exec("UPDATE mem SET embedding = "+embed.VecLiteral(vecs[i])+"::FLOAT[] WHERE path = ?", p); err != nil {
-							log.Printf("memory: embedding UPDATE for %s: %v", p, err)
+				tx, err := s.db.Begin()
+				if err != nil {
+					log.Printf("memory: embedding tx begin: %v", err)
+				} else {
+					for i, p := range paths {
+						if i < len(vecs) {
+							// #nosec G202
+							if _, err := tx.Exec("UPDATE mem SET embedding = "+embed.VecLiteral(vecs[i])+"::FLOAT[] WHERE path = ?", p); err != nil {
+								log.Printf("memory: embedding UPDATE for %s: %v", p, err)
+							}
 						}
+					}
+					if err := tx.Commit(); err != nil {
+						log.Printf("memory: embedding tx commit: %v", err)
 					}
 				}
 			}

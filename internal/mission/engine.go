@@ -169,10 +169,10 @@ type Engine struct {
 	OnFindingResolved func(f queue.Finding, outcome string)
 
 	// OnMissionCompleted, when non-nil, fires whenever the ENGINE (not the
-	// review-accept path — see mission.SubmitReview's caller) transitions a
-	// mission to a terminal state ("done", or "failed" via the give-up backstop).
-	// The caller wires it to telemetry so an auto-completed
-	// mission speaks mission_completed the same way a reviewed one does at its
+	// human-gate resolve path — see mission.ResolveNeedsReview's caller)
+	// transitions a mission to a terminal state ("done", or "failed" via the
+	// give-up backstop). The caller wires it to telemetry so an auto-completed
+	// mission speaks mission_completed the same way a resolved one does at its
 	// own call site — mission.Store never imports telemetry, so this is the
 	// engine's half of that split.
 	OnMissionCompleted func(missionID int64, status string, reviewRounds int)
@@ -230,22 +230,6 @@ func NewEngine(m *Store, q *queue.Store) *Engine {
 		staffAttempts:         map[int64]int{},
 		staffGaveUp:           map[int64]bool{},
 	}
-}
-
-// hasOpenChangeRequests reports whether a mission has unaddressed client feedback
-// (change-request findings) — which keeps the engine from gating to
-// awaiting_review before the lead has turned that feedback into rework.
-func (e *Engine) hasOpenChangeRequests(missionID int64) bool {
-	fs, err := e.q.Findings(missionID, queue.FindingOpen)
-	if err != nil {
-		return false
-	}
-	for _, f := range fs {
-		if f.Type == "change-request" {
-			return true
-		}
-	}
-	return false
 }
 
 // blockingFindingOpen reports whether the mission has an open finding at or above
@@ -422,40 +406,31 @@ func (e *Engine) Tick() error {
 			e.checkNoProgress(&mi)
 			continue
 		}
-		// Queue drained. A review-enabled mission waits for the client to ACCEPT
-		// instead of auto-completing — but only once any open client feedback
-		// (change-request findings) has been turned into rework by the lead, so we
-		// don't re-gate before this sprint's feedback is acted on.
-		if mi.RequiresReview {
-			if !e.hasOpenChangeRequests(mi.ID) {
-				_ = e.m.SetMissionStatus(mi.ID, "awaiting_review")
-			}
-		} else {
-			// #42: a drained queue is not the same as a correct final state — a
-			// later edit can break an earlier per-task pass. Before converging, the
-			// brain re-runs the mission's verify commands against the FINAL working
-			// copy. On failure, hold the mission back (a loud finding drives the
-			// reflex re-planner) instead of shipping a broken tree.
-			if e.Verify != nil && !e.finalStateOK(&mi) {
-				continue
-			}
-			// A drained, verifying queue can still hold an open finding at/above the
-			// blocking severity that never became a task (reflexRules leaves
-			// design-flaw/note non-actionable). Rather than certify a result it knows
-			// still holds that defect, route to the human-gate `needs-review` terminal
-			// state — and do NOT push/PR. The human dismisses the finding (then
-			// ResolveNeedsReview converges it) or reworks. #findings-gate.
-			if e.blockingFindingOpen(mi.ID) {
-				_ = e.m.SetMissionStatus(mi.ID, "needs-review")
-				if e.OnMissionCompleted != nil {
-					e.OnMissionCompleted(mi.ID, "needs-review", mi.ReviewRounds)
-				}
-				continue
-			}
-			_ = e.m.SetMissionStatus(mi.ID, "done")
+		// Queue drained.
+		// #42: a drained queue is not the same as a correct final state — a
+		// later edit can break an earlier per-task pass. Before converging, the
+		// brain re-runs the mission's verify commands against the FINAL working
+		// copy. On failure, hold the mission back (a loud finding drives the
+		// reflex re-planner) instead of shipping a broken tree.
+		if e.Verify != nil && !e.finalStateOK(&mi) {
+			continue
+		}
+		// A drained, verifying queue can still hold an open finding at/above the
+		// blocking severity that never became a task (reflexRules leaves
+		// design-flaw/note non-actionable). Rather than certify a result it knows
+		// still holds that defect, route to the human-gate `needs-review` terminal
+		// state — and do NOT push/PR. The human dismisses the finding (then
+		// ResolveNeedsReview converges it) or reworks. #findings-gate.
+		if e.blockingFindingOpen(mi.ID) {
+			_ = e.m.SetMissionStatus(mi.ID, "needs-review")
 			if e.OnMissionCompleted != nil {
-				e.OnMissionCompleted(mi.ID, "done", mi.ReviewRounds)
+				e.OnMissionCompleted(mi.ID, "needs-review", mi.ReviewRounds)
 			}
+			continue
+		}
+		_ = e.m.SetMissionStatus(mi.ID, "done")
+		if e.OnMissionCompleted != nil {
+			e.OnMissionCompleted(mi.ID, "done", mi.ReviewRounds)
 		}
 	}
 	return nil

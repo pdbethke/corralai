@@ -1432,9 +1432,6 @@ function renderProgress(){
     const pillClass = m.status==='done'?'done':(m.status==='awaiting_review'?'review':'running');
     const pillText = m.status==='awaiting_review'?'review':m.status;
     const sprintBadge = (m.sprint>1) ? `<span class="psprint">sprint ${m.sprint}</span>` : '';
-    const reviewBar = (m.status==='awaiting_review')
-      ? `<div class="preview">awaiting your review<button class="acc" onclick="reviewMission(${m.id},true)">accept</button><button class="chg" onclick="reviewMission(${m.id},false)">request changes</button></div>`
-      : '';
     const summary = `${fmtDuration(m.duration_seconds)} · ${done}/${ts.length} tasks`
       + (sup ? ` (${sup} superseded)` : '')
       + (openF ? ` · ${openF} open finding${openF===1?'':'s'}` : '');
@@ -1447,7 +1444,7 @@ function renderProgress(){
     }).join('');
     const frows = fs.length ? '<div class="pfind">' + fs.slice().sort((a,b)=>(SEV_RANK[b.severity]??0)-(SEV_RANK[a.severity]??0)).map(f =>
       `<span class="pfrow"><b style="color:${sevColor(f.severity)}">${esc(f.severity)} ${esc(f.type)}</b> <span style="color:var(--fg)">${esc(f.target||'')}</span> <span style="color:#6b6452">· ${esc(displayName(f.reporter))} · ${esc(f.status)}</span></span>`).join('') + '</div>' : '';
-    return `<div class="pmission" onclick="openMissionDetail(${m.id})"><div class="phdr"><span class="ppill ${pillClass}">${esc(pillText)}</span><span class="pdir">${esc(m.directive)}</span>${sprintBadge}</div><div class="psum">${esc(summary)}</div>${reviewBar}<div class="psteps">${steps}</div>${frows}</div>`;
+    return `<div class="pmission" onclick="openMissionDetail(${m.id})"><div class="phdr"><span class="ppill ${pillClass}">${esc(pillText)}</span><span class="pdir">${esc(m.directive)}</span>${sprintBadge}</div><div class="psum">${esc(summary)}</div><div class="psteps">${steps}</div>${frows}</div>`;
   }).join('');
   el.innerHTML = missionsHtml;
 }
@@ -1780,18 +1777,6 @@ async function fetchAgentDetail(){
 }
 // Select an agent/subagent node by its full coordination name (from the tree list).
 function selectAgent(fn){ openAgentWindow(fn); }
-// reviewMission: the human client's verdict from the Progress tab — accept the
-// deliverable, or request changes (which opens the next sprint).
-function reviewMission(id, accept){
-  let feedback = '';
-  if(!accept){
-    feedback = prompt('What changes do you want for the next sprint?') || '';
-    if(!feedback.trim()) return;
-  }
-  fetch('/api/review', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({id, accept, feedback})})
-    .then(r => { if(!r.ok) return r.text().then(t => alert('review failed: ' + t)); });
-}
 function summ(d){ try{ const o=JSON.parse(d); if(o.summary) return o.summary;
   if(o.paths!=null) return (Array.isArray(o.paths)?o.paths.length+' path(s)':o.paths)+(o.conflicts?' · '+o.conflicts+' conflict':'');
   if(o.released!=null) return o.released+' released'; if(o.task) return o.task; return ''; }catch(_){ return ''; } }

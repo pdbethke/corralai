@@ -229,7 +229,6 @@ func Handler(d Deps) http.Handler {
 	mux.HandleFunc("/api/ask", s.ask)
 	mux.HandleFunc("/api/ask_fleet", s.askFleet)
 	mux.HandleFunc("/api/chatter", s.chatter)
-	mux.HandleFunc("/api/review", s.review)
 	mux.HandleFunc("/api/proposal/approve", s.proposalApprove)
 	mux.HandleFunc("/api/proposal/reject", s.proposalReject)
 	mux.HandleFunc("/api/history", s.history)
@@ -783,7 +782,7 @@ func (s *Server) prune(w http.ResponseWriter, r *http.Request) {
 
 // steer returns the handler for one of #58's mid-mission human-steering
 // verbs (pause/resume/cancel) — today's human gate was TERMINAL only
-// (proposalApprove/proposalReject/review) and mission creation was PRE-launch
+// (proposalApprove/proposalReject) and mission creation was PRE-launch
 // only; there was no way to intervene on a RUNNING mission. Each
 // verb is gated exactly like prune: a read-only observer token, or a
 // delegation/worker token, is refused — only a verified human superuser may
@@ -873,42 +872,6 @@ func (s *Server) instruct(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"id": id, "ok": true})
-}
-
-// review is the human client's verdict on a mission awaiting review: accept it
-// or request changes (which opens the next sprint). Read-only observers can't.
-func (s *Server) review(w http.ResponseWriter, r *http.Request) {
-	if auth.ReadOnly(r) {
-		http.Error(w, "forbidden: read-only observer cannot review", http.StatusForbidden)
-		return
-	}
-	if r.Method != http.MethodPost {
-		http.Error(w, "POST only", http.StatusMethodNotAllowed)
-		return
-	}
-	if s.missions == nil {
-		http.Error(w, "missions unavailable", http.StatusNotFound)
-		return
-	}
-	var body struct {
-		ID       int64  `json:"id"`
-		Accept   bool   `json:"accept"`
-		Feedback string `json:"feedback"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "bad json", http.StatusBadRequest)
-		return
-	}
-	reporter := auth.Principal(r.Context())
-	if reporter == "" {
-		reporter = "operator"
-	}
-	mv, err := mission.SubmitReview(s.missions, s.queue, body.ID, body.Accept, body.Feedback, reporter)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, mv)
 }
 
 // agentDetail returns what one agent sees: its recent activity (live work

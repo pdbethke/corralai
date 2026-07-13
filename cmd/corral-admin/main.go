@@ -72,8 +72,6 @@ func main() {
 		cmdFindings(rest)
 	case "resolve-findings":
 		cmdResolveFindings(rest)
-	case "review":
-		cmdReview(rest)
 	case "reference":
 		cmdReference(rest)
 	case "analyze":
@@ -534,38 +532,6 @@ func cmdResolveFindings(args []string) {
 	fmt.Printf("resolve-findings: done (%d/%d resolved)\n", resolved, n)
 }
 
-// ---- review (the human client's verdict) ----
-
-func cmdReview(args []string) {
-	fs := flag.NewFlagSet("review", flag.ExitOnError)
-	c := bind(fs)
-	accept := fs.Bool("accept", false, "accept the deliverable (mission done)")
-	changes := fs.String("changes", "", "request changes with this feedback (opens the next sprint)")
-	parseFlags(fs, args)
-	if fs.NArg() < 1 {
-		fatal(`usage: corral-admin review <mission-id> --accept | --changes "..."`)
-	}
-	id, err := strconv.ParseInt(fs.Arg(0), 10, 64)
-	if err != nil {
-		fatal("mission id must be a number: %v", err)
-	}
-	if !*accept && *changes == "" {
-		fatal(`specify --accept or --changes "..."`)
-	}
-	a := map[string]any{"id": id, "accept": *accept}
-	if !*accept {
-		a["feedback"] = *changes
-	}
-	c.do("review_mission", a, func(out json.RawMessage) {
-		var r struct {
-			Status string `json:"status"`
-			Sprint int64  `json:"sprint"`
-		}
-		_ = json.Unmarshal(out, &r)
-		fmt.Printf("✓ mission #%d is now %s (sprint %d)\n", id, r.Status, r.Sprint)
-	})
-}
-
 // ---- reference (the RAG corpus) ----
 
 func cmdReference(args []string) {
@@ -984,7 +950,6 @@ func usage() {
   corral-admin mint-observer [--ttl 24h] [--principal x]
   corral-admin member  list | add <email> | super <email> [--off] | create-super [email] | remove <email>
   corral-admin mission list | status <id> | pause <id> | resume <id> | cancel <id>
-  corral-admin review <id> --accept | --changes "..."
   corral-admin findings [--mission N] [--status open]
   corral-admin resolve-findings [--delay 2m] [--mission N] [--outcome addressed|dismissed]
   corral-admin reference add <url> | --file <path> | --text "..." --source <n> | list | search "<q>"

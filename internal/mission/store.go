@@ -412,59 +412,6 @@ func CancelMission(m *Store, q *queue.Store, id int64) (*Mission, error) {
 	return m.Mission(id)
 }
 
-// BumpSprint increments a mission's sprint counter (a new client-feedback round)
-// and returns the new sprint number.
-func (s *Store) BumpSprint(id int64) (int64, error) {
-	if _, err := s.db.Exec(`UPDATE missions SET sprint=sprint+1, updated_ts=? WHERE id=?`, now(), id); err != nil {
-		return 0, err
-	}
-	var sp int64
-	err := s.db.QueryRow(`SELECT sprint FROM missions WHERE id=?`, id).Scan(&sp)
-	return sp, err
-}
-
-// SprintCap bounds client-feedback rounds so a never-satisfied client can't loop
-// the swarm forever.
-const SprintCap = 5
-
-// SubmitReview applies a client verdict on a mission. Accept completes it;
-// otherwise the feedback becomes a change-request finding (which the lead routes
-// into the next sprint's rework), the sprint bumps, and the mission returns to
-// running. Shared by the review_mission MCP tool and the UI's /api/review.
-func SubmitReview(m *Store, q *queue.Store, id int64, accept bool, feedback, reporter string) (*MissionView, error) {
-	mi, err := m.Mission(id)
-	if err != nil || mi == nil {
-		return nil, fmt.Errorf("no mission %d", id)
-	}
-	if accept {
-		if err := m.SetMissionStatus(id, "done"); err != nil {
-			return nil, err
-		}
-	} else {
-		if mi.Sprint >= SprintCap {
-			return nil, fmt.Errorf("sprint cap (%d) reached for mission %d — accept it or revise the directive", SprintCap, id)
-		}
-		if reporter == "" {
-			reporter = "client"
-		}
-		if q != nil {
-			if _, err := q.AddFinding(queue.Finding{
-				MissionID: id, Reporter: reporter, Type: "change-request", Severity: "high",
-				Target: "deliverable", Evidence: feedback, SuggestedAction: "address the client's feedback",
-			}); err != nil {
-				return nil, err
-			}
-		}
-		if _, err := m.BumpSprint(id); err != nil {
-			return nil, err
-		}
-		if err := m.SetMissionStatus(id, "running"); err != nil {
-			return nil, err
-		}
-	}
-	return m.View(id, q)
-}
-
 // ResolveNeedsReview is the human-gate resolution path for a mission the
 // convergence findings-gate parked at "needs-review" (see
 // Engine.blockingFindingOpen). The human reviews the open critical/high

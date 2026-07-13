@@ -30,22 +30,6 @@ func oneTask() []PhaseSpec {
 	return []PhaseSpec{{Name: "build", Role: "builder", Instruction: "build it"}}
 }
 
-func TestReviewGateAwaitsAcceptance(t *testing.T) {
-	e, q, m := reviewSetup(t)
-	mid, err := CreateMission(m, q, "thing", oneTask(), true) // requires review
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Drain the work, then tick: a review mission parks at awaiting_review, NOT done.
-	e.Tick()
-	b, _ := q.ClaimNext("Bee", nil, 300)
-	q.Complete(b.ID, "Bee", "done")
-	e.Tick()
-	if mv, _ := m.Mission(mid); mv.Status != "awaiting_review" {
-		t.Fatalf("review mission should park at awaiting_review, got %q", mv.Status)
-	}
-}
-
 func TestNonReviewMissionAutoCompletes(t *testing.T) {
 	e, q, m := reviewSetup(t)
 	mid, _ := CreateMission(m, q, "thing", oneTask(), false) // no review
@@ -55,44 +39,6 @@ func TestNonReviewMissionAutoCompletes(t *testing.T) {
 	e.Tick()
 	if mv, _ := m.Mission(mid); mv.Status != "done" {
 		t.Fatalf("non-review mission should auto-complete, got %q (no regression)", mv.Status)
-	}
-}
-
-func TestReviewFeedbackOpensNextSprint(t *testing.T) {
-	e, q, m := reviewSetup(t)
-	mid, _ := CreateMission(m, q, "thing", oneTask(), true)
-	e.Tick()
-	b, _ := q.ClaimNext("Bee", nil, 300)
-	q.Complete(b.ID, "Bee", "done")
-	e.Tick() // -> awaiting_review
-
-	// Client requests changes: open a change-request, bump sprint, back to running
-	// (this is what the review_mission tool does).
-	cr, err := q.AddFinding(queue.Finding{MissionID: mid, Reporter: "client", Type: "change-request", Severity: "high", Evidence: "needs dark mode"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if sp, _ := m.BumpSprint(mid); sp != 2 {
-		t.Fatalf("sprint should be 2 after feedback, got %d", sp)
-	}
-	m.SetMissionStatus(mid, "running")
-
-	// The engine must NOT re-gate to awaiting_review while the change-request is
-	// open (the lead hasn't turned it into rework yet).
-	e.Tick()
-	if mv, _ := m.Mission(mid); mv.Status != "running" {
-		t.Fatalf("mission must stay running while client feedback is unaddressed, got %q", mv.Status)
-	}
-
-	// The lead addresses the feedback (resolves it + enqueues rework, then it's done).
-	q.SetFindingStatus(cr, queue.FindingAddressed)
-	q.Enqueue(mid, []queue.TaskSpec{{Key: "rework#1", Role: "builder", Title: "rework", Instruction: "dark mode"}})
-	e.Tick()
-	rw, _ := q.ClaimNext("Bee", nil, 300)
-	q.Complete(rw.ID, "Bee", "done")
-	e.Tick() // queue drained, no open change-request -> awaiting_review again
-	if mv, _ := m.Mission(mid); mv.Status != "awaiting_review" {
-		t.Fatalf("after the sprint's rework, mission should await review again, got %q", mv.Status)
 	}
 }
 

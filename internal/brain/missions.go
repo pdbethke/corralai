@@ -17,19 +17,13 @@ import (
 type missionIDIn struct {
 	ID int64 `json:"id"`
 }
-type reviewMissionIn struct {
-	ID       int64  `json:"id" jsonschema:"the mission to review"`
-	Accept   bool   `json:"accept" jsonschema:"true to accept the deliverable (mission done); false to request changes"`
-	Feedback string `json:"feedback,omitempty" jsonschema:"the change request when accept=false — what needs to be different"`
-}
-
 type listMissionsOut struct {
 	Missions []mission.Mission `json:"missions"`
 }
 
 // registerMissions adds the mission lifecycle tools: status/listing, the
-// client review + findings-gate resolution paths, and mid-mission human
-// steering (pause/resume/cancel). Mission creation (the former create_mission
+// findings-gate resolution path, and mid-mission human steering
+// (pause/resume/cancel). Mission creation (the former create_mission
 // build verb) is retired — missions are created via mission.CreateMission by
 // whatever slice-2 caller re-scopes that entry point. Available to any allowed
 // caller (the command surface); audited via the per-mission orchestrator.
@@ -56,28 +50,6 @@ func registerMissions(s *mcp.Server, store *mission.Store, q *queue.Store, mem *
 			return nil, listMissionsOut{Missions: ms}, err
 		})
 
-	mcp.AddTool(s, &mcp.Tool{Name: "review_mission",
-		Description: "Client review of a mission awaiting review: accept to complete it, or request changes with feedback — which opens a change-request the lead turns into the next sprint's rework. Used by the human operator or a client agent."},
-		func(_ context.Context, req *mcp.CallToolRequest, in reviewMissionIn) (*mcp.CallToolResult, mission.MissionView, error) {
-			mv, err := mission.SubmitReview(store, q, in.ID, in.Accept, in.Feedback, identity(req, "client"))
-			if err != nil {
-				return nil, mission.MissionView{}, err
-			}
-			kind := "review_changes"
-			if in.Accept {
-				kind = "review_accepted"
-			}
-			rec(tel, in.ID, kind, identity(req, "client"), "", nil)
-			if mv.Status == "done" {
-				rounds := 0
-				if full, ferr := store.Mission(in.ID); ferr == nil && full != nil {
-					rounds = full.ReviewRounds
-				}
-				rec(tel, in.ID, "mission_completed", "engine", "", map[string]any{"status": "done", "review_rounds": rounds})
-			}
-			return nil, *mv, nil
-		})
-
 	mcp.AddTool(s, &mcp.Tool{Name: "resolve_review",
 		Description: "Resolve a mission parked at needs-review: the convergence findings-gate withheld certification because an open critical/high finding never became a task. Dismiss or address those findings first (resolve_finding), then call this to certify the mission done. Refused while any blocking finding is still open — a judge may not certify a result it knows still holds a critical defect."},
 		func(_ context.Context, req *mcp.CallToolRequest, in missionIDIn) (*mcp.CallToolResult, mission.MissionView, error) {
@@ -101,7 +73,7 @@ func registerMissions(s *mcp.Server, store *mission.Store, q *queue.Store, mem *
 		})
 
 	// pause_mission / resume_mission / cancel_mission are #58's mid-mission
-	// human steering: today's human gate was TERMINAL only (review_mission,
+	// human steering: today's human gate was TERMINAL only (resolve_review,
 	// above) and mission creation was PRE-launch only — there was no
 	// way to intervene on a mission while it runs. Each is isHumanAdmin-gated
 	// exactly like approve_proposal/reject_proposal: a delegation/worker token

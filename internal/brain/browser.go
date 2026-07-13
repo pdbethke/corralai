@@ -216,7 +216,9 @@ func guardNavigateURL(raw, selfAddr string) error {
 		}
 		return nil
 	}
-	ips, err := lookupIP(context.Background(), host)
+	lookupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ips, err := lookupIP(lookupCtx, host)
 	if err != nil {
 		return fmt.Errorf("blocked: cannot resolve %q: %w", host, err)
 	}

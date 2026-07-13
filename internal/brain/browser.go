@@ -18,6 +18,7 @@ import (
 	"github.com/go-rod/rod/lib/proto"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/pdbethke/corralai/internal/netguard"
 	"github.com/pdbethke/corralai/internal/queue"
 	"github.com/pdbethke/corralai/internal/taskartifacts"
 )
@@ -85,22 +86,17 @@ var metadataHosts = map[string]bool{
 // test suite can inject a fake resolver — the suite does no real DNS.
 var lookupIP = net.DefaultResolver.LookupIPAddr
 
-// imdsLiterals are cloud instance-metadata (IMDS) IP literals that are NOT
-// caught by the link-local check: the Alibaba IMDS (100.100.100.100, a public
-// literal) and the AWS IPv6 IMDS (fd00:ec2::254, a unique-local address). The
-// canonical AWS/GCP/ECS IMDS (169.254.0.0/16) is already link-local, but the
-// well-known .254 is listed for clarity/defence-in-depth.
-var imdsLiterals = map[string]bool{
-	"169.254.169.254": true, // AWS / GCP / Azure IMDS (also link-local)
-	"100.100.100.100": true, // Alibaba Cloud IMDS
-	"fd00:ec2::254":   true, // AWS IPv6 IMDS
-}
-
 // metadataOrLinkLocal reports whether ip is a cloud-metadata (IMDS) or
 // link-local address the agent browser must never reach. It deliberately does
 // NOT flag loopback or private ranges — those stay allowed so a tester can
 // drive the app the herd just built on localhost. This is the browser-specific
 // predicate (narrower than netguard.UnsafeIP, which blocks loopback/private).
+//
+// The cloud-IMDS IP-literal set (Alibaba 100.64/10, AWS IPv6 ULA) is NOT kept
+// here — it is the single canonical set in internal/netguard, consulted via
+// netguard.IsIMDSLiteral, so browser and netguard can never drift. The
+// well-known 169.254.169.254 is a link-local address, caught by the predicate
+// below, not by the IMDS-literal set.
 func metadataOrLinkLocal(ip net.IP) bool {
 	if ip == nil {
 		return false
@@ -108,11 +104,7 @@ func metadataOrLinkLocal(ip net.IP) bool {
 	if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
 		return true
 	}
-	// Normalise to the canonical string form for the literal set.
-	if imdsLiterals[ip.String()] {
-		return true
-	}
-	return false
+	return netguard.IsIMDSLiteral(ip)
 }
 
 // blockedHost reports whether host (a hostname or IP literal, no port) is an
@@ -123,13 +115,14 @@ func metadataOrLinkLocal(ip net.IP) bool {
 // separately, by host:port (see isBrainAddr).
 func blockedHost(host string) bool {
 	h := strings.ToLower(strings.TrimSuffix(host, "."))
-	if metadataHosts[h] || h == "100.100.100.100" /* Alibaba IMDS */ {
+	if metadataHosts[h] {
 		return true
 	}
+	// An IP-literal host: reuse the shared metadata/link-local predicate so the
+	// Alibaba/AWS IMDS literals come from netguard's single source (no divergent
+	// per-host string check to drift).
 	if ip := net.ParseIP(h); ip != nil {
-		if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
-			return true
-		}
+		return metadataOrLinkLocal(ip)
 	}
 	return false
 }

@@ -43,15 +43,34 @@ func (g *Guard) AllowCount() int {
 	return len(g.allow)
 }
 
-// imdsLiterals are cloud instance-metadata (IMDS) IP literals not otherwise
-// caught by the private/link-local checks. The Alibaba IMDS 100.100.100.100 is
-// a PUBLIC 100.64/10 (CGNAT) literal — Go's net.IP.IsPrivate() does NOT cover
-// 100.64/10, so without this it would dial. The AWS IPv6 IMDS fd00:ec2::254 is
-// a unique-local address already flagged by IsPrivate(); it is listed for
-// clarity/defence-in-depth. Mirrors the browser's imdsLiterals set.
+// imdsLiterals is the CANONICAL cloud instance-metadata (IMDS) IP-literal set:
+// the addresses not otherwise caught by the private/link-local checks. The
+// Alibaba IMDS 100.100.100.100 is a PUBLIC 100.64/10 (CGNAT) literal — Go's
+// net.IP.IsPrivate() does NOT cover 100.64/10, so without this it would dial.
+// The AWS IPv6 IMDS fd00:ec2::254 is a unique-local address already flagged by
+// IsPrivate(); it is listed for clarity/defence-in-depth. The well-known
+// 169.254.169.254 (AWS/GCP/Azure/ECS) is deliberately NOT here — it is already a
+// link-local address, so both consumers catch it via their link-local predicate.
+//
+// This is the single source of truth: netguard.UnsafeIP consults it below, and
+// internal/brain's browser predicate consults it via IsIMDSLiteral (there is no
+// second, divergent copy).
 var imdsLiterals = []net.IP{
 	net.ParseIP("100.100.100.100"), // Alibaba Cloud IMDS
 	net.ParseIP("fd00:ec2::254"),   // AWS IPv6 IMDS
+}
+
+// IsIMDSLiteral reports whether ip is one of the canonical cloud-IMDS IP literals
+// (Alibaba 100.64/10, AWS IPv6 ULA) not caught by the standard private/link-local
+// predicates. It is the shared source both netguard and the agent browser consult
+// so the two never drift out of sync.
+func IsIMDSLiteral(ip net.IP) bool {
+	for _, imds := range imdsLiterals {
+		if imds != nil && imds.Equal(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // UnsafeIP reports whether ip is loopback, private, unspecified, link-local
@@ -63,12 +82,7 @@ func UnsafeIP(ip net.IP) bool {
 		ip.IsInterfaceLocalMulticast() {
 		return true
 	}
-	for _, imds := range imdsLiterals {
-		if imds != nil && imds.Equal(ip) {
-			return true
-		}
-	}
-	return false
+	return IsIMDSLiteral(ip)
 }
 
 // DialContext resolves the host, rejects private/loopback/link-local targets

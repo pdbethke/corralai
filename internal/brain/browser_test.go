@@ -60,6 +60,31 @@ func fakeResolver(t *testing.T, m map[string][]string) {
 	}
 }
 
+// TestMetadataOrLinkLocal proves the browser predicate stays COMPLETE after the
+// IP-literal set was moved to netguard (F2 DRY): the Alibaba/AWS-IPv6 IMDS
+// literals come from netguard.IsIMDSLiteral, link-local (incl. 169.254.169.254)
+// from the local predicate, and loopback/private/public stay allowed so a tester
+// can drive the app on localhost.
+func TestMetadataOrLinkLocal(t *testing.T) {
+	cases := []struct {
+		ip      string
+		blocked bool
+	}{
+		{"100.100.100.100", true}, // Alibaba IMDS — via shared netguard set
+		{"fd00:ec2::254", true},   // AWS IPv6 IMDS — via shared netguard set
+		{"169.254.169.254", true}, // AWS/GCP IMDS — link-local predicate
+		{"fe80::1", true},         // link-local unicast
+		{"127.0.0.1", false},      // loopback stays allowed (localhost testing)
+		{"10.0.0.5", false},       // private stays allowed
+		{"8.8.8.8", false},        // public
+	}
+	for _, c := range cases {
+		if got := metadataOrLinkLocal(net.ParseIP(c.ip)); got != c.blocked {
+			t.Errorf("metadataOrLinkLocal(%s)=%v want %v", c.ip, got, c.blocked)
+		}
+	}
+}
+
 func TestGuardNavigateURL(t *testing.T) {
 	const brain = "127.0.0.1:9019"
 	// Deterministic DNS: the key bypass is a public-DNS alias whose A record is

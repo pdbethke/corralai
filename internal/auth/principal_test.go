@@ -17,6 +17,7 @@ func TestPickPrincipal(t *testing.T) {
 		{"client_id namespaced for a service token", "", false, "", "corral-svc", "", "client:corral-svc"},
 		{"azp namespaced when only azp present", "", false, "", "", "corral-svc", "client:corral-svc"},
 		{"empty when nothing", "", false, "", "", "", ""},
+		{"client-prefixed preferred_username is untrusted, not returned bare", "", false, "client:svc-1", "", "", ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

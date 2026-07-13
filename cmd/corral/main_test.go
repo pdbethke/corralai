@@ -30,4 +30,13 @@ func TestInsecureBindRefused(t *testing.T) {
 	if err := insecureBindRefused(true, "0.0.0.0:9019", false); err != nil {
 		t.Fatalf("auth-on ok: %v", err)
 	}
+	// "localhost" literal is a loopback host name, not an IP, but is fine
+	if err := insecureBindRefused(false, "localhost:9019", false); err != nil {
+		t.Fatalf("localhost ok: %v", err)
+	}
+	// an unclassifiable hostname (not localhost, not a loopback IP literal)
+	// is refused conservatively — we can't prove it resolves to loopback
+	if err := insecureBindRefused(false, "some-internal-host:9019", false); err == nil {
+		t.Fatal("must refuse an unclassifiable hostname")
+	}
 }

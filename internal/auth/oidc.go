@@ -221,13 +221,17 @@ func (vf *Verifier) Count() int    { return len(vf.vs) }
 // (a verified email, else preferred_username) are returned bare; machine claims
 // (client_id/azp) are NAMESPACED as "client:<id>" so a service account can never
 // match a human email allowlist entry. An unverified email is not trusted.
-// The Authorizer's allowlist still gates whatever this returns, so an unlisted
-// client is rejected exactly like an unlisted email.
+// A preferred_username that itself starts with "client:" is rejected as a
+// human-controlled claim (never returned bare): honoring it would let a
+// human-issued token collide with the machine namespace and match a
+// service-account allowlist entry. It falls through to the machine claims
+// below instead. The Authorizer's allowlist still gates whatever this
+// returns, so an unlisted client is rejected exactly like an unlisted email.
 func pickPrincipal(email string, emailVerified bool, preferredUsername, clientID, azp string) string {
 	if email != "" && emailVerified {
 		return email
 	}
-	if preferredUsername != "" {
+	if preferredUsername != "" && !strings.HasPrefix(preferredUsername, "client:") {
 		return preferredUsername
 	}
 	if clientID != "" {

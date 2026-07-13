@@ -19,7 +19,7 @@
 //	corral-admin whoami                          # who the brain sees you as
 //	corral-admin mint-observer [--ttl 24h] [--principal x]
 //	corral-admin member  list | add <email> | super <email> [--off] | create-super [email] | remove <email>
-//	corral-admin mission list | status <id> | create <directive...> | pause <id> | resume <id> | cancel <id>
+//	corral-admin mission list | status <id> | pause <id> | resume <id> | cancel <id>
 //	corral-admin proposals list | show <id> | approve <id> | reject <id> --reason "..."
 //
 // Global flags (all verbs): --brain/CORRAL_BRAIN, --token/CORRAL_TOKEN, --json.
@@ -352,7 +352,7 @@ func memberArg(args []string, name string) (*conn, string) {
 
 func cmdMission(args []string) {
 	if len(args) == 0 {
-		fatal("usage: corral-admin mission <list|status|create|pause|resume|cancel> ...")
+		fatal("usage: corral-admin mission <list|status|pause|resume|cancel> ...")
 	}
 	sub, rest := args[0], args[1:]
 	switch sub {
@@ -388,23 +388,6 @@ func cmdMission(args []string) {
 		c.do("mission_status", map[string]any{"id": id}, func(out json.RawMessage) {
 			printJSON(out) // phases/instructions are nested; show the structured detail
 		})
-	case "create":
-		fs := flag.NewFlagSet("mission create", flag.ExitOnError)
-		c := bind(fs)
-		review := fs.Bool("review", false, "require a client review (accept/feedback) instead of auto-completing — enables sprints")
-		recordStory := fs.Bool("record-story", false, "opt this mission into the story engine: agents' report_thought reasoning is durably recorded for replay (default off — no telemetry cost)")
-		parseFlags(fs, rest)
-		if fs.NArg() < 1 {
-			fatal("usage: corral-admin mission create [--review] [--record-story] <directive...>")
-		}
-		directive := strings.Join(fs.Args(), " ")
-		c.do("create_mission", map[string]any{"directive": directive, "requires_review": *review, "record_story": *recordStory}, func(out json.RawMessage) {
-			var r struct {
-				ID int64 `json:"id"`
-			}
-			_ = json.Unmarshal(out, &r)
-			fmt.Printf("✓ created mission #%d: %s\n", r.ID, directive)
-		})
 	case "pause":
 		cmdMissionSteer("pause_mission", "pause", rest)
 	case "resume":
@@ -412,7 +395,7 @@ func cmdMission(args []string) {
 	case "cancel":
 		cmdMissionSteer("cancel_mission", "cancel", rest)
 	default:
-		fatal("unknown mission subcommand %q (list|status|create|pause|resume|cancel)", sub)
+		fatal("unknown mission subcommand %q (list|status|pause|resume|cancel)", sub)
 	}
 }
 
@@ -1000,7 +983,7 @@ func usage() {
   corral-admin whoami                          who the brain sees you as
   corral-admin mint-observer [--ttl 24h] [--principal x]
   corral-admin member  list | add <email> | super <email> [--off] | create-super [email] | remove <email>
-  corral-admin mission list | status <id> | create <directive...> | pause <id> | resume <id> | cancel <id>
+  corral-admin mission list | status <id> | pause <id> | resume <id> | cancel <id>
   corral-admin review <id> --accept | --changes "..."
   corral-admin findings [--mission N] [--status open]
   corral-admin resolve-findings [--delay 2m] [--mission N] [--outcome addressed|dismissed]

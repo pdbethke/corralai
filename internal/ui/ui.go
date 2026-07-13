@@ -242,7 +242,6 @@ func Handler(d Deps) http.Handler {
 	mux.HandleFunc("/api/mission/resume", s.steer(brain.SteerResume))
 	mux.HandleFunc("/api/mission/cancel", s.steer(brain.SteerCancel))
 	mux.HandleFunc("/api/mission/intercept", s.intercept)
-	mux.HandleFunc("/api/mission/create", s.createMission)
 	mux.HandleFunc("/api/mission/propose_staffing", s.proposeStaffing)
 	mux.HandleFunc("/api/mission/compose-options", s.composeOptions)
 	mux.Handle("/api/terminal/ws", s.guardTerminalWS(websocket.Handler(Registry.ServeWS)))
@@ -784,8 +783,8 @@ func (s *Server) prune(w http.ResponseWriter, r *http.Request) {
 
 // steer returns the handler for one of #58's mid-mission human-steering
 // verbs (pause/resume/cancel) — today's human gate was TERMINAL only
-// (proposalApprove/proposalReject/review) and the composer was PRE-launch
-// (create_mission); there was no way to intervene on a RUNNING mission. Each
+// (proposalApprove/proposalReject/review) and mission creation was PRE-launch
+// only; there was no way to intervene on a RUNNING mission. Each
 // verb is gated exactly like prune: a read-only observer token, or a
 // delegation/worker token, is refused — only a verified human superuser may
 // steer a mission. The action is recorded (attributed to the verified
@@ -1224,48 +1223,6 @@ func (s *Server) intercept(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write([]byte(`{"ok":true}`))
-}
-
-func (s *Server) createMission(w http.ResponseWriter, r *http.Request) {
-	if auth.ReadOnly(r) {
-		http.Error(w, "forbidden: read-only observer token cannot act", http.StatusForbidden)
-		return
-	}
-	if r.Method != http.MethodPost {
-		http.Error(w, "POST only", http.StatusMethodNotAllowed)
-		return
-	}
-	var body struct {
-		Directive      string                        `json:"directive"`
-		RequiresReview bool                          `json:"requires_review"`
-		RoleModels     map[string]rolemodel.ModelRef `json:"role_models"`
-		MCPEndpoints   []string                      `json:"mcp_endpoints"`
-		LookbookIDs    []int64                       `json:"lookbook_ids"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "bad json", http.StatusBadRequest)
-		return
-	}
-	if body.Directive == "" {
-		http.Error(w, "directive required", http.StatusBadRequest)
-		return
-	}
-
-	if s.missions != nil {
-		running, err := s.missions.RunningMissions()
-		if err == nil && len(running) > 0 {
-			http.Error(w, fmt.Sprintf("Conflict: Swarm mission #%d is already running in this workspace. Wait for it to finish or cancel/pause it before launching a new one.", running[0].ID), http.StatusConflict)
-			return
-		}
-	}
-
-	// The build-plan sizer (ScaledPlan) is retired: builder missions no longer
-	// exist and this endpoint doesn't yet accept an explicit plan, so there is
-	// nothing to build a mission from. Fail closed rather than silently
-	// synthesizing a build arc, before resolving herd inputs or mutating any
-	// shared state (role-models policy). Phase 3 removes this handler/route
-	// entirely.
-	http.Error(w, "build missions are retired", http.StatusBadRequest)
 }
 
 func (s *Server) proposeStaffing(w http.ResponseWriter, r *http.Request) {

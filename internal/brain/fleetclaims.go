@@ -5,57 +5,12 @@ package brain
 import (
 	"context"
 	"fmt"
-	"log"
-	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/pdbethke/corralai/internal/fleet"
 )
-
-// crossSwarmClaimTTL is the TTL requested when this brain publishes a work claim.
-// fleet.PublishIntent clamps it to the configured maximum (default 24h via
-// maxClaimTTL / CORRALAI_CLAIM_MAX_TTL_SEC), so a generous value is safe — a
-// mission that outlives the clamp is re-claimed on the next create_mission.
-const crossSwarmClaimTTL = 24 * time.Hour
-
-// crossSwarmMissionClaim runs the ADVISORY-check + PUBLISH for a repo-work mission
-// when cross-swarm coordination is enabled. It is BRAIN-INTERNAL — invoked from
-// create_mission, never a bee-callable tool — which is what preserves
-// observe-don't-coerce (a bee can read peer claims but can never publish one).
-//
-//   - Observe: fleet.ActiveClaims surfaces any VERIFIED peer claim on subject as a
-//     returned advisory note. It NEVER blocks mission creation (the human/brain
-//     decides). Only verified, unexpired, other-brain claims are surfaced.
-//   - Claim: fleet.PublishIntent publishes THIS brain's signed claim so peers can
-//     observe it.
-//
-// Entirely best-effort: any DuckDB/publish error is logged and never affects
-// mission creation. Returns the advisory note ("" when no peer claim exists).
-func crossSwarmMissionClaim(opts Options, subject string, now time.Time) string {
-	if !opts.CrossSwarm || subject == "" {
-		return ""
-	}
-	// Observe: verified peer claims on this subject (advisory only — never blocks).
-	var note string
-	if claims, err := fleet.ActiveClaims(opts.FleetTarget, subject, opts.FleetBrainID, now); err != nil {
-		log.Printf("cross-swarm: advisory ActiveClaims(%q) failed (non-fatal): %v", subject, err)
-	} else if len(claims) > 0 {
-		peers := make([]string, 0, len(claims))
-		for _, c := range claims {
-			peers = append(peers, c.BrainID)
-		}
-		note = fmt.Sprintf("note: %d other swarm(s) hold an active claim on %s: %s (advisory — mission not blocked)",
-			len(claims), subject, strings.Join(peers, ", "))
-		log.Printf("cross-swarm: %s", note)
-	}
-	// Claim: publish this brain's signed intent so peers observe it. Best-effort.
-	if err := fleet.PublishIntent(opts.CrossSwarmKey, opts.FleetTarget, opts.FleetBrainID, "claim", subject, crossSwarmClaimTTL, now); err != nil {
-		log.Printf("cross-swarm: publish claim on %q failed (non-fatal): %v", subject, err)
-	}
-	return note
-}
 
 type fleetClaimsIn struct {
 	Subject string `json:"subject" jsonschema:"the repo or resource to query active peer claims for"`

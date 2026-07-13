@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -114,19 +113,13 @@ type Engine struct {
 	m *Store
 	q *queue.Store
 
-	// ReflexMinSeverity is the lowest finding severity the reflex re-planner acts
-	// on (low|medium|high|critical). ReflexMaxTasks bounds reflex-generated tasks
-	// per mission so a non-converging verify→finding→fix cycle can't run away.
-	ReflexMinSeverity string
-	ReflexMaxTasks    int
-
 	// ConvergeBlockSeverity is the lowest OPEN-finding severity that withholds
 	// mission certification at convergence (low|medium|high|critical). A drained
-	// queue is not a clean bill of health: reflexRules deems some finding types
-	// (design-flaw, note) non-actionable, so a critical one of those never becomes
-	// a task and never blocks MissionDone. Rather than certify a result it knows
-	// still holds such a defect, the engine routes the mission to the human-gate
-	// `needs-review` terminal state. "" disables the gate. Default: "high".
+	// queue is not a clean bill of health: some finding types (design-flaw, note)
+	// never become tasks and never block MissionDone. Rather than certify a
+	// result it knows still holds such a defect, the engine routes the mission to
+	// the human-gate `needs-review` terminal state. "" disables the gate.
+	// Default: "high".
 	ConvergeBlockSeverity string
 
 	// NoProgressTicks is the deterministic give-up backstop: a running mission that
@@ -143,10 +136,10 @@ type Engine struct {
 	Repo      RepoOps
 	Workspace string
 
-	// Verify, when non-nil, re-runs the mission's own verify commands against the
-	// FINAL working copy before convergence (#42) — so a mission cannot reach
-	// "done" on an earlier per-task pass while the final tree is actually broken.
-	// It is the same runner the completion gate uses; nil disables the check.
+	// Verify is the sandboxed command-runner (see NewSandboxVerify/execBackend in
+	// cmd/corral/main.go). The build-side final-state re-check that used to be its
+	// only caller here is gone (retire-the-builder #4); the runner itself is kept
+	// wired for slice 2 (control-gate style verification).
 	Verify func(ctx context.Context, dir, command string) (ok bool, detail string)
 
 	// Egress, when non-nil, scans a mission's cumulative changed-file set for
@@ -176,11 +169,6 @@ type Engine struct {
 	// own call site — mission.Store never imports telemetry, so this is the
 	// engine's half of that split.
 	OnMissionCompleted func(missionID int64, status string, reviewRounds int)
-
-	// OnReflexCapExhausted, when non-nil, fires whenever the ENGINE hits the
-	// task cap limit on auto-remediation, letting the caller record telemetry
-	// and pause the mission to prevent infinite loops.
-	OnReflexCapExhausted func(missionID int64, cap int, f queue.Finding)
 
 	// noProgress / lastFingerprint back the NoProgressTicks backstop: per mission,
 	// the consecutive count of no-progress ticks and the last progress fingerprint.
@@ -219,8 +207,6 @@ func NewEngine(m *Store, q *queue.Store) *Engine {
 	return &Engine{
 		m:                     m,
 		q:                     q,
-		ReflexMinSeverity:     "high",
-		ReflexMaxTasks:        50,
 		ConvergeBlockSeverity: "high",
 		NoProgressTicks:       240, // generous backstop; the "nothing claimed" guard keeps it off slow-but-healthy work
 		noProgress:            map[int64]int{},
@@ -376,17 +362,6 @@ func (e *Engine) Tick() error {
 			}
 		}
 
-		// Reflex re-planning first: open findings spawn remediation tasks before
-		// we promote/complete, so a finding on the last task revives the mission.
-		if err := e.replan(mi.ID); err != nil {
-			log.Printf("mission %d: replan: %v", mi.ID, err)
-		}
-		// replan may have transitioned the mission to a terminal state (the reflex
-		// cap failing it). Don't promote / converge / PR a mission that's no longer
-		// running.
-		if cur, err := e.m.Mission(mi.ID); err != nil || cur == nil || cur.Status != "running" {
-			continue
-		}
 		if _, err := e.q.PromoteReady(mi.ID); err != nil {
 			log.Printf("mission %d: promote: %v", mi.ID, err)
 			continue
@@ -406,20 +381,12 @@ func (e *Engine) Tick() error {
 			e.checkNoProgress(&mi)
 			continue
 		}
-		// Queue drained.
-		// #42: a drained queue is not the same as a correct final state — a
-		// later edit can break an earlier per-task pass. Before converging, the
-		// brain re-runs the mission's verify commands against the FINAL working
-		// copy. On failure, hold the mission back (a loud finding drives the
-		// reflex re-planner) instead of shipping a broken tree.
-		if e.Verify != nil && !e.finalStateOK(&mi) {
-			continue
-		}
-		// A drained, verifying queue can still hold an open finding at/above the
-		// blocking severity that never became a task (reflexRules leaves
-		// design-flaw/note non-actionable). Rather than certify a result it knows
-		// still holds that defect, route to the human-gate `needs-review` terminal
-		// state — and do NOT push/PR. The human dismisses the finding (then
+		// Queue drained. A drained queue can still hold an open finding at/above
+		// the blocking severity that never became a task (some finding types,
+		// e.g. design-flaw/note, are never auto-actioned). Rather than certify a
+		// result it knows still holds that defect, route to the human-gate
+		// `needs-review` terminal state — and do NOT push/PR. The human dismisses
+		// the finding (then
 		// ResolveNeedsReview converges it) or reworks. #findings-gate.
 		if e.blockingFindingOpen(mi.ID) {
 			_ = e.m.SetMissionStatus(mi.ID, "needs-review")
@@ -434,40 +401,6 @@ func (e *Engine) Tick() error {
 		}
 	}
 	return nil
-}
-
-// workdir returns the per-mission working-copy path.
-func (e *Engine) workdir(m *Mission) string { return MissionDir(e.Workspace, m.ID) }
-
-// finalStateOK re-runs each distinct verify command the mission's tasks declared
-// against the mission's FINAL working copy (#42). It returns true when every
-// command exits 0 — or when there is no working copy to run against (mirrors the
-// completion gate's fallback) or there is nothing to verify. On the first failure
-// it files a loud, deduplicated final-state regression finding and returns false,
-// holding the mission back for the reflex re-planner.
-func (e *Engine) finalStateOK(m *Mission) bool {
-	dir := e.workdir(m)
-	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
-		return true // no brain-owned working copy — cannot independently verify
-	}
-	tasks, err := e.q.List(m.ID)
-	if err != nil {
-		log.Printf("mission %d: final-verify list: %v", m.ID, err)
-		return true // never block convergence on an infrastructure error
-	}
-	seen := map[string]bool{}
-	for _, t := range tasks {
-		cmd := strings.TrimSpace(t.Verify)
-		if cmd == "" || seen[cmd] {
-			continue
-		}
-		seen[cmd] = true
-		if ok, detail := e.Verify(context.Background(), dir, cmd); !ok {
-			e.fileFinalStateFinding(m.ID, cmd, detail)
-			return false
-		}
-	}
-	return true
 }
 
 // checkNoProgress is the give-up backstop. It fingerprints a running mission's
@@ -611,31 +544,4 @@ func (e *Engine) fileBlockedDepFinding(missionID int64, taskKey, dep string, dep
 		return
 	}
 	log.Printf("mission %d: dep-sweep cancelled '%s' — dependency '%s' can never be satisfied", missionID, taskKey, dep)
-}
-
-// fileFinalStateFinding records a final-state regression finding once per failing
-// command (deduped against open findings so a held-back mission doesn't spam the
-// ledger or over-count the reflex cap every tick).
-func (e *Engine) fileFinalStateFinding(missionID int64, cmd, detail string) {
-	target := "final-state:" + cmd
-	if open, err := e.q.Findings(missionID, queue.FindingOpen); err == nil {
-		for _, f := range open {
-			if f.Reporter == "verify-gate" && f.Target == target {
-				return
-			}
-		}
-	}
-	if len(detail) > 200 {
-		detail = detail[:200]
-	}
-	if _, err := e.q.AddFinding(queue.Finding{
-		MissionID: missionID, Reporter: "verify-gate", Type: "regression", Severity: "high",
-		Target:          target,
-		Evidence:        "final-state re-run of '" + cmd + "' failed: " + detail,
-		SuggestedAction: "run '" + cmd + "' against the final tree and fix the failures, then it can converge",
-	}); err != nil {
-		log.Printf("mission %d: final-state finding: %v", missionID, err)
-		return
-	}
-	log.Printf("mission %d: final-state verify FAILED (%s) — held back from done", missionID, cmd)
 }

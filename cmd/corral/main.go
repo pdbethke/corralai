@@ -858,26 +858,6 @@ func main() {
 			log.Printf("telemetry mission_completed: %v", err)
 		}
 	}
-	engine.OnReflexCapExhausted = func(missionID int64, cap int, f queue.Finding) {
-		// Telemetry only; the engine transitions the non-converging mission to the
-		// terminal `failed` state itself (reliability #5) — no oscillating pause.
-		log.Printf("mission %d: reflex task cap reached on finding %d (%s) — mission is not converging", missionID, f.ID, f.Type)
-		if err := telStore.Record(telemetry.Event{
-			MissionID: missionID, Kind: "reflex_cap_exhausted", Actor: "reflex-replanner",
-			Subject: f.Target, Model: f.ReporterModel,
-			Detail: map[string]any{
-				"cap": cap, "finding_id": f.ID, "type": f.Type, "severity": f.Severity,
-			},
-		}); err != nil {
-			log.Printf("telemetry reflex_cap_exhausted: %v", err)
-		}
-	}
-	if v := os.Getenv("CORRALAI_REFLEX_MIN_SEVERITY"); v != "" {
-		engine.ReflexMinSeverity = v
-	}
-	if n := envInt("CORRALAI_REFLEX_MAX_TASKS", 0); n > 0 {
-		engine.ReflexMaxTasks = n
-	}
 	if v := os.Getenv("CORRALAI_CONVERGE_BLOCK_SEVERITY"); v != "" {
 		engine.ConvergeBlockSeverity = v // "" (or "none") to disable the needs-review findings gate
 		if v == "none" {
@@ -929,8 +909,7 @@ func main() {
 	}
 
 	go engine.Run(context.Background(), missionTick)
-	log.Printf("missions: orchestration engine ticking every %s (reflex re-planner: >=%s, cap %d)",
-		missionTick, engine.ReflexMinSeverity, engine.ReflexMaxTasks)
+	log.Printf("missions: orchestration engine ticking every %s", missionTick)
 
 	// healthBook infers per-agent health (working|idle|failing) from claim/
 	// complete/reclaim activity — see internal/brain/health.go (#72). Declared

@@ -3,8 +3,6 @@
 package mission
 
 import (
-	"context"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -170,67 +168,12 @@ func TestEngineFiresOnMissionCompleted(t *testing.T) {
 	}
 }
 
-// TestEngineHoldsBackWhenFinalStateVerifyFails is the #42 guarantee: once the
-// queue has drained, a mission must NOT converge to "done" if the brain's re-run
-// of the mission's verify commands against the FINAL working copy fails — no
-// shipping a broken tree on the strength of an earlier per-task pass.
-func TestEngineHoldsBackWhenFinalStateVerifyFails(t *testing.T) {
-	dir := t.TempDir()
-	q, err := queue.Open(filepath.Join(dir, "q.sqlite3"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer q.Close()
-	m, err := Open(filepath.Join(dir, "m.sqlite3"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer m.Close()
-
-	mid, err := CreateMission(m, q, "add a wishlist feature", fullDAGTestPlan("add a wishlist feature"), false)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	e := NewEngine(m, q)
-	// A materialized working copy so the final-state verify can actually run.
-	e.Workspace = t.TempDir()
-	if err := os.MkdirAll(e.workdir(&Mission{ID: mid}), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// The final tree is "broken": every re-run of a verify command fails.
-	e.Verify = func(_ context.Context, _, _ string) (bool, string) { return false, "final tree does not build" }
-
-	for i := 0; i < 60; i++ {
-		drain(t, q)
-		if err := e.Tick(); err != nil {
-			t.Fatalf("tick: %v", err)
-		}
-		if mv, _ := m.Mission(mid); mv != nil && mv.Status == "done" {
-			t.Fatal("mission converged to done despite a failing final-state verify (#42)")
-		}
-	}
-	// And it filed a loud final-state regression finding for the reflex loop.
-	fs, _ := q.Findings(mid, queue.FindingOpen)
-	found := false
-	for _, f := range fs {
-		if f.Reporter == "verify-gate" && f.Type == "regression" && strings.HasPrefix(f.Target, "final-state") {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Fatalf("expected a verify-gate final-state regression finding, got %+v", fs)
-	}
-}
-
 // TestEngineRoutesToNeedsReviewOnOpenCriticalFinding: a drained queue is not a
 // clean bill of health. If an open finding at/above `high` remains — e.g. a
-// critical `design-flaw`, which reflexRules deems non-actionable so it never
-// becomes a task and never blocks MissionDone — the brain must NOT certify the
-// mission "done". It routes to the human-gate `needs-review` terminal state
-// instead: a judge may not certify a result it knows still holds a critical
-// defect.
+// critical `design-flaw`, which is never auto-actioned and so never becomes a
+// task and never blocks MissionDone — the brain must NOT certify the mission
+// "done". It routes to the human-gate `needs-review` terminal state instead: a
+// judge may not certify a result it knows still holds a critical defect.
 func TestEngineRoutesToNeedsReviewOnOpenCriticalFinding(t *testing.T) {
 	dir := t.TempDir()
 	q, err := queue.Open(filepath.Join(dir, "q.sqlite3"))
@@ -248,9 +191,8 @@ func TestEngineRoutesToNeedsReviewOnOpenCriticalFinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A non-actionable but critical finding: reflexRules returns actionable=false
-	// for design-flaw, so replan never turns it into a task and never marks it
-	// addressed — it stays open right through convergence.
+	// A non-actionable but critical finding: design-flaw is never auto-remediated
+	// into a task or marked addressed — it stays open right through convergence.
 	if _, err := q.AddFinding(queue.Finding{
 		MissionID: mid, Reporter: "reviewer", Type: "design-flaw", Severity: "critical",
 		Target: "architecture", Evidence: "the auth model is fundamentally unsound",
@@ -416,8 +358,8 @@ func TestEngineSweepsBlockedDependencies(t *testing.T) {
 }
 
 // TestBlockedDepChainRoutesToNeedsReviewNotPR guards against a false convergence:
-// a dep-sweep blocker (cancelled dependency) files a high-severity finding that
-// replan must NOT auto-remediate/address, so blockingFindingOpen keeps holding the
+// a dep-sweep blocker (cancelled dependency) files a high-severity finding that is
+// never auto-remediated/addressed, so blockingFindingOpen keeps holding the
 // mission at needs-review instead of falling through to done.
 func TestBlockedDepChainRoutesToNeedsReviewNotPR(t *testing.T) {
 	dir := t.TempDir()

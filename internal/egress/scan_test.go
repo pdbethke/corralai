@@ -238,6 +238,42 @@ func TestScanText_IgnoresFileHeaderAndContext(t *testing.T) {
 	}
 }
 
+// TestScanText_LongLineSurfacesUnscannedRemainder mirrors
+// TestScanSecrets_LongLineNotSilentlyAborted for the history-scan path: a
+// `+`-added line in a git-log-p patch longer than the scanner's 1<<20 buffer
+// cap must surface an unscanned-remainder block finding rather than silently
+// truncating the scan (a secret evasion route — see F1 audit follow-up).
+func TestScanText_LongLineSurfacesUnscannedRemainder(t *testing.T) {
+	longLine := make([]byte, (1<<20)+1024)
+	for i := range longLine {
+		longLine[i] = 'a'
+	}
+	patch := "" +
+		"diff --git a/big.txt b/big.txt\n" +
+		"new file mode 100644\n" +
+		"--- /dev/null\n" +
+		"+++ b/big.txt\n" +
+		"@@ -0,0 +1 @@\n" +
+		"+" + string(longLine) + "\n"
+
+	out := ScanText(patch)
+	if len(out) == 0 {
+		t.Fatal("a patch with an over-long added line must surface a finding, not silently drop the remainder")
+	}
+	foundRemainder := false
+	for _, f := range out {
+		if f.Rule == "unscanned-remainder" {
+			foundRemainder = true
+			if f.Severity != SeverityBlock {
+				t.Errorf("expected unscanned-remainder to block, got severity %q", f.Severity)
+			}
+		}
+	}
+	if !foundRemainder {
+		t.Fatalf("expected an unscanned-remainder finding for the over-long added line, got: %+v", out)
+	}
+}
+
 func TestGovulnEnv(t *testing.T) {
 	t.Setenv("CORRAL_TOKEN", "SECRETVALUE")
 

@@ -169,6 +169,10 @@ func ScanText(text string) []Finding {
 			}
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		out = append(out, Finding{Path: curPath, Rule: "unscanned-remainder",
+			Sample: "line too long to scan — remainder of patch not scanned: " + err.Error(), Severity: SeverityBlock})
+	}
 	return out
 }
 

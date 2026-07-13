@@ -15,6 +15,34 @@ import (
 	"github.com/pdbethke/corralai/internal/gateway"
 )
 
+// TestParseHostRewrite proves the CORRALAI_GATEWAY_HOST_REWRITE parser is
+// fail-safe to "no rewrite" on anything unset or malformed, and only accepts a
+// well-formed "from=to" pair — no hardcoded docker-bridge constant survives.
+func TestParseHostRewrite(t *testing.T) {
+	cases := []struct {
+		name     string
+		in       string
+		wantFrom string
+		wantTo   string
+	}{
+		{"unset", "", "", ""},
+		{"whitespace only", "   ", "", ""},
+		{"well-formed", "172.19.0.1:9021=localhost:9021", "172.19.0.1:9021", "localhost:9021"},
+		{"trims whitespace", " 172.19.0.1:9021 = localhost:9021 ", "172.19.0.1:9021", "localhost:9021"},
+		{"missing equals", "172.19.0.1:9021", "", ""},
+		{"empty from", "=localhost:9021", "", ""},
+		{"empty to", "172.19.0.1:9021=", "", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			from, to := parseHostRewrite(c.in)
+			if from != c.wantFrom || to != c.wantTo {
+				t.Fatalf("parseHostRewrite(%q) = (%q, %q), want (%q, %q)", c.in, from, to, c.wantFrom, c.wantTo)
+			}
+		})
+	}
+}
+
 // TestPromoteEndpointRequiresHumanAdmin proves promote_endpoint gates on
 // isHumanAdmin, not just isAdmin: making a personal upstream endpoint
 // fleet-public (or scoped) is the same class of behavior-shaping write as

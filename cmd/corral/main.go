@@ -15,6 +15,7 @@
 //	CORRALAI_MEMORY_DIR        where new memory entries are written (default ~/.claude/projects/default/memory)
 //	CORRALAI_PROJECT_TIERS     optional path->tier rules "substr=tier,substr=tier"; front-matter project: wins, else "default"
 //	CORRALAI_OIDC_ISSUER       OIDC issuer URL (any OIDC provider: Keycloak, Auth0, Okta, Dex, Authentik, …); empty => AUTH DISABLED (dev)
+//	CORRALAI_ALLOW_INSECURE    set "1" to allow auth-disabled startup on a non-loopback CORRALAI_ADDR (refused otherwise, H-3)
 //	CORRALAI_OIDC_AUDIENCE     expected token aud (the client_id)
 //	CORRALAI_OIDC_CLIENTS      extra trusted clients "issuer|aud,issuer|aud"
 //	CORRALAI_ALLOWED_PRINCIPALS day-0 SEED of member emails (DB is canonical after; empty => any authenticated)
@@ -458,6 +459,30 @@ func initMotherDuckToken() {
 		_ = os.Setenv("motherduck_token", tok)              // DuckDB reads lowercase when attaching md:
 		scrubSecrets([]string{"CORRALAI_MOTHERDUCK_TOKEN"}) // scrub uppercase; lowercase stays for md: attach
 	}
+}
+
+// insecureBindRefused returns an error when the brain would run auth-DISABLED
+// while bound to a non-loopback interface — an open control plane. Loopback
+// binds (dev) and CORRALAI_ALLOW_INSECURE=1 (explicit opt-in) are allowed.
+func insecureBindRefused(authEnabled bool, addr string, allowInsecure bool) error {
+	if authEnabled || allowInsecure {
+		return nil
+	}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	if host == "" { // e.g. ":9019" — binds all interfaces
+		return fmt.Errorf("auth is disabled and CORRALAI_ADDR %q binds all interfaces; set CORRALAI_OIDC_ISSUER or CORRALAI_ALLOW_INSECURE=1", addr)
+	}
+	if ip := net.ParseIP(host); ip != nil && !ip.IsLoopback() {
+		return fmt.Errorf("auth is disabled and CORRALAI_ADDR %q is not loopback; set CORRALAI_OIDC_ISSUER or CORRALAI_ALLOW_INSECURE=1", addr)
+	}
+	if host != "localhost" && net.ParseIP(host) == nil {
+		// a hostname we can't classify — be conservative, refuse unless overridden
+		return fmt.Errorf("auth is disabled and CORRALAI_ADDR host %q is not a loopback literal; set CORRALAI_OIDC_ISSUER or CORRALAI_ALLOW_INSECURE=1", host)
+	}
+	return nil
 }
 
 // version is set at build time via -ldflags "-X main.version=...".
@@ -989,6 +1014,11 @@ func main() {
 	verifier, err := auth.NewVerifier(context.Background(), pairs)
 	if err != nil {
 		log.Fatalf("oidc verifier: %v", err)
+	}
+	// H-3: auth-DISABLED + bound to a non-loopback interface is an open control
+	// plane. Refuse to start unless the operator explicitly opts in.
+	if err := insecureBindRefused(verifier.Enabled(), addr, os.Getenv("CORRALAI_ALLOW_INSECURE") == "1"); err != nil {
+		log.Fatalf("%v", err)
 	}
 	// Subagent delegation tokens (out-of-process subagents authenticate with these).
 	// Key from CORRALAI_DELEGATION_SECRET / systemd cred, else a random ephemeral key

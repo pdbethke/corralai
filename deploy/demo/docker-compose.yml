@@ -122,6 +122,12 @@ services:
       dockerfile: deploy/demo/Dockerfile.brain
     # dev mode: no CORRALAI_OIDC_ISSUER => auth off, swarm UI open at /.
     environment:
+      # Dockerfile.brain sets CORRALAI_ADDR=0.0.0.0:9019 (the bees reach it as
+      # "brain:9019" from their own containers, so it can't bind loopback-only).
+      # Auth-off + non-loopback bind is exactly what the H-3 startup interlock
+      # (insecureBindRefused in cmd/corral/main.go) refuses — this is the demo's
+      # intentional, explicit opt-in, not an oversight.
+      CORRALAI_ALLOW_INSECURE: "1"
       # the agents reach the brain by its compose service name, so the host guard
       # must accept it (default is loopback-only).
       CORRALAI_ALLOWED_HOSTS: "brain,brain:9019,localhost,localhost:9019,127.0.0.1"

@@ -1022,6 +1022,16 @@ func main() {
 	if err := insecureBindRefused(verifier.Enabled(), addr, os.Getenv("CORRALAI_ALLOW_INSECURE") == "1"); err != nil {
 		log.Fatalf("%v", err)
 	}
+	// Warn (don't fail-closed — bootstrap needs the open-when-empty behavior) when
+	// auth is on but nobody has been promoted to superuser yet: every authenticated
+	// principal is treated as admin in that window.
+	if verifier.Enabled() {
+		if hasSuperuser, err := princStore.HasSuperuser(); err != nil {
+			log.Printf("auth: WARNING — could not check for a seeded superuser: %v", err)
+		} else if !hasSuperuser {
+			log.Printf("auth: WARNING — OIDC enabled but no superuser is seeded; every authenticated principal is treated as admin until you set CORRALAI_ADMIN_PRINCIPALS or run create_superuser")
+		}
+	}
 	// Subagent delegation tokens (out-of-process subagents authenticate with these).
 	// Key from CORRALAI_DELEGATION_SECRET / systemd cred, else a random ephemeral key
 	// (tokens then don't survive a restart — fine for short-lived subagents).

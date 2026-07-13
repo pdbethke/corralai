@@ -112,6 +112,19 @@ func (s *Store) SuperuserCount() int {
 	return n
 }
 
+// HasSuperuser reports whether at least one superuser is seeded. Unlike
+// SuperuserCount (which swallows query errors behind a 0), it surfaces the
+// error so a caller relying on the result for a security warning (e.g. the
+// startup "auth enabled but nobody is admin yet" check) can't mistake a
+// broken query for "definitely empty".
+func (s *Store) HasSuperuser() (bool, error) {
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM principals WHERE is_superuser=1`).Scan(&n); err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
 func (s *Store) exists(email string) bool {
 	var x int
 	return s.db.QueryRow(`SELECT 1 FROM principals WHERE email=?`, norm(email)).Scan(&x) == nil

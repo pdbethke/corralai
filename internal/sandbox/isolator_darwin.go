@@ -58,7 +58,7 @@ func (sandboxExecIsolator) Wrap(command string, opts Options, env []string) ([]s
 	// paths a build/test needs plus the workspace — not the whole host FS.
 	// macOS /etc is a symlink to /private/etc, so allow the real /private
 	// paths.
-	for _, p := range []string{"/usr", "/bin", "/sbin", "/System/Library", "/Library/Developer", "/private/etc/ssl", "/private/etc/ca-certificates"} {
+	for _, p := range []string{"/usr", "/bin", "/sbin", "/System/Library", "/Library/Developer", "/opt/homebrew", "/private/etc/ssl", "/private/etc/ca-certificates"} {
 		sb.WriteString(fmt.Sprintf("(allow file-read* (subpath %q))\n", p))
 	}
 

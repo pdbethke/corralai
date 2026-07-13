@@ -20,6 +20,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -75,7 +76,10 @@ type Verifier struct {
 // these tokens alongside JWTs). In dev (no OIDC) auth is off and a subagent token
 // needs no verification, so this is just a no-op-until-prod key install.
 func (vf *Verifier) EnableDelegation(key []byte) {
-	if len(key) == 0 {
+	if len(key) < 32 {
+		if len(key) > 0 {
+			log.Printf("auth: delegation key too short (%d bytes) — need >= 32; delegation stays disabled", len(key))
+		}
 		return
 	}
 	vf.delegKey = key

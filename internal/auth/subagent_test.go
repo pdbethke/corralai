@@ -18,7 +18,7 @@ import (
 // -> RequireBearerToken, the same path production bearer auth uses.
 func TestSubagentDetectsDelegationToken(t *testing.T) {
 	vf := &Verifier{}
-	vf.EnableDelegation([]byte("test-delegation-key"))
+	vf.EnableDelegation([]byte("test-delegation-key-that-is-32-bytes!!"))
 	tok, err := vf.MintDelegation("boss@x.com", "boss@x.com/child", time.Hour)
 	if err != nil {
 		t.Fatal(err)

@@ -10,7 +10,7 @@ import (
 
 func TestObserverTokenIsReadOnly(t *testing.T) {
 	vf := &Verifier{}
-	vf.EnableDelegation([]byte("test-delegation-key"))
+	vf.EnableDelegation([]byte("test-delegation-key-that-is-32-bytes!!"))
 
 	// An observer token authenticates as the principal but carries readonly=true.
 	tok, err := vf.MintObserver("alice@x.com", time.Hour)

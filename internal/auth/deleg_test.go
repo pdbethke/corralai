@@ -70,3 +70,24 @@ func TestDelegationDisabledErrors(t *testing.T) {
 		t.Fatal("minting with delegation disabled must error")
 	}
 }
+
+func TestEnableDelegationRejectsShortKey(t *testing.T) {
+	vf, _ := NewVerifier(context.Background(), nil)
+	vf.EnableDelegation([]byte("tiny")) // < floor
+	if vf.delegKey != nil {
+		t.Fatal("short delegation key must be rejected")
+	}
+	if _, err := vf.MintDelegation("p@x", "p@x/c", time.Minute); err == nil {
+		t.Fatal("minting must still fail: delegation stays disabled with a short key")
+	}
+}
+
+func TestEnableDelegationAccepts32ByteKey(t *testing.T) {
+	vf := delegVerifier(t) // uses the exact 32-byte key
+	if vf.delegKey == nil {
+		t.Fatal("32-byte key must enable delegation")
+	}
+	if _, err := vf.MintDelegation("p@x", "p@x/c", time.Minute); err != nil {
+		t.Fatalf("mint with 32-byte key should succeed: %v", err)
+	}
+}

@@ -148,7 +148,7 @@ func TestSetSuperuserRefusesRealDelegationToken(t *testing.T) {
 	}
 
 	vf := &auth.Verifier{}
-	vf.EnableDelegation([]byte("test-delegation-key"))
+	vf.EnableDelegation([]byte("test-delegation-key-that-is-32-bytes!!"))
 	tok, err := vf.MintDelegation("boss@x.com", "boss@x.com/child", time.Hour)
 	if err != nil {
 		t.Fatal(err)
@@ -247,7 +247,7 @@ func TestCreateSuperuserBootstrapUnaffected(t *testing.T) {
 	// Now that a superuser exists, a delegation token minted for a subagent
 	// under that new superuser is refused a second create_superuser.
 	vf := &auth.Verifier{}
-	vf.EnableDelegation([]byte("test-delegation-key"))
+	vf.EnableDelegation([]byte("test-delegation-key-that-is-32-bytes!!"))
 	tok, err := vf.MintDelegation("first-admin@x.com", "first-admin@x.com/child", time.Hour)
 	if err != nil {
 		t.Fatal(err)

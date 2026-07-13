@@ -224,15 +224,21 @@ func envInt(k string, def int) int {
 // delegationKey resolves the HMAC key for subagent delegation tokens:
 // CORRALAI_DELEGATION_SECRET, else a systemd credential (delegation-secret), else
 // a random ephemeral key (tokens then don't survive a restart — fine for the
-// short-lived subagents they're meant for).
+// short-lived subagents they're meant for). Any explicit secret (env or systemd
+// credential) must be at least 32 bytes — anything shorter makes the HMAC-SHA256
+// signature forgeable; an operator-set secret this weak is a misconfiguration we
+// fail loud on rather than silently falling back to a random key.
 func delegationKey() []byte {
 	if v := os.Getenv("CORRALAI_DELEGATION_SECRET"); v != "" {
 		scrubSecrets([]string{"CORRALAI_DELEGATION_SECRET"}) // consumed; scrub before any in-process reader can see it
+		if len(v) < 32 {
+			log.Fatalf("CORRALAI_DELEGATION_SECRET too short (%d bytes) — need >= 32 for a forgery-resistant HMAC key", len(v))
+		}
 		return []byte(v)
 	}
 	if d := os.Getenv("CREDENTIALS_DIRECTORY"); d != "" {
 		if b, err := os.ReadFile(filepath.Join(d, "delegation-secret")); err == nil { // #nosec G703,G304 -- reads a fixed-name systemd credential from $CREDENTIALS_DIRECTORY (operator-trusted env), not attacker input
-			if s := strings.TrimSpace(string(b)); len(s) >= 16 {
+			if s := strings.TrimSpace(string(b)); len(s) >= 32 {
 				return []byte(s)
 			}
 		}

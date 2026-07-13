@@ -5,10 +5,12 @@
 [![docs](https://img.shields.io/badge/docs-corralai.dev-2f6f4e)](https://corralai.dev/docs/getting-started/)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/pdbethke/corralai/badge)](https://securityscorecards.dev/viewer/?uri=github.com/pdbethke/corralai)
 
-> **A true audit for software change** — an adversarial, role-separated herd of AI
-> agents certifies a change **by execution** (not opinion), across any model (local
-> 7B to frontier), behind real fences, human-gated, with every run recorded and
-> replayable.
+> **A true audit for software change** — certify a change **by execution** (not
+> opinion): run the check in a jail, sign a tamper-evident record, and gate the
+> merge. Across any model (local 7B to frontier), behind real fences, human-gated,
+> with every run recorded and replayable. *(The adversarial, role-separated herd
+> that staffs the verification is the next slice — designed, not yet built; see the
+> honest floor below.)*
 
 **Corral is re-focusing from a builder to a reactive audit / certification gate —
 the CISO's tool, not another way to generate code.** The build-from-directive path
@@ -32,10 +34,10 @@ What still stands from the original build:
 1. **It's multi-model, not just multi-agent.** Most swarm frameworks run one LLM in
    N roles — parallelism with *correlated* blind spots, because the "reviewer"
    shares the "builder's" failure modes when it's the same model. Corralai lets each
-   role run a *different* model and coordinates them through one brain, so review
-   becomes genuinely **adversarial and decorrelated — cross-model review by
-   construction**. No lock-in: bring Claude, Gemini, GPT, anything
-   OpenAI-compatible, or a local model.
+   role run a *different* model and coordinates them through one brain — so
+   cross-model checking is **decorrelated by construction**, no single model grading
+   its own work. That's the foundation the staffed verification slice builds on. No
+   lock-in: bring Claude, Gemini, GPT, anything OpenAI-compatible, or a local model.
 2. **It's built to be contained.** Autonomous agents that write and run code are a
    security problem. Corralai starts from *"an agent can be hijacked"* and answers
    it structurally: every agent runs behind **fences** (jails, a credential

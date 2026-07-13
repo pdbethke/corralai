@@ -58,15 +58,16 @@ Go binary.**
 - **Model×role telemetry** — the brain computes each model's per-role performance
   (sample-weighted, honest about thin data) and infers per-agent health from the
   attributed ledger — the data layer the leaderboard and self-staffing read from.
-- **Graceful degradation over deadlock** — no mission strands or falsely
-  certifies: the verify gate certifies by *execution* (not worker self-report) at
-  every task and re-checks the final tree; orphaned/blocked-dep tasks are swept
-  and dep keys validated at the source; a no-progress backstop and reflex-cap fail
-  a non-converging mission instead of hanging; stale claims are reaped, a
-  force-reclaimed worker backs off (self-heal, not quarantine), and generalist /
-  multi-role workers no longer trip false stall alarms; a drained queue that still
-  holds an open critical/high finding routes to a **needs-review** human gate
-  rather than shipping a known defect.
+- **[retained — mission engine dormant]** Graceful degradation over deadlock —
+  the mission engine's lifecycle hardening (a no-progress backstop that fails a
+  non-converging mission instead of hanging; orphaned/blocked-dep sweeping with
+  dep keys validated at the source; stale-claim reaping with force-reclaim
+  back-off; generalist/multi-role workers that don't trip false stall alarms; a
+  drained queue with an open critical/high finding routing to a **needs-review**
+  human gate). This all lives in `internal/mission` and is carried forward as the
+  verification-engine seed, but with the Tick loop **not started** it does not run
+  as a live guarantee today. The certify-**by-execution** property (run the check
+  in a jail, never a self-report) is live in the repo gate + control gate below.
 - **Per-mission herd composer.** A visual **Mission Composer** builds each mission's
   team before launch: drag a model/agent onto each role, pick the **MCP endpoints**
   the herd may consume, and attach **lookbook** design directives. The choice is

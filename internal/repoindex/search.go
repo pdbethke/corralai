@@ -4,8 +4,9 @@ package repoindex
 
 import (
 	"database/sql"
-	"sort"
 	"strconv"
+
+	"github.com/pdbethke/corralai/internal/searchmerge"
 )
 
 // Hit is a single search result from the repoindex Store.
@@ -62,51 +63,13 @@ func scanHits(rows *sql.Rows, via string) ([]Hit, error) {
 
 // mergeHits max-normalizes each arm to [0,1], unions by path:start_line,
 // keeps the higher score when both arms surface the same chunk,
-// tags shared hits "both", and returns the top-k.
-// Mirrors internal/memory/store.go mergeHits.
+// tags shared hits "both", and returns the top-k. Shared implementation:
+// searchmerge.Merge (also used by internal/memory/store.go).
 func mergeHits(kw, sem []Hit, k int) []Hit {
-	norm := func(hs []Hit) {
-		var max float64
-		for _, h := range hs {
-			if h.Score > max {
-				max = h.Score
-			}
-		}
-		if max <= 0 {
-			return
-		}
-		for i := range hs {
-			hs[i].Score /= max
-		}
-	}
-	norm(kw)
-	norm(sem)
-
-	key := func(h Hit) string { return h.Path + ":" + strconv.Itoa(h.StartLine) }
-	idx := map[string]int{}
-	var out []Hit
-
-	add := func(h Hit) {
-		if j, ok := idx[key(h)]; ok {
-			if h.Score > out[j].Score {
-				out[j].Score = h.Score
-			}
-			out[j].Via = "both"
-			return
-		}
-		idx[key(h)] = len(out)
-		out = append(out, h)
-	}
-	for _, h := range kw {
-		add(h)
-	}
-	for _, h := range sem {
-		add(h)
-	}
-
-	sort.SliceStable(out, func(i, j int) bool { return out[i].Score > out[j].Score })
-	if len(out) > k {
-		out = out[:k]
-	}
-	return out
+	return searchmerge.Merge(kw, sem, searchmerge.Accessors[Hit]{
+		Key:      func(h Hit) string { return h.Path + ":" + strconv.Itoa(h.StartLine) },
+		Score:    func(h *Hit) float64 { return h.Score },
+		SetScore: func(h *Hit, s float64) { h.Score = s },
+		SetVia:   func(h *Hit, v string) { h.Via = v },
+	}, k)
 }

@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 	"sync"
 
@@ -20,6 +19,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/annindex"
 	"github.com/pdbethke/corralai/internal/embed"
+	"github.com/pdbethke/corralai/internal/searchmerge"
 )
 
 var (
@@ -218,55 +218,16 @@ func iterEntries(dirs []string, rules []tierRule) []entry {
 	return out
 }
 
+// mergeHits max-normalizes each arm to [0,1], unions by Slug, keeps the
+// higher score when both arms surface the same entry, tags shared hits
+// "both", and returns the top-limit. Shared implementation: searchmerge.Merge.
 func mergeHits(kw, sem []Hit, limit int) []Hit {
-	norm := func(hs []Hit) {
-		if len(hs) == 0 {
-			return
-		}
-		max := hs[0].Score
-		for _, h := range hs {
-			if h.Score > max {
-				max = h.Score
-			}
-		}
-		if max <= 0 {
-			return
-		}
-		for i := range hs {
-			hs[i].Score = hs[i].Score / max
-		}
-	}
-	cp := func(hs []Hit) []Hit { c := make([]Hit, len(hs)); copy(c, hs); return c }
-	k, m := cp(kw), cp(sem)
-	norm(k)
-	norm(m)
-	by := map[string]Hit{}
-	add := func(h Hit) {
-		if e, ok := by[h.Slug]; ok {
-			if h.Score > e.Score {
-				e.Score = h.Score
-			}
-			e.Via = "both"
-			by[h.Slug] = e
-		} else {
-			by[h.Slug] = h
-		}
-	}
-	for _, h := range k {
-		add(h)
-	}
-	for _, h := range m {
-		add(h)
-	}
-	out := make([]Hit, 0, len(by))
-	for _, h := range by {
-		out = append(out, h)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Score > out[j].Score })
-	if limit > 0 && len(out) > limit {
-		out = out[:limit]
-	}
-	return out
+	return searchmerge.Merge(kw, sem, searchmerge.Accessors[Hit]{
+		Key:      func(h Hit) string { return h.Slug },
+		Score:    func(h *Hit) float64 { return h.Score },
+		SetScore: func(h *Hit, s float64) { h.Score = s },
+		SetVia:   func(h *Hit, v string) { h.Via = v },
+	}, limit)
 }
 
 // RecallLessons returns the lessons (type=lesson) most relevant to query — the

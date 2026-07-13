@@ -276,18 +276,20 @@ func parseDiffGitBPath(line string) string {
 // its a//b/ prefix stripped (a fallback for when the `diff --git` path is absent).
 func parseBinaryFiles(line string) (path string, added, deleted bool) {
 	mid := strings.TrimSuffix(strings.TrimPrefix(line, "Binary files "), " differ")
-	parts := strings.SplitN(mid, " and ", 2)
-	if len(parts) != 2 {
-		return "", false, false
-	}
-	left, right := parts[0], parts[1]
+	// The a-side (left) is /dev/null for an ADD; the b-side (right) is /dev/null
+	// for a DELETE. Anchor on the /dev/null side via prefix/suffix rather than
+	// splitting on " and " — a filename can itself contain " and " (e.g.
+	// `x and y.bin`), which would otherwise misclassify a delete as a MODIFY and
+	// let a crafted-name binary evade the add+delete block. Check the ADD (a-side
+	// /dev/null) form first so an added file whose name ends in ` and /dev/null`
+	// isn't mistaken for a delete.
 	switch {
-	case left == "/dev/null" && right != "/dev/null":
-		return strings.TrimPrefix(right, "b/"), true, false
-	case right == "/dev/null" && left != "/dev/null":
-		return strings.TrimPrefix(left, "a/"), false, true
+	case strings.HasPrefix(mid, "/dev/null and "):
+		return strings.TrimPrefix(strings.TrimPrefix(mid, "/dev/null and "), "b/"), true, false
+	case strings.HasSuffix(mid, " and /dev/null"):
+		return strings.TrimPrefix(strings.TrimSuffix(mid, " and /dev/null"), "a/"), false, true
 	default:
-		return "", false, false // both real (MODIFY) or unparseable — not an evasion
+		return "", false, false // both real (MODIFY) or unparseable — not an add/delete evasion
 	}
 }
 

@@ -395,6 +395,29 @@ func TestScanText_FlagsBinaryAddedThenDeletedInHistory(t *testing.T) {
 	}
 }
 
+// TestScanText_FlagsBinaryWithAndInName is the robustness regression: a binary
+// whose filename literally contains " and " must still be classified add/delete
+// correctly (the old SplitN(" and ") parse misclassified the delete as a MODIFY,
+// letting a crafted-name secret blob evade the add+delete block).
+func TestScanText_FlagsBinaryWithAndInName(t *testing.T) {
+	patch := "" +
+		"diff --git a/x and y.bin b/x and y.bin\n" +
+		"new file mode 100644\n" +
+		"Binary files /dev/null and b/x and y.bin differ\n" +
+		"diff --git a/x and y.bin b/x and y.bin\n" +
+		"deleted file mode 100644\n" +
+		"Binary files a/x and y.bin and /dev/null differ\n"
+	found := false
+	for _, f := range ScanText(patch) {
+		if f.Rule == "binary-in-history" && f.Severity == SeverityBlock {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("crafted binary filename containing ' and ' evaded the add+delete block")
+	}
+}
+
 // TestScanText_BinaryAddedAndKeptNotFlagged is the F1 low-noise guard: a binary
 // only ADDED (and kept, present in the final tree) is scannable by the
 // working-tree scan and is NOT the history-evasion case, so ScanText must NOT

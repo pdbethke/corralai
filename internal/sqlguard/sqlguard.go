@@ -69,7 +69,19 @@ func ValidateReadOnly(userSQL string) error {
 // applied to the SAME *sql.Conn the query then runs on (database/sql pools conns).
 // This is the security wall; oracle additionally applies its own resource caps
 // BEFORE calling this (lock_configuration must be last). `md:` (MotherDuck) survives.
+//
+// Idempotent by design: database/sql pools and REUSES *sql.Conns, so a conn that a
+// prior ApplyLockdown already sealed (lock_configuration=true, which cannot be
+// re-SET) may come back here. Re-running the SETs on it would error on the first
+// statement even though the conn is already fully locked down. So we detect the
+// already-locked state and return success — the conn is already the wall we want.
+// (Callers like oracle that add their OWN pre-lockdown SETs use a dedicated pinned
+// conn locked exactly once, so they never hit the reuse path.)
 func ApplyLockdown(ctx context.Context, conn *sql.Conn) error {
+	var locked string
+	if err := conn.QueryRowContext(ctx, `SELECT CAST(current_setting('lock_configuration') AS VARCHAR)`).Scan(&locked); err == nil && locked == "true" {
+		return nil
+	}
 	stmts := []string{
 		`SET disabled_filesystems = 'LocalFileSystem'`,
 		`SET autoinstall_known_extensions = false`,

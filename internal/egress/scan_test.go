@@ -238,6 +238,32 @@ func TestScanText_IgnoresFileHeaderAndContext(t *testing.T) {
 	}
 }
 
+func TestGovulnEnv(t *testing.T) {
+	t.Setenv("CORRAL_TOKEN", "SECRETVALUE")
+
+	env := govulnEnv()
+
+	want := []string{"GOTOOLCHAIN=local", "CGO_ENABLED=0", "GOFLAGS=-mod=readonly"}
+	for _, w := range want {
+		found := false
+		for _, e := range env {
+			if e == w {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("govulnEnv() missing %q; got %v", w, env)
+		}
+	}
+
+	for _, e := range env {
+		if contains(e, "SECRETVALUE") {
+			t.Fatalf("govulnEnv() leaked a secret env var into the child process: %q", e)
+		}
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(substr) > 0 && (func() bool {
 		for i := 0; i+len(substr) <= len(s); i++ {

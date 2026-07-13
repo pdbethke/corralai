@@ -21,6 +21,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
 // Severity levels for a Finding. "block" means the finding is loud AND must
@@ -256,6 +258,15 @@ func scanGoVuln(ctx context.Context, dir string, files []string) []Finding {
 	defer cancel()
 	cmd := exec.CommandContext(runCtx, bin, "./...") // #nosec G204 -- bin resolved via LookPath, fixed arg
 	cmd.Dir = dir
+	// govulnEnv scrubs the brain's secret env before this runs against
+	// untrusted mission source (audit M): no cmd.Env here previously meant
+	// govulncheck inherited CORRAL_TOKEN and every other brain secret, and
+	// GOTOOLCHAIN=auto would let hostile go.mod content fetch+execute an
+	// arbitrary Go toolchain outside the jail. Residual: go/packages still
+	// type-checks the target code as part of vuln analysis, and this still
+	// runs on the brain host rather than inside the bwrap jail — running
+	// govulncheck fully inside the jail is the deeper fix, deferred.
+	cmd.Env = govulnEnv()
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
 	_ = cmd.Run() // non-zero exit is expected when vulnerabilities are found; we parse output either way
@@ -270,6 +281,20 @@ func scanGoVuln(ctx context.Context, dir string, files []string) []Finding {
 		})
 	}
 	return findings
+}
+
+// govulnEnv builds the hardened, secret-free environment scanGoVuln runs
+// govulncheck under: sandbox.MinimalEnv() (PATH/HOME/LANG/LC_ALL/TMPDIR only
+// — no CORRAL_TOKEN or other brain secrets) plus flags that freeze the
+// toolchain and forbid module/cgo mutation, since the mission workdir this
+// runs against is untrusted (hostile go.mod/#cgo content, outside the jail).
+func govulnEnv() []string {
+	return append(sandbox.MinimalEnv(),
+		"GOTOOLCHAIN=local", // never fetch+exec a different Go toolchain
+		"GOFLAGS=-mod=readonly",
+		"CGO_ENABLED=0", // no cgo compiler invocation
+		"GONOSUMDB=*",
+	)
 }
 
 func touchesGoModule(files []string) bool {

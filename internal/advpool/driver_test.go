@@ -493,6 +493,174 @@ func TestTick_PoolAdequacy_CompileError_ReopensAndSkipsScore(t *testing.T) {
 	}
 }
 
+// signCall records one Signer.SignVerdict invocation for assertions.
+type signCall struct {
+	verdict Verdict
+}
+
+// fakeSigner never touches the real certify chain: it just records what it
+// was asked to sign and returns a canned (recordID, head), or an error.
+type fakeSigner struct {
+	calls []signCall
+	err   error
+}
+
+func (f *fakeSigner) SignVerdict(ctx context.Context, v Verdict) (int64, string, error) {
+	f.calls = append(f.calls, signCall{verdict: v})
+	if f.err != nil {
+		return 0, "", f.err
+	}
+	return int64(len(f.calls)), fmt.Sprintf("head-%d", len(f.calls)), nil
+}
+
+// leaderboardCall records one LeaderboardSink.Record invocation.
+type leaderboardCall struct {
+	model, role, outcome string
+}
+
+type fakeLeaderboard struct {
+	calls []leaderboardCall
+}
+
+func (f *fakeLeaderboard) Record(model, role, outcome string) {
+	f.calls = append(f.calls, leaderboardCall{model, role, outcome})
+}
+
+// (j) a certified verdict: SignVerdict is called with ModelsByRole
+// populated, and (only after that succeeds) the leaderboard is fed
+// (model, role, outcome) for all three roles — soundness #5: the fitness
+// feed never runs before the deterministic gate has scored and signed.
+func TestTick_Aggregate_Certified_SignsAndFeedsLeaderboard(t *testing.T) {
+	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}}
+	scorer := &fakeScorer{devKillRate: 0.9, devSurvivors: survivors, poolSurvivors: nil}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0]}}
+	d, _ := newTestDriver(t, 8, scorer, validator, 0.5)
+	signer := &fakeSigner{}
+	leaderboard := &fakeLeaderboard{}
+	d.Signer = signer
+	d.Leaderboard = leaderboard
+
+	v := completeFullRun(t, d, 8, "no vacuous tests found")
+
+	if v.Status != StatusCertified {
+		t.Fatalf("Status = %q, want %q", v.Status, StatusCertified)
+	}
+
+	if len(signer.calls) != 1 {
+		t.Fatalf("expected SignVerdict called once, got %d calls", len(signer.calls))
+	}
+	signed := signer.calls[0].verdict
+	if signed.Status != StatusCertified {
+		t.Fatalf("signed verdict Status = %q, want %q", signed.Status, StatusCertified)
+	}
+	if len(signed.ModelsByRole) == 0 {
+		t.Fatal("expected SignVerdict to be called with ModelsByRole populated")
+	}
+	for _, role := range []string{RoleMutantGenerator, RoleTestWriter, RoleTestCritic} {
+		if signed.ModelsByRole[role] == "" {
+			t.Fatalf("signed verdict ModelsByRole[%q] is empty", role)
+		}
+	}
+
+	if len(leaderboard.calls) != 3 {
+		t.Fatalf("expected 3 leaderboard.Record calls (one per role), got %d: %+v", len(leaderboard.calls), leaderboard.calls)
+	}
+	seenRoles := map[string]bool{}
+	for _, c := range leaderboard.calls {
+		seenRoles[c.role] = true
+		if c.model == "" {
+			t.Fatalf("leaderboard.Record called with empty model for role %q", c.role)
+		}
+		if c.outcome != OutcomePass && c.outcome != OutcomeFail {
+			t.Fatalf("leaderboard.Record called with unexpected outcome %q for role %q", c.outcome, c.role)
+		}
+	}
+	for _, role := range []string{RoleMutantGenerator, RoleTestWriter, RoleTestCritic} {
+		if !seenRoles[role] {
+			t.Fatalf("leaderboard was never fed for role %q", role)
+		}
+	}
+	// test-writer's authored test killed the one dev-survivor (ProvenMissed=1
+	// per TestTick_Aggregate_Certified) -> its outcome must be a pass.
+	for _, c := range leaderboard.calls {
+		if c.role == RoleTestWriter && c.outcome != OutcomePass {
+			t.Fatalf("test-writer outcome = %q, want %q (ProvenMissed=1)", c.outcome, OutcomePass)
+		}
+	}
+}
+
+// (k) a needs-review verdict (below-threshold DevKillRate, no blocking
+// finding): the driver must not auto-sign a "certified" record — it may
+// still sign a needs-review one, but the signed verdict's Status must never
+// read "certified" on a run that didn't clear the human gate.
+func TestTick_Aggregate_NeedsReview_NeverSignsCertified(t *testing.T) {
+	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}, {ID: "m2", Code: "c2"}}
+	scorer := &fakeScorer{devKillRate: 0.2, devSurvivors: survivors, poolSurvivors: nil}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0], survivors[1]}}
+	d, _ := newTestDriver(t, 9, scorer, validator, 0.8)
+	signer := &fakeSigner{}
+	leaderboard := &fakeLeaderboard{}
+	d.Signer = signer
+	d.Leaderboard = leaderboard
+
+	v := completeFullRun(t, d, 9, "no vacuous tests found")
+
+	if v.Status != StatusNeedsReview {
+		t.Fatalf("Status = %q, want %q (DevKillRate 0.2 < threshold 0.8)", v.Status, StatusNeedsReview)
+	}
+	for _, c := range signer.calls {
+		if c.verdict.Status == StatusCertified {
+			t.Fatalf("a needs-review run must never sign a %q-status record, got one: %+v", StatusCertified, c.verdict)
+		}
+	}
+	// The needs-review record itself may still be signed...
+	if len(signer.calls) != 1 {
+		t.Fatalf("expected SignVerdict called once (a needs-review record), got %d calls", len(signer.calls))
+	}
+	if signer.calls[0].verdict.Status != StatusNeedsReview {
+		t.Fatalf("signed verdict Status = %q, want %q", signer.calls[0].verdict.Status, StatusNeedsReview)
+	}
+}
+
+// (l) SignVerdict failing: the driver must not feed the leaderboard from an
+// unsigned verdict (soundness #5), and must leave the run non-terminal so a
+// later Tick can retry the (idempotent) aggregate+sign sequence.
+func TestTick_Aggregate_SignFails_SkipsLeaderboardAndRetries(t *testing.T) {
+	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}}
+	scorer := &fakeScorer{devKillRate: 0.9, devSurvivors: survivors, poolSurvivors: nil}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0]}}
+	d, _ := newTestDriver(t, 10, scorer, validator, 0.5)
+	signer := &fakeSigner{err: fmt.Errorf("certify chain unavailable")}
+	leaderboard := &fakeLeaderboard{}
+	d.Signer = signer
+	d.Leaderboard = leaderboard
+
+	ctx := context.Background()
+	ready := claimAllReady(t, d.Q)
+	tc, mg := ready[RoleTestCritic], ready[RoleMutantGenerator]
+	mustComplete(t, d.Q, tc.ID, "no vacuous tests found")
+	mustComplete(t, d.Q, mg.ID, "raw mutants")
+	if _, err := d.Tick(ctx, 10); err != nil {
+		t.Fatalf("Tick (dev-adequacy): %v", err)
+	}
+	tw := claimTaskByID(t, d.Q, d.runs[10].testWriterTaskID)
+	mustComplete(t, d.Q, tw.ID, "pool test source")
+
+	v, err := d.Tick(ctx, 10)
+	if err == nil {
+		t.Fatal("expected Tick to return an error when SignVerdict fails")
+	}
+	if v != nil {
+		t.Fatalf("expected no verdict returned on a sign failure, got %+v", v)
+	}
+	if len(leaderboard.calls) != 0 {
+		t.Fatalf("expected the leaderboard NOT fed when SignVerdict fails, got %d calls", len(leaderboard.calls))
+	}
+	if d.runs[10].verdict != nil {
+		t.Fatal("expected run.verdict left unset after a sign failure, so a later Tick retries")
+	}
+}
+
 func TestCheckDecorrelation(t *testing.T) {
 	if err := CheckDecorrelation(decorrelatedAssign()); err != nil {
 		t.Fatalf("expected a properly decorrelated assignment to pass, got %v", err)

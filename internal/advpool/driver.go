@@ -34,6 +34,32 @@ const (
 	StatusNeedsReview = "needs-review"
 )
 
+// Leaderboard outcome values fed by the driver after a terminal, signed
+// verdict — never derived from a worker's self-report (soundness #5).
+const (
+	OutcomePass = "pass"
+	OutcomeFail = "fail"
+)
+
+// Signer wraps the certify chain (certify.BuildLedger/BuildAttestation/
+// SignDSSE + buildstore — the real impl is Task 5.1): it signs a terminal
+// Verdict as a tamper-evident record, subject = repo@commit, byproducts =
+// the Verdict fields (incl ModelsByRole). Here it is an interface so the
+// driver stays pure/unit-testable with a fake; the resulting record
+// verifies with `corral certify verify`.
+type Signer interface {
+	SignVerdict(ctx context.Context, v Verdict) (recordID int64, head string, err error)
+}
+
+// LeaderboardSink is the gate-earned fitness feed: one (model, role, outcome)
+// observation per role, fed ONLY after a terminal Verdict has been scored by
+// the deterministic gate (Scorer, never a worker's self-report) AND signed
+// (soundness #5 — "a judge may not certify herself" extends to the fitness
+// signal too: a model cannot earn leaderboard credit from its own claim).
+type LeaderboardSink interface {
+	Record(model, role, outcome string)
+}
+
 // Verdict is one run's final, gated outcome.
 type Verdict struct {
 	Repo, Commit    string
@@ -90,6 +116,18 @@ type Driver struct {
 	Scorer    Scorer
 	Validator Validator
 	Assign    RoleAssignment
+
+	// Signer and Leaderboard are the terminal-verdict effects (Task 4.3):
+	// optional (nil = skipped) so every pre-existing Driver test keeps
+	// working unwired. Phase 5 wires the real certify-chain Signer and
+	// leaderboard PerformanceTracker sink. When set, Signer.SignVerdict is
+	// called on every terminal verdict (certified or needs-review — a
+	// needs-review run may still get a signed needs-review record, just
+	// never a "certified"-status one past the gate); Leaderboard.Record is
+	// only ever called AFTER SignVerdict returns successfully, never before
+	// the deterministic score + sign (soundness #5).
+	Signer      Signer
+	Leaderboard LeaderboardSink
 
 	// Threshold is the minimum DevKillRate a run may be auto-certified at;
 	// below it (or with any blocking finding open) the run is routed to
@@ -205,7 +243,7 @@ func (d *Driver) Tick(ctx context.Context, missionID int64) (*Verdict, error) {
 	}
 
 	if run.poolScored {
-		v, err := d.tickAggregate(missionID, run)
+		v, err := d.tickAggregate(ctx, missionID, run)
 		if err != nil {
 			return nil, err
 		}
@@ -320,8 +358,14 @@ func (d *Driver) tickPoolAdequacy(ctx context.Context, run *runState) error {
 }
 
 // tickAggregate is step 4: once test-critic is done AND pool-adequacy is
-// scored, aggregate the Verdict and apply the human gate.
-func (d *Driver) tickAggregate(missionID int64, run *runState) (*Verdict, error) {
+// scored, aggregate the Verdict, apply the human gate, sign it (Signer, if
+// wired), and — only after that sign succeeds — feed the gate-earned
+// leaderboard (Leaderboard, if wired). run.verdict is set (and the run
+// considered terminal) only once this whole sequence has succeeded: if
+// signing fails, the aggregate is left unset so a later Tick simply
+// recomputes and retries — aggregate/sign are both deterministic/idempotent
+// over the same scored inputs.
+func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runState) (*Verdict, error) {
 	tc, err := d.taskByKey(missionID, RoleTestCritic)
 	if err != nil {
 		return nil, err
@@ -343,8 +387,37 @@ func (d *Driver) tickAggregate(missionID int64, run *runState) (*Verdict, error)
 
 	v := aggregate(run.rs, d.Assign, run.devKillRate, run.mutantsTotal, len(run.devSurvivors), run.provenMissed,
 		criticFindings, d.Threshold, d.blockingFindingOpen(findings))
+
+	if d.Signer != nil {
+		if _, _, serr := d.Signer.SignVerdict(ctx, v); serr != nil {
+			return nil, fmt.Errorf("advpool: sign verdict: %w", serr)
+		}
+		if d.Leaderboard != nil {
+			d.feedLeaderboard(v)
+		}
+	}
+
 	run.verdict = &v
 	return run.verdict, nil
+}
+
+// feedLeaderboard is the gate-earned fitness feed: one (model, role,
+// outcome) call per role, derived from the CERTIFIED (Scorer-scored, gated,
+// signed) result only — never from a worker's self-report.
+func (d *Driver) feedLeaderboard(v Verdict) {
+	outcome := func(ok bool) string {
+		if ok {
+			return OutcomePass
+		}
+		return OutcomeFail
+	}
+	// test-writer: did its authored test kill the survivors it was targeted at?
+	d.Leaderboard.Record(v.ModelsByRole[RoleTestWriter], RoleTestWriter, outcome(v.ProvenMissed > 0))
+	// mutant-generator: did it produce mutants that compiled and exposed at
+	// least one survivor (i.e. mutants the dev's own tests didn't catch)?
+	d.Leaderboard.Record(v.ModelsByRole[RoleMutantGenerator], RoleMutantGenerator, outcome(v.MutantsTotal > 0 && v.Survivors > 0))
+	// test-critic: did its findings hold (it actually flagged something)?
+	d.Leaderboard.Record(v.ModelsByRole[RoleTestCritic], RoleTestCritic, outcome(len(v.VacuousFindings) > 0))
 }
 
 // blockingFindingOpen mirrors mission.Engine.blockingFindingOpen: any OPEN

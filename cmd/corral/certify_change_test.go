@@ -68,6 +68,48 @@ func TestExtractCommitArchivesTheCommitNotTheWorktree(t *testing.T) {
 	}
 }
 
+func TestExtractCommitMaterializesSymlinks(t *testing.T) {
+	dir := t.TempDir()
+	run := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@e",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@e")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run("init", "-q")
+	if err := os.WriteFile(filepath.Join(dir, "real.txt"), []byte("hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("real.txt", filepath.Join(dir, "link.txt")); err != nil {
+		t.Skipf("symlinks unsupported in this environment: %v", err)
+	}
+	run("add", "-A")
+	run("commit", "-q", "-m", "with symlink")
+
+	restore := chdir(t, dir)
+	defer restore()
+	workdir, _, cleanup, err := extractCommit("HEAD")
+	if err != nil {
+		t.Fatalf("extractCommit: %v", err)
+	}
+	defer cleanup()
+
+	fi, err := os.Lstat(filepath.Join(workdir, "link.txt"))
+	if err != nil {
+		t.Fatalf("committed symlink was not materialized: %v", err)
+	}
+	if fi.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("link.txt materialized as %v, want a symlink — a committed symlink must not be silently dropped", fi.Mode())
+	}
+	if tgt, err := os.Readlink(filepath.Join(workdir, "link.txt")); err != nil || tgt != "real.txt" {
+		t.Errorf("readlink(link.txt) = %q, %v; want \"real.txt\", nil", tgt, err)
+	}
+}
+
 func TestSignBuildLocallyRoundTripsThroughVerify(t *testing.T) {
 	t.Setenv("CORRALAI_CERTIFY_KEY", "") // force the file/generated path off the env seed
 	_, priv, err := ed25519.GenerateKey(nil)

@@ -196,19 +196,6 @@ func runCertifyStandalone(ref string, checkArgv []string, outPath string, net bo
 	if v, err := run.GitOutput("rev-parse", "--abbrev-ref", "HEAD"); err == nil {
 		branch = v
 	}
-	commitMessage := ""
-	if v, err := run.GitOutput("show", "-s", "--format=%s", sha); err == nil {
-		commitMessage = v
-	}
-	commitAuthor := ""
-	if v, err := run.GitOutput("show", "-s", "--format=%an <%ae>", sha); err == nil {
-		commitAuthor = v
-	}
-	commitDate := ""
-	if v, err := run.GitOutput("show", "-s", "--format=%cI", sha); err == nil {
-		commitDate = v
-	}
-	commitSignature := captureCommitSignature(run, sha)
 
 	command := strings.Join(checkArgv, " ")
 	exitCode, combined, dur, jailErr := jail.Run(context.Background(), command, workdir, net, DefaultCertifyTimeout)
@@ -231,11 +218,6 @@ func runCertifyStandalone(ref string, checkArgv []string, outPath string, net bo
 		DurationS:    dur.Seconds(),
 		OutputDigest: "sha256:" + hex.EncodeToString(sum[:]),
 		ProducedBy:   parseProducedBy(producedByFlag),
-
-		CommitMessage:   commitMessage,
-		CommitAuthor:    commitAuthor,
-		CommitDate:      commitDate,
-		CommitSignature: commitSignature,
 	}
 
 	priv, err := signKey()
@@ -312,6 +294,29 @@ func extractTar(r io.Reader, dest string) error {
 			if err := f.Close(); err != nil {
 				return err
 			}
+		case tar.TypeSymlink:
+			// Recreate the committed symlink faithfully. The link FILE is
+			// written at target, which is escape-guarded above; h.Linkname is
+			// the link's *content* (where it points), not a write path, and any
+			// traversal it implies is contained by the jail the checks run in.
+			// Silently dropping it would make the checked-out tree differ from
+			// the commit the record is signed against — the one thing this tool
+			// must never do.
+			if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
+				return err
+			}
+			if err := os.Symlink(h.Linkname, target); err != nil { // #nosec G305 -- target (the link's location) is escape-guarded; Linkname is content, resolved only inside the jail
+				return err
+			}
+		case tar.TypeXHeader, tar.TypeXGlobalHeader:
+			// pax metadata (git archive emits a global header carrying the
+			// commit sha) — not a filesystem entry; skip it, don't error.
+			continue
+		default:
+			// Fidelity-by-execution: an entry we can't materialize means the
+			// checked-out tree would NOT be the commit we're about to sign a
+			// verdict against. Fail loudly rather than certify a partial tree.
+			return fmt.Errorf("cannot faithfully materialize archive entry %q (unsupported tar type %d) — refusing to certify a tree that would not match the commit", h.Name, h.Typeflag)
 		}
 	}
 }
@@ -339,10 +344,10 @@ func (realJail) Run(ctx context.Context, command, workdir string, net bool, time
 	})
 	dur := time.Since(start)
 	if err != nil {
+		// sandbox.RunGuarded already returns a non-nil err on a timeout (and on
+		// any other failed run), so this is the single fail-closed exit — a
+		// timed-out or otherwise-unrunnable check never yields a signable result.
 		return -1, nil, dur, err
-	}
-	if res.TimedOut {
-		return res.ExitCode, []byte(res.Output), dur, fmt.Errorf("check timed out after %s", timeout)
 	}
 	return res.ExitCode, []byte(res.Output), dur, nil
 }

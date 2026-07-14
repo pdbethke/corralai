@@ -47,6 +47,7 @@ type canonValidator struct {
 
 func (v *canonValidator) CompileTest(_ context.Context, _, _, _ string) error { return nil }
 func (v *canonValidator) ParseMutants(_ string) ([]adequacy.Mutant, error)    { return v.mutants, nil }
+func (v *canonValidator) ParseTest(raw string) string                         { return raw }
 
 // integrationRunSpec is the canned code+dev-test pair driving the end-to-end
 // run: a trivial "always passes" dev test standing in for a weak developer

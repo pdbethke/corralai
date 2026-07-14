@@ -99,3 +99,24 @@ func (b *scriptedRawBackend) Chat(messages []omsg, tools []any) (omsg, error) {
 	b.lastMessages = messages
 	return omsg{Role: "assistant", Content: b.content}, nil
 }
+
+// effectiveTaskRole must prefer the CLAIMED task's role over the worker's own,
+// so a generalist worker takes the structured fast path on a role-typed task.
+func TestEffectiveTaskRole(t *testing.T) {
+	cases := []struct{ taskRole, workerRole, want string }{
+		{"mutant-generator", "any", "mutant-generator"}, // generalist claims structured task -> task role wins
+		{"test-writer", "builder", "test-writer"},
+		{"", "any", "any"},       // untyped task -> fall back to worker role
+		{"", "tester", "tester"}, // untyped task, role-typed worker
+		{"test-critic", "", "test-critic"},
+	}
+	for _, c := range cases {
+		if got := effectiveTaskRole(c.taskRole, c.workerRole); got != c.want {
+			t.Errorf("effectiveTaskRole(%q,%q) = %q, want %q", c.taskRole, c.workerRole, got, c.want)
+		}
+		// and the fast-path decision must follow the effective (task) role
+		if c.taskRole == "mutant-generator" && !isStructuredRole(effectiveTaskRole(c.taskRole, c.workerRole)) {
+			t.Errorf("generalist claiming a mutant-generator task must be treated as structured")
+		}
+	}
+}

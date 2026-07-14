@@ -189,13 +189,18 @@ Usage:
                                   (env → OS keyring → age-encrypted file; set reads stdin, never argv)
   corral control seed [flags]     seed one vetted control test into the control-gate store
                                   (--spec-db --owner --goal --target --code-path --test-path --test-file)
-  corral certify --brain <url> [flags] -- <command>...
-                                  run <command>, sign + record the result as a tamper-evident
-                                  build attestation on the brain (report_build); exits with
-                                  <command>'s own exit code
-                                  flags: --produced-by a,b   --out <file>
+  corral certify [<ref>] [--out <file>] [--net=false] [--produced-by a,b] -- <check-cmd>...
+                                  certify a change by execution: check out <ref> (default
+                                  HEAD) into a jail, run <check-cmd> there, and write a
+                                  signed, offline-verifiable record; exits with
+                                  <check-cmd>'s own exit code
+                                  signs locally (no server) unless --brain is given
+                                  flags: --produced-by a,b   --out <file>   --net=false
                                          --repo/--commit/--branch (default: read via git)
-  corral certify verify <record-file> [--pubkey <hex>|--brain <url>]
+  corral certify --brain <url> [flags] -- <check-cmd>...
+                                  same as above, and also post the signed record to a
+                                  brain (report_build) as a tamper-evident build attestation
+  corral certify verify <record-file> [--pubkey <hex>|--brain <url>] [--allow-unanchored]
                                   independently verify a --out (or report_build) record: the
                                   Ed25519 signature, the ledger's hash chain, and that the
                                   statement is bound to that exact ledger head — requires a
@@ -203,6 +208,7 @@ Usage:
                                   embedded public_key is never a trust anchor); prints
                                   "verified" and exits 0, or names the failing check on
                                   stderr and exits non-zero
+  corral certify pubkey           print the local signing pubkey (for --pubkey trust anchors)
   corral --version                print the build version and exit
   corral -h                       print this help and exit
 

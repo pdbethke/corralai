@@ -121,7 +121,7 @@ func buildTestRecord(t *testing.T) (pubHex string, raw []byte) {
 	return hex.EncodeToString(pub), b
 }
 
-func writeRecord(t *testing.T, raw []byte) string {
+func writeRawRecord(t *testing.T, raw []byte) string {
 	t.Helper()
 	p := filepath.Join(t.TempDir(), "record.json")
 	if err := os.WriteFile(p, raw, 0o644); err != nil {
@@ -139,7 +139,7 @@ func failFetcher(t *testing.T) pubkeyFetcher {
 
 func TestRunCertifyVerify_ValidRecordPasses(t *testing.T) {
 	pubHex, raw := buildTestRecord(t)
-	path := writeRecord(t, raw)
+	path := writeRawRecord(t, raw)
 	var stdout, stderr bytes.Buffer
 
 	code := runCertifyVerify([]string{"--pubkey", pubHex, "--allow-unanchored", path}, failFetcher(t), failWitnessFactory(t), &stdout, &stderr)
@@ -161,7 +161,7 @@ func TestRunCertifyVerify_ValidRecordPasses(t *testing.T) {
 // stdout) rather than fall back to the record's self-reported key.
 func TestRunCertifyVerify_UsesRecordEmbeddedPublicKeyWhenNoFlagsGiven(t *testing.T) {
 	_, raw := buildTestRecord(t)
-	path := writeRecord(t, raw)
+	path := writeRawRecord(t, raw)
 	var stdout, stderr bytes.Buffer
 
 	code := runCertifyVerify([]string{path}, failFetcher(t), failWitnessFactory(t), &stdout, &stderr)
@@ -231,7 +231,7 @@ func TestRunCertifyVerify_TamperedPredicateFailsAtSignature(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := writeRecord(t, tampered)
+	path := writeRawRecord(t, tampered)
 	var stdout, stderr bytes.Buffer
 
 	code := runCertifyVerify([]string{"--pubkey", pubHex, path}, failFetcher(t), failWitnessFactory(t), &stdout, &stderr)
@@ -258,7 +258,7 @@ func TestRunCertifyVerify_TamperedStepFailsAtLedger(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := writeRecord(t, tampered)
+	path := writeRawRecord(t, tampered)
 	var stdout, stderr bytes.Buffer
 
 	code := runCertifyVerify([]string{"--pubkey", pubHex, path}, failFetcher(t), failWitnessFactory(t), &stdout, &stderr)
@@ -273,7 +273,7 @@ func TestRunCertifyVerify_TamperedStepFailsAtLedger(t *testing.T) {
 
 func TestRunCertifyVerify_FetchesPubkeyFromBrain(t *testing.T) {
 	pubHex, raw := buildTestRecord(t)
-	path := writeRecord(t, raw)
+	path := writeRawRecord(t, raw)
 	var stdout, stderr bytes.Buffer
 
 	called := false
@@ -303,7 +303,7 @@ func TestRunCertifyVerify_FetchesPubkeyFromBrain(t *testing.T) {
 // usage-error path (exit 2) before ever inspecting the record.
 func TestRunCertifyVerify_AcceptsRecordFileBeforeOrAfterFlags(t *testing.T) {
 	pubHex, raw := buildTestRecord(t)
-	path := writeRecord(t, raw)
+	path := writeRawRecord(t, raw)
 
 	var stdoutFileFirst, stderrFileFirst bytes.Buffer
 	codeFileFirst := runCertifyVerify([]string{path, "--pubkey", pubHex, "--allow-unanchored"}, failFetcher(t), failWitnessFactory(t), &stdoutFileFirst, &stderrFileFirst)
@@ -335,7 +335,7 @@ func TestRunCertifyVerify_MissingRecordFileIsAnError(t *testing.T) {
 // top-level main.go branch.
 func TestCertifyDispatchesVerifySubcommand(t *testing.T) {
 	_, raw := buildTestRecord(t)
-	path := writeRecord(t, raw)
+	path := writeRawRecord(t, raw)
 	pubHex, _ := buildTestRecord(t) // any pubkey works for the plumbing check below (wrong key still exercises dispatch)
 	_ = pubHex
 
@@ -350,7 +350,7 @@ func TestCertifyDispatchesVerifySubcommand(t *testing.T) {
 	post := &fakePoster{}
 	var stdout, stderr bytes.Buffer
 
-	code := runCertify([]string{"verify", "--pubkey", realPub, "--allow-unanchored", path}, run, post, &stdout, &stderr)
+	code := runCertify([]string{"verify", "--pubkey", realPub, "--allow-unanchored", path}, run, post, nil, nil, &stdout, &stderr)
 
 	if code != 0 {
 		t.Fatalf("expected exit 0 via certify's verify dispatch, got %d (stderr=%s)", code, stderr.String())
@@ -366,7 +366,7 @@ func TestCertifyDispatchesVerifySubcommand(t *testing.T) {
 // log index/time on stdout.
 func TestRunCertifyVerify_AnchoredRecordPasses(t *testing.T) {
 	pubHex, raw := buildAnchoredTestRecord(t)
-	path := writeRecord(t, raw)
+	path := writeRawRecord(t, raw)
 	var stdout, stderr bytes.Buffer
 
 	code := runCertifyVerify([]string{"--pubkey", pubHex, path}, failFetcher(t), fakeWitnessFactory, &stdout, &stderr)
@@ -406,7 +406,7 @@ func TestRunCertifyVerify_TamperedInclusionProofFailsAtRekorStep(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := writeRecord(t, tampered)
+	path := writeRawRecord(t, tampered)
 	var stdout, stderr bytes.Buffer
 
 	code := runCertifyVerify([]string{"--pubkey", pubHex, path}, failFetcher(t), fakeWitnessFactory, &stdout, &stderr)
@@ -425,7 +425,7 @@ func TestRunCertifyVerify_TamperedInclusionProofFailsAtRekorStep(t *testing.T) {
 // different claims, and verify must not silently conflate them.
 func TestRunCertifyVerify_UnanchoredRecordFailsWithoutAllowFlag(t *testing.T) {
 	pubHex, raw := buildTestRecord(t) // anchored=false (zero value)
-	path := writeRecord(t, raw)
+	path := writeRawRecord(t, raw)
 	var stdout, stderr bytes.Buffer
 
 	code := runCertifyVerify([]string{"--pubkey", pubHex, path}, failFetcher(t), failWitnessFactory(t), &stdout, &stderr)
@@ -446,7 +446,7 @@ func TestRunCertifyVerify_UnanchoredRecordFailsWithoutAllowFlag(t *testing.T) {
 // explicitly opts in via --allow-unanchored.
 func TestRunCertifyVerify_UnanchoredRecordPassesWithAllowFlag(t *testing.T) {
 	pubHex, raw := buildTestRecord(t)
-	path := writeRecord(t, raw)
+	path := writeRawRecord(t, raw)
 	var stdout, stderr bytes.Buffer
 
 	code := runCertifyVerify([]string{"--pubkey", pubHex, "--allow-unanchored", path}, failFetcher(t), failWitnessFactory(t), &stdout, &stderr)

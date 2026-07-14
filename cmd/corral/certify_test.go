@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"io"
@@ -96,7 +97,7 @@ func TestRunCertify_ExitPassthrough_Success(t *testing.T) {
 		"--commit", "abc123",
 		"--branch", "main",
 		"--", "go", "test", "./...",
-	}, run, post, &stdout, &stderr)
+	}, run, post, nil, nil, &stdout, &stderr)
 
 	if code != 0 {
 		t.Fatalf("expected exit 0, got %d (stderr=%s)", code, stderr.String())
@@ -120,7 +121,7 @@ func TestRunCertify_ExitPassthrough_Failure(t *testing.T) {
 		"--commit", "abc123",
 		"--branch", "main",
 		"--", "go", "test", "./...",
-	}, run, post, &stdout, &stderr)
+	}, run, post, nil, nil, &stdout, &stderr)
 
 	if code != 2 {
 		t.Fatalf("expected exit 2 (passthrough of the check's failure), got %d", code)
@@ -145,7 +146,7 @@ func TestRunCertify_RecordCarriesCommandAndGitContext(t *testing.T) {
 		"--branch", "feat/x",
 		"--produced-by", "claude-opus,codex",
 		"--", "go", "test", "./...",
-	}, run, post, &stdout, &stderr)
+	}, run, post, nil, nil, &stdout, &stderr)
 
 	if code != 0 {
 		t.Fatalf("unexpected exit code %d: %s", code, stderr.String())
@@ -183,7 +184,7 @@ func TestRunCertify_OutWritesStatement(t *testing.T) {
 		"--branch", "main",
 		"--out", outPath,
 		"--", "go", "test", "./...",
-	}, run, post, &stdout, &stderr)
+	}, run, post, nil, nil, &stdout, &stderr)
 
 	if code != 0 {
 		t.Fatalf("unexpected exit code %d: %s", code, stderr.String())
@@ -218,7 +219,7 @@ func TestRunCertify_OutWritesFullSelfVerifyingRecord(t *testing.T) {
 		"--branch", "main",
 		"--out", outPath,
 		"--", "go", "test", "./...",
-	}, run, post, &stdout, &stderr)
+	}, run, post, nil, nil, &stdout, &stderr)
 
 	if code != 0 {
 		t.Fatalf("unexpected exit code %d: %s", code, stderr.String())
@@ -275,7 +276,7 @@ func TestRunCertify_GitLinkCaptureGoodSig(t *testing.T) {
 		"--commit", "abc123",
 		"--branch", "main",
 		"--", "go", "test", "./...",
-	}, run, post, &stdout, &stderr)
+	}, run, post, nil, nil, &stdout, &stderr)
 
 	if code != 0 {
 		t.Fatalf("unexpected exit code %d: %s", code, stderr.String())
@@ -323,7 +324,7 @@ func TestRunCertify_GitLinkCaptureUnsigned(t *testing.T) {
 		"--commit", "abc123",
 		"--branch", "main",
 		"--", "go", "test", "./...",
-	}, run, post, &stdout, &stderr)
+	}, run, post, nil, nil, &stdout, &stderr)
 
 	if code != 0 {
 		t.Fatalf("an unsigned commit must not fail certify, got exit %d: %s", code, stderr.String())
@@ -367,7 +368,7 @@ func TestRunCertify_GitLinkCaptureBadSigAndUnknownKey(t *testing.T) {
 				"--commit", "abc123",
 				"--branch", "main",
 				"--", "go", "test", "./...",
-			}, run, post, &stdout, &stderr)
+			}, run, post, nil, nil, &stdout, &stderr)
 
 			if code != 0 {
 				t.Fatalf("must not fail certify, got exit %d: %s", code, stderr.String())
@@ -405,7 +406,7 @@ func TestRunCertify_GitLinkCaptureGitUnavailable(t *testing.T) {
 		"--commit", "abc123",
 		"--branch", "main",
 		"--", "go", "test", "./...",
-	}, run, post, &stdout, &stderr)
+	}, run, post, nil, nil, &stdout, &stderr)
 
 	if code != 0 {
 		t.Fatalf("git being unavailable must never make certify fatal, got exit %d: %s", code, stderr.String())
@@ -419,18 +420,29 @@ func TestRunCertify_GitLinkCaptureGitUnavailable(t *testing.T) {
 	}
 }
 
-func TestRunCertify_MissingBrainIsAnError(t *testing.T) {
+// TestRunCertify_MissingBrainRoutesToStandaloneNotError locks the Task 4
+// invariant: --brain/$CORRAL_BRAIN absent is no longer an error — it routes
+// to the standalone (checkout+jail+local-sign) path instead, and never posts
+// to a brain. (Superseded the old "missing --brain is an error" behavior;
+// see TestRunCertifyStandalone* in certify_change_test.go for full coverage
+// of the standalone path itself.)
+func TestRunCertify_MissingBrainRoutesToStandaloneNotError(t *testing.T) {
 	run := &fakeRunner{exitCode: 0}
 	post := &fakePoster{result: stubResult()}
 	var stdout, stderr bytes.Buffer
 
-	code := runCertify([]string{"--repo", "x", "--commit", "y", "--", "true"}, run, post, &stdout, &stderr)
+	code := runCertify([]string{"--repo", "x", "--commit", "y", "--", "true"}, run, post, fakeJail{exit: 0, out: "ok"}, func() (ed25519.PrivateKey, error) {
+		return nil, errors.New("no signing key configured for this test")
+	}, &stdout, &stderr)
 
-	if code == 0 {
-		t.Fatal("expected a non-zero exit when --brain/$CORRAL_BRAIN is not set")
-	}
 	if post.called {
-		t.Error("must not post when brain is unresolved")
+		t.Error("must not post when brain is unresolved (standalone path never talks to a brain)")
+	}
+	// signKey deliberately errors here (no local key configured) — the
+	// standalone path must fail closed (non-zero) rather than sign with a
+	// nil key or silently skip signing.
+	if code == 0 {
+		t.Fatal("expected a non-zero exit when the local signing key can't be loaded")
 	}
 }
 
@@ -445,7 +457,7 @@ func TestRunCertify_PostFailureStillReturnsCheckExitCode(t *testing.T) {
 		"--brain", "https://brain.example",
 		"--repo", "x", "--commit", "y", "--branch", "main",
 		"--", "true",
-	}, run, post, &stdout, &stderr)
+	}, run, post, nil, nil, &stdout, &stderr)
 
 	if code != 0 {
 		t.Fatalf("post failure must not flip a passing check's exit code, got %d", code)
@@ -460,7 +472,7 @@ func TestRunCertify_PostFailureStillReturnsCheckExitCode(t *testing.T) {
 		"--brain", "https://brain.example",
 		"--repo", "x", "--commit", "y", "--branch", "main",
 		"--", "false",
-	}, run2, post2, &stdout, &stderr)
+	}, run2, post2, nil, nil, &stdout, &stderr)
 	if code2 != 5 {
 		t.Fatalf("post failure must not mask a failing check's exit code, got %d", code2)
 	}

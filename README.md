@@ -11,6 +11,13 @@
 > with every run recorded and replayable. *(The adversarial, role-separated herd
 > that staffs the verification is the next slice — designed, not yet built; see the
 > honest floor below.)*
+>
+> `corral certify <ref> -- <cmd>` checks out that commit into a jail, runs `<cmd>`,
+> and writes a signed record you verify offline with `corral certify verify` — no
+> server required; `--brain` optionally posts it to a brain. This certifies the
+> change's **declared checks** — the control-owner tests and the adversarial herd
+> are later slices (see the
+> [design spec](docs/superpowers/specs/2026-07-13-corral-certify-cli-design.md)).
 
 **Corral is re-focusing from a builder to a reactive audit / certification gate —
 the CISO's tool, not another way to generate code.** The build-from-directive path
@@ -25,9 +32,11 @@ require. The mission engine that used to drive a build-and-iterate loop is still
 the codebase, but its Tick loop is **not started** — it's retained, dormant, as the
 seed for the next slice: an adversarial verification engine (staffed with
 security/correctness/exploit-hunting roles instead of coder/builder roles) rather
-than a code-generation one. A standalone `corral certify <change>` CLI and the
-staffed adversarial-verification flow described in the spec are **designed, not yet
-built** — don't expect them from this README; this is the honest floor.
+than a code-generation one. A standalone `corral certify <ref> -- <cmd>` CLI now
+exists (see above) and signs its records locally, no server required; the staffed
+adversarial-verification flow and the control-owner tests described in the spec
+are still **designed, not yet built** — don't expect them from this README; this
+is the honest floor.
 
 What still stands from the original build:
 

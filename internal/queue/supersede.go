@@ -131,9 +131,9 @@ func (s *Store) SupersedeTask(oldID int64, spec TaskSpec) (int64, error) {
 	}
 	b, _ := json.Marshal(deps)
 	res, err := tx.Exec(
-		`INSERT INTO tasks (mission_id,key,role,title,instruction,status,depends_on,verify,created_ts,supersedes)
-		 VALUES (?,?,?,?,?,?,?,?,?,?)`,
-		missionID, spec.Key, spec.Role, spec.Title, spec.Instruction, StatusPending, string(b), spec.Verify, now(), oldID,
+		`INSERT INTO tasks (mission_id,key,role,title,instruction,status,depends_on,verify,created_ts,supersedes,model)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		missionID, spec.Key, spec.Role, spec.Title, spec.Instruction, StatusPending, string(b), spec.Verify, now(), oldID, spec.Model,
 	)
 	if err != nil {
 		return 0, err

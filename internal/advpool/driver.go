@@ -25,6 +25,7 @@ type Scorer interface {
 type Validator interface {
 	CompileTest(ctx context.Context, codePath, code, test string) error
 	ParseMutants(raw string) ([]adequacy.Mutant, error) // = testgen.ParseMutantsOutput
+	ParseTest(raw string) string                        // = testgen.ParseTestOutput (strip fences/prose from a worker's raw test)
 }
 
 // Verdict status values. Never auto-certified: a blocking finding or a
@@ -341,14 +342,20 @@ func (d *Driver) tickPoolAdequacy(ctx context.Context, run *runState) error {
 		return nil
 	}
 
-	if cerr := d.Validator.CompileTest(ctx, run.rs.CodePath, run.rs.Code, tw.Result); cerr != nil {
+	// The worker hands back the model's RAW output (structured fast path); a
+	// model commonly wraps a test in ```go fences / prose. Clean it to the bare
+	// source before compiling or scoring — symmetric with ParseMutants on the
+	// mutant-generator side.
+	writerTest := d.Validator.ParseTest(tw.Result)
+
+	if cerr := d.Validator.CompileTest(ctx, run.rs.CodePath, run.rs.Code, writerTest); cerr != nil {
 		if _, rerr := d.Q.ReopenTask(tw.ID); rerr != nil {
 			return fmt.Errorf("advpool: reopen test-writer after compile failure: %w", rerr)
 		}
 		return fmt.Errorf("advpool: test-writer result does not compile, reissued for retry: %w", cerr)
 	}
 
-	_, poolSurvivors, serr := d.Scorer.Score(ctx, run.rs.CodePath, run.rs.Code, tw.Result, run.devSurvivors, run.rs.TestCmd)
+	_, poolSurvivors, serr := d.Scorer.Score(ctx, run.rs.CodePath, run.rs.Code, writerTest, run.devSurvivors, run.rs.TestCmd)
 	if serr != nil {
 		return fmt.Errorf("advpool: score pool test: %w", serr)
 	}

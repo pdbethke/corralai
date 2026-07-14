@@ -150,6 +150,10 @@ func (v advpoolValidator) ParseMutants(raw string) ([]adequacy.Mutant, error) {
 	return testgen.ParseMutantsOutput(raw)
 }
 
+func (v advpoolValidator) ParseTest(raw string) string {
+	return testgen.ParseTestOutput(raw)
+}
+
 // advpoolSigner signs a terminal Verdict via the SAME certify chain
 // certifyBuild/report_build uses (opts.CertifyKey/BuildStore/Witness) —
 // mirroring certifierAdapter (gate.go) and controlRunner's Cert field

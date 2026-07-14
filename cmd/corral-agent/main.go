@@ -379,6 +379,7 @@ func runQueueLoop(ctx context.Context, backend Backend, name, role string, rs ag
 				ID          int64  `json:"id"`
 				MissionID   int64  `json:"mission_id"`
 				Title       string `json:"title"`
+				Role        string `json:"role"` // the CLAIMED task's role — drives the structured fast path, even for a generalist worker
 				Instruction string `json:"instruction"`
 				Verify      string `json:"verify"`
 				Reissued    bool   `json:"reissued"`
@@ -412,8 +413,13 @@ func runQueueLoop(ctx context.Context, backend Backend, name, role string, rs ag
 			instruction += fmt.Sprintf("\n\nVERIFICATION REQUIREMENT: You MUST run the command %q using the run_command tool in the workspace before completing this task, and verify it succeeds.", out.Task.Verify)
 		}
 		instruction = withRefusalFeedback(instruction, refusalMsg[out.Task.ID])
+		// Behavior (esp. the structured-role fast path) keys on the CLAIMED
+		// TASK's role, not the worker's own role — a generalist ("any") worker
+		// that claims a mutant-generator/test-writer task must still take the
+		// structured single-Chat path, not the freeform tool loop.
+		effRole := effectiveTaskRole(out.Task.Role, role)
 		taskStart := time.Now()
-		summary, taskErr := runTask(ctx, backend, name, role, ws, brain, tools, out.Task.MissionID, out.Task.ID, out.Task.Title, instruction, mir, bc, out.Task.Model)
+		summary, taskErr := runTask(ctx, backend, name, effRole, ws, brain, tools, out.Task.MissionID, out.Task.ID, out.Task.Title, instruction, mir, bc, out.Task.Model)
 		fmt.Printf("[%s/%s] task #%d ran %s\n", name, role, out.Task.ID, time.Since(taskStart).Round(time.Second))
 		if handleTaskError(out.Task.ID, out.Task.MissionID, modelDesc, taskErr, brain) {
 			fmt.Printf("[%s/%s] ⨯ model unreachable on task #%d — released claim; reaper will reassign\n",
@@ -567,6 +573,18 @@ func taskModel(assignedModel, defaultModel string) string {
 // other role stay on the freeform loop.
 func isStructuredRole(role string) bool {
 	return role == "test-writer" || role == "mutant-generator"
+}
+
+// effectiveTaskRole is the role that drives per-task behavior (notably the
+// structured fast path): the CLAIMED task's own role when it has one, else the
+// worker's own role. A generalist ("any") worker that claims a role-typed pool
+// task (mutant-generator/test-writer) must behave as that role, not as a
+// generalist — the queue hands out role-typed work regardless of the claimer.
+func effectiveTaskRole(taskRole, workerRole string) string {
+	if taskRole != "" {
+		return taskRole
+	}
+	return workerRole
 }
 
 // handleTaskError is called when runTask returns a non-nil error. Returns true when

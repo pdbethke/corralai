@@ -59,13 +59,21 @@ type fakeValidator struct {
 	mutants    []adequacy.Mutant
 	parseErr   error
 	compileErr error
+	compileGot string // the test string CompileTest last received (post-ParseTest)
 }
 
 func (f *fakeValidator) ParseMutants(raw string) ([]adequacy.Mutant, error) {
 	return f.mutants, f.parseErr
 }
 
+// ParseTest strips a "RAW:" sentinel so a test can prove the driver cleans the
+// worker's raw output (fences/prose) BEFORE compiling/scoring it.
+func (f *fakeValidator) ParseTest(raw string) string {
+	return strings.TrimPrefix(raw, "RAW:")
+}
+
 func (f *fakeValidator) CompileTest(ctx context.Context, codePath, code, test string) error {
+	f.compileGot = test
 	return f.compileErr
 }
 
@@ -700,5 +708,33 @@ func TestCheckDecorrelation(t *testing.T) {
 	// Both empty (no assignment yet) must not false-positive.
 	if err := CheckDecorrelation(RoleAssignment{}); err != nil {
 		t.Fatalf("expected an empty assignment to pass, got %v", err)
+	}
+}
+
+// The driver must clean the test-writer's RAW output (fences/prose) via
+// ParseTest BEFORE compiling/scoring it — otherwise a ```go-fenced test never
+// compiles (the bug the live e2e exercise surfaced).
+func TestTick_PoolAdequacy_StripsRawTestBeforeCompile(t *testing.T) {
+	const mission int64 = 33
+	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}}
+	scorer := &fakeScorer{devKillRate: 0.9, devSurvivors: survivors, poolSurvivors: nil}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0]}}
+	d, _ := newTestDriver(t, mission, scorer, validator, 0.5)
+
+	ctx := context.Background()
+	ready := claimAllReady(t, d.Q)
+	mustComplete(t, d.Q, ready[RoleTestCritic].ID, "no vacuous tests found")
+	mustComplete(t, d.Q, ready[RoleMutantGenerator].ID, "raw mutants")
+	if _, err := d.Tick(ctx, mission); err != nil {
+		t.Fatalf("Tick (dev-adequacy): %v", err)
+	}
+	// Complete the test-writer with a RAW (fenced-style) artifact.
+	tw := claimTaskByID(t, d.Q, d.runs[mission].testWriterTaskID)
+	mustComplete(t, d.Q, tw.ID, "RAW:func TestX(t *testing.T){}")
+	if _, err := d.Tick(ctx, mission); err != nil {
+		t.Fatalf("Tick (pool-adequacy): %v", err)
+	}
+	if validator.compileGot != "func TestX(t *testing.T){}" {
+		t.Errorf("CompileTest received %q, want the ParseTest-cleaned source (RAW: prefix stripped)", validator.compileGot)
 	}
 }

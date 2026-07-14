@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"crypto/ed25519"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/pdbethke/corralai/internal/certverify"
 )
@@ -90,6 +92,37 @@ func TestSignBuildLocallyRoundTripsThroughVerify(t *testing.T) {
 	}, pub, nil, true)
 	if !ok {
 		t.Fatalf("VerifyRecord failed on a locally-signed record: %+v", checks)
+	}
+}
+
+func TestRealJailRunsInSandboxOrFailsClosed(t *testing.T) {
+	// This test asserts the fail-closed contract without requiring bwrap:
+	// with no exec backend available/allowed, realJail.Run must return an
+	// error (never a silent unsandboxed run).
+	t.Setenv("AGENT_EXEC_UNSAFE_HOST", "") // ensure the unsafe host backend is NOT opted in
+	dir := t.TempDir()
+	_, _, _, err := realJail{}.Run(context.Background(), "true", dir, false, 5*time.Second)
+	if err == nil {
+		t.Skip("a real jail backend is available in this environment; fail-closed path not exercised here")
+	}
+	// err != nil is the required fail-closed behavior when no backend resolves.
+}
+
+// TestRealJailFailsClosedOnUnavailableBackend exercises the fail-closed
+// contract DETERMINISTICALLY, regardless of whether a real bwrap backend
+// exists on the host: an unknown backend name makes sandbox.Resolve error,
+// so realJail.Run must return that error and never fall back to running the
+// check unsandboxed. This is the security-critical property, so it must be
+// verified in CI (where bwrap resolves and the skip-based test above skips).
+func TestRealJailFailsClosedOnUnavailableBackend(t *testing.T) {
+	t.Setenv("CORRALAI_EXEC_BACKEND", "definitely-not-a-real-backend")
+	dir := t.TempDir()
+	exit, out, _, err := realJail{}.Run(context.Background(), "true", dir, false, 5*time.Second)
+	if err == nil {
+		t.Fatal("realJail.Run returned nil error with an unavailable backend — it must fail closed, never run unsandboxed")
+	}
+	if exit != -1 || out != nil {
+		t.Errorf("fail-closed run must not report a check result: exit=%d out=%q", exit, out)
 	}
 }
 

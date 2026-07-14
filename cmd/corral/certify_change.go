@@ -4,6 +4,7 @@ package main
 
 import (
 	"archive/tar"
+	"context"
 	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
@@ -14,9 +15,11 @@ import (
 	"os/user"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/pdbethke/corralai/internal/buildstore"
 	"github.com/pdbethke/corralai/internal/certify"
+	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
 // extractCommit resolves ref to a commit sha and materializes that exact
@@ -167,4 +170,35 @@ func extractTar(r io.Reader, dest string) error {
 			}
 		}
 	}
+}
+
+// jailRunner runs the certified check inside a sandbox. err is returned ONLY
+// when the check could not be jail-run at all (no backend, setup failure) —
+// the fail-closed seam; a normal nonzero check exit comes back via exitCode.
+type jailRunner interface {
+	Run(ctx context.Context, command, workdir string, net bool, timeout time.Duration) (exitCode int, combined []byte, dur time.Duration, err error)
+}
+
+// realJail resolves a real isolator (bwrap on linux, etc.) and runs the
+// command via sandbox.RunGuarded — the one true "failed run != success"
+// home. A nil/unavailable backend fails closed (never an unsandboxed run).
+type realJail struct{}
+
+func (realJail) Run(ctx context.Context, command, workdir string, net bool, timeout time.Duration) (int, []byte, time.Duration, error) {
+	iso, err := sandbox.Resolve(sandbox.Config{Backend: os.Getenv("CORRALAI_EXEC_BACKEND")})
+	if err != nil {
+		return -1, nil, 0, fmt.Errorf("no sandbox backend (refusing to run unsandboxed): %w", err)
+	}
+	start := time.Now()
+	res, err := sandbox.RunGuarded(ctx, command, sandbox.Options{
+		Workspace: workdir, Timeout: timeout, Network: net, Backend: iso,
+	})
+	dur := time.Since(start)
+	if err != nil {
+		return -1, nil, dur, err
+	}
+	if res.TimedOut {
+		return res.ExitCode, []byte(res.Output), dur, fmt.Errorf("check timed out after %s", timeout)
+	}
+	return res.ExitCode, []byte(res.Output), dur, nil
 }

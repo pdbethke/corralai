@@ -557,6 +557,18 @@ func taskModel(assignedModel, defaultModel string) string {
 	return defaultModel
 }
 
+// isStructuredRole reports whether role produces a typed artifact (rendered
+// test source, generated mutants) via a single LLM call rather than working
+// the task through the general multi-step tool loop. This is the SOLE signal
+// for the runTask/runQueueLoop fast path — deliberately role-based (no new
+// task field) per the pool design: test-writer and mutant-generator receive
+// an already-rendered testgen prompt as their Instruction and are expected to
+// hand back raw output for the brain to validate/parse; test-critic and every
+// other role stay on the freeform loop.
+func isStructuredRole(role string) bool {
+	return role == "test-writer" || role == "mutant-generator"
+}
+
 // handleTaskError is called when runTask returns a non-nil error. Returns true when
 // the caller should skip complete_task and continue the loop (claim was released).
 // Extracted for testability — the queue loop calls this immediately after runTask.
@@ -612,6 +624,36 @@ func runTask(ctx context.Context, backend Backend, name, role, ws string, brain 
 				name, role, taskID, wantModel, modelMismatch)
 		}
 	}
+	// annotate appends the honest model-mismatch note (if any) to whatever
+	// summary this task ends up completing with, so complete_task's result
+	// never silently implies the assignment ran when it didn't.
+	annotate := func(s string) string {
+		if modelMismatch == "" {
+			return s
+		}
+		return s + " [" + modelMismatch + "]"
+	}
+	// Structured-role fast path: test-writer/mutant-generator tasks arrive
+	// with an already-rendered testgen prompt as their Instruction and are
+	// expected to produce a typed artifact (test source / mutants) for the
+	// brain to validate — not a freeform tool-loop summary. So skip the
+	// multi-step tool loop entirely: one backend.Chat call with the
+	// instruction as the sole prompt, and the raw model output goes back to
+	// complete_task verbatim. The per-task model selection above (WithModel /
+	// honest-mismatch annotate) already applies to `backend` here — no
+	// separate handling needed.
+	if isStructuredRole(role) {
+		brain("heartbeat", map[string]any{"status": "working"})
+		m, err := backend.Chat([]omsg{{Role: "user", Content: instruction}}, nil)
+		if err != nil {
+			if errors.Is(err, ErrModelUnreachable) {
+				return "", ErrModelUnreachable
+			}
+			fmt.Printf("   ! model: %v\n", err)
+			return annotate("error: " + err.Error()), nil
+		}
+		return annotate(m.Content), nil
+	}
 	extraPrompt := ""
 	if role == "tester" {
 		extraPrompt = `
@@ -663,15 +705,6 @@ Task: %s
 		}
 	}
 
-	// annotate appends the honest model-mismatch note (if any) to whatever
-	// summary this task ends up completing with, so complete_task's result
-	// never silently implies the assignment ran when it didn't.
-	annotate := func(s string) string {
-		if modelMismatch == "" {
-			return s
-		}
-		return s + " [" + modelMismatch + "]"
-	}
 	messages := []omsg{{Role: "system", Content: sys}, {Role: "user", Content: "Begin. Take the first step."}}
 	last := "completed"
 	for step := 0; step < 15; step++ {

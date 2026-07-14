@@ -134,6 +134,27 @@ Go binary.**
   runs — separation of duties, mechanized end to end. Next: the **first live-gated PR whose
   control was authored (not seeded)**, then multi-language + a cockpit panel — and only then the
   field note ships (don't advertise unbuilt).
+- **The adversarial testing pool (experimental, off by default).** A first cut at grading
+  a change's **own tests**, not just the change: given the code under review plus the
+  developer's own test file, a brain-coordinated distributed pool **mutates the code**
+  (seeded goal-violations), runs the **developer's tests** against those mutants — the
+  kill-rate is the dev suite's own adequacy grade, never a self-report, always scored
+  brain-side in the jail — then a **test-writer** role authors a test targeting whatever
+  survived, proving those gaps are real and catchable, while a **test-critic** role reads
+  the dev's tests and flags vacuous/tautological/designed-to-pass patterns. Three roles,
+  hybrid (mutant-generator + test-writer are structured/parseable, test-critic is
+  freeform-findings), **dynamic gate-earned routing** off the live leaderboard
+  (decorrelation-enforced: test-critic is always forced onto a *different* model than
+  test-writer, cold-start or not — a judge may not certify herself). Human-gated: a
+  blocking finding or a below-threshold kill-rate always routes to **needs-review**, never
+  auto-certified. A converged run — certified or needs-review — is signed via the same
+  certify chain as `report_build`/the control gate, and the routing loop is genuinely
+  closed: a **certified** outcome (never a needs-review one) feeds the same leaderboard
+  the next run's role assignment reads. Wired v1 behind `CORRALAI_ADVERSARIAL_POOL=1`
+  (off unless set), admin-only `start_adversarial_run` MCP tool. Honest about scope —
+  what this slice does **not** yet do: no pentester role, no concurrent runs (one active
+  run at a time), no CLI trigger, and the certification threshold is currently a fixed
+  constant, not configurable per run.
 
 ## Now — make it operable and unbreakable
 - **The front door.** The Mission Composer (above) is the first cut. Still ahead: an

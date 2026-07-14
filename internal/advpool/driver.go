@@ -392,7 +392,11 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 		if _, _, serr := d.Signer.SignVerdict(ctx, v); serr != nil {
 			return nil, fmt.Errorf("advpool: sign verdict: %w", serr)
 		}
-		if d.Leaderboard != nil {
+		// Gate-earned fitness (soundness #6): the leaderboard is fed ONLY from a
+		// CERTIFIED verdict — a run parked for human review has not earned fitness
+		// for anyone yet. A needs-review record is still signed (evidence), but no
+		// model gets leaderboard credit until the gate actually certified the run.
+		if d.Leaderboard != nil && v.Status == StatusCertified {
 			d.feedLeaderboard(v)
 		}
 	}

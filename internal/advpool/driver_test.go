@@ -373,6 +373,34 @@ func TestTick_Aggregate_BelowThreshold_NeedsReview(t *testing.T) {
 	}
 }
 
+// A needs-review verdict signs an evidence record but feeds NO leaderboard
+// fitness (soundness #6: fitness only from CERTIFIED outcomes — a run parked
+// for human review has not earned credit for any model yet).
+func TestTick_Aggregate_NeedsReview_SignsButFeedsNoLeaderboard(t *testing.T) {
+	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}}
+	scorer := &fakeScorer{devKillRate: 0.2, devSurvivors: survivors, poolSurvivors: nil}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0]}}
+	d, _ := newTestDriver(t, 9, scorer, validator, 0.8)
+	signer := &fakeSigner{}
+	leaderboard := &fakeLeaderboard{}
+	d.Signer = signer
+	d.Leaderboard = leaderboard
+
+	v := completeFullRun(t, d, 9, "no vacuous tests found")
+
+	if v.Status != StatusNeedsReview {
+		t.Fatalf("Status = %q, want %q", v.Status, StatusNeedsReview)
+	}
+	// The evidence record IS still signed (with needs-review status)...
+	if len(signer.calls) != 1 || signer.calls[0].verdict.Status != StatusNeedsReview {
+		t.Fatalf("expected one signed needs-review record, got %+v", signer.calls)
+	}
+	// ...but NO model earns fitness for a run the human still has to review.
+	if len(leaderboard.calls) != 0 {
+		t.Fatalf("needs-review run must not feed the leaderboard, got %d calls: %+v", len(leaderboard.calls), leaderboard.calls)
+	}
+}
+
 // (f) decorrelation: an assignment where test-critic and test-writer share a
 // model must be rejected at driver construction.
 func TestNewDriver_RejectsDecorrelatedAssignment(t *testing.T) {

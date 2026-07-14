@@ -44,6 +44,7 @@ type TaskSpec struct {
 	Instruction string   // what the bee must do
 	DependsOn   []string // task keys (within the mission) that must be done first
 	Verify      string   // command that MUST pass (exit 0) before this task can complete; "" = ungated
+	Model       string   // gate-earned model the worker should run this task on; "" = worker's own default
 }
 
 // Task is a queued unit of work.
@@ -65,6 +66,7 @@ type Task struct {
 	Supersedes     int64    `json:"supersedes,omitempty"` // the task id this one replaces (lineage)
 	Verify         string   `json:"verify,omitempty"`
 	Reissued       bool     `json:"reissued,omitempty"` // this claim was already yours — the reply was lost, not the task
+	Model          string   `json:"model,omitempty"`    // gate-earned model assigned to this task; "" = worker's own default
 }
 
 type Store struct{ db *sql.DB }
@@ -88,6 +90,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   supersedes       INTEGER NOT NULL DEFAULT 0,
   verify           TEXT    NOT NULL DEFAULT '',
   claimed_instance TEXT    NOT NULL DEFAULT '',
+  model            TEXT    NOT NULL DEFAULT '',
   UNIQUE(mission_id, key)
 );
 CREATE INDEX IF NOT EXISTS ix_tasks_claimable ON tasks(status, role);
@@ -154,6 +157,7 @@ func Open(path string) (*Store, error) {
 		`ALTER TABLE findings ADD COLUMN reporter_backend TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE tasks ADD COLUMN claimed_instance TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE findings ADD COLUMN resolved_ts REAL NOT NULL DEFAULT 0`,
+		`ALTER TABLE tasks ADD COLUMN model TEXT NOT NULL DEFAULT ''`,
 	} {
 		if _, err := db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			return nil, err
@@ -179,9 +183,9 @@ func (s *Store) Enqueue(missionID int64, specs []TaskSpec) error {
 		}
 		b, _ := json.Marshal(deps)
 		if _, err := tx.Exec(
-			`INSERT INTO tasks (mission_id,key,role,title,instruction,status,depends_on,verify,created_ts)
-			 VALUES (?,?,?,?,?,?,?,?,?)`,
-			missionID, sp.Key, sp.Role, sp.Title, sp.Instruction, StatusPending, string(b), sp.Verify, now(),
+			`INSERT INTO tasks (mission_id,key,role,title,instruction,status,depends_on,verify,created_ts,model)
+			 VALUES (?,?,?,?,?,?,?,?,?,?)`,
+			missionID, sp.Key, sp.Role, sp.Title, sp.Instruction, StatusPending, string(b), sp.Verify, now(), sp.Model,
 		); err != nil {
 			return err
 		}
@@ -357,13 +361,13 @@ func (s *Store) ClaimNextAs(bee, instance string, roles []string, leaseSeconds f
 		// claim still finishes via Complete (unaffected); the bee re-acquires a
 		// re-issue on resume. Cancel, being terminal, never re-issues at all.
 		err := tx.QueryRow(
-			`SELECT id,mission_id,key,role,title,instruction,depends_on,created_ts FROM tasks
+			`SELECT id,mission_id,key,role,title,instruction,depends_on,created_ts,model FROM tasks
 			 WHERE status=? AND claimed_by=?
 			   AND ((claimed_instance=? AND ?!='') OR claim_expires_ts < ?)
 			   AND mission_id NOT IN (SELECT mission_id FROM mission_halts)
 			 ORDER BY claimed_ts, id LIMIT 1`,
 			StatusClaimed, bee, instance, instance, t0,
-		).Scan(&t.ID, &t.MissionID, &t.Key, &t.Role, &t.Title, &t.Instruction, &depJSON, &t.CreatedTS)
+		).Scan(&t.ID, &t.MissionID, &t.Key, &t.Role, &t.Title, &t.Instruction, &depJSON, &t.CreatedTS, &t.Model)
 		if err != nil && err != sql.ErrNoRows {
 			return nil, err
 		}
@@ -398,7 +402,7 @@ func (s *Store) ClaimNextAs(bee, instance string, roles []string, leaseSeconds f
 	// already claimed before the halt are untouched (they live in status
 	// StatusClaimed, not StatusReady, so this WHERE never sees them) and may
 	// still finish — only new dispatch stops.
-	q := `SELECT id,mission_id,key,role,title,instruction,depends_on,created_ts FROM tasks
+	q := `SELECT id,mission_id,key,role,title,instruction,depends_on,created_ts,model FROM tasks
 		WHERE status=? AND mission_id NOT IN (SELECT mission_id FROM mission_halts)`
 	args := []any{StatusReady}
 	if len(roles) > 0 {
@@ -414,7 +418,7 @@ func (s *Store) ClaimNextAs(bee, instance string, roles []string, leaseSeconds f
 
 	var t Task
 	var depJSON string
-	err = tx.QueryRow(q, args...).Scan(&t.ID, &t.MissionID, &t.Key, &t.Role, &t.Title, &t.Instruction, &depJSON, &t.CreatedTS)
+	err = tx.QueryRow(q, args...).Scan(&t.ID, &t.MissionID, &t.Key, &t.Role, &t.Title, &t.Instruction, &depJSON, &t.CreatedTS, &t.Model)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -711,7 +715,7 @@ func (s *Store) query(q string, args ...any) ([]Task, error) {
 		var claimedBy, result sql.NullString
 		var claimedTS, doneTS, exp sql.NullFloat64
 		if err := rows.Scan(&t.ID, &t.MissionID, &t.Key, &t.Role, &t.Title, &t.Instruction,
-			&t.Status, &depJSON, &claimedBy, &result, &t.CreatedTS, &claimedTS, &doneTS, &exp, &t.Supersedes, &t.Verify); err != nil {
+			&t.Status, &depJSON, &claimedBy, &result, &t.CreatedTS, &claimedTS, &doneTS, &exp, &t.Supersedes, &t.Verify, &t.Model); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(depJSON), &t.DependsOn)

@@ -334,4 +334,4 @@ func (s *Store) TaskByID(id int64) (*Task, error) {
 	return &ts[0], nil
 }
 
-const taskSelect = `SELECT id,mission_id,key,role,title,instruction,status,depends_on,claimed_by,result,created_ts,claimed_ts,done_ts,claim_expires_ts,supersedes,verify FROM tasks`
+const taskSelect = `SELECT id,mission_id,key,role,title,instruction,status,depends_on,claimed_by,result,created_ts,claimed_ts,done_ts,claim_expires_ts,supersedes,verify,model FROM tasks`

@@ -263,3 +263,20 @@ func TestVerifyRoundTripAndClaimedMission(t *testing.T) {
 		t.Fatalf("ClaimedMission of an idle bee should be 0, got %d", m)
 	}
 }
+
+func TestEnqueueCarriesAssignedModel(t *testing.T) {
+	s := openTestStore(t)
+	if err := s.Enqueue(1, []TaskSpec{{Key: "w", Role: "test-writer", Title: "t", Instruction: "i", Model: "qwen2.5-coder:7b"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.PromoteReady(1); err != nil {
+		t.Fatal(err)
+	}
+	task, err := s.ClaimNextAs("bee", "inst", []string{"test-writer"}, 60)
+	if err != nil || task == nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if task.Model != "qwen2.5-coder:7b" {
+		t.Errorf("Model = %q, want the assigned model", task.Model)
+	}
+}

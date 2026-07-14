@@ -40,6 +40,24 @@ type Backend interface {
 	Chat(messages []omsg, tools []any) (omsg, error)
 }
 
+// modelSwitcher is an optional capability: backends that can serve more than
+// one model implement it so the queue loop can honor a task's gate-earned
+// Model assignment for the duration of that one task, without changing the
+// Backend interface (and so without touching every test double that only
+// implements Chat). WithModel returns a new Backend value configured for the
+// given model — it does not mutate the receiver, so the worker's default
+// backend is unaffected once the task is done.
+//
+// A backend that does NOT implement this (a genuinely single-model harness,
+// or a test double) cannot be told to serve a different model at all; the
+// worker keeps running its own model and the queue loop records the mismatch
+// in the task's completion result instead of silently pretending it ran the
+// assigned one.
+type modelSwitcher interface {
+	Model() string
+	WithModel(model string) Backend
+}
+
 func newBackend() Backend {
 	model := env("AGENT_MODEL", "qwen2.5-coder:7b")
 	switch env("MODEL_BACKEND", "ollama") {
@@ -166,6 +184,13 @@ func postJSON(url string, hdr map[string]string, body, out any) error {
 
 type ollamaBackend struct{ url, model string }
 
+func (b *ollamaBackend) Model() string { return b.model }
+func (b *ollamaBackend) WithModel(model string) Backend {
+	c := *b
+	c.model = model
+	return &c
+}
+
 func (b *ollamaBackend) Chat(messages []omsg, tools []any) (omsg, error) {
 	var out struct {
 		Message omsg `json:"message"`
@@ -180,6 +205,13 @@ func (b *ollamaBackend) Chat(messages []omsg, tools []any) (omsg, error) {
 // ---- OpenAI-compatible (/v1/chat/completions) — also Gemini, OpenRouter, local ----
 
 type openaiBackend struct{ base, key, model string }
+
+func (b *openaiBackend) Model() string { return b.model }
+func (b *openaiBackend) WithModel(model string) Backend {
+	c := *b
+	c.model = model
+	return &c
+}
 
 func (b *openaiBackend) Chat(messages []omsg, tools []any) (omsg, error) {
 	var out struct {
@@ -213,6 +245,13 @@ func (b *openaiBackend) Chat(messages []omsg, tools []any) (omsg, error) {
 // is what makes a real mission converge (clean tool calls, fewer fumbles).
 
 type anthropicBackend struct{ base, key, model string }
+
+func (b *anthropicBackend) Model() string { return b.model }
+func (b *anthropicBackend) WithModel(model string) Backend {
+	c := *b
+	c.model = model
+	return &c
+}
 
 func (b *anthropicBackend) Chat(messages []omsg, tools []any) (omsg, error) {
 	// Anthropic takes `system` as a top-level field; everything else must be a

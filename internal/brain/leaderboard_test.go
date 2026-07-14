@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pdbethke/corralai/internal/mission"
 	"github.com/pdbethke/corralai/internal/queue"
 	"github.com/pdbethke/corralai/internal/telemetry"
 )
@@ -239,5 +240,69 @@ func TestBuildLeaderboardSparseAndEmpty(t *testing.T) {
 	}
 	if lb2.Cells == nil || len(lb2.Cells) != 0 {
 		t.Errorf("expected a non-nil empty Cells slice from a nil queue store, got %#v", lb2.Cells)
+	}
+}
+
+// TestBuildLeaderboardFoldsAdvPoolOutcomes proves the compounding-routing
+// loop is actually closed (M-1): advpoolLeaderboardSink.Record's
+// advpool_leaderboard telemetry events (the ONLY thing a certified
+// adversarial-pool run leaves behind for a role's fitness) are folded into
+// the leaderboard's per-role cell exec pass rate, so a model that keeps
+// passing the pool's gate for a role ranks higher on the very next
+// mission.StaffingManager.Perf.GetRoleModelStats() call — not just logged
+// and forgotten.
+func TestBuildLeaderboardFoldsAdvPoolOutcomes(t *testing.T) {
+	dir := t.TempDir()
+	q, err := queue.Open(filepath.Join(dir, "q.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { q.Close() })
+	tel, err := telemetry.Open(filepath.Join(dir, "t.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { tel.Close() })
+
+	// Mirrors advpoolLeaderboardSink.Record's rec() call shape: actor=model,
+	// subject=role, detail={"outcome": ...}. qwen passes test-writer twice
+	// and fails once; llama has no evidence at all for test-writer.
+	record := func(model, role, outcome string) {
+		must(t, tel.Record(telemetry.Event{Kind: "advpool_leaderboard", Actor: model, Subject: role, Detail: map[string]any{"outcome": outcome}}))
+	}
+	record("qwen2.5-coder:7b", "test-writer", "pass")
+	record("qwen2.5-coder:7b", "test-writer", "pass")
+	record("qwen2.5-coder:7b", "test-writer", "fail")
+	record("llama3.2:3b", "test-critic", "pass")
+
+	lb, err := BuildLeaderboard(q, nil, tel)
+	if err != nil {
+		t.Fatalf("BuildLeaderboard: %v", err)
+	}
+
+	qwenWriter := cellFor(t, lb, "qwen2.5-coder:7b", "test-writer")
+	if qwenWriter.Executions != 3 || qwenWriter.ExecutionsOK != 2 {
+		t.Errorf("qwen/test-writer executions = %d/%d, want 3/2", qwenWriter.ExecutionsOK, qwenWriter.Executions)
+	}
+	wantPct := 200.0 / 3.0
+	if diff := qwenWriter.ExecPassRatePct - wantPct; diff < -0.001 || diff > 0.001 {
+		t.Errorf("qwen/test-writer exec_pass_rate_pct = %v, want ~%v", qwenWriter.ExecPassRatePct, wantPct)
+	}
+
+	llamaCritic := cellFor(t, lb, "llama3.2:3b", "test-critic")
+	if llamaCritic.Executions != 1 || llamaCritic.ExecutionsOK != 1 || llamaCritic.ExecPassRatePct != 100 {
+		t.Errorf("llama/test-critic = %+v, want 1/1 executions, 100%% pass rate", llamaCritic)
+	}
+
+	// The GetRoleModelStats() read path (mirrors cmd/corral/main.go's
+	// perfTracker) must expose the SAME signal: this is the thing
+	// advPoolAssign actually queries when staffing the next run.
+	var stats []mission.ModelStats
+	for _, cell := range lb.Cells {
+		stats = append(stats, mission.ModelStats{Model: cell.Model, Role: cell.Role, TasksCompleted: cell.TasksCompleted, ExecPassRatePct: cell.ExecPassRatePct})
+	}
+	best := advPoolBestByRole(stats)
+	if best["test-writer"] != "qwen2.5-coder:7b" {
+		t.Errorf("best test-writer by role = %q, want qwen2.5-coder:7b (from folded advpool outcomes)", best["test-writer"])
 	}
 }

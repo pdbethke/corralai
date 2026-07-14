@@ -1,0 +1,704 @@
+// SPDX-License-Identifier: Elastic-2.0
+
+package advpool
+
+import (
+	"context"
+	"fmt"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/pdbethke/corralai/internal/adequacy"
+	"github.com/pdbethke/corralai/internal/queue"
+)
+
+func newTestQueue(t *testing.T) *queue.Store {
+	t.Helper()
+	dir := t.TempDir()
+	q, err := queue.Open(filepath.Join(dir, "q.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = q.Close() })
+	return q
+}
+
+// scoreCall records one Scorer.Score invocation for assertions.
+type scoreCall struct {
+	code, test string
+	mutants    []adequacy.Mutant
+}
+
+// fakeScorer never runs a real jail: the first call is assumed to be the dev
+// score (mutant-generator's mutants against the dev's own tests), the second
+// the pool score (survivors against the pool's authored test) — matching the
+// order Tick's state machine actually calls Score in.
+type fakeScorer struct {
+	calls []scoreCall
+	err   error
+
+	devKillRate  float64
+	devSurvivors []adequacy.Mutant
+
+	poolSurvivors []adequacy.Mutant
+}
+
+func (f *fakeScorer) Score(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (float64, []adequacy.Mutant, error) {
+	f.calls = append(f.calls, scoreCall{code, test, mutants})
+	if f.err != nil {
+		return 0, nil, f.err
+	}
+	if len(f.calls) == 1 {
+		return f.devKillRate, f.devSurvivors, nil
+	}
+	return 1.0, f.poolSurvivors, nil
+}
+
+type fakeValidator struct {
+	mutants    []adequacy.Mutant
+	parseErr   error
+	compileErr error
+}
+
+func (f *fakeValidator) ParseMutants(raw string) ([]adequacy.Mutant, error) {
+	return f.mutants, f.parseErr
+}
+
+func (f *fakeValidator) CompileTest(ctx context.Context, codePath, code, test string) error {
+	return f.compileErr
+}
+
+func decorrelatedAssign() RoleAssignment {
+	return RoleAssignment{
+		RoleMutantGenerator: "model-gen",
+		RoleTestWriter:      "model-writer",
+		RoleTestCritic:      "model-critic",
+	}
+}
+
+// claimAllReady claims (as a generic bee) every currently-ready task and
+// returns them indexed by key. Claiming one at a time via ClaimNext and
+// checking for a specific key doesn't compose — a mismatched claim can't be
+// released, so it would strand an unrelated task — so tests instead drain
+// the whole ready set in one deterministic sweep and index by key.
+func claimAllReady(t *testing.T, q *queue.Store) map[string]*queue.Task {
+	t.Helper()
+	out := map[string]*queue.Task{}
+	for {
+		task, err := q.ClaimNext("bee", nil, 300)
+		if err != nil {
+			t.Fatalf("claim: %v", err)
+		}
+		if task == nil {
+			return out
+		}
+		out[task.Key] = task
+	}
+}
+
+// claimByKey drains the ready set and returns the task with the given key,
+// failing the test if it isn't among them.
+func claimByKey(t *testing.T, q *queue.Store, key string) *queue.Task {
+	t.Helper()
+	ready := claimAllReady(t, q)
+	task, ok := ready[key]
+	if !ok {
+		t.Fatalf("no claimable task found for key %q (ready were: %v)", key, keysOf(ready))
+	}
+	return task
+}
+
+func keysOf(m map[string]*queue.Task) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
+// claimTaskByID claims tasks until it wins the one identified by id — used
+// for test-writer, whose live key drifts across SupersedeTask calls
+// ("test-writer" -> "test-writer-r2" -> ...; see the note in
+// tickDevAdequacy), so claiming by key is unreliable for it.
+func claimTaskByID(t *testing.T, q *queue.Store, id int64) *queue.Task {
+	t.Helper()
+	for i := 0; i < 5; i++ {
+		task, err := q.ClaimNext("bee", nil, 300)
+		if err != nil {
+			t.Fatalf("claim: %v", err)
+		}
+		if task == nil {
+			t.Fatalf("no claimable task found for id %d", id)
+		}
+		if task.ID == id {
+			return task
+		}
+	}
+	t.Fatalf("could not claim task %d within attempts", id)
+	return nil
+}
+
+func mustComplete(t *testing.T, q *queue.Store, id int64, result string) {
+	t.Helper()
+	ok, err := q.Complete(id, "bee", result)
+	if err != nil || !ok {
+		t.Fatalf("complete %d: ok=%v err=%v", id, ok, err)
+	}
+}
+
+// newTestDriver wires a Driver over a fresh queue + the given fakes/threshold
+// and starts a run for missionID, returning the driver and its RunSpec.
+func newTestDriver(t *testing.T, missionID int64, scorer *fakeScorer, validator *fakeValidator, threshold float64) (*Driver, RunSpec) {
+	t.Helper()
+	q := newTestQueue(t)
+	d, err := NewDriver(q, scorer, validator, decorrelatedAssign(), threshold)
+	if err != nil {
+		t.Fatalf("NewDriver: %v", err)
+	}
+	rs := testRunSpec()
+	if err := d.StartRun(missionID, rs, nil); err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	// Enqueue leaves every task pending; flip the no-deps roles
+	// (mutant-generator, test-critic) to ready before a test claims them.
+	if _, err := q.PromoteReady(missionID); err != nil {
+		t.Fatalf("PromoteReady: %v", err)
+	}
+	return d, rs
+}
+
+// (a) mutant-generator done -> Tick scores the dev's own tests and promotes
+// test-writer, re-rendered with the real survivors.
+func TestTick_DevAdequacy_PromotesTestWriterWithSurvivors(t *testing.T) {
+	survivor := adequacy.Mutant{ID: "m1", Code: "SURVIVOR-MARKER-m1"}
+	scorer := &fakeScorer{devKillRate: 0.9, devSurvivors: []adequacy.Mutant{survivor}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{survivor, {ID: "m2", Code: "killed-m2"}}}
+	d, _ := newTestDriver(t, 1, scorer, validator, 0.5)
+
+	mg := claimByKey(t, d.Q, RoleMutantGenerator)
+	mustComplete(t, d.Q, mg.ID, "raw mutant-generator output")
+
+	v, err := d.Tick(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	if v != nil {
+		t.Fatalf("expected no verdict yet (test-critic/test-writer not done), got %+v", v)
+	}
+	if len(scorer.calls) != 1 {
+		t.Fatalf("expected Scorer.Score called once (dev tests), got %d calls", len(scorer.calls))
+	}
+	if scorer.calls[0].test != testRunSpec().DevTestCode {
+		t.Fatalf("dev score call used test %q, want the dev's own test code", scorer.calls[0].test)
+	}
+
+	live, err := d.Q.TaskByID(d.runs[1].testWriterTaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if live == nil {
+		t.Fatal("no live test-writer task after dev-adequacy scoring")
+	}
+	if live.Status != queue.StatusReady {
+		t.Fatalf("test-writer status = %s, want ready (promoted)", live.Status)
+	}
+	if !strings.Contains(live.Instruction, "SURVIVOR-MARKER-m1") {
+		t.Fatalf("test-writer instruction does not reference the real survivor:\n%s", live.Instruction)
+	}
+}
+
+// (b) test-writer done -> Tick validates it compiles and scores it against
+// the survivors, producing ProvenMissed.
+func TestTick_PoolAdequacy_ScoresProvenMissed(t *testing.T) {
+	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}, {ID: "m2", Code: "c2"}}
+	scorer := &fakeScorer{
+		devKillRate:   0.5,
+		devSurvivors:  survivors,
+		poolSurvivors: []adequacy.Mutant{{ID: "m2", Code: "c2"}}, // pool test killed m1 but not m2
+	}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0], survivors[1]}}
+	d, _ := newTestDriver(t, 2, scorer, validator, 0.1)
+
+	mg := claimByKey(t, d.Q, RoleMutantGenerator)
+	mustComplete(t, d.Q, mg.ID, "raw mutants")
+	if _, err := d.Tick(context.Background(), 2); err != nil {
+		t.Fatalf("Tick (dev-adequacy): %v", err)
+	}
+
+	tw := claimTaskByID(t, d.Q, d.runs[2].testWriterTaskID)
+	mustComplete(t, d.Q, tw.ID, "pool test source")
+
+	v, err := d.Tick(context.Background(), 2)
+	if err != nil {
+		t.Fatalf("Tick (pool-adequacy): %v", err)
+	}
+	if v != nil {
+		t.Fatalf("expected no verdict yet (test-critic not done), got %+v", v)
+	}
+	if len(scorer.calls) != 2 {
+		t.Fatalf("expected 2 Scorer.Score calls (dev, pool), got %d", len(scorer.calls))
+	}
+	if scorer.calls[1].test != "pool test source" {
+		t.Fatalf("pool score call used test %q, want the test-writer's result", scorer.calls[1].test)
+	}
+	if len(scorer.calls[1].mutants) != len(survivors) {
+		t.Fatalf("pool score call used %d mutants, want the %d dev survivors", len(scorer.calls[1].mutants), len(survivors))
+	}
+	for i, m := range scorer.calls[1].mutants {
+		if m.ID != survivors[i].ID {
+			t.Fatalf("pool score call mutant[%d] = %q, want survivor %q (Score must be scored against the survivor set, not the full mutant list)", i, m.ID, survivors[i].ID)
+		}
+	}
+	run := d.runs[2]
+	if !run.poolScored {
+		t.Fatal("expected poolScored=true")
+	}
+	if run.provenMissed != 1 { // 2 dev-survivors, pool killed 1 (only m2 still survives)
+		t.Fatalf("ProvenMissed = %d, want 1", run.provenMissed)
+	}
+}
+
+// completeFullRun drives test-critic, mutant-generator, and test-writer to
+// done and returns the final Verdict. mutant-generator and test-critic are
+// both ready from the start, so they're claimed in one sweep; test-critic is
+// completed first so the aggregate step's second precondition is already met
+// by the time test-writer's completion satisfies the first.
+func completeFullRun(t *testing.T, d *Driver, missionID int64, criticResult string) *Verdict {
+	t.Helper()
+	ctx := context.Background()
+
+	ready := claimAllReady(t, d.Q)
+	tc, mg := ready[RoleTestCritic], ready[RoleMutantGenerator]
+	if tc == nil || mg == nil {
+		t.Fatalf("expected test-critic and mutant-generator both ready, got: %v", keysOf(ready))
+	}
+	mustComplete(t, d.Q, tc.ID, criticResult)
+	mustComplete(t, d.Q, mg.ID, "raw mutants")
+	if _, err := d.Tick(ctx, missionID); err != nil {
+		t.Fatalf("Tick (dev-adequacy): %v", err)
+	}
+
+	tw := claimTaskByID(t, d.Q, d.runs[missionID].testWriterTaskID)
+	mustComplete(t, d.Q, tw.ID, "pool test source")
+	v, err := d.Tick(ctx, missionID)
+	if err != nil {
+		t.Fatalf("Tick (pool-adequacy + aggregate): %v", err)
+	}
+	if v == nil {
+		t.Fatal("expected a verdict once test-critic + pool-adequacy are both done")
+	}
+	return v
+}
+
+// (c) test-critic + pool-adequacy done, no blocking finding, DevKillRate
+// above threshold -> certified.
+func TestTick_Aggregate_Certified(t *testing.T) {
+	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}}
+	scorer := &fakeScorer{devKillRate: 0.9, devSurvivors: survivors, poolSurvivors: nil}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0]}}
+	d, _ := newTestDriver(t, 3, scorer, validator, 0.5)
+
+	v := completeFullRun(t, d, 3, "no vacuous tests found")
+
+	if v.Status != StatusCertified {
+		t.Fatalf("Status = %q, want %q", v.Status, StatusCertified)
+	}
+	if v.DevKillRate != 0.9 {
+		t.Fatalf("DevKillRate = %v, want 0.9", v.DevKillRate)
+	}
+	if v.ProvenMissed != 1 { // pool killed the one dev-survivor
+		t.Fatalf("ProvenMissed = %d, want 1", v.ProvenMissed)
+	}
+}
+
+// (d) a blocking finding open -> needs-review, even with a high DevKillRate.
+func TestTick_Aggregate_BlockingFinding_NeedsReview(t *testing.T) {
+	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}}
+	scorer := &fakeScorer{devKillRate: 0.95, devSurvivors: survivors, poolSurvivors: nil}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0]}}
+	d, _ := newTestDriver(t, 4, scorer, validator, 0.5)
+
+	ctx := context.Background()
+
+	// mutant-generator and test-critic are both ready from the start; claim
+	// both in one sweep (claiming one at a time by key can't compose here —
+	// see claimAllReady), file the blocking finding against test-critic, then
+	// complete both.
+	ready := claimAllReady(t, d.Q)
+	tc, mg := ready[RoleTestCritic], ready[RoleMutantGenerator]
+	if tc == nil || mg == nil {
+		t.Fatalf("expected test-critic and mutant-generator both ready, got: %v", keysOf(ready))
+	}
+	if _, err := d.Q.AddFinding(queue.Finding{
+		MissionID: 4, TaskID: tc.ID, Reporter: "test-critic", Type: "bug",
+		Severity: "high", Target: "TestAlwaysPasses", Evidence: "vacuous — no assertions",
+	}); err != nil {
+		t.Fatalf("AddFinding: %v", err)
+	}
+	mustComplete(t, d.Q, tc.ID, "flagged TestAlwaysPasses as vacuous")
+	mustComplete(t, d.Q, mg.ID, "raw mutants")
+	if _, err := d.Tick(ctx, 4); err != nil {
+		t.Fatalf("Tick (dev-adequacy): %v", err)
+	}
+	tw := claimTaskByID(t, d.Q, d.runs[4].testWriterTaskID)
+	mustComplete(t, d.Q, tw.ID, "pool test source")
+
+	v, err := d.Tick(ctx, 4)
+	if err != nil {
+		t.Fatalf("Tick (pool-adequacy + aggregate): %v", err)
+	}
+	if v == nil {
+		t.Fatal("expected a verdict")
+	}
+	if v.Status != StatusNeedsReview {
+		t.Fatalf("Status = %q, want %q (blocking finding open)", v.Status, StatusNeedsReview)
+	}
+	if len(v.VacuousFindings) != 1 {
+		t.Fatalf("VacuousFindings = %d, want 1", len(v.VacuousFindings))
+	}
+}
+
+// (e) DevKillRate below threshold -> needs-review, even with no findings.
+func TestTick_Aggregate_BelowThreshold_NeedsReview(t *testing.T) {
+	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}, {ID: "m2", Code: "c2"}}
+	scorer := &fakeScorer{devKillRate: 0.2, devSurvivors: survivors, poolSurvivors: nil}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0], survivors[1]}}
+	d, _ := newTestDriver(t, 5, scorer, validator, 0.8)
+
+	v := completeFullRun(t, d, 5, "no vacuous tests found")
+
+	if v.Status != StatusNeedsReview {
+		t.Fatalf("Status = %q, want %q (DevKillRate 0.2 < threshold 0.8)", v.Status, StatusNeedsReview)
+	}
+}
+
+// A needs-review verdict signs an evidence record but feeds NO leaderboard
+// fitness (soundness #6: fitness only from CERTIFIED outcomes — a run parked
+// for human review has not earned credit for any model yet).
+func TestTick_Aggregate_NeedsReview_SignsButFeedsNoLeaderboard(t *testing.T) {
+	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}}
+	scorer := &fakeScorer{devKillRate: 0.2, devSurvivors: survivors, poolSurvivors: nil}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0]}}
+	d, _ := newTestDriver(t, 9, scorer, validator, 0.8)
+	signer := &fakeSigner{}
+	leaderboard := &fakeLeaderboard{}
+	d.Signer = signer
+	d.Leaderboard = leaderboard
+
+	v := completeFullRun(t, d, 9, "no vacuous tests found")
+
+	if v.Status != StatusNeedsReview {
+		t.Fatalf("Status = %q, want %q", v.Status, StatusNeedsReview)
+	}
+	// The evidence record IS still signed (with needs-review status)...
+	if len(signer.calls) != 1 || signer.calls[0].verdict.Status != StatusNeedsReview {
+		t.Fatalf("expected one signed needs-review record, got %+v", signer.calls)
+	}
+	// ...but NO model earns fitness for a run the human still has to review.
+	if len(leaderboard.calls) != 0 {
+		t.Fatalf("needs-review run must not feed the leaderboard, got %d calls: %+v", len(leaderboard.calls), leaderboard.calls)
+	}
+}
+
+// (f) decorrelation: an assignment where test-critic and test-writer share a
+// model must be rejected at driver construction.
+func TestNewDriver_RejectsDecorrelatedAssignment(t *testing.T) {
+	q := newTestQueue(t)
+	scorer := &fakeScorer{}
+	validator := &fakeValidator{}
+	assign := RoleAssignment{
+		RoleMutantGenerator: "model-gen",
+		RoleTestWriter:      "same-model",
+		RoleTestCritic:      "same-model",
+	}
+	d, err := NewDriver(q, scorer, validator, assign, 0.5)
+	if err == nil {
+		t.Fatal("expected an error for test-critic == test-writer model, got nil")
+	}
+	if d != nil {
+		t.Fatal("expected a nil Driver on decorrelation rejection")
+	}
+}
+
+// (g) NewDriver must reject a non-positive threshold: DevKillRate < 0 (or
+// < a threshold <=0) can never be true, so a caller passing threshold<=0
+// would silently auto-certify every run regardless of suite strength.
+func TestNewDriver_RejectsNonPositiveThreshold(t *testing.T) {
+	q := newTestQueue(t)
+	scorer := &fakeScorer{}
+	validator := &fakeValidator{}
+
+	for _, threshold := range []float64{0, -0.1, -1} {
+		d, err := NewDriver(q, scorer, validator, decorrelatedAssign(), threshold)
+		if err == nil {
+			t.Fatalf("threshold=%v: expected an error, got nil", threshold)
+		}
+		if d != nil {
+			t.Fatalf("threshold=%v: expected a nil Driver on rejection", threshold)
+		}
+	}
+}
+
+// (h) malformed mutant-generator output: ParseMutants failing must refuse
+// the artifact — reopen mutant-generator for retry and never let it reach
+// Scorer.Score (soundness #1: no malformed artifact flows into scoring).
+func TestTick_DevAdequacy_ParseError_ReopensAndSkipsScore(t *testing.T) {
+	scorer := &fakeScorer{devKillRate: 0.9}
+	validator := &fakeValidator{parseErr: fmt.Errorf("malformed mutant output")}
+	d, _ := newTestDriver(t, 6, scorer, validator, 0.5)
+
+	mg := claimByKey(t, d.Q, RoleMutantGenerator)
+	mustComplete(t, d.Q, mg.ID, "garbage, not valid mutant output")
+
+	v, err := d.Tick(context.Background(), 6)
+	if err == nil {
+		t.Fatal("expected Tick to return an error on unparseable mutant output")
+	}
+	if v != nil {
+		t.Fatalf("expected no verdict on a refused artifact, got %+v", v)
+	}
+	if len(scorer.calls) != 0 {
+		t.Fatalf("expected Scorer.Score NOT called on a malformed artifact, got %d calls", len(scorer.calls))
+	}
+
+	reopened, terr := d.Q.TaskByID(mg.ID)
+	if terr != nil {
+		t.Fatal(terr)
+	}
+	if reopened == nil {
+		t.Fatal("mutant-generator task vanished after reopen")
+	}
+	if reopened.Status != queue.StatusReady {
+		t.Fatalf("mutant-generator status = %s, want ready (reopened for retry)", reopened.Status)
+	}
+}
+
+// (i) non-compiling test-writer output: CompileTest failing must refuse the
+// artifact — reopen test-writer for retry and never let it reach the pool
+// Scorer.Score call.
+func TestTick_PoolAdequacy_CompileError_ReopensAndSkipsScore(t *testing.T) {
+	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}, {ID: "m2", Code: "c2"}}
+	scorer := &fakeScorer{devKillRate: 0.5, devSurvivors: survivors}
+	validator := &fakeValidator{
+		mutants:    []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0], survivors[1]},
+		compileErr: fmt.Errorf("syntax error in generated test"),
+	}
+	d, _ := newTestDriver(t, 7, scorer, validator, 0.1)
+
+	mg := claimByKey(t, d.Q, RoleMutantGenerator)
+	mustComplete(t, d.Q, mg.ID, "raw mutants")
+	if _, err := d.Tick(context.Background(), 7); err != nil {
+		t.Fatalf("Tick (dev-adequacy): %v", err)
+	}
+	if len(scorer.calls) != 1 {
+		t.Fatalf("expected 1 Scorer.Score call after dev-adequacy, got %d", len(scorer.calls))
+	}
+
+	tw := claimTaskByID(t, d.Q, d.runs[7].testWriterTaskID)
+	mustComplete(t, d.Q, tw.ID, "test that does not compile")
+
+	v, err := d.Tick(context.Background(), 7)
+	if err == nil {
+		t.Fatal("expected Tick to return an error on a non-compiling test")
+	}
+	if v != nil {
+		t.Fatalf("expected no verdict on a refused artifact, got %+v", v)
+	}
+	if len(scorer.calls) != 1 {
+		t.Fatalf("expected pool Scorer.Score NOT called on a non-compiling artifact, still want 1 call, got %d", len(scorer.calls))
+	}
+
+	reopened, terr := d.Q.TaskByID(tw.ID)
+	if terr != nil {
+		t.Fatal(terr)
+	}
+	if reopened == nil {
+		t.Fatal("test-writer task vanished after reopen")
+	}
+	if reopened.Status != queue.StatusReady {
+		t.Fatalf("test-writer status = %s, want ready (reopened for retry)", reopened.Status)
+	}
+}
+
+// signCall records one Signer.SignVerdict invocation for assertions.
+type signCall struct {
+	verdict Verdict
+}
+
+// fakeSigner never touches the real certify chain: it just records what it
+// was asked to sign and returns a canned (recordID, head), or an error.
+type fakeSigner struct {
+	calls []signCall
+	err   error
+}
+
+func (f *fakeSigner) SignVerdict(ctx context.Context, v Verdict) (int64, string, error) {
+	f.calls = append(f.calls, signCall{verdict: v})
+	if f.err != nil {
+		return 0, "", f.err
+	}
+	return int64(len(f.calls)), fmt.Sprintf("head-%d", len(f.calls)), nil
+}
+
+// leaderboardCall records one LeaderboardSink.Record invocation.
+type leaderboardCall struct {
+	model, role, outcome string
+}
+
+type fakeLeaderboard struct {
+	calls []leaderboardCall
+}
+
+func (f *fakeLeaderboard) Record(model, role, outcome string) {
+	f.calls = append(f.calls, leaderboardCall{model, role, outcome})
+}
+
+// (j) a certified verdict: SignVerdict is called with ModelsByRole
+// populated, and (only after that succeeds) the leaderboard is fed
+// (model, role, outcome) for all three roles — soundness #5: the fitness
+// feed never runs before the deterministic gate has scored and signed.
+func TestTick_Aggregate_Certified_SignsAndFeedsLeaderboard(t *testing.T) {
+	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}}
+	scorer := &fakeScorer{devKillRate: 0.9, devSurvivors: survivors, poolSurvivors: nil}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0]}}
+	d, _ := newTestDriver(t, 8, scorer, validator, 0.5)
+	signer := &fakeSigner{}
+	leaderboard := &fakeLeaderboard{}
+	d.Signer = signer
+	d.Leaderboard = leaderboard
+
+	v := completeFullRun(t, d, 8, "no vacuous tests found")
+
+	if v.Status != StatusCertified {
+		t.Fatalf("Status = %q, want %q", v.Status, StatusCertified)
+	}
+
+	if len(signer.calls) != 1 {
+		t.Fatalf("expected SignVerdict called once, got %d calls", len(signer.calls))
+	}
+	signed := signer.calls[0].verdict
+	if signed.Status != StatusCertified {
+		t.Fatalf("signed verdict Status = %q, want %q", signed.Status, StatusCertified)
+	}
+	if len(signed.ModelsByRole) == 0 {
+		t.Fatal("expected SignVerdict to be called with ModelsByRole populated")
+	}
+	for _, role := range []string{RoleMutantGenerator, RoleTestWriter, RoleTestCritic} {
+		if signed.ModelsByRole[role] == "" {
+			t.Fatalf("signed verdict ModelsByRole[%q] is empty", role)
+		}
+	}
+
+	if len(leaderboard.calls) != 3 {
+		t.Fatalf("expected 3 leaderboard.Record calls (one per role), got %d: %+v", len(leaderboard.calls), leaderboard.calls)
+	}
+	seenRoles := map[string]bool{}
+	for _, c := range leaderboard.calls {
+		seenRoles[c.role] = true
+		if c.model == "" {
+			t.Fatalf("leaderboard.Record called with empty model for role %q", c.role)
+		}
+		if c.outcome != OutcomePass && c.outcome != OutcomeFail {
+			t.Fatalf("leaderboard.Record called with unexpected outcome %q for role %q", c.outcome, c.role)
+		}
+	}
+	for _, role := range []string{RoleMutantGenerator, RoleTestWriter, RoleTestCritic} {
+		if !seenRoles[role] {
+			t.Fatalf("leaderboard was never fed for role %q", role)
+		}
+	}
+	// test-writer's authored test killed the one dev-survivor (ProvenMissed=1
+	// per TestTick_Aggregate_Certified) -> its outcome must be a pass.
+	for _, c := range leaderboard.calls {
+		if c.role == RoleTestWriter && c.outcome != OutcomePass {
+			t.Fatalf("test-writer outcome = %q, want %q (ProvenMissed=1)", c.outcome, OutcomePass)
+		}
+	}
+}
+
+// (k) a needs-review verdict (below-threshold DevKillRate, no blocking
+// finding): the driver must not auto-sign a "certified" record — it may
+// still sign a needs-review one, but the signed verdict's Status must never
+// read "certified" on a run that didn't clear the human gate.
+func TestTick_Aggregate_NeedsReview_NeverSignsCertified(t *testing.T) {
+	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}, {ID: "m2", Code: "c2"}}
+	scorer := &fakeScorer{devKillRate: 0.2, devSurvivors: survivors, poolSurvivors: nil}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0], survivors[1]}}
+	d, _ := newTestDriver(t, 9, scorer, validator, 0.8)
+	signer := &fakeSigner{}
+	leaderboard := &fakeLeaderboard{}
+	d.Signer = signer
+	d.Leaderboard = leaderboard
+
+	v := completeFullRun(t, d, 9, "no vacuous tests found")
+
+	if v.Status != StatusNeedsReview {
+		t.Fatalf("Status = %q, want %q (DevKillRate 0.2 < threshold 0.8)", v.Status, StatusNeedsReview)
+	}
+	for _, c := range signer.calls {
+		if c.verdict.Status == StatusCertified {
+			t.Fatalf("a needs-review run must never sign a %q-status record, got one: %+v", StatusCertified, c.verdict)
+		}
+	}
+	// The needs-review record itself may still be signed...
+	if len(signer.calls) != 1 {
+		t.Fatalf("expected SignVerdict called once (a needs-review record), got %d calls", len(signer.calls))
+	}
+	if signer.calls[0].verdict.Status != StatusNeedsReview {
+		t.Fatalf("signed verdict Status = %q, want %q", signer.calls[0].verdict.Status, StatusNeedsReview)
+	}
+}
+
+// (l) SignVerdict failing: the driver must not feed the leaderboard from an
+// unsigned verdict (soundness #5), and must leave the run non-terminal so a
+// later Tick can retry the (idempotent) aggregate+sign sequence.
+func TestTick_Aggregate_SignFails_SkipsLeaderboardAndRetries(t *testing.T) {
+	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}}
+	scorer := &fakeScorer{devKillRate: 0.9, devSurvivors: survivors, poolSurvivors: nil}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0]}}
+	d, _ := newTestDriver(t, 10, scorer, validator, 0.5)
+	signer := &fakeSigner{err: fmt.Errorf("certify chain unavailable")}
+	leaderboard := &fakeLeaderboard{}
+	d.Signer = signer
+	d.Leaderboard = leaderboard
+
+	ctx := context.Background()
+	ready := claimAllReady(t, d.Q)
+	tc, mg := ready[RoleTestCritic], ready[RoleMutantGenerator]
+	mustComplete(t, d.Q, tc.ID, "no vacuous tests found")
+	mustComplete(t, d.Q, mg.ID, "raw mutants")
+	if _, err := d.Tick(ctx, 10); err != nil {
+		t.Fatalf("Tick (dev-adequacy): %v", err)
+	}
+	tw := claimTaskByID(t, d.Q, d.runs[10].testWriterTaskID)
+	mustComplete(t, d.Q, tw.ID, "pool test source")
+
+	v, err := d.Tick(ctx, 10)
+	if err == nil {
+		t.Fatal("expected Tick to return an error when SignVerdict fails")
+	}
+	if v != nil {
+		t.Fatalf("expected no verdict returned on a sign failure, got %+v", v)
+	}
+	if len(leaderboard.calls) != 0 {
+		t.Fatalf("expected the leaderboard NOT fed when SignVerdict fails, got %d calls", len(leaderboard.calls))
+	}
+	if d.runs[10].verdict != nil {
+		t.Fatal("expected run.verdict left unset after a sign failure, so a later Tick retries")
+	}
+}
+
+func TestCheckDecorrelation(t *testing.T) {
+	if err := CheckDecorrelation(decorrelatedAssign()); err != nil {
+		t.Fatalf("expected a properly decorrelated assignment to pass, got %v", err)
+	}
+	same := RoleAssignment{RoleTestWriter: "x", RoleTestCritic: "x"}
+	if err := CheckDecorrelation(same); err == nil {
+		t.Fatal("expected an error when test-writer and test-critic share a model")
+	}
+	// Both empty (no assignment yet) must not false-positive.
+	if err := CheckDecorrelation(RoleAssignment{}); err != nil {
+		t.Fatalf("expected an empty assignment to pass, got %v", err)
+	}
+}

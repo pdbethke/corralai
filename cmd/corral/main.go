@@ -1145,7 +1145,35 @@ func main() {
 		ControlModel:        controlModel,
 		ControlGateDB:       controlGateDB,
 		ControlPollInterval: time.Duration(envInt("CORRALAI_CONTROL_GATE_POLL_SECONDS", 120)) * time.Second,
+
+		Staffing: staffingMgr,
 	}
+
+	// Adversarial-testing pool (v1, OFF BY DEFAULT via CORRALAI_ADVERSARIAL_POOL):
+	// must be started and its runtime threaded onto brainOpts.AdvPool BEFORE
+	// brain.NewServer is constructed below — NewServer only registers the
+	// admin-gated start_adversarial_run tool when opts.AdvPool is already
+	// non-nil (see server.go), and Options.AdvPool's own doc comment requires
+	// this ordering. Starting it any later would produce a live tick loop
+	// with no reachable tool, or (worse) a tool registered against a nil
+	// runtime. With the flag unset, brainOpts.AdvPool stays nil and the
+	// daemon is byte-for-byte the same as before this task: no pool, no new
+	// tool, no behavior change.
+	if os.Getenv("CORRALAI_ADVERSARIAL_POOL") == "1" {
+		if rt, aerr := brain.StartAdversarialPool(context.Background(), brainOpts); aerr != nil {
+			log.Printf("adversarial pool: disabled (%v)", aerr)
+		} else if rt != nil {
+			brainOpts.AdvPool = rt
+			log.Printf("adversarial pool: ENABLED (start_adversarial_run live)")
+		} else {
+			// StartAdversarialPool logs its own loud reason (missing
+			// GateBackend/Missions/Queue/CertifyKey/BuildStore).
+			log.Printf("adversarial pool: disabled (missing dependencies)")
+		}
+	} else {
+		log.Printf("adversarial pool: disabled (set CORRALAI_ADVERSARIAL_POOL=1)")
+	}
+
 	srv := brain.NewServer(store, memStore, brainOpts)
 
 	// Learn sweep: deterministic recurrence detection over findings + lessons,

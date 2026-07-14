@@ -174,6 +174,28 @@ func BuildLeaderboard(q *queue.Store, hosts *HostBook, tel *telemetry.Store) (Le
 		}
 	}
 
+	// Adversarial-pool outcomes (M-1): fold each certified run's gate-earned
+	// (model, role, pass/fail) signal into the SAME per-role cell executions
+	// feed, so a model that keeps passing the pool's adequacy gate for a
+	// role ranks higher (via ExecPassRatePct) for that role on the NEXT run
+	// — closing the compounding-routing loop advpoolLeaderboardSink.Record
+	// writes into telemetry but nothing previously read back. Best-effort,
+	// same as rework: a nil or error-prone telemetry store just leaves this
+	// contribution at zero.
+	if tel != nil {
+		if outcomes, oerr := tel.AdvPoolOutcomeCounts(); oerr == nil {
+			for _, o := range outcomes {
+				model := o.Model
+				if model == "" {
+					model = unknownModel
+				}
+				c := get(model, o.Role)
+				c.execTotal += o.Pass + o.Fail
+				c.execOK += o.Pass
+			}
+		}
+	}
+
 	cells := make([]LeaderboardCell, 0, len(agg))
 	for k, c := range agg {
 		cell := LeaderboardCell{

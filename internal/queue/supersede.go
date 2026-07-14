@@ -131,9 +131,9 @@ func (s *Store) SupersedeTask(oldID int64, spec TaskSpec) (int64, error) {
 	}
 	b, _ := json.Marshal(deps)
 	res, err := tx.Exec(
-		`INSERT INTO tasks (mission_id,key,role,title,instruction,status,depends_on,verify,created_ts,supersedes)
-		 VALUES (?,?,?,?,?,?,?,?,?,?)`,
-		missionID, spec.Key, spec.Role, spec.Title, spec.Instruction, StatusPending, string(b), spec.Verify, now(), oldID,
+		`INSERT INTO tasks (mission_id,key,role,title,instruction,status,depends_on,verify,created_ts,supersedes,model)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		missionID, spec.Key, spec.Role, spec.Title, spec.Instruction, StatusPending, string(b), spec.Verify, now(), oldID, spec.Model,
 	)
 	if err != nil {
 		return 0, err
@@ -334,4 +334,4 @@ func (s *Store) TaskByID(id int64) (*Task, error) {
 	return &ts[0], nil
 }
 
-const taskSelect = `SELECT id,mission_id,key,role,title,instruction,status,depends_on,claimed_by,result,created_ts,claimed_ts,done_ts,claim_expires_ts,supersedes,verify FROM tasks`
+const taskSelect = `SELECT id,mission_id,key,role,title,instruction,status,depends_on,claimed_by,result,created_ts,claimed_ts,done_ts,claim_expires_ts,supersedes,verify,model FROM tasks`

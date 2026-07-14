@@ -8,15 +8,17 @@
 > **A true audit for software change** — certify a change **by execution** (not
 > opinion): run the check in a jail, sign a tamper-evident record, and gate the
 > merge. Across any model (local 7B to frontier), behind real fences, human-gated,
-> with every run recorded and replayable. *(The adversarial, role-separated herd
-> that staffs the verification is the next slice — designed, not yet built; see the
-> honest floor below.)*
+> with every run recorded and replayable. *(A first slice of the adversarial,
+> role-separated herd now exists — the **adversarial testing pool**, experimental
+> and off by default; the broader staffed verification engine it's the seed of is
+> still ahead. See the honest floor below.)*
 >
 > `corral certify <ref> -- <cmd>` checks out that commit into a jail, runs `<cmd>`,
 > and writes a signed record you verify offline with `corral certify verify` — no
 > server required; `--brain` optionally posts it to a brain. This certifies the
-> change's **declared checks** — the control-owner tests and the adversarial herd
-> are later slices (see the
+> change's **declared checks** — the control-owner tests are a later slice, and the
+> adversarial testing pool (below) is a separate, experimental, admin-triggered flow,
+> not yet wired to this CLI (see the
 > [design spec](docs/superpowers/specs/2026-07-13-corral-certify-cli-design.md)).
 
 **Corral is re-focusing from a builder to a reactive audit / certification gate —
@@ -30,13 +32,32 @@ poll open PRs, run checks **in a jail** (never trusting a self-report), and post
 signed `corral/gate` / `corral/control-gate` status that branch protection can
 require. The mission engine that used to drive a build-and-iterate loop is still in
 the codebase, but its Tick loop is **not started** — it's retained, dormant, as the
-seed for the next slice: an adversarial verification engine (staffed with
+seed for a broader adversarial verification engine (staffed with
 security/correctness/exploit-hunting roles instead of coder/builder roles) rather
 than a code-generation one. A standalone `corral certify <ref> -- <cmd>` CLI now
-exists (see above) and signs its records locally, no server required; the staffed
-adversarial-verification flow and the control-owner tests described in the spec
-are still **designed, not yet built** — don't expect them from this README; this
-is the honest floor.
+exists (see above) and signs its records locally, no server required.
+
+A first, narrower slice of that broader verification engine is now built and wired:
+the **adversarial testing pool** — **experimental, off by default**
+(`CORRALAI_ADVERSARIAL_POOL=1`). Given a code file plus the developer's own test
+file, a brain-coordinated pool of 3 roles grades the *developer's own tests'*
+adequacy: a **mutant-generator** seeds goal-violating mutants into the code, the
+brain scores the **dev's own tests** against them in the jail (the kill-rate —
+never a self-report), a **test-writer** authors a test targeting whatever survived
+(proving the gap is real and catchable), and a **test-critic** (always a
+*different*, decorrelation-enforced model than the test-writer) flags
+vacuous/designed-to-pass tests in the dev's suite. Routing is dynamic and
+gate-earned — the best-performing model per role, per the live leaderboard — and
+the loop actually closes: a certified run's outcome feeds that same leaderboard,
+so the next run routes better. Every converged run (certified or needs-review) is
+signed via the same certify chain as `report_build`; a low kill-rate or an open
+blocking finding always routes to **needs-review**, never auto-certified. What it
+does **not** yet do: no pentester role, no concurrent runs (one active run at a
+time), no CLI trigger (it's started via an admin-only `start_adversarial_run` MCP
+tool, not `corral certify`), and its certification threshold is a fixed constant
+today, not per-run configurable. The broader staffed verification engine and the
+control-owner tests described in the spec remain **designed, not yet built** —
+don't expect more than the above from this README; this is the honest floor.
 
 What still stands from the original build:
 

@@ -382,6 +382,7 @@ func runQueueLoop(ctx context.Context, backend Backend, name, role string, rs ag
 				Instruction string `json:"instruction"`
 				Verify      string `json:"verify"`
 				Reissued    bool   `json:"reissued"`
+				Model       string `json:"model"` // gate-earned model assignment; "" = worker's own default
 			} `json:"task"`
 			Error string `json:"error"`
 		}
@@ -412,7 +413,7 @@ func runQueueLoop(ctx context.Context, backend Backend, name, role string, rs ag
 		}
 		instruction = withRefusalFeedback(instruction, refusalMsg[out.Task.ID])
 		taskStart := time.Now()
-		summary, taskErr := runTask(ctx, backend, name, role, ws, brain, tools, out.Task.MissionID, out.Task.ID, out.Task.Title, instruction, mir, bc)
+		summary, taskErr := runTask(ctx, backend, name, role, ws, brain, tools, out.Task.MissionID, out.Task.ID, out.Task.Title, instruction, mir, bc, out.Task.Model)
 		fmt.Printf("[%s/%s] task #%d ran %s\n", name, role, out.Task.ID, time.Since(taskStart).Round(time.Second))
 		if handleTaskError(out.Task.ID, out.Task.MissionID, modelDesc, taskErr, brain) {
 			fmt.Printf("[%s/%s] ⨯ model unreachable on task #%d — released claim; reaper will reassign\n",
@@ -544,6 +545,30 @@ func withRefusalFeedback(instruction, refusal string) string {
 		"\nDo not try to complete again until you have satisfied it — actually run the required command with run_command, read its output, and fix what fails first."
 }
 
+// taskModel picks the model this task should run on: the driver's gate-earned
+// assignment if the claimed task carries one, else the worker's own default
+// (AGENT_MODEL). Pure and extracted from runTask so it's unit-testable without
+// a live backend — this is the mechanism that lets one multi-model worker
+// serve whatever model the pool's driver assigned to a given task.
+func taskModel(assignedModel, defaultModel string) string {
+	if assignedModel != "" {
+		return assignedModel
+	}
+	return defaultModel
+}
+
+// isStructuredRole reports whether role produces a typed artifact (rendered
+// test source, generated mutants) via a single LLM call rather than working
+// the task through the general multi-step tool loop. This is the SOLE signal
+// for the runTask/runQueueLoop fast path — deliberately role-based (no new
+// task field) per the pool design: test-writer and mutant-generator receive
+// an already-rendered testgen prompt as their Instruction and are expected to
+// hand back raw output for the brain to validate/parse; test-critic and every
+// other role stay on the freeform loop.
+func isStructuredRole(role string) bool {
+	return role == "test-writer" || role == "mutant-generator"
+}
+
 // handleTaskError is called when runTask returns a non-nil error. Returns true when
 // the caller should skip complete_task and continue the loop (claim was released).
 // Extracted for testability — the queue loop calls this immediately after runTask.
@@ -577,7 +602,58 @@ func handleTaskError(taskID, missionID int64, modelDesc string, err error, brain
 // Returns (summary, ErrModelUnreachable) when the backend 404s or is
 // connection-refused on the very first Chat call — the queue loop uses this to
 // release the claim instead of completing with an error string.
-func runTask(ctx context.Context, backend Backend, name, role, ws string, brain func(string, map[string]any) string, tools []any, missionID, taskID int64, title, instruction string, mir *mirror, bc brainCall) (string, error) {
+//
+// assignedModel is the task's gate-earned Model (queue.Task.Model), or "" for
+// the worker's own default. When set and the backend can serve more than one
+// model (it implements modelSwitcher), runTask reconfigures a per-task copy
+// of the backend to that model for the duration of this task only. When the
+// backend can't be told a different model, the worker still runs its own
+// model — but the mismatch is recorded in the returned summary ("ran <own>
+// not assigned <x>") rather than silently pretending it ran the assignment.
+func runTask(ctx context.Context, backend Backend, name, role, ws string, brain func(string, map[string]any) string, tools []any, missionID, taskID int64, title, instruction string, mir *mirror, bc brainCall, assignedModel string) (string, error) {
+	defaultModel := env("AGENT_MODEL", "qwen2.5-coder:7b")
+	wantModel := taskModel(assignedModel, defaultModel)
+	modelMismatch := ""
+	if wantModel != defaultModel {
+		if ms, ok := backend.(modelSwitcher); ok {
+			backend = ms.WithModel(wantModel)
+			fmt.Printf("[%s/%s] task #%d assigned model %s — running this task on it\n", name, role, taskID, wantModel)
+		} else {
+			modelMismatch = fmt.Sprintf("ran %s not assigned %s", defaultModel, wantModel)
+			fmt.Printf("[%s/%s] task #%d assigned model %s but this worker's backend can't switch models — %s\n",
+				name, role, taskID, wantModel, modelMismatch)
+		}
+	}
+	// annotate appends the honest model-mismatch note (if any) to whatever
+	// summary this task ends up completing with, so complete_task's result
+	// never silently implies the assignment ran when it didn't.
+	annotate := func(s string) string {
+		if modelMismatch == "" {
+			return s
+		}
+		return s + " [" + modelMismatch + "]"
+	}
+	// Structured-role fast path: test-writer/mutant-generator tasks arrive
+	// with an already-rendered testgen prompt as their Instruction and are
+	// expected to produce a typed artifact (test source / mutants) for the
+	// brain to validate — not a freeform tool-loop summary. So skip the
+	// multi-step tool loop entirely: one backend.Chat call with the
+	// instruction as the sole prompt, and the raw model output goes back to
+	// complete_task verbatim. The per-task model selection above (WithModel /
+	// honest-mismatch annotate) already applies to `backend` here — no
+	// separate handling needed.
+	if isStructuredRole(role) {
+		brain("heartbeat", map[string]any{"status": "working"})
+		m, err := backend.Chat([]omsg{{Role: "user", Content: instruction}}, nil)
+		if err != nil {
+			if errors.Is(err, ErrModelUnreachable) {
+				return "", ErrModelUnreachable
+			}
+			fmt.Printf("   ! model: %v\n", err)
+			return annotate("error: " + err.Error()), nil
+		}
+		return annotate(m.Content), nil
+	}
 	extraPrompt := ""
 	if role == "tester" {
 		extraPrompt = `
@@ -641,7 +717,7 @@ Task: %s
 				return "", ErrModelUnreachable
 			}
 			fmt.Printf("   ! model: %v\n", err)
-			return "error: " + err.Error(), nil
+			return annotate("error: " + err.Error()), nil
 		}
 		callName, args, ok := extractCall(m)
 		if callName == "report_finding" { // the harness scopes the finding; the model only describes it
@@ -664,7 +740,7 @@ Task: %s
 				last = c
 			}
 			fmt.Printf("   · %s considers the task done: %s\n", name, last)
-			return last, nil
+			return annotate(last), nil
 		}
 		// wd (not ws) routes write_file/edit_file/run_command to the per-mission
 		// mirror when this is a repo task; otherwise wd == ws and behaviour is unchanged.
@@ -692,7 +768,7 @@ Task: %s
 			omsg{Role: "user", Content: fmt.Sprintf("[result of %s] %s\nContinue with the next step, or stop if the task is complete.", callName, result)})
 		time.Sleep(300 * time.Millisecond)
 	}
-	return last, nil
+	return annotate(last), nil
 }
 
 // roleWork returns the role's job description and its backlog over the shared

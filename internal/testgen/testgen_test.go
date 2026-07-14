@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/repoindex"
 )
 
@@ -93,5 +94,50 @@ func TestParseTestOutputStripsFences(t *testing.T) {
 	got := ParseTestOutput("```go\npackage x\n```")
 	if strings.Contains(got, "```") {
 		t.Errorf("fences not stripped: %q", got)
+	}
+}
+
+// TestGenerateMutantsPromptUnchanged pins the exact prompt GenerateMutantsPrompt
+// renders so this refactor (extracting it out of GenerateMutants) cannot drift
+// the text a distributed worker will later send to its own model.
+func TestGenerateMutantsPromptUnchanged(t *testing.T) {
+	sigs := []repoindex.Signature{{Name: "F", Kind: "func", Results: []string{"int"}, Exported: true}}
+	sys, usr := GenerateMutantsPrompt("F returns >0", "func F() int { return 1 }", sigs, 3)
+	if sys != genMutantsSystem {
+		t.Fatalf("system prompt drifted:\ngot:  %q\nwant: %q", sys, genMutantsSystem)
+	}
+	if !strings.Contains(sys, "You are a SEEDED-VIOLATION GENERATOR.") {
+		t.Fatal("system prompt drifted")
+	}
+	for _, want := range []string{"GOAL:\nF returns >0", "func F() int { return 1 }", `"Name":"F"`, "Produce exactly 3 distinct mutations."} {
+		if !strings.Contains(usr, want) {
+			t.Errorf("user prompt missing %q; got:\n%s", want, usr)
+		}
+	}
+}
+
+func TestParseMutantsOutput(t *testing.T) {
+	raw := "===MUTATION_1===\npackage target\nfunc F() int { return 9 }\n===MUTATION_2===\npackage target\nfunc F() int { return 8 }\n"
+	muts, err := ParseMutantsOutput(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []adequacy.Mutant{
+		{ID: "m1", Code: "package target\nfunc F() int { return 9 }"},
+		{ID: "m2", Code: "package target\nfunc F() int { return 8 }"},
+	}
+	if len(muts) != len(want) {
+		t.Fatalf("mutants wrong: %+v", muts)
+	}
+	for i := range want {
+		if muts[i] != want[i] {
+			t.Errorf("mutant %d = %+v, want %+v", i, muts[i], want[i])
+		}
+	}
+}
+
+func TestParseMutantsOutputMalformedErrors(t *testing.T) {
+	if _, err := ParseMutantsOutput("no markers here"); err == nil {
+		t.Fatal("unparseable response must error")
 	}
 }

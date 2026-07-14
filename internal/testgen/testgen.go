@@ -96,19 +96,37 @@ Return ONLY the mutations, each a COMPLETE file, in this exact format:
 <complete file>
 (continue for the requested count)`
 
+// GenerateMutantsPrompt renders the system/user prompt pair GenerateMutants
+// sends to the model. Split out so a distributed worker can run the
+// identical prompt against its own model and hand the raw response back for
+// ParseMutantsOutput to parse — the prompt text itself must stay
+// byte-identical to GenerateMutants' prior inline construction.
+func GenerateMutantsPrompt(goal, code string, sigs []repoindex.Signature, n int) (system, user string) {
+	instr := fmt.Sprintf("Produce exactly %d distinct mutations.", n)
+	return genMutantsSystem, buildUser(goal, code, sigs, instr)
+}
+
+// ParseMutantsOutput extracts the seeded-violation mutants from a model's
+// raw response. It is the parse half of GenerateMutants, split out so a
+// distributed worker's response can be parsed the same way the brain would
+// parse its own model's response.
+func ParseMutantsOutput(raw string) ([]adequacy.Mutant, error) {
+	muts := parseMutants(raw)
+	if len(muts) == 0 {
+		return nil, errors.New("testgen: generator returned no parseable mutations")
+	}
+	return muts, nil
+}
+
 // GenerateMutants asks m for n distinct same-signature goal-violating
 // mutations of code and parses them into []adequacy.Mutant. Like WriteTest,
 // it is generation-only: it does not compile, run, or score the mutants —
 // that's adequacy's job.
 func GenerateMutants(ctx context.Context, m LLM, goal, code string, sigs []repoindex.Signature, n int) ([]adequacy.Mutant, error) {
-	instr := fmt.Sprintf("Produce exactly %d distinct mutations.", n)
-	resp, err := m.Ask(ctx, genMutantsSystem, buildUser(goal, code, sigs, instr))
+	sys, usr := GenerateMutantsPrompt(goal, code, sigs, n)
+	resp, err := m.Ask(ctx, sys, usr)
 	if err != nil {
 		return nil, err
 	}
-	muts := parseMutants(resp)
-	if len(muts) == 0 {
-		return nil, errors.New("testgen: generator returned no parseable mutations")
-	}
-	return muts, nil
+	return ParseMutantsOutput(resp)
 }

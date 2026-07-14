@@ -334,7 +334,17 @@ type jailRunner interface {
 type realJail struct{}
 
 func (realJail) Run(ctx context.Context, command, workdir string, net bool, timeout time.Duration) (int, []byte, time.Duration, error) {
-	iso, err := sandbox.Resolve(sandbox.Config{Backend: os.Getenv("CORRALAI_EXEC_BACKEND")})
+	// CORRALAI_EXEC_BACKEND picks the isolator (bwrap by default). On a host
+	// where no real jail is available — a disposable CI container, or a dev box
+	// with bwrap locked down — the operator can opt into the "none" backend, but
+	// ONLY by also confirming AGENT_EXEC_UNSAFE_HOST=1 (the same conventional
+	// confirmation corral-agent uses, and the one sandbox.Resolve's own error
+	// message names). Without that explicit opt-in, an unavailable backend still
+	// fails closed — this never silently runs unsandboxed.
+	iso, err := sandbox.Resolve(sandbox.Config{
+		Backend:    os.Getenv("CORRALAI_EXEC_BACKEND"),
+		UnsafeHost: os.Getenv("AGENT_EXEC_UNSAFE_HOST") == "1",
+	})
 	if err != nil {
 		return -1, nil, 0, fmt.Errorf("no sandbox backend (refusing to run unsandboxed): %w", err)
 	}

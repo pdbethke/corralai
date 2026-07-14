@@ -5,6 +5,7 @@ package advpool
 import (
 	"context"
 	"fmt"
+	"log"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/queue"
@@ -292,6 +293,10 @@ func (d *Driver) tickDevAdequacy(ctx context.Context, missionID int64, run *runS
 	run.devKillRate = killRate
 	run.mutantsTotal = len(mutants)
 	run.devSurvivors = survivors
+	// Log the headline the moment it's computed — the dev suite's grade — so it
+	// is visible even if the downstream test-writer/aggregate steps stall.
+	log.Printf("advpool: run %d dev-adequacy: the dev's OWN tests scored %.0f%% (killed %d of %d mutants, %d survived — bugs the dev's tests miss)",
+		missionID, killRate*100, len(mutants)-len(survivors), len(mutants), len(survivors))
 
 	tw, terr := d.Q.TaskByID(run.testWriterTaskID)
 	if terr != nil {

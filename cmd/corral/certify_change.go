@@ -4,12 +4,19 @@ package main
 
 import (
 	"archive/tar"
+	"crypto/ed25519"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"strings"
+
+	"github.com/pdbethke/corralai/internal/buildstore"
+	"github.com/pdbethke/corralai/internal/certify"
 )
 
 // extractCommit resolves ref to a commit sha and materializes that exact
@@ -52,6 +59,73 @@ func extractCommit(ref string) (workdir, sha string, cleanup func(), err error) 
 		return "", "", nil, fmt.Errorf("git archive: %w", err)
 	}
 	return dir, sha, cleanup, nil
+}
+
+// localCertifyKeyPath mirrors cmd/corral/main.go's resolution so the CLI and
+// the daemon sign with the same key file by default.
+func localCertifyKeyPath() string {
+	if p := strings.TrimSpace(os.Getenv("CORRALAI_CERTIFY_KEY_FILE")); p != "" {
+		return p
+	}
+	home := ""
+	if u, err := os.UserHomeDir(); err == nil {
+		home = u
+	} else if usr, err := user.Current(); err == nil {
+		home = usr.HomeDir
+	}
+	return filepath.Join(home, ".claude", "corralai_certify_key")
+}
+
+func loadLocalCertifyKey() (ed25519.PrivateKey, error) {
+	return buildstore.LoadOrCreateSigningKey(localCertifyKeyPath())
+}
+
+// signBuildLocally turns a raw build record into a signed, self-verifying
+// buildResult using the local key — the same ledger/attestation/DSSE recipe
+// as internal/brain.certifyBuild, so a locally-signed record is
+// indistinguishable in shape from a brain-signed one and verifies with the
+// same certverify.VerifyRecord path. Actor is the fixed local principal
+// "corral-certify"; anchoring is never done here (Anchored=false).
+func signBuildLocally(rec buildRecord, priv ed25519.PrivateKey) (buildResult, error) {
+	const actor = "corral-certify"
+	steps := []certify.Step{
+		{
+			Kind: "context", Actor: actor, Subject: rec.Repo + "@" + rec.Commit,
+			Detail: map[string]any{"repo": rec.Repo, "commit": rec.Commit, "branch": rec.Branch},
+		},
+		{
+			Kind: "execution", Actor: actor, Subject: rec.Command,
+			Detail: map[string]any{
+				"exit_code": rec.ExitCode, "ok": rec.ExitCode == 0,
+				"duration_s": rec.DurationS, "output_digest": rec.OutputDigest,
+			},
+		},
+	}
+	built, head := certify.BuildLedger(steps)
+
+	stmt := certify.BuildAttestation(certify.BuildRecord{
+		Repo: rec.Repo, Commit: rec.Commit, Branch: rec.Branch, Actor: actor,
+		Command: rec.Command, ExitCode: rec.ExitCode, DurationS: rec.DurationS,
+		OutputDigest: rec.OutputDigest, ProducedBy: rec.ProducedBy,
+	}, head)
+
+	envelope, err := certify.SignDSSE(stmt, priv, "corral-certify")
+	if err != nil {
+		return buildResult{}, fmt.Errorf("signing statement: %w", err)
+	}
+	stepsJSON, err := certify.MarshalSteps(built)
+	if err != nil {
+		return buildResult{}, fmt.Errorf("marshaling steps: %w", err)
+	}
+	var stepsOut []map[string]any
+	if err := json.Unmarshal(stepsJSON, &stepsOut); err != nil {
+		return buildResult{}, fmt.Errorf("decoding steps: %w", err)
+	}
+	pub := priv.Public().(ed25519.PublicKey)
+	return buildResult{
+		ID: 0, Head: head, Signature: string(envelope), Statement: stmt,
+		PublicKey: hex.EncodeToString(pub), Steps: stepsOut, Anchored: false,
+	}, nil
 }
 
 // extractTar writes every regular file/dir in the tar stream under dest,

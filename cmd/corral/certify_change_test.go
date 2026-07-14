@@ -1,10 +1,13 @@
 package main
 
 import (
+	"crypto/ed25519"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"github.com/pdbethke/corralai/internal/certverify"
 )
 
 // gitInitRepo makes a throwaway git repo with one committed file and one
@@ -56,6 +59,37 @@ func TestExtractCommitArchivesTheCommitNotTheWorktree(t *testing.T) {
 	}
 	if string(got) != committed {
 		t.Errorf("extracted file = %q, want the COMMITTED %q (uncommitted edits must be excluded)", got, committed)
+	}
+}
+
+func TestSignBuildLocallyRoundTripsThroughVerify(t *testing.T) {
+	t.Setenv("CORRALAI_CERTIFY_KEY", "") // force the file/generated path off the env seed
+	_, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := buildRecord{
+		Repo: "owner/x", Commit: "abc123", Branch: "main",
+		Command: "go test ./...", ExitCode: 0, DurationS: 1.5,
+		OutputDigest: "sha256:deadbeef",
+	}
+	res, err := signBuildLocally(rec, priv)
+	if err != nil {
+		t.Fatalf("signBuildLocally: %v", err)
+	}
+	if res.Signature == "" || res.Head == "" || res.PublicKey == "" {
+		t.Fatalf("incomplete record: %+v", res)
+	}
+	pub := priv.Public().(ed25519.PublicKey)
+	checks, ok := certverify.VerifyRecord(certverify.Record{
+		Statement: res.Statement,
+		Signature: res.Signature,
+		Steps:     res.Steps,
+		Head:      res.Head,
+		Anchored:  res.Anchored,
+	}, pub, nil, true)
+	if !ok {
+		t.Fatalf("VerifyRecord failed on a locally-signed record: %+v", checks)
 	}
 }
 

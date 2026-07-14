@@ -303,6 +303,26 @@ type Options struct {
 	// ControlModel is the LLM the authoring tools use for the writer + reviewer
 	// seats (llm.FromEnv()); nil disables stage_control.
 	ControlModel testgen.LLM
+
+	// Staffing, when set, is the leaderboard-driven role->model planner the
+	// adversarial pool asks for a gate-earned assignment (mission.StaffingManager.
+	// Perf.GetRoleModelStats()). nil => the pool falls back to static default
+	// models (still decorrelation-enforced) rather than refusing to start —
+	// the pool is useful even before a leaderboard has any evidence.
+	Staffing *mission.StaffingManager
+
+	// AdvPool, when set, is the wired adversarial-testing-pool runtime
+	// (StartAdversarialPool's return value) — the shared Driver instance the
+	// admin-gated start_adversarial_run tool and the tick-loop goroutine both
+	// operate on. Set this field BEFORE constructing the MCP server (mirrors
+	// the ControlSpec ordering: a resource shared between tool registration
+	// and a background loop must be built first and threaded in). nil => the
+	// start_adversarial_run tool is not registered.
+	AdvPool *AdvPoolRuntime
+
+	// AdvPoolPollInterval is how often the adversarial-pool tick loop advances
+	// the active run. <=0 => a 15-second default.
+	AdvPoolPollInterval time.Duration
 }
 
 // SpawnBudget is the brain-side request-side DoS bound for spawning.

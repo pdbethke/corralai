@@ -49,7 +49,7 @@ type Verdict struct {
 // CheckDecorrelation rejects an assignment where test-critic and test-writer
 // share a model. A test-critic judging tests written by its own model (or a
 // copy of it) is not an independent check — it is the same failure mode
-// grading its own homework. Enforced at driver construction (soundness #2).
+// grading its own homework. Enforced at driver construction (soundness #4).
 func CheckDecorrelation(assign RoleAssignment) error {
 	critic, writer := assign[RoleTestCritic], assign[RoleTestWriter]
 	if critic != "" && critic == writer {
@@ -118,6 +118,9 @@ type Driver struct {
 func NewDriver(q *queue.Store, scorer Scorer, validator Validator, assign RoleAssignment, threshold float64) (*Driver, error) {
 	if err := CheckDecorrelation(assign); err != nil {
 		return nil, err
+	}
+	if threshold <= 0 {
+		return nil, fmt.Errorf("advpool: threshold must be > 0 (got %v) — a non-positive threshold would auto-certify any dev suite, defeating the human gate", threshold)
 	}
 	return &Driver{
 		Q: q, Scorer: scorer, Validator: validator, Assign: assign,

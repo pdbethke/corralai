@@ -4,6 +4,7 @@ package advpool
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -241,6 +242,14 @@ func TestTick_PoolAdequacy_ScoresProvenMissed(t *testing.T) {
 	if scorer.calls[1].test != "pool test source" {
 		t.Fatalf("pool score call used test %q, want the test-writer's result", scorer.calls[1].test)
 	}
+	if len(scorer.calls[1].mutants) != len(survivors) {
+		t.Fatalf("pool score call used %d mutants, want the %d dev survivors", len(scorer.calls[1].mutants), len(survivors))
+	}
+	for i, m := range scorer.calls[1].mutants {
+		if m.ID != survivors[i].ID {
+			t.Fatalf("pool score call mutant[%d] = %q, want survivor %q (Score must be scored against the survivor set, not the full mutant list)", i, m.ID, survivors[i].ID)
+		}
+	}
 	run := d.runs[2]
 	if !run.poolScored {
 		t.Fatal("expected poolScored=true")
@@ -381,6 +390,106 @@ func TestNewDriver_RejectsDecorrelatedAssignment(t *testing.T) {
 	}
 	if d != nil {
 		t.Fatal("expected a nil Driver on decorrelation rejection")
+	}
+}
+
+// (g) NewDriver must reject a non-positive threshold: DevKillRate < 0 (or
+// < a threshold <=0) can never be true, so a caller passing threshold<=0
+// would silently auto-certify every run regardless of suite strength.
+func TestNewDriver_RejectsNonPositiveThreshold(t *testing.T) {
+	q := newTestQueue(t)
+	scorer := &fakeScorer{}
+	validator := &fakeValidator{}
+
+	for _, threshold := range []float64{0, -0.1, -1} {
+		d, err := NewDriver(q, scorer, validator, decorrelatedAssign(), threshold)
+		if err == nil {
+			t.Fatalf("threshold=%v: expected an error, got nil", threshold)
+		}
+		if d != nil {
+			t.Fatalf("threshold=%v: expected a nil Driver on rejection", threshold)
+		}
+	}
+}
+
+// (h) malformed mutant-generator output: ParseMutants failing must refuse
+// the artifact — reopen mutant-generator for retry and never let it reach
+// Scorer.Score (soundness #1: no malformed artifact flows into scoring).
+func TestTick_DevAdequacy_ParseError_ReopensAndSkipsScore(t *testing.T) {
+	scorer := &fakeScorer{devKillRate: 0.9}
+	validator := &fakeValidator{parseErr: fmt.Errorf("malformed mutant output")}
+	d, _ := newTestDriver(t, 6, scorer, validator, 0.5)
+
+	mg := claimByKey(t, d.Q, RoleMutantGenerator)
+	mustComplete(t, d.Q, mg.ID, "garbage, not valid mutant output")
+
+	v, err := d.Tick(context.Background(), 6)
+	if err == nil {
+		t.Fatal("expected Tick to return an error on unparseable mutant output")
+	}
+	if v != nil {
+		t.Fatalf("expected no verdict on a refused artifact, got %+v", v)
+	}
+	if len(scorer.calls) != 0 {
+		t.Fatalf("expected Scorer.Score NOT called on a malformed artifact, got %d calls", len(scorer.calls))
+	}
+
+	reopened, terr := d.Q.TaskByID(mg.ID)
+	if terr != nil {
+		t.Fatal(terr)
+	}
+	if reopened == nil {
+		t.Fatal("mutant-generator task vanished after reopen")
+	}
+	if reopened.Status != queue.StatusReady {
+		t.Fatalf("mutant-generator status = %s, want ready (reopened for retry)", reopened.Status)
+	}
+}
+
+// (i) non-compiling test-writer output: CompileTest failing must refuse the
+// artifact — reopen test-writer for retry and never let it reach the pool
+// Scorer.Score call.
+func TestTick_PoolAdequacy_CompileError_ReopensAndSkipsScore(t *testing.T) {
+	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}, {ID: "m2", Code: "c2"}}
+	scorer := &fakeScorer{devKillRate: 0.5, devSurvivors: survivors}
+	validator := &fakeValidator{
+		mutants:    []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0], survivors[1]},
+		compileErr: fmt.Errorf("syntax error in generated test"),
+	}
+	d, _ := newTestDriver(t, 7, scorer, validator, 0.1)
+
+	mg := claimByKey(t, d.Q, RoleMutantGenerator)
+	mustComplete(t, d.Q, mg.ID, "raw mutants")
+	if _, err := d.Tick(context.Background(), 7); err != nil {
+		t.Fatalf("Tick (dev-adequacy): %v", err)
+	}
+	if len(scorer.calls) != 1 {
+		t.Fatalf("expected 1 Scorer.Score call after dev-adequacy, got %d", len(scorer.calls))
+	}
+
+	tw := claimTaskByID(t, d.Q, d.runs[7].testWriterTaskID)
+	mustComplete(t, d.Q, tw.ID, "test that does not compile")
+
+	v, err := d.Tick(context.Background(), 7)
+	if err == nil {
+		t.Fatal("expected Tick to return an error on a non-compiling test")
+	}
+	if v != nil {
+		t.Fatalf("expected no verdict on a refused artifact, got %+v", v)
+	}
+	if len(scorer.calls) != 1 {
+		t.Fatalf("expected pool Scorer.Score NOT called on a non-compiling artifact, still want 1 call, got %d", len(scorer.calls))
+	}
+
+	reopened, terr := d.Q.TaskByID(tw.ID)
+	if terr != nil {
+		t.Fatal(terr)
+	}
+	if reopened == nil {
+		t.Fatal("test-writer task vanished after reopen")
+	}
+	if reopened.Status != queue.StatusReady {
+		t.Fatalf("test-writer status = %s, want ready (reopened for retry)", reopened.Status)
 	}
 }
 

@@ -69,3 +69,29 @@ func TestGenerateMutantsNoneErrors(t *testing.T) {
 		t.Fatal("unparseable response must error")
 	}
 }
+
+// TestWriteTestPromptUnchanged pins the exact prompt WriteTestPrompt renders
+// so this refactor (extracting it out of WriteTest) cannot drift the text a
+// distributed worker will later send to its own model.
+func TestWriteTestPromptUnchanged(t *testing.T) {
+	sigs := []repoindex.Signature{{Name: "Add", Kind: "func", Results: []string{"int"}, Exported: true}}
+	sys, usr := WriteTestPrompt("cover Add", "func Add(a,b int)int{return a+b}", sigs)
+	if sys != writeTestSystem {
+		t.Fatalf("system prompt drifted:\ngot:  %q\nwant: %q", sys, writeTestSystem)
+	}
+	if !strings.Contains(sys, "You are a TEST-WRITER.") {
+		t.Fatal("system prompt drifted")
+	}
+	for _, want := range []string{"GOAL:\ncover Add", "func Add(a,b int)int{return a+b}", `"Name":"Add"`} {
+		if !strings.Contains(usr, want) {
+			t.Errorf("user prompt missing %q; got:\n%s", want, usr)
+		}
+	}
+}
+
+func TestParseTestOutputStripsFences(t *testing.T) {
+	got := ParseTestOutput("```go\npackage x\n```")
+	if strings.Contains(got, "```") {
+		t.Errorf("fences not stripped: %q", got)
+	}
+}

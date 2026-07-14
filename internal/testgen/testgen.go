@@ -48,16 +48,34 @@ func buildUser(goal, code string, sigs []repoindex.Signature, instruction string
 	return b.String()
 }
 
+// WriteTestPrompt renders the system/user prompt pair WriteTest sends to the
+// model. Split out so a distributed worker can run the identical prompt
+// against its own model and hand the raw response back for ParseTestOutput
+// to parse — the prompt text itself must stay byte-identical to WriteTest's
+// prior inline construction.
+func WriteTestPrompt(goal, code string, sigs []repoindex.Signature) (system, user string) {
+	return writeTestSystem, buildUser(goal, code, sigs, "")
+}
+
+// ParseTestOutput extracts the Go test source from a model's raw response,
+// stripping markdown fences if present. It is the parse half of WriteTest,
+// split out so a distributed worker's response can be parsed the same way
+// the brain would parse its own model's response.
+func ParseTestOutput(raw string) string {
+	return extractCode(raw)
+}
+
 // WriteTest asks m to write a Go test that verifies code satisfies goal,
 // using sigs as the signature surface. It does not compile or run the
 // result — an empty response (after fence-stripping) is the only failure
 // mode caught here.
 func WriteTest(ctx context.Context, m LLM, goal, code string, sigs []repoindex.Signature) (string, error) {
-	resp, err := m.Ask(ctx, writeTestSystem, buildUser(goal, code, sigs, ""))
+	sys, usr := WriteTestPrompt(goal, code, sigs)
+	resp, err := m.Ask(ctx, sys, usr)
 	if err != nil {
 		return "", err
 	}
-	test := extractCode(resp)
+	test := ParseTestOutput(resp)
 	if strings.TrimSpace(test) == "" {
 		return "", errors.New("testgen: writer returned no code")
 	}

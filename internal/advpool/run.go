@@ -1,0 +1,27 @@
+// SPDX-License-Identifier: Elastic-2.0
+
+// Package advpool is the pure driver for the adversarial testing pool: a
+// run definition, roles-as-data, and the DAG builder that turns a run into
+// queue.TaskSpecs. It has no queue/jail/brain wiring of its own — callers
+// enqueue the returned specs and drive completions themselves (Phase 5).
+package advpool
+
+// RunSpec is one adversarial-pool run: the code under review PLUS the
+// developer's own tests for it. The pool's central question is not "does
+// the code pass its tests" but "do the dev's tests actually test anything" —
+// so DevTestPath/DevTestCode are first-class input, not an afterthought.
+type RunSpec struct {
+	Repo        string
+	Commit      string
+	Goal        string
+	CodePath    string
+	Code        string
+	DevTestPath string
+	DevTestCode string
+	TestCmd     string
+	NMutants    int
+}
+
+// RoleAssignment maps a role name (Role.Name) to the gate-earned model that
+// should run it, e.g. from StaffingManager off the leaderboard.
+type RoleAssignment map[string]string

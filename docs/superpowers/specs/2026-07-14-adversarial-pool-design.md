@@ -5,7 +5,9 @@
 
 ## The vision (where this is going)
 
-A code change arrives. The brain turns a **pool of role-separated worker agents** loose on it — a **test-writer** authors tests fitted to the change, a **mutant-generator** seeds violations, a **reviewer** (a *different* model) triages, a **pentester** hunts the hole nobody tested — each claiming role-typed tasks from the queue and running in its own jail. The brain proves the tests by **mutation** (adequacy kill-rate), aggregates the findings, routes each role to the **model that earned it** off the leaderboard, gates the verdict on a **human**, and emits a **signed** record. Certify-by-adversarial-adequacy, distributed across the herd.
+A code change arrives — **with the tests the developer wrote for it.** The brain turns a **pool of role-separated worker agents** loose on it, and the primary question is not "do the tests pass?" but **"do the dev's tests actually test anything?"** A **mutant-generator** seeds violations into the code; the brain runs the **developer's own tests** against those mutants — the **kill-rate is the dev suite's grade**. Tests that pass every mutant catch *nothing*: they suck, or they're **designed to pass** (vacuous, tautological, CI-theater). A **test-writer** then authors tests that *do* kill the survivors — proving the missed bugs are real and catchable, not equivalent mutants. A **test-critic** (a *different* model) reads the dev's tests for gamed/vacuous patterns. Each role runs the **model that earned it** off the leaderboard, in its own jail; the brain aggregates, gates the verdict on a **human**, and emits a **signed** record: *"this change's tests catch K% of injected bugs; here are the ones they miss; here are the tests written to pass without testing."* Certify-by-adversarial-adequacy, distributed across the herd.
+
+**This is the CISO-facing verdict nobody else produces.** SLSA proves the build ran; CI proves the tests passed. Neither tells you whether the tests were *worth* passing. The pool does — objectively (mutation kill-rate) and adversarially (a decorrelated herd trying to prove the suite hollow).
 
 This spec designs **sub-slice 1: the spine** — the driver + a hybrid 3-role DAG **with dynamic gate-earned routing**, proven end-to-end distributed. Slices 2–3 add the pentester, concurrent runs, and the CLI trigger.
 
@@ -27,7 +29,7 @@ Retire-the-builder removed only the *driver* — the thing that decomposed work 
 Because the pool is **distributed**, the LLM generation for a role happens **on the worker** (the worker's own gate-earned model) — the brain cannot run testgen with a worker's model. So the structured/freeform split is about the **output contract**, not where the model runs:
 
 - **Structured roles** (`test-writer`, `mutant-generator`): the driver renders the *proven testgen prompt* into the task `Instruction`; the worker's model produces a **typed, validated artifact** (a test that must compile; mutants in the `adequacy.Mutant` schema); the brain **validates** it (compile-verify; schema-parse) and feeds the **deterministic** `adequacy.Score` (jail kill-rate). Reliability where it matters.
-- **Freeform roles** (`reviewer` in this slice; `pentester` later): the worker runs its normal LLM+jail loop against an instruction and files **findings** (the existing untyped `Finding` contract). Judgment/exploration where autonomy helps.
+- **Freeform roles** (`test-critic` in this slice; `pentester` later): the worker runs its normal LLM+jail loop against an instruction and files **findings** (the existing untyped `Finding` contract). Judgment/exploration where autonomy helps.
 
 This requires a **testgen seam**: expose prompt-render + output-parse separately from the LLM call, so a structured role reuses testgen's exact prompt as a task instruction and the brain parses/validates the worker's result. (REUSE-WITH-CHANGES to `internal/testgen`.)
 
@@ -36,70 +38,76 @@ This requires a **testgen seam**: expose prompt-render + output-parse separately
 ## Sub-slice 1 — scope
 
 ### The run
-A **run** = one **target**: a unit of code under review + a goal + a test command. Shaped after the control-gate's `StageRequest`: `RunSpec{Repo, Commit, Goal, CodePath, Code, TestCmd, NMutants}`. A run is a queue **mission** (`mission_id` = the run id) — reusing all the queue's mission-scoped bookkeeping. **One active run at a time** (reuse the existing single-active constraint); concurrent runs are slice 3.
+A **run** = one **target**: the code under review **plus the developer's tests for it**, a goal, and the command that runs those tests. `RunSpec{Repo, Commit, Goal, CodePath, Code, DevTestPath, DevTestCode, TestCmd, NMutants}` — extends the control-gate's `StageRequest` with the **dev's tests as first-class input** (`TestCmd` runs `DevTestCode`). A run is a queue **mission** (`mission_id` = the run id). **One active run at a time**; concurrent runs are slice 3.
 
 ### The DAG (enqueued by the driver)
 ```
-[test-writer]  (structured, model A)  ─┐
-[mutant-gen]   (structured, model B)  ─┼─→  (brain) adequacy.Score ─→ [reviewer] (freeform, model C ≠ A) ─→ (brain) aggregate
-                                        │        kill-rate + survivors      triage survivors → findings          → verdict {kill_rate, survivors, verdicts, findings}
-                                        └────────────────────────────────────────────────────────────────────────→ human gate (promote/reject) → sign
+[mutant-generator] (structured, B) ─→ (brain) adequacy.Score(DEV's tests, mutants) ─→ dev_kill_rate + survivors
+                                                                                          │
+[test-critic] (freeform, C) ── reads the dev's tests for vacuous/designed-to-pass ─┐      ├─→ [test-writer] (structured, A≠C):
+                                → findings                                         │      │      write a test that KILLS the survivors
+                                                                                   │      └─→ (brain) adequacy.Score(pool's test, survivors) → proven_missed bugs
+                                                                                   └──────────────────────────────────────────────────────→ (brain) aggregate
+                                                                                          → verdict {dev_kill_rate, survivors, proven_missed, vacuous_findings, models_by_role}
+                                                                                          → human gate → sign
 ```
-- **Worker tasks**: `test-writer`, `mutant-generator`, `reviewer`, each stamped with a **leaderboard-assigned model** (A/B/C above), **decorrelation enforced** (reviewer model ≠ writer model). `reviewer` `DependsOn` the adequacy result.
-- **Brain-side steps** (in the driver's tick, using the shared isolator): run `adequacy.Score` once `test-writer` + `mutant-generator` are `done`; **aggregate** once `reviewer` is `done`; **sign**.
+- **The headline is the dev suite's kill-rate.** `adequacy.Score` runs the **developer's own tests** against the mutant-generator's mutants; the survivors are the bugs the dev's tests *miss*. A near-zero kill-rate means the tests don't test — they suck, or they're designed to pass.
+- **Worker tasks**: `mutant-generator` (mutate the code → violations), `test-writer` (author tests that kill the *survivors* — proving the missed bugs are real and catchable, not equivalent mutants), `test-critic` (freeform: flag vacuous/tautological/designed-to-pass dev tests → findings). Each stamped with a **leaderboard-assigned model**, **decorrelation enforced** (`test-writer` model ≠ `test-critic` model). `test-writer` `DependsOn` the dev-adequacy result (it needs the survivors).
+- **Brain-side steps** (driver tick, shared isolator): `adequacy.Score(dev tests, mutants)` once `mutant-generator` is done → `dev_kill_rate` + survivors; `adequacy.Score(pool test, survivors)` once `test-writer` is done → `proven_missed`; **aggregate** once `test-critic` + pool-adequacy are done; **sign**.
 
 ### Gate-earned routing — DYNAMIC (this slice — the wow)
 Before enqueuing a run's tasks, the driver asks `StaffingManager` (Sense→Judge→Clamp) to assign **each role → the model that has *earned* it** off the DuckDB leaderboard (`PerformanceTracker`), and **stamps the assigned model onto each task** (a new `TaskSpec.Model` field). Workers claim role tasks as usual and **run the task's assigned model** (their backend is a multi-model gateway — see assumptions), instead of a fixed `AGENT_MODEL`. This needs no model-scoped claiming and no worker-spawning — just a per-task model stamp.
 
-- **Decorrelation is enforced, not hoped:** the reviewer's model is the best-earned model that is *not* the writer's. A single model can never both write and grade.
+- **Decorrelation is enforced, not hoped:** the `test-critic`'s model is the best-earned model that is *not* the `test-writer`'s. A single model can never both write the exposing test and grade the dev's tests.
 - **The compounding loop, live:** every completion feeds the leaderboard `(model, role, certified-outcome)`; the *next* run routes better. The brain continuously re-evaluates who's best at each adversarial role **from the signed verdicts** and routes accordingly (the [[corralai-continuous-reevaluation-differentiator]], made visible — Fugu's route-to-the-fittest with a *gate-earned* fitness signal).
 - **Cold start is honest:** with thin data the assignment is sample-weighted defaults / exploration (StaffingManager is already "honest about thin data"), sharpening as certified runs accumulate; the signed record states which basis was used.
 
 ### The driver: `StartAdversarialPool(ctx, brainOpts)`
 Following `StartControlGate`'s shape. Enable via `CORRALAI_ADVERSARIAL_POOL=1` (off by default). Responsibilities:
 1. Expose an admin-gated MCP tool `start_adversarial_run(RunSpec) → run_id` (the slice-1 trigger; `corral certify --adversarial` is slice 3).
-2. On a new run: **call `StaffingManager` to assign role→model off the leaderboard** (decorrelation-enforced: reviewer ≠ writer); extract signatures (`repoindex`); render the structured prompts; `Enqueue` the DAG tasks (mission = run), **each stamped with its assigned model** (`TaskSpec.Model`).
-3. A tick loop (reusing the engine's promote/gate/backstop pattern, adapted): `PromoteReady` → when `test-writer`+`mutant-gen` done, run `adequacy.Score` in the jail, store the report, promote `reviewer` with the survivors in its instruction → when `reviewer` done, **aggregate** → **human gate** (open finding ≥ block-severity, or a low kill-rate, routes to `needs-review`; else auto or on `promote`) → **sign** the verdict via the certify chain → run `done`. A no-progress backstop fails a stalled run.
-4. Validation seams: compile-verify the test-writer's artifact (lift `authoring.compileVerify`); schema-parse the mutant-generator's artifact.
+2. On a new run: **call `StaffingManager` to assign role→model off the leaderboard** (decorrelation-enforced: `test-critic` ≠ `test-writer`); extract signatures (`repoindex`); render the structured prompts; `Enqueue` the initial tasks (mission = run), **each stamped with its assigned model** (`TaskSpec.Model`).
+3. A tick loop (reusing the engine's promote/gate/backstop pattern, adapted): `PromoteReady` → when `mutant-generator` done, run `adequacy.Score(DEV's tests, mutants)` in the jail → `dev_kill_rate` + survivors, store them, and promote `test-writer` with the survivors in its instruction → when `test-writer` done, run `adequacy.Score(pool test, survivors)` → `proven_missed` → when `test-critic` + pool-adequacy done, **aggregate** → **human gate** (open finding ≥ block-severity, or `dev_kill_rate` below threshold, routes to `needs-review`; else on `promote`) → **sign** the verdict via the certify chain → run `done`. A no-progress backstop fails a stalled run.
+4. Validation seams: compile-verify the `test-writer`'s artifact (lift `authoring.compileVerify`); schema-parse the `mutant-generator`'s artifact. The dev's tests are run as-provided (they are the subject under grade).
 
 ### The worker changes (`cmd/corral-agent`)
 - Structured roles produce a **typed result**: the worker recognizes a structured task (a flag/role) and returns the artifact as its `complete_task` result in the agreed shape (test source; mutants JSON) — validated brain-side, refused (existing verify-gate refusal loop) if it doesn't compile/parse.
-- Freeform `reviewer` uses the existing loop + `report_finding`.
+- Freeform `test-critic` uses the existing loop + `report_finding` (flagging vacuous/designed-to-pass dev tests).
 - Keep the worker generic: no role→behavior dispatch table beyond the structured-vs-freeform result contract + the instruction the driver renders.
 
 ### The signed verdict
-Reuse the certify chain (`certify.BuildLedger`/`BuildAttestation`/`SignDSSE`, `buildstore`). The verdict statement's subject = the change (repo@commit); byproducts = `{kill_rate, mutants_total, survivors, review_verdicts, findings_summary, models_by_role}`. Verifiable offline with the existing `corral certify verify` path. This is where the pool's output becomes **evidence**.
+Reuse the certify chain (`certify.BuildLedger`/`BuildAttestation`/`SignDSSE`, `buildstore`). The verdict statement's subject = the change (repo@commit); byproducts = `{dev_kill_rate, mutants_total, survivors, proven_missed, vacuous_findings, models_by_role}`. Verifiable offline with the existing `corral certify verify` path. This is where the pool's output becomes **evidence** — a signed statement that this change's tests catch `dev_kill_rate` of injected bugs, that here are the ones they miss (proven catchable), and that here are the tests written to pass without testing.
 
 ## Soundness invariants — what keeps the "wow" defensible
 
-The wow is the herd. The **soundness is the deterministic, no-trust gate the herd feeds.** These are load-bearing invariants a sharp reviewer will test, so they are stated first-class, not left implicit:
+The wow is the herd. The **soundness is the deterministic, no-trust gate the herd feeds.** These are load-bearing invariants a sharp critic will test, so they are stated first-class, not left implicit:
 
-1. **The verdict is deterministic, not the LLM's word.** The kill-rate is computed by the **brain** re-running the test against the mutants *in a jail* (`adequacy.Score`); given the same test + mutants it is reproducible. LLM creativity *feeds* the gate; it is never *the* gate. A signed record is reproducible evidence, not "the model said pass."
+1. **The verdict is deterministic, not the LLM's word.** The headline — the dev suite's kill-rate — is computed by the **brain** re-running the **developer's own tests** against the mutants *in a jail* (`adequacy.Score`); given the same tests + mutants it is reproducible. The "designed to pass" charge is not an opinion: a vacuous test kills ~0 mutants, which is an **objective, reproducible** measurement — the `test-critic`'s judgment corroborates it but the kill-rate is load-bearing. LLM creativity *feeds* the gate; it is never *the* gate.
 2. **Never trust a worker.** Every worker artifact is **validated** brain-side (the test must compile; mutants must parse the `adequacy.Mutant` schema) and a worker's *self-reported* outcome is never taken as the result — the brain computes it. Worker code runs **only in the jail**. A lazy or hostile worker cannot forge a green.
 3. **Human gate + signed, offline-verifiable record.** No auto-certify past a blocking finding or a below-threshold kill-rate; the verdict routes to `needs-review`. The record is signed and independently verifiable with the existing `corral certify verify` (no trust in the brain that produced it).
 4. **Honest, scoped claims.** Slice 1 *records* the routing signal (it does not yet dynamically route); decorrelation is achieved *structurally* (distinct roles → distinct workers → distinct models); the record states exactly what ran and with which models. Nothing is labeled "autonomous" or "AI-certified."
 5. **Earned complexity — why distributed, not in-process.** The pool is distributed for three *load-bearing* reasons, each recorded in the verdict so the choice is defensible, not decorative:
-   - **Multi-model decorrelation** — different model *endpoints* per role (writer ≠ reviewer), which a single in-process client cannot provide; this is the "a judge may not certify herself" mechanism made real.
+   - **Multi-model decorrelation** — different model *endpoints* per role (`test-writer` ≠ `test-critic`), which a single in-process client cannot provide; this is the "a judge may not certify herself" mechanism made real.
    - **Independent per-agent attribution** — each role's contribution is separately recorded, scored on the leaderboard, and named in the signed record (`models_by_role`).
    - **Horizontal scale** — roles and targets fan out across workers.
    If any of these three were false, the herd *would* be theater — so the design makes them central, and the demo leads with the deterministic spine, not the swarm animation.
-6. **The routing fitness signal is gate-earned, not gameable.** Dynamic routing is only as trustworthy as the signal it optimizes. That signal is **not** a self-report or a vanity metric — a model's fitness is measured by outcomes the **deterministic, execution-verified gate certified** (did its authored tests actually kill mutants; did its findings survive verification). A model cannot climb the leaderboard by *claiming* it did well. And decorrelation is a hard constraint on the assignment (reviewer ≠ writer), so routing can never collapse the pool onto one model to farm a metric. Cold-start uses honest thin-data defaults, stated in the record — never fabricated confidence.
+6. **The routing fitness signal is gate-earned, not gameable.** Dynamic routing is only as trustworthy as the signal it optimizes. That signal is **not** a self-report or a vanity metric — a model's fitness is measured by outcomes the **deterministic, execution-verified gate certified** (did the `test-writer`'s test actually kill the survivors; did the `mutant-generator`'s mutants compile and expose gaps; did the `test-critic`'s findings hold). A model cannot climb the leaderboard by *claiming* it did well. And decorrelation is a hard constraint on the assignment (`test-critic` ≠ `test-writer`), so routing can never collapse the pool onto one model to farm a metric. Cold-start uses honest thin-data defaults, stated in the record — never fabricated confidence.
 
 **Method mirrors product:** this system is itself built subagent-driven, with per-task and whole-branch adversarial review and a signed, honest gate — the same discipline it certifies.
 
 ## Data flow (one run)
 ```
-start_adversarial_run(RunSpec)
-  → driver: StaffingManager assigns role→model off the leaderboard (decorrelation enforced: reviewer ≠ writer);
-            repoindex signatures; render WriteTest+GenerateMutants prompts;
-            Enqueue DAG (mission=run) — each task STAMPED with its assigned model
-  → worker(test-writer,  model A): claim → run model A → produce test  → complete_task(result=test)     → brain compile-verifies
-  → worker(mutant-gen,   model B): claim → run model B → produce mutants→ complete_task(result=mutants)  → brain schema-parses
-  → driver tick: both done → adequacy.Score(test, mutants, testCmd) in jail → kill-rate + survivors
-                 → promote reviewer (model C≠A) with survivors in instruction
-  → worker(reviewer, model C): claim → run model C → triage → report_finding(...) → complete_task
-  → driver tick: reviewer done → aggregate {kill_rate, survivors, verdicts, findings, models_by_role}
-                 → human gate (needs-review if blocking finding / low kill-rate) → sign → run done
+start_adversarial_run(RunSpec{code + DEV's tests + testCmd})
+  → driver: StaffingManager assigns role→model off the leaderboard (decorrelation: test-writer ≠ test-critic);
+            repoindex signatures; render mutant-gen + test-critic prompts;
+            Enqueue {mutant-generator(B), test-critic(C)} (mission=run) — each task STAMPED with its model
+  → worker(mutant-generator, B): claim → run B → produce mutants → complete_task(result=mutants) → brain schema-parses
+  → worker(test-critic, C):      claim → run C → read the DEV's tests → report_finding(vacuous/designed-to-pass) → complete_task
+  → driver tick: mutants done → adequacy.Score(DEV's tests, mutants, testCmd) in jail → dev_kill_rate + survivors
+                 → promote test-writer(A≠C) with the SURVIVORS in its instruction
+  → worker(test-writer, A):      claim → run A → write a test that kills the survivors → complete_task(result=test) → brain compile-verifies
+  → driver tick: writer done → adequacy.Score(pool test, survivors) in jail → proven_missed
+                 → aggregate {dev_kill_rate, survivors, proven_missed, vacuous_findings, models_by_role}
+                 → human gate (needs-review if blocking finding / dev_kill_rate below threshold) → sign → run done
   → leaderboard records each (model, role, CERTIFIED-outcome)  → sharpens the NEXT run's routing
 ```
 
@@ -122,6 +130,6 @@ start_adversarial_run(RunSpec)
 - **Trust boundary:** workers are semi-trusted; their artifacts are always **validated** (compile/parse) and their code runs **only in the jail** — a worker cannot make the brain sign a verdict without the deterministic adequacy run and the human gate. Never trust a worker's self-reported kill-rate; the brain computes it.
 
 ## Testing posture
-- Unit: the testgen prompt seam (golden prompts unchanged); the driver's DAG enqueue (assert the task shape/deps); the tick state machine (fakes for queue completions → assert adequacy runs at the right point, reviewer promoted with survivors, verdict aggregated, sign called); the structured-result validation (a non-compiling test is refused; malformed mutants rejected).
+- Unit: the testgen prompt seam (golden prompts unchanged); the driver's DAG enqueue (assert the task shape/deps); the tick state machine (fakes for queue completions → assert dev-tests adequacy runs when mutants done, `test-writer` promoted with survivors, pool-adequacy runs, verdict aggregated, sign called); the structured-result validation (a non-compiling test is refused; malformed mutants rejected); a low dev kill-rate → `needs-review`.
 - Integration (hermetic, fake workers): drive a full run with in-test fake workers completing each role's task with canned artifacts → assert a signed verdict is produced with the right kill-rate and that `corral certify verify` accepts it; a blocking finding routes to `needs-review`.
 - Keep the shipped control-gate + `corral certify` + queue/coord tests green; the pool is additive and off by default.

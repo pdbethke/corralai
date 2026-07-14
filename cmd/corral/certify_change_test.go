@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -125,6 +127,22 @@ func TestRealJailFailsClosedOnUnavailableBackend(t *testing.T) {
 	}
 	if exit != -1 || out != nil {
 		t.Errorf("fail-closed run must not report a check result: exit=%d out=%q", exit, out)
+	}
+}
+
+func TestCertifyPubkeyMatchesTheSigningKey(t *testing.T) {
+	_, priv, _ := ed25519.GenerateKey(nil)
+	seed := hex.EncodeToString(priv.Seed())
+	t.Setenv("CORRALAI_CERTIFY_KEY", seed)
+
+	var stdout, stderr bytes.Buffer
+	code := runCertify([]string{"pubkey"}, realRunner{}, nil, nil, loadLocalCertifyKey, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit = %d, stderr=%s", code, stderr.String())
+	}
+	want := hex.EncodeToString(priv.Public().(ed25519.PublicKey))
+	if strings.TrimSpace(stdout.String()) != want {
+		t.Errorf("pubkey = %q, want %q", strings.TrimSpace(stdout.String()), want)
 	}
 }
 

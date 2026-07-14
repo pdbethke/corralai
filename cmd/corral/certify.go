@@ -281,6 +281,12 @@ func runCertify(args []string, run cmdRunner, post buildPoster, jail jailRunner,
 	if len(args) > 0 && args[0] == "verify" {
 		return runCertifyVerify(args[1:], httpPubkeyFetcher, newRekorVerifyWitness, stdout, stderr)
 	}
+	// `corral certify pubkey` prints the local signing key's Ed25519 public
+	// key as hex — so `corral certify verify <rec> --pubkey <hex>` can close
+	// the offline verify loop with no brain involved.
+	if len(args) > 0 && args[0] == "pubkey" {
+		return runCertifyPubkey(signKey, stdout, stderr)
+	}
 
 	flagArgs, checkArgv := splitCertifyArgs(args)
 

@@ -157,6 +157,22 @@ func writeRecord(path string, res buildResult) error {
 	return nil
 }
 
+// runCertifyPubkey prints the local signing key's Ed25519 public key as hex,
+// so an operator can hand it to `corral certify verify <rec> --pubkey <hex>`
+// and verify a record completely offline, with no brain round trip.
+func runCertifyPubkey(signKey func() (ed25519.PrivateKey, error), stdout, stderr io.Writer) int {
+	if signKey == nil {
+		signKey = loadLocalCertifyKey
+	}
+	priv, err := signKey()
+	if err != nil {
+		fmt.Fprintf(stderr, "corral certify pubkey: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, hex.EncodeToString(priv.Public().(ed25519.PublicKey)))
+	return 0
+}
+
 // runCertifyStandalone implements the no-brain path: check out ref into a
 // clean workspace (never the possibly-dirty working tree), run the check
 // jailed, sign the result locally, and write a fully self-verifying record —

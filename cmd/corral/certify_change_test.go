@@ -172,6 +172,34 @@ func TestRealJailFailsClosedOnUnavailableBackend(t *testing.T) {
 	}
 }
 
+// TestRealJailHonorsUnsafeHostOptIn proves the `none` backend escape hatch:
+// on a host with no real jail, an operator can run the check unisolated, but
+// ONLY by explicitly confirming AGENT_EXEC_UNSAFE_HOST=1. Without the opt-in
+// the same backend still fails closed. This is the gap the demo surfaced —
+// the CLI previously wired the backend name but not the unsafe-host opt-in.
+func TestRealJailHonorsUnsafeHostOptIn(t *testing.T) {
+	t.Setenv("CORRALAI_EXEC_BACKEND", "none")
+	dir := t.TempDir()
+
+	// Without the opt-in: the "none" backend must still refuse (fail closed).
+	t.Setenv("AGENT_EXEC_UNSAFE_HOST", "")
+	_, _, _, err := realJail{}.Run(context.Background(), "true", dir, false, 5*time.Second)
+	if err == nil {
+		t.Fatal("`none` backend without AGENT_EXEC_UNSAFE_HOST=1 must fail closed, never run unsandboxed")
+	}
+
+	// With the explicit opt-in: it runs the check unisolated and reports the
+	// real result (`true` exits 0).
+	t.Setenv("AGENT_EXEC_UNSAFE_HOST", "1")
+	exit, _, _, err := realJail{}.Run(context.Background(), "true", dir, false, 5*time.Second)
+	if err != nil {
+		t.Fatalf("with AGENT_EXEC_UNSAFE_HOST=1 the `none` backend should run: %v", err)
+	}
+	if exit != 0 {
+		t.Errorf("`true` under the opt-in exited %d, want 0", exit)
+	}
+}
+
 func TestCertifyPubkeyMatchesTheSigningKey(t *testing.T) {
 	_, priv, _ := ed25519.GenerateKey(nil)
 	seed := hex.EncodeToString(priv.Seed())

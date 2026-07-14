@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -54,9 +55,19 @@ func advPoolTestPath(codePath string) string {
 
 // advPoolBase returns the go.mod scaffold shared by the pool's Scorer and
 // Validator. v1 is go-only, mirroring stage_control's fixed lang assumption.
+//
+// The default testCmd is deliberately RECURSIVE ("./...", never
+// controlgate.LangScaffold's own "./" default): a run's code_path is very
+// commonly a subdirectory (e.g. internal/auth/login.go), which lands the
+// candidate files under internal/auth/ in the jail workspace — "go test ./"
+// from the module root only ever sees the root package (no .go files there),
+// so a non-recursive default would silently no-op the scorer/compile-check
+// for every subdirectory target. This is the SAME asymmetry bug CompileTest
+// had (I-1): the scorer already honors the run's own TestCmd when set, this
+// only fixes the fallback used when TestCmd is empty.
 func advPoolBase() (base map[string]string, testCmd []string) {
-	base, testCmd, _ = controlgate.LangScaffold("go")
-	return base, testCmd
+	base, _, _ = controlgate.LangScaffold("go")
+	return base, []string{"go", "test", "./..."}
 }
 
 // advpoolScorer adapts adequacy.Score (the SAME deterministic, brain-side,
@@ -104,6 +115,14 @@ func (s advpoolScorer) Score(ctx context.Context, codePath, code, test string, m
 // proven mutant-output parser (the Task 1.2 seam), reused verbatim so a
 // distributed worker's raw response parses identically to the in-process
 // generator's own output.
+//
+// CompileTest MUST cover the same scope the Scorer actually runs against
+// (I-1): a subdirectory code_path (e.g. internal/auth/login.go) lands the
+// candidate code+test under internal/auth/ in the jail workspace, so
+// `go vet ./` (module root, non-recursive) sees zero .go files there and
+// fails EVERY authored test regardless of whether it actually compiles —
+// the run then never converges. `go vet ./...` is recursive and always
+// covers whatever directory the files actually landed in.
 type advpoolValidator struct {
 	jail adequacy.Jail
 }
@@ -117,7 +136,7 @@ func (v advpoolValidator) CompileTest(ctx context.Context, codePath, code, test 
 	ws[codePath] = code
 	ws[advPoolTestPath(codePath)] = test
 
-	compiles, err := v.jail.RunTest(ctx, ws, []string{"go", "vet", "./"})
+	compiles, err := v.jail.RunTest(ctx, ws, []string{"go", "vet", "./..."})
 	if err != nil {
 		return fmt.Errorf("advpool: compile-verify test: %w", err)
 	}
@@ -154,12 +173,27 @@ func (s advpoolSigner) SignVerdict(ctx context.Context, v advpool.Verdict) (int6
 	sum := sha256.Sum256(b)
 	digest := "sha256:" + hex.EncodeToString(sum[:])
 
+	// ProducedBy surfaces the run's role assignment as human-readable
+	// "role:model" strings directly on the signed record (M-2), rather than
+	// leaving the models only re-derivable by unpacking output_digest against
+	// a separately-stored Verdict. Sorted so the record is deterministic.
+	roles := make([]string, 0, len(v.ModelsByRole))
+	for role := range v.ModelsByRole {
+		roles = append(roles, role)
+	}
+	sort.Strings(roles)
+	producedBy := make([]string, 0, len(roles))
+	for _, role := range roles {
+		producedBy = append(producedBy, role+":"+v.ModelsByRole[role])
+	}
+
 	out, err := certifyBuild(ctx, s.opts, reportBuildIn{
 		Repo:         v.Repo,
 		Commit:       v.Commit,
 		Command:      "corral/adversarial-pool",
 		ExitCode:     exitCode,
 		OutputDigest: digest,
+		ProducedBy:   producedBy,
 	}, "corral-advpool")
 	if err != nil {
 		return 0, "", err

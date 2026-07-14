@@ -253,6 +253,66 @@ type ActorRoleCount struct {
 	Count int
 }
 
+// ModelRoleOutcomeCount is a (model, role) grouped pass/fail count of
+// advpool_leaderboard events — the leaderboard's source for folding a
+// certified adversarial-pool run's gate-earned (model, role, outcome)
+// signal into the per-role model fitness matrix, closing the compounding-
+// routing loop (M-1): a model that earns a "pass" here ranks higher for
+// that role on the NEXT run.
+type ModelRoleOutcomeCount struct {
+	Model string
+	Role  string
+	Pass  int
+	Fail  int
+}
+
+// AdvPoolOutcomeCounts groups advpool_leaderboard events (recorded by
+// advpoolLeaderboardSink.Record: actor=model, subject=role,
+// detail={"outcome": "pass"|"fail"}) by (model, role), counting pass vs
+// fail — never any other outcome string is folded in (a malformed/unknown
+// outcome is silently excluded from both counters rather than corrupting
+// the pass rate). Rows with a null actor are excluded, mirroring
+// CountByActorAndDetailRole.
+func (s *Store) AdvPoolOutcomeCounts() ([]ModelRoleOutcomeCount, error) {
+	rows, err := s.db.Query(
+		`SELECT actor, COALESCE(subject,''), COALESCE(json_extract_string(detail,'$.outcome'),'') AS outcome, count(*) AS n
+		 FROM events WHERE kind='advpool_leaderboard' AND actor IS NOT NULL GROUP BY actor, subject, outcome`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	byKey := map[[2]string]*ModelRoleOutcomeCount{}
+	var order [][2]string
+	for rows.Next() {
+		var model, role, outcome string
+		var n int
+		if err := rows.Scan(&model, &role, &outcome, &n); err != nil {
+			return nil, err
+		}
+		key := [2]string{model, role}
+		c, ok := byKey[key]
+		if !ok {
+			c = &ModelRoleOutcomeCount{Model: model, Role: role}
+			byKey[key] = c
+			order = append(order, key)
+		}
+		switch outcome {
+		case "pass":
+			c.Pass += n
+		case "fail":
+			c.Fail += n
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out := make([]ModelRoleOutcomeCount, 0, len(order))
+	for _, k := range order {
+		out = append(out, *byKey[k])
+	}
+	return out, nil
+}
+
 // CountByActorAndDetailRole groups events of kind by actor and detail.role —
 // used by the model×role leaderboard to source a rework count from
 // task_reissued events (a bee re-claiming its own lost-reply task is not

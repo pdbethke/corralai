@@ -7,7 +7,7 @@
 
 A code change arrives. The brain turns a **pool of role-separated worker agents** loose on it — a **test-writer** authors tests fitted to the change, a **mutant-generator** seeds violations, a **reviewer** (a *different* model) triages, a **pentester** hunts the hole nobody tested — each claiming role-typed tasks from the queue and running in its own jail. The brain proves the tests by **mutation** (adequacy kill-rate), aggregates the findings, routes each role to the **model that earned it** off the leaderboard, gates the verdict on a **human**, and emits a **signed** record. Certify-by-adversarial-adequacy, distributed across the herd.
 
-This spec designs **sub-slice 1: the spine** — the driver + a hybrid 2.5-role DAG proven end-to-end distributed. Slices 2–3 add the pentester, dynamic gate-earned routing, concurrent runs, and the CLI trigger.
+This spec designs **sub-slice 1: the spine** — the driver + a hybrid 3-role DAG **with dynamic gate-earned routing**, proven end-to-end distributed. Slices 2–3 add the pentester, concurrent runs, and the CLI trigger.
 
 ## The re-focus context (why this is mostly assembly)
 
@@ -45,16 +45,20 @@ A **run** = one **target**: a unit of code under review + a goal + a test comman
                                         │        kill-rate + survivors      triage survivors → findings          → verdict {kill_rate, survivors, verdicts, findings}
                                         └────────────────────────────────────────────────────────────────────────→ human gate (promote/reject) → sign
 ```
-- **Worker tasks**: `test-writer`, `mutant-generator`, `reviewer`. Distinct roles ⇒ distinct workers ⇒ **distinct models = decorrelation by construction** (writer ≠ reviewer). `reviewer` `DependsOn` the adequacy result.
+- **Worker tasks**: `test-writer`, `mutant-generator`, `reviewer`, each stamped with a **leaderboard-assigned model** (A/B/C above), **decorrelation enforced** (reviewer model ≠ writer model). `reviewer` `DependsOn` the adequacy result.
 - **Brain-side steps** (in the driver's tick, using the shared isolator): run `adequacy.Score` once `test-writer` + `mutant-generator` are `done`; **aggregate** once `reviewer` is `done`; **sign**.
 
-### Gate-earned routing (this slice: record; slice 3: actively route)
-The pool is a set of role-typed workers, each started with a model (`AGENT_ROLE`+`AGENT_MODEL`). The driver enqueues role tasks; whichever role-matching worker claims runs its model. Every completion feeds the leaderboard (`PerformanceTracker`) with that model's per-role result — so the **gate-earned fitness data accumulates from day one**. *Actively* selecting the best-earned model per role (the driver spawning/tagging by staffing decision) is deferred to slice 3; slice 1 achieves decorrelation structurally (distinct roles→distinct workers→distinct models) and records the signal.
+### Gate-earned routing — DYNAMIC (this slice — the wow)
+Before enqueuing a run's tasks, the driver asks `StaffingManager` (Sense→Judge→Clamp) to assign **each role → the model that has *earned* it** off the DuckDB leaderboard (`PerformanceTracker`), and **stamps the assigned model onto each task** (a new `TaskSpec.Model` field). Workers claim role tasks as usual and **run the task's assigned model** (their backend is a multi-model gateway — see assumptions), instead of a fixed `AGENT_MODEL`. This needs no model-scoped claiming and no worker-spawning — just a per-task model stamp.
+
+- **Decorrelation is enforced, not hoped:** the reviewer's model is the best-earned model that is *not* the writer's. A single model can never both write and grade.
+- **The compounding loop, live:** every completion feeds the leaderboard `(model, role, certified-outcome)`; the *next* run routes better. The brain continuously re-evaluates who's best at each adversarial role **from the signed verdicts** and routes accordingly (the [[corralai-continuous-reevaluation-differentiator]], made visible — Fugu's route-to-the-fittest with a *gate-earned* fitness signal).
+- **Cold start is honest:** with thin data the assignment is sample-weighted defaults / exploration (StaffingManager is already "honest about thin data"), sharpening as certified runs accumulate; the signed record states which basis was used.
 
 ### The driver: `StartAdversarialPool(ctx, brainOpts)`
 Following `StartControlGate`'s shape. Enable via `CORRALAI_ADVERSARIAL_POOL=1` (off by default). Responsibilities:
 1. Expose an admin-gated MCP tool `start_adversarial_run(RunSpec) → run_id` (the slice-1 trigger; `corral certify --adversarial` is slice 3).
-2. On a new run: extract signatures (`repoindex`), render the structured prompts, `Enqueue` the DAG tasks (mission = run).
+2. On a new run: **call `StaffingManager` to assign role→model off the leaderboard** (decorrelation-enforced: reviewer ≠ writer); extract signatures (`repoindex`); render the structured prompts; `Enqueue` the DAG tasks (mission = run), **each stamped with its assigned model** (`TaskSpec.Model`).
 3. A tick loop (reusing the engine's promote/gate/backstop pattern, adapted): `PromoteReady` → when `test-writer`+`mutant-gen` done, run `adequacy.Score` in the jail, store the report, promote `reviewer` with the survivors in its instruction → when `reviewer` done, **aggregate** → **human gate** (open finding ≥ block-severity, or a low kill-rate, routes to `needs-review`; else auto or on `promote`) → **sign** the verdict via the certify chain → run `done`. A no-progress backstop fails a stalled run.
 4. Validation seams: compile-verify the test-writer's artifact (lift `authoring.compileVerify`); schema-parse the mutant-generator's artifact.
 
@@ -79,26 +83,29 @@ The wow is the herd. The **soundness is the deterministic, no-trust gate the her
    - **Independent per-agent attribution** — each role's contribution is separately recorded, scored on the leaderboard, and named in the signed record (`models_by_role`).
    - **Horizontal scale** — roles and targets fan out across workers.
    If any of these three were false, the herd *would* be theater — so the design makes them central, and the demo leads with the deterministic spine, not the swarm animation.
+6. **The routing fitness signal is gate-earned, not gameable.** Dynamic routing is only as trustworthy as the signal it optimizes. That signal is **not** a self-report or a vanity metric — a model's fitness is measured by outcomes the **deterministic, execution-verified gate certified** (did its authored tests actually kill mutants; did its findings survive verification). A model cannot climb the leaderboard by *claiming* it did well. And decorrelation is a hard constraint on the assignment (reviewer ≠ writer), so routing can never collapse the pool onto one model to farm a metric. Cold-start uses honest thin-data defaults, stated in the record — never fabricated confidence.
 
 **Method mirrors product:** this system is itself built subagent-driven, with per-task and whole-branch adversarial review and a signed, honest gate — the same discipline it certifies.
 
 ## Data flow (one run)
 ```
 start_adversarial_run(RunSpec)
-  → driver: repoindex signatures; render WriteTest+GenerateMutants prompts; Enqueue DAG (mission=run)
-  → worker(test-writer,  model A): claim → produce test  → complete_task(result=test)     → brain compile-verifies
-  → worker(mutant-gen,   model B): claim → produce mutants→ complete_task(result=mutants)  → brain schema-parses
+  → driver: StaffingManager assigns role→model off the leaderboard (decorrelation enforced: reviewer ≠ writer);
+            repoindex signatures; render WriteTest+GenerateMutants prompts;
+            Enqueue DAG (mission=run) — each task STAMPED with its assigned model
+  → worker(test-writer,  model A): claim → run model A → produce test  → complete_task(result=test)     → brain compile-verifies
+  → worker(mutant-gen,   model B): claim → run model B → produce mutants→ complete_task(result=mutants)  → brain schema-parses
   → driver tick: both done → adequacy.Score(test, mutants, testCmd) in jail → kill-rate + survivors
-                 → promote reviewer with survivors in instruction
-  → worker(reviewer, model C≠A): claim → triage → report_finding(...) → complete_task
-  → driver tick: reviewer done → aggregate {kill_rate, survivors, verdicts, findings}
+                 → promote reviewer (model C≠A) with survivors in instruction
+  → worker(reviewer, model C): claim → run model C → triage → report_finding(...) → complete_task
+  → driver tick: reviewer done → aggregate {kill_rate, survivors, verdicts, findings, models_by_role}
                  → human gate (needs-review if blocking finding / low kill-rate) → sign → run done
-  → leaderboard records each (model, role, outcome)
+  → leaderboard records each (model, role, CERTIFIED-outcome)  → sharpens the NEXT run's routing
 ```
 
 ## Non-goals (this slice — explicit)
 - **Pentester** role (freeform exploit loop → findings) — slice 2.
-- **Dynamic gate-earned routing** (driver actively assigns best-earned model per role; model-scoped claiming; worker spawning by staffing) — slice 3. Slice 1 records the signal and decorrelates structurally.
+- **Model-scoped claiming and worker-spawning-by-staffing** — NOT needed: dynamic routing is achieved by stamping the assigned model on each task + a multi-model worker backend. (Dynamic gate-earned routing itself is now IN slice 1.)
 - **Concurrent runs** — one active run; the single-active constraint holds. Slice 3.
 - **`corral certify --adversarial` / gate-poller trigger** — slice 3. Slice 1 triggers via the admin MCP tool.
 - **Multi-target runs** (a whole diff → many targets) — slice 1 is one target per run; fan-out later.
@@ -108,7 +115,9 @@ start_adversarial_run(RunSpec)
 - **Testgen prompt seam:** splitting prompt-render from the `Ask` call must not change the prompts (the proven pipeline). The plan pins this as a pure refactor with a golden-prompt test.
 - **Worker structured-result contract:** how the worker returns a compile-clean test vs. the brain refusing it — reuse the verify-gate refusal loop (`ok:false` → worker retries with the failure in its next instruction, `refusalCap`).
 - **Adequacy needs the code + test + mutants co-located in a jail workspace** (`adequacy.Score` takes `codePath`/`code`/`mutants`/`testCmd`) — the driver assembles the workspace; the shared isolator runs it. No new jail.
-- **Threading staffing/leaderboard into the driver:** `staffingMgr`/`perfTracker` live in `main()` closures, not `brain.Options` — add the minimal field(s) to `Options` (the one wiring gap the map flagged), or construct the tracker in the subsystem as `main.go` does.
+- **Threading staffing/leaderboard into the driver:** `staffingMgr`/`perfTracker` live in `main()` closures, not `brain.Options` — add the minimal field(s) to `Options` (the one wiring gap the map flagged), or construct the tracker in the subsystem as `main.go` does. Dynamic routing makes this mandatory (the driver must call `StaffingManager`).
+- **Multi-model worker backend (assumption for dynamic routing):** a worker must be able to run the task's *assigned* model, not a fixed one — i.e. its LLM backend is a gateway serving multiple models (local Ollama with several pulled models, or an OpenAI-compatible router). Single-model frontier-CLI harnesses (one worker = one model) can still participate, but only for the role/model they are, and the driver must fall back to role-based routing for them. The plan pins the per-task model plumbing: `TaskSpec.Model` → the worker passes it to `backend.Chat` instead of `AGENT_MODEL`.
+- **Routing needs the assignment to be recorded in the signed verdict** (`models_by_role`) so the record is self-explaining and the routing choice is auditable.
 - **Global claiming vs run-scope:** with one active run, global role-claiming is fine (only one run's tasks exist). Concurrent runs (slice 3) will need run-scoped claiming or model/run task tags.
 - **Trust boundary:** workers are semi-trusted; their artifacts are always **validated** (compile/parse) and their code runs **only in the jail** — a worker cannot make the brain sign a verdict without the deterministic adequacy run and the human gate. Never trust a worker's self-reported kill-rate; the brain computes it.
 

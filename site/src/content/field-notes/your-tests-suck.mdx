@@ -1,0 +1,87 @@
+---
+title: "Your Tests Suck!"
+description: "Roger Ebert collected his most withering pans into a book called Your Movie Sucks. I built the same critic for your test suite — it mutates your code, runs your own tests against the bugs, and if the tests don't scream, it says so, with a signed record and a decorrelated second opinion. Three real verdicts follow: a two-star, a needs-review, and a genuine zero-star."
+pubDate: 2026-07-14
+draft: false
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+
+*Field note. Named, with love, after the late Roger Ebert — who understood that the kindest thing you can do for bad work is to say so, precisely.*
+
+---
+
+## The green check is a liar
+
+Ebert kept a stack of one-star reviews so good he published them as a book: *Your Movie Sucks*. The joke was never cruelty. It was precision — the exact, itemized reason a thing that *looked* finished didn't work.
+
+Your CI is running the same con in the other direction. A green check means your tests **ran and passed**. It says nothing about whether they'd *notice* if the code broke. A test that asserts nothing passes forever. A suite that only exercises the happy path waves through every bug that lives on the sad one. The check is green; the tests are furniture.
+
+So I built the critic. Point it at a change and its own tests, and it does what Ebert did: it doesn't take the poster's word for it. It **mutates the code** — plants real, goal-violating bugs — and runs *your tests* against each mutant. If your tests kill the mutant, good. If the mutant strolls right past them, that's a survivor: a bug your suite doesn't test for. The **kill-rate is your grade.**
+
+Then, because a critic who only complains is useless, it writes the test you should have had (and proves it catches the bug), and a **second, deliberately different model** reads your tests cold and files the pan.
+
+Here are three real runs. Local models, a jail, a signed record at the end. I fed it toy code with tests I wrote to be bad on purpose — this is a demo, not an audit of your repo — but the machine didn't know that, and the numbers are real.
+
+## ★★½ — "Competent, and misses the one thing you'd get paged for"
+
+The code: a `Divide(a, b)` that returns an error on divide-by-zero. The dev's test: `Divide(6, 2) == 3`. Ships. Green.
+
+The verdict:
+
+```
+dev_kill_rate = 0.83   (killed 5 of 6 mutants, 1 survived)
+survivor: the mutant that deletes the `if b == 0` guard
+status: certified   —   proven_missed: 1
+```
+
+Eighty-three percent! On paper, a strong suite. And still — the one mutant that survived is the one that *removes the divide-by-zero check*, because `Divide(6, 2)` is still `3` whether or not the guard exists. Your test never divides by zero, so it can't tell. The pool then wrote the test you didn't (`Divide(1, 0)` must error), ran it against the survivor, and it died — **proven_missed: 1**. The gap is real and catchable; you just didn't catch it.
+
+This is the two-and-a-half-star review, and it's the most useful one Ebert ever wrote: *technically fine, forgettable, and quietly broken in the exact place that will page you at 3am.* It even certified — barely — which is the honest, uncomfortable part: the tool doesn't fail a suite for one gap. It signs the evidence and hands you the receipt.
+
+## ★ — "Tests the door, ignores the locks"
+
+A password validator with three rules: at least eight characters, a digit, an uppercase letter. The dev's test checks one thing — that `"Password1"` is accepted.
+
+```
+dev_kill_rate = 0.75   (killed 6 of 8, 2 survived)
+status: needs-review   (below the 0.8 bar)
+```
+
+Below the bar, so it routes to a human instead of certifying. Of course it does. A test that only feeds a *valid* password can't notice when you weaken a rule — loosen the length check, drop the digit requirement — because the valid password sails through either way. You tested that the door opens. You never tried a bad key.
+
+## ☆ — "The test calls the function and checks nothing"
+
+And the zero-star. The one Ebert lived for. A "smoke test" — the kind that exists to make the coverage number go up:
+
+```go
+func TestValidatePassword(t *testing.T) {
+	_ = ValidatePassword("Password1")  // calls it, asserts nothing
+}
+```
+
+```
+dev_kill_rate = 0.50   (needs-review)
+```
+
+Fifty percent — and the only reason it isn't zero is that half the mutants make the function *panic* on the input, so the test dies by accident, not by design. It never checks a return value. It tests that the function *can be called*.
+
+And the second model — the critic, a different LLM than the one writing tests, so it can't grade its own homework — read it and filed this, verbatim:
+
+> *"The test ValidatePassword calls ValidatePassword without checking its input."*
+
+That's the pan. Cold, correct, and exactly what your reviewer should have said in the PR and didn't.
+
+## Why this isn't just an LLM with opinions
+
+Because the grade is not an opinion. The kill-rate is **mutation testing**, run in a jail, by the brain — not self-reported by the model that wrote the test. "Your test asserts nothing" isn't a vibe; it's an objective measurement (a vacuous test kills ~zero mutants *on purpose*). The model that critiques is forced to be a **different** model than the one that writes — a judge may not certify her own homework. And the whole verdict is **signed**: a tamper-evident record you can verify offline, naming which model played which role. The divide-by-zero run above produced exactly that — `Actor: corral-advpool`, anchored, `ProducedBy: [mutant-generator:qwen, test-critic:llama, test-writer:qwen]`. Evidence, not a star rating.
+
+## The honest part (Ebert would insist)
+
+This is **experimental and off by default**. The verdicts above are grounded, but I'll tell you what wobbled: I ran it on small local models (a 7B and a 3B on a desktop GPU), and the 7B repeatedly wrote a corroborating test that wouldn't *compile* — which is exactly the argument for the gate-earned routing underneath this thing: on real work you'd route the writer to a model that's earned it, and the leaderboard learns that from the signed outcomes. The complete, signed verdict I showed is the divide run; for the weaker suites I'm quoting the **dev-adequacy grade** — the headline — because that's the review of *your* tests, which is the whole point.
+
+And the part I love most: **exercising this feature found three real bugs in the feature.** Its own hermetic test suite — the fakes, the mocks — passed clean and green. The moment I ran it against real code with a real model, it fell over three times: a fast-path that keyed on the wrong role, a dropped field, a fence it forgot to strip. The tool that grades your tests for testing nothing was, itself, shipping with tests that tested slightly less than they claimed. I fixed them in the open. I'd have deserved the pan.
+
+Ebert gave zero stars to movies that insulted his intelligence. Your CI gives a green check to tests that insult yours. This is the difference between *"it passed"* and *"it was worth passing"* — and it turns out you can measure that, sign it, and hand someone the receipt.
+
+Your tests suck. Here's the proof.

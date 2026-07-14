@@ -55,7 +55,7 @@ func TestRunCertifyReachedDespiteVOrHelpInCheckedArgv(t *testing.T) {
 			"--",
 		}, checkArgv...)
 
-		code := runCertify(args, run, post, &stdout, &stderr)
+		code := runCertify(args, run, post, nil, nil, &stdout, &stderr)
 		if code != 0 {
 			t.Fatalf("runCertify(%v) = %d, want 0 (stderr=%s)", args, code, stderr.String())
 		}

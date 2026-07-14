@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -237,6 +238,23 @@ func brainToken() (string, error) {
 	return v, nil
 }
 
+// parseProducedBy splits a comma-separated --produced-by value into its
+// trimmed, non-empty entries — shared by the legacy (--brain) and standalone
+// certify paths so the flag behaves identically in both.
+func parseProducedBy(v string) []string {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return nil
+	}
+	var out []string
+	for _, p := range strings.Split(v, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // splitCertifyArgs splits on the first bare "--": everything before is
 // corral certify's own flags, everything after is the checked command's argv.
 func splitCertifyArgs(args []string) (flags, checkArgv []string) {
@@ -256,7 +274,7 @@ func splitCertifyArgs(args []string) (flags, checkArgv []string) {
 // code — a failed check is still recorded ("did not pass, here's the
 // proof"), and a failure to reach the brain never masks or flips a real
 // build result.
-func runCertify(args []string, run cmdRunner, post buildPoster, stdout, stderr io.Writer) int {
+func runCertify(args []string, run cmdRunner, post buildPoster, jail jailRunner, signKey func() (ed25519.PrivateKey, error), stdout, stderr io.Writer) int {
 	// `corral certify verify <record-file> ...` is a distinct sub-subcommand
 	// (independent, offline verification of an already-produced record) —
 	// dispatch it before anything else parses args as certify's own flags.
@@ -266,6 +284,18 @@ func runCertify(args []string, run cmdRunner, post buildPoster, stdout, stderr i
 
 	flagArgs, checkArgv := splitCertifyArgs(args)
 
+	// The standalone path takes an optional leading positional <ref> (e.g.
+	// `corral certify HEAD~1 -- go test ./...`). Go's flag package stops
+	// parsing at the first non-flag token, so a leading ref would otherwise
+	// swallow every flag after it as "positional args" — pull it off first,
+	// before fs.Parse ever sees it. Legacy (--brain-first) invocations are
+	// unaffected: they never have a leading non-flag token here.
+	ref := "HEAD"
+	if len(flagArgs) > 0 && !strings.HasPrefix(flagArgs[0], "-") {
+		ref = flagArgs[0]
+		flagArgs = flagArgs[1:]
+	}
+
 	fs := flag.NewFlagSet("certify", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	brainURL := fs.String("brain", os.Getenv("CORRAL_BRAIN"), "brain MCP endpoint (or $CORRAL_BRAIN)")
@@ -274,8 +304,15 @@ func runCertify(args []string, run cmdRunner, post buildPoster, stdout, stderr i
 	repoFlag := fs.String("repo", "", "repository (default: git remote.origin.url)")
 	commitFlag := fs.String("commit", "", "commit sha (default: git rev-parse HEAD)")
 	branchFlag := fs.String("branch", "", "branch (default: git rev-parse --abbrev-ref HEAD)")
+	netFlag := fs.Bool("net", true, "allow network inside the jail for the check (use --net=false to lock down; standalone path only)")
 	if err := fs.Parse(flagArgs); err != nil {
 		return 2
+	}
+	// A trailing positional (after all flags) also counts as the ref, so
+	// `corral certify --out x -- cmd HEAD` style isn't required — but the
+	// common/documented form is the leading positional handled above.
+	if a := fs.Arg(0); a != "" {
+		ref = a
 	}
 
 	if len(checkArgv) == 0 {
@@ -283,8 +320,10 @@ func runCertify(args []string, run cmdRunner, post buildPoster, stdout, stderr i
 		return 2
 	}
 	if strings.TrimSpace(*brainURL) == "" {
-		fmt.Fprintln(stderr, "corral certify: --brain (or $CORRAL_BRAIN) is required")
-		return 2
+		// No --brain (and no $CORRAL_BRAIN): the standalone path — check out
+		// the resolved ref into a clean workspace, run the check jailed, sign
+		// the result locally, no brain round trip required.
+		return runCertifyStandalone(ref, checkArgv, *outPath, *netFlag, *producedByFlag, run, jail, signKey, stdout, stderr)
 	}
 
 	repo := strings.TrimSpace(*repoFlag)
@@ -332,14 +371,7 @@ func runCertify(args []string, run cmdRunner, post buildPoster, stdout, stderr i
 	}
 	commitSignature := captureCommitSignature(run, commit)
 
-	var producedBy []string
-	if v := strings.TrimSpace(*producedByFlag); v != "" {
-		for _, p := range strings.Split(v, ",") {
-			if p = strings.TrimSpace(p); p != "" {
-				producedBy = append(producedBy, p)
-			}
-		}
-	}
+	producedBy := parseProducedBy(*producedByFlag)
 
 	command := strings.Join(checkArgv, " ")
 	exitCode, dur, combined, runErr := run.RunCommand(checkArgv, stdout, stderr)
@@ -381,22 +413,8 @@ func runCertify(args []string, run cmdRunner, post buildPoster, stdout, stderr i
 		// The FULL record — not just the bare statement — so `corral certify
 		// verify <file>` can check it completely offline: no brain round
 		// trip needed to recover the signature, the ledger, or the pubkey.
-		record := map[string]any{
-			"statement":  result.Statement,
-			"signature":  result.Signature,
-			"steps":      result.Steps,
-			"head":       result.Head,
-			"public_key": result.PublicKey,
-			"rekor":      result.Rekor,
-			"anchored":   result.Anchored,
-		}
-		b, err := json.MarshalIndent(record, "", "  ")
-		if err != nil {
-			fmt.Fprintf(stderr, "corral certify: marshaling record: %v\n", err)
-			return exitCode
-		}
-		if err := os.WriteFile(*outPath, b, 0o644); err != nil { // #nosec G306 -- the signed record is meant to be shared/attached to CI artifacts, not secret
-			fmt.Fprintf(stderr, "corral certify: writing %s: %v\n", *outPath, err)
+		if err := writeRecord(*outPath, result); err != nil {
+			fmt.Fprintf(stderr, "corral certify: %v\n", err)
 			return exitCode
 		}
 	}

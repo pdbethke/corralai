@@ -6,6 +6,7 @@ import (
 	"archive/tar"
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -27,7 +28,7 @@ import (
 // checks run against the commit, never the (possibly dirty) working tree.
 // The returned cleanup removes the workspace; it is nil when err != nil.
 func extractCommit(ref string) (workdir, sha string, cleanup func(), err error) {
-	shaOut, err := exec.Command("git", "rev-parse", "--verify", "--quiet", ref+"^{commit}").Output() // #nosec G204 -- fixed "git"; ref is the operator's own certify target
+	shaOut, err := exec.Command("git", "rev-parse", "--verify", "--quiet", ref+"^{commit}").Output() // #nosec G204,G702 -- fixed "git"; ref is the operator's own certify target (positional CLI arg), passed to git itself for resolution/validation, never a shell
 	if err != nil {
 		return "", "", nil, fmt.Errorf("resolving %q to a commit (is this a git repo?): %w", ref, err)
 	}
@@ -42,7 +43,7 @@ func extractCommit(ref string) (workdir, sha string, cleanup func(), err error) 
 	}
 	cleanup = func() { _ = os.RemoveAll(dir) }
 
-	cmd := exec.Command("git", "archive", "--format=tar", sha) // #nosec G204 -- fixed "git"; sha is corral's own resolved commit
+	cmd := exec.Command("git", "archive", "--format=tar", sha) // #nosec G204,G702 -- fixed "git"; sha is corral's own already-resolved commit (verified by the rev-parse above), never raw operator input
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		cleanup()
@@ -130,6 +131,133 @@ func signBuildLocally(rec buildRecord, priv ed25519.PrivateKey) (buildResult, er
 		PublicKey: hex.EncodeToString(pub), Steps: stepsOut, Anchored: false,
 	}, nil
 }
+
+// writeRecord marshals a signed buildResult into the FULL self-verifying
+// record shape `corral certify verify <file>` expects (statement + signature
+// + steps + head + public key + Rekor evidence) and writes it to path. Shared
+// by both the legacy (--brain, --out) writer and the standalone path so the
+// on-disk record shape never drifts between the two.
+func writeRecord(path string, res buildResult) error {
+	record := map[string]any{
+		"statement":  res.Statement,
+		"signature":  res.Signature,
+		"steps":      res.Steps,
+		"head":       res.Head,
+		"public_key": res.PublicKey,
+		"rekor":      res.Rekor,
+		"anchored":   res.Anchored,
+	}
+	b, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshaling record: %w", err)
+	}
+	if err := os.WriteFile(path, b, 0o644); err != nil { // #nosec G306 -- the signed record is meant to be shared/attached to CI artifacts, not secret
+		return fmt.Errorf("writing %s: %w", path, err)
+	}
+	return nil
+}
+
+// runCertifyStandalone implements the no-brain path: check out ref into a
+// clean workspace (never the possibly-dirty working tree), run the check
+// jailed, sign the result locally, and write a fully self-verifying record —
+// no brain round trip. Fail-closed: a jail error (no sandbox backend, setup
+// failure) prints and returns 1 with NO record written, since no check was
+// actually (safely) run. A normal failing check still produces a record
+// ("did not pass, here's the proof") and returns the check's own exit code.
+func runCertifyStandalone(ref string, checkArgv []string, outPath string, net bool, producedByFlag string, run cmdRunner, jail jailRunner, signKey func() (ed25519.PrivateKey, error), stdout, stderr io.Writer) int {
+	workdir, sha, cleanup, err := extractCommit(ref)
+	if err != nil {
+		fmt.Fprintf(stderr, "corral certify: %v\n", err)
+		return 1
+	}
+	defer cleanup()
+
+	repo := ""
+	if v, err := run.GitOutput("config", "--get", "remote.origin.url"); err == nil {
+		repo = v
+	}
+	branch := ""
+	if v, err := run.GitOutput("rev-parse", "--abbrev-ref", "HEAD"); err == nil {
+		branch = v
+	}
+	commitMessage := ""
+	if v, err := run.GitOutput("show", "-s", "--format=%s", sha); err == nil {
+		commitMessage = v
+	}
+	commitAuthor := ""
+	if v, err := run.GitOutput("show", "-s", "--format=%an <%ae>", sha); err == nil {
+		commitAuthor = v
+	}
+	commitDate := ""
+	if v, err := run.GitOutput("show", "-s", "--format=%cI", sha); err == nil {
+		commitDate = v
+	}
+	commitSignature := captureCommitSignature(run, sha)
+
+	command := strings.Join(checkArgv, " ")
+	exitCode, combined, dur, jailErr := jail.Run(context.Background(), command, workdir, net, DefaultCertifyTimeout)
+	if jailErr != nil {
+		// Fail closed: a jail that couldn't even run the check (no sandbox
+		// backend, setup failure) is not a certifiable result — never write a
+		// record claiming a check ran when it didn't, safely.
+		fmt.Fprintf(stderr, "corral certify: running the check in the jail: %v\n", jailErr)
+		return 1
+	}
+	fmt.Fprint(stdout, string(combined))
+
+	sum := sha256.Sum256(combined)
+	rec := buildRecord{
+		Repo:         repo,
+		Commit:       sha,
+		Branch:       branch,
+		Command:      command,
+		ExitCode:     exitCode,
+		DurationS:    dur.Seconds(),
+		OutputDigest: "sha256:" + hex.EncodeToString(sum[:]),
+		ProducedBy:   parseProducedBy(producedByFlag),
+
+		CommitMessage:   commitMessage,
+		CommitAuthor:    commitAuthor,
+		CommitDate:      commitDate,
+		CommitSignature: commitSignature,
+	}
+
+	priv, err := signKey()
+	if err != nil {
+		fmt.Fprintf(stderr, "corral certify: loading the local certify key: %v\n", err)
+		return 1
+	}
+	result, err := signBuildLocally(rec, priv)
+	if err != nil {
+		fmt.Fprintf(stderr, "corral certify: signing the build record: %v\n", err)
+		return 1
+	}
+
+	out := outPath
+	if out == "" {
+		short := sha
+		if len(short) > 12 {
+			short = short[:12]
+		}
+		out = fmt.Sprintf("certify-%s.json", short)
+	}
+	if err := writeRecord(out, result); err != nil {
+		fmt.Fprintf(stderr, "corral certify: %v\n", err)
+		return exitCode
+	}
+
+	status := "pass"
+	if exitCode != 0 {
+		status = "fail"
+	}
+	fmt.Fprintf(stdout, "certified %s (%s): %s\n", sha, status, out)
+
+	return exitCode
+}
+
+// DefaultCertifyTimeout bounds how long the standalone path's jailed check
+// may run before sandbox.RunGuarded reports a timeout.
+const DefaultCertifyTimeout = 600 * time.Second
 
 // extractTar writes every regular file/dir in the tar stream under dest,
 // rejecting any entry whose cleaned path would escape dest (zip-slip guard).

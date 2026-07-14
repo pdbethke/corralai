@@ -500,7 +500,7 @@ func main() {
 		}
 		return
 	case "certify":
-		os.Exit(runCertify(os.Args[2:], realRunner{}, mcpPoster{}, os.Stdout, os.Stderr))
+		os.Exit(runCertify(os.Args[2:], realRunner{}, mcpPoster{}, realJail{}, loadLocalCertifyKey, os.Stdout, os.Stderr))
 	case "control":
 		if err := runControl(os.Args[2:], os.Stdout); err != nil {
 			fmt.Fprintln(os.Stderr, "corral control:", err)

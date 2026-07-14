@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -137,4 +139,72 @@ func chdir(t *testing.T, dir string) func() {
 		t.Fatal(err)
 	}
 	return func() { _ = os.Chdir(prev) }
+}
+
+// fakeJail runs nothing; it returns a canned exit code + output.
+type fakeJail struct {
+	exit int
+	out  string
+}
+
+func (f fakeJail) Run(_ context.Context, _, _ string, _ bool, _ time.Duration) (int, []byte, time.Duration, error) {
+	return f.exit, []byte(f.out), time.Millisecond, nil
+}
+
+func TestRunCertifyStandaloneSignsLocallyAndVerifies(t *testing.T) {
+	repo, _ := gitInitRepo(t)
+	restore := chdir(t, repo)
+	defer restore()
+
+	_, priv, _ := ed25519.GenerateKey(nil)
+	signKey := func() (ed25519.PrivateKey, error) { return priv, nil }
+
+	out := filepath.Join(t.TempDir(), "rec.json")
+	var stdout, stderr bytes.Buffer
+	// no --brain -> standalone path; a passing check (fake jail exit 0)
+	code := runCertify(
+		[]string{"HEAD", "--out", out, "--", "true"},
+		realRunner{}, nil /*post unused*/, fakeJail{exit: 0, out: "ok"}, signKey,
+		&stdout, &stderr,
+	)
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0; stderr=%s", code, stderr.String())
+	}
+	raw, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("record not written: %v", err)
+	}
+	var rec certRecord
+	if err := json.Unmarshal(raw, &rec); err != nil {
+		t.Fatalf("record not valid JSON: %v", err)
+	}
+	pub := priv.Public().(ed25519.PublicKey)
+	checks, ok := certverify.VerifyRecord(certverify.Record{
+		Statement: rec.Statement, Signature: rec.Signature, Steps: rec.Steps,
+		Head: rec.Head, Anchored: rec.Anchored,
+	}, pub, nil, true)
+	if !ok {
+		t.Fatalf("written record fails verification: %+v", checks)
+	}
+}
+
+func TestRunCertifyStandalonePropagatesFailingExit(t *testing.T) {
+	repo, _ := gitInitRepo(t)
+	restore := chdir(t, repo)
+	defer restore()
+	_, priv, _ := ed25519.GenerateKey(nil)
+	out := filepath.Join(t.TempDir(), "rec.json")
+	var stdout, stderr bytes.Buffer
+	code := runCertify(
+		[]string{"--out", out, "--", "false"},
+		realRunner{}, nil, fakeJail{exit: 1, out: "boom"}, func() (ed25519.PrivateKey, error) { return priv, nil },
+		&stdout, &stderr,
+	)
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1 (failing check must propagate)", code)
+	}
+	// a record is still written for a failing check ("did not pass, here's proof")
+	if _, err := os.Stat(out); err != nil {
+		t.Errorf("expected a record even for a failing check: %v", err)
+	}
 }

@@ -22,6 +22,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/admission"
 	"github.com/pdbethke/corralai/internal/agentrole"
+	"github.com/pdbethke/corralai/internal/brainclient"
 	"github.com/pdbethke/corralai/internal/sandbox"
 	"golang.org/x/net/websocket"
 	"net/http"
@@ -200,7 +201,22 @@ func main() {
 	setupExec()
 
 	cl := mcp.NewClient(&mcp.Implementation{Name: "corral-agent", Version: "0"}, nil)
-	sess, err := cl.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: brainURL}, nil)
+	// Connect so the agent can work a REAL brain — auth-enabled AND reached over
+	// a proxy/tunnel — not just an auth-disabled loopback dev brain:
+	//   1. Attach the CORRALAI_BRAIN_KEY bearer (else the MCP initialize
+	//      handshake gets Unauthorized on the prod brain). Empty token (dev
+	//      brain) => no header, unchanged.
+	//   2. DisableStandaloneSSE: the agent's claim/complete loop is pure
+	//      request/response (it polls claim_task); it needs no server-push. The
+	//      standalone server->client SSE GET HANGS through a CF tunnel, wedging
+	//      Connect before the agent ever registers. brainclient.Dial (the
+	//      CLI/console path that already works over the tunnel) disables it for
+	//      the same reason — mirror it here.
+	transport := &mcp.StreamableClientTransport{Endpoint: brainURL, DisableStandaloneSSE: true}
+	if token := agentSecret("CORRALAI_BRAIN_KEY"); token != "" {
+		transport.HTTPClient = brainclient.AuthedHTTPClient(token)
+	}
+	sess, err := cl.Connect(ctx, transport, nil)
 	if err != nil {
 		fmt.Println("connect brain:", err)
 		os.Exit(1)

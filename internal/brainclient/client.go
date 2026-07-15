@@ -31,6 +31,14 @@ func (b bearer) RoundTrip(r *http.Request) (*http.Response, error) {
 	return b.next.RoundTrip(r2)
 }
 
+// AuthedHTTPClient returns an http.Client that attaches the bearer token to
+// every request. It sets NO client timeout — safe for a long-lived streaming
+// MCP session (e.g. a worker agent's connection); callers that make only short
+// request/response calls should set a Timeout on the returned client (Dial does).
+func AuthedHTTPClient(token string) *http.Client {
+	return &http.Client{Transport: bearer{token, http.DefaultTransport}}
+}
+
 // Client is a connected MCP session to a brain's /mcp endpoint.
 type Client struct {
 	sess *mcp.ClientSession
@@ -41,7 +49,8 @@ type Client struct {
 // standalone server->client SSE stream is disabled.
 func Dial(ctx context.Context, brainURL, token string) (*Client, error) {
 	endpoint := strings.TrimRight(brainURL, "/") + "/mcp"
-	hc := &http.Client{Timeout: 30 * time.Second, Transport: bearer{token, http.DefaultTransport}}
+	hc := AuthedHTTPClient(token)
+	hc.Timeout = 30 * time.Second // Dial's verbs are short request/response
 	tr := &mcp.StreamableClientTransport{Endpoint: endpoint, HTTPClient: hc, DisableStandaloneSSE: true}
 	cl := mcp.NewClient(&mcp.Implementation{Name: "corral-client", Version: "0"}, nil)
 	sess, err := cl.Connect(ctx, tr, nil)

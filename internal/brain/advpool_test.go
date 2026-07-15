@@ -122,6 +122,38 @@ func TestAdvPoolAssign_AlwaysDecorrelated(t *testing.T) {
 	}
 }
 
+// TestAdvPoolAssign_SkipsUnknownModel proves an UNATTRIBUTED leaderboard entry
+// (the "(unknown model)" sentinel) never becomes a routing target — a worker
+// cannot run a model called "(unknown model)". The env/default model stands
+// instead. Regression: a hung run left mutant-generator/test-writer completions
+// attributed to unknownModel and advPoolAssign routed to it, stamping
+// "(unknown model)" onto the next run's tasks.
+func TestAdvPoolAssign_SkipsUnknownModel(t *testing.T) {
+	base := advpool.RoleAssignment{
+		advpool.RoleMutantGenerator: "gemini-flash-latest",
+		advpool.RoleTestWriter:      "gemini-flash-latest",
+		advpool.RoleTestCritic:      "gemini-pro-latest",
+	}
+	staffing := &mission.StaffingManager{Perf: fakePerf{stats: []mission.ModelStats{
+		{Model: unknownModel, Role: advpool.RoleMutantGenerator, TasksCompleted: 99, ExecPassRatePct: 100},
+		{Model: unknownModel, Role: advpool.RoleTestWriter, TasksCompleted: 99, ExecPassRatePct: 100},
+	}}}
+	got := advPoolAssign(staffing, base)
+	if got[advpool.RoleMutantGenerator] != "gemini-flash-latest" || got[advpool.RoleTestWriter] != "gemini-flash-latest" {
+		t.Fatalf("unknown-model entries must fall back to the env model, got %+v", got)
+	}
+	if err := advpool.CheckDecorrelation(got); err != nil {
+		t.Fatalf("must stay decorrelated: %v (%+v)", err, got)
+	}
+	// Guard against over-filtering: a genuinely routable leaderboard model still wins.
+	staffing2 := &mission.StaffingManager{Perf: fakePerf{stats: []mission.ModelStats{
+		{Model: "real-model", Role: advpool.RoleMutantGenerator, TasksCompleted: 99, ExecPassRatePct: 100},
+	}}}
+	if got2 := advPoolAssign(staffing2, base); got2[advpool.RoleMutantGenerator] != "real-model" {
+		t.Fatalf("a routable leaderboard model must still win: %+v", got2)
+	}
+}
+
 type fakePerf struct{ stats []mission.ModelStats }
 
 func (f fakePerf) GetRoleModelStats() []mission.ModelStats { return f.stats }

@@ -240,9 +240,21 @@ func advPoolBetter(a, b mission.ModelStats) bool {
 
 // advPoolBestByRole picks the best-earned model per role from the
 // leaderboard's stats.
+// routableModel reports whether a leaderboard model name is a real routing
+// target. The leaderboard records an UNATTRIBUTED completion under the
+// unknownModel sentinel ("(unknown model)") — you can never route a role TO
+// that (a worker cannot run a model called "(unknown model)"), and an empty
+// name is meaningless too. Skipping both means a run whose worker's model was
+// not attributed can never poison the next run's routing; the env/default
+// model stands instead.
+func routableModel(m string) bool { return m != "" && m != unknownModel }
+
 func advPoolBestByRole(stats []mission.ModelStats) map[string]string {
 	best := map[string]mission.ModelStats{}
 	for _, c := range stats {
+		if !routableModel(c.Model) {
+			continue
+		}
 		cur, ok := best[c.Role]
 		if !ok || advPoolBetter(c, cur) {
 			best[c.Role] = c
@@ -263,7 +275,7 @@ func advPoolBestExcluding(stats []mission.ModelStats, role, exclude string) stri
 	var best *mission.ModelStats
 	for i := range stats {
 		c := stats[i]
-		if c.Role != role || c.Model == exclude {
+		if c.Role != role || c.Model == exclude || !routableModel(c.Model) {
 			continue
 		}
 		if best == nil || advPoolBetter(c, *best) {

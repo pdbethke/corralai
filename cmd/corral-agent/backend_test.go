@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestBackendReports404AsUnreachable verifies that HTTP 404 from any backend
@@ -220,5 +221,22 @@ func TestRunTaskStampsReportThought(t *testing.T) {
 	}
 	if captured["text"] != "the retry loop never backs off; checking the interval" {
 		t.Errorf("the model's own reasoning text must pass through unchanged, got %v", captured["text"])
+	}
+}
+
+func TestLLMHTTPTimeout(t *testing.T) {
+	t.Setenv("AGENT_LLM_TIMEOUT_SECONDS", "")
+	if got := llmHTTPTimeout(); got != 180*time.Second {
+		t.Errorf("unset default = %v, want 180s", got)
+	}
+	t.Setenv("AGENT_LLM_TIMEOUT_SECONDS", "600")
+	if got := llmHTTPTimeout(); got != 600*time.Second {
+		t.Errorf("override = %v, want 600s", got)
+	}
+	for _, bad := range []string{"-5", "0", "abc", "  "} {
+		t.Setenv("AGENT_LLM_TIMEOUT_SECONDS", bad)
+		if got := llmHTTPTimeout(); got != 180*time.Second {
+			t.Errorf("invalid %q = %v, want default 180s", bad, got)
+		}
 	}
 }

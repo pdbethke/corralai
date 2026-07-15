@@ -298,6 +298,24 @@ func (d *Driver) tickDevAdequacy(ctx context.Context, missionID int64, run *runS
 	log.Printf("advpool: run %d dev-adequacy: the dev's OWN tests scored %.0f%% (killed %d of %d mutants, %d survived — bugs the dev's tests miss)",
 		missionID, killRate*100, len(mutants)-len(survivors), len(mutants), len(survivors))
 
+	if len(survivors) == 0 {
+		// A perfect dev suite: it killed every mutant. There are no survivors
+		// for the test-writer to expose, so skip it and the pool-adequacy step
+		// entirely and go straight to aggregate — the run certifies on its 100%
+		// kill-rate. Without this the test-writer would be promoted to "write a
+		// test targeting the survivors" of which there are none (a degenerate
+		// prompt) and the run could NEVER converge — i.e. the pool could grade a
+		// bad suite but never certify a perfect one.
+		run.poolScored = true
+		run.provenMissed = 0
+		if tw, terr := d.Q.TaskByID(run.testWriterTaskID); terr == nil && tw != nil && tw.Status == queue.StatusPending {
+			if _, cerr := d.Q.CancelTask(tw.ID); cerr != nil {
+				return fmt.Errorf("advpool: cancel moot test-writer (perfect suite): %w", cerr)
+			}
+		}
+		return nil
+	}
+
 	tw, terr := d.Q.TaskByID(run.testWriterTaskID)
 	if terr != nil {
 		return fmt.Errorf("advpool: load test-writer task: %w", terr)

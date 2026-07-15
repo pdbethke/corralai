@@ -738,3 +738,43 @@ func TestTick_PoolAdequacy_StripsRawTestBeforeCompile(t *testing.T) {
 		t.Errorf("CompileTest received %q, want the ParseTest-cleaned source (RAW: prefix stripped)", validator.compileGot)
 	}
 }
+
+// A PERFECT dev suite (0 survivors) must skip the test-writer + pool-adequacy
+// entirely and certify on its 100% kill-rate — without this the pool could
+// grade a bad suite but never certify a good one (the real-repo run's finding).
+func TestTick_PerfectSuite_SkipsTestWriterAndCertifies(t *testing.T) {
+	const mission int64 = 77
+	scorer := &fakeScorer{devKillRate: 1.0, devSurvivors: nil} // killed every mutant, 0 survivors
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, {ID: "m1", Code: "c1"}}}
+	d, _ := newTestDriver(t, mission, scorer, validator, 0.8)
+
+	ctx := context.Background()
+	ready := claimAllReady(t, d.Q)
+	mustComplete(t, d.Q, ready[RoleTestCritic].ID, "no vacuous tests found")
+	mustComplete(t, d.Q, ready[RoleMutantGenerator].ID, "raw mutants")
+
+	// One tick: dev-adequacy sees 0 survivors -> skips test-writer, poolScored,
+	// then aggregate (test-critic already done) -> certified.
+	v, err := d.Tick(ctx, mission)
+	if err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	if v == nil {
+		t.Fatal("a perfect suite must converge without a test-writer completion, got no verdict")
+	}
+	if v.Status != StatusCertified {
+		t.Errorf("Status = %q, want certified (100%% kill-rate)", v.Status)
+	}
+	if v.Survivors != 0 || v.ProvenMissed != 0 {
+		t.Errorf("Survivors=%d ProvenMissed=%d, want 0/0", v.Survivors, v.ProvenMissed)
+	}
+	// The moot test-writer task must be cancelled, not left pending or promoted.
+	tw, _ := d.Q.TaskByID(d.runs[mission].testWriterTaskID)
+	if tw != nil && tw.Status != queue.StatusCancelled {
+		t.Errorf("test-writer status = %q, want cancelled (no survivors to prove)", tw.Status)
+	}
+	// Scorer.Score called exactly once (dev tests) — never a second pool score.
+	if len(scorer.calls) != 1 {
+		t.Errorf("Scorer.Score called %d times, want 1 (no pool-adequacy for a perfect suite)", len(scorer.calls))
+	}
+}

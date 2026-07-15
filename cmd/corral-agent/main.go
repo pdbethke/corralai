@@ -704,7 +704,13 @@ func runTask(ctx context.Context, backend Backend, name, role, ws string, brain 
 	// hallucinate substitutes of), and a tight step budget. See
 	// runCriticLoop's doc comment for why this exists.
 	if isPoolCriticRole(role) {
-		return annotate(runCriticLoop(backend, name, role, title, instruction, brain, missionID, taskID)), nil
+		summary, err := runCriticLoop(backend, name, role, title, instruction, brain, missionID, taskID)
+		if err != nil {
+			// runCriticLoop only ever returns ErrModelUnreachable here — propagate
+			// so runQueueLoop releases the claim instead of completing past a down critic.
+			return "", err
+		}
+		return annotate(summary), nil
 	}
 	extraPrompt := ""
 	if role == "tester" {
@@ -1282,7 +1288,7 @@ func criticTools() []any {
 // steps on reflection or hallucinated tools without ever concluding — the
 // bug this fixes was observed live where a freeform critic ran all 15 steps
 // calling report_thought and never filed a finding or completed.
-func runCriticLoop(backend Backend, name, role, title, instruction string, brain func(string, map[string]any) string, missionID, taskID int64) string {
+func runCriticLoop(backend Backend, name, role, title, instruction string, brain func(string, map[string]any) string, missionID, taskID int64) (string, error) {
 	sys := fmt.Sprintf(`You are %q, a TEST CRITIC in an adversarial audit. Your ONLY job: read the developer's tests provided below and decide whether any are vacuous, tautological, or designed to pass without exercising the goal.
 
 You have EXACTLY two tools: report_finding (file one flaw — name the test and say what it fails to check) and report_thought (optional, at most twice). You CANNOT write files or run commands; do not attempt to.
@@ -1300,9 +1306,14 @@ Task: %s
 		m, err := backend.Chat(messages, tools)
 		if err != nil {
 			if errors.Is(err, ErrModelUnreachable) {
-				return "critic error: " + err.Error()
+				// Propagate up so runQueueLoop can release the claim and let the
+				// reaper reassign the task to an agent with a reachable model —
+				// otherwise a down critic model would complete-with-error and the
+				// mission could converge/certify with no critic having run.
+				return "", ErrModelUnreachable
 			}
-			return "critic error: " + err.Error()
+			fmt.Printf("   ! model: %v\n", err)
+			return "critic error: " + err.Error(), nil
 		}
 		callName, args, ok := extractCall(m)
 		if !ok {
@@ -1310,7 +1321,7 @@ Task: %s
 				last = c
 			}
 			fmt.Printf("   · %s (test-critic) considers the review done: %s\n", name, last)
-			return last
+			return last, nil
 		}
 		if args == nil {
 			args = map[string]any{}
@@ -1340,7 +1351,7 @@ Task: %s
 			omsg{Role: "assistant", Content: assistantEcho(m.Content, callName, args)},
 			omsg{Role: "user", Content: fmt.Sprintf("[result of %s] %s", callName, nudge)})
 	}
-	return last
+	return last, nil
 }
 
 func jsons(v any) string { b, _ := json.Marshal(v); return string(b) }

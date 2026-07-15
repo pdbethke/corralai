@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -93,7 +94,7 @@ func TestCriticLoopBoundsReportThought(t *testing.T) {
 	backend := &alwaysThoughtBackend{}
 	brain := func(tool string, args map[string]any) string { return `{"ok":true}` }
 
-	_ = runCriticLoop(backend, "test-agent", "test-critic", "critique tests", "TESTS HERE", brain, 1, 1)
+	_, _ = runCriticLoop(backend, "test-agent", "test-critic", "critique tests", "TESTS HERE", brain, 1, 1)
 
 	if backend.calls > critFreeformSteps {
 		t.Fatalf("critic loop must stop within %d steps; backend.Chat was called %d times", critFreeformSteps, backend.calls)
@@ -111,5 +112,36 @@ func TestCriticLoopBoundsReportThought(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("after 2 report_thought calls, the loop must inject a nudge to conclude; messages: %+v", backend.lastMessages)
+	}
+}
+
+// unreachableBackend simulates a model that can't be reached at all (404 /
+// connection-refused), the same failure runTask's general loop and structured
+// fast path already treat as ErrModelUnreachable.
+type unreachableBackend struct{}
+
+func (b *unreachableBackend) Chat(messages []omsg, tools []any) (omsg, error) {
+	return omsg{}, ErrModelUnreachable
+}
+
+// TestCriticLoopPropagatesModelUnreachable is the RED/GREEN case for the
+// honesty-hole fix: previously runCriticLoop swallowed backend.Chat errors
+// (including ErrModelUnreachable) into a "critic error: ..." summary string
+// with a nil error, so a down critic model would still let the task
+// COMPLETE — and a mission could converge/certify with no critic having
+// actually run. It must now mirror the general loop and propagate
+// ("", ErrModelUnreachable) so runQueueLoop releases the claim for
+// reassignment instead of completing past a down critic.
+func TestCriticLoopPropagatesModelUnreachable(t *testing.T) {
+	backend := &unreachableBackend{}
+	brain := func(tool string, args map[string]any) string { return `{"ok":true}` }
+
+	summary, err := runCriticLoop(backend, "test-agent", "test-critic", "critique tests", "TESTS HERE", brain, 1, 1)
+
+	if !errors.Is(err, ErrModelUnreachable) {
+		t.Fatalf("expected errors.Is(err, ErrModelUnreachable); got err=%v", err)
+	}
+	if summary != "" {
+		t.Fatalf("expected empty summary when the model is unreachable; got %q", summary)
 	}
 }

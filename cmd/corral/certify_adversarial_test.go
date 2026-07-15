@@ -214,7 +214,7 @@ func TestAdversarialTimeoutExitsOne(t *testing.T) {
 	if rc != 1 {
 		t.Fatalf("timeout: exit = %d, want 1", rc)
 	}
-	if !strings.Contains(errBuf.String(), "7") {
+	if !strings.Contains(errBuf.String(), "run_id 7") {
 		t.Fatalf("timeout message should name the run id for re-query:\n%s", errBuf.String())
 	}
 }

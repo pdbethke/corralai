@@ -263,6 +263,9 @@ func renderAdvVerdict(w io.Writer, codePath string, v advVerdict) {
 		status = "CERTIFIED"
 	}
 	killed := v.MutantsTotal - v.Survivors
+	if killed < 0 {
+		killed = 0
+	}
 	commit := v.Commit
 	if len(commit) > 7 {
 		commit = commit[:7]

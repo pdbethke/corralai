@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -285,19 +286,73 @@ func advPoolFallbackCritic(writer string) string {
 	return defaultAdvPoolModel
 }
 
-// advPoolAssign builds a decorrelation-enforced role assignment: mutant-
-// generator and test-writer take the leaderboard's best-earned model per
-// role (or the static default when staffing is nil or has no evidence yet);
-// test-critic is then FORCED to the best-earned model that is NOT the
-// test-writer's model (falling back to a distinct static default) — so the
-// assignment this function returns can never fail advpool.CheckDecorrelation
-// (soundness #4: "a test-critic judging tests written by its own model is
-// not an independent check — it is the same failure mode grading its own
-// homework").
-func advPoolAssign(staffing *mission.StaffingManager) advpool.RoleAssignment {
+// parseAdvPoolModels parses CORRALAI_ADVPOOL_MODELS
+// ("mutant-generator=<m>,test-writer=<m>,test-critic=<m>") into a base
+// RoleAssignment. Returns (nil, nil) for the empty string (unset → caller uses
+// the hardcoded defaults). Every one of the three known roles must be present
+// with a non-empty model, no unknown role keys are allowed, and the result
+// must pass decorrelation (test-critic != test-writer) — otherwise an error is
+// returned and the caller falls back to the hardcoded defaults rather than
+// starting the pool on an operator typo.
+func parseAdvPoolModels(s string) (advpool.RoleAssignment, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil, nil
+	}
+	known := map[string]bool{
+		advpool.RoleMutantGenerator: true,
+		advpool.RoleTestWriter:      true,
+		advpool.RoleTestCritic:      true,
+	}
+	out := advpool.RoleAssignment{}
+	for _, pair := range strings.Split(s, ",") {
+		kv := strings.SplitN(pair, "=", 2)
+		if len(kv) != 2 {
+			return nil, fmt.Errorf("advpool models: %q is not role=model", strings.TrimSpace(pair))
+		}
+		role, val := strings.TrimSpace(kv[0]), strings.TrimSpace(kv[1])
+		if !known[role] {
+			return nil, fmt.Errorf("advpool models: unknown role %q (want mutant-generator|test-writer|test-critic)", role)
+		}
+		if val == "" {
+			return nil, fmt.Errorf("advpool models: empty model for role %q", role)
+		}
+		out[role] = val
+	}
+	for _, r := range []string{advpool.RoleMutantGenerator, advpool.RoleTestWriter, advpool.RoleTestCritic} {
+		if out[r] == "" {
+			return nil, fmt.Errorf("advpool models: missing role %q", r)
+		}
+	}
+	if err := advpool.CheckDecorrelation(out); err != nil {
+		return nil, fmt.Errorf("advpool models: %w", err)
+	}
+	return out, nil
+}
+
+// advPoolAssign builds a decorrelation-enforced role assignment. The base
+// mutant-generator/test-writer models come from `defaults` (the operator's
+// CORRALAI_ADVPOOL_MODELS, or the hardcoded constants when defaults is nil);
+// the leaderboard's best-earned model per role still overrides when it has
+// evidence; test-critic is then forced to the best-earned model that is NOT
+// the test-writer's (falling back to a distinct default) so the result can
+// never fail CheckDecorrelation.
+func advPoolAssign(staffing *mission.StaffingManager, defaults advpool.RoleAssignment) advpool.RoleAssignment {
+	mg, tw, tc := defaultAdvPoolModel, defaultAdvPoolModel, defaultAdvPoolCriticModel
+	if defaults != nil {
+		if m := defaults[advpool.RoleMutantGenerator]; m != "" {
+			mg = m
+		}
+		if m := defaults[advpool.RoleTestWriter]; m != "" {
+			tw = m
+		}
+		if m := defaults[advpool.RoleTestCritic]; m != "" {
+			tc = m
+		}
+	}
 	assign := advpool.RoleAssignment{
-		advpool.RoleMutantGenerator: defaultAdvPoolModel,
-		advpool.RoleTestWriter:      defaultAdvPoolModel,
+		advpool.RoleMutantGenerator: mg,
+		advpool.RoleTestWriter:      tw,
 	}
 
 	var stats []mission.ModelStats
@@ -314,7 +369,10 @@ func advPoolAssign(staffing *mission.StaffingManager) advpool.RoleAssignment {
 		}
 	}
 
-	critic := advPoolFallbackCritic(assign[advpool.RoleTestWriter])
+	critic := tc
+	if critic == assign[advpool.RoleTestWriter] {
+		critic = advPoolFallbackCritic(assign[advpool.RoleTestWriter])
+	}
 	if m := advPoolBestExcluding(stats, advpool.RoleTestCritic, assign[advpool.RoleTestWriter]); m != "" {
 		critic = m
 	}
@@ -341,6 +399,7 @@ type AdvPoolRuntime struct {
 	driver   *advpool.Driver
 	missions *mission.Store
 	staffing *mission.StaffingManager
+	defaults advpool.RoleAssignment // operator CORRALAI_ADVPOOL_MODELS base (nil = hardcoded)
 
 	mu         sync.Mutex
 	activeID   int64
@@ -422,7 +481,7 @@ func (rt *AdvPoolRuntime) StartRun(in AdvPoolRunSpec) (int64, error) {
 		sigs = nil
 	}
 
-	assign := advPoolAssign(rt.staffing)
+	assign := advPoolAssign(rt.staffing, rt.defaults)
 	if err := advpool.CheckDecorrelation(assign); err != nil {
 		// Unreachable given advPoolAssign's construction — fail loudly rather
 		// than silently starting a run under a decorrelation bug.
@@ -529,8 +588,14 @@ func StartAdversarialPool(ctx context.Context, opts Options) (*AdvPoolRuntime, e
 		return nil, nil
 	}
 
+	defaults, derr := parseAdvPoolModels(os.Getenv("CORRALAI_ADVPOOL_MODELS"))
+	if derr != nil {
+		log.Printf("advpool: CORRALAI_ADVPOOL_MODELS invalid (%v) — falling back to defaults %s/%s", derr, defaultAdvPoolModel, defaultAdvPoolCriticModel)
+		defaults = nil
+	}
+
 	jail := adequacy.NewJail(opts.GateBackend, gate.DefaultGateTimeout)
-	assign := advPoolAssign(opts.Staffing)
+	assign := advPoolAssign(opts.Staffing, defaults)
 	driver, err := advpool.NewDriver(opts.Queue, advpoolScorer{jail: jail}, advpoolValidator{jail: jail}, assign, 0.8)
 	if err != nil {
 		return nil, fmt.Errorf("advpool: new driver: %w", err)
@@ -542,6 +607,7 @@ func StartAdversarialPool(ctx context.Context, opts Options) (*AdvPoolRuntime, e
 		driver:     driver,
 		missions:   opts.Missions,
 		staffing:   opts.Staffing,
+		defaults:   defaults,
 		tickErrors: make(map[int64]int),
 	}
 
@@ -549,7 +615,8 @@ func StartAdversarialPool(ctx context.Context, opts Options) (*AdvPoolRuntime, e
 	if interval <= 0 {
 		interval = 15 * time.Second
 	}
-	log.Printf("advpool: ENABLED — polling every %s", interval)
+	log.Printf("advpool: ENABLED — polling every %s; role models: mutant-generator=%s test-writer=%s test-critic=%s",
+		interval, assign[advpool.RoleMutantGenerator], assign[advpool.RoleTestWriter], assign[advpool.RoleTestCritic])
 	go rt.loop(ctx, interval)
 	return rt, nil
 }

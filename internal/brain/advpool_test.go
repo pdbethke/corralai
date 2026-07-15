@@ -54,7 +54,7 @@ func newTestAdvPoolRuntime(t *testing.T, staffing *mission.StaffingManager) (*Ad
 	}
 	t.Cleanup(func() { _ = ms.Close() })
 
-	assign := advPoolAssign(staffing)
+	assign := advPoolAssign(staffing, nil)
 	driver, err := advpool.NewDriver(q, stubScorer{}, stubValidator{}, assign, 0.8)
 	if err != nil {
 		t.Fatal(err)
@@ -83,7 +83,7 @@ func testRunSpecIn() AdvPoolRunSpec {
 // re-deriving decorrelation logic itself.
 func TestAdvPoolAssign_AlwaysDecorrelated(t *testing.T) {
 	// Cold start: no staffing at all.
-	assign := advPoolAssign(nil)
+	assign := advPoolAssign(nil, nil)
 	if err := advpool.CheckDecorrelation(assign); err != nil {
 		t.Fatalf("cold-start assignment must be decorrelated: %v (%+v)", err, assign)
 	}
@@ -99,7 +99,7 @@ func TestAdvPoolAssign_AlwaysDecorrelated(t *testing.T) {
 		{Model: "same-model", Role: advpool.RoleTestWriter, TasksCompleted: 10, ExecPassRatePct: 99},
 		{Model: "same-model", Role: advpool.RoleTestCritic, TasksCompleted: 10, ExecPassRatePct: 99},
 	}}}
-	assign2 := advPoolAssign(staffing)
+	assign2 := advPoolAssign(staffing, nil)
 	if err := advpool.CheckDecorrelation(assign2); err != nil {
 		t.Fatalf("single-dominant-model leaderboard must still decorrelate: %v (%+v)", err, assign2)
 	}
@@ -116,7 +116,7 @@ func TestAdvPoolAssign_AlwaysDecorrelated(t *testing.T) {
 		{Model: "writer-model", Role: advpool.RoleTestWriter, TasksCompleted: 10, ExecPassRatePct: 99},
 		{Model: "critic-model", Role: advpool.RoleTestCritic, TasksCompleted: 10, ExecPassRatePct: 95},
 	}}}
-	assign3 := advPoolAssign(staffing3)
+	assign3 := advPoolAssign(staffing3, nil)
 	if assign3[advpool.RoleTestWriter] != "writer-model" || assign3[advpool.RoleTestCritic] != "critic-model" {
 		t.Fatalf("expected leaderboard-earned writer/critic models, got %+v", assign3)
 	}
@@ -363,5 +363,73 @@ func TestAdvPoolValidatorCompileTest_SubdirectoryNonCompilingTest(t *testing.T) 
 
 	if err := v.CompileTest(context.Background(), "internal/auth/login.go", code, badTest); err == nil {
 		t.Fatal("expected CompileTest to reject a non-compiling test, got nil error")
+	}
+}
+
+func TestParseAdvPoolModels(t *testing.T) {
+	// Happy path: all three roles, decorrelated.
+	got, err := parseAdvPoolModels("mutant-generator=anthropic/claude-sonnet-4-6,test-writer=anthropic/claude-sonnet-4-6,test-critic=google/gemini-2.5-flash")
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if got[advpool.RoleMutantGenerator] != "anthropic/claude-sonnet-4-6" ||
+		got[advpool.RoleTestWriter] != "anthropic/claude-sonnet-4-6" ||
+		got[advpool.RoleTestCritic] != "google/gemini-2.5-flash" {
+		t.Fatalf("wrong assignment: %+v", got)
+	}
+
+	// Whitespace tolerated.
+	if _, err := parseAdvPoolModels(" mutant-generator = a , test-writer = b , test-critic = c "); err != nil {
+		t.Fatalf("whitespace form should parse: %v", err)
+	}
+
+	// Decorrelation violation (critic == writer) → error.
+	if _, err := parseAdvPoolModels("mutant-generator=a,test-writer=b,test-critic=b"); err == nil {
+		t.Fatalf("critic==writer must be rejected")
+	}
+
+	// Missing a role → error.
+	if _, err := parseAdvPoolModels("mutant-generator=a,test-writer=b"); err == nil {
+		t.Fatalf("missing test-critic must be rejected")
+	}
+
+	// Unknown role key → error.
+	if _, err := parseAdvPoolModels("mutant-generator=a,test-writer=b,test-critic=c,pentester=d"); err == nil {
+		t.Fatalf("unknown role must be rejected")
+	}
+
+	// Empty value → error.
+	if _, err := parseAdvPoolModels("mutant-generator=,test-writer=b,test-critic=c"); err == nil {
+		t.Fatalf("empty model must be rejected")
+	}
+
+	// Empty string → (nil, nil): "unset", caller uses hardcoded defaults.
+	got, err = parseAdvPoolModels("")
+	if err != nil || got != nil {
+		t.Fatalf("empty string should be (nil,nil), got (%v,%v)", got, err)
+	}
+}
+
+func TestAdvPoolAssignUsesDefaults_UnsetIdenticalToToday(t *testing.T) {
+	// nil defaults → the hardcoded qwen/llama assignment (no behavior change).
+	got := advPoolAssign(nil, nil)
+	if got[advpool.RoleMutantGenerator] != defaultAdvPoolModel ||
+		got[advpool.RoleTestWriter] != defaultAdvPoolModel ||
+		got[advpool.RoleTestCritic] != defaultAdvPoolCriticModel {
+		t.Fatalf("nil defaults must reproduce today's assignment, got %+v", got)
+	}
+
+	// Provided defaults (no leaderboard staffing) → those models, decorrelation intact.
+	base := advpool.RoleAssignment{
+		advpool.RoleMutantGenerator: "anthropic/claude-sonnet-4-6",
+		advpool.RoleTestWriter:      "anthropic/claude-sonnet-4-6",
+		advpool.RoleTestCritic:      "google/gemini-2.5-flash",
+	}
+	got = advPoolAssign(nil, base)
+	if got[advpool.RoleTestWriter] != "anthropic/claude-sonnet-4-6" || got[advpool.RoleTestCritic] != "google/gemini-2.5-flash" {
+		t.Fatalf("provided defaults not used: %+v", got)
+	}
+	if err := advpool.CheckDecorrelation(got); err != nil {
+		t.Fatalf("assignment must stay decorrelated: %v", err)
 	}
 }

@@ -82,14 +82,22 @@ func WriteTest(ctx context.Context, m LLM, goal, code string, sigs []repoindex.S
 	return test, nil
 }
 
-// genMutantsSystem instructs the model to act as a SEEDED-VIOLATION
-// GENERATOR — a second, independent generative agent from the writer above.
-// A model that wrote the test must not be the one that breaks the goal to
-// test it; keeping the two prompts and calls separate preserves that
-// independence.
-const genMutantsSystem = `You are a SEEDED-VIOLATION GENERATOR. Given a GOAL, compliant code, and its signature surface, produce mutations that GENUINELY VIOLATE the goal.
-Each mutation MUST keep the EXACT same signature and package (it compiles as a drop-in replacement) and must genuinely violate the goal — vary HOW they violate it. No no-ops, no compile errors, no tests.
-Return ONLY the mutations, each a COMPLETE file, in this exact format:
+// genMutantsSystem frames the model as a MUTATION-TESTING ENGINE — a second,
+// independent generative agent from the writer above (a model that wrote the
+// test must not be the one that mutates the goal to test it; separate prompts
+// and calls preserve that independence). The framing is deliberate and
+// load-bearing: an earlier "SEEDED-VIOLATION GENERATOR … produce mutations that
+// GENUINELY VIOLATE the goal" phrasing read, on a SECURITY goal, as "write code
+// that defeats a security control," and safety-aligned models refused it (~20%
+// on a real security target). Reframing it as what it actually is — standard,
+// legitimate mutation testing that generates throwaway synthetic faults ONLY to
+// grade a test suite, never deployed — drove the measured refusal rate to 0 on
+// that same target while keeping the exact output contract (same-signature,
+// drop-in, genuinely-goal-failing mutants; no no-ops/compile-errors/tests) the
+// parser and scorer depend on.
+const genMutantsSystem = `You are a MUTATION-TESTING ENGINE. Mutation testing is a standard, legitimate software-quality technique: to measure how thorough a test suite is, you generate small synthetic variants of the code ("mutants"), each containing one deliberate fault, and a SEPARATE step then checks whether the developer's own tests catch them. A mutant the tests miss reveals a GAP IN THE TESTS — that is the entire purpose. These mutants are throwaway QA fixtures: never deployed, never shipped, never run against any real system; they exist only to grade the test suite. This is defensive quality assurance, and producing them is exactly your job here.
+Given a GOAL, the compliant code, and its signature surface, produce mutants: variants that NO LONGER satisfy the goal, so a good test suite SHOULD catch them. Each mutant MUST keep the EXACT same signature and package (a drop-in replacement that compiles) and must genuinely fail the goal — vary HOW it fails. No no-ops, no compile errors, no tests.
+Return ONLY the mutants, each a COMPLETE file, in this exact format:
 ===MUTATION_1===
 <complete file>
 ===MUTATION_2===

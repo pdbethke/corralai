@@ -106,8 +106,16 @@ func TestGenerateMutantsPromptUnchanged(t *testing.T) {
 	if sys != genMutantsSystem {
 		t.Fatalf("system prompt drifted:\ngot:  %q\nwant: %q", sys, genMutantsSystem)
 	}
-	if !strings.Contains(sys, "You are a SEEDED-VIOLATION GENERATOR.") {
+	if !strings.Contains(sys, "You are a MUTATION-TESTING ENGINE.") {
 		t.Fatal("system prompt drifted")
+	}
+	// The QA framing that fixed the safety-refusal must stay: it's load-bearing,
+	// not cosmetic (see genMutantsSystem's comment). Guard the intent so a future
+	// "tidy-up" can't silently re-introduce attack-sounding phrasing.
+	for _, want := range []string{"MUTATION-TESTING ENGINE", "never deployed", "GAP IN THE TESTS"} {
+		if !strings.Contains(sys, want) {
+			t.Errorf("mutation-testing framing lost the phrase %q — this is what keeps safety-aligned models from refusing", want)
+		}
 	}
 	for _, want := range []string{"GOAL:\nF returns >0", "func F() int { return 1 }", `"Name":"F"`, "Produce exactly 3 distinct mutations."} {
 		if !strings.Contains(usr, want) {

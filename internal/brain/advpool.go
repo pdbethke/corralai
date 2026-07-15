@@ -367,6 +367,21 @@ type AdvPoolRunOut struct {
 	RunID int64 `json:"run_id"`
 }
 
+// AdvPoolQuery is get_adversarial_run's input: a run id from start_adversarial_run.
+type AdvPoolQuery struct {
+	RunID int64 `json:"run_id" jsonschema:"the run id returned by start_adversarial_run"`
+}
+
+// AdvPoolStatusOut is get_adversarial_run's output: a run's status and, once
+// converged, its signed Verdict. Verdict is nil while the run is still ticking
+// or for an unknown id.
+type AdvPoolStatusOut struct {
+	RunID     int64            `json:"run_id"`
+	Found     bool             `json:"found"`
+	Converged bool             `json:"converged"`
+	Verdict   *advpool.Verdict `json:"verdict,omitempty"`
+}
+
 // maxAdvPoolMutants mirrors maxControlMutants: bounds the compute a single
 // admin request can trigger (each mutant costs jail spawns).
 const maxAdvPoolMutants = 20
@@ -427,6 +442,13 @@ func (rt *AdvPoolRuntime) StartRun(in AdvPoolRunSpec) (int64, error) {
 	}
 	rt.activeID = mid
 	return mid, nil
+}
+
+// RunStatus reports a run's status/verdict by id, delegating to the driver
+// (which retains converged runs). Used by the get_adversarial_run tool so an
+// external caller can poll an async run to convergence.
+func (rt *AdvPoolRuntime) RunStatus(runID int64) (advpool.RunState, bool) {
+	return rt.driver.RunStatus(runID)
 }
 
 // loop ticks the active run every interval until ctx is cancelled — the
@@ -532,9 +554,9 @@ func StartAdversarialPool(ctx context.Context, opts Options) (*AdvPoolRuntime, e
 	return rt, nil
 }
 
-// registerAdvPoolTools registers the admin-gated start_adversarial_run tool
-// over the shared AdvPoolRuntime (opts.AdvPool) — never called when that's
-// nil (see server.go).
+// registerAdvPoolTools registers the admin-gated start_adversarial_run and
+// get_adversarial_run tools over the shared AdvPoolRuntime (opts.AdvPool) —
+// never called when that's nil (see server.go).
 func registerAdvPoolTools(s *mcp.Server, opts Options) {
 	rt := opts.AdvPool
 	mcp.AddTool(s, &mcp.Tool{Name: "start_adversarial_run",
@@ -549,5 +571,20 @@ func registerAdvPoolTools(s *mcp.Server, opts Options) {
 			}
 			auditKnowledge(opts, req, "start_adversarial_run", map[string]any{"repo": in.Repo, "commit": in.Commit, "run_id": runID})
 			return nil, AdvPoolRunOut{RunID: runID}, nil
+		})
+
+	mcp.AddTool(s, &mcp.Tool{Name: "get_adversarial_run",
+		Description: "ADMIN: query an adversarial-pool run's status and (once converged) its signed verdict, by the run id returned from start_adversarial_run."},
+		func(_ context.Context, req *mcp.CallToolRequest, in AdvPoolQuery) (*mcp.CallToolResult, AdvPoolStatusOut, error) {
+			if !opts.isHumanAdmin(req) {
+				return nil, AdvPoolStatusOut{}, errAdminOnly
+			}
+			st, found := rt.RunStatus(in.RunID)
+			return nil, AdvPoolStatusOut{
+				RunID:     in.RunID,
+				Found:     found,
+				Converged: st.Converged,
+				Verdict:   st.Verdict,
+			}, nil
 		})
 }

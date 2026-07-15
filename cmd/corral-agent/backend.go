@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -146,7 +147,20 @@ func scrubSecretEnv() {
 	}
 }
 
-var httpc = &http.Client{Timeout: 180 * time.Second}
+// llmHTTPTimeout is the per-request timeout for a model call. The default 180s
+// is fine for hosted/frontier models but too tight for a large local model
+// generating a big structured artifact (e.g. many full-file mutants of a real
+// source file), so it's overridable via AGENT_LLM_TIMEOUT_SECONDS.
+func llmHTTPTimeout() time.Duration {
+	if v := strings.TrimSpace(os.Getenv("AGENT_LLM_TIMEOUT_SECONDS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return time.Duration(n) * time.Second
+		}
+	}
+	return 180 * time.Second
+}
+
+var httpc = &http.Client{Timeout: llmHTTPTimeout()}
 
 func postJSON(url string, hdr map[string]string, body, out any) error {
 	b, _ := json.Marshal(body)

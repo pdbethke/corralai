@@ -738,3 +738,112 @@ func TestTick_PoolAdequacy_StripsRawTestBeforeCompile(t *testing.T) {
 		t.Errorf("CompileTest received %q, want the ParseTest-cleaned source (RAW: prefix stripped)", validator.compileGot)
 	}
 }
+
+// A PERFECT dev suite (0 survivors) must skip the test-writer + pool-adequacy
+// entirely and certify on its 100% kill-rate — without this the pool could
+// grade a bad suite but never certify a good one (the real-repo run's finding).
+func TestTick_PerfectSuite_SkipsTestWriterAndCertifies(t *testing.T) {
+	const mission int64 = 77
+	scorer := &fakeScorer{devKillRate: 1.0, devSurvivors: nil} // killed every mutant, 0 survivors
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, {ID: "m1", Code: "c1"}}}
+	d, _ := newTestDriver(t, mission, scorer, validator, 0.8)
+
+	ctx := context.Background()
+	ready := claimAllReady(t, d.Q)
+	mustComplete(t, d.Q, ready[RoleTestCritic].ID, "no vacuous tests found")
+	mustComplete(t, d.Q, ready[RoleMutantGenerator].ID, "raw mutants")
+
+	// One tick: dev-adequacy sees 0 survivors -> skips test-writer, poolScored,
+	// then aggregate (test-critic already done) -> certified.
+	v, err := d.Tick(ctx, mission)
+	if err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	if v == nil {
+		t.Fatal("a perfect suite must converge without a test-writer completion, got no verdict")
+	}
+	if v.Status != StatusCertified {
+		t.Errorf("Status = %q, want certified (100%% kill-rate)", v.Status)
+	}
+	if v.Survivors != 0 || v.ProvenMissed != 0 {
+		t.Errorf("Survivors=%d ProvenMissed=%d, want 0/0", v.Survivors, v.ProvenMissed)
+	}
+	// The moot test-writer task must be cancelled, not left pending or promoted.
+	tw, _ := d.Q.TaskByID(d.runs[mission].testWriterTaskID)
+	if tw != nil && tw.Status != queue.StatusCancelled {
+		t.Errorf("test-writer status = %q, want cancelled (no survivors to prove)", tw.Status)
+	}
+	// Scorer.Score called exactly once (dev tests) — never a second pool score.
+	if len(scorer.calls) != 1 {
+		t.Errorf("Scorer.Score called %d times, want 1 (no pool-adequacy for a perfect suite)", len(scorer.calls))
+	}
+}
+
+// A perfect suite (0 survivors) skips the test-writer — so its assigned model
+// must NOT be recorded on the leaderboard (it never ran); recording it a
+// failure for a task it never attempted would penalize a good model on exactly
+// the strong-suite runs. The mutant-generator IS fed, as a pass (it produced
+// usable mutants; the suite killing them is not its failure).
+func TestTick_PerfectSuite_DoesNotPenalizeMootTestWriter(t *testing.T) {
+	const mission int64 = 78
+	scorer := &fakeScorer{devKillRate: 1.0, devSurvivors: nil}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, {ID: "m1", Code: "c1"}}}
+	d, _ := newTestDriver(t, mission, scorer, validator, 0.8)
+	d.Signer = &fakeSigner{}
+	lb := &fakeLeaderboard{}
+	d.Leaderboard = lb
+
+	ctx := context.Background()
+	ready := claimAllReady(t, d.Q)
+	mustComplete(t, d.Q, ready[RoleTestCritic].ID, "no vacuous tests found")
+	mustComplete(t, d.Q, ready[RoleMutantGenerator].ID, "raw mutants")
+
+	v, err := d.Tick(ctx, mission)
+	if err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	if v == nil || v.Status != StatusCertified {
+		t.Fatalf("want certified, got %+v", v)
+	}
+	var mgOutcome string
+	for _, c := range lb.calls {
+		if c.role == RoleTestWriter {
+			t.Errorf("test-writer was fed to the leaderboard (%q) despite never running on a perfect suite", c.outcome)
+		}
+		if c.role == RoleMutantGenerator {
+			mgOutcome = c.outcome
+		}
+	}
+	if mgOutcome != OutcomePass {
+		t.Errorf("mutant-generator outcome = %q, want pass (it produced usable mutants; a good suite killing them is not its failure)", mgOutcome)
+	}
+}
+
+// The human gate still applies at a PERFECT (100%) kill-rate: a blocking finding
+// from the test-critic routes even a 0-survivor run to needs-review.
+func TestTick_PerfectSuite_BlockingFinding_NeedsReview(t *testing.T) {
+	const mission int64 = 79
+	scorer := &fakeScorer{devKillRate: 1.0, devSurvivors: nil}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, {ID: "m1", Code: "c1"}}}
+	d, _ := newTestDriver(t, mission, scorer, validator, 0.8)
+
+	ctx := context.Background()
+	ready := claimAllReady(t, d.Q)
+	tc := ready[RoleTestCritic]
+	if _, err := d.Q.AddFinding(queue.Finding{
+		MissionID: mission, TaskID: tc.ID, Reporter: "test-critic", Type: "bug",
+		Severity: "high", Target: "SomeTest", Evidence: "vacuous — no assertions",
+	}); err != nil {
+		t.Fatalf("AddFinding: %v", err)
+	}
+	mustComplete(t, d.Q, tc.ID, "flagged a vacuous test")
+	mustComplete(t, d.Q, ready[RoleMutantGenerator].ID, "raw mutants")
+
+	v, err := d.Tick(ctx, mission)
+	if err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	if v == nil || v.Status != StatusNeedsReview {
+		t.Fatalf("Status = %v, want needs-review (blocking finding open even at 100%% kill-rate)", v)
+	}
+}

@@ -535,7 +535,7 @@ type signCall struct {
 }
 
 // fakeSigner never touches the real certify chain: it just records what it
-// was asked to sign and returns a canned (recordID, head), or an error.
+// was asked to sign and returns a fixed canned (recordID, head), or an error.
 type fakeSigner struct {
 	calls []signCall
 	err   error
@@ -546,7 +546,7 @@ func (f *fakeSigner) SignVerdict(ctx context.Context, v Verdict) (int64, string,
 	if f.err != nil {
 		return 0, "", f.err
 	}
-	return int64(len(f.calls)), fmt.Sprintf("head-%d", len(f.calls)), nil
+	return 41, "head41", nil
 }
 
 // leaderboardCall records one LeaderboardSink.Record invocation.
@@ -622,6 +622,26 @@ func TestTick_Aggregate_Certified_SignsAndFeedsLeaderboard(t *testing.T) {
 		if c.role == RoleTestWriter && c.outcome != OutcomePass {
 			t.Fatalf("test-writer outcome = %q, want %q (ProvenMissed=1)", c.outcome, OutcomePass)
 		}
+	}
+}
+
+// The signed record id/head (from Signer.SignVerdict) must land on the
+// stored Verdict — Task 2's RunStatus and Task 4's advVerdict both read
+// these fields off the converged verdict.
+func TestVerdictCarriesSignedRecordID(t *testing.T) {
+	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}}
+	scorer := &fakeScorer{devKillRate: 0.9, devSurvivors: survivors, poolSurvivors: nil}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0]}}
+	d, _ := newTestDriver(t, 11, scorer, validator, 0.5)
+	d.Signer = &fakeSigner{}
+
+	v := completeFullRun(t, d, 11, "no vacuous tests found")
+
+	if v.RecordID != 41 {
+		t.Fatalf("RecordID = %d, want 41 (from the fake Signer)", v.RecordID)
+	}
+	if v.RecordHead != "head41" {
+		t.Fatalf("RecordHead = %q, want head41", v.RecordHead)
 	}
 }
 
@@ -846,4 +866,56 @@ func TestTick_PerfectSuite_BlockingFinding_NeedsReview(t *testing.T) {
 	if v == nil || v.Status != StatusNeedsReview {
 		t.Fatalf("Status = %v, want needs-review (blocking finding open even at 100%% kill-rate)", v)
 	}
+}
+
+// RunStatus must report unknown/mid-run/converged correctly: not-found for an
+// id that was never started, found-but-not-converged mid-run, and
+// found-and-converged (with the real Verdict) once completeFullRun finishes.
+func TestRunStatusUnknownRunningConverged(t *testing.T) {
+	const mission int64 = 7
+	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}}
+	scorer := &fakeScorer{devKillRate: 0.9, devSurvivors: survivors, poolSurvivors: nil}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0]}}
+	d, _ := newTestDriver(t, mission, scorer, validator, 0.5)
+
+	if st, found := d.RunStatus(999); found || st.Converged {
+		t.Fatalf("unknown id: found=%v converged=%v, want false/false", found, st.Converged)
+	}
+	if st, found := d.RunStatus(mission); !found || st.Converged || st.Verdict != nil {
+		t.Fatalf("mid-run: found=%v converged=%v verdict=%v, want true/false/nil", found, st.Converged, st.Verdict)
+	}
+
+	v := completeFullRun(t, d, mission, "no vacuous tests found")
+
+	st, found := d.RunStatus(mission)
+	if !found || !st.Converged || st.Verdict == nil {
+		t.Fatalf("converged: found=%v converged=%v verdict=%v, want true/true/non-nil", found, st.Converged, st.Verdict)
+	}
+	if st.Verdict.Status != v.Status {
+		t.Fatalf("Verdict.Status = %q, want %q", st.Verdict.Status, v.Status)
+	}
+}
+
+// TestRunStatusRaceWithTick proves RunStatus is safe to call concurrently with
+// Tick — run the package with -race to catch an unsynchronized run.verdict or
+// map access. Poll RunStatus in a goroutine while the main goroutine drives the
+// run's ticks to convergence.
+func TestRunStatusRaceWithTick(t *testing.T) {
+	const mission int64 = 7
+	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}}
+	scorer := &fakeScorer{devKillRate: 0.9, devSurvivors: survivors, poolSurvivors: nil}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0]}}
+	d, _ := newTestDriver(t, mission, scorer, validator, 0.5)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 1000; i++ {
+			_, _ = d.RunStatus(mission)
+		}
+	}()
+
+	completeFullRun(t, d, mission, "no vacuous tests found")
+
+	<-done
 }

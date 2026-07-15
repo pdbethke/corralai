@@ -27,6 +27,9 @@ Usage:
   corral certify --brain <url> [flags] -- <check-cmd>...
                                   same as above, and also post the signed record to a
                                   brain (report_build) as a tamper-evident build attestation
+  corral certify --adversarial --code <path> --goal "<text>" [--test <path>] -- <test cmd>
+                                  grade a change's own tests: fire the adversarial pool on the
+                                  brain, poll to a signed verdict
   corral certify verify <record-file> [--pubkey <hex>|--brain <url>] [--allow-unanchored]
                                   independently verify a --out (or report_build) record: the
                                   Ed25519 signature, the ledger's hash chain, and that the

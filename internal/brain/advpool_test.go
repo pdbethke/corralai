@@ -227,6 +227,82 @@ func TestStartAdversarialRunTool_RequiresAdmin(t *testing.T) {
 	}
 }
 
+// TestAdvPoolRuntimeRunStatusDelegates proves AdvPoolRuntime.RunStatus is a
+// thin delegate to the driver's own RunStatus: a known, started (but not yet
+// converged) run reports found=true/converged=false, and an unknown id
+// reports found=false. Full-convergence behavior is already covered by
+// advpool's own TestRunStatusUnknownRunningConverged; this only needs to
+// prove the runtime forwards to the SAME driver instance StartRun used.
+func TestAdvPoolRuntimeRunStatusDelegates(t *testing.T) {
+	rt, _ := newTestAdvPoolRuntime(t, nil)
+
+	runID, err := rt.StartRun(testRunSpecIn())
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	st, found := rt.RunStatus(runID)
+	if !found {
+		t.Fatalf("RunStatus(%d): found=false, want true for a just-started run", runID)
+	}
+	if st.Converged {
+		t.Fatalf("RunStatus(%d): Converged=true, want false before any Tick", runID)
+	}
+
+	if _, found := rt.RunStatus(999); found {
+		t.Fatal("RunStatus(999): found=true, want false for an unknown id")
+	}
+}
+
+// TestGetAdversarialRunToolRequiresAdmin proves get_adversarial_run is
+// isHumanAdmin-gated exactly like start_adversarial_run (mirrors
+// TestStartAdversarialRunTool_RequiresAdmin's setup verbatim).
+func TestGetAdversarialRunToolRequiresAdmin(t *testing.T) {
+	dir := t.TempDir()
+	cstore, err := coord.Open(filepath.Join(dir, "c.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cstore.Close() })
+	mstore, err := memory.Open(filepath.Join(dir, "m.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { mstore.Close() })
+	pstore, err := principals.Open(filepath.Join(dir, "p.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pstore.Close() })
+	if err := pstore.CreateSuperuser("real-admin@example.com", "test"); err != nil {
+		t.Fatal(err)
+	}
+
+	rt, _ := newTestAdvPoolRuntime(t, nil)
+
+	ctx := context.Background()
+	clientT, serverT := mcp.NewInMemoryTransports()
+	go func() {
+		_ = NewServer(cstore, mstore, Options{Principals: pstore, AdvPool: rt}).Run(ctx, serverT)
+	}()
+	client := mcp.NewClient(&mcp.Implementation{Name: "t1", Version: "0"}, nil)
+	sess, err := client.Connect(ctx, clientT, nil)
+	if err != nil {
+		t.Fatalf("connect non-admin: %v", err)
+	}
+	defer sess.Close()
+
+	res, err := sess.CallTool(ctx, &mcp.CallToolParams{Name: "get_adversarial_run", Arguments: map[string]any{
+		"run_id": int64(1),
+	}})
+	if err != nil {
+		t.Fatalf("get_adversarial_run non-admin call: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("want tool error for non-admin get_adversarial_run, got success")
+	}
+}
+
 // advPoolJailSkipUnlessGoWorks resolves a real bwrap backend and skips the
 // caller's test unless the `go` toolchain is actually reachable INSIDE the
 // jail — bwrap only binds /usr into the sandbox (see

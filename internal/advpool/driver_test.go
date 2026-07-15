@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/queue"
@@ -918,4 +919,78 @@ func TestRunStatusRaceWithTick(t *testing.T) {
 	completeFullRun(t, d, mission, "no vacuous tests found")
 
 	<-done
+}
+
+// fakeClock is an injected, manually-advanced clock: the deadline logic must
+// never call time.Now() directly (the driver/store convention), so tests can
+// simulate a stalled run's wall-clock without sleeping.
+type fakeClock struct {
+	t time.Time
+}
+
+func (c *fakeClock) Now() time.Time { return c.t }
+
+func (c *fakeClock) advance(d time.Duration) { c.t = c.t.Add(d) }
+
+// TestRunDeadlineProducesNeedsReviewVerdict proves the wall-clock deadline is
+// the backstop checkNoProgress can't be: checkNoProgress explicitly stands
+// down while any task is claimed ("slow is not stuck"), so a claimed-but-
+// wedged task would otherwise stall a run forever. Here the run is started
+// but never completes any task (simulating a stall); once the injected clock
+// crosses RunDeadline, Tick must converge to a SIGNED needs-review verdict —
+// never certified, honest about the timeout — and a second Tick must return
+// the same stored verdict (idempotent, no double-sign).
+func TestRunDeadlineProducesNeedsReviewVerdict(t *testing.T) {
+	const mission int64 = 42
+	scorer := &fakeScorer{devKillRate: 0.9}
+	validator := &fakeValidator{}
+	q := newTestQueue(t)
+	clk := &fakeClock{t: time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)}
+	d, err := NewDriver(q, scorer, validator, decorrelatedAssign(), 0.5)
+	if err != nil {
+		t.Fatalf("NewDriver: %v", err)
+	}
+	d.Now = clk.Now
+	d.RunDeadline = 10 * time.Minute
+	signer := &fakeSigner{}
+	d.Signer = signer
+	leaderboard := &fakeLeaderboard{}
+	d.Leaderboard = leaderboard
+
+	if err := d.StartRun(mission, testRunSpec(), nil); err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	// Simulate a stall: do NOT complete any task. Tick before the deadline must
+	// not converge.
+	if v, err := d.Tick(context.Background(), mission); err != nil || v != nil {
+		t.Fatalf("pre-deadline Tick: v=%+v err=%v, want nil/nil", v, err)
+	}
+
+	clk.advance(d.RunDeadline + time.Second)
+
+	v, err := d.Tick(context.Background(), mission)
+	if err != nil {
+		t.Fatalf("deadline Tick should not error: %v", err)
+	}
+	if v == nil || v.Status != StatusNeedsReview {
+		t.Fatalf("want a needs-review verdict, got %+v", v)
+	}
+	if len(signer.calls) != 1 || signer.calls[0].verdict.Status != StatusNeedsReview {
+		t.Fatalf("expected one signed needs-review record, got %+v", signer.calls)
+	}
+	if len(leaderboard.calls) != 0 {
+		t.Fatalf("a timed-out run must never feed the leaderboard, got %d calls", len(leaderboard.calls))
+	}
+
+	// A second Tick must be idempotent: same stored verdict pointer, no re-sign.
+	v2, err := d.Tick(context.Background(), mission)
+	if err != nil {
+		t.Fatalf("second Tick: %v", err)
+	}
+	if v2 != v {
+		t.Fatalf("second Tick returned a different verdict: %+v vs %+v", v, v2)
+	}
+	if len(signer.calls) != 1 {
+		t.Fatalf("second Tick must not re-sign, got %d signer calls", len(signer.calls))
+	}
 }

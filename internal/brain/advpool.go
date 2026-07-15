@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -603,6 +604,20 @@ func StartAdversarialPool(ctx context.Context, opts Options) (*AdvPoolRuntime, e
 	driver.Signer = advpoolSigner{opts: opts}
 	driver.Leaderboard = advpoolLeaderboardSink{tel: opts.Telemetry}
 
+	// RunDeadline is the wall-clock backstop checkNoProgress can't be: it
+	// stands down whenever any task is claimed ("slow is not stuck"), so a
+	// claimed-but-wedged task would otherwise stall a run forever. 12min is
+	// generous — a healthy frontier run finishes in 2-4min — so this only
+	// catches a genuine stall, converging it to a signed needs-review verdict.
+	driver.RunDeadline = 12 * time.Minute
+	if s := strings.TrimSpace(os.Getenv("CORRALAI_ADVPOOL_RUN_DEADLINE_S")); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n > 0 {
+			driver.RunDeadline = time.Duration(n) * time.Second
+		} else {
+			log.Printf("advpool: CORRALAI_ADVPOOL_RUN_DEADLINE_S invalid (%q) — keeping default %s", s, driver.RunDeadline)
+		}
+	}
+
 	rt := &AdvPoolRuntime{
 		driver:     driver,
 		missions:   opts.Missions,
@@ -617,6 +632,7 @@ func StartAdversarialPool(ctx context.Context, opts Options) (*AdvPoolRuntime, e
 	}
 	log.Printf("advpool: ENABLED — polling every %s; role models: mutant-generator=%s test-writer=%s test-critic=%s",
 		interval, assign[advpool.RoleMutantGenerator], assign[advpool.RoleTestWriter], assign[advpool.RoleTestCritic])
+	log.Printf("advpool: run-deadline=%s (a run that has not converged by then is signed needs-review and freed)", driver.RunDeadline)
 	go rt.loop(ctx, interval)
 	return rt, nil
 }

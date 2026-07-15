@@ -1,0 +1,54 @@
+---
+title: "Nobody Fails a Test They Never Took"
+description: "We borrowed one idea from Fugu: route each task to the model that's measured-best at it. Then we built the measuring, and learned that measuring fairly is the entire problem. Three times we penalized a model for the wrong thing — a task it never ran, a success that wasn't its doing, a verdict a human hadn't blessed — and what a fair fitness signal actually takes."
+pubDate: 2026-07-15
+draft: false
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+
+*Field note. Third in a Fugu thread: we [dinged its blind spot](/field-notes/fugu/), we [credited its best idea](/field-notes/what-we-took-from-fugu/), and now we build that idea and find out it's harder than the paper makes it look.*
+
+---
+
+## The bug that named this note
+
+I was watching a run of the [adversarial testing pool](/field-notes/your-tests-suck/) grade a real file — one of our own, a small security wrapper — and it scored a clean 100%. Our tests killed every planted mutant. Good tests. And then the machine recorded the **test-writer as a failure.**
+
+Here's why. On that run there was nothing for the test-writer to do: a perfect suite leaves no surviving bugs to write a test *for*, so the pool skips the writer entirely. But the code that feeds the leaderboard didn't know "skipped." It saw a role that hadn't proven anything and wrote down a loss.
+
+So on exactly the runs where a suite is *strongest* — the ones you'd most want your routing to learn from — the model assigned to write tests was getting quietly punished for a task it was never handed. Nobody should fail a test they never took. My leaderboard disagreed.
+
+## The idea, and the word doing all the work
+
+We took one thing from Sakana's Fugu: the orchestrator's real job isn't to run one model in N costumes, it's to **route each task to the model that's measured-best at it.** One model writes, a different one critiques, a third mutates — and which model gets which role is *learned from measured performance, not a hardcoded map.*
+
+I've written that sentence admiringly more than once. It has a word in it I glossed every time: **measured.** Route to the *measured*-best. The routing is the easy half — a lookup against a leaderboard. The measuring is the half where it all actually happens, and it is much harder than "measured performance" makes it sound, because a fitness signal is only as good as its *fairness*, and fairness is a series of ways to be wrong that don't announce themselves.
+
+I found three. All by running the thing on real code instead of trusting the tests I'd written for it — which is, I'm aware, the exact joke this whole product is built on.
+
+## Three ways I was unfair to a machine
+
+**1. Penalizing a role for a task it never ran.** The one above. A skipped role isn't a failed role. If your fitness function can't tell "didn't get the chance" from "got the chance and blew it," it will systematically demote whoever keeps landing on the easy days — which, over time, teaches your router to avoid your best performers on your best inputs. The fix is a single flag that says *this role was moot* and keeps it off the board. The principle is older than software: absence of evidence is not evidence of failure.
+
+**2. Penalizing a role for someone else's success.** The mutant-generator's job is to plant plausible, compiling bugs in the code. On that perfect-suite run I was scoring it on whether its bugs *survived* — and they didn't, because the developer's tests were good and caught them all. But a mutant getting caught is the **dev suite's** win, not the mutant-generator's loss. I'd wired one role's fitness to another actor's outcome. The generator did its job perfectly; my scoreboard marked it down for the tests being strong. Fixed: the generator is credited for producing usable mutants, full stop. Whether they survive is not its story to be graded on.
+
+**3. Crediting a role for a verdict nobody blessed.** The other direction. A run that ends in *needs-review* — a suite too weak to certify, or a blocking finding a human still has to adjudicate — must feed the leaderboard **nothing.** No model earns fitness from a run that isn't resolved in its favor yet. Give credit for unresolved work and your signal fills up with participation trophies, and the router starts trusting models for showing up rather than for being right. Fitness accrues *only* from a run the gate actually certified.
+
+None of these three is exotic. They're the same failure — **attributing an outcome to the wrong cause** — wearing three coats. And every one of them was invisible until the pool ran against a real repo, because a fake, in a unit test, does exactly what you told it to. Real code does what it does.
+
+## The two rules that make the number mean anything
+
+Fairness is the subtle layer. Underneath it are two rules that aren't subtle at all, because without them the whole exercise is theater:
+
+**The signal is gate-earned, not self-reported.** A model does not tell us it did well. It is measured by outcomes a **deterministic, execution-verified gate** certified — did its test actually kill the mutant, in a jail, on a real run. This is the seam where we [diverge from Fugu](/field-notes/fugu/): route-to-the-fittest is only as trustworthy as the fitness number, and a number a model can talk its way into is a number that selects for confident nonsense. Ours is signed. You can't flatter your way up our leaderboard.
+
+**A judge may not grade her own homework.** The model that critiques a suite is forced to be a *different* model than the one that wrote the exposing test — decorrelation, enforced at assignment time, not hoped for. A metric one model both produces and scores isn't a measurement; it's a mirror.
+
+## The honest part
+
+I'm not going to show you the leaderboard moving, because it hasn't — not yet, not at any scale worth a chart. The loop is wired end to end and the fixes above are real and shipped, but "our routing measurably improves over N runs" is a claim I haven't earned, and I'm not going to dress up three good fixes as a proven flywheel.
+
+What I *can* tell you is the thing this note is actually about: **the fitness signal was wrong three times, and each time it was wrong in a way that looked completely fine until real work ran through it.** Evolution with a biased fitness function doesn't select for the best. It selects for whoever games the bias. The entire point of gate-earned fitness is that it *can't* be gamed — but it can still, as mine did, be quietly unfair by accident, and an unfair fitness function is just a slower way to select for the wrong thing.
+
+Fugu's insight was route to the fittest. The unglamorous sentence underneath it is that *fittest* is a measurement, and a measurement you didn't stress-test against reality is a measurement that's lying to you politely. So we stress-tested it against reality, it lied to us three times, and we fixed it — which is, once more, the only trick we actually know: run it for real, and believe what happens instead of what you meant to happen.

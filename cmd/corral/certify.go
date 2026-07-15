@@ -255,6 +255,20 @@ func parseProducedBy(v string) []string {
 	return out
 }
 
+// hasFlag reports whether name appears as a bare token in args, stopping at
+// the first bare "--" (so it never matches inside the checked command's argv).
+func hasFlag(args []string, name string) bool {
+	for _, a := range args {
+		if a == "--" {
+			return false
+		}
+		if a == name || strings.HasPrefix(a, name+"=") {
+			return true
+		}
+	}
+	return false
+}
+
 // splitCertifyArgs splits on the first bare "--": everything before is
 // corral certify's own flags, everything after is the checked command's argv.
 func splitCertifyArgs(args []string) (flags, checkArgv []string) {
@@ -286,6 +300,11 @@ func runCertify(args []string, run cmdRunner, post buildPoster, jail jailRunner,
 	// the offline verify loop with no brain involved.
 	if len(args) > 0 && args[0] == "pubkey" {
 		return runCertifyPubkey(signKey, stdout, stderr)
+	}
+	// `corral certify --adversarial ...` is a distinct mode: trigger the
+	// adversarial testing pool on the brain and poll to a signed verdict.
+	if hasFlag(args, "--adversarial") {
+		return runCertifyAdversarial(args, mcpAdvClient{}, realRunner{}, time.Sleep, stdout, stderr)
 	}
 
 	flagArgs, checkArgv := splitCertifyArgs(args)

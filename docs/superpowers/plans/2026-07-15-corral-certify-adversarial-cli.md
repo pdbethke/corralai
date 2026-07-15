@@ -109,37 +109,38 @@ git commit -m "advpool: carry the signed record id/head on the Verdict"
 
 ---
 
-### Task 2: Piece 1 — `Driver.RunStatus` getter
+### Task 2: Piece 1 — `Driver.RunStatus` getter (+ a focused mutex)
+
+**IMPORTANT — plan correction (verified against the code):** the `Driver` has **no mutex today**. `runs`/`noProgress`/`lastFingerprint` are bare maps; `StartRun` (map write, runtime/MCP goroutine) and `Tick` (map read + `run.verdict` write, tick-loop goroutine) are race-free only by accident of the runtime's `rt.mu` publish-ordering. `RunStatus` adds a **third goroutine** (the `get_adversarial_run` MCP handler) that reads `d.runs` and `run.verdict` — a real data race against `tickAggregate`'s `run.verdict = &v`. So this task **adds a `sync.Mutex` to `Driver`** and guards **exactly** the `runs`-map lookups and every `run.verdict` read/write with it. The lock is **never held across slow work** (`Q.Enqueue`, `Q.List`, `Scorer.Score`, the tick helpers) — only around the map op and the verdict pointer. `noProgress`/`lastFingerprint` stay lock-free (only the single tick goroutine touches them). A `-race` test is mandatory.
 
 **Files:**
-- Modify: `internal/advpool/driver.go` (near the other `func (d *Driver)` methods; the `runs` map is guarded by `d.mu`)
+- Modify: `internal/advpool/driver.go` (the `Driver` struct — add `mu sync.Mutex` + `"sync"` import; `StartRun`; `Tick`; `tickAggregate`; add `RunStatus`)
 - Test: `internal/advpool/driver_test.go`
 
 **Interfaces:**
-- Consumes: `d.runs map[int64]*runState` (guarded by `d.mu`); `runState.verdict *Verdict` (set by `tickAggregate` in Task 1).
-- Produces: `type RunState struct { Converged bool; Verdict *Verdict }` and `func (d *Driver) RunStatus(missionID int64) (RunState, bool)`. Task 3's `AdvPoolRuntime.RunStatus` delegates here.
+- Consumes: `d.runs map[int64]*runState`; `runState.verdict *Verdict` (set by `tickAggregate` in Task 1).
+- Produces: `type RunState struct { Converged bool; Verdict *Verdict }`; `func (d *Driver) RunStatus(missionID int64) (RunState, bool)`; a `Driver.mu sync.Mutex` guarding `d.runs`-map access and `run.verdict`. Task 3's `AdvPoolRuntime.RunStatus` delegates here.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the failing tests (behavior + `-race` concurrency)**
+
+Use the file's existing harness (Task 1 used `newTestDriver`, `completeFullRun`, `fakeSigner` — inspect and reuse the real names; do NOT add new fakes). Two tests:
 
 ```go
-func TestRunStatusUnknownConvergedRunning(t *testing.T) {
-	d, _ := newTestDriver(t) // reuse this file's constructor; adjust to its real signature/returns
+func TestRunStatusUnknownRunningConverged(t *testing.T) {
+	// Build a driver + start a run WITHOUT converging it, using the same
+	// setup the file's other tests use (newTestDriver / StartRun with a
+	// RunSpec + sigs + a mission id constant, e.g. int64(7)).
+	d := /* the driver, run started at mission 7, not yet converged */
 
-	// Unknown id.
 	if st, found := d.RunStatus(999); found || st.Converged {
-		t.Fatalf("unknown id: got found=%v converged=%v, want false/false", found, st.Converged)
+		t.Fatalf("unknown id: found=%v converged=%v, want false/false", found, st.Converged)
 	}
-
-	// Start a run but do not converge it: found, not converged, nil verdict.
-	// (Use the same StartRun call the other tests use — mission id, RunSpec,
-	// sigs. Pick a mission id constant, e.g. int64(7).)
-	mustStartRun(t, d, 7) // reuse/inline the file's existing start helper
 	if st, found := d.RunStatus(7); !found || st.Converged || st.Verdict != nil {
 		t.Fatalf("mid-run: found=%v converged=%v verdict=%v, want true/false/nil", found, st.Converged, st.Verdict)
 	}
 
-	// Drive it to convergence, then RunStatus reports Converged + the Verdict.
-	v := driveToConvergence(t, d, 7) // reuse the file's full-run helper
+	// Drive to convergence with the file's full-run helper, then re-check.
+	v := /* the *Verdict from the converging completeFullRun/Tick */
 	st, found := d.RunStatus(7)
 	if !found || !st.Converged || st.Verdict == nil {
 		t.Fatalf("converged: found=%v converged=%v verdict=%v, want true/true/non-nil", found, st.Converged, st.Verdict)
@@ -148,18 +149,125 @@ func TestRunStatusUnknownConvergedRunning(t *testing.T) {
 		t.Fatalf("Verdict.Status = %q, want %q", st.Verdict.Status, v.Status)
 	}
 }
+
+// TestRunStatusRaceWithTick proves RunStatus is safe to call concurrently with
+// Tick — run the package with -race to catch an unsynchronized run.verdict or
+// map access. Poll RunStatus in a goroutine while the main goroutine drives the
+// run's ticks to convergence.
+func TestRunStatusRaceWithTick(t *testing.T) {
+	d := /* driver with a run started at mission 7, using the file's setup */
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 1000; i++ {
+			_, _ = d.RunStatus(7)
+		}
+	}()
+	// Drive the run to convergence on the main goroutine, exactly as the
+	// full-run helper does (complete each role's task + Tick between). Reuse
+	// the file's completeFullRun / step-by-step Tick calls.
+	_ = /* driveToConvergence(t, d, 7) */
+	<-done
+}
 ```
 
-Note: the helper names above (`newTestDriver`, `mustStartRun`, `driveToConvergence`) are illustrative — use whatever this file already provides to start and converge a run; do not add new fakes if the file has them.
+Note: helper names (`newTestDriver`, `completeFullRun`, `driveToConvergence`) are illustrative — use whatever the file provides. The `-race` test's exact convergence-driving must mirror how the file's existing full-run test advances a run.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Run tests to verify they fail**
 
-Run: `go test ./internal/advpool/ -run TestRunStatusUnknownConvergedRunning -v`
-Expected: FAIL to compile — `d.RunStatus undefined`.
+Run: `go test ./internal/advpool/ -run TestRunStatus -v`
+Expected: FAIL to compile — `d.RunStatus undefined` (and, before the mutex is added, `d.mu undefined`).
 
-- [ ] **Step 3: Implement `RunStatus` and `RunState`**
+- [ ] **Step 3: Add the mutex and guard the shared state**
 
-Add near the top-level types (after `Verdict`):
+Add the import `"sync"` and the field to `Driver`:
+
+```go
+type Driver struct {
+	// ...existing exported fields...
+
+	// mu guards the runs map lookups and each run's verdict pointer against
+	// concurrent RunStatus callers (the get_adversarial_run MCP handler runs
+	// on a different goroutine than the tick loop). It is NEVER held across
+	// slow work (Q.Enqueue/Q.List/Scorer.Score/tick helpers) — only around a
+	// map op or the verdict read/write. noProgress/lastFingerprint are not
+	// guarded: only the single tick goroutine touches them.
+	mu sync.Mutex
+
+	runs            map[int64]*runState
+	noProgress      map[int64]int
+	lastFingerprint map[int64]string
+}
+```
+
+In `StartRun`, guard the existence check and the insert (the slow `Enqueue`/`List` stays outside the lock; concurrent `StartRun` is already prevented by the runtime's `rt.mu`, so no TOCTOU matters here beyond map-access safety):
+
+```go
+func (d *Driver) StartRun(missionID int64, rs RunSpec, sigs []repoindex.Signature) error {
+	d.mu.Lock()
+	_, exists := d.runs[missionID]
+	d.mu.Unlock()
+	if exists {
+		return fmt.Errorf("advpool: run already started for mission %d", missionID)
+	}
+	specs := BuildDAG(rs, d.Assign, sigs)
+	if err := d.Q.Enqueue(missionID, specs); err != nil {
+		return fmt.Errorf("advpool: enqueue: %w", err)
+	}
+	tasks, err := d.Q.List(missionID)
+	if err != nil {
+		return fmt.Errorf("advpool: list after enqueue: %w", err)
+	}
+	var twID int64
+	for _, t := range tasks {
+		if t.Key == RoleTestWriter {
+			twID = t.ID
+		}
+	}
+	if twID == 0 {
+		return fmt.Errorf("advpool: test-writer task not found after enqueue")
+	}
+	d.mu.Lock()
+	d.runs[missionID] = &runState{rs: rs, sigs: sigs, testWriterTaskID: twID}
+	d.mu.Unlock()
+	return nil
+}
+```
+
+In `Tick`, guard the initial map lookup and the early verdict read (do the slow tick body OUTSIDE the lock):
+
+```go
+func (d *Driver) Tick(ctx context.Context, missionID int64) (*Verdict, error) {
+	d.mu.Lock()
+	run, ok := d.runs[missionID]
+	var existing *Verdict
+	if ok {
+		existing = run.verdict
+	}
+	d.mu.Unlock()
+	if !ok {
+		return nil, fmt.Errorf("advpool: unknown run for mission %d (call StartRun first)", missionID)
+	}
+	if existing != nil {
+		return existing, nil
+	}
+	// ...unchanged slow body (PromoteReady, tickDevAdequacy, tickPoolAdequacy,
+	// tickAggregate) — these mutate run fields other than verdict, which
+	// RunStatus never reads, so they need no lock...
+}
+```
+
+In `tickAggregate`, guard the verdict store and return the local pointer (do not re-read `run.verdict` outside the lock):
+
+```go
+	d.mu.Lock()
+	run.verdict = &v
+	d.mu.Unlock()
+	return &v, nil
+```
+
+Add `RunState` (after `Verdict`) and `RunStatus`:
 
 ```go
 // RunState is the observable status of one run: Converged is true once the run
@@ -168,16 +276,12 @@ type RunState struct {
 	Converged bool
 	Verdict   *Verdict
 }
-```
 
-Add the method (mirrors the locking the other Driver methods use):
-
-```go
 // RunStatus reports whether missionID's run has converged, and its Verdict if
-// so. found is false when the driver has no such run (unknown or never-started
-// id). A run is retained in d.runs after convergence (never deleted), so a
-// converged verdict stays queryable after the runtime frees the active slot —
-// which is exactly when a caller polls for it.
+// so. found is false when the driver has no such run. A run is retained in
+// d.runs after convergence (never deleted), so a converged verdict stays
+// queryable after the runtime frees the active slot — which is exactly when a
+// caller polls for it. Safe to call concurrently with Tick (guarded by d.mu).
 func (d *Driver) RunStatus(missionID int64) (RunState, bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -189,20 +293,18 @@ func (d *Driver) RunStatus(missionID int64) (RunState, bool) {
 }
 ```
 
-Confirm the Driver's mutex field is named `mu` (grep `d.mu` in driver.go — it is used by `Tick`/`StartRun`); match it.
+- [ ] **Step 4: Run tests to verify they pass (with `-race`)**
 
-- [ ] **Step 4: Run tests to verify they pass**
-
-Run: `go test ./internal/advpool/ -v`
-Expected: PASS.
+Run: `go test ./internal/advpool/ -race -run TestRunStatus -v` then `go test ./internal/advpool/ -race`
+Expected: PASS, no race warnings. (Confirm the existing full suite still passes under `-race` — the new lock is additive.)
 
 - [ ] **Step 5: Commit**
 
 ```bash
 gofmt -w internal/advpool/driver.go internal/advpool/driver_test.go
-go build ./... && go test ./internal/advpool/... && bash scripts/check-security.sh
+go build ./... && go test ./internal/advpool/... -race && bash scripts/check-security.sh
 git add internal/advpool/driver.go internal/advpool/driver_test.go
-git commit -m "advpool: Driver.RunStatus getter over the retained run verdict"
+git commit -m "advpool: Driver.RunStatus getter + a focused mutex for concurrent observation"
 ```
 
 ---

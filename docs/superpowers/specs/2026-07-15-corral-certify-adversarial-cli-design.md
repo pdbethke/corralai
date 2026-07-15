@@ -48,7 +48,7 @@ type RunState struct {
 func (d *Driver) RunStatus(missionID int64) (st RunState, found bool)
 ```
 
-Reads the already-retained `d.runs[missionID].verdict` under the driver's existing mutex (the Driver is already concurrency-safe — `Tick`/`StartRun` take `d.mu`). No new state; a pure read of what `tickAggregate` already stored. `found=false` for an id the driver never saw; `Converged=false` for a run still ticking.
+Reads the already-retained `d.runs[missionID].verdict`. **Correction (verified 2026-07-15): the `Driver` currently has NO mutex** — `runs`/`noProgress`/`lastFingerprint` are bare maps, and the existing `StartRun`↔`Tick` path is race-free only by accident of the runtime's `rt.mu` ordering (StartRun fully publishes a run before any Tick sees a nonzero `activeID`). `RunStatus`, called from the `get_adversarial_run` MCP handler goroutine, would race `tickAggregate`'s `run.verdict = &v` write. So Piece 1 **adds a focused `sync.Mutex` to `Driver`** guarding exactly the `runs` map lookups and the `run.verdict` read/write — NOT the slow jail work (the lock is never held across `Scorer.Score`). `noProgress`/`lastFingerprint` stay lock-free (touched only by the single tick goroutine). `found=false` for an id the driver never saw; `Converged=false` for a run still ticking. A `-race` test drives `RunStatus` concurrently with `Tick` to lock this in.
 
 ### Piece 2 — Runtime + MCP tool: `get_adversarial_run`
 

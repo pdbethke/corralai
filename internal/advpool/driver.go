@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sync"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/queue"
@@ -74,6 +75,13 @@ type Verdict struct {
 	Status          string // certified | needs-review
 	RecordID        int64  // the signed build-record id (0 if signing skipped/failed)
 	RecordHead      string // the record's ledger head
+}
+
+// RunState is the observable status of one run: Converged is true once the run
+// has a terminal Verdict, and Verdict is non-nil exactly when Converged is true.
+type RunState struct {
+	Converged bool
+	Verdict   *Verdict
 }
 
 // CheckDecorrelation rejects an assignment where test-critic and test-writer
@@ -154,6 +162,14 @@ type Driver struct {
 	// mission.Engine.NoProgressTicks).
 	NoProgressTicks int
 
+	// mu guards the runs map lookups and each run's verdict pointer against
+	// concurrent RunStatus callers (the get_adversarial_run MCP handler runs
+	// on a different goroutine than the tick loop). It is NEVER held across
+	// slow work (Q.Enqueue/Q.List/Scorer.Score/tick helpers) — only around a
+	// map op or the verdict read/write. noProgress/lastFingerprint are not
+	// guarded: only the single tick goroutine touches them.
+	mu sync.Mutex
+
 	runs            map[int64]*runState
 	noProgress      map[int64]int
 	lastFingerprint map[int64]string
@@ -186,7 +202,10 @@ func NewDriver(q *queue.Store, scorer Scorer, validator Validator, assign RoleAs
 // its own, mirroring the RepoOps/Indexer decoupling pattern elsewhere in the
 // codebase.
 func (d *Driver) StartRun(missionID int64, rs RunSpec, sigs []repoindex.Signature) error {
-	if _, exists := d.runs[missionID]; exists {
+	d.mu.Lock()
+	_, exists := d.runs[missionID]
+	d.mu.Unlock()
+	if exists {
 		return fmt.Errorf("advpool: run already started for mission %d", missionID)
 	}
 	specs := BuildDAG(rs, d.Assign, sigs)
@@ -206,8 +225,25 @@ func (d *Driver) StartRun(missionID int64, rs RunSpec, sigs []repoindex.Signatur
 	if twID == 0 {
 		return fmt.Errorf("advpool: test-writer task not found after enqueue")
 	}
+	d.mu.Lock()
 	d.runs[missionID] = &runState{rs: rs, sigs: sigs, testWriterTaskID: twID}
+	d.mu.Unlock()
 	return nil
+}
+
+// RunStatus reports whether missionID's run has converged, and its Verdict if
+// so. found is false when the driver has no such run. A run is retained in
+// d.runs after convergence (never deleted), so a converged verdict stays
+// queryable after the runtime frees the active slot — which is exactly when a
+// caller polls for it. Safe to call concurrently with Tick (guarded by d.mu).
+func (d *Driver) RunStatus(missionID int64) (RunState, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	run, ok := d.runs[missionID]
+	if !ok {
+		return RunState{}, false
+	}
+	return RunState{Converged: run.verdict != nil, Verdict: run.verdict}, true
 }
 
 // Tick advances one run given the current task states. It returns a non-nil
@@ -227,12 +263,18 @@ func (d *Driver) StartRun(missionID int64, rs RunSpec, sigs []repoindex.Signatur
 //     by the human gate (blocking finding or below-threshold DevKillRate).
 //  5. No-progress backstop: a stalled run fails.
 func (d *Driver) Tick(ctx context.Context, missionID int64) (*Verdict, error) {
+	d.mu.Lock()
 	run, ok := d.runs[missionID]
+	var existing *Verdict
+	if ok {
+		existing = run.verdict
+	}
+	d.mu.Unlock()
 	if !ok {
 		return nil, fmt.Errorf("advpool: unknown run for mission %d (call StartRun first)", missionID)
 	}
-	if run.verdict != nil {
-		return run.verdict, nil
+	if existing != nil {
+		return existing, nil
 	}
 
 	if _, err := d.Q.PromoteReady(missionID); err != nil {
@@ -446,8 +488,10 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 		}
 	}
 
+	d.mu.Lock()
 	run.verdict = &v
-	return run.verdict, nil
+	d.mu.Unlock()
+	return &v, nil
 }
 
 // feedLeaderboard is the gate-earned fitness feed: one (model, role,

@@ -867,3 +867,55 @@ func TestTick_PerfectSuite_BlockingFinding_NeedsReview(t *testing.T) {
 		t.Fatalf("Status = %v, want needs-review (blocking finding open even at 100%% kill-rate)", v)
 	}
 }
+
+// RunStatus must report unknown/mid-run/converged correctly: not-found for an
+// id that was never started, found-but-not-converged mid-run, and
+// found-and-converged (with the real Verdict) once completeFullRun finishes.
+func TestRunStatusUnknownRunningConverged(t *testing.T) {
+	const mission int64 = 7
+	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}}
+	scorer := &fakeScorer{devKillRate: 0.9, devSurvivors: survivors, poolSurvivors: nil}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0]}}
+	d, _ := newTestDriver(t, mission, scorer, validator, 0.5)
+
+	if st, found := d.RunStatus(999); found || st.Converged {
+		t.Fatalf("unknown id: found=%v converged=%v, want false/false", found, st.Converged)
+	}
+	if st, found := d.RunStatus(mission); !found || st.Converged || st.Verdict != nil {
+		t.Fatalf("mid-run: found=%v converged=%v verdict=%v, want true/false/nil", found, st.Converged, st.Verdict)
+	}
+
+	v := completeFullRun(t, d, mission, "no vacuous tests found")
+
+	st, found := d.RunStatus(mission)
+	if !found || !st.Converged || st.Verdict == nil {
+		t.Fatalf("converged: found=%v converged=%v verdict=%v, want true/true/non-nil", found, st.Converged, st.Verdict)
+	}
+	if st.Verdict.Status != v.Status {
+		t.Fatalf("Verdict.Status = %q, want %q", st.Verdict.Status, v.Status)
+	}
+}
+
+// TestRunStatusRaceWithTick proves RunStatus is safe to call concurrently with
+// Tick — run the package with -race to catch an unsynchronized run.verdict or
+// map access. Poll RunStatus in a goroutine while the main goroutine drives the
+// run's ticks to convergence.
+func TestRunStatusRaceWithTick(t *testing.T) {
+	const mission int64 = 7
+	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}}
+	scorer := &fakeScorer{devKillRate: 0.9, devSurvivors: survivors, poolSurvivors: nil}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0]}}
+	d, _ := newTestDriver(t, mission, scorer, validator, 0.5)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 1000; i++ {
+			_, _ = d.RunStatus(mission)
+		}
+	}()
+
+	completeFullRun(t, d, mission, "no vacuous tests found")
+
+	<-done
+}

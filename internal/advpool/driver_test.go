@@ -535,7 +535,7 @@ type signCall struct {
 }
 
 // fakeSigner never touches the real certify chain: it just records what it
-// was asked to sign and returns a canned (recordID, head), or an error.
+// was asked to sign and returns a fixed canned (recordID, head), or an error.
 type fakeSigner struct {
 	calls []signCall
 	err   error
@@ -546,7 +546,7 @@ func (f *fakeSigner) SignVerdict(ctx context.Context, v Verdict) (int64, string,
 	if f.err != nil {
 		return 0, "", f.err
 	}
-	return int64(len(f.calls)), fmt.Sprintf("head-%d", len(f.calls)), nil
+	return 41, "head41", nil
 }
 
 // leaderboardCall records one LeaderboardSink.Record invocation.
@@ -622,6 +622,26 @@ func TestTick_Aggregate_Certified_SignsAndFeedsLeaderboard(t *testing.T) {
 		if c.role == RoleTestWriter && c.outcome != OutcomePass {
 			t.Fatalf("test-writer outcome = %q, want %q (ProvenMissed=1)", c.outcome, OutcomePass)
 		}
+	}
+}
+
+// The signed record id/head (from Signer.SignVerdict) must land on the
+// stored Verdict — Task 2's RunStatus and Task 4's advVerdict both read
+// these fields off the converged verdict.
+func TestVerdictCarriesSignedRecordID(t *testing.T) {
+	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}}
+	scorer := &fakeScorer{devKillRate: 0.9, devSurvivors: survivors, poolSurvivors: nil}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0]}}
+	d, _ := newTestDriver(t, 11, scorer, validator, 0.5)
+	d.Signer = &fakeSigner{}
+
+	v := completeFullRun(t, d, 11, "no vacuous tests found")
+
+	if v.RecordID != 41 {
+		t.Fatalf("RecordID = %d, want 41 (from the fake Signer)", v.RecordID)
+	}
+	if v.RecordHead != "head41" {
+		t.Fatalf("RecordHead = %q, want head41", v.RecordHead)
 	}
 }
 

@@ -72,6 +72,8 @@ type Verdict struct {
 	VacuousFindings []queue.Finding // test-critic's designed-to-pass/vacuous flags
 	ModelsByRole    map[string]string
 	Status          string // certified | needs-review
+	RecordID        int64  // the signed build-record id (0 if signing skipped/failed)
+	RecordHead      string // the record's ledger head
 }
 
 // CheckDecorrelation rejects an assignment where test-critic and test-writer
@@ -429,9 +431,12 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 		criticFindings, d.Threshold, d.blockingFindingOpen(findings))
 
 	if d.Signer != nil {
-		if _, _, serr := d.Signer.SignVerdict(ctx, v); serr != nil {
+		recordID, head, serr := d.Signer.SignVerdict(ctx, v)
+		if serr != nil {
 			return nil, fmt.Errorf("advpool: sign verdict: %w", serr)
 		}
+		v.RecordID = recordID
+		v.RecordHead = head
 		// Gate-earned fitness (soundness #6): the leaderboard is fed ONLY from a
 		// CERTIFIED verdict — a run parked for human review has not earned fitness
 		// for anyone yet. A needs-review record is still signed (evidence), but no

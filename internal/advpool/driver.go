@@ -104,6 +104,11 @@ type runState struct {
 	poolScored   bool
 	provenMissed int
 
+	// testWriterMoot is set when a perfect dev suite (0 survivors) skipped the
+	// test-writer entirely: the assigned model never ran, so it must NOT be fed
+	// to the leaderboard as a failure for a task it never attempted.
+	testWriterMoot bool
+
 	verdict *Verdict
 }
 
@@ -308,9 +313,14 @@ func (d *Driver) tickDevAdequacy(ctx context.Context, missionID int64, run *runS
 		// bad suite but never certify a perfect one.
 		run.poolScored = true
 		run.provenMissed = 0
+		run.testWriterMoot = true // it never ran — keep it off the leaderboard
 		if tw, terr := d.Q.TaskByID(run.testWriterTaskID); terr == nil && tw != nil && tw.Status == queue.StatusPending {
-			if _, cerr := d.Q.CancelTask(tw.ID); cerr != nil {
+			cancelled, cerr := d.Q.CancelTask(tw.ID)
+			if cerr != nil {
 				return fmt.Errorf("advpool: cancel moot test-writer (perfect suite): %w", cerr)
+			}
+			if !cancelled {
+				log.Printf("advpool: run %d: moot test-writer task %d was not pending at cancel time (benign race)", missionID, tw.ID)
 			}
 		}
 		return nil
@@ -427,7 +437,7 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 		// for anyone yet. A needs-review record is still signed (evidence), but no
 		// model gets leaderboard credit until the gate actually certified the run.
 		if d.Leaderboard != nil && v.Status == StatusCertified {
-			d.feedLeaderboard(v)
+			d.feedLeaderboard(v, run.testWriterMoot)
 		}
 	}
 
@@ -438,7 +448,7 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 // feedLeaderboard is the gate-earned fitness feed: one (model, role,
 // outcome) call per role, derived from the CERTIFIED (Scorer-scored, gated,
 // signed) result only — never from a worker's self-report.
-func (d *Driver) feedLeaderboard(v Verdict) {
+func (d *Driver) feedLeaderboard(v Verdict, testWriterMoot bool) {
 	outcome := func(ok bool) string {
 		if ok {
 			return OutcomePass
@@ -446,10 +456,17 @@ func (d *Driver) feedLeaderboard(v Verdict) {
 		return OutcomeFail
 	}
 	// test-writer: did its authored test kill the survivors it was targeted at?
-	d.Leaderboard.Record(v.ModelsByRole[RoleTestWriter], RoleTestWriter, outcome(v.ProvenMissed > 0))
-	// mutant-generator: did it produce mutants that compiled and exposed at
-	// least one survivor (i.e. mutants the dev's own tests didn't catch)?
-	d.Leaderboard.Record(v.ModelsByRole[RoleMutantGenerator], RoleMutantGenerator, outcome(v.MutantsTotal > 0 && v.Survivors > 0))
+	// Skipped entirely when it never ran (a perfect dev suite left no survivors
+	// to target) — a model must never be recorded as failing a task it didn't
+	// attempt, or a strong suite would systematically penalize a good writer.
+	if !testWriterMoot {
+		d.Leaderboard.Record(v.ModelsByRole[RoleTestWriter], RoleTestWriter, outcome(v.ProvenMissed > 0))
+	}
+	// mutant-generator: it did its job if it produced usable (compiling) mutants
+	// at all — whether those mutants then SURVIVE is the dev suite's business,
+	// not the generator's, so a perfect suite killing them is not a generator
+	// failure.
+	d.Leaderboard.Record(v.ModelsByRole[RoleMutantGenerator], RoleMutantGenerator, outcome(v.MutantsTotal > 0))
 	// test-critic: did its findings hold (it actually flagged something)?
 	d.Leaderboard.Record(v.ModelsByRole[RoleTestCritic], RoleTestCritic, outcome(len(v.VacuousFindings) > 0))
 }

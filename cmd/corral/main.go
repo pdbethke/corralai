@@ -379,10 +379,27 @@ func hostAllow(hosts []string, next http.Handler) http.Handler {
 	})
 }
 
-// startFleetSync periodically replicates the curated reporting set to MotherDuck
-// (or any remote DuckDB) for fleet observability — when CORRALAI_MOTHERDUCK is set.
-// Retention (Compact) runs in the SAME goroutine on a coarse cadence so it is
-// serialized with Sync and never runs concurrently with it.
+// syncThrottle keeps persistent fleet-sync failures (e.g. a MotherDuck trial
+// that ended) from spamming the log every interval: the first failure logs, then
+// at most every logEvery-th, and the first success after failures logs recovery.
+type syncThrottle struct {
+	logEvery int
+	fails    int
+}
+
+func (s *syncThrottle) shouldLogFailure() bool {
+	s.fails++
+	return s.fails == 1 || (s.logEvery > 0 && (s.fails-1)%s.logEvery == 0)
+}
+
+// recordSuccess resets the failure run and returns true iff this success ended a
+// prior failure streak (so the caller can log a single "recovered" line).
+func (s *syncThrottle) recordSuccess() bool {
+	recovered := s.fails > 0
+	s.fails = 0
+	return recovered
+}
+
 // startFleetSync periodically replicates the curated reporting set to MotherDuck
 // (or any remote DuckDB) for fleet observability — when CORRALAI_MOTHERDUCK is set.
 // Retention (Compact) runs in the SAME goroutine on a coarse cadence so it is
@@ -435,6 +452,7 @@ func startFleetSync(cfg fleet.SyncConfig, registrationRetry func() bool) {
 		defer t.Stop()
 		var tick int
 		regDone := registrationRetry == nil // nil means no retry needed
+		th := &syncThrottle{logEvery: 20}   // ~once/10min at the 30s default
 		for range t.C {
 			// Registration retry: if startup registration failed transiently (MotherDuck
 			// was briefly unreachable), retry here — serialized with Sync so there is no
@@ -443,9 +461,16 @@ func startFleetSync(cfg fleet.SyncConfig, registrationRetry func() bool) {
 				regDone = registrationRetry()
 			}
 			if n, err := fleet.Sync(cfg, target, brainID); err != nil {
-				log.Printf("fleet: sync error: %v", err)
-			} else if n > 0 {
-				log.Printf("fleet: synced %d reporting rows to %s", n, target) // #nosec G706 -- operator-controlled config, not user input
+				if th.shouldLogFailure() {
+					log.Printf("fleet: sync error (%d consecutive): %v", th.fails, err)
+				}
+			} else {
+				if th.recordSuccess() {
+					log.Printf("fleet: sync recovered")
+				}
+				if n > 0 {
+					log.Printf("fleet: synced %d reporting rows to %s", n, target) // #nosec G706 -- operator-controlled config, not user input
+				}
 			}
 			// Compact runs in this same goroutine (serialized with Sync) on a coarse
 			// cadence. retentionEvery==0 means retention was disabled at startup.
@@ -752,10 +777,13 @@ func main() {
 				// succeeds. A brain that started while MotherDuck was briefly down will
 				// register once it comes back — the comment above is now actually true.
 				capturedKP, capturedAllowlist := kp, allowlist
+				regRetryThrottle := &syncThrottle{logEvery: 20} // ~once/10min at the 30s default tick
 				regRetry = func() bool {
 					out, err := fleet.RegisterBrain(fleetTarget, fleetBrainID, attest.PubB64(capturedKP.Pub), capturedAllowlist, time.Now())
 					if err != nil {
-						log.Printf("fleet: registration retry error (non-fatal): %v", err)
+						if regRetryThrottle.shouldLogFailure() {
+							log.Printf("fleet: registration retry error (non-fatal, %d consecutive): %v", regRetryThrottle.fails, err)
+						}
 						return false // keep retrying on next tick
 					}
 					switch out {

@@ -87,3 +87,28 @@ func TestRetentionCadenceCalc(t *testing.T) {
 		}
 	}
 }
+
+// TestFleetFailureThrottle verifies syncThrottle logs the first failure, then
+// throttles to every Nth, and signals recovery exactly once when a success
+// ends a failure streak.
+func TestFleetFailureThrottle(t *testing.T) {
+	th := &syncThrottle{logEvery: 20}
+	// 1st failure logs; next 19 don't; 21st (every 20th) does; a success resets + signals recovery.
+	if !th.shouldLogFailure() {
+		t.Fatal("first failure must log")
+	}
+	for i := 0; i < 19; i++ {
+		if th.shouldLogFailure() {
+			t.Fatalf("failure %d must be throttled", i+2)
+		}
+	}
+	if !th.shouldLogFailure() {
+		t.Fatal("the 20th-later failure must log")
+	}
+	if rec := th.recordSuccess(); !rec {
+		t.Fatal("first success after failures must signal recovery")
+	}
+	if rec := th.recordSuccess(); rec {
+		t.Fatal("a success with no prior failure must not signal recovery")
+	}
+}

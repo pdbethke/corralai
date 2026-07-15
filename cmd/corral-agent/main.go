@@ -22,6 +22,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/admission"
 	"github.com/pdbethke/corralai/internal/agentrole"
+	"github.com/pdbethke/corralai/internal/brainclient"
 	"github.com/pdbethke/corralai/internal/sandbox"
 	"golang.org/x/net/websocket"
 	"net/http"
@@ -200,7 +201,22 @@ func main() {
 	setupExec()
 
 	cl := mcp.NewClient(&mcp.Implementation{Name: "corral-agent", Version: "0"}, nil)
-	sess, err := cl.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: brainURL}, nil)
+	// Connect so the agent can work a REAL brain — auth-enabled AND reached over
+	// a proxy/tunnel — not just an auth-disabled loopback dev brain:
+	//   1. Attach the CORRALAI_BRAIN_KEY bearer (else the MCP initialize
+	//      handshake gets Unauthorized on the prod brain). Empty token (dev
+	//      brain) => no header, unchanged.
+	//   2. DisableStandaloneSSE: the agent's claim/complete loop is pure
+	//      request/response (it polls claim_task); it needs no server-push. The
+	//      standalone server->client SSE GET HANGS through a CF tunnel, wedging
+	//      Connect before the agent ever registers. brainclient.Dial (the
+	//      CLI/console path that already works over the tunnel) disables it for
+	//      the same reason — mirror it here.
+	transport := &mcp.StreamableClientTransport{Endpoint: brainURL, DisableStandaloneSSE: true}
+	if token := agentSecret("CORRALAI_BRAIN_KEY"); token != "" {
+		transport.HTTPClient = brainclient.AuthedHTTPClient(token)
+	}
+	sess, err := cl.Connect(ctx, transport, nil)
 	if err != nil {
 		fmt.Println("connect brain:", err)
 		os.Exit(1)
@@ -575,6 +591,16 @@ func isStructuredRole(role string) bool {
 	return role == "test-writer" || role == "mutant-generator"
 }
 
+// isPoolCriticRole is the adversarial pool's freeform critic. Unlike a builder
+// it neither writes files nor runs commands — it reads the dev tests handed to
+// it and files findings — so it gets a focused prompt, a restricted toolset,
+// and a tight loop rather than the general 15-step builder loop (which a model
+// otherwise burns on report_thought / groping for tools it doesn't have).
+func isPoolCriticRole(role string) bool { return role == "test-critic" }
+
+// critFreeformSteps bounds the critic's tool loop (the general path is 15).
+const critFreeformSteps = 6
+
 // effectiveTaskRole is the role that drives per-task behavior (notably the
 // structured fast path): the CLAIMED task's own role when it has one, else the
 // worker's own role. A generalist ("any") worker that claims a role-typed pool
@@ -671,6 +697,20 @@ func runTask(ctx context.Context, backend Backend, name, role, ws string, brain 
 			return annotate("error: " + err.Error()), nil
 		}
 		return annotate(m.Content), nil
+	}
+	// Pool test-critic fast path: a focused critique-only prompt, a
+	// restricted toolset (report_finding/report_thought only — no
+	// write_file/run_command/edit_file/claim_paths for it to grope for or
+	// hallucinate substitutes of), and a tight step budget. See
+	// runCriticLoop's doc comment for why this exists.
+	if isPoolCriticRole(role) {
+		summary, err := runCriticLoop(backend, name, role, title, instruction, brain, missionID, taskID)
+		if err != nil {
+			// runCriticLoop only ever returns ErrModelUnreachable here — propagate
+			// so runQueueLoop releases the claim instead of completing past a down critic.
+			return "", err
+		}
+		return annotate(summary), nil
 	}
 	extraPrompt := ""
 	if role == "tester" {
@@ -1214,6 +1254,104 @@ func agentTools(includeSimEdit bool) []any {
 			map[string]any{"text": str}, "text"),
 	)
 	return tools
+}
+
+// criticTools returns the test-critic's restricted toolset: report_finding
+// and report_thought only, filtered from the full agentTools schema (same
+// shape backend.Chat expects) so the critic can't grope for write_file/
+// run_command/edit_file/claim_paths — or hallucinate a substitute, as
+// observed live against gemini-pro (an unregistered "repo_snapshot" call).
+func criticTools() []any {
+	allow := map[string]bool{"report_finding": true, "report_thought": true}
+	var tools []any
+	for _, tl := range agentTools(false) {
+		m, ok := tl.(map[string]any)
+		if !ok {
+			continue
+		}
+		fnMap, ok := m["function"].(map[string]any)
+		if !ok {
+			continue
+		}
+		if name, _ := fnMap["name"].(string); allow[name] {
+			tools = append(tools, tl)
+		}
+	}
+	return tools
+}
+
+// runCriticLoop runs the test-critic to a conclusion: read the dev tests (in
+// `instruction`), file a report_finding per vacuous test, then stop. This is
+// deliberately NOT the general 15-step builder loop: a focused prompt +
+// restricted tools (report_finding/report_thought only) + a tight step
+// budget (critFreeformSteps) + a report_thought cap keep it from burning
+// steps on reflection or hallucinated tools without ever concluding — the
+// bug this fixes was observed live where a freeform critic ran all 15 steps
+// calling report_thought and never filed a finding or completed.
+func runCriticLoop(backend Backend, name, role, title, instruction string, brain func(string, map[string]any) string, missionID, taskID int64) (string, error) {
+	sys := fmt.Sprintf(`You are %q, a TEST CRITIC in an adversarial audit. Your ONLY job: read the developer's tests provided below and decide whether any are vacuous, tautological, or designed to pass without exercising the goal.
+
+You have EXACTLY two tools: report_finding (file one flaw — name the test and say what it fails to check) and report_thought (optional, at most twice). You CANNOT write files or run commands; do not attempt to.
+
+Procedure: (1) read the tests; (2) call report_finding once per vacuous test — or none if the tests are sound; (3) reply with a one-line summary to finish. Do not narrate. Conclude within a few steps.
+
+Task: %s
+%s`, name, title, instruction)
+	messages := []omsg{{Role: "system", Content: sys}, {Role: "user", Content: "Begin. Read the tests, file findings, then finish."}}
+	tools := criticTools()
+	last := "reviewed the dev tests"
+	thoughts := 0
+	for step := 0; step < critFreeformSteps; step++ {
+		brain("heartbeat", map[string]any{"status": "critiquing"})
+		m, err := backend.Chat(messages, tools)
+		if err != nil {
+			if errors.Is(err, ErrModelUnreachable) {
+				// Propagate up so runQueueLoop can release the claim and let the
+				// reaper reassign the task to an agent with a reachable model —
+				// otherwise a down critic model would complete-with-error and the
+				// mission could converge/certify with no critic having run.
+				return "", ErrModelUnreachable
+			}
+			fmt.Printf("   ! model: %v\n", err)
+			return "critic error: " + err.Error(), nil
+		}
+		callName, args, ok := extractCall(m)
+		if !ok {
+			if c := oneline(m.Content); c != "" {
+				last = c
+			}
+			fmt.Printf("   · %s (test-critic) considers the review done: %s\n", name, last)
+			return last, nil
+		}
+		if args == nil {
+			args = map[string]any{}
+		}
+		if callName == "report_finding" {
+			args["mission_id"] = missionID
+			args["task_id"] = taskID
+		}
+		if callName == "report_thought" {
+			args["mission_id"] = missionID
+			args["role"] = role
+			args["name"] = name
+			thoughts++
+		}
+		result := dispatch(name, role, "", brain, callName, args)
+		fmt.Printf("   → %s(%s)  ⇒  %s\n", callName, oneline(jsons(args)), oneline(result))
+		if callName != "report_thought" {
+			brain("report_activity", map[string]any{"role": role, "tool": callName, "detail": oneline(jsons(args))})
+		}
+		// After 2 report_thoughts, stop accepting reflection — push to conclude
+		// rather than let the model spin on report_thought to the step budget.
+		nudge := result
+		if callName == "report_thought" && thoughts >= 2 {
+			nudge = "You have reflected enough. Now call report_finding for each vacuous test (or none if the tests are sound), then reply with a one-line summary to finish."
+		}
+		messages = append(messages,
+			omsg{Role: "assistant", Content: assistantEcho(m.Content, callName, args)},
+			omsg{Role: "user", Content: fmt.Sprintf("[result of %s] %s", callName, nudge)})
+	}
+	return last, nil
 }
 
 func jsons(v any) string { b, _ := json.Marshal(v); return string(b) }

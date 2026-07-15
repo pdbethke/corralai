@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"time"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/queue"
@@ -120,6 +121,10 @@ type runState struct {
 	testWriterMoot bool
 
 	verdict *Verdict
+
+	// startedAt is the run's start time (from Driver.Now, set once in
+	// StartRun and never mutated), used by the RunDeadline backstop below.
+	startedAt time.Time
 }
 
 // Driver runs one or more adversarial-pool runs' tick state machines over
@@ -162,6 +167,22 @@ type Driver struct {
 	// mission.Engine.NoProgressTicks).
 	NoProgressTicks int
 
+	// Now returns the current time; injected so the deadline logic below is
+	// pure/unit-testable with a fake clock (the driver/store convention
+	// forbids a bare time.Now() call in the pure logic). Defaulted to
+	// time.Now in NewDriver when left nil.
+	Now func() time.Time
+
+	// RunDeadline is the wall-clock backstop checkNoProgress can't be: it
+	// explicitly stands down while any task is StatusClaimed ("slow is not
+	// stuck"), so a claimed-but-wedged task would otherwise stall a run
+	// forever. 0 disables it. When a run's wall-clock age (Now() minus
+	// startedAt) exceeds RunDeadline before convergence, Tick converges the
+	// run to a signed needs-review verdict noting the timeout — honest and
+	// terminal, so the CLI gets an answer and the single active slot frees.
+	// A sane non-zero default is set in the brain wiring (StartAdversarialPool).
+	RunDeadline time.Duration
+
 	// mu guards the runs map lookups and each run's verdict pointer against
 	// concurrent RunStatus callers (the get_adversarial_run MCP handler runs
 	// on a different goroutine than the tick loop). It is NEVER held across
@@ -185,7 +206,7 @@ func NewDriver(q *queue.Store, scorer Scorer, validator Validator, assign RoleAs
 	if threshold <= 0 {
 		return nil, fmt.Errorf("advpool: threshold must be > 0 (got %v) — a non-positive threshold would auto-certify any dev suite, defeating the human gate", threshold)
 	}
-	return &Driver{
+	d := &Driver{
 		Q: q, Scorer: scorer, Validator: validator, Assign: assign,
 		Threshold:       threshold,
 		BlockSeverity:   "high",
@@ -193,7 +214,11 @@ func NewDriver(q *queue.Store, scorer Scorer, validator Validator, assign RoleAs
 		runs:            map[int64]*runState{},
 		noProgress:      map[int64]int{},
 		lastFingerprint: map[int64]string{},
-	}, nil
+	}
+	if d.Now == nil {
+		d.Now = time.Now
+	}
+	return d, nil
 }
 
 // StartRun enqueues a run's DAG (BuildDAG(rs, d.Assign, sigs)) under missionID
@@ -226,7 +251,7 @@ func (d *Driver) StartRun(missionID int64, rs RunSpec, sigs []repoindex.Signatur
 		return fmt.Errorf("advpool: test-writer task not found after enqueue")
 	}
 	d.mu.Lock()
-	d.runs[missionID] = &runState{rs: rs, sigs: sigs, testWriterTaskID: twID}
+	d.runs[missionID] = &runState{rs: rs, sigs: sigs, testWriterTaskID: twID, startedAt: d.Now()}
 	d.mu.Unlock()
 	return nil
 }
@@ -275,6 +300,25 @@ func (d *Driver) Tick(ctx context.Context, missionID int64) (*Verdict, error) {
 	}
 	if existing != nil {
 		return existing, nil
+	}
+
+	// Wall-clock deadline: the backstop checkNoProgress can't be, since it
+	// stands down whenever any task is claimed ("slow is not stuck"). On
+	// exceed, converge to a signed needs-review verdict now — honest and
+	// terminal — so the CLI gets an answer and the slot frees.
+	if d.RunDeadline > 0 && d.Now().Sub(run.startedAt) > d.RunDeadline {
+		v := d.timeoutVerdict(run)
+		if d.Signer != nil {
+			recordID, head, serr := d.Signer.SignVerdict(ctx, v)
+			if serr != nil {
+				return nil, fmt.Errorf("advpool: sign timeout verdict: %w", serr)
+			}
+			v.RecordID, v.RecordHead = recordID, head
+		}
+		d.mu.Lock()
+		run.verdict = &v
+		d.mu.Unlock()
+		return &v, nil
 	}
 
 	if _, err := d.Q.PromoteReady(missionID); err != nil {
@@ -492,6 +536,25 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	run.verdict = &v
 	d.mu.Unlock()
 	return &v, nil
+}
+
+// timeoutVerdict builds the signed needs-review verdict for a run that did
+// not converge within RunDeadline. It uses whatever partial data was scored
+// (dev kill-rate if the dev-adequacy step ran, else zero) and is forced to
+// StatusNeedsReview — a timed-out run is NEVER certified, and (mirroring
+// tickAggregate's leaderboard gate, which only fires on StatusCertified) it
+// earns no leaderboard fitness for any model: a stalled run proved nothing.
+func (d *Driver) timeoutVerdict(run *runState) Verdict {
+	return Verdict{
+		Repo:         run.rs.Repo,
+		Commit:       run.rs.Commit,
+		DevKillRate:  run.devKillRate,
+		MutantsTotal: run.mutantsTotal,
+		Survivors:    len(run.devSurvivors),
+		ProvenMissed: run.provenMissed,
+		ModelsByRole: map[string]string(d.Assign),
+		Status:       StatusNeedsReview,
+	}
 }
 
 // feedLeaderboard is the gate-earned fitness feed: one (model, role,

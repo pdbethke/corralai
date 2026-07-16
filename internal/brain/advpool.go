@@ -577,6 +577,21 @@ func (rt *AdvPoolRuntime) tick(ctx context.Context) {
 	if verdict != nil {
 		log.Printf("advpool: run %d converged: status=%s dev_kill_rate=%.2f mutants=%d survivors=%d proven_missed=%d",
 			id, verdict.Status, verdict.DevKillRate, verdict.MutantsTotal, verdict.Survivors, verdict.ProvenMissed)
+		// The tracking mission is created status='running' and never
+		// transitioned otherwise; MissionHistoryList skips running/paused
+		// missions, so an un-transitioned pool mission never surfaces in
+		// /api/history and the export meta comes out 0/0/0 for a run that
+		// actually finished. Map the verdict onto a terminal status so it
+		// gets counted.
+		status := "needs-review"
+		if verdict.Status == advpool.StatusCertified {
+			status = "certified"
+		}
+		if rt.missions != nil {
+			if err := rt.missions.SetMissionStatus(id, status); err != nil {
+				log.Printf("advpool: run %d set mission status %q: %v", id, status, err)
+			}
+		}
 		rt.mu.Lock()
 		if rt.activeID == id {
 			rt.activeID = 0

@@ -286,6 +286,58 @@ func TestAdvPoolRuntimeRunStatusDelegates(t *testing.T) {
 	}
 }
 
+// TestAdvPoolConvergenceSetsMissionTerminalStatus proves tick transitions the
+// pool's tracking mission out of "running" once the driver converges — the
+// gap that left MissionHistoryList (which skips running/paused missions)
+// excluding every pool run, so /api/history's export meta came out
+// task_count=0/finding_count=0/duration=0 for runs that had actually
+// finished. Forces convergence deterministically via the RunDeadline
+// backstop (mirrors advpool.TestRunDeadlineProducesNeedsReviewVerdict) so
+// this test never depends on the stub scorer/validator's scoring behavior —
+// a timed-out run always converges to a signed StatusNeedsReview verdict.
+func TestAdvPoolConvergenceSetsMissionTerminalStatus(t *testing.T) {
+	rt, _ := newTestAdvPoolRuntime(t, nil)
+
+	runID, err := rt.StartRun(testRunSpecIn())
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	m, err := rt.missions.Mission(runID)
+	if err != nil {
+		t.Fatalf("Mission(%d) before tick: %v", runID, err)
+	}
+	if m.Status != "running" {
+		t.Fatalf("tracking mission status before convergence = %q, want %q", m.Status, "running")
+	}
+
+	// Force the RunDeadline backstop: no task ever completes, so the only
+	// way this run converges is the wall-clock timeout, which always yields
+	// a signed StatusNeedsReview verdict (never certified).
+	rt.driver.RunDeadline = time.Millisecond
+	rt.driver.Now = func() time.Time { return time.Now().Add(time.Hour) }
+
+	rt.tick(context.Background())
+
+	got, err := rt.missions.Mission(runID)
+	if err != nil {
+		t.Fatalf("Mission(%d) after tick: %v", runID, err)
+	}
+	if got.Status != "certified" && got.Status != "needs-review" {
+		t.Fatalf("converged pool mission must be terminal, got %q", got.Status)
+	}
+	if got.Status != advpool.StatusNeedsReview {
+		t.Fatalf("a RunDeadline timeout must map to %q, got %q", advpool.StatusNeedsReview, got.Status)
+	}
+
+	rt.mu.Lock()
+	active := rt.activeID
+	rt.mu.Unlock()
+	if active != 0 {
+		t.Fatalf("tick must clear the active slot on convergence, got activeID=%d", active)
+	}
+}
+
 // TestGetAdversarialRunToolRequiresAdmin proves get_adversarial_run is
 // isHumanAdmin-gated exactly like start_adversarial_run (mirrors
 // TestStartAdversarialRunTool_RequiresAdmin's setup verbatim).

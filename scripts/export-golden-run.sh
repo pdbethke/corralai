@@ -188,24 +188,29 @@ if not inference.startswith("vendor cloud"):
     except Exception:
         pass  # no NVIDIA GPU / no nvidia-smi -> omit, never guess
 
-try:
-    with open("/proc/cpuinfo", encoding="utf-8") as f:
-        for line in f:
-            if line.lower().startswith("model name"):
-                out["cpu"] = re.sub(r"\s+Processor$", "", line.split(":", 1)[1].strip())
-                break
-except OSError:
-    pass
+# CPU/RAM, like the GPU above, describe the LOCAL host — meaningful only when
+# this host ran the inference. For a "vendor cloud" run (frontier APIs / hosted
+# models) the inference happened elsewhere, so probing the export host's CPU/RAM
+# would MISLABEL the run with hardware that ran nothing. Skip them, same as GPU.
+if not inference.startswith("vendor cloud"):
+    try:
+        with open("/proc/cpuinfo", encoding="utf-8") as f:
+            for line in f:
+                if line.lower().startswith("model name"):
+                    out["cpu"] = re.sub(r"\s+Processor$", "", line.split(":", 1)[1].strip())
+                    break
+    except OSError:
+        pass
 
-try:
-    with open("/proc/meminfo", encoding="utf-8") as f:
-        kb = int(next(l for l in f if l.startswith("MemTotal")).split()[1])
-    gib = kb / 1048576
-    # marketing size: the nearest stick-count capacity, not the OS-visible total
-    sizes = [2, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024]
-    out["ram"] = f"{min(sizes, key=lambda s: abs(s - gib))}GB"
-except (OSError, StopIteration):
-    pass
+    try:
+        with open("/proc/meminfo", encoding="utf-8") as f:
+            kb = int(next(l for l in f if l.startswith("MemTotal")).split()[1])
+        gib = kb / 1048576
+        # marketing size: the nearest stick-count capacity, not the OS-visible total
+        sizes = [2, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024]
+        out["ram"] = f"{min(sizes, key=lambda s: abs(s - gib))}GB"
+    except (OSError, StopIteration):
+        pass
 
 goos = plat.system().lower()
 goarch = {"x86_64": "amd64", "aarch64": "arm64", "arm64": "arm64"}.get(plat.machine(), plat.machine())

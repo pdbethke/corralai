@@ -135,6 +135,21 @@ class DenyListPlantedViolations(unittest.TestCase):
 class DenyListControls(unittest.TestCase):
     """Things that must NOT trip the deny-list."""
 
+    def test_go_format_verb_is_not_a_drive_path(self):
+        # A Go format string `%q:\n%s` (verb %q, colon, newline escape) is NOT a
+        # `Q:\` Windows path — the lone escape letter must not false-positive.
+        for text in (r'Fatalf("missing %q:\n%s", want, out)',
+                     r'Fatalf(\"missing %q:\\n%s\", want, out)',  # JSON-escaped
+                     r'print("x:\t"+v)'):
+            offenses = scrub.scan_deny(text, '', '')
+            self.assertFalse(
+                any('drive-letter' in label for label, _ in offenses),
+                f'{text!r} is an escape sequence, not a drive path',
+            )
+        # ...but a real drive path is still caught (regression guard).
+        offenses = scrub.scan_deny(r'C:\network\share here', '', '')
+        self.assertTrue(any('drive-letter' in label for label, _ in offenses))
+
     def test_rfc1918_ip_is_clean(self):
         offenses = scrub.scan_deny('host 10.0.0.5 answered', '', '')
         self.assertFalse(any('IP' in label for label, _ in offenses))

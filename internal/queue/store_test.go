@@ -229,6 +229,54 @@ func key(i int) string { return "t" + string(rune('A'+i%26)) + string(rune('0'+i
 
 func restoreNow() { now = realNow }
 
+func TestSelfHealRespectsRoleScope(t *testing.T) {
+	defer restoreNow()
+	clock := 1000.0
+	now = func() float64 { return clock }
+
+	s := open(t)
+	mid := int64(1)
+	// Two tasks: one test-critic, one mutant-generator.
+	if err := s.Enqueue(mid, []TaskSpec{
+		{Key: "test-critic", Role: "test-critic", Title: "critique", Instruction: "x"},
+		{Key: "mutant-generator", Role: "mutant-generator", Title: "mutate", Instruction: "x"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.PromoteReady(mid); err != nil {
+		t.Fatal(err)
+	}
+
+	// bee "shared" claims the test-critic task with roles=[test-critic].
+	tc, err := s.ClaimNextAs("shared", "inst-A", []string{"test-critic"}, 60)
+	if err != nil || tc == nil || tc.Role != "test-critic" {
+		t.Fatalf("setup claim of test-critic failed: %v %+v", err, tc)
+	}
+
+	// Let the lease expire.
+	clock = 1100
+
+	// Same bee "shared" now polls claiming for roles=[mutant-generator] (a
+	// different worker, same principal). It must NOT self-heal the orphaned
+	// test-critic task — that's outside the roles it's claiming for. It should
+	// instead get the mutant-generator task (fresh) or nothing test-critic.
+	got, err := s.ClaimNextAs("shared", "inst-B", []string{"mutant-generator"}, 60)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != nil && got.Role == "test-critic" {
+		t.Fatalf("self-heal handed a test-critic task to a mutant-generator claim: %+v", got)
+	}
+	// And a test-critic-scoped claim by the same bee SHOULD recover it.
+	rec, err := s.ClaimNextAs("shared", "inst-A", []string{"test-critic"}, 60)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec == nil || rec.Role != "test-critic" {
+		t.Fatalf("role-matching self-heal should recover the orphaned test-critic task, got %+v", rec)
+	}
+}
+
 func TestVerifyRoundTripAndClaimedMission(t *testing.T) {
 	s := openTestStore(t)
 	if err := s.Enqueue(7, []TaskSpec{

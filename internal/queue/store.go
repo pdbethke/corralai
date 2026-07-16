@@ -360,14 +360,25 @@ func (s *Store) ClaimNextAs(bee, instance string, roles []string, leaseSeconds f
 		// would re-dispatch work the halt was meant to stop. A genuinely in-flight
 		// claim still finishes via Complete (unaffected); the bee re-acquires a
 		// re-issue on resume. Cancel, being terminal, never re-issues at all.
-		err := tx.QueryRow(
-			`SELECT id,mission_id,key,role,title,instruction,depends_on,created_ts,model FROM tasks
+		selfHealQ := `SELECT id,mission_id,key,role,title,instruction,depends_on,created_ts,model FROM tasks
 			 WHERE status=? AND claimed_by=?
 			   AND ((claimed_instance=? AND ?!='') OR claim_expires_ts < ?)
-			   AND mission_id NOT IN (SELECT mission_id FROM mission_halts)
-			 ORDER BY claimed_ts, id LIMIT 1`,
-			StatusClaimed, bee, instance, instance, t0,
-		).Scan(&t.ID, &t.MissionID, &t.Key, &t.Role, &t.Title, &t.Instruction, &depJSON, &t.CreatedTS, &t.Model)
+			   AND mission_id NOT IN (SELECT mission_id FROM mission_halts)`
+		shArgs := []any{StatusClaimed, bee, instance, instance, t0}
+		if len(roles) > 0 {
+			// role IN (roles..., '') — matches the fresh-claim SELECT's scoping:
+			// a bee only self-heals orphaned tasks matching the roles of THIS
+			// claim call, not any task it happens to have claimed under the
+			// same (possibly shared) bee identity.
+			ph := strings.TrimSuffix(strings.Repeat("?,", len(roles)+1), ",")
+			selfHealQ += ` AND role IN (` + ph + `)`
+			for _, r := range roles {
+				shArgs = append(shArgs, r)
+			}
+			shArgs = append(shArgs, "")
+		}
+		selfHealQ += ` ORDER BY claimed_ts, id LIMIT 1`
+		err := tx.QueryRow(selfHealQ, shArgs...).Scan(&t.ID, &t.MissionID, &t.Key, &t.Role, &t.Title, &t.Instruction, &depJSON, &t.CreatedTS, &t.Model)
 		if err != nil && err != sql.ErrNoRows {
 			return nil, err
 		}

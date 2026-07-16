@@ -35,33 +35,34 @@ const minutes = Math.round((meta.duration_seconds || 0) / 60);
 ---
 <section id="hero">
   <div class="hero-copy">
-    <h1>A headless brain that corrals a herd of AI agents — mixing any models, local and frontier — into one mission, over a shared pool of knowledge that grows as they learn.</h1>
+    <h1>No one may be judge in their own cause. So Corral doesn't build your code — it <em>certifies a change by execution</em>: a role-separated herd runs the checks in a jail, grades the tests meant to guard the code, and signs a tamper-evident verdict. Not a builder — a gate.</h1>
     <p class="pitch">
-      Corral is coordination infrastructure, not a demo reel. Give it one
-      directive and it decomposes the work into a mission, hands tasks to a
-      herd of agents that can each run a <em>different</em> model — cheap local
-      agents (Ollama, 7B and up) for the grunt work, frontier agents for the
-      hard reasoning, side by side in the same mission, with no vendor
-      lock-in — inside real fences: every command runs jailed, and the only
-      way code leaves is a reviewed pull request. The
-      herd verifies its own work against a deterministic gate, re-plans when
-      it hits problems, and — the part that compounds — every agent draws on
-      one shared pool of memory and skills and writes back what it learns, so
-      the whole herd gets sharper with every mission. Every admin action sits
-      behind a human gate.
+      Corral is the reactive audit you put <em>downstream</em> of every AI
+      coding tool — agnostic to whoever, or whatever, wrote the change. Point
+      it at one and an adversarial, role-separated herd goes to work: it
+      mutates the code to plant real faults and checks whether the developer's
+      own tests catch them — a test that catches nothing proves nothing — while
+      a <em>decorrelated</em> critic, a different model than the one that wrote
+      the exposing test, reads the suite for theater. The verdict is
+      <em>measured by execution in a jail, never taken on a model's word</em>.
+      Any model, local 7B to frontier, mixed in one run. Human-gated and
+      fail-closed; every run recorded, replayable, and signed into a record you
+      verify offline. (Honest floor: <code>corral certify</code> is the shipped
+      atom; the adversarial pool is experimental and off by default; the broader
+      engine is ahead — we'll always tell you which.)
     </p>
     <p class="proof-row">
-      <span>Any model — local or frontier — mixed in one mission</span>
+      <span>Certified <em>by execution</em> — run in a jail, not taken on a model's word</span>
       <span aria-hidden="true">·</span>
-      <span>Bring your own billing: metered API keys <em>or</em> a subscription CLI (Codex, Claude Max)</span>
+      <span><em>Decorrelated</em> — the judge is never the author; enforced, not hoped</span>
       <span aria-hidden="true">·</span>
-      <span>Agents propose, you approve — reviewed-PR merges, human-gated admin</span>
+      <span><em>Signed</em> &amp; offline-verifiable — tamper-evident, human-gated</span>
     </p>
     <p class="caption">
       {/* single line: Astro collapses a text→newline→expression boundary to
           ZERO chars (not a space), which rendered "done),56 findings" when
           this wrapped after the comma */}
-      And here it is doing exactly that: a real recorded mission — {meta.task_count} tasks ({meta.done_task_count} done), {meta.finding_count} findings, {minutes}m — replaying at 2× below.
+      Same machinery, recorded: here's the herd on a real mission — {meta.task_count} tasks ({meta.done_task_count} done), {meta.finding_count} findings, {minutes}m — every step replayable at 2× below. The gate runs on this exact engine.
     </p>
     <div class="ctas">
       <a class="cta" href="https://github.com/pdbethke/corralai">View on GitHub</a>

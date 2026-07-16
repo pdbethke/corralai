@@ -5,7 +5,12 @@
 [![docs](https://img.shields.io/badge/docs-corralai.dev-2f6f4e)](https://corralai.dev/docs/getting-started/)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/pdbethke/corralai/badge)](https://securityscorecards.dev/viewer/?uri=github.com/pdbethke/corralai)
 
-> **A true audit for software change** — certify a change **by execution** (not
+***Nemo iudex in causa sua*** — no one may be judge in their own cause. The one who
+wrote the code doesn't get to certify it: the verdict is **measured by execution**, by
+a **decorrelated** party, behind a **human gate**. That maxim isn't a slogan here — it's
+the constraint everything below is built on. ([why it's the whole design](https://corralai.dev/field-notes/nemo-iudex/))
+
+> **An audit for software change** — certify a change **by execution** (not
 > opinion): run the check in a jail, sign a tamper-evident record, and gate the
 > merge. Across any model (local 7B to frontier), behind real fences, human-gated,
 > with every run recorded and replayable. *(A first slice of the adversarial,

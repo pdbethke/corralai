@@ -994,3 +994,25 @@ func TestRunDeadlineProducesNeedsReviewVerdict(t *testing.T) {
 		t.Fatalf("second Tick must not re-sign, got %d signer calls", len(signer.calls))
 	}
 }
+
+// TestAggregateExcludesOpsFindings covers Task 3: an operational
+// (model-unreachable) finding filed against the critic's task must never
+// count as the critic's judgment and must never block certification — only
+// a real audit finding does either.
+func TestAggregateExcludesOpsFindings(t *testing.T) {
+	ops := queue.Finding{TaskID: 3, Type: "ops", Severity: "high", Status: queue.FindingOpen}
+	real := queue.Finding{TaskID: 3, Type: "note", Severity: "high", Status: queue.FindingOpen, Target: "TestX", Evidence: "vacuous"}
+
+	d := &Driver{BlockSeverity: "high"}
+	if d.blockingFindingOpen([]queue.Finding{ops}) {
+		t.Fatal("an operational ops finding must NOT block certification")
+	}
+	if !d.blockingFindingOpen([]queue.Finding{real}) {
+		t.Fatal("a real high finding must still block")
+	}
+
+	got := filterCriticFindings([]queue.Finding{ops, real}, 3)
+	if len(got) != 1 || got[0].Type != "note" {
+		t.Fatalf("ops finding must be excluded from critic findings, got %+v", got)
+	}
+}

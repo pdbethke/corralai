@@ -309,8 +309,12 @@ func (b *anthropicBackend) Chat(messages []omsg, tools []any) (omsg, error) {
 			"name": fn["name"], "description": fn["description"], "input_schema": fn["parameters"],
 		})
 	}
+	// No `temperature`: newer Anthropic models (Claude Sonnet 5+) REJECT it with
+	// a 400 ("temperature is deprecated for this model"), and older models are
+	// fine with the API default. Sending it broke every cross-vendor run whose
+	// writer/mutant-generator was a current Claude.
 	body := map[string]any{
-		"model": b.model, "max_tokens": 4096, "messages": msgs, "temperature": 0.2,
+		"model": b.model, "max_tokens": 4096, "messages": msgs,
 	}
 	if sys.Len() > 0 {
 		body["system"] = sys.String()

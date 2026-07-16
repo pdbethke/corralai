@@ -224,6 +224,16 @@ func (s advpoolLeaderboardSink) Record(model, role, outcome string) {
 	rec(s.tel, 0, "advpool_leaderboard", model, role, map[string]any{"outcome": outcome})
 }
 
+// advpoolEventSink adapts the driver's reasoning events to the brain's
+// telemetry store, keyed on the run's mission id so BuildReplayStream surfaces
+// them in the run's replay. Actor is the fixed pool actor. nil tel => rec()
+// no-ops (telemetry optional everywhere).
+type advpoolEventSink struct{ tel *telemetry.Store }
+
+func (s advpoolEventSink) Emit(missionID int64, kind, subject string, detail map[string]any) {
+	rec(s.tel, missionID, kind, "corral-advpool", subject, detail)
+}
+
 // advPoolBetter reports whether a's ModelStats outrank b's for staffing
 // purposes: higher exec pass rate wins; ties broken by more completed tasks
 // (more evidence); final tiebreak is the model name so the pick is
@@ -630,6 +640,7 @@ func StartAdversarialPool(ctx context.Context, opts Options) (*AdvPoolRuntime, e
 	}
 	driver.Signer = advpoolSigner{opts: opts}
 	driver.Leaderboard = advpoolLeaderboardSink{tel: opts.Telemetry}
+	driver.Events = advpoolEventSink{tel: opts.Telemetry}
 
 	// RunDeadline is the wall-clock backstop checkNoProgress can't be: it
 	// stands down whenever any task is claimed ("slow is not stuck"), so a

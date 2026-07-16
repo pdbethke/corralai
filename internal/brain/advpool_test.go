@@ -18,7 +18,38 @@ import (
 	"github.com/pdbethke/corralai/internal/principals"
 	"github.com/pdbethke/corralai/internal/queue"
 	"github.com/pdbethke/corralai/internal/sandbox"
+	"github.com/pdbethke/corralai/internal/telemetry"
 )
+
+// TestAdvPoolEventSinkRecordsToTelemetry proves advpoolEventSink.Emit is a
+// working adapter to the brain's telemetry store: a pool_verdict event
+// emitted for a mission id must come back out of EventsForMission for that
+// same mission — this is what lets BuildReplayStream surface the pool's
+// reasoning events (pool_subject/dev_adequacy/verdict) in a run's replay.
+func TestAdvPoolEventSinkRecordsToTelemetry(t *testing.T) {
+	tel, err := telemetry.Open(filepath.Join(t.TempDir(), "t.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { tel.Close() })
+
+	sink := advpoolEventSink{tel: tel}
+	sink.Emit(7, "pool_verdict", "abc123", map[string]any{"status": "certified"})
+
+	evs, err := tel.EventsForMission(7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, e := range evs {
+		if e.Kind == "pool_verdict" && e.Detail["status"] == "certified" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("EventSink.Emit must record a pool_verdict telemetry event for the mission")
+	}
+}
 
 // stubScorer/stubValidator satisfy advpool.Scorer/advpool.Validator with
 // no-op bodies: these tests exercise start_adversarial_run's admin gate and

@@ -366,6 +366,57 @@ func TestBuildReplayStreamCarriesTaskLineage(t *testing.T) {
 	}
 }
 
+// TestReplayCarriesResultAndEvidence verifies a reasoning trace gets the
+// actual evidence, not just metadata: the terminal task event carries
+// Task.Result (the mutants / the authored killing test — the OUTPUT), and
+// finding_reported carries Finding.Evidence (the critic's actual argument).
+func TestReplayCarriesResultAndEvidence(t *testing.T) {
+	q, tel, mid := seedReplayMission(t)
+	if err := q.Enqueue(mid, []queue.TaskSpec{
+		{Key: "second-task", Role: "builder", Title: "do more", Instruction: "do more work"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.PromoteReady(mid); err != nil {
+		t.Fatal(err)
+	}
+	tk, err := q.ClaimNext("bee2", nil, 3600)
+	if err != nil || tk == nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if _, err := q.Complete(tk.ID, "bee2", "3 mutants killed by TestFoo"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.AddFinding(queue.Finding{MissionID: mid, TaskID: tk.ID, Reporter: "bee2", Type: "note",
+		Severity: "high", Target: "TestX", Evidence: "the test asserts nothing"}); err != nil {
+		t.Fatal(err)
+	}
+
+	events, err := BuildReplayStream(q, tel, mid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawResult, sawEvidence bool
+	for _, e := range events {
+		if e.Kind == "task_done" || e.Kind == "task_completed" {
+			if r, _ := e.Detail["result"].(string); r != "" {
+				sawResult = true
+			}
+		}
+		if e.Kind == "finding_reported" {
+			if ev, _ := e.Detail["evidence"].(string); ev != "" {
+				sawEvidence = true
+			}
+		}
+	}
+	if !sawResult {
+		t.Fatal("replay must carry the task Result (the evidence source)")
+	}
+	if !sawEvidence {
+		t.Fatal("replay must carry the finding Evidence (the critic's argument)")
+	}
+}
+
 // TestBuildReplayStreamIncludesThoughtBeatInOrder verifies the story engine's
 // replay surface (task 64's foundation): a recorded thought rides the same
 // merged, timestamp-sorted stream as task/finding/execution beats, with a

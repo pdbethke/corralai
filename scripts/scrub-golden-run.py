@@ -37,8 +37,12 @@ DENY_PATTERNS = [
     (r'-----BEGIN[A-Z ]*PRIVATE KEY-----', 'private key material'),
     # Anything drive-lettered in a Linux-container demo export is suspicious
     # enough to deny outright. \\{1,2} handles both plain text (C:\Users\pat)
-    # and raw JSON-escaped text (C:\\Users\\pat) alike.
-    (r'\b[A-Za-z]:(?:\\{1,2}[A-Za-z0-9._-]+)+', 'Windows drive-letter path'),
+    # and raw JSON-escaped text (C:\\Users\\pat) alike. The (?!…) skips a lone
+    # C-style escape letter as the WHOLE segment (\n \t \r \b \f \v \a \0) —
+    # e.g. a Go format string `%q:\n%s` is not a `Q:\` path; a real path segment
+    # (Users, network, apps) is longer or continues with path chars, so it still
+    # matches.
+    (r'\b[A-Za-z]:(?:\\{1,2}(?![ntrbfva0](?![A-Za-z0-9._-]))[A-Za-z0-9._-]+)+', 'Windows drive-letter path'),
     # Drive-letter-less backslash paths through home-ish segments are just as
     # host-identifying (UNC tails, mangled copies of %USERPROFILE%).
     (r'\\{1,2}(?:Users|home)\\{1,2}[A-Za-z0-9._-]+', 'Windows backslash home path'),

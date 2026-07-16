@@ -1,0 +1,54 @@
+---
+title: "Nemo iudex in causa sua"
+description: "No one may be judge in their own cause. It's a maxim of natural justice — and it's the whole design. Most ways of checking AI-written code quietly violate it: the thing that did the work reports whether the work is good. Corral is built the other way, three enforced constraints deep — and here's the objection a good CISO raises, and the answer."
+pubDate: 2026-07-16
+draft: false
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+
+*Field note. The tagline arrived the way the good ones do — offhand, in someone else's mouth, while I was talking the thing out loud. Then it turned out to be the spec.*
+
+---
+
+## The oldest rule about judging
+
+**Nemo iudex in causa sua.** No one may be judge in their own cause.
+
+It's older than software, older than the common law that carries it — a principle of *natural* justice, the kind you don't have to be taught. A referee doesn't play. An auditor doesn't sign off on the books they cooked. The person on trial doesn't get to read the verdict into the record. We know this in our bones because the failure mode is obvious: an interested party, asked to grade itself, grades itself kindly.
+
+Now look at how most AI-written code gets checked.
+
+An agent writes the code. The same agent — same model, same run, same context — says whether it's correct. Or it writes the tests *for its own code* and reports that they pass. Or a "reviewer" step summarizes the diff and pronounces it good, having never run a thing. In every case the party that did the work is the party certifying the work. It's the defendant reading the verdict. And it grades itself kindly — confidently, fluently, kindly — which is exactly the failure the oldest rule exists to prevent.
+
+Corral is built the other way. Not as a slogan — as three constraints the machine enforces whether the models like it or not.
+
+## One: the judge is a different judge
+
+When the adversarial pool [grades a change's tests](/field-notes/your-tests-suck/), the model that critiques the suite is **forced** to be a different model than the one that wrote the exposing test. Not encouraged — enforced, at assignment time, with a hard check that refuses to start a run where the two collapse onto one model. A judge may not grade her own homework, so the assignment makes it structurally impossible for her to.
+
+## Two: the verdict is measured, not reported
+
+The headline number — did the tests actually catch the planted bug — is not something a worker tells us. The **brain** runs the developer's tests against the mutants *in a jail* and observes the result. A worker's "it passed" is never the verdict; it's a claim, and the claim is checked by execution. The party under judgment does not get to report the outcome of its own trial. This is the seam that makes the whole thing more than a panel of confident opinions: [we caught our own gate cheating](/field-notes/we-caught-our-own-gate-cheating/) precisely because the gate is a measurement, and measurements can be wrong in ways you can catch — unlike a vote.
+
+## Three: the author is never the certifier
+
+The mutants grade the developer's tests — not the developer. The control-owner's tests are vetted by the control owner — not the author of the change. A model cannot talk its way up the routing leaderboard; it climbs only on outcomes the deterministic gate certified, [and even that signal we had to learn to measure fairly](/field-notes/nobody-fails-a-test-they-never-took/). Everywhere a verdict is produced, the thing being verified and the thing doing the verifying are held apart on purpose.
+
+## The objection a good CISO raises
+
+Here's the one every serious security person asks, and they're right to: *"but isn't the brain judging its own cause? It orchestrates the whole thing AND signs the record. Quis custodiet — who watches it?"*
+
+The answer is the reason the maxim is safe to say out loud: **the brain's judgment path has no discretion.** It does not opine. The verdict is a deterministic, execution-verified gate, plus a decorrelated critic, plus a human gate that fails closed. The brain *runs* the gate the way a bailiff runs a courtroom — it keeps order, it records, it can't rule. Judgment that has no discretion isn't judgment in the sense the maxim forbids; it's arithmetic with a signature. We don't ask you to trust that the brain is fair. We built it so that fairness isn't the brain's to grant.
+
+That distinction — cognition can be central, judgment must be constrained and separated — is the load-bearing one. It's why the brain can be a single, opinionated orchestrator and the gate can still be trusted: the opinions live in the planning; the *verdict* lives in a mechanism no single party controls.
+
+## Why it's a control and not a vibe
+
+The tagline isn't aspiration. Every clause of it maps to something the code refuses to do otherwise: refuses to let one model both write and judge, refuses to take a worker's word for a pass, refuses to let the author certify. It's separation of duties — the same principle your auditors already live by — mechanized for software change, and signed.
+
+Which is the honest reason to put a 500-year-old legal maxim on a piece of software: not for the gravitas, though it has that. Because it's the most precise available description of what the machine actually enforces.
+
+*(Honest floor, as always: the adversarial pool is experimental and off by default; the human gate is real and blocking; the signed record is verifiable offline with `corral certify verify`. We'll tell you what's shipped and what's ahead. But the principle above isn't ahead — it's the constraint everything else is built on.)*
+
+Nemo iudex in causa sua. No one may be judge in their own cause — including, especially, the machine that wants you to trust its work.

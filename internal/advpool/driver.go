@@ -506,12 +506,7 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	if ferr != nil {
 		return nil, fmt.Errorf("advpool: load findings: %w", ferr)
 	}
-	var criticFindings []queue.Finding
-	for _, f := range findings {
-		if f.TaskID == tc.ID {
-			criticFindings = append(criticFindings, f)
-		}
-	}
+	criticFindings := filterCriticFindings(findings, tc.ID)
 
 	v := aggregate(run.rs, d.Assign, run.devKillRate, run.mutantsTotal, len(run.devSurvivors), run.provenMissed,
 		criticFindings, d.Threshold, d.blockingFindingOpen(findings))
@@ -583,14 +578,37 @@ func (d *Driver) feedLeaderboard(v Verdict, testWriterMoot bool) {
 	d.Leaderboard.Record(v.ModelsByRole[RoleTestCritic], RoleTestCritic, outcome(len(v.VacuousFindings) > 0))
 }
 
+// isOperationalFinding reports whether f is an operational event (e.g. a
+// model-unreachable notice filed by a worker), not an audit finding. These are
+// visible to operators but never count as a critic's judgment nor block
+// certification — an infrastructure hiccup is not a defect in the change.
+func isOperationalFinding(f queue.Finding) bool { return f.Type == "ops" }
+
+// filterCriticFindings returns the test-critic task's AUDIT findings
+// (excluding operational events), used to populate Verdict.VacuousFindings.
+func filterCriticFindings(findings []queue.Finding, criticTaskID int64) []queue.Finding {
+	var out []queue.Finding
+	for _, f := range findings {
+		if f.TaskID == criticTaskID && !isOperationalFinding(f) {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
 // blockingFindingOpen mirrors mission.Engine.blockingFindingOpen: any OPEN
 // finding at or above BlockSeverity withholds certification. "" disables it.
+// Operational findings (model-unreachable, etc.) are excluded — an infra
+// hiccup is never certification-blocking.
 func (d *Driver) blockingFindingOpen(findings []queue.Finding) bool {
 	if d.BlockSeverity == "" {
 		return false
 	}
 	minRank := queue.SeverityRank(d.BlockSeverity)
 	for _, f := range findings {
+		if isOperationalFinding(f) {
+			continue
+		}
 		if f.Status == queue.FindingOpen && queue.SeverityRank(f.Severity) >= minRank {
 			return true
 		}

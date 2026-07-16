@@ -619,6 +619,11 @@ func effectiveTaskRole(taskRole, workerRole string) string {
 //
 // Currently only ErrModelUnreachable triggers a release+report; all other errors
 // leave the caller to handle (or ignore, preserving the pre-existing behaviour).
+//
+// The finding is filed as type "ops" / severity "low" — an operational marker,
+// not an audit finding. It stays visible to operators (still filed via
+// report_finding) but is excluded from the pool's signed verdict + certification
+// gate, which only aggregate audit-relevant finding types (see Task 3).
 func handleTaskError(taskID, missionID int64, modelDesc string, err error, brain func(string, map[string]any) string) bool {
 	if !errors.Is(err, ErrModelUnreachable) {
 		return false
@@ -627,8 +632,8 @@ func handleTaskError(taskID, missionID int64, modelDesc string, err error, brain
 	brain("report_finding", map[string]any{
 		"mission_id":       missionID,
 		"task_id":          taskID,
-		"type":             "note",
-		"severity":         "high",
+		"type":             "ops",
+		"severity":         "low",
 		"target":           fmt.Sprintf("task#%d model", taskID),
 		"evidence":         fmt.Sprintf("model unreachable (%s); claim released for reaper re-assignment", modelDesc),
 		"suggested_action": "another agent with a reachable model will reclaim once the lease expires",

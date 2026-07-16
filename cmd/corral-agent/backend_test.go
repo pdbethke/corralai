@@ -74,6 +74,33 @@ func TestBackendConnectionRefusedIsUnreachable(t *testing.T) {
 	}
 }
 
+// TestHandleTaskErrorTagsOps verifies the model-unreachable finding is filed as
+// an operational marker (type "ops", severity "low"), not an audit finding —
+// so it can't pollute the pool's signed verdict or block certification (Task 3
+// excludes "ops" findings from the audit verdict + gate).
+func TestHandleTaskErrorTagsOps(t *testing.T) {
+	var got map[string]any
+	brain := func(tool string, args map[string]any) string {
+		if tool == "report_finding" {
+			got = args
+		}
+		return "{}"
+	}
+	handled := handleTaskError(7, 1, "anthropic:claude-sonnet-5", fmt.Errorf("%w: 529", ErrModelUnreachable), brain)
+	if !handled {
+		t.Fatal("model-unreachable must be handled")
+	}
+	if got == nil {
+		t.Fatal("a finding should be filed")
+	}
+	if got["type"] != "ops" {
+		t.Fatalf(`operational finding must be type "ops", got %v`, got["type"])
+	}
+	if got["severity"] != "low" {
+		t.Fatalf(`operational finding must be low severity (not a blocking audit finding), got %v`, got["severity"])
+	}
+}
+
 // TestTaskLoopReleasesOnModelUnreachable verifies that handleTaskError, when called
 // with ErrModelUnreachable, calls release_claims and report_finding via the brain
 // and returns true (caller should continue without calling complete_task).

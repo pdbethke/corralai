@@ -21,6 +21,7 @@ var findingTypes = map[string]bool{
 	"vuln": true, "bug": true, "design-flaw": true,
 	"missing-req": true, "regression": true, "note": true,
 	"change-request": true, // client feedback (judgment-tier; the lead routes it)
+	"ops":            true, // operational event (e.g. model-unreachable), not an audit finding — excluded from the verdict + gate
 }
 var severityRank = map[string]int{"low": 0, "medium": 1, "high": 2, "critical": 3}
 var findingStatuses = map[string]bool{FindingOpen: true, FindingAddressed: true, FindingDismissed: true}
@@ -59,7 +60,7 @@ func (s *Store) AddFinding(f Finding) (int64, error) {
 		return 0, fmt.Errorf("reporter required")
 	}
 	if !findingTypes[f.Type] {
-		return 0, fmt.Errorf("invalid finding type %q (want vuln|bug|design-flaw|missing-req|regression|note)", f.Type)
+		return 0, fmt.Errorf("invalid finding type %q (want vuln|bug|design-flaw|missing-req|regression|note|change-request|ops)", f.Type)
 	}
 	if _, ok := severityRank[f.Severity]; !ok {
 		return 0, fmt.Errorf("invalid severity %q (want low|medium|high|critical)", f.Severity)

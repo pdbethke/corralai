@@ -13,6 +13,18 @@ const RECORDING_SLUGS = fs.existsSync(RECORDINGS_DIR)
   ? fs.readdirSync(RECORDINGS_DIR)
       .filter((f) => f.endsWith('.json') && !f.endsWith('.meta.json'))
       .map((f) => f.replace(/\.json$/, ''))
+      // The gallery (recordings.astro) skips recordings that materialized with
+      // 0 tasks (a broken/empty export), so their card is never rendered.
+      // Keep this slug list in step with what the gallery shows, or a
+      // `.card[data-slug=…]` click for a filtered-out slug times out.
+      .filter((slug) => {
+        try {
+          const meta = JSON.parse(fs.readFileSync(`${RECORDINGS_DIR}/${slug}.meta.json`, 'utf-8'));
+          return (meta.task_count || 0) > 0;
+        } catch {
+          return false;
+        }
+      })
   : [];
 
 test('the gallery renders a card per recording, plays one, shows analytics, and stays on-domain', async ({ page }) => {

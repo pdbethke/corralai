@@ -60,6 +60,7 @@ const pool = poolVerdict
 <section id="hero">
   <div class="hero-copy hero-top">
     <h1>No one may be judge in their own cause.</h1>
+    <p class="latin"><em>Nemo iudex in causa sua.</em></p>
     <p class="lead">So Corral doesn't <em>build</em> your code — it <em>certifies a change by execution</em>: a decorrelated herd grades the tests meant to guard it, in a jail, and signs a tamper-evident verdict. Not a builder — a gate.</p>
     <div class="ctas">
       <a class="cta" href="https://github.com/pdbethke/corralai">View on GitHub</a>
@@ -141,7 +142,19 @@ const pool = poolVerdict
      instrument is what you see first), and the deep copy below it. */
   .hero-top { padding-top: 40px; padding-bottom: 18px; }
   .hero-bottom { padding-top: 26px; padding-bottom: 8px; }
-  .hero-copy h1 { font-size: 2.7rem; line-height: 1.12; margin: 0 0 14px; color: var(--amber); }
+  .hero-copy h1 { font-size: 2.7rem; line-height: 1.12; margin: 0 0 6px; color: var(--amber); }
+  /* the Latin original of the maxim, under its translation */
+  .latin { color: var(--muted); font-size: 1.05rem; letter-spacing: 0.02em; margin: 0 0 16px; }
+  /* Product cockpit chrome that's dead/broken on a static replay (cockpitView
+     doesn't manage these): #tab-records is hardcoded active and never toggled
+     off (so it looks perpetually selected, "the same link" as corral); #tab-launch
+     is the retired builder's composer; #tab-lookbook isn't a replay view. #skinsub
+     is the skin subtitle the tab row clips to a meaningless "— the". Hide them on
+     the site; the product UI keeps them. */
+  :global(#stage-frame #tab-records),
+  :global(#stage-frame #tab-launch),
+  :global(#stage-frame #tab-lookbook),
+  :global(#stage-frame #skinsub) { display: none !important; }
   .lead { font-size: 1.18rem; color: var(--fg); max-width: 720px; margin: 0 auto 18px; line-height: 1.5; }
   .pitch { font-size: 1.02rem; color: var(--fg); max-width: 740px; margin: 0 auto 14px; line-height: 1.6; }
   .proof-row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; color: var(--fg); font-size: 0.95rem; font-weight: 600; margin: 0 0 10px; }
@@ -357,6 +370,10 @@ const pool = poolVerdict
   }
   window.addEventListener('DOMContentLoaded', () => {
     startReplay(golden).then(() => {
+      // Activate the canvas tab (the shell hardcodes the hidden #tab-records
+      // active; cockpitView doesn't manage it) so the visible "corral" tab
+      // reads as selected, matching the stage that's showing.
+      if (typeof cockpitView === 'function') cockpitView('swarm');
       // Cinematic auto-advance. The built-in autoplay fires one beat every
       // 250/speed ms (~2.4s for this short pool tape) and then FREEZES — far too
       // fast to see the herd work, and static by the time a visitor looks. So we

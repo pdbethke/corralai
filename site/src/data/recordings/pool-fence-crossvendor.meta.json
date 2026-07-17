@@ -1,15 +1,15 @@
 {
-  "directive": "adversarial pool · internal/fence/fence.go",
+  "directive": "adversarial pool \u00b7 internal/fence/fence.go",
   "task_count": 4,
   "done_task_count": 3,
   "finding_count": 0,
-  "duration_seconds": 84.37248158454895,
+  "duration_seconds": 200.13891863822937,
   "models": [
     "anthropic:claude-sonnet-5",
-    "gemini-3.5-flash"
+    "openai:gemini-3.5-flash"
   ],
   "platform": {
-    "inference": "vendor cloud — Claude Sonnet 5 (Anthropic) + Gemini 3.5 Flash (Google)",
+    "inference": "vendor cloud \u2014 Claude Sonnet 5 (Anthropic) + Gemini 3.5 Flash (Google)",
     "host": "linux/amd64"
   }
 }

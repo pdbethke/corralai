@@ -23,6 +23,7 @@ import (
 	"github.com/pdbethke/corralai/internal/auth"
 	"github.com/pdbethke/corralai/internal/brain"
 	"github.com/pdbethke/corralai/internal/buildstore"
+	"github.com/pdbethke/corralai/internal/bugcatch"
 	"github.com/pdbethke/corralai/internal/certverify"
 	"github.com/pdbethke/corralai/internal/coord"
 	"github.com/pdbethke/corralai/internal/gateway"
@@ -70,6 +71,7 @@ type Server struct {
 	artifacts       *artifacts.Store
 	taskArtifacts   *taskartifacts.Store
 	buildStore      *buildstore.Store
+	bugCatch        *bugcatch.Store
 	certifyPub      ed25519.PublicKey
 	witness         transparency.Witness
 
@@ -169,6 +171,11 @@ type Deps struct {
 	// returns an empty list and /api/builds/{id} 404s (feature disabled,
 	// never a 500).
 	BuildStore *buildstore.Store
+	// BugCatch is the bug-catching scorecard store (internal/bugcatch);
+	// /api/bugcatch reads from it, marking thin (Runs < 3) cells provisional
+	// (see brain.BuildBugCatchScorecard). nil => /api/bugcatch returns an
+	// empty scorecard, never a 500 (degrade-never-block).
+	BugCatch *bugcatch.Store
 	// CertifyPub is the published Ed25519 public key /api/builds/{id} uses
 	// to re-verify a record's signature — the same external trust anchor
 	// `corral certify verify` uses, never derived from the record itself.
@@ -188,7 +195,7 @@ type Deps struct {
 }
 
 func Handler(d Deps) http.Handler {
-	s := &Server{coord: d.Coord, mem: d.Mem, gw: d.Gateway, bus: d.Bus, memOwners: d.MemOwners, roles: d.Roles, queue: d.Queue, missions: d.Missions, execs: d.Executions, acts: d.Activity, hosts: d.Hosts, health: d.Health, narrator: d.Narrator, tel: d.Telemetry, oracle: d.Oracle, roleModels: d.RoleModels, staffing: d.Staffing, learn: d.Learn, promote: d.Promote, reject: d.Reject, historyFn: d.History, historyDetailFn: d.HistoryDetail, replayFn: d.Replay, artifacts: d.Artifacts, taskArtifacts: d.TaskArtifacts, buildStore: d.BuildStore, certifyPub: d.CertifyPub, witness: d.Witness}
+	s := &Server{coord: d.Coord, mem: d.Mem, gw: d.Gateway, bus: d.Bus, memOwners: d.MemOwners, roles: d.Roles, queue: d.Queue, missions: d.Missions, execs: d.Executions, acts: d.Activity, hosts: d.Hosts, health: d.Health, narrator: d.Narrator, tel: d.Telemetry, oracle: d.Oracle, roleModels: d.RoleModels, staffing: d.Staffing, learn: d.Learn, promote: d.Promote, reject: d.Reject, historyFn: d.History, historyDetailFn: d.HistoryDetail, replayFn: d.Replay, artifacts: d.Artifacts, taskArtifacts: d.TaskArtifacts, buildStore: d.BuildStore, bugCatch: d.BugCatch, certifyPub: d.CertifyPub, witness: d.Witness}
 	mux := http.NewServeMux()
 	sub, _ := fs.Sub(webFS, "web")
 	// "/" no longer serves the SPA (Task 3 of the daemon/client refactor):
@@ -235,6 +242,7 @@ func Handler(d Deps) http.Handler {
 	mux.HandleFunc("/api/history/", s.historyDetail)
 	mux.HandleFunc("/api/replay", s.replay)
 	mux.HandleFunc("/api/leaderboard", s.leaderboard)
+	mux.HandleFunc("/api/bugcatch", s.bugcatch)
 	mux.HandleFunc("/api/mission/footprint", s.footprint)
 	mux.HandleFunc("/api/mission/prune", s.prune)
 	mux.HandleFunc("/api/mission/pause", s.steer(brain.SteerPause))
@@ -434,6 +442,19 @@ func (s *Server) leaderboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, lb)
+}
+
+// bugcatch serves the read-only bug-catching scorecard (Task 4): the same
+// authz-free, read-only pattern as leaderboard — reaching the mux at all
+// already required a valid bearer (see the daemon's authz wrapper in
+// cmd/corral/main.go), and this endpoint mutates nothing.
+func (s *Server) bugcatch(w http.ResponseWriter, r *http.Request) {
+	sc, err := brain.BuildBugCatchScorecard(s.bugCatch)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, sc)
 }
 
 func (s *Server) history(w http.ResponseWriter, r *http.Request) {

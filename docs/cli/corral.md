@@ -39,6 +39,8 @@ Usage:
                                   "verified" and exits 0, or names the failing check on
                                   stderr and exits non-zero
   corral certify pubkey           print the local signing pubkey (for --pubkey trust anchors)
+  corral scorecard [--json]       show the bug-catching scorecard (recall/precision per model×role);
+                                  table by default, or the raw cells as indented JSON with --json
   corral --version                print the build version and exit
   corral -h                       print this help and exit
 
@@ -116,4 +118,6 @@ CORRALAI_CONTROL_GATE     control gate: ";"-separated "repo=owner/name,owner=<pr
 CORRALAI_CONTROL_GATE_SPEC_DB  control-gate vetted-tests store (default ~/.claude/corralai_control_spec.duckdb)
 CORRALAI_CONTROL_GATE_DB       control-gate dedupe/index store (default ~/.claude/corralai_control_gate.duckdb)
 CORRALAI_CONTROL_GATE_POLL_SECONDS  how often the control gate polls for new PR heads (default 120)
+CORRALAI_BUGCATCH_DB       adversarial pool's bug-catching scorecard store DuckDB path
+                           (default ~/.claude/corralai_bugcatch.duckdb); also read by `corral scorecard`
 ```

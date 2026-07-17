@@ -12,6 +12,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/artifacts"
 	"github.com/pdbethke/corralai/internal/attest"
+	"github.com/pdbethke/corralai/internal/bugcatch"
 	"github.com/pdbethke/corralai/internal/buildstore"
 	"github.com/pdbethke/corralai/internal/controlgate"
 	"github.com/pdbethke/corralai/internal/controlspec"
@@ -251,6 +252,10 @@ type Options struct {
 	// leaves the brain process and must never appear in a log or error
 	// string. Required alongside BuildStore for report_build to function.
 	CertifyKey ed25519.PrivateKey
+
+	// BugCatch, if set, receives per-run execution-proven bug-catching
+	// observations from the adversarial pool (internal/bugcatch scorecard store).
+	BugCatch *bugcatch.Store
 
 	// Witness, when set, is the transparency log report_build anchors each
 	// signed DSSE envelope to (Sigstore Rekor or a hermetic fake in tests) —

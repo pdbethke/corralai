@@ -73,6 +73,8 @@
 //	CORRALAI_CONTROL_GATE_SPEC_DB  control-gate vetted-tests store (default ~/.claude/corralai_control_spec.duckdb)
 //	CORRALAI_CONTROL_GATE_DB       control-gate dedupe/index store (default ~/.claude/corralai_control_gate.duckdb)
 //	CORRALAI_CONTROL_GATE_POLL_SECONDS  how often the control gate polls for new PR heads (default 120)
+//	CORRALAI_BUGCATCH_DB       adversarial pool's bug-catching scorecard store DuckDB path
+//	                           (default ~/.claude/corralai_bugcatch.duckdb); also read by `corral scorecard`
 package main
 
 import (
@@ -98,6 +100,7 @@ import (
 	"github.com/pdbethke/corralai/internal/attest"
 	"github.com/pdbethke/corralai/internal/auth"
 	"github.com/pdbethke/corralai/internal/brain"
+	"github.com/pdbethke/corralai/internal/bugcatch"
 	"github.com/pdbethke/corralai/internal/buildstore"
 	"github.com/pdbethke/corralai/internal/controlgate"
 	"github.com/pdbethke/corralai/internal/controlspec"
@@ -147,7 +150,7 @@ func subcommand(args []string) string {
 		return ""
 	}
 	switch args[0] {
-	case "certify", "secret", "control":
+	case "certify", "secret", "control", "scorecard":
 		return args[0]
 	}
 	return ""
@@ -212,6 +215,8 @@ Usage:
                                   "verified" and exits 0, or names the failing check on
                                   stderr and exits non-zero
   corral certify pubkey           print the local signing pubkey (for --pubkey trust anchors)
+  corral scorecard [--json]       show the bug-catching scorecard (recall/precision per model×role);
+                                  table by default, or the raw cells as indented JSON with --json
   corral --version                print the build version and exit
   corral -h                       print this help and exit
 
@@ -541,6 +546,35 @@ func main() {
 			os.Exit(1)
 		}
 		return
+	case "scorecard":
+		// The bugcatch DuckDB file is single-process: corral.service (the
+		// running brain) already holds it read-write, and DuckDB refuses a
+		// second concurrent open — even read-only (verified: PID conflict
+		// error, not silent success). So whenever a brain is configured,
+		// read the scorecard over HTTP from its /api/bugcatch instead of
+		// touching the file; only fall back to the local DuckDB file when
+		// no brain is configured (the offline/standalone case).
+		if brainURL := strings.TrimSpace(os.Getenv("CORRAL_BRAIN")); brainURL != "" {
+			token, err := brainToken()
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "corral scorecard:", err)
+				os.Exit(1)
+			}
+			os.Exit(runScorecard(os.Args[2:], newHTTPScorecardReader(brainURL, token), os.Stdout))
+		}
+		home, _ := os.UserHomeDir()
+		bugCatchDB := env("CORRALAI_BUGCATCH_DB", filepath.Join(home, ".claude", "corralai_bugcatch.duckdb"))
+		bugCatchStore, err := bugcatch.Open(bugCatchDB)
+		if err != nil {
+			if strings.Contains(err.Error(), "Conflicting lock is held") {
+				fmt.Fprintln(os.Stderr, "corral scorecard: the bugcatch DB is held by the running brain — set CORRAL_BRAIN (and CORRALAI_BRAIN_TOKEN via `corral secret`) to read it over the API, or stop the brain first")
+			} else {
+				fmt.Fprintln(os.Stderr, "corral scorecard: open bugcatch store:", err)
+			}
+			os.Exit(1)
+		}
+		defer bugCatchStore.Close()
+		os.Exit(runScorecard(os.Args[2:], bugCatchStore, os.Stdout))
 	}
 	if showVersion(os.Args[1:]) {
 		log.SetFlags(0)
@@ -698,6 +732,17 @@ func main() {
 		log.Fatalf("open build-record store: %v", err)
 	}
 	defer buildStore.Close()
+
+	// The adversarial pool's bug-catching scorecard store — per-seat,
+	// execution-proven catch/opportunity/mutant observations feeding the
+	// leaderboard's decorrelated staffing.
+	bugCatchDB := env("CORRALAI_BUGCATCH_DB", filepath.Join(home, ".claude", "corralai_bugcatch.duckdb"))
+	bugCatchStore, err := bugcatch.Open(bugCatchDB)
+	if err != nil {
+		log.Fatalf("open bugcatch store: %v", err)
+	}
+	defer bugCatchStore.Close()
+
 	certifyKeyFile := env("CORRALAI_CERTIFY_KEY_FILE", filepath.Join(home, ".claude", "corralai_certify_key"))
 	certifyKey, err := buildstore.LoadOrCreateSigningKey(certifyKeyFile)
 	if err != nil {
@@ -1160,6 +1205,7 @@ func main() {
 		BuildStore:            buildStore,
 		CertifyKey:            certifyKey,
 		Witness:               certifyWitness,
+		BugCatch:              bugCatchStore,
 		SpawnBudget: brain.SpawnBudget{
 			MaxAgentsPerPrincipal: envInt("CORRALAI_MAX_AGENTS_PER_PRINCIPAL", 0),
 			MaxSpawnDepth:         envInt("CORRALAI_MAX_SPAWN_DEPTH", 0),
@@ -1372,7 +1418,7 @@ func main() {
 	replayStream := func(missionID int64) ([]brain.ReplayEvent, error) {
 		return brain.BuildReplayStream(queueStore, telStore, missionID)
 	}
-	uiHandler := verifier.Wrap(authz(ui.Handler(ui.Deps{Coord: store, Mem: memStore, Gateway: gwStore, Bus: bus, MemOwners: memOwners, Roles: princStore, Queue: queueStore, Missions: missionStore, Executions: execRing, Activity: activityRing, Hosts: hostBook, Health: healthBook, Narrator: narrator, Telemetry: telStore, Oracle: fleetOracle, RoleModels: roleModels, Staffing: staffingMgr, Learn: learnStore, Promote: proposalPromote, Reject: proposalReject, History: historyList, HistoryDetail: historyDetail, Replay: replayStream, Artifacts: artStore, TaskArtifacts: taskArtStore, BuildStore: buildStore, CertifyPub: certifyPub, Witness: certifyWitness, Version: version})))
+	uiHandler := verifier.Wrap(authz(ui.Handler(ui.Deps{Coord: store, Mem: memStore, Gateway: gwStore, Bus: bus, MemOwners: memOwners, Roles: princStore, Queue: queueStore, Missions: missionStore, Executions: execRing, Activity: activityRing, Hosts: hostBook, Health: healthBook, Narrator: narrator, Telemetry: telStore, Oracle: fleetOracle, RoleModels: roleModels, Staffing: staffingMgr, Learn: learnStore, Promote: proposalPromote, Reject: proposalReject, History: historyList, HistoryDetail: historyDetail, Replay: replayStream, Artifacts: artStore, TaskArtifacts: taskArtStore, BuildStore: buildStore, BugCatch: bugCatchStore, CertifyPub: certifyPub, Witness: certifyWitness, Version: version})))
 	if verifier.Enabled() {
 		log.Printf("ui: bearer-gated (view via `corral-observe`)")
 	} else {

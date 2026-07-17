@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	golang "github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/repoindex"
 	"github.com/pdbethke/corralai/internal/testgen"
 )
@@ -50,7 +51,8 @@ func TestBuildDAG(t *testing.T) {
 	if mutGen.Verify != "" {
 		t.Fatalf("mutant-generator must not have Verify set (structured fast path), got %q", mutGen.Verify)
 	}
-	wantSystem, wantUser := testgen.GenerateMutantsPrompt(rs.Goal, rs.Code, sigs, rs.NMutants)
+	goP, _ := golang.ByName("go")
+	wantSystem, wantUser := testgen.GenerateMutantsPrompt(goP.MutantSystem(), rs.Goal, rs.Code, sigs, rs.NMutants)
 	if !strings.Contains(mutGen.Instruction, wantSystem) || !strings.Contains(mutGen.Instruction, wantUser) {
 		t.Fatalf("mutant-generator instruction missing GenerateMutants prompt text:\n%s", mutGen.Instruction)
 	}

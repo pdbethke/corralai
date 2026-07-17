@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
+	golang "github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/queue"
 	"github.com/pdbethke/corralai/internal/repoindex"
 	"github.com/pdbethke/corralai/internal/testgen"
@@ -48,7 +49,8 @@ func joinPrompt(system, user string) string {
 // unchanged, so the worker's model sees the exact prompt the in-process
 // generator would have used.
 func renderMutantGenerator(rs RunSpec, sigs []repoindex.Signature, _ []adequacy.Mutant) string {
-	system, user := testgen.GenerateMutantsPrompt(rs.Goal, rs.Code, sigs, rs.NMutants)
+	goP, _ := golang.ByName("go")
+	system, user := testgen.GenerateMutantsPrompt(goP.MutantSystem(), rs.Goal, rs.Code, sigs, rs.NMutants)
 	return joinPrompt(system, user)
 }
 
@@ -76,7 +78,8 @@ func renderTestWriter(rs RunSpec, sigs []repoindex.Signature, survivors []adequa
 		}
 		goal = b.String()
 	}
-	system, user := testgen.WriteTestPrompt(goal, rs.Code, sigs)
+	goP, _ := golang.ByName("go")
+	system, user := testgen.WriteTestPrompt(goP.TestWriterSystem(), goal, rs.Code, sigs)
 	return joinPrompt(system, user)
 }
 

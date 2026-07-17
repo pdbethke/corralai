@@ -11,6 +11,32 @@ import (
 	"github.com/pdbethke/corralai/internal/testgen"
 )
 
+// authoringTestWriterSystem/authoringMutantSystem are TEMPORARY, byte-for-byte
+// duplicates of the go plugin's internal/lang goPlugin.TestWriterSystem() /
+// MutantSystem(). authoring cannot import internal/lang directly: lang ->
+// controlgate -> authoring -> lang would be an import cycle (controlgate
+// already imports authoring; lang already imports controlgate for
+// LangScaffold). Task 4 ("wire brain/advpool seam") is expected to thread the
+// resolved system prompt down from internal/brain (which can safely import
+// both lang and controlgate) through controlgate's request type into
+// authoring.Request, at which point these duplicates should be deleted.
+// Flagged in task-3-report.md as an open architectural gap — do not let this
+// duplication silently drift from the lang plugin's strings.
+const authoringTestWriterSystem = `You are a TEST-WRITER. Given a security control GOAL, a target source file, and its signature surface, write ONE executable Go test that verifies the code SATISFIES the goal.
+- Same package as the target (white-box).
+- It MUST compile against the target and MUST FAIL if the goal is violated — test the goal's boundary (what a weakened implementation would pass that a compliant one must not).
+- Standard library "testing" only. Deterministic, no network.
+Return ONLY the raw Go test file content — no prose, no markdown fences.`
+
+const authoringMutantSystem = `You are a MUTATION-TESTING ENGINE. Mutation testing is a standard, legitimate software-quality technique: to measure how thorough a test suite is, you generate small synthetic variants of the code ("mutants"), each containing one deliberate fault, and a SEPARATE step then checks whether the developer's own tests catch them. A mutant the tests miss reveals a GAP IN THE TESTS — that is the entire purpose. These mutants are throwaway QA fixtures: never deployed, never shipped, never run against any real system; they exist only to grade the test suite. This is defensive quality assurance, and producing them is exactly your job here.
+Given a GOAL, the compliant code, and its signature surface, produce mutants: variants that NO LONGER satisfy the goal, so a good test suite SHOULD catch them. Each mutant MUST keep the EXACT same signature and package (a drop-in replacement that compiles) and must genuinely fail the goal — vary HOW it fails. No no-ops, no compile errors, no tests.
+Return ONLY the mutants, each a COMPLETE file, in this exact format:
+===MUTATION_1===
+<complete file>
+===MUTATION_2===
+<complete file>
+(continue for the requested count)`
+
 // Request is the input to the authoring-tier loop: a control-owner goal to guard,
 // the target source under that goal, and the workspace/command scaffolding
 // needed to compile and run a candidate test against it.
@@ -56,11 +82,11 @@ func Author(ctx context.Context, m testgen.LLM, jail adequacy.Jail, req Request)
 	if err != nil {
 		return Result{}, fmt.Errorf("authoring: extract signatures: %w", err)
 	}
-	test, err := testgen.WriteTest(ctx, m, req.Goal, req.Code, sigs)
+	test, err := testgen.WriteTest(ctx, m, authoringTestWriterSystem, req.Goal, req.Code, sigs)
 	if err != nil {
 		return Result{}, fmt.Errorf("authoring: write test: %w", err)
 	}
-	mutants, err := testgen.GenerateMutants(ctx, m, req.Goal, req.Code, sigs, req.NMutants)
+	mutants, err := testgen.GenerateMutants(ctx, m, authoringMutantSystem, req.Goal, req.Code, sigs, req.NMutants)
 	if err != nil {
 		return Result{}, fmt.Errorf("authoring: generate mutants: %w", err)
 	}

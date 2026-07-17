@@ -73,6 +73,8 @@
 //	CORRALAI_CONTROL_GATE_SPEC_DB  control-gate vetted-tests store (default ~/.claude/corralai_control_spec.duckdb)
 //	CORRALAI_CONTROL_GATE_DB       control-gate dedupe/index store (default ~/.claude/corralai_control_gate.duckdb)
 //	CORRALAI_CONTROL_GATE_POLL_SECONDS  how often the control gate polls for new PR heads (default 120)
+//	CORRALAI_BUGCATCH_DB       adversarial pool's bug-catching scorecard store DuckDB path
+//	                           (default ~/.claude/corralai_bugcatch.duckdb); also read by `corral scorecard`
 package main
 
 import (
@@ -148,7 +150,7 @@ func subcommand(args []string) string {
 		return ""
 	}
 	switch args[0] {
-	case "certify", "secret", "control":
+	case "certify", "secret", "control", "scorecard":
 		return args[0]
 	}
 	return ""
@@ -213,6 +215,8 @@ Usage:
                                   "verified" and exits 0, or names the failing check on
                                   stderr and exits non-zero
   corral certify pubkey           print the local signing pubkey (for --pubkey trust anchors)
+  corral scorecard [--json]       show the bug-catching scorecard (recall/precision per model×role);
+                                  table by default, or the raw cells as indented JSON with --json
   corral --version                print the build version and exit
   corral -h                       print this help and exit
 
@@ -542,6 +546,16 @@ func main() {
 			os.Exit(1)
 		}
 		return
+	case "scorecard":
+		home, _ := os.UserHomeDir()
+		bugCatchDB := env("CORRALAI_BUGCATCH_DB", filepath.Join(home, ".claude", "corralai_bugcatch.duckdb"))
+		bugCatchStore, err := bugcatch.Open(bugCatchDB)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "corral scorecard: open bugcatch store:", err)
+			os.Exit(1)
+		}
+		defer bugCatchStore.Close()
+		os.Exit(runScorecard(os.Args[2:], bugCatchStore, os.Stdout))
 	}
 	if showVersion(os.Args[1:]) {
 		log.SetFlags(0)

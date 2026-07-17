@@ -622,6 +622,42 @@ function ensure(id, kind, label){
 
 function esc(s){ return (s||'').replace(/[&<>"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
 
+// renderFaultDiff / parseMutants: the FAULT HIGHLIGHT — the founder's key
+// transparency affordance ("here is the exact fault, and your tests pass
+// anyway"). A mutant is a same-signature drop-in of the code under review, so
+// a line diff of the original vs a surviving mutant isolates the planted
+// fault. No diff library exists on the tape side (esc() above is the only
+// primitive), so this is a minimal, dependency-free, O(n) line diff:
+// membership-against-the-original-line-set is an order-tolerant "is this
+// line new" test — good enough for a small mutation (a line present ANYWHERE
+// in the original is NOT a fault). A positional LCS diff is a fair follow-up
+// if false highlights ever show up on a real mutant, but it isn't needed for
+// the demo's single-region mutations.
+function renderFaultDiff(original, mutant){
+  const o = (original||'').split('\n'), m = (mutant||'').split('\n');
+  const oset = new Set(o.map(l => l.trim()));
+  const rows = m.map(line => {
+    const changed = line.trim() !== '' && !oset.has(line.trim());
+    const cell = esc(line);
+    return changed ? '<span class="faultline">' + cell + '</span>' : cell;
+  });
+  return '<pre class="aw-result faultdiff">' + rows.join('\n') + '</pre>';
+}
+// parseMutants: split a mutant-generator task_done.result into its
+// ===MUTATION_n=== blocks — {id, code}[] in tape order. Tolerant of a result
+// with no blocks at all (returns []), which is the signal to fall back to
+// the plain result <pre> (Task 2's behavior, unchanged for non-mutant tasks
+// or a mutant-gen result the tape didn't shape this way).
+function parseMutants(result){
+  const out = [];
+  const re = /===MUTATION_([^\s=]+)===\n([\s\S]*?)(?=\n===MUTATION_[^\s=]+===\n|$)/g;
+  let mch;
+  while((mch = re.exec(result || '')) !== null){
+    out.push({id: mch[1], code: mch[2]});
+  }
+  return out;
+}
+
 // simple force layout
 function step(){
   const arr = [...nodes.values()];
@@ -946,10 +982,20 @@ function setReplayExecFilter(n){ replayExecFilter = (replayExecFilter === n ? ''
 // when" (paths only; the tape never captures file contents). Accumulated in
 // applyReplayEvent, so it rebuilds-from-0 on scrub exactly like the panels.
 let replayFiles = new Map();
+// replayPoolSubject / replayDevAdequacy: the advpool's fault-highlight
+// inputs, accumulated the same way as replayFiles above — captured in
+// applyReplayEvent when their events land, rebuilt-from-0 on scrub.
+// replayPoolSubject.code is the ORIGINAL code under review (pool_subject.
+// detail.code); replayDevAdequacy.survivor_ids names which planted mutant(s)
+// the dev's own tests failed to kill — the fault worth showing (see
+// renderFaultDiff / the mutant-generator task-story "result" section below).
+let replayPoolSubject = null;
+let replayDevAdequacy = null;
 function resetReplayPanels(){
   replayConsoleLines = []; replayTasks = new Map(); replayFindings = [];
   replayAgents = new Map(); replaySeenBeats = new Set();
   replayFiles = new Map();
+  replayPoolSubject = null; replayDevAdequacy = null;
 }
 function clearReplayPanelDOM(){
   // 'agents' is the canonical roster id, shared by the product UI and the
@@ -1690,6 +1736,7 @@ function ensureReplayTaskStyles(){
 .aw-body .aw-chain:hover { color: var(--stage-fg,#e6e1d8); }
 .aw-body .aw-timing { color: var(--stage-muted,#8a8170); font-size:11.5px; line-height:1.6; }
 .aw-body .aw-result { max-height:220px; overflow:auto; font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11px; line-height:1.5; color: var(--stage-fg,#e6e1d8); background: var(--stage-bg,#0e1116); border: 1px solid var(--stage-line,#33405a); border-radius:6px; padding:8px; white-space:pre-wrap; word-break:break-word; margin:2px 0 4px; }
+.aw-body .faultline { background: rgba(232,80,58,.32); color: var(--stage-red,#ff7a63); font-weight:700; border-radius:3px; padding:0 2px; margin:0 -2px; box-decoration-break:clone; -webkit-box-decoration-break:clone; }
 `;
   document.head.appendChild(s);
 }
@@ -1792,7 +1839,27 @@ function renderReplayTaskWindowBody(key){
     });
   }
 
-  if(t.result){ h += '<div class="isec">result</div><pre class="aw-result">' + esc(t.result) + '</pre>'; }
+  if(t.result){
+    // Fault highlight: for a mutant-generator task, when the original code
+    // under review is on the tape (replayPoolSubject, captured from
+    // pool_subject.detail.code), diff the surviving mutant against it and
+    // highlight the planted-fault lines instead of dumping the raw result.
+    // Graceful/additive: no pool_subject, no mutant blocks, or a non-mutant
+    // task all fall straight through to the plain result <pre> (unchanged
+    // behavior from Task 2).
+    let resultHtml = '';
+    if(t.role === 'mutant-generator' && replayPoolSubject && replayPoolSubject.code){
+      const mutants = parseMutants(t.result);
+      if(mutants.length){
+        const survivorIds = (replayDevAdequacy && replayDevAdequacy.survivor_ids) || [];
+        const survivor = mutants.find(mu => survivorIds.includes(mu.id)) || mutants[0];
+        resultHtml = '<div class="isec">result <span class="ir">· the surviving fault, highlighted against the original</span></div>'
+          + renderFaultDiff(replayPoolSubject.code, survivor.code);
+      }
+    }
+    if(!resultHtml) resultHtml = '<div class="isec">result</div><pre class="aw-result">' + esc(t.result) + '</pre>';
+    h += resultHtml;
+  }
 
   // WHO did it
   h += '<div class="isec">who did it</div>';
@@ -2050,12 +2117,21 @@ function applyReplayEvent(ev){
     case 'pool_subject': {
       replayConsoleLines.push({kind:'pool', sub:'subject', text:'grading ' + (d.code_path||'the change') + ' against its own tests' + (d.dev_test_path ? ' (' + d.dev_test_path + ')' : '')});
       if(replayConsoleLines.length > 200) replayConsoleLines.shift();
+      // Capture the original code under review for the fault-highlight diff
+      // (renderFaultDiff, wired into the mutant-generator task story below).
+      // Additive: if this event never carries code, replayPoolSubject stays
+      // null and the task story falls back to the plain result <pre>.
+      if(d.code) replayPoolSubject = {code: d.code, code_path: d.code_path || ''};
       break;
     }
     case 'pool_dev_adequacy': {
       const total = d.mutants_total||0, surv = d.survivors||0;
       replayConsoleLines.push({kind:'pool', sub:'adequacy', text:"the dev's tests killed " + (total-surv) + '/' + total + ' planted faults — ' + surv + ' survived (the gap)'});
       if(replayConsoleLines.length > 200) replayConsoleLines.shift();
+      // Which mutant(s) survived — preferred over "just the first mutant" so
+      // the fault-highlight diffs the ACTUAL surviving fault, not any planted
+      // mutant that the dev's tests already killed.
+      replayDevAdequacy = {survivors: surv, survivor_ids: Array.isArray(d.survivor_ids) ? d.survivor_ids.map(String) : []};
       break;
     }
     case 'pool_verdict': {

@@ -784,6 +784,39 @@ test('task story shows the produced artifact (result)', async ({ page }) => {
   await expect(body).toContainText('the planted fault');
 });
 
+test('fault highlight marks the mutated lines', async ({ page }) => {
+  // The founder's key transparency affordance: when the original code under
+  // review is on the tape (pool_subject.detail.code), the mutant-generator
+  // task story diffs the SURVIVING mutant against it and highlights just the
+  // planted-fault line — "here is the exact fault, and your tests pass
+  // anyway" — instead of dumping the raw ===MUTATION_n=== blob.
+  await page.goto('/recordings/');
+  await page.evaluate(() => {
+    (window as any).startReplay({
+      events: [
+        { ts: 1, kind: 'pool_subject', detail: { code_path: 'x.go', code: 'package fence\nfunc F() bool { return true }\n' } },
+        { ts: 2, kind: 'task_created', subject: 'mutant-generator', detail: { role: 'mutant-generator', title: 'plant faults' } },
+        { ts: 3, kind: 'task_done', subject: 'mutant-generator', detail: { result: '===MUTATION_1===\npackage fence\nfunc F() bool { return false }\n' } },
+        { ts: 4, kind: 'pool_dev_adequacy', detail: { survivors: 1, survivor_ids: ['1'] } },
+      ],
+    });
+  });
+  await expect(async () => {
+    expect(Number(await page.locator('#replay-scrub').getAttribute('max'))).toBe(4);
+  }).toPass({ timeout: 5000 });
+  const scrub = page.locator('#replay-scrub');
+  await scrub.evaluate((el) => { (el as HTMLInputElement).value = '4'; el.dispatchEvent(new Event('input')); });
+  const row = page.locator('#tasks .trow', { hasText: 'plant faults' });
+  await expect(row).toBeVisible();
+  await row.click();
+  const body = page.locator('.aw-win .aw-body');
+  await expect(body).toBeVisible();
+  // the mutated line is wrapped and highlighted...
+  await expect(body.locator('.faultline')).toContainText('return false');
+  // ...but the unchanged line is NOT.
+  await expect(body.locator('.faultline')).not.toContainText('package fence');
+});
+
 test('every recording card corresponds to an active stream + meta pair', async () => {
   const files = fs.readdirSync(RECORDINGS_DIR);
   const streamFiles = files.filter((f) => f.endsWith('.json') && !f.endsWith('.meta.json'));

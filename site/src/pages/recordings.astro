@@ -1,5 +1,6 @@
 ---
 // SPDX-License-Identifier: Elastic-2.0
+import fs from 'node:fs';
 import '../styles/global.css';
 import { cockpitHud, cockpitViews, cockpitTasks, cockpitAgents, cockpitFindings, cockpitExec } from '../lib/cockpitShell';
 import Header from '../components/Header.astro';
@@ -32,7 +33,7 @@ for (const [p, mod] of Object.entries(analysisModules)) {
   analyses[p.split('/').pop()!.replace(/\.analysis\.md$/, '')] = (mod as any).Content;
 }
 const streams: Record<string, unknown> = {};
-const cards: { slug: string; directive: string; models: string[]; task_count: number; done_task_count: number; finding_count: number; minutes: number; result?: { url: string; label: string }; platform?: string }[] = [];
+const cards: { slug: string; directive: string; models: string[]; task_count: number; done_task_count: number; finding_count: number; minutes: number; result?: { url: string; label: string }; platform?: string; video?: string }[] = [];
 
 // One quiet line from meta.platform — e.g. "RTX 5070 · Ryzen 9 5900 · 128GB ·
 // local ollama". Marketing shorthand for the card; the meta keeps full names.
@@ -64,6 +65,10 @@ for (const [p, mod] of Object.entries(streamModules)) {
     // Task 10 populates this for new runs).
     result: meta.result && meta.result.url && meta.result.label ? meta.result : undefined,
     platform: platformLine(meta.platform),
+    // Optional rendered clip: if scripts/capture-recording-video.sh has written
+    // site/public/recordings/<slug>.mp4, the card grows a "watch the run" link
+    // (a downloadable/embeddable mp4). Existence is checked at build time.
+    video: fs.existsSync(`public/recordings/${slug}.mp4`) ? `/recordings/${slug}.mp4` : undefined,
   });
 }
 // Lead with the thesis tape (the mixtape — local + frontier in one mission),
@@ -116,6 +121,9 @@ const maxModelTasks = Math.max(1, ...tasksByModel.map((r: any) => r.tasks));
           <span class="stats">{c.task_count} tasks ({c.done_task_count} done) · {c.finding_count} findings · {c.minutes}m</span>
           {c.platform && <span class="platform">recorded on {c.platform}</span>}
           {analyses[c.slug] && <span class="has-analysis">analysis below ↓</span>}
+          {c.video && (
+            <a class="video-link" href={c.video} target="_blank" rel="noopener noreferrer">▶ watch the run (mp4)</a>
+          )}
           {c.result && (
             <a class="result-link" href={c.result.url} target="_blank" rel="noopener noreferrer">
               {c.result.label} →
@@ -249,6 +257,8 @@ const maxModelTasks = Math.max(1, ...tasksByModel.map((r: any) => r.tasks));
   .analysis-panel :global(h1), .analysis-panel :global(h2) { font-size: 1.15rem; }
   .analysis-panel :global(p), .analysis-panel :global(li) { color: var(--fg); font-size: 0.95rem; }
   .result-link { color: var(--amber); font-size: 0.85rem; text-decoration: underline; }
+  .video-link { color: var(--amber); font-size: 0.85rem; font-weight: 600; text-decoration: none; }
+  .video-link:hover { text-decoration: underline; }
   .back { margin-top: 8px; }
   /* full-width dark cockpit viewport — same framing tokens as the hero (Task 1),
      now with the tasks/canvas/findings + console panels joining the stage

@@ -52,6 +52,7 @@ const pool = poolVerdict
           : null,
       planter: poolVerdict.models_by_role?.['mutant-generator'],
       critic: poolVerdict.models_by_role?.['test-critic'],
+      provenMissed: poolVerdict.proven_missed || 0,
       statusLabel: poolVerdict.status === 'certified' ? 'CERTIFIED' : 'NEEDS-REVIEW',
     }
   : null;
@@ -67,7 +68,7 @@ const pool = poolVerdict
     {pool ? (
       <p class="caption">
         {/* single line: Astro collapses a text→newline→expression boundary to ZERO chars, so keep interpolations inline */}
-        Below is a real run, replaying now: a <em>decorrelated</em> cross-vendor herd put <code>{pool.codePath}</code> to its own tests — {pool.planter} planted {pool.mutants} faults, the suite caught {pool.caught} and missed {pool.survivors}, and a <em>different</em> model, {pool.critic}, proved the gap real. Signed <strong>{pool.statusLabel}</strong>, the missing test handed back.
+        Below is a real run, replaying now: a <em>decorrelated</em> cross-vendor herd put <code>{pool.codePath}</code> to its own tests — {pool.planter} planted {pool.mutants} faults and a <em>different</em> model, {pool.critic}, graded whether the suite catches them. It caught {pool.caught}, missed {pool.survivors}. Signed <strong>{pool.statusLabel}</strong>{pool.provenMissed > 0 ? ', and the herd handed back a test that catches the gap' : ''}.
       </p>
     ) : (
       <p class="caption">

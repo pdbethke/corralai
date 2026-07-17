@@ -1465,6 +1465,21 @@ function ensureSiteReplayStyles(){
 #exec .xpool-review .xpooltext, .cockpit-exec .xpool-review .xpooltext { color:var(--stage-red,#e8503a); font-weight:600; }
 #exec .xpoolfindingline, .cockpit-exec .xpoolfindingline { white-space:normal; overflow-wrap:anywhere; border-left:2px solid var(--stage-line,#33405a); padding-left:8px; }
 #exec .xpoolfindingtext, .cockpit-exec .xpoolfindingtext { color:var(--stage-fg,#e6e1d8); font-size:11.5px; font-style:italic; line-height:1.5; }
+/* the per-agent WORK timeline inside the inspector — the console beat
+   vocabulary (renderReplayLine) re-scoped into .aw-body, so a drill-down reads
+   with the same colored ❯ commands and 💭 thoughts as the console feed (those
+   rules are otherwise scoped to #exec/.cockpit-exec and never reach here). */
+.aw-body .itl { margin:2px 0 6px; }
+.aw-body .itl .xblk { padding:2px 0; border:none; }
+.aw-body .itl .xcmdline { display:flex; align-items:baseline; gap:6px; white-space:normal; overflow-wrap:anywhere; line-height:1.5; }
+.aw-body .itl .xprompt { color:var(--stage-amber,#e8a838); flex:none; }
+.aw-body .itl .xcmd { font-family:ui-monospace,monospace; color:var(--stage-fg,#e6e1d8); }
+.aw-body .itl .xbadge { font-weight:700; flex:none; }
+.aw-body .itl .xthoughtline { white-space:normal; overflow-wrap:anywhere; }
+.aw-body .itl .xthoughtico { flex:none; opacity:.85; }
+.aw-body .itl .xthoughttext { color:var(--stage-muted,#8a8170); font-style:italic; font-size:11.5px; line-height:1.5; }
+.aw-body .itlprod { color:var(--stage-green,#8fdcab); cursor:pointer; }
+.aw-body .itlprod:hover { color:var(--stage-amber,#e8a838); }
 `;
   document.head.appendChild(s);
 }
@@ -1587,7 +1602,38 @@ function renderReplayWindowBody(name){
     h += '<div class="isec">holding</div>';
     holdingTasks.forEach(t => { h += '<div class="irow"><span class="igreen">' + esc(t.title || t.key) + '</span></div>'; });
   }
-  if(ra && ra.lastCmd){ h += '<div class="isec">last command</div><div class="irow ir">❯ ' + esc(ra.lastCmd) + '</div>'; }
+  // The per-agent WORK timeline — every thought + command this agent authored,
+  // in tape order, in the SAME console vocabulary (renderReplayLine) but scoped
+  // to one agent: "see exactly what this model did." The console feed holds only
+  // exec + thought beats (both tagged .agent), already chronological, so filter
+  // it directly and reuse the renderer (DRY with the console + the per-agent
+  // filter chip). Supersedes the old one-line "last command" summary.
+  const beats = replayConsoleLines.filter(e => e.agent === name);
+  if(beats.length){
+    h += '<div class="isec">work <span class="ir">· thoughts + commands, in order</span></div>';
+    h += '<div class="itl">' + beats.map(renderReplayLine).join('') + '</div>';
+  }
+  // The artifacts this agent PRODUCED — each task it completed up to this scrub
+  // position, clickable into the task-story modal (its mutants / authored test /
+  // critique + fault-highlight). Same inline-onclick as renderReplayTasks: the
+  // body is rebuilt every tick so a bound node would detach mid-click, and task
+  // keys are internal ids (that function's same trust boundary).
+  const produced = [], seenProduced = new Set();
+  const uptoIdx = (typeof replayIdx === 'number') ? replayIdx : replayEvents.length;
+  for(let i=0; i<uptoIdx && i<replayEvents.length; i++){
+    const ev = replayEvents[i];
+    if(ev.kind === 'task_done' && ev.actor === name && ev.subject && !seenProduced.has(ev.subject)){
+      seenProduced.add(ev.subject); produced.push(ev.subject);
+    }
+  }
+  if(produced.length){
+    h += '<div class="isec">produced <span class="ir">· click to inspect the artifact</span></div>';
+    produced.forEach(k => {
+      const t = replayTasks.get(k) || { key: k, title: k };
+      const key = String(k).replace(/'/g, "\\'");   // escape like renderReplayTasks — a quoted key must not break out of the inline handler
+      h += '<div class="irow itlprod" role="button" tabindex="0" title="open this task’s story" onclick="replayTaskClick(\'' + key + '\')" style="cursor:pointer">✓ ' + esc(t.title || k) + '</div>';
+    });
+  }
   if(ra && ra.lastTs){ h += '<div class="isec">last activity</div><div class="irow ir">' + esc(replayWindowActivityLabel(ra)) + '</div>'; }
   // The tape doesn't capture each agent's per-agent memory / MCP / skills state
   // — but the LIVE view does. Show the real section shape (the same three the

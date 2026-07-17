@@ -404,6 +404,20 @@
   .aw-body .itask { color:var(--fg); line-height:1.45; padding:3px 0; }
   .aw-body .iconf { color:var(--red); }
   .aw-body .igreen { color:var(--green); }
+  /* the per-agent WORK timeline inside the inspector — the console beat
+     vocabulary (renderReplayLine) re-scoped into .aw-body, since #exec's beat
+     rules never reach here. Mirror of ensureSiteReplayStyles' .aw-body .itl. */
+  .aw-body .itl { margin:2px 0 6px; }
+  .aw-body .itl .xblk { padding:2px 0; border:none; }
+  .aw-body .itl .xcmdline { display:flex; align-items:baseline; gap:6px; white-space:normal; overflow-wrap:anywhere; line-height:1.5; }
+  .aw-body .itl .xprompt { color:var(--amber); flex:none; }
+  .aw-body .itl .xcmd { font-family:ui-monospace,monospace; color:var(--fg); }
+  .aw-body .itl .xbadge { font-weight:700; flex:none; }
+  .aw-body .itl .xthoughtline { white-space:normal; overflow-wrap:anywhere; }
+  .aw-body .itl .xthoughtico { flex:none; opacity:.85; }
+  .aw-body .itl .xthoughttext { color:var(--muted); font-style:italic; font-size:11.5px; line-height:1.5; }
+  .aw-body .itlprod { color:var(--green); cursor:pointer; }
+  .aw-body .itlprod:hover { color:var(--amber); }
   .aw-footer { flex:none; border-top:1px solid var(--line); padding:8px 10px; display:flex;
     flex-direction:column; gap:4px; }
   .aw-footer .aw-askbox { display:flex; gap:6px; }
@@ -2006,7 +2020,34 @@ function renderReplayAgentWindowBody(name) {
     h += `<div class="isec">holding</div>`;
     holdingTasks.forEach(t => { h += `<div class="irow"><span class="igreen">${esc(t.title || t.key)}</span></div>`; });
   }
-  if (ra && ra.lastCmd) h += `<div class="isec">last command</div><div class="irow ir">❯ ${esc(ra.lastCmd)}</div>`;
+  // The per-agent WORK timeline — every thought + command this agent authored,
+  // in tape order, reusing the shared renderReplayLine (replay-player.js) scoped
+  // to one agent. Supersedes the old one-line "last command" summary.
+  const beats = replayConsoleLines.filter(e => e.agent === name);
+  if (beats.length) {
+    h += `<div class="isec">work <span class="ir">· thoughts + commands, in order</span></div>`;
+    h += `<div class="itl">${beats.map(renderReplayLine).join('')}</div>`;
+  }
+  // The artifacts this agent PRODUCED — each task it completed up to this scrub
+  // position, clickable into the task-story modal. Same inline-onclick as the
+  // task list (renderReplayTasks): the body is rebuilt each tick, and task keys
+  // are internal ids (that function's same trust boundary).
+  const produced = [], seenProduced = new Set();
+  const uptoIdx = (typeof replayIdx === 'number') ? replayIdx : replayEvents.length;
+  for (let i = 0; i < uptoIdx && i < replayEvents.length; i++) {
+    const ev = replayEvents[i];
+    if (ev.kind === 'task_done' && ev.actor === name && ev.subject && !seenProduced.has(ev.subject)) {
+      seenProduced.add(ev.subject); produced.push(ev.subject);
+    }
+  }
+  if (produced.length) {
+    h += `<div class="isec">produced <span class="ir">· click to inspect the artifact</span></div>`;
+    produced.forEach(k => {
+      const t = replayTasks.get(k) || { key: k, title: k };
+      const key = String(k).replace(/'/g, "\\'");   // escape like renderReplayTasks — a quoted key must not break out of the inline handler
+      h += `<div class="irow itlprod" role="button" tabindex="0" title="open this task’s story" onclick="replayTaskClick('${key}')" style="cursor:pointer">✓ ${esc(t.title || k)}</div>`;
+    });
+  }
   if (ra && ra.lastTs) h += `<div class="isec">last activity</div><div class="irow ir">${esc(replayActivityLabel(ra))}</div>`;
   // Show the real section shape (same three the live view renders), flagged
   // live-only, instead of one flat "not recorded" line — so it reads as "this

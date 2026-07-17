@@ -332,6 +332,46 @@ test('a finished agent stops claiming "working on" once idle at end-of-tape', as
   await expect(body).toContainText('finished');
 });
 
+test('agent drill-down shows the per-agent work timeline + produced artifacts', async ({ page }) => {
+  // Clicking an agent opens a per-agent WORK timeline — its own thoughts +
+  // commands in order (the console vocabulary, scoped to one agent) — plus the
+  // artifacts it PRODUCED, each clickable into the task-story modal. "See
+  // exactly what this model did," reconstructed purely from the tape.
+  await page.goto('/recordings/');
+  await page.evaluate(() => {
+    (window as any).startReplay({
+      events: [
+        { ts: 1, kind: 'task_created', subject: 't1', detail: { role: 'builder', title: 'wire the loop' } },
+        { ts: 2, kind: 'task_claimed', actor: 'Bob', subject: 't1', detail: { role: 'builder', title: 'wire the loop' } },
+        { ts: 3, kind: 'thought', actor: 'Bob', subject: '', detail: { role: 'builder', text: 'the retry needs a ceiling or it spins forever' } },
+        { ts: 4, kind: 'execution', actor: 'Bob', subject: 'go build ./...', detail: { ok: true, exit_code: 0, role: 'builder' } },
+        { ts: 5, kind: 'execution', actor: 'Bob', subject: 'go test ./...', detail: { ok: false, exit_code: 1, role: 'builder' } },
+        { ts: 6, kind: 'task_done', actor: 'Bob', subject: 't1', detail: { role: 'builder', result: 'func retry() {}' } },
+      ],
+    });
+  });
+  const scrub = page.locator('#replay-scrub');
+  await expect(async () => {
+    expect(Number(await scrub.getAttribute('max'))).toBe(6);
+  }).toPass({ timeout: 5000 });
+  await scrub.evaluate((el) => { (el as HTMLInputElement).value = '6'; el.dispatchEvent(new Event('input')); });
+
+  await page.locator('#agents .arow', { hasText: 'Bob' }).click();
+  const body = page.locator('.aw-win .aw-body');
+  await expect(body).toBeVisible();
+  // the WORK timeline: the agent's thought + BOTH commands, in order
+  await expect(body).toContainText('work');
+  await expect(body).toContainText('the retry needs a ceiling');
+  await expect(body).toContainText('go build ./...');
+  await expect(body).toContainText('go test ./...');
+  // the PRODUCED artifact, clickable → opens the task-story modal (the result)
+  await expect(body).toContainText('produced');
+  const prod = body.locator('.itlprod', { hasText: 'wire the loop' });
+  await expect(prod).toBeVisible();
+  await prod.click();
+  await expect(page.locator('.aw-win', { hasText: 'func retry' })).toBeVisible();
+});
+
 test('the console surfaces BOTH the builder and the tester (command from subject, not detail.command)', async ({ page }) => {
   // python-ratelimit: Bob (builder) ran 5 commands, Tess (tester) ran 3 — the
   // console reads the command from the beat's `subject`, so both actors appear.

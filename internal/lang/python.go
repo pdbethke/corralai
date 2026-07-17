@@ -11,6 +11,17 @@ import (
 
 func init() { Register(pyPlugin{}) }
 
+// pythonBin resolves the interpreter to invoke: python3 (canonical on the
+// Linux hosts corral grades on) when present, else bare python. The bwrap
+// jail binds the host /usr, so whatever is on the host PATH is what the jail
+// sees — resolving here on the host is valid for the jailed test run too.
+func pythonBin() string {
+	if _, err := exec.LookPath("python3"); err == nil {
+		return "python3"
+	}
+	return "python"
+}
+
 type pyPlugin struct{}
 
 func (pyPlugin) Name() string                { return "python" }
@@ -20,11 +31,11 @@ func (pyPlugin) Detect(codePath string) bool { return filepath.Ext(codePath) == 
 // module under test is importable from the workspace root.
 func (pyPlugin) Scaffold() map[string]string { return map[string]string{} }
 
-func (pyPlugin) TestCmd() []string { return []string{"python", "-m", "pytest", "-q"} }
+func (pyPlugin) TestCmd() []string { return []string{pythonBin(), "-m", "pytest", "-q"} }
 
 // CompileCheck is an offline, stdlib syntax check of both files.
 func (pyPlugin) CompileCheck(codePath, testPath string) []string {
-	return []string{"python", "-m", "py_compile", codePath, testPath}
+	return []string{pythonBin(), "-m", "py_compile", codePath, testPath}
 }
 
 // TestPath follows the pytest convention: pkg/foo.py -> pkg/test_foo.py.
@@ -38,13 +49,14 @@ func (pyPlugin) TestPath(codePath string) string {
 	return filepath.Join(dir, name)
 }
 
-// Preflight fails CLOSED unless python3 is on PATH AND pytest is importable
-// (offline). The gate refuses to run rather than false-certify.
+// Preflight fails CLOSED unless python3 (or python) is on PATH AND pytest is
+// importable (offline). The gate refuses to run rather than false-certify.
 func (pyPlugin) Preflight() error {
-	if err := toolOnPath("python"); err != nil {
+	bin := pythonBin()
+	if err := toolOnPath(bin); err != nil {
 		return err
 	}
-	if out, err := exec.Command("python", "-m", "pytest", "--version").CombinedOutput(); err != nil {
+	if out, err := exec.Command(bin, "-m", "pytest", "--version").CombinedOutput(); err != nil {
 		return fmt.Errorf("lang: python plugin preflight — pytest not importable (install it on the host): %v: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil

@@ -67,7 +67,15 @@ func TestScorePythonKillsAndSurvives(t *testing.T) {
 	const codePath = "evenmod.py"
 	code := "def is_even(n):\n    return n % 2 == 0\n"
 	mutants := []adequacy.Mutant{
-		{ID: "m1", Code: "def is_even(n):\n    return n % 2 == 1\n"}, // inverted — a real test kills it
+		// Always-even, not inverted: an inverted mutant (return n % 2 == 1)
+		// would also be killed by the gappy suite below (its single
+		// assert is_even(2) still catches an inversion), so the survivor
+		// assertion on the gappy run would never actually hold. "return
+		// True" is killed by the thorough suite's `assert not is_even(3)`
+		// but survives the gappy suite, which only ever asserts the even
+		// case — giving both scenarios a mutant with the behavior their
+		// assertions expect.
+		{ID: "m1", Code: "def is_even(n):\n    return True\n"},
 	}
 
 	// If a workspace import of the module fails because the workspace root

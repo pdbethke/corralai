@@ -75,7 +75,11 @@ func BuildReplayStream(q *queue.Store, tel *telemetry.Store, missionID int64) ([
 		}
 		if t.DoneTS > 0 {
 			kind := "task_" + t.Status // task_done, task_cancelled, task_superseded
-			out = append(out, ReplayEvent{TS: t.DoneTS, Kind: kind, Actor: t.ClaimedBy, Subject: t.Key})
+			var doneDetail map[string]any
+			if t.Result != "" {
+				doneDetail = map[string]any{"result": t.Result}
+			}
+			out = append(out, ReplayEvent{TS: t.DoneTS, Kind: kind, Actor: t.ClaimedBy, Subject: t.Key, Detail: doneDetail})
 		}
 	}
 
@@ -89,6 +93,12 @@ func BuildReplayStream(q *queue.Store, tel *telemetry.Store, missionID int64) ([
 			Detail: map[string]any{"type": f.Type, "severity": f.Severity}}
 		if f.ReporterBackend != "" {
 			fev.Detail["backend"] = f.ReporterBackend
+		}
+		if f.Evidence != "" {
+			fev.Detail["evidence"] = f.Evidence
+		}
+		if f.SuggestedAction != "" {
+			fev.Detail["suggested_action"] = f.SuggestedAction
 		}
 		out = append(out, fev)
 		if f.ResolvedTS > 0 {

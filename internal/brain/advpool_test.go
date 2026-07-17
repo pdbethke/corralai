@@ -18,7 +18,38 @@ import (
 	"github.com/pdbethke/corralai/internal/principals"
 	"github.com/pdbethke/corralai/internal/queue"
 	"github.com/pdbethke/corralai/internal/sandbox"
+	"github.com/pdbethke/corralai/internal/telemetry"
 )
+
+// TestAdvPoolEventSinkRecordsToTelemetry proves advpoolEventSink.Emit is a
+// working adapter to the brain's telemetry store: a pool_verdict event
+// emitted for a mission id must come back out of EventsForMission for that
+// same mission — this is what lets BuildReplayStream surface the pool's
+// reasoning events (pool_subject/dev_adequacy/verdict) in a run's replay.
+func TestAdvPoolEventSinkRecordsToTelemetry(t *testing.T) {
+	tel, err := telemetry.Open(filepath.Join(t.TempDir(), "t.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { tel.Close() })
+
+	sink := advpoolEventSink{tel: tel}
+	sink.Emit(7, "pool_verdict", "abc123", map[string]any{"status": "certified"})
+
+	evs, err := tel.EventsForMission(7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, e := range evs {
+		if e.Kind == "pool_verdict" && e.Detail["status"] == "certified" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("EventSink.Emit must record a pool_verdict telemetry event for the mission")
+	}
+}
 
 // stubScorer/stubValidator satisfy advpool.Scorer/advpool.Validator with
 // no-op bodies: these tests exercise start_adversarial_run's admin gate and
@@ -283,6 +314,58 @@ func TestAdvPoolRuntimeRunStatusDelegates(t *testing.T) {
 
 	if _, found := rt.RunStatus(999); found {
 		t.Fatal("RunStatus(999): found=true, want false for an unknown id")
+	}
+}
+
+// TestAdvPoolConvergenceSetsMissionTerminalStatus proves tick transitions the
+// pool's tracking mission out of "running" once the driver converges — the
+// gap that left MissionHistoryList (which skips running/paused missions)
+// excluding every pool run, so /api/history's export meta came out
+// task_count=0/finding_count=0/duration=0 for runs that had actually
+// finished. Forces convergence deterministically via the RunDeadline
+// backstop (mirrors advpool.TestRunDeadlineProducesNeedsReviewVerdict) so
+// this test never depends on the stub scorer/validator's scoring behavior —
+// a timed-out run always converges to a signed StatusNeedsReview verdict.
+func TestAdvPoolConvergenceSetsMissionTerminalStatus(t *testing.T) {
+	rt, _ := newTestAdvPoolRuntime(t, nil)
+
+	runID, err := rt.StartRun(testRunSpecIn())
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	m, err := rt.missions.Mission(runID)
+	if err != nil {
+		t.Fatalf("Mission(%d) before tick: %v", runID, err)
+	}
+	if m.Status != "running" {
+		t.Fatalf("tracking mission status before convergence = %q, want %q", m.Status, "running")
+	}
+
+	// Force the RunDeadline backstop: no task ever completes, so the only
+	// way this run converges is the wall-clock timeout, which always yields
+	// a signed StatusNeedsReview verdict (never certified).
+	rt.driver.RunDeadline = time.Millisecond
+	rt.driver.Now = func() time.Time { return time.Now().Add(time.Hour) }
+
+	rt.tick(context.Background())
+
+	got, err := rt.missions.Mission(runID)
+	if err != nil {
+		t.Fatalf("Mission(%d) after tick: %v", runID, err)
+	}
+	if got.Status != "certified" && got.Status != "needs-review" {
+		t.Fatalf("converged pool mission must be terminal, got %q", got.Status)
+	}
+	if got.Status != advpool.StatusNeedsReview {
+		t.Fatalf("a RunDeadline timeout must map to %q, got %q", advpool.StatusNeedsReview, got.Status)
+	}
+
+	rt.mu.Lock()
+	active := rt.activeID
+	rt.mu.Unlock()
+	if active != 0 {
+		t.Fatalf("tick must clear the active slot on convergence, got activeID=%d", active)
 	}
 }
 

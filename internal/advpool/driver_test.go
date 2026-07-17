@@ -718,6 +718,115 @@ func TestTick_Aggregate_SignFails_SkipsLeaderboardAndRetries(t *testing.T) {
 	}
 }
 
+// eventCall records one EventSink.Emit invocation for assertions.
+type eventCall struct {
+	mid     int64
+	kind    string
+	subject string
+	detail  map[string]any
+}
+
+// fakeEventSink never touches real telemetry: it just captures what it was
+// asked to emit, in order, for assertions.
+type fakeEventSink struct {
+	events []eventCall
+}
+
+func (f *fakeEventSink) Emit(missionID int64, kind, subject string, detail map[string]any) {
+	f.events = append(f.events, eventCall{missionID, kind, subject, detail})
+}
+
+// TestDriverEmitsReasoningEvents drives a full run to convergence with an
+// EventSink wired and asserts the three reasoning-milestone events fire with
+// the expected detail keys.
+func TestDriverEmitsReasoningEvents(t *testing.T) {
+	const mission int64 = 88
+	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}}
+	scorer := &fakeScorer{devKillRate: 0.9, devSurvivors: survivors, poolSurvivors: nil}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0]}}
+	q := newTestQueue(t)
+	d, err := NewDriver(q, scorer, validator, decorrelatedAssign(), 0.5)
+	if err != nil {
+		t.Fatalf("NewDriver: %v", err)
+	}
+	sink := &fakeEventSink{}
+	d.Events = sink
+	d.Signer = &fakeSigner{}
+	if err := d.StartRun(mission, testRunSpec(), nil); err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	if _, err := q.PromoteReady(mission); err != nil {
+		t.Fatalf("PromoteReady: %v", err)
+	}
+
+	completeFullRun(t, d, mission, "no vacuous tests found")
+
+	kinds := map[string]map[string]any{}
+	for _, e := range sink.events {
+		if e.mid != mission {
+			t.Fatalf("event %q emitted with missionID %d, want %d", e.kind, e.mid, mission)
+		}
+		kinds[e.kind] = e.detail
+	}
+	for _, want := range []string{"pool_subject", "pool_dev_adequacy", "pool_verdict"} {
+		if _, ok := kinds[want]; !ok {
+			t.Fatalf("missing emit %q; got %v", want, keysOf2(kinds))
+		}
+	}
+	if kinds["pool_subject"]["dev_test_code"] == nil {
+		t.Fatal("pool_subject must carry the dev tests (the subject)")
+	}
+	if kinds["pool_subject"]["goal"] == nil || kinds["pool_subject"]["code"] == nil ||
+		kinds["pool_subject"]["code_path"] == nil || kinds["pool_subject"]["dev_test_path"] == nil {
+		t.Fatalf("pool_subject detail incomplete: %v", kinds["pool_subject"])
+	}
+	da := kinds["pool_dev_adequacy"]
+	if da["dev_kill_rate"] == nil || da["mutants_total"] == nil || da["survivors"] == nil || da["survivor_ids"] == nil {
+		t.Fatalf("pool_dev_adequacy detail incomplete: %v", da)
+	}
+	ids, ok := da["survivor_ids"].([]string)
+	if !ok || len(ids) != 1 || ids[0] != "m1" {
+		t.Fatalf("pool_dev_adequacy survivor_ids = %v, want [\"m1\"]", da["survivor_ids"])
+	}
+	verdict := kinds["pool_verdict"]
+	if verdict["status"] == nil || verdict["dev_kill_rate"] == nil || verdict["mutants_total"] == nil ||
+		verdict["survivors"] == nil || verdict["proven_missed"] == nil || verdict["models_by_role"] == nil ||
+		verdict["record_id"] == nil || verdict["record_head"] == nil {
+		t.Fatalf("pool_verdict detail incomplete: %v", verdict)
+	}
+	if verdict["status"] != StatusCertified {
+		t.Fatalf("pool_verdict status = %v, want %q", verdict["status"], StatusCertified)
+	}
+}
+
+// keysOf2 returns the keys of a map[string]map[string]any — a second helper
+// distinct from the file's keysOf(map[string]*queue.Task) since Go generics
+// aren't used here.
+func keysOf2(m map[string]map[string]any) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
+// TestDriverNilEventSinkNoop proves a Driver with Events left nil (the
+// default — every pre-existing test) drives a full run to convergence
+// without panicking: the emit helper must no-op cleanly.
+func TestDriverNilEventSinkNoop(t *testing.T) {
+	const mission int64 = 89
+	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}}
+	scorer := &fakeScorer{devKillRate: 0.9, devSurvivors: survivors, poolSurvivors: nil}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0]}}
+	d, _ := newTestDriver(t, mission, scorer, validator, 0.5)
+	// d.Events left nil deliberately.
+
+	v := completeFullRun(t, d, mission, "no vacuous tests found")
+	if v.Status != StatusCertified {
+		t.Fatalf("Status = %q, want %q", v.Status, StatusCertified)
+	}
+}
+
 func TestCheckDecorrelation(t *testing.T) {
 	if err := CheckDecorrelation(decorrelatedAssign()); err != nil {
 		t.Fatalf("expected a properly decorrelated assignment to pass, got %v", err)
@@ -956,6 +1065,8 @@ func TestRunDeadlineProducesNeedsReviewVerdict(t *testing.T) {
 	d.Signer = signer
 	leaderboard := &fakeLeaderboard{}
 	d.Leaderboard = leaderboard
+	sink := &fakeEventSink{}
+	d.Events = sink
 
 	if err := d.StartRun(mission, testRunSpec(), nil); err != nil {
 		t.Fatalf("StartRun: %v", err)
@@ -980,6 +1091,22 @@ func TestRunDeadlineProducesNeedsReviewVerdict(t *testing.T) {
 	}
 	if len(leaderboard.calls) != 0 {
 		t.Fatalf("a timed-out run must never feed the leaderboard, got %d calls", len(leaderboard.calls))
+	}
+
+	// The replay trace must not lose the verdict beat just because the run
+	// timed out instead of aggregating normally: pool_verdict must still fire.
+	var found *eventCall
+	for i := range sink.events {
+		if sink.events[i].kind == "pool_verdict" {
+			found = &sink.events[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("expected a pool_verdict event on the timeout path, got events: %+v", sink.events)
+	}
+	if found.detail["status"] != StatusNeedsReview {
+		t.Fatalf("pool_verdict status = %v, want %q", found.detail["status"], StatusNeedsReview)
 	}
 
 	// A second Tick must be idempotent: same stored verdict pointer, no re-sign.

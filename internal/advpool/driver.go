@@ -64,6 +64,15 @@ type LeaderboardSink interface {
 	Record(model, role, outcome string)
 }
 
+// EventSink receives the pool's reasoning milestones as replay/telemetry
+// events. Optional (nil ⇒ no-op), like Signer/Leaderboard — the pure Driver
+// takes no telemetry dependency; the brain wires this to its telemetry store
+// keyed on the run's missionID. Kinds: pool_subject, pool_dev_adequacy,
+// pool_verdict. detail carries the real values/evidence, never a summary.
+type EventSink interface {
+	Emit(missionID int64, kind, subject string, detail map[string]any)
+}
+
 // Verdict is one run's final, gated outcome.
 type Verdict struct {
 	Repo, Commit    string
@@ -151,6 +160,12 @@ type Driver struct {
 	Signer      Signer
 	Leaderboard LeaderboardSink
 
+	// Events is the optional reasoning-event sink (nil = no-op), mirroring
+	// Signer/Leaderboard: every pre-existing Driver test keeps working
+	// unwired. When set, the driver emits pool_subject/pool_dev_adequacy/
+	// pool_verdict at the three milestones below via the d.emit helper.
+	Events EventSink
+
 	// Threshold is the minimum DevKillRate a run may be auto-certified at;
 	// below it (or with any blocking finding open) the run is routed to
 	// needs-review — the human gate never auto-certifies a weak dev suite.
@@ -221,6 +236,25 @@ func NewDriver(q *queue.Store, scorer Scorer, validator Validator, assign RoleAs
 	return d, nil
 }
 
+// emit forwards a reasoning-milestone event to d.Events, no-op when it is
+// nil (the default — every pre-existing Driver test keeps working unwired).
+func (d *Driver) emit(missionID int64, kind, subject string, detail map[string]any) {
+	if d.Events != nil {
+		d.Events.Emit(missionID, kind, subject, detail)
+	}
+}
+
+// survivorIDs returns the Mutant.ID of each survivor, for the
+// pool_dev_adequacy event — NOT the mutant source, which is recoverable from
+// the mutant-generator task's Result if ever needed.
+func survivorIDs(survivors []adequacy.Mutant) []string {
+	ids := make([]string, len(survivors))
+	for i, m := range survivors {
+		ids[i] = m.ID
+	}
+	return ids
+}
+
 // StartRun enqueues a run's DAG (BuildDAG(rs, d.Assign, sigs)) under missionID
 // and begins tracking its progress. missionID is caller-supplied (Phase 5
 // wires it to a real mission.Store id); the driver has no mission package of
@@ -253,6 +287,10 @@ func (d *Driver) StartRun(missionID int64, rs RunSpec, sigs []repoindex.Signatur
 	d.mu.Lock()
 	d.runs[missionID] = &runState{rs: rs, sigs: sigs, testWriterTaskID: twID, startedAt: d.Now()}
 	d.mu.Unlock()
+	d.emit(missionID, "pool_subject", rs.CodePath, map[string]any{
+		"goal": rs.Goal, "code": rs.Code, "dev_test_code": rs.DevTestCode,
+		"code_path": rs.CodePath, "dev_test_path": rs.DevTestPath,
+	})
 	return nil
 }
 
@@ -315,6 +353,11 @@ func (d *Driver) Tick(ctx context.Context, missionID int64) (*Verdict, error) {
 			}
 			v.RecordID, v.RecordHead = recordID, head
 		}
+		d.emit(missionID, "pool_verdict", v.Commit, map[string]any{
+			"status": v.Status, "dev_kill_rate": v.DevKillRate, "mutants_total": v.MutantsTotal,
+			"survivors": v.Survivors, "proven_missed": v.ProvenMissed, "models_by_role": v.ModelsByRole,
+			"record_id": v.RecordID, "record_head": v.RecordHead,
+		})
 		d.mu.Lock()
 		run.verdict = &v
 		d.mu.Unlock()
@@ -390,6 +433,10 @@ func (d *Driver) tickDevAdequacy(ctx context.Context, missionID int64, run *runS
 	// is visible even if the downstream test-writer/aggregate steps stall.
 	log.Printf("advpool: run %d dev-adequacy: the dev's OWN tests scored %.0f%% (killed %d of %d mutants, %d survived — bugs the dev's tests miss)",
 		missionID, killRate*100, len(mutants)-len(survivors), len(mutants), len(survivors))
+	d.emit(missionID, "pool_dev_adequacy", "", map[string]any{
+		"dev_kill_rate": run.devKillRate, "mutants_total": run.mutantsTotal,
+		"survivors": len(run.devSurvivors), "survivor_ids": survivorIDs(run.devSurvivors),
+	})
 
 	if len(survivors) == 0 {
 		// A perfect dev suite: it killed every mutant. There are no survivors
@@ -526,6 +573,12 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 			d.feedLeaderboard(v, run.testWriterMoot)
 		}
 	}
+
+	d.emit(missionID, "pool_verdict", v.Commit, map[string]any{
+		"status": v.Status, "dev_kill_rate": v.DevKillRate, "mutants_total": v.MutantsTotal,
+		"survivors": v.Survivors, "proven_missed": v.ProvenMissed, "models_by_role": v.ModelsByRole,
+		"record_id": v.RecordID, "record_head": v.RecordHead,
+	})
 
 	d.mu.Lock()
 	run.verdict = &v

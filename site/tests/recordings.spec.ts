@@ -762,6 +762,28 @@ test('the cockpit body is bounded and the task list scrolls inside it (never gro
   expect(bounded, 'the cockpit body must be bounded to a fixed row track').toBe(true);
 });
 
+test('task story shows the produced artifact (result)', async ({ page }) => {
+  await page.goto('/recordings/');
+  await page.evaluate(() => {
+    (window as any).startReplay({ events: [
+      { ts: 1, kind: 'task_created', subject: 'mutant-generator', detail: { role: 'mutant-generator', title: 'plant faults' } },
+      { ts: 2, kind: 'task_claimed', subject: 'mutant-generator', actor: 'claude-writer', detail: {} },
+      { ts: 3, kind: 'task_done', subject: 'mutant-generator', actor: 'claude-writer', detail: { result: '===MUTATION_1===\npackage fence\n// the planted fault' } },
+    ] });
+  });
+  await expect(async () => {
+    expect(Number(await page.locator('#replay-scrub').getAttribute('max'))).toBe(3);
+  }).toPass({ timeout: 5000 });
+  const scrub = page.locator('#replay-scrub');
+  await scrub.evaluate((el) => { (el as HTMLInputElement).value = '3'; el.dispatchEvent(new Event('input')); });
+  const row = page.locator('#tasks .trow', { hasText: 'plant faults' });
+  await expect(row).toBeVisible();
+  await row.click();
+  const body = page.locator('.aw-win .aw-body');
+  await expect(body).toBeVisible();
+  await expect(body).toContainText('the planted fault');
+});
+
 test('every recording card corresponds to an active stream + meta pair', async () => {
   const files = fs.readdirSync(RECORDINGS_DIR);
   const streamFiles = files.filter((f) => f.endsWith('.json') && !f.endsWith('.meta.json'));

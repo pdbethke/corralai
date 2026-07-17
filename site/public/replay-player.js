@@ -1573,7 +1573,7 @@ function buildReplayTaskStories(){
   let base = 0;
   const ensureT = (key) => {
     let t = tasks.get(key);
-    if(!t){ t = {key, title:'', role:'', instruction:'', deps:[], supersedes:0, status:'queued', claimedBy:'', actors:new Set(), createdTs:0, claimedTs:0, doneTs:0, doneKind:'', commands:[], findings:[], next:[]}; tasks.set(key, t); }
+    if(!t){ t = {key, title:'', role:'', instruction:'', deps:[], supersedes:0, status:'queued', claimedBy:'', actors:new Set(), createdTs:0, claimedTs:0, doneTs:0, doneKind:'', commands:[], findings:[], next:[], result:''}; tasks.set(key, t); }
     return t;
   };
   for(const ev of evs){
@@ -1608,6 +1608,7 @@ function buildReplayTaskStories(){
         t.doneKind = ev.kind;
         if(ev.actor) t.actors.add(ev.actor);
         if(ev.ts) t.doneTs = ev.ts;
+        if(d.result) t.result = d.result;
         break;
       }
     }
@@ -1688,6 +1689,7 @@ function ensureReplayTaskStyles(){
 .aw-body .aw-chain { color: var(--stage-amber,#e8a838); cursor:pointer; text-decoration:underline dotted; }
 .aw-body .aw-chain:hover { color: var(--stage-fg,#e6e1d8); }
 .aw-body .aw-timing { color: var(--stage-muted,#8a8170); font-size:11.5px; line-height:1.6; }
+.aw-body .aw-result { max-height:220px; overflow:auto; font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11px; line-height:1.5; color: var(--stage-fg,#e6e1d8); background: var(--stage-bg,#0e1116); border: 1px solid var(--stage-line,#33405a); border-radius:6px; padding:8px; white-space:pre-wrap; word-break:break-word; margin:2px 0 4px; }
 `;
   document.head.appendChild(s);
 }
@@ -1789,6 +1791,8 @@ function renderReplayTaskWindowBody(key){
       h += '<div class="aw-frow"><span class="aw-fsev" style="color:' + sevColor(f.severity) + '">' + esc(f.severity || 'finding') + '</span> <span class="ir">' + esc(f.type) + '</span>' + (f.target ? ' <span style="color:var(--stage-fg,#e6e1d8)">' + esc(f.target) + '</span>' : '') + '</div>';
     });
   }
+
+  if(t.result){ h += '<div class="isec">result</div><pre class="aw-result">' + esc(t.result) + '</pre>'; }
 
   // WHO did it
   h += '<div class="isec">who did it</div>';

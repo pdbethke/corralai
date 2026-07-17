@@ -593,9 +593,9 @@ func (rt *AdvPoolRuntime) tick(ctx context.Context) {
 		// /api/history and the export meta comes out 0/0/0 for a run that
 		// actually finished. Map the verdict onto a terminal status so it
 		// gets counted.
-		status := "needs-review"
+		status := advpool.StatusNeedsReview
 		if verdict.Status == advpool.StatusCertified {
-			status = "certified"
+			status = advpool.StatusCertified
 		}
 		if rt.missions != nil {
 			if err := rt.missions.SetMissionStatus(id, status); err != nil {

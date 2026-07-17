@@ -1065,6 +1065,8 @@ func TestRunDeadlineProducesNeedsReviewVerdict(t *testing.T) {
 	d.Signer = signer
 	leaderboard := &fakeLeaderboard{}
 	d.Leaderboard = leaderboard
+	sink := &fakeEventSink{}
+	d.Events = sink
 
 	if err := d.StartRun(mission, testRunSpec(), nil); err != nil {
 		t.Fatalf("StartRun: %v", err)
@@ -1089,6 +1091,22 @@ func TestRunDeadlineProducesNeedsReviewVerdict(t *testing.T) {
 	}
 	if len(leaderboard.calls) != 0 {
 		t.Fatalf("a timed-out run must never feed the leaderboard, got %d calls", len(leaderboard.calls))
+	}
+
+	// The replay trace must not lose the verdict beat just because the run
+	// timed out instead of aggregating normally: pool_verdict must still fire.
+	var found *eventCall
+	for i := range sink.events {
+		if sink.events[i].kind == "pool_verdict" {
+			found = &sink.events[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("expected a pool_verdict event on the timeout path, got events: %+v", sink.events)
+	}
+	if found.detail["status"] != StatusNeedsReview {
+		t.Fatalf("pool_verdict status = %v, want %q", found.detail["status"], StatusNeedsReview)
 	}
 
 	// A second Tick must be idempotent: same stored verdict pointer, no re-sign.

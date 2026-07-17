@@ -353,6 +353,11 @@ func (d *Driver) Tick(ctx context.Context, missionID int64) (*Verdict, error) {
 			}
 			v.RecordID, v.RecordHead = recordID, head
 		}
+		d.emit(missionID, "pool_verdict", v.Commit, map[string]any{
+			"status": v.Status, "dev_kill_rate": v.DevKillRate, "mutants_total": v.MutantsTotal,
+			"survivors": v.Survivors, "proven_missed": v.ProvenMissed, "models_by_role": v.ModelsByRole,
+			"record_id": v.RecordID, "record_head": v.RecordHead,
+		})
 		d.mu.Lock()
 		run.verdict = &v
 		d.mu.Unlock()

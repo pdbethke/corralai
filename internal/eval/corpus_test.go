@@ -3,6 +3,7 @@ package eval
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -57,5 +58,35 @@ func TestLoadRejectsMissingFileAndDupID(t *testing.T) {
 	os.WriteFile(mp, []byte(`{"corpus_version":"v1","targets":[{"id":"a","code_path":"nope.go","test_path":"nope_test.go","goal":"g","test_cmd":"go test"}]}`), 0o644)
 	if _, err := Load(mp); err == nil {
 		t.Fatal("expected error for missing file")
+	}
+}
+
+func TestLoadRejectsDuplicateID(t *testing.T) {
+	dir := t.TempDir()
+	must := func(p, s string) {
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(s), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	must(filepath.Join(dir, "x/x.go"), "package x\nfunc F() bool { return true }\n")
+	must(filepath.Join(dir, "x/x_test.go"), "package x\nimport \"testing\"\nfunc TestF(t *testing.T){ if !F(){t.Fatal(\"x\")} }\n")
+	must(filepath.Join(dir, "y/y.go"), "package y\nfunc G() bool { return true }\n")
+	must(filepath.Join(dir, "y/y_test.go"), "package y\nimport \"testing\"\nfunc TestG(t *testing.T){ if !G(){t.Fatal(\"y\")} }\n")
+	man := `{"corpus_version":"v1","targets":[
+	  {"id":"dup","code_path":"x/x.go","test_path":"x/x_test.go","goal":"F is true","test_cmd":"go test ./x/..."},
+	  {"id":"dup","code_path":"y/y.go","test_path":"y/y_test.go","goal":"G is true","test_cmd":"go test ./y/..."}
+	]}`
+	mp := filepath.Join(dir, "manifest.json")
+	must(mp, man)
+
+	_, err := Load(mp)
+	if err == nil {
+		t.Fatal("expected error for duplicate target id")
+	}
+	if !strings.Contains(err.Error(), `duplicate target id "dup"`) {
+		t.Fatalf("error should mention the duplicate id: %v", err)
 	}
 }

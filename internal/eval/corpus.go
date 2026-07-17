@@ -51,7 +51,11 @@ func Load(manifestPath string) (Manifest, error) {
 	for i := range m.Targets {
 		t := &m.Targets[i]
 		if t.ID == "" || t.CodePath == "" || t.TestPath == "" || t.Goal == "" || t.TestCmd == "" {
-			return Manifest{}, fmt.Errorf("eval: target %d missing a required field", i)
+			ident := t.ID
+			if ident == "" {
+				return Manifest{}, fmt.Errorf("eval: target %d missing a required field", i)
+			}
+			return Manifest{}, fmt.Errorf("eval: target %s (index %d) missing a required field", ident, i)
 		}
 		if seen[t.ID] {
 			return Manifest{}, fmt.Errorf("eval: duplicate target id %q", t.ID)

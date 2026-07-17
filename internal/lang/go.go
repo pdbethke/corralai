@@ -5,8 +5,6 @@ package lang
 import (
 	"path/filepath"
 	"strings"
-
-	"github.com/pdbethke/corralai/internal/controlgate"
 )
 
 func init() { Register(goPlugin{}) }
@@ -17,8 +15,7 @@ func (goPlugin) Name() string                { return "go" }
 func (goPlugin) Detect(codePath string) bool { return filepath.Ext(codePath) == ".go" }
 
 func (goPlugin) Scaffold() map[string]string {
-	base, _, _ := controlgate.LangScaffold("go")
-	return base
+	return map[string]string{"go.mod": "module control\ngo 1.26\n"}
 }
 
 func (goPlugin) TestCmd() []string { return []string{"go", "test", "./..."} }

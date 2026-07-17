@@ -563,6 +563,28 @@ func TestPluginForFailsClosedOnUnknownExt(t *testing.T) {
 	}
 }
 
+// TestResolveRunLang_RejectsDisagreement proves the run-language resolver
+// (used by StartRun before Preflight/mission-creation) treats an explicit
+// in.Lang as an assertion that MUST agree with the extension-detected
+// plugin — a declared "go" run over a .py code_path is refused rather than
+// silently graded (and signed) under the wrong language.
+func TestResolveRunLang_RejectsDisagreement(t *testing.T) {
+	if _, err := resolveRunLang("go", "x.py"); err == nil {
+		t.Fatal("resolveRunLang(go, x.py) must error on lang/extension disagreement — fail closed")
+	}
+	p, err := resolveRunLang("", "x.go")
+	if err != nil || p.Name() != "go" {
+		t.Fatalf("resolveRunLang(\"\", x.go) = %v,%v; want go,nil", p, err)
+	}
+	p, err = resolveRunLang("go", "x.go")
+	if err != nil || p.Name() != "go" {
+		t.Fatalf("resolveRunLang(go, x.go) = %v,%v; want go,nil", p, err)
+	}
+	if _, err := resolveRunLang("", "x.cobol"); err == nil {
+		t.Fatal("resolveRunLang(\"\", x.cobol) must error — unknown extension, fail closed")
+	}
+}
+
 // TestAdvPoolBaseGoUnchanged proves advPoolBase's go path is unchanged after
 // gaining a codePath argument: the go.mod scaffold and the recursive `go
 // test ./...` default must be byte-identical to the prior go-only behavior.

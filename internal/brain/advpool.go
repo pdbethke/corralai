@@ -51,6 +51,24 @@ func pluginFor(codePath string) (golang.Plugin, error) {
 	return p, nil
 }
 
+// resolveRunLang resolves the ONE language plugin a run's grading path will
+// actually use — from the code file's extension (a .py file is pytest-graded
+// no matter what inLang says). An explicit inLang is treated as an assertion:
+// it must agree with the detected plugin's name, or the run is refused
+// (fail-closed) rather than silently grading under a mismatched toolchain.
+// Preflighting the toolchain is NOT done here (it hits the host) — callers
+// preflight the returned plugin themselves.
+func resolveRunLang(inLang, codePath string) (golang.Plugin, error) {
+	detected, err := pluginFor(codePath)
+	if err != nil {
+		return nil, err
+	}
+	if in := strings.TrimSpace(inLang); in != "" && in != detected.Name() {
+		return nil, fmt.Errorf("advpool: declared language %q disagrees with code_path %q (detected %q) — refusing", inLang, codePath, detected.Name())
+	}
+	return detected, nil
+}
+
 // advPoolTestPath derives the synthetic test-file name a candidate test is
 // written to in the jail workspace from the code file's own path via the
 // resolved language plugin's own convention. Falls back to the legacy go
@@ -567,15 +585,14 @@ func (rt *AdvPoolRuntime) StartRun(in AdvPoolRunSpec) (int64, error) {
 		nMutants = maxAdvPoolMutants
 	}
 
-	langName := in.Lang
-	if langName == "" {
-		if p, err := pluginFor(in.CodePath); err == nil {
-			langName = p.Name()
-		}
-	}
-	langPlugin, ok := golang.ByName(langName)
-	if !ok {
-		return 0, fmt.Errorf("advpool: unknown language %q for %q — refusing", langName, in.CodePath)
+	// Resolve the language the jail will actually grade with — from the code
+	// file's extension (a .py file is pytest-graded no matter what in.Lang
+	// says). An explicit in.Lang is an assertion: it MUST match, or the run
+	// is refused (fail-closed) rather than grading under a mismatched
+	// toolchain with a mislabeled signed Verdict.Lang.
+	langPlugin, err := resolveRunLang(in.Lang, in.CodePath)
+	if err != nil {
+		return 0, err
 	}
 	if err := langPlugin.Preflight(); err != nil {
 		return 0, fmt.Errorf("advpool: language toolchain unavailable — refusing to run: %w", err)

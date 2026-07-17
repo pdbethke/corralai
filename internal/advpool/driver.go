@@ -68,9 +68,9 @@ type LeaderboardSink interface {
 // single converged run (see internal/bugcatch). Catches come ONLY from
 // ProvenMissed — no claim/self-report path may ever populate it.
 type BugCatchObservation struct {
-	Model, Role                                 string
-	Catches, Opportunities                      int
-	SoundTests, AuthoredTests                   int
+	Model, Role                                  string
+	Catches, Opportunities                       int
+	SoundTests, AuthoredTests                    int
 	CriticFlags, MutantsPlanted, MutantsSurvived int
 }
 

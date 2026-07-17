@@ -1,0 +1,15 @@
+{
+  "directive": "adversarial-pool: git@github.com:pdbethke/corralai.git@e21ab59844df7de59b68d13ffb30b1e270b4e64d",
+  "task_count": 4,
+  "done_task_count": 3,
+  "finding_count": 0,
+  "duration_seconds": 84.37248158454895,
+  "models": [
+    "anthropic:claude-sonnet-5",
+    "gemini-3.5-flash"
+  ],
+  "platform": {
+    "inference": "vendor cloud \u2014 Claude Sonnet 5 (Anthropic) + Gemini 3.5 Flash (Google)",
+    "host": "linux/amd64"
+  }
+}

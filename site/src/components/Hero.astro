@@ -10,7 +10,7 @@ const hasGeneratedRecordings = Object.keys(generatedRecordings).some(
 );
 const preferredRecordings = hasGeneratedRecordings ? generatedRecordings : legacyRecordings;
 const fallbackRecordings = hasGeneratedRecordings ? legacyRecordings : {};
-const heroSlug = (process.env.CORRALAI_HERO_SLUG || 'mixtape').trim() || 'mixtape';
+const heroSlug = (process.env.CORRALAI_HERO_SLUG || 'pool-fence-crossvendor').trim() || 'pool-fence-crossvendor';
 
 function readRecordingModule(modules: Record<string, any>, slug: string, suffix: string) {
   const key = Object.keys(modules).find((p) => p.endsWith(`/${slug}${suffix}`));
@@ -32,6 +32,29 @@ if (!golden || !meta) {
 }
 
 const minutes = Math.round((meta.duration_seconds || 0) / 60);
+
+// If the hero tape is an adversarial-pool run, its signed verdict — not the
+// build-mission task/finding counts — is the real story (a pool run reports 0
+// "findings"; its result is a kill-rate + survivors + a signed verdict). Read
+// it straight off the tape so the caption is data-driven and can't drift from
+// the recording. Falls back to the build-mission caption for any other tape.
+const events = Array.isArray(golden.events) ? golden.events : [];
+const poolVerdict = events.find((e: any) => e?.kind === 'pool_verdict')?.detail;
+const poolSubject = events.find((e: any) => e?.kind === 'pool_subject')?.detail;
+const pool = poolVerdict
+  ? {
+      codePath: poolSubject?.code_path || 'the change',
+      mutants: poolVerdict.mutants_total,
+      survivors: poolVerdict.survivors,
+      caught:
+        poolVerdict.mutants_total != null && poolVerdict.survivors != null
+          ? poolVerdict.mutants_total - poolVerdict.survivors
+          : null,
+      planter: poolVerdict.models_by_role?.['mutant-generator'],
+      critic: poolVerdict.models_by_role?.['test-critic'],
+      statusLabel: poolVerdict.status === 'certified' ? 'CERTIFIED' : 'NEEDS-REVIEW',
+    }
+  : null;
 ---
 <section id="hero">
   <div class="hero-copy">
@@ -58,12 +81,17 @@ const minutes = Math.round((meta.duration_seconds || 0) / 60);
       <span aria-hidden="true">·</span>
       <span><em>Signed</em> &amp; offline-verifiable — tamper-evident, human-gated</span>
     </p>
-    <p class="caption">
-      {/* single line: Astro collapses a text→newline→expression boundary to
-          ZERO chars (not a space), which rendered "done),56 findings" when
-          this wrapped after the comma */}
-      Same machinery, recorded: here's the herd on a real mission — {meta.task_count} tasks ({meta.done_task_count} done), {meta.finding_count} findings, {minutes}m — every step replayable at 2× below. The gate runs on this exact engine.
-    </p>
+    {pool ? (
+      <p class="caption">
+        {/* single line: Astro collapses a text→newline→expression boundary to
+            ZERO chars, so keep interpolations inline */}
+        A real run, recorded: a <em>decorrelated</em> cross-vendor herd put <code>{pool.codePath}</code> to its own tests — {pool.planter} planted {pool.mutants} faults, the code's suite caught {pool.caught} and missed {pool.survivors}, and a <em>different</em> model, {pool.critic}, proved the gap real. Signed <strong>{pool.statusLabel}</strong>, the missing test handed back — every step replayable at 2× below.
+      </p>
+    ) : (
+      <p class="caption">
+        Same machinery, recorded: here's the herd on a real mission — {meta.task_count} tasks ({meta.done_task_count} done), {meta.finding_count} findings, {minutes}m — every step replayable at 2× below. The gate runs on this exact engine.
+      </p>
+    )}
     <div class="ctas">
       <a class="cta" href="https://github.com/pdbethke/corralai">View on GitHub</a>
       <a class="cta secondary" id="watch-demo-cta" href="#" style="display:none">Watch the demo</a>

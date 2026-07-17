@@ -63,6 +63,10 @@ tool, not `corral certify`), and its certification threshold is a fixed constant
 today, not per-run configurable. The broader staffed verification engine and the
 control-owner tests described in the spec remain **designed, not yet built** —
 don't expect more than the above from this README; this is the honest floor.
+Certify-by-execution now supports Go and Python (pytest), with the language
+inferred from the code file's extension; other languages are a plugin each in
+`internal/lang` (Python runs need `pytest` present on the brain host — missing
+it fails closed, never a false certify).
 
 What still stands from the original build:
 

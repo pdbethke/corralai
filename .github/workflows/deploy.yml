@@ -20,6 +20,10 @@ jobs:
           go-version-file: go.mod
           cache: true
       - run: go vet ./...
+      - name: Provision Python test toolchain (audit gate — python plugin)
+        run: |
+          python3 -m pip install --user --break-system-packages --quiet pytest || python3 -m pip install --user --quiet pytest || pipx install pytest || true
+          python3 -m pytest --version || echo "pytest not available — python-in-jail test will SKIP"
       - run: go test ./...
       - name: Install gosec
         run: go install github.com/securego/gosec/v2/cmd/gosec@latest

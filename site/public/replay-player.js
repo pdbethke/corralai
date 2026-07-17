@@ -1790,7 +1790,7 @@ function ensureReplayTaskStyles(){
 .aw-win.aw-task { width: 430px; }
 .aw-win.aw-task .aw-title b { color: var(--stage-fg,#e6e1d8); }
 .aw-pill { font-size:9.5px; text-transform:uppercase; letter-spacing:.4px; padding:1px 7px; border-radius:999px; flex:none; white-space:nowrap; }
-.aw-body .aw-instr { color: var(--stage-fg,#e6e1d8); line-height:1.5; padding:2px 0 4px; }
+.aw-body .aw-instr { max-height:132px; overflow-y:auto; white-space:pre-wrap; overflow-wrap:anywhere; color: var(--stage-fg,#e6e1d8); font-size:11.5px; line-height:1.5; background: var(--stage-bg,#0e1116); border: 1px solid var(--stage-line,#33405a); border-radius:6px; padding:8px; margin:2px 0 4px; }
 .aw-body .aw-honest { color: var(--stage-muted,#8a8170); font-style:italic; font-size:11.5px; line-height:1.45; padding:2px 0; }
 .aw-body .aw-cmdrow { font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11.5px; line-height:1.55; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .aw-body .aw-cmdrow .aw-prompt { color: var(--stage-amber,#e8a838); }

@@ -6,11 +6,6 @@ import { cockpitHud, cockpitViews, cockpitTasks, cockpitAgents, cockpitFindings,
 import Header from '../components/Header.astro';
 import ReplayBarControls from '../components/ReplayBarControls.astro';
 
-const generatedAnalyticsModules = import.meta.glob('../data/generated/analytics.json', { eager: true });
-const legacyAnalyticsModules = import.meta.glob('../data/analytics.json', { eager: true });
-const analyticsModule = Object.values(generatedAnalyticsModules)[0] ?? Object.values(legacyAnalyticsModules)[0];
-if (!analyticsModule) throw new Error('missing analytics.json (generated and legacy)');
-const analytics = (analyticsModule as any).default ?? analyticsModule;
 
 // Prefer generated recordings materialized from DuckDB during prebuild; fall
 // back to committed JSON tapes when no generated bundle exists.
@@ -77,13 +72,10 @@ for (const [p, mod] of Object.entries(streamModules)) {
 }
 // Lead with the thesis tape (the mixtape — local + frontier in one mission),
 // then the rest alphabetically. The spread reads best mixtape-first.
-const LEAD = 'mixtape';
+const LEAD = 'pool-fence-crossvendor';
 cards.sort((a, b) =>
   (a.slug === LEAD ? -1 : b.slug === LEAD ? 1 : 0) || a.slug.localeCompare(b.slug),
 );
-const maxModelFindings = Math.max(1, ...analytics.findings_by_model.map((r: any) => r.findings));
-const tasksByModel = analytics.tasks_by_model ?? [];
-const maxModelTasks = Math.max(1, ...tasksByModel.map((r: any) => r.tasks));
 ---
 <html lang="en">
 <head>
@@ -102,20 +94,19 @@ const maxModelTasks = Math.max(1, ...tasksByModel.map((r: any) => r.tasks));
   <div class="section">
     <h1>Recordings</h1>
     <p>
-      Three real missions, chosen to make one point: <strong>the brain doesn't
-      care what's behind an agent.</strong> One tape runs entirely on a local 7B
-      (Qwen, on a single RTX 5070). One runs entirely on frontier CLIs (Claude,
-      Gemini, Codex) — each on its own subscription, no API keys. And the
-      <strong>mixtape</strong> puts them in the <em>same</em> mission: a cheap
-      local model doing the design, frontier models building and hardening, one
-      deterministic gate holding all of them honest. No vendor lock-in, no
-      orchestration rewrite to swap a model.
+      Real audits, recorded. Each is corral <em>certifying a change by
+      execution</em>: a <strong>decorrelated</strong> cross-vendor herd plants
+      faults in the code, checks whether the developer's own tests catch them,
+      and signs a tamper-evident verdict — <em>no one judging their own cause</em>.
+      Some certify clean; some find a gap the suite missed and refuse to pass.
+      Both are here, honestly — the gate showing its work either way.
     </p>
     <p>
       Every one was exported through the same deny-list + human-manifest privacy
-      gate as the landing hero. Open any tab in a replay and scrub — the
-      <strong>work-by-model</strong> table below shows which model did what.
-      Pick a card to replay it on the corral canvas.
+      gate as the landing hero, and is offline-verifiable from its signed record.
+      Open the <strong>tests</strong> tab in any replay to see the verdict, the
+      code under review with the surviving fault highlighted, and the suite it
+      graded. Pick a card to replay it on the corral canvas.
     </p>
     <div class="cards">
       {cards.map((c) => (
@@ -183,63 +174,15 @@ const maxModelTasks = Math.max(1, ...tasksByModel.map((r: any) => r.tasks));
   <div class="section" id="analytics">
     <h2>Across the recordings</h2>
     <p class="how">
-      Computed at build time with DuckDB over the recordings rendered above —
-      the public face of the product's <code>model_comparison</code> report.
-      MotherDuck stays product-side (fleet sync + the cross-brain oracle,
-      credentialed) and is never wired into this site.
+      The cross-recording metric for audits isn't a findings table — it's the
+      <strong>bug-catching scorecard</strong>: which model actually catches bugs,
+      <em>proven by execution</em>, per (model, role). It accrues as audits run —
+      a cell stays <em>provisional</em> until it has enough of them, so we don't
+      publish a confident number off a handful — and lives at
+      <code>corral scorecard</code> / <code>/api/bugcatch</code>, offline-verifiable
+      from each signed record. Fugu's routing scores come out of a trained black
+      box; this comes out of a test that really ran and really killed a fault.
     </p>
-
-    <h3>Work by model — tasks completed</h3>
-    <p class="muted">Who actually <em>built, tested, and fixed</em> — task completions grouped by the
-      model behind the agent. This is where a mixed-model run shows its hand: every model that
-      carried a role appears here, unlike findings-by-model below (which is often the deterministic
-      gate doing the reporting).</p>
-    <table>
-      <thead><tr><th>model</th><th>tasks</th><th></th></tr></thead>
-      <tbody>
-        {tasksByModel.map((r: any) => (
-          <tr>
-            <td>{r.model}</td>
-            <td class="num">{r.tasks}</td>
-            <td class="barcell"><div class="bar" style={`width:${Math.round((r.tasks / maxModelTasks) * 100)}%`}></div></td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-
-    <h3>Findings by model</h3>
-    <table>
-      <thead><tr><th>model</th><th>findings</th><th></th></tr></thead>
-      <tbody>
-        {analytics.findings_by_model.map((r: any) => (
-          <tr>
-            <td>{r.model}</td>
-            <td class="num">{r.findings}</td>
-            <td class="barcell"><div class="bar" style={`width:${Math.round((r.findings / maxModelFindings) * 100)}%`}></div></td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-
-    <h3>Findings by severity, per recording</h3>
-    <table>
-      <thead><tr><th>recording</th><th>severity</th><th>count</th></tr></thead>
-      <tbody>
-        {analytics.findings_by_severity.map((r: any) => (
-          <tr><td>{r.slug}</td><td>{r.severity}</td><td class="num">{r.n}</td></tr>
-        ))}
-      </tbody>
-    </table>
-
-    <h3>Task durations, per recording</h3>
-    <table>
-      <thead><tr><th>recording</th><th>tasks</th><th>avg (s)</th><th>max (s)</th></tr></thead>
-      <tbody>
-        {analytics.task_durations.map((r: any) => (
-          <tr><td>{r.slug}</td><td class="num">{r.tasks}</td><td class="num">{r.avg_seconds}</td><td class="num">{r.max_seconds}</td></tr>
-        ))}
-      </tbody>
-    </table>
   </div>
 </body>
 </html>

@@ -27,7 +27,7 @@ const RECORDING_SLUGS = fs.existsSync(RECORDINGS_DIR)
       })
   : [];
 
-test('the gallery renders a card per recording, plays one, shows analytics, and stays on-domain', async ({ page }) => {
+test('the gallery renders a card per recording, plays one, points at the scorecard, and stays on-domain', async ({ page }) => {
   const external: string[] = [];
   const backendApiCalls: string[] = [];
   page.on('request', (req) => {
@@ -46,8 +46,9 @@ test('the gallery renders a card per recording, plays one, shows analytics, and 
     expect(Number(max)).toBeGreaterThan(0);
   }).toPass({ timeout: 5000 });
 
-  await expect(page.locator('#analytics table').first()).toBeVisible();
-  await expect(page.locator('#analytics .bar').first()).toBeVisible();
+  // The "Across the recordings" section now points at the audit-native metric
+  // (the bug-catching scorecard), not a build-mission findings table.
+  await expect(page.locator('#analytics')).toContainText('bug-catching scorecard');
 
   expect(external, `unexpected external requests: ${external.join(', ')}`).toHaveLength(0);
   expect(backendApiCalls, `unexpected /api/* calls from a backend-free page: ${backendApiCalls.join(', ')}`).toHaveLength(0);
@@ -72,11 +73,31 @@ test('a recording with an .analysis.md shows the affordance and reveals the anal
 });
 
 test('the cockpit panels replay the tape: console lines appear and track the scrub position', async ({ page }) => {
+  // Synthetic build-shaped tape: the gallery now ships only audit (pool) runs,
+  // so we drive the cockpit off an injected tape to test the panel machinery
+  // (console tracks the scrub, tasks + findings headers render) independent of
+  // whatever recordings happen to exist. Executions are spread through the
+  // tape so the console total genuinely grows mid → end.
   await page.goto('/recordings/');
-  await page.locator('.card').first().click();
+  await page.evaluate(() => {
+    (window as any).startReplay({
+      events: [
+        { ts: 1, kind: 'task_created', subject: 't1', detail: { role: 'builder', title: 'wire the loop' } },
+        { ts: 2, kind: 'task_claimed', actor: 'Bob', subject: 't1', detail: { role: 'builder', title: 'wire the loop' } },
+        { ts: 3, kind: 'execution', actor: 'Bob', subject: 'go build ./...', detail: { ok: true, exit_code: 0, role: 'builder' } },
+        { ts: 4, kind: 'execution', actor: 'Bob', subject: 'go vet ./...', detail: { ok: true, exit_code: 0, role: 'builder' } },
+        { ts: 5, kind: 'task_created', subject: 't2', detail: { role: 'reviewer', title: 'review the loop' } },
+        { ts: 6, kind: 'task_claimed', actor: 'Tess', subject: 't2', detail: { role: 'reviewer', title: 'review the loop' } },
+        { ts: 7, kind: 'finding_reported', actor: 'Tess', subject: 'retry.go', detail: { severity: 'high', type: 'no ceiling on retry', role: 'reviewer' } },
+        { ts: 8, kind: 'execution', actor: 'Bob', subject: 'go test ./...', detail: { ok: true, exit_code: 0, role: 'builder' } },
+        { ts: 9, kind: 'execution', actor: 'Bob', subject: 'gofmt -l .', detail: { ok: true, exit_code: 0, role: 'builder' } },
+        { ts: 10, kind: 'task_done', actor: 'Bob', subject: 't1', detail: { role: 'builder' } },
+      ],
+    });
+  });
   await expect(async () => {
     const max = await page.locator('#replay-scrub').getAttribute('max');
-    expect(Number(max)).toBeGreaterThan(0);
+    expect(Number(max)).toBe(10);
   }).toPass({ timeout: 5000 });
 
   const scrub = page.locator('#replay-scrub');
@@ -162,14 +183,35 @@ test('findings PERSIST as the tape plays: open findings stay visible and severit
 });
 
 test('the agents roster reconstructs the herd from claims + executions', async ({ page }) => {
-  const slug = RECORDING_SLUGS.find((s) => s === 'golden-run') || RECORDING_SLUGS[0];
-  test.skip(!slug, 'no recordings available');
-  await openRecording(page, slug!);
+  // Synthetic multi-agent build tape — a three-worker herd (Bob/Tess/Sage),
+  // each claiming a task and running a command. Gallery recordings are now
+  // audit runs (a two-seat pool), so we inject a build-shaped tape to exercise
+  // the roster's herd reconstruction directly.
+  await page.goto('/recordings/');
+  await page.evaluate(() => {
+    (window as any).startReplay({
+      events: [
+        { ts: 1, kind: 'task_created', subject: 't1', detail: { role: 'builder', title: 'wire the loop' } },
+        { ts: 2, kind: 'task_claimed', actor: 'Bob', subject: 't1', detail: { role: 'builder', title: 'wire the loop' } },
+        { ts: 3, kind: 'execution', actor: 'Bob', subject: 'go build ./...', detail: { ok: true, exit_code: 0, role: 'builder' } },
+        { ts: 4, kind: 'task_created', subject: 't2', detail: { role: 'reviewer', title: 'review the loop' } },
+        { ts: 5, kind: 'task_claimed', actor: 'Tess', subject: 't2', detail: { role: 'reviewer', title: 'review the loop' } },
+        { ts: 6, kind: 'execution', actor: 'Tess', subject: 'go test ./...', detail: { ok: true, exit_code: 0, role: 'reviewer' } },
+        { ts: 7, kind: 'task_created', subject: 't3', detail: { role: 'tester', title: 'fuzz the loop' } },
+        { ts: 8, kind: 'task_claimed', actor: 'Sage', subject: 't3', detail: { role: 'tester', title: 'fuzz the loop' } },
+        { ts: 9, kind: 'execution', actor: 'Sage', subject: 'go test -run Fuzz', detail: { ok: true, exit_code: 0, role: 'tester' } },
+        { ts: 10, kind: 'task_done', actor: 'Bob', subject: 't1', detail: { role: 'builder' } },
+      ],
+    });
+  });
+  await expect(async () => {
+    expect(Number(await page.locator('#replay-scrub').getAttribute('max'))).toBe(10);
+  }).toPass({ timeout: 5000 });
   const max = Number(await page.locator('#replay-scrub').getAttribute('max'));
   await seekTo(page, Math.floor(max * 0.8));
   await expect(page.locator('#agents .feedhdr')).toContainText('agents ·');
-  // the golden run's herd has many named workers (Bob, Tess, Sage, …) each
-  // with a role — assert several rows, each carrying a role label.
+  // the herd has three named workers (Bob, Tess, Sage) each with a role —
+  // assert several rows, each carrying a role label.
   const rows = page.locator('#agents .arow');
   expect(await rows.count(), 'expected multiple agents in the roster').toBeGreaterThan(2);
   await expect(page.locator('#agents .ameta').first()).not.toBeEmpty();
@@ -198,9 +240,6 @@ test('the agents roster reconstructs the herd from claims + executions', async (
 });
 
 test('clicking a roster agent opens the faithful floating inspector window (tape-only, no /api/*, survives scrub)', async ({ page }) => {
-  const slug = RECORDING_SLUGS.find((s) => s === 'golden-run') || RECORDING_SLUGS[0];
-  test.skip(!slug, 'no recordings available');
-
   // HARD CONSTRAINT: the window must reconstruct detail from the tape alone —
   // never a brain call. Fail the test on ANY /api/* request the click triggers.
   const apiCalls: string[] = [];
@@ -208,7 +247,26 @@ test('clicking a roster agent opens the faithful floating inspector window (tape
     if (new URL(req.url()).pathname.startsWith('/api/')) apiCalls.push(req.url());
   });
 
-  await openRecording(page, slug!);
+  // Synthetic build tape (gallery ships audit runs only). Alphabetically Bob
+  // sorts first in the roster and is present from ts2, so the .arow.first()
+  // the test clicks is a worker with real tape data at every scrub position.
+  await page.goto('/recordings/');
+  await page.evaluate(() => {
+    (window as any).startReplay({
+      events: [
+        { ts: 1, kind: 'task_created', subject: 't1', detail: { role: 'builder', title: 'wire the loop' } },
+        { ts: 2, kind: 'task_claimed', actor: 'Bob', subject: 't1', detail: { role: 'builder', title: 'wire the loop' } },
+        { ts: 3, kind: 'execution', actor: 'Bob', subject: 'go build ./...', detail: { ok: true, exit_code: 0, role: 'builder' } },
+        { ts: 4, kind: 'task_done', actor: 'Bob', subject: 't1', detail: { role: 'builder' } },
+        { ts: 5, kind: 'task_created', subject: 't2', detail: { role: 'reviewer', title: 'review the loop' } },
+        { ts: 6, kind: 'task_claimed', actor: 'Tess', subject: 't2', detail: { role: 'reviewer', title: 'review the loop' } },
+        { ts: 7, kind: 'execution', actor: 'Tess', subject: 'go test ./...', detail: { ok: true, exit_code: 0, role: 'reviewer' } },
+      ],
+    });
+  });
+  await expect(async () => {
+    expect(Number(await page.locator('#replay-scrub').getAttribute('max'))).toBe(7);
+  }).toPass({ timeout: 5000 });
   const scrub = page.locator('#replay-scrub');
   const max = Number(await scrub.getAttribute('max'));
 

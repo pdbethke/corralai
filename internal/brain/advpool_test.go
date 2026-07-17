@@ -12,6 +12,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/advpool"
+	"github.com/pdbethke/corralai/internal/bugcatch"
 	"github.com/pdbethke/corralai/internal/coord"
 	"github.com/pdbethke/corralai/internal/memory"
 	"github.com/pdbethke/corralai/internal/mission"
@@ -546,5 +547,29 @@ func TestAdvPoolAssignUsesDefaults_UnsetIdenticalToToday(t *testing.T) {
 	}
 	if err := advpool.CheckDecorrelation(got); err != nil {
 		t.Fatalf("assignment must stay decorrelated: %v", err)
+	}
+}
+
+func TestBugCatchSinkPersistsToStore(t *testing.T) {
+	store, err := bugcatch.Open(t.TempDir() + "/bc.duckdb")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	sink := advpoolBugCatchSink{
+		store:     store,
+		clock:     func() time.Time { return time.Unix(1000, 0).UTC() },
+		missionID: 7, repo: "git@x:y.git", commit: "abc123",
+	}
+	sink.Record(42, "headhash", []advpool.BugCatchObservation{
+		{Model: "claude-sonnet-5", Role: "test-writer", Catches: 1, Opportunities: 2, AuthoredTests: 1, SoundTests: 1},
+	})
+	cells, err := store.Scorecard(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cells) != 1 || cells[0].Catches != 1 || cells[0].Opportunities != 2 {
+		t.Fatalf("scorecard = %+v, want one cell catches=1 opps=2", cells)
 	}
 }

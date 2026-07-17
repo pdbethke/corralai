@@ -98,6 +98,7 @@ import (
 	"github.com/pdbethke/corralai/internal/attest"
 	"github.com/pdbethke/corralai/internal/auth"
 	"github.com/pdbethke/corralai/internal/brain"
+	"github.com/pdbethke/corralai/internal/bugcatch"
 	"github.com/pdbethke/corralai/internal/buildstore"
 	"github.com/pdbethke/corralai/internal/controlgate"
 	"github.com/pdbethke/corralai/internal/controlspec"
@@ -698,6 +699,17 @@ func main() {
 		log.Fatalf("open build-record store: %v", err)
 	}
 	defer buildStore.Close()
+
+	// The adversarial pool's bug-catching scorecard store — per-seat,
+	// execution-proven catch/opportunity/mutant observations feeding the
+	// leaderboard's decorrelated staffing.
+	bugCatchDB := env("CORRALAI_BUGCATCH_DB", filepath.Join(home, ".claude", "corralai_bugcatch.duckdb"))
+	bugCatchStore, err := bugcatch.Open(bugCatchDB)
+	if err != nil {
+		log.Fatalf("open bugcatch store: %v", err)
+	}
+	defer bugCatchStore.Close()
+
 	certifyKeyFile := env("CORRALAI_CERTIFY_KEY_FILE", filepath.Join(home, ".claude", "corralai_certify_key"))
 	certifyKey, err := buildstore.LoadOrCreateSigningKey(certifyKeyFile)
 	if err != nil {
@@ -1160,6 +1172,7 @@ func main() {
 		BuildStore:            buildStore,
 		CertifyKey:            certifyKey,
 		Witness:               certifyWitness,
+		BugCatch:              bugCatchStore,
 		SpawnBudget: brain.SpawnBudget{
 			MaxAgentsPerPrincipal: envInt("CORRALAI_MAX_AGENTS_PER_PRINCIPAL", 0),
 			MaxSpawnDepth:         envInt("CORRALAI_MAX_SPAWN_DEPTH", 0),

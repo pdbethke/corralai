@@ -21,6 +21,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/advpool"
+	"github.com/pdbethke/corralai/internal/bugcatch"
 	"github.com/pdbethke/corralai/internal/controlgate"
 	"github.com/pdbethke/corralai/internal/gate"
 	"github.com/pdbethke/corralai/internal/mission"
@@ -234,6 +235,38 @@ func (s advpoolEventSink) Emit(missionID int64, kind, subject string, detail map
 	rec(s.tel, missionID, kind, "corral-advpool", subject, detail)
 }
 
+// advpoolBugCatchSink persists a converged run's per-seat bug-catching
+// observations into the DuckDB scorecard store, stamping the run context
+// (ts via the brain clock, mission/repo/commit, source="pool") the pure driver
+// does not carry. Satisfies advpool.BugCatchSink.
+type advpoolBugCatchSink struct {
+	store     *bugcatch.Store
+	clock     func() time.Time
+	missionID int64
+	repo      string
+	commit    string
+}
+
+func (s advpoolBugCatchSink) Record(recordID int64, recordHead string, obs []advpool.BugCatchObservation) {
+	if s.store == nil {
+		return
+	}
+	rows := make([]bugcatch.Observation, 0, len(obs))
+	for _, o := range obs {
+		rows = append(rows, bugcatch.Observation{
+			TS: s.clock(), RecordID: recordID, RecordHead: recordHead,
+			MissionID: s.missionID, Repo: s.repo, Commit: s.commit,
+			Model: o.Model, Role: o.Role, Source: "pool",
+			Catches: o.Catches, Opportunities: o.Opportunities,
+			SoundTests: o.SoundTests, AuthoredTests: o.AuthoredTests,
+			CriticFlags: o.CriticFlags, MutantsPlanted: o.MutantsPlanted, MutantsSurvived: o.MutantsSurvived,
+		})
+	}
+	if err := s.store.Record(context.Background(), rows); err != nil {
+		log.Printf("advpool: bugcatch record failed (mission %d record %d): %v", s.missionID, recordID, err)
+	}
+}
+
 // advPoolBetter reports whether a's ModelStats outrank b's for staffing
 // purposes: higher exec pass rate wins; ties broken by more completed tasks
 // (more evidence); final tiebreak is the model name so the pick is
@@ -423,6 +456,7 @@ type AdvPoolRuntime struct {
 	missions *mission.Store
 	staffing *mission.StaffingManager
 	defaults advpool.RoleAssignment // operator CORRALAI_ADVPOOL_MODELS base (nil = hardcoded)
+	bugCatch *bugcatch.Store        // optional scorecard store; nil = feature off (see StartRun)
 
 	mu         sync.Mutex
 	activeID   int64
@@ -533,6 +567,12 @@ func (rt *AdvPoolRuntime) StartRun(in AdvPoolRunSpec) (int64, error) {
 	}
 
 	rt.driver.Assign = assign
+	if rt.bugCatch != nil {
+		rt.driver.BugCatch = advpoolBugCatchSink{
+			store: rt.bugCatch, clock: time.Now,
+			missionID: mid, repo: rs.Repo, commit: rs.Commit,
+		}
+	}
 	if err := rt.driver.StartRun(mid, rs, sigs); err != nil {
 		return 0, fmt.Errorf("advpool: start run: %w", err)
 	}
@@ -675,6 +715,7 @@ func StartAdversarialPool(ctx context.Context, opts Options) (*AdvPoolRuntime, e
 		missions:   opts.Missions,
 		staffing:   opts.Staffing,
 		defaults:   defaults,
+		bugCatch:   opts.BugCatch,
 		tickErrors: make(map[int64]int),
 	}
 

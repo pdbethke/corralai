@@ -33,6 +33,7 @@ type advFinding struct {
 type advVerdict struct {
 	Repo            string            `json:"Repo"`
 	Commit          string            `json:"Commit"`
+	Lang            string            `json:"Lang"`
 	DevKillRate     float64           `json:"DevKillRate"`
 	MutantsTotal    int               `json:"MutantsTotal"`
 	Survivors       int               `json:"Survivors"`

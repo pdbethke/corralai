@@ -94,6 +94,7 @@ type EventSink interface {
 // Verdict is one run's final, gated outcome.
 type Verdict struct {
 	Repo, Commit    string
+	Lang            string          // the run's resolved language plugin name (e.g. "go", "python")
 	DevKillRate     float64         // the headline: the DEV suite's kill-rate, from Scorer — never a self-report
 	MutantsTotal    int             // total mutants the mutant-generator produced
 	Survivors       int             // mutants the dev's own tests did NOT kill
@@ -645,6 +646,7 @@ func (d *Driver) timeoutVerdict(run *runState) Verdict {
 	return Verdict{
 		Repo:         run.rs.Repo,
 		Commit:       run.rs.Commit,
+		Lang:         run.rs.Lang,
 		DevKillRate:  run.devKillRate,
 		MutantsTotal: run.mutantsTotal,
 		Survivors:    len(run.devSurvivors),

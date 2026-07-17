@@ -21,6 +21,7 @@ func aggregate(
 	v := Verdict{
 		Repo:            rs.Repo,
 		Commit:          rs.Commit,
+		Lang:            rs.Lang,
 		DevKillRate:     devKillRate,
 		MutantsTotal:    mutantsTotal,
 		Survivors:       survivors,

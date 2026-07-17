@@ -22,6 +22,7 @@ func testRunSpec() RunSpec {
 		DevTestCode: "package target\nfunc TestAlwaysPasses(t *testing.T) {}",
 		TestCmd:     "go test ./...",
 		NMutants:    3,
+		Lang:        "go",
 	}
 }
 

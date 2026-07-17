@@ -20,6 +20,7 @@ type RunSpec struct {
 	DevTestCode string
 	TestCmd     string
 	NMutants    int
+	Lang        string // "" defaults to "go" at render time (back-compat)
 }
 
 // RoleAssignment maps a role name (Role.Name) to the gate-earned model that

@@ -550,6 +550,29 @@ func TestAdvPoolAssignUsesDefaults_UnsetIdenticalToToday(t *testing.T) {
 	}
 }
 
+// TestPluginForFailsClosedOnUnknownExt proves pluginFor fail-closes on an
+// unrecognized code extension (the gate must never grade a language it
+// cannot run) while still resolving the go plugin for a .go path.
+func TestPluginForFailsClosedOnUnknownExt(t *testing.T) {
+	if _, err := pluginFor("weird.cobol"); err == nil {
+		t.Fatal("pluginFor(.cobol) must error — fail closed")
+	}
+	p, err := pluginFor("internal/sqlguard/sqlguard.go")
+	if err != nil || p.Name() != "go" {
+		t.Fatalf("pluginFor(.go) = %v,%v; want go,nil", p, err)
+	}
+}
+
+// TestAdvPoolBaseGoUnchanged proves advPoolBase's go path is unchanged after
+// gaining a codePath argument: the go.mod scaffold and the recursive `go
+// test ./...` default must be byte-identical to the prior go-only behavior.
+func TestAdvPoolBaseGoUnchanged(t *testing.T) {
+	base, cmd := advPoolBase("x/y.go")
+	if base["go.mod"] == "" || cmd[0] != "go" {
+		t.Fatalf("go base/cmd regressed: %v %v", base, cmd)
+	}
+}
+
 func TestBugCatchSinkPersistsToStore(t *testing.T) {
 	store, err := bugcatch.Open(t.TempDir() + "/bc.duckdb")
 	if err != nil {

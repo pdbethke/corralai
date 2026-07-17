@@ -1801,6 +1801,7 @@ function ensureReplayTaskStyles(){
 .aw-body .aw-fsev { font-weight:700; }
 .aw-body .aw-chain { color: var(--stage-amber,#e8a838); cursor:pointer; text-decoration:underline dotted; }
 .aw-body .aw-chain:hover { color: var(--stage-fg,#e6e1d8); }
+.aw-body .aw-phase { color: var(--stage-muted,#8a8170); font-style:italic; }
 .aw-body .aw-timing { color: var(--stage-muted,#8a8170); font-size:11.5px; line-height:1.6; }
 .aw-body .aw-result { max-height:220px; overflow:auto; font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11px; line-height:1.5; color: var(--stage-fg,#e6e1d8); background: var(--stage-bg,#0e1116); border: 1px solid var(--stage-line,#33405a); border-radius:6px; padding:8px; white-space:pre-wrap; word-break:break-word; margin:2px 0 4px; }
 .aw-body .faultline { background: rgba(232,80,58,.32); color: var(--stage-red,#ff7a63); font-weight:700; border-radius:3px; padding:0 2px; margin:0 -2px; box-decoration-break:clone; -webkit-box-decoration-break:clone; }
@@ -1879,7 +1880,15 @@ function renderReplayTaskWindowBody(key){
   if(titleEl) titleEl.textContent = t.title || t.key;
   if(statusEl) statusEl.innerHTML = replayTaskStatusPill(t.status);
 
-  const chainTask = (k) => { const o = tasks.get(k); const lbl = (o && (o.title || o.key)) || k; return '<span class="aw-chain" onclick="replayTaskClick(\'' + String(k).replace(/'/g,"\\'") + '\')">' + esc(lbl) + '</span>'; };
+  const chainTask = (k) => {
+    const o = tasks.get(k);
+    // A depends_on target that has no task on the tape is an internal pool PHASE
+    // (e.g. "dev-adequacy" — the driver's dev-suite scoring tick), not a queued
+    // task. Render it as plain text, not a clickable link that dead-ends in
+    // "isn't on the recorded tape."
+    if(!o){ return '<span class="aw-phase" title="an internal pool phase, not a recorded task">' + esc(k) + '</span>'; }
+    return '<span class="aw-chain" onclick="replayTaskClick(\'' + String(k).replace(/'/g,"\\'") + '\')">' + esc(o.title || o.key || k) + '</span>';
+  };
   const chainAgent = (name) => '<span class="aw-chain" onclick="replayAgentClick(\'' + String(name).replace(/'/g,"\\'") + '\')">' + esc(displayName(name)) + '</span>';
 
   let h = '';

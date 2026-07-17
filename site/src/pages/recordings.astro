@@ -342,6 +342,14 @@ const maxModelTasks = Math.max(1, ...tasksByModel.map((r: any) => r.tasks));
      themes via prefers-color-scheme and its cockpit is dark-always, so it's a
      no-op here — hide it rather than ship a dead control. */
   :global(#stage-frame #hud #themebtn) { display: none; }
+  /* product cockpit chrome that's dead/broken on a static replay (cockpitView
+     doesn't manage these): #tab-records (hardcoded active, never toggled off →
+     looks perpetually selected), the retired-builder "launch" tab, "lookbook",
+     and the skin subtitle the tab row clips to "— the". Hide them (product keeps them). */
+  :global(#stage-frame #tab-records),
+  :global(#stage-frame #tab-launch),
+  :global(#stage-frame #tab-lookbook),
+  :global(#stage-frame #skinsub) { display: none; }
   /* On narrow screens the cockpit stacks to a single column, so drop the fixed
      body-height track and let each panel keep its own scroll cap instead. */
   @media (max-width: 900px) { #cockpit { grid-template-columns: 1fr; grid-template-rows: none; } .cockpit-tasks, .cockpit-side { max-height: 200px; } }

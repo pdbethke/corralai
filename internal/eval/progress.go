@@ -41,5 +41,5 @@ func (p *Progress) done(corpusVersion, targetID string, iter int) bool {
 func (p *Progress) mark(corpusVersion, targetID string, iter int) error {
 	p.Done[progKey(corpusVersion, targetID, iter)] = true
 	raw, _ := json.MarshalIndent(p, "", "  ")
-	return os.WriteFile(p.path, raw, 0o644)
+	return os.WriteFile(p.path, raw, 0o600) // local resumable state; least-privilege (gosec G306)
 }

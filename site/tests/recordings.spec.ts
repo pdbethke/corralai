@@ -784,20 +784,28 @@ test('task story shows the produced artifact (result)', async ({ page }) => {
   await expect(body).toContainText('the planted fault');
 });
 
-test('fault highlight marks the mutated lines', async ({ page }) => {
+test('fault highlight marks the mutated lines of the REAL survivor (Go id scheme)', async ({ page }) => {
   // The founder's key transparency affordance: when the original code under
   // review is on the tape (pool_subject.detail.code), the mutant-generator
   // task story diffs the SURVIVING mutant against it and highlights just the
   // planted-fault line — "here is the exact fault, and your tests pass
   // anyway" — instead of dumping the raw ===MUTATION_n=== blob.
+  //
+  // The tape's pool_dev_adequacy.survivor_ids are Go-assigned positional ids
+  // ("m1", "m2", ...) from internal/testgen/parse.go — NOT the raw
+  // "===MUTATION_n===" marker token. This tape plants TWO mutants and marks
+  // the SECOND ("m2") as the survivor, proving the JS side resolves ids the
+  // same way Go does and highlights the right one (not just mutants[0]).
   await page.goto('/recordings/');
   await page.evaluate(() => {
     (window as any).startReplay({
       events: [
-        { ts: 1, kind: 'pool_subject', detail: { code_path: 'x.go', code: 'package fence\nfunc F() bool { return true }\n' } },
+        { ts: 1, kind: 'pool_subject', detail: { code_path: 'x.go', code: 'package fence\nfunc F() bool { return true }\nfunc G() bool { return true }\n' } },
         { ts: 2, kind: 'task_created', subject: 'mutant-generator', detail: { role: 'mutant-generator', title: 'plant faults' } },
-        { ts: 3, kind: 'task_done', subject: 'mutant-generator', detail: { result: '===MUTATION_1===\npackage fence\nfunc F() bool { return false }\n' } },
-        { ts: 4, kind: 'pool_dev_adequacy', detail: { survivors: 1, survivor_ids: ['1'] } },
+        { ts: 3, kind: 'task_done', subject: 'mutant-generator', detail: { result:
+          '===MUTATION_1===\npackage fence\nfunc F() bool { return false }\nfunc G() bool { return true }\n'
+          + '===MUTATION_2===\npackage fence\nfunc F() bool { return true }\nfunc G() bool { return false }\n' } },
+        { ts: 4, kind: 'pool_dev_adequacy', detail: { survivors: 1, survivor_ids: ['m2'] } },
       ],
     });
   });
@@ -811,10 +819,48 @@ test('fault highlight marks the mutated lines', async ({ page }) => {
   await row.click();
   const body = page.locator('.aw-win .aw-body');
   await expect(body).toBeVisible();
-  // the mutated line is wrapped and highlighted...
+  // the label claims a verified survivor, since survivor_ids matched a parsed mutant.
+  await expect(body).toContainText('the surviving fault');
+  // the SECOND mutant's (m2) mutated line is highlighted...
   await expect(body.locator('.faultline')).toContainText('return false');
-  // ...but the unchanged line is NOT.
+  await expect(body.locator('.faultline')).toContainText('G()');
+  // ...and NOT the first mutant's line (proves m2 was selected, not mutants[0]/m1).
+  await expect(body.locator('.faultline')).not.toContainText('F() bool { return false }');
+  // ...and the unchanged line is NOT highlighted either.
   await expect(body.locator('.faultline')).not.toContainText('package fence');
+});
+
+test('fault highlight softens its label when the survivor id cannot be resolved', async ({ page }) => {
+  // If survivor_ids doesn't match any parsed mutant's id (unrecognized
+  // scheme, stale tape, empty list), the render falls back to mutants[0] —
+  // but that's a GUESS, not a verified survivor, so it must NOT claim "the
+  // surviving fault." This is the honesty regression this fix closes.
+  await page.goto('/recordings/');
+  await page.evaluate(() => {
+    (window as any).startReplay({
+      events: [
+        { ts: 1, kind: 'pool_subject', detail: { code_path: 'x.go', code: 'package fence\nfunc F() bool { return true }\n' } },
+        { ts: 2, kind: 'task_created', subject: 'mutant-generator', detail: { role: 'mutant-generator', title: 'plant faults' } },
+        { ts: 3, kind: 'task_done', subject: 'mutant-generator', detail: { result: '===MUTATION_1===\npackage fence\nfunc F() bool { return false }\n' } },
+        { ts: 4, kind: 'pool_dev_adequacy', detail: { survivors: 1, survivor_ids: ['does-not-exist'] } },
+      ],
+    });
+  });
+  await expect(async () => {
+    expect(Number(await page.locator('#replay-scrub').getAttribute('max'))).toBe(4);
+  }).toPass({ timeout: 5000 });
+  const scrub = page.locator('#replay-scrub');
+  await scrub.evaluate((el) => { (el as HTMLInputElement).value = '4'; el.dispatchEvent(new Event('input')); });
+  const row = page.locator('#tasks .trow', { hasText: 'plant faults' });
+  await expect(row).toBeVisible();
+  await row.click();
+  const body = page.locator('.aw-win .aw-body');
+  await expect(body).toBeVisible();
+  // the mutated line is still highlighted (fallback still shows a fault)...
+  await expect(body.locator('.faultline')).toContainText('return false');
+  // ...but the label must NOT over-claim it's the verified survivor.
+  await expect(body).not.toContainText('the surviving fault');
+  await expect(body).toContainText('a planted fault');
 });
 
 test('every recording card corresponds to an active stream + meta pair', async () => {

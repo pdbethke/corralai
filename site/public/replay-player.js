@@ -648,12 +648,29 @@ function renderFaultDiff(original, mutant){
 // with no blocks at all (returns []), which is the signal to fall back to
 // the plain result <pre> (Task 2's behavior, unchanged for non-mutant tasks
 // or a mutant-gen result the tape didn't shape this way).
+//
+// IDs must mirror internal/testgen/parse.go's parseMutants EXACTLY: "m"+
+// positional-index (1-based) over only the NON-EMPTY blocks — NOT the raw
+// marker token (a marker of "===MUTATION_1===" does NOT mean id "1"). The
+// tape's pool_dev_adequacy.survivor_ids are the Go-assigned ids ("m1","m2",
+// ...), so a mismatched id scheme here silently breaks survivor matching
+// (see the honesty-fix commit that introduced this comment).
 function parseMutants(result){
+  const mark = '===MUTATION_';
+  const parts = (result || '').split(mark);
   const out = [];
-  const re = /===MUTATION_([^\s=]+)===\n([\s\S]*?)(?=\n===MUTATION_[^\s=]+===\n|$)/g;
-  let mch;
-  while((mch = re.exec(result || '')) !== null){
-    out.push({id: mch[1], code: mch[2]});
+  for(let i = 1; i < parts.length; i++){ // parts[0] is any preamble before the first marker
+    const p = parts[i];
+    // p looks like "1===\n<code>...": drop up to and including the marker's closing "==="
+    const close = p.indexOf('===');
+    if(close < 0) continue;
+    let body = p.slice(close + 3);
+    // A trailing "..._END===" (or the next marker, already split off) may remain — cut at any residual "===".
+    const end = body.indexOf('===');
+    if(end >= 0) body = body.slice(0, end);
+    const code = body.trim();
+    if(code === '') continue;
+    out.push({id: 'm' + (out.length + 1), code});
   }
   return out;
 }
@@ -1852,8 +1869,17 @@ function renderReplayTaskWindowBody(key){
       const mutants = parseMutants(t.result);
       if(mutants.length){
         const survivorIds = (replayDevAdequacy && replayDevAdequacy.survivor_ids) || [];
-        const survivor = mutants.find(mu => survivorIds.includes(mu.id)) || mutants[0];
-        resultHtml = '<div class="isec">result <span class="ir">· the surviving fault, highlighted against the original</span></div>'
+        const matched = mutants.find(mu => survivorIds.includes(mu.id));
+        const survivor = matched || mutants[0];
+        // Only claim "the surviving fault" when the tape's survivor_ids
+        // actually resolved to one of the parsed mutants — if the id didn't
+        // match (unrecognized scheme, empty list, stale tape), the fallback
+        // to mutants[0] is a GUESS, not a verified survivor, so the label
+        // must not over-claim.
+        const label = matched
+          ? 'the surviving fault, highlighted against the original'
+          : 'a planted fault (highlighted against the original)';
+        resultHtml = '<div class="isec">result <span class="ir">· ' + esc(label) + '</span></div>'
           + renderFaultDiff(replayPoolSubject.code, survivor.code);
       }
     }

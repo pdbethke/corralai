@@ -547,11 +547,30 @@ func main() {
 		}
 		return
 	case "scorecard":
+		// The bugcatch DuckDB file is single-process: corral.service (the
+		// running brain) already holds it read-write, and DuckDB refuses a
+		// second concurrent open — even read-only (verified: PID conflict
+		// error, not silent success). So whenever a brain is configured,
+		// read the scorecard over HTTP from its /api/bugcatch instead of
+		// touching the file; only fall back to the local DuckDB file when
+		// no brain is configured (the offline/standalone case).
+		if brainURL := strings.TrimSpace(os.Getenv("CORRAL_BRAIN")); brainURL != "" {
+			token, err := brainToken()
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "corral scorecard:", err)
+				os.Exit(1)
+			}
+			os.Exit(runScorecard(os.Args[2:], newHTTPScorecardReader(brainURL, token), os.Stdout))
+		}
 		home, _ := os.UserHomeDir()
 		bugCatchDB := env("CORRALAI_BUGCATCH_DB", filepath.Join(home, ".claude", "corralai_bugcatch.duckdb"))
 		bugCatchStore, err := bugcatch.Open(bugCatchDB)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "corral scorecard: open bugcatch store:", err)
+			if strings.Contains(err.Error(), "Conflicting lock is held") {
+				fmt.Fprintln(os.Stderr, "corral scorecard: the bugcatch DB is held by the running brain — set CORRAL_BRAIN (and CORRALAI_BRAIN_TOKEN via `corral secret`) to read it over the API, or stop the brain first")
+			} else {
+				fmt.Fprintln(os.Stderr, "corral scorecard: open bugcatch store:", err)
+			}
 			os.Exit(1)
 		}
 		defer bugCatchStore.Close()

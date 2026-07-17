@@ -5,6 +5,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -36,5 +39,54 @@ func TestScorecardTableAndJSON(t *testing.T) {
 	}
 	if !strings.Contains(j.String(), `"recall"`) || !strings.Contains(j.String(), "0.5") {
 		t.Fatalf("json missing recall:\n%s", j.String())
+	}
+}
+
+// TestHTTPScorecardReaderDecodesCells verifies httpScorecardReader against a
+// canned /api/bugcatch response body — the same JSON shape internal/ui's
+// bugcatch handler serves — and that it sends the bearer token.
+func TestHTTPScorecardReaderDecodesCells(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		if r.URL.Path != "/api/bugcatch" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"cells": []map[string]any{
+				{"model": "claude-sonnet-5", "role": "test-writer", "catches": 1, "opportunities": 2, "recall": 0.5, "runs": 2, "provisional": true},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	r := newHTTPScorecardReader(srv.URL, "test-token")
+	cells, err := r.Scorecard(context.Background())
+	if err != nil {
+		t.Fatalf("Scorecard: %v", err)
+	}
+	if len(cells) != 1 || cells[0].Model != "claude-sonnet-5" || cells[0].Role != "test-writer" {
+		t.Fatalf("unexpected cells: %+v", cells)
+	}
+	if cells[0].Recall == nil || *cells[0].Recall != 0.5 {
+		t.Fatalf("unexpected recall: %+v", cells[0].Recall)
+	}
+	if gotAuth != "Bearer test-token" {
+		t.Fatalf("expected bearer auth, got %q", gotAuth)
+	}
+}
+
+// TestHTTPScorecardReaderErrorStatus verifies a non-200 response surfaces as
+// a clean error rather than a decode panic or silent empty scorecard.
+func TestHTTPScorecardReaderErrorStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	r := newHTTPScorecardReader(srv.URL, "bad-token")
+	if _, err := r.Scorecard(context.Background()); err == nil {
+		t.Fatal("expected error on non-200 status, got nil")
 	}
 }

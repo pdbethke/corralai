@@ -57,49 +57,23 @@ const pool = poolVerdict
   : null;
 ---
 <section id="hero">
-  <div class="hero-copy">
-    <h1>No one may be judge in their own cause. So Corral doesn't build your code — it <em>certifies a change by execution</em>: a role-separated herd runs the checks in a jail, grades the tests meant to guard the code, and signs a tamper-evident verdict. Not a builder — a gate.</h1>
-    <p class="pitch">
-      Corral is the reactive audit you put <em>downstream</em> of every AI
-      coding tool — agnostic to whoever, or whatever, wrote the change. Point
-      it at one and an adversarial, role-separated herd goes to work: it
-      mutates the code to plant real faults and checks whether the developer's
-      own tests catch them — a test that catches nothing proves nothing — while
-      a <em>decorrelated</em> critic, a different model than the one that wrote
-      the exposing test, reads the suite for theater. The verdict is
-      <em>measured by execution in a jail, never taken on a model's word</em>.
-      Any model, local 7B to frontier, mixed in one run. Human-gated and
-      fail-closed; every run recorded, replayable, and signed into a record you
-      verify offline. (Honest floor: <code>corral certify</code> is the shipped
-      atom; the adversarial pool is experimental and off by default; the broader
-      engine is ahead — we'll always tell you which.)
-    </p>
-    <p class="proof-row">
-      <span>Certified <em>by execution</em> — run in a jail, not taken on a model's word</span>
-      <span aria-hidden="true">·</span>
-      <span><em>Decorrelated</em> — the judge is never the author; enforced, not hoped</span>
-      <span aria-hidden="true">·</span>
-      <span><em>Signed</em> &amp; offline-verifiable — tamper-evident, human-gated</span>
-    </p>
-    {pool ? (
-      <p class="caption">
-        {/* single line: Astro collapses a text→newline→expression boundary to
-            ZERO chars, so keep interpolations inline */}
-        A real run, recorded: a <em>decorrelated</em> cross-vendor herd put <code>{pool.codePath}</code> to its own tests — {pool.planter} planted {pool.mutants} faults, the code's suite caught {pool.caught} and missed {pool.survivors}, and a <em>different</em> model, {pool.critic}, proved the gap real. Signed <strong>{pool.statusLabel}</strong>, the missing test handed back — every step replayable at 2× below.
-      </p>
-    ) : (
-      <p class="caption">
-        Same machinery, recorded: here's the herd on a real mission — {meta.task_count} tasks ({meta.done_task_count} done), {meta.finding_count} findings, {minutes}m — every step replayable at 2× below. The gate runs on this exact engine.
-      </p>
-    )}
+  <div class="hero-copy hero-top">
+    <h1>No one may be judge in their own cause.</h1>
+    <p class="lead">So Corral doesn't <em>build</em> your code — it <em>certifies a change by execution</em>: a decorrelated herd grades the tests meant to guard it, in a jail, and signs a tamper-evident verdict. Not a builder — a gate.</p>
     <div class="ctas">
       <a class="cta" href="https://github.com/pdbethke/corralai">View on GitHub</a>
       <a class="cta secondary" id="watch-demo-cta" href="#" style="display:none">Watch the demo</a>
     </div>
-    <p class="star-invite">
-      Free, source-available, and getting better with every run —
-      <a href="https://github.com/pdbethke/corralai">a star helps other people find it</a>.
-    </p>
+    {pool ? (
+      <p class="caption">
+        {/* single line: Astro collapses a text→newline→expression boundary to ZERO chars, so keep interpolations inline */}
+        Below is a real run, replaying now: a <em>decorrelated</em> cross-vendor herd put <code>{pool.codePath}</code> to its own tests — {pool.planter} planted {pool.mutants} faults, the suite caught {pool.caught} and missed {pool.survivors}, and a <em>different</em> model, {pool.critic}, proved the gap real. Signed <strong>{pool.statusLabel}</strong>, the missing test handed back.
+      </p>
+    ) : (
+      <p class="caption">
+        Below is a real run, replaying now — {meta.task_count} tasks ({meta.done_task_count} done), {meta.finding_count} findings, {minutes}m — every step scrubbable.
+      </p>
+    )}
   </div>
   <div id="stage-frame">
     <div class="cockpit-hud" set:html={cockpitHud} />
@@ -130,13 +104,45 @@ const pool = poolVerdict
       </div>
     </div>
   </div>
+  <div class="hero-copy hero-bottom">
+    <p class="proof-row">
+      <span>Certified <em>by execution</em> — run in a jail, not taken on a model's word</span>
+      <span aria-hidden="true">·</span>
+      <span><em>Decorrelated</em> — the judge is never the author; enforced, not hoped</span>
+      <span aria-hidden="true">·</span>
+      <span><em>Signed</em> &amp; offline-verifiable — tamper-evident, human-gated</span>
+    </p>
+    <p class="pitch">
+      Corral is the reactive audit you put <em>downstream</em> of every AI coding
+      tool — agnostic to whoever, or whatever, wrote the change. It mutates the
+      code to plant real faults and checks whether the developer's own tests
+      catch them — a test that catches nothing proves nothing — while a
+      <em>decorrelated</em> critic, a different model than the one that wrote the
+      exposing test, reads the suite for theater. The verdict is <em>measured by
+      execution in a jail, never taken on a model's word</em>. Any model, local
+      7B to frontier, mixed in one run. Human-gated and fail-closed; every run
+      recorded, replayable, and signed into a record you verify offline. (Honest
+      floor: <code>corral certify</code> is the shipped atom; the adversarial
+      pool is experimental and off by default; the broader engine is ahead —
+      we'll always tell you which.)
+    </p>
+    <p class="star-invite">
+      Free, source-available, and getting better with every run —
+      <a href="https://github.com/pdbethke/corralai">a star helps other people find it</a>.
+    </p>
+  </div>
 </section>
 
 <style>
   #hero { position: relative; }
-  .hero-copy { max-width: 860px; margin: 0 auto; padding: 56px 20px 24px; text-align: center; }
-  .hero-copy h1 { font-size: 2.4rem; margin: 0 0 12px; color: var(--amber); }
-  .pitch { font-size: 1.15rem; color: var(--fg); max-width: 720px; margin: 0 auto 14px; }
+  .hero-copy { max-width: 860px; margin: 0 auto; padding: 0 20px; text-align: center; }
+  /* Visual-first: a compact headline block above the cockpit (so the live
+     instrument is what you see first), and the deep copy below it. */
+  .hero-top { padding-top: 40px; padding-bottom: 18px; }
+  .hero-bottom { padding-top: 26px; padding-bottom: 8px; }
+  .hero-copy h1 { font-size: 2.7rem; line-height: 1.12; margin: 0 0 14px; color: var(--amber); }
+  .lead { font-size: 1.18rem; color: var(--fg); max-width: 720px; margin: 0 auto 18px; line-height: 1.5; }
+  .pitch { font-size: 1.02rem; color: var(--fg); max-width: 740px; margin: 0 auto 14px; line-height: 1.6; }
   .proof-row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; color: var(--fg); font-size: 0.95rem; font-weight: 600; margin: 0 0 10px; }
   .proof-row span[aria-hidden] { color: var(--muted); font-weight: 400; }
   .caption { color: var(--muted); font-size: 0.9rem; margin-bottom: 20px; }
@@ -350,7 +356,32 @@ const pool = poolVerdict
   }
   window.addEventListener('DOMContentLoaded', () => {
     startReplay(golden).then(() => {
-      toggleReplayPlay(); // autoplay-equivalent: starts playing immediately at header speed
+      // Cinematic auto-advance. The built-in autoplay fires one beat every
+      // 250/speed ms (~2.4s for this short pool tape) and then FREEZES — far too
+      // fast to see the herd work, and static by the time a visitor looks. So we
+      // drive the scrubber ourselves at a watchable cadence, hold on the signed
+      // verdict, and loop: the landing always shows the reasoning trace
+      // revealing beat by beat. The moment the visitor touches the controls we
+      // stop and hand playback over to them.
+      const scrub = document.getElementById('replay-scrub');
+      const playbtn = document.getElementById('replay-playbtn');
+      if (!scrub || typeof seekReplay !== 'function') { toggleReplayPlay(); return; }
+      let cinematic = true;
+      const stop = () => { cinematic = false; };
+      scrub.addEventListener('pointerdown', stop);
+      scrub.addEventListener('keydown', stop);
+      if (playbtn) playbtn.addEventListener('click', stop);
+      const total = Number(scrub.max) || 0;
+      const BEAT = 900, HOLD = 4200, LOOP_GAP = 1000;
+      let i = 0;
+      const tick = () => {
+        if (!cinematic) return;
+        i += 1;
+        if (i > total) { i = 0; seekReplay(0); setTimeout(tick, LOOP_GAP); return; }
+        seekReplay(i);
+        setTimeout(tick, i === total ? HOLD : BEAT);
+      };
+      tick();
     });
   });
   // replay-player.js's setSkin() (run synchronously at its own script-load

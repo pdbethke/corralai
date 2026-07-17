@@ -606,7 +606,7 @@ func (rt *AdvPoolRuntime) StartRun(in AdvPoolRunSpec) (int64, error) {
 		Lang: langPlugin.Name(),
 	}
 
-	sigs, err := repoindex.ExtractSignatures(rs.Code, "go")
+	sigs, err := repoindex.ExtractSignatures(rs.Code, rs.Lang)
 	if err != nil {
 		log.Printf("advpool: extract signatures for %s@%s: %v (continuing with no signatures)", rs.Repo, rs.Commit, err)
 		sigs = nil

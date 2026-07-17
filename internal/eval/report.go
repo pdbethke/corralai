@@ -13,6 +13,7 @@ type TargetReport struct {
 	Runs             int
 	MeanKillRate     float64
 	MeanSurvivors    float64
+	MeanMutantsTotal float64
 	MeanProvenMissed float64
 	Calibrated       bool
 	Note             string
@@ -44,6 +45,7 @@ func Report(m Manifest, results []RunResult) []TargetReport {
 		rep.Runs++
 		rep.MeanKillRate += r.DevKillRate
 		rep.MeanSurvivors += float64(r.Survivors)
+		rep.MeanMutantsTotal += float64(r.MutantsTotal)
 		rep.MeanProvenMissed += float64(r.ProvenMissed)
 	}
 	var out []TargetReport
@@ -51,6 +53,7 @@ func Report(m Manifest, results []RunResult) []TargetReport {
 		rep := agg[id]
 		rep.MeanKillRate /= float64(rep.Runs)
 		rep.MeanSurvivors /= float64(rep.Runs)
+		rep.MeanMutantsTotal /= float64(rep.Runs)
 		rep.MeanProvenMissed /= float64(rep.Runs)
 		t := adeq[id]
 		if unmatched[id] {
@@ -61,7 +64,9 @@ func Report(m Manifest, results []RunResult) []TargetReport {
 		} else {
 			switch rep.ExpectedAdequacy {
 			case "thorough":
-				if rep.MeanSurvivors <= thoroughSurvivorTolerance {
+				if rep.MeanMutantsTotal == 0 {
+					rep.Note = "no mutants generated — the target was not actually exercised; cannot validate"
+				} else if rep.MeanSurvivors <= thoroughSurvivorTolerance {
 					rep.Calibrated = true
 				} else {
 					rep.Note = fmt.Sprintf("thorough target has mean %.2f survivors — pool is inventing gaps (over-sensitive)", rep.MeanSurvivors)
@@ -85,7 +90,7 @@ func WriteReport(out io.Writer, reps []TargetReport) {
 	bad := 0
 	totalRuns := 0
 	tw := tabwriter.NewWriter(out, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, "TARGET\tEXPECTED\tRUNS\tKILL-RATE\tSURVIVORS\tPROVEN\tCALIBRATED\t")
+	fmt.Fprintln(tw, "TARGET\tEXPECTED\tRUNS\tKILL-RATE\tSURVIVORS\tMUTANTS\tPROVEN\tCALIBRATED\t")
 	for _, r := range reps {
 		cal := "yes"
 		if !r.Calibrated {
@@ -93,8 +98,8 @@ func WriteReport(out io.Writer, reps []TargetReport) {
 			bad++
 		}
 		totalRuns += r.Runs
-		fmt.Fprintf(tw, "%s\t%s\t%d\t%.2f\t%.2f\t%.2f\t%s\t\n",
-			r.ID, r.ExpectedAdequacy, r.Runs, r.MeanKillRate, r.MeanSurvivors, r.MeanProvenMissed, cal)
+		fmt.Fprintf(tw, "%s\t%s\t%d\t%.2f\t%.2f\t%.2f\t%.2f\t%s\t\n",
+			r.ID, r.ExpectedAdequacy, r.Runs, r.MeanKillRate, r.MeanSurvivors, r.MeanMutantsTotal, r.MeanProvenMissed, cal)
 	}
 	tw.Flush()
 	// SCOPE must always be visible: a reader must never mistake "nothing ran"

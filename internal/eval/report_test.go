@@ -14,10 +14,10 @@ func TestReportFlagsMiscalibration(t *testing.T) {
 		{ID: "thorough-BROKEN", ExpectedAdequacy: "thorough"},
 	}}
 	res := []RunResult{
-		{TargetID: "thorough-ok", Survivors: 0},
-		{TargetID: "gappy-ok", Survivors: 2},        // has the gap → calibrated
-		{TargetID: "gappy-BROKEN", Survivors: 0},    // gappy but pool found NO gap → miscalibrated
-		{TargetID: "thorough-BROKEN", Survivors: 3}, // thorough but riddled with survivors → miscalibrated
+		{TargetID: "thorough-ok", Survivors: 0, MutantsTotal: 8},
+		{TargetID: "gappy-ok", Survivors: 2},                         // has the gap → calibrated
+		{TargetID: "gappy-BROKEN", Survivors: 0},                     // gappy but pool found NO gap → miscalibrated
+		{TargetID: "thorough-BROKEN", Survivors: 3, MutantsTotal: 8}, // thorough but riddled with survivors → miscalibrated
 	}
 	reps := Report(m, res)
 	byID := map[string]TargetReport{}
@@ -44,7 +44,7 @@ func TestReportFlagsUnmatchedTarget(t *testing.T) {
 		{ID: "thorough-ok", ExpectedAdequacy: "thorough"},
 	}}
 	res := []RunResult{
-		{TargetID: "thorough-ok", Survivors: 0},
+		{TargetID: "thorough-ok", Survivors: 0, MutantsTotal: 8},
 		{TargetID: "does-not-exist-in-manifest", Survivors: 0},
 	}
 	reps := Report(m, res)
@@ -64,6 +64,36 @@ func TestReportFlagsUnmatchedTarget(t *testing.T) {
 	}
 	if !strings.Contains(got.Note, "not in manifest") {
 		t.Fatalf("expected a clear 'not in manifest' note, got: %q", got.Note)
+	}
+}
+
+// TestReportThoroughRequiresMutants ensures a thorough target that converges
+// with zero survivors AND zero mutants generated is flagged miscalibrated,
+// not silently CALIBRATED — "0 survivors because the tests are thorough" is
+// indistinguishable from "0 survivors because nothing was mutated" unless the
+// gate also checks that mutants were actually generated.
+func TestReportThoroughRequiresMutants(t *testing.T) {
+	m := Manifest{CorpusVersion: "v1", Targets: []Target{
+		{ID: "thorough-degenerate", ExpectedAdequacy: "thorough"},
+		{ID: "thorough-normal", ExpectedAdequacy: "thorough"},
+	}}
+	res := []RunResult{
+		{TargetID: "thorough-degenerate", Survivors: 0, MutantsTotal: 0},
+		{TargetID: "thorough-normal", Survivors: 0, MutantsTotal: 8},
+	}
+	reps := Report(m, res)
+	byID := map[string]TargetReport{}
+	for _, r := range reps {
+		byID[r.ID] = r
+	}
+	if byID["thorough-degenerate"].Calibrated {
+		t.Fatalf("a thorough target with 0 mutants generated must be flagged miscalibrated, not CALIBRATED: %+v", byID["thorough-degenerate"])
+	}
+	if !strings.Contains(byID["thorough-degenerate"].Note, "no mutants generated") {
+		t.Fatalf("expected a 'no mutants generated' note, got: %q", byID["thorough-degenerate"].Note)
+	}
+	if !byID["thorough-normal"].Calibrated {
+		t.Fatal("a thorough target with mutants generated and 0 survivors must remain calibrated")
 	}
 }
 

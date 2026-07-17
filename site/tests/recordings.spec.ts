@@ -295,6 +295,43 @@ test('the inspector window populates LIVE as the tape PLAYS forward (not just on
   expect(apiCalls, `live-updating window must stay tape-only: ${apiCalls.join(', ')}`).toHaveLength(0);
 });
 
+test('a finished agent stops claiming "working on" once idle at end-of-tape', async ({ page }) => {
+  // Regression: the agent inspector kept showing "working on <lastTask>" even
+  // after the agent finished it and held nothing — contradicting its own idle
+  // state in the roster. "working on" must track held.size > 0 (the roster's
+  // own idle-vs-working rule), so a done agent reads idle, not busy.
+  await page.goto('/recordings/');
+  await page.evaluate(() => {
+    (window as any).startReplay({
+      events: [
+        { ts: 1, kind: 'task_created', subject: 't1', detail: { role: 'writer', title: 'write the docs' } },
+        { ts: 2, kind: 'task_claimed', actor: 'Qwen', subject: 't1', detail: { role: 'writer', title: 'write the docs' } },
+        { ts: 3, kind: 'task_done', actor: 'Qwen', subject: 't1', detail: { role: 'writer' } },
+      ],
+    });
+  });
+  const scrub = page.locator('#replay-scrub');
+  await expect(async () => {
+    expect(Number(await scrub.getAttribute('max'))).toBe(3);
+  }).toPass({ timeout: 5000 });
+  // Seek to the very end — Qwen has finished t1 and holds nothing.
+  await scrub.evaluate((el) => { (el as HTMLInputElement).value = '3'; el.dispatchEvent(new Event('input')); });
+
+  const row = page.locator('#agents .arow', { hasText: 'Qwen' });
+  await expect(row).toBeVisible();
+  await expect(row).toContainText('idle'); // roster: idle (held 0)
+
+  await row.click();
+  const body = page.locator('.aw-win .aw-body');
+  await expect(body).toBeVisible();
+  await expect(body).toContainText('holding 0');
+  await expect(body).toContainText('completed 1');
+  // The bug: the card must NOT still claim to be working on the finished task.
+  await expect(body).not.toContainText('working on');
+  // …but it DOES honestly report what it last finished.
+  await expect(body).toContainText('finished');
+});
+
 test('the console surfaces BOTH the builder and the tester (command from subject, not detail.command)', async ({ page }) => {
   // python-ratelimit: Bob (builder) ran 5 commands, Tess (tester) ran 3 — the
   // console reads the command from the beat's `subject`, so both actors appear.

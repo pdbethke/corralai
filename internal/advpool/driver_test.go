@@ -1152,3 +1152,166 @@ func TestAggregateExcludesOpsFindings(t *testing.T) {
 		t.Fatalf("ops finding must be excluded from critic findings, got %+v", got)
 	}
 }
+
+// --- BugCatchSink (Task 2) ---
+
+// fakeBugCatch records the (recordID, obs) it was fed.
+type fakeBugCatch struct {
+	recordID int64
+	obs      []BugCatchObservation
+}
+
+func (f *fakeBugCatch) Record(recordID int64, _ string, obs []BugCatchObservation) {
+	f.recordID = recordID
+	f.obs = append(f.obs, obs...)
+}
+
+func obsFor(obs []BugCatchObservation, role string) (BugCatchObservation, bool) {
+	for _, o := range obs {
+		if o.Role == role {
+			return o, true
+		}
+	}
+	return BugCatchObservation{}, false
+}
+
+// scoredRun is the shape of a run's scored outcome, used by newScoredRun to
+// build a driver whose dev-adequacy/pool-adequacy scoring lands on exactly
+// these numbers once driven to convergence.
+type scoredRun struct {
+	survivors, provenMissed, mutantsTotal, vacuous int
+	writerModel, criticModel                       string
+}
+
+// scoredRunVacuous stashes each newScoredRun's vacuous-finding count, keyed
+// by missionID, so drivePoolToConvergence (which has no other way to learn
+// it — the Driver/runState carry no such field) can file that many findings
+// against the test-critic task before completing it.
+var scoredRunVacuous = map[int64]int{}
+
+// newScoredRun wires a Driver (fakeScorer/fakeValidator, matching the
+// existing convergence tests' harness) whose dev-adequacy/pool-adequacy
+// scoring will produce cfg's survivors/provenMissed/mutantsTotal once driven
+// through drivePoolToConvergence, with the given per-role models assigned.
+var scoredRunNextMissionID int64 = 1000
+
+func newScoredRun(t *testing.T, cfg scoredRun) (*Driver, int64) {
+	t.Helper()
+	missionID := scoredRunNextMissionID
+	scoredRunNextMissionID++
+	scoredRunVacuous[missionID] = cfg.vacuous
+
+	devSurvivors := make([]adequacy.Mutant, cfg.survivors)
+	for i := range devSurvivors {
+		devSurvivors[i] = adequacy.Mutant{ID: fmt.Sprintf("survivor%d", i+1), Code: fmt.Sprintf("s%d", i+1)}
+	}
+	poolSurvivorCount := cfg.survivors - cfg.provenMissed
+	if poolSurvivorCount < 0 {
+		t.Fatalf("scoredRun: provenMissed %d must not exceed survivors %d", cfg.provenMissed, cfg.survivors)
+	}
+	poolSurvivors := append([]adequacy.Mutant(nil), devSurvivors[:poolSurvivorCount]...)
+
+	scorer := &fakeScorer{devKillRate: 0.5, devSurvivors: devSurvivors, poolSurvivors: poolSurvivors}
+
+	mutants := make([]adequacy.Mutant, cfg.mutantsTotal)
+	copy(mutants, devSurvivors)
+	for i := len(devSurvivors); i < cfg.mutantsTotal; i++ {
+		mutants[i] = adequacy.Mutant{ID: fmt.Sprintf("filler%d", i), Code: fmt.Sprintf("f%d", i)}
+	}
+	validator := &fakeValidator{mutants: mutants}
+
+	assign := RoleAssignment{
+		RoleMutantGenerator: "model-gen",
+		RoleTestWriter:      cfg.writerModel,
+		RoleTestCritic:      cfg.criticModel,
+	}
+	q := newTestQueue(t)
+	d, err := NewDriver(q, scorer, validator, assign, 0.9)
+	if err != nil {
+		t.Fatalf("NewDriver: %v", err)
+	}
+	rs := testRunSpec()
+	if err := d.StartRun(missionID, rs, nil); err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	if _, err := q.PromoteReady(missionID); err != nil {
+		t.Fatalf("PromoteReady: %v", err)
+	}
+	d.Signer = &fakeSigner{}
+	return d, missionID
+}
+
+// drivePoolToConvergence ticks a Driver built by newScoredRun through
+// dev-adequacy, pool-adequacy, and aggregate — filing the run's configured
+// vacuous-finding count against test-critic first — returning the signed
+// Verdict.
+func drivePoolToConvergence(t *testing.T, d *Driver, missionID int64) *Verdict {
+	t.Helper()
+	ctx := context.Background()
+
+	ready := claimAllReady(t, d.Q)
+	tc, mg := ready[RoleTestCritic], ready[RoleMutantGenerator]
+	if tc == nil || mg == nil {
+		t.Fatalf("expected test-critic and mutant-generator both ready, got: %v", keysOf(ready))
+	}
+	for i := 0; i < scoredRunVacuous[missionID]; i++ {
+		if _, err := d.Q.AddFinding(queue.Finding{
+			MissionID: missionID, TaskID: tc.ID, Reporter: "test-critic", Type: "bug",
+			Severity: "high", Target: fmt.Sprintf("VacuousTest%d", i+1), Evidence: "vacuous — no assertions",
+		}); err != nil {
+			t.Fatalf("AddFinding: %v", err)
+		}
+	}
+	mustComplete(t, d.Q, tc.ID, "critic findings filed")
+	mustComplete(t, d.Q, mg.ID, "raw mutants")
+	if _, err := d.Tick(ctx, missionID); err != nil {
+		t.Fatalf("Tick (dev-adequacy): %v", err)
+	}
+
+	tw := claimTaskByID(t, d.Q, d.runs[missionID].testWriterTaskID)
+	mustComplete(t, d.Q, tw.ID, "pool test source")
+	v, err := d.Tick(ctx, missionID)
+	if err != nil {
+		t.Fatalf("Tick (pool-adequacy + aggregate): %v", err)
+	}
+	if v == nil {
+		t.Fatal("expected a verdict once test-critic + pool-adequacy are both done")
+	}
+	return v
+}
+
+func TestBugCatchSinkFedOnConvergence(t *testing.T) {
+	// A needs-review run with 2 survivors, 1 proven-missed → the test-writer seat
+	// records catches=1, opportunities=2; the mutant-generator seat records
+	// potency; the critic seat records its vacuous-flag count.
+	bc := &fakeBugCatch{}
+	d, missionID := newScoredRun(t, scoredRun{
+		survivors: 2, provenMissed: 1, mutantsTotal: 4, vacuous: 1,
+		writerModel: "claude-sonnet-5", criticModel: "gemini-3.5-flash",
+	})
+	d.BugCatch = bc
+	drivePoolToConvergence(t, d, missionID) // ticks through sign + aggregate
+
+	if bc.recordID == 0 {
+		t.Fatal("BugCatch sink was not fed after signing")
+	}
+	tw, ok := obsFor(bc.obs, "test-writer")
+	if !ok || tw.Catches != 1 || tw.Opportunities != 2 {
+		t.Fatalf("test-writer obs = %+v, want catches=1 opportunities=2", tw)
+	}
+	if tw.AuthoredTests != 1 || tw.SoundTests != 1 {
+		t.Fatalf("test-writer authored/sound = %d/%d, want 1/1", tw.AuthoredTests, tw.SoundTests)
+	}
+	crit, ok := obsFor(bc.obs, "test-critic")
+	if !ok || crit.CriticFlags != 1 || crit.Model != "gemini-3.5-flash" {
+		t.Fatalf("critic obs = %+v, want flags=1 model=gemini-3.5-flash", crit)
+	}
+	mg, ok := obsFor(bc.obs, "mutant-generator")
+	if !ok || mg.MutantsPlanted != 4 || mg.MutantsSurvived != 2 {
+		t.Fatalf("mutant-generator obs = %+v, want planted=4 survived=2", mg)
+	}
+	// Execution-proven invariant: catches never exceeds proven_missed.
+	if tw.Catches > 1 {
+		t.Fatal("catches exceeded proven_missed — a claim leaked into the headline")
+	}
+}

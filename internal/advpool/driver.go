@@ -64,6 +64,24 @@ type LeaderboardSink interface {
 	Record(model, role, outcome string)
 }
 
+// BugCatchObservation is one seat's execution-proven contribution from a
+// single converged run (see internal/bugcatch). Catches come ONLY from
+// ProvenMissed — no claim/self-report path may ever populate it.
+type BugCatchObservation struct {
+	Model, Role                                 string
+	Catches, Opportunities                      int
+	SoundTests, AuthoredTests                   int
+	CriticFlags, MutantsPlanted, MutantsSurvived int
+}
+
+// BugCatchSink is the optional per-run bug-catching feed (nil ⇒ no-op),
+// mirroring LeaderboardSink but fed on EVERY converged run (certified AND
+// needs-review) — a catch or a miss is meaningful regardless of the overall
+// verdict, unlike leaderboard fitness which is gated on certification.
+type BugCatchSink interface {
+	Record(recordID int64, recordHead string, obs []BugCatchObservation)
+}
+
 // EventSink receives the pool's reasoning milestones as replay/telemetry
 // events. Optional (nil ⇒ no-op), like Signer/Leaderboard — the pure Driver
 // takes no telemetry dependency; the brain wires this to its telemetry store
@@ -171,6 +189,12 @@ type Driver struct {
 	// the deterministic score + sign (soundness #5).
 	Signer      Signer
 	Leaderboard LeaderboardSink
+
+	// BugCatch is the optional per-run bug-catching feed (nil = no-op),
+	// fed AFTER Signer (once RecordID/RecordHead are set) on every terminal
+	// verdict — certified AND needs-review, unlike Leaderboard which only
+	// fires on certified. See bugCatchObservations.
+	BugCatch BugCatchSink
 
 	// Events is the optional reasoning-event sink (nil = no-op), mirroring
 	// Signer/Leaderboard: every pre-existing Driver test keeps working
@@ -592,6 +616,13 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 		}
 	}
 
+	// BugCatch is fed regardless of Status (certified AND needs-review) — a
+	// proven catch or a proven miss is meaningful evidence either way, unlike
+	// Leaderboard fitness which is gated on certification.
+	if d.BugCatch != nil {
+		d.BugCatch.Record(v.RecordID, v.RecordHead, bugCatchObservations(run, v))
+	}
+
 	d.emit(missionID, "pool_verdict", v.Commit, map[string]any{
 		"status": v.Status, "dev_kill_rate": v.DevKillRate, "mutants_total": v.MutantsTotal,
 		"survivors": v.Survivors, "proven_missed": v.ProvenMissed, "models_by_role": v.ModelsByRole,
@@ -647,6 +678,37 @@ func (d *Driver) feedLeaderboard(v Verdict, testWriterMoot bool) {
 	d.Leaderboard.Record(v.ModelsByRole[RoleMutantGenerator], RoleMutantGenerator, outcome(v.MutantsTotal > 0))
 	// test-critic: did its findings hold (it actually flagged something)?
 	d.Leaderboard.Record(v.ModelsByRole[RoleTestCritic], RoleTestCritic, outcome(len(v.VacuousFindings) > 0))
+}
+
+// bugCatchObservations derives each seat's execution-proven contribution
+// from the run state + the signed verdict. Catches = ProvenMissed only — no
+// claim/self-report path may reach it.
+func bugCatchObservations(run *runState, v Verdict) []BugCatchObservation {
+	var out []BugCatchObservation
+	// test-writer: the execution-proven catcher.
+	authored, sound := 0, 0
+	if !run.testWriterMoot {
+		authored = 1
+		if run.poolScored && run.authoredTest != "" { // compiled + scored ⇒ a valid discriminating test
+			sound = 1
+		}
+	}
+	out = append(out, BugCatchObservation{
+		Model: v.ModelsByRole[RoleTestWriter], Role: RoleTestWriter,
+		Catches: v.ProvenMissed, Opportunities: v.Survivors,
+		AuthoredTests: authored, SoundTests: sound,
+	})
+	// test-critic: theater-detection (judgement, lower-confidence).
+	out = append(out, BugCatchObservation{
+		Model: v.ModelsByRole[RoleTestCritic], Role: RoleTestCritic,
+		CriticFlags: len(v.VacuousFindings),
+	})
+	// mutant-generator: adversary potency (not a catcher).
+	out = append(out, BugCatchObservation{
+		Model: v.ModelsByRole[RoleMutantGenerator], Role: RoleMutantGenerator,
+		MutantsPlanted: v.MutantsTotal, MutantsSurvived: v.Survivors,
+	})
+	return out
 }
 
 // isOperationalFinding reports whether f is an operational event (e.g. a

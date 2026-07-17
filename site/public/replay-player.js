@@ -622,6 +622,59 @@ function ensure(id, kind, label){
 
 function esc(s){ return (s||'').replace(/[&<>"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
 
+// renderFaultDiff / parseMutants: the FAULT HIGHLIGHT — the founder's key
+// transparency affordance ("here is the exact fault, and your tests pass
+// anyway"). A mutant is a same-signature drop-in of the code under review, so
+// a line diff of the original vs a surviving mutant isolates the planted
+// fault. No diff library exists on the tape side (esc() above is the only
+// primitive), so this is a minimal, dependency-free, O(n) line diff:
+// membership-against-the-original-line-set is an order-tolerant "is this
+// line new" test — good enough for a small mutation (a line present ANYWHERE
+// in the original is NOT a fault). A positional LCS diff is a fair follow-up
+// if false highlights ever show up on a real mutant, but it isn't needed for
+// the demo's single-region mutations.
+function renderFaultDiff(original, mutant){
+  const o = (original||'').split('\n'), m = (mutant||'').split('\n');
+  const oset = new Set(o.map(l => l.trim()));
+  const rows = m.map(line => {
+    const changed = line.trim() !== '' && !oset.has(line.trim());
+    const cell = esc(line);
+    return changed ? '<span class="faultline">' + cell + '</span>' : cell;
+  });
+  return '<pre class="aw-result faultdiff">' + rows.join('\n') + '</pre>';
+}
+// parseMutants: split a mutant-generator task_done.result into its
+// ===MUTATION_n=== blocks — {id, code}[] in tape order. Tolerant of a result
+// with no blocks at all (returns []), which is the signal to fall back to
+// the plain result <pre> (Task 2's behavior, unchanged for non-mutant tasks
+// or a mutant-gen result the tape didn't shape this way).
+//
+// IDs must mirror internal/testgen/parse.go's parseMutants EXACTLY: "m"+
+// positional-index (1-based) over only the NON-EMPTY blocks — NOT the raw
+// marker token (a marker of "===MUTATION_1===" does NOT mean id "1"). The
+// tape's pool_dev_adequacy.survivor_ids are the Go-assigned ids ("m1","m2",
+// ...), so a mismatched id scheme here silently breaks survivor matching
+// (see the honesty-fix commit that introduced this comment).
+function parseMutants(result){
+  const mark = '===MUTATION_';
+  const parts = (result || '').split(mark);
+  const out = [];
+  for(let i = 1; i < parts.length; i++){ // parts[0] is any preamble before the first marker
+    const p = parts[i];
+    // p looks like "1===\n<code>...": drop up to and including the marker's closing "==="
+    const close = p.indexOf('===');
+    if(close < 0) continue;
+    let body = p.slice(close + 3);
+    // A trailing "..._END===" (or the next marker, already split off) may remain — cut at any residual "===".
+    const end = body.indexOf('===');
+    if(end >= 0) body = body.slice(0, end);
+    const code = body.trim();
+    if(code === '') continue;
+    out.push({id: 'm' + (out.length + 1), code});
+  }
+  return out;
+}
+
 // simple force layout
 function step(){
   const arr = [...nodes.values()];
@@ -946,10 +999,20 @@ function setReplayExecFilter(n){ replayExecFilter = (replayExecFilter === n ? ''
 // when" (paths only; the tape never captures file contents). Accumulated in
 // applyReplayEvent, so it rebuilds-from-0 on scrub exactly like the panels.
 let replayFiles = new Map();
+// replayPoolSubject / replayDevAdequacy: the advpool's fault-highlight
+// inputs, accumulated the same way as replayFiles above — captured in
+// applyReplayEvent when their events land, rebuilt-from-0 on scrub.
+// replayPoolSubject.code is the ORIGINAL code under review (pool_subject.
+// detail.code); replayDevAdequacy.survivor_ids names which planted mutant(s)
+// the dev's own tests failed to kill — the fault worth showing (see
+// renderFaultDiff / the mutant-generator task-story "result" section below).
+let replayPoolSubject = null;
+let replayDevAdequacy = null;
 function resetReplayPanels(){
   replayConsoleLines = []; replayTasks = new Map(); replayFindings = [];
   replayAgents = new Map(); replaySeenBeats = new Set();
   replayFiles = new Map();
+  replayPoolSubject = null; replayDevAdequacy = null;
 }
 function clearReplayPanelDOM(){
   // 'agents' is the canonical roster id, shared by the product UI and the
@@ -1107,6 +1170,22 @@ function renderReplayLine(e){
       '<span class="xthoughtico" title="reasoning, not an action">💭</span> ' +
       '<b style="color:' + roleColor(e.role) + '">' + esc(displayName(e.agent)) + '</b> ' +
       '<span class="xthoughttext">·thinking· ' + esc(e.text || '') + '</span></div></div>';
+  }
+  // pool: the advpool's ordered reasoning trace (subject → dev-adequacy →
+  // verdict), one beat each, always readable text pre-composed by the switch
+  // above and esc()'d here — never raw HTML from the tape. The verdict beat
+  // carries a status modifier (xpool-ok / xpool-review) so certified vs
+  // needs-review reads at a glance.
+  if(e.kind === 'pool'){
+    const cls = 'xpool' + (e.sub === 'verdict' ? ' xpool-' + (e.status === 'certified' ? 'ok' : 'review') : '');
+    return '<div class="xblk"><div class="xcmdline xpoolline ' + cls + '"><span class="xpoolico" title="reasoning trace">⟐</span> <span class="xpooltext">' + esc(e.text || '') + '</span></div></div>';
+  }
+  // poolfinding: the critic's actual argument (finding_reported.detail.
+  // evidence) — distinct from the ".xpool" trio above (a run can report many
+  // findings), but rendered in the same chronological feed right where it
+  // happened.
+  if(e.kind === 'poolfinding'){
+    return '<div class="xblk"><div class="xcmdline xpoolfindingline"><span class="xpoolico" title="critic evidence">⚑</span> <span class="xpoolfindingtext">' + esc(e.text || '') + '</span></div></div>';
   }
   const badge = e.ok
     ? '<span class="xbadge" style="color:var(--green)" title="exit 0">✓</span>'
@@ -1374,6 +1453,18 @@ function ensureSiteReplayStyles(){
 .aw-footer .aw-askbox button:disabled { opacity:.5; cursor:default; }
 .aw-footer .aw-ans { color:var(--stage-fg,#e6e1d8); font-size:12px; line-height:1.5; font-style:italic; border-left:2px solid var(--stage-amber,#e8a838); padding-left:8px; white-space:pre-wrap; max-height:72px; overflow-y:auto; }
 .aw-footer .aw-q2 { color:var(--stage-muted,#8a8170); font-size:11px; }
+/* pool reasoning-trace beats — the site-embed twin of index.html's #exec
+   .xpool* rules (product ships those directly in its <style>; this JS
+   injector is the site's only path to the same CSS, hence the mirror). */
+#exec .xpoolline, .cockpit-exec .xpoolline { white-space:normal; overflow-wrap:anywhere; border-left:2px solid var(--stage-amber,#e8a838); padding-left:8px; }
+#exec .xpoolico, .cockpit-exec .xpoolico { flex:none; opacity:.85; }
+#exec .xpooltext, .cockpit-exec .xpooltext { color:var(--stage-muted,#8a8170); font-size:11.5px; line-height:1.5; }
+#exec .xpool-ok, .cockpit-exec .xpool-ok { border-left-color:var(--stage-green,#8fdcab); }
+#exec .xpool-ok .xpooltext, .cockpit-exec .xpool-ok .xpooltext { color:var(--stage-green,#8fdcab); font-weight:600; }
+#exec .xpool-review, .cockpit-exec .xpool-review { border-left-color:var(--stage-red,#e8503a); }
+#exec .xpool-review .xpooltext, .cockpit-exec .xpool-review .xpooltext { color:var(--stage-red,#e8503a); font-weight:600; }
+#exec .xpoolfindingline, .cockpit-exec .xpoolfindingline { white-space:normal; overflow-wrap:anywhere; border-left:2px solid var(--stage-line,#33405a); padding-left:8px; }
+#exec .xpoolfindingtext, .cockpit-exec .xpoolfindingtext { color:var(--stage-fg,#e6e1d8); font-size:11.5px; font-style:italic; line-height:1.5; }
 `;
   document.head.appendChild(s);
 }
@@ -1545,7 +1636,7 @@ function buildReplayTaskStories(){
   let base = 0;
   const ensureT = (key) => {
     let t = tasks.get(key);
-    if(!t){ t = {key, title:'', role:'', instruction:'', deps:[], supersedes:0, status:'queued', claimedBy:'', actors:new Set(), createdTs:0, claimedTs:0, doneTs:0, doneKind:'', commands:[], findings:[], next:[]}; tasks.set(key, t); }
+    if(!t){ t = {key, title:'', role:'', instruction:'', deps:[], supersedes:0, status:'queued', claimedBy:'', actors:new Set(), createdTs:0, claimedTs:0, doneTs:0, doneKind:'', commands:[], findings:[], next:[], result:''}; tasks.set(key, t); }
     return t;
   };
   for(const ev of evs){
@@ -1580,6 +1671,7 @@ function buildReplayTaskStories(){
         t.doneKind = ev.kind;
         if(ev.actor) t.actors.add(ev.actor);
         if(ev.ts) t.doneTs = ev.ts;
+        if(d.result) t.result = d.result;
         break;
       }
     }
@@ -1660,6 +1752,8 @@ function ensureReplayTaskStyles(){
 .aw-body .aw-chain { color: var(--stage-amber,#e8a838); cursor:pointer; text-decoration:underline dotted; }
 .aw-body .aw-chain:hover { color: var(--stage-fg,#e6e1d8); }
 .aw-body .aw-timing { color: var(--stage-muted,#8a8170); font-size:11.5px; line-height:1.6; }
+.aw-body .aw-result { max-height:220px; overflow:auto; font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11px; line-height:1.5; color: var(--stage-fg,#e6e1d8); background: var(--stage-bg,#0e1116); border: 1px solid var(--stage-line,#33405a); border-radius:6px; padding:8px; white-space:pre-wrap; word-break:break-word; margin:2px 0 4px; }
+.aw-body .faultline { background: rgba(232,80,58,.32); color: var(--stage-red,#ff7a63); font-weight:700; border-radius:3px; padding:0 2px; margin:0 -2px; box-decoration-break:clone; -webkit-box-decoration-break:clone; }
 `;
   document.head.appendChild(s);
 }
@@ -1760,6 +1854,37 @@ function renderReplayTaskWindowBody(key){
     t.findings.slice(0, 8).forEach(f => {
       h += '<div class="aw-frow"><span class="aw-fsev" style="color:' + sevColor(f.severity) + '">' + esc(f.severity || 'finding') + '</span> <span class="ir">' + esc(f.type) + '</span>' + (f.target ? ' <span style="color:var(--stage-fg,#e6e1d8)">' + esc(f.target) + '</span>' : '') + '</div>';
     });
+  }
+
+  if(t.result){
+    // Fault highlight: for a mutant-generator task, when the original code
+    // under review is on the tape (replayPoolSubject, captured from
+    // pool_subject.detail.code), diff the surviving mutant against it and
+    // highlight the planted-fault lines instead of dumping the raw result.
+    // Graceful/additive: no pool_subject, no mutant blocks, or a non-mutant
+    // task all fall straight through to the plain result <pre> (unchanged
+    // behavior from Task 2).
+    let resultHtml = '';
+    if(t.role === 'mutant-generator' && replayPoolSubject && replayPoolSubject.code){
+      const mutants = parseMutants(t.result);
+      if(mutants.length){
+        const survivorIds = (replayDevAdequacy && replayDevAdequacy.survivor_ids) || [];
+        const matched = mutants.find(mu => survivorIds.includes(mu.id));
+        const survivor = matched || mutants[0];
+        // Only claim "the surviving fault" when the tape's survivor_ids
+        // actually resolved to one of the parsed mutants — if the id didn't
+        // match (unrecognized scheme, empty list, stale tape), the fallback
+        // to mutants[0] is a GUESS, not a verified survivor, so the label
+        // must not over-claim.
+        const label = matched
+          ? 'the surviving fault, highlighted against the original'
+          : 'a planted fault (highlighted against the original)';
+        resultHtml = '<div class="isec">result <span class="ir">· ' + esc(label) + '</span></div>'
+          + renderFaultDiff(replayPoolSubject.code, survivor.code);
+      }
+    }
+    if(!resultHtml) resultHtml = '<div class="isec">result</div><pre class="aw-result">' + esc(t.result) + '</pre>';
+    h += resultHtml;
   }
 
   // WHO did it
@@ -1993,7 +2118,52 @@ function applyReplayEvent(ev){
       if(!replaySeenBeats.has(k)){
         replaySeenBeats.add(k);
         replayFindings.push({reporter: ev.actor || '', target: ev.subject || '', type: d.type || '', severity: d.severity || '', model: ev.model || '', resolved: false});
+        // Surface the critic's ACTUAL ARGUMENT (d.evidence) in the chronological
+        // console feed alongside the pool_* beats below — "show the work" means
+        // the reader sees not just "a finding was reported" but WHY, in the
+        // critic's own words. Only pool runs carry evidence; a bare
+        // finding_reported without it produces no console beat (unchanged
+        // behavior for non-pool streams).
+        if(d.evidence){
+          // kind:'poolfinding' — deliberately NOT 'pool': the pool_subject/
+          // pool_dev_adequacy/pool_verdict trio is the countable ".xpool" trace
+          // (one beat each), while a finding's evidence is its own distinct
+          // beat (a finding_reported can fire many times per run).
+          replayConsoleLines.push({kind:'poolfinding', target: ev.subject || '', severity: d.severity || '', type: d.type || '', text: d.evidence});
+          if(replayConsoleLines.length > 200) replayConsoleLines.shift();
+        }
       }
+      break;
+    }
+    // pool_subject / pool_dev_adequacy / pool_verdict: the advpool's
+    // reasoning trace (internal/brain: contain·certify·query) rendered as
+    // readable beats in the SAME console feed the thoughts/execs use — the
+    // ordered "why" behind a certify/needs-review verdict. Synthetic beats,
+    // same shape as reflex_cap_exhausted above.
+    case 'pool_subject': {
+      replayConsoleLines.push({kind:'pool', sub:'subject', text:'grading ' + (d.code_path||'the change') + ' against its own tests' + (d.dev_test_path ? ' (' + d.dev_test_path + ')' : '')});
+      if(replayConsoleLines.length > 200) replayConsoleLines.shift();
+      // Capture the original code under review for the fault-highlight diff
+      // (renderFaultDiff, wired into the mutant-generator task story below).
+      // Additive: if this event never carries code, replayPoolSubject stays
+      // null and the task story falls back to the plain result <pre>.
+      if(d.code) replayPoolSubject = {code: d.code, code_path: d.code_path || ''};
+      break;
+    }
+    case 'pool_dev_adequacy': {
+      const total = d.mutants_total||0, surv = d.survivors||0;
+      replayConsoleLines.push({kind:'pool', sub:'adequacy', text:"the dev's tests killed " + (total-surv) + '/' + total + ' planted faults — ' + surv + ' survived (the gap)'});
+      if(replayConsoleLines.length > 200) replayConsoleLines.shift();
+      // Which mutant(s) survived — preferred over "just the first mutant" so
+      // the fault-highlight diffs the ACTUAL surviving fault, not any planted
+      // mutant that the dev's tests already killed.
+      replayDevAdequacy = {survivors: surv, survivor_ids: Array.isArray(d.survivor_ids) ? d.survivor_ids.map(String) : []};
+      break;
+    }
+    case 'pool_verdict': {
+      const models = Object.keys(d.models_by_role||{}).sort().map(r => r + '=' + d.models_by_role[r]).join(' ');
+      replayConsoleLines.push({kind:'pool', sub:'verdict', status:(d.status||''), text:(d.status||'').toUpperCase() + ': kill-rate ' + (d.dev_kill_rate) + ', ' + (d.survivors||0) + ' survivors, ' + (d.proven_missed||0) + ' proven-missed' + (models ? ' · models ' + models : '') + ' · signed record ' + (d.record_id||'?')});
+      if(replayConsoleLines.length > 200) replayConsoleLines.shift();
       break;
     }
     case 'reflex_cap_exhausted': {

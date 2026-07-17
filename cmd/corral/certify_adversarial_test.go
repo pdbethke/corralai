@@ -272,3 +272,66 @@ func TestAdversarialStartErrorExitsOne(t *testing.T) {
 		t.Fatalf("start error: exit = %d, want 1", rc)
 	}
 }
+
+func TestAdversarialDetectsPythonLanguage(t *testing.T) {
+	dir := t.TempDir()
+	codePath := dir + "/foo.py"
+	testPath := dir + "/test_foo.py"
+	if err := os.WriteFile(codePath, []byte("def f(): pass\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(testPath, []byte("def test_f(): pass\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeAdvClient{runID: 7, statuses: []advStatus{certifiedStatus()}}
+	var out, errBuf bytes.Buffer
+	args := []string{"--adversarial", "--brain", "http://b", "--code", codePath, "--goal", "g", "--poll", "1ms", "--", "pytest"}
+	rc := runCertifyAdversarial(args, f, gitStubRunner{}, noSleep, &out, &errBuf)
+	if rc != 0 {
+		t.Fatalf("exit = %d, want 0; stderr=%s", rc, errBuf.String())
+	}
+	if f.spec.Lang != "python" {
+		t.Fatalf("spec.Lang = %q, want python", f.spec.Lang)
+	}
+	if f.spec.DevTestPath != testPath {
+		t.Fatalf("spec.DevTestPath = %q, want %q", f.spec.DevTestPath, testPath)
+	}
+}
+
+func TestAdversarialDetectsGoLanguage(t *testing.T) {
+	code, testPath := writeTmpFiles(t) // fence.go / fence_test.go
+	f := &fakeAdvClient{runID: 7, statuses: []advStatus{certifiedStatus()}}
+	var out, errBuf bytes.Buffer
+	args := []string{"--adversarial", "--brain", "http://b", "--code", code, "--goal", "g", "--poll", "1ms", "--", "go", "test", "./..."}
+	rc := runCertifyAdversarial(args, f, gitStubRunner{}, noSleep, &out, &errBuf)
+	if rc != 0 {
+		t.Fatalf("exit = %d, want 0; stderr=%s", rc, errBuf.String())
+	}
+	if f.spec.Lang != "go" {
+		t.Fatalf("spec.Lang = %q, want go", f.spec.Lang)
+	}
+	if f.spec.DevTestPath != testPath {
+		t.Fatalf("spec.DevTestPath = %q, want %q", f.spec.DevTestPath, testPath)
+	}
+}
+
+func TestAdversarialUnknownLanguageExitsTwo(t *testing.T) {
+	dir := t.TempDir()
+	codePath := dir + "/foo.xyz"
+	if err := os.WriteFile(codePath, []byte("???\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeAdvClient{}
+	var out, errBuf bytes.Buffer
+	args := []string{"--adversarial", "--brain", "http://b", "--code", codePath, "--goal", "g", "--", "some", "cmd"}
+	rc := runCertifyAdversarial(args, f, gitStubRunner{}, noSleep, &out, &errBuf)
+	if rc != 2 {
+		t.Fatalf("exit = %d, want 2", rc)
+	}
+	if !strings.Contains(errBuf.String(), "unknown language") {
+		t.Fatalf("stderr missing 'unknown language': %s", errBuf.String())
+	}
+	if f.spec != (advStartSpec{}) {
+		t.Fatalf("StartRun should not have been called, but spec was captured: %+v", f.spec)
+	}
+}

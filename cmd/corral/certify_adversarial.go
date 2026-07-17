@@ -9,12 +9,12 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/pdbethke/corralai/internal/brainclient"
+	"github.com/pdbethke/corralai/internal/lang"
 )
 
 // advFinding is the subset of a queue.Finding the verdict render shows. The
@@ -65,6 +65,7 @@ type advStartSpec struct {
 	DevTestCode string `json:"dev_test_code"`
 	TestCmd     string `json:"test_cmd"`
 	NMutants    int    `json:"n_mutants,omitempty"`
+	Lang        string `json:"lang"`
 }
 
 // advPoolClient triggers and polls an adversarial-pool run over the brain's
@@ -108,7 +109,7 @@ func (c mcpAdvClient) StartRun(ctx context.Context, brainURL string, spec advSta
 		"repo": spec.Repo, "commit": spec.Commit, "goal": spec.Goal,
 		"code_path": spec.CodePath, "code": spec.Code,
 		"dev_test_path": spec.DevTestPath, "dev_test_code": spec.DevTestCode,
-		"test_cmd": spec.TestCmd,
+		"test_cmd": spec.TestCmd, "lang": spec.Lang,
 	}
 	if spec.NMutants > 0 {
 		args["n_mutants"] = spec.NMutants
@@ -152,6 +153,7 @@ func runCertifyAdversarial(args []string, client advPoolClient, run cmdRunner, s
 	brainURL := fs.String("brain", os.Getenv("CORRAL_BRAIN"), "brain MCP endpoint (or $CORRAL_BRAIN)")
 	codePath := fs.String("code", "", "repo-relative path of the code under review (required)")
 	testPath := fs.String("test", "", "repo-relative path of the dev's test (default: the _test.go sibling of --code)")
+	langFlag := fs.String("lang", "", "source language (default: inferred from --code extension)")
 	goal := fs.String("goal", "", "the correctness/security goal the code must satisfy (required)")
 	nMutants := fs.Int("n-mutants", 0, "how many seeded-violation mutants (default 5, brain clamps to 20)")
 	poll := fs.Duration("poll", 5*time.Second, "how often to poll the run's status")
@@ -179,9 +181,26 @@ func runCertifyAdversarial(args []string, client advPoolClient, run cmdRunner, s
 		return 2
 	}
 
+	var plug lang.Plugin
+	if strings.TrimSpace(*langFlag) != "" {
+		p, ok := lang.ByName(strings.TrimSpace(*langFlag))
+		if !ok {
+			fmt.Fprintf(stderr, "corral certify --adversarial: unknown --lang %q\n", *langFlag)
+			return 2
+		}
+		plug = p
+	} else {
+		p, ok := lang.Detect(*codePath)
+		if !ok {
+			fmt.Fprintf(stderr, "corral certify --adversarial: unknown language for --code %s (pass --lang)\n", *codePath)
+			return 2
+		}
+		plug = p
+	}
+
 	tp := strings.TrimSpace(*testPath)
 	if tp == "" {
-		tp = siblingTestPath(*codePath)
+		tp = plug.TestPath(*codePath)
 	}
 
 	code, err := os.ReadFile(*codePath) // #nosec G304 -- operator-supplied path to the file under review
@@ -214,6 +233,7 @@ func runCertifyAdversarial(args []string, client advPoolClient, run cmdRunner, s
 		DevTestPath: tp, DevTestCode: string(devTest),
 		TestCmd:  strings.Join(checkArgv, " "),
 		NMutants: *nMutants,
+		Lang:     plug.Name(),
 	}
 
 	ctx := context.Background()
@@ -256,13 +276,6 @@ func runCertifyAdversarial(args []string, client advPoolClient, run cmdRunner, s
 	}
 }
 
-// siblingTestPath derives foo.go -> foo_test.go in the same directory.
-func siblingTestPath(codePath string) string {
-	ext := filepath.Ext(codePath)
-	base := strings.TrimSuffix(codePath, ext)
-	return base + "_test" + ext
-}
-
 // renderAdvVerdict prints the legible verdict block — the demo artifact. It
 // prints exactly what the brain signed; it never upgrades a needs-review to
 // CERTIFIED, and shows survivors/proven_missed and the test-critic's pan even
@@ -281,6 +294,9 @@ func renderAdvVerdict(w io.Writer, codePath string, v advVerdict) {
 		commit = commit[:7]
 	}
 	fmt.Fprintf(w, "\nadversarial verdict — %s @ %s\n", codePath, commit)
+	if v.Lang != "" {
+		fmt.Fprintf(w, "  language:      %s\n", v.Lang)
+	}
 	fmt.Fprintf(w, "  status:        %-12s (dev suite killed %d/%d mutants)\n", status, killed, v.MutantsTotal)
 	fmt.Fprintf(w, "  dev_kill_rate: %.2f\n", v.DevKillRate)
 	fmt.Fprintf(w, "  survivors:     %d\n", v.Survivors)

@@ -481,6 +481,16 @@ const maxAdvPoolMutants = 20
 // DAG is enqueued by driver.StartRun, not by CreateMission's plan-to-tasks
 // path), and enqueues the run's DAG. Refuses a second run while one is
 // already active (single active run — slice 1's explicit scope limit).
+// poolDirective is the tracking mission's human-facing directive — it names the
+// change under audit (the code path), not the raw repo URL + full commit hash,
+// which read as noise on the recordings gallery card.
+func poolDirective(rs advpool.RunSpec) string {
+	if p := strings.TrimSpace(rs.CodePath); p != "" {
+		return "adversarial pool · " + p
+	}
+	return "adversarial pool"
+}
+
 func (rt *AdvPoolRuntime) StartRun(in AdvPoolRunSpec) (int64, error) {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
@@ -516,7 +526,7 @@ func (rt *AdvPoolRuntime) StartRun(in AdvPoolRunSpec) (int64, error) {
 	}
 
 	mid, err := mission.CreateMission(rt.missions, nil,
-		fmt.Sprintf("adversarial-pool: %s@%s", rs.Repo, rs.Commit),
+		poolDirective(rs),
 		[]mission.PhaseSpec{{Name: "adversarial-pool", Role: "system", Count: 1}}, false)
 	if err != nil {
 		return 0, fmt.Errorf("advpool: create tracking mission: %w", err)

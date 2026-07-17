@@ -40,6 +40,9 @@ deploy/demo/.env
 # gosec scan output (regenerated on demand, never committed)
 /gosec*.json
 
+# eval harness scratch progress (regenerated per run, never committed)
+/eval/.eval-progress.json
+
 # local build outputs — never commit binaries
 /corral
 /corral-agent

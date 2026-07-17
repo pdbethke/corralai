@@ -1,0 +1,54 @@
+{
+  "corpus_version": "2026-07-17.1",
+  "targets": [
+    {
+      "id": "fence-neutralization",
+      "code_path": "../../internal/fence/fence.go",
+      "test_path": "../../internal/fence/fence_test.go",
+      "goal": "Untrusted content cannot forge or close the fence: every occurrence of the sentinel in content is neutralized before wrapping, so wrapped text can never escape the untrusted-data fence.",
+      "test_cmd": "go test ./internal/fence/...",
+      "expected_adequacy": "thorough",
+      "n_mutants": 8
+    },
+    {
+      "id": "passwd-thorough",
+      "code_path": "passwd/passwd.go",
+      "test_path": "passwd/passwd_thorough_test.go",
+      "goal": "A password is valid iff length >= 12 AND it contains an upper, a lower, a digit, and a symbol.",
+      "test_cmd": "go test ./eval/corpus/passwd/... -run Thorough",
+      "expected_adequacy": "thorough",
+      "n_mutants": 8
+    },
+    {
+      "id": "passwd-gappy",
+      "code_path": "passwd/passwd.go",
+      "test_path": "passwd/passwd_gappy_test.go",
+      "goal": "A password is valid iff length >= 12 AND it contains an upper, a lower, a digit, and a symbol.",
+      "test_cmd": "go test ./eval/corpus/passwd/... -run Gappy",
+      "expected_adequacy": "gappy",
+      "known_gap": "the suite only checks length; a mutant that drops the character-class requirement survives — a good test-writer should catch it.",
+      "expected_survivors": 1,
+      "n_mutants": 8
+    },
+    {
+      "id": "interval-thorough",
+      "code_path": "interval/interval.go",
+      "test_path": "interval/interval_thorough_test.go",
+      "goal": "Contains(lo,hi,x) reports whether x is within the inclusive range [lo,hi].",
+      "test_cmd": "go test ./eval/corpus/interval/... -run Thorough",
+      "expected_adequacy": "thorough",
+      "n_mutants": 8
+    },
+    {
+      "id": "interval-gappy",
+      "code_path": "interval/interval.go",
+      "test_path": "interval/interval_gappy_test.go",
+      "goal": "Contains(lo,hi,x) reports whether x is within the inclusive range [lo,hi].",
+      "test_cmd": "go test ./eval/corpus/interval/... -run Gappy",
+      "expected_adequacy": "gappy",
+      "known_gap": "the suite never tests the boundaries; a mutant that turns >= into > (excluding lo) or <= into < survives.",
+      "expected_survivors": 1,
+      "n_mutants": 8
+    }
+  ]
+}

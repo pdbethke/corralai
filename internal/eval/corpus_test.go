@@ -90,3 +90,21 @@ func TestLoadRejectsDuplicateID(t *testing.T) {
 		t.Fatalf("error should mention the duplicate id: %v", err)
 	}
 }
+
+func TestRealCorpusManifestLoads(t *testing.T) {
+	m, err := Load("../../eval/corpus/manifest.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Targets) != 5 {
+		t.Fatalf("want 5 targets, got %d", len(m.Targets))
+	}
+	for _, tg := range m.Targets {
+		if tg.Code() == "" || tg.TestCode() == "" {
+			t.Fatalf("target %s files empty", tg.ID)
+		}
+		if len(tg.Digest()) != 64 {
+			t.Fatalf("target %s bad digest", tg.ID)
+		}
+	}
+}

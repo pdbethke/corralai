@@ -18,7 +18,12 @@ const DENY_PATTERNS: [RegExp, string][] = [
   // Windows-shaped paths (drive-letter and backslash-home), mirroring the
   // two extra deny rules scrub-golden-run.py carries that scripts/export
   // didn't originally quote in Task 2's excerpt.
-  [/\b[A-Za-z]:(?:\\{1,2}[A-Za-z0-9._-]+)+/g, 'Windows drive-letter path'],
+  // The (?!…) skips a lone escape sequence right after the colon so a Go
+  // format string like `%q:\n%s` is NOT read as a `Q:\` path — a real path
+  // segment ("q:\name") has more chars after the escape letter and still
+  // matches. Kept byte-for-byte in sync with the python rule at
+  // scrub-golden-run.py (drive-letter regex).
+  [/\b[A-Za-z]:(?:\\{1,2}(?![ntrbfva0](?![A-Za-z0-9._-]))[A-Za-z0-9._-]+)+/g, 'Windows drive-letter path'],
   [/\\{1,2}(?:Users|home)\\{1,2}[A-Za-z0-9._-]+/g, 'Windows backslash home path'],
 ];
 

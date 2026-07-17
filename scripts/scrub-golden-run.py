@@ -147,7 +147,15 @@ def cmd_models(path):
     (backend:model when the event carries a backend in detail, bare model
     otherwise). A bare label that is the suffix of a qualified one is the SAME
     model seen from the telemetry side (no backend column there) — collapsed,
-    so one model never lists twice."""
+    so one model never lists twice.
+
+    For an adversarial-pool run, the per-task telemetry backend stamp is
+    unreliable for the decorrelated roles (a Gemini/OpenAI-compat critic can be
+    recorded under the brain's own backend), so the authoritative model-per-role
+    attribution is the signed pool_verdict's models_by_role. We union those bare
+    model names in; the collapse below folds any that already appear qualified
+    (e.g. bare 'claude-sonnet-5' into 'anthropic:claude-sonnet-5') while keeping
+    a cross-vendor model the stream never qualified (e.g. 'gemini-3.5-flash')."""
     data = json.load(open(path, encoding='utf-8'))
     models = set()
     for ev in data.get('events', []):
@@ -156,6 +164,14 @@ def cmd_models(path):
             continue
         backend = ((ev.get('detail') or {}).get('backend') or '').strip()
         models.add(backend + ':' + m if backend else m)
+    for ev in data.get('events', []):
+        if ev.get('kind') != 'pool_verdict':
+            continue
+        by_role = ((ev.get('detail') or {}).get('models_by_role') or {})
+        for role_model in by_role.values():
+            rm = (role_model or '').strip()
+            if rm:
+                models.add(rm)
     models = {m for m in models if not any(o != m and o.endswith(':' + m) for o in models)}
     print(json.dumps(sorted(models)))
 

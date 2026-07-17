@@ -92,6 +92,11 @@ type Verdict struct {
 type RunState struct {
 	Converged bool
 	Verdict   *Verdict
+	// AuthoredTest is the pool's compiling killing test, when one was authored
+	// (the test-writer ran because the dev suite left survivors). Empty when a
+	// perfect dev suite made the test-writer moot. NOT part of the signed
+	// Verdict — evidence handed back to the dev, not certified state.
+	AuthoredTest string
 }
 
 // CheckDecorrelation rejects an assignment where test-critic and test-writer
@@ -123,6 +128,13 @@ type runState struct {
 
 	poolScored   bool
 	provenMissed int
+
+	// authoredTest is the pool's compiling killing test (the test-writer's
+	// cleaned source), surfaced via RunState so `corral certify --adversarial`
+	// can hand it back to the dev ("add this test; it catches the gap your suite
+	// missed"). Evidence, deliberately NOT folded into the signed Verdict digest
+	// — kept as run status, per the reasoning-trace design's non-goals.
+	authoredTest string
 
 	// testWriterMoot is set when a perfect dev suite (0 survivors) skipped the
 	// test-writer entirely: the assigned model never ran, so it must NOT be fed
@@ -306,7 +318,7 @@ func (d *Driver) RunStatus(missionID int64) (RunState, bool) {
 	if !ok {
 		return RunState{}, false
 	}
-	return RunState{Converged: run.verdict != nil, Verdict: run.verdict}, true
+	return RunState{Converged: run.verdict != nil, Verdict: run.verdict, AuthoredTest: run.authoredTest}, true
 }
 
 // Tick advances one run given the current task states. It returns a non-nil
@@ -522,6 +534,12 @@ func (d *Driver) tickPoolAdequacy(ctx context.Context, run *runState) error {
 		}
 		return fmt.Errorf("advpool: test-writer result does not compile, reissued for retry: %w", cerr)
 	}
+
+	// Capture the compiling killing test for hand-back (read by RunStatus under
+	// d.mu, so store it under the same lock).
+	d.mu.Lock()
+	run.authoredTest = writerTest
+	d.mu.Unlock()
 
 	_, poolSurvivors, serr := d.Scorer.Score(ctx, run.rs.CodePath, run.rs.Code, writerTest, run.devSurvivors, run.rs.TestCmd)
 	if serr != nil {

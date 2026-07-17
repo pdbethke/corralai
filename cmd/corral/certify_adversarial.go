@@ -46,10 +46,11 @@ type advVerdict struct {
 
 // advStatus mirrors brain.AdvPoolStatusOut (get_adversarial_run's output).
 type advStatus struct {
-	RunID     int64       `json:"run_id"`
-	Found     bool        `json:"found"`
-	Converged bool        `json:"converged"`
-	Verdict   *advVerdict `json:"verdict"`
+	RunID        int64       `json:"run_id"`
+	Found        bool        `json:"found"`
+	Converged    bool        `json:"converged"`
+	Verdict      *advVerdict `json:"verdict"`
+	AuthoredTest string      `json:"authored_test"`
 }
 
 // advStartSpec mirrors brain.AdvPoolRunSpec (start_adversarial_run's input).
@@ -232,6 +233,14 @@ func runCertifyAdversarial(args []string, client advPoolClient, run cmdRunner, s
 		}
 		if st.Converged && st.Verdict != nil {
 			renderAdvVerdict(stdout, *codePath, *st.Verdict)
+			// Hand the test back: when the pool authored a killing test for a gap
+			// the dev suite missed, print it so the dev can adopt it. This is the
+			// sharing payoff — the herd doesn't just grade the suite, it returns
+			// the exact test that closes the proven gap.
+			if strings.TrimSpace(st.AuthoredTest) != "" {
+				fmt.Fprintf(stdout, "\nthe herd authored a test that catches a gap your suite missed — add it to %s:\n\n", tp)
+				fmt.Fprintln(stdout, strings.TrimRight(st.AuthoredTest, "\n"))
+			}
 			if st.Verdict.Status == "certified" {
 				return 0
 			}

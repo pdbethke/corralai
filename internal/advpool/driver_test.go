@@ -266,6 +266,15 @@ func TestTick_PoolAdequacy_ScoresProvenMissed(t *testing.T) {
 	if run.provenMissed != 1 { // 2 dev-survivors, pool killed 1 (only m2 still survives)
 		t.Fatalf("ProvenMissed = %d, want 1", run.provenMissed)
 	}
+	// The compiling killing test is captured for hand-back and surfaced on
+	// RunState (not the signed Verdict) so `corral certify --adversarial` can
+	// return it to the dev.
+	if run.authoredTest == "" {
+		t.Fatal("expected authoredTest captured after pool-adequacy scoring")
+	}
+	if rs, ok := d.RunStatus(2); !ok || rs.AuthoredTest != run.authoredTest {
+		t.Fatalf("RunState.AuthoredTest = %q, want %q (surfaced via RunStatus)", rs.AuthoredTest, run.authoredTest)
+	}
 }
 
 // completeFullRun drives test-critic, mutant-generator, and test-writer to

@@ -462,6 +462,10 @@ type AdvPoolStatusOut struct {
 	Found     bool             `json:"found"`
 	Converged bool             `json:"converged"`
 	Verdict   *advpool.Verdict `json:"verdict,omitempty"`
+	// AuthoredTest is the pool's compiling killing test (when the dev suite left
+	// survivors the pool then killed), handed back so the dev can adopt it. Not
+	// part of the signed Verdict — evidence, not certified state.
+	AuthoredTest string `json:"authored_test,omitempty"`
 }
 
 // maxAdvPoolMutants mirrors maxControlMutants: bounds the compute a single
@@ -702,10 +706,11 @@ func registerAdvPoolTools(s *mcp.Server, opts Options) {
 			}
 			st, found := rt.RunStatus(in.RunID)
 			return nil, AdvPoolStatusOut{
-				RunID:     in.RunID,
-				Found:     found,
-				Converged: st.Converged,
-				Verdict:   st.Verdict,
+				RunID:        in.RunID,
+				Found:        found,
+				Converged:    st.Converged,
+				Verdict:      st.Verdict,
+				AuthoredTest: st.AuthoredTest,
 			}, nil
 		})
 }

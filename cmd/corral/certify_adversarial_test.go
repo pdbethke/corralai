@@ -172,6 +172,50 @@ func TestAdversarialNeedsReviewExitsThree(t *testing.T) {
 	}
 }
 
+func TestAdversarialHandsBackAuthoredTest(t *testing.T) {
+	// The sharing payoff: when the pool authored a killing test for a gap the
+	// dev suite missed, `corral certify --adversarial` prints it so the dev can
+	// adopt it — with a hand-back message naming the test file to add it to.
+	code, testPath := writeTmpFiles(t)
+	nr := certifiedStatus()
+	nr.Verdict.Status = "needs-review"
+	nr.Verdict.ProvenMissed = 1
+	nr.AuthoredTest = "func TestNeutralizesSentinel(t *testing.T) {\n\tif got := F(); got { t.Fatal(\"gap\") }\n}\n"
+	f := &fakeAdvClient{runID: 7, statuses: []advStatus{nr}}
+	var out, errBuf bytes.Buffer
+	args := []string{"--adversarial", "--brain", "http://b", "--code", code, "--test", testPath, "--goal", "g", "--poll", "1ms", "--", "go", "test", "./..."}
+	rc := runCertifyAdversarial(args, f, gitStubRunner{}, noSleep, &out, &errBuf)
+	if rc != 3 {
+		t.Fatalf("exit = %d, want 3", rc)
+	}
+	s := out.String()
+	if !strings.Contains(s, "authored a test that catches a gap") {
+		t.Fatalf("missing the hand-back message:\n%s", s)
+	}
+	if !strings.Contains(s, "TestNeutralizesSentinel") {
+		t.Fatalf("the authored test itself must be printed for the dev to adopt:\n%s", s)
+	}
+	if !strings.Contains(s, testPath) {
+		t.Fatalf("hand-back should name the dev test file (%s) to add it to:\n%s", testPath, s)
+	}
+}
+
+func TestAdversarialNoAuthoredTestNoHandBack(t *testing.T) {
+	// A perfect dev suite (0 survivors) makes the test-writer moot — no authored
+	// test, so no hand-back noise.
+	code, _ := writeTmpFiles(t)
+	st := certifiedStatus() // AuthoredTest left empty
+	f := &fakeAdvClient{runID: 7, statuses: []advStatus{st}}
+	var out, errBuf bytes.Buffer
+	args := []string{"--adversarial", "--brain", "http://b", "--code", code, "--goal", "g", "--poll", "1ms", "--", "go", "test", "./..."}
+	if rc := runCertifyAdversarial(args, f, gitStubRunner{}, noSleep, &out, &errBuf); rc != 0 {
+		t.Fatalf("exit = %d, want 0", rc)
+	}
+	if strings.Contains(out.String(), "authored a test") {
+		t.Fatalf("no authored test → must not print a hand-back:\n%s", out.String())
+	}
+}
+
 func TestAdversarialPollsUntilConverged(t *testing.T) {
 	code, _ := writeTmpFiles(t)
 	running := advStatus{RunID: 7, Found: true, Converged: false}

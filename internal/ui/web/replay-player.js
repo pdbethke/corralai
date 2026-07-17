@@ -1578,7 +1578,11 @@ function renderReplayWindowBody(name){
 
   let h = '<div class="isec">stats <span class="ir">· reconstructed from the tape</span></div>';
   h += '<div class="irow">holding <b>' + holdingTasks.length + '</b> · completed <b>' + ((ra && ra.completed) || 0) + '</b></div>';
-  if(ra && ra.lastTaskTitle){ h += '<div class="isec">working on</div><div class="itask">' + esc(ra.lastTaskTitle) + '</div>'; }
+  // "working on" only when the agent is ACTUALLY holding a task at this scrub
+  // position — same rule the roster uses for idle-vs-working (held.size > 0).
+  // Otherwise a finished agent (holding 0) kept claiming "working on <lastTask>"
+  // at end-of-tape, contradicting its own idle state.
+  if(ra && ra.held.size > 0 && ra.lastTaskTitle){ h += '<div class="isec">working on</div><div class="itask">' + esc(ra.lastTaskTitle) + '</div>'; }
   if(holdingTasks.length){
     h += '<div class="isec">holding</div>';
     holdingTasks.forEach(t => { h += '<div class="irow"><span class="igreen">' + esc(t.title || t.key) + '</span></div>'; });

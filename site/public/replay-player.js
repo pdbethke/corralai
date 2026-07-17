@@ -1108,6 +1108,22 @@ function renderReplayLine(e){
       '<b style="color:' + roleColor(e.role) + '">' + esc(displayName(e.agent)) + '</b> ' +
       '<span class="xthoughttext">·thinking· ' + esc(e.text || '') + '</span></div></div>';
   }
+  // pool: the advpool's ordered reasoning trace (subject → dev-adequacy →
+  // verdict), one beat each, always readable text pre-composed by the switch
+  // above and esc()'d here — never raw HTML from the tape. The verdict beat
+  // carries a status modifier (xpool-ok / xpool-review) so certified vs
+  // needs-review reads at a glance.
+  if(e.kind === 'pool'){
+    const cls = 'xpool' + (e.sub === 'verdict' ? ' xpool-' + (e.status === 'certified' ? 'ok' : 'review') : '');
+    return '<div class="xblk"><div class="xcmdline xpoolline ' + cls + '"><span class="xpoolico" title="reasoning trace">⟐</span> <span class="xpooltext">' + esc(e.text || '') + '</span></div></div>';
+  }
+  // poolfinding: the critic's actual argument (finding_reported.detail.
+  // evidence) — distinct from the ".xpool" trio above (a run can report many
+  // findings), but rendered in the same chronological feed right where it
+  // happened.
+  if(e.kind === 'poolfinding'){
+    return '<div class="xblk"><div class="xcmdline xpoolfindingline"><span class="xpoolico" title="critic evidence">⚑</span> <span class="xpoolfindingtext">' + esc(e.text || '') + '</span></div></div>';
+  }
   const badge = e.ok
     ? '<span class="xbadge" style="color:var(--green)" title="exit 0">✓</span>'
     : '<span class="xbadge" style="color:var(--red)" title="exit ' + esc(String(e.exitCode)) + '">✗' + esc(String(e.exitCode)) + '</span>';
@@ -1374,6 +1390,18 @@ function ensureSiteReplayStyles(){
 .aw-footer .aw-askbox button:disabled { opacity:.5; cursor:default; }
 .aw-footer .aw-ans { color:var(--stage-fg,#e6e1d8); font-size:12px; line-height:1.5; font-style:italic; border-left:2px solid var(--stage-amber,#e8a838); padding-left:8px; white-space:pre-wrap; max-height:72px; overflow-y:auto; }
 .aw-footer .aw-q2 { color:var(--stage-muted,#8a8170); font-size:11px; }
+/* pool reasoning-trace beats — the site-embed twin of index.html's #exec
+   .xpool* rules (product ships those directly in its <style>; this JS
+   injector is the site's only path to the same CSS, hence the mirror). */
+#exec .xpoolline, .cockpit-exec .xpoolline { white-space:normal; overflow-wrap:anywhere; border-left:2px solid var(--stage-amber,#e8a838); padding-left:8px; }
+#exec .xpoolico, .cockpit-exec .xpoolico { flex:none; opacity:.85; }
+#exec .xpooltext, .cockpit-exec .xpooltext { color:var(--stage-muted,#8a8170); font-size:11.5px; line-height:1.5; }
+#exec .xpool-ok, .cockpit-exec .xpool-ok { border-left-color:var(--stage-green,#8fdcab); }
+#exec .xpool-ok .xpooltext, .cockpit-exec .xpool-ok .xpooltext { color:var(--stage-green,#8fdcab); font-weight:600; }
+#exec .xpool-review, .cockpit-exec .xpool-review { border-left-color:var(--stage-red,#e8503a); }
+#exec .xpool-review .xpooltext, .cockpit-exec .xpool-review .xpooltext { color:var(--stage-red,#e8503a); font-weight:600; }
+#exec .xpoolfindingline, .cockpit-exec .xpoolfindingline { white-space:normal; overflow-wrap:anywhere; border-left:2px solid var(--stage-line,#33405a); padding-left:8px; }
+#exec .xpoolfindingtext, .cockpit-exec .xpoolfindingtext { color:var(--stage-fg,#e6e1d8); font-size:11.5px; font-style:italic; line-height:1.5; }
 `;
   document.head.appendChild(s);
 }
@@ -1993,7 +2021,43 @@ function applyReplayEvent(ev){
       if(!replaySeenBeats.has(k)){
         replaySeenBeats.add(k);
         replayFindings.push({reporter: ev.actor || '', target: ev.subject || '', type: d.type || '', severity: d.severity || '', model: ev.model || '', resolved: false});
+        // Surface the critic's ACTUAL ARGUMENT (d.evidence) in the chronological
+        // console feed alongside the pool_* beats below — "show the work" means
+        // the reader sees not just "a finding was reported" but WHY, in the
+        // critic's own words. Only pool runs carry evidence; a bare
+        // finding_reported without it produces no console beat (unchanged
+        // behavior for non-pool streams).
+        if(d.evidence){
+          // kind:'poolfinding' — deliberately NOT 'pool': the pool_subject/
+          // pool_dev_adequacy/pool_verdict trio is the countable ".xpool" trace
+          // (one beat each), while a finding's evidence is its own distinct
+          // beat (a finding_reported can fire many times per run).
+          replayConsoleLines.push({kind:'poolfinding', target: ev.subject || '', severity: d.severity || '', type: d.type || '', text: d.evidence});
+          if(replayConsoleLines.length > 200) replayConsoleLines.shift();
+        }
       }
+      break;
+    }
+    // pool_subject / pool_dev_adequacy / pool_verdict: the advpool's
+    // reasoning trace (internal/brain: contain·certify·query) rendered as
+    // readable beats in the SAME console feed the thoughts/execs use — the
+    // ordered "why" behind a certify/needs-review verdict. Synthetic beats,
+    // same shape as reflex_cap_exhausted above.
+    case 'pool_subject': {
+      replayConsoleLines.push({kind:'pool', sub:'subject', text:'grading ' + (d.code_path||'the change') + ' against its own tests' + (d.dev_test_path ? ' (' + d.dev_test_path + ')' : '')});
+      if(replayConsoleLines.length > 200) replayConsoleLines.shift();
+      break;
+    }
+    case 'pool_dev_adequacy': {
+      const total = d.mutants_total||0, surv = d.survivors||0;
+      replayConsoleLines.push({kind:'pool', sub:'adequacy', text:"the dev's tests killed " + (total-surv) + '/' + total + ' planted faults — ' + surv + ' survived (the gap)'});
+      if(replayConsoleLines.length > 200) replayConsoleLines.shift();
+      break;
+    }
+    case 'pool_verdict': {
+      const models = Object.keys(d.models_by_role||{}).sort().map(r => r + '=' + d.models_by_role[r]).join(' ');
+      replayConsoleLines.push({kind:'pool', sub:'verdict', status:(d.status||''), text:(d.status||'').toUpperCase() + ': kill-rate ' + (d.dev_kill_rate) + ', ' + (d.survivors||0) + ' survivors, ' + (d.proven_missed||0) + ' proven-missed' + (models ? ' · models ' + models : '') + ' · signed record ' + (d.record_id||'?')});
+      if(replayConsoleLines.length > 200) replayConsoleLines.shift();
       break;
     }
     case 'reflex_cap_exhausted': {

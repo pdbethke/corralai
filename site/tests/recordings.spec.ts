@@ -416,6 +416,39 @@ test('thought beats render distinctly from actions in the console, interleaved b
   await expect(page.locator('#exec .xblk').first()).toHaveClass(/xthought/);
 });
 
+test('pool reasoning trace renders the why in the console', async ({ page }) => {
+  // The advpool run carries pool_subject/pool_dev_adequacy/pool_verdict beats
+  // plus finding_reported.detail.evidence (the critic's argument) — this is
+  // "show the work", the difference from Fugu. Render them as an ordered,
+  // readable trace in the SAME console feed the thoughts/execs use.
+  await page.goto('/recordings/');
+  await page.evaluate(() => {
+    (window as any).startReplay({
+      events: [
+        { ts: 1, kind: 'pool_subject', actor: 'corral-advpool', detail: { code_path: 'internal/fence/fence.go', dev_test_path: 'internal/fence/fence_test.go', goal: 'neutralize the fence', code: 'package fence', dev_test_code: 'package fence' } },
+        { ts: 2, kind: 'pool_dev_adequacy', detail: { dev_kill_rate: 0.8, mutants_total: 5, survivors: 1, survivor_ids: ['m3'] } },
+        { ts: 3, kind: 'finding_reported', subject: 'TestX', detail: { type: 'note', severity: 'high', evidence: 'the test asserts nothing' } },
+        { ts: 4, kind: 'pool_verdict', detail: { status: 'certified', dev_kill_rate: 0.8, mutants_total: 5, survivors: 1, proven_missed: 0, models_by_role: { 'test-critic': 'gemini-3.5-flash', 'test-writer': 'claude-sonnet-5' }, record_id: 5, record_head: 'abc' } },
+      ],
+    });
+  });
+  await expect(async () => {
+    expect(Number(await page.locator('#replay-scrub').getAttribute('max'))).toBe(4);
+  }).toPass({ timeout: 5000 });
+
+  const scrub = page.locator('#replay-scrub');
+  const seek = (t: number) => scrub.evaluate((el, v) => { (el as HTMLInputElement).value = String(v); el.dispatchEvent(new Event('input')); }, t);
+  await seek(4);
+
+  const exec = page.locator('#exec');
+  await expect(exec).toContainText('grading internal/fence/fence.go');
+  await expect(exec).toContainText('killed 4/5');       // 5 total - 1 survivor
+  await expect(exec).toContainText('the test asserts nothing'); // critic evidence surfaced
+  await expect(exec).toContainText('CERTIFIED');
+  await expect(exec).toContainText('record 5');
+  await expect(page.locator('#exec .xpool')).toHaveCount(3); // subject + adequacy + verdict beats
+});
+
 test('the console per-agent filter isolates one actor\'s thoughts AND commands, and survives scrub/seek', async ({ page }) => {
   // Synthetic two-actor tape: Bob (builder) and Tess (tester) interleave
   // thoughts and executions. The filter chips must let a viewer isolate

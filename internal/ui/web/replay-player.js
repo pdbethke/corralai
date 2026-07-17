@@ -1008,11 +1008,12 @@ let replayFiles = new Map();
 // renderFaultDiff / the mutant-generator task-story "result" section below).
 let replayPoolSubject = null;
 let replayDevAdequacy = null;
+let replayPoolVerdict = null; // the signed verdict, for the "tests" (audit) lens
 function resetReplayPanels(){
   replayConsoleLines = []; replayTasks = new Map(); replayFindings = [];
   replayAgents = new Map(); replaySeenBeats = new Set();
   replayFiles = new Map();
-  replayPoolSubject = null; replayDevAdequacy = null;
+  replayPoolSubject = null; replayDevAdequacy = null; replayPoolVerdict = null;
 }
 function clearReplayPanelDOM(){
   // 'agents' is the canonical roster id, shared by the product UI and the
@@ -1334,6 +1335,71 @@ function renderReplayFileNode(node, depth){
       '</div>';
   }
   return html;
+}
+// renderReplayTests: the AUDIT-native lens (the "tests" tab on a pool run) — one
+// scannable panel of what the adversarial audit actually did: the signed verdict,
+// the surviving planted fault (diffed against the original — reuses
+// renderFaultDiff/parseMutants), the test it handed back (when one was authored),
+// and the dev suite it graded. Reconstructed from the tape up to the playhead.
+// Returns false when this isn't a pool run, so cockpitView falls back to files.
+function renderReplayTests(){
+  const el = document.getElementById('files');
+  if(!el) return false;
+  if(!replayPoolSubject && !replayPoolVerdict) return false; // not an audit run
+  // The two authored artifacts live in task results on the tape; reconstruct them
+  // up to the current playhead (mutant-generator's mutants, test-writer's test).
+  let mutantGen = '', authoredTest = '';
+  const upto = (typeof replayIdx === 'number') ? replayIdx : (replayEvents ? replayEvents.length : 0);
+  for(let i=0; i<upto && replayEvents && i<replayEvents.length; i++){
+    const ev = replayEvents[i];
+    if(ev.kind === 'task_done' && ev.detail && ev.detail.result){
+      const s = String(ev.subject||'');
+      if(/mutant/.test(s)) mutantGen = ev.detail.result;
+      else if(/test-writer/.test(s)) authoredTest = ev.detail.result;
+    }
+  }
+  const V = replayPoolVerdict, S = replayPoolSubject, A = replayDevAdequacy;
+  const codePath = (S && S.code_path) || 'the change';
+  let h = '<div class="cv-pane tests-lens">';
+  h += '<div class="cv-explain">The audit — an adversarial herd grades <b>' + esc(codePath) + '</b> against its own tests. Every catch is proven by execution in a jail, never taken on a model’s word.</div>';
+  if(V){
+    const cls = V.status === 'certified' ? 'tv-ok' : 'tv-review';
+    const killed = Math.max(0, V.mutantsTotal - V.survivors);
+    h += '<div class="tests-sec">verdict</div><div class="tests-verdict ' + cls + '">'
+      + esc((V.status||'').toUpperCase()) + ' — the suite killed ' + killed + '/' + V.mutantsTotal + ' planted faults, ' + V.survivors + ' survived'
+      + (V.provenMissed>0 ? ', ' + V.provenMissed + ' proven catchable' : '')
+      + (V.recordId ? ' · signed record ' + esc(String(V.recordId)) : '') + '</div>';
+    const models = Object.keys(V.models||{}).sort().map(r => r + '=' + V.models[r]).join(' · ');
+    if(models) h += '<div class="tests-models">decorrelated: ' + esc(models) + '</div>';
+  }
+  // the ACTUAL code that was tested — always shown, so a certified run still
+  // carries the evidence. When a fault survived, the surviving mutant is diffed
+  // against it in place (renderFaultDiff), so you see the code AND the exact
+  // planted line your suite passed anyway.
+  if(S && S.code){
+    const mutants = mutantGen ? parseMutants(mutantGen) : [];
+    const survIds = (A && A.survivor_ids) || [];
+    const surv = mutants.find(m => survIds.includes(m.id));
+    if(surv){
+      h += '<div class="tests-sec">the code under review <span class="tests-note">· the surviving fault highlighted — your suite passed anyway</span></div>';
+      h += '<pre class="tests-code">' + renderFaultDiff(S.code, surv.code) + '</pre>';
+    } else {
+      h += '<div class="tests-sec">the code under review' + (S.code_path ? ' <span class="tests-note">· ' + esc(S.code_path) + '</span>' : '') + '</div>';
+      h += '<pre class="tests-code">' + esc(S.code) + '</pre>';
+    }
+  }
+  // the test data — the developer's own suite that corral graded.
+  if(S && S.devTest){
+    h += '<div class="tests-sec">the suite corral graded' + (S.devTestPath ? ' <span class="tests-note">· ' + esc(S.devTestPath) + '</span>' : '') + '</div>';
+    h += '<pre class="tests-code">' + esc(S.devTest) + '</pre>';
+  }
+  if(authoredTest && V && V.provenMissed > 0){
+    h += '<div class="tests-sec">the test handed back <span class="tests-note">· add it — it catches the gap</span></div>';
+    h += '<pre class="tests-code">' + esc(authoredTest) + '</pre>';
+  }
+  h += '</div>';
+  el.innerHTML = h;
+  return true;
 }
 function renderReplayFiles(){
   const el = document.getElementById('files');
@@ -2206,7 +2272,10 @@ function applyReplayEvent(ev){
       // (renderFaultDiff, wired into the mutant-generator task story below).
       // Additive: if this event never carries code, replayPoolSubject stays
       // null and the task story falls back to the plain result <pre>.
-      if(d.code) replayPoolSubject = {code: d.code, code_path: d.code_path || ''};
+      if(d.code) replayPoolSubject = {code: d.code, code_path: d.code_path || '', devTest: d.dev_test_code || '', devTestPath: d.dev_test_path || '', goal: d.goal || ''};
+      // This is an AUDIT run, not a build — the "files" tab (a build-era view of
+      // touched files) becomes "tests", the audit-native lens (renderReplayTests).
+      const ftab = document.getElementById('tab-files'); if(ftab) ftab.textContent = 'tests';
       break;
     }
     case 'pool_dev_adequacy': {
@@ -2223,6 +2292,8 @@ function applyReplayEvent(ev){
       const models = Object.keys(d.models_by_role||{}).sort().map(r => r + '=' + d.models_by_role[r]).join(' ');
       replayConsoleLines.push({kind:'pool', sub:'verdict', status:(d.status||''), text:(d.status||'').toUpperCase() + ': kill-rate ' + (d.dev_kill_rate) + ', ' + (d.survivors||0) + ' survivors, ' + (d.proven_missed||0) + ' proven-missed' + (models ? ' · models ' + models : '') + ' · signed record ' + (d.record_id||'?')});
       if(replayConsoleLines.length > 200) replayConsoleLines.shift();
+      // Retain the signed verdict for the "tests" (audit) lens.
+      replayPoolVerdict = {status:d.status||'', killRate:d.dev_kill_rate, mutantsTotal:d.mutants_total||0, survivors:d.survivors||0, provenMissed:d.proven_missed||0, models:d.models_by_role||{}, recordId:d.record_id||0};
       break;
     }
     case 'reflex_cap_exhausted': {
@@ -2522,7 +2593,7 @@ function cockpitView(v){
   else if(v === 'memory') renderSampleMemory();
   else if(v === 'skills') renderSampleSkills();
   else if(v === 'proposals') renderSampleProposals();
-  else if(v === 'files') renderReplayFiles();   // reconstructed at the current playhead
+  else if(v === 'files'){ if(!renderReplayTests()) renderReplayFiles(); }   // audit run → the tests lens; build run → the file tree (both scrub-driven)
 }
 
 // Export inline handlers to window so they work reliably when the player

@@ -106,6 +106,7 @@ import (
 	"github.com/pdbethke/corralai/internal/controlspec"
 	"github.com/pdbethke/corralai/internal/coord"
 	"github.com/pdbethke/corralai/internal/embed"
+	"github.com/pdbethke/corralai/internal/eval"
 	"github.com/pdbethke/corralai/internal/fleet"
 	"github.com/pdbethke/corralai/internal/gate"
 	"github.com/pdbethke/corralai/internal/gateway"
@@ -150,7 +151,7 @@ func subcommand(args []string) string {
 		return ""
 	}
 	switch args[0] {
-	case "certify", "secret", "control", "scorecard":
+	case "certify", "secret", "control", "scorecard", "eval":
 		return args[0]
 	}
 	return ""
@@ -217,6 +218,12 @@ Usage:
   corral certify pubkey           print the local signing pubkey (for --pubkey trust anchors)
   corral scorecard [--json]       show the bug-catching scorecard (recall/precision per model×role);
                                   table by default, or the raw cells as indented JSON with --json
+  corral eval [flags]             run the adversarial pool across the versioned eval corpus and
+                                  print a soundness report (does the recall metric catch known gaps?)
+                                  flags: --corpus <path> (default eval/corpus/manifest.json)
+                                         --iterations <n> (default 1)   --only <id,id,...>
+                                         --brain <url> (or $CORRAL_BRAIN)
+                                         --progress <path> (default eval/.eval-progress.json)
   corral --version                print the build version and exit
   corral -h                       print this help and exit
 
@@ -575,6 +582,11 @@ func main() {
 		}
 		defer bugCatchStore.Close()
 		os.Exit(runScorecard(os.Args[2:], bugCatchStore, os.Stdout))
+	case "eval":
+		os.Exit(runEval(os.Args[2:], func(brainURL, corpusVersion string) eval.PoolRunner {
+			return mcpPoolRunner{client: mcpAdvClient{}, brainURL: brainURL, corpusVersion: corpusVersion,
+				poll: 5 * time.Second, timeout: 15 * time.Minute}
+		}, os.Stdout, os.Stderr))
 	}
 	if showVersion(os.Args[1:]) {
 		log.SetFlags(0)

@@ -41,6 +41,12 @@ Usage:
   corral certify pubkey           print the local signing pubkey (for --pubkey trust anchors)
   corral scorecard [--json]       show the bug-catching scorecard (recall/precision per model×role);
                                   table by default, or the raw cells as indented JSON with --json
+  corral eval [flags]             run the adversarial pool across the versioned eval corpus and
+                                  print a soundness report (does the recall metric catch known gaps?)
+                                  flags: --corpus <path> (default eval/corpus/manifest.json)
+                                         --iterations <n> (default 1)   --only <id,id,...>
+                                         --brain <url> (or $CORRAL_BRAIN)
+                                         --progress <path> (default eval/.eval-progress.json)
   corral --version                print the build version and exit
   corral -h                       print this help and exit
 

@@ -50,6 +50,10 @@ for (const [p, mod] of Object.entries(streamModules)) {
   const metaMod = streamModules[p.replace(/\.json$/, '.meta.json')] as any;
   if (!metaMod) throw new Error(`recording ${slug} has no .meta.json sidecar`);
   const meta = metaMod.default ?? metaMod;
+  // Skip a recording that materialized with zero tasks — a broken/empty export
+  // (e.g. a pool run whose tracking mission never got a terminal status) that
+  // otherwise renders as a dead "(no directive recorded) · 0 tasks" card.
+  if ((meta.task_count || 0) === 0) continue;
   streams[slug] = (mod as any).default ?? mod;
   cards.push({
     slug,

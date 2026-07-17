@@ -1883,7 +1883,7 @@ function renderReplayTaskWindowBody(key){
   const chainAgent = (name) => '<span class="aw-chain" onclick="replayAgentClick(\'' + String(name).replace(/'/g,"\\'") + '\')">' + esc(displayName(name)) + '</span>';
 
   let h = '';
-  h += '<div class="irow ir">' + esc(t.key) + (t.role ? ' · ' + esc(t.role) : '') + '</div>';
+  h += '<div class="irow ir">' + esc(t.key) + (t.role && t.role !== t.key ? ' · ' + esc(t.role) : '') + '</div>';
 
   // WHAT was done
   h += '<div class="isec">what was done</div>';

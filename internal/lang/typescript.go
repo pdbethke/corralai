@@ -26,15 +26,39 @@ func (tsPlugin) Scaffold() map[string]string {
 		// (node:test, node:assert), so the type-check is zero-infra AND still
 		// catches real type errors in the code under review.
 		"tsconfig.json": `{"compilerOptions":{"module":"nodenext","moduleResolution":"nodenext","target":"es2022","noEmit":true,"skipLibCheck":true,"strict":true,"allowImportingTsExtensions":true}}` + "\n",
+		// Permissive on purpose: a generated test may reach for any node:test
+		// export (describe/it/before/mock/…) or import assert by default OR by
+		// name. Declaring the surface as `any` lets every well-formed test
+		// type-check, while tsc still catches real type errors in the CODE under
+		// review (that's the point of the check). A too-narrow shim made the
+		// test-writer thrash for 11 minutes on tsc rejections — don't do that.
 		"corral-env.d.ts": `declare module "node:test" {
-  type Fn = () => void | Promise<void>;
-  export function test(name: string, fn: Fn): void;
-  export function describe(name: string, fn: () => void): void;
-  export function it(name: string, fn: Fn): void;
+  export const test: any;
+  export const describe: any;
+  export const it: any;
+  export const suite: any;
+  export const before: any;
+  export const after: any;
+  export const beforeEach: any;
+  export const afterEach: any;
+  export const mock: any;
+  const _default: any;
+  export default _default;
 }
 declare module "node:assert" {
-  const assert: any;
-  export default assert;
+  const _assert: any;
+  export default _assert;
+  export const ok: any;
+  export const equal: any;
+  export const strictEqual: any;
+  export const deepEqual: any;
+  export const deepStrictEqual: any;
+  export const notStrictEqual: any;
+  export const throws: any;
+  export const rejects: any;
+  export const match: any;
+  export const fail: any;
+  export const ifError: any;
 }
 `,
 	}

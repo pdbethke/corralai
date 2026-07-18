@@ -56,6 +56,8 @@ func (pyPlugin) Preflight() error {
 	if err := toolOnPath(bin); err != nil {
 		return err
 	}
+	// #nosec G204 -- bin is one of two hardcoded interpreter names ("python3" or
+	// "python") returned by pythonBin(); the args are constant. No external input.
 	if out, err := exec.Command(bin, "-m", "pytest", "--version").CombinedOutput(); err != nil {
 		return fmt.Errorf("lang: python plugin preflight — pytest not importable (install it on the host): %v: %s", err, strings.TrimSpace(string(out)))
 	}

@@ -1,0 +1,60 @@
+---
+title: "D'oh!"
+description: "A builder is bounded by what a model can write. A certifier is bounded by what its sandbox can actually run. Those are different constraints — and confusing them meant we spent a while certifying Go over and over while telling a five-language story. Here's the mistake, the sharper mistake hiding under it, and why the whole thing tastes better for the kneading."
+pubDate: 2026-07-18
+draft: false
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+
+*Field note. You can't make good bread without several rounds of D'oh. Good baking means always mind the D'oh.*
+
+---
+
+## The mistake I didn't see because it looked like a feature
+
+For a long time corral could "do" many languages. Point the old builder at a Python task and it wrote Python. Ask for a Node service and it wrote Node. The models are fluent — genuinely, effortlessly fluent — in more languages than I am. So the multi-language story told itself, and I believed it, because the evidence was right there on the screen: code, in the language you asked for, that looked correct.
+
+Here is the part I missed. **Writing code in a language and *certifying* code in that language are not the same act, and they are not bounded by the same thing.**
+
+A builder is bounded by what a model can *write*. That bound is generous — the models will write you anything.
+
+A certifier is bounded by what its sandbox can *run*. And that bound is not generous at all. It's the exact set of tools that happen to be installed, in the exact place the jail can reach them, on the exact box doing the judging.
+
+corral is a certifier now. We [retired the builder](/field-notes/retire-the-builder/) on purpose. And the adversarial gate — the thing that plants faults in your code and [proves your tests actually catch them](/field-notes/your-tests-suck/) by *running* them in a locked room — scaffolded a `go.mod` and shelled `go test`. That's it. That's all it could do.
+
+So while I was telling a many-languages story, the gate was quietly certifying Go. Over and over. Every recorded run — the fence, the SQL guard, the password validator — Go, Go, Go. Not because we chose Go. Because Go was the only language the judge could actually hold a trial in.
+
+D'oh.
+
+## The sharper mistake, hiding under the first one
+
+Fine. The fix is obvious, right? Teach the gate more languages. Install pytest, install a Ruby, install a TypeScript compiler, and let the herd loose.
+
+So we did. And the Python runs kept failing closed — refusing to certify — even though `pytest --version` printed a perfectly happy version number on the box.
+
+Here's why, and it's the kind of thing you only learn by watching it bite you. The gate runs your tests inside a sandbox. A real one — no network, a read-only view of the system, nothing of yours it wasn't explicitly handed. That sandbox can see `/usr`. It **cannot** see your home directory. And `pip install --user` — the reflexive, muscle-memory way everyone installs a Python package — puts pytest in `~/.local`, which to the sandbox may as well not exist.
+
+So pytest was installed. On the host. Where the *human* could see it. And utterly invisible to the *judge*. The tool was there and not there at the same time, and the only symptom was a gate that quietly declined to certify — which, if you weren't looking closely, looked exactly like the gate working.
+
+That is the more dangerous mistake, because the first one is loud (nothing works) and this one is silent (it looks like caution). A certifier that can't reach its tools doesn't crash. It fail-closes. Which is *correct* — a judge with no way to run the trial should refuse to sign, not guess — but a fail-close you didn't expect is just a confident-looking wrong answer wearing a responsible outfit.
+
+The fix is a sentence you now never get to forget: **install the tools where the sandbox can see them — system-wide, under `/usr`, not in a home directory.** Ruby's minitest ships in the standard library, under `/usr`, which is why Ruby worked on the first try and Python didn't. Same jail. Different shelf.
+
+D'oh, again.
+
+## The one that was just Go being Go
+
+A smaller one, for flavor, because good bread has lumps. We wrote the JavaScript in-jail test in a file called `score_js_test.go`. It vanished. No error, no failure — it simply stopped being part of the build. Turns out Go treats a `_js` filename suffix as a build constraint for the `js/wasm` target, so on a normal Linux box the file is silently excluded. A test that tests nothing because it isn't there. Renamed the file; it came back.
+
+Three D'ohs, one feature. That's about the right ratio.
+
+## Why it tastes better for the kneading
+
+Every one of these was invisible from the builder's side. A builder never has to know whether the box can run pytest, because a builder never runs pytest — it hands you a file and moves on. The whole class of mistake only exists because we made the machine *do the thing it claims*, in a room where it can't fake having done it.
+
+That's the trade, and I'll take it every time. A tool that only writes code can promise you the moon and never be caught. A tool that has to *run* the tests, in a sandbox, to earn a signature — that tool will embarrass you. It'll fail closed in front of you. It'll make you learn where `/usr` is. It cannot certify what it cannot execute, and it will not pretend otherwise, and the pretending is exactly the thing we were trying to kill.
+
+The gate speaks five languages now — Go, Python, Ruby, JavaScript, TypeScript — and each one earned its way in by actually running, in the jail, against planted faults, and coming back with a signed verdict a stranger can re-check. C is next. Each new language is one small plugin and, I have no doubt, one more D'oh.
+
+Good baking means always mind the D'oh.

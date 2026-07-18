@@ -8,8 +8,15 @@ import (
 	"testing"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
+	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/repoindex"
 )
+
+// goP is the single source of truth for the go plugin's system prompts used
+// across this test file — internal/lang/go.go's goPlugin.TestWriterSystem()
+// / MutantSystem(). testgen_test.go is package testgen (not testgen_test), and
+// internal/lang does not import internal/testgen, so this import is cycle-free.
+var goP, _ = lang.ByName("go")
 
 // fakeLLM records the system/user prompts it was asked and returns a canned
 // response — no live model in these tests (spikes already proved output quality;
@@ -30,7 +37,7 @@ func (f *fakeLLM) Ask(ctx context.Context, system, user string) (string, error) 
 func TestWriteTest(t *testing.T) {
 	f := &fakeLLM{resp: "```go\npackage target\nimport \"testing\"\nfunc TestGoal(t *testing.T){}\n```"}
 	sigs := []repoindex.Signature{{Name: "ValidatePassword", Kind: "func", Params: []repoindex.Param{{Name: "pw", Type: "string"}}, Results: []string{"error"}, Exported: true}}
-	out, err := WriteTest(context.Background(), f, "passwords >= 12 chars", "package target\nfunc ValidatePassword(pw string) error { return nil }", sigs)
+	out, err := WriteTest(context.Background(), f, goP.TestWriterSystem(), "passwords >= 12 chars", "package target\nfunc ValidatePassword(pw string) error { return nil }", sigs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,14 +53,14 @@ func TestWriteTest(t *testing.T) {
 }
 
 func TestWriteTestEmptyResponseErrors(t *testing.T) {
-	if _, err := WriteTest(context.Background(), &fakeLLM{resp: "   "}, "g", "c", nil); err == nil {
+	if _, err := WriteTest(context.Background(), &fakeLLM{resp: "   "}, goP.TestWriterSystem(), "g", "c", nil); err == nil {
 		t.Fatal("empty model response must error")
 	}
 }
 
 func TestGenerateMutants(t *testing.T) {
 	f := &fakeLLM{resp: "===MUTATION_1===\npackage target\nfunc F() int { return 9 }\n===MUTATION_2===\npackage target\nfunc F() int { return 8 }\n"}
-	muts, err := GenerateMutants(context.Background(), f, "F returns >0", "package target\nfunc F() int { return 1 }", nil, 2)
+	muts, err := GenerateMutants(context.Background(), f, goP.MutantSystem(), "F returns >0", "package target\nfunc F() int { return 1 }", nil, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +73,7 @@ func TestGenerateMutants(t *testing.T) {
 }
 
 func TestGenerateMutantsNoneErrors(t *testing.T) {
-	if _, err := GenerateMutants(context.Background(), &fakeLLM{resp: "no markers here"}, "g", "c", nil, 3); err == nil {
+	if _, err := GenerateMutants(context.Background(), &fakeLLM{resp: "no markers here"}, goP.MutantSystem(), "g", "c", nil, 3); err == nil {
 		t.Fatal("unparseable response must error")
 	}
 }
@@ -76,9 +83,9 @@ func TestGenerateMutantsNoneErrors(t *testing.T) {
 // distributed worker will later send to its own model.
 func TestWriteTestPromptUnchanged(t *testing.T) {
 	sigs := []repoindex.Signature{{Name: "Add", Kind: "func", Results: []string{"int"}, Exported: true}}
-	sys, usr := WriteTestPrompt("cover Add", "func Add(a,b int)int{return a+b}", sigs)
-	if sys != writeTestSystem {
-		t.Fatalf("system prompt drifted:\ngot:  %q\nwant: %q", sys, writeTestSystem)
+	sys, usr := WriteTestPrompt(goP.TestWriterSystem(), "cover Add", "func Add(a,b int)int{return a+b}", sigs)
+	if sys != goP.TestWriterSystem() {
+		t.Fatalf("system prompt drifted:\ngot:  %q\nwant: %q", sys, goP.TestWriterSystem())
 	}
 	if !strings.Contains(sys, "You are a TEST-WRITER.") {
 		t.Fatal("system prompt drifted")
@@ -102,9 +109,9 @@ func TestParseTestOutputStripsFences(t *testing.T) {
 // the text a distributed worker will later send to its own model.
 func TestGenerateMutantsPromptUnchanged(t *testing.T) {
 	sigs := []repoindex.Signature{{Name: "F", Kind: "func", Results: []string{"int"}, Exported: true}}
-	sys, usr := GenerateMutantsPrompt("F returns >0", "func F() int { return 1 }", sigs, 3)
-	if sys != genMutantsSystem {
-		t.Fatalf("system prompt drifted:\ngot:  %q\nwant: %q", sys, genMutantsSystem)
+	sys, usr := GenerateMutantsPrompt(goP.MutantSystem(), "F returns >0", "func F() int { return 1 }", sigs, 3)
+	if sys != goP.MutantSystem() {
+		t.Fatalf("system prompt drifted:\ngot:  %q\nwant: %q", sys, goP.MutantSystem())
 	}
 	if !strings.Contains(sys, "You are a MUTATION-TESTING ENGINE.") {
 		t.Fatal("system prompt drifted")

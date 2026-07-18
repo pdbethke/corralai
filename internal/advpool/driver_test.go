@@ -328,6 +328,9 @@ func TestTick_Aggregate_Certified(t *testing.T) {
 	if v.ProvenMissed != 1 { // pool killed the one dev-survivor
 		t.Fatalf("ProvenMissed = %d, want 1", v.ProvenMissed)
 	}
+	if v.Lang != "go" {
+		t.Fatalf("Verdict.Lang = %q, want %q (from the run's RunSpec.Lang)", v.Lang, "go")
+	}
 }
 
 // (d) a blocking finding open -> needs-review, even with a high DevKillRate.

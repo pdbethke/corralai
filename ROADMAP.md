@@ -131,9 +131,12 @@ Go binary.**
   and scores its **mutation-adequacy** kill-rate), `list_pending_controls`/`get_control` to
   review, and `promote_control` — the **recorded, attributed human approval**. A candidate is
   always stored unvetted; only a human admin's `promote_control` vets it into the store the gate
-  runs — separation of duties, mechanized end to end. Next: the **first live-gated PR whose
-  control was authored (not seeded)**, then multi-language + a cockpit panel — and only then the
-  field note ships (don't advertise unbuilt).
+  runs — separation of duties, mechanized end to end. **Multi-language SHIPPED**: certify-by-
+  execution now supports Go and Python (pytest) via a leaf plugin registry (`internal/lang`),
+  language inferred from the code path's extension, fail-closed on an unknown language or a
+  failed preflight (e.g. `pytest` missing on the brain host). Next: the **first live-gated PR
+  whose control was authored (not seeded)**, then a cockpit panel — and only then the field note
+  ships (don't advertise unbuilt).
 - **The adversarial testing pool (experimental, off by default).** A first cut at grading
   a change's **own tests**, not just the change: given the code under review plus the
   developer's own test file, a brain-coordinated distributed pool **mutates the code**

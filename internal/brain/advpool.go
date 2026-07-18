@@ -24,6 +24,7 @@ import (
 	"github.com/pdbethke/corralai/internal/bugcatch"
 	"github.com/pdbethke/corralai/internal/controlgate"
 	"github.com/pdbethke/corralai/internal/gate"
+	golang "github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/mission"
 	"github.com/pdbethke/corralai/internal/repoindex"
 	"github.com/pdbethke/corralai/internal/telemetry"
@@ -39,14 +40,45 @@ const (
 	defaultAdvPoolCriticModel = "llama3.2:3b"
 )
 
+// pluginFor resolves the language plugin from the code file's extension,
+// fail-closed on an unknown language (the gate never grades what it cannot
+// run).
+func pluginFor(codePath string) (golang.Plugin, error) {
+	p, ok := golang.Detect(codePath)
+	if !ok {
+		return nil, fmt.Errorf("advpool: no language plugin for %q — refusing to grade", codePath)
+	}
+	return p, nil
+}
+
+// resolveRunLang resolves the ONE language plugin a run's grading path will
+// actually use — from the code file's extension (a .py file is pytest-graded
+// no matter what inLang says). An explicit inLang is treated as an assertion:
+// it must agree with the detected plugin's name, or the run is refused
+// (fail-closed) rather than silently grading under a mismatched toolchain.
+// Preflighting the toolchain is NOT done here (it hits the host) — callers
+// preflight the returned plugin themselves.
+func resolveRunLang(inLang, codePath string) (golang.Plugin, error) {
+	detected, err := pluginFor(codePath)
+	if err != nil {
+		return nil, err
+	}
+	if in := strings.TrimSpace(inLang); in != "" && in != detected.Name() {
+		return nil, fmt.Errorf("advpool: declared language %q disagrees with code_path %q (detected %q) — refusing", inLang, codePath, detected.Name())
+	}
+	return detected, nil
+}
+
 // advPoolTestPath derives the synthetic test-file name a candidate test is
-// written to in the jail workspace from the code file's own path: same base
-// name, `_test.go` suffix, same directory — so it lands in the same package
-// as the code under test regardless of which of the two (dev-authored or
-// pool-authored) test source is currently being scored. Go does not care
-// about the test file's exact base name, only that it ends in `_test.go`
-// and shares the package.
+// written to in the jail workspace from the code file's own path via the
+// resolved language plugin's own convention. Falls back to the legacy go
+// convention (same base name, `_test.go` suffix, same directory) when no
+// plugin resolves — kept identical to the prior implementation so an
+// unresolvable path still behaves exactly as before.
 func advPoolTestPath(codePath string) string {
+	if p, err := pluginFor(codePath); err == nil {
+		return p.TestPath(codePath)
+	}
 	ext := filepath.Ext(codePath)
 	base := strings.TrimSuffix(codePath, ext)
 	dir := filepath.Dir(codePath)
@@ -56,21 +88,28 @@ func advPoolTestPath(codePath string) string {
 	return filepath.Join(dir, filepath.Base(base)+"_test.go")
 }
 
-// advPoolBase returns the go.mod scaffold shared by the pool's Scorer and
-// Validator. v1 is go-only, mirroring stage_control's fixed lang assumption.
+// advPoolBase returns the workspace scaffold + default test command for the
+// code file's resolved language plugin. The default testCmd is deliberately
+// RECURSIVE for go ("./...", never controlgate.LangScaffold's own "./"
+// default): a run's code_path is very commonly a subdirectory (e.g.
+// internal/auth/login.go), which lands the candidate files under
+// internal/auth/ in the jail workspace — "go test ./" from the module root
+// only ever sees the root package (no .go files there), so a non-recursive
+// default would silently no-op the scorer/compile-check for every
+// subdirectory target. This is the SAME asymmetry bug CompileTest had (I-1):
+// the scorer already honors the run's own TestCmd when set, this only fixes
+// the fallback used when TestCmd is empty.
 //
-// The default testCmd is deliberately RECURSIVE ("./...", never
-// controlgate.LangScaffold's own "./" default): a run's code_path is very
-// commonly a subdirectory (e.g. internal/auth/login.go), which lands the
-// candidate files under internal/auth/ in the jail workspace — "go test ./"
-// from the module root only ever sees the root package (no .go files there),
-// so a non-recursive default would silently no-op the scorer/compile-check
-// for every subdirectory target. This is the SAME asymmetry bug CompileTest
-// had (I-1): the scorer already honors the run's own TestCmd when set, this
-// only fixes the fallback used when TestCmd is empty.
-func advPoolBase() (base map[string]string, testCmd []string) {
-	base, _, _ = controlgate.LangScaffold("go")
-	return base, []string{"go", "test", "./..."}
+// Unknown/unresolvable codePath falls back to the exact go scaffold/cmd kept
+// from the prior go-only implementation — callers that can fail instead
+// (StartRun) preflight first and refuse the run rather than silently
+// grading under the wrong language.
+func advPoolBase(codePath string) (base map[string]string, testCmd []string) {
+	if p, err := pluginFor(codePath); err == nil {
+		return p.Scaffold(), p.TestCmd()
+	}
+	b, _, _ := controlgate.LangScaffold("go")
+	return b, []string{"go", "test", "./..."}
 }
 
 // advpoolScorer adapts adequacy.Score (the SAME deterministic, brain-side,
@@ -82,7 +121,7 @@ type advpoolScorer struct {
 }
 
 func (s advpoolScorer) Score(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (float64, []adequacy.Mutant, error) {
-	base, defaultCmd := advPoolBase()
+	base, defaultCmd := advPoolBase(codePath)
 	cmd := strings.Fields(testCmd)
 	if len(cmd) == 0 {
 		cmd = defaultCmd
@@ -131,15 +170,20 @@ type advpoolValidator struct {
 }
 
 func (v advpoolValidator) CompileTest(ctx context.Context, codePath, code, test string) error {
-	base, _ := advPoolBase()
+	p, err := pluginFor(codePath)
+	if err != nil {
+		return err
+	}
+	base := p.Scaffold()
 	ws := make(map[string]string, len(base)+2)
 	for k, val := range base {
 		ws[k] = val
 	}
 	ws[codePath] = code
-	ws[advPoolTestPath(codePath)] = test
+	testPath := advPoolTestPath(codePath)
+	ws[testPath] = test
 
-	compiles, err := v.jail.RunTest(ctx, ws, []string{"go", "vet", "./..."})
+	compiles, err := v.jail.RunTest(ctx, ws, p.CompileCheck(codePath, testPath))
 	if err != nil {
 		return fmt.Errorf("advpool: compile-verify test: %w", err)
 	}
@@ -475,6 +519,7 @@ type AdvPoolRunSpec struct {
 	DevTestCode string `json:"dev_test_code" jsonschema:"the developer's own test file source"`
 	TestCmd     string `json:"test_cmd" jsonschema:"the test command, e.g. \"go test ./\""`
 	NMutants    int    `json:"n_mutants,omitempty" jsonschema:"how many seeded-violation mutants to generate (default 5)"`
+	Lang        string `json:"lang,omitempty" jsonschema:"source language of the code under review (default: inferred from code_path extension, e.g. go, python)"`
 }
 
 // AdvPoolRunOut is start_adversarial_run's output: the id of the mission
@@ -539,14 +584,29 @@ func (rt *AdvPoolRuntime) StartRun(in AdvPoolRunSpec) (int64, error) {
 	if nMutants > maxAdvPoolMutants {
 		nMutants = maxAdvPoolMutants
 	}
+
+	// Resolve the language the jail will actually grade with — from the code
+	// file's extension (a .py file is pytest-graded no matter what in.Lang
+	// says). An explicit in.Lang is an assertion: it MUST match, or the run
+	// is refused (fail-closed) rather than grading under a mismatched
+	// toolchain with a mislabeled signed Verdict.Lang.
+	langPlugin, err := resolveRunLang(in.Lang, in.CodePath)
+	if err != nil {
+		return 0, err
+	}
+	if err := langPlugin.Preflight(); err != nil {
+		return 0, fmt.Errorf("advpool: language toolchain unavailable — refusing to run: %w", err)
+	}
+
 	rs := advpool.RunSpec{
 		Repo: in.Repo, Commit: in.Commit, Goal: in.Goal,
 		CodePath: in.CodePath, Code: in.Code,
 		DevTestPath: in.DevTestPath, DevTestCode: in.DevTestCode,
 		TestCmd: in.TestCmd, NMutants: nMutants,
+		Lang: langPlugin.Name(),
 	}
 
-	sigs, err := repoindex.ExtractSignatures(rs.Code, "go")
+	sigs, err := repoindex.ExtractSignatures(rs.Code, rs.Lang)
 	if err != nil {
 		log.Printf("advpool: extract signatures for %s@%s: %v (continuing with no signatures)", rs.Repo, rs.Commit, err)
 		sigs = nil

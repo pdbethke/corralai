@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
+	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/repoindex"
 	"github.com/pdbethke/corralai/internal/testgen"
 )
@@ -56,11 +57,12 @@ func Author(ctx context.Context, m testgen.LLM, jail adequacy.Jail, req Request)
 	if err != nil {
 		return Result{}, fmt.Errorf("authoring: extract signatures: %w", err)
 	}
-	test, err := testgen.WriteTest(ctx, m, req.Goal, req.Code, sigs)
+	goP, _ := lang.ByName("go")
+	test, err := testgen.WriteTest(ctx, m, goP.TestWriterSystem(), req.Goal, req.Code, sigs)
 	if err != nil {
 		return Result{}, fmt.Errorf("authoring: write test: %w", err)
 	}
-	mutants, err := testgen.GenerateMutants(ctx, m, req.Goal, req.Code, sigs, req.NMutants)
+	mutants, err := testgen.GenerateMutants(ctx, m, goP.MutantSystem(), req.Goal, req.Code, sigs, req.NMutants)
 	if err != nil {
 		return Result{}, fmt.Errorf("authoring: generate mutants: %w", err)
 	}

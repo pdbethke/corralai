@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
+	golang "github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/queue"
 	"github.com/pdbethke/corralai/internal/repoindex"
 	"github.com/pdbethke/corralai/internal/testgen"
@@ -44,11 +45,23 @@ func joinPrompt(system, user string) string {
 	return system + "\n\n" + user
 }
 
+// langFor resolves the run's plugin, defaulting to go for back-compat when
+// Lang is unset. Falls back to go if an unknown name slips through (the
+// brain has already preflighted; this keeps rendering total).
+func langFor(rs RunSpec) golang.Plugin {
+	if p, ok := golang.ByName(rs.Lang); ok {
+		return p
+	}
+	p, _ := golang.ByName("go")
+	return p
+}
+
 // renderMutantGenerator uses testgen's proven GenerateMutants prompt,
 // unchanged, so the worker's model sees the exact prompt the in-process
 // generator would have used.
 func renderMutantGenerator(rs RunSpec, sigs []repoindex.Signature, _ []adequacy.Mutant) string {
-	system, user := testgen.GenerateMutantsPrompt(rs.Goal, rs.Code, sigs, rs.NMutants)
+	p := langFor(rs)
+	system, user := testgen.GenerateMutantsPrompt(p.MutantSystem(), rs.Goal, rs.Code, sigs, rs.NMutants)
 	return joinPrompt(system, user)
 }
 
@@ -76,7 +89,8 @@ func renderTestWriter(rs RunSpec, sigs []repoindex.Signature, survivors []adequa
 		}
 		goal = b.String()
 	}
-	system, user := testgen.WriteTestPrompt(goal, rs.Code, sigs)
+	p := langFor(rs)
+	system, user := testgen.WriteTestPrompt(p.TestWriterSystem(), goal, rs.Code, sigs)
 	return joinPrompt(system, user)
 }
 

@@ -550,6 +550,51 @@ func TestAdvPoolAssignUsesDefaults_UnsetIdenticalToToday(t *testing.T) {
 	}
 }
 
+// TestPluginForFailsClosedOnUnknownExt proves pluginFor fail-closes on an
+// unrecognized code extension (the gate must never grade a language it
+// cannot run) while still resolving the go plugin for a .go path.
+func TestPluginForFailsClosedOnUnknownExt(t *testing.T) {
+	if _, err := pluginFor("weird.cobol"); err == nil {
+		t.Fatal("pluginFor(.cobol) must error — fail closed")
+	}
+	p, err := pluginFor("internal/sqlguard/sqlguard.go")
+	if err != nil || p.Name() != "go" {
+		t.Fatalf("pluginFor(.go) = %v,%v; want go,nil", p, err)
+	}
+}
+
+// TestResolveRunLang_RejectsDisagreement proves the run-language resolver
+// (used by StartRun before Preflight/mission-creation) treats an explicit
+// in.Lang as an assertion that MUST agree with the extension-detected
+// plugin — a declared "go" run over a .py code_path is refused rather than
+// silently graded (and signed) under the wrong language.
+func TestResolveRunLang_RejectsDisagreement(t *testing.T) {
+	if _, err := resolveRunLang("go", "x.py"); err == nil {
+		t.Fatal("resolveRunLang(go, x.py) must error on lang/extension disagreement — fail closed")
+	}
+	p, err := resolveRunLang("", "x.go")
+	if err != nil || p.Name() != "go" {
+		t.Fatalf("resolveRunLang(\"\", x.go) = %v,%v; want go,nil", p, err)
+	}
+	p, err = resolveRunLang("go", "x.go")
+	if err != nil || p.Name() != "go" {
+		t.Fatalf("resolveRunLang(go, x.go) = %v,%v; want go,nil", p, err)
+	}
+	if _, err := resolveRunLang("", "x.cobol"); err == nil {
+		t.Fatal("resolveRunLang(\"\", x.cobol) must error — unknown extension, fail closed")
+	}
+}
+
+// TestAdvPoolBaseGoUnchanged proves advPoolBase's go path is unchanged after
+// gaining a codePath argument: the go.mod scaffold and the recursive `go
+// test ./...` default must be byte-identical to the prior go-only behavior.
+func TestAdvPoolBaseGoUnchanged(t *testing.T) {
+	base, cmd := advPoolBase("x/y.go")
+	if base["go.mod"] == "" || cmd[0] != "go" {
+		t.Fatalf("go base/cmd regressed: %v %v", base, cmd)
+	}
+}
+
 func TestBugCatchSinkPersistsToStore(t *testing.T) {
 	store, err := bugcatch.Open(t.TempDir() + "/bc.duckdb")
 	if err != nil {

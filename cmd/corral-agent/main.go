@@ -21,6 +21,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/pdbethke/corralai/internal/admission"
+	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/agentrole"
 	"github.com/pdbethke/corralai/internal/agentworker"
 	"github.com/pdbethke/corralai/internal/brainclient"
@@ -77,19 +78,8 @@ Env:
 `
 }
 
-// ---- Ollama (function-calling chat) ----
-
-type omsg struct {
-	Role      string     `json:"role"`
-	Content   string     `json:"content"`
-	ToolCalls []otoolcal `json:"tool_calls,omitempty"`
-}
-type otoolcal struct {
-	Function struct {
-		Name      string          `json:"name"`
-		Arguments json.RawMessage `json:"arguments"`
-	} `json:"function"`
-}
+// omsg/otoolcal are declared as aliases of agentbackend.Message/ToolCall in
+// backend.go.
 
 // extractCall returns the tool name + raw args the model wants, handling BOTH the
 // structured tool_calls field AND the common Ollama fallback where the model emits
@@ -182,9 +172,9 @@ func main() {
 		ws   = env("AGENT_WORKSPACE", filepath.Join(os.TempDir(), "corral-demo-ws"))
 	)
 	globalBrainURL = brainURL
-	backend := newBackend() // MODEL_BACKEND: ollama (default) | openai (Gemini/OpenRouter/local) — NOT hard-wired
+	backend := agentbackend.FromEnv() // MODEL_BACKEND: ollama (default) | openai (Gemini/OpenRouter/local) — NOT hard-wired
 	// Provider keys and the brain token are resolved (env or keystore) by now —
-	// newBackend() already captured them into the Backend struct, and
+	// agentbackend.FromEnv() already captured them into the Backend struct, and
 	// scrubSecretEnv caches CORRALAI_BRAIN_KEY for later on-demand reads. Scrub
 	// the env now so none of it leaks into a jailed child process this agent spawns.
 	scrubSecretEnv()
@@ -691,7 +681,7 @@ func runTask(ctx context.Context, backend Backend, name, role, ws string, brain 
 	// separate handling needed.
 	if isStructuredRole(role) {
 		brain("heartbeat", map[string]any{"status": "working"})
-		result, _, err := agentworker.RunRole(ctx, backendChatter{backend}, role, instruction)
+		result, _, err := agentworker.RunRole(ctx, agentbackend.AsChatter(backend), role, instruction)
 		if err != nil {
 			if errors.Is(err, ErrModelUnreachable) {
 				return "", ErrModelUnreachable
@@ -711,7 +701,7 @@ func runTask(ctx context.Context, backend Backend, name, role, ws string, brain 
 	// the brain so the pool driver's verdict sees them).
 	if isPoolCriticRole(role) {
 		brain("heartbeat", map[string]any{"status": "critiquing"})
-		summary, findings, err := agentworker.RunRole(ctx, backendChatter{backend}, role, instruction)
+		summary, findings, err := agentworker.RunRole(ctx, agentbackend.AsChatter(backend), role, instruction)
 		if err != nil {
 			if errors.Is(err, ErrModelUnreachable) {
 				// Propagate so runQueueLoop releases the claim instead of completing

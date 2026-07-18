@@ -132,10 +132,11 @@ Go binary.**
   review, and `promote_control` — the **recorded, attributed human approval**. A candidate is
   always stored unvetted; only a human admin's `promote_control` vets it into the store the gate
   runs — separation of duties, mechanized end to end. **Multi-language SHIPPED**: certify-by-
-  execution now supports Go, Python (pytest), and Ruby (minitest/RSpec) via a leaf plugin
-  registry (`internal/lang`), language inferred from the code path's extension, fail-closed on
-  an unknown language or a failed preflight (e.g. `pytest`/`ruby`+`rspec` missing on the brain
-  host). JS/TS and C are next. Then the **first live-gated PR
+  execution now supports Go, Python (pytest), Ruby (minitest/RSpec), JavaScript (node:test), and
+  TypeScript (tsc + node:test) via a leaf plugin registry (`internal/lang`), language inferred
+  from the code path's extension, fail-closed on an unknown language or a failed preflight (e.g.
+  `pytest`/`ruby`+`rspec`/`tsc`+`@types/node` missing on the brain host). C is next. Then the
+  **first live-gated PR
   whose control was authored (not seeded)**, then a cockpit panel — and only then the field note
   ships (don't advertise unbuilt).
 - **The adversarial testing pool (experimental, off by default).** A first cut at grading

@@ -28,6 +28,11 @@ jobs:
         run: |
           sudo apt-get install -y ruby ruby-rspec || true
           ruby --version || echo "ruby not available — ruby-in-jail test will SKIP"
+      - name: Provision JS/TS test toolchain (audit gate — js/ts plugins)
+        run: |
+          node --version || echo "node missing — js/ts-in-jail tests will SKIP"
+          sudo npm install -g typescript @types/node || npm install -g typescript @types/node || true
+          tsc --version || echo "tsc not available — ts-in-jail test will SKIP"
       - run: go test ./...
       - name: Install gosec
         run: go install github.com/securego/gosec/v2/cmd/gosec@latest

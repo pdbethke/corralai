@@ -17,6 +17,7 @@ import (
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/bugcatch"
+	"github.com/pdbethke/corralai/internal/buildstore"
 	"github.com/pdbethke/corralai/internal/gate"
 	golang "github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/mission"
@@ -108,6 +109,53 @@ func (s advpoolBugCatchSink) Record(recordID int64, recordHead string, obs []adv
 	if err := s.store.Record(context.Background(), rows); err != nil {
 		log.Printf("advpool: bugcatch record failed (mission %d record %d): %v", s.missionID, recordID, err)
 	}
+}
+
+// telemetrySigner wraps advpool.CertSigner to re-emit the brain's
+// "build_certified" telemetry event after a successful sign — the behavior
+// the brain had before the signer was relocated into the leaf advpool
+// package (see CertSigner's own doc comment: that move deliberately dropped
+// the Telemetry field, since `corral certify --local` has no telemetry store
+// to feed and the leaf package must not depend on one to run). This wrapper
+// restores the brain's old certifyBuild-driven event WITHOUT re-coupling
+// advpool itself to telemetry — only the brain-side StartAdversarialPool
+// wiring uses it; the bare CertSigner stays what --local uses.
+//
+// The event fields mirror certifyBuild's own rec() call exactly (actor
+// "corral-advpool", subject repo@commit, detail {repo, commit, head,
+// anchored}) so a dashboard/query built against the old event shape keeps
+// working unchanged. "anchored" isn't part of the Signer interface's return
+// values (recordID, head, error) — it's looked up from the just-saved build
+// record via Store.Get so the value is the real one CertSigner persisted,
+// not a guess.
+type telemetrySigner struct {
+	inner advpool.CertSigner
+	tel   *telemetry.Store
+	store *buildstore.Store
+}
+
+func (s telemetrySigner) SignVerdict(ctx context.Context, v advpool.Verdict) (int64, string, error) {
+	id, head, err := s.inner.SignVerdict(ctx, v)
+	if err != nil {
+		return id, head, err
+	}
+
+	var anchored bool
+	if s.store != nil {
+		if m, ok, gerr := s.store.Get(id); gerr == nil && ok {
+			if a, ok := m["anchored"].(bool); ok {
+				anchored = a
+			}
+		}
+	}
+
+	rec(s.tel, 0, "build_certified", "corral-advpool", v.Repo+"@"+v.Commit, map[string]any{
+		"repo":     v.Repo,
+		"commit":   v.Commit,
+		"head":     head,
+		"anchored": anchored,
+	})
+	return id, head, nil
 }
 
 // advPoolBetter reports whether a's ModelStats outrank b's for staffing
@@ -551,7 +599,11 @@ func StartAdversarialPool(ctx context.Context, opts Options) (*AdvPoolRuntime, e
 	if err != nil {
 		return nil, fmt.Errorf("advpool: new driver: %w", err)
 	}
-	driver.Signer = advpool.CertSigner{Key: opts.CertifyKey, Store: opts.BuildStore, Witness: opts.Witness}
+	driver.Signer = telemetrySigner{
+		inner: advpool.CertSigner{Key: opts.CertifyKey, Store: opts.BuildStore, Witness: opts.Witness},
+		tel:   opts.Telemetry,
+		store: opts.BuildStore,
+	}
 	driver.Leaderboard = advpoolLeaderboardSink{tel: opts.Telemetry}
 	driver.Events = advpoolEventSink{tel: opts.Telemetry}
 

@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"encoding/hex"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -19,9 +21,82 @@ import (
 	"github.com/pdbethke/corralai/internal/agentworker"
 	"github.com/pdbethke/corralai/internal/buildstore"
 	"github.com/pdbethke/corralai/internal/certify"
+	"github.com/pdbethke/corralai/internal/certverify"
 	"github.com/pdbethke/corralai/internal/queue"
 	"github.com/pdbethke/corralai/internal/sandbox"
+	"github.com/pdbethke/corralai/internal/transparency"
 )
+
+// TestWriteLocalRecordFile_RoundTripsThroughVerify proves the `--out` file a
+// --local run writes re-verifies through the EXACT offline path `corral certify
+// verify` uses: sign a verdict into the ledger (as the driver does), export it
+// with writeLocalRecordFile, then unmarshal into certRecord and run
+// certverify.VerifyRecord under the out-of-band public key. A --local record is
+// signed-but-not-witnessed, so it verifies only with allowUnanchored=true —
+// which is exactly what the printed verify hint tells the user to pass.
+func TestWriteLocalRecordFile_RoundTripsThroughVerify(t *testing.T) {
+	dir := t.TempDir()
+	bs, err := buildstore.Open(filepath.Join(dir, "build.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { bs.Close() })
+
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Sign a synthetic verdict into the ledger exactly as the --local driver's
+	// CertSigner does, then carry its id/head onto the Verdict the CLI holds.
+	s := advpool.CertSigner{Key: priv, Store: bs}
+	v := advpool.Verdict{
+		Repo: "local", Commit: "local", Status: advpool.StatusCertified,
+		DevKillRate: 0.2,
+		ModelsByRole: advpool.RoleAssignment{
+			advpool.RoleMutantGenerator: "claude-sonnet-5",
+			advpool.RoleTestWriter:      "claude-sonnet-5",
+			advpool.RoleTestCritic:      "claude-haiku-4-5",
+		},
+	}
+	id, head, err := s.SignVerdict(context.Background(), v)
+	if err != nil {
+		t.Fatalf("SignVerdict: %v", err)
+	}
+	v.RecordID, v.RecordHead = id, head
+
+	out := filepath.Join(dir, "verdict.json")
+	if err := writeLocalRecordFile(out, bs, priv, v); err != nil {
+		t.Fatalf("writeLocalRecordFile: %v", err)
+	}
+
+	raw, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cr certRecord
+	if err := json.Unmarshal(raw, &cr); err != nil {
+		t.Fatalf("--out file is not a parseable record: %v", err)
+	}
+	if cr.PublicKey != hex.EncodeToString(pub) {
+		t.Fatalf("exported public_key = %q, want the signer's key %q", cr.PublicKey, hex.EncodeToString(pub))
+	}
+	crec := certverify.Record{
+		Statement: cr.Statement, Signature: cr.Signature, Steps: cr.Steps,
+		Head: cr.Head, Rekor: cr.Rekor, Anchored: cr.Anchored,
+	}
+	checks, allOK := certverify.VerifyRecord(crec, pub, func() (transparency.Witness, error) {
+		return transparency.NewFakeWitness(), nil
+	}, true)
+	if !allOK {
+		for _, c := range checks {
+			if !c.OK {
+				t.Fatalf("offline verify of the --out file failed at check %q: %s", c.Name, c.Detail)
+			}
+		}
+		t.Fatal("certverify.VerifyRecord: allOK=false with no failing check named")
+	}
+}
 
 // cannedChatter is a fake agentworker.Chatter that always replies with the same
 // content and never a tool call — enough to stand in for a role's model:

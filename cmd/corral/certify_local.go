@@ -4,6 +4,9 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
+	"encoding/hex"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -83,6 +86,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	poll := fs.Duration("poll", 2*time.Second, "how long to wait between drive iterations when nothing is claimable")
 	repoFlag := fs.String("repo", "", "repository (default: git remote.origin.url, else \"local\")")
 	commitFlag := fs.String("commit", "", "commit sha (default: git rev-parse HEAD, else \"local\")")
+	outFlag := fs.String("out", "", "also write the signed verdict as a self-contained record file, re-verifiable offline with `corral certify verify <file> --pubkey <hex> --allow-unanchored`")
 	if err := fs.Parse(flagArgs); err != nil {
 		return 2
 	}
@@ -244,10 +248,22 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	if n <= 0 {
 		n = 5
 	}
+	// Key the jail workspace by BASENAME. A --local audit is a single, flat
+	// file set (code + its test + the language scaffold), and the adequacy
+	// scorer refuses absolute or `..` workspace keys as an anti-traversal
+	// measure (internal/adequacy/jail.go). A user naturally passes an absolute
+	// --code (the quickstart shows `--code path/to/file`), and the dev test is
+	// commonly its absolute sibling — left raw, every derived workspace key is
+	// absolute and the scorer fails closed after 20 retries. Normalize here,
+	// at the CLI boundary, rather than deep in the shared driver (the daemon
+	// path deliberately uses repo-relative subdirectory paths for multi-file
+	// repos, so this normalization belongs to --local alone).
+	codeKey := filepath.Base(*codePath)
+	devTestKey := filepath.Base(tp)
 	rs := advpool.RunSpec{
 		Repo: repo, Commit: commit, Goal: strings.TrimSpace(*goal),
-		CodePath: *codePath, Code: string(code),
-		DevTestPath: tp, DevTestCode: string(devTest),
+		CodePath: codeKey, Code: string(code),
+		DevTestPath: devTestKey, DevTestCode: string(devTest),
 		TestCmd:  strings.Join(checkArgv, " "),
 		NMutants: n,
 		Lang:     plug.Name(),
@@ -283,6 +299,21 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 
 	renderAdvVerdict(stdout, *codePath, advVerdictFromPool(*verdict))
 
+	// --out writes the signed record as a self-contained file the user can
+	// re-verify offline. A --local record is signed by the user's OWN key but
+	// never publicly witnessed (Witness is nil above), so the verify hint
+	// carries --allow-unanchored — an honest "signed by you, not third-party
+	// anchored" claim, not a silent omission.
+	if out := strings.TrimSpace(*outFlag); out != "" {
+		if err := writeLocalRecordFile(out, bs, key, *verdict); err != nil {
+			// Non-fatal: the verdict already printed and is signed in the ledger.
+			fmt.Fprintf(stderr, "corral certify --local: writing --out %s: %v\n", out, err)
+		} else {
+			pubHex := hex.EncodeToString(key.Public().(ed25519.PublicKey))
+			fmt.Fprintf(stdout, "\nwrote signed record to %s — re-verify offline:\n  corral certify verify %s --pubkey %s --allow-unanchored\n", out, out, pubHex)
+		}
+	}
+
 	// Hand the pool's authored test back: when it killed a survivor the dev suite
 	// missed, print it so the dev can adopt it.
 	if st, ok := d.RunStatus(localMissionID); ok && strings.TrimSpace(st.AuthoredTest) != "" {
@@ -294,6 +325,62 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 	return 3
+}
+
+// writeLocalRecordFile exports the signed --local verdict as a self-contained
+// record file in the SAME shape `corral certify verify` reads (certRecord) and
+// the daemon's `certify --out` writes, so a --local record round-trips through
+// the identical offline verifier. It reconstructs the file from the signed
+// record persisted in the local ledger (the CLI never sees the DSSE envelope
+// itself — CertSigner signs and stores it inside the driver): buildstore.Get
+// layers steps/signature/rekor/anchored onto the statement map, and the ledger
+// head comes from the verdict. Statement is cosmetic (verify checks the
+// envelope's own embedded statement), so the extra layered keys are stripped
+// only for a clean human-readable file.
+func writeLocalRecordFile(path string, bs *buildstore.Store, key ed25519.PrivateKey, v advpool.Verdict) error {
+	if v.RecordID <= 0 {
+		return fmt.Errorf("no signed record was produced (signing skipped or failed)")
+	}
+	m, ok, err := bs.Get(v.RecordID)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("record %d not found in the local ledger", v.RecordID)
+	}
+	sig, _ := m["signature"].(string)
+	rekor, _ := m["rekor"].(string)
+	anchored, _ := m["anchored"].(bool)
+	// steps comes back as an untyped decoded value; round-trip through JSON to
+	// land it as the []map[string]any certRecord.Steps expects.
+	var steps []map[string]any
+	if sb, e := json.Marshal(m["steps"]); e == nil {
+		_ = json.Unmarshal(sb, &steps)
+	}
+	stmt := make(map[string]any, len(m))
+	for k, val := range m {
+		switch k {
+		case "steps", "signature", "rekor", "anchored",
+			"commit_message", "commit_author", "commit_date", "commit_signature", "pass":
+			// layered-on columns, not part of the human-readable statement
+		default:
+			stmt[k] = val
+		}
+	}
+	rec := certRecord{
+		Statement: stmt,
+		Signature: sig,
+		Steps:     steps,
+		Head:      v.RecordHead,
+		PublicKey: hex.EncodeToString(key.Public().(ed25519.PublicKey)),
+		Rekor:     rekor,
+		Anchored:  anchored,
+	}
+	data, err := json.MarshalIndent(rec, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o600) // #nosec G306 -- a signed record is public artifact; 0600 is conservative
 }
 
 // localTickMaxErrors mirrors internal/brain/advpool.go's advPoolTickMaxErrors:

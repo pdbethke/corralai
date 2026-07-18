@@ -22,8 +22,12 @@ jobs:
       - run: go vet ./...
       - name: Provision Python test toolchain (audit gate — python plugin)
         run: |
-          python3 -m pip install --user --break-system-packages --quiet pytest || python3 -m pip install --user --quiet pytest || pipx install pytest || true
+          sudo apt-get install -y python3-pytest || python3 -m pip install --break-system-packages --quiet pytest || true
           python3 -m pytest --version || echo "pytest not available — python-in-jail test will SKIP"
+      - name: Provision Ruby test toolchain (audit gate — ruby plugin)
+        run: |
+          sudo apt-get install -y ruby ruby-rspec || true
+          ruby --version || echo "ruby not available — ruby-in-jail test will SKIP"
       - run: go test ./...
       - name: Install gosec
         run: go install github.com/securego/gosec/v2/cmd/gosec@latest

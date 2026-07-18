@@ -18,7 +18,25 @@ func (tsPlugin) Detect(codePath string) bool { return filepath.Ext(codePath) == 
 // explicit .ts imports (which Node's strip-types also requires at run time).
 func (tsPlugin) Scaffold() map[string]string {
 	return map[string]string{
-		"tsconfig.json": `{"compilerOptions":{"module":"nodenext","moduleResolution":"nodenext","target":"es2022","types":["node"],"noEmit":true,"skipLibCheck":true,"strict":true,"allowImportingTsExtensions":true}}` + "\n",
+		// No `types:["node"]`: that would force tsc to resolve @types/node, which
+		// is NOT present in the ephemeral jail workspace (and a globally-installed
+		// @types/node is off tsc's default typeRoots) — so the type-check would
+		// spuriously fail with TS2688. Instead we ship a tiny self-contained
+		// ambient declaration for the only node builtins an audit test uses
+		// (node:test, node:assert), so the type-check is zero-infra AND still
+		// catches real type errors in the code under review.
+		"tsconfig.json": `{"compilerOptions":{"module":"nodenext","moduleResolution":"nodenext","target":"es2022","noEmit":true,"skipLibCheck":true,"strict":true,"allowImportingTsExtensions":true}}` + "\n",
+		"corral-env.d.ts": `declare module "node:test" {
+  type Fn = () => void | Promise<void>;
+  export function test(name: string, fn: Fn): void;
+  export function describe(name: string, fn: () => void): void;
+  export function it(name: string, fn: Fn): void;
+}
+declare module "node:assert" {
+  const assert: any;
+  export default assert;
+}
+`,
 	}
 }
 

@@ -30,6 +30,17 @@ func TestTypeScriptPlugin(t *testing.T) {
 	if !strings.Contains(sc["tsconfig.json"], "allowImportingTsExtensions") {
 		t.Fatal("tsconfig must allow importing .ts extensions")
 	}
+	// The type-check must be self-contained (no @types/node dependency, which
+	// isn't in the jail workspace): the scaffold ships an ambient shim for the
+	// node builtins an audit test uses, and the tsconfig must NOT force
+	// types:["node"] (which would demand @types/node and fail with TS2688).
+	if strings.Contains(sc["tsconfig.json"], `"types"`) {
+		t.Fatal("tsconfig must not pin types:[\"node\"] — @types/node is absent in the jail")
+	}
+	shim, ok := sc["corral-env.d.ts"]
+	if !ok || !strings.Contains(shim, `declare module "node:test"`) || !strings.Contains(shim, `declare module "node:assert"`) {
+		t.Fatalf("Scaffold must include an ambient shim declaring node:test + node:assert, got %v", sc)
+	}
 	if !strings.Contains(p.TestWriterSystem(), "node:test") || !strings.Contains(p.TestWriterSystem(), ".ts") {
 		t.Fatal("ts writer prompt must instruct node:test + explicit .ts import")
 	}

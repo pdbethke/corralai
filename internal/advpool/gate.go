@@ -201,8 +201,8 @@ func (v JailValidator) CompileTest(ctx context.Context, codePath, code, test str
 	return nil
 }
 
-func (v JailValidator) ParseMutants(raw string) ([]adequacy.Mutant, error) {
-	return testgen.ParseMutantsOutput(raw)
+func (v JailValidator) ParseMutants(raw, original string) ([]adequacy.Mutant, error) {
+	return testgen.ParseMutantsOutput(raw, original)
 }
 
 func (v JailValidator) ParseTest(raw string) string {

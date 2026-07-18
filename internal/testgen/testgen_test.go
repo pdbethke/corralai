@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/repoindex"
 )
@@ -59,13 +58,18 @@ func TestWriteTestEmptyResponseErrors(t *testing.T) {
 }
 
 func TestGenerateMutants(t *testing.T) {
-	f := &fakeLLM{resp: "===MUTATION_1===\npackage target\nfunc F() int { return 9 }\n===MUTATION_2===\npackage target\nfunc F() int { return 8 }\n"}
-	muts, err := GenerateMutants(context.Background(), f, goP.MutantSystem(), "F returns >0", "package target\nfunc F() int { return 1 }", nil, 2)
+	code := "package target\nfunc F() int { return 1 }\n"
+	f := &fakeLLM{resp: srBlock("1", "return 1", "return 9") + srBlock("2", "return 1", "return -1")}
+	muts, err := GenerateMutants(context.Background(), f, goP.MutantSystem(), "F returns >0", code, nil, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(muts) != 2 || muts[0].ID != "m1" {
 		t.Fatalf("mutants wrong: %+v", muts)
+	}
+	// The hunks were applied to the original, producing full mutant files.
+	if !strings.Contains(muts[0].Code, "return 9") || !strings.Contains(muts[0].Code, "package target") {
+		t.Errorf("m1 should be the full file with the applied edit: %q", muts[0].Code)
 	}
 	if !strings.Contains(f.gotUser, "2 distinct") { // instruction carried the count
 		t.Errorf("generator prompt missing the count instruction: %s", f.gotUser)
@@ -124,7 +128,13 @@ func TestGenerateMutantsPromptUnchanged(t *testing.T) {
 			t.Errorf("mutation-testing framing lost the phrase %q — this is what keeps safety-aligned models from refusing", want)
 		}
 	}
-	for _, want := range []string{"GOAL:\nF returns >0", "func F() int { return 1 }", `"Name":"F"`, "Produce exactly 3 distinct mutations."} {
+	// The system prompt must NO LONGER ask for whole-file copies (they don't
+	// scale) — the output format is the centralized SEARCH/REPLACE spec, in the
+	// user prompt.
+	if strings.Contains(sys, "COMPLETE file") || strings.Contains(sys, "<complete file>") {
+		t.Error("MutantSystem must not still instruct whole-file mutants — the scalable SEARCH/REPLACE format is centralized in the task")
+	}
+	for _, want := range []string{"GOAL:\nF returns >0", "func F() int { return 1 }", `"Name":"F"`, "Produce exactly 3 distinct mutations.", "<<<<<<< SEARCH", ">>>>>>> REPLACE"} {
 		if !strings.Contains(usr, want) {
 			t.Errorf("user prompt missing %q; got:\n%s", want, usr)
 		}
@@ -132,27 +142,26 @@ func TestGenerateMutantsPromptUnchanged(t *testing.T) {
 }
 
 func TestParseMutantsOutput(t *testing.T) {
-	raw := "===MUTATION_1===\npackage target\nfunc F() int { return 9 }\n===MUTATION_2===\npackage target\nfunc F() int { return 8 }\n"
-	muts, err := ParseMutantsOutput(raw)
+	orig := "package target\nfunc F() int { return 1 }\n"
+	raw := srBlock("1", "return 1", "return 9") + srBlock("2", "return 1", "return 8")
+	muts, err := ParseMutantsOutput(raw, orig)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []adequacy.Mutant{
-		{ID: "m1", Code: "package target\nfunc F() int { return 9 }"},
-		{ID: "m2", Code: "package target\nfunc F() int { return 8 }"},
-	}
-	if len(muts) != len(want) {
+	if len(muts) != 2 || muts[0].ID != "m1" || muts[1].ID != "m2" {
 		t.Fatalf("mutants wrong: %+v", muts)
 	}
-	for i := range want {
-		if muts[i] != want[i] {
-			t.Errorf("mutant %d = %+v, want %+v", i, muts[i], want[i])
-		}
+	if !strings.Contains(muts[0].Code, "return 9") || !strings.Contains(muts[1].Code, "return 8") {
+		t.Errorf("hunks not applied to the original: %+v", muts)
+	}
+	// Tamper-evident link to the exact original, identical across its mutants.
+	if muts[0].ParentSHA256 == "" || muts[0].ParentSHA256 != muts[1].ParentSHA256 {
+		t.Errorf("ParentSHA256 must be set and identical: %q / %q", muts[0].ParentSHA256, muts[1].ParentSHA256)
 	}
 }
 
 func TestParseMutantsOutputMalformedErrors(t *testing.T) {
-	if _, err := ParseMutantsOutput("no markers here"); err == nil {
+	if _, err := ParseMutantsOutput("no markers here", "code"); err == nil {
 		t.Fatal("unparseable response must error")
 	}
 }

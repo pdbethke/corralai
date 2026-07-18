@@ -3,6 +3,8 @@
 package testgen
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 
@@ -55,30 +57,113 @@ func lineFenceIndex(s string, from int) int {
 	}
 }
 
-// parseMutants splits a "===MUTATION_N===" delimited response into mutants.
-// The code for each mutation is the text between its marker and the next
-// marker (or end), fence-stripped and trimmed. Empty blocks are skipped; IDs
-// are assigned sequentially m1, m2, ... over the kept blocks.
-func parseMutants(resp string) []adequacy.Mutant {
+// SEARCH/REPLACE hunk markers — the industry-standard format for applying
+// LLM-generated code edits (Aider, str_replace): a uniquely-anchored find/
+// replace, cheap regardless of file size. Emitting the whole file per mutant
+// does not scale (a 600-line file × N mutants overruns the model, which then
+// returns one); a hunk is ~a few lines whatever the file size.
+const (
+	srSearchHead = "<<<<<<< SEARCH"
+	srDivider    = "======="
+	srReplaceEnd = ">>>>>>> REPLACE"
+)
+
+// parseMutants splits a "===MUTATION_N===" delimited response into mutants,
+// each block a SEARCH/REPLACE hunk applied to `original`. Splitting on the
+// literal "===MUTATION_" marker is safe next to the 7-equals SEARCH/REPLACE
+// divider: the divider never contains "MUTATION_". IDs are assigned m1, m2, …
+// over the kept (successfully-applied) blocks; a block whose hunk is malformed
+// or does not apply cleanly is DROPPED, never scored.
+func parseMutants(resp, original string) []adequacy.Mutant {
 	const mark = "===MUTATION_"
+	parentHash := hex.EncodeToString(sha256Sum(original))
 	var out []adequacy.Mutant
-	parts := strings.Split(resp, mark)
-	for _, p := range parts[1:] { // parts[0] is any preamble before the first marker
-		// p looks like "1===\n<code>...": drop up to and including the marker's closing "==="
+	for _, p := range strings.Split(resp, mark)[1:] { // [0] is any preamble
+		// p looks like "1===\n<hunk>…": drop up to and including the marker's closing "===".
 		close := strings.Index(p, "===")
 		if close < 0 {
 			continue
 		}
-		body := p[close+3:]
-		// A trailing "..._END===" (or the next marker, already split off) may remain — cut at any residual "===".
-		if e := strings.Index(body, "==="); e >= 0 {
-			body = body[:e]
-		}
-		code := extractCode(body)
-		if strings.TrimSpace(code) == "" {
+		search, replace, ok := parseSearchReplace(p[close+3:])
+		if !ok {
 			continue
 		}
-		out = append(out, adequacy.Mutant{ID: fmt.Sprintf("m%d", len(out)+1), Code: code})
+		mutant, ok := applyMutation(original, search, replace)
+		if !ok {
+			continue
+		}
+		out = append(out, adequacy.Mutant{
+			ID:           fmt.Sprintf("m%d", len(out)+1),
+			Code:         mutant,
+			ParentSHA256: parentHash,
+		})
 	}
 	return out
+}
+
+// parseSearchReplace pulls the SEARCH and REPLACE bodies out of one mutation
+// block. The bodies are taken VERBATIM between the marker lines (only the
+// single newline that ends each marker line is consumed), because SEARCH must
+// match the original's exact bytes — indentation included — for a unique
+// anchor. Anything after ">>>>>>> REPLACE" (a stray _END marker, prose) is
+// ignored. ok=false if any of the three markers is absent.
+func parseSearchReplace(block string) (search, replace string, ok bool) {
+	si := strings.Index(block, srSearchHead)
+	if si < 0 {
+		return "", "", false
+	}
+	rest := afterMarkerLine(block[si+len(srSearchHead):])
+	di := strings.Index(rest, "\n"+srDivider)
+	if di < 0 {
+		return "", "", false
+	}
+	search = rest[:di]
+	rest = afterMarkerLine(rest[di+1+len(srDivider):])
+	ri := strings.Index(rest, "\n"+srReplaceEnd)
+	if ri < 0 {
+		return "", "", false
+	}
+	replace = rest[:ri]
+	return search, replace, true
+}
+
+// afterMarkerLine drops everything up to and including the first newline (the
+// remainder of a marker's own line — e.g. a trailing "\r" or stray spaces).
+func afterMarkerLine(s string) string {
+	if nl := strings.IndexByte(s, '\n'); nl >= 0 {
+		return s[nl+1:]
+	}
+	return ""
+}
+
+// applyMutation applies one SEARCH/REPLACE hunk to original and returns the
+// full mutant, GUARANTEEING it is original with exactly one contiguous region
+// changed: SEARCH must be non-empty and occur EXACTLY once (a unique anchor),
+// REPLACE must differ from SEARCH (a real mutation), and reversing the single
+// splice must reproduce original byte-for-byte. Any violation returns ok=false
+// so the caller drops the mutant — corral never scores a mutant it cannot prove
+// is a faithful single-point derivative of the exact code under audit.
+func applyMutation(original, search, replace string) (mutant string, ok bool) {
+	if search == "" || search == replace {
+		return "", false
+	}
+	i := strings.Index(original, search)
+	if i < 0 {
+		return "", false // anchor not found
+	}
+	if strings.Contains(original[i+len(search):], search) {
+		return "", false // anchor not unique
+	}
+	mutant = original[:i] + replace + original[i+len(search):]
+	// Integrity round-trip: undo the one change and demand the EXACT original
+	// back — nothing outside the replaced span may have moved.
+	if mutant[:i]+search+mutant[i+len(replace):] != original {
+		return "", false
+	}
+	return mutant, true
+}
+
+func sha256Sum(s string) []byte {
+	h := sha256.Sum256([]byte(s))
+	return h[:]
 }

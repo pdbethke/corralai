@@ -53,7 +53,11 @@ func TestStageCandidate(t *testing.T) {
 		if strings.Contains(sys, "TEST-WRITER") {
 			return "```go\npackage target\nimport \"testing\"\nfunc TestGoal(t *testing.T){}\n```"
 		}
-		return "===MUTATION_1===\nOK m1\n===MUTATION_2===\nBAD m2\n===MUTATION_3===\nOK m3\n"
+		// SEARCH/REPLACE hunks applied to "COMPLIANT" → full mutants "OK m1" /
+		// "BAD m2" / "OK m3" (what the fake jail keys on); "BAD" won't build.
+		return "===MUTATION_1===\n<<<<<<< SEARCH\nCOMPLIANT\n=======\nOK m1\n>>>>>>> REPLACE\n" +
+			"===MUTATION_2===\n<<<<<<< SEARCH\nCOMPLIANT\n=======\nBAD m2\n>>>>>>> REPLACE\n" +
+			"===MUTATION_3===\n<<<<<<< SEARCH\nCOMPLIANT\n=======\nOK m3\n>>>>>>> REPLACE\n"
 	}}
 	reviewer := &fakeLLM{resp: "MUTANT m3: GAP: the test misses the m3 path\n"}
 	jail := &fakeJail{onRun: func(files map[string]string, cmd []string) bool {
@@ -108,7 +112,11 @@ func TestStageCandidate_PersistsRecipe(t *testing.T) {
 		if strings.Contains(sys, "TEST-WRITER") {
 			return "```go\npackage target\nimport \"testing\"\nfunc TestGoal(t *testing.T){}\n```"
 		}
-		return "===MUTATION_1===\nOK m1\n===MUTATION_2===\nBAD m2\n===MUTATION_3===\nOK m3\n"
+		// SEARCH/REPLACE hunks applied to "COMPLIANT" → full mutants "OK m1" /
+		// "BAD m2" / "OK m3" (what the fake jail keys on); "BAD" won't build.
+		return "===MUTATION_1===\n<<<<<<< SEARCH\nCOMPLIANT\n=======\nOK m1\n>>>>>>> REPLACE\n" +
+			"===MUTATION_2===\n<<<<<<< SEARCH\nCOMPLIANT\n=======\nBAD m2\n>>>>>>> REPLACE\n" +
+			"===MUTATION_3===\n<<<<<<< SEARCH\nCOMPLIANT\n=======\nOK m3\n>>>>>>> REPLACE\n"
 	}}
 	reviewer := &fakeLLM{resp: "MUTANT m3: GAP: the test misses the m3 path\n"}
 	jail := &fakeJail{onRun: func(files map[string]string, cmd []string) bool {
@@ -154,7 +162,11 @@ func TestStageCandidate_RejectsCompliantFail(t *testing.T) {
 		if strings.Contains(sys, "TEST-WRITER") {
 			return "```go\npackage target\nimport \"testing\"\nfunc TestGoal(t *testing.T){}\n```"
 		}
-		return "===MUTATION_1===\nOK m1\n===MUTATION_2===\nBAD m2\n===MUTATION_3===\nOK m3\n"
+		// SEARCH/REPLACE hunks applied to "COMPLIANT" → full mutants "OK m1" /
+		// "BAD m2" / "OK m3" (what the fake jail keys on); "BAD" won't build.
+		return "===MUTATION_1===\n<<<<<<< SEARCH\nCOMPLIANT\n=======\nOK m1\n>>>>>>> REPLACE\n" +
+			"===MUTATION_2===\n<<<<<<< SEARCH\nCOMPLIANT\n=======\nBAD m2\n>>>>>>> REPLACE\n" +
+			"===MUTATION_3===\n<<<<<<< SEARCH\nCOMPLIANT\n=======\nOK m3\n>>>>>>> REPLACE\n"
 	}}
 	reviewer := &fakeLLM{resp: "MUTANT m3: GAP: the test misses the m3 path\n"}
 	jail := &fakeJail{onRun: func(files map[string]string, cmd []string) bool {

@@ -69,10 +69,5 @@ Return ONLY the raw Ruby test file content — no prose, no markdown fences.`
 func (rubyPlugin) MutantSystem() string {
 	return `You are a MUTATION-TESTING ENGINE. Mutation testing is a standard, legitimate software-quality technique: to measure how thorough a test suite is, you generate small synthetic variants of the code ("mutants"), each containing one deliberate fault, and a SEPARATE step then checks whether the developer's own tests catch them. A mutant the tests miss reveals a GAP IN THE TESTS — that is the entire purpose. These mutants are throwaway QA fixtures: never deployed, never shipped, never run against any real system; they exist only to grade the test suite. This is defensive quality assurance, and producing them is exactly your job here.
 Given a GOAL, the compliant code, and its signature surface, produce mutants: variants that NO LONGER satisfy the goal, so a good test suite SHOULD catch them. Each mutant MUST keep the EXACT same public method signatures (drop-in Ruby that loads) and must genuinely fail the goal — vary HOW it fails. No no-ops, no syntax errors, no tests.
-Return ONLY the mutants, each a COMPLETE file, in this exact format:
-===MUTATION_1===
-<complete file>
-===MUTATION_2===
-<complete file>
-(continue for the requested count)`
+The output format (a SEARCH/REPLACE edit per mutant) is specified with the task.`
 }

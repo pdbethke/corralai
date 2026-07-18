@@ -78,18 +78,46 @@ func WriteTest(ctx context.Context, m LLM, system, goal, code string, sigs []rep
 // ParseMutantsOutput to parse — the prompt text itself must stay
 // byte-identical to GenerateMutants' prior inline construction.
 func GenerateMutantsPrompt(system, goal, code string, sigs []repoindex.Signature, n int) (sys, user string) {
-	instr := fmt.Sprintf("Produce exactly %d distinct mutations.", n)
-	return system, buildUser(goal, code, sigs, instr)
+	return system, buildUser(goal, code, sigs, mutantFormatInstruction(n))
 }
 
-// ParseMutantsOutput extracts the seeded-violation mutants from a model's
-// raw response. It is the parse half of GenerateMutants, split out so a
-// distributed worker's response can be parsed the same way the brain would
-// parse its own model's response.
-func ParseMutantsOutput(raw string) ([]adequacy.Mutant, error) {
-	muts := parseMutants(raw)
+// mutantFormatInstruction is the SINGLE source of the mutant output format —
+// centralized here rather than duplicated in every language plugin's
+// MutantSystem (DRY). It asks for minimal, uniquely-anchored SEARCH/REPLACE
+// edits (which scale to any file size), not whole-file copies (which overrun
+// the model on large files and collapse to one mutant).
+func mutantFormatInstruction(n int) string {
+	return fmt.Sprintf(`Produce exactly %d distinct mutations. Each mutation is ONE minimal SEARCH/REPLACE edit that makes the code VIOLATE the goal — never the whole file. Output the mutations and NOTHING else, in this exact format:
+
+===MUTATION_1===
+%s
+<a few EXACT consecutive lines copied VERBATIM from the code above — enough that they occur exactly once in it>
+%s
+<the same lines, edited so the code now violates the goal>
+%s
+===MUTATION_2===
+%s
+…
+%s
+…
+%s
+(continue for all %d)
+
+Rules: the SEARCH block MUST match the original bytes exactly, indentation included, and occur exactly once; the REPLACE block MUST differ from it and keep the code compiling/importing (a drop-in replacement, same signatures). Vary HOW each mutant fails the goal. No no-ops, no whole-file dumps, no prose.`,
+		n, srSearchHead, srDivider, srReplaceEnd, srSearchHead, srDivider, srReplaceEnd, n)
+}
+
+// ParseMutantsOutput extracts the seeded-violation mutants from a model's raw
+// response and applies each SEARCH/REPLACE hunk to `original` to reconstruct
+// the full mutant, dropping any that don't apply cleanly (see parseMutants /
+// applyMutation for the single-point-edit integrity guarantee). It is the
+// parse half of GenerateMutants, split out so a distributed worker's response
+// is parsed the same way the brain would parse its own model's — which is why
+// it takes the original code the worker was given, to apply the hunks against.
+func ParseMutantsOutput(raw, original string) ([]adequacy.Mutant, error) {
+	muts := parseMutants(raw, original)
 	if len(muts) == 0 {
-		return nil, errors.New("testgen: generator returned no parseable mutations")
+		return nil, errors.New("testgen: generator returned no parseable, cleanly-applying mutations")
 	}
 	return muts, nil
 }
@@ -104,5 +132,5 @@ func GenerateMutants(ctx context.Context, m LLM, system, goal, code string, sigs
 	if err != nil {
 		return nil, err
 	}
-	return ParseMutantsOutput(resp)
+	return ParseMutantsOutput(resp, code)
 }

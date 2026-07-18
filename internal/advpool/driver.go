@@ -27,7 +27,7 @@ type Scorer interface {
 // result, run before the driver trusts it enough to score or promote on it.
 type Validator interface {
 	CompileTest(ctx context.Context, codePath, code, test string) error
-	ParseMutants(raw string) ([]adequacy.Mutant, error) // = testgen.ParseMutantsOutput
+	ParseMutants(raw, original string) ([]adequacy.Mutant, error) // = testgen.ParseMutantsOutput (applies each SEARCH/REPLACE hunk to `original`)
 	ParseTest(raw string) string                        // = testgen.ParseTestOutput (strip fences/prose from a worker's raw test)
 }
 
@@ -446,7 +446,7 @@ func (d *Driver) tickDevAdequacy(ctx context.Context, missionID int64, run *runS
 		return nil
 	}
 
-	mutants, perr := d.Validator.ParseMutants(mg.Result)
+	mutants, perr := d.Validator.ParseMutants(mg.Result, run.rs.Code)
 	if perr != nil {
 		// Malformed artifact: refuse it. The pure driver has no live hook into
 		// the completion call (that already happened, unlike brain's

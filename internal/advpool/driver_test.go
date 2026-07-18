@@ -63,7 +63,7 @@ type fakeValidator struct {
 	compileGot string // the test string CompileTest last received (post-ParseTest)
 }
 
-func (f *fakeValidator) ParseMutants(raw string) ([]adequacy.Mutant, error) {
+func (f *fakeValidator) ParseMutants(raw, _ string) ([]adequacy.Mutant, error) {
 	return f.mutants, f.parseErr
 }
 

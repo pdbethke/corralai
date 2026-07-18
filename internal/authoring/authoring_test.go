@@ -39,7 +39,12 @@ func TestAuthor(t *testing.T) {
 		if strings.Contains(sys, "TEST-WRITER") {
 			return "```go\npackage target\nimport \"testing\"\nfunc TestGoal(t *testing.T){}\n```"
 		}
-		return "===MUTATION_1===\nOK m1\n===MUTATION_2===\nBAD m2\n===MUTATION_3===\nOK m3\n"
+		// SEARCH/REPLACE hunks applied to the "COMPLIANT" original: each yields a
+		// mutant whose full content is "OK m1" / "BAD m2" / "OK m3" (what the fake
+		// jail keys on). "BAD" won't build, so m2 is discarded before scoring.
+		return "===MUTATION_1===\n<<<<<<< SEARCH\nCOMPLIANT\n=======\nOK m1\n>>>>>>> REPLACE\n" +
+			"===MUTATION_2===\n<<<<<<< SEARCH\nCOMPLIANT\n=======\nBAD m2\n>>>>>>> REPLACE\n" +
+			"===MUTATION_3===\n<<<<<<< SEARCH\nCOMPLIANT\n=======\nOK m3\n>>>>>>> REPLACE\n"
 	}}
 	// fake jail: compile-verify (build cmd) → true unless code contains "BAD";
 	// score (test cmd) → test passes on COMPLIANT and on m3 (survivor), fails on m1 (killed).

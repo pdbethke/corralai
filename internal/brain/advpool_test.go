@@ -65,7 +65,7 @@ func (stubScorer) Score(_ context.Context, _, _, _ string, _ []adequacy.Mutant, 
 type stubValidator struct{}
 
 func (stubValidator) CompileTest(_ context.Context, _, _, _ string) error { return nil }
-func (stubValidator) ParseMutants(_ string) ([]adequacy.Mutant, error)    { return nil, nil }
+func (stubValidator) ParseMutants(_, _ string) ([]adequacy.Mutant, error) { return nil, nil }
 func (stubValidator) ParseTest(raw string) string                         { return raw }
 
 // newTestAdvPoolRuntime wires an AdvPoolRuntime over fresh queue/mission

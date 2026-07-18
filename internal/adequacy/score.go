@@ -17,6 +17,13 @@ import "context"
 type Mutant struct {
 	ID   string
 	Code string
+	// ParentSHA256 is the hex SHA-256 of the EXACT original code this mutant was
+	// derived from (empty for hand-built test fixtures). It ties each mutant to
+	// the precise bytes under audit: a mutant is a faithful single-point edit of
+	// that original, so `sha256(original) == ParentSHA256` and the recorded
+	// patch re-applies to reproduce Code. Set by testgen's patch applier, which
+	// drops any mutant that cannot be proven a clean single-region derivative.
+	ParentSHA256 string
 }
 
 // Jail runs a test command against a set of files (path -> content) in an

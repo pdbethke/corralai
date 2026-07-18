@@ -1,13 +1,13 @@
 ---
 title: "Your Tests Suck!"
-description: "Roger Ebert collected his most withering pans into a book called Your Movie Sucks. I built the same critic for your test suite — it mutates your code, runs your own tests against the bugs, and if the tests don't scream, it says so, with a signed record and a decorrelated second opinion. Three real verdicts follow: a two-star, a needs-review, and a genuine zero-star."
+description: "Roger Ebert collected his most withering pans into a book called Your Movie Sucks; John Cleese built a career on the flaw everyone can see and no one can bring themselves to name. I built that critic for your test suite — it mutates your code, runs your own tests against the bugs, and if the tests don't scream it says so (terribly sorry to trouble you), with a signed record and a decorrelated second opinion. Three real verdicts follow: a two-star, a needs-review, and a genuine zero-star."
 pubDate: 2026-07-14
 draft: false
 ---
 
 {/* SPDX-License-Identifier: Elastic-2.0 */}
 
-*Field note. Named, with love, after the late Roger Ebert — who understood that the kindest thing you can do for bad work is to say so, precisely.*
+*Field note. Named with love after two critics: the late Roger Ebert, who knew the kindest thing you can do for bad work is to say so, precisely — and John Cleese, who knew you can say very nearly anything if you apologize sincerely enough on the way in. There is a third debt owed here, but it doesn't announce itself until the end.*
 
 ---
 
@@ -20,6 +20,10 @@ Your CI is running the same con in the other direction. A green check means your
 So I built the critic. Point it at a change and its own tests, and it does what Ebert did: it doesn't take the poster's word for it. It **mutates the code** — plants real, goal-violating bugs — and runs *your tests* against each mutant. If your tests kill the mutant, good. If the mutant strolls right past them, that's a survivor: a bug your suite doesn't test for. The **kill-rate is your grade.**
 
 Then, because a critic who only complains is useless, it writes the test you should have had (and proves it catches the bug), and a **second, deliberately different model** reads your tests cold and files the pan.
+
+And it files it *politely*. If Ebert supplies the standard, John Cleese supplies the bedside manner — the verdict lands the way the nicest man in the sketch delivers the worst possible news: *terribly sorry to trouble you; lovely validator, really, top marks on the length check; it's only that a password with no digit strolls straight through, and I did feel you'd want to know. I've taken the liberty of writing the test you were missing. No rush.* You are allowed to tell a suite it's broken to its face, provided you are gracious about it and hand over the fix on the way out. That politeness isn't a bit — it's the humility the whole design is built on. A gate whose first principle is *no one may judge their own cause* has no business being smug.
+
+But Cleese was working a vein far deeper than manners, and it happens to be the exact reason this tool needs to exist. His whole career was built on one exquisite agony: a person who plainly *perceives* the obvious thing and cannot force it past their own lips. In the very first episode of *Flying Circus*, an interviewer has landed the scoop of the century — Arthur Frampton, the man with three buttocks — and, live on air, cannot bring himself to ask the one question the entire nation tuned in for. He circles it in strangled euphemism ("you have a certain, shall we say, *something*…"), physically unable to name what everyone can plainly see. That is your code review, precisely. Your reviewer saw the test that asserts nothing. They *did.* And then they typed "LGTM," because *"this test doesn't actually test anything"* is a genuinely awkward sentence to say to a colleague you'll stand next to at tomorrow's standup. The flaw was obvious and the sentence was unspeakable, so the green check shipped. Corral's one real advantage over your reviewer isn't intelligence — it's that it has no standup to attend, no feelings to bruise, and no fear whatsoever of being the pedant. It clears its throat and says the obvious thing, out loud, politely, every single time. It is the one who finally, courteously, finishes the interviewer's sentence — *"I have with me Mr. Arthur Frampton, who has a test that asserts nothing."*
 
 Here are three real runs. Local models, a jail, a signed record at the end. I fed it toy code with tests I wrote to be bad on purpose — this is a demo, not an audit of your repo — but the machine didn't know that, and the numbers are real.
 
@@ -84,4 +88,6 @@ And the part I love most: **exercising this feature found three real bugs in the
 
 Ebert gave zero stars to movies that insulted his intelligence. Your CI gives a green check to tests that insult yours. This is the difference between *"it passed"* and *"it was worth passing"* — and it turns out you can measure that, sign it, and hand someone the receipt.
 
-Your tests suck. Here's the proof.
+And now the third debt, the one I promised at the top. The first language this gate ever graded in anger was Python — which is named, as Guido van Rossum will happily tell you, after *Monty Python's Flying Circus.* So the critic that turns to your Python suite and says, with infinite courtesy, that it's terribly sorry to trouble you but the tests rather suck — has been speaking in the exact voice of the circus the language was named for, this whole time. I would love to claim I planned that. I did not. It's simply the sort of thing that turns out to be true if you build honestly for long enough. Ebert for the standard, Cleese for the manners, and the language itself finishing the joke.
+
+Your tests suck. Terribly sorry. Here's the proof.

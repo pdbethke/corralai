@@ -301,6 +301,12 @@ func runCertify(args []string, run cmdRunner, post buildPoster, jail jailRunner,
 	if len(args) > 0 && args[0] == "pubkey" {
 		return runCertifyPubkey(signKey, stdout, stderr)
 	}
+	// `corral certify --local ...` runs the WHOLE adversarial pool in-process —
+	// no brain, no MCP, no token — off the user's own API key. Route it before
+	// the remote --adversarial path so --local never requires --brain/a token.
+	if hasFlag(args, "--local") {
+		return runCertifyLocal(args, stdout, stderr)
+	}
 	// `corral certify --adversarial ...` is a distinct mode: trigger the
 	// adversarial testing pool on the brain and poll to a signed verdict.
 	if hasFlag(args, "--adversarial") {

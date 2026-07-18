@@ -6,42 +6,42 @@
   <p>
     Every claim above is checkable against tape, not marketing copy — the
     hero you scrolled past is the exact same replay code you'd use to audit
-    your own missions.
+    your own runs.
   </p>
   <p>
-    Nothing about a finished mission is thrown away: every task's claim and
-    completion, every finding and its resolution, every command an agent
-    actually ran, and the event log itself survive indefinitely. A Completed
-    tab lists past missions — directive, duration, task/finding counts, and
-    (best-effort) what got learned from them — with a detail view per mission
-    and a ▶ replay button. Replay is read-only: it reconstructs the whole
-    build from durable rows and plays it back on the same corral canvas, at
-    up to 16×. And <strong>one scrub bar moves the whole cockpit</strong> —
-    canvas, plan, files, and console all snap to the same instant in mission
-    time, so pausing live traffic and stepping through history is a single
-    control, not four.
+    Nothing about a finished audit is thrown away: every fault the herd
+    planted, every test run against it, every kill and every survivor, each
+    command an agent actually ran, and the event log itself survive
+    indefinitely. A signed verdict — certified or needs-review — sits at the
+    end of a record you can list, open, and re-run. Replay is read-only: it
+    reconstructs the whole audit from durable rows and plays it back on the
+    same corral canvas, at up to 16×. And <strong>one scrub bar moves the
+    whole cockpit</strong> — canvas, plan, files, and console all snap to the
+    same instant in the run, so pausing live traffic and stepping through
+    history is a single control, not four.
   </p>
   <p>
     Then go deeper than the timeline: <strong>click any task</strong> — a row
     in the plan or a node on the canvas — and its whole story opens. What the
     herd was told to do, every command that ran under it, which agent (and
-    which model) did it, <strong>what triggered it</strong> (the findings and
+    which model) did it, <strong>what triggered it</strong> (the faults and
     upstream tasks it depended on), and <strong>what came next</strong> (the
     downstream work it unblocked). Every link is clickable, so you walk the
     causal chain a step at a time — the replay isn't a video, it's a queryable
-    record of <em>why</em> the build went the way it did.
+    record of <em>why</em> the verdict came out the way it did.
   </p>
   <p>
     A <strong>files lens</strong> rebuilds the directory tree the herd touched,
     each path colored by the agent that claimed it, filling in as you scrub —
-    local-green and frontier paths appearing side by side. And with story
-    capture on, each agent's own reasoning streams verbatim in the console,
-    interleaved with its commands: the italic lines scrolling past are the
-    model thinking out loud. Scrub back to where a model's reasoning went
-    wrong and watch how it cascaded — the replay is a debugger, not a demo reel.
+    the code under audit and the tests grading it appearing side by side. And
+    with story capture on, each agent's own reasoning streams verbatim in the
+    console, interleaved with its commands: the italic lines scrolling past are
+    the model thinking out loud. Scrub back to where a fault slipped past the
+    suite and watch exactly which test failed to kill it — the replay is a
+    debugger for your tests, not a demo reel.
   </p>
-  <p class="callout">This hero IS that player — the exact same code, replaying a real mission.</p>
-  <p><a href="/recordings/">More recordings → local, frontier, and a mixtape of both — three real missions, all replayable.</a></p>
+  <p class="callout">This hero IS that player — the exact same code, replaying a real audit.</p>
+  <p><a href="/recordings/">More recordings → passwd-gappy, interval-thorough, and pool-fence — three real audits, all replayable.</a></p>
 </section>
 
 <style>

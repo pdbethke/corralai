@@ -4,16 +4,18 @@
 <section class="section" id="learning-loop">
   <h2>It learns</h2>
   <p>
-    Recurring failure signatures (the same finding, again and again) and
-    clusters of similar lessons are swept into skill proposals: an LLM drafts
-    corrective guidance plus a reusable skill, Shep announces the pending
-    proposal at standup, and the operator approves or rejects it — from its
-    own Proposals tab (a live count badge) or <code>corral-admin proposals</code>.
-    Approval promotes the guidance into vetted memory and a versioned skill
-    artifact; every later mission's instructions carry the top vetted lessons
-    (fence-wrapped, clearly labeled, capped at 3) so the herd starts each
-    mission already warned. And the loop watches its own efficacy: if the
-    same signature keeps recurring after promotion, a revision proposal
-    reopens for the human to reconsider.
+    Every audit is graded by execution, and the results feed a
+    <strong>gate-earned leaderboard</strong>: corral tracks which model
+    actually <em>catches</em> bugs — per role, per language, measured from real
+    kill-rates and survivors, never self-reported — and routes each audit's
+    roles (fault-planter, test-critic) to the best-fit model for the job.
+    Recurring blind spots and clusters of similar lessons are swept into
+    proposals: an LLM drafts corrective guidance plus a reusable skill, and the
+    operator approves or rejects it — from a Proposals tab (a live count badge)
+    or <code>corral-admin proposals</code>. Approval promotes the guidance into
+    vetted memory and a versioned skill artifact that later audits carry
+    (fence-wrapped, clearly labeled, capped at 3). And the loop watches its own
+    efficacy: if the same blind spot keeps surviving after promotion, a revision
+    proposal reopens for the human to reconsider.
   </p>
 </section>

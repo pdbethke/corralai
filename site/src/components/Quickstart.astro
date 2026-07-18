@@ -3,11 +3,23 @@
 ---
 <section class="section" id="quickstart">
   <h2>Quickstart</h2>
-  <pre class="code">go test ./...
-go run ./cmd/corral     # MCP /mcp/ · health /healthz · live UI / · on 127.0.0.1:9019</pre>
-  <p>Open <code>http://127.0.0.1:9019/</code> for the live herd + Progress tab (dev: auth off). To watch the whole loop end-to-end on one command (bundled GPU Ollama):</p>
-  <pre class="code">cd deploy/demo
-make demo-mission       # directive → team builds it → re-plans → client review → converge</pre>
+  <p>Install the CLI, hand it your key, and point it at a change plus the test that's supposed to guard it:</p>
+  <pre class="code">go install github.com/pdbethke/corralai/cmd/corral@latest
+export ANTHROPIC_API_KEY=sk-ant-...
+corral certify --local --code path/to/file.go \
+  --goal "what it must guarantee" -- go test ./...</pre>
+  <p>
+    Out comes a signed verdict — <strong>certified</strong> or
+    <strong>needs-review</strong> — with the kill-rate, the survivors, and any
+    written-and-proven killing test. Re-check the record offline, anytime:
+  </p>
+  <pre class="code">corral certify verify record.json    # re-runs the proof — no key, no network</pre>
+  <p>
+    The herd runs in a bwrap jail on Linux (<code>--jail container</code> for
+    docker/podman elsewhere), grades tests in five languages
+    (Go, Python, Ruby, JavaScript, TypeScript), and decorrelates the roles
+    across two Claude models by default — all off your own key.
+  </p>
 </section>
 
 <style>

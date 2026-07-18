@@ -75,6 +75,58 @@ func keysOf(m map[string]string) []string {
 	return ks
 }
 
+// TestRecordSink_TapeShape proves the --record collector produces the exact
+// {events:[{ts,kind,actor,subject,detail}]} tape the cockpit replays: beats are
+// ts-ordered from 1, the driver's EventSink beats are attributed to the pool,
+// and drive-loop beats carry their actor.
+func TestRecordSink_TapeShape(t *testing.T) {
+	r := &recordSink{}
+	r.add("task_created", "", "mutant-generator", map[string]any{"role": "mutant-generator"})
+	r.add("task_claimed", "claude-sonnet-5/mutant-generator", "mutant-generator", nil)
+	r.Emit(0, "pool_dev_adequacy", "", map[string]any{"dev_kill_rate": 1.0}) // EventSink path
+	r.add("task_done", "claude-sonnet-5/mutant-generator", "mutant-generator", nil)
+
+	if len(r.events) != 4 {
+		t.Fatalf("want 4 beats, got %d", len(r.events))
+	}
+	for i, e := range r.events {
+		if e.Ts != i+1 {
+			t.Errorf("beat %d ts = %d, want %d (monotonic from 1)", i, e.Ts, i+1)
+		}
+	}
+	if r.events[2].Actor != "corral-advpool" {
+		t.Errorf("EventSink beat must be attributed to the pool, got %q", r.events[2].Actor)
+	}
+	if r.events[1].Actor != "claude-sonnet-5/mutant-generator" {
+		t.Errorf("drive-loop beat lost its actor: %q", r.events[1].Actor)
+	}
+
+	// The tape round-trips to the cockpit's {events:[…]} JSON.
+	path := filepath.Join(t.TempDir(), "tape.json")
+	if err := r.writeTape(path); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tape struct {
+		Events []recEvent `json:"events"`
+	}
+	if err := json.Unmarshal(raw, &tape); err != nil {
+		t.Fatalf("tape is not valid {events} JSON: %v", err)
+	}
+	if len(tape.Events) != 4 || tape.Events[0].Kind != "task_created" {
+		t.Fatalf("tape did not round-trip: %+v", tape.Events)
+	}
+}
+
+// nil recordSink must be a total no-op (the non-recording path).
+func TestRecordSink_NilIsNoop(t *testing.T) {
+	var r *recordSink
+	r.add("x", "a", "s", nil) // must not panic
+}
+
 // TestWriteLocalRecordFile_RoundTripsThroughVerify proves the `--out` file a
 // --local run writes re-verifies through the EXACT offline path `corral certify
 // verify` uses: sign a verdict into the ledger (as the driver does), export it
@@ -335,12 +387,25 @@ func TestDriveLocalRun_EndToEnd(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
-	verdict, err := driveLocalRun(ctx, d, q, missionID, chatterFor, time.Millisecond, func(time.Duration) {}, io.Discard)
+	tape := &recordSink{}
+	actorFor := func(role string) string { return recordActor(role, assign[role]) }
+	verdict, err := driveLocalRun(ctx, d, q, missionID, chatterFor, time.Millisecond, func(time.Duration) {}, io.Discard, tape, actorFor)
 	if err != nil {
 		t.Fatalf("driveLocalRun: %v", err)
 	}
 	if verdict == nil {
 		t.Fatal("expected a converged verdict, got nil")
+	}
+	// The --record tape captured the run: the task lifecycle from the drive loop
+	// plus the pool's reasoning beats from the driver's EventSink.
+	kinds := map[string]int{}
+	for _, e := range tape.events {
+		kinds[e.Kind]++
+	}
+	for _, want := range []string{"task_created", "task_claimed", "task_done", "pool_subject", "pool_verdict"} {
+		if kinds[want] == 0 {
+			t.Errorf("tape missing a %q beat; got kinds %v", want, kinds)
+		}
 	}
 
 	// The dev suite killed 2 of 3 mutants (0.667 ≥ 0.5 threshold) and the pool's
@@ -480,7 +545,7 @@ func TestDriveLocalRun_TolerateOneRecoverableTickError(t *testing.T) {
 	defer cancel()
 
 	var progress bytes.Buffer
-	verdict, err := driveLocalRun(ctx, d, q, missionID, chatterFor, time.Millisecond, func(time.Duration) {}, &progress)
+	verdict, err := driveLocalRun(ctx, d, q, missionID, chatterFor, time.Millisecond, func(time.Duration) {}, &progress, nil, nil)
 	if err != nil {
 		t.Fatalf("driveLocalRun: %v (progress log:\n%s)", err, progress.String())
 	}

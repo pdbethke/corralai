@@ -15,6 +15,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -90,6 +91,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	commitFlag := fs.String("commit", "", "commit sha (default: git rev-parse HEAD, else \"local\")")
 	outFlag := fs.String("out", "", "also write the signed verdict as a self-contained record file, re-verifiable offline with `corral certify verify <file> --pubkey <hex> --allow-unanchored`")
 	repoDirFlag := fs.String("repo-dir", "", "audit --code IN THE CONTEXT of this cloned repo/package: the whole tree is seeded into the jail, the file is mutated in place, and the project's OWN test command (given after `--`) grades it — so real multi-file projects with package imports work (--code/--test are repo-relative)")
+	recordFlag := fs.String("record", "", "write a replayable tape of the run (the pool's reasoning beats, task lifecycle, and findings) to this JSON file — the same {events:[…]} shape the corralai.dev cockpit replays")
 	if err := fs.Parse(flagArgs); err != nil {
 		return 2
 	}
@@ -279,6 +281,16 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	d.Signer = advpool.CertSigner{Key: key, Store: bs, Witness: nil}
+
+	// --record: collect the run into a replayable tape. The sink is the driver's
+	// EventSink (pool reasoning beats) and is also fed the task lifecycle +
+	// findings from the drive loop below, so one ordered stream is the tape.
+	var rec *recordSink
+	if strings.TrimSpace(*recordFlag) != "" {
+		rec = &recordSink{}
+		d.Events = rec
+	}
+	actorFor := func(role string) string { return recordActor(role, assign[role]) }
 	// The wall-clock backstop: a run that hasn't converged by --timeout is signed
 	// as a needs-review verdict and returned, so the CLI always gets an answer.
 	d.RunDeadline = *timeout
@@ -336,7 +348,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	defer cancel()
 
 	chatterFor := localChatterFor(assign)
-	verdict, err := driveLocalRun(ctx, d, q, localMissionID, chatterFor, *poll, time.Sleep, stdout)
+	verdict, err := driveLocalRun(ctx, d, q, localMissionID, chatterFor, *poll, time.Sleep, stdout, rec, actorFor)
 	if err != nil {
 		fmt.Fprintf(stderr, "corral certify --local: %v\n", err)
 		return 1
@@ -359,6 +371,15 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
+	// --record: flush the replayable tape.
+	if out := strings.TrimSpace(*recordFlag); out != "" && rec != nil {
+		if err := rec.writeTape(out); err != nil {
+			fmt.Fprintf(stderr, "corral certify --local: writing --record %s: %v\n", out, err)
+		} else {
+			fmt.Fprintf(stdout, "\nwrote a replayable tape (%d beats) to %s\n", len(rec.events), out)
+		}
+	}
+
 	// Hand the pool's authored test back: when it killed a survivor the dev suite
 	// missed, print it so the dev can adopt it.
 	if st, ok := d.RunStatus(localMissionID); ok && strings.TrimSpace(st.AuthoredTest) != "" {
@@ -370,6 +391,70 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 	return 3
+}
+
+// recEvent is one beat of a replay tape — the exact {ts,kind,actor,subject,
+// detail} shape the corralai.dev cockpit (recordings.astro / replay-player.js)
+// reconstructs a run from. ts is a monotonic 1-based index (the scrub position);
+// the cockpit orders and plays beats by it.
+type recEvent struct {
+	Ts      int            `json:"ts"`
+	Kind    string         `json:"kind"`
+	Actor   string         `json:"actor,omitempty"`
+	Subject string         `json:"subject,omitempty"`
+	Detail  map[string]any `json:"detail,omitempty"`
+}
+
+// recordSink collects a --local run's events into a replayable tape. It doubles
+// as the driver's advpool.EventSink (the pool_subject/pool_dev_adequacy/
+// pool_verdict reasoning beats) AND is fed the task lifecycle + findings from
+// the in-process drive loop, so one ordered stream carries everything the
+// cockpit needs. Concurrency-safe: the driver and the drive loop are the same
+// goroutine here, but guard anyway so a future concurrent worker stays correct.
+type recordSink struct {
+	mu     sync.Mutex
+	ts     int
+	events []recEvent
+}
+
+func (r *recordSink) add(kind, actor, subject string, detail map[string]any) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.ts++
+	r.events = append(r.events, recEvent{Ts: r.ts, Kind: kind, Actor: actor, Subject: subject, Detail: detail})
+}
+
+// Emit implements advpool.EventSink: the driver's pool reasoning beats, all
+// attributed to the pool itself (matching the corral-advpool actor the hosted
+// recordings use).
+func (r *recordSink) Emit(_ int64, kind, subject string, detail map[string]any) {
+	r.add(kind, "corral-advpool", subject, detail)
+}
+
+func (r *recordSink) writeTape(path string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.events == nil {
+		r.events = []recEvent{}
+	}
+	data, err := json.MarshalIndent(map[string]any{"events": r.events}, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o644) // #nosec G306 -- a replay tape is a public artifact
+}
+
+// recordActor renders a stable, role-distinct worker id for the tape's roster/
+// canvas, e.g. "claude-sonnet-5/test-writer" — so the decorrelated herd shows
+// each seat separately even when two roles share a model.
+func recordActor(role, model string) string {
+	if model == "" {
+		return role
+	}
+	return model + "/" + role
 }
 
 // loadRepoFiles walks root and returns every regular text file keyed by its
@@ -528,7 +613,7 @@ const localTickMaxErrors = 20
 // tests can supply fakes). It returns the converged Verdict, or an error if
 // ctx expired before convergence, a role's LLM call failed outright, or Tick
 // errored localTickMaxErrors times in a row.
-func driveLocalRun(ctx context.Context, d *advpool.Driver, q *queue.Store, missionID int64, chatterFor func(role string) agentworker.Chatter, poll time.Duration, sleep func(time.Duration), progress io.Writer) (*advpool.Verdict, error) {
+func driveLocalRun(ctx context.Context, d *advpool.Driver, q *queue.Store, missionID int64, chatterFor func(role string) agentworker.Chatter, poll time.Duration, sleep func(time.Duration), progress io.Writer, rec *recordSink, actorFor func(role string) string) (*advpool.Verdict, error) {
 	consecutiveTickErrors := 0
 	for {
 		if err := ctx.Err(); err != nil {
@@ -548,7 +633,7 @@ func driveLocalRun(ctx context.Context, d *advpool.Driver, q *queue.Store, missi
 		if verdict != nil {
 			return verdict, nil
 		}
-		ran, err := runReadyTasks(ctx, q, missionID, chatterFor)
+		ran, err := runReadyTasks(ctx, q, missionID, chatterFor, rec, actorFor)
 		if err != nil {
 			return nil, err
 		}
@@ -571,7 +656,7 @@ func driveLocalRun(ctx context.Context, d *advpool.Driver, q *queue.Store, missi
 // task and returns an error from Tick, which driveLocalRun tolerates up to
 // localTickMaxErrors times, so the reopened task IS re-claimed and re-run here
 // on the next drain — a real retry, not just a reissue that nothing consumes.
-func runReadyTasks(ctx context.Context, q *queue.Store, missionID int64, chatterFor func(role string) agentworker.Chatter) (bool, error) {
+func runReadyTasks(ctx context.Context, q *queue.Store, missionID int64, chatterFor func(role string) agentworker.Chatter, rec *recordSink, actorFor func(role string) string) (bool, error) {
 	ran := false
 	for {
 		if err := ctx.Err(); err != nil {
@@ -588,6 +673,14 @@ func runReadyTasks(ctx context.Context, q *queue.Store, missionID int64, chatter
 		if ch == nil {
 			return ran, fmt.Errorf("no model backend for role %q", task.Role)
 		}
+		// Tape (no-op when rec is nil): the task appears, is claimed by its seat,
+		// files its findings, and completes — the lifecycle the cockpit renders.
+		actor := ""
+		if actorFor != nil {
+			actor = actorFor(task.Role)
+		}
+		rec.add("task_created", "", task.Key, map[string]any{"role": task.Role, "title": task.Title})
+		rec.add("task_claimed", actor, task.Key, map[string]any{"role": task.Role, "title": task.Title})
 		result, findings, rerr := agentworker.RunRole(ctx, ch, task.Role, task.Instruction)
 		if rerr != nil {
 			return ran, fmt.Errorf("running role %q: %w", task.Role, rerr)
@@ -600,7 +693,11 @@ func runReadyTasks(ctx context.Context, q *queue.Store, missionID int64, chatter
 			if _, err := q.AddFinding(f); err != nil {
 				return ran, fmt.Errorf("recording %q finding: %w", task.Role, err)
 			}
+			rec.add("finding_reported", actor, f.Target, map[string]any{
+				"severity": f.Severity, "type": f.Type, "evidence": f.Evidence, "role": task.Role,
+			})
 		}
+		rec.add("task_done", actor, task.Key, map[string]any{"role": task.Role, "result": result})
 		if _, err := q.Complete(task.ID, localBee, result); err != nil {
 			return ran, fmt.Errorf("completing role %q: %w", task.Role, err)
 		}

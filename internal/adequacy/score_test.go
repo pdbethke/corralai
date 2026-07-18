@@ -60,7 +60,7 @@ func TestScoreInvalidWhenCompliantFails(t *testing.T) {
 	// A test that fails on compliant code is broken/overreaching: report invalid, no mutants run.
 	fj := &fakeJail{passOn: map[string]bool{"COMPLIANT": false}}
 	rep, err := Score(context.Background(), fj, map[string]string{}, "code.go", "COMPLIANT",
-		[]Mutant{{"m1", "M1"}}, []string{"go", "test"})
+		[]Mutant{{ID: "m1", Code: "M1"}}, []string{"go", "test"})
 	if err != nil {
 		t.Fatal(err)
 	}

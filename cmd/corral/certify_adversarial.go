@@ -308,7 +308,13 @@ func renderAdvVerdict(w io.Writer, codePath string, v advVerdict) {
 	}
 	fmt.Fprintf(w, "  models:        %s\n", formatModels(v.ModelsByRole))
 	if v.RecordID != 0 {
-		fmt.Fprintf(w, "  signed:        record %d  (verify offline: corral certify verify <record>)\n", v.RecordID)
+		// No inline verify command here: the record lands in a ledger, and
+		// `certify verify` reads a self-contained FILE, not a bare id. The
+		// --local path prints the precise `--out`-based verify command right
+		// after this block when --out is set; the daemon path's record is
+		// verifiable via the brain. Printing a bare `verify <record>` here was
+		// a dead end (dogfooding, 2026-07-18).
+		fmt.Fprintf(w, "  signed:        record %d\n", v.RecordID)
 	} else {
 		fmt.Fprintln(w, "  signed:        (signing failed — no record id)")
 	}

@@ -18,7 +18,6 @@ import (
 	"github.com/pdbethke/corralai/internal/mission"
 	"github.com/pdbethke/corralai/internal/principals"
 	"github.com/pdbethke/corralai/internal/queue"
-	"github.com/pdbethke/corralai/internal/sandbox"
 	"github.com/pdbethke/corralai/internal/telemetry"
 )
 
@@ -419,69 +418,6 @@ func TestGetAdversarialRunToolRequiresAdmin(t *testing.T) {
 	}
 }
 
-// advPoolJailSkipUnlessGoWorks resolves a real bwrap backend and skips the
-// caller's test unless the `go` toolchain is actually reachable INSIDE the
-// jail — bwrap only binds /usr into the sandbox (see
-// internal/sandbox/isolator_linux.go), so a host where `go` is installed
-// outside /usr (e.g. a snap-packaged go, common on Ubuntu dev boxes: `go` at
-// /snap/bin -> /usr/bin/snap) has a working bwrap backend that can still
-// never actually run `go` — a plain "no backend, skip" check would silently
-// pass over that case instead of skipping it. Returns the resolved backend,
-// or skips via t.Skip.
-func advPoolJailSkipUnlessGoWorks(t *testing.T) sandbox.Isolator {
-	t.Helper()
-	backend, err := sandbox.Resolve(sandbox.Config{})
-	if err != nil || backend == nil {
-		t.Skip("no sandbox backend available (bwrap) — needs the real jail to exercise go vet")
-	}
-	jail := adequacy.NewJail(backend, 30*time.Second)
-	pass, rerr := jail.RunTest(context.Background(), nil, []string{"go", "version"})
-	if rerr != nil || !pass {
-		t.Skipf("go toolchain not reachable inside the bwrap jail on this host (rerr=%v pass=%v) — likely a snap-packaged go outside /usr", rerr, pass)
-	}
-	return backend
-}
-
-// TestAdvPoolValidatorCompileTest_SubdirectoryCodePath is I-1's regression
-// test: a SUBDIRECTORY code_path (e.g. internal/auth/login.go, the common
-// case — control-plane targets are rarely at the module root) must not have
-// its compiling test wrongly rejected. Before the fix, CompileTest ran
-// `go vet ./` (module root, non-recursive) while the candidate files landed
-// under internal/auth/ — the root package has no .go files, so vet always
-// errored and every authored test was rejected regardless of whether it
-// actually compiled, wedging the run forever. This exercises the REAL
-// advpoolValidator over a real jail (never the stub — the stub is exactly
-// what hid this bug in the other tests in this file).
-func TestAdvPoolValidatorCompileTest_SubdirectoryCodePath(t *testing.T) {
-	backend := advPoolJailSkipUnlessGoWorks(t)
-	jail := adequacy.NewJail(backend, 30*time.Second)
-	v := advpoolValidator{jail: jail}
-
-	code := "package auth\n\nfunc ValidatePassword(pw string) error { return nil }\n"
-	test := "package auth\n\nimport \"testing\"\n\nfunc TestValidatePassword(t *testing.T) {\n\tif err := ValidatePassword(\"x\"); err != nil {\n\t\tt.Fatal(err)\n\t}\n}\n"
-
-	if err := v.CompileTest(context.Background(), "internal/auth/login.go", code, test); err != nil {
-		t.Fatalf("CompileTest rejected a compiling test under a subdirectory code_path: %v", err)
-	}
-}
-
-// TestAdvPoolValidatorCompileTest_SubdirectoryNonCompilingTest proves the
-// fix didn't just widen the check into a rubber stamp: a genuinely
-// non-compiling test under the SAME subdirectory code_path must still be
-// rejected.
-func TestAdvPoolValidatorCompileTest_SubdirectoryNonCompilingTest(t *testing.T) {
-	backend := advPoolJailSkipUnlessGoWorks(t)
-	jail := adequacy.NewJail(backend, 30*time.Second)
-	v := advpoolValidator{jail: jail}
-
-	code := "package auth\n\nfunc ValidatePassword(pw string) error { return nil }\n"
-	badTest := "package auth\n\nimport \"testing\"\n\nfunc TestValidatePassword(t *testing.T) {\n\tValidatePassword(123)\n}\n" // wrong arg type
-
-	if err := v.CompileTest(context.Background(), "internal/auth/login.go", code, badTest); err == nil {
-		t.Fatal("expected CompileTest to reject a non-compiling test, got nil error")
-	}
-}
-
 func TestParseAdvPoolModels(t *testing.T) {
 	// Happy path: all three roles, decorrelated.
 	got, err := parseAdvPoolModels("mutant-generator=anthropic/claude-sonnet-4-6,test-writer=anthropic/claude-sonnet-4-6,test-critic=google/gemini-2.5-flash")
@@ -550,19 +486,6 @@ func TestAdvPoolAssignUsesDefaults_UnsetIdenticalToToday(t *testing.T) {
 	}
 }
 
-// TestPluginForFailsClosedOnUnknownExt proves pluginFor fail-closes on an
-// unrecognized code extension (the gate must never grade a language it
-// cannot run) while still resolving the go plugin for a .go path.
-func TestPluginForFailsClosedOnUnknownExt(t *testing.T) {
-	if _, err := pluginFor("weird.cobol"); err == nil {
-		t.Fatal("pluginFor(.cobol) must error — fail closed")
-	}
-	p, err := pluginFor("internal/sqlguard/sqlguard.go")
-	if err != nil || p.Name() != "go" {
-		t.Fatalf("pluginFor(.go) = %v,%v; want go,nil", p, err)
-	}
-}
-
 // TestResolveRunLang_RejectsDisagreement proves the run-language resolver
 // (used by StartRun before Preflight/mission-creation) treats an explicit
 // in.Lang as an assertion that MUST agree with the extension-detected
@@ -582,16 +505,6 @@ func TestResolveRunLang_RejectsDisagreement(t *testing.T) {
 	}
 	if _, err := resolveRunLang("", "x.cobol"); err == nil {
 		t.Fatal("resolveRunLang(\"\", x.cobol) must error — unknown extension, fail closed")
-	}
-}
-
-// TestAdvPoolBaseGoUnchanged proves advPoolBase's go path is unchanged after
-// gaining a codePath argument: the go.mod scaffold and the recursive `go
-// test ./...` default must be byte-identical to the prior go-only behavior.
-func TestAdvPoolBaseGoUnchanged(t *testing.T) {
-	base, cmd := advPoolBase("x/y.go")
-	if base["go.mod"] == "" || cmd[0] != "go" {
-		t.Fatalf("go base/cmd regressed: %v %v", base, cmd)
 	}
 }
 

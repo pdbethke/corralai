@@ -102,7 +102,7 @@ func setupIntegrationDriver(t *testing.T, scorer *canonScorer, validator *canonV
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.Signer = advpoolSigner{opts: Options{BuildStore: bs, CertifyKey: priv}}
+	d.Signer = advpool.CertSigner{Key: priv, Store: bs}
 	d.Leaderboard = advpoolLeaderboardSink{tel: nil} // nil telemetry is a documented no-op
 
 	const missionID = 42

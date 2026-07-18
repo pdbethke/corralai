@@ -4,14 +4,9 @@ package brain
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,13 +17,11 @@ import (
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/bugcatch"
-	"github.com/pdbethke/corralai/internal/controlgate"
 	"github.com/pdbethke/corralai/internal/gate"
 	golang "github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/mission"
 	"github.com/pdbethke/corralai/internal/repoindex"
 	"github.com/pdbethke/corralai/internal/telemetry"
-	"github.com/pdbethke/corralai/internal/testgen"
 )
 
 // defaultAdvPoolModel and defaultAdvPoolCriticModel are the static fallback
@@ -40,17 +33,6 @@ const (
 	defaultAdvPoolCriticModel = "llama3.2:3b"
 )
 
-// pluginFor resolves the language plugin from the code file's extension,
-// fail-closed on an unknown language (the gate never grades what it cannot
-// run).
-func pluginFor(codePath string) (golang.Plugin, error) {
-	p, ok := golang.Detect(codePath)
-	if !ok {
-		return nil, fmt.Errorf("advpool: no language plugin for %q — refusing to grade", codePath)
-	}
-	return p, nil
-}
-
 // resolveRunLang resolves the ONE language plugin a run's grading path will
 // actually use — from the code file's extension (a .py file is pytest-graded
 // no matter what inLang says). An explicit inLang is treated as an assertion:
@@ -59,197 +41,14 @@ func pluginFor(codePath string) (golang.Plugin, error) {
 // Preflighting the toolchain is NOT done here (it hits the host) — callers
 // preflight the returned plugin themselves.
 func resolveRunLang(inLang, codePath string) (golang.Plugin, error) {
-	detected, err := pluginFor(codePath)
-	if err != nil {
-		return nil, err
+	detected, ok := golang.Detect(codePath)
+	if !ok {
+		return nil, fmt.Errorf("advpool: no language plugin for %q — refusing to grade", codePath)
 	}
 	if in := strings.TrimSpace(inLang); in != "" && in != detected.Name() {
 		return nil, fmt.Errorf("advpool: declared language %q disagrees with code_path %q (detected %q) — refusing", inLang, codePath, detected.Name())
 	}
 	return detected, nil
-}
-
-// advPoolTestPath derives the synthetic test-file name a candidate test is
-// written to in the jail workspace from the code file's own path via the
-// resolved language plugin's own convention. Falls back to the legacy go
-// convention (same base name, `_test.go` suffix, same directory) when no
-// plugin resolves — kept identical to the prior implementation so an
-// unresolvable path still behaves exactly as before.
-func advPoolTestPath(codePath string) string {
-	if p, err := pluginFor(codePath); err == nil {
-		return p.TestPath(codePath)
-	}
-	ext := filepath.Ext(codePath)
-	base := strings.TrimSuffix(codePath, ext)
-	dir := filepath.Dir(codePath)
-	if dir == "." {
-		return base + "_test.go"
-	}
-	return filepath.Join(dir, filepath.Base(base)+"_test.go")
-}
-
-// advPoolBase returns the workspace scaffold + default test command for the
-// code file's resolved language plugin. The default testCmd is deliberately
-// RECURSIVE for go ("./...", never controlgate.LangScaffold's own "./"
-// default): a run's code_path is very commonly a subdirectory (e.g.
-// internal/auth/login.go), which lands the candidate files under
-// internal/auth/ in the jail workspace — "go test ./" from the module root
-// only ever sees the root package (no .go files there), so a non-recursive
-// default would silently no-op the scorer/compile-check for every
-// subdirectory target. This is the SAME asymmetry bug CompileTest had (I-1):
-// the scorer already honors the run's own TestCmd when set, this only fixes
-// the fallback used when TestCmd is empty.
-//
-// Unknown/unresolvable codePath falls back to the exact go scaffold/cmd kept
-// from the prior go-only implementation — callers that can fail instead
-// (StartRun) preflight first and refuse the run rather than silently
-// grading under the wrong language.
-func advPoolBase(codePath string) (base map[string]string, testCmd []string) {
-	if p, err := pluginFor(codePath); err == nil {
-		return p.Scaffold(), p.TestCmd()
-	}
-	b, _, _ := controlgate.LangScaffold("go")
-	return b, []string{"go", "test", "./..."}
-}
-
-// advpoolScorer adapts adequacy.Score (the SAME deterministic, brain-side,
-// jail-run mutation scorer the control gate uses) to advpool.Scorer. This is
-// the soundness-#1 seam: the driver never trusts a worker's self-reported
-// kill rate, only what this Scorer actually observes running in the jail.
-type advpoolScorer struct {
-	jail adequacy.Jail
-}
-
-func (s advpoolScorer) Score(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (float64, []adequacy.Mutant, error) {
-	base, defaultCmd := advPoolBase(codePath)
-	cmd := strings.Fields(testCmd)
-	if len(cmd) == 0 {
-		cmd = defaultCmd
-	}
-	scoreBase := make(map[string]string, len(base)+1)
-	for k, v := range base {
-		scoreBase[k] = v
-	}
-	scoreBase[advPoolTestPath(codePath)] = test
-
-	rep, err := adequacy.Score(ctx, s.jail, scoreBase, codePath, code, mutants, cmd)
-	if err != nil {
-		return 0, nil, fmt.Errorf("advpool: score: %w", err)
-	}
-	byID := make(map[string]adequacy.Mutant, len(mutants))
-	for _, m := range mutants {
-		byID[m.ID] = m
-	}
-	survivors := make([]adequacy.Mutant, 0, len(rep.Survived))
-	for _, id := range rep.Survived {
-		if m, ok := byID[id]; ok {
-			survivors = append(survivors, m)
-		}
-	}
-	return rep.KillRate(), survivors, nil
-}
-
-// advpoolValidator brain-side-validates a worker's structured artifacts
-// before the driver trusts them: CompileTest jail-compiles a candidate test
-// against the code (via `go vet`, which type-checks test files without
-// executing them — the "does it compile" check, never "does it pass",
-// which would corrupt CompileTest's meaning); ParseMutants is testgen's
-// proven mutant-output parser (the Task 1.2 seam), reused verbatim so a
-// distributed worker's raw response parses identically to the in-process
-// generator's own output.
-//
-// CompileTest MUST cover the same scope the Scorer actually runs against
-// (I-1): a subdirectory code_path (e.g. internal/auth/login.go) lands the
-// candidate code+test under internal/auth/ in the jail workspace, so
-// `go vet ./` (module root, non-recursive) sees zero .go files there and
-// fails EVERY authored test regardless of whether it actually compiles —
-// the run then never converges. `go vet ./...` is recursive and always
-// covers whatever directory the files actually landed in.
-type advpoolValidator struct {
-	jail adequacy.Jail
-}
-
-func (v advpoolValidator) CompileTest(ctx context.Context, codePath, code, test string) error {
-	p, err := pluginFor(codePath)
-	if err != nil {
-		return err
-	}
-	base := p.Scaffold()
-	ws := make(map[string]string, len(base)+2)
-	for k, val := range base {
-		ws[k] = val
-	}
-	ws[codePath] = code
-	testPath := advPoolTestPath(codePath)
-	ws[testPath] = test
-
-	compiles, err := v.jail.RunTest(ctx, ws, p.CompileCheck(codePath, testPath))
-	if err != nil {
-		return fmt.Errorf("advpool: compile-verify test: %w", err)
-	}
-	if !compiles {
-		return fmt.Errorf("advpool: test does not compile")
-	}
-	return nil
-}
-
-func (v advpoolValidator) ParseMutants(raw string) ([]adequacy.Mutant, error) {
-	return testgen.ParseMutantsOutput(raw)
-}
-
-func (v advpoolValidator) ParseTest(raw string) string {
-	return testgen.ParseTestOutput(raw)
-}
-
-// advpoolSigner signs a terminal Verdict via the SAME certify chain
-// certifyBuild/report_build uses (opts.CertifyKey/BuildStore/Witness) —
-// mirroring certifierAdapter (gate.go) and controlRunner's Cert field
-// (controlgate.go): the verdict is marshaled and sha256-digested (mirroring
-// controlgate.PostControlGate's digest pattern) so the signed record's
-// output_digest is a tamper-evident fingerprint of every Verdict field
-// (subject = repo@commit, byproducts = the digest), then certified with a
-// distinct actor so a signed advpool record is never confused with a human
-// `corral certify` submission, a merge-gate run, or a control-gate run.
-type advpoolSigner struct{ opts Options }
-
-func (s advpoolSigner) SignVerdict(ctx context.Context, v advpool.Verdict) (int64, string, error) {
-	exitCode := 0
-	if v.Status != advpool.StatusCertified {
-		exitCode = 1
-	}
-	b, err := json.Marshal(v)
-	if err != nil {
-		return 0, "", fmt.Errorf("advpool: marshal verdict: %w", err)
-	}
-	sum := sha256.Sum256(b)
-	digest := "sha256:" + hex.EncodeToString(sum[:])
-
-	// ProducedBy surfaces the run's role assignment as human-readable
-	// "role:model" strings directly on the signed record (M-2), rather than
-	// leaving the models only re-derivable by unpacking output_digest against
-	// a separately-stored Verdict. Sorted so the record is deterministic.
-	roles := make([]string, 0, len(v.ModelsByRole))
-	for role := range v.ModelsByRole {
-		roles = append(roles, role)
-	}
-	sort.Strings(roles)
-	producedBy := make([]string, 0, len(roles))
-	for _, role := range roles {
-		producedBy = append(producedBy, role+":"+v.ModelsByRole[role])
-	}
-
-	out, err := certifyBuild(ctx, s.opts, reportBuildIn{
-		Repo:         v.Repo,
-		Commit:       v.Commit,
-		Command:      "corral/adversarial-pool",
-		ExitCode:     exitCode,
-		OutputDigest: digest,
-		ProducedBy:   producedBy,
-	}, "corral-advpool")
-	if err != nil {
-		return 0, "", err
-	}
-	return out.ID, out.Head, nil
 }
 
 // advpoolLeaderboardSink feeds the gate-earned (model, role, outcome)
@@ -748,11 +547,11 @@ func StartAdversarialPool(ctx context.Context, opts Options) (*AdvPoolRuntime, e
 
 	jail := adequacy.NewJail(opts.GateBackend, gate.DefaultGateTimeout)
 	assign := advPoolAssign(opts.Staffing, defaults)
-	driver, err := advpool.NewDriver(opts.Queue, advpoolScorer{jail: jail}, advpoolValidator{jail: jail}, assign, 0.8)
+	driver, err := advpool.NewDriver(opts.Queue, advpool.JailScorer{Jail: jail}, advpool.JailValidator{Jail: jail}, assign, 0.8)
 	if err != nil {
 		return nil, fmt.Errorf("advpool: new driver: %w", err)
 	}
-	driver.Signer = advpoolSigner{opts: opts}
+	driver.Signer = advpool.CertSigner{Key: opts.CertifyKey, Store: opts.BuildStore, Witness: opts.Witness}
 	driver.Leaderboard = advpoolLeaderboardSink{tel: opts.Telemetry}
 	driver.Events = advpoolEventSink{tel: opts.Telemetry}
 

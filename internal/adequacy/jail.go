@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -82,19 +81,6 @@ func (j bwrapJail) RunTest(ctx context.Context, files map[string]string, testCmd
 	})
 	if err != nil {
 		return false, err
-	}
-	// TEMPORARY DEBUG (TS compile-check diagnosis): when a tsc check fails,
-	// surface the exact command, exit code, tsc output, and the files fed to
-	// it — the pool discards this and reports only "does not compile", which
-	// hid a failure that survived every offline reproduction. Scoped to tsc so
-	// it does not spam the log with the (expected) failing test-vs-mutant runs.
-	cmdStr := strings.Join(testCmd, " ")
-	if res.ExitCode != 0 && strings.Contains(cmdStr, "tsc") {
-		var b strings.Builder
-		for path, content := range files {
-			fmt.Fprintf(&b, "--- %s ---\n%s\n", path, content)
-		}
-		log.Printf("adequacy: DEBUG tsc check failed: cmd=%q exit=%d\n=== OUTPUT ===\n%s\n=== FILES ===\n%s", cmdStr, res.ExitCode, res.Output, b.String())
 	}
 	return res.ExitCode == 0, nil
 }

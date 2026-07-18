@@ -4,6 +4,7 @@ package advpool
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
@@ -89,8 +90,18 @@ func renderTestWriter(rs RunSpec, sigs []repoindex.Signature, survivors []adequa
 		}
 		goal = b.String()
 	}
+	// Tell the writer the actual file name. WriteTestPrompt hands the model the
+	// code CONTENT but not its path, so without this it cannot form a correct
+	// relative import and falls back to the prompt's EXAMPLE filename — which a
+	// real module-resolving compile check (tsc: TS2307) rejects, and which a
+	// syntax-only check (py_compile / ruby -c / node --check) silently lets
+	// through as a latent runtime break. The authored test lands in the SAME
+	// directory as the code, so a same-directory reference by this base name is
+	// correct. Stated as a fact so it stays right across languages (Go stays
+	// white-box same-package; python/js/ts import by name/extension).
+	named := fmt.Sprintf("The source file under review is named %q, and your test file will be placed in the SAME directory as it. Reference or import the code under test as appropriate for the language, using that exact file name — do not invent or assume any other name.\n\n%s", filepath.Base(rs.CodePath), goal)
 	p := langFor(rs)
-	system, user := testgen.WriteTestPrompt(p.TestWriterSystem(), goal, rs.Code, sigs)
+	system, user := testgen.WriteTestPrompt(p.TestWriterSystem(), named, rs.Code, sigs)
 	return joinPrompt(system, user)
 }
 

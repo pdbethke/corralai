@@ -2,96 +2,114 @@
 // SPDX-License-Identifier: Elastic-2.0
 ---
 <section class="section" id="how-it-works">
-  <h2>How the herd works</h2>
+  <h2>How the gate works</h2>
   <p>
-    A directive becomes a mission; the brain decomposes it into a
-    dependency-ordered task queue; the agents pull ready tasks and execute
-    them; their structured findings feed a two-tier re-planner; the mission
-    converges when the client accepts.
+    Point corral at a code change and the tests that are supposed to cover it.
+    A decorrelated herd of models plants goal-violating faults in the code and
+    runs <em>your</em> tests against each one in a jail — measuring the kill
+    rate by execution, never by a self-report. A different model reads the
+    suite cold and critiques it; any fault that survives gets a missing test
+    written and <em>proven</em> to catch it. What comes out is a signed
+    verdict: <strong>certified</strong>, or <strong>needs-review</strong>. No
+    one may be judge in their own cause.
   </p>
-  <pre class="flow">CLIENT (you, or a modeled product-owner agent)
-  │ directive ↓                 ↑ accept / feedback → next sprint
-  ▼                             │
-LEAD ── research → design → build-core → build → test ∥ secops ∥ perf → integrate → docs → retro
-(orchestrates,        the dev team (one role per phase)
- re-plans, reworks)          SCRUM (standups · stall call-outs · nudges)
-  └── findings → reflex fix+verify  ∥  lead supersede / re-architect → converge</pre>
+  <pre class="flow">change + its tests
+  │
+  ▼
+[mutant-generator] plants goal-violating faults in the code
+  │ each fault ↓
+  ▼
+run YOUR tests against each fault, in a bwrap jail ──► kill-rate (never a self-report)
+  │
+  ├── faults your tests killed        → covered
+  └── survivors (a fault slipped past) → [test-writer] writes the missing
+                                          killing test, proven against the fault
+  │
+  ▼
+[test-critic — a DIFFERENT model reads the suite cold]
+  │
+  ▼
+SIGNED VERDICT ── certified   (kill-rate clears the bar, no blocking gap)
+               └─ needs-review (a survivor still stands, or a human must adjudicate)</pre>
 
   <div class="tech-grid">
     <div class="tech">
-      <h3>Cross-model review, decorrelated by construction</h3>
+      <h3>Decorrelated by construction</h3>
       <p>
-        Most agent-swarm frameworks run one LLM in every role — parallelism
-        with <em>correlated</em> blind spots, because the "reviewer" shares
-        the builder's failure modes when it's the same model underneath.
-        Corral lets each role run a genuinely different model — a Claude
-        builder, a Gemini reviewer, a local model for the cheap passes — all
-        coordinating through one brain, so review becomes adversarial and
-        decorrelated by construction, not by hoping the temperature setting
-        helps. Mix cheap local agents with frontier ones in the same mission,
-        and pay for it however you already do — a metered API key <em>or</em> a
-        subscription CLI like Codex or Claude Max. Bring anything
-        OpenAI-compatible or a local model: no vendor lock-in.
+        Run one LLM in every role and the "critic" shares the fault-planter's
+        blind spots — the same model can't be surprised by its own bugs.
+        Corral forces the three roles apart: the model that plants the faults,
+        the model that writes the exposing test, and the model that critiques
+        the suite are <em>genuinely different models</em>, enforced at
+        assignment — <code>CheckDecorrelation</code> refuses a run where the
+        critic and the test-writer are the same model. Mix cheap local models
+        with frontier ones, and pay for it however you already do — a metered
+        API key <em>or</em> a subscription CLI like Codex or Claude Max. Bring
+        anything OpenAI-compatible or a local model: no vendor lock-in.
       </p>
       <a href="/docs/concepts/multi-model-herds/">Multi-model herds →</a>
     </div>
     <div class="tech">
-      <h3>The verify gate — a quality floor, not a vibe</h3>
+      <h3>Certified by execution, not by a vibe</h3>
       <p>
-        A task isn't "done" because an agent says so. The verification gate
-        refuses completion until a real command — <code>go test</code>,
-        <code>pytest</code>, <code>npm test</code>, <code>cargo test</code>,
-        anything — is on record with a passing exit code. A failing build
-        becomes a finding, not an assumption.
+        A suite's grade isn't an opinion. The kill rate is <strong>mutation
+        testing measured by the brain</strong>: your real command —
+        <code>go test</code>, <code>pytest</code>, <code>npm test</code>,
+        <code>cargo test</code>, anything — is run against each planted fault
+        inside a <code>bwrap</code> jail, and the exit codes decide what died.
+        A model never tells us it did well; a test that claims to catch a bug
+        has to actually catch it, on a real run, on the record. Clear the bar
+        with no blocking gap and the change is certified; fall short and it
+        routes to a human as needs-review.
       </p>
-      <a href="/docs/concepts/queue-and-verify/">The task queue + verify gate →</a>
+      <a href="/docs/concepts/queue-and-verify/">Certify by execution →</a>
     </div>
     <div class="tech">
-      <h3>Two-tier re-planning</h3>
+      <h3>Survivors don't just get flagged — they get a test</h3>
       <p>
-        Findings don't just pile up in a backlog. High-severity findings
-        trigger a <strong>reflex tier</strong> that deterministically spawns
-        fix-and-reverify tasks — no LLM in the loop, fast and predictable.
-        Judgment calls — superseding stale work, reopening something thought
-        done, re-architecting a bad approach — go to an <strong>LLM lead
-        tier</strong>, with full task lineage so nothing disappears silently.
-        Convergence is bounded: caps and loop-until-dry keep a stuck mission
-        from re-planning forever.
+        A critic who only complains is furniture. When a planted fault slips
+        past your suite, the <strong>test-writer</strong> writes the test you
+        were missing and the brain <em>proves</em> it: runs the new test
+        against the surviving fault and watches it fail, then against clean
+        code and watches it pass. The gap comes back to you as
+        <code>proven_missed</code> — a real, catchable bug and the exact test
+        that would have caught it — not a lecture.
       </p>
-      <a href="/docs/concepts/mission-lifecycle/">Mission lifecycle →</a>
+      <a href="/field-notes/your-tests-suck/">Three real verdicts →</a>
     </div>
     <div class="tech">
-      <h3>Path claims and leases — the coordination substrate</h3>
+      <h3>A signed, tamper-evident verdict</h3>
       <p>
-        A dozen agents working the same repo need a way to not step on each
-        other. The coordination layer is transactional SQLite: atomic
-        exclusive claims on paths and branches, time-boxed with a TTL, a
-        presence/lease reaper that reclaims work from an agent that went
-        quiet, and a durable completed-work log. No file gets two writers; no
-        claim outlives its holder.
-      </p>
-      <a href="/docs/concepts/claims-and-leases/">Claims &amp; leases →</a>
-    </div>
-    <div class="tech">
-      <h3>Jail → repo — the only way code leaves</h3>
-      <p>
-        Every agent's shell commands run inside a <code>bwrap</code> jail: no
-        network by default, workspace-confined, a secret-free environment —
-        the git/forge token lives only in the brain, never handed to an
-        agent. The only egress is a pull request the brain opens and watches;
-        a <code>CHANGES_REQUESTED</code> review reopens rework automatically.
-        Because every consequential action funnels through the brain, it's
-        also the forensic record — attributed to a verified principal, and
-        the subject of the record doesn't control the ledger.
+        Every run ends in a signed record you can verify offline: the kill
+        rate, the survivors, the written tests, and which model played which
+        role — <code>ProducedBy: [mutant-generator, test-critic, test-writer]</code>,
+        each named. Because the verdict is attributed to a verified principal
+        and the subject of the record doesn't control the ledger, it's a
+        forensic artifact, not a screenshot. A judge may not certify her own
+        cause, and she may not quietly edit the transcript either.
       </p>
       <a href="/docs/concepts/trust-and-security/">Trust &amp; security →</a>
     </div>
     <div class="tech">
-      <h3>And it learns</h3>
+      <h3>The jail is the only place a claim gets proven</h3>
       <p>
-        Recurring findings don't just get fixed once — they get swept into
-        skill proposals a human approves, so every later mission starts
-        already warned. See how the learning loop works below.
+        Every command corral runs — your tests against each mutant, the new
+        test against the survivor — runs inside a <code>bwrap</code> jail: no
+        network by default, workspace-confined, a secret-free environment. The
+        kill rate is a fact about what happened in that jail, not a number a
+        model asserted. Nothing about the grade rests on trusting the thing
+        being graded.
+      </p>
+      <a href="/docs/concepts/queue-and-verify/">The verify gate →</a>
+    </div>
+    <div class="tech">
+      <h3>And it learns which model to trust</h3>
+      <p>
+        The signed verdicts feed a leaderboard: which model actually
+        <em>catches</em> bugs in which role, proven by execution, not
+        self-reported. Over time the herd routes each role to the model
+        that's measured-best at it — fitness earned at the gate, a number you
+        can't flatter your way up. See how the loop works below.
       </p>
       <a href="#learning-loop">The learning loop ↓</a>
     </div>

@@ -66,13 +66,25 @@ func renderMutantGenerator(rs RunSpec, sigs []repoindex.Signature, _ []adequacy.
 	return joinPrompt(system, user)
 }
 
-// renderTestCritic asks a (different) model to read the dev's own tests and
-// flag vacuous/tautological/designed-to-pass patterns — freeform, so the
-// worker runs its normal LLM+jail loop and files findings.
+// renderTestCritic asks a (different) model to read BOTH the code under review
+// and the dev's own tests, and flag ONLY the demonstrably vacuous ones —
+// freeform, so the worker runs its normal LLM+jail loop and files findings.
+//
+// The code is included deliberately: an earlier version handed the critic only
+// the test file, so it speculated about the API and filed false positives
+// (e.g. accusing a valid `tabulate(func, -1)` call of violating the recipe when
+// a negative start is legitimate). Grounding it in the real source, plus a
+// strict "only if certain" rubric, is what makes the critic safe to point at
+// real, respected projects: a false accusation against a good test is worse
+// than a miss, and "no vacuous tests" is a correct and common answer.
 func renderTestCritic(rs RunSpec, _ []repoindex.Signature, _ []adequacy.Mutant) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "You are a TEST CRITIC. Read the developer's own tests below (for %s, goal: %s) and flag any that are vacuous, tautological, or designed to pass without actually exercising the goal (CI-theater). File a finding for each such test, naming it and explaining what it fails to check.\n\n", rs.DevTestPath, rs.Goal)
-	fmt.Fprintf(&b, "DEV TEST FILE (%s):\n%s\n", rs.DevTestPath, rs.DevTestCode)
+	fmt.Fprintf(&b, "You are a TEST CRITIC. Below are the code under review and the developer's own tests for it (goal: %s).\n\n", rs.Goal)
+	fmt.Fprintf(&b, "CODE UNDER REVIEW (%s):\n%s\n\n", rs.CodePath, rs.Code)
+	fmt.Fprintf(&b, "DEV TEST FILE (%s):\n%s\n\n", rs.DevTestPath, rs.DevTestCode)
+	b.WriteString("Flag ONLY a test that is DEMONSTRABLY vacuous: it asserts nothing, its assertion is tautological (true regardless of the implementation), or it could not fail even if the code were broken in a way that violates the goal. Reason strictly from the CODE ABOVE — never guess a function's signature or behavior. If the code shows a call or argument is valid, it IS valid; do not flag a test for it.\n\n")
+	b.WriteString("Do NOT flag a test merely because it is narrow, checks one case, exercises an implementation detail, uses a mock, or does not fully cover the documented behavior — those are normal, not vacuous. If you are not certain a test is vacuous, do NOT flag it. Many suites have zero vacuous tests, and reporting none is the correct answer.\n\n")
+	b.WriteString("For each test you are certain is vacuous, file one finding: name the test and state exactly why it cannot fail. If none qualify, file nothing.\n")
 	return b.String()
 }
 

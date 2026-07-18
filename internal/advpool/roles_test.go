@@ -68,6 +68,16 @@ func TestBuildDAG(t *testing.T) {
 	if !strings.Contains(critic.Instruction, rs.DevTestCode) {
 		t.Fatalf("test-critic instruction does not reference the dev's tests:\n%s", critic.Instruction)
 	}
+	// The critic must be GROUNDED in the code under review, not just the tests —
+	// otherwise it speculates about the API and files false positives against
+	// valid tests (the tabulate() false-positive). It must also be calibrated
+	// to only flag the demonstrably vacuous.
+	if !strings.Contains(critic.Instruction, rs.Code) {
+		t.Fatalf("test-critic instruction must include the code under review (grounding against API-guess false positives):\n%s", critic.Instruction)
+	}
+	if !strings.Contains(critic.Instruction, "DEMONSTRABLY vacuous") {
+		t.Fatalf("test-critic instruction must be calibrated to flag ONLY the demonstrably vacuous:\n%s", critic.Instruction)
+	}
 
 	writer := specs[byKey[RoleTestWriter]]
 	if len(writer.DependsOn) != 1 || writer.DependsOn[0] != DevAdequacyKey {

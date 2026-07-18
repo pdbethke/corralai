@@ -382,17 +382,29 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 func loadRepoFiles(root string) (map[string]string, error) {
 	const maxFile = 1 << 20   // 1 MiB per file
 	const maxTotal = 64 << 20 // 64 MiB of text total
+	// os.Root confines every open to the repo dir: a symlink pointing outside
+	// the tree can't be followed, so a malicious checkout can't smuggle
+	// /etc/passwd into the jail workspace (gosec G122 / CWE-367 TOCTOU).
+	r, err := os.OpenRoot(root)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = r.Close() }()
+
 	files := make(map[string]string)
 	var total int64
-	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+	walkErr := fs.WalkDir(r.FS(), ".", func(rel string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
 			if d.Name() == ".git" {
-				return filepath.SkipDir
+				return fs.SkipDir
 			}
 			return nil
+		}
+		if d.Type()&fs.ModeSymlink != 0 {
+			return nil // never follow a symlink out of the repo
 		}
 		info, ierr := d.Info()
 		if ierr != nil {
@@ -401,7 +413,12 @@ func loadRepoFiles(root string) (map[string]string, error) {
 		if info.Size() > maxFile {
 			return nil
 		}
-		b, rerr := os.ReadFile(p) // #nosec G304 -- operator-supplied repo root, the point of --repo-dir
+		f, oerr := r.Open(rel) // root-scoped: cannot escape the repo dir
+		if oerr != nil {
+			return oerr
+		}
+		b, rerr := io.ReadAll(f)
+		_ = f.Close()
 		if rerr != nil {
 			return rerr
 		}
@@ -412,15 +429,11 @@ func loadRepoFiles(root string) (map[string]string, error) {
 		if total > maxTotal {
 			return fmt.Errorf("repo has more than %d MiB of text — too large to seed the jail workspace", maxTotal>>20)
 		}
-		rel, rerr := filepath.Rel(root, p)
-		if rerr != nil {
-			return rerr
-		}
-		files[filepath.ToSlash(rel)] = string(b)
+		files[rel] = string(b) // fs.WalkDir yields slash-separated paths
 		return nil
 	})
-	if err != nil {
-		return nil, err
+	if walkErr != nil {
+		return nil, walkErr
 	}
 	return files, nil
 }

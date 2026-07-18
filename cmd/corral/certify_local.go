@@ -80,7 +80,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	criticModel := fs.String("critic-model", "", "model for the test-critic role (default "+defaultLocalCriticModel+")")
 	mutantModel := fs.String("mutant-model", "", "model for the mutant-generator role (default "+defaultLocalMutantModel+")")
 	jailFlag := fs.String("jail", "", "sandbox backend: bwrap|container|sandbox-exec|none (default: auto-detect for this OS)")
-	timeout := fs.Duration("timeout", 10*time.Minute, "give up if the pool has not converged after this long")
+	timeout := fs.Duration("timeout", 10*time.Minute, "give up if the run makes no progress for this long (not a hard wall-clock cap — a single slow LLM call can overshoot it)")
 	poll := fs.Duration("poll", 2*time.Second, "how long to wait between drive iterations when nothing is claimable")
 	repoFlag := fs.String("repo", "", "repository (default: git remote.origin.url, else \"local\")")
 	commitFlag := fs.String("commit", "", "commit sha (default: git rev-parse HEAD, else \"local\")")
@@ -298,6 +298,17 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	return 3
 }
 
+// localTickMaxErrors mirrors internal/brain/advpool.go's advPoolTickMaxErrors:
+// the brain's tick loop tolerates up to this many CONSECUTIVE Tick errors on a
+// run before giving up, because the driver deliberately returns a Tick error
+// on RECOVERABLE conditions (an unparseable mutant-generator result or a
+// non-compiling test-writer result) after REOPENING the task so a fresh claim
+// re-prompts the model — see driver.go's tickDevAdequacy/tickPoolAdequacy
+// ReopenTask+"reissued for retry" paths. A --local run must tolerate the same
+// bound the brain does: giving up on the first such error would abort the
+// whole audit on a frontier model's common non-compiling first attempt.
+const localTickMaxErrors = 20
+
 // driveLocalRun is the in-process drive loop — the testable seam. It advances
 // the pure driver to convergence exactly the way the brain's tick loop + a
 // remote worker interoperate, but with BOTH sides in one process: Tick advances
@@ -309,18 +320,35 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 // once the survivors are known, so the two must interleave, never run one to
 // exhaustion before the other.
 //
+// A Tick error is tolerated up to localTickMaxErrors CONSECUTIVE times — the
+// same bound and "reissued for retry" tolerance internal/brain/advpool.go's
+// tick loop applies — because the driver has already reopened the offending
+// task, so the next drain re-claims and re-runs it. The counter resets to zero
+// on any Tick that makes progress (returns without error); only after
+// localTickMaxErrors CONSECUTIVE errors does the loop give up and return the
+// error (an infra failure, not a recoverable artifact).
+//
 // chatterFor maps a task's role to the model backend that runs it (injected so
-// tests can supply fakes). It returns the converged Verdict, or an error if a
-// role's LLM call failed or ctx expired before convergence.
+// tests can supply fakes). It returns the converged Verdict, or an error if
+// ctx expired before convergence, a role's LLM call failed outright, or Tick
+// errored localTickMaxErrors times in a row.
 func driveLocalRun(ctx context.Context, d *advpool.Driver, q *queue.Store, missionID int64, chatterFor func(role string) agentworker.Chatter, poll time.Duration, sleep func(time.Duration), progress io.Writer) (*advpool.Verdict, error) {
+	consecutiveTickErrors := 0
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, fmt.Errorf("timed out before the pool converged: %w", err)
 		}
 		verdict, err := d.Tick(ctx, missionID)
 		if err != nil {
-			return nil, err
+			consecutiveTickErrors++
+			fmt.Fprintf(progress, "certify --local: tick error, reissued for retry (%d/%d): %v\n", consecutiveTickErrors, localTickMaxErrors, err)
+			if consecutiveTickErrors >= localTickMaxErrors {
+				return nil, fmt.Errorf("giving up after %d consecutive tick errors: %w", localTickMaxErrors, err)
+			}
+			sleep(poll)
+			continue
 		}
+		consecutiveTickErrors = 0
 		if verdict != nil {
 			return verdict, nil
 		}
@@ -340,11 +368,13 @@ func driveLocalRun(ctx context.Context, d *advpool.Driver, q *queue.Store, missi
 // returning whether it ran at least one. Each claimed task is routed to the
 // in-process agentworker.RunRole for its role; a test-critic's findings are
 // stamped with the run/task/reporter context and filed on the queue BEFORE the
-// task is completed, so the driver's aggregate step sees them. A role LLM error
-// aborts the run (returned to the caller) rather than being silently retried
-// forever — the driver's own reopen-on-malformed-artifact path already handles
-// the legitimate retry case (a fresh claim re-prompts the model on the next
-// drain).
+// task is completed, so the driver's aggregate step sees them. A role LLM
+// error (the Chatter call itself failing, e.g. a network/API error) aborts the
+// run — that is not the recoverable case. The recoverable case (a malformed or
+// non-compiling artifact) is handled one layer up: the driver reopens the
+// task and returns an error from Tick, which driveLocalRun tolerates up to
+// localTickMaxErrors times, so the reopened task IS re-claimed and re-run here
+// on the next drain — a real retry, not just a reissue that nothing consumes.
 func runReadyTasks(ctx context.Context, q *queue.Store, missionID int64, chatterFor func(role string) agentworker.Chatter) (bool, error) {
 	ran := false
 	for {

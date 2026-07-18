@@ -3,11 +3,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -29,6 +32,29 @@ type cannedChatter struct{ content string }
 
 func (c cannedChatter) Chat(_ []agentworker.Message, _ []any) (agentworker.Message, error) {
 	return agentworker.Message{Role: "assistant", Content: c.content}, nil
+}
+
+// sequenceChatter replies with successive entries from replies on each call
+// (sticking on the last entry once exhausted) — used to make a role's FIRST
+// artifact a recoverable dud (e.g. non-compiling test-writer output) and its
+// RETRY the real thing, so a test can exercise the driver's
+// reopen-then-reissue path and driveLocalRun's tolerance of the resulting
+// Tick error.
+type sequenceChatter struct {
+	mu      sync.Mutex
+	replies []string
+	calls   int
+}
+
+func (c *sequenceChatter) Chat(_ []agentworker.Message, _ []any) (agentworker.Message, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	i := c.calls
+	if i >= len(c.replies) {
+		i = len(c.replies) - 1
+	}
+	c.calls++
+	return agentworker.Message{Role: "assistant", Content: c.replies[i]}, nil
 }
 
 // The hermetic Go target: a password validator whose goal is "≥ 12 chars", the
@@ -228,5 +254,136 @@ func TestDriveLocalRun_EndToEnd(t *testing.T) {
 	}
 	if !ok || stmt == nil {
 		t.Fatal("VerifyDSSE must succeed over the signed --local verdict record under the run's public key")
+	}
+}
+
+// A non-compiling first draft of the pool's test: syntactically broken (a
+// missing closing brace), so JailValidator.CompileTest rejects it and the
+// driver reopens the test-writer task — the RECOVERABLE condition this fix is
+// about (a frontier model's common non-compiling first attempt).
+const localWriterTestBroken = `package control
+
+import "testing"
+
+func TestPoolElevenCharsRejected(t *testing.T) {
+	if err := ValidatePassword("elevenchars"); err == nil {
+		t.Fatal("expected an error for an 11-char password")
+	}
+`
+
+// TestDriveLocalRun_TolerateOneRecoverableTickError proves the bug-fix: a
+// single non-compiling test-writer artifact — which makes the driver reopen
+// the task and Tick return an error ("reissued for retry") — must NOT abort
+// driveLocalRun. The retry (this test's sequenceChatter's second reply) is a
+// valid, compiling test, and the run must still converge to a signed
+// certified verdict, proving the reopened task really was re-claimed and
+// re-run, not just logged and dropped.
+//
+// Uses the same real-jail-or-skip pattern as TestDriveLocalRun_EndToEnd: the
+// tolerance only has something to exercise when JailValidator.CompileTest is
+// the REAL compiler rejecting the REAL broken source.
+func TestDriveLocalRun_TolerateOneRecoverableTickError(t *testing.T) {
+	iso, err := sandbox.Resolve(sandbox.Config{
+		Backend:    os.Getenv("CORRAL_TEST_JAIL"),
+		UnsafeHost: os.Getenv("AGENT_EXEC_UNSAFE_HOST") == "1",
+	})
+	if err != nil || iso == nil {
+		t.Skipf("no working sandbox jail on this host (%v) — --local refuses to run tests unsandboxed; skipping", err)
+	}
+	jail := adequacy.NewJail(iso, 120*time.Second)
+	if pass, rerr := jail.RunTest(context.Background(), nil, []string{"go", "version"}); rerr != nil || !pass {
+		t.Skipf("go toolchain not reachable inside the jail on this host (rerr=%v pass=%v) — likely a snap-packaged go outside /usr; skipping", rerr, pass)
+	}
+
+	dir := t.TempDir()
+	q, err := queue.Open(filepath.Join(dir, "queue.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = q.Close() })
+
+	bs, err := buildstore.Open(filepath.Join(dir, "build.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { bs.Close() })
+
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assign := advpool.RoleAssignment{
+		advpool.RoleMutantGenerator: "model-gen",
+		advpool.RoleTestWriter:      "model-writer",
+		advpool.RoleTestCritic:      "model-critic",
+	}
+	d, err := advpool.NewDriver(q, advpool.JailScorer{Jail: jail}, advpool.JailValidator{Jail: jail}, assign, 0.5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.Signer = advpool.CertSigner{Key: priv, Store: bs, Witness: nil}
+
+	rs := advpool.RunSpec{
+		Repo: "local", Commit: "local",
+		Goal:        "passwords must be at least 12 characters",
+		CodePath:    "validate.go",
+		Code:        localTargetCode,
+		DevTestPath: "validate_test.go",
+		DevTestCode: localDevTest,
+		NMutants:    3,
+		Lang:        "go",
+	}
+	const missionID = 8
+	if err := d.StartRun(missionID, rs, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	writerChatter := &sequenceChatter{replies: []string{localWriterTestBroken, localWriterTest}}
+	chatterFor := func(role string) agentworker.Chatter {
+		switch role {
+		case advpool.RoleMutantGenerator:
+			return cannedChatter{content: localMutants}
+		case advpool.RoleTestWriter:
+			return writerChatter
+		case advpool.RoleTestCritic:
+			return cannedChatter{content: "the dev tests exercise the boundary; no vacuous tests found"}
+		default:
+			return nil
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	var progress bytes.Buffer
+	verdict, err := driveLocalRun(ctx, d, q, missionID, chatterFor, time.Millisecond, func(time.Duration) {}, &progress)
+	if err != nil {
+		t.Fatalf("driveLocalRun: %v (progress log:\n%s)", err, progress.String())
+	}
+	if verdict == nil {
+		t.Fatal("expected a converged verdict, got nil")
+	}
+	if verdict.Status != advpool.StatusCertified {
+		t.Fatalf("Status = %q, want %q (one bad test-writer artifact must not abort the run)", verdict.Status, advpool.StatusCertified)
+	}
+	if writerChatter.calls < 2 {
+		t.Fatalf("writerChatter.calls = %d, want >= 2 (the reopened task must be re-claimed and re-run)", writerChatter.calls)
+	}
+	if !strings.Contains(progress.String(), "reissued for retry") {
+		t.Fatalf("expected the drive loop to log a reissued-for-retry line, got:\n%s", progress.String())
+	}
+
+	// The recovered run must still sign+verify like any other converged run.
+	rec, found, err := bs.Get(verdict.RecordID)
+	if err != nil || !found {
+		t.Fatalf("bs.Get(%d): found=%v err=%v", verdict.RecordID, found, err)
+	}
+	sig, ok := rec["signature"].(string)
+	if !ok || sig == "" {
+		t.Fatalf("stored record %d missing signature", verdict.RecordID)
+	}
+	if _, ok, verr := certify.VerifyDSSE([]byte(sig), pub); verr != nil || !ok {
+		t.Fatalf("VerifyDSSE: ok=%v err=%v", ok, verr)
 	}
 }

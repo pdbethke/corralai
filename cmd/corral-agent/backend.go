@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pdbethke/corralai/internal/agentworker"
 	"github.com/pdbethke/corralai/internal/creds"
 )
 
@@ -39,6 +40,41 @@ var ErrModelUnreachable = errors.New("model unreachable")
 //   - local:      vLLM / LM Studio / llama.cpp servers
 type Backend interface {
 	Chat(messages []omsg, tools []any) (omsg, error)
+}
+
+// backendChatter adapts a Backend to agentworker.Chatter so runTask can hand
+// its already-configured backend (ollama/openai/anthropic, with per-task
+// WithModel already applied) straight to agentworker.RunRole, without
+// changing the Backend interface or any of its implementations. It only
+// translates message/tool-call shapes (omsg/otoolcal <-> agentworker.Message/
+// ToolCall) — no behavior of its own.
+type backendChatter struct{ b Backend }
+
+func (c backendChatter) Chat(messages []agentworker.Message, tools []any) (agentworker.Message, error) {
+	oms := make([]omsg, len(messages))
+	for i, m := range messages {
+		oms[i] = omsg{Role: m.Role, Content: m.Content}
+		if len(m.ToolCalls) > 0 {
+			tcs := make([]otoolcal, len(m.ToolCalls))
+			for j, tc := range m.ToolCalls {
+				tcs[j].Function.Name = tc.Name
+				tcs[j].Function.Arguments = tc.Arguments
+			}
+			oms[i].ToolCalls = tcs
+		}
+	}
+	m, err := c.b.Chat(oms, tools)
+	if err != nil {
+		return agentworker.Message{}, err
+	}
+	out := agentworker.Message{Role: m.Role, Content: m.Content}
+	if len(m.ToolCalls) > 0 {
+		out.ToolCalls = make([]agentworker.ToolCall, len(m.ToolCalls))
+		for j, tc := range m.ToolCalls {
+			out.ToolCalls[j] = agentworker.ToolCall{Name: tc.Function.Name, Arguments: tc.Function.Arguments}
+		}
+	}
+	return out, nil
 }
 
 // modelSwitcher is an optional capability: backends that can serve more than

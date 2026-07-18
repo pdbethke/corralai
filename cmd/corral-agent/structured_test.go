@@ -63,9 +63,11 @@ func TestRunTaskStructuredRoleReturnsRawOutput(t *testing.T) {
 // (builder) is unaffected by the structured fast path — it drives the
 // existing general 15-step multi-step tool loop, calling backend.Chat once
 // per step until the model stops issuing tool calls. (test-critic is ALSO a
-// freeform role but has its OWN dedicated bounded loop as of the pool-critic
-// fix — see TestCriticLoopBoundsReportThought in critic_test.go — so builder
-// is used here to keep this test's claim about "the existing loop" true.)
+// freeform role but has its OWN dedicated bounded loop, extracted into
+// internal/agentworker's RunRole — see agentworker_test.go for its loop-bound
+// coverage and critic_test.go for this call site's brain-forwarding wiring —
+// so builder is used here to keep this test's claim about "the existing
+// loop" true.)
 func TestRunTaskFreeformRoleStillUsesLoop(t *testing.T) {
 	backend := &scriptedBackend{calls: []otoolcal{
 		toolCall("report_thought", map[string]any{"text": "reviewing the generated test for a tautological assertion"}),

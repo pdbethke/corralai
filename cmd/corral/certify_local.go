@@ -10,11 +10,13 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/user"
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/advpool"
@@ -87,6 +89,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	repoFlag := fs.String("repo", "", "repository (default: git remote.origin.url, else \"local\")")
 	commitFlag := fs.String("commit", "", "commit sha (default: git rev-parse HEAD, else \"local\")")
 	outFlag := fs.String("out", "", "also write the signed verdict as a self-contained record file, re-verifiable offline with `corral certify verify <file> --pubkey <hex> --allow-unanchored`")
+	repoDirFlag := fs.String("repo-dir", "", "audit --code IN THE CONTEXT of this cloned repo/package: the whole tree is seeded into the jail, the file is mutated in place, and the project's OWN test command (given after `--`) grades it — so real multi-file projects with package imports work (--code/--test are repo-relative)")
 	if err := fs.Parse(flagArgs); err != nil {
 		return 2
 	}
@@ -158,8 +161,19 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
+	// In --repo-dir mode, --code/--test are repo-relative (or absolute under the
+	// repo); the file lives inside the cloned tree. Resolve to filesystem paths
+	// for reading; the workspace keys are computed repo-relative below.
+	repoDir := strings.TrimSpace(*repoDirFlag)
+	fsPath := func(p string) string {
+		if repoDir == "" || filepath.IsAbs(p) {
+			return p
+		}
+		return filepath.Join(repoDir, p)
+	}
+
 	// Read the code + dev test.
-	code, err := os.ReadFile(*codePath) // #nosec G304 -- operator-supplied path to the file under review
+	code, err := os.ReadFile(fsPath(*codePath)) // #nosec G304 -- operator-supplied path to the file under review
 	if err != nil {
 		fmt.Fprintf(stderr, "corral certify --local: reading --code %s: %v\n", *codePath, err)
 		return 2
@@ -168,7 +182,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	if tp == "" {
 		tp = plug.TestPath(*codePath)
 	}
-	devTest, err := os.ReadFile(tp) // #nosec G304 -- operator-supplied (or sibling-derived) test path
+	devTest, err := os.ReadFile(fsPath(tp)) // #nosec G304 -- operator-supplied (or sibling-derived) test path
 	if err != nil {
 		fmt.Fprintf(stderr, "corral certify --local: reading test %s: %v (pass --test to override)\n", tp, err)
 		return 2
@@ -214,9 +228,52 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
+	// Resolve the workspace keys + jail-backed scorer/validator. Single-file mode
+	// keys by BASENAME (a flat scaffold; the adequacy jail refuses absolute/`..`
+	// keys, so an absolute --code must be normalized here). --repo-dir mode
+	// seeds the jail with the whole cloned tree and keys the file under audit by
+	// its REPO-RELATIVE path, so a mutant overwrites the real file in context
+	// and the project's own tests (which import the package) resolve.
+	var scorer advpool.JailScorer
+	var validator advpool.JailValidator
+	var codeKey, devTestKey string
+	if repoDir != "" {
+		if len(checkArgv) == 0 {
+			fmt.Fprintln(stderr, "corral certify --local: --repo-dir requires the project's own test command after `--`, e.g. `-- python3 -m pytest tests/test_recipes.py`")
+			return 2
+		}
+		repoFiles, lerr := loadRepoFiles(repoDir)
+		if lerr != nil {
+			fmt.Fprintf(stderr, "corral certify --local: reading --repo-dir %s: %v\n", repoDir, lerr)
+			return 2
+		}
+		ck, rerr := filepath.Rel(repoDir, fsPath(*codePath))
+		if rerr != nil || strings.HasPrefix(ck, "..") {
+			fmt.Fprintf(stderr, "corral certify --local: --code %s is not inside --repo-dir %s\n", *codePath, repoDir)
+			return 2
+		}
+		dk, rerr := filepath.Rel(repoDir, fsPath(tp))
+		if rerr != nil || strings.HasPrefix(dk, "..") {
+			fmt.Fprintf(stderr, "corral certify --local: --test %s is not inside --repo-dir %s\n", tp, repoDir)
+			return 2
+		}
+		codeKey, devTestKey = filepath.ToSlash(ck), filepath.ToSlash(dk)
+		// The just-read code/test are authoritative in the map (identical to the
+		// on-disk copy, but explicit so a mutant overlay targets the right key).
+		repoFiles[codeKey] = string(code)
+		repoFiles[devTestKey] = string(devTest)
+		scorer = advpool.JailScorer{Jail: jail, BaseFiles: repoFiles}
+		validator = advpool.JailValidator{Jail: jail, BaseFiles: repoFiles}
+	} else {
+		codeKey = filepath.Base(*codePath)
+		devTestKey = filepath.Base(tp)
+		scorer = advpool.JailScorer{Jail: jail}
+		validator = advpool.JailValidator{Jail: jail}
+	}
+
 	// Build the pure driver over the REAL jail-backed scorer/validator and the
 	// REAL certify-chain signer.
-	d, err := advpool.NewDriver(q, advpool.JailScorer{Jail: jail}, advpool.JailValidator{Jail: jail}, assign, localCertifyThreshold)
+	d, err := advpool.NewDriver(q, scorer, validator, assign, localCertifyThreshold)
 	if err != nil {
 		fmt.Fprintf(stderr, "corral certify --local: %v\n", err)
 		return 1
@@ -248,18 +305,6 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	if n <= 0 {
 		n = 5
 	}
-	// Key the jail workspace by BASENAME. A --local audit is a single, flat
-	// file set (code + its test + the language scaffold), and the adequacy
-	// scorer refuses absolute or `..` workspace keys as an anti-traversal
-	// measure (internal/adequacy/jail.go). A user naturally passes an absolute
-	// --code (the quickstart shows `--code path/to/file`), and the dev test is
-	// commonly its absolute sibling — left raw, every derived workspace key is
-	// absolute and the scorer fails closed after 20 retries. Normalize here,
-	// at the CLI boundary, rather than deep in the shared driver (the daemon
-	// path deliberately uses repo-relative subdirectory paths for multi-file
-	// repos, so this normalization belongs to --local alone).
-	codeKey := filepath.Base(*codePath)
-	devTestKey := filepath.Base(tp)
 	rs := advpool.RunSpec{
 		Repo: repo, Commit: commit, Goal: strings.TrimSpace(*goal),
 		CodePath: codeKey, Code: string(code),
@@ -325,6 +370,59 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 	return 3
+}
+
+// loadRepoFiles walks root and returns every regular text file keyed by its
+// slash-separated repo-relative path — the seed for --repo-dir's jail
+// workspace. It skips .git, files over 1 MiB (data/fixtures, not source), and
+// anything that isn't valid UTF-8 (binaries the text-only jail can't carry),
+// and caps the total so a huge checkout can't blow up the workspace. The keys
+// are exactly the paths a mutant overlay and the project's own test command
+// reference (e.g. `more_itertools/recipes.py`, `tests/test_recipes.py`).
+func loadRepoFiles(root string) (map[string]string, error) {
+	const maxFile = 1 << 20   // 1 MiB per file
+	const maxTotal = 64 << 20 // 64 MiB of text total
+	files := make(map[string]string)
+	var total int64
+	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if d.Name() == ".git" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		info, ierr := d.Info()
+		if ierr != nil {
+			return ierr
+		}
+		if info.Size() > maxFile {
+			return nil
+		}
+		b, rerr := os.ReadFile(p) // #nosec G304 -- operator-supplied repo root, the point of --repo-dir
+		if rerr != nil {
+			return rerr
+		}
+		if !utf8.Valid(b) {
+			return nil // binary — the jail workspace is text-only
+		}
+		total += int64(len(b))
+		if total > maxTotal {
+			return fmt.Errorf("repo has more than %d MiB of text — too large to seed the jail workspace", maxTotal>>20)
+		}
+		rel, rerr := filepath.Rel(root, p)
+		if rerr != nil {
+			return rerr
+		}
+		files[filepath.ToSlash(rel)] = string(b)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return files, nil
 }
 
 // writeLocalRecordFile exports the signed --local verdict as a self-contained

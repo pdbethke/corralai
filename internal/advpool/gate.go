@@ -89,19 +89,19 @@ func advPoolBase(codePath string) (base map[string]string, testCmd []string) {
 // kill rate, only what this Scorer actually observes running in the jail.
 type JailScorer struct {
 	Jail adequacy.Jail
+	// BaseFiles, when non-nil, switches the scorer into REPO-AWARE mode: the
+	// jail workspace is seeded with these files (a whole cloned repo/package,
+	// keyed by repo-relative path) instead of the synthetic single-file
+	// scaffold, `codePath` is the repo-relative path of the file under audit
+	// (so a mutant overwrites the real file IN CONTEXT), and the project's OWN
+	// test command (the run's TestCmd) grades it. The dev's tests already live
+	// in BaseFiles, so — unlike single-file mode — no synthetic dev-test is
+	// overlaid. nil preserves the exact single-file behavior byte-for-byte.
+	BaseFiles map[string]string
 }
 
 func (s JailScorer) Score(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (float64, []adequacy.Mutant, error) {
-	base, defaultCmd := advPoolBase(codePath)
-	cmd := strings.Fields(testCmd)
-	if len(cmd) == 0 {
-		cmd = defaultCmd
-	}
-	scoreBase := make(map[string]string, len(base)+1)
-	for k, v := range base {
-		scoreBase[k] = v
-	}
-	scoreBase[advPoolTestPath(codePath)] = test
+	scoreBase, cmd := s.scoreWorkspace(codePath, test, testCmd)
 
 	rep, err := adequacy.Score(ctx, s.Jail, scoreBase, codePath, code, mutants, cmd)
 	if err != nil {
@@ -118,6 +118,35 @@ func (s JailScorer) Score(ctx context.Context, codePath, code, test string, muta
 		}
 	}
 	return rep.KillRate(), survivors, nil
+}
+
+// scoreWorkspace builds the jail base file-map and the test command for a
+// scoring run. In single-file mode (BaseFiles nil) it reproduces the original
+// behavior exactly: the language scaffold plus the dev test overlaid at the
+// plugin's synthetic test path, defaulting the command to the plugin's when
+// the run carries none. In repo-aware mode (BaseFiles set) the whole repo IS
+// the base, the dev test already lives inside it (so `test` is NOT overlaid —
+// overlaying would shadow the real suite), and the run's own TestCmd (the
+// project's command) is authoritative — there is no synthetic default.
+func (s JailScorer) scoreWorkspace(codePath, test, testCmd string) (map[string]string, []string) {
+	if s.BaseFiles != nil {
+		base := make(map[string]string, len(s.BaseFiles))
+		for k, v := range s.BaseFiles {
+			base[k] = v
+		}
+		return base, strings.Fields(testCmd)
+	}
+	base, defaultCmd := advPoolBase(codePath)
+	cmd := strings.Fields(testCmd)
+	if len(cmd) == 0 {
+		cmd = defaultCmd
+	}
+	scoreBase := make(map[string]string, len(base)+1)
+	for k, v := range base {
+		scoreBase[k] = v
+	}
+	scoreBase[advPoolTestPath(codePath)] = test
+	return scoreBase, cmd
 }
 
 // JailValidator brain-side-validates a worker's structured artifacts before
@@ -138,6 +167,11 @@ func (s JailScorer) Score(ctx context.Context, codePath, code, test string, muta
 // covers whatever directory the files actually landed in.
 type JailValidator struct {
 	Jail adequacy.Jail
+	// BaseFiles mirrors JailScorer.BaseFiles: in repo-aware mode the authored
+	// test is compile-checked against the WHOLE repo (so a test that imports
+	// the package resolves), not the bare single-file scaffold. nil preserves
+	// the original single-file behavior.
+	BaseFiles map[string]string
 }
 
 func (v JailValidator) CompileTest(ctx context.Context, codePath, code, test string) error {
@@ -146,6 +180,9 @@ func (v JailValidator) CompileTest(ctx context.Context, codePath, code, test str
 		return err
 	}
 	base := p.Scaffold()
+	if v.BaseFiles != nil {
+		base = v.BaseFiles
+	}
 	ws := make(map[string]string, len(base)+2)
 	for k, val := range base {
 		ws[k] = val

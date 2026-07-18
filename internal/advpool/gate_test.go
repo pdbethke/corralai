@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -101,6 +102,52 @@ func TestAdvPoolBaseGoUnchanged(t *testing.T) {
 	base, cmd := advPoolBase("x/y.go")
 	if base["go.mod"] == "" || cmd[0] != "go" {
 		t.Fatalf("go base/cmd regressed: %v %v", base, cmd)
+	}
+}
+
+// TestScoreWorkspace_RepoModeSeedsRepoAndSkipsDevTestOverlay proves --repo-dir
+// mode: the WHOLE repo is the jail base, the project's own command is
+// authoritative (no synthetic default), and the dev-test arg is NOT overlaid
+// (the real suite already lives in the repo). It also proves the returned map
+// is a COPY, so a mutant overlay never mutates the shared BaseFiles.
+func TestScoreWorkspace_RepoModeSeedsRepoAndSkipsDevTestOverlay(t *testing.T) {
+	repo := map[string]string{
+		"more_itertools/recipes.py":  "def f():\n    return 1\n",
+		"more_itertools/__init__.py": "from .recipes import *\n",
+		"tests/test_recipes.py":      "import more_itertools\n",
+	}
+	s := JailScorer{BaseFiles: repo}
+	ws, cmd := s.scoreWorkspace("more_itertools/recipes.py", "DEV-TEST-MUST-NOT-APPEAR", "python3 -m pytest tests/test_recipes.py -q")
+
+	if len(ws) != len(repo) {
+		t.Fatalf("repo-mode base must equal the repo (%d files), got %d", len(repo), len(ws))
+	}
+	if got := strings.Join(cmd, " "); got != "python3 -m pytest tests/test_recipes.py -q" {
+		t.Fatalf("repo-mode must use the project command verbatim, got %q", got)
+	}
+	for k, v := range ws {
+		if strings.Contains(v, "DEV-TEST-MUST-NOT-APPEAR") {
+			t.Fatalf("repo mode must not overlay the dev-test arg (found at %q)", k)
+		}
+	}
+	ws["injected"] = "x"
+	if _, ok := repo["injected"]; ok {
+		t.Fatal("scoreWorkspace must copy BaseFiles, not alias it")
+	}
+}
+
+// TestScoreWorkspace_SingleFileModeUnchanged pins the original behavior: the
+// dev test IS overlaid at the plugin's synthetic test path and the command
+// defaults from the plugin when the run carries none.
+func TestScoreWorkspace_SingleFileModeUnchanged(t *testing.T) {
+	s := JailScorer{} // no BaseFiles -> single-file mode
+	ws, cmd := s.scoreWorkspace("passwd.py", "DEVTEST", "")
+	tp := advPoolTestPath("passwd.py")
+	if ws[tp] != "DEVTEST" {
+		t.Fatalf("single-file mode must overlay the dev test at %q; keys=%v", tp, ws)
+	}
+	if len(cmd) == 0 {
+		t.Fatal("single-file mode must default the test command from the plugin")
 	}
 }
 

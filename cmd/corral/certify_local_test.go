@@ -27,6 +27,54 @@ import (
 	"github.com/pdbethke/corralai/internal/transparency"
 )
 
+// TestLoadRepoFiles_SkipsGitBinaryAndKeysRepoRelative proves --repo-dir's repo
+// loader: it keys files by slash-separated repo-relative path, skips the .git
+// dir and non-UTF-8 (binary) files, and reads real source through.
+func TestLoadRepoFiles_SkipsGitBinaryAndKeysRepoRelative(t *testing.T) {
+	root := t.TempDir()
+	for _, d := range []string{"more_itertools", "tests", ".git"} {
+		if err := os.MkdirAll(filepath.Join(root, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write := func(rel string, b []byte) {
+		if err := os.WriteFile(filepath.Join(root, rel), b, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("more_itertools/recipes.py", []byte("def f():\n    return 1\n"))
+	write("tests/test_recipes.py", []byte("import more_itertools\n"))
+	write(".git/config", []byte("[core]\n"))
+	write("logo.bin", []byte{0xff, 0xfe, 0x00, 0x01}) // invalid UTF-8 -> skipped
+
+	files, err := loadRepoFiles(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := files["more_itertools/recipes.py"]; !ok {
+		t.Fatalf("expected more_itertools/recipes.py in the seed; got %v", keysOf(files))
+	}
+	if _, ok := files["tests/test_recipes.py"]; !ok {
+		t.Fatalf("expected tests/test_recipes.py in the seed; got %v", keysOf(files))
+	}
+	for k := range files {
+		if strings.HasPrefix(k, ".git/") || k == ".git" {
+			t.Fatalf(".git must be skipped, found %q", k)
+		}
+		if k == "logo.bin" {
+			t.Fatal("binary (non-UTF-8) files must be skipped")
+		}
+	}
+}
+
+func keysOf(m map[string]string) []string {
+	ks := make([]string, 0, len(m))
+	for k := range m {
+		ks = append(ks, k)
+	}
+	return ks
+}
+
 // TestWriteLocalRecordFile_RoundTripsThroughVerify proves the `--out` file a
 // --local run writes re-verifies through the EXACT offline path `corral certify
 // verify` uses: sign a verdict into the ledger (as the driver does), export it

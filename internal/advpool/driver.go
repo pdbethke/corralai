@@ -28,7 +28,7 @@ type Scorer interface {
 type Validator interface {
 	CompileTest(ctx context.Context, codePath, code, test string) error
 	ParseMutants(raw, original string) ([]adequacy.Mutant, error) // = testgen.ParseMutantsOutput (applies each SEARCH/REPLACE hunk to `original`)
-	ParseTest(raw string) string                        // = testgen.ParseTestOutput (strip fences/prose from a worker's raw test)
+	ParseTest(raw string) string                                  // = testgen.ParseTestOutput (strip fences/prose from a worker's raw test)
 }
 
 // Verdict status values. Never auto-certified: a blocking finding or a

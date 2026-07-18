@@ -21,7 +21,6 @@ import (
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/queue"
 	"github.com/pdbethke/corralai/internal/repoindex"
-	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
 // Decorrelation default (design 2026-07-18): two DISTINCT Claude models off a
@@ -171,13 +170,12 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	// Resolve the jail. NEVER fall back to unsandboxed — Resolve fails closed if
-	// the requested/auto backend can't isolate on this host, and so do we.
-	iso, err := sandbox.Resolve(sandbox.Config{Backend: strings.TrimSpace(*jailFlag)})
+	// Resolve the jail. NEVER fall back to unsandboxed — resolveLocalJail fails
+	// closed if the requested/auto backend can't isolate on this host (and
+	// refuses "none" outright), returning an actionable message.
+	iso, err := resolveLocalJail(*jailFlag)
 	if err != nil {
-		fmt.Fprintf(stderr, "corral certify --local: no working sandbox jail: %v\n", err)
-		fmt.Fprintln(stderr, "  the audit runs the dev's tests against mutants inside a sandbox; corral never runs them unsandboxed.")
-		fmt.Fprintln(stderr, "  try --jail container (needs docker/podman), or on Ubuntu enable unprivileged userns for bwrap.")
+		fmt.Fprintf(stderr, "corral certify --local: %v\n", err)
 		return 1
 	}
 	jail := adequacy.NewJail(iso, *timeout)

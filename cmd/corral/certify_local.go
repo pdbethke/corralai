@@ -78,7 +78,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	writerModel := fs.String("writer-model", "", "model for the test-writer role (default "+defaultLocalWriterModel+")")
 	criticModel := fs.String("critic-model", "", "model for the test-critic role (default "+defaultLocalCriticModel+")")
 	mutantModel := fs.String("mutant-model", "", "model for the mutant-generator role (default "+defaultLocalMutantModel+")")
-	jailFlag := fs.String("jail", "", "sandbox backend: bwrap|container|sandbox-exec|none (default: auto-detect for this OS)")
+	jailFlag := fs.String("jail", "", "sandbox backend: bwrap|container (Linux), sandbox-exec (macOS) (default: auto-detect for this OS; \"none\" is not supported — --local always sandboxes)")
 	timeout := fs.Duration("timeout", 10*time.Minute, "give up if the run makes no progress for this long (not a hard wall-clock cap — a single slow LLM call can overshoot it)")
 	poll := fs.Duration("poll", 2*time.Second, "how long to wait between drive iterations when nothing is claimable")
 	repoFlag := fs.String("repo", "", "repository (default: git remote.origin.url, else \"local\")")

@@ -1,0 +1,129 @@
+---
+title: "Your first audit, in detail"
+description: A real corral certify --local verdict, end to end — the code, the gap, the handed-back test, and the signed record.
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+
+This walks one real `corral certify --local` run start to finish, using the
+same password-validator example published in the field note
+["Terribly sorry to trouble you… but your tests, um, well. They suck, really"](/field-notes/your-tests-suck/).
+Nothing here is staged for the docs — it's the actual shape of a verdict this
+gate produced.
+
+## The code under review
+
+```go
+// SPDX-License-Identifier: Elastic-2.0
+package passwd
+
+import "unicode"
+
+// Valid reports whether p is a valid password: length >= 12 AND it contains an
+// uppercase letter, a lowercase letter, a digit, and a symbol.
+func Valid(p string) bool {
+	if len(p) < 12 {
+		return false
+	}
+	var up, lo, di, sy bool
+	for _, r := range p {
+		switch {
+		case unicode.IsUpper(r):
+			up = true
+		case unicode.IsLower(r):
+			lo = true
+		case unicode.IsDigit(r):
+			di = true
+		case unicode.IsPunct(r) || unicode.IsSymbol(r):
+			sy = true
+		}
+	}
+	return up && lo && di && sy
+}
+```
+
+## The developer's own test
+
+A test that only ever feeds a *valid* password:
+
+```go
+func TestGappy_ValidLength(t *testing.T) {
+	if !Valid("Abcdefgh1!xy") {
+		t.Fatal("a 12-char password was rejected")
+	}
+}
+func TestGappy_TooShort(t *testing.T) {
+	if Valid("Ab1!xyz") {
+		t.Fatal("a 7-char password was accepted")
+	}
+}
+```
+
+Green in CI. Looks reasonable — it checks a boundary (7 chars vs 12) and a
+happy-path accept.
+
+## Running it
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+
+corral certify --local \
+  --code passwd.go \
+  --test passwd_gappy_test.go \
+  --goal "Valid must require length >= 12, an uppercase letter, a lowercase letter, a digit, and a symbol" \
+  -- go test ./...
+```
+
+## What happens inside the jail
+
+1. **Preflight.** The Go toolchain is checked (`Preflight()` fails closed if
+   `go` isn't on the jail-visible `PATH`), and the sandbox backend is
+   resolved — `bwrap` by default on Linux, refusing to fall back to
+   unsandboxed if it can't start.
+2. **Mutants.** A mutant-generator model seeds goal-violating mutants into
+   `Valid` — dropping the digit check, weakening the length bound, flipping
+   the symbol test, and so on.
+3. **Dev kill-rate.** The **existing** test above is run, in the jail, against
+   every mutant. It only ever calls `Valid` with a password that already
+   satisfies every rule (or is simply too short) — so a mutant that *loosens*
+   a rule (say, dropping the digit requirement) still passes: the input never
+   exercised the rule it broke. Several mutants survive.
+4. **Test-writer.** For each surviving mutant, a test-writer model (a
+   different model than the critic, enforced — decorrelation isn't optional)
+   writes a targeted test and the jail confirms it kills the mutant, proving
+   the gap is real and catchable, not a fluke of the harness.
+5. **Test-critic.** A decorrelated critic model reads the dev's test file cold
+   and flags what it would have said in review: the suite never tries an
+   *invalid* password that's the right length.
+
+## The verdict
+
+```
+dev_kill_rate = 0.75   (killed 6 of 8 mutants, 2 survived)
+status: needs-review   (below the 0.8 certify bar)
+```
+
+Below the bar, so the run routes to a human instead of auto-certifying — the
+honest failure mode. The kill-rate is measured, not asserted: it's mutation
+testing executed in the sandbox, never the model's self-report of how good the
+test is.
+
+## The signed record
+
+The verdict is written to a local, tamper-evident ledger (the same certify
+chain `corral certify` and `corral certify verify` use for the non-`--local`
+path) and printed to stdout — subject (repo/commit), the models that played
+each role, the kill-rate, and the status. Verify it any time, fully offline:
+
+```bash
+corral certify verify <record>
+```
+
+## Try it on your own code
+
+Point `--code` and `--test` at a real file and its test, describe the
+guarantee in `--goal`, and pass whatever check command actually exercises it
+(`go test ./...`, `pytest`, `npm test`, …). See
+[Getting started](/docs/getting-started/) for the jail-visibility gotcha
+(system-installed toolchain, not a `--user`/snap install) and the
+Ubuntu-apparmor fix if `bwrap` won't start.

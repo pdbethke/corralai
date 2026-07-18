@@ -39,6 +39,7 @@ export default defineConfig({
           ],
         },
         { label: 'Getting started', slug: 'docs/getting-started' },
+        { label: 'Your first audit, in detail', slug: 'docs/first-audit' },
         {
           label: 'Concepts',
           items: [

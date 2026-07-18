@@ -21,10 +21,12 @@ the constraint everything below is built on. ([why it's the whole design](https:
 > `corral certify <ref> -- <cmd>` checks out that commit into a jail, runs `<cmd>`,
 > and writes a signed record you verify offline with `corral certify verify` — no
 > server required; `--brain` optionally posts it to a brain. This certifies the
-> change's **declared checks** — the control-owner tests are a later slice, and the
-> adversarial testing pool (below) is a separate, experimental, admin-triggered flow,
-> not yet wired to this CLI (see the
-> [design spec](docs/superpowers/specs/2026-07-13-corral-certify-cli-design.md)).
+> change's **declared checks** — the control-owner tests are a later slice.
+>
+> `corral certify --local` runs the **adversarial testing pool** itself — the
+> mutation-tested, decorrelated-critic audit described below — in one command,
+> in-process, off your own `$ANTHROPIC_API_KEY`, no brain/daemon/MCP required.
+> See the Quickstart for the exact invocation.
 
 **Corral is re-focusing from a builder to a reactive audit / certification gate —
 the CISO's tool, not another way to generate code.** The build-from-directive path
@@ -56,11 +58,13 @@ gate-earned — the best-performing model per role, per the live leaderboard —
 the loop actually closes: a certified run's outcome feeds that same leaderboard,
 so the next run routes better. Every converged run (certified or needs-review) is
 signed via the same certify chain as `report_build`; a low kill-rate or an open
-blocking finding always routes to **needs-review**, never auto-certified. What it
-does **not** yet do: no pentester role, no concurrent runs (one active run at a
-time), no CLI trigger (it's started via an admin-only `start_adversarial_run` MCP
-tool, not `corral certify`), and its certification threshold is a fixed constant
-today, not per-run configurable. The broader staffed verification engine and the
+blocking finding always routes to **needs-review**, never auto-certified. **`corral certify --local` is the CLI trigger for this audit** — no server, no
+MCP, just your own provider key (see Quickstart). The brain-hosted version of the
+same pool (for a repo already wired to a running brain) is still started via an
+admin-only `start_adversarial_run` MCP tool. What it does **not** yet do, either
+way: no pentester role, no concurrent runs (one active run at a time on a given
+brain), and its certification threshold is a fixed constant today, not per-run
+configurable. The broader staffed verification engine and the
 control-owner tests described in the spec remain **designed, not yet built** —
 don't expect more than the above from this README; this is the honest floor.
 Certify-by-execution now supports Go, Python (pytest), Ruby
@@ -428,7 +432,8 @@ requirements, and Go is the boring, correct answer to them:
 know.** The agents' tools are `write_file` and `run_command` (or, for harness agents
 like Claude Code, their own editors and shells): nothing about the pipeline is
 Go-specific. The `DEMO_DIRECTIVE` + `make demo-mission` invocations below describe
-that retired build-from-directive demo (see the Quickstart note above) and are
+that retired build-from-directive demo (see
+[deploy/demo/README.md](deploy/demo/README.md) for the retirement note) and are
 **not runnable today** — they're kept here to illustrate the language-agnostic
 intent for whoever re-points the demo at the gate:
 
@@ -444,6 +449,58 @@ the swarm; Go is just what the corral fence is made of.
 
 ## Quickstart
 
+The fastest way to see corral certify something is `--local`: one command, your
+own key, no daemon.
+
+```bash
+go install github.com/pdbethke/corralai/cmd/corral@latest
+export ANTHROPIC_API_KEY=sk-ant-...            # your own key
+
+corral certify --local \
+  --code path/to/your/file.go \
+  --goal "what this code must guarantee" \
+  -- go test ./...
+```
+
+That runs a full adversarial audit **in-process** — no brain daemon, no MCP, no
+worker fleet: a mutant-generator seeds goal-violating bugs into your code, your
+own test is scored against them **by execution, in a jail** (never a
+self-report), a test-writer proves any gap is real by writing (and killing) the
+test you were missing, and a decorrelated test-critic reads your suite cold. You
+get a signed verdict — `certified` or `needs-review` — printed to stdout and
+written to a local, tamper-evident ledger. Re-check it anytime, offline, with no
+network call:
+
+```bash
+corral certify verify <record>
+```
+
+By default the audit runs two distinct Claude models off that one
+`ANTHROPIC_API_KEY` (Sonnet writes/mutates, Haiku critiques) — decorrelation is
+satisfied with a single key; add a second vendor's key and pass `--critic-model`
+to cross a vendor boundary instead. It supports Go, Python (pytest), Ruby
+(minitest/RSpec), JavaScript (node:test), and TypeScript (tsc + node:test) —
+language inferred from `--code`'s extension.
+
+**The audit always runs sandboxed** (`bwrap` on Linux by default; `--jail
+container` for a docker/podman fallback; `sandbox-exec` on macOS) — there's no
+unsandboxed option. On Ubuntu 24.04+, apparmor disables unprivileged user
+namespaces by default and bwrap won't start; the CLI's error message spells out
+the exact one-line fix (or use `--jail container`). One gotcha that costs people
+an hour: the language toolchain has to be **jail-visible** — installed
+system-wide under `/usr` (e.g. your distro's `golang`/`python3` package), not a
+`--user`/snap/pyenv install invisible to the sandboxed mount namespace; a snap
+`go` or a `pip install --user pytest` won't be found once the command runs
+inside the jail.
+
+See **[the "first audit" walkthrough](https://corralai.dev/docs/first-audit/)**
+for a real verdict end to end.
+
+---
+
+Running the full brain instead of `--local` (the coordination substrate the
+gates below run inside of):
+
 ```bash
 go test ./...
 go run ./cmd/corral     # MCP /mcp/ · health /healthz · swarm UI / · on 127.0.0.1:9019
@@ -451,15 +508,6 @@ go run ./cmd/corral     # MCP /mcp/ · health /healthz · swarm UI / · on 127.0
 
 Open `http://127.0.0.1:9019/` for the live swarm + **Progress** tab (dev: auth
 off).
-
-> **`make demo-mission` describes the retired build-from-directive loop and does
-> not run today.** It seeded a mission via `corral-admin mission create`, a verb
-> removed in the 2026-07-13 re-focus to a reactive audit/certification gate (see
-> [`docs/superpowers/specs/2026-07-13-corral-refocus-audit-not-builder-design.md`](docs/superpowers/specs/2026-07-13-corral-refocus-audit-not-builder-design.md)).
-> The current live surface is the gate described above ("What runs today") — a
-> gate-oriented demo is a later slice, not shipped yet. See
-> **[deploy/demo/README.md](deploy/demo/README.md)** for the full retirement note
-> on that pipeline.
 
 Common knobs: `CORRALAI_OIDC_ISSUER`/`_AUDIENCE` (cross-machine auth) ·
 `CORRALAI_GIT_TOKEN` + `CORRALAI_FORGES` (repo-work / multi-forge) ·

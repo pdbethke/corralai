@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/pdbethke/corralai/internal/agentbackend"
 )
 
 // TestTaskModel is a table test on the pure selection helper: it must prefer
@@ -53,7 +55,7 @@ func TestRunTaskUsesAssignedModelWhenBackendCanSwitch(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	backend := &ollamaBackend{url: srv.URL, model: "qwen2.5-coder:7b"}
+	backend := agentbackend.NewOllamaBackend(srv.URL, "qwen2.5-coder:7b")
 	brain := func(tool string, args map[string]any) string { return `{"ok":true}` }
 
 	summary, err := runTask(context.Background(), backend, "test-agent", "builder",
@@ -68,8 +70,12 @@ func TestRunTaskUsesAssignedModelWhenBackendCanSwitch(t *testing.T) {
 		t.Errorf("summary should NOT carry a mismatch note when the backend honored the assignment; got %q", summary)
 	}
 	// The worker's own model default must be untouched by the per-task switch.
-	if backend.model != "qwen2.5-coder:7b" {
-		t.Errorf("original backend.model mutated to %q; WithModel must not mutate the receiver", backend.model)
+	ms, ok := backend.(modelSwitcher)
+	if !ok {
+		t.Fatal("ollama backend must implement modelSwitcher")
+	}
+	if ms.Model() != "qwen2.5-coder:7b" {
+		t.Errorf("original backend.Model() mutated to %q; WithModel must not mutate the receiver", ms.Model())
 	}
 }
 

@@ -459,7 +459,7 @@ export ANTHROPIC_API_KEY=sk-ant-...            # your own key
 corral certify --local \
   --code path/to/your/file.go \
   --goal "what this code must guarantee" \
-  -- go test ./...
+  --out verdict.json
 ```
 
 That runs a full adversarial audit **in-process** — no brain daemon, no MCP, no
@@ -468,12 +468,19 @@ own test is scored against them **by execution, in a jail** (never a
 self-report), a test-writer proves any gap is real by writing (and killing) the
 test you were missing, and a decorrelated test-critic reads your suite cold. You
 get a signed verdict — `certified` or `needs-review` — printed to stdout and
-written to a local, tamper-evident ledger. Re-check it anytime, offline, with no
-network call:
+written to a local, tamper-evident ledger. `--out` also writes the signed record
+as a self-contained file you can re-check anytime, offline, with no network call
+(the run prints this exact line, filled in with your key):
 
 ```bash
-corral certify verify <record>
+corral certify verify verdict.json --pubkey "$(corral certify pubkey)" --allow-unanchored
 ```
+
+`--allow-unanchored` is required because a `--local` record is signed by **your
+own** key but never submitted to a public transparency log — an honest "signed
+by you, not third-party witnessed" claim. The language and test command are
+inferred from `--code` (a sibling `_test` file, `go test ./...`, `pytest`, …);
+pass `--test`/`-- <cmd>` to override.
 
 By default the audit runs two distinct Claude models off that one
 `ANTHROPIC_API_KEY` (Sonnet writes/mutates, Haiku critiques) — decorrelation is
@@ -485,8 +492,17 @@ language inferred from `--code`'s extension.
 **The audit always runs sandboxed** (`bwrap` on Linux by default; `--jail
 container` for a docker/podman fallback; `sandbox-exec` on macOS) — there's no
 unsandboxed option. On Ubuntu 24.04+, apparmor disables unprivileged user
-namespaces by default and bwrap won't start; the CLI's error message spells out
-the exact one-line fix (or use `--jail container`). One gotcha that costs people
+namespaces by default and bwrap won't start (`bwrap: setting up uid map:
+Permission denied`); the CLI's error message spells out the exact one-line fix.
+The zero-sudo alternative is `--jail container` with a toolchain image —
+`export CORRALAI_EXEC_IMAGE=golang:1.26` (or `python:3`, `ruby:3`, `node:22`,
+matched to `--code`) — which runs the jailed test command inside that container
+instead:
+
+```bash
+export CORRALAI_EXEC_IMAGE=python:3
+corral certify --local --jail container --code app/passwd.py --goal "…" --out verdict.json
+``` One gotcha that costs people
 an hour: the language toolchain has to be **jail-visible** — installed
 system-wide under `/usr` (e.g. your distro's `golang`/`python3` package), not a
 `--user`/snap/pyenv install invisible to the sandboxed mount namespace; a snap

@@ -1,0 +1,66 @@
+---
+title: "We ran our own gate as a stranger (and it bit us)"
+description: "Nemo iudex in causa sua — no one may judge their own cause — is the whole thesis of the tool. So we pointed corral certify --local at a Python file as a first-time user, not as its authors. It caught the flaw it was built to catch. It also failed its own onboarding in a way only a stranger would ever hit: the absolute path our own README tells you to type. Here's the real run, the Frampton Flaw it found, and the two bugs we found in ourselves fixing it."
+pubDate: 2026-07-18
+draft: false
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+
+*Field note. The tool's one rule is that an author doesn't get to certify their own work. It turns out that rule has teeth when you point it back at the people who built it.*
+
+---
+
+## The rule, applied to us
+
+The entire pitch of this thing is four Latin words a law student would recognize: *nemo iudex in causa sua* — no one may be a judge in their own cause. The model that wrote the code doesn't get to certify it. The model that wrote the test doesn't get to grade it. Somebody decorrelated, with no stake, runs the check.
+
+Which is a slightly awkward principle to hold if you've never actually run your own tool the way a stranger would. We'd run `corral certify --local` plenty — from inside the repo, on the Go demo, with the paths and the muscle memory of the people who wrote it. That's not a user. That's an author grading their own homework. The exact thing we tell everyone not to trust.
+
+So we did the honest version: a **Python** file we'd never audited, on a fresh box, typing the command the way the README tells *you* to type it. Not Go — Python, because if the multi-language story is real it shouldn't matter, and because (as [an earlier note](/field-notes/your-tests-suck/) admits with some delight) Python is named after the circus this whole tool keeps quoting.
+
+## It found the Frampton Flaw
+
+The subject: a password validator that's supposed to require twelve characters *and* an uppercase, a lowercase, a digit, and a symbol. The dev's test — the kind everyone actually writes — feeds it one password that satisfies every rule at once and asserts it passes. Green. Ships.
+
+Here's the real verdict, signed, in about two minutes:
+
+```
+adversarial verdict — passwd.py @ local
+  language:      python
+  status:        NEEDS-REVIEW (dev suite killed 1/5 mutants)
+  dev_kill_rate: 0.20
+  survivors:     4         (bugs the dev's tests don't notice)
+  proven_missed: 4         (the herd wrote a test that catches each one)
+  vacuous tests: 5 flagged
+  models:        mutant-generator=claude-sonnet-5  test-critic=claude-haiku-4-5  test-writer=claude-sonnet-5
+  signed:        record 1
+```
+
+The critic — a *different* model from the one writing tests, because of the rule — filed this, cold:
+
+> *"test_accepts_a_valid_password passes a single password satisfying all four character-class requirements simultaneously. If any one requirement were deleted from the implementation, this test would still pass and would not catch the regression."*
+
+That is the **Frampton Flaw**, and it deserves the name. In the very first episode of *Monty Python's Flying Circus*, an interviewer has the scoop of the century sitting beside him and cannot force the obvious question past his own lips. The flaw everyone can see and no one will say. Your reviewer saw that a password test that only ever feeds a *valid* password can't notice when a rule is dropped. They saw it. And they typed "LGTM," because *"this test doesn't really test anything"* is a mortifying sentence to say to a colleague. The gate has no colleague, no standup, no capacity for embarrassment. It ran the missing test against the bug, watched it fail, and handed back the two tests the dev should have written. Signed.
+
+That part worked. First try, in a language the gate had never met on that box.
+
+## And then it failed its own onboarding
+
+Getting there as a stranger was another matter — and the most useful thing we learned is that **an author and a first user are not the same person, and the tool was built by authors.**
+
+Two walls, both real, both now fixed in the open:
+
+**The jail wall.** On a stock Ubuntu 24.04 laptop, the sandbox the audit runs in (`bwrap`) won't start at all — the distro disables unprivileged user namespaces by default, and you get `setting up uid map: Permission denied`. The tool fails *closed* here, which is correct — it will never run your untrusted code un-sandboxed — but a reader following the quickstart hits a wall on line one. The honest fix is a sentence we hadn't written: use `--jail container` with a toolchain image (Docker, no sudo), or install the apparmor profile. It's in the docs now.
+
+**The bug we'd left for exactly one kind of person: a stranger.** The audit kept failing, twenty times, with `refusing to write file outside workspace`. The cause is almost funny. Our own README tells you to run `--code path/to/your/file`. Pass an *absolute* path — the most natural thing in the world for a new user — and it broke, because the scorer keyed its jail workspace by the raw path and the jail's anti-traversal guard (correctly) refuses absolute keys. It had only ever worked because *we*, the authors, always passed a repo-relative path without thinking about it. The muscle memory that makes you fluent in your own tool is the exact thing that blinds you to its first-run experience.
+
+A gate whose entire job is to catch the flaw the author can't see, shipping with a first-run flaw its authors couldn't see. We'd have deserved the pan.
+
+## Fixed in the open
+
+Both are fixed. Absolute paths now normalize at the boundary. And because the run told you to "verify offline" but gave you no file to verify, `--local` now takes `--out` — it writes the signed record as a self-contained file that re-checks through the exact same offline verifier, and prints you the precise command (down to your public key). There's a test now that round-trips that file through verification, so this particular embarrassment doesn't recur.
+
+None of this is a triumph. It's the second time running our own tool honestly has found bugs in our own tool — the [last note](/field-notes/your-tests-suck/) said the same thing. That's not a coincidence; it's the method working. *Nemo iudex in causa sua* was never only about the code you're shipping. It's about the thing you're too fluent in to see. Including, especially, your own.
+
+If you want to point it at something you're too close to, it's one command and your own key. It might find your Frampton Flaw. Fair warning: it found ours.

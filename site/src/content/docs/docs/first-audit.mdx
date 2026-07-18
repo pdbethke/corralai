@@ -71,8 +71,14 @@ corral certify --local \
   --code passwd.go \
   --test passwd_gappy_test.go \
   --goal "Valid must require length >= 12, an uppercase letter, a lowercase letter, a digit, and a symbol" \
+  --out verdict.json \
   -- go test ./...
 ```
+
+`--code`/`--test` may be absolute or relative paths. On Ubuntu 24.04, if `bwrap`
+won't start (apparmor disables unprivileged user namespaces by default), add
+`--jail container` and `export CORRALAI_EXEC_IMAGE=golang:1.26` to run the
+jailed check in Docker instead — no sudo required.
 
 ## What happens inside the jail
 
@@ -111,13 +117,19 @@ test is.
 ## The signed record
 
 The verdict is written to a local, tamper-evident ledger (the same certify
-chain `corral certify` and `corral certify verify` use for the non-`--local`
-path) and printed to stdout — subject (repo/commit), the models that played
-each role, the kill-rate, and the status. Verify it any time, fully offline:
+chain `corral certify` uses for the non-`--local` path) and printed to stdout —
+subject (repo/commit), the models that played each role, the kill-rate, and the
+status. Because you passed `--out`, the signed record is also written as a
+self-contained file, which re-verifies any time, fully offline (the run prints
+this line for you, with your key filled in):
 
 ```bash
-corral certify verify <record>
+corral certify verify verdict.json --pubkey "$(corral certify pubkey)" --allow-unanchored
 ```
+
+`--allow-unanchored` is required: a `--local` record is signed by your own key
+but never submitted to a public transparency log, so verify makes you opt in to
+that weaker "signed-by-you, not third-party-witnessed" trust explicitly.
 
 ## Try it on your own code
 

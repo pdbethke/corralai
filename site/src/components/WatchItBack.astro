@@ -1,5 +1,9 @@
 ---
 // SPDX-License-Identifier: Elastic-2.0
+import { Image } from 'astro:assets';
+import cockpitImg from '../assets/ui-cockpit/audit-cockpit.png';
+import faultImg from '../assets/ui-cockpit/surviving-fault.png';
+import verdictImg from '../assets/ui-cockpit/signed-verdict.png';
 ---
 <section class="section" id="watch-it-back">
   <h2>Receipts, not a highlight reel</h2>
@@ -8,6 +12,53 @@
     hero you scrolled past is the exact same replay code you'd use to audit
     your own runs.
   </p>
+
+  <div class="ui-gallery">
+    <figure class="ui-fig ui-wide">
+      <Image
+        src={cockpitImg}
+        alt="The corral cockpit replaying an audit: a canvas of agents labeled mutant-generator, test-writer, and test-critic, with a task plan on the left and a findings panel on the right."
+        widths={[600, 900, 1200]}
+        sizes="(max-width: 900px) 100vw, 900px"
+        loading="lazy"
+      />
+      <figcaption>
+        The cockpit replaying the <code>passwd-gappy</code> audit. On the canvas,
+        the decorrelated herd&nbsp;— a <strong>mutant-generator</strong>, a <strong>test-writer</strong>, and a separate <strong>test-critic</strong>&nbsp;— not a builder in sight. One scrub bar drives the whole thing.
+      </figcaption>
+    </figure>
+
+    <figure class="ui-fig ui-tall">
+      <Image
+        src={faultImg}
+        alt="A task-story panel titled 'Generate seeded-violation mutants — DONE', showing the password validator source with the line 'if len(p) < 8 {' highlighted in red as the surviving planted fault, attributed to claude-writer."
+        widths={[430, 640]}
+        sizes="(max-width: 520px) 100vw, 430px"
+        loading="lazy"
+      />
+      <figcaption>
+        Click the mutant-generator's task and the surviving fault opens: the
+        planted bug — <code>len(p) &lt; 8</code>, quietly weakening the length
+        rule — highlighted against the original. The dev's tests passed anyway.
+      </figcaption>
+    </figure>
+
+    <figure class="ui-fig ui-wide">
+      <Image
+        src={verdictImg}
+        alt="The cockpit console showing the audit verdict: the critic's finding in plain English, then 'the dev's tests killed 4/8 planted faults — 4 survived (the gap)', then 'NEEDS-REVIEW: kill-rate 0.5, 4 survivors, 0 proven-missed — models mutant-generator=claude-sonnet-5 test-critic=gemini-3.5-flash test-writer=claude-sonnet-5 — signed record 11'."
+        widths={[600, 900, 1170]}
+        sizes="(max-width: 900px) 100vw, 900px"
+        loading="lazy"
+      />
+      <figcaption>
+        The verdict, in plain language: the suite killed 4 of 8 planted faults,
+        4 survived, and the record is <strong>signed</strong> — naming which
+        model played which role. Not a green check; a receipt.
+      </figcaption>
+    </figure>
+  </div>
+
   <p>
     Nothing about a finished audit is thrown away: every fault the herd
     planted, every test run against it, every kill and every survivor, each
@@ -46,4 +97,41 @@
 
 <style>
   .callout { color: var(--amber); font-weight: 600; }
+
+  .ui-gallery {
+    display: flex;
+    flex-direction: column;
+    gap: 1.75rem;
+    max-width: 940px;
+    margin: 2rem auto 2.25rem;
+  }
+  .ui-fig {
+    margin: 0;
+  }
+  .ui-fig img {
+    display: block;
+    width: 100%;
+    height: auto;
+    border-radius: 10px;
+    border: 1px solid color-mix(in srgb, currentColor 16%, transparent);
+    box-shadow: 0 10px 30px -18px rgba(0, 0, 0, 0.55);
+  }
+  /* The fault panel is a tall modal — don't blow it up to full width. */
+  .ui-tall img {
+    max-width: 430px;
+    margin: 0 auto;
+  }
+  .ui-fig figcaption {
+    margin-top: 0.7rem;
+    font-size: 0.9rem;
+    line-height: 1.55;
+    opacity: 0.82;
+    text-align: center;
+    max-width: 68ch;
+    margin-left: auto;
+    margin-right: auto;
+  }
+  .ui-fig figcaption code {
+    font-size: 0.86em;
+  }
 </style>

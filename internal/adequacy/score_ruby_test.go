@@ -21,9 +21,9 @@ import (
 // jail itself is unavailable on the host — ruby missing, no bwrap backend, a
 // Score error, or a compliant suite that doesn't pass in the jail (e.g.
 // bwrap userns/loopback blocked, surfaced as a non-zero exit rather than a Go
-// error). On THIS dev host bwrap's userns is blocked, so this test is
-// expected to SKIP here; it runs for real only where the jail works
-// (CI/Hetzner).
+// error). Ruby's minitest is stdlib (installed under /usr, jail-visible), so
+// wherever ruby is present and the jail's userns works, this test runs for
+// real end to end rather than skipping — it does not always skip.
 func TestScoreRubyKillsAndSurvives(t *testing.T) {
 	rb, ok := lang.ByName("ruby")
 	if !ok {

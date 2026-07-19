@@ -364,9 +364,15 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "swarm: %d concurrent workers (auto-sized to %d cores)\n", swarm, runtime.NumCPU())
 	}
 	if shards := advpool.ShardSymbols(sigs, rs.MaxShards); len(shards) > 0 {
-		fmt.Fprintf(stdout, "regions: %d generator seats over %d functions\n", len(shards), len(sigs))
-	} else {
+		packed := 0
+		for _, sh := range shards {
+			packed += len(sh.Symbols)
+		}
+		fmt.Fprintf(stdout, "regions: %d generator seats over %d functions\n", len(shards), packed)
+	} else if len(sigs) == 0 {
 		fmt.Fprintf(stdout, "regions: 1 generator seat (whole file — no symbol surface extracted)\n")
+	} else {
+		fmt.Fprintf(stdout, "regions: 1 generator seat (whole file — too few functions to split)\n")
 	}
 
 	verdict, err := driveLocalRun(ctx, d, q, localMissionID, chatterFor, *poll, time.Sleep, stdout, rec, actorFor, swarm)

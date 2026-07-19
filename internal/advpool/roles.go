@@ -158,8 +158,13 @@ func renderMutantGeneratorShard(rs RunSpec, sigs []repoindex.Signature, sh Shard
 	return renderMutantGenerator(aimed, filterSignatures(sigs, sh.Symbols), nil)
 }
 
-// filterSignatures keeps only the signatures naming one of want, preserving
-// input order, so a shard's prompt lists exactly the surface it is aimed at.
+// filterSignatures keeps only the signatures whose symbolIdentity is in
+// want, preserving input order, so a shard's prompt lists exactly the
+// surface it is aimed at. want holds qualified identities (symbolIdentity
+// output, e.g. "*Engine.String"), matching Shard.Symbols exactly — matching
+// on bare Signature.Name would conflate same-named methods on different
+// receivers, letting both leak into a shard whose "ATTACK ONLY THESE
+// FUNCTIONS" directive only meant one of them.
 func filterSignatures(sigs []repoindex.Signature, want []string) []repoindex.Signature {
 	keep := make(map[string]bool, len(want))
 	for _, w := range want {
@@ -167,7 +172,7 @@ func filterSignatures(sigs []repoindex.Signature, want []string) []repoindex.Sig
 	}
 	var out []repoindex.Signature
 	for _, s := range sigs {
-		if keep[s.Name] {
+		if keep[symbolIdentity(s)] {
 			out = append(out, s)
 		}
 	}

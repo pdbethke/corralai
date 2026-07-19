@@ -162,6 +162,32 @@ func TestShardSymbolsZeroComplexityIsDeterministic(t *testing.T) {
 	}
 }
 
+func TestShardSymbolsQualifiesMethodsByReceiver(t *testing.T) {
+	// (*Engine).String and (*Store).String share a bare Name; ShardSymbols must
+	// record a qualified identity for each so they remain distinguishable once
+	// packed into shards (a bare "String" would be ambiguous between them).
+	sigs := []repoindex.Signature{
+		{Name: "String", Receiver: "*Engine", Complexity: 1, Lines: 1},
+		{Name: "String", Receiver: "*Store", Complexity: 1, Lines: 1},
+		{Name: "Plain", Complexity: 1, Lines: 1}, // no receiver — a top-level function
+	}
+	shards := ShardSymbols(sigs, 3)
+	seen := map[string]bool{}
+	for _, s := range shards {
+		for _, name := range s.Symbols {
+			seen[name] = true
+		}
+	}
+	for _, want := range []string{"*Engine.String", "*Store.String", "Plain"} {
+		if !seen[want] {
+			t.Errorf("want symbol identity %q recorded in some shard, got %v", want, seen)
+		}
+	}
+	if seen["String"] {
+		t.Errorf("bare unqualified %q must not appear as a recorded symbol identity: %v", "String", seen)
+	}
+}
+
 func TestShardSymbolsSkipsUnnamedSymbols(t *testing.T) {
 	sigs := []repoindex.Signature{sig("a", 2, 4), sig("", 9, 30), sig("b", 2, 4)}
 	shards := ShardSymbols(sigs, 4)

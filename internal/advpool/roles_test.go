@@ -201,6 +201,35 @@ func TestBuildDAGShardedEmitsOneSpecPerShard(t *testing.T) {
 	}
 }
 
+func TestBuildDAGSameNamedMethodsOnDifferentReceiversStayDistinct(t *testing.T) {
+	// (*Engine).String and (*Store).String share a bare Name of "String". If
+	// shard packing/matching used the bare name, both signatures could leak
+	// into both shards' filtered signature list and aiming directive, making
+	// "ATTACK ONLY THESE FUNCTIONS: String" ambiguous about which one a seat
+	// owns. Force them into separate shards (maxShards == symbol count) and
+	// assert each shard's rendered instruction names only its own method.
+	rs := RunSpec{
+		Goal: "g", CodePath: "a.go", Lang: "go", MaxShards: 2,
+		Code: "package p\ntype Engine struct{}\nfunc (*Engine) String() string { return \"e\" }\ntype Store struct{}\nfunc (*Store) String() string { return \"s\" }\n",
+	}
+	sigs := []repoindex.Signature{
+		{Name: "String", Receiver: "*Engine", Complexity: 1, Lines: 1},
+		{Name: "String", Receiver: "*Store", Complexity: 1, Lines: 1},
+	}
+	assign := RoleAssignment{RoleMutantGenerator: "m", RoleTestWriter: "w", RoleTestCritic: "c"}
+	got := mutantSpecs(BuildDAG(rs, assign, sigs))
+	if len(got) != 2 {
+		t.Fatalf("want 2 mutant-generator specs, got %d", len(got))
+	}
+	for i, s := range got {
+		hasEngine := strings.Contains(s.Instruction, "*Engine.String")
+		hasStore := strings.Contains(s.Instruction, "*Store.String")
+		if hasEngine == hasStore {
+			t.Errorf("spec[%d] instruction must name exactly one of *Engine.String / *Store.String, got hasEngine=%v hasStore=%v:\n%s", i, hasEngine, hasStore, s.Instruction)
+		}
+	}
+}
+
 func TestShardTaskKeyRoundTrip(t *testing.T) {
 	if got := ShardTaskKey(3); got != "mutant-generator/3" {
 		t.Errorf("ShardTaskKey(3): want %q, got %q", "mutant-generator/3", got)

@@ -16,9 +16,30 @@ import (
 // tamper-evidence chain. Sharding changes AIM, not CONTEXT.
 type Shard struct {
 	Index      int
-	Symbols    []string
-	Complexity int // summed symbol complexity — the packing weight and the difficulty control
-	Lines      int // summed symbol line span
+	Symbols    []string // qualified identities from symbolIdentity, e.g. "*Engine.String" — never bare names, see symbolIdentity
+	Complexity int      // summed symbol complexity — the packing weight and the difficulty control
+	Lines      int      // summed symbol line span
+}
+
+// symbolIdentity is the ONE qualified identifier used both to record a
+// symbol into a Shard and to match it back out of a signature list
+// (filterSignatures in roles.go). A bare Signature.Name is not unique: Go
+// lets two methods on different receivers share a name — (*Engine).String
+// and (*Store).String both have Name == "String" — so packing and matching
+// by name alone can silently pack them into different shards while each
+// shard's aiming directive and filtered signature list still reference BOTH
+// of them ambiguously. Qualifying with the receiver when present closes
+// that gap and, as a side effect, makes the "ATTACK ONLY THESE FUNCTIONS"
+// prompt line unambiguous instead of just "String".
+//
+// The Python extractor only walks top-level function definitions and never
+// populates Receiver, so this is a no-op there — plain names pass through
+// unchanged.
+func symbolIdentity(s repoindex.Signature) string {
+	if s.Receiver != "" {
+		return s.Receiver + "." + s.Name
+	}
+	return s.Name
 }
 
 // ShardSymbols bin-packs sigs into at most maxShards balanced groups, or
@@ -39,8 +60,9 @@ type Shard struct {
 // per-shard comparison the metrics exist for.
 //
 // Packing is greedy hardest-first into the lightest bin. Deterministic: the
-// sort breaks ties by name, so the same input always yields the same shards
-// (a run must be reproducible, and shard index is a recorded metrics key).
+// sort breaks ties by qualified identity (symbolIdentity), so the same input
+// always yields the same shards (a run must be reproducible, and shard index
+// is a recorded metrics key).
 func ShardSymbols(sigs []repoindex.Signature, maxShards int) []Shard {
 	if maxShards <= 1 {
 		return nil
@@ -62,7 +84,7 @@ func ShardSymbols(sigs []repoindex.Signature, maxShards int) []Shard {
 		if named[i].Complexity != named[j].Complexity {
 			return named[i].Complexity > named[j].Complexity // hardest first
 		}
-		return named[i].Name < named[j].Name // deterministic tie-break
+		return symbolIdentity(named[i]) < symbolIdentity(named[j]) // deterministic tie-break
 	})
 
 	n := maxShards
@@ -85,7 +107,7 @@ func ShardSymbols(sigs []repoindex.Signature, maxShards int) []Shard {
 				lightest = i
 			}
 		}
-		shards[lightest].Symbols = append(shards[lightest].Symbols, s.Name)
+		shards[lightest].Symbols = append(shards[lightest].Symbols, symbolIdentity(s))
 		shards[lightest].Complexity += s.Complexity
 		shards[lightest].Lines += s.Lines
 	}

@@ -37,18 +37,6 @@ const (
 // spend. Dropping converges; the shortfall is recorded, never swallowed.
 const MaxShardRetries = 2
 
-// MaxShadowUnreachableAttempts bounds how many consecutive
-// claim→model-unreachable→release cycles a shadow (challenger) task may go
-// through before the caller abandons it as unmeasured rather than continuing
-// to hand it back to the fleet. A shadow seat is measurement only — it must
-// never gate the verdict — so an unservable challenger model (e.g. a fleet of
-// ollama-backed workers asked to run DefaultShadowModel, which they 404 on)
-// must give up rather than cycle claim→fail→release forever, which would
-// otherwise continuously consume workers the PRIMARY shards need to converge.
-// See cmd/corral-agent's handleTaskError, which completes the task with
-// ShadowProviderFailedResult once this is exceeded.
-const MaxShadowUnreachableAttempts = 3
-
 // Role is a role defined as data: a prompt-render, a result contract
 // (Structured vs freeform-findings), and its DAG deps. New adversarial
 // roles compose by adding an entry here — no new driver plumbing.

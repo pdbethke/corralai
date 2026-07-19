@@ -385,9 +385,16 @@ agent underperform."
   exists once shadow tasks are dispatched onto a REAL, heterogeneous remote
   worker fleet, which `--local`'s single in-process worker never exercises
   (fixed: `cmd/corral-agent`'s `handleTaskError` now abandons a shadow seat
-  as unmeasured, via `advpool.ShadowProviderFailedResult`, after
-  `advpool.MaxShadowUnreachableAttempts` consecutive failures, tracked
-  server-side per task id via a new `bump_unreachable_attempts` brain tool).
+  as unmeasured, via `advpool.ShadowProviderFailedResult`, on the FIRST such
+  failure. An earlier version of this fix tracked consecutive failures
+  server-side per task id via a new `bump_unreachable_attempts` brain tool
+  before abandoning — that tool shipped with no authorization (its handler
+  discarded the caller's identity, so any principal could bump the counter
+  for a task it never claimed) and an unbounded process-wide map, and was
+  removed rather than gated: a shadow seat is measurement that can never
+  gate a verdict, so losing one region's comparison to a single
+  unreachable-model failure is far cheaper than an ungated mutator in the
+  control plane).
   `MaxShards` is additionally ceilinged at `maxAdvPoolShards` for a hosted
   run (`internal/brain/advpool.go`), closing a related cost-escape-hatch gap
   the floor-of-one-mutant-per-shard clamp had. With those closed, "the first

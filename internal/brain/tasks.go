@@ -101,9 +101,6 @@ type listFindingsOut struct {
 type taskIDIn struct {
 	ID int64 `json:"id" jsonschema:"the task id"`
 }
-type unreachableAttemptsOut struct {
-	Attempts int `json:"attempts"` // running count of consecutive model-unreachable failures for this task id
-}
 type cancelIn struct {
 	ID      int64 `json:"id" jsonschema:"the task id"`
 	Cascade bool  `json:"cascade,omitempty" jsonschema:"also cancel every live task that depends on it (the whole subtree)"`
@@ -211,18 +208,6 @@ func registerTasks(s *mcp.Server, store *coord.Store, q *queue.Store, lease floa
 	}
 	var refusalMu sync.Mutex
 	refusals := map[refusalKey]int{}
-
-	// unreachableAttempts counts consecutive model-unreachable claim/release
-	// cycles PER TASK ID, across whichever bee(s) attempt it — a shadow seat
-	// starving an all-ollama fleet is a fleet-wide problem, not a per-worker
-	// one, so the bound must live where every claimant's failures land, not
-	// in any one worker process. In-memory, mirroring the `refusals` map
-	// above: a brain restart resetting the tally is harmless (a live loop
-	// re-trips it within MaxShadowUnreachableAttempts claims), and it keeps
-	// this state free of a schema migration for what is, today, one active
-	// run's worth of shadow seats.
-	var unreachableMu sync.Mutex
-	unreachableAttempts := map[int64]int{}
 
 	// escalateRefusalLoop is bug-#40 part 2: convert a silent verify-refusal
 	// livelock into visible, recoverable state. Force-release path leases whose
@@ -412,16 +397,6 @@ func registerTasks(s *mcp.Server, store *coord.Store, q *queue.Store, lease floa
 					map[string]any{"type": fi.Type, "severity": fi.Severity})
 			}
 			return nil, completeTaskOut{OK: ok}, nil
-		})
-
-	mcp.AddTool(s, &mcp.Tool{Name: "bump_unreachable_attempts",
-		Description: "Record one more consecutive model-unreachable failure for a claimed task id and return the running count. Used by handleTaskError to bound how many times a shadow (mutant-generator-shadow) seat may cycle claim/fail/release before the caller abandons it as unmeasured, rather than letting an unservable challenger model starve the fleet's primary work forever — see advpool.MaxShadowUnreachableAttempts."},
-		func(_ context.Context, _ *mcp.CallToolRequest, in taskIDIn) (*mcp.CallToolResult, unreachableAttemptsOut, error) {
-			unreachableMu.Lock()
-			unreachableAttempts[in.ID]++
-			n := unreachableAttempts[in.ID]
-			unreachableMu.Unlock()
-			return nil, unreachableAttemptsOut{Attempts: n}, nil
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "report_finding",

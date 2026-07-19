@@ -428,8 +428,14 @@ func runQueueLoop(ctx context.Context, backend Backend, name, role string, rs ag
 		taskStart := time.Now()
 		summary, taskErr := runTask(ctx, backend, name, effRole, ws, brain, tools, out.Task.MissionID, out.Task.ID, out.Task.Title, instruction, mir, bc, out.Task.Model)
 		fmt.Printf("[%s/%s] task #%d ran %s\n", name, role, out.Task.ID, time.Since(taskStart).Round(time.Second))
-		if handleTaskError(out.Task.ID, out.Task.MissionID, effRole, modelDesc, taskErr, brain) {
+		switch handleTaskError(out.Task.ID, out.Task.MissionID, effRole, modelDesc, taskErr, brain) {
+		case releasedForReclaim:
 			fmt.Printf("[%s/%s] ⨯ model unreachable on task #%d — released claim; reaper will reassign\n",
+				name, role, out.Task.ID)
+			time.Sleep(5 * time.Second) // brief backoff: avoid re-claiming immediately
+			continue
+		case abandonedUnmeasured:
+			fmt.Printf("[%s/%s] ⨯ model unreachable on task #%d — shadow seat abandoned as unmeasured (no reassignment)\n",
 				name, role, out.Task.ID)
 			time.Sleep(5 * time.Second) // brief backoff: avoid re-claiming immediately
 			continue
@@ -591,21 +597,22 @@ func isStructuredRole(role string) bool {
 	return role == "test-writer" || role == "mutant-generator" || role == roleMutantGeneratorShadow
 }
 
-// roleMutantGeneratorShadow / shadowProviderFailedResult /
-// shadowUnreachableMaxAttempts mirror advpool.RoleMutantGeneratorShadow /
-// advpool.ShadowProviderFailedResult / advpool.MaxShadowUnreachableAttempts
-// as bare local constants rather than an import of package advpool: advpool
+// roleMutantGeneratorShadow / shadowProviderFailedResult mirror
+// advpool.RoleMutantGeneratorShadow / advpool.ShadowProviderFailedResult as
+// bare local constants rather than an import of package advpool: advpool
 // pulls in internal/buildstore (the DuckDB-backed signed-record ledger, for
 // CertSigner) as a whole-package dependency, and corral-agent must stay
 // duckdb-free (`go list -deps ./cmd/corral-agent | grep -c duckdb` == 0 is an
 // enforced constraint — the remote worker binary has no business linking the
 // brain's ledger store). This is the same constraint isStructuredRole's own
-// "mutant-generator-shadow" literal above already lives under; keep all
-// three in sync with their advpool counterparts by hand.
+// "mutant-generator-shadow" literal above already lives under; keep both in
+// sync with their advpool counterparts by hand — a `TestMirroredConstants*`
+// in this package imports internal/advpool (test-only, so it never reaches
+// the shipped binary — see the duckdb-free assertion below) and fails loudly
+// on drift instead of silently mismatching the driver's sentinel.
 const (
-	roleMutantGeneratorShadow    = "mutant-generator-shadow"
-	shadowProviderFailedResult   = "\x00shadow-provider-call-failed\x00"
-	shadowUnreachableMaxAttempts = 3
+	roleMutantGeneratorShadow  = "mutant-generator-shadow"
+	shadowProviderFailedResult = "\x00shadow-provider-call-failed\x00"
 )
 
 // isPoolCriticRole is the adversarial pool's freeform critic. Unlike a builder
@@ -627,10 +634,30 @@ func effectiveTaskRole(taskRole, workerRole string) string {
 	return workerRole
 }
 
-// handleTaskError is called when runTask returns a non-nil error. Returns true when
-// the caller should skip complete_task and continue the loop (the claim was either
-// released for reclaim, or the task was completed as abandoned — see below).
-// Extracted for testability — the queue loop calls this immediately after runTask.
+// taskErrorOutcome reports what handleTaskError actually did about an
+// ErrModelUnreachable failure, so the caller can log accurately (a released
+// claim WILL be reassigned by the reaper; an abandoned shadow seat will not)
+// instead of printing one blanket message for both.
+type taskErrorOutcome int
+
+const (
+	// notHandled means err wasn't ErrModelUnreachable — the caller proceeds
+	// with its normal complete_task path.
+	notHandled taskErrorOutcome = iota
+	// releasedForReclaim means the claim was released; the reaper will hand
+	// it to another (hopefully reachable-model) bee once the lease expires.
+	releasedForReclaim
+	// abandonedUnmeasured means a shadow seat completed itself with
+	// shadowProviderFailedResult — nothing was released, nothing will be
+	// reassigned, and the run records the seat unmeasured.
+	abandonedUnmeasured
+)
+
+// handleTaskError is called when runTask returns a non-nil error. Returns
+// notHandled when the caller should proceed with its own complete_task path,
+// and releasedForReclaim/abandonedUnmeasured when the caller should skip
+// complete_task and continue the loop instead. Extracted for testability —
+// the queue loop calls this immediately after runTask.
 //
 // Currently only ErrModelUnreachable triggers a release+report; all other errors
 // leave the caller to handle (or ignore, preserving the pre-existing behaviour).
@@ -648,38 +675,50 @@ func effectiveTaskRole(taskRole, workerRole string) string {
 // claim→404→release→reclaim forever — every such cycle consumes a worker the
 // PRIMARY shards need to converge, and tickDevAdequacy blocks until every
 // primary shard is terminal while ClaimNextAs is plain FIFO with no role
-// priority to protect them. bump_unreachable_attempts tracks the count
-// PER TASK ID server-side (across whichever bee(s) attempt it — the failure
-// is fleet-wide, not this one worker's), and once it exceeds
-// advpool.MaxShadowUnreachableAttempts this completes the task itself with
-// advpool.ShadowProviderFailedResult — the SAME sentinel the driver already
-// recognizes as "the provider was never successfully asked" (see
-// runShadowPass/ShadowProviderFailedResult's doc): the run records the seat
-// UNMEASURED, never a fabricated zero-yield row, and the primary shards are
-// freed of a seat that was never going to succeed.
-func handleTaskError(taskID, missionID int64, role, modelDesc string, err error, brain func(string, map[string]any) string) bool {
+// priority to protect them.
+//
+// This used to count consecutive failures server-side (a brain tool,
+// bump_unreachable_attempts) and only abandon once a cap was exceeded. That
+// tool shipped with no authorization at all — its handler discarded the
+// caller's identity, so any principal reaching the MCP surface could bump the
+// counter for a task it never claimed, in any mission, and the backing map
+// was never scoped or cleaned up. Rather than gate an ungated mutator, the
+// need for shared state is removed entirely: a shadow seat is measurement
+// that can never gate a verdict, so losing one region's comparison to a
+// single unreachable-model failure is far cheaper than keeping a
+// process-wide, unauthenticated counter in the control plane. handleTaskError
+// now abandons a shadow-role task on the FIRST ErrModelUnreachable, completing
+// it itself with advpool.ShadowProviderFailedResult — the SAME sentinel the
+// driver already recognizes as "the provider was never successfully asked"
+// (see runShadowPass/ShadowProviderFailedResult's doc): the run records the
+// seat UNMEASURED, never a fabricated zero-yield row, and the primary shards
+// are freed of a seat that was never going to succeed. A non-shadow task's
+// error handling is unchanged: it always releases for reclaim.
+func handleTaskError(taskID, missionID int64, role, modelDesc string, err error, brain func(string, map[string]any) string) taskErrorOutcome {
 	if !errors.Is(err, ErrModelUnreachable) {
-		return false
+		return notHandled
 	}
 	if role == roleMutantGeneratorShadow {
-		raw := brain("bump_unreachable_attempts", map[string]any{"id": taskID})
+		raw := brain("complete_task", map[string]any{"id": taskID, "result": shadowProviderFailedResult})
 		var out struct {
-			Attempts int `json:"attempts"`
+			OK bool `json:"ok"`
 		}
-		_ = json.Unmarshal([]byte(raw), &out)
-		if out.Attempts > shadowUnreachableMaxAttempts {
-			brain("complete_task", map[string]any{"id": taskID, "result": shadowProviderFailedResult})
-			brain("report_finding", map[string]any{
-				"mission_id":       missionID,
-				"task_id":          taskID,
-				"type":             "ops",
-				"severity":         "low",
-				"target":           fmt.Sprintf("task#%d model", taskID),
-				"evidence":         fmt.Sprintf("shadow seat abandoned as unmeasured after %d consecutive model-unreachable failures (%s) — never gated the verdict", out.Attempts, modelDesc),
-				"suggested_action": "measurement only, no verdict impact — check whether the fleet can actually serve the configured shadow model",
-			})
-			return true
+		if jerr := json.Unmarshal([]byte(raw), &out); jerr != nil || !out.OK {
+			// The claim may already have been reaped out from under us (lease
+			// expired, another bee reclaimed it) — say so honestly rather than
+			// silently reporting success while the task is actually still live.
+			fmt.Printf("⚠ task #%d: complete_task (abandon shadow seat as unmeasured) did not confirm ok — raw=%.200s\n", taskID, raw)
 		}
+		brain("report_finding", map[string]any{
+			"mission_id":       missionID,
+			"task_id":          taskID,
+			"type":             "ops",
+			"severity":         "low",
+			"target":           fmt.Sprintf("task#%d model", taskID),
+			"evidence":         fmt.Sprintf("shadow seat abandoned as unmeasured after a model-unreachable failure (%s) — never gated the verdict", modelDesc),
+			"suggested_action": "measurement only, no verdict impact — check whether the fleet can actually serve the configured shadow model",
+		})
+		return abandonedUnmeasured
 	}
 	brain("release_claims", map[string]any{})
 	brain("report_finding", map[string]any{
@@ -691,7 +730,7 @@ func handleTaskError(taskID, missionID int64, role, modelDesc string, err error,
 		"evidence":         fmt.Sprintf("model unreachable (%s); claim released for reaper re-assignment", modelDesc),
 		"suggested_action": "another agent with a reachable model will reclaim once the lease expires",
 	})
-	return true
+	return releasedForReclaim
 }
 
 // runTask drives the LLM to carry out one queued task, coordinating file edits

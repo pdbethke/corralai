@@ -401,53 +401,6 @@ func TestClaimTaskThrottlesReclaimedAgent(t *testing.T) {
 	}
 }
 
-// TestBumpUnreachableAttemptsIncrementsPerTaskAcrossBees proves the
-// bump_unreachable_attempts counter is tracked PER TASK ID, not per caller —
-// a shadow seat cycling across several different bees (the actual fleet
-// failure mode: claim, 404, release, a DIFFERENT worker reclaims and 404s
-// again) must still accumulate against the same running count, since the
-// bound cmd/corral-agent's handleTaskError applies exists to stop the SEAT
-// from starving the fleet regardless of which bee is currently failing it.
-func TestBumpUnreachableAttemptsIncrementsPerTaskAcrossBees(t *testing.T) {
-	dir := t.TempDir()
-	q, err := queue.Open(filepath.Join(dir, "q.sqlite3"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { q.Close() })
-
-	ctx := context.Background()
-	clientT, serverT := mcp.NewInMemoryTransports()
-	go func() { _ = NewServer(nil, nil, Options{Queue: q}).Run(ctx, serverT) }()
-	client := mcp.NewClient(&mcp.Implementation{Name: "bee", Version: "0"}, nil)
-	sess, err := client.Connect(ctx, clientT, nil)
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	defer sess.Close()
-
-	var out unreachableAttemptsOut
-	callTask(t, sess, "bump_unreachable_attempts", map[string]any{"id": 99}, &out)
-	if out.Attempts != 1 {
-		t.Fatalf("first bump: attempts = %d, want 1", out.Attempts)
-	}
-	callTask(t, sess, "bump_unreachable_attempts", map[string]any{"id": 99}, &out)
-	if out.Attempts != 2 {
-		t.Fatalf("second bump (a different bee failing the SAME task id): attempts = %d, want 2", out.Attempts)
-	}
-
-	// A DIFFERENT task id has its own independent counter.
-	var other unreachableAttemptsOut
-	callTask(t, sess, "bump_unreachable_attempts", map[string]any{"id": 100}, &other)
-	if other.Attempts != 1 {
-		t.Fatalf("a different task id must start its own count at 1, got %d", other.Attempts)
-	}
-	callTask(t, sess, "bump_unreachable_attempts", map[string]any{"id": 99}, &out)
-	if out.Attempts != 3 {
-		t.Fatalf("task 99's count must be unaffected by task 100's bumps: attempts = %d, want 3", out.Attempts)
-	}
-}
-
 func callTask(t *testing.T, sess *mcp.ClientSession, name string, args map[string]any, out any) {
 	t.Helper()
 	res, err := sess.CallTool(context.Background(), &mcp.CallToolParams{Name: name, Arguments: args})

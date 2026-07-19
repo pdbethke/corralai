@@ -4,6 +4,7 @@ package brain
 
 import (
 	"context"
+	"crypto/ed25519"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/bugcatch"
+	"github.com/pdbethke/corralai/internal/buildstore"
 	"github.com/pdbethke/corralai/internal/coord"
 	"github.com/pdbethke/corralai/internal/memory"
 	"github.com/pdbethke/corralai/internal/mission"
@@ -1099,4 +1101,66 @@ func TestResolveAdvPoolRunDeadline(t *testing.T) {
 			t.Fatalf("hosted widening (%s) diverged from the shared advpool.ResolveRunDeadline (%s) — the CLI and the daemon must agree", got, want)
 		}
 	})
+}
+
+// TestStartAdversarialPool_RunDeadlineCallSitePinned is the CRITICAL fix this
+// test pins: TestResolveAdvPoolRunDeadline only tests the pure helper in
+// isolation — nothing asserts StartAdversarialPool's wiring actually CALLS
+// it and assigns the result back to driver.RunDeadline. A silent regression
+// (e.g. swapping `driver.RunDeadline = resolveAdvPoolRunDeadline(...)` for
+// `_ = resolveAdvPoolRunDeadline(...)`, discarding the result) would leave
+// the whole suite green otherwise. That widening is what stops shadow work
+// from pushing a hosted run past its deadline and forcing a signed
+// needs-review verdict — i.e. shadow (measurement that must never gate a
+// verdict) changing the Status via the deadline channel. Mirrors
+// TestAdvPoolStartRun_ClampCallSitePinned's shape for the sibling call-site
+// defect (the mutant clamp).
+func TestStartAdversarialPool_RunDeadlineCallSitePinned(t *testing.T) {
+	t.Setenv("CORRALAI_ADVPOOL_RUN_DEADLINE_S", "90")
+	t.Setenv("CORRALAI_ADVPOOL_SHADOW_MODEL", advpool.DefaultShadowModel)
+
+	dir := t.TempDir()
+	q, err := queue.Open(filepath.Join(dir, "q.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = q.Close() })
+	ms, err := mission.Open(filepath.Join(dir, "m.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ms.Close() })
+	bs, err := buildstore.Open(filepath.Join(dir, "build.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { bs.Close() })
+	_, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	rt, err := StartAdversarialPool(ctx, Options{
+		GateBackend: shellIsolator{},
+		Missions:    ms,
+		Queue:       q,
+		CertifyKey:  priv,
+		BuildStore:  bs,
+	})
+	if err != nil {
+		t.Fatalf("StartAdversarialPool: %v", err)
+	}
+	if rt == nil {
+		t.Fatal("expected a non-nil runtime — all required Options are set")
+	}
+
+	base := 90 * time.Second
+	want := base + advpool.ShadowTimeBudget(base)
+	if rt.driver.RunDeadline != want {
+		t.Fatalf("driver.RunDeadline = %s, want %s (CORRALAI_ADVPOOL_RUN_DEADLINE_S base %s widened by ShadowTimeBudget for the configured daemon shadow model) — the resolveAdvPoolRunDeadline call site may have regressed (e.g. its result discarded via `_ = resolveAdvPoolRunDeadline(...)`)",
+			rt.driver.RunDeadline, want, base)
+	}
 }

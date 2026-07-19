@@ -12,6 +12,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/queue"
+	"github.com/pdbethke/corralai/internal/repoindex"
 )
 
 func newTestQueue(t *testing.T) *queue.Store {
@@ -1327,5 +1328,186 @@ func TestBugCatchSinkFedOnConvergence(t *testing.T) {
 	// Execution-proven invariant: catches never exceeds proven_missed.
 	if tw.Catches > 1 {
 		t.Fatal("catches exceeded proven_missed — a claim leaked into the headline")
+	}
+}
+
+// shardedRunSpec is the fixture every sharded test starts from: three symbols,
+// so a maxShards of 2 or 3 produces a real fan-out.
+func shardedRunSpec(maxShards int) (RunSpec, []repoindex.Signature) {
+	rs := RunSpec{
+		Repo: "r", Commit: "c", Goal: "g",
+		CodePath: "a.go", Code: "package p\nfunc A() {}\nfunc B() {}\nfunc C() {}\n",
+		DevTestPath: "a_test.go", DevTestCode: "package p\n",
+		NMutants: 1, Lang: "go", MaxShards: maxShards,
+	}
+	sigs := []repoindex.Signature{
+		{Name: "A", Complexity: 5, Lines: 10},
+		{Name: "B", Complexity: 3, Lines: 6},
+		{Name: "C", Complexity: 1, Lines: 2},
+	}
+	return rs, sigs
+}
+
+// newShardedRun mirrors newTestDriver but starts the run WITH signatures and a
+// MaxShards budget, so BuildDAG actually fans out. maxShards 0 yields the
+// unsharded single-seat run. validator is an interface param so a test can
+// supply a shard-aware fake (see shardValidator in Task 4).
+func newShardedRun(t *testing.T, missionID int64, maxShards int, scorer *fakeScorer, validator Validator) *Driver {
+	t.Helper()
+	q := newTestQueue(t)
+	d, err := NewDriver(q, scorer, validator, decorrelatedAssign(), 0.5)
+	if err != nil {
+		t.Fatalf("NewDriver: %v", err)
+	}
+	rs, sigs := shardedRunSpec(maxShards)
+	if err := d.StartRun(missionID, rs, sigs); err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	if _, err := q.PromoteReady(missionID); err != nil {
+		t.Fatalf("PromoteReady: %v", err)
+	}
+	return d
+}
+
+// completeAllReady claims every currently-ready task and completes it with
+// result — the sharded analogue of the file's claimByKey/mustComplete pair.
+func completeAllReady(t *testing.T, d *Driver, result string) int {
+	t.Helper()
+	ready := claimAllReady(t, d.Q)
+	for _, task := range ready {
+		mustComplete(t, d.Q, task.ID, result)
+	}
+	return len(ready)
+}
+
+// driveShardedToVerdict ticks to convergence, completing whatever becomes
+// claimable, and returns the terminal verdict.
+func driveShardedToVerdict(t *testing.T, d *Driver, missionID int64, result string) Verdict {
+	t.Helper()
+	for i := 0; i < 50; i++ {
+		v, err := d.Tick(context.Background(), missionID)
+		if err != nil {
+			t.Fatalf("Tick: %v", err)
+		}
+		if v != nil {
+			return *v
+		}
+		completeAllReady(t, d, result)
+	}
+	t.Fatal("run did not converge in 50 ticks")
+	return Verdict{}
+}
+
+// TestTickDevAdequacyWaitsForEveryShard proves the gate never scores a PARTIAL
+// mutant set: with 3 shards and only 2 done, dev-adequacy must not run.
+func TestTickDevAdequacyWaitsForEveryShard(t *testing.T) {
+	const missionID = int64(200)
+	scorer := &fakeScorer{devKillRate: 0.9}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
+	d := newShardedRun(t, missionID, 3, scorer, validator)
+
+	mgs, err := d.tasksByRole(missionID, RoleMutantGenerator)
+	if err != nil {
+		t.Fatalf("tasksByRole: %v", err)
+	}
+	if len(mgs) != 3 {
+		t.Fatalf("want 3 shard tasks, got %d", len(mgs))
+	}
+
+	// Claim every ready task in one sweep (mirrors a real dispatch round), then
+	// complete only two of the three shards. The leftover shard stays CLAIMED
+	// (not done) with a live lease — it must be finished directly below rather
+	// than re-claimed, since an unnamed-instance claim only self-heals once its
+	// lease expires (see ClaimNextAs), which a fast unit test never waits out.
+	ready := claimAllReady(t, d.Q)
+	var pending []*queue.Task
+	done := 0
+	for key, task := range ready {
+		if _, sharded := ShardIndexFromKey(key); sharded {
+			if done < 2 {
+				mustComplete(t, d.Q, task.ID, "raw")
+				done++
+			} else {
+				pending = append(pending, task)
+			}
+		}
+	}
+	if _, err := d.Tick(context.Background(), missionID); err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	if d.runs[missionID].devScored {
+		t.Fatal("dev-adequacy scored a PARTIAL mutant set — the gate must wait for every shard")
+	}
+	if len(scorer.calls) != 0 {
+		t.Fatalf("Scorer ran on a partial mutant set (%d calls)", len(scorer.calls))
+	}
+
+	// Complete the last shard (already claimed above); now dev-adequacy may run.
+	for _, task := range pending {
+		mustComplete(t, d.Q, task.ID, "raw")
+	}
+	if _, err := d.Tick(context.Background(), missionID); err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	if !d.runs[missionID].devScored {
+		t.Fatal("dev-adequacy did not run once every shard was done")
+	}
+}
+
+// TestShardedMutantIDsArePrefixed proves mutants from different shards cannot
+// collide. Every shard's fake returns a mutant named "m1", so ONLY prefixing
+// keeps them distinct. Asserted on the mutants handed TO the Scorer, because
+// devSurvivors comes from the fake scorer's canned list, not from the union.
+func TestShardedMutantIDsArePrefixed(t *testing.T) {
+	const missionID = int64(201)
+	scorer := &fakeScorer{devKillRate: 1.0}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
+	d := newShardedRun(t, missionID, 2, scorer, validator)
+
+	completeAllReady(t, d, "raw")
+	if _, err := d.Tick(context.Background(), missionID); err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	if len(scorer.calls) == 0 {
+		t.Fatal("Scorer never ran")
+	}
+	got := scorer.calls[0].mutants
+	if len(got) != 2 {
+		t.Fatalf("want 2 unioned mutants, got %d — identical shard IDs collided", len(got))
+	}
+	seen := map[string]bool{}
+	for _, m := range got {
+		if seen[m.ID] {
+			t.Errorf("duplicate mutant ID %q across shards", m.ID)
+		}
+		seen[m.ID] = true
+		if !strings.HasPrefix(m.ID, "s") || !strings.Contains(m.ID, "/") {
+			t.Errorf("sharded mutant ID %q must carry its shard prefix (s<idx>/…)", m.ID)
+		}
+	}
+}
+
+// TestUnshardedMutantIDsUnchanged pins the back-compat guarantee.
+func TestUnshardedMutantIDsUnchanged(t *testing.T) {
+	const missionID = int64(202)
+	scorer := &fakeScorer{devKillRate: 1.0}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
+	d := newShardedRun(t, missionID, 0, scorer, validator) // MaxShards 0 => unsharded
+
+	mgs, _ := d.tasksByRole(missionID, RoleMutantGenerator)
+	if len(mgs) != 1 {
+		t.Fatalf("want 1 unsharded task, got %d", len(mgs))
+	}
+	if mgs[0].Key != RoleMutantGenerator {
+		t.Errorf("unsharded key: want %q, got %q", RoleMutantGenerator, mgs[0].Key)
+	}
+	completeAllReady(t, d, "raw")
+	if _, err := d.Tick(context.Background(), missionID); err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	for _, m := range scorer.calls[0].mutants {
+		if strings.Contains(m.ID, "/") {
+			t.Errorf("unsharded mutant ID %q must not be prefixed", m.ID)
+		}
 	}
 }

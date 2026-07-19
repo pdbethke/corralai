@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sort"
 	"sync"
 	"time"
 
@@ -438,24 +439,46 @@ func (d *Driver) Tick(ctx context.Context, missionID int64) (*Verdict, error) {
 // never the worker's self-report), and promote test-writer re-rendered with
 // the real survivors.
 func (d *Driver) tickDevAdequacy(ctx context.Context, missionID int64, run *runState) error {
-	mg, err := d.taskByKey(missionID, RoleMutantGenerator)
+	mgs, err := d.tasksByRole(missionID, RoleMutantGenerator)
 	if err != nil {
 		return err
 	}
-	if mg == nil || mg.Status != queue.StatusDone {
+	if len(mgs) == 0 {
 		return nil
 	}
-
-	mutants, perr := d.Validator.ParseMutants(mg.Result, run.rs.Code)
-	if perr != nil {
-		// Malformed artifact: refuse it. The pure driver has no live hook into
-		// the completion call (that already happened, unlike brain's
-		// complete_task verify-gate) — reopen the task so a bee can retry, and
-		// surface the failure to the caller to handle/log.
-		if _, rerr := d.Q.ReopenTask(mg.ID); rerr != nil {
-			return fmt.Errorf("advpool: reopen mutant-generator after parse failure: %w", rerr)
+	// EVERY shard must be terminal before the dev's tests are scored. Scoring a
+	// partial mutant set would grade the suite against a smaller exam than the
+	// run claims to have set — the kill-rate would be real but would not mean
+	// what the verdict says it means.
+	for i := range mgs {
+		if mgs[i].Status != queue.StatusDone {
+			return nil
 		}
-		return fmt.Errorf("advpool: mutant-generator result unparseable, reissued for retry: %w", perr)
+	}
+
+	// Union every shard's mutants. IDs are prefixed with the shard index so two
+	// shards returning "m1" cannot collide, and so each survivor names the
+	// region it came from (including in the test-writer's prompt). An UNSHARDED
+	// run keeps its original, unprefixed IDs.
+	var mutants []adequacy.Mutant
+	for i := range mgs {
+		shardIdx, sharded := ShardIndexFromKey(mgs[i].Key)
+		parsed, perr := d.Validator.ParseMutants(mgs[i].Result, run.rs.Code)
+		if perr != nil {
+			// Malformed artifact: refuse it. The pure driver has no live hook
+			// into the completion call — reopen the task so a worker can retry,
+			// and surface the failure to the caller.
+			if _, rerr := d.Q.ReopenTask(mgs[i].ID); rerr != nil {
+				return fmt.Errorf("advpool: reopen %s after parse failure: %w", mgs[i].Key, rerr)
+			}
+			return fmt.Errorf("advpool: %s result unparseable, reissued for retry: %w", mgs[i].Key, perr)
+		}
+		for _, m := range parsed {
+			if sharded {
+				m.ID = fmt.Sprintf("s%d/%s", shardIdx, m.ID)
+			}
+			mutants = append(mutants, m)
+		}
 	}
 
 	killRate, survivors, serr := d.Scorer.Score(ctx, run.rs.CodePath, run.rs.Code, run.rs.DevTestCode, mutants, run.rs.TestCmd)
@@ -824,4 +847,23 @@ func (d *Driver) taskByKey(missionID int64, key string) (*queue.Task, error) {
 		}
 	}
 	return nil, nil
+}
+
+// tasksByRole returns every task for a role, sorted by key so shard order is
+// deterministic (shard index is a recorded metrics key, and a run must be
+// reproducible). Used for the mutant-generator, which fans out into one task
+// per symbol shard; taskByKey remains correct for the single-task roles.
+func (d *Driver) tasksByRole(missionID int64, role string) ([]queue.Task, error) {
+	tasks, err := d.Q.List(missionID)
+	if err != nil {
+		return nil, err
+	}
+	var out []queue.Task
+	for i := range tasks {
+		if tasks[i].Role == role {
+			out = append(out, tasks[i])
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
+	return out, nil
 }

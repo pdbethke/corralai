@@ -1589,3 +1589,90 @@ func keysInOrder(tasks []queue.Task) []string {
 	}
 	return out
 }
+
+// shardValidator fails to parse any result equal to failRaw, and returns
+// canned mutants otherwise — so a test can make ONE shard persistently bad
+// while its siblings succeed. (fakeValidator's single parseErr applies to
+// every call and cannot express this.)
+type shardValidator struct {
+	failRaw string
+	mutants []adequacy.Mutant
+}
+
+func (v *shardValidator) ParseMutants(raw, _ string) ([]adequacy.Mutant, error) {
+	if raw == v.failRaw {
+		return nil, fmt.Errorf("shardValidator: unparseable")
+	}
+	return v.mutants, nil
+}
+
+func (v *shardValidator) ParseTest(raw string) string { return raw }
+
+func (v *shardValidator) CompileTest(_ context.Context, _, _, _ string) error { return nil }
+
+// TestShardDroppedAfterRetriesAndRecorded proves a persistently unparseable
+// shard is dropped (not retried forever, not an aborted run) and that the
+// shortfall lands in the verdict.
+func TestShardDroppedAfterRetriesAndRecorded(t *testing.T) {
+	const missionID = int64(210)
+	const bad = "UNPARSEABLE"
+	scorer := &fakeScorer{devKillRate: 1.0}
+	validator := &shardValidator{failRaw: bad, mutants: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
+	d := newShardedRun(t, missionID, 3, scorer, validator)
+
+	// One chosen shard always returns junk; the others return parseable output.
+	badKey := ShardTaskKey(0)
+	completeShards := func() {
+		for key, task := range claimAllReady(t, d.Q) {
+			result := "raw"
+			if key == badKey {
+				result = bad
+			}
+			mustComplete(t, d.Q, task.ID, result)
+		}
+	}
+	completeShards()
+
+	// Each Tick reopens the bad shard and errors, up to the retry budget.
+	for i := 0; i < MaxShardRetries; i++ {
+		if _, err := d.Tick(context.Background(), missionID); err == nil {
+			t.Fatalf("Tick %d: want a retry error while the shard has budget left", i)
+		}
+		completeShards()
+	}
+
+	// Budget exhausted: the shard DROPS and the run proceeds.
+	if _, err := d.Tick(context.Background(), missionID); err != nil {
+		t.Fatalf("Tick after drop: %v", err)
+	}
+	run := d.runs[missionID]
+	if !run.devScored {
+		t.Fatal("run did not proceed after dropping a persistently bad shard")
+	}
+	if got := len(run.droppedRegions); got != 1 {
+		t.Fatalf("want 1 dropped region, got %d: %v", got, run.droppedRegions)
+	}
+	if run.regionsTotal != 3 {
+		t.Errorf("regionsTotal: want 3, got %d", run.regionsTotal)
+	}
+}
+
+// TestVerdictCarriesRegionCoverage proves a clean run reports full coverage —
+// the counterpart to the drop case, and what makes PARTIAL meaningful.
+func TestVerdictCarriesRegionCoverage(t *testing.T) {
+	const missionID = int64(211)
+	scorer := &fakeScorer{devKillRate: 1.0}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
+	d := newShardedRun(t, missionID, 3, scorer, validator)
+
+	v := driveShardedToVerdict(t, d, missionID, "raw")
+	if v.RegionsTotal != 3 {
+		t.Errorf("RegionsTotal: want 3, got %d", v.RegionsTotal)
+	}
+	if v.RegionsProbed != 3 {
+		t.Errorf("RegionsProbed: want 3, got %d", v.RegionsProbed)
+	}
+	if len(v.DroppedRegions) != 0 {
+		t.Errorf("DroppedRegions: want none, got %v", v.DroppedRegions)
+	}
+}

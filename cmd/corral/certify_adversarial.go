@@ -38,6 +38,9 @@ type advVerdict struct {
 	MutantsTotal    int               `json:"MutantsTotal"`
 	Survivors       int               `json:"Survivors"`
 	ProvenMissed    int               `json:"ProvenMissed"`
+	RegionsTotal    int               `json:"regions_total"`
+	RegionsProbed   int               `json:"regions_probed"`
+	DroppedRegions  []string          `json:"dropped_regions"`
 	VacuousFindings []advFinding      `json:"VacuousFindings"`
 	ModelsByRole    map[string]string `json:"ModelsByRole"`
 	Status          string            `json:"Status"`
@@ -301,6 +304,10 @@ func renderAdvVerdict(w io.Writer, codePath string, v advVerdict) {
 	fmt.Fprintf(w, "  dev_kill_rate: %.2f\n", v.DevKillRate)
 	fmt.Fprintf(w, "  survivors:     %d\n", v.Survivors)
 	fmt.Fprintf(w, "  proven_missed: %d\n", v.ProvenMissed)
+	if v.RegionsTotal > 0 && v.RegionsProbed < v.RegionsTotal {
+		fmt.Fprintf(w, "  PARTIAL AUDIT: %d of %d regions probed — these went unprobed: %s\n",
+			v.RegionsProbed, v.RegionsTotal, strings.Join(v.DroppedRegions, "; "))
+	}
 	if len(v.VacuousFindings) == 0 {
 		fmt.Fprintln(w, "  critic review: no vacuous tests flagged")
 	} else {

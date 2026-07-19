@@ -28,6 +28,15 @@ const (
 	RoleTestCritic      = "test-critic"
 )
 
+// MaxShardRetries is how many times a mutant-generator shard whose result will
+// not parse is reopened before it is DROPPED and the run proceeds without it.
+//
+// Straight-lining the pre-shard "retry until the run dies" semantics would
+// make sharding actively worse: with 8 seats the odds that at least one
+// misbehaves rise ~8x, and one flaky shard would waste the other seven seats'
+// spend. Dropping converges; the shortfall is recorded, never swallowed.
+const MaxShardRetries = 2
+
 // Role is a role defined as data: a prompt-render, a result contract
 // (Structured vs freeform-findings), and its DAG deps. New adversarial
 // roles compose by adding an entry here — no new driver plumbing.

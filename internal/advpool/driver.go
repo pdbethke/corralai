@@ -100,6 +100,9 @@ type Verdict struct {
 	MutantsTotal    int             // total mutants the mutant-generator produced
 	Survivors       int             // mutants the dev's own tests did NOT kill
 	ProvenMissed    int             // survivors the pool's authored test then killed — real, catchable gaps
+	RegionsTotal    int             // mutant-generator seats the run dispatched
+	RegionsProbed   int             // seats that returned usable mutants
+	DroppedRegions  []string        // seats abandoned after MaxShardRetries — the coverage shortfall
 	VacuousFindings []queue.Finding // test-critic's designed-to-pass/vacuous flags
 	ModelsByRole    map[string]string
 	Status          string // certified | needs-review
@@ -148,6 +151,17 @@ type runState struct {
 
 	poolScored   bool
 	provenMissed int
+
+	// shardRetries counts parse failures per mutant-generator task KEY (never
+	// its id). Keying by key is deliberate: a lease-expiry re-claim and a
+	// parse-failure reopen must draw on the SAME budget, or a shard could
+	// retry forever by alternating failure modes.
+	shardRetries map[string]int
+	// droppedRegions names the shards abandoned after exhausting their retry
+	// budget — the coverage shortfall, carried into the signed verdict so a
+	// partial audit is provably partial rather than silently partial.
+	droppedRegions []string
+	regionsTotal   int
 
 	// authoredTest is the pool's compiling killing test (the test-writer's
 	// cleaned source), surfaced via RunState so `corral certify --adversarial`
@@ -323,7 +337,10 @@ func (d *Driver) StartRun(missionID int64, rs RunSpec, sigs []repoindex.Signatur
 		return fmt.Errorf("advpool: test-writer task not found after enqueue")
 	}
 	d.mu.Lock()
-	d.runs[missionID] = &runState{rs: rs, sigs: sigs, testWriterTaskID: twID, startedAt: d.Now()}
+	d.runs[missionID] = &runState{
+		rs: rs, sigs: sigs, testWriterTaskID: twID, startedAt: d.Now(),
+		shardRetries: map[string]int{},
+	}
 	d.mu.Unlock()
 	d.emit(missionID, "pool_subject", rs.CodePath, map[string]any{
 		"goal": rs.Goal, "code": rs.Code, "dev_test_code": rs.DevTestCode,
@@ -465,13 +482,21 @@ func (d *Driver) tickDevAdequacy(ctx context.Context, missionID int64, run *runS
 		shardIdx, sharded := ShardIndexFromKey(mgs[i].Key)
 		parsed, perr := d.Validator.ParseMutants(mgs[i].Result, run.rs.Code)
 		if perr != nil {
-			// Malformed artifact: refuse it. The pure driver has no live hook
-			// into the completion call — reopen the task so a worker can retry,
-			// and surface the failure to the caller.
-			if _, rerr := d.Q.ReopenTask(mgs[i].ID); rerr != nil {
-				return fmt.Errorf("advpool: reopen %s after parse failure: %w", mgs[i].Key, rerr)
+			key := mgs[i].Key
+			run.shardRetries[key]++
+			if run.shardRetries[key] <= MaxShardRetries {
+				if _, rerr := d.Q.ReopenTask(mgs[i].ID); rerr != nil {
+					return fmt.Errorf("advpool: reopen %s after parse failure: %w", key, rerr)
+				}
+				return fmt.Errorf("advpool: %s result unparseable, reissued for retry (%d/%d): %w",
+					key, run.shardRetries[key], MaxShardRetries, perr)
 			}
-			return fmt.Errorf("advpool: %s result unparseable, reissued for retry: %w", mgs[i].Key, perr)
+			// Budget exhausted: DROP this region and proceed on the shards that
+			// parsed. Recorded, never swallowed.
+			log.Printf("advpool: run %d: dropping region %s after %d unparseable results — its functions go unprobed",
+				missionID, key, run.shardRetries[key])
+			run.droppedRegions = append(run.droppedRegions, mgs[i].Title)
+			continue
 		}
 		for _, m := range parsed {
 			if sharded {
@@ -479,6 +504,11 @@ func (d *Driver) tickDevAdequacy(ctx context.Context, missionID int64, run *runS
 			}
 			mutants = append(mutants, m)
 		}
+	}
+	run.regionsTotal = len(mgs)
+
+	if len(mutants) == 0 && len(run.droppedRegions) > 0 {
+		return fmt.Errorf("advpool: every mutant-generator region failed (%d dropped) — nothing to grade the dev suite against", len(run.droppedRegions))
 	}
 
 	killRate, survivors, serr := d.Scorer.Score(ctx, run.rs.CodePath, run.rs.Code, run.rs.DevTestCode, mutants, run.rs.TestCmd)
@@ -629,6 +659,9 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	// execution-verified finding path.
 	v := aggregate(run.rs, d.Assign, run.devKillRate, run.mutantsTotal, len(run.devSurvivors), run.provenMissed,
 		criticFindings, d.Threshold, false)
+	v.RegionsTotal = run.regionsTotal
+	v.RegionsProbed = run.regionsTotal - len(run.droppedRegions)
+	v.DroppedRegions = run.droppedRegions
 
 	if d.Signer != nil {
 		recordID, head, serr := d.Signer.SignVerdict(ctx, v)

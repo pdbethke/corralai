@@ -1,0 +1,65 @@
+---
+title: "The code is the code"
+description: "We pointed corral at a real, respected, well-tested project. Its suite killed all eight planted bugs — and then our own critic flagged four of its tests as worthless. The tempting move was to hide the criticism and publish the flattering number. We didn't, and chasing down why taught us the one rule a tool built on trust cannot break: it may only assert what execution proves — including, especially, when the thing making the claim is itself an AI."
+pubDate: 2026-07-19
+draft: false
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+
+*Field note. This one is about a mistake we nearly made, and the principle that stopped us.*
+
+---
+
+## The tempting number
+
+We finally did the thing the whole tool is for: pointed it at real, respected, well-loved code. `more-itertools` — thousands of stars, a test suite people trust, zero runtime dependencies. We planted eight bugs in one of its modules and ran its **own** test suite against them, in a jail, by execution.
+
+It killed all eight. Eight for eight. That is a genuinely strong result and an entirely honest one — proof, by execution, that this suite catches the kinds of regressions we could throw at it.
+
+And then the second model on our panel — the *critic*, whose job is to read the tests and flag the ones that don't actually test anything — flagged four of `more-itertools`'s tests as vacuous. That dragged the verdict from *certified* to *needs-review*.
+
+So here was the tempting move, and I'll be honest that we said it out loud: this is supposed to be a *flattering* demo of a *respected* project. Just show the eight-for-eight. Filter out the critic's complaints. Publish the number that makes everyone look good.
+
+## Why that's the one thing we can't do
+
+The entire pitch of this tool is one Latin sentence — *nemo iudex in causa sua*, no one may judge their own cause — and one property: a signed, tamper-evident record you can verify offline. If we hand-pick which of our own outputs to publish, we are doing the exact thing we built the tool to catch. **Filtering results is faking results.** A trust instrument that shows you only its flattering readings is a bathroom scale that subtracts five pounds. It's worse than useless; it's a liar with a certificate.
+
+The founder's instinct was blunt and correct: *the code is the code.* Either the finding is real, or the model is wrong. You don't get to vote on which.
+
+So we went to look at the finding instead of hiding it.
+
+## The critic was wrong
+
+The critic had flagged `more-itertools`'s `test_negative_take` — a test that checks `take(-3, …)` raises `ValueError`. Its reasoning, quoted from the run: the implementation is `list(islice(iterable, n))`, and *"islice silently returns an empty result for a negative index, so this test can never fail."*
+
+One line settles it:
+
+```python
+>>> from itertools import islice
+>>> list(islice(range(10), -3))
+ValueError: Indices for islice() must be None or an integer: 0 <= x <= sys.maxsize.
+```
+
+`islice` **raises** on a negative index. So `take(-3, …)` raises, the test passes for exactly the right reason, and it is not vacuous in the slightest. The critic hadn't found a bad test. It had **hallucinated the behavior of the standard library** and accused a good test of a crime it didn't commit.
+
+Which means the flattering-vs-honest framing was a trap the whole time. The real problem was never that we might show an unflattering result. It was that we were about to publish an **unverified opinion as a finding** — to stamp a hallucination with the tool's execution-backed authority. Filtering fakes the *output*. Publishing an unproven claim fakes the *authority*. Both are the same lie wearing different clothes.
+
+## Nemo iudex applies to our own critic
+
+Here is the part that took us embarrassingly long to see. We built the whole thing on the principle that *the author of the code doesn't get to certify it* — you need an independent, disinterested check. And then we let one of our own AI models file "findings" that rode alongside the execution-proven numbers as if they carried the same weight. An LLM's say-so does not become fact because it lives inside a tool named after fairness. **Nemo iudex applies to the critic too.**
+
+So we drew the line where it always should have been, at execution:
+
+- The **mutation kill-rate** — did the suite catch the planted bugs, run in a sandbox — is proof. It certifies. It's the same whether the result flatters anyone or not.
+- The **critic's flags** are a second model's *review*. Useful, often sharp, and — as we just saw — sometimes flatly wrong. They are now carried on the record as clearly-labeled **advisory** review, and they **do not gate the signed verdict.** The CLI says it plainly: *critic review — UNVERIFIED (a second model's opinion, not execution-proven; check before acting).*
+
+With that, `more-itertools` certifies on its eight-for-eight, honestly, and the critic's mistaken flag sits in a box marked *unverified* — also honestly. Nothing is hidden. Nothing is faked. The record asserts only what a jail and an exit code can back up.
+
+## Where this goes next
+
+The right long-term answer isn't to silence the critic — it's to hold it to the same standard as everything else: **execution.** A test the critic calls vacuous is a *claim*, and it's a checkable one — run that test, alone, against the planted bugs. If it kills none, the critic is proven right and the finding earns its place. If it kills even one, the critic is disproven and the finding is dropped, and that miss is exactly the signal that the model needs to get better. Improve the model, or accept reality — and let execution, not opinion, decide which. That's the next thing we're building.
+
+We almost shipped a prettier, quieter version of this story. I'm glad we didn't. A tool like this is worth exactly as much as the number of times it tells you something you'd rather not hear — and not one time more.
+
+The code is the code.

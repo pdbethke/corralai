@@ -94,6 +94,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	repoDirFlag := fs.String("repo-dir", "", "audit --code IN THE CONTEXT of this cloned repo/package: the whole tree is seeded into the jail, the file is mutated in place, and the project's OWN test command (given after `--`) grades it — so real multi-file projects with package imports work (--code/--test are repo-relative)")
 	recordFlag := fs.String("record", "", "write a replayable tape of the run (the pool's reasoning beats, task lifecycle, and findings) to this JSON file — the same {events:[…]} shape the corralai.dev cockpit replays")
 	swarmFlag := fs.Int("swarm", 0, "max concurrent audit workers (0 = auto-size to this host's cores). The BUDGET clamp: independent role tasks run in parallel up to this bound, so a big audit swarms without melting the box")
+	maxShardsFlag := fs.Int("max-shards", 0, "max mutant-generator seats fanned out across the file's functions (0 = "+fmt.Sprint(advpool.DefaultMaxShards)+"). Bounds PARALLELISM only — every function is probed regardless; --n-mutants is the PER-SHARD budget")
 	if err := fs.Parse(flagArgs); err != nil {
 		return 2
 	}
@@ -323,9 +324,10 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		Repo: repo, Commit: commit, Goal: strings.TrimSpace(*goal),
 		CodePath: codeKey, Code: string(code),
 		DevTestPath: devTestKey, DevTestCode: string(devTest),
-		TestCmd:  strings.Join(checkArgv, " "),
-		NMutants: n,
-		Lang:     plug.Name(),
+		TestCmd:   strings.Join(checkArgv, " "),
+		NMutants:  n,
+		Lang:      plug.Name(),
+		MaxShards: resolveMaxShards(*maxShardsFlag),
 	}
 
 	// Signatures are best-effort (mirrors the brain's StartRun): a failure just
@@ -360,6 +362,11 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "swarm: %d concurrent workers (--swarm budget)\n", swarm)
 	} else {
 		fmt.Fprintf(stdout, "swarm: %d concurrent workers (auto-sized to %d cores)\n", swarm, runtime.NumCPU())
+	}
+	if shards := advpool.ShardSymbols(sigs, rs.MaxShards); len(shards) > 0 {
+		fmt.Fprintf(stdout, "regions: %d generator seats over %d functions\n", len(shards), len(sigs))
+	} else {
+		fmt.Fprintf(stdout, "regions: 1 generator seat (whole file — no symbol surface extracted)\n")
 	}
 
 	verdict, err := driveLocalRun(ctx, d, q, localMissionID, chatterFor, *poll, time.Sleep, stdout, rec, actorFor, swarm)
@@ -430,6 +437,15 @@ func resolveSwarm(flag int) int {
 		n = localSwarmAutoCap
 	}
 	return n
+}
+
+// resolveMaxShards resolves the generator fan-out width: the operator's
+// --max-shards budget, else the stock default.
+func resolveMaxShards(flag int) int {
+	if flag > 0 {
+		return flag
+	}
+	return advpool.DefaultMaxShards
 }
 
 // recEvent is one beat of a replay tape — the exact {ts,kind,actor,subject,

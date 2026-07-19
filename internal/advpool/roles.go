@@ -5,6 +5,7 @@ package advpool
 import (
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
@@ -117,6 +118,68 @@ func renderTestWriter(rs RunSpec, sigs []repoindex.Signature, survivors []adequa
 	return joinPrompt(system, user)
 }
 
+// DefaultMaxShards is the stock generator width. It matches
+// cmd/corral.localSwarmAutoCap so a default run's shard count and its
+// concurrent-worker bound agree rather than one throttling the other.
+const DefaultMaxShards = 8
+
+// ShardTaskKey is the queue key for shard i of the mutant-generator role.
+// Sharded keys are distinct from the bare role name so an unsharded run's
+// task key is unchanged.
+func ShardTaskKey(index int) string {
+	return RoleMutantGenerator + "/" + strconv.Itoa(index)
+}
+
+// ShardIndexFromKey returns the shard index encoded in a mutant-generator task
+// key, and whether the key was a sharded one. The bare role key (an unsharded
+// run) and any malformed suffix report (0, false).
+func ShardIndexFromKey(key string) (int, bool) {
+	rest, ok := strings.CutPrefix(key, RoleMutantGenerator+"/")
+	if !ok {
+		return 0, false
+	}
+	i, err := strconv.Atoi(rest)
+	if err != nil || i < 0 {
+		return 0, false
+	}
+	return i, true
+}
+
+// renderMutantGeneratorShard renders one shard's prompt: the SAME testgen
+// prompt and the SAME whole-file context as the unsharded path, with the goal
+// augmented by an aiming directive and the signature list filtered to this
+// shard's symbols. The file is never fragmented — patch-based mutants anchor
+// against the whole original.
+func renderMutantGeneratorShard(rs RunSpec, sigs []repoindex.Signature, sh Shard) string {
+	aimed := rs
+	aimed.Goal = fmt.Sprintf(
+		"%s\n\nATTACK ONLY THESE FUNCTIONS: %s. Every mutation you produce MUST edit code inside one of them. Other functions in the file are being attacked by other seats — do not mutate them, and do not report that you skipped them.",
+		rs.Goal, strings.Join(sh.Symbols, ", "))
+	return renderMutantGenerator(aimed, filterSignatures(sigs, sh.Symbols), nil)
+}
+
+// filterSignatures keeps only the signatures naming one of want, preserving
+// input order, so a shard's prompt lists exactly the surface it is aimed at.
+func filterSignatures(sigs []repoindex.Signature, want []string) []repoindex.Signature {
+	keep := make(map[string]bool, len(want))
+	for _, w := range want {
+		keep[w] = true
+	}
+	var out []repoindex.Signature
+	for _, s := range sigs {
+		if keep[s.Name] {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// shardTitle labels a shard task with the region it attacks, so the queue and
+// the cockpit show WHICH functions each seat is on.
+func shardTitle(sh Shard) string {
+	return "Generate mutants for " + strings.Join(sh.Symbols, ", ")
+}
+
 // Roles returns the pool's three worker roles: mutant-generator and
 // test-critic run in parallel with no deps; test-writer depends on
 // dev-adequacy (the survivors it needs to target).
@@ -141,8 +204,24 @@ func Roles() []Role {
 // prompt.
 func BuildDAG(rs RunSpec, assign RoleAssignment, sigs []repoindex.Signature) []queue.TaskSpec {
 	roles := Roles()
-	specs := make([]queue.TaskSpec, 0, len(roles))
+	shards := ShardSymbols(sigs, rs.MaxShards)
+	specs := make([]queue.TaskSpec, 0, len(roles)+len(shards))
 	for _, role := range roles {
+		// The mutant-generator fans out into one seat per shard when the file
+		// has an extractable symbol surface; otherwise it stays exactly one
+		// whole-file seat with an unchanged key and a byte-identical prompt.
+		if role.Name == RoleMutantGenerator && len(shards) > 0 {
+			for _, sh := range shards {
+				specs = append(specs, queue.TaskSpec{
+					Key:         ShardTaskKey(sh.Index),
+					Role:        RoleMutantGenerator,
+					Title:       shardTitle(sh),
+					Instruction: renderMutantGeneratorShard(rs, sigs, sh),
+					Model:       assign[RoleMutantGenerator],
+				})
+			}
+			continue
+		}
 		specs = append(specs, queue.TaskSpec{
 			Key:         role.Name,
 			Role:        role.Name,

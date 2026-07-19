@@ -21,6 +21,13 @@ type RunSpec struct {
 	TestCmd     string
 	NMutants    int
 	Lang        string // "" defaults to "go" at render time (back-compat)
+
+	// MaxShards bounds how many mutant-generator seats fan out across the
+	// file's top-level symbols. 0 or 1 means unsharded (one generator, whole
+	// file — the pre-slice-2 behavior, byte-identical prompt). It bounds
+	// PARALLELISM only: every symbol is probed regardless (see ShardSymbols).
+	// NMutants is the PER-SHARD budget, so total mutants scale with width.
+	MaxShards int
 }
 
 // RoleAssignment maps a role name (Role.Name) to the gate-earned model that

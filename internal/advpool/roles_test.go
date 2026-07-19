@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	golang "github.com/pdbethke/corralai/internal/lang"
+	"github.com/pdbethke/corralai/internal/queue"
 	"github.com/pdbethke/corralai/internal/repoindex"
 	"github.com/pdbethke/corralai/internal/testgen"
 )
@@ -117,5 +118,100 @@ func TestRoles(t *testing.T) {
 	}
 	if got := byName[RoleTestWriter].Deps; len(got) != 1 || got[0] != DevAdequacyKey {
 		t.Fatalf("test-writer deps = %v, want [%q]", got, DevAdequacyKey)
+	}
+}
+
+func mutantSpecs(specs []queue.TaskSpec) []queue.TaskSpec {
+	var out []queue.TaskSpec
+	for _, s := range specs {
+		if s.Role == RoleMutantGenerator {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func TestBuildDAGUnshardedIsByteIdenticalPrompt(t *testing.T) {
+	rs := RunSpec{Goal: "g", CodePath: "a.go", Code: "package p\nfunc A() {}\n", Lang: "go"}
+	sigs := []repoindex.Signature{{Name: "A", Complexity: 1, Lines: 1}}
+	assign := RoleAssignment{RoleMutantGenerator: "m", RoleTestWriter: "w", RoleTestCritic: "c"}
+
+	// MaxShards unset => unsharded.
+	got := mutantSpecs(BuildDAG(rs, assign, sigs))
+	if len(got) != 1 {
+		t.Fatalf("want 1 mutant-generator spec, got %d", len(got))
+	}
+	if got[0].Key != RoleMutantGenerator {
+		t.Errorf("key: want %q, got %q", RoleMutantGenerator, got[0].Key)
+	}
+	want := renderMutantGenerator(rs, sigs, nil)
+	if got[0].Instruction != want {
+		t.Errorf("unsharded instruction must be byte-identical to renderMutantGenerator\nwant:\n%s\ngot:\n%s", want, got[0].Instruction)
+	}
+}
+
+func TestBuildDAGShardedEmitsOneSpecPerShard(t *testing.T) {
+	rs := RunSpec{
+		Goal: "g", CodePath: "a.go", Lang: "go", MaxShards: 3,
+		Code: "package p\nfunc A() {}\nfunc B() {}\nfunc C() {}\n",
+	}
+	sigs := []repoindex.Signature{
+		{Name: "A", Complexity: 5, Lines: 10},
+		{Name: "B", Complexity: 3, Lines: 6},
+		{Name: "C", Complexity: 1, Lines: 2},
+	}
+	assign := RoleAssignment{RoleMutantGenerator: "m", RoleTestWriter: "w", RoleTestCritic: "c"}
+	got := mutantSpecs(BuildDAG(rs, assign, sigs))
+	if len(got) != 3 {
+		t.Fatalf("want 3 mutant-generator specs, got %d", len(got))
+	}
+	keys := map[string]bool{}
+	for i, s := range got {
+		keys[s.Key] = true
+		if s.Role != RoleMutantGenerator {
+			t.Errorf("spec[%d].Role: want %q, got %q", i, RoleMutantGenerator, s.Role)
+		}
+		if s.Model != "m" {
+			t.Errorf("spec[%d].Model: want %q, got %q", i, "m", s.Model)
+		}
+		if len(s.DependsOn) != 0 {
+			t.Errorf("spec[%d].DependsOn: want none, got %v", i, s.DependsOn)
+		}
+		// Whole file is still the context — sharding changes aim, not context.
+		if !strings.Contains(s.Instruction, rs.Code) {
+			t.Errorf("spec[%d] must carry the whole file as context", i)
+		}
+	}
+	for i := 0; i < 3; i++ {
+		if !keys[ShardTaskKey(i)] {
+			t.Errorf("missing shard key %q (got %v)", ShardTaskKey(i), keys)
+		}
+	}
+	// Every symbol is aimed at by exactly one shard.
+	for _, name := range []string{"A", "B", "C"} {
+		hits := 0
+		for _, s := range got {
+			if strings.Contains(s.Title, name) {
+				hits++
+			}
+		}
+		if hits != 1 {
+			t.Errorf("symbol %q aimed at by %d shards, want 1", name, hits)
+		}
+	}
+}
+
+func TestShardTaskKeyRoundTrip(t *testing.T) {
+	if got := ShardTaskKey(3); got != "mutant-generator/3" {
+		t.Errorf("ShardTaskKey(3): want %q, got %q", "mutant-generator/3", got)
+	}
+	if idx, sharded := ShardIndexFromKey("mutant-generator/3"); !sharded || idx != 3 {
+		t.Errorf("ShardIndexFromKey: want (3,true), got (%d,%v)", idx, sharded)
+	}
+	if idx, sharded := ShardIndexFromKey(RoleMutantGenerator); sharded || idx != 0 {
+		t.Errorf("unsharded key: want (0,false), got (%d,%v)", idx, sharded)
+	}
+	if _, sharded := ShardIndexFromKey("mutant-generator/bogus"); sharded {
+		t.Error("malformed shard key must report unsharded, not panic")
 	}
 }

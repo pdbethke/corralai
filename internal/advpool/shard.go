@@ -26,11 +26,12 @@ type Shard struct {
 // whole-file generator, whose prompt stays byte-identical to the pre-slice-2
 // behavior).
 //
-// EVERY symbol lands in exactly one shard. maxShards bounds PARALLELISM, never
-// COVERAGE: a top-N-by-size selection would silently make the "every function
-// gets probed" claim false while the readout still said "sharded", and
-// "we probed 8 of your 30 functions" is exactly what surfaces embarrassingly
-// in a real audit.
+// EVERY named symbol lands in exactly one shard. maxShards bounds PARALLELISM,
+// never COVERAGE: a top-N-by-size selection would silently make the "every
+// function gets probed" claim false while the readout still said "sharded",
+// and "we probed 8 of your 30 functions" is exactly what surfaces
+// embarrassingly in a real audit. Unnamed symbols are excluded from that
+// guarantee — see the filter below — but they are the only exclusion.
 //
 // Balancing is by COMPLEXITY rather than line span so a shard of gnarly
 // branch-heavy functions is not paired against a shard of one-line getters
@@ -44,6 +45,9 @@ func ShardSymbols(sigs []repoindex.Signature, maxShards int) []Shard {
 	if maxShards <= 1 {
 		return nil
 	}
+	// An unnamed symbol has no stable identifier a shard's aiming directive
+	// could reference, so there is no way to tell a seat what to attack — it
+	// is dropped here rather than counted against the coverage guarantee.
 	named := make([]repoindex.Signature, 0, len(sigs))
 	for _, s := range sigs {
 		if s.Name != "" {
@@ -72,7 +76,12 @@ func ShardSymbols(sigs []repoindex.Signature, maxShards int) []Shard {
 	for _, s := range named {
 		lightest := 0
 		for i := 1; i < len(shards); i++ {
-			if shards[i].Complexity < shards[lightest].Complexity {
+			// Weight ties (e.g. all-zero-complexity input from a future
+			// extractor) fall through to fewest-symbols-so-far, so equal
+			// weight still spreads across shards instead of everything
+			// piling into shard 0. Both comparisons are deterministic.
+			if shards[i].Complexity < shards[lightest].Complexity ||
+				(shards[i].Complexity == shards[lightest].Complexity && len(shards[i].Symbols) < len(shards[lightest].Symbols)) {
 				lightest = i
 			}
 		}

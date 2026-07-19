@@ -119,6 +119,49 @@ func TestShardSymbolsIsDeterministic(t *testing.T) {
 	}
 }
 
+func TestShardSymbolsZeroComplexityDistributesAcrossShards(t *testing.T) {
+	// A future language extractor could report Complexity 0 for every symbol
+	// (today's Go/Python extractors floor at 1). A strict-less-than lightest
+	// search never moves off index 0 when weights never change, collapsing
+	// everything into shard 0 and leaving the rest empty. The tie-break must
+	// spread these instead.
+	sigs := []repoindex.Signature{
+		sig("a", 0, 1), sig("b", 0, 1), sig("c", 0, 1),
+		sig("d", 0, 1), sig("e", 0, 1), sig("f", 0, 1),
+	}
+	shards := ShardSymbols(sigs, 3)
+	if len(shards) != 3 {
+		t.Fatalf("want 3 shards, got %d: %+v", len(shards), shards)
+	}
+	for _, s := range shards {
+		if len(s.Symbols) == 0 {
+			t.Errorf("shard %d got no symbols, want distribution across all shards: %+v", s.Index, shards)
+		}
+	}
+	seen := map[string]int{}
+	for _, s := range shards {
+		for _, name := range s.Symbols {
+			seen[name]++
+		}
+	}
+	if len(seen) != len(sigs) {
+		t.Errorf("want all %d symbols covered, got %d: %v", len(sigs), len(seen), seen)
+	}
+}
+
+func TestShardSymbolsZeroComplexityIsDeterministic(t *testing.T) {
+	sigs := []repoindex.Signature{
+		sig("a", 0, 1), sig("b", 0, 1), sig("c", 0, 1),
+		sig("d", 0, 1), sig("e", 0, 1), sig("f", 0, 1),
+	}
+	first := ShardSymbols(sigs, 3)
+	for i := 0; i < 20; i++ {
+		if got := ShardSymbols(sigs, 3); !reflect.DeepEqual(first, got) {
+			t.Fatalf("non-deterministic packing under zero-weight tie-break on iteration %d:\nfirst=%+v\ngot=%+v", i, first, got)
+		}
+	}
+}
+
 func TestShardSymbolsSkipsUnnamedSymbols(t *testing.T) {
 	sigs := []repoindex.Signature{sig("a", 2, 4), sig("", 9, 30), sig("b", 2, 4)}
 	shards := ShardSymbols(sigs, 4)

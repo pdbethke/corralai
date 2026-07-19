@@ -155,9 +155,32 @@ adds to this design:
    math to GPT and trivia to Gemini. Off the gate-earned leaderboard, not a
    learned head.
 
-Fugu's **persistent shared memory** maps to our DuckDB perf feedback + cell
-dedup (share the mutant set; never re-run an identical cell) — cross-run,
-transparent memory rather than inter-workflow tool-call memory.
+Fugu's **persistent shared memory** maps to something we ALREADY BUILT and only
+have to re-point: the `memory` (multi-tier vector/FTS, shared/`SetShared`) +
+`learn` (proposals → lessons → versioned skills) human-gated learning loop. It
+was aimed at the *builder* (lessons like "add jittered backoff on a retry"); the
+retire-the-builder pivot left it intact but pointed at the wrong world. Re-aim it
+at AUDIT and it becomes the swarm's persistent memory:
+
+- **Proven mutation operators per code shape** — a growing library of
+  goal-violating edits that actually survived good suites, so the
+  mutant-generator gets sharper over runs (the audit analog of a build skill).
+- **Proven test-blind-spot patterns** — "this shape of test provably misses this
+  shape of bug", accumulated from execution, so the swarm knows where to aim.
+- **Per-code-type model fitness** — `bugcatch` is already this: re-pointed
+  learning, execution-proven.
+- **Verdict cache / dedup keyed on `ParentSHA256`** — never re-audit unchanged
+  code, never re-run an identical `(test,mutant)` cell (Fugu's
+  redundant-tool-call avoidance, exact analog).
+
+**Trust caveat (inherited from the-code-is-the-code):** the re-pointed loop must
+carry the same rule — only **execution-proven** audit knowledge is promoted to
+shared/skills, never an LLM's opinion. Otherwise we'd accumulate the critic's
+hallucinations into "skills" and poison the swarm. The human gate + the
+execution-proof requirement together keep the accumulated audit memory honest.
+So: the swarm learns what actually catches bugs and where tests actually miss —
+transparently, provably, across runs — instead of a Fugu-style learned reward
+proxy. The infrastructure exists; the work is re-aiming and re-gating it.
 
 ## Open questions for review
 

@@ -17,6 +17,21 @@ import (
 	_ "github.com/marcboeker/go-duckdb/v2"
 )
 
+// bugcatchObservationsMigrationCols is the additive set of columns this
+// package has ever needed beyond the original CREATE TABLE, in the order
+// they must be added — a ledger created before swarm slice 2 gets them added
+// on open; a ledger created after already has them and none are re-added.
+var bugcatchObservationsMigrationCols = []struct{ name, ddl string }{
+	{"shard", "shard INTEGER"},
+	{"region", "region VARCHAR"},
+	{"region_complexity", "region_complexity INTEGER"},
+	{"region_lines", "region_lines INTEGER"},
+	{"test_complexity", "test_complexity INTEGER"},
+	{"parse_retries", "parse_retries INTEGER"},
+	{"dropped", "dropped BOOLEAN"},
+	{"shadow", "shadow BOOLEAN"},
+}
+
 type Store struct{ db *sql.DB }
 
 type Observation struct {
@@ -38,6 +53,19 @@ type Observation struct {
 	CriticFlags     int
 	MutantsPlanted  int
 	MutantsSurvived int
+
+	// Per-shard generator dimensions (zero for the single-seat roles). See
+	// advpool.BugCatchObservation for the "why": one row PER SHARD, never
+	// summed, with RegionComplexity/RegionLines as the difficulty CONTROL a
+	// raw per-shard yield cannot supply on its own.
+	Shard            int
+	Region           string
+	RegionComplexity int
+	RegionLines      int
+	TestComplexity   int
+	ParseRetries     int
+	Dropped          bool
+	Shadow           bool
 }
 
 type Cell struct {
@@ -64,12 +92,57 @@ func Open(dsn string) (*Store, error) {
 		ts TIMESTAMP, record_id BIGINT, record_head VARCHAR, mission_id BIGINT,
 		repo VARCHAR, commit VARCHAR, model VARCHAR, role VARCHAR, source VARCHAR,
 		catches INTEGER, opportunities INTEGER, sound_tests INTEGER, authored_tests INTEGER,
-		critic_flags INTEGER, mutants_planted INTEGER, mutants_survived INTEGER
+		critic_flags INTEGER, mutants_planted INTEGER, mutants_survived INTEGER,
+		shard INTEGER, region VARCHAR, region_complexity INTEGER, region_lines INTEGER,
+		test_complexity INTEGER, parse_retries INTEGER, dropped BOOLEAN, shadow BOOLEAN
 	)`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("bugcatch: create table: %w", err)
 	}
+	if err := migrateBugcatchObservations(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return &Store{db: db}, nil
+}
+
+// migrateBugcatchObservations additively brings a ledger created before swarm
+// slice 2 up to the current column set. DuckDB has no
+// `ADD COLUMN IF NOT EXISTS`, and this is a ledger — silently discarding
+// every ALTER error would make a genuinely broken migration indistinguishable
+// from an already-applied one. Instead: probe information_schema.columns for
+// what already exists, add only what's missing, and surface any other ALTER
+// failure as a real error. Idempotent across repeated opens: a table that
+// already has every column runs zero ALTERs.
+func migrateBugcatchObservations(db *sql.DB) error {
+	rows, err := db.Query(`SELECT column_name FROM information_schema.columns WHERE table_name = ?`, "bugcatch_observations")
+	if err != nil {
+		return fmt.Errorf("bugcatch: probe existing columns: %w", err)
+	}
+	existing := map[string]bool{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			rows.Close()
+			return fmt.Errorf("bugcatch: scan existing column: %w", err)
+		}
+		existing[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("bugcatch: probe existing columns: %w", err)
+	}
+	rows.Close()
+
+	for _, col := range bugcatchObservationsMigrationCols {
+		if existing[col.name] {
+			continue
+		}
+		if _, err := db.Exec("ALTER TABLE bugcatch_observations ADD COLUMN " + col.ddl); err != nil {
+			return fmt.Errorf("bugcatch: migrate: add column %s: %w", col.name, err)
+		}
+	}
+	return nil
 }
 
 func (s *Store) Close() error { return s.db.Close() }
@@ -89,10 +162,12 @@ func (s *Store) Record(ctx context.Context, obs []Observation) error {
 			model = "(unknown model)"
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO bugcatch_observations VALUES
-			(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			o.TS, o.RecordID, o.RecordHead, o.MissionID, o.Repo, o.Commit, model, o.Role, o.Source,
 			o.Catches, o.Opportunities, o.SoundTests, o.AuthoredTests,
-			o.CriticFlags, o.MutantsPlanted, o.MutantsSurvived); err != nil {
+			o.CriticFlags, o.MutantsPlanted, o.MutantsSurvived,
+			o.Shard, o.Region, o.RegionComplexity, o.RegionLines,
+			o.TestComplexity, o.ParseRetries, o.Dropped, o.Shadow); err != nil {
 			return fmt.Errorf("bugcatch: insert: %w", err)
 		}
 	}

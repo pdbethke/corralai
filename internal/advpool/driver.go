@@ -74,6 +74,15 @@ type BugCatchObservation struct {
 	Catches, Opportunities                       int
 	SoundTests, AuthoredTests                    int
 	CriticFlags, MutantsPlanted, MutantsSurvived int
+	// Per-shard generator dimensions (zero for the single-seat roles).
+	Shard            int
+	Region           string
+	RegionComplexity int
+	RegionLines      int
+	TestComplexity   int
+	ParseRetries     int
+	Dropped          bool
+	Shadow           bool // set by Task 6; a shadow seat NEVER gates
 }
 
 // BugCatchSink is the optional per-run bug-catching feed (nil ⇒ no-op),
@@ -135,6 +144,19 @@ func CheckDecorrelation(assign RoleAssignment) error {
 	return nil
 }
 
+// shardStat is one generator seat's recorded outcome. Region complexity is the
+// DIFFICULTY CONTROL: raw yield cannot distinguish a weak model from an easy
+// region, so effectiveness is read CONDITIONED on complexity, never pooled
+// across it.
+type shardStat struct {
+	region       string
+	complexity   int
+	lines        int
+	mutants      int
+	parseRetries int
+	dropped      bool
+}
+
 // runState is one run's mutable progress, tracked across ticks. The
 // test-writer task's id (not its key) is tracked explicitly because
 // SupersedeTask auto-uniquifies the replacement's key when it reuses the
@@ -189,6 +211,22 @@ type runState struct {
 	// should read like the former. Empty/absent for an unsharded run's single
 	// bare-keyed task, which falls back to its Title.
 	shardSymbols map[string][]string
+
+	// shardStats is per-shard generation outcome, keyed by shard index — the
+	// metrics substrate. Recorded per shard and NEVER summed: summing collapses
+	// N seats into one row and makes an underperforming seat invisible by
+	// construction.
+	shardStats map[int]shardStat
+
+	// testComplexity is the dev suite's complexity — the SECOND conditioning
+	// axis (a model that only wins against naive suites is a different
+	// proposition from one that wins against rigorous ones).
+	//
+	// FILE-granular by necessity: attributing a specific test to a specific
+	// region requires knowing which tests exercise which code, which is exactly
+	// what the slice-5 tests-x-mutants matrix establishes by execution. Any
+	// per-region test-complexity claim would be unproven until then.
+	testComplexity int
 
 	// authoredTest is the pool's compiling killing test (the test-writer's
 	// cleaned source), surfaced via RunState so `corral certify --adversarial`
@@ -369,16 +407,37 @@ func (d *Driver) StartRun(missionID int64, rs RunSpec, sigs []repoindex.Signatur
 	// title string.
 	shards := ShardSymbols(sigs, rs.MaxShards)
 	shardSymbols := make(map[string][]string, len(shards))
+	// shardStats seeds the metrics substrate with each shard's difficulty
+	// control (region/complexity/lines), computed once here from the SAME
+	// ShardSymbols call BuildDAG used — never a second source of truth for
+	// what a region contains.
+	stats := make(map[int]shardStat, len(shards))
 	for _, sh := range shards {
 		shardSymbols[ShardTaskKey(sh.Index)] = sh.Symbols
+		stats[sh.Index] = shardStat{
+			region: strings.Join(sh.Symbols, ", "), complexity: sh.Complexity, lines: sh.Lines,
+		}
+	}
+
+	// testComplexity is the dev suite's own complexity — see the runState
+	// field comment. A parse failure here (an unsupported/unparseable dev
+	// test) is not fatal to the run: the conditioning axis is best-effort
+	// telemetry, not a gate, so it is simply left at its zero value.
+	testComplexity := 0
+	if testSigs, terr := repoindex.ExtractSignatures(rs.DevTestCode, rs.Lang); terr == nil {
+		for _, s := range testSigs {
+			testComplexity += s.Complexity
+		}
 	}
 
 	d.mu.Lock()
 	d.runs[missionID] = &runState{
 		rs: rs, sigs: sigs, testWriterTaskID: twID, startedAt: d.Now(),
-		shardRetries: map[string]int{},
-		droppedKeys:  map[string]bool{},
-		shardSymbols: shardSymbols,
+		shardRetries:   map[string]int{},
+		droppedKeys:    map[string]bool{},
+		shardSymbols:   shardSymbols,
+		shardStats:     stats,
+		testComplexity: testComplexity,
 	}
 	d.mu.Unlock()
 	d.emit(missionID, "pool_subject", rs.CodePath, map[string]any{
@@ -562,6 +621,17 @@ func (d *Driver) tickDevAdequacy(ctx context.Context, missionID int64, run *runS
 			}
 			run.droppedKeys[key] = true
 			run.droppedRegions = append(run.droppedRegions, label)
+			// Guarded by `sharded`: an unsharded run's shardStats map starts
+			// (and must stay) empty — bugCatchObservations reads its length
+			// to decide whether to emit the single-seat row or the per-shard
+			// rows, so writing a key here for the bare, unsharded task would
+			// silently flip that decision.
+			if sharded {
+				st := run.shardStats[shardIdx]
+				st.parseRetries = run.shardRetries[key]
+				st.dropped = true
+				run.shardStats[shardIdx] = st
+			}
 			continue
 		}
 		if len(parsed) > 0 {
@@ -576,6 +646,12 @@ func (d *Driver) tickDevAdequacy(ctx context.Context, missionID int64, run *runS
 				m.ID = fmt.Sprintf("s%d/%s", shardIdx, m.ID)
 			}
 			mutants = append(mutants, m)
+		}
+		if sharded {
+			st := run.shardStats[shardIdx]
+			st.mutants = len(parsed)
+			st.parseRetries = run.shardRetries[mgs[i].Key]
+			run.shardStats[shardIdx] = st
 		}
 	}
 	run.regionsTotal = len(mgs)
@@ -599,6 +675,18 @@ func (d *Driver) tickDevAdequacy(ctx context.Context, missionID int64, run *runS
 	run.devKillRate = killRate
 	run.mutantsTotal = len(mutants)
 	run.devSurvivors = survivors
+	// Emit one telemetry event per shard now that run.shardStats is final
+	// (this whole function only reaches here once, guarded by devScored, so
+	// this cannot double-emit on a re-entrant tick) — the --record tape, the
+	// cockpit, and telemetry all get it from this one write.
+	for _, i := range sortedShardIndexes(run.shardStats) {
+		st := run.shardStats[i]
+		d.emit(missionID, "pool_shard", st.region, map[string]any{
+			"shard": i, "region": st.region,
+			"region_complexity": st.complexity, "region_lines": st.lines,
+			"mutants": st.mutants, "parse_retries": st.parseRetries, "dropped": st.dropped,
+		})
+	}
 	// Log the headline the moment it's computed — the dev suite's grade — so it
 	// is visible even if the downstream test-writer/aggregate steps stall.
 	log.Printf("advpool: run %d dev-adequacy: the dev's OWN tests scored %.0f%% (killed %d of %d mutants, %d survived — bugs the dev's tests miss)",
@@ -855,11 +943,40 @@ func bugCatchObservations(run *runState, v Verdict) []BugCatchObservation {
 		Model: v.ModelsByRole[RoleTestCritic], Role: RoleTestCritic,
 		CriticFlags: len(v.VacuousFindings),
 	})
-	// mutant-generator: adversary potency (not a catcher).
-	out = append(out, BugCatchObservation{
-		Model: v.ModelsByRole[RoleMutantGenerator], Role: RoleMutantGenerator,
-		MutantsPlanted: v.MutantsTotal, MutantsSurvived: v.Survivors,
-	})
+	// mutant-generator: one row PER SHARD. Never summed — see shardStat.
+	if len(run.shardStats) == 0 {
+		out = append(out, BugCatchObservation{
+			Model: v.ModelsByRole[RoleMutantGenerator], Role: RoleMutantGenerator,
+			MutantsPlanted: v.MutantsTotal, MutantsSurvived: v.Survivors,
+			TestComplexity: run.testComplexity,
+		})
+	} else {
+		for _, i := range sortedShardIndexes(run.shardStats) {
+			st := run.shardStats[i]
+			out = append(out, BugCatchObservation{
+				Model: v.ModelsByRole[RoleMutantGenerator], Role: RoleMutantGenerator,
+				MutantsPlanted:   st.mutants,
+				Shard:            i,
+				Region:           st.region,
+				RegionComplexity: st.complexity,
+				RegionLines:      st.lines,
+				TestComplexity:   run.testComplexity,
+				ParseRetries:     st.parseRetries,
+				Dropped:          st.dropped,
+			})
+		}
+	}
+	return out
+}
+
+// sortedShardIndexes returns the shard indexes in ascending order, so emitted
+// events and recorded rows are deterministic.
+func sortedShardIndexes(m map[int]shardStat) []int {
+	out := make([]int, 0, len(m))
+	for i := range m {
+		out = append(out, i)
+	}
+	sort.Ints(out)
 	return out
 }
 

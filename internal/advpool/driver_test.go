@@ -2087,3 +2087,41 @@ func TestTimeoutVerdictCarriesRegionCoverage(t *testing.T) {
 		t.Errorf("DroppedRegions = %v, want 1 entry", v.DroppedRegions)
 	}
 }
+
+// TestBugCatchRowsArePerShard proves the metrics keep every seat visible.
+// Summing shards back into one generator row would collapse N seats into 1 and
+// make an underperforming seat invisible BY CONSTRUCTION.
+func TestBugCatchRowsArePerShard(t *testing.T) {
+	const missionID = int64(220)
+	scorer := &fakeScorer{devKillRate: 1.0}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
+	d := newShardedRun(t, missionID, 3, scorer, validator)
+	sink := &fakeBugCatch{}
+	d.BugCatch = sink
+	d.Signer = &fakeSigner{} // BugCatch is fed on a terminal, signed verdict
+
+	driveShardedToVerdict(t, d, missionID, "raw")
+
+	var gen []BugCatchObservation
+	for _, o := range sink.obs {
+		if o.Role == RoleMutantGenerator {
+			gen = append(gen, o)
+		}
+	}
+	if len(gen) != 3 {
+		t.Fatalf("want one generator row per shard (3), got %d — rows were summed", len(gen))
+	}
+	seenShards := map[int]bool{}
+	for _, o := range gen {
+		if seenShards[o.Shard] {
+			t.Errorf("duplicate row for shard %d", o.Shard)
+		}
+		seenShards[o.Shard] = true
+		if o.Region == "" {
+			t.Errorf("shard %d: Region must name the symbols attacked", o.Shard)
+		}
+		if o.RegionComplexity <= 0 {
+			t.Errorf("shard %d: RegionComplexity must be recorded as the difficulty control, got %d", o.Shard, o.RegionComplexity)
+		}
+	}
+}

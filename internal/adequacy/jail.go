@@ -56,6 +56,44 @@ func (j bwrapJail) RunTest(ctx context.Context, files map[string]string, testCmd
 	}
 	defer os.RemoveAll(dir) // #nosec G104 -- best-effort cleanup of our own disposable temp dir
 
+	// World-readable/traversable perms (not the Go default 0600/0700).
+	//
+	// WHY: the container backend (internal/sandbox/container.go) always runs
+	// with --cap-drop=ALL, which strips CAP_DAC_OVERRIDE, and the standard
+	// language images (python:slim, node:slim, etc.) default to a container
+	// user of root — but that "root" is a *different* uid in the container's
+	// user namespace than the host uid that owns this MkdirTemp workspace.
+	// Without CAP_DAC_OVERRIDE, that container-root is subject to ordinary
+	// Unix permission checks, so it cannot open a 0600 file or traverse a
+	// 0700 dir owned by a different uid: every --jail container run failed
+	// to even read its own workspace before this fix (confirmed by hand
+	// against a live docker run — PermissionError during pytest's own config
+	// discovery). The bwrap backend runs the sandboxed process as the SAME
+	// host uid, so it never depended on the restrictive perms for isolation
+	// in the first place; loosening them costs it nothing.
+	//
+	// We chose "make the workspace world-readable" over "run the container
+	// as --user <hostuid>:<hostgid>" because the latter is fragile across
+	// images (many images don't tolerate an arbitrary non-root uid, and
+	// their entrypoints/tmpfs HOME may not be writable by it) and actively
+	// dangerous on podman rootless, which already remaps the container's
+	// root to the host uid via its own user namespace — forcing --user
+	// there would double-map and could break a currently-working case.
+	// World-readable perms work identically regardless of runtime, image,
+	// or uid-mapping scheme.
+	//
+	// Exposure this accepts: for the few hundred milliseconds this scratch
+	// dir exists, its contents (the operator's OWN code-under-audit, not a
+	// secret) are readable by any other local user on a shared host — a
+	// non-issue on a single-user dev box or CI runner, and it does not
+	// change what the *sandbox* isolates (network, read-only rootfs,
+	// cap-drop, and the anti-escape path guard below are untouched). This
+	// scope is deliberately narrow: only this disposable adequacy workspace
+	// gets loosened perms, nowhere else in the codebase.
+	if err := os.Chmod(dir, 0o755); err != nil { // #nosec G302 -- deliberately world-readable, see comment above
+		return false, fmt.Errorf("adequacy: chmod workspace: %w", err)
+	}
+
 	for path, content := range files {
 		// #nosec G304 -- path is one of corral's own synthetic filenames (mutant
 		// filenames / base fixture keys), not attacker-controlled; still cleaned
@@ -65,10 +103,10 @@ func (j bwrapJail) RunTest(ctx context.Context, files map[string]string, testCmd
 			return false, fmt.Errorf("adequacy: refusing to write file outside workspace: %q", path)
 		}
 		full := filepath.Join(dir, clean)
-		if err := os.MkdirAll(filepath.Dir(full), 0o750); err != nil {
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil { // #nosec G301 -- deliberately world-readable, see comment above
 			return false, fmt.Errorf("adequacy: create parent dirs for %q: %w", path, err)
 		}
-		if err := os.WriteFile(full, []byte(content), 0o600); err != nil {
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil { // #nosec G306 -- deliberately world-readable, see comment above
 			return false, fmt.Errorf("adequacy: write %q: %w", path, err)
 		}
 	}

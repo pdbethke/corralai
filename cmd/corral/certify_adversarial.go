@@ -302,9 +302,12 @@ func renderAdvVerdict(w io.Writer, codePath string, v advVerdict) {
 	fmt.Fprintf(w, "  survivors:     %d\n", v.Survivors)
 	fmt.Fprintf(w, "  proven_missed: %d\n", v.ProvenMissed)
 	if len(v.VacuousFindings) == 0 {
-		fmt.Fprintln(w, "  vacuous tests: none flagged")
+		fmt.Fprintln(w, "  critic review: no vacuous tests flagged")
 	} else {
-		fmt.Fprintf(w, "  vacuous tests: %d flagged\n", len(v.VacuousFindings))
+		// The critic's flags are a SECOND MODEL'S UNVERIFIED opinion — not part
+		// of the execution-proven verdict above, and they do NOT gate the signed
+		// record. Label them so no one mistakes an LLM's say-so for proof.
+		fmt.Fprintf(w, "  critic review: %d test(s) flagged — UNVERIFIED (a second model's opinion, not execution-proven; check before acting)\n", len(v.VacuousFindings))
 	}
 	fmt.Fprintf(w, "  models:        %s\n", formatModels(v.ModelsByRole))
 	if v.RecordID != 0 {

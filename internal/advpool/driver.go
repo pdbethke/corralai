@@ -598,8 +598,14 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	}
 	criticFindings := filterCriticFindings(findings, tc.ID)
 
+	// The critic's findings are a second model's UNVERIFIED review — carried on
+	// the verdict as advisory (VacuousFindings) but NOT gating the signed record
+	// (pass false, not d.blockingFindingOpen(findings)): certification is an
+	// execution-proven judgment (kill-rate + proven_missed), never an LLM's
+	// opinion, which can hallucinate. blockingFindingOpen remains for a future
+	// execution-verified finding path.
 	v := aggregate(run.rs, d.Assign, run.devKillRate, run.mutantsTotal, len(run.devSurvivors), run.provenMissed,
-		criticFindings, d.Threshold, d.blockingFindingOpen(findings))
+		criticFindings, d.Threshold, false)
 
 	if d.Signer != nil {
 		recordID, head, serr := d.Signer.SignVerdict(ctx, v)

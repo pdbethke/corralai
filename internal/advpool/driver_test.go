@@ -334,7 +334,11 @@ func TestTick_Aggregate_Certified(t *testing.T) {
 }
 
 // (d) a blocking finding open -> needs-review, even with a high DevKillRate.
-func TestTick_Aggregate_BlockingFinding_NeedsReview(t *testing.T) {
+// A test-critic finding is a SECOND MODEL'S UNVERIFIED opinion: it is carried on
+// the verdict as advisory review but must NOT gate the signed record. With a
+// kill-rate (0.95) at/above threshold (0.5), the run CERTIFIES despite the
+// critic's flag — execution proves adequacy; an LLM opinion does not un-prove it.
+func TestTick_CriticFindingIsAdvisory_CertifiesOnKillRate(t *testing.T) {
 	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}}
 	scorer := &fakeScorer{devKillRate: 0.95, devSurvivors: survivors, poolSurvivors: nil}
 	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0]}}
@@ -372,11 +376,11 @@ func TestTick_Aggregate_BlockingFinding_NeedsReview(t *testing.T) {
 	if v == nil {
 		t.Fatal("expected a verdict")
 	}
-	if v.Status != StatusNeedsReview {
-		t.Fatalf("Status = %q, want %q (blocking finding open)", v.Status, StatusNeedsReview)
+	if v.Status != StatusCertified {
+		t.Fatalf("Status = %q, want %q — a critic finding is UNVERIFIED review and must not gate; kill-rate 0.95 >= threshold 0.5 certifies", v.Status, StatusCertified)
 	}
 	if len(v.VacuousFindings) != 1 {
-		t.Fatalf("VacuousFindings = %d, want 1", len(v.VacuousFindings))
+		t.Fatalf("VacuousFindings = %d, want 1 (the critic's review is still CARRIED as advisory, just not gating)", len(v.VacuousFindings))
 	}
 }
 
@@ -963,7 +967,11 @@ func TestTick_PerfectSuite_DoesNotPenalizeMootTestWriter(t *testing.T) {
 
 // The human gate still applies at a PERFECT (100%) kill-rate: a blocking finding
 // from the test-critic routes even a 0-survivor run to needs-review.
-func TestTick_PerfectSuite_BlockingFinding_NeedsReview(t *testing.T) {
+// The more-itertools case, distilled: a perfect suite (100% kill-rate) with a
+// critic flag CERTIFIES — the flag is a second model's unverified opinion (the
+// one that once hallucinated islice raising nothing on a negative index), and a
+// tamper-evident record asserts only what execution proves.
+func TestTick_PerfectSuite_CriticFlagIsAdvisory_Certifies(t *testing.T) {
 	const mission int64 = 79
 	scorer := &fakeScorer{devKillRate: 1.0, devSurvivors: nil}
 	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, {ID: "m1", Code: "c1"}}}
@@ -985,8 +993,11 @@ func TestTick_PerfectSuite_BlockingFinding_NeedsReview(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Tick: %v", err)
 	}
-	if v == nil || v.Status != StatusNeedsReview {
-		t.Fatalf("Status = %v, want needs-review (blocking finding open even at 100%% kill-rate)", v)
+	if v == nil || v.Status != StatusCertified {
+		t.Fatalf("Status = %v, want certified — a 100%% kill-rate certifies; a critic's UNVERIFIED flag is advisory, not a gate (the islice-hallucination lesson)", v)
+	}
+	if len(v.VacuousFindings) != 1 {
+		t.Fatalf("VacuousFindings = %d, want 1 (advisory review carried, not gating)", len(v.VacuousFindings))
 	}
 }
 

@@ -30,6 +30,15 @@ func aggregate(
 		ModelsByRole:    map[string]string(assign),
 		Status:          StatusCertified,
 	}
+	// The SIGNED certify/needs-review decision rests on execution-proven signals:
+	// the mutation kill-rate against the threshold, run in the jail. The
+	// test-critic's vacuous-test flags are a SECOND MODEL'S UNVERIFIED OPINION
+	// (VacuousFindings) — carried as advisory review but never gating the signed
+	// record, because an LLM opinion can be wrong (it once "flagged" a valid test
+	// by hallucinating that islice doesn't raise on a negative index). A
+	// tamper-evident record must assert only what execution proves; the caller
+	// passes blockingFindingOpen=false for critic findings, keeping the parameter
+	// for a future EXECUTION-VERIFIED finding path.
 	if blockingFindingOpen || devKillRate < threshold {
 		v.Status = StatusNeedsReview
 	}

@@ -531,3 +531,108 @@ func TestBugCatchSinkPersistsToStore(t *testing.T) {
 		t.Fatalf("scorecard = %+v, want one cell catches=1 opps=2", cells)
 	}
 }
+
+// TestAdvPoolBugCatchSinkRecord_CopiesEveryField closes IMPORTANT 4: this is
+// the ONLY path converting advpool.BugCatchObservation (the driver's pure
+// output) into bugcatch.Observation (what actually lands in the persisted
+// ledger) on the live brain. Deleting a field-copy line here leaves every
+// package's own test suite green — nothing else exercises this conversion —
+// so this test populates EVERY BugCatchObservation field with a distinct,
+// recognizable value and asserts every corresponding Observation field
+// (including the per-shard columns Scorecard never projects, which is why
+// this reads back via store.Observations, not store.Scorecard) survived.
+func TestAdvPoolBugCatchSinkRecord_CopiesEveryField(t *testing.T) {
+	store, err := bugcatch.Open(t.TempDir() + "/bc.duckdb")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	fixedClock := time.Unix(5000, 0).UTC()
+	sink := advpoolBugCatchSink{
+		store:     store,
+		clock:     func() time.Time { return fixedClock },
+		missionID: 99, repo: "git@x:field-copy.git", commit: "deadbeef",
+	}
+
+	in := advpool.BugCatchObservation{
+		Model: "distinct-model", Role: "mutant-generator",
+		Catches: 11, Opportunities: 22,
+		SoundTests: 33, AuthoredTests: 44,
+		CriticFlags: 55, MutantsPlanted: 66, MutantsSurvived: 77,
+		Shard: 3, Region: "distinct-region", RegionComplexity: 88, RegionLines: 99,
+		TestComplexity: 111, ParseRetries: 2, Dropped: true, Shadow: true,
+	}
+	sink.Record(1234, "distinct-head", []advpool.BugCatchObservation{in})
+
+	rows, err := store.Observations(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("want 1 persisted row, got %d: %+v", len(rows), rows)
+	}
+	got := rows[0]
+
+	// Fields the sink stamps from the run context, not copied from `in`.
+	if !got.TS.Equal(fixedClock) {
+		t.Errorf("TS = %v, want %v", got.TS, fixedClock)
+	}
+	if got.RecordID != 1234 {
+		t.Errorf("RecordID = %d, want 1234", got.RecordID)
+	}
+	if got.RecordHead != "distinct-head" {
+		t.Errorf("RecordHead = %q, want %q", got.RecordHead, "distinct-head")
+	}
+	if got.MissionID != 99 {
+		t.Errorf("MissionID = %d, want 99", got.MissionID)
+	}
+	if got.Repo != "git@x:field-copy.git" {
+		t.Errorf("Repo = %q, want %q", got.Repo, "git@x:field-copy.git")
+	}
+	if got.Commit != "deadbeef" {
+		t.Errorf("Commit = %q, want %q", got.Commit, "deadbeef")
+	}
+	if got.Source != "pool" {
+		t.Errorf("Source = %q, want %q", got.Source, "pool")
+	}
+
+	// Every field copied straight from the BugCatchObservation — this is the
+	// mapping the two deleted lines (advpool.go ~107-108) closed.
+	switch {
+	case got.Model != in.Model:
+		t.Errorf("Model = %q, want %q", got.Model, in.Model)
+	case got.Role != in.Role:
+		t.Errorf("Role = %q, want %q", got.Role, in.Role)
+	case got.Catches != in.Catches:
+		t.Errorf("Catches = %d, want %d", got.Catches, in.Catches)
+	case got.Opportunities != in.Opportunities:
+		t.Errorf("Opportunities = %d, want %d", got.Opportunities, in.Opportunities)
+	case got.SoundTests != in.SoundTests:
+		t.Errorf("SoundTests = %d, want %d", got.SoundTests, in.SoundTests)
+	case got.AuthoredTests != in.AuthoredTests:
+		t.Errorf("AuthoredTests = %d, want %d", got.AuthoredTests, in.AuthoredTests)
+	case got.CriticFlags != in.CriticFlags:
+		t.Errorf("CriticFlags = %d, want %d", got.CriticFlags, in.CriticFlags)
+	case got.MutantsPlanted != in.MutantsPlanted:
+		t.Errorf("MutantsPlanted = %d, want %d", got.MutantsPlanted, in.MutantsPlanted)
+	case got.MutantsSurvived != in.MutantsSurvived:
+		t.Errorf("MutantsSurvived = %d, want %d", got.MutantsSurvived, in.MutantsSurvived)
+	case got.Shard != in.Shard:
+		t.Errorf("Shard = %d, want %d", got.Shard, in.Shard)
+	case got.Region != in.Region:
+		t.Errorf("Region = %q, want %q", got.Region, in.Region)
+	case got.RegionComplexity != in.RegionComplexity:
+		t.Errorf("RegionComplexity = %d, want %d", got.RegionComplexity, in.RegionComplexity)
+	case got.RegionLines != in.RegionLines:
+		t.Errorf("RegionLines = %d, want %d", got.RegionLines, in.RegionLines)
+	case got.TestComplexity != in.TestComplexity:
+		t.Errorf("TestComplexity = %d, want %d", got.TestComplexity, in.TestComplexity)
+	case got.ParseRetries != in.ParseRetries:
+		t.Errorf("ParseRetries = %d, want %d", got.ParseRetries, in.ParseRetries)
+	case got.Dropped != in.Dropped:
+		t.Errorf("Dropped = %v, want %v", got.Dropped, in.Dropped)
+	case got.Shadow != in.Shadow:
+		t.Errorf("Shadow = %v, want %v", got.Shadow, in.Shadow)
+	}
+}

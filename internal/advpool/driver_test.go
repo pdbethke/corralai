@@ -2088,19 +2088,39 @@ func TestTimeoutVerdictCarriesRegionCoverage(t *testing.T) {
 	}
 }
 
-// TestBugCatchRowsArePerShard proves the metrics keep every seat visible.
-// Summing shards back into one generator row would collapse N seats into 1 and
-// make an underperforming seat invisible BY CONSTRUCTION.
+// TestBugCatchRowsArePerShard proves the metrics keep every seat visible AND
+// that each row's difficulty control (Region/RegionComplexity/RegionLines)
+// belongs to THAT shard — not just that some non-empty/positive value showed
+// up. A row whose difficulty control comes from the WRONG shard looks
+// rigorous while being wrong, which is worse than no control at all, so this
+// recomputes ShardSymbols itself (the same call StartRun makes) and checks
+// each row keyed by its own Shard index. Summing shards back into one
+// generator row would collapse N seats into 1 and make an underperforming
+// seat invisible BY CONSTRUCTION.
 func TestBugCatchRowsArePerShard(t *testing.T) {
 	const missionID = int64(220)
-	scorer := &fakeScorer{devKillRate: 1.0}
+	// devKillRate < 1.0 with a real devSurvivor gives Survivors == 1 — a
+	// perfect (1.0) suite would leave Survivors == 0, which cannot
+	// distinguish "correctly on exactly one row" from "correctly zero
+	// everywhere by construction" for the MutantsSurvived assertion below.
+	scorer := &fakeScorer{devKillRate: 0.5, devSurvivors: []adequacy.Mutant{{ID: "s0/m1", Code: "c1"}}}
 	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
 	d := newShardedRun(t, missionID, 3, scorer, validator)
 	sink := &fakeBugCatch{}
 	d.BugCatch = sink
 	d.Signer = &fakeSigner{} // BugCatch is fed on a terminal, signed verdict
 
-	driveShardedToVerdict(t, d, missionID, "raw")
+	_, sigs := shardedRunSpec(3)
+	wantShards := ShardSymbols(sigs, 3)
+	wantByIndex := make(map[int]Shard, len(wantShards))
+	for _, sh := range wantShards {
+		wantByIndex[sh.Index] = sh
+	}
+	if len(wantByIndex) != 3 {
+		t.Fatalf("test setup: want 3 distinct shards from the fixture, got %d", len(wantByIndex))
+	}
+
+	v := driveShardedToVerdict(t, d, missionID, "raw")
 
 	var gen []BugCatchObservation
 	for _, o := range sink.obs {
@@ -2117,11 +2137,264 @@ func TestBugCatchRowsArePerShard(t *testing.T) {
 			t.Errorf("duplicate row for shard %d", o.Shard)
 		}
 		seenShards[o.Shard] = true
-		if o.Region == "" {
-			t.Errorf("shard %d: Region must name the symbols attacked", o.Shard)
+
+		want, ok := wantByIndex[o.Shard]
+		if !ok {
+			t.Fatalf("row names shard %d, which ShardSymbols never produced", o.Shard)
 		}
-		if o.RegionComplexity <= 0 {
-			t.Errorf("shard %d: RegionComplexity must be recorded as the difficulty control, got %d", o.Shard, o.RegionComplexity)
+		wantRegion := strings.Join(want.Symbols, ", ")
+		if o.Region != wantRegion {
+			t.Errorf("shard %d: Region = %q, want %q (a region belonging to a DIFFERENT shard looks rigorous while being wrong)", o.Shard, o.Region, wantRegion)
+		}
+		if o.RegionComplexity != want.Complexity {
+			t.Errorf("shard %d: RegionComplexity = %d, want %d (that shard's actual complexity)", o.Shard, o.RegionComplexity, want.Complexity)
+		}
+		if o.RegionLines != want.Lines {
+			t.Errorf("shard %d: RegionLines = %d, want %d", o.Shard, o.RegionLines, want.Lines)
+		}
+		// The fake validator hands back exactly one mutant per shard
+		// regardless of which shard asked — st.mutants must record that, not
+		// leave MutantsPlanted at its zero value.
+		if o.MutantsPlanted != 1 {
+			t.Errorf("shard %d: MutantsPlanted = %d, want 1 (st.mutants must be recorded)", o.Shard, o.MutantsPlanted)
+		}
+		if o.Dropped {
+			t.Errorf("shard %d: Dropped = true, want false — no shard was dropped in this run", o.Shard)
+		}
+		if o.ParseRetries != 0 {
+			t.Errorf("shard %d: ParseRetries = %d, want 0 — no shard retried in this run", o.Shard, o.ParseRetries)
+		}
+		if o.TestComplexity != 0 {
+			// shardedRunSpec's dev test code is empty, so testComplexity is
+			// genuinely 0 here; this just pins that every row carries the
+			// SAME run-level value rather than something stray.
+			t.Errorf("shard %d: TestComplexity = %d, want 0 (run.testComplexity for this fixture)", o.Shard, o.TestComplexity)
+		}
+	}
+	var total int
+	for _, o := range gen {
+		total += o.MutantsSurvived
+	}
+	if total != v.Survivors {
+		t.Fatalf("sum(MutantsSurvived) across shard rows = %d, want verdict.Survivors = %d", total, v.Survivors)
+	}
+	// MutantsSurvived is measured against the MERGED mutant set — it cannot be
+	// attributed per shard — so it must land on exactly ONE row (the lowest
+	// shard index is documented as carrying it, see
+	// bugCatchObservations) — pin that too, not just "some row has it".
+	lowest := gen[0].Shard
+	for _, o := range gen {
+		if o.Shard < lowest {
+			lowest = o.Shard
+		}
+	}
+	for _, o := range gen {
+		if o.Shard == lowest && o.MutantsSurvived != v.Survivors {
+			t.Errorf("lowest-index shard %d: MutantsSurvived = %d, want %d", lowest, o.MutantsSurvived, v.Survivors)
+		}
+		if o.Shard != lowest && o.MutantsSurvived != 0 {
+			t.Errorf("non-lowest shard %d: MutantsSurvived = %d, want 0", o.Shard, o.MutantsSurvived)
+		}
+	}
+}
+
+// TestBugCatchRowsCarryDropAndParseRetries proves a dropped shard's
+// BugCatchObservation row records BOTH Dropped=true and the ParseRetries
+// count it actually exhausted — the two fields the drop path
+// (tickDevAdequacy) sets on shardStat, which must survive unchanged into the
+// per-shard rows bugCatchObservations builds from that same map.
+func TestBugCatchRowsCarryDropAndParseRetries(t *testing.T) {
+	const missionID = int64(221)
+	const bad = "UNPARSEABLE"
+	scorer := &fakeScorer{devKillRate: 1.0}
+	validator := &shardValidator{failRaw: bad, mutants: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
+	d := newShardedRun(t, missionID, 3, scorer, validator)
+	sink := &fakeBugCatch{}
+	d.BugCatch = sink
+	d.Signer = &fakeSigner{}
+
+	badKey := ShardTaskKey(0)
+	completeShards := func() {
+		for key, task := range claimAllReady(t, d.Q) {
+			result := "raw"
+			if key == badKey {
+				result = bad
+			}
+			mustComplete(t, d.Q, task.ID, result)
+		}
+	}
+	completeShards()
+	for i := 0; i < MaxShardRetries; i++ {
+		if _, err := d.Tick(context.Background(), missionID); err == nil {
+			t.Fatalf("Tick %d: want a retry error while the shard has budget left", i)
+		}
+		completeShards()
+	}
+	if _, err := d.Tick(context.Background(), missionID); err != nil {
+		t.Fatalf("Tick after drop: %v", err)
+	}
+
+	driveShardedToVerdict(t, d, missionID, "raw")
+
+	var badRow *BugCatchObservation
+	otherDropped, otherRetried := 0, 0
+	for i, o := range sink.obs {
+		if o.Role != RoleMutantGenerator {
+			continue
+		}
+		if o.Shard == 0 {
+			badRow = &sink.obs[i]
+			continue
+		}
+		if o.Dropped {
+			otherDropped++
+		}
+		if o.ParseRetries != 0 {
+			otherRetried++
+		}
+	}
+	if badRow == nil {
+		t.Fatal("no row for the dropped shard 0")
+	}
+	if !badRow.Dropped {
+		t.Error("dropped shard's row: Dropped = false, want true — the drop must be recorded on the row")
+	}
+	if badRow.ParseRetries != MaxShardRetries+1 {
+		t.Errorf("dropped shard's row: ParseRetries = %d, want %d (MaxShardRetries+1, the exhausted attempt count)", badRow.ParseRetries, MaxShardRetries+1)
+	}
+	if otherDropped != 0 {
+		t.Errorf("%d non-dropped shard rows falsely carry Dropped=true", otherDropped)
+	}
+	if otherRetried != 0 {
+		t.Errorf("%d non-retried shard rows falsely carry a nonzero ParseRetries", otherRetried)
+	}
+}
+
+// TestBugCatchRowsCarryTestComplexity proves every shard row carries the
+// run's real (nonzero) dev-suite complexity — not the zeroed default a
+// deleted field-copy would leave behind. shardedRunSpec's fixture has an
+// empty dev test file (testComplexity genuinely 0), which cannot distinguish
+// "correctly zero" from "never set" — so this test supplies a real,
+// non-trivial Go dev-test file instead.
+func TestBugCatchRowsCarryTestComplexity(t *testing.T) {
+	const missionID = int64(222)
+	rs := RunSpec{
+		Repo: "r", Commit: "c", Goal: "g",
+		CodePath: "a.go", Code: "package p\nfunc A() {}\nfunc B() {}\nfunc C() {}\n",
+		DevTestPath: "a_test.go",
+		DevTestCode: "package p\nimport \"testing\"\nfunc TestA(t *testing.T) { if true { t.Log(1) } else { t.Log(2) } }\n",
+		NMutants:    1, Lang: "go", MaxShards: 3,
+	}
+	sigs := []repoindex.Signature{
+		{Name: "A", Complexity: 5, Lines: 10},
+		{Name: "B", Complexity: 3, Lines: 6},
+		{Name: "C", Complexity: 1, Lines: 2},
+	}
+	scorer := &fakeScorer{devKillRate: 1.0}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
+	q := newTestQueue(t)
+	d, err := NewDriver(q, scorer, validator, decorrelatedAssign(), 0.5)
+	if err != nil {
+		t.Fatalf("NewDriver: %v", err)
+	}
+	if err := d.StartRun(missionID, rs, sigs); err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	if _, err := q.PromoteReady(missionID); err != nil {
+		t.Fatalf("PromoteReady: %v", err)
+	}
+	wantComplexity := d.runs[missionID].testComplexity
+	if wantComplexity <= 0 {
+		t.Fatalf("test setup: want a nonzero dev-suite complexity, got %d", wantComplexity)
+	}
+	sink := &fakeBugCatch{}
+	d.BugCatch = sink
+	d.Signer = &fakeSigner{}
+
+	driveShardedToVerdict(t, d, missionID, "raw")
+
+	got := 0
+	for _, o := range sink.obs {
+		if o.Role != RoleMutantGenerator {
+			continue
+		}
+		got++
+		if o.TestComplexity != wantComplexity {
+			t.Errorf("shard %d: TestComplexity = %d, want %d", o.Shard, o.TestComplexity, wantComplexity)
+		}
+	}
+	if got != 3 {
+		t.Fatalf("want 3 generator rows, got %d", got)
+	}
+}
+
+// TestPoolShardTelemetryEmitted proves tickDevAdequacy emits one "pool_shard"
+// event per shard, carrying that shard's real region/complexity/lines/
+// mutants/parse_retries/dropped — the telemetry the cockpit/replay/--record
+// tape read. A prior change could delete this whole emit block and every
+// other Driver test would stay green (it isn't wired to BugCatch/Scorecard),
+// which is exactly why it needs its own direct assertion via fakeEventSink.
+func TestPoolShardTelemetryEmitted(t *testing.T) {
+	const missionID = int64(223)
+	scorer := &fakeScorer{devKillRate: 1.0}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
+	d := newShardedRun(t, missionID, 3, scorer, validator)
+	sink := &fakeEventSink{}
+	d.Events = sink
+
+	_, sigs := shardedRunSpec(3)
+	wantShards := ShardSymbols(sigs, 3)
+	wantByIndex := make(map[int]Shard, len(wantShards))
+	for _, sh := range wantShards {
+		wantByIndex[sh.Index] = sh
+	}
+
+	completeAllReady(t, d, "raw")
+	if _, err := d.Tick(context.Background(), missionID); err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+
+	var shardEvents []eventCall
+	for _, e := range sink.events {
+		if e.kind == "pool_shard" {
+			shardEvents = append(shardEvents, e)
+		}
+	}
+	if len(shardEvents) != 3 {
+		t.Fatalf("want 3 pool_shard events, got %d — the per-shard telemetry emit is missing", len(shardEvents))
+	}
+	seen := map[int]bool{}
+	for _, e := range shardEvents {
+		idx, ok := e.detail["shard"].(int)
+		if !ok {
+			t.Fatalf("pool_shard event detail[\"shard\"] not an int: %#v", e.detail["shard"])
+		}
+		if seen[idx] {
+			t.Errorf("duplicate pool_shard event for shard %d", idx)
+		}
+		seen[idx] = true
+		want, ok := wantByIndex[idx]
+		if !ok {
+			t.Fatalf("pool_shard event names shard %d, which ShardSymbols never produced", idx)
+		}
+		wantRegion := strings.Join(want.Symbols, ", ")
+		if got := e.detail["region"]; got != wantRegion {
+			t.Errorf("shard %d: detail[region] = %v, want %q", idx, got, wantRegion)
+		}
+		if got := e.detail["region_complexity"]; got != want.Complexity {
+			t.Errorf("shard %d: detail[region_complexity] = %v, want %d", idx, got, want.Complexity)
+		}
+		if got := e.detail["region_lines"]; got != want.Lines {
+			t.Errorf("shard %d: detail[region_lines] = %v, want %d", idx, got, want.Lines)
+		}
+		if got := e.detail["mutants"]; got != 1 {
+			t.Errorf("shard %d: detail[mutants] = %v, want 1", idx, got)
+		}
+		if got := e.detail["dropped"]; got != false {
+			t.Errorf("shard %d: detail[dropped] = %v, want false", idx, got)
+		}
+		if got := e.detail["parse_retries"]; got != 0 {
+			t.Errorf("shard %d: detail[parse_retries] = %v, want 0", idx, got)
 		}
 	}
 }

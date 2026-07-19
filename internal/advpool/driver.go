@@ -951,9 +951,19 @@ func bugCatchObservations(run *runState, v Verdict) []BugCatchObservation {
 			TestComplexity: run.testComplexity,
 		})
 	} else {
+		// MutantsSurvived is measured against the MERGED mutant set (Scorer.Score
+		// runs once over the union of every shard's mutants — see
+		// tickDevAdequacy) — there is no sound way to attribute which shard's
+		// mutants specifically survived, so it CANNOT be split per shard without
+		// inventing a false per-shard attribution. Record v.Survivors on exactly
+		// ONE row (the lowest shard index) so the run-level aggregate
+		// (SUM(mutants_survived) for this role) stays exact; every other shard
+		// row carries 0. Do NOT "fix" this into an even/proportional split
+		// across shards — that would be a fabricated number, not a measured one.
+		first := true
 		for _, i := range sortedShardIndexes(run.shardStats) {
 			st := run.shardStats[i]
-			out = append(out, BugCatchObservation{
+			obs := BugCatchObservation{
 				Model: v.ModelsByRole[RoleMutantGenerator], Role: RoleMutantGenerator,
 				MutantsPlanted:   st.mutants,
 				Shard:            i,
@@ -963,7 +973,12 @@ func bugCatchObservations(run *runState, v Verdict) []BugCatchObservation {
 				TestComplexity:   run.testComplexity,
 				ParseRetries:     st.parseRetries,
 				Dropped:          st.dropped,
-			})
+			}
+			if first {
+				obs.MutantsSurvived = v.Survivors
+				first = false
+			}
+			out = append(out, obs)
 		}
 	}
 	return out

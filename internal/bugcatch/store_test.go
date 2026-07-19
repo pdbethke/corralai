@@ -2,6 +2,8 @@ package bugcatch
 
 import (
 	"context"
+	"database/sql"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -78,5 +80,189 @@ func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestScorecardRunsCountsDistinctRunsNotRows is the regression test for
+// IMPORTANT 2: swarm slice 2 fans the mutant-generator role out into one row
+// PER SHARD (up to DefaultMaxShards=8), while every other role still writes
+// exactly one row per run. Runs must count converged RUNS (COUNT(DISTINCT
+// record_id)), never observation rows (COUNT(*)) — the latter would report a
+// single 8-shard run as RUNS=8 for mutant-generator while test-writer
+// correctly reports RUNS=1 for the SAME run, silently defeating the
+// provisionalBelow=3 "not yet a signal" gate after one real run.
+func TestScorecardRunsCountsDistinctRunsNotRows(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	ts := time.Unix(1, 0).UTC()
+
+	// Run 100: 8 mutant-generator shard rows (same record_id, same model —
+	// exactly what one sharded run's driver output looks like) plus the
+	// SAME run's single test-writer row.
+	for shard := 0; shard < 8; shard++ {
+		must(t, s.Record(ctx, []Observation{{
+			TS: ts, RecordID: 100, Model: "m", Role: "mutant-generator", Source: "pool",
+			Shard: shard, MutantsPlanted: 1,
+		}}))
+	}
+	must(t, s.Record(ctx, []Observation{{
+		TS: ts, RecordID: 100, Model: "m", Role: "test-writer", Source: "pool",
+		Catches: 1, Opportunities: 1, AuthoredTests: 1, SoundTests: 1,
+	}}))
+
+	// A second, independent run (record_id 101) contributes one more row to
+	// each role, so both cells have exactly 2 real runs behind them.
+	must(t, s.Record(ctx, []Observation{{
+		TS: ts, RecordID: 101, Model: "m", Role: "mutant-generator", Source: "pool",
+		Shard: 0, MutantsPlanted: 1,
+	}}))
+	must(t, s.Record(ctx, []Observation{{
+		TS: ts, RecordID: 101, Model: "m", Role: "test-writer", Source: "pool",
+		Catches: 1, Opportunities: 1, AuthoredTests: 1, SoundTests: 1,
+	}}))
+
+	cells, err := s.Scorecard(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gen, tw *Cell
+	for i := range cells {
+		switch cells[i].Role {
+		case "mutant-generator":
+			gen = &cells[i]
+		case "test-writer":
+			tw = &cells[i]
+		}
+	}
+	if gen == nil || tw == nil {
+		t.Fatalf("missing cells: %+v", cells)
+	}
+	if gen.Runs != 2 {
+		t.Fatalf("mutant-generator Runs = %d, want 2 (2 runs, 9 rows) — Runs is counting rows, not runs", gen.Runs)
+	}
+	if tw.Runs != 2 {
+		t.Fatalf("test-writer Runs = %d, want 2", tw.Runs)
+	}
+}
+
+// TestMigrationIdempotent proves opening the same ledger file twice adds no
+// duplicate columns and errors on neither open — the property the prior
+// round's scratch test verified and then deleted.
+func TestMigrationIdempotent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bc.duckdb")
+
+	s1, err := Open(path)
+	if err != nil {
+		t.Fatalf("first Open: %v", err)
+	}
+	cols1 := countColumns(t, s1)
+	if err := s1.Close(); err != nil {
+		t.Fatalf("close first: %v", err)
+	}
+
+	s2, err := Open(path)
+	if err != nil {
+		t.Fatalf("second Open: %v", err)
+	}
+	defer s2.Close()
+	cols2 := countColumns(t, s2)
+
+	if len(cols2) != len(cols1) {
+		t.Fatalf("column count changed across a re-open with no schema change: %d -> %d (duplicate ALTER?)", len(cols1), len(cols2))
+	}
+	for name := range cols2 {
+		if cols2[name] != 1 {
+			t.Errorf("column %q appears %d times, want exactly 1", name, cols2[name])
+		}
+	}
+}
+
+// countColumns returns, for the live bugcatch_observations table, how many
+// times each column name appears in information_schema.columns — more than
+// once for any name would mean a migration ALTER ran again on an
+// already-migrated table.
+func countColumns(t *testing.T, s *Store) map[string]int {
+	t.Helper()
+	rows, err := s.db.Query(`SELECT column_name FROM information_schema.columns WHERE table_name = ?`, "bugcatch_observations")
+	if err != nil {
+		t.Fatalf("probe columns: %v", err)
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatalf("scan column: %v", err)
+		}
+		out[name]++
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate columns: %v", err)
+	}
+	return out
+}
+
+// TestMigrationUpgradesPreExistingDatabase proves a ledger created before
+// swarm slice 2 (the bare pre-migration CREATE TABLE, missing every column in
+// bugcatchObservationsMigrationCols) gets those columns added on Open, and
+// can then round-trip a full Record() — every field, including the per-shard
+// ones the pre-migration schema never had.
+func TestMigrationUpgradesPreExistingDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.duckdb")
+
+	// Stand up the ORIGINAL pre-migration schema directly (bypassing Open,
+	// which would immediately migrate it) — the exact CREATE TABLE this
+	// package used before the shard/region/etc. columns existed.
+	raw, err := sql.Open("duckdb", path)
+	if err != nil {
+		t.Fatalf("raw open: %v", err)
+	}
+	if _, err := raw.Exec(`CREATE TABLE bugcatch_observations (
+		ts TIMESTAMP, record_id BIGINT, record_head VARCHAR, mission_id BIGINT,
+		repo VARCHAR, commit VARCHAR, model VARCHAR, role VARCHAR, source VARCHAR,
+		catches INTEGER, opportunities INTEGER, sound_tests INTEGER, authored_tests INTEGER,
+		critic_flags INTEGER, mutants_planted INTEGER, mutants_survived INTEGER
+	)`); err != nil {
+		t.Fatalf("create legacy table: %v", err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close raw: %v", err)
+	}
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open on pre-existing database: %v", err)
+	}
+	defer s.Close()
+
+	cols := countColumns(t, s)
+	for _, c := range bugcatchObservationsMigrationCols {
+		if cols[c.name] != 1 {
+			t.Fatalf("migrated column %q not added exactly once (count=%d)", c.name, cols[c.name])
+		}
+	}
+
+	ctx := context.Background()
+	ts := time.Unix(2, 0).UTC()
+	want := Observation{
+		TS: ts, RecordID: 200, RecordHead: "head200", MissionID: 9,
+		Repo: "r", Commit: "c", Model: "m", Role: "mutant-generator", Source: "pool",
+		Catches: 1, Opportunities: 2, SoundTests: 3, AuthoredTests: 4,
+		CriticFlags: 5, MutantsPlanted: 6, MutantsSurvived: 7,
+		Shard: 1, Region: "A, B", RegionComplexity: 8, RegionLines: 9,
+		TestComplexity: 10, ParseRetries: 1, Dropped: true, Shadow: false,
+	}
+	if err := s.Record(ctx, []Observation{want}); err != nil {
+		t.Fatalf("Record on upgraded database: %v", err)
+	}
+	got, err := s.Observations(ctx)
+	if err != nil {
+		t.Fatalf("Observations: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("want 1 round-tripped row, got %d", len(got))
+	}
+	if got[0] != want {
+		t.Fatalf("round-tripped observation = %+v, want %+v", got[0], want)
 	}
 }

@@ -161,8 +161,13 @@ func (s *Store) Record(ctx context.Context, obs []Observation) error {
 		if model == "" {
 			model = "(unknown model)"
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO bugcatch_observations VALUES
-			(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		if _, err := tx.ExecContext(ctx, `INSERT INTO bugcatch_observations (
+			ts, record_id, record_head, mission_id, repo, commit, model, role, source,
+			catches, opportunities, sound_tests, authored_tests,
+			critic_flags, mutants_planted, mutants_survived,
+			shard, region, region_complexity, region_lines,
+			test_complexity, parse_retries, dropped, shadow
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			o.TS, o.RecordID, o.RecordHead, o.MissionID, o.Repo, o.Commit, model, o.Role, o.Source,
 			o.Catches, o.Opportunities, o.SoundTests, o.AuthoredTests,
 			o.CriticFlags, o.MutantsPlanted, o.MutantsSurvived,
@@ -174,13 +179,51 @@ func (s *Store) Record(ctx context.Context, obs []Observation) error {
 	return tx.Commit()
 }
 
+// Observations returns every raw row in insertion order, unaggregated —
+// unlike Scorecard, which only ever surfaces the SUM'd model×role cells. This
+// exists to let a test assert the full round-trip (every Observation field
+// survives Record unchanged, including the per-shard columns Scorecard never
+// projects) and for ad hoc debugging; ordinary callers want Scorecard.
+func (s *Store) Observations(ctx context.Context) ([]Observation, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT
+		ts, record_id, record_head, mission_id, repo, commit, model, role, source,
+		catches, opportunities, sound_tests, authored_tests,
+		critic_flags, mutants_planted, mutants_survived,
+		shard, region, region_complexity, region_lines,
+		test_complexity, parse_retries, dropped, shadow
+		FROM bugcatch_observations`)
+	if err != nil {
+		return nil, fmt.Errorf("bugcatch: observations: %w", err)
+	}
+	defer rows.Close()
+	var out []Observation
+	for rows.Next() {
+		var o Observation
+		if err := rows.Scan(&o.TS, &o.RecordID, &o.RecordHead, &o.MissionID, &o.Repo, &o.Commit, &o.Model, &o.Role, &o.Source,
+			&o.Catches, &o.Opportunities, &o.SoundTests, &o.AuthoredTests,
+			&o.CriticFlags, &o.MutantsPlanted, &o.MutantsSurvived,
+			&o.Shard, &o.Region, &o.RegionComplexity, &o.RegionLines,
+			&o.TestComplexity, &o.ParseRetries, &o.Dropped, &o.Shadow); err != nil {
+			return nil, fmt.Errorf("bugcatch: scan observation: %w", err)
+		}
+		out = append(out, o)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) Scorecard(ctx context.Context) ([]Cell, error) {
+	// Runs is COUNT(DISTINCT record_id), never COUNT(*): swarm slice 2 fans the
+	// mutant-generator role out into one row PER SHARD (up to DefaultMaxShards
+	// per run), while every other role still writes exactly one row per run.
+	// COUNT(*) would report a sharded run as 8 runs instead of 1, defeating the
+	// provisionalBelow=3 gate after a single real run — see the field note this
+	// migration fixed (Runs must count converged RUNS, not observation rows).
 	rows, err := s.db.QueryContext(ctx, `SELECT model, role,
 		SUM(catches), SUM(opportunities),
 		CASE WHEN SUM(opportunities) > 0 THEN SUM(catches)*1.0/SUM(opportunities) END,
 		SUM(sound_tests), SUM(authored_tests),
 		CASE WHEN SUM(authored_tests) > 0 THEN SUM(sound_tests)*1.0/SUM(authored_tests) END,
-		SUM(critic_flags), SUM(mutants_planted), SUM(mutants_survived), COUNT(*)
+		SUM(critic_flags), SUM(mutants_planted), SUM(mutants_survived), COUNT(DISTINCT record_id)
 		FROM bugcatch_observations
 		GROUP BY model, role
 		ORDER BY SUM(catches) DESC, model, role`)

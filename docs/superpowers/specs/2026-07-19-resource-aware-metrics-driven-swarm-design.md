@@ -52,6 +52,15 @@ belongs to the *code*, not a test):
    tests are load-bearing vs dead weight — the execution-proven version of
    "vacuous", no LLM opinion). This is also the execution-verification of the
    test-critic discussed in "the-code-is-the-code".
+   **Killer product payoff — test-attrition detection.** Read the matrix down the
+   per-test axis: a test that kills **zero** mutants is *provably* dead weight
+   (the feature it covered was removed/refactored; it decayed into a passing
+   no-op). On a 1,000-test suite this finds the ~hundred stale tests that are
+   pure CI drag and false confidence — an execution-proven, opinion-free "safe to
+   delete" list. "Stronger" is signal-per-test, not test count: the matrix both
+   adds the missing killing test AND cuts the dead ones. This is a concrete,
+   universally-felt ROI (faster CI + honest green) and it's the single strongest
+   demo of why the swarm's per-test axis matters.
 3. **Test-writer per survivor; critic per test cluster** — the remaining
    fan-out, gated behind the suite-level survivor set (a real barrier).
 

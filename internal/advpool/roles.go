@@ -194,6 +194,39 @@ func shardTitle(sh Shard) string {
 	return "Generate mutants for " + strings.Join(sh.Symbols, ", ")
 }
 
+// RoleMutantGeneratorShadow is the CHALLENGER generator seat: a second model
+// attacking the SAME region as its primary, for a region-controlled head-to-head.
+//
+// It is a DISTINCT role key on purpose. tasksByRole(RoleMutantGenerator)
+// therefore CANNOT return a shadow task — the exclusion is structural, not a
+// boolean someone must remember to check at each of four call sites. This is
+// the gate; a flag would be the wrong mechanism.
+//
+// Assigning different models to different SHARDS instead would be no comparison
+// at all: it is confounded by region exactly as raw per-shard yield is, and it
+// would blend the exam's difficulty (the generator SETS the difficulty, so a
+// weaker model on one shard plants easier mutants, the dev suite kills them,
+// and the kill-rate rises) under a fixed certification threshold.
+const RoleMutantGeneratorShadow = "mutant-generator-shadow"
+
+// ShadowShardTaskKey is the queue key for the challenger seat on shard i.
+func ShadowShardTaskKey(index int) string {
+	return RoleMutantGeneratorShadow + "/" + strconv.Itoa(index)
+}
+
+// ShadowShardIndexFromKey mirrors ShardIndexFromKey for challenger seats.
+func ShadowShardIndexFromKey(key string) (int, bool) {
+	rest, ok := strings.CutPrefix(key, RoleMutantGeneratorShadow+"/")
+	if !ok {
+		return 0, false
+	}
+	i, err := strconv.Atoi(rest)
+	if err != nil || i < 0 {
+		return 0, false
+	}
+	return i, true
+}
+
 // Roles returns the pool's three worker roles: mutant-generator and
 // test-critic run in parallel with no deps; test-writer depends on
 // dev-adequacy (the survivors it needs to target).
@@ -233,6 +266,22 @@ func BuildDAG(rs RunSpec, assign RoleAssignment, sigs []repoindex.Signature) []q
 					Instruction: renderMutantGeneratorShard(rs, sigs, sh),
 					Model:       assign[RoleMutantGenerator],
 				})
+			}
+			// The challenger fans out over the SAME shards, one seat per region,
+			// under its OWN role key (RoleMutantGeneratorShadow) — never under
+			// RoleMutantGenerator — so tasksByRole(RoleMutantGenerator) structurally
+			// cannot return a shadow task. See RoleMutantGeneratorShadow's doc for
+			// why this is a role key and not a boolean field.
+			if strings.TrimSpace(rs.ShadowModel) != "" {
+				for _, sh := range shards {
+					specs = append(specs, queue.TaskSpec{
+						Key:         ShadowShardTaskKey(sh.Index),
+						Role:        RoleMutantGeneratorShadow,
+						Title:       "Challenger: " + shardTitle(sh),
+						Instruction: renderMutantGeneratorShard(rs, sigs, sh),
+						Model:       rs.ShadowModel,
+					})
+				}
 			}
 			continue
 		}

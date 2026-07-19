@@ -28,6 +28,13 @@ type RunSpec struct {
 	// PARALLELISM only: every symbol is probed regardless (see ShardSymbols).
 	// NMutants is the PER-SHARD budget, so total mutants scale with width.
 	MaxShards int
+
+	// ShadowModel is the CHALLENGER generator model. When set, every shard is
+	// attacked a second time by this model for a region-controlled head-to-head.
+	// Shadow mutants are parsed, scored, and recorded, but NEVER feed the
+	// verdict — the exam's difficulty stays set by the primary model alone, so
+	// certification means exactly what it meant before. "" disables.
+	ShadowModel string
 }
 
 // RoleAssignment maps a role name (Role.Name) to the gate-earned model that

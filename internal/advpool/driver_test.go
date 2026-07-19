@@ -2500,3 +2500,114 @@ func TestPoolShardTelemetryEmitted(t *testing.T) {
 		}
 	}
 }
+
+// TestShadowMutantsNeverReachTheGate is THE invariant test. A shadow seat's
+// mutants must never influence DevKillRate, Survivors, MutantsTotal, or Status.
+func TestShadowMutantsNeverReachTheGate(t *testing.T) {
+	const missionID = int64(230)
+	scorer := &fakeScorer{devKillRate: 1.0}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
+	d := newShadowedRun(t, missionID, 2, "challenger-model", scorer, validator)
+
+	primary, err := d.tasksByRole(missionID, RoleMutantGenerator)
+	if err != nil {
+		t.Fatalf("tasksByRole: %v", err)
+	}
+	if len(primary) != 2 {
+		t.Fatalf("want 2 primary seats, got %d", len(primary))
+	}
+	for _, mg := range primary {
+		if strings.Contains(mg.Key, "shadow") {
+			t.Fatalf("a shadow task leaked into the PRIMARY role lookup: %q", mg.Key)
+		}
+	}
+
+	shadow, err := d.tasksByRole(missionID, RoleMutantGeneratorShadow)
+	if err != nil {
+		t.Fatalf("tasksByRole(shadow): %v", err)
+	}
+	if len(shadow) != 2 {
+		t.Fatalf("want 2 shadow seats, got %d", len(shadow))
+	}
+	for _, sh := range shadow {
+		if sh.Model != "challenger-model" {
+			t.Errorf("shadow seat model: want %q, got %q", "challenger-model", sh.Model)
+		}
+	}
+
+	// Every seat — primary and shadow — returns the SAME single canned mutant
+	// via fakeValidator. There are 2 primary seats and 2 shadow seats, so if
+	// shadow mutants reached the gate MutantsTotal would be 4, not 2.
+	driveShardedToVerdict(t, d, missionID, "raw")
+	st, ok := d.RunStatus(missionID)
+	if !ok || st.Verdict == nil {
+		t.Fatal("run did not converge to a verdict")
+	}
+	v := *st.Verdict
+	if v.MutantsTotal != 2 {
+		t.Fatalf("MutantsTotal: want 2 (primary seats only), got %d — SHADOW MUTANTS REACHED THE GATE", v.MutantsTotal)
+	}
+	if v.RegionsTotal != 2 {
+		t.Errorf("RegionsTotal: want 2 (primary seats), got %d", v.RegionsTotal)
+	}
+}
+
+// TestShadowRowsArePairedAndFlagged proves the comparison data lands, marked.
+func TestShadowRowsArePairedAndFlagged(t *testing.T) {
+	const missionID = int64(231)
+	scorer := &fakeScorer{devKillRate: 1.0}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
+	d := newShadowedRun(t, missionID, 2, "challenger-model", scorer, validator)
+	sink := &fakeBugCatch{}
+	d.BugCatch = sink
+	d.Signer = &fakeSigner{}
+
+	driveShardedToVerdict(t, d, missionID, "raw")
+
+	byShard := map[int][]BugCatchObservation{}
+	for _, o := range sink.obs {
+		if o.Role == RoleMutantGenerator || o.Role == RoleMutantGeneratorShadow {
+			byShard[o.Shard] = append(byShard[o.Shard], o)
+		}
+	}
+	for idx, rows := range byShard {
+		if len(rows) != 2 {
+			t.Errorf("shard %d: want a PAIR (primary + shadow), got %d rows", idx, len(rows))
+		}
+		var regions []string
+		shadows := 0
+		for _, r := range rows {
+			regions = append(regions, r.Region)
+			if r.Shadow {
+				shadows++
+			}
+		}
+		if shadows != 1 {
+			t.Errorf("shard %d: want exactly 1 shadow row, got %d", idx, shadows)
+		}
+		// The whole point: SAME region, so the comparison is not confounded.
+		if regions[0] != regions[1] {
+			t.Errorf("shard %d: paired rows must name the SAME region, got %q vs %q", idx, regions[0], regions[1])
+		}
+	}
+}
+
+// newShadowedRun mirrors newShardedRun but sets a challenger model, so
+// BuildDAG also emits the shadow seats.
+func newShadowedRun(t *testing.T, missionID int64, maxShards int, shadowModel string, scorer *fakeScorer, validator Validator) *Driver {
+	t.Helper()
+	q := newTestQueue(t)
+	d, err := NewDriver(q, scorer, validator, decorrelatedAssign(), 0.5)
+	if err != nil {
+		t.Fatalf("NewDriver: %v", err)
+	}
+	rs, sigs := shardedRunSpec(maxShards)
+	rs.ShadowModel = shadowModel
+	if err := d.StartRun(missionID, rs, sigs); err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	if _, err := q.PromoteReady(missionID); err != nil {
+		t.Fatalf("PromoteReady: %v", err)
+	}
+	return d
+}

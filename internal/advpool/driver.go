@@ -155,6 +155,11 @@ type shardStat struct {
 	mutants      int
 	parseRetries int
 	dropped      bool
+	// survived is set only on a shadowStats entry (the challenger's scored
+	// outcome for this region) — the primary's survivor count is NOT tracked
+	// per shard here; see the survivorIdx placement note in
+	// bugCatchObservations for why the primary's is recorded differently.
+	survived int
 }
 
 // runState is one run's mutable progress, tracked across ticks. The
@@ -217,6 +222,14 @@ type runState struct {
 	// N seats into one row and makes an underperforming seat invisible by
 	// construction.
 	shardStats map[int]shardStat
+
+	// shadowStats mirrors shardStats but for the CHALLENGER seats (Task 6):
+	// keyed by the SAME shard index, seeded with the SAME region/complexity/
+	// lines in StartRun — the whole point of a shadow run is that both models
+	// are graded on identical regions, not a second independent partition.
+	// Populated by the shadow pass in tickDevAdequacy; empty when
+	// rs.ShadowModel == "" (no change to any pre-existing run's behavior).
+	shadowStats map[int]shardStat
 
 	// testComplexity is the dev suite's complexity — the SECOND conditioning
 	// axis (a model that only wins against naive suites is a different
@@ -412,10 +425,24 @@ func (d *Driver) StartRun(missionID int64, rs RunSpec, sigs []repoindex.Signatur
 	// ShardSymbols call BuildDAG used — never a second source of truth for
 	// what a region contains.
 	stats := make(map[int]shardStat, len(shards))
+	// shadowStats is seeded with the SAME region/complexity/lines as stats —
+	// the challenger is graded on IDENTICAL regions, not a second partition,
+	// which is the entire point of a shadow run (see RoleMutantGeneratorShadow).
+	// Left nil (never seeded) when no shadow model is configured, so an
+	// ordinary sharded run's bugCatchObservations emits zero shadow rows —
+	// exactly its pre-Task-6 behavior.
+	var shadowStats map[int]shardStat
+	if strings.TrimSpace(rs.ShadowModel) != "" {
+		shadowStats = make(map[int]shardStat, len(shards))
+	}
 	for _, sh := range shards {
 		shardSymbols[ShardTaskKey(sh.Index)] = sh.Symbols
-		stats[sh.Index] = shardStat{
+		seed := shardStat{
 			region: strings.Join(sh.Symbols, ", "), complexity: sh.Complexity, lines: sh.Lines,
+		}
+		stats[sh.Index] = seed
+		if shadowStats != nil {
+			shadowStats[sh.Index] = seed
 		}
 	}
 
@@ -437,6 +464,7 @@ func (d *Driver) StartRun(missionID int64, rs RunSpec, sigs []repoindex.Signatur
 		droppedKeys:    map[string]bool{},
 		shardSymbols:   shardSymbols,
 		shardStats:     stats,
+		shadowStats:    shadowStats,
 		testComplexity: testComplexity,
 	}
 	d.mu.Unlock()
@@ -675,6 +703,44 @@ func (d *Driver) tickDevAdequacy(ctx context.Context, missionID int64, run *runS
 	run.devKillRate = killRate
 	run.mutantsTotal = len(mutants)
 	run.devSurvivors = survivors
+
+	// The challenger pass: score the shadow seats' mutants against the SAME dev
+	// suite so the comparison measures POTENCY (mutants that survive a good
+	// suite), not merely output volume. Results are recorded and never
+	// aggregated into the verdict — the exam stays the primary model's.
+	//
+	// A shadow failure is NEVER fatal: it is measurement, not the gate. Errors
+	// are logged and the seat is skipped.
+	if strings.TrimSpace(run.rs.ShadowModel) != "" {
+		shadows, serr := d.tasksByRole(missionID, RoleMutantGeneratorShadow)
+		if serr != nil {
+			log.Printf("advpool: run %d: shadow seats unavailable (measurement only): %v", missionID, serr)
+		}
+		for i := range shadows {
+			if shadows[i].Status != queue.StatusDone {
+				continue
+			}
+			idx, _ := ShadowShardIndexFromKey(shadows[i].Key)
+			parsed, perr := d.Validator.ParseMutants(shadows[i].Result, run.rs.Code)
+			if perr != nil {
+				st := run.shadowStats[idx]
+				st.parseRetries++
+				st.dropped = true
+				run.shadowStats[idx] = st
+				continue
+			}
+			_, shadowSurvivors, sserr := d.Scorer.Score(ctx, run.rs.CodePath, run.rs.Code, run.rs.DevTestCode, parsed, run.rs.TestCmd)
+			if sserr != nil {
+				log.Printf("advpool: run %d: shadow shard %d scoring failed (measurement only): %v", missionID, idx, sserr)
+				continue
+			}
+			st := run.shadowStats[idx]
+			st.mutants = len(parsed)
+			st.survived = len(shadowSurvivors)
+			run.shadowStats[idx] = st
+		}
+	}
+
 	// Emit one telemetry event per shard now that run.shardStats is final
 	// (this whole function only reaches here once, guarded by devScored, so
 	// this cannot double-emit on a re-entrant tick) — the --record tape, the
@@ -1001,6 +1067,22 @@ func bugCatchObservations(run *runState, v Verdict) []BugCatchObservation {
 			}
 			out = append(out, obs)
 		}
+	}
+	// The challenger's paired rows (Task 6): one row per shard, SAME region as
+	// its primary counterpart, flagged Shadow so the scorecard can tell them
+	// apart. Empty (no-op) when no shadow run was configured — shadowStats is
+	// only ever seeded alongside shardStats.
+	for _, i := range sortedShardIndexes(run.shadowStats) {
+		st := run.shadowStats[i]
+		out = append(out, BugCatchObservation{
+			Model: run.rs.ShadowModel, Role: RoleMutantGeneratorShadow,
+			MutantsPlanted: st.mutants, MutantsSurvived: st.survived,
+			Shard: i, Region: st.region,
+			RegionComplexity: st.complexity, RegionLines: st.lines,
+			TestComplexity: run.testComplexity,
+			ParseRetries:   st.parseRetries, Dropped: st.dropped,
+			Shadow: true,
+		})
 	}
 	return out
 }

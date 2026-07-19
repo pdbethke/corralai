@@ -42,6 +42,10 @@ const (
 	defaultLocalCriticModel = "claude-haiku-4-5"
 )
 
+// defaultLocalShadowModel is the challenger seat's model. Cheap and already the
+// critic's model, so it needs no additional provider credential.
+const defaultLocalShadowModel = "claude-haiku-4-5"
+
 // localBee is the queue bee name the single in-process worker claims under.
 // A local run has exactly one claimant, so the name is a constant.
 const localBee = "corral-local"
@@ -95,6 +99,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	recordFlag := fs.String("record", "", "write a replayable tape of the run (the pool's reasoning beats, task lifecycle, and findings) to this JSON file — the same {events:[…]} shape the corralai.dev cockpit replays")
 	swarmFlag := fs.Int("swarm", 0, "max concurrent audit workers (0 = auto-size to this host's cores). The BUDGET clamp: independent role tasks run in parallel up to this bound, so a big audit swarms without melting the box")
 	maxShardsFlag := fs.Int("max-shards", 0, "max mutant-generator seats fanned out across the file's functions (0 = "+fmt.Sprint(advpool.DefaultMaxShards)+"). Bounds PARALLELISM only — every function is probed regardless; --n-mutants is the PER-SHARD budget")
+	shadowModelFlag := fs.String("shadow-model", "", "challenger model that attacks every region a SECOND time for a region-controlled head-to-head (default "+defaultLocalShadowModel+"; \"off\" disables). Recorded for comparison — NEVER gates the verdict")
 	if err := fs.Parse(flagArgs); err != nil {
 		return 2
 	}
@@ -138,10 +143,17 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	writer := orDefault(*writerModel, defaultLocalWriterModel)
 	mutant := orDefault(*mutantModel, defaultLocalMutantModel)
 	critic := orDefault(*criticModel, defaultLocalCriticModel)
+	shadow := resolveShadowModel(*shadowModelFlag)
 	assign := advpool.RoleAssignment{
 		advpool.RoleMutantGenerator: mutant,
 		advpool.RoleTestWriter:      writer,
 		advpool.RoleTestCritic:      critic,
+	}
+	if shadow != "" {
+		// Additive only: CheckDecorrelation compares critic vs writer alone, so
+		// a shadow model equal to the critic's (the stock default) is expected
+		// and must NOT error — it is a measurement seat, never a grading one.
+		assign[advpool.RoleMutantGeneratorShadow] = shadow
 	}
 	if err := advpool.CheckDecorrelation(assign); err != nil {
 		fmt.Fprintf(stderr, "corral certify --local: %v — pass distinct --writer-model / --critic-model\n", err)
@@ -324,10 +336,11 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		Repo: repo, Commit: commit, Goal: strings.TrimSpace(*goal),
 		CodePath: codeKey, Code: string(code),
 		DevTestPath: devTestKey, DevTestCode: string(devTest),
-		TestCmd:   strings.Join(checkArgv, " "),
-		NMutants:  n,
-		Lang:      plug.Name(),
-		MaxShards: resolveMaxShards(*maxShardsFlag),
+		TestCmd:     strings.Join(checkArgv, " "),
+		NMutants:    n,
+		Lang:        plug.Name(),
+		MaxShards:   resolveMaxShards(*maxShardsFlag),
+		ShadowModel: shadow,
 	}
 
 	// Signatures are best-effort (mirrors the brain's StartRun): a failure just
@@ -363,7 +376,8 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	} else {
 		fmt.Fprintf(stdout, "swarm: %d concurrent workers (auto-sized to %d cores)\n", swarm, runtime.NumCPU())
 	}
-	if shards := advpool.ShardSymbols(sigs, rs.MaxShards); len(shards) > 0 {
+	shards := advpool.ShardSymbols(sigs, rs.MaxShards)
+	if len(shards) > 0 {
 		packed := 0
 		for _, sh := range shards {
 			packed += len(sh.Symbols)
@@ -373,6 +387,14 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "regions: 1 generator seat (whole file — no symbol surface extracted)\n")
 	} else {
 		fmt.Fprintf(stdout, "regions: 1 generator seat (whole file — too few functions to split)\n")
+	}
+	if shadow != "" {
+		// len(shards) is the shadow seat count too — one challenger per PRIMARY
+		// region, never a separate partition (see RoleMutantGeneratorShadow).
+		// BuildDAG only fans the challenger out alongside a sharded run, so an
+		// unsharded file (len(shards) == 0, a single whole-file generator) gets
+		// no shadow seat at all — this prints 0 rather than claiming one.
+		fmt.Fprintf(stdout, "shadow: %d challenger seats (%s) — recorded, never gating\n", len(shards), shadow)
 	}
 
 	verdict, err := driveLocalRun(ctx, d, q, localMissionID, chatterFor, *poll, time.Sleep, stdout, rec, actorFor, swarm)
@@ -883,6 +905,19 @@ func orDefault(v, def string) string {
 		return s
 	}
 	return def
+}
+
+// resolveShadowModel resolves the challenger model: the operator's
+// --shadow-model, "off" to disable, else the stock default.
+func resolveShadowModel(flag string) string {
+	f := strings.TrimSpace(flag)
+	switch f {
+	case "off", "none":
+		return ""
+	case "":
+		return defaultLocalShadowModel
+	}
+	return f
 }
 
 // localBuildDBPath mirrors cmd/corral/main.go's CORRALAI_BUILD_DB resolution so

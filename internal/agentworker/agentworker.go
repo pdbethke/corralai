@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/queue"
 )
 
@@ -59,7 +60,11 @@ type Chatter interface {
 // list / test source) for the brain/validator to re-parse, rather than a
 // freeform tool-loop summary. Mirrors cmd/corral-agent's isStructuredRole.
 func isStructuredRole(role string) bool {
-	return role == "test-writer" || role == "mutant-generator"
+	// mutant-generator-shadow (the Task 6 challenger seat) uses the identical
+	// structured single-shot path as its primary — it renders the SAME testgen
+	// prompt shape, just under a different model/role key, and is never routed
+	// through the critic's freeform tool loop.
+	return role == "test-writer" || role == "mutant-generator" || role == advpool.RoleMutantGeneratorShadow
 }
 
 // isPoolCriticRole mirrors cmd/corral-agent's isPoolCriticRole.

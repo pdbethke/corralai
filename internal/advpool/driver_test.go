@@ -1349,6 +1349,32 @@ func TestBugCatchSinkFedOnConvergence(t *testing.T) {
 	}
 }
 
+// TestBugCatchSinkNotFedWithoutSigner proves a Driver wired with BugCatch but
+// no Signer never calls Record. Verdict.RecordID is documented as "0 if
+// signing skipped/failed"; the BugCatch field's own doc asserts it is fed
+// AFTER Signer, "once RecordID/RecordHead are set" — a signer-less driver
+// would otherwise write every row of every run with record_id=0, which
+// Cell.Runs (COUNT(DISTINCT record_id)) then reads back as a single run
+// forever, pinning every cell below the provisionalBelow trust threshold no
+// matter how many runs actually happened.
+func TestBugCatchSinkNotFedWithoutSigner(t *testing.T) {
+	bc := &fakeBugCatch{}
+	d, missionID := newScoredRun(t, scoredRun{
+		survivors: 2, provenMissed: 1, mutantsTotal: 4, vacuous: 1,
+		writerModel: "claude-sonnet-5", criticModel: "gemini-3.5-flash",
+	})
+	d.BugCatch = bc
+	d.Signer = nil // the case under test: BugCatch wired, Signer not
+
+	v := drivePoolToConvergence(t, d, missionID)
+	if v.RecordID != 0 {
+		t.Fatalf("RecordID = %d, want 0 (no Signer wired)", v.RecordID)
+	}
+	if bc.recordID != 0 || bc.obs != nil {
+		t.Fatalf("BugCatch sink was fed despite no Signer: recordID=%d obs=%+v", bc.recordID, bc.obs)
+	}
+}
+
 // shardedRunSpec is the fixture every sharded test starts from: three symbols,
 // so a maxShards of 2 or 3 produces a real fan-out.
 func shardedRunSpec(maxShards int) (RunSpec, []repoindex.Signature) {
@@ -2267,6 +2293,82 @@ func TestBugCatchRowsCarryDropAndParseRetries(t *testing.T) {
 	}
 	if otherRetried != 0 {
 		t.Errorf("%d non-retried shard rows falsely carry a nonzero ParseRetries", otherRetried)
+	}
+}
+
+// TestBugCatchRowsSurvivorsSkipDroppedShard proves v.Survivors is recorded on
+// the lowest NON-DROPPED shard index, never just the lowest index. Shard 0 is
+// dropped here (never contributed a mutant), so parking the run's survivor
+// count there would produce an internally incoherent row (planted=0,
+// survived>0) and make the natural analytical filter "exclude shards that
+// never ran" silently zero the run's adversary-potency aggregate.
+func TestBugCatchRowsSurvivorsSkipDroppedShard(t *testing.T) {
+	const missionID = int64(223)
+	const bad = "UNPARSEABLE"
+	// Every shard's raw mutant output parses to the same bare "m1"; the
+	// driver prefixes it with the shard index ("s1/m1", "s2/m1") once
+	// unioned, so the surviving mutant must be named with the prefix it will
+	// actually carry once it comes from shard 1.
+	validator := &shardValidator{failRaw: bad, mutants: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
+	scorer := &fakeScorer{devKillRate: 0.5, devSurvivors: []adequacy.Mutant{{ID: "s1/m1", Code: "c1"}}}
+	d := newShardedRun(t, missionID, 3, scorer, validator)
+	sink := &fakeBugCatch{}
+	d.BugCatch = sink
+	d.Signer = &fakeSigner{}
+
+	badKey := ShardTaskKey(0)
+	completeShards := func() {
+		for key, task := range claimAllReady(t, d.Q) {
+			result := "raw"
+			if key == badKey {
+				result = bad
+			}
+			mustComplete(t, d.Q, task.ID, result)
+		}
+	}
+	completeShards()
+	for i := 0; i < MaxShardRetries; i++ {
+		if _, err := d.Tick(context.Background(), missionID); err == nil {
+			t.Fatalf("Tick %d: want a retry error while the shard has budget left", i)
+		}
+		completeShards()
+	}
+	if _, err := d.Tick(context.Background(), missionID); err != nil {
+		t.Fatalf("Tick after drop: %v", err)
+	}
+
+	v := driveShardedToVerdict(t, d, missionID, "raw")
+	if v.Survivors != 1 {
+		t.Fatalf("test setup: v.Survivors = %d, want 1", v.Survivors)
+	}
+
+	var gen []BugCatchObservation
+	for _, o := range sink.obs {
+		if o.Role == RoleMutantGenerator {
+			gen = append(gen, o)
+		}
+	}
+	if len(gen) != 3 {
+		t.Fatalf("want one generator row per shard (3), got %d", len(gen))
+	}
+	for _, o := range gen {
+		switch o.Shard {
+		case 0:
+			if !o.Dropped {
+				t.Fatalf("test setup: shard 0 must be the dropped shard, row = %+v", o)
+			}
+			if o.MutantsSurvived != 0 {
+				t.Errorf("dropped shard 0: MutantsSurvived = %d, want 0 — a shard that never ran must not carry the run's survivor count", o.MutantsSurvived)
+			}
+		case 1:
+			if o.MutantsSurvived != v.Survivors {
+				t.Errorf("lowest NON-dropped shard 1: MutantsSurvived = %d, want %d (v.Survivors)", o.MutantsSurvived, v.Survivors)
+			}
+		case 2:
+			if o.MutantsSurvived != 0 {
+				t.Errorf("shard 2: MutantsSurvived = %d, want 0 (only one row carries the run-level count)", o.MutantsSurvived)
+			}
+		}
 	}
 }
 

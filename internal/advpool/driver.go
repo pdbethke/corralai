@@ -849,8 +849,15 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 
 	// BugCatch is fed regardless of Status (certified AND needs-review) — a
 	// proven catch or a proven miss is meaningful evidence either way, unlike
-	// Leaderboard fitness which is gated on certification.
-	if d.BugCatch != nil {
+	// Leaderboard fitness which is gated on certification. Guarded on a real
+	// v.RecordID (nonzero): the BugCatch field doc asserts it is fed AFTER
+	// Signer, "once RecordID/RecordHead are set" — a Driver wired with
+	// BugCatch but no Signer (or one whose sign attempt failed and returned
+	// early above) leaves v.RecordID at its documented zero value, and every
+	// row this sink writes would carry that same unlinkable record_id=0. Since
+	// Cell.Runs is COUNT(DISTINCT record_id), those rows would all collapse
+	// into a single "run", pinning every cell below provisionalBelow forever.
+	if d.BugCatch != nil && v.RecordID != 0 {
 		d.BugCatch.Record(v.RecordID, v.RecordHead, bugCatchObservations(run, v))
 	}
 
@@ -956,11 +963,26 @@ func bugCatchObservations(run *runState, v Verdict) []BugCatchObservation {
 		// tickDevAdequacy) — there is no sound way to attribute which shard's
 		// mutants specifically survived, so it CANNOT be split per shard without
 		// inventing a false per-shard attribution. Record v.Survivors on exactly
-		// ONE row (the lowest shard index) so the run-level aggregate
-		// (SUM(mutants_survived) for this role) stays exact; every other shard
-		// row carries 0. Do NOT "fix" this into an even/proportional split
-		// across shards — that would be a fabricated number, not a measured one.
-		first := true
+		// ONE row — the lowest NON-DROPPED shard index, never just the lowest
+		// index — so the run-level aggregate (SUM(mutants_survived) for this
+		// role) stays exact; every other shard row carries 0. A dropped seat
+		// never ran (it exhausted its retry budget before contributing any
+		// mutants), so parking the run's survivor count there would produce an
+		// internally incoherent row (planted=0, survived>0) AND make the
+		// natural analytical filter "exclude shards that never ran" silently
+		// zero the run's adversary-potency aggregate. This is always safe: a
+		// run where every shard dropped produces zero mutants and errors out
+		// (see the len(mutants)==0 guard in tickDevAdequacy) before ever
+		// reaching a verdict, so there is always at least one non-dropped shard
+		// here. Do NOT "fix" this into an even/proportional split across
+		// shards — that would be a fabricated number, not a measured one.
+		survivorIdx := -1
+		for _, i := range sortedShardIndexes(run.shardStats) {
+			if !run.shardStats[i].dropped {
+				survivorIdx = i
+				break
+			}
+		}
 		for _, i := range sortedShardIndexes(run.shardStats) {
 			st := run.shardStats[i]
 			obs := BugCatchObservation{
@@ -974,9 +996,8 @@ func bugCatchObservations(run *runState, v Verdict) []BugCatchObservation {
 				ParseRetries:     st.parseRetries,
 				Dropped:          st.dropped,
 			}
-			if first {
+			if i == survivorIdx {
 				obs.MutantsSurvived = v.Survivors
-				first = false
 			}
 			out = append(out, obs)
 		}

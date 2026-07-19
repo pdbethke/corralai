@@ -225,6 +225,24 @@ func TestMigrationUpgradesPreExistingDatabase(t *testing.T) {
 	)`); err != nil {
 		t.Fatalf("create legacy table: %v", err)
 	}
+	// Insert a row through the LEGACY (pre-slice-2) schema, before Open/migrate
+	// ever runs — this is what every row in a production ledger predating
+	// swarm slice 2 actually looks like: NULL in all eight additive columns.
+	// This is the assertion the prior scratch version of this test had and
+	// lost when promoted: without it, nothing exercises Observations() against
+	// a real legacy row, which is exactly the row that made it scan-fail on
+	// `shard`/`region_complexity`/.../`shadow` (all NULL, scanned into
+	// int/bool destinations) the first time this method met a real ledger.
+	legacyTS := time.Unix(1000, 0).UTC()
+	if _, err := raw.Exec(`INSERT INTO bugcatch_observations (
+		ts, record_id, record_head, mission_id, repo, commit, model, role, source,
+		catches, opportunities, sound_tests, authored_tests,
+		critic_flags, mutants_planted, mutants_survived
+	) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		legacyTS, int64(199), "head199", int64(1), "r", "c", "m", "test-writer", "pool",
+		1, 2, 1, 1, 0, 0, 0); err != nil {
+		t.Fatalf("insert legacy row: %v", err)
+	}
 	if err := raw.Close(); err != nil {
 		t.Fatalf("close raw: %v", err)
 	}
@@ -259,10 +277,36 @@ func TestMigrationUpgradesPreExistingDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Observations: %v", err)
 	}
-	if len(got) != 1 {
-		t.Fatalf("want 1 round-tripped row, got %d", len(got))
+	if len(got) != 2 {
+		t.Fatalf("want 2 round-tripped rows (1 legacy + 1 post-migration), got %d: %+v", len(got), got)
 	}
-	if got[0] != want {
-		t.Fatalf("round-tripped observation = %+v, want %+v", got[0], want)
+	var newRow, legacyRow *Observation
+	for i := range got {
+		switch got[i].RecordID {
+		case 200:
+			newRow = &got[i]
+		case 199:
+			legacyRow = &got[i]
+		}
+	}
+	if newRow == nil || legacyRow == nil {
+		t.Fatalf("expected rows for record_id 199 and 200, got %+v", got)
+	}
+	if *newRow != want {
+		t.Fatalf("round-tripped observation = %+v, want %+v", *newRow, want)
+	}
+
+	// The legacy row predates every additive column: it must come back with
+	// their zero values (via COALESCE), not fail to scan or return NULL.
+	wantLegacy := Observation{
+		TS: legacyTS, RecordID: 199, RecordHead: "head199", MissionID: 1,
+		Repo: "r", Commit: "c", Model: "m", Role: "test-writer", Source: "pool",
+		Catches: 1, Opportunities: 2, SoundTests: 1, AuthoredTests: 1,
+		// Shard, Region, RegionComplexity, RegionLines, TestComplexity,
+		// ParseRetries, Dropped, Shadow all left at zero value: never written
+		// by the legacy schema, so this ledger has no way to know otherwise.
+	}
+	if *legacyRow != wantLegacy {
+		t.Fatalf("legacy round-tripped observation = %+v, want %+v", *legacyRow, wantLegacy)
 	}
 }

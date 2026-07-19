@@ -179,19 +179,32 @@ func (s *Store) Record(ctx context.Context, obs []Observation) error {
 	return tx.Commit()
 }
 
-// Observations returns every raw row in insertion order, unaggregated —
-// unlike Scorecard, which only ever surfaces the SUM'd model×role cells. This
-// exists to let a test assert the full round-trip (every Observation field
-// survives Record unchanged, including the per-shard columns Scorecard never
-// projects) and for ad hoc debugging; ordinary callers want Scorecard.
+// observationsLimit bounds Observations to the most recent N rows so it can
+// never scan an arbitrarily large production ledger into memory — this
+// method is for ad hoc debugging and round-trip tests, not a paging API.
+const observationsLimit = 10000
+
+// Observations returns the most recent rows (newest record first, capped at
+// observationsLimit), unaggregated — unlike Scorecard, which only ever
+// surfaces the SUM'd model×role cells. This exists to let a test assert the
+// full round-trip (every Observation field survives Record unchanged,
+// including the per-shard columns Scorecard never projects) and for ad hoc
+// debugging; ordinary callers want Scorecard.
+//
+// The additive shard/region/*/dropped/shadow columns (swarm slice 2) are
+// NULL on every row written before that migration; COALESCE'd to each
+// field's zero value here so a legacy row reads back cleanly instead of
+// failing to scan (int/bool destinations reject a raw NULL).
 func (s *Store) Observations(ctx context.Context) ([]Observation, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT
 		ts, record_id, record_head, mission_id, repo, commit, model, role, source,
 		catches, opportunities, sound_tests, authored_tests,
 		critic_flags, mutants_planted, mutants_survived,
-		shard, region, region_complexity, region_lines,
-		test_complexity, parse_retries, dropped, shadow
-		FROM bugcatch_observations`)
+		COALESCE(shard, 0), COALESCE(region, ''), COALESCE(region_complexity, 0), COALESCE(region_lines, 0),
+		COALESCE(test_complexity, 0), COALESCE(parse_retries, 0), COALESCE(dropped, false), COALESCE(shadow, false)
+		FROM bugcatch_observations
+		ORDER BY record_id DESC, shard ASC
+		LIMIT ?`, observationsLimit)
 	if err != nil {
 		return nil, fmt.Errorf("bugcatch: observations: %w", err)
 	}

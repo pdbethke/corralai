@@ -8,6 +8,7 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -26,6 +27,83 @@ import (
 	"github.com/pdbethke/corralai/internal/sandbox"
 	"github.com/pdbethke/corralai/internal/transparency"
 )
+
+// blockingChatter tracks how many Chat calls overlap in time, so a test can
+// prove the worker pool actually runs tasks in parallel (max > 1) and never
+// exceeds the swarm bound (max <= swarm). It holds each call briefly to force
+// observable overlap.
+type blockingChatter struct {
+	mu              *sync.Mutex
+	cur, max, total *int
+}
+
+func (c blockingChatter) Chat(_ []agentworker.Message, _ []any) (agentworker.Message, error) {
+	c.mu.Lock()
+	*c.cur++
+	*c.total++
+	if *c.cur > *c.max {
+		*c.max = *c.cur
+	}
+	c.mu.Unlock()
+	time.Sleep(25 * time.Millisecond)
+	c.mu.Lock()
+	*c.cur--
+	c.mu.Unlock()
+	return agentworker.Message{Role: "assistant", Content: "ok"}, nil
+}
+
+// TestRunReadyTasks_ConcurrentAndBounded proves slice 1 of the swarm: the drive
+// loop drains independent tasks through a POOL of concurrent workers (genuine
+// parallelism), CAPPED at the swarm bound, and runs every task exactly once —
+// jail-free (the pool needs only the queue + a fake role model, no sandbox).
+func TestRunReadyTasks_ConcurrentAndBounded(t *testing.T) {
+	q, err := queue.Open(filepath.Join(t.TempDir(), "q.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer q.Close()
+
+	const mission int64 = 1
+	const nTasks = 6
+	const swarm = 3
+	var specs []queue.TaskSpec
+	for i := 0; i < nTasks; i++ {
+		// role mutant-generator = the structured fast path (one Chat call, no tool loop)
+		specs = append(specs, queue.TaskSpec{Key: fmt.Sprintf("t%d", i), Role: "mutant-generator", Title: "t", Instruction: "do"})
+	}
+	if err := q.Enqueue(mission, specs); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.PromoteReady(mission); err != nil {
+		t.Fatal(err)
+	}
+
+	var mu sync.Mutex
+	var cur, max, total int
+	chatterFor := func(string) agentworker.Chatter {
+		return blockingChatter{mu: &mu, cur: &cur, max: &max, total: &total}
+	}
+
+	ran, err := runReadyTasks(context.Background(), q, mission, chatterFor, nil, nil, swarm)
+	if err != nil {
+		t.Fatalf("runReadyTasks: %v", err)
+	}
+	if !ran {
+		t.Fatal("expected ran=true")
+	}
+	if total != nTasks {
+		t.Fatalf("every task must run exactly once: total=%d, want %d", total, nTasks)
+	}
+	if max <= 1 {
+		t.Fatalf("no parallelism observed (max concurrent = %d) — the pool must run independent tasks together", max)
+	}
+	if max > swarm {
+		t.Fatalf("swarm bound violated: max concurrent %d > swarm %d", max, swarm)
+	}
+	if leftover, _ := q.ClaimNext("check", nil, 1); leftover != nil {
+		t.Fatalf("all tasks must be drained; still claimable: %+v", leftover)
+	}
+}
 
 // TestLoadRepoFiles_SkipsGitBinaryAndKeysRepoRelative proves --repo-dir's repo
 // loader: it keys files by slash-separated repo-relative path, skips the .git
@@ -389,7 +467,7 @@ func TestDriveLocalRun_EndToEnd(t *testing.T) {
 
 	tape := &recordSink{}
 	actorFor := func(role string) string { return recordActor(role, assign[role]) }
-	verdict, err := driveLocalRun(ctx, d, q, missionID, chatterFor, time.Millisecond, func(time.Duration) {}, io.Discard, tape, actorFor)
+	verdict, err := driveLocalRun(ctx, d, q, missionID, chatterFor, time.Millisecond, func(time.Duration) {}, io.Discard, tape, actorFor, 2)
 	if err != nil {
 		t.Fatalf("driveLocalRun: %v", err)
 	}
@@ -545,7 +623,7 @@ func TestDriveLocalRun_TolerateOneRecoverableTickError(t *testing.T) {
 	defer cancel()
 
 	var progress bytes.Buffer
-	verdict, err := driveLocalRun(ctx, d, q, missionID, chatterFor, time.Millisecond, func(time.Duration) {}, &progress, nil, nil)
+	verdict, err := driveLocalRun(ctx, d, q, missionID, chatterFor, time.Millisecond, func(time.Duration) {}, &progress, nil, nil, 1)
 	if err != nil {
 		t.Fatalf("driveLocalRun: %v (progress log:\n%s)", err, progress.String())
 	}

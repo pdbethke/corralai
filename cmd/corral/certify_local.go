@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -92,6 +93,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	outFlag := fs.String("out", "", "also write the signed verdict as a self-contained record file, re-verifiable offline with `corral certify verify <file> --pubkey <hex> --allow-unanchored`")
 	repoDirFlag := fs.String("repo-dir", "", "audit --code IN THE CONTEXT of this cloned repo/package: the whole tree is seeded into the jail, the file is mutated in place, and the project's OWN test command (given after `--`) grades it — so real multi-file projects with package imports work (--code/--test are repo-relative)")
 	recordFlag := fs.String("record", "", "write a replayable tape of the run (the pool's reasoning beats, task lifecycle, and findings) to this JSON file — the same {events:[…]} shape the corralai.dev cockpit replays")
+	swarmFlag := fs.Int("swarm", 0, "max concurrent audit workers (0 = auto-size to this host's cores). The BUDGET clamp: independent role tasks run in parallel up to this bound, so a big audit swarms without melting the box")
 	if err := fs.Parse(flagArgs); err != nil {
 		return 2
 	}
@@ -348,7 +350,19 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	defer cancel()
 
 	chatterFor := localChatterFor(assign)
-	verdict, err := driveLocalRun(ctx, d, q, localMissionID, chatterFor, *poll, time.Sleep, stdout, rec, actorFor)
+
+	// Size the concurrent audit swarm and say so out loud — the "won't bankrupt
+	// me / won't melt the box" bound made visible. Independent role tasks run in
+	// parallel up to this bound; it's clamped to the host's cores (auto) or the
+	// operator's --swarm budget.
+	swarm := resolveSwarm(*swarmFlag)
+	if *swarmFlag > 0 {
+		fmt.Fprintf(stdout, "swarm: %d concurrent workers (--swarm budget)\n", swarm)
+	} else {
+		fmt.Fprintf(stdout, "swarm: %d concurrent workers (auto-sized to %d cores)\n", swarm, runtime.NumCPU())
+	}
+
+	verdict, err := driveLocalRun(ctx, d, q, localMissionID, chatterFor, *poll, time.Sleep, stdout, rec, actorFor, swarm)
 	if err != nil {
 		fmt.Fprintf(stderr, "corral certify --local: %v\n", err)
 		return 1
@@ -391,6 +405,31 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 	return 3
+}
+
+// localSwarmAutoCap keeps a default (no --swarm) run polite: even on a
+// many-core box, auto-sizing won't spawn an absurd worker count for what is,
+// today, a handful of independent role tasks. The cap lifts naturally as the
+// fan-out slices land (per-region generators, the tests×mutants matrix).
+const localSwarmAutoCap = 8
+
+// resolveSwarm sizes the concurrent audit swarm — the first, honest cut of the
+// resource-aware optimizer. The operator's --swarm budget wins if set; else it
+// auto-clamps to this host's cores (minus one for the driver/OS, capped). This
+// is the cost/resource bound the swarm answers "no, it won't bankrupt or melt
+// you" with; RAM and yield-weighted allocation land in a later slice.
+func resolveSwarm(flag int) int {
+	if flag > 0 {
+		return flag
+	}
+	n := runtime.NumCPU() - 1
+	if n < 1 {
+		n = 1
+	}
+	if n > localSwarmAutoCap {
+		n = localSwarmAutoCap
+	}
+	return n
 }
 
 // recEvent is one beat of a replay tape — the exact {ts,kind,actor,subject,
@@ -613,7 +652,7 @@ const localTickMaxErrors = 20
 // tests can supply fakes). It returns the converged Verdict, or an error if
 // ctx expired before convergence, a role's LLM call failed outright, or Tick
 // errored localTickMaxErrors times in a row.
-func driveLocalRun(ctx context.Context, d *advpool.Driver, q *queue.Store, missionID int64, chatterFor func(role string) agentworker.Chatter, poll time.Duration, sleep func(time.Duration), progress io.Writer, rec *recordSink, actorFor func(role string) string) (*advpool.Verdict, error) {
+func driveLocalRun(ctx context.Context, d *advpool.Driver, q *queue.Store, missionID int64, chatterFor func(role string) agentworker.Chatter, poll time.Duration, sleep func(time.Duration), progress io.Writer, rec *recordSink, actorFor func(role string) string, swarm int) (*advpool.Verdict, error) {
 	consecutiveTickErrors := 0
 	for {
 		if err := ctx.Err(); err != nil {
@@ -633,7 +672,7 @@ func driveLocalRun(ctx context.Context, d *advpool.Driver, q *queue.Store, missi
 		if verdict != nil {
 			return verdict, nil
 		}
-		ran, err := runReadyTasks(ctx, q, missionID, chatterFor, rec, actorFor)
+		ran, err := runReadyTasks(ctx, q, missionID, chatterFor, rec, actorFor, swarm)
 		if err != nil {
 			return nil, err
 		}
@@ -656,53 +695,108 @@ func driveLocalRun(ctx context.Context, d *advpool.Driver, q *queue.Store, missi
 // task and returns an error from Tick, which driveLocalRun tolerates up to
 // localTickMaxErrors times, so the reopened task IS re-claimed and re-run here
 // on the next drain — a real retry, not just a reissue that nothing consumes.
-func runReadyTasks(ctx context.Context, q *queue.Store, missionID int64, chatterFor func(role string) agentworker.Chatter, rec *recordSink, actorFor func(role string) string) (bool, error) {
-	ran := false
-	for {
-		if err := ctx.Err(); err != nil {
-			return ran, err
-		}
-		task, err := q.ClaimNext(localBee, nil, localLeaseSeconds)
-		if err != nil {
-			return ran, fmt.Errorf("claiming next task: %w", err)
-		}
-		if task == nil {
-			return ran, nil
-		}
-		ch := chatterFor(task.Role)
-		if ch == nil {
-			return ran, fmt.Errorf("no model backend for role %q", task.Role)
-		}
-		// Tape (no-op when rec is nil): the task appears, is claimed by its seat,
-		// files its findings, and completes — the lifecycle the cockpit renders.
-		actor := ""
-		if actorFor != nil {
-			actor = actorFor(task.Role)
-		}
-		rec.add("task_created", "", task.Key, map[string]any{"role": task.Role, "title": task.Title})
-		rec.add("task_claimed", actor, task.Key, map[string]any{"role": task.Role, "title": task.Title})
-		result, findings, rerr := agentworker.RunRole(ctx, ch, task.Role, task.Instruction)
-		if rerr != nil {
-			return ran, fmt.Errorf("running role %q: %w", task.Role, rerr)
-		}
-		for _, f := range findings {
-			f.MissionID = missionID
-			f.TaskID = task.ID
-			f.Reporter = task.Role
-			normalizeFinding(&f)
-			if _, err := q.AddFinding(f); err != nil {
-				return ran, fmt.Errorf("recording %q finding: %w", task.Role, err)
-			}
-			rec.add("finding_reported", actor, f.Target, map[string]any{
-				"severity": f.Severity, "type": f.Type, "evidence": f.Evidence, "role": task.Role,
-			})
-		}
-		rec.add("task_done", actor, task.Key, map[string]any{"role": task.Role, "result": result})
-		if _, err := q.Complete(task.ID, localBee, result); err != nil {
-			return ran, fmt.Errorf("completing role %q: %w", task.Role, err)
-		}
-		ran = true
+// runReadyTasks drains every currently-claimable task through a BOUNDED pool of
+// `swarm` concurrent workers, returning whether at least one ran. This is the
+// execution substrate of the swarm: independent role tasks (e.g. the
+// mutant-generator and the test-critic, both ready at the start of a run) run in
+// parallel instead of one-at-a-time. It stays inside the Tick→drain→Tick
+// structure — a drain never unlocks new tasks (only Tick promotes dependents),
+// so a worker that sees no claimable task is genuinely done for this drain.
+//
+// Bounded by design (the cost answer): at most `swarm` workers run at once, and
+// `swarm` itself is clamped to the host + the operator budget upstream. The
+// first hard error cancels the rest and is returned; the queue's atomic claim
+// guarantees no task is run twice even under concurrent workers.
+func runReadyTasks(ctx context.Context, q *queue.Store, missionID int64, chatterFor func(role string) agentworker.Chatter, rec *recordSink, actorFor func(role string) string, swarm int) (bool, error) {
+	if swarm < 1 {
+		swarm = 1
 	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var (
+		mu       sync.Mutex
+		ranAny   bool
+		firstErr error
+		wg       sync.WaitGroup
+	)
+	fail := func(err error) {
+		mu.Lock()
+		if firstErr == nil {
+			firstErr = err
+		}
+		mu.Unlock()
+		cancel() // stop the other workers promptly
+	}
+
+	for i := 0; i < swarm; i++ {
+		wg.Add(1)
+		go func(workerID string) {
+			defer wg.Done()
+			for {
+				if ctx.Err() != nil {
+					return
+				}
+				task, err := q.ClaimNext(workerID, nil, localLeaseSeconds)
+				if err != nil {
+					fail(fmt.Errorf("claiming next task: %w", err))
+					return
+				}
+				if task == nil {
+					return // nothing claimable → this worker is done for the drain
+				}
+				mu.Lock()
+				ranAny = true
+				mu.Unlock()
+				if err := runOneTask(ctx, q, missionID, workerID, task, chatterFor, rec, actorFor); err != nil {
+					fail(err)
+					return
+				}
+			}
+		}(fmt.Sprintf("%s-%d", localBee, i))
+	}
+	wg.Wait()
+	return ranAny, firstErr
+}
+
+// runOneTask claims-through a single task: routes it to its role's in-process
+// agentworker, files any findings, records the tape lifecycle, and completes it
+// on the queue under workerID. Pure per-task work — safe to run concurrently
+// with other workers (distinct tasks, atomic queue ops, mutex-guarded tape).
+func runOneTask(ctx context.Context, q *queue.Store, missionID int64, workerID string, task *queue.Task, chatterFor func(role string) agentworker.Chatter, rec *recordSink, actorFor func(role string) string) error {
+	ch := chatterFor(task.Role)
+	if ch == nil {
+		return fmt.Errorf("no model backend for role %q", task.Role)
+	}
+	// Tape (no-op when rec is nil): the task appears, is claimed by its seat,
+	// files its findings, and completes — the lifecycle the cockpit renders.
+	actor := ""
+	if actorFor != nil {
+		actor = actorFor(task.Role)
+	}
+	rec.add("task_created", "", task.Key, map[string]any{"role": task.Role, "title": task.Title})
+	rec.add("task_claimed", actor, task.Key, map[string]any{"role": task.Role, "title": task.Title})
+	result, findings, rerr := agentworker.RunRole(ctx, ch, task.Role, task.Instruction)
+	if rerr != nil {
+		return fmt.Errorf("running role %q: %w", task.Role, rerr)
+	}
+	for _, f := range findings {
+		f.MissionID = missionID
+		f.TaskID = task.ID
+		f.Reporter = task.Role
+		normalizeFinding(&f)
+		if _, err := q.AddFinding(f); err != nil {
+			return fmt.Errorf("recording %q finding: %w", task.Role, err)
+		}
+		rec.add("finding_reported", actor, f.Target, map[string]any{
+			"severity": f.Severity, "type": f.Type, "evidence": f.Evidence, "role": task.Role,
+		})
+	}
+	rec.add("task_done", actor, task.Key, map[string]any{"role": task.Role, "result": result})
+	if _, err := q.Complete(task.ID, workerID, result); err != nil {
+		return fmt.Errorf("completing role %q: %w", task.Role, err)
+	}
+	return nil
 }
 
 // validFindingType / validFindingSeverity are the queue.AddFinding-accepted

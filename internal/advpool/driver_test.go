@@ -876,6 +876,35 @@ func TestCheckDecorrelation(t *testing.T) {
 	}
 }
 
+// TestCheckDecorrelation_ShadowModelNeverParticipates proves the shadow
+// (challenger) seat cannot trip the decorrelation guard, in either direction:
+// CheckDecorrelation only ever reads assign[RoleTestCritic] and
+// assign[RoleTestWriter] — RunSpec.ShadowModel lives entirely outside the
+// RoleAssignment map BuildDAG receives, so no value of it can add a role key
+// this check inspects. A shadow model equal to the critic's is explicitly
+// FINE (not just untested): the shadow seat grades nothing — it never
+// authors or reviews a test — so "shares a model with the critic" carries
+// none of the self-grading risk CheckDecorrelation exists to catch.
+func TestCheckDecorrelation_ShadowModelNeverParticipates(t *testing.T) {
+	assign := decorrelatedAssign()
+	rs := RunSpec{ShadowModel: assign[RoleTestCritic]} // shadow == critic's model, on purpose
+	if err := CheckDecorrelation(assign); err != nil {
+		t.Fatalf("a shadow model equal to the critic's must not fail decorrelation (shadow is not in the assignment map): %v", err)
+	}
+	// And BuildDAG must actually route the shadow role under its OWN key
+	// (RoleMutantGeneratorShadow), never write it into assign under
+	// RoleTestCritic/RoleTestWriter — confirming the two really are disjoint,
+	// not just coincidentally non-conflicting in this one assignment.
+	sigs := []repoindex.Signature{{Name: "A"}, {Name: "B"}}
+	rs.CodePath, rs.Code, rs.MaxShards = "f.go", "package f\nfunc A(){}\nfunc B(){}\n", 2
+	specs := BuildDAG(rs, assign, sigs)
+	for _, s := range specs {
+		if s.Role == RoleMutantGeneratorShadow && s.Model != rs.ShadowModel {
+			t.Fatalf("shadow task %q stamped model %q, want the shadow model %q", s.Key, s.Model, rs.ShadowModel)
+		}
+	}
+}
+
 // The driver must clean the test-writer's RAW output (fences/prose) via
 // ParseTest BEFORE compiling/scoring it — otherwise a ```go-fenced test never
 // compiles (the bug the live e2e exercise surfaced).

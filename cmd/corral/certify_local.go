@@ -45,8 +45,12 @@ const (
 )
 
 // defaultLocalShadowModel is the challenger seat's model. Cheap and already the
-// critic's model, so it needs no additional provider credential.
-const defaultLocalShadowModel = "claude-haiku-4-5"
+// critic's model, so it needs no additional provider credential. Mirrors
+// advpool.DefaultShadowModel — kept as a local alias (not a straight `=
+// advpool.DefaultShadowModel`) only so this file's existing doc comment/name
+// stay put; the brain's hosted path resolves the SAME constant via
+// advpool.ResolveShadowModel.
+const defaultLocalShadowModel = advpool.DefaultShadowModel
 
 // localBee is the queue bee name the single in-process worker claims under.
 // A local run has exactly one claimant, so the name is a constant.
@@ -1049,14 +1053,7 @@ func orDefault(v, def string) string {
 // silently treating it as a model name would send every challenger seat to a
 // provider that has no such model.
 func resolveShadowModel(flag string) string {
-	f := strings.TrimSpace(flag)
-	switch strings.ToLower(f) {
-	case "off", "none":
-		return ""
-	case "":
-		return defaultLocalShadowModel
-	}
-	return f
+	return advpool.ResolveShadowModel(flag)
 }
 
 // localBuildDBPath mirrors cmd/corral/main.go's CORRALAI_BUILD_DB resolution so

@@ -209,6 +209,32 @@ func shardTitle(sh Shard) string {
 // and the kill-rate rises) under a fixed certification threshold.
 const RoleMutantGeneratorShadow = "mutant-generator-shadow"
 
+// DefaultShadowModel is the challenger seat's stock model: cheap, and it
+// shares the same provider credential (Anthropic) the mutant-generator's own
+// cold-start default routinely runs under once an operator sets
+// MODEL_BACKEND=anthropic — no NEW credential is required to turn shadow on,
+// only a worker capable of serving it. Named here (not in cmd/corral) so both
+// `certify --local` and the hosted brain resolve the SAME default rather than
+// keeping two constants in lockstep by hand.
+const DefaultShadowModel = "claude-haiku-4-5"
+
+// ResolveShadowModel resolves an operator's shadow-model override into the
+// RunSpec.ShadowModel value: "off"/"none" (case-insensitive) disables the
+// challenger entirely, an empty string uses DefaultShadowModel, and anything
+// else passes through verbatim as the challenger's model name. Shared by
+// `certify --local`'s --shadow-model flag and the brain's per-run/env
+// overrides so "off" means the same thing on both paths.
+func ResolveShadowModel(flag string) string {
+	f := strings.TrimSpace(flag)
+	switch strings.ToLower(f) {
+	case "off", "none":
+		return ""
+	case "":
+		return DefaultShadowModel
+	}
+	return f
+}
+
 // ShadowShardTaskKey is the queue key for the challenger seat on shard i.
 func ShadowShardTaskKey(index int) string {
 	return RoleMutantGeneratorShadow + "/" + strconv.Itoa(index)

@@ -47,6 +47,35 @@ func TestRunRole_MutantGenerator_ReturnsRawText(t *testing.T) {
 	}
 }
 
+// TestRunRole_MutantGeneratorShadow_ReturnsRawText is the daemon-dispatch
+// proof for the challenger seat: a task claimed off the REAL queue with
+// Role == "mutant-generator-shadow" must take the exact same structured
+// single-shot path as its primary ("mutant-generator") — one Chat call, the
+// model's raw output returned verbatim for the brain-side Validator to parse
+// — not fall through to "no single-shot runner for role" (which RunRole
+// returns for any role isStructuredRole/isPoolCriticRole don't recognize)
+// and not the critic's freeform tool loop. This is the in-process half of
+// the daemon dispatch path; cmd/corral-agent's structured_test.go covers the
+// claim-loop half (task.Role driving runTask's fast path + model selection).
+func TestRunRole_MutantGeneratorShadow_ReturnsRawText(t *testing.T) {
+	canned := "--- MUTANT 1 ---\nfile: foo.go\nline: 12\n..."
+	fake := &fakeChatter{scripted: []Message{{Role: "assistant", Content: canned}}}
+
+	result, findings, err := RunRole(context.Background(), fake, "mutant-generator-shadow", "generate mutants for foo.go (challenger seat)")
+	if err != nil {
+		t.Fatalf("RunRole: %v", err)
+	}
+	if result != canned {
+		t.Errorf("result = %q, want raw canned text %q", result, canned)
+	}
+	if findings != nil {
+		t.Errorf("findings = %v, want nil for a structured role", findings)
+	}
+	if fake.calls != 1 {
+		t.Errorf("calls = %d, want exactly 1 (single-shot, not the critic's multi-step loop)", fake.calls)
+	}
+}
+
 func TestRunRole_TestWriter_ReturnsRawText(t *testing.T) {
 	canned := "package foo_test\n\nfunc TestFoo(t *testing.T) { ... }"
 	fake := &fakeChatter{scripted: []Message{{Role: "assistant", Content: canned}}}

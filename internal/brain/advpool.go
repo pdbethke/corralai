@@ -350,6 +350,15 @@ type AdvPoolRuntime struct {
 	staffing *mission.StaffingManager
 	defaults advpool.RoleAssignment // operator CORRALAI_ADVPOOL_MODELS base (nil = hardcoded)
 	bugCatch *bugcatch.Store        // optional scorecard store; nil = feature off (see StartRun)
+	// shadowModel is the daemon-wide default challenger model (resolved once
+	// in StartAdversarialPool from CORRALAI_ADVPOOL_SHADOW_MODEL, "" =
+	// advpool.DefaultShadowModel). Left at its Go zero value ("") by a test
+	// that constructs AdvPoolRuntime directly rather than through
+	// StartAdversarialPool — shadow stays OFF for those unless the test
+	// sets it explicitly, matching every pre-existing Driver/StartRun test's
+	// expectations. A per-call AdvPoolRunSpec.ShadowModel always overrides
+	// this daemon default (see StartRun).
+	shadowModel string
 
 	mu         sync.Mutex
 	activeID   int64
@@ -370,6 +379,7 @@ type AdvPoolRunSpec struct {
 	NMutants    int    `json:"n_mutants,omitempty" jsonschema:"how many seeded-violation mutants to generate PER SHARD (default 5) — the run's total mutant count is this divided across the resolved shard width, see max_shards"`
 	Lang        string `json:"lang,omitempty" jsonschema:"source language of the code under review (default: inferred from code_path extension, e.g. go, python)"`
 	MaxShards   int    `json:"max_shards,omitempty" jsonschema:"max mutant-generator seats fanned out across the file's functions, one per complexity-balanced group (default 8, see advpool.DefaultMaxShards). Bounds PARALLELISM only — every function is still probed regardless of this value; n_mutants is divided across the resolved shard width so the run's TOTAL mutant budget stays roughly constant as this changes"`
+	ShadowModel string `json:"shadow_model,omitempty" jsonschema:"per-run override for the challenger seat that attacks every region a SECOND time for a region-controlled model head-to-head (default: the daemon's configured shadow model, see CORRALAI_ADVPOOL_SHADOW_MODEL; \"off\" disables it for this run only). Recorded for comparison — NEVER gates the verdict, and never adds a test-writer seat. Roughly DOUBLES this run's mutant-generator LLM calls (one challenger seat per shard) AND adds one extra dev-suite jail execution PER SHARD (the challenger's mutants are scored against the same dev suite as the primary, via a separate Scorer.Score call — see advpool.Driver.runShadowPass), bounded to at most a quarter of the run's deadline (advpool.ShadowTimeBudget)"`
 }
 
 // AdvPoolRunOut is start_adversarial_run's output: the id of the mission
@@ -497,22 +507,42 @@ func (rt *AdvPoolRuntime) StartRun(in AdvPoolRunSpec) (int64, error) {
 		return 0, fmt.Errorf("advpool: language toolchain unavailable — refusing to run: %w", err)
 	}
 
+	// ShadowModel: the challenger seat's model for THIS run. A per-call
+	// override (in.ShadowModel) always wins — "off"/"none" disables it for
+	// this run only, an explicit model name uses that model — falling back to
+	// the daemon-wide default (rt.shadowModel, resolved once in
+	// StartAdversarialPool from CORRALAI_ADVPOOL_SHADOW_MODEL) when the call
+	// leaves it unset. rt.shadowModel is "" (off) for any AdvPoolRuntime built
+	// outside StartAdversarialPool — e.g. every existing unit test — so this
+	// enable is opt-in per test/deployment, never a silent behavior change for
+	// code that constructs the runtime directly.
+	//
+	// Turning shadow on here was deliberately deferred (see the sharding
+	// design spec's §8) until the daemon dispatch path — a shard task
+	// claimed by a REAL remote worker over the task queue, not run in-process
+	// like `certify --local` — was proven safe by tests (see
+	// internal/agentworker and cmd/corral-agent's isStructuredRole coverage
+	// for the mutant-generator-shadow role, and TestAdvPoolStartRun_*Shadow*
+	// below). It roughly DOUBLES the run's mutant-generator LLM spend (one
+	// challenger seat per shard) AND adds one extra dev-suite jail execution
+	// PER SHARD (each shard's challenger mutants are scored against the SAME
+	// dev suite via their own Scorer.Score call, bounded in total by
+	// advpool.ShadowTimeBudget — see driver.go's runShadowPass); it never adds
+	// a test-writer seat or a pool-adequacy scoring call, since a shadow seat
+	// is measurement only and never gates the verdict.
+	shadowModel := rt.shadowModel
+	if s := strings.TrimSpace(in.ShadowModel); s != "" {
+		shadowModel = advpool.ResolveShadowModel(s)
+	}
+
 	rs := advpool.RunSpec{
 		Repo: in.Repo, Commit: in.Commit, Goal: in.Goal,
 		CodePath: in.CodePath, Code: in.Code,
 		DevTestPath: in.DevTestPath, DevTestCode: in.DevTestCode,
 		TestCmd: in.TestCmd, NMutants: nMutants,
-		Lang:      langPlugin.Name(),
-		MaxShards: maxShards,
-		// ShadowModel is deliberately left unset ("") on every hosted run: the
-		// challenger seat stays off for the daemon path. The sharding design
-		// spec's §8 open questions explicitly defer turning shadow on here
-		// pending a watched production run, and enabling it would DOUBLE the
-		// generator LLM spend of every hosted audit (one challenger seat per
-		// shard, same shard count as the primary — see
-		// advpool.RoleMutantGeneratorShadow) for every user of a shared
-		// daemon, not just an operator who opts in via `certify --local
-		// --shadow-model`. Do not set this without re-reading that decision.
+		Lang:        langPlugin.Name(),
+		MaxShards:   maxShards,
+		ShadowModel: shadowModel,
 	}
 
 	sigs, err := repoindex.ExtractSignatures(rs.Code, rs.Lang)
@@ -683,13 +713,22 @@ func StartAdversarialPool(ctx context.Context, opts Options) (*AdvPoolRuntime, e
 		}
 	}
 
+	// CORRALAI_ADVPOOL_SHADOW_MODEL: the daemon-wide default challenger model.
+	// Unset/empty resolves to advpool.DefaultShadowModel (shadow ON by
+	// default for a hosted run, mirroring certify --local's own default);
+	// "off"/"none" (case-insensitive) disables it daemon-wide as an operator
+	// kill switch, still overridable per-call via start_adversarial_run's
+	// shadow_model field.
+	shadowModel := advpool.ResolveShadowModel(os.Getenv("CORRALAI_ADVPOOL_SHADOW_MODEL"))
+
 	rt := &AdvPoolRuntime{
-		driver:     driver,
-		missions:   opts.Missions,
-		staffing:   opts.Staffing,
-		defaults:   defaults,
-		bugCatch:   opts.BugCatch,
-		tickErrors: make(map[int64]int),
+		driver:      driver,
+		missions:    opts.Missions,
+		staffing:    opts.Staffing,
+		defaults:    defaults,
+		bugCatch:    opts.BugCatch,
+		shadowModel: shadowModel,
+		tickErrors:  make(map[int64]int),
 	}
 
 	interval := opts.AdvPoolPollInterval
@@ -698,6 +737,11 @@ func StartAdversarialPool(ctx context.Context, opts Options) (*AdvPoolRuntime, e
 	}
 	log.Printf("advpool: ENABLED — polling every %s; role models: mutant-generator=%s test-writer=%s test-critic=%s",
 		interval, assign[advpool.RoleMutantGenerator], assign[advpool.RoleTestWriter], assign[advpool.RoleTestCritic])
+	if shadowModel == "" {
+		log.Printf("advpool: shadow challenger OFF (CORRALAI_ADVPOOL_SHADOW_MODEL=off, or no worker has claimed a shadow seat yet)")
+	} else {
+		log.Printf("advpool: shadow challenger ON by default — model=%s (override per-run via start_adversarial_run's shadow_model, or set CORRALAI_ADVPOOL_SHADOW_MODEL=off to disable daemon-wide)", shadowModel)
+	}
 	log.Printf("advpool: run-deadline=%s (a run that has not converged by then is signed needs-review and freed)", driver.RunDeadline)
 	go rt.loop(ctx, interval)
 	return rt, nil

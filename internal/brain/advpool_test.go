@@ -727,14 +727,26 @@ func TestAdvPoolStartRun_SingleSeatWhenNoSymbolSurface(t *testing.T) {
 	}
 }
 
-// TestAdvPoolStartRun_NeverCreatesShadowSeats proves the hosted brain never
-// sets RunSpec.ShadowModel: even for a multi-symbol file that shards (the
-// only condition under which BuildDAG would ever fan out a challenger — see
-// RoleMutantGeneratorShadow), a hosted run must enqueue zero
-// mutant-generator-shadow tasks. The shadow challenger is `certify --local`
-// only, deliberately deferred for the daemon (spec §8) since it would double
-// generator LLM spend on every hosted audit.
-func TestAdvPoolStartRun_NeverCreatesShadowSeats(t *testing.T) {
+// shadowGeneratorTasks returns every task whose Role is exactly
+// advpool.RoleMutantGeneratorShadow, keyed by its task Key.
+func shadowGeneratorTasks(tasks []queue.Task) map[string]queue.Task {
+	out := map[string]queue.Task{}
+	for _, tk := range tasks {
+		if tk.Role == advpool.RoleMutantGeneratorShadow {
+			out[tk.Key] = tk
+		}
+	}
+	return out
+}
+
+// TestAdvPoolStartRun_ShadowOffByDefaultForABareRuntime proves an
+// AdvPoolRuntime built directly (bypassing StartAdversarialPool, as every
+// test in this file does via newTestAdvPoolRuntime) still enqueues ZERO
+// mutant-generator-shadow tasks when neither the daemon default
+// (rt.shadowModel) nor a per-call override (AdvPoolRunSpec.ShadowModel) is
+// set — shadow is opt-in per deployment/test, not a silent default flip for
+// code that constructs the runtime by hand.
+func TestAdvPoolStartRun_ShadowOffByDefaultForABareRuntime(t *testing.T) {
 	rt, q := newTestAdvPoolRuntime(t, nil)
 
 	runID, err := rt.StartRun(multiSymbolRunSpecIn())
@@ -745,10 +757,120 @@ func TestAdvPoolStartRun_NeverCreatesShadowSeats(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, tk := range tasks {
-		if tk.Role == advpool.RoleMutantGeneratorShadow {
-			t.Fatalf("hosted StartRun must never create a shadow seat, got task %+v", tk)
+	if shadows := shadowGeneratorTasks(tasks); len(shadows) != 0 {
+		t.Fatalf("a bare runtime with no configured shadow model must enqueue zero shadow seats, got %+v", shadows)
+	}
+}
+
+// TestAdvPoolStartRun_ShadowSeatsWhenDaemonDefaultConfigured proves the
+// PRIMARY-RISK path this feature turns on: once the daemon has a configured
+// shadow model (mirroring what StartAdversarialPool resolves from
+// CORRALAI_ADVPOOL_SHADOW_MODEL in production), a multi-symbol file's
+// StartRun enqueues one mutant-generator-shadow task per shard, each stamped
+// with the challenger model — real tasks a real remote worker will claim off
+// the queue exactly like the primary shards.
+func TestAdvPoolStartRun_ShadowSeatsWhenDaemonDefaultConfigured(t *testing.T) {
+	rt, q := newTestAdvPoolRuntime(t, nil)
+	rt.shadowModel = advpool.DefaultShadowModel
+
+	runID, err := rt.StartRun(multiSymbolRunSpecIn())
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	tasks, err := q.List(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mgs := mutantGeneratorTasks(tasks)
+	shadows := shadowGeneratorTasks(tasks)
+	if len(shadows) == 0 {
+		t.Fatal("expected shadow seats once the daemon has a configured shadow model, got none")
+	}
+	if len(shadows) != len(mgs) {
+		t.Fatalf("expected one shadow seat per primary shard (%d), got %d shadow seats", len(mgs), len(shadows))
+	}
+	for key, tk := range shadows {
+		if tk.Model != advpool.DefaultShadowModel {
+			t.Errorf("shadow task %q has model %q, want the daemon default %q", key, tk.Model, advpool.DefaultShadowModel)
 		}
+	}
+}
+
+// TestAdvPoolStartRun_ShadowModelPerCallOverride proves
+// AdvPoolRunSpec.ShadowModel (the start_adversarial_run field) overrides the
+// daemon default in BOTH directions: an explicit model name turns shadow on
+// (or changes it) even when the daemon default is off, and "off" disables it
+// for this one call even when the daemon default is on — the per-run
+// operator override the design calls for, reusing the existing
+// NMutants/MaxShards override seam rather than inventing a new one.
+func TestAdvPoolStartRun_ShadowModelPerCallOverride(t *testing.T) {
+	t.Run("override turns shadow on despite an off daemon default", func(t *testing.T) {
+		rt, q := newTestAdvPoolRuntime(t, nil) // rt.shadowModel == "" (off)
+		in := multiSymbolRunSpecIn()
+		in.ShadowModel = "gpt-4o-mini"
+
+		runID, err := rt.StartRun(in)
+		if err != nil {
+			t.Fatalf("StartRun: %v", err)
+		}
+		tasks, err := q.List(runID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		shadows := shadowGeneratorTasks(tasks)
+		if len(shadows) == 0 {
+			t.Fatal("expected a per-call ShadowModel override to enqueue shadow seats even with the daemon default off")
+		}
+		for key, tk := range shadows {
+			if tk.Model != "gpt-4o-mini" {
+				t.Errorf("shadow task %q has model %q, want the override %q", key, tk.Model, "gpt-4o-mini")
+			}
+		}
+	})
+
+	t.Run(`"off" disables shadow despite an on daemon default`, func(t *testing.T) {
+		rt, q := newTestAdvPoolRuntime(t, nil)
+		rt.shadowModel = advpool.DefaultShadowModel
+		in := multiSymbolRunSpecIn()
+		in.ShadowModel = "off"
+
+		runID, err := rt.StartRun(in)
+		if err != nil {
+			t.Fatalf("StartRun: %v", err)
+		}
+		tasks, err := q.List(runID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if shadows := shadowGeneratorTasks(tasks); len(shadows) != 0 {
+			t.Fatalf(`a per-call "off" override must disable shadow even with the daemon default on, got %+v`, shadows)
+		}
+	})
+}
+
+// TestAdvPoolStartRun_NoShadowSeatsWithoutSymbolSurface proves shadow never
+// fans out for a file with no extractable symbol surface — BuildDAG only
+// creates a shadow seat alongside a SHARDED primary (one per shard), and a
+// file that stays a single, unsharded seat (see
+// TestAdvPoolStartRun_SingleSeatWhenNoSymbolSurface) has no shards to pair a
+// challenger against, even with the daemon default shadow model configured.
+func TestAdvPoolStartRun_NoShadowSeatsWithoutSymbolSurface(t *testing.T) {
+	rt, q := newTestAdvPoolRuntime(t, nil)
+	rt.shadowModel = advpool.DefaultShadowModel
+
+	in := testRunSpecIn()
+	in.Code = "package target\nvar Threshold = 12\n"
+
+	runID, err := rt.StartRun(in)
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	tasks, err := q.List(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shadows := shadowGeneratorTasks(tasks); len(shadows) != 0 {
+		t.Fatalf("a file with no symbol surface must enqueue zero shadow seats even with shadow configured, got %+v", shadows)
 	}
 }
 

@@ -4,8 +4,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/pdbethke/corralai/internal/agentbackend"
 )
 
 // TestIsStructuredRole is a table test on the pure role classifier: only the
@@ -94,6 +99,52 @@ func TestRunTaskFreeformRoleStillUsesLoop(t *testing.T) {
 	}
 	if !strings.Contains(summary, "done") {
 		t.Errorf("freeform loop should end on the model's plain-content answer; got %q", summary)
+	}
+}
+
+// TestRunTaskShadowRoleDaemonDispatch is the PRIMARY-RISK proof for turning
+// the shadow challenger on for hosted runs: a task claimed off the REAL
+// queue with Role == "mutant-generator-shadow" (exactly what a daemon worker
+// sees via claim_task, see runQueueLoop's out.Task.Role) must (1) take the
+// structured single-shot fast path — one backend.Chat call, no critic
+// tool-loop, no "no single-shot runner for role" error — and (2) actually
+// run against the task's gate-earned Model (queue.Task.Model, the field
+// BuildDAG stamps from RunSpec.ShadowModel), not the worker's own configured
+// AGENT_MODEL default. Before this test, isStructuredRole's shadow-role
+// entry (present in both this file and internal/agentworker) had no test
+// exercising it TOGETHER with per-task model selection — the two behaviors
+// combined are what a real daemon dispatch of a shadow task actually needs.
+func TestRunTaskShadowRoleDaemonDispatch(t *testing.T) {
+	var gotModel string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Model string `json:"model"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		gotModel = body.Model
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"message": map[string]any{"role": "assistant", "content": "--- MUTANT 1 ---\nfile: foo.go\nline: 12\n..."},
+		})
+	}))
+	defer srv.Close()
+
+	backend := agentbackend.NewOllamaBackend(srv.URL, "qwen2.5-coder:7b") // the worker's own default
+	brain := func(tool string, args map[string]any) string { return `{"ok":true}` }
+
+	summary, err := runTask(context.Background(), backend, "test-agent", "mutant-generator-shadow",
+		t.TempDir(), brain, nil, 1, 1, "challenger: generate mutants for foo.go",
+		"RENDERED TESTGEN PROMPT HERE", nil, nil, "claude-haiku-4-5")
+	if err != nil {
+		t.Fatalf("runTask: %v", err)
+	}
+	if gotModel != "claude-haiku-4-5" {
+		t.Errorf("backend received model %q, want the shadow task's assigned model %q", gotModel, "claude-haiku-4-5")
+	}
+	if summary != "--- MUTANT 1 ---\nfile: foo.go\nline: 12\n..." {
+		t.Errorf("shadow role must return the model's raw output verbatim (structured fast path), got %q", summary)
+	}
+	if strings.Contains(summary, "not assigned") {
+		t.Errorf("summary should not carry a model-mismatch note when the backend honored the shadow model assignment; got %q", summary)
 	}
 }
 

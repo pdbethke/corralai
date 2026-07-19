@@ -257,7 +257,16 @@ func (s CertSigner) SignVerdict(ctx context.Context, v Verdict) (int64, string, 
 	sort.Strings(roles)
 	producedBy := make([]string, 0, len(roles))
 	for _, role := range roles {
-		producedBy = append(producedBy, role+":"+v.ModelsByRole[role])
+		entry := role + ":" + v.ModelsByRole[role]
+		if role == RoleMutantGeneratorShadow {
+			// The challenger seat is measurement, not the exam: its mutants
+			// never entered the set the dev suite was graded against. An
+			// unmarked entry here would read to a record's audience as a model
+			// that helped SET the certification, so say plainly that it did
+			// not.
+			entry += " (non-gating)"
+		}
+		producedBy = append(producedBy, entry)
 	}
 
 	const actor = "corral-advpool"

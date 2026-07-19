@@ -2589,12 +2589,262 @@ func TestShadowRowsArePairedAndFlagged(t *testing.T) {
 		if regions[0] != regions[1] {
 			t.Errorf("shard %d: paired rows must name the SAME region, got %q vs %q", idx, regions[0], regions[1])
 		}
+		// The region NAME matching is not sufficient: RegionComplexity and
+		// RegionLines are the DIFFICULTY CONTROL the whole comparison rests on
+		// (raw yield cannot distinguish a weak model from an easy region), and
+		// they are carried as separate numeric fields. A shadow row that
+		// inherited another shard's complexity would still pass the region
+		// check above while silently attributing the challenger's yield to the
+		// wrong difficulty — so assert the numbers pair too.
+		if rows[0].RegionComplexity != rows[1].RegionComplexity {
+			t.Errorf("shard %d: paired rows must carry the SAME RegionComplexity, got %d vs %d",
+				idx, rows[0].RegionComplexity, rows[1].RegionComplexity)
+		}
+		if rows[0].RegionLines != rows[1].RegionLines {
+			t.Errorf("shard %d: paired rows must carry the SAME RegionLines, got %d vs %d",
+				idx, rows[0].RegionLines, rows[1].RegionLines)
+		}
+		// And they must be the region's REAL difficulty, not merely equal to
+		// each other: a mutation that zeroed both would pass the pairing checks.
+		if rows[0].RegionComplexity <= 0 || rows[0].RegionLines <= 0 {
+			t.Errorf("shard %d: region difficulty control is empty (complexity=%d lines=%d)",
+				idx, rows[0].RegionComplexity, rows[0].RegionLines)
+		}
 	}
+}
+
+// shadowResultTag is the completion result used for CHALLENGER seats by
+// completeAllReadyTagged, so a fake Validator/Scorer can branch on which seat
+// it is serving without guessing from call order.
+const shadowResultTag = "SHADOW-RAW"
+
+// completeAllReadyTagged completes every ready task like completeAllReady, but
+// tags the challenger seats' results with shadowResultTag.
+func completeAllReadyTagged(t *testing.T, d *Driver) int {
+	t.Helper()
+	ready := claimAllReady(t, d.Q)
+	for key, task := range ready {
+		result := "raw"
+		if _, isShadow := ShadowShardIndexFromKey(key); isShadow {
+			result = shadowResultTag
+		}
+		mustComplete(t, d.Q, task.ID, result)
+	}
+	return len(ready)
+}
+
+// driveTaggedToVerdict mirrors driveShardedToVerdict but completes challenger
+// seats with shadowResultTag.
+func driveTaggedToVerdict(t *testing.T, d *Driver, missionID int64) Verdict {
+	t.Helper()
+	for i := 0; i < 50; i++ {
+		v, err := d.Tick(context.Background(), missionID)
+		if err != nil {
+			t.Fatalf("Tick: %v", err)
+		}
+		if v != nil {
+			return *v
+		}
+		completeAllReadyTagged(t, d)
+	}
+	t.Fatal("run did not converge in 50 ticks")
+	return Verdict{}
+}
+
+// shadowParseFailValidator parses everything EXCEPT a challenger seat's
+// result, which it rejects — so a test can drive a run in which only the
+// shadow parse fails.
+type shadowParseFailValidator struct {
+	mutants []adequacy.Mutant
+}
+
+func (v *shadowParseFailValidator) ParseMutants(raw, _ string) ([]adequacy.Mutant, error) {
+	if raw == shadowResultTag {
+		return nil, fmt.Errorf("challenger output is garbage")
+	}
+	return v.mutants, nil
+}
+func (v *shadowParseFailValidator) ParseTest(raw string) string { return raw }
+func (v *shadowParseFailValidator) CompileTest(_ context.Context, _, _, _ string) error {
+	return nil
+}
+
+// TestShadowParseFailureIsNotFatal proves a challenger seat whose output will
+// not parse cannot fail the run. A shadow seat is MEASUREMENT: its failure is
+// recorded (or, here, simply kept out of the scorecard as a dropped seat) and
+// the primary's certification proceeds untouched. Without this, a challenger
+// model's malformed reply — on a feature that is ON BY DEFAULT — would decide
+// whether a good suite gets certified.
+func TestShadowParseFailureIsNotFatal(t *testing.T) {
+	const missionID = int64(240)
+	scorer := &fakeScorer{devKillRate: 1.0}
+	validator := &shadowParseFailValidator{mutants: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
+	d := newShadowedRun(t, missionID, 2, "challenger-model", scorer, validator)
+	d.Signer = &fakeSigner{}
+
+	v := driveTaggedToVerdict(t, d, missionID)
+
+	if v.Status != StatusCertified {
+		t.Fatalf("a shadow PARSE failure must not change the verdict: Status = %q, want %q", v.Status, StatusCertified)
+	}
+	if v.DevKillRate != 1.0 {
+		t.Errorf("DevKillRate = %v, want 1.0 — the primary exam is untouched by the challenger", v.DevKillRate)
+	}
+}
+
+// shadowScoreFailScorer succeeds on the FIRST call and fails on every one
+// after. Paired with a perfect dev suite (kill-rate 1.0 ⇒ no survivors ⇒ no
+// test-writer and no pool score), the calls after the first are exactly the
+// challenger seats' scoring calls.
+type shadowScoreFailScorer struct{ calls int }
+
+func (s *shadowScoreFailScorer) Score(_ context.Context, _, _, _ string, _ []adequacy.Mutant, _ string) (float64, []adequacy.Mutant, error) {
+	s.calls++
+	if s.calls == 1 {
+		return 1.0, nil, nil
+	}
+	return 0, nil, fmt.Errorf("shadow jail run exploded")
+}
+
+// TestShadowScoringFailureIsNotFatal proves a challenger seat whose SCORING
+// fails (the jail run the shadow pass performs against the same dev suite)
+// cannot fail the run either. Scoring is the expensive half of the shadow
+// pass and the one most likely to break transiently — an infra hiccup there
+// must never cost a certification.
+func TestShadowScoringFailureIsNotFatal(t *testing.T) {
+	const missionID = int64(241)
+	scorer := &shadowScoreFailScorer{}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
+	d := newShadowedRun(t, missionID, 2, "challenger-model", scorer, validator)
+	sink := &fakeBugCatch{}
+	d.BugCatch = sink
+	d.Signer = &fakeSigner{}
+
+	v := driveTaggedToVerdict(t, d, missionID)
+
+	if v.Status != StatusCertified {
+		t.Fatalf("a shadow SCORING failure must not change the verdict: Status = %q, want %q", v.Status, StatusCertified)
+	}
+	if scorer.calls < 2 {
+		t.Fatalf("the shadow pass never attempted to score (%d Score calls) — this test would pass vacuously", scorer.calls)
+	}
+	// A seat whose scoring failed was never measured, so it must NOT appear as
+	// a challenger that planted zero mutants — that is a fabricated comparison.
+	for _, o := range sink.obs {
+		if o.Shadow {
+			t.Errorf("an UNMEASURED shadow seat was recorded to the scorecard: %+v", o)
+		}
+	}
+}
+
+// TestIncompleteShadowSeatDoesNotBlockDevAdequacy proves the primary
+// all-shards-terminal gate in tickDevAdequacy waits only on the PRIMARY
+// generator seats. The existing sharded tests complete shadow tasks along with
+// everything else, so none of them exercise this: here the challenger seats
+// are left CLAIMED (never completed) and dev-adequacy must still score. If a
+// shadow seat could hold the gate, a single wedged challenger would stall
+// every run with shadow on — which is the default.
+func TestIncompleteShadowSeatDoesNotBlockDevAdequacy(t *testing.T) {
+	const missionID = int64(242)
+	scorer := &fakeScorer{devKillRate: 0.9, devSurvivors: []adequacy.Mutant{{ID: "s1", Code: "c1"}}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
+	d := newShadowedRun(t, missionID, 2, "challenger-model", scorer, validator)
+
+	// Claim everything, then complete ONLY the primary generator seats. The
+	// challenger seats stay claimed with a live lease — exactly the shape of a
+	// challenger whose provider is hanging.
+	ready := claimAllReady(t, d.Q)
+	shadowsLeftOpen := 0
+	primariesDone := 0
+	for key, task := range ready {
+		if _, isShadow := ShadowShardIndexFromKey(key); isShadow {
+			shadowsLeftOpen++
+			continue
+		}
+		if _, isPrimary := ShardIndexFromKey(key); isPrimary {
+			mustComplete(t, d.Q, task.ID, "raw")
+			primariesDone++
+		}
+	}
+	if shadowsLeftOpen == 0 || primariesDone == 0 {
+		t.Fatalf("fixture is wrong: %d shadow seats left open, %d primaries completed", shadowsLeftOpen, primariesDone)
+	}
+
+	if _, err := d.Tick(context.Background(), missionID); err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	if !d.runs[missionID].devScored {
+		t.Fatal("dev-adequacy did not score — an unfinished CHALLENGER seat is blocking the primary gate")
+	}
+	if len(scorer.calls) == 0 {
+		t.Fatal("the Scorer never ran: the primary exam is gated on a measurement seat")
+	}
+}
+
+// TestShadowBudgetSkipsRatherThanTimingOutTheRun proves the invariant the role
+// key cannot enforce: shadow work can never flip a run's Status. RunDeadline
+// is wall-clock from run start and exceeding it forces a needs-review TIMEOUT
+// verdict, while the shadow pass runs a SECOND full Scorer.Score per shard —
+// so without the guard, enabling shadow could turn a would-be-certified run
+// into needs-review purely by being slower. Here the fake clock advances past
+// the whole deadline DURING shadow scoring; the run must still certify.
+func TestShadowBudgetSkipsRatherThanTimingOutTheRun(t *testing.T) {
+	const missionID = int64(243)
+	now := time.Unix(0, 0)
+	scorer := &clockAdvancingScorer{devKillRate: 1.0, now: &now, perShadowCall: 20 * time.Minute}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
+	d := newShadowedRun(t, missionID, 2, "challenger-model", scorer, validator)
+	d.Now = func() time.Time { return now }
+	d.RunDeadline = 10 * time.Minute
+	d.Signer = &fakeSigner{}
+	sink := &fakeBugCatch{}
+	d.BugCatch = sink
+
+	v := driveTaggedToVerdict(t, d, missionID)
+
+	if v.Status != StatusCertified {
+		t.Fatalf("shadow work timed the run out: Status = %q, want %q — shadow must never change Status", v.Status, StatusCertified)
+	}
+	if scorer.shadowCalls == 0 {
+		t.Fatal("the shadow pass never ran — this test would pass vacuously")
+	}
+	// The guard SKIPS rather than pretending: an unmeasured seat is absent
+	// from the scorecard, never recorded as a challenger with zero yield.
+	for _, o := range sink.obs {
+		if o.Shadow && o.MutantsPlanted == 0 {
+			t.Errorf("a skipped shadow seat was recorded as zero yield: %+v", o)
+		}
+	}
+}
+
+// clockAdvancingScorer burns fake wall-clock on every call AFTER the first
+// (i.e. on the shadow pass's calls, given a perfect dev suite), so a test can
+// prove shadow spend does not consume the run's deadline.
+type clockAdvancingScorer struct {
+	devKillRate   float64
+	now           *time.Time
+	perShadowCall time.Duration
+	calls         int
+	shadowCalls   int
+}
+
+func (s *clockAdvancingScorer) Score(_ context.Context, _, _, _ string, _ []adequacy.Mutant, _ string) (float64, []adequacy.Mutant, error) {
+	s.calls++
+	if s.calls == 1 {
+		return s.devKillRate, nil, nil
+	}
+	s.shadowCalls++
+	*s.now = s.now.Add(s.perShadowCall)
+	return 1.0, nil, nil
 }
 
 // newShadowedRun mirrors newShardedRun but sets a challenger model, so
 // BuildDAG also emits the shadow seats.
-func newShadowedRun(t *testing.T, missionID int64, maxShards int, shadowModel string, scorer *fakeScorer, validator Validator) *Driver {
+// scorer/validator are interface params so a test can supply a fake that
+// branches on WHICH seat it is serving (see shadowScoreFailScorer /
+// shadowParseFailValidator) — the only way to prove a shadow-only failure is
+// non-fatal.
+func newShadowedRun(t *testing.T, missionID int64, maxShards int, shadowModel string, scorer Scorer, validator Validator) *Driver {
 	t.Helper()
 	q := newTestQueue(t)
 	d, err := NewDriver(q, scorer, validator, decorrelatedAssign(), 0.5)
@@ -2610,4 +2860,53 @@ func newShadowedRun(t *testing.T, missionID int64, maxShards int, shadowModel st
 		t.Fatalf("PromoteReady: %v", err)
 	}
 	return d
+}
+
+// TestShadowShardTelemetryEmitted proves the challenger's per-seat beats reach
+// the EventSink — the --record tape and the cockpit. The pool_shard emit loop
+// previously iterated run.shardStats only, so a replay of a shadowed run
+// carried the primary's rows and no trace of the comparison at all: the
+// feature was invisible everywhere it claimed to be recorded.
+func TestShadowShardTelemetryEmitted(t *testing.T) {
+	const missionID = int64(244)
+	scorer := &fakeScorer{devKillRate: 1.0}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
+	d := newShadowedRun(t, missionID, 2, "challenger-model", scorer, validator)
+	sink := &fakeEventSink{}
+	d.Events = sink
+
+	completeAllReadyTagged(t, d)
+	if _, err := d.Tick(context.Background(), missionID); err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+
+	var shadowEvents, primaryEvents []eventCall
+	for _, e := range sink.events {
+		if e.kind != "pool_shard" {
+			continue
+		}
+		if isShadow, _ := e.detail["shadow"].(bool); isShadow {
+			shadowEvents = append(shadowEvents, e)
+		} else {
+			primaryEvents = append(primaryEvents, e)
+		}
+	}
+	if len(primaryEvents) == 0 {
+		t.Fatal("the primary per-shard telemetry regressed")
+	}
+	if len(shadowEvents) != len(primaryEvents) {
+		t.Fatalf("want a shadow beat per primary beat, got %d shadow vs %d primary — the comparison is missing from the tape",
+			len(shadowEvents), len(primaryEvents))
+	}
+	for _, e := range shadowEvents {
+		if got := e.detail["model"]; got != "challenger-model" {
+			t.Errorf("shadow beat must name the challenger model, got %v", got)
+		}
+		if measured, _ := e.detail["measured"].(bool); !measured {
+			t.Errorf("shadow beat for shard %v reports measured=false on a clean run", e.detail["shard"])
+		}
+		if e.detail["region_complexity"] == nil || e.detail["region_lines"] == nil {
+			t.Errorf("shadow beat is missing the region difficulty control: %#v", e.detail)
+		}
+	}
 }

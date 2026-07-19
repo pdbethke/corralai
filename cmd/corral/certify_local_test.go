@@ -20,6 +20,7 @@ import (
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/agentworker"
+	"github.com/pdbethke/corralai/internal/bugcatch"
 	"github.com/pdbethke/corralai/internal/buildstore"
 	"github.com/pdbethke/corralai/internal/certify"
 	"github.com/pdbethke/corralai/internal/certverify"
@@ -84,7 +85,7 @@ func TestRunReadyTasks_ConcurrentAndBounded(t *testing.T) {
 		return blockingChatter{mu: &mu, cur: &cur, max: &max, total: &total}
 	}
 
-	ran, err := runReadyTasks(context.Background(), q, mission, chatterFor, nil, nil, swarm)
+	ran, err := runReadyTasks(context.Background(), q, mission, chatterFor, nil, nil, swarm, io.Discard)
 	if err != nil {
 		t.Fatalf("runReadyTasks: %v", err)
 	}
@@ -676,5 +677,243 @@ func TestAdvVerdictFromPoolCarriesRegionCoverage(t *testing.T) {
 	}
 	if len(got.DroppedRegions) != 2 || got.DroppedRegions[0] != "parseConfig" {
 		t.Errorf("DroppedRegions = %v, want [parseConfig renderReport]", got.DroppedRegions)
+	}
+}
+
+// failingChatter fails every Chat call — the shape of a provider 429, a
+// network blip, or a model name that does not exist.
+type failingChatter struct{ err error }
+
+func (c failingChatter) Chat(_ []agentworker.Message, _ []any) (agentworker.Message, error) {
+	return agentworker.Message{}, c.err
+}
+
+// TestShadowSeatFailureDoesNotFailTheRun proves the tolerance that makes the
+// challenger safe to enable BY DEFAULT: a shadow seat whose LLM call fails is
+// logged and completed empty, while a PRIMARY seat's failure still aborts.
+//
+// The bug this pins: runOneTask was role-blind, so any error here reached
+// runReadyTasks' fail(), which cancels every in-flight primary worker, and
+// driveLocalRun returned it directly — outside the consecutiveTickErrors
+// tolerance, which only wraps d.Tick. The run exited 1 with no verdict. With
+// shadow on by default that meant a challenger-model hiccup could kill an
+// audit the primary seats were about to pass.
+func TestShadowSeatFailureDoesNotFailTheRun(t *testing.T) {
+	q, err := queue.Open(filepath.Join(t.TempDir(), "q.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer q.Close()
+
+	const mission int64 = 1
+	specs := []queue.TaskSpec{
+		{Key: advpool.ShardTaskKey(0), Role: advpool.RoleMutantGenerator, Title: "primary", Instruction: "do"},
+		{Key: advpool.ShadowShardTaskKey(0), Role: advpool.RoleMutantGeneratorShadow, Title: "challenger", Instruction: "do"},
+	}
+	if err := q.Enqueue(mission, specs); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.PromoteReady(mission); err != nil {
+		t.Fatal(err)
+	}
+
+	boom := fmt.Errorf("challenger provider said 429")
+	chatterFor := func(role string) agentworker.Chatter {
+		if role == advpool.RoleMutantGeneratorShadow {
+			return failingChatter{err: boom}
+		}
+		return cannedChatter{content: "primary mutants"}
+	}
+
+	var progress bytes.Buffer
+	ran, err := runReadyTasks(context.Background(), q, mission, chatterFor, nil, nil, 1, &progress)
+	if err != nil {
+		t.Fatalf("a CHALLENGER seat's failure must not fail the run, got: %v", err)
+	}
+	if !ran {
+		t.Fatal("expected ran=true")
+	}
+	if !strings.Contains(progress.String(), "challenger seat") {
+		t.Errorf("the skipped measurement must be reported, got progress:\n%s", progress.String())
+	}
+
+	// Both tasks must be terminal — the shadow one completed EMPTY, which the
+	// driver's shadow pass tolerates, rather than left pending (which would
+	// hold a drain open forever).
+	tasks, err := q.List(mission)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, task := range tasks {
+		if task.Status != queue.StatusDone {
+			t.Errorf("task %q status = %q, want done", task.Key, task.Status)
+		}
+		if task.Role == advpool.RoleMutantGeneratorShadow && task.Result != "" {
+			t.Errorf("a failed challenger seat must complete with an EMPTY result, got %q", task.Result)
+		}
+	}
+}
+
+// TestPrimarySeatFailureStillFailsTheRun is the other half: the shadow
+// tolerance must be narrow. A PRIMARY generator seat whose model call fails is
+// an infrastructure failure on the gating path and must still abort — if this
+// regressed to "tolerate everything", a run could certify on a mutant set no
+// model ever produced.
+func TestPrimarySeatFailureStillFailsTheRun(t *testing.T) {
+	q, err := queue.Open(filepath.Join(t.TempDir(), "q.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer q.Close()
+
+	const mission int64 = 1
+	if err := q.Enqueue(mission, []queue.TaskSpec{
+		{Key: advpool.ShardTaskKey(0), Role: advpool.RoleMutantGenerator, Title: "primary", Instruction: "do"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.PromoteReady(mission); err != nil {
+		t.Fatal(err)
+	}
+
+	chatterFor := func(string) agentworker.Chatter {
+		return failingChatter{err: fmt.Errorf("primary provider said 500")}
+	}
+	if _, err := runReadyTasks(context.Background(), q, mission, chatterFor, nil, nil, 1, io.Discard); err == nil {
+		t.Fatal("a PRIMARY seat's model failure must fail the run — it is the gating path")
+	}
+}
+
+// TestWireLocalBugCatchPersistsShadowRows proves the --local path actually
+// PERSISTS the comparison. Before this wiring, BugCatch was set only in the
+// brain, and the brain never sets a ShadowModel — so on the sole path where a
+// challenger runs, every shadow row was computed and discarded while the CLI
+// printed "recorded, never gating". This asserts the whole adapter: a shadow
+// observation handed to the wired sink lands in the DuckDB store, flagged.
+func TestWireLocalBugCatchPersistsShadowRows(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "bugcatch.duckdb")
+	q, err := queue.Open(filepath.Join(t.TempDir(), "q.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer q.Close()
+	d, err := advpool.NewDriver(q, nil, nil, advpool.RoleAssignment{
+		advpool.RoleMutantGenerator: "m", advpool.RoleTestWriter: "w", advpool.RoleTestCritic: "c",
+	}, 0.8)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var warn bytes.Buffer
+	closer := wireLocalBugCatch(d, dbPath, "repoA", "commitB", &warn)
+	if d.BugCatch == nil {
+		t.Fatal("wireLocalBugCatch did not wire the driver's BugCatch feed — shadow rows would be computed and discarded")
+	}
+	d.BugCatch.Record(7, "head7", []advpool.BugCatchObservation{
+		{
+			Model: "challenger-model", Role: advpool.RoleMutantGeneratorShadow,
+			MutantsPlanted: 4, MutantsSurvived: 3,
+			Shard: 1, Region: "A, B", RegionComplexity: 9, RegionLines: 20,
+			Shadow: true,
+		},
+	})
+	closer()
+	if warn.Len() != 0 {
+		t.Fatalf("unexpected warning from the metrics path: %s", warn.String())
+	}
+
+	store, err := bugcatch.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	obs, err := store.Observations(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(obs) != 1 {
+		t.Fatalf("want 1 persisted observation, got %d — the shadow comparison is not durable", len(obs))
+	}
+	got := obs[0]
+	if !got.Shadow {
+		t.Error("the persisted row must be flagged Shadow, or it reads as a gating seat")
+	}
+	if got.Role != advpool.RoleMutantGeneratorShadow || got.Model != "challenger-model" {
+		t.Errorf("role/model = %q/%q, want %q/%q", got.Role, got.Model, advpool.RoleMutantGeneratorShadow, "challenger-model")
+	}
+	if got.RecordID != 7 || got.RecordHead != "head7" {
+		t.Errorf("record anchor = %d/%q, want 7/head7", got.RecordID, got.RecordHead)
+	}
+	if got.Repo != "repoA" || got.Commit != "commitB" {
+		t.Errorf("subject = %s@%s, want repoA@commitB", got.Repo, got.Commit)
+	}
+	// The difficulty control must survive the hop — without it the comparison
+	// is confounded by region and means nothing.
+	if got.RegionComplexity != 9 || got.RegionLines != 20 || got.Region != "A, B" || got.Shard != 1 {
+		t.Errorf("region controls lost in transit: %+v", got)
+	}
+	if got.MutantsPlanted != 4 || got.MutantsSurvived != 3 {
+		t.Errorf("yield lost in transit: planted=%d survived=%d, want 4/3", got.MutantsPlanted, got.MutantsSurvived)
+	}
+}
+
+// TestWireLocalBugCatchDegradesOnOpenFailure proves metrics are never the
+// gate: a scorecard store that cannot open warns and leaves the driver
+// unwired, so the audit still runs and still signs a verdict.
+func TestWireLocalBugCatchDegradesOnOpenFailure(t *testing.T) {
+	q, err := queue.Open(filepath.Join(t.TempDir(), "q.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer q.Close()
+	d, err := advpool.NewDriver(q, nil, nil, advpool.RoleAssignment{
+		advpool.RoleMutantGenerator: "m", advpool.RoleTestWriter: "w", advpool.RoleTestCritic: "c",
+	}, 0.8)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A path under a non-existent directory: DuckDB cannot create the file.
+	bad := filepath.Join(t.TempDir(), "no-such-dir", "bugcatch.duckdb")
+	var warn bytes.Buffer
+	closer := wireLocalBugCatch(d, bad, "r", "c", &warn)
+	defer closer()
+
+	if d.BugCatch != nil {
+		t.Fatal("a failed metrics store must leave BugCatch unwired, not half-wired")
+	}
+	if warn.Len() == 0 {
+		t.Error("a failed metrics store must WARN — silently dropping metrics is how the readout starts lying")
+	}
+}
+
+// TestResolveShadowModelDisableIsCaseInsensitive: "OFF" plainly means off. If
+// case mattered, --shadow-model OFF would be taken as a MODEL NAME and every
+// challenger seat would be dispatched to a provider that has no such model.
+func TestResolveShadowModelDisableIsCaseInsensitive(t *testing.T) {
+	for _, in := range []string{"off", "OFF", "Off", "none", "NONE", "None", " Off "} {
+		if got := resolveShadowModel(in); got != "" {
+			t.Errorf("resolveShadowModel(%q) = %q, want \"\" (disabled)", in, got)
+		}
+	}
+	if got := resolveShadowModel(""); got != defaultLocalShadowModel {
+		t.Errorf("resolveShadowModel(\"\") = %q, want the default %q", got, defaultLocalShadowModel)
+	}
+	if got := resolveShadowModel("claude-haiku-4-5"); got != "claude-haiku-4-5" {
+		t.Errorf("resolveShadowModel: a real model name must pass through, got %q", got)
+	}
+}
+
+// TestLocalBugCatchDBPathHonoursEnv mirrors the build-ledger path resolution:
+// an operator who redirects the ledger must be able to redirect the metrics
+// store the same way (and tests must never write to the real one).
+func TestLocalBugCatchDBPathHonoursEnv(t *testing.T) {
+	t.Setenv("CORRALAI_BUGCATCH_DB", "/tmp/some-bugcatch.duckdb")
+	if got := localBugCatchDBPath(); got != "/tmp/some-bugcatch.duckdb" {
+		t.Errorf("localBugCatchDBPath() = %q, want the env override", got)
+	}
+	t.Setenv("CORRALAI_BUGCATCH_DB", "")
+	if got := localBugCatchDBPath(); !strings.HasSuffix(got, filepath.Join(".claude", "corralai_bugcatch.duckdb")) {
+		t.Errorf("localBugCatchDBPath() default = %q, want it beside the build ledger", got)
 	}
 }

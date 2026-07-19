@@ -160,6 +160,16 @@ type shardStat struct {
 	// per shard here; see the survivorIdx placement note in
 	// bugCatchObservations for why the primary's is recorded differently.
 	survived int
+	// measured is set only on a shadowStats entry, and only once the
+	// challenger seat actually PRODUCED an observation for this region —
+	// either a scored mutant set or a real parse failure. It stays false when
+	// the seat never finished, when its scoring errored, or when the shadow
+	// budget guard skipped it. An unmeasured seat emits NO bugcatch row: a
+	// zero-mutant row for a seat that never ran would be recorded as the
+	// challenger producing nothing, which is a fabricated comparison, not a
+	// measurement. The telemetry event is still emitted for it, carrying
+	// measured=false, so the skip is visible rather than silent.
+	measured bool
 }
 
 // runState is one run's mutable progress, tracked across ticks. The
@@ -255,8 +265,12 @@ type runState struct {
 
 	verdict *Verdict
 
-	// startedAt is the run's start time (from Driver.Now, set once in
-	// StartRun and never mutated), used by the RunDeadline backstop below.
+	// startedAt is the run's start time (from Driver.Now, set in StartRun),
+	// used by the RunDeadline backstop below. It is advanced by exactly the
+	// wall-clock time runShadowPass spends, so the deadline measures PRIMARY
+	// elapsed time only — shadow measurement can never push a would-be
+	// certified run into a needs-review timeout. Only the tick goroutine
+	// touches it.
 	startedAt time.Time
 }
 
@@ -712,33 +726,7 @@ func (d *Driver) tickDevAdequacy(ctx context.Context, missionID int64, run *runS
 	// A shadow failure is NEVER fatal: it is measurement, not the gate. Errors
 	// are logged and the seat is skipped.
 	if strings.TrimSpace(run.rs.ShadowModel) != "" {
-		shadows, serr := d.tasksByRole(missionID, RoleMutantGeneratorShadow)
-		if serr != nil {
-			log.Printf("advpool: run %d: shadow seats unavailable (measurement only): %v", missionID, serr)
-		}
-		for i := range shadows {
-			if shadows[i].Status != queue.StatusDone {
-				continue
-			}
-			idx, _ := ShadowShardIndexFromKey(shadows[i].Key)
-			parsed, perr := d.Validator.ParseMutants(shadows[i].Result, run.rs.Code)
-			if perr != nil {
-				st := run.shadowStats[idx]
-				st.parseRetries++
-				st.dropped = true
-				run.shadowStats[idx] = st
-				continue
-			}
-			_, shadowSurvivors, sserr := d.Scorer.Score(ctx, run.rs.CodePath, run.rs.Code, run.rs.DevTestCode, parsed, run.rs.TestCmd)
-			if sserr != nil {
-				log.Printf("advpool: run %d: shadow shard %d scoring failed (measurement only): %v", missionID, idx, sserr)
-				continue
-			}
-			st := run.shadowStats[idx]
-			st.mutants = len(parsed)
-			st.survived = len(shadowSurvivors)
-			run.shadowStats[idx] = st
-		}
+		d.runShadowPass(ctx, missionID, run)
 	}
 
 	// Emit one telemetry event per shard now that run.shardStats is final
@@ -751,6 +739,22 @@ func (d *Driver) tickDevAdequacy(ctx context.Context, missionID int64, run *runS
 			"shard": i, "region": st.region,
 			"region_complexity": st.complexity, "region_lines": st.lines,
 			"mutants": st.mutants, "parse_retries": st.parseRetries, "dropped": st.dropped,
+		})
+	}
+	// The challenger's paired telemetry: the SAME pool_shard kind (so the tape
+	// and cockpit render it with the existing per-shard handling) marked
+	// shadow=true, plus measured — a seat the budget guard skipped, or one
+	// whose scoring errored, emits measured=false rather than a silent absence
+	// or a fabricated zero. Without this the --record tape carried only the
+	// primary's rows and the comparison was invisible in every replay.
+	for _, i := range sortedShardIndexes(run.shadowStats) {
+		st := run.shadowStats[i]
+		d.emit(missionID, "pool_shard", st.region, map[string]any{
+			"shard": i, "region": st.region,
+			"region_complexity": st.complexity, "region_lines": st.lines,
+			"mutants": st.mutants, "parse_retries": st.parseRetries, "dropped": st.dropped,
+			"survived": st.survived, "shadow": true, "measured": st.measured,
+			"model": run.rs.ShadowModel,
 		})
 	}
 	// Log the headline the moment it's computed — the dev suite's grade — so it
@@ -819,6 +823,116 @@ func (d *Driver) tickDevAdequacy(ctx context.Context, missionID int64, run *runS
 		return fmt.Errorf("advpool: promote after test-writer supersede: %w", err)
 	}
 	return nil
+}
+
+// ShadowTimeBudget is the hard wall-clock cap on ALL of a run's shadow
+// measurement work, derived from the run's deadline. Shadow scoring runs real
+// jail executions of the dev suite — a second full Scorer.Score per shard — so
+// it must be bounded twice over: this cap bounds how long it may take, and
+// runShadowPass credits whatever it does spend back to the run's deadline
+// clock so it cannot consume the PRIMARY run's budget.
+//
+// A zero deadline (the pure-unit-test / no-backstop case) means there is no
+// budget to protect, so shadow work is unbounded there.
+func ShadowTimeBudget(deadline time.Duration) time.Duration {
+	if deadline <= 0 {
+		return 0
+	}
+	return deadline / 4
+}
+
+// runShadowPass scores the challenger seats' mutants against the SAME dev
+// suite as the primary, so the head-to-head measures POTENCY (mutants that
+// survive a good suite) rather than mere output volume. It is MEASUREMENT, and
+// is held to two invariants that the role key alone cannot enforce:
+//
+//  1. A shadow failure is NEVER fatal. Every error path here logs and leaves
+//     the seat unmeasured; nothing returns an error to Tick.
+//
+//  2. Shadow work can never change the run's Status. RunDeadline is a
+//     wall-clock budget from run start, and exceeding it forces a
+//     needs-review TIMEOUT verdict — so absent a guard, enabling shadow could
+//     flip a would-be-certified run to needs-review purely by making it
+//     slower. That would breach "shadow never gates" through a channel the
+//     role key cannot close. Two mechanisms close it together:
+//     (a) every shadow Score is bounded by ShadowTimeBudget, and the pass
+//     stops as soon as that budget is spent (remaining seats are recorded
+//     as UNMEASURED, never as a challenger that produced nothing); and
+//     (b) the wall-clock time this pass consumes is credited back to the
+//     run's deadline clock by advancing startedAt, so the deadline check in
+//     Tick measures PRIMARY elapsed time only. (b) is what makes the
+//     guarantee structural rather than probabilistic — (a) exists so the
+//     caller's own outer context (which must allow deadline + this budget;
+//     see cmd/corral's certify --local) stays bounded.
+func (d *Driver) runShadowPass(ctx context.Context, missionID int64, run *runState) {
+	shadows, serr := d.tasksByRole(missionID, RoleMutantGeneratorShadow)
+	if serr != nil {
+		log.Printf("advpool: run %d: shadow seats unavailable (measurement only): %v", missionID, serr)
+		return
+	}
+
+	budget := ShadowTimeBudget(d.RunDeadline)
+	started := d.Now()
+	if budget > 0 {
+		// Credit the pass's whole wall-clock spend back to the run's deadline
+		// clock on EVERY exit path — see invariant (2b) above.
+		defer func() { run.startedAt = run.startedAt.Add(d.Now().Sub(started)) }()
+	}
+
+	for i := range shadows {
+		if shadows[i].Status != queue.StatusDone {
+			// Never finished (still pending/claimed, or superseded): there is
+			// nothing to measure, and — critically — this must NOT hold up the
+			// primary run, which has already scored above.
+			continue
+		}
+		idx, ok := ShadowShardIndexFromKey(shadows[i].Key)
+		if !ok {
+			// A key this function cannot parse would otherwise silently become
+			// index 0 and collapse this seat onto shard 0's row, mis-attributing
+			// one region's difficulty control to another. Skip it, loudly —
+			// matching the log-and-degrade pattern the rest of the shadow path
+			// uses.
+			log.Printf("advpool: run %d: shadow seat key %q does not parse to a shard index — skipping (measurement only)", missionID, shadows[i].Key)
+			continue
+		}
+
+		sctx := ctx
+		if budget > 0 {
+			left := budget - d.Now().Sub(started)
+			if left <= 0 {
+				log.Printf("advpool: run %d: shadow budget (%s) spent — skipping the remaining challenger seats; they are recorded as UNMEASURED, not as zero yield", missionID, budget)
+				return
+			}
+			var cancel context.CancelFunc
+			sctx, cancel = context.WithTimeout(ctx, left)
+			defer cancel() // bounded by len(shadows) — one per shard, freed when the pass returns
+		}
+
+		parsed, perr := d.Validator.ParseMutants(shadows[i].Result, run.rs.Code)
+		if perr != nil {
+			// A real, observed challenger failure: it produced output the
+			// validator could not use. That IS a measurement, so mark it so.
+			st := run.shadowStats[idx]
+			st.parseRetries++
+			st.dropped = true
+			st.measured = true
+			run.shadowStats[idx] = st
+			continue
+		}
+		_, shadowSurvivors, sserr := d.Scorer.Score(sctx, run.rs.CodePath, run.rs.Code, run.rs.DevTestCode, parsed, run.rs.TestCmd)
+		if sserr != nil {
+			// Infrastructure, not a challenger verdict — leave it unmeasured
+			// rather than recording a zero the scorecard would read as yield.
+			log.Printf("advpool: run %d: shadow shard %d scoring failed (measurement only): %v", missionID, idx, sserr)
+			continue
+		}
+		st := run.shadowStats[idx]
+		st.mutants = len(parsed)
+		st.survived = len(shadowSurvivors)
+		st.measured = true
+		run.shadowStats[idx] = st
+	}
 }
 
 // tickPoolAdequacy is step 3: once test-writer is done, validate that its
@@ -1074,6 +1188,13 @@ func bugCatchObservations(run *runState, v Verdict) []BugCatchObservation {
 	// only ever seeded alongside shardStats.
 	for _, i := range sortedShardIndexes(run.shadowStats) {
 		st := run.shadowStats[i]
+		if !st.measured {
+			// The seat never produced an observation (unfinished, scoring
+			// failed, or skipped by the shadow budget guard). Recording it
+			// would enter mutants_planted=0 for a model that was never asked
+			// the question — a fabricated comparison. See shardStat.measured.
+			continue
+		}
 		out = append(out, BugCatchObservation{
 			Model: run.rs.ShadowModel, Role: RoleMutantGeneratorShadow,
 			MutantsPlanted: st.mutants, MutantsSurvived: st.survived,
@@ -1205,6 +1326,19 @@ func (d *Driver) taskByKey(missionID int64, key string) (*queue.Task, error) {
 	return nil, nil
 }
 
+// shardIndexOfAnyKey parses a shard index out of EITHER a primary
+// mutant-generator key or a challenger (shadow) one. tasksByRole is called for
+// both roles, and the two key formats differ by prefix — so parsing only the
+// primary form dropped every shadow seat into the lexicographic fallback,
+// ordering them /0, /1, /10, /2 past ten shards and silently voiding the
+// numeric-order guarantee tasksByRole's doc comment spends ten lines making.
+func shardIndexOfAnyKey(key string) (int, bool) {
+	if i, ok := ShardIndexFromKey(key); ok {
+		return i, true
+	}
+	return ShadowShardIndexFromKey(key)
+}
+
 // tasksByRole returns every task for a role, sorted by parsed shard index
 // (the bare unsharded key first) rather than by key string — a lexicographic
 // sort on Key would order ten-plus shards as /0, /1, /10, /11, /2, ... once
@@ -1227,8 +1361,8 @@ func (d *Driver) tasksByRole(missionID int64, role string) ([]queue.Task, error)
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {
-		ii, iSharded := ShardIndexFromKey(out[i].Key)
-		ji, jSharded := ShardIndexFromKey(out[j].Key)
+		ii, iSharded := shardIndexOfAnyKey(out[i].Key)
+		ji, jSharded := shardIndexOfAnyKey(out[j].Key)
 		if iSharded != jSharded {
 			// Unsharded key sorts first (it stands in for shard 0 in an
 			// unsharded run).

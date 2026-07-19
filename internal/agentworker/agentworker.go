@@ -23,7 +23,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/queue"
 )
 
@@ -58,13 +57,24 @@ type Chatter interface {
 
 // isStructuredRole reports whether role produces a typed artifact (mutant
 // list / test source) for the brain/validator to re-parse, rather than a
-// freeform tool-loop summary. Mirrors cmd/corral-agent's isStructuredRole.
+// freeform tool-loop summary. Kept in lockstep with cmd/corral-agent's
+// isStructuredRole, which classifies the same roles for the daemon-side
+// worker — both must list the shadow seat, since either process can be the
+// one that runs it.
+//
+// The role names are string LITERALS, not advpool constants, deliberately:
+// this package mirrors advpool's shapes rather than importing it (see the
+// package doc). Importing advpool for one constant pulled internal/buildstore
+// — and with it DuckDB — into every binary that links this package, including
+// cmd/corral-agent (measured: 0 duckdb packages in `go list -deps
+// ./cmd/corral-agent` before that import, 3 after). A worker binary must not
+// grow a database driver to name a role.
 func isStructuredRole(role string) bool {
 	// mutant-generator-shadow (the Task 6 challenger seat) uses the identical
 	// structured single-shot path as its primary — it renders the SAME testgen
 	// prompt shape, just under a different model/role key, and is never routed
 	// through the critic's freeform tool loop.
-	return role == "test-writer" || role == "mutant-generator" || role == advpool.RoleMutantGeneratorShadow
+	return role == "test-writer" || role == "mutant-generator" || role == "mutant-generator-shadow"
 }
 
 // isPoolCriticRole mirrors cmd/corral-agent's isPoolCriticRole.

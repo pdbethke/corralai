@@ -8,8 +8,9 @@ import (
 	"testing"
 )
 
-// TestIsStructuredRole is a table test on the pure role classifier: only
-// test-writer and mutant-generator are structured (single-call, raw-artifact)
+// TestIsStructuredRole is a table test on the pure role classifier: only the
+// artifact-producing generator/writer seats — test-writer, mutant-generator,
+// and mutant-generator-shadow — are structured (single-call, raw-artifact)
 // roles; every other role — including test-critic, which reviews rather than
 // produces an artifact — stays on the freeform tool loop.
 func TestIsStructuredRole(t *testing.T) {
@@ -19,6 +20,11 @@ func TestIsStructuredRole(t *testing.T) {
 	}{
 		{"test-writer", true},
 		{"mutant-generator", true},
+		// The challenger seat renders the SAME testgen prompt as its primary
+		// and hands back a raw mutant list — it must take the structured fast
+		// path here exactly as internal/agentworker does, or the brain gets a
+		// tool-loop summary it cannot parse.
+		{"mutant-generator-shadow", true},
 		{"test-critic", false},
 		{"builder", false},
 		{"tester", false},

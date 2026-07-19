@@ -578,8 +578,17 @@ func taskModel(assignedModel, defaultModel string) string {
 // an already-rendered testgen prompt as their Instruction and are expected to
 // hand back raw output for the brain to validate/parse; test-critic and every
 // other role stay on the freeform loop.
+//
+// mutant-generator-shadow (the challenger seat) belongs here for the same
+// reason its primary does, and must stay in sync with
+// internal/agentworker.isStructuredRole: corral-agent is the DAEMON-side
+// worker for this very role — the brain's pool fans challenger tasks onto the
+// same queue every other role task lands on, and a generalist agent can claim
+// one. Omitting it here would route an already-rendered testgen prompt through
+// the freeform builder loop, which returns a tool-loop summary the brain's
+// ParseMutants cannot parse.
 func isStructuredRole(role string) bool {
-	return role == "test-writer" || role == "mutant-generator"
+	return role == "test-writer" || role == "mutant-generator" || role == "mutant-generator-shadow"
 }
 
 // isPoolCriticRole is the adversarial pool's freeform critic. Unlike a builder

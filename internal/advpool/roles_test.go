@@ -3,6 +3,7 @@
 package advpool
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -242,5 +243,46 @@ func TestShardTaskKeyRoundTrip(t *testing.T) {
 	}
 	if _, sharded := ShardIndexFromKey("mutant-generator/bogus"); sharded {
 		t.Error("malformed shard key must report unsharded, not panic")
+	}
+}
+
+// TestShadowShardTaskKeyRoundTrip covers the CHALLENGER key pair, which had no
+// direct test at all. The ok return is load-bearing: the driver's shadow pass
+// uses it to decide whether a seat has a real shard index, and a silently
+// discarded false there collapses that seat onto shard 0 — attributing one
+// region's difficulty control to another.
+func TestShadowShardTaskKeyRoundTrip(t *testing.T) {
+	for _, idx := range []int{0, 1, 7, 10, 42} {
+		key := ShadowShardTaskKey(idx)
+		want := "mutant-generator-shadow/" + strconv.Itoa(idx)
+		if key != want {
+			t.Errorf("ShadowShardTaskKey(%d): want %q, got %q", idx, want, key)
+		}
+		got, ok := ShadowShardIndexFromKey(key)
+		if !ok || got != idx {
+			t.Errorf("ShadowShardIndexFromKey(%q): want (%d,true), got (%d,%v)", key, idx, got, ok)
+		}
+	}
+	// A PRIMARY key is not a shadow key: the two roles must not be
+	// interchangeable through these parsers, or the structural exclusion that
+	// keeps shadow mutants out of the exam stops being structural.
+	if idx, ok := ShadowShardIndexFromKey(ShardTaskKey(2)); ok || idx != 0 {
+		t.Errorf("a primary shard key must not parse as a shadow key, got (%d,%v)", idx, ok)
+	}
+	for _, bad := range []string{
+		RoleMutantGeneratorShadow,       // bare role, no index
+		"mutant-generator-shadow/",      // empty index
+		"mutant-generator-shadow/bogus", // non-numeric
+		"mutant-generator-shadow/-1",    // negative
+		"mutant-generator-shadowX/1",    // prefix is not the role
+		"test-writer/1",                 // another role entirely
+		"",                              // empty
+		"mutant-generator-shadow/1/2",   // trailing garbage
+		" mutant-generator-shadow/1",    // leading space
+		"MUTANT-GENERATOR-SHADOW/1",     // wrong case
+	} {
+		if idx, ok := ShadowShardIndexFromKey(bad); ok || idx != 0 {
+			t.Errorf("ShadowShardIndexFromKey(%q): want (0,false), got (%d,%v)", bad, idx, ok)
+		}
 	}
 }

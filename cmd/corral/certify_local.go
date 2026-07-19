@@ -24,6 +24,7 @@ import (
 	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/agentworker"
+	"github.com/pdbethke/corralai/internal/bugcatch"
 	"github.com/pdbethke/corralai/internal/buildstore"
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/queue"
@@ -154,6 +155,13 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		// a shadow model equal to the critic's (the stock default) is expected
 		// and must NOT error — it is a measurement seat, never a grading one.
 		assign[advpool.RoleMutantGeneratorShadow] = shadow
+	}
+	if shadow != "" && shadow == mutant {
+		// A head-to-head of a model against ITSELF is not a comparison — it
+		// would be silently recorded as one, and read later as evidence about
+		// two models. Not fatal (an operator may want the same-model variance
+		// baseline on purpose), but never silent.
+		fmt.Fprintf(stderr, "corral certify --local: warning: --shadow-model %q is the same model as the mutant-generator — the recorded head-to-head compares a model against itself, not two models\n", shadow)
 	}
 	if err := advpool.CheckDecorrelation(assign); err != nil {
 		fmt.Fprintf(stderr, "corral certify --local: %v — pass distinct --writer-model / --critic-model\n", err)
@@ -328,6 +336,16 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
+	// The bug-catching scorecard feed — the ONLY thing that makes the shadow
+	// head-to-head durable: BugCatch was previously wired solely in the brain,
+	// and the brain never sets a ShadowModel, so on the only path where a
+	// challenger actually runs, every comparison row was computed and
+	// discarded. Opening it is best-effort on purpose: metrics are NOT the
+	// gate, so a store that will not open must warn and let the audit run,
+	// never abort it.
+	closeBugCatch := wireLocalBugCatch(d, localBugCatchDBPath(), repo, commit, stderr)
+	defer closeBugCatch()
+
 	n := *nMutants
 	if n <= 0 {
 		n = 5
@@ -360,8 +378,16 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 
 	// The outer context bound is slightly beyond the driver's own RunDeadline so
 	// the driver gets the chance to emit its signed timeout verdict before ctx
-	// cancels the loop.
-	ctx, cancel := context.WithTimeout(context.Background(), *timeout+30*time.Second)
+	// cancels the loop. When a challenger is configured it must ALSO allow the
+	// driver's shadow budget: shadow spend is deliberately excluded from
+	// RunDeadline (so measurement can never time a run out — see
+	// advpool.runShadowPass), which means real wall-clock can legitimately run
+	// to deadline + that budget.
+	outerBound := *timeout + 30*time.Second
+	if shadow != "" {
+		outerBound += advpool.ShadowTimeBudget(*timeout)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), outerBound)
 	defer cancel()
 
 	chatterFor := localChatterFor(assign)
@@ -388,13 +414,18 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	} else {
 		fmt.Fprintf(stdout, "regions: 1 generator seat (whole file — too few functions to split)\n")
 	}
-	if shadow != "" {
-		// len(shards) is the shadow seat count too — one challenger per PRIMARY
-		// region, never a separate partition (see RoleMutantGeneratorShadow).
-		// BuildDAG only fans the challenger out alongside a sharded run, so an
-		// unsharded file (len(shards) == 0, a single whole-file generator) gets
-		// no shadow seat at all — this prints 0 rather than claiming one.
-		fmt.Fprintf(stdout, "shadow: %d challenger seats (%s) — recorded, never gating\n", len(shards), shadow)
+	// len(shards) is the shadow seat count too — one challenger per PRIMARY
+	// region, never a separate partition (see RoleMutantGeneratorShadow).
+	// BuildDAG only fans the challenger out alongside a SHARDED run, so an
+	// unsharded file gets no shadow seat at all: say nothing rather than
+	// announce "0 challenger seats", which is noise about work that was never
+	// going to happen.
+	if shadow != "" && len(shards) > 0 {
+		// "recorded" is load-bearing and now true: d.BugCatch is wired above
+		// (best-effort), and the driver emits a shadow pool_shard beat per seat
+		// into the --record tape. If the scorecard store failed to open, the
+		// warning printed at that point is the correction to this line.
+		fmt.Fprintf(stdout, "shadow: %d challenger seats (%s) — recorded to the scorecard, never gating\n", len(shards), shadow)
 	}
 
 	verdict, err := driveLocalRun(ctx, d, q, localMissionID, chatterFor, *poll, time.Sleep, stdout, rec, actorFor, swarm)
@@ -716,7 +747,7 @@ func driveLocalRun(ctx context.Context, d *advpool.Driver, q *queue.Store, missi
 		if verdict != nil {
 			return verdict, nil
 		}
-		ran, err := runReadyTasks(ctx, q, missionID, chatterFor, rec, actorFor, swarm)
+		ran, err := runReadyTasks(ctx, q, missionID, chatterFor, rec, actorFor, swarm, progress)
 		if err != nil {
 			return nil, err
 		}
@@ -751,10 +782,13 @@ func driveLocalRun(ctx context.Context, d *advpool.Driver, q *queue.Store, missi
 // `swarm` itself is clamped to the host + the operator budget upstream. The
 // first hard error cancels the rest and is returned; the queue's atomic claim
 // guarantees no task is run twice even under concurrent workers.
-func runReadyTasks(ctx context.Context, q *queue.Store, missionID int64, chatterFor func(role string) agentworker.Chatter, rec *recordSink, actorFor func(role string) string, swarm int) (bool, error) {
+func runReadyTasks(ctx context.Context, q *queue.Store, missionID int64, chatterFor func(role string) agentworker.Chatter, rec *recordSink, actorFor func(role string) string, swarm int, progress io.Writer) (bool, error) {
 	if swarm < 1 {
 		swarm = 1
 	}
+	// Workers write progress concurrently; serialize so two notices can't
+	// interleave mid-line.
+	out := &syncWriter{w: progress}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -792,7 +826,7 @@ func runReadyTasks(ctx context.Context, q *queue.Store, missionID int64, chatter
 				mu.Lock()
 				ranAny = true
 				mu.Unlock()
-				if err := runOneTask(ctx, q, missionID, workerID, task, chatterFor, rec, actorFor); err != nil {
+				if err := runOneTask(ctx, q, missionID, workerID, task, chatterFor, rec, actorFor, out); err != nil {
 					fail(err)
 					return
 				}
@@ -807,7 +841,10 @@ func runReadyTasks(ctx context.Context, q *queue.Store, missionID int64, chatter
 // agentworker, files any findings, records the tape lifecycle, and completes it
 // on the queue under workerID. Pure per-task work — safe to run concurrently
 // with other workers (distinct tasks, atomic queue ops, mutex-guarded tape).
-func runOneTask(ctx context.Context, q *queue.Store, missionID int64, workerID string, task *queue.Task, chatterFor func(role string) agentworker.Chatter, rec *recordSink, actorFor func(role string) string) error {
+func runOneTask(ctx context.Context, q *queue.Store, missionID int64, workerID string, task *queue.Task, chatterFor func(role string) agentworker.Chatter, rec *recordSink, actorFor func(role string) string, progress io.Writer) error {
+	if progress == nil {
+		progress = io.Discard
+	}
 	ch := chatterFor(task.Role)
 	if ch == nil {
 		return fmt.Errorf("no model backend for role %q", task.Role)
@@ -822,7 +859,28 @@ func runOneTask(ctx context.Context, q *queue.Store, missionID int64, workerID s
 	rec.add("task_claimed", actor, task.Key, map[string]any{"role": task.Role, "title": task.Title})
 	result, findings, rerr := agentworker.RunRole(ctx, ch, task.Role, task.Instruction)
 	if rerr != nil {
-		return fmt.Errorf("running role %q: %w", task.Role, rerr)
+		if task.Role == advpool.RoleMutantGeneratorShadow {
+			// A challenger seat is MEASUREMENT, never the gate — so its LLM
+			// call failing must not take the certification down with it. This
+			// path is otherwise role-blind: runReadyTasks turns any error here
+			// into fail(), which cancels every in-flight PRIMARY worker, and
+			// driveLocalRun returns it directly (outside the
+			// consecutiveTickErrors tolerance, which only wraps d.Tick) — so
+			// the run exits 1 with NO verdict. With shadow on by default, a
+			// challenger-model 429, a network blip, or a typo'd
+			// --shadow-model would kill an audit the primary seats were about
+			// to pass.
+			//
+			// Completing with an EMPTY result (rather than leaving the task
+			// pending) is what lets the run proceed: the driver's shadow pass
+			// tolerates an unparseable/empty result by leaving the seat
+			// unmeasured, and the primary all-shards-terminal gate never waits
+			// on a shadow task at all.
+			fmt.Fprintf(progress, "certify --local: challenger seat %s failed (%v) — measurement skipped, the audit continues\n", task.Key, rerr)
+			result, findings = "", nil
+		} else {
+			return fmt.Errorf("running role %q: %w", task.Role, rerr)
+		}
 	}
 	for _, f := range findings {
 		f.MissionID = missionID
@@ -841,6 +899,23 @@ func runOneTask(ctx context.Context, q *queue.Store, missionID int64, workerID s
 		return fmt.Errorf("completing role %q: %w", task.Role, err)
 	}
 	return nil
+}
+
+// syncWriter serializes concurrent writes from the bounded worker pool onto
+// one progress stream, so two workers' notices cannot interleave mid-line. A
+// nil target is treated as io.Discard by the caller.
+type syncWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (s *syncWriter) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.w == nil {
+		return len(p), nil
+	}
+	return s.w.Write(p)
 }
 
 // validFindingType / validFindingSeverity are the queue.AddFinding-accepted
@@ -908,10 +983,13 @@ func orDefault(v, def string) string {
 }
 
 // resolveShadowModel resolves the challenger model: the operator's
-// --shadow-model, "off" to disable, else the stock default.
+// --shadow-model, "off" to disable, else the stock default. The disable words
+// are matched case-INSENSITIVELY — `--shadow-model OFF` plainly means off, and
+// silently treating it as a model name would send every challenger seat to a
+// provider that has no such model.
 func resolveShadowModel(flag string) string {
 	f := strings.TrimSpace(flag)
-	switch f {
+	switch strings.ToLower(f) {
 	case "off", "none":
 		return ""
 	case "":
@@ -934,4 +1012,80 @@ func localBuildDBPath() string {
 		home = usr.HomeDir
 	}
 	return filepath.Join(home, ".claude", "corralai_build.duckdb")
+}
+
+// localBugCatchDBPath mirrors localBuildDBPath for the bug-catching scorecard
+// store, so a --local run's per-seat metrics (including the shadow
+// head-to-head) persist next to the signed build ledger and feed the same
+// `corral scorecard` surface the daemon's runs feed.
+func localBugCatchDBPath() string {
+	if p := strings.TrimSpace(os.Getenv("CORRALAI_BUGCATCH_DB")); p != "" {
+		return p
+	}
+	home := ""
+	if u, err := os.UserHomeDir(); err == nil {
+		home = u
+	} else if usr, err := user.Current(); err == nil {
+		home = usr.HomeDir
+	}
+	return filepath.Join(home, ".claude", "corralai_bugcatch.duckdb")
+}
+
+// localBugCatchSink persists a converged --local run's per-seat observations
+// into the DuckDB scorecard store, stamping the run context (ts, repo, commit,
+// source="pool") the pure driver does not carry. The daemon-side analogue is
+// internal/brain.advpoolBugCatchSink; this exists because the brain is the
+// only place BugCatch was ever wired, while `certify --local` is the ONLY
+// writer of RunSpec.ShadowModel — so on the only path where shadow actually
+// runs, every shadow row was computed and thrown away.
+//
+// Recording is best-effort by design: metrics are not the gate, so a failed
+// write warns and the audit stands.
+type localBugCatchSink struct {
+	store        *bugcatch.Store
+	missionID    int64
+	repo, commit string
+	warn         io.Writer
+}
+
+// wireLocalBugCatch opens the scorecard store at path and points the driver's
+// BugCatch feed at it, returning a closer that is always safe to call. A store
+// that will not open is a WARNING, never a failure: the audit's verdict does
+// not depend on metrics, so refusing to run over an unwritable metrics file
+// would trade the whole product for the telemetry.
+func wireLocalBugCatch(d *advpool.Driver, path, repo, commit string, warn io.Writer) func() {
+	bcs, err := bugcatch.Open(path)
+	if err != nil {
+		if warn != nil {
+			fmt.Fprintf(warn, "corral certify --local: opening scorecard store (metrics only — the audit continues): %v\n", err)
+		}
+		return func() {}
+	}
+	d.BugCatch = localBugCatchSink{
+		store: bcs, missionID: localMissionID, repo: repo, commit: commit, warn: warn,
+	}
+	return func() { _ = bcs.Close() }
+}
+
+func (s localBugCatchSink) Record(recordID int64, recordHead string, obs []advpool.BugCatchObservation) {
+	if s.store == nil {
+		return
+	}
+	now := time.Now()
+	rows := make([]bugcatch.Observation, 0, len(obs))
+	for _, o := range obs {
+		rows = append(rows, bugcatch.Observation{
+			TS: now, RecordID: recordID, RecordHead: recordHead,
+			MissionID: s.missionID, Repo: s.repo, Commit: s.commit,
+			Model: o.Model, Role: o.Role, Source: "pool",
+			Catches: o.Catches, Opportunities: o.Opportunities,
+			SoundTests: o.SoundTests, AuthoredTests: o.AuthoredTests,
+			CriticFlags: o.CriticFlags, MutantsPlanted: o.MutantsPlanted, MutantsSurvived: o.MutantsSurvived,
+			Shard: o.Shard, Region: o.Region, RegionComplexity: o.RegionComplexity, RegionLines: o.RegionLines,
+			TestComplexity: o.TestComplexity, ParseRetries: o.ParseRetries, Dropped: o.Dropped, Shadow: o.Shadow,
+		})
+	}
+	if err := s.store.Record(context.Background(), rows); err != nil && s.warn != nil {
+		fmt.Fprintf(s.warn, "corral certify --local: recording scorecard metrics failed (the verdict stands): %v\n", err)
+	}
 }

@@ -5,6 +5,7 @@ package advpool
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -206,5 +207,53 @@ func TestCertSigner_SignVerdict_ProducesVerifiableRecord(t *testing.T) {
 	}
 	if !ok || stmt == nil {
 		t.Fatal("VerifyDSSE must succeed over the signed verdict record under the returned public key")
+	}
+}
+
+// TestSignVerdictMarksShadowProducerNonGating proves the signed record tells a
+// reader which models SET the exam and which merely measured. produced_by
+// lists every entry in ModelsByRole as "role:model"; the challenger seat is in
+// that map (certify --local adds it to the assignment) but its mutants never
+// entered the set the dev suite was graded against. An unmarked entry would
+// read as a model that helped certify.
+func TestSignVerdictMarksShadowProducerNonGating(t *testing.T) {
+	dir := t.TempDir()
+	bs, err := buildstore.Open(filepath.Join(dir, "build.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { bs.Close() })
+	_, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	id, _, err := CertSigner{Key: priv, Store: bs}.SignVerdict(context.Background(), Verdict{
+		Repo: "example/repo", Commit: "deadbeef02", Status: StatusCertified,
+		ModelsByRole: RoleAssignment{
+			RoleMutantGenerator:       "model-gen",
+			RoleTestWriter:            "model-writer",
+			RoleTestCritic:            "model-critic",
+			RoleMutantGeneratorShadow: "challenger-model",
+		},
+	})
+	if err != nil {
+		t.Fatalf("SignVerdict: %v", err)
+	}
+	rec, found, err := bs.Get(id)
+	if err != nil || !found {
+		t.Fatalf("bs.Get(%d): found=%v err=%v", id, found, err)
+	}
+	blob, err := json.Marshal(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	produced := string(blob)
+	if !strings.Contains(produced, RoleMutantGeneratorShadow+":challenger-model (non-gating)") {
+		t.Errorf("the shadow producer must be marked non-gating in the signed record, got:\n%s", produced)
+	}
+	// The gating seats must NOT pick up the marker.
+	if strings.Contains(produced, "model-gen (non-gating)") {
+		t.Error("the PRIMARY mutant-generator was marked non-gating — it sets the exam")
 	}
 }

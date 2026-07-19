@@ -849,10 +849,16 @@ func (d *Driver) taskByKey(missionID int64, key string) (*queue.Task, error) {
 	return nil, nil
 }
 
-// tasksByRole returns every task for a role, sorted by key so shard order is
-// deterministic (shard index is a recorded metrics key, and a run must be
-// reproducible). Used for the mutant-generator, which fans out into one task
-// per symbol shard; taskByKey remains correct for the single-task roles.
+// tasksByRole returns every task for a role, sorted by parsed shard index
+// (the bare unsharded key first) rather than by key string — a lexicographic
+// sort on Key would order ten-plus shards as /0, /1, /10, /11, /2, ... once
+// --max-shards (operator-settable, unbounded) crosses ten. Nothing downstream
+// derives shard index from slice position today (ShardIndexFromKey always
+// re-parses it from the key), but shard index is itself a recorded metrics
+// key, and per-shard metrics are about to fold over exactly this slice — so
+// the order must be numeric and deterministic, not an inherited positional
+// assumption. Used for the mutant-generator, which fans out into one task per
+// symbol shard; taskByKey remains correct for the single-task roles.
 func (d *Driver) tasksByRole(missionID int64, role string) ([]queue.Task, error) {
 	tasks, err := d.Q.List(missionID)
 	if err != nil {
@@ -864,6 +870,20 @@ func (d *Driver) tasksByRole(missionID int64, role string) ([]queue.Task, error)
 			out = append(out, tasks[i])
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
+	sort.Slice(out, func(i, j int) bool {
+		ii, iSharded := ShardIndexFromKey(out[i].Key)
+		ji, jSharded := ShardIndexFromKey(out[j].Key)
+		if iSharded != jSharded {
+			// Unsharded key sorts first (it stands in for shard 0 in an
+			// unsharded run).
+			return jSharded
+		}
+		if iSharded {
+			return ii < ji
+		}
+		// Both unsharded: identical role means identical key, but keep the
+		// comparator total.
+		return out[i].Key < out[j].Key
+	})
 	return out, nil
 }

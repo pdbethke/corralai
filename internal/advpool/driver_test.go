@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -1420,9 +1421,16 @@ func TestTickDevAdequacyWaitsForEveryShard(t *testing.T) {
 	// than re-claimed, since an unnamed-instance claim only self-heals once its
 	// lease expires (see ClaimNextAs), which a fast unit test never waits out.
 	ready := claimAllReady(t, d.Q)
+	// Iterate keys in sorted order rather than ranging the map directly — map
+	// iteration order is randomized per-run, so which two of the three shards
+	// get completed (and which one is left CLAIMED below) would otherwise
+	// differ from run to run, making a failure here unreproducible.
+	keys := keysOf(ready)
+	sort.Strings(keys)
 	var pending []*queue.Task
 	done := 0
-	for key, task := range ready {
+	for _, key := range keys {
+		task := ready[key]
 		if _, sharded := ShardIndexFromKey(key); sharded {
 			if done < 2 {
 				mustComplete(t, d.Q, task.ID, "raw")
@@ -1510,4 +1518,74 @@ func TestUnshardedMutantIDsUnchanged(t *testing.T) {
 			t.Errorf("unsharded mutant ID %q must not be prefixed", m.ID)
 		}
 	}
+}
+
+// TestTasksByRole_NumericShardOrder proves tasksByRole orders shard tasks by
+// parsed shard index, not by lexicographic key. Ten-plus shards is the case
+// where the two orders diverge: a string sort puts "mutant-generator/10"
+// before "mutant-generator/2". --max-shards is operator-settable and
+// unbounded, so this is reachable in a real run, and per-shard metrics
+// (about to land) fold over exactly this slice.
+func TestTasksByRole_NumericShardOrder(t *testing.T) {
+	tests := []struct {
+		name    string
+		keys    []string // enqueued out of numeric order
+		wantIdx []int    // expected shard index sequence after tasksByRole
+	}{
+		{
+			name:    "single digit stays sorted",
+			keys:    []string{ShardTaskKey(2), ShardTaskKey(0), ShardTaskKey(1)},
+			wantIdx: []int{0, 1, 2},
+		},
+		{
+			name: "ten-plus shards sort numerically, not lexicographically",
+			keys: []string{
+				ShardTaskKey(11), ShardTaskKey(2), ShardTaskKey(0), ShardTaskKey(10),
+				ShardTaskKey(1), ShardTaskKey(9), ShardTaskKey(3), ShardTaskKey(4),
+				ShardTaskKey(5), ShardTaskKey(6), ShardTaskKey(7), ShardTaskKey(8),
+			},
+			wantIdx: []int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11},
+		},
+		{
+			name:    "bare unsharded key sorts first",
+			keys:    []string{ShardTaskKey(1), RoleMutantGenerator, ShardTaskKey(0)},
+			wantIdx: []int{0, 0, 1}, // unsharded key reports (0,false); real shards follow numerically
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			const missionID = int64(300)
+			q := newTestQueue(t)
+			specs := make([]queue.TaskSpec, len(tc.keys))
+			for i, k := range tc.keys {
+				specs[i] = queue.TaskSpec{Key: k, Role: RoleMutantGenerator, Title: k, Instruction: "x"}
+			}
+			if err := q.Enqueue(missionID, specs); err != nil {
+				t.Fatalf("Enqueue: %v", err)
+			}
+			d := &Driver{Q: q}
+			out, err := d.tasksByRole(missionID, RoleMutantGenerator)
+			if err != nil {
+				t.Fatalf("tasksByRole: %v", err)
+			}
+			if len(out) != len(tc.wantIdx) {
+				t.Fatalf("want %d tasks, got %d", len(tc.wantIdx), len(out))
+			}
+			for i, task := range out {
+				idx, _ := ShardIndexFromKey(task.Key)
+				if idx != tc.wantIdx[i] {
+					t.Errorf("position %d: key %q parsed shard index %d, want %d (full order: %v)", i, task.Key, idx, tc.wantIdx[i], keysInOrder(out))
+				}
+			}
+		})
+	}
+}
+
+func keysInOrder(tasks []queue.Task) []string {
+	out := make([]string, len(tasks))
+	for i, t := range tasks {
+		out[i] = t.Key
+	}
+	return out
 }

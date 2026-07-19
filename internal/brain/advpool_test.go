@@ -636,3 +636,188 @@ func TestAdvPoolBugCatchSinkRecord_CopiesEveryField(t *testing.T) {
 		t.Errorf("Shadow = %v, want %v", got.Shadow, in.Shadow)
 	}
 }
+
+// multiSymbolRunSpecIn returns a run spec whose code has enough distinct
+// top-level functions (advpool.ShardSymbols requires at least 2 NAMED
+// symbols to shard at all) that the default MaxShards fans the
+// mutant-generator role out into multiple seats.
+func multiSymbolRunSpecIn() AdvPoolRunSpec {
+	in := testRunSpecIn()
+	in.Code = "package target\n" +
+		"func ValidatePassword(pw string) error { return nil }\n" +
+		"func Normalize(pw string) string { return pw }\n" +
+		"func Strength(pw string) int { return len(pw) }\n"
+	return in
+}
+
+// mutantGeneratorTasks returns every task whose Role is exactly
+// advpool.RoleMutantGenerator, keyed by its (possibly sharded) task Key.
+func mutantGeneratorTasks(tasks []queue.Task) map[string]queue.Task {
+	out := map[string]queue.Task{}
+	for _, tk := range tasks {
+		if tk.Role == advpool.RoleMutantGenerator {
+			out[tk.Key] = tk
+		}
+	}
+	return out
+}
+
+// TestAdvPoolStartRun_ShardsMultiSymbolFile proves the hosted brain's
+// StartRun now sets RunSpec.MaxShards (previously left at its zero value,
+// which made advpool.ShardSymbols always return nil and the hosted pool run
+// exactly one whole-file mutant-generator seat regardless of the file's
+// symbol surface — see BuildDAG/ShardSymbols). A file with several
+// top-level functions must now enqueue MORE THAN ONE mutant-generator task,
+// each still under the bare Role "mutant-generator" (role-based dispatch is
+// unaffected by sharding — only the task Key changes, e.g.
+// "mutant-generator/0").
+func TestAdvPoolStartRun_ShardsMultiSymbolFile(t *testing.T) {
+	rt, q := newTestAdvPoolRuntime(t, nil)
+
+	runID, err := rt.StartRun(multiSymbolRunSpecIn())
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	tasks, err := q.List(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mgs := mutantGeneratorTasks(tasks)
+	if len(mgs) < 2 {
+		t.Fatalf("expected a multi-symbol file to shard into more than one mutant-generator task, got %d: %+v", len(mgs), mgs)
+	}
+	for key, tk := range mgs {
+		if tk.Role != advpool.RoleMutantGenerator {
+			t.Fatalf("shard task %q has Role %q, want %q — role-based dispatch would misroute this", key, tk.Role, advpool.RoleMutantGenerator)
+		}
+		if tk.Model == "" {
+			t.Fatalf("shard task %q has no stamped model", key)
+		}
+	}
+	if _, ok := mgs[advpool.RoleMutantGenerator]; ok {
+		t.Fatal("expected NO bare, unsharded mutant-generator key once the file sharded")
+	}
+}
+
+// TestAdvPoolStartRun_SingleSeatWhenNoSymbolSurface proves a file with no
+// extractable symbol surface (advpool.ShardSymbols needs at least 2 named
+// symbols; this fixture has zero) still enqueues exactly the one, bare-keyed
+// "mutant-generator" task — the pre-sharding behavior, byte-identical task
+// key — rather than erroring or silently dropping the seat.
+func TestAdvPoolStartRun_SingleSeatWhenNoSymbolSurface(t *testing.T) {
+	rt, q := newTestAdvPoolRuntime(t, nil)
+
+	in := testRunSpecIn()
+	in.Code = "package target\nvar Threshold = 12\n"
+
+	runID, err := rt.StartRun(in)
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	tasks, err := q.List(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mgs := mutantGeneratorTasks(tasks)
+	if len(mgs) != 1 {
+		t.Fatalf("expected exactly one mutant-generator seat for a file with no symbol surface, got %d: %+v", len(mgs), mgs)
+	}
+	if _, ok := mgs[advpool.RoleMutantGenerator]; !ok {
+		t.Fatalf("expected the single seat under the bare key %q, got %+v", advpool.RoleMutantGenerator, mgs)
+	}
+}
+
+// TestAdvPoolStartRun_NeverCreatesShadowSeats proves the hosted brain never
+// sets RunSpec.ShadowModel: even for a multi-symbol file that shards (the
+// only condition under which BuildDAG would ever fan out a challenger — see
+// RoleMutantGeneratorShadow), a hosted run must enqueue zero
+// mutant-generator-shadow tasks. The shadow challenger is `certify --local`
+// only, deliberately deferred for the daemon (spec §8) since it would double
+// generator LLM spend on every hosted audit.
+func TestAdvPoolStartRun_NeverCreatesShadowSeats(t *testing.T) {
+	rt, q := newTestAdvPoolRuntime(t, nil)
+
+	runID, err := rt.StartRun(multiSymbolRunSpecIn())
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	tasks, err := q.List(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tk := range tasks {
+		if tk.Role == advpool.RoleMutantGeneratorShadow {
+			t.Fatalf("hosted StartRun must never create a shadow seat, got task %+v", tk)
+		}
+	}
+}
+
+// TestClampAdvPoolMutants proves the per-shard mutant budget is bounded by
+// the run's TOTAL, not the per-shard, allowance — the fix for the
+// post-sharding risk that NMutants (now rendered unchanged into every
+// shard's prompt) could multiply by MaxShards worth of extra jail spend.
+func TestClampAdvPoolMutants(t *testing.T) {
+	cases := []struct {
+		name             string
+		requested        int
+		maxShards        int
+		want             int
+		wantTotalAtMostN int // requested-or-clamped * maxShards must not exceed this
+	}{
+		// Unsharded (maxShards=1): identical to the pre-sharding behavior —
+		// the per-run cap applies directly, one shard IS the whole run.
+		{"unsharded under cap", 5, 1, 5, maxAdvPoolMutants},
+		{"unsharded at cap", maxAdvPoolMutants, 1, maxAdvPoolMutants, maxAdvPoolMutants},
+		{"unsharded over cap clamps to the old per-run cap", 1000, 1, maxAdvPoolMutants, maxAdvPoolMutants},
+		// Sharded: the default-5 request must be divided down so the RUN's
+		// total mutant count — not each shard's — stays near maxAdvPoolMutants.
+		{"default width divides the default request down", 5, advpool.DefaultMaxShards, maxAdvPoolMutants / advpool.DefaultMaxShards, maxAdvPoolMutants},
+		// An operator request that pre-dates sharding (set under the old
+		// "this is the whole run's budget" meaning) must NOT multiply by the
+		// shard count — this is the actual production-cost risk.
+		{"pre-sharding operator value does not multiply by shard width", maxAdvPoolMutants, advpool.DefaultMaxShards, maxAdvPoolMutants / advpool.DefaultMaxShards, maxAdvPoolMutants},
+		// A wide shard count must never clamp a shard to zero mutants — that
+		// would silently drop the region's coverage.
+		{"never clamps below one mutant per shard", 1, 100, 1, 100},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := clampAdvPoolMutants(c.requested, c.maxShards)
+			if got != c.want {
+				t.Fatalf("clampAdvPoolMutants(%d, %d) = %d, want %d", c.requested, c.maxShards, got, c.want)
+			}
+			if total := got * c.maxShards; total > c.wantTotalAtMostN && c.want > 1 {
+				t.Fatalf("clampAdvPoolMutants(%d, %d) = %d gives total %d mutants, want at most %d", c.requested, c.maxShards, got, total, c.wantTotalAtMostN)
+			}
+		})
+	}
+}
+
+// TestAdvPoolStartRun_MaxShardsOverride proves an operator's per-call
+// MaxShards override (AdvPoolRunSpec.MaxShards, mirroring the existing
+// NMutants override) is honored: forcing MaxShards=1 on a multi-symbol file
+// must produce the SAME single, bare-keyed seat as
+// TestAdvPoolStartRun_SingleSeatWhenNoSymbolSurface, even though the file
+// has plenty of symbol surface to shard.
+func TestAdvPoolStartRun_MaxShardsOverride(t *testing.T) {
+	rt, q := newTestAdvPoolRuntime(t, nil)
+
+	in := multiSymbolRunSpecIn()
+	in.MaxShards = 1
+
+	runID, err := rt.StartRun(in)
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	tasks, err := q.List(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mgs := mutantGeneratorTasks(tasks)
+	if len(mgs) != 1 {
+		t.Fatalf("expected MaxShards=1 to force a single seat despite symbol surface, got %d: %+v", len(mgs), mgs)
+	}
+	if _, ok := mgs[advpool.RoleMutantGenerator]; !ok {
+		t.Fatalf("expected the single seat under the bare key %q, got %+v", advpool.RoleMutantGenerator, mgs)
+	}
+}

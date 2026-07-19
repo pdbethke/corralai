@@ -367,8 +367,9 @@ type AdvPoolRunSpec struct {
 	DevTestPath string `json:"dev_test_path" jsonschema:"repo-relative path of the developer's own test file"`
 	DevTestCode string `json:"dev_test_code" jsonschema:"the developer's own test file source"`
 	TestCmd     string `json:"test_cmd" jsonschema:"the test command, e.g. \"go test ./\""`
-	NMutants    int    `json:"n_mutants,omitempty" jsonschema:"how many seeded-violation mutants to generate (default 5)"`
+	NMutants    int    `json:"n_mutants,omitempty" jsonschema:"how many seeded-violation mutants to generate PER SHARD (default 5) — the run's total mutant count is this divided across the resolved shard width, see max_shards"`
 	Lang        string `json:"lang,omitempty" jsonschema:"source language of the code under review (default: inferred from code_path extension, e.g. go, python)"`
+	MaxShards   int    `json:"max_shards,omitempty" jsonschema:"max mutant-generator seats fanned out across the file's functions, one per complexity-balanced group (default 8, see advpool.DefaultMaxShards). Bounds PARALLELISM only — every function is still probed regardless of this value; n_mutants is divided across the resolved shard width so the run's TOTAL mutant budget stays roughly constant as this changes"`
 }
 
 // AdvPoolRunOut is start_adversarial_run's output: the id of the mission
@@ -397,8 +398,46 @@ type AdvPoolStatusOut struct {
 }
 
 // maxAdvPoolMutants mirrors maxControlMutants: bounds the compute a single
-// admin request can trigger (each mutant costs jail spawns).
+// admin request can trigger (each mutant costs a jail spawn — see
+// adequacy.Score, which runs the test command once per mutant).
+//
+// This is a TOTAL-run budget, not a per-shard one, even though the field it
+// clamps (AdvPoolRunSpec.NMutants / advpool.RunSpec.NMutants) is documented
+// as PER-SHARD (renderMutantGeneratorShard renders the same rs.NMutants,
+// unchanged, into every shard's prompt — see internal/advpool/roles.go).
+// Before slice 2 (mutant-generator sharding) NMutants WAS the whole run's
+// budget, so clamping it directly at this constant was correct. Sharding
+// repointed the field's meaning without touching this clamp, which would let
+// an operator's pre-sharding value of maxAdvPoolMutants multiply by
+// MaxShards (up to 8x by default) worth of EXTRA jail spend on a hosted
+// daemon serving many users — the opposite of what "bounds the compute a
+// single admin request can trigger" is supposed to mean. clampAdvPoolMutants
+// divides this budget across the resolved shard width so the run's total
+// mutant count — and therefore total dev-suite jail executions — stays
+// bounded by this constant regardless of fan-out width.
 const maxAdvPoolMutants = 20
+
+// clampAdvPoolMutants bounds a run's PER-SHARD mutant request (requested,
+// already defaulted to 5 by the caller) so the run's TOTAL mutant count never
+// exceeds maxAdvPoolMutants, however many shards it fans out over. Dividing
+// (floor) rather than reapplying the old per-run cap per shard is what keeps
+// the constant's TOTAL-budget meaning honest post-sharding; a floor of 1
+// keeps every shard probed at all (a 0-mutant shard would silently drop that
+// region's coverage, which is exactly what sharding exists to prevent — see
+// ShardSymbols's "every function gets probed" guarantee).
+func clampAdvPoolMutants(requested, maxShards int) int {
+	if maxShards < 1 {
+		maxShards = 1
+	}
+	perShardCap := maxAdvPoolMutants / maxShards
+	if perShardCap < 1 {
+		perShardCap = 1
+	}
+	if requested > perShardCap {
+		return perShardCap
+	}
+	return requested
+}
 
 // StartRun begins one adversarial-pool run: builds the RunSpec, extracts
 // signatures (best-effort — a failure degrades to no signatures rather than
@@ -426,13 +465,24 @@ func (rt *AdvPoolRuntime) StartRun(in AdvPoolRunSpec) (int64, error) {
 		return 0, fmt.Errorf("advpool: run %d is already active — only one active run is supported in this slice", rt.activeID)
 	}
 
+	// MaxShards: this is what turns sharding ON for the hosted pool. Prior to
+	// this, RunSpec.MaxShards was left at its zero value on every hosted run,
+	// so advpool.ShardSymbols(sigs, 0) always returned nil and the pool ran
+	// exactly one whole-file mutant-generator seat no matter how many
+	// functions the file had — sharding existed only on `certify --local`.
+	// The design spec calls for sharding on both paths; an operator can still
+	// override the width per-call (mirrors the NMutants override below), but
+	// the default alone is what makes an ordinary hosted run shard.
+	maxShards := in.MaxShards
+	if maxShards <= 0 {
+		maxShards = advpool.DefaultMaxShards
+	}
+
 	nMutants := in.NMutants
 	if nMutants <= 0 {
 		nMutants = 5
 	}
-	if nMutants > maxAdvPoolMutants {
-		nMutants = maxAdvPoolMutants
-	}
+	nMutants = clampAdvPoolMutants(nMutants, maxShards)
 
 	// Resolve the language the jail will actually grade with — from the code
 	// file's extension (a .py file is pytest-graded no matter what in.Lang
@@ -452,7 +502,17 @@ func (rt *AdvPoolRuntime) StartRun(in AdvPoolRunSpec) (int64, error) {
 		CodePath: in.CodePath, Code: in.Code,
 		DevTestPath: in.DevTestPath, DevTestCode: in.DevTestCode,
 		TestCmd: in.TestCmd, NMutants: nMutants,
-		Lang: langPlugin.Name(),
+		Lang:      langPlugin.Name(),
+		MaxShards: maxShards,
+		// ShadowModel is deliberately left unset ("") on every hosted run: the
+		// challenger seat stays off for the daemon path. The sharding design
+		// spec's §8 open questions explicitly defer turning shadow on here
+		// pending a watched production run, and enabling it would DOUBLE the
+		// generator LLM spend of every hosted audit (one challenger seat per
+		// shard, same shard count as the primary — see
+		// advpool.RoleMutantGeneratorShadow) for every user of a shared
+		// daemon, not just an operator who opts in via `certify --local
+		// --shadow-model`. Do not set this without re-reading that decision.
 	}
 
 	sigs, err := repoindex.ExtractSignatures(rs.Code, rs.Lang)

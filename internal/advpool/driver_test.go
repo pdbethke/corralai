@@ -2006,3 +2006,84 @@ func asFloat(t *testing.T, v any) float64 {
 	}
 	return f
 }
+
+// TestTimeoutVerdictCarriesRegionCoverage proves timeoutVerdict — the verdict
+// path for a run that hits its wall-clock RunDeadline instead of converging
+// normally — carries the same three coverage fields
+// (RegionsTotal/RegionsProbed/DroppedRegions) as an ordinary converged
+// verdict. This is the run MOST likely to actually carry a shortfall: a
+// persistently bad shard is exactly the kind of thing that can also wedge a
+// run past its deadline. A prior change deleted these three assignments from
+// timeoutVerdict and the whole repo suite stayed green.
+func TestTimeoutVerdictCarriesRegionCoverage(t *testing.T) {
+	const missionID = int64(212)
+	const bad = "UNPARSEABLE"
+	// devKillRate < 1.0 with a real survivor leaves pool-adequacy work
+	// (test-writer) outstanding after the drop, so the run does NOT converge
+	// to a normal verdict on its own — it's still pending when the deadline
+	// check runs, exactly like the stall TestRunDeadlineProducesNeedsReviewVerdict
+	// simulates. A perfect dev score would certify immediately after the drop
+	// (no pool stage needed) and never reach the timeout path at all.
+	scorer := &fakeScorer{devKillRate: 0.5, devSurvivors: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
+	validator := &shardValidator{failRaw: bad, mutants: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
+	d := newShardedRun(t, missionID, 3, scorer, validator)
+	d.Signer = &fakeSigner{}
+
+	// Install the fake clock AFTER StartRun so run.startedAt (set from the
+	// driver's real clock during newShardedRun) is effectively "now" —
+	// leaving headroom before the deadline for the retry-and-drop sequence
+	// below.
+	clk := &fakeClock{t: time.Now()}
+	d.Now = clk.Now
+	d.RunDeadline = 10 * time.Minute
+
+	// Drive one shard to a persistent parse failure, exactly as in
+	// TestShardDroppedAfterRetriesAndRecorded, so the region actually drops
+	// and regionsTotal/regionsProbed/droppedRegions get recorded on the run
+	// — all before the deadline fires.
+	badKey := ShardTaskKey(0)
+	completeShards := func() {
+		for key, task := range claimAllReady(t, d.Q) {
+			result := "raw"
+			if key == badKey {
+				result = bad
+			}
+			mustComplete(t, d.Q, task.ID, result)
+		}
+	}
+	completeShards()
+	for i := 0; i < MaxShardRetries; i++ {
+		if _, err := d.Tick(context.Background(), missionID); err == nil {
+			t.Fatalf("Tick %d: want a retry error while the shard has budget left", i)
+		}
+		completeShards()
+	}
+	if _, err := d.Tick(context.Background(), missionID); err != nil {
+		t.Fatalf("Tick after drop: %v", err)
+	}
+	run := d.runs[missionID]
+	if len(run.droppedRegions) != 1 || run.regionsTotal != 3 {
+		t.Fatalf("setup: want 1 dropped region of 3 total, got dropped=%v total=%d", run.droppedRegions, run.regionsTotal)
+	}
+
+	// Now exceed the deadline. Tick checks the deadline FIRST (before any
+	// normal-progress logic), so this takes the timeoutVerdict path — and
+	// that verdict must still carry the coverage numbers already recorded.
+	clk.advance(d.RunDeadline + time.Minute)
+	v, err := d.Tick(context.Background(), missionID)
+	if err != nil {
+		t.Fatalf("deadline Tick: %v", err)
+	}
+	if v == nil || v.Status != StatusNeedsReview {
+		t.Fatalf("want a needs-review timeout verdict, got %+v", v)
+	}
+	if v.RegionsTotal != 3 {
+		t.Errorf("RegionsTotal = %d, want 3", v.RegionsTotal)
+	}
+	if v.RegionsProbed != 2 {
+		t.Errorf("RegionsProbed = %d, want 2", v.RegionsProbed)
+	}
+	if len(v.DroppedRegions) != 1 {
+		t.Errorf("DroppedRegions = %v, want 1 entry", v.DroppedRegions)
+	}
+}

@@ -653,3 +653,28 @@ func TestDriveLocalRun_TolerateOneRecoverableTickError(t *testing.T) {
 		t.Fatalf("VerifyDSSE: ok=%v err=%v", ok, verr)
 	}
 }
+
+// TestAdvVerdictFromPoolCarriesRegionCoverage proves advVerdictFromPool
+// (the --local path's converter, the sibling of the --adversarial path's
+// JSON decode) carries the three coverage fields through, so a --local run
+// with a dropped region still shows PARTIAL AUDIT via renderAdvVerdict.
+func TestAdvVerdictFromPoolCarriesRegionCoverage(t *testing.T) {
+	src := advpool.Verdict{
+		Repo: "r", Commit: "c", Lang: "go",
+		DevKillRate: 0.5, MutantsTotal: 8, Survivors: 4, ProvenMissed: 2,
+		RegionsTotal:   5,
+		RegionsProbed:  3,
+		DroppedRegions: []string{"parseConfig", "renderReport"},
+		Status:         "needs-review",
+	}
+	got := advVerdictFromPool(src)
+	if got.RegionsTotal != 5 {
+		t.Errorf("RegionsTotal = %d, want 5", got.RegionsTotal)
+	}
+	if got.RegionsProbed != 3 {
+		t.Errorf("RegionsProbed = %d, want 3", got.RegionsProbed)
+	}
+	if len(got.DroppedRegions) != 2 || got.DroppedRegions[0] != "parseConfig" {
+		t.Errorf("DroppedRegions = %v, want [parseConfig renderReport]", got.DroppedRegions)
+	}
+}

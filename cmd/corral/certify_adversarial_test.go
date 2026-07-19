@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/pdbethke/corralai/internal/advpool"
 )
 
 func TestAdvVerdictDecodesToolPayload(t *testing.T) {
@@ -50,6 +52,93 @@ func TestAdvVerdictDecodesToolPayload(t *testing.T) {
 	}
 	if v.ModelsByRole["test-writer"] != "qwen2.5-coder:7b" {
 		t.Fatalf("models wrong: %+v", v.ModelsByRole)
+	}
+}
+
+// TestAdvVerdictWireRoundTripCarriesCoverage is the test that would have
+// caught the Critical: the brain marshals a *live* advpool.Verdict struct
+// with encoding/json (advStatus{Verdict: &v}), and advpool.Verdict has NO
+// json tags of its own — so its wire keys are whatever Go's default
+// marshaling produces for its exported field names, i.e. capitalized
+// ("RegionsTotal", not "regions_total"). advVerdict's json tags exist ONLY
+// to match that default output byte-for-byte. A prior change gave the three
+// coverage tags (RegionsTotal/RegionsProbed/DroppedRegions) snake_case
+// values; nothing here decoded a REAL marshaled Verdict, so the mismatch
+// shipped and a partial audit silently decoded as zeros. Do NOT "tidy" these
+// three json tags to snake_case — they must stay capitalized to match the
+// brain's actual wire format, not idiomatic Go JSON style.
+func TestAdvVerdictWireRoundTripCarriesCoverage(t *testing.T) {
+	src := advpool.Verdict{
+		Repo: "pdbethke/corralai", Commit: "88b6ff7", Lang: "go",
+		DevKillRate: 0.5, MutantsTotal: 8, Survivors: 4, ProvenMissed: 2,
+		RegionsTotal:   5,
+		RegionsProbed:  3,
+		DroppedRegions: []string{"parseConfig", "renderReport"},
+		Status:         "needs-review", RecordID: 41, RecordHead: "head41",
+	}
+	// Mirror the brain's actual wire shape: get_adversarial_run's output
+	// embeds *advpool.Verdict directly and marshals with encoding/json.
+	wire := struct {
+		RunID     int64            `json:"run_id"`
+		Found     bool             `json:"found"`
+		Converged bool             `json:"converged"`
+		Verdict   *advpool.Verdict `json:"verdict"`
+	}{RunID: 7, Found: true, Converged: true, Verdict: &src}
+
+	raw, err := json.Marshal(wire)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var st advStatus
+	if err := json.Unmarshal(raw, &st); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if st.Verdict == nil {
+		t.Fatal("decoded verdict is nil")
+	}
+	v := st.Verdict
+	if v.RegionsTotal != 5 {
+		t.Errorf("RegionsTotal = %d, want 5 (json tags must be capitalized to match advpool.Verdict's default marshaling)", v.RegionsTotal)
+	}
+	if v.RegionsProbed != 3 {
+		t.Errorf("RegionsProbed = %d, want 3", v.RegionsProbed)
+	}
+	if len(v.DroppedRegions) != 2 || v.DroppedRegions[0] != "parseConfig" {
+		t.Errorf("DroppedRegions = %v, want [parseConfig renderReport]", v.DroppedRegions)
+	}
+}
+
+// TestRenderAdvVerdictPrintsPartialAudit proves renderAdvVerdict surfaces the
+// coverage shortfall: a PARTIAL AUDIT line with the exact probed/total counts
+// and dropped-region names when RegionsProbed < RegionsTotal, and its
+// complete absence when coverage is full. A deleted print block here would
+// silently swallow the shortfall the signed statement still carries.
+func TestRenderAdvVerdictPrintsPartialAudit(t *testing.T) {
+	partial := advVerdict{
+		Repo: "pdbethke/corralai", Commit: "88b6ff7deadbeef",
+		DevKillRate: 0.5, MutantsTotal: 8, Survivors: 4, ProvenMissed: 2,
+		RegionsTotal: 5, RegionsProbed: 3, DroppedRegions: []string{"parseConfig", "renderReport"},
+		Status: "needs-review",
+	}
+	var buf bytes.Buffer
+	renderAdvVerdict(&buf, "fence.go", partial)
+	s := buf.String()
+	if !strings.Contains(s, "PARTIAL AUDIT: 3 of 5 regions probed") {
+		t.Fatalf("missing PARTIAL AUDIT summary:\n%s", s)
+	}
+	if !strings.Contains(s, "parseConfig; renderReport") {
+		t.Fatalf("missing dropped-region names:\n%s", s)
+	}
+
+	full := partial
+	full.RegionsTotal = 3
+	full.RegionsProbed = 3
+	full.DroppedRegions = nil
+	buf.Reset()
+	renderAdvVerdict(&buf, "fence.go", full)
+	if strings.Contains(buf.String(), "PARTIAL AUDIT") {
+		t.Fatalf("full coverage must not print PARTIAL AUDIT:\n%s", buf.String())
 	}
 }
 

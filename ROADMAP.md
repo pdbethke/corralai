@@ -176,10 +176,18 @@ Go binary.**
   second time for a region-controlled, execution-proven head-to-head between
   generator models, recorded to the bug-catching scorecard — **it never feeds
   dev-adequacy or the kill-rate**, and roughly doubles generator calls and
-  jail-scoring time (`--shadow-model off` disables it). Honest about scope:
-  both slices are wired **only for `corral certify --local`** today — the
-  hosted brain's `start_adversarial_run` path does not set `--max-shards`/
-  `--shadow-model` and still runs the single-seat, unsharded generator. The
+  jail-scoring time (`--shadow-model off` disables it). **Both slices are now
+  wired for the hosted brain too** (2026-07-19): `start_adversarial_run` sets
+  `max_shards` (ceilinged at 20 for a hosted run) and defaults `shadow_model`
+  on via `CORRALAI_ADVPOOL_SHADOW_MODEL` (unset = on daemon-wide; `off`
+  disables it; a per-call `shadow_model` overrides either way). Independently
+  verified hosted production cost, stock defaults, an 8+-symbol file: **16
+  generator LLM calls** (8 primary + 8 shadow, up from 1), **32 total
+  mutants scored** (16 primary + 16 shadow, up from 5), **~45 jail
+  executions** (each `Score` call re-runs a baseline plus one run per mutant,
+  up from ~8). The daemon widens its run deadline automatically when its
+  shadow model is configured, mirroring `--local`'s own deadline allowance,
+  so shadow work can never force a timeout `needs-review` verdict. The
   per-region/per-complexity-band effectiveness comparison the design spec
   aims at is sound on the shadow side (which scores each region separately)
   but **not yet computable on the primary side**, which scores the run's

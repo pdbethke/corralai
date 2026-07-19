@@ -27,7 +27,7 @@ func TestHandleTaskErrorTagsOps(t *testing.T) {
 		}
 		return "{}"
 	}
-	handled := handleTaskError(7, 1, "anthropic:claude-sonnet-5", fmt.Errorf("%w: 529", ErrModelUnreachable), brain)
+	handled := handleTaskError(7, 1, "", "anthropic:claude-sonnet-5", fmt.Errorf("%w: 529", ErrModelUnreachable), brain)
 	if !handled {
 		t.Fatal("model-unreachable must be handled")
 	}
@@ -54,7 +54,7 @@ func TestTaskLoopReleasesOnModelUnreachable(t *testing.T) {
 			return `{"ok":true}`
 		}
 
-		released := handleTaskError(42, 7, "ollama:test-model", ErrModelUnreachable, brain)
+		released := handleTaskError(42, 7, "", "ollama:test-model", ErrModelUnreachable, brain)
 		if !released {
 			t.Fatal("want released=true for ErrModelUnreachable")
 		}
@@ -87,7 +87,7 @@ func TestTaskLoopReleasesOnModelUnreachable(t *testing.T) {
 		}
 
 		otherErr := fmt.Errorf("some transient error")
-		released := handleTaskError(42, 7, "ollama:test-model", otherErr, brain)
+		released := handleTaskError(42, 7, "", "ollama:test-model", otherErr, brain)
 		if released {
 			t.Fatal("want released=false for a non-unreachable error")
 		}
@@ -97,11 +97,120 @@ func TestTaskLoopReleasesOnModelUnreachable(t *testing.T) {
 	})
 
 	t.Run("nil error does not release", func(t *testing.T) {
-		released := handleTaskError(1, 1, "x", nil, func(string, map[string]any) string { return `{}` })
+		released := handleTaskError(1, 1, "", "x", nil, func(string, map[string]any) string { return `{}` })
 		if released {
 			t.Fatal("want released=false for nil error")
 		}
 	})
+}
+
+// TestHandleTaskErrorShadowSeatBelowCap verifies a shadow-role task's
+// model-unreachable failure still goes through the ordinary release+report
+// path (same as any other role) as long as the brain-tracked consecutive
+// count is at or below shadowUnreachableMaxAttempts — the fleet gets more
+// chances before the seat is given up on.
+func TestHandleTaskErrorShadowSeatBelowCap(t *testing.T) {
+	var calls []string
+	brain := func(tool string, args map[string]any) string {
+		calls = append(calls, tool)
+		if tool == "bump_unreachable_attempts" {
+			return `{"attempts":1}`
+		}
+		return `{"ok":true}`
+	}
+
+	released := handleTaskError(42, 7, roleMutantGeneratorShadow, "ollama:test-model", ErrModelUnreachable, brain)
+	if !released {
+		t.Fatal("want released=true")
+	}
+	hasBump, hasRelease, hasComplete := false, false, false
+	for _, c := range calls {
+		switch c {
+		case "bump_unreachable_attempts":
+			hasBump = true
+		case "release_claims":
+			hasRelease = true
+		case "complete_task":
+			hasComplete = true
+		}
+	}
+	if !hasBump {
+		t.Errorf("bump_unreachable_attempts must be called for a shadow-role task; got %v", calls)
+	}
+	if !hasRelease {
+		t.Errorf("below the cap, release_claims must still be called; got %v", calls)
+	}
+	if hasComplete {
+		t.Errorf("below the cap, complete_task must NOT be called; got %v", calls)
+	}
+}
+
+// TestHandleTaskErrorAbandonsShadowSeatAfterCap is the CRITICAL fix this test
+// pins: once a shadow seat's brain-tracked consecutive model-unreachable
+// count exceeds shadowUnreachableMaxAttempts, handleTaskError must stop
+// releasing it for reclaim (which would let it cycle
+// claim→404→release→reclaim forever, starving the fleet's primary shards —
+// tickDevAdequacy blocks until every primary shard is terminal, and
+// ClaimNextAs has no role priority to protect them) and instead complete the
+// task itself with shadowProviderFailedResult — the sentinel the driver
+// recognizes as "never successfully asked" and records UNMEASURED, not a
+// fabricated zero-yield row.
+func TestHandleTaskErrorAbandonsShadowSeatAfterCap(t *testing.T) {
+	var calls []string
+	var completeArgs map[string]any
+	brain := func(tool string, args map[string]any) string {
+		calls = append(calls, tool)
+		switch tool {
+		case "bump_unreachable_attempts":
+			return `{"attempts":` + fmt.Sprint(shadowUnreachableMaxAttempts+1) + `}`
+		case "complete_task":
+			completeArgs = args
+		}
+		return `{"ok":true}`
+	}
+
+	released := handleTaskError(42, 7, roleMutantGeneratorShadow, "ollama:test-model", ErrModelUnreachable, brain)
+	if !released {
+		t.Fatal("want released=true (caller must skip its own complete_task either way)")
+	}
+	if completeArgs == nil {
+		t.Fatalf("expected complete_task to be called once the cap is exceeded; calls=%v", calls)
+	}
+	if completeArgs["result"] != shadowProviderFailedResult {
+		t.Fatalf("completed with result %v, want the shadowProviderFailedResult sentinel %q", completeArgs["result"], shadowProviderFailedResult)
+	}
+	for _, c := range calls {
+		if c == "release_claims" {
+			t.Fatalf("release_claims must NOT be called once the shadow seat is abandoned; calls=%v", calls)
+		}
+	}
+}
+
+// TestHandleTaskErrorNonShadowRoleNeverAbandons verifies the cap is scoped to
+// the shadow role only: a PRIMARY mutant-generator (or any other role) task
+// must keep releasing for reclaim no matter how many consecutive
+// model-unreachable failures are reported — abandoning primary work would
+// silently drop coverage, which sharding's own retry/drop path (a different,
+// pre-existing mechanism) already governs.
+func TestHandleTaskErrorNonShadowRoleNeverAbandons(t *testing.T) {
+	var calls []string
+	brain := func(tool string, args map[string]any) string {
+		calls = append(calls, tool)
+		if tool == "bump_unreachable_attempts" {
+			t.Fatalf("bump_unreachable_attempts must not be called for a non-shadow role")
+		}
+		if tool == "complete_task" {
+			t.Fatalf("complete_task must not be called for a non-shadow role's model-unreachable failure")
+		}
+		return `{"ok":true}`
+	}
+	released := handleTaskError(42, 7, "mutant-generator", "ollama:test-model", ErrModelUnreachable, brain)
+	if !released {
+		t.Fatal("want released=true")
+	}
+	if len(calls) != 2 { // release_claims + report_finding, same as the untyped-role path
+		t.Fatalf("expected exactly release_claims + report_finding, got %v", calls)
+	}
 }
 
 // TestRunTaskPropagatesModelUnreachable verifies that runTask surfaces

@@ -860,6 +860,36 @@ func ShadowTimeBudget(deadline time.Duration) time.Duration {
 	return deadline / 4
 }
 
+// ResolveRunDeadline sizes a run's wall-clock backstop (Driver.RunDeadline)
+// so shadow work can never change the run's Status by pushing it past the
+// deadline into a timeout needs-review verdict (see timeoutVerdict). When a
+// shadow model is configured it widens base by ShadowTimeBudget(base) — the
+// SAME allowance a caller's own outer bound should give itself alongside it.
+//
+// This closes a gap runShadowPass's own credit-back does not: that credit
+// only returns the wall-clock runShadowPass itself spends SCORING shadow
+// mutants. The challenger's mutant-GENERATION LLM calls happen entirely
+// outside the driver — in cmd/corral's in-process drive loop for `certify
+// --local`, and in a REMOTE worker claiming a queued task for the hosted
+// brain — so nothing credits that generation time back the way runShadowPass
+// credits scoring. With shadow on (the default) roughly doubling generator
+// calls, that uncredited generation wall-clock can by itself carry a run past
+// RunDeadline before it converges. Widening the deadline itself gives
+// generation the same headroom scoring already has, on both callers.
+//
+// Shared by cmd/corral/certify_local.go (resolveRunDeadline, called with the
+// CLI's --timeout) and internal/brain's StartAdversarialPool (called with the
+// daemon's already-resolved driver.RunDeadline) — the two callers differ only
+// in what "base" means for them (a per-run --timeout vs. a daemon-wide
+// startup constant), not in the widening arithmetic itself.
+func ResolveRunDeadline(base time.Duration, shadow string) time.Duration {
+	d := base
+	if strings.TrimSpace(shadow) != "" {
+		d += ShadowTimeBudget(base)
+	}
+	return d
+}
+
 // runShadowPass scores the challenger seats' mutants against the SAME dev
 // suite as the primary, so the head-to-head measures POTENCY (mutants that
 // survive a good suite) rather than mere output volume. It is MEASUREMENT, and

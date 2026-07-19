@@ -555,11 +555,7 @@ func resolveMaxShards(flag int) int {
 // equivalent hook to the driver's tick loop), gives generation the same
 // headroom scoring already has.
 func resolveRunDeadline(timeout time.Duration, shadow string) time.Duration {
-	d := timeout
-	if strings.TrimSpace(shadow) != "" {
-		d += advpool.ShadowTimeBudget(timeout)
-	}
-	return d
+	return advpool.ResolveRunDeadline(timeout, shadow)
 }
 
 // recEvent is one beat of a replay tape — the exact {ts,kind,actor,subject,

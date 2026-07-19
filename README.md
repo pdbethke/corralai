@@ -61,10 +61,13 @@ signed via the same certify chain as `report_build`; a low kill-rate or an open
 blocking finding always routes to **needs-review**, never auto-certified. **`corral certify --local` is the CLI trigger for this audit** — no server, no
 MCP, just your own provider key (see Quickstart). The brain-hosted version of the
 same pool (for a repo already wired to a running brain) is still started via an
-admin-only `start_adversarial_run` MCP tool. What it does **not** yet do, either
-way: no pentester role, no concurrent runs (one active run at a time on a given
-brain), and its certification threshold is a fixed constant today, not per-run
-configurable. The broader staffed verification engine and the
+admin-only `start_adversarial_run` MCP tool, and now runs the SAME sharded
+mutant-generator + shadow-challenger machinery `--local` does (see Quickstart
+for the mechanics; `CORRALAI_ADVPOOL_SHADOW_MODEL` is the daemon-wide on/off
+switch, `max_shards`/`shadow_model` are the per-call `start_adversarial_run`
+overrides). What it does **not** yet do, either way: no pentester role, no
+concurrent runs (one active run at a time on a given brain), and its
+certification threshold is a fixed constant today, not per-run configurable. The broader staffed verification engine and the
 control-owner tests described in the spec remain **designed, not yet built** —
 don't expect more than the above from this README; this is the honest floor.
 Certify-by-execution now supports Go, Python (pytest), Ruby
@@ -517,10 +520,23 @@ package imports); `--record <file>.json` writes a replayable tape of the run
 (the pool's reasoning beats, task lifecycle, and findings, in the same
 `{events:[…]}` shape the corralai.dev cockpit replays).
 
-Today, sharding and the shadow challenger are wired **only for `corral
-certify --local`** — the hosted brain's `start_adversarial_run` path does not
-yet set `--max-shards`/`--shadow-model` and runs the pre-sharding single-seat
-generator.
+**Sharding and the shadow challenger are now wired for the hosted brain too**
+(2026-07-19): `start_adversarial_run` sets `max_shards` (default 8, same as
+`--local`, ceilinged at 20 for a hosted run — see `CORRALAI_ADVPOOL_*` below)
+and defaults `shadow_model` on daemon-wide via `CORRALAI_ADVPOOL_SHADOW_MODEL`
+(unset = on, `claude-haiku-4-5`; `off` disables it for the whole daemon; a
+per-call `shadow_model` in `start_adversarial_run` overrides either way, same
+override semantics as `--local`'s `--shadow-model`). This is a real cost
+change on the hosted gate: for a file with 8+ named symbols at stock
+defaults, a hosted run now costs roughly **16 generator LLM calls** (8
+primary + 8 shadow, up from 1), **32 total mutants scored** (16 primary + 16
+shadow, up from 5), and **~45 jail executions** (each `Score` call re-runs a
+baseline plus one run per mutant, up from ~8) — bounded on the hosted side by
+the `max_shards` ceiling and `CORRALAI_ADVPOOL_RUN_DEADLINE_S`, which the
+daemon widens automatically when its shadow model is configured (the same
+deadline-widening `--local`'s `--timeout` gets, so shadow work can never
+force a run into a timeout `needs-review` verdict). Set
+`CORRALAI_ADVPOOL_SHADOW_MODEL=off` to run the hosted pool primary-only.
 
 **The audit always runs sandboxed** (`bwrap` on Linux by default; `--jail
 container` for a docker/podman fallback; `sandbox-exec` on macOS) — there's no

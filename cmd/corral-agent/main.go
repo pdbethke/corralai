@@ -428,7 +428,7 @@ func runQueueLoop(ctx context.Context, backend Backend, name, role string, rs ag
 		taskStart := time.Now()
 		summary, taskErr := runTask(ctx, backend, name, effRole, ws, brain, tools, out.Task.MissionID, out.Task.ID, out.Task.Title, instruction, mir, bc, out.Task.Model)
 		fmt.Printf("[%s/%s] task #%d ran %s\n", name, role, out.Task.ID, time.Since(taskStart).Round(time.Second))
-		if handleTaskError(out.Task.ID, out.Task.MissionID, modelDesc, taskErr, brain) {
+		if handleTaskError(out.Task.ID, out.Task.MissionID, effRole, modelDesc, taskErr, brain) {
 			fmt.Printf("[%s/%s] ⨯ model unreachable on task #%d — released claim; reaper will reassign\n",
 				name, role, out.Task.ID)
 			time.Sleep(5 * time.Second) // brief backoff: avoid re-claiming immediately
@@ -588,8 +588,25 @@ func taskModel(assignedModel, defaultModel string) string {
 // the freeform builder loop, which returns a tool-loop summary the brain's
 // ParseMutants cannot parse.
 func isStructuredRole(role string) bool {
-	return role == "test-writer" || role == "mutant-generator" || role == "mutant-generator-shadow"
+	return role == "test-writer" || role == "mutant-generator" || role == roleMutantGeneratorShadow
 }
+
+// roleMutantGeneratorShadow / shadowProviderFailedResult /
+// shadowUnreachableMaxAttempts mirror advpool.RoleMutantGeneratorShadow /
+// advpool.ShadowProviderFailedResult / advpool.MaxShadowUnreachableAttempts
+// as bare local constants rather than an import of package advpool: advpool
+// pulls in internal/buildstore (the DuckDB-backed signed-record ledger, for
+// CertSigner) as a whole-package dependency, and corral-agent must stay
+// duckdb-free (`go list -deps ./cmd/corral-agent | grep -c duckdb` == 0 is an
+// enforced constraint — the remote worker binary has no business linking the
+// brain's ledger store). This is the same constraint isStructuredRole's own
+// "mutant-generator-shadow" literal above already lives under; keep all
+// three in sync with their advpool counterparts by hand.
+const (
+	roleMutantGeneratorShadow    = "mutant-generator-shadow"
+	shadowProviderFailedResult   = "\x00shadow-provider-call-failed\x00"
+	shadowUnreachableMaxAttempts = 3
+)
 
 // isPoolCriticRole is the adversarial pool's freeform critic. Unlike a builder
 // it neither writes files nor runs commands — it reads the dev tests handed to
@@ -611,19 +628,58 @@ func effectiveTaskRole(taskRole, workerRole string) string {
 }
 
 // handleTaskError is called when runTask returns a non-nil error. Returns true when
-// the caller should skip complete_task and continue the loop (claim was released).
+// the caller should skip complete_task and continue the loop (the claim was either
+// released for reclaim, or the task was completed as abandoned — see below).
 // Extracted for testability — the queue loop calls this immediately after runTask.
 //
 // Currently only ErrModelUnreachable triggers a release+report; all other errors
 // leave the caller to handle (or ignore, preserving the pre-existing behaviour).
 //
-// The finding is filed as type "ops" / severity "low" — an operational marker,
-// not an audit finding. It stays visible to operators (still filed via
-// report_finding) but is excluded from the pool's signed verdict + certification
-// gate, which only aggregate audit-relevant finding types (see Task 3).
-func handleTaskError(taskID, missionID int64, modelDesc string, err error, brain func(string, map[string]any) string) bool {
+// The ordinary-release finding is filed as type "ops" / severity "low" — an
+// operational marker, not an audit finding. It stays visible to operators
+// (still filed via report_finding) but is excluded from the pool's signed
+// verdict + certification gate, which only aggregate audit-relevant finding
+// types (see Task 3).
+//
+// role bounds a SEPARATE failure mode for the shadow (mutant-generator-shadow)
+// role specifically: that seat is measurement only and must NEVER gate the
+// verdict, so an unservable challenger model (e.g. an all-ollama fleet 404ing
+// on the default claude-haiku-4-5 challenger) must not be allowed to cycle
+// claim→404→release→reclaim forever — every such cycle consumes a worker the
+// PRIMARY shards need to converge, and tickDevAdequacy blocks until every
+// primary shard is terminal while ClaimNextAs is plain FIFO with no role
+// priority to protect them. bump_unreachable_attempts tracks the count
+// PER TASK ID server-side (across whichever bee(s) attempt it — the failure
+// is fleet-wide, not this one worker's), and once it exceeds
+// advpool.MaxShadowUnreachableAttempts this completes the task itself with
+// advpool.ShadowProviderFailedResult — the SAME sentinel the driver already
+// recognizes as "the provider was never successfully asked" (see
+// runShadowPass/ShadowProviderFailedResult's doc): the run records the seat
+// UNMEASURED, never a fabricated zero-yield row, and the primary shards are
+// freed of a seat that was never going to succeed.
+func handleTaskError(taskID, missionID int64, role, modelDesc string, err error, brain func(string, map[string]any) string) bool {
 	if !errors.Is(err, ErrModelUnreachable) {
 		return false
+	}
+	if role == roleMutantGeneratorShadow {
+		raw := brain("bump_unreachable_attempts", map[string]any{"id": taskID})
+		var out struct {
+			Attempts int `json:"attempts"`
+		}
+		_ = json.Unmarshal([]byte(raw), &out)
+		if out.Attempts > shadowUnreachableMaxAttempts {
+			brain("complete_task", map[string]any{"id": taskID, "result": shadowProviderFailedResult})
+			brain("report_finding", map[string]any{
+				"mission_id":       missionID,
+				"task_id":          taskID,
+				"type":             "ops",
+				"severity":         "low",
+				"target":           fmt.Sprintf("task#%d model", taskID),
+				"evidence":         fmt.Sprintf("shadow seat abandoned as unmeasured after %d consecutive model-unreachable failures (%s) — never gated the verdict", out.Attempts, modelDesc),
+				"suggested_action": "measurement only, no verdict impact — check whether the fleet can actually serve the configured shadow model",
+			})
+			return true
+		}
 	}
 	brain("release_claims", map[string]any{})
 	brain("report_finding", map[string]any{

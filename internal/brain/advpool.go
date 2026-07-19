@@ -411,30 +411,73 @@ type AdvPoolStatusOut struct {
 // admin request can trigger (each mutant costs a jail spawn — see
 // adequacy.Score, which runs the test command once per mutant).
 //
-// This is a TOTAL-run budget, not a per-shard one, even though the field it
-// clamps (AdvPoolRunSpec.NMutants / advpool.RunSpec.NMutants) is documented
-// as PER-SHARD (renderMutantGeneratorShard renders the same rs.NMutants,
-// unchanged, into every shard's prompt — see internal/advpool/roles.go).
-// Before slice 2 (mutant-generator sharding) NMutants WAS the whole run's
-// budget, so clamping it directly at this constant was correct. Sharding
-// repointed the field's meaning without touching this clamp, which would let
-// an operator's pre-sharding value of maxAdvPoolMutants multiply by
-// MaxShards (up to 8x by default) worth of EXTRA jail spend on a hosted
-// daemon serving many users — the opposite of what "bounds the compute a
-// single admin request can trigger" is supposed to mean. clampAdvPoolMutants
-// divides this budget across the resolved shard width so the run's total
-// mutant count — and therefore total dev-suite jail executions — stays
-// bounded by this constant regardless of fan-out width.
+// This is a TOTAL-run PRIMARY-mutant budget, not a per-shard one, even though
+// the field it clamps (AdvPoolRunSpec.NMutants / advpool.RunSpec.NMutants) is
+// documented as PER-SHARD (renderMutantGeneratorShard renders the same
+// rs.NMutants, unchanged, into every shard's prompt — see
+// internal/advpool/roles.go). Before slice 2 (mutant-generator sharding)
+// NMutants WAS the whole run's budget, so clamping it directly at this
+// constant was correct. Sharding repointed the field's meaning without
+// touching this clamp, which would let an operator's pre-sharding value of
+// maxAdvPoolMutants multiply by MaxShards worth of EXTRA jail spend on a
+// hosted daemon serving many users — the opposite of what "bounds the compute
+// a single admin request can trigger" is supposed to mean.
+// clampAdvPoolMutants divides this budget across the resolved shard width so
+// the PRIMARY total mutant count stays bounded by this constant.
+//
+// The real, honest invariant (not just "divide and hope"): clampAdvPoolMutants
+// floors requested/maxShards to a PER-SHARD cap, but never lets that cap drop
+// below 1 (a 0-mutant shard would silently drop that region's coverage — see
+// ShardSymbols's "every function gets probed" guarantee). floor(N/k)*k <= N
+// holds for ANY k <= N, so as long as maxShards never exceeds maxAdvPoolMutants
+// the floor never needs forcing up to 1 in a way that breaks the total bound.
+// But once maxShards EXCEEDS maxAdvPoolMutants, floor(N/k) is 0 and the
+// floor-of-1 escape hatch forces perShardCap back up to 1 regardless — at
+// which point the run's total is 1*maxShards, which is now GREATER than N.
+// That escape hatch is real and by itself makes this NOT a total bound for an
+// arbitrarily large maxShards (e.g. max_shards:100 on a 100-symbol file would
+// yield 100 primary mutants, not <=20). Closing it requires bounding maxShards
+// itself — see maxAdvPoolShards/clampAdvPoolMaxShards below, which callers
+// (StartRun) MUST apply before calling clampAdvPoolMutants for the invariant
+// above to actually hold. With shadow on, the run's mutant TOTAL (primary +
+// shadow) is up to 2x this constant, since the challenger mirrors the
+// primary's per-shard budget on the SAME shard width.
 const maxAdvPoolMutants = 20
 
+// maxAdvPoolShards bounds MaxShards for a hosted run — the ceiling
+// clampAdvPoolMutants' doc comment above depends on to keep its total-mutant
+// invariant honest. Deliberately set EQUAL to maxAdvPoolMutants: for any
+// maxShards <= maxAdvPoolMutants, floor(maxAdvPoolMutants/maxShards) is
+// already >= 1 without the floor-of-1 escape hatch ever needing to fire, so
+// floor(N/k)*k <= N holds unconditionally and the run's primary total stays
+// at or under maxAdvPoolMutants. Set this higher than maxAdvPoolMutants and
+// that guarantee breaks again for shard counts in between. An operator's
+// MaxShards request above this ceiling is honored up to the ceiling, never
+// refused outright — mirroring clampAdvPoolMutants' own "clamp, don't error"
+// posture for an operator's stale/oversized request.
+const maxAdvPoolShards = maxAdvPoolMutants
+
+// clampAdvPoolMaxShards bounds a hosted run's requested shard width
+// (already defaulted by the caller) at maxAdvPoolShards — see that
+// constant's doc for why the ceiling has to be exactly this value.
+func clampAdvPoolMaxShards(requested int) int {
+	if requested > maxAdvPoolShards {
+		return maxAdvPoolShards
+	}
+	return requested
+}
+
 // clampAdvPoolMutants bounds a run's PER-SHARD mutant request (requested,
-// already defaulted to 5 by the caller) so the run's TOTAL mutant count never
-// exceeds maxAdvPoolMutants, however many shards it fans out over. Dividing
-// (floor) rather than reapplying the old per-run cap per shard is what keeps
-// the constant's TOTAL-budget meaning honest post-sharding; a floor of 1
-// keeps every shard probed at all (a 0-mutant shard would silently drop that
-// region's coverage, which is exactly what sharding exists to prevent — see
-// ShardSymbols's "every function gets probed" guarantee).
+// already defaulted to 5 by the caller) so the run's TOTAL PRIMARY mutant
+// count never exceeds maxAdvPoolMutants — PROVIDED maxShards has already
+// been bounded by clampAdvPoolMaxShards (see maxAdvPoolMutants' doc comment
+// for the floor-of-one escape hatch this function cannot close on its own).
+// Dividing (floor) rather than reapplying the old per-run cap per shard is
+// what keeps the constant's TOTAL-budget meaning honest post-sharding; a
+// floor of 1 keeps every shard probed at all (a 0-mutant shard would
+// silently drop that region's coverage, which is exactly what sharding
+// exists to prevent — see ShardSymbols's "every function gets probed"
+// guarantee).
 func clampAdvPoolMutants(requested, maxShards int) int {
 	if maxShards < 1 {
 		maxShards = 1
@@ -447,6 +490,44 @@ func clampAdvPoolMutants(requested, maxShards int) int {
 		return perShardCap
 	}
 	return requested
+}
+
+// resolveAdvPoolRunDeadline widens the daemon's driver.RunDeadline by
+// advpool.ShadowTimeBudget whenever the daemon's shadow model is configured
+// — the hosted-path fix for exactly the hole cmd/corral's own
+// resolveRunDeadline already closed on the CLI (both now delegate their
+// arithmetic to advpool.ResolveRunDeadline). Without this, shadow work
+// pushing a run past RunDeadline forces a timeoutVerdict (Status:
+// needs-review) — shadow, which must NEVER gate the verdict, changing it via
+// the deadline channel instead of the scoring one. The existing
+// runShadowPass credit-back does not close this on its own: it only credits
+// shadow SCORING time, never the shadow mutant-GENERATION calls, which on
+// the hosted path happen entirely in a REMOTE worker outside the driver's
+// tick loop (unlike scoring, which the driver's own Scorer.Score call
+// performs and can therefore credit back).
+//
+// The design wrinkle: Driver.RunDeadline is one field set ONCE at daemon
+// startup, while ShadowModel is per-run (a start_adversarial_run caller may
+// override it per call — see StartRun). There is no per-run deadline to
+// widen selectively, so this widens the daemon-wide deadline
+// UNCONDITIONALLY whenever the daemon default (shadowModel, already resolved
+// from CORRALAI_ADVPOOL_SHADOW_MODEL) is non-empty, covering every run for as
+// long as the daemon stays up — including a run whose caller turns shadow
+// OFF for that one call (in.ShadowModel == "off"), which merely gets more
+// headroom than it strictly needs. That is a safe direction to be wrong in:
+// extra deadline margin never hurts a run that converges faster than it, and
+// it keeps this a one-line daemon-startup decision rather than requiring
+// RunDeadline to become per-run state.
+//
+// Extracted as a pure function (base + shadowModel in, a Duration out) so
+// the widening itself is unit-testable without standing up the full
+// StartAdversarialPool wiring (sandbox jail, buildstore, telemetry, mission
+// store, queue).
+func resolveAdvPoolRunDeadline(base time.Duration, shadowModel string) time.Duration {
+	if shadowModel == "" {
+		return base
+	}
+	return advpool.ResolveRunDeadline(base, shadowModel)
 }
 
 // StartRun begins one adversarial-pool run: builds the RunSpec, extracts
@@ -487,11 +568,27 @@ func (rt *AdvPoolRuntime) StartRun(in AdvPoolRunSpec) (int64, error) {
 	if maxShards <= 0 {
 		maxShards = advpool.DefaultMaxShards
 	}
+	// Ceiling BEFORE clampAdvPoolMutants divides by it — see
+	// maxAdvPoolShards' doc for why this order matters: clampAdvPoolMutants's
+	// total-bound guarantee only holds once maxShards itself is bounded.
+	maxShards = clampAdvPoolMaxShards(maxShards)
 
 	nMutants := in.NMutants
 	if nMutants <= 0 {
 		nMutants = 5
 	}
+	// clampAdvPoolMutants divides by the RESOLVED WIDTH (maxShards), not the
+	// actual shard count ShardSymbols will end up producing — those differ
+	// whenever a file has fewer extractable symbols than maxShards (e.g. a
+	// 3-function file at the default width 8 shards to only 3 seats, but this
+	// still divides by 8). That under-spends the per-shard budget rather than
+	// over-spending it (a smaller perShardCap than the file could actually
+	// use), so it is conservative, not a safety issue — computing the true
+	// count here would mean extracting signatures + calling ShardSymbols
+	// BEFORE this clamp (today that happens later, after the language plugin
+	// resolves — see below), which is more reordering than this minor
+	// tightening is worth. Left as a known, intentional slack rather than a
+	// bug.
 	nMutants = clampAdvPoolMutants(nMutants, maxShards)
 
 	// Resolve the language the jail will actually grade with — from the code
@@ -721,6 +818,11 @@ func StartAdversarialPool(ctx context.Context, opts Options) (*AdvPoolRuntime, e
 	// shadow_model field.
 	shadowModel := advpool.ResolveShadowModel(os.Getenv("CORRALAI_ADVPOOL_SHADOW_MODEL"))
 
+	// Widen RunDeadline for the daemon's shadow allowance — see
+	// resolveAdvPoolRunDeadline's doc for the full rationale (the hole this
+	// closes, and why it must be unconditional rather than per-run).
+	driver.RunDeadline = resolveAdvPoolRunDeadline(driver.RunDeadline, shadowModel)
+
 	rt := &AdvPoolRuntime{
 		driver:      driver,
 		missions:    opts.Missions,
@@ -738,7 +840,7 @@ func StartAdversarialPool(ctx context.Context, opts Options) (*AdvPoolRuntime, e
 	log.Printf("advpool: ENABLED — polling every %s; role models: mutant-generator=%s test-writer=%s test-critic=%s",
 		interval, assign[advpool.RoleMutantGenerator], assign[advpool.RoleTestWriter], assign[advpool.RoleTestCritic])
 	if shadowModel == "" {
-		log.Printf("advpool: shadow challenger OFF (CORRALAI_ADVPOOL_SHADOW_MODEL=off, or no worker has claimed a shadow seat yet)")
+		log.Printf("advpool: shadow challenger OFF (CORRALAI_ADVPOOL_SHADOW_MODEL=off)")
 	} else {
 		log.Printf("advpool: shadow challenger ON by default — model=%s (override per-run via start_adversarial_run's shadow_model, or set CORRALAI_ADVPOOL_SHADOW_MODEL=off to disable daemon-wide)", shadowModel)
 	}

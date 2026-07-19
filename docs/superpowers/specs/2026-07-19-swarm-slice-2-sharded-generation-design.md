@@ -99,6 +99,8 @@ which is where the parallelism story gets big.
 
 Accepted consequence: this changes prod behavior on the commit that lands it.
 The deploy wants a real audit run watched end to end before it's called done.
+(Shadow followed the same path on the same rollout footing — see §8's note,
+"Shadow on the brain: DECIDED 2026-07-19".)
 
 ## 3. Failure handling — honest, accountable, traceable
 
@@ -353,6 +355,43 @@ agent underperform."
 - **`--max-shards` default of 8:** matches `localSwarmAutoCap`. Whether the
   brain should carry a different default (its fleet has more workers) is
   deferred until the fleet path has real shard runs behind it.
-- **Shadow on the brain:** doubling generator calls on every hosted run is a
-  real cost change for the prod gate. Ship it on for `--local` and evaluate the
-  brain default after the first watched prod run.
+- **Shadow on the brain: DECIDED 2026-07-19, enabled before a watched prod
+  run.** This section originally read "ship it on for `--local` and evaluate
+  the brain default after the first watched prod run" — the project owner has
+  since decided to turn it on for the hosted daemon NOW, in the same change
+  that landed sharding for the hosted path (`internal/brain/advpool.go`'s
+  `StartAdversarialPool` now sets `RunSpec.MaxShards` and resolves
+  `CORRALAI_ADVPOOL_SHADOW_MODEL`, mirroring `certify --local`). Stated
+  honestly: this reverses the original rollout plan's ordering. Shadow is on
+  for the hosted brain BEFORE the "first watched prod run" gate this section
+  called for was met. The accepted tradeoff: sharding itself (§2's "on
+  everywhere, brain included") already carried the "changes prod behavior on
+  the commit that lands it, wants a watched run" caveat, and shadow riding
+  the same commit was judged not to materially change that risk profile — the
+  two features share the same failure surface (the driver's tick loop, the
+  hosted worker-claim path, the deadline backstop) and watching one run
+  covers both. What DID change to make this safe to ship without waiting:
+  the review that prompted this note also caught and fixed two gaps the
+  original "ship --local first" caution was implicitly relying on staying
+  --local-only to avoid — (1) the hosted `RunDeadline` was never widened by
+  `advpool.ShadowTimeBudget` the way `--local`'s `resolveRunDeadline` already
+  was, so shadow work could force a timeout `needs-review` verdict on the
+  hosted path specifically (fixed: `resolveAdvPoolRunDeadline` in
+  `internal/brain/advpool.go`, sharing `advpool.ResolveRunDeadline` with the
+  CLI); and (2) an unservable shadow seat (e.g. an all-ollama fleet asked to
+  run the default `claude-haiku-4-5` challenger) had no bound on how many
+  times it could cycle claim→404→release→reclaim, continuously consuming
+  workers the primary shards need to converge — a failure mode that only
+  exists once shadow tasks are dispatched onto a REAL, heterogeneous remote
+  worker fleet, which `--local`'s single in-process worker never exercises
+  (fixed: `cmd/corral-agent`'s `handleTaskError` now abandons a shadow seat
+  as unmeasured, via `advpool.ShadowProviderFailedResult`, after
+  `advpool.MaxShadowUnreachableAttempts` consecutive failures, tracked
+  server-side per task id via a new `bump_unreachable_attempts` brain tool).
+  `MaxShards` is additionally ceilinged at `maxAdvPoolShards` for a hosted
+  run (`internal/brain/advpool.go`), closing a related cost-escape-hatch gap
+  the floor-of-one-mutant-per-shard clamp had. With those closed, "the first
+  watched prod run" becomes the verification step for an already-shipped
+  default, not the gate before shipping it — a deliberately different (and
+  weaker) posture than this section originally called for, recorded here so
+  the spec doesn't quietly contradict the code.

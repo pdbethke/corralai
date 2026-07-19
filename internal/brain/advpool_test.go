@@ -4,7 +4,9 @@ package brain
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -942,4 +944,159 @@ func TestAdvPoolStartRun_MaxShardsOverride(t *testing.T) {
 	if _, ok := mgs[advpool.RoleMutantGenerator]; !ok {
 		t.Fatalf("expected the single seat under the bare key %q, got %+v", advpool.RoleMutantGenerator, mgs)
 	}
+}
+
+// manySymbolRunSpecIn returns a run spec whose code has n trivial top-level
+// functions — enough to exceed maxAdvPoolShards so a requested MaxShards
+// above the ceiling has real symbol surface to (over)shard onto.
+func manySymbolRunSpecIn(n int) AdvPoolRunSpec {
+	in := testRunSpecIn()
+	var b strings.Builder
+	b.WriteString("package target\n")
+	for i := 0; i < n; i++ {
+		fmt.Fprintf(&b, "func Fn%d(pw string) int { return len(pw) }\n", i)
+	}
+	in.Code = b.String()
+	return in
+}
+
+// TestAdvPoolStartRun_MaxShardsCeiling is the IMPORTANT fix this test pins:
+// an operator (or a compromised/buggy caller) requesting an unbounded
+// max_shards on a hosted run must not be allowed to multiply the run's
+// generator-seat count (and therefore its LLM-call and jail-execution cost)
+// without limit — clampAdvPoolMutants' floor-of-one-mutant-per-shard escape
+// hatch means an unbounded MaxShards defeats maxAdvPoolMutants' total-budget
+// guarantee (see that constant's doc). Requesting far more shards than
+// maxAdvPoolShards on a file with plenty of symbol surface to actually use
+// them must still cap the enqueued mutant-generator seat count AT the
+// ceiling, never above it.
+func TestAdvPoolStartRun_MaxShardsCeiling(t *testing.T) {
+	rt, q := newTestAdvPoolRuntime(t, nil)
+
+	in := manySymbolRunSpecIn(maxAdvPoolShards + 15) // plenty of symbols beyond the ceiling
+	in.MaxShards = maxAdvPoolShards + 100            // a wildly oversized request
+
+	runID, err := rt.StartRun(in)
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	tasks, err := q.List(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mgs := mutantGeneratorTasks(tasks)
+	if len(mgs) > maxAdvPoolShards {
+		t.Fatalf("MaxShards request of %d must be clamped to the ceiling %d, got %d shard seats", in.MaxShards, maxAdvPoolShards, len(mgs))
+	}
+	if len(mgs) != maxAdvPoolShards {
+		t.Fatalf("expected the ceiling to bind exactly (enough symbols to fill it): got %d seats, want %d", len(mgs), maxAdvPoolShards)
+	}
+}
+
+// TestClampAdvPoolMaxShards is the table-driven pure-function test for the
+// MaxShards ceiling — mirrors TestClampAdvPoolMutants' shape for its sibling
+// clamp.
+func TestClampAdvPoolMaxShards(t *testing.T) {
+	cases := []struct {
+		name      string
+		requested int
+		want      int
+	}{
+		{"under the ceiling passes through", 4, 4},
+		{"at the ceiling passes through", maxAdvPoolShards, maxAdvPoolShards},
+		{"over the ceiling clamps", maxAdvPoolShards + 100, maxAdvPoolShards},
+		{"zero passes through (caller defaults before clamping)", 0, 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := clampAdvPoolMaxShards(c.requested); got != c.want {
+				t.Fatalf("clampAdvPoolMaxShards(%d) = %d, want %d", c.requested, got, c.want)
+			}
+		})
+	}
+}
+
+// TestAdvPoolStartRun_ClampCallSitePinned is the IMPORTANT fix this test
+// pins: TestClampAdvPoolMutants only tested the clamp helper in isolation —
+// nothing asserted StartRun actually CALLS it. Two silent regressions would
+// leave that test green: reverting StartRun to the old pre-sharding direct
+// per-run cap, or discarding clampAdvPoolMutants' result entirely (e.g.
+// `clampAdvPoolMutants(nMutants, maxShards)` computed but never assigned
+// back to nMutants). This asserts the RESOLVED per-shard NMutants that
+// actually reached the queue reflects the clamp having run: a pre-sharding
+// operator value (maxAdvPoolMutants) on the DEFAULT shard width must come
+// back divided down, not passed through unchanged.
+func TestAdvPoolStartRun_ClampCallSitePinned(t *testing.T) {
+	rt, q := newTestAdvPoolRuntime(t, nil)
+
+	in := manySymbolRunSpecIn(advpool.DefaultMaxShards + 4) // enough symbols to actually fill DefaultMaxShards seats
+	in.NMutants = maxAdvPoolMutants                         // a pre-sharding "whole run" value — must NOT reach every shard unchanged
+
+	runID, err := rt.StartRun(in)
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	tasks, err := q.List(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mgs := mutantGeneratorTasks(tasks)
+	if len(mgs) != advpool.DefaultMaxShards {
+		t.Fatalf("expected the default shard width (%d) to bind, got %d shards", advpool.DefaultMaxShards, len(mgs))
+	}
+	wantPerShard := clampAdvPoolMutants(in.NMutants, advpool.DefaultMaxShards)
+	if wantPerShard >= in.NMutants {
+		t.Fatalf("test fixture bug: expected clamping to actually divide the request down (got %d unclamped)", wantPerShard)
+	}
+	// The rendered prompt's exact wording is testgen.mutantFormatInstruction's
+	// concern ("Produce exactly %d distinct mutations."), not this test's —
+	// but it IS the one observable surface StartRun's resolved NMutants
+	// reaches, so reading it back is what pins the call site rather than
+	// re-deriving the internal value some other way.
+	unclampedMarker := fmt.Sprintf("exactly %d distinct mutation", in.NMutants)
+	clampedMarker := fmt.Sprintf("exactly %d distinct mutation", wantPerShard)
+	for key, tk := range mgs {
+		if strings.Contains(tk.Instruction, unclampedMarker) {
+			t.Fatalf("shard %q instruction mentions the UNCLAMPED per-run request %d — the clampAdvPoolMutants call site regressed (either reverted to the direct cap, or its result was discarded): %.200q",
+				key, in.NMutants, tk.Instruction)
+		}
+		if !strings.Contains(tk.Instruction, clampedMarker) {
+			t.Fatalf("shard %q instruction does not mention the expected CLAMPED per-shard count %q: %.200q", key, clampedMarker, tk.Instruction)
+		}
+	}
+}
+
+// TestResolveAdvPoolRunDeadline is the CRITICAL fix this test pins: the
+// hosted daemon's driver.RunDeadline must get the SAME shadow allowance
+// certify_local.go's resolveRunDeadline already gives the CLI path — without
+// it, shadow work (which happens in a remote worker entirely outside the
+// driver on the hosted path) can push a run past its deadline and force a
+// timeout needs-review verdict, which is shadow — measurement that must
+// NEVER gate — changing the Status via the deadline channel.
+func TestResolveAdvPoolRunDeadline(t *testing.T) {
+	t.Run("no daemon shadow model leaves the deadline untouched", func(t *testing.T) {
+		got := resolveAdvPoolRunDeadline(12*time.Minute, "")
+		if got != 12*time.Minute {
+			t.Fatalf("got %s, want the base deadline unchanged (12m)", got)
+		}
+	})
+	t.Run("a configured daemon shadow model widens by ShadowTimeBudget", func(t *testing.T) {
+		base := 12 * time.Minute
+		got := resolveAdvPoolRunDeadline(base, advpool.DefaultShadowModel)
+		want := base + advpool.ShadowTimeBudget(base)
+		if got != want {
+			t.Fatalf("got %s, want %s (base + ShadowTimeBudget(base))", got, want)
+		}
+		if got <= base {
+			t.Fatalf("a configured shadow model must WIDEN the deadline, got %s <= base %s", got, base)
+		}
+	})
+	t.Run("matches cmd/corral's own resolveRunDeadline arithmetic via the shared helper", func(t *testing.T) {
+		base := 7 * time.Minute
+		got := resolveAdvPoolRunDeadline(base, "claude-haiku-4-5")
+		want := advpool.ResolveRunDeadline(base, "claude-haiku-4-5")
+		if got != want {
+			t.Fatalf("hosted widening (%s) diverged from the shared advpool.ResolveRunDeadline (%s) — the CLI and the daemon must agree", got, want)
+		}
+	})
 }

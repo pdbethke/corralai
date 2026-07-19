@@ -44,6 +44,71 @@ func exported(name string) bool {
 	return false
 }
 
+// branchNodeTypes are the per-language tree-sitter node types that introduce an
+// independent execution path through a symbol. Counting them (plus the boolean
+// operators handled below) yields a cyclomatic-style complexity.
+//
+// Deliberately per-language: a "case_clause" in Python and an "expression_case"
+// in Go are the same concept under different grammar names, so a shared set
+// would silently under-count one language and make its symbols look easy.
+var branchNodeTypes = map[string]map[string]bool{
+	"go": {
+		"if_statement":       true,
+		"for_statement":      true,
+		"expression_case":    true,
+		"type_case":          true,
+		"communication_case": true,
+		"select_statement":   true,
+	},
+	"python": {
+		"if_statement":           true,
+		"elif_clause":            true,
+		"for_statement":          true,
+		"while_statement":        true,
+		"except_clause":          true,
+		"case_clause":            true,
+		"conditional_expression": true,
+		"boolean_operator":       true, // `and` / `or`
+	},
+}
+
+// symbolComplexity walks n's subtree counting branch nodes, returning the
+// cyclomatic-style complexity (minimum 1 — a straight-line symbol has exactly
+// one path). Go's `&&`/`||` are binary_expression nodes distinguished by their
+// operator field rather than by node type, so they are counted separately;
+// Python's are their own `boolean_operator` node type and fall out of the set.
+func symbolComplexity(n *sitter.Node, src []byte, lang string) int {
+	types := branchNodeTypes[lang]
+	c := 1
+	var walk func(*sitter.Node)
+	walk = func(node *sitter.Node) {
+		if node == nil {
+			return
+		}
+		t := node.Type()
+		switch {
+		case types[t]:
+			c++
+		case lang == "go" && t == "binary_expression":
+			if op := node.ChildByFieldName("operator"); op != nil {
+				if s := op.Content(src); s == "&&" || s == "||" {
+					c++
+				}
+			}
+		}
+		for i := 0; i < int(node.NamedChildCount()); i++ {
+			walk(node.NamedChild(i))
+		}
+	}
+	walk(n)
+	return c
+}
+
+// symbolLines is the inclusive line span of n.
+func symbolLines(n *sitter.Node) int {
+	return int(n.EndPoint().Row-n.StartPoint().Row) + 1
+}
+
 func extractGoSignatures(text string) ([]Signature, error) {
 	tree, src, err := parseTS(text, "go")
 	if err != nil {
@@ -82,6 +147,8 @@ func goCallable(n *sitter.Node, kind, receiver string, src []byte) Signature {
 	}
 	sig.Results = goResults(n.ChildByFieldName("result"), src)
 	sig.Exported = exported(sig.Name)
+	sig.Complexity = symbolComplexity(n, src, "go")
+	sig.Lines = symbolLines(n)
 	return sig
 }
 
@@ -207,6 +274,8 @@ func extractPythonSignatures(text string) ([]Signature, error) {
 		if rt := def.ChildByFieldName("return_type"); rt != nil {
 			sig.Results = []string{rt.Content(src)}
 		}
+		sig.Complexity = symbolComplexity(def, src, "python")
+		sig.Lines = symbolLines(def)
 		out = append(out, sig)
 	}
 	return out, nil

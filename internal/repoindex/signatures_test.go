@@ -101,6 +101,81 @@ func TestExtractSignaturesPython(t *testing.T) {
 	assertSignatures(t, want, got)
 }
 
+func TestGoSignatureComplexity(t *testing.T) {
+	src := `package p
+
+func Simple(a int) int { return a }
+
+func Branchy(a int) int {
+	if a > 0 {
+		for i := 0; i < a; i++ {
+			if i%2 == 0 && i > 2 {
+				return i
+			}
+		}
+	}
+	switch a {
+	case 1:
+		return 1
+	case 2:
+		return 2
+	}
+	return 0
+}
+`
+	got, err := ExtractSignatures(src, "go")
+	if err != nil {
+		t.Fatalf("ExtractSignatures: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want 2 signatures, got %d: %+v", len(got), got)
+	}
+	if got[0].Complexity != 1 {
+		t.Errorf("Simple.Complexity: want 1, got %d", got[0].Complexity)
+	}
+	if got[0].Lines != 1 {
+		t.Errorf("Simple.Lines: want 1, got %d", got[0].Lines)
+	}
+	// 1 base + 2 if + 1 for + 1 "&&" + 2 case = 7
+	if got[1].Complexity != 7 {
+		t.Errorf("Branchy.Complexity: want 7, got %d", got[1].Complexity)
+	}
+	if got[1].Lines != 16 {
+		t.Errorf("Branchy.Lines: want 16, got %d", got[1].Lines)
+	}
+}
+
+func TestPythonSignatureComplexity(t *testing.T) {
+	src := `def simple(a):
+    return a
+
+
+def branchy(a):
+    if a > 0:
+        for i in range(a):
+            if i % 2 == 0 and i > 2:
+                return i
+    elif a < 0:
+        while a < 0:
+            a += 1
+    return 0
+`
+	got, err := ExtractSignatures(src, "python")
+	if err != nil {
+		t.Fatalf("ExtractSignatures: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want 2 signatures, got %d: %+v", len(got), got)
+	}
+	if got[0].Complexity != 1 {
+		t.Errorf("simple.Complexity: want 1, got %d", got[0].Complexity)
+	}
+	// 1 base + 2 if + 1 for + 1 "and" + 1 elif + 1 while = 7
+	if got[1].Complexity != 7 {
+		t.Errorf("branchy.Complexity: want 7, got %d", got[1].Complexity)
+	}
+}
+
 func TestExtractSignaturesUnwiredLang(t *testing.T) {
 	// cobol has no extractor wired (even though it's not a repoindex grammar);
 	// the contract is an explicit ErrUnsupportedLang, never a silent empty.

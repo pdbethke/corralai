@@ -182,6 +182,40 @@ So: the swarm learns what actually catches bugs and where tests actually miss �
 transparently, provably, across runs — instead of a Fugu-style learned reward
 proxy. The infrastructure exists; the work is re-aiming and re-gating it.
 
+### It's client-server — so the memory is SHARED to the clients (the real moat)
+
+corral is a client-server system, and the memory-sharing + skills loop was built
+to distribute knowledge across principals (`memory` shared/`SetShared`/
+`sharedOnly`; `learn` versioned skills; `fleet` → MotherDuck federation of signed
+records; the per-principal `gateway`). It helped devs BUILD. The same pipes carry
+AUDIT knowledge to every dev running a client:
+
+- A blind-spot pattern proven once ("length-only validators miss the character-
+  class rules") becomes a shared, versioned skill every client's swarm can pull.
+- Effective mutation operators + per-code-type model fitness accumulate centrally
+  and flow outward — so a first-time client audits with the whole network's
+  execution-proven experience, not from zero.
+- The more devs audit, the sharper every dev's audit gets — a data flywheel, but
+  made of **execution-proven, signed, human-gated, versioned** facts, not opaque
+  weights. (Honesty guard: this is the DESIGN direction; the flywheel is not yet
+  claimed proven — same guard as the "Nobody Fails a Test They Never Took" note.)
+
+**Cross-principal caveats (the new bar):** shared audit memory must carry
+**patterns, never code** — a blind-spot shape transfers; Org A's source must not
+leak to Org B. This raises the scrub bar above the single-org recording scrub:
+promotion to the shared tier must strip repo-specific identifiers, and every
+shared skill must stay **signed + attributable** (provenance), so a wrong or
+poisoned skill is traceable and revocable, and only **execution-proven** lessons
+are ever promoted. The human gate + the proof requirement + attribution are what
+keep a shared commons from becoming a shared liability.
+
+This is the founder's gold-seal vision made concrete ([[corralai-eval-harness]]):
+an independent, open, self-verifying accountability commons for AI code — CT /
+Sigstore for *test adequacy* — where contributing proven audit knowledge and
+drawing on it are the same act. Fugu bakes learning into one opaque orchestrator's
+weights; corral federates a transparent, execution-proven, human-gated knowledge
+commons to every client. Same instinct; opposite trust model — and the moat.
+
 ## Open questions for review
 
 - Per-jail-run RAM: measure live (cgroup/rusage) or estimate per language first?

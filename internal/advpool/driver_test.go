@@ -2931,8 +2931,11 @@ func TestShadowBudgetSkipsRatherThanTimingOutTheRun(t *testing.T) {
 
 	// Tick #1: dev-adequacy scores a REAL survivor, so the run cannot converge
 	// this tick (the test-writer still has to run) — the shadow pass runs
-	// inside this same call and burns 40 fake minutes (2 shards × 20m), well
-	// past the 10-minute RunDeadline, all credited back to run.startedAt.
+	// inside this same call. Only the first shadow call proceeds (11 fake
+	// minutes); the second is skipped by the pre-call budget check. That 11
+	// minutes is well past the 10-minute RunDeadline, and is credited back to
+	// run.startedAt (capped at the 2.5-minute shadow budget — see
+	// TestShadowCreditIsCappedAtBudget for the cap itself).
 	completeAllReadyTagged(t, d)
 	if v, err := d.Tick(context.Background(), missionID); err != nil {
 		t.Fatalf("tick 1: %v", err)
@@ -2963,6 +2966,65 @@ func TestShadowBudgetSkipsRatherThanTimingOutTheRun(t *testing.T) {
 		if o.Shadow && o.MutantsPlanted == 0 {
 			t.Errorf("a skipped shadow seat was recorded as zero yield: %+v", o)
 		}
+	}
+}
+
+// TestShadowCreditIsCappedAtBudget pins the min(elapsed, budget) clamp in
+// runShadowPass's credit-back (driver.go, around the ShadowTimeBudget doc).
+// The credit-back exists so shadow work never eats into the PRIMARY run's
+// deadline, but crediting the RAW elapsed time would let a Scorer that
+// ignores its own context extend the deadline arbitrarily just by running
+// long — the cap is what keeps the credit bounded regardless of how badly a
+// misbehaving Scorer overspends. Here perShadowCall (100 minutes) is chosen
+// to vastly exceed ShadowTimeBudget(10 min) = 2.5 min, so the assertion is
+// unambiguous: with the cap, run.startedAt advances by EXACTLY the 2.5-minute
+// budget; with the cap removed (min(elapsed, budget) → elapsed), it would
+// advance by the full 100 minutes instead — verified by hand by deleting the
+// clamp (see the fix commit).
+func TestShadowCreditIsCappedAtBudget(t *testing.T) {
+	const missionID = int64(244)
+	now := time.Unix(0, 0)
+	rs, sigs := shardedRunSpec(2)
+	rs.ShadowModel = "challenger-model"
+	scorer := &clockAdvancingScorer{
+		devKillRate:  0.5,
+		devTest:      rs.DevTestCode,
+		devSurvivors: []adequacy.Mutant{{ID: "s1", Code: "c1"}},
+		now:          &now, perShadowCall: 100 * time.Minute,
+	}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
+	q := newTestQueue(t)
+	d, err := NewDriver(q, scorer, validator, decorrelatedAssign(), 0.5)
+	if err != nil {
+		t.Fatalf("NewDriver: %v", err)
+	}
+	d.Now = func() time.Time { return now } // seeded BEFORE StartRun.
+	d.RunDeadline = 10 * time.Minute
+	d.Signer = &fakeSigner{}
+	sink := &fakeBugCatch{}
+	d.BugCatch = sink
+
+	if err := d.StartRun(missionID, rs, sigs); err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	startedAt := d.runs[missionID].startedAt
+
+	if _, err := q.PromoteReady(missionID); err != nil {
+		t.Fatalf("PromoteReady: %v", err)
+	}
+	completeAllReadyTagged(t, d)
+	if _, err := d.Tick(context.Background(), missionID); err != nil {
+		t.Fatalf("tick 1: %v", err)
+	}
+	if scorer.shadowCalls == 0 {
+		t.Fatal("the shadow pass never ran — this test would pass vacuously")
+	}
+
+	want := ShadowTimeBudget(d.RunDeadline)
+	got := d.runs[missionID].startedAt.Sub(startedAt)
+	if got != want {
+		t.Fatalf("shadow credit-back not capped: startedAt advanced by %s, want exactly %s (ShadowTimeBudget) — the min(elapsed, budget) clamp is missing or wrong",
+			got, want)
 	}
 }
 

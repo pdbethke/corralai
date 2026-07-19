@@ -440,8 +440,9 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	// that warning goes to stderr BEFORE this line ran, so stdout alone read
 	// as an unqualified false claim), the run hit its deadline (the timeout
 	// path signs a verdict but never calls the metrics sink), or every shadow
-	// seat ended unmeasured (a provider failure, a parse failure, or the
-	// shadow budget skip). shadowRowsRecorded is nil (metrics store never
+	// seat ended unmeasured (a provider failure, or the shadow budget skip —
+	// NOT a parse failure, which is deliberately recorded as measured=true,
+	// dropped=true and DOES emit a row). shadowRowsRecorded is nil (metrics store never
 	// opened) or 0 (opened, but nothing landed) in exactly those cases, so
 	// this only fires once rows are actually sitting in the store.
 	if shadow != "" && len(shards) > 0 && shadowRowsRecorded != nil {

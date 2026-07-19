@@ -148,12 +148,13 @@ func CheckDecorrelation(assign RoleAssignment) error {
 // completed with when the LLM call itself failed — a network error, a 429, a
 // typo'd --shadow-model — rather than the model responding with output that
 // merely failed to parse (see cmd/corral's runOneTask). The two cases MUST be
-// kept distinguishable: an empty result is what a real challenger call could
-// never legitimately produce (RunRole always returns non-empty raw output on
-// success), so runShadowPass could not tell "the model was never asked"
-// apart from "the model answered with garbage" — and ParseMutants("") always
-// errors, which used to route straight into the parse-failure branch and
-// record a MEASURED, DROPPED, zero-yield row for a model that never ran.
+// kept distinguishable: without this sentinel, both a never-asked model and a
+// model that answered with garbage would leave the same empty Result, and
+// ParseMutants("") fails identically for both — the parse failure alone gives
+// runShadowPass no way to tell "the model was never asked" apart from "the
+// model answered with garbage". That ambiguity used to route the never-asked
+// case straight into the parse-failure branch and record a MEASURED,
+// DROPPED, zero-yield row for a model that never ran.
 // That is data fabrication: it attributes a bad result to a model that was
 // never asked the question, and it would have landed in the shared scorecard
 // store that feeds model routing — exactly the corruption the `measured`
@@ -877,11 +878,20 @@ func ShadowTimeBudget(deadline time.Duration) time.Duration {
 //     stops as soon as that budget is spent (remaining seats are recorded
 //     as UNMEASURED, never as a challenger that produced nothing); and
 //     (b) the wall-clock time this pass consumes is credited back to the
-//     run's deadline clock by advancing startedAt, so the deadline check in
-//     Tick measures PRIMARY elapsed time only. (b) is what makes the
-//     guarantee structural rather than probabilistic — (a) exists so the
-//     caller's own outer context (which must allow deadline + this budget;
-//     see cmd/corral's certify --local) stays bounded.
+//     run's deadline clock by advancing startedAt — but ONLY up to
+//     ShadowTimeBudget (min(elapsed, budget); see the clamp below), so the
+//     credit itself cannot exceed what (a) is supposed to bound. That cap
+//     bounds shadow's charge against the deadline to at most the shadow
+//     budget: any overspend beyond the budget IS charged against the primary
+//     deadline. The guarantee is therefore not purely structural — it still
+//     depends on Scorer.Score honoring the context this pass hands it (sctx
+//     below), so (a) can actually cut a call off rather than merely being
+//     ignored. The production jail Scorer does honor its context, keeping
+//     the behavioral risk low, but a Scorer that ignores sctx and runs long
+//     can still consume up to ShadowTimeBudget of the primary run's margin.
+//     (a) also exists so the caller's own outer context (which must allow
+//     deadline + this budget; see cmd/corral's certify --local) stays
+//     bounded.
 func (d *Driver) runShadowPass(ctx context.Context, missionID int64, run *runState) {
 	shadows, serr := d.tasksByRole(missionID, RoleMutantGeneratorShadow)
 	if serr != nil {

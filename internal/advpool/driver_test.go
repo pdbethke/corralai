@@ -4,6 +4,7 @@ package advpool
 
 import (
 	"context"
+	"crypto/ed25519"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
+	"github.com/pdbethke/corralai/internal/buildstore"
 	"github.com/pdbethke/corralai/internal/queue"
 	"github.com/pdbethke/corralai/internal/repoindex"
 )
@@ -33,26 +35,41 @@ type scoreCall struct {
 	mutants    []adequacy.Mutant
 }
 
-// fakeScorer never runs a real jail: the first call is assumed to be the dev
-// score (mutant-generator's mutants against the dev's own tests), the second
-// the pool score (survivors against the pool's authored test) — matching the
-// order Tick's state machine actually calls Score in.
+// fakeScorer never runs a real jail: the first SUCCESSFUL call is assumed to
+// be the dev score (mutant-generator's mutants against the dev's own tests),
+// the second the pool score (survivors against the pool's authored test) —
+// matching the order Tick's state machine actually calls Score in.
 type fakeScorer struct {
 	calls []scoreCall
 	err   error
+	// failFirstN, when > 0 (together with err), makes Score fail with err on
+	// exactly the first failFirstN call ATTEMPTS (successful or not — this
+	// counts total attempts), then succeed on every attempt after —
+	// simulating a transient scorer failure (the sandboxed jail run this
+	// interface wraps can fail transiently) so a re-entrancy test can drive a
+	// Tick that errors once and then recovers, without failing forever. 0
+	// (the default) preserves the original always-fail-if-err-set behavior.
+	failFirstN int
 
 	devKillRate  float64
 	devSurvivors []adequacy.Mutant
 
 	poolSurvivors []adequacy.Mutant
+
+	// successes counts calls that did NOT return f.err — used (rather than
+	// len(calls)) to decide dev-vs-pool branch, so a failed attempt (which
+	// the driver treats as "nothing happened yet" and simply retries) does
+	// not consume the dev-score slot a subsequent successful retry needs.
+	successes int
 }
 
 func (f *fakeScorer) Score(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (float64, []adequacy.Mutant, error) {
 	f.calls = append(f.calls, scoreCall{code, test, mutants})
-	if f.err != nil {
+	if f.err != nil && (f.failFirstN == 0 || len(f.calls) <= f.failFirstN) {
 		return 0, nil, f.err
 	}
-	if len(f.calls) == 1 {
+	f.successes++
+	if f.successes == 1 {
 		return f.devKillRate, f.devSurvivors, nil
 	}
 	return 1.0, f.poolSurvivors, nil
@@ -1590,18 +1607,24 @@ func keysInOrder(tasks []queue.Task) []string {
 	return out
 }
 
-// shardValidator fails to parse any result equal to failRaw, and returns
-// canned mutants otherwise — so a test can make ONE shard persistently bad
-// while its siblings succeed. (fakeValidator's single parseErr applies to
-// every call and cannot express this.)
+// shardValidator fails to parse any result equal to failRaw, parses any
+// result equal to emptyRaw to a CLEAN empty mutant set (no error, zero
+// mutants — distinct from failRaw's unparseable case), and returns canned
+// mutants otherwise — so a test can make ONE shard persistently bad, or one
+// shard persistently vacuous, while its siblings succeed. (fakeValidator's
+// single parseErr applies to every call and cannot express either.)
 type shardValidator struct {
-	failRaw string
-	mutants []adequacy.Mutant
+	failRaw  string
+	emptyRaw string
+	mutants  []adequacy.Mutant
 }
 
 func (v *shardValidator) ParseMutants(raw, _ string) ([]adequacy.Mutant, error) {
 	if raw == v.failRaw {
 		return nil, fmt.Errorf("shardValidator: unparseable")
+	}
+	if v.emptyRaw != "" && raw == v.emptyRaw {
+		return nil, nil
 	}
 	return v.mutants, nil
 }
@@ -1675,4 +1698,311 @@ func TestVerdictCarriesRegionCoverage(t *testing.T) {
 	if len(v.DroppedRegions) != 0 {
 		t.Errorf("DroppedRegions: want none, got %v", v.DroppedRegions)
 	}
+}
+
+// completeShardsWith is the general form of TestShardDroppedAfterRetriesAndRecorded's
+// local completeShards closure, lifted out so more than one test can drive a
+// run where a specific shard key gets a different completion result than its
+// siblings (claimAllReady's map-by-key return makes this natural; the file's
+// other completion helper, completeAllReady, can only send ONE result to
+// every ready task).
+func completeShardsWith(t *testing.T, d *Driver, byKey map[string]string, otherwise string) {
+	t.Helper()
+	for key, task := range claimAllReady(t, d.Q) {
+		result, ok := byKey[key]
+		if !ok {
+			result = otherwise
+		}
+		mustComplete(t, d.Q, task.ID, result)
+	}
+}
+
+// TestShardDropReachesSignedVerdict drives a run with one persistently
+// unparseable shard all the way to a terminal Verdict (not just internal run
+// state, which TestShardDroppedAfterRetriesAndRecorded already covers) and
+// asserts the coverage fields the SIGNED record actually carries — this is
+// the gap that let C-2's append-on-reentry bug and I-1's over-counted
+// RegionsProbed both ship: neither was ever checked against a real Verdict.
+func TestShardDropReachesSignedVerdict(t *testing.T) {
+	const missionID = int64(220)
+	const bad = "UNPARSEABLE"
+	scorer := &fakeScorer{devKillRate: 1.0}
+	validator := &shardValidator{failRaw: bad, mutants: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
+	d := newShardedRun(t, missionID, 3, scorer, validator)
+
+	badKey := ShardTaskKey(0) // packs to the single heaviest symbol, "A" — see shard.go's greedy packer
+	completeShards := func() { completeShardsWith(t, d, map[string]string{badKey: bad}, "raw") }
+	completeShards()
+	for i := 0; i < MaxShardRetries; i++ {
+		if _, err := d.Tick(context.Background(), missionID); err == nil {
+			t.Fatalf("tick %d: want a retry error while the shard has budget left", i)
+		}
+		completeShards()
+	}
+	// Budget exhausted this tick: shard 0 drops and dev-adequacy scores.
+	if _, err := d.Tick(context.Background(), missionID); err != nil {
+		t.Fatalf("tick after drop: %v", err)
+	}
+
+	// Drive the rest of the run (test-writer, test-critic, aggregate) to a
+	// terminal Verdict.
+	var v Verdict
+	converged := false
+	for i := 0; i < 50; i++ {
+		got, err := d.Tick(context.Background(), missionID)
+		if err != nil {
+			t.Fatalf("Tick: %v", err)
+		}
+		if got != nil {
+			v = *got
+			converged = true
+			break
+		}
+		completeAllReady(t, d, "raw")
+	}
+	if !converged {
+		t.Fatal("run did not converge in 50 ticks")
+	}
+
+	if v.RegionsTotal != 3 {
+		t.Errorf("Verdict.RegionsTotal: want 3, got %d", v.RegionsTotal)
+	}
+	if v.RegionsProbed != 2 {
+		t.Errorf("Verdict.RegionsProbed: want 2 (3 total minus the 1 dropped), got %d", v.RegionsProbed)
+	}
+	if len(v.DroppedRegions) != 1 {
+		t.Fatalf("Verdict.DroppedRegions: want 1 entry, got %d: %v", len(v.DroppedRegions), v.DroppedRegions)
+	}
+	// M-2: a dropped region is recorded by the SYMBOLS it left unprobed, not
+	// the task-UI title string ("Generate mutants for A").
+	if v.DroppedRegions[0] != "A" {
+		t.Errorf("DroppedRegions[0]: want bare symbol %q, got %q", "A", v.DroppedRegions[0])
+	}
+	if strings.Contains(v.DroppedRegions[0], "Generate mutants for") {
+		t.Errorf("DroppedRegions carries task-UI phrasing: %q", v.DroppedRegions[0])
+	}
+}
+
+// TestAllRegionsDroppedRefusesToGrade is I-2's regression test: every shard
+// exhausting its retry budget must trip the all-regions-failed guard, even
+// though every individual shard PARSED without error along the way to
+// exhaustion (the bug was the guard's second conjunct, len(droppedRegions) >
+// 0, which this run also satisfies — see
+// TestZeroMutantShardIsNotCountedAsProbed for the case that conjunct
+// actually gated wrong).
+func TestAllRegionsDroppedRefusesToGrade(t *testing.T) {
+	const missionID = int64(221)
+	const bad = "BAD"
+	scorer := &fakeScorer{devKillRate: 1.0}
+	validator := &shardValidator{failRaw: bad}
+	d := newShardedRun(t, missionID, 3, scorer, validator)
+
+	var lastErr error
+	for i := 0; i < 30; i++ {
+		completeAllReady(t, d, bad)
+		v, err := d.Tick(context.Background(), missionID)
+		if v != nil {
+			t.Fatalf("run converged to a verdict despite every region being dropped: %+v", v)
+		}
+		if err != nil {
+			lastErr = err
+			if strings.Contains(err.Error(), "no usable mutants") {
+				break
+			}
+		}
+	}
+	if lastErr == nil || !strings.Contains(lastErr.Error(), "no usable mutants") {
+		t.Fatalf("want the all-regions-failed guard to fire with \"no usable mutants\", last error: %v", lastErr)
+	}
+	run := d.runs[missionID]
+	if run.devScored {
+		t.Fatal("guard fired but devScored was still left true")
+	}
+	if got := len(run.droppedRegions); got != 3 {
+		t.Fatalf("want all 3 regions dropped, got %d: %v", got, run.droppedRegions)
+	}
+}
+
+// TestZeroMutantShardIsNotCountedAsProbed is I-1's regression test: a shard
+// that PARSES cleanly to zero mutants must not inflate RegionsProbed — it
+// contributed nothing to the exam the dev suite is graded against, so
+// counting it as probed would over-report coverage even though nothing was
+// ever dropped (RegionsTotal - len(droppedRegions) would wrongly say 3/3).
+func TestZeroMutantShardIsNotCountedAsProbed(t *testing.T) {
+	const missionID = int64(222)
+	const empty = "EMPTY"
+	scorer := &fakeScorer{devKillRate: 1.0}
+	validator := &shardValidator{emptyRaw: empty, mutants: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
+	d := newShardedRun(t, missionID, 3, scorer, validator)
+
+	emptyKey := ShardTaskKey(2) // packs to the lightest symbol, "C"
+	completeShardsWith(t, d, map[string]string{emptyKey: empty}, "raw")
+	if _, err := d.Tick(context.Background(), missionID); err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	run := d.runs[missionID]
+	if !run.devScored {
+		t.Fatal("dev-adequacy did not run")
+	}
+	if len(run.droppedRegions) != 0 {
+		t.Fatalf("nothing should be DROPPED here (the shard parsed fine, just to zero mutants), got %v", run.droppedRegions)
+	}
+	if run.regionsTotal != 3 {
+		t.Errorf("regionsTotal: want 3, got %d", run.regionsTotal)
+	}
+	if run.regionsProbed != 2 {
+		t.Errorf("regionsProbed: want 2 (the zero-mutant shard must not count), got %d", run.regionsProbed)
+	}
+}
+
+// TestDropAndTransientScorerFailureIsIdempotent is C-2's regression test:
+// tickDevAdequacy re-runs its whole scan on every Tick while the run has not
+// yet devScored, and BOTH re-entry paths this test exercises (the shard was
+// already dropped on a prior pass; the Scorer then fails transiently on the
+// pass that would otherwise have devScored the run) must leave droppedRegions
+// and regionsProbed exactly as if they had happened once — not appended or
+// decremented again on each re-entry.
+func TestDropAndTransientScorerFailureIsIdempotent(t *testing.T) {
+	const missionID = int64(223)
+	const bad = "UNPARSEABLE"
+	scorer := &fakeScorer{devKillRate: 1.0, err: fmt.Errorf("transient jail failure"), failFirstN: 1}
+	validator := &shardValidator{failRaw: bad, mutants: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
+	d := newShardedRun(t, missionID, 3, scorer, validator)
+
+	badKey := ShardTaskKey(0)
+	completeShards := func() { completeShardsWith(t, d, map[string]string{badKey: bad}, "raw") }
+	completeShards()
+	for i := 0; i < MaxShardRetries; i++ {
+		if _, err := d.Tick(context.Background(), missionID); err == nil {
+			t.Fatalf("tick %d: want a retry error while the shard has budget left", i)
+		}
+		completeShards()
+	}
+
+	// This tick: shard 0 drops, shards 1/2 parse fine, but Scorer.Score fails
+	// transiently (failFirstN=1) — the drop must already be recorded even
+	// though the tick as a whole errors, since re-entry must find it recorded.
+	if _, err := d.Tick(context.Background(), missionID); err == nil {
+		t.Fatal("want the transient scorer error to surface on the first attempt")
+	}
+	run := d.runs[missionID]
+	if got := len(run.droppedRegions); got != 1 {
+		t.Fatalf("after the first (failed) scorer attempt: want 1 dropped region, got %d: %v", got, run.droppedRegions)
+	}
+	if run.regionsProbed < 0 {
+		t.Fatalf("regionsProbed went negative after the first attempt: %d", run.regionsProbed)
+	}
+
+	// Re-enter several more times, mirroring Tick's real re-call pattern
+	// (nothing is completed between calls — the task states are unchanged).
+	// The second attempt should succeed (the scorer recovers) and devScore
+	// the run; further re-entries are no-ops since devScored gates them off.
+	for i := 0; i < 3; i++ {
+		_, _ = d.Tick(context.Background(), missionID)
+	}
+	if !run.devScored {
+		t.Fatal("run never recovered from the transient scorer failure")
+	}
+	if got := len(run.droppedRegions); got != 1 {
+		t.Fatalf("after re-entry: want droppedRegions to stay at 1 (no duplicates), got %d: %v", got, run.droppedRegions)
+	}
+	seen := map[string]bool{}
+	for _, r := range run.droppedRegions {
+		if seen[r] {
+			t.Fatalf("duplicate entry in droppedRegions after re-entry: %v", run.droppedRegions)
+		}
+		seen[r] = true
+	}
+	if run.regionsProbed < 0 {
+		t.Fatalf("regionsProbed went negative after re-entry: %d", run.regionsProbed)
+	}
+	if run.regionsProbed != 2 {
+		t.Errorf("regionsProbed: want 2, got %d", run.regionsProbed)
+	}
+}
+
+// TestCertSigner_SignVerdict_CarriesCoverageInDetail proves the coverage
+// fields reach the SIGNED statement, not just the in-memory Verdict struct:
+// it asserts on what CertSigner actually writes into the "execution" step's
+// Detail map (regions_total/regions_probed/dropped_regions), reading the
+// record back out of a real buildstore the way `certify verify` would — so a
+// future refactor of gate.go's Detail map literal cannot silently drop these
+// fields without a test noticing.
+func TestCertSigner_SignVerdict_CarriesCoverageInDetail(t *testing.T) {
+	dir := t.TempDir()
+	bs, err := buildstore.Open(filepath.Join(dir, "build.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { bs.Close() })
+
+	_, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := CertSigner{Key: priv, Store: bs}
+
+	v := Verdict{
+		Repo: "example/repo", Commit: "deadbeef01",
+		Status:         StatusNeedsReview,
+		DevKillRate:    0.5,
+		RegionsTotal:   3,
+		RegionsProbed:  2,
+		DroppedRegions: []string{"A"},
+		ModelsByRole: RoleAssignment{
+			RoleMutantGenerator: "model-gen",
+			RoleTestWriter:      "model-writer",
+			RoleTestCritic:      "model-critic",
+		},
+	}
+
+	id, _, err := s.SignVerdict(context.Background(), v)
+	if err != nil {
+		t.Fatalf("SignVerdict: %v", err)
+	}
+
+	rec, found, err := bs.Get(id)
+	if err != nil || !found {
+		t.Fatalf("bs.Get(%d): found=%v err=%v", id, found, err)
+	}
+	steps, ok := rec["steps"].([]any)
+	if !ok {
+		t.Fatalf("rec[\"steps\"] is not a []any: %T", rec["steps"])
+	}
+	var execDetail map[string]any
+	for _, raw := range steps {
+		step, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if step["kind"] == "execution" {
+			execDetail, _ = step["detail"].(map[string]any)
+		}
+	}
+	if execDetail == nil {
+		t.Fatal("no \"execution\" step with a detail map found in the signed record's steps")
+	}
+
+	if got, want := asFloat(t, execDetail["regions_total"]), float64(3); got != want {
+		t.Errorf("signed detail regions_total: want %v, got %v", want, got)
+	}
+	if got, want := asFloat(t, execDetail["regions_probed"]), float64(2); got != want {
+		t.Errorf("signed detail regions_probed: want %v, got %v", want, got)
+	}
+	dropped, ok := execDetail["dropped_regions"].([]any)
+	if !ok || len(dropped) != 1 || dropped[0] != "A" {
+		t.Fatalf("signed detail dropped_regions: want [\"A\"], got %v (ok=%v)", execDetail["dropped_regions"], ok)
+	}
+}
+
+// asFloat unwraps a JSON-decoded number (always float64 via encoding/json's
+// map[string]any path) for a clean comparison, failing loudly on any other
+// type rather than silently comparing zero values.
+func asFloat(t *testing.T, v any) float64 {
+	t.Helper()
+	f, ok := v.(float64)
+	if !ok {
+		t.Fatalf("value is not a float64 (JSON number): %T %v", v, v)
+	}
+	return f
 }

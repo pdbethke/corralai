@@ -38,9 +38,9 @@ type advVerdict struct {
 	MutantsTotal    int               `json:"MutantsTotal"`
 	Survivors       int               `json:"Survivors"`
 	ProvenMissed    int               `json:"ProvenMissed"`
-	RegionsTotal    int               `json:"regions_total"`
-	RegionsProbed   int               `json:"regions_probed"`
-	DroppedRegions  []string          `json:"dropped_regions"`
+	RegionsTotal    int               `json:"RegionsTotal"`
+	RegionsProbed   int               `json:"RegionsProbed"`
+	DroppedRegions  []string          `json:"DroppedRegions"`
 	VacuousFindings []advFinding      `json:"VacuousFindings"`
 	ModelsByRole    map[string]string `json:"ModelsByRole"`
 	Status          string            `json:"Status"`

@@ -144,6 +144,24 @@ func CheckDecorrelation(assign RoleAssignment) error {
 	return nil
 }
 
+// ShadowProviderFailedResult is the sentinel a shadow (challenger) seat is
+// completed with when the LLM call itself failed — a network error, a 429, a
+// typo'd --shadow-model — rather than the model responding with output that
+// merely failed to parse (see cmd/corral's runOneTask). The two cases MUST be
+// kept distinguishable: an empty result is what a real challenger call could
+// never legitimately produce (RunRole always returns non-empty raw output on
+// success), so runShadowPass could not tell "the model was never asked"
+// apart from "the model answered with garbage" — and ParseMutants("") always
+// errors, which used to route straight into the parse-failure branch and
+// record a MEASURED, DROPPED, zero-yield row for a model that never ran.
+// That is data fabrication: it attributes a bad result to a model that was
+// never asked the question, and it would have landed in the shared scorecard
+// store that feeds model routing — exactly the corruption the `measured`
+// flag exists to prevent. Recording nothing is strictly better than
+// recording a fabricated zero: an absent row is honestly "we don't know",
+// while a fabricated row is confidently wrong.
+const ShadowProviderFailedResult = "\x00shadow-provider-call-failed\x00"
+
 // shardStat is one generator seat's recorded outcome. Region complexity is the
 // DIFFICULTY CONTROL: raw yield cannot distinguish a weak model from an easy
 // region, so effectiveness is read CONDITIONED on complexity, never pooled
@@ -874,9 +892,21 @@ func (d *Driver) runShadowPass(ctx context.Context, missionID int64, run *runSta
 	budget := ShadowTimeBudget(d.RunDeadline)
 	started := d.Now()
 	if budget > 0 {
-		// Credit the pass's whole wall-clock spend back to the run's deadline
-		// clock on EVERY exit path — see invariant (2b) above.
-		defer func() { run.startedAt = run.startedAt.Add(d.Now().Sub(started)) }()
+		// Credit the pass's wall-clock spend back to the run's deadline clock
+		// on EVERY exit path — see invariant (2b) above. Capped at `budget`:
+		// crediting the raw elapsed time would let a Scorer that ignored its
+		// own context (sctx below) extend the deadline arbitrarily by simply
+		// running long, which would blow past the CALLER's own outer bound
+		// (see cmd/corral's outerBound) — failing worse than the timeout this
+		// exists to avoid (an ungraceful exit 1/no verdict, instead of the
+		// honest signed needs-review the deadline is supposed to produce).
+		defer func() {
+			elapsed := d.Now().Sub(started)
+			if elapsed > budget {
+				elapsed = budget
+			}
+			run.startedAt = run.startedAt.Add(elapsed)
+		}()
 	}
 
 	for i := range shadows {
@@ -884,6 +914,15 @@ func (d *Driver) runShadowPass(ctx context.Context, missionID int64, run *runSta
 			// Never finished (still pending/claimed, or superseded): there is
 			// nothing to measure, and — critically — this must NOT hold up the
 			// primary run, which has already scored above.
+			continue
+		}
+		if shadows[i].Result == ShadowProviderFailedResult {
+			// The challenger's LLM call itself failed (see
+			// ShadowProviderFailedResult) — there is no output to attempt to
+			// parse, and running it through ParseMutants would fabricate an
+			// observed parse failure for a model that was never asked the
+			// question. Leave the seat unmeasured, exactly like the
+			// still-claimed/skipped-by-budget cases below.
 			continue
 		}
 		idx, ok := ShadowShardIndexFromKey(shadows[i].Key)
@@ -898,15 +937,14 @@ func (d *Driver) runShadowPass(ctx context.Context, missionID int64, run *runSta
 		}
 
 		sctx := ctx
+		var cancel context.CancelFunc
 		if budget > 0 {
 			left := budget - d.Now().Sub(started)
 			if left <= 0 {
 				log.Printf("advpool: run %d: shadow budget (%s) spent — skipping the remaining challenger seats; they are recorded as UNMEASURED, not as zero yield", missionID, budget)
 				return
 			}
-			var cancel context.CancelFunc
 			sctx, cancel = context.WithTimeout(ctx, left)
-			defer cancel() // bounded by len(shadows) — one per shard, freed when the pass returns
 		}
 
 		parsed, perr := d.Validator.ParseMutants(shadows[i].Result, run.rs.Code)
@@ -918,9 +956,19 @@ func (d *Driver) runShadowPass(ctx context.Context, missionID int64, run *runSta
 			st.dropped = true
 			st.measured = true
 			run.shadowStats[idx] = st
+			if cancel != nil {
+				cancel()
+			}
 			continue
 		}
 		_, shadowSurvivors, sserr := d.Scorer.Score(sctx, run.rs.CodePath, run.rs.Code, run.rs.DevTestCode, parsed, run.rs.TestCmd)
+		// Release sctx's timeout right after the call it bounded, rather than
+		// deferring to the end of the pass — correctness must not depend on
+		// reasoning about how many shards (and therefore deferred cancels) may
+		// accumulate before this function returns.
+		if cancel != nil {
+			cancel()
+		}
 		if sserr != nil {
 			// Infrastructure, not a challenger verdict — leave it unmeasured
 			// rather than recording a zero the scorecard would read as yield.

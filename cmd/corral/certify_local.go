@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -343,7 +344,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	// discarded. Opening it is best-effort on purpose: metrics are NOT the
 	// gate, so a store that will not open must warn and let the audit run,
 	// never abort it.
-	closeBugCatch := wireLocalBugCatch(d, localBugCatchDBPath(), repo, commit, stderr)
+	closeBugCatch, _, shadowRowsRecorded := wireLocalBugCatch(d, localBugCatchDBPath(), repo, commit, stderr)
 	defer closeBugCatch()
 
 	n := *nMutants
@@ -419,13 +420,10 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	// BuildDAG only fans the challenger out alongside a SHARDED run, so an
 	// unsharded file gets no shadow seat at all: say nothing rather than
 	// announce "0 challenger seats", which is noise about work that was never
-	// going to happen.
+	// going to happen. The claim that anything was actually RECORDED cannot
+	// be made yet — see the print after driveLocalRun below.
 	if shadow != "" && len(shards) > 0 {
-		// "recorded" is load-bearing and now true: d.BugCatch is wired above
-		// (best-effort), and the driver emits a shadow pool_shard beat per seat
-		// into the --record tape. If the scorecard store failed to open, the
-		// warning printed at that point is the correction to this line.
-		fmt.Fprintf(stdout, "shadow: %d challenger seats (%s) — recorded to the scorecard, never gating\n", len(shards), shadow)
+		fmt.Fprintf(stdout, "shadow: %d challenger seat(s) (%s) — a head-to-head measurement, never gating\n", len(shards), shadow)
 	}
 
 	verdict, err := driveLocalRun(ctx, d, q, localMissionID, chatterFor, *poll, time.Sleep, stdout, rec, actorFor, swarm)
@@ -435,6 +433,22 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	}
 
 	renderAdvVerdict(stdout, *codePath, advVerdictFromPool(*verdict))
+
+	// The "recorded to the scorecard" claim can only be made in PAST TENSE
+	// once it is actually true: printing it unconditionally whenever shadow is
+	// enabled was false in three cases — the metrics store failed to open (and
+	// that warning goes to stderr BEFORE this line ran, so stdout alone read
+	// as an unqualified false claim), the run hit its deadline (the timeout
+	// path signs a verdict but never calls the metrics sink), or every shadow
+	// seat ended unmeasured (a provider failure, a parse failure, or the
+	// shadow budget skip). shadowRowsRecorded is nil (metrics store never
+	// opened) or 0 (opened, but nothing landed) in exactly those cases, so
+	// this only fires once rows are actually sitting in the store.
+	if shadow != "" && len(shards) > 0 && shadowRowsRecorded != nil {
+		if n := atomic.LoadInt64(shadowRowsRecorded); n > 0 {
+			fmt.Fprintf(stdout, "shadow: recorded %d row(s) to the scorecard\n", n)
+		}
+	}
 
 	// --out writes the signed record as a self-contained file the user can
 	// re-verify offline. A --local record is signed by the user's OWN key but
@@ -871,13 +885,23 @@ func runOneTask(ctx context.Context, q *queue.Store, missionID int64, workerID s
 			// --shadow-model would kill an audit the primary seats were about
 			// to pass.
 			//
-			// Completing with an EMPTY result (rather than leaving the task
-			// pending) is what lets the run proceed: the driver's shadow pass
-			// tolerates an unparseable/empty result by leaving the seat
-			// unmeasured, and the primary all-shards-terminal gate never waits
-			// on a shadow task at all.
+			// Completing with the ShadowProviderFailedResult sentinel (rather
+			// than leaving the task pending) is what lets the run proceed: the
+			// primary all-shards-terminal gate never waits on a shadow task at
+			// all, and the driver recognizes the sentinel and leaves the seat
+			// UNMEASURED rather than attempting to parse it.
+			//
+			// The sentinel matters, not just "some non-empty completion": an
+			// EMPTY result is indistinguishable, downstream, from a real
+			// challenger reply that failed to parse — ParseMutants("") always
+			// errors, which used to fall into the driver's ordinary
+			// parse-failure branch and record a MEASURED, DROPPED, zero-yield
+			// row for a model that was never actually asked the question. That
+			// is fabricated data landing in the shared scorecard that feeds
+			// model routing (see advpool.ShadowProviderFailedResult) — worse
+			// than recording nothing.
 			fmt.Fprintf(progress, "certify --local: challenger seat %s failed (%v) — measurement skipped, the audit continues\n", task.Key, rerr)
-			result, findings = "", nil
+			result, findings = advpool.ShadowProviderFailedResult, nil
 		} else {
 			return fmt.Errorf("running role %q: %w", task.Role, rerr)
 		}
@@ -1046,25 +1070,39 @@ type localBugCatchSink struct {
 	missionID    int64
 	repo, commit string
 	warn         io.Writer
+	// shadowRows counts shadow rows actually WRITTEN to the store (never
+	// merely computed) — see wireLocalBugCatch's third return value. Read via
+	// atomic because Record is called from the driver's tick path; today that
+	// is always the single in-process --local goroutine, but this sink has no
+	// business assuming that stays true.
+	shadowRows *int64
 }
 
 // wireLocalBugCatch opens the scorecard store at path and points the driver's
-// BugCatch feed at it, returning a closer that is always safe to call. A store
-// that will not open is a WARNING, never a failure: the audit's verdict does
-// not depend on metrics, so refusing to run over an unwritable metrics file
-// would trade the whole product for the telemetry.
-func wireLocalBugCatch(d *advpool.Driver, path, repo, commit string, warn io.Writer) func() {
+// BugCatch feed at it, returning a closer that is always safe to call, plus a
+// live counter of shadow rows actually persisted (nil if the store never
+// opened). A store that will not open is a WARNING, never a failure: the
+// audit's verdict does not depend on metrics, so refusing to run over an
+// unwritable metrics file would trade the whole product for the telemetry.
+//
+// The counter exists so a caller can print an honest, PAST-TENSE "recorded to
+// the scorecard" claim: printing it merely because shadow was ENABLED was
+// false whenever the store failed to open, the run hit its deadline (which
+// signs a verdict without ever calling BugCatch), or every shadow seat ended
+// unmeasured — see runCertifyLocal.
+func wireLocalBugCatch(d *advpool.Driver, path, repo, commit string, warn io.Writer) (closer func(), opened bool, shadowRows *int64) {
 	bcs, err := bugcatch.Open(path)
 	if err != nil {
 		if warn != nil {
 			fmt.Fprintf(warn, "corral certify --local: opening scorecard store (metrics only — the audit continues): %v\n", err)
 		}
-		return func() {}
+		return func() {}, false, nil
 	}
+	var n int64
 	d.BugCatch = localBugCatchSink{
-		store: bcs, missionID: localMissionID, repo: repo, commit: commit, warn: warn,
+		store: bcs, missionID: localMissionID, repo: repo, commit: commit, warn: warn, shadowRows: &n,
 	}
-	return func() { _ = bcs.Close() }
+	return func() { _ = bcs.Close() }, true, &n
 }
 
 func (s localBugCatchSink) Record(recordID int64, recordHead string, obs []advpool.BugCatchObservation) {
@@ -1073,7 +1111,11 @@ func (s localBugCatchSink) Record(recordID int64, recordHead string, obs []advpo
 	}
 	now := time.Now()
 	rows := make([]bugcatch.Observation, 0, len(obs))
+	shadowCount := int64(0)
 	for _, o := range obs {
+		if o.Shadow {
+			shadowCount++
+		}
 		rows = append(rows, bugcatch.Observation{
 			TS: now, RecordID: recordID, RecordHead: recordHead,
 			MissionID: s.missionID, Repo: s.repo, Commit: s.commit,
@@ -1085,7 +1127,13 @@ func (s localBugCatchSink) Record(recordID int64, recordHead string, obs []advpo
 			TestComplexity: o.TestComplexity, ParseRetries: o.ParseRetries, Dropped: o.Dropped, Shadow: o.Shadow,
 		})
 	}
-	if err := s.store.Record(context.Background(), rows); err != nil && s.warn != nil {
-		fmt.Fprintf(s.warn, "corral certify --local: recording scorecard metrics failed (the verdict stands): %v\n", err)
+	if err := s.store.Record(context.Background(), rows); err != nil {
+		if s.warn != nil {
+			fmt.Fprintf(s.warn, "corral certify --local: recording scorecard metrics failed (the verdict stands): %v\n", err)
+		}
+		return
+	}
+	if s.shadowRows != nil && shadowCount > 0 {
+		atomic.AddInt64(s.shadowRows, shadowCount)
 	}
 }

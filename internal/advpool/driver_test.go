@@ -2692,6 +2692,84 @@ func TestShadowParseFailureIsNotFatal(t *testing.T) {
 	}
 }
 
+// TestShadowProviderFailureIsRecordedUnmeasuredNotDropped proves the fix for
+// the data-fabrication bug: a challenger seat completed with
+// ShadowProviderFailedResult (cmd/corral's stand-in for "the LLM call itself
+// failed") must NOT be run through ParseMutants at all. Before this fix, the
+// driver could not tell "the model was never asked" apart from "the model
+// answered with garbage": ParseMutants("") always errors, which fell straight
+// into the parse-failure branch and recorded a MEASURED, DROPPED, zero-yield
+// row for a model that never ran — fabricated data landing in the shared
+// scorecard that feeds model routing. This asserts the seat is left
+// unmeasured: no row reaches BugCatch, and the shard's own telemetry beat
+// carries measured=false.
+func TestShadowProviderFailureIsRecordedUnmeasuredNotDropped(t *testing.T) {
+	const missionID = int64(245)
+	scorer := &fakeScorer{devKillRate: 1.0}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
+	d := newShadowedRun(t, missionID, 2, "challenger-model", scorer, validator)
+	d.Signer = &fakeSigner{}
+	sink := &fakeBugCatch{}
+	d.BugCatch = sink
+	events := &fakeEventSink{}
+	d.Events = events
+
+	// Complete every ready task, but hand the CHALLENGER seats the provider-
+	// failure sentinel instead of a normal (or garbage) result — exactly what
+	// cmd/corral's runOneTask does when the shadow model's LLM call errors.
+	ready := claimAllReady(t, d.Q)
+	shadowSeats := 0
+	for key, task := range ready {
+		result := "raw"
+		if _, isShadow := ShadowShardIndexFromKey(key); isShadow {
+			result = ShadowProviderFailedResult
+			shadowSeats++
+		}
+		mustComplete(t, d.Q, task.ID, result)
+	}
+	if shadowSeats == 0 {
+		t.Fatal("fixture is wrong: no shadow seats were claimed")
+	}
+
+	v, err := d.Tick(context.Background(), missionID)
+	if err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	if v == nil || v.Status != StatusCertified {
+		t.Fatalf("a provider-failed challenger must not affect the primary verdict, got %+v", v)
+	}
+
+	// No BugCatch row for the failed seats — recording nothing is strictly
+	// better than recording a fabricated zero-yield drop.
+	for _, o := range sink.obs {
+		if o.Shadow {
+			t.Errorf("a provider-failed shadow seat must never be recorded (measured or dropped): %+v", o)
+		}
+	}
+	// The telemetry beat must say so honestly: measured=false, not a silent
+	// absence and not a fabricated dropped=true/mutants_planted=0 pair either.
+	shadowBeats := 0
+	for _, e := range events.events {
+		if e.kind != "pool_shard" {
+			continue
+		}
+		isShadow, _ := e.detail["shadow"].(bool)
+		if !isShadow {
+			continue
+		}
+		shadowBeats++
+		if measured, _ := e.detail["measured"].(bool); measured {
+			t.Errorf("provider-failed shadow beat reports measured=true: %+v", e.detail)
+		}
+		if dropped, _ := e.detail["dropped"].(bool); dropped {
+			t.Errorf("provider-failed shadow beat reports dropped=true — that IS the fabrication this test guards against: %+v", e.detail)
+		}
+	}
+	if shadowBeats == 0 {
+		t.Fatal("no shadow telemetry beats were emitted — this test would pass vacuously")
+	}
+}
+
 // shadowScoreFailScorer succeeds on the FIRST call and fails on every one
 // after. Paired with a perfect dev suite (kill-rate 1.0 ⇒ no survivors ⇒ no
 // test-writer and no pool score), the calls after the first are exactly the
@@ -2787,26 +2865,97 @@ func TestIncompleteShadowSeatDoesNotBlockDevAdequacy(t *testing.T) {
 // verdict, while the shadow pass runs a SECOND full Scorer.Score per shard —
 // so without the guard, enabling shadow could turn a would-be-certified run
 // into needs-review purely by being slower. Here the fake clock advances past
-// the whole deadline DURING shadow scoring; the run must still certify.
+// the whole deadline DURING shadow scoring, in Tick #1; the run must still
+// certify.
+//
+// This is a two-tick test on purpose. The original version of this test used
+// a PERFECT dev suite (kill-rate 1.0, no survivors), which makes tickDevAdequacy
+// skip the test-writer and go straight to poolScored=true — so the ENTIRE run
+// (dev-adequacy, shadow pass, aggregate) converged inside the single Tick call
+// where the clock was advanced, and the deadline guard at the top of Tick was
+// never evaluated a second time with the advanced clock. That made the test
+// vacuous with respect to the credit-back: removing the credit-back entirely
+// left the full suite green (verified by hand before this fix). Using a
+// real (non-1.0) kill-rate with an actual survivor forces a second Tick (the
+// test-writer must run and be scored before the run can converge), which is
+// the only way to actually exercise the deadline check AFTER the shadow pass's
+// clock advance has been credited back.
+//
+// It is also seeded the same way TestRunDeadlineProducesNeedsReviewVerdict is:
+// d.Now is set BEFORE StartRun. The prior version set it AFTER newShadowedRun
+// (which calls StartRun internally), so run.startedAt was seeded from the
+// REAL time.Now() while every later check read the fake clock frozen at
+// time.Unix(0,0) — an offset of decades that made the deadline check
+// unreachable regardless of the credit-back.
 func TestShadowBudgetSkipsRatherThanTimingOutTheRun(t *testing.T) {
 	const missionID = int64(243)
 	now := time.Unix(0, 0)
-	scorer := &clockAdvancingScorer{devKillRate: 1.0, now: &now, perShadowCall: 20 * time.Minute}
+	rs, sigs := shardedRunSpec(2)
+	rs.ShadowModel = "challenger-model"
+	// RunDeadline is 10 minutes below, so ShadowTimeBudget is 2.5 minutes
+	// (deadline/4). perShadowCall (11 minutes) is deliberately chosen to
+	// exceed RunDeadline on its own: only the FIRST shadow call actually
+	// proceeds (the budget guard's pre-call check always lets the first
+	// through; it skips the second once elapsed already exceeds the 2.5-minute
+	// budget), so total shadow spend is 11 minutes — more than the whole
+	// deadline, but less than deadline+budget (12.5 minutes). That range is
+	// exactly what proves the credit-back without the MINOR-3 cap silently
+	// hiding a regression: capped at budget, 2.5 of the 11 minutes are
+	// credited back (8.5 min charged against the deadline, still < 10 min ⇒
+	// certifies); with NO credit-back at all, the full 11 minutes would be
+	// charged (> 10 min ⇒ times out) — verified by hand (see the fix commit).
+	scorer := &clockAdvancingScorer{
+		devKillRate:  0.5,
+		devTest:      rs.DevTestCode,
+		devSurvivors: []adequacy.Mutant{{ID: "s1", Code: "c1"}},
+		now:          &now, perShadowCall: 11 * time.Minute,
+	}
 	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
-	d := newShadowedRun(t, missionID, 2, "challenger-model", scorer, validator)
-	d.Now = func() time.Time { return now }
+	q := newTestQueue(t)
+	d, err := NewDriver(q, scorer, validator, decorrelatedAssign(), 0.5)
+	if err != nil {
+		t.Fatalf("NewDriver: %v", err)
+	}
+	d.Now = func() time.Time { return now } // seeded BEFORE StartRun.
 	d.RunDeadline = 10 * time.Minute
 	d.Signer = &fakeSigner{}
 	sink := &fakeBugCatch{}
 	d.BugCatch = sink
 
+	if err := d.StartRun(missionID, rs, sigs); err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	if _, err := q.PromoteReady(missionID); err != nil {
+		t.Fatalf("PromoteReady: %v", err)
+	}
+
+	// Tick #1: dev-adequacy scores a REAL survivor, so the run cannot converge
+	// this tick (the test-writer still has to run) — the shadow pass runs
+	// inside this same call and burns 40 fake minutes (2 shards × 20m), well
+	// past the 10-minute RunDeadline, all credited back to run.startedAt.
+	completeAllReadyTagged(t, d)
+	if v, err := d.Tick(context.Background(), missionID); err != nil {
+		t.Fatalf("tick 1: %v", err)
+	} else if v != nil {
+		t.Fatalf("tick 1 converged early (want the test-writer still pending so tick 2 exercises the deadline check): %+v", v)
+	}
+	if !d.runs[missionID].devScored {
+		t.Fatal("dev-adequacy did not score on tick 1 — fixture is wrong")
+	}
+	if scorer.shadowCalls == 0 {
+		t.Fatal("the shadow pass never ran — this test would pass vacuously")
+	}
+
+	// Tick #2 (and on, via driveTaggedToVerdict): the deadline check now runs
+	// against the CREDITED clock. Without the credit-back (or with it applied
+	// before StartRun seeded the real clock, as in the pre-fix version), this
+	// observes elapsed time already past RunDeadline and times out instead of
+	// certifying.
+	completeAllReadyTagged(t, d)
 	v := driveTaggedToVerdict(t, d, missionID)
 
 	if v.Status != StatusCertified {
 		t.Fatalf("shadow work timed the run out: Status = %q, want %q — shadow must never change Status", v.Status, StatusCertified)
-	}
-	if scorer.shadowCalls == 0 {
-		t.Fatal("the shadow pass never ran — this test would pass vacuously")
 	}
 	// The guard SKIPS rather than pretending: an unmeasured seat is absent
 	// from the scorecard, never recorded as a challenger with zero yield.
@@ -2817,21 +2966,33 @@ func TestShadowBudgetSkipsRatherThanTimingOutTheRun(t *testing.T) {
 	}
 }
 
-// clockAdvancingScorer burns fake wall-clock on every call AFTER the first
-// (i.e. on the shadow pass's calls, given a perfect dev suite), so a test can
-// prove shadow spend does not consume the run's deadline.
+// clockAdvancingScorer burns fake wall-clock on every call scored against
+// devTest AFTER the first (i.e. the shadow pass's calls) — never on a call
+// scored against a DIFFERENT test string, which is how tickPoolAdequacy's
+// score of the test-writer's authored test is distinguished from a shadow
+// call. Without that distinction, a run with real survivors (needed so the
+// run does not converge inside a single Tick — see the test above) would
+// have its pool-adequacy score call miscounted as a shadow call and burn
+// UNCREDITED clock time, defeating the very invariant the test proves.
 type clockAdvancingScorer struct {
 	devKillRate   float64
+	devTest       string
+	devSurvivors  []adequacy.Mutant
 	now           *time.Time
 	perShadowCall time.Duration
 	calls         int
 	shadowCalls   int
 }
 
-func (s *clockAdvancingScorer) Score(_ context.Context, _, _, _ string, _ []adequacy.Mutant, _ string) (float64, []adequacy.Mutant, error) {
+func (s *clockAdvancingScorer) Score(_ context.Context, _, _, test string, _ []adequacy.Mutant, _ string) (float64, []adequacy.Mutant, error) {
 	s.calls++
+	if test != s.devTest {
+		// Scored against the test-writer's authored test, not the dev suite —
+		// this is tickPoolAdequacy, never a shadow call.
+		return 1.0, nil, nil
+	}
 	if s.calls == 1 {
-		return s.devKillRate, nil, nil
+		return s.devKillRate, s.devSurvivors, nil
 	}
 	s.shadowCalls++
 	*s.now = s.now.Add(s.perShadowCall)

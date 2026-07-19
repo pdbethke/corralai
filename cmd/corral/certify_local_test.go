@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -690,7 +691,11 @@ func (c failingChatter) Chat(_ []agentworker.Message, _ []any) (agentworker.Mess
 
 // TestShadowSeatFailureDoesNotFailTheRun proves the tolerance that makes the
 // challenger safe to enable BY DEFAULT: a shadow seat whose LLM call fails is
-// logged and completed empty, while a PRIMARY seat's failure still aborts.
+// logged and completed with the advpool.ShadowProviderFailedResult sentinel
+// (never a plain empty string — see that constant's doc: an empty result is
+// indistinguishable from a real reply that failed to parse, and the driver
+// used to fabricate a measured, dropped, zero-yield row for a model that was
+// never asked the question), while a PRIMARY seat's failure still aborts.
 //
 // The bug this pins: runOneTask was role-blind, so any error here reached
 // runReadyTasks' fail(), which cancels every in-flight primary worker, and
@@ -737,9 +742,11 @@ func TestShadowSeatFailureDoesNotFailTheRun(t *testing.T) {
 		t.Errorf("the skipped measurement must be reported, got progress:\n%s", progress.String())
 	}
 
-	// Both tasks must be terminal — the shadow one completed EMPTY, which the
-	// driver's shadow pass tolerates, rather than left pending (which would
-	// hold a drain open forever).
+	// Both tasks must be terminal — the shadow one completed with the
+	// provider-failure sentinel, which the driver's shadow pass recognizes and
+	// leaves unmeasured, rather than left pending (which would hold a drain
+	// open forever) or completed empty (which the driver cannot distinguish
+	// from real garbage output — see advpool.ShadowProviderFailedResult).
 	tasks, err := q.List(mission)
 	if err != nil {
 		t.Fatal(err)
@@ -748,8 +755,8 @@ func TestShadowSeatFailureDoesNotFailTheRun(t *testing.T) {
 		if task.Status != queue.StatusDone {
 			t.Errorf("task %q status = %q, want done", task.Key, task.Status)
 		}
-		if task.Role == advpool.RoleMutantGeneratorShadow && task.Result != "" {
-			t.Errorf("a failed challenger seat must complete with an EMPTY result, got %q", task.Result)
+		if task.Role == advpool.RoleMutantGeneratorShadow && task.Result != advpool.ShadowProviderFailedResult {
+			t.Errorf("a failed challenger seat must complete with the ShadowProviderFailedResult sentinel, got %q", task.Result)
 		}
 	}
 }
@@ -805,7 +812,13 @@ func TestWireLocalBugCatchPersistsShadowRows(t *testing.T) {
 	}
 
 	var warn bytes.Buffer
-	closer := wireLocalBugCatch(d, dbPath, "repoA", "commitB", &warn)
+	closer, opened, shadowRows := wireLocalBugCatch(d, dbPath, "repoA", "commitB", &warn)
+	if !opened {
+		t.Fatal("wireLocalBugCatch reported the store as not opened, want opened")
+	}
+	if shadowRows == nil {
+		t.Fatal("wireLocalBugCatch returned a nil shadow-row counter for a store that opened")
+	}
 	if d.BugCatch == nil {
 		t.Fatal("wireLocalBugCatch did not wire the driver's BugCatch feed — shadow rows would be computed and discarded")
 	}
@@ -820,6 +833,9 @@ func TestWireLocalBugCatchPersistsShadowRows(t *testing.T) {
 	closer()
 	if warn.Len() != 0 {
 		t.Fatalf("unexpected warning from the metrics path: %s", warn.String())
+	}
+	if got := atomic.LoadInt64(shadowRows); got != 1 {
+		t.Fatalf("shadowRows counter = %d, want 1 — the CLI's \"recorded to the scorecard\" claim relies on this being accurate", got)
 	}
 
 	store, err := bugcatch.Open(dbPath)
@@ -876,9 +892,15 @@ func TestWireLocalBugCatchDegradesOnOpenFailure(t *testing.T) {
 	// A path under a non-existent directory: DuckDB cannot create the file.
 	bad := filepath.Join(t.TempDir(), "no-such-dir", "bugcatch.duckdb")
 	var warn bytes.Buffer
-	closer := wireLocalBugCatch(d, bad, "r", "c", &warn)
+	closer, opened, shadowRows := wireLocalBugCatch(d, bad, "r", "c", &warn)
 	defer closer()
 
+	if opened {
+		t.Fatal("wireLocalBugCatch reported opened=true for a store that could not open")
+	}
+	if shadowRows != nil {
+		t.Fatal("wireLocalBugCatch returned a non-nil shadow-row counter for a store that never opened — the CLI would print a false \"recorded\" claim")
+	}
 	if d.BugCatch != nil {
 		t.Fatal("a failed metrics store must leave BugCatch unwired, not half-wired")
 	}

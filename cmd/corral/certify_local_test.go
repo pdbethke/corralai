@@ -926,6 +926,46 @@ func TestResolveShadowModelDisableIsCaseInsensitive(t *testing.T) {
 	}
 }
 
+// TestResolveRunDeadlineShadowAllowance pins the fix for the deadline gap:
+// the challenger's mutant-GENERATION LLM calls run entirely outside the
+// driver (in runReadyTasks), so unlike shadow SCORING (credited back by
+// runShadowPass via advpool.ShadowTimeBudget) nothing widens the driver's own
+// RunDeadline for generation time. With shadow on (the default), a run's
+// wall-clock can legitimately exceed --timeout by roughly the extra
+// generation work before ever reaching the driver's tick loop — and if
+// RunDeadline itself doesn't carry a matching allowance, that uncredited time
+// alone can force Tick's timeout path to StatusNeedsReview: shadow work
+// changing the verdict's Status, the exact breach the shadow budget exists to
+// prevent.
+func TestResolveRunDeadlineShadowAllowance(t *testing.T) {
+	timeout := 10 * time.Minute
+
+	withoutShadow := resolveRunDeadline(timeout, "")
+	if withoutShadow != timeout {
+		t.Fatalf("resolveRunDeadline(%v, \"\") = %v, want unchanged %v (no shadow, no allowance)", timeout, withoutShadow, timeout)
+	}
+
+	withShadow := resolveRunDeadline(timeout, "claude-haiku-4-5")
+	wantAllowance := advpool.ShadowTimeBudget(timeout)
+	if wantAllowance <= 0 {
+		t.Fatalf("advpool.ShadowTimeBudget(%v) = %v, want > 0 for this test to be meaningful", timeout, wantAllowance)
+	}
+	if want := timeout + wantAllowance; withShadow != want {
+		t.Fatalf("resolveRunDeadline(%v, \"claude-haiku-4-5\") = %v, want %v (timeout + ShadowTimeBudget, mirroring outerBound's allowance)", timeout, withShadow, want)
+	}
+	if withShadow <= withoutShadow {
+		t.Fatalf("enabling shadow must strictly RAISE the deadline allowance: got %v with shadow vs %v without", withShadow, withoutShadow)
+	}
+
+	// "off" must resolve exactly like no shadow model at all — resolveShadowModel
+	// already turns "off" into "", so resolveRunDeadline never needs to special-
+	// case it, but pin the composition explicitly since these two are always
+	// called together in runCertifyLocal.
+	if got := resolveRunDeadline(timeout, resolveShadowModel("off")); got != timeout {
+		t.Fatalf("resolveRunDeadline(timeout, resolveShadowModel(\"off\")) = %v, want unchanged %v", got, timeout)
+	}
+}
+
 // TestLocalBugCatchDBPathHonoursEnv mirrors the build-ledger path resolution:
 // an operator who redirects the ledger must be able to redirect the metrics
 // store the same way (and tests must never write to the real one).

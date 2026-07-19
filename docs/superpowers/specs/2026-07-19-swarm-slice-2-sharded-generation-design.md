@@ -168,15 +168,39 @@ extractors. The nocgo path needs no change: it returns no signatures at all, so
 such a run is already a single unsharded shard per §1 and never reaches the
 packer.
 
-**Model effectiveness is reported per `(model, role, complexity band)`**, not
-pooled. Bands are computed from the corpus tertiles rather than hardcoded
+**Model effectiveness is reported per `(model, role, complexity band)`, on the
+SHADOW side only** — not pooled, and, as of this branch, not on the primary
+side. Bands are computed from the corpus tertiles rather than hardcoded
 thresholds, so they stay meaningful as the corpus grows and across languages
 whose complexity distributions differ.
 
-This is the concrete substrate for the per-task complexity router: "route this
-symbol to the model with the best proven potency *at this symbol's complexity
-band*" — the execution-grounded version of the routing the parent spec contrasts
-against Fugu's learned head.
+**Why the asymmetry, stated honestly:** `mutants_survived` is recorded
+differently on the two sides, and correctly so. The shadow challenger scores
+each region's mutants in its own `Scorer.Score` call (§5), so its survivor
+count IS genuinely per-region — a shadow bugcatch row's `region`/
+`region_complexity` accurately describes what was scored. The primary side
+does not: `tickDevAdequacy` scores the MERGED mutant set across all
+all-shards-terminal shards in ONE `Scorer.Score` call (§2, §3), because the
+dev suite is graded once against the whole exam, not once per shard — so the
+run's single survivor/kill-rate figure is parked on one bugcatch row (today,
+shard 0's) rather than truly attributed per shard. Recording that figure
+against each shard's `region`/`region_complexity` would be fabricating
+per-region data the run never actually measured.
+
+**Consequence:** whole-file aggregate comparison across models (the shadow
+head-to-head, §5) is sound today. **Per-region and per-complexity-band potency
+for the PRIMARY generator cannot be computed from what this branch records** —
+only the shadow side supports that cut. This is not abandoned, just not yet
+supported: closing it would need the primary side to score per-shard
+survivors the way the shadow side already does (e.g. scoring each shard's
+merged-in mutants separately before folding them into the run's aggregate
+kill-rate) — deferred, not scheduled, as of this branch.
+
+Once the primary side supports it, this becomes the concrete substrate for the
+per-task complexity router: "route this symbol to the model with the best
+proven potency *at this symbol's complexity band*" — the execution-grounded
+version of the routing the parent spec contrasts against Fugu's learned head.
+Today only the shadow challenger's numbers can honestly be read that way.
 
 ### 4.2 Test complexity — and an honest limit
 
@@ -235,6 +259,19 @@ Scoring the shadow mutants (rather than only counting them) is what makes the
 comparison worth having: it measures not just who plants more *usable* mutants
 but who plants mutants that actually **survive a good suite** — the real measure
 of an adversary. Execution-proven potency, head-to-head, same region.
+
+**Narrowing this claim to what is actually recorded (see §4.1):** the shadow
+side genuinely scores each region separately (its own `Scorer.Score` call per
+shard), so shadow-vs-shadow-across-runs and whole-file shadow-vs-primary
+aggregate comparisons are sound. But the primary side scores the run's
+MERGED mutant set in one call, so it has no per-region survivor count to put
+on the other side of a *per-region* head-to-head — today's comparison is
+"the challenger's region-scoped potency" against "the primary's whole-file
+potency," not two truly region-scoped numbers. Closing that requires scoring
+the primary side per-shard too (see §4.1's note); until then, read
+"same-region head-to-head" as a same-region, same-input comparison of what
+each model *plants*, with genuinely region-scoped *survival* numbers only on
+the shadow side.
 
 ### Structural exclusion (the load-bearing invariant)
 

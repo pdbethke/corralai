@@ -87,7 +87,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	testPath := fs.String("test", "", "path of the dev's test (default: the sibling test of --code)")
 	langFlag := fs.String("lang", "", "source language (default: inferred from --code extension)")
 	goal := fs.String("goal", "", "the correctness/security goal the code must satisfy (required)")
-	nMutants := fs.Int("n-mutants", 0, "how many seeded-violation mutants (default 5)")
+	nMutants := fs.Int("n-mutants", 0, "PER-SHARD seeded-violation mutant budget (default 5) — this is NOT the run's total: total mutants scored scale with --max-shards (default "+fmt.Sprint(advpool.DefaultMaxShards)+") shards, and DOUBLE again if the shadow challenger is on (default). E.g. the default 5 with the default 8 shards means up to ~40 primary + ~40 shadow = ~80 full dev-suite jail executions, not 5 — `--n-mutants 20` means roughly ~320")
 	writerModel := fs.String("writer-model", "", "model for the test-writer role (default "+defaultLocalWriterModel+")")
 	criticModel := fs.String("critic-model", "", "model for the test-critic role (default "+defaultLocalCriticModel+")")
 	mutantModel := fs.String("mutant-model", "", "model for the mutant-generator role (default "+defaultLocalMutantModel+")")
@@ -317,7 +317,22 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	actorFor := func(role string) string { return recordActor(role, assign[role]) }
 	// The wall-clock backstop: a run that hasn't converged by --timeout is signed
 	// as a needs-review verdict and returned, so the CLI always gets an answer.
-	d.RunDeadline = *timeout
+	//
+	// When a shadow model is configured, RunDeadline itself must carry the SAME
+	// allowance the outer context bound gets below (see outerBound) — NOT just
+	// the scoring-side credit runShadowPass already gives back (see
+	// advpool.ShadowTimeBudget). The challenger's mutant-GENERATION LLM calls
+	// happen in runReadyTasks, entirely outside the driver, so nothing credits
+	// that wall-clock to the deadline the way runShadowPass credits shadow
+	// SCORING. With the swarm auto-sized to localSwarmAutoCap and shadow
+	// roughly doubling generator calls, that uncredited generation time can by
+	// itself push a run's elapsed wall-clock past RunDeadline before it
+	// converges — and Tick's timeout path (see timeoutVerdict) then forces
+	// StatusNeedsReview. That is shadow work changing the verdict's Status,
+	// the exact breach the shadow budget exists to prevent, just via the
+	// generation channel instead of the scoring one. Widening RunDeadline
+	// itself closes it: see resolveRunDeadline.
+	d.RunDeadline = resolveRunDeadline(*timeout, shadow)
 
 	// Resolve repo/commit for the signed subject (best-effort git, else "local").
 	repo := strings.TrimSpace(*repoFlag)
@@ -377,17 +392,11 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "auditing %s against its own tests — mutant-generator=%s test-writer=%s test-critic=%s\n",
 		*codePath, mutant, writer, critic)
 
-	// The outer context bound is slightly beyond the driver's own RunDeadline so
+	// The outer context bound is slightly beyond the driver's own RunDeadline
+	// (which already carries the shadow allowance — see resolveRunDeadline) so
 	// the driver gets the chance to emit its signed timeout verdict before ctx
-	// cancels the loop. When a challenger is configured it must ALSO allow the
-	// driver's shadow budget: shadow spend is deliberately excluded from
-	// RunDeadline (so measurement can never time a run out — see
-	// advpool.runShadowPass), which means real wall-clock can legitimately run
-	// to deadline + that budget.
-	outerBound := *timeout + 30*time.Second
-	if shadow != "" {
-		outerBound += advpool.ShadowTimeBudget(*timeout)
-	}
+	// cancels the loop.
+	outerBound := resolveRunDeadline(*timeout, shadow) + 30*time.Second
 	ctx, cancel := context.WithTimeout(context.Background(), outerBound)
 	defer cancel()
 
@@ -520,6 +529,33 @@ func resolveMaxShards(flag int) int {
 		return flag
 	}
 	return advpool.DefaultMaxShards
+}
+
+// resolveRunDeadline sizes the driver's own wall-clock backstop
+// (advpool.Driver.RunDeadline). When a shadow model is configured it widens
+// the deadline by advpool.ShadowTimeBudget(timeout) — the SAME allowance the
+// outer context bound (outerBound, below) gives itself — so that shadow work
+// can never change the run's Status by pushing it past RunDeadline into a
+// timeout needs-review verdict (see timeoutVerdict).
+//
+// This closes a gap the existing scoring-side credit does not: runShadowPass
+// already credits back the wall-clock it spends SCORING shadow mutants (see
+// advpool.ShadowTimeBudget's doc comment), advancing run.startedAt so scoring
+// alone cannot exhaust the deadline. But the challenger's mutant-GENERATION
+// LLM calls happen in runReadyTasks, entirely outside the driver — nothing
+// credits that time back the way runShadowPass does for scoring. With shadow
+// on (the default) roughly doubling generator calls, that uncredited
+// generation wall-clock can by itself carry a run past RunDeadline before it
+// converges. Widening the deadline itself, rather than trying to credit
+// generation time after the fact from inside cmd/corral (which has no
+// equivalent hook to the driver's tick loop), gives generation the same
+// headroom scoring already has.
+func resolveRunDeadline(timeout time.Duration, shadow string) time.Duration {
+	d := timeout
+	if strings.TrimSpace(shadow) != "" {
+		d += advpool.ShadowTimeBudget(timeout)
+	}
+	return d
 }
 
 // recEvent is one beat of a replay tape — the exact {ts,kind,actor,subject,

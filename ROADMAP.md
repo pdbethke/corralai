@@ -160,6 +160,32 @@ Go binary.**
   what this slice does **not** yet do: no pentester role, no concurrent runs (one active
   run at a time), no CLI trigger, and the certification threshold is currently a fixed
   constant, not configurable per run.
+- **The swarm — bounded concurrent workers (slice 1), then sharded generation +
+  a shadow challenger (slice 2).** `corral certify --local` now runs its independent
+  role tasks through a **bounded concurrent worker pool** instead of one at a
+  time: `--swarm N` (0 = auto-size to the host's cores, capped) bounds the
+  fan-out and the run announces its size out loud (`swarm: N concurrent
+  workers`). Slice 2 gave the pool something to actually fan out onto: the
+  mutant-generator is **sharded** — the file's functions are bin-packed
+  (complexity-balanced, deterministic) into up to `--max-shards` (default 8)
+  generator seats, so every function is probed instead of whatever one
+  generator happened to pick, with per-shard parse-failure retry/drop and
+  the shortfall (`RegionsProbed`/`DroppedRegions`) carried into the **signed**
+  verdict. A **shadow challenger** (`--shadow-model`, on by default, cheap by
+  default — the critic's model, no extra credential) attacks every shard a
+  second time for a region-controlled, execution-proven head-to-head between
+  generator models, recorded to the bug-catching scorecard — **it never feeds
+  dev-adequacy or the kill-rate**, and roughly doubles generator calls and
+  jail-scoring time (`--shadow-model off` disables it). Honest about scope:
+  both slices are wired **only for `corral certify --local`** today — the
+  hosted brain's `start_adversarial_run` path does not set `--max-shards`/
+  `--shadow-model` and still runs the single-seat, unsharded generator. The
+  per-region/per-complexity-band effectiveness comparison the design spec
+  aims at is sound on the shadow side (which scores each region separately)
+  but **not yet computable on the primary side**, which scores the run's
+  merged mutant set in one pass — closing that gap, the resource-aware
+  optimizer, and the tests×mutants matrix are design, not built (see
+  `docs/superpowers/specs/2026-07-19-swarm-slice-2-sharded-generation-design.md`).
 
 ## Now — make it operable and unbreakable
 - **The front door.** The Mission Composer (above) is the first cut. Still ahead: an

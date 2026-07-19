@@ -489,6 +489,39 @@ to cross a vendor boundary instead. It supports Go, Python (pytest), Ruby
 (minitest/RSpec), JavaScript (node:test), and TypeScript (tsc + node:test) —
 language inferred from `--code`'s extension.
 
+**The mutant-generator is sharded, not one seat.** The file's top-level
+functions are bin-packed into up to `--max-shards` (default 8) generator
+seats, each attacking a different group of functions against the SAME dev
+suite, so every function gets probed instead of whatever one generator
+happened to pick. `--n-mutants` (default 5) is a **PER-SHARD** budget, not a
+run total — the default 8 shards means up to ~40 mutants scored, not 5;
+`--max-shards` is the width dial.
+
+**A second, cheap "shadow" model attacks every shard again, by default, purely
+for measurement.** `--shadow-model` (default `claude-haiku-4-5`, the critic's
+model — no extra credential needed) fans a challenger seat across every
+region for a region-controlled, execution-proven head-to-head between
+generator models — same file, same goal, same commit. **It never affects the
+verdict**: shadow mutants are scored in the jail and recorded to the
+bug-catching scorecard (`corral scorecard`), but only the primary generator's
+mutants ever feed dev-adequacy or the kill-rate. **This roughly doubles
+generator API calls and jail-scoring wall-clock** — pass `--shadow-model off`
+to disable it and run with only the primary generator.
+
+Other flags worth knowing: `--swarm N` bounds how many audit tasks run
+concurrently (0, the default, auto-sizes to this host's cores, capped);
+`--repo-dir <path>` audits `--code` in the context of a whole cloned
+repo/package (the tree is seeded into the jail and the project's own test
+command, given after `--`, grades it — for real multi-file projects with
+package imports); `--record <file>.json` writes a replayable tape of the run
+(the pool's reasoning beats, task lifecycle, and findings, in the same
+`{events:[…]}` shape the corralai.dev cockpit replays).
+
+Today, sharding and the shadow challenger are wired **only for `corral
+certify --local`** — the hosted brain's `start_adversarial_run` path does not
+yet set `--max-shards`/`--shadow-model` and runs the pre-sharding single-seat
+generator.
+
 **The audit always runs sandboxed** (`bwrap` on Linux by default; `--jail
 container` for a docker/podman fallback; `sandbox-exec` on macOS) — there's no
 unsandboxed option. On Ubuntu 24.04+, apparmor disables unprivileged user

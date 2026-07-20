@@ -403,6 +403,104 @@ func TestTick_CriticFindingIsAdvisory_CertifiesOnKillRate(t *testing.T) {
 	}
 }
 
+// criticFindingCall-free sink: captures every CriticFindingObservation the
+// driver hands it, mirroring the real corral-svc adapter's shape without any
+// storage behind it.
+type fakeCriticSink struct {
+	obs []CriticFindingObservation
+}
+
+func (f *fakeCriticSink) Record(_ int64, _ string, o []CriticFindingObservation) {
+	f.obs = append(f.obs, o...)
+}
+
+// TestCriticAutoRefute drives a run with two critic findings against the SAME
+// killing test: a whole-test "this test can never fail" claim, and a
+// dead-check "one assertion inside is unreachable" claim. The dev's own test
+// suite (TestAlwaysPasses) is scored — via the fakeScorer's post-pool-score
+// branch — as killing at least one mutant when run alone, so the whole-test
+// claim is refuted by execution. The dead-check claim is scope-excluded from
+// auto-adjudication by construction (AutoAdjudication never auto-touches it)
+// and must stay unadjudicated even though the SAME test just proved it can
+// fail.
+func TestCriticAutoRefute(t *testing.T) {
+	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}}
+	// poolSurvivors=nil: both the pool-adequacy call (2nd success) AND the
+	// auto-refute single-test call (3rd success) come back with zero
+	// survivors, i.e. the killing test kills every mutant it's run against.
+	scorer := &fakeScorer{devKillRate: 0.9, devSurvivors: survivors, poolSurvivors: nil}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0]}}
+	d, _ := newTestDriver(t, 20, scorer, validator, 0.5)
+	d.Signer = &fakeSigner{}
+	sink := &fakeCriticSink{}
+	d.CriticFindings = sink
+
+	ctx := context.Background()
+	ready := claimAllReady(t, d.Q)
+	tc, mg := ready[RoleTestCritic], ready[RoleMutantGenerator]
+	if tc == nil || mg == nil {
+		t.Fatalf("expected test-critic and mutant-generator both ready, got: %v", keysOf(ready))
+	}
+	if _, err := d.Q.AddFinding(queue.Finding{
+		MissionID: 20, TaskID: tc.ID, Reporter: "test-critic", Type: "bug",
+		Severity: "high", Target: "TestAlwaysPasses",
+		Evidence: "this test asserts nothing — it can never fail",
+		Scope:    ScopeWholeTest, TestFile: "target_test.go", TestSelector: "TestAlwaysPasses",
+	}); err != nil {
+		t.Fatalf("AddFinding (whole-test): %v", err)
+	}
+	if _, err := d.Q.AddFinding(queue.Finding{
+		MissionID: 20, TaskID: tc.ID, Reporter: "test-critic", Type: "bug",
+		Severity: "low", Target: "TestAlwaysPasses",
+		Evidence: "one internal check inside this test is unreachable",
+		Scope:    ScopeDeadCheck, TestFile: "target_test.go", TestSelector: "TestAlwaysPasses",
+	}); err != nil {
+		t.Fatalf("AddFinding (dead-check): %v", err)
+	}
+	mustComplete(t, d.Q, tc.ID, "flagged TestAlwaysPasses on two scopes")
+	mustComplete(t, d.Q, mg.ID, "raw mutants")
+	if _, err := d.Tick(ctx, 20); err != nil {
+		t.Fatalf("Tick (dev-adequacy): %v", err)
+	}
+	tw := claimTaskByID(t, d.Q, d.runs[20].testWriterTaskID)
+	mustComplete(t, d.Q, tw.ID, "pool test source")
+
+	v, err := d.Tick(ctx, 20)
+	if err != nil {
+		t.Fatalf("Tick (pool-adequacy + aggregate): %v", err)
+	}
+	if v == nil {
+		t.Fatal("expected a verdict")
+	}
+	if len(sink.obs) != 2 {
+		t.Fatalf("CriticFindings.Record obs = %d, want 2, got %+v", len(sink.obs), sink.obs)
+	}
+	var wholeTest, deadCheck *CriticFindingObservation
+	for i := range sink.obs {
+		switch sink.obs[i].Scope {
+		case ScopeWholeTest:
+			wholeTest = &sink.obs[i]
+		case ScopeDeadCheck:
+			deadCheck = &sink.obs[i]
+		}
+	}
+	if wholeTest == nil {
+		t.Fatal("no whole-test observation emitted")
+	}
+	if wholeTest.Adjudication != AdjRefuted {
+		t.Fatalf("whole-test Adjudication = %q, want %q (execution proved the test can fail)", wholeTest.Adjudication, AdjRefuted)
+	}
+	if wholeTest.Source != "auto" {
+		t.Fatalf("whole-test Source = %q, want %q", wholeTest.Source, "auto")
+	}
+	if deadCheck == nil {
+		t.Fatal("no dead-check observation emitted")
+	}
+	if deadCheck.Adjudication != AdjUnadjudicated {
+		t.Fatalf("dead-check Adjudication = %q, want %q (dead-check is never auto-touched)", deadCheck.Adjudication, AdjUnadjudicated)
+	}
+}
+
 // (e) DevKillRate below threshold -> needs-review, even with no findings.
 func TestTick_Aggregate_BelowThreshold_NeedsReview(t *testing.T) {
 	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}, {ID: "m2", Code: "c2"}}

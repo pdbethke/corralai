@@ -93,6 +93,29 @@ type BugCatchSink interface {
 	Record(recordID int64, recordHead string, obs []BugCatchObservation)
 }
 
+// CriticFindingObservation is one test-critic finding's execution-checked
+// outcome from a single converged run: whether the flagged test, run ALONE
+// against the run's own mutants, actually killed anything. Populated ONLY by
+// the driver's conservative auto-refute (never a worker's self-report) —
+// soundness #1 extends to critic findings too ("a judge may not certify
+// herself" also means a claim about a test is not itself proof).
+type CriticFindingObservation struct {
+	QueueFindingID                     int64
+	Model                              string
+	TargetTest, TestFile, TestSelector string
+	Scope                              string // normalized (NormalizeScope)
+	Evidence, Severity                 string
+	Adjudication                       string // auto verdict: refuted|unadjudicated
+	Source                             string // "auto"
+}
+
+// CriticFindingSink is the optional per-run critic-finding feed (nil ⇒
+// no-op), mirroring BugCatchSink: fed on every terminal verdict once
+// RecordID/RecordHead are set, so every row carries a linkable record.
+type CriticFindingSink interface {
+	Record(recordID int64, recordHead string, obs []CriticFindingObservation)
+}
+
 // EventSink receives the pool's reasoning milestones as replay/telemetry
 // events. Optional (nil ⇒ no-op), like Signer/Leaderboard — the pure Driver
 // takes no telemetry dependency; the brain wires this to its telemetry store
@@ -210,6 +233,11 @@ type runState struct {
 	devKillRate  float64
 	mutantsTotal int
 	devSurvivors []adequacy.Mutant
+	// mutants is the FULL merged mutant set (every shard, pre-scoring) that
+	// tickDevAdequacy graded the dev suite against — retained (not just its
+	// count/survivors) so tickAggregate's critic auto-refute step can
+	// re-score a single flagged test against the SAME exam later.
+	mutants []adequacy.Mutant
 
 	testWriterTaskID int64
 
@@ -342,6 +370,12 @@ type Driver struct {
 	// verdict — certified AND needs-review, unlike Leaderboard which only
 	// fires on certified. See bugCatchObservations.
 	BugCatch BugCatchSink
+
+	// CriticFindings is the optional per-run critic-finding auto-adjudication
+	// feed (nil = no-op), mirroring BugCatch: fed AFTER Signer (once
+	// RecordID/RecordHead are set) on every terminal verdict. See
+	// tickAggregate's auto-refute step.
+	CriticFindings CriticFindingSink
 
 	// Events is the optional reasoning-event sink (nil = no-op), mirroring
 	// Signer/Leaderboard: every pre-existing Driver test keeps working
@@ -756,6 +790,7 @@ func (d *Driver) tickDevAdequacy(ctx context.Context, missionID int64, run *runS
 	run.devKillRate = killRate
 	run.mutantsTotal = len(mutants)
 	run.devSurvivors = survivors
+	run.mutants = mutants
 
 	// The challenger pass: score the shadow seats' mutants against the SAME dev
 	// suite so the comparison measures POTENCY (mutants that survive a good
@@ -1161,6 +1196,49 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	// into a single "run", pinning every cell below provisionalBelow forever.
 	if d.BugCatch != nil && v.RecordID != 0 {
 		d.BugCatch.Record(v.RecordID, v.RecordHead, bugCatchObservations(run, v))
+	}
+
+	// Conservative auto-refute: for each critic finding scoped whole-test with
+	// a runnable single-test selector, re-run the JAIL's Scorer with THAT test
+	// alone against the run's own mutant set. If it kills at least one mutant,
+	// execution has proven the "can never fail" claim false — AutoAdjudication
+	// downgrades it to refuted. dead-check findings and anything the language
+	// plugin can't target as a single test are left unadjudicated; this NEVER
+	// auto-confirms and NEVER fails the audit — a scoring/jail error here is
+	// logged and simply leaves that one finding unadjudicated, same fail-soft
+	// posture as the shadow-challenger pass above. Same RecordID!=0 guard as
+	// BugCatch (see its doc comment): a record_id=0 row is unlinkable.
+	if d.CriticFindings != nil && v.RecordID != 0 {
+		p := langFor(run.rs)
+		var obs []CriticFindingObservation
+		for _, f := range criticFindings {
+			scope := NormalizeScope(f.Scope)
+			ran, kills := false, 0
+			if scope == ScopeWholeTest && f.TestSelector != "" {
+				if cmd, ok := p.SingleTestCmd(f.TestFile, f.TestSelector); ok {
+					if _, survivors, serr := d.Scorer.Score(ctx, run.rs.CodePath, run.rs.Code, run.rs.DevTestCode, run.mutants, strings.Join(cmd, " ")); serr == nil {
+						ran, kills = true, len(run.mutants)-len(survivors)
+					} else {
+						log.Printf("advpool: run %d: critic auto-refute score failed for %q: %v", missionID, f.TestSelector, serr)
+					}
+				}
+			}
+			obs = append(obs, CriticFindingObservation{
+				QueueFindingID: f.ID,
+				Model:          v.ModelsByRole[RoleTestCritic],
+				TargetTest:     f.Target,
+				TestFile:       f.TestFile,
+				TestSelector:   f.TestSelector,
+				Scope:          scope,
+				Evidence:       f.Evidence,
+				Severity:       f.Severity,
+				Adjudication:   AutoAdjudication(scope, ran, kills),
+				Source:         "auto",
+			})
+		}
+		if len(obs) > 0 {
+			d.CriticFindings.Record(v.RecordID, v.RecordHead, obs)
+		}
 	}
 
 	d.emit(missionID, "pool_verdict", v.Commit, map[string]any{

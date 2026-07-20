@@ -166,6 +166,90 @@ func NewOllamaBackend(url, model string) Backend {
 	return &ollamaBackend{url: url, model: model}
 }
 
+// ForModel infers the cloud vendor from model's name prefix and builds the
+// matching backend, reading THAT vendor's base URL + key from env/keystore —
+// independent of MODEL_BACKEND/FromEnv. It exists for exactly one case: a
+// `corral certify --local` role (the decorrelated test-critic, by design)
+// that needs to run on a DIFFERENT vendor than the run's base backend, e.g. a
+// Gemini critic grading a Claude writer/mutant-generator. It fails closed —
+// a clear, actionable error naming the missing env var — rather than falling
+// back to any other backend, because a silent fallback here would silently
+// collapse the cross-vendor decorrelation the caller asked for.
+//
+// ForModel is NOT a general-purpose backend constructor: it only recognizes
+// hosted-cloud model name prefixes. Local/ollama models (and any explicit
+// MODEL_BACKEND setup) are unaffected — they keep going through FromEnv().
+func ForModel(model string) (Backend, error) {
+	switch {
+	case hasAnyPrefix(model, "claude-", "opus-", "sonnet-", "haiku-", "fable-"):
+		key := agentSecret("ANTHROPIC_API_KEY")
+		if key == "" {
+			return nil, fmt.Errorf("agentbackend: ForModel: model %q needs an Anthropic key — set ANTHROPIC_API_KEY", model)
+		}
+		return &anthropicBackend{
+			base:  env("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
+			key:   key,
+			model: model,
+		}, nil
+	case hasAnyPrefix(model, "gemini-"):
+		key := agentSecret("GEMINI_API_KEY")
+		if key == "" {
+			key = agentSecret("GOOGLE_API_KEY")
+		}
+		if key == "" {
+			return nil, fmt.Errorf("agentbackend: ForModel: model %q needs a Google key — set GEMINI_API_KEY (or GOOGLE_API_KEY)", model)
+		}
+		base := os.Getenv("CORRALAI_GEMINI_BASE_URL")
+		if base == "" {
+			base = os.Getenv("OPENAI_BASE_URL")
+		}
+		if base == "" {
+			base = "https://generativelanguage.googleapis.com/v1beta/openai"
+		}
+		return &openaiBackend{base: base, key: key, model: model}, nil
+	case hasAnyPrefix(model, "gpt-", "o1-", "o3-"):
+		key := agentSecret("OPENAI_API_KEY")
+		if key == "" {
+			return nil, fmt.Errorf("agentbackend: ForModel: model %q needs an OpenAI key — set OPENAI_API_KEY", model)
+		}
+		return &openaiBackend{
+			base:  env("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+			key:   key,
+			model: model,
+		}, nil
+	default:
+		return nil, fmt.Errorf("agentbackend: ForModel: cannot infer a cloud vendor for model %q (this path is for cross-vendor cloud critics; local/ollama models use the base backend)", model)
+	}
+}
+
+// VendorOf reports which cloud vendor ForModel would route model to
+// ("anthropic"/"google"/"openai"), or "" if none matches (e.g. a local/ollama
+// model name) — used by callers (certify --local's localChatterFor) that need
+// to know a critic model's vendor differs from the base backend's BEFORE
+// calling ForModel (e.g. to decide whether cross-vendor routing even
+// applies), without duplicating the prefix table.
+func VendorOf(model string) string {
+	switch {
+	case hasAnyPrefix(model, "claude-", "opus-", "sonnet-", "haiku-", "fable-"):
+		return "anthropic"
+	case hasAnyPrefix(model, "gemini-"):
+		return "google"
+	case hasAnyPrefix(model, "gpt-", "o1-", "o3-"):
+		return "openai"
+	default:
+		return ""
+	}
+}
+
+func hasAnyPrefix(s string, prefixes ...string) bool {
+	for _, p := range prefixes {
+		if strings.HasPrefix(s, p) {
+			return true
+		}
+	}
+	return false
+}
+
 func env(k, d string) string {
 	if v := os.Getenv(k); v != "" {
 		return v

@@ -192,6 +192,17 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
+	// Resolve the role→backend router NOW, before opening the jail or any
+	// store: a cross-vendor critic (e.g. --critic-model gemini-3.5-flash on
+	// the default Claude path) needs its own vendor's key, and a missing key
+	// must refuse the run here — fail closed at the top, not mid-run after
+	// jails/stores/mutants are already in flight.
+	chatterFor, err := localChatterFor(assign)
+	if err != nil {
+		fmt.Fprintf(stderr, "corral certify --local: %v\n", err)
+		return 2
+	}
+
 	// In --repo-dir mode, --code/--test are repo-relative (or absolute under the
 	// repo); the file lives inside the cloned tree. Resolve to filesystem paths
 	// for reading; the workspace keys are computed repo-relative below.
@@ -404,8 +415,6 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	outerBound := resolveRunDeadline(*timeout, shadow) + 30*time.Second
 	ctx, cancel := context.WithTimeout(context.Background(), outerBound)
 	defer cancel()
-
-	chatterFor := localChatterFor(assign)
 
 	// Size the concurrent audit swarm and say so out loud — the "won't bankrupt
 	// me / won't melt the box" bound made visible. Independent role tasks run in
@@ -1003,15 +1012,50 @@ func normalizeFinding(f *queue.Finding) {
 // backend from FromEnv() (MODEL_BACKEND-selected), switched to each role's
 // assigned model via WithModel when the backend supports it. A single ANTHROPIC
 // key + the anthropic backend serves all three Claude models this way.
-func localChatterFor(assign advpool.RoleAssignment) func(role string) agentworker.Chatter {
+//
+// Cross-vendor critic (design 2026-07-19): decorrelation is strongest when the
+// test-critic runs on a DIFFERENT VENDOR than the writer/mutant-generator, not
+// just a different model on the same vendor. When the operator hasn't pinned
+// an explicit MODEL_BACKEND (the default direct-Claude path) AND the critic's
+// model resolves to a cloud vendor other than the base backend's, this builds
+// a dedicated critic backend via agentbackend.ForModel ONCE up front and
+// routes RoleTestCritic to it; every other role keeps the base+WithModel path
+// unchanged. An explicit MODEL_BACKEND (openai/openrouter/ollama — an
+// operator pointing every role at one endpoint on purpose) is never
+// disturbed: all roles including the critic keep today's single-backend
+// WithModel behavior.
+//
+// Fails closed: if a cross-vendor critic is requested but its vendor's key is
+// missing, this returns the actionable error from ForModel instead of
+// silently falling back to the base backend — the caller must refuse to
+// start the run, not fail mid-run.
+func localChatterFor(assign advpool.RoleAssignment) (func(role string) agentworker.Chatter, error) {
 	base := agentbackend.FromEnv()
 	sw, canSwitch := base.(agentbackend.ModelSwitcher)
+
+	var criticChatter agentworker.Chatter
+	backendSel := strings.TrimSpace(os.Getenv("MODEL_BACKEND"))
+	onDefaultClaudePath := backendSel == "" || backendSel == "anthropic" || backendSel == "claude"
+	if onDefaultClaudePath && canSwitch {
+		criticModel := assign[advpool.RoleTestCritic]
+		if criticModel != "" && agentbackend.VendorOf(criticModel) != "" && agentbackend.VendorOf(criticModel) != agentbackend.VendorOf(sw.Model()) {
+			cb, err := agentbackend.ForModel(criticModel)
+			if err != nil {
+				return nil, fmt.Errorf("cross-vendor critic: %w", err)
+			}
+			criticChatter = agentbackend.AsChatter(cb)
+		}
+	}
+
 	return func(role string) agentworker.Chatter {
+		if role == advpool.RoleTestCritic && criticChatter != nil {
+			return criticChatter
+		}
 		if model := assign[role]; canSwitch && model != "" {
 			return agentbackend.AsChatter(sw.WithModel(model))
 		}
 		return agentbackend.AsChatter(base)
-	}
+	}, nil
 }
 
 // advVerdictFromPool converts a concrete advpool.Verdict to the advVerdict wire

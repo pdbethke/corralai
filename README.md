@@ -64,8 +64,11 @@ Go, Python (pytest), Ruby (minitest/RSpec), JavaScript (node:test), and TypeScri
 (tsc + node:test) — the language is inferred from `--code`'s extension; C is next,
 each a plugin in `internal/lang`. By default the audit runs two distinct Claude
 models off one key (Sonnet writes/mutates, Haiku critiques) — decorrelation satisfied
-with a single key; add a second vendor's key and `--critic-model` to cross a vendor
-boundary. Full walkthrough of a real verdict: **[the "first audit"
+with a single key; on that same default path, `--critic-model gemini-3.5-flash` plus
+`GEMINI_API_KEY` (or `GOOGLE_API_KEY`) routes the critic to Gemini via the
+OpenAI-compatible Google endpoint, a real cross-vendor critic, while the writer and
+mutant-generator stay on Claude — a missing key fails the run closed rather than
+silently falling back. Full walkthrough of a real verdict: **[the "first audit"
 guide](https://corralai.dev/docs/first-audit/)**.
 
 ### Certify a change by its declared check

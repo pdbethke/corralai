@@ -56,8 +56,12 @@ that makes your suite *hang* is killed fast and counted as caught, so a runaway
 loop can't stall the audit (`--test-timeout` overrides the auto-derived cap).
 
 By default the audit runs two distinct Claude models off that single
-`ANTHROPIC_API_KEY` (Sonnet writes/mutates, Haiku critiques); a second vendor
-key plus `--critic-model` gets you a cross-vendor critic instead. It supports
+`ANTHROPIC_API_KEY` (Sonnet writes/mutates, Haiku critiques); on that same
+default path, `--critic-model gemini-3.5-flash` plus a Google key
+(`GEMINI_API_KEY` or `GOOGLE_API_KEY`) routes the critic to Gemini via the
+OpenAI-compatible Google endpoint — a real cross-vendor critic, writer and
+mutant-generator unchanged on Claude. A missing key fails the run closed
+instead of silently falling back. It supports
 Go, Python (pytest), Ruby (minitest/RSpec), JavaScript (node:test), and
 TypeScript (tsc + node:test) — the language is inferred from `--code`'s
 extension.

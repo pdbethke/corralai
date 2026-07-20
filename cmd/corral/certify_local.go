@@ -1038,7 +1038,14 @@ func localChatterFor(assign advpool.RoleAssignment) (func(role string) agentwork
 	onDefaultClaudePath := backendSel == "" || backendSel == "anthropic" || backendSel == "claude"
 	if onDefaultClaudePath && canSwitch {
 		criticModel := assign[advpool.RoleTestCritic]
-		if criticModel != "" && agentbackend.VendorOf(criticModel) != "" && agentbackend.VendorOf(criticModel) != agentbackend.VendorOf(sw.Model()) {
+		// On the default path the base backend is definitively anthropic
+		// (onDefaultClaudePath gates that), so the base vendor is "anthropic"
+		// regardless of the base backend's default model string — do NOT
+		// derive it from sw.Model() (which is the local AGENT_MODEL default,
+		// vendor ""). Cross-route only when the critic resolves to a
+		// recognized cloud vendor that is NOT anthropic; a same-vendor Claude
+		// critic keeps the base+WithModel path below.
+		if v := agentbackend.VendorOf(criticModel); criticModel != "" && v != "" && v != "anthropic" {
 			cb, err := agentbackend.ForModel(criticModel)
 			if err != nil {
 				return nil, fmt.Errorf("cross-vendor critic: %w", err)

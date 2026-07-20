@@ -1,0 +1,15 @@
+{
+  "directive": "adversarial pool · eval/corpus/passwd_py/passwd.py",
+  "task_count": 3,
+  "done_task_count": 3,
+  "finding_count": 2,
+  "duration_seconds": 39,
+  "models": [
+    "anthropic:claude-sonnet-5",
+    "anthropic:claude-haiku-4-5"
+  ],
+  "platform": {
+    "inference": "vendor cloud — Claude Sonnet 5 (planting + writing) + Claude Haiku 4.5 (critic), Anthropic",
+    "host": "linux/amd64 · container jail"
+  }
+}

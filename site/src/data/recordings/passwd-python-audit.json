@@ -1,0 +1,166 @@
+{
+  "events": [
+    {
+      "ts": 1,
+      "kind": "pool_subject",
+      "actor": "corral-advpool",
+      "subject": "passwd.py",
+      "detail": {
+        "code": "# SPDX-License-Identifier: Elastic-2.0\n\"\"\"Password strength validator.\"\"\"\n\n\ndef valid(p: str) -\u003e bool:\n    \"\"\"Return True iff p is a valid password: length \u003e= 12 AND it contains an\n    uppercase letter, a lowercase letter, a digit, and a symbol.\"\"\"\n    if len(p) \u003c 12:\n        return False\n    up = lo = di = sy = False\n    for c in p:\n        if c.isupper():\n            up = True\n        elif c.islower():\n            lo = True\n        elif c.isdigit():\n            di = True\n        elif not c.isalnum():\n            sy = True\n    return up and lo and di and sy\n",
+        "code_path": "passwd.py",
+        "dev_test_code": "# SPDX-License-Identifier: Elastic-2.0\n\"\"\"The 'gappy' suite: it only ever feeds a VALID password (and one too-short\none), so it never exercises the four character-class rules — a mutant that\ndrops, say, the digit requirement passes it undetected.\"\"\"\nimport passwd\n\n\ndef test_valid_length():\n    assert passwd.valid(\"Abcdefgh1!xy\")\n\n\ndef test_too_short():\n    assert not passwd.valid(\"Ab1!xyz\")\n",
+        "dev_test_path": "test_passwd.py",
+        "goal": "valid must require length \u003e= 12 AND an uppercase letter, a lowercase letter, a digit, and a symbol"
+      }
+    },
+    {
+      "ts": 2,
+      "kind": "task_created",
+      "subject": "mutant-generator",
+      "detail": {
+        "role": "mutant-generator",
+        "title": "Generate seeded-violation mutants"
+      }
+    },
+    {
+      "ts": 3,
+      "kind": "task_claimed",
+      "actor": "claude-sonnet-5/mutant-generator",
+      "subject": "mutant-generator",
+      "detail": {
+        "role": "mutant-generator",
+        "title": "Generate seeded-violation mutants"
+      }
+    },
+    {
+      "ts": 4,
+      "kind": "task_created",
+      "subject": "test-critic",
+      "detail": {
+        "role": "test-critic",
+        "title": "Critique the dev's tests"
+      }
+    },
+    {
+      "ts": 5,
+      "kind": "task_claimed",
+      "actor": "claude-haiku-4-5/test-critic",
+      "subject": "test-critic",
+      "detail": {
+        "role": "test-critic",
+        "title": "Critique the dev's tests"
+      }
+    },
+    {
+      "ts": 6,
+      "kind": "task_done",
+      "actor": "claude-sonnet-5/mutant-generator",
+      "subject": "mutant-generator",
+      "detail": {
+        "result": "===MUTATION_1===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n    if len(p) \u003c 12:\n=======\n    if len(p) \u003c 8:\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_2===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n    return up and lo and di and sy\n=======\n    return up and lo and di\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_3===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n        if c.isupper():\n            up = True\n=======\n        if c.isupper():\n            up = True\n            lo = True\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_4===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n        elif c.isdigit():\n            di = True\n=======\n        elif c.isdigit():\n            di = True\n            sy = True\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_5===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n    return up and lo and di and sy\n=======\n    return up or lo or di or sy\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE",
+        "role": "mutant-generator"
+      }
+    },
+    {
+      "ts": 7,
+      "kind": "finding_reported",
+      "actor": "claude-haiku-4-5/test-critic",
+      "subject": "test_passwd.py::test_too_short",
+      "detail": {
+        "evidence": "test_too_short asserts False for a password that is only 7 characters long. The code returns False immediately for any string with length \u003c 12, making this test pass regardless of whether the character-class requirements (uppercase, lowercase, digit, symbol) are implemented. A mutant that removes any or all of the four character-class checks would still pass this test.",
+        "role": "test-critic",
+        "severity": "high",
+        "type": "bug"
+      }
+    },
+    {
+      "ts": 8,
+      "kind": "finding_reported",
+      "actor": "claude-haiku-4-5/test-critic",
+      "subject": "test_passwd.py::test_valid_length",
+      "detail": {
+        "evidence": "test_valid_length feeds a single password that happens to contain all four required character classes (uppercase, lowercase, digit, symbol). A mutant that drops any of the four character-class checks will still pass this test because the test string satisfies all requirements.",
+        "role": "test-critic",
+        "severity": "high",
+        "type": "bug"
+      }
+    },
+    {
+      "ts": 9,
+      "kind": "task_done",
+      "actor": "claude-haiku-4-5/test-critic",
+      "subject": "test-critic",
+      "detail": {
+        "result": "I see that the finding was already recorded. Let me clarify: I have filed **one** finding against `test_too_sh…",
+        "role": "test-critic"
+      }
+    },
+    {
+      "ts": 10,
+      "kind": "pool_dev_adequacy",
+      "actor": "corral-advpool",
+      "detail": {
+        "dev_kill_rate": 0,
+        "mutants_total": 5,
+        "survivor_ids": [
+          "m1",
+          "m2",
+          "m3",
+          "m4",
+          "m5"
+        ],
+        "survivors": 5
+      }
+    },
+    {
+      "ts": 11,
+      "kind": "task_created",
+      "subject": "test-writer-r2",
+      "detail": {
+        "role": "test-writer",
+        "title": "Write test targeting survivors"
+      }
+    },
+    {
+      "ts": 12,
+      "kind": "task_claimed",
+      "actor": "claude-sonnet-5/test-writer",
+      "subject": "test-writer-r2",
+      "detail": {
+        "role": "test-writer",
+        "title": "Write test targeting survivors"
+      }
+    },
+    {
+      "ts": 13,
+      "kind": "task_done",
+      "actor": "claude-sonnet-5/test-writer",
+      "subject": "test-writer-r2",
+      "detail": {
+        "result": "# SPDX-License-Identifier: Elastic-2.0\n\"\"\"Tests for passwd.py valid() function.\"\"\"\n\nimport passwd\n\n\ndef test_valid_positive_control():\n    # Meets all requirements: length \u003e= 12, upper, lower, digit, symbol.\n    assert passwd.valid(\"Aa1!aaaaaaaa\") is True\n\n\ndef test_length_below_12_with_all_classes_rejected():\n    # 11 chars, has upper/lower/digit/symbol -\u003e must be rejected (kills m1\n    # which only enforces length \u003e= 8).\n    pw = \"Aa1!bbbbbbb\"\n    assert len(pw) == 11\n    assert passwd.valid(pw) is False\n\n\ndef test_missing_symbol_rejected():\n    # length \u003e= 12, has upper/lower/digit but no symbol -\u003e must be rejected\n    # (kills m2 which forgets to require a symbol).\n    pw = \"Aa1bbbbbbbbb\"\n    assert len(pw) == 12\n    assert passwd.valid(pw) is False\n\n\ndef test_missing_lowercase_rejected():\n    # length \u003e= 12, has upper/digit/symbol but no real lowercase letter\n    # -\u003e must be rejected (kills m3 where uppercase incorrectly also sets\n    # the lowercase flag).\n    pw = \"AAAA1111!!!!\"\n    assert len(pw) == 12\n    assert passwd.valid(pw) is False\n\n\ndef test_digit_without_symbol_rejected():\n    # length \u003e= 12, has upper/lower/digit but no symbol -\u003e must be rejected\n    # (kills m4 where a digit incorrectly also sets the symbol flag).\n    pw = \"Aa1111111111\"\n    assert len(pw) == 12\n    assert passwd.valid(pw) is False\n\n\ndef test_only_digit_present_rejected():\n    # length \u003e= 12, only digits present (no upper/lower/symbol) -\u003e must be\n    # rejected (kills m5 which uses OR instead of AND across categories).\n    pw = \"111111111111\"\n    assert len(pw) == 12\n    assert passwd.valid(pw) is False",
+        "role": "test-writer"
+      }
+    },
+    {
+      "ts": 14,
+      "kind": "pool_verdict",
+      "actor": "corral-advpool",
+      "subject": "1566bbbd57de1c94759694cc4601c520e8efdd6c",
+      "detail": {
+        "dev_kill_rate": 0,
+        "models_by_role": {
+          "mutant-generator": "claude-sonnet-5",
+          "mutant-generator-shadow": "claude-haiku-4-5",
+          "test-critic": "claude-haiku-4-5",
+          "test-writer": "claude-sonnet-5"
+        },
+        "mutants_total": 5,
+        "proven_missed": 5,
+        "record_head": "792a15152e11c59b45b194301768c36f8d871a4cf55985048ede8ba7edb224aa",
+        "record_id": 1,
+        "status": "needs-review",
+        "survivors": 5
+      }
+    }
+  ]
+}

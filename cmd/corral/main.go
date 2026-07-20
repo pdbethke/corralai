@@ -105,6 +105,7 @@ import (
 	"github.com/pdbethke/corralai/internal/controlgate"
 	"github.com/pdbethke/corralai/internal/controlspec"
 	"github.com/pdbethke/corralai/internal/coord"
+	"github.com/pdbethke/corralai/internal/criticscore"
 	"github.com/pdbethke/corralai/internal/embed"
 	"github.com/pdbethke/corralai/internal/eval"
 	"github.com/pdbethke/corralai/internal/fleet"
@@ -755,6 +756,17 @@ func main() {
 	}
 	defer bugCatchStore.Close()
 
+	// The adversarial pool's critic-accuracy store — per-finding, execution-
+	// checked test-critic auto-refute observations, mutable (a human
+	// adjudication permanently outranks a later auto Record) unlike the
+	// append-only bugcatch ledger above. See internal/criticscore.
+	criticScoreDB := env("CORRALAI_CRITICSCORE_DB", filepath.Join(home, ".claude", "corralai_criticscore.duckdb"))
+	criticScoreStore, err := criticscore.Open(criticScoreDB)
+	if err != nil {
+		log.Fatalf("open criticscore store: %v", err)
+	}
+	defer criticScoreStore.Close()
+
 	certifyKeyFile := env("CORRALAI_CERTIFY_KEY_FILE", filepath.Join(home, ".claude", "corralai_certify_key"))
 	certifyKey, err := buildstore.LoadOrCreateSigningKey(certifyKeyFile)
 	if err != nil {
@@ -1218,6 +1230,7 @@ func main() {
 		CertifyKey:            certifyKey,
 		Witness:               certifyWitness,
 		BugCatch:              bugCatchStore,
+		CriticScore:           criticScoreStore,
 		SpawnBudget: brain.SpawnBudget{
 			MaxAgentsPerPrincipal: envInt("CORRALAI_MAX_AGENTS_PER_PRINCIPAL", 0),
 			MaxSpawnDepth:         envInt("CORRALAI_MAX_SPAWN_DEPTH", 0),

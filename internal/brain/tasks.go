@@ -84,6 +84,15 @@ type reportFindingIn struct {
 	Target          string `json:"target,omitempty" jsonschema:"the file or area affected"`
 	Evidence        string `json:"evidence,omitempty" jsonschema:"what you observed"`
 	SuggestedAction string `json:"suggested_action,omitempty" jsonschema:"how to fix it"`
+	// Scope/TestFile/TestSelector are test-critic-only: set when this finding
+	// flags a specific test as vacuous. Mirrors the LOCAL certify --local
+	// path's agentworker.findingFromArgs verbatim (same three keys), which is
+	// what lets the brain-path auto-refute (advpool.Driver.Tick) read a
+	// runnable single-test selector back off the queue — an empty Scope here
+	// normalizes to dead-check and NOTHING ever auto-refutes on this path.
+	Scope        string `json:"scope,omitempty" jsonschema:"for a flagged test: whole-test (the ENTIRE test can never fail) or dead-check (a specific check is dead but the test still asserts something real)"`
+	TestFile     string `json:"test_file,omitempty" jsonschema:"repo-relative path of the file holding the flagged test"`
+	TestSelector string `json:"test_selector,omitempty" jsonschema:"a runnable selector for the single flagged test (e.g. path::Class::test_name for pytest, TestName for go)"`
 }
 type findingOut struct {
 	ID int64 `json:"id"`
@@ -407,6 +416,7 @@ func registerTasks(s *mcp.Server, store *coord.Store, q *queue.Store, lease floa
 				MissionID: in.MissionID, TaskID: in.TaskID, Reporter: reporter,
 				Type: in.Type, Severity: in.Severity, Target: in.Target,
 				Evidence: in.Evidence, SuggestedAction: in.SuggestedAction,
+				Scope: in.Scope, TestFile: in.TestFile, TestSelector: in.TestSelector,
 			}
 			stampModel(book, &f) // HostBook attribution; missing entry degrades to "" — never blocks
 			id, err := q.AddFinding(f)

@@ -17,6 +17,7 @@ import (
 	"github.com/pdbethke/corralai/internal/controlgate"
 	"github.com/pdbethke/corralai/internal/controlspec"
 	"github.com/pdbethke/corralai/internal/coord"
+	"github.com/pdbethke/corralai/internal/criticscore"
 	"github.com/pdbethke/corralai/internal/gate"
 	"github.com/pdbethke/corralai/internal/gateway"
 	"github.com/pdbethke/corralai/internal/learn"
@@ -256,6 +257,13 @@ type Options struct {
 	// BugCatch, if set, receives per-run execution-proven bug-catching
 	// observations from the adversarial pool (internal/bugcatch scorecard store).
 	BugCatch *bugcatch.Store
+
+	// CriticScore, if set, receives per-run execution-checked test-critic
+	// findings from the adversarial pool (internal/criticscore store) and
+	// enables the admin-gated adjudication MCP tools (list_pending_critic_findings/
+	// get_critic_finding/adjudicate_critic_finding). nil => the pool's critic
+	// findings are never persisted here and those tools are not registered.
+	CriticScore *criticscore.Store
 
 	// Witness, when set, is the transparency log report_build anchors each
 	// signed DSSE envelope to (Sigstore Rekor or a hermetic fake in tests) —

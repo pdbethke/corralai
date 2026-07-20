@@ -18,6 +18,7 @@ import (
 	"github.com/pdbethke/corralai/internal/bugcatch"
 	"github.com/pdbethke/corralai/internal/buildstore"
 	"github.com/pdbethke/corralai/internal/coord"
+	"github.com/pdbethke/corralai/internal/criticscore"
 	"github.com/pdbethke/corralai/internal/memory"
 	"github.com/pdbethke/corralai/internal/mission"
 	"github.com/pdbethke/corralai/internal/principals"
@@ -1162,5 +1163,104 @@ func TestStartAdversarialPool_RunDeadlineCallSitePinned(t *testing.T) {
 	if rt.driver.RunDeadline != want {
 		t.Fatalf("driver.RunDeadline = %s, want %s (CORRALAI_ADVPOOL_RUN_DEADLINE_S base %s widened by ShadowTimeBudget for the configured daemon shadow model) — the resolveAdvPoolRunDeadline call site may have regressed (e.g. its result discarded via `_ = resolveAdvPoolRunDeadline(...)`)",
 			rt.driver.RunDeadline, want, base)
+	}
+}
+
+// TestAdvPoolCriticSinkPersistsToStore proves advpoolCriticSink is a working
+// adapter from the driver's pure advpool.CriticFindingObservation into the
+// criticscore.Store: Record on the sink must produce a row readable back via
+// store.Get, with the id composed as "<recordID>:<queueFindingID>" (the
+// stable key criticscore.Finding's doc comment requires), the critic model,
+// and the auto adjudication the observation carried.
+func TestAdvPoolCriticSinkPersistsToStore(t *testing.T) {
+	store, err := criticscore.Open(filepath.Join(t.TempDir(), "cs.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	sink := advpoolCriticSink{
+		store:     store,
+		clock:     func() time.Time { return time.Unix(1000, 0).UTC() },
+		missionID: 7, repo: "git@x:y.git", commit: "abc123",
+	}
+	sink.Record(42, "headhash", []advpool.CriticFindingObservation{
+		{
+			QueueFindingID: 5, Model: "llama3.2:3b",
+			TargetTest: "TestFoo", TestFile: "x_test.py", TestSelector: "x_test.py::TestFoo",
+			Scope: "whole-test", Evidence: "asserts nothing", Severity: "medium",
+			Adjudication: "refuted", Source: "auto",
+		},
+	})
+
+	f, ok, err := store.Get(context.Background(), "42:5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("want a row at id \"42:5\" (recordID:queueFindingID), found none")
+	}
+	if f.Model != "llama3.2:3b" {
+		t.Fatalf("Model = %q, want llama3.2:3b", f.Model)
+	}
+	if f.Adjudication != "refuted" || f.Source != "auto" {
+		t.Fatalf("Adjudication/Source = %q/%q, want refuted/auto", f.Adjudication, f.Source)
+	}
+	if f.RecordID != 42 || f.RecordHead != "headhash" {
+		t.Fatalf("RecordID/RecordHead = %d/%q, want 42/headhash", f.RecordID, f.RecordHead)
+	}
+	if f.MissionID != 7 || f.Repo != "git@x:y.git" || f.Commit != "abc123" {
+		t.Fatalf("run context wrong: mission=%d repo=%q commit=%q", f.MissionID, f.Repo, f.Commit)
+	}
+}
+
+// TestAdvPoolCriticSinkRecord_CopiesEveryField mirrors
+// TestAdvPoolBugCatchSinkRecord_CopiesEveryField: this is the ONLY path that
+// converts advpool.CriticFindingObservation into criticscore.Finding on the
+// live brain, and nothing else in the repo exercises that conversion. Every
+// observation field gets a distinct value; every corresponding Finding field
+// must survive the round trip.
+func TestAdvPoolCriticSinkRecord_CopiesEveryField(t *testing.T) {
+	store, err := criticscore.Open(filepath.Join(t.TempDir(), "cs.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	fixedClock := time.Unix(5000, 0).UTC()
+	sink := advpoolCriticSink{
+		store:     store,
+		clock:     func() time.Time { return fixedClock },
+		missionID: 99, repo: "git@x:field-copy.git", commit: "deadbeef",
+	}
+
+	in := advpool.CriticFindingObservation{
+		QueueFindingID: 17, Model: "distinct-model",
+		TargetTest: "distinct-target", TestFile: "distinct-file.py", TestSelector: "distinct-file.py::T",
+		Scope: "dead-check", Evidence: "distinct-evidence", Severity: "high",
+		Adjudication: "unadjudicated", Source: "auto",
+	}
+	sink.Record(1234, "distinct-head", []advpool.CriticFindingObservation{in})
+
+	f, ok, err := store.Get(context.Background(), "1234:17")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("want a row at id \"1234:17\"")
+	}
+	if f.TS != float64(fixedClock.Unix()) {
+		t.Errorf("TS = %v, want %v", f.TS, fixedClock.Unix())
+	}
+	if f.RecordID != 1234 || f.RecordHead != "distinct-head" {
+		t.Errorf("RecordID/RecordHead = %d/%q, want 1234/distinct-head", f.RecordID, f.RecordHead)
+	}
+	if f.MissionID != 99 || f.Repo != "git@x:field-copy.git" || f.Commit != "deadbeef" {
+		t.Errorf("run context wrong: %+v", f)
+	}
+	if f.Model != in.Model || f.TargetTest != in.TargetTest || f.TestFile != in.TestFile ||
+		f.TestSelector != in.TestSelector || f.Scope != in.Scope || f.Evidence != in.Evidence ||
+		f.Severity != in.Severity || f.Adjudication != in.Adjudication || f.Source != in.Source {
+		t.Errorf("copied fields wrong: got %+v, from %+v", f, in)
 	}
 }

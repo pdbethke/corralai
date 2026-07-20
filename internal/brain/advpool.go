@@ -18,6 +18,7 @@ import (
 	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/bugcatch"
 	"github.com/pdbethke/corralai/internal/buildstore"
+	"github.com/pdbethke/corralai/internal/criticscore"
 	"github.com/pdbethke/corralai/internal/gate"
 	golang "github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/mission"
@@ -110,6 +111,50 @@ func (s advpoolBugCatchSink) Record(recordID int64, recordHead string, obs []adv
 	}
 	if err := s.store.Record(context.Background(), rows); err != nil {
 		log.Printf("advpool: bugcatch record failed (mission %d record %d): %v", s.missionID, recordID, err)
+	}
+}
+
+// advpoolCriticSink persists a converged run's execution-checked critic
+// findings into the criticscore DuckDB store, stamping the run context
+// (ts via the brain clock, mission/repo/commit) the pure driver does not
+// carry — mirrors advpoolBugCatchSink exactly. The stable finding ID is
+// "<recordID>:<queueFindingID>" (see criticscore.Finding's doc comment),
+// composed here since the driver's observation carries the two halves
+// separately. Satisfies advpool.CriticFindingSink.
+type advpoolCriticSink struct {
+	store     *criticscore.Store
+	clock     func() time.Time
+	missionID int64
+	repo      string
+	commit    string
+}
+
+func (s advpoolCriticSink) Record(recordID int64, recordHead string, obs []advpool.CriticFindingObservation) {
+	if s.store == nil {
+		return
+	}
+	ts := float64(s.clock().Unix())
+	rows := make([]criticscore.Finding, 0, len(obs))
+	for _, o := range obs {
+		rows = append(rows, criticscore.Finding{
+			ID:         fmt.Sprintf("%d:%d", recordID, o.QueueFindingID),
+			TS:         ts,
+			RecordID:   recordID,
+			RecordHead: recordHead,
+			Repo:       s.repo, Commit: s.commit, MissionID: s.missionID,
+			Model:        o.Model,
+			TargetTest:   o.TargetTest,
+			TestFile:     o.TestFile,
+			TestSelector: o.TestSelector,
+			Scope:        o.Scope,
+			Evidence:     o.Evidence,
+			Severity:     o.Severity,
+			Adjudication: o.Adjudication,
+			Source:       o.Source,
+		})
+	}
+	if err := s.store.Record(context.Background(), rows); err != nil {
+		log.Printf("advpool: criticscore record failed (mission %d record %d): %v", s.missionID, recordID, err)
 	}
 }
 
@@ -345,11 +390,12 @@ const advPoolTickMaxErrors = 20
 // so the in-memory run state Driver.StartRun begins is the same state
 // Driver.Tick later advances.
 type AdvPoolRuntime struct {
-	driver   *advpool.Driver
-	missions *mission.Store
-	staffing *mission.StaffingManager
-	defaults advpool.RoleAssignment // operator CORRALAI_ADVPOOL_MODELS base (nil = hardcoded)
-	bugCatch *bugcatch.Store        // optional scorecard store; nil = feature off (see StartRun)
+	driver      *advpool.Driver
+	missions    *mission.Store
+	staffing    *mission.StaffingManager
+	defaults    advpool.RoleAssignment // operator CORRALAI_ADVPOOL_MODELS base (nil = hardcoded)
+	bugCatch    *bugcatch.Store        // optional scorecard store; nil = feature off (see StartRun)
+	criticScore *criticscore.Store     // optional critic-accuracy store; nil = feature off (see StartRun)
 	// shadowModel is the daemon-wide default challenger model (resolved once
 	// in StartAdversarialPool from CORRALAI_ADVPOOL_SHADOW_MODEL, "" =
 	// advpool.DefaultShadowModel). Left at its Go zero value ("") by a test
@@ -669,6 +715,12 @@ func (rt *AdvPoolRuntime) StartRun(in AdvPoolRunSpec) (int64, error) {
 			missionID: mid, repo: rs.Repo, commit: rs.Commit,
 		}
 	}
+	if rt.criticScore != nil {
+		rt.driver.CriticFindings = advpoolCriticSink{
+			store: rt.criticScore, clock: time.Now,
+			missionID: mid, repo: rs.Repo, commit: rs.Commit,
+		}
+	}
 	if err := rt.driver.StartRun(mid, rs, sigs); err != nil {
 		return 0, fmt.Errorf("advpool: start run: %w", err)
 	}
@@ -829,6 +881,7 @@ func StartAdversarialPool(ctx context.Context, opts Options) (*AdvPoolRuntime, e
 		staffing:    opts.Staffing,
 		defaults:    defaults,
 		bugCatch:    opts.BugCatch,
+		criticScore: opts.CriticScore,
 		shadowModel: shadowModel,
 		tickErrors:  make(map[int64]int),
 	}

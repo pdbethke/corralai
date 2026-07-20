@@ -85,6 +85,61 @@ func TestFindingToolsOverMCP(t *testing.T) {
 	}
 }
 
+// TestReportFindingPersistsCriticScopeFields closes the carried Task 1 risk:
+// on the BRAIN path, the out-of-process test-critic worker (cmd/corral-agent)
+// files findings via THIS MCP call, not the in-process AddFinding the local
+// certify --local path uses — so if report_finding's tool handler drops
+// scope/test_file/test_selector from its args, every brain-path critic
+// finding reads back off the queue with an empty Scope, which
+// advpool.NormalizeScope treats as dead-check, and the driver's conservative
+// auto-refute (Tick, ~driver.go:1213) NEVER attempts to re-run it — nothing
+// ever auto-refutes on this path even though the model claimed "can never
+// fail". This proves a report_finding call carrying those three fields
+// (the exact keys agentworker.findingFromArgs / criticTools uses) persists
+// them intact through AddFinding, readable back via list_findings.
+func TestReportFindingPersistsCriticScopeFields(t *testing.T) {
+	dir := t.TempDir()
+	cstore, _ := coord.Open(filepath.Join(dir, "c.sqlite3"))
+	t.Cleanup(func() { cstore.Close() })
+	q, _ := queue.Open(filepath.Join(dir, "q.sqlite3"))
+	t.Cleanup(func() { q.Close() })
+
+	ctx := context.Background()
+	clientT, serverT := mcp.NewInMemoryTransports()
+	go func() { _ = NewServer(cstore, nil, Options{Queue: q}).Run(ctx, serverT) }()
+	client := mcp.NewClient(&mcp.Implementation{Name: "critic", Version: "0"}, nil)
+	sess, err := client.Connect(ctx, clientT, nil)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer sess.Close()
+
+	var rf findingOut
+	callTask(t, sess, "report_finding", map[string]any{
+		"name": "Critic", "mission_id": 7, "type": "bug", "severity": "medium",
+		"target": "TestFoo", "evidence": "asserts nothing",
+		"scope": "whole-test", "test_file": "tests/test_x.py", "test_selector": "tests/test_x.py::T::test_a",
+	}, &rf)
+	if rf.ID == 0 {
+		t.Fatal("report_finding did not return an id")
+	}
+
+	var lf listFindingsOut
+	callTask(t, sess, "list_findings", map[string]any{"mission_id": 7}, &lf)
+	var found *queue.Finding
+	for i := range lf.Findings {
+		if lf.Findings[i].ID == rf.ID {
+			found = &lf.Findings[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("filed finding %d not present in list_findings", rf.ID)
+	}
+	if found.Scope != "whole-test" || found.TestFile != "tests/test_x.py" || found.TestSelector != "tests/test_x.py::T::test_a" {
+		t.Fatalf("scope/test_file/test_selector did not persist through report_finding: %+v", found)
+	}
+}
+
 func TestReplanMutationToolsOverMCP(t *testing.T) {
 	dir := t.TempDir()
 	cstore, _ := coord.Open(filepath.Join(dir, "c.sqlite3"))

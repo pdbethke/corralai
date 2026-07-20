@@ -235,6 +235,9 @@ func NewServer(store *coord.Store, mem *memory.Store, opts Options) *mcp.Server 
 	if opts.ControlSpec != nil {
 		registerControlTools(s, opts)
 	}
+	if opts.CriticScore != nil {
+		registerCriticScoreTools(s, opts)
+	}
 	if opts.AdvPool != nil {
 		registerAdvPoolTools(s, opts)
 	}

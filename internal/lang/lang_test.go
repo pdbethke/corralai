@@ -1,6 +1,7 @@
 package lang
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -45,5 +46,42 @@ func TestSingleTestCmd(t *testing.T) {
 	rb, _ := ByName("ruby")
 	if _, ok := rb.SingleTestCmd("x", "y"); ok {
 		t.Fatal("ruby should report ok=false (unimplemented)")
+	}
+}
+
+func TestListTestsCmd(t *testing.T) {
+	py, _ := ByName("python")
+	cmd, ok := py.ListTestsCmd("tests/test_recipes.py")
+	if !ok || strings.Join(cmd, " ") != "python3 -m pytest --collect-only -q tests/test_recipes.py" {
+		t.Fatalf("python ListTestsCmd = %v ok=%v", cmd, ok)
+	}
+	g, _ := ByName("go")
+	gcmd, ok := g.ListTestsCmd("recipes_test.go")
+	if !ok || strings.Join(gcmd, " ") != "go test -list .* ./..." {
+		t.Fatalf("go ListTestsCmd = %v ok=%v", gcmd, ok)
+	}
+	rb, _ := ByName("ruby")
+	if _, ok := rb.ListTestsCmd("x"); ok {
+		t.Fatal("ruby ListTestsCmd should be ok=false")
+	}
+}
+
+func TestParseTestList(t *testing.T) {
+	py, _ := ByName("python")
+	// pytest --collect-only -q prints one node id per line, then a summary line.
+	pyOut := "tests/test_recipes.py::TakeTests::test_take\ntests/test_recipes.py::TakeTests::test_negative_take\n\n2 tests collected in 0.01s\n"
+	got := py.ParseTestList(pyOut)
+	want := []string{"tests/test_recipes.py::TakeTests::test_take", "tests/test_recipes.py::TakeTests::test_negative_take"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("python ParseTestList = %v want %v", got, want)
+	}
+
+	g, _ := ByName("go")
+	// go test -list prints one test name per line, then an "ok  pkg  0.001s" line.
+	goOut := "TestTake\nTestNegativeTake\nExampleTake\nok  \tgithub.com/x/recipes\t0.002s\n"
+	ggot := g.ParseTestList(goOut)
+	gwant := []string{"TestTake", "TestNegativeTake"} // only Test* — drop Example*/Benchmark* and the ok/PASS/FAIL trailer
+	if !reflect.DeepEqual(ggot, gwant) {
+		t.Fatalf("go ParseTestList = %v want %v", ggot, gwant)
 	}
 }

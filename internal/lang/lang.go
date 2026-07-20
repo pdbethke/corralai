@@ -25,6 +25,13 @@ type Plugin interface {
 	// selector in testPath. ok=false when the language can't yet target a
 	// single test — callers must treat that as "no auto-signal", never a pass.
 	SingleTestCmd(testPath, selector string) (cmd []string, ok bool)
+	// ListTestsCmd yields a command that ENUMERATES the individual tests in
+	// testPath. ok=false when the language can't list tests yet — callers must
+	// then skip the matrix, never assume an empty suite.
+	ListTestsCmd(testPath string) (cmd []string, ok bool)
+	// ParseTestList extracts SingleTestCmd-compatible selectors from the output
+	// of ListTestsCmd, in emission order. Pure.
+	ParseTestList(output string) []string
 }
 
 var registry = map[string]Plugin{}

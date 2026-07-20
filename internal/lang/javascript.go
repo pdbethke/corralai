@@ -61,3 +61,7 @@ The output format (a SEARCH/REPLACE edit per mutant) is specified with the task.
 }
 
 func (jsPlugin) SingleTestCmd(testPath, selector string) ([]string, bool) { return nil, false }
+
+func (jsPlugin) ListTestsCmd(string) ([]string, bool) { return nil, false }
+
+func (jsPlugin) ParseTestList(string) []string { return nil }

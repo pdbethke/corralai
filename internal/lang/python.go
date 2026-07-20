@@ -102,3 +102,23 @@ func (pyPlugin) SingleTestCmd(testPath, selector string) ([]string, bool) {
 	}
 	return []string{"python3", "-m", "pytest", "-q", selector}, true
 }
+
+func (pyPlugin) ListTestsCmd(testPath string) ([]string, bool) {
+	if testPath == "" {
+		return nil, false
+	}
+	return []string{"python3", "-m", "pytest", "--collect-only", "-q", testPath}, true
+}
+
+func (pyPlugin) ParseTestList(output string) []string {
+	var out []string
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		// pytest -q node ids contain "::"; the summary line ("N tests collected")
+		// and blank lines do not.
+		if strings.Contains(line, "::") {
+			out = append(out, line)
+		}
+	}
+	return out
+}

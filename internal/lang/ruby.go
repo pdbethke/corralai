@@ -73,3 +73,7 @@ The output format (a SEARCH/REPLACE edit per mutant) is specified with the task.
 }
 
 func (rubyPlugin) SingleTestCmd(testPath, selector string) ([]string, bool) { return nil, false }
+
+func (rubyPlugin) ListTestsCmd(string) ([]string, bool) { return nil, false }
+
+func (rubyPlugin) ParseTestList(string) []string { return nil }

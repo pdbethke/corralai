@@ -113,3 +113,7 @@ The output format (a SEARCH/REPLACE edit per mutant) is specified with the task.
 }
 
 func (tsPlugin) SingleTestCmd(testPath, selector string) ([]string, bool) { return nil, false }
+
+func (tsPlugin) ListTestsCmd(string) ([]string, bool) { return nil, false }
+
+func (tsPlugin) ParseTestList(string) []string { return nil }

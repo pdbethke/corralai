@@ -63,3 +63,21 @@ func (goPlugin) SingleTestCmd(testPath, selector string) ([]string, bool) {
 	}
 	return []string{"go", "test", "-run", "^" + selector + "$", "./..."}, true
 }
+
+func (goPlugin) ListTestsCmd(testPath string) ([]string, bool) {
+	return []string{"go", "test", "-list", ".*", "./..."}, true
+}
+
+func (goPlugin) ParseTestList(output string) []string {
+	var out []string
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		// go test -list prints one identifier per line; keep only Test* funcs
+		// (drop Example*/Benchmark*/Fuzz* and the "ok  pkg  0.00s" / PASS trailer,
+		// which contain whitespace or don't start with "Test").
+		if strings.HasPrefix(line, "Test") && !strings.ContainsAny(line, " \t") {
+			out = append(out, line)
+		}
+	}
+	return out
+}

@@ -33,11 +33,11 @@ if (!golden || !meta) {
 
 const minutes = Math.round((meta.duration_seconds || 0) / 60);
 
-// If the hero tape is an adversarial-pool run, its signed verdict — not the
-// build-mission task/finding counts — is the real story (a pool run reports 0
-// "findings"; its result is a kill-rate + survivors + a signed verdict). Read
-// it straight off the tape so the caption is data-driven and can't drift from
-// the recording. Falls back to the build-mission caption for any other tape.
+// Every hero tape is an adversarial-pool audit: its signed verdict — a
+// kill-rate + survivors, not a task/finding count — is the real story. Read it
+// straight off the tape so the caption is data-driven and can't drift from the
+// recording. The generic step-count caption is a defensive fallback only (no
+// audit tape should ever hit it).
 const events = Array.isArray(golden.events) ? golden.events : [];
 const poolVerdict = events.find((e: any) => e?.kind === 'pool_verdict')?.detail;
 const poolSubject = events.find((e: any) => e?.kind === 'pool_subject')?.detail;
@@ -73,7 +73,7 @@ const pool = poolVerdict
       </p>
     ) : (
       <p class="caption">
-        Below is a real run, replaying now — {meta.task_count} tasks ({meta.done_task_count} done), {meta.finding_count} findings, {minutes}m — every step scrubbable.
+        Below is a real run, replaying now — {minutes}m, every step scrubbable.
       </p>
     )}
   </div>

@@ -45,9 +45,9 @@ for (const [p, mod] of Object.entries(streamModules)) {
   const metaMod = streamModules[p.replace(/\.json$/, '.meta.json')] as any;
   if (!metaMod) throw new Error(`recording ${slug} has no .meta.json sidecar`);
   const meta = metaMod.default ?? metaMod;
-  // Skip a recording that materialized with zero tasks — a broken/empty export
-  // (e.g. a pool run whose tracking mission never got a terminal status) that
-  // otherwise renders as a dead "(no directive recorded) · 0 tasks" card.
+  // Skip a recording that materialized with zero steps — a broken/empty export
+  // (e.g. a pool run that never reached a terminal status) that otherwise
+  // renders as a dead "(no directive recorded) · 0 tasks" card.
   if ((meta.task_count || 0) === 0) continue;
   streams[slug] = (mod as any).default ?? mod;
   cards.push({
@@ -58,11 +58,6 @@ for (const [p, mod] of Object.entries(streamModules)) {
     done_task_count: meta.done_task_count || 0,
     finding_count: meta.finding_count || 0,
     minutes: Math.round((meta.duration_seconds || 0) / 60),
-    // Optional: {url, label} — when present, the card grows a "browse what
-    // it built" link (opens in a new tab). The legacy golden run has no
-    // result field; its card simply omits the link (honest omission —
-    // Task 10 populates this for new runs).
-    result: meta.result && meta.result.url && meta.result.label ? meta.result : undefined,
     platform: platformLine(meta.platform),
     // Optional rendered clip: if scripts/capture-recording-video.sh has written
     // site/public/recordings/<slug>.mp4, the card grows a "watch the run" link
@@ -70,7 +65,7 @@ for (const [p, mod] of Object.entries(streamModules)) {
     video: fs.existsSync(`public/recordings/${slug}.mp4`) ? `/recordings/${slug}.mp4` : undefined,
   });
 }
-// Lead with the thesis tape (the mixtape — local + frontier in one mission),
+// Lead with the thesis tape (the mixtape — local + frontier in one audit),
 // then the rest alphabetically. The spread reads best mixtape-first.
 const LEAD = 'pool-fence-crossvendor';
 cards.sort((a, b) =>
@@ -87,7 +82,7 @@ cards.sort((a, b) =>
   </script>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <title>Corralai — recordings</title>
-  <meta name="description" content="A gallery of real recorded corralai missions — different directives, different model mixes, every one replayable." />
+  <meta name="description" content="A gallery of real recorded corral audits — a decorrelated herd grading a change by execution, different model mixes, every one replayable." />
 </head>
 <body>
   <Header active="recordings" />
@@ -118,11 +113,6 @@ cards.sort((a, b) =>
           {analyses[c.slug] && <span class="has-analysis">analysis below ↓</span>}
           {c.video && (
             <a class="video-link" href={c.video} target="_blank" rel="noopener noreferrer">▶ watch the run (mp4)</a>
-          )}
-          {c.result && (
-            <a class="result-link" href={c.result.url} target="_blank" rel="noopener noreferrer">
-              {c.result.label} →
-            </a>
           )}
         </div>
       ))}
@@ -203,7 +193,6 @@ cards.sort((a, b) =>
   .analysis-panel { border-left: 3px solid var(--amber); padding-left: 16px; }
   .analysis-panel :global(h1), .analysis-panel :global(h2) { font-size: 1.15rem; }
   .analysis-panel :global(p), .analysis-panel :global(li) { color: var(--fg); font-size: 0.95rem; }
-  .result-link { color: var(--amber); font-size: 0.85rem; text-decoration: underline; }
   .video-link { color: var(--amber); font-size: 0.85rem; font-weight: 600; text-decoration: none; }
   .video-link:hover { text-decoration: underline; }
   .back { margin-top: 8px; }
@@ -434,8 +423,8 @@ cards.sort((a, b) =>
     };
     for (const btn of document.querySelectorAll('.card')) {
       btn.addEventListener('click', (ev) => {
-        // The optional "browse what it built" link is a real <a> inside the
-        // card (for a11y + opening in a new tab) — let its own click through
+        // A card may carry its own link (e.g. "watch the run" mp4) as a real
+        // <a> (for a11y + opening in a new tab) — let its own click through
         // without also triggering the replay.
         if (ev.target.closest('a')) return;
         activate(btn);

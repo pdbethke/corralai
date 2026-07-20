@@ -19,6 +19,7 @@ import (
 	"github.com/pdbethke/corralai/internal/buildstore"
 	"github.com/pdbethke/corralai/internal/coord"
 	"github.com/pdbethke/corralai/internal/criticscore"
+	"github.com/pdbethke/corralai/internal/matrixstore"
 	"github.com/pdbethke/corralai/internal/memory"
 	"github.com/pdbethke/corralai/internal/mission"
 	"github.com/pdbethke/corralai/internal/principals"
@@ -1266,5 +1267,78 @@ func TestAdvPoolCriticSinkRecord_CopiesEveryField(t *testing.T) {
 		f.TestSelector != in.TestSelector || f.Scope != in.Scope || f.Evidence != in.Evidence ||
 		f.Severity != in.Severity || f.Adjudication != in.Adjudication || f.Source != in.Source {
 		t.Errorf("copied fields wrong: got %+v, from %+v", f, in)
+	}
+}
+
+// TestAdvPoolMatrixSinkPersistsToStore proves advpoolMatrixSink is a working
+// adapter from the driver's pure advpool.MatrixObservation into the
+// matrixstore.Store: Record on the sink must produce rows readable back via
+// store.List/DeleteCandidates, stamped with the run context (ts via the
+// brain clock, mission/repo/commit/lang) the pure driver does not carry —
+// mirrors TestAdvPoolCriticSinkPersistsToStore exactly.
+func TestAdvPoolMatrixSinkPersistsToStore(t *testing.T) {
+	store, err := matrixstore.Open(filepath.Join(t.TempDir(), "mx.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	fixedClock := time.Unix(9000, 0).UTC()
+	sink := advpoolMatrixSink{
+		store:     store,
+		clock:     func() time.Time { return fixedClock },
+		missionID: 11, repo: "git@x:matrix.git", commit: "cafebabe", lang: "go",
+	}
+	sink.Record(77, "matrixhead", []advpool.MatrixObservation{
+		{TestSelector: "TestKills", TestFile: "x_test.go", Kills: 3, MutantsTotal: 5, DeleteCandidate: false},
+		{TestSelector: "TestDead", TestFile: "x_test.go", Kills: 0, MutantsTotal: 5, DeleteCandidate: true},
+	})
+
+	rows, err := store.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("List returned %d rows, want 2", len(rows))
+	}
+	byTest := map[string]matrixstore.Row{}
+	for _, r := range rows {
+		byTest[r.TestSelector] = r
+	}
+	kills, ok := byTest["TestKills"]
+	if !ok {
+		t.Fatal("want a row for TestKills")
+	}
+	if kills.Kills != 3 || kills.MutantsTotal != 5 || kills.DeleteCandidate {
+		t.Fatalf("TestKills row wrong: %+v", kills)
+	}
+	dead, ok := byTest["TestDead"]
+	if !ok {
+		t.Fatal("want a row for TestDead")
+	}
+	if dead.Kills != 0 || dead.MutantsTotal != 5 || !dead.DeleteCandidate {
+		t.Fatalf("TestDead row wrong: %+v", dead)
+	}
+	for name, r := range byTest {
+		if r.RecordID != 77 || r.RecordHead != "matrixhead" {
+			t.Errorf("%s: RecordID/RecordHead = %d/%q, want 77/matrixhead", name, r.RecordID, r.RecordHead)
+		}
+		if r.MissionID != 11 || r.Repo != "git@x:matrix.git" || r.Commit != "cafebabe" || r.Lang != "go" {
+			t.Errorf("%s: run context wrong: %+v", name, r)
+		}
+		if r.TS != float64(fixedClock.Unix()) {
+			t.Errorf("%s: TS = %v, want %v", name, r.TS, fixedClock.Unix())
+		}
+		if r.TestFile != "x_test.go" {
+			t.Errorf("%s: TestFile = %q, want x_test.go", name, r.TestFile)
+		}
+	}
+
+	candidates, err := store.DeleteCandidates(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 1 || candidates[0].TestSelector != "TestDead" {
+		t.Fatalf("DeleteCandidates = %+v, want exactly [TestDead]", candidates)
 	}
 }

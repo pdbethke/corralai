@@ -117,6 +117,7 @@ import (
 	"github.com/pdbethke/corralai/internal/learn"
 	"github.com/pdbethke/corralai/internal/limit"
 	"github.com/pdbethke/corralai/internal/llm"
+	"github.com/pdbethke/corralai/internal/matrixstore"
 	"github.com/pdbethke/corralai/internal/memory"
 	"github.com/pdbethke/corralai/internal/mission"
 	"github.com/pdbethke/corralai/internal/oracle"
@@ -797,6 +798,16 @@ func main() {
 	}
 	defer criticScoreStore.Close()
 
+	// The adversarial pool's tests×mutants matrix store — per-test,
+	// execution-proven kill-count observations (swarm slice 5), append-only
+	// like bugcatch above. See internal/matrixstore.
+	matrixDB := env("CORRALAI_MATRIX_DB", filepath.Join(home, ".claude", "corralai_matrix.duckdb"))
+	matrixStore, err := matrixstore.Open(matrixDB)
+	if err != nil {
+		log.Fatalf("open matrixstore: %v", err)
+	}
+	defer matrixStore.Close()
+
 	certifyKeyFile := env("CORRALAI_CERTIFY_KEY_FILE", filepath.Join(home, ".claude", "corralai_certify_key"))
 	certifyKey, err := buildstore.LoadOrCreateSigningKey(certifyKeyFile)
 	if err != nil {
@@ -1261,6 +1272,7 @@ func main() {
 		Witness:               certifyWitness,
 		BugCatch:              bugCatchStore,
 		CriticScore:           criticScoreStore,
+		MatrixStore:           matrixStore,
 		SpawnBudget: brain.SpawnBudget{
 			MaxAgentsPerPrincipal: envInt("CORRALAI_MAX_AGENTS_PER_PRINCIPAL", 0),
 			MaxSpawnDepth:         envInt("CORRALAI_MAX_SPAWN_DEPTH", 0),

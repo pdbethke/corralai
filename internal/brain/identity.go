@@ -21,6 +21,7 @@ import (
 	"github.com/pdbethke/corralai/internal/gate"
 	"github.com/pdbethke/corralai/internal/gateway"
 	"github.com/pdbethke/corralai/internal/learn"
+	"github.com/pdbethke/corralai/internal/matrixstore"
 	"github.com/pdbethke/corralai/internal/mission"
 	"github.com/pdbethke/corralai/internal/oracle"
 	"github.com/pdbethke/corralai/internal/principals"
@@ -264,6 +265,15 @@ type Options struct {
 	// get_critic_finding/adjudicate_critic_finding). nil => the pool's critic
 	// findings are never persisted here and those tools are not registered.
 	CriticScore *criticscore.Store
+
+	// MatrixStore, if set, receives per-run tests×mutants matrix observations
+	// from the adversarial pool (internal/matrixstore store) — how many
+	// mutants each dev-suite test killed alone, feeding the
+	// delete-candidate/attrition signal (see swarm slice 5). nil => a run
+	// that opts in via start_adversarial_run's matrix param still runs the
+	// matrix phase (its auto-confirm/refute still flows through
+	// CriticFindings) but the per-test observations are never persisted here.
+	MatrixStore *matrixstore.Store
 
 	// Witness, when set, is the transparency log report_build anchors each
 	// signed DSSE envelope to (Sigstore Rekor or a hermetic fake in tests) —

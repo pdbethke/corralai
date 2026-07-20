@@ -21,6 +21,7 @@ import (
 	"github.com/pdbethke/corralai/internal/criticscore"
 	"github.com/pdbethke/corralai/internal/gate"
 	golang "github.com/pdbethke/corralai/internal/lang"
+	"github.com/pdbethke/corralai/internal/matrixstore"
 	"github.com/pdbethke/corralai/internal/mission"
 	"github.com/pdbethke/corralai/internal/repoindex"
 	"github.com/pdbethke/corralai/internal/telemetry"
@@ -155,6 +156,41 @@ func (s advpoolCriticSink) Record(recordID int64, recordHead string, obs []advpo
 	}
 	if err := s.store.Record(context.Background(), rows); err != nil {
 		log.Printf("advpool: criticscore record failed (mission %d record %d): %v", s.missionID, recordID, err)
+	}
+}
+
+// advpoolMatrixSink persists a converged run's tests×mutants matrix
+// observations into the matrixstore DuckDB store, stamping the run context
+// (ts via the brain clock, mission/repo/commit/lang) the pure driver does
+// not carry — mirrors advpoolBugCatchSink/advpoolCriticSink exactly. lang is
+// the run's resolved language plugin name (RunSpec.Lang), since
+// MatrixObservation carries no language field of its own. Satisfies
+// advpool.MatrixSink.
+type advpoolMatrixSink struct {
+	store     *matrixstore.Store
+	clock     func() time.Time
+	missionID int64
+	repo      string
+	commit    string
+	lang      string
+}
+
+func (s advpoolMatrixSink) Record(recordID int64, recordHead string, obs []advpool.MatrixObservation) {
+	if s.store == nil {
+		return
+	}
+	ts := float64(s.clock().Unix())
+	rows := make([]matrixstore.Row, 0, len(obs))
+	for _, o := range obs {
+		rows = append(rows, matrixstore.Row{
+			TS: ts, RecordID: recordID, RecordHead: recordHead,
+			Repo: s.repo, Commit: s.commit, MissionID: s.missionID, Lang: s.lang,
+			TestSelector: o.TestSelector, TestFile: o.TestFile,
+			Kills: o.Kills, MutantsTotal: o.MutantsTotal, DeleteCandidate: o.DeleteCandidate,
+		})
+	}
+	if err := s.store.Record(context.Background(), rows); err != nil {
+		log.Printf("advpool: matrixstore record failed (mission %d record %d): %v", s.missionID, recordID, err)
 	}
 }
 
@@ -396,6 +432,7 @@ type AdvPoolRuntime struct {
 	defaults    advpool.RoleAssignment // operator CORRALAI_ADVPOOL_MODELS base (nil = hardcoded)
 	bugCatch    *bugcatch.Store        // optional scorecard store; nil = feature off (see StartRun)
 	criticScore *criticscore.Store     // optional critic-accuracy store; nil = feature off (see StartRun)
+	matrixStore *matrixstore.Store     // optional tests×mutants matrix store; nil = per-test rows not persisted (see StartRun)
 	// shadowModel is the daemon-wide default challenger model (resolved once
 	// in StartAdversarialPool from CORRALAI_ADVPOOL_SHADOW_MODEL, "" =
 	// advpool.DefaultShadowModel). Left at its Go zero value ("") by a test
@@ -426,6 +463,7 @@ type AdvPoolRunSpec struct {
 	Lang        string `json:"lang,omitempty" jsonschema:"source language of the code under review (default: inferred from code_path extension, e.g. go, python)"`
 	MaxShards   int    `json:"max_shards,omitempty" jsonschema:"max mutant-generator seats fanned out across the file's functions, one per complexity-balanced group (default 8, see advpool.DefaultMaxShards). Bounds PARALLELISM only — every function is still probed regardless of this value; n_mutants is divided across the resolved shard width so the run's TOTAL mutant budget stays roughly constant as this changes"`
 	ShadowModel string `json:"shadow_model,omitempty" jsonschema:"per-run override for the challenger seat that attacks every region a SECOND time for a region-controlled model head-to-head (default: the daemon's configured shadow model, see CORRALAI_ADVPOOL_SHADOW_MODEL; \"off\" disables it for this run only). Recorded for comparison — NEVER gates the verdict, and never adds a test-writer seat. Roughly DOUBLES this run's mutant-generator LLM calls (one challenger seat per shard) AND adds one extra dev-suite jail execution PER SHARD (the challenger's mutants are scored against the same dev suite as the primary, via a separate Scorer.Score call — see advpool.Driver.runShadowPass), bounded to at most a quarter of the run's deadline (advpool.ShadowTimeBudget)"`
+	Matrix      bool   `json:"matrix,omitempty" jsonschema:"opt this run into the tests×mutants matrix (swarm slice 5, default false): after the primary mutant pass, enumerate the dev suite's individual tests and re-score each ALONE against the run's mutants, feeding a per-test kill-count into the matrix store (delete-candidate/attrition signal) instead of just one dev-suite-wide adequacy number. Requires the daemon to have an Enumerator wired (see StartAdversarialPool) — otherwise this is silently a no-op for that run"`
 }
 
 // AdvPoolRunOut is start_adversarial_run's output: the id of the mission
@@ -686,6 +724,7 @@ func (rt *AdvPoolRuntime) StartRun(in AdvPoolRunSpec) (int64, error) {
 		Lang:        langPlugin.Name(),
 		MaxShards:   maxShards,
 		ShadowModel: shadowModel,
+		Matrix:      in.Matrix,
 	}
 
 	sigs, err := repoindex.ExtractSignatures(rs.Code, rs.Lang)
@@ -719,6 +758,12 @@ func (rt *AdvPoolRuntime) StartRun(in AdvPoolRunSpec) (int64, error) {
 		rt.driver.CriticFindings = advpoolCriticSink{
 			store: rt.criticScore, clock: time.Now,
 			missionID: mid, repo: rs.Repo, commit: rs.Commit,
+		}
+	}
+	if rt.matrixStore != nil {
+		rt.driver.Matrix = advpoolMatrixSink{
+			store: rt.matrixStore, clock: time.Now,
+			missionID: mid, repo: rs.Repo, commit: rs.Commit, lang: rs.Lang,
 		}
 	}
 	if err := rt.driver.StartRun(mid, rs, sigs); err != nil {
@@ -848,6 +893,17 @@ func StartAdversarialPool(ctx context.Context, opts Options) (*AdvPoolRuntime, e
 	driver.Leaderboard = advpoolLeaderboardSink{tel: opts.Telemetry}
 	driver.Events = advpoolEventSink{tel: opts.Telemetry}
 
+	// Enumerator: the jail-backed test-list seam the tests×mutants matrix
+	// phase needs to turn the dev suite into individual selectors (see
+	// advpool.TestEnumerator). Wired unconditionally off the SAME jail
+	// backend as the scorer/validator above — like Signer/Leaderboard/Events
+	// this has no per-run state, so it is set once here rather than per
+	// StartRun call. A run only actually exercises it when it opts in via
+	// RunSpec.Matrix (start_adversarial_run's matrix param); tickMatrix's own
+	// gate (`!run.rs.Matrix || d.Enumerator == nil`) makes this safe to wire
+	// even for daemons that never see a matrix-enabled run.
+	driver.Enumerator = advpool.JailEnumerator{Jail: adequacy.NewEnumerator(opts.GateBackend, gate.DefaultGateTimeout)}
+
 	// RunDeadline is the wall-clock backstop checkNoProgress can't be: it
 	// stands down whenever any task is claimed ("slow is not stuck"), so a
 	// claimed-but-wedged task would otherwise stall a run forever. 12min is
@@ -882,6 +938,7 @@ func StartAdversarialPool(ctx context.Context, opts Options) (*AdvPoolRuntime, e
 		defaults:    defaults,
 		bugCatch:    opts.BugCatch,
 		criticScore: opts.CriticScore,
+		matrixStore: opts.MatrixStore,
 		shadowModel: shadowModel,
 		tickErrors:  make(map[int64]int),
 	}

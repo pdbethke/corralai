@@ -55,31 +55,34 @@ func TestJailAdapterWritesFilesIntoWorkspace(t *testing.T) {
 	}
 }
 
-// TestJailAdapterWorkspaceFilesAreWorldReadable is the cheap unit-level
-// complement to TestJailAdapterContainerBackendCanReadOwnWorkspace below: it
-// locks in the actual perm bits RunTest writes (0644 files, 0755 dirs)
-// rather than the mechanism used to read them. It runs through the bwrap
-// backend (same-uid, so this alone would never have caught the container
-// bug) purely to get a real `stat` inside the jail's own workspace.
-func TestJailAdapterWorkspaceFilesAreWorldReadable(t *testing.T) {
+// TestJailAdapterBwrapWorkspaceStaysLockedDown pins the security-hardening
+// (2026-07-20 review): the workspace is loosened to world-readable ONLY for the
+// container backend, which needs it to read its own files under --cap-drop=ALL.
+// The bwrap backend runs the jailed process as the SAME host uid, so it reads
+// the Go-default locked-down 0700/0600 fine — and MUST stay locked down, or on
+// a shared host it would gratuitously expose the operator's code-under-audit +
+// tests to any other local user. This stat's the real bits inside a bwrap jail.
+func TestJailAdapterBwrapWorkspaceStaysLockedDown(t *testing.T) {
 	backend, err := sandbox.Resolve(sandbox.Config{})
 	if err != nil || backend == nil {
 		t.Skip("no sandbox backend available (bwrap) — needs the real jail to stat the workspace")
+	}
+	if backend.Name() != "bwrap" {
+		t.Skipf("this test pins bwrap perms; resolved backend is %q", backend.Name())
 	}
 	j := NewJail(backend, 30*time.Second)
 	// NOTE: RunTest joins testCmd's elements with a single space and hands the
 	// result to sandbox.RunGuarded, which is itself wrapped in exactly one
 	// "sh -c" by the isolator's Wrap — so a compound shell script must be a
-	// SINGLE testCmd element, not pre-wrapped in its own "sh", "-c" pair
-	// (that would double-wrap and mangle the parsing).
+	// SINGLE testCmd element, not pre-wrapped in its own "sh", "-c" pair.
 	pass, err := j.RunTest(context.Background(), map[string]string{
 		"sub/marker.txt": "hello",
-	}, []string{`test "$(stat -c %a sub/marker.txt 2>/dev/null || stat -f %Lp sub/marker.txt)" = "644" && test "$(stat -c %a sub 2>/dev/null || stat -f %Lp sub)" = "755"`})
+	}, []string{`test "$(stat -c %a sub/marker.txt 2>/dev/null || stat -f %Lp sub/marker.txt)" = "600" && test "$(stat -c %a sub 2>/dev/null || stat -f %Lp sub)" = "700"`})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !pass {
-		t.Fatalf("expected the written file/dir to be 0644/0755 (world-readable), got a mismatch")
+		t.Fatalf("bwrap workspace must be locked down (file 0600, dir 0700) — world-readable perms are gratuitous exposure on the same-uid backend")
 	}
 }
 

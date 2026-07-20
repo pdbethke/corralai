@@ -1,0 +1,15 @@
+{
+  "directive": "adversarial pool · more_itertools/recipes.py (a library we didn't write)",
+  "task_count": 8,
+  "done_task_count": 8,
+  "finding_count": 2,
+  "duration_seconds": 465,
+  "models": [
+    "openai:gemini-3.5-flash",
+    "openai:gemini-3.1-pro-preview"
+  ],
+  "platform": {
+    "inference": "vendor cloud — Gemini 3.5 Flash (planting + writing) + Gemini 3.1 Pro (a stronger, decorrelated critic), Google",
+    "host": "linux/amd64 · bwrap jail"
+  }
+}

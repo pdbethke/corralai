@@ -13,15 +13,21 @@ is the honest version: what it can't do yet, and what's next.
 
 ## What v0.1 is
 
-- The **adaptive loop** works end to end: a directive → a mission → the herd
-  plans, builds, verifies against a deterministic gate, re-plans on findings,
-  and converges.
-- **Multi-model, multi-forge**, key-free on a local 7B if you want it.
-- The **`bwrap` jail**, the **human gate** on admin actions and merges, and a
-  fully **attributed action ledger**.
+- **Certify by execution** works end to end: `corral certify -- <check>` and
+  `corral certify --local`'s adversarial pool (mutant-generator → your suite
+  in the jail → test-writer → decorrelated test-critic) both mint a signed,
+  independently-verifiable record, offline-checkable against the published
+  key with `corral certify verify`.
+- The **repo gate** and the **control gate** run continuously against a
+  brain, requiring the actual check to pass — not a self-report — before
+  branch protection lets a PR merge.
+- **Multi-model, multi-language** (Go, Python, Ruby, JS, TS), decorrelation
+  enforced by construction, key-free on a local 7B if you want it.
+- The **jail** (`bwrap`/container/`sandbox-exec`), the **human gate** on
+  admin actions and merges, and a fully **attributed action ledger**.
 - The **learning loop** (findings → human-approved skills), **shared memory /
-  skills / hooks**, and durable **mission history + replay** — the recordings
-  you can watch on this site are real exported runs.
+  `search_memory`**, and durable **history + replay** — the recordings you
+  can watch on this site are real exported runs.
 - Embedded **DuckDB analytics** and optional **MotherDuck** fleet sync.
 
 ## What it does *not* claim yet
@@ -43,24 +49,53 @@ page and `SECURITY.md`):
   design review and adversarial tests, not (yet) by a hostile production
   adversary.
 
-Operationally, v0.1 is a **single-operator** system: many-missions-at-once,
-budget caps, and mid-mission steering are roadmap items, not shipped features.
+Operationally, v0.1 has real, named ceilings, not "coming soon" hand-waving:
+
+- **One active adversarial-pool run at a time, per hosted brain.**
+  `start_adversarial_run` refuses a second run while one is active — a
+  deliberate scope limit, not a bug; `--local` has no such limit since it
+  runs in-process off your own key.
+- **The certify kill-rate threshold is fixed, not per-repo tunable yet.** A
+  non-positive threshold is refused outright — auto-certifying any suite
+  would defeat the human gate — but there's no per-project dial on it today.
+- **No pentester role in the certify pool.** The adversarial pool runs
+  mutant-generator, test-writer, and test-critic; a dedicated pentester role
+  (as distinct from mutation-testing your suite) isn't part of it.
+- **The language toolchain must be jail-visible.** Installed system-wide
+  under `/usr`, not `--user`/snap/pyenv — an invisible-to-the-sandbox
+  toolchain fails the run closed rather than degrading; see [Running
+  it](/docs/running-it/).
+- **Production runs no worker fleet today.** The hosted brain's gates and
+  `start_adversarial_run` fan-out are real, tested code paths, but with no
+  workers connected to a given deployment they have nothing to fan out to —
+  dormant until workers are pointed at it, not a missing feature.
+- **Single-operator.** Many-runs-at-once, budget caps, and mid-run steering
+  are roadmap items, not shipped features.
 
 ## Where it's heading
 
 From the [roadmap](https://github.com/pdbethke/corralai/blob/main/ROADMAP.md)
-(directional, not committed):
+(directional, not committed) — corral's arc is from a certify CLI + a merge
+gate to a full **accountability plane for AI-written code**:
 
-- **The front door.** A first-class *"what should the herd build?"* composer
-  with an optional clarify step and a pre-flight feasibility check.
-- **Reliability hardening.** Graceful degradation over deadlock — staffing
-  gaps, refusal storms, and stale claims must never strand a mission.
-- **Resumability.** A mission survives a crash or quota blip and resumes from
-  durable state.
-- **The operator surface.** Assign models to roles from a panel; an earned
-  per-role model leaderboard; a VS Code cockpit docked beside the diff.
-- **Ready for teams.** Cost governance, concurrency & multi-tenancy, and
-  mid-mission steering.
+- **The trustless tier.** Ship the ledger head to an external, append-only,
+  timestamped witness (Sigstore Rekor, or a shared MotherDuck warehouse) so
+  tampering is detectable even if you don't trust the brain — central-trust
+  today becomes tamper-evident-against-everyone next.
+- **One-command agent onboarding.** Independent, dev-driven agents join with
+  deterministic passive telemetry via their own hooks — capture by
+  instrumentation, never by an agent choosing to self-report.
+- **The MotherDuck accountability warehouse.** Signed records from every
+  dev, CI runner, and project federate into one shared, queryable warehouse
+  — the same DuckDB schema, a DSN flip.
+- **The shared corpus.** A blind-spot pattern proven once becomes a shared,
+  versioned, signed skill every client's audit can pull from — execution-proven,
+  human-gated, never opaque weights.
+- **Operate the gate at scale.** Model management (assign models to audit
+  roles, an earned per-role leaderboard), cross-model evaluation, a review
+  cockpit docked beside the diff.
+- **Ready for teams.** Cost governance, concurrency & multi-tenancy, memory
+  hygiene on the shared corpus.
 
 The through-line: every capability is the same pattern — brain-mediated,
 human-gated, attributed, *share the capability and hold the credential* — and

@@ -43,7 +43,6 @@ export default defineConfig({
         {
           label: 'Concepts',
           items: [
-            { label: 'Mission lifecycle', slug: 'docs/concepts/mission-lifecycle' },
             { label: 'The task queue + verify gate', slug: 'docs/concepts/queue-and-verify' },
             { label: 'Claims & leases', slug: 'docs/concepts/claims-and-leases' },
             { label: 'Memory tiers + the learning loop', slug: 'docs/concepts/memory-and-learning-loop' },
@@ -66,7 +65,6 @@ export default defineConfig({
             { label: 'Topology', slug: 'docs/ui-tour/topology' },
             { label: 'Memory', slug: 'docs/ui-tour/memory' },
             { label: 'Proposals', slug: 'docs/ui-tour/proposals' },
-            { label: 'Lookbook', slug: 'docs/ui-tour/lookbook' },
             { label: 'Completed + replay + agent windows', slug: 'docs/ui-tour/completed-and-replay' },
           ],
         },

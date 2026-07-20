@@ -1,41 +1,43 @@
 ---
 title: Publishing recordings
-description: The pipeline from a converged mission to a public, replayable recording — deny gate, human manifest, result repos, and the analysis doc.
+description: The pipeline from a completed audit run to a public, replayable recording — deny gate, human manifest, result repos, and the analysis doc.
 ---
 
 {/* SPDX-License-Identifier: Elastic-2.0 */}
 {/* Source of truth: scripts/export-golden-run.sh, scripts/scrub-golden-run.py, site/tests/site.spec.ts (deny glob), site/scripts/build-analytics.mjs */}
 
-Every card on [the recordings gallery](/recordings/) is a real mission that
-ran to convergence and then walked through this pipeline. Nothing on that
-page is synthesized for marketing; the pipeline exists so that honesty is
-cheap and leaks are hard.
+Every card on [the recordings gallery](/recordings/) is a real audit run
+(a `corral certify --local` adversarial-pool run, or a gate run against a
+repo) that ran to completion and then walked through this pipeline. Nothing
+on that page is synthesized for marketing; the pipeline exists so that
+honesty is cheap and leaks are hard.
 
 ## The five artifacts
 
 A published recording is up to five pieces, all keyed by one slug:
 
-1. **The tape** — `site/src/data/recordings/<slug>.json`, the mission's raw
+1. **The tape** — `site/src/data/recordings/<slug>.json`, the run's raw
    `/api/replay` event stream, plus its `.meta.json` sidecar (directive,
    task/finding counts, duration, `models`, `platform`, `result`).
 2. **Analytics** — rebuilt at site build time by
    `site/scripts/build-analytics.mjs` (DuckDB over every committed tape); no
    hand-maintained numbers.
 3. **The analysis doc** — an optional `<slug>.analysis.md` sibling: what the
-   herd was asked, how it went, the honest warts, what we learned. Rendered
-   below the player when the recording is selected.
+   run was asked to certify, how it went, the honest warts, what we learned.
+   Rendered below the player when the recording is selected.
 4. **The result repo** — the run's unedited workspace, pushed to a public
-   repo the card links to ("browse what it built").
+   repo the card links to ("browse what it certified").
 5. **The platform line** — probed at export time (`--platform-inference`,
-   nvidia-smi, `/proc`): what hardware and inference actually ran the herd.
+   nvidia-smi, `/proc`): what hardware and inference actually ran the audit.
 
 ## The pipeline
 
-### 1. Record a mission
+### 1. Record an audit run
 
-Run one to convergence — a demo stack (`make demo-mission` in `deploy/demo/`)
-or a real brain. The brain records the replay stream as a side effect of
-coordination; there is no separate "recording mode".
+Run one to completion — `corral certify --local --record <file>.json`
+against your own code, or a hosted brain's `start_adversarial_run` /
+repo-gate run. The brain records the replay stream as a side effect of the
+run itself; there is no separate "recording mode".
 
 ### 2. Export through the gate
 
@@ -65,10 +67,10 @@ suite scans every committed tape *and* every `.analysis.md` on every run.
 
 ### 3. The result repo
 
-Preserve the converged workspace, review it by eye (same standard as the
+Preserve the run's workspace, review it by eye (same standard as the
 manifest — it ships verbatim), then push it with a README stating it was
-built by a corralai herd, unedited, linking back to the gallery. Three
-target options:
+produced by a corralai audit run, unedited, linking back to the gallery.
+Three target options:
 
 - **GitHub via `gh` CLI** — the interactive operator path: authenticate
   once, `gh repo create <owner>/corral-run-<slug> --public --source . --push`.

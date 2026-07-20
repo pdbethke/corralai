@@ -8,18 +8,17 @@ description: The trust model, the human gate, observer tokens, delegation, and s
 
 ## The human gate
 
-Nothing that changes what future missions do — a memory promotion, a skill
-proposal, a fleet-published skill, a superuser grant — happens without a
-human approving it. One rule, `isHumanAdmin`, guards **thirteen** admin write
-paths (`approve_proposal`, `reject_proposal`, `add_memory(shared=true)`,
-`promote_memory`, `promote_reference`, the UI's proposal-approve/reject
-endpoints, `sync_put`/`sync_delete`, `promote_endpoint`, and the four
-principal-management writes): `isAdmin` **and** no `subagent` claim on the
-token. This is the same gate described in [mission
-lifecycle](/docs/concepts/mission-lifecycle/) and [the learning
-loop](/docs/concepts/memory-and-learning-loop/), stated here as the security
-property it actually is — an agent cannot unilaterally make itself, or a
-later agent, more trusted.
+Nothing that changes what a future audit run does — a memory promotion, a
+skill proposal, a fleet-published skill, a promoted control, a superuser
+grant — happens without a human approving it. One rule, `isHumanAdmin`,
+guards **thirteen** admin write paths (`approve_proposal`, `reject_proposal`,
+`add_memory(shared=true)`, `promote_memory`, `promote_reference`, the UI's
+proposal-approve/reject endpoints, `sync_put`/`sync_delete`,
+`promote_endpoint`, and the four principal-management writes): `isAdmin`
+**and** no `subagent` claim on the token. This is the same gate described in [the control gate
+tools](/docs/mcp-tools/) and [the learning loop](/docs/concepts/memory-and-learning-loop/),
+stated here as the security property it actually is — an agent cannot
+unilaterally make itself, or a later agent, more trusted.
 
 In dev mode there's no cryptographic identity to check, so the same rule
 becomes a **truthfulness guardrail, not a security boundary**: a session that

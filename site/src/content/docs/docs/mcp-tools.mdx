@@ -1,21 +1,23 @@
 ---
 title: MCP tools reference
-description: The brain is an MCP server — the herd, the operator, and any MCP-native client reach it through these tools. Grouped by what they do.
+description: The brain is an MCP server — certify, the gates, and the herd doing audit work all reach it through these tools. Grouped by what they do.
 ---
 
 {/* SPDX-License-Identifier: Elastic-2.0 */}
 {/* Source: internal/brain/*.go mcp.AddTool registrations (server.go, admin.go,
     memory.go, reference.go, recordings.go, history.go, analytics.go,
     gateway.go, host.go, inbox.go, reposync.go, reposearch.go, repofiles.go,
-    executions.go, askfleet.go, fleetclaims.go). Descriptions paraphrase each
-    tool's own registered Description. */}
+    executions.go, askfleet.go, fleetclaims.go, advpool.go, buildcert.go,
+    controltools.go, subagents.go, task_artifacts.go, artifacts.go, browser.go,
+    thought.go, activity.go, tasks.go, missions.go). Descriptions paraphrase
+    each tool's own registered Description. */}
 
 The corral brain is **MCP-native**: `corral` serves `/mcp/` (and `/healthz`) on
-`$CORRALAI_ADDR`. Everything the herd does — claim work, run commands, read and
-write shared knowledge, push to a repo — is an MCP tool call to the brain,
-which records it as an attributed side effect. An MCP-native client (an agent,
-an operator's CLI, an IDE) points its `.mcp.json` at the brain's endpoint and
-gets the tools below.
+`$CORRALAI_ADDR`. Every audit action — certifying a build, staging a control,
+claiming and running work in the jail, reading and writing shared knowledge —
+is an MCP tool call to the brain, which records it as an attributed side
+effect. An MCP-native client (an agent, an operator's CLI, an IDE) points its
+`.mcp.json` at the brain's endpoint and gets the tools below.
 
 Access is enforced per call: workers get the coordination + work tools;
 admin/superuser tools are gated; some (like sharing a recording) are
@@ -23,29 +25,83 @@ human-gated and refuse delegated subagent tokens. This is a guide, not the wire
 spec — the authoritative schema is whatever the running brain advertises via
 `tools/list`.
 
+## Certify — the audit ingest + the adversarial pool
+
+- **`report_build`** — `corral certify`'s ingest endpoint: turn a raw build
+  record (repo, commit, command, exit code) into a signed, tamper-evident,
+  stored accountability record.
+- **`start_adversarial_run`** — *(admin)* start an adversarial-testing-pool
+  run against a code + dev-test pair — mutant-generator, test-writer, and
+  test-critic roles, decorrelation-enforced, gated by the brain-side adequacy
+  jail, certified via the signed record chain. What `corral certify --local`
+  runs in-process; this is the hosted, brain-mediated equivalent.
+- **`get_adversarial_run`** — *(admin)* query a run's status and, once
+  converged, its signed verdict, by the id `start_adversarial_run` returned.
+
+## The control gate — vetted, org-owned checks
+
+A control is an authored test scored for mutation-adequacy against a goal,
+staged unvetted, then human-promoted into the set the control gate actually
+runs — see [Trust & security](/docs/concepts/trust-and-security/) for the
+human-gate rule these tools sit behind.
+
+- **`import_control_bundle`** — *(admin)* import a control-standard bundle
+  (e.g. `asvs-l1`) as owner-scoped goals.
+- **`list_control_goals`** — list your control goals: the bar the control
+  gate holds code to.
+- **`stage_control`** — *(admin)* author a candidate test for a goal+target
+  and score its mutation-adequacy. Stored **unvetted** — never gates until
+  `promote_control`.
+- **`list_pending_controls`** — list your unvetted candidates awaiting
+  review (goal, target, kill rate).
+- **`get_control`** — fetch one pending candidate in full: test source, kill
+  rate, surviving mutants, reviewer triage — to read before promoting.
+- **`promote_control`** — *(admin)* approve a pending candidate into the
+  vetted store the control gate runs. The recorded, attributed human gate.
+- **`reject_control`** — *(admin)* delete a candidate control, vetted or not.
+
 ## Coordination — join the herd, claim work
 
 - **`bootstrap`** — enter a coordination session in one call: register yourself and get active peers, your live claims, and recently-completed work. Call this first.
 - **`heartbeat`** — refresh your presence (and optionally report status: `working` / `awaiting_approval` / `idle`).
 - **`claim_paths`** — lease files/dirs/branches. Exclusive claims are *enforced* — always check `granted` before acting; pass `exclusive:false` for an advisory lease.
 - **`release_claims`** — release your leases (specific paths, or all of yours).
-- **`fleet_claims`** — see who across the fleet holds a lease on a subject.
-- **`spawn_subagent`** — spawn a governed out-of-process worker under a scoped, TTL-bound delegation token.
+- **`whois`** / **`list_active`** — one agent's profile + active claims, or every agent that's heartbeat within the window.
+- **`mark_done`** / **`coordination_status`** — record finished work so peers don't duplicate it, or snapshot active agents + live claims + recent work in one call.
+- **`fleet_claims`** — see who across the fleet holds a lease on a subject (cross-brain, cryptographically verified, advisory-only).
+- **`spawn_subagent`** / **`despawn_subagent`** / **`list_subagents`** — spawn a governed out-of-process worker under a scoped, TTL-bound delegation token, tear one down, or list active ones.
 
-## Missions — start, inspect, replay
+## The task queue — gated work inside a jail run
 
-- **`create_mission`** — turn a directive (optionally against a repo) into a mission the herd plans and executes.
-- **`mission_history`** — past missions: a list (directive, status, duration, counts, what-got-learned) or, given an id, the full drill-down.
-- **`mission_replay`** — replay one mission's recorded event stream, oldest-first.
-- **`mission_analytics`** — analyze the mission event log (DuckDB): a named report (`missions` / `agents` / `kinds` / `findings` / `replans` / `sprints` / `model_comparison`) or an ad-hoc read-only `SELECT`.
+These back the audit runs above (adversarial-pool task DAGs, repo/control
+gate work) — a task queue with a verify gate, not a directive-to-build
+pipeline. See [The task queue + verify gate](/docs/concepts/queue-and-verify/).
+
+- **`claim_task`** / **`complete_task`** — pull the next eligible task in dependency order; `complete_task` refuses to close a **gated** task (one with a `Verify` command) until a matching passing execution is on record.
+- **`report_finding`** / **`list_findings`** / **`resolve_finding`** — file a vuln/bug/design finding with a severity, list open ones, or mark one resolved.
+- **`list_tasks`** / **`cancel_task`** / **`reopen_task`** / **`retarget_dependencies`** / **`supersede_task`** / **`enqueue_task`** — inspect and reshape a run's task graph.
+- **`report_execution`** — record a command execution (the attributed action ledger + the replay console read from these).
+
+## Missions — read-only tracking, not a build pipeline
+
+Every audit run (adversarial pool, repo-work) is tracked as a mission record
+internally, so the same durable history + replay applies to it — there is no
+tool that turns a directive into a mission to build; `create_mission` doesn't
+exist. These are the observability surface over that tracking record:
+
+- **`mission_status`** / **`list_missions`** — one run's status, or recent runs and theirs.
+- **`resolve_review`** / **`pause_mission`** / **`resume_mission`** / **`cancel_mission`** — operator controls over a run's lifecycle.
+- **`mission_history`** — past runs: a list (status, duration, counts, what-got-learned) or, given an id, the full drill-down.
+- **`mission_replay`** — replay one run's recorded event stream, oldest-first.
+- **`mission_analytics`** — analyze the run event log (DuckDB): a named report (`missions` / `agents` / `kinds` / `findings` / `model_comparison`) or an ad-hoc read-only `SELECT`.
 
 ## Working in a repo — the jail → PR path
 
-- **`repo_snapshot`** — snapshot your mission's working copy.
+- **`repo_snapshot`** — snapshot the current run's working copy.
 - **`repo_push`** — hand code back through the brain (which holds the credential) as a reviewed PR — the only way code leaves the jail.
 - **`read_repo`** / **`repo_tree`** / **`repo_grep`** — read a file, list files, or literal-search across the working copy.
 - **`repo_search`** — semantic/hybrid code search over the working copy; returns `path:line` ranges ranked by meaning.
-- **`report_execution`** — record a command execution (the attributed action ledger + the replay console read from these).
+- **`sync_head`** / **`sync_pull`** / **`sync_put`** / **`sync_delete`** — the artifact-sync surface for exchanging files with a run's working copy outside the snapshot/push path (`sync_put`/`sync_delete` are human-gated).
 
 ## Headless browser — web app automation & verification
 
@@ -56,6 +112,7 @@ Built-in headless browser tools powered by Go-native `rod` allowing agents to in
 - **`browser_input`** — enter text into a text input element matched by CSS selector.
 - **`browser_get_html`** — retrieve the current raw HTML source of the active page.
 - **`browser_screenshot`** — capture a full-page PNG screenshot of the current page and save it directly as a task artifact. Gated: the calling agent must hold the active task lease claim.
+- **`save_task_artifact`** / **`list_task_artifacts`** — save an artifact (e.g. a screenshot) to the database directly, or list a run's saved artifacts.
 
 ## Knowledge — memory & reference corpus
 
@@ -67,7 +124,7 @@ Built-in headless browser tools powered by Go-native `rod` allowing agents to in
 
 ## The learning loop — human-gated
 
-- **`approve_proposal`** / **`reject_proposal`** — act on the learning loop's clustered findings → proposed skills. Approving is what turns a run's lessons into authoritative, reusable knowledge; both sit behind the human gate.
+- **`list_proposals`** / **`approve_proposal`** / **`reject_proposal`** — list the learning loop's clustered findings → proposed skills, and act on one. Approving is what turns a run's lessons into authoritative, reusable knowledge; both writes sit behind the human gate.
 
 ## Recordings — export & share replays
 
@@ -80,6 +137,8 @@ Built-in headless browser tools powered by Go-native `rod` allowing agents to in
 
 - **`report_host`** — announce your runtime facts (host, model, jail) so the topology view can map where every agent runs.
 - **`swarm_topology`** — the live topology: each active worker with its host, model, jail, and any model-drift from the configured role policy.
+- **`report_activity`** — report a tool call you just made so the live console shows what every agent is doing, durably recorded for replay when a mission id is present.
+- **`report_thought`** — report a piece of your own reasoning, verbatim, for the story/recording engine. Opt-in per run (off by default); never rewritten or summarized by the brain.
 - **`send_instruction`** / **`check_instructions`** / **`ack_instruction`** — the operator↔agent inbox: send a nudge, read yours, acknowledge one.
 
 ## The fleet oracle
@@ -107,6 +166,7 @@ Register any upstream MCP server with the brain; the herd then shares
 
 ---
 
-See [Mission lifecycle](/docs/concepts/mission-lifecycle/) for how these tools
-compose into a running mission, and [Trust & security](/docs/concepts/trust-and-security/)
-for the boundaries every one of them is enforced against.
+See [The task queue + verify gate](/docs/concepts/queue-and-verify/) for how
+these tools compose into a running audit, and [Trust &
+security](/docs/concepts/trust-and-security/) for the boundaries every one of
+them is enforced against.

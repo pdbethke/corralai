@@ -1,34 +1,41 @@
 ---
 title: Multi-model herds
-description: Role-based model policy, harness workers bringing their own auth, and model comparison.
+description: Decorrelation by construction, role-based model policy, harness workers bringing their own auth, and model comparison.
 ---
 
 {/* SPDX-License-Identifier: Elastic-2.0 */}
-{/* Source: README.md multi-model + harness sections; internal/rolemodel/rolemodel.go, internal/brain/subagents.go, internal/brain/host.go; docs/DESIGN.md P3 */}
+{/* Source: README.md multi-model + decorrelation + harness sections; internal/rolemodel/rolemodel.go, internal/brain/subagents.go, internal/brain/host.go, internal/advpool/driver.go */}
 
-## A role-model policy
+Multi-model isn't a comparison feature bolted onto certify — it's the mechanism
+that makes the verdict trustworthy. *Nemo iudex in causa sua*: the model that
+critiques a test suite is **forced** to differ from the model that wrote the
+exposing test — the run refuses to start where the roles collapse onto one
+model. A swarm that runs one LLM in every role gets parallelism with
+*correlated* blind spots, because the "reviewer" shares the "author's" failure
+modes when it's the same model underneath.
 
-Different roles can run different models: `CORRALAI_ROLE_MODELS` maps
-`role=backend:model` pairs — e.g. a pentester and a reviewer on two distinct
-models so `model_comparison` has something real to compare, while builder and
-tester share a cheaper default. When a role's spawn happens and its assigned
-model is already live in the pool, the spawn call resolves the new
-subagent onto it (**apply-on-spawn**); when it isn't yet connected, the child
-inherits the default instead and the gap shows up as **drift** on
-`swarm_topology` rather than a blocked spawn. See [corral's env
-reference](/docs/cli/corral/) for the rest of the brain's environment
-variables.
+## Decorrelation across the audit roles
 
-## Composing a mission's herd
+`corral certify --local` runs distinct roles — mutant-generator, test-writer,
+test-critic — each with its own model assignment, and the critic role is
+**decorrelation-enforced**: it must differ from the model that authored the
+exposing test, checked at run start, not advised after the fact. By default a
+single `ANTHROPIC_API_KEY` already satisfies this (Sonnet writes/mutates,
+Haiku critiques); `--critic-model` plus a second vendor's key crosses a vendor
+boundary entirely. Bring Claude, Gemini, GPT, anything OpenAI-compatible, or a
+local model — no lock-in.
 
-`CORRALAI_ROLE_MODELS` sets a *global* default; the cockpit's **Mission Composer**
-builds a herd **per mission** instead. Drag a model/agent onto each role, select
-which **MCP endpoints** (from the gateway) the herd may consume, and attach
-**lookbook** design directives — then launch. Those choices are persisted against
-that mission — its own role→agent map, endpoints, and lookbook — and the endpoint +
-lookbook context is injected into the herd's task instructions, so each mission
-carries its own team and reach rather than the process-wide default. (v1 runs one
-mission at a time; concurrent, differently-composed missions are on the roadmap.)
+## A role-model policy for the hosted brain
+
+The same idea, generalized: `CORRALAI_ROLE_MODELS` maps `role=backend:model`
+pairs so different roles in a running brain carry different models — e.g. a
+generator and a critic on two distinct models so `model_comparison` has
+something real to compare. When a role's spawn happens and its assigned model
+is already live in the pool, the spawn call resolves the new subagent onto it
+(**apply-on-spawn**); when it isn't yet connected, the child inherits the
+default instead and the gap shows up as **drift** on `swarm_topology` rather
+than a blocked spawn. See [corral's env reference](/docs/cli/corral/) for the
+rest of the brain's environment variables.
 
 ## Bring your own model, bring your own auth
 

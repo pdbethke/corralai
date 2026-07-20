@@ -7,8 +7,9 @@ description: How tasks are queued for agents and how the verify gate keeps bad w
 {/* Source: docs/corral/verify-gate.md; internal/queue/store.go, internal/brain/tasks.go, internal/queue/executions.go, internal/queue/supersede.go */}
 
 A queued task can carry a `Verify` command — e.g. `"go build"` or
-`"go test"` — set on phases like `build-core`, `test`, and `integrate` in the
-default mission plan. A task with a non-empty `Verify` is **gated**:
+`"go test"` — set on a task in an audit run's task graph (the adversarial
+pool's shards, or a gate's checkout-and-check task). A task with a non-empty
+`Verify` is **gated**:
 `complete_task` refuses to close it until a matching passing run is on
 record. Tasks with no `Verify` command are trusted on the agent's own
 completion report — for genuinely unverifiable work, like a design write-up
@@ -34,8 +35,8 @@ and pass/fail flag. That both feeds the live activity view and durably
 records the run, keyed to the agent's currently-claimed mission. Only after a
 passing `report_execution` for the gating command can `complete_task`
 succeed. A failing run instead leaves the task in the queue with the failure
-captured as a **finding** — which feeds the
-[re-planning loop](/docs/concepts/mission-lifecycle/), not a silent retry.
+captured as a **finding**, which the run's own retry/reshard logic acts on —
+not a silent retry.
 
 ## Supersede inherits the gate
 

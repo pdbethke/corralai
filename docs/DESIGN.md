@@ -1,10 +1,17 @@
 # CorralAI — Design
 
-**Corral your coding agents.** An MCP-native **brain** that a swarm of coding
-agents (local and across machines) coordinate and remember through. The agents are
-the swarm; CorralAI is the **corral** — the shared environment they self-organize
-within. No central orchestrator: each agent decides for itself and reads shared
-state (claims, presence, completed work) to stay in its lane. That's stigmergy.
+**An audit for software change.** Corral certifies a change **by execution, not
+opinion**: run the check in a jail, measure the result yourself, sign a
+tamper-evident record, and gate the merge — see [README.md](../README.md) for the
+current product pitch and [ROADMAP.md](../ROADMAP.md) for where it's headed. This
+document is the architecture record underneath that: an MCP-native **brain** that
+a herd of coding agents (local and across machines) coordinate, certify, and
+remember through, plus the build log of how the substrate got here. The agents
+are the herd; CorralAI is the **corral** — the shared environment they
+self-organize within. No central orchestrator: each agent decides for itself and
+reads shared state (claims, presence, completed work) to stay in its lane. That's
+stigmergy — and it's still exactly how the adversarial pool's roles, the repo
+gate's checkout-and-check, and the control gate's staged reviews coordinate today.
 
 ## Topology: central brain + thin clients
 
@@ -59,7 +66,16 @@ topology here; historical analytics via MotherDuck → any BI tool (Metabase, Gr
   a fork of `mcp_agent_mail`, whose license carries an anti-OpenAI/Anthropic rider).
 - Names: PyPI/npm/GitHub `corralai`; domain `corralai.dev`.
 
-## Roadmap
+## Build log (P0–P11)
+
+A dated record of how the coordination + audit substrate was actually built,
+kept for provenance rather than as current framing — for where the product is
+headed now, see [ROADMAP.md](../ROADMAP.md); for what's live today, the
+[site docs](https://corralai.dev/docs/getting-started/). Several phases below
+predate the 2026-07-13 refocus onto certify-by-execution as the product; the
+substrate they built (coordination, memory, replay, the human gate) is what
+the audit gate runs on today, described here as it was shipped, phase by
+phase.
 
 - **P0 — coordination core (DONE).** SQLite-backed advisory TTL leases, presence,
   completed-work, audit; bootstrap one-call entry. `internal/coord`, 6/6 tests green.

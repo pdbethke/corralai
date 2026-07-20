@@ -13,8 +13,8 @@ searched by everyone (`search_memory`), but not yet trusted enough to shape
 behavior automatically. `CORRAL.md` + `docs/corral/*.md` are ingested the same
 way, tagged to the repo — code review is the trust gate for that knowledge,
 same as for code. Promotion to **vetted** (`shared=true`) requires the human
-gate below; only vetted guidance is injected into later missions'
-instructions.
+gate below; only vetted guidance is injected into later audit runs'
+task instructions.
 
 ## The learning loop
 
@@ -23,11 +23,11 @@ seen **3 or more times**) and similar lessons into **proposals**: an LLM
 drafts corrective guidance plus a reusable skill, Shep announces the pending
 proposal at standup — even with an empty queue — and the operator approves or
 rejects it, from the Proposals tab (a live count badge, kept off the Progress
-tab so a busy sweep doesn't crowd the mission view) or `corral-admin
-proposals`. Approval fans the guidance out to vetted memory and a versioned
-skill artifact; `create_mission` then injects the top vetted lessons into
-phase instructions, fence-wrapped under `LESSONS FROM THE HERD (vetted)` and
-**capped at 3**.
+tab so a busy sweep doesn't crowd the view) or `corral-admin proposals`.
+Approval fans the guidance out to vetted memory and a versioned skill
+artifact; the top vetted lessons are then injected into the task
+instructions of the audit runs that follow, fence-wrapped under `LESSONS
+FROM THE HERD (vetted)` and **capped at 3**.
 
 The sweep re-feeds the full finding/lesson history every tick rather than
 accumulating counts, so a signature's count always reflects what's true right

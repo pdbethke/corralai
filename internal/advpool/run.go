@@ -35,6 +35,15 @@ type RunSpec struct {
 	// verdict — the exam's difficulty stays set by the primary model alone, so
 	// certification means exactly what it meant before. "" disables.
 	ShadowModel string
+
+	// Matrix opts a run into the tests×mutants matrix (swarm slice 5): after
+	// pool-adequacy, the driver enumerates the dev suite's individual tests
+	// and scores each ALONE against the run's own mutants, then drives critic
+	// finding adjudication (refute + confirm) off that per-test data instead
+	// of the single re-scored test the pre-matrix path used. false (the
+	// default) preserves today's single-test critic auto-refute path byte-
+	// for-byte — every existing run/test keeps behaving exactly as before.
+	Matrix bool
 }
 
 // RoleAssignment maps a role name (Role.Name) to the gate-earned model that

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
+	"github.com/pdbethke/corralai/internal/matrix"
 	"github.com/pdbethke/corralai/internal/queue"
 	"github.com/pdbethke/corralai/internal/repoindex"
 )
@@ -52,6 +53,9 @@ const (
 	OutcomePass = "pass"
 	OutcomeFail = "fail"
 )
+
+// matrixDefaultWorkers is Driver.MatrixWorkers' fallback when unset (<= 0).
+const matrixDefaultWorkers = 4
 
 // Signer wraps the certify chain (certify.BuildLedger/BuildAttestation/
 // SignDSSE + buildstore — the real impl is Task 5.1): it signs a terminal
@@ -120,6 +124,33 @@ type CriticFindingObservation struct {
 // RecordID/RecordHead are set, so every row carries a linkable record.
 type CriticFindingSink interface {
 	Record(recordID int64, recordHead string, obs []CriticFindingObservation)
+}
+
+// TestEnumerator runs a language plugin's list command in the run's jail
+// workspace and returns its stdout — the seam tickMatrix needs to turn a
+// suite file into individual selectors before scoring each one. Optional on
+// the Driver (nil ⇒ the matrix phase is skipped even when RunSpec.Matrix is
+// set — matrix is opt-in on TWO axes: the run must ask for it AND the driver
+// must be wired with a way to enumerate).
+type TestEnumerator interface {
+	Enumerate(ctx context.Context, codePath, code, test string, listCmd []string) (stdout string, err error)
+}
+
+// MatrixObservation is one test's execution-proven adequacy from the
+// tests×mutants matrix: how many of the run's mutants it killed ALONE, and
+// whether that makes it a delete-candidate (scored, ran against a non-empty
+// mutant set, killed nothing).
+type MatrixObservation struct {
+	TestSelector, TestFile string
+	Kills, MutantsTotal    int
+	DeleteCandidate        bool
+}
+
+// MatrixSink is the optional per-run tests×mutants matrix feed (nil ⇒
+// no-op), mirroring CriticFindingSink/BugCatchSink: fed on every terminal
+// verdict once RecordID/RecordHead are set, only when the matrix actually ran.
+type MatrixSink interface {
+	Record(recordID int64, recordHead string, obs []MatrixObservation)
 }
 
 // EventSink receives the pool's reasoning milestones as replay/telemetry
@@ -249,6 +280,14 @@ type runState struct {
 
 	poolScored   bool
 	provenMissed int
+
+	// matrix is the tests×mutants matrix result (nil until tickMatrix runs,
+	// and forever nil when RunSpec.Matrix is false or no Enumerator is
+	// wired). matrixDone guards tickMatrix to run AT MOST ONCE per run — the
+	// matrix is O(tests × mutants) jail runs, the most expensive phase in the
+	// pipeline, and Tick may be called many times before convergence.
+	matrix     *matrix.Result
+	matrixDone bool
 
 	// testWriterAttempts counts compile-failure reopens of the test-writer
 	// task, guarded against MaxTestWriterAttempts in tickPoolAdequacy. Once
@@ -382,6 +421,24 @@ type Driver struct {
 	// RecordID/RecordHead are set) on every terminal verdict. See
 	// tickAggregate's auto-refute step.
 	CriticFindings CriticFindingSink
+
+	// Enumerator is the optional jail-backed test-list seam (nil = the matrix
+	// phase is always skipped, regardless of any run's RunSpec.Matrix). When
+	// set AND a run opts in, tickMatrix uses it to enumerate the dev suite's
+	// individual tests before scoring each against the run's mutants.
+	Enumerator TestEnumerator
+
+	// Matrix is the optional per-run tests×mutants matrix feed (nil = no-op),
+	// fed AFTER Signer (once RecordID/RecordHead are set), mirroring
+	// CriticFindings/BugCatch — same RecordID!=0 guard, same reasoning.
+	Matrix MatrixSink
+
+	// MatrixWorkers bounds the matrix phase's concurrent jail scoring calls.
+	// <= 0 defaults to matrixDefaultWorkers. Each ScoreReport/Enumerate call
+	// runs in its OWN disposable os.MkdirTemp workspace with no shared
+	// mutable state (confirmed against bwrapJail — see jail.go), so scoring
+	// concurrently is safe the same way --swarm's concurrent workers are.
+	MatrixWorkers int
 
 	// Events is the optional reasoning-event sink (nil = no-op), mirroring
 	// Signer/Leaderboard: every pre-existing Driver test keeps working
@@ -652,6 +709,10 @@ func (d *Driver) Tick(ctx context.Context, missionID int64) (*Verdict, error) {
 		if err := d.tickPoolAdequacy(ctx, run); err != nil {
 			return nil, err
 		}
+	}
+
+	if run.poolScored && !run.matrixDone {
+		d.tickMatrix(ctx, run)
 	}
 
 	if run.poolScored {
@@ -1139,6 +1200,81 @@ func (d *Driver) tickPoolAdequacy(ctx context.Context, run *runState) error {
 	return nil
 }
 
+// tickMatrix is the tests×mutants matrix phase (swarm slice 5): once
+// pool-adequacy is scored, enumerate the dev suite's individual tests and
+// score EACH ALONE against the run's own mutant set, so tickAggregate can
+// drive critic finding adjudication off real, per-test execution data
+// instead of one re-scored selector. Opt-in on two axes (RunSpec.Matrix AND
+// a wired Enumerator) and fail-soft throughout: an unavailable language
+// plugin, an enumeration error, or any single test's scoring error never
+// fails the audit — it just leaves run.matrix nil (or that one row
+// unscored) and the pre-matrix single-test critic path in tickAggregate
+// still runs. Guarded to run AT MOST ONCE per run by the matrixDone flag the
+// caller (Tick) sets is checked before calling this.
+func (d *Driver) tickMatrix(ctx context.Context, run *runState) {
+	run.matrixDone = true // set FIRST: even a skip/failure must not retry every tick
+
+	if !run.rs.Matrix || d.Enumerator == nil || len(run.mutants) == 0 {
+		return
+	}
+
+	p := langFor(run.rs)
+	listCmd, ok := p.ListTestsCmd(run.rs.DevTestPath)
+	if !ok {
+		log.Printf("advpool: matrix: unavailable for %q", run.rs.Lang)
+		return
+	}
+
+	out, err := d.Enumerator.Enumerate(ctx, run.rs.CodePath, run.rs.Code, run.rs.DevTestCode, listCmd)
+	if err != nil {
+		log.Printf("advpool: matrix: enumerate failed, skipping matrix: %v", err)
+		return
+	}
+
+	sels := p.ParseTestList(out)
+	if len(sels) == 0 {
+		return
+	}
+	refs := make([]matrix.TestRef, len(sels))
+	for i, sel := range sels {
+		refs[i] = matrix.TestRef{Selector: sel, TestFile: run.rs.DevTestPath}
+	}
+
+	workers := d.MatrixWorkers
+	if workers <= 0 {
+		workers = matrixDefaultWorkers
+	}
+	log.Printf("advpool: matrix: %d tests × %d mutants (%d cells) across %d workers",
+		len(sels), len(run.mutants), len(sels)*len(run.mutants), workers)
+
+	scoreFn := func(sctx context.Context, tr matrix.TestRef) (int, []string, bool) {
+		cmd, ok := p.SingleTestCmd(tr.TestFile, tr.Selector)
+		if !ok {
+			return 0, nil, false
+		}
+		rep, serr := d.Scorer.ScoreReport(sctx, run.rs.CodePath, run.rs.Code, run.rs.DevTestCode, run.mutants, strings.Join(cmd, " "))
+		if serr != nil {
+			log.Printf("advpool: matrix: score failed for %q: %v", tr.Selector, serr)
+			return 0, nil, false
+		}
+		if !rep.CompliantPass {
+			return 0, nil, false
+		}
+		return len(rep.Killed), rep.Killed, true
+	}
+
+	res := matrix.Build(ctx, refs, len(run.mutants), workers, scoreFn)
+	run.matrix = &res
+
+	deleteCandidates := 0
+	for _, row := range res.Rows {
+		if row.DeleteCandidate {
+			deleteCandidates++
+		}
+	}
+	log.Printf("advpool: matrix: %d delete-candidate test(s)", deleteCandidates)
+}
+
 // tickAggregate is step 4: once test-critic is done AND pool-adequacy is
 // scored, aggregate the Verdict, apply the human gate, sign it (Signer, if
 // wired), and — only after that sign succeeds — feed the gate-earned
@@ -1204,37 +1340,53 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 		d.BugCatch.Record(v.RecordID, v.RecordHead, bugCatchObservations(run, v))
 	}
 
-	// Conservative auto-refute: for each critic finding scoped whole-test with
-	// a runnable single-test selector, re-run the JAIL's Scorer with THAT test
-	// alone against the run's own mutant set. If it kills at least one mutant,
-	// execution has proven the "can never fail" claim false — AutoAdjudication
-	// downgrades it to refuted. dead-check findings and anything the language
-	// plugin can't target as a single test are left unadjudicated; this NEVER
-	// auto-confirms and NEVER fails the audit — a scoring/jail error here is
-	// logged and simply leaves that one finding unadjudicated, same fail-soft
-	// posture as the shadow-challenger pass above. Same RecordID!=0 guard as
-	// BugCatch (see its doc comment): a record_id=0 row is unlinkable.
+	// Conservative auto-refute/confirm: when the tests×mutants matrix ran for
+	// this run (run.matrix != nil), each whole-test finding's adjudication is
+	// driven off the matrix's OWN execution-proven per-test row instead of a
+	// fresh single-test re-score — see matrixAdjudication. When the matrix did
+	// NOT run (matrix off, no Enumerator wired, or it skipped/failed), this
+	// falls back to the ORIGINAL single-test path, unchanged: for each critic
+	// finding scoped whole-test with a runnable single-test selector, re-run
+	// the JAIL's Scorer with THAT test alone against the run's own mutant set.
+	// If it kills at least one mutant, execution has proven the "can never
+	// fail" claim false — AutoAdjudication downgrades it to refuted. Either
+	// path: dead-check findings and anything the language plugin can't target
+	// as a single test are left unadjudicated; neither path ever auto-fails
+	// the audit — a scoring/jail error is logged and simply leaves that one
+	// finding unadjudicated. Same RecordID!=0 guard as BugCatch (see its doc
+	// comment): a record_id=0 row is unlinkable.
 	if d.CriticFindings != nil && v.RecordID != 0 {
 		p := langFor(run.rs)
 		var obs []CriticFindingObservation
 		for _, f := range criticFindings {
 			scope := NormalizeScope(f.Scope)
-			ran, kills := false, 0
-			if scope == ScopeWholeTest && f.TestSelector != "" {
-				if cmd, ok := p.SingleTestCmd(f.TestFile, f.TestSelector); ok {
-					if kr, survivors, serr := d.Scorer.Score(ctx, run.rs.CodePath, run.rs.Code, run.rs.DevTestCode, run.mutants, strings.Join(cmd, " ")); serr != nil {
-						log.Printf("advpool: run %d: critic auto-refute score failed for %q: %v", missionID, f.TestSelector, serr)
-					} else if kr > 0 {
-						// kr == 0 covers BOTH the baseline-couldn't-pass case
-						// (adequacy.Score returns CompliantPass:false, Total:0,
-						// Survived:nil, err:nil — see JailScorer.Score) and the
-						// genuine-zero-kills case; either way there is no
-						// execution-proven kill, so leave ran=false, kills=0 ->
-						// AutoAdjudication yields unadjudicated (inconclusive),
-						// never a false "refuted".
-						ran, kills = true, len(run.mutants)-len(survivors)
+			var adjudication string
+			if run.matrix != nil {
+				adjudication = AdjUnadjudicated
+				if scope == ScopeWholeTest && f.TestSelector != "" {
+					if row := matrixRowFor(run.matrix.Rows, f.TestSelector); row != nil {
+						adjudication = matrixAdjudication(*row, run.matrix.Catchable)
 					}
 				}
+			} else {
+				ran, kills := false, 0
+				if scope == ScopeWholeTest && f.TestSelector != "" {
+					if cmd, ok := p.SingleTestCmd(f.TestFile, f.TestSelector); ok {
+						if kr, survivors, serr := d.Scorer.Score(ctx, run.rs.CodePath, run.rs.Code, run.rs.DevTestCode, run.mutants, strings.Join(cmd, " ")); serr != nil {
+							log.Printf("advpool: run %d: critic auto-refute score failed for %q: %v", missionID, f.TestSelector, serr)
+						} else if kr > 0 {
+							// kr == 0 covers BOTH the baseline-couldn't-pass case
+							// (adequacy.Score returns CompliantPass:false, Total:0,
+							// Survived:nil, err:nil — see JailScorer.Score) and the
+							// genuine-zero-kills case; either way there is no
+							// execution-proven kill, so leave ran=false, kills=0 ->
+							// AutoAdjudication yields unadjudicated (inconclusive),
+							// never a false "refuted".
+							ran, kills = true, len(run.mutants)-len(survivors)
+						}
+					}
+				}
+				adjudication = AutoAdjudication(scope, ran, kills)
 			}
 			obs = append(obs, CriticFindingObservation{
 				QueueFindingID: f.ID,
@@ -1245,13 +1397,30 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 				Scope:          scope,
 				Evidence:       f.Evidence,
 				Severity:       f.Severity,
-				Adjudication:   AutoAdjudication(scope, ran, kills),
+				Adjudication:   adjudication,
 				Source:         "auto",
 			})
 		}
 		if len(obs) > 0 {
 			d.CriticFindings.Record(v.RecordID, v.RecordHead, obs)
 		}
+	}
+
+	// Feed the matrix sink with the SAME matrix result tickMatrix already
+	// computed — only when the matrix actually ran (run.matrix != nil) and a
+	// sink is wired. Same RecordID!=0 guard as CriticFindings/BugCatch above.
+	if run.matrix != nil && d.Matrix != nil && v.RecordID != 0 {
+		obs := make([]MatrixObservation, len(run.matrix.Rows))
+		for i, row := range run.matrix.Rows {
+			obs[i] = MatrixObservation{
+				TestSelector:    row.Selector,
+				TestFile:        row.TestFile,
+				Kills:           row.Kills,
+				MutantsTotal:    row.MutantsTotal,
+				DeleteCandidate: row.DeleteCandidate,
+			}
+		}
+		d.Matrix.Record(v.RecordID, v.RecordHead, obs)
 	}
 
 	d.emit(missionID, "pool_verdict", v.Commit, map[string]any{

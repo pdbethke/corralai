@@ -87,6 +87,17 @@ type Jail interface {
 	RunTest(ctx context.Context, files map[string]string, testCmd []string) (bool, error)
 }
 
+// Enumerator runs a command in the SAME jailed, disposable-workspace
+// convention as Jail.RunTest, but returns its captured stdout instead of a
+// bool pass/fail — the seam the tests×mutants matrix needs to enumerate a
+// suite's individual tests (Jail.RunTest only ever answers "did it pass",
+// never "what did it print"). bwrapJail implements both over the identical
+// writeWorkspace helper, so an Enumerate call gets the exact same
+// perms/anti-traversal/backend handling RunTest does.
+type Enumerator interface {
+	Enumerate(ctx context.Context, files map[string]string, cmd []string) (stdout string, err error)
+}
+
 // Report is the outcome of scoring a candidate test against compliant code
 // and a set of mutants.
 type Report struct {

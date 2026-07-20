@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Elastic-2.0
 package advpool
 
+import "github.com/pdbethke/corralai/internal/matrix"
+
 const (
 	AdjUnadjudicated = "unadjudicated"
 	AdjConfirmed     = "confirmed"
@@ -26,4 +28,36 @@ func AutoAdjudication(scope string, ran bool, kills int) string {
 		return AdjRefuted
 	}
 	return AdjUnadjudicated
+}
+
+// matrixRowFor finds the tests×mutants matrix row for a critic finding's
+// TestSelector, nil if the matrix never scored that selector (e.g. it was
+// not among the enumerated tests).
+func matrixRowFor(rows []matrix.TestAdequacy, selector string) *matrix.TestAdequacy {
+	for i := range rows {
+		if rows[i].Selector == selector {
+			return &rows[i]
+		}
+	}
+	return nil
+}
+
+// matrixAdjudication is AutoAdjudication's matrix-driven sibling: unlike
+// AutoAdjudication (which never auto-confirms — a single re-scored test in
+// isolation has no way to know whether ANY test could have caught the gap),
+// the matrix DOES know: catchable is true iff some OTHER scored test in the
+// same run killed at least one mutant, which is the soundness floor that
+// makes "this specific test caught nothing, and something else proves the
+// mutants were catchable at all" a sound zero-kill confirmation. A test that
+// could not even be scored (row.Scored false — e.g. its baseline couldn't
+// pass) is never adjudicated either way: NOT running is not evidence.
+func matrixAdjudication(row matrix.TestAdequacy, catchable bool) string {
+	switch {
+	case row.Scored && row.Kills >= 1:
+		return AdjRefuted
+	case row.Scored && row.Kills == 0 && catchable:
+		return AdjConfirmed
+	default:
+		return AdjUnadjudicated
+	}
 }

@@ -171,6 +171,34 @@ func (s JailScorer) scoreWorkspace(codePath, test, testCmd string) (map[string]s
 	return scoreBase, cmd
 }
 
+// JailEnumerator implements the driver's TestEnumerator over the SAME
+// jail/workspace conventions JailScorer uses (scoreWorkspace), so a matrix
+// enumeration sees the identical scaffold/BaseFiles-mode a subsequent
+// ScoreReport call for one of its selectors would see. It holds an
+// adequacy.Enumerator rather than adequacy.Jail — RunTest only ever answers
+// pass/fail, never stdout, so enumeration needs the stdout-capturing sibling
+// (see internal/adequacy.Enumerator).
+type JailEnumerator struct {
+	Jail adequacy.Enumerator
+	// BaseFiles mirrors JailScorer.BaseFiles: nil preserves single-file mode.
+	BaseFiles map[string]string
+}
+
+// Enumerate builds the same jail workspace scoreWorkspace would for a scoring
+// run (base scaffold/whole-repo plus the dev test overlaid at its synthetic
+// path in single-file mode), overlays codePath -> code exactly as
+// adequacy.Score's own run closure does, and runs listCmd through the
+// stdout-capturing jail.
+func (e JailEnumerator) Enumerate(ctx context.Context, codePath, code, test string, listCmd []string) (string, error) {
+	scoreBase, _ := (JailScorer{BaseFiles: e.BaseFiles}).scoreWorkspace(codePath, test, "")
+	files := make(map[string]string, len(scoreBase)+1)
+	for k, v := range scoreBase {
+		files[k] = v
+	}
+	files[codePath] = code
+	return e.Jail.Enumerate(ctx, files, listCmd)
+}
+
 // JailValidator brain-side-validates a worker's structured artifacts before
 // the driver trusts them: CompileTest jail-compiles a candidate test against
 // the code (via `go vet`, which type-checks test files without executing

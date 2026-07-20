@@ -592,6 +592,259 @@ func TestCriticAutoRefute_BaselineFail_StaysUnadjudicated(t *testing.T) {
 	}
 }
 
+// fakeEnumerator never touches a real jail: it returns canned stdout for
+// tickMatrix's enumeration call and records how many times it was asked.
+type fakeEnumerator struct {
+	out   string
+	err   error
+	calls int
+}
+
+func (f *fakeEnumerator) Enumerate(ctx context.Context, codePath, code, test string, listCmd []string) (string, error) {
+	f.calls++
+	return f.out, f.err
+}
+
+// matrixSinkCall records one MatrixSink.Record invocation.
+type matrixSinkCall struct {
+	recordID   int64
+	recordHead string
+	obs        []MatrixObservation
+}
+
+type fakeMatrixSink struct {
+	calls []matrixSinkCall
+}
+
+func (f *fakeMatrixSink) Record(recordID int64, recordHead string, obs []MatrixObservation) {
+	f.calls = append(f.calls, matrixSinkCall{recordID, recordHead, obs})
+}
+
+// newTestDriverWithSpec mirrors newTestDriver but lets the caller supply the
+// RunSpec (needed to set Matrix: true — testRunSpec()'s default leaves it
+// false, byte-compatible with every pre-matrix test).
+func newTestDriverWithSpec(t *testing.T, missionID int64, scorer *fakeScorer, validator *fakeValidator, threshold float64, rs RunSpec) *Driver {
+	t.Helper()
+	q := newTestQueue(t)
+	d, err := NewDriver(q, scorer, validator, decorrelatedAssign(), threshold)
+	if err != nil {
+		t.Fatalf("NewDriver: %v", err)
+	}
+	if err := d.StartRun(missionID, rs, nil); err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	if _, err := q.PromoteReady(missionID); err != nil {
+		t.Fatalf("PromoteReady: %v", err)
+	}
+	return d
+}
+
+// TestMatrixDrivesAdjudicationAndCandidates is the integration crux of the
+// tests×mutants matrix (swarm slice 5): with RunSpec.Matrix=true and a wired
+// Enumerator, tickMatrix enumerates three tests (TestA/TestB/TestC, via the
+// REAL go plugin's ParseTestList over a fake Enumerator's stdout) and scores
+// each alone against the run's two mutants (m1, m2) via the fakeScorer's
+// scripted ScoreReport: TestA kills m1 (a load-bearing test), TestB is
+// scored but kills nothing (a delete-candidate — but only a SOUND one
+// because TestA proves the mutants were catchable at all), TestC's baseline
+// can't even pass (CompliantPass=false, excluded from scoring/candidacy
+// entirely). Two whole-test critic findings — one on TestA, one on TestB —
+// must then be adjudicated OFF THE MATRIX (not a fresh single-test
+// re-score): TestA's finding is refuted (execution proved it CAN fail),
+// TestB's finding is confirmed (it genuinely caught nothing, and the matrix
+// floor — Catchable — proves that absence is meaningful, not just an
+// untestable claim).
+func TestMatrixDrivesAdjudicationAndCandidates(t *testing.T) {
+	mutants := []adequacy.Mutant{{ID: "m1", Code: "c1"}, {ID: "m2", Code: "c2"}}
+	scorer := &fakeScorer{
+		devKillRate: 0.9, devSurvivors: mutants, poolSurvivors: nil,
+		reportFn: func(_ context.Context, _, _, _ string, _ []adequacy.Mutant, testCmd string) (adequacy.Report, error) {
+			switch {
+			case strings.Contains(testCmd, "^TestA$"):
+				return adequacy.Report{CompliantPass: true, Killed: []string{"m1"}, Survived: []string{"m2"}}, nil
+			case strings.Contains(testCmd, "^TestB$"):
+				return adequacy.Report{CompliantPass: true, Killed: nil, Survived: []string{"m1", "m2"}}, nil
+			case strings.Contains(testCmd, "^TestC$"):
+				return adequacy.Report{CompliantPass: false}, nil
+			default:
+				t.Fatalf("unexpected ScoreReport testCmd: %q", testCmd)
+				return adequacy.Report{}, nil
+			}
+		},
+	}
+	validator := &fakeValidator{mutants: mutants}
+
+	rs := testRunSpec()
+	rs.Matrix = true
+	d := newTestDriverWithSpec(t, 30, scorer, validator, 0.5, rs)
+	d.Signer = &fakeSigner{}
+	enumerator := &fakeEnumerator{out: "TestA\nTestB\nTestC\nok  \tpkg\t0.002s\n"}
+	d.Enumerator = enumerator
+	matrixSink := &fakeMatrixSink{}
+	d.Matrix = matrixSink
+	criticSink := &fakeCriticSink{}
+	d.CriticFindings = criticSink
+
+	ctx := context.Background()
+	ready := claimAllReady(t, d.Q)
+	tc, mg := ready[RoleTestCritic], ready[RoleMutantGenerator]
+	if tc == nil || mg == nil {
+		t.Fatalf("expected test-critic and mutant-generator both ready, got: %v", keysOf(ready))
+	}
+	if _, err := d.Q.AddFinding(queue.Finding{
+		MissionID: 30, TaskID: tc.ID, Reporter: "test-critic", Type: "bug",
+		Severity: "high", Target: "TestA",
+		Evidence: "this test asserts nothing — it can never fail",
+		Scope:    ScopeWholeTest, TestFile: "target_test.go", TestSelector: "TestA",
+	}); err != nil {
+		t.Fatalf("AddFinding (TestA): %v", err)
+	}
+	if _, err := d.Q.AddFinding(queue.Finding{
+		MissionID: 30, TaskID: tc.ID, Reporter: "test-critic", Type: "bug",
+		Severity: "high", Target: "TestB",
+		Evidence: "this test asserts nothing — it can never fail",
+		Scope:    ScopeWholeTest, TestFile: "target_test.go", TestSelector: "TestB",
+	}); err != nil {
+		t.Fatalf("AddFinding (TestB): %v", err)
+	}
+	mustComplete(t, d.Q, tc.ID, "flagged TestA and TestB")
+	mustComplete(t, d.Q, mg.ID, "raw mutants")
+	if _, err := d.Tick(ctx, 30); err != nil {
+		t.Fatalf("Tick (dev-adequacy): %v", err)
+	}
+	tw := claimTaskByID(t, d.Q, d.runs[30].testWriterTaskID)
+	mustComplete(t, d.Q, tw.ID, "pool test source")
+
+	v, err := d.Tick(ctx, 30)
+	if err != nil {
+		t.Fatalf("Tick (pool-adequacy + matrix + aggregate): %v", err)
+	}
+	if v == nil {
+		t.Fatal("expected a verdict")
+	}
+
+	if enumerator.calls != 1 {
+		t.Fatalf("Enumerate calls = %d, want 1", enumerator.calls)
+	}
+
+	// The matrix sink must have gotten exactly one Record call, carrying all
+	// three rows (order preserved from enumeration).
+	if len(matrixSink.calls) != 1 {
+		t.Fatalf("MatrixSink.Record calls = %d, want 1", len(matrixSink.calls))
+	}
+	mc := matrixSink.calls[0]
+	if mc.recordID != v.RecordID || mc.recordHead != v.RecordHead {
+		t.Fatalf("matrix sink record = (%d, %q), want (%d, %q)", mc.recordID, mc.recordHead, v.RecordID, v.RecordHead)
+	}
+	if len(mc.obs) != 3 {
+		t.Fatalf("matrix observations = %d, want 3: %+v", len(mc.obs), mc.obs)
+	}
+	byTest := map[string]MatrixObservation{}
+	for _, o := range mc.obs {
+		byTest[o.TestSelector] = o
+	}
+	if byTest["TestA"].DeleteCandidate {
+		t.Error("TestA (kills m1) must NOT be a delete-candidate")
+	}
+	if !byTest["TestB"].DeleteCandidate {
+		t.Error("TestB (scored, zero kills) MUST be a delete-candidate")
+	}
+	if byTest["TestC"].DeleteCandidate {
+		t.Error("TestC (baseline could not pass, not scored) must NOT be a delete-candidate")
+	}
+
+	// The critic findings must be adjudicated off the matrix, not a fresh
+	// single-test re-score.
+	if len(criticSink.obs) != 2 {
+		t.Fatalf("CriticFindings.Record obs = %d, want 2: %+v", len(criticSink.obs), criticSink.obs)
+	}
+	var onA, onB *CriticFindingObservation
+	for i := range criticSink.obs {
+		switch criticSink.obs[i].TestSelector {
+		case "TestA":
+			onA = &criticSink.obs[i]
+		case "TestB":
+			onB = &criticSink.obs[i]
+		}
+	}
+	if onA == nil {
+		t.Fatal("no observation for the TestA finding")
+	}
+	if onA.Adjudication != AdjRefuted {
+		t.Fatalf("TestA finding Adjudication = %q, want %q (matrix proved it can fail)", onA.Adjudication, AdjRefuted)
+	}
+	if onA.Source != "auto" {
+		t.Fatalf("TestA finding Source = %q, want %q", onA.Source, "auto")
+	}
+	if onB == nil {
+		t.Fatal("no observation for the TestB finding")
+	}
+	if onB.Adjudication != AdjConfirmed {
+		t.Fatalf("TestB finding Adjudication = %q, want %q (scored zero-kill, catchable via TestA)", onB.Adjudication, AdjConfirmed)
+	}
+	if onB.Source != "auto" {
+		t.Fatalf("TestB finding Source = %q, want %q", onB.Source, "auto")
+	}
+}
+
+// TestMatrixOff_PreservesSingleTestCriticPath proves RunSpec.Matrix=false
+// (the default) leaves today's single-test critic auto-refute path byte-for-
+// byte unchanged even when an Enumerator IS wired: tickMatrix must never run
+// (Enumerate must be called zero times), and the finding must be adjudicated
+// via the pre-matrix single-test re-score path (AutoAdjudication), exactly as
+// TestCriticAutoRefute already proves without an Enumerator wired at all.
+func TestMatrixOff_PreservesSingleTestCriticPath(t *testing.T) {
+	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}}
+	scorer := &fakeScorer{devKillRate: 0.9, devSurvivors: survivors, poolSurvivors: nil}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0]}}
+	rs := testRunSpec() // Matrix left false
+	d := newTestDriverWithSpec(t, 31, scorer, validator, 0.5, rs)
+	d.Signer = &fakeSigner{}
+	enumerator := &fakeEnumerator{out: "TestAlwaysPasses\n"}
+	d.Enumerator = enumerator
+	sink := &fakeCriticSink{}
+	d.CriticFindings = sink
+
+	ctx := context.Background()
+	ready := claimAllReady(t, d.Q)
+	tc, mg := ready[RoleTestCritic], ready[RoleMutantGenerator]
+	if tc == nil || mg == nil {
+		t.Fatalf("expected test-critic and mutant-generator both ready, got: %v", keysOf(ready))
+	}
+	if _, err := d.Q.AddFinding(queue.Finding{
+		MissionID: 31, TaskID: tc.ID, Reporter: "test-critic", Type: "bug",
+		Severity: "high", Target: "TestAlwaysPasses",
+		Evidence: "this test asserts nothing — it can never fail",
+		Scope:    ScopeWholeTest, TestFile: "target_test.go", TestSelector: "TestAlwaysPasses",
+	}); err != nil {
+		t.Fatalf("AddFinding: %v", err)
+	}
+	mustComplete(t, d.Q, tc.ID, "flagged TestAlwaysPasses")
+	mustComplete(t, d.Q, mg.ID, "raw mutants")
+	if _, err := d.Tick(ctx, 31); err != nil {
+		t.Fatalf("Tick (dev-adequacy): %v", err)
+	}
+	tw := claimTaskByID(t, d.Q, d.runs[31].testWriterTaskID)
+	mustComplete(t, d.Q, tw.ID, "pool test source")
+
+	v, err := d.Tick(ctx, 31)
+	if err != nil {
+		t.Fatalf("Tick (pool-adequacy + aggregate): %v", err)
+	}
+	if v == nil {
+		t.Fatal("expected a verdict")
+	}
+	if enumerator.calls != 0 {
+		t.Fatalf("Enumerate calls = %d, want 0 (matrix must never run when RunSpec.Matrix is false)", enumerator.calls)
+	}
+	if len(sink.obs) != 1 {
+		t.Fatalf("CriticFindings.Record obs = %d, want 1: %+v", len(sink.obs), sink.obs)
+	}
+	if sink.obs[0].Adjudication != AdjRefuted {
+		t.Fatalf("Adjudication = %q, want %q (single-test re-score path, unchanged)", sink.obs[0].Adjudication, AdjRefuted)
+	}
+}
+
 // (e) DevKillRate below threshold -> needs-review, even with no findings.
 func TestTick_Aggregate_BelowThreshold_NeedsReview(t *testing.T) {
 	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}, {ID: "m2", Code: "c2"}}

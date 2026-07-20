@@ -1,7 +1,7 @@
 ## What corral was asked
 
-Certify a file from [more-itertools](https://github.com/more-itertools/more-itertools)
-— `more_itertools/recipes.py`, 67 functions we didn't write — against the
+Certify a file from **more-itertools** — `more_itertools/recipes.py`, 67
+functions we didn't write, from a well-loved zero-dependency library — against the
 library's *own* test suite (`tests/test_recipes.py`), by execution. The
 generation fanned out into six shards so every function got probed, not just
 whichever one a single generator happened to pick.

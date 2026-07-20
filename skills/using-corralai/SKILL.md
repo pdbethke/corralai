@@ -1,121 +1,135 @@
 ---
 name: using-corralai
-description: "Use when driving or observing a corralai brain — the multi-agent 'herd' orchestrator. NOTE: the build-from-directive mission loop this skill documents is being RETIRED as corral re-focuses to a reactive audit/certification gate (see docs/superpowers/specs/2026-07-13-corral-refocus-audit-not-builder-design.md); the repo gate + control gate are the live surface today, and the mission engine is retained dormant. Still covers the CLI (corral / corral-admin / corral-agent / corral-harness / corral-observe / corral-top), the human gate, memory + the CORRAL.md knowledge corpus, and watching/replaying a run. Invoke whenever the user mentions corral, the herd, a mission, the gate, wrangling agents, or wants to run/observe/steer corralai."
+description: "Use when driving or querying a corralai brain — the audit-by-execution gate for software change. Covers `corral certify --local` (mutation-score a change's own tests), `corral certify <ref> -- <cmd>` (certify a change by its declared check), the repo gate + control gate, querying the shared knowledge corpus (`search_memory`), and the CLI (corral / corral-admin / corral-agent / corral-harness / corral-observe / corral-top). Invoke whenever the user mentions corral, certify, the audit, the gate, the herd, or wants to run/observe/steer a corralai brain."
 ---
 
 # Using corralai
 
-> **RETIRED FLOW.** This skill describes the build-from-directive mission loop
-> below (directive -> herd builds -> re-plans on findings -> client review),
-> which is being retired as corral re-focuses to a reactive audit/certification
-> gate (the repo gate + control gate are the current live surface — see
-> `README.md`'s "What runs today"). `make demo-mission` and the
-> `corral-admin mission create` verb it depended on are no longer runnable.
-> Kept for reference pending a rewrite; see
-> `docs/superpowers/specs/2026-07-13-corral-refocus-audit-not-builder-design.md`.
+corralai certifies a software change **by execution, not opinion**: it runs the
+check in a jail, measures the result itself — never a self-report — signs a
+tamper-evident record, and gates the merge. This skill teaches any coding agent
+how to drive that audit surface.
 
-corralai turns **one directive** into a **mission** that a **herd** of role-differentiated
-AI agents executes: a headless **brain** decomposes it into a dependency-ordered task
-queue; agents pull ready tasks and build; their structured **findings** feed a two-tier
-re-planner; the mission **converges** when the client (you, or a modeled product-owner
-agent) accepts. Agents run on any model — local Ollama (no API keys) or frontier CLIs.
+**The one thing that most determines a good audit: the check you hand it.**
+Everything below serves that.
 
-**The one thing that most determines a good run: the directive's verify gate.** Everything
-below serves that.
+## `corral certify --local` — audit a change's own tests
 
-## Compose the directive (do this well and the rest follows)
-
-A directive is a sentence plus a *checkable* definition of done. The brain gates task
-completion on a **recorded passing run of a verify command** — so name it:
-
-- Good: `Build a Python 'ratelimit' package: a RateLimiter with allow(key), configurable
-  capacity + refill, docstrings, a README, and unittest tests; make 'python3 -m unittest' pass.`
-- Weak: `Build a rate limiter.` (no gate → the herd can't prove it's done → sprawl.)
-
-Rules of thumb:
-- **State the verify command** (`go test ./...`, `pytest`, `node --test`). The language is
-  inferred from it — corral is language-agnostic; the gate is what pins quality.
-- **Bound the scope.** One artifact converges fast; a vague epic grows tasks without end.
-- **Name the acceptance shape** (files, API, tests) so findings have something to check against.
-
-## Run a mission
-
-The **brain** is the coordination server; you talk to it with `corral-admin`, and agents
-connect to it. Simplest first run is the bundled demo (local models, no keys):
+The fastest path: mutate the code, run the dev's own test suite against every
+mutant in a jail, and score what fraction it kills.
 
 ```bash
-go run ./cmd/corral                 # start the brain (dev: auth off) — MCP /mcp/, UI on :9019
-cd deploy/demo && make demo-mission # a directive → the herd builds it → re-plans → converges
+corral certify --local \
+  --code path/to/file.py \
+  --goal "what this code must guarantee" \
+  --out verdict.json \
+  -- python -m pytest
 ```
 
-Then open `http://127.0.0.1:9019/` to watch the corral. Against a running brain:
+- A mutant-generator seeds real, goal-violating bugs into the code.
+- The suite runs against every mutant, **in a jail**; the kill-rate is the
+  adequacy score — measured, never reported.
+- A test-writer authors a compiling test that kills whatever the suite missed.
+- A test-critic (always a *different*, decorrelation-enforced model) flags
+  vacuous tests as **unverified advice — it never gates the verdict.**
+
+Output is a signed verdict (`certified` or `needs-review`), printed and written
+to a local tamper-evident ledger; `--out` also writes a self-contained file
+re-checkable offline with `corral certify verify verdict.json --pubkey "$(corral
+certify pubkey)" --allow-unanchored`.
+
+Key flags: `--repo-dir <path>` audits the file in the context of a whole cloned
+repo; `--swarm N` bounds concurrent audit tasks (0 = auto-size to cores);
+`--record <file>.json` writes a replayable tape; `--max-shards` /
+`--n-mutants` control how many mutants get scored; `--shadow-model` runs a
+second challenger model for a scorecard-only head-to-head (never affects the
+verdict). Full flag reference in the root [README.md](../../README.md#the-audit-flags).
+
+## `corral certify <ref> -- <cmd>` — certify a change by its declared check
+
+The other entry point: any commit, any command.
 
 ```bash
-corral-admin mission create "Build X … make <verify> pass"   # launch a mission
-corral-admin status                                          # agents, claims, recent work
-corral-admin mission list | status <id>                     # progress
+corral certify HEAD -- go test ./...
 ```
+
+It checks `<ref>` out into a jail, runs `<cmd>`, reads the exit code, and
+writes a signed record — verify offline with `corral certify verify`, or
+`--brain <url>` to post it to a running brain. No server required either way.
+
+## The gate — repo and control owner
+
+Against a running brain, the same certify-by-execution pattern runs
+continuously on pull requests:
+
+- **The repo (merge) gate.** Watches a covered repo's open PRs; on a new head
+  commit it checks the PR out, runs the repo's declared check in the jail,
+  signs the result, and posts a `corral/gate` status.
+- **The control gate.** Same pattern, but runs the **control owner's**
+  independently-vetted tests against the PR head instead of the repo's own
+  check, posting a distinct `corral/control-gate` status — the party
+  accountable for code they didn't write sets the bar.
+- The admin-only `start_adversarial_run` MCP tool runs the same sharded +
+  shadow adversarial audit `--local` runs, against a repo the brain already
+  coordinates.
+
+## Query the knowledge corpus
+
+A repo carries its working knowledge as markdown (`CORRAL.md` at the root,
+`docs/corral/*.md` as the corpus) plus a shared, searchable memory (DuckDB,
+full-text + optional vector). Point any MCP-speaking coding agent's
+`.mcp.json` at the brain and ask it to search — under the hood that calls
+`search_memory`, which returns the repo's docs, prior findings, and any
+human-approved lessons in one ranked list. Memory is **trust-tiered**:
+searchable advisory knowledge is never auto-injected as an instruction, so a
+repo (or a poisoned document) can't smuggle in authority by shipping a file.
 
 ## The binaries
 
 | Binary | Role |
 |---|---|
-| `corral` | the **brain** — coordination + memory MCP server; validates bearer tokens, no browser-login of its own |
+| `corral` | the **brain** — MCP coordination, the repo/control gates, memory, reference RAG, the fleet oracle, embedded UI |
 | `corral-admin` | **operator** client: `mission`, `instruct`, `status`, `findings`, `review`, `proposals`, `member`, `reference`, `analyze`, `whoami`, `ui` (privileged live console), `mint-observer` |
-| `corral-agent` | a **worker** that pulls tasks and executes (queue mode) or self-organizes (demo mode); drives a model backend (Ollama/OpenAI/Anthropic) |
-| `corral-harness` | a **worker wrapper** around a headless coding CLI (Claude Code, Gemini, Codex, Copilot) via a `HARNESS_CMD` template — bring your own frontier agent |
+| `corral-agent` | a **worker** that pulls tasks and executes; drives a model backend (Ollama/OpenAI/Anthropic) |
+| `corral-harness` | a **worker wrapper** around a headless coding CLI (Claude Code, Gemini, Codex, Copilot) via a `HARNESS_CMD` template — bring your own frontier agent to staff an audit role |
 | `corral-observe` | **read-only** credentialed proxy to the live UI — hand it to people who should watch but not touch |
 | `corral-top` | terminal dashboard of the live corral |
 
 Every binary supports `-h`. Run it to see its exact flags and env vars.
 
-## Mission lifecycle (what you're watching)
-
-`directive → decompose into a task queue → LEAD orchestrates phases (research → design →
-build-core → build → test ∥ secops ∥ perf → integrate → docs → retro) → agents claim ready
-tasks (exclusive path leases, no trampling) → they report structured findings → a two-tier
-re-planner reacts → the client reviews → converge.`
-
-- **The verify gate:** a task with a verify command can't be marked done until a *passing*
-  run of it is on record (`report_execution`). This is the quality floor — never bypass it.
-- **Two-tier re-planning:** a *reflex* tier deterministically spawns fix + re-verify tasks
-  from findings (bounded by caps, loop-until-dry); a *lead* tier can supersede or re-architect.
-- **Claims & leases:** agents hold exclusive (or advisory) path claims with TTLs; an idle
-  holder is reclaimed (the slacker rule) so a stalled agent doesn't wedge the mission.
-
 ## The human gate — agents propose, you dispose
 
-Nothing that shapes the herd's future behavior lands without a human. Recurring findings and
-lesson clusters become **skill proposals**; you approve or reject them (`corral-admin proposals
-list | show | approve | reject`, or the UI's Proposals tab). Approval promotes vetted guidance
-into memory and a versioned skill artifact the whole fleet equips. Worker/delegation tokens are
+Nothing that shapes future audit behavior lands without a human. Recurring
+finding signatures and clusters of similar lessons become **skill
+proposals**: an LLM drafts corrective guidance plus a reusable skill, and the
+operator approves or rejects it (`corral-admin proposals list | show | approve
+| reject`, or the UI's Proposals tab). Approval promotes it into vetted memory
+and a versioned skill the whole fleet equips. Worker/delegation tokens are
 *refused* admin writes by design — a worker can propose, it cannot self-vet.
-
-## Memory + the knowledge corpus
-
-- **Memory tiers:** advisory → vetted. The herd searches memory before working and extends it as
-  it learns; vetted lessons (human-approved) are injected into every mission's instructions, capped.
-- **CORRAL.md:** a repo that corral runs on can carry its working knowledge as a markdown corpus —
-  `CORRAL.md` at the root as the entry point, `docs/corral/*.md` as the corpus. Developers read it
-  as onboarding; any coding agent queries it; the herd searches it and grows it by ordinary PRs
-  (code review is the trust gate for knowledge, same as for code).
 
 ## Watch it, then watch it back
 
-- **Live:** the UI at the brain's address (canvas of agents + claims, a live console of the exact
-  commands they ran, tasks and findings panels), or `corral-top`, or `corral-observe` for a
-  read-only share.
-- **Replay:** finished missions are recorded (tasks, claims, findings, executions, the event log)
-  and replay read-only on the same canvas with a scrub bar — reconstructed deterministically from
-  durable rows, so scrubbing backward rebuilds a shorter history exactly.
+- **Live:** the UI at the brain's address, or `corral-top`, or `corral-observe`
+  for a read-only share.
+- **Replay:** finished runs record fully (tasks, findings, executions, the
+  event log) and replay read-only on the same canvas with a scrub bar, up to
+  16×. `corral certify --local --record <file>.json` writes the same
+  replayable tape for a local run.
 
 ## Operator gotchas
 
-- **The gate is the hero, not an obstacle** — if a run sprawls, the directive's verify command was
-  too weak. Sharpen it, don't loosen the gate.
-- **Local 7B models are slow and argumentative** (many findings → many re-plan tasks). That's honest,
-  not broken; frontier models converge far faster with fewer detours.
-- **Auth off = dev only.** A brain with no OIDC issuer configured is wide open — never expose one
-  publicly. In production, configure an issuer (any OIDC provider) + a principal allowlist.
-- **A worker that shares your interactive model/quota can stall mid-mission** when the quota drains —
-  pin worker models off whatever you're using by hand.
+- **The check you hand it is the whole audit** — a weak or absent verify
+  command means a weak or absent gate. Sharpen the check, don't loosen it.
+- **Decorrelation is enforced, not requested.** Cross-model checking refuses
+  to start if the critic and the generator collapse onto the same model.
+- **Jail-visibility.** The language toolchain a check needs must be installed
+  system-wide (under `/usr`), not `--user`/pyenv/nvm-local — invisible to the
+  sandboxed mount namespace means the gate fails closed with a loud error, not
+  a silent false pass.
+- **Fail-closed, always.** If the host can't isolate execution, or a run can't
+  converge to a killing test for a survivor, corral returns a loud error or
+  `needs-review` — never a silent, unsandboxed run and never an unearned
+  `certified`.
+- **Auth off = dev only.** A brain with no OIDC issuer configured is wide
+  open — never expose one publicly. In production, configure an issuer (any
+  OIDC provider) plus a principal allowlist.

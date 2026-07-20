@@ -2,26 +2,15 @@
 # Corralai Roadmap
 
 > **Directional, not committed.** Solo-maintained and moving fast (v0.1). This is
-> where corral is heading and *why*; the reasoning in depth lives in
-> [`docs/superpowers/notes/2026-07-05-corral-as-an-operator-system.md`](docs/superpowers/notes/2026-07-05-corral-as-an-operator-system.md).
-> No dates — priorities shift with what real use surfaces.
+> where corral is heading and *why*. No dates — priorities shift with what real use
+> surfaces.
 
-> **Re-focus in progress (2026-07-13):** corral is retiring the build-from-directive
-> path and re-centering on being a **reactive audit / certification gate** — the
-> CISO's tool, not another builder. Full reasoning:
-> [`docs/superpowers/specs/2026-07-13-corral-refocus-audit-not-builder-design.md`](docs/superpowers/specs/2026-07-13-corral-refocus-audit-not-builder-design.md).
-> Below, items describing the old build-and-iterate loop are marked **[retired]**;
-> everything else in "Shipped" is accountability/gate infrastructure carried
-> forward as-is. Honesty note: the `corral certify <change>` CLI and the staffed
-> adversarial-verification flow the spec describes are **design, not shipped** —
-> only the repo gate + control gate (below) actually run today.
-
-Corral's arc is from *impressive demo* to *usable system* — the environment where
-you **run a team of AI agents across any model**. The foundations are already in
-place (per-action attribution, the jail + human gate, the learning loop, durable
-replay, embedded DuckDB analytics, MCP, jail→repo). Most of what's ahead is
-**surfacing** that foundation, not re-architecting it — which is the best place to
-be standing at the start of the hard part.
+Corral's arc is from a **certify CLI + a merge gate** to a full **accountability
+plane for AI-written code**: the place a team proves — by execution, not opinion —
+that a change is fit, and holds a signed, queryable record of what actually ran. The
+foundation is in place (certify-by-execution, the jail + human gate, the attributed
+ledger, the learning loop, durable replay, embedded DuckDB, MCP). Most of what's
+ahead is **surfacing and federating** that foundation, not re-architecting it.
 
 A guiding invariant runs through all of it: **the brain's API is the boundary —
 writes go through it, reads share the analytical store read-only, every kind of
@@ -29,232 +18,158 @@ sharing lends the *capability* and holds the *credential*, and the core stays on
 Go binary.**
 
 ## Shipped
-- **[retired]** ~~The adaptive loop: a directive → a mission → the herd builds →
-  verifies against a deterministic gate → re-plans on findings → converges~~ — the
-  build-from-directive loop is retired (see the re-focus note above). The mission
-  engine's lifecycle plumbing (dependency-ordered queue, findings, human-gated
-  needs-review) is retained in the codebase as a dormant seed for an adversarial
-  *verification* engine; its Tick loop is not started by the daemon today.
-- The learning loop (findings → human-approved skills) behind the human gate
-- Multi-model, multi-forge; the `bwrap` jail; the attributed action ledger
-- Mission history + read-only replay; the corralai.dev site + recordings gallery
-- Shared memory, skills, and hooks (fleet-synced); OIDC identity
-- Fleet analytics to MotherDuck
-- **The story engine** — the replay streams the agents' *real, captured reasoning*
-  alongside their commands; click any agent mid-scrub to inspect its reconstructed
-  state; **click any task** for its causal chain (what triggered it, what it
-  unblocked, the commands that ran under it); a **file-tree lens** reconstructs the
-  paths the herd touched, filling in as the tape plays; and **one scrub bar drives
-  the whole cockpit** — canvas, progress, and files — through the same moment in
-  time. Filter the console per agent. Watch the herd **think**, not just move.
-- **[retired — code retained, not wired]** Egress scan — the mission engine's
-  scanner (committed secrets *blocking*; new/vulnerable deps and license
-  conflicts advisory) is still in the codebase but has no running caller now that
-  the Tick loop is disabled. The gates (below) are the live exit-side control.
-- **[retired]** ~~Complexity-aware planning~~ — the build-plan sizer this
-  described was deleted with the build path. **Multi-role workers** (a small
-  herd covering every role without deadlocking) is retained — staffing is
-  re-pointed at verifier roles, not deleted.
-- **Model×role telemetry** — the brain computes each model's per-role performance
-  (sample-weighted, honest about thin data) and infers per-agent health from the
-  attributed ledger — the data layer the leaderboard and self-staffing read from.
-- **[retained — mission engine dormant]** Graceful degradation over deadlock —
-  the mission engine's lifecycle hardening (a no-progress backstop that fails a
-  non-converging mission instead of hanging; orphaned/blocked-dep sweeping with
-  dep keys validated at the source; stale-claim reaping with force-reclaim
-  back-off; generalist/multi-role workers that don't trip false stall alarms; a
-  drained queue with an open critical/high finding routing to a **needs-review**
-  human gate). This all lives in `internal/mission` and is carried forward as the
-  verification-engine seed, but with the Tick loop **not started** it does not run
-  as a live guarantee today. The certify-**by-execution** property (run the check
-  in a jail, never a self-report) is live in the repo gate + control gate below.
-- **Per-mission herd composer.** A visual **Mission Composer** builds each mission's
-  team before launch: drag a model/agent onto each role, pick the **MCP endpoints**
-  the herd may consume, and attach **lookbook** design directives. The choice is
-  stored *per mission* (role→agent map + endpoints + lookbook) and injected into the
-  herd's instructions — so a mission carries its own team, not a global default.
-  (v1 runs one mission at a time; concurrent, differently-composed missions are next.)
-- **Portable credential keystore.** Provider keys + the worker token, configured once
-  and stored securely, cross-platform: an embedded resolver (env → OS keyring →
-  age-encrypted file) with a `corral secret` CLI — the GCP-ADC pattern in the one
-  binary. Secrets never touch argv, logs, or plaintext-at-rest; the age identity
-  fails closed. Security-reviewed adversarially before shipping.
-- **`corral certify` — the accountability wedge.** One line in a pipeline
-  (`corral certify -- <check>`) runs the check *itself* and mints a signed,
-  tamper-evident, **independently-verifiable** record of what ran — certify **by
-  execution** (a real exit code, not a self-report), in the in-toto/SLSA provenance
-  format, with the models that produced the change carried as provenance materials.
-  Stored in DuckDB (the same schema federates to MotherDuck by swapping the DSN).
-  Ships with `corral certify verify` — verify a record against the brain's **published**
-  key (`GET /api/certify/pubkey`), never a key embedded in the record itself. The
-  signing key lives only in the brain; the verify path refuses without an external
-  trust anchor. Central-trust v1 (a holder of the published key can confirm the brain's
-  records honestly bind what ran); the trustless tier is next. Adversarially reviewed —
-  the review caught and closed a silent-pass and a circular-trust-anchor bug before merge.
-- **Headless daemon + thin rendering clients.** The brain emits no UI. It hosts the
-  console as a versioned, **release-signed** `/console` bundle; each client
-  (`corral-admin`, read-only `corral-observe`, `corral-desktop`) fetches that bundle,
-  **verifies its signature against a pinned corralai key** before rendering, caches it
-  by version, serves it locally, and reverse-proxies only `/api|/events|/mcp` to the
-  daemon with a bearer that **never crosses to the browser**. One UI, many purpose-built
-  windows into one daemon. The proxy is guarded by a loopback host-gate (DNS-rebinding),
-  a same-origin check, and a per-session `SameSite=Strict` secret cookie. Adversarially
-  reviewed end-to-end — the whole-branch review caught that the real SPA's
-  header-incapable transports (SSE/WebSocket) couldn't satisfy a header-based gate; the
-  fix (the session cookie) was then verified in a live browser.
-- **The repo gate — corral as a required, signed merge check (control-plane v1).** `corral
-  certify`, *inverted*: instead of a developer voluntarily certifying in their own CI, the
-  **brain** polls covered repos' open PRs and, on each new head commit, checks it out, runs
-  the repo's declared check **in the bwrap jail** (untrusted PR code), signs the result via
-  the same tamper-evident certify path, and posts `corral/gate = pass|fail` to that commit —
-  a status the org's branch protection **requires**, so a red or missing verdict blocks the
-  merge. Certify **by execution**, enforced: no self-report, fail-closed (a `success` is only
-  ever posted on a real exit-0), and the gated SHA is provably the merged SHA. This is the
-  **separation-of-duties control a CISO is already required to prove**, mechanized. v1 is
-  GitHub + opt-in (`CORRALAI_GATE_POLICIES`; zero change to a brain that doesn't set it).
-  Honest about scope: the **posture verifier** (proving branch protection can't be silently
-  disabled), the **GitHub App check-run** (an un-forgeable green), and **self-hosted
-  GitLab/Gitea** (the forge a bank actually runs) are the next cut, not this one.
-- **The control gate — the flipside of agentic development is agentic testing.** The merge
-  gate above runs the *repo's own* declared check; the control gate runs the **control
-  owner's independently-vetted tests** against each PR head — the person accountable for code
-  they didn't write (a CISO in a bank, an eng lead or QA/platform lead elsewhere) sets the
-  bar, and the code author can't grade their own homework. Per open PR the brain checks out
-  head, runs the owner's vetted tests in the bwrap jail, signs the verdict, and posts a
-  **distinct `corral/control-gate` required check** — fail-closed (green only on a signed
-  all-pass; a missing target, a failing control, or zero vetted controls → red). "Control
-  owner" is the industry-standard GRC term (NIST 800-53 / ISO 27001 / SOC 2), and it maps
-  corral onto the recognized **owner → operator → assessor** separation of duties: *a judge
-  may not certify herself.* Wired v1 (`CORRALAI_CONTROL_GATE`, off by default), Go-only.
-  The owner's **authoring/vetting loop is wired too** — seven admin-gated, audited MCP tools:
-  `import_control_bundle` (ASVS → goals), `stage_control` (an independent agent authors a test
-  and scores its **mutation-adequacy** kill-rate), `list_pending_controls`/`get_control` to
-  review, and `promote_control` — the **recorded, attributed human approval**. A candidate is
-  always stored unvetted; only a human admin's `promote_control` vets it into the store the gate
-  runs — separation of duties, mechanized end to end. **Multi-language SHIPPED**: certify-by-
-  execution now supports Go, Python (pytest), Ruby (minitest/RSpec), JavaScript (node:test), and
-  TypeScript (tsc + node:test) via a leaf plugin registry (`internal/lang`), language inferred
-  from the code path's extension, fail-closed on an unknown language or a failed preflight (e.g.
-  `pytest`/`ruby`+`rspec`/`tsc`+`@types/node` missing on the brain host). C is next. Then the
-  **first live-gated PR
-  whose control was authored (not seeded)**, then a cockpit panel — and only then the field note
-  ships (don't advertise unbuilt).
-- **The adversarial testing pool (experimental, off by default).** A first cut at grading
-  a change's **own tests**, not just the change: given the code under review plus the
-  developer's own test file, a brain-coordinated distributed pool **mutates the code**
-  (seeded goal-violations), runs the **developer's tests** against those mutants — the
-  kill-rate is the dev suite's own adequacy grade, never a self-report, always scored
-  brain-side in the jail — then a **test-writer** role authors a test targeting whatever
-  survived, proving those gaps are real and catchable, while a **test-critic** role reads
-  the dev's tests and flags vacuous/tautological/designed-to-pass patterns. Three roles,
-  hybrid (mutant-generator + test-writer are structured/parseable, test-critic is
-  freeform-findings), **dynamic gate-earned routing** off the live leaderboard
-  (decorrelation-enforced: test-critic is always forced onto a *different* model than
-  test-writer, cold-start or not — a judge may not certify herself). Human-gated: a
-  blocking finding or a below-threshold kill-rate always routes to **needs-review**, never
-  auto-certified. A converged run — certified or needs-review — is signed via the same
-  certify chain as `report_build`/the control gate, and the routing loop is genuinely
-  closed: a **certified** outcome (never a needs-review one) feeds the same leaderboard
-  the next run's role assignment reads. Wired v1 behind `CORRALAI_ADVERSARIAL_POOL=1`
-  (off unless set), admin-only `start_adversarial_run` MCP tool. Honest about scope —
-  what this slice does **not** yet do: no pentester role, no concurrent runs (one active
-  run at a time), no CLI trigger, and the certification threshold is currently a fixed
-  constant, not configurable per run.
-- **The swarm — bounded concurrent workers (slice 1), then sharded generation +
-  a shadow challenger (slice 2).** `corral certify --local` now runs its independent
-  role tasks through a **bounded concurrent worker pool** instead of one at a
-  time: `--swarm N` (0 = auto-size to the host's cores, capped) bounds the
-  fan-out and the run announces its size out loud (`swarm: N concurrent
-  workers`). Slice 2 gave the pool something to actually fan out onto: the
-  mutant-generator is **sharded** — the file's functions are bin-packed
-  (complexity-balanced, deterministic) into up to `--max-shards` (default 8)
-  generator seats, so every function is probed instead of whatever one
-  generator happened to pick, with per-shard parse-failure retry/drop and
-  the shortfall (`RegionsProbed`/`DroppedRegions`) carried into the **signed**
-  verdict. A **shadow challenger** (`--shadow-model`, on by default, cheap by
-  default — the critic's model, no extra credential) attacks every shard a
-  second time for a region-controlled, execution-proven head-to-head between
-  generator models, recorded to the bug-catching scorecard — **it never feeds
-  dev-adequacy or the kill-rate**, and roughly doubles generator calls and
-  jail-scoring time (`--shadow-model off` disables it). **Both slices are now
-  wired for the hosted brain too** (2026-07-19): `start_adversarial_run` sets
-  `max_shards` (ceilinged at 20 for a hosted run) and defaults `shadow_model`
-  on via `CORRALAI_ADVPOOL_SHADOW_MODEL` (unset = on daemon-wide; `off`
-  disables it; a per-call `shadow_model` overrides either way). Independently
-  verified hosted production cost, stock defaults, an 8+-symbol file: **16
-  generator LLM calls** (8 primary + 8 shadow, up from 1), **32 total
-  mutants scored** (16 primary + 16 shadow, up from 5), **~45 jail
-  executions** (each `Score` call re-runs a baseline plus one run per mutant,
-  up from ~8). The daemon widens its run deadline automatically when its
-  shadow model is configured, mirroring `--local`'s own deadline allowance,
-  so shadow work can never force a timeout `needs-review` verdict. The
-  per-region/per-complexity-band effectiveness comparison the design spec
-  aims at is sound on the shadow side (which scores each region separately)
-  but **not yet computable on the primary side**, which scores the run's
-  merged mutant set in one pass — closing that gap, the resource-aware
-  optimizer, and the tests×mutants matrix are design, not built (see
-  `docs/superpowers/specs/2026-07-19-swarm-slice-2-sharded-generation-design.md`).
 
-## Now — make it operable and unbreakable
-- **The front door.** The Mission Composer (above) is the first cut. Still ahead: an
-  optional brain-led clarify step (→ a crisp directive with explicit acceptance
-  criteria) and a pre-flight feasibility check (roles the plan needs vs. workers
-  available). Specifying well is also a reliability fix.
-- **Resumability.** A mission survives a crash or quota blip and resumes from
-  durable state instead of starting over.
-- **Dogfooding.** Use corral to build corral — the forcing function for all of it.
+**Certify by execution.**
+- **`corral certify -- <check>`** — one line in a pipeline runs the check *itself*
+  and mints a signed, tamper-evident, **independently-verifiable** record of what ran
+  (a real exit code, not a self-report), in the in-toto/SLSA provenance format, with
+  the models that produced the change carried as provenance materials. Stored in
+  DuckDB (the same schema federates to MotherDuck by swapping the DSN). `corral certify
+  verify` checks a record against the brain's **published** key, never one embedded in
+  the record; the verify path refuses without an external trust anchor. Central-trust
+  v1 (the trustless tier is below). Adversarially reviewed — the review caught and
+  closed a silent-pass and a circular-trust-anchor bug before merge.
+- **`corral certify --local` — the adversarial testing pool in one command.** Given a
+  code file and the developer's own tests, it **mutates the code** (seeded
+  goal-violations), runs the **developer's own tests** against those mutants in the
+  jail — the kill-rate is the suite's adequacy grade, never a self-report — then a
+  **test-writer** authors a test targeting whatever survived (proving the gap is real)
+  and a decorrelated **test-critic** flags vacuous/designed-to-pass tests as
+  **unverified advice that never gates**. A converged run (certified or needs-review)
+  is signed via the same certify chain; a low kill-rate or a blocking finding always
+  routes to needs-review, never auto-certified.
+- **The swarm.** `--local` runs its role tasks through a **bounded concurrent worker
+  pool** (`--swarm N`), and the mutant-generator is **sharded** — the file's functions
+  are bin-packed (complexity-balanced, deterministic) into up to `--max-shards`
+  (default 8) generator seats, so every function is probed, with per-shard retry/drop
+  and the coverage shortfall carried into the **signed** verdict. A **shadow
+  challenger** (`--shadow-model`, on by default) attacks every shard a second time for
+  a region-controlled, execution-proven head-to-head between generator models,
+  recorded to the scorecard — **it never feeds the kill-rate**. Wired for the hosted
+  brain too (`start_adversarial_run`, `max_shards` ceilinged at 20, `shadow_model`
+  daemon-defaulted via `CORRALAI_ADVPOOL_SHADOW_MODEL`); the daemon widens its run
+  deadline when a shadow model is set, so shadow work can never force a timeout
+  verdict.
+- **Multi-language** — Go, Python (pytest), Ruby (minitest/RSpec), JavaScript
+  (node:test), TypeScript (tsc + node:test), the language inferred from the code
+  path's extension, fail-closed on an unknown language or a failed preflight. C is next.
+- **The bug-catching scorecard + eval harness** — which model actually *catches* bugs,
+  execution-proven (recall from `ProvenMissed`, never a self-report), DuckDB-native;
+  the eval harness runs the pool over a versioned known-adequacy corpus to give the
+  scorecard volume and a soundness report (it says *do not publish* if the metric is
+  miscalibrated).
 
-## The operator surface — the IDE moves up a level
-The developer's seat moves from *author* to *conductor*: write directives, set the
-model mix, watch the board, approve the merges.
-- **Model management.** Assign models to roles from a settings panel; a model
-  registry with empirical per-role performance — a leaderboard your herd *earns*;
-  role→hardware scheduling.
+**The gate — accountability, enforced.**
+- **The repo (merge) gate — control-plane v1.** `corral certify`, *inverted*: the
+  **brain** polls covered repos' open PRs and, on each new head commit, checks it out,
+  runs the repo's declared check **in the jail** (untrusted PR code), signs the result,
+  and posts `corral/gate = pass|fail` — a status branch protection **requires**, so a
+  red or missing verdict blocks the merge. Fail-closed (a `success` is only ever posted
+  on a real exit-0), and the gated SHA is provably the merged SHA. v1 is GitHub +
+  opt-in (`CORRALAI_GATE_POLICIES`).
+- **The control gate.** The merge gate runs the *repo's own* check; the control gate
+  runs the **control owner's independently-vetted tests** against each PR head — the
+  person accountable for code they didn't write sets the bar, and the author can't
+  grade their own homework. A distinct required `corral/control-gate` check,
+  fail-closed. The owner's **authoring/vetting loop** is wired too — seven admin-gated,
+  audited MCP tools (`import_control_bundle` ASVS→goals, `stage_control` which authors a
+  test and scores its mutation-adequacy, `list_pending_controls`/`get_control`, and
+  `promote_control` — the **recorded, attributed human approval**). A candidate is
+  always stored unvetted; only a human admin's `promote_control` vets it into the store
+  the gate runs. It maps corral onto the recognized GRC **owner → operator → assessor**
+  separation of duties: *a judge may not certify herself.*
+
+**The substrate.**
+- **Multi-model, multi-forge; the `bwrap` + container jail; the attributed action
+  ledger** — every consequential action recorded and attributed to a verified
+  principal; the subject of the record doesn't control the ledger.
+- **The learning loop** (findings → human-approved skills) and **shared memory +
+  skills** (fleet-synced), all behind the human gate — a worker proposes, only a
+  superuser publishes.
+- **Model×role telemetry / the gate-earned leaderboard** — each model's per-role
+  performance (sample-weighted, honest about thin data), the data layer routing reads
+  from.
+- **Portable credential keystore** — provider keys + the worker token, an embedded
+  resolver (env → OS keyring → age-encrypted file) with a `corral secret` CLI; secrets
+  never touch argv, logs, or plaintext-at-rest; the age identity fails closed.
+  Security-reviewed adversarially before shipping.
+- **Headless daemon + thin, release-signed rendering clients** — the brain emits no
+  UI; it hosts the console as a versioned `/console` bundle each client
+  (`corral-admin`, read-only `corral-observe`, `corral-desktop`) fetches, **verifies
+  against a pinned key** before rendering, and reverse-proxies only `/api|/events|/mcp`
+  with a bearer that **never crosses to the browser**. Guarded by a loopback host-gate,
+  a same-origin check, and a `SameSite=Strict` session cookie — adversarially reviewed
+  end-to-end.
+- **Durable replay + the story engine** — every run's rows survive indefinitely and
+  replay on the corral canvas at up to 16×; with reasoning capture on, the replay
+  streams each model's *real, captured reasoning* alongside its commands, so you watch
+  the herd **think**, not just move.
+- **Fleet analytics to MotherDuck.**
+
+## Ahead — the accountability plane
+
+`corral certify` is the first brick of a second arc: corral not only *runs* the audit,
+it becomes the way a team **accounts** for what its agents — the herd's, or a dev's
+own — actually produced. The engine that already contains, certifies, and records is
+exactly the engine that can *attest* and *federate*.
+
+- **The trustless tier — witness anchoring.** Ship the ledger head to an external,
+  append-only, timestamped witness (a shared MotherDuck warehouse, or Sigstore
+  **Rekor**) so tampering is detectable *even if you don't trust the brain*.
+  Central-trust today becomes tamper-evident-against-everyone next. (Honest all the
+  way: evident, never "proof" — you can't make a party's own machine tamper-proof,
+  only detectable.)
+- **One-command agent onboarding.** Independent, dev-driven agents (starting with
+  **Claude Code**, richest hooks) join with `corral hooks install` — deterministic
+  passive telemetry to the brain via the agent's own hooks, no behavior change, no
+  reliance on the model *choosing* to report. Capture is deterministic — the same
+  principle as certify-by-execution: don't trust the agent's word, capture it.
+- **The MotherDuck accountability warehouse.** Signed records from every dev, CI
+  runner, and project federate into one shared, queryable warehouse — the *same*
+  DuckDB schema, a DSN flip. Read-only **shares** hand a client, an auditor, or a
+  conference room a live, verifiable slice with zero infra. The firehose stays local
+  and cheap; only signed summaries federate.
+- **The shared corpus — the moat.** A blind-spot pattern proven once ("length-only
+  validators miss the character-class rules") becomes a shared, versioned, **signed**
+  skill every client's audit can pull — so a first-time client audits with the whole
+  network's execution-proven experience, not from zero. Value prop: *corral makes your
+  local tests stronger by pulling from a shared corpus of verified, signed findings.*
+  Patterns, never code; execution-proven, human-gated, attributable — a data flywheel
+  made of facts, not opaque weights.
+- **The swarm's remaining slices** — the resource-aware optimizer (size the fan-out
+  from execution-proven yield × host resources), per-region/per-complexity-band model
+  effectiveness, and the **tests × mutants matrix**: per-test adequacy by execution,
+  the opinion-free "safe to delete" list for the stale tests an agentic dev's
+  thousand-green-test suite accumulates. See
+  [`docs/superpowers/specs/2026-07-19-swarm-slice-2-sharded-generation-design.md`](docs/superpowers/specs/2026-07-19-swarm-slice-2-sharded-generation-design.md).
+
+## Ahead — operate the gate at scale
+
+The reviewer's seat moves from *author* to *assessor*: set the model mix, watch the
+board, approve the merges.
+- **Model management.** Assign models to audit roles from a settings panel; a registry
+  with empirical per-role performance — a leaderboard your herd *earns*; role→hardware
+  scheduling.
 - **Cross-model evaluation.** Controlled per-role benchmarks — accuracy (the verify
   gate as ground-truth oracle), speed, and cost.
-- **A VS Code cockpit.** Mission control docked beside the diff; browse the herd's
-  output through git/PR and a read-only live view — never reaching into the jail.
-- **Shared reach.** Register any service (yours, wrapped as MCP) with the gateway.
-  The herd then shares *knowledge, behavior, context, **and reach*** — one uniform
-  pattern, access shared, credential held brain-side.
+- **A review cockpit.** Verdicts and findings docked beside the diff — a VS Code panel
+  and a read-only live view, never reaching into the jail.
+- **Shared reach.** Register any service (yours, wrapped as MCP) with the gateway; the
+  herd then shares *knowledge, behavior, context, **and reach*** — one uniform pattern,
+  access shared, credential held brain-side.
 
-## Ready for teams
-- **Cost governance.** Per-mission / role / model cost, budget caps, pre-flight
+## Ahead — ready for teams
+- **Cost governance.** Per-audit / role / model cost, budget caps, pre-flight
   estimates.
-- **Concurrency & multi-tenancy.** Many missions at once — scheduled, isolated,
-  fair.
-- **Mid-mission steering.** Pause, redirect, or re-scope a running mission — not
-  just approve/reject at the ends.
+- **Concurrency & multi-tenancy.** Many audits at once — scheduled, isolated, fair.
 - **Memory hygiene.** The shared corpus stays *fresh*, not merely growing.
-
-## Accountability — prove what any agent ships
-`corral certify` (shipped, above) is the first brick of a second arc: corral not only
-*runs* a herd, it becomes the way a team **accounts** for what its agents — the herd's,
-or a dev's own — actually produced. The engine that already contains, certifies, and
-records is exactly the engine that can *attest*.
-- **The trustless tier — witness anchoring.** Ship the ledger head to an external,
-  append-only, timestamped witness (a shared MotherDuck warehouse, or Sigstore **Rekor**)
-  so tampering is detectable *even if you don't trust the brain*. Central-trust today
-  becomes tamper-evident-against-everyone next. (Honest all the way: evident, never
-  "proof" — you can't make a party's own machine tamper-proof, only detectable.)
-- **One-command agent onboarding.** Independent, dev-driven agents (starting with
-  **Claude Code**, richest hooks) join with `corral hooks install` — deterministic passive
-  telemetry to the brain via the agent's own hooks, no behavior change, no reliance on the
-  model *choosing* to report. Capture is deterministic — the same principle as certify-by-
-  execution: don't trust the agent's word, capture it. The `corral certify` CLI is the
-  agent-agnostic floor beneath it (it wraps the *check*, not the agent).
-- **The MotherDuck accountability warehouse.** Signed records from every dev, CI runner,
-  and project federate into one shared, queryable warehouse — the *same* DuckDB schema,
-  a DSN flip. Read-only **shares** hand a client, an auditor, or a conference room a live,
-  verifiable slice with zero infra. The firehose stays local and cheap; only signed
-  summaries federate.
 
 ## The through-line
 Every capability above is the **same pattern** — brain-mediated, human-gated,
-attributed, *share the capability and hold the credential* — and increasingly just
-a query over one attributed ledger. The moat isn't any single UI; it's the data
-model underneath all of them. Competitors can clone a dashboard; they can't
-retroactively have recorded years of attributed, multi-model runs.
+attributed, *share the capability and hold the credential* — and increasingly just a
+query over one attributed ledger. The moat isn't any single UI; it's the data model
+underneath all of them. Competitors can clone a dashboard; they can't retroactively
+have recorded years of attributed, execution-proven, multi-model audit runs.
 
 ---
 *Want to shape this? Issues and verified-harness PRs are welcome — see the

@@ -1,14 +1,6 @@
 # Sakana Fugu & Corralai Architectural Analysis
 
-This document records the architectural comparison and analysis of the **Sakana Fugu Technical Report** (Sakana AI, June 2026) and its implications/opportunities for the **Corralai** multi-agent substrate.
-
-> **RETIRED FLOW — reference only.** Some rows below describe the build-from-directive
-> architecture (builder/reviewer/tester/pentester roles, the two-tier *reflex*
-> re-planner in `replan.go`) that was **retired in the 2026-07-13 re-focus** to a
-> reactive audit/certification gate — `replan.go` and those coder roles no longer
-> exist. The route-to-the-fittest idea this analysis draws from Fugu is retained and
-> re-pointed at *verifier* roles; see
-> [`docs/superpowers/specs/2026-07-13-corral-refocus-audit-not-builder-design.md`](../superpowers/specs/2026-07-13-corral-refocus-audit-not-builder-design.md).
+This document records the architectural comparison and analysis of the **Sakana Fugu Technical Report** (Sakana AI, June 2026) and its implications/opportunities for **Corralai** — an audit-by-execution gate for software change, coordinated by a role-differentiated pool of adversarial agents (generator, critic, decorrelated verifier roles).
 
 ---
 
@@ -35,8 +27,8 @@ Sakana Fugu is a family of LLM orchestrator models designed to coordinate a pool
 
 | Dimension | Sakana Fugu (Conductor) | Corralai |
 | :--- | :--- | :--- |
-| **Orchestration** | Dynamic learned generation of agent subtasks, worker assignments, and context access lists via RL/GRPO. | Deterministic dependency-ordered task queue mapped to specialized role-agents (builder, reviewer, tester, pentester). |
-| **Re-Planning** | Orchestrator model generates updated/downstream workflows based on step execution feedback. | Two-tier re-planning: deterministic *reflex rules* for bugs/vulns; an *LLM lead* for architectural revisions. |
+| **Orchestration** | Dynamic learned generation of agent subtasks, worker assignments, and context access lists via RL/GRPO. | Deterministic task queue mapped to specialized, decorrelated audit role-agents (generator, mutant-scorer, test-writer, critic). |
+| **Re-Planning** | Orchestrator model generates updated/downstream workflows based on step execution feedback. | The gate reacts to measured execution results (kill-rate, exit code) rather than a generated plan — deterministic by construction. |
 | **Context Isolation** | Access lists restrict context exposure; intra-workflow isolation avoids orchestration collapse. | Task-level sandboxing. Context is programmatically populated from task descriptions, repo state, and DuckDB shared memory. |
 | **Memory** | Inter-workflow shared memory tracks tool calling across a multi-turn conversation. | DuckDB vector/FTS shared memory database, with a human-gated learning loop that compiles lessons into versioned skills. |
 | **Security** | Delegated to execution harnesses (Mini-SWE-agent, Terminus 2) with no native sandbox or egress scanning. | Hard sandboxing via unprivileged `bubblewrap` jails, token scrubbing, and pre-push secrets scanning. |
@@ -47,8 +39,8 @@ Sakana Fugu is a family of LLM orchestrator models designed to coordinate a pool
 
 Fugu's research highlights several potential enhancements for the Corralai design:
 
-1. **Adversarial Coder-Debugger Loops**:
-   Fugu consistently improves scores on Terminal Bench by alternating between GPT-5.5 as a builder and Claude-Opus as a debugger to verify and trace errors. Corralai can codify this behavior in `replan.go` or `agentrole/` by forcing an alternate model to review and locate execution/concurrency bugs.
+1. **Adversarial Generator-Debugger Loops**:
+   Fugu consistently improves scores on Terminal Bench by alternating between GPT-5.5 as a builder and Claude-Opus as a debugger to verify and trace errors. Corralai's `internal/lang` adversarial pool already forces this alternation for certification (a decorrelated critic model, never the generator, scores survivors); the same pattern could extend to locating execution/concurrency bugs during a certify run.
 
 2. **Mitigating Orchestration Collapse**:
    When designing custom sub-plans, Corralai must ensure that agents in separate tasks do not receive the raw execution logs of parallel tasks unless explicitly needed. Maintaining strict task context limits (similar to Fugu's access lists) protects downstream agents from path bias.

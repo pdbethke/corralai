@@ -1,34 +1,18 @@
-# corralai demo — watch a local-LLM swarm coordinate
+# corralai demo — watch the coordination substrate that the audit gate runs on
 
-> **RETIRED FLOW — reference only.** This whole file documents the
-> build-from-directive mission demo (`make demo-mission` and the
-> `corral-admin mission create` / `corral-admin review` verbs it depended on),
-> which was retired in the 2026-07-13 re-focus to a reactive audit/certification
-> gate. `mission create` and the `review` verb no longer exist in
-> `cmd/corral-admin`, so **`make demo-mission` errors today** (see
-> `docker-compose.yml`'s seed service for exactly where). This content is kept
-> for reference pending a gate-oriented demo — see
-> [`docs/superpowers/specs/2026-07-13-corral-refocus-audit-not-builder-design.md`](../../docs/superpowers/specs/2026-07-13-corral-refocus-audit-not-builder-design.md).
-> `make demo` (the simpler swarm-coordination warm-up, no mission seed) is
-> unaffected by this retirement.
-
-A real, role-differentiated swarm of coding agents — **builder, tester, pentester,
+This demo shows the mechanics underneath `corral certify` at a scale you can watch:
+a real, role-differentiated swarm of coding agents — **builder, tester, pentester,
 reviewer** — each driven by a local Ollama model, coordinating through the corral
-brain on a shared codebase.
+brain on a shared codebase. The same queue/claim/lease machinery, the same jail,
+and the same replayable event log back the certification gate described in the
+root [README.md](../../README.md); this Compose stack is the fastest way to see
+it move without touching your own repo. For the actual audit product — mutation-
+scoring a change's own tests, or certifying a change by its declared check — run
+`corral certify --local` directly (root README quickstart).
 
-> **No API keys, no cloud** — `make demo` and `make demo-mission` run fully local
-> (bundled Ollama). `make demo-models` also runs key-free by default (two local
-> models); a frontier key unlocks a more striking A-vs-B comparison (see below).
-
----
-
-> **FOR THE FULL SHOWCASE: `make demo-mission`, then open http://localhost:9019 → Progress tab.**
->
-> The complete adaptive loop: a directive becomes a mission, the herd builds it, the
-> reflex re-planner reworks it when findings land, and a modeled client reviews the
-> result. (`make demo` is a simpler warm-up if you want to see coordination first.)
-
----
+> **No API keys, no cloud** — `make demo` runs fully local (bundled Ollama).
+> `make demo-models` also runs key-free by default (two local models); a
+> frontier key unlocks a more striking A-vs-B comparison (see below).
 
 ## Run it
 
@@ -109,119 +93,21 @@ method-gating is what enforces read-only; against an auth-enabled brain, a
 read-only token minted by `mint_observer` adds the second layer — see
 [../observe/README.md](../observe/README.md).)
 
-## The full adaptive loop (the headline)
+## Watch it back — replay, for the audit itself
+
+This Compose demo doesn't seed a build-and-review loop to replay — for that,
+run the real audit and record it:
 
 ```bash
-make demo-mission    # a directive -> the herd builds it -> it re-thinks itself
+corral certify --local --code path/to/file.py --goal "..." \
+  --record run.json -- python -m pytest
 ```
 
-One command brings up the brain, the bundled GPU Ollama, a **team of queue agents**
-(researcher/designer/builder/tester/pentester/perf/integrator/writer/reviewer), a **lead** agent, a
-**scrum master** (`Shep` — posts standups in the live console, names stalled
-claims, and nudges their holders), and a one-shot that seeds a directive. The
-default directive is deliberately small — *build a Go `stack` package with
-table-driven tests that must `go build` and `go test` clean* — so the **entire
-loop, client review included, converges in minutes on the default local 7B model**
-(pulled on first run — the weights aren't shipped, only the Ollama runtime is).
-Want the ambitious version (a recursive-descent expression parser)?
-`make demo-mission-epic`, or set `DEMO_DIRECTIVE` to anything you like. Then
-open **http://localhost:9019** and click the **Progress tab**:
-
-- the directive's **plan** fills in as the brain lays out the steps;
-- **agents claim steps** (you see `← Bob`, `← Hawk` assignments) and complete them;
-- a pentester/tester **reports a finding** → the **reflex re-planner** spawns
-  `fix` + `re-verify` tasks inline;
-- the **lead** supersedes/reworks stale work when a design flaw lands
-  (`superseded → replacement`);
-- the mission reaches **awaiting review** instead of auto-completing (the demo
-  seeds it with `--review`);
-- the **client** — a modeled product-owner agent, or *you* via the Progress tab's
-  Accept / Request-changes buttons (or `corral-admin review <id> --accept |
-  --changes "..."`) — reviews it: accept → done, or feedback → the **next
-  sprint** (the lead routes the change-request into rework);
-- the mission **converges** when the client accepts.
-
-Scale the herd — more agents, more parallelism:
-
-```bash
-DEMO_DIRECTIVE="build a tic-tac-toe game" \
-  docker compose -f docker-compose.yml --profile mission up --build \
-  --scale mission-builder=3 --scale mission-tester=2
-```
-
-> Output quality — and convergence speed — track the model. The default
-> `qwen2.5-coder:7b` (pulled on first run) shows the **mechanism**: coordination, findings, re-planning,
-> review, all real, and the small default directive converges in minutes. A
-> frontier model shows the **payoff**: point the agents at Gemini / GPT / Claude
-> (see "Bring your own model") and the same swarm ships production-grade
-> artifacts fast — that's the config for `make demo-mission-epic`'s parser.
-> The choreography is the show either way.
-
-## Watch it learn (the learning loop)
-
-`make demo-mission` also shows the herd **getting smarter between missions** —
-no extra command, it rides the same run:
-
-1. **The herd stumbles, repeatedly.** The empty demo workspace makes the first
-   `go build` fail, so the verify gate files the same finding signature
-   (`regression|build-core#1`) over and over as the fix cycle grinds.
-2. **The sweep notices.** At ≥3 findings with the same signature, the learn
-   sweep opens a **proposal** and has the swarm's model draft corrective
-   guidance plus a reusable skill. (The demo brain sweeps every 10s —
-   `CORRALAI_LEARN_SWEEP_SECONDS`, a demo-profile setting; the product default
-   is 60s.) Watch the brain log: `learn: proposal #1 opened (…, 3 occurrences)`.
-3. **Shep announces it.** The live console standup starts saying
-   `1 skill proposal(s) awaiting the operator` — even after the task queue
-   drains, so a pending proposal never dies in silence.
-4. **You are the gate.** The **Proposals tab** (a live count badge lands on
-   it the moment the sweep opens one) grows a *"the herd proposes:"* card —
-   signature, occurrence count, drafted guidance, the skill — with
-   **approve / reject** buttons. (Or from the CLI:
-   `corral-admin proposals list | show <id> | approve <id> | reject <id>
-   --reason "..."`, with `--brain http://localhost:9019 --token demo`.)
-   Nothing is promoted until a human clicks.
-5. **Approval fans out.** The guidance lands in **vetted memory**
-   (`shared=true`) and the skill becomes a versioned artifact
-   (`skills/<name>/SKILL.md`) that agents sync.
-6. **The next mission is born knowing it.** Create a second directive —
-   ```bash
-   docker compose -f docker-compose.yml run --rm mission-seed \
-     mission create --review "Build a Go package 'queue' with a FIFO queue of ints ..."
-   ```
-   — and its task instructions carry the top vetted lessons in a clearly
-   labeled `LESSONS FROM THE HERD (vetted)` block (capped at 3, fence-wrapped
-   so guidance can't impersonate instructions). Whether the herd *applies*
-   the lesson tracks the model — the default 7B still stumbles; a frontier
-   model puts the lesson to work. The plumbing — what got promoted, what got
-   injected, what recurred — is fully visible either way.
-7. **The loop watches itself.** If the same signature keeps recurring *after*
-   promotion, a **revision proposal** reopens against the approved one — the
-   operator sees that the lesson didn't take, with the new evidence attached.
-
-## Watch it back (mission history + replay)
-
-`make demo-mission` records everything durably as it runs — so once it
-finishes, you can replay it:
-
-1. **Open the Completed tab.** `http://localhost:9019` → **completed**. The
-   mission you just ran appears with its directive, duration, and
-   task/finding counts.
-2. **Drill in.** Click **details** — phases with their status, findings with
-   outcomes, the PR link if the mission targeted a repo.
-3. **Replay it.** Click **▶ replay**. The live view pauses (the `/events`
-   feed disconnects) and the whole build plays back on the same canvas:
-   agents spawning as they first claim work, execution bursts landing,
-   findings surfacing and resolving — reconstructed entirely from durable
-   rows, not a recording.
-4. **Scrub and speed up.** Drag the scrub bar to jump anywhere in the run, or
-   push the speed selector to **16×** to watch a whole mission converge in
-   seconds.
-5. **Exit replay** to resume the live feed — nothing about replay mode
-   touches the running herd; it's read-only by construction.
-
-Missions run before this shipped still replay too — durable task/finding/
-execution rows are all replay needs; positions are recomputed on the fly,
-never stored.
+`--record` writes a replayable tape (the pool's reasoning beats, the task
+lifecycle, the findings) in the same `{events:[…]}` shape the corralai.dev
+cockpit replays — scrub bar, up to 16×, real captured reasoning. See the root
+[README.md](../../README.md#watch-it-back--every-run-recorded-and-replayable)
+and the live gallery at [corralai.dev](https://corralai.dev/recordings).
 
 ### Ask the brain about the codebase (the corpus, queried)
 
@@ -250,8 +136,8 @@ make demo-models    # multi-model run: pentester on qwen2.5-coder:7b (Group A), 
 needed). For a more striking frontier-vs-local comparison, set `OPENAI_API_KEY` and
 swap Group A to a frontier model — see `.env.example`.
 
-This is the flagship analytics demo. It runs the same small default directive as
-`demo-mission` but splits the herd across **two model groups**. The key is that
+This is the flagship analytics demo. It runs the coordinated herd split across
+**two model groups**. The key is that
 the **two finding-filers** — `pentester` and `reviewer` — run on *different*
 models, so their findings carry distinct `reporter_model` values and the report
 renders a genuine side-by-side (builder/tester don't file findings; they build
@@ -368,47 +254,6 @@ headless agent — the brain can't tell the difference, and the topology view,
 subscription's usage limits: the economical shape is one or two frontier-harness
 agents on the judgment roles (builder/reviewer/lead) alongside free local agents.
 
-### Two GPUs, two models (split the herd)
-
-Run part of the herd on a **second Ollama backend** — a second GPU, a second
-host, any reachable endpoint — with a different model, and watch two models
-coordinate on one mission (the topology view and `model_comparison` report treat
-them as one herd). `docker-compose.split.yml` puts the verify roles (tester,
-pentester, reviewer) on the second backend; the builder stays on the default:
-
-```bash
-# a second Ollama reachable on the host at :11435, serving a bigger coder model
-SPLIT_OLLAMA_URL=http://host.docker.internal:11435 SPLIT_MODEL=qwen2.5-coder:14b \
-  docker compose -f docker-compose.yml -f docker-compose.split.yml --profile mission up -d
-```
-
-Point `SPLIT_OLLAMA_URL` at wherever your second backend lives, and edit the
-overlay's service list to split roles however you like.
-
-### A Max-plan agent in the wow demo (verified)
-
-Run the mission demo with the container builder replaced by a **host-side Claude
-Code agent on your subscription** — the containers and the host agent share one
-workspace via a bind-mount override:
-
-```bash
-export HOST_WORKSPACE=$PWD/swarm-ws && mkdir -p "$HOST_WORKSPACE" && chmod 777 "$HOST_WORKSPACE"
-docker compose -f docker-compose.yml -f docker-compose.hostws.yml \
-  --profile mission up --build --scale mission-builder=0     # no container builder
-
-# in another terminal — the Max-plan builder:
-cd "$HOST_WORKSPACE" && CORRAL_BRAIN=http://localhost:9019 AGENT_NAME=Cody AGENT_ROLE=builder \
-HARNESS_CMD='claude -p {prompt} --mcp-config {mcp_config} --allowedTools "mcp__corral,Read,Write,Edit,Bash" --permission-mode acceptEdits' \
-HARNESS_DESC='claude-code (Max subscription)' corral-harness
-```
-
-Verified live: Cody idled while the local agents researched and designed, then
-claimed the gated build, wrote an idiomatic stack package (edge cases, fuzz
-tests, benchmarks), passed `go build`/`go test`, and — when the 7B lead
-cancelled a task mid-pipeline — **filed a high-severity finding documenting the
-stall for the lead to act on**. Mixed-fleet coordination, one subscription agent
-among free local ones.
-
 ### Harness templates
 
 | Harness | Auth it brings | `HARNESS_CMD` template | Status |
@@ -441,13 +286,13 @@ session. Any remaining untested row is welcome as a PR.
 ## Real execution (the bwrap sandbox)
 
 **`make demo` agents narrate** what they would do (distroless image, no shell).
-**`make demo-mission` runs REAL execution by default** for its builder / tester /
-pentester / perf / integrator agents — they actually build, run, and test their
-artifacts inside a sandbox (that's what makes the verification gate and the
-Progress-tab findings real). To flip the mission agents back to narrate-only:
+**`make demo-models` runs REAL execution by default** for its builder / tester /
+pentester agents — they actually build, run, and test their artifacts inside a
+sandbox (this is the same jail `corral certify` runs a check in). To flip those
+agents back to narrate-only:
 
 ```bash
-AGENT_ALLOW_EXEC=0 make demo-mission
+AGENT_ALLOW_EXEC=0 make demo-models
 ```
 
 Exec-capable agents are built from `Dockerfile.agent-exec` (a toolchain image with
@@ -478,7 +323,7 @@ the outer boundary instead of trusting the container boundary. Set
 | env | default | meaning |
 |---|---|---|
 | `MODEL_BACKEND` | `ollama` | `ollama` \| `openai` (OpenAI-compatible: Gemini/OpenRouter/local) \| `anthropic` |
-| `AGENT_ALLOW_EXEC` | `1` for mission agents, else `0` | `0` flips the mission's exec agents back to narrate-only |
+| `AGENT_ALLOW_EXEC` | `1` for `demo-models`' exec-capable agents, else `0` | `0` flips those agents back to narrate-only |
 | `AGENT_MODEL` | `qwen2.5-coder:7b` | the model name for the chosen backend |
 | `OLLAMA_MODELS_DIR` | `ollama-models` (volume) | set to `~/.ollama` to reuse a host download and skip the pull |
 | `AGENT_ROLE` | per service | `builder` \| `tester` \| `pentester` \| `reviewer` |

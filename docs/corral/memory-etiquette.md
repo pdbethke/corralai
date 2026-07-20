@@ -1,26 +1,25 @@
 # memory-etiquette
 
 Corralai's memory (`internal/memory`) is the herd's shared, searchable state
-across missions and agents. Two rules make it worth having.
+across audit runs and agents. Two rules make it worth having.
 
 ## Search before work
 
-Before starting a phase, search first: `search_memory` (BM25 full-text,
-`internal/brain/memory.go`) over everything you can see — your own entries plus
-the shared knowledge base. (In the now-retired build-from-directive path,
-`create_mission` did this automatically — calling `mem.RecallLessons` and
-injecting up to 3 vetted hits into phase instructions; that verb was removed in
-the 2026-07-13 re-focus, so recall is explicit now.) Search again as you work —
-memory grows as work runs.
+Before starting a phase of an audit run, search first: `search_memory`
+(BM25 full-text, `internal/brain/memory.go`) over everything you can see —
+your own entries plus the shared knowledge base. Search again as you
+work — memory grows as work runs, and a finding another role just recorded
+may bear directly on what you're certifying.
 
 ## Write lessons liberally
 
-`mission.DefaultPlan`'s final `retro` phase instructs the reviewing agent:
-for each thing that broke or surprised you, record a concrete LESSON with
-`add_memory` (type `lesson`, `shared=true`) — the trigger, what went wrong, the
-corrective guidance. Don't wait for retro, either: any phase can `add_memory`
-findings and notes as it goes (`internal/brain/memory.go`'s `add_memory` tool).
-More lessons written means more raw material for the learning loop below.
+Every phase in a run — build/test/verify, adversarial review, mutation
+scoring — should record a concrete LESSON with `add_memory` (type `lesson`,
+`shared=true`) for each thing that broke or surprised the agent: the
+trigger, what went wrong, the corrective guidance. Don't wait until the run
+wraps up, either: any phase can `add_memory` findings and notes as it goes
+(`internal/brain/memory.go`'s `add_memory` tool). More lessons written means
+more raw material for the learning loop below.
 
 ## Lessons are advisory until promoted
 

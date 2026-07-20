@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/buildstore"
@@ -98,12 +99,18 @@ type JailScorer struct {
 	// in BaseFiles, so — unlike single-file mode — no synthetic dev-test is
 	// overlaid. nil preserves the exact single-file behavior byte-for-byte.
 	BaseFiles map[string]string
+	// MutantTimeout, when > 0, overrides adequacy.Score's auto-derived
+	// per-mutant timeout (see adequacy.WithMutantTimeout) with an explicit
+	// cap — the plumbing for `certify --local --test-timeout`. The zero
+	// value (so every existing JailScorer{} literal keeps today's behavior
+	// unchanged) means auto-derive from the healthy baseline's own runtime.
+	MutantTimeout time.Duration
 }
 
 func (s JailScorer) Score(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (float64, []adequacy.Mutant, error) {
 	scoreBase, cmd := s.scoreWorkspace(codePath, test, testCmd)
 
-	rep, err := adequacy.Score(ctx, s.Jail, scoreBase, codePath, code, mutants, cmd)
+	rep, err := adequacy.Score(ctx, s.Jail, scoreBase, codePath, code, mutants, cmd, adequacy.WithMutantTimeout(s.MutantTimeout))
 	if err != nil {
 		return 0, nil, fmt.Errorf("advpool: score: %w", err)
 	}

@@ -97,6 +97,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	mutantModel := fs.String("mutant-model", "", "model for the mutant-generator role (default "+defaultLocalMutantModel+")")
 	jailFlag := fs.String("jail", "", "sandbox backend: bwrap|container (Linux), sandbox-exec (macOS) (default: auto-detect for this OS; \"none\" is not supported — --local always sandboxes)")
 	timeout := fs.Duration("timeout", 10*time.Minute, "give up if the run makes no progress for this long (not a hard wall-clock cap — a single slow LLM call can overshoot it)")
+	testTimeout := fs.Duration("test-timeout", 0, "hard cap on a SINGLE test-suite run in the jail (0 = auto: derived from the healthy suite's own runtime, so a mutant that makes the suite hang is killed fast instead of eating the whole --timeout). Raise it only if your suite legitimately runs long")
 	poll := fs.Duration("poll", 2*time.Second, "how long to wait between drive iterations when nothing is claimable")
 	repoFlag := fs.String("repo", "", "repository (default: git remote.origin.url, else \"local\")")
 	commitFlag := fs.String("commit", "", "commit sha (default: git rev-parse HEAD, else \"local\")")
@@ -292,12 +293,12 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		// on-disk copy, but explicit so a mutant overlay targets the right key).
 		repoFiles[codeKey] = string(code)
 		repoFiles[devTestKey] = string(devTest)
-		scorer = advpool.JailScorer{Jail: jail, BaseFiles: repoFiles}
+		scorer = advpool.JailScorer{Jail: jail, BaseFiles: repoFiles, MutantTimeout: *testTimeout}
 		validator = advpool.JailValidator{Jail: jail, BaseFiles: repoFiles}
 	} else {
 		codeKey = filepath.Base(*codePath)
 		devTestKey = filepath.Base(tp)
-		scorer = advpool.JailScorer{Jail: jail}
+		scorer = advpool.JailScorer{Jail: jail, MutantTimeout: *testTimeout}
 		validator = advpool.JailValidator{Jail: jail}
 	}
 

@@ -14,6 +14,14 @@ import (
 	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
+// ErrTestTimeout is the sentinel RunTest wraps and returns when a run did not
+// finish within its timeout (sandbox.Result.TimedOut). It lets a caller
+// distinguish "the run hung" from any other infra failure via errors.Is,
+// WITHOUT changing the load-bearing contract: a timed-out run still returns
+// (passed=false, err!=nil) — this only makes that error identifiable, never
+// makes a timeout read as success.
+var ErrTestTimeout = errors.New("adequacy: test run timed out")
+
 // bwrapJail implements Jail over sandbox.Run, using backend — which MUST be a
 // real isolation backend resolved via sandbox.Resolve. It writes the candidate
 // file set into a fresh, disposable workspace and runs testCmd inside it.
@@ -118,6 +126,9 @@ func (j bwrapJail) RunTest(ctx context.Context, files map[string]string, testCmd
 		Timeout:   j.timeout,
 	})
 	if err != nil {
+		if res.TimedOut {
+			return false, fmt.Errorf("%w: %s", ErrTestTimeout, res.Err)
+		}
 		return false, err
 	}
 	return res.ExitCode == 0, nil

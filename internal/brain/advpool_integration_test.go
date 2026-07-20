@@ -38,6 +38,10 @@ func (s *canonScorer) Score(_ context.Context, _, _, _ string, _ []adequacy.Muta
 	return 1.0, s.poolSurvivors, nil
 }
 
+func (s *canonScorer) ScoreReport(_ context.Context, _, _, _ string, _ []adequacy.Mutant, _ string) (adequacy.Report, error) {
+	return adequacy.Report{CompliantPass: true}, nil
+}
+
 // canonValidator is a hermetic, fake advpool.Validator: it always accepts
 // (test "compiles") and its ParseMutants returns a canned mutant set — no
 // jail, no real go vet.

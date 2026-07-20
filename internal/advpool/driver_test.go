@@ -70,6 +70,16 @@ type fakeScorer struct {
 	// false, Total: 0}, so KillRate()==0, with no error and Survived left
 	// nil) — the false-refute bug this fake exists to reproduce.
 	refuteBaselineFail bool
+
+	// reportFn, when set, drives ScoreReport's return directly — the control
+	// knob later tasks (the tests×mutants matrix) use to script a per-test
+	// adequacy.Report (CompliantPass/Killed/Survived) without adding a second
+	// parallel set of scripting fields. When nil, ScoreReport returns a
+	// sensible default (CompliantPass: true, no mutants killed) so every
+	// existing fakeScorer literal — which never sets this — keeps compiling
+	// and behaving as a scorer that always finds a runnable, zero-kill
+	// baseline.
+	reportFn func(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (adequacy.Report, error)
 }
 
 func (f *fakeScorer) Score(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (float64, []adequacy.Mutant, error) {
@@ -85,6 +95,13 @@ func (f *fakeScorer) Score(ctx context.Context, codePath, code, test string, mut
 		return 0, nil, nil
 	}
 	return 1.0, f.poolSurvivors, nil
+}
+
+func (f *fakeScorer) ScoreReport(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (adequacy.Report, error) {
+	if f.reportFn != nil {
+		return f.reportFn(ctx, codePath, code, test, mutants, testCmd)
+	}
+	return adequacy.Report{CompliantPass: true}, nil
 }
 
 type fakeValidator struct {
@@ -3092,6 +3109,10 @@ func (s *shadowScoreFailScorer) Score(_ context.Context, _, _, _ string, _ []ade
 	return 0, nil, fmt.Errorf("shadow jail run exploded")
 }
 
+func (s *shadowScoreFailScorer) ScoreReport(_ context.Context, _, _, _ string, _ []adequacy.Mutant, _ string) (adequacy.Report, error) {
+	return adequacy.Report{CompliantPass: true}, nil
+}
+
 // TestShadowScoringFailureIsNotFatal proves a challenger seat whose SCORING
 // fails (the jail run the shadow pass performs against the same dev suite)
 // cannot fail the run either. Scoring is the expensive half of the shadow
@@ -3367,6 +3388,10 @@ func (s *clockAdvancingScorer) Score(_ context.Context, _, _, test string, _ []a
 	s.shadowCalls++
 	*s.now = s.now.Add(s.perShadowCall)
 	return 1.0, nil, nil
+}
+
+func (s *clockAdvancingScorer) ScoreReport(_ context.Context, _, _, _ string, _ []adequacy.Mutant, _ string) (adequacy.Report, error) {
+	return adequacy.Report{CompliantPass: true}, nil
 }
 
 // newShadowedRun mirrors newShardedRun but sets a challenger model, so

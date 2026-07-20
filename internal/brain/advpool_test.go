@@ -67,6 +67,10 @@ func (stubScorer) Score(_ context.Context, _, _, _ string, _ []adequacy.Mutant, 
 	return 0, nil, nil
 }
 
+func (stubScorer) ScoreReport(_ context.Context, _, _, _ string, _ []adequacy.Mutant, _ string) (adequacy.Report, error) {
+	return adequacy.Report{CompliantPass: true}, nil
+}
+
 type stubValidator struct{}
 
 func (stubValidator) CompileTest(_ context.Context, _, _, _ string) error { return nil }

@@ -127,6 +127,21 @@ func (s JailScorer) Score(ctx context.Context, codePath, code, test string, muta
 	return rep.KillRate(), survivors, nil
 }
 
+// ScoreReport is Score's richer sibling: it reuses the SAME scoreWorkspace +
+// adequacy.Score call Score itself makes above, but returns the raw
+// adequacy.Report instead of collapsing it to a kill rate + survivor slice —
+// so a caller can distinguish a baseline that couldn't pass (CompliantPass
+// false) from a genuine zero-kill (CompliantPass true, len(Killed)==0).
+func (s JailScorer) ScoreReport(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (adequacy.Report, error) {
+	scoreBase, cmd := s.scoreWorkspace(codePath, test, testCmd)
+
+	rep, err := adequacy.Score(ctx, s.Jail, scoreBase, codePath, code, mutants, cmd, adequacy.WithMutantTimeout(s.MutantTimeout))
+	if err != nil {
+		return adequacy.Report{}, fmt.Errorf("advpool: score report: %w", err)
+	}
+	return rep, nil
+}
+
 // scoreWorkspace builds the jail base file-map and the test command for a
 // scoring run. In single-file mode (BaseFiles nil) it reproduces the original
 // behavior exactly: the language scaffold plus the dev test overlaid at the

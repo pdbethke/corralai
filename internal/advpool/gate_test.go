@@ -41,6 +41,42 @@ func advPoolJailSkipUnlessGoWorks(t *testing.T) sandbox.Isolator {
 	return backend
 }
 
+// fakeReportJail is a deterministic stand-in for adequacy.Jail, keyed by the
+// code content it receives at codePath (mirrors adequacy's own score_test.go
+// fakeJail, relocated here since JailScorer.ScoreReport is exercised at this
+// package's boundary, not adequacy's).
+type fakeReportJail struct {
+	passOn map[string]bool
+}
+
+func (f *fakeReportJail) RunTest(ctx context.Context, files map[string]string, testCmd []string) (bool, error) {
+	return f.passOn[files["target.go"]], nil
+}
+
+// TestJailScorerReport proves ScoreReport surfaces the full adequacy.Report
+// (not just a collapsed kill rate): a compliant baseline that passes plus one
+// killed mutant must come back with CompliantPass=true and exactly one
+// Killed entry.
+func TestJailScorerReport(t *testing.T) {
+	jail := &fakeReportJail{passOn: map[string]bool{
+		"COMPLIANT": true,  // baseline passes
+		"MUTANT":    false, // test fails on the mutant -> killed
+	}}
+	s := JailScorer{Jail: jail}
+
+	mutants := []adequacy.Mutant{{ID: "m1", Code: "MUTANT"}}
+	rep, err := s.ScoreReport(context.Background(), "target.go", "COMPLIANT", "<test>", mutants, "go test ./...")
+	if err != nil {
+		t.Fatalf("ScoreReport: %v", err)
+	}
+	if !rep.CompliantPass {
+		t.Fatalf("rep.CompliantPass = false, want true")
+	}
+	if len(rep.Killed) != 1 {
+		t.Fatalf("len(rep.Killed) = %d, want 1; rep=%+v", len(rep.Killed), rep)
+	}
+}
+
 // TestJailValidatorCompileTest_SubdirectoryCodePath is I-1's regression test
 // (relocated from internal/brain/advpool_test.go's
 // TestAdvPoolValidatorCompileTest_SubdirectoryCodePath): a SUBDIRECTORY

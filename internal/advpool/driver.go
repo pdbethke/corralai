@@ -23,6 +23,12 @@ import (
 // (soundness #1: "a judge may not certify herself").
 type Scorer interface {
 	Score(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (killRate float64, survivors []adequacy.Mutant, err error)
+
+	// ScoreReport is Score's richer sibling: it returns the full adequacy.Report
+	// (CompliantPass + the Killed/Survived mutant IDs), so a caller can tell a
+	// baseline that could not pass (CompliantPass=false) from a genuine zero-kill
+	// (CompliantPass=true, len(Killed)==0). The matrix needs this distinction.
+	ScoreReport(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (adequacy.Report, error)
 }
 
 // Validator is brain-side artifact validation of a worker's structured

@@ -1,0 +1,111 @@
+---
+title: "You can delegate the labor. You can't delegate the accountability."
+description: "AI will write your tests now — by the thousand, all of them green. That feels like relief. It should feel like a question: if nobody read them and nobody cares what they do, what is actually deciding your software is fit to ship? A short answer, and a command you can run against your own code in a few minutes."
+pubDate: 2026-07-19
+draft: false
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+
+*Field note. This one started as a question a friend asked me, out loud, that I couldn't answer cleanly for a week: in the age of AI, what is actually determining the fitness of your product? Here's the answer I got to.*
+
+---
+
+## The checkmark you've stopped believing
+
+Be honest with yourself for a second. When did you last read your test suite?
+
+Not glance at the number. Read them. Open the files, follow the assertions, decide for yourself whether each one would actually notice if the thing it guards broke.
+
+For a lot of us the true answer is now *never* — because a model writes them, by the dozen, by the hundred, all green on arrival, and the green is enough. The relief is real. Testing was the guilt-shaped hole in every project for twenty years, and something finally filled it without asking us to.
+
+But sit with the shape of what happened. The same lineage of model wrote your code. Wrote your tests. Maybe reviewed both. And the signal you're shipping on — the green checkmark that used to mean *a person who cared checked* — now means *the thing that did the work says the work is fine.* The chain of custody for "is this good" snapped, quietly, and we're all still treating the light like it means what it meant in 2015.
+
+So: what is determining the fitness of your product? Right now, honestly? A model's confidence, laundered through a checkmark, with the last accountable human gently removed from the room and told the light means they're safe.
+
+## The watchmen are your tests
+
+*Quis custodiet ipsos custodes* — who watches the watchmen. It's the oldest question about oversight, and it lands somewhere very specific here.
+
+Your tests are the watchmen. Their whole job is to stand on the wall and shout if the code does something it shouldn't. And a passing test is a guard reporting **all clear**.
+
+Here's the trouble with a guard who reports all clear: it's exactly what a vigilant one and a sleeping one both say. You cannot tell them apart by asking. And in the age of AI you no longer have a handful of guards you hired and trust — you have a thousand of them, generated overnight, every one at attention, every one reporting all clear, not one of them ever tested against an actual intruder. Your wall has never *looked* more defended. That's precisely what makes it dangerous.
+
+There's only one way to find out who's awake. **You stage a break-in.** You slip a real bug past the wall on purpose and see which guard screams. The ones who sleep through a staged intrusion aren't neutral — they're worse than no guard, because they manufacture confidence you didn't earn.
+
+That staged break-in has a name — [mutation](/field-notes/your-tests-suck/) — and it's the entire idea behind what I've been building. You watch the watchmen by committing a crime in front of them and seeing who notices.
+
+## The line the whole thing hangs on
+
+Here is the sentence I got to, the one I'd stake my name on:
+
+> **You can delegate the labor. What you cannot delegate is the accountability.**
+
+This is not a complaint about AI. Use the machine for the work — write the code with it, write the tests with it, I do. What you cannot hand to it is the part where someone stands behind the word *fit* and says *this is good enough to ship, and it's on me.* The labor is delegable. The signature is not.
+
+That's the same principle your auditors already live by, and the same one that's [older than software](/field-notes/nemo-iudex/): no one may be judge in their own cause. A model that writes the tests and then certifies its own tests is the defendant reading his own verdict into the record. It grades itself kindly — fluently, confidently, kindly — which is the exact failure the oldest rule exists to prevent.
+
+So the accountability has to rest on a signal the producer didn't make and can't fake. Not "does this look right" from a second model with the same blind spots — that's not oversight, it's a co-signer of the same mistakes. Something decorrelated. Something *measured.* Whether the guard actually screams when you stage the break-in — run in a sandbox, counted by execution, not asked.
+
+## I ran it on someone else's code today
+
+Talk is cheap, so here is the thing actually doing the thing, this afternoon, against a library neither I nor any model of mine wrote: [more-itertools](https://github.com/more-itertools/more-itertools) — a well-respected, heavily-tested Python package. I pointed corral at one of its files and told it to stage break-ins.
+
+It planted 39 goal-violating bugs across the file's functions and ran more-itertools' *own* test suite against every one of them, in a jail. Verdict, signed:
+
+- **The suite caught 35 of 39.** A genuinely strong 90% — these are good tests, written by people who cared.
+- **Four bugs walked straight past the wall.** Real gaps, and the tool tells you exactly which functions.
+- And then it wrote me a test — a real, compiling, discriminating one — that catches a gap the suite missed, and handed it back to add.
+
+Now the part I almost got wrong, which is the actual point of this whole note.
+
+Alongside those numbers, corral's decorrelated critic — a *second* model reading the suite cold — flagged a more-itertools test as vacuous: `test_negative_take`, which asserts that `take(-3, …)` raises a `ValueError`. The critic's argument was tidy and confident: the code uses `islice`, `islice` silently accepts a negative count, so the exception never fires, so the test can't fail — a guard asleep at his post.
+
+It was a good story. I nearly printed it. Then I did the one thing this note is about, and *ran it*:
+
+```python
+>>> import more_itertools as mi
+>>> mi.take(-3, range(10))
+ValueError: Indices for islice() must be None or an integer: 0 <= x <= sys.maxsize.
+```
+
+`islice` doesn't silently accept a negative count. It **raises.** The exception fires, the test catches it, the test is *correct* — and the critic, fluent and sure of itself, was simply wrong. A confident second model hallucinated a flaw in a good test, and if I'd trusted it I'd have libeled a fine piece of open-source work in the very note where I tell you not to trust confident models.
+
+Here's why that near-miss is the argument and not a footnote: **the critic's opinion never touched the 90%.** By design it's marked *unverified* and it *cannot gate the verdict* — only the execution-measured kill-rate certifies. So the hallucination stayed exactly where a hallucination belongs: a flagged second opinion for a human to check, not a fact the record asserts. The one number that means anything is the one no model was allowed to author.
+
+That's the whole thing, live, on my own tool: I could not take its word for any of it — and the moment I checked the part I *would* have taken on faith, it was wrong. The 90% survived precisely because it was never a claim. It's what happened when the tests met the bugs in a sandbox.
+
+## Yes, this technique is older than you are
+
+A sharp reader is already typing it, so let me say it first: **mutation testing is forty years old.** PIT, mutmut, Stryker. This is not a new invention and I won't pretend it is.
+
+It was a luxury when humans wrote tests by hand — you could usually trust that the author cared whether they caught anything, so you rarely needed to check the checkers. AI severed the test from anyone who cares whether it works. In doing that, it took a dusty academic technique and made it the only honest signal left standing. The novelty was never the mechanism. It's that the mechanism just became mandatory — and almost nobody is saying that out loud yet.
+
+## The honest floor
+
+Same as every note here, because honesty is the actual product:
+
+- The number **moves** run to run — 82% one pass, 90% the next — because which bugs get planted is non-deterministic. The *shape* is stable (a strong suite with a few real gaps); the exact percentage isn't a lab constant, and I won't quote it like one.
+- The critic **hallucinates sometimes** — you just watched it. That's not a bug I'm hiding; it's the reason its opinion is fenced off from the verdict. A tool that let a confident second model gate the record would be the exact disease this whole thing exists to cure.
+- It **certified** more-itertools at 90% while four real gaps remained — because the suite cleared the bar I set. Certified-and-here's-what-you-missed, not certified-and-perfect. Whether 90% is the right bar is your call, not the tool's.
+- It runs your tests against live, deliberately-broken code, so it **refuses to run unsandboxed** — you need bwrap or a container. That's not friction; it's the tool declining to do a dangerous thing quietly.
+- The adversarial pool is experimental. The signed record is real and verifiable offline. I'll always tell you which is which.
+
+## Watch your own watchmen
+
+One file, a sandbox, your own key:
+
+```bash
+go install github.com/pdbethke/corralai/cmd/corral@latest
+export ANTHROPIC_API_KEY=sk-ant-...
+corral certify --local \
+  --code path/to/your/file.py \
+  --goal "what this code must guarantee" \
+  -- python -m pytest
+```
+
+It'll stage the break-ins, run your tests against them in a jail, and hand you a signed verdict: how many of your guards are awake, which ones slept, and — where it can — a test to wake them up.
+
+You'll delegate the writing. You always will now, and that's fine. Just don't let the machine quietly take the one thing that was never yours to give away.
+
+You can delegate the labor. You can't delegate the accountability.

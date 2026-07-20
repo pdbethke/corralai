@@ -56,3 +56,10 @@ func (goPlugin) MutantSystem() string {
 Given a GOAL, the compliant code, and its signature surface, produce mutants: variants that NO LONGER satisfy the goal, so a good test suite SHOULD catch them. Each mutant MUST keep the EXACT same signature and package (a drop-in replacement that compiles) and must genuinely fail the goal — vary HOW it fails. No no-ops, no compile errors, no tests.
 The output format (a SEARCH/REPLACE edit per mutant) is specified with the task.`
 }
+
+func (goPlugin) SingleTestCmd(testPath, selector string) ([]string, bool) {
+	if selector == "" {
+		return nil, false
+	}
+	return []string{"go", "test", "-run", "^" + selector + "$", "./..."}, true
+}

@@ -21,6 +21,10 @@ type Plugin interface {
 	PromptLang() string                              // human label, for verdict metadata + logs
 	TestWriterSystem() string                        // language-specific test-writer system prompt
 	MutantSystem() string                            // language-specific mutant-generator system prompt
+	// SingleTestCmd yields a command that runs exactly the one test named by
+	// selector in testPath. ok=false when the language can't yet target a
+	// single test — callers must treat that as "no auto-signal", never a pass.
+	SingleTestCmd(testPath, selector string) (cmd []string, ok bool)
 }
 
 var registry = map[string]Plugin{}

@@ -1,6 +1,9 @@
 package lang
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestRegistryByNameAndDetect(t *testing.T) {
 	p, ok := ByName("go")
@@ -19,5 +22,28 @@ func TestRegistryByNameAndDetect(t *testing.T) {
 	}
 	if _, ok := Detect("x.cobol"); ok {
 		t.Fatal("Detect(.cobol) must be false — fail closed")
+	}
+}
+
+func TestSingleTestCmd(t *testing.T) {
+	py, _ := ByName("python")
+	cmd, ok := py.SingleTestCmd("tests/test_recipes.py", "tests/test_recipes.py::RandomPermutationTests::test_full_permutation")
+	if !ok || len(cmd) == 0 {
+		t.Fatalf("python: want ok cmd, got ok=%v cmd=%v", ok, cmd)
+	}
+	joined := strings.Join(cmd, " ")
+	if !strings.Contains(joined, "test_full_permutation") {
+		t.Fatalf("python cmd missing selector: %v", cmd)
+	}
+
+	g, _ := ByName("go")
+	gcmd, ok := g.SingleTestCmd("foo_test.go", "TestNegativeTake")
+	if !ok || !strings.Contains(strings.Join(gcmd, " "), "TestNegativeTake") {
+		t.Fatalf("go: %v ok=%v", gcmd, ok)
+	}
+
+	rb, _ := ByName("ruby")
+	if _, ok := rb.SingleTestCmd("x", "y"); ok {
+		t.Fatal("ruby should report ok=false (unimplemented)")
 	}
 }

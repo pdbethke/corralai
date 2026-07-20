@@ -71,3 +71,5 @@ func (rubyPlugin) MutantSystem() string {
 Given a GOAL, the compliant code, and its signature surface, produce mutants: variants that NO LONGER satisfy the goal, so a good test suite SHOULD catch them. Each mutant MUST keep the EXACT same public method signatures (drop-in Ruby that loads) and must genuinely fail the goal — vary HOW it fails. No no-ops, no syntax errors, no tests.
 The output format (a SEARCH/REPLACE edit per mutant) is specified with the task.`
 }
+
+func (rubyPlugin) SingleTestCmd(testPath, selector string) ([]string, bool) { return nil, false }

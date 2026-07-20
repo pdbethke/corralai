@@ -111,3 +111,5 @@ func (tsPlugin) MutantSystem() string {
 Given a GOAL, the compliant code, and its signature surface, produce mutants: variants that NO LONGER satisfy the goal, so a good test suite SHOULD catch them. Each mutant MUST keep the EXACT same exports, signatures, and types (a drop-in replacement that type-checks) and must genuinely fail the goal — vary HOW it fails. No no-ops, no type/syntax errors, no tests.
 The output format (a SEARCH/REPLACE edit per mutant) is specified with the task.`
 }
+
+func (tsPlugin) SingleTestCmd(testPath, selector string) ([]string, bool) { return nil, false }

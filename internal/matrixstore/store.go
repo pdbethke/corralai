@@ -92,22 +92,28 @@ func migrateMatrixTestAdequacy(db *sql.DB) error {
 
 func (s *Store) Close() error { return s.db.Close() }
 
-// Record appends rows for a single converged run, stamping each with the
-// insert-time ts (this is an append log, not a caller-supplied-timestamp
-// ledger — the moment a row lands is the moment it's true as of). No-op on
-// an empty slice so callers can pass a possibly-empty matrix without a
-// guard.
+// Record appends rows for a single converged run. ts is caller-supplied via
+// Row.TS — mirroring internal/bugcatch's convention, since DeleteCandidates
+// resolves "latest per (repo,commit,test_selector)" by MAX(ts), and that
+// ordering must be under the caller's control (the driver sink stamps the
+// run's own timestamp, not Record's call time). A zero Row.TS falls back to
+// time.Now() so callers that don't care about ordering (e.g. this package's
+// own acceptance test) still get a sensible value. No-op on an empty slice
+// so callers can pass a possibly-empty matrix without a guard.
 func (s *Store) Record(ctx context.Context, rows []Row) error {
 	if len(rows) == 0 {
 		return nil
 	}
-	ts := float64(time.Now().UnixNano()) / 1e9
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("matrixstore: begin: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck
 	for _, r := range rows {
+		ts := r.TS
+		if ts == 0 {
+			ts = float64(time.Now().UnixNano()) / 1e9
+		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO matrix_test_adequacy (
 			ts, record_id, record_head, repo, commit, mission_id, lang,
 			test_selector, test_file, kills, mutants_total, delete_candidate

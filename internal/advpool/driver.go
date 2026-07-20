@@ -1216,10 +1216,17 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 			ran, kills := false, 0
 			if scope == ScopeWholeTest && f.TestSelector != "" {
 				if cmd, ok := p.SingleTestCmd(f.TestFile, f.TestSelector); ok {
-					if _, survivors, serr := d.Scorer.Score(ctx, run.rs.CodePath, run.rs.Code, run.rs.DevTestCode, run.mutants, strings.Join(cmd, " ")); serr == nil {
-						ran, kills = true, len(run.mutants)-len(survivors)
-					} else {
+					if kr, survivors, serr := d.Scorer.Score(ctx, run.rs.CodePath, run.rs.Code, run.rs.DevTestCode, run.mutants, strings.Join(cmd, " ")); serr != nil {
 						log.Printf("advpool: run %d: critic auto-refute score failed for %q: %v", missionID, f.TestSelector, serr)
+					} else if kr > 0 {
+						// kr == 0 covers BOTH the baseline-couldn't-pass case
+						// (adequacy.Score returns CompliantPass:false, Total:0,
+						// Survived:nil, err:nil — see JailScorer.Score) and the
+						// genuine-zero-kills case; either way there is no
+						// execution-proven kill, so leave ran=false, kills=0 ->
+						// AutoAdjudication yields unadjudicated (inconclusive),
+						// never a false "refuted".
+						ran, kills = true, len(run.mutants)-len(survivors)
 					}
 				}
 			}

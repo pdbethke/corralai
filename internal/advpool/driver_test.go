@@ -61,6 +61,15 @@ type fakeScorer struct {
 	// the driver treats as "nothing happened yet" and simply retries) does
 	// not consume the dev-score slot a subsequent successful retry needs.
 	successes int
+
+	// refuteBaselineFail, when true, makes every success AFTER the pool score
+	// (successes >= 3 — i.e. the critic auto-refute single-test calls) return
+	// (0, nil, nil) instead of the hardcoded (1.0, poolSurvivors, nil):
+	// modeling JailScorer.Score's real shape when the jailed single-test
+	// baseline can't pass (adequacy.Score returns Report{CompliantPass:
+	// false, Total: 0}, so KillRate()==0, with no error and Survived left
+	// nil) — the false-refute bug this fake exists to reproduce.
+	refuteBaselineFail bool
 }
 
 func (f *fakeScorer) Score(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (float64, []adequacy.Mutant, error) {
@@ -71,6 +80,9 @@ func (f *fakeScorer) Score(ctx context.Context, codePath, code, test string, mut
 	f.successes++
 	if f.successes == 1 {
 		return f.devKillRate, f.devSurvivors, nil
+	}
+	if f.successes >= 3 && f.refuteBaselineFail {
+		return 0, nil, nil
 	}
 	return 1.0, f.poolSurvivors, nil
 }
@@ -498,6 +510,68 @@ func TestCriticAutoRefute(t *testing.T) {
 	}
 	if deadCheck.Adjudication != AdjUnadjudicated {
 		t.Fatalf("dead-check Adjudication = %q, want %q (dead-check is never auto-touched)", deadCheck.Adjudication, AdjUnadjudicated)
+	}
+}
+
+// TestCriticAutoRefute_BaselineFail_StaysUnadjudicated covers the false-refute
+// regression: when the jailed single-test baseline for the auto-refute call
+// can't even pass (e.g. a pytest selector that fails at collection because,
+// in single-file scoring mode, the dev test lives at a synthetic sibling
+// path), JailScorer.Score returns (killRate=0, survivors=nil, err=nil) — NOT
+// an error. Before the fix, the driver derived kills from
+// len(mutants)-len(survivors) and ignored the returned kill rate, so this
+// zero-survivors-no-error shape was indistinguishable from "ran and killed
+// everything" and produced a false "refuted" verdict for a whole-test finding
+// that never actually ran. The fix must gate on killRate > 0, leaving this
+// finding unadjudicated (inconclusive), the same as any other run that
+// couldn't be scored.
+func TestCriticAutoRefute_BaselineFail_StaysUnadjudicated(t *testing.T) {
+	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}}
+	scorer := &fakeScorer{devKillRate: 0.9, devSurvivors: survivors, poolSurvivors: nil, refuteBaselineFail: true}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0]}}
+	d, _ := newTestDriver(t, 21, scorer, validator, 0.5)
+	d.Signer = &fakeSigner{}
+	sink := &fakeCriticSink{}
+	d.CriticFindings = sink
+
+	ctx := context.Background()
+	ready := claimAllReady(t, d.Q)
+	tc, mg := ready[RoleTestCritic], ready[RoleMutantGenerator]
+	if tc == nil || mg == nil {
+		t.Fatalf("expected test-critic and mutant-generator both ready, got: %v", keysOf(ready))
+	}
+	if _, err := d.Q.AddFinding(queue.Finding{
+		MissionID: 21, TaskID: tc.ID, Reporter: "test-critic", Type: "bug",
+		Severity: "high", Target: "TestAlwaysPasses",
+		Evidence: "this test asserts nothing — it can never fail",
+		Scope:    ScopeWholeTest, TestFile: "target_test.go", TestSelector: "TestAlwaysPasses",
+	}); err != nil {
+		t.Fatalf("AddFinding (whole-test): %v", err)
+	}
+	mustComplete(t, d.Q, tc.ID, "flagged TestAlwaysPasses")
+	mustComplete(t, d.Q, mg.ID, "raw mutants")
+	if _, err := d.Tick(ctx, 21); err != nil {
+		t.Fatalf("Tick (dev-adequacy): %v", err)
+	}
+	tw := claimTaskByID(t, d.Q, d.runs[21].testWriterTaskID)
+	mustComplete(t, d.Q, tw.ID, "pool test source")
+
+	v, err := d.Tick(ctx, 21)
+	if err != nil {
+		t.Fatalf("Tick (pool-adequacy + aggregate): %v", err)
+	}
+	if v == nil {
+		t.Fatal("expected a verdict")
+	}
+	if len(sink.obs) != 1 {
+		t.Fatalf("CriticFindings.Record obs = %d, want 1, got %+v", len(sink.obs), sink.obs)
+	}
+	wholeTest := sink.obs[0]
+	if wholeTest.Scope != ScopeWholeTest {
+		t.Fatalf("observation Scope = %q, want %q", wholeTest.Scope, ScopeWholeTest)
+	}
+	if wholeTest.Adjudication != AdjUnadjudicated {
+		t.Fatalf("whole-test Adjudication = %q, want %q (baseline could not pass — inconclusive, must NOT be refuted)", wholeTest.Adjudication, AdjUnadjudicated)
 	}
 }
 

@@ -49,7 +49,14 @@ Go binary.**
   brain too (`start_adversarial_run`, `max_shards` ceilinged at 20, `shadow_model`
   daemon-defaulted via `CORRALAI_ADVPOOL_SHADOW_MODEL`); the daemon widens its run
   deadline when a shadow model is set, so shadow work can never force a timeout
-  verdict.
+  verdict. **The tests×mutants matrix** (`--matrix`, opt-in — T×M extra jail runs, so
+  off by default): after the primary pass, every dev test is re-scored ALONE against
+  the run's mutants for a per-test adequacy readout and an opinion-free "safe to
+  delete" candidate list (a test that caught none of the planted mutants — relative to
+  THIS run's mutant set, not proof the test is dead weight). `corral matrix list
+  [--json]` reads it off the brain; persisted to DuckDB (`internal/matrixstore`),
+  go + python only today. Wired for the hosted brain too (`start_adversarial_run`'s
+  `matrix` param).
 - **Multi-language** — Go, Python (pytest), Ruby (minitest/RSpec), JavaScript
   (node:test), TypeScript (tsc + node:test), the language inferred from the code
   path's extension, fail-closed on an unknown language or a failed preflight. C is next.
@@ -148,10 +155,8 @@ exactly the engine that can *attest* and *federate*.
   Patterns, never code; execution-proven, human-gated, attributable — a data flywheel
   made of facts, not opaque weights.
 - **The swarm's remaining slices** — the resource-aware optimizer (size the fan-out
-  from execution-proven yield × host resources), per-region/per-complexity-band model
-  effectiveness, and the **tests × mutants matrix**: per-test adequacy by execution,
-  the opinion-free "safe to delete" list for the stale tests an agentic dev's
-  thousand-green-test suite accumulates. See
+  from execution-proven yield × host resources) and per-region/per-complexity-band
+  model effectiveness (the tests × mutants matrix itself SHIPPED — see above). See
   [`docs/superpowers/specs/2026-07-19-swarm-slice-2-sharded-generation-design.md`](docs/superpowers/specs/2026-07-19-swarm-slice-2-sharded-generation-design.md).
 
 ## Ahead — operate the gate at scale

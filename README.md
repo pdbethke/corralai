@@ -353,6 +353,13 @@ of.
   now asked of the critic. It's a human-gated metric on the brain path only: `--local`
   shows the auto-adjudicated verdict on the run's tape, but persists nothing to the
   scorecard (there's no server-side store to write to without a brain).
+- **The tests×mutants matrix (`--matrix`, opt-in).** After the primary pass, re-score
+  EVERY dev test alone against the run's mutants — a per-test adequacy readout instead
+  of one suite-wide kill-rate, plus a safe-to-delete candidate list (a test that caught
+  none of the planted mutants). Read it with `corral matrix list [--json]`. Costly (T
+  tests × M mutants extra jail runs) and opt-in for that reason; go + python only
+  today; a delete-candidate is relative to the mutants THIS run happened to plant, not
+  proof a test is dead weight — review before deleting, don't auto-delete on it.
 - **Robustness.** A non-terminating mutant is killed fast and counted (a broken loop
   can't stall the run); `--test-timeout` overrides the auto-derived per-run cap. The
   run always converges to a signed verdict — even when the herd can't author a killing

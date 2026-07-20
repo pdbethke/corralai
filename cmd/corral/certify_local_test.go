@@ -8,6 +8,7 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -25,6 +26,7 @@ import (
 	"github.com/pdbethke/corralai/internal/buildstore"
 	"github.com/pdbethke/corralai/internal/certify"
 	"github.com/pdbethke/corralai/internal/certverify"
+	"github.com/pdbethke/corralai/internal/matrix"
 	"github.com/pdbethke/corralai/internal/queue"
 	"github.com/pdbethke/corralai/internal/sandbox"
 	"github.com/pdbethke/corralai/internal/transparency"
@@ -977,5 +979,94 @@ func TestLocalBugCatchDBPathHonoursEnv(t *testing.T) {
 	t.Setenv("CORRALAI_BUGCATCH_DB", "")
 	if got := localBugCatchDBPath(); !strings.HasSuffix(got, filepath.Join(".claude", "corralai_bugcatch.duckdb")) {
 		t.Errorf("localBugCatchDBPath() default = %q, want it beside the build ledger", got)
+	}
+}
+
+// TestMatrixFlagPlumbsIntoRunSpec proves --matrix reaches RunSpec.Matrix
+// unmangled (true when passed, false — the safe default — when omitted),
+// exercising the exact flag-parsing path runCertifyLocal uses rather than
+// asserting on the field name alone.
+func TestMatrixFlagPlumbsIntoRunSpec(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{"default off", nil, false},
+		{"explicit on", []string{"--matrix"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := flag.NewFlagSet("certify --local", flag.ContinueOnError)
+			matrixFlag := fs.Bool("matrix", false, "")
+			if err := fs.Parse(tc.args); err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			rs := advpool.RunSpec{Matrix: *matrixFlag}
+			if rs.Matrix != tc.want {
+				t.Fatalf("RunSpec.Matrix = %v, want %v", rs.Matrix, tc.want)
+			}
+		})
+	}
+}
+
+// TestRenderMatrixSummary_ListsDeleteCandidatesWithCaveat proves the
+// --matrix verdict summary prints the scored/delete-candidate counts and,
+// for EACH delete-candidate, the honest caveat verbatim — the same string
+// `corral matrix list` prints (matrixDeleteCandidateCaveat), so the CLI and
+// the tape agree on the exact wording.
+func TestRenderMatrixSummary_ListsDeleteCandidatesWithCaveat(t *testing.T) {
+	res := matrix.Result{
+		MutantsTotal: 5,
+		Rows: []matrix.TestAdequacy{
+			{Selector: "TestKeeper", TestFile: "foo_test.go", Kills: 2, MutantsTotal: 5, Scored: true, DeleteCandidate: false},
+			{Selector: "TestDead", TestFile: "foo_test.go", Kills: 0, MutantsTotal: 5, Scored: true, DeleteCandidate: true},
+			{Selector: "TestUnscored", TestFile: "foo_test.go", Scored: false},
+		},
+	}
+	var buf bytes.Buffer
+	renderMatrixSummary(&buf, res)
+	out := buf.String()
+	if !strings.Contains(out, "2 test(s) scored, 1 delete-candidate(s)") {
+		t.Fatalf("summary line missing/wrong:\n%s", out)
+	}
+	if !strings.Contains(out, "TestDead") {
+		t.Fatalf("delete-candidate selector missing:\n%s", out)
+	}
+	if strings.Contains(out, "TestKeeper — caught") {
+		t.Fatalf("non-candidate must not get a delete-candidate line:\n%s", out)
+	}
+	if !strings.Contains(out, matrixDeleteCandidateCaveat) {
+		t.Fatalf("missing the honest caveat verbatim:\n%s", out)
+	}
+	if !strings.Contains(out, "caught 0 of 5 planted mutants") {
+		t.Fatalf("missing the per-row mutant count:\n%s", out)
+	}
+}
+
+// TestMatrixTapeDetail_CarriesCountsAndCandidateSelectors proves the
+// pool_matrix tape event's detail payload carries the same counts the CLI
+// summary prints, plus the raw delete-candidate selectors — so a cockpit
+// replay can render the beat without re-deriving it from the driver.
+func TestMatrixTapeDetail_CarriesCountsAndCandidateSelectors(t *testing.T) {
+	res := matrix.Result{
+		MutantsTotal: 5,
+		Rows: []matrix.TestAdequacy{
+			{Selector: "TestKeeper", Scored: true, DeleteCandidate: false},
+			{Selector: "TestDead", Scored: true, DeleteCandidate: true},
+		},
+	}
+	detail := matrixTapeDetail(res)
+	if detail["tests_scored"] != 2 {
+		t.Fatalf("tests_scored = %v, want 2", detail["tests_scored"])
+	}
+	if detail["tests_total"] != 2 {
+		t.Fatalf("tests_total = %v, want 2", detail["tests_total"])
+	}
+	if detail["mutants_total"] != 5 {
+		t.Fatalf("mutants_total = %v, want 5", detail["mutants_total"])
+	}
+	cands, ok := detail["delete_candidates"].([]string)
+	if !ok || len(cands) != 1 || cands[0] != "TestDead" {
+		t.Fatalf("delete_candidates = %v, want [TestDead]", detail["delete_candidates"])
 	}
 }

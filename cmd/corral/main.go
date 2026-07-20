@@ -156,7 +156,7 @@ func subcommand(args []string) string {
 		return ""
 	}
 	switch args[0] {
-	case "certify", "secret", "control", "scorecard", "criticscore", "eval":
+	case "certify", "secret", "control", "scorecard", "criticscore", "matrix", "eval":
 		return args[0]
 	}
 	return ""
@@ -232,6 +232,10 @@ Usage:
   corral criticscore refute <id>  record a human "refuted" verdict — the finding was wrong
                                   (confirm/refute permanently override the pool's own auto-adjudication;
                                   this IS the human gate the critic-precision column measures)
+  corral matrix list [--json]     show the tests×mutants matrix (swarm slice 5): per-test
+                                  execution-proven adequacy against a run's own mutant set, plus a
+                                  safe-to-delete candidate list — populated only by runs opted in via
+                                  certify --local --matrix (requires CORRAL_BRAIN — no offline mode)
   corral eval [flags]             run the adversarial pool across the versioned eval corpus and
                                   print a soundness report (does the recall metric catch known gaps?)
                                   flags: --corpus <path> (default eval/corpus/manifest.json)
@@ -614,6 +618,23 @@ func main() {
 			os.Exit(1)
 		}
 		os.Exit(runCriticScore(os.Args[2:], newHTTPCriticScoreLister(brainURL, token), mcpCriticScoreAdmin{brainURL: brainURL}, os.Stdout, os.Stderr))
+	case "matrix":
+		// Same reasoning as criticscore above: the matrix store is a
+		// single-process DuckDB file the running brain already holds
+		// read-write, and matrix data only exists at all from a brain-run
+		// (or a --local run's own signed ledger, which this command does
+		// not read) — no offline mode.
+		brainURL := strings.TrimSpace(os.Getenv("CORRAL_BRAIN"))
+		if brainURL == "" {
+			fmt.Fprintln(os.Stderr, "corral matrix: set CORRAL_BRAIN (and CORRALAI_BRAIN_TOKEN via `corral secret`) — matrix has no offline mode")
+			os.Exit(1)
+		}
+		token, err := brainToken()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "corral matrix:", err)
+			os.Exit(1)
+		}
+		os.Exit(runMatrix(os.Args[2:], newHTTPMatrixReader(brainURL, token), os.Stdout, os.Stderr))
 	case "eval":
 		os.Exit(runEval(os.Args[2:], func(brainURL, corpusVersion string) eval.PoolRunner {
 			return mcpPoolRunner{client: mcpAdvClient{}, brainURL: brainURL, corpusVersion: corpusVersion,
@@ -1485,7 +1506,7 @@ func main() {
 	replayStream := func(missionID int64) ([]brain.ReplayEvent, error) {
 		return brain.BuildReplayStream(queueStore, telStore, missionID)
 	}
-	uiHandler := verifier.Wrap(authz(ui.Handler(ui.Deps{Coord: store, Mem: memStore, Gateway: gwStore, Bus: bus, MemOwners: memOwners, Roles: princStore, Queue: queueStore, Missions: missionStore, Executions: execRing, Activity: activityRing, Hosts: hostBook, Health: healthBook, Narrator: narrator, Telemetry: telStore, Oracle: fleetOracle, RoleModels: roleModels, Staffing: staffingMgr, Learn: learnStore, Promote: proposalPromote, Reject: proposalReject, History: historyList, HistoryDetail: historyDetail, Replay: replayStream, Artifacts: artStore, TaskArtifacts: taskArtStore, BuildStore: buildStore, BugCatch: bugCatchStore, CriticScore: criticScoreStore, CertifyPub: certifyPub, Witness: certifyWitness, Version: version})))
+	uiHandler := verifier.Wrap(authz(ui.Handler(ui.Deps{Coord: store, Mem: memStore, Gateway: gwStore, Bus: bus, MemOwners: memOwners, Roles: princStore, Queue: queueStore, Missions: missionStore, Executions: execRing, Activity: activityRing, Hosts: hostBook, Health: healthBook, Narrator: narrator, Telemetry: telStore, Oracle: fleetOracle, RoleModels: roleModels, Staffing: staffingMgr, Learn: learnStore, Promote: proposalPromote, Reject: proposalReject, History: historyList, HistoryDetail: historyDetail, Replay: replayStream, Artifacts: artStore, TaskArtifacts: taskArtStore, BuildStore: buildStore, BugCatch: bugCatchStore, CriticScore: criticScoreStore, MatrixStore: matrixStore, CertifyPub: certifyPub, Witness: certifyWitness, Version: version})))
 	if verifier.Enabled() {
 		log.Printf("ui: bearer-gated (view via `corral-observe`)")
 	} else {

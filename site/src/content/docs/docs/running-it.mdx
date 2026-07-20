@@ -62,6 +62,47 @@ on the run's own tape (nothing is hidden from you locally), but it persists
 nothing to a scorecard — there's no server-side store to write to without a
 brain running.
 
+## The tests×mutants matrix (`--matrix`, opt-in, brain-path only)
+
+`corral certify --local --matrix` opts a run into a second, more expensive pass:
+after the primary mutant pass converges, it re-scores **every one of the dev
+suite's own tests, alone**, against the same mutants — a per-test adequacy
+number instead of one suite-wide kill-rate. The verdict prints a `matrix:`
+summary (tests scored, delete-candidate count) and each delete-candidate
+selector, and the run's `--record` tape carries a `pool_matrix` beat with the
+same data.
+
+**The cost is real and it's why this is opt-in.** The matrix is T tests × M
+mutants extra jail runs, on top of the primary pass — a suite with 40 tests
+and 40 mutants is up to 1,600 additional sandboxed executions. Leave it off
+for routine runs; turn it on when you actually want the per-test signal (e.g.
+before a cleanup pass on a suite an agentic dev grew fast).
+
+**The safe-to-delete list is a signal, not a verdict.** A delete-candidate is
+a test that was scored (compiled and ran clean against the compliant code)
+but killed **zero** of the run's planted mutants. Every delete-candidate line
+carries the same honest caveat, verbatim: *"Relative to this mutant set; a
+test may still guard behavior no mutant probed."* Zero kills against this
+run's mutants is not proof the test is vacuous — it means this run's mutant
+generator never happened to seed a violation that test would catch. Review
+before deleting; don't script deletions off the list unattended.
+
+**Persistence is brain-path only.** A `--matrix`-opted run's per-test rows
+land in the running brain's `internal/matrixstore` DuckDB store
+(`CORRALAI_MATRIX_DB`) — the same store the hosted adversarial pool's
+`start_adversarial_run` writes to when its own `matrix` param is set. `corral
+matrix list [--json]` reads it back over the brain's HTTP API
+(`GET /api/matrix`, mirroring `/api/bugcatch`); like `criticscore`, there is
+**no offline fallback** — set `CORRAL_BRAIN` (and a token via `corral
+secret`). A `--local --matrix` run with no `CORRAL_BRAIN` configured prints
+its own tape/verdict summary same as always, but that run's rows are never
+persisted anywhere `corral matrix list` can see them.
+
+**Language support:** go and python only today, the same two languages the
+underlying test-enumeration/single-test-selector plumbing (`ListTestsCmd`/
+`SingleTestCmd`) currently implements — an unsupported language silently
+skips the matrix phase (the primary audit still runs and gates normally).
+
 ## The verify gate needs a sandbox (Ubuntu 24.04+)
 
 The brain certifies a gated task by **running its verify command itself** — in a

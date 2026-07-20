@@ -197,6 +197,15 @@ type RunState struct {
 	// perfect dev suite made the test-writer moot. NOT part of the signed
 	// Verdict — evidence handed back to the dev, not certified state.
 	AuthoredTest string
+	// Matrix is the tests×mutants matrix result (swarm slice 5), when the run
+	// opted in (RunSpec.Matrix) and a Driver.Enumerator was wired. nil when
+	// the matrix phase never ran (opted out, no Enumerator, or it hasn't
+	// reached that tick yet) — a caller (the --local verdict summary, the
+	// brain's matrix sink caller) must treat nil as "no matrix data",
+	// never as "zero tests scored". Exported here (mirroring AuthoredTest)
+	// so a caller outside the package can read the driver's internal
+	// runState.matrix without a package-private accessor.
+	Matrix *matrix.Result
 }
 
 // CheckDecorrelation rejects an assignment where test-critic and test-writer
@@ -637,7 +646,7 @@ func (d *Driver) RunStatus(missionID int64) (RunState, bool) {
 	if !ok {
 		return RunState{}, false
 	}
-	return RunState{Converged: run.verdict != nil, Verdict: run.verdict, AuthoredTest: run.authoredTest}, true
+	return RunState{Converged: run.verdict != nil, Verdict: run.verdict, AuthoredTest: run.authoredTest, Matrix: run.matrix}, true
 }
 
 // Tick advances one run given the current task states. It returns a non-nil

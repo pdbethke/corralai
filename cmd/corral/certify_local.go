@@ -28,6 +28,7 @@ import (
 	"github.com/pdbethke/corralai/internal/bugcatch"
 	"github.com/pdbethke/corralai/internal/buildstore"
 	"github.com/pdbethke/corralai/internal/lang"
+	"github.com/pdbethke/corralai/internal/matrix"
 	"github.com/pdbethke/corralai/internal/queue"
 	"github.com/pdbethke/corralai/internal/repoindex"
 )
@@ -107,6 +108,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	swarmFlag := fs.Int("swarm", 0, "max concurrent audit workers (0 = auto-size to this host's cores). The BUDGET clamp: independent role tasks run in parallel up to this bound, so a big audit swarms without melting the box")
 	maxShardsFlag := fs.Int("max-shards", 0, "max mutant-generator seats fanned out across the file's functions (0 = "+fmt.Sprint(advpool.DefaultMaxShards)+"). Bounds PARALLELISM only — every function is probed regardless; --n-mutants is the PER-SHARD budget")
 	shadowModelFlag := fs.String("shadow-model", "", "challenger model that attacks every region a SECOND time for a region-controlled head-to-head (default "+defaultLocalShadowModel+"; \"off\" disables). Recorded for comparison — NEVER gates the verdict")
+	matrixFlag := fs.Bool("matrix", false, "opt into the tests×mutants matrix: after the primary pass, re-score EVERY dev test ALONE against the run's mutants — a per-test adequacy readout + a delete-candidate list, instead of one dev-suite-wide number. COSTLY: T tests × M mutants extra jail runs (T×M, on top of the primary pass), so leave off by default on a big suite")
 	if err := fs.Parse(flagArgs); err != nil {
 		return 2
 	}
@@ -239,6 +241,12 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	jail := adequacy.NewJail(iso, *timeout)
+	// enumerator backs the tests×mutants matrix's test-listing step (--matrix).
+	// Wired unconditionally off the SAME backend/timeout as jail (bwrapJail
+	// satisfies both interfaces) — a nil advpool.Driver.Enumerator makes
+	// tickMatrix always skip regardless of RunSpec.Matrix, so wiring it here
+	// costs nothing when --matrix is off (the flag is the real gate).
+	enumerator := adequacy.NewEnumerator(iso, *timeout)
 
 	// Open the local stores: an ephemeral queue (one run), and the SAME
 	// persistent build ledger + signing key `corral certify`/`corral certify
@@ -278,6 +286,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	// and the project's own tests (which import the package) resolve.
 	var scorer advpool.JailScorer
 	var validator advpool.JailValidator
+	var jailEnum advpool.JailEnumerator
 	var codeKey, devTestKey string
 	if repoDir != "" {
 		if len(checkArgv) == 0 {
@@ -306,11 +315,13 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		repoFiles[devTestKey] = string(devTest)
 		scorer = advpool.JailScorer{Jail: jail, BaseFiles: repoFiles, MutantTimeout: *testTimeout}
 		validator = advpool.JailValidator{Jail: jail, BaseFiles: repoFiles}
+		jailEnum = advpool.JailEnumerator{Jail: enumerator, BaseFiles: repoFiles}
 	} else {
 		codeKey = filepath.Base(*codePath)
 		devTestKey = filepath.Base(tp)
 		scorer = advpool.JailScorer{Jail: jail, MutantTimeout: *testTimeout}
 		validator = advpool.JailValidator{Jail: jail}
+		jailEnum = advpool.JailEnumerator{Jail: enumerator}
 	}
 
 	// Build the pure driver over the REAL jail-backed scorer/validator and the
@@ -321,6 +332,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	d.Signer = advpool.CertSigner{Key: key, Store: bs, Witness: nil}
+	d.Enumerator = jailEnum
 
 	// --record: collect the run into a replayable tape. The sink is the driver's
 	// EventSink (pool reasoning beats) and is also fed the task lifecycle +
@@ -391,6 +403,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		Lang:        plug.Name(),
 		MaxShards:   resolveMaxShards(*maxShardsFlag),
 		ShadowModel: shadow,
+		Matrix:      *matrixFlag,
 	}
 
 	// Signatures are best-effort (mirrors the brain's StartRun): a failure just
@@ -421,6 +434,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	// parallel up to this bound; it's clamped to the host's cores (auto) or the
 	// operator's --swarm budget.
 	swarm := resolveSwarm(*swarmFlag)
+	d.MatrixWorkers = swarm
 	if *swarmFlag > 0 {
 		fmt.Fprintf(stdout, "swarm: %d concurrent workers (--swarm budget)\n", swarm)
 	} else {
@@ -456,6 +470,15 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	}
 
 	renderAdvVerdict(stdout, *codePath, advVerdictFromPool(*verdict))
+
+	// --matrix: print the per-test adequacy summary + delete-candidate list.
+	// st.Matrix is nil unless --matrix was set AND the phase actually ran
+	// (see advpool.RunState.Matrix's doc comment) — the summary is entirely
+	// opt-in and silent otherwise.
+	if st, ok := d.RunStatus(localMissionID); ok && st.Matrix != nil {
+		renderMatrixSummary(stdout, *st.Matrix)
+		rec.add("pool_matrix", "corral-advpool", *codePath, matrixTapeDetail(*st.Matrix))
+	}
 
 	// The "recorded to the scorecard" claim can only be made in PAST TENSE
 	// once it is actually true: printing it unconditionally whenever shadow is
@@ -578,6 +601,60 @@ type recEvent struct {
 	Actor   string         `json:"actor,omitempty"`
 	Subject string         `json:"subject,omitempty"`
 	Detail  map[string]any `json:"detail,omitempty"`
+}
+
+// matrixDeleteCandidateCaveat is the honest caveat printed on every
+// delete-candidate line, verbatim, both on the CLI (renderMatrixSummary)
+// and on `corral matrix list` (cmd/corral/matrix.go). A zero-kill result is
+// relative to the mutants THIS run happened to plant — it is not proof the
+// test guards nothing; a mutant that would have exercised the behavior may
+// simply never have been generated.
+const matrixDeleteCandidateCaveat = "Relative to this mutant set; a test may still guard behavior no mutant probed."
+
+// renderMatrixSummary prints the tests×mutants matrix section (swarm slice
+// 5, --matrix): how many of the dev suite's own tests were individually
+// re-scored against the run's mutant set, and — the safe-to-delete list —
+// which ones caught none of them. Never printed when --matrix was off or the
+// phase didn't run (the caller only calls this when st.Matrix != nil).
+func renderMatrixSummary(w io.Writer, res matrix.Result) {
+	scored := 0
+	var candidates []matrix.TestAdequacy
+	for _, row := range res.Rows {
+		if row.Scored {
+			scored++
+		}
+		if row.DeleteCandidate {
+			candidates = append(candidates, row)
+		}
+	}
+	fmt.Fprintf(w, "\nmatrix: %d test(s) scored, %d delete-candidate(s)\n", scored, len(candidates))
+	for _, row := range candidates {
+		fmt.Fprintf(w, "  • %s — caught 0 of %d planted mutants — review for deletion. %s\n",
+			row.Selector, row.MutantsTotal, matrixDeleteCandidateCaveat)
+	}
+}
+
+// matrixTapeDetail is the pool_matrix tape event's detail payload — the same
+// counts renderMatrixSummary prints, plus the raw delete-candidate selectors,
+// so a cockpit replay can show the matrix beat without re-deriving it from
+// the driver.
+func matrixTapeDetail(res matrix.Result) map[string]any {
+	scored := 0
+	candidates := []string{}
+	for _, row := range res.Rows {
+		if row.Scored {
+			scored++
+		}
+		if row.DeleteCandidate {
+			candidates = append(candidates, row.Selector)
+		}
+	}
+	return map[string]any{
+		"tests_scored":      scored,
+		"tests_total":       len(res.Rows),
+		"mutants_total":     res.MutantsTotal,
+		"delete_candidates": candidates,
+	}
 }
 
 // recordSink collects a --local run's events into a replayable tape. It doubles

@@ -50,6 +50,10 @@ Usage:
   corral criticscore refute <id>  record a human "refuted" verdict — the finding was wrong
                                   (confirm/refute permanently override the pool's own auto-adjudication;
                                   this IS the human gate the critic-precision column measures)
+  corral matrix list [--json]     show the tests×mutants matrix (swarm slice 5): per-test
+                                  execution-proven adequacy against a run's own mutant set, plus a
+                                  safe-to-delete candidate list — populated only by runs opted in via
+                                  certify --local --matrix (requires CORRAL_BRAIN — no offline mode)
   corral eval [flags]             run the adversarial pool across the versioned eval corpus and
                                   print a soundness report (does the recall metric catch known gaps?)
                                   flags: --corpus <path> (default eval/corpus/manifest.json)

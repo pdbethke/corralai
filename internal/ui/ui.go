@@ -30,6 +30,7 @@ import (
 	"github.com/pdbethke/corralai/internal/gateway"
 	"github.com/pdbethke/corralai/internal/learn"
 	"github.com/pdbethke/corralai/internal/llm"
+	"github.com/pdbethke/corralai/internal/matrixstore"
 	"github.com/pdbethke/corralai/internal/memory"
 	"github.com/pdbethke/corralai/internal/mission"
 	"github.com/pdbethke/corralai/internal/oracle"
@@ -74,6 +75,7 @@ type Server struct {
 	buildStore      *buildstore.Store
 	bugCatch        *bugcatch.Store
 	criticScore     *criticscore.Store
+	matrixStore     *matrixstore.Store
 	certifyPub      ed25519.PublicKey
 	witness         transparency.Witness
 
@@ -185,6 +187,11 @@ type Deps struct {
 	// critic-precision column and /api/criticscore returns an empty list,
 	// never a 500 (degrade-never-block, same as BugCatch above).
 	CriticScore *criticscore.Store
+	// MatrixStore is the tests×mutants matrix store (internal/matrixstore,
+	// swarm slice 5); /api/matrix reads its List + DeleteCandidates for
+	// `corral matrix list`. nil => /api/matrix returns an empty matrix,
+	// never a 500 (degrade-never-block, same as BugCatch/CriticScore above).
+	MatrixStore *matrixstore.Store
 	// CertifyPub is the published Ed25519 public key /api/builds/{id} uses
 	// to re-verify a record's signature — the same external trust anchor
 	// `corral certify verify` uses, never derived from the record itself.
@@ -204,7 +211,7 @@ type Deps struct {
 }
 
 func Handler(d Deps) http.Handler {
-	s := &Server{coord: d.Coord, mem: d.Mem, gw: d.Gateway, bus: d.Bus, memOwners: d.MemOwners, roles: d.Roles, queue: d.Queue, missions: d.Missions, execs: d.Executions, acts: d.Activity, hosts: d.Hosts, health: d.Health, narrator: d.Narrator, tel: d.Telemetry, oracle: d.Oracle, roleModels: d.RoleModels, staffing: d.Staffing, learn: d.Learn, promote: d.Promote, reject: d.Reject, historyFn: d.History, historyDetailFn: d.HistoryDetail, replayFn: d.Replay, artifacts: d.Artifacts, taskArtifacts: d.TaskArtifacts, buildStore: d.BuildStore, bugCatch: d.BugCatch, criticScore: d.CriticScore, certifyPub: d.CertifyPub, witness: d.Witness}
+	s := &Server{coord: d.Coord, mem: d.Mem, gw: d.Gateway, bus: d.Bus, memOwners: d.MemOwners, roles: d.Roles, queue: d.Queue, missions: d.Missions, execs: d.Executions, acts: d.Activity, hosts: d.Hosts, health: d.Health, narrator: d.Narrator, tel: d.Telemetry, oracle: d.Oracle, roleModels: d.RoleModels, staffing: d.Staffing, learn: d.Learn, promote: d.Promote, reject: d.Reject, historyFn: d.History, historyDetailFn: d.HistoryDetail, replayFn: d.Replay, artifacts: d.Artifacts, taskArtifacts: d.TaskArtifacts, buildStore: d.BuildStore, bugCatch: d.BugCatch, criticScore: d.CriticScore, matrixStore: d.MatrixStore, certifyPub: d.CertifyPub, witness: d.Witness}
 	mux := http.NewServeMux()
 	sub, _ := fs.Sub(webFS, "web")
 	// "/" no longer serves the SPA (Task 3 of the daemon/client refactor):
@@ -253,6 +260,7 @@ func Handler(d Deps) http.Handler {
 	mux.HandleFunc("/api/leaderboard", s.leaderboard)
 	mux.HandleFunc("/api/bugcatch", s.bugcatch)
 	mux.HandleFunc("/api/criticscore", s.criticScorePending)
+	mux.HandleFunc("/api/matrix", s.matrix)
 	mux.HandleFunc("/api/mission/footprint", s.footprint)
 	mux.HandleFunc("/api/mission/prune", s.prune)
 	mux.HandleFunc("/api/mission/pause", s.steer(brain.SteerPause))
@@ -486,6 +494,45 @@ func (s *Server) criticScorePending(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, pendingCriticFindingsResponse{Findings: fs})
+}
+
+// matrixResponse is /api/matrix's response shape: every scored row (List)
+// plus the delete-candidate subset (DeleteCandidates), pre-split so `corral
+// matrix list` doesn't have to re-filter Rows client-side to render its
+// safe-to-delete section.
+type matrixResponse struct {
+	Rows             []matrixstore.Row `json:"rows"`
+	DeleteCandidates []matrixstore.Row `json:"delete_candidates"`
+}
+
+// matrix serves the read-only tests×mutants matrix (swarm slice 5): the same
+// authz-free-past-the-mux, read-only pattern as bugcatch/criticScorePending
+// above — reaching the mux at all already required a valid bearer, and this
+// endpoint mutates nothing. A nil matrixStore (feature disabled, or no
+// --matrix run has ever recorded anything) degrades to an empty matrix,
+// never a 500.
+func (s *Server) matrix(w http.ResponseWriter, r *http.Request) {
+	if s.matrixStore == nil {
+		writeJSON(w, matrixResponse{Rows: []matrixstore.Row{}, DeleteCandidates: []matrixstore.Row{}})
+		return
+	}
+	rows, err := s.matrixStore.List(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	candidates, err := s.matrixStore.DeleteCandidates(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if rows == nil {
+		rows = []matrixstore.Row{}
+	}
+	if candidates == nil {
+		candidates = []matrixstore.Row{}
+	}
+	writeJSON(w, matrixResponse{Rows: rows, DeleteCandidates: candidates})
 }
 
 // pendingCriticFindingsResponse is /api/criticscore's response shape —

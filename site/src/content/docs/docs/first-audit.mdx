@@ -88,7 +88,13 @@ jailed check in Docker instead — no sudo required.
    unsandboxed if it can't start.
 2. **Mutants.** A mutant-generator model seeds goal-violating mutants into
    `Valid` — dropping the digit check, weakening the length bound, flipping
-   the symbol test, and so on.
+   the symbol test, and so on. On a file with several functions the generation
+   **fans out**: one seat per group of functions (balanced by complexity), so
+   every function is probed rather than just the one a single generator picked
+   — `--max-shards` bounds the width, and it auto-sizes to your machine
+   otherwise. A mutant that makes the suite *hang* (a broken loop bound, say)
+   is killed fast and counted as caught, so a non-terminating mutant can't
+   stall the run.
 3. **Dev kill-rate.** The **existing** test above is run, in the jail, against
    every mutant. It only ever calls `Valid` with a password that already
    satisfies every rule (or is simply too short) — so a mutant that *loosens*
@@ -100,7 +106,18 @@ jailed check in Docker instead — no sudo required.
    the gap is real and catchable, not a fluke of the harness.
 5. **Test-critic.** A decorrelated critic model reads the dev's test file cold
    and flags what it would have said in review: the suite never tries an
-   *invalid* password that's the right length.
+   *invalid* password that's the right length. Its findings are carried as an
+   **unverified** second opinion — advisory, never gating the signed verdict,
+   which is execution-proven only.
+6. **Shadow challenger.** In parallel, a second (cheaper) model attacks the
+   same regions — a same-ground, head-to-head measurement of one model against
+   another. It's recorded for comparison and **never** enters the verdict; the
+   exam's difficulty is set by the primary model alone, so certification means
+   exactly what it did before. `--shadow-model off` turns it off.
+
+Whatever happens, the run **converges to a signed verdict** — even if the herd
+can't author a compiling test to kill a survivor, it routes to `needs-review`
+and hands back what it found rather than spinning.
 
 ## The verdict
 

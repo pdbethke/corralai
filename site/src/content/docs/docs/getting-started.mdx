@@ -34,8 +34,8 @@ corral certify --local \
   -- go test ./...
 ```
 
-That runs the full **adversarial testing pool** in-process: a mutant-generator
-seeds goal-violating bugs into your code, your own test is scored against them
+That runs the full **adversarial testing pool** in-process: mutant-generators
+seed goal-violating bugs into your code, your own test is scored against them
 by executing it in a jail (never a self-report), a test-writer proves any gap
 is real by writing and killing the test you were missing, and a decorrelated
 test-critic reads your suite cold. You get a signed verdict — `certified` or
@@ -44,6 +44,16 @@ test-critic reads your suite cold. You get a signed verdict — `certified` or
 ```bash
 corral certify verify <record>
 ```
+
+On a file with several functions the generation **fans out** — one seat per
+group of functions, so every function gets probed, not just whichever one a
+single generator happened to pick (`--max-shards N` bounds the width; the
+default auto-sizes to your machine). Alongside each region a cheaper
+**challenger model** attacks the same code in parallel, purely to measure one
+model against another on identical ground — it's recorded for comparison and
+**never** part of the verdict (`--shadow-model off` disables it). And a mutant
+that makes your suite *hang* is killed fast and counted as caught, so a runaway
+loop can't stall the audit (`--test-timeout` overrides the auto-derived cap).
 
 By default the audit runs two distinct Claude models off that single
 `ANTHROPIC_API_KEY` (Sonnet writes/mutates, Haiku critiques); a second vendor

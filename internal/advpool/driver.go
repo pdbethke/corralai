@@ -1273,7 +1273,13 @@ func (d *Driver) tickMatrix(ctx context.Context, run *runState) {
 	}
 
 	res := matrix.Build(ctx, refs, len(run.mutants), workers, scoreFn)
+
+	// Read by RunStatus under d.mu (like verdict/authoredTest), so publish it
+	// under the same lock — the brain's poller reads on a different goroutine
+	// than the Tick loop.
+	d.mu.Lock()
 	run.matrix = &res
+	d.mu.Unlock()
 
 	deleteCandidates := 0
 	for _, row := range res.Rows {

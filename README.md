@@ -360,6 +360,9 @@ of.
   tests × M mutants extra jail runs) and opt-in for that reason; go + python only
   today; a delete-candidate is relative to the mutants THIS run happened to plant, not
   proof a test is dead weight — review before deleting, don't auto-delete on it.
+  Python single-file mode: the `--test` filename must follow pytest's discovery
+  convention or enumeration finds nothing and the matrix is silently skipped
+  (repo-dir mode unaffected).
 - **Robustness.** A non-terminating mutant is killed fast and counted (a broken loop
   can't stall the run); `--test-timeout` overrides the auto-derived per-run cap. The
   run always converges to a signed verdict — even when the herd can't author a killing

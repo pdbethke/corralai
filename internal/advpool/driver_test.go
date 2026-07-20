@@ -1650,6 +1650,93 @@ func TestRunStatusRaceWithTick(t *testing.T) {
 	<-done
 }
 
+// TestRunStatusRaceWithTick_Matrix is TestRunStatusRaceWithTick's sibling for
+// the tests×mutants matrix path (swarm slice 5): tickMatrix publishes
+// run.matrix, which RunStatus also returns in RunState — that publish must be
+// under d.mu like verdict/authoredTest, or -race flags an unsynchronized
+// access between the Tick goroutine (tickMatrix's write) and this test's
+// RunStatus-polling goroutine (a read). Wires Matrix=true + a fake Enumerator
+// so tickMatrix actually runs matrix.Build and assigns run.matrix, unlike
+// TestRunStatusRaceWithTick's default RunSpec which early-returns before
+// touching the field.
+func TestRunStatusRaceWithTick_Matrix(t *testing.T) {
+	const mission int64 = 31
+	mutants := []adequacy.Mutant{{ID: "m1", Code: "c1"}, {ID: "m2", Code: "c2"}}
+	scorer := &fakeScorer{
+		devKillRate: 0.9, devSurvivors: mutants, poolSurvivors: nil,
+		// A small sleep widens the window matrix.Build spends inside
+		// tickMatrix (real jail scoring is never this fast either), giving
+		// the concurrent RunStatus-polling goroutine below a realistic
+		// chance to overlap with the unsynchronized run.matrix publish on
+		// unfixed code.
+		reportFn: func(_ context.Context, _, _, _ string, _ []adequacy.Mutant, testCmd string) (adequacy.Report, error) {
+			time.Sleep(time.Millisecond)
+			switch {
+			case strings.Contains(testCmd, "^TestA$"):
+				return adequacy.Report{CompliantPass: true, Killed: []string{"m1"}, Survived: []string{"m2"}}, nil
+			case strings.Contains(testCmd, "^TestB$"):
+				return adequacy.Report{CompliantPass: true, Killed: nil, Survived: []string{"m1", "m2"}}, nil
+			default:
+				t.Fatalf("unexpected ScoreReport testCmd: %q", testCmd)
+				return adequacy.Report{}, nil
+			}
+		},
+	}
+	validator := &fakeValidator{mutants: mutants}
+
+	rs := testRunSpec()
+	rs.Matrix = true
+	d := newTestDriverWithSpec(t, mission, scorer, validator, 0.5, rs)
+	d.Signer = &fakeSigner{}
+	d.Enumerator = &fakeEnumerator{out: "TestA\nTestB\nok  \tpkg\t0.002s\n"}
+	d.Matrix = &fakeMatrixSink{}
+
+	ctx := context.Background()
+	ready := claimAllReady(t, d.Q)
+	tc, mg := ready[RoleTestCritic], ready[RoleMutantGenerator]
+	if tc == nil || mg == nil {
+		t.Fatalf("expected test-critic and mutant-generator both ready, got: %v", keysOf(ready))
+	}
+	mustComplete(t, d.Q, tc.ID, "no vacuous tests found")
+	mustComplete(t, d.Q, mg.ID, "raw mutants")
+	if _, err := d.Tick(ctx, mission); err != nil {
+		t.Fatalf("Tick (dev-adequacy): %v", err)
+	}
+	tw := claimTaskByID(t, d.Q, d.runs[mission].testWriterTaskID)
+	mustComplete(t, d.Q, tw.ID, "pool test source")
+
+	// Poll RunStatus concurrently with the Tick below that runs tickMatrix
+	// (Matrix=true, mutants + Enumerator wired, so tickMatrix actually calls
+	// matrix.Build and assigns run.matrix). Poll until told to stop (rather
+	// than a fixed count) so the polling spans the full duration of the Tick
+	// call below — maximizing the chance of overlapping with tickMatrix's
+	// run.matrix publish, which is exactly the unsynchronized access this
+	// test exists to catch.
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				_, _ = d.RunStatus(mission)
+			}
+		}
+	}()
+
+	v, err := d.Tick(ctx, mission)
+	close(stop)
+	<-done
+	if err != nil {
+		t.Fatalf("Tick (pool-adequacy + matrix + aggregate): %v", err)
+	}
+	if v == nil {
+		t.Fatal("expected a verdict")
+	}
+}
+
 // fakeClock is an injected, manually-advanced clock: the deadline logic must
 // never call time.Now() directly (the driver/store convention), so tests can
 // simulate a stalled run's wall-clock without sleeping.

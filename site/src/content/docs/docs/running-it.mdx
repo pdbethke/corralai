@@ -103,6 +103,14 @@ underlying test-enumeration/single-test-selector plumbing (`ListTestsCmd`/
 `SingleTestCmd`) currently implements — an unsupported language silently
 skips the matrix phase (the primary audit still runs and gates normally).
 
+**Python single-file caveat:** in single-file `--test` mode (no repo dir),
+enumeration runs `pytest --collect-only` against the operator-supplied
+`--test` path itself, not the synthetic path the dev test is actually
+written to in the jail — so on Python, the `--test` filename must follow
+pytest's discovery convention (matching the synthetic `test_<code>.py` path)
+or collection finds nothing and the matrix is silently skipped (fail-soft,
+no crash). Repo-dir mode and go are unaffected.
+
 ## The verify gate needs a sandbox (Ubuntu 24.04+)
 
 The brain certifies a gated task by **running its verify command itself** — in a

@@ -46,6 +46,10 @@ type advVerdict struct {
 	Status          string            `json:"Status"`
 	RecordID        int64             `json:"RecordID"`
 	RecordHead      string            `json:"RecordHead"`
+	// TestWriterFailed mirrors advpool.Verdict.TestWriterFailed: true when the
+	// pool exhausted its compile-retry budget without authoring a compiling
+	// killing test. See renderAdvVerdict for the honest readout this drives.
+	TestWriterFailed bool `json:"TestWriterFailed"`
 }
 
 // advStatus mirrors brain.AdvPoolStatusOut (get_adversarial_run's output).
@@ -304,6 +308,11 @@ func renderAdvVerdict(w io.Writer, codePath string, v advVerdict) {
 	fmt.Fprintf(w, "  dev_kill_rate: %.2f\n", v.DevKillRate)
 	fmt.Fprintf(w, "  survivors:     %d\n", v.Survivors)
 	fmt.Fprintf(w, "  proven_missed: %d\n", v.ProvenMissed)
+	if v.TestWriterFailed && v.Survivors > 0 {
+		// Honesty: proven_missed=0 here does NOT mean the suite is clean — it
+		// means the pool could not author a compiling test to PROVE the gap.
+		fmt.Fprintf(w, "  the herd found %d survivor(s) your suite missed but could not author a compiling test to kill them — review these manually\n", v.Survivors)
+	}
 	if v.RegionsTotal > 0 && v.RegionsProbed < v.RegionsTotal {
 		fmt.Fprintf(w, "  PARTIAL AUDIT: %d of %d regions probed — these went unprobed: %s\n",
 			v.RegionsProbed, v.RegionsTotal, strings.Join(v.DroppedRegions, "; "))

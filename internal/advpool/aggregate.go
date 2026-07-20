@@ -17,18 +17,20 @@ func aggregate(
 	vacuousFindings []queue.Finding,
 	threshold float64,
 	blockingFindingOpen bool,
+	testWriterFailed bool,
 ) Verdict {
 	v := Verdict{
-		Repo:            rs.Repo,
-		Commit:          rs.Commit,
-		Lang:            rs.Lang,
-		DevKillRate:     devKillRate,
-		MutantsTotal:    mutantsTotal,
-		Survivors:       survivors,
-		ProvenMissed:    provenMissed,
-		VacuousFindings: vacuousFindings,
-		ModelsByRole:    map[string]string(assign),
-		Status:          StatusCertified,
+		Repo:             rs.Repo,
+		Commit:           rs.Commit,
+		Lang:             rs.Lang,
+		DevKillRate:      devKillRate,
+		MutantsTotal:     mutantsTotal,
+		Survivors:        survivors,
+		ProvenMissed:     provenMissed,
+		VacuousFindings:  vacuousFindings,
+		ModelsByRole:     map[string]string(assign),
+		Status:           StatusCertified,
+		TestWriterFailed: testWriterFailed,
 	}
 	// The SIGNED certify/needs-review decision rests on execution-proven signals:
 	// the mutation kill-rate against the threshold, run in the jail. The
@@ -39,7 +41,13 @@ func aggregate(
 	// tamper-evident record must assert only what execution proves; the caller
 	// passes blockingFindingOpen=false for critic findings, keeping the parameter
 	// for a future EXECUTION-VERIFIED finding path.
-	if blockingFindingOpen || devKillRate < threshold {
+	// testWriterFailed forces needs-review UNCONDITIONALLY, regardless of
+	// where devKillRate lands against threshold: it means real survivors were
+	// found (Survivors > 0) that the pool could NOT prove killable with a
+	// compiling test. A high devKillRate (e.g. 96%, 1 survivor) must never
+	// sail past the threshold check and auto-certify an unproven gap — that
+	// would silently misrepresent "gap found, not proven" as "clean."
+	if blockingFindingOpen || devKillRate < threshold || testWriterFailed {
 		v.Status = StatusNeedsReview
 	}
 	return v

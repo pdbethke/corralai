@@ -1025,7 +1025,8 @@ func advVerdictFromPool(v advpool.Verdict) advVerdict {
 		ModelsByRole: v.ModelsByRole, Status: v.Status,
 		RecordID: v.RecordID, RecordHead: v.RecordHead,
 		RegionsTotal: v.RegionsTotal, RegionsProbed: v.RegionsProbed,
-		DroppedRegions: v.DroppedRegions,
+		DroppedRegions:   v.DroppedRegions,
+		TestWriterFailed: v.TestWriterFailed,
 	}
 	for _, f := range v.VacuousFindings {
 		out.VacuousFindings = append(out.VacuousFindings, advFinding{

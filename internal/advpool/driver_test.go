@@ -565,6 +565,113 @@ func TestTick_PoolAdequacy_CompileError_ReopensAndSkipsScore(t *testing.T) {
 	}
 }
 
+// (i2) a HARD survivor: the test-writer's output NEVER compiles. The driver
+// must not spin forever reopening it — after MaxTestWriterAttempts it must
+// give up and CONVERGE to a signed needs-review verdict carrying the real,
+// already-computed dev-adequacy result (kill-rate, survivors) instead of
+// throwing that work away. Bounded ticks prove it, not a timeout: the test
+// itself fails if convergence doesn't happen within
+// MaxTestWriterAttempts ticks of completing the (always non-compiling)
+// test-writer task.
+//
+// DevKillRate is deliberately set HIGH (0.9) with threshold 0.5 — well above
+// threshold — so this also proves the aggregate gate forces needs-review on
+// TestWriterFailed regardless of where DevKillRate lands: a 90% kill-rate
+// must never auto-certify a run that found a survivor it could not prove
+// killable.
+func TestTick_PoolAdequacy_CompileError_ExhaustsAttemptsThenConverges(t *testing.T) {
+	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}, {ID: "m2", Code: "c2"}}
+	scorer := &fakeScorer{devKillRate: 0.9, devSurvivors: survivors}
+	validator := &fakeValidator{
+		mutants:    []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0], survivors[1]},
+		compileErr: fmt.Errorf("syntax error in generated test"), // NEVER clears
+	}
+	d, _ := newTestDriver(t, 12, scorer, validator, 0.5)
+	d.Signer = &fakeSigner{}
+
+	ctx := context.Background()
+	ready := claimAllReady(t, d.Q)
+	tc, mg := ready[RoleTestCritic], ready[RoleMutantGenerator]
+	if tc == nil || mg == nil {
+		t.Fatalf("expected test-critic and mutant-generator both ready, got: %v", keysOf(ready))
+	}
+	mustComplete(t, d.Q, tc.ID, "no vacuous tests found")
+	mustComplete(t, d.Q, mg.ID, "raw mutants")
+	if _, err := d.Tick(ctx, 12); err != nil {
+		t.Fatalf("Tick (dev-adequacy): %v", err)
+	}
+
+	var v *Verdict
+	for attempt := 1; attempt <= MaxTestWriterAttempts; attempt++ {
+		tw := claimTaskByID(t, d.Q, d.runs[12].testWriterTaskID)
+		mustComplete(t, d.Q, tw.ID, "test that never compiles")
+
+		got, err := d.Tick(ctx, 12)
+		if attempt < MaxTestWriterAttempts {
+			if err == nil {
+				t.Fatalf("attempt %d: expected a reissued-for-retry error, got nil (v=%+v)", attempt, got)
+			}
+			if got != nil {
+				t.Fatalf("attempt %d: expected no verdict yet, got %+v", attempt, got)
+			}
+			reopened, terr := d.Q.TaskByID(tw.ID)
+			if terr != nil {
+				t.Fatal(terr)
+			}
+			if reopened == nil || reopened.Status != queue.StatusReady {
+				t.Fatalf("attempt %d: expected test-writer reopened (ready), got %+v", attempt, reopened)
+			}
+			continue
+		}
+		// Final attempt: budget exhausted -> converge, no error.
+		if err != nil {
+			t.Fatalf("final attempt %d: expected no error (converge on exhaustion), got %v", attempt, err)
+		}
+		if got == nil {
+			t.Fatalf("final attempt %d: expected a signed verdict once the test-writer budget is exhausted, got nil (never converged)", attempt)
+		}
+		v = got
+	}
+
+	if v == nil {
+		t.Fatal("run never converged within MaxTestWriterAttempts ticks")
+	}
+	if !v.TestWriterFailed {
+		t.Fatal("expected TestWriterFailed=true")
+	}
+	if v.ProvenMissed != 0 {
+		t.Fatalf("ProvenMissed = %d, want 0 (no killing test was ever authored)", v.ProvenMissed)
+	}
+	if v.Survivors != len(survivors) {
+		t.Fatalf("Survivors = %d, want %d (the real, already-computed dev-adequacy result must be preserved)", v.Survivors, len(survivors))
+	}
+	if v.DevKillRate != 0.9 {
+		t.Fatalf("DevKillRate = %v, want 0.9 (preserved from dev-adequacy, not thrown away)", v.DevKillRate)
+	}
+	if v.Status != StatusNeedsReview {
+		t.Fatalf("Status = %q, want %q — TestWriterFailed must force needs-review even at DevKillRate 0.9 >= threshold 0.5", v.Status, StatusNeedsReview)
+	}
+}
+
+// (i3) the happy path must not regress: when the test-writer's output DOES
+// compile (first try), TestWriterFailed must be false.
+func TestTick_PoolAdequacy_CompileSucceeds_TestWriterFailedFalse(t *testing.T) {
+	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}}
+	scorer := &fakeScorer{devKillRate: 0.9, devSurvivors: survivors, poolSurvivors: nil}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0]}}
+	d, _ := newTestDriver(t, 13, scorer, validator, 0.5)
+	d.Signer = &fakeSigner{}
+
+	v := completeFullRun(t, d, 13, "no vacuous tests found")
+
+	if v.TestWriterFailed {
+		t.Fatal("expected TestWriterFailed=false on a normal run where the writer's test compiles")
+	}
+	if v.Status != StatusCertified {
+		t.Fatalf("Status = %q, want %q", v.Status, StatusCertified)
+	}
+}
+
 // signCall records one Signer.SignVerdict invocation for assertions.
 type signCall struct {
 	verdict Verdict

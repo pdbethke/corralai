@@ -116,8 +116,15 @@ type Verdict struct {
 	VacuousFindings []queue.Finding // test-critic's designed-to-pass/vacuous flags
 	ModelsByRole    map[string]string
 	Status          string // certified | needs-review
-	RecordID        int64  // the signed build-record id (0 if signing skipped/failed)
-	RecordHead      string // the record's ledger head
+	// TestWriterFailed is true when the pool exhausted MaxTestWriterAttempts
+	// without producing a compiling killing test. HONESTY NOTE: when this is
+	// true, ProvenMissed==0 does NOT mean "no real gaps" — it means "gaps
+	// found (Survivors > 0), killing test not authored." A testWriterFailed
+	// run is never certified (aggregate forces needs-review whenever
+	// Survivors > 0 and ProvenMissed < Survivors — see aggregate).
+	TestWriterFailed bool
+	RecordID         int64  // the signed build-record id (0 if signing skipped/failed)
+	RecordHead       string // the record's ledger head
 }
 
 // RunState is the observable status of one run: Converged is true once the run
@@ -208,6 +215,19 @@ type runState struct {
 
 	poolScored   bool
 	provenMissed int
+
+	// testWriterAttempts counts compile-failure reopens of the test-writer
+	// task, guarded against MaxTestWriterAttempts in tickPoolAdequacy. Once
+	// exhausted, testWriterFailed is set and the run converges instead of
+	// reopening again.
+	testWriterAttempts int
+	// testWriterFailed is set when the test-writer exhausted
+	// MaxTestWriterAttempts without producing a compiling test. The run still
+	// converges (poolScored=true, provenMissed=0), but ProvenMissed=0 here does
+	// NOT mean "no real gaps" — it means "gaps found (Survivors > 0), killing
+	// test not authored." Carried onto the signed Verdict (TestWriterFailed) so
+	// the CLI/cockpit can say so honestly instead of implying a clean suite.
+	testWriterFailed bool
 
 	// shardRetries counts parse failures per mutant-generator task KEY (never
 	// its id). Keying by key is deliberate: a lease-expiry re-claim and a
@@ -1043,10 +1063,24 @@ func (d *Driver) tickPoolAdequacy(ctx context.Context, run *runState) error {
 	writerTest := d.Validator.ParseTest(tw.Result)
 
 	if cerr := d.Validator.CompileTest(ctx, run.rs.CodePath, run.rs.Code, writerTest); cerr != nil {
-		if _, rerr := d.Q.ReopenTask(tw.ID); rerr != nil {
-			return fmt.Errorf("advpool: reopen test-writer after compile failure: %w", rerr)
+		run.testWriterAttempts++
+		if run.testWriterAttempts < MaxTestWriterAttempts {
+			if _, rerr := d.Q.ReopenTask(tw.ID); rerr != nil {
+				return fmt.Errorf("advpool: reopen test-writer after compile failure: %w", rerr)
+			}
+			return fmt.Errorf("advpool: test-writer result does not compile, reissued for retry (%d/%d): %w",
+				run.testWriterAttempts, MaxTestWriterAttempts, cerr)
 		}
-		return fmt.Errorf("advpool: test-writer result does not compile, reissued for retry: %w", cerr)
+		// Exhausted: STOP reopening. A hard survivor whose only authored tests
+		// never compile must not spin the run to RunDeadline with no verdict —
+		// converge now with the real, already-computed dev-adequacy result
+		// (kill-rate, survivors, critic findings) rather than throwing it away.
+		log.Printf("advpool: %s: test-writer could not produce a compiling test after %d attempts — %d survivor(s) found but not proven-killed; converging without an authored test",
+			run.rs.CodePath, MaxTestWriterAttempts, len(run.devSurvivors))
+		run.poolScored = true
+		run.provenMissed = 0
+		run.testWriterFailed = true
+		return nil
 	}
 
 	// Capture the compiling killing test for hand-back (read by RunStatus under
@@ -1094,7 +1128,7 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	// opinion, which can hallucinate. blockingFindingOpen remains for a future
 	// execution-verified finding path.
 	v := aggregate(run.rs, d.Assign, run.devKillRate, run.mutantsTotal, len(run.devSurvivors), run.provenMissed,
-		criticFindings, d.Threshold, false)
+		criticFindings, d.Threshold, false, run.testWriterFailed)
 	v.RegionsTotal = run.regionsTotal
 	v.RegionsProbed = run.regionsProbed
 	v.DroppedRegions = run.droppedRegions

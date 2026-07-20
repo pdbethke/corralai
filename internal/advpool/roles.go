@@ -37,6 +37,20 @@ const (
 // spend. Dropping converges; the shortfall is recorded, never swallowed.
 const MaxShardRetries = 2
 
+// MaxTestWriterAttempts is how many times the test-writer's output is
+// reopened after a compile failure before the run gives up on authoring a
+// killing test and converges anyway.
+//
+// Unlike a mutant-generator shard (dropping one of several regions still
+// leaves a usable exam), the test-writer is a single seat with no fallback:
+// looping it unconditionally on a hard survivor spins the run to
+// RunDeadline with NO signed verdict — the worst possible first impression
+// for a run that already has a real, useful result (the dev kill-rate, the
+// survivor, the critic findings) sitting computed and unused. Capping the
+// attempts and then converging with TestWriterFailed=true trades "an
+// auto-authored killing test" for "an honest signed verdict every time."
+const MaxTestWriterAttempts = 3
+
 // Role is a role defined as data: a prompt-render, a result contract
 // (Structured vs freeform-findings), and its DAG deps. New adversarial
 // roles compose by adding an entry here — no new driver plumbing.

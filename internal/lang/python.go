@@ -33,9 +33,25 @@ func (pyPlugin) Scaffold() map[string]string { return map[string]string{} }
 
 func (pyPlugin) TestCmd() []string { return []string{pythonBin(), "-m", "pytest", "-q"} }
 
-// CompileCheck is an offline, stdlib syntax check of both files.
+// pyCachePrefixEnv redirects py_compile's bytecode output to the sandbox's
+// writable /tmp tmpfs. py_compile writes a .pyc into a __pycache__ dir NEXT TO
+// each source file; in the container jail the workspace is read-only to the
+// container's (different-uid) root — cap-drop=ALL removes CAP_DAC_OVERRIDE, and
+// the workspace is world-readable-but-not-writable — so that write fails with
+// EACCES and a syntactically VALID test is FALSELY rejected as "does not
+// compile" (the whole test-writer role was silently defeated this way on the
+// container backend). Both jail backends provide a writable /tmp tmpfs, so
+// pointing the bytecode cache there makes the syntax check succeed without
+// needing to write into the workspace. It is a single space- and
+// metacharacter-free token so it survives the jail's `strings.Join(cmd," ")` +
+// `sh -c` execution as a leading shell env assignment. Harmless on bwrap
+// (same-uid), where the workspace write already worked.
+const pyCachePrefixEnv = "PYTHONPYCACHEPREFIX=/tmp/corral-pyc"
+
+// CompileCheck is an offline, stdlib syntax check of both files, with bytecode
+// output redirected off the (jail-read-only) workspace — see pyCachePrefixEnv.
 func (pyPlugin) CompileCheck(codePath, testPath string) []string {
-	return []string{pythonBin(), "-m", "py_compile", codePath, testPath}
+	return []string{pyCachePrefixEnv, pythonBin(), "-m", "py_compile", codePath, testPath}
 }
 
 // TestPath follows the pytest convention: pkg/foo.py -> pkg/test_foo.py.

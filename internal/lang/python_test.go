@@ -23,8 +23,13 @@ func TestPythonPlugin(t *testing.T) {
 	if len(tc) != 4 || (tc[0] != "python3" && tc[0] != "python") || tc[1] != "-m" || tc[2] != "pytest" || tc[3] != "-q" {
 		t.Fatalf("TestCmd = %v", tc)
 	}
+	// The leading token MUST be the PYTHONPYCACHEPREFIX assignment: without it,
+	// py_compile writes bytecode into the jail-read-only workspace and a valid
+	// test is falsely rejected as "does not compile" on the container backend.
 	cc := p.CompileCheck("pricing.py", "test_pricing.py")
-	if len(cc) != 5 || (cc[0] != "python3" && cc[0] != "python") || cc[1] != "-m" || cc[2] != "py_compile" || cc[3] != "pricing.py" || cc[4] != "test_pricing.py" {
+	if len(cc) != 6 || cc[0] != "PYTHONPYCACHEPREFIX=/tmp/corral-pyc" ||
+		(cc[1] != "python3" && cc[1] != "python") || cc[2] != "-m" || cc[3] != "py_compile" ||
+		cc[4] != "pricing.py" || cc[5] != "test_pricing.py" {
 		t.Fatalf("CompileCheck = %v", cc)
 	}
 	if len(p.Scaffold()) != 0 {

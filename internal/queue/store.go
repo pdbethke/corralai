@@ -112,7 +112,10 @@ CREATE TABLE IF NOT EXISTS findings (
   recurring        INTEGER NOT NULL DEFAULT 0,
   created_ts       REAL    NOT NULL,
   reporter_model   TEXT    NOT NULL DEFAULT '',
-  reporter_backend TEXT    NOT NULL DEFAULT ''
+  reporter_backend TEXT    NOT NULL DEFAULT '',
+  scope            TEXT    NOT NULL DEFAULT '',
+  test_file        TEXT    NOT NULL DEFAULT '',
+  test_selector    TEXT    NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS ix_findings_mission ON findings(mission_id);
 CREATE INDEX IF NOT EXISTS ix_findings_status  ON findings(status);
@@ -158,6 +161,9 @@ func Open(path string) (*Store, error) {
 		`ALTER TABLE tasks ADD COLUMN claimed_instance TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE findings ADD COLUMN resolved_ts REAL NOT NULL DEFAULT 0`,
 		`ALTER TABLE tasks ADD COLUMN model TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE findings ADD COLUMN scope TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE findings ADD COLUMN test_file TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE findings ADD COLUMN test_selector TEXT NOT NULL DEFAULT ''`,
 	} {
 		if _, err := db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			return nil, err

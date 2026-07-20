@@ -131,6 +131,38 @@ func TestRunRole_TestCritic_ReturnsParsedFindings(t *testing.T) {
 	}
 }
 
+// TestRunRole_TestCritic_ReturnsParsedScope verifies the optional
+// scope/test_file/test_selector arguments the critic can pass to
+// report_finding are plumbed through to the assembled queue.Finding.
+func TestRunRole_TestCritic_ReturnsParsedScope(t *testing.T) {
+	findingArgs := map[string]any{
+		"type":          "bug",
+		"severity":      "high",
+		"target":        "TestFoo",
+		"evidence":      "asserts nothing — always passes",
+		"scope":         "whole-test",
+		"test_file":     "t.py",
+		"test_selector": "t.py::test_a",
+	}
+	raw, _ := json.Marshal(findingArgs)
+	fake := &fakeChatter{scripted: []Message{
+		{Role: "assistant", ToolCalls: []ToolCall{{Name: "report_finding", Arguments: raw}}},
+		{Role: "assistant", Content: "reviewed the dev tests; filed 1 finding"},
+	}}
+
+	_, findings, err := RunRole(context.Background(), fake, "test-critic", "dev tests:\n<the test source>")
+	if err != nil {
+		t.Fatalf("RunRole: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("findings = %v, want exactly 1", findings)
+	}
+	f := findings[0]
+	if f.Scope != "whole-test" || f.TestFile != "t.py" || f.TestSelector != "t.py::test_a" {
+		t.Errorf("finding = %+v, want scope=whole-test test_file=t.py test_selector=t.py::test_a", f)
+	}
+}
+
 func TestRunRole_TestCritic_NoFindings_WhenTestsAreSound(t *testing.T) {
 	fake := &fakeChatter{scripted: []Message{
 		{Role: "assistant", Content: "the tests are sound; no findings"},

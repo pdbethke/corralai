@@ -275,6 +275,39 @@ func TestSetFindingStatusStampsResolvedTS(t *testing.T) {
 	}
 }
 
+// TestFindingScopeRoundTrip verifies the critic-only Scope/TestFile/
+// TestSelector fields persist and read back intact — additive, other
+// findings simply leave them empty (see TestAddFindingCarriesModel's
+// back-compat pattern).
+func TestFindingScopeRoundTrip(t *testing.T) {
+	s := open(t)
+	id, err := s.AddFinding(Finding{
+		MissionID: 1, Reporter: "test-critic", Type: "note", Severity: "low",
+		Target: "tests/test_x.py::T::test_a", Evidence: "always passes",
+		Scope: "whole-test", TestFile: "tests/test_x.py",
+		TestSelector: "tests/test_x.py::T::test_a",
+	})
+	if err != nil {
+		t.Fatalf("AddFinding: %v", err)
+	}
+	got, err := s.Findings(1, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var f *Finding
+	for i := range got {
+		if got[i].ID == id {
+			f = &got[i]
+		}
+	}
+	if f == nil {
+		t.Fatal("finding not found")
+	}
+	if f.Scope != "whole-test" || f.TestFile != "tests/test_x.py" || f.TestSelector != "tests/test_x.py::T::test_a" {
+		t.Fatalf("scope fields not round-tripped: %+v", f)
+	}
+}
+
 func TestSeverityRankOrders(t *testing.T) {
 	if !(SeverityRank("low") < SeverityRank("medium") &&
 		SeverityRank("medium") < SeverityRank("high") &&

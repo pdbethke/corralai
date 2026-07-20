@@ -42,6 +42,9 @@ type Finding struct {
 	Type            string  `json:"type"`                       // vuln|bug|design-flaw|missing-req|regression|note
 	Severity        string  `json:"severity"`                   // low|medium|high|critical
 	Target          string  `json:"target,omitempty"`
+	Scope           string  `json:"scope,omitempty"`         // whole-test|dead-check (critic findings)
+	TestFile        string  `json:"test_file,omitempty"`     // repo-relative file holding the flagged test
+	TestSelector    string  `json:"test_selector,omitempty"` // language-runnable single-test selector
 	Evidence        string  `json:"evidence,omitempty"`
 	SuggestedAction string  `json:"suggested_action,omitempty"`
 	Status          string  `json:"status"`
@@ -75,10 +78,10 @@ func (s *Store) AddFinding(f Finding) (int64, error) {
 		}
 	}
 	res, err := s.db.Exec(
-		`INSERT INTO findings (mission_id,task_id,reporter,type,severity,target,evidence,suggested_action,status,recurring,created_ts,reporter_model,reporter_backend)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		`INSERT INTO findings (mission_id,task_id,reporter,type,severity,target,evidence,suggested_action,status,recurring,created_ts,reporter_model,reporter_backend,scope,test_file,test_selector)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		f.MissionID, f.TaskID, f.Reporter, f.Type, f.Severity, f.Target, f.Evidence, f.SuggestedAction, FindingOpen, recurring, now(),
-		f.ReporterModel, f.ReporterBackend,
+		f.ReporterModel, f.ReporterBackend, f.Scope, f.TestFile, f.TestSelector,
 	)
 	if err != nil {
 		return 0, err
@@ -181,7 +184,7 @@ func (s *Store) SetFindingStatus(id int64, status string) (bool, error) {
 	return n > 0, nil
 }
 
-const findingsSelect = `SELECT id,mission_id,task_id,reporter,type,severity,target,evidence,suggested_action,status,recurring,created_ts,reporter_model,reporter_backend,resolved_ts FROM findings`
+const findingsSelect = `SELECT id,mission_id,task_id,reporter,type,severity,target,evidence,suggested_action,status,recurring,created_ts,reporter_model,reporter_backend,resolved_ts,scope,test_file,test_selector FROM findings`
 
 func (s *Store) queryFindings(q string, args ...any) ([]Finding, error) {
 	rows, err := s.db.Query(q, args...)
@@ -196,7 +199,8 @@ func (s *Store) queryFindings(q string, args ...any) ([]Finding, error) {
 		var recurring int
 		if err := rows.Scan(&f.ID, &f.MissionID, &f.TaskID, &f.Reporter, &f.Type, &f.Severity,
 			&target, &evidence, &action, &f.Status, &recurring, &f.CreatedTS,
-			&f.ReporterModel, &f.ReporterBackend, &f.ResolvedTS); err != nil {
+			&f.ReporterModel, &f.ReporterBackend, &f.ResolvedTS,
+			&f.Scope, &f.TestFile, &f.TestSelector); err != nil {
 			return nil, err
 		}
 		f.Target, f.Evidence, f.SuggestedAction = target.String, evidence.String, action.String

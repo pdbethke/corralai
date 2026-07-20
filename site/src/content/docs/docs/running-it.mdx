@@ -31,6 +31,37 @@ NOT coordinating looks like), `make demo-observe` adds a read-only observer
 console, and `make demo-models` runs a two-model comparison so
 `model_comparison` has real A-vs-B data to report on.
 
+## The scorecard + critic precision (brain-path only)
+
+`corral scorecard` shows which model actually catches bugs, execution-proven
+(recall from mutants a model's own generated tests killed — never a
+self-report) and, in a **C-PREC** column, how often that model's
+**test-critic** findings turn out to be real once a human adjudicates them.
+Both columns read the running brain's DuckDB stores over its HTTP API
+(`GET /api/bugcatch`) — set `CORRAL_BRAIN` (and a token via `corral secret`)
+to point at one; without it, `corral scorecard` falls back to opening the
+local `CORRALAI_BUGCATCH_DB` file directly, which shows recall/precision but
+**not** the C-PREC column (that join needs `CORRALAI_CRITICSCORE_DB`, and
+the offline path never has both single-process files open at once).
+
+The critic's own findings get flagged automatically the same way the rest of
+the audit works — by execution, not opinion — but the human gate has final
+say: `corral criticscore list` shows findings still awaiting adjudication,
+`corral criticscore show <id>` prints one in full (model, target test,
+evidence), and `corral criticscore confirm <id>` / `refute <id>` record a
+human verdict that **permanently overrides** the auto-adjudication — a later
+automated pass can never claw a human verdict back. All four subcommands
+require a brain (`CORRAL_BRAIN`); there's no offline mode, because
+confirm/refute are admin-gated MCP tools that need the caller's
+authenticated identity for the audit trail.
+
+**Honesty caveat:** the critic-precision metric and its human gate are
+brain-path features only, like the rest of the bug-catching scorecard.
+`corral certify --local` still shows the critic's auto-adjudicated verdict
+on the run's own tape (nothing is hidden from you locally), but it persists
+nothing to a scorecard — there's no server-side store to write to without a
+brain running.
+
 ## The verify gate needs a sandbox (Ubuntu 24.04+)
 
 The brain certifies a gated task by **running its verify command itself** — in a

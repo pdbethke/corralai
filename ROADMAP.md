@@ -58,6 +58,17 @@ Go binary.**
   the eval harness runs the pool over a versioned known-adequacy corpus to give the
   scorecard volume and a soundness report (it says *do not publish* if the metric is
   miscalibrated).
+- **Critic-accuracy metrics.** The test-critic's own findings are scored, the same
+  execution-proven way: a whole-test finding is auto-refuted when the target test
+  still kills its own seeded mutant (the finding was wrong), recorded to a mutable
+  per-finding store (`internal/criticscore`) that a **human adjudication always wins**
+  and can never be clawed back by a later auto pass. `list_pending_critic_findings` /
+  `get_critic_finding` / `adjudicate_critic_finding` are admin-gated MCP tools; `corral
+  criticscore list|show <id>|confirm <id>|refute <id>` is the CLI over the same brain
+  API. `corral scorecard`'s **C-PREC** column shows the resulting per-model precision
+  (confirmed/(confirmed+refuted)), marked provisional under a thin adjudicated sample
+  even when the model has plenty of runs. Brain-path only, like the rest of the
+  scorecard: `--local` shows the auto verdict on the run's tape but persists nothing.
 
 **The gate — accountability, enforced.**
 - **The repo (merge) gate — control-plane v1.** `corral certify`, *inverted*: the

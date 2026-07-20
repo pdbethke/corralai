@@ -26,6 +26,7 @@ import (
 	"github.com/pdbethke/corralai/internal/buildstore"
 	"github.com/pdbethke/corralai/internal/certverify"
 	"github.com/pdbethke/corralai/internal/coord"
+	"github.com/pdbethke/corralai/internal/criticscore"
 	"github.com/pdbethke/corralai/internal/gateway"
 	"github.com/pdbethke/corralai/internal/learn"
 	"github.com/pdbethke/corralai/internal/llm"
@@ -72,6 +73,7 @@ type Server struct {
 	taskArtifacts   *taskartifacts.Store
 	buildStore      *buildstore.Store
 	bugCatch        *bugcatch.Store
+	criticScore     *criticscore.Store
 	certifyPub      ed25519.PublicKey
 	witness         transparency.Witness
 
@@ -176,6 +178,13 @@ type Deps struct {
 	// (see brain.BuildBugCatchScorecard). nil => /api/bugcatch returns an
 	// empty scorecard, never a 500 (degrade-never-block).
 	BugCatch *bugcatch.Store
+	// CriticScore is the critic-accuracy store (internal/criticscore);
+	// /api/bugcatch joins its per-model precision onto the test-critic
+	// cells, and /api/criticscore serves its pending-adjudication list to
+	// `corral criticscore list`. nil => /api/bugcatch shows no
+	// critic-precision column and /api/criticscore returns an empty list,
+	// never a 500 (degrade-never-block, same as BugCatch above).
+	CriticScore *criticscore.Store
 	// CertifyPub is the published Ed25519 public key /api/builds/{id} uses
 	// to re-verify a record's signature — the same external trust anchor
 	// `corral certify verify` uses, never derived from the record itself.
@@ -195,7 +204,7 @@ type Deps struct {
 }
 
 func Handler(d Deps) http.Handler {
-	s := &Server{coord: d.Coord, mem: d.Mem, gw: d.Gateway, bus: d.Bus, memOwners: d.MemOwners, roles: d.Roles, queue: d.Queue, missions: d.Missions, execs: d.Executions, acts: d.Activity, hosts: d.Hosts, health: d.Health, narrator: d.Narrator, tel: d.Telemetry, oracle: d.Oracle, roleModels: d.RoleModels, staffing: d.Staffing, learn: d.Learn, promote: d.Promote, reject: d.Reject, historyFn: d.History, historyDetailFn: d.HistoryDetail, replayFn: d.Replay, artifacts: d.Artifacts, taskArtifacts: d.TaskArtifacts, buildStore: d.BuildStore, bugCatch: d.BugCatch, certifyPub: d.CertifyPub, witness: d.Witness}
+	s := &Server{coord: d.Coord, mem: d.Mem, gw: d.Gateway, bus: d.Bus, memOwners: d.MemOwners, roles: d.Roles, queue: d.Queue, missions: d.Missions, execs: d.Executions, acts: d.Activity, hosts: d.Hosts, health: d.Health, narrator: d.Narrator, tel: d.Telemetry, oracle: d.Oracle, roleModels: d.RoleModels, staffing: d.Staffing, learn: d.Learn, promote: d.Promote, reject: d.Reject, historyFn: d.History, historyDetailFn: d.HistoryDetail, replayFn: d.Replay, artifacts: d.Artifacts, taskArtifacts: d.TaskArtifacts, buildStore: d.BuildStore, bugCatch: d.BugCatch, criticScore: d.CriticScore, certifyPub: d.CertifyPub, witness: d.Witness}
 	mux := http.NewServeMux()
 	sub, _ := fs.Sub(webFS, "web")
 	// "/" no longer serves the SPA (Task 3 of the daemon/client refactor):
@@ -243,6 +252,7 @@ func Handler(d Deps) http.Handler {
 	mux.HandleFunc("/api/replay", s.replay)
 	mux.HandleFunc("/api/leaderboard", s.leaderboard)
 	mux.HandleFunc("/api/bugcatch", s.bugcatch)
+	mux.HandleFunc("/api/criticscore", s.criticScorePending)
 	mux.HandleFunc("/api/mission/footprint", s.footprint)
 	mux.HandleFunc("/api/mission/prune", s.prune)
 	mux.HandleFunc("/api/mission/pause", s.steer(brain.SteerPause))
@@ -449,12 +459,40 @@ func (s *Server) leaderboard(w http.ResponseWriter, r *http.Request) {
 // already required a valid bearer (see the daemon's authz wrapper in
 // cmd/corral/main.go), and this endpoint mutates nothing.
 func (s *Server) bugcatch(w http.ResponseWriter, r *http.Request) {
-	sc, err := brain.BuildBugCatchScorecard(s.bugCatch)
+	sc, err := brain.BuildBugCatchScorecard(s.bugCatch, s.criticScore)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, sc)
+}
+
+// criticScorePending serves the critic-accuracy findings still awaiting
+// human adjudication (internal/criticscore.ListPending) — the same
+// read-only, authz-free-past-the-mux pattern as bugcatch above. `corral
+// criticscore list` reads this instead of opening the criticscore DuckDB
+// file directly, for the same single-process reason `corral scorecard`
+// reads /api/bugcatch instead of the bugcatch file (see
+// cmd/corral/scorecard.go's httpScorecardReader doc comment). A nil
+// criticScore store (feature disabled) degrades to an empty list.
+func (s *Server) criticScorePending(w http.ResponseWriter, r *http.Request) {
+	if s.criticScore == nil {
+		writeJSON(w, pendingCriticFindingsResponse{Findings: []criticscore.Finding{}})
+		return
+	}
+	fs, err := s.criticScore.ListPending(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, pendingCriticFindingsResponse{Findings: fs})
+}
+
+// pendingCriticFindingsResponse is /api/criticscore's response shape —
+// mirrors brain.pendingCriticFindingsOut's {"findings": [...]}  so the
+// MCP tool (list_pending_critic_findings) and the HTTP surface agree.
+type pendingCriticFindingsResponse struct {
+	Findings []criticscore.Finding `json:"findings"`
 }
 
 func (s *Server) history(w http.ResponseWriter, r *http.Request) {

@@ -346,6 +346,13 @@ of.
   are scored and recorded to the scorecard (`corral scorecard`), but only the primary
   generator's mutants feed the kill-rate. It roughly doubles generator API calls and
   jail wall-clock; `--shadow-model off` disables it.
+- **Critic precision.** `corral scorecard`'s C-PREC column scores the test-critic role
+  itself: how often a critic's findings, once a human adjudicates them
+  (`corral criticscore list|show <id>|confirm <id>|refute <id>`), turn out to be real
+  vs. wrong — the same "who watches the watchmen" question the gate asks of generators,
+  now asked of the critic. It's a human-gated metric on the brain path only: `--local`
+  shows the auto-adjudicated verdict on the run's tape, but persists nothing to the
+  scorecard (there's no server-side store to write to without a brain).
 - **Robustness.** A non-terminating mutant is killed fast and counted (a broken loop
   can't stall the run); `--test-timeout` overrides the auto-derived per-run cap. The
   run always converges to a signed verdict — even when the herd can't author a killing

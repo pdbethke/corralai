@@ -11,16 +11,18 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pdbethke/corralai/internal/advpool"
+	"github.com/pdbethke/corralai/internal/brain"
 	"github.com/pdbethke/corralai/internal/bugcatch"
 )
 
-type fakeScore struct{ cells []bugcatch.Cell }
+type fakeScore struct{ cells []brain.ScorecardCell }
 
-func (f fakeScore) Scorecard(context.Context) ([]bugcatch.Cell, error) { return f.cells, nil }
+func (f fakeScore) Scorecard(context.Context) ([]brain.ScorecardCell, error) { return f.cells, nil }
 
 func TestScorecardTableAndJSON(t *testing.T) {
 	r := 0.5
-	f := fakeScore{cells: []bugcatch.Cell{{Model: "claude-sonnet-5", Role: "test-writer", Catches: 1, Opportunities: 2, Recall: &r, Runs: 2}}}
+	f := fakeScore{cells: []brain.ScorecardCell{{Cell: bugcatch.Cell{Model: "claude-sonnet-5", Role: "test-writer", Catches: 1, Opportunities: 2, Recall: &r, Runs: 2}, Provisional: true}}}
 
 	var table bytes.Buffer
 	if rc := runScorecard(nil, f, &table); rc != 0 {
@@ -32,6 +34,12 @@ func TestScorecardTableAndJSON(t *testing.T) {
 	if !strings.Contains(table.String(), "provisional") { // runs=2 < 3
 		t.Fatalf("thin cell must be marked provisional:\n%s", table.String())
 	}
+	if !strings.Contains(table.String(), "C-PREC") {
+		t.Fatalf("table missing C-PREC header:\n%s", table.String())
+	}
+	if !strings.Contains(table.String(), "—") {
+		t.Fatalf("non-critic role must show a dash in the C-PREC column:\n%s", table.String())
+	}
 
 	var j bytes.Buffer
 	if rc := runScorecard([]string{"--json"}, f, &j); rc != 0 {
@@ -39,6 +47,37 @@ func TestScorecardTableAndJSON(t *testing.T) {
 	}
 	if !strings.Contains(j.String(), `"recall"`) || !strings.Contains(j.String(), "0.5") {
 		t.Fatalf("json missing recall:\n%s", j.String())
+	}
+}
+
+// TestScorecardTableShowsCriticPrecisionColumn proves the C-PREC column
+// renders a real percentage + provisional tilde for the test-critic role,
+// carrying the raw counts through in --json.
+func TestScorecardTableShowsCriticPrecisionColumn(t *testing.T) {
+	p := 2.0 / 3.0
+	f := fakeScore{cells: []brain.ScorecardCell{{
+		Cell:                bugcatch.Cell{Model: "haiku", Role: advpool.RoleTestCritic, Runs: 5},
+		Provisional:         false,
+		CriticConfirmed:     2,
+		CriticRefuted:       1,
+		CriticUnadjudicated: 0,
+		CriticPrecision:     &p,
+	}}}
+
+	var table bytes.Buffer
+	if rc := runScorecard(nil, f, &table); rc != 0 {
+		t.Fatalf("rc=%d", rc)
+	}
+	if !strings.Contains(table.String(), "67%") {
+		t.Fatalf("table missing critic precision %%:\n%s", table.String())
+	}
+
+	var j bytes.Buffer
+	if rc := runScorecard([]string{"--json"}, f, &j); rc != 0 {
+		t.Fatalf("rc=%d", rc)
+	}
+	if !strings.Contains(j.String(), `"critic_confirmed": 2`) || !strings.Contains(j.String(), `"critic_refuted": 1`) {
+		t.Fatalf("json missing raw critic counts:\n%s", j.String())
 	}
 }
 

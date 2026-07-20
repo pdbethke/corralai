@@ -39,8 +39,17 @@ Usage:
                                   "verified" and exits 0, or names the failing check on
                                   stderr and exits non-zero
   corral certify pubkey           print the local signing pubkey (for --pubkey trust anchors)
-  corral scorecard [--json]       show the bug-catching scorecard (recall/precision per model×role);
+  corral scorecard [--json]       show the bug-catching scorecard (recall/precision per model×role,
+                                  plus a C-PREC column: the test-critic role's execution-checked
+                                  precision from criticscore adjudications);
                                   table by default, or the raw cells as indented JSON with --json
+  corral criticscore list         list execution-checked test-critic findings still awaiting human
+                                  adjudication (requires CORRAL_BRAIN — no offline mode)
+  corral criticscore show <id>    print one finding in full (model, target test, evidence)
+  corral criticscore confirm <id> record a human "confirmed" verdict — the finding was real
+  corral criticscore refute <id>  record a human "refuted" verdict — the finding was wrong
+                                  (confirm/refute permanently override the pool's own auto-adjudication;
+                                  this IS the human gate the critic-precision column measures)
   corral eval [flags]             run the adversarial pool across the versioned eval corpus and
                                   print a soundness report (does the recall metric catch known gaps?)
                                   flags: --corpus <path> (default eval/corpus/manifest.json)
@@ -126,4 +135,7 @@ CORRALAI_CONTROL_GATE_DB       control-gate dedupe/index store (default ~/.claud
 CORRALAI_CONTROL_GATE_POLL_SECONDS  how often the control gate polls for new PR heads (default 120)
 CORRALAI_BUGCATCH_DB       adversarial pool's bug-catching scorecard store DuckDB path
                            (default ~/.claude/corralai_bugcatch.duckdb); also read by `corral scorecard`
+CORRALAI_CRITICSCORE_DB    adversarial pool's critic-accuracy store DuckDB path (default
+                           ~/.claude/corralai_criticscore.duckdb); the scorecard's C-PREC column and
+                           `corral criticscore` read it over the API — see CORRAL_BRAIN below
 ```

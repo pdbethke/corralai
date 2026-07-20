@@ -13,15 +13,37 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/pdbethke/corralai/internal/advpool"
+	"github.com/pdbethke/corralai/internal/brain"
 	"github.com/pdbethke/corralai/internal/brainclient"
 	"github.com/pdbethke/corralai/internal/bugcatch"
 )
 
-// scorecardReader is the read surface runScorecard needs from a bugcatch
-// store — narrowed to a single method so tests can inject a fake without
-// standing up a real DuckDB-backed *bugcatch.Store.
+// scorecardReader is the read surface runScorecard needs — narrowed to a
+// single method so tests can inject a fake without standing up a real
+// DuckDB-backed store. Returns brain.ScorecardCell (not the raw
+// bugcatch.Cell) because the critic-precision join (internal/criticscore,
+// Task 7) only exists at that layer.
 type scorecardReader interface {
-	Scorecard(context.Context) ([]bugcatch.Cell, error)
+	Scorecard(context.Context) ([]brain.ScorecardCell, error)
+}
+
+// localScorecardReader adapts a directly-opened *bugcatch.Store (the
+// offline/no-brain-running fallback in main.go's `scorecard` case) to the
+// scorecardReader interface by running it through
+// brain.BuildBugCatchScorecard with a nil criticStore — the local file path
+// never has the criticscore store open at the same time (CORRALAI_CRITICSCORE_DB
+// is a separate single-process DuckDB file the running brain holds too), so
+// the C-PREC column is legitimately empty for this path; use `corral
+// criticscore` or CORRAL_BRAIN for that data.
+type localScorecardReader struct{ store *bugcatch.Store }
+
+func (r localScorecardReader) Scorecard(ctx context.Context) ([]brain.ScorecardCell, error) {
+	sc, err := brain.BuildBugCatchScorecard(r.store, nil)
+	if err != nil {
+		return nil, err
+	}
+	return sc.Cells, nil
 }
 
 // httpScorecardReader reads the scorecard over the wire from a running
@@ -45,16 +67,7 @@ func newHTTPScorecardReader(brainURL, token string) *httpScorecardReader {
 	return &httpScorecardReader{brainURL: brainURL, client: hc}
 }
 
-// bugcatchScorecardResponse mirrors internal/brain.Scorecard's JSON shape
-// (the /api/bugcatch response body): {"cells":[{...bugcatch.Cell, "provisional":bool}]}.
-type bugcatchScorecardResponse struct {
-	Cells []struct {
-		bugcatch.Cell
-		Provisional bool `json:"provisional"`
-	} `json:"cells"`
-}
-
-func (r *httpScorecardReader) Scorecard(ctx context.Context) ([]bugcatch.Cell, error) {
+func (r *httpScorecardReader) Scorecard(ctx context.Context) ([]brain.ScorecardCell, error) {
 	url := strings.TrimRight(r.brainURL, "/") + "/api/bugcatch"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -68,15 +81,11 @@ func (r *httpScorecardReader) Scorecard(ctx context.Context) ([]bugcatch.Cell, e
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("scorecard: GET %s: unexpected status %s", url, resp.Status)
 	}
-	var body bugcatchScorecardResponse
+	var body brain.Scorecard
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		return nil, fmt.Errorf("scorecard: decode response: %w", err)
 	}
-	cells := make([]bugcatch.Cell, 0, len(body.Cells))
-	for _, c := range body.Cells {
-		cells = append(cells, c.Cell)
-	}
-	return cells, nil
+	return body.Cells, nil
 }
 
 // runScorecard renders the bug-catching scorecard: a table by default (MODEL,
@@ -101,14 +110,26 @@ func runScorecard(args []string, store scorecardReader, stdout io.Writer) int {
 		return 0
 	}
 	tw := tabwriter.NewWriter(stdout, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, "MODEL\tROLE\tCATCHES\tRECALL\tPRECISION\tRUNS\t")
+	fmt.Fprintln(tw, "MODEL\tROLE\tCATCHES\tRECALL\tPRECISION\tC-PREC\tRUNS\t")
 	for _, c := range cells {
-		fmt.Fprintf(tw, "%s\t%s\t%d/%d\t%s\t%s\t%d%s\t\n",
+		fmt.Fprintf(tw, "%s\t%s\t%d/%d\t%s\t%s\t%s\t%d%s\t\n",
 			c.Model, c.Role, c.Catches, c.Opportunities,
-			pctOrDash(c.Recall), pctOrDash(c.Precision), c.Runs, provisionalTag(c.Runs))
+			pctOrDash(c.Recall), pctOrDash(c.Precision), criticPrecisionCell(c), c.Runs, provisionalTag(c.Runs))
 	}
 	tw.Flush()
 	return 0
+}
+
+// criticPrecisionCell renders the C-PREC column: the test-critic role's
+// execution-checked precision (confirmed/(confirmed+refuted), from
+// internal/criticscore via brain.BuildBugCatchScorecard's join) with a
+// provisionalTag when the adjudicated sample is thin, or "—" for every
+// other role / a critic cell with no adjudicated evidence yet.
+func criticPrecisionCell(c brain.ScorecardCell) string {
+	if c.Role != advpool.RoleTestCritic || c.CriticPrecision == nil {
+		return "—"
+	}
+	return pctOrDash(c.CriticPrecision) + provisionalTag(c.CriticConfirmed+c.CriticRefuted)
 }
 
 func pctOrDash(p *float64) string {

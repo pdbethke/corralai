@@ -1073,21 +1073,10 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 		d.BugCatch.Record(v.RecordID, v.RecordHead, bugCatchObservations(run, v))
 	}
 
-	// Conservative auto-refute/confirm: when the tests×mutants matrix ran for
-	// this run (run.matrix != nil), each whole-test finding's adjudication is
-	// driven off the matrix's OWN execution-proven per-test row instead of a
-	// fresh single-test re-score — see matrixAdjudication. When the matrix did
-	// NOT run (matrix off, no Enumerator wired, or it skipped/failed), this
-	// falls back to the ORIGINAL single-test path, unchanged: for each critic
-	// finding scoped whole-test with a runnable single-test selector, re-run
-	// the JAIL's Scorer with THAT test alone against the run's own mutant set.
-	// If it kills at least one mutant, execution has proven the "can never
-	// fail" claim false — AutoAdjudication downgrades it to refuted. Either
-	// path: dead-check findings and anything the language plugin can't target
-	// as a single test are left unadjudicated; neither path ever auto-fails
-	// the audit — a scoring/jail error is logged and simply leaves that one
-	// finding unadjudicated. Same RecordID!=0 guard as BugCatch (see its doc
-	// comment): a record_id=0 row is unlinkable.
+	// Conservative auto-refute/confirm of the test-critic's findings — the full
+	// matrix-vs-single-test policy lives on adjudicateCriticFindings' doc. Same
+	// RecordID!=0 guard as BugCatch (see its doc comment): a record_id=0 row is
+	// unlinkable.
 	if d.CriticFindings != nil && v.RecordID != 0 {
 		obs := d.adjudicateCriticFindings(ctx, missionID, run, criticFindings, v)
 		if len(obs) > 0 {

@@ -249,6 +249,16 @@ func (s *syncWriter) Write(p []byte) (int, error) {
 	return s.w.Write(p)
 }
 
+// validFindingType / validFindingSeverity are the queue.AddFinding-accepted
+// values. A critic model can return an off-list type/severity; rather than fail
+// the whole run on AddFinding's validation, normalizeFinding coerces an unknown
+// value to the safe default (note / low) so the finding is still recorded.
+var validFindingType = map[string]bool{
+	"vuln": true, "bug": true, "design-flaw": true, "missing-req": true,
+	"regression": true, "note": true, "change-request": true, "ops": true,
+}
+var validFindingSeverity = map[string]bool{"low": true, "medium": true, "high": true, "critical": true}
+
 func normalizeFinding(f *queue.Finding) {
 	if !validFindingType[f.Type] {
 		f.Type = "note"

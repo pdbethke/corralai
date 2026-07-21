@@ -292,14 +292,18 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	// seeds the jail with the whole cloned tree and keys the file under audit by
 	// its REPO-RELATIVE path, so a mutant overwrites the real file in context
 	// and the project's own tests (which import the package) resolve.
-	scorer, validator, jailEnum, codeKey, devTestKey, _, err := buildJailWiring(
-		iso, *timeout, *testTimeout, *codePath, tp, repoDir, fsPath, code, devTest,
-		checkArgv, bindDirFlag, *noBindDepsFlag, stdout,
-	)
+	wiring, err := buildJailWiring(jailWiringInput{
+		iso: iso, timeout: *timeout, testTimeout: *testTimeout,
+		codePath: *codePath, testPath: tp, repoDir: repoDir, fsPath: fsPath,
+		code: code, devTest: devTest, checkArgv: checkArgv,
+		bindDirFlag: bindDirFlag, noBindDepsFlag: *noBindDepsFlag, stdout: stdout,
+	})
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
+	scorer, validator, jailEnum := wiring.scorer, wiring.validator, wiring.jailEnum
+	codeKey, devTestKey := wiring.codeKey, wiring.devTestKey
 
 	// Build the pure driver over the REAL jail-backed scorer/validator and the
 	// REAL certify-chain signer.
@@ -511,6 +515,37 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	return 3
 }
 
+// jailWiringInput bundles the inputs buildJailWiring needs. It is a params
+// struct only to keep the signature readable — every field is a plain input,
+// none optional.
+type jailWiringInput struct {
+	iso            sandbox.Isolator
+	timeout        time.Duration
+	testTimeout    time.Duration
+	codePath       string
+	testPath       string
+	repoDir        string
+	fsPath         func(string) string
+	code           []byte
+	devTest        []byte
+	checkArgv      []string
+	bindDirFlag    []string
+	noBindDepsFlag bool
+	stdout         io.Writer
+}
+
+// jailWiring is what buildJailWiring resolves: the jail-backed
+// scorer/validator/enumerator, the workspace keys for the code + dev-test files,
+// and the read-only dependency binds (empty in single-file mode).
+type jailWiring struct {
+	scorer     advpool.JailScorer
+	validator  advpool.JailValidator
+	jailEnum   advpool.JailEnumerator
+	codeKey    string
+	devTestKey string
+	depBinds   []adequacy.DepBind
+}
+
 // buildJailWiring resolves the jail-backed scorer/validator/enumerator and the
 // workspace keys for a --local run, branching on whether --repo-dir was set.
 // Single-file mode keys by BASENAME (a flat scaffold; the adequacy jail
@@ -523,67 +558,58 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 // --local: ..." message ready to print as-is; the caller always exits 2 for
 // a non-nil error from this function (every failure path here is a usage/
 // input error, never an internal one).
-func buildJailWiring(
-	iso sandbox.Isolator, timeout, testTimeout time.Duration,
-	codePath, testPath, repoDir string, fsPath func(string) string,
-	code, devTest []byte, checkArgv []string, bindDirFlag []string, noBindDepsFlag bool,
-	stdout io.Writer,
-) (scorer advpool.JailScorer, validator advpool.JailValidator, jailEnum advpool.JailEnumerator, codeKey, devTestKey string, depBinds []adequacy.DepBind, err error) {
-	if repoDir != "" {
-		if len(checkArgv) == 0 {
-			return scorer, validator, jailEnum, codeKey, devTestKey, depBinds,
-				fmt.Errorf("corral certify --local: --repo-dir requires the project's own test command after `--`, e.g. `-- python3 -m pytest tests/test_recipes.py`")
+func buildJailWiring(in jailWiringInput) (jailWiring, error) {
+	var w jailWiring
+	if in.repoDir != "" {
+		if len(in.checkArgv) == 0 {
+			return w, fmt.Errorf("corral certify --local: --repo-dir requires the project's own test command after `--`, e.g. `-- python3 -m pytest tests/test_recipes.py`")
 		}
-		var repoFiles map[string]string
-		var lerr error
-		repoFiles, depBinds, lerr = loadRepoFiles(repoDir, buildLoadOpts(iso.Name(), bindDirFlag, noBindDepsFlag))
+		repoFiles, depBinds, lerr := loadRepoFiles(in.repoDir, buildLoadOpts(in.iso.Name(), in.bindDirFlag, in.noBindDepsFlag))
 		if lerr != nil {
-			return scorer, validator, jailEnum, codeKey, devTestKey, depBinds,
-				fmt.Errorf("corral certify --local: reading --repo-dir %s: %v", repoDir, lerr)
+			return w, fmt.Errorf("corral certify --local: reading --repo-dir %s: %v", in.repoDir, lerr)
 		}
-		ck, rerr := filepath.Rel(repoDir, fsPath(codePath))
+		w.depBinds = depBinds
+		ck, rerr := filepath.Rel(in.repoDir, in.fsPath(in.codePath))
 		if rerr != nil || strings.HasPrefix(ck, "..") {
-			return scorer, validator, jailEnum, codeKey, devTestKey, depBinds,
-				fmt.Errorf("corral certify --local: --code %s is not inside --repo-dir %s", codePath, repoDir)
+			return w, fmt.Errorf("corral certify --local: --code %s is not inside --repo-dir %s", in.codePath, in.repoDir)
 		}
-		dk, rerr := filepath.Rel(repoDir, fsPath(testPath))
+		dk, rerr := filepath.Rel(in.repoDir, in.fsPath(in.testPath))
 		if rerr != nil || strings.HasPrefix(dk, "..") {
-			return scorer, validator, jailEnum, codeKey, devTestKey, depBinds,
-				fmt.Errorf("corral certify --local: --test %s is not inside --repo-dir %s", testPath, repoDir)
+			return w, fmt.Errorf("corral certify --local: --test %s is not inside --repo-dir %s", in.testPath, in.repoDir)
 		}
-		codeKey, devTestKey = filepath.ToSlash(ck), filepath.ToSlash(dk)
+		w.codeKey, w.devTestKey = filepath.ToSlash(ck), filepath.ToSlash(dk)
 		// The just-read code/test are authoritative in the map (identical to the
 		// on-disk copy, but explicit so a mutant overlay targets the right key).
-		repoFiles[codeKey] = string(code)
-		repoFiles[devTestKey] = string(devTest)
-		jail := adequacy.NewJail(iso, timeout, adequacy.WithReadOnlyBinds(depBinds))
+		repoFiles[w.codeKey] = string(in.code)
+		repoFiles[w.devTestKey] = string(in.devTest)
+		jail := adequacy.NewJail(in.iso, in.timeout, adequacy.WithReadOnlyBinds(depBinds))
 		// enumerator backs the tests×mutants matrix's test-listing step
 		// (--matrix). Wired unconditionally off the SAME backend/timeout/binds
 		// as jail (bwrapJail satisfies both interfaces) — a nil
 		// advpool.Driver.Enumerator makes tickMatrix always skip regardless of
 		// RunSpec.Matrix, so wiring it here costs nothing when --matrix is off
 		// (the flag is the real gate).
-		enumerator := adequacy.NewEnumerator(iso, timeout, adequacy.WithReadOnlyBinds(depBinds))
-		scorer = advpool.JailScorer{Jail: jail, BaseFiles: repoFiles, MutantTimeout: testTimeout}
-		validator = advpool.JailValidator{Jail: jail, BaseFiles: repoFiles}
-		jailEnum = advpool.JailEnumerator{Jail: enumerator, BaseFiles: repoFiles}
+		enumerator := adequacy.NewEnumerator(in.iso, in.timeout, adequacy.WithReadOnlyBinds(depBinds))
+		w.scorer = advpool.JailScorer{Jail: jail, BaseFiles: repoFiles, MutantTimeout: in.testTimeout}
+		w.validator = advpool.JailValidator{Jail: jail, BaseFiles: repoFiles}
+		w.jailEnum = advpool.JailEnumerator{Jail: enumerator, BaseFiles: repoFiles}
 		if len(depBinds) > 0 {
 			names := make([]string, 0, len(depBinds))
 			for _, b := range depBinds {
 				names = append(names, b.Rel)
 			}
-			fmt.Fprintf(stdout, "deps: bound %d dir(s) read-only (%s) — not copied into the jail seed\n", len(depBinds), strings.Join(names, ", "))
+			fmt.Fprintf(in.stdout, "deps: bound %d dir(s) read-only (%s) — not copied into the jail seed\n", len(depBinds), strings.Join(names, ", "))
 		}
 	} else {
-		codeKey = filepath.Base(codePath)
-		devTestKey = filepath.Base(testPath)
-		jail := adequacy.NewJail(iso, timeout)
-		enumerator := adequacy.NewEnumerator(iso, timeout)
-		scorer = advpool.JailScorer{Jail: jail, MutantTimeout: testTimeout}
-		validator = advpool.JailValidator{Jail: jail}
-		jailEnum = advpool.JailEnumerator{Jail: enumerator}
+		w.codeKey = filepath.Base(in.codePath)
+		w.devTestKey = filepath.Base(in.testPath)
+		jail := adequacy.NewJail(in.iso, in.timeout)
+		enumerator := adequacy.NewEnumerator(in.iso, in.timeout)
+		w.scorer = advpool.JailScorer{Jail: jail, MutantTimeout: in.testTimeout}
+		w.validator = advpool.JailValidator{Jail: jail}
+		w.jailEnum = advpool.JailEnumerator{Jail: enumerator}
 	}
-	return scorer, validator, jailEnum, codeKey, devTestKey, depBinds, nil
+	return w, nil
 }
 
 // localSwarmAutoCap keeps a default (no --swarm) run polite: even on a
@@ -698,16 +724,6 @@ func writeLocalRecordFile(path string, bs *buildstore.Store, key ed25519.Private
 	}
 	return os.WriteFile(path, data, 0o600) // #nosec G306 -- a signed record is public artifact; 0600 is conservative
 }
-
-// validFindingType / validFindingSeverity are the queue.AddFinding-accepted
-// values. A critic model can return an off-list type/severity; rather than fail
-// the whole run on AddFinding's validation, normalizeFinding coerces an unknown
-// value to the safe default (note / low) so the finding is still recorded.
-var validFindingType = map[string]bool{
-	"vuln": true, "bug": true, "design-flaw": true, "missing-req": true,
-	"regression": true, "note": true, "change-request": true, "ops": true,
-}
-var validFindingSeverity = map[string]bool{"low": true, "medium": true, "high": true, "critical": true}
 
 // advVerdictFromPool converts a concrete advpool.Verdict to the advVerdict wire
 // shape renderAdvVerdict prints (the same type the --adversarial path decodes

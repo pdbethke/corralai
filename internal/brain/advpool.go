@@ -134,6 +134,10 @@ func (s advpoolCriticSink) Record(recordID int64, recordHead string, obs []advpo
 	if s.store == nil {
 		return
 	}
+	// Whole-second granularity is schema-driven (the store's ts column is a
+	// float64 epoch-second), not a precision goal: rows are keyed by finding ID,
+	// and the matrix DeleteCandidates query breaks same-second ties on record_id
+	// (see matrixstore), so a coarser stamp costs nothing here.
 	ts := float64(s.clock().Unix())
 	rows := make([]criticscore.Finding, 0, len(obs))
 	for _, o := range obs {
@@ -179,6 +183,9 @@ func (s advpoolMatrixSink) Record(recordID int64, recordHead string, obs []advpo
 	if s.store == nil {
 		return
 	}
+	// Whole-second granularity is schema-driven (see advpoolCriticSink.Record):
+	// DeleteCandidates breaks same-second ties on record_id, so a coarse stamp
+	// is intentional, not a precision loss.
 	ts := float64(s.clock().Unix())
 	rows := make([]matrixstore.Row, 0, len(obs))
 	for _, o := range obs {
@@ -255,8 +262,6 @@ func advPoolBetter(a, b mission.ModelStats) bool {
 	return a.Model < b.Model
 }
 
-// advPoolBestByRole picks the best-earned model per role from the
-// leaderboard's stats.
 // routableModel reports whether a leaderboard model name is a real routing
 // target. The leaderboard records an UNATTRIBUTED completion under the
 // unknownModel sentinel ("(unknown model)") — you can never route a role TO
@@ -266,6 +271,8 @@ func advPoolBetter(a, b mission.ModelStats) bool {
 // model stands instead.
 func routableModel(m string) bool { return m != "" && m != unknownModel }
 
+// advPoolBestByRole picks the best-earned model per role from the
+// leaderboard's stats.
 func advPoolBestByRole(stats []mission.ModelStats) map[string]string {
 	best := map[string]mission.ModelStats{}
 	for _, c := range stats {

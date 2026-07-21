@@ -12,6 +12,17 @@ import (
 	"github.com/pdbethke/corralai/internal/agentworker"
 )
 
+// onDefaultClaudePath reports whether the run is on the default direct-Claude
+// path — MODEL_BACKEND unset, "anthropic", or "claude" — vs an operator-pinned
+// backend. It reads MODEL_BACKEND fresh, so after runCertifyLocal defaults an
+// unset MODEL_BACKEND to "anthropic" this still reports true. Both the
+// provider-key gate and the cross-vendor router consult it, so the policy lives
+// in one place.
+func onDefaultClaudePath() bool {
+	b := strings.TrimSpace(os.Getenv("MODEL_BACKEND"))
+	return b == "" || b == "anthropic" || b == "claude"
+}
+
 // localChatterFor builds the role→backend router for a real run: the base
 // backend from FromEnv() (MODEL_BACKEND-selected), switched to each role's
 // assigned model via WithModel when the backend supports it. A single ANTHROPIC
@@ -33,17 +44,6 @@ import (
 // missing, this returns the actionable error from ForModel instead of
 // silently falling back to the base backend — the caller must refuse to
 // start the run, not fail mid-run.
-// onDefaultClaudePath reports whether the run is on the default direct-Claude
-// path — MODEL_BACKEND unset, "anthropic", or "claude" — vs an operator-pinned
-// backend. It reads MODEL_BACKEND fresh, so after runCertifyLocal defaults an
-// unset MODEL_BACKEND to "anthropic" this still reports true. Both the
-// provider-key gate and the cross-vendor router consult it, so the policy lives
-// in one place.
-func onDefaultClaudePath() bool {
-	b := strings.TrimSpace(os.Getenv("MODEL_BACKEND"))
-	return b == "" || b == "anthropic" || b == "claude"
-}
-
 func localChatterFor(assign advpool.RoleAssignment) (func(role string) agentworker.Chatter, error) {
 	base := agentbackend.FromEnv()
 	sw, canSwitch := base.(agentbackend.ModelSwitcher)

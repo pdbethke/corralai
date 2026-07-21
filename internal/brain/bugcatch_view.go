@@ -51,7 +51,11 @@ type Scorecard struct {
 // test-critic cells. A nil bugcatch store (feature disabled / not opened)
 // degrades to an empty scorecard rather than an error. A nil criticStore
 // (feature disabled) leaves the critic fields at their zero value — the
-// scorecard still renders, just without the critic-precision column.
+// scorecard still renders, just without the critic-precision column. A
+// consequence worth naming: with no critic data, every test-critic cell has
+// zero adjudicated findings and so is forced Provisional below — intended, an
+// un-adjudicated critic hasn't earned a trusted precision, but it means the
+// critic role reads as provisional whenever the feature is off.
 func BuildBugCatchScorecard(store *bugcatch.Store, criticStore *criticscore.Store) (Scorecard, error) {
 	if store == nil {
 		return Scorecard{}, nil
@@ -81,6 +85,9 @@ func BuildBugCatchScorecard(store *bugcatch.Store, criticStore *criticscore.Stor
 				cell.CriticUnadjudicated = cc.Unadjudicated
 				cell.CriticPrecision = cc.Precision
 			}
+			// Too few adjudicated findings (including the nil-criticStore case,
+			// where this is always 0) → the critic hasn't earned a trusted
+			// precision yet; mark the cell provisional.
 			if cell.CriticConfirmed+cell.CriticRefuted < provisionalBelow {
 				cell.Provisional = true
 			}

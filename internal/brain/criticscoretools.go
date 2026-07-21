@@ -37,11 +37,13 @@ type adjudicateCriticFindingIn struct {
 
 // registerCriticScoreTools wires the human-gate over the adversarial pool's
 // execution-checked test-critic findings: list what's still pending, read
-// one in full, and adjudicate it. Mirrors registerControlTools's admin-gate
-// shape exactly (isHumanAdmin on every write, auditKnowledge on every
-// successful one) — this is the same "a judge may not certify herself"
-// human-gate pattern, just over critic-accuracy findings instead of vetted
-// controls.
+// one in full, and adjudicate it. It follows registerControlTools's admin-gate
+// pattern (isHumanAdmin on the write, auditKnowledge on every successful one) —
+// the same "a judge may not certify herself" human-gate, over critic-accuracy
+// findings instead of vetted controls. It is STRICTER than the control tools in
+// one respect: the two reads (list_pending / get) are admin-gated too, not just
+// the adjudicate write, since a pending finding can quote critic reasoning about
+// an unpublished audit.
 func registerCriticScoreTools(s *mcp.Server, opts Options) {
 	store := opts.CriticScore
 

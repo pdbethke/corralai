@@ -372,6 +372,16 @@ of.
   whole cloned repo (the tree is seeded into the jail and the project's own test
   command, after `--`, grades it). **`--record <file>.json`** writes the replayable
   tape.
+- **Dependency dirs are bound, not copied (`--repo-dir` mode).** `node_modules`,
+  `vendor`, `.venv`, `venv`, and `.bundle` are auto-detected and mounted **read-only**
+  into the jail instead of being copied into the workspace seed — they're usually the
+  bulk of a checkout's size and irrelevant to the mutant/text seed, so binding keeps
+  them off the 64 MiB workspace cap. Dependencies must already be **present**
+  (vendored/installed, the same way CI expects them) — corral binds what's there, it
+  never installs anything. `--bind-dir <path>` (repeatable, repo-relative) binds
+  additional dirs the same way; `--no-bind-deps` restores the pre-bind behavior
+  (copy every dep dir into the seed, subject to the size cap). A run prints `deps:
+  bound N dir(s) read-only (...)` whenever anything was bound.
 
 **The audit always runs sandboxed** (`bwrap` on Linux by default; `--jail container`
 for a docker/podman fallback; `sandbox-exec` on macOS) — there is no unsandboxed

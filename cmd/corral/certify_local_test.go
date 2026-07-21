@@ -1070,3 +1070,49 @@ func TestMatrixTapeDetail_CarriesCountsAndCandidateSelectors(t *testing.T) {
 		t.Fatalf("delete_candidates = %v, want [TestDead]", detail["delete_candidates"])
 	}
 }
+
+// TestBuildLoadOpts proves the --bind-dir/--no-bind-deps flags reach
+// loadRepoFiles' loadOpts unchanged, keyed under the resolved backend name.
+func TestBuildLoadOpts(t *testing.T) {
+	o := buildLoadOpts("container", []string{"third"}, true)
+	if o.BackendName != "container" || !o.NoBindDeps || len(o.ExtraBindDir) != 1 || o.ExtraBindDir[0] != "third" {
+		t.Fatalf("loadOpts not built from flags: %+v", o)
+	}
+}
+
+// TestLoadRepoFiles_BindDirEscape_FailsClosed proves the Task 3 review
+// finding is fixed: a --bind-dir entry that escapes the repo root (via `..`
+// or an absolute path) must error clearly BEFORE the walk, not silently fail
+// to match inside shouldBind and get dropped with no bind and no error.
+func TestLoadRepoFiles_BindDirEscape_FailsClosed(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "pkg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []string{"../escape", "..", "/etc"}
+	for _, bad := range cases {
+		_, _, err := loadRepoFiles(root, loadOpts{ExtraBindDir: []string{bad}})
+		if err == nil {
+			t.Fatalf("--bind-dir %q: expected a fail-closed error, got nil", bad)
+		}
+	}
+}
+
+// TestStringSliceFlag_Repeatable proves the repeatable --bind-dir flag.Value
+// accumulates every occurrence rather than overwriting.
+func TestStringSliceFlag_Repeatable(t *testing.T) {
+	var s stringSlice
+	if err := s.Set("first"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Set("second"); err != nil {
+		t.Fatal(err)
+	}
+	if len(s) != 2 || s[0] != "first" || s[1] != "second" {
+		t.Fatalf("stringSlice = %v, want [first second]", s)
+	}
+	if s.String() == "" {
+		t.Fatalf("String() must not be empty once values are set")
+	}
+}

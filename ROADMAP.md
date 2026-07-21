@@ -57,6 +57,15 @@ Go binary.**
   [--json]` reads it off the brain; persisted to DuckDB (`internal/matrixstore`),
   go + python only today. Wired for the hosted brain too (`start_adversarial_run`'s
   `matrix` param).
+- **Dependency dirs bound, not copied (`--repo-dir`).** `node_modules`, `vendor`,
+  `.venv`, `venv`, and `.bundle` are auto-detected and mounted **read-only** into the
+  jail instead of copied into the workspace seed — they must already be present
+  (vendored, the same way CI expects them); corral binds, it never installs.
+  `--bind-dir <path>` (repeatable) covers dirs the auto-detected set misses;
+  `--no-bind-deps` restores the copy-everything behavior. `bwrap`/macOS bind cleanly;
+  the container backend binds only world-readable dep dirs and copies the rest
+  (subject to the size cap) — an honest, loud fallback, not silent. Local-only today;
+  the brain-gate path (hosted `start_adversarial_run`) is the remaining follow-up.
 - **Multi-language** — Go, Python (pytest), Ruby (minitest/RSpec), JavaScript
   (node:test), TypeScript (tsc + node:test), the language inferred from the code
   path's extension, fail-closed on an unknown language or a failed preflight. C is next.

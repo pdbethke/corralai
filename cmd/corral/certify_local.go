@@ -109,6 +109,9 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	maxShardsFlag := fs.Int("max-shards", 0, "max mutant-generator seats fanned out across the file's functions (0 = "+fmt.Sprint(advpool.DefaultMaxShards)+"). Bounds PARALLELISM only — every function is probed regardless; --n-mutants is the PER-SHARD budget")
 	shadowModelFlag := fs.String("shadow-model", "", "challenger model that attacks every region a SECOND time for a region-controlled head-to-head (default "+defaultLocalShadowModel+"; \"off\" disables). Recorded for comparison — NEVER gates the verdict")
 	matrixFlag := fs.Bool("matrix", false, "opt into the tests×mutants matrix: after the primary pass, re-score EVERY dev test ALONE against the run's mutants — a per-test adequacy readout + a delete-candidate list, instead of one dev-suite-wide number. COSTLY: T tests × M mutants extra jail runs (T×M, on top of the primary pass), so leave off by default on a big suite")
+	var bindDirFlag stringSlice
+	fs.Var(&bindDirFlag, "bind-dir", "extra repo-relative dependency dir to mount read-only into the jail instead of copying it into the workspace (repeatable; node_modules/vendor/.venv/venv/.bundle are auto-detected) — --repo-dir mode only")
+	noBindDepsFlag := fs.Bool("no-bind-deps", false, "copy dependency dirs into the jail workspace instead of bind-mounting them read-only (the pre-bind behavior; subject to the workspace size cap)")
 	if err := fs.Parse(flagArgs); err != nil {
 		return 2
 	}
@@ -240,13 +243,6 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "corral certify --local: %v\n", err)
 		return 1
 	}
-	jail := adequacy.NewJail(iso, *timeout)
-	// enumerator backs the tests×mutants matrix's test-listing step (--matrix).
-	// Wired unconditionally off the SAME backend/timeout as jail (bwrapJail
-	// satisfies both interfaces) — a nil advpool.Driver.Enumerator makes
-	// tickMatrix always skip regardless of RunSpec.Matrix, so wiring it here
-	// costs nothing when --matrix is off (the flag is the real gate).
-	enumerator := adequacy.NewEnumerator(iso, *timeout)
 
 	// Open the local stores: an ephemeral queue (one run), and the SAME
 	// persistent build ledger + signing key `corral certify`/`corral certify
@@ -288,13 +284,15 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	var validator advpool.JailValidator
 	var jailEnum advpool.JailEnumerator
 	var codeKey, devTestKey string
+	var depBinds []adequacy.DepBind
 	if repoDir != "" {
 		if len(checkArgv) == 0 {
 			fmt.Fprintln(stderr, "corral certify --local: --repo-dir requires the project's own test command after `--`, e.g. `-- python3 -m pytest tests/test_recipes.py`")
 			return 2
 		}
-		repoFiles, depBinds, lerr := loadRepoFiles(repoDir, loadOpts{}) // TODO(task4): wire opts (BackendName/--bind-dir/--no-bind-deps) + pass depBinds to the jail via adequacy.WithReadOnlyBinds
-		_ = depBinds
+		var repoFiles map[string]string
+		var lerr error
+		repoFiles, depBinds, lerr = loadRepoFiles(repoDir, buildLoadOpts(iso.Name(), bindDirFlag, *noBindDepsFlag))
 		if lerr != nil {
 			fmt.Fprintf(stderr, "corral certify --local: reading --repo-dir %s: %v\n", repoDir, lerr)
 			return 2
@@ -314,12 +312,29 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		// on-disk copy, but explicit so a mutant overlay targets the right key).
 		repoFiles[codeKey] = string(code)
 		repoFiles[devTestKey] = string(devTest)
+		jail := adequacy.NewJail(iso, *timeout, adequacy.WithReadOnlyBinds(depBinds))
+		// enumerator backs the tests×mutants matrix's test-listing step
+		// (--matrix). Wired unconditionally off the SAME backend/timeout/binds
+		// as jail (bwrapJail satisfies both interfaces) — a nil
+		// advpool.Driver.Enumerator makes tickMatrix always skip regardless of
+		// RunSpec.Matrix, so wiring it here costs nothing when --matrix is off
+		// (the flag is the real gate).
+		enumerator := adequacy.NewEnumerator(iso, *timeout, adequacy.WithReadOnlyBinds(depBinds))
 		scorer = advpool.JailScorer{Jail: jail, BaseFiles: repoFiles, MutantTimeout: *testTimeout}
 		validator = advpool.JailValidator{Jail: jail, BaseFiles: repoFiles}
 		jailEnum = advpool.JailEnumerator{Jail: enumerator, BaseFiles: repoFiles}
+		if len(depBinds) > 0 {
+			names := make([]string, 0, len(depBinds))
+			for _, b := range depBinds {
+				names = append(names, b.Rel)
+			}
+			fmt.Fprintf(stdout, "deps: bound %d dir(s) read-only (%s) — not copied into the jail seed\n", len(depBinds), strings.Join(names, ", "))
+		}
 	} else {
 		codeKey = filepath.Base(*codePath)
 		devTestKey = filepath.Base(tp)
+		jail := adequacy.NewJail(iso, *timeout)
+		enumerator := adequacy.NewEnumerator(iso, *timeout)
 		scorer = advpool.JailScorer{Jail: jail, MutantTimeout: *testTimeout}
 		validator = advpool.JailValidator{Jail: jail}
 		jailEnum = advpool.JailEnumerator{Jail: enumerator}
@@ -710,6 +725,26 @@ func recordActor(role, model string) string {
 	return model + "/" + role
 }
 
+// stringSlice is a minimal repeatable-string flag.Value (cmd/corral has no
+// existing repeatable-flag helper to reuse): each `--bind-dir <path>`
+// occurrence appends rather than overwrites, so an operator can pass it more
+// than once.
+type stringSlice []string
+
+func (s *stringSlice) String() string { return strings.Join(*s, ",") }
+
+func (s *stringSlice) Set(v string) error {
+	*s = append(*s, v)
+	return nil
+}
+
+// buildLoadOpts is the testable flag→loadOpts seam: it carries the resolved
+// backend name (the container-fallback rule in shouldBind needs it),
+// --bind-dir's accumulated dirs, and --no-bind-deps straight into loadOpts.
+func buildLoadOpts(backendName string, bindDirs []string, noBindDeps bool) loadOpts {
+	return loadOpts{BackendName: backendName, ExtraBindDir: bindDirs, NoBindDeps: noBindDeps}
+}
+
 // loadOpts configures loadRepoFiles' dep-dir detection: which sandbox
 // backend will run the jail (the container-fallback rule needs it),
 // operator-supplied extra dirs to bind (--bind-dir), and an opt-out that
@@ -794,7 +829,16 @@ func loadRepoFiles(root string, opts loadOpts) (map[string]string, []adequacy.De
 	// non-dir entry is a clear error before the walk starts, not a silent
 	// no-op discovered later inside the sandbox.
 	for _, e := range opts.ExtraBindDir {
-		fi, serr := os.Stat(filepath.Join(rootAbs, filepath.FromSlash(e)))
+		// Reject anything that isn't a clean repo-relative path BEFORE
+		// stat'ing it: an absolute path or a `../`-escaping entry would stat
+		// fine (it may well exist on the host) but can never match a
+		// root-confined walk `rel`, so it would silently produce no bind and
+		// no error — the opposite of fail-closed.
+		clean := filepath.Clean(filepath.FromSlash(e))
+		if filepath.IsAbs(e) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+			return nil, nil, fmt.Errorf("--bind-dir %s: must be a path inside --repo-dir (not absolute or escaping with ..)", e)
+		}
+		fi, serr := os.Stat(filepath.Join(rootAbs, clean))
 		if serr != nil {
 			return nil, nil, fmt.Errorf("--bind-dir %s: %w", e, serr)
 		}

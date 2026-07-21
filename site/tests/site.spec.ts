@@ -14,6 +14,10 @@ const DENY_PATTERNS: [RegExp, string][] = [
   [/AKIA[0-9A-Z]{16}/g, 'AWS access key id'],
   [/cdt_[A-Za-z0-9]{20,}/g, 'vendor token (cdt_*)'],
   [/sk-[A-Za-z0-9]{20,}/g, 'OpenAI-shaped API key'],
+  // Anthropic keys are sk-ant-… (hyphens break the sk-[alnum]{20,} rule above),
+  // Google/Gemini keys are AIza… — the two cross-vendor-critic vendors.
+  [/sk-ant-[A-Za-z0-9_-]{20,}/g, 'Anthropic API key'],
+  [/\bAIza[0-9A-Za-z_-]{35}/g, 'Google API key'],
   [/-----BEGIN[A-Z ]*PRIVATE KEY-----/g, 'private key material'],
   // Windows-shaped paths (drive-letter and backslash-home), mirroring the
   // two extra deny rules scrub-golden-run.py carries that scripts/export
@@ -107,6 +111,13 @@ test('the deny-list scan flags the Important-1 parity rules (non-private IPv4, a
   // ported faithfully from scan_deny's own documented edge case.
   const gluedSlash = scanDeny('see github.com/yourusername/stack for the source');
   expect(gluedSlash).toHaveLength(0);
+
+  // Provider API keys: Anthropic sk-ant-… (hyphens defeat the plain sk-… rule)
+  // and Google AIza… — the two vendors the cross-vendor critic uses.
+  const anthropicKey = scanDeny('export ANTHROPIC_API_KEY=sk-ant-api03-AbCdEf0123456789xyzABCDEFGH');
+  expect(anthropicKey.some((o) => o.includes('Anthropic API key'))).toBe(true);
+  const googleKey = scanDeny('GEMINI_API_KEY=AIzaSyA0123456789abcdef_ABCDEFGHIJKLMNOP');
+  expect(googleKey.some((o) => o.includes('Google API key'))).toBe(true);
 });
 
 test('every committed recording passes the deny-list scan', async () => {

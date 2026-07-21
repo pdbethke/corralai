@@ -864,9 +864,15 @@ func loadRepoFiles(root string, opts loadOpts) (map[string]string, []adequacy.De
 		if filepath.IsAbs(e) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
 			return nil, nil, fmt.Errorf("--bind-dir %s: must be a path inside --repo-dir (not absolute or escaping with ..)", e)
 		}
-		fi, serr := os.Stat(filepath.Join(rootAbs, clean))
+		fi, serr := os.Lstat(filepath.Join(rootAbs, clean))
 		if serr != nil {
 			return nil, nil, fmt.Errorf("--bind-dir %s: %w", e, serr)
+		}
+		if fi.Mode()&os.ModeSymlink != 0 {
+			// A symlinked entry would pass a following os.Stat but the walk
+			// skips symlinked dirs — so it would bind nothing, silently. Reject
+			// it loudly (and it keeps out-of-repo symlink targets from binding).
+			return nil, nil, fmt.Errorf("--bind-dir %s: is a symlink; only a real directory inside --repo-dir can be bound", e)
 		}
 		if !fi.IsDir() {
 			return nil, nil, fmt.Errorf("--bind-dir %s: not a directory", e)

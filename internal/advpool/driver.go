@@ -57,6 +57,15 @@ const (
 // matrixDefaultWorkers is Driver.MatrixWorkers' fallback when unset (<= 0).
 const matrixDefaultWorkers = 4
 
+// maxMatrixTests bounds the tests dimension of the tests×mutants matrix. The
+// matrix runs T×M jail executions and tickMatrix blocks on all of them inside a
+// single Tick (so RunDeadline, checked only between Ticks, can't bound it) — an
+// enormous suite would pin the host. Every other advpool compute knob (mutants,
+// shard width) is likewise ceilinged; this ceilings T. A suite larger than this
+// is truncated with a loud log, never silently. Generous enough that real
+// single-file suites are never clipped.
+const maxMatrixTests = 500
+
 // Signer wraps the certify chain (certify.BuildLedger/BuildAttestation/
 // SignDSSE + buildstore — the real impl is Task 5.1): it signs a terminal
 // Verdict as a tamper-evident record, subject = repo@commit, byproducts =
@@ -1243,6 +1252,11 @@ func (d *Driver) tickMatrix(ctx context.Context, run *runState) {
 	sels := p.ParseTestList(out)
 	if len(sels) == 0 {
 		return
+	}
+	if len(sels) > maxMatrixTests {
+		log.Printf("advpool: matrix: suite has %d tests, capping to %d to bound the tests×mutants work (the rest are not scored this run)",
+			len(sels), maxMatrixTests)
+		sels = sels[:maxMatrixTests]
 	}
 	refs := make([]matrix.TestRef, len(sels))
 	for i, sel := range sels {

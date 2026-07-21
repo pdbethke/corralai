@@ -34,6 +34,11 @@ DENY_PATTERNS = [
     (r'AKIA[0-9A-Z]{16}', 'AWS access key id'),
     (r'cdt_[A-Za-z0-9]{20,}', 'vendor token (cdt_*)'),
     (r'sk-[A-Za-z0-9]{20,}', 'OpenAI-shaped API key'),
+    # Anthropic keys are sk-ant-… (hyphens break the sk-[alnum]{20,} rule above),
+    # and Google/Gemini keys are AIza… — the two vendors the cross-vendor critic
+    # uses. Deny both outright.
+    (r'sk-ant-[A-Za-z0-9_-]{20,}', 'Anthropic API key'),
+    (r'\bAIza[0-9A-Za-z_-]{35}', 'Google API key'),
     (r'-----BEGIN[A-Z ]*PRIVATE KEY-----', 'private key material'),
     # Anything drive-lettered in a Linux-container demo export is suspicious
     # enough to deny outright. \\{1,2} handles both plain text (C:\Users\pat)

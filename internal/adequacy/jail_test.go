@@ -5,6 +5,8 @@ package adequacy
 import (
 	"context"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -191,16 +193,22 @@ func (c *captureIsolator) Name() string {
 // RunTest itself — never a static path — because only RunTest knows the
 // per-run dir.
 func TestJailResolvesDepBindsToWorkspaceTarget(t *testing.T) {
+	// Host must be a REAL, non-symlink directory — resolveBinds lstat-refuses a
+	// symlinked/missing bind source (the TOCTOU hardening).
+	host := filepath.Join(t.TempDir(), "node_modules")
+	if err := os.Mkdir(host, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	var got sandbox.Options
 	fake := &captureIsolator{name: "bwrap", onWrap: func(o sandbox.Options) { got = o }}
-	j := NewJail(fake, time.Second, WithReadOnlyBinds([]DepBind{{Host: "/proj/node_modules", Rel: "node_modules"}}))
+	j := NewJail(fake, time.Second, WithReadOnlyBinds([]DepBind{{Host: host, Rel: "node_modules"}}))
 	_, _ = j.RunTest(context.Background(), map[string]string{"a.js": "1"}, []string{"true"})
 	if len(got.ReadOnlyBinds) != 1 {
 		t.Fatalf("want 1 bind, got %d", len(got.ReadOnlyBinds))
 	}
 	b := got.ReadOnlyBinds[0]
-	if b.Host != "/proj/node_modules" {
-		t.Fatalf("host = %q", b.Host)
+	if b.Host != host {
+		t.Fatalf("host = %q, want %q", b.Host, host)
 	}
 	// Target is the PER-RUN temp workspace joined with Rel — not a static path.
 	if b.Target != got.Workspace+"/node_modules" {
@@ -220,5 +228,30 @@ func TestJailAdapterTimeoutNeverReadsAsPassed(t *testing.T) {
 	}
 	if err == nil {
 		t.Fatalf("a timed-out run should surface an error")
+	}
+}
+
+// TestJailRefusesSymlinkedDepBind is the TOCTOU hardening: a dependency bind
+// whose Host is a symlink (e.g. swapped in after the walk to point at a host
+// secret) must be REFUSED at mount time, not bound. RunTest/Enumerate return an
+// error rather than mounting the symlink's target read-only into the jail.
+func TestJailRefusesSymlinkedDepBind(t *testing.T) {
+	tmp := t.TempDir()
+	real := filepath.Join(tmp, "realdir")
+	if err := os.Mkdir(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(tmp, "node_modules") // a symlink standing in for a dep dir
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	backend := &captureIsolator{name: "bwrap"}
+	j := NewJail(backend, time.Second, WithReadOnlyBinds([]DepBind{{Host: link, Rel: "node_modules"}}))
+	_, err := j.RunTest(context.Background(), map[string]string{"a.txt": "x"}, []string{"true"})
+	if err == nil {
+		t.Fatal("RunTest must refuse a symlinked dependency bind, got nil error")
+	}
+	if !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("error should mention the symlink refusal, got: %v", err)
 	}
 }

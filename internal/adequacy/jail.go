@@ -89,12 +89,26 @@ func NewEnumerator(backend sandbox.Isolator, timeout time.Duration, opts ...Jail
 // resolveBinds resolves the jail's constant repo-relative DepBinds into
 // absolute sandbox.Bind targets under this run's temp workspace dir. Shared
 // by RunTest and Enumerate so the two never drift.
-func (j bwrapJail) resolveBinds(dir string) []sandbox.Bind {
+func (j bwrapJail) resolveBinds(dir string) ([]sandbox.Bind, error) {
 	var roBinds []sandbox.Bind
 	for _, b := range j.binds {
+		// Defense-in-depth against a TOCTOU: the dep dir was a real directory
+		// when the walk captured it, but it is bind-mounted here, later. lstat
+		// it now and REFUSE if it became a symlink in between — bwrap/docker
+		// resolve the bind SOURCE at mount time, so a Host swapped to a
+		// symlink→/etc/... would otherwise expose that target read-only in the
+		// jail. Only the final component is checked (a legit symlink in the
+		// repo's own path prefix must not false-reject).
+		fi, err := os.Lstat(b.Host)
+		if err != nil {
+			return nil, fmt.Errorf("adequacy: dependency bind %s: %w", b.Host, err)
+		}
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return nil, fmt.Errorf("adequacy: refusing to bind %q: dependency directory is a symlink", b.Host)
+		}
 		roBinds = append(roBinds, sandbox.Bind{Host: b.Host, Target: filepath.Join(dir, filepath.FromSlash(b.Rel))})
 	}
-	return roBinds
+	return roBinds, nil
 }
 
 // writeWorkspace materializes files into a fresh, disposable temp directory,
@@ -184,12 +198,16 @@ func (j bwrapJail) RunTest(ctx context.Context, files map[string]string, testCmd
 	}
 	defer os.RemoveAll(dir) // #nosec G104 -- best-effort cleanup of our own disposable temp dir
 
+	roBinds, berr := j.resolveBinds(dir)
+	if berr != nil {
+		return false, berr
+	}
 	res, err := sandbox.RunGuarded(ctx, strings.Join(testCmd, " "), sandbox.Options{
 		Workspace:     dir,
 		Backend:       j.backend,
 		Network:       false,
 		Timeout:       j.timeout,
-		ReadOnlyBinds: j.resolveBinds(dir),
+		ReadOnlyBinds: roBinds,
 	})
 	if err != nil {
 		if res.TimedOut {
@@ -216,12 +234,16 @@ func (j bwrapJail) Enumerate(ctx context.Context, files map[string]string, cmd [
 	}
 	defer os.RemoveAll(dir) // #nosec G104 -- best-effort cleanup of our own disposable temp dir
 
+	roBinds, berr := j.resolveBinds(dir)
+	if berr != nil {
+		return "", berr
+	}
 	res, err := sandbox.RunGuarded(ctx, strings.Join(cmd, " "), sandbox.Options{
 		Workspace:     dir,
 		Backend:       j.backend,
 		Network:       false,
 		Timeout:       j.timeout,
-		ReadOnlyBinds: j.resolveBinds(dir),
+		ReadOnlyBinds: roBinds,
 	})
 	if err != nil {
 		if res.TimedOut {

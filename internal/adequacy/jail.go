@@ -37,14 +37,40 @@ var ErrTestTimeout = errors.New("adequacy: test run timed out")
 type bwrapJail struct {
 	backend sandbox.Isolator
 	timeout time.Duration
+	binds   []DepBind
+}
+
+// DepBind is a read-only dependency dir to mount into the jail: Host is the
+// absolute host path, Rel is the repo-relative path where it lives (and
+// where the test command expects it). RunTest/Enumerate resolve Rel against
+// the per-run temp workspace to build sandbox.Bind.Target — Rel alone is not
+// enough because only RunTest/Enumerate know the per-run dir.
+type DepBind struct {
+	Host string // absolute host dir
+	Rel  string // repo-relative dir (slash-separated), e.g. "node_modules"
+}
+
+// JailOption configures a bwrapJail at construction (NewJail/NewEnumerator).
+type JailOption func(*bwrapJail)
+
+// WithReadOnlyBinds sets the dependency dirs mounted read-only into every
+// run this jail performs. Binds are constant for the jail's whole lifetime;
+// only their Target (resolved from Rel against the per-run workspace) varies
+// per call.
+func WithReadOnlyBinds(binds []DepBind) JailOption {
+	return func(j *bwrapJail) { j.binds = binds }
 }
 
 // NewJail builds the real bwrap-sandboxed Jail for the adequacy scorer.
 // backend must be resolved via sandbox.Resolve — never construct an
 // alternate, weaker isolation path here. A nil backend is accepted (RunTest
 // will refuse to run rather than fall back to unsandboxed execution).
-func NewJail(backend sandbox.Isolator, timeout time.Duration) Jail {
-	return bwrapJail{backend: backend, timeout: timeout}
+func NewJail(backend sandbox.Isolator, timeout time.Duration, opts ...JailOption) Jail {
+	j := bwrapJail{backend: backend, timeout: timeout}
+	for _, o := range opts {
+		o(&j)
+	}
+	return j
 }
 
 // NewEnumerator builds the real bwrap-sandboxed Enumerator for the tests×
@@ -52,8 +78,23 @@ func NewJail(backend sandbox.Isolator, timeout time.Duration) Jail {
 // SAME concrete type (bwrapJail) satisfies both interfaces, so a caller
 // wiring both a Jail and an Enumerator off one backend gets identical
 // workspace/perm handling for each.
-func NewEnumerator(backend sandbox.Isolator, timeout time.Duration) Enumerator {
-	return bwrapJail{backend: backend, timeout: timeout}
+func NewEnumerator(backend sandbox.Isolator, timeout time.Duration, opts ...JailOption) Enumerator {
+	j := bwrapJail{backend: backend, timeout: timeout}
+	for _, o := range opts {
+		o(&j)
+	}
+	return j
+}
+
+// resolveBinds resolves the jail's constant repo-relative DepBinds into
+// absolute sandbox.Bind targets under this run's temp workspace dir. Shared
+// by RunTest and Enumerate so the two never drift.
+func (j bwrapJail) resolveBinds(dir string) []sandbox.Bind {
+	var roBinds []sandbox.Bind
+	for _, b := range j.binds {
+		roBinds = append(roBinds, sandbox.Bind{Host: b.Host, Target: filepath.Join(dir, filepath.FromSlash(b.Rel))})
+	}
+	return roBinds
 }
 
 // writeWorkspace materializes files into a fresh, disposable temp directory,
@@ -144,10 +185,11 @@ func (j bwrapJail) RunTest(ctx context.Context, files map[string]string, testCmd
 	defer os.RemoveAll(dir) // #nosec G104 -- best-effort cleanup of our own disposable temp dir
 
 	res, err := sandbox.RunGuarded(ctx, strings.Join(testCmd, " "), sandbox.Options{
-		Workspace: dir,
-		Backend:   j.backend,
-		Network:   false,
-		Timeout:   j.timeout,
+		Workspace:     dir,
+		Backend:       j.backend,
+		Network:       false,
+		Timeout:       j.timeout,
+		ReadOnlyBinds: j.resolveBinds(dir),
 	})
 	if err != nil {
 		if res.TimedOut {
@@ -175,10 +217,11 @@ func (j bwrapJail) Enumerate(ctx context.Context, files map[string]string, cmd [
 	defer os.RemoveAll(dir) // #nosec G104 -- best-effort cleanup of our own disposable temp dir
 
 	res, err := sandbox.RunGuarded(ctx, strings.Join(cmd, " "), sandbox.Options{
-		Workspace: dir,
-		Backend:   j.backend,
-		Network:   false,
-		Timeout:   j.timeout,
+		Workspace:     dir,
+		Backend:       j.backend,
+		Network:       false,
+		Timeout:       j.timeout,
+		ReadOnlyBinds: j.resolveBinds(dir),
 	})
 	if err != nil {
 		if res.TimedOut {

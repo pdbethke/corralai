@@ -161,6 +161,53 @@ func TestJailAdapterContainerBackendCanCompilePythonInWorkspace(t *testing.T) {
 	}
 }
 
+// captureIsolator is a fake sandbox.Isolator that records the Options it was
+// given (via Wrap) and returns a harmless argv so sandbox.RunGuarded proceeds
+// to actually exec — letting RunTest/Enumerate run for real while we inspect
+// what Options they built (in particular, the resolved ReadOnlyBinds).
+type captureIsolator struct {
+	name   string
+	onWrap func(sandbox.Options)
+}
+
+func (c *captureIsolator) Wrap(command string, opts sandbox.Options, env []string) ([]string, error) {
+	if c.onWrap != nil {
+		c.onWrap(opts)
+	}
+	return []string{"true"}, nil
+}
+
+func (c *captureIsolator) Preflight() error { return nil }
+func (c *captureIsolator) Name() string {
+	if c.name != "" {
+		return c.name
+	}
+	return "capture"
+}
+
+// TestJailResolvesDepBindsToWorkspaceTarget pins the KEY design point of the
+// bind-mount-deps feature: DepBind.Rel is repo-relative and is resolved to an
+// ABSOLUTE sandbox.Bind.Target under the per-run temp workspace inside
+// RunTest itself — never a static path — because only RunTest knows the
+// per-run dir.
+func TestJailResolvesDepBindsToWorkspaceTarget(t *testing.T) {
+	var got sandbox.Options
+	fake := &captureIsolator{name: "bwrap", onWrap: func(o sandbox.Options) { got = o }}
+	j := NewJail(fake, time.Second, WithReadOnlyBinds([]DepBind{{Host: "/proj/node_modules", Rel: "node_modules"}}))
+	_, _ = j.RunTest(context.Background(), map[string]string{"a.js": "1"}, []string{"true"})
+	if len(got.ReadOnlyBinds) != 1 {
+		t.Fatalf("want 1 bind, got %d", len(got.ReadOnlyBinds))
+	}
+	b := got.ReadOnlyBinds[0]
+	if b.Host != "/proj/node_modules" {
+		t.Fatalf("host = %q", b.Host)
+	}
+	// Target is the PER-RUN temp workspace joined with Rel — not a static path.
+	if b.Target != got.Workspace+"/node_modules" {
+		t.Fatalf("target = %q, want %q (per-run workspace + Rel)", b.Target, got.Workspace+"/node_modules")
+	}
+}
+
 func TestJailAdapterTimeoutNeverReadsAsPassed(t *testing.T) {
 	backend, err := sandbox.Resolve(sandbox.Config{})
 	if err != nil || backend == nil {

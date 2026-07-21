@@ -41,7 +41,7 @@ func TestParseCommaList(t *testing.T) {
 }
 
 func TestParseAnyVariants(t *testing.T) {
-	for _, raw := range []string{"", "any", "ANY", "Any", "*", "  ", " , , "} {
+	for _, raw := range []string{"", "any", "ANY", "Any", "*", "  ", " , , ", "generalist", "Generalist"} {
 		s := Parse(raw)
 		if !s.Any {
 			t.Fatalf("Parse(%q).Any = false, want true", raw)

@@ -34,7 +34,11 @@ type Set struct {
 // task"). A single entry behaves exactly as the old single-role field did.
 func Parse(raw string) Set {
 	raw = strings.TrimSpace(raw)
-	if raw == "" || strings.EqualFold(raw, "any") || raw == "*" {
+	// "generalist" is honored here to match Coverage() (which already maps it to
+	// a claim-any set) and the AGENT_ROLE help text — a worker started with the
+	// default AGENT_ROLE=generalist claims ANY ready task, not a role literally
+	// named "generalist" (no such role exists).
+	if raw == "" || strings.EqualFold(raw, "any") || raw == "*" || strings.EqualFold(raw, "generalist") {
 		return Set{Any: true}
 	}
 	var roles []string

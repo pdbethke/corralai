@@ -1089,51 +1089,7 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	// finding unadjudicated. Same RecordID!=0 guard as BugCatch (see its doc
 	// comment): a record_id=0 row is unlinkable.
 	if d.CriticFindings != nil && v.RecordID != 0 {
-		p := langFor(run.rs)
-		var obs []CriticFindingObservation
-		for _, f := range criticFindings {
-			scope := NormalizeScope(f.Scope)
-			var adjudication string
-			if run.matrix != nil {
-				adjudication = AdjUnadjudicated
-				if scope == ScopeWholeTest && f.TestSelector != "" {
-					if row := matrixRowFor(run.matrix.Rows, f.TestSelector); row != nil {
-						adjudication = matrixAdjudication(*row, run.matrix.Catchable)
-					}
-				}
-			} else {
-				ran, kills := false, 0
-				if scope == ScopeWholeTest && f.TestSelector != "" {
-					if cmd, ok := p.SingleTestCmd(f.TestFile, f.TestSelector); ok {
-						if kr, survivors, serr := d.Scorer.Score(ctx, run.rs.CodePath, run.rs.Code, run.rs.DevTestCode, run.mutants, strings.Join(cmd, " ")); serr != nil {
-							log.Printf("advpool: run %d: critic auto-refute score failed for %q: %v", missionID, f.TestSelector, serr)
-						} else if kr > 0 {
-							// kr == 0 covers BOTH the baseline-couldn't-pass case
-							// (adequacy.Score returns CompliantPass:false, Total:0,
-							// Survived:nil, err:nil — see JailScorer.Score) and the
-							// genuine-zero-kills case; either way there is no
-							// execution-proven kill, so leave ran=false, kills=0 ->
-							// AutoAdjudication yields unadjudicated (inconclusive),
-							// never a false "refuted".
-							ran, kills = true, len(run.mutants)-len(survivors)
-						}
-					}
-				}
-				adjudication = AutoAdjudication(scope, ran, kills)
-			}
-			obs = append(obs, CriticFindingObservation{
-				QueueFindingID: f.ID,
-				Model:          v.ModelsByRole[RoleTestCritic],
-				TargetTest:     f.Target,
-				TestFile:       f.TestFile,
-				TestSelector:   f.TestSelector,
-				Scope:          scope,
-				Evidence:       f.Evidence,
-				Severity:       f.Severity,
-				Adjudication:   adjudication,
-				Source:         "auto",
-			})
-		}
+		obs := d.adjudicateCriticFindings(ctx, missionID, run, criticFindings, v)
 		if len(obs) > 0 {
 			d.CriticFindings.Record(v.RecordID, v.RecordHead, obs)
 		}
@@ -1166,6 +1122,69 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	run.verdict = &v
 	d.mu.Unlock()
 	return &v, nil
+}
+
+// adjudicateCriticFindings builds the execution-checked adjudication for each
+// of the test-critic's findings on this run. When the tests×mutants matrix
+// ran (run.matrix != nil), each whole-test finding's adjudication is driven
+// off the matrix's OWN execution-proven per-test row instead of a fresh
+// single-test re-score — see matrixAdjudication. When the matrix did NOT run
+// (matrix off, no Enumerator wired, or it skipped/failed), this falls back to
+// the ORIGINAL single-test path, unchanged: for each critic finding scoped
+// whole-test with a runnable single-test selector, re-run the JAIL's Scorer
+// with THAT test alone against the run's own mutant set. If it kills at least
+// one mutant, execution has proven the "can never fail" claim false —
+// AutoAdjudication downgrades it to refuted. Either path: dead-check findings
+// and anything the language plugin can't target as a single test are left
+// unadjudicated; neither path ever auto-fails the audit — a scoring/jail
+// error is logged and simply leaves that one finding unadjudicated.
+func (d *Driver) adjudicateCriticFindings(ctx context.Context, missionID int64, run *runState, criticFindings []queue.Finding, v Verdict) []CriticFindingObservation {
+	p := langFor(run.rs)
+	var obs []CriticFindingObservation
+	for _, f := range criticFindings {
+		scope := NormalizeScope(f.Scope)
+		var adjudication string
+		if run.matrix != nil {
+			adjudication = AdjUnadjudicated
+			if scope == ScopeWholeTest && f.TestSelector != "" {
+				if row := matrixRowFor(run.matrix.Rows, f.TestSelector); row != nil {
+					adjudication = matrixAdjudication(*row, run.matrix.Catchable)
+				}
+			}
+		} else {
+			ran, kills := false, 0
+			if scope == ScopeWholeTest && f.TestSelector != "" {
+				if cmd, ok := p.SingleTestCmd(f.TestFile, f.TestSelector); ok {
+					if kr, survivors, serr := d.Scorer.Score(ctx, run.rs.CodePath, run.rs.Code, run.rs.DevTestCode, run.mutants, strings.Join(cmd, " ")); serr != nil {
+						log.Printf("advpool: run %d: critic auto-refute score failed for %q: %v", missionID, f.TestSelector, serr)
+					} else if kr > 0 {
+						// kr == 0 covers BOTH the baseline-couldn't-pass case
+						// (adequacy.Score returns CompliantPass:false, Total:0,
+						// Survived:nil, err:nil — see JailScorer.Score) and the
+						// genuine-zero-kills case; either way there is no
+						// execution-proven kill, so leave ran=false, kills=0 ->
+						// AutoAdjudication yields unadjudicated (inconclusive),
+						// never a false "refuted".
+						ran, kills = true, len(run.mutants)-len(survivors)
+					}
+				}
+			}
+			adjudication = AutoAdjudication(scope, ran, kills)
+		}
+		obs = append(obs, CriticFindingObservation{
+			QueueFindingID: f.ID,
+			Model:          v.ModelsByRole[RoleTestCritic],
+			TargetTest:     f.Target,
+			TestFile:       f.TestFile,
+			TestSelector:   f.TestSelector,
+			Scope:          scope,
+			Evidence:       f.Evidence,
+			Severity:       f.Severity,
+			Adjudication:   adjudication,
+			Source:         "auto",
+		})
+	}
+	return obs
 }
 
 // timeoutVerdict builds the signed needs-review verdict for a run that did

@@ -1,0 +1,396 @@
+{
+  "events": [
+    {
+      "ts": 1,
+      "kind": "pool_subject",
+      "actor": "corral-advpool",
+      "subject": "version4.go",
+      "detail": {
+        "code": "// Copyright 2016 Google Inc.  All rights reserved.\n// Use of this source code is governed by a BSD-style\n// license that can be found in the LICENSE file.\n\npackage uuid\n\nimport \"io\"\n\n// New creates a new random UUID or panics.  New is equivalent to\n// the expression\n//\n//    uuid.Must(uuid.NewRandom())\nfunc New() UUID {\n\treturn Must(NewRandom())\n}\n\n// NewString creates a new random UUID and returns it as a string or panics.\n// NewString is equivalent to the expression\n//\n//    uuid.New().String()\nfunc NewString() string {\n\treturn Must(NewRandom()).String()\n}\n\n// NewRandom returns a Random (Version 4) UUID.\n//\n// The strength of the UUIDs is based on the strength of the crypto/rand\n// package.\n//\n// Uses the randomness pool if it was enabled with EnableRandPool.\n//\n// A note about uniqueness derived from the UUID Wikipedia entry:\n//\n//  Randomly generated UUIDs have 122 random bits.  One's annual risk of being\n//  hit by a meteorite is estimated to be one chance in 17 billion, that\n//  means the probability is about 0.00000000006 (6 × 10−11),\n//  equivalent to the odds of creating a few tens of trillions of UUIDs in a\n//  year and having one duplicate.\nfunc NewRandom() (UUID, error) {\n\tif !poolEnabled {\n\t\treturn NewRandomFromReader(rander)\n\t}\n\treturn newRandomFromPool()\n}\n\n// NewRandomFromReader returns a UUID based on bytes read from a given io.Reader.\nfunc NewRandomFromReader(r io.Reader) (UUID, error) {\n\tvar uuid UUID\n\t_, err := io.ReadFull(r, uuid[:])\n\tif err != nil {\n\t\treturn Nil, err\n\t}\n\tuuid[6] = (uuid[6] \u0026 0x0f) | 0x40 // Version 4\n\tuuid[8] = (uuid[8] \u0026 0x3f) | 0x80 // Variant is 10\n\treturn uuid, nil\n}\n\nfunc newRandomFromPool() (UUID, error) {\n\tvar uuid UUID\n\tpoolMu.Lock()\n\tif poolPos == randPoolSize {\n\t\t_, err := io.ReadFull(rander, pool[:])\n\t\tif err != nil {\n\t\t\tpoolMu.Unlock()\n\t\t\treturn Nil, err\n\t\t}\n\t\tpoolPos = 0\n\t}\n\tcopy(uuid[:], pool[poolPos:(poolPos+16)])\n\tpoolPos += 16\n\tpoolMu.Unlock()\n\n\tuuid[6] = (uuid[6] \u0026 0x0f) | 0x40 // Version 4\n\tuuid[8] = (uuid[8] \u0026 0x3f) | 0x80 // Variant is 10\n\treturn uuid, nil\n}\n",
+        "code_path": "version4.go",
+        "dev_test_code": "// Copyright 2016 Google Inc.  All rights reserved.\n// Use of this source code is governed by a BSD-style\n// license that can be found in the LICENSE file.\n\npackage uuid\n\nimport (\n\t\"bytes\"\n\t\"errors\"\n\t\"fmt\"\n\t\"os\"\n\t\"runtime\"\n\t\"strings\"\n\t\"testing\"\n\t\"time\"\n\t\"unsafe\"\n)\n\ntype test struct {\n\tin      string\n\tversion Version\n\tvariant Variant\n\tisuuid  bool\n}\n\nvar tests = []test{\n\t{\"f47ac10b-58cc-0372-8567-0e02b2c3d479\", 0, RFC4122, true},\n\t{\"f47ac10b-58cc-1372-8567-0e02b2c3d479\", 1, RFC4122, true},\n\t{\"f47ac10b-58cc-2372-8567-0e02b2c3d479\", 2, RFC4122, true},\n\t{\"f47ac10b-58cc-3372-8567-0e02b2c3d479\", 3, RFC4122, true},\n\t{\"f47ac10b-58cc-4372-8567-0e02b2c3d479\", 4, RFC4122, true},\n\t{\"f47ac10b-58cc-5372-8567-0e02b2c3d479\", 5, RFC4122, true},\n\t{\"f47ac10b-58cc-6372-8567-0e02b2c3d479\", 6, RFC4122, true},\n\t{\"f47ac10b-58cc-7372-8567-0e02b2c3d479\", 7, RFC4122, true},\n\t{\"f47ac10b-58cc-8372-8567-0e02b2c3d479\", 8, RFC4122, true},\n\t{\"f47ac10b-58cc-9372-8567-0e02b2c3d479\", 9, RFC4122, true},\n\t{\"f47ac10b-58cc-a372-8567-0e02b2c3d479\", 10, RFC4122, true},\n\t{\"f47ac10b-58cc-b372-8567-0e02b2c3d479\", 11, RFC4122, true},\n\t{\"f47ac10b-58cc-c372-8567-0e02b2c3d479\", 12, RFC4122, true},\n\t{\"f47ac10b-58cc-d372-8567-0e02b2c3d479\", 13, RFC4122, true},\n\t{\"f47ac10b-58cc-e372-8567-0e02b2c3d479\", 14, RFC4122, true},\n\t{\"f47ac10b-58cc-f372-8567-0e02b2c3d479\", 15, RFC4122, true},\n\n\t{\"urn:uuid:f47ac10b-58cc-4372-0567-0e02b2c3d479\", 4, Reserved, true},\n\t{\"URN:UUID:f47ac10b-58cc-4372-0567-0e02b2c3d479\", 4, Reserved, true},\n\t{\"f47ac10b-58cc-4372-0567-0e02b2c3d479\", 4, Reserved, true},\n\t{\"f47ac10b-58cc-4372-1567-0e02b2c3d479\", 4, Reserved, true},\n\t{\"f47ac10b-58cc-4372-2567-0e02b2c3d479\", 4, Reserved, true},\n\t{\"f47ac10b-58cc-4372-3567-0e02b2c3d479\", 4, Reserved, true},\n\t{\"f47ac10b-58cc-4372-4567-0e02b2c3d479\", 4, Reserved, true},\n\t{\"f47ac10b-58cc-4372-5567-0e02b2c3d479\", 4, Reserved, true},\n\t{\"f47ac10b-58cc-4372-6567-0e02b2c3d479\", 4, Reserved, true},\n\t{\"f47ac10b-58cc-4372-7567-0e02b2c3d479\", 4, Reserved, true},\n\t{\"f47ac10b-58cc-4372-8567-0e02b2c3d479\", 4, RFC4122, true},\n\t{\"f47ac10b-58cc-4372-9567-0e02b2c3d479\", 4, RFC4122, true},\n\t{\"f47ac10b-58cc-4372-a567-0e02b2c3d479\", 4, RFC4122, true},\n\t{\"f47ac10b-58cc-4372-b567-0e02b2c3d479\", 4, RFC4122, true},\n\t{\"f47ac10b-58cc-4372-c567-0e02b2c3d479\", 4, Microsoft, true},\n\t{\"f47ac10b-58cc-4372-d567-0e02b2c3d479\", 4, Microsoft, true},\n\t{\"f47ac10b-58cc-4372-e567-0e02b2c3d479\", 4, Future, true},\n\t{\"f47ac10b-58cc-4372-f567-0e02b2c3d479\", 4, Future, true},\n\n\t{\"f47ac10b158cc-5372-a567-0e02b2c3d479\", 0, Invalid, false},\n\t{\"f47ac10b-58cc25372-a567-0e02b2c3d479\", 0, Invalid, false},\n\t{\"f47ac10b-58cc-53723a567-0e02b2c3d479\", 0, Invalid, false},\n\t{\"f47ac10b-58cc-5372-a56740e02b2c3d479\", 0, Invalid, false},\n\t{\"f47ac10b-58cc-5372-a567-0e02-2c3d479\", 0, Invalid, false},\n\t{\"g47ac10b-58cc-4372-a567-0e02b2c3d479\", 0, Invalid, false},\n\n\t{\"{f47ac10b-58cc-0372-8567-0e02b2c3d479}\", 0, RFC4122, true},\n\t{\"{f47ac10b-58cc-0372-8567-0e02b2c3d479\", 0, Invalid, false},\n\t{\"f47ac10b-58cc-0372-8567-0e02b2c3d479}\", 0, Invalid, false},\n\n\t{\"f47ac10b58cc037285670e02b2c3d479\", 0, RFC4122, true},\n\t{\"f47ac10b58cc037285670e02b2c3d4790\", 0, Invalid, false},\n\t{\"f47ac10b58cc037285670e02b2c3d47\", 0, Invalid, false},\n\n\t{\"01ee836c-e7c9-619d-929a-525400475911\", 6, RFC4122, true},\n\t{\"018bd12c-58b0-7683-8a5b-8752d0e86651\", 7, RFC4122, true},\n}\n\nvar constants = []struct {\n\tc    interface{}\n\tname string\n}{\n\t{Person, \"Person\"},\n\t{Group, \"Group\"},\n\t{Org, \"Org\"},\n\t{Invalid, \"Invalid\"},\n\t{RFC4122, \"RFC4122\"},\n\t{Reserved, \"Reserved\"},\n\t{Microsoft, \"Microsoft\"},\n\t{Future, \"Future\"},\n\t{Domain(17), \"Domain17\"},\n\t{Variant(42), \"BadVariant42\"},\n}\n\nfunc testTest(t *testing.T, in string, tt test) {\n\tuuid, err := Parse(in)\n\tif ok := (err == nil); ok != tt.isuuid {\n\t\tt.Errorf(\"Parse(%s) got %v expected %v\\b\", in, ok, tt.isuuid)\n\t}\n\tif err != nil {\n\t\treturn\n\t}\n\n\tif v := uuid.Variant(); v != tt.variant {\n\t\tt.Errorf(\"Variant(%s) got %d expected %d\\b\", in, v, tt.variant)\n\t}\n\tif v := uuid.Version(); v != tt.version {\n\t\tt.Errorf(\"Version(%s) got %d expected %d\\b\", in, v, tt.version)\n\t}\n}\n\nfunc testBytes(t *testing.T, in []byte, tt test) {\n\tuuid, err := ParseBytes(in)\n\tif ok := (err == nil); ok != tt.isuuid {\n\t\tt.Errorf(\"ParseBytes(%s) got %v expected %v\\b\", in, ok, tt.isuuid)\n\t}\n\tif err != nil {\n\t\treturn\n\t}\n\tsuuid, _ := Parse(string(in))\n\tif uuid != suuid {\n\t\tt.Errorf(\"ParseBytes(%s) got %v expected %v\\b\", in, uuid, suuid)\n\t}\n}\n\nfunc TestUUID(t *testing.T) {\n\tfor _, tt := range tests {\n\t\ttestTest(t, tt.in, tt)\n\t\ttestTest(t, strings.ToUpper(tt.in), tt)\n\t\ttestBytes(t, []byte(tt.in), tt)\n\t}\n}\n\nfunc TestFromBytes(t *testing.T) {\n\tb := []byte{\n\t\t0x7d, 0x44, 0x48, 0x40,\n\t\t0x9d, 0xc0,\n\t\t0x11, 0xd1,\n\t\t0xb2, 0x45,\n\t\t0x5f, 0xfd, 0xce, 0x74, 0xfa, 0xd2,\n\t}\n\tuuid, err := FromBytes(b)\n\tif err != nil {\n\t\tt.Fatalf(\"%s\", err)\n\t}\n\tfor i := 0; i \u003c len(uuid); i++ {\n\t\tif b[i] != uuid[i] {\n\t\t\tt.Fatalf(\"FromBytes() got %v expected %v\\b\", uuid[:], b)\n\t\t}\n\t}\n}\n\nfunc TestConstants(t *testing.T) {\n\tfor x, tt := range constants {\n\t\tv, ok := tt.c.(fmt.Stringer)\n\t\tif !ok {\n\t\t\tt.Errorf(\"%x: %v: not a stringer\", x, v)\n\t\t} else if s := v.String(); s != tt.name {\n\t\t\tv, _ := tt.c.(int)\n\t\t\tt.Errorf(\"%x: Constant %T:%d gives %q, expected %q\", x, tt.c, v, s, tt.name)\n\t\t}\n\t}\n}\n\nfunc TestRandomUUID(t *testing.T) {\n\tm := make(map[string]bool)\n\tfor x := 1; x \u003c 32; x++ {\n\t\tuuid := New()\n\t\ts := uuid.String()\n\t\tif m[s] {\n\t\t\tt.Errorf(\"NewRandom returned duplicated UUID %s\", s)\n\t\t}\n\t\tm[s] = true\n\t\tif v := uuid.Version(); v != 4 {\n\t\t\tt.Errorf(\"Random UUID of version %s\", v)\n\t\t}\n\t\tif uuid.Variant() != RFC4122 {\n\t\t\tt.Errorf(\"Random UUID is variant %d\", uuid.Variant())\n\t\t}\n\t}\n}\n\nfunc TestRandomUUID_Pooled(t *testing.T) {\n\tdefer DisableRandPool()\n\tEnableRandPool()\n\tm := make(map[string]bool)\n\tfor x := 1; x \u003c 128; x++ {\n\t\tuuid := New()\n\t\ts := uuid.String()\n\t\tif m[s] {\n\t\t\tt.Errorf(\"NewRandom returned duplicated UUID %s\", s)\n\t\t}\n\t\tm[s] = true\n\t\tif v := uuid.Version(); v != 4 {\n\t\t\tt.Errorf(\"Random UUID of version %s\", v)\n\t\t}\n\t\tif uuid.Variant() != RFC4122 {\n\t\t\tt.Errorf(\"Random UUID is variant %d\", uuid.Variant())\n\t\t}\n\t}\n}\n\nfunc TestNew(t *testing.T) {\n\tm := make(map[UUID]bool)\n\tfor x := 1; x \u003c 32; x++ {\n\t\ts := New()\n\t\tif m[s] {\n\t\t\tt.Errorf(\"New returned duplicated UUID %s\", s)\n\t\t}\n\t\tm[s] = true\n\t\tuuid, err := Parse(s.String())\n\t\tif err != nil {\n\t\t\tt.Errorf(\"New.String() returned %q which does not decode\", s)\n\t\t\tcontinue\n\t\t}\n\t\tif v := uuid.Version(); v != 4 {\n\t\t\tt.Errorf(\"Random UUID of version %s\", v)\n\t\t}\n\t\tif uuid.Variant() != RFC4122 {\n\t\t\tt.Errorf(\"Random UUID is variant %d\", uuid.Variant())\n\t\t}\n\t}\n}\n\nfunc TestClockSeq(t *testing.T) {\n\t// Fake time.Now for this test to return a monotonically advancing time; restore it at end.\n\tdefer func(orig func() time.Time) { timeNow = orig }(timeNow)\n\tmonTime := time.Now()\n\ttimeNow = func() time.Time {\n\t\tmonTime = monTime.Add(1 * time.Second)\n\t\treturn monTime\n\t}\n\n\tSetClockSequence(-1)\n\tuuid1, err := NewUUID()\n\tif err != nil {\n\t\tt.Fatalf(\"could not create UUID: %v\", err)\n\t}\n\tuuid2, err := NewUUID()\n\tif err != nil {\n\t\tt.Fatalf(\"could not create UUID: %v\", err)\n\t}\n\n\tif s1, s2 := uuid1.ClockSequence(), uuid2.ClockSequence(); s1 != s2 {\n\t\tt.Errorf(\"clock sequence %d != %d\", s1, s2)\n\t}\n\n\tSetClockSequence(-1)\n\tuuid2, err = NewUUID()\n\tif err != nil {\n\t\tt.Fatalf(\"could not create UUID: %v\", err)\n\t}\n\n\t// Just on the very off chance we generated the same sequence\n\t// two times we try again.\n\tif uuid1.ClockSequence() == uuid2.ClockSequence() {\n\t\tSetClockSequence(-1)\n\t\tuuid2, err = NewUUID()\n\t\tif err != nil {\n\t\t\tt.Fatalf(\"could not create UUID: %v\", err)\n\t\t}\n\t}\n\tif s1, s2 := uuid1.ClockSequence(), uuid2.ClockSequence(); s1 == s2 {\n\t\tt.Errorf(\"Duplicate clock sequence %d\", s1)\n\t}\n\n\tSetClockSequence(0x1234)\n\tuuid1, err = NewUUID()\n\tif err != nil {\n\t\tt.Fatalf(\"could not create UUID: %v\", err)\n\t}\n\tif seq := uuid1.ClockSequence(); seq != 0x1234 {\n\t\tt.Errorf(\"%s: expected seq 0x1234 got 0x%04x\", uuid1, seq)\n\t}\n}\n\nfunc TestCoding(t *testing.T) {\n\ttext := \"7d444840-9dc0-11d1-b245-5ffdce74fad2\"\n\turn := \"urn:uuid:7d444840-9dc0-11d1-b245-5ffdce74fad2\"\n\tdata := UUID{\n\t\t0x7d, 0x44, 0x48, 0x40,\n\t\t0x9d, 0xc0,\n\t\t0x11, 0xd1,\n\t\t0xb2, 0x45,\n\t\t0x5f, 0xfd, 0xce, 0x74, 0xfa, 0xd2,\n\t}\n\tif v := data.String(); v != text {\n\t\tt.Errorf(\"%x: encoded to %s, expected %s\", data, v, text)\n\t}\n\tif v := data.URN(); v != urn {\n\t\tt.Errorf(\"%x: urn is %s, expected %s\", data, v, urn)\n\t}\n\n\tuuid, err := Parse(text)\n\tif err != nil {\n\t\tt.Errorf(\"Parse returned unexpected error %v\", err)\n\t}\n\tif data != uuid {\n\t\tt.Errorf(\"%s: decoded to %s, expected %s\", text, uuid, data)\n\t}\n}\n\nfunc TestVersion1(t *testing.T) {\n\tuuid1, err := NewUUID()\n\tif err != nil {\n\t\tt.Fatalf(\"could not create UUID: %v\", err)\n\t}\n\tuuid2, err := NewUUID()\n\tif err != nil {\n\t\tt.Fatalf(\"could not create UUID: %v\", err)\n\t}\n\n\tif uuid1 == uuid2 {\n\t\tt.Errorf(\"%s:duplicate uuid\", uuid1)\n\t}\n\tif v := uuid1.Version(); v != 1 {\n\t\tt.Errorf(\"%s: version %s expected 1\", uuid1, v)\n\t}\n\tif v := uuid2.Version(); v != 1 {\n\t\tt.Errorf(\"%s: version %s expected 1\", uuid2, v)\n\t}\n\tn1 := uuid1.NodeID()\n\tn2 := uuid2.NodeID()\n\tif !bytes.Equal(n1, n2) {\n\t\tt.Errorf(\"Different nodes %x != %x\", n1, n2)\n\t}\n\tt1 := uuid1.Time()\n\tt2 := uuid2.Time()\n\tq1 := uuid1.ClockSequence()\n\tq2 := uuid2.ClockSequence()\n\n\tswitch {\n\tcase t1 == t2 \u0026\u0026 q1 == q2:\n\t\tt.Error(\"time stopped\")\n\tcase t1 \u003e t2 \u0026\u0026 q1 == q2:\n\t\tt.Error(\"time reversed\")\n\tcase t1 \u003c t2 \u0026\u0026 q1 != q2:\n\t\tt.Error(\"clock sequence changed unexpectedly\")\n\t}\n}\n\nfunc TestNode(t *testing.T) {\n\t// This test is mostly to make sure we don't leave nodeMu locked.\n\tifname = \"\"\n\tif ni := NodeInterface(); ni != \"\" {\n\t\tt.Errorf(\"NodeInterface got %q, want %q\", ni, \"\")\n\t}\n\tif SetNodeInterface(\"xyzzy\") {\n\t\tt.Error(\"SetNodeInterface succeeded on a bad interface name\")\n\t}\n\tif !SetNodeInterface(\"\") {\n\t\tt.Error(\"SetNodeInterface failed\")\n\t}\n\tif runtime.GOARCH != \"js\" {\n\t\tif ni := NodeInterface(); ni == \"\" {\n\t\t\tt.Error(\"NodeInterface returned an empty string\")\n\t\t}\n\t}\n\n\tni := NodeID()\n\tif len(ni) != 6 {\n\t\tt.Errorf(\"ni got %d bytes, want 6\", len(ni))\n\t}\n\thasData := false\n\tfor _, b := range ni {\n\t\tif b != 0 {\n\t\t\thasData = true\n\t\t}\n\t}\n\tif !hasData {\n\t\tt.Error(\"nodeid is all zeros\")\n\t}\n\n\tid := []byte{1, 2, 3, 4, 5, 6, 7, 8}\n\tSetNodeID(id)\n\tni = NodeID()\n\tif !bytes.Equal(ni, id[:6]) {\n\t\tt.Errorf(\"got nodeid %v, want %v\", ni, id[:6])\n\t}\n\n\tif ni := NodeInterface(); ni != \"user\" {\n\t\tt.Errorf(\"got interface %q, want %q\", ni, \"user\")\n\t}\n}\n\nfunc TestNodeAndTime(t *testing.T) {\n\t// Time is February 5, 1998 12:30:23.136364800 AM GMT\n\n\tuuid, err := Parse(\"7d444840-9dc0-11d1-b245-5ffdce74fad2\")\n\tif err != nil {\n\t\tt.Fatalf(\"Parser returned unexpected error %v\", err)\n\t}\n\tnode := []byte{0x5f, 0xfd, 0xce, 0x74, 0xfa, 0xd2}\n\n\tts := uuid.Time()\n\tc := time.Unix(ts.UnixTime())\n\twant := time.Date(1998, 2, 5, 0, 30, 23, 136364800, time.UTC)\n\tif !c.Equal(want) {\n\t\tt.Errorf(\"Got time %v, want %v\", c, want)\n\t}\n\tif !bytes.Equal(node, uuid.NodeID()) {\n\t\tt.Errorf(\"Expected node %v got %v\", node, uuid.NodeID())\n\t}\n}\n\nfunc TestMD5(t *testing.T) {\n\tuuid := NewMD5(NameSpaceDNS, []byte(\"python.org\")).String()\n\twant := \"6fa459ea-ee8a-3ca4-894e-db77e160355e\"\n\tif uuid != want {\n\t\tt.Errorf(\"MD5: got %q expected %q\", uuid, want)\n\t}\n}\n\nfunc TestSHA1(t *testing.T) {\n\tuuid := NewSHA1(NameSpaceDNS, []byte(\"python.org\")).String()\n\twant := \"886313e1-3b8a-5372-9b90-0c9aee199e5d\"\n\tif uuid != want {\n\t\tt.Errorf(\"SHA1: got %q expected %q\", uuid, want)\n\t}\n}\n\nfunc TestNodeID(t *testing.T) {\n\tnid := []byte{1, 2, 3, 4, 5, 6}\n\tSetNodeInterface(\"\")\n\ts := NodeInterface()\n\tif runtime.GOARCH != \"js\" {\n\t\tif s == \"\" || s == \"user\" {\n\t\t\tt.Errorf(\"NodeInterface %q after SetInterface\", s)\n\t\t}\n\t}\n\tnode1 := NodeID()\n\tif node1 == nil {\n\t\tt.Error(\"NodeID nil after SetNodeInterface\", s)\n\t}\n\tSetNodeID(nid)\n\ts = NodeInterface()\n\tif s != \"user\" {\n\t\tt.Errorf(\"Expected NodeInterface %q got %q\", \"user\", s)\n\t}\n\tnode2 := NodeID()\n\tif node2 == nil {\n\t\tt.Error(\"NodeID nil after SetNodeID\", s)\n\t}\n\tif bytes.Equal(node1, node2) {\n\t\tt.Error(\"NodeID not changed after SetNodeID\", s)\n\t} else if !bytes.Equal(nid, node2) {\n\t\tt.Errorf(\"NodeID is %x, expected %x\", node2, nid)\n\t}\n}\n\nfunc testDCE(t *testing.T, name string, uuid UUID, err error, domain Domain, id uint32) {\n\tif err != nil {\n\t\tt.Errorf(\"%s failed: %v\", name, err)\n\t\treturn\n\t}\n\tif v := uuid.Version(); v != 2 {\n\t\tt.Errorf(\"%s: %s: expected version 2, got %s\", name, uuid, v)\n\t\treturn\n\t}\n\tif v := uuid.Domain(); v != domain {\n\t\tt.Errorf(\"%s: %s: expected domain %d, got %d\", name, uuid, domain, v)\n\t}\n\tif v := uuid.ID(); v != id {\n\t\tt.Errorf(\"%s: %s: expected id %d, got %d\", name, uuid, id, v)\n\t}\n}\n\nfunc TestDCE(t *testing.T) {\n\tuuid, err := NewDCESecurity(42, 12345678)\n\ttestDCE(t, \"NewDCESecurity\", uuid, err, 42, 12345678)\n\tuuid, err = NewDCEPerson()\n\ttestDCE(t, \"NewDCEPerson\", uuid, err, Person, uint32(os.Getuid()))\n\tuuid, err = NewDCEGroup()\n\ttestDCE(t, \"NewDCEGroup\", uuid, err, Group, uint32(os.Getgid()))\n}\n\ntype badRand struct{}\n\nfunc (r badRand) Read(buf []byte) (int, error) {\n\tfor i := range buf {\n\t\tbuf[i] = byte(i)\n\t}\n\treturn len(buf), nil\n}\n\nfunc TestBadRand(t *testing.T) {\n\tSetRand(badRand{})\n\tuuid1 := New()\n\tuuid2 := New()\n\tif uuid1 != uuid2 {\n\t\tt.Errorf(\"expected duplicates, got %q and %q\", uuid1, uuid2)\n\t}\n\tSetRand(nil)\n\tuuid1 = New()\n\tuuid2 = New()\n\tif uuid1 == uuid2 {\n\t\tt.Errorf(\"unexpected duplicates, got %q\", uuid1)\n\t}\n}\n\nfunc TestSetRand(t *testing.T) {\n\tmyString := \"805-9dd6-1a877cb526c678e71d38-7122-44c0-9b7c-04e7001cc78783ac3e82-47a3-4cc3-9951-13f3339d88088f5d685a-11f7-4078-ada9-de44ad2daeb7\"\n\n\tSetRand(strings.NewReader(myString))\n\tuuid1 := New()\n\tuuid2 := New()\n\n\tSetRand(strings.NewReader(myString))\n\tuuid3 := New()\n\tuuid4 := New()\n\n\tif uuid1 != uuid3 {\n\t\tt.Errorf(\"expected duplicates, got %q and %q\", uuid1, uuid3)\n\t}\n\tif uuid2 != uuid4 {\n\t\tt.Errorf(\"expected duplicates, got %q and %q\", uuid2, uuid4)\n\t}\n}\n\nfunc TestRandomFromReader(t *testing.T) {\n\tmyString := \"8059ddhdle77cb52\"\n\tr := bytes.NewReader([]byte(myString))\n\tr2 := bytes.NewReader([]byte(myString))\n\tuuid1, err := NewRandomFromReader(r)\n\tif err != nil {\n\t\tt.Errorf(\"failed generating UUID from a reader\")\n\t}\n\t_, err = NewRandomFromReader(r)\n\tif err == nil {\n\t\tt.Errorf(\"expecting an error as reader has no more bytes. Got uuid. NewRandomFromReader may not be using the provided reader\")\n\t}\n\tuuid3, err := NewRandomFromReader(r2)\n\tif err != nil {\n\t\tt.Errorf(\"failed generating UUID from a reader\")\n\t}\n\tif uuid1 != uuid3 {\n\t\tt.Errorf(\"expected duplicates, got %q and %q\", uuid1, uuid3)\n\t}\n}\n\nfunc TestRandPool(t *testing.T) {\n\tmyString := \"8059ddhdle77cb52\"\n\tEnableRandPool()\n\tSetRand(strings.NewReader(myString))\n\t_, err := NewRandom()\n\tif err == nil {\n\t\tt.Errorf(\"expecting an error as reader has no more bytes\")\n\t}\n\tDisableRandPool()\n\tSetRand(strings.NewReader(myString))\n\t_, err = NewRandom()\n\tif err != nil {\n\t\tt.Errorf(\"failed generating UUID from a reader\")\n\t}\n}\n\nfunc TestWrongLength(t *testing.T) {\n\t_, err := Parse(\"12345\")\n\tif err == nil {\n\t\tt.Errorf(\"expected ‘12345’ was invalid\")\n\t} else if err.Error() != \"invalid UUID length: 5\" {\n\t\tt.Errorf(\"expected a different error message for an invalid length\")\n\t}\n}\n\nfunc TestIsWrongLength(t *testing.T) {\n\t_, err := Parse(\"12345\")\n\tif !IsInvalidLengthError(err) {\n\t\tt.Errorf(\"IsInvalidLength returned incorrect type %T\", err)\n\t}\n}\n\nfunc FuzzParse(f *testing.F) {\n\tfor _, tt := range tests {\n\t\tf.Add(tt.in)\n\t\tf.Add(strings.ToUpper(tt.in))\n\t}\n\tf.Fuzz(func(t *testing.T, in string) {\n\t\tParse(in)\n\t})\n}\n\nfunc FuzzParseBytes(f *testing.F) {\n\tfor _, tt := range tests {\n\t\tf.Add([]byte(tt.in))\n\t}\n\tf.Fuzz(func(t *testing.T, in []byte) {\n\t\tParseBytes(in)\n\t})\n}\n\nfunc FuzzFromBytes(f *testing.F) {\n\t// Copied from TestFromBytes.\n\tf.Add([]byte{\n\t\t0x7d, 0x44, 0x48, 0x40,\n\t\t0x9d, 0xc0,\n\t\t0x11, 0xd1,\n\t\t0xb2, 0x45,\n\t\t0x5f, 0xfd, 0xce, 0x74, 0xfa, 0xd2,\n\t})\n\tf.Fuzz(func(t *testing.T, in []byte) {\n\t\tFromBytes(in)\n\t})\n}\n\n// TestValidate checks various scenarios for the Validate function\nfunc TestValidate(t *testing.T) {\n\ttestCases := []struct {\n\t\tname   string\n\t\tinput  string\n\t\texpect error\n\t}{\n\t\t{\"Valid UUID\", \"123e4567-e89b-12d3-a456-426655440000\", nil},\n\t\t{\"Valid UUID with URN\", \"urn:uuid:123e4567-e89b-12d3-a456-426655440000\", nil},\n\t\t{\"Valid UUID with Braces\", \"{123e4567-e89b-12d3-a456-426655440000}\", nil},\n\t\t{\"Valid UUID No Hyphens\", \"123e4567e89b12d3a456426655440000\", nil},\n\t\t{\"Invalid UUID\", \"invalid-uuid\", errors.New(\"invalid UUID length: 12\")},\n\t\t{\"Invalid Length\", \"123\", fmt.Errorf(\"invalid UUID length: %d\", len(\"123\"))},\n\t\t{\"Invalid URN Prefix\", \"urn:test:123e4567-e89b-12d3-a456-426655440000\", fmt.Errorf(\"invalid urn prefix: %q\", \"urn:test:\")},\n\t\t{\"Invalid Brackets\", \"[123e4567-e89b-12d3-a456-426655440000]\", fmt.Errorf(\"invalid bracketed UUID format\")},\n\t\t{\"Invalid UUID Format\", \"12345678gabc1234abcd1234abcd1234\", fmt.Errorf(\"invalid UUID format\")},\n\t}\n\n\tfor _, tc := range testCases {\n\t\tt.Run(tc.name, func(t *testing.T) {\n\t\t\terr := Validate(tc.input)\n\t\t\tif (err != nil) != (tc.expect != nil) || (err != nil \u0026\u0026 err.Error() != tc.expect.Error()) {\n\t\t\t\tt.Errorf(\"Validate(%q) = %v, want %v\", tc.input, err, tc.expect)\n\t\t\t}\n\t\t})\n\t}\n}\n\nvar asString = \"f47ac10b-58cc-0372-8567-0e02b2c3d479\"\nvar asBytes = []byte(asString)\n\nfunc BenchmarkParse(b *testing.B) {\n\tfor i := 0; i \u003c b.N; i++ {\n\t\t_, err := Parse(asString)\n\t\tif err != nil {\n\t\t\tb.Fatal(err)\n\t\t}\n\t}\n}\n\nfunc BenchmarkParseBytes(b *testing.B) {\n\tfor i := 0; i \u003c b.N; i++ {\n\t\t_, err := ParseBytes(asBytes)\n\t\tif err != nil {\n\t\t\tb.Fatal(err)\n\t\t}\n\t}\n}\n\n// parseBytesUnsafe is to benchmark using unsafe.\nfunc parseBytesUnsafe(b []byte) (UUID, error) {\n\treturn Parse(*(*string)(unsafe.Pointer(\u0026b)))\n}\n\nfunc BenchmarkParseBytesUnsafe(b *testing.B) {\n\tfor i := 0; i \u003c b.N; i++ {\n\t\t_, err := parseBytesUnsafe(asBytes)\n\t\tif err != nil {\n\t\t\tb.Fatal(err)\n\t\t}\n\t}\n}\n\n// parseBytesCopy is to benchmark not using unsafe.\nfunc parseBytesCopy(b []byte) (UUID, error) {\n\treturn Parse(string(b))\n}\n\nfunc BenchmarkParseBytesCopy(b *testing.B) {\n\tfor i := 0; i \u003c b.N; i++ {\n\t\t_, err := parseBytesCopy(asBytes)\n\t\tif err != nil {\n\t\t\tb.Fatal(err)\n\t\t}\n\t}\n}\n\nfunc BenchmarkNew(b *testing.B) {\n\tfor i := 0; i \u003c b.N; i++ {\n\t\tNew()\n\t}\n}\n\nfunc BenchmarkUUID_String(b *testing.B) {\n\tuuid, err := Parse(\"f47ac10b-58cc-0372-8567-0e02b2c3d479\")\n\tif err != nil {\n\t\tb.Fatal(err)\n\t}\n\tfor i := 0; i \u003c b.N; i++ {\n\t\tif uuid.String() == \"\" {\n\t\t\tb.Fatal(\"invalid uuid\")\n\t\t}\n\t}\n}\n\nfunc BenchmarkUUID_URN(b *testing.B) {\n\tuuid, err := Parse(\"f47ac10b-58cc-0372-8567-0e02b2c3d479\")\n\tif err != nil {\n\t\tb.Fatal(err)\n\t}\n\tfor i := 0; i \u003c b.N; i++ {\n\t\tif uuid.URN() == \"\" {\n\t\t\tb.Fatal(\"invalid uuid\")\n\t\t}\n\t}\n}\n\nfunc BenchmarkParseBadLength(b *testing.B) {\n\tshort := asString[:10]\n\tfor i := 0; i \u003c b.N; i++ {\n\t\t_, err := Parse(short)\n\t\tif err == nil {\n\t\t\tb.Fatalf(\"expected ‘%s’ was invalid\", short)\n\t\t}\n\t}\n}\n\nfunc BenchmarkParseLen32Truncated(b *testing.B) {\n\tpartial := asString[:len(asString)-4]\n\tfor i := 0; i \u003c b.N; i++ {\n\t\t_, err := Parse(partial)\n\t\tif err == nil {\n\t\t\tb.Fatalf(\"expected ‘%s’ was invalid\", partial)\n\t\t}\n\t}\n}\n\nfunc BenchmarkParseLen36Corrupted(b *testing.B) {\n\twrong := asString[:len(asString)-1] + \"x\"\n\tfor i := 0; i \u003c b.N; i++ {\n\t\t_, err := Parse(wrong)\n\t\tif err == nil {\n\t\t\tb.Fatalf(\"expected ‘%s’ was invalid\", wrong)\n\t\t}\n\t}\n}\n\nfunc BenchmarkUUID_New(b *testing.B) {\n\tb.RunParallel(func(pb *testing.PB) {\n\t\tfor pb.Next() {\n\t\t\t_, err := NewRandom()\n\t\t\tif err != nil {\n\t\t\t\tb.Fatal(err)\n\t\t\t}\n\t\t}\n\t})\n}\n\nfunc BenchmarkUUID_NewPooled(b *testing.B) {\n\tEnableRandPool()\n\tb.RunParallel(func(pb *testing.PB) {\n\t\tfor pb.Next() {\n\t\t\t_, err := NewRandom()\n\t\t\tif err != nil {\n\t\t\t\tb.Fatal(err)\n\t\t\t}\n\t\t}\n\t})\n}\n\nfunc BenchmarkUUIDs_Strings(b *testing.B) {\n\tuuid1, err := Parse(\"f47ac10b-58cc-0372-8567-0e02b2c3d479\")\n\tif err != nil {\n\t\tb.Fatal(err)\n\t}\n\tuuid2, err := Parse(\"7d444840-9dc0-11d1-b245-5ffdce74fad2\")\n\tif err != nil {\n\t\tb.Fatal(err)\n\t}\n\tuuids := UUIDs{uuid1, uuid2}\n\tfor i := 0; i \u003c b.N; i++ {\n\t\tuuids.Strings()\n\t}\n}\n\nfunc TestVersion6(t *testing.T) {\n\tuuid1, err := NewV6()\n\tif err != nil {\n\t\tt.Fatalf(\"could not create UUID: %v\", err)\n\t}\n\tuuid2, err := NewV6()\n\tif err != nil {\n\t\tt.Fatalf(\"could not create UUID: %v\", err)\n\t}\n\n\tif uuid1 == uuid2 {\n\t\tt.Errorf(\"%s:duplicate uuid\", uuid1)\n\t}\n\tif v := uuid1.Version(); v != 6 {\n\t\tt.Errorf(\"%s: version %s expected 6\", uuid1, v)\n\t}\n\tif v := uuid2.Version(); v != 6 {\n\t\tt.Errorf(\"%s: version %s expected 6\", uuid2, v)\n\t}\n\tn1 := uuid1.NodeID()\n\tn2 := uuid2.NodeID()\n\tif !bytes.Equal(n1, n2) {\n\t\tt.Errorf(\"Different nodes %x != %x\", n1, n2)\n\t}\n\tt1 := uuid1.Time()\n\tt2 := uuid2.Time()\n\tq1 := uuid1.ClockSequence()\n\tq2 := uuid2.ClockSequence()\n\n\tswitch {\n\tcase t1 == t2 \u0026\u0026 q1 == q2:\n\t\tt.Error(\"time stopped\")\n\tcase t1 \u003e t2 \u0026\u0026 q1 == q2:\n\t\tt.Error(\"time reversed\")\n\tcase t1 \u003c t2 \u0026\u0026 q1 != q2:\n\t\tt.Error(\"clock sequence changed unexpectedly\")\n\t}\n}\n\n// uuid v7 time is only unix milliseconds, so\n// uuid1.Time() == uuid2.Time() is right, but uuid1 must != uuid2\nfunc TestVersion7(t *testing.T) {\n\tSetRand(nil)\n\tm := make(map[string]bool)\n\tfor x := 1; x \u003c 128; x++ {\n\t\tuuid, err := NewV7()\n\t\tif err != nil {\n\t\t\tt.Fatalf(\"could not create UUID: %v\", err)\n\t\t}\n\t\ts := uuid.String()\n\t\tif m[s] {\n\t\t\tt.Errorf(\"NewV7 returned duplicated UUID %s\", s)\n\t\t}\n\t\tm[s] = true\n\t\tif v := uuid.Version(); v != 7 {\n\t\t\tt.Errorf(\"UUID of version %s\", v)\n\t\t}\n\t\tif uuid.Variant() != RFC4122 {\n\t\t\tt.Errorf(\"UUID is variant %d\", uuid.Variant())\n\t\t}\n\t}\n}\n\n// uuid v7 time is only unix milliseconds, so\n// uuid1.Time() == uuid2.Time() is right, but uuid1 must != uuid2\nfunc TestVersion7_pooled(t *testing.T) {\n\tSetRand(nil)\n\tEnableRandPool()\n\tdefer DisableRandPool()\n\n\tm := make(map[string]bool)\n\tfor x := 1; x \u003c 128; x++ {\n\t\tuuid, err := NewV7()\n\t\tif err != nil {\n\t\t\tt.Fatalf(\"could not create UUID: %v\", err)\n\t\t}\n\t\ts := uuid.String()\n\t\tif m[s] {\n\t\t\tt.Errorf(\"NewV7 returned duplicated UUID %s\", s)\n\t\t}\n\t\tm[s] = true\n\t\tif v := uuid.Version(); v != 7 {\n\t\t\tt.Errorf(\"UUID of version %s\", v)\n\t\t}\n\t\tif uuid.Variant() != RFC4122 {\n\t\t\tt.Errorf(\"UUID is variant %d\", uuid.Variant())\n\t\t}\n\t}\n}\n\nfunc TestVersion7FromReader(t *testing.T) {\n\tmyString := \"8059ddhdle77cb52\"\n\tr := bytes.NewReader([]byte(myString))\n\t_, err := NewV7FromReader(r)\n\tif err != nil {\n\t\tt.Errorf(\"failed generating UUID from a reader\")\n\t}\n\t_, err = NewV7FromReader(r)\n\tif err == nil {\n\t\tt.Errorf(\"expecting an error as reader has no more bytes. Got uuid. NewV7FromReader may not be using the provided reader\")\n\t}\n}\n\nfunc TestVersion7Monotonicity(t *testing.T) {\n\tlength := 10000\n\tu1 := Must(NewV7()).String()\n\tfor i := 0; i \u003c length; i++ {\n\t\tu2 := Must(NewV7()).String()\n\t\tif u2 \u003c= u1 {\n\t\t\tt.Errorf(\"monotonicity failed at #%d: %s(next) \u003c %s(before)\", i, u2, u1)\n\t\t\tbreak\n\t\t}\n\t\tu1 = u2\n\t}\n}\n\ntype fakeRand struct{}\n\nfunc (g fakeRand) Read(bs []byte) (int, error) {\n\tfor i, _ := range bs {\n\t\tbs[i] = 0x88\n\t}\n\treturn len(bs), nil\n}\n\nfunc TestVersion7MonotonicityStrict(t *testing.T) {\n\ttimeNow = func() time.Time {\n\t\treturn time.Date(2008, 8, 8, 8, 8, 8, 8, time.UTC)\n\t}\n\tdefer func() {\n\t\ttimeNow = time.Now\n\t}()\n\n\tSetRand(fakeRand{})\n\tdefer SetRand(nil)\n\n\tlength := 100000 // \u003e 3906\n\tu1 := Must(NewV7())\n\tfor i := 0; i \u003c length; i++ {\n\t\tu2 := Must(NewV7())\n\t\tif Compare(u1, u2) \u003e= 0 {\n\t\t\tt.Errorf(\"monotonicity failed at #%d: %s(next) \u003c %s(before)\", i, u2, u1)\n\t\t\tbreak\n\t\t}\n\t\tu1 = u2\n\t}\n}\n",
+        "dev_test_path": "uuid_test.go",
+        "goal": "New/NewRandom returns a valid RFC-4122 version-4 (random) UUID: 122 random bits with the 4-bit version set to 4 and the 2-bit variant set to RFC 4122."
+      }
+    },
+    {
+      "ts": 2,
+      "kind": "task_created",
+      "subject": "mutant-generator/0",
+      "detail": {
+        "role": "mutant-generator",
+        "title": "Generate mutants for newRandomFromPool"
+      }
+    },
+    {
+      "ts": 3,
+      "kind": "task_claimed",
+      "actor": "claude-sonnet-5/mutant-generator",
+      "subject": "mutant-generator/0",
+      "detail": {
+        "role": "mutant-generator",
+        "title": "Generate mutants for newRandomFromPool"
+      }
+    },
+    {
+      "ts": 4,
+      "kind": "task_created",
+      "subject": "mutant-generator/1",
+      "detail": {
+        "role": "mutant-generator",
+        "title": "Generate mutants for NewRandom"
+      }
+    },
+    {
+      "ts": 5,
+      "kind": "task_claimed",
+      "actor": "claude-sonnet-5/mutant-generator",
+      "subject": "mutant-generator/1",
+      "detail": {
+        "role": "mutant-generator",
+        "title": "Generate mutants for NewRandom"
+      }
+    },
+    {
+      "ts": 6,
+      "kind": "task_created",
+      "subject": "mutant-generator/2",
+      "detail": {
+        "role": "mutant-generator",
+        "title": "Generate mutants for NewRandomFromReader"
+      }
+    },
+    {
+      "ts": 7,
+      "kind": "task_claimed",
+      "actor": "claude-sonnet-5/mutant-generator",
+      "subject": "mutant-generator/2",
+      "detail": {
+        "role": "mutant-generator",
+        "title": "Generate mutants for NewRandomFromReader"
+      }
+    },
+    {
+      "ts": 8,
+      "kind": "task_created",
+      "subject": "mutant-generator/3",
+      "detail": {
+        "role": "mutant-generator",
+        "title": "Generate mutants for New, NewString"
+      }
+    },
+    {
+      "ts": 9,
+      "kind": "task_claimed",
+      "actor": "claude-sonnet-5/mutant-generator",
+      "subject": "mutant-generator/3",
+      "detail": {
+        "role": "mutant-generator",
+        "title": "Generate mutants for New, NewString"
+      }
+    },
+    {
+      "ts": 10,
+      "kind": "task_created",
+      "subject": "test-critic",
+      "detail": {
+        "role": "test-critic",
+        "title": "Critique the dev's tests"
+      }
+    },
+    {
+      "ts": 11,
+      "kind": "task_claimed",
+      "actor": "claude-haiku-4-5/test-critic",
+      "subject": "test-critic",
+      "detail": {
+        "role": "test-critic",
+        "title": "Critique the dev's tests"
+      }
+    },
+    {
+      "ts": 12,
+      "kind": "task_done",
+      "actor": "claude-sonnet-5/mutant-generator",
+      "subject": "mutant-generator/2",
+      "detail": {
+        "result": "===MUTATION_1===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n\tuuid[6] = (uuid[6] \u0026 0x0f) | 0x40 // Version 4\n\tuuid[8] = (uuid[8] \u0026 0x3f) | 0x80 // Variant is 10\n\treturn uuid, nil\n}\n\nfunc newRandomFromPool() (UUID, error) {\n=======\n\tuuid[6] = (uuid[6] \u0026 0x0f) | 0x30 // Version 3 (wrong)\n\tuuid[8] = (uuid[8] \u0026 0x3f) | 0x80 // Variant is 10\n\treturn uuid, nil\n}\n\nfunc newRandomFromPool() (UUID, error) {\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_2===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n\tuuid[6] = (uuid[6] \u0026 0x0f) | 0x40 // Version 4\n\tuuid[8] = (uuid[8] \u0026 0x3f) | 0x80 // Variant is 10\n\treturn uuid, nil\n}\n\nfunc newRandomFromPool() (UUID, error) {\n\tvar uuid UUID\n\tpoolMu.Lock()\n=======\n\tuuid[6] = (uuid[6] \u0026 0x0f) | 0x40 // Version 4\n\tuuid[8] = (uuid[8] \u0026 0x1f) | 0xa0 // Variant wrong\n\treturn uuid, nil\n}\n\nfunc newRandomFromPool() (UUID, error) {\n\tvar uuid UUID\n\tpoolMu.Lock()\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_3===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n\tvar uuid UUID\n\t_, err := io.ReadFull(r, uuid[:])\n\tif err != nil {\n\t\treturn Nil, err\n\t}\n=======\n\tvar uuid UUID\n\t_, err := io.ReadFull(r, uuid[:15])\n\tif err != nil {\n\t\treturn Nil, err\n\t}\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_4===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n\tuuid[6] = (uuid[6] \u0026 0x0f) | 0x40 // Version 4\n\tuuid[8] = (uuid[8] \u0026 0x3f) | 0x80 // Variant is 10\n\treturn uuid, nil\n}\n\nfunc newRandomFromPool() (UUID, error) {\n\tvar uuid UUID\n\tpoolMu.Lock()\n\tif poolPos == randPoolSize {\n=======\n\tuuid[6] = (uuid[6] \u0026 0xff) | 0x40 // Version 4 (bits not cleared)\n\tuuid[8] = (uuid[8] \u0026 0x3f) | 0x80 // Variant is 10\n\treturn uuid, nil\n}\n\nfunc newRandomFromPool() (UUID, error) {\n\tvar uuid UUID\n\tpoolMu.Lock()\n\tif poolPos == randPoolSize {\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_5===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n\tvar uuid UUID\n\t_, err := io.ReadFull(r, uuid[:])\n\tif err != nil {\n\t\treturn Nil, err\n\t}\n\tuuid[6] = (uuid[6] \u0026 0x0f) | 0x40 // Version 4\n=======\n\tvar uuid UUID\n\t_, err := io.ReadFull(r, uuid[:])\n\tif err != nil {\n\t\treturn uuid, nil\n\t}\n\tuuid[6] = (uuid[6] \u0026 0x0f) | 0x40 // Version 4\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE",
+        "role": "mutant-generator"
+      }
+    },
+    {
+      "ts": 13,
+      "kind": "task_done",
+      "actor": "claude-sonnet-5/mutant-generator",
+      "subject": "mutant-generator/0",
+      "detail": {
+        "result": "===MUTATION_1===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n\tuuid[6] = (uuid[6] \u0026 0x0f) | 0x40 // Version 4\n\tuuid[8] = (uuid[8] \u0026 0x3f) | 0x80 // Variant is 10\n\treturn uuid, nil\n}\n\nfunc newRandomFromPool\n=======\n\tuuid[6] = (uuid[6] \u0026 0x0f) | 0x30 // Version 4\n\tuuid[8] = (uuid[8] \u0026 0x3f) | 0x80 // Variant is 10\n\treturn uuid, nil\n}\n\nfunc newRandomFromPool\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_2===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n\tcopy(uuid[:], pool[poolPos:(poolPos+16)])\n\tpoolPos += 16\n\tpoolMu.Unlock()\n\n\tuuid[6] = (uuid[6] \u0026 0x0f) | 0x40 // Version 4\n\tuuid[8] = (uuid[8] \u0026 0x3f) | 0x80 // Variant is 10\n\treturn uuid, nil\n}\n=======\n\tcopy(uuid[:], pool[poolPos:(poolPos+16)])\n\tpoolPos += 16\n\tpoolMu.Unlock()\n\n\tuuid[6] = (uuid[6] \u0026 0x0f) | 0x40 // Version 4\n\tuuid[8] = (uuid[8] \u0026 0x0f) | 0x80 // Variant is 10\n\treturn uuid, nil\n}\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_3===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n\tcopy(uuid[:], pool[poolPos:(poolPos+16)])\n\tpoolPos += 16\n\tpoolMu.Unlock()\n=======\n\tcopy(uuid[:], pool[poolPos:(poolPos+16)])\n\tpoolPos += 8\n\tpoolMu.Unlock()\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_4===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n\tif poolPos == randPoolSize {\n\t\t_, err := io.ReadFull(rander, pool[:])\n\t\tif err != nil {\n\t\t\tpoolMu.Unlock()\n\t\t\treturn Nil, err\n\t\t}\n\t\tpoolPos = 0\n\t}\n=======\n\tif poolPos == randPoolSize {\n\t\t_, err := io.ReadFull(rander, pool[:])\n\t\tif err != nil {\n\t\t\tpoolMu.Unlock()\n\t\t\treturn Nil, nil\n\t\t}\n\t\tpoolPos = 0\n\t}\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_5===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n\tcopy(uuid[:], pool[poolPos:(poolPos+16)])\n=======\n\tcopy(uuid[:], pool[poolPos:(poolPos+15)])\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE",
+        "role": "mutant-generator"
+      }
+    },
+    {
+      "ts": 14,
+      "kind": "task_done",
+      "actor": "claude-sonnet-5/mutant-generator",
+      "subject": "mutant-generator/3",
+      "detail": {
+        "result": "===MUTATION_1===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\nfunc New() UUID {\n\treturn Must(NewRandom())\n}\n=======\nfunc New() UUID {\n\treturn Nil\n}\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_2===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\nfunc New() UUID {\n\treturn Must(NewRandom())\n}\n=======\nfunc New() UUID {\n\tu := Must(NewRandom())\n\tu[6] = 0x00 // strip version bits\n\treturn u\n}\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_3===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\nfunc NewString() string {\n\treturn Must(NewRandom()).String()\n}\n=======\nfunc NewString() string {\n\treturn \"00000000-0000-4000-8000-000000000000\"\n}\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_4===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\nfunc NewString() string {\n\treturn Must(NewRandom()).String()\n}\n=======\nfunc NewString() string {\n\tNewRandom()\n\treturn \"\"\n}\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_5===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\nfunc New() UUID {\n\treturn Must(NewRandom())\n}\n=======\nfunc New() UUID {\n\tu := Must(NewRandom())\n\tu[8] = u[8] \u0026 0x3f // clear variant bits entirely\n\treturn u\n}\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE",
+        "role": "mutant-generator"
+      }
+    },
+    {
+      "ts": 15,
+      "kind": "task_done",
+      "actor": "claude-sonnet-5/mutant-generator",
+      "subject": "mutant-generator/1",
+      "detail": {
+        "result": "===MUTATION_1===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\nfunc NewRandom() (UUID, error) {\n\tif !poolEnabled {\n\t\treturn NewRandomFromReader(rander)\n\t}\n\treturn newRandomFromPool()\n}\n=======\nfunc NewRandom() (UUID, error) {\n\tif !poolEnabled {\n\t\tu, _ := NewRandomFromReader(rander)\n\t\treturn u, nil\n\t}\n\treturn newRandomFromPool()\n}\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_2===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\nfunc NewRandom() (UUID, error) {\n\tif !poolEnabled {\n\t\treturn NewRandomFromReader(rander)\n\t}\n\treturn newRandomFromPool()\n}\n=======\nfunc NewRandom() (UUID, error) {\n\tif !poolEnabled {\n\t\tvar uuid UUID\n\t\t_, err := io.ReadFull(rander, uuid[:])\n\t\treturn uuid, err\n\t}\n\treturn newRandomFromPool()\n}\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_3===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\nfunc NewRandom() (UUID, error) {\n\tif !poolEnabled {\n\t\treturn NewRandomFromReader(rander)\n\t}\n\treturn newRandomFromPool()\n}\n=======\nfunc NewRandom() (UUID, error) {\n\tif !poolEnabled {\n\t\tvar uuid UUID\n\t\t_, err := io.ReadFull(rander, uuid[:])\n\t\tif err != nil {\n\t\t\treturn Nil, err\n\t\t}\n\t\tuuid[6] = (uuid[6] \u0026 0x0f) | 0x30 // Wrong version bits\n\t\tuuid[8] = (uuid[8] \u0026 0x3f) | 0x80\n\t\treturn uuid, nil\n\t}\n\treturn newRandomFromPool()\n}\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_4===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\nfunc NewRandom() (UUID, error) {\n\tif !poolEnabled {\n\t\treturn NewRandomFromReader(rander)\n\t}\n\treturn newRandomFromPool()\n}\n=======\nfunc NewRandom() (UUID, error) {\n\tif !poolEnabled {\n\t\tvar uuid UUID\n\t\t_, err := io.ReadFull(rander, uuid[:])\n\t\tif err != nil {\n\t\t\treturn Nil, err\n\t\t}\n\t\tuuid[6] = (uuid[6] \u0026 0x0f) | 0x40\n\t\tuuid[8] = (uuid[8] \u0026 0x3f) | 0xC0 // Wrong variant bits\n\t\treturn uuid, nil\n\t}\n\treturn newRandomFromPool()\n}\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_5===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\nfunc NewRandom() (UUID, error) {\n\tif !poolEnabled {\n\t\treturn NewRandomFromReader(rander)\n\t}\n\treturn newRandomFromPool()\n}\n=======\nfunc NewRandom() (UUID, error) {\n\tif !poolEnabled {\n\t\treturn NewRandomFromReader(rander)\n\t}\n\tvar uuid UUID\n\treturn uuid, nil\n}\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE",
+        "role": "mutant-generator"
+      }
+    },
+    {
+      "ts": 16,
+      "kind": "finding_reported",
+      "actor": "claude-haiku-4-5/test-critic",
+      "subject": "version4.go NewRandomFromReader",
+      "detail": {
+        "evidence": "TestRandomUUID generates 31 UUIDs via New() and checks version==4 and variant==RFC4122. However, the test does NOT verify that the UUIDs actually contain 122 random bits. The code sets uuid[6] = (uuid[6] \u0026 0x0f) | 0x40 (version 4) and uuid[8] = (uuid[8] \u0026 0x3f) | 0x80 (variant RFC4122), but the test never inspects the actual bit values to confirm the 122 random bits are present—it only checks the version and variant fields after they are already masked and set by the code. The test passes as long as Version() and Variant() return the expected values, which they will regardless of the actual entropy, making this test vacuous with respect to the \"122 random bits\" requirement.",
+        "role": "test-critic",
+        "severity": "high",
+        "type": "bug"
+      }
+    },
+    {
+      "ts": 17,
+      "kind": "finding_reported",
+      "actor": "claude-haiku-4-5/test-critic",
+      "subject": "uuid_test.go - TestRandomUUID and TestRandomUUID_Pooled",
+      "detail": {
+        "evidence": "TestRandomUUID calls uuid.Version() and uuid.Variant() on UUIDs created by New(), and asserts v == 4 and variant == RFC4122. However, the test never verifies that the 122 random bits are actually random or that they are not deterministic. The Version and Variant checks pass by virtue of the fixed bit manipulations in NewRandomFromReader (lines uuid[6] = (uuid[6] \u0026 0x0f) | 0x40 and uuid[8] = (uuid[8] \u0026 0x3f) | 0x80), which set those bits regardless of whether the underlying 122 bits came from a proper random source. The test does not validate the randomness property stated in the goal.",
+        "role": "test-critic",
+        "severity": "high",
+        "type": "bug"
+      }
+    },
+    {
+      "ts": 18,
+      "kind": "finding_reported",
+      "actor": "claude-haiku-4-5/test-critic",
+      "subject": "version4.go",
+      "detail": {
+        "evidence": "TestRandomUUID verifies that New() generates 31 UUIDs with version 4 and RFC4122 variant. However, the test does not verify the core requirement: that the UUID contains 122 random bits. The code in NewRandomFromReader and newRandomFromPool sets version and variant bits (lines uuid[6] and uuid[8]), which overwrites 6 bits of the supposed 122 random bits, reducing actual randomness. The test never validates the randomness of the 122 bits or checks that only the specified 6 bits were modified from the random source.",
+        "role": "test-critic",
+        "severity": "high",
+        "type": "note"
+      }
+    },
+    {
+      "ts": 19,
+      "kind": "finding_reported",
+      "actor": "claude-haiku-4-5/test-critic",
+      "subject": "uuid_test.go - TestNew",
+      "detail": {
+        "evidence": "TestNew() calls New() 31 times and checks each has version 4 and RFC4122 variant. However, the test first parses the UUID string representation via Parse(s.String()), meaning it is not directly testing the binary output of New() but rather testing that Parse() correctly identifies version and variant from the string. The check `if v := uuid.Version(); v != 4` is actually verifying Parse's extraction logic, not New's generation logic. The test does not directly validate the bit-level structure (122 random bits, version nibble = 0x4, variant bits = 0b10) that New() produces.",
+        "role": "test-critic",
+        "severity": "medium",
+        "type": "note"
+      }
+    },
+    {
+      "ts": 20,
+      "kind": "task_done",
+      "actor": "claude-haiku-4-5/test-critic",
+      "subject": "test-critic",
+      "detail": {
+        "result": "reviewed the dev tests",
+        "role": "test-critic"
+      }
+    },
+    {
+      "ts": 21,
+      "kind": "pool_shard",
+      "actor": "corral-advpool",
+      "subject": "newRandomFromPool",
+      "detail": {
+        "dropped": false,
+        "mutants": 5,
+        "parse_retries": 0,
+        "region": "newRandomFromPool",
+        "region_complexity": 3,
+        "region_lines": 19,
+        "shard": 0
+      }
+    },
+    {
+      "ts": 22,
+      "kind": "pool_shard",
+      "actor": "corral-advpool",
+      "subject": "NewRandom",
+      "detail": {
+        "dropped": false,
+        "mutants": 5,
+        "parse_retries": 0,
+        "region": "NewRandom",
+        "region_complexity": 2,
+        "region_lines": 6,
+        "shard": 1
+      }
+    },
+    {
+      "ts": 23,
+      "kind": "pool_shard",
+      "actor": "corral-advpool",
+      "subject": "NewRandomFromReader",
+      "detail": {
+        "dropped": false,
+        "mutants": 5,
+        "parse_retries": 0,
+        "region": "NewRandomFromReader",
+        "region_complexity": 2,
+        "region_lines": 10,
+        "shard": 2
+      }
+    },
+    {
+      "ts": 24,
+      "kind": "pool_shard",
+      "actor": "corral-advpool",
+      "subject": "New, NewString",
+      "detail": {
+        "dropped": false,
+        "mutants": 5,
+        "parse_retries": 0,
+        "region": "New, NewString",
+        "region_complexity": 2,
+        "region_lines": 6,
+        "shard": 3
+      }
+    },
+    {
+      "ts": 25,
+      "kind": "pool_dev_adequacy",
+      "actor": "corral-advpool",
+      "detail": {
+        "dev_kill_rate": 0.65,
+        "mutants_total": 20,
+        "survivor_ids": [
+          "s0/m2",
+          "s0/m5",
+          "s1/m1",
+          "s2/m2",
+          "s2/m3",
+          "s3/m3",
+          "s3/m4"
+        ],
+        "survivors": 7
+      }
+    },
+    {
+      "ts": 26,
+      "kind": "task_created",
+      "subject": "test-writer-r2",
+      "detail": {
+        "role": "test-writer",
+        "title": "Write test targeting survivors"
+      }
+    },
+    {
+      "ts": 27,
+      "kind": "task_claimed",
+      "actor": "claude-sonnet-5/test-writer",
+      "subject": "test-writer-r2",
+      "detail": {
+        "role": "test-writer",
+        "title": "Write test targeting survivors"
+      }
+    },
+    {
+      "ts": 28,
+      "kind": "task_done",
+      "actor": "claude-sonnet-5/test-writer",
+      "subject": "test-writer-r2",
+      "detail": {
+        "result": "",
+        "role": "test-writer"
+      }
+    },
+    {
+      "ts": 29,
+      "kind": "task_created",
+      "subject": "test-writer-r2",
+      "detail": {
+        "role": "test-writer",
+        "title": "Write test targeting survivors"
+      }
+    },
+    {
+      "ts": 30,
+      "kind": "task_claimed",
+      "actor": "claude-sonnet-5/test-writer",
+      "subject": "test-writer-r2",
+      "detail": {
+        "role": "test-writer",
+        "title": "Write test targeting survivors"
+      }
+    },
+    {
+      "ts": 31,
+      "kind": "task_done",
+      "actor": "claude-sonnet-5/test-writer",
+      "subject": "test-writer-r2",
+      "detail": {
+        "result": "",
+        "role": "test-writer"
+      }
+    },
+    {
+      "ts": 32,
+      "kind": "task_created",
+      "subject": "test-writer-r2",
+      "detail": {
+        "role": "test-writer",
+        "title": "Write test targeting survivors"
+      }
+    },
+    {
+      "ts": 33,
+      "kind": "task_claimed",
+      "actor": "claude-sonnet-5/test-writer",
+      "subject": "test-writer-r2",
+      "detail": {
+        "role": "test-writer",
+        "title": "Write test targeting survivors"
+      }
+    },
+    {
+      "ts": 34,
+      "kind": "task_done",
+      "actor": "claude-sonnet-5/test-writer",
+      "subject": "test-writer-r2",
+      "detail": {
+        "result": "",
+        "role": "test-writer"
+      }
+    },
+    {
+      "ts": 35,
+      "kind": "pool_verdict",
+      "actor": "corral-advpool",
+      "subject": "2d3c2a9cc518326daf99a383f07c4d3c44317e4d",
+      "detail": {
+        "dev_kill_rate": 0.65,
+        "models_by_role": {
+          "mutant-generator": "claude-sonnet-5",
+          "test-critic": "claude-haiku-4-5",
+          "test-writer": "claude-sonnet-5"
+        },
+        "mutants_total": 20,
+        "proven_missed": 0,
+        "record_head": "1d417042d76ab4f119eae70e6ebde899fa49ed3ba82f91ad3614fa1472b5e09e",
+        "record_id": 1,
+        "status": "needs-review",
+        "survivors": 7
+      }
+    }
+  ]
+}

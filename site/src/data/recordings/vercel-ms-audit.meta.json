@@ -1,0 +1,15 @@
+{
+  "directive": "adversarial pool · vercel/ms — src/index.ts (node_modules bound read-only)",
+  "task_count": 5,
+  "done_task_count": 5,
+  "finding_count": 0,
+  "duration_seconds": 71,
+  "models": [
+    "anthropic:claude-sonnet-5",
+    "anthropic:claude-haiku-4-5"
+  ],
+  "platform": {
+    "inference": "vendor cloud — Claude Sonnet 5 (planting + writing) + Claude Haiku 4.5 (critic), Anthropic",
+    "host": "linux/amd64 · bwrap jail · 337 MB node_modules bound read-only"
+  }
+}

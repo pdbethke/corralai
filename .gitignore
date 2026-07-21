@@ -70,3 +70,6 @@ private/
 
 # spike/probe scratch — never part of the repo
 scratch/
+
+# launch prep — drafts + assets stay LOCAL until the reveal, never in the public repo
+docs/launch/

@@ -262,24 +262,6 @@ func (s *Store) Get(ctx context.Context, id string) (Finding, bool, error) {
 	return f, true, nil
 }
 
-// List returns every finding, ordered by ID.
-func (s *Store) List(ctx context.Context) ([]Finding, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+findingCols+` FROM critic_findings ORDER BY id`)
-	if err != nil {
-		return nil, fmt.Errorf("criticscore: list: %w", err)
-	}
-	defer rows.Close()
-	var out []Finding
-	for rows.Next() {
-		f, err := scanFinding(rows)
-		if err != nil {
-			return nil, fmt.Errorf("criticscore: list: scan: %w", err)
-		}
-		out = append(out, f)
-	}
-	return out, rows.Err()
-}
-
 // Precision rolls findings up per critic model: how many of its findings
 // have been confirmed vs refuted vs are still unadjudicated, plus the
 // confirmed/(confirmed+refuted) ratio computed in Go so a model with zero

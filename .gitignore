@@ -67,3 +67,6 @@ site/src/data/generated/
 # Cloudflare wrangler local cache
 .wrangler/
 private/
+
+# spike/probe scratch — never part of the repo
+scratch/

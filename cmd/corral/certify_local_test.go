@@ -1114,6 +1114,27 @@ func TestRunCertifyLocal_BindDirWithoutRepoDirFailsClosed(t *testing.T) {
 	}
 }
 
+// TestRunCertifyLocal_BindDirWithNoBindDepsConflicts proves --bind-dir and
+// --no-bind-deps together fail closed (they contradict — one binds a dir, the
+// other copies all dep dirs) rather than silently letting --no-bind-deps win.
+func TestRunCertifyLocal_BindDirWithNoBindDepsConflicts(t *testing.T) {
+	dir := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	code := runCertifyLocal([]string{
+		"--code", "foo.go",
+		"--goal", "correctness",
+		"--repo-dir", dir,
+		"--bind-dir", "vendor",
+		"--no-bind-deps",
+	}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("want exit 2 for the flag conflict, got %d (stderr=%q)", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "conflict") {
+		t.Fatalf("stderr should explain the --bind-dir/--no-bind-deps conflict, got %q", stderr.String())
+	}
+}
+
 // TestLoadRepoFiles_BindDirEscape_FailsClosed proves the Task 3 review
 // finding is fixed: a --bind-dir entry that escapes the repo root (via `..`
 // or an absolute path) must error clearly BEFORE the walk, not silently fail

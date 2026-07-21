@@ -80,3 +80,30 @@ func TestRecordHonorsCallerSuppliedTS(t *testing.T) {
 		t.Fatalf("delete candidates = %+v, want none (the caller-supplied ts=2000 non-candidate row is the true latest, despite being inserted first)", cands)
 	}
 }
+
+// TestDeleteCandidatesBreaksTsTiesOnRecordID pins the tie-break: when two runs
+// for the same key share a ts (the brain sink stamps whole-second timestamps),
+// the newer run (higher record_id) must win — so a superseding NON-candidate run
+// suppresses an earlier candidate row. A MAX(ts)-only match would return both.
+func TestDeleteCandidatesBreaksTsTiesOnRecordID(t *testing.T) {
+	s := openTmp(t)
+	ctx := context.Background()
+	must := func(e error) {
+		if e != nil {
+			t.Fatal(e)
+		}
+	}
+	// Same key, SAME ts, different record_id: run 1 flagged it a candidate; run 2
+	// (later, higher record_id) did not. The tie must resolve to run 2.
+	must(s.Record(ctx, []matrixstore.Row{
+		{TS: 1500, RecordID: 1, Repo: "r", Commit: "c", TestSelector: "T::a", Kills: 0, MutantsTotal: 3, DeleteCandidate: true},
+	}))
+	must(s.Record(ctx, []matrixstore.Row{
+		{TS: 1500, RecordID: 2, Repo: "r", Commit: "c", TestSelector: "T::a", Kills: 3, MutantsTotal: 3, DeleteCandidate: false},
+	}))
+	cands, err := s.DeleteCandidates(ctx)
+	must(err)
+	if len(cands) != 0 {
+		t.Fatalf("delete candidates = %+v, want none (record_id=2 non-candidate is the latest at the tied ts)", cands)
+	}
+}

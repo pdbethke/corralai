@@ -152,6 +152,17 @@ func (s *Store) Record(ctx context.Context, fs []Finding) error {
 	defer tx.Rollback() //nolint:errcheck
 
 	for _, f := range fs {
+		// Normalize the load-bearing enums so a caller-built Finding{} with a
+		// zero-value Adjudication/Source can't insert "" (which defeats the
+		// column's NOT NULL DEFAULT — DEFAULT only fires when the column is
+		// OMITTED, never on an explicit "") and then vanish from ListPending's
+		// `adjudication = 'unadjudicated'` filter forever.
+		if f.Adjudication == "" {
+			f.Adjudication = "unadjudicated"
+		}
+		if f.Source == "" {
+			f.Source = "auto"
+		}
 		var existingSource sql.NullString
 		err := tx.QueryRowContext(ctx, `SELECT source FROM critic_findings WHERE id = ?`, f.ID).Scan(&existingSource)
 		switch {

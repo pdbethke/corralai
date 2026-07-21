@@ -62,3 +62,35 @@ func TestRecordAndPrecision(t *testing.T) {
 		t.Fatalf("no pending expected, got %d", len(pend))
 	}
 }
+
+// TestPrecisionNilWhenNoAdjudicated pins the documented reason Precision returns
+// a *float64: a model with zero confirmed+refuted (only unadjudicated findings)
+// gets a nil Precision, not a misleading 0.0.
+func TestPrecisionNilWhenNoAdjudicated(t *testing.T) {
+	s := openTmp(t)
+	ctx := context.Background()
+	if err := s.Record(ctx, []criticscore.Finding{
+		{ID: "1:1", RecordID: 1, Model: "fresh", Scope: "whole-test", Adjudication: "unadjudicated", Source: "auto"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cells, err := s.Precision(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, c := range cells {
+		if c.Model == "fresh" {
+			found = true
+			if c.Precision != nil {
+				t.Fatalf("Precision must be nil with 0 adjudicated, got %v", *c.Precision)
+			}
+			if c.Unadjudicated != 1 || c.Confirmed != 0 || c.Refuted != 0 {
+				t.Fatalf("counts wrong: %+v", c)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("model 'fresh' missing from Precision cells")
+	}
+}

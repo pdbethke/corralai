@@ -149,12 +149,19 @@ func scanRow(scanner interface{ Scan(...any) error }) (Row, error) {
 // means the newest run, and the outer WHERE then filters to the ones that
 // are still candidates as of that latest run.
 func (s *Store) DeleteCandidates(ctx context.Context) ([]Row, error) {
+	// "Latest per (repo,commit,test_selector)" must be a SINGLE row even when two
+	// runs share a ts (the brain sink stamps whole-second timestamps, so two runs
+	// converging in the same second tie). Rank on (ts, record_id) — record_id is
+	// monotonic per run — so a superseding non-candidate run reliably suppresses
+	// an earlier candidate row for the same key. A MAX(ts)-only match would return
+	// BOTH tied rows and let a stale candidate leak.
 	rows, err := s.db.QueryContext(ctx, `SELECT `+matrixSelectCols+`
 		FROM matrix_test_adequacy m
 		WHERE delete_candidate = TRUE
-		AND ts = (
-			SELECT MAX(ts) FROM matrix_test_adequacy m2
+		AND NOT EXISTS (
+			SELECT 1 FROM matrix_test_adequacy m2
 			WHERE m2.repo = m.repo AND m2.commit = m.commit AND m2.test_selector = m.test_selector
+			AND (m2.ts > m.ts OR (m2.ts = m.ts AND m2.record_id > m.record_id))
 		)
 		ORDER BY repo, commit, test_selector`)
 	if err != nil {

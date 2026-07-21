@@ -133,6 +133,14 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "corral certify --local: --bind-dir/--no-bind-deps require --repo-dir (they configure how the cloned tree is seeded into the jail; a single --code file has no dependency dirs to bind or copy)")
 		return 2
 	}
+	// --bind-dir asks to BIND a dir read-only; --no-bind-deps asks to COPY every
+	// dep dir instead. Together they contradict: --no-bind-deps would silently
+	// win and copy the explicitly-requested --bind-dir target. Refuse the
+	// contradiction rather than do the opposite of one flag quietly.
+	if len(bindDirFlag) > 0 && *noBindDepsFlag {
+		fmt.Fprintln(stderr, "corral certify --local: --bind-dir and --no-bind-deps conflict (--bind-dir binds a dir read-only; --no-bind-deps copies all dep dirs — pick one)")
+		return 2
+	}
 
 	// Resolve the language plugin the jail will grade with — from --lang, else
 	// the code file's extension. Fail closed on an unknown language: the gate
@@ -193,7 +201,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	// MODEL_BACKEND is unset we default it to anthropic so FromEnv() builds the
 	// Claude backend the default models expect (rather than the ollama default).
 	backendSel := strings.TrimSpace(os.Getenv("MODEL_BACKEND"))
-	if backendSel == "" || backendSel == "anthropic" || backendSel == "claude" {
+	if onDefaultClaudePath() {
 		if agentbackend.Secret("ANTHROPIC_API_KEY") == "" {
 			fmt.Fprintln(stderr, "corral certify --local: no $ANTHROPIC_API_KEY set — export your Claude key, or select another provider with MODEL_BACKEND + its key")
 			return 2
@@ -1278,14 +1286,23 @@ func normalizeFinding(f *queue.Finding) {
 // missing, this returns the actionable error from ForModel instead of
 // silently falling back to the base backend — the caller must refuse to
 // start the run, not fail mid-run.
+// onDefaultClaudePath reports whether the run is on the default direct-Claude
+// path — MODEL_BACKEND unset, "anthropic", or "claude" — vs an operator-pinned
+// backend. It reads MODEL_BACKEND fresh, so after runCertifyLocal defaults an
+// unset MODEL_BACKEND to "anthropic" this still reports true. Both the
+// provider-key gate and the cross-vendor router consult it, so the policy lives
+// in one place.
+func onDefaultClaudePath() bool {
+	b := strings.TrimSpace(os.Getenv("MODEL_BACKEND"))
+	return b == "" || b == "anthropic" || b == "claude"
+}
+
 func localChatterFor(assign advpool.RoleAssignment) (func(role string) agentworker.Chatter, error) {
 	base := agentbackend.FromEnv()
 	sw, canSwitch := base.(agentbackend.ModelSwitcher)
 
 	var criticChatter agentworker.Chatter
-	backendSel := strings.TrimSpace(os.Getenv("MODEL_BACKEND"))
-	onDefaultClaudePath := backendSel == "" || backendSel == "anthropic" || backendSel == "claude"
-	if onDefaultClaudePath && canSwitch {
+	if onDefaultClaudePath() && canSwitch {
 		criticModel := assign[advpool.RoleTestCritic]
 		// On the default path the base backend is definitively anthropic
 		// (onDefaultClaudePath gates that), so the base vendor is "anthropic"

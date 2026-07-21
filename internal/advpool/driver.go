@@ -66,6 +66,17 @@ const matrixDefaultWorkers = 4
 // single-file suites are never clipped.
 const maxMatrixTests = 500
 
+// capMatrixTests truncates an over-large enumerated test list to maxMatrixTests,
+// returning the kept selectors and how many were dropped (0 when under the cap).
+// The safety ceiling that keeps the tests×mutants matrix from a runaway; pulled
+// out so it is unit-testable without the whole tickMatrix jail harness.
+func capMatrixTests(sels []string) (kept []string, dropped int) {
+	if len(sels) <= maxMatrixTests {
+		return sels, 0
+	}
+	return sels[:maxMatrixTests], len(sels) - maxMatrixTests
+}
+
 // Signer wraps the certify chain (certify.BuildLedger/BuildAttestation/
 // SignDSSE + buildstore — the real impl is Task 5.1): it signs a terminal
 // Verdict as a tamper-evident record, subject = repo@commit, byproducts =
@@ -1253,10 +1264,10 @@ func (d *Driver) tickMatrix(ctx context.Context, run *runState) {
 	if len(sels) == 0 {
 		return
 	}
-	if len(sels) > maxMatrixTests {
-		log.Printf("advpool: matrix: suite has %d tests, capping to %d to bound the tests×mutants work (the rest are not scored this run)",
-			len(sels), maxMatrixTests)
-		sels = sels[:maxMatrixTests]
+	sels, dropped := capMatrixTests(sels)
+	if dropped > 0 {
+		log.Printf("advpool: matrix: suite has %d tests, capping to %d to bound the tests×mutants work (%d not scored this run)",
+			len(sels)+dropped, maxMatrixTests, dropped)
 	}
 	refs := make([]matrix.TestRef, len(sels))
 	for i, sel := range sels {

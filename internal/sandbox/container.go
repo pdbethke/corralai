@@ -69,6 +69,11 @@ func (c containerIsolator) Wrap(command string, opts Options, env []string) ([]s
 	argv = append(argv,
 		"-v", opts.Workspace+":"+opts.Workspace,
 		"-w", opts.Workspace,
+	)
+	for _, bnd := range opts.ReadOnlyBinds {
+		argv = append(argv, "-v", bnd.Host+":"+bnd.Target+":ro")
+	}
+	argv = append(argv,
 		c.image,
 		"sh", "-c", command,
 	)

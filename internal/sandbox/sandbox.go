@@ -18,6 +18,12 @@ import (
 	"time"
 )
 
+// Bind is a host directory mounted read-only into the jail at Target.
+type Bind struct {
+	Host   string // absolute host directory
+	Target string // absolute path inside the jail (under Workspace)
+}
+
 // Options configure a single Run.
 type Options struct {
 	Workspace string        // working directory (the command's cwd)
@@ -26,6 +32,12 @@ type Options struct {
 	Env       []string      // environment; nil => MinimalEnv() (no inherited secrets)
 	Network   bool          // allow network egress for the command (default false)
 	Backend   Isolator      // isolation backend; nil => execution is disabled (used from Task 2)
+
+	// ReadOnlyBinds are host directories mounted read-only into the jail at
+	// Target (an absolute path under Workspace), so large read-only trees
+	// (node_modules, vendor, .venv) are visible to the command without being
+	// copied into the workspace. The sandboxed process can never write them.
+	ReadOnlyBinds []Bind
 }
 
 // Result is the outcome of a Run.

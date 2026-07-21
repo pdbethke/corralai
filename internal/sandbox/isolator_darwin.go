@@ -87,6 +87,12 @@ func (sandboxExecIsolator) Wrap(command string, opts Options, env []string) ([]s
 	// Re-allow reads of the workspace itself (even if it lives under $HOME).
 	sb.WriteString(fmt.Sprintf("(allow file-read* (subpath %q))\n", opts.Workspace))
 
+	// Read-only dep-dir binds (Task 1). macOS has no bind-mount primitive here,
+	// so the command reads the dir in place at Host; Target is unused.
+	for _, bnd := range opts.ReadOnlyBinds {
+		sb.WriteString(fmt.Sprintf("(allow file-read* (subpath %q))\n", bnd.Host))
+	}
+
 	// Writable paths. Unlike bwrap (which gives the jail its own private
 	// tmpfs at /tmp via --tmpfs), sandbox-exec has no per-run tmpfs primitive:
 	// SBPL grants access to real host paths, so there is no way to hand the

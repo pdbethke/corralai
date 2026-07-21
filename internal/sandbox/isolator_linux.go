@@ -78,6 +78,9 @@ func (bwrapIsolator) Wrap(command string, opts Options, env []string) ([]string,
 		"--bind", opts.Workspace, opts.Workspace, // bind AFTER tmpfs so a /tmp workspace survives
 		"--chdir", opts.Workspace,
 	)
+	for _, bnd := range opts.ReadOnlyBinds {
+		argv = append(argv, "--ro-bind", bnd.Host, bnd.Target)
+	}
 	if opts.Network {
 		argv = append(argv, "--ro-bind-try", "/etc/resolv.conf", "/etc/resolv.conf")
 	}

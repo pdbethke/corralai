@@ -65,12 +65,16 @@ for (const [p, mod] of Object.entries(streamModules)) {
     video: fs.existsSync(`public/recordings/${slug}.mp4`) ? `/recordings/${slug}.mp4` : undefined,
   });
 }
-// Lead with the thesis tape (the mixtape — local + frontier in one audit),
-// then the rest alphabetically. The spread reads best mixtape-first.
-const LEAD = 'pool-fence-crossvendor';
-cards.sort((a, b) =>
-  (a.slug === LEAD ? -1 : b.slug === LEAD ? 1 : 0) || a.slug.localeCompare(b.slug),
-);
+// Lead with the real-library tape (more-itertools — a package we didn't write,
+// the longest run, with real findings): the most legible "aha" for a first-time
+// viewer, and it recognizably audits code that isn't ours. Then the cross-vendor
+// mixtape thesis tape, then the rest alphabetically.
+const LEAD_ORDER = ['more-itertools-reliable-critic', 'pool-fence-crossvendor'];
+const leadRank = (slug: string) => {
+  const i = LEAD_ORDER.indexOf(slug);
+  return i === -1 ? LEAD_ORDER.length : i;
+};
+cards.sort((a, b) => leadRank(a.slug) - leadRank(b.slug) || a.slug.localeCompare(b.slug));
 ---
 <html lang="en">
 <head>

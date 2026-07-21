@@ -129,7 +129,7 @@ func TestLoadRepoFiles_SkipsGitBinaryAndKeysRepoRelative(t *testing.T) {
 	write(".git/config", []byte("[core]\n"))
 	write("logo.bin", []byte{0xff, 0xfe, 0x00, 0x01}) // invalid UTF-8 -> skipped
 
-	files, err := loadRepoFiles(root)
+	files, _, err := loadRepoFiles(root, loadOpts{})
 	if err != nil {
 		t.Fatal(err)
 	}

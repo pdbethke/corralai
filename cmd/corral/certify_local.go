@@ -293,7 +293,8 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "corral certify --local: --repo-dir requires the project's own test command after `--`, e.g. `-- python3 -m pytest tests/test_recipes.py`")
 			return 2
 		}
-		repoFiles, lerr := loadRepoFiles(repoDir)
+		repoFiles, depBinds, lerr := loadRepoFiles(repoDir, loadOpts{}) // TODO(task4): wire opts (BackendName/--bind-dir/--no-bind-deps) + pass depBinds to the jail via adequacy.WithReadOnlyBinds
+		_ = depBinds
 		if lerr != nil {
 			fmt.Fprintf(stderr, "corral certify --local: reading --repo-dir %s: %v\n", repoDir, lerr)
 			return 2
@@ -709,26 +710,110 @@ func recordActor(role, model string) string {
 	return model + "/" + role
 }
 
+// loadOpts configures loadRepoFiles' dep-dir detection: which sandbox
+// backend will run the jail (the container-fallback rule needs it),
+// operator-supplied extra dirs to bind (--bind-dir), and an opt-out that
+// forces every dep dir to be copied instead of bound (--no-bind-deps).
+type loadOpts struct {
+	BackendName  string   // sandbox backend Name(): "bwrap" | "container" | "sandbox-exec" | ...
+	ExtraBindDir []string // repo-relative dirs from --bind-dir
+	NoBindDeps   bool     // --no-bind-deps: copy dep dirs instead of binding
+	rootAbs      string   // absolute root, set internally before the walk
+}
+
+// depDirNames are directory basenames auto-detected as dependency trees:
+// large, vendor-managed, and irrelevant to the mutant/text seed — binding
+// them read-only instead of copying keeps them out of the 64 MiB cap.
+var depDirNames = map[string]bool{
+	"node_modules": true,
+	"vendor":       true,
+	".venv":        true,
+	"venv":         true,
+	".bundle":      true,
+}
+
+// shouldBind reports whether the dir at rel (base name name) should be
+// bind-mounted read-only rather than copied. Auto-detected dep dirs and
+// --bind-dir entries qualify, unless --no-bind-deps is set. On the container
+// backend a non-world-readable dep dir is copied instead (degrade loudly): the
+// container maps host uid → a different uid and can't read 0700 trees, and a
+// read-only bind can't be chmod'd — so fall back to the seed (and its cap).
+func shouldBind(rel, name string, opts loadOpts) bool {
+	if opts.NoBindDeps {
+		return false
+	}
+	auto := depDirNames[name]
+	extra := false
+	for _, e := range opts.ExtraBindDir {
+		if e == rel {
+			extra = true
+		}
+	}
+	if !auto && !extra {
+		return false
+	}
+	if opts.BackendName == "container" && !worldReadableDir(filepath.Join(opts.rootAbs, filepath.FromSlash(rel))) {
+		return false // copy it instead; may hit the cap → the existing clear error
+	}
+	return true
+}
+
+// worldReadableDir reports whether dir is readable+traversable by "other"
+// (o+r and o+x) — the bar a bind-mounted dep dir must clear for the
+// container backend's different-uid process to read through it.
+func worldReadableDir(dir string) bool {
+	fi, err := os.Stat(dir) // #nosec G304 -- dir is always root/rel, confined under --repo-dir
+	if err != nil {
+		return false
+	}
+	const oRX = 0o005
+	return fi.Mode().Perm()&oRX == oRX
+}
+
 // loadRepoFiles walks root and returns every regular text file keyed by its
 // slash-separated repo-relative path — the seed for --repo-dir's jail
-// workspace. It skips .git, files over 1 MiB (data/fixtures, not source), and
-// anything that isn't valid UTF-8 (binaries the text-only jail can't carry),
-// and caps the total so a huge checkout can't blow up the workspace. The keys
-// are exactly the paths a mutant overlay and the project's own test command
-// reference (e.g. `more_itertools/recipes.py`, `tests/test_recipes.py`).
-func loadRepoFiles(root string) (map[string]string, error) {
+// workspace — plus the dependency dirs (node_modules, vendor, .venv, venv,
+// .bundle, and any --bind-dir entries) it detected and excluded from that
+// seed so they can be bind-mounted read-only instead of copied. It skips
+// .git, files over 1 MiB (data/fixtures, not source), and anything that
+// isn't valid UTF-8 (binaries the text-only jail can't carry), and caps the
+// total so a huge checkout can't blow up the workspace. The keys are exactly
+// the paths a mutant overlay and the project's own test command reference
+// (e.g. `more_itertools/recipes.py`, `tests/test_recipes.py`).
+func loadRepoFiles(root string, opts loadOpts) (map[string]string, []adequacy.DepBind, error) {
 	const maxFile = 1 << 20   // 1 MiB per file
 	const maxTotal = 64 << 20 // 64 MiB of text total
+
+	rootAbs, aerr := filepath.Abs(root)
+	if aerr != nil {
+		return nil, nil, aerr
+	}
+	opts.rootAbs = rootAbs
+
+	// Validate --bind-dir entries up front (fail-closed): a missing or
+	// non-dir entry is a clear error before the walk starts, not a silent
+	// no-op discovered later inside the sandbox.
+	for _, e := range opts.ExtraBindDir {
+		fi, serr := os.Stat(filepath.Join(rootAbs, filepath.FromSlash(e)))
+		if serr != nil {
+			return nil, nil, fmt.Errorf("--bind-dir %s: %w", e, serr)
+		}
+		if !fi.IsDir() {
+			return nil, nil, fmt.Errorf("--bind-dir %s: not a directory", e)
+		}
+	}
+
 	// os.Root confines every open to the repo dir: a symlink pointing outside
 	// the tree can't be followed, so a malicious checkout can't smuggle
 	// /etc/passwd into the jail workspace (gosec G122 / CWE-367 TOCTOU).
 	r, err := os.OpenRoot(root)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer func() { _ = r.Close() }()
 
 	files := make(map[string]string)
+	var binds []adequacy.DepBind
 	var total int64
 	walkErr := fs.WalkDir(r.FS(), ".", func(rel string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -737,6 +822,14 @@ func loadRepoFiles(root string) (map[string]string, error) {
 		if d.IsDir() {
 			if d.Name() == ".git" {
 				return fs.SkipDir
+			}
+			if rel != "." && shouldBind(rel, d.Name(), opts) {
+				absHost, aerr := filepath.Abs(filepath.Join(root, filepath.FromSlash(rel)))
+				if aerr != nil {
+					return aerr
+				}
+				binds = append(binds, adequacy.DepBind{Host: absHost, Rel: rel})
+				return fs.SkipDir // do NOT copy the dep dir into the seed
 			}
 			return nil
 		}
@@ -770,9 +863,9 @@ func loadRepoFiles(root string) (map[string]string, error) {
 		return nil
 	})
 	if walkErr != nil {
-		return nil, walkErr
+		return nil, nil, walkErr
 	}
-	return files, nil
+	return files, binds, nil
 }
 
 // writeLocalRecordFile exports the signed --local verdict as a self-contained

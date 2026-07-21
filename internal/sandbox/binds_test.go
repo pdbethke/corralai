@@ -39,7 +39,16 @@ func TestContainerWrapReadOnlyBinds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(strings.Join(argv, " "), "-v /proj/node_modules:/tmp/ws/node_modules:ro") {
+	joined := strings.Join(argv, " ")
+	if !strings.Contains(joined, "-v /proj/node_modules:/tmp/ws/node_modules:ro") {
 		t.Fatalf("container argv missing ro volume: %v", argv)
+	}
+	// the -v bind flag must precede the image arg (docker/podman parse flags
+	// before the positional image, and a bind flag placed after it would be
+	// swallowed as a command arg instead of a mount)
+	bindIdx := strings.Index(joined, "-v /proj/node_modules:/tmp/ws/node_modules:ro")
+	imgIdx := strings.Index(joined, "img")
+	if bindIdx < 0 || imgIdx < 0 || imgIdx < bindIdx {
+		t.Fatalf("bind flag must precede the image arg: bind=%d img=%d argv=%v", bindIdx, imgIdx, argv)
 	}
 }

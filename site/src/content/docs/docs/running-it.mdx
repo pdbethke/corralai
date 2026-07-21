@@ -132,14 +132,22 @@ never installs anything on your behalf.
 - When anything is bound, the run prints `deps: bound N dir(s) read-only
   (<names>) — not copied into the jail seed`.
 
-**The honest container caveat.** `bwrap` (Linux default) and `sandbox-exec`
-(macOS) bind read-only dirs cleanly — no size limit, no copy. The `--jail
-container` backend is different: containers remap the host uid, so a
-container process can't read a dep dir it doesn't have world-read
-permission on. `--jail container` binds only **world-readable** dep dirs;
-anything more restrictively permissioned is copied into the seed instead
-(and so is subject to the workspace size cap) — a loud fallback, not a
-silent one, but still a real behavior difference from the bwrap/macOS path.
+**The honest backend caveat.** Binding a dep dir requires the backend to
+**relocate** it into the jail workspace — only `bwrap` (Linux default, via
+`--ro-bind Host Target`) and `--jail container` (via `-v Host:Target:ro`) can
+do that. `bwrap` binds cleanly with no size limit and no copy. `--jail
+container` is more restricted: containers remap the host uid, so a container
+process can't read a dep dir it doesn't have world-read permission on —
+`--jail container` binds only **world-readable** dep dirs; anything more
+restrictively permissioned is copied into the seed instead (and so is
+subject to the workspace size cap) — a loud fallback, not a silent one.
+
+**macOS `sandbox-exec` cannot bind dep dirs at all.** `sandbox-exec` only
+grants read access at a dir's *original* host path — it has no primitive to
+relocate a dir into the jail workspace, which is where the test toolchain
+(cwd = the workspace) needs to find it. So on macOS (and on any other/unknown
+backend), every dep dir is **copied** into the workspace seed, the same as
+`--no-bind-deps`, and is subject to the 64 MiB workspace size cap.
 
 ## The verify gate needs a sandbox (Ubuntu 24.04+)
 

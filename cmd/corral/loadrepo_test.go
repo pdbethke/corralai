@@ -116,3 +116,55 @@ func TestLoadRepoFilesContainerBackendCopiesNonWorldReadableDep(t *testing.T) {
 		t.Fatalf("non-world-readable dep dir must be copied into the seed instead: %v", keysOf(files))
 	}
 }
+
+// TestLoadRepoFilesSandboxExecBackendCopiesDeps proves the macOS-broken-bind
+// fix (whole-branch review finding #1): sandbox-exec (and any backend other
+// than bwrap/container) has no primitive to RELOCATE a dir into the jail
+// workspace — it only grants file-read* at the dir's ORIGINAL host path — so
+// a dep dir must be COPIED into the seed on that backend, never bound, even
+// though it's an auto-detected (and world-readable) dep dir name.
+func TestLoadRepoFilesSandboxExecBackendCopiesDeps(t *testing.T) {
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		"src/index.js":          "code",
+		"node_modules/pkg/i.js": "dep code",
+	})
+
+	files, binds, err := loadRepoFiles(root, loadOpts{BackendName: "sandbox-exec"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(binds) != 0 {
+		t.Fatalf("sandbox-exec cannot relocate a dir into the workspace — must NOT bind, got %+v", binds)
+	}
+	if _, ok := files["node_modules/pkg/i.js"]; !ok {
+		t.Fatalf("dep dir must be copied into the seed on sandbox-exec: %v", keysOf(files))
+	}
+}
+
+// TestLoadRepoFilesBindDirNonCanonicalMatches proves the fail-closed
+// normalization fix (whole-branch review finding #2): a --bind-dir entry
+// like "./thirdparty" or "thirdparty/" must still match the walk's clean
+// slash-separated rel and get bound, not silently no-op.
+func TestLoadRepoFilesBindDirNonCanonicalMatches(t *testing.T) {
+	cases := []string{"./thirdparty", "thirdparty/", "thirdparty"}
+	for _, entry := range cases {
+		t.Run(entry, func(t *testing.T) {
+			root := t.TempDir()
+			writeTree(t, root, map[string]string{"src/a.go": "x", "thirdparty/lib.go": "y"})
+			_, binds, err := loadRepoFiles(root, loadOpts{BackendName: "bwrap", ExtraBindDir: []string{entry}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, b := range binds {
+				if b.Rel == "thirdparty" {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("--bind-dir %q not bound (normalization missing): %+v", entry, binds)
+			}
+		})
+	}
+}

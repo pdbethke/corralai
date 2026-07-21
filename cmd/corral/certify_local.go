@@ -124,6 +124,15 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "corral certify --local: --goal is required")
 		return 2
 	}
+	// --bind-dir/--no-bind-deps only apply to --repo-dir mode: loadRepoFiles
+	// (the only thing that reads them) is never called for a single-file
+	// --code path. Without --repo-dir they'd be silently unread — refuse
+	// loudly instead so an operator's misplaced flag doesn't look like a
+	// no-op.
+	if strings.TrimSpace(*repoDirFlag) == "" && (len(bindDirFlag) > 0 || *noBindDepsFlag) {
+		fmt.Fprintln(stderr, "corral certify --local: --bind-dir/--no-bind-deps require --repo-dir (they configure how the cloned tree is seeded into the jail; a single --code file has no dependency dirs to bind or copy)")
+		return 2
+	}
 
 	// Resolve the language plugin the jail will grade with — from --lang, else
 	// the code file's extension. Fail closed on an unknown language: the gate
@@ -769,10 +778,13 @@ var depDirNames = map[string]bool{
 
 // shouldBind reports whether the dir at rel (base name name) should be
 // bind-mounted read-only rather than copied. Auto-detected dep dirs and
-// --bind-dir entries qualify, unless --no-bind-deps is set. On the container
-// backend a non-world-readable dep dir is copied instead (degrade loudly): the
-// container maps host uid → a different uid and can't read 0700 trees, and a
-// read-only bind can't be chmod'd — so fall back to the seed (and its cap).
+// --bind-dir entries qualify, unless --no-bind-deps is set. The backend must
+// then also be able to RELOCATE the dir to the per-run workspace (Target) —
+// only bwrap (--ro-bind Host Target) and container (-v Host:Target:ro) can.
+// macOS sandbox-exec (and any other/unknown backend) grants file-read* at the
+// dir's ORIGINAL host path only, with no relocate primitive, so it must copy
+// the dep dir into the seed instead (subject to the 64 MiB cap) — binding it
+// would leave the toolchain (cwd = workspace) unable to find it at all.
 func shouldBind(rel, name string, opts loadOpts) bool {
 	if opts.NoBindDeps {
 		return false
@@ -787,10 +799,17 @@ func shouldBind(rel, name string, opts loadOpts) bool {
 	if !auto && !extra {
 		return false
 	}
-	if opts.BackendName == "container" && !worldReadableDir(filepath.Join(opts.rootAbs, filepath.FromSlash(rel))) {
-		return false // copy it instead; may hit the cap → the existing clear error
+	switch opts.BackendName {
+	case "bwrap":
+		return true
+	case "container":
+		// The container backend maps host uid → a different uid and can't read
+		// 0700 trees, and a read-only bind can't be chmod'd — so a
+		// non-world-readable dep dir is copied instead (degrade loudly).
+		return worldReadableDir(filepath.Join(opts.rootAbs, filepath.FromSlash(rel)))
+	default:
+		return false // sandbox-exec / none / unknown → copy (may hit the cap)
 	}
-	return true
 }
 
 // worldReadableDir reports whether dir is readable+traversable by "other"
@@ -827,7 +846,14 @@ func loadRepoFiles(root string, opts loadOpts) (map[string]string, []adequacy.De
 
 	// Validate --bind-dir entries up front (fail-closed): a missing or
 	// non-dir entry is a clear error before the walk starts, not a silent
-	// no-op discovered later inside the sandbox.
+	// no-op discovered later inside the sandbox. Also NORMALIZE each entry to
+	// a clean slash path here, once: a non-canonical entry like "./thirdparty"
+	// or "thirdparty/" passes this stat check fine but would never equal the
+	// walk's already-clean slash `rel` in shouldBind's `e == rel` match, so it
+	// would silently produce no bind and no error — the opposite of
+	// fail-closed. Store the normalized form back into opts.ExtraBindDir so
+	// every later match (in shouldBind) compares clean-to-clean.
+	normalized := make([]string, 0, len(opts.ExtraBindDir))
 	for _, e := range opts.ExtraBindDir {
 		// Reject anything that isn't a clean repo-relative path BEFORE
 		// stat'ing it: an absolute path or a `../`-escaping entry would stat
@@ -845,7 +871,10 @@ func loadRepoFiles(root string, opts loadOpts) (map[string]string, []adequacy.De
 		if !fi.IsDir() {
 			return nil, nil, fmt.Errorf("--bind-dir %s: not a directory", e)
 		}
+		norm := filepath.ToSlash(clean)
+		normalized = append(normalized, norm)
 	}
+	opts.ExtraBindDir = normalized
 
 	// os.Root confines every open to the repo dir: a symlink pointing outside
 	// the tree can't be followed, so a malicious checkout can't smuggle

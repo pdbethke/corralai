@@ -1080,6 +1080,40 @@ func TestBuildLoadOpts(t *testing.T) {
 	}
 }
 
+// TestRunCertifyLocal_BindDirWithoutRepoDirFailsClosed proves the whole-branch
+// review finding #4 fix: --bind-dir/--no-bind-deps only mean anything in
+// --repo-dir mode (loadRepoFiles is the only reader of either), so passing
+// them for a single-file --code run must refuse loudly instead of silently
+// ignoring the flag.
+func TestRunCertifyLocal_BindDirWithoutRepoDirFailsClosed(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := runCertifyLocal([]string{
+		"--code", "foo.go",
+		"--goal", "correctness",
+		"--bind-dir", "vendor",
+	}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("want exit 2, got %d (stderr=%q)", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "--repo-dir") {
+		t.Fatalf("stderr should explain --bind-dir needs --repo-dir, got %q", stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = runCertifyLocal([]string{
+		"--code", "foo.go",
+		"--goal", "correctness",
+		"--no-bind-deps",
+	}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("want exit 2 for --no-bind-deps without --repo-dir, got %d (stderr=%q)", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "--repo-dir") {
+		t.Fatalf("stderr should explain --no-bind-deps needs --repo-dir, got %q", stderr.String())
+	}
+}
+
 // TestLoadRepoFiles_BindDirEscape_FailsClosed proves the Task 3 review
 // finding is fixed: a --bind-dir entry that escapes the repo root (via `..`
 // or an absolute path) must error clearly BEFORE the walk, not silently fail

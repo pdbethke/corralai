@@ -8,7 +8,7 @@ description: Generated CLI reference for corral-agent — never hand-written; se
 ## Usage
 
 ```
-corral-agent — reference LLM-driven agent for the demo (local Ollama by default)
+corral-agent — reference LLM-driven audit-role worker (local Ollama by default)
 
 Usage:
   corral-agent            connect to the brain and work the queue
@@ -17,11 +17,10 @@ Usage:
 
 Env:
   CORRAL_BRAIN       brain URL (default http://127.0.0.1:9019/mcp/)
-  AGENT_ROLE         role(s) to serve (default builder): a single role
-                     (builder | tester | pentester | reviewer | ...), a
-                     comma-separated list (e.g. "researcher,designer,tester")
-                     to claim any ready task in that set, or "any"/"*"/empty
-                     to claim ANY ready task as a pure generalist
+  AGENT_ROLE         role(s) to serve (default generalist): a single role
+                     (mutant-generator | test-writer | test-critic | ...), a
+                     comma-separated list to claim any ready task in that set,
+                     or "generalist"/"any"/"*"/empty to claim ANY ready task
   AGENT_NAME         display name in the swarm UI (default same as AGENT_ROLE,
                      e.g. "researcher+designer" or "generalist")
   AGENT_WORKSPACE    working directory for edits (default $TMPDIR/corral-demo-ws)

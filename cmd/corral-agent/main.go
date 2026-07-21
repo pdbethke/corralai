@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: Elastic-2.0
 
-// Command corral-agent is a reference agent for the demo: a real LLM (local Ollama)
-// drives a coding-work loop and coordinates through the corral brain over MCP —
-// claim before editing, mark done, release. The model picks the tools; the agent
-// executes them against the brain and the shared workspace.
+// Command corral-agent is the reference audit-role worker: a real LLM (local
+// Ollama by default) claims an adversarial-audit role off the brain's task
+// queue — mutant-generator, test-writer, or test-critic — and coordinates over
+// MCP (claim, work, mark done, release). It is the distributed half of
+// certify-by-execution: the model produces a typed artifact, the brain scores
+// it in the jail. The model picks the tools; the agent executes them.
 package main
 
 import (
@@ -55,7 +57,7 @@ func env(k, d string) string {
 }
 
 func usageText() string {
-	return `corral-agent — reference LLM-driven agent for the demo (local Ollama by default)
+	return `corral-agent — reference LLM-driven audit-role worker (local Ollama by default)
 
 Usage:
   corral-agent            connect to the brain and work the queue
@@ -64,11 +66,10 @@ Usage:
 
 Env:
   CORRAL_BRAIN       brain URL (default http://127.0.0.1:9019/mcp/)
-  AGENT_ROLE         role(s) to serve (default builder): a single role
-                     (builder | tester | pentester | reviewer | ...), a
-                     comma-separated list (e.g. "researcher,designer,tester")
-                     to claim any ready task in that set, or "any"/"*"/empty
-                     to claim ANY ready task as a pure generalist
+  AGENT_ROLE         role(s) to serve (default generalist): a single role
+                     (mutant-generator | test-writer | test-critic | ...), a
+                     comma-separated list to claim any ready task in that set,
+                     or "generalist"/"any"/"*"/empty to claim ANY ready task
   AGENT_NAME         display name in the swarm UI (default same as AGENT_ROLE,
                      e.g. "researcher+designer" or "generalist")
   AGENT_WORKSPACE    working directory for edits (default $TMPDIR/corral-demo-ws)
@@ -166,7 +167,7 @@ func main() {
 		// a small herd of multi-role bees can then cover every role a
 		// mission plans instead of deadlocking on the first one nobody
 		// staffs (#23/#39).
-		rs   = agentrole.Parse(env("AGENT_ROLE", "builder"))
+		rs   = agentrole.Parse(env("AGENT_ROLE", "generalist"))
 		role = rs.Display()
 		name = env("AGENT_NAME", role)
 		ws   = env("AGENT_WORKSPACE", filepath.Join(os.TempDir(), "corral-demo-ws"))

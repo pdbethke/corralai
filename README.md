@@ -205,11 +205,12 @@ with the hardware it ran on and honest per-run analytics. Full docs at
 - **Model-agnostic** — Ollama or any OpenAI-compatible backend (Gemini, OpenRouter,
   Anthropic, local, …). Not wired to one LLM.
 - **Harness-agnostic** — the herd "contract" is nothing but MCP calls against the
-  brain (`bootstrap → claim_task → work → complete_task`); `corral-agent` is its
-  reference implementation. **`corral-harness`** loops any headless coding agent as a
-  herd member — Claude Code, Gemini CLI, Codex, GitHub Copilot CLI — each bringing its
-  own tool loop, sandbox, and **its own auth**: they run on their own Pro/Max/Plus
-  subscriptions, no API billing.
+  brain (`bootstrap → claim_task → work → complete_task`, where the tasks are the
+  adversarial-audit roles — mutant-generator, test-writer, test-critic); `corral-agent`
+  is its reference implementation. **`corral-harness`** loops any headless coding-agent
+  CLI as an audit-role worker — Claude Code, Gemini CLI, Codex, GitHub Copilot CLI —
+  each bringing its own tool loop, sandbox, and **its own auth**: they run on their own
+  Pro/Max/Plus subscriptions, no API billing.
   ```bash
   CORRAL_BRAIN=http://localhost:9019 AGENT_NAME=Cody AGENT_ROLE=reviewer \
   HARNESS_CMD='claude -p {prompt} --mcp-config {mcp_config} --allowedTools "mcp__corral,Read,Write,Edit,Bash" --permission-mode acceptEdits' \
@@ -285,10 +286,11 @@ Corralai is a **headless server with thin client apps**, like a backup system:
 | Binary | Role | CGO | Ships as |
 |--------|------|-----|----------|
 | **`corral`** | the **brain** — MCP coordination, the gates, task queue, memory, reference RAG, repo-work + multi-forge, the fleet oracle, embedded UI; owns the databases | yes | `deploy/demo/Dockerfile.brain` |
-| **`corral-agent`** | the reference **agent** — model-agnostic worker | no | `deploy/demo/Dockerfile.agent` (distroless) |
+| **`corral-agent`** | the reference **audit-role worker** — model-agnostic, claims an adversarial-audit role (mutant-generator / test-writer / test-critic) off the queue | no | `deploy/demo/Dockerfile.agent` (distroless) |
 | **`corral-observe`** | the **observer** — read-only credentialed window onto a brain's live UI | no | `deploy/observe/Dockerfile` (distroless) |
 | **`corral-admin`** | the **operator** — privileged live console plus command verbs over MCP | no | binary / `go install` |
-| **`corral-harness`** | the **harness-agent launcher** — loops any headless coding agent as a herd member on ITS auth | no | binary / `go install` |
+| **`corral-desktop`** | the **desktop client** — native-window (`--app` mode) launcher onto a local console | no | binary / `go install` |
+| **`corral-harness`** | the **harness-agent launcher** — loops any headless coding-agent CLI as an audit-role worker on ITS auth | no | binary / `go install` |
 
 The observer and admin consoles share one reverse-proxy core (`internal/console`),
 parameterized read-only vs read-write.

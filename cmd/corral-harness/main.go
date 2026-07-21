@@ -16,7 +16,7 @@
 //
 //	CORRAL_BRAIN   brain URL (default http://localhost:9019)
 //	AGENT_NAME       swarm name (default Harness)
-//	AGENT_ROLE       role(s) to serve (default builder): a single role, a
+//	AGENT_ROLE       role(s) to serve (default generalist): a single role, a
 //	               comma-separated list (e.g. "researcher,designer,tester") to
 //	               claim any ready task in that set, or "any"/"*"/empty to
 //	               claim ANY ready task as a pure generalist
@@ -105,7 +105,7 @@ Usage:
 Env:
   CORRAL_BRAIN   brain URL (default http://localhost:9019)
   AGENT_NAME       swarm name (default Harness)
-  AGENT_ROLE       role(s) to serve (default builder): a single role, a
+  AGENT_ROLE       role(s) to serve (default generalist): a single role, a
                  comma-separated list (e.g. "researcher,designer,tester") to
                  claim any ready task in that set, or "any"/"*"/empty to
                  claim ANY ready task as a pure generalist
@@ -231,7 +231,7 @@ func main() {
 		}
 	}
 	brain := env("CORRAL_BRAIN", "http://localhost:9019")
-	rs := agentrole.Parse(env("AGENT_ROLE", "builder"))
+	rs := agentrole.Parse(env("AGENT_ROLE", "generalist"))
 	role := rs.Display() // e.g. "builder", "researcher+designer", or "generalist"
 	name := env("AGENT_NAME", "Harness")
 	ws := env("AGENT_WORKSPACE", ".")

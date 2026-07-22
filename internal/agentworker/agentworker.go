@@ -181,7 +181,11 @@ Task: ` + instruction
 		}
 		callName, args, ok := extractCall(m)
 		if !ok {
-			if c := oneline(m.Content); c != "" {
+			// Collapse whitespace to a single line but do NOT truncate: this
+			// summary is the critic's recorded RESULT, and a drill-down modal
+			// (which scrolls) shows it in full — a mid-word "…" cut lost the
+			// actual reasoning. oneline (110-char) is for log lines, not this.
+			if c := strings.TrimSpace(strings.Join(strings.Fields(m.Content), " ")); c != "" {
 				last = c
 			}
 			return last, findings, nil

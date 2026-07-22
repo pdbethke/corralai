@@ -1804,7 +1804,7 @@ function buildReplayTaskStories(){
       if(t) t.commands.push({command: ev.subject || '', ok: !!d.ok, exitCode: d.exit_code == null ? '' : d.exit_code, ts: ev.ts});
     } else if(ev.kind === 'finding_reported' && ev.actor){
       const t = ownerTaskAt(tasks, ev.actor, ev.ts);
-      if(t) t.findings.push({type: d.type || '', severity: d.severity || '', target: ev.subject || '', ts: ev.ts});
+      if(t) t.findings.push({type: d.type || '', severity: d.severity || '', target: ev.subject || '', evidence: d.evidence || '', ts: ev.ts});
     }
   }
   return {tasks, base};
@@ -1870,6 +1870,7 @@ function ensureReplayTaskStyles(){
 .aw-body .aw-phase { color: var(--stage-muted,#8a8170); font-style:italic; }
 .aw-body .aw-timing { color: var(--stage-muted,#8a8170); font-size:11.5px; line-height:1.6; }
 .aw-body .aw-result { max-height:220px; overflow:auto; font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11px; line-height:1.5; color: var(--stage-fg,#e6e1d8); background: var(--stage-bg,#0e1116); border: 1px solid var(--stage-line,#33405a); border-radius:6px; padding:8px; white-space:pre-wrap; word-break:break-word; margin:2px 0 4px; }
+.aw-body .aw-fev { max-height:180px; overflow:auto; font-size:12px; line-height:1.55; color: var(--stage-muted,#b8b0a0); background: var(--stage-bg,#0e1116); border-left:2px solid var(--stage-line,#33405a); border-radius:0 4px 4px 0; padding:6px 10px; white-space:pre-wrap; overflow-wrap:anywhere; margin:2px 0 8px; }
 .aw-body .faultline { background: rgba(232,80,58,.32); color: var(--stage-red,#ff7a63); font-weight:700; border-radius:3px; padding:0 2px; margin:0 -2px; box-decoration-break:clone; -webkit-box-decoration-break:clone; }
 `;
   document.head.appendChild(s);
@@ -1978,6 +1979,10 @@ function renderReplayTaskWindowBody(key){
     h += '<div class="isec">findings <span class="ir">· reported while holding this task</span></div>';
     t.findings.slice(0, 8).forEach(f => {
       h += '<div class="aw-frow"><span class="aw-fsev" style="color:' + sevColor(f.severity) + '">' + esc(f.severity || 'finding') + '</span> <span class="ir">' + esc(f.type) + '</span>' + (f.target ? ' <span style="color:var(--stage-fg,#e6e1d8)">' + esc(f.target) + '</span>' : '') + '</div>';
+      // The critic's ACTUAL ARGUMENT (finding evidence) is the "what the agent
+      // did" — render it in full (the box scrolls) instead of only the target,
+      // which read as a bare label with no reasoning behind it.
+      if(f.evidence) h += '<div class="aw-fev">' + esc(f.evidence) + '</div>';
     });
   }
 

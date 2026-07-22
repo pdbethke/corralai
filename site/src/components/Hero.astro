@@ -41,19 +41,38 @@ const minutes = Math.round((meta.duration_seconds || 0) / 60);
 const events = Array.isArray(golden.events) ? golden.events : [];
 const poolVerdict = events.find((e: any) => e?.kind === 'pool_verdict')?.detail;
 const poolSubject = events.find((e: any) => e?.kind === 'pool_subject')?.detail;
+// The critic's flags are advisory (never gate the verdict) — surface the count
+// and the first one's evidence so the breakdown shows the herd's actual output.
+const criticFindings = events
+  .filter((e: any) => e?.kind === 'finding_reported' && e?.detail?.role === 'test-critic')
+  .map((e: any) => e.detail);
+const caughtN =
+  poolVerdict && poolVerdict.mutants_total != null && poolVerdict.survivors != null
+    ? poolVerdict.mutants_total - poolVerdict.survivors
+    : null;
 const pool = poolVerdict
   ? {
       codePath: poolSubject?.code_path || 'the change',
+      goal: poolSubject?.goal || '',
+      devTestPath: poolSubject?.dev_test_path || '',
       mutants: poolVerdict.mutants_total,
       survivors: poolVerdict.survivors,
-      caught:
-        poolVerdict.mutants_total != null && poolVerdict.survivors != null
-          ? poolVerdict.mutants_total - poolVerdict.survivors
-          : null,
+      caught: caughtN,
+      killPct:
+        poolVerdict.dev_kill_rate != null
+          ? Math.round(poolVerdict.dev_kill_rate * 100)
+          : caughtN != null && poolVerdict.mutants_total
+            ? Math.round((caughtN / poolVerdict.mutants_total) * 100)
+            : null,
       planter: poolVerdict.models_by_role?.['mutant-generator'],
+      writer: poolVerdict.models_by_role?.['test-writer'],
       critic: poolVerdict.models_by_role?.['test-critic'],
       provenMissed: poolVerdict.proven_missed || 0,
+      certified: poolVerdict.status === 'certified',
       statusLabel: poolVerdict.status === 'certified' ? 'CERTIFIED' : 'NEEDS-REVIEW',
+      criticCount: criticFindings.length,
+      criticEvidence: (criticFindings[0]?.evidence || '').trim(),
+      recordId: poolVerdict.record_id,
     }
   : null;
 ---
@@ -106,6 +125,55 @@ const pool = poolVerdict
       </div>
     </div>
   </div>
+  {pool && (
+    <div class="hero-copy hero-breakdown-wrap">
+      <div class="verdict-strip">
+        <span class={`vs-status ${pool.certified ? 'is-cert' : 'is-review'}`}>{pool.statusLabel}</span>
+        <span class="vs-file"><code>{pool.codePath}</code></span>
+        <span class="vs-metric"><strong>{pool.caught}/{pool.mutants}</strong> faults caught{pool.killPct != null ? ` · ${pool.killPct}% kill-rate` : ''}</span>
+        <span class="vs-herd">{pool.planter}{pool.critic && pool.critic !== pool.planter ? ` + ${pool.critic}` : ''}</span>
+      </div>
+      <details class="hero-breakdown">
+        <summary><span>What you just watched — the full breakdown</span><span class="chev" aria-hidden="true">▾</span></summary>
+        <div class="bd-grid">
+          <section class="bd-block">
+            <h4>What was tested</h4>
+            <dl>
+              <div><dt>Code under audit</dt><dd><code>{pool.codePath}</code></dd></div>
+              {pool.goal && <div><dt>The goal it must satisfy</dt><dd>“{pool.goal}”</dd></div>}
+              {pool.devTestPath && <div><dt>Graded by</dt><dd><code>{pool.devTestPath}</code> — the library’s own tests</dd></div>}
+            </dl>
+          </section>
+          <section class="bd-block">
+            <h4>The decorrelated herd</h4>
+            <dl>
+              <div><dt>Planted the faults</dt><dd>{pool.planter}</dd></div>
+              {pool.writer && <div><dt>Wrote exposing tests</dt><dd>{pool.writer}</dd></div>}
+              <div><dt>Critiqued the suite <span class="tag">different model</span></dt><dd>{pool.critic}</dd></div>
+            </dl>
+          </section>
+          <section class="bd-block bd-wide">
+            <h4>What happened, in a jail</h4>
+            <ul>
+              <li>Planted <strong>{pool.mutants}</strong> goal-violating mutants across the file.</li>
+              <li>Ran the developer’s own suite against every one — it killed <strong>{pool.caught} of {pool.mutants}</strong>{pool.killPct != null ? ` (a ${pool.killPct}% kill-rate)` : ''}, measured by execution, not asserted.</li>
+              <li>Verdict: <strong class={pool.certified ? 'ok' : 'review'}>{pool.statusLabel}</strong> — signed and offline-verifiable{pool.provenMissed > 0 ? ', and the herd handed back a compiling test that kills the gap' : ''}.</li>
+            </ul>
+          </section>
+          <section class="bd-block bd-wide">
+            <h4>What it does — and doesn’t — claim</h4>
+            <ul>
+              <li><strong>{pool.survivors} survivor{pool.survivors === 1 ? '' : 's'}</strong> disclosed, <em>unadjudicated</em>: an injected mutant the suite didn’t kill — a real untested edge, <em>or</em> an equivalent mutant nothing can catch. Corral hands it to a human to judge; it doesn’t rule a well-loved library buggy.</li>
+              {pool.criticCount > 0 && (
+                <li>The decorrelated critic flagged <strong>{pool.criticCount}</strong> possible dead test{pool.criticCount === 1 ? '' : 's'} — <em>advisory, unverified, and structurally barred from gating the signed verdict</em>.{pool.criticEvidence && <span class="bd-ev"> {pool.criticEvidence.slice(0, 200)}…</span>}</li>
+              )}
+            </ul>
+          </section>
+        </div>
+        <a class="bd-link" href={`/recordings/#${heroSlug}`}>Replay the full run and open the tests tab →</a>
+      </details>
+    </div>
+  )}
   <div class="hero-copy hero-bottom">
     <p class="proof-row">
       <span>Certified <em>by execution</em> — run in a jail, not taken on a model's word</span>
@@ -324,6 +392,58 @@ const pool = poolVerdict
     --green: #8fdcab; --red: #e8503a; --amber: var(--stage-amber);
   }
   #c { width: 100%; height: 100%; display: block; }
+
+  /* --- "what you just watched" breakdown: bridges the replay to the pitch --- */
+  .hero-breakdown-wrap { max-width: 1100px; margin: 18px auto 8px; text-align: left; }
+  .verdict-strip {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px;
+    padding: 12px 16px; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; font-size: 0.92rem; color: var(--muted);
+  }
+  .vs-status {
+    font-weight: 800; letter-spacing: 0.03em; font-size: 0.8rem; text-transform: uppercase;
+    padding: 4px 10px; border-radius: 999px; border: 1px solid transparent;
+  }
+  .vs-status.is-cert { color: var(--green); border-color: var(--green); background: var(--sel); }
+  .vs-status.is-review { color: var(--amber); border-color: var(--amber); background: var(--sel); }
+  .vs-file code { color: var(--fg); font-size: 0.86rem; }
+  .vs-metric { color: var(--fg); }
+  .vs-metric strong { color: var(--fg); }
+  .vs-herd { margin-left: auto; font-family: ui-monospace, monospace; font-size: 0.8rem; }
+
+  .hero-breakdown { margin-top: 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+  .hero-breakdown > summary {
+    list-style: none; cursor: pointer; user-select: none;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 16px; font-weight: 700; color: var(--fg); font-size: 0.98rem;
+  }
+  .hero-breakdown > summary::-webkit-details-marker { display: none; }
+  .hero-breakdown > summary:hover { color: var(--amber); }
+  .hero-breakdown .chev { transition: transform 0.15s ease; color: var(--muted); }
+  .hero-breakdown[open] .chev { transform: rotate(180deg); }
+
+  .bd-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px 26px; padding: 4px 18px 8px; }
+  .bd-block.bd-wide { grid-column: 1 / -1; }
+  .bd-block h4 { margin: 0 0 8px; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--amber); }
+  .bd-block dl { margin: 0; display: flex; flex-direction: column; gap: 8px; }
+  .bd-block dl > div { display: grid; grid-template-columns: 190px 1fr; gap: 12px; align-items: baseline; }
+  .bd-block dt { color: var(--muted); font-size: 0.86rem; }
+  .bd-block dd { margin: 0; color: var(--fg); font-size: 0.92rem; }
+  .bd-block dd code, .bd-block dt code { font-family: ui-monospace, monospace; font-size: 0.85em; background: var(--sel); border-radius: 4px; padding: 1px 5px; }
+  .bd-block .tag { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.03em; color: var(--green); border: 1px solid var(--green); border-radius: 999px; padding: 1px 7px; margin-left: 6px; vertical-align: middle; }
+  .bd-block ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 7px; }
+  .bd-block li { color: var(--fg); font-size: 0.94rem; line-height: 1.55; }
+  .bd-block strong.ok { color: var(--green); }
+  .bd-block strong.review { color: var(--amber); }
+  .bd-ev { color: var(--muted); font-style: italic; }
+  .bd-link { display: inline-block; margin: 4px 18px 16px; font-weight: 600; font-size: 0.92rem; text-decoration: none; color: var(--amber); }
+  .bd-link:hover { text-decoration: underline; }
+
+  @media (max-width: 720px) {
+    .bd-grid { grid-template-columns: 1fr; }
+    .bd-block dl > div { grid-template-columns: 1fr; gap: 2px; }
+    .vs-herd { margin-left: 0; width: 100%; }
+  }
   #empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--stage-muted); pointer-events: none; }
   /* Bottom panel of the instrument — a child of #stage-frame, so it inherits
      the same content width (and 20px side gutters) as the console/cockpit and

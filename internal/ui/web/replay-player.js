@@ -2063,6 +2063,7 @@ function renderReplayPanels(){
   if(cvCurrentView === 'progress') renderReplayProgress();
   else if(cvCurrentView === 'topology') renderReplayTopology();
   else if(cvCurrentView === 'completed') renderReplayCompleted();
+  else if(cvCurrentView === 'proposals') renderReplayProposals();
   refreshReplayAgentWindows();
   refreshReplayWindows();
 }
@@ -2547,32 +2548,87 @@ function renderReplayCompleted(){
     + `<div class="cv-sum">${cvFmtDuration(r.durationSec)} · ${done}/${tasks.length} tasks · ${r.findings} finding${r.findings===1?'':'s'}${r.critHigh?` (${r.critHigh} high)`:''}</div>`
     + `<div class="cv-note">This is the mission that plays in the cockpit — the full recorded run, replayable end to end.</div></div></div>`;
 }
+// whLink: a grounding link to the DuckDB integration page, pre-running a query
+// (?q=). Rendered ONLY where /warehouse exists — the site (its Header carries
+// the link); the product cockpit has no such route, so it renders nothing.
+// Turns any claim into one click from the exact SQL that grounds it — the
+// telemetry is captured; this stops it being hidden.
+const WH_KILLRATE = "SELECT l.repo, IF(l.certified,'CERTIFIED','needs-review') AS verdict, SUM(b.mutants_killed) AS killed, SUM(b.mutants_planted) AS planted, ROUND(100.0*SUM(b.mutants_killed)/SUM(b.mutants_planted),1) AS kill_pct FROM audit_ledger l JOIN bug_catches b ON b.record_id=l.id GROUP BY 1,2 ORDER BY kill_pct DESC";
+const WH_SCORECARD = "SELECT model, role, COUNT(*) AS seats, SUM(mutants_planted) AS planted, ROUND(100.0*SUM(mutants_killed)/SUM(mutants_planted),1) AS caught_pct FROM bug_catches GROUP BY 1,2 ORDER BY planted DESC";
+function whLink(q, label){
+  if(!document.querySelector('a[href="/warehouse/"]')) return '';
+  return ' <a class="cv-whlink" href="/warehouse/?q=' + encodeURIComponent(q) + '">▸ ' + esc(label) + '</a>';
+}
 function renderSampleMemory(){
   const el = document.getElementById('memory'); if(!el) return;
   const rows = [
-    ['decision', 'retry backoff must be jittered', 'to avoid thundering-herd on a shared dependency'],
-    ['lesson', 'context cancellation beats a fixed deadline', 'so a caller can abort a slow retry loop'],
-    ['reference', 'table-driven tests for max-retries', 'cover 0, 1, N and the exhausted case'],
+    ['pattern', 'a length-only password test misses the digit/uppercase rules', 'planted 5 goal-violating mutants — a length-only suite killed 0'],
+    ['finding', 'range == tuple is always False in Python 3', 'a dead assertion the decorrelated critic flagged, execution-confirmed'],
+    ['adequacy', 'a 100%-passing suite still missed 40% of planted faults', 'kill-rate, not pass-count, is the real adequacy signal'],
   ];
-  el.innerHTML = `<div class="cv-pane"><div class="cv-explain">${cvSampleTag()} The shared corpus every agent reads from and writes back to — it grows as the herd learns. Populated live from the brain in the product.</div>`
+  el.innerHTML = `<div class="cv-pane"><div class="cv-explain">${cvSampleTag()} The shared corpus of execution-VERIFIED audit findings every connected client reads from and writes back to — patterns, not code. It grows as the herd audits. Populated live from the brain in the product.${whLink(WH_SCORECARD, 'see the execution telemetry in DuckDB')}</div>`
     + rows.map(([k,t,w]) => `<div class="cv-memrow"><span class="cv-kind">${esc(k)}</span><b>${esc(t)}</b><div class="cv-meta">${esc(w)}</div></div>`).join('') + '</div>';
 }
 function renderSampleSkills(){
   const el = document.getElementById('skills'); if(!el) return;
   const skills = [
-    ['go-retry-backoff', 'skills/go/retry-backoff', 'exponential backoff with jitter + context cancellation'],
-    ['table-tests', 'skills/go/table-tests', 'idiomatic table-driven test scaffolding'],
-    ['egress-scan', 'skills/security/egress-scan', 'vet output for secrets before it ships'],
+    ['mutation-hunks', 'skills/mutate/search-replace', 'minimal single-point, goal-violating edits that still compile'],
+    ['decorrelated-critic', 'skills/audit/decorrelated-critic', 'a cross-vendor critic reads the suite cold for vacuous tests'],
+    ['certify-by-execution', 'skills/audit/kill-rate-gate', 'grade the suite by the kill-rate a jail measures, never a model’s word'],
   ];
-  el.innerHTML = `<div class="cv-pane"><div class="cv-explain">${cvSampleTag()} Skills the fleet shares — synced by every member, versioned in the brain so one change propagates to all.</div>`
+  el.innerHTML = `<div class="cv-pane"><div class="cv-explain">${cvSampleTag()} Audit skills the fleet shares — how to plant faults, decorrelate the critic, certify by execution — synced by every member, versioned in the brain so one improvement propagates to all.${whLink(WH_SCORECARD, 'see which model catches bugs in DuckDB')}</div>`
     + skills.map(([n,p,d]) => `<div class="cv-skrow"><b>${esc(n)}</b> <span class="cv-meta">${esc(p)}</span><div class="cv-meta">${esc(d)}</div></div>`).join('') + '</div>';
 }
-function renderSampleProposals(){
+// renderReplayProposals: the herd's PROPOSED TESTS, reconstructed from the tape
+// up to the playhead. corral doesn't just grade your suite — when a planted
+// fault survives, the test-writer AUTHORS a test to kill it, and that authored
+// test IS a proposal: a human approves it into the suite. This surfaces that
+// real, execution-oriented output (a load-bearing product claim that otherwise
+// only appeared inline in the tests lens, and only when proven). Scrub-driven,
+// so it fills in when the writer hands one back.
+function renderReplayProposals(){
   const el = document.getElementById('proposals'); if(!el) return;
-  el.innerHTML = `<div class="cv-pane"><div class="cv-explain">${cvSampleTag()} The learning loop's human gate — the herd clusters findings into proposals; you approve what becomes standing memory or a shared skill.</div>`
-    + `<div class="cv-prop"><div class="cv-mhdr"><span class="cv-sig">retry without jitter → thundering herd</span><span class="cv-count">3×</span></div>`
-    + `<div class="cv-meta">Add jitter to backoff; the pentester flagged it across two missions.</div>`
-    + `<div class="cv-pactions"><button class="cv-acc" disabled>approve</button><button class="cv-rej" disabled>dismiss</button></div></div></div>`;
+  const upto = (typeof replayIdx === 'number') ? replayIdx : (replayEvents ? replayEvents.length : 0);
+  let proposed = '', mutantGen = '';
+  for(let i=0; i<upto && replayEvents && i<replayEvents.length; i++){
+    const ev = replayEvents[i];
+    if(ev.kind === 'task_done' && ev.detail && ev.detail.result){
+      const s = String(ev.subject||'');
+      if(/test-writer/.test(s)) proposed = String(ev.detail.result).trim();
+      else if(/mutant/.test(s) && ev.detail.result) mutantGen = ev.detail.result;
+    }
+  }
+  const V = replayPoolVerdict, S = replayPoolSubject, A = replayDevAdequacy;
+  const proven = V && V.provenMissed > 0;
+  let h = '<div class="cv-pane"><div class="cv-explain">The herd doesn’t just grade your suite — when a planted fault survives, it <b>proposes a test that kills it</b>. You approve what goes into the suite: the brain suggests, a human accepts. This is the human gate the audit runs on.' + whLink(WH_KILLRATE, 'see this run’s kill-rate in DuckDB') + '</div>';
+  if(!proposed){
+    h += '<div class="ft-empty">▌ No proposed test on this tape yet — the herd hands one back when the dev suite leaves a survivor it can target. Scrub forward…</div>';
+  } else {
+    h += '<div class="cv-prop"><div class="cv-mhdr"><span class="cv-sig">the herd proposes a test</span><span class="cv-count">' + (proven ? 'PROVEN — kills the survivor' : 'candidate') + '</span></div>';
+    // GOAL — what the code under review must satisfy (the test's reason to exist).
+    if(S && S.goal) h += '<div class="cv-meta"><b>goal:</b> ' + esc(S.goal) + '</div>';
+    // THE GAP — the surviving planted fault the proposal targets, highlighted
+    // against the original (the "test data": what this test is up against).
+    if(S && S.code){
+      const mutants = mutantGen ? parseMutants(mutantGen) : [];
+      const survIds = (A && A.survivor_ids) || [];
+      const surv = mutants.find(m => survIds.includes(m.id));
+      if(surv){
+        h += '<div class="tests-sec">the surviving fault it targets <span class="tests-note">· your suite passed this anyway</span></div>';
+        h += '<pre class="tests-code">' + renderFaultDiff(S.code, surv.code) + '</pre>';
+      }
+    }
+    // THE PROPOSED TEST — the authored source.
+    h += '<div class="tests-sec">the proposed test</div>';
+    h += '<pre class="tests-code">' + esc(proposed) + '</pre>';
+    // THE RESULT — execution outcome of running it against the fault.
+    h += '<div class="tests-verdict ' + (proven ? 'tv-ok' : 'tv-review') + '">' + esc(proven
+      ? 'result: run in the jail, this test KILLS the survivor — an execution-proof the gap is real and catchable'
+      : 'result: authored to close the gap; not execution-proven on this run — review before adding') + '</div>';
+    h += '<div class="cv-pactions"><button class="cv-acc" disabled>approve → add to suite</button><button class="cv-rej" disabled>dismiss</button></div></div>';
+  }
+  h += '</div>';
+  el.innerHTML = h;
 }
 // cockpitView: the site's tab switcher. Normalizes 'replay' → swarm (the stage
 // is the swarm surface here), toggles the active tab + the shown panel + the
@@ -2590,14 +2646,14 @@ function cockpitView(v){
   // via cvReduce). Only the sample panels (memory/skills/proposals), which show
   // a static labeled sample the tape never recorded, are position-independent
   // and hide the transport.
-  const timeline = (v === 'swarm' || v === 'files' || v === 'progress' || v === 'topology' || v === 'completed');
+  const timeline = (v === 'swarm' || v === 'files' || v === 'progress' || v === 'topology' || v === 'completed' || v === 'proposals');
   const bar = document.getElementById('replay'); if(bar) bar.classList.toggle('show', timeline);
   if(v === 'progress') renderReplayProgress();
   else if(v === 'topology') renderReplayTopology();
   else if(v === 'completed') renderReplayCompleted();
   else if(v === 'memory') renderSampleMemory();
   else if(v === 'skills') renderSampleSkills();
-  else if(v === 'proposals') renderSampleProposals();
+  else if(v === 'proposals') renderReplayProposals();
   else if(v === 'files'){ if(!renderReplayTests()) renderReplayFiles(); }   // audit run → the tests lens; build run → the file tree (both scrub-driven)
 }
 

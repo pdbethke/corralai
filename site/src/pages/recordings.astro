@@ -254,6 +254,8 @@ cards.sort((a, b) => leadRank(a.slug) - leadRank(b.slug) || a.slug.localeCompare
   :global(#cockpit .cv-kind) { display: inline-block; font-size: 11px; color: var(--stage-amber); text-transform: uppercase; letter-spacing: .5px; margin-right: 8px; }
   :global(#cockpit .cv-explain), :global(#cockpit .cv-note), :global(#cockpit .cv-tsum) { color: var(--stage-muted); font-size: 12px; margin-bottom: 12px; }
   :global(#cockpit .cv-note) { margin-top: 12px; }
+  :global(#cockpit .cv-whlink) { display: inline-block; margin-top: 4px; color: var(--stage-amber); text-decoration: none; font-weight: 600; white-space: nowrap; }
+  :global(#cockpit .cv-whlink:hover) { text-decoration: underline; }
   /* files lens — the tree nodes are injected at RUNTIME by renderReplayFiles
      (replay-player.js), so they carry no Astro scope attribute: these MUST be
      :global or they silently don't apply (same rule as .arow/.feedhdr). */

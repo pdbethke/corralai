@@ -160,7 +160,12 @@ const initialSql = PRESETS[1].sql;
       for (const b of document.querySelectorAll('.preset')) {
         b.addEventListener('click', () => { sqlEl.value = (b as HTMLElement).dataset.sql || ''; runQuery(); });
       }
-      runQuery(); // run the default preset on load
+      // A ?q=<sql> link (e.g. from a cockpit view — "see this query run")
+      // pre-fills and runs that exact query, so a claim is one click from its
+      // grounding.
+      const urlQ = new URLSearchParams(location.search).get('q');
+      if (urlQ) sqlEl.value = urlQ;
+      runQuery(); // run the URL query, or the default preset
     } catch (e: any) {
       statusEl!.textContent = 'DuckDB failed to load: ' + (e.message || String(e));
     }

@@ -3,16 +3,104 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 )
+
+// ensureGoVendored makes external Go modules resolvable inside the OFFLINE audit
+// jail. The jail has no network by design (the code under audit can't phone
+// home), and a repo's external deps live in the operator's module cache, which
+// is (a) incomplete for a full build and (b) deliberately NOT mounted into the
+// jail. So for a Go module that isn't already vendored, this stages a throwaway
+// copy of the repo and runs `go mod vendor` in it (network available HERE, on
+// the host, before the jail runs) — the jailed build then resolves everything
+// from vendor/ with no network and no access to the operator's cache. The
+// operator's real working tree is never modified; the copy is removed by the
+// returned cleanup. It's a no-op for non-Go code, a non-module dir, or a repo
+// that already carries vendor/ (which loadRepoFiles bind-mounts as-is).
+func ensureGoVendored(repoDir, langName string, out io.Writer) (string, func(), error) {
+	noop := func() {}
+	if langName != "go" {
+		return repoDir, noop, nil
+	}
+	if _, err := os.Stat(filepath.Join(repoDir, "go.mod")); err != nil {
+		return repoDir, noop, nil // not a module — nothing to vendor
+	}
+	if fi, err := os.Stat(filepath.Join(repoDir, "vendor")); err == nil && fi.IsDir() {
+		return repoDir, noop, nil // already vendored — the jail bind-mounts it
+	}
+	tmp, err := os.MkdirTemp("", "corral-vendor-")
+	if err != nil {
+		return "", noop, fmt.Errorf("corral certify --local: vendor staging dir: %w", err)
+	}
+	cleanup := func() { _ = os.RemoveAll(tmp) }
+	if cerr := copyTreeSkipGit(repoDir, tmp); cerr != nil {
+		cleanup()
+		return "", noop, fmt.Errorf("corral certify --local: staging repo copy for vendoring: %w", cerr)
+	}
+	fmt.Fprintln(out, "corral certify --local: vendoring Go dependencies (go mod vendor) so the offline jail can resolve them…")
+	cmd := exec.CommandContext(context.Background(), "go", "mod", "vendor")
+	cmd.Dir = tmp
+	if b, verr := cmd.CombinedOutput(); verr != nil {
+		cleanup()
+		return "", noop, fmt.Errorf("corral certify --local: `go mod vendor` failed — the offline jail can't resolve this repo's external deps without it: %v\n%s", verr, strings.TrimSpace(string(b)))
+	}
+	return tmp, cleanup, nil
+}
+
+// copyTreeSkipGit recursively copies src into an existing dst, skipping .git and
+// any symlink (never following one out of the tree). It stages a throwaway copy
+// of a repo for `go mod vendor` so the operator's real working tree is untouched.
+// Reads go through os.Root so a symlink can't escape src (gosec G122 / TOCTOU),
+// mirroring loadRepoFiles.
+func copyTreeSkipGit(src, dst string) error {
+	r, err := os.OpenRoot(src)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = r.Close() }()
+	return fs.WalkDir(r.FS(), ".", func(rel string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		target := filepath.Join(dst, filepath.FromSlash(rel))
+		if d.IsDir() {
+			if d.Name() == ".git" {
+				return fs.SkipDir
+			}
+			if rel == "." {
+				return nil
+			}
+			return os.MkdirAll(target, 0o750)
+		}
+		if d.Type()&fs.ModeSymlink != 0 {
+			return nil // do not follow symlinks out of the tree
+		}
+		in, oerr := r.Open(rel) // root-scoped: cannot escape src
+		if oerr != nil {
+			return oerr
+		}
+		defer func() { _ = in.Close() }()
+		out, ferr := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600) // #nosec G304 -- target confined to the temp staging dir
+		if ferr != nil {
+			return ferr
+		}
+		if _, werr := io.Copy(out, in); werr != nil {
+			_ = out.Close()
+			return werr
+		}
+		return out.Close()
+	})
+}
 
 // stringSlice is a minimal repeatable-string flag.Value (cmd/corral has no
 // existing repeatable-flag helper to reuse): each `--bind-dir <path>`

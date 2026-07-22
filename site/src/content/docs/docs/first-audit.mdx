@@ -99,11 +99,18 @@ jailed check in Docker instead — no sudo required.
    every mutant. It only ever calls `Valid` with a password that already
    satisfies every rule (or is simply too short) — so a mutant that *loosens*
    a rule (say, dropping the digit requirement) still passes: the input never
-   exercised the rule it broke. Several mutants survive.
+   exercised the rule it broke. Several mutants **survive** — a survivor is a
+   planted mutant your suite didn't catch. corral discloses it *unadjudicated*:
+   it may be a real untested edge, or an *equivalent mutant* (a change nothing
+   can observe, so no test could ever catch it). Which one is the human's call,
+   not the tool's — corral won't call an unproven survivor a real bug.
 4. **Test-writer.** For each surviving mutant, a test-writer model (a
    different model than the critic, enforced — decorrelation isn't optional)
-   writes a targeted test and the jail confirms it kills the mutant, proving
-   the gap is real and catchable, not a fluke of the harness.
+   writes a targeted test; if its first attempt doesn't compile, the compiler's
+   own error is **fed back** so it corrects rather than blindly repeating. When
+   the jail confirms the test kills the mutant, *that* survivor is now a
+   **proven**, catchable gap — not a fluke of the harness — and the test is
+   handed back for you to add.
 5. **Test-critic.** A decorrelated critic model reads the dev's test file cold
    and flags what it would have said in review: the suite never tries an
    *invalid* password that's the right length. Its findings are carried as an

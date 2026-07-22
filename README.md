@@ -46,8 +46,12 @@ actually test anything, or do they just pass?* — and answers it by execution:
 - Your **own test suite** is run against every one of them, **in a jail** — the
   fraction it catches (the *kill-rate*) is the adequacy score, measured, never a
   self-report.
-- A **test-writer** authors a compiling test that kills whatever your suite missed,
-  proving the gap is real and catchable — and hands it back to you.
+- A **test-writer** authors a compiling test that kills whatever your suite missed —
+  correcting itself when its test doesn't compile (the compiler's own error is fed
+  back) rather than blindly repeating. A surviving mutant is *disclosed,
+  unadjudicated* (a real gap, or an equivalent mutant no test can catch — your call);
+  only a survivor a compiling test actually kills is a **proven** gap, handed back to
+  you.
 - A **test-critic** — always a *different*, decorrelation-enforced model — reads your
   suite cold and flags vacuous, designed-to-pass tests. Its opinion is carried as
   **unverified advice; it never gates the verdict.**
@@ -183,7 +187,10 @@ captured reasoning is real, never synthesized, which is what turns a replay into
 
 **See it live at [corralai.dev](https://corralai.dev).** The hero is a real recorded
 run replaying in your browser; the **recordings gallery** holds more, each labeled
-with the hardware it ran on and honest per-run analytics. Full docs at
+with the hardware it ran on and honest per-run analytics. And
+**[corralai.dev/warehouse](https://corralai.dev/warehouse/)** runs DuckDB itself — in
+your browser, via WebAssembly — over the real audit ledger + execution telemetry, so
+you can query the signed records with live SQL. Full docs at
 [corralai.dev/docs](https://corralai.dev/docs).
 
 ## Coordinate — one swarm or many

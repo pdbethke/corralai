@@ -18,7 +18,7 @@ Env:
   CORRAL_BRAIN   brain URL (default http://localhost:9019)
   AGENT_NAME       swarm name (default Harness)
   AGENT_ROLE       role(s) to serve (default generalist): a single role, a
-                 comma-separated list (e.g. "researcher,designer,tester") to
+                 comma-separated list (e.g. "mutant-generator,test-writer,test-critic") to
                  claim any ready task in that set, or "any"/"*"/empty to
                  claim ANY ready task as a pure generalist
   AGENT_MODEL      the model driving this harness (e.g. gpt-5.1-codex); adds a

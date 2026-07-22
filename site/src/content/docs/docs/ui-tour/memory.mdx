@@ -1,11 +1,15 @@
 ---
 title: Memory
-description: The tab that shows what corralai has learned and remembered across missions.
+description: The tab that shows what corralai has learned and remembered across audit runs.
 ---
 
-The Memory tab lists the brain's own memory corpus — searchable markdown
-entries agents write and recall across missions. See [memory tiers and the
-learning loop](/docs/concepts/memory-and-learning-loop/) for how an entry
-moves from advisory to vetted.
+The Memory tab lists the brain's own memory corpus — a shared corpus of
+execution-**verified** audit findings (patterns, not code) that every
+`corral certify --local` run can draw on. An entry doesn't get in by a model
+asserting it; it gets in because a run actually caught it — a mutant a suite
+missed, a dead assertion a critic flagged and a jail confirmed was really
+inert. See [memory tiers and the learning loop](/docs/concepts/memory-and-learning-loop/)
+for how an entry moves from advisory to vetted. Every entry links "▸ see it
+in DuckDB" back to the run that proved it.
 
-![The Memory tab listing two advisory memory entries: "always run go vet before go test in CI" (advisory: CI ordering) and "prefer table-driven tests for the queue package" (advisory: testing style for the queue package), both tagged CORRALAI · LESSON, with a search box and a tier filter above the list](../../../../assets/ui-tour/memory.png)
+![The Memory tab listing three advisory memory entries: "a length-only password test misses the digit/uppercase rules" (advisory: test coverage, linked to the passwd.go run), "range==tuple is always False in Python 3 — a dead assertion" (advisory: dead-test pattern, linked to the full_permutation run), and "a 100%-passing suite still missed 40% of planted faults — kill-rate, not pass-count, is adequacy" (advisory: adequacy framing), each tagged CORRALAI · FINDING with a "▸ see it in DuckDB" link, plus a search box and a tier filter above the list](../../../../assets/ui-tour/memory.png)

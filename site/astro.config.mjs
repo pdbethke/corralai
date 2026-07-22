@@ -52,6 +52,7 @@ export default defineConfig({
             { label: 'Trust & security', slug: 'docs/concepts/trust-and-security' },
           ],
         },
+        { label: 'The DuckDB warehouse', slug: 'docs/warehouse' },
         { label: 'Running it', slug: 'docs/running-it' },
         { label: 'Configuration', slug: 'docs/configuration' },
         { label: 'MCP tools reference', slug: 'docs/mcp-tools' },

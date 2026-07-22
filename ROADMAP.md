@@ -33,9 +33,12 @@ Go binary.**
   code file and the developer's own tests, it **mutates the code** (seeded
   goal-violations), runs the **developer's own tests** against those mutants in the
   jail — the kill-rate is the suite's adequacy grade, never a self-report — then a
-  **test-writer** authors a test targeting whatever survived (proving the gap is real)
-  and a decorrelated **test-critic** flags vacuous/designed-to-pass tests as
-  **unverified advice that never gates**. A converged run (certified or needs-review)
+  **test-writer** authors a test targeting whatever survived (a survivor stays
+  *disclosed, unadjudicated* until a compiling test actually kills it — corral never
+  calls an unproven survivor a real bug), **feeding the compiler's own error back on a
+  non-compiling attempt so it corrects rather than blindly repeats**, and a decorrelated
+  **test-critic** flags vacuous/designed-to-pass tests as **unverified advice that never
+  gates**. A converged run (certified or needs-review)
   is signed via the same certify chain; a low kill-rate or a blocking finding always
   routes to needs-review, never auto-certified.
 - **The swarm.** `--local` runs its role tasks through a **bounded concurrent worker
@@ -136,6 +139,14 @@ Go binary.**
   streams each model's *real, captured reasoning* alongside its commands, so you watch
   the herd **think**, not just move.
 - **Fleet analytics to MotherDuck.**
+- **The accountability warehouse, in the browser** — a public page
+  (`corralai.dev/warehouse`, "DuckDB integration" in the nav) runs DuckDB itself,
+  compiled to **WebAssembly, client-side in the browser**, over corral's *real* audit
+  data: two self-hosted parquet extracts — the signed hash-linked verdict ledger
+  (`audit_ledger`) and per-model×role execution telemetry (`bug_catches`) — with preset
+  queries, a live query box, and `?q=<sql>` deep-links (a claim is one click from the
+  SQL that grounds it). No backend to query; the same schema federates to MotherDuck
+  for streaming-live.
 
 ## Ahead — the accountability plane
 
@@ -155,11 +166,12 @@ exactly the engine that can *attest* and *federate*.
   passive telemetry to the brain via the agent's own hooks, no behavior change, no
   reliance on the model *choosing* to report. Capture is deterministic — the same
   principle as certify-by-execution: don't trust the agent's word, capture it.
-- **The MotherDuck accountability warehouse.** Signed records from every dev, CI
-  runner, and project federate into one shared, queryable warehouse — the *same*
-  DuckDB schema, a DSN flip. Read-only **shares** hand a client, an auditor, or a
-  conference room a live, verifiable slice with zero infra. The firehose stays local
-  and cheap; only signed summaries federate.
+- **The MotherDuck accountability warehouse.** The public browser-DuckDB page
+  (Shipped, above) proves the model on one project's data; the next step federates
+  signed records from every dev, CI runner, and project into one shared, queryable
+  warehouse — the *same* DuckDB schema, a DSN flip. Read-only **shares** hand a client,
+  an auditor, or a conference room a live, verifiable slice with zero infra. The
+  firehose stays local and cheap; only signed summaries federate.
 - **The shared corpus — the moat.** A blind-spot pattern proven once ("length-only
   validators miss the character-class rules") becomes a shared, versioned, **signed**
   skill every client's audit can pull — so a first-time client audits with the whole

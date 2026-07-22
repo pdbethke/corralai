@@ -1,13 +1,30 @@
 ---
 title: Proposals
-description: The tab where the learning loop's proposed skills and lessons wait for review.
+description: The tab where the herd's proposed tests — and the learning loop's proposed lessons — wait for review.
 ---
 
-The Proposals tab shows every pending skill proposal, with the live count
-badge that also appears on the tab itself. Approving here (or via
-`corral-admin proposals approve <id>`) promotes the proposal's guidance into
-vetted memory and syncs the matching skill fleet-wide — see [the learning
-loop](/docs/concepts/memory-and-learning-loop/). Rejecting sends the pattern
-back until the evidence doubles. This is the human gate of the learning loop.
+The Proposals tab's main job is the test-writer's handiwork: the real
+proposed test, reconstructed from the run's own tape, that the herd authored
+to target a surviving mutant. Each proposal shows the surviving fault it
+targets, the goal the code is supposed to satisfy, and an honest result —
+**proven-kills** (the jail confirmed the test actually kills that mutant) or
+**candidate-not-proven** (it compiles but hasn't been run to a kill yet).
+Approve or reject with a typed reason; the reason is recorded alongside the
+decision.
 
-![The Proposals tab showing one pending proposal, "retries-without-backoff|ingest", with its guidance — "When a retry loop is added, always include jittered exponential backoff — unbounded retries have caused a burst-load thundering herd on the ingest endpoint more than once." — a "backoff-on-retry" skill chip, and approve/reject buttons](../../../../assets/ui-tour/proposals.png)
+In a **replay**, this human gate is demo-only: a recording is read-only, so
+clicking approve or reject re-renders the card but doesn't persist anywhere.
+The real wiring — POST the decision to the brain and sign it into the
+ledger — is a stated follow-on, not shipped yet. Only a live run against a
+live brain writes the decision anywhere durable.
+
+The same tab (and the same approve/reject human gate) also surfaces the
+learning loop's proposed lessons and skills once enough runs corroborate a
+pattern — approving promotes the guidance into vetted memory and syncs the
+matching skill fleet-wide (see [the learning
+loop](/docs/concepts/memory-and-learning-loop/)); rejecting sends it back
+until the evidence doubles. Proposed tests and proposed lessons share the
+tab and the gate, but the test proposal — closing an actual, execution-proven
+gap in the file you just audited — is the one worth looking at first.
+
+![The Proposals tab showing one pending test proposal for full_permutation: the surviving mutant it targets (a flipped boundary in the length check), the goal ("must generate every permutation of the given length"), the proposed test body, a "PROVEN — kills the survivor in the jail" result badge, and approve/reject buttons with a note that decisions in this replay are demo-only and don't persist](../../../../assets/ui-tour/proposals.png)

@@ -17,7 +17,10 @@ is the honest version: what it can't do yet, and what's next.
   `corral certify --local`'s adversarial pool (mutant-generator → your suite
   in the jail → test-writer → decorrelated test-critic) both mint a signed,
   independently-verifiable record, offline-checkable against the published
-  key with `corral certify verify`.
+  key with `corral certify verify`. The test-writer does **corrective retries**
+  — it feeds the compiler's own error back on a non-compiling attempt so it
+  fixes the real problem rather than blindly repeating — so real third-party
+  libraries certify reliably.
 - The **repo gate** and the **control gate** run continuously against a
   brain, requiring the actual check to pass — not a self-report — before
   branch protection lets a PR merge.
@@ -28,13 +31,22 @@ is the honest version: what it can't do yet, and what's next.
 - The **learning loop** (findings → human-approved skills), **shared memory /
   `search_memory`**, and durable **history + replay** — the recordings you
   can watch on this site are real exported runs.
-- Embedded **DuckDB analytics** and optional **MotherDuck** fleet sync.
+- Embedded **DuckDB analytics** and optional **MotherDuck** fleet sync — plus a
+  public **[DuckDB integration page](/warehouse/)** that runs DuckDB in your
+  browser (WebAssembly) over the real audit ledger + execution telemetry, with a
+  live SQL box and `?q=` deep-links.
 
 ## What it does *not* claim yet
 
 Honesty is part of the design (see the full [Trust & security](/docs/concepts/trust-and-security/)
 page and `SECURITY.md`):
 
+- **It does not adjudicate a survivor as a bug.** A survivor is a planted mutant
+  your suite didn't catch — corral **discloses it unadjudicated**. Whether it's a
+  real untested edge or an *equivalent mutant* (a change nothing can observe, and
+  so no test can catch) is the human's call, not the tool's. corral only calls a
+  survivor a *proven* gap when its test-writer authors a compiling test that
+  actually kills it; it never over-claims an unproven survivor as a real bug.
 - **It does not make an LLM immune to instructions in the content it reads.**
   Fencing untrusted data is hardening, not a guarantee — the *control* is that
   unvetted content can never reach an authoritative position, and a fooled

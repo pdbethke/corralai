@@ -1,0 +1,54 @@
+---
+title: The DuckDB warehouse
+description: Query corral's real audit ledger with DuckDB running in your browser — signed records + execution telemetry, live SQL, no backend.
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+
+corral stores every audit as a **signed, hash-linked record** plus per-model
+**execution telemetry** — natively in **DuckDB**. The
+[**DuckDB integration page**](/warehouse/) ("DuckDB integration" in the site nav)
+makes that layer tangible: it runs DuckDB itself, compiled to **WebAssembly, in
+your browser**, over corral's *real* audit dataset. Real SQL, no backend.
+
+## What you can query
+
+Two real DuckDB tables, shipped as small parquet extracts and queried client-side:
+
+- **`audit_ledger`** — the signed verdict records. Every audit is a tamper-evident,
+  hash-linked row: `repo`, `commit`, `record_head` (the signature head), `certified`
+  (the verdict), `actor`.
+- **`bug_catches`** — per-model, per-role, per-region execution telemetry: which
+  model planted or graded, `mutants_planted` / `mutants_killed` / `mutants_survived`,
+  `region_complexity`, and more.
+
+The page ships four preset queries — the signed ledger, each audit's verdict joined
+to its execution-proven kill-rate, "which model actually catches bugs," and mutation
+difficulty vs. code complexity — plus a **live query box** so you can write your own.
+
+## It's grounded, not marketing
+
+The point is that a claim is one click from the SQL that grounds it. A
+[**`?q=<sql>`** deep-link](/warehouse/?q=SELECT%20l.repo%2C%20IF(l.certified%2C'CERTIFIED'%2C'needs-review')%20AS%20verdict%2C%20SUM(b.mutants_killed)%20AS%20killed%2C%20SUM(b.mutants_planted)%20AS%20planted%2C%20ROUND(100.0*SUM(b.mutants_killed)%2FSUM(b.mutants_planted)%2C1)%20AS%20kill_pct%20FROM%20audit_ledger%20l%20JOIN%20bug_catches%20b%20ON%20b.record_id%3Dl.id%20GROUP%20BY%201%2C2%20ORDER%20BY%20kill_pct%20DESC)
+pre-fills and runs a query, so the recordings cockpit links straight to the numbers
+behind a run. The verdicts you see (more-itertools **certified at 90%**, a Ruby
+edit-distance suite **sent back at 60%**) are the same signed records the
+[recordings](/recordings/) come from.
+
+## Why in the browser
+
+The DuckDB **runtime** loads from a CDN (the WebAssembly build is larger than a
+static host's per-file cap, and loading the runtime from a CDN is standard); the
+**data** is self-hosted parquet. Because DuckDB runs client-side in a WebAssembly
+sandbox over public, read-only data, there is **no server-side SQL** — so there is
+nothing to inject into. The query runs in *your* browser, on public data, in a
+sandbox; that's precisely why the query box can be handed to anyone.
+
+## Where it goes
+
+The public page proves the model on one project's data. The same schema **federates
+to MotherDuck** (a DSN flip): signed records from every dev, CI runner, and project
+into one shared, queryable warehouse — read-only shares hand a client or an auditor a
+live, verifiable slice with zero infra. See [Multi-model
+herds](/docs/concepts/multi-model-herds/) and the
+[roadmap](https://github.com/pdbethke/corralai/blob/main/ROADMAP.md).

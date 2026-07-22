@@ -9,9 +9,16 @@ description: The ecosystem map — every host, the model driving each agent on i
     graph — that view is Progress. */}
 
 The Topology tab is the corral's ecosystem map: every host machine, the
-agents running on it, and — for each agent — the model backing it and the
-exec-isolation jail confining its commands. It's observability, not control:
-useful for seeing at a glance which host is carrying the load, or whether an
-agent is running with network access it shouldn't need.
+audit-role agents running on it, and — for each agent — the model backing it
+and the exec-isolation jail confining its commands. It's observability, not
+control: useful for seeing at a glance which host is carrying the load,
+whether a decorrelated pair is actually on two different models, or whether
+an agent is running with network access it shouldn't need.
 
-![The Topology tab showing 7 agents across 3 hosts, all on ollama:local-7b: wrangler-1 running Ada (builder), Tavo (designer), and Wren (researcher), each bwrap-jailed with no network; wrangler-2 running Boa (tester), Nell (builder), and Piper (tester), also bwrap-jailed with no network; and wrangler-3 running Rook (pentester) inside a container jail with network access](../../../../assets/ui-tour/topology.png)
+The decorrelation the audit depends on shows up here directly: a
+mutant-generator and its shadow challenger on different models, and a
+test-critic that's never the same model (and often a different vendor) than
+the test-writer it's reviewing behind — "a judge may not certify herself"
+made visible as a topology fact, not just a claim in the docs.
+
+![The Topology tab showing 5 agents across 2 hosts: wrangler-1 running gemini-3.5-flash/mutant-generator and gemini-3.1-pro-preview/test-critic, both bwrap-jailed with no network; and wrangler-2 running claude-sonnet-5/test-writer, claude-haiku-4-5/test-critic, and gpt-5-mini/mutant-generator-shadow, the test-writer and its critic each bwrap-jailed with no network and the shadow challenger inside a container jail with network access](../../../../assets/ui-tour/topology.png)

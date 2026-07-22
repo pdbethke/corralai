@@ -20,7 +20,21 @@ func (goPlugin) Scaffold() map[string]string {
 
 func (goPlugin) TestCmd() []string { return []string{"go", "test", "./..."} }
 
-func (goPlugin) CompileCheck(_, _ string) []string { return []string{"go", "vet", "./..."} }
+// CompileCheck type-checks the authored test. It scopes to the audited file's
+// OWN package (./dir/...) rather than the whole module (./...): a single-file
+// audit inside a monorepo must not drag in unrelated packages — above all cgo
+// deps elsewhere in the tree (e.g. tree-sitter bindings) whose C headers
+// `go mod vendor` prunes, which would fail the compile-check for a reason that
+// has nothing to do with the authored test. This matches the (package-scoped)
+// command the scorer actually runs. A bare filename (single-file mode) has no
+// package dir, so it falls back to ./... over the one-package scaffold.
+func (goPlugin) CompileCheck(codePath, _ string) []string {
+	dir := filepath.ToSlash(filepath.Dir(codePath))
+	if dir == "." || dir == "" || dir == "/" {
+		return []string{"go", "vet", "./..."}
+	}
+	return []string{"go", "vet", "./" + dir + "/..."}
+}
 
 // TestPath mirrors the prior advPoolTestPath: same base name, `_test.go`
 // suffix, same directory.

@@ -52,8 +52,8 @@ func (bwrapIsolator) Wrap(command string, opts Options, env []string) ([]string,
 	}
 	for _, kv := range env {
 		if i := strings.IndexByte(kv, '='); i > 0 {
-			if kv[:i] == "HOME" {
-				continue // host HOME is meaningless in the jail; a writable one is set below
+			if kv[:i] == "HOME" || kv[:i] == "GOTOOLCHAIN" {
+				continue // HOME/GOTOOLCHAIN are pinned below, not inherited from the host
 			}
 			argv = append(argv, "--setenv", kv[:i], kv[i+1:])
 		}
@@ -61,6 +61,12 @@ func (bwrapIsolator) Wrap(command string, opts Options, env []string) ([]string,
 	// A writable HOME on tmpfs so toolchains that cache under $HOME (go build's
 	// GOCACHE, npm, pip) work. Ephemeral per command; the workspace is for artifacts.
 	argv = append(argv, "--setenv", "HOME", "/home/agent")
+	// The jail is offline (no --share-net unless Options.Network). Pin
+	// GOTOOLCHAIN=local so `go` NEVER tries to DOWNLOAD a go.mod-pinned toolchain
+	// (which, with no network, either hangs or dies with a cryptic "toolchain not
+	// available"). A repo requiring a newer Go than the jail's then fails with a
+	// clear "go.mod requires go >= X" error instead — an honest, actionable signal.
+	argv = append(argv, "--setenv", "GOTOOLCHAIN", "local")
 	// Minimal read-only root (usrmerged Linux): the command can't read /home or
 	// host secrets, only the toolchain. The workspace is the ONLY writable path.
 	argv = append(argv,

@@ -57,11 +57,14 @@ func (c containerIsolator) Wrap(command string, opts Options, env []string) ([]s
 		"--tmpfs", "/tmp",
 		"--tmpfs", "/home/agent",
 		"-e", "HOME=/home/agent",
+		// Offline jail: pin GOTOOLCHAIN=local so `go` never tries to download a
+		// go.mod-pinned toolchain (mirrors the bwrap backend). See isolator_linux.go.
+		"-e", "GOTOOLCHAIN=local",
 	}
 	for _, kv := range env {
 		if i := strings.IndexByte(kv, '='); i > 0 {
-			if kv[:i] == "HOME" {
-				continue // already pinned to /home/agent above
+			if kv[:i] == "HOME" || kv[:i] == "GOTOOLCHAIN" {
+				continue // already pinned above
 			}
 			argv = append(argv, "-e", kv)
 		}

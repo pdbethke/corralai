@@ -11,7 +11,7 @@
 const REPO = 'https://github.com/pdbethke/corralai';
 interface Props {
   /** which primary nav item is the current page */
-  active?: 'home' | 'docs' | 'recordings' | 'notes';
+  active?: 'home' | 'docs' | 'recordings' | 'warehouse' | 'notes';
 }
 const { active } = Astro.props;
 import Logo from './Logo.astro';
@@ -25,6 +25,7 @@ import Logo from './Logo.astro';
       <a href="/" aria-current={active === 'home' ? 'page' : undefined}>Home</a>
       <a href="/docs/getting-started/" aria-current={active === 'docs' ? 'page' : undefined}>Docs</a>
       <a href="/recordings/" aria-current={active === 'recordings' ? 'page' : undefined}>Recordings</a>
+      <a href="/warehouse/" aria-current={active === 'warehouse' ? 'page' : undefined}>DuckDB integration</a>
       <a href="/field-notes/" aria-current={active === 'notes' ? 'page' : undefined}>Field notes</a>
       <a href={REPO} target="_blank" rel="noopener noreferrer">GitHub</a>
     </nav>

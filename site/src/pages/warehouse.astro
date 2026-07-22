@@ -1,0 +1,195 @@
+---
+// SPDX-License-Identifier: Elastic-2.0
+// The accountability warehouse: DuckDB (WebAssembly) running IN THE BROWSER
+// against corral's REAL audit dataset. corral stores every audit as a signed,
+// hash-linked record + per-model execution telemetry in DuckDB; this page ships
+// two tiny parquet extracts (self-hosted) and runs live SQL client-side. The
+// DuckDB runtime is loaded from jsDelivr on first query (the wasm is >25MiB, over
+// Cloudflare Pages' file cap — and loading the runtime from a CDN is the norm).
+// The same schema federates to MotherDuck (corral/internal/fleet) for streaming-live.
+import Header from '../components/Header.astro';
+import SiteFooter from '../components/SiteFooter.astro';
+
+const PRESETS = [
+  {
+    label: 'The signed audit ledger',
+    sql: `-- Every verdict is a tamper-evident, hash-linked record.\nSELECT id, repo, record_head, certified, actor\nFROM audit_ledger\nORDER BY id;`,
+  },
+  {
+    label: 'Verdict × execution-proven kill-rate',
+    sql: `-- Each audit's signed verdict joined to the kill-rate a jail actually\n-- measured — computed in SQL, never self-reported by a model.\nSELECT l.repo,\n       IF(l.certified, 'CERTIFIED', 'needs-review') AS verdict,\n       SUM(b.mutants_killed)  AS killed,\n       SUM(b.mutants_planted) AS planted,\n       ROUND(100.0*SUM(b.mutants_killed)/SUM(b.mutants_planted),1) AS kill_pct\nFROM audit_ledger l\nJOIN bug_catches b ON b.record_id = l.id\nGROUP BY 1,2\nORDER BY kill_pct DESC;`,
+  },
+  {
+    label: 'Which model catches bugs',
+    sql: `-- The decorrelated herd, by role — proven by execution in a jail.\n-- This is the metric corral's routing keys off.\nSELECT model, role,\n       COUNT(*)             AS seats,\n       SUM(mutants_planted) AS planted,\n       ROUND(100.0*SUM(mutants_killed)/SUM(mutants_planted),1) AS caught_pct\nFROM bug_catches\nGROUP BY 1,2\nORDER BY planted DESC;`,
+  },
+  {
+    label: 'Difficulty vs code complexity',
+    sql: `-- Does mutation difficulty track corral's per-symbol complexity score?\nSELECT IF(region_complexity >= 4, 'complex (>=4)', 'simple (<4)') AS band,\n       COUNT(*) AS regions,\n       ROUND(100.0*SUM(mutants_killed)/SUM(mutants_planted),1) AS kill_pct\nFROM bug_catches\nWHERE role = 'mutant-generator'\nGROUP BY 1\nORDER BY 1;`,
+  },
+];
+const initialSql = PRESETS[1].sql;
+---
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script is:inline>
+    (function () { try { var t = localStorage.getItem('corralai-site-theme') || 'light'; document.documentElement.setAttribute('data-theme', t); } catch (e) {} })();
+  </script>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <title>Corralai — the accountability warehouse (DuckDB in your browser)</title>
+  <meta name="description" content="Query corral's real audit ledger with DuckDB running in WebAssembly, client-side. Signed records + execution-proven telemetry, live SQL, no backend — the same schema that federates to MotherDuck." />
+</head>
+<body>
+  <Header active="warehouse" />
+  <div class="section">
+    <h1>The accountability warehouse</h1>
+    <p class="lede">
+      corral stores every audit as a <strong>signed, hash-linked record</strong> plus
+      per-model <strong>execution telemetry</strong> — natively in <strong>DuckDB</strong>.
+      This page runs DuckDB itself, compiled to <strong>WebAssembly</strong>,
+      <em>in your browser</em>, against corral's real audit dataset. Real SQL, no
+      backend. The same schema federates to <strong>MotherDuck</strong> (a DSN flip)
+      as a shared warehouse across a distributed dev shop.
+    </p>
+
+    <div class="presets">
+      {PRESETS.map((p, i) => (
+        <button class="preset" data-sql={p.sql} data-i={i}>{p.label}</button>
+      ))}
+    </div>
+
+    <div class="editor">
+      <textarea id="sql" spellcheck="false" aria-label="SQL query">{initialSql}</textarea>
+      <div class="editrow">
+        <button id="run" disabled>Loading DuckDB…</button>
+        <span id="status">booting DuckDB-WASM…</span>
+      </div>
+    </div>
+
+    <div id="out" class="out"></div>
+
+    <p class="foot">
+      <strong>Tables:</strong> <code>audit_ledger</code> (signed verdict records) ·
+      <code>bug_catches</code> (per-model, per-region execution telemetry). Two real
+      DuckDB tables, shipped as parquet and queried client-side. Data is fresh as of
+      the last publish; <code>corral fleet</code> federates the same schema to
+      MotherDuck for streaming-live. <a href="/recordings/">See the audits these rows came from →</a>
+    </p>
+  </div>
+  <SiteFooter />
+</body>
+</html>
+
+<script>
+  import * as duckdb from '@duckdb/duckdb-wasm';
+
+  const statusEl = document.getElementById('status');
+  const runBtn = document.getElementById('run') as HTMLButtonElement;
+  const sqlEl = document.getElementById('sql') as HTMLTextAreaElement;
+  const outEl = document.getElementById('out');
+
+  let conn: any = null;
+
+  function esc(s: any) {
+    return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string));
+  }
+
+  function renderTable(rows: any[], cols: string[], ms: number) {
+    if (!rows.length) { outEl!.innerHTML = '<p class="empty">0 rows.</p>'; return; }
+    let h = '<div class="tablewrap"><table><thead><tr>';
+    for (const c of cols) h += '<th>' + esc(c) + '</th>';
+    h += '</tr></thead><tbody>';
+    for (const r of rows) {
+      h += '<tr>';
+      for (const c of cols) {
+        const v = r[c];
+        const cls = typeof v === 'number' || typeof v === 'bigint' ? ' class="num"' : '';
+        h += '<td' + cls + '>' + (v === null || v === undefined ? '<span class="null">∅</span>' : esc(v)) + '</td>';
+      }
+      h += '</tr>';
+    }
+    h += '</tbody></table></div><p class="meta">' + rows.length + ' row' + (rows.length === 1 ? '' : 's') + ' · ' + ms + ' ms · DuckDB-WASM, in your browser</p>';
+    outEl!.innerHTML = h;
+  }
+
+  async function runQuery() {
+    if (!conn) return;
+    const sql = sqlEl.value.trim();
+    if (!sql) return;
+    runBtn.disabled = true;
+    const t0 = performance.now();
+    try {
+      const res = await conn.query(sql);
+      const cols = res.schema.fields.map((f: any) => f.name);
+      const rows = res.toArray().map((r: any) => r.toJSON());
+      renderTable(rows, cols, Math.round(performance.now() - t0));
+      statusEl!.textContent = 'ready';
+    } catch (e: any) {
+      outEl!.innerHTML = '<p class="err">' + esc(e.message || String(e)) + '</p>';
+      statusEl!.textContent = 'ready';
+    }
+    runBtn.disabled = false;
+  }
+
+  async function boot() {
+    try {
+      // Load the DuckDB runtime from jsDelivr (the wasm is >25MiB, over Cloudflare
+      // Pages' per-file cap; loading the runtime from a CDN is standard). Data
+      // stays local: two same-origin parquet extracts registered below.
+      const bundles = duckdb.getJsDelivrBundles();
+      const bundle = await duckdb.selectBundle(bundles);
+      const worker = await duckdb.createWorker(bundle.mainWorker!);
+      const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(), worker);
+      await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
+      conn = await db.connect();
+
+      for (const t of ['audit_ledger', 'bug_catches']) {
+        const buf = new Uint8Array(await (await fetch('/data/' + t + '.parquet')).arrayBuffer());
+        await db.registerFileBuffer(t + '.parquet', buf);
+        await conn.query("CREATE VIEW " + t + " AS SELECT * FROM '" + t + ".parquet'");
+      }
+
+      runBtn.textContent = 'Run query';
+      runBtn.disabled = false;
+      statusEl!.textContent = 'ready — DuckDB is live in your browser';
+      runBtn.addEventListener('click', runQuery);
+      sqlEl.addEventListener('keydown', (e) => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') runQuery(); });
+      for (const b of document.querySelectorAll('.preset')) {
+        b.addEventListener('click', () => { sqlEl.value = (b as HTMLElement).dataset.sql || ''; runQuery(); });
+      }
+      runQuery(); // run the default preset on load
+    } catch (e: any) {
+      statusEl!.textContent = 'DuckDB failed to load: ' + (e.message || String(e));
+    }
+  }
+  boot();
+</script>
+
+<style>
+  .section { max-width: 1000px; }
+  .lede { max-width: 780px; font-size: 1.08rem; line-height: 1.55; color: var(--fg); }
+  .presets { display: flex; flex-wrap: wrap; gap: 8px; margin: 22px 0 14px; }
+  .preset { background: var(--panel); border: 1px solid var(--line); color: var(--fg); border-radius: 999px; padding: 6px 14px; font-size: 0.88rem; cursor: pointer; }
+  .preset:hover { border-color: var(--amber); color: var(--amber); }
+  .editor { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--panel); }
+  #sql { width: 100%; box-sizing: border-box; border: 0; background: transparent; color: var(--fg); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; line-height: 1.55; padding: 14px 16px; min-height: 150px; resize: vertical; outline: none; }
+  .editrow { display: flex; align-items: center; gap: 14px; padding: 10px 14px; border-top: 1px solid var(--line); }
+  #run { background: var(--amber); color: #fff; border: 0; border-radius: 6px; padding: 8px 18px; font-weight: 600; cursor: pointer; }
+  #run:disabled { opacity: 0.55; cursor: default; }
+  #status { color: var(--muted); font-size: 0.86rem; }
+  .out { margin-top: 18px; }
+  .tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
+  .out table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+  .out th, .out td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  .out th { color: var(--amber); font-weight: 700; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.03em; background: var(--sel); }
+  .out td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .out .null { color: var(--muted); }
+  .out .meta { color: var(--muted); font-size: 0.82rem; margin: 8px 2px 0; }
+  .out .err { color: var(--amber); font-family: ui-monospace, monospace; font-size: 0.86rem; padding: 12px; border: 1px solid var(--amber); border-radius: 8px; background: var(--sel); white-space: pre-wrap; }
+  .out .empty { color: var(--muted); }
+  .foot { margin-top: 24px; color: var(--muted); font-size: 0.9rem; line-height: 1.6; }
+  .foot code { background: var(--sel); border-radius: 4px; padding: 1px 5px; font-size: 0.85em; }
+  .foot a { color: var(--amber); font-weight: 600; text-decoration: none; }
+</style>

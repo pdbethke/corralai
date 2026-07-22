@@ -1011,12 +1011,23 @@ func (d *Driver) tickPoolAdequacy(ctx context.Context, missionID int64, run *run
 			// the model repeat the same mistake until exhaustion. Supersede (the
 			// same mechanism the survivor-promote uses) is required to swap the
 			// instruction — ReopenTask keeps the old one.
-			var ce *CompileError
-			compileMsg := cerr.Error()
-			if errors.As(cerr, &ce) && strings.TrimSpace(ce.Output) != "" {
-				compileMsg = ce.Output
+			var newInstr string
+			if strings.TrimSpace(writerTest) == "" {
+				// The model returned NO usable test (an empty result — seen on
+				// hard targets). Feeding an empty "broken test" into the REPAIR
+				// prompt ("here is your test: «», fix the compile error") just
+				// begets more emptiness and burns the whole retry budget in a
+				// degenerate loop, so a later good attempt never gets a slot.
+				// Re-issue a FRESH prompt instead — a clean shot, not a repair.
+				newInstr = renderTestWriter(run.rs, run.sigs, run.devSurvivors)
+			} else {
+				var ce *CompileError
+				compileMsg := cerr.Error()
+				if errors.As(cerr, &ce) && strings.TrimSpace(ce.Output) != "" {
+					compileMsg = ce.Output
+				}
+				newInstr = renderTestWriterWithRepair(run.rs, run.sigs, run.devSurvivors, writerTest, compileMsg)
 			}
-			newInstr := renderTestWriterWithRepair(run.rs, run.sigs, run.devSurvivors, writerTest, compileMsg)
 			newID, serr := d.Q.SupersedeTask(tw.ID, queue.TaskSpec{
 				Key:         RoleTestWriter,
 				Role:        RoleTestWriter,

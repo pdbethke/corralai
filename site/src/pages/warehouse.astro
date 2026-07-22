@@ -7,6 +7,7 @@
 // DuckDB runtime is loaded from jsDelivr on first query (the wasm is >25MiB, over
 // Cloudflare Pages' file cap — and loading the runtime from a CDN is the norm).
 // The same schema federates to MotherDuck (corral/internal/fleet) for streaming-live.
+import '../styles/global.css';
 import Header from '../components/Header.astro';
 import SiteFooter from '../components/SiteFooter.astro';
 

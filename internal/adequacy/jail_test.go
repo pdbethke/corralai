@@ -73,13 +73,13 @@ func TestJailAdapterBwrapWorkspaceStaysLockedDown(t *testing.T) {
 		t.Skipf("this test pins bwrap perms; resolved backend is %q", backend.Name())
 	}
 	j := NewJail(backend, 30*time.Second)
-	// NOTE: RunTest joins testCmd's elements with a single space and hands the
-	// result to sandbox.RunGuarded, which is itself wrapped in exactly one
-	// "sh -c" by the isolator's Wrap — so a compound shell script must be a
-	// SINGLE testCmd element, not pre-wrapped in its own "sh", "-c" pair.
+	// NOTE: testCmd is an ARGV — each element is quoted literally by shellJoin
+	// before the isolator's single "sh -c" wrap — so a compound shell script
+	// must be passed as an explicit []string{"sh", "-c", script}, not as one
+	// bare element (which would be run as a literal program name).
 	pass, err := j.RunTest(context.Background(), map[string]string{
 		"sub/marker.txt": "hello",
-	}, []string{`test "$(stat -c %a sub/marker.txt 2>/dev/null || stat -f %Lp sub/marker.txt)" = "600" && test "$(stat -c %a sub 2>/dev/null || stat -f %Lp sub)" = "700"`})
+	}, []string{"sh", "-c", `test "$(stat -c %a sub/marker.txt 2>/dev/null || stat -f %Lp sub/marker.txt)" = "600" && test "$(stat -c %a sub 2>/dev/null || stat -f %Lp sub)" = "700"`})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -253,5 +253,19 @@ func TestJailRefusesSymlinkedDepBind(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "symlink") {
 		t.Fatalf("error should mention the symlink refusal, got: %v", err)
+	}
+}
+
+// TestShellJoinQuotesMetacharacters pins Bug C's fix: a test command with shell
+// metacharacters survives the jail's `sh -c` as literal argv, not re-parsed into
+// pipes/subshells (the failure that fail-closed a real self-audit).
+func TestShellJoinQuotesMetacharacters(t *testing.T) {
+	cmd := []string{"go", "test", "-run", "^TestScore$|^TestScore(Invalid|Mutant)", "./pkg/"}
+	want := `'go' 'test' '-run' '^TestScore$|^TestScore(Invalid|Mutant)' './pkg/'`
+	if got := shellJoin(cmd); got != want {
+		t.Fatalf("shellJoin mangled metacharacters:\n got: %s\nwant: %s", got, want)
+	}
+	if q := shellQuote("a'b"); q != `'a'\''b'` {
+		t.Fatalf("shellQuote embedded quote: got %s", q)
 	}
 }

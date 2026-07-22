@@ -1,15 +1,15 @@
 {
-  "directive": "adversarial pool · threedaymonk/text — levenshtein.rb (a real algorithm we didn't write)",
+  "directive": "adversarial pool \u00b7 threedaymonk/text \u2014 levenshtein.rb (a real algorithm we didn't write)",
   "task_count": 3,
   "done_task_count": 3,
-  "finding_count": 3,
-  "duration_seconds": 180,
+  "finding_count": 4,
+  "duration_seconds": 150,
   "models": [
     "anthropic:claude-sonnet-5",
     "anthropic:claude-haiku-4-5"
   ],
   "platform": {
-    "inference": "vendor cloud — Claude Sonnet 5 (planting + writing) + Claude Haiku 4.5 (critic), Anthropic",
-    "host": "linux/amd64 · bwrap jail"
+    "inference": "vendor cloud \u2014 Claude Sonnet 5 (planting + writing) + Claude Haiku 4.5 (critic), Anthropic",
+    "host": "linux/amd64 \u00b7 bwrap jail"
   }
 }

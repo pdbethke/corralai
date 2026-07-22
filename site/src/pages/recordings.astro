@@ -437,6 +437,13 @@ cards.sort((a, b) => leadRank(a.slug) - leadRank(b.slug) || a.slug.localeCompare
         if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); activate(btn); }
       });
     }
+    // Deep link: /recordings/#<slug> (e.g. a homepage proof-band row) opens
+    // that recording directly — activate + autoplay + scroll into view.
+    const initialSlug = decodeURIComponent((location.hash || '').replace(/^#/, ''));
+    if (initialSlug) {
+      const target = document.querySelector('.card[data-slug="' + (window.CSS && CSS.escape ? CSS.escape(initialSlug) : initialSlug) + '"]');
+      if (target) activate(target);
+    }
   });
   // The cockpit HUD's #skinsel calls the shared setSkin, which repaints the
   // whole instrument in the picked visual palette (matrix → green phosphor,

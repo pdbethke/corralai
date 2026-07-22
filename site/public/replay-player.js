@@ -1472,6 +1472,11 @@ addEventListener('mouseup', () => { rwDrag = null; });
 // (its native floating window, unchanged), site fallback (this port).
 function replayAgentClick(name){
   if(!name) return;
+  // Connect the swarm UI to the console: clicking an agent (roster row or canvas
+  // node) filters the console to THAT agent's lines — so picking a pony in the
+  // swarm shows exactly what it did/said, no separate chip hunt. Set-to (not
+  // toggle) so a click always lands on the clicked agent.
+  if(replayExecFilter !== name) setReplayExecFilter(name);
   if(typeof openAgentWindow === 'function'){ openAgentWindow(name); return; }
   openReplayAgentWindow(name);
 }
@@ -2177,6 +2182,30 @@ function seekReplay(target){
 // applyReplayEvent: the read-only translation from one ReplayEvent (brain.go's
 // merged, sorted beat stream) into the live canvas's node/link/burst/buzz
 // vocabulary.
+// AUDIT-CONSOLE narration: the adversarial-pool tapes emit no thought/command
+// beats (unlike build tapes), so the console read EMPTY. Synthesize a per-agent
+// work line from the pool's own events — grounded in the tape, attributed to
+// ev.actor so the filter chips AND the swarm-click→console connection work.
+// Only fires for the audit roles, so a build tape's real beats are never doubled.
+function auditClaimVerb(role){
+  switch(role){
+    case 'mutant-generator': return 'planting goal-violating faults across the file…';
+    case 'mutant-generator-shadow': return 'challenging with a second fault set (measurement only)…';
+    case 'test-writer': return 'authoring a test to kill the faults the suite missed…';
+    case 'test-critic': return 'reading the developer’s suite cold for vacuous tests…';
+    default: return '';
+  }
+}
+function auditDoneSummary(role, result){
+  switch(role){
+    case 'mutant-generator': { const n = result ? parseMutants(result).length : 0; return n ? ('planted ' + n + ' goal-violating mutant' + (n===1?'':'s')) : 'produced its mutants'; }
+    case 'mutant-generator-shadow': return 'planted its challenger set (recorded, non-gating)';
+    case 'test-writer': { const s = (result||'').trim(); return s ? ('authored a test (' + s.split('\n').length + ' lines) to close the gap') : 'produced no compiling test this attempt'; }
+    case 'test-critic': return 'finished reading the suite';
+    default: return '';
+  }
+}
+function pushConsole(line){ replayConsoleLines.push(line); if(replayConsoleLines.length > 200) replayConsoleLines.shift(); }
 function applyReplayEvent(ev){
   // ---- cockpit accumulation (panels) — before the canvas switch below ----
   const d = ev.detail || {};
@@ -2194,6 +2223,8 @@ function applyReplayEvent(ev){
           const title = d.title || ev.subject;
           const a = replayAgentEnsure(ev.actor, d.role); a.lastTaskTitle = title;
           replayAgentTouch(ev.actor, d.role, ev.ts, 'claimed', title);
+          const cverb = auditClaimVerb(d.role);
+          if(cverb) pushConsole({kind:'thought', agent: ev.actor, role: d.role, text: cverb});
         }
       }
       break;
@@ -2205,7 +2236,11 @@ function applyReplayEvent(ev){
         if(ev.actor){
           replayAgentHold(ev.actor, d.role, ev.subject, false);
           const title = (t && t.title) || ev.subject;
-          if(ev.kind === 'task_done'){ const a = replayAgentEnsure(ev.actor, d.role); a.completed = (a.completed||0) + 1; }
+          if(ev.kind === 'task_done'){
+            const a = replayAgentEnsure(ev.actor, d.role); a.completed = (a.completed||0) + 1;
+            const dsum = auditDoneSummary(d.role, d.result);
+            if(dsum) pushConsole({kind:'exec', agent: ev.actor, role: d.role, command: dsum, ok: true, exitCode: ''});
+          }
           replayAgentTouch(ev.actor, d.role, ev.ts, ev.kind, title);
         }
       }
@@ -2260,7 +2295,7 @@ function applyReplayEvent(ev){
           // pool_dev_adequacy/pool_verdict trio is the countable ".xpool" trace
           // (one beat each), while a finding's evidence is its own distinct
           // beat (a finding_reported can fire many times per run).
-          replayConsoleLines.push({kind:'poolfinding', target: ev.subject || '', severity: d.severity || '', type: d.type || '', text: d.evidence});
+          replayConsoleLines.push({kind:'poolfinding', agent: ev.actor || '', role: d.role || 'test-critic', target: ev.subject || '', severity: d.severity || '', type: d.type || '', text: d.evidence});
           if(replayConsoleLines.length > 200) replayConsoleLines.shift();
         }
       }

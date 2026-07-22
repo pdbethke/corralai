@@ -181,8 +181,15 @@ type Verdict struct {
 	// run is never certified (aggregate forces needs-review whenever
 	// Survivors > 0 and ProvenMissed < Survivors — see aggregate).
 	TestWriterFailed bool
-	RecordID         int64  // the signed build-record id (0 if signing skipped/failed)
-	RecordHead       string // the record's ledger head
+	// BaselineFailed is true when the dev suite did not pass on the UNMUTATED
+	// compliant code inside the jail — a build/environment failure, not a
+	// test-quality verdict. When true, DevKillRate (0) and Survivors (0) are
+	// meaningless: nothing was graded. The status is still needs-review
+	// (fail-closed), but the readout says "could not grade" rather than
+	// reporting a fabricated kill tally. See runState.baselineFailed.
+	BaselineFailed bool
+	RecordID       int64  // the signed build-record id (0 if signing skipped/failed)
+	RecordHead     string // the record's ledger head
 }
 
 // RunState is the observable status of one run: Converged is true once the run
@@ -258,6 +265,13 @@ type runState struct {
 	devKillRate  float64
 	mutantsTotal int
 	devSurvivors []adequacy.Mutant
+	// baselineFailed is true when the dev suite did not pass on the UNMUTATED
+	// compliant code inside the jail (adequacy.Report.CompliantPass=false) — a
+	// build/environment failure (bad toolchain, missing dep, a shell-mangled
+	// test command), NOT a test-quality verdict. When set, devKillRate is a
+	// meaningless 0 and devSurvivors is empty because NOTHING was actually
+	// graded, so the readout must say "could not grade", never fabricate a tally.
+	baselineFailed bool
 	// mutants is the FULL merged mutant set (every shard, pre-scoring) that
 	// tickDevAdequacy graded the dev suite against — retained (not just its
 	// count/survivors) so tickAggregate's critic auto-refute step can
@@ -841,6 +855,14 @@ func (d *Driver) tickDevAdequacy(ctx context.Context, missionID int64, run *runS
 	if serr != nil {
 		return fmt.Errorf("advpool: score dev tests: %w", serr)
 	}
+	// Baseline honesty: adequacy fail-closes when the dev suite can't pass on the
+	// UNMUTATED code (CompliantPass=false → Total 0, Killed/Survived empty). That
+	// is the ONLY way a graded run yields kill-rate 0 with ZERO survivors out of
+	// N>0 mutants — a passing baseline that kills nothing leaves ALL N mutants as
+	// survivors, never zero. Detect that signature so the readout says "could not
+	// grade" instead of fabricating a 0% test-quality verdict from a build/env
+	// failure (bad toolchain floor, missing dep, a shell-mangled --test command).
+	run.baselineFailed = len(mutants) > 0 && killRate == 0 && len(survivors) == 0
 	run.devScored = true
 	run.devKillRate = killRate
 	run.mutantsTotal = len(mutants)
@@ -888,8 +910,15 @@ func (d *Driver) tickDevAdequacy(ctx context.Context, missionID int64, run *runS
 	}
 	// Log the headline the moment it's computed — the dev suite's grade — so it
 	// is visible even if the downstream test-writer/aggregate steps stall.
-	log.Printf("advpool: run %d dev-adequacy: the dev's OWN tests scored %.0f%% (killed %d of %d mutants, %d survived — bugs the dev's tests miss)",
-		missionID, killRate*100, len(mutants)-len(survivors), len(mutants), len(survivors))
+	if run.baselineFailed {
+		// The dev suite did NOT pass on the unmutated code in the jail: nothing
+		// was graded, so a "killed N of N" tally would be fabricated from an empty
+		// survivor set. Say what actually happened instead.
+		log.Printf("advpool: run %d dev-adequacy: COULD NOT GRADE — the dev suite did not pass on the UNMUTATED code in the jail (baseline build/test failed); this is a build/environment failure, not a test-quality verdict", missionID)
+	} else {
+		log.Printf("advpool: run %d dev-adequacy: the dev's OWN tests scored %.0f%% (killed %d of %d mutants, %d survived — bugs the dev's tests miss)",
+			missionID, killRate*100, len(mutants)-len(survivors), len(mutants), len(survivors))
+	}
 	d.emit(missionID, "pool_dev_adequacy", "", map[string]any{
 		"dev_kill_rate": run.devKillRate, "mutants_total": run.mutantsTotal,
 		"survivors": len(run.devSurvivors), "survivor_ids": survivorIDs(run.devSurvivors),
@@ -1066,6 +1095,10 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	v.RegionsTotal = run.regionsTotal
 	v.RegionsProbed = run.regionsProbed
 	v.DroppedRegions = run.droppedRegions
+	// A baseline that couldn't pass is fail-closed to needs-review by aggregate
+	// (devKillRate 0 < threshold); mark it so the readout says "could not grade"
+	// instead of reporting the 0 as if the suite were graded and scored zero.
+	v.BaselineFailed = run.baselineFailed
 
 	if d.Signer != nil {
 		recordID, head, serr := d.Signer.SignVerdict(ctx, v)

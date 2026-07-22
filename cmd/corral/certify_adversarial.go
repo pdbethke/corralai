@@ -50,6 +50,10 @@ type advVerdict struct {
 	// pool exhausted its compile-retry budget without authoring a compiling
 	// killing test. See renderAdvVerdict for the honest readout this drives.
 	TestWriterFailed bool `json:"TestWriterFailed"`
+	// BaselineFailed mirrors advpool.Verdict.BaselineFailed: the dev suite did
+	// not pass on the unmutated code in the jail, so nothing was graded. Drives
+	// the "could not grade" readout instead of a fabricated kill tally.
+	BaselineFailed bool `json:"BaselineFailed"`
 }
 
 // advStatus mirrors brain.AdvPoolStatusOut (get_adversarial_run's output).
@@ -303,6 +307,18 @@ func renderAdvVerdict(w io.Writer, codePath string, v advVerdict) {
 	fmt.Fprintf(w, "\nadversarial verdict — %s @ %s\n", codePath, commit)
 	if v.Lang != "" {
 		fmt.Fprintf(w, "  language:      %s\n", v.Lang)
+	}
+	if v.BaselineFailed {
+		// The dev suite did not pass on the UNMUTATED code in the jail: nothing
+		// was graded. Reporting DevKillRate/killed/survivors here would present a
+		// build/environment failure as a 0% test-quality verdict — the dishonest
+		// readout this branch exists to prevent.
+		fmt.Fprintf(w, "  status:        COULD-NOT-GRADE\n")
+		fmt.Fprintf(w, "  reason:        the dev suite did not pass on the unmutated code in the jail\n")
+		fmt.Fprintf(w, "                 (baseline build/test failed — a build/environment issue, not a\n")
+		fmt.Fprintf(w, "                 test-quality verdict; e.g. toolchain floor, missing dep, bad --test cmd)\n")
+		fmt.Fprintf(w, "  mutants:       %d generated, 0 graded\n", v.MutantsTotal)
+		return
 	}
 	fmt.Fprintf(w, "  status:        %-12s (dev suite killed %d/%d mutants)\n", status, killed, v.MutantsTotal)
 	fmt.Fprintf(w, "  dev_kill_rate: %.2f\n", v.DevKillRate)

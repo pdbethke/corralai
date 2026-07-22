@@ -81,3 +81,19 @@ func TestBwrapWrapDropsHostHome(t *testing.T) {
 		t.Fatal("jail HOME should be /home/agent")
 	}
 }
+
+// TestBwrapWrapPinsGoToolchainLocal pins Bug A's fix: the offline jail forces
+// GOTOOLCHAIN=local so `go` cannot attempt a network toolchain download, and the
+// host's own GOTOOLCHAIN never leaks through to override it.
+func TestBwrapWrapPinsGoToolchainLocal(t *testing.T) {
+	argv, err := (bwrapIsolator{}).Wrap("go test ./...", Options{Workspace: "/w"}, []string{"GOTOOLCHAIN=auto", "PATH=/usr/bin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !argvHas(argv, "--setenv", "GOTOOLCHAIN", "local") {
+		t.Fatal("offline jail must pin GOTOOLCHAIN=local")
+	}
+	if argvHas(argv, "--setenv", "GOTOOLCHAIN", "auto") {
+		t.Fatal("host GOTOOLCHAIN=auto must not leak into the jail")
+	}
+}

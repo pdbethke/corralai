@@ -7,9 +7,9 @@
 // Rendered as plain theme-aware HTML/CSS: no images, no external requests,
 // nothing to fetch (the site's test-enforced zero-external-requests posture).
 const audits = [
-  { lang: 'Python',     target: 'more-itertools · recipes.py',          slug: 'more-itertools-reliable-critic', status: 'certified',   killed: 18, total: 20, note: "a library we didn't write — 2 survivors disclosed" },
-  { lang: 'TypeScript', target: 'vercel/ms · index.ts',                 slug: 'vercel-ms-audit',                status: 'needs-review', killed: 4,  total: 5,  note: '1 goal-violating edit the suite missed' },
-  { lang: 'Go',         target: 'google/uuid · version4.go',            slug: 'google-uuid-audit',              status: 'needs-review', killed: 13, total: 20, note: '7 survivors — real gaps handed back' },
+  { lang: 'Python',     target: 'more-itertools · recipes.py',          slug: 'more-itertools-reliable-critic', status: 'certified',   killed: 18, total: 20, note: "a library we didn't write — 2 survivors disclosed, unadjudicated" },
+  { lang: 'TypeScript', target: 'vercel/ms · index.ts',                 slug: 'vercel-ms-audit',                status: 'needs-review', killed: 4,  total: 5,  note: '1 planted fault the suite did not catch' },
+  { lang: 'Go',         target: 'google/uuid · version4.go',            slug: 'google-uuid-audit',              status: 'needs-review', killed: 13, total: 20, note: '7 survivors — below the bar, handed to review' },
   { lang: 'Ruby',       target: 'threedaymonk/text · levenshtein.rb',   slug: 'ruby-levenshtein-audit',         status: 'needs-review', killed: 3,  total: 5,  note: '100%-green suite, 60% kill-rate' },
   { lang: 'Go',         target: 'corral · internal/fence.go',           slug: 'pool-fence-crossvendor',         status: 'needs-review', killed: 3,  total: 4,  note: 'cross-vendor herd: Claude + Gemini' },
   { lang: 'Python',     target: 'passwd validator (toy)',               slug: 'passwd-python-audit',            status: 'needs-review', killed: 0,  total: 5,  note: 'a length-only test catches nothing' },
@@ -22,9 +22,10 @@ const audits = [
     write, plus our own — and graded each suite <em>by execution</em>: plant
     goal-violating faults, run the developer's <strong>own</strong> tests against
     them in a jail, sign the kill-rate. more-itertools' suite caught 90% and
-    <strong>CERTIFIED</strong>. The rest missed enough to be sent back, with the
-    gaps named. Every verdict is a signed record you can replay and verify
-    offline — pick any row.
+    <strong>CERTIFIED</strong>. The rest fell short of the bar and were sent back
+    with their survivors <em>disclosed</em> — corral hands those to a human to
+    judge, it doesn't rule them defects. Every verdict is a signed record you can
+    replay and verify offline — pick any row.
   </p>
 
   <ul class="verdicts" role="list">

@@ -10,17 +10,20 @@ whichever one a single generator happened to pick.
 
 Gemini 3.5 Flash planted 20 goal-violating mutants across the file; the
 library's own suite, run in the jail against every one, killed **18 of 20** — a
-**dev kill-rate of 90%**, measured, not asserted. That cleared the bar (0.8), so
-the gate returned **CERTIFIED** and signed the verdict — offline-verifiable from
-the record.
+**dev kill-rate of 90%**, measured by execution, not asserted. That cleared the
+bar (0.8), so the gate returned **CERTIFIED** and signed the verdict —
+offline-verifiable from the record.
 
-But certified is not "spotless." Two mutants **survived** the suite, and corral
-signs them into the record rather than hiding them: this is
-*certified-and-here's-what-you-missed*, not a rubber stamp. The two survivors are
-disclosed and handed back for you to close — the gate proved your suite is strong
-(90% of planted faults caught, in a jail) without pretending the last 10% isn't
-there. Open the **tests** tab to see them highlighted against the code the suite
-passed anyway.
+Two of the twenty mutants **survived** — the suite passed despite them. Corral
+records both rather than rounding up to "spotless," but it makes **no claim that
+they're defects**. A survivor is either a real untested edge *or* an **equivalent
+mutant** — an injected change with no observable effect, which no test can catch
+by construction — and corral only calls a survivor a *proven* gap when the pool
+authors a compiling test that actually kills it (it didn't here). So this is not
+"more-itertools missed two tests": it's the tool catching 90% of injected faults
+against a genuinely strong suite, and disclosing the two it couldn't kill,
+**unadjudicated**, for a human to judge. Open the **tests** tab to see them
+highlighted against the code the suite passed anyway.
 
 ## Why this one is worth watching: the critic that didn't hallucinate
 

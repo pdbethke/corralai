@@ -54,8 +54,8 @@ Talk is cheap, so here is the thing actually doing the thing, this afternoon, ag
 It planted 39 goal-violating bugs across the file's functions and ran more-itertools' *own* test suite against every one of them, in a jail. Verdict, signed:
 
 - **The suite caught 35 of 39.** A genuinely strong 90% — these are good tests, written by people who cared.
-- **Four bugs walked straight past the wall.** Real gaps, and the tool tells you exactly which functions.
-- And then it wrote me a test — a real, compiling, discriminating one — that catches a gap the suite missed, and handed it back to add.
+- **Four slipped past the net.** Four planted faults the suite didn't kill. The tool names the exact functions and hands them back *unadjudicated* — a real untested edge, or an equivalent mutant nothing can catch: my call to make, not the tool's. It doesn't declare a beloved library buggy; it shows me its work and lets me judge.
+- And for one of them it then wrote a test — a real, compiling, discriminating one — that *actually kills* the survivor: execution-proof that that particular gap is real and catchable, handed back to add.
 
 Now the part I almost got wrong, which is the actual point of this whole note.
 
@@ -87,7 +87,7 @@ Same as every note here, because honesty is the actual product:
 
 - The number **moves** run to run — 82% one pass, 90% the next — because which bugs get planted is non-deterministic. The *shape* is stable (a strong suite with a few real gaps); the exact percentage isn't a lab constant, and I won't quote it like one.
 - The critic **hallucinates sometimes** — you just watched it. That's not a bug I'm hiding; it's the reason its opinion is fenced off from the verdict. A tool that let a confident second model gate the record would be the exact disease this whole thing exists to cure.
-- It **certified** more-itertools at 90% while four real gaps remained — because the suite cleared the bar I set. Certified-and-here's-what-you-missed, not certified-and-perfect. Whether 90% is the right bar is your call, not the tool's.
+- It **certified** more-itertools at 90% while four survivors remained — disclosed, not adjudicated — because the suite cleared the bar I set. Certified-and-here's-what-survived, not certified-and-perfect; whether any survivor is a real hole or an equivalent mutant is the human's call. Whether 90% is the right bar is your call too, not the tool's.
 - It runs your tests against live, deliberately-broken code, so it **refuses to run unsandboxed** — you need bwrap or a container. That's not friction; it's the tool declining to do a dangerous thing quietly.
 - The adversarial pool is experimental. The signed record is real and verifiable offline. I'll always tell you which is which.
 

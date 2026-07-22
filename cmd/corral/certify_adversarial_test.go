@@ -424,3 +424,47 @@ func TestAdversarialUnknownLanguageExitsTwo(t *testing.T) {
 		t.Fatalf("StartRun should not have been called, but spec was captured: %+v", f.spec)
 	}
 }
+
+// TestRenderAdvVerdictBaselineFailed pins Bug D's fix: when the dev suite could
+// not pass on the unmutated code (baseline failed), the readout says
+// COULD-NOT-GRADE and does NOT fabricate a kill rate / killed tally from a run
+// where nothing was actually graded.
+func TestRenderAdvVerdictBaselineFailed(t *testing.T) {
+	var b strings.Builder
+	renderAdvVerdict(&b, "internal/adequacy/score.go", advVerdict{
+		Lang: "go", Commit: "abc1234", MutantsTotal: 20,
+		DevKillRate: 0, Survivors: 0, Status: "needs-review",
+		BaselineFailed: true,
+	})
+	out := b.String()
+	if !strings.Contains(out, "COULD-NOT-GRADE") {
+		t.Fatalf("baseline-failed verdict must report COULD-NOT-GRADE, got:\n%s", out)
+	}
+	if strings.Contains(out, "dev_kill_rate") {
+		t.Fatalf("baseline-failed verdict must not print a kill rate (nothing was graded):\n%s", out)
+	}
+	for _, bad := range []string{"killed 20/20", "killed 0/20"} {
+		if strings.Contains(out, bad) {
+			t.Fatalf("baseline-failed verdict must not print a killed tally (%q):\n%s", bad, out)
+		}
+	}
+	if !strings.Contains(out, "0 graded") {
+		t.Fatalf("baseline-failed verdict should say mutants generated but not graded:\n%s", out)
+	}
+}
+
+// TestRenderAdvVerdictNormalPathUnaffected guards that the honest-reporting
+// branch does not change the readout for a real, graded verdict.
+func TestRenderAdvVerdictNormalPathUnaffected(t *testing.T) {
+	var b strings.Builder
+	renderAdvVerdict(&b, "x.go", advVerdict{
+		Lang: "go", MutantsTotal: 20, Survivors: 5, DevKillRate: 0.75, Status: "needs-review",
+	})
+	out := b.String()
+	if !strings.Contains(out, "dev_kill_rate: 0.75") {
+		t.Fatalf("a graded verdict must still print its kill rate:\n%s", out)
+	}
+	if strings.Contains(out, "COULD-NOT-GRADE") {
+		t.Fatalf("a graded verdict must not claim could-not-grade:\n%s", out)
+	}
+}

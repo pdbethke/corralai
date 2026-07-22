@@ -294,7 +294,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	// and the project's own tests (which import the package) resolve.
 	wiring, err := buildJailWiring(jailWiringInput{
 		iso: iso, timeout: *timeout, testTimeout: *testTimeout,
-		codePath: *codePath, testPath: tp, repoDir: repoDir, fsPath: fsPath,
+		codePath: *codePath, testPath: tp, repoDir: repoDir, langName: plug.Name(), fsPath: fsPath,
 		code: code, devTest: devTest, checkArgv: checkArgv,
 		bindDirFlag: bindDirFlag, noBindDepsFlag: *noBindDepsFlag, stdout: stdout,
 	})
@@ -302,6 +302,9 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
+	// Release any Go-vendor staging dir once the run completes (the jail
+	// bind-mounts vendor/ from it, so it must outlive scoring).
+	defer wiring.cleanup()
 	scorer, validator, jailEnum := wiring.scorer, wiring.validator, wiring.jailEnum
 	codeKey, devTestKey := wiring.codeKey, wiring.devTestKey
 
@@ -525,6 +528,7 @@ type jailWiringInput struct {
 	codePath       string
 	testPath       string
 	repoDir        string
+	langName       string // resolved language plugin name — drives Go dep vendoring
 	fsPath         func(string) string
 	code           []byte
 	devTest        []byte
@@ -544,6 +548,11 @@ type jailWiring struct {
 	codeKey    string
 	devTestKey string
 	depBinds   []adequacy.DepBind
+	// cleanup releases any temp staging dir created for Go dep vendoring
+	// (see ensureGoVendored). Always non-nil; a no-op when nothing was staged.
+	// The caller MUST defer it after the run completes — the jail bind-mounts
+	// vendor/ from the staged copy, so it has to outlive scoring.
+	cleanup func()
 }
 
 // buildJailWiring resolves the jail-backed scorer/validator/enumerator and the
@@ -558,13 +567,28 @@ type jailWiring struct {
 // --local: ..." message ready to print as-is; the caller always exits 2 for
 // a non-nil error from this function (every failure path here is a usage/
 // input error, never an internal one).
-func buildJailWiring(in jailWiringInput) (jailWiring, error) {
-	var w jailWiring
+func buildJailWiring(in jailWiringInput) (w jailWiring, err error) {
+	w.cleanup = func() {}
+	// If wiring fails AFTER a vendor staging dir was created, release it here —
+	// the caller only defers cleanup on the success path.
+	defer func() {
+		if err != nil && w.cleanup != nil {
+			w.cleanup()
+			w.cleanup = func() {}
+		}
+	}()
 	if in.repoDir != "" {
 		if len(in.checkArgv) == 0 {
 			return w, fmt.Errorf("corral certify --local: --repo-dir requires the project's own test command after `--`, e.g. `-- python3 -m pytest tests/test_recipes.py`")
 		}
-		repoFiles, depBinds, lerr := loadRepoFiles(in.repoDir, buildLoadOpts(in.iso.Name(), in.bindDirFlag, in.noBindDepsFlag))
+		// Provision external Go deps for the offline jail (no-op for other langs,
+		// non-modules, or already-vendored repos). Seed from the returned dir.
+		seedDir, cleanup, verr := ensureGoVendored(in.repoDir, in.langName, in.stdout)
+		if verr != nil {
+			return w, verr
+		}
+		w.cleanup = cleanup
+		repoFiles, depBinds, lerr := loadRepoFiles(seedDir, buildLoadOpts(in.iso.Name(), in.bindDirFlag, in.noBindDepsFlag))
 		if lerr != nil {
 			return w, fmt.Errorf("corral certify --local: reading --repo-dir %s: %v", in.repoDir, lerr)
 		}

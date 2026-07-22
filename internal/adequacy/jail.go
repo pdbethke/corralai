@@ -190,6 +190,27 @@ func (j bwrapJail) writeWorkspace(files map[string]string) (dir string, err erro
 // is nil — corral never falls back to running untrusted test+code unsandboxed.
 // RunTest, RunTestVerbose, and Enumerate all funnel through here so the
 // workspace/binds/timeout handling never drifts between them.
+// shellQuote single-quotes one argv element so the jail's `sh -c` treats it as a
+// literal: an embedded ' is closed, escaped, and reopened. testCmd is an ARGV
+// (a program plus its literal arguments) — to run a compound shell command, pass
+// it as a single explicit element, e.g. []string{"sh", "-c", "a && b"}.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// shellJoin renders an argv as one sh-safe command string, each element quoted.
+// It replaces a bare strings.Join(cmd, " "), which leaked argv metacharacters
+// into `sh -c`: a `-run '^Foo$|^Bar'` regex (with $, |, ()) was re-parsed into
+// pipes/subshells, corrupting the command and fail-closing the audit for the
+// wrong reason. Quoting makes the argv literal, exactly as exec would.
+func shellJoin(cmd []string) string {
+	quoted := make([]string, len(cmd))
+	for i, a := range cmd {
+		quoted[i] = shellQuote(a)
+	}
+	return strings.Join(quoted, " ")
+}
+
 func (j bwrapJail) runInJail(ctx context.Context, files map[string]string, cmd []string) (sandbox.Result, error) {
 	if len(cmd) == 0 {
 		return sandbox.Result{}, errors.New("adequacy: empty command")
@@ -204,7 +225,7 @@ func (j bwrapJail) runInJail(ctx context.Context, files map[string]string, cmd [
 	if berr != nil {
 		return sandbox.Result{}, berr
 	}
-	res, err := sandbox.RunGuarded(ctx, strings.Join(cmd, " "), sandbox.Options{
+	res, err := sandbox.RunGuarded(ctx, shellJoin(cmd), sandbox.Options{
 		Workspace:     dir,
 		Backend:       j.backend,
 		Network:       false,

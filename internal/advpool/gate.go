@@ -224,6 +224,28 @@ type JailValidator struct {
 	BaseFiles map[string]string
 }
 
+// CompileError is returned by CompileTest when the authored test builds a
+// workspace but does not compile. It carries the jail's actual compiler output
+// so the driver can feed it back to the test-writer on retry instead of blindly
+// re-asking — a bare "does not compile" taught the writer nothing, so it
+// repeated the same mistake until it exhausted its attempts. Output is empty
+// only when the jail could not surface it (the RunTest fallback path).
+type CompileError struct{ Output string }
+
+func (e *CompileError) Error() string {
+	if strings.TrimSpace(e.Output) == "" {
+		return "advpool: test does not compile"
+	}
+	return "advpool: test does not compile:\n" + e.Output
+}
+
+// verboseJail is the optional Jail extension that also returns the compiler
+// output. bwrapJail implements it; a Jail that doesn't falls back to the bare
+// RunTest path below — still a correct pass/fail, just no output to feed back.
+type verboseJail interface {
+	RunTestVerbose(ctx context.Context, files map[string]string, cmd []string) (bool, string, error)
+}
+
 func (v JailValidator) CompileTest(ctx context.Context, codePath, code, test string) error {
 	p, err := pluginFor(codePath)
 	if err != nil {
@@ -240,13 +262,24 @@ func (v JailValidator) CompileTest(ctx context.Context, codePath, code, test str
 	ws[codePath] = code
 	testPath := advPoolTestPath(codePath)
 	ws[testPath] = test
+	cmd := p.CompileCheck(codePath, testPath)
 
-	compiles, err := v.Jail.RunTest(ctx, ws, p.CompileCheck(codePath, testPath))
+	if vj, ok := v.Jail.(verboseJail); ok {
+		compiles, output, err := vj.RunTestVerbose(ctx, ws, cmd)
+		if err != nil {
+			return fmt.Errorf("advpool: compile-verify test: %w", err)
+		}
+		if !compiles {
+			return &CompileError{Output: output}
+		}
+		return nil
+	}
+	compiles, err := v.Jail.RunTest(ctx, ws, cmd)
 	if err != nil {
 		return fmt.Errorf("advpool: compile-verify test: %w", err)
 	}
 	if !compiles {
-		return fmt.Errorf("advpool: test does not compile")
+		return &CompileError{}
 	}
 	return nil
 }

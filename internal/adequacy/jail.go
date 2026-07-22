@@ -185,58 +185,24 @@ func (j bwrapJail) writeWorkspace(files map[string]string) (dir string, err erro
 	return dir, nil
 }
 
-// RunTest writes files into a fresh temp workspace and runs testCmd inside
-// the jail. It refuses to run at all when backend is nil — corral never
-// falls back to running untrusted test+code unsandboxed.
-func (j bwrapJail) RunTest(ctx context.Context, files map[string]string, testCmd []string) (bool, error) {
-	if len(testCmd) == 0 {
-		return false, errors.New("adequacy: empty test command")
-	}
-	dir, err := j.writeWorkspace(files)
-	if err != nil {
-		return false, err
-	}
-	defer os.RemoveAll(dir) // #nosec G104 -- best-effort cleanup of our own disposable temp dir
-
-	roBinds, berr := j.resolveBinds(dir)
-	if berr != nil {
-		return false, berr
-	}
-	res, err := sandbox.RunGuarded(ctx, strings.Join(testCmd, " "), sandbox.Options{
-		Workspace:     dir,
-		Backend:       j.backend,
-		Network:       false,
-		Timeout:       j.timeout,
-		ReadOnlyBinds: roBinds,
-	})
-	if err != nil {
-		if res.TimedOut {
-			return false, fmt.Errorf("%w: %s", ErrTestTimeout, res.Err)
-		}
-		return false, err
-	}
-	return res.ExitCode == 0, nil
-}
-
-// Enumerate is RunTest's stdout-returning sibling: same disposable
-// workspace/perms/anti-traversal handling (writeWorkspace), but reports
-// sandbox.Result.Output instead of collapsing the run to a bool. An empty
-// output on a real (non-error) run is a legitimate "no tests" answer, not a
-// failure — only a genuine timeout or infra failure to start the run
-// returns a non-nil error, mirroring RunTest's own contract.
-func (j bwrapJail) Enumerate(ctx context.Context, files map[string]string, cmd []string) (string, error) {
+// runInJail writes files into a fresh temp workspace and runs cmd inside the
+// jail, returning the raw sandbox result. It refuses to run at all when backend
+// is nil — corral never falls back to running untrusted test+code unsandboxed.
+// RunTest, RunTestVerbose, and Enumerate all funnel through here so the
+// workspace/binds/timeout handling never drifts between them.
+func (j bwrapJail) runInJail(ctx context.Context, files map[string]string, cmd []string) (sandbox.Result, error) {
 	if len(cmd) == 0 {
-		return "", errors.New("adequacy: empty list command")
+		return sandbox.Result{}, errors.New("adequacy: empty command")
 	}
 	dir, err := j.writeWorkspace(files)
 	if err != nil {
-		return "", err
+		return sandbox.Result{}, err
 	}
 	defer os.RemoveAll(dir) // #nosec G104 -- best-effort cleanup of our own disposable temp dir
 
 	roBinds, berr := j.resolveBinds(dir)
 	if berr != nil {
-		return "", berr
+		return sandbox.Result{}, berr
 	}
 	res, err := sandbox.RunGuarded(ctx, strings.Join(cmd, " "), sandbox.Options{
 		Workspace:     dir,
@@ -247,8 +213,44 @@ func (j bwrapJail) Enumerate(ctx context.Context, files map[string]string, cmd [
 	})
 	if err != nil {
 		if res.TimedOut {
-			return "", fmt.Errorf("%w: %s", ErrTestTimeout, res.Err)
+			return res, fmt.Errorf("%w: %s", ErrTestTimeout, res.Err)
 		}
+		return res, err
+	}
+	return res, nil
+}
+
+// RunTest reports whether testCmd exited 0 inside the jail.
+func (j bwrapJail) RunTest(ctx context.Context, files map[string]string, testCmd []string) (bool, error) {
+	res, err := j.runInJail(ctx, files, testCmd)
+	if err != nil {
+		return false, err
+	}
+	return res.ExitCode == 0, nil
+}
+
+// RunTestVerbose is RunTest that ALSO returns the jail's combined stdout+stderr.
+// The compile-verify path uses it so a non-compiling test's actual compiler
+// error is surfaced to the caller (and fed back to the test-writer on retry)
+// instead of a bare "does not compile". Output is returned even on a non-nil
+// error so a timeout/infra failure can still carry whatever the jail printed.
+func (j bwrapJail) RunTestVerbose(ctx context.Context, files map[string]string, testCmd []string) (bool, string, error) {
+	res, err := j.runInJail(ctx, files, testCmd)
+	if err != nil {
+		return false, res.Output, err
+	}
+	return res.ExitCode == 0, res.Output, nil
+}
+
+// Enumerate is RunTest's stdout-returning sibling: same disposable
+// workspace/perms/anti-traversal handling (writeWorkspace), but reports
+// sandbox.Result.Output instead of collapsing the run to a bool. An empty
+// output on a real (non-error) run is a legitimate "no tests" answer, not a
+// failure — only a genuine timeout or infra failure to start the run
+// returns a non-nil error, mirroring RunTest's own contract.
+func (j bwrapJail) Enumerate(ctx context.Context, files map[string]string, cmd []string) (string, error) {
+	res, err := j.runInJail(ctx, files, cmd)
+	if err != nil {
 		return "", err
 	}
 	return res.Output, nil

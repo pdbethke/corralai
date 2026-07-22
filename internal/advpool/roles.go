@@ -116,7 +116,21 @@ func renderTestCritic(rs RunSpec, _ []repoindex.Signature, _ []adequacy.Mutant) 
 // survivors the dev's tests missed: the goal is augmented with the
 // surviving mutants so the worker's model writes a test that kills what the
 // dev's suite let through, not a generic test of the goal.
+// renderTestWriter is the RoleTestWriter Render func: the initial (survivors
+// nil) and survivor-promote renders. Compile-failure retries go through
+// renderTestWriterWithRepair to feed the compiler error back.
 func renderTestWriter(rs RunSpec, sigs []repoindex.Signature, survivors []adequacy.Mutant) string {
+	return renderTestWriterWithRepair(rs, sigs, survivors, "", "")
+}
+
+// renderTestWriterWithRepair renders the test-writer instruction, appending a
+// REPAIR block when a prior attempt's test (prevTest) and its compiler error
+// (compileErr) are supplied — so a compile-failure retry CORRECTS the actual
+// error instead of blindly repeating it. Both empty == a normal render. The
+// driver's retry path (tickPoolAdequacy) is the only caller that passes them;
+// see CompileError for why a bare "does not compile" left the writer unable to
+// improve.
+func renderTestWriterWithRepair(rs RunSpec, sigs []repoindex.Signature, survivors []adequacy.Mutant, prevTest, compileErr string) string {
 	goal := rs.Goal
 	if len(survivors) > 0 {
 		var b strings.Builder
@@ -134,8 +148,14 @@ func renderTestWriter(rs RunSpec, sigs []repoindex.Signature, survivors []adequa
 	// through as a latent runtime break. The authored test lands in the SAME
 	// directory as the code, so a same-directory reference by this base name is
 	// correct. Stated as a fact so it stays right across languages (Go stays
-	// white-box same-package; python/js/ts import by name/extension).
-	named := fmt.Sprintf("The source file under review is named %q, and your test file will be placed in the SAME directory as it. Reference or import the code under test as appropriate for the language, using that exact file name — do not invent or assume any other name.\n\n%s", filepath.Base(rs.CodePath), goal)
+	// white-box same-package; python/js/ts import by name/extension). The
+	// unique-names clause heads off the single most common compile failure: a
+	// white-box Go test redeclaring a helper/test name the dev's own suite (also
+	// seeded into the jail, same package) already defines.
+	named := fmt.Sprintf("The source file under review is named %q, and your test file will be placed in the SAME directory as it. Reference or import the code under test as appropriate for the language, using that exact file name — do not invent or assume any other name. Your test may share the package/namespace with the developer's OWN tests, so give your test function(s) and any helpers UNIQUE names — never redeclare an identifier the existing suite may already define.\n\n%s", filepath.Base(rs.CodePath), goal)
+	if strings.TrimSpace(compileErr) != "" {
+		named = fmt.Sprintf("%s\n\n--- YOUR PREVIOUS ATTEMPT DID NOT COMPILE ---\nYou wrote:\n%s\n\nThe compiler reported:\n%s\n\nReturn a corrected FULL test file that compiles cleanly. Fix exactly what the compiler flagged; if it is a redeclared/duplicate identifier, rename yours to something unique.", named, prevTest, strings.TrimSpace(compileErr))
+	}
 	p := langFor(rs)
 	system, user := testgen.WriteTestPrompt(p.TestWriterSystem(), named, rs.Code, sigs)
 	return joinPrompt(system, user)

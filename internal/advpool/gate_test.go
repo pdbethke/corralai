@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -112,8 +113,23 @@ func TestJailValidatorCompileTest_SubdirectoryNonCompilingTest(t *testing.T) {
 	code := "package auth\n\nfunc ValidatePassword(pw string) error { return nil }\n"
 	badTest := "package auth\n\nimport \"testing\"\n\nfunc TestValidatePassword(t *testing.T) {\n\tValidatePassword(123)\n}\n" // wrong arg type
 
-	if err := v.CompileTest(context.Background(), "internal/auth/login.go", code, badTest); err == nil {
+	err := v.CompileTest(context.Background(), "internal/auth/login.go", code, badTest)
+	if err == nil {
 		t.Fatal("expected CompileTest to reject a non-compiling test, got nil error")
+	}
+	// The corrective-retry loop depends on this error being a *CompileError that
+	// actually carries the jail's compiler output — an empty Output silently
+	// reverts the driver to the pre-fix BLIND retry (bare "does not compile" fed
+	// back, model repeats the mistake to exhaustion). Assert both.
+	var ce *CompileError
+	if !errors.As(err, &ce) {
+		t.Fatalf("expected a *CompileError, got %T: %v", err, err)
+	}
+	if strings.TrimSpace(ce.Output) == "" {
+		t.Fatal("CompileError.Output is empty — the real compiler diagnostic was not surfaced")
+	}
+	if !strings.Contains(ce.Output, "ValidatePassword") && !strings.Contains(ce.Output, "123") {
+		t.Fatalf("CompileError.Output does not carry the real go-vet diagnostic:\n%s", ce.Output)
 	}
 }
 

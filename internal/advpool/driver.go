@@ -4,6 +4,7 @@ package advpool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sort"
@@ -693,7 +694,7 @@ func (d *Driver) Tick(ctx context.Context, missionID int64) (*Verdict, error) {
 	}
 
 	if run.devScored && !run.poolScored {
-		if err := d.tickPoolAdequacy(ctx, run); err != nil {
+		if err := d.tickPoolAdequacy(ctx, missionID, run); err != nil {
 			return nil, err
 		}
 	}
@@ -957,7 +958,7 @@ func (d *Driver) tickDevAdequacy(ctx context.Context, missionID int64, run *runS
 // test compiles, then score it (via Scorer, brain-side) against the
 // survivors the dev's tests missed. ProvenMissed is how many of those
 // survivors the pool's test then killed — real, catchable gaps.
-func (d *Driver) tickPoolAdequacy(ctx context.Context, run *runState) error {
+func (d *Driver) tickPoolAdequacy(ctx context.Context, missionID int64, run *runState) error {
 	tw, err := d.Q.TaskByID(run.testWriterTaskID)
 	if err != nil {
 		return fmt.Errorf("advpool: load test-writer task: %w", err)
@@ -975,8 +976,31 @@ func (d *Driver) tickPoolAdequacy(ctx context.Context, run *runState) error {
 	if cerr := d.Validator.CompileTest(ctx, run.rs.CodePath, run.rs.Code, writerTest); cerr != nil {
 		run.testWriterAttempts++
 		if run.testWriterAttempts < MaxTestWriterAttempts {
-			if _, rerr := d.Q.ReopenTask(tw.ID); rerr != nil {
-				return fmt.Errorf("advpool: reopen test-writer after compile failure: %w", rerr)
+			// CORRECTIVE retry: re-render the test-writer WITH the compiler error
+			// and its own broken test so it fixes the actual problem, instead of
+			// the old blind ReopenTask that re-ran the identical prompt and let
+			// the model repeat the same mistake until exhaustion. Supersede (the
+			// same mechanism the survivor-promote uses) is required to swap the
+			// instruction — ReopenTask keeps the old one.
+			var ce *CompileError
+			compileMsg := cerr.Error()
+			if errors.As(cerr, &ce) && strings.TrimSpace(ce.Output) != "" {
+				compileMsg = ce.Output
+			}
+			newInstr := renderTestWriterWithRepair(run.rs, run.sigs, run.devSurvivors, writerTest, compileMsg)
+			newID, serr := d.Q.SupersedeTask(tw.ID, queue.TaskSpec{
+				Key:         RoleTestWriter,
+				Role:        RoleTestWriter,
+				Title:       tw.Title,
+				Instruction: newInstr,
+				Model:       tw.Model,
+			})
+			if serr != nil {
+				return fmt.Errorf("advpool: reissue test-writer with compile feedback: %w", serr)
+			}
+			run.testWriterTaskID = newID
+			if _, perr := d.Q.PromoteReady(missionID); perr != nil {
+				return fmt.Errorf("advpool: promote test-writer after compile-feedback reissue: %w", perr)
 			}
 			return fmt.Errorf("advpool: test-writer result does not compile, reissued for retry (%d/%d): %w",
 				run.testWriterAttempts, MaxTestWriterAttempts, cerr)

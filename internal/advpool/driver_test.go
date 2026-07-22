@@ -995,15 +995,30 @@ func TestTick_PoolAdequacy_CompileError_ReopensAndSkipsScore(t *testing.T) {
 		t.Fatalf("expected pool Scorer.Score NOT called on a non-compiling artifact, still want 1 call, got %d", len(scorer.calls))
 	}
 
-	reopened, terr := d.Q.TaskByID(tw.ID)
+	// The old task is SUPERSEDED and a fresh test-writer task is reissued
+	// (ready) carrying the compiler error fed back to the writer — the
+	// corrective-retry contract that replaced the old blind reopen.
+	old, terr := d.Q.TaskByID(tw.ID)
 	if terr != nil {
 		t.Fatal(terr)
 	}
-	if reopened == nil {
-		t.Fatal("test-writer task vanished after reopen")
+	if old == nil || old.Status != queue.StatusSuperseded {
+		t.Fatalf("old test-writer status = %v, want superseded", old)
 	}
-	if reopened.Status != queue.StatusReady {
-		t.Fatalf("test-writer status = %s, want ready (reopened for retry)", reopened.Status)
+	newID := d.runs[7].testWriterTaskID
+	if newID == tw.ID {
+		t.Fatal("expected a NEW test-writer task id after corrective reissue, got the same id")
+	}
+	reissued, terr := d.Q.TaskByID(newID)
+	if terr != nil {
+		t.Fatal(terr)
+	}
+	if reissued == nil || reissued.Status != queue.StatusReady {
+		t.Fatalf("reissued test-writer status = %v, want ready", reissued)
+	}
+	if !strings.Contains(reissued.Instruction, "syntax error in generated test") ||
+		!strings.Contains(reissued.Instruction, "DID NOT COMPILE") {
+		t.Fatalf("reissued instruction missing compile-repair feedback:\n%s", reissued.Instruction)
 	}
 }
 
@@ -1056,12 +1071,22 @@ func TestTick_PoolAdequacy_CompileError_ExhaustsAttemptsThenConverges(t *testing
 			if got != nil {
 				t.Fatalf("attempt %d: expected no verdict yet, got %+v", attempt, got)
 			}
-			reopened, terr := d.Q.TaskByID(tw.ID)
+			superseded, terr := d.Q.TaskByID(tw.ID)
 			if terr != nil {
 				t.Fatal(terr)
 			}
-			if reopened == nil || reopened.Status != queue.StatusReady {
-				t.Fatalf("attempt %d: expected test-writer reopened (ready), got %+v", attempt, reopened)
+			if superseded == nil || superseded.Status != queue.StatusSuperseded {
+				t.Fatalf("attempt %d: expected old test-writer superseded, got %+v", attempt, superseded)
+			}
+			reissued, terr := d.Q.TaskByID(d.runs[12].testWriterTaskID)
+			if terr != nil {
+				t.Fatal(terr)
+			}
+			if reissued == nil || reissued.Status != queue.StatusReady {
+				t.Fatalf("attempt %d: expected a fresh test-writer reissued (ready), got %+v", attempt, reissued)
+			}
+			if !strings.Contains(reissued.Instruction, "syntax error in generated test") {
+				t.Fatalf("attempt %d: reissued instruction missing compile feedback:\n%s", attempt, reissued.Instruction)
 			}
 			continue
 		}

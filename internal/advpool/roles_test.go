@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pdbethke/corralai/internal/adequacy"
 	golang "github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/queue"
 	"github.com/pdbethke/corralai/internal/repoindex"
@@ -284,5 +285,46 @@ func TestShadowShardTaskKeyRoundTrip(t *testing.T) {
 		if idx, ok := ShadowShardIndexFromKey(bad); ok || idx != 0 {
 			t.Errorf("ShadowShardIndexFromKey(%q): want (0,false), got (%d,%v)", bad, idx, ok)
 		}
+	}
+}
+
+func TestRenderTestWriterWithRepair(t *testing.T) {
+	rs := RunSpec{Goal: "reject bad input", CodePath: "version4.go", Code: "package uuid\nfunc New() {}\n", Lang: "go"}
+	survivors := []adequacy.Mutant{{ID: "m1", Code: "mutant one"}}
+
+	// Base render (no repair): carries the goal + the same-package unique-names
+	// hint, but no repair block.
+	base := renderTestWriterWithRepair(rs, nil, survivors, "", "")
+	if strings.Contains(base, "DID NOT COMPILE") {
+		t.Fatalf("base render must not carry a repair block:\n%s", base)
+	}
+	if !strings.Contains(base, "UNIQUE names") {
+		t.Fatalf("base render missing the same-package unique-names hint:\n%s", base)
+	}
+	if !strings.Contains(base, "mutant one") {
+		t.Fatalf("base render missing the survivor code:\n%s", base)
+	}
+
+	// Repair render: feeds the compiler error + the prior broken test back so
+	// the writer can correct the actual failure.
+	repair := renderTestWriterWithRepair(rs, nil, survivors, "func TestNew(){}", "TestNew redeclared in this block")
+	for _, want := range []string{"DID NOT COMPILE", "func TestNew(){}", "TestNew redeclared in this block"} {
+		if !strings.Contains(repair, want) {
+			t.Fatalf("repair render missing %q:\n%s", want, repair)
+		}
+	}
+
+	// The Render-typed wrapper must be byte-identical to the no-repair variant.
+	if got := renderTestWriter(rs, nil, survivors); got != base {
+		t.Fatal("renderTestWriter must equal renderTestWriterWithRepair(...,\"\",\"\")")
+	}
+}
+
+func TestCompileErrorMessage(t *testing.T) {
+	if got := (&CompileError{Output: "vet: x redeclared"}).Error(); !strings.Contains(got, "vet: x redeclared") {
+		t.Fatalf("CompileError with output must surface it, got %q", got)
+	}
+	if got := (&CompileError{}).Error(); got != "advpool: test does not compile" {
+		t.Fatalf("empty CompileError = %q, want bare message", got)
 	}
 }

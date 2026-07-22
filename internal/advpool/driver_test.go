@@ -1022,6 +1022,47 @@ func TestTick_PoolAdequacy_CompileError_ReopensAndSkipsScore(t *testing.T) {
 	}
 }
 
+// TestTick_PoolAdequacy_EmptyTestWriterResult_ReissuesFresh pins the fix for the
+// degenerate loop: a test-writer that returns an EMPTY result would otherwise get
+// an empty "broken test" fed into the REPAIR prompt ("here is your test: «», fix
+// the compile error"), begetting more emptiness and burning the whole retry
+// budget so a later good attempt never gets a slot. An empty result must reissue
+// a FRESH prompt, not the repair variant.
+func TestTick_PoolAdequacy_EmptyTestWriterResult_ReissuesFresh(t *testing.T) {
+	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}, {ID: "m2", Code: "c2"}}
+	scorer := &fakeScorer{devKillRate: 0.5, devSurvivors: survivors}
+	validator := &fakeValidator{
+		mutants:    []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0], survivors[1]},
+		compileErr: fmt.Errorf("expected 'package', found 'EOF'"), // what an empty test yields
+	}
+	d, _ := newTestDriver(t, 7, scorer, validator, 0.1)
+
+	mg := claimByKey(t, d.Q, RoleMutantGenerator)
+	mustComplete(t, d.Q, mg.ID, "raw mutants")
+	if _, err := d.Tick(context.Background(), 7); err != nil {
+		t.Fatalf("Tick (dev-adequacy): %v", err)
+	}
+
+	tw := claimTaskByID(t, d.Q, d.runs[7].testWriterTaskID)
+	mustComplete(t, d.Q, tw.ID, "") // EMPTY result — the model returned nothing usable
+
+	if _, err := d.Tick(context.Background(), 7); err == nil {
+		t.Fatal("expected Tick to reissue (error) on an empty test-writer result")
+	}
+	reissued, terr := d.Q.TaskByID(d.runs[7].testWriterTaskID)
+	if terr != nil {
+		t.Fatal(terr)
+	}
+	if reissued == nil || reissued.Status != queue.StatusReady {
+		t.Fatalf("reissued test-writer status = %v, want ready", reissued)
+	}
+	// It must be a FRESH prompt, NOT the repair variant — the repair block would
+	// just feed the emptiness back and loop.
+	if strings.Contains(reissued.Instruction, "DID NOT COMPILE") {
+		t.Fatalf("empty result must reissue a FRESH prompt, not the repair variant:\n%s", reissued.Instruction)
+	}
+}
+
 // (i2) a HARD survivor: the test-writer's output NEVER compiles. The driver
 // must not spin forever reopening it — after MaxTestWriterAttempts it must
 // give up and CONVERGE to a signed needs-review verdict carrying the real,

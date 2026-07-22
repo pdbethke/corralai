@@ -1,0 +1,68 @@
+---
+title: "A judge may not certify herself. So I made corral certify corral."
+description: "The whole thesis is that no one can judge their own work. So I turned the tool on itself and asked it to audit its own kill-rate scorer. It couldn't — for four reasons, each hiding behind the last, all wearing the same mask. Here's the debugging, the fix, and the honest number that came out the other side."
+pubDate: 2026-07-22
+draft: false
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+
+*Field note. corral exists to answer one question — can something other than the author confirm the work is fit? There's a comment buried in the code that states the principle plainly: `a judge may not certify herself`. Which raises an uncomfortable question I'd been avoiding: can corral certify corral?*
+
+---
+
+## The obvious experiment I'd been putting off
+
+Every part of this tool is built around *nemo iudex in causa sua* — no one may be judge in their own cause. A different model plants the faults than grades them. The kill-rate is measured by execution, never self-reported. The whole point is that the thing under test doesn't get a vote on whether it passed.
+
+So the honest experiment writes itself: point corral at corral. Specifically, at `internal/adequacy/score.go` — the file that computes kill rates. If corral is going to lecture the world about grading your own exam, it had better survive grading its own grader.
+
+I ran it. And it came back with a verdict that made no sense:
+
+```
+status:        NEEDS-REVIEW (dev suite killed 20/20 mutants)
+dev_kill_rate: 0.00
+survivors:     0
+```
+
+Killed 20 of 20, zero survivors — and a kill rate of *zero*. Twenty out of twenty is a hundred percent. Those numbers cannot both be true. The tool that certifies software was contradicting itself in its own signed output.
+
+## Four bugs wearing one mask
+
+Here's the part worth the whole note. That contradiction wasn't one bug. It was four, and each one was hiding behind the last, and they all looked identical because of the fourth.
+
+**The mask.** When the dev suite can't even pass on the *unmutated* code — a build failure, a broken environment, anything before grading can begin — the scorer fail-closes: nothing gets graded. But the driver, handed an empty result, computed "killed" as *mutants minus survivors* — twenty minus zero — and printed a triumphant, entirely fabricated `killed 20 of 20`. Every kind of failure produced the exact same misleading line. It was a single lie that made four different problems impossible to tell apart. This is the one that scared me most: a tool whose only job is honesty was manufacturing a number.
+
+Peel it off, and underneath:
+
+**One.** The jail runs offline, by design — the code under audit can't phone home. But `go.mod` pins a toolchain (1.26.5) newer than the jail's Go (1.26.4), so `go` tried to *download* the newer toolchain, failed with no network, and the baseline build died. corral could not audit corral because corral's own version pin was newer than the jail's compiler, and nobody had ever hit it because the demos used toy code with no such pin.
+
+**Two.** Even past that, the whole-repo build needs external modules the offline jail's empty cache can't fetch. Toy targets have zero dependencies; a real repo has dozens.
+
+**Three.** And the one that stung: the test command I passed contained a regex — `-run '^TestScore$|^TestScore(...)'` — full of shell metacharacters. corral joined the argv into a string and ran it through `sh -c`, which happily re-parsed my `$`, `|`, and `()` into pipes and subshells and shredded the command. Half my fault for the regex; half corral's, for treating an argv like a shell script.
+
+Four failures. One mask. I only found the other three *after* I fixed the mask — because until then, every single one printed `killed 20 of 20 / 0.00` and told me nothing.
+
+## The critic, still hallucinating on cue
+
+One more, for the record. corral's decorrelated critic — a second, cheaper model that reads the tests cold and flags the vacuous ones — looked at our own `score_test.go` and confidently declared a test worthless. It had "read" an `errJail` test as a `fakeJail` test, invented a failure mode the code plainly doesn't have, and pronounced with total confidence. It was flat wrong. That's the second time that critic has cried wolf on real code.
+
+And it didn't matter. The critic is fenced off — advisory, never gating, recorded as an *unverified* opinion. The signed number comes from execution alone. The architecture assumes the cheap judge will sometimes hallucinate, so the hallucination touched nothing. Watching that safety net do its job on our own code was, honestly, the most reassuring moment of the whole exercise.
+
+## The number
+
+Once the jail could actually build and grade, corral audited its own kill-rate scorer and returned a real verdict:
+
+**75%.** Its own tests caught fifteen of twenty planted faults. Five survived. Below corral's own 0.8 certify bar — **needs-review**, with five execution-proven gaps in the test coverage of the very code that measures test coverage.
+
+I'll be honest: I wanted a clean 90. What I got is better. A tool that only ever passes things is a rubber stamp. A tool that fails *its own most sacred file* and hands you the five specific gaps — that's the thing actually working. The physician did not heal thyself. The physician found five things wrong with thyself and wrote them down.
+
+## What shipped
+
+The mask is gone: when the baseline can't pass, corral now says `COULD-NOT-GRADE` with the real reason, instead of inventing a tally. The jail pins its toolchain resolution so an offline audit fails with a clear "requires a newer Go" instead of a silent hang. Both are merged.
+
+Two of the four I deferred, out loud, rather than rush a verdict-path change on a launch day — the shell-safe command exec needs a real interface change, and the offline dependency story deserves its own design. They're written down where the next person will find them. That's the same discipline the tool is selling: disclose the gap, don't paper over it.
+
+The thesis was never that corral is above judgment. It's that *nothing* is — including corral. The only way to earn that claim is to turn the instrument on yourself and publish what it finds, especially the unflattering parts. So: five gaps in our own scorer, four bugs in our own jail, one of them a lie the tool was telling in its own signed output.
+
+A judge may not certify herself. We didn't. We let the tool do it, and it convicted us. That's the whole idea.

@@ -2625,7 +2625,12 @@ function renderReplayProposals(){
     h += '<div class="tests-verdict ' + (proven ? 'tv-ok' : 'tv-review') + '">' + esc(proven
       ? 'result: run in the jail, this test KILLS the survivor — an execution-proof the gap is real and catchable'
       : 'result: authored to close the gap; not execution-proven on this run — review before adding') + '</div>';
-    h += '<div class="cv-pactions"><button class="cv-acc" disabled>approve → add to suite</button><button class="cv-rej" disabled>dismiss</button></div></div>';
+    h += '<div class="cv-pactions">'
+      + '<button class="cv-acc" onclick="corralProposalAct(this,\'accept\')">accept → add to suite</button>'
+      + '<button class="cv-rej" onclick="corralProposalReject(this)">reject</button></div>';
+    h += '<div class="cv-rejbox" hidden><textarea class="cv-rejreason" rows="2" placeholder="reason for rejecting — recorded with the decision…"></textarea>'
+      + '<button class="cv-rejgo" onclick="corralProposalAct(this,\'reject\')">confirm reject</button></div>';
+    h += '<div class="cv-demo" hidden></div></div>';
   }
   h += '</div>';
   el.innerHTML = h;
@@ -2672,6 +2677,30 @@ window.seekReplay = seekReplay;
 window.setReplaySpeed = setReplaySpeed;
 window.closeReplay = closeReplay;
 window.cockpitView = cockpitView;
+// Proposal accept/reject — the human gate, shown as WORKING UI in the replay
+// (demo: it doesn't persist, a recording is read-only). In the live tool these
+// same controls POST the decision to the brain and the reject reason is recorded
+// with it — wiring the real path is the follow-on.
+window.corralProposalReject = function(btn){
+  const prop = btn.closest('.cv-prop'); if(!prop) return;
+  const box = prop.querySelector('.cv-rejbox');
+  if(box){ box.hidden = false; const ta = box.querySelector('textarea'); if(ta) ta.focus(); }
+};
+window.corralProposalAct = function(btn, kind){
+  const prop = btn.closest('.cv-prop'); if(!prop) return;
+  let msg;
+  if(kind === 'accept'){
+    msg = '✓ accepted — in the live tool this adds the test to your suite and signs the decision into the audit record.';
+  } else {
+    const ta = prop.querySelector('.cv-rejreason');
+    const reason = ta ? ta.value.trim() : '';
+    if(!reason){ if(ta){ ta.focus(); ta.placeholder = 'a reason is required to reject — recorded with the decision'; } return; }
+    msg = '✕ rejected — “' + reason + '”. In the live tool the reason is recorded with the decision.';
+  }
+  const demo = prop.querySelector('.cv-demo');
+  if(demo){ demo.hidden = false; demo.textContent = msg + '  · demo — this replay is read-only; accept/reject is wired in the live tool.'; }
+  prop.querySelectorAll('button, textarea').forEach(x => { x.disabled = true; });
+};
 window.replayAgentClick = replayAgentClick;
 window.openReplayAgentWindow = openReplayAgentWindow;
 window.replayTaskClick = replayTaskClick;

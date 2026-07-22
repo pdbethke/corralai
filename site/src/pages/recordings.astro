@@ -275,7 +275,15 @@ cards.sort((a, b) => leadRank(a.slug) - leadRank(b.slug) || a.slug.localeCompare
     display: inline-block; font-size: 10px; text-transform: uppercase; letter-spacing: .6px;
     background: var(--stage-line); color: var(--stage-fg); border-radius: 4px; padding: 1px 6px; margin-right: 8px; vertical-align: middle;
   }
-  :global(#cockpit .cv-pactions button) { margin-right: 8px; margin-top: 8px; font-size: 12px; padding: 3px 10px; border-radius: 5px; border: 1px solid var(--stage-line); background: var(--stage-panel); color: var(--stage-muted); opacity: .6; }
+  :global(#cockpit .cv-pactions button) { margin-right: 8px; margin-top: 8px; font-size: 12px; padding: 4px 12px; border-radius: 5px; border: 1px solid var(--stage-line); background: var(--stage-panel); color: var(--stage-muted); cursor: pointer; }
+  :global(#cockpit .cv-pactions .cv-acc) { border-color: var(--stage-green,#8fdcab); color: var(--stage-green,#8fdcab); }
+  :global(#cockpit .cv-pactions .cv-rej) { border-color: var(--stage-amber); color: var(--stage-amber); }
+  :global(#cockpit .cv-pactions button:disabled) { opacity: .5; cursor: default; }
+  :global(#cockpit .cv-rejbox) { margin-top: 10px; }
+  :global(#cockpit .cv-rejbox textarea) { width: 100%; box-sizing: border-box; background: var(--stage-bg,#0e1116); color: var(--stage-fg); border: 1px solid var(--stage-line); border-radius: 6px; padding: 6px 8px; font: inherit; font-size: 12px; resize: vertical; }
+  :global(#cockpit .cv-rejbox .cv-rejgo) { margin-top: 6px; font-size: 12px; padding: 4px 12px; border-radius: 5px; border: 1px solid var(--stage-amber); background: var(--stage-panel); color: var(--stage-amber); cursor: pointer; }
+  :global(#cockpit .cv-rejbox .cv-rejgo:disabled) { opacity: .5; cursor: default; }
+  :global(#cockpit .cv-demo) { margin-top: 10px; color: var(--stage-muted); font-size: 11.5px; font-style: italic; }
   :global(#stage-frame #hud) {
     position: relative; inset: auto; height: 42px; display: flex; align-items: baseline; gap: 14px;
     padding: 10px 14px; background: var(--stage-bg); color: var(--stage-fg);

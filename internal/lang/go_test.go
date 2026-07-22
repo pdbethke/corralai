@@ -13,8 +13,14 @@ func TestGoPluginMatchesLegacyBehavior(t *testing.T) {
 	if got := p.TestCmd(); !reflect.DeepEqual(got, []string{"go", "test", "./..."}) {
 		t.Fatalf("TestCmd() = %v", got)
 	}
-	if got := p.CompileCheck("a/b.go", "a/b_test.go"); !reflect.DeepEqual(got, []string{"go", "vet", "./..."}) {
-		t.Fatalf("CompileCheck() = %v", got)
+	// A file in a package dir scopes the vet to that package (not the whole
+	// module) so a monorepo audit doesn't compile unrelated cgo deps.
+	if got := p.CompileCheck("a/b.go", "a/b_test.go"); !reflect.DeepEqual(got, []string{"go", "vet", "./a/..."}) {
+		t.Fatalf("CompileCheck(package path) = %v", got)
+	}
+	// A bare filename (single-file mode) has no package dir → whole scaffold.
+	if got := p.CompileCheck("b.go", "b_test.go"); !reflect.DeepEqual(got, []string{"go", "vet", "./..."}) {
+		t.Fatalf("CompileCheck(bare file) = %v", got)
 	}
 	for in, want := range map[string]string{
 		"login.go":           "login_test.go",

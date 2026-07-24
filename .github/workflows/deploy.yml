@@ -12,39 +12,94 @@ jobs:
     # Fast correctness gate on a GitHub-hosted runner: vet + the full test
     # suite (coordination, memory, principals, auth). Runs on PRs too so a
     # red build blocks the deploy and shows on the PR.
+    #
+    # `validate` is a REQUIRED status check, so this job must ALWAYS run to
+    # completion — a skipped required check stays "pending" forever and blocks
+    # every merge. So we never path-filter the job itself; instead we detect
+    # whether anything but docs changed and skip only the heavy STEPS when it's
+    # a Markdown-only change. Detection fails SAFE: anything it can't confidently
+    # classify as docs-only runs the full build.
     runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history so the changed-file diff below is exact
+      - name: Detect whether anything but docs changed
+        id: filter
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -uo pipefail
+          files=""
+          if [ "$EVENT" = "pull_request" ]; then
+            git fetch --no-tags --quiet origin "$BASE_REF" || true
+            base="$(git merge-base FETCH_HEAD HEAD 2>/dev/null || true)"
+            [ -n "$base" ] && files="$(git diff --name-only "$base" HEAD 2>/dev/null || true)"
+          elif [ -n "${BEFORE:-}" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] \
+               && git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            files="$(git diff --name-only "$BEFORE" HEAD 2>/dev/null || true)"
+          fi
+          # Fail-safe: if we couldn't enumerate the diff, run the full build.
+          if [ -z "$files" ]; then
+            echo "changed files: <undetermined> — running full validate (fail-safe)"
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "changed files:"; printf '  %s\n' $files
+          # Any changed file that is not Markdown -> run the full build.
+          if printf '%s\n' "$files" | grep -qvE '(^$|\.md$)'; then
+            code=true
+          else
+            code=false
+          fi
+          echo "non-docs changed: $code"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-go@v5
+        if: steps.filter.outputs.code == 'true'
         with:
           go-version-file: go.mod
           cache: true
-      - run: go vet ./...
+      - if: steps.filter.outputs.code == 'true'
+        run: go vet ./...
       - name: Provision Python test toolchain (audit gate — python plugin)
+        if: steps.filter.outputs.code == 'true'
         run: |
           sudo apt-get install -y python3-pytest || python3 -m pip install --break-system-packages --quiet pytest || true
           python3 -m pytest --version || echo "pytest not available — python-in-jail test will SKIP"
       - name: Provision Ruby test toolchain (audit gate — ruby plugin)
+        if: steps.filter.outputs.code == 'true'
         run: |
           sudo apt-get install -y ruby ruby-rspec || true
           ruby --version || echo "ruby not available — ruby-in-jail test will SKIP"
       - name: Provision JS/TS test toolchain (audit gate — js/ts plugins)
+        if: steps.filter.outputs.code == 'true'
         run: |
           node --version || echo "node missing — js/ts-in-jail tests will SKIP"
           sudo npm install -g typescript @types/node || npm install -g typescript @types/node || true
           tsc --version || echo "tsc not available — ts-in-jail test will SKIP"
-      - run: go test ./...
+      - if: steps.filter.outputs.code == 'true'
+        run: go test ./...
       - name: Install gosec
+        if: steps.filter.outputs.code == 'true'
         run: go install github.com/securego/gosec/v2/cmd/gosec@latest
       - name: Security gate
+        if: steps.filter.outputs.code == 'true'
         run: bash scripts/check-security.sh
+      - name: Docs-only change — heavy checks skipped
+        if: steps.filter.outputs.code != 'true'
+        run: echo "Only Markdown changed — go vet/test + security gate skipped; validate passes."
 
   deploy:
     # Runs ON the deploy host (a self-hosted runner, as the deploy user), so it
     # updates the canonical clone + rebuilds + restarts in place — no SSH key
-    # leaves the host. Skipped on PRs.
+    # leaves the host. Skipped on PRs, and skipped for docs-only pushes to main
+    # (nothing about the binary changed, so there's nothing to rebuild).
     needs: validate
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && needs.validate.outputs.code == 'true'
     runs-on: [self-hosted, corralai]
     steps:
       - name: Build + restart the brain

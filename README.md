@@ -64,6 +64,17 @@ re-check anytime, offline:
 corral certify verify verdict.json --pubkey "$(corral certify pubkey)" --allow-unanchored
 ```
 
+`--allow-unanchored` is deliberate: a record minted off *your own* key, with no
+server, was never submitted to a public witness, so it's "signed by you, not
+third-party attested" — a weaker claim, and verify makes you say so out loud.
+Records the **brain** signs are stronger: it anchors every one to a public,
+append-only transparency log (**Sigstore Rekor**, `CORRALAI_REKOR_URL`) at signing
+time and carries the inclusion proof *inside* the record, so `corral certify verify`
+checks it **offline** against the TUF-rooted Rekor key — no round trip to the brain or
+the log — and tampering is detectable even by someone who doesn't trust the brain. A
+witness outage degrades honestly (`anchored=false`, never a fabricated proof); verify
+then refuses unless you pass `--allow-unanchored`.
+
 Go, Python (pytest), Ruby (minitest/RSpec), JavaScript (node:test), and TypeScript
 (tsc + node:test) — the language is inferred from `--code`'s extension; C is next,
 each a plugin in `internal/lang`. By default the audit runs two distinct Claude
@@ -206,6 +217,15 @@ you can query the signed records with live SQL. Full docs at
 - **Cross-swarm coordination** — brains hold signed (Ed25519) identities and
   publish/read *advisory* claims through the fleet, so independent swarms avoid
   colliding — observe, never coerce.
+- **Shared reach (the MCP gateway)** — register any service (yours, wrapped as MCP)
+  with the brain and the herd can *use* it without ever holding the key: the brain
+  proxies the call, holds the upstream secret (never returns it), SSRF-guards every
+  dial (resolve-and-pin), and appends the call to the audit ledger under the verified
+  caller. Governance is scoped to bound mischief — `register_endpoint` makes an
+  **owner-scoped** endpoint only that user can reach; only an admin's `promote_endpoint`
+  makes it team-wide (optionally swapping in a team credential); `list_capabilities` /
+  `call_capability` are the herd's use path. The same pattern as everything else:
+  *share the capability, hold the credential.*
 
 ## Run anywhere
 

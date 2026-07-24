@@ -113,6 +113,7 @@ repo (or a poisoned document) can't smuggle in authority by shipping a file.
 | `corral-agent` | a **worker** that pulls tasks and executes; drives a model backend (Ollama/OpenAI/Anthropic) |
 | `corral-harness` | a **worker wrapper** around a headless coding CLI (Claude Code, Gemini, Codex, Copilot) via a `HARNESS_CMD` template — bring your own frontier agent to staff an audit role |
 | `corral-observe` | **read-only** credentialed proxy to the live UI — hand it to people who should watch but not touch |
+| `corral-desktop` | **native-window** launcher (`--app` mode) onto a local console |
 | `corral-top` | terminal dashboard of the live corral |
 
 Every binary supports `-h`. Run it to see its exact flags and env vars.

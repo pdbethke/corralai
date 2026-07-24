@@ -318,6 +318,7 @@ Corralai is a **headless server with thin client apps**, like a backup system:
 | **`corral-admin`** | the **operator** — privileged live console plus command verbs over MCP | no | binary / `go install` |
 | **`corral-desktop`** | the **desktop client** — native-window (`--app` mode) launcher onto a local console | no | binary / `go install` |
 | **`corral-harness`** | the **harness-agent launcher** — loops any headless coding-agent CLI as an audit-role worker on ITS auth | no | binary / `go install` |
+| **`corral-top`** | the **terminal dashboard** — a read-only TUI over a live brain (tasks, agents, findings), for a glanceable window without a browser | no | binary / `go install` |
 
 The observer and admin consoles share one reverse-proxy core (`internal/console`),
 parameterized read-only vs read-write.

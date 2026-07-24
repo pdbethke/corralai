@@ -107,13 +107,13 @@ func TestBuildLeaderboardBrief(t *testing.T) {
 	}
 
 	stats := []ModelStats{
-		{Model: "qwen2.5-coder:7b", Role: "builder", TasksCompleted: 20, ExecPassRatePct: 95},
-		{Model: "llama3.2:3b", Role: "builder", TasksCompleted: 2, ExecPassRatePct: 100}, // thin data
+		{Model: "qwen2.5-coder:7b", Role: "tester", TasksCompleted: 20, ExecPassRatePct: 95},
+		{Model: "llama3.2:3b", Role: "tester", TasksCompleted: 2, ExecPassRatePct: 100}, // thin data
 	}
-	eligible := []string{"qwen2.5-coder:7b", "llama3.2:3b", "deepseek-coder:6.7b"} // deepseek untested for builder
+	eligible := []string{"qwen2.5-coder:7b", "llama3.2:3b", "deepseek-coder:6.7b"} // deepseek untested for tester
 	brief := buildLeaderboardBrief(stats, eligible, 5)
 
-	if !strings.Contains(brief, "qwen2.5-coder:7b as builder") || !strings.Contains(brief, "confident") {
+	if !strings.Contains(brief, "qwen2.5-coder:7b as tester") || !strings.Contains(brief, "confident") {
 		t.Fatalf("a 20-task cell should read as confident:\n%s", brief)
 	}
 	if !strings.Contains(brief, "THIN") {

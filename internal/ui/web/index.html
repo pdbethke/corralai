@@ -2396,7 +2396,7 @@ function renderComposer() {
     <span class="drag-agent" draggable="true" ondragstart="mcDrag(event)" data-agent="${esc(a)}" data-backend="${esc(agentBackend(a))}">${esc(a)}</span>
   `).join('');
 
-  const roles = ['builder', 'tester', 'reviewer', 'pentester'];
+  const roles = ['tester', 'reviewer', 'pentester', 'writer'];
   const rolesHtml = roles.map(r => {
     const assigned = mcAssignments[r] ? mcAssignments[r].agent : '';
     const valClass = assigned ? 'has-agent' : '';

@@ -35,7 +35,9 @@ export default defineConfig({
           items: [
             { label: 'Home', link: '/' },
             { label: 'Recordings', link: '/recordings/' },
+            { label: 'DuckDB integration', link: '/warehouse/' },
             { label: 'Field notes', link: '/field-notes/' },
+            { label: 'GitHub', link: 'https://github.com/pdbethke/corralai', attrs: { target: '_blank', rel: 'noopener noreferrer' } },
           ],
         },
         { label: 'Getting started', slug: 'docs/getting-started' },

@@ -27,8 +27,20 @@ Go binary.**
   DuckDB (the same schema federates to MotherDuck by swapping the DSN). `corral certify
   verify` checks a record against the brain's **published** key, never one embedded in
   the record; the verify path refuses without an external trust anchor. Central-trust
-  v1 (the trustless tier is below). Adversarially reviewed — the review caught and
-  closed a silent-pass and a circular-trust-anchor bug before merge.
+  v1, since upgraded — the trustless tier is the next bullet. Adversarially reviewed —
+  the review caught and closed a silent-pass and a circular-trust-anchor bug before merge.
+- **The trustless tier — witness anchoring.** Every record the brain signs is anchored
+  to an external, append-only transparency witness at signing time — Sigstore **Rekor**
+  (`CORRALAI_REKOR_URL`, the public log by default) — and carries the inclusion-proof
+  evidence inside the record itself. `corral certify verify` checks that proof
+  **offline** against the TUF-rooted Rekor key — no round trip to the brain *or* the
+  log — so tampering is detectable *even if you don't trust the brain*. Fail-closed in
+  both directions: an unanchored record fails verification unless the operator
+  explicitly passes `--allow-unanchored`, and a witness outage degrades honestly — the
+  record signs with `anchored=false`, never a fabricated proof. Local, brain-less
+  `corral certify` records are minted unanchored (that's what the quickstart's
+  `--allow-unanchored` acknowledges). (Honest all the way: evident, never "proof" —
+  you can't make a party's own machine tamper-proof, only detectable.)
 - **`corral certify --local` — the adversarial testing pool in one command.** Given a
   code file and the developer's own tests, it **mutates the code** (seeded
   goal-violations), runs the **developer's own tests** against those mutants in the
@@ -123,6 +135,14 @@ Go binary.**
 - **Model×role telemetry / the gate-earned leaderboard** — each model's per-role
   performance (sample-weighted, honest about thin data), the data layer routing reads
   from.
+- **Shared reach — the MCP gateway.** Register any service (yours, wrapped as MCP)
+  with the brain's gateway; the herd then shares *knowledge, behavior, context, **and
+  reach*** — one uniform pattern, access shared, credential held brain-side. Governance
+  is deliberate, to bound mischief: a personal endpoint is owner-scoped (one user's
+  endpoint can never affect a teammate), only an admin promotes one to team-wide
+  (optionally swapping in a team credential), the brain holds every upstream secret and
+  never returns one, SSRF-guards every dial (resolve-and-pin), and appends every
+  proxied call to the audit ledger attributed to the verified caller.
 - **Portable credential keystore** — provider keys + the worker token, an embedded
   resolver (env → OS keyring → age-encrypted file) with a `corral secret` CLI; secrets
   never touch argv, logs, or plaintext-at-rest; the age identity fails closed.
@@ -155,12 +175,6 @@ it becomes the way a team **accounts** for what its agents — the herd's, or a 
 own — actually produced. The engine that already contains, certifies, and records is
 exactly the engine that can *attest* and *federate*.
 
-- **The trustless tier — witness anchoring.** Ship the ledger head to an external,
-  append-only, timestamped witness (a shared MotherDuck warehouse, or Sigstore
-  **Rekor**) so tampering is detectable *even if you don't trust the brain*.
-  Central-trust today becomes tamper-evident-against-everyone next. (Honest all the
-  way: evident, never "proof" — you can't make a party's own machine tamper-proof,
-  only detectable.)
 - **One-command agent onboarding.** Independent, dev-driven agents (starting with
   **Claude Code**, richest hooks) join with `corral hooks install` — deterministic
   passive telemetry to the brain via the agent's own hooks, no behavior change, no
@@ -181,23 +195,24 @@ exactly the engine that can *attest* and *federate*.
   made of facts, not opaque weights.
 - **The swarm's remaining slices** — the resource-aware optimizer (size the fan-out
   from execution-proven yield × host resources) and per-region/per-complexity-band
-  model effectiveness (the tests × mutants matrix itself SHIPPED — see above). See
-  [`docs/superpowers/specs/2026-07-19-swarm-slice-2-sharded-generation-design.md`](docs/superpowers/specs/2026-07-19-swarm-slice-2-sharded-generation-design.md).
+  model effectiveness (the tests × mutants matrix itself SHIPPED — see above), plus
+  widening the matrix beyond go + python.
 
 ## Ahead — operate the gate at scale
 
 The reviewer's seat moves from *author* to *assessor*: set the model mix, watch the
 board, approve the merges.
-- **Model management.** Assign models to audit roles from a settings panel; a registry
-  with empirical per-role performance — a leaderboard your herd *earns*; role→hardware
-  scheduling.
-- **Cross-model evaluation.** Controlled per-role benchmarks — accuracy (the verify
-  gate as ground-truth oracle), speed, and cost.
-- **A review cockpit.** Verdicts and findings docked beside the diff — a VS Code panel
-  and a read-only live view, never reaching into the jail.
-- **Shared reach.** Register any service (yours, wrapped as MCP) with the gateway; the
-  herd then shares *knowledge, behavior, context, **and reach*** — one uniform pattern,
-  access shared, credential held brain-side.
+- **Model management.** The declared role→model policy already drives spawn-time model
+  resolution and the console's topology view, and the earned per-role leaderboard is in
+  (Shipped, above); still ahead: assigning models to roles from a **settings panel**
+  instead of env config, and role→hardware scheduling driven by the measured fit.
+- **Cross-model evaluation.** Accuracy is in — the eval harness benchmarks the pool
+  over a versioned known-adequacy corpus, execution-proven (Shipped, above); still
+  ahead: speed and cost alongside it, per role, in one controlled readout.
+- **A review cockpit.** The demo cockpit shipped — per-agent audit consoles, the herd's
+  proposed tests grounded in DuckDB, accept/reject at the human gate. Still ahead:
+  verdicts and findings docked beside the diff in a **VS Code panel**, never reaching
+  into the jail.
 
 ## Ahead — ready for teams
 - **Cost governance.** Per-audit / role / model cost, budget caps, pre-flight

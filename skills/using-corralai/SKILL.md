@@ -1,6 +1,6 @@
 ---
 name: using-corralai
-description: "Use when driving or querying a corralai brain — the audit-by-execution gate for software change. Covers `corral certify --local` (mutation-score a change's own tests), `corral certify <ref> -- <cmd>` (certify a change by its declared check), the repo gate + control gate, querying the shared knowledge corpus (`search_memory`), and the CLI (corral / corral-admin / corral-agent / corral-harness / corral-observe / corral-top). Invoke whenever the user mentions corral, certify, the audit, the gate, the herd, or wants to run/observe/steer a corralai brain."
+description: "Use when driving or querying a corralai brain — the audit-by-execution gate for software change. Covers `corral certify --local` (mutation-score a change's own tests), `corral certify <ref> -- <cmd>` (certify a change by its declared check), the repo gate + control gate, the tests×mutants matrix (`--matrix` / `corral matrix`), the model scorecard + critic precision (`corral scorecard` / `corral criticscore`), querying the shared knowledge corpus (`search_memory`), and the CLI (corral / corral-admin / corral-agent / corral-harness / corral-observe / corral-top). Invoke whenever the user mentions corral, certify, the audit, the gate, the herd, or wants to run/observe/steer a corralai brain."
 ---
 
 # Using corralai
@@ -36,14 +36,23 @@ corral certify --local \
 Output is a signed verdict (`certified` or `needs-review`), printed and written
 to a local tamper-evident ledger; `--out` also writes a self-contained file
 re-checkable offline with `corral certify verify verdict.json --pubkey "$(corral
-certify pubkey)" --allow-unanchored`.
+certify pubkey)" --allow-unanchored`. `--allow-unanchored` is required because a
+record minted off *your own* key was never submitted to a public witness —
+records the **brain** signs are anchored to a transparency log (Sigstore Rekor)
+at signing time and verify against it offline, no such flag needed.
 
 Key flags: `--repo-dir <path>` audits the file in the context of a whole cloned
 repo; `--swarm N` bounds concurrent audit tasks (0 = auto-size to cores);
 `--record <file>.json` writes a replayable tape; `--max-shards` /
 `--n-mutants` control how many mutants get scored; `--shadow-model` runs a
 second challenger model for a scorecard-only head-to-head (never affects the
-verdict). Full flag reference in the root [README.md](../../README.md#the-audit-flags).
+verdict); `--matrix` re-scores every dev test alone against the run's mutants
+for a per-test adequacy readout + a safe-to-delete candidate list (costly,
+opt-in, read it back with `corral matrix list [--json]`; go + python only).
+Dependency dirs (`node_modules`, `vendor`, `.venv`, …) are bound read-only into
+the jail in `--repo-dir` mode, not copied — they must already be vendored;
+`--bind-dir <path>` adds more, `--no-bind-deps` restores copying. Full flag
+reference in the root [README.md](../../README.md#the-audit-flags).
 
 ## `corral certify <ref> -- <cmd>` — certify a change by its declared check
 
@@ -73,6 +82,17 @@ continuously on pull requests:
   shadow adversarial audit `--local` runs, against a repo the brain already
   coordinates.
 
+## Which models actually catch bugs — the scorecard
+
+The gate produces a by-product: an execution-proven record of which model catches
+bugs in which role. `corral scorecard` reads it — per-model recall from mutants
+actually missed (`ProvenMissed`, never a self-report), plus a **C-PREC** column
+scoring the test-critic role itself: how often a critic's findings hold up once a
+human adjudicates them. That adjudication is the `corral criticscore
+list|show <id>|confirm <id>|refute <id>` surface — a human ruling always wins and
+is never clawed back by a later auto pass. Both are brain-path metrics; `--local`
+shows the auto verdict on the run's tape but persists nothing to the scorecard.
+
 ## Query the knowledge corpus
 
 A repo carries its working knowledge as markdown (`CORRAL.md` at the root,
@@ -89,10 +109,11 @@ repo (or a poisoned document) can't smuggle in authority by shipping a file.
 | Binary | Role |
 |---|---|
 | `corral` | the **brain** — MCP coordination, the repo/control gates, memory, reference RAG, the fleet oracle, embedded UI |
-| `corral-admin` | **operator** client: `mission`, `instruct`, `status`, `findings`, `review`, `proposals`, `member`, `reference`, `analyze`, `whoami`, `ui` (privileged live console), `mint-observer` |
+| `corral-admin` | **operator** client: `mission`, `instruct`, `status`, `findings`, `proposals`, `member`, `reference`, `analyze`, `whoami`, `ui` (privileged live console), `mint-observer` |
 | `corral-agent` | a **worker** that pulls tasks and executes; drives a model backend (Ollama/OpenAI/Anthropic) |
 | `corral-harness` | a **worker wrapper** around a headless coding CLI (Claude Code, Gemini, Codex, Copilot) via a `HARNESS_CMD` template — bring your own frontier agent to staff an audit role |
 | `corral-observe` | **read-only** credentialed proxy to the live UI — hand it to people who should watch but not touch |
+| `corral-desktop` | **native-window** launcher (`--app` mode) onto a local console |
 | `corral-top` | terminal dashboard of the live corral |
 
 Every binary supports `-h`. Run it to see its exact flags and env vars.

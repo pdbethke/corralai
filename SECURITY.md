@@ -168,4 +168,4 @@ the evidence:
 - **Vulnerabilities:** `govulncheck` gates every merge (`scripts/check-security.sh`); `gosec`
   static analysis runs alongside it.
 - **Dev process:** mapped to NIST **SSDF (SP 800-218)**; the local console is verified against
-  **OWASP ASVS**. See `docs/superpowers/specs/2026-07-10-own-supply-chain-hardening-design.md`.
+  **OWASP ASVS**.

@@ -9,6 +9,7 @@ import (
 	"io"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/lang"
@@ -143,7 +144,14 @@ func printExclusions(w io.Writer, excl []reposcan.Exclusion) {
 }
 
 func printRepoReport(w io.Writer, r reposcan.RepoReport) {
-	fmt.Fprintf(w, "\nRepo adequacy — %s/%s @ %s\n", r.Owner, r.Repo, r.Commit)
+	commit := r.Commit
+	if strings.TrimSpace(commit) == "" {
+		// Never print a bare dangling "@ " — say plainly that the report is
+		// not bound to a commit, because that is what it means for anyone
+		// trying to reproduce it.
+		commit = "(no commit given)"
+	}
+	fmt.Fprintf(w, "\nRepo adequacy — %s/%s @ %s\n", r.Owner, r.Repo, commit)
 	if r.Audited == 0 {
 		fmt.Fprintln(w, "  COULD-NOT-GRADE: nothing was audited; no score is reported.")
 	} else {
@@ -205,13 +213,17 @@ func newLocalExecutor(repoDir string, checkArgv []string, progress io.Writer) re
 
 func (l localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.FileResult, error) {
 	in := localAuditInput{
-		repoDir:   l.repoDir,
-		codePath:  j.Path,
-		testPath:  j.TestPath,
-		goal:      j.Goal.Text,
-		lang:      j.Lang,
-		repo:      j.Repo,
-		commit:    j.Commit,
+		repoDir:  l.repoDir,
+		codePath: j.Path,
+		testPath: j.TestPath,
+		goal:     j.Goal.Text,
+		lang:     j.Lang,
+		repo:     j.Repo,
+		// "local" rather than "" when the operator gave no --commit: an empty
+		// commit makes auditOneFile fall back to `git rev-parse HEAD` — which
+		// reads the CWD's repo, not the SCANNED one, and would stamp every
+		// verdict with an unrelated sha.
+		commit:    orDefault(j.Commit, "local"),
 		checkArgv: l.testCmd(j),
 		// One worker per file: the scan's budget is spent on file-level
 		// fan-out, so a nested per-file swarm would multiply it by the worker

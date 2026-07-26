@@ -3,6 +3,7 @@ package reposcan
 import (
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 )
 
@@ -242,5 +243,114 @@ func TestEnumerateDirectorySubstringDoesNotTriggerTestDetection(t *testing.T) {
 	}
 	if reasons["integration.spec.assets/icon.test.js"] != "is-test" {
 		t.Errorf("icon.test.js reason = %q, want is-test", reasons["integration.spec.assets/icon.test.js"])
+	}
+}
+
+// TestEnumerateExcludesSymlinkOutOfTree is the containment invariant: the scan
+// AUTO-DISCOVERS its subjects, so a checked-in symlink must never be able to
+// point the audit at a file outside the repository. `secrets.py ->
+// ~/.aws/credentials` would otherwise be digested, shipped to a model provider
+// and copied into the jail workspace.
+func TestEnumerateExcludesSymlinkOutOfTree(t *testing.T) {
+	outside := filepath.Join(t.TempDir(), "outside_secret.go")
+	if err := os.WriteFile(outside, []byte("package pkg // SECRET\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	root := writeTree(t, map[string]string{
+		"pkg/a.go":         "package pkg\n",
+		"pkg/a_test.go":    "package pkg\n",
+		"pkg/leak_test.go": "package pkg\n", // a paired test, so only the link type can exclude it
+	})
+	if err := os.Symlink(outside, filepath.Join(root, "pkg/leak.go")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	cands, excl, err := Enumerate(root)
+	if err != nil {
+		t.Fatalf("Enumerate: %v", err)
+	}
+	for _, c := range cands {
+		if c.Path == "pkg/leak.go" {
+			t.Fatalf("a symlink out of the tree became an audit candidate: %+v", c)
+		}
+	}
+	reasons := map[string]string{}
+	for _, e := range excl {
+		reasons[e.Path] = e.Reason
+	}
+	if reasons["pkg/leak.go"] != ReasonNotRegularFile {
+		t.Fatalf("pkg/leak.go reason = %q, want %q", reasons["pkg/leak.go"], ReasonNotRegularFile)
+	}
+
+	// ...and it must not become a JOB either, which is the thing that would
+	// carry the out-of-tree bytes into a cache key and into the jail.
+	jobs, _, err := EmitJobs(EmitConfig{Owner: "o", Root: root}, cands, stubGoals{
+		"pkg/a.go": "g", "pkg/leak.go": "g",
+	})
+	if err != nil {
+		t.Fatalf("EmitJobs: %v", err)
+	}
+	for _, j := range jobs {
+		if j.Path == "pkg/leak.go" {
+			t.Fatalf("a symlink out of the tree became a job: %+v", j)
+		}
+	}
+}
+
+// TestEnumerateExcludesFIFO: a named pipe cannot be audited and a read of it
+// would block the scan forever. It is accounted for, not enumerated.
+func TestEnumerateExcludesFIFO(t *testing.T) {
+	root := writeTree(t, map[string]string{"pkg/a.go": "package pkg\n"})
+	fifo := filepath.Join(root, "pkg", "pipe.go")
+	if err := syscall.Mkfifo(fifo, 0o644); err != nil {
+		t.Skipf("mkfifo unavailable: %v", err)
+	}
+	_, excl, err := Enumerate(root)
+	if err != nil {
+		t.Fatalf("Enumerate: %v", err)
+	}
+	for _, e := range excl {
+		if e.Path == "pkg/pipe.go" {
+			if e.Reason != ReasonNotRegularFile {
+				t.Fatalf("FIFO reason = %q, want %q", e.Reason, ReasonNotRegularFile)
+			}
+			return
+		}
+	}
+	t.Fatal("the FIFO was not accounted for as an exclusion")
+}
+
+// TestEnumerateSkipsBuildOutputDirs keeps vendored and generated trees out of
+// the denominator the report's coverage ratio is computed over.
+func TestEnumerateSkipsBuildOutputDirs(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"pkg/a.go":                    "package pkg\n",
+		"pkg/a_test.go":               "package pkg\n",
+		"dist/d.go":                   "package d\n",
+		"build/b.go":                  "package b\n",
+		"target/t.go":                 "package t\n",
+		".tox/x.py":                   "x = 1\n",
+		"lib/site-packages/s.py":      "s = 1\n",
+		"lib/site-packages/test_s.py": "s = 1\n",
+	})
+	cands, excl, err := Enumerate(root)
+	if err != nil {
+		t.Fatalf("Enumerate: %v", err)
+	}
+	seen := map[string]bool{}
+	for _, c := range cands {
+		seen[c.Path] = true
+	}
+	for _, e := range excl {
+		seen[e.Path] = true
+	}
+	for _, skipped := range []string{"dist/d.go", "build/b.go", "target/t.go", ".tox/x.py", "lib/site-packages/s.py"} {
+		if seen[skipped] {
+			t.Errorf("%s was walked; build/vendor trees must stay out of the audited surface", skipped)
+		}
+	}
+	if len(cands) != 1 || cands[0].Path != "pkg/a.go" {
+		t.Errorf("candidates = %+v, want only pkg/a.go", cands)
 	}
 }

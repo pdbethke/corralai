@@ -269,6 +269,36 @@ func hasFlag(args []string, name string) bool {
 	return false
 }
 
+// flagValue returns the value given for name, handling both `--name value`
+// and `--name=value`, and stopping at the first bare "--" so it never reads
+// inside the checked command's argv.
+func flagValue(args []string, name string) (string, bool) {
+	for i, a := range args {
+		if a == "--" {
+			return "", false
+		}
+		if v, ok := strings.CutPrefix(a, name+"="); ok {
+			return v, true
+		}
+		if a == name {
+			if i+1 < len(args) && args[i+1] != "--" {
+				return args[i+1], true
+			}
+			return "", false
+		}
+	}
+	return "", false
+}
+
+// isExistingDir reports whether p is a directory on disk right now.
+func isExistingDir(p string) bool {
+	if strings.TrimSpace(p) == "" {
+		return false
+	}
+	fi, err := os.Stat(p)
+	return err == nil && fi.IsDir()
+}
+
 // splitCertifyArgs splits on the first bare "--": everything before is
 // corral certify's own flags, everything after is the checked command's argv.
 func splitCertifyArgs(args []string) (flags, checkArgv []string) {
@@ -325,6 +355,17 @@ func runCertify(args []string, run cmdRunner, post buildPoster, jail jailRunner,
 	// --local/--adversarial so those modes always win their own args.
 	if hasFlag(args, "--goals") {
 		return runCertifyRepo(args, stdout, stderr)
+	}
+	// --goals is absent, so the scan was not selected. If --repo nonetheless
+	// names an existing DIRECTORY, the operator meant the scan and forgot
+	// --goals: falling through would certify the CURRENT directory's build and
+	// stamp the other repo's path onto the record as its subject — a signed
+	// statement about the wrong thing. Refuse; say which flag is missing.
+	if dir, ok := flagValue(args, "--repo"); ok && isExistingDir(dir) {
+		fmt.Fprintf(stderr, "corral certify: --repo %s is a directory, but --goals is missing.\n", dir)
+		fmt.Fprintf(stderr, "  To scan a whole repository:   corral certify --repo %s --goals <goals.json>\n", dir)
+		fmt.Fprintln(stderr, "  In the record path --repo names a repository (e.g. owner/name), not a path to scan.")
+		return 2
 	}
 
 	flagArgs, checkArgv := splitCertifyArgs(args)

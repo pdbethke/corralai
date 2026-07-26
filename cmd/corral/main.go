@@ -219,6 +219,9 @@ Usage:
                                   print a repo report whose kill rate is over the AUDITED surface
                                   only, with every excluded file accounted for by reason
                                   --dry-run stops after enumeration (no jail, no LLM calls)
+                                  an explicit -- <test cmd> grades EVERY file, so it is refused
+                                  when the scan spans more than one language (omit it and each
+                                  file is graded with its own language's stock command)
                                   the report is NOT signed yet — that lands with the sealed
                                   repo statement
   corral certify verify <record-file> [--pubkey <hex>|--brain <url>] [--allow-unanchored]

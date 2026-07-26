@@ -3,7 +3,10 @@ package reposcan
 import (
 	"os"
 	"path/filepath"
+	"runtime"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func baseInputs() KeyInputs {
@@ -58,18 +61,30 @@ func TestCacheKeyIsUnambiguous(t *testing.T) {
 	}
 }
 
+// openRoot opens an *os.Root on dir for the digest helpers, which read only
+// through a root so a symlink cannot take the scan outside the repository.
+func openRoot(t *testing.T, dir string) *os.Root {
+	t.Helper()
+	r, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatalf("OpenRoot: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Close() })
+	return r
+}
+
 // DigestFile must return consistent hashes for identical content.
 func TestDigestFileIsConsistent(t *testing.T) {
 	root := writeTree(t, map[string]string{
 		"test.txt": "hello",
 	})
-	path := filepath.Join(root, "test.txt")
+	r := openRoot(t, root)
 
-	d1, err := DigestFile(path)
+	d1, err := DigestFile(r, "test.txt")
 	if err != nil {
 		t.Fatalf("DigestFile: %v", err)
 	}
-	d2, err := DigestFile(path)
+	d2, err := DigestFile(r, "test.txt")
 	if err != nil {
 		t.Fatalf("DigestFile: %v", err)
 	}
@@ -83,19 +98,19 @@ func TestDigestFileChangesWithContent(t *testing.T) {
 	root := writeTree(t, map[string]string{
 		"test.txt": "hello",
 	})
-	path := filepath.Join(root, "test.txt")
+	r := openRoot(t, root)
 
-	d1, err := DigestFile(path)
+	d1, err := DigestFile(r, "test.txt")
 	if err != nil {
 		t.Fatalf("DigestFile: %v", err)
 	}
 
 	// Modify the file
-	if err := os.WriteFile(path, []byte("world"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "test.txt"), []byte("world"), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	d2, err := DigestFile(path)
+	d2, err := DigestFile(r, "test.txt")
 	if err != nil {
 		t.Fatalf("DigestFile: %v", err)
 	}
@@ -107,7 +122,7 @@ func TestDigestFileChangesWithContent(t *testing.T) {
 
 // DigestFile must return an error for missing files.
 func TestDigestFilePropagatesReadError(t *testing.T) {
-	_, err := DigestFile("/nonexistent/path/file.txt")
+	_, err := DigestFile(openRoot(t, t.TempDir()), "nonexistent/file.txt")
 	if err == nil {
 		t.Fatal("DigestFile should error on nonexistent file")
 	}
@@ -120,11 +135,11 @@ func TestDigestDirIsConsistent(t *testing.T) {
 		"b.txt": "beta",
 	})
 
-	d1, err := DigestDir(root)
+	d1, err := DigestDir(openRoot(t, root), ".")
 	if err != nil {
 		t.Fatalf("DigestDir: %v", err)
 	}
-	d2, err := DigestDir(root)
+	d2, err := DigestDir(openRoot(t, root), ".")
 	if err != nil {
 		t.Fatalf("DigestDir: %v", err)
 	}
@@ -139,7 +154,7 @@ func TestDigestDirChangesWhenFileAdded(t *testing.T) {
 		"a.txt": "alpha",
 	})
 
-	d1, err := DigestDir(root)
+	d1, err := DigestDir(openRoot(t, root), ".")
 	if err != nil {
 		t.Fatalf("DigestDir: %v", err)
 	}
@@ -149,7 +164,7 @@ func TestDigestDirChangesWhenFileAdded(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	d2, err := DigestDir(root)
+	d2, err := DigestDir(openRoot(t, root), ".")
 	if err != nil {
 		t.Fatalf("DigestDir: %v", err)
 	}
@@ -166,7 +181,7 @@ func TestDigestDirChangesWhenFileRemoved(t *testing.T) {
 		"b.txt": "beta",
 	})
 
-	d1, err := DigestDir(root)
+	d1, err := DigestDir(openRoot(t, root), ".")
 	if err != nil {
 		t.Fatalf("DigestDir: %v", err)
 	}
@@ -176,7 +191,7 @@ func TestDigestDirChangesWhenFileRemoved(t *testing.T) {
 		t.Fatalf("Remove: %v", err)
 	}
 
-	d2, err := DigestDir(root)
+	d2, err := DigestDir(openRoot(t, root), ".")
 	if err != nil {
 		t.Fatalf("DigestDir: %v", err)
 	}
@@ -193,7 +208,7 @@ func TestDigestDirChangesWhenContentChanges(t *testing.T) {
 		"b.txt": "beta",
 	})
 
-	d1, err := DigestDir(root)
+	d1, err := DigestDir(openRoot(t, root), ".")
 	if err != nil {
 		t.Fatalf("DigestDir: %v", err)
 	}
@@ -203,7 +218,7 @@ func TestDigestDirChangesWhenContentChanges(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	d2, err := DigestDir(root)
+	d2, err := DigestDir(openRoot(t, root), ".")
 	if err != nil {
 		t.Fatalf("DigestDir: %v", err)
 	}
@@ -222,7 +237,7 @@ func TestDigestDirDoesNotDescendSubdirectories(t *testing.T) {
 		"subdir/y.txt": "y",
 	})
 
-	d1, err := DigestDir(root)
+	d1, err := DigestDir(openRoot(t, root), ".")
 	if err != nil {
 		t.Fatalf("DigestDir: %v", err)
 	}
@@ -232,7 +247,7 @@ func TestDigestDirDoesNotDescendSubdirectories(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	d2, err := DigestDir(root)
+	d2, err := DigestDir(openRoot(t, root), ".")
 	if err != nil {
 		t.Fatalf("DigestDir: %v", err)
 	}
@@ -254,7 +269,7 @@ func TestDigestDirIsUnambiguous(t *testing.T) {
 		"ab": "c",
 		"d":  "e",
 	})
-	d1, err := DigestDir(root1)
+	d1, err := DigestDir(openRoot(t, root1), ".")
 	if err != nil {
 		t.Fatalf("DigestDir: %v", err)
 	}
@@ -266,7 +281,7 @@ func TestDigestDirIsUnambiguous(t *testing.T) {
 		"a": "bc",
 		"d": "e",
 	})
-	d2, err := DigestDir(root2)
+	d2, err := DigestDir(openRoot(t, root2), ".")
 	if err != nil {
 		t.Fatalf("DigestDir: %v", err)
 	}
@@ -278,8 +293,98 @@ func TestDigestDirIsUnambiguous(t *testing.T) {
 
 // DigestDir must propagate read errors.
 func TestDigestDirPropagatesReadError(t *testing.T) {
-	_, err := DigestDir("/nonexistent/directory")
+	_, err := DigestDir(openRoot(t, t.TempDir()), "nonexistent")
 	if err == nil {
 		t.Fatal("DigestDir should error on nonexistent directory")
+	}
+}
+
+// TestDigestFileRefusesSymlinkOutOfTree: the digest path is the one that reads
+// bytes, so root confinement has to hold HERE too, not only in enumeration.
+func TestDigestFileRefusesSymlinkOutOfTree(t *testing.T) {
+	outside := filepath.Join(t.TempDir(), "secret")
+	if err := os.WriteFile(outside, []byte("TOP SECRET"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root := writeTree(t, map[string]string{"a.txt": "alpha"})
+	if err := os.Symlink(outside, filepath.Join(root, "leak.txt")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if _, err := DigestFile(openRoot(t, root), "leak.txt"); err == nil {
+		t.Fatal("DigestFile followed a symlink pointing outside the tree")
+	}
+}
+
+// TestDigestDirSkipsNonRegularEntries: a symlink's target is not this repo's
+// content, and a FIFO in the directory would block the digest forever. Both
+// are skipped, and the digest is exactly the digest of the regular files.
+func TestDigestDirSkipsNonRegularEntries(t *testing.T) {
+	outside := filepath.Join(t.TempDir(), "secret")
+	if err := os.WriteFile(outside, []byte("TOP SECRET"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	plain := writeTree(t, map[string]string{"a.txt": "alpha"})
+	want, err := DigestDir(openRoot(t, plain), ".")
+	if err != nil {
+		t.Fatalf("DigestDir: %v", err)
+	}
+
+	mixed := writeTree(t, map[string]string{"a.txt": "alpha"})
+	if err := os.Symlink(outside, filepath.Join(mixed, "leak.txt")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := syscall.Mkfifo(filepath.Join(mixed, "pipe"), 0o644); err != nil {
+		t.Skipf("mkfifo unavailable: %v", err)
+	}
+
+	done := make(chan struct{})
+	var got string
+	var derr error
+	go func() {
+		got, derr = DigestDir(openRoot(t, mixed), ".")
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("DigestDir blocked — it opened the FIFO")
+	}
+	if derr != nil {
+		t.Fatalf("DigestDir: %v", derr)
+	}
+	if got != want {
+		t.Errorf("non-regular entries changed the digest: %s vs %s", got, want)
+	}
+}
+
+// TestDigestFileStreamsLargeFile: contents go into the hash a chunk at a time,
+// so one huge fixture is not one huge allocation. Asserted by MEASURING peak
+// heap growth across the call, not by inspecting the implementation.
+func TestDigestFileStreamsLargeFile(t *testing.T) {
+	const size = 64 << 20 // 64 MiB
+	root := t.TempDir()
+	f, err := os.Create(filepath.Join(root, "big.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunk := make([]byte, 1<<20)
+	for i := 0; i < size>>20; i++ {
+		if _, err := f.Write(chunk); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	if _, err := DigestFile(openRoot(t, root), "big.bin"); err != nil {
+		t.Fatalf("DigestFile: %v", err)
+	}
+	runtime.ReadMemStats(&after)
+	if grew := after.TotalAlloc - before.TotalAlloc; grew > size/4 {
+		t.Errorf("DigestFile allocated %d bytes for a %d-byte file — it is not streaming", grew, size)
 	}
 }

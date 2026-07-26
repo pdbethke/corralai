@@ -91,6 +91,17 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		totalFiles, len(cands), len(jobs), len(excl))
 	printExclusions(stdout, excl)
 
+	// An explicit `-- <cmd>` is applied to EVERY job, so it is only meaningful
+	// when every job speaks the same language. Refuse the mixed case rather
+	// than grade a mutated .py file with `go test ./...`: that check is green
+	// on the baseline AND green on every mutant, which is not an error
+	// anywhere in the pipeline — it is a confident 0.00 kill rate landing in
+	// the report as a real measurement. Never fabricate a score.
+	if err := checkArgvSpansOneLanguage(checkArgv, jobs); err != nil {
+		fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
+		return 2
+	}
+
 	if *dryRun {
 		return 0
 	}
@@ -119,10 +130,40 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// persistent store behind it is H1b. A nil Cache means every job is
 	// computed fresh — slow, never stale.
 	results := reposcan.Scan(context.Background(), jobs, ex, nil, workers)
-	rep := reposcan.Aggregate(*owner, cfg.Repo, *commit, totalFiles, results, excl)
+	rep := reposcan.Aggregate(*owner, cfg.Repo, *commit, totalFiles, len(cands), results, excl)
 
 	printRepoReport(stdout, rep)
 	return repoScanExitCode(rep)
+}
+
+// checkArgvSpansOneLanguage fails closed when the operator gave an explicit
+// test command and the job set is multi-language. One command cannot grade two
+// languages: the wrong-language jobs would run a check that never observes the
+// mutation, so every mutant "survives" and a 0.00 kill rate is reported as if
+// it had been measured. Refusing is the honest answer — the operator can
+// re-run per language, or drop `--` and let each job use its plugin's stock
+// command.
+func checkArgvSpansOneLanguage(checkArgv []string, jobs []reposcan.Job) error {
+	if len(checkArgv) == 0 || len(jobs) == 0 {
+		return nil
+	}
+	seen := map[string]bool{}
+	for _, j := range jobs {
+		seen[j.Lang] = true
+	}
+	if len(seen) < 2 {
+		return nil
+	}
+	langs := make([]string, 0, len(seen))
+	for l := range seen {
+		langs = append(langs, l)
+	}
+	sort.Strings(langs)
+	return fmt.Errorf(
+		"an explicit test command after `--` grades every file, but this scan spans %d languages (%s).\n"+
+			"  One command cannot grade them all: the wrong-language files would report a 0.00 kill rate that was never measured.\n"+
+			"  Either drop `--` (each file is then graded with its own language's stock test command), or scan one language at a time",
+		len(langs), strings.Join(langs, ", "))
 }
 
 // repoScanExitCode is the scan's automated signal. A scan that measured
@@ -185,8 +226,15 @@ func printRepoReport(w io.Writer, r reposcan.RepoReport) {
 		fmt.Fprintf(w, "  kill rate %.2f over %d audited file(s) (%.0f%% of %d candidates)\n",
 			r.KillRate, r.Audited, 100*r.AuditedFraction(), r.Candidates)
 	}
-	for reason, n := range r.Ungradable {
-		fmt.Fprintf(w, "  ungradable: %d (%s)\n", n, reason)
+	// Sorted, like printExclusions: map iteration order is random, and a
+	// report a later slice signs and anchors has to be byte-reproducible.
+	ungradableReasons := make([]string, 0, len(r.Ungradable))
+	for reason := range r.Ungradable {
+		ungradableReasons = append(ungradableReasons, reason)
+	}
+	sort.Strings(ungradableReasons)
+	for _, reason := range ungradableReasons {
+		fmt.Fprintf(w, "  ungradable: %d (%s)\n", r.Ungradable[reason], reason)
 	}
 	if r.CacheHits > 0 {
 		fmt.Fprintf(w, "  %d verdict(s) reused from cache\n", r.CacheHits)

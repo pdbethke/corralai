@@ -148,14 +148,14 @@ func TestCertifyRepoFileTotalMatchesDiskWithManyUngoaled(t *testing.T) {
 // TestRepoScanExitCodeNothingAuditedIsNonZero is Finding 4: a scan in which
 // every file failed to grade must not read as green to CI.
 func TestRepoScanExitCodeNothingAuditedIsNonZero(t *testing.T) {
-	nothing := reposcan.Aggregate("o", "r", "c", 2, []reposcan.FileResult{
+	nothing := reposcan.Aggregate("o", "r", "c", 2, 1, []reposcan.FileResult{
 		{Job: reposcan.Job{Path: "a.go"}, Gradable: false, Reason: reposcan.ReasonExecutorError},
 	}, nil)
 	if got := repoScanExitCode(nothing); got == 0 {
 		t.Errorf("a scan that graded nothing must exit non-zero, got %d", got)
 	}
 
-	graded := reposcan.Aggregate("o", "r", "c", 2, []reposcan.FileResult{
+	graded := reposcan.Aggregate("o", "r", "c", 2, 1, []reposcan.FileResult{
 		{Job: reposcan.Job{Path: "a.go"}, Gradable: true, Verdict: advpool.Verdict{DevKillRate: 0.9}},
 	}, nil)
 	if got := repoScanExitCode(graded); got != 0 {
@@ -387,7 +387,7 @@ func TestLocalExecutorExecuteBaselineFailedIsUngradable(t *testing.T) {
 // say COULD-NOT-GRADE, not print a 0.00 kill rate (or a NaN).
 func TestPrintRepoReportNothingAuditedSaysSo(t *testing.T) {
 	var out bytes.Buffer
-	rep := reposcan.Aggregate("local", "r", "c", 3, []reposcan.FileResult{
+	rep := reposcan.Aggregate("local", "r", "c", 3, 1, []reposcan.FileResult{
 		{Job: reposcan.Job{Path: "a.go"}, Gradable: false, Reason: reposcan.ReasonFlakyBaseline},
 	}, []reposcan.Exclusion{{Path: "b.go", Reason: reposcan.ReasonNoPairedTest}})
 	printRepoReport(&out, rep)
@@ -415,7 +415,7 @@ func TestPrintRepoReportWeakestIsCapped(t *testing.T) {
 		})
 	}
 	var out bytes.Buffer
-	printRepoReport(&out, reposcan.Aggregate("o", "r", "c", 12, results, nil))
+	printRepoReport(&out, reposcan.Aggregate("o", "r", "c", 12, len(results), results, nil))
 	s := out.String()
 	if !strings.Contains(s, "... and 2 more") {
 		t.Errorf("want the weakest list capped at 10 with a remainder line:\n%s", s)
@@ -487,5 +487,135 @@ func TestResolveAuditRolesRejectsCollapsedDecorrelation(t *testing.T) {
 	}
 	if !isAuditUsageError(err) {
 		t.Errorf("want a usage error (exit 2), got %v", err)
+	}
+}
+
+// TestCertifyRepoRefusesExplicitCheckCommandAcrossLanguages: an explicit
+// `-- <cmd>` is applied to EVERY job, so in a mixed repo `go test ./...` would
+// "grade" a mutated .py file — green on the baseline, green on every mutant,
+// no error anywhere, and a confident 0.00 kill rate in the report. That is the
+// never-fabricate-a-score invariant failing through the one path the invariant
+// machinery does not watch, so the scan refuses instead.
+func TestCertifyRepoRefusesExplicitCheckCommandAcrossLanguages(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "pkg", "a_test.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "py", "m.py"), "x = 1\n")
+	mustWrite(t, filepath.Join(root, "py", "test_m.py"), "x = 1\n")
+	goals := filepath.Join(root, "goals.json")
+	mustWrite(t, goals, `{"pkg/a.go": "must not panic", "py/m.py": "must not divide by zero"}`)
+
+	var out, errb bytes.Buffer
+	code := runCertifyRepo([]string{"--repo", root, "--goals", goals, "--dry-run", "--", "go", "test", "./..."}, &out, &errb)
+	if code != 2 {
+		t.Fatalf("exit %d, want 2 (usage error); stdout=%s stderr=%s", code, out.String(), errb.String())
+	}
+	s := errb.String()
+	for _, want := range []string{"spans 2 languages", "go, python"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("error message missing %q:\n%s", want, s)
+		}
+	}
+}
+
+// The same explicit command is FINE when every job speaks one language — the
+// refusal above must not break the single-language case.
+func TestCertifyRepoAllowsExplicitCheckCommandForOneLanguage(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "pkg", "a_test.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "py", "m.py"), "x = 1\n") // no goal: never a job
+	mustWrite(t, filepath.Join(root, "py", "test_m.py"), "x = 1\n")
+	goals := filepath.Join(root, "goals.json")
+	mustWrite(t, goals, `{"pkg/a.go": "must not panic"}`)
+
+	var out, errb bytes.Buffer
+	code := runCertifyRepo([]string{"--repo", root, "--goals", goals, "--dry-run", "--", "go", "test", "./..."}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit %d, want 0; stderr=%s", code, errb.String())
+	}
+}
+
+// TestCertifyRepoReportsEnumeratedCandidatesNotJobs is Finding I2 at the CLI:
+// the score line's "% of N candidates" must be over the ENUMERATED candidates,
+// so ungoaled files cannot be hidden from the coverage ratio.
+func TestCertifyRepoReportsEnumeratedCandidatesNotJobs(t *testing.T) {
+	rep := reposcan.Aggregate("o", "r", "c", 12, 5, []reposcan.FileResult{
+		{Job: reposcan.Job{Path: "a.go"}, Gradable: true, Verdict: advpool.Verdict{DevKillRate: 0.8}},
+	}, nil)
+	var out bytes.Buffer
+	printRepoReport(&out, rep)
+	s := out.String()
+	if !strings.Contains(s, "20% of 5 candidates") {
+		t.Errorf("want the ratio over the 5 enumerated candidates, got:\n%s", s)
+	}
+	if !strings.Contains(s, "ungradable: 4 ("+reposcan.ReasonUngoaled+")") {
+		t.Errorf("ungoaled candidates must be accounted by reason:\n%s", s)
+	}
+}
+
+// TestPrintRepoReportUngradableOrderIsStable: map iteration order is random,
+// and a report a later slice signs and anchors has to be byte-reproducible.
+func TestPrintRepoReportUngradableOrderIsStable(t *testing.T) {
+	rep := reposcan.Aggregate("o", "r", "c", 9, 6, []reposcan.FileResult{
+		{Job: reposcan.Job{Path: "a.go"}, Gradable: true, Verdict: advpool.Verdict{DevKillRate: 1}},
+		{Job: reposcan.Job{Path: "b.go"}, Gradable: false, Reason: reposcan.ReasonFlakyBaseline},
+		{Job: reposcan.Job{Path: "c.go"}, Gradable: false, Reason: reposcan.ReasonBaselineFailed},
+		{Job: reposcan.Job{Path: "d.go"}, Gradable: false, Reason: reposcan.ReasonExecutorError},
+		{Job: reposcan.Job{Path: "e.go"}, Gradable: false, Reason: reposcan.ReasonCancelled},
+	}, nil)
+
+	var first bytes.Buffer
+	printRepoReport(&first, rep)
+	for i := 0; i < 50; i++ {
+		var again bytes.Buffer
+		printRepoReport(&again, rep)
+		if again.String() != first.String() {
+			t.Fatalf("report is not reproducible:\n--- run 1 ---\n%s\n--- run %d ---\n%s", first.String(), i+2, again.String())
+		}
+	}
+	// And the order is the sorted one, not merely stable by luck.
+	s := first.String()
+	if a, b := strings.Index(s, reposcan.ReasonBaselineFailed), strings.Index(s, reposcan.ReasonCancelled); a > b {
+		t.Errorf("ungradable reasons are not sorted:\n%s", s)
+	}
+}
+
+// TestRunCertifyRepoDirWithoutGoalsRefuses is Finding I6: `--repo <dir>` with
+// --goals forgotten silently certified the CURRENT directory and stamped the
+// other repo's path onto the record — a signed statement about the wrong
+// subject. It must refuse and point at the scan.
+func TestRunCertifyRepoDirWithoutGoalsRefuses(t *testing.T) {
+	root := t.TempDir()
+	run := &fakeRunner{exitCode: 0}
+	post := &fakePoster{result: stubResult()}
+	var stdout, stderr bytes.Buffer
+	code := runCertify([]string{"--repo", root, "--", "true"},
+		run, post, fakeJail{exit: 0, out: "ok"},
+		func() (ed25519.PrivateKey, error) { return nil, errors.New("unused") },
+		&stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("exit %d, want 2", code)
+	}
+	if run.ranArgv != nil || post.called {
+		t.Error("a --repo <dir> typo must not run the check or post a record")
+	}
+	if !strings.Contains(stderr.String(), "--goals") {
+		t.Errorf("the error must point at the missing --goals:\n%s", stderr.String())
+	}
+}
+
+// The same guard must also catch the --repo=<dir> spelling.
+func TestRunCertifyRepoDirEqualsFormWithoutGoalsRefuses(t *testing.T) {
+	root := t.TempDir()
+	run := &fakeRunner{exitCode: 0}
+	post := &fakePoster{result: stubResult()}
+	var stdout, stderr bytes.Buffer
+	code := runCertify([]string{"--repo=" + root, "--", "true"},
+		run, post, fakeJail{exit: 0, out: "ok"},
+		func() (ed25519.PrivateKey, error) { return nil, errors.New("unused") },
+		&stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("exit %d, want 2; stderr=%s", code, stderr.String())
 	}
 }

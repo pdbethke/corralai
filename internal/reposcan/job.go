@@ -5,7 +5,8 @@ package reposcan
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"path/filepath"
+	"os"
+	"path"
 )
 
 // ReasonUngoaled marks a candidate the GoalSource declined to supply a goal
@@ -31,9 +32,22 @@ type EmitConfig struct {
 
 // EmitJobs turns candidates into job envelopes, computing each one's cache
 // key. Candidates without a goal come back as exclusions.
+//
+// Every digest is read through an *os.Root opened on cfg.Root, so a symlink
+// inside the scanned checkout cannot make the scan hash — and therefore the
+// scan's own record of — a file outside the repository.
 func EmitJobs(cfg EmitConfig, cands []Candidate, gs GoalSource) ([]Job, []Exclusion, error) {
 	var jobs []Job
 	var excl []Exclusion
+
+	if len(cands) == 0 {
+		return nil, nil, nil
+	}
+	root, err := os.OpenRoot(cfg.Root)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer func() { _ = root.Close() }()
 
 	for _, c := range cands {
 		goal, ok, err := gs.GoalFor(c)
@@ -45,15 +59,15 @@ func EmitJobs(cfg EmitConfig, cands []Candidate, gs GoalSource) ([]Job, []Exclus
 			continue
 		}
 
-		srcDigest, err := DigestFile(filepath.Join(cfg.Root, c.Path))
+		srcDigest, err := DigestFile(root, c.Path)
 		if err != nil {
 			return nil, nil, err
 		}
-		pkgDigest, err := DigestDir(filepath.Join(cfg.Root, filepath.Dir(c.Path)))
+		pkgDigest, err := DigestDir(root, path.Dir(c.Path))
 		if err != nil {
 			return nil, nil, err
 		}
-		testDigest, err := DigestFile(filepath.Join(cfg.Root, c.TestPath))
+		testDigest, err := DigestFile(root, c.TestPath)
 		if err != nil {
 			return nil, nil, err
 		}

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Elastic-2.0
 
 // Package reposcan fans corral's single-file adequacy audit out over a whole
-// repository. It is the shared core behind both the local CLI scan and the
-// hosted scan service: the two differ only in who hands jobs to workers.
+// repository: enumerate candidates, emit owner-keyed jobs, run them through an
+// Executor, aggregate the verdicts into one report with complete accounting.
 package reposcan
 
 import (
@@ -35,13 +35,23 @@ const (
 	ReasonNoLanguage   = "no-language"
 	ReasonIsTest       = "is-test"
 	ReasonNoPairedTest = "no-paired-test"
+	// ReasonNotRegularFile covers symlinks, FIFOs, sockets and devices. A
+	// symlink is the dangerous one: `secrets.py -> ~/.aws/credentials` in a
+	// cloned repo would otherwise be auto-discovered, digested, shipped to a
+	// model provider and copied into the jail workspace. The rest simply
+	// cannot be audited (a FIFO read blocks forever). Fail closed: they are
+	// accounted for, never followed.
+	ReasonNotRegularFile = "not-a-regular-file"
 )
 
-// skipDirs are never walked: dependency and VCS trees are not the subject of
-// an audit of THIS repo's tests.
+// skipDirs are never walked: dependency, build-output and VCS trees are not
+// the subject of an audit of THIS repo's tests, and letting them into the walk
+// puts vendored third-party code into the report's denominator.
 var skipDirs = map[string]bool{
 	".git": true, "node_modules": true, "vendor": true,
 	".venv": true, "venv": true, ".bundle": true, "testdata": true,
+	"dist": true, "build": true, "target": true, ".tox": true,
+	"site-packages": true,
 }
 
 // Enumerate walks root and classifies every file into an audit candidate or
@@ -67,7 +77,18 @@ func Enumerate(root string) ([]Candidate, []Exclusion, error) {
 			}
 			return nil
 		}
-		present[filepath.ToSlash(rel)] = true
+		slash := filepath.ToSlash(rel)
+		// ONLY regular files are auditable. Everything else — above all a
+		// symlink, which can point anywhere on the host — is excluded with a
+		// reason instead of being enumerated. The scan AUTO-DISCOVERS its
+		// subjects (unlike `certify --local`, where the operator names the
+		// file), so following a link here would be a repository choosing what
+		// the audit reads off the operator's disk.
+		if !d.Type().IsRegular() {
+			excl = append(excl, Exclusion{Path: slash, Reason: ReasonNotRegularFile})
+			return nil
+		}
+		present[slash] = true
 		return nil
 	}
 	if err := filepath.WalkDir(root, walk); err != nil {
@@ -100,11 +121,13 @@ func Enumerate(root string) ([]Candidate, []Exclusion, error) {
 	return cands, excl, nil
 }
 
-// isTestFile reports whether rel is itself a test file under the plugin's
-// naming convention: applying TestPath to a test file is a no-op or the file
-// already carries the convention's marker.
+// isTestFile reports whether rel is itself a test file, detected by the
+// naming markers the five language plugins use. The markers are the real
+// check: no current plugin's TestPath is idempotent on an already-test path
+// (`foo_test.go` becomes `foo_test_test.go`), so the fixed-point check below
+// is a cheap belt-and-braces for a plugin that someday IS idempotent — it
+// never fires today.
 func isTestFile(p lang.Plugin, rel string) bool {
-	// Check if the plugin's TestPath returns the same path (no-op for test files).
 	if filepath.ToSlash(p.TestPath(rel)) == rel {
 		return true
 	}

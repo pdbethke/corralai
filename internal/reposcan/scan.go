@@ -92,7 +92,12 @@ func Scan(ctx context.Context, jobs []Job, ex Executor, c Cache, workers int) []
 				return
 			}
 			res.Job = j
-			res.CacheHit = false
+			// res.CacheHit is deliberately NOT reset here. Scan's own cache
+			// miss says nothing about the executor's: a queue-backed executor
+			// with a cache of its own is the one component that knows the
+			// verdict was reused, and overwriting its answer would make the
+			// scan report reused work as fresh — the exact opposite of the
+			// "reuse is always disclosed" invariant above.
 			if res.ComputedAt.IsZero() {
 				res.ComputedAt = time.Now()
 			}

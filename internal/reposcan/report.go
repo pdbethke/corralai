@@ -22,6 +22,11 @@ type RepoReport struct {
 	Owner, Repo, Commit string
 
 	TotalFiles int
+	// Candidates is the number of files enumeration judged AUDITABLE, before
+	// any of them were dropped for want of a goal. It is not the number of
+	// jobs: counting jobs would erase every ungoaled file from the ratio
+	// below, so a repo with one goal out of five hundred candidates would
+	// report 100% audited.
 	Candidates int
 	Audited    int
 	Excluded   []Exclusion
@@ -47,14 +52,32 @@ func (r RepoReport) AuditedFraction() float64 {
 }
 
 // Aggregate rolls per-file results into the repo report.
-func Aggregate(owner, repo, commit string, totalFiles int, results []FileResult, excl []Exclusion) RepoReport {
+//
+// candidates is the PRE-GOAL candidate count from enumeration, not len(results):
+// results only covers candidates that became jobs, and the difference — files
+// with no goal — belongs in the audited-fraction denominator, accounted under
+// ReasonUngoaled. Passing len(results) here would report "100% audited" for a
+// repo where one file in five hundred had a goal.
+func Aggregate(owner, repo, commit string, totalFiles, candidates int, results []FileResult, excl []Exclusion) RepoReport {
+	// Fail safe rather than print a fraction above 1.0: a caller that
+	// under-counts candidates gets the honest floor, never a flattering ratio.
+	if candidates < len(results) {
+		candidates = len(results)
+	}
 	rep := RepoReport{
 		Owner: owner, Repo: repo, Commit: commit,
 		TotalFiles:  totalFiles,
-		Candidates:  len(results),
+		Candidates:  candidates,
 		Excluded:    excl,
 		Ungradable:  map[string]int{},
 		GeneratedAt: time.Now(),
+	}
+	// Candidates that never became jobs were dropped for exactly one reason in
+	// this slice — no goal — and they are ungradable in the report's sense:
+	// counted in the denominator, never scored. Booking them here keeps the
+	// accounting closed: Audited + sum(Ungradable) == Candidates.
+	if n := candidates - len(results); n > 0 {
+		rep.Ungradable[ReasonUngoaled] = n
 	}
 
 	var sum float64

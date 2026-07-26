@@ -312,6 +312,20 @@ func runCertify(args []string, run cmdRunner, post buildPoster, jail jailRunner,
 	if hasFlag(args, "--adversarial") {
 		return runCertifyAdversarial(args, mcpAdvClient{}, realRunner{}, time.Sleep, stdout, stderr)
 	}
+	// `corral certify --repo <dir> --goals <file> ...` fans the local audit out
+	// over a WHOLE repository.
+	//
+	// Dispatched on --goals, NOT on --repo, deliberately: --repo is already a
+	// long-standing flag on three other certify modes (the brain path, the
+	// standalone path, and --local), where it names the repository the record
+	// is ABOUT, not a directory to scan. Routing on --repo would silently
+	// hijack `corral certify --repo pdbethke/corralai -- go test ./...`.
+	// --goals is unique to the scan, so it is the unambiguous discriminator;
+	// the scan's own --repo flag is parsed by runCertifyRepo. Checked after
+	// --local/--adversarial so those modes always win their own args.
+	if hasFlag(args, "--goals") {
+		return runCertifyRepo(args, stdout, stderr)
+	}
 
 	flagArgs, checkArgv := splitCertifyArgs(args)
 

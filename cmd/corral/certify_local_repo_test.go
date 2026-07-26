@@ -72,8 +72,12 @@ func mustMkdir(t *testing.T, p string) {
 	}
 }
 
+// mustWrite writes s to p, creating p's parent directories as needed.
 func mustWrite(t *testing.T, p, s string) {
 	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(p, []byte(s), 0o600); err != nil {
 		t.Fatal(err)
 	}

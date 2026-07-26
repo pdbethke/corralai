@@ -212,6 +212,15 @@ Usage:
   corral certify --adversarial --code <path> --goal "<text>" [--test <path>] -- <test cmd>
                                   grade a change's own tests: fire the adversarial pool on the
                                   brain, poll to a signed verdict
+  corral certify --repo <dir> --goals <file> [--dry-run] [--swarm n] [-- <test cmd>]
+                                  fan the --local audit out over a WHOLE repository: enumerate
+                                  every source file with a paired test, take each one's goal from
+                                  the --goals JSON map, audit them through a bounded swarm, and
+                                  print a repo report whose kill rate is over the AUDITED surface
+                                  only, with every excluded file accounted for by reason
+                                  --dry-run stops after enumeration (no jail, no LLM calls)
+                                  the report is NOT signed yet — that lands with the sealed
+                                  repo statement
   corral certify verify <record-file> [--pubkey <hex>|--brain <url>] [--allow-unanchored]
                                   independently verify a --out (or report_build) record: the
                                   Ed25519 signature, the ledger's hash chain, and that the

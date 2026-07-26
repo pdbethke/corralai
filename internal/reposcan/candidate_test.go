@@ -208,9 +208,9 @@ func TestEnumerateDirectorySubstringDoesNotTriggerTestDetection(t *testing.T) {
 	// Regression test for Finding 2: directory names containing _test. should not
 	// cause files within them to be misclassified as tests.
 	root := writeTree(t, map[string]string{
-		"e2e_test.fixtures/schema.go":      "package fixtures\n",
-		"e2e_test.fixtures/schema_test.go": "package fixtures\n",
-		"integration.spec.assets/icon.js":  "// icon\n",
+		"e2e_test.fixtures/schema.go":          "package fixtures\n",
+		"e2e_test.fixtures/schema_test.go":     "package fixtures\n",
+		"integration.spec.assets/icon.js":      "// icon\n",
 		"integration.spec.assets/icon.test.js": "// test\n",
 	})
 

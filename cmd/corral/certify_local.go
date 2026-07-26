@@ -7,6 +7,7 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -21,10 +22,12 @@ import (
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/agentbackend"
+	"github.com/pdbethke/corralai/internal/agentworker"
 	"github.com/pdbethke/corralai/internal/buildstore"
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/queue"
 	"github.com/pdbethke/corralai/internal/repoindex"
+	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
@@ -137,37 +140,380 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	// Resolve the language plugin the jail will grade with — from --lang, else
-	// the code file's extension. Fail closed on an unknown language: the gate
-	// never grades what it cannot run.
-	var plug lang.Plugin
-	if strings.TrimSpace(*langFlag) != "" {
-		p, ok := lang.ByName(strings.TrimSpace(*langFlag))
-		if !ok {
-			fmt.Fprintf(stderr, "corral certify --local: unknown --lang %q\n", *langFlag)
+	// --record: collect the run into a replayable tape. The sink is the driver's
+	// EventSink (pool reasoning beats) and is also fed the task lifecycle +
+	// findings from the drive loop, so one ordered stream is the tape.
+	var rec *recordSink
+	if strings.TrimSpace(*recordFlag) != "" {
+		rec = &recordSink{}
+	}
+
+	// The persistent build ledger + signing key `corral certify`/`corral certify
+	// verify`/`corral certify pubkey` use, so a --local verdict is signed by the
+	// user's own key and lands in the same offline-verifiable ledger. Opened
+	// LAZILY, by auditOneFile, at exactly the point the pre-extraction code
+	// opened it: every cheap validation (unknown --lang, absent toolchain,
+	// collapsed decorrelation, missing provider key) must still fail fast
+	// WITHOUT creating a DuckDB file. The handles are captured here because
+	// --out below reads the signed record back out of the same store.
+	var bs *buildstore.Store
+	var key ed25519.PrivateKey
+	defer func() {
+		if bs != nil {
+			bs.Close()
+		}
+	}()
+	openStore := func() (*buildstore.Store, ed25519.PrivateKey, error) {
+		st, err := buildstore.Open(localBuildDBPath())
+		if err != nil {
+			return nil, nil, fmt.Errorf("opening build ledger: %w", err)
+		}
+		k, err := buildstore.LoadOrCreateSigningKey(localCertifyKeyPath())
+		if err != nil {
+			st.Close()
+			return nil, nil, fmt.Errorf("loading signing key: %w", err)
+		}
+		bs, key = st, k
+		return st, k, nil
+	}
+
+	verdict, err := auditOneFile(context.Background(), localAuditInput{
+		repoDir: strings.TrimSpace(*repoDirFlag), codePath: *codePath,
+		testPath: strings.TrimSpace(*testPath), goal: strings.TrimSpace(*goal),
+		lang: strings.TrimSpace(*langFlag),
+
+		swarm: *swarmFlag, mutantTimeout: *testTimeout, timeout: *timeout,
+		poll: *poll, nMutants: *nMutants, maxShards: *maxShardsFlag,
+
+		writerModel: *writerModel, criticModel: *criticModel,
+		mutantModel: *mutantModel, shadowModel: *shadowModelFlag,
+
+		jail: *jailFlag, checkArgv: checkArgv,
+		bindDirs: bindDirFlag, noBindDeps: *noBindDepsFlag,
+
+		repo: strings.TrimSpace(*repoFlag), commit: strings.TrimSpace(*commitFlag),
+
+		matrix: *matrixFlag, record: rec, bugCatchDB: localBugCatchDBPath(),
+		openStore: openStore,
+		stdout:    stdout, stderr: stderr,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "corral certify --local: %v\n", err)
+		if isAuditUsageError(err) {
 			return 2
+		}
+		return 1
+	}
+
+	// --out writes the signed record as a self-contained file the user can
+	// re-verify offline. A --local record is signed by the user's OWN key but
+	// never publicly witnessed (Witness is nil), so the verify hint carries
+	// --allow-unanchored — an honest "signed by you, not third-party anchored"
+	// claim, not a silent omission.
+	// bs/key are non-nil whenever auditOneFile returned a verdict (it opens the
+	// ledger before it drives the run); the nil guard is belt-and-braces so a
+	// future unsigned --local mode degrades to "no record file" rather than a
+	// panic.
+	if out := strings.TrimSpace(*outFlag); out != "" && bs != nil {
+		if err := writeLocalRecordFile(out, bs, key, verdict); err != nil {
+			// Non-fatal: the verdict already printed and is signed in the ledger.
+			fmt.Fprintf(stderr, "corral certify --local: writing --out %s: %v\n", out, err)
+		} else {
+			pubHex := hex.EncodeToString(key.Public().(ed25519.PublicKey))
+			fmt.Fprintf(stdout, "\nwrote signed record to %s — re-verify offline:\n  corral certify verify %s --pubkey %s --allow-unanchored\n", out, out, pubHex)
+		}
+	}
+
+	// --record: flush the replayable tape.
+	if out := strings.TrimSpace(*recordFlag); out != "" && rec != nil {
+		if err := rec.writeTape(out); err != nil {
+			fmt.Fprintf(stderr, "corral certify --local: writing --record %s: %v\n", out, err)
+		} else {
+			fmt.Fprintf(stdout, "\nwrote a replayable tape (%d beats) to %s\n", len(rec.events), out)
+		}
+	}
+
+	if verdict.Status == advpool.StatusCertified {
+		return 0
+	}
+	return 3
+}
+
+// localAuditInput is everything ONE file's adversarial audit needs. It is the
+// seam between a driver (the --local CLI, the --repo scan, and later a hosted
+// service) and the audit itself: every caller resolves these inputs its own
+// way, and they all share one implementation of the run.
+//
+// Zero values are the documented defaults throughout (see auditOneFile), so a
+// caller only sets what it actually knows.
+type localAuditInput struct {
+	// The subject. repoDir empty = single-file mode (codePath/testPath are
+	// filesystem paths); non-empty = repo-aware mode (they are repo-relative,
+	// the whole tree is seeded into the jail). testPath empty = the language
+	// plugin's sibling convention. lang empty = detect from codePath.
+	repoDir  string
+	codePath string
+	testPath string
+	goal     string
+	lang     string
+
+	// Budgets. Zero means the stock default for each.
+	swarm         int
+	mutantTimeout time.Duration
+	timeout       time.Duration
+	poll          time.Duration
+	nMutants      int
+	maxShards     int
+
+	// Role models. Empty means this file's stock default.
+	writerModel, criticModel, mutantModel, shadowModel string
+
+	// Jail + workspace. jail empty = auto-detect this OS's backend (never
+	// unsandboxed). checkArgv is the project's own test command, required in
+	// repo-aware mode.
+	checkArgv  []string
+	jail       string
+	bindDirs   []string
+	noBindDeps bool
+
+	// The signed subject's identity. Empty falls back to git, else "local".
+	repo, commit string
+
+	// Effects, all optional. A nil openStore means the verdict is NOT signed
+	// (the repo scan's H1a position — signing is H1c); an empty bugCatchDB
+	// means no scorecard feed; a nil record means no tape.
+	//
+	// openStore is a FUNCTION, not an open handle, so the ledger is created
+	// only once a run is actually going to happen: every usage error above it
+	// fails fast without touching the user's DuckDB file.
+	matrix     bool
+	record     *recordSink
+	bugCatchDB string
+	openStore  func() (*buildstore.Store, ed25519.PrivateKey, error)
+
+	// Where the run's human-readable progress goes. nil = io.Discard (the
+	// repo scan's position: N concurrent files would interleave into mush).
+	stdout, stderr io.Writer
+
+	// cmdName prefixes WARNINGS written straight to stderr (errors are
+	// returned, and the caller prefixes those itself). Empty means `corral
+	// certify --local`, which is what makes the extraction invisible to that
+	// command's existing output.
+	cmdName string
+}
+
+// localAuditError distinguishes a USAGE error (bad flags/inputs — the CLI's
+// exit 2) from an internal failure (exit 1), so the extracted audit can keep
+// the exit-code contract `certify --local` already has without printing
+// anything itself.
+type localAuditError struct {
+	usage bool
+	msg   string
+}
+
+func (e localAuditError) Error() string { return e.msg }
+
+func auditUsageErr(format string, a ...any) error {
+	return localAuditError{usage: true, msg: fmt.Sprintf(format, a...)}
+}
+
+func auditErr(format string, a ...any) error {
+	return localAuditError{msg: fmt.Sprintf(format, a...)}
+}
+
+// isAuditUsageError reports whether err is an auditOneFile usage error (exit
+// 2 rather than exit 1). Anything else — including a nil-safe non-audit error
+// — is an internal failure.
+func isAuditUsageError(err error) bool {
+	var ae localAuditError
+	return errors.As(err, &ae) && ae.usage
+}
+
+// resolveAuditPlugin validates the subject and resolves the language plugin
+// the jail will grade with — from in.lang, else the code file's extension.
+// Fail closed on an unknown language or an absent toolchain: the gate never
+// grades what it cannot run. Shared by auditOneFile and baselineRunnerFor so
+// the baseline is measured with the SAME plugin the audit will grade with.
+func resolveAuditPlugin(in localAuditInput) (lang.Plugin, error) {
+	// Fail closed for non-CLI callers: the CLI checks these at flag-parse
+	// time (before it opens a ledger), but a scan job or a hosted request
+	// must never reach the jail with no subject or no goal — an audit with an
+	// empty goal grades against nothing.
+	if strings.TrimSpace(in.codePath) == "" {
+		return nil, auditUsageErr("--code is required")
+	}
+	if strings.TrimSpace(in.goal) == "" {
+		return nil, auditUsageErr("--goal is required")
+	}
+	var plug lang.Plugin
+	if in.lang != "" {
+		p, ok := lang.ByName(in.lang)
+		if !ok {
+			return nil, auditUsageErr("unknown --lang %q", in.lang)
 		}
 		plug = p
 	} else {
-		p, ok := lang.Detect(*codePath)
+		p, ok := lang.Detect(in.codePath)
 		if !ok {
-			fmt.Fprintf(stderr, "corral certify --local: unknown language for --code %s (pass --lang)\n", *codePath)
-			return 2
+			return nil, auditUsageErr("unknown language for --code %s (pass --lang)", in.codePath)
 		}
 		plug = p
 	}
 	if err := plug.Preflight(); err != nil {
-		fmt.Fprintf(stderr, "corral certify --local: %s toolchain unavailable — refusing to grade: %v\n", plug.Name(), err)
-		return 1
+		return nil, auditErr("%s toolchain unavailable — refusing to grade: %v", plug.Name(), err)
+	}
+	return plug, nil
+}
+
+// auditJailPrep is the jail-side of one file's audit: the resolved test path,
+// the code + dev-test bytes, and the jail-backed scorer/validator/enumerator
+// wiring. cleanup releases any Go-vendor staging dir and is always non-nil.
+type auditJailPrep struct {
+	testPath string
+	code     []byte
+	devTest  []byte
+	wiring   jailWiring
+	cleanup  func()
+}
+
+// prepareAuditJail reads the subject + its dev test and builds the jail-backed
+// wiring for them. It is the single place that turns a localAuditInput into a
+// runnable jail, shared by the full audit (auditOneFile) and the
+// baseline-only run (baselineRunnerFor) — so the baseline is measured in
+// exactly the workspace the audit will score mutants in, never a lookalike.
+func prepareAuditJail(in localAuditInput, plug lang.Plugin, timeout time.Duration, stdout io.Writer) (auditJailPrep, error) {
+	var p auditJailPrep
+	p.cleanup = func() {}
+
+	// In repo-aware mode, the code/test paths are repo-relative (or absolute
+	// under the repo); the file lives inside the cloned tree. Resolve to
+	// filesystem paths for reading; the workspace keys are computed
+	// repo-relative by buildJailWiring.
+	repoDir := strings.TrimSpace(in.repoDir)
+	fsPath := func(q string) string {
+		if repoDir == "" || filepath.IsAbs(q) {
+			return q
+		}
+		return filepath.Join(repoDir, q)
 	}
 
+	code, err := os.ReadFile(fsPath(in.codePath)) // #nosec G304 -- operator-supplied path to the file under review
+	if err != nil {
+		return p, auditUsageErr("reading --code %s: %v", in.codePath, err)
+	}
+	tp := strings.TrimSpace(in.testPath)
+	if tp == "" {
+		tp = plug.TestPath(in.codePath)
+	}
+	devTest, err := os.ReadFile(fsPath(tp)) // #nosec G304 -- operator-supplied (or sibling-derived) test path
+	if err != nil {
+		return p, auditUsageErr("reading test %s: %v (pass --test to override)", tp, err)
+	}
+
+	// Resolve the jail. NEVER fall back to unsandboxed — resolveLocalJail fails
+	// closed if the requested/auto backend can't isolate on this host (and
+	// refuses "none" outright), returning an actionable message.
+	iso, err := resolveLocalJail(in.jail)
+	if err != nil {
+		return p, auditErr("%v", err)
+	}
+
+	wiring, err := buildJailWiring(jailWiringInput{
+		iso: iso, timeout: timeout, testTimeout: in.mutantTimeout,
+		codePath: in.codePath, testPath: tp, repoDir: repoDir, langName: plug.Name(), fsPath: fsPath,
+		code: code, devTest: devTest, checkArgv: in.checkArgv,
+		bindDirFlag: in.bindDirs, noBindDepsFlag: in.noBindDeps, stdout: stdout,
+	})
+	if err != nil {
+		return p, auditUsageErr("%v", err)
+	}
+	return auditJailPrep{testPath: tp, code: code, devTest: devTest, wiring: wiring, cleanup: wiring.cleanup}, nil
+}
+
+// jailBaselineRunner runs a candidate's UNMUTATED suite in the jail, once per
+// RunBaseline call, off the SAME scorer the audit grades mutants with:
+// adequacy.Score with an empty mutant list executes exactly the healthy
+// baseline and reports whether it passed (see adequacy.Report.CompliantPass).
+// That is the honest definition of "the baseline ran" — no second jail
+// invocation, no reimplementation of the workspace.
+type jailBaselineRunner struct {
+	ctx     context.Context
+	scorer  advpool.JailScorer
+	codeKey string
+	code    string
+	devTest string
+	testCmd string
+}
+
+func (b jailBaselineRunner) RunBaseline() (bool, error) {
+	rep, err := b.scorer.ScoreReport(b.ctx, b.codeKey, b.code, b.devTest, nil, b.testCmd)
+	if err != nil {
+		return false, err
+	}
+	return rep.CompliantPass, nil
+}
+
+// baselineRunnerFor builds the baseline-only runner for one job — honesty
+// invariant 2's input: a suite that does not agree with itself across repeated
+// unmutated runs cannot produce a meaningful kill rate, so the scan reports it
+// as ungradable rather than scoring a coin flip.
+//
+// It returns a cleanup the caller MUST call once it is done with the runner
+// (it releases any Go-vendor staging dir the jail bind-mounts). The brief's
+// signature is widened by that cleanup and an error: building the jail can
+// fail (missing toolchain, unreadable subject), and swallowing either would
+// mean reporting a stable baseline that was never actually run.
+func baselineRunnerFor(ctx context.Context, in localAuditInput) (reposcan.BaselineRunner, func(), error) {
+	noop := func() {}
+	plug, err := resolveAuditPlugin(in)
+	if err != nil {
+		return nil, noop, err
+	}
+	timeout := in.timeout
+	if timeout <= 0 {
+		timeout = 10 * time.Minute
+	}
+	prep, err := prepareAuditJail(in, plug, timeout, io.Discard)
+	if err != nil {
+		prep.cleanup()
+		return nil, noop, err
+	}
+	return jailBaselineRunner{
+		ctx:     ctx,
+		scorer:  prep.wiring.scorer,
+		codeKey: prep.wiring.codeKey,
+		code:    string(prep.code),
+		devTest: string(prep.devTest),
+		testCmd: strings.Join(in.checkArgv, " "),
+	}, prep.cleanup, nil
+}
+
+// auditRoles is the resolved role→model assignment for one run, plus the
+// role→backend router that will actually execute each seat.
+type auditRoles struct {
+	assign                 advpool.RoleAssignment
+	shadow                 string
+	writer, mutant, critic string
+	chatterFor             func(role string) agentworker.Chatter
+}
+
+// resolveAuditRoles resolves the role models, enforces decorrelation, requires
+// the provider credential, and builds the role→backend router. It is pure of
+// jail/store I/O on purpose so a caller can run it ONCE as a preflight — a
+// repo scan must discover a missing key before it fans out, not once per file
+// after each has already run its baseline in the jail.
+func resolveAuditRoles(in localAuditInput, stderr io.Writer) (auditRoles, error) {
+	var r auditRoles
+	if stderr == nil {
+		stderr = io.Discard
+	}
 	// Resolve the models and enforce decorrelation BEFORE doing any I/O — an
 	// operator override that collapses critic==writer must fail fast, not after
 	// opening stores and a jail.
-	writer := orDefault(*writerModel, defaultLocalWriterModel)
-	mutant := orDefault(*mutantModel, defaultLocalMutantModel)
-	critic := orDefault(*criticModel, defaultLocalCriticModel)
-	shadow := resolveShadowModel(*shadowModelFlag)
+	writer := orDefault(in.writerModel, defaultLocalWriterModel)
+	mutant := orDefault(in.mutantModel, defaultLocalMutantModel)
+	critic := orDefault(in.criticModel, defaultLocalCriticModel)
+	shadow := resolveShadowModel(in.shadowModel)
 	assign := advpool.RoleAssignment{
 		advpool.RoleMutantGenerator: mutant,
 		advpool.RoleTestWriter:      writer,
@@ -184,11 +530,10 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		// would be silently recorded as one, and read later as evidence about
 		// two models. Not fatal (an operator may want the same-model variance
 		// baseline on purpose), but never silent.
-		fmt.Fprintf(stderr, "corral certify --local: warning: --shadow-model %q is the same model as the mutant-generator — the recorded head-to-head compares a model against itself, not two models\n", shadow)
+		fmt.Fprintf(stderr, "%s: warning: --shadow-model %q is the same model as the mutant-generator — the recorded head-to-head compares a model against itself, not two models\n", orDefault(in.cmdName, "corral certify --local"), shadow)
 	}
 	if err := advpool.CheckDecorrelation(assign); err != nil {
-		fmt.Fprintf(stderr, "corral certify --local: %v — pass distinct --writer-model / --critic-model\n", err)
-		return 2
+		return r, auditUsageErr("%v — pass distinct --writer-model / --critic-model", err)
 	}
 
 	// Require a provider key. The default role models are Claude, so unless the
@@ -198,13 +543,11 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	backendSel := strings.TrimSpace(os.Getenv("MODEL_BACKEND"))
 	if onDefaultClaudePath() {
 		if agentbackend.Secret("ANTHROPIC_API_KEY") == "" {
-			fmt.Fprintln(stderr, "corral certify --local: no $ANTHROPIC_API_KEY set — export your Claude key, or select another provider with MODEL_BACKEND + its key")
-			return 2
+			return r, auditUsageErr("no $ANTHROPIC_API_KEY set — export your Claude key, or select another provider with MODEL_BACKEND + its key")
 		}
 		if backendSel == "" {
 			if err := os.Setenv("MODEL_BACKEND", "anthropic"); err != nil {
-				fmt.Fprintf(stderr, "corral certify --local: selecting anthropic backend: %v\n", err)
-				return 1
+				return r, auditErr("selecting anthropic backend: %v", err)
 			}
 		}
 	}
@@ -216,114 +559,114 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	// jails/stores/mutants are already in flight.
 	chatterFor, err := localChatterFor(assign)
 	if err != nil {
-		fmt.Fprintf(stderr, "corral certify --local: %v\n", err)
-		return 2
+		return r, auditUsageErr("%v", err)
 	}
 
-	// In --repo-dir mode, --code/--test are repo-relative (or absolute under the
-	// repo); the file lives inside the cloned tree. Resolve to filesystem paths
-	// for reading; the workspace keys are computed repo-relative below.
-	repoDir := strings.TrimSpace(*repoDirFlag)
-	fsPath := func(p string) string {
-		if repoDir == "" || filepath.IsAbs(p) {
-			return p
-		}
-		return filepath.Join(repoDir, p)
+	return auditRoles{assign: assign, shadow: shadow, writer: writer, mutant: mutant, critic: critic, chatterFor: chatterFor}, nil
+}
+
+// auditOneFile runs ONE file's complete adversarial-pool audit in-process and
+// returns the converged verdict. This is the whole of what `corral certify
+// --local` does between parsing its flags and writing its --out/--record
+// files, extracted so the repo scan (and later a hosted worker) drives the
+// SAME implementation rather than a second copy that would drift.
+//
+// It prints the run's human-readable progress and the rendered verdict to
+// in.stdout, but never prints its errors: those come back typed (see
+// localAuditError) so each caller can prefix and exit as its own mode
+// requires.
+func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, error) {
+	stdout, stderr := in.stdout, in.stderr
+	if stdout == nil {
+		stdout = io.Discard
+	}
+	if stderr == nil {
+		stderr = io.Discard
+	}
+	var zero advpool.Verdict
+
+	// Budget defaults — the same values `certify --local`'s flags carry, kept
+	// here so every caller of the seam (scan job, hosted worker) inherits them
+	// rather than each re-deciding what "no budget given" means.
+	timeout := in.timeout
+	if timeout <= 0 {
+		timeout = 10 * time.Minute
+	}
+	poll := in.poll
+	if poll <= 0 {
+		poll = 2 * time.Second
 	}
 
-	// Read the code + dev test.
-	code, err := os.ReadFile(fsPath(*codePath)) // #nosec G304 -- operator-supplied path to the file under review
+	plug, err := resolveAuditPlugin(in)
 	if err != nil {
-		fmt.Fprintf(stderr, "corral certify --local: reading --code %s: %v\n", *codePath, err)
-		return 2
-	}
-	tp := strings.TrimSpace(*testPath)
-	if tp == "" {
-		tp = plug.TestPath(*codePath)
-	}
-	devTest, err := os.ReadFile(fsPath(tp)) // #nosec G304 -- operator-supplied (or sibling-derived) test path
-	if err != nil {
-		fmt.Fprintf(stderr, "corral certify --local: reading test %s: %v (pass --test to override)\n", tp, err)
-		return 2
+		return zero, err
 	}
 
-	// Resolve the jail. NEVER fall back to unsandboxed — resolveLocalJail fails
-	// closed if the requested/auto backend can't isolate on this host (and
-	// refuses "none" outright), returning an actionable message.
-	iso, err := resolveLocalJail(*jailFlag)
+	// Resolve the models, enforce decorrelation, and prove the provider key is
+	// present BEFORE doing any I/O — an operator override that collapses
+	// critic==writer, or a missing key, must fail fast, not after opening
+	// stores and a jail.
+	roles, err := resolveAuditRoles(in, stderr)
 	if err != nil {
-		fmt.Fprintf(stderr, "corral certify --local: %v\n", err)
-		return 1
+		return zero, err
 	}
+	assign, shadow := roles.assign, roles.shadow
+	writer, mutant, critic := roles.writer, roles.mutant, roles.critic
+	chatterFor := roles.chatterFor
 
-	// Open the local stores: an ephemeral queue (one run), and the SAME
-	// persistent build ledger + signing key `corral certify`/`corral certify
-	// verify`/`corral certify pubkey` use, so a --local verdict is signed by the
-	// user's own key and lands in the same offline-verifiable ledger.
+	// Read the subject + its dev test and build the jail-backed wiring for
+	// them. Single-file mode keys by BASENAME (a flat scaffold; the adequacy
+	// jail refuses absolute/`..` keys); repo-aware mode seeds the jail with
+	// the whole cloned tree and keys the file under audit by its
+	// REPO-RELATIVE path, so a mutant overwrites the real file in context and
+	// the project's own tests (which import the package) resolve.
+	prep, err := prepareAuditJail(in, plug, timeout, stdout)
+	if err != nil {
+		prep.cleanup()
+		return zero, err
+	}
+	// Release any Go-vendor staging dir once the run completes (the jail
+	// bind-mounts vendor/ from it, so it must outlive scoring).
+	defer prep.cleanup()
+	tp, code, devTest := prep.testPath, prep.code, prep.devTest
+	scorer, validator, jailEnum := prep.wiring.scorer, prep.wiring.validator, prep.wiring.jailEnum
+	codeKey, devTestKey := prep.wiring.codeKey, prep.wiring.devTestKey
+
+	// Open the ephemeral queue — one run, one claimant, discarded on return.
 	qdir, err := os.MkdirTemp("", "corral-local-queue-")
 	if err != nil {
-		fmt.Fprintf(stderr, "corral certify --local: temp queue dir: %v\n", err)
-		return 1
+		return zero, auditErr("temp queue dir: %v", err)
 	}
 	defer func() { _ = os.RemoveAll(qdir) }()
 	q, err := queue.Open(filepath.Join(qdir, "queue.sqlite3"))
 	if err != nil {
-		fmt.Fprintf(stderr, "corral certify --local: opening queue: %v\n", err)
-		return 1
+		return zero, auditErr("opening queue: %v", err)
 	}
 	defer func() { _ = q.Close() }()
-
-	bs, err := buildstore.Open(localBuildDBPath())
-	if err != nil {
-		fmt.Fprintf(stderr, "corral certify --local: opening build ledger: %v\n", err)
-		return 1
-	}
-	defer bs.Close()
-
-	key, err := buildstore.LoadOrCreateSigningKey(localCertifyKeyPath())
-	if err != nil {
-		fmt.Fprintf(stderr, "corral certify --local: loading signing key: %v\n", err)
-		return 1
-	}
-
-	// Resolve the workspace keys + jail-backed scorer/validator. Single-file mode
-	// keys by BASENAME (a flat scaffold; the adequacy jail refuses absolute/`..`
-	// keys, so an absolute --code must be normalized here). --repo-dir mode
-	// seeds the jail with the whole cloned tree and keys the file under audit by
-	// its REPO-RELATIVE path, so a mutant overwrites the real file in context
-	// and the project's own tests (which import the package) resolve.
-	wiring, err := buildJailWiring(jailWiringInput{
-		iso: iso, timeout: *timeout, testTimeout: *testTimeout,
-		codePath: *codePath, testPath: tp, repoDir: repoDir, langName: plug.Name(), fsPath: fsPath,
-		code: code, devTest: devTest, checkArgv: checkArgv,
-		bindDirFlag: bindDirFlag, noBindDepsFlag: *noBindDepsFlag, stdout: stdout,
-	})
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 2
-	}
-	// Release any Go-vendor staging dir once the run completes (the jail
-	// bind-mounts vendor/ from it, so it must outlive scoring).
-	defer wiring.cleanup()
-	scorer, validator, jailEnum := wiring.scorer, wiring.validator, wiring.jailEnum
-	codeKey, devTestKey := wiring.codeKey, wiring.devTestKey
 
 	// Build the pure driver over the REAL jail-backed scorer/validator and the
 	// REAL certify-chain signer.
 	d, err := advpool.NewDriver(q, scorer, validator, assign, localCertifyThreshold)
 	if err != nil {
-		fmt.Fprintf(stderr, "corral certify --local: %v\n", err)
-		return 1
+		return zero, auditErr("%v", err)
 	}
-	d.Signer = advpool.CertSigner{Key: key, Store: bs, Witness: nil}
+	// A nil openStore means UNSIGNED on purpose: the repo scan (H1a) produces
+	// a report, not a sealed statement — signing/anchoring is H1c. Never
+	// half-sign: no store, no Signer at all.
+	if in.openStore != nil {
+		st, k, serr := in.openStore()
+		if serr != nil {
+			return zero, auditErr("%v", serr)
+		}
+		d.Signer = advpool.CertSigner{Key: k, Store: st, Witness: nil}
+	}
 	d.Enumerator = jailEnum
 
-	// --record: collect the run into a replayable tape. The sink is the driver's
-	// EventSink (pool reasoning beats) and is also fed the task lifecycle +
-	// findings from the drive loop below, so one ordered stream is the tape.
-	var rec *recordSink
-	if strings.TrimSpace(*recordFlag) != "" {
-		rec = &recordSink{}
+	// --record: the tape sink is the driver's EventSink (pool reasoning beats)
+	// and is also fed the task lifecycle + findings from the drive loop below,
+	// so one ordered stream is the tape. nil = no tape (rec.add is nil-safe).
+	rec := in.record
+	if rec != nil {
 		d.Events = rec
 	}
 	actorFor := func(role string) string { return recordActor(role, assign[role]) }
@@ -344,10 +687,10 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	// the exact breach the shadow budget exists to prevent, just via the
 	// generation channel instead of the scoring one. Widening RunDeadline
 	// itself closes it: see resolveRunDeadline.
-	d.RunDeadline = resolveRunDeadline(*timeout, shadow)
+	d.RunDeadline = resolveRunDeadline(timeout, shadow)
 
 	// Resolve repo/commit for the signed subject (best-effort git, else "local").
-	repo := strings.TrimSpace(*repoFlag)
+	repo := strings.TrimSpace(in.repo)
 	if repo == "" {
 		if v, gerr := (realRunner{}).GitOutput("config", "--get", "remote.origin.url"); gerr == nil && v != "" {
 			repo = v
@@ -355,7 +698,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 			repo = "local"
 		}
 	}
-	commit := strings.TrimSpace(*commitFlag)
+	commit := strings.TrimSpace(in.commit)
 	if commit == "" {
 		if v, gerr := (realRunner{}).GitOutput("rev-parse", "HEAD"); gerr == nil && v != "" {
 			commit = v
@@ -371,23 +714,30 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	// discarded. Opening it is best-effort on purpose: metrics are NOT the
 	// gate, so a store that will not open must warn and let the audit run,
 	// never abort it.
-	closeBugCatch, _, shadowRowsRecorded := wireLocalBugCatch(d, localBugCatchDBPath(), repo, commit, stderr)
-	defer closeBugCatch()
+	// An empty bugCatchDB means the caller wants no scorecard feed at all (the
+	// repo scan's position: N concurrent audits must not contend on one
+	// single-process DuckDB file).
+	var shadowRowsRecorded *int64
+	if strings.TrimSpace(in.bugCatchDB) != "" {
+		var closeBugCatch func()
+		closeBugCatch, _, shadowRowsRecorded = wireLocalBugCatch(d, in.bugCatchDB, repo, commit, stderr)
+		defer closeBugCatch()
+	}
 
-	n := *nMutants
+	n := in.nMutants
 	if n <= 0 {
 		n = 5
 	}
 	rs := advpool.RunSpec{
-		Repo: repo, Commit: commit, Goal: strings.TrimSpace(*goal),
+		Repo: repo, Commit: commit, Goal: strings.TrimSpace(in.goal),
 		CodePath: codeKey, Code: string(code),
 		DevTestPath: devTestKey, DevTestCode: string(devTest),
-		TestCmd:     strings.Join(checkArgv, " "),
+		TestCmd:     strings.Join(in.checkArgv, " "),
 		NMutants:    n,
 		Lang:        plug.Name(),
-		MaxShards:   resolveMaxShards(*maxShardsFlag),
+		MaxShards:   resolveMaxShards(in.maxShards),
 		ShadowModel: shadow,
-		Matrix:      *matrixFlag,
+		Matrix:      in.matrix,
 	}
 
 	// Signatures are best-effort (mirrors the brain's StartRun): a failure just
@@ -398,28 +748,28 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if err := d.StartRun(localMissionID, rs, sigs); err != nil {
-		fmt.Fprintf(stderr, "corral certify --local: starting run: %v\n", err)
-		return 1
+		return zero, auditErr("starting run: %v", err)
 	}
 
 	fmt.Fprintf(stdout, "auditing %s against its own tests — mutant-generator=%s test-writer=%s test-critic=%s\n",
-		*codePath, mutant, writer, critic)
+		in.codePath, mutant, writer, critic)
 
 	// The outer context bound is slightly beyond the driver's own RunDeadline
 	// (which already carries the shadow allowance — see resolveRunDeadline) so
 	// the driver gets the chance to emit its signed timeout verdict before ctx
-	// cancels the loop.
-	outerBound := resolveRunDeadline(*timeout, shadow) + 30*time.Second
-	ctx, cancel := context.WithTimeout(context.Background(), outerBound)
+	// cancels the loop. Layered on the CALLER's ctx, so a scan-wide cancel
+	// still reaches every in-flight file.
+	outerBound := resolveRunDeadline(timeout, shadow) + 30*time.Second
+	ctx, cancel := context.WithTimeout(ctx, outerBound)
 	defer cancel()
 
 	// Size the concurrent audit swarm and say so out loud — the "won't bankrupt
 	// me / won't melt the box" bound made visible. Independent role tasks run in
 	// parallel up to this bound; it's clamped to the host's cores (auto) or the
 	// operator's --swarm budget.
-	swarm := resolveSwarm(*swarmFlag)
+	swarm := resolveSwarm(in.swarm)
 	d.MatrixWorkers = swarm
-	if *swarmFlag > 0 {
+	if in.swarm > 0 {
 		fmt.Fprintf(stdout, "swarm: %d concurrent workers (--swarm budget)\n", swarm)
 	} else {
 		fmt.Fprintf(stdout, "swarm: %d concurrent workers (auto-sized to %d cores)\n", swarm, runtime.NumCPU())
@@ -447,13 +797,12 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "shadow: %d challenger seat(s) (%s) — a head-to-head measurement, never gating\n", len(shards), shadow)
 	}
 
-	verdict, err := driveLocalRun(ctx, d, q, localMissionID, chatterFor, *poll, time.Sleep, stdout, rec, actorFor, swarm)
+	verdict, err := driveLocalRun(ctx, d, q, localMissionID, chatterFor, poll, time.Sleep, stdout, rec, actorFor, swarm)
 	if err != nil {
-		fmt.Fprintf(stderr, "corral certify --local: %v\n", err)
-		return 1
+		return zero, auditErr("%v", err)
 	}
 
-	renderAdvVerdict(stdout, *codePath, advVerdictFromPool(*verdict))
+	renderAdvVerdict(stdout, in.codePath, advVerdictFromPool(*verdict))
 
 	// --matrix: print the per-test adequacy summary + delete-candidate list.
 	// st.Matrix is nil unless --matrix was set AND the phase actually ran
@@ -461,7 +810,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	// opt-in and silent otherwise.
 	if st, ok := d.RunStatus(localMissionID); ok && st.Matrix != nil {
 		renderMatrixSummary(stdout, *st.Matrix)
-		rec.add("pool_matrix", "corral-advpool", *codePath, matrixTapeDetail(*st.Matrix))
+		rec.add("pool_matrix", "corral-advpool", in.codePath, matrixTapeDetail(*st.Matrix))
 	}
 
 	// The "recorded to the scorecard" claim can only be made in PAST TENSE
@@ -481,30 +830,6 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
-	// --out writes the signed record as a self-contained file the user can
-	// re-verify offline. A --local record is signed by the user's OWN key but
-	// never publicly witnessed (Witness is nil above), so the verify hint
-	// carries --allow-unanchored — an honest "signed by you, not third-party
-	// anchored" claim, not a silent omission.
-	if out := strings.TrimSpace(*outFlag); out != "" {
-		if err := writeLocalRecordFile(out, bs, key, *verdict); err != nil {
-			// Non-fatal: the verdict already printed and is signed in the ledger.
-			fmt.Fprintf(stderr, "corral certify --local: writing --out %s: %v\n", out, err)
-		} else {
-			pubHex := hex.EncodeToString(key.Public().(ed25519.PublicKey))
-			fmt.Fprintf(stdout, "\nwrote signed record to %s — re-verify offline:\n  corral certify verify %s --pubkey %s --allow-unanchored\n", out, out, pubHex)
-		}
-	}
-
-	// --record: flush the replayable tape.
-	if out := strings.TrimSpace(*recordFlag); out != "" && rec != nil {
-		if err := rec.writeTape(out); err != nil {
-			fmt.Fprintf(stderr, "corral certify --local: writing --record %s: %v\n", out, err)
-		} else {
-			fmt.Fprintf(stdout, "\nwrote a replayable tape (%d beats) to %s\n", len(rec.events), out)
-		}
-	}
-
 	// Hand the pool's authored test back: when it killed a survivor the dev suite
 	// missed, print it so the dev can adopt it.
 	if st, ok := d.RunStatus(localMissionID); ok && strings.TrimSpace(st.AuthoredTest) != "" {
@@ -512,10 +837,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, strings.TrimRight(st.AuthoredTest, "\n"))
 	}
 
-	if verdict.Status == advpool.StatusCertified {
-		return 0
-	}
-	return 3
+	return *verdict, nil
 }
 
 // jailWiringInput bundles the inputs buildJailWiring needs. It is a params
@@ -579,7 +901,7 @@ func buildJailWiring(in jailWiringInput) (w jailWiring, err error) {
 	}()
 	if in.repoDir != "" {
 		if len(in.checkArgv) == 0 {
-			return w, fmt.Errorf("corral certify --local: --repo-dir requires the project's own test command after `--`, e.g. `-- python3 -m pytest tests/test_recipes.py`")
+			return w, fmt.Errorf("--repo-dir requires the project's own test command after `--`, e.g. `-- python3 -m pytest tests/test_recipes.py`")
 		}
 		// Provision external Go deps for the offline jail (no-op for other langs,
 		// non-modules, or already-vendored repos). Seed from the returned dir.
@@ -590,16 +912,16 @@ func buildJailWiring(in jailWiringInput) (w jailWiring, err error) {
 		w.cleanup = cleanup
 		repoFiles, depBinds, lerr := loadRepoFiles(seedDir, buildLoadOpts(in.iso.Name(), in.bindDirFlag, in.noBindDepsFlag))
 		if lerr != nil {
-			return w, fmt.Errorf("corral certify --local: reading --repo-dir %s: %v", in.repoDir, lerr)
+			return w, fmt.Errorf("reading --repo-dir %s: %v", in.repoDir, lerr)
 		}
 		w.depBinds = depBinds
 		ck, rerr := filepath.Rel(in.repoDir, in.fsPath(in.codePath))
 		if rerr != nil || strings.HasPrefix(ck, "..") {
-			return w, fmt.Errorf("corral certify --local: --code %s is not inside --repo-dir %s", in.codePath, in.repoDir)
+			return w, fmt.Errorf("--code %s is not inside --repo-dir %s", in.codePath, in.repoDir)
 		}
 		dk, rerr := filepath.Rel(in.repoDir, in.fsPath(in.testPath))
 		if rerr != nil || strings.HasPrefix(dk, "..") {
-			return w, fmt.Errorf("corral certify --local: --test %s is not inside --repo-dir %s", in.testPath, in.repoDir)
+			return w, fmt.Errorf("--test %s is not inside --repo-dir %s", in.testPath, in.repoDir)
 		}
 		w.codeKey, w.devTestKey = filepath.ToSlash(ck), filepath.ToSlash(dk)
 		// The just-read code/test are authoritative in the map (identical to the

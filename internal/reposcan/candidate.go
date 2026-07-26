@@ -104,7 +104,43 @@ func Enumerate(root string) ([]Candidate, []Exclusion, error) {
 // naming convention: applying TestPath to a test file is a no-op or the file
 // already carries the convention's marker.
 func isTestFile(p lang.Plugin, rel string) bool {
-	return filepath.ToSlash(p.TestPath(rel)) == rel || strings.Contains(rel, "_test.") ||
-		strings.Contains(rel, ".test.") || strings.Contains(rel, ".spec.") ||
-		strings.HasPrefix(filepath.Base(rel), "test_")
+	// Check if the plugin's TestPath returns the same path (no-op for test files).
+	if filepath.ToSlash(p.TestPath(rel)) == rel {
+		return true
+	}
+
+	// Check against the basename only to avoid directory-component matches.
+	base := filepath.Base(rel)
+
+	// _test. suffix (Go: foo_test.go, Ruby minitest: foo_test.rb)
+	if strings.Contains(base, "_test.") {
+		return true
+	}
+
+	// test_ prefix (Python: test_foo.py, Ruby: test_foo.rb)
+	if strings.HasPrefix(base, "test_") {
+		return true
+	}
+
+	// _spec. suffix (Ruby RSpec: foo_spec.rb, JavaScript: foo_spec.js, TypeScript: foo_spec.ts)
+	if strings.Contains(base, "_spec.") {
+		return true
+	}
+
+	// .test. suffix (JavaScript: foo.test.js, TypeScript: foo.test.ts)
+	if strings.Contains(base, ".test.") {
+		return true
+	}
+
+	// .spec. suffix (JavaScript: foo.spec.js, TypeScript: foo.spec.ts)
+	if strings.Contains(base, ".spec.") {
+		return true
+	}
+
+	// spec_ prefix (Ruby: spec_foo.rb)
+	if strings.HasPrefix(base, "spec_") {
+		return true
+	}
+
+	return false
 }

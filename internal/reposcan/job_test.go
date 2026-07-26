@@ -2,6 +2,8 @@ package reposcan
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -112,7 +114,7 @@ func TestEmitJobsPropagatesGoalSourceError(t *testing.T) {
 // DigestFile errors on source file are propagated.
 func TestEmitJobsPropagatesSourceDigestError(t *testing.T) {
 	root := t.TempDir()
-	// Create directory where source file should be
+	// Empty root: source file does not exist
 	cands := []Candidate{{Path: "pkg/a.go", TestPath: "pkg/a_test.go", Lang: "go"}}
 	gs := stubGoals{"pkg/a.go": "g"}
 
@@ -123,17 +125,33 @@ func TestEmitJobsPropagatesSourceDigestError(t *testing.T) {
 }
 
 // DigestDir errors on package directory are propagated.
+// Uses permission bits: directory must be unreadable (no read) but traversable (has execute)
+// so files can still be opened by name but listing fails.
 func TestEmitJobsPropagatesPackageDigestError(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("test requires non-root user (root bypasses permission checks)")
+	}
+
 	root := writeTree(t, map[string]string{
 		"pkg/a.go": "package pkg\n", "pkg/a_test.go": "package pkg\n",
 	})
-	// Candidate with non-existent package directory
-	cands := []Candidate{{Path: "nonexistent/pkg/a.go", TestPath: "nonexistent/pkg/a_test.go", Lang: "go"}}
-	gs := stubGoals{"nonexistent/pkg/a.go": "g"}
+	pkgDir := filepath.Join(root, "pkg")
+
+	// Remove read permission on directory to make os.ReadDir fail,
+	// but keep execute permission so files can still be opened by name.
+	if err := os.Chmod(pkgDir, 0o100); err != nil {
+		t.Fatalf("Chmod: %v", err)
+	}
+	t.Cleanup(func() {
+		os.Chmod(pkgDir, 0o755) // restore for cleanup
+	})
+
+	cands := []Candidate{{Path: "pkg/a.go", TestPath: "pkg/a_test.go", Lang: "go"}}
+	gs := stubGoals{"pkg/a.go": "g"}
 
 	_, _, err := EmitJobs(EmitConfig{Owner: "o", Root: root}, cands, gs)
 	if err == nil {
-		t.Error("want error for missing package directory, got nil")
+		t.Error("want error for unreadable package directory, got nil")
 	}
 }
 

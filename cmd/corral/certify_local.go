@@ -293,9 +293,13 @@ type localAuditInput struct {
 
 	// Where the run's human-readable progress goes. nil = io.Discard (the
 	// repo scan's position: N concurrent files would interleave into mush).
-	// errPrefix prefixes nothing here — it is what the CALLER prepends when it
-	// prints a returned error; auditOneFile never prints errors itself.
 	stdout, stderr io.Writer
+
+	// cmdName prefixes WARNINGS written straight to stderr (errors are
+	// returned, and the caller prefixes those itself). Empty means `corral
+	// certify --local`, which is what makes the extraction invisible to that
+	// command's existing output.
+	cmdName string
 }
 
 // localAuditError distinguishes a USAGE error (bad flags/inputs — the CLI's
@@ -526,7 +530,7 @@ func resolveAuditRoles(in localAuditInput, stderr io.Writer) (auditRoles, error)
 		// would be silently recorded as one, and read later as evidence about
 		// two models. Not fatal (an operator may want the same-model variance
 		// baseline on purpose), but never silent.
-		fmt.Fprintf(stderr, "warning: --shadow-model %q is the same model as the mutant-generator — the recorded head-to-head compares a model against itself, not two models\n", shadow)
+		fmt.Fprintf(stderr, "%s: warning: --shadow-model %q is the same model as the mutant-generator — the recorded head-to-head compares a model against itself, not two models\n", orDefault(in.cmdName, "corral certify --local"), shadow)
 	}
 	if err := advpool.CheckDecorrelation(assign); err != nil {
 		return r, auditUsageErr("%v — pass distinct --writer-model / --critic-model", err)

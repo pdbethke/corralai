@@ -96,9 +96,159 @@ func TestCertifyRepoReportsBothExclusionSources(t *testing.T) {
 			t.Errorf("output missing exclusion %q:\n%s", want, s)
 		}
 	}
-	// 6 files on disk (5 source + README) + goals.json itself.
-	if !strings.Contains(s, "6 file(s) excluded") {
+	// 6 files are excluded from the audit: 5 non-candidates (a_test.go,
+	// b_test.go, c.go, README.md, goals.json) plus the ungoaled candidate b.go.
+	if !strings.Contains(s, "6 file(s) excluded from the audit") {
 		t.Errorf("want 6 exclusions (4 above + b_test.go + goals.json):\n%s", s)
+	}
+	// Finding 1 regression: the file total must be candidates + ENUMERATE-only
+	// exclusions. b.go is BOTH a candidate and (ungoaled) an exclusion, so
+	// counting the merged exclusion slice double-counted it. 7 files exist on
+	// disk: a.go a_test.go b.go b_test.go c.go README.md goals.json.
+	if !strings.Contains(s, "7 file(s) walked") {
+		t.Errorf("file total must not double-count the ungoaled candidate b.go (want 7):\n%s", s)
+	}
+}
+
+// TestCertifyRepoFileTotalMatchesDiskWithManyUngoaled is the wider version of
+// the same arithmetic: with several ungoaled candidates the double-count grew
+// with them, so a repo could report more files than it contains — in a number
+// a later slice signs and anchors.
+func TestCertifyRepoFileTotalMatchesDiskWithManyUngoaled(t *testing.T) {
+	root := t.TempDir()
+	// 4 goal-less candidates + 1 goaled, each with a paired test = 10 files,
+	// plus goals.json = 11 on disk.
+	for _, n := range []string{"a", "b", "c", "d", "e"} {
+		mustWrite(t, filepath.Join(root, "pkg", n+".go"), "package pkg\n")
+		mustWrite(t, filepath.Join(root, "pkg", n+"_test.go"), "package pkg\n")
+	}
+	goals := filepath.Join(root, "goals.json")
+	mustWrite(t, goals, `{"pkg/a.go": "must not panic"}`)
+
+	var out, errb bytes.Buffer
+	if code := runCertifyRepo([]string{"--repo", root, "--goals", goals, "--dry-run"}, &out, &errb); code != 0 {
+		t.Fatalf("exit %d, stderr=%s", code, errb.String())
+	}
+	s := out.String()
+	if !strings.Contains(s, "11 file(s) walked") {
+		t.Errorf("want 11 files walked (5 src + 5 tests + goals.json):\n%s", s)
+	}
+	if !strings.Contains(s, "5 candidate(s)") {
+		t.Errorf("want 5 candidates:\n%s", s)
+	}
+	if !strings.Contains(s, "1 job(s)") {
+		t.Errorf("want 1 job (only pkg/a.go is goaled):\n%s", s)
+	}
+	// 4 ungoaled + 5 test files + goals.json = 10 excluded from the audit.
+	if !strings.Contains(s, "10 file(s) excluded from the audit") {
+		t.Errorf("want 10 exclusions:\n%s", s)
+	}
+}
+
+// TestRepoScanExitCodeNothingAuditedIsNonZero is Finding 4: a scan in which
+// every file failed to grade must not read as green to CI.
+func TestRepoScanExitCodeNothingAuditedIsNonZero(t *testing.T) {
+	nothing := reposcan.Aggregate("o", "r", "c", 2, []reposcan.FileResult{
+		{Job: reposcan.Job{Path: "a.go"}, Gradable: false, Reason: reposcan.ReasonExecutorError},
+	}, nil)
+	if got := repoScanExitCode(nothing); got == 0 {
+		t.Errorf("a scan that graded nothing must exit non-zero, got %d", got)
+	}
+
+	graded := reposcan.Aggregate("o", "r", "c", 2, []reposcan.FileResult{
+		{Job: reposcan.Job{Path: "a.go"}, Gradable: true, Verdict: advpool.Verdict{DevKillRate: 0.9}},
+	}, nil)
+	if got := repoScanExitCode(graded); got != 0 {
+		t.Errorf("a scan that graded something must exit 0, got %d", got)
+	}
+}
+
+// TestLocalExecutorExecuteRedBaselineSkipsTheAudit is Finding 3: a suite that
+// consistently FAILS unmutated is stable (the runs agree) but ungradable, and
+// must not pay for mutant generation, critic calls and a third suite run to
+// produce a verdict that would only be discarded.
+func TestLocalExecutorExecuteRedBaselineSkipsTheAudit(t *testing.T) {
+	audited := false
+	ex := localExecutor{
+		baselineRuns: 2,
+		newBaseline: func(context.Context, localAuditInput) (reposcan.BaselineRunner, func(), error) {
+			return &scriptedBaseline{results: []bool{false, false}}, func() {}, nil
+		},
+		audit: func(context.Context, localAuditInput) (advpool.Verdict, error) {
+			audited = true
+			return advpool.Verdict{}, nil
+		},
+	}
+	res, err := ex.Execute(context.Background(), reposcan.Job{Path: "pkg/a.go", Goal: reposcan.Goal{Text: "g"}})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if audited {
+		t.Error("a consistently-red baseline must not pay for a full LLM audit")
+	}
+	if res.Gradable {
+		t.Error("a red baseline must not be gradable")
+	}
+	if res.Reason != reposcan.ReasonBaselineFailed {
+		t.Errorf("Reason = %q, want %q", res.Reason, reposcan.ReasonBaselineFailed)
+	}
+}
+
+// TestLocalExecutorReleasesTheBaselineJail proves the cleanup runs on every
+// path — including the early return for a red baseline, where a leak would
+// strand a vendor staging dir per file.
+func TestLocalExecutorReleasesTheBaselineJail(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		results []bool
+	}{
+		{"red baseline", []bool{false, false}},
+		{"flaky baseline", []bool{true, false}},
+		{"green baseline", []bool{true, true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cleaned := 0
+			ex := localExecutor{
+				baselineRuns: 2,
+				newBaseline: func(context.Context, localAuditInput) (reposcan.BaselineRunner, func(), error) {
+					return &scriptedBaseline{results: tc.results}, func() { cleaned++ }, nil
+				},
+				audit: func(context.Context, localAuditInput) (advpool.Verdict, error) {
+					return advpool.Verdict{DevKillRate: 1}, nil
+				},
+			}
+			if _, err := ex.Execute(context.Background(), reposcan.Job{Path: "a.go", Goal: reposcan.Goal{Text: "g"}}); err != nil {
+				t.Fatal(err)
+			}
+			if cleaned != 1 {
+				t.Errorf("cleanup ran %d times, want exactly 1", cleaned)
+			}
+		})
+	}
+}
+
+// TestResolveAuditRolesWarningCarriesTheCommandPrefix pins the observable
+// output of the shipped command: the shadow-model warning must still be
+// prefixed "corral certify --local: " after the extraction moved it into a
+// shared helper, and must name the calling mode when another one uses it.
+func TestResolveAuditRolesWarningCarriesTheCommandPrefix(t *testing.T) {
+	var errb bytes.Buffer
+	// critic != writer keeps decorrelation happy; shadow == mutant fires the
+	// warning, which is written before any credential check.
+	_, _ = resolveAuditRoles(localAuditInput{
+		writerModel: "w", criticModel: "c", mutantModel: "m", shadowModel: "m",
+	}, &errb)
+	if !strings.Contains(errb.String(), "corral certify --local: warning: --shadow-model") {
+		t.Errorf("stderr = %q", errb.String())
+	}
+
+	errb.Reset()
+	_, _ = resolveAuditRoles(localAuditInput{
+		cmdName:     "corral certify --repo",
+		writerModel: "w", criticModel: "c", mutantModel: "m", shadowModel: "m",
+	}, &errb)
+	if !strings.Contains(errb.String(), "corral certify --repo: warning: --shadow-model") {
+		t.Errorf("stderr = %q", errb.String())
 	}
 }
 
@@ -205,11 +355,16 @@ func TestLocalExecutorExecuteStableBaselineIsGraded(t *testing.T) {
 // TestLocalExecutorExecuteBaselineFailedIsUngradable proves honesty invariant
 // 1 survives the adapter: a verdict whose baseline could not pass is reported
 // as ungradable-with-reason, never as a real 0.0 kill rate.
+//
+// The baseline here is GREEN, so the pre-audit short-circuit does not fire —
+// this exercises the verdict-level backstop specifically, for the case where
+// the suite passes the standalone baseline run but fails inside the audit's
+// own scoring workspace.
 func TestLocalExecutorExecuteBaselineFailedIsUngradable(t *testing.T) {
 	ex := localExecutor{
 		baselineRuns: 2,
 		newBaseline: func(context.Context, localAuditInput) (reposcan.BaselineRunner, func(), error) {
-			return &scriptedBaseline{results: []bool{false, false}}, func() {}, nil
+			return &scriptedBaseline{results: []bool{true, true}}, func() {}, nil
 		},
 		audit: func(context.Context, localAuditInput) (advpool.Verdict, error) {
 			return advpool.Verdict{BaselineFailed: true}, nil

@@ -65,16 +65,30 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "corral certify --repo: emitting jobs: %v\n", err)
 		return 1
 	}
-	// BOTH exclusion sources or the coverage story is a lie: the enumerator's
-	// (no-language / is-test / no-paired-test) AND the ungoaled ones EmitJobs
-	// returns. Dropping either would silently shrink the denominator a reader
-	// judges the score by.
+	// The two exclusion sources partition DIFFERENTLY, and conflating them
+	// double-counts files:
+	//   - Enumerate's exclusions are files that are NOT candidates at all
+	//     (no-language / is-test / no-paired-test).
+	//   - EmitJobs' ungoaled exclusions are candidates — they are already
+	//     inside len(cands).
+	// So the file total is candidates + ENUMERATE-only exclusions. Counting
+	// len(excl) after the append added every ungoaled path a second time and
+	// inflated TotalFiles past the number of files on disk — in a report a
+	// later slice signs and anchors to a public transparency log.
+	enumExcl := len(excl)
+	totalFiles := len(cands) + enumExcl
+
+	// BOTH sources are still REPORTED, or the coverage story is a lie: a reader
+	// has to see the ungoaled files too, since they are candidates that were
+	// nonetheless not audited.
 	excl = append(excl, goalExcl...)
 
-	totalFiles := len(cands) + len(excl)
 	fmt.Fprintf(stdout, "corral certify --repo %s\n", *repoDir)
-	fmt.Fprintf(stdout, "  %d job(s) from %d candidate(s); %d file(s) excluded\n",
-		len(jobs), len(cands), len(excl))
+	// totalFiles is printed rather than left for the reader to add up: the two
+	// terms below overlap (ungoaled files are candidates AND excluded), so
+	// candidates + excluded is deliberately NOT the file count.
+	fmt.Fprintf(stdout, "  %d file(s) walked; %d candidate(s); %d job(s); %d file(s) excluded from the audit\n",
+		totalFiles, len(cands), len(jobs), len(excl))
 	printExclusions(stdout, excl)
 
 	if *dryRun {
@@ -85,7 +99,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// and the API key are scan-wide facts. Discovering a missing key per-file —
 	// after each job has already run its baseline suite in the jail — would burn
 	// real minutes to reach an answer the first job could have given instantly.
-	if _, err := resolveAuditRoles(localAuditInput{}, stderr); err != nil {
+	if _, err := resolveAuditRoles(localAuditInput{cmdName: "corral certify --repo"}, stderr); err != nil {
 		fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
 		if isAuditUsageError(err) {
 			return 2
@@ -108,6 +122,19 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	rep := reposcan.Aggregate(*owner, cfg.Repo, *commit, totalFiles, results, excl)
 
 	printRepoReport(stdout, rep)
+	return repoScanExitCode(rep)
+}
+
+// repoScanExitCode is the scan's automated signal. A scan that measured
+// NOTHING is not a passing scan: exiting 0 would read as green in CI for a
+// repo where every single file failed to grade — the exact false-green the
+// COULD-NOT-GRADE line prevents for a human reader, left unfixed for the
+// automated one. Split out as a function so both branches are testable
+// without a jail and an API key.
+func repoScanExitCode(r reposcan.RepoReport) int {
+	if r.Audited == 0 {
+		return 1
+	}
 	return 0
 }
 
@@ -244,8 +271,24 @@ func (l localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.Fi
 	if err != nil {
 		return reposcan.FileResult{}, l.fail(j, err)
 	}
-	stable, err := reposcan.CheckBaselineStable(runner, l.baselineRuns)
-	cleanup()
+	// Deferred, not called inline: a panic in CheckBaselineStable or in the
+	// jail beneath it would otherwise leak the vendor staging dir. Released
+	// explicitly before l.audit too, since the audit builds its own jail and
+	// this one is dead the moment the baseline question is answered.
+	released := false
+	release := func() {
+		if !released {
+			released = true
+			cleanup()
+		}
+	}
+	defer release()
+
+	// recordingBaseline remembers the outcome CheckBaselineStable observed, so
+	// the consistent PASS/FAIL value is available at zero extra cost — no
+	// additional suite run just to learn which way a stable baseline went.
+	rec := &recordingBaseline{inner: runner}
+	stable, err := reposcan.CheckBaselineStable(rec, l.baselineRuns)
 	if err != nil {
 		return reposcan.FileResult{}, l.fail(j, err)
 	}
@@ -253,6 +296,19 @@ func (l localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.Fi
 		l.note("%s: unstable baseline — not graded\n", j.Path)
 		return reposcan.FileResult{Gradable: false, Reason: reposcan.ReasonFlakyBaseline}, nil
 	}
+	// Stable means every run AGREED — including agreeing to fail. A suite that
+	// is consistently red is a legitimate ungradable (that is the existing
+	// BaselineFailed case), and auditing it anyway would spend mutant
+	// generation, critic calls and a third full suite run to produce a verdict
+	// we already know must be discarded. On a repo with a broken suite that is
+	// the entire LLM bill, for every file, to reach an answer the first two
+	// runs already gave. The BaselineFailed handling below stays as the
+	// backstop for anything this misses.
+	if !rec.last {
+		l.note("%s: baseline does not pass unmutated — not graded\n", j.Path)
+		return reposcan.FileResult{Gradable: false, Reason: reposcan.ReasonBaselineFailed}, nil
+	}
+	release()
 
 	v, err := l.audit(ctx, in)
 	if err != nil {
@@ -286,6 +342,24 @@ func (l localExecutor) testCmd(j reposcan.Job) []string {
 		return p.TestCmd()
 	}
 	return nil
+}
+
+// recordingBaseline wraps a BaselineRunner and remembers the last outcome it
+// observed. CheckBaselineStable answers "did the runs agree?" but not "agree on
+// WHAT"; when it reports stable, every run returned the same value, so `last`
+// IS that value — recoverable without paying for another suite run.
+type recordingBaseline struct {
+	inner reposcan.BaselineRunner
+	last  bool
+}
+
+func (r *recordingBaseline) RunBaseline() (bool, error) {
+	v, err := r.inner.RunBaseline()
+	if err != nil {
+		return false, err
+	}
+	r.last = v
+	return v, nil
 }
 
 // fail reports WHY a job could not be audited and returns the error

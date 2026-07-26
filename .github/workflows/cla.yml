@@ -24,10 +24,14 @@ jobs:
           path-to-signatures: 'signatures/cla.json'
           path-to-document: 'https://github.com/pdbethke/corralai/blob/main/CLA.md'
           branch: 'main'
-          # contributor-assistant matches the allowlist against each committer's
-          # name — the GitHub login when the commit's author email is linked to
-          # an account, else the raw git author name. Claude-authored commits use
-          # `noreply@anthropic.com`, which links to no account, so they surface as
-          # the bare author name "Claude" (never `bot*`). Exempt that identity so
-          # AI-authored PRs don't hang on a CLA the human operator already signed.
-          allowlist: 'pdbethke,bot*,Claude'
+          # contributor-assistant resolves each commit to
+          #   commit.author.user || commit.committer.user || commit.author || commit.committer
+          # and matches the allowlist against `login || name` — CASE-SENSITIVELY,
+          # by exact string equality (patterns containing `*` become regexes).
+          #
+          # Claude-authored commits use `noreply@anthropic.com`, which IS linked
+          # to a real GitHub account (login `claude`, id 81847), so the LOGIN wins
+          # and the identity presented is lowercase `claude` — not the git author
+          # name "Claude". Exempt that login so AI-authored PRs don't hang on a CLA
+          # the human operator already signed.
+          allowlist: 'pdbethke,bot*,claude'

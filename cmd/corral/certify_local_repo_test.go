@@ -65,6 +65,37 @@ func TestCopyTreeSkipGit(t *testing.T) {
 	}
 }
 
+func TestBuildRepoSeedLoadsTreeAndAlwaysReturnsCleanup(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.py"), []byte("x = 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	seed, err := buildRepoSeed(root, "python", "bwrap", nil, false, io.Discard)
+	if err != nil {
+		t.Fatalf("buildRepoSeed: %v", err)
+	}
+	if seed.cleanup == nil {
+		t.Fatal("cleanup must always be non-nil — callers defer it unconditionally")
+	}
+	defer seed.cleanup()
+
+	if got := seed.files["a.py"]; got != "x = 1\n" {
+		t.Errorf("files[a.py] = %q, want the file's contents", got)
+	}
+	// Non-Go repos stage nothing: the seed dir IS the repo dir.
+	if seed.seedDir != root {
+		t.Errorf("seedDir = %q, want %q for a non-Go repo", seed.seedDir, root)
+	}
+}
+
+func TestBuildRepoSeedPropagatesLoadError(t *testing.T) {
+	_, err := buildRepoSeed(filepath.Join(t.TempDir(), "does-not-exist"), "python", "bwrap", nil, false, io.Discard)
+	if err == nil {
+		t.Fatal("a missing repo dir must be an error, not an empty seed")
+	}
+}
+
 func mustMkdir(t *testing.T, p string) {
 	t.Helper()
 	if err := os.MkdirAll(p, 0o750); err != nil {

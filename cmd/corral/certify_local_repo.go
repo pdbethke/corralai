@@ -16,6 +16,38 @@ import (
 	"github.com/pdbethke/corralai/internal/adequacy"
 )
 
+// repoSeed is everything about a repo's jail workspace that does NOT depend on
+// which file is being audited: the (possibly vendored) seed directory, the
+// workspace text keyed repo-relative, and the dependency dirs to bind
+// read-only. It depends only on the repo, the language, the sandbox backend
+// and the bind flags — all constant for a whole scan — which is what makes it
+// shareable across every job of one language.
+type repoSeed struct {
+	seedDir string
+	files   map[string]string
+	binds   []adequacy.DepBind
+	cleanup func()
+}
+
+// buildRepoSeed performs the scan-invariant half of jail preparation: provision
+// external Go deps for the offline jail (a no-op for other languages,
+// non-modules, and already-vendored repos), then load the tree.
+//
+// cleanup is ALWAYS non-nil so callers can defer it unconditionally, and it
+// releases the vendor staging dir when one was created.
+func buildRepoSeed(repoDir, langName, backendName string, bindDirs []string, noBindDeps bool, out io.Writer) (repoSeed, error) {
+	seedDir, cleanup, verr := ensureGoVendored(repoDir, langName, out)
+	if verr != nil {
+		return repoSeed{cleanup: func() {}}, verr
+	}
+	files, binds, lerr := loadRepoFiles(seedDir, buildLoadOpts(backendName, bindDirs, noBindDeps))
+	if lerr != nil {
+		cleanup()
+		return repoSeed{cleanup: func() {}}, fmt.Errorf("reading --repo-dir %s: %v", repoDir, lerr)
+	}
+	return repoSeed{seedDir: seedDir, files: files, binds: binds, cleanup: cleanup}, nil
+}
+
 // ensureGoVendored makes external Go modules resolvable inside the OFFLINE audit
 // jail. The jail has no network by design (the code under audit can't phone
 // home), and a repo's external deps live in the operator's module cache, which

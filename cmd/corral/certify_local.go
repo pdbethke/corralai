@@ -905,15 +905,12 @@ func buildJailWiring(in jailWiringInput) (w jailWiring, err error) {
 		}
 		// Provision external Go deps for the offline jail (no-op for other langs,
 		// non-modules, or already-vendored repos). Seed from the returned dir.
-		seedDir, cleanup, verr := ensureGoVendored(in.repoDir, in.langName, in.stdout)
-		if verr != nil {
-			return w, verr
+		seed, serr := buildRepoSeed(in.repoDir, in.langName, in.iso.Name(), in.bindDirFlag, in.noBindDepsFlag, in.stdout)
+		if serr != nil {
+			return w, serr
 		}
-		w.cleanup = cleanup
-		repoFiles, depBinds, lerr := loadRepoFiles(seedDir, buildLoadOpts(in.iso.Name(), in.bindDirFlag, in.noBindDepsFlag))
-		if lerr != nil {
-			return w, fmt.Errorf("reading --repo-dir %s: %v", in.repoDir, lerr)
-		}
+		w.cleanup = seed.cleanup
+		repoFiles, depBinds := seed.files, seed.binds
 		w.depBinds = depBinds
 		ck, rerr := filepath.Rel(in.repoDir, in.fsPath(in.codePath))
 		if rerr != nil || strings.HasPrefix(ck, "..") {

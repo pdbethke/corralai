@@ -3,6 +3,8 @@ package reposcan
 import (
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"syscall"
 	"testing"
 )
@@ -322,7 +324,9 @@ func TestEnumerateExcludesFIFO(t *testing.T) {
 }
 
 // TestEnumerateSkipsBuildOutputDirs keeps vendored and generated trees out of
-// the denominator the report's coverage ratio is computed over.
+// the audited surface: they are not candidates. However, the files are still
+// accounted for in the exclusions with reason "skipped-dir" so the report
+// maintains an honest count of all files on disk.
 func TestEnumerateSkipsBuildOutputDirs(t *testing.T) {
 	root := writeTree(t, map[string]string{
 		"pkg/a.go":                    "package pkg\n",
@@ -338,19 +342,127 @@ func TestEnumerateSkipsBuildOutputDirs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Enumerate: %v", err)
 	}
-	seen := map[string]bool{}
-	for _, c := range cands {
-		seen[c.Path] = true
-	}
-	for _, e := range excl {
-		seen[e.Path] = true
-	}
-	for _, skipped := range []string{"dist/d.go", "build/b.go", "target/t.go", ".tox/x.py", "lib/site-packages/s.py"} {
-		if seen[skipped] {
-			t.Errorf("%s was walked; build/vendor trees must stay out of the audited surface", skipped)
-		}
-	}
+
+	// Only pkg/a.go should be a candidate
 	if len(cands) != 1 || cands[0].Path != "pkg/a.go" {
 		t.Errorf("candidates = %+v, want only pkg/a.go", cands)
+	}
+
+	// Verify that the skipped-dir files are accounted for in exclusions
+	reasons := map[string]string{}
+	for _, e := range excl {
+		reasons[e.Path] = e.Reason
+	}
+
+	skippedFiles := []string{"dist/d.go", "build/b.go", "target/t.go", ".tox/x.py", "lib/site-packages/s.py", "lib/site-packages/test_s.py"}
+	for _, path := range skippedFiles {
+		if reasons[path] != ReasonSkippedDir {
+			t.Errorf("%s reason = %q, want %q (skipped dirs must be accounted)", path, reasons[path], ReasonSkippedDir)
+		}
+	}
+
+	// Verify the test file is excluded as a test
+	if reasons["pkg/a_test.go"] != ReasonIsTest {
+		t.Errorf("pkg/a_test.go reason = %q, want %q", reasons["pkg/a_test.go"], ReasonIsTest)
+	}
+}
+
+func TestEnumerateAccountsSkippedDirs(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"pkg/a.go":      "package pkg\n",
+		"pkg/a_test.go": "package pkg\n",
+		"build/gen.go":  "package build\n",
+		"build/x.txt":   "data\n",
+	})
+
+	cands, excl, err := Enumerate(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cands) != 1 {
+		t.Fatalf("want 1 candidate, got %d", len(cands))
+	}
+
+	var skipped int
+	for _, e := range excl {
+		if e.Reason == ReasonSkippedDir {
+			skipped++
+		}
+	}
+	if skipped != 2 {
+		t.Errorf("skipped-dir exclusions = %d, want 2 — build/ files must be accounted, not invisible", skipped)
+	}
+	if total := len(cands) + len(excl); total != 4 {
+		t.Errorf("walked total = %d, want 4 (every file on disk accounted)", total)
+	}
+}
+
+func TestEnumerateRealRepoStats(t *testing.T) {
+	// This test enumerates the real repository and reports statistics about
+	// skipped-dir exclusions. It's informational and not normally run.
+	if os.Getenv("VERBOSE") == "" {
+		t.Skip("skipping real repo stats (set VERBOSE=1 to run)")
+	}
+
+	root := "/home/pdbethke/PycharmProjects/corralai/.claude/worktrees/canary-punch-list"
+	cands, excl, err := Enumerate(root)
+	if err != nil {
+		t.Fatalf("Enumerate: %v", err)
+	}
+
+	// Count exclusions by reason
+	reasonCount := map[string]int{}
+	for _, e := range excl {
+		reasonCount[e.Reason]++
+	}
+
+	t.Logf("Real repo enumeration stats:")
+	t.Logf("  Candidates: %d", len(cands))
+	t.Logf("  Total exclusions: %d", len(excl))
+	t.Logf("  Exclusions by reason:")
+
+	// Sort for consistent output
+	reasons := make([]string, 0, len(reasonCount))
+	for r := range reasonCount {
+		reasons = append(reasons, r)
+	}
+	sort.Strings(reasons)
+
+	for _, reason := range reasons {
+		t.Logf("    %s: %d", reason, reasonCount[reason])
+	}
+
+	// Break down skipped-dir by directory
+	skippedByDir := map[string]int{}
+	skippedFiles := []string{}
+	for _, e := range excl {
+		if e.Reason == ReasonSkippedDir {
+			// Extract top-level directory
+			dir := e.Path
+			if idx := strings.IndexByte(e.Path, '/'); idx != -1 {
+				dir = e.Path[:idx]
+			}
+			skippedByDir[dir]++
+			skippedFiles = append(skippedFiles, e.Path)
+		}
+	}
+
+	if len(skippedByDir) > 0 {
+		t.Logf("  Skipped-dir exclusions by directory:")
+		dirs := make([]string, 0, len(skippedByDir))
+		for d := range skippedByDir {
+			dirs = append(dirs, d)
+		}
+		sort.Strings(dirs)
+		for _, dir := range dirs {
+			t.Logf("    %s: %d", dir, skippedByDir[dir])
+		}
+		if len(skippedFiles) <= 10 {
+			sort.Strings(skippedFiles)
+			t.Logf("  Skipped files:")
+			for _, f := range skippedFiles {
+				t.Logf("    %s", f)
+			}
+		}
 	}
 }

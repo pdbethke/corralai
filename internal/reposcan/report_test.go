@@ -87,7 +87,14 @@ func TestAggregateCountsCacheHits(t *testing.T) {
 // audited fraction is the ratio a later slice's coverage floor is applied to.
 func TestAggregateCountsUngoaledCandidatesInTheDenominator(t *testing.T) {
 	// 5 candidates enumerated; only 1 had a goal and became a job.
-	rep := Aggregate("o", "r", "c1", 12, 5, []FileResult{gradable("a.go", 1.0, 0)}, nil)
+	// The other 4 had no goal and are recorded in the exclusions.
+	excl := []Exclusion{
+		{Path: "b.go", Reason: ReasonUngoaled},
+		{Path: "c.go", Reason: ReasonUngoaled},
+		{Path: "d.go", Reason: ReasonUngoaled},
+		{Path: "e.go", Reason: ReasonUngoaled},
+	}
+	rep := Aggregate("o", "r", "c1", 12, 5, []FileResult{gradable("a.go", 1.0, 0)}, excl)
 
 	if rep.Candidates != 5 {
 		t.Fatalf("Candidates = %d, want 5 (the enumerated candidates, not the jobs)", rep.Candidates)
@@ -133,5 +140,24 @@ func TestAggregateBooksPrepFailed(t *testing.T) {
 	}, nil)
 	if rep.Ungradable[ReasonPrepFailed] != 1 {
 		t.Fatalf("Ungradable = %+v, want one prep-failed", rep.Ungradable)
+	}
+}
+
+// Two candidates dropped before becoming jobs: one ungoaled, one for a
+// DIFFERENT reason. Subtraction would label both "ungoaled".
+func TestAggregateBooksUngoaledFromExclusionsNotSubtraction(t *testing.T) {
+	excl := []Exclusion{
+		{Path: "a.go", Reason: ReasonUngoaled},
+		{Path: "b.go", Reason: ReasonNotRegularFile},
+	}
+	rep := Aggregate("o", "r", "c1", 10, 3, []FileResult{
+		{Job: Job{Path: "c.go"}, Gradable: true},
+	}, excl)
+
+	if got := rep.Ungradable[ReasonUngoaled]; got != 1 {
+		t.Errorf("ungoaled = %d, want exactly 1 — the other drop is not ungoaled", got)
+	}
+	if rep.Ungradable[ReasonNotRegularFile] != 0 {
+		t.Errorf("a pre-job exclusion was booked as ungradable: %+v", rep.Ungradable)
 	}
 }

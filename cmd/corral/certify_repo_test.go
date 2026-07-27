@@ -541,9 +541,15 @@ func TestCertifyRepoAllowsExplicitCheckCommandForOneLanguage(t *testing.T) {
 // the score line's "% of N candidates" must be over the ENUMERATED candidates,
 // so ungoaled files cannot be hidden from the coverage ratio.
 func TestCertifyRepoReportsEnumeratedCandidatesNotJobs(t *testing.T) {
+	excl := []reposcan.Exclusion{
+		{Path: "b.go", Reason: reposcan.ReasonUngoaled},
+		{Path: "c.go", Reason: reposcan.ReasonUngoaled},
+		{Path: "d.go", Reason: reposcan.ReasonUngoaled},
+		{Path: "e.go", Reason: reposcan.ReasonUngoaled},
+	}
 	rep := reposcan.Aggregate("o", "r", "c", 12, 5, []reposcan.FileResult{
 		{Job: reposcan.Job{Path: "a.go"}, Gradable: true, Verdict: advpool.Verdict{DevKillRate: 0.8}},
-	}, nil)
+	}, excl)
 	var out bytes.Buffer
 	printRepoReport(&out, rep)
 	s := out.String()
@@ -558,13 +564,16 @@ func TestCertifyRepoReportsEnumeratedCandidatesNotJobs(t *testing.T) {
 // TestPrintRepoReportUngradableOrderIsStable: map iteration order is random,
 // and a report a later slice signs and anchors has to be byte-reproducible.
 func TestPrintRepoReportUngradableOrderIsStable(t *testing.T) {
+	excl := []reposcan.Exclusion{
+		{Path: "f.go", Reason: reposcan.ReasonUngoaled},
+	}
 	rep := reposcan.Aggregate("o", "r", "c", 9, 6, []reposcan.FileResult{
 		{Job: reposcan.Job{Path: "a.go"}, Gradable: true, Verdict: advpool.Verdict{DevKillRate: 1}},
 		{Job: reposcan.Job{Path: "b.go"}, Gradable: false, Reason: reposcan.ReasonFlakyBaseline},
 		{Job: reposcan.Job{Path: "c.go"}, Gradable: false, Reason: reposcan.ReasonBaselineFailed},
 		{Job: reposcan.Job{Path: "d.go"}, Gradable: false, Reason: reposcan.ReasonExecutorError},
 		{Job: reposcan.Job{Path: "e.go"}, Gradable: false, Reason: reposcan.ReasonCancelled},
-	}, nil)
+	}, excl)
 
 	var first bytes.Buffer
 	printRepoReport(&first, rep)

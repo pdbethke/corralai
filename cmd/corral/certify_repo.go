@@ -126,6 +126,16 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// recursive command is used — resolved per job, since a repo can mix
 	// languages.
 	ex := newLocalExecutor(*repoDir, checkArgv, stdout)
+	// Deferred, not called at the end: a panic mid-scan must still release the
+	// staging dirs the shared seeds created.
+	defer ex.Close()
+	// Jail preflight, ONCE, like the provider preflight above: a host that
+	// cannot sandbox grades nothing, and saying so now beats reporting every
+	// file as ungradable for a reason the first job already knew.
+	if err := ex.preflight(); err != nil {
+		fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
+		return 1
+	}
 	// Cache is nil in H1a: the content-addressed key exists (Task 2) but the
 	// persistent store behind it is H1b. A nil Cache means every job is
 	// computed fresh — slow, never stale.
@@ -266,15 +276,28 @@ type localExecutor struct {
 	baselineRuns int // how many times to run the unmutated suite; 2 is the floor
 	progress     io.Writer
 
+	// seeds memoizes the repo seed per language for this scan. Without it,
+	// prep runs twice per audited file (once for the baseline runner, once for
+	// the audit): on a 189-file Go repo that is 378 tree copies and 378 `go mod
+	// vendor` runs, up to NumCPU concurrently, which exhausts TMPDIR rather
+	// than merely running slowly. A nil cache means "prepare per file", which
+	// is what the unit tests that construct a bare localExecutor rely on.
+	seeds *seedCache
+
+	// jailErr is the sandbox-resolution failure, if any, captured once at
+	// construction. It is scan-fatal (no jail = nothing can be graded on this
+	// host), surfaced by preflight before the fan-out — never swallowed.
+	jailErr error
+
 	newBaseline func(context.Context, localAuditInput) (reposcan.BaselineRunner, func(), error)
 	audit       func(context.Context, localAuditInput) (advpool.Verdict, error)
 }
 
-func newLocalExecutor(repoDir string, checkArgv []string, progress io.Writer) reposcan.Executor {
+func newLocalExecutor(repoDir string, checkArgv []string, progress io.Writer) *localExecutor {
 	if progress == nil {
 		progress = io.Discard
 	}
-	return localExecutor{
+	l := &localExecutor{
 		repoDir:      repoDir,
 		checkArgv:    checkArgv,
 		baselineRuns: 2,
@@ -284,9 +307,44 @@ func newLocalExecutor(repoDir string, checkArgv []string, progress io.Writer) re
 		newBaseline: baselineRunnerFor,
 		audit:       auditOneFile,
 	}
+	// Resolve the sandbox ONCE for the whole scan: the backend name is an input
+	// to the seed (it decides which dep dirs can be bind-mounted rather than
+	// copied), and it is a scan-wide constant — resolving it per file would
+	// re-run the backend probe for every job to reach the same answer. The scan
+	// exposes no --jail flag, so the auto backend is resolved, exactly as
+	// prepareAuditJail does for an empty in.jail.
+	iso, err := resolveLocalJail("")
+	backendName := ""
+	if err != nil {
+		l.jailErr = err
+	} else {
+		backendName = iso.Name()
+	}
+	// The scan exposes no --bind-dir/--no-bind-deps: nil/false are the
+	// documented defaults (auto-detected dep dirs are bound, nothing extra).
+	l.seeds = newSeedCache(func(langName string) (repoSeed, error) {
+		if l.jailErr != nil {
+			return repoSeed{cleanup: func() {}}, l.jailErr
+		}
+		return buildRepoSeed(repoDir, langName, backendName, nil, false, l.progress)
+	})
+	return l
 }
 
-func (l localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.FileResult, error) {
+// preflight reports a scan-fatal condition discovered at construction — today,
+// a sandbox that cannot isolate on this host. Checked ONCE before the fan-out,
+// like the provider-key preflight: discovering it per file would report every
+// file as ungradable for a reason the first job could have stated instantly.
+func (l *localExecutor) preflight() error { return l.jailErr }
+
+// Close releases every staging dir this scan's seeds created. Idempotent.
+func (l *localExecutor) Close() {
+	if l.seeds != nil {
+		l.seeds.close()
+	}
+}
+
+func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.FileResult, error) {
 	in := localAuditInput{
 		repoDir:  l.repoDir,
 		codePath: j.Path,
@@ -309,6 +367,22 @@ func (l localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.Fi
 		// contend on one single-process DuckDB file). Signing is H1c.
 		stdout: io.Discard,
 		stderr: io.Discard,
+	}
+
+	// The scan-wide, per-language seed: the tree copy, the vendoring and the
+	// tree walk depend only on the repo + language, so they are done ONCE and
+	// shared (read-only) by every job. A nil cache means each job prepares its
+	// own, which is what the seam-level unit tests exercise.
+	if l.seeds != nil {
+		seed, serr := l.seeds.get(j.Lang)
+		if serr != nil {
+			// Prep failed for this language: every job of it is ungradable, and
+			// the cached error means the work is attempted once rather than
+			// once per file. Never a fabricated 0.0 — ungradable WITH a reason.
+			l.note("%s: jail preparation failed for %s — not graded: %v\n", j.Path, j.Lang, serr)
+			return reposcan.FileResult{Gradable: false, Reason: reposcan.ReasonPrepFailed}, nil
+		}
+		in.seed = &seed
 	}
 
 	// Honesty invariant 2: a flapping suite makes a mutant look killed or
@@ -382,7 +456,7 @@ func (l localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.Fi
 // fall back on), and a repo can mix languages, so it is resolved per job. An
 // unknown language yields nil and the audit fails closed downstream rather
 // than grading with someone else's command.
-func (l localExecutor) testCmd(j reposcan.Job) []string {
+func (l *localExecutor) testCmd(j reposcan.Job) []string {
 	if len(l.checkArgv) > 0 {
 		return l.checkArgv
 	}
@@ -416,12 +490,12 @@ func (r *recordingBaseline) RunBaseline() (bool, error) {
 // nothing about the cause — a scan where every file failed for one fixable
 // reason (no provider key, no jail on this host) must say so, not just report
 // a wall of ungradables.
-func (l localExecutor) fail(j reposcan.Job, err error) error {
+func (l *localExecutor) fail(j reposcan.Job, err error) error {
 	l.note("%s: could not audit: %v\n", j.Path, err)
 	return err
 }
 
-func (l localExecutor) note(format string, a ...any) {
+func (l *localExecutor) note(format string, a ...any) {
 	if l.progress == nil {
 		return
 	}

@@ -14,6 +14,10 @@ const (
 	ReasonFlakyBaseline  = "flaky-baseline"
 	ReasonExecutorError  = "executor-error"
 	ReasonCancelled      = "cancelled"
+	// ReasonPrepFailed marks a job whose language-wide jail preparation failed
+	// (e.g. `go mod vendor`). Cached per language, so it is reported once per
+	// language rather than once per file.
+	ReasonPrepFailed = "prep-failed"
 )
 
 // FileResult is one file's audit outcome plus the provenance the report needs.

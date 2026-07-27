@@ -10,6 +10,7 @@ import (
 	"io"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/pdbethke/corralai/internal/advpool"
@@ -617,5 +618,142 @@ func TestRunCertifyRepoDirEqualsFormWithoutGoalsRefuses(t *testing.T) {
 		&stdout, &stderr)
 	if code != 2 {
 		t.Fatalf("exit %d, want 2; stderr=%s", code, stderr.String())
+	}
+}
+
+// TestLocalExecutorSharesOneSeedAcrossJobs is the point of the shared-seed
+// cache: jail preparation (a tree copy + `go mod vendor` + a full tree walk)
+// depends only on the repo and the language, so it must happen ONCE for a whole
+// scan — not twice per audited file, which on a 189-file repo meant 378 tree
+// copies and 378 vendor runs, up to NumCPU concurrently.
+func TestLocalExecutorSharesOneSeedAcrossJobs(t *testing.T) {
+	var builds atomic.Int32
+	ex := newLocalExecutor(t.TempDir(), nil, io.Discard)
+	ex.seeds = newSeedCache(func(lang string) (repoSeed, error) {
+		builds.Add(1)
+		return repoSeed{seedDir: "/seed/" + lang, files: map[string]string{}, cleanup: func() {}}, nil
+	})
+	defer ex.Close()
+
+	// Stub both jail seams so no bwrap is needed.
+	ex.newBaseline = func(context.Context, localAuditInput) (reposcan.BaselineRunner, func(), error) {
+		return &scriptedBaseline{results: []bool{true, true}}, func() {}, nil
+	}
+	ex.audit = func(context.Context, localAuditInput) (advpool.Verdict, error) {
+		return advpool.Verdict{DevKillRate: 1, MutantsTotal: 1}, nil
+	}
+
+	for i := 0; i < 8; i++ {
+		if _, err := ex.Execute(context.Background(), reposcan.Job{
+			Path: "a.go", TestPath: "a_test.go", Lang: "go", Goal: reposcan.Goal{Text: "g"},
+		}); err != nil {
+			t.Fatalf("Execute %d: %v", i, err)
+		}
+	}
+	if got := builds.Load(); got != 1 {
+		t.Fatalf("seed built %d times across 8 jobs of one language, want 1", got)
+	}
+}
+
+// The seed the cache built must actually REACH both jail seams — a cache
+// consulted but never threaded through would still prepare twice per file
+// inside prepareAuditJail.
+func TestLocalExecutorPassesTheSharedSeedToBothSeams(t *testing.T) {
+	want := repoSeed{seedDir: "/seed/go", files: map[string]string{"a.go": "package a\n"}, cleanup: func() {}}
+	ex := newLocalExecutor(t.TempDir(), nil, io.Discard)
+	ex.seeds = newSeedCache(func(string) (repoSeed, error) { return want, nil })
+	defer ex.Close()
+
+	var baselineSeed, auditSeed *repoSeed
+	ex.newBaseline = func(_ context.Context, in localAuditInput) (reposcan.BaselineRunner, func(), error) {
+		baselineSeed = in.seed
+		return &scriptedBaseline{results: []bool{true, true}}, func() {}, nil
+	}
+	ex.audit = func(_ context.Context, in localAuditInput) (advpool.Verdict, error) {
+		auditSeed = in.seed
+		return advpool.Verdict{DevKillRate: 1}, nil
+	}
+	if _, err := ex.Execute(context.Background(), reposcan.Job{
+		Path: "a.go", TestPath: "a_test.go", Lang: "go", Goal: reposcan.Goal{Text: "g"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for name, got := range map[string]*repoSeed{"baseline": baselineSeed, "audit": auditSeed} {
+		if got == nil {
+			t.Fatalf("%s seam got no shared seed — it would prepare its own", name)
+		}
+		if got.seedDir != want.seedDir {
+			t.Errorf("%s seam got seedDir %q, want %q", name, got.seedDir, want.seedDir)
+		}
+	}
+}
+
+// A language whose prep failed is ungradable WITH ITS REASON, never a
+// fabricated score — and the cached failure means it is not retried per file.
+func TestLocalExecutorPrepFailureIsUngradable(t *testing.T) {
+	var builds atomic.Int32
+	audited := false
+	ex := newLocalExecutor(t.TempDir(), nil, io.Discard)
+	ex.seeds = newSeedCache(func(string) (repoSeed, error) {
+		builds.Add(1)
+		return repoSeed{cleanup: func() {}}, errors.New("go mod vendor failed")
+	})
+	defer ex.Close()
+	ex.newBaseline = func(context.Context, localAuditInput) (reposcan.BaselineRunner, func(), error) {
+		t.Error("a failed prep must not reach the baseline jail")
+		return &scriptedBaseline{results: []bool{true, true}}, func() {}, nil
+	}
+	ex.audit = func(context.Context, localAuditInput) (advpool.Verdict, error) {
+		audited = true
+		return advpool.Verdict{}, nil
+	}
+	for i := 0; i < 3; i++ {
+		res, err := ex.Execute(context.Background(), reposcan.Job{
+			Path: "a.go", TestPath: "a_test.go", Lang: "go", Goal: reposcan.Goal{Text: "g"},
+		})
+		if err != nil {
+			t.Fatalf("Execute %d: %v", i, err)
+		}
+		if res.Gradable {
+			t.Error("a file whose prep failed must not be gradable")
+		}
+		if res.Reason != reposcan.ReasonPrepFailed {
+			t.Errorf("Reason = %q, want %q", res.Reason, reposcan.ReasonPrepFailed)
+		}
+	}
+	if audited {
+		t.Error("a failed prep must not pay for an LLM audit")
+	}
+	if got := builds.Load(); got != 1 {
+		t.Errorf("prep retried %d times; a cached failure must be attempted once", got)
+	}
+}
+
+func TestLocalExecutorCloseReleasesSeeds(t *testing.T) {
+	var cleaned atomic.Int32
+	ex := newLocalExecutor(t.TempDir(), nil, io.Discard)
+	ex.seeds = newSeedCache(func(lang string) (repoSeed, error) {
+		return repoSeed{seedDir: lang, files: map[string]string{}, cleanup: func() { cleaned.Add(1) }}, nil
+	})
+	ex.newBaseline = func(context.Context, localAuditInput) (reposcan.BaselineRunner, func(), error) {
+		return &scriptedBaseline{results: []bool{true, true}}, func() {}, nil
+	}
+	ex.audit = func(context.Context, localAuditInput) (advpool.Verdict, error) {
+		return advpool.Verdict{DevKillRate: 1, MutantsTotal: 1}, nil
+	}
+	if _, err := ex.Execute(context.Background(), reposcan.Job{
+		Path: "a.go", TestPath: "a_test.go", Lang: "go", Goal: reposcan.Goal{Text: "g"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ex.Close()
+	if got := cleaned.Load(); got != 1 {
+		t.Fatalf("cleanup ran %d times after Close, want 1", got)
+	}
+	// Idempotent: the driver defers it, and a later explicit call must not
+	// release a staging dir twice.
+	ex.Close()
+	if got := cleaned.Load(); got != 1 {
+		t.Fatalf("cleanup ran %d times after a second Close, want 1", got)
 	}
 }

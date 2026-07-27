@@ -276,6 +276,13 @@ type localAuditInput struct {
 	bindDirs   []string
 	noBindDeps bool
 
+	// seed, when non-nil, is a prebuilt repo workspace SHARED across a scan's
+	// jobs (see seedCache): jail prep is per-repo-and-language work, not
+	// per-file work, and building it here would repeat the tree copy, the
+	// vendoring and the tree walk twice for every audited file. Nil (the
+	// `certify --local` position) means this run builds — and owns — its own.
+	seed *repoSeed
+
 	// The signed subject's identity. Empty falls back to git, else "local".
 	repo, commit string
 
@@ -423,6 +430,7 @@ func prepareAuditJail(in localAuditInput, plug lang.Plugin, timeout time.Duratio
 		codePath: in.codePath, testPath: tp, repoDir: repoDir, langName: plug.Name(), fsPath: fsPath,
 		code: code, devTest: devTest, checkArgv: in.checkArgv,
 		bindDirFlag: in.bindDirs, noBindDepsFlag: in.noBindDeps, stdout: stdout,
+		seed: in.seed,
 	})
 	if err != nil {
 		return p, auditUsageErr("%v", err)

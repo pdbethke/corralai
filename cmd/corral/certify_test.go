@@ -505,3 +505,25 @@ func TestBrainTokenMissingIsAnError(t *testing.T) {
 		t.Fatal("expected an error when CORRALAI_BRAIN_TOKEN is unset")
 	}
 }
+
+func TestFlagsMatchSingleDashSpelling(t *testing.T) {
+	args := []string{"-repo", "./dir", "-goals", "g.json"}
+	if !hasFlag(args, "--goals") {
+		t.Error("hasFlag missed the single-dash spelling of --goals")
+	}
+	v, ok := flagValue(args, "--repo")
+	if !ok || v != "./dir" {
+		t.Errorf("flagValue(-repo) = %q,%v; want ./dir,true", v, ok)
+	}
+}
+
+func TestFlagsStillStopAtTheBareSeparator(t *testing.T) {
+	// A flag INSIDE the checked command's argv must never be read.
+	args := []string{"--", "mytool", "-goals", "x"}
+	if hasFlag(args, "--goals") {
+		t.Error("hasFlag read a flag from inside the checked command's argv")
+	}
+	if _, ok := flagValue(args, "--goals"); ok {
+		t.Error("flagValue read a flag from inside the checked command's argv")
+	}
+}

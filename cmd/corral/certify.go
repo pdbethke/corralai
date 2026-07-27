@@ -255,6 +255,14 @@ func parseProducedBy(v string) []string {
 	return out
 }
 
+// flagNames yields the accepted spellings of a "--name" flag. Go's flag
+// package accepts one dash and two interchangeably, so a guard that matches
+// only "--name" is defeated by "-name" — and these guards protect what a
+// signed record claims as its subject.
+func flagNames(name string) [2]string {
+	return [2]string{name, strings.TrimPrefix(name, "-")}
+}
+
 // hasFlag reports whether name appears as a bare token in args, stopping at
 // the first bare "--" (so it never matches inside the checked command's argv).
 func hasFlag(args []string, name string) bool {
@@ -262,8 +270,11 @@ func hasFlag(args []string, name string) bool {
 		if a == "--" {
 			return false
 		}
-		if a == name || strings.HasPrefix(a, name+"=") {
-			return true
+		names := flagNames(name)
+		for _, n := range names {
+			if a == n || strings.HasPrefix(a, n+"=") {
+				return true
+			}
 		}
 	}
 	return false
@@ -273,18 +284,21 @@ func hasFlag(args []string, name string) bool {
 // and `--name=value`, and stopping at the first bare "--" so it never reads
 // inside the checked command's argv.
 func flagValue(args []string, name string) (string, bool) {
+	names := flagNames(name)
 	for i, a := range args {
 		if a == "--" {
 			return "", false
 		}
-		if v, ok := strings.CutPrefix(a, name+"="); ok {
-			return v, true
-		}
-		if a == name {
-			if i+1 < len(args) && args[i+1] != "--" {
-				return args[i+1], true
+		for _, n := range names {
+			if v, ok := strings.CutPrefix(a, n+"="); ok {
+				return v, true
 			}
-			return "", false
+			if a == n {
+				if i+1 < len(args) && args[i+1] != "--" {
+					return args[i+1], true
+				}
+				return "", false
+			}
 		}
 	}
 	return "", false

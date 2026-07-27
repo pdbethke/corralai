@@ -144,6 +144,84 @@ func TestScoreBaselineTimeoutFailsClosed(t *testing.T) {
 	}
 }
 
+// ignoringJail models a check command pointed at some OTHER package: it
+// passes regardless of what the audited file contains, because it never
+// compiles or imports it.
+type ignoringJail struct{ runs int }
+
+func (j *ignoringJail) RunTest(ctx context.Context, files map[string]string, cmd []string) (bool, error) {
+	j.runs++
+	return true, nil
+}
+
+// realJail models a command that DOES exercise the file: invalid source
+// fails, and a mutant that changes behaviour fails too.
+type realJail struct{ runs int }
+
+func (j *realJail) RunTest(ctx context.Context, files map[string]string, cmd []string) (bool, error) {
+	j.runs++
+	return files["a.go"] == "package a\n", nil
+}
+
+func TestScoreCanarySurvivesWhenSuiteIgnoresTheFile(t *testing.T) {
+	j := &ignoringJail{}
+	rep, err := Score(context.Background(), j, map[string]string{}, "a.go", "package a\n",
+		[]Mutant{{ID: "m1", Code: "package a // mutated\n"}}, []string{"true"})
+	if err != nil {
+		t.Fatalf("Score: %v", err)
+	}
+	if !rep.CompliantPass {
+		t.Fatal("baseline should pass — this suite passes everything")
+	}
+	if rep.CanaryKilled {
+		t.Fatal("canary must NOT be killed: the suite never compiles the file")
+	}
+	if rep.KillRate() != 0 {
+		t.Errorf("KillRate = %v; a surviving canary must not yield a score", rep.KillRate())
+	}
+}
+
+func TestScoreCanaryKilledLeavesTheMeasurementUntouched(t *testing.T) {
+	j := &realJail{}
+	rep, err := Score(context.Background(), j, map[string]string{}, "a.go", "package a\n",
+		[]Mutant{{ID: "m1", Code: "package a // mutated\n"}}, []string{"true"})
+	if err != nil {
+		t.Fatalf("Score: %v", err)
+	}
+	if !rep.CanaryKilled {
+		t.Fatal("canary should be killed: this suite does compile the file")
+	}
+	// The canary is a GATE, not a measurement: it must not appear in the tally.
+	if rep.Total != 1 {
+		t.Errorf("Total = %d, want 1 — the canary must not be counted", rep.Total)
+	}
+	if len(rep.Killed)+len(rep.Survived) != 1 {
+		t.Errorf("killed+survived = %d, want 1 — the canary must not be listed",
+			len(rep.Killed)+len(rep.Survived))
+	}
+	for _, id := range append(append([]string{}, rep.Killed...), rep.Survived...) {
+		if id == canaryID {
+			t.Errorf("canary id %q leaked into the report", id)
+		}
+	}
+}
+
+// The baseline-stability path calls Score with no mutants, twice per file.
+// Running a canary there would triple its cost for no information.
+func TestScoreRunsNoCanaryWithoutMutants(t *testing.T) {
+	j := &ignoringJail{}
+	rep, err := Score(context.Background(), j, map[string]string{}, "a.go", "package a\n", nil, []string{"true"})
+	if err != nil {
+		t.Fatalf("Score: %v", err)
+	}
+	if j.runs != 1 {
+		t.Errorf("jail ran %d times for a zero-mutant Score, want 1 (baseline only)", j.runs)
+	}
+	if rep.CanaryKilled {
+		t.Error("CanaryKilled must stay false when no canary ran")
+	}
+}
+
 // TestScoreMutantOtherErrorPropagates confirms a NON-timeout mutant error
 // (a real infra failure) still aborts Score as before — only ErrTestTimeout
 // gets the "count as killed" treatment.

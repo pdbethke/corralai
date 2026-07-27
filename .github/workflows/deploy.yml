@@ -103,8 +103,28 @@ jobs:
           # audit rests on. Never apply this to a durable host.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           bwrap --version || echo "bwrap unavailable — jail tests will SKIP"
-      - if: steps.filter.outputs.code == 'true'
-        run: go test ./...
+      - name: Test, and census the SKIPs
+        if: steps.filter.outputs.code == 'true'
+        run: |
+          # -v so this one run doubles as a skip census. Plain `go test ./...`
+          # never prints SKIP markers, so a jail test that silently skips is
+          # indistinguishable from one that passed — and a skipped jail test
+          # proves nothing about the jail, which is what corral's whole audit
+          # rests on. The count is the only way to see whether the bubblewrap
+          # provisioning above actually took effect on this runner. -v changes
+          # verbosity only, never pass/fail.
+          set +e
+          set -o pipefail
+          go test ./... -v 2>&1 | tee /tmp/gotest.log
+          rc=$?
+          set -e
+          count=$(grep -c -- '--- SKIP' /tmp/gotest.log || true)
+          echo "::notice title=SKIP census::${count} test(s) skipped on this runner"
+          if [ "$count" -gt 0 ]; then
+            echo "skipped tests:"
+            grep -- '--- SKIP' /tmp/gotest.log | sed 's/.*--- SKIP: /  /' | sort -u
+          fi
+          exit "$rc"
       - name: Install gosec
         if: steps.filter.outputs.code == 'true'
         run: go install github.com/securego/gosec/v2/cmd/gosec@latest

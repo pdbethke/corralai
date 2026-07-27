@@ -16,6 +16,42 @@ import (
 	"github.com/pdbethke/corralai/internal/adequacy"
 )
 
+// repoSeed is everything about a repo's jail workspace that does NOT depend on
+// which file is being audited: the (possibly vendored) seed directory, the
+// workspace text keyed repo-relative, and the dependency dirs to bind
+// read-only. It depends only on the repo, the language, the sandbox backend
+// and the bind flags — all constant for a whole scan — which is what makes it
+// shareable across every job of one language.
+type repoSeed struct {
+	seedDir string
+	files   map[string]string
+	binds   []adequacy.DepBind
+	cleanup func()
+}
+
+// buildRepoSeed performs the scan-invariant half of jail preparation: provision
+// external Go deps for the offline jail (a no-op for other languages,
+// non-modules, and already-vendored repos), then load the tree.
+//
+// cleanup is ALWAYS non-nil so callers can defer it unconditionally, and it
+// releases the vendor staging dir when one was created.
+//
+// cmdName is the command the operator actually ran ("corral certify --local" or
+// "corral certify --repo"); it prefixes the prep messages and errors so a --repo
+// operator is never told about a command they never invoked.
+func buildRepoSeed(cmdName, repoDir, langName, backendName string, bindDirs []string, noBindDeps bool, out io.Writer) (repoSeed, error) {
+	seedDir, cleanup, verr := ensureGoVendored(cmdName, repoDir, langName, out)
+	if verr != nil {
+		return repoSeed{cleanup: func() {}}, verr
+	}
+	files, binds, lerr := loadRepoFiles(seedDir, buildLoadOpts(backendName, bindDirs, noBindDeps))
+	if lerr != nil {
+		cleanup()
+		return repoSeed{cleanup: func() {}}, fmt.Errorf("reading --repo-dir %s: %v", repoDir, lerr)
+	}
+	return repoSeed{seedDir: seedDir, files: files, binds: binds, cleanup: cleanup}, nil
+}
+
 // ensureGoVendored makes external Go modules resolvable inside the OFFLINE audit
 // jail. The jail has no network by design (the code under audit can't phone
 // home), and a repo's external deps live in the operator's module cache, which
@@ -27,7 +63,7 @@ import (
 // operator's real working tree is never modified; the copy is removed by the
 // returned cleanup. It's a no-op for non-Go code, a non-module dir, or a repo
 // that already carries vendor/ (which loadRepoFiles bind-mounts as-is).
-func ensureGoVendored(repoDir, langName string, out io.Writer) (string, func(), error) {
+func ensureGoVendored(cmdName, repoDir, langName string, out io.Writer) (string, func(), error) {
 	noop := func() {}
 	if langName != "go" {
 		return repoDir, noop, nil
@@ -40,19 +76,19 @@ func ensureGoVendored(repoDir, langName string, out io.Writer) (string, func(), 
 	}
 	tmp, err := os.MkdirTemp("", "corral-vendor-")
 	if err != nil {
-		return "", noop, fmt.Errorf("corral certify --local: vendor staging dir: %w", err)
+		return "", noop, fmt.Errorf("%s: vendor staging dir: %w", cmdName, err)
 	}
 	cleanup := func() { _ = os.RemoveAll(tmp) }
 	if cerr := copyTreeSkipGit(repoDir, tmp); cerr != nil {
 		cleanup()
-		return "", noop, fmt.Errorf("corral certify --local: staging repo copy for vendoring: %w", cerr)
+		return "", noop, fmt.Errorf("%s: staging repo copy for vendoring: %w", cmdName, cerr)
 	}
-	fmt.Fprintln(out, "corral certify --local: vendoring Go dependencies (go mod vendor) so the offline jail can resolve them…")
+	fmt.Fprintf(out, "%s: vendoring Go dependencies (go mod vendor) so the offline jail can resolve them…\n", cmdName)
 	cmd := exec.CommandContext(context.Background(), "go", "mod", "vendor")
 	cmd.Dir = tmp
 	if b, verr := cmd.CombinedOutput(); verr != nil {
 		cleanup()
-		return "", noop, fmt.Errorf("corral certify --local: `go mod vendor` failed — the offline jail can't resolve this repo's external deps without it: %v\n%s", verr, strings.TrimSpace(string(b)))
+		return "", noop, fmt.Errorf("%s: `go mod vendor` failed — the offline jail can't resolve this repo's external deps without it: %v\n%s", cmdName, verr, strings.TrimSpace(string(b)))
 	}
 	return tmp, cleanup, nil
 }

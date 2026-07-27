@@ -26,6 +26,7 @@ import (
 	"github.com/pdbethke/corralai/internal/buildstore"
 	"github.com/pdbethke/corralai/internal/certify"
 	"github.com/pdbethke/corralai/internal/certverify"
+	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/matrix"
 	"github.com/pdbethke/corralai/internal/queue"
 	"github.com/pdbethke/corralai/internal/sandbox"
@@ -1169,5 +1170,174 @@ func TestStringSliceFlag_Repeatable(t *testing.T) {
 	}
 	if s.String() == "" {
 		t.Fatalf("String() must not be empty once values are set")
+	}
+}
+
+// A prebuilt seed must not be mutated by wiring a job onto it: the scan shares
+// ONE seed across concurrent workers, and each job overlays its own code and
+// test. Mutating the shared map corrupts every other job's workspace.
+func TestBuildJailWiringDoesNotMutateASharedSeed(t *testing.T) {
+	shared := repoSeed{
+		seedDir: t.TempDir(),
+		files:   map[string]string{"pkg/a.go": "package pkg\n", "pkg/a_test.go": "package pkg\n"},
+		cleanup: func() {},
+	}
+	before := len(shared.files)
+	originalCode := shared.files["pkg/a.go"]
+
+	w := workspaceFromSeed(shared, map[string]string{"pkg/a.go": "package pkg // MUTATED\n"})
+
+	if len(shared.files) != before {
+		t.Errorf("shared seed grew from %d to %d keys", before, len(shared.files))
+	}
+	if shared.files["pkg/a.go"] != originalCode {
+		t.Errorf("shared seed's code was overwritten: %q", shared.files["pkg/a.go"])
+	}
+	if w["pkg/a.go"] != "package pkg // MUTATED\n" {
+		t.Errorf("overlay not applied to the copy: %q", w["pkg/a.go"])
+	}
+	if w["pkg/a_test.go"] != "package pkg\n" {
+		t.Errorf("copy lost an unrelated key: %q", w["pkg/a_test.go"])
+	}
+}
+
+// The shared-seed branch of buildJailWiring: when a scan hands in a prebuilt
+// seed, the wiring must use it AS-IS (no second tree walk, no second `go mod
+// vendor`) and must NOT take ownership of its cleanup — the scan's seedCache
+// owns that for every job of the language.
+func TestBuildJailWiringUsesTheSharedSeedAndDoesNotOwnIt(t *testing.T) {
+	repoDir := t.TempDir() // deliberately EMPTY: any file in the workspace came from the seed
+	cleaned := 0
+	shared := repoSeed{
+		seedDir: repoDir,
+		files: map[string]string{
+			"pkg/a.go":      "package pkg // FROM THE SEED\n",
+			"pkg/a_test.go": "package pkg\n",
+			"go.mod":        "module x\n",
+		},
+		binds:   []adequacy.DepBind{{Host: filepath.Join(repoDir, "vendor"), Rel: "vendor"}},
+		cleanup: func() { cleaned++ },
+	}
+
+	w, err := buildJailWiring(jailWiringInput{
+		iso: nil, timeout: time.Minute,
+		codePath: "pkg/a.go", testPath: "pkg/a_test.go", repoDir: repoDir, langName: "go",
+		fsPath:    func(q string) string { return filepath.Join(repoDir, q) },
+		code:      []byte("package pkg // THIS JOB\n"),
+		devTest:   []byte("package pkg // THIS JOB'S TEST\n"),
+		checkArgv: []string{"go", "test", "./..."},
+		stdout:    io.Discard,
+		seed:      &shared,
+	})
+	if err != nil {
+		t.Fatalf("buildJailWiring: %v", err)
+	}
+	if w.codeKey != "pkg/a.go" || w.devTestKey != "pkg/a_test.go" {
+		t.Fatalf("keys = %q/%q", w.codeKey, w.devTestKey)
+	}
+	// The seed's unrelated files are in the workspace...
+	if got := w.scorer.BaseFiles["go.mod"]; got != "module x\n" {
+		t.Errorf("workspace lost the seed's go.mod: %q", got)
+	}
+	// ...and this job's own bytes overlay the subject.
+	if got := w.scorer.BaseFiles["pkg/a.go"]; got != "package pkg // THIS JOB\n" {
+		t.Errorf("code overlay = %q", got)
+	}
+	if got := w.validator.BaseFiles["pkg/a_test.go"]; got != "package pkg // THIS JOB'S TEST\n" {
+		t.Errorf("test overlay = %q", got)
+	}
+	// The shared seed itself is untouched.
+	if shared.files["pkg/a.go"] != "package pkg // FROM THE SEED\n" {
+		t.Errorf("the SHARED seed was mutated: %q", shared.files["pkg/a.go"])
+	}
+	if len(w.depBinds) != 1 || w.depBinds[0].Rel != "vendor" {
+		t.Errorf("depBinds = %+v, want the seed's binds", w.depBinds)
+	}
+	// Ownership stays with the cache: this wiring's cleanup must be a no-op,
+	// or the first finished job would delete the staging dir every other
+	// concurrent job's jail is bind-mounting.
+	w.cleanup()
+	if cleaned != 0 {
+		t.Errorf("wiring released a SHARED seed's staging dir (%d times)", cleaned)
+	}
+}
+
+// prepareAuditJail must FORWARD the handed-in shared seed into buildJailWiring.
+// Without this, deleting `seed: in.seed` from that call passes the whole suite
+// while every scan job silently rebuilds its own seed — the regression this
+// branch exists to prevent, and one that also loses the seed's dep binds.
+//
+// The proof is a key that exists ONLY in the seed: repoDir on disk holds just
+// the subject and its test, so a go.mod in the resulting workspace can only
+// have come through in.seed.
+func TestPrepareAuditJailForwardsTheSharedSeed(t *testing.T) {
+	if _, err := resolveLocalJail(""); err != nil {
+		t.Skipf("no sandbox backend on this host: %v", err)
+	}
+	plug, ok := lang.ByName("go")
+	if !ok {
+		t.Fatal("go plugin not registered")
+	}
+
+	repoDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repoDir, "pkg"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	// ONLY these two exist on disk. Anything else in the workspace came from
+	// the seed.
+	if err := os.WriteFile(filepath.Join(repoDir, "pkg", "a.go"), []byte("package pkg // ON DISK\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "pkg", "a_test.go"), []byte("package pkg // ON DISK TEST\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cleaned := 0
+	shared := repoSeed{
+		seedDir: repoDir,
+		files: map[string]string{
+			"go.mod":         "module only-from-the-seed\n",
+			"pkg/sibling.go": "package pkg // ONLY FROM THE SEED\n",
+		},
+		binds:   []adequacy.DepBind{{Host: filepath.Join(repoDir, "vendor"), Rel: "vendor"}},
+		cleanup: func() { cleaned++ },
+	}
+
+	prep, err := prepareAuditJail(localAuditInput{
+		repoDir:   repoDir,
+		codePath:  "pkg/a.go",
+		testPath:  "pkg/a_test.go",
+		goal:      "g",
+		lang:      "go",
+		checkArgv: []string{"go", "test", "./..."},
+		seed:      &shared,
+	}, plug, time.Minute, io.Discard)
+	if err != nil {
+		t.Fatalf("prepareAuditJail: %v", err)
+	}
+	defer prep.cleanup()
+
+	ws := prep.wiring.scorer.BaseFiles
+	if got := ws["go.mod"]; got != "module only-from-the-seed\n" {
+		t.Errorf("workspace go.mod = %q; the shared seed was not forwarded", got)
+	}
+	if got := ws["pkg/sibling.go"]; got != "package pkg // ONLY FROM THE SEED\n" {
+		t.Errorf("workspace lost the seed's sibling file: %q", got)
+	}
+	if len(prep.wiring.depBinds) != 1 || prep.wiring.depBinds[0].Rel != "vendor" {
+		t.Errorf("depBinds = %+v; the seed's binds were not forwarded", prep.wiring.depBinds)
+	}
+	// The subject's own bytes still overlay the seed, and the shared seed is
+	// never mutated in place.
+	if got := ws["pkg/a.go"]; got != "package pkg // ON DISK\n" {
+		t.Errorf("subject overlay = %q", got)
+	}
+	if _, present := shared.files["pkg/a.go"]; present {
+		t.Error("the SHARED seed was mutated by this job's overlay")
+	}
+	// Ownership stays with the seedCache: this prep must not release it.
+	prep.cleanup()
+	if cleaned != 0 {
+		t.Errorf("prepareAuditJail released a SHARED seed's staging dir (%d times)", cleaned)
 	}
 }

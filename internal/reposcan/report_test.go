@@ -124,3 +124,14 @@ func TestAggregateNeverReportsMoreAuditedThanCandidates(t *testing.T) {
 		t.Errorf("AuditedFraction = %v, want 1", got)
 	}
 }
+
+// A per-language prep failure (e.g. `go mod vendor`) is an ungradable with its
+// OWN reason, never a fabricated 0.0 kill rate.
+func TestAggregateBooksPrepFailed(t *testing.T) {
+	rep := Aggregate("o", "r", "c1", 2, 1, []FileResult{
+		{Job: Job{Path: "a.go"}, Gradable: false, Reason: ReasonPrepFailed},
+	}, nil)
+	if rep.Ungradable[ReasonPrepFailed] != 1 {
+		t.Fatalf("Ungradable = %+v, want one prep-failed", rep.Ungradable)
+	}
+}

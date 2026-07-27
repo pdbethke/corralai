@@ -858,6 +858,22 @@ type jailWiringInput struct {
 	bindDirFlag    []string
 	noBindDepsFlag bool
 	stdout         io.Writer
+	seed           *repoSeed // non-nil: use this prebuilt, SHARED seed instead of building one
+}
+
+// workspaceFromSeed returns a private copy of the seed's workspace text with
+// overlay applied. The seed is SHARED across concurrent jobs and must never be
+// mutated; this copies string headers, not bytes, so it is cheap even for a
+// large tree.
+func workspaceFromSeed(seed repoSeed, overlay map[string]string) map[string]string {
+	w := make(map[string]string, len(seed.files)+len(overlay))
+	for k, v := range seed.files {
+		w[k] = v
+	}
+	for k, v := range overlay {
+		w[k] = v
+	}
+	return w
 }
 
 // jailWiring is what buildJailWiring resolves: the jail-backed
@@ -903,14 +919,23 @@ func buildJailWiring(in jailWiringInput) (w jailWiring, err error) {
 		if len(in.checkArgv) == 0 {
 			return w, fmt.Errorf("--repo-dir requires the project's own test command after `--`, e.g. `-- python3 -m pytest tests/test_recipes.py`")
 		}
-		// Provision external Go deps for the offline jail (no-op for other langs,
-		// non-modules, or already-vendored repos). Seed from the returned dir.
-		seed, serr := buildRepoSeed(in.repoDir, in.langName, in.iso.Name(), in.bindDirFlag, in.noBindDepsFlag, in.stdout)
-		if serr != nil {
-			return w, serr
+		var seed repoSeed
+		if in.seed != nil {
+			// Shared across a scan's jobs: use as-is, and do NOT take ownership
+			// of its cleanup — the seedCache owns that for the whole scan.
+			seed = *in.seed
+		} else {
+			// Provision external Go deps for the offline jail (no-op for other
+			// langs, non-modules, or already-vendored repos). Seed from the
+			// returned dir.
+			var serr error
+			seed, serr = buildRepoSeed(in.repoDir, in.langName, in.iso.Name(), in.bindDirFlag, in.noBindDepsFlag, in.stdout)
+			if serr != nil {
+				return w, serr
+			}
+			w.cleanup = seed.cleanup
 		}
-		w.cleanup = seed.cleanup
-		repoFiles, depBinds := seed.files, seed.binds
+		depBinds := seed.binds
 		w.depBinds = depBinds
 		ck, rerr := filepath.Rel(in.repoDir, in.fsPath(in.codePath))
 		if rerr != nil || strings.HasPrefix(ck, "..") {
@@ -923,8 +948,12 @@ func buildJailWiring(in jailWiringInput) (w jailWiring, err error) {
 		w.codeKey, w.devTestKey = filepath.ToSlash(ck), filepath.ToSlash(dk)
 		// The just-read code/test are authoritative in the map (identical to the
 		// on-disk copy, but explicit so a mutant overlay targets the right key).
-		repoFiles[w.codeKey] = string(in.code)
-		repoFiles[w.devTestKey] = string(in.devTest)
+		// A private copy: the seed may be SHARED across concurrent jobs and must
+		// never be mutated in place.
+		repoFiles := workspaceFromSeed(seed, map[string]string{
+			w.codeKey:    string(in.code),
+			w.devTestKey: string(in.devTest),
+		})
 		jail := adequacy.NewJail(in.iso, in.timeout, adequacy.WithReadOnlyBinds(depBinds))
 		// enumerator backs the tests×mutants matrix's test-listing step
 		// (--matrix). Wired unconditionally off the SAME backend/timeout/binds

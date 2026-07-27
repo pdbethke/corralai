@@ -1171,3 +1171,31 @@ func TestStringSliceFlag_Repeatable(t *testing.T) {
 		t.Fatalf("String() must not be empty once values are set")
 	}
 }
+
+// A prebuilt seed must not be mutated by wiring a job onto it: the scan shares
+// ONE seed across concurrent workers, and each job overlays its own code and
+// test. Mutating the shared map corrupts every other job's workspace.
+func TestBuildJailWiringDoesNotMutateASharedSeed(t *testing.T) {
+	shared := repoSeed{
+		seedDir: t.TempDir(),
+		files:   map[string]string{"pkg/a.go": "package pkg\n", "pkg/a_test.go": "package pkg\n"},
+		cleanup: func() {},
+	}
+	before := len(shared.files)
+	originalCode := shared.files["pkg/a.go"]
+
+	w := workspaceFromSeed(shared, map[string]string{"pkg/a.go": "package pkg // MUTATED\n"})
+
+	if len(shared.files) != before {
+		t.Errorf("shared seed grew from %d to %d keys", before, len(shared.files))
+	}
+	if shared.files["pkg/a.go"] != originalCode {
+		t.Errorf("shared seed's code was overwritten: %q", shared.files["pkg/a.go"])
+	}
+	if w["pkg/a.go"] != "package pkg // MUTATED\n" {
+		t.Errorf("overlay not applied to the copy: %q", w["pkg/a.go"])
+	}
+	if w["pkg/a_test.go"] != "package pkg\n" {
+		t.Errorf("copy lost an unrelated key: %q", w["pkg/a_test.go"])
+	}
+}

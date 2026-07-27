@@ -64,18 +64,27 @@ var skipDirs = map[string]bool{
 // for the same reason:
 //
 //   - .git is not source at all — listing its objects would swamp the report.
-//   - dependency trees (node_modules, vendor) are not THIS repo's source
-//     either; they are third-party code the audit has no business grading.
-//     They are also enormous: node_modules alone is routinely tens of
-//     thousands of files, so enumerating them would bury the handful of
-//     entries a reader actually needs in a report that gets signed and
-//     anchored. Build output (dist, build, target, .tox, site-packages) IS
-//     accounted: those trees are small and are derived from this repo, so a
-//     reader benefits from seeing the scan chose not to look there.
+//   - DEPENDENCY trees are not THIS repo's source either; they are
+//     third-party code the audit has no business grading, and they are
+//     enormous. node_modules alone is routinely tens of thousands of files;
+//     a Python virtualenv's site-packages is comparable. Enumerating them
+//     buries the handful of entries a reader actually needs in a report that
+//     gets signed and anchored.
 //
-// In both cases listing them tells a reader nothing and costs the report its
-// readability.
-var invisibleDirs = map[string]bool{".git": true, "node_modules": true, "vendor": true}
+// BUILD OUTPUT (dist, build, target) stays ACCOUNTED: those trees are small
+// and derived from this repo, so a reader benefits from seeing the scan chose
+// not to look there.
+//
+// .tox is classified as a dependency tree rather than build output because a
+// tox environment contains full virtualenvs — it is site-packages wearing a
+// different name, not a modest build artifact.
+var invisibleDirs = map[string]bool{
+	".git": true,
+	// Dependency trees, by ecosystem: node, go, python (×3), ruby.
+	"node_modules": true, "vendor": true,
+	".venv": true, "venv": true, "site-packages": true, ".tox": true,
+	".bundle": true,
+}
 
 // skippedDirFiles enumerates the regular files under dir as skipped-dir
 // exclusions, keyed repo-relative to root. Non-regular entries (symlinks,
@@ -102,7 +111,18 @@ func skippedDirFiles(dir, root string) ([]Exclusion, error) {
 			}
 			return nil
 		}
-		if d.IsDir() || !d.Type().IsRegular() {
+		if d.IsDir() {
+			// A dependency tree NESTED inside an accounted one is still
+			// invisible: build/node_modules is no more worth enumerating
+			// than a top-level node_modules, and it is just as large.
+			// Without this, accounting build/ drags its whole dependency
+			// tree into a signed report.
+			if p != dir && invisibleDirs[d.Name()] {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !d.Type().IsRegular() {
 			return nil
 		}
 		rel, rerr := filepath.Rel(root, p)

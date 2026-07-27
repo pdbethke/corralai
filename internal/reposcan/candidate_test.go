@@ -353,10 +353,23 @@ func TestEnumerateSkipsBuildOutputDirs(t *testing.T) {
 		reasons[e.Path] = e.Reason
 	}
 
-	skippedFiles := []string{"dist/d.go", "build/b.go", "target/t.go", ".tox/x.py", "lib/site-packages/s.py", "lib/site-packages/test_s.py"}
-	for _, path := range skippedFiles {
+	// BUILD OUTPUT is accounted: small, derived from this repo, and a reader
+	// benefits from seeing the scan chose not to look there.
+	accounted := []string{"dist/d.go", "build/b.go", "target/t.go"}
+	for _, path := range accounted {
 		if reasons[path] != ReasonSkippedDir {
-			t.Errorf("%s reason = %q, want %q (skipped dirs must be accounted)", path, reasons[path], ReasonSkippedDir)
+			t.Errorf("%s reason = %q, want %q (build output must be accounted)", path, reasons[path], ReasonSkippedDir)
+		}
+	}
+
+	// DEPENDENCY trees are invisible, not accounted. .tox holds full
+	// virtualenvs and site-packages is installed third-party code — both are
+	// routinely 10k+ files, so enumerating them buries the entries a reader
+	// actually needs in a report that gets signed and anchored.
+	invisible := []string{".tox/x.py", "lib/site-packages/s.py", "lib/site-packages/test_s.py"}
+	for _, path := range invisible {
+		if _, listed := reasons[path]; listed {
+			t.Errorf("%s was enumerated; dependency trees must stay invisible", path)
 		}
 	}
 
@@ -629,5 +642,74 @@ func TestEnumerateUnreadableSkippedDirIsNotFatal(t *testing.T) {
 	}
 	if !sawLocked {
 		t.Errorf("the unreadable subtree must be recorded as one skipped-dir entry; exclusions = %+v", excl)
+	}
+}
+
+// A Python virtualenv is a dependency tree, not build output: enumerating
+// site-packages would drown a signed report exactly as node_modules would.
+func TestEnumerateVirtualenvsAreInvisible(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"pkg/a.py":                       "x = 1\n",
+		"pkg/test_a.py":                  "def test_x(): pass\n",
+		".venv/lib/site-packages/dep.py": "y = 2\n",
+		"venv/lib/other.py":              "z = 3\n",
+		".tox/py311/lib/tox_dep.py":      "w = 4\n",
+		".bundle/gems/g.rb":              "v = 5\n",
+		"build/out.py":                   "b = 6\n",
+	})
+
+	cands, excl, err := Enumerate(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range excl {
+		for _, dep := range []string{".venv/", "venv/", ".tox/", ".bundle/"} {
+			if strings.HasPrefix(e.Path, dep) {
+				t.Errorf("dependency tree enumerated into the report: %q", e.Path)
+			}
+		}
+	}
+	for _, c := range cands {
+		if strings.Contains(c.Path, "venv") || strings.Contains(c.Path, ".tox") {
+			t.Errorf("dependency file became a candidate: %q", c.Path)
+		}
+	}
+	// Build output is still accounted — that half must not regress.
+	var sawBuild bool
+	for _, e := range excl {
+		if e.Path == "build/out.py" && e.Reason == ReasonSkippedDir {
+			sawBuild = true
+		}
+	}
+	if !sawBuild {
+		t.Error("build/out.py should still be an accounted skipped-dir exclusion")
+	}
+}
+
+// A dependency tree nested inside an ACCOUNTED skipped dir is still
+// invisible: accounting build/ must not drag build/node_modules in with it.
+func TestEnumerateNestedDependencyTreeStaysInvisible(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"pkg/a.go":                        "package pkg\n",
+		"pkg/a_test.go":                   "package pkg\n",
+		"build/gen.go":                    "package build\n",
+		"build/node_modules/dep/index.js": "module.exports = 1\n",
+	})
+
+	_, excl, err := Enumerate(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawGen bool
+	for _, e := range excl {
+		if strings.Contains(e.Path, "node_modules") {
+			t.Errorf("nested dependency tree enumerated: %q", e.Path)
+		}
+		if e.Path == "build/gen.go" {
+			sawGen = true
+		}
+	}
+	if !sawGen {
+		t.Error("build/gen.go should still be accounted")
 	}
 }

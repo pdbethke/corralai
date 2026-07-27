@@ -1,6 +1,9 @@
 package main
 
-import "sync"
+import (
+	"errors"
+	"sync"
+)
 
 // seedCache memoizes repoSeed construction per language for the lifetime of one
 // scan. Without it, prep runs twice per audited file — a 189-file Go repo does
@@ -29,9 +32,13 @@ func newSeedCache(build func(lang string) (repoSeed, error)) *seedCache {
 
 // get returns the language's seed, building it at most once. Concurrent
 // callers for the SAME language block on one build; different languages
-// build concurrently.
+// build concurrently. Returns an error if the cache has been closed.
 func (c *seedCache) get(lang string) (repoSeed, error) {
 	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return repoSeed{}, errors.New("seedCache: cache is closed")
+	}
 	e := c.entries[lang]
 	if e == nil {
 		e = &seedEntry{}
@@ -45,15 +52,27 @@ func (c *seedCache) get(lang string) (repoSeed, error) {
 }
 
 // close releases every staging dir the cache created. Idempotent: safe to
-// defer and to call again.
+// defer and to call again. It waits for any in-flight builds to complete
+// before running cleanup functions.
 func (c *seedCache) close() {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.closed {
+		c.mu.Unlock()
 		return
 	}
 	c.closed = true
+	// Take a snapshot of entries under the lock, then release it.
+	entries := make([]*seedEntry, 0, len(c.entries))
 	for _, e := range c.entries {
+		entries = append(entries, e)
+	}
+	c.mu.Unlock()
+
+	// Outside the lock: drain each entry's build (no-op if already done, blocks
+	// if in flight) and call its cleanup. sync.Once ensures this is safe to
+	// call even if already running.
+	for _, e := range entries {
+		e.once.Do(func() {}) // Wait for any in-flight build to complete
 		if e.seed.cleanup != nil {
 			e.seed.cleanup()
 		}

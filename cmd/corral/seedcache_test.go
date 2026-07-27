@@ -110,3 +110,64 @@ func TestSeedCacheCloseRunsEveryCleanupOnce(t *testing.T) {
 		t.Fatalf("cleanup ran %d times, want exactly 2 (one per built seed, close idempotent)", got)
 	}
 }
+
+// Test that close() waits for in-flight builds and does not leak cleanups.
+// This catches the data race where close() reads e.seed.cleanup before the
+// build completes, sees zero-value nil, and skips the cleanup.
+func TestSeedCacheCloseWaitsForInflightBuilds(t *testing.T) {
+	var cleaned atomic.Int32
+	var buildStarted, closeCanProceed sync.WaitGroup
+	buildStarted.Add(1)
+	closeCanProceed.Add(1)
+
+	c := newSeedCache(func(lang string) (repoSeed, error) {
+		buildStarted.Done()    // Signal that build has started
+		closeCanProceed.Wait() // Wait for close() to be called, then finish build
+		return repoSeed{seedDir: lang, cleanup: func() { cleaned.Add(1) }}, nil
+	})
+
+	// Spawn a get() that starts building
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_, _ = c.get("go")
+	}()
+
+	buildStarted.Wait()    // Wait until build is in flight
+	closeCanProceed.Done() // Let the build proceed
+	c.close()              // This must wait for the in-flight build to complete
+	wg.Wait()              // Wait for goroutine to finish
+
+	if got := cleaned.Load(); got != 1 {
+		t.Fatalf("cleanup ran %d times, want 1 (close must not leak in-flight builds)", got)
+	}
+}
+
+// Test that get() after close() returns an error and does not build.
+func TestSeedCacheGetAfterCloseReturnsError(t *testing.T) {
+	var calls atomic.Int32
+	c := newSeedCache(func(lang string) (repoSeed, error) {
+		calls.Add(1)
+		return repoSeed{seedDir: lang, cleanup: func() {}}, nil
+	})
+
+	// Build once before closing
+	if _, err := c.get("go"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Close the cache
+	c.close()
+
+	// Try to get after close — should return an error and not build
+	_, err := c.get("python")
+	if err == nil {
+		t.Fatal("get after close: expected error, got nil")
+	}
+
+	// Verify no new build was triggered
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("builder called %d times after close, want 1 (no new build)", got)
+	}
+}

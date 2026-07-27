@@ -25,6 +25,22 @@ import (
 // unconditionally: --local always sandboxes, regardless of what the
 // separate, env-gated test-suite unsafe path allows internally.
 func resolveLocalJail(jailFlag string) (sandbox.Isolator, error) {
+	return resolveJail(jailFlag, true)
+}
+
+// resolveScanJail resolves the sandbox for `corral certify --repo`. Same
+// fail-closed rules as resolveLocalJail, but the scan exposes no --jail flag,
+// so a bwrap failure must not advise `--jail container`: an operator who never
+// ran --local cannot reach that escape hatch from the command that printed the
+// message.
+func resolveScanJail() (sandbox.Isolator, error) {
+	return resolveJail("", false)
+}
+
+// resolveJail is the shared implementation. containerFallback says whether the
+// calling command actually exposes --jail, and therefore whether the bwrap
+// advice may point at `--jail container`.
+func resolveJail(jailFlag string, containerFallback bool) (sandbox.Isolator, error) {
 	flag := strings.TrimSpace(jailFlag)
 
 	if flag == "none" {
@@ -53,7 +69,7 @@ func resolveLocalJail(jailFlag string) (sandbox.Isolator, error) {
 	// --jail container failure should surface sandbox.Resolve's own message
 	// (already clear: install docker/podman or set CORRALAI_EXEC_IMAGE).
 	if backend == "" || backend == "bwrap" {
-		return nil, bwrapUnavailableError(err)
+		return nil, bwrapUnavailableError(err, containerFallback)
 	}
 	return nil, err
 }
@@ -61,10 +77,16 @@ func resolveLocalJail(jailFlag string) (sandbox.Isolator, error) {
 // bwrapUnavailableError turns a raw bwrap Preflight/Resolve failure into a
 // concise, copy-pasteable actionable error: it names the Ubuntu 24.04 apparmor
 // cause (unprivileged userns disabled by the distro default), the surgical
-// fix, and the --jail container fallback. It is a pure formatter — no bwrap
-// invocation — so it is unit-testable without a working (or degraded) bwrap
-// on the host.
-func bwrapUnavailableError(cause error) error {
+// fix, and — only for commands that actually expose --jail — the container
+// fallback. It is a pure formatter — no bwrap invocation — so it is
+// unit-testable without a working (or degraded) bwrap on the host.
+func bwrapUnavailableError(cause error, containerFallback bool) error {
+	tail := `Otherwise run on a host where bwrap can isolate: this command has no
+sandbox-backend override.`
+	if containerFallback {
+		tail = `Or skip bwrap entirely: --jail container (needs docker or podman, plus
+CORRALAI_EXEC_IMAGE set to an image with your toolchain).`
+	}
 	return fmt.Errorf(
 		`no working bwrap sandbox: %w
 
@@ -75,8 +97,7 @@ cause. Fix it with a surgical profile that allows only bwrap's own binary:
   printf 'abi <abi/4.0>,\ninclude <tunables/global>\n\n/usr/bin/bwrap flags=(unconfined) {\n  userns,\n  include if exists <local/bwrap>\n}\n' | sudo tee /etc/apparmor.d/bwrap
   sudo systemctl reload apparmor
 
-Or skip bwrap entirely: --jail container (needs docker or podman, plus
-CORRALAI_EXEC_IMAGE set to an image with your toolchain).`, cause)
+%s`, cause, tail)
 }
 
 // hasContainerRuntime reports whether docker or podman is on PATH, so tests

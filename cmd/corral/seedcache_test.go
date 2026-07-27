@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -111,36 +112,125 @@ func TestSeedCacheCloseRunsEveryCleanupOnce(t *testing.T) {
 	}
 }
 
-// Test that close() waits for in-flight builds and does not leak cleanups.
-// This catches the data race where close() reads e.seed.cleanup before the
-// build completes, sees zero-value nil, and skips the cleanup.
+// close() must WAIT for an in-flight build and then run its cleanup. The bug
+// this rules out: close() reads e.seed.cleanup while the build is still
+// running, sees the zero value's nil, and leaks the staging dir.
+//
+// The interleaving is FORCED, not hoped for. The build is released only after
+// the test observes c.closed == true, which close() sets under the lock before
+// it enters the drain loop. So at the moment close() starts draining, the build
+// is provably still blocked and its cleanup is still the zero value's nil —
+// exactly the window the earlier version of this test only visited by luck.
 func TestSeedCacheCloseWaitsForInflightBuilds(t *testing.T) {
 	var cleaned atomic.Int32
-	var buildStarted, closeCanProceed sync.WaitGroup
-	buildStarted.Add(1)
-	closeCanProceed.Add(1)
+	buildStarted := make(chan struct{})
+	releaseBuild := make(chan struct{})
 
 	c := newSeedCache(func(lang string) (repoSeed, error) {
-		buildStarted.Done()    // Signal that build has started
-		closeCanProceed.Wait() // Wait for close() to be called, then finish build
+		close(buildStarted) // the build is now in flight
+		<-releaseBuild      // hold here until close() is past its `closed` flag
 		return repoSeed{seedDir: lang, cleanup: func() { cleaned.Add(1) }}, nil
 	})
 
-	// Spawn a get() that starts building
 	var wg sync.WaitGroup
-	wg.Add(1)
+	wg.Add(2)
 	go func() {
 		defer wg.Done()
 		_, _ = c.get("go")
 	}()
+	<-buildStarted // the builder is blocked inside once.Do
 
-	buildStarted.Wait()    // Wait until build is in flight
-	closeCanProceed.Done() // Let the build proceed
-	c.close()              // This must wait for the in-flight build to complete
-	wg.Wait()              // Wait for goroutine to finish
+	go func() {
+		defer wg.Done()
+		c.close()
+	}()
+	// Spin until close() has taken the lock, set closed, and released it: it is
+	// now committed to the drain loop with the build still unfinished.
+	for {
+		c.mu.Lock()
+		entered := c.closed
+		c.mu.Unlock()
+		if entered {
+			break
+		}
+		runtime.Gosched()
+	}
+	close(releaseBuild)
+	wg.Wait()
 
 	if got := cleaned.Load(); got != 1 {
 		t.Fatalf("cleanup ran %d times, want 1 (close must not leak in-flight builds)", got)
+	}
+}
+
+// THE INVARIANT: get() must NEVER return a zero seed with a nil error. A zero
+// seed has files == nil, so workspaceFromSeed would build a jail workspace
+// holding only the job's own code + test — no go.mod, no siblings, no binds —
+// and a self-contained Python/Ruby suite can still PASS there. That would be a
+// kill rate measured against a repo that wasn't present: a fabricated
+// measurement. The window: get() passes the `closed` check and releases the
+// lock, close() then wins the entry's Once.
+func TestSeedCacheGetNeverReturnsAZeroSeedWithNilError(t *testing.T) {
+	for i := 0; i < 200; i++ {
+		c := newSeedCache(func(lang string) (repoSeed, error) {
+			return repoSeed{
+				seedDir: "/seed/" + lang,
+				files:   map[string]string{"go.mod": "module x\n"},
+				cleanup: func() {},
+			}, nil
+		})
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		start := make(chan struct{})
+		var seed repoSeed
+		var err error
+		go func() {
+			defer wg.Done()
+			<-start
+			seed, err = c.get("go")
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			c.close()
+		}()
+		close(start)
+		wg.Wait()
+
+		if err == nil && seed.files == nil {
+			t.Fatalf("iteration %d: get returned a ZERO seed with a nil error — "+
+				"a job would audit a workspace missing the whole repo and report a real-looking kill rate", i)
+		}
+	}
+}
+
+// The invariant asserted directly at the seam, without depending on the
+// scheduler visiting the window: drive the exact interleaving by hand.
+// get() creates the entry and releases the lock; close() then runs its drain
+// before get() reaches its own once.Do.
+func TestSeedCacheGetLosingTheCloseRaceErrors(t *testing.T) {
+	c := newSeedCache(func(lang string) (repoSeed, error) {
+		t.Fatalf("build must not run for %q after close()", lang)
+		return repoSeed{}, nil
+	})
+
+	// Step 1: create the entry exactly as get() does before it unlocks.
+	c.mu.Lock()
+	e := &seedEntry{}
+	c.entries["go"] = e
+	c.mu.Unlock()
+
+	// Step 2: close() runs, and its drain wins the entry's Once.
+	c.close()
+
+	// Step 3: the racing get() now reaches e.once.Do — which is already spent.
+	e.once.Do(func() { e.seed, e.err = c.build("go") })
+	if e.err == nil {
+		t.Fatal("entry drained by close() carries a nil error: get would return a zero seed as a valid one")
+	}
+	if e.seed.files != nil {
+		t.Fatalf("drained entry has files %v, want nil", e.seed.files)
 	}
 }
 

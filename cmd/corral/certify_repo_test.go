@@ -757,3 +757,34 @@ func TestLocalExecutorCloseReleasesSeeds(t *testing.T) {
 		t.Fatalf("cleanup ran %d times after a second Close, want 1", got)
 	}
 }
+
+// The whole point of this slice: newLocalExecutor must WIRE a seed cache.
+// Every other executor test overwrites ex.seeds with a stub, so without this
+// one, deleting `l.seeds = newSeedCache(...)` from the constructor breaks no
+// test — and Execute's `if l.seeds != nil` guard turns that deletion into a
+// silent regression to per-file jail prep (2 tree copies + 2 `go mod vendor`
+// runs per audited file), the exact bug this branch exists to remove.
+func TestNewLocalExecutorWiresASeedCache(t *testing.T) {
+	ex := newLocalExecutor(t.TempDir(), nil, io.Discard)
+	defer ex.Close()
+	if ex.seeds == nil {
+		t.Fatal("no seed cache: every job would prepare its own jail")
+	}
+}
+
+// The cache must be wired even when the host cannot sandbox: jailErr is
+// reported by preflight, and a nil cache would silently change the fan-out's
+// prep strategy rather than fail.
+func TestNewLocalExecutorWiresASeedCacheEvenWhenTheJailIsUnavailable(t *testing.T) {
+	ex := newLocalExecutor(t.TempDir(), nil, io.Discard)
+	defer ex.Close()
+	if ex.jailErr == nil {
+		t.Skip("this host has a working sandbox; the jail-unavailable path is covered on hosts without one")
+	}
+	if ex.seeds == nil {
+		t.Fatal("no seed cache on the jail-error path")
+	}
+	if _, err := ex.seeds.get("go"); err == nil {
+		t.Fatal("seed build must fail closed when the sandbox could not be resolved")
+	}
+}

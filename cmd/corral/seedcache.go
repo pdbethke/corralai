@@ -71,8 +71,18 @@ func (c *seedCache) close() {
 	// Outside the lock: drain each entry's build (no-op if already done, blocks
 	// if in flight) and call its cleanup. sync.Once ensures this is safe to
 	// call even if already running.
+	//
+	// The drain records an ERROR rather than running a no-op, because it can WIN
+	// the Once: a get() that passed the `closed` check and released the lock just
+	// before close() took it has created its entry but not yet reached its own
+	// once.Do. If this drain wrote nothing, that get() would return a ZERO seed
+	// with a NIL error — a workspace holding only the job's own two files, no
+	// go.mod, no siblings, no binds. A self-contained Python/Ruby suite can still
+	// PASS in such a workspace, so the scan would report a real-looking kill rate
+	// measured against a repo that wasn't there. Fail closed instead: a get that
+	// loses this race gets an error and its file is reported ungradable.
 	for _, e := range entries {
-		e.once.Do(func() {}) // Wait for any in-flight build to complete
+		e.once.Do(func() { e.err = errors.New("seedCache: closed before build") })
 		if e.seed.cleanup != nil {
 			e.seed.cleanup()
 		}

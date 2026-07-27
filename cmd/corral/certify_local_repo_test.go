@@ -15,13 +15,13 @@ import (
 func TestEnsureGoVendoredNoOps(t *testing.T) {
 	dir := t.TempDir()
 
-	got, cleanup, err := ensureGoVendored(dir, "python", io.Discard)
+	got, cleanup, err := ensureGoVendored("corral certify --local", dir, "python", io.Discard)
 	if err != nil || got != dir {
 		t.Fatalf("non-Go must be a no-op: got=%s err=%v", got, err)
 	}
 	cleanup()
 
-	got, cleanup, err = ensureGoVendored(dir, "go", io.Discard)
+	got, cleanup, err = ensureGoVendored("corral certify --local", dir, "go", io.Discard)
 	if err != nil || got != dir {
 		t.Fatalf("Go without go.mod must be a no-op: got=%s err=%v", got, err)
 	}
@@ -33,7 +33,7 @@ func TestEnsureGoVendoredNoOps(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dir, "vendor"), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	got, cleanup, err = ensureGoVendored(dir, "go", io.Discard)
+	got, cleanup, err = ensureGoVendored("corral certify --local", dir, "go", io.Discard)
 	if err != nil || got != dir {
 		t.Fatalf("already-vendored repo must be a no-op: got=%s err=%v", got, err)
 	}
@@ -71,7 +71,7 @@ func TestBuildRepoSeedLoadsTreeAndAlwaysReturnsCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	seed, err := buildRepoSeed(root, "python", "bwrap", nil, false, io.Discard)
+	seed, err := buildRepoSeed("corral certify --local", root, "python", "bwrap", nil, false, io.Discard)
 	if err != nil {
 		t.Fatalf("buildRepoSeed: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestBuildRepoSeedLoadsTreeAndAlwaysReturnsCleanup(t *testing.T) {
 }
 
 func TestBuildRepoSeedPropagatesLoadError(t *testing.T) {
-	_, err := buildRepoSeed(filepath.Join(t.TempDir(), "does-not-exist"), "python", "bwrap", nil, false, io.Discard)
+	_, err := buildRepoSeed("corral certify --local", filepath.Join(t.TempDir(), "does-not-exist"), "python", "bwrap", nil, false, io.Discard)
 	if err == nil {
 		t.Fatal("a missing repo dir must be an error, not an empty seed")
 	}

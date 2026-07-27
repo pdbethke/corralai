@@ -15,8 +15,10 @@ const (
 	ReasonExecutorError  = "executor-error"
 	ReasonCancelled      = "cancelled"
 	// ReasonPrepFailed marks a job whose language-wide jail preparation failed
-	// (e.g. `go mod vendor`). Cached per language, so it is reported once per
-	// language rather than once per file.
+	// (e.g. `go mod vendor`). The failure is cached per language, so the WORK is
+	// attempted once per language rather than once per file — but every file of
+	// that language is still individually reported ungradable with this reason
+	// and tallied by Aggregate.
 	ReasonPrepFailed = "prep-failed"
 )
 

@@ -311,9 +311,10 @@ func newLocalExecutor(repoDir string, checkArgv []string, progress io.Writer) *l
 	// to the seed (it decides which dep dirs can be bind-mounted rather than
 	// copied), and it is a scan-wide constant — resolving it per file would
 	// re-run the backend probe for every job to reach the same answer. The scan
-	// exposes no --jail flag, so the auto backend is resolved, exactly as
-	// prepareAuditJail does for an empty in.jail.
-	iso, err := resolveLocalJail("")
+	// exposes no --jail flag, so the auto backend is resolved (same rules as
+	// prepareAuditJail's empty in.jail), minus the `--jail container` advice on
+	// failure — a flag this command does not offer.
+	iso, err := resolveScanJail()
 	backendName := ""
 	if err != nil {
 		l.jailErr = err
@@ -326,7 +327,7 @@ func newLocalExecutor(repoDir string, checkArgv []string, progress io.Writer) *l
 		if l.jailErr != nil {
 			return repoSeed{cleanup: func() {}}, l.jailErr
 		}
-		return buildRepoSeed(repoDir, langName, backendName, nil, false, l.progress)
+		return buildRepoSeed("corral certify --repo", repoDir, langName, backendName, nil, false, l.progress)
 	})
 	return l
 }

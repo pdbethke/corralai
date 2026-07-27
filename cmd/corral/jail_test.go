@@ -30,7 +30,7 @@ func TestResolveLocalJail_NoneAlwaysRejected(t *testing.T) {
 // host to trigger the failure path.
 func TestBwrapUnavailableError_NamesTheFixAndTheAlternative(t *testing.T) {
 	cause := errors.New("bwrap cannot create a sandbox (user namespaces disabled?): exit status 1")
-	err := bwrapUnavailableError(cause)
+	err := bwrapUnavailableError(cause, true)
 	if err == nil {
 		t.Fatal("bwrapUnavailableError(cause) = nil; want a non-nil error")
 	}
@@ -93,5 +93,23 @@ func TestResolveLocalJail_AutoNeverReturnsUnsafe(t *testing.T) {
 	}
 	if iso.Name() == "none" {
 		t.Fatalf("resolveLocalJail(\"\") auto-detected the \"none\" backend; must never do this")
+	}
+}
+
+// `corral certify --repo` exposes no --jail flag, so its bwrap failure must not
+// advise `--jail container`: an escape hatch unreachable from the command that
+// printed the message is worse than no advice at all.
+func TestBwrapUnavailableError_OmitsTheContainerHatchWhenUnreachable(t *testing.T) {
+	cause := errors.New("bwrap cannot create a sandbox (user namespaces disabled?): exit status 1")
+	msg := bwrapUnavailableError(cause, false).Error()
+	if strings.Contains(msg, "--jail") {
+		t.Errorf("message %q advises a --jail flag the calling command does not expose", msg)
+	}
+	// The actionable half must survive: the operator can still fix the host.
+	if !strings.Contains(msg, "/etc/apparmor.d/bwrap") {
+		t.Errorf("message %q dropped the apparmor fix", msg)
+	}
+	if !strings.Contains(msg, cause.Error()) {
+		t.Errorf("message %q dropped the underlying cause", msg)
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/reposcan"
+	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
 // runCertifyRepo fans the single-file audit out over a whole repository.
@@ -284,6 +285,11 @@ type localExecutor struct {
 	// is what the unit tests that construct a bare localExecutor rely on.
 	seeds *seedCache
 
+	// iso is the scan's sandbox, resolved ONCE at construction (see below) and
+	// handed to every job via localAuditInput.iso — never re-resolved per
+	// file. Nil when resolution failed (jailErr is set instead).
+	iso sandbox.Isolator
+
 	// jailErr is the sandbox-resolution failure, if any, captured once at
 	// construction. It is scan-fatal (no jail = nothing can be graded on this
 	// host), surfaced by preflight before the fan-out — never swallowed.
@@ -319,6 +325,7 @@ func newLocalExecutor(repoDir string, checkArgv []string, progress io.Writer) *l
 	if err != nil {
 		l.jailErr = err
 	} else {
+		l.iso = iso
 		backendName = iso.Name()
 	}
 	// The scan exposes no --bind-dir/--no-bind-deps: nil/false are the
@@ -353,6 +360,7 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 		goal:     j.Goal.Text,
 		lang:     j.Lang,
 		repo:     j.Repo,
+		iso:      l.iso,
 		// "local" rather than "" when the operator gave no --commit: an empty
 		// commit makes auditOneFile fall back to `git rev-parse HEAD` — which
 		// reads the CWD's repo, not the SCANNED one, and would stamp every

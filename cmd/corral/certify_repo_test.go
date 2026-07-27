@@ -15,6 +15,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/reposcan"
+	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
 func TestCertifyRepoRequiresRepoDir(t *testing.T) {
@@ -380,6 +381,42 @@ func TestLocalExecutorExecuteBaselineFailedIsUngradable(t *testing.T) {
 	}
 	if res.Reason != reposcan.ReasonBaselineFailed {
 		t.Errorf("Reason = %q, want %q", res.Reason, reposcan.ReasonBaselineFailed)
+	}
+}
+
+// TestExecuteHandsTheScanIsolatorToEachJob proves the scan's isolator,
+// resolved once in newLocalExecutor, is the SAME one every job's
+// localAuditInput carries — not re-resolved (re-probing bwrap) per file.
+func TestExecuteHandsTheScanIsolatorToEachJob(t *testing.T) {
+	ex := newLocalExecutor(t.TempDir(), nil, io.Discard)
+	defer ex.Close()
+
+	if ex.iso == nil {
+		t.Skip("no sandbox backend on this host; nothing to hand down")
+	}
+
+	var got []sandbox.Isolator
+	ex.newBaseline = func(_ context.Context, in localAuditInput) (reposcan.BaselineRunner, func(), error) {
+		got = append(got, in.iso)
+		return &scriptedBaseline{results: []bool{true, true}}, func() {}, nil
+	}
+	ex.audit = func(_ context.Context, in localAuditInput) (advpool.Verdict, error) {
+		got = append(got, in.iso)
+		return advpool.Verdict{DevKillRate: 1, MutantsTotal: 1}, nil
+	}
+
+	for i := 0; i < 3; i++ {
+		if _, err := ex.Execute(context.Background(), reposcan.Job{Path: "a.go", TestPath: "a_test.go", Lang: "go"}); err != nil {
+			t.Fatalf("Execute %d: %v", i, err)
+		}
+	}
+	if len(got) == 0 {
+		t.Fatal("no seam observed in.iso")
+	}
+	for i, g := range got {
+		if g != ex.iso {
+			t.Errorf("call %d got a different isolator than the scan's; it would re-resolve per file", i)
+		}
 	}
 }
 

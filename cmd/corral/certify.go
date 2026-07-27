@@ -295,7 +295,7 @@ func isExistingDir(p string) bool {
 	if strings.TrimSpace(p) == "" {
 		return false
 	}
-	fi, err := os.Stat(p)
+	fi, err := os.Stat(p) // #nosec G703 -- p is the operator's own --repo value on a local CLI; stat only, never opened or read
 	return err == nil && fi.IsDir()
 }
 

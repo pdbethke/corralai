@@ -65,6 +65,12 @@ jobs:
           cache: true
       - if: steps.filter.outputs.code == 'true'
         run: go vet ./...
+      - name: Refresh apt package lists
+        if: steps.filter.outputs.code == 'true'
+        # Some runner images ship with empty/stale apt lists, so a bare
+        # `apt-get install` fails to find the package. Done once, up front, for
+        # every provisioning step below.
+        run: sudo apt-get update || true
       - name: Provision Python test toolchain (audit gate — python plugin)
         if: steps.filter.outputs.code == 'true'
         run: |
@@ -81,6 +87,22 @@ jobs:
           node --version || echo "node missing — js/ts-in-jail tests will SKIP"
           sudo npm install -g typescript @types/node || npm install -g typescript @types/node || true
           tsc --version || echo "tsc not available — ts-in-jail test will SKIP"
+      - name: Provision bubblewrap (audit gate — jail tests)
+        if: steps.filter.outputs.code == 'true'
+        run: |
+          sudo apt-get install -y bubblewrap || true
+          # Ubuntu 24.04 blocks unprivileged user namespaces, which is what
+          # bwrap needs. Relaxing it here is what lets the jail tests run
+          # instead of skipping; if it fails the tests skip as before.
+          #
+          # DELIBERATE SANDBOX WEAKENING, accepted for this ephemeral runner
+          # only: this same job runs `go install …@latest`, so third-party code
+          # executes on a host whose unprivileged-userns restriction is off.
+          # The trade is knowingly made — a jail test that SKIPS silently
+          # proves nothing about the jail, which is the thing corral's whole
+          # audit rests on. Never apply this to a durable host.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          bwrap --version || echo "bwrap unavailable — jail tests will SKIP"
       - if: steps.filter.outputs.code == 'true'
         run: go test ./...
       - name: Install gosec

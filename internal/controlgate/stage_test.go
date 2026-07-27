@@ -199,3 +199,53 @@ func TestStageCandidate_RejectsCompliantFail(t *testing.T) {
 		t.Fatalf("expected nothing stored on a rejected candidate, got: %+v", pend)
 	}
 }
+
+// TestStageCandidateRefusesASurvivingCanary is the never-fabricate-a-score
+// invariant at the staging call site. authoring.Author scores WITH mutants, so
+// the canary runs; a check command that never compiles or imports the audited
+// file passes on deliberately invalid source. The baseline still passes, so
+// the CompliantPass guard lets it through — and KillRate() is 0 with an empty
+// survivor set. Persisting that to controlspec would record "graded, killed
+// nothing" for a candidate that was never graded at all.
+func TestStageCandidateRefusesASurvivingCanary(t *testing.T) {
+	writer := &fakeLLM{onSystem: func(sys string) string {
+		if strings.Contains(sys, "TEST-WRITER") {
+			return "```go\npackage target\nimport \"testing\"\nfunc TestGoal(t *testing.T){}\n```"
+		}
+		return "===MUTATION_1===\n<<<<<<< SEARCH\nCOMPLIANT\n=======\nOK m1\n>>>>>>> REPLACE\n"
+	}}
+	reviewer := &fakeLLM{resp: ""}
+	// A suite pointed somewhere else: every test run passes, including the one
+	// against source that cannot compile.
+	jail := &fakeJail{onRun: func(files map[string]string, cmd []string) bool { return true }}
+	store, err := controlspec.OpenStore(filepath.Join(t.TempDir(), "cs.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	req := StageRequest{
+		Request: authoring.Request{
+			Goal: "deny by default", Code: "COMPLIANT", Lang: "go", CodePath: "auth.go", TestPath: "auth_gate_test.go",
+			Base: map[string]string{"go.mod": "module target\ngo 1.26\n"}, NMutants: 1,
+			BuildCmd: []string{"go", "build", "./"}, TestCmd: []string{"go", "test", "./"},
+		},
+		Owner: "ciso@bankz", GoalID: "asvs-v4.1.1", Target: "bankz/app:auth.go", Now: time.Unix(1_700_000_000, 0).UTC(),
+	}
+	gt, err := StageCandidate(context.Background(), writer, reviewer, jail, store, req)
+	if err == nil {
+		t.Fatalf("StageCandidate staged an ungraded candidate: %+v", gt)
+	}
+	if !strings.Contains(err.Error(), "invalid source") {
+		t.Errorf("error %q does not name the canary cause; it must be distinguishable from a failed baseline", err)
+	}
+	// Nothing may reach the store: a reader of controlspec must never find a
+	// 0.00 kill rate that was never measured.
+	pending, perr := store.ListPending("ciso@bankz")
+	if perr != nil {
+		t.Fatal(perr)
+	}
+	if len(pending) != 0 {
+		t.Errorf("an ungraded candidate was persisted: %+v", pending)
+	}
+}

@@ -72,12 +72,13 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 		Ungradable:  map[string]int{},
 		GeneratedAt: time.Now(),
 	}
-	// Candidates that never became jobs were dropped for exactly one reason in
-	// this slice — no goal — and they are ungradable in the report's sense:
-	// counted in the denominator, never scored. Booking them here keeps the
-	// accounting closed: Audited + sum(Ungradable) == Candidates.
-	if n := candidates - len(results); n > 0 {
-		rep.Ungradable[ReasonUngoaled] = n
+	// Ungoaled files never became jobs, so they are absent from results.
+	// Count them from the exclusions rather than by subtracting, so a future
+	// pre-job drop reason cannot be silently mislabelled as ungoaled.
+	for _, e := range excl {
+		if e.Reason == ReasonUngoaled {
+			rep.Ungradable[ReasonUngoaled]++
+		}
 	}
 
 	var sum float64

@@ -6,6 +6,8 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	"fmt"
+	"math"
 	"path/filepath"
 	"testing"
 
@@ -38,8 +40,27 @@ func (s *canonScorer) Score(_ context.Context, _, _, _ string, _ []adequacy.Muta
 	return 1.0, s.poolSurvivors, nil
 }
 
-func (s *canonScorer) ScoreReport(_ context.Context, _, _, _ string, _ []adequacy.Mutant, _ string) (adequacy.Report, error) {
-	return adequacy.Report{CompliantPass: true}, nil
+// ScoreReport is the DEV-adequacy call: the driver reads the full report
+// there so it can tell a failed baseline from a suite that never reads the
+// file, instead of inferring either from a zero tally. It delegates to Score
+// so the call-order contract above still holds, and reports the graded shape
+// (baseline passed, canary killed) with the scripted kill rate encoded as
+// Killed/Total — the driver takes the mutant TOTAL from the mutant slice, so
+// the scale here is invisible to it.
+func (s *canonScorer) ScoreReport(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (adequacy.Report, error) {
+	kr, survivors, err := s.Score(ctx, codePath, code, test, mutants, testCmd)
+	if err != nil {
+		return adequacy.Report{}, err
+	}
+	const scale = 10000
+	rep := adequacy.Report{CompliantPass: true, CanaryKilled: true, Total: scale}
+	for i := 0; i < int(math.Round(kr*scale)); i++ {
+		rep.Killed = append(rep.Killed, fmt.Sprintf("k%d", i))
+	}
+	for _, m := range survivors {
+		rep.Survived = append(rep.Survived, m.ID)
+	}
+	return rep, nil
 }
 
 // canonValidator is a hermetic, fake advpool.Validator: it always accepts

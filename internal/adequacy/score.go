@@ -98,20 +98,33 @@ type Enumerator interface {
 	Enumerate(ctx context.Context, files map[string]string, cmd []string) (stdout string, err error)
 }
 
+// CanaryCode is deliberately invalid source in every language corral
+// supports (go, python, ruby, javascript, typescript). Any check command
+// that genuinely compiles or imports the file under audit MUST fail on it.
+// A suite that still passes provably never reads the file, so nothing it
+// reports about that file can mean anything.
+const CanaryCode = "!!!corral canary!!!"
+
 // Report is the outcome of scoring a candidate test against compliant code
 // and a set of mutants.
 type Report struct {
 	CompliantPass bool
-	Total         int
-	Killed        []string
-	Survived      []string
+	// CanaryKilled reports whether the suite failed on deliberately invalid
+	// source. False means the suite never compiles or imports the file, so
+	// KillRate is meaningless — the same fail-closed shape as
+	// CompliantPass. Callers MUST check this before reading KillRate.
+	CanaryKilled bool
+	Total        int
+	Killed       []string
+	Survived     []string
 }
 
 // KillRate is the adequacy score: the fraction of mutants the test caught.
 // Zero when no mutants were run (including when the report is invalid
-// because the test failed on compliant code).
+// because the test failed on compliant code, or because the canary survived
+// and the suite provably never reads the file).
 func (r Report) KillRate() float64 {
-	if r.Total == 0 {
+	if r.Total == 0 || !r.CanaryKilled {
 		return 0
 	}
 	return float64(len(r.Killed)) / float64(r.Total)
@@ -174,6 +187,28 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 	if !pass {
 		// broken/overreaching test — do not score mutants (fail-safe: no kill rate for an invalid test)
 		return rep, nil
+	}
+
+	// The canary runs only when there are mutants to score. The
+	// baseline-stability path calls Score with none, twice per file, and a
+	// canary there would triple its cost for no information.
+	if len(mutants) > 0 {
+		cpass, cerr := run(ctx, CanaryCode)
+		if cerr != nil {
+			if errors.Is(cerr, ErrTestTimeout) {
+				// A suite that hangs on invalid source did react to it.
+				rep.CanaryKilled = true
+			} else {
+				return Report{}, cerr
+			}
+		} else {
+			rep.CanaryKilled = !cpass
+		}
+		if !rep.CanaryKilled {
+			// The suite passed on source that cannot compile: it never reads
+			// this file. Fail closed — no mutants scored, no kill rate.
+			return rep, nil
+		}
 	}
 
 	perMutant := cfg.mutantTimeout

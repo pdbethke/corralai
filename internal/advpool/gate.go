@@ -114,17 +114,7 @@ func (s JailScorer) Score(ctx context.Context, codePath, code, test string, muta
 	if err != nil {
 		return 0, nil, fmt.Errorf("advpool: score: %w", err)
 	}
-	byID := make(map[string]adequacy.Mutant, len(mutants))
-	for _, m := range mutants {
-		byID[m.ID] = m
-	}
-	survivors := make([]adequacy.Mutant, 0, len(rep.Survived))
-	for _, id := range rep.Survived {
-		if m, ok := byID[id]; ok {
-			survivors = append(survivors, m)
-		}
-	}
-	return rep.KillRate(), survivors, nil
+	return rep.KillRate(), survivorsFrom(rep, mutants), nil
 }
 
 // ScoreReport is Score's richer sibling: it reuses the SAME scoreWorkspace +

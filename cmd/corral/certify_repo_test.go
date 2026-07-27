@@ -8,13 +8,17 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/pdbethke/corralai/internal/advpool"
+	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/reposcan"
+	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
 func TestCertifyRepoRequiresRepoDir(t *testing.T) {
@@ -383,6 +387,91 @@ func TestLocalExecutorExecuteBaselineFailedIsUngradable(t *testing.T) {
 	}
 }
 
+// countingIsolator is a stand-in sandbox with a real identity (a pointer, so
+// two of them are distinguishable — unlike sandbox.bwrapIsolator, an empty
+// struct whose independently-resolved values always compare equal).
+type countingIsolator struct{ label string }
+
+func (c *countingIsolator) Name() string     { return c.label }
+func (c *countingIsolator) Preflight() error { return nil }
+func (c *countingIsolator) Wrap(command string, _ sandbox.Options, _ []string) ([]string, error) {
+	return []string{"/bin/sh", "-c", command}, nil
+}
+
+// TestScanResolvesTheSandboxExactlyOnceForTheWholeScan proves the perf claim
+// as a COUNT, which is the only way it can be proven: the scan resolves the
+// backend once in newLocalExecutor and hands that isolator to every job via
+// localAuditInput.iso, so prepareAuditJail must never re-probe per file. An
+// identity assertion cannot detect a violation here — bwrapIsolator is an
+// empty struct, so a per-file re-resolution yields a value that compares
+// EQUAL to the scan's. So this counts every resolution in the command (both
+// resolveLocalJail and resolveScanJail go through resolveJailFn) across three
+// jobs and requires exactly one.
+//
+// Counting through the seam also removes the host dependency: the fake
+// resolver succeeds with no bwrap, so this runs everywhere instead of
+// skipping on hosts without a sandbox backend.
+func TestScanResolvesTheSandboxExactlyOnceForTheWholeScan(t *testing.T) {
+	var resolutions int
+	orig := resolveJailFn
+	resolveJailFn = func(string, bool) (sandbox.Isolator, error) {
+		resolutions++
+		return &countingIsolator{label: "fake"}, nil
+	}
+	t.Cleanup(func() { resolveJailFn = orig })
+
+	repo := t.TempDir()
+	for name, body := range map[string]string{
+		"a.go":      "package p\n\nfunc A() int { return 1 }\n",
+		"a_test.go": "package p\n\nimport \"testing\"\n\nfunc TestA(t *testing.T) {}\n",
+	} {
+		if err := os.WriteFile(filepath.Join(repo, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ex := newLocalExecutor(repo, nil, io.Discard)
+	defer ex.Close()
+	if ex.jailErr != nil {
+		t.Fatalf("construction must resolve through the seam: %v", ex.jailErr)
+	}
+	if resolutions != 1 {
+		t.Fatalf("construction resolved the sandbox %d time(s), want 1", resolutions)
+	}
+
+	plug, ok := lang.Detect("a.go")
+	if !ok {
+		t.Fatal("no go plugin")
+	}
+	// Both seams drive the REAL prepareAuditJail with the input Execute built,
+	// which is where the per-file re-resolution would happen. Its outcome is
+	// irrelevant here (the fake isolator cannot actually run a suite) — the
+	// measurement is how many times the sandbox got resolved.
+	drive := func(in localAuditInput) {
+		if p, err := prepareAuditJail(in, plug, time.Minute, io.Discard); err == nil {
+			p.cleanup()
+		}
+	}
+	ex.newBaseline = func(_ context.Context, in localAuditInput) (reposcan.BaselineRunner, func(), error) {
+		drive(in)
+		return &scriptedBaseline{results: []bool{true, true}}, func() {}, nil
+	}
+	ex.audit = func(_ context.Context, in localAuditInput) (advpool.Verdict, error) {
+		drive(in)
+		return advpool.Verdict{DevKillRate: 1, MutantsTotal: 1}, nil
+	}
+
+	const jobs = 3
+	for i := 0; i < jobs; i++ {
+		if _, err := ex.Execute(context.Background(), reposcan.Job{Path: "a.go", TestPath: "a_test.go", Lang: "go"}); err != nil {
+			t.Fatalf("Execute %d: %v", i, err)
+		}
+	}
+	if resolutions != 1 {
+		t.Errorf("sandbox resolved %d time(s) across %d job(s), want exactly 1 — the scan is re-probing the backend per file", resolutions, jobs)
+	}
+}
+
 // TestPrintRepoReportNothingAuditedSaysSo proves the never-fabricate-a-score
 // invariant at the presentation layer: with nothing audited the report must
 // say COULD-NOT-GRADE, not print a 0.00 kill rate (or a NaN).
@@ -541,9 +630,15 @@ func TestCertifyRepoAllowsExplicitCheckCommandForOneLanguage(t *testing.T) {
 // the score line's "% of N candidates" must be over the ENUMERATED candidates,
 // so ungoaled files cannot be hidden from the coverage ratio.
 func TestCertifyRepoReportsEnumeratedCandidatesNotJobs(t *testing.T) {
+	excl := []reposcan.Exclusion{
+		{Path: "b.go", Reason: reposcan.ReasonUngoaled},
+		{Path: "c.go", Reason: reposcan.ReasonUngoaled},
+		{Path: "d.go", Reason: reposcan.ReasonUngoaled},
+		{Path: "e.go", Reason: reposcan.ReasonUngoaled},
+	}
 	rep := reposcan.Aggregate("o", "r", "c", 12, 5, []reposcan.FileResult{
 		{Job: reposcan.Job{Path: "a.go"}, Gradable: true, Verdict: advpool.Verdict{DevKillRate: 0.8}},
-	}, nil)
+	}, excl)
 	var out bytes.Buffer
 	printRepoReport(&out, rep)
 	s := out.String()
@@ -558,13 +653,16 @@ func TestCertifyRepoReportsEnumeratedCandidatesNotJobs(t *testing.T) {
 // TestPrintRepoReportUngradableOrderIsStable: map iteration order is random,
 // and a report a later slice signs and anchors has to be byte-reproducible.
 func TestPrintRepoReportUngradableOrderIsStable(t *testing.T) {
+	excl := []reposcan.Exclusion{
+		{Path: "f.go", Reason: reposcan.ReasonUngoaled},
+	}
 	rep := reposcan.Aggregate("o", "r", "c", 9, 6, []reposcan.FileResult{
 		{Job: reposcan.Job{Path: "a.go"}, Gradable: true, Verdict: advpool.Verdict{DevKillRate: 1}},
 		{Job: reposcan.Job{Path: "b.go"}, Gradable: false, Reason: reposcan.ReasonFlakyBaseline},
 		{Job: reposcan.Job{Path: "c.go"}, Gradable: false, Reason: reposcan.ReasonBaselineFailed},
 		{Job: reposcan.Job{Path: "d.go"}, Gradable: false, Reason: reposcan.ReasonExecutorError},
 		{Job: reposcan.Job{Path: "e.go"}, Gradable: false, Reason: reposcan.ReasonCancelled},
-	}, nil)
+	}, excl)
 
 	var first bytes.Buffer
 	printRepoReport(&first, rep)
@@ -786,5 +884,53 @@ func TestNewLocalExecutorWiresASeedCacheEvenWhenTheJailIsUnavailable(t *testing.
 	}
 	if _, err := ex.seeds.get("go"); err == nil {
 		t.Fatal("seed build must fail closed when the sandbox could not be resolved")
+	}
+}
+
+// TestLocalExecutorExecuteSuiteIgnoresFileIsUngradable proves the adapter maps
+// the canary's own diagnosis to its own reason. The baseline here is GREEN —
+// that is the whole point: a suite that passes both its baseline and
+// deliberately invalid source is not broken, it is pointed somewhere else, and
+// reporting it as baseline-failed would send an operator to debug their build.
+func TestLocalExecutorExecuteSuiteIgnoresFileIsUngradable(t *testing.T) {
+	ex := localExecutor{
+		baselineRuns: 2,
+		newBaseline: func(context.Context, localAuditInput) (reposcan.BaselineRunner, func(), error) {
+			return &scriptedBaseline{results: []bool{true, true}}, func() {}, nil
+		},
+		audit: func(context.Context, localAuditInput) (advpool.Verdict, error) {
+			return advpool.Verdict{SuiteIgnoresFile: true}, nil
+		},
+	}
+	res, err := ex.Execute(context.Background(), reposcan.Job{Path: "pkg/a.go", Goal: reposcan.Goal{Text: "g"}})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.Gradable {
+		t.Error("a suite that never reads the file must not be gradable")
+	}
+	if res.Reason != reposcan.ReasonSuiteIgnoresFile {
+		t.Errorf("Reason = %q, want %q", res.Reason, reposcan.ReasonSuiteIgnoresFile)
+	}
+}
+
+// TestLocalExecutorSuiteIgnoresFileBeatsBaselineFailed pins the ORDER: a
+// verdict carrying both flags is reported as the more specific diagnosis.
+func TestLocalExecutorSuiteIgnoresFileBeatsBaselineFailed(t *testing.T) {
+	ex := localExecutor{
+		baselineRuns: 2,
+		newBaseline: func(context.Context, localAuditInput) (reposcan.BaselineRunner, func(), error) {
+			return &scriptedBaseline{results: []bool{true, true}}, func() {}, nil
+		},
+		audit: func(context.Context, localAuditInput) (advpool.Verdict, error) {
+			return advpool.Verdict{SuiteIgnoresFile: true, BaselineFailed: true}, nil
+		},
+	}
+	res, err := ex.Execute(context.Background(), reposcan.Job{Path: "pkg/a.go", Goal: reposcan.Goal{Text: "g"}})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.Reason != reposcan.ReasonSuiteIgnoresFile {
+		t.Errorf("Reason = %q, want %q", res.Reason, reposcan.ReasonSuiteIgnoresFile)
 	}
 }

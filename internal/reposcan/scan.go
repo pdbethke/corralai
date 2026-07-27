@@ -20,6 +20,10 @@ const (
 	// that language is still individually reported ungradable with this reason
 	// and tallied by Aggregate.
 	ReasonPrepFailed = "prep-failed"
+	// ReasonSuiteIgnoresFile marks a file whose check command provably never
+	// compiles or imports it — the canary survived. Distinct from
+	// ReasonBaselineFailed: the suite is fine, it is pointed elsewhere.
+	ReasonSuiteIgnoresFile = "suite-ignores-file"
 )
 
 // FileResult is one file's audit outcome plus the provenance the report needs.
@@ -107,9 +111,17 @@ func Scan(ctx context.Context, jobs []Job, ex Executor, c Cache, workers int) []
 			if res.ComputedAt.IsZero() {
 				res.ComputedAt = time.Now()
 			}
-			// Preserve the existing could-not-grade signal rather than
-			// letting a zero kill rate masquerade as a real score.
-			if res.Verdict.BaselineFailed {
+			// Preserve the existing could-not-grade signals rather than
+			// letting a zero kill rate masquerade as a real score. The
+			// suite-ignores-file case is checked FIRST because it is the more
+			// specific diagnosis: a verdict carrying both flags is a suite that
+			// never reads the file, not merely a broken baseline.
+			if res.Verdict.SuiteIgnoresFile {
+				res.Gradable = false
+				if res.Reason == "" {
+					res.Reason = ReasonSuiteIgnoresFile
+				}
+			} else if res.Verdict.BaselineFailed {
 				res.Gradable = false
 				if res.Reason == "" {
 					res.Reason = ReasonBaselineFailed

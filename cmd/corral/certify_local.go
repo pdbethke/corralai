@@ -283,6 +283,12 @@ type localAuditInput struct {
 	// `certify --local` position) means this run builds — and owns — its own.
 	seed *repoSeed
 
+	// iso, when non-nil, is a pre-resolved sandbox shared across a scan's
+	// jobs. Resolving probes the backend, which is a scan-wide constant —
+	// doing it per file re-probes bwrap once per audited file. Nil means
+	// resolve one here, which is the `certify --local` path.
+	iso sandbox.Isolator
+
 	// The signed subject's identity. Empty falls back to git, else "local".
 	repo, commit string
 
@@ -420,9 +426,19 @@ func prepareAuditJail(in localAuditInput, plug lang.Plugin, timeout time.Duratio
 	// Resolve the jail. NEVER fall back to unsandboxed — resolveLocalJail fails
 	// closed if the requested/auto backend can't isolate on this host (and
 	// refuses "none" outright), returning an actionable message.
-	iso, err := resolveLocalJail(in.jail)
-	if err != nil {
-		return p, auditErr("%v", err)
+	//
+	// in.iso, when set, is the scan's already-resolved isolator (see
+	// localExecutor): the backend is a scan-wide constant, so a repo scan
+	// resolves it once and hands it to every job rather than re-probing bwrap
+	// per file. `certify --local` passes nothing, so iso is nil here and this
+	// resolves its own exactly as before.
+	iso := in.iso
+	if iso == nil {
+		var err error
+		iso, err = resolveLocalJail(in.jail)
+		if err != nil {
+			return p, auditErr("%v", err)
+		}
 	}
 
 	wiring, err := buildJailWiring(jailWiringInput{
@@ -1119,6 +1135,7 @@ func advVerdictFromPool(v advpool.Verdict) advVerdict {
 		DroppedRegions:   v.DroppedRegions,
 		TestWriterFailed: v.TestWriterFailed,
 		BaselineFailed:   v.BaselineFailed,
+		SuiteIgnoresFile: v.SuiteIgnoresFile,
 	}
 	for _, f := range v.VacuousFindings {
 		out.VacuousFindings = append(out.VacuousFindings, advFinding{

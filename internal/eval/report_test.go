@@ -129,3 +129,74 @@ func TestWriteReportShowsScope(t *testing.T) {
 		t.Fatalf("expected the headline to state scope (targets/runs), got: %q", output)
 	}
 }
+
+// TestReportExcludesUngradedRunsFromTheMeans is the never-fabricate-a-score
+// invariant at the soundness report — the report whose entire job is to say
+// "do NOT publish". A run that could not be graded (failed baseline, or a
+// check command that provably never compiles or imports the audited file)
+// carries a meaningless DevKillRate 0 with an empty survivor set. Averaging
+// that in lets a build failure declare a well-behaved target miscalibrated.
+func TestReportExcludesUngradedRunsFromTheMeans(t *testing.T) {
+	m := Manifest{CorpusVersion: "v1", Targets: []Target{
+		{ID: "gappy-ok", ExpectedAdequacy: "gappy", ExpectedSurvivors: 2},
+	}}
+	res := []RunResult{
+		{TargetID: "gappy-ok", DevKillRate: 0.6, Survivors: 2, MutantsTotal: 5},
+		{TargetID: "gappy-ok", DevKillRate: 0, Survivors: 0, MutantsTotal: 0, SuiteIgnoresFile: true},
+		{TargetID: "gappy-ok", DevKillRate: 0, Survivors: 0, MutantsTotal: 0, BaselineFailed: true},
+	}
+	reps := Report(m, res)
+	if len(reps) != 1 {
+		t.Fatalf("want 1 target report, got %d", len(reps))
+	}
+	got := reps[0]
+	if got.Runs != 3 || got.GradedRuns != 1 || got.Ungraded != 2 {
+		t.Errorf("Runs/GradedRuns/Ungraded = %d/%d/%d, want 3/1/2", got.Runs, got.GradedRuns, got.Ungraded)
+	}
+	if got.MeanKillRate != 0.6 {
+		t.Errorf("MeanKillRate = %.2f, want 0.60 — ungraded runs must not average in", got.MeanKillRate)
+	}
+	if got.MeanSurvivors != 2 {
+		t.Errorf("MeanSurvivors = %.2f, want 2.00 — ungraded runs must not average in", got.MeanSurvivors)
+	}
+	if !got.Calibrated {
+		t.Errorf("a target whose ONE graded run behaves as predicted must stay calibrated; note = %q", got.Note)
+	}
+
+	var buf bytes.Buffer
+	WriteReport(&buf, reps)
+	out := buf.String()
+	if !strings.Contains(out, "COULD NOT BE GRADED") {
+		t.Errorf("the excluded runs must be VISIBLE in the report, not silently dropped:\n%s", out)
+	}
+	if strings.Contains(out, "MISCALIBRATED") {
+		t.Errorf("ungraded runs pushed a sound target into MISCALIBRATED:\n%s", out)
+	}
+}
+
+// TestReportAllRunsUngradedCannotValidate: when NOTHING was graded, the means
+// are zero because nothing was measured. That must read as "cannot validate",
+// never as evidence in either direction.
+func TestReportAllRunsUngradedCannotValidate(t *testing.T) {
+	m := Manifest{CorpusVersion: "v1", Targets: []Target{
+		{ID: "thorough-ok", ExpectedAdequacy: "thorough"},
+	}}
+	res := []RunResult{
+		{TargetID: "thorough-ok", SuiteIgnoresFile: true},
+		{TargetID: "thorough-ok", BaselineFailed: true},
+	}
+	reps := Report(m, res)
+	if len(reps) != 1 {
+		t.Fatalf("want 1 target report, got %d", len(reps))
+	}
+	got := reps[0]
+	if got.Calibrated {
+		t.Fatalf("a target with zero graded runs must never be reported CALIBRATED: %+v", got)
+	}
+	if !strings.Contains(got.Note, "could not be graded") {
+		t.Errorf("note = %q, want it to name the could-not-grade cause", got.Note)
+	}
+	if got.MeanKillRate != 0 || got.MeanSurvivors != 0 {
+		t.Errorf("means over zero graded runs must stay 0 (and must not be NaN): %+v", got)
+	}
+}

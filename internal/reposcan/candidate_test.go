@@ -404,7 +404,7 @@ func TestEnumerateRealRepoStats(t *testing.T) {
 		t.Skip("skipping real repo stats (set VERBOSE=1 to run)")
 	}
 
-	root := "/home/pdbethke/PycharmProjects/corralai/.claude/worktrees/canary-punch-list"
+	root := "."
 	cands, excl, err := Enumerate(root)
 	if err != nil {
 		t.Fatalf("Enumerate: %v", err)
@@ -464,5 +464,157 @@ func TestEnumerateRealRepoStats(t *testing.T) {
 				t.Logf("    %s", f)
 			}
 		}
+	}
+}
+
+func TestEnumerateAccountsNestedFilesInSkippedDirs(t *testing.T) {
+	// FINDING 1: Verify that skippedDirFiles recursively descends into nested
+	// subdirectories within a skipped directory. A future edit that returned
+	// SkipDir for nested dirs would silently reintroduce invisible files two
+	// levels down.
+	root := writeTree(t, map[string]string{
+		"pkg/a.go":               "package pkg\n",
+		"pkg/a_test.go":          "package pkg\n",
+		"build/x.go":             "package build\n",
+		"build/nested/y.go":      "package nested\n",
+		"build/nested/deep/z.go": "package deep\n",
+	})
+
+	cands, excl, err := Enumerate(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(cands) != 1 {
+		t.Fatalf("want 1 candidate, got %d", len(cands))
+	}
+
+	// Count skipped-dir exclusions and verify all build/ files are accounted
+	var skipped int
+	skippedPaths := map[string]bool{}
+	for _, e := range excl {
+		if e.Reason == ReasonSkippedDir {
+			skipped++
+			skippedPaths[e.Path] = true
+		}
+	}
+
+	expectedSkipped := []string{"build/x.go", "build/nested/y.go", "build/nested/deep/z.go"}
+	for _, path := range expectedSkipped {
+		if !skippedPaths[path] {
+			t.Errorf("nested file %s not accounted as skipped-dir", path)
+		}
+	}
+
+	if skipped != 3 {
+		t.Errorf("skipped-dir exclusions = %d, want 3 (including nested files)", skipped)
+	}
+}
+
+func TestEnumerateInvisibleGitDir(t *testing.T) {
+	// FINDING 2: Verify that .git/ directory files stay completely invisible
+	// (not accounted as exclusions). This is a security invariant: .git is not
+	// source code, and listing its objects would swamp a signed report.
+	root := writeTree(t, map[string]string{
+		"pkg/a.go":             "package pkg\n",
+		"pkg/a_test.go":        "package pkg\n",
+		".git/HEAD":            "ref: refs/heads/main\n",
+		".git/objects/ab/cdef": "binary\n",
+		".git/refs/heads/main": "hash\n",
+	})
+
+	cands, excl, err := Enumerate(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify no exclusions mention .git
+	for _, e := range excl {
+		if strings.Contains(e.Path, ".git") {
+			t.Errorf(".git file leaked into exclusions: %s (reason: %s)", e.Path, e.Reason)
+		}
+	}
+
+	// Verify .git is completely invisible: not in cands, not in excl
+	for _, c := range cands {
+		if strings.Contains(c.Path, ".git") {
+			t.Errorf(".git file leaked into candidates: %s", c.Path)
+		}
+	}
+
+	// Verify only the legitimate files are accounted
+	if len(cands) != 1 || cands[0].Path != "pkg/a.go" {
+		t.Errorf("candidates = %+v, want only pkg/a.go", cands)
+	}
+	reasons := map[string]bool{}
+	for _, e := range excl {
+		reasons[e.Reason] = true
+	}
+	if reasons[ReasonSkippedDir] {
+		t.Errorf(".git leaked as skipped-dir exclusion")
+	}
+}
+
+func TestEnumerateExcludesSymlinkInSkippedDir(t *testing.T) {
+	// FINDING 3: Verify that symlinks inside skipped directories are not
+	// followed (the same security invariant as TestEnumerateExcludesSymlinkOutOfTree,
+	// but for the skipped-dir sub-walk). A symlink in build/ pointing to ~/.aws/credentials
+	// must not be followed. Non-regular entries in skipped dirs are silently filtered
+	// (not listed as exclusions) to keep the report clean.
+	outside := filepath.Join(t.TempDir(), "secret.go")
+	if err := os.WriteFile(outside, []byte("package secret // LEAKED\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	root := writeTree(t, map[string]string{
+		"pkg/a.go":         "package pkg\n",
+		"pkg/a_test.go":    "package pkg\n",
+		"build/regular.go": "package build\n",
+	})
+
+	// Try to create a symlink in the skipped dir pointing outside the tree
+	linkPath := filepath.Join(root, "build", "link.go")
+	if err := os.Symlink(outside, linkPath); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	cands, excl, err := Enumerate(root)
+	if err != nil {
+		t.Fatalf("Enumerate: %v", err)
+	}
+
+	// Verify the symlink inside the skipped dir is NOT followed:
+	// it should not appear as a candidate
+	for _, c := range cands {
+		if strings.Contains(c.Path, "link.go") {
+			t.Fatalf("symlink in skipped dir became a candidate: %s", c.Path)
+		}
+	}
+
+	// Verify the symlink was not traversed: outside file should not appear anywhere
+	allPaths := map[string]bool{}
+	for _, c := range cands {
+		allPaths[c.Path] = true
+	}
+	for _, e := range excl {
+		allPaths[e.Path] = true
+	}
+	if allPaths[filepath.Base(outside)] || allPaths["secret.go"] {
+		t.Fatalf("symlink in skipped dir was followed, leaking outside the tree")
+	}
+
+	// Verify only the regular file in build/ is accounted as skipped-dir
+	var foundRegular bool
+	for _, e := range excl {
+		if e.Path == "build/regular.go" && e.Reason == ReasonSkippedDir {
+			foundRegular = true
+		}
+		// Symlink should not appear in exclusions (silently filtered)
+		if e.Path == "build/link.go" {
+			t.Errorf("symlink should not appear in exclusions (non-regular entries in skipped dirs are silently filtered)")
+		}
+	}
+	if !foundRegular {
+		t.Errorf("build/regular.go not found as skipped-dir exclusion")
 	}
 }

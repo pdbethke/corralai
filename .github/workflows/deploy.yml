@@ -81,6 +81,15 @@ jobs:
           node --version || echo "node missing — js/ts-in-jail tests will SKIP"
           sudo npm install -g typescript @types/node || npm install -g typescript @types/node || true
           tsc --version || echo "tsc not available — ts-in-jail test will SKIP"
+      - name: Provision bubblewrap (audit gate — jail tests)
+        if: steps.filter.outputs.code == 'true'
+        run: |
+          sudo apt-get install -y bubblewrap || true
+          # Ubuntu 24.04 blocks unprivileged user namespaces, which is what
+          # bwrap needs. Relaxing it here is what lets the jail tests run
+          # instead of skipping; if it fails the tests skip as before.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          bwrap --version || echo "bwrap unavailable — jail tests will SKIP"
       - if: steps.filter.outputs.code == 'true'
         run: go test ./...
       - name: Install gosec

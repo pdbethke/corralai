@@ -168,7 +168,10 @@ func (f *fakeScorer) ScoreReport(ctx context.Context, codePath, code, test strin
 	if f.reportFn != nil {
 		return f.reportFn(ctx, codePath, code, test, mutants, testCmd)
 	}
-	return adequacy.Report{CompliantPass: true}, nil
+	// The GRADED shape, not a bare CompliantPass: post-canary, a report with
+	// CanaryKilled false means "this command never reads the file under audit",
+	// which is a specific diagnosis an unscripted default must not assert.
+	return adequacy.Report{CompliantPass: true, CanaryKilled: true}, nil
 }
 
 type fakeValidator struct {
@@ -728,9 +731,11 @@ func TestMatrixDrivesAdjudicationAndCandidates(t *testing.T) {
 		reportFn: func(_ context.Context, _, _, _ string, _ []adequacy.Mutant, testCmd string) (adequacy.Report, error) {
 			switch {
 			case strings.Contains(testCmd, "^TestA$"):
-				return adequacy.Report{CompliantPass: true, Killed: []string{"m1"}, Survived: []string{"m2"}}, nil
+				return adequacy.Report{CompliantPass: true, CanaryKilled: true, Total: 2,
+					Killed: []string{"m1"}, Survived: []string{"m2"}}, nil
 			case strings.Contains(testCmd, "^TestB$"):
-				return adequacy.Report{CompliantPass: true, Killed: nil, Survived: []string{"m1", "m2"}}, nil
+				return adequacy.Report{CompliantPass: true, CanaryKilled: true, Total: 2,
+					Killed: nil, Survived: []string{"m1", "m2"}}, nil
 			case strings.Contains(testCmd, "^TestC$"):
 				return adequacy.Report{CompliantPass: false}, nil
 			default:
@@ -1806,9 +1811,11 @@ func TestRunStatusRaceWithTick_Matrix(t *testing.T) {
 			time.Sleep(time.Millisecond)
 			switch {
 			case strings.Contains(testCmd, "^TestA$"):
-				return adequacy.Report{CompliantPass: true, Killed: []string{"m1"}, Survived: []string{"m2"}}, nil
+				return adequacy.Report{CompliantPass: true, CanaryKilled: true, Total: 2,
+					Killed: []string{"m1"}, Survived: []string{"m2"}}, nil
 			case strings.Contains(testCmd, "^TestB$"):
-				return adequacy.Report{CompliantPass: true, Killed: nil, Survived: []string{"m1", "m2"}}, nil
+				return adequacy.Report{CompliantPass: true, CanaryKilled: true, Total: 2,
+					Killed: nil, Survived: []string{"m1", "m2"}}, nil
 			default:
 				t.Fatalf("unexpected ScoreReport testCmd: %q", testCmd)
 				return adequacy.Report{}, nil
@@ -4069,5 +4076,121 @@ func TestTick_SuiteIgnoresFile_CarriesTheDiagnosisOntoTheVerdict(t *testing.T) {
 	}
 	if v.DevKillRate != 0 || v.Survivors != 0 {
 		t.Errorf("DevKillRate=%v Survivors=%d — nothing was graded, so both must be the empty 0", v.DevKillRate, v.Survivors)
+	}
+}
+
+// TestMatrix_PerTestCanarySurvival_IsUnscoredNotADeleteCandidate is the matrix
+// half of the canary gate. Each matrix cell issues its OWN check command
+// (SingleTestCmd for one selector), so the DEV suite's canary result says
+// nothing about it: `pytest test_x.py::test_y` can perfectly well not import
+// the module the whole-suite command does.
+//
+// When such a per-test command's canary survives, adequacy.Score returns
+// CompliantPass true with Total 0 and no kills. Reading only CompliantPass
+// scores that as a real measurement, and the row then says "this test caught
+// nothing — delete it" AND auto-CONFIRMS the critic's vacuous-test finding
+// against it. Both conclusions would be drawn from an invocation that graded
+// nothing, and both are persisted to the signed-record-linked Matrix and
+// CriticFindings sinks. The row must come back UNSCORED instead.
+func TestMatrix_PerTestCanarySurvival_IsUnscoredNotADeleteCandidate(t *testing.T) {
+	const mission int64 = 32
+	mutants := []adequacy.Mutant{{ID: "m1", Code: "c1"}, {ID: "m2", Code: "c2"}}
+	scorer := &fakeScorer{
+		devKillRate: 0.9, devSurvivors: mutants, poolSurvivors: nil,
+		reportFn: func(_ context.Context, _, _, _ string, _ []adequacy.Mutant, testCmd string) (adequacy.Report, error) {
+			switch {
+			case strings.Contains(testCmd, "^TestA$"):
+				// A real measurement: this single-test command DOES exercise the
+				// file, and it kills m1. It is the Catchable floor.
+				return adequacy.Report{CompliantPass: true, CanaryKilled: true, Total: 2,
+					Killed: []string{"m1"}, Survived: []string{"m2"}}, nil
+			case strings.Contains(testCmd, "^TestB$"):
+				// This selector's command passes its baseline AND passes on
+				// deliberately invalid source: it never reads the audited file,
+				// so its zero kills mean nothing about TestB's quality.
+				return adequacy.Report{CompliantPass: true, CanaryKilled: false}, nil
+			default:
+				t.Fatalf("unexpected ScoreReport testCmd: %q", testCmd)
+				return adequacy.Report{}, nil
+			}
+		},
+	}
+	validator := &fakeValidator{mutants: mutants}
+
+	rs := testRunSpec()
+	rs.Matrix = true
+	d := newTestDriverWithSpec(t, mission, scorer, validator, 0.5, rs)
+	d.Signer = &fakeSigner{}
+	d.Enumerator = &fakeEnumerator{out: "TestA\nTestB\nok  \tpkg\t0.002s\n"}
+	matrixSink := &fakeMatrixSink{}
+	d.Matrix = matrixSink
+	criticSink := &fakeCriticSink{}
+	d.CriticFindings = criticSink
+
+	ctx := context.Background()
+	ready := claimAllReady(t, d.Q)
+	tc, mg := ready[RoleTestCritic], ready[RoleMutantGenerator]
+	if tc == nil || mg == nil {
+		t.Fatalf("expected test-critic and mutant-generator both ready, got: %v", keysOf(ready))
+	}
+	if _, err := d.Q.AddFinding(queue.Finding{
+		MissionID: mission, TaskID: tc.ID, Reporter: "test-critic", Type: "bug",
+		Severity: "high", Target: "TestB",
+		Evidence: "this test asserts nothing — it can never fail",
+		Scope:    ScopeWholeTest, TestFile: "target_test.go", TestSelector: "TestB",
+	}); err != nil {
+		t.Fatalf("AddFinding (TestB): %v", err)
+	}
+	mustComplete(t, d.Q, tc.ID, "flagged TestB")
+	mustComplete(t, d.Q, mg.ID, "raw mutants")
+	if _, err := d.Tick(ctx, mission); err != nil {
+		t.Fatalf("Tick (dev-adequacy): %v", err)
+	}
+	tw := claimTaskByID(t, d.Q, d.runs[mission].testWriterTaskID)
+	mustComplete(t, d.Q, tw.ID, "pool test source")
+	v, err := d.Tick(ctx, mission)
+	if err != nil {
+		t.Fatalf("Tick (pool-adequacy + matrix + aggregate): %v", err)
+	}
+	if v == nil {
+		t.Fatal("expected a verdict")
+	}
+
+	rsx, ok := d.RunStatus(mission)
+	if !ok || rsx.Matrix == nil {
+		t.Fatal("the matrix never ran — this test would pass vacuously")
+	}
+	row := matrixRowFor(rsx.Matrix.Rows, "TestB")
+	if row == nil {
+		t.Fatal("no matrix row for TestB")
+	}
+	if row.Scored {
+		t.Error("a per-test command whose canary survived graded NOTHING — its row must not be Scored")
+	}
+	if row.DeleteCandidate {
+		t.Error("an ungraded row must never be a delete-candidate: that recommends deleting a test on evidence that does not exist")
+	}
+	// The control: TestA's command really did run, so it stays scored.
+	if a := matrixRowFor(rsx.Matrix.Rows, "TestA"); a == nil || !a.Scored || a.Kills != 1 {
+		t.Fatalf("TestA must remain a real measurement, got %+v", a)
+	}
+
+	if len(matrixSink.calls) != 1 {
+		t.Fatalf("MatrixSink.Record calls = %d, want 1", len(matrixSink.calls))
+	}
+	for _, o := range matrixSink.calls[0].obs {
+		if o.TestSelector == "TestB" && o.DeleteCandidate {
+			t.Error("the ungraded row reached the signed-record-linked matrix sink as a delete-candidate")
+		}
+	}
+
+	// And the finding against it must stay INCONCLUSIVE: confirming "it can
+	// never fail" off a command that never ran the file is a fabricated
+	// attribution against the critic's target.
+	if len(criticSink.obs) != 1 {
+		t.Fatalf("CriticFindings.Record obs = %d, want 1: %+v", len(criticSink.obs), criticSink.obs)
+	}
+	if got := criticSink.obs[0].Adjudication; got != AdjUnadjudicated {
+		t.Errorf("Adjudication = %q, want %q — a finding must not be auto-confirmed off an ungraded row", got, AdjUnadjudicated)
 	}
 }

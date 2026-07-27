@@ -95,7 +95,17 @@ func (d *Driver) tickMatrix(ctx context.Context, run *runState) {
 			log.Printf("advpool: matrix: score failed for %q: %v", tr.Selector, serr)
 			return 0, nil, false
 		}
-		if !rep.CompliantPass {
+		// Both validity flags, and CanaryKilled is NOT redundant with the dev
+		// suite's: this cell issues its OWN command (SingleTestCmd for one
+		// selector), and `pytest test_x.py::test_y` can fail to import the
+		// module the whole-suite command imports. When that command's canary
+		// survives, adequacy.Score returns CompliantPass true with Total 0 and
+		// no kills — scoring it would record "this test caught nothing, delete
+		// it" and auto-CONFIRM a vacuous-test finding against it, both from an
+		// invocation that graded nothing, and both persisted to the
+		// signed-record-linked Matrix/CriticFindings sinks. Unscored instead:
+		// matrix.Build accounts ok=false as a row that was never measured.
+		if !rep.CompliantPass || !rep.CanaryKilled {
 			return 0, nil, false
 		}
 		return len(rep.Killed), rep.Killed, true

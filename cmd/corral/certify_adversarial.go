@@ -54,6 +54,12 @@ type advVerdict struct {
 	// not pass on the unmutated code in the jail, so nothing was graded. Drives
 	// the "could not grade" readout instead of a fabricated kill tally.
 	BaselineFailed bool `json:"BaselineFailed"`
+	// SuiteIgnoresFile mirrors advpool.Verdict.SuiteIgnoresFile: the suite
+	// passed on deliberately invalid source, so it never compiles or imports
+	// the audited file and nothing about it was graded. A DIFFERENT readout
+	// from BaselineFailed — the suite is fine, the check command is not
+	// pointed at this file.
+	SuiteIgnoresFile bool `json:"SuiteIgnoresFile"`
 }
 
 // advStatus mirrors brain.AdvPoolStatusOut (get_adversarial_run's output).
@@ -307,6 +313,19 @@ func renderAdvVerdict(w io.Writer, codePath string, v advVerdict) {
 	fmt.Fprintf(w, "\nadversarial verdict — %s @ %s\n", codePath, commit)
 	if v.Lang != "" {
 		fmt.Fprintf(w, "  language:      %s\n", v.Lang)
+	}
+	if v.SuiteIgnoresFile {
+		// The suite PASSED on source that cannot compile: it provably never
+		// compiles or imports this file, so every mutant of it "survived" for a
+		// reason that has nothing to do with test quality. Checked before
+		// BaselineFailed — it is the more specific diagnosis, and it points the
+		// operator at the check command rather than at their build.
+		fmt.Fprintf(w, "  status:        COULD-NOT-GRADE\n")
+		fmt.Fprintf(w, "  reason:        the check command never compiles or imports this file\n")
+		fmt.Fprintf(w, "                 (it passed on deliberately invalid source, so no mutant of this file\n")
+		fmt.Fprintf(w, "                 could ever have been caught; point --test at a command that runs it)\n")
+		fmt.Fprintf(w, "  mutants:       %d generated, 0 graded\n", v.MutantsTotal)
+		return
 	}
 	if v.BaselineFailed {
 		// The dev suite did not pass on the UNMUTATED code in the jail: nothing

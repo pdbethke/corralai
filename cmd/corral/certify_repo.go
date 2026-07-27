@@ -441,7 +441,16 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 	// ungradable WITH ITS REASON, never a 0.0 kill rate that would read as
 	// "terrible tests". (Scan re-asserts this; setting it here means the
 	// adapter is honest on its own, for any caller.)
-	res := reposcan.FileResult{Verdict: v, Gradable: !v.BaselineFailed}
+	res := reposcan.FileResult{Verdict: v, Gradable: !v.BaselineFailed && !v.SuiteIgnoresFile}
+	// Checked BEFORE BaselineFailed so the more specific diagnosis wins: a
+	// suite that passes on invalid source is not broken, it is pointed at
+	// something other than this file, and an operator told "baseline failed"
+	// would go debug the wrong thing.
+	if v.SuiteIgnoresFile {
+		res.Reason = reposcan.ReasonSuiteIgnoresFile
+		l.note("%s: the check command never compiles or imports this file — not graded\n", j.Path)
+		return res, nil
+	}
 	if v.BaselineFailed {
 		res.Reason = reposcan.ReasonBaselineFailed
 		l.note("%s: baseline failed — not graded\n", j.Path)

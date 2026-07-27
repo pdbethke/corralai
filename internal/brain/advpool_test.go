@@ -68,8 +68,11 @@ func (stubScorer) Score(_ context.Context, _, _, _ string, _ []adequacy.Mutant, 
 	return 0, nil, nil
 }
 
+// The graded shape (baseline passed AND canary killed) rather than the bare
+// CompliantPass: a report with CanaryKilled false means "the suite never reads
+// this file", which is a specific diagnosis these tests are not making.
 func (stubScorer) ScoreReport(_ context.Context, _, _, _ string, _ []adequacy.Mutant, _ string) (adequacy.Report, error) {
-	return adequacy.Report{CompliantPass: true}, nil
+	return adequacy.Report{CompliantPass: true, CanaryKilled: true}, nil
 }
 
 type stubValidator struct{}

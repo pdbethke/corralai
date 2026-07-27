@@ -788,3 +788,51 @@ func TestNewLocalExecutorWiresASeedCacheEvenWhenTheJailIsUnavailable(t *testing.
 		t.Fatal("seed build must fail closed when the sandbox could not be resolved")
 	}
 }
+
+// TestLocalExecutorExecuteSuiteIgnoresFileIsUngradable proves the adapter maps
+// the canary's own diagnosis to its own reason. The baseline here is GREEN —
+// that is the whole point: a suite that passes both its baseline and
+// deliberately invalid source is not broken, it is pointed somewhere else, and
+// reporting it as baseline-failed would send an operator to debug their build.
+func TestLocalExecutorExecuteSuiteIgnoresFileIsUngradable(t *testing.T) {
+	ex := localExecutor{
+		baselineRuns: 2,
+		newBaseline: func(context.Context, localAuditInput) (reposcan.BaselineRunner, func(), error) {
+			return &scriptedBaseline{results: []bool{true, true}}, func() {}, nil
+		},
+		audit: func(context.Context, localAuditInput) (advpool.Verdict, error) {
+			return advpool.Verdict{SuiteIgnoresFile: true}, nil
+		},
+	}
+	res, err := ex.Execute(context.Background(), reposcan.Job{Path: "pkg/a.go", Goal: reposcan.Goal{Text: "g"}})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.Gradable {
+		t.Error("a suite that never reads the file must not be gradable")
+	}
+	if res.Reason != reposcan.ReasonSuiteIgnoresFile {
+		t.Errorf("Reason = %q, want %q", res.Reason, reposcan.ReasonSuiteIgnoresFile)
+	}
+}
+
+// TestLocalExecutorSuiteIgnoresFileBeatsBaselineFailed pins the ORDER: a
+// verdict carrying both flags is reported as the more specific diagnosis.
+func TestLocalExecutorSuiteIgnoresFileBeatsBaselineFailed(t *testing.T) {
+	ex := localExecutor{
+		baselineRuns: 2,
+		newBaseline: func(context.Context, localAuditInput) (reposcan.BaselineRunner, func(), error) {
+			return &scriptedBaseline{results: []bool{true, true}}, func() {}, nil
+		},
+		audit: func(context.Context, localAuditInput) (advpool.Verdict, error) {
+			return advpool.Verdict{SuiteIgnoresFile: true, BaselineFailed: true}, nil
+		},
+	}
+	res, err := ex.Execute(context.Background(), reposcan.Job{Path: "pkg/a.go", Goal: reposcan.Goal{Text: "g"}})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.Reason != reposcan.ReasonSuiteIgnoresFile {
+		t.Errorf("Reason = %q, want %q", res.Reason, reposcan.ReasonSuiteIgnoresFile)
+	}
+}

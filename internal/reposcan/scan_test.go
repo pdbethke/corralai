@@ -184,3 +184,36 @@ func (reusingExec) Execute(ctx context.Context, j Job) (FileResult, error) {
 		ComputedAt: time.Now().Add(-24 * time.Hour),
 	}, nil
 }
+
+// ignoredFileExec returns a verdict whose suite never compiles or imports the
+// audited file (the canary survived) but which — like a real executor that
+// forgot to check — still claims to be gradable with a 0.0 kill rate.
+type ignoredFileExec struct{}
+
+func (ignoredFileExec) Execute(ctx context.Context, j Job) (FileResult, error) {
+	return FileResult{
+		Verdict:  advpool.Verdict{SuiteIgnoresFile: true, DevKillRate: 0, MutantsTotal: 8},
+		Gradable: true,
+	}, nil
+}
+
+// TestScanMarksSuiteIgnoresFileUngradable proves Scan's backstop covers the
+// second could-not-grade case as well as the first: a 0.0 from a suite that
+// provably never reads the file must not reach the report as a real score,
+// and it must carry ITS OWN reason rather than the baseline-failed one.
+func TestScanMarksSuiteIgnoresFileUngradable(t *testing.T) {
+	c := mapCache{}
+	out := Scan(context.Background(), jobsN(1), ignoredFileExec{}, c, 1)
+	if len(out) != 1 {
+		t.Fatalf("want 1 result, got %d", len(out))
+	}
+	if out[0].Gradable {
+		t.Error("a suite that never reads the file must not be gradable")
+	}
+	if out[0].Reason != ReasonSuiteIgnoresFile {
+		t.Errorf("Reason = %q, want %q", out[0].Reason, ReasonSuiteIgnoresFile)
+	}
+	if len(c) != 0 {
+		t.Errorf("an ungradable result must not be cached, got %d entries", len(c))
+	}
+}

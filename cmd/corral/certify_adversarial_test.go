@@ -468,3 +468,41 @@ func TestRenderAdvVerdictNormalPathUnaffected(t *testing.T) {
 		t.Fatalf("a graded verdict must not claim could-not-grade:\n%s", out)
 	}
 }
+
+// TestRenderAdvVerdictSuiteIgnoresFile is the canary's readout: a suite that
+// passed on deliberately invalid source graded nothing, so the --local summary
+// must say COULD-NOT-GRADE instead of printing the fabricated 0.00 that made
+// this indistinguishable from a genuinely terrible suite. It must ALSO not
+// reuse the baseline-failed wording — the two send operators to different
+// places.
+func TestRenderAdvVerdictSuiteIgnoresFile(t *testing.T) {
+	var b strings.Builder
+	renderAdvVerdict(&b, "internal/adequacy/score.go", advVerdict{
+		Lang: "go", Commit: "abc1234", MutantsTotal: 20,
+		DevKillRate: 0, Survivors: 0, Status: "needs-review",
+		SuiteIgnoresFile: true,
+	})
+	out := b.String()
+	if !strings.Contains(out, "COULD-NOT-GRADE") {
+		t.Fatalf("a suite that ignores the file must report COULD-NOT-GRADE, got:\n%s", out)
+	}
+	if strings.Contains(out, "dev_kill_rate") {
+		t.Fatalf("nothing was graded — no kill rate may be printed:\n%s", out)
+	}
+	if !strings.Contains(out, "never compiles or imports this file") {
+		t.Fatalf("the readout must name THIS diagnosis, not the baseline one:\n%s", out)
+	}
+	if strings.Contains(out, "baseline build/test failed") {
+		t.Fatalf("a suite that ignores the file is not a failed baseline:\n%s", out)
+	}
+}
+
+// TestAdvVerdictFromPoolCarriesSuiteIgnoresFile proves the flag survives the
+// pool→wire conversion; without it the --local readout silently loses the
+// diagnosis and falls through to the fabricated 0.00.
+func TestAdvVerdictFromPoolCarriesSuiteIgnoresFile(t *testing.T) {
+	got := advVerdictFromPool(advpool.Verdict{SuiteIgnoresFile: true})
+	if !got.SuiteIgnoresFile {
+		t.Error("advVerdictFromPool dropped SuiteIgnoresFile")
+	}
+}

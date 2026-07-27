@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"fmt"
+	"math"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -80,6 +81,57 @@ type fakeScorer struct {
 	// and behaving as a scorer that always finds a runnable, zero-kill
 	// baseline.
 	reportFn func(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (adequacy.Report, error)
+
+	// devReported records that the dev-adequacy ScoreReport call has happened.
+	// The driver scores the dev suite through ScoreReport (so it can read
+	// CompliantPass/CanaryKilled instead of inferring them), and that is always
+	// the FIRST ScoreReport call of a run — every later one is the matrix's
+	// per-test score. Routing only the first through the Score-shaped scripting
+	// fields keeps every existing fakeScorer literal meaning exactly what it
+	// meant when the dev score went through Score.
+	devReported bool
+
+	// devCanarySurvives makes the DEV report the canary-survived shape
+	// (CompliantPass true, CanaryKilled false): a suite that passes its
+	// baseline and also passes on deliberately invalid source, i.e. one that
+	// never compiles or imports the file under audit.
+	devCanarySurvives bool
+}
+
+// devReportFrom encodes a scripted (killRate, survivors) pair as the
+// adequacy.Report the real scorer would have returned for a graded run:
+// baseline passed, canary killed, these mutants survived. Total/Killed are
+// scaled (not len(mutants)) purely so KillRate() reproduces the scripted rate
+// exactly for any mutant count — the driver takes its mutant TOTAL from the
+// mutant slice, never from the report, so nothing else reads these.
+// Survivors are named by the ID the mutant carries IN `mutants` — a sharded
+// run rewrites parsed mutant IDs to "s<shard>/<id>" after a test scripted its
+// survivors, so a scripted survivor is matched by ID first and by mutant CODE
+// second. A scripted survivor matching neither is reported as-is, which the
+// driver then drops (it is not a mutant of this exam).
+func devReportFrom(killRate float64, survivors, mutants []adequacy.Mutant) adequacy.Report {
+	const scale = 10000
+	rep := adequacy.Report{CompliantPass: true, CanaryKilled: true, Total: scale}
+	for i := 0; i < int(math.Round(killRate*scale)); i++ {
+		rep.Killed = append(rep.Killed, fmt.Sprintf("k%d", i))
+	}
+	byID := map[string]bool{}
+	byCode := map[string]string{}
+	for _, m := range mutants {
+		byID[m.ID] = true
+		byCode[m.Code] = m.ID
+	}
+	for _, s := range survivors {
+		switch {
+		case byID[s.ID]:
+			rep.Survived = append(rep.Survived, s.ID)
+		case byCode[s.Code] != "":
+			rep.Survived = append(rep.Survived, byCode[s.Code])
+		default:
+			rep.Survived = append(rep.Survived, s.ID)
+		}
+	}
+	return rep
 }
 
 func (f *fakeScorer) Score(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (float64, []adequacy.Mutant, error) {
@@ -98,6 +150,21 @@ func (f *fakeScorer) Score(ctx context.Context, codePath, code, test string, mut
 }
 
 func (f *fakeScorer) ScoreReport(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (adequacy.Report, error) {
+	if !f.devReported {
+		// The dev-adequacy score: run it through the SAME bookkeeping Score
+		// does (calls, err/failFirstN, successes) so the pool-score and
+		// auto-refute calls that follow still land on their scripted slots,
+		// then convert the result into the equivalent Report.
+		kr, survivors, err := f.Score(ctx, codePath, code, test, mutants, testCmd)
+		if err != nil {
+			return adequacy.Report{}, err
+		}
+		f.devReported = true
+		if f.devCanarySurvives {
+			return adequacy.Report{CompliantPass: true, CanaryKilled: false}, nil
+		}
+		return devReportFrom(kr, survivors, mutants), nil
+	}
 	if f.reportFn != nil {
 		return f.reportFn(ctx, codePath, code, test, mutants, testCmd)
 	}
@@ -3515,8 +3582,15 @@ func (s *shadowScoreFailScorer) Score(_ context.Context, _, _, _ string, _ []ade
 	return 0, nil, fmt.Errorf("shadow jail run exploded")
 }
 
-func (s *shadowScoreFailScorer) ScoreReport(_ context.Context, _, _, _ string, _ []adequacy.Mutant, _ string) (adequacy.Report, error) {
-	return adequacy.Report{CompliantPass: true}, nil
+// ScoreReport is the dev-adequacy path (the driver's FIRST scoring call), so
+// it delegates to Score's own script — the first call succeeds, and the
+// challenger calls that follow still hit the failure this fake exists for.
+func (s *shadowScoreFailScorer) ScoreReport(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (adequacy.Report, error) {
+	kr, survivors, err := s.Score(ctx, codePath, code, test, mutants, testCmd)
+	if err != nil {
+		return adequacy.Report{}, err
+	}
+	return devReportFrom(kr, survivors, mutants), nil
 }
 
 // TestShadowScoringFailureIsNotFatal proves a challenger seat whose SCORING
@@ -3796,8 +3870,14 @@ func (s *clockAdvancingScorer) Score(_ context.Context, _, _, test string, _ []a
 	return 1.0, nil, nil
 }
 
-func (s *clockAdvancingScorer) ScoreReport(_ context.Context, _, _, _ string, _ []adequacy.Mutant, _ string) (adequacy.Report, error) {
-	return adequacy.Report{CompliantPass: true}, nil
+// ScoreReport is the dev-adequacy call, delegated to Score so it consumes the
+// same first-call slot the shadow-call accounting above depends on.
+func (s *clockAdvancingScorer) ScoreReport(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (adequacy.Report, error) {
+	kr, survivors, err := s.Score(ctx, codePath, code, test, mutants, testCmd)
+	if err != nil {
+		return adequacy.Report{}, err
+	}
+	return devReportFrom(kr, survivors, mutants), nil
 }
 
 // newShadowedRun mirrors newShardedRun but sets a challenger model, so
@@ -3870,5 +3950,124 @@ func TestShadowShardTelemetryEmitted(t *testing.T) {
 		if e.detail["region_complexity"] == nil || e.detail["region_lines"] == nil {
 			t.Errorf("shadow beat is missing the region difficulty control: %#v", e.detail)
 		}
+	}
+}
+
+// canaryScorer reports a suite that passes its baseline but never reads the
+// file: CompliantPass true, CanaryKilled false.
+type canaryScorer struct{}
+
+func (canaryScorer) Score(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (float64, []adequacy.Mutant, error) {
+	return 0, nil, nil
+}
+func (canaryScorer) ScoreReport(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (adequacy.Report, error) {
+	return adequacy.Report{CompliantPass: true, CanaryKilled: false}, nil
+}
+
+// brokenBaselineScorer reports the OTHER could-not-grade case: the suite
+// itself fails on unmutated code.
+type brokenBaselineScorer struct{}
+
+func (brokenBaselineScorer) Score(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (float64, []adequacy.Mutant, error) {
+	return 0, nil, nil
+}
+func (brokenBaselineScorer) ScoreReport(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (adequacy.Report, error) {
+	return adequacy.Report{CompliantPass: false, CanaryKilled: false}, nil
+}
+
+// gradedScorer is the control: a real measurement (baseline passed, canary
+// killed) that happens to score zero. Neither could-not-grade flag may fire.
+type gradedScorer struct{}
+
+func (gradedScorer) Score(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (float64, []adequacy.Mutant, error) {
+	return 0, mutants, nil
+}
+func (gradedScorer) ScoreReport(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (adequacy.Report, error) {
+	return adequacy.Report{CompliantPass: true, CanaryKilled: true, Total: len(mutants), Survived: []string{"m1"}}, nil
+}
+
+// The two diagnoses must not merge: "your suite is broken" and "your suite
+// is fine but points elsewhere" send an operator to different places.
+func TestCanarySurvivalIsNotReportedAsABaselineFailure(t *testing.T) {
+	run := &runState{}
+	if err := applyDevScore(context.Background(), run, canaryScorer{}, oneMutant()); err != nil {
+		t.Fatalf("applyDevScore: %v", err)
+	}
+	if run.baselineFailed {
+		t.Error("a surviving canary was mislabeled as a failed baseline")
+	}
+	if !run.suiteIgnoresFile {
+		t.Error("a surviving canary must set suiteIgnoresFile")
+	}
+}
+
+func TestBrokenBaselineIsStillABaselineFailure(t *testing.T) {
+	run := &runState{}
+	if err := applyDevScore(context.Background(), run, brokenBaselineScorer{}, oneMutant()); err != nil {
+		t.Fatalf("applyDevScore: %v", err)
+	}
+	if !run.baselineFailed {
+		t.Error("a failed baseline must still be reported as one")
+	}
+	if run.suiteIgnoresFile {
+		t.Error("a failed baseline is not the same as a suite that ignores the file")
+	}
+}
+
+// A genuine zero — the suite ran, the canary died, nothing was killed — must
+// stay gradable: the whole point of the flags is that they do NOT fire on a
+// real measurement that happens to be bad.
+func TestGenuineZeroKillIsStillGraded(t *testing.T) {
+	run := &runState{}
+	mutants := oneMutant()
+	if err := applyDevScore(context.Background(), run, gradedScorer{}, mutants); err != nil {
+		t.Fatalf("applyDevScore: %v", err)
+	}
+	if run.baselineFailed || run.suiteIgnoresFile {
+		t.Errorf("a graded zero must not set a could-not-grade flag: baselineFailed=%v suiteIgnoresFile=%v",
+			run.baselineFailed, run.suiteIgnoresFile)
+	}
+	if !run.devScored || run.devKillRate != 0 || run.mutantsTotal != 1 {
+		t.Errorf("devScored=%v devKillRate=%v mutantsTotal=%d", run.devScored, run.devKillRate, run.mutantsTotal)
+	}
+	if len(run.devSurvivors) != 1 || run.devSurvivors[0].ID != "m1" {
+		t.Errorf("survivors were not mapped back from the report: %#v", run.devSurvivors)
+	}
+}
+
+func oneMutant() []adequacy.Mutant { return []adequacy.Mutant{{ID: "m1", Code: "x"}} }
+
+// TestTick_SuiteIgnoresFile_CarriesTheDiagnosisOntoTheVerdict drives a whole
+// run whose suite passes on deliberately invalid source. It must converge to a
+// verdict that says so — not to the fabricated "0.00, no survivors" that is
+// byte-identical to a failed baseline.
+func TestTick_SuiteIgnoresFile_CarriesTheDiagnosisOntoTheVerdict(t *testing.T) {
+	const mission int64 = 991
+	scorer := &fakeScorer{devCanarySurvives: true}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, {ID: "m1", Code: "c1"}}}
+	d, _ := newTestDriver(t, mission, scorer, validator, 0.8)
+
+	ready := claimAllReady(t, d.Q)
+	mustComplete(t, d.Q, ready[RoleTestCritic].ID, "no vacuous tests found")
+	mustComplete(t, d.Q, ready[RoleMutantGenerator].ID, "raw mutants")
+
+	v, err := d.Tick(context.Background(), mission)
+	if err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	if v == nil {
+		t.Fatal("want a converged verdict")
+	}
+	if !v.SuiteIgnoresFile {
+		t.Error("the verdict lost the canary diagnosis: SuiteIgnoresFile = false")
+	}
+	if v.BaselineFailed {
+		t.Error("a suite that ignores the file must NOT be reported as a failed baseline")
+	}
+	if v.Status != StatusNeedsReview {
+		t.Errorf("Status = %q, want needs-review (nothing was graded)", v.Status)
+	}
+	if v.DevKillRate != 0 || v.Survivors != 0 {
+		t.Errorf("DevKillRate=%v Survivors=%d — nothing was graded, so both must be the empty 0", v.DevKillRate, v.Survivors)
 	}
 }

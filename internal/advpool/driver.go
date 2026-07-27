@@ -188,8 +188,13 @@ type Verdict struct {
 	// (fail-closed), but the readout says "could not grade" rather than
 	// reporting a fabricated kill tally. See runState.baselineFailed.
 	BaselineFailed bool
-	RecordID       int64  // the signed build-record id (0 if signing skipped/failed)
-	RecordHead     string // the record's ledger head
+	// SuiteIgnoresFile is true when the dev suite passed on deliberately
+	// invalid source — it provably never compiles or imports the file under
+	// audit, so DevKillRate is meaningless. DISTINCT from BaselineFailed:
+	// the suite is fine, the check command points somewhere else.
+	SuiteIgnoresFile bool
+	RecordID         int64  // the signed build-record id (0 if signing skipped/failed)
+	RecordHead       string // the record's ledger head
 }
 
 // RunState is the observable status of one run: Converged is true once the run
@@ -272,6 +277,14 @@ type runState struct {
 	// meaningless 0 and devSurvivors is empty because NOTHING was actually
 	// graded, so the readout must say "could not grade", never fabricate a tally.
 	baselineFailed bool
+	// suiteIgnoresFile is true when the dev suite PASSED its baseline but also
+	// passed on deliberately invalid source (adequacy.Report.CanaryKilled=false):
+	// the check command provably never compiles or imports the file under audit,
+	// so devKillRate is a meaningless 0 and no mutant was ever graded. Kept
+	// SEPARATE from baselineFailed on purpose — "your suite is broken or your
+	// environment is wrong" and "your suite is fine but it is pointed somewhere
+	// else" send an operator to completely different places.
+	suiteIgnoresFile bool
 	// mutants is the FULL merged mutant set (every shard, pre-scoring) that
 	// tickDevAdequacy graded the dev suite against — retained (not just its
 	// count/survivors) so tickAggregate's critic auto-refute step can
@@ -733,6 +746,50 @@ func (d *Driver) Tick(ctx context.Context, missionID int64) (*Verdict, error) {
 	return nil, nil
 }
 
+// applyDevScore grades the dev suite against `mutants` and records the result
+// on run. It reads ScoreReport (not Score) so the two could-not-grade cases
+// arrive as their own flags instead of being inferred from the tally: the old
+// inference (killRate==0 && len(survivors)==0) cannot tell a failed baseline
+// from a suite that never reads the file, because BOTH return early with an
+// empty report — and conflating them sends an operator to debug the wrong
+// thing entirely.
+func applyDevScore(ctx context.Context, run *runState, scorer Scorer, mutants []adequacy.Mutant) error {
+	rep, serr := scorer.ScoreReport(ctx, run.rs.CodePath, run.rs.Code, run.rs.DevTestCode, mutants, run.rs.TestCmd)
+	if serr != nil {
+		return fmt.Errorf("advpool: score dev tests: %w", serr)
+	}
+	run.baselineFailed = !rep.CompliantPass
+	// Gated on CompliantPass: when the baseline itself failed, adequacy.Score
+	// returns BEFORE running the canary, so CanaryKilled is false for a reason
+	// that is not "the suite ignores this file". Only a suite that PASSED its
+	// baseline and then also passed on invalid source has proven it never
+	// compiles or imports the file.
+	run.suiteIgnoresFile = rep.CompliantPass && !rep.CanaryKilled
+	run.devScored = true
+	run.devKillRate = rep.KillRate()
+	run.mutantsTotal = len(mutants)
+	run.devSurvivors = survivorsFrom(rep, mutants)
+	run.mutants = mutants
+	return nil
+}
+
+// survivorsFrom maps a report's surviving mutant IDs back to the mutants they
+// name, preserving the report's order. IDs with no matching mutant are
+// dropped: a survivor the caller cannot produce the code for is not evidence.
+func survivorsFrom(rep adequacy.Report, mutants []adequacy.Mutant) []adequacy.Mutant {
+	byID := make(map[string]adequacy.Mutant, len(mutants))
+	for _, m := range mutants {
+		byID[m.ID] = m
+	}
+	survivors := make([]adequacy.Mutant, 0, len(rep.Survived))
+	for _, id := range rep.Survived {
+		if m, ok := byID[id]; ok {
+			survivors = append(survivors, m)
+		}
+	}
+	return survivors
+}
+
 // tickDevAdequacy is step 2: once mutant-generator is done, parse its
 // mutants, score the dev's own tests against them (brain-side, via Scorer —
 // never the worker's self-report), and promote test-writer re-rendered with
@@ -851,23 +908,10 @@ func (d *Driver) tickDevAdequacy(ctx context.Context, missionID int64, run *runS
 			run.regionsTotal, len(run.droppedRegions))
 	}
 
-	killRate, survivors, serr := d.Scorer.Score(ctx, run.rs.CodePath, run.rs.Code, run.rs.DevTestCode, mutants, run.rs.TestCmd)
-	if serr != nil {
-		return fmt.Errorf("advpool: score dev tests: %w", serr)
+	if err := applyDevScore(ctx, run, d.Scorer, mutants); err != nil {
+		return err
 	}
-	// Baseline honesty: adequacy fail-closes when the dev suite can't pass on the
-	// UNMUTATED code (CompliantPass=false → Total 0, Killed/Survived empty). That
-	// is the ONLY way a graded run yields kill-rate 0 with ZERO survivors out of
-	// N>0 mutants — a passing baseline that kills nothing leaves ALL N mutants as
-	// survivors, never zero. Detect that signature so the readout says "could not
-	// grade" instead of fabricating a 0% test-quality verdict from a build/env
-	// failure (bad toolchain floor, missing dep, a shell-mangled --test command).
-	run.baselineFailed = len(mutants) > 0 && killRate == 0 && len(survivors) == 0
-	run.devScored = true
-	run.devKillRate = killRate
-	run.mutantsTotal = len(mutants)
-	run.devSurvivors = survivors
-	run.mutants = mutants
+	killRate, survivors := run.devKillRate, run.devSurvivors
 
 	// The challenger pass: score the shadow seats' mutants against the SAME dev
 	// suite so the comparison measures POTENCY (mutants that survive a good
@@ -910,12 +954,19 @@ func (d *Driver) tickDevAdequacy(ctx context.Context, missionID int64, run *runS
 	}
 	// Log the headline the moment it's computed — the dev suite's grade — so it
 	// is visible even if the downstream test-writer/aggregate steps stall.
-	if run.baselineFailed {
+	switch {
+	case run.baselineFailed:
 		// The dev suite did NOT pass on the unmutated code in the jail: nothing
 		// was graded, so a "killed N of N" tally would be fabricated from an empty
 		// survivor set. Say what actually happened instead.
 		log.Printf("advpool: run %d dev-adequacy: COULD NOT GRADE — the dev suite did not pass on the UNMUTATED code in the jail (baseline build/test failed); this is a build/environment failure, not a test-quality verdict", missionID)
-	} else {
+	case run.suiteIgnoresFile:
+		// The suite passed on source that cannot compile: it provably never
+		// compiles or imports the audited file, so no mutant of it could have
+		// been graded. A different diagnosis from a failed baseline — the suite
+		// is fine, the check command is pointed somewhere else.
+		log.Printf("advpool: run %d dev-adequacy: COULD NOT GRADE — the dev suite PASSED on deliberately invalid source, so it never compiles or imports %s; the suite is fine, the check command does not exercise this file", missionID, run.rs.CodePath)
+	default:
 		log.Printf("advpool: run %d dev-adequacy: the dev's OWN tests scored %.0f%% (killed %d of %d mutants, %d survived — bugs the dev's tests miss)",
 			missionID, killRate*100, len(mutants)-len(survivors), len(mutants), len(survivors))
 	}
@@ -1110,6 +1161,9 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	// (devKillRate 0 < threshold); mark it so the readout says "could not grade"
 	// instead of reporting the 0 as if the suite were graded and scored zero.
 	v.BaselineFailed = run.baselineFailed
+	// The other could-not-grade case, carried separately so the readout can
+	// name the right one: the suite passed but never reads the audited file.
+	v.SuiteIgnoresFile = run.suiteIgnoresFile
 
 	if d.Signer != nil {
 		recordID, head, serr := d.Signer.SignVerdict(ctx, v)

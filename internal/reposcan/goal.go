@@ -33,7 +33,7 @@ type fileGoalSource struct{ goals map[string]string }
 // text. This is the H1a stand-in for LLM derivation (H1b), which will
 // implement the same interface.
 func NewFileGoalSource(path string) (GoalSource, error) {
-	b, err := os.ReadFile(path)
+	b, err := os.ReadFile(path) // #nosec G304 -- operator-supplied --goals path, same trust class as --code
 	if err != nil {
 		return nil, err
 	}

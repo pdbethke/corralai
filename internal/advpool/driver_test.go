@@ -4194,3 +4194,43 @@ func TestMatrix_PerTestCanarySurvival_IsUnscoredNotADeleteCandidate(t *testing.T
 		t.Errorf("Adjudication = %q, want %q — a finding must not be auto-confirmed off an ungraded row", got, AdjUnadjudicated)
 	}
 }
+
+// TestTimeoutVerdictCarriesTheCouldNotGradeFlags: a run that scored dev
+// adequacy, could NOT grade it, and only then stalled past RunDeadline must
+// still carry the reason on its SIGNED verdict. Without both flags the
+// timeout verdict reads "DevKillRate 0, Survivors 0, MutantsTotal N" with no
+// could-not-grade marker, and renderAdvVerdict falls straight through to
+// `dev_kill_rate: 0.00` — a fabricated measurement on a signed record. The
+// two causes are distinct diagnoses and both must survive the timeout path.
+func TestTimeoutVerdictCarriesTheCouldNotGradeFlags(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		baselineFailed   bool
+		suiteIgnoresFile bool
+	}{
+		{"surviving canary", false, true},
+		{"failed baseline", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := &Driver{}
+			run := &runState{
+				rs:               RunSpec{Repo: "r", Commit: "c", Lang: "go"},
+				devScored:        true,
+				devKillRate:      0,
+				mutantsTotal:     8,
+				baselineFailed:   tc.baselineFailed,
+				suiteIgnoresFile: tc.suiteIgnoresFile,
+			}
+			v := d.timeoutVerdict(run)
+			if v.Status != StatusNeedsReview {
+				t.Fatalf("Status = %q, want %q", v.Status, StatusNeedsReview)
+			}
+			if v.BaselineFailed != tc.baselineFailed {
+				t.Errorf("BaselineFailed = %v, want %v — the timeout verdict lost the diagnosis", v.BaselineFailed, tc.baselineFailed)
+			}
+			if v.SuiteIgnoresFile != tc.suiteIgnoresFile {
+				t.Errorf("SuiteIgnoresFile = %v, want %v — the timeout verdict lost the diagnosis", v.SuiteIgnoresFile, tc.suiteIgnoresFile)
+			}
+		})
+	}
+}

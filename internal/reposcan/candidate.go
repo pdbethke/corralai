@@ -43,9 +43,10 @@ const (
 	// accounted for, never followed.
 	ReasonNotRegularFile = "not-a-regular-file"
 	// ReasonSkippedDir marks a file inside a directory the walk does not
-	// descend (build output, dependency trees). It is still ACCOUNTED: a
-	// reader must be able to see the scan chose not to look there, rather
-	// than see a repo that appears smaller than it is.
+	// descend (build output: dist, build, target, .tox, site-packages). It is
+	// still ACCOUNTED: a reader must be able to see the scan chose not to look
+	// there, rather than see a repo that appears smaller than it is. VCS and
+	// dependency trees are the exception — see invisibleDirs.
 	ReasonSkippedDir = "skipped-dir"
 )
 
@@ -59,20 +60,47 @@ var skipDirs = map[string]bool{
 	"site-packages": true,
 }
 
-// invisibleDirs are skipped WITHOUT accounting. .git is not source, and
-// listing its objects would swamp the report with thousands of entries that
-// tell a reader nothing.
-var invisibleDirs = map[string]bool{".git": true}
+// invisibleDirs are skipped WITHOUT accounting. Two kinds of tree qualify,
+// for the same reason:
+//
+//   - .git is not source at all — listing its objects would swamp the report.
+//   - dependency trees (node_modules, vendor) are not THIS repo's source
+//     either; they are third-party code the audit has no business grading.
+//     They are also enormous: node_modules alone is routinely tens of
+//     thousands of files, so enumerating them would bury the handful of
+//     entries a reader actually needs in a report that gets signed and
+//     anchored. Build output (dist, build, target, .tox, site-packages) IS
+//     accounted: those trees are small and are derived from this repo, so a
+//     reader benefits from seeing the scan chose not to look there.
+//
+// In both cases listing them tells a reader nothing and costs the report its
+// readability.
+var invisibleDirs = map[string]bool{".git": true, "node_modules": true, "vendor": true}
 
 // skippedDirFiles enumerates the regular files under dir as skipped-dir
 // exclusions, keyed repo-relative to root. Non-regular entries (symlinks,
 // devices) are not followed and not listed: the point is an honest count of
 // source files not looked at, not an inventory of the filesystem.
+//
+// Degradation: a subtree that cannot be read (permissions, a directory that
+// vanished mid-scan) is NOT scan-fatal. These are trees the audit deliberately
+// does not look at — before this accounting existed the walk never descended
+// into them at all, so an unreadable build/ could not affect a scan. Failing
+// the whole run over one would be a regression. The unreadable subtree is
+// recorded as a single skipped-dir entry and the walk continues.
 func skippedDirFiles(dir, root string) ([]Exclusion, error) {
 	var out []Exclusion
 	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return err
+			// Account the unreadable path as one entry and move on. d may be
+			// nil here (an error stat-ing the root of the subtree).
+			if rel, rerr := filepath.Rel(root, p); rerr == nil {
+				out = append(out, Exclusion{Path: filepath.ToSlash(rel), Reason: ReasonSkippedDir})
+			}
+			if d != nil && d.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
 		}
 		if d.IsDir() || !d.Type().IsRegular() {
 			return nil

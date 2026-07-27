@@ -105,17 +105,13 @@ type Enumerator interface {
 // reports about that file can mean anything.
 const CanaryCode = "!!!corral canary!!!"
 
-// canaryID identifies the canary run internally. It is never reported: the
-// canary is a validity gate, not a measurement.
-const canaryID = "__corral_canary__"
-
 // Report is the outcome of scoring a candidate test against compliant code
 // and a set of mutants.
 type Report struct {
 	CompliantPass bool
 	// CanaryKilled reports whether the suite failed on deliberately invalid
 	// source. False means the suite never compiles or imports the file, so
-	// DevKillRate is meaningless — the same fail-closed shape as
+	// KillRate is meaningless — the same fail-closed shape as
 	// CompliantPass. Callers MUST check this before reading KillRate.
 	CanaryKilled bool
 	Total        int

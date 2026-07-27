@@ -16,7 +16,21 @@ type RunResult struct {
 	Survivors    int
 	ProvenMissed int
 	RecordID     int64
+	// BaselineFailed / SuiteIgnoresFile are the two could-not-grade causes,
+	// carried verbatim from the pool verdict. When either is set, DevKillRate
+	// is a meaningless 0 and Survivors is empty because NOTHING was graded —
+	// the run must be EXCLUDED from the means rather than averaged in as a
+	// zero. The soundness report's whole job is to say "do NOT publish", so a
+	// build failure or a misaimed check command must never be able to push a
+	// target into MISCALIBRATED by arithmetic.
+	BaselineFailed   bool
+	SuiteIgnoresFile bool
 }
+
+// Graded reports whether this run actually measured anything. A run that
+// could not be graded carries no kill rate, no survivors and no mutant tally
+// worth averaging.
+func (r RunResult) Graded() bool { return !r.BaselineFailed && !r.SuiteIgnoresFile }
 
 // PoolRunner triggers ONE adversarial-pool run for a target and returns its
 // verdict. The CLI implements this over the real brain client; tests fake it.

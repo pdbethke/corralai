@@ -199,9 +199,12 @@ func TestScoreCanaryKilledLeavesTheMeasurementUntouched(t *testing.T) {
 		t.Errorf("killed+survived = %d, want 1 — the canary must not be listed",
 			len(rep.Killed)+len(rep.Survived))
 	}
+	// Every reported id must be a MUTANT's id. Checked positively rather than
+	// against a canary-id constant: the canary is not a Mutant and never
+	// carries an id, so "no entry whose id is the canary's" could never fire.
 	for _, id := range append(append([]string{}, rep.Killed...), rep.Survived...) {
-		if id == canaryID {
-			t.Errorf("canary id %q leaked into the report", id)
+		if id != "m1" {
+			t.Errorf("report lists %q; the only graded subject was mutant m1 — the canary must never appear", id)
 		}
 	}
 }
@@ -244,8 +247,77 @@ type errJail struct {
 
 func (f *errJail) RunTest(ctx context.Context, files map[string]string, testCmd []string) (bool, error) {
 	f.calls++
-	if files["code.go"] == "COMPLIANT" {
+	switch files["code.go"] {
+	case "COMPLIANT":
 		return true, nil
+	case CanaryCode:
+		// FAIL (not error) on invalid source, so the canary is KILLED and the
+		// mutant loop is actually reached. Without this the canary run — which
+		// happens first — would absorb the error and this fake would never
+		// exercise the mutant branch it exists for.
+		return false, nil
 	}
 	return false, f.err
+}
+
+// TestScoreCanaryTimeoutCountsAsKilled is the canary half of the
+// mutant-timeout contract (TestScoreMutantTimeoutCountsAsKilled): a suite
+// that HANGS on deliberately invalid source did react to it — it is not a
+// suite that ignores the file — so the canary counts as killed and scoring
+// proceeds normally. The alternative (treating a hang as a surviving canary)
+// would report could-not-grade for a suite that demonstrably reads the file.
+func TestScoreCanaryTimeoutCountsAsKilled(t *testing.T) {
+	fj := &timeoutJail{
+		passOn:    map[string]bool{"COMPLIANT": true, "m1": false},
+		timeoutOn: map[string]bool{CanaryCode: true},
+	}
+	muts := []Mutant{{ID: "m1", Code: "m1"}}
+	rep, err := Score(context.Background(), fj, map[string]string{}, "code.go", "COMPLIANT", muts, []string{"go", "test"})
+	if err != nil {
+		t.Fatalf("a canary timeout must not abort Score: %v", err)
+	}
+	if !rep.CanaryKilled {
+		t.Fatal("a suite that hangs on invalid source DID react to it — CanaryKilled must be true")
+	}
+	if rep.Total != 1 || !eq(rep.Killed, []string{"m1"}) {
+		t.Fatalf("scoring must proceed after a killed canary, got %+v", rep)
+	}
+	if rep.KillRate() != 1 {
+		t.Errorf("KillRate = %v, want 1", rep.KillRate())
+	}
+}
+
+// TestScoreCanaryOtherErrorPropagates: only ErrTestTimeout gets the
+// count-as-killed treatment on the canary run. A real infra failure (the
+// sandbox could not start) must abort Score, never be silently read as
+// "canary killed" — which would let an unrunnable jail produce a graded
+// report.
+func TestScoreCanaryOtherErrorPropagates(t *testing.T) {
+	wantErr := errors.New("boom: sandbox could not start")
+	fj := &canaryErrJail{err: wantErr}
+	muts := []Mutant{{ID: "m1", Code: "m1"}}
+	_, err := Score(context.Background(), fj, map[string]string{}, "code.go", "COMPLIANT", muts, []string{"go", "test"})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("want the infra error propagated from the canary run, got %v", err)
+	}
+	if fj.mutantRuns != 0 {
+		t.Errorf("mutants ran (%d) after a failed canary run; nothing may be graded", fj.mutantRuns)
+	}
+}
+
+// canaryErrJail passes the baseline and errors ONLY on the canary run.
+type canaryErrJail struct {
+	err        error
+	mutantRuns int
+}
+
+func (f *canaryErrJail) RunTest(ctx context.Context, files map[string]string, testCmd []string) (bool, error) {
+	switch files["code.go"] {
+	case "COMPLIANT":
+		return true, nil
+	case CanaryCode:
+		return false, f.err
+	}
+	f.mutantRuns++
+	return false, nil
 }

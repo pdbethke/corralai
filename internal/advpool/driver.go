@@ -976,13 +976,20 @@ func (d *Driver) tickDevAdequacy(ctx context.Context, missionID int64, run *runS
 	})
 
 	if len(survivors) == 0 {
-		// A perfect dev suite: it killed every mutant. There are no survivors
-		// for the test-writer to expose, so skip it and the pool-adequacy step
-		// entirely and go straight to aggregate — the run certifies on its 100%
-		// kill-rate. Without this the test-writer would be promoted to "write a
+		// THREE different runs reach here, and only one of them is good news:
+		//   1. a perfect dev suite — it killed every mutant;
+		//   2. a failed baseline (run.baselineFailed) — nothing was graded;
+		//   3. a surviving canary (run.suiteIgnoresFile) — the check command
+		//      never compiles or imports the file, so nothing was graded.
+		// In all three there are no survivors for the test-writer to expose, so
+		// skip it and the pool-adequacy step entirely and go straight to
+		// aggregate. Without this the test-writer would be promoted to "write a
 		// test targeting the survivors" of which there are none (a degenerate
 		// prompt) and the run could NEVER converge — i.e. the pool could grade a
-		// bad suite but never certify a perfect one.
+		// bad suite but never certify a perfect one. Cases 2 and 3 do NOT
+		// certify on a 100% kill-rate: the could-not-grade flags ride the
+		// verdict (see tickAggregate) so the readout says what happened
+		// instead of reporting an empty survivor set as a perfect score.
 		run.poolScored = true
 		run.provenMissed = 0
 		run.testWriterMoot = true // it never ran — keep it off the leaderboard
@@ -1313,6 +1320,14 @@ func (d *Driver) timeoutVerdict(run *runState) Verdict {
 		MutantsTotal: run.mutantsTotal,
 		Survivors:    len(run.devSurvivors),
 		ProvenMissed: run.provenMissed,
+		// The could-not-grade flags must ride the TIMEOUT verdict too. A run
+		// that scored dev adequacy, could not grade it (failed baseline, or a
+		// surviving canary), and only then stalled would otherwise be SIGNED
+		// reading "DevKillRate 0, Survivors 0, MutantsTotal N" with no marker —
+		// renderAdvVerdict falls straight through to `dev_kill_rate: 0.00`,
+		// which is a fabricated measurement. Never fabricate a score.
+		BaselineFailed:   run.baselineFailed,
+		SuiteIgnoresFile: run.suiteIgnoresFile,
 		// Coverage fields (I-5): a run that dispatched N regions and dropped
 		// some before hitting RunDeadline must carry that shortfall on the
 		// timeout verdict too, or the CLI's RegionsTotal > 0 guard silently

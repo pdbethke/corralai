@@ -51,6 +51,15 @@ func StageCandidate(ctx context.Context, writer, reviewer testgen.LLM, jail adeq
 	if !res.Report.CompliantPass {
 		return controlspec.GateTest{}, fmt.Errorf("controlgate: authored test does not pass on compliant code — invalid candidate, not staging")
 	}
+	// The canary gate: authoring.Author scores WITH mutants, so adequacy.Score
+	// runs the deliberately-invalid-source canary. A surviving canary means the
+	// check command provably never compiles or imports the audited file — the
+	// baseline still passes, KillRate() is 0 and Survived is empty, so staging
+	// here would persist "graded, killed nothing" when the truth is "not
+	// graded". No caller may read KillRate() without checking CanaryKilled.
+	if !res.Report.CanaryKilled {
+		return controlspec.GateTest{}, fmt.Errorf("controlgate: authored test PASSED on deliberately invalid source — the check command never compiles or imports %s, so nothing was graded; not staging", req.CodePath)
+	}
 
 	// Recover the surviving mutants' code (by ID) from the valid scored set.
 	byID := make(map[string]adequacy.Mutant, len(res.Mutants))

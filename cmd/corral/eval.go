@@ -50,6 +50,10 @@ func (r mcpPoolRunner) RunOne(ctx context.Context, t eval.Target) (eval.RunResul
 			return eval.RunResult{
 				Status: v.Status, DevKillRate: v.DevKillRate, MutantsTotal: v.MutantsTotal,
 				Survivors: v.Survivors, ProvenMissed: v.ProvenMissed, RecordID: v.RecordID,
+				// Both could-not-grade causes must cross this boundary. Dropping
+				// them here is what let an ungraded run's meaningless 0 average
+				// into MeanKillRate and declare a target miscalibrated.
+				BaselineFailed: v.BaselineFailed, SuiteIgnoresFile: v.SuiteIgnoresFile,
 			}, nil
 		}
 		if time.Now().After(deadline) {

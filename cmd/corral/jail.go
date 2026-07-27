@@ -25,8 +25,17 @@ import (
 // unconditionally: --local always sandboxes, regardless of what the
 // separate, env-gated test-suite unsafe path allows internally.
 func resolveLocalJail(jailFlag string) (sandbox.Isolator, error) {
-	return resolveJail(jailFlag, true)
+	return resolveJailFn(jailFlag, true)
 }
+
+// resolveJailFn is the single seam EVERY sandbox resolution in this command
+// goes through. A package var solely so a test can COUNT resolutions: "the
+// repo scan resolves the sandbox once for the whole scan and hands it to
+// every job" is a claim about how many times the backend probe runs, and it
+// cannot be checked by comparing the isolators themselves — bwrapIsolator is
+// an empty struct, so two INDEPENDENT resolutions compare equal and an
+// identity assertion can never fail. Never reassigned in production.
+var resolveJailFn = resolveJail
 
 // resolveScanJail resolves the sandbox for `corral certify --repo`. Same
 // fail-closed rules as resolveLocalJail, but the scan exposes no --jail flag,
@@ -34,7 +43,7 @@ func resolveLocalJail(jailFlag string) (sandbox.Isolator, error) {
 // ran --local cannot reach that escape hatch from the command that printed the
 // message.
 func resolveScanJail() (sandbox.Isolator, error) {
-	return resolveJail("", false)
+	return resolveJailFn("", false)
 }
 
 // resolveJail is the shared implementation. containerFallback says whether the

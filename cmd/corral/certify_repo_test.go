@@ -8,12 +8,15 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/pdbethke/corralai/internal/advpool"
+	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/sandbox"
 )
@@ -384,39 +387,88 @@ func TestLocalExecutorExecuteBaselineFailedIsUngradable(t *testing.T) {
 	}
 }
 
-// TestExecuteHandsTheScanIsolatorToEachJob proves the scan's isolator,
-// resolved once in newLocalExecutor, is the SAME one every job's
-// localAuditInput carries — not re-resolved (re-probing bwrap) per file.
-func TestExecuteHandsTheScanIsolatorToEachJob(t *testing.T) {
-	ex := newLocalExecutor(t.TempDir(), nil, io.Discard)
-	defer ex.Close()
+// countingIsolator is a stand-in sandbox with a real identity (a pointer, so
+// two of them are distinguishable — unlike sandbox.bwrapIsolator, an empty
+// struct whose independently-resolved values always compare equal).
+type countingIsolator struct{ label string }
 
-	if ex.iso == nil {
-		t.Skip("no sandbox backend on this host; nothing to hand down")
+func (c *countingIsolator) Name() string     { return c.label }
+func (c *countingIsolator) Preflight() error { return nil }
+func (c *countingIsolator) Wrap(command string, _ sandbox.Options, _ []string) ([]string, error) {
+	return []string{"/bin/sh", "-c", command}, nil
+}
+
+// TestScanResolvesTheSandboxExactlyOnceForTheWholeScan proves the perf claim
+// as a COUNT, which is the only way it can be proven: the scan resolves the
+// backend once in newLocalExecutor and hands that isolator to every job via
+// localAuditInput.iso, so prepareAuditJail must never re-probe per file. An
+// identity assertion cannot detect a violation here — bwrapIsolator is an
+// empty struct, so a per-file re-resolution yields a value that compares
+// EQUAL to the scan's. So this counts every resolution in the command (both
+// resolveLocalJail and resolveScanJail go through resolveJailFn) across three
+// jobs and requires exactly one.
+//
+// Counting through the seam also removes the host dependency: the fake
+// resolver succeeds with no bwrap, so this runs everywhere instead of
+// skipping on hosts without a sandbox backend.
+func TestScanResolvesTheSandboxExactlyOnceForTheWholeScan(t *testing.T) {
+	var resolutions int
+	orig := resolveJailFn
+	resolveJailFn = func(string, bool) (sandbox.Isolator, error) {
+		resolutions++
+		return &countingIsolator{label: "fake"}, nil
+	}
+	t.Cleanup(func() { resolveJailFn = orig })
+
+	repo := t.TempDir()
+	for name, body := range map[string]string{
+		"a.go":      "package p\n\nfunc A() int { return 1 }\n",
+		"a_test.go": "package p\n\nimport \"testing\"\n\nfunc TestA(t *testing.T) {}\n",
+	} {
+		if err := os.WriteFile(filepath.Join(repo, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 
-	var got []sandbox.Isolator
+	ex := newLocalExecutor(repo, nil, io.Discard)
+	defer ex.Close()
+	if ex.jailErr != nil {
+		t.Fatalf("construction must resolve through the seam: %v", ex.jailErr)
+	}
+	if resolutions != 1 {
+		t.Fatalf("construction resolved the sandbox %d time(s), want 1", resolutions)
+	}
+
+	plug, ok := lang.Detect("a.go")
+	if !ok {
+		t.Fatal("no go plugin")
+	}
+	// Both seams drive the REAL prepareAuditJail with the input Execute built,
+	// which is where the per-file re-resolution would happen. Its outcome is
+	// irrelevant here (the fake isolator cannot actually run a suite) — the
+	// measurement is how many times the sandbox got resolved.
+	drive := func(in localAuditInput) {
+		if p, err := prepareAuditJail(in, plug, time.Minute, io.Discard); err == nil {
+			p.cleanup()
+		}
+	}
 	ex.newBaseline = func(_ context.Context, in localAuditInput) (reposcan.BaselineRunner, func(), error) {
-		got = append(got, in.iso)
+		drive(in)
 		return &scriptedBaseline{results: []bool{true, true}}, func() {}, nil
 	}
 	ex.audit = func(_ context.Context, in localAuditInput) (advpool.Verdict, error) {
-		got = append(got, in.iso)
+		drive(in)
 		return advpool.Verdict{DevKillRate: 1, MutantsTotal: 1}, nil
 	}
 
-	for i := 0; i < 3; i++ {
+	const jobs = 3
+	for i := 0; i < jobs; i++ {
 		if _, err := ex.Execute(context.Background(), reposcan.Job{Path: "a.go", TestPath: "a_test.go", Lang: "go"}); err != nil {
 			t.Fatalf("Execute %d: %v", i, err)
 		}
 	}
-	if len(got) == 0 {
-		t.Fatal("no seam observed in.iso")
-	}
-	for i, g := range got {
-		if g != ex.iso {
-			t.Errorf("call %d got a different isolator than the scan's; it would re-resolve per file", i)
-		}
+	if resolutions != 1 {
+		t.Errorf("sandbox resolved %d time(s) across %d job(s), want exactly 1 — the scan is re-probing the backend per file", resolutions, jobs)
 	}
 }
 

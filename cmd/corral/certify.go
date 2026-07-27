@@ -266,11 +266,11 @@ func flagNames(name string) [2]string {
 // hasFlag reports whether name appears as a bare token in args, stopping at
 // the first bare "--" (so it never matches inside the checked command's argv).
 func hasFlag(args []string, name string) bool {
+	names := flagNames(name)
 	for _, a := range args {
 		if a == "--" {
 			return false
 		}
-		names := flagNames(name)
 		for _, n := range names {
 			if a == n || strings.HasPrefix(a, n+"=") {
 				return true

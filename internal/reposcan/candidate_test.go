@@ -3,7 +3,6 @@ package reposcan
 import (
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"syscall"
 	"testing"
@@ -397,76 +396,6 @@ func TestEnumerateAccountsSkippedDirs(t *testing.T) {
 	}
 }
 
-func TestEnumerateRealRepoStats(t *testing.T) {
-	// This test enumerates the real repository and reports statistics about
-	// skipped-dir exclusions. It's informational and not normally run.
-	if os.Getenv("VERBOSE") == "" {
-		t.Skip("skipping real repo stats (set VERBOSE=1 to run)")
-	}
-
-	root := "."
-	cands, excl, err := Enumerate(root)
-	if err != nil {
-		t.Fatalf("Enumerate: %v", err)
-	}
-
-	// Count exclusions by reason
-	reasonCount := map[string]int{}
-	for _, e := range excl {
-		reasonCount[e.Reason]++
-	}
-
-	t.Logf("Real repo enumeration stats:")
-	t.Logf("  Candidates: %d", len(cands))
-	t.Logf("  Total exclusions: %d", len(excl))
-	t.Logf("  Exclusions by reason:")
-
-	// Sort for consistent output
-	reasons := make([]string, 0, len(reasonCount))
-	for r := range reasonCount {
-		reasons = append(reasons, r)
-	}
-	sort.Strings(reasons)
-
-	for _, reason := range reasons {
-		t.Logf("    %s: %d", reason, reasonCount[reason])
-	}
-
-	// Break down skipped-dir by directory
-	skippedByDir := map[string]int{}
-	skippedFiles := []string{}
-	for _, e := range excl {
-		if e.Reason == ReasonSkippedDir {
-			// Extract top-level directory
-			dir := e.Path
-			if idx := strings.IndexByte(e.Path, '/'); idx != -1 {
-				dir = e.Path[:idx]
-			}
-			skippedByDir[dir]++
-			skippedFiles = append(skippedFiles, e.Path)
-		}
-	}
-
-	if len(skippedByDir) > 0 {
-		t.Logf("  Skipped-dir exclusions by directory:")
-		dirs := make([]string, 0, len(skippedByDir))
-		for d := range skippedByDir {
-			dirs = append(dirs, d)
-		}
-		sort.Strings(dirs)
-		for _, dir := range dirs {
-			t.Logf("    %s: %d", dir, skippedByDir[dir])
-		}
-		if len(skippedFiles) <= 10 {
-			sort.Strings(skippedFiles)
-			t.Logf("  Skipped files:")
-			for _, f := range skippedFiles {
-				t.Logf("    %s", f)
-			}
-		}
-	}
-}
-
 func TestEnumerateAccountsNestedFilesInSkippedDirs(t *testing.T) {
 	// FINDING 1: Verify that skippedDirFiles recursively descends into nested
 	// subdirectories within a skipped directory. A future edit that returned
@@ -616,5 +545,89 @@ func TestEnumerateExcludesSymlinkInSkippedDir(t *testing.T) {
 	}
 	if !foundRegular {
 		t.Errorf("build/regular.go not found as skipped-dir exclusion")
+	}
+}
+
+// TestEnumerateDependencyTreesAreInvisible pins the report-readability
+// invariant: dependency trees are skipped WITHOUT accounting, exactly like
+// .git. They are not this repo's source, and node_modules alone is routinely
+// tens of thousands of files — enumerating them would bury every entry a
+// reader actually needs in a report that gets signed and anchored.
+func TestEnumerateDependencyTreesAreInvisible(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"pkg/a.go":                        "package pkg\n",
+		"pkg/a_test.go":                   "package pkg\n",
+		"node_modules/left-pad/index.js":  "// dep\n",
+		"node_modules/left-pad/deep/x.js": "// dep\n",
+		"vendor/github.com/x/y/y.go":      "package y\n",
+		"build/b.go":                      "package b\n",
+	})
+
+	cands, excl, err := Enumerate(root)
+	if err != nil {
+		t.Fatalf("Enumerate: %v", err)
+	}
+	if len(cands) != 1 || cands[0].Path != "pkg/a.go" {
+		t.Errorf("candidates = %+v, want only pkg/a.go", cands)
+	}
+	for _, e := range excl {
+		if strings.HasPrefix(e.Path, "node_modules/") || strings.HasPrefix(e.Path, "vendor/") {
+			t.Errorf("dependency tree leaked into exclusions: %s (reason %s)", e.Path, e.Reason)
+		}
+	}
+	// Build output is still ACCOUNTED — the widening must not swallow it.
+	var sawBuild bool
+	for _, e := range excl {
+		if e.Path == "build/b.go" && e.Reason == ReasonSkippedDir {
+			sawBuild = true
+		}
+	}
+	if !sawBuild {
+		t.Error("build/b.go must still be accounted as skipped-dir; only VCS and dependency trees are invisible")
+	}
+}
+
+// TestEnumerateUnreadableSkippedDirIsNotFatal: an unreadable subtree inside a
+// tree the audit deliberately does not look at must not fail the whole scan.
+// Before skipped-dir accounting existed the walk never descended there at all,
+// so a permission-denied build/ could not affect a scan; making it scan-fatal
+// would be a regression. It degrades to a single skipped-dir entry.
+func TestEnumerateUnreadableSkippedDirIsNotFatal(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: mode 0000 is still readable")
+	}
+	root := writeTree(t, map[string]string{
+		"pkg/a.go":              "package pkg\n",
+		"pkg/a_test.go":         "package pkg\n",
+		"build/locked/deep.go":  "package deep\n",
+		"build/readable/ok.txt": "data\n",
+	})
+	locked := filepath.Join(root, "build", "locked")
+	if err := os.Chmod(locked, 0o000); err != nil {
+		t.Skipf("chmod unavailable: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+
+	cands, excl, err := Enumerate(root)
+	if err != nil {
+		t.Fatalf("an unreadable skipped subtree made the scan fatal: %v", err)
+	}
+	if len(cands) != 1 || cands[0].Path != "pkg/a.go" {
+		t.Errorf("candidates = %+v, want only pkg/a.go — the rest of the scan must still complete", cands)
+	}
+	var sawReadable, sawLocked bool
+	for _, e := range excl {
+		if e.Path == "build/readable/ok.txt" && e.Reason == ReasonSkippedDir {
+			sawReadable = true
+		}
+		if e.Path == "build/locked" && e.Reason == ReasonSkippedDir {
+			sawLocked = true
+		}
+	}
+	if !sawReadable {
+		t.Error("the readable half of the skipped tree stopped being accounted")
+	}
+	if !sawLocked {
+		t.Errorf("the unreadable subtree must be recorded as one skipped-dir entry; exclusions = %+v", excl)
 	}
 }

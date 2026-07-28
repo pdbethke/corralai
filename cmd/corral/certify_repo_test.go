@@ -1877,3 +1877,52 @@ func TestWorkspaceSubstrateNeverResolvesAJailPerFile(t *testing.T) {
 		t.Errorf("the workspace substrate resolved a jail %d time(s), want 0", resolutions)
 	}
 }
+
+// TestWorkspaceSubstrateSerializesTheSwarm proves the scan does not fan out
+// concurrent jobs over ONE shared checkout.
+//
+// On the workspace substrate every job mutates the same tree in place
+// (adequacy.NewWorkspaceRunner(repoDir)), and applyFiles' restore ledger is
+// per-runner — it assumes exclusivity. Two jobs at once means job B's suite
+// runs while job A has a mutant (or adequacy.CanaryCode, which does not even
+// compile) written into A's file: B's surviving mutants get recorded as
+// KILLED, inflating the kill rate on a record this product signs, and B's
+// baseline can fail into a spurious baseline-failed/flaky-baseline. The swarm
+// sizing was substrate-blind (NumCPU-1, so a live run showed 8 workers), and
+// the Action passes no --swarm, so any PR touching two audited files hit it.
+//
+// Serialization is the accepted cost — giving each job its own tree copy is
+// exactly the memory ceiling this substrate exists to escape — so it must be
+// SAID, not silently differ from what the operator asked for.
+func TestWorkspaceSubstrateSerializesTheSwarm(t *testing.T) {
+	for _, ask := range []int{0, 4, 8} {
+		workers, readout := resolveScanWorkers(ask, substrateWorkspace)
+		if workers != 1 {
+			t.Errorf("--swarm %d on the workspace substrate: %d workers, want 1 (one shared checkout)", ask, workers)
+		}
+		if !strings.Contains(readout, "1 worker") {
+			t.Errorf("--swarm %d: readout %q must state the real worker count", ask, readout)
+		}
+		if !strings.Contains(readout, substrateWorkspace) {
+			t.Errorf("--swarm %d: readout %q must say WHY it serialized, naming the substrate", ask, readout)
+		}
+	}
+}
+
+// TestJailSubstrateSwarmSizingIsUnchanged is the other direction: the jail
+// substrate (including the "" zero value, today's shipped default) keeps the
+// exact auto-sizing and the exact readout it has always had. `certify --repo`
+// is a shipped command; the fix above must not change it.
+func TestJailSubstrateSwarmSizingIsUnchanged(t *testing.T) {
+	for _, substrate := range []string{"", substrateJail} {
+		for _, ask := range []int{0, 3} {
+			workers, readout := resolveScanWorkers(ask, substrate)
+			if want := resolveSwarm(ask); workers != want {
+				t.Errorf("substrate %q, --swarm %d: %d workers, want %d", substrate, ask, workers, want)
+			}
+			if got, want := readout, fmt.Sprintf("  swarm: %d workers\n", workers); got != want {
+				t.Errorf("substrate %q: readout %q, want %q (unchanged)", substrate, got, want)
+			}
+		}
+	}
+}

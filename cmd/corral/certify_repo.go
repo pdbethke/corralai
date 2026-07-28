@@ -247,8 +247,8 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 
-	workers := resolveSwarm(*swarmFlag)
-	fmt.Fprintf(stdout, "  swarm: %d workers\n", workers)
+	workers, swarmReadout := resolveScanWorkers(*swarmFlag, *substrateFlag)
+	fmt.Fprint(stdout, swarmReadout)
 
 	// ex is non-nil here: it is constructed on every non-dry-run path above,
 	// and the dry run returned before this point.
@@ -573,6 +573,35 @@ func printRepoReport(w io.Writer, r reposcan.RepoReport, nothingInScope bool) {
 			fmt.Fprintf(w, "    %.2f  %s (%d survivor(s))\n", f.KillRate, f.Path, f.Survivors)
 		}
 	}
+}
+
+// resolveScanWorkers sizes the scan's concurrent worker pool AND renders the
+// readout line for it, together, so the number printed is always the number
+// used.
+//
+// The jail substrate keeps resolveSwarm's behaviour and readout exactly: each
+// job builds its own disposable jail workspace, so jobs are independent and
+// concurrency is free correctness-wise.
+//
+// The workspace substrate is clamped to ONE worker, whatever the operator
+// asked for. Every job on that substrate mutates the SAME checkout in place
+// (adequacy.NewWorkspaceRunner over --repo), and the apply/restore ledger is
+// per-runner: it assumes exclusivity. Run two jobs at once and job B's suite
+// executes while job A has a mutant — or adequacy.CanaryCode, which does not
+// compile — written into A's file. B's surviving mutants are then recorded as
+// KILLED (an inflated kill rate on a record this product signs) and B's
+// baseline can fail into a spurious baseline-failed/flaky-baseline. Neither
+// is detectable after the fact.
+//
+// The fix is serialization, not a per-job tree copy: copying the tree per job
+// is the memory ceiling this substrate exists to escape. That cost is real, so
+// the readout STATES the clamp rather than silently differing from --swarm.
+func resolveScanWorkers(swarmFlag int, substrate string) (int, string) {
+	if substrate == substrateWorkspace {
+		return 1, fmt.Sprintf("  swarm: 1 worker — --substrate %s mutates one checkout in place, so jobs run one at a time\n", substrateWorkspace)
+	}
+	n := resolveSwarm(swarmFlag)
+	return n, fmt.Sprintf("  swarm: %d workers\n", n)
 }
 
 // localExecutor runs one scan job through the SAME in-process adversarial

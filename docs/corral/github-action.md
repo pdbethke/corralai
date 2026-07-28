@@ -67,6 +67,18 @@ die on `unknown revision`. And there is deliberately **no `--depth`**: a shallow
 fetch writes `.git/shallow` and truncates the base's ancestry, which destroys the
 very merge base `fetch-depth: 0` was set to provide (`no merge base`, exit 1).
 
+## Audited files are graded one at a time
+
+On this substrate the scan runs **one worker**, whatever `--swarm` says, and the
+run's readout says so. There is exactly one checkout, and every job mutates it in
+place: two jobs at once would mean one job's suite running while the other job
+has a mutant — or corral's deliberately non-compiling canary — written into a
+file, which silently records surviving mutants as killed and can fail a healthy
+baseline. Giving each job its own copy of the tree is the memory ceiling this
+substrate exists to escape, so serialization is the accepted cost. Combined with
+`--diff-base` scoping (the default), it is a cost measured against the handful of
+files a PR touched.
+
 ## Why scoped by default, and why whole-repo is opt-in
 
 Auditing one file runs a full adversarial herd against it — generate mutants,

@@ -17,7 +17,7 @@ corral certify --repo "$GITHUB_WORKSPACE" --substrate workspace \
 ```
 
 - `--substrate workspace` (`internal/reposcan/cachekey.go`'s `SubstrateWorkspace`)
-  tells corral to mutate the checkout at `.` directly and grade each mutant with
+  tells corral to mutate the workspace checkout directly and grade each mutant with
   your own test command — no bubblewrap jail, no tree copy, no `go mod vendor`
   seed. **The runner is the isolation boundary, not corral.** Point this action
   only at a checkout you're fine seeing mutated mid-run — a throwaway CI
@@ -39,11 +39,17 @@ corral certify --repo "$GITHUB_WORKSPACE" --substrate workspace \
 - uses: actions/checkout@v4
   with:
     fetch-depth: 0
-- uses: pdbethke/corralai@v1
+- uses: pdbethke/corralai@main
   with:
     test-command: "go test ./..."
     model-key: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
+
+**There is no `v1` tag.** The action ships on `main`; the repo's cut tags
+(`v0.1.0`, `v0.2.0`) predate it, so no released tag contains an `action.yml`.
+Use `@main`, or pin the commit SHA you reviewed (`pdbethke/corralai@<sha>`) if
+you want an immutable reference. This document will name a version tag when one
+is actually cut, and not before.
 
 `corral` itself is not installed by this action — install it in a prior step,
 pinned to whatever version you choose. The action assumes it's on `PATH`.

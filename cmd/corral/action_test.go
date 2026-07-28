@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -176,5 +177,44 @@ func TestActionNamesTheRecordItProduces(t *testing.T) {
 		"--commit", "deadbeef", "--owner", "pdbethke",
 	}, &out, &errb); code != 0 {
 		t.Fatalf("certify --repo rejected the flags the action passes: exit %d, stderr=%s", code, errb.String())
+	}
+}
+
+// TestDocsNeverAdvertiseAnUncutActionTag: the docs showed
+// `uses: pdbethke/corralai@v1`, and no v1 tag exists (the repo's tags are
+// v0.1.0 and v0.2.0) — a copy-pasteable snippet that cannot resolve. The
+// project's rule is that documentation describes what exists, so every
+// `pdbethke/corralai@<ref>` in the docs must name a ref that resolves: a
+// branch that exists, or a tag that has actually been cut.
+func TestDocsNeverAdvertiseAnUncutActionTag(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	repoRoot := filepath.Join("..", "..")
+	tagsOut, err := runGit(t, repoRoot, "tag", "-l")
+	if err != nil {
+		t.Skipf("git tag: %v: %s", err, tagsOut)
+	}
+	if strings.TrimSpace(tagsOut) == "" {
+		t.Skip("no tags in this clone (shallow/tagless); cannot tell a cut tag from an uncut one")
+	}
+	tags := map[string]bool{}
+	for _, tg := range strings.Fields(tagsOut) {
+		tags[tg] = true
+	}
+	// Branches are resolvable refs too; `main` is where the action lands.
+	tags["main"] = true
+
+	ref := regexp.MustCompile(`pdbethke/corralai@([A-Za-z0-9._-]+)`)
+	for _, doc := range []string{"README.md", "ROADMAP.md", filepath.Join("docs", "corral", "github-action.md")} {
+		b, rerr := os.ReadFile(filepath.Join(repoRoot, doc))
+		if rerr != nil {
+			t.Fatalf("reading %s: %v", doc, rerr)
+		}
+		for _, m := range ref.FindAllStringSubmatch(string(b), -1) {
+			if !tags[m[1]] {
+				t.Errorf("%s advertises %s, but %q is neither an existing tag nor `main` — the snippet does not resolve", doc, m[0], m[1])
+			}
+		}
 	}
 }

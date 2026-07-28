@@ -157,6 +157,56 @@ func TestCertifyRepoAcceptsKnownSubstrateValues(t *testing.T) {
 	}
 }
 
+// TestNewLocalExecutorSkipsSandboxForWorkspaceSubstrate proves the jail
+// preflight is conditional on the selected substrate: the workspace substrate
+// needs no jail by construction (buildJailWiring's workspace branch never
+// builds a seed, resolves an isolator, or binds a mount), so a host with no
+// working bwrap must not be refused when --substrate workspace is selected —
+// that is exactly the CI runner this substrate exists to serve.
+func TestNewLocalExecutorSkipsSandboxForWorkspaceSubstrate(t *testing.T) {
+	var resolutions int
+	orig := resolveJailFn
+	resolveJailFn = func(string, bool) (sandbox.Isolator, error) {
+		resolutions++
+		return nil, errors.New("no bwrap on this host")
+	}
+	t.Cleanup(func() { resolveJailFn = orig })
+
+	ex := newLocalExecutor(t.TempDir(), nil, substrateWorkspace, io.Discard)
+	defer ex.Close()
+	if err := ex.preflight(); err != nil {
+		t.Fatalf("workspace substrate must not demand a sandbox: %v", err)
+	}
+	if resolutions != 0 {
+		t.Errorf("workspace substrate resolved the sandbox %d time(s), want 0", resolutions)
+	}
+}
+
+// TestNewLocalExecutorStillRequiresSandboxForJailSubstrate is the other
+// direction of the same fix: the jail substrate (the default) must still
+// refuse, with the SAME message, on a host that cannot sandbox — this
+// behaviour must not regress while fixing the workspace path.
+func TestNewLocalExecutorStillRequiresSandboxForJailSubstrate(t *testing.T) {
+	wantErr := errors.New("no bwrap on this host")
+	orig := resolveJailFn
+	resolveJailFn = func(string, bool) (sandbox.Isolator, error) {
+		return nil, wantErr
+	}
+	t.Cleanup(func() { resolveJailFn = orig })
+
+	for _, substrate := range []string{"", substrateJail} {
+		ex := newLocalExecutor(t.TempDir(), nil, substrate, io.Discard)
+		err := ex.preflight()
+		ex.Close()
+		if err == nil {
+			t.Fatalf("substrate %q: jail substrate must still refuse when no sandbox resolves", substrate)
+		}
+		if !errors.Is(err, wantErr) {
+			t.Errorf("substrate %q: preflight error = %v, want it to wrap %v (the same message)", substrate, err, wantErr)
+		}
+	}
+}
+
 // TestLocalExecutorThreadsSubstrateIntoAuditInput proves the value actually
 // arrives at localAuditInput — the seam the cache key is later computed
 // from — rather than merely existing as an unused field. A test asserting
@@ -599,7 +649,7 @@ func TestScanResolvesTheSandboxExactlyOnceForTheWholeScan(t *testing.T) {
 		}
 	}
 
-	ex := newLocalExecutor(repo, nil, io.Discard)
+	ex := newLocalExecutor(repo, nil, "", io.Discard)
 	defer ex.Close()
 	if ex.jailErr != nil {
 		t.Fatalf("construction must resolve through the seam: %v", ex.jailErr)
@@ -902,7 +952,7 @@ func TestRunCertifyRepoDirEqualsFormGoesToTheScan(t *testing.T) {
 // copies and 378 vendor runs, up to NumCPU concurrently.
 func TestLocalExecutorSharesOneSeedAcrossJobs(t *testing.T) {
 	var builds atomic.Int32
-	ex := newLocalExecutor(t.TempDir(), nil, io.Discard)
+	ex := newLocalExecutor(t.TempDir(), nil, "", io.Discard)
 	ex.seeds = newSeedCache(func(lang string) (repoSeed, error) {
 		builds.Add(1)
 		return repoSeed{seedDir: "/seed/" + lang, files: map[string]string{}, cleanup: func() {}}, nil
@@ -934,7 +984,7 @@ func TestLocalExecutorSharesOneSeedAcrossJobs(t *testing.T) {
 // inside prepareAuditJail.
 func TestLocalExecutorPassesTheSharedSeedToBothSeams(t *testing.T) {
 	want := repoSeed{seedDir: "/seed/go", files: map[string]string{"a.go": "package a\n"}, cleanup: func() {}}
-	ex := newLocalExecutor(t.TempDir(), nil, io.Discard)
+	ex := newLocalExecutor(t.TempDir(), nil, "", io.Discard)
 	ex.seeds = newSeedCache(func(string) (repoSeed, error) { return want, nil })
 	defer ex.Close()
 
@@ -967,7 +1017,7 @@ func TestLocalExecutorPassesTheSharedSeedToBothSeams(t *testing.T) {
 func TestLocalExecutorPrepFailureIsUngradable(t *testing.T) {
 	var builds atomic.Int32
 	audited := false
-	ex := newLocalExecutor(t.TempDir(), nil, io.Discard)
+	ex := newLocalExecutor(t.TempDir(), nil, "", io.Discard)
 	ex.seeds = newSeedCache(func(string) (repoSeed, error) {
 		builds.Add(1)
 		return repoSeed{cleanup: func() {}}, errors.New("go mod vendor failed")
@@ -1005,7 +1055,7 @@ func TestLocalExecutorPrepFailureIsUngradable(t *testing.T) {
 
 func TestLocalExecutorCloseReleasesSeeds(t *testing.T) {
 	var cleaned atomic.Int32
-	ex := newLocalExecutor(t.TempDir(), nil, io.Discard)
+	ex := newLocalExecutor(t.TempDir(), nil, "", io.Discard)
 	ex.seeds = newSeedCache(func(lang string) (repoSeed, error) {
 		return repoSeed{seedDir: lang, files: map[string]string{}, cleanup: func() { cleaned.Add(1) }}, nil
 	})
@@ -1039,7 +1089,7 @@ func TestLocalExecutorCloseReleasesSeeds(t *testing.T) {
 // silent regression to per-file jail prep (2 tree copies + 2 `go mod vendor`
 // runs per audited file), the exact bug this branch exists to remove.
 func TestNewLocalExecutorWiresASeedCache(t *testing.T) {
-	ex := newLocalExecutor(t.TempDir(), nil, io.Discard)
+	ex := newLocalExecutor(t.TempDir(), nil, "", io.Discard)
 	defer ex.Close()
 	if ex.seeds == nil {
 		t.Fatal("no seed cache: every job would prepare its own jail")
@@ -1050,7 +1100,7 @@ func TestNewLocalExecutorWiresASeedCache(t *testing.T) {
 // reported by preflight, and a nil cache would silently change the fan-out's
 // prep strategy rather than fail.
 func TestNewLocalExecutorWiresASeedCacheEvenWhenTheJailIsUnavailable(t *testing.T) {
-	ex := newLocalExecutor(t.TempDir(), nil, io.Discard)
+	ex := newLocalExecutor(t.TempDir(), nil, "", io.Discard)
 	defer ex.Close()
 	if ex.jailErr == nil {
 		t.Skip("this host has a working sandbox; the jail-unavailable path is covered on hosts without one")

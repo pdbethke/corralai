@@ -161,8 +161,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// project's own test command. Given after `--`; absent, the language
 		// plugin's stock recursive command is used — resolved per job, since a
 		// repo can mix languages.
-		ex = newLocalExecutor(*repoDir, checkArgv, stdout)
-		ex.substrate = *substrateFlag
+		ex = newLocalExecutor(*repoDir, checkArgv, *substrateFlag, stdout)
 		// Deferred, not called at the end: a panic mid-scan must still release
 		// the staging dirs the shared seeds created. Deferred here so it also
 		// covers the early returns below.
@@ -568,7 +567,7 @@ type localExecutor struct {
 	audit       func(context.Context, localAuditInput) (advpool.Verdict, error)
 }
 
-func newLocalExecutor(repoDir string, checkArgv []string, progress io.Writer) *localExecutor {
+func newLocalExecutor(repoDir string, checkArgv []string, substrate string, progress io.Writer) *localExecutor {
 	if progress == nil {
 		progress = io.Discard
 	}
@@ -576,26 +575,37 @@ func newLocalExecutor(repoDir string, checkArgv []string, progress io.Writer) *l
 		repoDir:      repoDir,
 		checkArgv:    checkArgv,
 		baselineRuns: 2,
+		substrate:    substrate,
 		// Concurrent jobs write progress; serialize so two files' notices
 		// cannot interleave mid-line.
 		progress:    &syncWriter{w: progress},
 		newBaseline: baselineRunnerFor,
 		audit:       auditOneFile,
 	}
-	// Resolve the sandbox ONCE for the whole scan: the backend name is an input
-	// to the seed (it decides which dep dirs can be bind-mounted rather than
-	// copied), and it is a scan-wide constant — resolving it per file would
-	// re-run the backend probe for every job to reach the same answer. The scan
-	// exposes no --jail flag, so the auto backend is resolved (same rules as
-	// prepareAuditJail's empty in.jail), minus the `--jail container` advice on
-	// failure — a flag this command does not offer.
-	iso, err := resolveScanJail()
+	// The substrate must be known BEFORE this preflight runs: the workspace
+	// substrate needs no sandbox by construction (buildJailWiring's workspace
+	// branch never builds a seed, resolves an isolator, or binds a mount), so
+	// resolving one here would refuse a bwrap-less CI runner for a jail the
+	// scan was never going to use. The jail substrate (including the "" zero
+	// value — today's shipped default) keeps the exact preflight behaviour
+	// below: a bwrap-less host still fails, with the same message.
 	backendName := ""
-	if err != nil {
-		l.jailErr = err
-	} else {
-		l.iso = iso
-		backendName = iso.Name()
+	if substrate != substrateWorkspace {
+		// Resolve the sandbox ONCE for the whole scan: the backend name is an
+		// input to the seed (it decides which dep dirs can be bind-mounted
+		// rather than copied), and it is a scan-wide constant — resolving it
+		// per file would re-run the backend probe for every job to reach the
+		// same answer. The scan exposes no --jail flag, so the auto backend is
+		// resolved (same rules as prepareAuditJail's empty in.jail), minus the
+		// `--jail container` advice on failure — a flag this command does not
+		// offer.
+		iso, err := resolveScanJail()
+		if err != nil {
+			l.jailErr = err
+		} else {
+			l.iso = iso
+			backendName = iso.Name()
+		}
 	}
 	// The scan exposes no --bind-dir/--no-bind-deps: nil/false are the
 	// documented defaults (auto-detected dep dirs are bound, nothing extra).

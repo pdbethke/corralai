@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -23,6 +24,482 @@ import (
 	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/sandbox"
 )
+
+// gitCmd returns a helper that runs a git command in dir for a test fixture,
+// skipping (not failing) the test when git is unusable in this environment —
+// diff scoping's own logic is unit-tested regardless; these fixtures only
+// need a working git to exist.
+func gitCmd(t *testing.T, dir string) func(args ...string) {
+	t.Helper()
+	return func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(cmd.Environ(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@e",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@e")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Skipf("git unusable here (%v): %s", err, out)
+		}
+	}
+}
+
+// gitRevParseHead returns dir's current commit SHA, captured at the moment
+// of the call. The literal ref "HEAD" is not usable as a fixture's baseRef:
+// by the time a later commit runs, "HEAD" resolves to THAT commit rather
+// than the one intended as the base, and a diff against it would always be
+// empty. Resolving to a concrete SHA up front pins the intended base.
+func gitRevParseHead(t *testing.T, dir string) string {
+	t.Helper()
+	cmd := exec.Command("git", "rev-parse", "HEAD")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Skipf("git rev-parse unusable here: %v", err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// TestChangedFilesListsOnlyWhatMoved proves changedFiles reports exactly the
+// paths that differ from baseRef — the bound diff scoping rests on.
+func TestChangedFilesListsOnlyWhatMoved(t *testing.T) {
+	root := t.TempDir()
+	gitRun := gitCmd(t, root)
+	mustWrite(t, filepath.Join(root, "a.go"), "package p\n")
+	mustWrite(t, filepath.Join(root, "b.go"), "package p\n")
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+	base := gitRevParseHead(t, root)
+
+	mustWrite(t, filepath.Join(root, "a.go"), "package p // changed\n")
+	gitRun("add", "a.go")
+	gitRun("commit", "-q", "-m", "change", "--no-gpg-sign")
+
+	got, err := changedFiles(root, base)
+	if err != nil {
+		t.Fatalf("changedFiles: %v", err)
+	}
+	if len(got) != 1 || got[0] != "a.go" {
+		t.Fatalf("changed = %v, want [a.go]", got)
+	}
+}
+
+// TestChangedFilesIsRelativeToRepoRootWhenRepoIsASubdirectory is Gap 3:
+// `git diff --name-only` emits paths relative to the REPOSITORY root
+// regardless of cwd, while reposcan.Enumerate produces paths relative to
+// --repo. Point --repo at a subdirectory of a git repo (a package inside a
+// monorepo) and, uncorrected, the two path frames never intersect — every
+// candidate falls out as not-selected, blaming selection rather than the
+// path mismatch.
+func TestChangedFilesIsRelativeToRepoRootWhenRepoIsASubdirectory(t *testing.T) {
+	top := t.TempDir()
+	gitRun := gitCmd(t, top)
+	sub := filepath.Join(top, "svc")
+	mustWrite(t, filepath.Join(top, "README.md"), "root file\n")
+	mustWrite(t, filepath.Join(sub, "a.go"), "package p\n")
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+	base := gitRevParseHead(t, top)
+
+	mustWrite(t, filepath.Join(sub, "a.go"), "package p // changed\n")
+	gitRun("add", "svc/a.go")
+	gitRun("commit", "-q", "-m", "change", "--no-gpg-sign")
+
+	got, err := changedFiles(sub, base)
+	if err != nil {
+		t.Fatalf("changedFiles: %v", err)
+	}
+	// Relative to --repo (sub), not the git repository root: "a.go", never
+	// "svc/a.go" — the latter would never match anything reposcan.Enumerate
+	// produced under sub.
+	if len(got) != 1 || got[0] != "a.go" {
+		t.Fatalf("changed = %v, want [a.go] (relative to --repo, not the git root)", got)
+	}
+}
+
+// TestChangedFilesUsesAThreeDotRange is Gap 4a, an adjudicated fix to code
+// the plan itself specified: two-dot `git diff <base>` compares trees
+// directly, so once base has advanced past the branch point, files changed
+// only ON BASE are reported as changed too and get audited — over-scoping,
+// which is expensive (an audit costs ~84 full test-suite runs per file), not
+// merely untidy. `<base>...HEAD` compares against the merge base, which is
+// what "what this PR changed" means: here, a feature branch only ever
+// touched a.go, but base's OWN tip moved on and touched b.go after the
+// branch point — the diff must report only a.go.
+func TestChangedFilesUsesAThreeDotRange(t *testing.T) {
+	root := t.TempDir()
+	gitRun := gitCmd(t, root)
+	mustWrite(t, filepath.Join(root, "a.go"), "package p\n")
+	mustWrite(t, filepath.Join(root, "b.go"), "package p\n")
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+	mainBranch := strings.TrimSpace(func() string {
+		out, err := exec.Command("git", "-C", root, "rev-parse", "--abbrev-ref", "HEAD").Output()
+		if err != nil {
+			t.Skipf("git rev-parse --abbrev-ref unusable here: %v", err)
+		}
+		return string(out)
+	}())
+
+	gitRun("checkout", "-q", "-b", "feature")
+	mustWrite(t, filepath.Join(root, "a.go"), "package p // feature change\n")
+	gitRun("add", "a.go")
+	gitRun("commit", "-q", "-m", "feature change", "--no-gpg-sign")
+
+	gitRun("checkout", "-q", mainBranch)
+	mustWrite(t, filepath.Join(root, "b.go"), "package p // base advanced\n")
+	gitRun("add", "b.go")
+	gitRun("commit", "-q", "-m", "base advanced", "--no-gpg-sign")
+
+	gitRun("checkout", "-q", "feature")
+
+	got, err := changedFiles(root, mainBranch)
+	if err != nil {
+		t.Fatalf("changedFiles: %v", err)
+	}
+	if len(got) != 1 || got[0] != "a.go" {
+		t.Fatalf("changed = %v, want [a.go] — b.go changed only on base after the branch point, and must not be reported as part of this PR's diff", got)
+	}
+}
+
+// TestChangedFilesSurfacesGitStderr is Gap 4b: cmd.Output() with a bare %w
+// wrap surfaced a bad ref to the operator as "exit status 128", discarding
+// git's own explanation entirely. exec.ExitError.Stderr is already
+// populated by cmd.Output(); it must be included in the returned error.
+func TestChangedFilesSurfacesGitStderr(t *testing.T) {
+	root := t.TempDir()
+	gitRun := gitCmd(t, root)
+	gitRun("init", "-q")
+	gitRun("commit", "-q", "--allow-empty", "-m", "x", "--no-gpg-sign")
+
+	_, err := changedFiles(root, "no-such-ref-at-all")
+	if err == nil {
+		t.Fatal("want an error for an unresolvable ref")
+	}
+	msg := err.Error()
+	// The bare pre-fix form was exactly this, with nothing after it: the
+	// %w wrap alone renders as "exit status <n>", no git detail attached.
+	bareForm := "git diff against no-such-ref-at-all...HEAD: exit status 128"
+	// Not asserting on git's own wording ("unknown revision", "bad
+	// revision", ...): git localizes that text under a non-C locale, and
+	// pinning LC_ALL here would test the test environment more than the
+	// code. What matters is that SOMETHING beyond the bare exit code made
+	// it into the error.
+	if !strings.Contains(msg, "no-such-ref-at-all") {
+		t.Errorf("error must name the bad ref: %v", err)
+	}
+	if strings.HasSuffix(strings.TrimRight(msg, "\n"), bareForm) {
+		t.Errorf("error looks like the bare %%w form with no git detail appended: %v", err)
+	}
+}
+
+// TestCertifyRepoDiffBaseBoundsTheJobSet: a repo where two files are
+// candidates (both goaled, both paired with a test) but only one changed —
+// the scan must emit one job, and must NOT rank or apply --top on this path,
+// because in a PR the diff IS the bound.
+func TestCertifyRepoDiffBaseBoundsTheJobSet(t *testing.T) {
+	root := t.TempDir()
+	gitRun := gitCmd(t, root)
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "pkg", "a_test.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "pkg", "b.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "pkg", "b_test.go"), "package pkg\n")
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+	base := gitRevParseHead(t, root)
+
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg // changed\n")
+	gitRun("add", "pkg/a.go")
+	gitRun("commit", "-q", "-m", "change", "--no-gpg-sign")
+
+	// Both files are named in the goals map, so the bound demonstrably comes
+	// from the diff and not from which files happen to have a hand-written
+	// goal.
+	goals := filepath.Join(root, "goals.json")
+	mustWrite(t, goals, `{"pkg/a.go": "must not panic", "pkg/b.go": "must not panic either"}`)
+
+	var out, errb bytes.Buffer
+	code := runCertifyRepo([]string{"--repo", root, "--diff-base", base, "--goals", goals, "--dry-run"}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "1 job(s)") {
+		t.Errorf("diff scoping did not bound the job set:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "ranked by") {
+		t.Errorf("ranking ran on the diff path, where the diff is the bound:\n%s", out.String())
+	}
+	// The unchanged candidate must be ACCOUNTED, never silently dropped.
+	if !strings.Contains(out.String(), reposcan.ReasonNotSelected) {
+		t.Errorf("the unchanged candidate must be accounted as %s:\n%s", reposcan.ReasonNotSelected, out.String())
+	}
+}
+
+// TestCertifyRepoDiffBaseEmptyScopeExitsZero is Gap 2: the most common PR in
+// existence (here, one that changed nothing under the goal-eligible surface)
+// legitimately has nothing in scope, and that must exit 0 — not read as a
+// failed audit in CI. This is a real (non-dry-run) run: --substrate workspace
+// is used so the assertion does not depend on bwrap being available on the
+// test host, and it never reaches Execute because zero jobs are emitted.
+func TestCertifyRepoDiffBaseEmptyScopeExitsZero(t *testing.T) {
+	// The provider preflight demands a key regardless of scope (it is a
+	// scan-wide fact checked before selection is even known); a zero-scope
+	// scan never actually calls a model, so a placeholder value is enough.
+	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
+	root := t.TempDir()
+	gitRun := gitCmd(t, root)
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "pkg", "a_test.go"), "package pkg\n")
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+	base := gitRevParseHead(t, root)
+	// Nothing changes after base: the diff scope is empty.
+
+	goals := filepath.Join(root, "goals.json")
+	mustWrite(t, goals, `{"pkg/a.go": "must not panic"}`)
+
+	var out, errb bytes.Buffer
+	code := runCertifyRepo([]string{
+		"--repo", root, "--diff-base", base, "--goals", goals,
+		"--substrate", substrateWorkspace,
+	}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit %d, want 0 for an empty diff scope: stdout=%s stderr=%s", code, out.String(), errb.String())
+	}
+	if !strings.Contains(out.String(), "0 job(s)") {
+		t.Errorf("want 0 jobs for an empty diff scope:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "NOTHING IN SCOPE") {
+		t.Errorf("want the distinct empty-scope line, got:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "COULD-NOT-GRADE") {
+		t.Errorf("an empty scope must not be reported as a grading failure:\n%s", out.String())
+	}
+}
+
+// TestCertifyRepoDiffBaseNonEmptyScopeNothingGradableExitsNonZero is the
+// other half of Gap 2: files WERE in scope (one candidate changed) and none
+// of them could be graded — that is a real failure to report, and must stay
+// exit 1, never silently read as green because the scan happened to be
+// diff-scoped. The check command is `-- false`, which fails the baseline
+// deterministically without ever reaching an LLM call; --substrate workspace
+// avoids depending on bwrap on the test host.
+func TestCertifyRepoDiffBaseNonEmptyScopeNothingGradableExitsNonZero(t *testing.T) {
+	// The provider preflight demands a key before the audit runs, even though
+	// the `-- false` baseline fails before any model would be called.
+	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
+	root := t.TempDir()
+	gitRun := gitCmd(t, root)
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "pkg", "a_test.go"), "package pkg\n")
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+	base := gitRevParseHead(t, root)
+
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg // changed\n")
+	gitRun("add", "pkg/a.go")
+	gitRun("commit", "-q", "-m", "change", "--no-gpg-sign")
+
+	goals := filepath.Join(root, "goals.json")
+	mustWrite(t, goals, `{"pkg/a.go": "must not panic"}`)
+
+	var out, errb bytes.Buffer
+	code := runCertifyRepo([]string{
+		"--repo", root, "--diff-base", base, "--goals", goals,
+		"--substrate", substrateWorkspace, "--", "false",
+	}, &out, &errb)
+	if code != 1 {
+		t.Fatalf("exit %d, want 1 (nothing graded out of a non-empty scope): stdout=%s stderr=%s", code, out.String(), errb.String())
+	}
+	if !strings.Contains(out.String(), "1 job(s)") {
+		t.Errorf("want 1 job (the changed candidate was in scope):\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "COULD-NOT-GRADE") {
+		t.Errorf("want the could-not-grade line, got:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "NOTHING IN SCOPE") {
+		t.Errorf("a non-empty scope must not print the empty-scope line:\n%s", out.String())
+	}
+}
+
+// TestCertifyRepoRejectsUnknownSubstrate proves an unrecognized --substrate
+// value is a usage error (exit 2), never a silent fall-through to the jail
+// default — a run that quietly used the wrong substrate while claiming the
+// other is exactly the accountability failure this branch closes.
+func TestCertifyRepoRejectsUnknownSubstrate(t *testing.T) {
+	root := t.TempDir()
+	var out, errb bytes.Buffer
+	code := runCertifyRepo([]string{"--repo", root, "--substrate", "docker", "--dry-run"}, &out, &errb)
+	if code != 2 {
+		t.Fatalf("exit %d, want 2 (usage error) for an unrecognized substrate; stdout=%s stderr=%s", code, out.String(), errb.String())
+	}
+	if !strings.Contains(errb.String(), "docker") {
+		t.Errorf("stderr should name the bad value: %q", errb.String())
+	}
+}
+
+// TestCertifyRepoAcceptsKnownSubstrateValues proves both real substrate names
+// are accepted flag values.
+func TestCertifyRepoAcceptsKnownSubstrateValues(t *testing.T) {
+	root := t.TempDir()
+	for _, s := range []string{substrateJail, substrateWorkspace} {
+		var out, errb bytes.Buffer
+		code := runCertifyRepo([]string{"--repo", root, "--substrate", s, "--dry-run"}, &out, &errb)
+		if code != 0 {
+			t.Fatalf("--substrate %s: exit %d, stderr=%s", s, code, errb.String())
+		}
+	}
+}
+
+// TestNewLocalExecutorSkipsSandboxForWorkspaceSubstrate proves the jail
+// preflight is conditional on the selected substrate: the workspace substrate
+// needs no jail by construction (buildJailWiring's workspace branch never
+// builds a seed, resolves an isolator, or binds a mount), so a host with no
+// working bwrap must not be refused when --substrate workspace is selected —
+// that is exactly the CI runner this substrate exists to serve.
+func TestNewLocalExecutorSkipsSandboxForWorkspaceSubstrate(t *testing.T) {
+	var resolutions int
+	orig := resolveJailFn
+	resolveJailFn = func(string, bool) (sandbox.Isolator, error) {
+		resolutions++
+		return nil, errors.New("no bwrap on this host")
+	}
+	t.Cleanup(func() { resolveJailFn = orig })
+
+	ex := newLocalExecutor(t.TempDir(), nil, substrateWorkspace, io.Discard)
+	defer ex.Close()
+	if err := ex.preflight(); err != nil {
+		t.Fatalf("workspace substrate must not demand a sandbox: %v", err)
+	}
+	if resolutions != 0 {
+		t.Errorf("workspace substrate resolved the sandbox %d time(s), want 0", resolutions)
+	}
+}
+
+// TestNewLocalExecutorStillRequiresSandboxForJailSubstrate is the other
+// direction of the same fix: the jail substrate (the default) must still
+// refuse, with the SAME message, on a host that cannot sandbox — this
+// behaviour must not regress while fixing the workspace path.
+func TestNewLocalExecutorStillRequiresSandboxForJailSubstrate(t *testing.T) {
+	wantErr := errors.New("no bwrap on this host")
+	orig := resolveJailFn
+	resolveJailFn = func(string, bool) (sandbox.Isolator, error) {
+		return nil, wantErr
+	}
+	t.Cleanup(func() { resolveJailFn = orig })
+
+	for _, substrate := range []string{"", substrateJail} {
+		ex := newLocalExecutor(t.TempDir(), nil, substrate, io.Discard)
+		err := ex.preflight()
+		ex.Close()
+		if err == nil {
+			t.Fatalf("substrate %q: jail substrate must still refuse when no sandbox resolves", substrate)
+		}
+		if !errors.Is(err, wantErr) {
+			t.Errorf("substrate %q: preflight error = %v, want it to wrap %v (the same message)", substrate, err, wantErr)
+		}
+	}
+}
+
+// TestNewLocalExecutorSkipsTheSeedCacheForWorkspaceSubstrate is the seed-cache
+// corollary of Gap 1: buildJailWiring's workspace branch never reads a
+// shared seed (it builds its own empty overlay and mutates repoDir
+// directly), but before this fix the seed cache was wired unconditionally.
+// On the workspace path that meant a failed `go mod vendor` — no network, a
+// private module proxy, a small TMPDIR: normal conditions on the ephemeral
+// CI runner this substrate exists to serve — cached an error that turned
+// EVERY job ungradable (Execute's `l.seeds != nil` branch), a false
+// COULD-NOT-GRADE red build from jail prep the run was never going to use.
+// The fix must not wire a seed cache at all for substrateWorkspace, proven
+// here as a builder invocation count of zero: nil is the only way Execute's
+// existing nil-cache branch (already exercised by every other seam-level
+// test in this file) can apply.
+func TestNewLocalExecutorSkipsTheSeedCacheForWorkspaceSubstrate(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "a.go"), "package p\n")
+	mustWrite(t, filepath.Join(root, "a_test.go"), "package p\n")
+
+	ex := newLocalExecutor(root, nil, substrateWorkspace, io.Discard)
+	defer ex.Close()
+	if ex.seeds != nil {
+		t.Fatal("workspace substrate must not wire a seed cache at all")
+	}
+
+	// Load-bearing, not just cosmetic: drive a real Execute and prove no
+	// seed ever reaches either seam, and a job is gradable — this is the
+	// exact path that used to fail closed with ReasonPrepFailed when
+	// ensureGoVendored errored.
+	ex.newBaseline = func(_ context.Context, in localAuditInput) (reposcan.BaselineRunner, func(), error) {
+		if in.seed != nil {
+			t.Error("workspace substrate must never receive a shared seed")
+		}
+		return &scriptedBaseline{results: []bool{true, true}}, func() {}, nil
+	}
+	ex.audit = func(_ context.Context, in localAuditInput) (advpool.Verdict, error) {
+		if in.seed != nil {
+			t.Error("workspace substrate must never receive a shared seed")
+		}
+		return advpool.Verdict{DevKillRate: 1, MutantsTotal: 1}, nil
+	}
+	res, err := ex.Execute(context.Background(), reposcan.Job{
+		Path: "a.go", TestPath: "a_test.go", Lang: "go", Goal: reposcan.Goal{Text: "g"},
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !res.Gradable || res.Reason == reposcan.ReasonPrepFailed {
+		t.Errorf("workspace substrate must not fail closed on a seed it never builds: %+v", res)
+	}
+}
+
+// TestNewLocalExecutorStillWiresTheSeedCacheForJailSubstrate is the other
+// direction: the jail substrate's seed-build behaviour (built once, shared
+// across every job of a language — TestLocalExecutorSharesOneSeedAcrossJobs
+// already proves the sharing) must be unchanged by the workspace-substrate
+// guard added above. "" (today's shipped default) and the explicit
+// substrateJail value both still wire a real cache.
+func TestNewLocalExecutorStillWiresTheSeedCacheForJailSubstrate(t *testing.T) {
+	for _, substrate := range []string{"", substrateJail} {
+		ex := newLocalExecutor(t.TempDir(), nil, substrate, io.Discard)
+		if ex.seeds == nil {
+			t.Errorf("substrate %q: no seed cache wired — every job would re-prepare its own jail", substrate)
+		}
+		ex.Close()
+	}
+}
+
+// TestLocalExecutorThreadsSubstrateIntoAuditInput proves the value actually
+// arrives at localAuditInput — the seam the cache key is later computed
+// from — rather than merely existing as an unused field. A test asserting
+// only that the scan runs would still pass with substrate silently stuck at
+// "".
+func TestLocalExecutorThreadsSubstrateIntoAuditInput(t *testing.T) {
+	var gotBaseline, gotAudit string
+	ex := localExecutor{
+		baselineRuns: 2,
+		substrate:    substrateWorkspace,
+		newBaseline: func(_ context.Context, in localAuditInput) (reposcan.BaselineRunner, func(), error) {
+			gotBaseline = in.substrate
+			return &scriptedBaseline{results: []bool{true, true}}, func() {}, nil
+		},
+		audit: func(_ context.Context, in localAuditInput) (advpool.Verdict, error) {
+			gotAudit = in.substrate
+			return advpool.Verdict{DevKillRate: 1}, nil
+		},
+	}
+	if _, err := ex.Execute(context.Background(), reposcan.Job{Path: "a.go", Goal: reposcan.Goal{Text: "g"}}); err != nil {
+		t.Fatal(err)
+	}
+	if gotBaseline != substrateWorkspace || gotAudit != substrateWorkspace {
+		t.Fatalf("substrate did not reach localAuditInput: baseline=%q audit=%q, want %q", gotBaseline, gotAudit, substrateWorkspace)
+	}
+}
 
 func TestCertifyRepoRequiresRepoDir(t *testing.T) {
 	var out, errb bytes.Buffer
@@ -160,20 +637,42 @@ func TestCertifyRepoFileTotalMatchesDiskWithManyUngoaled(t *testing.T) {
 }
 
 // TestRepoScanExitCodeNothingAuditedIsNonZero is Finding 4: a scan in which
-// every file failed to grade must not read as green to CI.
+// every file failed to grade must not read as green to CI. This is the
+// whole-repo (non-diff) path — nothingInScope is always false there — so its
+// exit codes must be unchanged by the --diff-base distinction added below.
 func TestRepoScanExitCodeNothingAuditedIsNonZero(t *testing.T) {
 	nothing := reposcan.Aggregate("o", "r", "c", 2, 1, []reposcan.FileResult{
 		{Job: reposcan.Job{Path: "a.go"}, Gradable: false, Reason: reposcan.ReasonExecutorError},
 	}, nil)
-	if got := repoScanExitCode(nothing); got == 0 {
+	if got := repoScanExitCode(nothing, false); got == 0 {
 		t.Errorf("a scan that graded nothing must exit non-zero, got %d", got)
 	}
 
 	graded := reposcan.Aggregate("o", "r", "c", 2, 1, []reposcan.FileResult{
 		{Job: reposcan.Job{Path: "a.go"}, Gradable: true, Verdict: advpool.Verdict{DevKillRate: 0.9}},
 	}, nil)
-	if got := repoScanExitCode(graded); got != 0 {
+	if got := repoScanExitCode(graded, false); got != 0 {
 		t.Errorf("a scan that graded something must exit 0, got %d", got)
+	}
+}
+
+// TestRepoScanExitCodeDistinguishesEmptyScopeFromNothingGradable is the
+// --diff-base half of the exit-code contract: with diff scoping, the most
+// common PR in existence (docs-only, or touching only files with no paired
+// test) legitimately has nothing in scope, and exits 0 — a true, honest
+// answer. Zero GRADABLE out of a NON-empty scope stays exit 1: files were in
+// scope and none could be graded, which is a real failure to report.
+func TestRepoScanExitCodeDistinguishesEmptyScopeFromNothingGradable(t *testing.T) {
+	emptyScope := reposcan.Aggregate("o", "r", "c", 0, 0, nil, nil)
+	if got := repoScanExitCode(emptyScope, true); got != 0 {
+		t.Errorf("an empty diff scope must exit 0 (nothing to audit), got %d", got)
+	}
+
+	nothingGradable := reposcan.Aggregate("o", "r", "c", 2, 1, []reposcan.FileResult{
+		{Job: reposcan.Job{Path: "a.go"}, Gradable: false, Reason: reposcan.ReasonBaselineFailed},
+	}, nil)
+	if got := repoScanExitCode(nothingGradable, false); got != 1 {
+		t.Errorf("a non-empty scope where nothing graded must exit 1, got %d", got)
 	}
 }
 
@@ -439,7 +938,7 @@ func TestScanResolvesTheSandboxExactlyOnceForTheWholeScan(t *testing.T) {
 		}
 	}
 
-	ex := newLocalExecutor(repo, nil, io.Discard)
+	ex := newLocalExecutor(repo, nil, "", io.Discard)
 	defer ex.Close()
 	if ex.jailErr != nil {
 		t.Fatalf("construction must resolve through the seam: %v", ex.jailErr)
@@ -489,7 +988,7 @@ func TestPrintRepoReportNothingAuditedSaysSo(t *testing.T) {
 	rep := reposcan.Aggregate("local", "r", "c", 3, 1, []reposcan.FileResult{
 		{Job: reposcan.Job{Path: "a.go"}, Gradable: false, Reason: reposcan.ReasonFlakyBaseline},
 	}, []reposcan.Exclusion{{Path: "b.go", Reason: reposcan.ReasonNoPairedTest}})
-	printRepoReport(&out, rep)
+	printRepoReport(&out, rep, false)
 	s := out.String()
 	if !strings.Contains(s, "COULD-NOT-GRADE") {
 		t.Errorf("want COULD-NOT-GRADE, got:\n%s", s)
@@ -499,6 +998,32 @@ func TestPrintRepoReportNothingAuditedSaysSo(t *testing.T) {
 	}
 	if !strings.Contains(s, reposcan.ReasonFlakyBaseline) {
 		t.Errorf("ungradable reasons must be reported:\n%s", s)
+	}
+}
+
+// TestPrintRepoReportEmptyScopeSaysADifferentLineThanCouldNotGrade proves the
+// two zero-audited outcomes are not conflated in the human-readable output:
+// an empty diff scope (nothing was ever in bound) must not print the same
+// line as a non-empty scope that failed to grade anything.
+func TestPrintRepoReportEmptyScopeSaysADifferentLineThanCouldNotGrade(t *testing.T) {
+	rep := reposcan.Aggregate("local", "r", "c", 0, 0, nil, nil)
+
+	var scoped bytes.Buffer
+	printRepoReport(&scoped, rep, true)
+	if strings.Contains(scoped.String(), "COULD-NOT-GRADE") {
+		t.Errorf("an empty diff scope must not print COULD-NOT-GRADE:\n%s", scoped.String())
+	}
+	if !strings.Contains(scoped.String(), "NOTHING IN SCOPE") {
+		t.Errorf("want a distinct NOTHING IN SCOPE line, got:\n%s", scoped.String())
+	}
+
+	var notScoped bytes.Buffer
+	printRepoReport(&notScoped, rep, false)
+	if strings.Contains(notScoped.String(), "NOTHING IN SCOPE") {
+		t.Errorf("the non-diff/nothing-gradable case must not print the scope line:\n%s", notScoped.String())
+	}
+	if !strings.Contains(notScoped.String(), "COULD-NOT-GRADE") {
+		t.Errorf("want COULD-NOT-GRADE, got:\n%s", notScoped.String())
 	}
 }
 
@@ -514,7 +1039,7 @@ func TestPrintRepoReportWeakestIsCapped(t *testing.T) {
 		})
 	}
 	var out bytes.Buffer
-	printRepoReport(&out, reposcan.Aggregate("o", "r", "c", 12, len(results), results, nil))
+	printRepoReport(&out, reposcan.Aggregate("o", "r", "c", 12, len(results), results, nil), false)
 	s := out.String()
 	if !strings.Contains(s, "... and 2 more") {
 		t.Errorf("want the weakest list capped at 10 with a remainder line:\n%s", s)
@@ -646,7 +1171,7 @@ func TestCertifyRepoReportsEnumeratedCandidatesNotJobs(t *testing.T) {
 		{Job: reposcan.Job{Path: "a.go"}, Gradable: true, Verdict: advpool.Verdict{DevKillRate: 0.8}},
 	}, excl)
 	var out bytes.Buffer
-	printRepoReport(&out, rep)
+	printRepoReport(&out, rep, false)
 	s := out.String()
 	if !strings.Contains(s, "20% of 5 candidates") {
 		t.Errorf("want the ratio over the 5 enumerated candidates, got:\n%s", s)
@@ -671,10 +1196,10 @@ func TestPrintRepoReportUngradableOrderIsStable(t *testing.T) {
 	}, excl)
 
 	var first bytes.Buffer
-	printRepoReport(&first, rep)
+	printRepoReport(&first, rep, false)
 	for i := 0; i < 50; i++ {
 		var again bytes.Buffer
-		printRepoReport(&again, rep)
+		printRepoReport(&again, rep, false)
 		if again.String() != first.String() {
 			t.Fatalf("report is not reproducible:\n--- run 1 ---\n%s\n--- run %d ---\n%s", first.String(), i+2, again.String())
 		}
@@ -742,7 +1267,7 @@ func TestRunCertifyRepoDirEqualsFormGoesToTheScan(t *testing.T) {
 // copies and 378 vendor runs, up to NumCPU concurrently.
 func TestLocalExecutorSharesOneSeedAcrossJobs(t *testing.T) {
 	var builds atomic.Int32
-	ex := newLocalExecutor(t.TempDir(), nil, io.Discard)
+	ex := newLocalExecutor(t.TempDir(), nil, "", io.Discard)
 	ex.seeds = newSeedCache(func(lang string) (repoSeed, error) {
 		builds.Add(1)
 		return repoSeed{seedDir: "/seed/" + lang, files: map[string]string{}, cleanup: func() {}}, nil
@@ -774,7 +1299,7 @@ func TestLocalExecutorSharesOneSeedAcrossJobs(t *testing.T) {
 // inside prepareAuditJail.
 func TestLocalExecutorPassesTheSharedSeedToBothSeams(t *testing.T) {
 	want := repoSeed{seedDir: "/seed/go", files: map[string]string{"a.go": "package a\n"}, cleanup: func() {}}
-	ex := newLocalExecutor(t.TempDir(), nil, io.Discard)
+	ex := newLocalExecutor(t.TempDir(), nil, "", io.Discard)
 	ex.seeds = newSeedCache(func(string) (repoSeed, error) { return want, nil })
 	defer ex.Close()
 
@@ -807,7 +1332,7 @@ func TestLocalExecutorPassesTheSharedSeedToBothSeams(t *testing.T) {
 func TestLocalExecutorPrepFailureIsUngradable(t *testing.T) {
 	var builds atomic.Int32
 	audited := false
-	ex := newLocalExecutor(t.TempDir(), nil, io.Discard)
+	ex := newLocalExecutor(t.TempDir(), nil, "", io.Discard)
 	ex.seeds = newSeedCache(func(string) (repoSeed, error) {
 		builds.Add(1)
 		return repoSeed{cleanup: func() {}}, errors.New("go mod vendor failed")
@@ -845,7 +1370,7 @@ func TestLocalExecutorPrepFailureIsUngradable(t *testing.T) {
 
 func TestLocalExecutorCloseReleasesSeeds(t *testing.T) {
 	var cleaned atomic.Int32
-	ex := newLocalExecutor(t.TempDir(), nil, io.Discard)
+	ex := newLocalExecutor(t.TempDir(), nil, "", io.Discard)
 	ex.seeds = newSeedCache(func(lang string) (repoSeed, error) {
 		return repoSeed{seedDir: lang, files: map[string]string{}, cleanup: func() { cleaned.Add(1) }}, nil
 	})
@@ -879,7 +1404,7 @@ func TestLocalExecutorCloseReleasesSeeds(t *testing.T) {
 // silent regression to per-file jail prep (2 tree copies + 2 `go mod vendor`
 // runs per audited file), the exact bug this branch exists to remove.
 func TestNewLocalExecutorWiresASeedCache(t *testing.T) {
-	ex := newLocalExecutor(t.TempDir(), nil, io.Discard)
+	ex := newLocalExecutor(t.TempDir(), nil, "", io.Discard)
 	defer ex.Close()
 	if ex.seeds == nil {
 		t.Fatal("no seed cache: every job would prepare its own jail")
@@ -890,7 +1415,7 @@ func TestNewLocalExecutorWiresASeedCache(t *testing.T) {
 // reported by preflight, and a nil cache would silently change the fan-out's
 // prep strategy rather than fail.
 func TestNewLocalExecutorWiresASeedCacheEvenWhenTheJailIsUnavailable(t *testing.T) {
-	ex := newLocalExecutor(t.TempDir(), nil, io.Discard)
+	ex := newLocalExecutor(t.TempDir(), nil, "", io.Discard)
 	defer ex.Close()
 	if ex.jailErr == nil {
 		t.Skip("this host has a working sandbox; the jail-unavailable path is covered on hosts without one")
@@ -1296,4 +1821,108 @@ type stubDeriver struct{}
 
 func (stubDeriver) Derive(context.Context, reposcan.Candidate, string) (string, bool, error) {
 	return "", false, errors.New("stubDeriver must never be invoked in a unit test")
+}
+
+// TestWorkspaceSubstrateNeverResolvesAJailPerFile is the PER-JOB layer of the
+// same invariant TestNewLocalExecutorSkipsSandboxForWorkspaceSubstrate (the
+// constructor layer) and TestNewLocalExecutorSkipsTheSeedCacheForWorkspaceSubstrate
+// (the scan-wide seed layer) assert: selecting the workspace substrate means
+// NO jail construction runs, anywhere.
+//
+// prepareAuditJail resolved an isolator whenever localAuditInput.iso was nil,
+// with no substrate guard — and on the workspace path iso is ALWAYS nil (the
+// constructor deliberately leaves it so). On a GitHub-hosted runner, which
+// ships no bubblewrap, that resolution fails closed and every audited file
+// came back `could not audit: no working bwrap sandbox`, i.e. exit 1 with
+// COULD-NOT-GRADE — the precise false red this substrate exists to remove.
+//
+// The two constructor-level tests cannot catch it: they stop before any job
+// runs. So this one stubs the resolver to FAIL (a bwrap-less runner) and
+// drives a real Execute — with the REAL baselineRunnerFor seam, which is what
+// calls prepareAuditJail — through to a gradable result.
+func TestWorkspaceSubstrateNeverResolvesAJailPerFile(t *testing.T) {
+	var resolutions int
+	orig := resolveJailFn
+	resolveJailFn = func(string, bool) (sandbox.Isolator, error) {
+		resolutions++
+		return nil, errors.New("no working bwrap sandbox: bwrap backend unavailable")
+	}
+	t.Cleanup(func() { resolveJailFn = orig })
+
+	repo := t.TempDir()
+	mustWrite(t, filepath.Join(repo, "a.go"), "package p\n\nfunc A() int { return 1 }\n")
+	mustWrite(t, filepath.Join(repo, "a_test.go"), "package p\n\nimport \"testing\"\n\nfunc TestA(t *testing.T) {}\n")
+
+	// `true` stands in for the project's own test command: the point here is
+	// which SUBSTRATE runs it, not what it runs. It exits 0, so the baseline
+	// is stable and passing — and it runs through the real WorkspaceRunner.
+	ex := newLocalExecutor(repo, []string{"true"}, substrateWorkspace, io.Discard)
+	defer ex.Close()
+	// newBaseline is deliberately left REAL (baselineRunnerFor →
+	// prepareAuditJail): that is the layer under test. Only the audit itself
+	// is stubbed, because it would spend model calls.
+	ex.audit = func(context.Context, localAuditInput) (advpool.Verdict, error) {
+		return advpool.Verdict{DevKillRate: 1, MutantsTotal: 1}, nil
+	}
+
+	job := reposcan.Job{Path: "a.go", TestPath: "a_test.go", Lang: "go", Goal: reposcan.Goal{Text: "A returns 1"}}
+	res, err := ex.Execute(context.Background(), job)
+	if err != nil {
+		t.Fatalf("workspace substrate must not need a jail to audit a file: %v", err)
+	}
+	if !res.Gradable {
+		t.Fatalf("result not gradable (reason %q); the workspace substrate graded nothing", res.Reason)
+	}
+	if resolutions != 0 {
+		t.Errorf("the workspace substrate resolved a jail %d time(s), want 0", resolutions)
+	}
+}
+
+// TestWorkspaceSubstrateSerializesTheSwarm proves the scan does not fan out
+// concurrent jobs over ONE shared checkout.
+//
+// On the workspace substrate every job mutates the same tree in place
+// (adequacy.NewWorkspaceRunner(repoDir)), and applyFiles' restore ledger is
+// per-runner — it assumes exclusivity. Two jobs at once means job B's suite
+// runs while job A has a mutant (or adequacy.CanaryCode, which does not even
+// compile) written into A's file: B's surviving mutants get recorded as
+// KILLED, inflating the kill rate on a record this product signs, and B's
+// baseline can fail into a spurious baseline-failed/flaky-baseline. The swarm
+// sizing was substrate-blind (NumCPU-1, so a live run showed 8 workers), and
+// the Action passes no --swarm, so any PR touching two audited files hit it.
+//
+// Serialization is the accepted cost — giving each job its own tree copy is
+// exactly the memory ceiling this substrate exists to escape — so it must be
+// SAID, not silently differ from what the operator asked for.
+func TestWorkspaceSubstrateSerializesTheSwarm(t *testing.T) {
+	for _, ask := range []int{0, 4, 8} {
+		workers, readout := resolveScanWorkers(ask, substrateWorkspace)
+		if workers != 1 {
+			t.Errorf("--swarm %d on the workspace substrate: %d workers, want 1 (one shared checkout)", ask, workers)
+		}
+		if !strings.Contains(readout, "1 worker") {
+			t.Errorf("--swarm %d: readout %q must state the real worker count", ask, readout)
+		}
+		if !strings.Contains(readout, substrateWorkspace) {
+			t.Errorf("--swarm %d: readout %q must say WHY it serialized, naming the substrate", ask, readout)
+		}
+	}
+}
+
+// TestJailSubstrateSwarmSizingIsUnchanged is the other direction: the jail
+// substrate (including the "" zero value, today's shipped default) keeps the
+// exact auto-sizing and the exact readout it has always had. `certify --repo`
+// is a shipped command; the fix above must not change it.
+func TestJailSubstrateSwarmSizingIsUnchanged(t *testing.T) {
+	for _, substrate := range []string{"", substrateJail} {
+		for _, ask := range []int{0, 3} {
+			workers, readout := resolveScanWorkers(ask, substrate)
+			if want := resolveSwarm(ask); workers != want {
+				t.Errorf("substrate %q, --swarm %d: %d workers, want %d", substrate, ask, workers, want)
+			}
+			if got, want := readout, fmt.Sprintf("  swarm: %d workers\n", workers); got != want {
+				t.Errorf("substrate %q: readout %q, want %q (unchanged)", substrate, got, want)
+			}
+		}
+	}
 }

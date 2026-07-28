@@ -29,6 +29,12 @@ type Job struct {
 type EmitConfig struct {
 	Owner, Repo, Commit, Root            string
 	EngineVersion, ModelSet, AuditConfig string
+	// Substrate is where this scan's audits run — SubstrateJail or
+	// SubstrateWorkspace. Carried into every job's KeyInputs so a verdict
+	// earned under bwrap and one earned in a CI runner's own checkout never
+	// key identically: without it, a cached jail verdict would satisfy a
+	// seal claiming runner provenance.
+	Substrate string
 }
 
 // EmitJobs turns candidates into job envelopes, computing each one's cache
@@ -93,6 +99,7 @@ func EmitJobs(cfg EmitConfig, cands []Candidate, gs GoalSource) ([]Job, []Exclus
 			EngineVersion:     cfg.EngineVersion,
 			ModelSet:          cfg.ModelSet,
 			AuditConfig:       cfg.AuditConfig,
+			Substrate:         cfg.Substrate,
 		}.CacheKey()
 
 		jobs = append(jobs, Job{

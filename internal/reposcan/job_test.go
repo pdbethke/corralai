@@ -93,6 +93,35 @@ func TestEmitJobsCacheKeyTracksTestChanges(t *testing.T) {
 	}
 }
 
+// The audit's substrate is part of the cache key's identity: a verdict
+// earned under bwrap and one earned in a CI runner's own checkout are
+// different claims (different isolation, different toolchain provenance).
+// Without this, a cached jail verdict would satisfy a seal claiming runner
+// provenance — this proves the value actually reaches the key, not just that
+// the field exists.
+func TestEmitJobsCacheKeyTracksSubstrate(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"pkg/a.go": "package pkg\n", "pkg/a_test.go": "package pkg\n",
+	})
+	cands := []Candidate{{Path: "pkg/a.go", TestPath: "pkg/a_test.go", Lang: "go"}}
+	gs := stubGoals{"pkg/a.go": "g"}
+
+	jailJobs, _, err := EmitJobs(EmitConfig{Owner: "o", Root: root, Substrate: SubstrateJail}, cands, gs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wsJobs, _, err := EmitJobs(EmitConfig{Owner: "o", Root: root, Substrate: SubstrateWorkspace}, cands, gs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jailJobs) != 1 || len(wsJobs) != 1 {
+		t.Fatalf("want 1 job each, got %d and %d", len(jailJobs), len(wsJobs))
+	}
+	if jailJobs[0].CacheKey == wsJobs[0].CacheKey {
+		t.Fatal("substrate did not reach the cache key: jail and workspace verdicts key identically")
+	}
+}
+
 type errorGoalSource struct{}
 
 func (e errorGoalSource) GoalFor(c Candidate) (Goal, bool, error) {

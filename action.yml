@@ -1,0 +1,36 @@
+name: "Corral adversarial test audit"
+description: "Breaks your code to check whether your tests notice. Runs in your own CI, on the checkout that is already there."
+inputs:
+  test-command:
+    description: "The command that runs your tests, exactly as your CI runs it (e.g. 'go test ./...')."
+    required: true
+  diff-base:
+    description: "Audit only files changed against this ref. Defaults to the PR base; set empty to audit the whole repo (expensive)."
+    required: false
+    default: ""
+  goals:
+    description: "Optional JSON file of per-file goals. Omitted means goals are derived by a model."
+    required: false
+    default: ""
+  model-key:
+    description: "Provider API key for goal derivation. Required unless 'goals' is supplied."
+    required: false
+    default: ""
+runs:
+  using: "composite"
+  steps:
+    - name: Run corral
+      shell: bash
+      env:
+        ANTHROPIC_API_KEY: ${{ inputs.model-key }}
+      run: |
+        set -euo pipefail
+        base="${{ inputs.diff-base }}"
+        if [ -z "$base" ] && [ -n "${GITHUB_BASE_REF:-}" ]; then
+          git fetch --no-tags --depth=1 origin "$GITHUB_BASE_REF"
+          base="origin/$GITHUB_BASE_REF"
+        fi
+        args=(certify --repo . --substrate workspace)
+        [ -n "$base" ] && args+=(--diff-base "$base")
+        [ -n "${{ inputs.goals }}" ] && args+=(--goals "${{ inputs.goals }}")
+        corral "${args[@]}" -- ${{ inputs.test-command }}

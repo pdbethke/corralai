@@ -1,0 +1,94 @@
+# github-action
+
+`action.yml` at the repo root wraps `corral certify --repo` as a GitHub composite
+action, so a PR gets an adversarial test audit without anyone standing up a
+jail: the runner is already an ephemeral, isolated VM with your toolchain on it,
+so corral mutates your real checkout in place and runs your own test command
+against it, then restores the tree.
+
+## What it does
+
+The action runs one command:
+
+```
+corral certify --repo . --substrate workspace --diff-base <base> -- <test-command>
+```
+
+- `--substrate workspace` (`internal/reposcan/cachekey.go`'s `SubstrateWorkspace`)
+  tells corral to mutate the checkout at `.` directly and grade each mutant with
+  your own test command — no bubblewrap jail, no tree copy, no `go mod vendor`
+  seed. **The runner is the isolation boundary, not corral.** Point this action
+  only at a checkout you're fine seeing mutated mid-run — a throwaway CI
+  checkout, never a working tree with uncommitted changes you care about.
+  Mutations are applied and reverted in place; corral never commits and never
+  pushes, but a crash mid-mutation on a machine you also use for other work is
+  not a risk worth taking outside CI.
+- `--diff-base <base>` scopes the audit to files the change touched, instead of
+  the whole repo. **This is the default** — see below.
+
+## Usage
+
+```yaml
+- uses: actions/checkout@v4
+  with:
+    fetch-depth: 0
+- uses: pdbethke/corralai@v1
+  with:
+    test-command: "go test ./..."
+    model-key: ${{ secrets.ANTHROPIC_API_KEY }}
+```
+
+`corral` itself is not installed by this action — install it in a prior step,
+pinned to whatever version you choose. The action assumes it's on `PATH`.
+
+## `fetch-depth: 0` is required
+
+`--diff-base` computes the changed-file set with a **three-dot** git range
+(`<base>...HEAD`, i.e. against the merge base), because that's what "what this
+PR changed" means — a two-dot compare would also catch files that changed on
+the base branch after the fork point. GitHub's default checkout is
+**depth 1**, which has no merge base to find. On a shallow checkout the diff
+computation fails closed (exit 1, not a silent full-repo scan) — so the
+single most common way this action breaks on a first run is a missing
+`fetch-depth: 0` on the checkout step above it. Set it.
+
+## Why scoped by default, and why whole-repo is opt-in
+
+Auditing one file runs a full adversarial herd against it — generate mutants,
+run the project's real suite against each one, repeatedly — roughly 84 suite
+runs per audited file, against CI's one. That's a normal cost for the three
+files a PR actually touched; it is not for every file in the repo. Leave
+`diff-base` at its default (the PR's base ref) and the action audits only
+what changed. Passing an empty `diff-base` audits the whole repository instead
+— expensive, and something you should opt into deliberately, not something
+this action does by default.
+
+A file the diff didn't touch is still counted in the report's denominator, as
+`not-selected` — a scoped run reports a genuinely low coverage fraction of the
+repo, on purpose. It's telling you what it covered, not claiming the whole
+repo passed.
+
+A diff that touches no auditable candidate (a docs-only PR, or one that only
+touches files with no paired test) is a legitimate pass: the action prints
+`NOTHING IN SCOPE:` and exits 0.
+
+## Inputs
+
+| Input | Required | Default | Meaning |
+|---|---|---|---|
+| `test-command` | yes | — | The command that runs your tests, exactly as your CI runs it (e.g. `go test ./...`). |
+| `diff-base` | no | `""` (falls back to the PR's base ref) | Audit only files changed against this ref. Left empty on a `pull_request` event, the action falls back to `origin/$GITHUB_BASE_REF` (the PR's own base). On any other event (e.g. a push to `main`), there is no base ref to fall back to, so an empty `diff-base` means a whole-repo audit. |
+| `goals` | no | `""` | Optional JSON file of per-file goals. Omitted means goals are derived per file by a model. |
+| `model-key` | no | `""` | Provider API key for goal derivation, wired into the run as `ANTHROPIC_API_KEY` — the same environment variable corral's default model backend reads everywhere else (`internal/creds`). Required unless `goals` is supplied. Pass it as `${{ secrets.ANTHROPIC_API_KEY }}`; never write a key inline in the workflow. |
+
+## Exit codes
+
+- **0** — the scan ran and graded at least one file (whatever its kill rate
+  came out to), or nothing was in scope at all (a docs-only PR is a legitimate
+  green). **The action does not currently fail the merge on a low kill
+  rate** — a weak-but-gradable suite still exits 0. Read the report for the
+  number; don't rely on the exit code alone if you want CI to block on it.
+- **1** — a real failure: files were in scope and *none* of them could be
+  graded at all (`COULD-NOT-GRADE:`, e.g. every candidate's baseline suite was
+  already broken or flaky), or enumeration/derivation itself errored out.
+- **2** — a usage error (bad flags), not a finding.

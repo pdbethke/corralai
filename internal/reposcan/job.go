@@ -52,7 +52,12 @@ func EmitJobs(cfg EmitConfig, cands []Candidate, gs GoalSource) ([]Job, []Exclus
 	for _, c := range cands {
 		goal, ok, err := gs.GoalFor(c)
 		if err != nil {
-			return nil, nil, err
+			// A per-candidate goal failure is NOT fatal to the scan and is NOT
+			// ungoaled: the source of the goal failed, which says nothing about
+			// the file. Account it under its own reason and keep going, so one
+			// rate-limited file cannot cost the operator the other 24.
+			excl = append(excl, Exclusion{Path: c.Path, Reason: ReasonDeriveFailed})
+			continue
 		}
 		if !ok {
 			excl = append(excl, Exclusion{Path: c.Path, Reason: ReasonUngoaled})

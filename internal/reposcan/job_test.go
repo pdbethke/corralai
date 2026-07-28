@@ -98,16 +98,57 @@ func (e errorGoalSource) GoalFor(c Candidate) (Goal, bool, error) {
 	return Goal{}, false, errFail
 }
 
-// GoalSource errors are propagated.
-func TestEmitJobsPropagatesGoalSourceError(t *testing.T) {
+// A GoalSource error is ACCOUNTED per candidate, not propagated as a
+// scan-fatal error. It was fatal while goals came only from a file (a
+// malformed goals file is fatal for every candidate); with derivation, one
+// failed model call must not cost the operator every other file.
+func TestEmitJobsAccountsGoalSourceErrorPerCandidate(t *testing.T) {
 	root := writeTree(t, map[string]string{
 		"pkg/a.go": "package pkg\n", "pkg/a_test.go": "package pkg\n",
 	})
 	cands := []Candidate{{Path: "pkg/a.go", TestPath: "pkg/a_test.go", Lang: "go"}}
 
-	_, _, err := EmitJobs(EmitConfig{Owner: "o", Root: root}, cands, errorGoalSource{})
-	if err != errFail {
-		t.Errorf("want errFail, got %v", err)
+	jobs, excl, err := EmitJobs(EmitConfig{Owner: "o", Root: root}, cands, errorGoalSource{})
+	if err != nil {
+		t.Fatalf("a per-candidate goal failure must not abort the scan: %v", err)
+	}
+	if len(jobs) != 0 {
+		t.Errorf("jobs = %+v, want none: no goal was obtained", jobs)
+	}
+	// Never conflated with ungoaled: that would report a broken run as a repo
+	// with unclear code.
+	if len(excl) != 1 || excl[0].Reason != ReasonDeriveFailed {
+		t.Errorf("excl = %+v, want one %s", excl, ReasonDeriveFailed)
+	}
+}
+
+type failOneGoals struct{ failPath string }
+
+func (f failOneGoals) GoalFor(c Candidate) (Goal, bool, error) {
+	if c.Path == f.failPath {
+		return Goal{}, false, errors.New("429 rate limited")
+	}
+	return Goal{Text: "g", Provenance: "file"}, true, nil
+}
+
+func TestEmitJobsOneDeriveFailureDoesNotAbortTheScan(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"a.go": "package p\n", "a_test.go": "package p\n",
+		"b.go": "package p\n", "b_test.go": "package p\n",
+	})
+	cands := []Candidate{
+		{Path: "a.go", TestPath: "a_test.go", Lang: "go"},
+		{Path: "b.go", TestPath: "b_test.go", Lang: "go"},
+	}
+	jobs, excl, err := EmitJobs(EmitConfig{Owner: "o", Root: root}, cands, failOneGoals{failPath: "a.go"})
+	if err != nil {
+		t.Fatalf("one failing candidate must not abort the scan: %v", err)
+	}
+	if len(jobs) != 1 || jobs[0].Path != "b.go" {
+		t.Fatalf("jobs = %+v, want just b.go", jobs)
+	}
+	if len(excl) != 1 || excl[0].Reason != ReasonDeriveFailed {
+		t.Fatalf("excl = %+v, want one derive-failed", excl)
 	}
 }
 

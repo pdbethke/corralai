@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -32,14 +33,20 @@ func TestCertifyRepoRequiresRepoDir(t *testing.T) {
 	}
 }
 
-func TestCertifyRepoRequiresGoalsFile(t *testing.T) {
+// --goals is OPTIONAL now: without it the scan derives a goal per file. The
+// only remaining required flag is --repo, covered above.
+func TestCertifyRepoWithoutGoalsDoesNotDemandThem(t *testing.T) {
+	root := t.TempDir()
+	// No candidates in an empty tree, so no derivation is attempted and no
+	// provider credential is needed — the point is only that the old
+	// "--goals is required" refusal is gone.
 	var out, errb bytes.Buffer
-	code := runCertifyRepo([]string{"--repo", t.TempDir()}, &out, &errb)
-	if code == 0 {
-		t.Fatal("missing --goals should be an error in H1a")
+	code := runCertifyRepo([]string{"--repo", root, "--dry-run"}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit %d, stderr=%s", code, errb.String())
 	}
-	if !strings.Contains(errb.String(), "--goals is required") {
-		t.Errorf("stderr = %q", errb.String())
+	if strings.Contains(errb.String(), "--goals is required") {
+		t.Errorf("--goals is no longer required: %q", errb.String())
 	}
 }
 
@@ -680,42 +687,52 @@ func TestPrintRepoReportUngradableOrderIsStable(t *testing.T) {
 	}
 }
 
-// TestRunCertifyRepoDirWithoutGoalsRefuses is Finding I6: `--repo <dir>` with
-// --goals forgotten silently certified the CURRENT directory and stamped the
-// other repo's path onto the record — a signed statement about the wrong
-// subject. It must refuse and point at the scan.
-func TestRunCertifyRepoDirWithoutGoalsRefuses(t *testing.T) {
+// Finding I6, still guarded: `--repo <dir>` used to fall through to the record
+// path, which certified the CURRENT directory while stamping the other repo's
+// path onto the record — a signed statement about the wrong subject. It was
+// fixed by refusing (goals were mandatory then); now that goals are derived,
+// it is fixed by RUNNING the scan the operator asked for. Either way the
+// record path must never see it.
+func TestRunCertifyRepoDirWithoutGoalsGoesToTheScan(t *testing.T) {
 	root := t.TempDir()
 	run := &fakeRunner{exitCode: 0}
 	post := &fakePoster{result: stubResult()}
 	var stdout, stderr bytes.Buffer
-	code := runCertify([]string{"--repo", root, "--", "true"},
+	code := runCertify([]string{"--repo", root, "--dry-run", "--", "true"},
 		run, post, fakeJail{exit: 0, out: "ok"},
 		func() (ed25519.PrivateKey, error) { return nil, errors.New("unused") },
 		&stdout, &stderr)
-	if code != 2 {
-		t.Fatalf("exit %d, want 2", code)
+	if code != 0 {
+		t.Fatalf("exit %d, stderr=%s", code, stderr.String())
 	}
+	// THE invariant: the record path must never run, because it would certify
+	// the CURRENT directory while stamping root onto the record as its subject.
 	if run.ranArgv != nil || post.called {
-		t.Error("a --repo <dir> typo must not run the check or post a record")
+		t.Error("--repo <dir> must not run the check or post a record")
 	}
-	if !strings.Contains(stderr.String(), "--goals") {
-		t.Errorf("the error must point at the missing --goals:\n%s", stderr.String())
+	if !strings.Contains(stdout.String(), "corral certify --repo "+root) {
+		t.Errorf("--repo <dir> did not reach the scan:\n%s", stdout.String())
 	}
 }
 
-// The same guard must also catch the --repo=<dir> spelling.
-func TestRunCertifyRepoDirEqualsFormWithoutGoalsRefuses(t *testing.T) {
+// The same dispatch must also recognise the --repo=<dir> spelling.
+func TestRunCertifyRepoDirEqualsFormGoesToTheScan(t *testing.T) {
 	root := t.TempDir()
 	run := &fakeRunner{exitCode: 0}
 	post := &fakePoster{result: stubResult()}
 	var stdout, stderr bytes.Buffer
-	code := runCertify([]string{"--repo=" + root, "--", "true"},
+	code := runCertify([]string{"--repo=" + root, "--dry-run", "--", "true"},
 		run, post, fakeJail{exit: 0, out: "ok"},
 		func() (ed25519.PrivateKey, error) { return nil, errors.New("unused") },
 		&stdout, &stderr)
-	if code != 2 {
-		t.Fatalf("exit %d, want 2; stderr=%s", code, stderr.String())
+	if code != 0 {
+		t.Fatalf("exit %d, stderr=%s", code, stderr.String())
+	}
+	if run.ranArgv != nil || post.called {
+		t.Error("--repo=<dir> must not run the check or post a record")
+	}
+	if !strings.Contains(stdout.String(), "corral certify --repo "+root) {
+		t.Errorf("--repo=<dir> did not reach the scan:\n%s", stdout.String())
 	}
 }
 
@@ -932,5 +949,57 @@ func TestLocalExecutorSuiteIgnoresFileBeatsBaselineFailed(t *testing.T) {
 	}
 	if res.Reason != reposcan.ReasonSuiteIgnoresFile {
 		t.Errorf("Reason = %q, want %q", res.Reason, reposcan.ReasonSuiteIgnoresFile)
+	}
+}
+
+// TestCertifyRepoDryRunRanksSelectsAndAccounts proves the bound is applied
+// BEFORE derivation and that what fell outside it is accounted, not dropped.
+func TestCertifyRepoDryRunRanksSelectsAndAccounts(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "pkg", "a_test.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "pkg", "b.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "pkg", "b_test.go"), "package pkg\n")
+
+	var out, errb bytes.Buffer
+	code := runCertifyRepo([]string{"--repo", root, "--top", "1", "--dry-run"}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit %d, stderr=%s", code, errb.String())
+	}
+	s := out.String()
+	if !strings.Contains(s, reposcan.ReasonNotSelected) {
+		t.Errorf("bounded scan must account the unselected candidate:\n%s", s)
+	}
+	// The bound is applied BEFORE goals are obtained: only the selected
+	// candidate becomes a job, so only it would ever cost a derivation.
+	if !strings.Contains(s, "1 job(s)") {
+		t.Errorf("--top 1 must emit exactly one job:\n%s", s)
+	}
+	// The selection rule is disclosed, not silent. Matched as a whole line
+	// rather than on the substring "ranked by": Rank's own degradation note
+	// ("... ranked by source size alone") contains that phrase, so a bare
+	// Contains check passes even with the disclosure line deleted.
+	if !regexp.MustCompile(`(?m)^  ranked by \S+; auditing 1 of 2 candidate\(s\)$`).MatchString(s) {
+		t.Errorf("output must disclose the ranking signal and the bound:\n%s", s)
+	}
+}
+
+// --goals still wins: hand-written goals and the file source keep working.
+func TestCertifyRepoGoalsFileTakesPrecedenceOverDerivation(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "pkg", "a_test.go"), "package pkg\n")
+	goals := filepath.Join(root, "goals.json")
+	mustWrite(t, goals, `{"pkg/a.go": "hand written"}`)
+
+	var out, errb bytes.Buffer
+	// No provider credential is needed on this path — proof derivation was
+	// not attempted.
+	code := runCertifyRepo([]string{"--repo", root, "--goals", goals, "--dry-run"}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit %d, stderr=%s", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "1 job(s)") {
+		t.Errorf("hand-written goal did not produce a job:\n%s", out.String())
 	}
 }

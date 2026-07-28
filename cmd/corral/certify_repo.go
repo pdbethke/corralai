@@ -17,17 +17,30 @@ import (
 	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
+// defaultScanTop bounds a scan by default. Provisional: large enough to be
+// useful, small enough to quote a price. Revisit against a real third-party
+// repo scan before relying on it.
+const defaultScanTop = 25
+
+// defaultDeriveModel is the goal-deriver's model. It is intentionally the same
+// tier as the mutant generator: deriving one sentence from a file is not the
+// hard part of this pipeline.
+const defaultDeriveModel = defaultLocalMutantModel
+
 // runCertifyRepo fans the single-file audit out over a whole repository.
-// H1a: goals come from a checked-in JSON file; H1b replaces that with LLM
-// derivation behind the same GoalSource interface. No signing here — H1c
-// turns the report into a sealed, anchored statement.
+// Goals come from a checked-in JSON file when --goals is given, and are
+// otherwise DERIVED per file by a model behind the same GoalSource interface.
+// No signing here — H1c turns the report into a sealed, anchored statement.
 func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	flagArgs, checkArgv := splitCertifyArgs(args)
 
 	fs := flag.NewFlagSet("certify --repo", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	repoDir := fs.String("repo", "", "path of the repository to audit (required)")
-	goalsPath := fs.String("goals", "", "JSON file mapping repo-relative paths to goals (required)")
+	goalsPath := fs.String("goals", "", "JSON file mapping repo-relative paths to goals (default: derive a goal per file)")
+	topFlag := fs.Int("top", defaultScanTop, "audit only the N highest-ranked candidates (0 or --all = every candidate). Bounded by default: a whole-repo audit runs a full herd per file, so an unbounded first scan on a large repo costs hours and real money")
+	allFlag := fs.Bool("all", false, "audit every candidate, ignoring --top")
+	deriveModel := fs.String("derive-model", defaultDeriveModel, "model that derives a goal per file when --goals is not given")
 	owner := fs.String("owner", "local", "owning account for the scan (tenant identifier)")
 	commit := fs.String("commit", "", "commit SHA the report is bound to")
 	swarmFlag := fs.Int("swarm", 0, "max concurrent audit workers (0 = auto-size to this host's cores)")
@@ -40,10 +53,6 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "corral certify --repo: --repo is required")
 		return 2
 	}
-	if *goalsPath == "" {
-		fmt.Fprintln(stderr, "corral certify --repo: --goals is required (H1a supplies goals from a file)")
-		return 2
-	}
 
 	cands, excl, err := reposcan.Enumerate(*repoDir)
 	if err != nil {
@@ -51,32 +60,95 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	gs, err := reposcan.NewFileGoalSource(*goalsPath)
-	if err != nil {
-		fmt.Fprintf(stderr, "corral certify --repo: reading --goals %s: %v\n", *goalsPath, err)
+	fmt.Fprintf(stdout, "corral certify --repo %s\n", *repoDir)
+
+	// Selection precedes derivation, deliberately: bounding afterwards would
+	// pay for a goal on every candidate in order to audit 25 of them.
+	ranked, rankInfo, rerr := reposcan.Rank(*repoDir, cands)
+	if rerr != nil {
+		fmt.Fprintf(stderr, "corral certify --repo: ranking candidates: %v\n", rerr)
 		return 1
+	}
+	// Captured BEFORE any candidate-level exclusion is appended below. Only
+	// Enumerate's exclusions are non-candidates; every later reason
+	// (not-selected, ungoaled, derive-failed) names a file already counted in
+	// len(cands), and adding those to the file total would report more files
+	// than exist on disk.
+	enumExcl := len(excl)
+
+	limit := *topFlag
+	if *allFlag {
+		limit = 0
+	}
+	selected, notSelected := reposcan.Select(ranked, limit)
+	// Appending into excl is safe: notSelected is Select's own freshly
+	// allocated slice, and excl is Enumerate's. Nothing is appended to
+	// `selected`, which ALIASES ranked's backing array.
+	excl = append(excl, notSelected...)
+
+	// The rule is disclosed. A selection nobody can explain is the same
+	// problem this project criticises in black-box model routing.
+	fmt.Fprintf(stdout, "  ranked by %s; auditing %d of %d candidate(s)\n",
+		rankInfo.Signal, len(selected), len(cands))
+	if rankInfo.Note != "" {
+		fmt.Fprintf(stdout, "    %s\n", rankInfo.Note)
+	}
+
+	// --goals takes precedence when given, so hand-written goals keep working
+	// and that path needs no provider credential at all.
+	var gs reposcan.GoalSource
+	if *goalsPath != "" {
+		gs, err = reposcan.NewFileGoalSource(*goalsPath)
+		if err != nil {
+			fmt.Fprintf(stderr, "corral certify --repo: reading --goals %s: %v\n", *goalsPath, err)
+			return 1
+		}
+	} else if *dryRun {
+		// A dry run stops before any audit, so deriving a goal for each
+		// selected file would spend real money to produce nothing. Report the
+		// jobs the scan WOULD emit, with a goal plainly marked as not derived
+		// — reporting them as `ungoaled` instead would be a claim about the
+		// files, for a question that was never asked.
+		fmt.Fprintln(stdout, "  dry run: goals were NOT derived (no model calls); jobs below are what the scan would emit")
+		gs = notDerivedGoals{}
+	} else if len(selected) > 0 {
+		// Constructed only when there is something to derive FOR. It fails
+		// closed on a missing credential, which is the right answer for a real
+		// scan — but demanding a provider key to report "0 candidates" would
+		// refuse a scan that was never going to call a model.
+		d, derr := newLLMDeriver(*deriveModel)
+		if derr != nil {
+			fmt.Fprintf(stderr, "corral certify --repo: %v\n", derr)
+			return 2
+		}
+		gs = reposcan.NewDerivingGoalSource(*repoDir, d, *deriveModel, version, 3)
+	} else {
+		// Nothing was selected, so no goal will ever be asked for. A real
+		// source rather than a nil interface: EmitJobs returns early on an
+		// empty candidate list today, and a nil GoalSource would be a trap the
+		// day that changes.
+		gs = noGoals{}
 	}
 
 	cfg := reposcan.EmitConfig{
 		Owner: *owner, Repo: filepath.Base(*repoDir), Commit: *commit, Root: *repoDir,
 		EngineVersion: version, ModelSet: "unset", AuditConfig: "default",
 	}
-	jobs, goalExcl, err := reposcan.EmitJobs(cfg, cands, gs)
+	jobs, goalExcl, err := reposcan.EmitJobs(cfg, selected, gs)
 	if err != nil {
 		fmt.Fprintf(stderr, "corral certify --repo: emitting jobs: %v\n", err)
 		return 1
 	}
-	// The two exclusion sources partition DIFFERENTLY, and conflating them
+	// The exclusion sources partition DIFFERENTLY, and conflating them
 	// double-counts files:
 	//   - Enumerate's exclusions are files that are NOT candidates at all
 	//     (no-language / is-test / no-paired-test).
-	//   - EmitJobs' ungoaled exclusions are candidates — they are already
-	//     inside len(cands).
+	//   - not-selected / ungoaled / derive-failed name CANDIDATES — they are
+	//     already inside len(cands).
 	// So the file total is candidates + ENUMERATE-only exclusions. Counting
-	// len(excl) after the append added every ungoaled path a second time and
+	// len(excl) after the appends added every such path a second time and
 	// inflated TotalFiles past the number of files on disk — in a report a
 	// later slice signs and anchors to a public transparency log.
-	enumExcl := len(excl)
 	totalFiles := len(cands) + enumExcl
 
 	// BOTH sources are still REPORTED, or the coverage story is a lie: a reader
@@ -84,7 +156,6 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// nonetheless not audited.
 	excl = append(excl, goalExcl...)
 
-	fmt.Fprintf(stdout, "corral certify --repo %s\n", *repoDir)
 	// totalFiles is printed rather than left for the reader to add up: the two
 	// terms below overlap (ungoaled files are candidates AND excluded), so
 	// candidates + excluded is deliberately NOT the file count.
@@ -145,6 +216,30 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 
 	printRepoReport(stdout, rep)
 	return repoScanExitCode(rep)
+}
+
+// noGoals supplies no goal for anything. Used only when the scan selected
+// zero candidates, so it can never silently ungoal a file an operator meant
+// to audit.
+type noGoals struct{}
+
+func (noGoals) GoalFor(reposcan.Candidate) (reposcan.Goal, bool, error) {
+	return reposcan.Goal{}, false, nil
+}
+
+// notDerivedGoals stands in for the deriver on a --dry-run with no --goals: it
+// lets the scan show which jobs it would emit without making a model call. The
+// goal text says so in plain words, and its provenance is not a model name, so
+// a placeholder can never be mistaken for a derived goal if one of these jobs
+// is ever printed or serialised. A dry run stops before Scan, so it is never
+// audited against.
+type notDerivedGoals struct{}
+
+func (notDerivedGoals) GoalFor(reposcan.Candidate) (reposcan.Goal, bool, error) {
+	return reposcan.Goal{
+		Text:       "(not derived — dry run)",
+		Provenance: "not-derived:dry-run",
+	}, true, nil
 }
 
 // checkArgvSpansOneLanguage fails closed when the operator gave an explicit

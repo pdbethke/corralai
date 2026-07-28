@@ -356,30 +356,23 @@ func runCertify(args []string, run cmdRunner, post buildPoster, jail jailRunner,
 	if hasFlag(args, "--adversarial") {
 		return runCertifyAdversarial(args, mcpAdvClient{}, realRunner{}, time.Sleep, stdout, stderr)
 	}
-	// `corral certify --repo <dir> --goals <file> ...` fans the local audit out
-	// over a WHOLE repository.
+	// `corral certify --repo <dir> ...` fans the local audit out over a WHOLE
+	// repository. Dispatched on --repo naming an existing DIRECTORY, because
+	// --repo is also a long-standing flag on three other certify modes where
+	// it names the repository a record is ABOUT (e.g. `--repo owner/name`).
+	// A repository NAME is not a directory on disk, so the two never collide;
+	// --goals alone also selects the scan, for an operator who supplies goals
+	// from a file. Checked after --local/--adversarial so those modes win
+	// their own args.
 	//
-	// Dispatched on --goals, NOT on --repo, deliberately: --repo is already a
-	// long-standing flag on three other certify modes (the brain path, the
-	// standalone path, and --local), where it names the repository the record
-	// is ABOUT, not a directory to scan. Routing on --repo would silently
-	// hijack `corral certify --repo pdbethke/corralai -- go test ./...`.
-	// --goals is unique to the scan, so it is the unambiguous discriminator;
-	// the scan's own --repo flag is parsed by runCertifyRepo. Checked after
-	// --local/--adversarial so those modes always win their own args.
-	if hasFlag(args, "--goals") {
+	// The directory test is load-bearing beyond routing: before goals could be
+	// derived, `--repo <dir>` without --goals fell through to the standalone
+	// path, which certified the CURRENT directory's build while stamping the
+	// other repo's path onto the record as its subject — a signed statement
+	// about the wrong thing. Dispatching on the directory makes that case run
+	// the scan the operator asked for instead.
+	if dir, ok := flagValue(args, "--repo"); (ok && isExistingDir(dir)) || hasFlag(args, "--goals") {
 		return runCertifyRepo(args, stdout, stderr)
-	}
-	// --goals is absent, so the scan was not selected. If --repo nonetheless
-	// names an existing DIRECTORY, the operator meant the scan and forgot
-	// --goals: falling through would certify the CURRENT directory's build and
-	// stamp the other repo's path onto the record as its subject — a signed
-	// statement about the wrong thing. Refuse; say which flag is missing.
-	if dir, ok := flagValue(args, "--repo"); ok && isExistingDir(dir) {
-		fmt.Fprintf(stderr, "corral certify: --repo %s is a directory, but --goals is missing.\n", dir)
-		fmt.Fprintf(stderr, "  To scan a whole repository:   corral certify --repo %s --goals <goals.json>\n", dir)
-		fmt.Fprintln(stderr, "  In the record path --repo names a repository (e.g. owner/name), not a path to scan.")
-		return 2
 	}
 
 	flagArgs, checkArgv := splitCertifyArgs(args)

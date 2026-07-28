@@ -397,7 +397,12 @@ func runRunCorralStep(t *testing.T, runStep actionStep, tmp, testCommand string)
 		t.Fatal(err)
 	}
 	argvLog := filepath.Join(tmp, "argv.log")
-	stub := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"" + argvLog + "\"\n"
+	// NUL-delimited, not newline-delimited: a newline-joined log has the
+	// exact ambiguity this whole fix is about — it cannot distinguish "no
+	// trailing empty argument" from "one trailing empty argument", since
+	// both would just be a trailing newline. NUL cannot appear in argv at
+	// all, so it is an unambiguous separator.
+	stub := "#!/bin/sh\nprintf '%s\\0' \"$@\" > \"" + argvLog + "\"\n"
 	if err := os.WriteFile(filepath.Join(stubDir, "corral"), []byte(stub), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -424,7 +429,16 @@ func runRunCorralStep(t *testing.T, runStep actionStep, tmp, testCommand string)
 	out, runErr = cmd.CombinedOutput()
 
 	if argvBytes, err := os.ReadFile(argvLog); err == nil {
-		full := strings.Split(strings.TrimRight(string(argvBytes), "\n"), "\n")
+		// Exactly one NUL terminates each field, including the last one, so
+		// trim exactly one trailing NUL (the final field's own terminator) —
+		// never TrimRight, which would also eat a legitimately empty final
+		// argument's terminator and reintroduce the very ambiguity NUL
+		// delimiting exists to avoid.
+		content := strings.TrimSuffix(string(argvBytes), "\x00")
+		var full []string
+		if content != "" {
+			full = strings.Split(content, "\x00")
+		}
 		// The stub received corral's ENTIRE argv (its own --repo/--owner/etc
 		// flags too); only what follows "--" is the test-command's own
 		// argv, which is what every caller here actually wants to assert on.
@@ -551,5 +565,78 @@ func TestActionTestCommandRejectsEmbeddedNewline(t *testing.T) {
 	}
 	if len(argv) > 0 {
 		t.Errorf("corral should never have been invoked on a multi-line test-command; got argv=%v, output:\n%s", argv, out)
+	}
+}
+
+// TestActionTestCommandEmptyFailsClosed is the fence for a second
+// undiagnosable-COULD-NOT-GRADE door: pre-fix, `read -ra A <<< ""` gave a
+// zero-length argv, so corral saw `--` with nothing after it and fell back
+// to the language's stock test command — silently auditing something the
+// operator never asked for. The xargs-based parser instead produces a
+// ONE-element array holding "" (GNU xargs runs its command once even on
+// empty input without -r, so `printf '%s\n'` still emits a line and
+// `mapfile` still captures one field), which corral would treat as an
+// explicit, empty test command and try to exec — every candidate fails its
+// baseline for an opaque reason. An empty (or whitespace-only)
+// test-command must fail the step loudly instead, since guessing the test
+// command on a signed-record path is exactly the failure mode the
+// injection fix's canary exists to prevent.
+func TestActionTestCommandEmptyFailsClosed(t *testing.T) {
+	a := loadActionYAML(t)
+	runStep := findStepContaining(t, a, "certify --repo")
+
+	for name, testCommand := range map[string]string{
+		"empty":           "",
+		"whitespace only": "   \t  ",
+	} {
+		t.Run(name, func(t *testing.T) {
+			tmp := t.TempDir()
+			out, runErr, argv := runRunCorralStep(t, runStep, tmp, testCommand)
+			if runErr == nil {
+				t.Fatalf("test-command %q should fail the step (required, and must not silently fall back to a guessed command); output:\n%s", testCommand, out)
+			}
+			if len(argv) > 0 {
+				t.Errorf("corral should never have been invoked for test-command %q; got argv=%v, output:\n%s", testCommand, argv, out)
+			}
+			if !strings.Contains(strings.ToLower(string(out)), "test-command") {
+				t.Errorf("failure message should name test-command as the problem; got:\n%s", out)
+			}
+		})
+	}
+}
+
+// TestActionTestCommandPreservesEmptyArguments is the fence for the second
+// manifestation of the same root cause: $( ) command substitution strips
+// trailing newlines, so a NAIVE fix that captures xargs's newline-delimited
+// output through `$( )` silently drops a trailing empty argument —
+// `pytest ""` would arrive as a single word `[pytest]` instead of two,
+// and `pytest -k ""` would hand pytest a `-k` flag with nothing after it.
+// A NUL-delimited round trip (`xargs ... printf '%s\0'` into
+// `mapfile -d ”`) must preserve empty arguments in every position:
+// leading, middle, and trailing.
+func TestActionTestCommandPreservesEmptyArguments(t *testing.T) {
+	a := loadActionYAML(t)
+	runStep := findStepContaining(t, a, "certify --repo")
+
+	cases := []struct {
+		name        string
+		testCommand string
+		want        []string
+	}{
+		{"trailing empty argument", `pytest ""`, []string{"pytest", ""}},
+		{"empty flag value", `pytest -k ""`, []string{"pytest", "-k", ""}},
+		{"empty flag value followed by another word", `pytest -k "" -x`, []string{"pytest", "-k", "", "-x"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tmp := t.TempDir()
+			out, runErr, argv := runRunCorralStep(t, runStep, tmp, tc.testCommand)
+			if runErr != nil {
+				t.Fatalf("run-corral step failed: %v\n%s", runErr, out)
+			}
+			if strings.Join(argv, "\x1f") != strings.Join(tc.want, "\x1f") {
+				t.Errorf("test-command %q: got argv=%#v, want=%#v", tc.testCommand, argv, tc.want)
+			}
+		})
 	}
 }

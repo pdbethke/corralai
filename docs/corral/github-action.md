@@ -61,13 +61,39 @@ produces) is rejected up front for the same reason: quietly running only
 its first line would grade a different, truncated command than the one in
 the workflow file.
 
+An **empty or whitespace-only** `test-command` is rejected the same way,
+even though the input is declared `required: true` — GitHub does not
+actually enforce that on composite-action inputs, and a reusable workflow
+can still resolve `test-command` to `""`. Without the check, GNU `xargs`
+runs its command once even on empty input unless told not to, producing a
+one-element argv holding `""`, which corral would treat as an explicit,
+empty test command and try to exec — every candidate fails its baseline
+for an opaque reason, the exact undiagnosable shape this whole section
+exists to prevent, arriving through a different door than the newline
+case. `xargs -r` (no-run-if-empty) is also passed, as defense in depth,
+but the explicit check is the real guard — nothing here relies on `-r`
+alone.
+
+The split itself is NUL-delimited (`xargs ... printf '%s\0'` into
+`mapfile -d ''`), not newline-delimited, so a **trailing empty argument**
+survives: `pytest ""` becomes two words, and `pytest -k ""` keeps the
+empty value rather than silently dropping it. A newline-delimited version
+(piping through `$( )` command substitution) would strip exactly that
+trailing empty field, since `$( )` always strips trailing newlines — the
+same ambiguity a plain `echo` has for a value that legitimately ends in
+blank lines. Non-trailing empty arguments (`pytest -k "" -x`) round-trip
+correctly either way, which is what makes the trailing case easy to miss.
+
 `cmd/corral/action_test.go` covers all of this:
 `TestActionTestCommandWordSplitNotEvaluated` proves a `test-command`
 containing `;`, backticks, and `$( )` arrives as literal argv words instead
 of running; `TestActionTestCommandStillSplitsAnOrdinaryCommand` and
 `TestActionTestCommandPreservesQuotedWords` pin the two splitting shapes
-above; `TestActionTestCommandUnmatchedQuoteFailsClosed` and
-`TestActionTestCommandRejectsEmbeddedNewline` cover the two failure modes.
+above; `TestActionTestCommandUnmatchedQuoteFailsClosed`,
+`TestActionTestCommandRejectsEmbeddedNewline`, and
+`TestActionTestCommandEmptyFailsClosed` cover the three failure modes;
+`TestActionTestCommandPreservesEmptyArguments` pins the trailing/leading/
+middle empty-argument cases.
 
 What this does **not** give you is full shell fidelity: pipes (`|`), `&&`
 / `||` chaining, output redirection, and glob expansion in `test-command`

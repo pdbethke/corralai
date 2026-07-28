@@ -89,15 +89,38 @@ runs:
           echo "::error::test-command must be a single line — a multi-line value (e.g. from a YAML block scalar) would be silently truncated to its first line rather than run in full." >&2
           exit 1
         fi
+        # GitHub does not actually enforce `required: true`, and an empty
+        # value can also arrive through a reusable workflow. Reject it here
+        # rather than letting it become a one-element argv holding "" below
+        # (GNU xargs still runs its command once on empty input without
+        # -r): corral would treat that as an explicit, empty test command
+        # and try to exec it — every candidate fails its baseline for an
+        # opaque reason, the same undiagnosable shape the newline check
+        # above exists to prevent, arriving through a different door.
+        if [[ -z "${TEST_COMMAND//[[:space:]]/}" ]]; then
+          echo "::error::test-command is empty (or whitespace-only). It is required — corral will not silently fall back to a guessed test command." >&2
+          exit 1
+        fi
         # xargs does its own shell-style quote parsing (single and double
         # quotes are honoured) WITHOUT being a shell: it never evaluates
         # $( ), backticks, ;, &&, redirection, or globs, and -d is
-        # deliberately not passed since that disables the quote handling
-        # this depends on. An unmatched quote makes xargs fail, which must
-        # surface as an error, not an empty or partial argv.
-        if ! TEST_ARGV_RAW="$(printf '%s' "$TEST_COMMAND" | xargs -n1 printf '%s\n')"; then
+        # deliberately not passed on the INPUT side since that disables the
+        # quote handling this depends on. An unmatched quote makes xargs
+        # fail, which must surface as an error, not an empty or partial
+        # argv — checked here as its own pass (before the parse below)
+        # since the parse's own pipeline exit status is not reliably
+        # observable once it feeds a NUL-delimited `mapfile` via process
+        # substitution.
+        if ! printf '%s\n' "$TEST_COMMAND" | xargs -r -n1 printf '%s\0' >/dev/null; then
           echo "::error::test-command could not be parsed as shell-style words (check for an unmatched quote): $TEST_COMMAND" >&2
           exit 1
         fi
-        mapfile -t TEST_ARGV <<< "$TEST_ARGV_RAW"
+        # The actual split: NUL-delimited output, read with `mapfile -d ''`,
+        # so a trailing empty argument (`pytest ""`, or `pytest -k ""`)
+        # survives — `$( )` command substitution strips trailing newlines,
+        # which would otherwise silently drop exactly that argument. The
+        # trailing `\n` fed to xargs above is required too: without it, GNU
+        # xargs drops a trailing empty-quoted argument outright rather than
+        # emitting it as a zero-length one.
+        mapfile -d '' TEST_ARGV < <(printf '%s\n' "$TEST_COMMAND" | xargs -r -n1 printf '%s\0')
         corral "${args[@]}" -- "${TEST_ARGV[@]}"

@@ -124,6 +124,18 @@ Go binary.**
   always stored unvetted; only a human admin's `promote_control` vets it into the store
   the gate runs. It maps corral onto the recognized GRC **owner → operator → assessor**
   separation of duties: *a judge may not certify herself.*
+- **The GitHub Action — a second substrate, no brain required.** `certify --repo`
+  gained `--substrate {jail|workspace}`: `workspace` (`adequacy.WorkspaceRunner`)
+  mutates the CI runner's own checkout in place and grades each mutant with the
+  project's own test command — no bwrap jail, no tree copy, no `go mod vendor` seed;
+  the runner is the isolation boundary. `--diff-base <ref>` scopes a scan to the
+  files a PR actually touched (a three-dot range against the merge base), so a normal
+  PR audits the handful of files it changed rather than the whole repo — an
+  auditor's-own-time cost the *unbounded* case is deliberately not: roughly 84 suite
+  runs per audited file. `action.yml` wraps this as `pdbethke/corralai@v1` — install
+  `corral`, check out with `fetch-depth: 0` (required — the diff needs the merge
+  base), and one step audits the PR's diff in the runner that's already there. Docs:
+  `docs/corral/github-action.md`.
 
 **The substrate.**
 - **Multi-model, multi-forge; the `bwrap` + container jail; the attributed action

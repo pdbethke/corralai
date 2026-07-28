@@ -150,6 +150,15 @@ The same adversarial audit `--local` runs is available on the brain for a wired 
 via the admin-only `start_adversarial_run` MCP tool (see [the flags reference
 below](#the-audit-flags)).
 
+**No brain required — the GitHub Action.** `pdbethke/corralai@v1` runs `corral
+certify --repo` straight in your own CI job, on the checkout that's already
+there: no jail, no brain, no separate infra. It mutates the runner's checkout
+in place and grades each mutant with your own test command — the runner
+itself is the isolation boundary, so this is for CI, not a working tree you
+care about. Scoped to the PR's changed files by default (auditing every file
+on every PR is expensive — roughly 84 suite runs per file); a whole-repo run
+is opt-in. See **[docs/corral/github-action.md](docs/corral/github-action.md)**.
+
 ## A knowledge corpus that makes every audit sharper
 
 Audit knowledge compounds instead of dying with each context.

@@ -179,11 +179,20 @@ func TestChangedFilesSurfacesGitStderr(t *testing.T) {
 	if err == nil {
 		t.Fatal("want an error for an unresolvable ref")
 	}
-	if strings.Contains(err.Error(), "exit status 128") && !strings.Contains(err.Error(), "no-such-ref-at-all") {
-		t.Errorf("error discarded git's own explanation, left only the exit code: %v", err)
+	msg := err.Error()
+	// The bare pre-fix form was exactly this, with nothing after it: the
+	// %w wrap alone renders as "exit status <n>", no git detail attached.
+	bareForm := "git diff against no-such-ref-at-all...HEAD: exit status 128"
+	// Not asserting on git's own wording ("unknown revision", "bad
+	// revision", ...): git localizes that text under a non-C locale, and
+	// pinning LC_ALL here would test the test environment more than the
+	// code. What matters is that SOMETHING beyond the bare exit code made
+	// it into the error.
+	if !strings.Contains(msg, "no-such-ref-at-all") {
+		t.Errorf("error must name the bad ref: %v", err)
 	}
-	if !strings.Contains(err.Error(), "unknown revision") && !strings.Contains(err.Error(), "bad revision") {
-		t.Errorf("want git's stderr explanation in the error, got: %v", err)
+	if strings.HasSuffix(strings.TrimRight(msg, "\n"), bareForm) {
+		t.Errorf("error looks like the bare %%w form with no git detail appended: %v", err)
 	}
 }
 
@@ -395,6 +404,73 @@ func TestNewLocalExecutorStillRequiresSandboxForJailSubstrate(t *testing.T) {
 		if !errors.Is(err, wantErr) {
 			t.Errorf("substrate %q: preflight error = %v, want it to wrap %v (the same message)", substrate, err, wantErr)
 		}
+	}
+}
+
+// TestNewLocalExecutorSkipsTheSeedCacheForWorkspaceSubstrate is the seed-cache
+// corollary of Gap 1: buildJailWiring's workspace branch never reads a
+// shared seed (it builds its own empty overlay and mutates repoDir
+// directly), but before this fix the seed cache was wired unconditionally.
+// On the workspace path that meant a failed `go mod vendor` — no network, a
+// private module proxy, a small TMPDIR: normal conditions on the ephemeral
+// CI runner this substrate exists to serve — cached an error that turned
+// EVERY job ungradable (Execute's `l.seeds != nil` branch), a false
+// COULD-NOT-GRADE red build from jail prep the run was never going to use.
+// The fix must not wire a seed cache at all for substrateWorkspace, proven
+// here as a builder invocation count of zero: nil is the only way Execute's
+// existing nil-cache branch (already exercised by every other seam-level
+// test in this file) can apply.
+func TestNewLocalExecutorSkipsTheSeedCacheForWorkspaceSubstrate(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "a.go"), "package p\n")
+	mustWrite(t, filepath.Join(root, "a_test.go"), "package p\n")
+
+	ex := newLocalExecutor(root, nil, substrateWorkspace, io.Discard)
+	defer ex.Close()
+	if ex.seeds != nil {
+		t.Fatal("workspace substrate must not wire a seed cache at all")
+	}
+
+	// Load-bearing, not just cosmetic: drive a real Execute and prove no
+	// seed ever reaches either seam, and a job is gradable — this is the
+	// exact path that used to fail closed with ReasonPrepFailed when
+	// ensureGoVendored errored.
+	ex.newBaseline = func(_ context.Context, in localAuditInput) (reposcan.BaselineRunner, func(), error) {
+		if in.seed != nil {
+			t.Error("workspace substrate must never receive a shared seed")
+		}
+		return &scriptedBaseline{results: []bool{true, true}}, func() {}, nil
+	}
+	ex.audit = func(_ context.Context, in localAuditInput) (advpool.Verdict, error) {
+		if in.seed != nil {
+			t.Error("workspace substrate must never receive a shared seed")
+		}
+		return advpool.Verdict{DevKillRate: 1, MutantsTotal: 1}, nil
+	}
+	res, err := ex.Execute(context.Background(), reposcan.Job{
+		Path: "a.go", TestPath: "a_test.go", Lang: "go", Goal: reposcan.Goal{Text: "g"},
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !res.Gradable || res.Reason == reposcan.ReasonPrepFailed {
+		t.Errorf("workspace substrate must not fail closed on a seed it never builds: %+v", res)
+	}
+}
+
+// TestNewLocalExecutorStillWiresTheSeedCacheForJailSubstrate is the other
+// direction: the jail substrate's seed-build behaviour (built once, shared
+// across every job of a language — TestLocalExecutorSharesOneSeedAcrossJobs
+// already proves the sharing) must be unchanged by the workspace-substrate
+// guard added above. "" (today's shipped default) and the explicit
+// substrateJail value both still wire a real cache.
+func TestNewLocalExecutorStillWiresTheSeedCacheForJailSubstrate(t *testing.T) {
+	for _, substrate := range []string{"", substrateJail} {
+		ex := newLocalExecutor(t.TempDir(), nil, substrate, io.Discard)
+		if ex.seeds == nil {
+			t.Errorf("substrate %q: no seed cache wired — every job would re-prepare its own jail", substrate)
+		}
+		ex.Close()
 	}
 }
 

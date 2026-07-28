@@ -610,10 +610,13 @@ type localExecutor struct {
 
 	// substrate selects where every job in this scan runs — "" or
 	// substrateJail (the bwrap jail, today's behavior) or substrateWorkspace
-	// (mutate repoDir in place, the caller IS the isolation boundary). Set
-	// by the caller after construction (see runCertifyRepo), not a
-	// constructor parameter, so every existing caller of newLocalExecutor —
-	// including every test in this package — keeps the zero-value default.
+	// (mutate repoDir in place, the caller IS the isolation boundary). A
+	// newLocalExecutor constructor parameter, not set after construction: it
+	// must be known BEFORE the sandbox-resolution preflight below decides
+	// whether a jail is even needed, so a bwrap-less CI runner is never
+	// refused for a jail --substrate workspace was never going to use. Every
+	// existing caller of newLocalExecutor that doesn't care passes "" and
+	// keeps the zero-value (jail-equivalent) default.
 	substrate string
 
 	newBaseline func(context.Context, localAuditInput) (reposcan.BaselineRunner, func(), error)
@@ -660,14 +663,28 @@ func newLocalExecutor(repoDir string, checkArgv []string, substrate string, prog
 			backendName = iso.Name()
 		}
 	}
+	// The seed is jail preparation — a tree copy, `go mod vendor`, a full
+	// tree walk into memory — and buildJailWiring's workspace branch never
+	// reads any of it (it builds its own empty overlay map and mutates
+	// repoDir directly). Wiring it anyway would not just waste the work: a
+	// failed `go mod vendor` (no network, a private proxy, a small TMPDIR —
+	// exactly the conditions an ephemeral CI runner can hit) caches an error
+	// that turns EVERY job ungradable (see Execute's `l.seeds != nil`
+	// guard below), which is a false COULD-NOT-GRADE red build from a step
+	// this substrate exists to skip. Same shape as the sandbox guard above:
+	// left nil, so Execute's existing nil-cache branch (already exercised by
+	// the seam-level unit tests) applies.
+	//
 	// The scan exposes no --bind-dir/--no-bind-deps: nil/false are the
 	// documented defaults (auto-detected dep dirs are bound, nothing extra).
-	l.seeds = newSeedCache(func(langName string) (repoSeed, error) {
-		if l.jailErr != nil {
-			return repoSeed{cleanup: func() {}}, l.jailErr
-		}
-		return buildRepoSeed("corral certify --repo", repoDir, langName, backendName, nil, false, l.progress)
-	})
+	if substrate != substrateWorkspace {
+		l.seeds = newSeedCache(func(langName string) (repoSeed, error) {
+			if l.jailErr != nil {
+				return repoSeed{cleanup: func() {}}, l.jailErr
+			}
+			return buildRepoSeed("corral certify --repo", repoDir, langName, backendName, nil, false, l.progress)
+		})
+	}
 	return l
 }
 

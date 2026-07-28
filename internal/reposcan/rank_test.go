@@ -45,12 +45,16 @@ func touchCommit(t *testing.T, root, rel string) {
 }
 
 func TestRankPutsHighChurnLargeFilesFirst(t *testing.T) {
-	// Both files same size so churn is the deciding factor, not size.
-	sameSize := "package p\n" + string(make([]byte, 4000))
+	// touchCommit appends "// touched\n" (11 bytes) twice on hot.go, growing it
+	// by 22 bytes. To isolate churn from size, pad cold.go so it's the same
+	// size as hot.go AFTER the touches, then assert equality.
+	base := "package p\n" + string(make([]byte, 4000))
+	// cold.go needs extra 22 bytes to match hot.go's post-touch size.
+	coldPadded := base + string(make([]byte, 22))
 	root := writeTree(t, map[string]string{
-		"hot.go":       sameSize,
+		"hot.go":       base,
 		"hot_test.go":  "package p\n",
-		"cold.go":      sameSize,
+		"cold.go":      coldPadded,
 		"cold_test.go": "package p\n",
 	})
 	// hot.go is touched three times, cold.go once. Each later commit MODIFIES
@@ -61,9 +65,18 @@ func TestRankPutsHighChurnLargeFilesFirst(t *testing.T) {
 	touchCommit(t, root, "hot.go")
 	touchCommit(t, root, "hot.go")
 
-	// Guard: if this test ever skips, the churn signal is untested and the
-	// ranking degrades to size — which the OTHER test already covers. Assert
-	// git actually recorded the history we think it did.
+	// Guard: files must be the same size after touches so churn is the deciding
+	// factor. If this ever fails, churn cannot be isolated.
+	hotInfo, err := os.Stat(filepath.Join(root, "hot.go"))
+	coldInfo, err2 := os.Stat(filepath.Join(root, "cold.go"))
+	if err != nil || err2 != nil {
+		t.Fatalf("fixture stat failed: hot=%v cold=%v", err, err2)
+	}
+	if hotInfo.Size() != coldInfo.Size() {
+		t.Fatalf("fixture files not equal size: hot=%d cold=%d (test cannot isolate churn)", hotInfo.Size(), coldInfo.Size())
+	}
+
+	// Assert git actually recorded the history we think it did.
 	if out, err := exec.Command("git", "-C", root, "log", "--format=", "--name-only").Output(); err != nil || !strings.Contains(string(out), "hot.go") {
 		t.Fatalf("fixture did not produce git history (err=%v): %s", err, out)
 	}
@@ -137,5 +150,59 @@ func TestRankIsStableForTies(t *testing.T) {
 				t.Fatalf("run %d reordered ties: %v vs %v", i, again, first)
 			}
 		}
+	}
+}
+
+// A shallow clone has a working .git but truncated history, so git log succeeds
+// with biased counts. Ranking on that would silently bias a signal disclosed in
+// a report. Shallow clones degrade to size-only ranking with an explanation.
+func TestRankDegradesToSizeInShallowClone(t *testing.T) {
+	// Create a source repo with commit history.
+	source := writeTree(t, map[string]string{
+		"a.go":      "package p\n" + string(make([]byte, 100)),
+		"a_test.go": "package p\n",
+		"b.go":      "package p\n" + string(make([]byte, 200)),
+		"b_test.go": "package p\n",
+	})
+	gitRun(t, source, "init", "-q")
+	gitRun(t, source, "add", ".")
+	gitRun(t, source, "commit", "-q", "-m", "c1", "--no-gpg-sign")
+	// Modify b.go several times to give it high churn.
+	for i := 0; i < 3; i++ {
+		touchCommit(t, source, "b.go")
+	}
+
+	// Shallow clone into a temp directory.
+	clonePath := t.TempDir()
+	cloneCmd := exec.Command("git", "clone", "--depth", "1", "file://"+source, clonePath) // #nosec G204 -- fixed binary, literal test args
+	if out, err := cloneCmd.CombinedOutput(); err != nil {
+		t.Skipf("shallow clone failed (git may not support file:// clones): %v: %s", err, out)
+	}
+
+	// Verify the clone is actually shallow.
+	isShallow := exec.Command("git", "-C", clonePath, "rev-parse", "--is-shallow-repository") // #nosec G204 -- fixed binary, literal test args
+	out, err := isShallow.Output()
+	if err != nil || strings.TrimSpace(string(out)) != "true" {
+		t.Fatalf("clone fixture is not shallow (err=%v, output=%q); test cannot verify shallow detection", err, string(out))
+	}
+
+	// Rank in the shallow clone; should degrade to size-only.
+	cands := []Candidate{
+		{Path: "a.go", TestPath: "a_test.go", Lang: "go"},
+		{Path: "b.go", TestPath: "b_test.go", Lang: "go"},
+	}
+	got, info, err := Rank(clonePath, cands)
+	if err != nil {
+		t.Fatalf("Rank: %v", err)
+	}
+	if info.Signal != "size-only" {
+		t.Errorf("Signal = %q, want size-only in shallow clone", info.Signal)
+	}
+	if info.Note == "" {
+		t.Error("degraded ranking in shallow clone must explain itself")
+	}
+	// Size-only ranking should put b.go (200 bytes) before a.go (100 bytes).
+	if got[0].Path != "b.go" {
+		t.Errorf("ranked %q first, want b.go (size-only in shallow clone)", got[0].Path)
 	}
 }

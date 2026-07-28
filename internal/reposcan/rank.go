@@ -57,6 +57,19 @@ func Rank(root string, cands []Candidate) ([]Candidate, RankInfo, error) {
 // fileChurn counts commits touching each repo-relative path. A failure is not
 // an error: it degrades the signal and is reported through RankInfo.
 func fileChurn(root string) (map[string]int, RankInfo) {
+	// A shallow clone has a working .git, so `git log` succeeds — but its
+	// history is TRUNCATED, and a file whose commits predate the cutoff looks
+	// untouched. Ranking on that would silently bias a signal the report
+	// discloses, so treat it the same as no history at all.
+	shallow := exec.CommandContext(context.Background(), "git", "rev-parse", "--is-shallow-repository") // #nosec G204 -- fixed binary, literal args
+	shallow.Dir = root
+	if out, err := shallow.Output(); err == nil && strings.TrimSpace(string(out)) == "true" {
+		return nil, RankInfo{
+			Signal: "size-only",
+			Note:   "shallow clone — commit history is truncated, so churn would be biased; ranked by source size alone",
+		}
+	}
+
 	cmd := exec.CommandContext(context.Background(), "git", "log", "--format=", "--name-only") // #nosec G204 -- fixed binary, literal args
 	cmd.Dir = root
 	out, err := cmd.Output()

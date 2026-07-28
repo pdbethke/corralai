@@ -256,6 +256,25 @@ func loadActionYAML(t *testing.T) actionYAML {
 	return a
 }
 
+// TestActionRunScriptsHaveNoInlineExpressions is the fence for defect 2:
+// GitHub expands every `${{ }}` textually into the `run:` script BEFORE bash
+// ever sees the line, so any input value containing shell metacharacters
+// executes. Every value the action needs inside a script must travel through
+// `env:` (which GitHub also expands, but into an environment variable value,
+// never into script text) and be referenced as an ordinary quoted shell
+// variable instead.
+func TestActionRunScriptsHaveNoInlineExpressions(t *testing.T) {
+	a := loadActionYAML(t)
+	if len(a.Runs.Steps) == 0 {
+		t.Fatal("action.yml has no composite steps")
+	}
+	for _, step := range a.Runs.Steps {
+		if strings.Contains(step.Run, "${{") {
+			t.Errorf("step %q run script contains a `${{ }}` expression — GitHub expands this into the script text before bash runs it, so a value with shell metacharacters executes as code. Move it into env: and reference it as a shell variable instead. Script:\n%s", step.Name, step.Run)
+		}
+	}
+}
+
 // findStepContaining returns the first composite step whose run script
 // contains needle, failing the test if none does.
 func findStepContaining(t *testing.T, a actionYAML, needle string) actionStep {
@@ -359,5 +378,73 @@ func TestActionInstallStepFailsClearlyWithoutGo(t *testing.T) {
 	lower := strings.ToLower(string(out))
 	if !strings.Contains(lower, "setup-go") {
 		t.Errorf("install step's failure message should name actions/setup-go as the fix; got:\n%s", out)
+	}
+}
+
+// TestActionTestCommandWordSplitNotEvaluated is the fence for the one
+// deliberate exception to defect 2: `test-command` must still word-split
+// into argv (so "go test ./..." becomes three args), but it must never be
+// handed to bash as script text. This runs the real "run corral" step's
+// script with a test-command containing `;`, backticks and `$( )`, and
+// checks (a) none of the embedded commands actually ran, and (b) the
+// literal text arrived as argv on a stub `corral`.
+func TestActionTestCommandWordSplitNotEvaluated(t *testing.T) {
+	a := loadActionYAML(t)
+	runStep := findStepContaining(t, a, "certify --repo")
+	if strings.Contains(runStep.Run, "${{") {
+		t.Fatal("the run-corral step still inlines a ${{ }} expression; fix defect 2 first")
+	}
+
+	tmp := t.TempDir()
+	stubDir := filepath.Join(tmp, "stubbin")
+	if err := os.MkdirAll(stubDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	argvLog := filepath.Join(tmp, "argv.log")
+	pwned := filepath.Join(tmp, "pwned")
+	stub := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"" + argvLog + "\"\n"
+	if err := os.WriteFile(filepath.Join(stubDir, "corral"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	workspace := filepath.Join(tmp, "workspace")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	malicious := "go test ./...; touch " + pwned + "; echo $(touch " + pwned + ")"
+
+	cmd := exec.Command("bash", "-c", runStep.Run)
+	cmd.Dir = tmp
+	cmd.Env = append(os.Environ(),
+		"PATH="+stubDir+":"+os.Getenv("PATH"),
+		"TEST_COMMAND="+malicious,
+		"DIFF_BASE=",
+		"GOALS=",
+		"REPO_OWNER=acme",
+		"COMMIT_SHA=deadbeef",
+		"ANTHROPIC_API_KEY=",
+		"GITHUB_WORKSPACE="+workspace,
+	)
+	// Make sure a real pull_request base-ref fetch path isn't accidentally
+	// exercised in this unit test.
+	cmd.Env = append(cmd.Env, "GITHUB_BASE_REF=")
+
+	out, runErr := cmd.CombinedOutput()
+	if runErr != nil {
+		t.Fatalf("run-corral step failed: %v\n%s", runErr, out)
+	}
+
+	if _, statErr := os.Stat(pwned); statErr == nil {
+		t.Fatal("the malicious test-command was executed by the shell (the injected `touch` ran) — word-splitting alone is not protecting this")
+	}
+
+	argvBytes, err := os.ReadFile(argvLog)
+	if err != nil {
+		t.Fatalf("stub `corral` was never invoked, or produced no argv log: %v\n%s", err, out)
+	}
+	argv := strings.Split(strings.TrimRight(string(argvBytes), "\n"), "\n")
+	joined := strings.Join(argv, "\x1f")
+	if !strings.Contains(joined, "touch") || !strings.Contains(joined, pwned) {
+		t.Errorf("expected the test-command's literal text (including the embedded `touch` and its path) to arrive as argv words after `--`; got argv=%v", argv)
 	}
 }

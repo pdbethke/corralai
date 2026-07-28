@@ -33,6 +33,29 @@ corral certify --repo "$GITHUB_WORKSPACE" --substrate workspace \
   knows (`github.repository_owner`, `github.sha`, and `$GITHUB_WORKSPACE`, whose
   basename is the repository name). A record that names nothing is not a record.
 
+## Inputs never become script text
+
+Every `${{ inputs.* }}` / `${{ github.* }}` value the action needs travels
+through the step's `env:` block and is read back as an ordinary quoted shell
+variable (`"$DIFF_BASE"`, `"$TEST_COMMAND"`, etc.) — never interpolated
+directly into a `run:` script. This matters because GitHub expands `${{ }}`
+into the script's literal text **before** bash ever sees the line; an input
+interpolated that way is not data, it's code, and a value containing shell
+metacharacters (`;`, backticks, `$( )`) executes. `env:` values don't have
+that problem — GitHub still expands `${{ }}` there, but into an environment
+variable's *value*, which the shell never re-parses as script.
+
+The one deliberate exception is `test-command`: it's still meant to
+word-split into argv the way CI commands normally do (`go test ./...`
+becomes three separate arguments to `corral -- `), so the run step reads it
+into an array explicitly — `read -ra TEST_ARGV <<< "$TEST_COMMAND"` — rather
+than letting bash's normal unquoted-expansion splitting do it. That keeps the
+splitting behavior while guaranteeing the value is never handed to bash for
+*evaluation*; `cmd/corral/action_test.go`'s
+`TestActionTestCommandWordSplitNotEvaluated` proves a `test-command`
+containing `;`, backticks, and `$( )` arrives as literal argv words instead
+of running.
+
 ## Usage
 
 ```yaml

@@ -54,9 +54,14 @@ runs:
       shell: bash
       env:
         ANTHROPIC_API_KEY: ${{ inputs.model-key }}
+        DIFF_BASE: ${{ inputs.diff-base }}
+        GOALS: ${{ inputs.goals }}
+        REPO_OWNER: ${{ github.repository_owner }}
+        COMMIT_SHA: ${{ github.sha }}
+        TEST_COMMAND: ${{ inputs.test-command }}
       run: |
         set -euo pipefail
-        base="${{ inputs.diff-base }}"
+        base="$DIFF_BASE"
         if [ -z "$base" ] && [ -n "${GITHUB_BASE_REF:-}" ]; then
           git fetch --no-tags origin "+refs/heads/$GITHUB_BASE_REF:refs/remotes/origin/$GITHUB_BASE_REF"
           base="origin/$GITHUB_BASE_REF"
@@ -67,7 +72,11 @@ runs:
         # the workspace path rather than "."; the repo NAME in the header is
         # that path's basename, and "." names nothing.
         args=(certify --repo "${GITHUB_WORKSPACE:-.}" --substrate workspace)
-        args+=(--owner "${{ github.repository_owner }}" --commit "${{ github.sha }}")
+        args+=(--owner "$REPO_OWNER" --commit "$COMMIT_SHA")
         [ -n "$base" ] && args+=(--diff-base "$base")
-        [ -n "${{ inputs.goals }}" ] && args+=(--goals "${{ inputs.goals }}")
-        corral "${args[@]}" -- ${{ inputs.test-command }}
+        [ -n "$GOALS" ] && args+=(--goals "$GOALS")
+        # $TEST_COMMAND is data, not script: it is deliberately word-split
+        # (so "go test ./..." becomes three argv words), never handed to
+        # bash for evaluation, so shell metacharacters in it cannot execute.
+        read -ra TEST_ARGV <<< "$TEST_COMMAND"
+        corral "${args[@]}" -- "${TEST_ARGV[@]}"

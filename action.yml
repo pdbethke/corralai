@@ -27,7 +27,7 @@ runs:
         set -euo pipefail
         base="${{ inputs.diff-base }}"
         if [ -z "$base" ] && [ -n "${GITHUB_BASE_REF:-}" ]; then
-          git fetch --no-tags --depth=1 origin "$GITHUB_BASE_REF"
+          git fetch --no-tags origin "+refs/heads/$GITHUB_BASE_REF:refs/remotes/origin/$GITHUB_BASE_REF"
           base="origin/$GITHUB_BASE_REF"
         fi
         args=(certify --repo . --substrate workspace)

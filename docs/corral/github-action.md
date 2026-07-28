@@ -52,6 +52,21 @@ computation fails closed (exit 1, not a silent full-repo scan) — so the
 single most common way this action breaks on a first run is a missing
 `fetch-depth: 0` on the checkout step above it. Set it.
 
+When `diff-base` is left empty on a `pull_request` event, the action fetches the
+base branch itself before computing the diff:
+
+```
+git fetch --no-tags origin "+refs/heads/$GITHUB_BASE_REF:refs/remotes/origin/$GITHUB_BASE_REF"
+```
+
+Both halves of that are load-bearing. The **explicit refspec** is what actually
+creates `refs/remotes/origin/<base>`; a bare `git fetch origin main` updates only
+`FETCH_HEAD`, and `actions/checkout` configures a single-ref refspec that does not
+cover the base branch — so `origin/main` would simply not exist and the run would
+die on `unknown revision`. And there is deliberately **no `--depth`**: a shallow
+fetch writes `.git/shallow` and truncates the base's ancestry, which destroys the
+very merge base `fetch-depth: 0` was set to provide (`no merge base`, exit 1).
+
 ## Why scoped by default, and why whole-repo is opt-in
 
 Auditing one file runs a full adversarial herd against it — generate mutants,

@@ -65,3 +65,31 @@ func TestLLMDeriverTransportFailureIsAnError(t *testing.T) {
 		t.Fatalf("want an error and ok=false, got ok=%v err=%v", ok, err)
 	}
 }
+
+// NONE must be an exact match (post-trim, case-insensitive), not a substring
+// check — a real goal sentence that happens to contain the word "none" must
+// still come back as a goal.
+func TestLLMDeriverNoneIsExactMatchNotSubstring(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		reply string
+		want  bool // want ok
+	}{
+		{"literal NONE", "NONE", false},
+		{"lowercase", "none", false},
+		{"padded and mixed case", "  None  ", false},
+		{"contains the word but is a real goal", "must accept none of the malformed inputs", true},
+		{"ordinary goal", "must never return a negative balance", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := llmDeriver{b: &fakeBackend{reply: tc.reply}}
+			_, ok, err := d.Derive(context.Background(), reposcan.Candidate{Path: "a.go"}, "x")
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if ok != tc.want {
+				t.Errorf("ok = %v, want %v for reply %q", ok, tc.want, tc.reply)
+			}
+		})
+	}
+}

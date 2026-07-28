@@ -892,13 +892,16 @@ type jailWiringInput struct {
 	substrate      string    // "" or substrateJail = the bwrap jail (today's behavior); substrateWorkspace = mutate repoDir in place, no jail
 }
 
-// Substrate names for jailWiringInput.substrate / localAuditInput.substrate.
-// "" is equivalent to substrateJail — the zero value must be today's shipped
+// Substrate names for jailWiringInput.substrate / localAuditInput.substrate,
+// assigned (not re-spelled) from reposcan's constants so the value that
+// selects which substrate RUNS and the value that later gets recorded as
+// what ran (reposcan.KeyInputs.Substrate) can never drift apart. "" is
+// equivalent to substrateJail — the zero value must be today's shipped
 // behavior so every existing caller (which never sets this field) is
 // unaffected.
 const (
-	substrateJail      = "jail"
-	substrateWorkspace = "workspace"
+	substrateJail      = reposcan.SubstrateJail
+	substrateWorkspace = reposcan.SubstrateWorkspace
 )
 
 // workspaceFromSeed returns a private copy of the seed's workspace text with

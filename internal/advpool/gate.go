@@ -42,7 +42,7 @@ func pluginFor(codePath string) (golang.Plugin, error) {
 // unresolvable path still behaves exactly as before.
 func advPoolTestPath(codePath string) string {
 	if p, err := pluginFor(codePath); err == nil {
-		return p.TestPaths(codePath)[0]
+		return p.TestPaths(codePath)[0].Path
 	}
 	ext := filepath.Ext(codePath)
 	base := strings.TrimSuffix(codePath, ext)

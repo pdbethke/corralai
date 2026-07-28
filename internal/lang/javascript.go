@@ -43,20 +43,20 @@ func (jsPlugin) CompileCheck(codePath, testPath string) []string {
 //  4. test/<subpath>/foo.test.js  — parallel tree, leading directory
 //     replaced by `test` (mirrors the `src/` -> `test/` layout).
 //  5. tests/<subpath>/foo.test.js — the `tests` (plural) spelling of (4).
-func (jsPlugin) TestPaths(codePath string) []string {
+func (jsPlugin) TestPaths(codePath string) []TestCandidate {
 	dir, base, _ := splitPath(codePath)
 	sub := stripFirstSegment(dir)
 	testName := base + ".test.js"
 	specName := base + ".spec.js"
 
-	out := []string{
-		joinDir(dir, testName),
-		joinDir(dir, specName),
-		filepath.Join(dir, "__tests__", testName),
-		filepath.Join("test", sub, testName),
-		filepath.Join("tests", sub, testName),
+	out := []TestCandidate{
+		{Path: joinDir(dir, testName), Rank: 0},
+		{Path: joinDir(dir, specName), Rank: 0},
+		{Path: filepath.Join(dir, "__tests__", testName), Rank: 1},
+		{Path: filepath.Join("test", sub, testName), Rank: 2},
+		{Path: filepath.Join("tests", sub, testName), Rank: 2},
 	}
-	return dedupeKeepOrder(out)
+	return dedupeCandidates(out)
 }
 
 func (jsPlugin) Preflight() error { return toolOnPath("node") }

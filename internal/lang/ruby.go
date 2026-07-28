@@ -52,16 +52,16 @@ func (rubyPlugin) CompileCheck(codePath, testPath string) []string {
 // form: Ruby's lib/-vs-test/ (or lib/-vs-spec/) split is a single well-known
 // convention, not a family of layouts, so there is no comparably plausible
 // second parallel-tree shape to hedge against.
-func (rubyPlugin) TestPaths(codePath string) []string {
+func (rubyPlugin) TestPaths(codePath string) []TestCandidate {
 	dir, base, _ := splitPath(codePath)
 	sub := stripFirstSegment(dir)
 
-	out := []string{
-		joinDir(dir, base+"_test.rb"),
-		filepath.Join("test", sub, base+"_test.rb"),
-		filepath.Join("spec", sub, base+"_spec.rb"),
+	out := []TestCandidate{
+		{Path: joinDir(dir, base+"_test.rb"), Rank: 0},
+		{Path: filepath.Join("test", sub, base+"_test.rb"), Rank: 1},
+		{Path: filepath.Join("spec", sub, base+"_spec.rb"), Rank: 1},
 	}
-	return dedupeKeepOrder(out)
+	return dedupeCandidates(out)
 }
 
 // Preflight requires only `ruby` (minitest is bundled). It deliberately does

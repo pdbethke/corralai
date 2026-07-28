@@ -422,7 +422,7 @@ func prepareAuditJail(in localAuditInput, plug lang.Plugin, timeout time.Duratio
 	}
 	tp := strings.TrimSpace(in.testPath)
 	if tp == "" {
-		tp = plug.TestPaths(in.codePath)[0]
+		tp = plug.TestPaths(in.codePath)[0].Path
 	}
 	devTest, err := os.ReadFile(fsPath(tp)) // #nosec G304 -- operator-supplied (or sibling-derived) test path
 	if err != nil {

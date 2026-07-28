@@ -83,22 +83,31 @@ func (pyPlugin) CompileCheck(codePath, testPath string) []string {
 //     ambiguous-test demotion for the property that holds unconditionally.
 //
 // For a shallow codePath (dir has zero or one path segment), several of
-// these forms coincide; dedupeKeepOrder collapses them to one entry.
-func (pyPlugin) TestPaths(codePath string) []string {
+// these forms coincide as STRINGS; dedupeCandidates collapses them to one
+// entry and attributes it the LEAST specific (highest) Rank among the
+// colliding forms — never the rank of whichever form happened to be listed
+// first — so that two different sources whose match carries equally little
+// real directory evidence always compare as EQUALLY ranked, regardless of
+// how each of them individually arrived at that string. See TestCandidate
+// and dedupeCandidates for why that distinction is load-bearing.
+//
+// Ranks: 0 = sibling (both forms), 1 = full mirror, 2 = leading-segment
+// stripped, 3 = flat.
+func (pyPlugin) TestPaths(codePath string) []TestCandidate {
 	dir, base, _ := splitPath(codePath)
 	name := "test_" + base + ".py"
 	altName := base + "_test.py"
 
-	out := []string{
-		joinDir(dir, name),
-		joinDir(dir, altName),
-		filepath.Join("tests", dir, name),
-		filepath.Join("tests", stripFirstSegment(dir), name),
+	out := []TestCandidate{
+		{Path: joinDir(dir, name), Rank: 0},
+		{Path: joinDir(dir, altName), Rank: 0},
+		{Path: filepath.Join("tests", dir, name), Rank: 1},
+		{Path: filepath.Join("tests", stripFirstSegment(dir), name), Rank: 2},
 	}
 	if dirDepth(dir) <= 2 {
-		out = append(out, filepath.Join("tests", name))
+		out = append(out, TestCandidate{Path: filepath.Join("tests", name), Rank: 3})
 	}
-	return dedupeKeepOrder(out)
+	return dedupeCandidates(out)
 }
 
 // Preflight fails CLOSED unless python3 (or python) is on PATH AND pytest is

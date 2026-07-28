@@ -202,6 +202,47 @@ func TestEnumeratePairingConventions(t *testing.T) {
 				{path: "tests/utils.py", test: "tests/test_utils.py"},
 			},
 		},
+		{
+			// Round-3 regression: rank must denote CONVENTION KIND, not
+			// position in the deduped candidate list. Before the fix, a
+			// zero-directory-evidence match (the flat form, or a degenerate
+			// mirror/stripped form that collapses onto it) got a DIFFERENT
+			// numeric rank depending on how many more-specific forms
+			// happened to also collapse for that particular source's depth —
+			// so two equally-uninformative matches at different depths never
+			// tied, and demote-all never fired. examples/views.py (1
+			// directory segment, so its "stripped" form degenerates to the
+			// flat string at index 3) and src/flask/views.py (2 segments, a
+			// genuine flat match at index 4) both resolve to
+			// tests/test_views.py with ZERO real directory evidence either
+			// way — they must tie and both demote, not silently pick
+			// whichever source happened to collapse fewer forms.
+			name: "python: same-evidence flat matches at different depths must tie (examples/ vs src/flask/)",
+			files: map[string]string{
+				"examples/views.py":   "def index(): ...\n",
+				"src/flask/views.py":  "class View: ...\n",
+				"tests/test_views.py": "def test_view(): pass\n",
+			},
+			wants: []want{
+				{path: "examples/views.py", reason: ReasonAmbiguousTest},
+				{path: "src/flask/views.py", reason: ReasonAmbiguousTest},
+			},
+		},
+		{
+			// Same shape, different names: docs/conf.py (1 segment) vs
+			// mypkg/sub/conf.py (2 segments) both resolve to
+			// tests/test_conf.py with no real directory evidence.
+			name: "python: same-evidence flat matches at different depths must tie (docs/ vs mypkg/sub/)",
+			files: map[string]string{
+				"docs/conf.py":       "html_theme = 'x'\n",
+				"mypkg/sub/conf.py":  "DEBUG = False\n",
+				"tests/test_conf.py": "def test_conf(): pass\n",
+			},
+			wants: []want{
+				{path: "docs/conf.py", reason: ReasonAmbiguousTest},
+				{path: "mypkg/sub/conf.py", reason: ReasonAmbiguousTest},
+			},
+		},
 	}
 
 	for _, c := range cases {

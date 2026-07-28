@@ -26,8 +26,8 @@ func TestGoPluginMatchesLegacyBehavior(t *testing.T) {
 		"login.go":           "login_test.go",
 		"internal/auth/x.go": "internal/auth/x_test.go",
 	} {
-		if got := p.TestPaths(in); len(got) != 1 || got[0] != want {
-			t.Fatalf("TestPaths(%q) = %v, want [%q]", in, got, want)
+		if got := p.TestPaths(in); len(got) != 1 || got[0].Path != want || got[0].Rank != 0 {
+			t.Fatalf("TestPaths(%q) = %v, want [{%q, 0}]", in, got, want)
 		}
 	}
 	if p.PromptLang() != "Go" {

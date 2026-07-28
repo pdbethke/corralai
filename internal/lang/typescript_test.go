@@ -14,8 +14,8 @@ func TestTypeScriptPlugin(t *testing.T) {
 	if !p.Detect("app/foo.ts") || p.Detect("app/foo.js") || p.Detect("app/foo.tsx") {
 		t.Fatal("Detect must match .ts only (not .tsx in v1)")
 	}
-	if got := p.TestPaths("pkg/foo.ts")[0]; got != "pkg/foo.test.ts" {
-		t.Fatalf("TestPaths()[0] = %q", got)
+	if got := p.TestPaths("pkg/foo.ts")[0]; got.Path != "pkg/foo.test.ts" || got.Rank != 0 {
+		t.Fatalf("TestPaths()[0] = %+v", got)
 	}
 	if got := p.TestCmd(); !reflect.DeepEqual(got, []string{"node", "--experimental-strip-types", "--test"}) {
 		t.Fatalf("TestCmd = %v", got)
@@ -56,22 +56,22 @@ func TestTypeScriptTestPathsOrder(t *testing.T) {
 	cases := []struct {
 		name string
 		in   string
-		want []string
+		want []TestCandidate
 	}{
 		{
 			name: "top-level file",
 			in:   "foo.ts",
-			want: []string{
-				"foo.test.ts", "foo.spec.ts", "__tests__/foo.test.ts",
-				"test/foo.test.ts", "tests/foo.test.ts",
+			want: []TestCandidate{
+				{Path: "foo.test.ts", Rank: 0}, {Path: "foo.spec.ts", Rank: 0}, {Path: "__tests__/foo.test.ts", Rank: 1},
+				{Path: "test/foo.test.ts", Rank: 2}, {Path: "tests/foo.test.ts", Rank: 2},
 			},
 		},
 		{
 			name: "src/ layout",
 			in:   "src/pkg/foo.ts",
-			want: []string{
-				"src/pkg/foo.test.ts", "src/pkg/foo.spec.ts", "src/pkg/__tests__/foo.test.ts",
-				"test/pkg/foo.test.ts", "tests/pkg/foo.test.ts",
+			want: []TestCandidate{
+				{Path: "src/pkg/foo.test.ts", Rank: 0}, {Path: "src/pkg/foo.spec.ts", Rank: 0}, {Path: "src/pkg/__tests__/foo.test.ts", Rank: 1},
+				{Path: "test/pkg/foo.test.ts", Rank: 2}, {Path: "tests/pkg/foo.test.ts", Rank: 2},
 			},
 		},
 	}
@@ -79,11 +79,11 @@ func TestTypeScriptTestPathsOrder(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			got := p.TestPaths(c.in)
 			if len(got) != len(c.want) {
-				t.Fatalf("TestPaths(%q) = %v, want %v", c.in, got, c.want)
+				t.Fatalf("TestPaths(%q) = %+v, want %+v", c.in, got, c.want)
 			}
 			for i := range got {
 				if got[i] != c.want[i] {
-					t.Errorf("TestPaths(%q)[%d] = %q, want %q\nfull got=%v", c.in, i, got[i], c.want[i], got)
+					t.Errorf("TestPaths(%q)[%d] = %+v, want %+v\nfull got=%+v", c.in, i, got[i], c.want[i], got)
 				}
 			}
 		})

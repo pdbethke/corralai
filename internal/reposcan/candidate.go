@@ -197,11 +197,16 @@ func Enumerate(root string) ([]Candidate, []Exclusion, error) {
 	}
 
 	// rank tracks, per candidate (parallel to cands, before the ambiguity
-	// pass below), the SPECIFICITY of the match: the index in the plugin's
-	// ordered TestPaths list where the paired test was found. Lower is more
-	// specific. It only exists to resolve cross-source collisions below and
-	// is discarded once that pass is done — Candidate itself carries no
-	// notion of rank.
+	// pass below), the EVIDENTIARY specificity of the match — each plugin's
+	// own TestCandidate.Rank, NOT the position at which it was found in the
+	// (deduped) TestPaths list. Position and rank can diverge: for a shallow
+	// source several differently-specific forms can collapse onto the same
+	// string, and dedupeCandidates attributes that surviving entry the LEAST
+	// specific of the colliding forms' ranks — see lang.TestCandidate for why
+	// using position instead let two equally-uninformative matches from
+	// different-depth sources dodge the ambiguity check entirely. rank only
+	// exists to resolve cross-source collisions below and is discarded once
+	// that pass is done — Candidate itself carries no notion of rank.
 	var rank []int
 
 	for rel := range present {
@@ -224,11 +229,11 @@ func Enumerate(root string) ([]Candidate, []Exclusion, error) {
 		// plausibly belong to a different source file.
 		tp := ""
 		tpRank := -1
-		for i, cand := range p.TestPaths(rel) {
-			cand = filepath.ToSlash(cand)
-			if cand != "" && present[cand] {
-				tp = cand
-				tpRank = i
+		for _, cand := range p.TestPaths(rel) {
+			path := filepath.ToSlash(cand.Path)
+			if path != "" && present[path] {
+				tp = path
+				tpRank = cand.Rank
 				break
 			}
 		}
@@ -272,9 +277,13 @@ func Enumerate(root string) ([]Candidate, []Exclusion, error) {
 //     ReasonAmbiguousTest exclusion is honest; a coin-flip pairing that
 //     happens to land on the right file some fraction of the time is not.
 //
-// rank[i] is the specificity index (lower = more specific) at which
-// cands[i].TestPath was resolved; it is parallel to cands and produced by
-// the same loop in Enumerate, never persisted on Candidate itself.
+// rank[i] is the evidentiary specificity (lower = more specific) of the
+// plugin's own lang.TestCandidate that resolved cands[i].TestPath — NOT its
+// position in Enumerate's search loop, which would conflate "how specific is
+// this match" with "how many earlier, more-specific-looking candidates
+// happened to collapse onto the same string for this particular source". It
+// is parallel to cands and produced by the same loop in Enumerate, never
+// persisted on Candidate itself.
 func demoteAmbiguousPairings(cands []Candidate, rank []int, excl []Exclusion) ([]Candidate, []Exclusion) {
 	groups := map[string][]int{} // TestPath -> indices into cands
 	for i, c := range cands {
@@ -342,7 +351,7 @@ func demoteAmbiguousPairings(cands []Candidate, rank []int, excl []Exclusion) ([
 // itself), so this never fires today either.
 func isTestFile(p lang.Plugin, rel string) bool {
 	for _, tp := range p.TestPaths(rel) {
-		if filepath.ToSlash(tp) == rel {
+		if filepath.ToSlash(tp.Path) == rel {
 			return true
 		}
 	}

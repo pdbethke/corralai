@@ -4,9 +4,11 @@ package adequacy
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func wsTree(t *testing.T, files map[string]string) string {
@@ -36,7 +38,7 @@ func read(t *testing.T, root, rel string) string {
 // The mutant must be visible to the command while it runs...
 func TestWorkspaceRunnerAppliesTheMutantDuringTheRun(t *testing.T) {
 	root := wsTree(t, map[string]string{"a.txt": "ORIGINAL\n"})
-	w := NewWorkspaceRunner(root)
+	w := NewWorkspaceRunner(root, 0)
 
 	// `grep -q MUTANT a.txt` exits 0 only if the mutant is on disk right then.
 	pass, err := w.RunTest(context.Background(),
@@ -54,7 +56,7 @@ func TestWorkspaceRunnerAppliesTheMutantDuringTheRun(t *testing.T) {
 // job in this workspace, and on an ephemeral runner nobody would notice.
 func TestWorkspaceRunnerRestoresAfterTheRun(t *testing.T) {
 	root := wsTree(t, map[string]string{"a.txt": "ORIGINAL\n"})
-	w := NewWorkspaceRunner(root)
+	w := NewWorkspaceRunner(root, 0)
 
 	if _, err := w.RunTest(context.Background(),
 		map[string]string{"a.txt": "MUTANT\n"},
@@ -70,7 +72,7 @@ func TestWorkspaceRunnerRestoresAfterTheRun(t *testing.T) {
 // most mutants are supposed to make the suite fail.
 func TestWorkspaceRunnerRestoresWhenTheCommandFails(t *testing.T) {
 	root := wsTree(t, map[string]string{"a.txt": "ORIGINAL\n"})
-	w := NewWorkspaceRunner(root)
+	w := NewWorkspaceRunner(root, 0)
 
 	pass, err := w.RunTest(context.Background(),
 		map[string]string{"a.txt": "MUTANT\n"},
@@ -90,7 +92,7 @@ func TestWorkspaceRunnerRestoresWhenTheCommandFails(t *testing.T) {
 // then REMOVED, not left behind as a stray.
 func TestWorkspaceRunnerRemovesFilesItCreated(t *testing.T) {
 	root := wsTree(t, map[string]string{"a.txt": "ORIGINAL\n"})
-	w := NewWorkspaceRunner(root)
+	w := NewWorkspaceRunner(root, 0)
 
 	if _, err := w.RunTest(context.Background(),
 		map[string]string{"new.txt": "TEMP\n"},
@@ -107,7 +109,7 @@ func TestWorkspaceRunnerRemovesFilesItCreated(t *testing.T) {
 // write to the runner's filesystem outside the repo.
 func TestWorkspaceRunnerRefusesPathsOutsideTheRoot(t *testing.T) {
 	root := wsTree(t, map[string]string{"a.txt": "ORIGINAL\n"})
-	w := NewWorkspaceRunner(root)
+	w := NewWorkspaceRunner(root, 0)
 
 	for _, bad := range []string{"../escape.txt", "/etc/passwd", "sub/../../escape.txt"} {
 		if _, err := w.RunTest(context.Background(),
@@ -122,7 +124,7 @@ func TestWorkspaceRunnerRefusesPathsOutsideTheRoot(t *testing.T) {
 // detect a leftover mutant, since it has no record of the tree's prior
 // state; that guarantee comes from applyFiles' restore instead.)
 func TestWorkspaceRunnerVerifyPassesOnACleanTree(t *testing.T) {
-	w := NewWorkspaceRunner(wsTree(t, map[string]string{"a.txt": "ORIGINAL\n"}))
+	w := NewWorkspaceRunner(wsTree(t, map[string]string{"a.txt": "ORIGINAL\n"}), 0)
 	if err := w.Verify(); err != nil {
 		t.Errorf("Verify on a clean tree: %v", err)
 	}
@@ -134,7 +136,7 @@ func TestWorkspaceRunnerVerifyPassesOnACleanTree(t *testing.T) {
 // later job just as badly as a RunTest that failed to.
 func TestWorkspaceRunnerEnumerateAppliesAndRestores(t *testing.T) {
 	root := wsTree(t, map[string]string{"a.txt": "ORIGINAL\n"})
-	w := NewWorkspaceRunner(root)
+	w := NewWorkspaceRunner(root, 0)
 
 	stdout, err := w.Enumerate(context.Background(),
 		map[string]string{"a.txt": "MUTANT\n"},
@@ -155,7 +157,7 @@ func TestWorkspaceRunnerEnumerateAppliesAndRestores(t *testing.T) {
 // and a restore that only runs on success is not a restore.
 func TestWorkspaceRunnerEnumerateRestoresWhenTheCommandFails(t *testing.T) {
 	root := wsTree(t, map[string]string{"a.txt": "ORIGINAL\n"})
-	w := NewWorkspaceRunner(root)
+	w := NewWorkspaceRunner(root, 0)
 
 	if _, err := w.Enumerate(context.Background(),
 		map[string]string{"a.txt": "MUTANT\n"},
@@ -174,7 +176,7 @@ func TestWorkspaceRunnerEnumerateRestoresWhenTheCommandFails(t *testing.T) {
 // invisible on an ephemeral runner.
 func TestWorkspaceRunnerRemovesDirectoriesItCreated(t *testing.T) {
 	root := wsTree(t, map[string]string{"a.txt": "ORIGINAL\n"})
-	w := NewWorkspaceRunner(root)
+	w := NewWorkspaceRunner(root, 0)
 
 	if _, err := w.RunTest(context.Background(),
 		map[string]string{"newdir/sub/new.txt": "TEMP\n"},
@@ -213,7 +215,7 @@ func TestWorkspaceRunnerRefusesASymlinkThatEscapesTheRoot(t *testing.T) {
 		t.Skip("symlink creation unavailable on this host")
 	}
 
-	w := NewWorkspaceRunner(root)
+	w := NewWorkspaceRunner(root, 0)
 	if _, err := w.RunTest(context.Background(),
 		map[string]string{"link.txt": "MUTANT\n"},
 		[]string{"true"}); err == nil {
@@ -226,5 +228,71 @@ func TestWorkspaceRunnerRefusesASymlinkThatEscapesTheRoot(t *testing.T) {
 	}
 	if string(got) != "SECRET\n" {
 		t.Errorf("outside file content = %q; the symlink write escaped the checkout", got)
+	}
+}
+
+// TestWorkspaceRunnerBoundsTheRunWithItsOwnTimeout: the jail path bounds
+// EVERY run — baseline, canary and mutants alike — because NewJail's timeout
+// is passed into each RunGuarded call. adequacy.Score only wraps MUTANT runs
+// in a deadline of its own; the baseline and the canary run on the caller's
+// bare ctx, which on `certify --repo` is context.Background() with no
+// per-job deadline. So a deadlocking baseline suite — plausible precisely
+// because this substrate, unlike the jail, has network — hung the CI job
+// forever, and ErrTestTimeout (the outcome Score already models for the jail
+// path) could never be produced for a baseline here.
+func TestWorkspaceRunnerBoundsTheRunWithItsOwnTimeout(t *testing.T) {
+	root := wsTree(t, map[string]string{"a.txt": "ORIGINAL\n"})
+	w := NewWorkspaceRunner(root, 100*time.Millisecond)
+
+	start := time.Now()
+	ok, err := w.RunTest(context.Background(),
+		map[string]string{"a.txt": "MUTANT\n"},
+		[]string{"sleep", "30"})
+	elapsed := time.Since(start)
+
+	if !errors.Is(err, ErrTestTimeout) {
+		t.Fatalf("RunTest on a hanging command = (%v, %v), want ErrTestTimeout", ok, err)
+	}
+	if elapsed > 10*time.Second {
+		t.Errorf("the run took %s: the timeout did not bound it", elapsed)
+	}
+	// The tree is still restored: the timeout goes through the same deferred
+	// restore every other exit path does.
+	if got := read(t, root, "a.txt"); got != "ORIGINAL\n" {
+		t.Errorf("file left as %q after a timed-out run", got)
+	}
+}
+
+// Enumerate is bounded the same way, off the same field: it shares RunTest's
+// apply/run/restore discipline and must share its wall-clock bound too.
+func TestWorkspaceRunnerEnumerateIsBoundedToo(t *testing.T) {
+	root := wsTree(t, map[string]string{"a.txt": "ORIGINAL\n"})
+	w := NewWorkspaceRunner(root, 100*time.Millisecond)
+
+	start := time.Now()
+	if _, err := w.Enumerate(context.Background(), nil, []string{"sleep", "30"}); !errors.Is(err, ErrTestTimeout) {
+		t.Fatalf("Enumerate on a hanging command = %v, want ErrTestTimeout", err)
+	}
+	if elapsed := time.Since(start); elapsed > 10*time.Second {
+		t.Errorf("the run took %s: the timeout did not bound it", elapsed)
+	}
+}
+
+// The caller's own ctx still wins when it is TIGHTER than the runner's
+// timeout — the runner's bound is a backstop, never a widening of a deadline
+// the caller already set (adequacy.Score's per-mutant deadline is exactly
+// such a caller).
+func TestWorkspaceRunnerStillHonoursATighterCallerDeadline(t *testing.T) {
+	root := wsTree(t, map[string]string{"a.txt": "ORIGINAL\n"})
+	w := NewWorkspaceRunner(root, time.Hour)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if _, err := w.RunTest(ctx, nil, []string{"sleep", "30"}); !errors.Is(err, ErrTestTimeout) {
+		t.Fatalf("RunTest = %v, want ErrTestTimeout from the caller's own deadline", err)
+	}
+	if elapsed := time.Since(start); elapsed > 10*time.Second {
+		t.Errorf("the run took %s: the caller's tighter deadline was not honoured", elapsed)
 	}
 }

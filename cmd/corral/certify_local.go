@@ -980,7 +980,7 @@ func buildJailWiring(in jailWiringInput) (w jailWiring, err error) {
 		if len(in.checkArgv) == 0 {
 			return w, fmt.Errorf("--repo-dir requires the project's own test command after `--`, e.g. `-- python3 -m pytest tests/test_recipes.py`")
 		}
-		runner := adequacy.NewWorkspaceRunner(in.repoDir)
+		runner := adequacy.NewWorkspaceRunner(in.repoDir, in.timeout)
 		if verr := runner.Verify(); verr != nil {
 			return w, verr
 		}

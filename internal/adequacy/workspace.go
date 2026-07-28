@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 // WorkspaceRunner is a Jail (and Enumerator) that runs against a REAL
@@ -29,12 +30,44 @@ import (
 // its own. Use it only where the surrounding environment is already
 // disposable.
 type WorkspaceRunner struct {
-	root string
+	root    string
+	timeout time.Duration
 }
 
+// defaultWorkspaceTimeout is the wall-clock bound a WorkspaceRunner built
+// with timeout <= 0 uses. It mirrors the jail's own default for an
+// unspecified timeout (sandbox.RunGuarded substitutes 60s when
+// Options.Timeout is zero), so neither substrate can be constructed with "no
+// bound at all". In practice the value is always supplied: cmd/corral plumbs
+// the run's --timeout (defaulting to 10 minutes) into NewWorkspaceRunner from
+// the same place it plumbs it into NewJail.
+const defaultWorkspaceTimeout = 60 * time.Second
+
 // NewWorkspaceRunner returns a WorkspaceRunner rooted at root, an existing
-// checkout directory.
-func NewWorkspaceRunner(root string) *WorkspaceRunner { return &WorkspaceRunner{root: root} }
+// checkout directory, bounding every command it runs to timeout.
+//
+// The bound is not optional decoration. The jail path passes its construction
+// timeout into every sandbox run, so baseline, canary and mutants are all
+// bounded there; Score only wraps MUTANT runs in a deadline of its own, and
+// on `certify --repo` the surrounding ctx is context.Background() with no
+// per-job deadline. Without this field a deadlocking baseline suite — more
+// plausible here than in the jail, because this substrate has network — would
+// hang the CI job forever instead of producing ErrTestTimeout.
+//
+// timeout <= 0 means defaultWorkspaceTimeout, never "unbounded".
+func NewWorkspaceRunner(root string, timeout time.Duration) *WorkspaceRunner {
+	if timeout <= 0 {
+		timeout = defaultWorkspaceTimeout
+	}
+	return &WorkspaceRunner{root: root, timeout: timeout}
+}
+
+// bound derives the context one command runs under: the runner's own
+// wall-clock bound, or the caller's deadline when that is tighter (context's
+// own semantics — a derived timeout never extends a parent's).
+func (w *WorkspaceRunner) bound(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, w.timeout)
+}
 
 // Verify checks that the workspace root exists and is a directory. It is a
 // pre-flight sanity check, not a dirty-tree scan: it cannot detect a mutant
@@ -193,6 +226,8 @@ func (w *WorkspaceRunner) RunTest(ctx context.Context, files map[string]string, 
 		return false, err
 	}
 
+	ctx, cancel := w.bound(ctx)
+	defer cancel()
 	cmd := exec.CommandContext(ctx, testCmd[0], testCmd[1:]...) // #nosec G204 -- the project's own test command, supplied by its workflow
 	cmd.Dir = w.root
 	runErr := cmd.Run()
@@ -226,6 +261,8 @@ func (w *WorkspaceRunner) Enumerate(ctx context.Context, files map[string]string
 		return "", err
 	}
 
+	ctx, cancel := w.bound(ctx)
+	defer cancel()
 	var stdout bytes.Buffer
 	c := exec.CommandContext(ctx, cmd[0], cmd[1:]...) // #nosec G204 -- the project's own list command, supplied by its workflow
 	c.Dir = w.root

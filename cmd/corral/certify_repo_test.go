@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -23,6 +24,165 @@ import (
 	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/sandbox"
 )
+
+// gitCmd returns a helper that runs a git command in dir for a test fixture,
+// skipping (not failing) the test when git is unusable in this environment —
+// diff scoping's own logic is unit-tested regardless; these fixtures only
+// need a working git to exist.
+func gitCmd(t *testing.T, dir string) func(args ...string) {
+	t.Helper()
+	return func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(cmd.Environ(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@e",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@e")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Skipf("git unusable here (%v): %s", err, out)
+		}
+	}
+}
+
+// gitRevParseHead returns dir's current commit SHA, captured at the moment
+// of the call. The literal ref "HEAD" is not usable as a fixture's baseRef:
+// by the time a later commit runs, "HEAD" resolves to THAT commit rather
+// than the one intended as the base, and a diff against it would always be
+// empty. Resolving to a concrete SHA up front pins the intended base.
+func gitRevParseHead(t *testing.T, dir string) string {
+	t.Helper()
+	cmd := exec.Command("git", "rev-parse", "HEAD")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Skipf("git rev-parse unusable here: %v", err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// TestChangedFilesListsOnlyWhatMoved proves changedFiles reports exactly the
+// paths that differ from baseRef — the bound diff scoping rests on.
+func TestChangedFilesListsOnlyWhatMoved(t *testing.T) {
+	root := t.TempDir()
+	gitRun := gitCmd(t, root)
+	mustWrite(t, filepath.Join(root, "a.go"), "package p\n")
+	mustWrite(t, filepath.Join(root, "b.go"), "package p\n")
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+	base := gitRevParseHead(t, root)
+
+	mustWrite(t, filepath.Join(root, "a.go"), "package p // changed\n")
+	gitRun("add", "a.go")
+	gitRun("commit", "-q", "-m", "change", "--no-gpg-sign")
+
+	got, err := changedFiles(root, base)
+	if err != nil {
+		t.Fatalf("changedFiles: %v", err)
+	}
+	if len(got) != 1 || got[0] != "a.go" {
+		t.Fatalf("changed = %v, want [a.go]", got)
+	}
+}
+
+// TestCertifyRepoDiffBaseBoundsTheJobSet: a repo where two files are
+// candidates (both goaled, both paired with a test) but only one changed —
+// the scan must emit one job, and must NOT rank or apply --top on this path,
+// because in a PR the diff IS the bound.
+func TestCertifyRepoDiffBaseBoundsTheJobSet(t *testing.T) {
+	root := t.TempDir()
+	gitRun := gitCmd(t, root)
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "pkg", "a_test.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "pkg", "b.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "pkg", "b_test.go"), "package pkg\n")
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+	base := gitRevParseHead(t, root)
+
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg // changed\n")
+	gitRun("add", "pkg/a.go")
+	gitRun("commit", "-q", "-m", "change", "--no-gpg-sign")
+
+	// Both files are named in the goals map, so the bound demonstrably comes
+	// from the diff and not from which files happen to have a hand-written
+	// goal.
+	goals := filepath.Join(root, "goals.json")
+	mustWrite(t, goals, `{"pkg/a.go": "must not panic", "pkg/b.go": "must not panic either"}`)
+
+	var out, errb bytes.Buffer
+	code := runCertifyRepo([]string{"--repo", root, "--diff-base", base, "--goals", goals, "--dry-run"}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "1 job(s)") {
+		t.Errorf("diff scoping did not bound the job set:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "ranked by") {
+		t.Errorf("ranking ran on the diff path, where the diff is the bound:\n%s", out.String())
+	}
+	// The unchanged candidate must be ACCOUNTED, never silently dropped.
+	if !strings.Contains(out.String(), reposcan.ReasonNotSelected) {
+		t.Errorf("the unchanged candidate must be accounted as %s:\n%s", reposcan.ReasonNotSelected, out.String())
+	}
+}
+
+// TestCertifyRepoRejectsUnknownSubstrate proves an unrecognized --substrate
+// value is a usage error (exit 2), never a silent fall-through to the jail
+// default — a run that quietly used the wrong substrate while claiming the
+// other is exactly the accountability failure this branch closes.
+func TestCertifyRepoRejectsUnknownSubstrate(t *testing.T) {
+	root := t.TempDir()
+	var out, errb bytes.Buffer
+	code := runCertifyRepo([]string{"--repo", root, "--substrate", "docker", "--dry-run"}, &out, &errb)
+	if code != 2 {
+		t.Fatalf("exit %d, want 2 (usage error) for an unrecognized substrate; stdout=%s stderr=%s", code, out.String(), errb.String())
+	}
+	if !strings.Contains(errb.String(), "docker") {
+		t.Errorf("stderr should name the bad value: %q", errb.String())
+	}
+}
+
+// TestCertifyRepoAcceptsKnownSubstrateValues proves both real substrate names
+// are accepted flag values.
+func TestCertifyRepoAcceptsKnownSubstrateValues(t *testing.T) {
+	root := t.TempDir()
+	for _, s := range []string{substrateJail, substrateWorkspace} {
+		var out, errb bytes.Buffer
+		code := runCertifyRepo([]string{"--repo", root, "--substrate", s, "--dry-run"}, &out, &errb)
+		if code != 0 {
+			t.Fatalf("--substrate %s: exit %d, stderr=%s", s, code, errb.String())
+		}
+	}
+}
+
+// TestLocalExecutorThreadsSubstrateIntoAuditInput proves the value actually
+// arrives at localAuditInput — the seam the cache key is later computed
+// from — rather than merely existing as an unused field. A test asserting
+// only that the scan runs would still pass with substrate silently stuck at
+// "".
+func TestLocalExecutorThreadsSubstrateIntoAuditInput(t *testing.T) {
+	var gotBaseline, gotAudit string
+	ex := localExecutor{
+		baselineRuns: 2,
+		substrate:    substrateWorkspace,
+		newBaseline: func(_ context.Context, in localAuditInput) (reposcan.BaselineRunner, func(), error) {
+			gotBaseline = in.substrate
+			return &scriptedBaseline{results: []bool{true, true}}, func() {}, nil
+		},
+		audit: func(_ context.Context, in localAuditInput) (advpool.Verdict, error) {
+			gotAudit = in.substrate
+			return advpool.Verdict{DevKillRate: 1}, nil
+		},
+	}
+	if _, err := ex.Execute(context.Background(), reposcan.Job{Path: "a.go", Goal: reposcan.Goal{Text: "g"}}); err != nil {
+		t.Fatal(err)
+	}
+	if gotBaseline != substrateWorkspace || gotAudit != substrateWorkspace {
+		t.Fatalf("substrate did not reach localAuditInput: baseline=%q audit=%q, want %q", gotBaseline, gotAudit, substrateWorkspace)
+	}
+}
 
 func TestCertifyRepoRequiresRepoDir(t *testing.T) {
 	var out, errb bytes.Buffer

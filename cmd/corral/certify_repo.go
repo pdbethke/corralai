@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -45,12 +46,23 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	commit := fs.String("commit", "", "commit SHA the report is bound to")
 	swarmFlag := fs.Int("swarm", 0, "max concurrent audit workers (0 = auto-size to this host's cores)")
 	dryRun := fs.Bool("dry-run", false, "enumerate and emit jobs, then stop — no audits run")
+	substrateFlag := fs.String("substrate", substrateJail, "where the audit runs: "+substrateJail+" (bwrap) or "+substrateWorkspace+" (mutate --repo in place; the caller IS the isolation boundary, e.g. an ephemeral CI runner)")
+	diffBase := fs.String("diff-base", "", "bound the scan to files changed since this git ref, instead of ranking + --top. In a PR the diff IS the bound: ranking and --top do not apply on this path")
 	if err := fs.Parse(flagArgs); err != nil {
 		return 2
 	}
 
 	if *repoDir == "" {
 		fmt.Fprintln(stderr, "corral certify --repo: --repo is required")
+		return 2
+	}
+
+	// An unrecognized substrate must be a usage error, not a silent
+	// fall-through to the jail default: a run that quietly used the wrong
+	// substrate while claiming the other is the exact accountability
+	// failure diff scoping and the cache key exist to close.
+	if *substrateFlag != substrateJail && *substrateFlag != substrateWorkspace {
+		fmt.Fprintf(stderr, "corral certify --repo: --substrate %q is not %s or %s\n", *substrateFlag, substrateJail, substrateWorkspace)
 		return 2
 	}
 
@@ -62,9 +74,6 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 
 	fmt.Fprintf(stdout, "corral certify --repo %s\n", *repoDir)
 
-	// Selection precedes derivation, deliberately: bounding afterwards would
-	// pay for a goal on every candidate in order to audit 25 of them.
-	ranked, rankInfo := reposcan.Rank(*repoDir, cands)
 	// Captured BEFORE any candidate-level exclusion is appended below. Only
 	// Enumerate's exclusions are non-candidates; every later reason
 	// (not-selected, ungoaled, derive-failed, source-too-large) names a file
@@ -73,31 +82,66 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// than exist on disk.
 	enumExcl := len(excl)
 
-	limit := *topFlag
-	if *allFlag {
-		limit = 0
-	}
-	// --top exists to bound what DERIVATION costs. An operator who hand-wrote
-	// a goals file has already chosen the surface by hand and paid nothing per
-	// file, so the default bound must not apply to it: the bound is taken over
-	// ALL candidates, most of which have no hand-written goal, so a default 25
-	// would quietly audit a handful of a 40-file goals map. An EXPLICIT --top
-	// is still honoured on that path.
-	if *goalsPath != "" && !flagWasSet(fs, "top") && !*allFlag {
-		limit = 0
-	}
-	selected, notSelected := reposcan.Select(ranked, limit)
-	// Appending into excl is safe: notSelected is Select's own freshly
-	// allocated slice, and excl is Enumerate's. Nothing is appended to
-	// `selected`, which ALIASES ranked's backing array.
-	excl = append(excl, notSelected...)
+	var selected []reposcan.Candidate
+	if *diffBase != "" {
+		// In a PR the diff IS the bound: ranking and --top exist to bound what
+		// DERIVATION costs over a whole repo, and that question does not apply
+		// when the operator has already told us exactly which files changed.
+		// A changed file with no paired test is still a candidate the
+		// enumerator never produced (Enumerate already excluded it as
+		// no-paired-test) — this loop only decides which CANDIDATES are IN
+		// bound; anything outside it is accounted, never silently dropped.
+		changed, cerr := changedFiles(*repoDir, *diffBase)
+		if cerr != nil {
+			fmt.Fprintf(stderr, "corral certify --repo: %v\n", cerr)
+			return 1
+		}
+		changedSet := make(map[string]bool, len(changed))
+		for _, p := range changed {
+			changedSet[p] = true
+		}
+		var kept []reposcan.Candidate
+		for _, c := range cands {
+			if changedSet[c.Path] {
+				kept = append(kept, c)
+				continue
+			}
+			excl = append(excl, reposcan.Exclusion{Path: c.Path, Reason: reposcan.ReasonNotSelected})
+		}
+		selected = kept
+		fmt.Fprintf(stdout, "  diff against %s: auditing %d of %d candidate(s)\n", *diffBase, len(selected), len(cands))
+	} else {
+		// Selection precedes derivation, deliberately: bounding afterwards would
+		// pay for a goal on every candidate in order to audit 25 of them.
+		ranked, rankInfo := reposcan.Rank(*repoDir, cands)
 
-	// The rule is disclosed. A selection nobody can explain is the same
-	// problem this project criticises in black-box model routing.
-	fmt.Fprintf(stdout, "  ranked by %s; auditing %d of %d candidate(s)\n",
-		rankInfo.Signal, len(selected), len(cands))
-	if rankInfo.Note != "" {
-		fmt.Fprintf(stdout, "    %s\n", rankInfo.Note)
+		limit := *topFlag
+		if *allFlag {
+			limit = 0
+		}
+		// --top exists to bound what DERIVATION costs. An operator who hand-wrote
+		// a goals file has already chosen the surface by hand and paid nothing per
+		// file, so the default bound must not apply to it: the bound is taken over
+		// ALL candidates, most of which have no hand-written goal, so a default 25
+		// would quietly audit a handful of a 40-file goals map. An EXPLICIT --top
+		// is still honoured on that path.
+		if *goalsPath != "" && !flagWasSet(fs, "top") && !*allFlag {
+			limit = 0
+		}
+		var notSelected []reposcan.Exclusion
+		selected, notSelected = reposcan.Select(ranked, limit)
+		// Appending into excl is safe: notSelected is Select's own freshly
+		// allocated slice, and excl is Enumerate's. Nothing is appended to
+		// `selected`, which ALIASES ranked's backing array.
+		excl = append(excl, notSelected...)
+
+		// The rule is disclosed. A selection nobody can explain is the same
+		// problem this project criticises in black-box model routing.
+		fmt.Fprintf(stdout, "  ranked by %s; auditing %d of %d candidate(s)\n",
+			rankInfo.Signal, len(selected), len(cands))
+		if rankInfo.Note != "" {
+			fmt.Fprintf(stdout, "    %s\n", rankInfo.Note)
+		}
 	}
 
 	// EVERY scan-fatal preflight runs BEFORE the first derivation, because
@@ -118,6 +162,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// plugin's stock recursive command is used — resolved per job, since a
 		// repo can mix languages.
 		ex = newLocalExecutor(*repoDir, checkArgv, stdout)
+		ex.substrate = *substrateFlag
 		// Deferred, not called at the end: a panic mid-scan must still release
 		// the staging dirs the shared seeds created. Deferred here so it also
 		// covers the early returns below.
@@ -156,6 +201,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	cfg := reposcan.EmitConfig{
 		Owner: *owner, Repo: filepath.Base(*repoDir), Commit: *commit, Root: *repoDir,
 		EngineVersion: version, ModelSet: "unset", AuditConfig: "default",
+		Substrate: *substrateFlag,
 	}
 	jobs, goalExcl, err := reposcan.EmitJobs(cfg, selected, gs)
 	if err != nil {
@@ -215,6 +261,25 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 
 	printRepoReport(stdout, rep)
 	return repoScanExitCode(rep)
+}
+
+// changedFiles lists repo-relative paths that differ from baseRef. In a PR
+// the diff is the natural bound on an audit: ~84 suite runs per file is a
+// day's work across a repo and a normal CI job across a three-file change.
+func changedFiles(root, baseRef string) ([]string, error) {
+	cmd := exec.CommandContext(context.Background(), "git", "diff", "--name-only", baseRef) // #nosec G204 -- fixed binary; baseRef is the operator's own ref
+	cmd.Dir = root
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("corral certify --repo: git diff against %s: %w", baseRef, err)
+	}
+	var changed []string
+	for _, line := range strings.Split(string(out), "\n") {
+		if p := strings.TrimSpace(line); p != "" {
+			changed = append(changed, p)
+		}
+	}
+	return changed, nil
 }
 
 // deriverFactory builds a Deriver for a model. Injected so the goal-source
@@ -491,6 +556,14 @@ type localExecutor struct {
 	// host), surfaced by preflight before the fan-out — never swallowed.
 	jailErr error
 
+	// substrate selects where every job in this scan runs — "" or
+	// substrateJail (the bwrap jail, today's behavior) or substrateWorkspace
+	// (mutate repoDir in place, the caller IS the isolation boundary). Set
+	// by the caller after construction (see runCertifyRepo), not a
+	// constructor parameter, so every existing caller of newLocalExecutor —
+	// including every test in this package — keeps the zero-value default.
+	substrate string
+
 	newBaseline func(context.Context, localAuditInput) (reposcan.BaselineRunner, func(), error)
 	audit       func(context.Context, localAuditInput) (advpool.Verdict, error)
 }
@@ -563,6 +636,7 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 		// verdict with an unrelated sha.
 		commit:    orDefault(j.Commit, "local"),
 		checkArgv: l.testCmd(j),
+		substrate: l.substrate,
 		// One worker per file: the scan's budget is spent on file-level
 		// fan-out, so a nested per-file swarm would multiply it by the worker
 		// count and melt the box the --swarm bound exists to protect.

@@ -196,6 +196,38 @@ func TestChangedFilesSurfacesGitStderr(t *testing.T) {
 	}
 }
 
+// TestChangedFilesRejectsBaseRefStartingWithDash: baseRef is not passed to
+// `git diff` behind a `--` separator, so a baseRef that starts with `-` is a
+// legal-looking git OPTION, not a ref — and `git check-ref-format
+// 'refs/heads/-evil'` exits 0, so a branch actually named that way is a
+// valid ref an attacker fully controls (this is exactly --diff-base's
+// documented threat model: a pull_request_target workflow passing
+// `diff-base: ${{ github.head_ref }}`, where head_ref is the PR author's own
+// branch name). `--output=<path>` makes git WRITE to an attacker-chosen path
+// on the runner instead of comparing anything — confirmed by hand:
+// `git diff --name-only --relative '--output=/tmp/x...HEAD'` creates
+// /tmp/x...HEAD. changedFiles must refuse a leading-dash baseRef outright
+// rather than ever handing it to git as an argument.
+func TestChangedFilesRejectsBaseRefStartingWithDash(t *testing.T) {
+	root := t.TempDir()
+	gitRun := gitCmd(t, root)
+	gitRun("init", "-q")
+	gitRun("commit", "-q", "--allow-empty", "-m", "x", "--no-gpg-sign")
+
+	sentinel := filepath.Join(t.TempDir(), "should-never-exist")
+	badRef := "--output=" + sentinel
+	_, err := changedFiles(root, badRef)
+	if err == nil {
+		t.Fatal("want an error for a baseRef starting with '-' — it must never reach git as a bare argument")
+	}
+	if !strings.Contains(err.Error(), badRef) {
+		t.Errorf("error should name the rejected baseRef: %v", err)
+	}
+	if _, statErr := os.Stat(sentinel); statErr == nil {
+		t.Fatal("git actually executed --output and wrote a file — the leading-dash baseRef reached git as an option")
+	}
+}
+
 // TestCertifyRepoDiffBaseBoundsTheJobSet: a repo where two files are
 // candidates (both goaled, both paired with a test) but only one changed —
 // the scan must emit one job, and must NOT rank or apply --top on this path,

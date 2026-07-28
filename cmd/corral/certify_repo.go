@@ -289,8 +289,22 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 //     diff to root and reports paths relative to it — matching Enumerate's
 //     frame exactly.
 func changedFiles(root, baseRef string) ([]string, error) {
+	// baseRef is not passed behind a `--` separator below, so a value
+	// starting with `-` is a legal-looking git OPTION, not a ref —
+	// `git check-ref-format 'refs/heads/-evil'` exits 0, so a branch
+	// actually named that way is a ref an attacker fully controls (e.g. a
+	// pull_request_target workflow passing `diff-base:
+	// ${{ github.head_ref }}`, the PR author's own branch name). Something
+	// like `--output=<path>` would make git WRITE to that path on the
+	// runner instead of comparing anything. Refuse it outright rather than
+	// ever handing it to git as a bare argument.
+	if strings.HasPrefix(baseRef, "-") {
+		return nil, fmt.Errorf("corral certify --repo: --diff-base %q looks like a git option, not a ref (it starts with '-'); refusing to pass it to git diff", baseRef)
+	}
 	rangeArg := baseRef + "...HEAD"
-	cmd := exec.CommandContext(context.Background(), "git", "diff", "--name-only", "--relative", rangeArg) // #nosec G204 -- fixed binary; baseRef is the operator's own ref
+	// #nosec G204 -- fixed binary; baseRef is validated above to not start
+	// with '-', so rangeArg cannot be mistaken for an option by git diff.
+	cmd := exec.CommandContext(context.Background(), "git", "diff", "--name-only", "--relative", rangeArg)
 	cmd.Dir = root
 	out, err := cmd.Output()
 	if err != nil {

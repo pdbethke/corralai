@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -294,5 +295,36 @@ func TestWorkspaceRunnerStillHonoursATighterCallerDeadline(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 10*time.Second {
 		t.Errorf("the run took %s: the caller's tighter deadline was not honoured", elapsed)
+	}
+}
+
+// TestWorkspaceRunnerRunTestVerboseReturnsTheOutput: advpool's CompileTest
+// type-asserts its Jail to the optional verbose interface and, when that
+// fails, silently degrades to a bare pass/fail — so the test-writer gets
+// "does not compile" with no compiler output to fix itself from, and burns
+// retries (and model spend) repeating the same mistake. On the substrate
+// whose whole pitch is cost, that is the wrong place to degrade. Same
+// apply/run/restore discipline as RunTest, via the same applyFiles.
+func TestWorkspaceRunnerRunTestVerboseReturnsTheOutput(t *testing.T) {
+	root := wsTree(t, map[string]string{"a.txt": "ORIGINAL\n"})
+	w := NewWorkspaceRunner(root, 0)
+
+	ok, out, err := w.RunTestVerbose(context.Background(),
+		map[string]string{"a.txt": "MUTANT\n"},
+		[]string{"sh", "-c", "cat a.txt; echo 'compiler said this' >&2; exit 1"})
+	if err != nil {
+		t.Fatalf("a non-zero exit is a RESULT, not an error: %v", err)
+	}
+	if ok {
+		t.Error("a command that exited 1 must report false")
+	}
+	if !strings.Contains(out, "MUTANT") {
+		t.Errorf("output %q must include the command's stdout, seen against the applied files", out)
+	}
+	if !strings.Contains(out, "compiler said this") {
+		t.Errorf("output %q must include stderr — that is where a compiler writes", out)
+	}
+	if got := read(t, root, "a.txt"); got != "ORIGINAL\n" {
+		t.Errorf("file left as %q after RunTestVerbose", got)
 	}
 }

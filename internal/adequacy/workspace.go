@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -216,8 +217,36 @@ func (w *WorkspaceRunner) applyFiles(files map[string]string) (restore func(), e
 // a panic. A file that did not exist before is REMOVED rather than left as a
 // stray, because a leftover file is indistinguishable from part of the repo.
 func (w *WorkspaceRunner) RunTest(ctx context.Context, files map[string]string, testCmd []string) (bool, error) {
-	if len(testCmd) == 0 {
-		return false, errors.New("adequacy: workspace runner needs a test command")
+	return w.applyRunRestore(ctx, files, testCmd, nil, nil)
+}
+
+// RunTestVerbose is RunTest that ALSO returns the command's combined
+// stdout+stderr, the same contract the jail's own RunTestVerbose has.
+//
+// advpool's compile-verify path type-asserts its Jail to this optional
+// interface and, when the assertion fails, degrades to a bare pass/fail — so
+// the test-writer is told "does not compile" with no compiler output to fix
+// itself from, and spends retries repeating the same mistake. Implementing it
+// here keeps that feedback on the substrate whose pitch is cost.
+//
+// Output is returned even on a non-nil error, so a timeout still carries
+// whatever the command printed before it was killed.
+func (w *WorkspaceRunner) RunTestVerbose(ctx context.Context, files map[string]string, testCmd []string) (bool, string, error) {
+	var out bytes.Buffer
+	ok, err := w.applyRunRestore(ctx, files, testCmd, &out, &out)
+	return ok, out.String(), err
+}
+
+// applyRunRestore is the single implementation of this runner's
+// apply/run/restore discipline: overlay files onto the checkout, run cmd in
+// it under the runner's wall-clock bound, and restore via defer — so a
+// failing command, a timeout, and a panic all unwind the tree identically.
+// RunTest, RunTestVerbose and Enumerate differ ONLY in which streams they
+// capture, which is what stdout/stderr (either may be nil, meaning discard)
+// express. A non-zero exit is a RESULT, not an error, for all three.
+func (w *WorkspaceRunner) applyRunRestore(ctx context.Context, files map[string]string, cmdArgv []string, stdout, stderr io.Writer) (bool, error) {
+	if len(cmdArgv) == 0 {
+		return false, errors.New("adequacy: workspace runner needs a command")
 	}
 
 	restore, err := w.applyFiles(files)
@@ -228,8 +257,10 @@ func (w *WorkspaceRunner) RunTest(ctx context.Context, files map[string]string, 
 
 	ctx, cancel := w.bound(ctx)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, testCmd[0], testCmd[1:]...) // #nosec G204 -- the project's own test command, supplied by its workflow
+	cmd := exec.CommandContext(ctx, cmdArgv[0], cmdArgv[1:]...) // #nosec G204 -- the project's own command, supplied by its workflow
 	cmd.Dir = w.root
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 	runErr := cmd.Run()
 	if ctx.Err() != nil {
 		return false, ErrTestTimeout
@@ -239,7 +270,7 @@ func (w *WorkspaceRunner) RunTest(ctx context.Context, files map[string]string, 
 		if errors.As(runErr, &ee) {
 			return false, nil // a non-zero exit is a RESULT, not an error
 		}
-		return false, fmt.Errorf("adequacy: running the test command: %w", runErr)
+		return false, fmt.Errorf("adequacy: running the command: %w", runErr)
 	}
 	return true, nil
 }
@@ -251,32 +282,7 @@ func (w *WorkspaceRunner) RunTest(ctx context.Context, files map[string]string, 
 // caller wants whatever the command printed, e.g. a test listing that a
 // mutant made incomplete), not an error.
 func (w *WorkspaceRunner) Enumerate(ctx context.Context, files map[string]string, cmd []string) (string, error) {
-	if len(cmd) == 0 {
-		return "", errors.New("adequacy: workspace runner needs a command")
-	}
-
-	restore, err := w.applyFiles(files)
-	defer restore()
-	if err != nil {
-		return "", err
-	}
-
-	ctx, cancel := w.bound(ctx)
-	defer cancel()
 	var stdout bytes.Buffer
-	c := exec.CommandContext(ctx, cmd[0], cmd[1:]...) // #nosec G204 -- the project's own list command, supplied by its workflow
-	c.Dir = w.root
-	c.Stdout = &stdout
-	runErr := c.Run()
-	if ctx.Err() != nil {
-		return stdout.String(), ErrTestTimeout
-	}
-	if runErr != nil {
-		var ee *exec.ExitError
-		if errors.As(runErr, &ee) {
-			return stdout.String(), nil // a non-zero exit is a RESULT, not an error
-		}
-		return stdout.String(), fmt.Errorf("adequacy: running the enumerate command: %w", runErr)
-	}
-	return stdout.String(), nil
+	_, err := w.applyRunRestore(ctx, files, cmd, &stdout, nil)
+	return stdout.String(), err
 }

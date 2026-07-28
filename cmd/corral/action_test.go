@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -142,5 +143,38 @@ func TestActionBaseFetchMakesTheDiffBaseUsable(t *testing.T) {
 	}
 	if strings.Contains(out, "base.txt") {
 		t.Errorf("the three-dot diff must exclude files that only moved on the base branch; got:\n%s", out)
+	}
+}
+
+// TestActionNamesTheRecordItProduces: a run's report header is
+// "Repo adequacy — <owner>/<repo> @ <commit>". The action passed no --commit
+// and `--repo .`, so EmitConfig.Repo was filepath.Base(".") = "." and the
+// header read `local/. @ (no commit given)` — a signed, published record that
+// names nothing. This asserts the shipped invocation carries the identity
+// GitHub already knows, and — separately — that certify --repo really accepts
+// those flag names, so the assertion cannot pass on a flag that doesn't exist.
+func TestActionNamesTheRecordItProduces(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "action.yml"))
+	if err != nil {
+		t.Fatalf("reading action.yml: %v", err)
+	}
+	body := string(b)
+	for _, want := range []string{
+		"--commit", "github.sha",
+		"--owner", "github.repository_owner",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("action.yml does not pass %q: the record it publishes names nothing", want)
+		}
+	}
+
+	// The flags must exist and parse on the real command, not just look
+	// plausible in YAML.
+	var out, errb bytes.Buffer
+	if code := runCertifyRepo([]string{
+		"--repo", t.TempDir(), "--dry-run",
+		"--commit", "deadbeef", "--owner", "pdbethke",
+	}, &out, &errb); code != 0 {
+		t.Fatalf("certify --repo rejected the flags the action passes: exit %d, stderr=%s", code, errb.String())
 	}
 }

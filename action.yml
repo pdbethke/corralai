@@ -30,7 +30,13 @@ runs:
           git fetch --no-tags origin "+refs/heads/$GITHUB_BASE_REF:refs/remotes/origin/$GITHUB_BASE_REF"
           base="origin/$GITHUB_BASE_REF"
         fi
-        args=(certify --repo . --substrate workspace)
+        # The record this run publishes must name what it audited: --owner and
+        # --commit are what the report header ("Repo adequacy — owner/repo @
+        # commit") is built from, and GitHub already knows both. --repo takes
+        # the workspace path rather than "."; the repo NAME in the header is
+        # that path's basename, and "." names nothing.
+        args=(certify --repo "${GITHUB_WORKSPACE:-.}" --substrate workspace)
+        args+=(--owner "${{ github.repository_owner }}" --commit "${{ github.sha }}")
         [ -n "$base" ] && args+=(--diff-base "$base")
         [ -n "${{ inputs.goals }}" ] && args+=(--goals "${{ inputs.goals }}")
         corral "${args[@]}" -- ${{ inputs.test-command }}

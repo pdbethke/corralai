@@ -11,7 +11,9 @@ against it, then restores the tree.
 The action runs one command:
 
 ```
-corral certify --repo . --substrate workspace --diff-base <base> -- <test-command>
+corral certify --repo "$GITHUB_WORKSPACE" --substrate workspace \
+  --owner <github.repository_owner> --commit <github.sha> \
+  --diff-base <base> -- <test-command>
 ```
 
 - `--substrate workspace` (`internal/reposcan/cachekey.go`'s `SubstrateWorkspace`)
@@ -25,6 +27,11 @@ corral certify --repo . --substrate workspace --diff-base <base> -- <test-comman
   not a risk worth taking outside CI.
 - `--diff-base <base>` scopes the audit to files the change touched, instead of
   the whole repo. **This is the default** — see below.
+- `--owner` and `--commit` name the record. The report header is
+  `Repo adequacy — <owner>/<repo> @ <commit>`, built from those two plus the
+  basename of `--repo`; the action fills all three from what GitHub already
+  knows (`github.repository_owner`, `github.sha`, and `$GITHUB_WORKSPACE`, whose
+  basename is the repository name). A record that names nothing is not a record.
 
 ## Usage
 

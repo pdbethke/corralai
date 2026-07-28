@@ -44,6 +44,19 @@ type RepoReport struct {
 
 // AuditedFraction is the share of candidates that produced a real score. The
 // coverage floor (H1c) is applied to this.
+//
+// The DENOMINATOR IS ALL CANDIDATES — every file enumeration judged auditable,
+// including the ones a bounded scan deliberately left outside --top. That is
+// the deliberately safe direction: a top-25 scan of a 431-candidate repo
+// reports ~6% coverage rather than 100%, so the number can never overstate what
+// was actually measured. It does mean a bounded scan under-reports its coverage
+// OF THE BOUND, which is the trade taken on purpose.
+//
+// A consumer that needs the bounded/unaudited split — "of the 25 we chose, how
+// many graded?" — must read Excluded and separate ReasonNotSelected (a
+// deliberate bound) from the failure reasons. This method will not do it: one
+// number cannot answer both questions, and the safe one is the one that gets
+// signed.
 func (r RepoReport) AuditedFraction() float64 {
 	if r.Candidates == 0 {
 		return 0
@@ -72,12 +85,21 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 		Ungradable:  map[string]int{},
 		GeneratedAt: time.Now(),
 	}
-	// Ungoaled files never became jobs, so they are absent from results.
-	// Count them from the exclusions rather than by subtracting, so a future
-	// pre-job drop reason cannot be silently mislabelled as ungoaled.
+	// Candidates dropped BEFORE they became jobs are absent from results, so
+	// they are counted from the exclusions. Each is folded under its own
+	// reason — never merged — because the distinction is the whole taxonomy:
+	// ungoaled and source-too-large are properties of the FILE, derive-failed
+	// is infrastructure.
+	//
+	// ReasonNotSelected is deliberately NOT folded. A bound the operator asked
+	// for is not a failure to grade; listing 189 not-selected files as
+	// "ungradable" would read as "this repo could not be graded" when the truth
+	// is "we graded exactly what you asked for". It is still fully accounted in
+	// Excluded, and AuditedFraction already carries it in the denominator.
 	for _, e := range excl {
-		if e.Reason == ReasonUngoaled {
-			rep.Ungradable[ReasonUngoaled]++
+		switch e.Reason {
+		case ReasonUngoaled, ReasonDeriveFailed, ReasonSourceTooLarge:
+			rep.Ungradable[e.Reason]++
 		}
 	}
 

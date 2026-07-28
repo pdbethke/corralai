@@ -6,10 +6,13 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -32,14 +35,20 @@ func TestCertifyRepoRequiresRepoDir(t *testing.T) {
 	}
 }
 
-func TestCertifyRepoRequiresGoalsFile(t *testing.T) {
+// --goals is OPTIONAL now: without it the scan derives a goal per file. The
+// only remaining required flag is --repo, covered above.
+func TestCertifyRepoWithoutGoalsDoesNotDemandThem(t *testing.T) {
+	root := t.TempDir()
+	// No candidates in an empty tree, so no derivation is attempted and no
+	// provider credential is needed — the point is only that the old
+	// "--goals is required" refusal is gone.
 	var out, errb bytes.Buffer
-	code := runCertifyRepo([]string{"--repo", t.TempDir()}, &out, &errb)
-	if code == 0 {
-		t.Fatal("missing --goals should be an error in H1a")
+	code := runCertifyRepo([]string{"--repo", root, "--dry-run"}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit %d, stderr=%s", code, errb.String())
 	}
-	if !strings.Contains(errb.String(), "--goals is required") {
-		t.Errorf("stderr = %q", errb.String())
+	if strings.Contains(errb.String(), "--goals is required") {
+		t.Errorf("--goals is no longer required: %q", errb.String())
 	}
 }
 
@@ -558,9 +567,6 @@ func TestRunCertifyLegacyRepoFlagIsNotHijacked(t *testing.T) {
 	if strings.Contains(stdout.String(), "corral certify --repo ") {
 		t.Errorf("legacy --repo was hijacked by the repo scan:\n%s", stdout.String())
 	}
-	if strings.Contains(stderr.String(), "--goals is required") {
-		t.Errorf("legacy --repo was hijacked by the repo scan:\n%s", stderr.String())
-	}
 }
 
 // TestResolveAuditRolesRejectsCollapsedDecorrelation covers the shared role
@@ -680,42 +686,52 @@ func TestPrintRepoReportUngradableOrderIsStable(t *testing.T) {
 	}
 }
 
-// TestRunCertifyRepoDirWithoutGoalsRefuses is Finding I6: `--repo <dir>` with
-// --goals forgotten silently certified the CURRENT directory and stamped the
-// other repo's path onto the record — a signed statement about the wrong
-// subject. It must refuse and point at the scan.
-func TestRunCertifyRepoDirWithoutGoalsRefuses(t *testing.T) {
+// Finding I6, still guarded: `--repo <dir>` used to fall through to the record
+// path, which certified the CURRENT directory while stamping the other repo's
+// path onto the record — a signed statement about the wrong subject. It was
+// fixed by refusing (goals were mandatory then); now that goals are derived,
+// it is fixed by RUNNING the scan the operator asked for. Either way the
+// record path must never see it.
+func TestRunCertifyRepoDirWithoutGoalsGoesToTheScan(t *testing.T) {
 	root := t.TempDir()
 	run := &fakeRunner{exitCode: 0}
 	post := &fakePoster{result: stubResult()}
 	var stdout, stderr bytes.Buffer
-	code := runCertify([]string{"--repo", root, "--", "true"},
+	code := runCertify([]string{"--repo", root, "--dry-run", "--", "true"},
 		run, post, fakeJail{exit: 0, out: "ok"},
 		func() (ed25519.PrivateKey, error) { return nil, errors.New("unused") },
 		&stdout, &stderr)
-	if code != 2 {
-		t.Fatalf("exit %d, want 2", code)
+	if code != 0 {
+		t.Fatalf("exit %d, stderr=%s", code, stderr.String())
 	}
+	// THE invariant: the record path must never run, because it would certify
+	// the CURRENT directory while stamping root onto the record as its subject.
 	if run.ranArgv != nil || post.called {
-		t.Error("a --repo <dir> typo must not run the check or post a record")
+		t.Error("--repo <dir> must not run the check or post a record")
 	}
-	if !strings.Contains(stderr.String(), "--goals") {
-		t.Errorf("the error must point at the missing --goals:\n%s", stderr.String())
+	if !strings.Contains(stdout.String(), "corral certify --repo "+root) {
+		t.Errorf("--repo <dir> did not reach the scan:\n%s", stdout.String())
 	}
 }
 
-// The same guard must also catch the --repo=<dir> spelling.
-func TestRunCertifyRepoDirEqualsFormWithoutGoalsRefuses(t *testing.T) {
+// The same dispatch must also recognise the --repo=<dir> spelling.
+func TestRunCertifyRepoDirEqualsFormGoesToTheScan(t *testing.T) {
 	root := t.TempDir()
 	run := &fakeRunner{exitCode: 0}
 	post := &fakePoster{result: stubResult()}
 	var stdout, stderr bytes.Buffer
-	code := runCertify([]string{"--repo=" + root, "--", "true"},
+	code := runCertify([]string{"--repo=" + root, "--dry-run", "--", "true"},
 		run, post, fakeJail{exit: 0, out: "ok"},
 		func() (ed25519.PrivateKey, error) { return nil, errors.New("unused") },
 		&stdout, &stderr)
-	if code != 2 {
-		t.Fatalf("exit %d, want 2; stderr=%s", code, stderr.String())
+	if code != 0 {
+		t.Fatalf("exit %d, stderr=%s", code, stderr.String())
+	}
+	if run.ranArgv != nil || post.called {
+		t.Error("--repo=<dir> must not run the check or post a record")
+	}
+	if !strings.Contains(stdout.String(), "corral certify --repo "+root) {
+		t.Errorf("--repo=<dir> did not reach the scan:\n%s", stdout.String())
 	}
 }
 
@@ -933,4 +949,351 @@ func TestLocalExecutorSuiteIgnoresFileBeatsBaselineFailed(t *testing.T) {
 	if res.Reason != reposcan.ReasonSuiteIgnoresFile {
 		t.Errorf("Reason = %q, want %q", res.Reason, reposcan.ReasonSuiteIgnoresFile)
 	}
+}
+
+// TestCertifyRepoDryRunRanksSelectsAndAccounts proves the bound is applied
+// BEFORE derivation and that what fell outside it is accounted, not dropped.
+func TestCertifyRepoDryRunRanksSelectsAndAccounts(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "pkg", "a_test.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "pkg", "b.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "pkg", "b_test.go"), "package pkg\n")
+
+	var out, errb bytes.Buffer
+	code := runCertifyRepo([]string{"--repo", root, "--top", "1", "--dry-run"}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit %d, stderr=%s", code, errb.String())
+	}
+	s := out.String()
+	if !strings.Contains(s, reposcan.ReasonNotSelected) {
+		t.Errorf("bounded scan must account the unselected candidate:\n%s", s)
+	}
+	// The bound is applied BEFORE goals are obtained: only the selected
+	// candidate becomes a job, so only it would ever cost a derivation.
+	if !strings.Contains(s, "1 job(s)") {
+		t.Errorf("--top 1 must emit exactly one job:\n%s", s)
+	}
+	// The selection rule is disclosed, not silent. Matched as a whole line
+	// rather than on the substring "ranked by": Rank's own degradation note
+	// ("... ranked by source size alone") contains that phrase, so a bare
+	// Contains check passes even with the disclosure line deleted.
+	if !regexp.MustCompile(`(?m)^  ranked by \S+; auditing 1 of 2 candidate\(s\)$`).MatchString(s) {
+		t.Errorf("output must disclose the ranking signal and the bound:\n%s", s)
+	}
+}
+
+// --goals still wins: hand-written goals and the file source keep working.
+func TestCertifyRepoGoalsFileTakesPrecedenceOverDerivation(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "pkg", "a_test.go"), "package pkg\n")
+	goals := filepath.Join(root, "goals.json")
+	mustWrite(t, goals, `{"pkg/a.go": "hand written"}`)
+
+	var out, errb bytes.Buffer
+	// No provider credential is needed on this path — proof derivation was
+	// not attempted.
+	code := runCertifyRepo([]string{"--repo", root, "--goals", goals, "--dry-run"}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit %d, stderr=%s", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "1 job(s)") {
+		t.Errorf("hand-written goal did not produce a job:\n%s", out.String())
+	}
+}
+
+// TestCertifyRepoGoalsFileIsNotBoundedByTheDefaultTop guards the existing
+// hand-written-goals path against the bound added for derivation. --top's
+// default exists to cap what DERIVATION costs; it is taken over ALL
+// candidates, so applying it here would audit whichever 25 ranked highest —
+// most of which have no hand-written goal — instead of the map the operator
+// wrote. An explicit --top is still honoured (covered below).
+func TestCertifyRepoGoalsFileIsNotBoundedByTheDefaultTop(t *testing.T) {
+	root := t.TempDir()
+	goals := map[string]string{}
+	// More candidates than defaultScanTop, every one of them goaled.
+	for i := 0; i < defaultScanTop+5; i++ {
+		name := fmt.Sprintf("f%02d", i)
+		mustWrite(t, filepath.Join(root, "pkg", name+".go"), "package pkg\n")
+		mustWrite(t, filepath.Join(root, "pkg", name+"_test.go"), "package pkg\n")
+		goals["pkg/"+name+".go"] = "must not panic"
+	}
+	b, err := json.Marshal(goals)
+	if err != nil {
+		t.Fatal(err)
+	}
+	goalsFile := filepath.Join(root, "goals.json")
+	mustWrite(t, goalsFile, string(b))
+
+	var out, errb bytes.Buffer
+	if code := runCertifyRepo([]string{"--repo", root, "--goals", goalsFile, "--dry-run"}, &out, &errb); code != 0 {
+		t.Fatalf("exit %d, stderr=%s", code, errb.String())
+	}
+	want := fmt.Sprintf("%d job(s)", defaultScanTop+5)
+	if !strings.Contains(out.String(), want) {
+		t.Errorf("every hand-written goal must become a job (want %q):\n%s", want, out.String())
+	}
+	if strings.Contains(out.String(), reposcan.ReasonNotSelected) {
+		t.Errorf("the default bound must not apply to --goals:\n%s", out.String())
+	}
+}
+
+// ...but an EXPLICIT --top still bounds the goals path, so an operator can cap
+// a large hand-written map on purpose.
+func TestCertifyRepoExplicitTopStillBoundsTheGoalsPath(t *testing.T) {
+	root := t.TempDir()
+	goals := map[string]string{}
+	for _, n := range []string{"a", "b", "c"} {
+		mustWrite(t, filepath.Join(root, "pkg", n+".go"), "package pkg\n")
+		mustWrite(t, filepath.Join(root, "pkg", n+"_test.go"), "package pkg\n")
+		goals["pkg/"+n+".go"] = "must not panic"
+	}
+	b, err := json.Marshal(goals)
+	if err != nil {
+		t.Fatal(err)
+	}
+	goalsFile := filepath.Join(root, "goals.json")
+	mustWrite(t, goalsFile, string(b))
+
+	var out, errb bytes.Buffer
+	if code := runCertifyRepo([]string{"--repo", root, "--goals", goalsFile, "--top", "2", "--dry-run"}, &out, &errb); code != 0 {
+		t.Fatalf("exit %d, stderr=%s", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "2 job(s)") {
+		t.Errorf("an explicit --top must bound the goals path too:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), reposcan.ReasonNotSelected) {
+		t.Errorf("the bounded-out candidate must be accounted:\n%s", out.String())
+	}
+}
+
+// --- final-review fix wave -------------------------------------------------
+
+// TestCertifyRepoPreflightsBeforeSpendingOnDerivation is I1: EmitJobs performs
+// up to --top sequential model calls, and the two scan-fatal preflights (jail,
+// provider roles) used to run AFTER it. On a host that cannot sandbox the
+// operator paid for 25 derivations and then got exit 1 having graded nothing.
+//
+// The jail is forced to fail here, so the run must die before a goal source is
+// ever built: no disclosure line, no deriver error, exit 1.
+func TestCertifyRepoPreflightsBeforeSpendingOnDerivation(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "pkg", "a_test.go"), "package pkg\n")
+
+	orig := resolveJailFn
+	resolveJailFn = func(string, bool) (sandbox.Isolator, error) {
+		return nil, errors.New("no usable sandbox on this host")
+	}
+	t.Cleanup(func() { resolveJailFn = orig })
+
+	var out, errb bytes.Buffer
+	// NOT a dry run: this is the path that spends money.
+	code := runCertifyRepo([]string{"--repo", root}, &out, &errb)
+	if code != 1 {
+		t.Fatalf("exit %d, want 1 from the jail preflight; stdout=%s stderr=%s", code, out.String(), errb.String())
+	}
+	if !strings.Contains(errb.String(), "no usable sandbox on this host") {
+		t.Errorf("want the jail preflight failure on stderr:\n%s", errb.String())
+	}
+	// The proof that nothing was paid for: the goal source is built AFTER the
+	// preflights, so neither its disclosure line nor its credential error can
+	// have been reached.
+	if strings.Contains(out.String(), "goals derived per file by") {
+		t.Errorf("a goal source was built before the jail preflight:\n%s", out.String())
+	}
+	if strings.Contains(errb.String(), "goal deriver") {
+		t.Errorf("the deriver was constructed before the jail preflight:\n%s", errb.String())
+	}
+}
+
+// TestResolveGoalSourceDerivedPathDisclosesTheModel is I3. There is deliberately
+// no goal-critic — a goal cannot be executed, so a second model grading the
+// first is opinion on opinion — which makes this line the entire accountability
+// mechanism for a machine-invented goal.
+func TestResolveGoalSourceDerivedPathDisclosesTheModel(t *testing.T) {
+	var errb bytes.Buffer
+	called := 0
+	gs, disclosure, code := resolveGoalSource(&errb, t.TempDir(), "", "test-model-x", false, 3,
+		func(model string) (reposcan.Deriver, error) {
+			called++
+			if model != "test-model-x" {
+				t.Errorf("factory got model %q", model)
+			}
+			return stubDeriver{}, nil
+		})
+	if code != 0 || gs == nil {
+		t.Fatalf("code=%d gs=%v stderr=%s", code, gs, errb.String())
+	}
+	if called != 1 {
+		t.Errorf("deriver factory called %d times, want 1", called)
+	}
+	for _, want := range []string{
+		"goals derived per file by test-model-x@" + version,
+		"no goal-critic",
+		"judged after the fact by mutant yield",
+	} {
+		if !strings.Contains(disclosure, want) {
+			t.Errorf("disclosure missing %q:\n%s", want, disclosure)
+		}
+	}
+}
+
+// The hand-written path invents nothing, so it discloses nothing — and must not
+// build a deriver at all (that path needs no provider credential).
+func TestResolveGoalSourceGoalsFileDisclosesNothingAndDerivesNothing(t *testing.T) {
+	root := t.TempDir()
+	goals := filepath.Join(root, "goals.json")
+	mustWrite(t, goals, `{"pkg/a.go": "hand written"}`)
+
+	var errb bytes.Buffer
+	gs, disclosure, code := resolveGoalSource(&errb, root, goals, "test-model-x", false, 3,
+		func(string) (reposcan.Deriver, error) {
+			t.Fatal("the --goals path must never construct a deriver")
+			return nil, nil
+		})
+	if code != 0 || gs == nil {
+		t.Fatalf("code=%d gs=%v stderr=%s", code, gs, errb.String())
+	}
+	if disclosure != "" {
+		t.Errorf("the --goals path must disclose no derivation, got %q", disclosure)
+	}
+}
+
+// A scan that selected nothing never asks for a goal, so it must not demand a
+// provider credential either.
+func TestResolveGoalSourceNothingSelectedNeedsNoDeriver(t *testing.T) {
+	var errb bytes.Buffer
+	gs, disclosure, code := resolveGoalSource(&errb, t.TempDir(), "", "test-model-x", false, 0,
+		func(string) (reposcan.Deriver, error) {
+			t.Fatal("no candidate was selected; a deriver must not be built")
+			return nil, nil
+		})
+	if code != 0 || gs == nil || disclosure != "" {
+		t.Fatalf("code=%d gs=%v disclosure=%q stderr=%s", code, gs, disclosure, errb.String())
+	}
+}
+
+// A missing credential is a USAGE error (exit 2), reported before any spend.
+func TestResolveGoalSourceDeriverFailureIsAUsageError(t *testing.T) {
+	var errb bytes.Buffer
+	gs, _, code := resolveGoalSource(&errb, t.TempDir(), "", "test-model-x", false, 3,
+		func(string) (reposcan.Deriver, error) { return nil, errors.New("goal deriver: no key") })
+	if code != 2 || gs != nil {
+		t.Fatalf("code=%d gs=%v, want 2 and nil", code, gs)
+	}
+	if !strings.Contains(errb.String(), "no key") {
+		t.Errorf("stderr = %q", errb.String())
+	}
+}
+
+// The disclosure PRINT SITE is shared by both paths that have something to say;
+// this pins it through the CLI on the one that costs nothing to run.
+func TestCertifyRepoDryRunSaysGoalsWereNotDerived(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "pkg", "a_test.go"), "package pkg\n")
+
+	var out, errb bytes.Buffer
+	if code := runCertifyRepo([]string{"--repo", root, "--dry-run"}, &out, &errb); code != 0 {
+		t.Fatalf("exit %d, stderr=%s", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "goals were NOT derived (no model calls)") {
+		t.Errorf("a dry run must say the goals are placeholders:\n%s", out.String())
+	}
+	// ...and must never claim a derivation it did not perform.
+	if strings.Contains(out.String(), "goals derived per file by") {
+		t.Errorf("a dry run must not claim derived goals:\n%s", out.String())
+	}
+}
+
+// TestPrintExclusionsListsCandidateLevelReasonsFirst is I6: the listing is
+// capped at 20 lines and enumerate-level exclusions come first by construction,
+// so a real bounded scan spent every printed line on `no-language` noise and
+// named none of the files that fell outside the bound.
+func TestPrintExclusionsListsCandidateLevelReasonsFirst(t *testing.T) {
+	var excl []reposcan.Exclusion
+	// 30 enumerate-level exclusions, ahead of the interesting ones — exactly
+	// the shape Enumerate + Select produce.
+	for i := 0; i < 30; i++ {
+		excl = append(excl, reposcan.Exclusion{
+			Path:   fmt.Sprintf("doc%02d.md", i),
+			Reason: reposcan.ReasonNoLanguage,
+		})
+	}
+	excl = append(excl,
+		reposcan.Exclusion{Path: "bounded_out.go", Reason: reposcan.ReasonNotSelected},
+		reposcan.Exclusion{Path: "unclear.go", Reason: reposcan.ReasonUngoaled},
+		reposcan.Exclusion{Path: "ratelimited.go", Reason: reposcan.ReasonDeriveFailed},
+		reposcan.Exclusion{Path: "generated.go", Reason: reposcan.ReasonSourceTooLarge},
+	)
+
+	var out bytes.Buffer
+	printExclusions(&out, excl)
+	s := out.String()
+	for _, want := range []string{"bounded_out.go", "unclear.go", "ratelimited.go", "generated.go"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("candidate-level exclusion %s was buried under the cap:\n%s", want, s)
+		}
+	}
+	// The tally stays COMPLETE regardless of what the capped listing shows.
+	if !strings.Contains(s, "30 "+reposcan.ReasonNoLanguage) {
+		t.Errorf("the tally by reason must still count every exclusion:\n%s", s)
+	}
+	if !strings.Contains(s, "and 14 more excluded file(s)") {
+		t.Errorf("the cap must announce exactly how many lines it withheld:\n%s", s)
+	}
+}
+
+// --all audits every candidate, ignoring the default bound.
+func TestCertifyRepoAllIgnoresTheDefaultBound(t *testing.T) {
+	root := t.TempDir()
+	for i := 0; i < defaultScanTop+3; i++ {
+		name := fmt.Sprintf("f%02d", i)
+		mustWrite(t, filepath.Join(root, "pkg", name+".go"), "package pkg\n")
+		mustWrite(t, filepath.Join(root, "pkg", name+"_test.go"), "package pkg\n")
+	}
+	var out, errb bytes.Buffer
+	if code := runCertifyRepo([]string{"--repo", root, "--all", "--dry-run"}, &out, &errb); code != 0 {
+		t.Fatalf("exit %d, stderr=%s", code, errb.String())
+	}
+	want := fmt.Sprintf("auditing %d of %d candidate(s)", defaultScanTop+3, defaultScanTop+3)
+	if !strings.Contains(out.String(), want) {
+		t.Errorf("--all must select every candidate (want %q):\n%s", want, out.String())
+	}
+	if strings.Contains(out.String(), reposcan.ReasonNotSelected) {
+		t.Errorf("--all must leave nothing unselected:\n%s", out.String())
+	}
+}
+
+// --top 0 and a negative --top both mean "no bound", like --all.
+func TestCertifyRepoTopZeroAndNegativeMeanUnbounded(t *testing.T) {
+	root := t.TempDir()
+	for i := 0; i < defaultScanTop+2; i++ {
+		name := fmt.Sprintf("f%02d", i)
+		mustWrite(t, filepath.Join(root, "pkg", name+".go"), "package pkg\n")
+		mustWrite(t, filepath.Join(root, "pkg", name+"_test.go"), "package pkg\n")
+	}
+	for _, top := range []string{"0", "-1"} {
+		var out, errb bytes.Buffer
+		if code := runCertifyRepo([]string{"--repo", root, "--top", top, "--dry-run"}, &out, &errb); code != 0 {
+			t.Fatalf("--top %s: exit %d, stderr=%s", top, code, errb.String())
+		}
+		want := fmt.Sprintf("auditing %d of %d candidate(s)", defaultScanTop+2, defaultScanTop+2)
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("--top %s must be unbounded (want %q):\n%s", top, want, out.String())
+		}
+		if strings.Contains(out.String(), reposcan.ReasonNotSelected) {
+			t.Errorf("--top %s must leave nothing unselected:\n%s", top, out.String())
+		}
+	}
+}
+
+// stubDeriver is never called: the tests above only exercise how a goal source
+// is CHOSEN and disclosed. No unit test in this package may make a model call.
+type stubDeriver struct{}
+
+func (stubDeriver) Derive(context.Context, reposcan.Candidate, string) (string, bool, error) {
+	return "", false, errors.New("stubDeriver must never be invoked in a unit test")
 }

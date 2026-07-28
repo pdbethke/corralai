@@ -17,17 +17,30 @@ import (
 	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
+// defaultScanTop bounds a scan by default. Provisional: large enough to be
+// useful, small enough to quote a price. Revisit against a real third-party
+// repo scan before relying on it.
+const defaultScanTop = 25
+
+// defaultDeriveModel is the goal-deriver's model. It is intentionally the same
+// tier as the mutant generator: deriving one sentence from a file is not the
+// hard part of this pipeline.
+const defaultDeriveModel = defaultLocalMutantModel
+
 // runCertifyRepo fans the single-file audit out over a whole repository.
-// H1a: goals come from a checked-in JSON file; H1b replaces that with LLM
-// derivation behind the same GoalSource interface. No signing here — H1c
-// turns the report into a sealed, anchored statement.
+// Goals come from a checked-in JSON file when --goals is given, and are
+// otherwise DERIVED per file by a model behind the same GoalSource interface.
+// No signing here — H1c turns the report into a sealed, anchored statement.
 func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	flagArgs, checkArgv := splitCertifyArgs(args)
 
 	fs := flag.NewFlagSet("certify --repo", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	repoDir := fs.String("repo", "", "path of the repository to audit (required)")
-	goalsPath := fs.String("goals", "", "JSON file mapping repo-relative paths to goals (required)")
+	goalsPath := fs.String("goals", "", "JSON file mapping repo-relative paths to goals (default: derive a goal per file)")
+	topFlag := fs.Int("top", defaultScanTop, "audit only the N highest-ranked candidates (0 or --all = every candidate). Bounded by default: a whole-repo audit runs a full herd per file, so an unbounded first scan on a large repo costs hours and real money. The DEFAULT bound does not apply with --goals — a hand-written goals map has already chosen the surface — but an explicit --top does")
+	allFlag := fs.Bool("all", false, "audit every candidate, ignoring --top")
+	deriveModel := fs.String("derive-model", defaultDeriveModel, "model that derives a goal per file when --goals is not given")
 	owner := fs.String("owner", "local", "owning account for the scan (tenant identifier)")
 	commit := fs.String("commit", "", "commit SHA the report is bound to")
 	swarmFlag := fs.Int("swarm", 0, "max concurrent audit workers (0 = auto-size to this host's cores)")
@@ -40,10 +53,6 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "corral certify --repo: --repo is required")
 		return 2
 	}
-	if *goalsPath == "" {
-		fmt.Fprintln(stderr, "corral certify --repo: --goals is required (H1a supplies goals from a file)")
-		return 2
-	}
 
 	cands, excl, err := reposcan.Enumerate(*repoDir)
 	if err != nil {
@@ -51,32 +60,118 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	gs, err := reposcan.NewFileGoalSource(*goalsPath)
-	if err != nil {
-		fmt.Fprintf(stderr, "corral certify --repo: reading --goals %s: %v\n", *goalsPath, err)
-		return 1
+	fmt.Fprintf(stdout, "corral certify --repo %s\n", *repoDir)
+
+	// Selection precedes derivation, deliberately: bounding afterwards would
+	// pay for a goal on every candidate in order to audit 25 of them.
+	ranked, rankInfo := reposcan.Rank(*repoDir, cands)
+	// Captured BEFORE any candidate-level exclusion is appended below. Only
+	// Enumerate's exclusions are non-candidates; every later reason
+	// (not-selected, ungoaled, derive-failed, source-too-large) names a file
+	// already counted in
+	// len(cands), and adding those to the file total would report more files
+	// than exist on disk.
+	enumExcl := len(excl)
+
+	limit := *topFlag
+	if *allFlag {
+		limit = 0
+	}
+	// --top exists to bound what DERIVATION costs. An operator who hand-wrote
+	// a goals file has already chosen the surface by hand and paid nothing per
+	// file, so the default bound must not apply to it: the bound is taken over
+	// ALL candidates, most of which have no hand-written goal, so a default 25
+	// would quietly audit a handful of a 40-file goals map. An EXPLICIT --top
+	// is still honoured on that path.
+	if *goalsPath != "" && !flagWasSet(fs, "top") && !*allFlag {
+		limit = 0
+	}
+	selected, notSelected := reposcan.Select(ranked, limit)
+	// Appending into excl is safe: notSelected is Select's own freshly
+	// allocated slice, and excl is Enumerate's. Nothing is appended to
+	// `selected`, which ALIASES ranked's backing array.
+	excl = append(excl, notSelected...)
+
+	// The rule is disclosed. A selection nobody can explain is the same
+	// problem this project criticises in black-box model routing.
+	fmt.Fprintf(stdout, "  ranked by %s; auditing %d of %d candidate(s)\n",
+		rankInfo.Signal, len(selected), len(cands))
+	if rankInfo.Note != "" {
+		fmt.Fprintf(stdout, "    %s\n", rankInfo.Note)
+	}
+
+	// EVERY scan-fatal preflight runs BEFORE the first derivation, because
+	// derivation is where the money goes: EmitJobs below performs up to --top
+	// sequential model calls, and an operator on a host that cannot sandbox
+	// used to pay for all of them and then get exit 1 having graded nothing.
+	// Both checks are cheap — newLocalExecutor only probes the backend, and its
+	// seeds are lazy — and both are scan-wide facts the first job would have
+	// known instantly.
+	//
+	// Skipped on a dry run, which never audits anything: demanding a jail and a
+	// provider key to print the jobs a scan WOULD emit would refuse the one
+	// invocation that costs nothing.
+	var ex *localExecutor
+	if !*dryRun {
+		// Each job runs the whole tree in a jail and grades it with the
+		// project's own test command. Given after `--`; absent, the language
+		// plugin's stock recursive command is used — resolved per job, since a
+		// repo can mix languages.
+		ex = newLocalExecutor(*repoDir, checkArgv, stdout)
+		// Deferred, not called at the end: a panic mid-scan must still release
+		// the staging dirs the shared seeds created. Deferred here so it also
+		// covers the early returns below.
+		defer ex.Close()
+		// Jail preflight: a host that cannot sandbox grades nothing, and saying
+		// so now beats reporting every file as ungradable — after paying for a
+		// goal for each of them.
+		if err := ex.preflight(); err != nil {
+			fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
+			return 1
+		}
+		// Provider preflight: role models, decorrelation, and the API key are
+		// scan-wide facts too.
+		if _, err := resolveAuditRoles(localAuditInput{cmdName: "corral certify --repo"}, stderr); err != nil {
+			fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
+			if isAuditUsageError(err) {
+				return 2
+			}
+			return 1
+		}
+	}
+
+	gs, disclosure, code := resolveGoalSource(stderr, *repoDir, *goalsPath, *deriveModel, *dryRun, len(selected), newLLMDeriver)
+	if code != 0 {
+		return code
+	}
+	// Printed on EVERY path that has something to disclose. A machine-invented
+	// goal has no goal-critic — a goal cannot be executed, so a second model
+	// grading the first would be opinion on opinion — which means DISCLOSURE is
+	// the accountability mechanism: the reader is told what question was asked
+	// and by whom, and execution answers it afterwards through mutant yield.
+	if disclosure != "" {
+		fmt.Fprintln(stdout, disclosure)
 	}
 
 	cfg := reposcan.EmitConfig{
 		Owner: *owner, Repo: filepath.Base(*repoDir), Commit: *commit, Root: *repoDir,
 		EngineVersion: version, ModelSet: "unset", AuditConfig: "default",
 	}
-	jobs, goalExcl, err := reposcan.EmitJobs(cfg, cands, gs)
+	jobs, goalExcl, err := reposcan.EmitJobs(cfg, selected, gs)
 	if err != nil {
 		fmt.Fprintf(stderr, "corral certify --repo: emitting jobs: %v\n", err)
 		return 1
 	}
-	// The two exclusion sources partition DIFFERENTLY, and conflating them
+	// The exclusion sources partition DIFFERENTLY, and conflating them
 	// double-counts files:
 	//   - Enumerate's exclusions are files that are NOT candidates at all
 	//     (no-language / is-test / no-paired-test).
-	//   - EmitJobs' ungoaled exclusions are candidates — they are already
-	//     inside len(cands).
+	//   - not-selected / ungoaled / derive-failed / source-too-large name
+	//     CANDIDATES — they are already inside len(cands).
 	// So the file total is candidates + ENUMERATE-only exclusions. Counting
-	// len(excl) after the append added every ungoaled path a second time and
+	// len(excl) after the appends added every such path a second time and
 	// inflated TotalFiles past the number of files on disk — in a report a
 	// later slice signs and anchors to a public transparency log.
-	enumExcl := len(excl)
 	totalFiles := len(cands) + enumExcl
 
 	// BOTH sources are still REPORTED, or the coverage story is a lie: a reader
@@ -84,7 +179,6 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// nonetheless not audited.
 	excl = append(excl, goalExcl...)
 
-	fmt.Fprintf(stdout, "corral certify --repo %s\n", *repoDir)
 	// totalFiles is printed rather than left for the reader to add up: the two
 	// terms below overlap (ungoaled files are candidates AND excluded), so
 	// candidates + excluded is deliberately NOT the file count.
@@ -107,36 +201,12 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 
-	// Provider preflight, ONCE, before the fan-out: role models, decorrelation,
-	// and the API key are scan-wide facts. Discovering a missing key per-file —
-	// after each job has already run its baseline suite in the jail — would burn
-	// real minutes to reach an answer the first job could have given instantly.
-	if _, err := resolveAuditRoles(localAuditInput{cmdName: "corral certify --repo"}, stderr); err != nil {
-		fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
-		if isAuditUsageError(err) {
-			return 2
-		}
-		return 1
-	}
-
 	workers := resolveSwarm(*swarmFlag)
 	fmt.Fprintf(stdout, "  swarm: %d workers\n", workers)
 
-	// Each job runs the whole tree in a jail and grades it with the project's
-	// own test command. Given after `--`; absent, the language plugin's stock
-	// recursive command is used — resolved per job, since a repo can mix
-	// languages.
-	ex := newLocalExecutor(*repoDir, checkArgv, stdout)
-	// Deferred, not called at the end: a panic mid-scan must still release the
-	// staging dirs the shared seeds created.
-	defer ex.Close()
-	// Jail preflight, ONCE, like the provider preflight above: a host that
-	// cannot sandbox grades nothing, and saying so now beats reporting every
-	// file as ungradable for a reason the first job already knew.
-	if err := ex.preflight(); err != nil {
-		fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
-		return 1
-	}
+	// ex is non-nil here: it is constructed on every non-dry-run path above,
+	// and the dry run returned before this point.
+	//
 	// Cache is nil in H1a: the content-addressed key exists (Task 2) but the
 	// persistent store behind it is H1b. A nil Cache means every job is
 	// computed fresh — slow, never stale.
@@ -145,6 +215,97 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 
 	printRepoReport(stdout, rep)
 	return repoScanExitCode(rep)
+}
+
+// deriverFactory builds a Deriver for a model. Injected so the goal-source
+// wiring can be tested without a provider credential — and, more importantly,
+// without any possibility of a real model call from a unit test.
+type deriverFactory func(model string) (reposcan.Deriver, error)
+
+// resolveGoalSource picks where goals come from and returns the ONE line that
+// discloses it. Split out of runCertifyRepo so both the choice and its
+// disclosure are testable: on the derived path there is no goal-critic, so this
+// line is the entire accountability mechanism for a machine-invented goal.
+//
+// An empty disclosure means there is nothing to disclose — a hand-written
+// --goals map is the operator's own claim, and a scan that selected nothing
+// will never ask for a goal at all.
+//
+// Returns the process exit code to use on failure; 0 means the source is good.
+func resolveGoalSource(stderr io.Writer, repoDir, goalsPath, deriveModel string, dryRun bool, nSelected int, newDeriver deriverFactory) (reposcan.GoalSource, string, int) {
+	// --goals takes precedence when given, so hand-written goals keep working
+	// and that path needs no provider credential at all.
+	if goalsPath != "" {
+		gs, err := reposcan.NewFileGoalSource(goalsPath)
+		if err != nil {
+			fmt.Fprintf(stderr, "corral certify --repo: reading --goals %s: %v\n", goalsPath, err)
+			return nil, "", 1
+		}
+		return gs, "", 0
+	}
+	if dryRun {
+		// A dry run stops before any audit, so deriving a goal for each
+		// selected file would spend real money to produce nothing. Report the
+		// jobs the scan WOULD emit, with a goal plainly marked as not derived
+		// — reporting them as `ungoaled` instead would be a claim about the
+		// files, for a question that was never asked.
+		return notDerivedGoals{}, "  dry run: goals were NOT derived (no model calls); jobs below are what the scan would emit", 0
+	}
+	if nSelected > 0 {
+		// Constructed only when there is something to derive FOR. It fails
+		// closed on a missing credential, which is the right answer for a real
+		// scan — but demanding a provider key to report "0 candidates" would
+		// refuse a scan that was never going to call a model.
+		d, derr := newDeriver(deriveModel)
+		if derr != nil {
+			fmt.Fprintf(stderr, "corral certify --repo: %v\n", derr)
+			return nil, "", 2
+		}
+		return reposcan.NewDerivingGoalSource(repoDir, d, deriveModel, version, 3),
+			fmt.Sprintf("  goals derived per file by %s@%s — no goal-critic; each goal is judged after the fact by mutant yield", deriveModel, version),
+			0
+	}
+	// Nothing was selected, so no goal will ever be asked for. A real source
+	// rather than a nil interface: EmitJobs returns early on an empty candidate
+	// list today, and a nil GoalSource would be a trap the day that changes.
+	return noGoals{}, "", 0
+}
+
+// flagWasSet reports whether the operator passed a flag explicitly, as opposed
+// to inheriting its default. flag.FlagSet has no accessor for this; Visit
+// walks only the flags actually set.
+func flagWasSet(fs *flag.FlagSet, name string) bool {
+	set := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			set = true
+		}
+	})
+	return set
+}
+
+// noGoals supplies no goal for anything. Used only when the scan selected
+// zero candidates, so it can never silently ungoal a file an operator meant
+// to audit.
+type noGoals struct{}
+
+func (noGoals) GoalFor(reposcan.Candidate) (reposcan.Goal, bool, error) {
+	return reposcan.Goal{}, false, nil
+}
+
+// notDerivedGoals stands in for the deriver on a --dry-run with no --goals: it
+// lets the scan show which jobs it would emit without making a model call. The
+// goal text says so in plain words, and its provenance is not a model name, so
+// a placeholder can never be mistaken for a derived goal if one of these jobs
+// is ever printed or serialised. A dry run stops before Scan, so it is never
+// audited against.
+type notDerivedGoals struct{}
+
+func (notDerivedGoals) GoalFor(reposcan.Candidate) (reposcan.Goal, bool, error) {
+	return reposcan.Goal{
+		Text:       "(not derived — dry run)",
+		Provenance: "not-derived:dry-run",
+	}, true, nil
 }
 
 // checkArgvSpansOneLanguage fails closed when the operator gave an explicit
@@ -213,13 +374,48 @@ func printExclusions(w io.Writer, excl []reposcan.Exclusion) {
 	for _, r := range reasons {
 		fmt.Fprintf(w, "    %d %s\n", byReason[r], r)
 	}
-	for i, e := range excl {
+	for i, e := range orderExclusionsForListing(excl) {
 		if i == maxListedExclusions {
 			fmt.Fprintf(w, "    ... and %d more excluded file(s)\n", len(excl)-maxListedExclusions)
 			break
 		}
 		fmt.Fprintf(w, "    excluded %s (%s)\n", e.Path, e.Reason)
 	}
+}
+
+// candidateLevelReasons name exclusions that describe a CANDIDATE — a file the
+// scan judged auditable and then did not audit. Enumerate's reasons
+// (no-language / is-test / no-paired-test) describe files that were never
+// candidates at all.
+var candidateLevelReasons = map[string]bool{
+	reposcan.ReasonNotSelected:    true,
+	reposcan.ReasonUngoaled:       true,
+	reposcan.ReasonDeriveFailed:   true,
+	reposcan.ReasonSourceTooLarge: true,
+}
+
+// orderExclusionsForListing puts candidate-level exclusions ahead of
+// enumerate-level ones, preserving order within each group.
+//
+// This is presentation only — the tally by reason above the listing is complete
+// either way. It matters because the cap is 20 lines and enumerate's exclusions
+// come first by construction: a dogfood run of this repo spent all 20 lines on
+// `no-language` noise and named not one of the 189 files that fell outside the
+// bound. For a BOUNDED scan, which candidates were left out is the interesting
+// question; that every .md file has no language is not.
+func orderExclusionsForListing(excl []reposcan.Exclusion) []reposcan.Exclusion {
+	out := make([]reposcan.Exclusion, 0, len(excl))
+	for _, e := range excl {
+		if candidateLevelReasons[e.Reason] {
+			out = append(out, e)
+		}
+	}
+	for _, e := range excl {
+		if !candidateLevelReasons[e.Reason] {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 func printRepoReport(w io.Writer, r reposcan.RepoReport) {

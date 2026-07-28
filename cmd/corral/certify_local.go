@@ -276,6 +276,12 @@ type localAuditInput struct {
 	bindDirs   []string
 	noBindDeps bool
 
+	// substrate selects where the audit runs: "" or substrateJail (today's
+	// behavior) builds and mutates inside the bwrap jail; substrateWorkspace
+	// mutates repoDir in place and skips jail construction entirely — the
+	// caller (an ephemeral CI runner) IS the isolation boundary.
+	substrate string
+
 	// seed, when non-nil, is a prebuilt repo workspace SHARED across a scan's
 	// jobs (see seedCache): jail prep is per-repo-and-language work, not
 	// per-file work, and building it here would repeat the tree copy, the
@@ -446,7 +452,7 @@ func prepareAuditJail(in localAuditInput, plug lang.Plugin, timeout time.Duratio
 		codePath: in.codePath, testPath: tp, repoDir: repoDir, langName: plug.Name(), fsPath: fsPath,
 		code: code, devTest: devTest, checkArgv: in.checkArgv,
 		bindDirFlag: in.bindDirs, noBindDepsFlag: in.noBindDeps, stdout: stdout,
-		seed: in.seed,
+		seed: in.seed, substrate: in.substrate,
 	})
 	if err != nil {
 		return p, auditUsageErr("%v", err)
@@ -883,7 +889,17 @@ type jailWiringInput struct {
 	noBindDepsFlag bool
 	stdout         io.Writer
 	seed           *repoSeed // non-nil: use this prebuilt, SHARED seed instead of building one
+	substrate      string    // "" or substrateJail = the bwrap jail (today's behavior); substrateWorkspace = mutate repoDir in place, no jail
 }
+
+// Substrate names for jailWiringInput.substrate / localAuditInput.substrate.
+// "" is equivalent to substrateJail — the zero value must be today's shipped
+// behavior so every existing caller (which never sets this field) is
+// unaffected.
+const (
+	substrateJail      = "jail"
+	substrateWorkspace = "workspace"
+)
 
 // workspaceFromSeed returns a private copy of the seed's workspace text with
 // overlay applied. The seed is SHARED across concurrent jobs and must never be
@@ -939,6 +955,48 @@ func buildJailWiring(in jailWiringInput) (w jailWiring, err error) {
 			w.cleanup = func() {}
 		}
 	}()
+	if in.substrate == substrateWorkspace {
+		// The runner IS the isolation boundary — an ephemeral VM with the repo
+		// checked out and the toolchain installed. Nothing to seed, nothing to
+		// vendor, nothing to bind: skip the jail entirely.
+		if in.repoDir == "" {
+			return w, fmt.Errorf("--substrate workspace needs --repo-dir: it mutates a real checkout")
+		}
+		if len(in.checkArgv) == 0 {
+			return w, fmt.Errorf("--repo-dir requires the project's own test command after `--`, e.g. `-- python3 -m pytest tests/test_recipes.py`")
+		}
+		runner := adequacy.NewWorkspaceRunner(in.repoDir)
+		if verr := runner.Verify(); verr != nil {
+			return w, verr
+		}
+		w.cleanup = func() {}
+
+		// Same key computation as the jail's repo-aware branch: the mutant
+		// overlay must target the repo-relative path adequacy.Score writes.
+		ck, rerr := filepath.Rel(in.repoDir, in.fsPath(in.codePath))
+		if rerr != nil || strings.HasPrefix(ck, "..") {
+			return w, fmt.Errorf("--code %s is not inside --repo-dir %s", in.codePath, in.repoDir)
+		}
+		dk, rerr := filepath.Rel(in.repoDir, in.fsPath(in.testPath))
+		if rerr != nil || strings.HasPrefix(dk, "..") {
+			return w, fmt.Errorf("--test %s is not inside --repo-dir %s", in.testPath, in.repoDir)
+		}
+		w.codeKey, w.devTestKey = filepath.ToSlash(ck), filepath.ToSlash(dk)
+
+		// EMPTY but NON-NIL. scoreWorkspace (internal/advpool/gate.go:143)
+		// branches on BaseFiles != nil: non-nil takes the repo-aware path and
+		// uses the run's own TestCmd; nil rebuilds a synthetic single-file
+		// scaffold. Empty-non-nil therefore yields a base of {}, so only the
+		// mutant is overlaid — the rest of the repo is already on disk and
+		// must NOT be rewritten over itself.
+		base := map[string]string{}
+		w.scorer = advpool.JailScorer{Jail: runner, BaseFiles: base, MutantTimeout: in.testTimeout}
+		w.validator = advpool.JailValidator{Jail: runner, BaseFiles: base}
+		w.jailEnum = advpool.JailEnumerator{Jail: runner, BaseFiles: base}
+		// w.depBinds stays nil: there is nothing to bind read-only when the
+		// real tree is already present.
+		return w, nil
+	}
 	if in.repoDir != "" {
 		if len(in.checkArgv) == 0 {
 			return w, fmt.Errorf("--repo-dir requires the project's own test command after `--`, e.g. `-- python3 -m pytest tests/test_recipes.py`")

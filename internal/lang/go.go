@@ -36,16 +36,17 @@ func (goPlugin) CompileCheck(codePath, _ string) []string {
 	return []string{"go", "vet", "./" + dir + "/..."}
 }
 
-// TestPath mirrors the prior advPoolTestPath: same base name, `_test.go`
-// suffix, same directory.
-func (goPlugin) TestPath(codePath string) string {
+// TestPaths mirrors the prior advPoolTestPath: same base name, `_test.go`
+// suffix, same directory. Go's convention IS the sibling file — there is no
+// parallel-tree or flat convention to add, so this is a single-element list.
+func (goPlugin) TestPaths(codePath string) []TestCandidate {
 	ext := filepath.Ext(codePath)
 	base := strings.TrimSuffix(codePath, ext)
 	dir := filepath.Dir(codePath)
 	if dir == "." {
-		return base + "_test.go"
+		return []TestCandidate{{Path: base + "_test.go", Rank: 0}}
 	}
-	return filepath.Join(dir, filepath.Base(base)+"_test.go")
+	return []TestCandidate{{Path: filepath.Join(dir, filepath.Base(base)+"_test.go"), Rank: 0}}
 }
 
 func (goPlugin) Preflight() error { return toolOnPath("go") }

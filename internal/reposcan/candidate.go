@@ -35,6 +35,16 @@ const (
 	ReasonNoLanguage   = "no-language"
 	ReasonIsTest       = "is-test"
 	ReasonNoPairedTest = "no-paired-test"
+	// ReasonAmbiguousTest marks a source file whose resolved test path is
+	// ALSO claimed by at least one other source file at the same or better
+	// specificity rank. Ordered TestPaths candidates broke the injectivity
+	// the old single-path design had for free (one source, one test, no two
+	// sources could ever name the same test) — this reason is the repair:
+	// a wrong pairing plants mutants in one file and grades them against a
+	// DIFFERENT file's tests, producing a confident, signed, wrong adequacy
+	// verdict. An accounted non-pairing is always the safer failure. See
+	// demoteAmbiguousPairings.
+	ReasonAmbiguousTest = "ambiguous-test"
 	// ReasonNotRegularFile covers symlinks, FIFOs, sockets and devices. A
 	// symlink is the dangerous one: `secrets.py -> ~/.aws/credentials` in a
 	// cloned repo would otherwise be auto-discovered, digested, shipped to a
@@ -186,6 +196,19 @@ func Enumerate(root string) ([]Candidate, []Exclusion, error) {
 		return nil, nil, err
 	}
 
+	// rank tracks, per candidate (parallel to cands, before the ambiguity
+	// pass below), the EVIDENTIARY specificity of the match — each plugin's
+	// own TestCandidate.Rank, NOT the position at which it was found in the
+	// (deduped) TestPaths list. Position and rank can diverge: for a shallow
+	// source several differently-specific forms can collapse onto the same
+	// string, and dedupeCandidates attributes that surviving entry the LEAST
+	// specific of the colliding forms' ranks — see lang.TestCandidate for why
+	// using position instead let two equally-uninformative matches from
+	// different-depth sources dodge the ambiguity check entirely. rank only
+	// exists to resolve cross-source collisions below and is discarded once
+	// that pass is done — Candidate itself carries no notion of rank.
+	var rank []int
+
 	for rel := range present {
 		p, ok := lang.Detect(rel)
 		if !ok {
@@ -199,28 +222,138 @@ func Enumerate(root string) ([]Candidate, []Exclusion, error) {
 			excl = append(excl, Exclusion{Path: rel, Reason: ReasonIsTest})
 			continue
 		}
-		tp := filepath.ToSlash(p.TestPath(rel))
-		if tp == "" || !present[tp] {
+		// Walk the plugin's ordered candidates and pair with the first one
+		// that actually exists in this repo. The list is ordered most
+		// specific first (see each plugin's TestPaths), so a sibling or
+		// full-directory-mirror test wins over a same-named test that could
+		// plausibly belong to a different source file.
+		tp := ""
+		tpRank := -1
+		for _, cand := range p.TestPaths(rel) {
+			path := filepath.ToSlash(cand.Path)
+			if path != "" && present[path] {
+				tp = path
+				tpRank = cand.Rank
+				break
+			}
+		}
+		if tp == "" {
 			excl = append(excl, Exclusion{Path: rel, Reason: ReasonNoPairedTest})
 			continue
 		}
 		cands = append(cands, Candidate{Path: rel, TestPath: tp, Lang: p.Name()})
+		rank = append(rank, tpRank)
 	}
+
+	cands, excl = demoteAmbiguousPairings(cands, rank, excl)
 
 	sort.Slice(cands, func(i, j int) bool { return cands[i].Path < cands[j].Path })
 	sort.Slice(excl, func(i, j int) bool { return excl[i].Path < excl[j].Path })
 	return cands, excl, nil
 }
 
+// demoteAmbiguousPairings enforces, as a global property (not a per-plugin
+// heuristic), that one test file grades exactly one source file. The
+// per-plugin TestPaths ordering minimizes collisions but cannot rule them
+// out — two sources can each legitimately resolve to the SAME test path
+// (observed on real repos: flask's tests/test_views.py matched THREE
+// distinct source files; tests/test_blueprints.py matched two). Signing a
+// mutation-adequacy verdict for one file using a test suite that actually
+// belongs to another is worse than not auditing the file at all, so this
+// pass runs AFTER every source has independently resolved its pairing and
+// removes every pairing that isn't safely unambiguous:
+//
+//   - Group the just-resolved candidates by TestPath.
+//   - A group of size 1 is untouched — no collision.
+//   - In a group of size >1, if exactly one member has a STRICTLY better
+//     (lower) specificity rank than every other member, it is kept — a
+//     sibling or full-directory-mirror match outranks a same-named test that
+//     merely happens to also resolve via a less specific form for some other
+//     file — and every other member is demoted.
+//   - If the best rank is TIED across two or more members, ALL of them are
+//     demoted. This does lose a correct pairing sometimes (a genuine
+//     sibling match demoted because an unrelated file's own sibling match
+//     collides implausibly) — that is the intended trade: an accounted
+//     ReasonAmbiguousTest exclusion is honest; a coin-flip pairing that
+//     happens to land on the right file some fraction of the time is not.
+//
+// rank[i] is the evidentiary specificity (lower = more specific) of the
+// plugin's own lang.TestCandidate that resolved cands[i].TestPath — NOT its
+// position in Enumerate's search loop, which would conflate "how specific is
+// this match" with "how many earlier, more-specific-looking candidates
+// happened to collapse onto the same string for this particular source". It
+// is parallel to cands and produced by the same loop in Enumerate, never
+// persisted on Candidate itself.
+func demoteAmbiguousPairings(cands []Candidate, rank []int, excl []Exclusion) ([]Candidate, []Exclusion) {
+	groups := map[string][]int{} // TestPath -> indices into cands
+	for i, c := range cands {
+		groups[c.TestPath] = append(groups[c.TestPath], i)
+	}
+
+	demoted := map[int]bool{}
+	for _, idxs := range groups {
+		if len(idxs) < 2 {
+			continue
+		}
+		best := rank[idxs[0]]
+		for _, i := range idxs[1:] {
+			if rank[i] < best {
+				best = rank[i]
+			}
+		}
+		var atBest []int
+		for _, i := range idxs {
+			if rank[i] == best {
+				atBest = append(atBest, i)
+			}
+		}
+		if len(atBest) == 1 {
+			// Exactly one strictly-best claimant: keep it, demote the rest.
+			for _, i := range idxs {
+				if i != atBest[0] {
+					demoted[i] = true
+				}
+			}
+			continue
+		}
+		// Tied for best (or, degenerately, every member shares one rank):
+		// no safe winner — demote the whole group.
+		for _, i := range idxs {
+			demoted[i] = true
+		}
+	}
+	if len(demoted) == 0 {
+		return cands, excl
+	}
+
+	kept := cands[:0:0]
+	for i, c := range cands {
+		if demoted[i] {
+			excl = append(excl, Exclusion{Path: c.Path, Reason: ReasonAmbiguousTest})
+			continue
+		}
+		kept = append(kept, c)
+	}
+	return kept, excl
+}
+
 // isTestFile reports whether rel is itself a test file, detected by the
 // naming markers the five language plugins use. The markers are the real
-// check: no current plugin's TestPath is idempotent on an already-test path
-// (`foo_test.go` becomes `foo_test_test.go`), so the fixed-point check below
-// is a cheap belt-and-braces for a plugin that someday IS idempotent — it
-// never fires today.
+// check and do NOT depend on the shape of TestPaths at all — a parallel-tree
+// test like tests/agents/test_artifact_store.py is caught by the "test_"
+// prefix marker exactly like a sibling test_artifact_store.py would be, so
+// widening TestPaths from one path to an ordered list changes nothing here.
+//
+// The fixed-point check below (does rel appear in ITS OWN TestPaths list) is
+// a cheap belt-and-braces for a plugin that is someday idempotent on an
+// already-test path — no current plugin is (`foo_test.go`'s own conventions
+// produce `foo_test_test.go`, `test_test_foo.py`, etc, never `foo_test.go`
+// itself), so this never fires today either.
 func isTestFile(p lang.Plugin, rel string) bool {
-	if filepath.ToSlash(p.TestPath(rel)) == rel {
-		return true
+	for _, tp := range p.TestPaths(rel) {
+		if filepath.ToSlash(tp.Path) == rel {
+			return true
+		}
 	}
 
 	// Check against the basename only to avoid directory-component matches.

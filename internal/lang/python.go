@@ -54,15 +54,60 @@ func (pyPlugin) CompileCheck(codePath, testPath string) []string {
 	return []string{pyCachePrefixEnv, pythonBin(), "-m", "py_compile", codePath, testPath}
 }
 
-// TestPath follows the pytest convention: pkg/foo.py -> pkg/test_foo.py.
-func (pyPlugin) TestPath(codePath string) string {
-	dir := filepath.Dir(codePath)
-	base := filepath.Base(codePath)
-	name := "test_" + base
-	if dir == "." {
-		return name
+// TestPaths returns pytest-convention candidates for codePath, most specific
+// (least likely to collide with a DIFFERENT source file's test) first:
+//
+//  1. sibling test_foo.py    — same directory, pytest's own preferred prefix.
+//  2. sibling foo_test.py    — same directory, the alternate suffix form.
+//  3. full-mirror tests/<same full dir>/test_foo.py — keeps the ENTIRE
+//     original directory path under tests/, so it can only ever pair with
+//     this source file, even if some other top-level package happens to
+//     share a subpath.
+//  4. leading-segment-stripped tests/<dir minus first component>/test_foo.py
+//     — the dominant real-world layout: a single top-level package (or a
+//     `src/` layout) collapsed the same way, e.g.
+//     `aisuite/agents/artifact_store.py` -> `tests/agents/test_artifact_store.py`.
+//     Ranked below the full mirror because two DIFFERENT top-level packages
+//     with the same subpath (`pkgA/agents/x.py` and `pkgB/agents/x.py`)
+//     would generate the SAME candidate here, which the full mirror cannot.
+//  5. flat tests/test_foo.py — no directory context at all, so it is the
+//     most likely of the five to accidentally match a different source
+//     file's test; tried last, and only generated for a SHALLOW source (dir
+//     at most 2 path segments — e.g. `src/flask/views.py`). Beyond that
+//     depth the flat form stops being a plausible convention and starts
+//     being a collision magnet: on a real repo (flask) a 3-segment source
+//     (`examples/javascript/js_example/views.py`) generated the exact same
+//     flat candidate (`tests/test_views.py`) as the genuine top-level
+//     `src/flask/views.py`, and both "paired" with the same test file. The
+//     depth bound is a heuristic tuned to observed layouts — see Enumerate's
+//     ambiguous-test demotion for the property that holds unconditionally.
+//
+// For a shallow codePath (dir has zero or one path segment), several of
+// these forms coincide as STRINGS; dedupeCandidates collapses them to one
+// entry and attributes it the LEAST specific (highest) Rank among the
+// colliding forms — never the rank of whichever form happened to be listed
+// first — so that two different sources whose match carries equally little
+// real directory evidence always compare as EQUALLY ranked, regardless of
+// how each of them individually arrived at that string. See TestCandidate
+// and dedupeCandidates for why that distinction is load-bearing.
+//
+// Ranks: 0 = sibling (both forms), 1 = full mirror, 2 = leading-segment
+// stripped, 3 = flat.
+func (pyPlugin) TestPaths(codePath string) []TestCandidate {
+	dir, base, _ := splitPath(codePath)
+	name := "test_" + base + ".py"
+	altName := base + "_test.py"
+
+	out := []TestCandidate{
+		{Path: joinDir(dir, name), Rank: 0},
+		{Path: joinDir(dir, altName), Rank: 0},
+		{Path: filepath.Join("tests", dir, name), Rank: 1},
+		{Path: filepath.Join("tests", stripFirstSegment(dir), name), Rank: 2},
 	}
-	return filepath.Join(dir, name)
+	if dirDepth(dir) <= 2 {
+		out = append(out, TestCandidate{Path: filepath.Join("tests", name), Rank: 3})
+	}
+	return dedupeCandidates(out)
 }
 
 // Preflight fails CLOSED unless python3 (or python) is on PATH AND pytest is

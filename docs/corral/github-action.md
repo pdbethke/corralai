@@ -117,9 +117,10 @@ deep inside on a bare "command not found".
 resolved at — so the installed binary always matches the action version you
 pinned in `uses:`. Override it with the `corral-version` input if you need a
 different `corral` release than the action's own ref (rare). If
-`github.action_ref` is empty — this happens for a local `uses: ./` reference,
-the shape this repo's own CI uses to test the action against itself — the
-install step falls back to `corral@main` and logs a warning saying so.
+`github.action_ref` is empty — this happens for a local `uses: ./` reference
+(not exercised by this repo's own CI today; nothing in `.github/workflows/`
+currently references this action that way) — the install step falls back to
+`corral@main` and logs a warning saying so.
 
 `go install <path>@<version>` has been module-independent since Go 1.16: it
 builds the requested module in its own module cache, not against your

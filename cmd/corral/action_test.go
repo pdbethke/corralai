@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // actionFetchLine returns the `git fetch` command action.yml actually ships,
@@ -216,5 +218,146 @@ func TestDocsNeverAdvertiseAnUncutActionTag(t *testing.T) {
 				t.Errorf("%s advertises %s, but %q is neither an existing tag nor `main` — the snippet does not resolve", doc, m[0], m[1])
 			}
 		}
+	}
+}
+
+// actionStep is a single composite step within action.yml's `runs.steps`.
+type actionStep struct {
+	Name  string            `yaml:"name"`
+	Shell string            `yaml:"shell"`
+	Env   map[string]string `yaml:"env"`
+	Run   string            `yaml:"run"`
+}
+
+// actionYAML is a minimal typed view of action.yml, enough to inspect its
+// inputs and composite steps without hand-parsing YAML.
+type actionYAML struct {
+	Inputs map[string]struct {
+		Description string `yaml:"description"`
+		Required    bool   `yaml:"required"`
+		Default     string `yaml:"default"`
+	} `yaml:"inputs"`
+	Runs struct {
+		Using string       `yaml:"using"`
+		Steps []actionStep `yaml:"steps"`
+	} `yaml:"runs"`
+}
+
+func loadActionYAML(t *testing.T) actionYAML {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("..", "..", "action.yml"))
+	if err != nil {
+		t.Fatalf("reading action.yml: %v", err)
+	}
+	var a actionYAML
+	if err := yaml.Unmarshal(b, &a); err != nil {
+		t.Fatalf("parsing action.yml: %v", err)
+	}
+	return a
+}
+
+// findStepContaining returns the first composite step whose run script
+// contains needle, failing the test if none does.
+func findStepContaining(t *testing.T, a actionYAML, needle string) actionStep {
+	t.Helper()
+	for _, step := range a.Runs.Steps {
+		if strings.Contains(step.Run, needle) {
+			return step
+		}
+	}
+	t.Fatalf("no step in action.yml has a run script containing %q", needle)
+	panic("unreachable")
+}
+
+// TestActionInstallsCorralOntoPATH is the fence for defect 1: action.yml
+// must not assume `corral` is already on the runner's PATH. It must install
+// it itself, via the Go toolchain already on the runner (not
+// actions/setup-go, which would silently swap the toolchain the audited
+// project's own tests run under), into a private GOBIN, then publish that
+// directory onto PATH for later steps via $GITHUB_PATH.
+func TestActionInstallsCorralOntoPATH(t *testing.T) {
+	a := loadActionYAML(t)
+	install := findStepContaining(t, a, "go install")
+
+	if !strings.Contains(install.Run, "github.com/pdbethke/corralai/cmd/corral@") {
+		t.Errorf("install step does not `go install` the corral module path declared in go.mod; got:\n%s", install.Run)
+	}
+	if !strings.Contains(install.Run, "GITHUB_PATH") {
+		t.Error("install step does not append its GOBIN to $GITHUB_PATH — later steps still would not find `corral` on PATH")
+	}
+	if !strings.Contains(install.Run, "RUNNER_TEMP") {
+		t.Error("install step should install into a private GOBIN under $RUNNER_TEMP, not pollute the runner's default GOBIN/GOPATH")
+	}
+	// Mentioning actions/setup-go in a diagnostic message (as remediation
+	// advice when `go` is missing) is fine; actually using it as a step
+	// would replace the runner's Go toolchain, corrupting the toolchain the
+	// audited project's own tests run under, so it must never appear as a
+	// step invocation.
+	for _, step := range a.Runs.Steps {
+		if strings.Contains(step.Run, "uses: actions/setup-go") || strings.HasPrefix(strings.TrimSpace(step.Name), "actions/setup-go") {
+			t.Error("action.yml must not use actions/setup-go as a step")
+		}
+	}
+	raw, err := os.ReadFile(filepath.Join("..", "..", "action.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "actions/setup-go@") {
+		t.Error("action.yml must not depend on the actions/setup-go action")
+	}
+
+	cv, ok := a.Inputs["corral-version"]
+	if !ok {
+		t.Fatal(`action.yml should declare a "corral-version" input to override the installed ref`)
+	}
+	if cv.Default != "" {
+		t.Errorf(`"corral-version" should default to "" (meaning: use the action's own ref), got %q`, cv.Default)
+	}
+}
+
+// TestActionInstallStepFailsClearlyWithoutGo runs the real install script
+// with every directory that has a `go` binary stripped from PATH. Before a
+// preflight check, a runner without Go would die on a bare "go: command not
+// found" from deep inside the script — this asserts the step instead fails
+// fast with a message that tells the operator what to do about it.
+func TestActionInstallStepFailsClearlyWithoutGo(t *testing.T) {
+	a := loadActionYAML(t)
+	install := findStepContaining(t, a, "go install")
+
+	goPath, err := exec.LookPath("go")
+	if err != nil {
+		t.Skip("go not available in this test environment")
+	}
+	goDir := filepath.Dir(goPath)
+
+	var kept []string
+	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+		if dir == "" || dir == goDir {
+			continue
+		}
+		if _, statErr := os.Stat(filepath.Join(dir, "go")); statErr == nil {
+			continue
+		}
+		kept = append(kept, dir)
+	}
+
+	tmp := t.TempDir()
+	envPairs := []string{
+		"PATH=" + strings.Join(kept, string(os.PathListSeparator)),
+		"RUNNER_TEMP=" + tmp,
+		"GITHUB_PATH=" + filepath.Join(tmp, "github_path"),
+		"CORRAL_VERSION=",
+		"ACTION_REF=",
+	}
+
+	cmd := exec.Command("bash", "-c", install.Run)
+	cmd.Env = envPairs
+	out, runErr := cmd.CombinedOutput()
+	if runErr == nil {
+		t.Fatalf("install step should fail when `go` is not on PATH; it exited 0:\n%s", out)
+	}
+	lower := strings.ToLower(string(out))
+	if !strings.Contains(lower, "setup-go") {
+		t.Errorf("install step's failure message should name actions/setup-go as the fix; got:\n%s", out)
 	}
 }

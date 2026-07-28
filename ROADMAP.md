@@ -133,8 +133,10 @@ Go binary.**
   PR audits the handful of files it changed rather than the whole repo — an
   auditor's-own-time cost the *unbounded* case is deliberately not: roughly 84 suite
   runs per audited file. `action.yml` wraps this as `pdbethke/corralai@main` (no version tag is cut for it
-  yet — pin a commit SHA if you want immutability) — install
-  `corral`, check out with `fetch-depth: 0` (required — the diff needs the merge
+  yet — pin a commit SHA if you want immutability); it installs `corral` itself via
+  `go install`, using whatever Go toolchain the runner already has (never
+  `actions/setup-go`, which would swap out the toolchain the audited project's own
+  tests run under). Check out with `fetch-depth: 0` (required — the diff needs the merge
   base), and one step audits the PR's diff in the runner that's already there. Docs:
   `docs/corral/github-action.md`.
 

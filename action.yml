@@ -16,9 +16,40 @@ inputs:
     description: "Provider API key for goal derivation. Required unless 'goals' is supplied."
     required: false
     default: ""
+  corral-version:
+    description: "Which corral to install, as a `go install .../cmd/corral@<ref>` version (a tag, branch, or commit). Defaults to the ref this action itself was resolved at, so the installed binary always matches the action."
+    required: false
+    default: ""
 runs:
   using: "composite"
   steps:
+    - name: Install corral
+      shell: bash
+      env:
+        CORRAL_VERSION: ${{ inputs.corral-version }}
+        ACTION_REF: ${{ github.action_ref }}
+      run: |
+        set -euo pipefail
+        if ! command -v go >/dev/null 2>&1; then
+          echo "::error::corral requires a Go toolchain on the runner (it is installed via 'go install', not vendored). Add the 'actions/setup-go' action before this step, or otherwise put a 'go' binary on PATH." >&2
+          exit 1
+        fi
+        ref="$CORRAL_VERSION"
+        if [ -z "$ref" ]; then
+          ref="$ACTION_REF"
+        fi
+        if [ -z "$ref" ]; then
+          # github.action_ref is empty for a local `uses: ./` reference
+          # (e.g. this repo's own CI checking out this action). There is no
+          # ref to match in that case, so fall back to main.
+          ref="main"
+          echo "::warning::github.action_ref was empty (a local 'uses: ./' reference); installing corral@main instead of matching a resolved ref."
+        fi
+        gobin="${RUNNER_TEMP:-/tmp}/corral-gobin"
+        mkdir -p "$gobin"
+        echo "Installing corral@${ref} into ${gobin}"
+        GOBIN="$gobin" go install "github.com/pdbethke/corralai/cmd/corral@${ref}"
+        echo "$gobin" >> "$GITHUB_PATH"
     - name: Run corral
       shell: bash
       env:

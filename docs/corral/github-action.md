@@ -51,8 +51,39 @@ Use `@main`, or pin the commit SHA you reviewed (`pdbethke/corralai@<sha>`) if
 you want an immutable reference. This document will name a version tag when one
 is actually cut, and not before.
 
-`corral` itself is not installed by this action — install it in a prior step,
-pinned to whatever version you choose. The action assumes it's on `PATH`.
+That's the whole workflow — you don't install `corral` yourself. The one
+requirement is a `go` binary on the runner's `PATH`; GitHub-hosted runners
+ship one, and this action installs `corral` with it (see below). A
+self-hosted runner with no Go toolchain at all will fail fast on a clear
+error rather than a bare "command not found".
+
+## Installing `corral`
+
+The action installs `corral` itself — there is nothing to add before it. Its
+first step runs `go install github.com/pdbethke/corralai/cmd/corral@<ref>`
+into a private `GOBIN` under `$RUNNER_TEMP`, then prepends that directory to
+`$GITHUB_PATH` so the second step finds `corral` on `PATH`. This deliberately
+does **not** use `actions/setup-go`: that action replaces the toolchain on the
+runner, and for a Go project this action is auditing that would silently
+change the toolchain the project's own test suite runs under — corrupting the
+very thing corral is measuring. Instead it uses whatever `go` binary the
+runner already has. If `go` is not on `PATH` at all, the step fails fast with
+a message telling you to add `actions/setup-go` yourself, rather than dying
+deep inside on a bare "command not found".
+
+`<ref>` defaults to `${{ github.action_ref }}` — the ref the action itself was
+resolved at — so the installed binary always matches the action version you
+pinned in `uses:`. Override it with the `corral-version` input if you need a
+different `corral` release than the action's own ref (rare). If
+`github.action_ref` is empty — this happens for a local `uses: ./` reference,
+the shape this repo's own CI uses to test the action against itself — the
+install step falls back to `corral@main` and logs a warning saying so.
+
+`go install <path>@<version>` has been module-independent since Go 1.16: it
+builds the requested module in its own module cache, not against your
+project's `go.mod`. The audited checkout's `go.mod` and `go.sum` are
+untouched — verified by diffing them byte-for-byte before and after a real
+`go install` of this repo's `cmd/corral` in this project's own tree.
 
 ## `fetch-depth: 0` is required
 
@@ -120,6 +151,7 @@ touches files with no paired test) is a legitimate pass: the action prints
 | `diff-base` | no | `""` (falls back to the PR's base ref) | Audit only files changed against this ref. Left empty on a `pull_request` event, the action falls back to `origin/$GITHUB_BASE_REF` (the PR's own base). On any other event (e.g. a push to `main`), there is no base ref to fall back to, so an empty `diff-base` means a whole-repo audit. |
 | `goals` | no | `""` | Optional JSON file of per-file goals. Omitted means goals are derived per file by a model. |
 | `model-key` | no | `""` | Provider API key for goal derivation, wired into the run as `ANTHROPIC_API_KEY` — the same environment variable corral's default model backend reads everywhere else (`internal/creds`). Required unless `goals` is supplied. Pass it as `${{ secrets.ANTHROPIC_API_KEY }}`; never write a key inline in the workflow. |
+| `corral-version` | no | `""` (falls back to the action's own ref, `github.action_ref`) | Which `corral` to `go install`, as a version suffix (a tag, branch, or commit). Leave it empty unless you deliberately want a different `corral` release than the action you pinned in `uses:`. |
 
 ## Exit codes
 

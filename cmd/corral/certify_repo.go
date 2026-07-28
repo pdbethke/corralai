@@ -80,6 +80,15 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	if *allFlag {
 		limit = 0
 	}
+	// --top exists to bound what DERIVATION costs. An operator who hand-wrote
+	// a goals file has already chosen the surface by hand and paid nothing per
+	// file, so the default bound must not apply to it: the bound is taken over
+	// ALL candidates, most of which have no hand-written goal, so a default 25
+	// would quietly audit a handful of a 40-file goals map. An EXPLICIT --top
+	// is still honoured on that path.
+	if *goalsPath != "" && !flagWasSet(fs, "top") && !*allFlag {
+		limit = 0
+	}
 	selected, notSelected := reposcan.Select(ranked, limit)
 	// Appending into excl is safe: notSelected is Select's own freshly
 	// allocated slice, and excl is Enumerate's. Nothing is appended to
@@ -216,6 +225,19 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 
 	printRepoReport(stdout, rep)
 	return repoScanExitCode(rep)
+}
+
+// flagWasSet reports whether the operator passed a flag explicitly, as opposed
+// to inheriting its default. flag.FlagSet has no accessor for this; Visit
+// walks only the flags actually set.
+func flagWasSet(fs *flag.FlagSet, name string) bool {
+	set := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			set = true
+		}
+	})
+	return set
 }
 
 // noGoals supplies no goal for anything. Used only when the scan selected

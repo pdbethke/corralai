@@ -6,7 +6,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -1001,5 +1003,70 @@ func TestCertifyRepoGoalsFileTakesPrecedenceOverDerivation(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "1 job(s)") {
 		t.Errorf("hand-written goal did not produce a job:\n%s", out.String())
+	}
+}
+
+// TestCertifyRepoGoalsFileIsNotBoundedByTheDefaultTop guards the existing
+// hand-written-goals path against the bound added for derivation. --top's
+// default exists to cap what DERIVATION costs; it is taken over ALL
+// candidates, so applying it here would audit whichever 25 ranked highest —
+// most of which have no hand-written goal — instead of the map the operator
+// wrote. An explicit --top is still honoured (covered below).
+func TestCertifyRepoGoalsFileIsNotBoundedByTheDefaultTop(t *testing.T) {
+	root := t.TempDir()
+	goals := map[string]string{}
+	// More candidates than defaultScanTop, every one of them goaled.
+	for i := 0; i < defaultScanTop+5; i++ {
+		name := fmt.Sprintf("f%02d", i)
+		mustWrite(t, filepath.Join(root, "pkg", name+".go"), "package pkg\n")
+		mustWrite(t, filepath.Join(root, "pkg", name+"_test.go"), "package pkg\n")
+		goals["pkg/"+name+".go"] = "must not panic"
+	}
+	b, err := json.Marshal(goals)
+	if err != nil {
+		t.Fatal(err)
+	}
+	goalsFile := filepath.Join(root, "goals.json")
+	mustWrite(t, goalsFile, string(b))
+
+	var out, errb bytes.Buffer
+	if code := runCertifyRepo([]string{"--repo", root, "--goals", goalsFile, "--dry-run"}, &out, &errb); code != 0 {
+		t.Fatalf("exit %d, stderr=%s", code, errb.String())
+	}
+	want := fmt.Sprintf("%d job(s)", defaultScanTop+5)
+	if !strings.Contains(out.String(), want) {
+		t.Errorf("every hand-written goal must become a job (want %q):\n%s", want, out.String())
+	}
+	if strings.Contains(out.String(), reposcan.ReasonNotSelected) {
+		t.Errorf("the default bound must not apply to --goals:\n%s", out.String())
+	}
+}
+
+// ...but an EXPLICIT --top still bounds the goals path, so an operator can cap
+// a large hand-written map on purpose.
+func TestCertifyRepoExplicitTopStillBoundsTheGoalsPath(t *testing.T) {
+	root := t.TempDir()
+	goals := map[string]string{}
+	for _, n := range []string{"a", "b", "c"} {
+		mustWrite(t, filepath.Join(root, "pkg", n+".go"), "package pkg\n")
+		mustWrite(t, filepath.Join(root, "pkg", n+"_test.go"), "package pkg\n")
+		goals["pkg/"+n+".go"] = "must not panic"
+	}
+	b, err := json.Marshal(goals)
+	if err != nil {
+		t.Fatal(err)
+	}
+	goalsFile := filepath.Join(root, "goals.json")
+	mustWrite(t, goalsFile, string(b))
+
+	var out, errb bytes.Buffer
+	if code := runCertifyRepo([]string{"--repo", root, "--goals", goalsFile, "--top", "2", "--dry-run"}, &out, &errb); code != 0 {
+		t.Fatalf("exit %d, stderr=%s", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "2 job(s)") {
+		t.Errorf("an explicit --top must bound the goals path too:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), reposcan.ReasonNotSelected) {
+		t.Errorf("the bounded-out candidate must be accounted:\n%s", out.String())
 	}
 }

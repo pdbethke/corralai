@@ -2,7 +2,7 @@ name: "Corral adversarial test audit"
 description: "Breaks your code to check whether your tests notice. Runs in your own CI, on the checkout that is already there."
 inputs:
   test-command:
-    description: "The command that runs your tests, exactly as your CI runs it (e.g. 'go test ./...')."
+    description: "The command that runs your tests, as a single-line invocation (e.g. 'go test ./...', 'pytest -k \"not slow\"'). Quoting is honoured; pipes, &&/||, redirection and globs are not."
     required: true
   diff-base:
     description: "Audit only files changed against this ref. Defaults to the PR base; set empty to audit the whole repo (expensive)."
@@ -16,16 +16,52 @@ inputs:
     description: "Provider API key for goal derivation. Required unless 'goals' is supplied."
     required: false
     default: ""
+  corral-version:
+    description: "Which corral to install, as a `go install .../cmd/corral@<ref>` version (a tag, branch, or commit). Defaults to the ref this action itself was resolved at, so the installed binary always matches the action."
+    required: false
+    default: ""
 runs:
   using: "composite"
   steps:
+    - name: Install corral
+      shell: bash
+      env:
+        CORRAL_VERSION: ${{ inputs.corral-version }}
+        ACTION_REF: ${{ github.action_ref }}
+      run: |
+        set -euo pipefail
+        if ! command -v go >/dev/null 2>&1; then
+          echo "::error::corral requires a Go toolchain on the runner (it is installed via 'go install', not vendored). Add the 'actions/setup-go' action before this step, or otherwise put a 'go' binary on PATH." >&2
+          exit 1
+        fi
+        ref="$CORRAL_VERSION"
+        if [ -z "$ref" ]; then
+          ref="$ACTION_REF"
+        fi
+        if [ -z "$ref" ]; then
+          # github.action_ref is empty for a local `uses: ./` reference
+          # (e.g. this repo's own CI checking out this action). There is no
+          # ref to match in that case, so fall back to main.
+          ref="main"
+          echo "::warning::github.action_ref was empty (a local 'uses: ./' reference); installing corral@main instead of matching a resolved ref."
+        fi
+        gobin="${RUNNER_TEMP:-/tmp}/corral-gobin"
+        mkdir -p "$gobin"
+        echo "Installing corral@${ref} into ${gobin}"
+        GOBIN="$gobin" go install "github.com/pdbethke/corralai/cmd/corral@${ref}"
+        echo "$gobin" >> "$GITHUB_PATH"
     - name: Run corral
       shell: bash
       env:
         ANTHROPIC_API_KEY: ${{ inputs.model-key }}
+        DIFF_BASE: ${{ inputs.diff-base }}
+        GOALS: ${{ inputs.goals }}
+        REPO_OWNER: ${{ github.repository_owner }}
+        COMMIT_SHA: ${{ github.sha }}
+        TEST_COMMAND: ${{ inputs.test-command }}
       run: |
         set -euo pipefail
-        base="${{ inputs.diff-base }}"
+        base="$DIFF_BASE"
         if [ -z "$base" ] && [ -n "${GITHUB_BASE_REF:-}" ]; then
           git fetch --no-tags origin "+refs/heads/$GITHUB_BASE_REF:refs/remotes/origin/$GITHUB_BASE_REF"
           base="origin/$GITHUB_BASE_REF"
@@ -36,7 +72,71 @@ runs:
         # the workspace path rather than "."; the repo NAME in the header is
         # that path's basename, and "." names nothing.
         args=(certify --repo "${GITHUB_WORKSPACE:-.}" --substrate workspace)
-        args+=(--owner "${{ github.repository_owner }}" --commit "${{ github.sha }}")
+        args+=(--owner "$REPO_OWNER" --commit "$COMMIT_SHA")
         [ -n "$base" ] && args+=(--diff-base "$base")
-        [ -n "${{ inputs.goals }}" ] && args+=(--goals "${{ inputs.goals }}")
-        corral "${args[@]}" -- ${{ inputs.test-command }}
+        [ -n "$GOALS" ] && args+=(--goals "$GOALS")
+        # $TEST_COMMAND is data, not script: it is split into argv words the
+        # way a real shell's own parser would (so "go test ./..." becomes
+        # three args, and pytest -k "not slow" keeps "not slow" as one),
+        # but it is never handed to bash for evaluation, so shell
+        # metacharacters (;, backticks, $( )) in it cannot execute.
+        #
+        # A YAML block scalar (test-command: |) can carry an embedded
+        # newline; silently keeping only the first line would grade a
+        # different, truncated command than the one written, so reject it
+        # instead.
+        if [[ "$TEST_COMMAND" == *$'\n'* ]]; then
+          echo "::error::test-command must be a single line — a multi-line value (e.g. from a YAML block scalar) would be silently truncated to its first line rather than run in full." >&2
+          exit 1
+        fi
+        # GitHub does not actually enforce `required: true`, and an empty
+        # value can also arrive through a reusable workflow. Reject it here
+        # rather than letting it become a one-element argv holding "" below
+        # (GNU xargs still runs its command once on empty input without
+        # -r): corral would treat that as an explicit, empty test command
+        # and try to exec it — every candidate fails its baseline for an
+        # opaque reason, the same undiagnosable shape the newline check
+        # above exists to prevent, arriving through a different door.
+        if [[ -z "${TEST_COMMAND//[[:space:]]/}" ]]; then
+          echo "::error::test-command is empty (or whitespace-only). It is required — corral will not silently fall back to a guessed test command." >&2
+          exit 1
+        fi
+        # xargs does its own shell-style quote parsing (single and double
+        # quotes are honoured) WITHOUT being a shell: it never evaluates
+        # $( ), backticks, ;, &&, redirection, or globs, and -d is
+        # deliberately not passed on the INPUT side since that disables the
+        # quote handling this depends on. An unmatched quote makes xargs
+        # fail, which must surface as an error, not an empty or partial
+        # argv — checked here as its own pass (before the parse below)
+        # since the parse's own pipeline exit status is not reliably
+        # observable once it feeds a NUL-delimited `mapfile` via process
+        # substitution.
+        if ! printf '%s\n' "$TEST_COMMAND" | xargs -r -n1 printf '%s\0' >/dev/null; then
+          echo "::error::test-command could not be parsed as shell-style words (check for an unmatched quote): $TEST_COMMAND" >&2
+          exit 1
+        fi
+        # The actual split: NUL-delimited output, read with `mapfile -d ''`,
+        # so a trailing empty argument (`pytest ""`, or `pytest -k ""`)
+        # survives — `$( )` command substitution strips trailing newlines,
+        # which would otherwise silently drop exactly that argument. The
+        # trailing `\n` fed to xargs above is required too: without it, GNU
+        # xargs drops a trailing empty-quoted argument outright rather than
+        # emitting it as a zero-length one.
+        mapfile -d '' TEST_ARGV < <(printf '%s\n' "$TEST_COMMAND" | xargs -r -n1 printf '%s\0')
+        # The load-bearing guard is HERE, over the parsed OUTPUT, not the
+        # input string above — and it checks the actual invariant corral
+        # needs, not a shape of the input. What makes an argv usable as a
+        # command is simply: there is at least one word, and the FIRST one
+        # (the program name corral will exec) is not empty. That is the
+        # whole property; an empty argument ANYWHERE ELSE is completely
+        # legitimate (`pytest ""`, `pytest -k ""`) and must not trip this.
+        # A check phrased as a shape of the input ("is it whitespace?", "is
+        # the argv exactly one empty element?") only ever catches the
+        # shapes already seen; checking argv[0] directly catches every
+        # shape that can produce an unusable command, including ones not
+        # yet constructed.
+        if [ "${#TEST_ARGV[@]}" -eq 0 ] || [ -z "${TEST_ARGV[0]}" ]; then
+          echo "::error::test-command has no command to run (the program name is empty or missing). It is required — corral will not silently fall back to a guessed test command." >&2
+          exit 1
+        fi
+        corral "${args[@]}" -- "${TEST_ARGV[@]}"

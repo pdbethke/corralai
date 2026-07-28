@@ -33,6 +33,117 @@ corral certify --repo "$GITHUB_WORKSPACE" --substrate workspace \
   knows (`github.repository_owner`, `github.sha`, and `$GITHUB_WORKSPACE`, whose
   basename is the repository name). A record that names nothing is not a record.
 
+## Inputs never become script text
+
+Every `${{ inputs.* }}` / `${{ github.* }}` value the action needs travels
+through the step's `env:` block and is read back as an ordinary quoted shell
+variable (`"$DIFF_BASE"`, `"$TEST_COMMAND"`, etc.) — never interpolated
+directly into a `run:` script. This matters because GitHub expands `${{ }}`
+into the script's literal text **before** bash ever sees the line; an input
+interpolated that way is not data, it's code, and a value containing shell
+metacharacters (`;`, backticks, `$( )`) executes. `env:` values don't have
+that problem — GitHub still expands `${{ }}` there, but into an environment
+variable's *value*, which the shell never re-parses as script.
+
+The one deliberate exception is `test-command`: it's still meant to split
+into argv the way a real shell parses a command line (`go test ./...`
+becomes three separate arguments to `corral -- `, and `pytest -k "not
+slow"` keeps `"not slow"` — quotes removed — as one argument, not two), so
+the run step parses it with `xargs`, which does shell-style quote handling
+*without being a shell*: it understands single and double quotes, but it
+never evaluates `$( )`, backticks, `;`, `&&`, redirection, or globs. (`xargs
+-d` is deliberately not used — that flag turns the quote handling off,
+which is exactly the part being relied on.) An unmatched quote makes
+`xargs` fail, and the step fails with it rather than silently parsing a
+different command than the one written. A `test-command` containing an
+embedded newline (the shape a YAML block scalar, `test-command: |`,
+produces) is rejected up front for the same reason: quietly running only
+its first line would grade a different, truncated command than the one in
+the workflow file.
+
+An **empty or whitespace-only** `test-command` is rejected the same way,
+even though the input is declared `required: true` — GitHub does not
+actually enforce that on composite-action inputs, and a reusable workflow
+can still resolve `test-command` to `""`. Without a check, GNU `xargs`
+runs its command once even on empty input unless told not to, producing a
+one-element argv holding `""`, which corral would treat as an explicit,
+empty test command and try to exec — every candidate fails its baseline
+for an opaque reason, the exact undiagnosable shape this whole section
+exists to prevent, arriving through a different door than the newline
+case. `xargs -r` (no-run-if-empty) is also passed, as defense in depth.
+
+This door has reopened four times now, each through a different INPUT
+shape:
+
+- A whitespace-only pre-parse check (above) catches the bare-empty and
+  whitespace-only cases with a clear message, but not a literal
+  empty-quoted value: `test-command: '""'` or `"''"` is not whitespace, so
+  it survives that check, and is then reduced to a single zero-length word
+  by `xargs`'s own quote removal — the exact mechanism that makes
+  `pytest -k "not slow"` work. Reachable via a generated or reusable
+  workflow that defensively quotes an interpolated value
+  (`test-command: '"${{ inputs.cmd }}"'`) whose inner value resolves
+  empty.
+- A guard written as "reject an argv with zero elements, or exactly one
+  element that's empty" is *still* a shape special-case, and
+  `test-command: '"" ""'`, `"'' ''"`, and `'"" pytest'` all walk straight
+  through it — two-or-more elements, first one empty. `certify_repo.go`
+  honours any non-empty argv as an explicit test command and execs
+  `argv[0]` — empty — for every candidate.
+
+Guarding a shape of the input loses this game structurally: there is no
+way to enumerate every shape that can become an unusable command, and each
+attempt so far was walked around by the next one. The actual invariant is
+about what corral *needs*, not what the input looked like: **there must be
+at least one argv element, and the first one — the program name corral is
+about to exec — must not be empty.** Nothing else about the argv's shape
+matters; an empty argument anywhere *other than* the first position is
+completely legitimate (`pytest ""`, `pytest -k ""` — see below). Stated
+that way, over the value corral actually receives, the check holds
+regardless of which input shape produced the argv, including shapes
+nobody has constructed yet:
+
+```bash
+if [ "${#TEST_ARGV[@]}" -eq 0 ] || [ -z "${TEST_ARGV[0]}" ]; then
+  echo "::error::test-command has no command to run (the program name is empty or missing)." >&2
+  exit 1
+fi
+```
+
+The pre-parse checks above are kept for their clearer error messages on
+the common cases, not because they are what makes this safe — the
+`argv[0]` check is.
+
+The split itself is NUL-delimited (`xargs ... printf '%s\0'` into
+`mapfile -d ''`), not newline-delimited, so a **trailing empty argument**
+survives: `pytest ""` becomes two words, and `pytest -k ""` keeps the
+empty value rather than silently dropping it. A newline-delimited version
+(piping through `$( )` command substitution) would strip exactly that
+trailing empty field, since `$( )` always strips trailing newlines — the
+same ambiguity a plain `echo` has for a value that legitimately ends in
+blank lines. Non-trailing empty arguments (`pytest -k "" -x`) round-trip
+correctly either way, which is what makes the trailing case easy to miss.
+
+`cmd/corral/action_test.go` covers all of this:
+`TestActionTestCommandWordSplitNotEvaluated` proves a `test-command`
+containing `;`, backticks, and `$( )` arrives as literal argv words instead
+of running; `TestActionTestCommandStillSplitsAnOrdinaryCommand` and
+`TestActionTestCommandPreservesQuotedWords` pin the two splitting shapes
+above; `TestActionTestCommandUnmatchedQuoteFailsClosed`,
+`TestActionTestCommandRejectsEmbeddedNewline`, and
+`TestActionTestCommandEmptyFailsClosed` (bare-empty, whitespace-only, both
+literal-quoted-empty shapes, and multi-element argvs whose first element
+is empty — `'"" ""'`, `"'' ''"`, `'"" pytest'`) cover the failure modes;
+`TestActionTestCommandPreservesEmptyArguments` pins the trailing/leading/
+middle empty-argument cases, which must keep working precisely because
+only `argv[0]` is checked.
+
+What this does **not** give you is full shell fidelity: pipes (`|`), `&&`
+/ `||` chaining, output redirection, and glob expansion in `test-command`
+are not supported — `xargs`'s quote parsing covers quoting only. Write
+`test-command` as a plain invocation (`go test ./...`, `pytest -k "not
+slow"`), not a shell one-liner that chains multiple commands.
+
 ## Usage
 
 ```yaml
@@ -51,8 +162,40 @@ Use `@main`, or pin the commit SHA you reviewed (`pdbethke/corralai@<sha>`) if
 you want an immutable reference. This document will name a version tag when one
 is actually cut, and not before.
 
-`corral` itself is not installed by this action — install it in a prior step,
-pinned to whatever version you choose. The action assumes it's on `PATH`.
+That's the whole workflow — you don't install `corral` yourself. The one
+requirement is a `go` binary on the runner's `PATH`; GitHub-hosted runners
+ship one, and this action installs `corral` with it (see below). A
+self-hosted runner with no Go toolchain at all will fail fast on a clear
+error rather than a bare "command not found".
+
+## Installing `corral`
+
+The action installs `corral` itself — there is nothing to add before it. Its
+first step runs `go install github.com/pdbethke/corralai/cmd/corral@<ref>`
+into a private `GOBIN` under `$RUNNER_TEMP`, then prepends that directory to
+`$GITHUB_PATH` so the second step finds `corral` on `PATH`. This deliberately
+does **not** use `actions/setup-go`: that action replaces the toolchain on the
+runner, and for a Go project this action is auditing that would silently
+change the toolchain the project's own test suite runs under — corrupting the
+very thing corral is measuring. Instead it uses whatever `go` binary the
+runner already has. If `go` is not on `PATH` at all, the step fails fast with
+a message telling you to add `actions/setup-go` yourself, rather than dying
+deep inside on a bare "command not found".
+
+`<ref>` defaults to `${{ github.action_ref }}` — the ref the action itself was
+resolved at — so the installed binary always matches the action version you
+pinned in `uses:`. Override it with the `corral-version` input if you need a
+different `corral` release than the action's own ref (rare). If
+`github.action_ref` is empty — this happens for a local `uses: ./` reference
+(not exercised by this repo's own CI today; nothing in `.github/workflows/`
+currently references this action that way) — the install step falls back to
+`corral@main` and logs a warning saying so.
+
+`go install <path>@<version>` has been module-independent since Go 1.16: it
+builds the requested module in its own module cache, not against your
+project's `go.mod`. The audited checkout's `go.mod` and `go.sum` are
+untouched — verified by diffing them byte-for-byte before and after a real
+`go install` of this repo's `cmd/corral` in this project's own tree.
 
 ## `fetch-depth: 0` is required
 
@@ -116,10 +259,11 @@ touches files with no paired test) is a legitimate pass: the action prints
 
 | Input | Required | Default | Meaning |
 |---|---|---|---|
-| `test-command` | yes | — | The command that runs your tests, exactly as your CI runs it (e.g. `go test ./...`). |
+| `test-command` | yes | — | The command that runs your tests, as a single-line invocation (e.g. `go test ./...`, `pytest -k "not slow"`). Quoting is honoured; pipes, `&&`/`\|\|`, redirection and globs are not — see "Inputs never become script text" above. |
 | `diff-base` | no | `""` (falls back to the PR's base ref) | Audit only files changed against this ref. Left empty on a `pull_request` event, the action falls back to `origin/$GITHUB_BASE_REF` (the PR's own base). On any other event (e.g. a push to `main`), there is no base ref to fall back to, so an empty `diff-base` means a whole-repo audit. |
 | `goals` | no | `""` | Optional JSON file of per-file goals. Omitted means goals are derived per file by a model. |
 | `model-key` | no | `""` | Provider API key for goal derivation, wired into the run as `ANTHROPIC_API_KEY` — the same environment variable corral's default model backend reads everywhere else (`internal/creds`). Required unless `goals` is supplied. Pass it as `${{ secrets.ANTHROPIC_API_KEY }}`; never write a key inline in the workflow. |
+| `corral-version` | no | `""` (falls back to the action's own ref, `github.action_ref`) | Which `corral` to `go install`, as a version suffix (a tag, branch, or commit). Leave it empty unless you deliberately want a different `corral` release than the action you pinned in `uses:`. |
 
 ## Exit codes
 

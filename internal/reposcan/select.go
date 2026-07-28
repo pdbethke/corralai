@@ -18,5 +18,10 @@ func Select(ranked []Candidate, limit int) ([]Candidate, []Exclusion) {
 	for _, c := range ranked[limit:] {
 		excluded = append(excluded, Exclusion{Path: c.Path, Reason: ReasonNotSelected})
 	}
-	return ranked[:limit], excluded
+	// Capacity-bounded: the returned head ALIASES ranked's backing array, whose
+	// tail is exactly the region the exclusions above were built from. Without
+	// the cap, an append by any future caller would overwrite candidates already
+	// accounted as not-selected — silently making the report disagree with the
+	// tree it describes.
+	return ranked[:limit:limit], excluded
 }

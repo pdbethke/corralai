@@ -45,3 +45,21 @@ func TestSelectLimitAboveCountTakesEverything(t *testing.T) {
 		t.Errorf("selected %d excluded %d, want 1 and 0", len(sel), len(excl))
 	}
 }
+
+// The returned head aliases ranked's backing array, whose tail is exactly the
+// region the exclusions were built from. Without a capacity bound an append by
+// any future caller silently overwrites a candidate already reported as
+// not-selected.
+func TestSelectHeadCannotClobberTheExcludedTail(t *testing.T) {
+	ranked := []Candidate{{Path: "a.go"}, {Path: "b.go"}, {Path: "c.go"}}
+	sel, excl := Select(ranked, 1)
+
+	sel = append(sel, Candidate{Path: "intruder.go"}) //nolint:staticcheck // the append IS the test
+	_ = sel
+	if ranked[1].Path != "b.go" {
+		t.Errorf("an append to the selected head clobbered ranked[1] (now %q)", ranked[1].Path)
+	}
+	if excl[0].Path != "b.go" {
+		t.Errorf("the exclusion list no longer matches the tree: %q", excl[0].Path)
+	}
+}

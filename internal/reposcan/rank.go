@@ -4,6 +4,7 @@ package reposcan
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,17 +27,35 @@ type RankInfo struct {
 //
 // Degradation: without usable git history (a tarball, a shallow clone, no git
 // binary) it ranks by size alone and says so. A scan of an exported tree must
-// still run.
-func Rank(root string, cands []Candidate) ([]Candidate, RankInfo, error) {
+// still run. Likewise a candidate that cannot be stat'ed (deleted between
+// enumeration and ranking, or unreadable) is sized 0 and ranked last rather
+// than costing the whole scan — one bad path must not be worth 430 files.
+// Ranking cannot fail, which is why it returns no error.
+func Rank(root string, cands []Candidate) ([]Candidate, RankInfo) {
 	churn, info := fileChurn(root)
 
 	size := make(map[string]int64, len(cands))
+	unsized := 0
 	for _, c := range cands {
 		fi, err := os.Stat(filepath.Join(root, filepath.FromSlash(c.Path)))
 		if err != nil {
-			return nil, info, err
+			// Size 0 sorts it to the tail: it is still a candidate, still
+			// accounted, just never preferred over a file we could measure.
+			size[c.Path] = 0
+			unsized++
+			continue
 		}
 		size[c.Path] = fi.Size()
+	}
+	// Disclosed, like every other degradation: a reader must be able to see
+	// that the order was computed with missing information.
+	if unsized > 0 {
+		note := fmt.Sprintf("%d candidate(s) could not be sized and were ranked last", unsized)
+		if info.Note == "" {
+			info.Note = note
+		} else {
+			info.Note += "; " + note
+		}
 	}
 
 	score := func(c Candidate) int64 {
@@ -51,7 +70,7 @@ func Rank(root string, cands []Candidate) ([]Candidate, RankInfo, error) {
 	// SliceStable so equal scores keep enumeration order: a scan of the same
 	// tree must select the same files every time.
 	sort.SliceStable(out, func(i, j int) bool { return score(out[i]) > score(out[j]) })
-	return out, info, nil
+	return out, info
 }
 
 // fileChurn counts commits touching each repo-relative path. A failure is not

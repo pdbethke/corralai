@@ -2,6 +2,7 @@ package reposcan
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -208,5 +209,32 @@ func TestEmitJobsPropagatesTestDigestError(t *testing.T) {
 	_, _, err := EmitJobs(EmitConfig{Owner: "o", Root: root}, cands, gs)
 	if err == nil {
 		t.Error("want error for missing test file, got nil")
+	}
+}
+
+type tooLargeGoals struct{}
+
+func (tooLargeGoals) GoalFor(c Candidate) (Goal, bool, error) {
+	return Goal{}, false, fmt.Errorf("reposcan: %s: %w (9 bytes, cap 4)", c.Path, ErrSourceTooLarge)
+}
+
+// An oversized file gets its OWN reason. Letting it land in derive-failed would
+// tell an operator to go check their API key for a fact about their repo — and
+// derive-failed is the one bucket in this taxonomy that means "not the repo".
+func TestEmitJobsAccountsSourceTooLargeUnderItsOwnReason(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"pkg/a.go": "package pkg\n", "pkg/a_test.go": "package pkg\n",
+	})
+	cands := []Candidate{{Path: "pkg/a.go", TestPath: "pkg/a_test.go", Lang: "go"}}
+
+	jobs, excl, err := EmitJobs(EmitConfig{Owner: "o", Root: root}, cands, tooLargeGoals{})
+	if err != nil {
+		t.Fatalf("an oversized candidate must not abort the scan: %v", err)
+	}
+	if len(jobs) != 0 {
+		t.Errorf("jobs = %+v, want none", jobs)
+	}
+	if len(excl) != 1 || excl[0].Reason != ReasonSourceTooLarge {
+		t.Errorf("excl = %+v, want one %s (never %s)", excl, ReasonSourceTooLarge, ReasonDeriveFailed)
 	}
 }

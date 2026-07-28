@@ -5,6 +5,7 @@ package reposcan
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path"
 )
@@ -56,7 +57,14 @@ func EmitJobs(cfg EmitConfig, cands []Candidate, gs GoalSource) ([]Job, []Exclus
 			// ungoaled: the source of the goal failed, which says nothing about
 			// the file. Account it under its own reason and keep going, so one
 			// rate-limited file cannot cost the operator the other 24.
-			excl = append(excl, Exclusion{Path: c.Path, Reason: ReasonDeriveFailed})
+			reason := ReasonDeriveFailed
+			// ...except when the failure is a property of the FILE. An oversized
+			// generated blob is not an outage, and filing it under derive-failed
+			// would tell an operator to go check their API key.
+			if errors.Is(err, ErrSourceTooLarge) {
+				reason = ReasonSourceTooLarge
+			}
+			excl = append(excl, Exclusion{Path: c.Path, Reason: reason})
 			continue
 		}
 		if !ok {

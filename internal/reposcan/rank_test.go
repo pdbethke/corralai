@@ -85,10 +85,7 @@ func TestRankPutsHighChurnLargeFilesFirst(t *testing.T) {
 		{Path: "cold.go", TestPath: "cold_test.go", Lang: "go"},
 		{Path: "hot.go", TestPath: "hot_test.go", Lang: "go"},
 	}
-	got, info, err := Rank(root, cands)
-	if err != nil {
-		t.Fatalf("Rank: %v", err)
-	}
+	got, info := Rank(root, cands)
 	if info.Signal != "churn-x-size" {
 		t.Errorf("Signal = %q, want churn-x-size", info.Signal)
 	}
@@ -110,10 +107,7 @@ func TestRankDegradesToSizeWithoutGitHistory(t *testing.T) {
 		{Path: "tiny.go", TestPath: "tiny_test.go", Lang: "go"},
 		{Path: "big.go", TestPath: "big_test.go", Lang: "go"},
 	}
-	got, info, err := Rank(root, cands)
-	if err != nil {
-		t.Fatalf("Rank must not fail without git: %v", err)
-	}
+	got, info := Rank(root, cands)
 	if info.Signal != "size-only" {
 		t.Errorf("Signal = %q, want size-only", info.Signal)
 	}
@@ -136,15 +130,9 @@ func TestRankIsStableForTies(t *testing.T) {
 		{Path: "a.go", TestPath: "a_test.go", Lang: "go"},
 		{Path: "b.go", TestPath: "b_test.go", Lang: "go"},
 	}
-	first, _, err := Rank(root, cands)
-	if err != nil {
-		t.Fatal(err)
-	}
+	first, _ := Rank(root, cands)
 	for i := 0; i < 5; i++ {
-		again, _, err := Rank(root, cands)
-		if err != nil {
-			t.Fatal(err)
-		}
+		again, _ := Rank(root, cands)
 		for j := range first {
 			if again[j].Path != first[j].Path {
 				t.Fatalf("run %d reordered ties: %v vs %v", i, again, first)
@@ -191,10 +179,7 @@ func TestRankDegradesToSizeInShallowClone(t *testing.T) {
 		{Path: "a.go", TestPath: "a_test.go", Lang: "go"},
 		{Path: "b.go", TestPath: "b_test.go", Lang: "go"},
 	}
-	got, info, err := Rank(clonePath, cands)
-	if err != nil {
-		t.Fatalf("Rank: %v", err)
-	}
+	got, info := Rank(clonePath, cands)
 	if info.Signal != "size-only" {
 		t.Errorf("Signal = %q, want size-only in shallow clone", info.Signal)
 	}
@@ -204,5 +189,29 @@ func TestRankDegradesToSizeInShallowClone(t *testing.T) {
 	// Size-only ranking should put b.go (200 bytes) before a.go (100 bytes).
 	if got[0].Path != "b.go" {
 		t.Errorf("ranked %q first, want b.go (size-only in shallow clone)", got[0].Path)
+	}
+}
+
+// One unstattable candidate — deleted between enumeration and ranking, or
+// unreadable — must not cost the whole scan. It degrades to size 0, ranks last,
+// and the degradation is disclosed like every other one.
+func TestRankDegradesAnUnstattableCandidateInsteadOfFailing(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"real.go":      "package p\n" + string(make([]byte, 500)),
+		"real_test.go": "package p\n",
+	})
+	cands := []Candidate{
+		{Path: "gone.go", TestPath: "gone_test.go", Lang: "go"},
+		{Path: "real.go", TestPath: "real_test.go", Lang: "go"},
+	}
+	got, info := Rank(root, cands)
+	if len(got) != 2 {
+		t.Fatalf("ranked %d candidates, want both kept", len(got))
+	}
+	if got[0].Path != "real.go" {
+		t.Errorf("ranked %q first, want real.go (the unsized file sorts last)", got[0].Path)
+	}
+	if !strings.Contains(info.Note, "could not be sized") {
+		t.Errorf("a degraded ranking must disclose itself, Note = %q", info.Note)
 	}
 }

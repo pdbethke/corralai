@@ -14,11 +14,11 @@ func TestRubyPlugin(t *testing.T) {
 	if !p.Detect("app/pricing.rb") || p.Detect("app/pricing.py") {
 		t.Fatal("Detect must match .rb only")
 	}
-	if got := p.TestPath("app/pricing.rb"); got != "app/pricing_test.rb" {
-		t.Fatalf("TestPath = %q, want app/pricing_test.rb", got)
+	if got := p.TestPaths("app/pricing.rb")[0]; got != "app/pricing_test.rb" {
+		t.Fatalf("TestPaths()[0] = %q, want app/pricing_test.rb", got)
 	}
-	if got := p.TestPath("pricing.rb"); got != "pricing_test.rb" {
-		t.Fatalf("TestPath = %q, want pricing_test.rb", got)
+	if got := p.TestPaths("pricing.rb")[0]; got != "pricing_test.rb" {
+		t.Fatalf("TestPaths()[0] = %q, want pricing_test.rb", got)
 	}
 	cc := p.CompileCheck("pricing.rb", "pricing_test.rb")
 	if !reflect.DeepEqual(cc, []string{"ruby", "-c", "pricing.rb", "&&", "ruby", "-c", "pricing_test.rb"}) {
@@ -42,5 +42,46 @@ func TestRubyPlugin(t *testing.T) {
 	}
 	if p.PromptLang() != "Ruby" {
 		t.Fatalf("PromptLang = %q", p.PromptLang())
+	}
+}
+
+// TestRubyTestPathsOrder pins the ordered-candidate-list contract for the
+// lib/ vs test/ (or spec/) layout: sibling first, then the leading directory
+// (conventionally "lib") replaced by test/, then the RSpec equivalent.
+func TestRubyTestPathsOrder(t *testing.T) {
+	p, _ := ByName("ruby")
+	cases := []struct {
+		name string
+		in   string
+		want []string
+	}{
+		{
+			name: "top-level file",
+			in:   "pricing.rb",
+			want: []string{"pricing_test.rb", "test/pricing_test.rb", "spec/pricing_spec.rb"},
+		},
+		{
+			name: "single-segment lib dir",
+			in:   "lib/foo.rb",
+			want: []string{"lib/foo_test.rb", "test/foo_test.rb", "spec/foo_spec.rb"},
+		},
+		{
+			name: "lib/<pkg> layout",
+			in:   "lib/mypkg/foo.rb",
+			want: []string{"lib/mypkg/foo_test.rb", "test/mypkg/foo_test.rb", "spec/mypkg/foo_spec.rb"},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := p.TestPaths(c.in)
+			if len(got) != len(c.want) {
+				t.Fatalf("TestPaths(%q) = %v, want %v", c.in, got, c.want)
+			}
+			for i := range got {
+				if got[i] != c.want[i] {
+					t.Errorf("TestPaths(%q)[%d] = %q, want %q\nfull got=%v", c.in, i, got[i], c.want[i], got)
+				}
+			}
+		})
 	}
 }

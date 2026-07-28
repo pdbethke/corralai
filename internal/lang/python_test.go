@@ -13,11 +13,11 @@ func TestPythonPlugin(t *testing.T) {
 	if !p.Detect("app/pricing.py") || p.Detect("app/pricing.go") {
 		t.Fatal("Detect must match .py only")
 	}
-	if got := p.TestPath("app/pricing.py"); got != "app/test_pricing.py" {
-		t.Fatalf("TestPath = %q, want app/test_pricing.py", got)
+	if got := p.TestPaths("app/pricing.py")[0]; got != "app/test_pricing.py" {
+		t.Fatalf("TestPaths()[0] = %q, want app/test_pricing.py", got)
 	}
-	if got := p.TestPath("pricing.py"); got != "test_pricing.py" {
-		t.Fatalf("TestPath = %q, want test_pricing.py", got)
+	if got := p.TestPaths("pricing.py")[0]; got != "test_pricing.py" {
+		t.Fatalf("TestPaths()[0] = %q, want test_pricing.py", got)
 	}
 	tc := p.TestCmd()
 	if len(tc) != 4 || (tc[0] != "python3" && tc[0] != "python") || tc[1] != "-m" || tc[2] != "pytest" || tc[3] != "-q" {
@@ -40,5 +40,69 @@ func TestPythonPlugin(t *testing.T) {
 	}
 	if p.PromptLang() != "Python" {
 		t.Fatalf("PromptLang = %q", p.PromptLang())
+	}
+}
+
+// TestPythonTestPathsOrder pins the ordered-candidate-list contract: most
+// specific (least likely to collide with a different source file) first.
+// The aisuite/agents/artifact_store.py case is the real shape measured
+// against github.com/andrewyng/aisuite — the whole reason this seam exists.
+func TestPythonTestPathsOrder(t *testing.T) {
+	p, _ := ByName("python")
+	cases := []struct {
+		name string
+		in   string
+		want []string
+	}{
+		{
+			name: "top-level file",
+			in:   "pricing.py",
+			want: []string{"test_pricing.py", "pricing_test.py", "tests/test_pricing.py"},
+		},
+		{
+			name: "sibling dir, single segment",
+			in:   "app/pricing.py",
+			want: []string{
+				"app/test_pricing.py",
+				"app/pricing_test.py",
+				"tests/app/test_pricing.py", // full mirror
+				"tests/test_pricing.py",     // leading-segment-stripped ("app" stripped to "") and flat coincide
+			},
+		},
+		{
+			name: "aisuite shape: package/subdir",
+			in:   "aisuite/agents/artifact_store.py",
+			want: []string{
+				"aisuite/agents/test_artifact_store.py",
+				"aisuite/agents/artifact_store_test.py",
+				"tests/aisuite/agents/test_artifact_store.py", // full mirror
+				"tests/agents/test_artifact_store.py",         // leading segment stripped — the real aisuite layout
+				"tests/test_artifact_store.py",                // flat, tried last
+			},
+		},
+		{
+			name: "src/ layout",
+			in:   "src/pkg/foo.py",
+			want: []string{
+				"src/pkg/test_foo.py",
+				"src/pkg/foo_test.py",
+				"tests/src/pkg/test_foo.py", // full mirror
+				"tests/pkg/test_foo.py",     // leading segment ("src") stripped
+				"tests/test_foo.py",         // flat, tried last
+			},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := p.TestPaths(c.in)
+			if len(got) != len(c.want) {
+				t.Fatalf("TestPaths(%q) = %v (len %d), want %v (len %d)", c.in, got, len(got), c.want, len(c.want))
+			}
+			for i := range got {
+				if got[i] != c.want[i] {
+					t.Errorf("TestPaths(%q)[%d] = %q, want %q\nfull got=%v", c.in, i, got[i], c.want[i], got)
+				}
+			}
+		})
 	}
 }

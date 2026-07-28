@@ -45,7 +45,7 @@ func TestScoreRubyKillsAndSurvives(t *testing.T) {
 	mutants := []adequacy.Mutant{
 		{ID: "m1", Code: "def is_even(n)\n  true\nend\n"},
 	}
-	tp := rb.TestPath(codePath) // evenmod_test.rb
+	tp := rb.TestPaths(codePath)[0] // evenmod_test.rb
 
 	// Thorough suite: checks both the true and false branches, so it kills
 	// the always-even mutant.

@@ -67,7 +67,8 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	ranked, rankInfo := reposcan.Rank(*repoDir, cands)
 	// Captured BEFORE any candidate-level exclusion is appended below. Only
 	// Enumerate's exclusions are non-candidates; every later reason
-	// (not-selected, ungoaled, derive-failed) names a file already counted in
+	// (not-selected, ungoaled, derive-failed, source-too-large) names a file
+	// already counted in
 	// len(cands), and adding those to the file total would report more files
 	// than exist on disk.
 	enumExcl := len(excl)
@@ -165,8 +166,8 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// double-counts files:
 	//   - Enumerate's exclusions are files that are NOT candidates at all
 	//     (no-language / is-test / no-paired-test).
-	//   - not-selected / ungoaled / derive-failed name CANDIDATES — they are
-	//     already inside len(cands).
+	//   - not-selected / ungoaled / derive-failed / source-too-large name
+	//     CANDIDATES — they are already inside len(cands).
 	// So the file total is candidates + ENUMERATE-only exclusions. Counting
 	// len(excl) after the appends added every such path a second time and
 	// inflated TotalFiles past the number of files on disk — in a report a
@@ -203,6 +204,9 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	workers := resolveSwarm(*swarmFlag)
 	fmt.Fprintf(stdout, "  swarm: %d workers\n", workers)
 
+	// ex is non-nil here: it is constructed on every non-dry-run path above,
+	// and the dry run returned before this point.
+	//
 	// Cache is nil in H1a: the content-addressed key exists (Task 2) but the
 	// persistent store behind it is H1b. A nil Cache means every job is
 	// computed fresh — slow, never stale.

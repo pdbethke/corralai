@@ -34,11 +34,12 @@ var ErrSourceTooLarge = errors.New("source exceeds the goal deriver's input cap"
 // maxSourceBytes caps what is sent to the deriver.
 //
 // 256 KiB is roughly 64k tokens of source — already past the useful window of
-// the cheap models this role runs on, and far past any hand-written file: the
-// largest file in this repository is under 40 KiB. Anything above the cap is
-// generated or vendored, which is exactly the class of file that has no
-// hand-authored correctness property worth mutating for. Checked BEFORE the
-// read, so an enormous file costs neither the memory nor a provider round-trip.
+// the cheap models this role runs on, and comfortably above any hand-written
+// file: the largest .go file in this repository is ~80 KiB, and the largest of
+// any kind (a test corpus) is ~166 KiB. Anything above the cap is generated or
+// vendored, which is exactly the class of file that has no hand-authored
+// correctness property worth mutating for. Checked BEFORE the read, so an
+// enormous file costs neither the memory nor a provider round-trip.
 const maxSourceBytes int64 = 256 << 10
 
 // defaultDeriveBackoff is the first inter-attempt delay; each further attempt

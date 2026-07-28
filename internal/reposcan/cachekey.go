@@ -28,6 +28,11 @@ type KeyInputs struct {
 	EngineVersion     string
 	ModelSet          string
 	AuditConfig       string
+	// Substrate is where the audit ran — "jail" or "workspace". A verdict
+	// earned under bwrap and one earned in a CI runner's checkout are
+	// different claims: different isolation, different toolchain provenance.
+	// Keying on it stops a seal being assembled from a mix without saying so.
+	Substrate string
 }
 
 // CacheKey is the content address of a verdict. Fields are length-prefixed so
@@ -36,7 +41,7 @@ func (k KeyInputs) CacheKey() string {
 	h := sha256.New()
 	for _, f := range []string{
 		k.SourceDigest, k.PackageDigest, k.GoalDigest, k.TestSurfaceDigest,
-		k.EngineVersion, k.ModelSet, k.AuditConfig,
+		k.EngineVersion, k.ModelSet, k.AuditConfig, k.Substrate,
 	} {
 		fmt.Fprintf(h, "%d:%s|", len(f), f)
 	}

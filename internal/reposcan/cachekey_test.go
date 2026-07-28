@@ -18,6 +18,7 @@ func baseInputs() KeyInputs {
 		EngineVersion:     "v0.2.0",
 		ModelSet:          "claude,gemini",
 		AuditConfig:       "mutants=10",
+		Substrate:         "jail",
 	}
 }
 
@@ -38,6 +39,7 @@ func TestCacheKeyChangesWhenAnyFieldChanges(t *testing.T) {
 		"EngineVersion":     func(k *KeyInputs) { k.EngineVersion = "x" },
 		"ModelSet":          func(k *KeyInputs) { k.ModelSet = "x" },
 		"AuditConfig":       func(k *KeyInputs) { k.AuditConfig = "x" },
+		"Substrate":         func(k *KeyInputs) { k.Substrate = "x" },
 	}
 	want := baseInputs().CacheKey()
 	for field, mutate := range mutators {
@@ -58,6 +60,19 @@ func TestCacheKeyIsUnambiguous(t *testing.T) {
 	b.SourceDigest, b.PackageDigest = "a", "bc"
 	if a.CacheKey() == b.CacheKey() {
 		t.Fatal("field boundaries are ambiguous: concatenation collision")
+	}
+}
+
+// A verdict earned in the jail must not silently satisfy a claim of runner
+// provenance, or a seal could be assembled from a mix of substrates without
+// saying so.
+func TestCacheKeySeparatesSubstrates(t *testing.T) {
+	jail := baseInputs()
+	jail.Substrate = "jail"
+	runner := baseInputs()
+	runner.Substrate = "workspace"
+	if jail.CacheKey() == runner.CacheKey() {
+		t.Fatal("jail and workspace verdicts share a cache key")
 	}
 }
 

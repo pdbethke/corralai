@@ -18,7 +18,12 @@ import (
 func TestEnumeratePairingConventions(t *testing.T) {
 	type want struct {
 		path string
-		test string // "" means expect ReasonNoPairedTest, not a candidate
+		test string // "" means NOT a candidate; see reason
+		// reason is the expected exclusion reason when test == "". Defaults
+		// to ReasonNoPairedTest (the zero value "") so every pre-existing
+		// case in this table is unaffected; set explicitly to
+		// ReasonAmbiguousTest for a collision case.
+		reason string
 	}
 	cases := []struct {
 		name  string
@@ -31,7 +36,7 @@ func TestEnumeratePairingConventions(t *testing.T) {
 				"aisuite/agents/artifact_store.py":    "x = 1\n",
 				"tests/agents/test_artifact_store.py": "def test_x(): pass\n",
 			},
-			wants: []want{{"aisuite/agents/artifact_store.py", "tests/agents/test_artifact_store.py"}},
+			wants: []want{{path: "aisuite/agents/artifact_store.py", test: "tests/agents/test_artifact_store.py"}},
 		},
 		{
 			name: "python: full-directory-mirror preferred over ambiguous stripped form",
@@ -43,8 +48,8 @@ func TestEnumeratePairingConventions(t *testing.T) {
 				"tests/agents/test_x.py":      "def test_ambiguous(): pass\n", // would match BOTH under the stripped form
 			},
 			wants: []want{
-				{"pkgA/agents/x.py", "tests/pkgA/agents/test_x.py"},
-				{"pkgB/agents/x.py", "tests/pkgB/agents/test_x.py"},
+				{path: "pkgA/agents/x.py", test: "tests/pkgA/agents/test_x.py"},
+				{path: "pkgB/agents/x.py", test: "tests/pkgB/agents/test_x.py"},
 			},
 		},
 		{
@@ -55,8 +60,8 @@ func TestEnumeratePairingConventions(t *testing.T) {
 				"aisuite/agents_extra/artifact_store.py": "y = 1\n", // same basename, different (similarly-named) dir — must NOT pair
 			},
 			wants: []want{
-				{"aisuite/agents/artifact_store.py", "tests/agents/test_artifact_store.py"},
-				{"aisuite/agents_extra/artifact_store.py", ""},
+				{path: "aisuite/agents/artifact_store.py", test: "tests/agents/test_artifact_store.py"},
+				{path: "aisuite/agents_extra/artifact_store.py", test: ""},
 			},
 		},
 		{
@@ -65,14 +70,14 @@ func TestEnumeratePairingConventions(t *testing.T) {
 				"toplevel.py":            "x = 1\n",
 				"tests/test_toplevel.py": "def test_x(): pass\n",
 			},
-			wants: []want{{"toplevel.py", "tests/test_toplevel.py"}},
+			wants: []want{{path: "toplevel.py", test: "tests/test_toplevel.py"}},
 		},
 		{
 			name: "python: genuinely untested file stays unpaired",
 			files: map[string]string{
 				"aisuite/agents/lonely.py": "x = 1\n",
 			},
-			wants: []want{{"aisuite/agents/lonely.py", ""}},
+			wants: []want{{path: "aisuite/agents/lonely.py", test: ""}},
 		},
 		{
 			name: "ruby: lib/ vs test/ parallel tree",
@@ -80,7 +85,7 @@ func TestEnumeratePairingConventions(t *testing.T) {
 				"lib/mypkg/foo.rb":       "class Foo; end\n",
 				"test/mypkg/foo_test.rb": "# minitest\n",
 			},
-			wants: []want{{"lib/mypkg/foo.rb", "test/mypkg/foo_test.rb"}},
+			wants: []want{{path: "lib/mypkg/foo.rb", test: "test/mypkg/foo_test.rb"}},
 		},
 		{
 			name: "ruby: lib/ vs spec/ parallel tree",
@@ -88,7 +93,7 @@ func TestEnumeratePairingConventions(t *testing.T) {
 				"lib/mypkg/bar.rb":       "class Bar; end\n",
 				"spec/mypkg/bar_spec.rb": "# rspec\n",
 			},
-			wants: []want{{"lib/mypkg/bar.rb", "spec/mypkg/bar_spec.rb"}},
+			wants: []want{{path: "lib/mypkg/bar.rb", test: "spec/mypkg/bar_spec.rb"}},
 		},
 		{
 			name: "javascript: __tests__ folder beside the source",
@@ -96,7 +101,7 @@ func TestEnumeratePairingConventions(t *testing.T) {
 				"src/calc.js":                "// calc\n",
 				"src/__tests__/calc.test.js": "// test\n",
 			},
-			wants: []want{{"src/calc.js", "src/__tests__/calc.test.js"}},
+			wants: []want{{path: "src/calc.js", test: "src/__tests__/calc.test.js"}},
 		},
 		{
 			name: "javascript: parallel test/ tree, leading segment stripped",
@@ -104,7 +109,7 @@ func TestEnumeratePairingConventions(t *testing.T) {
 				"src/pkg/sort.js":       "// sort\n",
 				"test/pkg/sort.test.js": "// test\n",
 			},
-			wants: []want{{"src/pkg/sort.js", "test/pkg/sort.test.js"}},
+			wants: []want{{path: "src/pkg/sort.js", test: "test/pkg/sort.test.js"}},
 		},
 		{
 			name: "typescript: parallel tests/ tree, leading segment stripped",
@@ -112,7 +117,90 @@ func TestEnumeratePairingConventions(t *testing.T) {
 				"src/pkg/util.ts":        "// util\n",
 				"tests/pkg/util.test.ts": "// test\n",
 			},
-			wants: []want{{"src/pkg/util.ts", "tests/pkg/util.test.ts"}},
+			wants: []want{{path: "src/pkg/util.ts", test: "tests/pkg/util.test.ts"}},
+		},
+		{
+			// The negative case candidate_pairing_test.go was missing: the
+			// pkgA/pkgB case above ALSO supplies both full mirrors, so the
+			// collision never actually materializes there — it passes for
+			// the happy reason. Here NEITHER full mirror exists, so both
+			// sources resolve the ambiguous stripped form at the SAME
+			// specificity rank and neither can safely win.
+			name: "python: ambiguous stripped form with no mirrors demotes BOTH claimants",
+			files: map[string]string{
+				"pkgA/agents/x.py":       "a = 1\n",
+				"pkgB/agents/x.py":       "b = 1\n",
+				"tests/agents/test_x.py": "def test_ambiguous(): pass\n",
+			},
+			wants: []want{
+				{path: "pkgA/agents/x.py", reason: ReasonAmbiguousTest},
+				{path: "pkgB/agents/x.py", reason: ReasonAmbiguousTest},
+			},
+		},
+		{
+			// The real collision that shipped unnoticed: flask's
+			// tests/test_views.py was claimed by src/flask/views.py (2
+			// segments deep — correct) AND by two example apps 3-4 segments
+			// deep, whose only route to tests/test_views.py was the
+			// depth-unbounded flat fallback. The depth bound (python.go)
+			// removes the example apps' flat candidate entirely, so there is
+			// no collision left for the ambiguous-test pass to catch here —
+			// this pins that (a) alone fixes this exact shape.
+			name: "python: flask tests/test_views.py — deep example apps excluded by depth bound",
+			files: map[string]string{
+				"src/flask/views.py":                      "class View: ...\n",
+				"examples/celery/src/task_app/views.py":   "def index(): ...\n",
+				"examples/javascript/js_example/views.py": "def add(): ...\n",
+				"tests/test_views.py":                     "def test_view(): pass\n",
+			},
+			wants: []want{
+				{path: "src/flask/views.py", test: "tests/test_views.py"},
+				{path: "examples/celery/src/task_app/views.py", reason: ReasonNoPairedTest},
+				{path: "examples/javascript/js_example/views.py", reason: ReasonNoPairedTest},
+			},
+		},
+		{
+			// flask's second observed collision: tests/test_blueprints.py
+			// claimed by both src/flask/blueprints.py (2 segments — flat
+			// eligible) and src/flask/sansio/blueprints.py (3 segments —
+			// excluded by the depth bound before it can even reach the
+			// ambiguous-test pass).
+			name: "python: flask tests/test_blueprints.py — sansio/ excluded by depth bound",
+			files: map[string]string{
+				"src/flask/blueprints.py":        "class Blueprint: ...\n",
+				"src/flask/sansio/blueprints.py": "class BlueprintSetupState: ...\n",
+				"tests/test_blueprints.py":       "def test_bp(): pass\n",
+			},
+			wants: []want{
+				{path: "src/flask/blueprints.py", test: "tests/test_blueprints.py"},
+				{path: "src/flask/sansio/blueprints.py", reason: ReasonNoPairedTest},
+			},
+		},
+		{
+			// requests' collision: tests/test_utils.py claimed by BOTH
+			// src/requests/utils.py (flat form, rank 4 — depth 2, so still
+			// eligible) and tests/utils.py itself. tests/utils.py has no
+			// test-name marker (pre-existing on main, not introduced by this
+			// change — see the report), so it is misclassified as SOURCE
+			// rather than test, and its own sibling convention resolves to
+			// tests/test_utils.py at rank 0 — strictly better than
+			// src/requests/utils.py's rank-4 flat match. Per the
+			// strictly-better-rank rule, tests/utils.py (the pre-existing,
+			// unrelated pairing) keeps tests/test_utils.py, and
+			// src/requests/utils.py — which no longer gets to silently
+			// co-claim it — is demoted to ambiguous-test instead of being
+			// wrongly graded against a test suite that was never meant for
+			// it.
+			name: "python: requests tests/test_utils.py — pre-existing tests/utils.py misclassification wins the strict-rank tiebreak",
+			files: map[string]string{
+				"src/requests/utils.py": "def x(): ...\n",
+				"tests/utils.py":        "def y(): ...\n",
+				"tests/test_utils.py":   "def test_x(): pass\n",
+			},
+			wants: []want{
+				{path: "src/requests/utils.py", reason: ReasonAmbiguousTest},
+				{path: "tests/utils.py", test: "tests/test_utils.py"},
+			},
 		},
 	}
 
@@ -133,11 +221,15 @@ func TestEnumeratePairingConventions(t *testing.T) {
 			}
 			for _, w := range c.wants {
 				if w.test == "" {
-					if _, ok := byPath[w.path]; ok {
-						t.Errorf("%s: became a candidate, want no-paired-test", w.path)
+					wantReason := w.reason
+					if wantReason == "" {
+						wantReason = ReasonNoPairedTest
 					}
-					if reasons[w.path] != ReasonNoPairedTest {
-						t.Errorf("%s: reason = %q, want %q", w.path, reasons[w.path], ReasonNoPairedTest)
+					if _, ok := byPath[w.path]; ok {
+						t.Errorf("%s: became a candidate, want %q", w.path, wantReason)
+					}
+					if reasons[w.path] != wantReason {
+						t.Errorf("%s: reason = %q, want %q", w.path, reasons[w.path], wantReason)
 					}
 					continue
 				}

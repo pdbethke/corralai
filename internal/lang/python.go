@@ -72,7 +72,15 @@ func (pyPlugin) CompileCheck(codePath, testPath string) []string {
 //     would generate the SAME candidate here, which the full mirror cannot.
 //  5. flat tests/test_foo.py — no directory context at all, so it is the
 //     most likely of the five to accidentally match a different source
-//     file's test; tried last.
+//     file's test; tried last, and only generated for a SHALLOW source (dir
+//     at most 2 path segments — e.g. `src/flask/views.py`). Beyond that
+//     depth the flat form stops being a plausible convention and starts
+//     being a collision magnet: on a real repo (flask) a 3-segment source
+//     (`examples/javascript/js_example/views.py`) generated the exact same
+//     flat candidate (`tests/test_views.py`) as the genuine top-level
+//     `src/flask/views.py`, and both "paired" with the same test file. The
+//     depth bound is a heuristic tuned to observed layouts — see Enumerate's
+//     ambiguous-test demotion for the property that holds unconditionally.
 //
 // For a shallow codePath (dir has zero or one path segment), several of
 // these forms coincide; dedupeKeepOrder collapses them to one entry.
@@ -86,7 +94,9 @@ func (pyPlugin) TestPaths(codePath string) []string {
 		joinDir(dir, altName),
 		filepath.Join("tests", dir, name),
 		filepath.Join("tests", stripFirstSegment(dir), name),
-		filepath.Join("tests", name),
+	}
+	if dirDepth(dir) <= 2 {
+		out = append(out, filepath.Join("tests", name))
 	}
 	return dedupeKeepOrder(out)
 }

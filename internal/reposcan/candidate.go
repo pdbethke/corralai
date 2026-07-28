@@ -35,6 +35,16 @@ const (
 	ReasonNoLanguage   = "no-language"
 	ReasonIsTest       = "is-test"
 	ReasonNoPairedTest = "no-paired-test"
+	// ReasonAmbiguousTest marks a source file whose resolved test path is
+	// ALSO claimed by at least one other source file at the same or better
+	// specificity rank. Ordered TestPaths candidates broke the injectivity
+	// the old single-path design had for free (one source, one test, no two
+	// sources could ever name the same test) — this reason is the repair:
+	// a wrong pairing plants mutants in one file and grades them against a
+	// DIFFERENT file's tests, producing a confident, signed, wrong adequacy
+	// verdict. An accounted non-pairing is always the safer failure. See
+	// demoteAmbiguousPairings.
+	ReasonAmbiguousTest = "ambiguous-test"
 	// ReasonNotRegularFile covers symlinks, FIFOs, sockets and devices. A
 	// symlink is the dangerous one: `secrets.py -> ~/.aws/credentials` in a
 	// cloned repo would otherwise be auto-discovered, digested, shipped to a
@@ -186,6 +196,14 @@ func Enumerate(root string) ([]Candidate, []Exclusion, error) {
 		return nil, nil, err
 	}
 
+	// rank tracks, per candidate (parallel to cands, before the ambiguity
+	// pass below), the SPECIFICITY of the match: the index in the plugin's
+	// ordered TestPaths list where the paired test was found. Lower is more
+	// specific. It only exists to resolve cross-source collisions below and
+	// is discarded once that pass is done — Candidate itself carries no
+	// notion of rank.
+	var rank []int
+
 	for rel := range present {
 		p, ok := lang.Detect(rel)
 		if !ok {
@@ -205,10 +223,12 @@ func Enumerate(root string) ([]Candidate, []Exclusion, error) {
 		// full-directory-mirror test wins over a same-named test that could
 		// plausibly belong to a different source file.
 		tp := ""
-		for _, cand := range p.TestPaths(rel) {
+		tpRank := -1
+		for i, cand := range p.TestPaths(rel) {
 			cand = filepath.ToSlash(cand)
 			if cand != "" && present[cand] {
 				tp = cand
+				tpRank = i
 				break
 			}
 		}
@@ -217,11 +237,95 @@ func Enumerate(root string) ([]Candidate, []Exclusion, error) {
 			continue
 		}
 		cands = append(cands, Candidate{Path: rel, TestPath: tp, Lang: p.Name()})
+		rank = append(rank, tpRank)
 	}
+
+	cands, excl = demoteAmbiguousPairings(cands, rank, excl)
 
 	sort.Slice(cands, func(i, j int) bool { return cands[i].Path < cands[j].Path })
 	sort.Slice(excl, func(i, j int) bool { return excl[i].Path < excl[j].Path })
 	return cands, excl, nil
+}
+
+// demoteAmbiguousPairings enforces, as a global property (not a per-plugin
+// heuristic), that one test file grades exactly one source file. The
+// per-plugin TestPaths ordering minimizes collisions but cannot rule them
+// out — two sources can each legitimately resolve to the SAME test path
+// (observed on real repos: flask's tests/test_views.py matched THREE
+// distinct source files; tests/test_blueprints.py matched two). Signing a
+// mutation-adequacy verdict for one file using a test suite that actually
+// belongs to another is worse than not auditing the file at all, so this
+// pass runs AFTER every source has independently resolved its pairing and
+// removes every pairing that isn't safely unambiguous:
+//
+//   - Group the just-resolved candidates by TestPath.
+//   - A group of size 1 is untouched — no collision.
+//   - In a group of size >1, if exactly one member has a STRICTLY better
+//     (lower) specificity rank than every other member, it is kept — a
+//     sibling or full-directory-mirror match outranks a same-named test that
+//     merely happens to also resolve via a less specific form for some other
+//     file — and every other member is demoted.
+//   - If the best rank is TIED across two or more members, ALL of them are
+//     demoted. This does lose a correct pairing sometimes (a genuine
+//     sibling match demoted because an unrelated file's own sibling match
+//     collides implausibly) — that is the intended trade: an accounted
+//     ReasonAmbiguousTest exclusion is honest; a coin-flip pairing that
+//     happens to land on the right file some fraction of the time is not.
+//
+// rank[i] is the specificity index (lower = more specific) at which
+// cands[i].TestPath was resolved; it is parallel to cands and produced by
+// the same loop in Enumerate, never persisted on Candidate itself.
+func demoteAmbiguousPairings(cands []Candidate, rank []int, excl []Exclusion) ([]Candidate, []Exclusion) {
+	groups := map[string][]int{} // TestPath -> indices into cands
+	for i, c := range cands {
+		groups[c.TestPath] = append(groups[c.TestPath], i)
+	}
+
+	demoted := map[int]bool{}
+	for _, idxs := range groups {
+		if len(idxs) < 2 {
+			continue
+		}
+		best := rank[idxs[0]]
+		for _, i := range idxs[1:] {
+			if rank[i] < best {
+				best = rank[i]
+			}
+		}
+		var atBest []int
+		for _, i := range idxs {
+			if rank[i] == best {
+				atBest = append(atBest, i)
+			}
+		}
+		if len(atBest) == 1 {
+			// Exactly one strictly-best claimant: keep it, demote the rest.
+			for _, i := range idxs {
+				if i != atBest[0] {
+					demoted[i] = true
+				}
+			}
+			continue
+		}
+		// Tied for best (or, degenerately, every member shares one rank):
+		// no safe winner — demote the whole group.
+		for _, i := range idxs {
+			demoted[i] = true
+		}
+	}
+	if len(demoted) == 0 {
+		return cands, excl
+	}
+
+	kept := cands[:0:0]
+	for i, c := range cands {
+		if demoted[i] {
+			excl = append(excl, Exclusion{Path: c.Path, Reason: ReasonAmbiguousTest})
+			continue
+		}
+		kept = append(kept, c)
+	}
+	return kept, excl
 }
 
 // isTestFile reports whether rel is itself a test file, detected by the

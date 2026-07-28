@@ -50,6 +50,20 @@ func stripFirstSegment(dir string) string {
 	return ""
 }
 
+// dirDepth returns the number of path segments in dir (0 for a top-level
+// file). Used to bound how far a "no directory context at all" flat-tree
+// test candidate is allowed to reach: a flat candidate is a plausible
+// convention for a shallow source but a collision magnet for a deep one
+// (e.g. `examples/javascript/js_example/views.py`, 3 segments deep, would
+// otherwise generate the same flat candidate as a genuine top-level
+// `src/flask/views.py`).
+func dirDepth(dir string) int {
+	if dir == "" {
+		return 0
+	}
+	return len(strings.Split(filepath.ToSlash(dir), "/"))
+}
+
 // dedupeKeepOrder drops duplicate paths, keeping the first (most specific)
 // occurrence. Candidates naturally collide when a source file has a shallow
 // directory (e.g. a one-segment dir makes the "strip first segment" and

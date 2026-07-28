@@ -91,6 +91,23 @@ func TestPythonTestPathsOrder(t *testing.T) {
 				"tests/test_foo.py",         // flat, tried last
 			},
 		},
+		{
+			// A source more than 2 directory segments deep must NOT generate
+			// the flat tests/test_foo.py candidate at all: on a real repo
+			// (flask) a 3-segment-deep example app
+			// (examples/javascript/js_example/views.py) generated the exact
+			// same flat candidate as the genuine top-level src/flask/views.py
+			// and both silently "paired" with the same test file. No flat
+			// entry here is what removes that collision at the source.
+			name: "deep dir (>2 segments) excludes the flat fallback",
+			in:   "examples/celery/src/task_app/views.py",
+			want: []string{
+				"examples/celery/src/task_app/test_views.py",
+				"examples/celery/src/task_app/views_test.py",
+				"tests/examples/celery/src/task_app/test_views.py",
+				"tests/celery/src/task_app/test_views.py",
+			},
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

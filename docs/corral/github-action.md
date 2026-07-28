@@ -64,15 +64,38 @@ the workflow file.
 An **empty or whitespace-only** `test-command` is rejected the same way,
 even though the input is declared `required: true` — GitHub does not
 actually enforce that on composite-action inputs, and a reusable workflow
-can still resolve `test-command` to `""`. Without the check, GNU `xargs`
+can still resolve `test-command` to `""`. Without a check, GNU `xargs`
 runs its command once even on empty input unless told not to, producing a
 one-element argv holding `""`, which corral would treat as an explicit,
 empty test command and try to exec — every candidate fails its baseline
 for an opaque reason, the exact undiagnosable shape this whole section
 exists to prevent, arriving through a different door than the newline
-case. `xargs -r` (no-run-if-empty) is also passed, as defense in depth,
-but the explicit check is the real guard — nothing here relies on `-r`
-alone.
+case. `xargs -r` (no-run-if-empty) is also passed, as defense in depth.
+
+This door has reopened three times now, each through a different INPUT
+shape that reduces to the same forbidden OUTPUT — an empty argv, or an
+argv holding one empty word. A whitespace-only pre-parse check (above)
+catches the common case with a clear message, but it does not catch a
+literal empty-quoted value: `test-command: '""'` or `"''"` is not
+whitespace, so it survives that check, and is then reduced to a single
+zero-length word by `xargs`'s own quote removal — the exact mechanism
+that makes `pytest -k "not slow"` work. This is reachable the same way
+the bare-empty case is: a generated or reusable workflow that defensively
+quotes an interpolated value (`test-command: '"${{ inputs.cmd }}"'`)
+where the inner value resolves empty.
+
+Guarding only the input string loses this game structurally — there is no
+way to enumerate every shape that can become an empty argv. So the real
+guard is a **post-parse assertion over `TEST_ARGV` itself**, after
+splitting: reject when it has zero elements, or exactly one element that
+is empty. That is the property actually wanted ("corral must never be
+handed an empty test command"), stated once, over the value corral
+actually receives — it holds regardless of which input shape produced it.
+The pre-parse checks above are kept for their clearer error messages on
+the common cases, not because they are what makes this safe. A **trailing**
+empty argument in an otherwise real command (`pytest ""`) is legitimate
+and does not trip this guard — only an argv that is entirely one empty
+word does; see the empty-argument case below.
 
 The split itself is NUL-delimited (`xargs ... printf '%s\0'` into
 `mapfile -d ''`), not newline-delimited, so a **trailing empty argument**
@@ -91,7 +114,9 @@ of running; `TestActionTestCommandStillSplitsAnOrdinaryCommand` and
 `TestActionTestCommandPreservesQuotedWords` pin the two splitting shapes
 above; `TestActionTestCommandUnmatchedQuoteFailsClosed`,
 `TestActionTestCommandRejectsEmbeddedNewline`, and
-`TestActionTestCommandEmptyFailsClosed` cover the three failure modes;
+`TestActionTestCommandEmptyFailsClosed` (which includes the bare-empty,
+whitespace-only, AND both literal-quoted-empty shapes) cover the failure
+modes;
 `TestActionTestCommandPreservesEmptyArguments` pins the trailing/leading/
 middle empty-argument cases.
 

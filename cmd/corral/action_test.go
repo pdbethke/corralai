@@ -568,26 +568,43 @@ func TestActionTestCommandRejectsEmbeddedNewline(t *testing.T) {
 	}
 }
 
-// TestActionTestCommandEmptyFailsClosed is the fence for a second
-// undiagnosable-COULD-NOT-GRADE door: pre-fix, `read -ra A <<< ""` gave a
-// zero-length argv, so corral saw `--` with nothing after it and fell back
-// to the language's stock test command — silently auditing something the
-// operator never asked for. The xargs-based parser instead produces a
-// ONE-element array holding "" (GNU xargs runs its command once even on
-// empty input without -r, so `printf '%s\n'` still emits a line and
-// `mapfile` still captures one field), which corral would treat as an
-// explicit, empty test command and try to exec — every candidate fails its
-// baseline for an opaque reason. An empty (or whitespace-only)
-// test-command must fail the step loudly instead, since guessing the test
-// command on a signed-record path is exactly the failure mode the
-// injection fix's canary exists to prevent.
+// TestActionTestCommandEmptyFailsClosed is the fence for a door that has
+// reopened three times now, each time through a different input shape that
+// reduces to the same forbidden OUTPUT: corral must never be handed an argv
+// that is empty, or a single empty word.
+//
+//   - Pre-fix, `read -ra A <<< ""` gave a zero-length argv, so corral saw
+//     `--` with nothing after it and silently fell back to the language's
+//     stock test command.
+//   - The xargs-based parser instead produces a ONE-element array holding
+//     "" for a bare-empty TEST_COMMAND (GNU xargs runs its command once
+//     even on empty input without -r), which corral would treat as an
+//     explicit, empty test command and try to exec — every candidate fails
+//     its baseline for an opaque reason.
+//   - A literal empty-quoted value (`test-command: '""'` or `"”"`) slips
+//     past a whitespace-only pre-parse check — it isn't whitespace — and
+//     is then reduced to a single zero-length word by xargs's own quote
+//     removal, the exact mechanism that makes `pytest -k "not slow"` work.
+//     Reachable via a generated or reusable workflow that defensively
+//     quotes an interpolated value that resolves empty.
+//
+// Guarding only the INPUT string loses this game structurally: there is no
+// way to enumerate every input shape that can become an empty argv. The
+// load-bearing check is a POST-parse assertion over TEST_ARGV itself —
+// length 0, or length 1 with an empty element — which holds regardless of
+// which input shape produced it. The pre-parse whitespace check is kept
+// only for its clearer error message on the common case; it is not what
+// makes this safe.
 func TestActionTestCommandEmptyFailsClosed(t *testing.T) {
 	a := loadActionYAML(t)
 	runStep := findStepContaining(t, a, "certify --repo")
 
 	for name, testCommand := range map[string]string{
-		"empty":           "",
-		"whitespace only": "   \t  ",
+		"empty":                            "",
+		"whitespace only":                  "   \t  ",
+		"literal double-quoted empty":      `""`,
+		"literal single-quoted empty":      `''`,
+		"whitespace around a quoted empty": `  ""  `,
 	} {
 		t.Run(name, func(t *testing.T) {
 			tmp := t.TempDir()

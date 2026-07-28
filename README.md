@@ -157,7 +157,10 @@ in place and grades each mutant with your own test command — the runner
 itself is the isolation boundary, so this is for CI, not a working tree you
 care about. Scoped to the PR's changed files by default (auditing every file
 on every PR is expensive — roughly 84 suite runs per file); a whole-repo run
-is opt-in. See **[docs/corral/github-action.md](docs/corral/github-action.md)**.
+is opt-in. By default a weak-but-gradable kill rate still exits 0 — the
+opt-in `min-kill-rate` input (`--min-kill-rate` on the CLI) fails the run
+when any *individual* audited file scores below the threshold you set. See
+**[docs/corral/github-action.md](docs/corral/github-action.md)**.
 
 ## A knowledge corpus that makes every audit sharper
 

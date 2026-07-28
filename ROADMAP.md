@@ -137,7 +137,12 @@ Go binary.**
   `go install`, using whatever Go toolchain the runner already has (never
   `actions/setup-go`, which would swap out the toolchain the audited project's own
   tests run under). Check out with `fetch-depth: 0` (required — the diff needs the merge
-  base), and one step audits the PR's diff in the runner that's already there. Docs:
+  base), and one step audits the PR's diff in the runner that's already there.
+  **`--min-kill-rate` (opt-in, `min-kill-rate` on the Action) gives the gate teeth**:
+  unset, a file that grades at 0.00 still exits 0 (today's behaviour, unchanged); set,
+  ANY audited file scoring below it fails the scan (exit 1) — checked per file against
+  `reposcan.RepoReport.Weakest`, never the aggregate, so one well-tested file can't mask
+  a weak one. Docs:
   `docs/corral/github-action.md`.
 
 **The substrate.**

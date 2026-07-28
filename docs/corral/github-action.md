@@ -262,22 +262,68 @@ touches files with no paired test) is a legitimate pass: the action prints
 | `test-command` | yes | — | The command that runs your tests, as a single-line invocation (e.g. `go test ./...`, `pytest -k "not slow"`). Quoting is honoured; pipes, `&&`/`\|\|`, redirection and globs are not — see "Inputs never become script text" above. |
 | `diff-base` | no | `""` (falls back to the PR's base ref) | Audit only files changed against this ref. Left empty on a `pull_request` event, the action falls back to `origin/$GITHUB_BASE_REF` (the PR's own base). On any other event (e.g. a push to `main`), there is no base ref to fall back to, so an empty `diff-base` means a whole-repo audit. |
 | `goals` | no | `""` | Optional JSON file of per-file goals. Omitted means goals are derived per file by a model. |
+| `min-kill-rate` | no | `""` (unset) | Fail the run (exit 1) if **any individual audited file's** kill rate is below this value. Range 0.0-1.0 inclusive; a *minimum*, so a file exactly at the value passes. Opt-in — leave empty to keep the pre-`min-kill-rate` behaviour, where a weak-but-gradable suite still exits 0. See "Failing on a weak kill rate" below. |
 | `model-key` | no | `""` | Provider API key for goal derivation, wired into the run as `ANTHROPIC_API_KEY` — the same environment variable corral's default model backend reads everywhere else (`internal/creds`). Required unless `goals` is supplied. Pass it as `${{ secrets.ANTHROPIC_API_KEY }}`; never write a key inline in the workflow. |
 | `corral-version` | no | `""` (falls back to the action's own ref, `github.action_ref`) | Which `corral` to `go install`, as a version suffix (a tag, branch, or commit). Leave it empty unless you deliberately want a different `corral` release than the action you pinned in `uses:`. |
 
+## Failing on a weak kill rate
+
+By default, a scan that successfully grades a file exits 0 **no matter what
+kill rate it measured** — a file with every mutant surviving (0.00) merges
+exactly as cleanly as one with a perfect score. That is deliberate: this
+input is opt-in, and giving it a default would silently change the exit code
+of every existing caller of this action.
+
+Set `min-kill-rate` (a number from `0.0` to `1.0`) to give the gate teeth:
+
+```yaml
+- uses: pdbethke/corralai@main
+  with:
+    test-command: "go test ./..."
+    model-key: ${{ secrets.ANTHROPIC_API_KEY }}
+    min-kill-rate: "0.7"
+```
+
+The check is **per file, not on the aggregate**. If any one audited file
+scores below the threshold, the whole scan exits 1 — a well-tested file
+elsewhere in the PR cannot average out, or mask, a weak one. `0.7` here means
+*at least* 70%: a file scoring exactly `0.70` passes (`min-kill-rate` is a
+minimum, checked inclusively), and a file at `0.69` fails the run.
+
+When a run breaches the threshold, the human-readable report names every
+breaching file and by how much, on its own `KILL-RATE BREACH:` line —
+distinct from `COULD-NOT-GRADE:`, which means something different (nothing
+was measured at all, rather than measured and found weak):
+
+```
+  KILL-RATE BREACH: 1 file(s) below --min-kill-rate 0.70:
+    0.40  pkg/widget.go (0.30 below threshold)
+```
+
+This is independent of, and decided after, the two existing zero-file
+outcomes: an empty `--diff-base` scope (`NOTHING IN SCOPE:`, exit 0 — nothing
+was ever meant to be measured) and a non-empty scope where nothing could be
+graded (`COULD-NOT-GRADE:`, exit 1) both still take priority over the
+threshold check, exactly as they did before this input existed. A threshold
+can only fail a run that actually produced at least one real kill-rate
+measurement.
+
 ## Exit codes
 
-- **0** — the scan ran and graded at least one file (whatever its kill rate
-  came out to), or nothing was in scope at all (a docs-only PR is a legitimate
-  green). **The action does not currently fail the merge on a low kill
-  rate** — a weak-but-gradable suite still exits 0. Read the report for the
-  number; don't rely on the exit code alone if you want CI to block on it.
-- **1** — a real failure: files were in scope and *none* of them could be
-  graded at all (`COULD-NOT-GRADE:`, e.g. every candidate's baseline suite was
-  already broken or flaky), or enumeration failed. Per-file goal derivation
-  that runs and comes back empty for every file lands here too — the scan
-  happened, it just graded nothing.
-- **2** — the run never started: a usage error (bad flags), or the goal deriver
-  could not be CONSTRUCTED at all — the usual cause being no `model-key` (and no
-  `goals` file) to derive goals with. Distinct from exit 1: nothing was
-  attempted, so nothing is being reported about your code.
+- **0** — the scan ran and graded at least one file, and (if `min-kill-rate`
+  was given) every audited file met it; or nothing was in scope at all (a
+  docs-only PR is a legitimate green). **With `min-kill-rate` left unset**, a
+  weak-but-gradable suite still exits 0 regardless of its score — read the
+  report for the number, or set `min-kill-rate` if you want CI to block on it.
+- **1** — a real failure: either files were in scope and *none* of them could
+  be graded at all (`COULD-NOT-GRADE:`, e.g. every candidate's baseline suite
+  was already broken or flaky), enumeration failed, or (only when
+  `min-kill-rate` was given) at least one audited file scored below it
+  (`KILL-RATE BREACH:`). Per-file goal derivation that runs and comes back
+  empty for every file lands here too — the scan happened, it just graded
+  nothing.
+- **2** — the run never started: a usage error (bad flags, including a
+  `min-kill-rate` that doesn't parse or falls outside 0.0-1.0), or the goal
+  deriver could not be CONSTRUCTED at all — the usual cause being no
+  `model-key` (and no `goals` file) to derive goals with. Distinct from exit
+  1: nothing was attempted, so nothing is being reported about your code.

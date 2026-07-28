@@ -16,11 +16,19 @@ type Plugin interface {
 	Scaffold() map[string]string                     // base workspace files (go.mod / none)
 	TestCmd() []string                               // default recursive test command
 	CompileCheck(codePath, testPath string) []string // syntax/type check for the authored test
-	TestPath(codePath string) string                 // sibling test path per convention
-	Preflight() error                                // toolchain present? nil ok, else fail CLOSED
-	PromptLang() string                              // human label, for verdict metadata + logs
-	TestWriterSystem() string                        // language-specific test-writer system prompt
-	MutantSystem() string                            // language-specific mutant-generator system prompt
+	// TestPaths returns the plausible test-file paths for codePath, ordered
+	// most specific (least likely to accidentally match a DIFFERENT source
+	// file's test) first. A caller that wants "the" conventional test path —
+	// e.g. to name a freshly-authored test — uses TestPaths(codePath)[0],
+	// which is always the same sibling convention the old single-valued
+	// TestPath used to return. A caller PAIRING against an existing repo
+	// (reposcan) walks the whole list and takes the first entry that exists
+	// on disk.
+	TestPaths(codePath string) []string
+	Preflight() error         // toolchain present? nil ok, else fail CLOSED
+	PromptLang() string       // human label, for verdict metadata + logs
+	TestWriterSystem() string // language-specific test-writer system prompt
+	MutantSystem() string     // language-specific mutant-generator system prompt
 	// SingleTestCmd yields a command that runs exactly the one test named by
 	// selector in testPath. ok=false when the language can't yet target a
 	// single test — callers must treat that as "no auto-signal", never a pass.

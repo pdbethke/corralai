@@ -4,7 +4,6 @@ package lang
 
 import (
 	"path/filepath"
-	"strings"
 )
 
 func init() { Register(jsPlugin{}) }
@@ -32,14 +31,32 @@ func (jsPlugin) CompileCheck(codePath, testPath string) []string {
 	return []string{"node", "--check", codePath, "&&", "node", "--check", testPath}
 }
 
-func (jsPlugin) TestPath(codePath string) string {
-	ext := filepath.Ext(codePath)
-	base := strings.TrimSuffix(codePath, ext)
-	dir := filepath.Dir(codePath)
-	if dir == "." {
-		return base + ".test.js"
+// TestPaths covers the common Node/JS test-file conventions, most specific
+// first. All forms use a literal `.js` suffix regardless of the source
+// file's own extension (.js/.mjs/.cjs) — that mirrors the prior single-path
+// behavior, which always emitted `.test.js`.
+//
+//  1. sibling foo.test.js         — same directory as the source.
+//  2. sibling foo.spec.js         — same directory, alternate suffix.
+//  3. __tests__/foo.test.js       — same directory, in a `__tests__` folder
+//     beside the source (a common Jest/CRA convention).
+//  4. test/<subpath>/foo.test.js  — parallel tree, leading directory
+//     replaced by `test` (mirrors the `src/` -> `test/` layout).
+//  5. tests/<subpath>/foo.test.js — the `tests` (plural) spelling of (4).
+func (jsPlugin) TestPaths(codePath string) []string {
+	dir, base, _ := splitPath(codePath)
+	sub := stripFirstSegment(dir)
+	testName := base + ".test.js"
+	specName := base + ".spec.js"
+
+	out := []string{
+		joinDir(dir, testName),
+		joinDir(dir, specName),
+		filepath.Join(dir, "__tests__", testName),
+		filepath.Join("test", sub, testName),
+		filepath.Join("tests", sub, testName),
 	}
-	return filepath.Join(dir, filepath.Base(base)+".test.js")
+	return dedupeKeepOrder(out)
 }
 
 func (jsPlugin) Preflight() error { return toolOnPath("node") }

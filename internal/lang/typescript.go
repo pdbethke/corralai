@@ -4,7 +4,6 @@ package lang
 
 import (
 	"path/filepath"
-	"strings"
 )
 
 func init() { Register(tsPlugin{}) }
@@ -77,14 +76,23 @@ func (tsPlugin) CompileCheck(codePath, testPath string) []string {
 	return []string{"tsc", "--noEmit", "-p", "tsconfig.json"}
 }
 
-func (tsPlugin) TestPath(codePath string) string {
-	ext := filepath.Ext(codePath)
-	base := strings.TrimSuffix(codePath, ext)
-	dir := filepath.Dir(codePath)
-	if dir == "." {
-		return base + ".test.ts"
+// TestPaths mirrors jsPlugin.TestPaths with the `.ts` suffix — see there for
+// the ordering rationale (sibling .test/.spec, __tests__/, then a
+// leading-segment-stripped parallel test/ or tests/ tree).
+func (tsPlugin) TestPaths(codePath string) []string {
+	dir, base, _ := splitPath(codePath)
+	sub := stripFirstSegment(dir)
+	testName := base + ".test.ts"
+	specName := base + ".spec.ts"
+
+	out := []string{
+		joinDir(dir, testName),
+		joinDir(dir, specName),
+		filepath.Join(dir, "__tests__", testName),
+		filepath.Join("test", sub, testName),
+		filepath.Join("tests", sub, testName),
 	}
-	return filepath.Join(dir, filepath.Base(base)+".test.ts")
+	return dedupeKeepOrder(out)
 }
 
 // Preflight requires BOTH node AND tsc (TS genuinely needs the compiler; unlike

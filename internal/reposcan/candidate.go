@@ -199,8 +199,20 @@ func Enumerate(root string) ([]Candidate, []Exclusion, error) {
 			excl = append(excl, Exclusion{Path: rel, Reason: ReasonIsTest})
 			continue
 		}
-		tp := filepath.ToSlash(p.TestPath(rel))
-		if tp == "" || !present[tp] {
+		// Walk the plugin's ordered candidates and pair with the first one
+		// that actually exists in this repo. The list is ordered most
+		// specific first (see each plugin's TestPaths), so a sibling or
+		// full-directory-mirror test wins over a same-named test that could
+		// plausibly belong to a different source file.
+		tp := ""
+		for _, cand := range p.TestPaths(rel) {
+			cand = filepath.ToSlash(cand)
+			if cand != "" && present[cand] {
+				tp = cand
+				break
+			}
+		}
+		if tp == "" {
 			excl = append(excl, Exclusion{Path: rel, Reason: ReasonNoPairedTest})
 			continue
 		}
@@ -214,13 +226,21 @@ func Enumerate(root string) ([]Candidate, []Exclusion, error) {
 
 // isTestFile reports whether rel is itself a test file, detected by the
 // naming markers the five language plugins use. The markers are the real
-// check: no current plugin's TestPath is idempotent on an already-test path
-// (`foo_test.go` becomes `foo_test_test.go`), so the fixed-point check below
-// is a cheap belt-and-braces for a plugin that someday IS idempotent — it
-// never fires today.
+// check and do NOT depend on the shape of TestPaths at all — a parallel-tree
+// test like tests/agents/test_artifact_store.py is caught by the "test_"
+// prefix marker exactly like a sibling test_artifact_store.py would be, so
+// widening TestPaths from one path to an ordered list changes nothing here.
+//
+// The fixed-point check below (does rel appear in ITS OWN TestPaths list) is
+// a cheap belt-and-braces for a plugin that is someday idempotent on an
+// already-test path — no current plugin is (`foo_test.go`'s own conventions
+// produce `foo_test_test.go`, `test_test_foo.py`, etc, never `foo_test.go`
+// itself), so this never fires today either.
 func isTestFile(p lang.Plugin, rel string) bool {
-	if filepath.ToSlash(p.TestPath(rel)) == rel {
-		return true
+	for _, tp := range p.TestPaths(rel) {
+		if filepath.ToSlash(tp) == rel {
+			return true
+		}
 	}
 
 	// Check against the basename only to avoid directory-component matches.

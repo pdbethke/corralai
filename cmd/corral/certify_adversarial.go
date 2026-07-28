@@ -217,7 +217,7 @@ func runCertifyAdversarial(args []string, client advPoolClient, run cmdRunner, s
 
 	tp := strings.TrimSpace(*testPath)
 	if tp == "" {
-		tp = plug.TestPath(*codePath)
+		tp = plug.TestPaths(*codePath)[0]
 	}
 
 	code, err := os.ReadFile(*codePath) // #nosec G304 -- operator-supplied path to the file under review

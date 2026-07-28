@@ -54,15 +54,41 @@ func (pyPlugin) CompileCheck(codePath, testPath string) []string {
 	return []string{pyCachePrefixEnv, pythonBin(), "-m", "py_compile", codePath, testPath}
 }
 
-// TestPath follows the pytest convention: pkg/foo.py -> pkg/test_foo.py.
-func (pyPlugin) TestPath(codePath string) string {
-	dir := filepath.Dir(codePath)
-	base := filepath.Base(codePath)
-	name := "test_" + base
-	if dir == "." {
-		return name
+// TestPaths returns pytest-convention candidates for codePath, most specific
+// (least likely to collide with a DIFFERENT source file's test) first:
+//
+//  1. sibling test_foo.py    — same directory, pytest's own preferred prefix.
+//  2. sibling foo_test.py    — same directory, the alternate suffix form.
+//  3. full-mirror tests/<same full dir>/test_foo.py — keeps the ENTIRE
+//     original directory path under tests/, so it can only ever pair with
+//     this source file, even if some other top-level package happens to
+//     share a subpath.
+//  4. leading-segment-stripped tests/<dir minus first component>/test_foo.py
+//     — the dominant real-world layout: a single top-level package (or a
+//     `src/` layout) collapsed the same way, e.g.
+//     `aisuite/agents/artifact_store.py` -> `tests/agents/test_artifact_store.py`.
+//     Ranked below the full mirror because two DIFFERENT top-level packages
+//     with the same subpath (`pkgA/agents/x.py` and `pkgB/agents/x.py`)
+//     would generate the SAME candidate here, which the full mirror cannot.
+//  5. flat tests/test_foo.py — no directory context at all, so it is the
+//     most likely of the five to accidentally match a different source
+//     file's test; tried last.
+//
+// For a shallow codePath (dir has zero or one path segment), several of
+// these forms coincide; dedupeKeepOrder collapses them to one entry.
+func (pyPlugin) TestPaths(codePath string) []string {
+	dir, base, _ := splitPath(codePath)
+	name := "test_" + base + ".py"
+	altName := base + "_test.py"
+
+	out := []string{
+		joinDir(dir, name),
+		joinDir(dir, altName),
+		filepath.Join("tests", dir, name),
+		filepath.Join("tests", stripFirstSegment(dir), name),
+		filepath.Join("tests", name),
 	}
-	return filepath.Join(dir, name)
+	return dedupeKeepOrder(out)
 }
 
 // Preflight fails CLOSED unless python3 (or python) is on PATH AND pytest is

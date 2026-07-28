@@ -297,7 +297,13 @@ func parseMinKillRate(s string) (float64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("--min-kill-rate %q is not a number: %w", s, err)
 	}
-	if v < 0 || v > 1 {
+	// Stated positively (the value must lie IN [0,1]) rather than as the
+	// negation ("< 0 || > 1"): ParseFloat accepts "NaN"/"nan" cleanly
+	// (err == nil), and every comparison against NaN is false — so the
+	// negated form lets NaN silently pass both bounds. !(v >= 0 && v <= 1)
+	// rejects NaN by construction, the same way checking argv[0] directly
+	// beat enumerating bad input shapes elsewhere in this action's history.
+	if !(v >= 0 && v <= 1) {
 		return 0, fmt.Errorf("--min-kill-rate %q is out of range: must be between 0.0 and 1.0 inclusive", s)
 	}
 	return v, nil

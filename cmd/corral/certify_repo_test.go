@@ -444,7 +444,11 @@ func TestParseMinKillRateValidation(t *testing.T) {
 			t.Errorf("parseMinKillRate(%q): unexpected error %v", s, err)
 		}
 	}
-	invalid := []string{"1.1", "-0.0001", "2", "-1", "abc", "", "  ", "1,0"}
+	// NaN is the value the naive "v < 0 || v > 1" range check cannot reject:
+	// strconv.ParseFloat parses it cleanly (err == nil) and every comparison
+	// against NaN is false, so both bounds silently pass. ParseFloat is also
+	// case-insensitive, so the lowercase spelling must be caught too.
+	invalid := []string{"1.1", "-0.0001", "2", "-1", "abc", "", "  ", "1,0", "NaN", "nan"}
 	for _, s := range invalid {
 		if _, err := parseMinKillRate(s); err == nil {
 			t.Errorf("parseMinKillRate(%q): want an error, got none", s)

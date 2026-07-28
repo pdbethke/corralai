@@ -569,42 +569,48 @@ func TestActionTestCommandRejectsEmbeddedNewline(t *testing.T) {
 }
 
 // TestActionTestCommandEmptyFailsClosed is the fence for a door that has
-// reopened three times now, each time through a different input shape that
-// reduces to the same forbidden OUTPUT: corral must never be handed an argv
-// that is empty, or a single empty word.
+// reopened four times now, each through a different input shape — and the
+// first three "fixes" each guarded a shape instead of the actual invariant,
+// so each was walked around by the next shape:
 //
 //   - Pre-fix, `read -ra A <<< ""` gave a zero-length argv, so corral saw
 //     `--` with nothing after it and silently fell back to the language's
 //     stock test command.
 //   - The xargs-based parser instead produces a ONE-element array holding
 //     "" for a bare-empty TEST_COMMAND (GNU xargs runs its command once
-//     even on empty input without -r), which corral would treat as an
-//     explicit, empty test command and try to exec — every candidate fails
-//     its baseline for an opaque reason.
-//   - A literal empty-quoted value (`test-command: '""'` or `"”"`) slips
-//     past a whitespace-only pre-parse check — it isn't whitespace — and
-//     is then reduced to a single zero-length word by xargs's own quote
-//     removal, the exact mechanism that makes `pytest -k "not slow"` work.
-//     Reachable via a generated or reusable workflow that defensively
-//     quotes an interpolated value that resolves empty.
+//     even on empty input without -r).
+//   - A literal empty-quoted value (`test-command: '""'` or `"”"`) is not
+//     whitespace, so it survived a whitespace-only pre-parse check, then
+//     was reduced to a single zero-length word by xargs's own quote
+//     removal — the same mechanism that makes `pytest -k "not slow"` work.
+//   - A guard written as "reject argv of length 0, or length 1 with an
+//     empty element" is STILL a shape special-case, not the actual
+//     invariant, and `'"" ""'`, `"” ”"`, and `'"" pytest'` all walk
+//     straight through it: two (or more) elements, first one empty.
+//     `certify_repo.go` honours any non-empty argv as an explicit test
+//     command and execs argv[0] — empty — for every candidate.
 //
-// Guarding only the INPUT string loses this game structurally: there is no
-// way to enumerate every input shape that can become an empty argv. The
-// load-bearing check is a POST-parse assertion over TEST_ARGV itself —
-// length 0, or length 1 with an empty element — which holds regardless of
-// which input shape produced it. The pre-parse whitespace check is kept
-// only for its clearer error message on the common case; it is not what
-// makes this safe.
+// The actual invariant, stated once, is about what corral NEEDS rather
+// than what the input looked like: there must be at least one argv
+// element, and the FIRST one — the program name — must not be empty.
+// Nothing else about the argv's shape matters; a trailing or
+// middle empty argument elsewhere is completely legitimate (see
+// TestActionTestCommandPreservesEmptyArguments). That is what the
+// post-parse guard in action.yml checks, and it is what subsumes every
+// shape above plus any nobody has constructed yet.
 func TestActionTestCommandEmptyFailsClosed(t *testing.T) {
 	a := loadActionYAML(t)
 	runStep := findStepContaining(t, a, "certify --repo")
 
 	for name, testCommand := range map[string]string{
-		"empty":                            "",
-		"whitespace only":                  "   \t  ",
-		"literal double-quoted empty":      `""`,
-		"literal single-quoted empty":      `''`,
-		"whitespace around a quoted empty": `  ""  `,
+		"empty":                                "",
+		"whitespace only":                      "   \t  ",
+		"literal double-quoted empty":          `""`,
+		"literal single-quoted empty":          `''`,
+		"whitespace around a quoted empty":     `  ""  `,
+		"two empty double-quoted words":        `"" ""`,
+		"two empty single-quoted words":        `'' ''`,
+		"empty program name, real second word": `"" pytest`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			tmp := t.TempDir()

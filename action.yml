@@ -124,20 +124,19 @@ runs:
         # emitting it as a zero-length one.
         mapfile -d '' TEST_ARGV < <(printf '%s\n' "$TEST_COMMAND" | xargs -r -n1 printf '%s\0')
         # The load-bearing guard is HERE, over the parsed OUTPUT, not the
-        # input string above: a literal empty-quoted value (test-command:
-        # '""' or "''") is not whitespace, so it survives the check above,
-        # then xargs's own quote removal — the same mechanism that makes
-        # `pytest -k "not slow"` work — reduces it to a single zero-length
-        # word. Guarding only the input string loses this game
-        # structurally, since there is no way to enumerate every input
-        # shape that can become an empty argv; asserting the property
-        # actually wanted (corral is never handed an empty test command),
-        # over the value it actually receives, holds regardless of which
-        # input shape produced it. A trailing empty argument in an
-        # otherwise real command (`pytest ""`) is legitimate and must NOT
-        # trip this — only an argv that is entirely one empty word does.
-        if [ "${#TEST_ARGV[@]}" -eq 0 ] || { [ "${#TEST_ARGV[@]}" -eq 1 ] && [ -z "${TEST_ARGV[0]}" ]; }; then
-          echo "::error::test-command parsed to an empty command. It is required — corral will not silently fall back to a guessed test command." >&2
+        # input string above — and it checks the actual invariant corral
+        # needs, not a shape of the input. What makes an argv usable as a
+        # command is simply: there is at least one word, and the FIRST one
+        # (the program name corral will exec) is not empty. That is the
+        # whole property; an empty argument ANYWHERE ELSE is completely
+        # legitimate (`pytest ""`, `pytest -k ""`) and must not trip this.
+        # A check phrased as a shape of the input ("is it whitespace?", "is
+        # the argv exactly one empty element?") only ever catches the
+        # shapes already seen; checking argv[0] directly catches every
+        # shape that can produce an unusable command, including ones not
+        # yet constructed.
+        if [ "${#TEST_ARGV[@]}" -eq 0 ] || [ -z "${TEST_ARGV[0]}" ]; then
+          echo "::error::test-command has no command to run (the program name is empty or missing). It is required — corral will not silently fall back to a guessed test command." >&2
           exit 1
         fi
         corral "${args[@]}" -- "${TEST_ARGV[@]}"

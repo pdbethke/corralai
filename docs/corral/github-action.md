@@ -72,30 +72,47 @@ for an opaque reason, the exact undiagnosable shape this whole section
 exists to prevent, arriving through a different door than the newline
 case. `xargs -r` (no-run-if-empty) is also passed, as defense in depth.
 
-This door has reopened three times now, each through a different INPUT
-shape that reduces to the same forbidden OUTPUT — an empty argv, or an
-argv holding one empty word. A whitespace-only pre-parse check (above)
-catches the common case with a clear message, but it does not catch a
-literal empty-quoted value: `test-command: '""'` or `"''"` is not
-whitespace, so it survives that check, and is then reduced to a single
-zero-length word by `xargs`'s own quote removal — the exact mechanism
-that makes `pytest -k "not slow"` work. This is reachable the same way
-the bare-empty case is: a generated or reusable workflow that defensively
-quotes an interpolated value (`test-command: '"${{ inputs.cmd }}"'`)
-where the inner value resolves empty.
+This door has reopened four times now, each through a different INPUT
+shape:
 
-Guarding only the input string loses this game structurally — there is no
-way to enumerate every shape that can become an empty argv. So the real
-guard is a **post-parse assertion over `TEST_ARGV` itself**, after
-splitting: reject when it has zero elements, or exactly one element that
-is empty. That is the property actually wanted ("corral must never be
-handed an empty test command"), stated once, over the value corral
-actually receives — it holds regardless of which input shape produced it.
+- A whitespace-only pre-parse check (above) catches the bare-empty and
+  whitespace-only cases with a clear message, but not a literal
+  empty-quoted value: `test-command: '""'` or `"''"` is not whitespace, so
+  it survives that check, and is then reduced to a single zero-length word
+  by `xargs`'s own quote removal — the exact mechanism that makes
+  `pytest -k "not slow"` work. Reachable via a generated or reusable
+  workflow that defensively quotes an interpolated value
+  (`test-command: '"${{ inputs.cmd }}"'`) whose inner value resolves
+  empty.
+- A guard written as "reject an argv with zero elements, or exactly one
+  element that's empty" is *still* a shape special-case, and
+  `test-command: '"" ""'`, `"'' ''"`, and `'"" pytest'` all walk straight
+  through it — two-or-more elements, first one empty. `certify_repo.go`
+  honours any non-empty argv as an explicit test command and execs
+  `argv[0]` — empty — for every candidate.
+
+Guarding a shape of the input loses this game structurally: there is no
+way to enumerate every shape that can become an unusable command, and each
+attempt so far was walked around by the next one. The actual invariant is
+about what corral *needs*, not what the input looked like: **there must be
+at least one argv element, and the first one — the program name corral is
+about to exec — must not be empty.** Nothing else about the argv's shape
+matters; an empty argument anywhere *other than* the first position is
+completely legitimate (`pytest ""`, `pytest -k ""` — see below). Stated
+that way, over the value corral actually receives, the check holds
+regardless of which input shape produced the argv, including shapes
+nobody has constructed yet:
+
+```bash
+if [ "${#TEST_ARGV[@]}" -eq 0 ] || [ -z "${TEST_ARGV[0]}" ]; then
+  echo "::error::test-command has no command to run (the program name is empty or missing)." >&2
+  exit 1
+fi
+```
+
 The pre-parse checks above are kept for their clearer error messages on
-the common cases, not because they are what makes this safe. A **trailing**
-empty argument in an otherwise real command (`pytest ""`) is legitimate
-and does not trip this guard — only an argv that is entirely one empty
-word does; see the empty-argument case below.
+the common cases, not because they are what makes this safe — the
+`argv[0]` check is.
 
 The split itself is NUL-delimited (`xargs ... printf '%s\0'` into
 `mapfile -d ''`), not newline-delimited, so a **trailing empty argument**
@@ -114,11 +131,12 @@ of running; `TestActionTestCommandStillSplitsAnOrdinaryCommand` and
 `TestActionTestCommandPreservesQuotedWords` pin the two splitting shapes
 above; `TestActionTestCommandUnmatchedQuoteFailsClosed`,
 `TestActionTestCommandRejectsEmbeddedNewline`, and
-`TestActionTestCommandEmptyFailsClosed` (which includes the bare-empty,
-whitespace-only, AND both literal-quoted-empty shapes) cover the failure
-modes;
+`TestActionTestCommandEmptyFailsClosed` (bare-empty, whitespace-only, both
+literal-quoted-empty shapes, and multi-element argvs whose first element
+is empty — `'"" ""'`, `"'' ''"`, `'"" pytest'`) cover the failure modes;
 `TestActionTestCommandPreservesEmptyArguments` pins the trailing/leading/
-middle empty-argument cases.
+middle empty-argument cases, which must keep working precisely because
+only `argv[0]` is checked.
 
 What this does **not** give you is full shell fidelity: pipes (`|`), `&&`
 / `||` chaining, output redirection, and glob expansion in `test-command`

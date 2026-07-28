@@ -438,8 +438,20 @@ func prepareAuditJail(in localAuditInput, plug lang.Plugin, timeout time.Duratio
 	// resolves it once and hands it to every job rather than re-probing bwrap
 	// per file. `certify --local` passes nothing, so iso is nil here and this
 	// resolves its own exactly as before.
+	//
+	// The workspace substrate is exempt, and MUST be: buildJailWiring's
+	// workspace branch never touches in.iso (there is no jail to build — the
+	// caller IS the isolation boundary), and on that path in.iso is always
+	// nil because newLocalExecutor deliberately skips the scan-wide
+	// resolution. Resolving one here anyway would fail closed on a
+	// GitHub-hosted runner (no bubblewrap installed; Ubuntu 24.04 disables
+	// unprivileged user namespaces) and turn EVERY audited file into
+	// `could not audit: no working bwrap sandbox` — a COULD-NOT-GRADE red
+	// build from jail work this substrate exists to skip. Where bwrap does
+	// exist it would also re-probe the backend once per audited file,
+	// defeating the resolve-once-per-scan invariant.
 	iso := in.iso
-	if iso == nil {
+	if iso == nil && in.substrate != substrateWorkspace {
 		var err error
 		iso, err = resolveLocalJail(in.jail)
 		if err != nil {

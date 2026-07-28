@@ -1822,3 +1822,58 @@ type stubDeriver struct{}
 func (stubDeriver) Derive(context.Context, reposcan.Candidate, string) (string, bool, error) {
 	return "", false, errors.New("stubDeriver must never be invoked in a unit test")
 }
+
+// TestWorkspaceSubstrateNeverResolvesAJailPerFile is the PER-JOB layer of the
+// same invariant TestNewLocalExecutorSkipsSandboxForWorkspaceSubstrate (the
+// constructor layer) and TestNewLocalExecutorSkipsTheSeedCacheForWorkspaceSubstrate
+// (the scan-wide seed layer) assert: selecting the workspace substrate means
+// NO jail construction runs, anywhere.
+//
+// prepareAuditJail resolved an isolator whenever localAuditInput.iso was nil,
+// with no substrate guard — and on the workspace path iso is ALWAYS nil (the
+// constructor deliberately leaves it so). On a GitHub-hosted runner, which
+// ships no bubblewrap, that resolution fails closed and every audited file
+// came back `could not audit: no working bwrap sandbox`, i.e. exit 1 with
+// COULD-NOT-GRADE — the precise false red this substrate exists to remove.
+//
+// The two constructor-level tests cannot catch it: they stop before any job
+// runs. So this one stubs the resolver to FAIL (a bwrap-less runner) and
+// drives a real Execute — with the REAL baselineRunnerFor seam, which is what
+// calls prepareAuditJail — through to a gradable result.
+func TestWorkspaceSubstrateNeverResolvesAJailPerFile(t *testing.T) {
+	var resolutions int
+	orig := resolveJailFn
+	resolveJailFn = func(string, bool) (sandbox.Isolator, error) {
+		resolutions++
+		return nil, errors.New("no working bwrap sandbox: bwrap backend unavailable")
+	}
+	t.Cleanup(func() { resolveJailFn = orig })
+
+	repo := t.TempDir()
+	mustWrite(t, filepath.Join(repo, "a.go"), "package p\n\nfunc A() int { return 1 }\n")
+	mustWrite(t, filepath.Join(repo, "a_test.go"), "package p\n\nimport \"testing\"\n\nfunc TestA(t *testing.T) {}\n")
+
+	// `true` stands in for the project's own test command: the point here is
+	// which SUBSTRATE runs it, not what it runs. It exits 0, so the baseline
+	// is stable and passing — and it runs through the real WorkspaceRunner.
+	ex := newLocalExecutor(repo, []string{"true"}, substrateWorkspace, io.Discard)
+	defer ex.Close()
+	// newBaseline is deliberately left REAL (baselineRunnerFor →
+	// prepareAuditJail): that is the layer under test. Only the audit itself
+	// is stubbed, because it would spend model calls.
+	ex.audit = func(context.Context, localAuditInput) (advpool.Verdict, error) {
+		return advpool.Verdict{DevKillRate: 1, MutantsTotal: 1}, nil
+	}
+
+	job := reposcan.Job{Path: "a.go", TestPath: "a_test.go", Lang: "go", Goal: reposcan.Goal{Text: "A returns 1"}}
+	res, err := ex.Execute(context.Background(), job)
+	if err != nil {
+		t.Fatalf("workspace substrate must not need a jail to audit a file: %v", err)
+	}
+	if !res.Gradable {
+		t.Fatalf("result not gradable (reason %q); the workspace substrate graded nothing", res.Reason)
+	}
+	if resolutions != 0 {
+		t.Errorf("the workspace substrate resolved a jail %d time(s), want 0", resolutions)
+	}
+}

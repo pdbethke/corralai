@@ -12,6 +12,10 @@ inputs:
     description: "Optional JSON file of per-file goals. Omitted means goals are derived by a model."
     required: false
     default: ""
+  min-kill-rate:
+    description: "Fail the run if any audited file's kill rate is below this value (0.0-1.0 inclusive, a minimum so a file exactly at the value passes). Applies PER FILE, not to the aggregate. Opt-in: leave empty (the default) to keep today's behaviour, where the run does not fail on a low kill rate."
+    required: false
+    default: ""
   model-key:
     description: "Provider API key for goal derivation. Required unless 'goals' is supplied."
     required: false
@@ -56,6 +60,7 @@ runs:
         ANTHROPIC_API_KEY: ${{ inputs.model-key }}
         DIFF_BASE: ${{ inputs.diff-base }}
         GOALS: ${{ inputs.goals }}
+        MIN_KILL_RATE: ${{ inputs.min-kill-rate }}
         REPO_OWNER: ${{ github.repository_owner }}
         COMMIT_SHA: ${{ github.sha }}
         TEST_COMMAND: ${{ inputs.test-command }}
@@ -75,6 +80,7 @@ runs:
         args+=(--owner "$REPO_OWNER" --commit "$COMMIT_SHA")
         [ -n "$base" ] && args+=(--diff-base "$base")
         [ -n "$GOALS" ] && args+=(--goals "$GOALS")
+        [ -n "$MIN_KILL_RATE" ] && args+=(--min-kill-rate "$MIN_KILL_RATE")
         # $TEST_COMMAND is data, not script: it is split into argv words the
         # way a real shell's own parser would (so "go test ./..." becomes
         # three args, and pytest -k "not slow" keeps "not slow" as one),

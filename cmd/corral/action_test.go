@@ -390,7 +390,12 @@ func TestActionInstallStepFailsClearlyWithoutGo(t *testing.T) {
 // exit 0), and the test-command's own argv — everything the stub `corral`
 // received after the `--` separator, not corral's own --repo/--owner/etc
 // flags — or nil if the stub was never run.
-func runRunCorralStep(t *testing.T, runStep actionStep, tmp, testCommand string) (out []byte, runErr error, argv []string) {
+//
+// extraEnv entries (each "NAME=value") are appended after the defaults
+// below, so a caller can override one (e.g. "MIN_KILL_RATE=0.8") without
+// this function growing a dedicated parameter per input — later entries win
+// when os/exec.Cmd.Env has a duplicate key.
+func runRunCorralStep(t *testing.T, runStep actionStep, tmp, testCommand string, extraEnv ...string) (out []byte, runErr error, argv []string) {
 	t.Helper()
 	stubDir := filepath.Join(tmp, "stubbin")
 	if err := os.MkdirAll(stubDir, 0o755); err != nil {
@@ -418,6 +423,7 @@ func runRunCorralStep(t *testing.T, runStep actionStep, tmp, testCommand string)
 		"TEST_COMMAND="+testCommand,
 		"DIFF_BASE=",
 		"GOALS=",
+		"MIN_KILL_RATE=",
 		"REPO_OWNER=acme",
 		"COMMIT_SHA=deadbeef",
 		"ANTHROPIC_API_KEY=",
@@ -426,6 +432,7 @@ func runRunCorralStep(t *testing.T, runStep actionStep, tmp, testCommand string)
 		// accidentally exercised in these unit tests.
 		"GITHUB_BASE_REF=",
 	)
+	cmd.Env = append(cmd.Env, extraEnv...)
 	out, runErr = cmd.CombinedOutput()
 
 	if argvBytes, err := os.ReadFile(argvLog); err == nil {
@@ -451,6 +458,61 @@ func runRunCorralStep(t *testing.T, runStep actionStep, tmp, testCommand string)
 		}
 	}
 	return out, runErr, argv
+}
+
+// TestActionPassesMinKillRateOnlyWhenSet proves the min-kill-rate input is
+// threaded onto corral's own argv as --min-kill-rate exactly when the input
+// is non-empty, and omitted (not passed as an empty string) when it isn't —
+// matching how --diff-base and --goals already behave, and keeping the flag
+// genuinely opt-in end to end, not just at the corral CLI layer.
+func TestActionPassesMinKillRateOnlyWhenSet(t *testing.T) {
+	a := loadActionYAML(t)
+	runStep := findStepContaining(t, a, "certify --repo")
+
+	readFullArgv := func(tmp string) []string {
+		t.Helper()
+		argvBytes, err := os.ReadFile(filepath.Join(tmp, "argv.log"))
+		if err != nil {
+			t.Fatalf("no argv.log written — corral stub was never invoked: %v", err)
+		}
+		content := strings.TrimSuffix(string(argvBytes), "\x00")
+		if content == "" {
+			return nil
+		}
+		return strings.Split(content, "\x00")
+	}
+
+	t.Run("set", func(t *testing.T) {
+		tmp := t.TempDir()
+		out, runErr, _ := runRunCorralStep(t, runStep, tmp, "true", "MIN_KILL_RATE=0.8")
+		if runErr != nil {
+			t.Fatalf("run-corral step failed: %v\n%s", runErr, out)
+		}
+		full := readFullArgv(tmp)
+		found := false
+		for i, a := range full {
+			if a == "--min-kill-rate" && i+1 < len(full) && full[i+1] == "0.8" {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("want --min-kill-rate 0.8 in corral's argv, got: %v", full)
+		}
+	})
+
+	t.Run("unset", func(t *testing.T) {
+		tmp := t.TempDir()
+		out, runErr, _ := runRunCorralStep(t, runStep, tmp, "true", "MIN_KILL_RATE=")
+		if runErr != nil {
+			t.Fatalf("run-corral step failed: %v\n%s", runErr, out)
+		}
+		full := readFullArgv(tmp)
+		for _, a := range full {
+			if a == "--min-kill-rate" {
+				t.Errorf("min-kill-rate input was empty; --min-kill-rate must not be passed at all, got: %v", full)
+			}
+		}
+	})
 }
 
 // TestActionTestCommandWordSplitNotEvaluated is the fence for the one

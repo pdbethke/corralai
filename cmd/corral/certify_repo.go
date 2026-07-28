@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/pdbethke/corralai/internal/advpool"
@@ -49,6 +50,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	dryRun := fs.Bool("dry-run", false, "enumerate and emit jobs, then stop — no audits run")
 	substrateFlag := fs.String("substrate", substrateJail, "where the audit runs: "+substrateJail+" (bwrap) or "+substrateWorkspace+" (mutate --repo in place; the caller IS the isolation boundary, e.g. an ephemeral CI runner)")
 	diffBase := fs.String("diff-base", "", "bound the scan to files changed since this git ref, instead of ranking + --top. In a PR the diff IS the bound: ranking and --top do not apply on this path")
+	minKillRateFlag := fs.String("min-kill-rate", "", "fail the scan (exit 1) if ANY audited file's kill rate is below this value (0.0-1.0 inclusive; a minimum, so a file exactly at the threshold passes). Opt-in: unset by default, so exit codes are unchanged unless this is given. Applies PER FILE, not to the aggregate — a well-tested file must not mask a weak one")
 	if err := fs.Parse(flagArgs); err != nil {
 		return 2
 	}
@@ -65,6 +67,22 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	if *substrateFlag != substrateJail && *substrateFlag != substrateWorkspace {
 		fmt.Fprintf(stderr, "corral certify --repo: --substrate %q is not %s or %s\n", *substrateFlag, substrateJail, substrateWorkspace)
 		return 2
+	}
+
+	// Validated here, before enumeration even runs — an out-of-range or
+	// unparseable --min-kill-rate is a usage error (exit 2), matching
+	// --substrate above, not a value that silently limps through to a
+	// threshold check that can never be satisfied (or is always satisfied).
+	// nil means "unset": the flag is opt-in, and a default threshold here
+	// would break every existing caller of this shipped command.
+	var minKillRate *float64
+	if *minKillRateFlag != "" {
+		v, perr := parseMinKillRate(*minKillRateFlag)
+		if perr != nil {
+			fmt.Fprintf(stderr, "corral certify --repo: %v\n", perr)
+			return 2
+		}
+		minKillRate = &v
 	}
 
 	cands, excl, err := reposcan.Enumerate(*repoDir)
@@ -265,8 +283,30 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// conflate it with "files were in scope and none could be graded".
 	nothingInScope := *diffBase != "" && len(selected) == 0
 
-	printRepoReport(stdout, rep, nothingInScope)
-	return repoScanExitCode(rep, nothingInScope)
+	printRepoReport(stdout, rep, nothingInScope, minKillRate)
+	return repoScanExitCode(rep, nothingInScope, minKillRate)
+}
+
+// parseMinKillRate parses and range-validates the --min-kill-rate flag value.
+// Split out so the validation is testable directly, without a repo, a jail,
+// or an API key — mirroring how the substrate check next to its call site is
+// a plain string comparison. Valid range is 0.0-1.0 inclusive (the flag is a
+// minimum, so both ends are legal thresholds).
+func parseMinKillRate(s string) (float64, error) {
+	v, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
+	if err != nil {
+		return 0, fmt.Errorf("--min-kill-rate %q is not a number: %w", s, err)
+	}
+	// Stated positively (the value must lie IN [0,1]) rather than as the
+	// negation ("< 0 || > 1"): ParseFloat accepts "NaN"/"nan" cleanly
+	// (err == nil), and every comparison against NaN is false — so the
+	// negated form lets NaN silently pass both bounds. !(v >= 0 && v <= 1)
+	// rejects NaN by construction, the same way checking argv[0] directly
+	// beat enumerating bad input shapes elsewhere in this action's history.
+	if !(v >= 0 && v <= 1) {
+		return 0, fmt.Errorf("--min-kill-rate %q is out of range: must be between 0.0 and 1.0 inclusive", s)
+	}
+	return v, nil
 }
 
 // changedFiles lists paths, relative to root, that differ from baseRef. In a
@@ -466,12 +506,35 @@ func checkArgvSpansOneLanguage(checkArgv []string, jobs []reposcan.Job) error {
 // true only on the diff path, and only when the diff selected zero
 // candidates; the whole-repo (non-diff) path always passes false, so its
 // exit codes are unchanged.
-func repoScanExitCode(r reposcan.RepoReport, nothingInScope bool) int {
+//
+// minKillRate is nil unless the operator opted in with --min-kill-rate: a
+// default threshold here would break every existing caller of this shipped
+// command. When set, it is checked PER FILE against r.Weakest (which holds
+// every audited file, not a truncated worst-N list — see report.go's
+// Aggregate) rather than against the aggregate r.KillRate: an aggregate lets
+// a well-tested file mask an untested one, which is precisely the
+// substitution this product exists to refuse.
+//
+// Ordering is deliberate and load-bearing: nothingInScope and Audited == 0
+// are decided FIRST, unconditionally. r.KillRate (and every per-file rate
+// backing it) is only meaningful once at least one file was actually
+// audited; RepoReport.KillRate is NaN when Audited == 0 and every comparison
+// against NaN is false, so a threshold check reached in that state would
+// silently never fire — checking Audited == 0 first, and returning early,
+// is what keeps that failure from being maskable by (or masking) a breach.
+func repoScanExitCode(r reposcan.RepoReport, nothingInScope bool, minKillRate *float64) int {
 	if nothingInScope {
 		return 0
 	}
 	if r.Audited == 0 {
 		return 1
+	}
+	if minKillRate != nil {
+		for _, f := range r.Weakest {
+			if f.KillRate < *minKillRate {
+				return 1
+			}
+		}
 	}
 	return 0
 }
@@ -543,7 +606,7 @@ func orderExclusionsForListing(excl []reposcan.Exclusion) []reposcan.Exclusion {
 	return out
 }
 
-func printRepoReport(w io.Writer, r reposcan.RepoReport, nothingInScope bool) {
+func printRepoReport(w io.Writer, r reposcan.RepoReport, nothingInScope bool, minKillRate *float64) {
 	commit := r.Commit
 	if strings.TrimSpace(commit) == "" {
 		// Never print a bare dangling "@ " — say plainly that the report is
@@ -585,6 +648,27 @@ func printRepoReport(w io.Writer, r reposcan.RepoReport, nothingInScope bool) {
 				break
 			}
 			fmt.Fprintf(w, "    %.2f  %s (%d survivor(s))\n", f.KillRate, f.Path, f.Survivors)
+		}
+	}
+	// A distinct line from COULD-NOT-GRADE: that line means nothing was
+	// measured at all; this one means files WERE measured and at least one
+	// scored below the operator's own floor — an operator reading the report
+	// must be able to tell which file to go write tests for. Guarded the same
+	// way repoScanExitCode is (nothingInScope / Audited == 0 decide first) so
+	// the two never disagree about what happened: r.Weakest is empty in both
+	// of those states anyway, but the guard keeps the intent explicit.
+	if minKillRate != nil && !nothingInScope && r.Audited > 0 {
+		var breaches []reposcan.WeakFile
+		for _, f := range r.Weakest {
+			if f.KillRate < *minKillRate {
+				breaches = append(breaches, f)
+			}
+		}
+		if len(breaches) > 0 {
+			fmt.Fprintf(w, "  KILL-RATE BREACH: %d file(s) below --min-kill-rate %.2f:\n", len(breaches), *minKillRate)
+			for _, f := range breaches {
+				fmt.Fprintf(w, "    %.2f  %s (%.2f below threshold)\n", f.KillRate, f.Path, *minKillRate-f.KillRate)
+			}
 		}
 	}
 }

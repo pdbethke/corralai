@@ -389,6 +389,69 @@ func TestCertifyRepoAcceptsKnownSubstrateValues(t *testing.T) {
 	}
 }
 
+// TestCertifyRepoRejectsOutOfRangeMinKillRate proves --min-kill-rate is
+// validated at flag-parse time, before enumeration even runs: an out-of-range
+// value is a usage error (exit 2), matching how --substrate already rejects
+// an unknown value, never a silent clamp or a threshold nothing can breach.
+func TestCertifyRepoRejectsOutOfRangeMinKillRate(t *testing.T) {
+	root := t.TempDir()
+	for _, bad := range []string{"1.5", "-0.1", "2", "-1"} {
+		var out, errb bytes.Buffer
+		code := runCertifyRepo([]string{"--repo", root, "--min-kill-rate", bad, "--dry-run"}, &out, &errb)
+		if code != 2 {
+			t.Fatalf("--min-kill-rate %s: exit %d, want 2 (usage error); stdout=%s stderr=%s", bad, code, out.String(), errb.String())
+		}
+		if !strings.Contains(errb.String(), bad) {
+			t.Errorf("--min-kill-rate %s: stderr should name the bad value: %q", bad, errb.String())
+		}
+	}
+}
+
+// TestCertifyRepoRejectsUnparseableMinKillRate proves a non-numeric value is
+// also a usage error, not a silent fall-through to "unset".
+func TestCertifyRepoRejectsUnparseableMinKillRate(t *testing.T) {
+	root := t.TempDir()
+	var out, errb bytes.Buffer
+	code := runCertifyRepo([]string{"--repo", root, "--min-kill-rate", "not-a-number", "--dry-run"}, &out, &errb)
+	if code != 2 {
+		t.Fatalf("exit %d, want 2 (usage error); stdout=%s stderr=%s", code, out.String(), errb.String())
+	}
+	if !strings.Contains(errb.String(), "not-a-number") {
+		t.Errorf("stderr should name the bad value: %q", errb.String())
+	}
+}
+
+// TestCertifyRepoAcceptsBoundaryMinKillRateValues proves 0.0 and 1.0 are
+// valid (the range is inclusive on both ends), and that a bare integer
+// string ("0", "1") parses too.
+func TestCertifyRepoAcceptsBoundaryMinKillRateValues(t *testing.T) {
+	root := t.TempDir()
+	for _, ok := range []string{"0", "0.0", "1", "1.0", "0.5"} {
+		var out, errb bytes.Buffer
+		code := runCertifyRepo([]string{"--repo", root, "--min-kill-rate", ok, "--dry-run"}, &out, &errb)
+		if code != 0 {
+			t.Fatalf("--min-kill-rate %s: exit %d, want 0; stdout=%s stderr=%s", ok, code, out.String(), errb.String())
+		}
+	}
+}
+
+// TestParseMinKillRateValidation pins parseMinKillRate directly (the flag
+// value is validated by this function before enumeration ever runs).
+func TestParseMinKillRateValidation(t *testing.T) {
+	valid := []string{"0", "0.0", "1", "1.0", "0.5", "0.999"}
+	for _, s := range valid {
+		if _, err := parseMinKillRate(s); err != nil {
+			t.Errorf("parseMinKillRate(%q): unexpected error %v", s, err)
+		}
+	}
+	invalid := []string{"1.1", "-0.0001", "2", "-1", "abc", "", "  ", "1,0"}
+	for _, s := range invalid {
+		if _, err := parseMinKillRate(s); err == nil {
+			t.Errorf("parseMinKillRate(%q): want an error, got none", s)
+		}
+	}
+}
+
 // TestNewLocalExecutorSkipsSandboxForWorkspaceSubstrate proves the jail
 // preflight is conditional on the selected substrate: the workspace substrate
 // needs no jail by construction (buildJailWiring's workspace branch never
@@ -676,14 +739,14 @@ func TestRepoScanExitCodeNothingAuditedIsNonZero(t *testing.T) {
 	nothing := reposcan.Aggregate("o", "r", "c", 2, 1, []reposcan.FileResult{
 		{Job: reposcan.Job{Path: "a.go"}, Gradable: false, Reason: reposcan.ReasonExecutorError},
 	}, nil)
-	if got := repoScanExitCode(nothing, false); got == 0 {
+	if got := repoScanExitCode(nothing, false, nil); got == 0 {
 		t.Errorf("a scan that graded nothing must exit non-zero, got %d", got)
 	}
 
 	graded := reposcan.Aggregate("o", "r", "c", 2, 1, []reposcan.FileResult{
 		{Job: reposcan.Job{Path: "a.go"}, Gradable: true, Verdict: advpool.Verdict{DevKillRate: 0.9}},
 	}, nil)
-	if got := repoScanExitCode(graded, false); got != 0 {
+	if got := repoScanExitCode(graded, false, nil); got != 0 {
 		t.Errorf("a scan that graded something must exit 0, got %d", got)
 	}
 }
@@ -696,15 +759,96 @@ func TestRepoScanExitCodeNothingAuditedIsNonZero(t *testing.T) {
 // scope and none could be graded, which is a real failure to report.
 func TestRepoScanExitCodeDistinguishesEmptyScopeFromNothingGradable(t *testing.T) {
 	emptyScope := reposcan.Aggregate("o", "r", "c", 0, 0, nil, nil)
-	if got := repoScanExitCode(emptyScope, true); got != 0 {
+	if got := repoScanExitCode(emptyScope, true, nil); got != 0 {
 		t.Errorf("an empty diff scope must exit 0 (nothing to audit), got %d", got)
 	}
 
 	nothingGradable := reposcan.Aggregate("o", "r", "c", 2, 1, []reposcan.FileResult{
 		{Job: reposcan.Job{Path: "a.go"}, Gradable: false, Reason: reposcan.ReasonBaselineFailed},
 	}, nil)
-	if got := repoScanExitCode(nothingGradable, false); got != 1 {
+	if got := repoScanExitCode(nothingGradable, false, nil); got != 1 {
 		t.Errorf("a non-empty scope where nothing graded must exit 1, got %d", got)
+	}
+}
+
+// TestRepoScanExitCodeMinKillRateUnsetIsExactlyTodaysBehaviour is the opt-in
+// contract: a nil --min-kill-rate must not change the exit code at all, even
+// for a file that would obviously breach any reasonable threshold (0.0). A
+// default threshold would break every existing caller of a shipped command —
+// so "flag absent" and "flag threshold 0.0" must NOT be the same thing.
+func TestRepoScanExitCodeMinKillRateUnsetIsExactlyTodaysBehaviour(t *testing.T) {
+	weak := reposcan.Aggregate("o", "r", "c", 1, 1, []reposcan.FileResult{
+		{Job: reposcan.Job{Path: "a.go"}, Gradable: true, Verdict: advpool.Verdict{DevKillRate: 0.0}},
+	}, nil)
+	if got := repoScanExitCode(weak, false, nil); got != 0 {
+		t.Errorf("min-kill-rate unset (nil) must leave a graded 0.00 file exiting 0, got %d", got)
+	}
+}
+
+// TestRepoScanExitCodeMinKillRateBreachIsNonZero proves the new teeth: any
+// audited file scoring strictly below the threshold fails the whole scan,
+// even when other files pass and the aggregate would look fine.
+func TestRepoScanExitCodeMinKillRateBreachIsNonZero(t *testing.T) {
+	rep := reposcan.Aggregate("o", "r", "c", 2, 2, []reposcan.FileResult{
+		{Job: reposcan.Job{Path: "strong.go"}, Gradable: true, Verdict: advpool.Verdict{DevKillRate: 1.0}},
+		{Job: reposcan.Job{Path: "weak.go"}, Gradable: true, Verdict: advpool.Verdict{DevKillRate: 0.4}},
+	}, nil)
+	threshold := 0.8
+	if got := repoScanExitCode(rep, false, &threshold); got != 1 {
+		t.Errorf("one file below --min-kill-rate must fail the whole scan, got %d (a well-tested file must not mask a weak one)", got)
+	}
+}
+
+// TestRepoScanExitCodeMinKillRateAtThresholdPasses pins the boundary: the
+// flag is a MINIMUM, inclusive, so a file exactly at the threshold passes.
+func TestRepoScanExitCodeMinKillRateAtThresholdPasses(t *testing.T) {
+	rep := reposcan.Aggregate("o", "r", "c", 1, 1, []reposcan.FileResult{
+		{Job: reposcan.Job{Path: "a.go"}, Gradable: true, Verdict: advpool.Verdict{DevKillRate: 0.8}},
+	}, nil)
+	threshold := 0.8
+	if got := repoScanExitCode(rep, false, &threshold); got != 0 {
+		t.Errorf("a file exactly at --min-kill-rate must PASS (inclusive minimum), got %d", got)
+	}
+}
+
+// TestRepoScanExitCodeMinKillRateAboveThresholdPasses is the mirror of the
+// boundary test: comfortably above the threshold must not be flagged.
+func TestRepoScanExitCodeMinKillRateAboveThresholdPasses(t *testing.T) {
+	rep := reposcan.Aggregate("o", "r", "c", 1, 1, []reposcan.FileResult{
+		{Job: reposcan.Job{Path: "a.go"}, Gradable: true, Verdict: advpool.Verdict{DevKillRate: 0.95}},
+	}, nil)
+	threshold := 0.8
+	if got := repoScanExitCode(rep, false, &threshold); got != 0 {
+		t.Errorf("a file above --min-kill-rate must pass, got %d", got)
+	}
+}
+
+// TestRepoScanExitCodeNothingInScopeWinsOverMinKillRate proves the ordering
+// requirement: nothingInScope must decide FIRST. RepoReport.KillRate (and
+// every per-file rate) is undefined when nothing was ever in scope, so a
+// threshold check must never be reachable there — the empty-scope branch
+// must return 0 regardless of what minKillRate says.
+func TestRepoScanExitCodeNothingInScopeWinsOverMinKillRate(t *testing.T) {
+	emptyScope := reposcan.Aggregate("o", "r", "c", 0, 0, nil, nil)
+	threshold := 0.99
+	if got := repoScanExitCode(emptyScope, true, &threshold); got != 0 {
+		t.Errorf("nothingInScope must win over minKillRate, got %d", got)
+	}
+}
+
+// TestRepoScanExitCodeAuditedZeroWinsOverMinKillRate is the other half of the
+// ordering requirement: RepoReport.KillRate is NaN when Audited == 0, and
+// every comparison against NaN is false — so a threshold breach can never be
+// the thing that reports this failure. The existing COULD-NOT-GRADE exit (1)
+// must fire regardless of minKillRate, not be silently satisfied by NaN
+// comparisons all evaluating false.
+func TestRepoScanExitCodeAuditedZeroWinsOverMinKillRate(t *testing.T) {
+	nothingGradable := reposcan.Aggregate("o", "r", "c", 2, 1, []reposcan.FileResult{
+		{Job: reposcan.Job{Path: "a.go"}, Gradable: false, Reason: reposcan.ReasonBaselineFailed},
+	}, nil)
+	threshold := 0.0
+	if got := repoScanExitCode(nothingGradable, false, &threshold); got != 1 {
+		t.Errorf("Audited==0 must still exit 1 even with a permissive minKillRate, got %d", got)
 	}
 }
 
@@ -1020,7 +1164,7 @@ func TestPrintRepoReportNothingAuditedSaysSo(t *testing.T) {
 	rep := reposcan.Aggregate("local", "r", "c", 3, 1, []reposcan.FileResult{
 		{Job: reposcan.Job{Path: "a.go"}, Gradable: false, Reason: reposcan.ReasonFlakyBaseline},
 	}, []reposcan.Exclusion{{Path: "b.go", Reason: reposcan.ReasonNoPairedTest}})
-	printRepoReport(&out, rep, false)
+	printRepoReport(&out, rep, false, nil)
 	s := out.String()
 	if !strings.Contains(s, "COULD-NOT-GRADE") {
 		t.Errorf("want COULD-NOT-GRADE, got:\n%s", s)
@@ -1041,7 +1185,7 @@ func TestPrintRepoReportEmptyScopeSaysADifferentLineThanCouldNotGrade(t *testing
 	rep := reposcan.Aggregate("local", "r", "c", 0, 0, nil, nil)
 
 	var scoped bytes.Buffer
-	printRepoReport(&scoped, rep, true)
+	printRepoReport(&scoped, rep, true, nil)
 	if strings.Contains(scoped.String(), "COULD-NOT-GRADE") {
 		t.Errorf("an empty diff scope must not print COULD-NOT-GRADE:\n%s", scoped.String())
 	}
@@ -1050,12 +1194,56 @@ func TestPrintRepoReportEmptyScopeSaysADifferentLineThanCouldNotGrade(t *testing
 	}
 
 	var notScoped bytes.Buffer
-	printRepoReport(&notScoped, rep, false)
+	printRepoReport(&notScoped, rep, false, nil)
 	if strings.Contains(notScoped.String(), "NOTHING IN SCOPE") {
 		t.Errorf("the non-diff/nothing-gradable case must not print the scope line:\n%s", notScoped.String())
 	}
 	if !strings.Contains(notScoped.String(), "COULD-NOT-GRADE") {
 		t.Errorf("want COULD-NOT-GRADE, got:\n%s", notScoped.String())
+	}
+}
+
+// TestPrintRepoReportMinKillRateBreachIsLabelledDistinctlyFromCouldNotGrade
+// proves the human-readable requirement: an operator reading the report must
+// be able to see which file(s) breached --min-kill-rate and by how much, on
+// a line that is NOT the COULD-NOT-GRADE line (that line means something
+// different: nothing was measured at all, not "it was measured and failed").
+func TestPrintRepoReportMinKillRateBreachIsLabelledDistinctlyFromCouldNotGrade(t *testing.T) {
+	rep := reposcan.Aggregate("o", "r", "c", 2, 2, []reposcan.FileResult{
+		{Job: reposcan.Job{Path: "strong.go"}, Gradable: true, Verdict: advpool.Verdict{DevKillRate: 1.0}},
+		{Job: reposcan.Job{Path: "weak.go"}, Gradable: true, Verdict: advpool.Verdict{DevKillRate: 0.4}},
+	}, nil)
+	threshold := 0.8
+	var out bytes.Buffer
+	printRepoReport(&out, rep, false, &threshold)
+	s := out.String()
+	if !strings.Contains(s, "KILL-RATE BREACH") {
+		t.Errorf("want a distinct breach line, got:\n%s", s)
+	}
+	if !strings.Contains(s, "weak.go") {
+		t.Errorf("want the breaching file named, got:\n%s", s)
+	}
+	if strings.Contains(s, "COULD-NOT-GRADE") {
+		t.Errorf("a threshold breach must not print the could-not-grade line:\n%s", s)
+	}
+	breachSection := s[strings.Index(s, "KILL-RATE BREACH"):]
+	if strings.Contains(breachSection, "strong.go") {
+		t.Errorf("a file that passed the threshold must not be listed under the breach line:\n%s", s)
+	}
+}
+
+// TestPrintRepoReportMinKillRateNoBreachPrintsNoBreachLine proves the report
+// stays silent about the threshold when nothing breached it — the line is
+// meant to be a call to action, not noise on every green run.
+func TestPrintRepoReportMinKillRateNoBreachPrintsNoBreachLine(t *testing.T) {
+	rep := reposcan.Aggregate("o", "r", "c", 1, 1, []reposcan.FileResult{
+		{Job: reposcan.Job{Path: "a.go"}, Gradable: true, Verdict: advpool.Verdict{DevKillRate: 0.9}},
+	}, nil)
+	threshold := 0.8
+	var out bytes.Buffer
+	printRepoReport(&out, rep, false, &threshold)
+	if strings.Contains(out.String(), "KILL-RATE BREACH") {
+		t.Errorf("no file breached the threshold; the breach line must not print:\n%s", out.String())
 	}
 }
 
@@ -1071,7 +1259,7 @@ func TestPrintRepoReportWeakestIsCapped(t *testing.T) {
 		})
 	}
 	var out bytes.Buffer
-	printRepoReport(&out, reposcan.Aggregate("o", "r", "c", 12, len(results), results, nil), false)
+	printRepoReport(&out, reposcan.Aggregate("o", "r", "c", 12, len(results), results, nil), false, nil)
 	s := out.String()
 	if !strings.Contains(s, "... and 2 more") {
 		t.Errorf("want the weakest list capped at 10 with a remainder line:\n%s", s)
@@ -1203,7 +1391,7 @@ func TestCertifyRepoReportsEnumeratedCandidatesNotJobs(t *testing.T) {
 		{Job: reposcan.Job{Path: "a.go"}, Gradable: true, Verdict: advpool.Verdict{DevKillRate: 0.8}},
 	}, excl)
 	var out bytes.Buffer
-	printRepoReport(&out, rep, false)
+	printRepoReport(&out, rep, false, nil)
 	s := out.String()
 	if !strings.Contains(s, "20% of 5 candidates") {
 		t.Errorf("want the ratio over the 5 enumerated candidates, got:\n%s", s)
@@ -1228,10 +1416,10 @@ func TestPrintRepoReportUngradableOrderIsStable(t *testing.T) {
 	}, excl)
 
 	var first bytes.Buffer
-	printRepoReport(&first, rep, false)
+	printRepoReport(&first, rep, false, nil)
 	for i := 0; i < 50; i++ {
 		var again bytes.Buffer
-		printRepoReport(&again, rep, false)
+		printRepoReport(&again, rep, false, nil)
 		if again.String() != first.String() {
 			t.Fatalf("report is not reproducible:\n--- run 1 ---\n%s\n--- run %d ---\n%s", first.String(), i+2, again.String())
 		}

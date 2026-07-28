@@ -381,27 +381,22 @@ func TestActionInstallStepFailsClearlyWithoutGo(t *testing.T) {
 	}
 }
 
-// TestActionTestCommandWordSplitNotEvaluated is the fence for the one
-// deliberate exception to defect 2: `test-command` must still word-split
-// into argv (so "go test ./..." becomes three args), but it must never be
-// handed to bash as script text. This runs the real "run corral" step's
-// script with a test-command containing `;`, backticks and `$( )`, and
-// checks (a) none of the embedded commands actually ran, and (b) the
-// literal text arrived as argv on a stub `corral`.
-func TestActionTestCommandWordSplitNotEvaluated(t *testing.T) {
-	a := loadActionYAML(t)
-	runStep := findStepContaining(t, a, "certify --repo")
-	if strings.Contains(runStep.Run, "${{") {
-		t.Fatal("the run-corral step still inlines a ${{ }} expression; fix defect 2 first")
-	}
-
-	tmp := t.TempDir()
+// runRunCorralStep runs the real "run corral" step's script (extracted from
+// action.yml) with TEST_COMMAND set to testCommand, a stub `corral` on PATH
+// that logs the argv it receives, and the other env vars the step needs.
+// tmp is the caller's scratch dir, so a caller that needs to plant a marker
+// file path inside testCommand (to prove it was or wasn't executed) can do
+// so before calling. Returns the step's combined output, its error (nil on
+// exit 0), and the test-command's own argv — everything the stub `corral`
+// received after the `--` separator, not corral's own --repo/--owner/etc
+// flags — or nil if the stub was never run.
+func runRunCorralStep(t *testing.T, runStep actionStep, tmp, testCommand string) (out []byte, runErr error, argv []string) {
+	t.Helper()
 	stubDir := filepath.Join(tmp, "stubbin")
 	if err := os.MkdirAll(stubDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	argvLog := filepath.Join(tmp, "argv.log")
-	pwned := filepath.Join(tmp, "pwned")
 	stub := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"" + argvLog + "\"\n"
 	if err := os.WriteFile(filepath.Join(stubDir, "corral"), []byte(stub), 0o755); err != nil {
 		t.Fatal(err)
@@ -411,25 +406,57 @@ func TestActionTestCommandWordSplitNotEvaluated(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	malicious := "go test ./...; touch " + pwned + "; echo $(touch " + pwned + ")"
-
 	cmd := exec.Command("bash", "-c", runStep.Run)
 	cmd.Dir = tmp
 	cmd.Env = append(os.Environ(),
 		"PATH="+stubDir+":"+os.Getenv("PATH"),
-		"TEST_COMMAND="+malicious,
+		"TEST_COMMAND="+testCommand,
 		"DIFF_BASE=",
 		"GOALS=",
 		"REPO_OWNER=acme",
 		"COMMIT_SHA=deadbeef",
 		"ANTHROPIC_API_KEY=",
 		"GITHUB_WORKSPACE="+workspace,
+		// Make sure a real pull_request base-ref fetch path isn't
+		// accidentally exercised in these unit tests.
+		"GITHUB_BASE_REF=",
 	)
-	// Make sure a real pull_request base-ref fetch path isn't accidentally
-	// exercised in this unit test.
-	cmd.Env = append(cmd.Env, "GITHUB_BASE_REF=")
+	out, runErr = cmd.CombinedOutput()
 
-	out, runErr := cmd.CombinedOutput()
+	if argvBytes, err := os.ReadFile(argvLog); err == nil {
+		full := strings.Split(strings.TrimRight(string(argvBytes), "\n"), "\n")
+		// The stub received corral's ENTIRE argv (its own --repo/--owner/etc
+		// flags too); only what follows "--" is the test-command's own
+		// argv, which is what every caller here actually wants to assert on.
+		argv = []string{}
+		for i, a := range full {
+			if a == "--" {
+				argv = append(argv, full[i+1:]...)
+				break
+			}
+		}
+	}
+	return out, runErr, argv
+}
+
+// TestActionTestCommandWordSplitNotEvaluated is the fence for the one
+// deliberate exception to defect 2: `test-command` must still split into
+// argv words, but it must never be handed to bash as script text. This runs
+// the real "run corral" step's script with a test-command containing `;`,
+// backticks and `$( )`, and checks (a) none of the embedded commands
+// actually ran, and (b) the literal text arrived as argv on a stub `corral`.
+func TestActionTestCommandWordSplitNotEvaluated(t *testing.T) {
+	a := loadActionYAML(t)
+	runStep := findStepContaining(t, a, "certify --repo")
+	if strings.Contains(runStep.Run, "${{") {
+		t.Fatal("the run-corral step still inlines a ${{ }} expression; fix defect 2 first")
+	}
+
+	tmp := t.TempDir()
+	pwned := filepath.Join(tmp, "pwned")
+	malicious := "go test ./...; touch " + pwned + "; echo $(touch " + pwned + ")"
+
+	out, runErr, argv := runRunCorralStep(t, runStep, tmp, malicious)
 	if runErr != nil {
 		t.Fatalf("run-corral step failed: %v\n%s", runErr, out)
 	}
@@ -438,13 +465,91 @@ func TestActionTestCommandWordSplitNotEvaluated(t *testing.T) {
 		t.Fatal("the malicious test-command was executed by the shell (the injected `touch` ran) — word-splitting alone is not protecting this")
 	}
 
-	argvBytes, err := os.ReadFile(argvLog)
-	if err != nil {
-		t.Fatalf("stub `corral` was never invoked, or produced no argv log: %v\n%s", err, out)
-	}
-	argv := strings.Split(strings.TrimRight(string(argvBytes), "\n"), "\n")
 	joined := strings.Join(argv, "\x1f")
 	if !strings.Contains(joined, "touch") || !strings.Contains(joined, pwned) {
 		t.Errorf("expected the test-command's literal text (including the embedded `touch` and its path) to arrive as argv words after `--`; got argv=%v", argv)
+	}
+}
+
+// TestActionTestCommandStillSplitsAnOrdinaryCommand pins the ordinary case
+// the whole mechanism exists for: "go test ./..." must still arrive as
+// exactly three argv words, the same as it did before any hardening.
+func TestActionTestCommandStillSplitsAnOrdinaryCommand(t *testing.T) {
+	a := loadActionYAML(t)
+	runStep := findStepContaining(t, a, "certify --repo")
+	tmp := t.TempDir()
+
+	out, runErr, argv := runRunCorralStep(t, runStep, tmp, "go test ./...")
+	if runErr != nil {
+		t.Fatalf("run-corral step failed: %v\n%s", runErr, out)
+	}
+	want := []string{"go", "test", "./..."}
+	if strings.Join(argv, "\x1f") != strings.Join(want, "\x1f") {
+		t.Errorf("test-command %q: got argv=%v, want=%v", "go test ./...", argv, want)
+	}
+}
+
+// TestActionTestCommandPreservesQuotedWords is the fence for the regression
+// a naive `read -ra` word split introduces: a real shell honours quoting, so
+// `pytest -k "not slow"` is two flags plus one argument, "not slow" — an
+// entirely ordinary pytest invocation. Splitting on whitespace alone turns
+// the quotes into literal characters and breaks the quoted argument into
+// two words, silently sending pytest a filter expression it never asked
+// for. The parser must honour shell-style quoting without being a shell
+// (never evaluating `$( )`, backticks, `;`, or redirection — that's
+// TestActionTestCommandWordSplitNotEvaluated's job).
+func TestActionTestCommandPreservesQuotedWords(t *testing.T) {
+	a := loadActionYAML(t)
+	runStep := findStepContaining(t, a, "certify --repo")
+	tmp := t.TempDir()
+
+	testCommand := `pytest -k "not slow"`
+	out, runErr, argv := runRunCorralStep(t, runStep, tmp, testCommand)
+	if runErr != nil {
+		t.Fatalf("run-corral step failed: %v\n%s", runErr, out)
+	}
+	want := []string{"pytest", "-k", "not slow"}
+	if strings.Join(argv, "\x1f") != strings.Join(want, "\x1f") {
+		t.Errorf("test-command %q should preserve the quoted argument as one word (the way a real shell parses it); got argv=%v, want=%v", testCommand, argv, want)
+	}
+}
+
+// TestActionTestCommandUnmatchedQuoteFailsClosed: a test-command that can't
+// be parsed as shell-style words (an unterminated quote) must fail the step
+// loudly, not silently misparse into some other argv and audit a command
+// the operator never asked for.
+func TestActionTestCommandUnmatchedQuoteFailsClosed(t *testing.T) {
+	a := loadActionYAML(t)
+	runStep := findStepContaining(t, a, "certify --repo")
+	tmp := t.TempDir()
+
+	out, runErr, argv := runRunCorralStep(t, runStep, tmp, `go test "unterminated`)
+	if runErr == nil {
+		t.Fatalf("an unmatched quote in test-command should fail the step, not silently audit something else; output:\n%s", out)
+	}
+	if len(argv) > 0 {
+		t.Errorf("corral should never have been invoked when test-command could not be parsed; got argv=%v, output:\n%s", argv, out)
+	}
+}
+
+// TestActionTestCommandRejectsEmbeddedNewline is the fence for a
+// multi-line test-command (e.g. a YAML block scalar, `test-command: |`)
+// being silently truncated to its first line. `read` returns success after
+// consuming one line, so a naive split would leave `set -e` with nothing to
+// catch — the step would exit 0 having quietly graded a different, partial
+// command than the one written. It must fail instead, with a message that
+// says why.
+func TestActionTestCommandRejectsEmbeddedNewline(t *testing.T) {
+	a := loadActionYAML(t)
+	runStep := findStepContaining(t, a, "certify --repo")
+	tmp := t.TempDir()
+
+	multiline := "go test ./...\necho this-should-never-run-alone"
+	out, runErr, argv := runRunCorralStep(t, runStep, tmp, multiline)
+	if runErr == nil {
+		t.Fatalf("a multi-line test-command should fail the step instead of silently running only its first line; output:\n%s", out)
+	}
+	if len(argv) > 0 {
+		t.Errorf("corral should never have been invoked on a multi-line test-command; got argv=%v, output:\n%s", argv, out)
 	}
 }

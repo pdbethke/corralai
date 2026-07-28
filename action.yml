@@ -2,7 +2,7 @@ name: "Corral adversarial test audit"
 description: "Breaks your code to check whether your tests notice. Runs in your own CI, on the checkout that is already there."
 inputs:
   test-command:
-    description: "The command that runs your tests, exactly as your CI runs it (e.g. 'go test ./...')."
+    description: "The command that runs your tests, as a single-line invocation (e.g. 'go test ./...', 'pytest -k \"not slow\"'). Quoting is honoured; pipes, &&/||, redirection and globs are not."
     required: true
   diff-base:
     description: "Audit only files changed against this ref. Defaults to the PR base; set empty to audit the whole repo (expensive)."
@@ -75,8 +75,29 @@ runs:
         args+=(--owner "$REPO_OWNER" --commit "$COMMIT_SHA")
         [ -n "$base" ] && args+=(--diff-base "$base")
         [ -n "$GOALS" ] && args+=(--goals "$GOALS")
-        # $TEST_COMMAND is data, not script: it is deliberately word-split
-        # (so "go test ./..." becomes three argv words), never handed to
-        # bash for evaluation, so shell metacharacters in it cannot execute.
-        read -ra TEST_ARGV <<< "$TEST_COMMAND"
+        # $TEST_COMMAND is data, not script: it is split into argv words the
+        # way a real shell's own parser would (so "go test ./..." becomes
+        # three args, and pytest -k "not slow" keeps "not slow" as one),
+        # but it is never handed to bash for evaluation, so shell
+        # metacharacters (;, backticks, $( )) in it cannot execute.
+        #
+        # A YAML block scalar (test-command: |) can carry an embedded
+        # newline; silently keeping only the first line would grade a
+        # different, truncated command than the one written, so reject it
+        # instead.
+        if [[ "$TEST_COMMAND" == *$'\n'* ]]; then
+          echo "::error::test-command must be a single line — a multi-line value (e.g. from a YAML block scalar) would be silently truncated to its first line rather than run in full." >&2
+          exit 1
+        fi
+        # xargs does its own shell-style quote parsing (single and double
+        # quotes are honoured) WITHOUT being a shell: it never evaluates
+        # $( ), backticks, ;, &&, redirection, or globs, and -d is
+        # deliberately not passed since that disables the quote handling
+        # this depends on. An unmatched quote makes xargs fail, which must
+        # surface as an error, not an empty or partial argv.
+        if ! TEST_ARGV_RAW="$(printf '%s' "$TEST_COMMAND" | xargs -n1 printf '%s\n')"; then
+          echo "::error::test-command could not be parsed as shell-style words (check for an unmatched quote): $TEST_COMMAND" >&2
+          exit 1
+        fi
+        mapfile -t TEST_ARGV <<< "$TEST_ARGV_RAW"
         corral "${args[@]}" -- "${TEST_ARGV[@]}"

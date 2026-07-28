@@ -45,16 +45,35 @@ metacharacters (`;`, backticks, `$( )`) executes. `env:` values don't have
 that problem — GitHub still expands `${{ }}` there, but into an environment
 variable's *value*, which the shell never re-parses as script.
 
-The one deliberate exception is `test-command`: it's still meant to
-word-split into argv the way CI commands normally do (`go test ./...`
-becomes three separate arguments to `corral -- `), so the run step reads it
-into an array explicitly — `read -ra TEST_ARGV <<< "$TEST_COMMAND"` — rather
-than letting bash's normal unquoted-expansion splitting do it. That keeps the
-splitting behavior while guaranteeing the value is never handed to bash for
-*evaluation*; `cmd/corral/action_test.go`'s
+The one deliberate exception is `test-command`: it's still meant to split
+into argv the way a real shell parses a command line (`go test ./...`
+becomes three separate arguments to `corral -- `, and `pytest -k "not
+slow"` keeps `"not slow"` — quotes removed — as one argument, not two), so
+the run step parses it with `xargs`, which does shell-style quote handling
+*without being a shell*: it understands single and double quotes, but it
+never evaluates `$( )`, backticks, `;`, `&&`, redirection, or globs. (`xargs
+-d` is deliberately not used — that flag turns the quote handling off,
+which is exactly the part being relied on.) An unmatched quote makes
+`xargs` fail, and the step fails with it rather than silently parsing a
+different command than the one written. A `test-command` containing an
+embedded newline (the shape a YAML block scalar, `test-command: |`,
+produces) is rejected up front for the same reason: quietly running only
+its first line would grade a different, truncated command than the one in
+the workflow file.
+
+`cmd/corral/action_test.go` covers all of this:
 `TestActionTestCommandWordSplitNotEvaluated` proves a `test-command`
 containing `;`, backticks, and `$( )` arrives as literal argv words instead
-of running.
+of running; `TestActionTestCommandStillSplitsAnOrdinaryCommand` and
+`TestActionTestCommandPreservesQuotedWords` pin the two splitting shapes
+above; `TestActionTestCommandUnmatchedQuoteFailsClosed` and
+`TestActionTestCommandRejectsEmbeddedNewline` cover the two failure modes.
+
+What this does **not** give you is full shell fidelity: pipes (`|`), `&&`
+/ `||` chaining, output redirection, and glob expansion in `test-command`
+are not supported — `xargs`'s quote parsing covers quoting only. Write
+`test-command` as a plain invocation (`go test ./...`, `pytest -k "not
+slow"`), not a shell one-liner that chains multiple commands.
 
 ## Usage
 
@@ -170,7 +189,7 @@ touches files with no paired test) is a legitimate pass: the action prints
 
 | Input | Required | Default | Meaning |
 |---|---|---|---|
-| `test-command` | yes | — | The command that runs your tests, exactly as your CI runs it (e.g. `go test ./...`). |
+| `test-command` | yes | — | The command that runs your tests, as a single-line invocation (e.g. `go test ./...`, `pytest -k "not slow"`). Quoting is honoured; pipes, `&&`/`\|\|`, redirection and globs are not — see "Inputs never become script text" above. |
 | `diff-base` | no | `""` (falls back to the PR's base ref) | Audit only files changed against this ref. Left empty on a `pull_request` event, the action falls back to `origin/$GITHUB_BASE_REF` (the PR's own base). On any other event (e.g. a push to `main`), there is no base ref to fall back to, so an empty `diff-base` means a whole-repo audit. |
 | `goals` | no | `""` | Optional JSON file of per-file goals. Omitted means goals are derived per file by a model. |
 | `model-key` | no | `""` | Provider API key for goal derivation, wired into the run as `ANTHROPIC_API_KEY` — the same environment variable corral's default model backend reads everywhere else (`internal/creds`). Required unless `goals` is supplied. Pass it as `${{ secrets.ANTHROPIC_API_KEY }}`; never write a key inline in the workflow. |

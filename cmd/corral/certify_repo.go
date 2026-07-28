@@ -258,8 +258,14 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	results := reposcan.Scan(context.Background(), jobs, ex, nil, workers)
 	rep := reposcan.Aggregate(*owner, cfg.Repo, *commit, totalFiles, len(cands), results, excl)
 
-	printRepoReport(stdout, rep)
-	return repoScanExitCode(rep)
+	// The diff selected zero candidates: a docs-only (or no-paired-test-only)
+	// PR is the most common change in existence, and it legitimately has
+	// nothing to audit. That is a true, honest answer, not a failure — never
+	// conflate it with "files were in scope and none could be graded".
+	nothingInScope := *diffBase != "" && len(selected) == 0
+
+	printRepoReport(stdout, rep, nothingInScope)
+	return repoScanExitCode(rep, nothingInScope)
 }
 
 // changedFiles lists repo-relative paths that differ from baseRef. In a PR
@@ -408,7 +414,20 @@ func checkArgvSpansOneLanguage(checkArgv []string, jobs []reposcan.Job) error {
 // COULD-NOT-GRADE line prevents for a human reader, left unfixed for the
 // automated one. Split out as a function so both branches are testable
 // without a jail and an API key.
-func repoScanExitCode(r reposcan.RepoReport) int {
+//
+// nothingInScope distinguishes the two ways a scan can audit zero files, a
+// distinction that matters once --diff-base exists: the most common PR in
+// existence (docs-only, or touching only files with no paired test)
+// legitimately has nothing in scope, and that is a true, honest answer — not
+// a failure to report. Zero GRADABLE out of a NON-empty scope is still a
+// real failure: files were in scope and none could be graded. Callers pass
+// true only on the diff path, and only when the diff selected zero
+// candidates; the whole-repo (non-diff) path always passes false, so its
+// exit codes are unchanged.
+func repoScanExitCode(r reposcan.RepoReport, nothingInScope bool) int {
+	if nothingInScope {
+		return 0
+	}
 	if r.Audited == 0 {
 		return 1
 	}
@@ -482,7 +501,7 @@ func orderExclusionsForListing(excl []reposcan.Exclusion) []reposcan.Exclusion {
 	return out
 }
 
-func printRepoReport(w io.Writer, r reposcan.RepoReport) {
+func printRepoReport(w io.Writer, r reposcan.RepoReport, nothingInScope bool) {
 	commit := r.Commit
 	if strings.TrimSpace(commit) == "" {
 		// Never print a bare dangling "@ " — say plainly that the report is
@@ -491,9 +510,15 @@ func printRepoReport(w io.Writer, r reposcan.RepoReport) {
 		commit = "(no commit given)"
 	}
 	fmt.Fprintf(w, "\nRepo adequacy — %s/%s @ %s\n", r.Owner, r.Repo, commit)
-	if r.Audited == 0 {
+	switch {
+	case nothingInScope:
+		// "Nothing in scope" and "nothing could be graded" must not print the
+		// same line: one is the honest, expected outcome of a docs-only PR;
+		// the other is a real failure to report.
+		fmt.Fprintln(w, "  NOTHING IN SCOPE: the diff touched no candidate; no audit was needed.")
+	case r.Audited == 0:
 		fmt.Fprintln(w, "  COULD-NOT-GRADE: nothing was audited; no score is reported.")
-	} else {
+	default:
 		fmt.Fprintf(w, "  kill rate %.2f over %d audited file(s) (%.0f%% of %d candidates)\n",
 			r.KillRate, r.Audited, 100*r.AuditedFraction(), r.Candidates)
 	}

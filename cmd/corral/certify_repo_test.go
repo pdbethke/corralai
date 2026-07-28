@@ -128,6 +128,95 @@ func TestCertifyRepoDiffBaseBoundsTheJobSet(t *testing.T) {
 	}
 }
 
+// TestCertifyRepoDiffBaseEmptyScopeExitsZero is Gap 2: the most common PR in
+// existence (here, one that changed nothing under the goal-eligible surface)
+// legitimately has nothing in scope, and that must exit 0 — not read as a
+// failed audit in CI. This is a real (non-dry-run) run: --substrate workspace
+// is used so the assertion does not depend on bwrap being available on the
+// test host, and it never reaches Execute because zero jobs are emitted.
+func TestCertifyRepoDiffBaseEmptyScopeExitsZero(t *testing.T) {
+	// The provider preflight demands a key regardless of scope (it is a
+	// scan-wide fact checked before selection is even known); a zero-scope
+	// scan never actually calls a model, so a placeholder value is enough.
+	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
+	root := t.TempDir()
+	gitRun := gitCmd(t, root)
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "pkg", "a_test.go"), "package pkg\n")
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+	base := gitRevParseHead(t, root)
+	// Nothing changes after base: the diff scope is empty.
+
+	goals := filepath.Join(root, "goals.json")
+	mustWrite(t, goals, `{"pkg/a.go": "must not panic"}`)
+
+	var out, errb bytes.Buffer
+	code := runCertifyRepo([]string{
+		"--repo", root, "--diff-base", base, "--goals", goals,
+		"--substrate", substrateWorkspace,
+	}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit %d, want 0 for an empty diff scope: stdout=%s stderr=%s", code, out.String(), errb.String())
+	}
+	if !strings.Contains(out.String(), "0 job(s)") {
+		t.Errorf("want 0 jobs for an empty diff scope:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "NOTHING IN SCOPE") {
+		t.Errorf("want the distinct empty-scope line, got:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "COULD-NOT-GRADE") {
+		t.Errorf("an empty scope must not be reported as a grading failure:\n%s", out.String())
+	}
+}
+
+// TestCertifyRepoDiffBaseNonEmptyScopeNothingGradableExitsNonZero is the
+// other half of Gap 2: files WERE in scope (one candidate changed) and none
+// of them could be graded — that is a real failure to report, and must stay
+// exit 1, never silently read as green because the scan happened to be
+// diff-scoped. The check command is `-- false`, which fails the baseline
+// deterministically without ever reaching an LLM call; --substrate workspace
+// avoids depending on bwrap on the test host.
+func TestCertifyRepoDiffBaseNonEmptyScopeNothingGradableExitsNonZero(t *testing.T) {
+	// The provider preflight demands a key before the audit runs, even though
+	// the `-- false` baseline fails before any model would be called.
+	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
+	root := t.TempDir()
+	gitRun := gitCmd(t, root)
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "pkg", "a_test.go"), "package pkg\n")
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+	base := gitRevParseHead(t, root)
+
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg // changed\n")
+	gitRun("add", "pkg/a.go")
+	gitRun("commit", "-q", "-m", "change", "--no-gpg-sign")
+
+	goals := filepath.Join(root, "goals.json")
+	mustWrite(t, goals, `{"pkg/a.go": "must not panic"}`)
+
+	var out, errb bytes.Buffer
+	code := runCertifyRepo([]string{
+		"--repo", root, "--diff-base", base, "--goals", goals,
+		"--substrate", substrateWorkspace, "--", "false",
+	}, &out, &errb)
+	if code != 1 {
+		t.Fatalf("exit %d, want 1 (nothing graded out of a non-empty scope): stdout=%s stderr=%s", code, out.String(), errb.String())
+	}
+	if !strings.Contains(out.String(), "1 job(s)") {
+		t.Errorf("want 1 job (the changed candidate was in scope):\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "COULD-NOT-GRADE") {
+		t.Errorf("want the could-not-grade line, got:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "NOTHING IN SCOPE") {
+		t.Errorf("a non-empty scope must not print the empty-scope line:\n%s", out.String())
+	}
+}
+
 // TestCertifyRepoRejectsUnknownSubstrate proves an unrecognized --substrate
 // value is a usage error (exit 2), never a silent fall-through to the jail
 // default — a run that quietly used the wrong substrate while claiming the
@@ -370,20 +459,42 @@ func TestCertifyRepoFileTotalMatchesDiskWithManyUngoaled(t *testing.T) {
 }
 
 // TestRepoScanExitCodeNothingAuditedIsNonZero is Finding 4: a scan in which
-// every file failed to grade must not read as green to CI.
+// every file failed to grade must not read as green to CI. This is the
+// whole-repo (non-diff) path — nothingInScope is always false there — so its
+// exit codes must be unchanged by the --diff-base distinction added below.
 func TestRepoScanExitCodeNothingAuditedIsNonZero(t *testing.T) {
 	nothing := reposcan.Aggregate("o", "r", "c", 2, 1, []reposcan.FileResult{
 		{Job: reposcan.Job{Path: "a.go"}, Gradable: false, Reason: reposcan.ReasonExecutorError},
 	}, nil)
-	if got := repoScanExitCode(nothing); got == 0 {
+	if got := repoScanExitCode(nothing, false); got == 0 {
 		t.Errorf("a scan that graded nothing must exit non-zero, got %d", got)
 	}
 
 	graded := reposcan.Aggregate("o", "r", "c", 2, 1, []reposcan.FileResult{
 		{Job: reposcan.Job{Path: "a.go"}, Gradable: true, Verdict: advpool.Verdict{DevKillRate: 0.9}},
 	}, nil)
-	if got := repoScanExitCode(graded); got != 0 {
+	if got := repoScanExitCode(graded, false); got != 0 {
 		t.Errorf("a scan that graded something must exit 0, got %d", got)
+	}
+}
+
+// TestRepoScanExitCodeDistinguishesEmptyScopeFromNothingGradable is the
+// --diff-base half of the exit-code contract: with diff scoping, the most
+// common PR in existence (docs-only, or touching only files with no paired
+// test) legitimately has nothing in scope, and exits 0 — a true, honest
+// answer. Zero GRADABLE out of a NON-empty scope stays exit 1: files were in
+// scope and none could be graded, which is a real failure to report.
+func TestRepoScanExitCodeDistinguishesEmptyScopeFromNothingGradable(t *testing.T) {
+	emptyScope := reposcan.Aggregate("o", "r", "c", 0, 0, nil, nil)
+	if got := repoScanExitCode(emptyScope, true); got != 0 {
+		t.Errorf("an empty diff scope must exit 0 (nothing to audit), got %d", got)
+	}
+
+	nothingGradable := reposcan.Aggregate("o", "r", "c", 2, 1, []reposcan.FileResult{
+		{Job: reposcan.Job{Path: "a.go"}, Gradable: false, Reason: reposcan.ReasonBaselineFailed},
+	}, nil)
+	if got := repoScanExitCode(nothingGradable, false); got != 1 {
+		t.Errorf("a non-empty scope where nothing graded must exit 1, got %d", got)
 	}
 }
 
@@ -699,7 +810,7 @@ func TestPrintRepoReportNothingAuditedSaysSo(t *testing.T) {
 	rep := reposcan.Aggregate("local", "r", "c", 3, 1, []reposcan.FileResult{
 		{Job: reposcan.Job{Path: "a.go"}, Gradable: false, Reason: reposcan.ReasonFlakyBaseline},
 	}, []reposcan.Exclusion{{Path: "b.go", Reason: reposcan.ReasonNoPairedTest}})
-	printRepoReport(&out, rep)
+	printRepoReport(&out, rep, false)
 	s := out.String()
 	if !strings.Contains(s, "COULD-NOT-GRADE") {
 		t.Errorf("want COULD-NOT-GRADE, got:\n%s", s)
@@ -709,6 +820,32 @@ func TestPrintRepoReportNothingAuditedSaysSo(t *testing.T) {
 	}
 	if !strings.Contains(s, reposcan.ReasonFlakyBaseline) {
 		t.Errorf("ungradable reasons must be reported:\n%s", s)
+	}
+}
+
+// TestPrintRepoReportEmptyScopeSaysADifferentLineThanCouldNotGrade proves the
+// two zero-audited outcomes are not conflated in the human-readable output:
+// an empty diff scope (nothing was ever in bound) must not print the same
+// line as a non-empty scope that failed to grade anything.
+func TestPrintRepoReportEmptyScopeSaysADifferentLineThanCouldNotGrade(t *testing.T) {
+	rep := reposcan.Aggregate("local", "r", "c", 0, 0, nil, nil)
+
+	var scoped bytes.Buffer
+	printRepoReport(&scoped, rep, true)
+	if strings.Contains(scoped.String(), "COULD-NOT-GRADE") {
+		t.Errorf("an empty diff scope must not print COULD-NOT-GRADE:\n%s", scoped.String())
+	}
+	if !strings.Contains(scoped.String(), "NOTHING IN SCOPE") {
+		t.Errorf("want a distinct NOTHING IN SCOPE line, got:\n%s", scoped.String())
+	}
+
+	var notScoped bytes.Buffer
+	printRepoReport(&notScoped, rep, false)
+	if strings.Contains(notScoped.String(), "NOTHING IN SCOPE") {
+		t.Errorf("the non-diff/nothing-gradable case must not print the scope line:\n%s", notScoped.String())
+	}
+	if !strings.Contains(notScoped.String(), "COULD-NOT-GRADE") {
+		t.Errorf("want COULD-NOT-GRADE, got:\n%s", notScoped.String())
 	}
 }
 
@@ -724,7 +861,7 @@ func TestPrintRepoReportWeakestIsCapped(t *testing.T) {
 		})
 	}
 	var out bytes.Buffer
-	printRepoReport(&out, reposcan.Aggregate("o", "r", "c", 12, len(results), results, nil))
+	printRepoReport(&out, reposcan.Aggregate("o", "r", "c", 12, len(results), results, nil), false)
 	s := out.String()
 	if !strings.Contains(s, "... and 2 more") {
 		t.Errorf("want the weakest list capped at 10 with a remainder line:\n%s", s)
@@ -856,7 +993,7 @@ func TestCertifyRepoReportsEnumeratedCandidatesNotJobs(t *testing.T) {
 		{Job: reposcan.Job{Path: "a.go"}, Gradable: true, Verdict: advpool.Verdict{DevKillRate: 0.8}},
 	}, excl)
 	var out bytes.Buffer
-	printRepoReport(&out, rep)
+	printRepoReport(&out, rep, false)
 	s := out.String()
 	if !strings.Contains(s, "20% of 5 candidates") {
 		t.Errorf("want the ratio over the 5 enumerated candidates, got:\n%s", s)
@@ -881,10 +1018,10 @@ func TestPrintRepoReportUngradableOrderIsStable(t *testing.T) {
 	}, excl)
 
 	var first bytes.Buffer
-	printRepoReport(&first, rep)
+	printRepoReport(&first, rep, false)
 	for i := 0; i < 50; i++ {
 		var again bytes.Buffer
-		printRepoReport(&again, rep)
+		printRepoReport(&again, rep, false)
 		if again.String() != first.String() {
 			t.Fatalf("report is not reproducible:\n--- run 1 ---\n%s\n--- run %d ---\n%s", first.String(), i+2, again.String())
 		}

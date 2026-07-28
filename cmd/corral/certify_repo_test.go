@@ -85,6 +85,108 @@ func TestChangedFilesListsOnlyWhatMoved(t *testing.T) {
 	}
 }
 
+// TestChangedFilesIsRelativeToRepoRootWhenRepoIsASubdirectory is Gap 3:
+// `git diff --name-only` emits paths relative to the REPOSITORY root
+// regardless of cwd, while reposcan.Enumerate produces paths relative to
+// --repo. Point --repo at a subdirectory of a git repo (a package inside a
+// monorepo) and, uncorrected, the two path frames never intersect — every
+// candidate falls out as not-selected, blaming selection rather than the
+// path mismatch.
+func TestChangedFilesIsRelativeToRepoRootWhenRepoIsASubdirectory(t *testing.T) {
+	top := t.TempDir()
+	gitRun := gitCmd(t, top)
+	sub := filepath.Join(top, "svc")
+	mustWrite(t, filepath.Join(top, "README.md"), "root file\n")
+	mustWrite(t, filepath.Join(sub, "a.go"), "package p\n")
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+	base := gitRevParseHead(t, top)
+
+	mustWrite(t, filepath.Join(sub, "a.go"), "package p // changed\n")
+	gitRun("add", "svc/a.go")
+	gitRun("commit", "-q", "-m", "change", "--no-gpg-sign")
+
+	got, err := changedFiles(sub, base)
+	if err != nil {
+		t.Fatalf("changedFiles: %v", err)
+	}
+	// Relative to --repo (sub), not the git repository root: "a.go", never
+	// "svc/a.go" — the latter would never match anything reposcan.Enumerate
+	// produced under sub.
+	if len(got) != 1 || got[0] != "a.go" {
+		t.Fatalf("changed = %v, want [a.go] (relative to --repo, not the git root)", got)
+	}
+}
+
+// TestChangedFilesUsesAThreeDotRange is Gap 4a, an adjudicated fix to code
+// the plan itself specified: two-dot `git diff <base>` compares trees
+// directly, so once base has advanced past the branch point, files changed
+// only ON BASE are reported as changed too and get audited — over-scoping,
+// which is expensive (an audit costs ~84 full test-suite runs per file), not
+// merely untidy. `<base>...HEAD` compares against the merge base, which is
+// what "what this PR changed" means: here, a feature branch only ever
+// touched a.go, but base's OWN tip moved on and touched b.go after the
+// branch point — the diff must report only a.go.
+func TestChangedFilesUsesAThreeDotRange(t *testing.T) {
+	root := t.TempDir()
+	gitRun := gitCmd(t, root)
+	mustWrite(t, filepath.Join(root, "a.go"), "package p\n")
+	mustWrite(t, filepath.Join(root, "b.go"), "package p\n")
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+	mainBranch := strings.TrimSpace(func() string {
+		out, err := exec.Command("git", "-C", root, "rev-parse", "--abbrev-ref", "HEAD").Output()
+		if err != nil {
+			t.Skipf("git rev-parse --abbrev-ref unusable here: %v", err)
+		}
+		return string(out)
+	}())
+
+	gitRun("checkout", "-q", "-b", "feature")
+	mustWrite(t, filepath.Join(root, "a.go"), "package p // feature change\n")
+	gitRun("add", "a.go")
+	gitRun("commit", "-q", "-m", "feature change", "--no-gpg-sign")
+
+	gitRun("checkout", "-q", mainBranch)
+	mustWrite(t, filepath.Join(root, "b.go"), "package p // base advanced\n")
+	gitRun("add", "b.go")
+	gitRun("commit", "-q", "-m", "base advanced", "--no-gpg-sign")
+
+	gitRun("checkout", "-q", "feature")
+
+	got, err := changedFiles(root, mainBranch)
+	if err != nil {
+		t.Fatalf("changedFiles: %v", err)
+	}
+	if len(got) != 1 || got[0] != "a.go" {
+		t.Fatalf("changed = %v, want [a.go] — b.go changed only on base after the branch point, and must not be reported as part of this PR's diff", got)
+	}
+}
+
+// TestChangedFilesSurfacesGitStderr is Gap 4b: cmd.Output() with a bare %w
+// wrap surfaced a bad ref to the operator as "exit status 128", discarding
+// git's own explanation entirely. exec.ExitError.Stderr is already
+// populated by cmd.Output(); it must be included in the returned error.
+func TestChangedFilesSurfacesGitStderr(t *testing.T) {
+	root := t.TempDir()
+	gitRun := gitCmd(t, root)
+	gitRun("init", "-q")
+	gitRun("commit", "-q", "--allow-empty", "-m", "x", "--no-gpg-sign")
+
+	_, err := changedFiles(root, "no-such-ref-at-all")
+	if err == nil {
+		t.Fatal("want an error for an unresolvable ref")
+	}
+	if strings.Contains(err.Error(), "exit status 128") && !strings.Contains(err.Error(), "no-such-ref-at-all") {
+		t.Errorf("error discarded git's own explanation, left only the exit code: %v", err)
+	}
+	if !strings.Contains(err.Error(), "unknown revision") && !strings.Contains(err.Error(), "bad revision") {
+		t.Errorf("want git's stderr explanation in the error, got: %v", err)
+	}
+}
+
 // TestCertifyRepoDiffBaseBoundsTheJobSet: a repo where two files are
 // candidates (both goaled, both paired with a test) but only one changed —
 // the scan must emit one job, and must NOT rank or apply --top on this path,

@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -268,15 +269,42 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	return repoScanExitCode(rep, nothingInScope)
 }
 
-// changedFiles lists repo-relative paths that differ from baseRef. In a PR
-// the diff is the natural bound on an audit: ~84 suite runs per file is a
+// changedFiles lists paths, relative to root, that differ from baseRef. In a
+// PR the diff is the natural bound on an audit: ~84 suite runs per file is a
 // day's work across a repo and a normal CI job across a three-file change.
+//
+// Two things a plain `git diff <baseRef>` gets wrong for this caller:
+//
+//   - It is a THREE-DOT range (baseRef...HEAD), not two-dot. Two-dot compares
+//     trees directly, so once baseRef has advanced past the branch point,
+//     files changed only ON baseRef are reported as changed here too and get
+//     audited — over-scoping, which is expensive (~84 suite runs per file),
+//     not merely untidy. Three-dot compares against the merge base, which is
+//     what "what this PR changed" means, and is the cheaper direction.
+//   - `git diff --name-only` emits paths relative to the REPOSITORY root
+//     regardless of cwd, while reposcan.Enumerate (and every candidate this
+//     list is intersected against) produces paths relative to root. When root
+//     is a subdirectory of the repo (a package inside a monorepo), the two
+//     frames never intersect without --relative, which both restricts the
+//     diff to root and reports paths relative to it — matching Enumerate's
+//     frame exactly.
 func changedFiles(root, baseRef string) ([]string, error) {
-	cmd := exec.CommandContext(context.Background(), "git", "diff", "--name-only", baseRef) // #nosec G204 -- fixed binary; baseRef is the operator's own ref
+	rangeArg := baseRef + "...HEAD"
+	cmd := exec.CommandContext(context.Background(), "git", "diff", "--name-only", "--relative", rangeArg) // #nosec G204 -- fixed binary; baseRef is the operator's own ref
 	cmd.Dir = root
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("corral certify --repo: git diff against %s: %w", baseRef, err)
+		// cmd.Output() alone discards git's own explanation, surfacing only
+		// "exit status 128" — exec.ExitError.Stderr is already populated with
+		// the actual reason (e.g. an unresolvable ref) and must not be thrown
+		// away.
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			if detail := strings.TrimSpace(string(exitErr.Stderr)); detail != "" {
+				return nil, fmt.Errorf("corral certify --repo: git diff against %s: %w: %s", rangeArg, err, detail)
+			}
+		}
+		return nil, fmt.Errorf("corral certify --repo: git diff against %s: %w", rangeArg, err)
 	}
 	var changed []string
 	for _, line := range strings.Split(string(out), "\n") {

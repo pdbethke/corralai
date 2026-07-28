@@ -117,8 +117,10 @@ func TestWorkspaceRunnerRefusesPathsOutsideTheRoot(t *testing.T) {
 	}
 }
 
-// Verify is the pre-flight: a workspace that already carries a leftover
-// mutant must be caught before the first job, not after.
+// Verify is the pre-flight: a configured root that exists and is a
+// directory must be accepted. (Verify only checks that much — it cannot
+// detect a leftover mutant, since it has no record of the tree's prior
+// state; that guarantee comes from applyFiles' restore instead.)
 func TestWorkspaceRunnerVerifyPassesOnACleanTree(t *testing.T) {
 	w := NewWorkspaceRunner(wsTree(t, map[string]string{"a.txt": "ORIGINAL\n"}))
 	if err := w.Verify(); err != nil {
@@ -162,5 +164,67 @@ func TestWorkspaceRunnerEnumerateRestoresWhenTheCommandFails(t *testing.T) {
 	}
 	if got := read(t, root, "a.txt"); got != "ORIGINAL\n" {
 		t.Errorf("file left as %q after a failing Enumerate command", got)
+	}
+}
+
+// A mutant that names a path under a directory that does not yet exist must
+// have that directory removed too, not just the file. Restore only ever
+// wrote back or removed the file entry; a directory it had to create to hold
+// that file is exactly as much a stray as the file would be, and just as
+// invisible on an ephemeral runner.
+func TestWorkspaceRunnerRemovesDirectoriesItCreated(t *testing.T) {
+	root := wsTree(t, map[string]string{"a.txt": "ORIGINAL\n"})
+	w := NewWorkspaceRunner(root)
+
+	if _, err := w.RunTest(context.Background(),
+		map[string]string{"newdir/sub/new.txt": "TEMP\n"},
+		[]string{"true"}); err != nil {
+		t.Fatalf("RunTest: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "newdir", "sub", "new.txt")); !os.IsNotExist(err) {
+		t.Error("the file the runner created was left on disk")
+	}
+	if _, err := os.Stat(filepath.Join(root, "newdir", "sub")); !os.IsNotExist(err) {
+		t.Error("the nested directory the runner created was left on disk")
+	}
+	if _, err := os.Stat(filepath.Join(root, "newdir")); !os.IsNotExist(err) {
+		t.Error("the top-level directory the runner created was left on disk")
+	}
+}
+
+// A path that is lexically inside the root but is itself a symlink pointing
+// outside it must be refused, not followed. The tree under audit is a PR
+// checkout: whoever opened the PR could have committed a symlink, and this
+// is the one seam where following it would read or write outside the repo.
+func TestWorkspaceRunnerRefusesASymlinkThatEscapesTheRoot(t *testing.T) {
+	if _, err := os.Readlink("/proc/self"); err != nil {
+		t.Skip("symlinks unavailable on this host")
+	}
+
+	outsideDir := t.TempDir()
+	outsidePath := filepath.Join(outsideDir, "secret.txt")
+	if err := os.WriteFile(outsidePath, []byte("SECRET\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	root := wsTree(t, map[string]string{"a.txt": "ORIGINAL\n"})
+	linkPath := filepath.Join(root, "link.txt")
+	if err := os.Symlink(outsidePath, linkPath); err != nil {
+		t.Skip("symlink creation unavailable on this host")
+	}
+
+	w := NewWorkspaceRunner(root)
+	if _, err := w.RunTest(context.Background(),
+		map[string]string{"link.txt": "MUTANT\n"},
+		[]string{"true"}); err == nil {
+		t.Error("a mutant key pointing through a symlink out of the root was accepted")
+	}
+
+	got, rerr := os.ReadFile(outsidePath)
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	if string(got) != "SECRET\n" {
+		t.Errorf("outside file content = %q; the symlink write escaped the checkout", got)
 	}
 }

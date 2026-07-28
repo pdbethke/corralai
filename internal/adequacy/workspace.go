@@ -36,9 +36,13 @@ type WorkspaceRunner struct {
 // checkout directory.
 func NewWorkspaceRunner(root string) *WorkspaceRunner { return &WorkspaceRunner{root: root} }
 
-// Verify reports whether the workspace is usable before the first job. It
-// exists because a mutant left behind by a crashed run would silently poison
-// every later job, and on an ephemeral runner nobody would ever see it.
+// Verify checks that the workspace root exists and is a directory. It is a
+// pre-flight sanity check, not a dirty-tree scan: it cannot detect a mutant
+// or a stray file left behind by an earlier crashed run, because it has no
+// record of what the tree looked like before. That guarantee instead comes
+// from applyFiles' restore always running (see RunTest/Enumerate) — Verify
+// only catches the case where the configured root is missing or is not a
+// directory at all, before the first job wastes time discovering that.
 func (w *WorkspaceRunner) Verify() error {
 	fi, err := os.Stat(w.root)
 	if err != nil {
@@ -50,41 +54,76 @@ func (w *WorkspaceRunner) Verify() error {
 	return nil
 }
 
-// resolve confines a repo-relative key to the checkout. The keys come from
-// repo-relative candidate paths, but this is the one place a bad key would
-// write to the runner's filesystem outside the repository, so it is checked
-// here rather than trusted.
-func (w *WorkspaceRunner) resolve(rel string) (string, error) {
-	if filepath.IsAbs(rel) {
-		return "", fmt.Errorf("adequacy: workspace path %q is absolute", rel)
-	}
-	full := filepath.Join(w.root, filepath.FromSlash(rel))
-	cleanRoot := filepath.Clean(w.root) + string(os.PathSeparator)
-	if !strings.HasPrefix(filepath.Clean(full)+string(os.PathSeparator), cleanRoot) {
-		return "", fmt.Errorf("adequacy: workspace path %q escapes the checkout", rel)
-	}
-	return full, nil
-}
-
-// savedFile is one entry of the apply/restore ledger: the resolved path plus
-// enough state to put the checkout back exactly as it was.
+// savedFile is one entry of the apply/restore ledger: the repo-relative path
+// plus enough state to put the checkout back exactly as it was.
 type savedFile struct {
-	path     string
+	rel      string
 	original []byte
 	existed  bool
 }
 
+// mkdirAllTracking creates dir and any missing ancestors of it, opened
+// through root so a symlink component cannot smuggle the creation outside
+// the checkout, and returns exactly the directories it created — in
+// shallow-to-deep order — so a later restore can remove exactly those and
+// nothing else. dir "." (the workspace root itself) needs no creation and
+// returns (nil, nil).
+func mkdirAllTracking(root *os.Root, dir string) ([]string, error) {
+	dir = filepath.ToSlash(filepath.Clean(dir))
+	if dir == "." || dir == "" {
+		return nil, nil
+	}
+	parts := strings.Split(dir, "/")
+	var created []string
+	cur := ""
+	for _, p := range parts {
+		if cur == "" {
+			cur = p
+		} else {
+			cur = cur + "/" + p
+		}
+		if _, err := root.Stat(cur); err == nil {
+			continue // already there; not ours to remove later
+		} else if !os.IsNotExist(err) {
+			return created, fmt.Errorf("adequacy: checking %s: %w", cur, err)
+		}
+		if err := root.Mkdir(cur, 0o750); err != nil {
+			return created, fmt.Errorf("adequacy: creating %s: %w", cur, err)
+		}
+		created = append(created, cur)
+	}
+	return created, nil
+}
+
 // applyFiles overlays files onto the checkout and returns a restore func that
 // undoes exactly that overlay: an existing file gets its original bytes
-// written back; a file that did not exist gets removed. The caller MUST
-// invoke restore via defer, before checking any error from applyFiles itself
-// for the entries that did get applied — the ledger only contains entries
-// that were actually written, so a partial failure still unwinds cleanly.
+// written back; a file that did not exist gets removed; a directory this
+// call created to hold a new file is removed too (deepest first, and only if
+// still empty — something else may have put content there, in which case
+// leaving the directory behind is the safe failure, not a forced delete of
+// data this runner didn't write). The caller MUST invoke restore via defer,
+// before checking any error from applyFiles itself — the ledger only
+// contains entries that were actually applied, so a partial failure still
+// unwinds cleanly.
+//
+// Every filesystem access here goes through an *os.Root opened on w.root,
+// never through a plain os.* call joined onto a string path: Root refuses to
+// resolve a name — absolute, "..", or a symlink component — that would leave
+// the directory tree it was opened on, even though the checkout may contain
+// a symlink committed by whoever authored the change under audit. A lexical
+// prefix check on the joined path cannot make that guarantee, because it
+// only inspects the path string, never what a symlink on disk actually
+// points to.
 //
 // This is the single place the crash-safety guarantee is written: RunTest
 // and Enumerate both call it, so a failing command, a timeout, or a panic in
 // either method restores the tree the same way.
 func (w *WorkspaceRunner) applyFiles(files map[string]string) (restore func(), err error) {
+	root, rerr := os.OpenRoot(w.root)
+	if rerr != nil {
+		return func() {}, fmt.Errorf("adequacy: opening workspace %s: %w", w.root, rerr)
+	}
+
 	keys := make([]string, 0, len(files))
 	for k := range files {
 		keys = append(keys, k)
@@ -93,36 +132,45 @@ func (w *WorkspaceRunner) applyFiles(files map[string]string) (restore func(), e
 	// reproducible state rather than a map-order-dependent one.
 	sort.Strings(keys)
 
-	var ledger []savedFile
+	var fileLedger []savedFile
+	var dirsCreated []string // shallow-to-deep creation order
 	restore = func() {
+		defer func() { _ = root.Close() }()
 		// Reverse order, so nested creations unwind cleanly.
-		for i := len(ledger) - 1; i >= 0; i-- {
-			s := ledger[i]
+		for i := len(fileLedger) - 1; i >= 0; i-- {
+			s := fileLedger[i]
 			if s.existed {
-				_ = os.WriteFile(s.path, s.original, 0o600)
+				_ = root.WriteFile(s.rel, s.original, 0o600)
 				continue
 			}
-			_ = os.Remove(s.path)
+			_ = root.Remove(s.rel)
+		}
+		// Deepest directory first; Remove no-ops (returns an error we
+		// discard) if anything else left the directory non-empty — a stray
+		// directory is a smaller failure than deleting data we didn't write.
+		for i := len(dirsCreated) - 1; i >= 0; i-- {
+			_ = root.Remove(dirsCreated[i])
 		}
 	}
 
 	for _, rel := range keys {
-		full, rerr := w.resolve(rel)
-		if rerr != nil {
-			return restore, rerr
+		if filepath.IsAbs(rel) {
+			return restore, fmt.Errorf("adequacy: workspace path %q is absolute", rel)
 		}
-		orig, rerr := os.ReadFile(full) // #nosec G304 -- confined by resolve above
+		orig, rerr := root.ReadFile(rel)
 		existed := rerr == nil
 		if rerr != nil && !os.IsNotExist(rerr) {
 			return restore, fmt.Errorf("adequacy: reading %s: %w", rel, rerr)
 		}
 		if !existed {
-			if merr := os.MkdirAll(filepath.Dir(full), 0o750); merr != nil {
-				return restore, fmt.Errorf("adequacy: creating %s: %w", rel, merr)
+			created, merr := mkdirAllTracking(root, filepath.Dir(filepath.FromSlash(rel)))
+			if merr != nil {
+				return restore, fmt.Errorf("adequacy: creating parent of %s: %w", rel, merr)
 			}
+			dirsCreated = append(dirsCreated, created...)
 		}
-		ledger = append(ledger, savedFile{path: full, original: orig, existed: existed})
-		if werr := os.WriteFile(full, []byte(files[rel]), 0o600); werr != nil {
+		fileLedger = append(fileLedger, savedFile{rel: rel, original: orig, existed: existed})
+		if werr := root.WriteFile(rel, []byte(files[rel]), 0o600); werr != nil {
 			return restore, fmt.Errorf("adequacy: writing %s: %w", rel, werr)
 		}
 	}

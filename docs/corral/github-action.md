@@ -130,5 +130,10 @@ touches files with no paired test) is a legitimate pass: the action prints
   number; don't rely on the exit code alone if you want CI to block on it.
 - **1** — a real failure: files were in scope and *none* of them could be
   graded at all (`COULD-NOT-GRADE:`, e.g. every candidate's baseline suite was
-  already broken or flaky), or enumeration/derivation itself errored out.
-- **2** — a usage error (bad flags), not a finding.
+  already broken or flaky), or enumeration failed. Per-file goal derivation
+  that runs and comes back empty for every file lands here too — the scan
+  happened, it just graded nothing.
+- **2** — the run never started: a usage error (bad flags), or the goal deriver
+  could not be CONSTRUCTED at all — the usual cause being no `model-key` (and no
+  `goals` file) to derive goals with. Distinct from exit 1: nothing was
+  attempted, so nothing is being reported about your code.

@@ -3,7 +3,9 @@
 package lang
 
 import (
+	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -81,6 +83,102 @@ func (goPlugin) SingleTestCmd(testPath, selector string) ([]string, bool) {
 
 func (goPlugin) ListTestsCmd(testPath string) ([]string, bool) {
 	return []string{"go", "test", "-list", ".*", "./..."}, true
+}
+
+// CoverageCmd wraps the project's own test command so a coverage profile
+// ends up on stdout after ONE run. `-coverprofile=/dev/stdout` was the
+// obvious first attempt but is NOT safe: verified against corral's own
+// suite, it interleaves and corrupts the profile whenever more than one
+// package's test binary flushes to the shared fd (`go test ./... -p 1
+// -coverprofile=/dev/stdout` still corrupted — the race is between the `go
+// test` parent's own summary line and a child binary's profile flush, not
+// package parallelism). Writing to a real temporary file and `cat`-ing it
+// afterward, inside one `sh -c` invocation (so callers still see a single
+// command and a single stdout stream), was verified clean. See
+// .superpowers/sdd/2026-07-29-coverage-preflight/task-1-report.md for the
+// transcript.
+func (goPlugin) CoverageCmd(testCmd []string) (cmd []string, ok bool) {
+	if len(testCmd) == 0 {
+		return nil, false
+	}
+	quoted := make([]string, len(testCmd))
+	for i, arg := range testCmd {
+		quoted[i] = shellQuote(arg)
+	}
+	script := `f=$(mktemp) && trap 'rm -f "$f"' EXIT && ` +
+		strings.Join(quoted, " ") + ` -coverprofile="$f" && cat "$f"`
+	return []string{"sh", "-c", script}, true
+}
+
+// shellQuote wraps s in single quotes for safe use inside a POSIX sh -c
+// script, escaping any embedded single quote.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// ParseCoverage reads the output of the command CoverageCmd builds: whatever
+// preamble the wrapped test command itself prints (e.g. `go test`'s own
+// "ok  pkg  0.01s  coverage: NN%" summary line, which — per the verified
+// invocation above — lands on stdout BEFORE the profile), then the profile
+// itself: a "mode: <mode>" header line, followed by one line per covered
+// block —
+//
+//	<import-path>/<file>:<startLine>.<col>,<endLine>.<col> <numStmt> <count>
+//
+// Lines before the mode header are preamble and are ignored outright — they
+// are the wrapped command's own output, not coverage data, so there is
+// nothing to validate about their shape. A file is "executed" if ANY of its
+// blocks has count > 0. modulePath, when non-empty, is stripped as a
+// "<modulePath>/" prefix to yield a repo-relative path.
+//
+// Once the mode header has been seen, every subsequent non-blank line MUST
+// match the block shape above, or this returns an error — never silently
+// drops it, because a dropped block line would just as silently shrink the
+// executed set, exactly the falsely-empty-coverage outcome this type exists
+// to prevent. For the same reason, input with no recognizable "mode:" header
+// anywhere is itself an error rather than an empty map: a genuinely-empty
+// instrumented run still emits that header, so its absence means the
+// command's output was not a coverage profile at all (e.g. it failed before
+// ever running `go test`), which is a fact callers must see, not paper over.
+func (goPlugin) ParseCoverage(stdout, modulePath string) (executed map[string]bool, err error) {
+	executed = make(map[string]bool)
+	sawMode := false
+	for i, line := range strings.Split(stdout, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if !sawMode {
+			if strings.HasPrefix(trimmed, "mode:") {
+				sawMode = true
+			}
+			continue
+		}
+		fields := strings.Fields(trimmed)
+		if len(fields) != 3 {
+			return nil, fmt.Errorf("lang: unparseable coverage line %d: %q", i+1, line)
+		}
+		count, convErr := strconv.Atoi(fields[2])
+		if convErr != nil {
+			return nil, fmt.Errorf("lang: unparseable coverage count on line %d: %q", i+1, line)
+		}
+		colon := strings.Index(fields[0], ":")
+		if colon <= 0 {
+			return nil, fmt.Errorf("lang: unparseable coverage block on line %d: %q", i+1, line)
+		}
+		if count <= 0 {
+			continue
+		}
+		path := fields[0][:colon]
+		if modulePath != "" {
+			path = strings.TrimPrefix(path, modulePath+"/")
+		}
+		executed[path] = true
+	}
+	if !sawMode {
+		return nil, fmt.Errorf("lang: coverage report has no \"mode:\" header (got %d bytes)", len(stdout))
+	}
+	return executed, nil
 }
 
 func (goPlugin) ParseTestList(output string) []string {

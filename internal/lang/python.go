@@ -156,51 +156,101 @@ func (pyPlugin) ListTestsCmd(testPath string) ([]string, bool) {
 	return []string{"python3", "-m", "pytest", "--collect-only", "-q", testPath}, true
 }
 
-// CoverageCmd wraps testCmd (the shape pyPlugin.TestCmd() returns —
-// [interpreter, "-m", <module>, ...args], e.g. ["python3", "-m", "pytest",
-// "-q"]) into ONE `sh -c` script that instruments the run with `coverage`
-// (coverage.py) and prints a machine-readable JSON report on stdout.
+// CoverageCmd wraps testCmd into ONE `sh -c` script that instruments the run
+// with `coverage` (coverage.py) and prints a machine-readable JSON report on
+// stdout. It accepts two shapes:
+//
+//  1. [interpreter, "-m", <module>, ...args] — what pyPlugin.TestCmd() itself
+//     returns, e.g. ["python3", "-m", "pytest", "-q"].
+//  2. [pytest|py.test, ...args] — a BARE pytest invocation. This is the
+//     shape that matters most in practice, not a fallback: action.yml and
+//     docs/corral/github-action.md document `test-command: pytest ...` as
+//     the canonical GitHub Action example, and cmd/corral/certify_repo.go's
+//     testCmd() passes the operator's `-- <cmd>` argv through UNCHANGED —
+//     so a real, documented, already-shipped invocation is exactly
+//     ["pytest", "-q"], not the TestCmd() shape. Measured: without this
+//     case, that invocation got ok=false and silently no pre-flight ran on
+//     the one path most operators actually use. "py.test" is pytest's
+//     console-script alias; the importable module is always "pytest"
+//     either way.
+//
+// Any other shape (e.g. ["poetry", "run", "pytest"] — measured, also
+// ok=false) is declined rather than guessed at: there is no reliable way to
+// splice `coverage run -m` into an arbitrary wrapper without risking running
+// something other than what the operator specified.
 //
 // Determined empirically against a real repository (pallets/flask, shallow
 // clone), not from documentation — see
 // .superpowers/sdd/2026-07-29-coverage-preflight/task-2-report.md for the
-// full transcript. Two things were verified there and shape this
-// implementation:
+// full transcript, including a round of adversarial re-verification that
+// found and fixed the issues this comment now documents. Three things
+// shape the script this builds:
 //
 //  1. `coverage json -o -` is a SEPARATE command from the instrumented test
 //     run (pytest-cov writes its JSON to a file by default; there is no
 //     single-invocation pytest-cov flag that puts JSON on stdout). The brief
 //     accepts a two-command `sh -c "<cmd1> && <cmd2>"` form for exactly this
 //     reason — same shape as Task 1's `go test ...; cat "$f"` split.
-//  2. Using `&&` between the two commands is WRONG for Python specifically:
-//     `coverage run -m pytest` exits non-zero whenever ANY test fails, which
-//     is the ordinary case for a suite corral is auditing (that's the whole
-//     point of running it) — not a tooling failure. With `&&`, one failing
-//     test would silently skip the `coverage json` step and starve the
-//     caller of a report entirely. `;` runs the json step regardless of the
-//     test run's exit code; coverage.py still emits a report as long as the
-//     run got far enough to produce a `.coverage` data file. If it didn't
-//     (e.g. coverage/pytest not installed, a collection error before any
-//     test ran), `coverage json` itself fails and stdout is not
-//     JSON — ParseCoverage below turns that into an error, never an empty
-//     map, which is the correct fail-closed outcome either way.
+//  2. A bare `&&` between the two commands is WRONG for Python: `coverage
+//     run -m pytest` exits non-zero whenever ANY test fails, which is the
+//     ordinary case for a suite corral is auditing (that's the whole point
+//     of running it) — not a tooling failure. `&&` would silently skip the
+//     `coverage json` step on that ordinary case and starve the caller of a
+//     report entirely.
+//  3. But a BARE `;` is ALSO wrong on its own, and this is the part a first
+//     pass missed: coverage.py's `[tool.coverage.run] source = [...]`
+//     config (real-world, e.g. flask's own pyproject.toml) makes `coverage
+//     json` enumerate every file under the configured source tree whether
+//     or not it was ever executed — so when the suite never actually ran at
+//     all (a broken pytest plugin, a `conftest.py` import crashing before
+//     any test file loads, `-p nonexistent-plugin`), `coverage json` still
+//     exits 0 and prints a well-formed, syntactically valid report, just
+//     with EVERY file's `covered_lines` at 0 and `totals.covered_lines: 0`.
+//     Reproduced directly against flask
+//     (`coverage run -m pytest -p nonexistent_plugin_xyz`): exit 0, valid
+//     JSON, 23 files, all zero. A bare `;` would hand that straight to
+//     ParseCoverage indistinguishable from "the suite ran and genuinely
+//     touched nothing" — silently reporting "your suite never touches any
+//     file in this repo" from what is actually a missing test dependency.
+//     The fix keeps `;`'s benefit (still report on ordinary test FAILURES)
+//     while refusing to run the json step at all when the test run's own
+//     exit code says it didn't get that far: pytest's exit codes are
+//     specific (0 ok, 1 tests failed — both are "it ran"; 2 interrupted, 3
+//     internal error, 4 usage error, 5 no tests collected — none of those
+//     are "it ran"), so `rc=$?; case $rc in 0|1) ;; *) exit "$rc" ;; esac;`
+//     runs between the two commands: exit codes 0 and 1 fall through to the
+//     json step, everything else re-raises that exit code and skips it,
+//     leaving stdout non-JSON — which ParseCoverage already turns into an
+//     error, never an empty map. ParseCoverage ALSO checks
+//     totals.covered_lines itself (see below) as a backstop that holds
+//     regardless of how a report reached it, since a shell-layer check can
+//     only guard the one command this method builds.
 //
 // Every element of testCmd is shell-quoted via shellQuote (shared with
 // goPlugin, defined in go.go) — nothing here is interpolated unquoted.
 func (pyPlugin) CoverageCmd(testCmd []string) (cmd []string, ok bool) {
-	// Require the [interpreter, "-m", <module>, ...] shape TestCmd() always
-	// returns. A testCmd of any other shape (no reliable way to splice in
-	// `coverage run` without guessing) is declined rather than guessed at.
-	if len(testCmd) < 3 || testCmd[1] != "-m" {
+	var interp string
+	var moduleArgs []string // argv coverage should run via `-m`, e.g. ["pytest", "-q"].
+
+	switch {
+	case len(testCmd) >= 3 && testCmd[1] == "-m":
+		interp = testCmd[0]
+		moduleArgs = testCmd[2:]
+	case len(testCmd) >= 1 && (testCmd[0] == "pytest" || testCmd[0] == "py.test"):
+		interp = pythonBin()
+		moduleArgs = append([]string{"pytest"}, testCmd[1:]...)
+	default:
 		return nil, false
 	}
-	interp := shellQuote(testCmd[0])
-	rest := make([]string, len(testCmd)-2)
-	for i, arg := range testCmd[2:] {
-		rest[i] = shellQuote(arg)
+
+	quotedInterp := shellQuote(interp)
+	quotedModule := make([]string, len(moduleArgs))
+	for i, arg := range moduleArgs {
+		quotedModule[i] = shellQuote(arg)
 	}
-	script := interp + " -m coverage run -m " + strings.Join(rest, " ") +
-		"; " + interp + " -m coverage json -o -"
+	script := quotedInterp + " -m coverage run -m " + strings.Join(quotedModule, " ") +
+		`; rc=$?; case $rc in 0|1) ;; *) exit "$rc" ;; esac; ` +
+		quotedInterp + " -m coverage json -o -"
 	return []string{"sh", "-c", script}, true
 }
 
@@ -216,10 +266,13 @@ type pyCoverageReport struct {
 			CoveredLines int `json:"covered_lines"`
 		} `json:"summary"`
 	} `json:"files"`
+	Totals struct {
+		CoveredLines int `json:"covered_lines"`
+	} `json:"totals"`
 }
 
 // ParseCoverage reads the output of the command CoverageCmd builds. Because
-// that command is a `sh -c "<instrumented test run>; coverage json -o -"`
+// that command is a `sh -c "<instrumented test run>; ...; coverage json -o -"`
 // script, stdout carries whatever the wrapped test command itself printed
 // (pytest's own dot-progress / summary output) BEFORE the JSON report — the
 // same preamble-then-payload shape Task 1 found for Go, except coverage.py's
@@ -229,24 +282,56 @@ type pyCoverageReport struct {
 // stdout — so that is the structural marker ParseCoverage uses to find it.
 //
 // A file is "executed" if its summary.covered_lines is greater than zero.
-// modulePath is unused for Python: coverage.py, run from the repository
-// root (as corral's harness always does), already reports paths relative to
-// the CURRENT DIRECTORY — there is no import-path-style prefix to strip, the
-// way Go's module path is. The parameter is accepted (never referenced) so
-// the CoverageReporter signature stays uniform across languages; a future
-// caller passing a non-empty modulePath for Python is a caller error this
-// method does not attempt to detect.
 //
-// The last line failing to parse as JSON, or parsing but missing the "meta"
-// or "files" keys that mark it as a genuine coverage-json report (rather
-// than some other JSON a wrapped command happened to print), or a "files"
-// entry whose covered_lines is not a number, are all ERRORS — never an
-// empty map — for the same reason Task 1's ParseCoverage treats a missing
-// "mode:" header as an error: a dropped/misread report must not silently
+// modulePath is the REPO ROOT (an absolute filesystem path, no trailing
+// slash), NOT an import-path-style prefix the way Go's module path is —
+// coverage.py's own path shape depends on the working directory the test
+// command ran from, which corral's harness does not otherwise pin down:
+//
+//   - Run from the repo root, coverage.py already reports paths relative to
+//     the CURRENT DIRECTORY, which coincides with the repo root — those
+//     pass through unchanged.
+//   - Run from ANY OTHER directory (verified: from flask's own tests/
+//     subdirectory, `coverage json` emits absolute paths, e.g.
+//     "/…/flask/src/flask/app.py", not "src/flask/app.py") coverage.py
+//     switches to absolute paths. An absolute path found UNDER modulePath is
+//     relativized to it; an absolute path found OUTSIDE modulePath (a
+//     dependency imported from elsewhere, e.g. site-packages) is skipped —
+//     it is not this repo's source, so it has no repo-relative form to
+//     report and reposcan.Enumerate would never have a candidate for it
+//     anyway.
+//   - An ABSOLUTE path with modulePath == "" cannot be aligned to anything —
+//     guessing would silently fabricate a repo-relative path that might
+//     collide with an unrelated file, which is exactly the kind of silent
+//     misalignment this method exists to refuse. That combination is
+//     therefore an ERROR, not a best-effort pass-through.
+//
+// The last line failing to parse as JSON, or parsing but missing the "meta",
+// "files", or "totals" keys that mark it as a genuine coverage-json report
+// (rather than some other JSON a wrapped command happened to print), a
+// "files" entry whose covered_lines is not a number, or an absolute path
+// with no modulePath to align it against, are all ERRORS — never an empty
+// map — for the same reason Task 1's ParseCoverage treats a missing "mode:"
+// header as an error: a dropped/misread/misaligned report must not silently
 // present as "nothing was executed", which downstream is turned into a
-// repo-wide untested-files finding. The one legitimate empty result is a
-// well-formed report (valid JSON, "meta" and "files" both present) in which
-// every file's covered_lines is zero.
+// repo-wide untested-files finding.
+//
+// totals.covered_lines == 0 is ALSO an error, not the empty-result case —
+// this is the one place "well-formed but empty" stops being legitimate.
+// Reproduced directly against flask: `coverage run -m pytest -p
+// nonexistent_plugin_xyz` (a broken plugin — the suite never runs a single
+// test) exits 0 and `coverage json` still prints a syntactically valid
+// report, because coverage.py's `[tool.coverage.run] source = [...]` config
+// (real, present in flask's own pyproject.toml) makes it enumerate every
+// file under the configured source tree whether or not anything executed —
+// 23 files, every one at covered_lines: 0, totals.covered_lines: 0. That is
+// indistinguishable, file-by-file, from "the suite ran and genuinely touched
+// nothing" without this check. "The suite ran and executed zero statements
+// total" is not a real state for anything but a suite that never ran at
+// all — it does not describe a real, if unlucky, coverage outcome the way a
+// single legitimately-untouched FILE can (see the file-level check above,
+// which this does not change: fixtureAllZero below still has
+// totals.covered_lines: 7525, so it stays the legitimate empty-map case).
 func (pyPlugin) ParseCoverage(stdout, modulePath string) (executed map[string]bool, err error) {
 	lines := strings.Split(stdout, "\n")
 	i := len(lines) - 1
@@ -265,14 +350,19 @@ func (pyPlugin) ParseCoverage(stdout, modulePath string) (executed map[string]bo
 	if _, ok := top["meta"]; !ok {
 		return nil, fmt.Errorf("lang: python coverage report has no %q key — not a coverage-json report", "meta")
 	}
-	filesRaw, ok := top["files"]
-	if !ok {
+	if _, ok := top["totals"]; !ok {
+		return nil, fmt.Errorf("lang: python coverage report has no %q key — not a coverage-json report", "totals")
+	}
+	if _, ok := top["files"]; !ok {
 		return nil, fmt.Errorf("lang: python coverage report has no %q key — not a coverage-json report", "files")
 	}
 
 	var report pyCoverageReport
-	if unmarshalErr := json.Unmarshal(filesRaw, &report.Files); unmarshalErr != nil {
-		return nil, fmt.Errorf("lang: unparseable python coverage report %q entries: %w", "files", unmarshalErr)
+	if unmarshalErr := json.Unmarshal([]byte(payload), &report); unmarshalErr != nil {
+		return nil, fmt.Errorf("lang: unparseable python coverage report: %w", unmarshalErr)
+	}
+	if report.Totals.CoveredLines == 0 {
+		return nil, fmt.Errorf("lang: python coverage report totals.covered_lines is 0 — the suite most likely never ran (e.g. a broken pytest plugin or collection error), not a genuinely-empty result")
 	}
 
 	executed = make(map[string]bool)
@@ -281,8 +371,19 @@ func (pyPlugin) ParseCoverage(stdout, modulePath string) (executed map[string]bo
 			continue
 		}
 		p := filepath.ToSlash(path)
-		if modulePath != "" {
-			p = strings.TrimPrefix(p, modulePath+"/")
+		if filepath.IsAbs(path) {
+			if modulePath == "" {
+				return nil, fmt.Errorf("lang: python coverage report contains an absolute path %q but no repo root (modulePath) was given to align it against", path)
+			}
+			root := filepath.ToSlash(modulePath)
+			rel, cut := strings.CutPrefix(p, root+"/")
+			if !cut {
+				// Outside the repo root entirely (e.g. a dependency
+				// imported from site-packages) — not this repo's source,
+				// skip rather than report a bogus path.
+				continue
+			}
+			p = rel
 		}
 		executed[p] = true
 	}

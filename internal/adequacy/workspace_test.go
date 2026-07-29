@@ -7,9 +7,12 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
 func wsTree(t *testing.T, files map[string]string) string {
@@ -279,6 +282,72 @@ func TestWorkspaceRunnerEnumerateIsBoundedToo(t *testing.T) {
 	}
 }
 
+// TestWorkspaceRunnerEnumerateWithoutMaxOutputStaysUnbounded pins F1's
+// backward-compatibility half: a WorkspaceRunner built WITHOUT
+// WithWorkspaceMaxOutput (every caller before this option existed,
+// including certify_local.go's ordinary per-mutant runs) must keep
+// buffering Enumerate's output completely unbounded, exactly as it always
+// has — this option is opt-in, and RunTest/RunTestVerbose never accept it
+// at all.
+func TestWorkspaceRunnerEnumerateWithoutMaxOutputStaysUnbounded(t *testing.T) {
+	root := wsTree(t, map[string]string{"a.txt": "x\n"})
+	w := NewWorkspaceRunner(root, 0)
+
+	// 100 KiB of 'x' — bigger than sandbox.Run's own 16 KiB default, to
+	// prove nothing is silently capping this path either.
+	const want = 100 << 10
+	out, err := w.Enumerate(context.Background(), nil,
+		[]string{"sh", "-c", "yes x | head -c " + itoa(want)})
+	if err != nil {
+		t.Fatalf("Enumerate: %v", err)
+	}
+	if len(out) != want {
+		t.Fatalf("output = %d bytes, want exactly %d (unbounded, no truncation marker expected)", len(out), want)
+	}
+}
+
+// TestWorkspaceRunnerEnumerateWithMaxOutputTruncates is the F1 fix itself:
+// this is the coverage pre-flight's own substrate, and before this option
+// existed nothing bounded what Enumerate buffered here at all — measured
+// against a real grpc-go run, a 253 MB coverage profile read entirely into
+// memory (827 MB peak RSS). WithWorkspaceMaxOutput must actually cap it,
+// using the same sandbox.CappedWriter + sandbox.TruncationMarker contract
+// reposcan.Preflight already knows how to detect (checked as a suffix, see
+// preflight.go), so a truncated run here reports exactly the way a
+// truncated jail run always has.
+func TestWorkspaceRunnerEnumerateWithMaxOutputTruncates(t *testing.T) {
+	root := wsTree(t, map[string]string{"a.txt": "x\n"})
+	const cap = 1024
+	w := NewWorkspaceRunner(root, 0, WithWorkspaceMaxOutput(cap))
+
+	out, err := w.Enumerate(context.Background(), nil,
+		[]string{"sh", "-c", "yes x | head -c " + itoa(cap*10)})
+	if err != nil {
+		t.Fatalf("Enumerate: %v", err)
+	}
+	if !strings.HasSuffix(out, sandbox.TruncationMarker) {
+		t.Fatalf("output does not end with sandbox.TruncationMarker: got %d bytes, tail %q", len(out), tail(out, 40))
+	}
+	// The captured payload itself (before the marker) must still be capped
+	// at cap bytes — a marker appended to an otherwise-unbounded buffer
+	// would defeat the whole point.
+	payload := strings.TrimSuffix(strings.TrimRight(out, "\n"), "\n"+sandbox.TruncationMarker)
+	if len(payload) > cap {
+		t.Fatalf("payload is %d bytes, want <= %d (the cap)", len(payload), cap)
+	}
+}
+
+func itoa(n int) string {
+	return strconv.Itoa(n)
+}
+
+func tail(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[len(s)-n:]
+}
+
 // The caller's own ctx still wins when it is TIGHTER than the runner's
 // timeout — the runner's bound is a backstop, never a widening of a deadline
 // the caller already set (adequacy.Score's per-mutant deadline is exactly
@@ -326,5 +395,72 @@ func TestWorkspaceRunnerRunTestVerboseReturnsTheOutput(t *testing.T) {
 	}
 	if got := read(t, root, "a.txt"); got != "ORIGINAL\n" {
 		t.Errorf("file left as %q after RunTestVerbose", got)
+	}
+}
+
+// TestWorkspaceRunnerEnumerateReturnsWhenAChildOutlivesTheCommand is the
+// regression for the review's Important 3: applyRunRestore used
+// exec.CommandContext + cmd.Run() with no process group, no cmd.Cancel and no
+// cmd.WaitDelay, so a command that exits cleanly while leaving a background
+// grandchild alive left that grandchild holding the inherited write end of
+// the output pipe — and cmd.Wait blocked on the copying goroutine FOREVER,
+// past the runner's own wall-clock bound. sandbox.Run has carried all three
+// guards for exactly this reason; this substrate never goes through it.
+//
+// `sh -c "sleep 120 & echo hello; exit 0"` is the minimal shape of an
+// ordinary suite that leaves a worker running (the reproduction in the
+// review), and 120s is far past both the runner's 2s bound and this test's
+// own 20s ceiling, so a hang here cannot pass by accident.
+func TestWorkspaceRunnerEnumerateReturnsWhenAChildOutlivesTheCommand(t *testing.T) {
+	root := wsTree(t, map[string]string{"a.txt": "ORIGINAL\n"})
+	w := NewWorkspaceRunner(root, 2*time.Second, WithWorkspaceMaxOutput(1<<20))
+
+	done := make(chan struct{})
+	var out string
+	var err error
+	go func() {
+		defer close(done)
+		out, err = w.Enumerate(context.Background(), nil,
+			[]string{"sh", "-c", "sleep 120 & echo hello; exit 0"})
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(20 * time.Second):
+		t.Fatal("Enumerate did not return within 20s: a leaked grandchild held the output pipe open")
+	}
+	if err != nil {
+		t.Fatalf("Enumerate = %v, want nil: the command itself exited 0", err)
+	}
+	if !strings.Contains(out, "hello") {
+		t.Errorf("Enumerate output = %q, want it to contain the command's own stdout", out)
+	}
+}
+
+// The RunTest half of the same defect: RunTestVerbose shares applyRunRestore
+// (and, being the variant that captures output, shares the inherited pipe
+// that a grandchild holds open), so it shares both the bug and the fix. A
+// non-zero exit stays a RESULT, not an error, even when a grandchild
+// outlives the command.
+func TestWorkspaceRunnerRunTestVerboseReturnsWhenAChildOutlivesTheCommand(t *testing.T) {
+	root := wsTree(t, map[string]string{"a.txt": "ORIGINAL\n"})
+	w := NewWorkspaceRunner(root, 2*time.Second)
+
+	done := make(chan struct{})
+	var ok bool
+	var err error
+	go func() {
+		defer close(done)
+		ok, _, err = w.RunTestVerbose(context.Background(), nil,
+			[]string{"sh", "-c", "sleep 120 & exit 1"})
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(20 * time.Second):
+		t.Fatal("RunTestVerbose did not return within 20s: a leaked grandchild held the output pipe open")
+	}
+	if ok || err != nil {
+		t.Fatalf("RunTestVerbose = (%v, %v), want (false, nil): a non-zero exit is a result", ok, err)
 	}
 }

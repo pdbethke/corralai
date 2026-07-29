@@ -255,6 +255,154 @@ A diff that touches no auditable candidate (a docs-only PR, or one that only
 touches files with no paired test) is a legitimate pass: the action prints
 `NOTHING IN SCOPE:` and exits 0.
 
+## Coverage pre-flight (`--preflight`) — CLI only, not yet an Action input
+
+`corral certify --repo` has a separate `--preflight` flag this action does
+not expose (there is no `preflight` `with:` input yet — pass it by invoking
+`corral` yourself instead of through the composite action, if you want it in
+CI today). It answers a different question than the audit above: not "how
+adequate are this repo's tests" but "which files does the suite ever touch
+at all" — useful on its own, especially for a repo where the audit's own
+test-pairing finds almost nothing (a common state for a JS/TS project, which
+this flag also cannot help with — see below).
+
+It runs the project's test suite **one extra time**, instrumented for
+coverage, and reports three buckets, printed only when the flag is given:
+
+- **executed** — files the instrumentation recorded at least one executed
+  statement in. Not a finding; the point of the flag. **On Go this is
+  broader than "a test ran against it"** — see the limitation below.
+- **measured and never executed** — files the instrumentation watched and
+  recorded zero executions for. This is the actual finding, and the only
+  bucket printed **by name**.
+- **not measured at all** — files outside the instrumented run's own scope,
+  or with nothing measurable in them (e.g. a genuinely empty `__init__.py`
+  the run legitimately never records either way). Printed **only as a
+  count**. A file lands here for reasons that have nothing to do with
+  whether it's tested — coverage.py's own `[tool.coverage.run] source =`
+  scoping is one; a zero-statement file is another — so naming one would be
+  an accusation about a file the run never actually looked at.
+
+**Coverage-grade evidence, not proof.** A `measured and never executed`
+verdict means the instrument saw nothing; it cannot see everything —
+subprocess calls, dynamic imports, and native extensions are common blind
+spots for both `coverage.py` and Go's own instrumentation. Treat a finding
+here as "worth a look", not as a certified defect the way a killed mutant is.
+
+**A known limitation on Go: "executed" can mean "imported", not "tested".**
+`-coverpkg=./...` (required — see the false-accusation section above) makes
+every test binary that *imports* a package instrument it, and Go runs a
+package's `init()` functions and package-level variable initializers at
+**import time**, before any test executes. A file whose only reachable
+statements live in an `init()` or a var initializer therefore shows up
+**executed** the moment anything imports it — even if the actual test run
+executes zero tests. Measured directly: on gin, `go test -run
+zzzNoSuchTest ./...` (a test selector that matches nothing, so zero tests
+run) still reports 1 file executed without `-coverpkg` and 3 with it — pure
+import-time execution, no test involved. On a larger repo the effect is
+larger: `-run zzzNoSuchTest` against grpc-go clears 71 files without
+`-coverpkg` and 135 with it. This means a **cleared** file (absent from the
+"measured and never executed" list) is a weaker claim on Go than it looks —
+it can mean "a test exercises this file's logic" or it can mean "something,
+somewhere, imports this package", and the pre-flight cannot currently tell
+you which. Distinguishing import-time execution from test-time execution
+properly needs different instrumentation (e.g. running with `-run
+^$` first to get an import-only baseline, then subtracting it) and is
+**not implemented on this branch** — noted here rather than fixed, so this
+doc does not overclaim what a Go "executed" verdict is worth.
+
+**Python's version of this is broader, not narrower.** In Python every
+module-scope `def` and `class` is itself a counted statement, so **merely
+importing a module clears it** — no `init()` equivalent required. Measured:
+a module containing one class (two methods) and two module-level functions,
+none of which any test calls, imported only transitively via its package
+`__init__.py`, reports **6 of its 12 statements covered** and lands in the
+**executed** bucket. Go's case needs the file's reachable statements to be
+specifically an `init()` or a var initializer; Python's fires on any
+imported module unconditionally. So on both languages a *cleared* file is a
+weaker claim than it looks, and on Python it is weaker still. The
+`--min-kill-rate` gate is unaffected — it grades measured kill rates, not
+this bucket.
+
+**A file exercised only by benchmarks reads as a finding.** `go test` does
+not run benchmarks, so a Go file reachable solely from a `Benchmark…`
+function is genuinely never executed by the suite and is reported as such.
+Literally accurate, occasionally surprising: `rs/zerolog`'s
+`diode/internal/diodes/poller.go` is reached only from a benchmark and is
+correctly named.
+
+**A repo where test-pairing finds nothing still gets a pre-flight.** The
+language set is derived from every enumerated *source* file, not from the
+paired-test candidate set — otherwise the pre-flight would inherit the exact
+limitation it exists to route around. Verified on
+`python-jsonschema/jsonschema`, which yields **0** audit candidates and 31
+Python files excluded as `no-paired-test`: the pre-flight runs.
+
+**Go and Python only.** The pre-flight is implemented for exactly two
+languages (`go test -coverpkg=./... -coverprofile=…` and `pytest`/`coverage
+run` + `coverage json`). Ruby, JavaScript, and TypeScript have no
+coverage-pre-flight plugin at all — this project does not document
+capability it hasn't built, so a scan in one of those languages reports
+`could not run: …` and names zero files, rather than guessing or silently
+doing nothing. The same fail-closed report is what you get when the coverage
+tool itself isn't installed on the runner (`coverage`/`pytest-cov` missing
+from the Python environment, for example) — `--preflight` never treats "the
+tool didn't run" as "nothing is covered".
+
+**A repo whose candidates span more than one language is not an automatic
+refusal.** One instrumented run genuinely cannot cover two languages, so
+with no explicit `-- <test-command>` (nothing to disambiguate with), or when
+the command given could plausibly belong to more than one of the candidate
+languages, the scan still declines the same way it always has. But
+`andrewyng/aisuite` — the repo this feature was built to help, and one this
+project got wrong in an earlier draft of this doc — has Python **and**
+TypeScript candidates, and `-- pytest -q` is not actually ambiguous just
+because the repo has files in a language nothing here can instrument:
+TypeScript has no coverage plugin at all, so Python is the *only* candidate
+language capable of answering the question, not merely the likeliest one.
+Given that command, this repo now runs the pre-flight; its TypeScript files
+simply never enter `CoverageMap.Executed` and land in "never measured" —
+the same tri-state contract every other out-of-language file already gets,
+never a name, never an accusation. Two languages that could both plausibly
+own the given command (concretely: Go, whose `CoverageCmd` accepts any
+non-empty test invocation by design, paired with any other language and
+almost any `--` command) still decline as genuinely ambiguous — this is a
+narrowing of the refusal, not its removal.
+
+**Cost: one suite run, but "one run" is not "instant".** The design's claim
+is O(1) in the number of source *files* — one instrumented invocation
+classifies every file in the repo, instead of the ~84-suite-runs-per-file
+the adversarial audit costs. That held on every repo in the foreign-repo
+sweep this flag was proven against: exactly one suite invocation regardless
+of file count. But the flag's wall clock is still bounded below by however
+long the project's *own* test suite takes to run once — a repo with a large,
+network-heavy suite pays that cost every time, independent of how many
+source files it has (`psf/requests`: 174 files walked, coverage pre-flight
+wall clock ≈80s, dominated by tests that make real network calls; `pallets/
+flask`: 321 files walked, ≈3s, because its suite itself runs in under a
+second). And on Go, closing a real false-positive found during that same
+sweep (below) required adding `-coverpkg=./...`, which makes the *profile
+size* — not the wall clock — scale with how many tested packages import a
+given file, not just with repo size; it is bounded the same way the rest of
+the pre-flight's output is (a hard cap, reported as `could not run:
+…truncated…` rather than a silently partial result, never a partial finding
+list).
+
+**A false accusation this flag caught in itself, on this sweep.** Proving
+this flag against `gin-gonic/gin` surfaced a real bug, not a documentation
+gap: without `-coverpkg=./...`, `go test -coverprofile=… ./...` only
+instruments each package's *own* tests, so a package with no `_test.go`
+files of its own always reports synthetic all-zero coverage — even when its
+exported code runs constantly via a shared interface from another package's
+tests. `codec/json/json.go` was reported `measured and NEVER executed` under
+the old command; the root package's own `errors_test.go` calls
+`json.API.Marshal`, which dispatches straight into that file, every run.
+Fixed by adding `-coverpkg=./...` (`internal/lang/go.go`); re-verified on
+the same repo, same commit, same suite — the finding disappears, because it
+was never real. This is the standard this feature is held to: a false
+`measured and never executed` verdict is worse than no pre-flight at all,
+and the fix belongs in the code, not a caveat in these docs.
+
 ## Inputs
 
 | Input | Required | Default | Meaning |

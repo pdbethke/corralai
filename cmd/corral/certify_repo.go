@@ -3,17 +3,21 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/reposcan"
@@ -51,6 +55,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	substrateFlag := fs.String("substrate", substrateJail, "where the audit runs: "+substrateJail+" (bwrap) or "+substrateWorkspace+" (mutate --repo in place; the caller IS the isolation boundary, e.g. an ephemeral CI runner)")
 	diffBase := fs.String("diff-base", "", "bound the scan to files changed since this git ref, instead of ranking + --top. In a PR the diff IS the bound: ranking and --top do not apply on this path")
 	minKillRateFlag := fs.String("min-kill-rate", "", "fail the scan (exit 1) if ANY audited file's kill rate is below this value (0.0-1.0 inclusive; a minimum, so a file exactly at the threshold passes). Opt-in: unset by default, so exit codes are unchanged unless this is given. Applies PER FILE, not to the aggregate — a well-tested file must not mask a weak one")
+	preflightFlag := fs.Bool("preflight", false, "run the project's test suite once with coverage instrumentation and report which source files it never executes. One extra suite run; reports coverage-grade evidence, not proof")
 	if err := fs.Parse(flagArgs); err != nil {
 		return 2
 	}
@@ -256,13 +261,61 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// on the baseline AND green on every mutant, which is not an error
 	// anywhere in the pipeline — it is a confident 0.00 kill rate landing in
 	// the report as a real measurement. Never fabricate a score.
-	if err := checkArgvSpansOneLanguage(checkArgv, jobs); err != nil {
-		fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
-		return 2
+	//
+	// The error is CAPTURED rather than returned on the spot, because this
+	// gate bounds THE AUDIT and the coverage pre-flight is not the audit: it
+	// is one instrumented run of ONE language's suite, over the enumerated
+	// source set, that grades nothing and mutates nothing. Returning here
+	// made the documented multi-language path unreachable in composition —
+	// `certify --repo aisuite --preflight -- pytest -q` (Python +
+	// TypeScript) took this exit-2 branch before runPreflight was ever
+	// called, so selectPreflightLanguage, added specifically to make that
+	// invocation work, could only ever be reached by a scan whose JOBS were
+	// single-language. The refusal itself is unchanged in strength: the
+	// audit still refuses, with the same message and the same exit 2, on
+	// every input it refused before.
+	argvErr := checkArgvSpansOneLanguage(checkArgv, jobs)
+
+	// --dry-run returns here, before any suite ever runs — including the
+	// pre-flight's own instrumented run. Dry run means no execution, full
+	// stop; --preflight opts INTO an extra suite run, it does not opt a dry
+	// run out of being dry. The audit's refusal still outranks it, exactly
+	// as when this check ran above.
+	if *dryRun {
+		if argvErr != nil {
+			fmt.Fprintf(stderr, "corral certify --repo: %v\n", argvErr)
+			return 2
+		}
+		return 0
 	}
 
-	if *dryRun {
-		return 0
+	// Placed here, deliberately: EVERY line --preflight can print lives
+	// behind this flag, so a run with it absent is byte-identical to today
+	// — no extra progress line, no extra report section, and (see
+	// runPreflight) the instrumented suite is never even invoked.
+	var preflightResult reposcan.CoverageMap
+	var preflightSources []string
+	if *preflightFlag {
+		// Independent of --top/--diff-base: this answers "what does the
+		// suite ever touch in this repo", not "what did THIS scan audit",
+		// so it is computed over every enumerated source file, not just the
+		// selected/audited subset — see enumeratedSourcePaths.
+		preflightSources = enumeratedSourcePaths(cands, excl[:enumExcl])
+		fmt.Fprintln(stdout, "  preflight: running the suite once with coverage instrumentation…")
+		preflightResult = ex.runPreflight(context.Background(), preflightSources)
+	}
+
+	// The audit cannot proceed, but the pre-flight above already answered
+	// its own separate question — so its report is printed before the
+	// refusal, and the refusal still exits 2. Without --preflight this is
+	// byte-for-byte the pre-existing behaviour, just reached a few lines
+	// later.
+	if argvErr != nil {
+		if *preflightFlag {
+			printPreflightReport(stdout, preflightResult, preflightSources)
+		}
+		fmt.Fprintf(stderr, "corral certify --repo: %v\n", argvErr)
+		return 2
 	}
 
 	workers, swarmReadout := resolveScanWorkers(*swarmFlag, *substrateFlag)
@@ -284,6 +337,13 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	nothingInScope := *diffBase != "" && len(selected) == 0
 
 	printRepoReport(stdout, rep, nothingInScope, minKillRate)
+	// A distinct section, never folded into Excluded/Ungradable/the audited
+	// fraction: this is an inventory alongside the audit, not a change to
+	// it (see the brief). Printed unconditionally when the flag was given,
+	// even when the pre-flight could not run at all.
+	if *preflightFlag {
+		printPreflightReport(stdout, preflightResult, preflightSources)
+	}
 	return repoScanExitCode(rep, nothingInScope, minKillRate)
 }
 
@@ -488,6 +548,396 @@ func checkArgvSpansOneLanguage(checkArgv []string, jobs []reposcan.Job) error {
 			"  One command cannot grade them all: the wrong-language files would report a 0.00 kill rate that was never measured.\n"+
 			"  Either drop `--` (each file is then graded with its own language's stock test command), or scan one language at a time",
 		len(langs), strings.Join(langs, ", "))
+}
+
+// preflightMaxOutput caps the coverage pre-flight's own instrumented suite
+// run at 8 MiB of combined stdout+stderr — overriding sandbox.Run's own
+// 16 KiB default (see adequacy.WithMaxOutput) via a jail/enumerator built
+// specifically for this one call, never for the scan's ordinary mutant runs
+// — and, on the workspace substrate, via adequacy.WithWorkspaceMaxOutput,
+// which did not exist until the review round below and left that substrate
+// completely unbounded until then (see the F1 note there).
+//
+// A real `coverage json` report was measured at 467 KB against a real
+// project (pallets/flask): at the 16 KiB default every real run truncates
+// before ParseCoverage ever sees valid JSON, so the pre-flight could not
+// succeed on any non-toy Python repository. 8 MiB is comfortably generous
+// headroom above that.
+//
+// For Go this cap is sized against the REDUCED profile
+// (goCoverageReduceScript in internal/lang/go.go), not the raw one
+// -coverpkg=./... produces. The raw profile is ~quadratic in package count
+// (measured up to 253 MB on grpc-go — see go.go's CoverageCmd doc comment)
+// and 8 MiB would not have been "generous headroom" for it at all; it would
+// have made the pre-flight fail closed (truncated, Ran=false) on any Go
+// repo above roughly a few dozen packages, including corral's own tree.
+// The reduction collapses that to one line per file BEFORE this cap ever
+// sees it — corral's own 53 MB raw profile reduces to a few KB — so 8 MiB
+// stays generous for Go too, for the profile this cap actually measures.
+const preflightMaxOutput = 8 << 20
+
+// preflightTimeout bounds the ONE instrumented suite run --preflight
+// performs. Coverage instrumentation adds real overhead over a plain test
+// run, so this is deliberately looser than the jail's own 60s
+// zero-value default (see sandbox.Run) that the scan's ordinary per-mutant
+// runs fall back to today.
+const preflightTimeout = 5 * time.Minute
+
+// coverageRunner is the minimal seam runPreflight needs to hand to
+// reposcan.Preflight — satisfied structurally by both *adequacy.WorkspaceRunner
+// and adequacy.Enumerator (bwrapJail), matching reposcan's own unexported
+// commandRunner exactly so either concrete substrate runner can be passed
+// straight through without reposcan and cmd/corral needing to share a type.
+type coverageRunner interface {
+	Enumerate(ctx context.Context, files map[string]string, cmd []string) (string, error)
+}
+
+// selectPreflightLanguage picks which language runPreflight instruments
+// when a scan's candidates span more than one — called only in that case;
+// the single-language case never reaches this function.
+//
+// With no explicit `-- <cmd>` there is no principled way to pick a stock
+// TestCmd() across multiple languages, so this always declines (langName
+// == "").
+//
+// With an explicit checkArgv, the operator's own command IS the
+// disambiguator, PROVIDED exactly one candidate language's
+// lang.CoverageReporter accepts it: try every candidate language's
+// CoverageCmd(checkArgv) (skipping any that doesn't implement
+// CoverageReporter at all, e.g. Ruby/JS/TS today — see internal/lang) and
+// count how many say yes. Exactly one match is unambiguous — this is what
+// makes andrewyng/aisuite (python + typescript candidates, `-- pytest -q`)
+// resolvable: typescript has no CoverageReporter, so python is the only
+// candidate at all, not merely the most likely one. Zero or more than one
+// match keeps the original blanket refusal: Go's CoverageCmd accepts ANY
+// non-empty argv by design (see go.go — it wraps whatever it's given
+// without inspecting shape), so a genuinely mixed python+go scan given `--
+// pytest -q` still declines rather than guess which language the operator
+// meant, exactly as before this function existed.
+func selectPreflightLanguage(langs map[string]bool, checkArgv []string) (langName string, note string) {
+	names := make([]string, 0, len(langs))
+	for n := range langs {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+
+	if len(checkArgv) > 0 {
+		var matches []string
+		for _, n := range names {
+			plug, ok := lang.ByName(n)
+			if !ok {
+				continue
+			}
+			reporter, ok := plug.(lang.CoverageReporter)
+			if !ok {
+				continue // no CoverageReporter for this language at all — never a match
+			}
+			if _, ok := reporter.CoverageCmd(checkArgv); ok {
+				matches = append(matches, n)
+			}
+		}
+		if len(matches) == 1 {
+			return matches[0], ""
+		}
+		if len(matches) > 1 {
+			return "", fmt.Sprintf(
+				"preflight: scan spans %d languages (%s) and the `--` test command matches more than one of them's coverage instrumentation (%s) — ambiguous, skipped",
+				len(names), strings.Join(names, ", "), strings.Join(matches, ", "))
+		}
+		// len(matches) == 0: none of the candidate languages' coverage
+		// instrumentation recognized the operator's own command either —
+		// falls through to the same refusal the no-checkArgv case returns.
+	}
+	return "", fmt.Sprintf(
+		"preflight: scan spans %d languages (%s) — one instrumented suite run cannot cover more than one, skipped",
+		len(names), strings.Join(names, ", "))
+}
+
+// preflightLanguages derives the language set the pre-flight may instrument
+// from the ENUMERATED SOURCE SET — every language-detected non-test file
+// reposcan.Enumerate walked — not from the candidate set.
+//
+// That distinction is the whole feature. Candidates are what corral's
+// test-PAIRING heuristic matched, and the pre-flight's stated justification
+// (README, docs/corral/github-action.md) is that pairing finds nothing in
+// repos that don't name tests after source files. Deriving the language set
+// from candidates made the pre-flight decline with "no candidates to
+// instrument" on exactly those repos — it inherited the limitation it was
+// built to route around. Measured before this fix: python-jsonschema/
+// jsonschema (0 candidates, 31 Python files excluded no-paired-test),
+// tox-dev/filelock (0/35), pallets/itsdangerous (0/10), pallets/markupsafe
+// (0/7) — four repos where the feature could not run at all.
+//
+// enumeratedSourcePaths is the same slice printPreflightReport buckets
+// against, so the languages instrumented and the files reported on are
+// derived from one set, not two that can drift apart.
+func preflightLanguages(sources []string) map[string]bool {
+	langs := map[string]bool{}
+	for _, p := range sources {
+		if plug, ok := lang.Detect(p); ok {
+			langs[plug.Name()] = true
+		}
+	}
+	return langs
+}
+
+// runPreflight runs the coverage pre-flight ONCE for the whole scan (never
+// once per audited file) over every ENUMERATED SOURCE FILE in the repo,
+// independent of --top/--diff-base AND of whether test-pairing made any of
+// them a candidate: it answers "what does the suite ever touch in this
+// repo", not "what did this particular scan choose to audit".
+//
+// One instrumented command can only speak one language. When every
+// candidate resolved to the same language plugin, that is the obvious
+// choice. When candidates span more than one language, this DECLINES BY
+// DEFAULT (a repo with no candidates also declines) — but not
+// unconditionally: see selectPreflightLanguage, which resolves the
+// multi-language case when the operator's own `-- <cmd>` unambiguously
+// names one of them (andrewyng/aisuite — python + typescript candidates —
+// is the repo this distinction exists for: `-- pytest -q` is not
+// ambiguous just because the repo also has files in a language nothing
+// here can instrument). A file belonging to a language this run never
+// instruments is not silently accused either way: it is simply ABSENT
+// from the resulting CoverageMap.Executed (never measured), which
+// splitPreflightFindings reports as a count, never a name — see Part 1's
+// tri-state contract on lang.CoverageReporter.ParseCoverage.
+func (l *localExecutor) runPreflight(ctx context.Context, sources []string) reposcan.CoverageMap {
+	langs := preflightLanguages(sources)
+	if len(langs) == 0 {
+		return reposcan.CoverageMap{Note: "preflight: no source files to instrument"}
+	}
+
+	var langName string
+	if len(langs) == 1 {
+		for n := range langs {
+			langName = n
+		}
+	} else {
+		var note string
+		langName, note = selectPreflightLanguage(langs, l.checkArgv)
+		if langName == "" {
+			return reposcan.CoverageMap{Note: note}
+		}
+	}
+
+	plug, ok := lang.ByName(langName)
+	if !ok {
+		return reposcan.CoverageMap{Note: fmt.Sprintf("preflight: unknown language %q", langName)}
+	}
+
+	testCmd := l.checkArgv
+	if len(testCmd) == 0 {
+		testCmd = plug.TestCmd()
+	}
+
+	var runner coverageRunner
+	var files map[string]string
+	var repoRoot string
+
+	if l.substrate == substrateWorkspace {
+		// The real checkout IS the workspace, and the command runs with
+		// cwd == l.repoDir == reposcan.Enumerate's own root — coverage.py
+		// already reports paths relative to that (see python.go's
+		// ParseCoverage doc comment), so there is nothing to relativize.
+		//
+		// WithWorkspaceMaxOutput mirrors the jail branch's WithMaxOutput
+		// below — a WorkspaceRunner built SPECIFICALLY for this one call,
+		// never reused for RunTest's ordinary per-mutant runs (which stay
+		// on this substrate's original unbounded bytes.Buffer). Without
+		// this, the workspace substrate had no cap at all on the
+		// instrumented profile it reads back — measured against grpc-go: a
+		// 253 MB profile read entirely into memory (827 MB peak RSS).
+		runner = adequacy.NewWorkspaceRunner(l.repoDir, preflightTimeout,
+			adequacy.WithWorkspaceMaxOutput(preflightMaxOutput))
+		files = map[string]string{}
+	} else {
+		if l.jailErr != nil {
+			return reposcan.CoverageMap{Note: fmt.Sprintf("preflight: %v", l.jailErr)}
+		}
+		if l.seeds == nil {
+			return reposcan.CoverageMap{Note: "preflight: no repo seed available"}
+		}
+		seed, serr := l.seeds.get(langName)
+		if serr != nil {
+			return reposcan.CoverageMap{Note: fmt.Sprintf("preflight: jail preparation failed for %s: %v", langName, serr)}
+		}
+		// A jail/enumerator built SPECIFICALLY for this one call — never
+		// reused for the scan's ordinary per-mutant runs, which must keep
+		// sandbox.Run's stock 16 KiB default (see preflightMaxOutput).
+		runner = adequacy.NewEnumerator(l.iso, preflightTimeout,
+			adequacy.WithReadOnlyBinds(seed.binds), adequacy.WithMaxOutput(preflightMaxOutput))
+		files = seed.files
+		// Same reasoning as the workspace branch: cmd.Dir is the jail's own
+		// ephemeral workspace root, which IS the seeded repo root, so
+		// coverage.py's paths are already relative to it.
+	}
+	if langName == "go" {
+		// Go's coverage profile paths are import paths, not filesystem
+		// paths, on EITHER substrate — always need the module prefix to
+		// strip it back to a repo-relative path (see go.go's ParseCoverage).
+		//
+		// Fail-closed on a go.mod this cannot parse: without the prefix
+		// nothing aligns and the report would be a confident
+		// `0 executed, 0 findings, N not measured` — the silent empty result
+		// (see goModulePath).
+		mp, merr := goModulePath(l.repoDir)
+		if merr != nil {
+			return reposcan.CoverageMap{Note: fmt.Sprintf("preflight: cannot determine the Go module path, so no coverage path could be resolved: %v", merr)}
+		}
+		repoRoot = mp
+	}
+
+	return reposcan.Preflight(ctx, runner, files, plug, testCmd, repoRoot)
+}
+
+// goModulePath reads the `module` directive out of repoDir's go.mod, for
+// stripping the import-path prefix goPlugin.ParseCoverage needs.
+//
+// It returns an ERROR rather than "" when it cannot find one, and that is
+// the point of the signature. Failing to parse the module line is not a
+// cosmetic miss: without the prefix, no profile path aligns with any
+// repo-relative source path, so every Go file falls out of
+// CoverageMap.Executed and the report reads `0 executed, 0 findings, N not
+// measured` — confident, empty, and indistinguishable from a genuinely
+// uninstrumented repo. A silent empty result is the one outcome this
+// feature's whole tri-state contract exists to prevent, so the caller
+// reports the failure instead (see runPreflight).
+//
+// Both legal spellings the earlier prefix-cut mis-parsed are handled: a
+// quoted path (`module "example.com/x"`, and its backquoted variant) and a
+// trailing `//` comment (`module example.com/x // v2`), plus tab separation.
+func goModulePath(repoDir string) (string, error) {
+	p := filepath.Join(repoDir, "go.mod")
+	f, err := os.Open(p) // #nosec G304,G703 -- repoDir is the operator's own --repo
+	if err != nil {
+		return "", fmt.Errorf("reading %s: %w", p, err)
+	}
+	defer func() { _ = f.Close() }()
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		rest, ok := strings.CutPrefix(line, "module")
+		if !ok {
+			continue
+		}
+		// "module" must be its own token: `moduleX ...` is not the
+		// directive, while `module\tpath` is.
+		if rest != "" && !strings.ContainsAny(rest[:1], " \t") {
+			continue
+		}
+		// A `//` comment may trail the directive; everything after it is
+		// commentary, not part of the path.
+		if i := strings.Index(rest, "//"); i >= 0 {
+			rest = rest[:i]
+		}
+		rest = strings.TrimSpace(rest)
+		// go.mod tokens may be quoted (") or raw-quoted (`).
+		if len(rest) >= 2 {
+			if (rest[0] == '"' && rest[len(rest)-1] == '"') || (rest[0] == '`' && rest[len(rest)-1] == '`') {
+				rest = rest[1 : len(rest)-1]
+			}
+		}
+		if rest == "" {
+			return "", fmt.Errorf("%s has a module directive with no path", p)
+		}
+		return rest, nil
+	}
+	if serr := scanner.Err(); serr != nil {
+		return "", fmt.Errorf("reading %s: %w", p, serr)
+	}
+	return "", fmt.Errorf("%s has no module directive", p)
+}
+
+// enumeratedSourcePaths reconstructs "every file reposcan.Enumerate treated
+// as source" — language-detected, not a test file — regardless of whether it
+// ended up a candidate. cands alone is a narrower set (Enumerate additionally
+// demoted an ambiguous pairing, or found no paired test, into an exclusion),
+// so this adds back the two Enumerate-level reasons that still describe a
+// language-detected, non-test file: ReasonNoPairedTest and
+// ReasonAmbiguousTest. enumOnlyExcl MUST be Enumerate's own exclusions only
+// (excl[:enumExcl] in runCertifyRepo) — later-appended reasons
+// (not-selected/ungoaled/derive-failed/source-too-large) describe candidates
+// already counted via cands, and re-detecting their language here would be
+// redundant, not wrong, but the caller passes the narrower slice anyway to
+// keep the two exclusion universes (Enumerate-level vs candidate-level) from
+// being conflated the same way the totalFiles accounting above avoids it.
+func enumeratedSourcePaths(cands []reposcan.Candidate, enumOnlyExcl []reposcan.Exclusion) []string {
+	seen := make(map[string]bool, len(cands)+len(enumOnlyExcl))
+	var out []string
+	add := func(p string) {
+		if !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	for _, c := range cands {
+		add(c.Path)
+	}
+	for _, e := range enumOnlyExcl {
+		if e.Reason != reposcan.ReasonNoPairedTest && e.Reason != reposcan.ReasonAmbiguousTest {
+			continue
+		}
+		if _, ok := lang.Detect(e.Path); ok {
+			add(e.Path)
+		}
+	}
+	return out
+}
+
+// preflightFindings splits the enumerated source set into the three buckets
+// --preflight reports, using CoverageMap's tri-state Executed map: present
+// true is bucket 1, present false is bucket 2 (the actual finding — a file
+// the run measured and never touched), and absent is bucket 3, reported only
+// as a COUNT, never by name — naming an unmeasured file would be an
+// accusation about a file the instrumented run never even looked at (e.g.
+// coverage.py's own [tool.coverage.run] source=[...] scoping).
+type preflightFindings struct {
+	executed    int
+	unexercised []string // measured, never executed — the real finding, sorted
+	notMeasured int
+}
+
+func splitPreflightFindings(sourceFiles []string, cm reposcan.CoverageMap) preflightFindings {
+	var f preflightFindings
+	for _, p := range sourceFiles {
+		v, measured := cm.Executed[p]
+		switch {
+		case !measured:
+			f.notMeasured++
+		case v:
+			f.executed++
+		default:
+			f.unexercised = append(f.unexercised, p)
+		}
+	}
+	sort.Strings(f.unexercised)
+	return f
+}
+
+// printPreflightReport prints the --preflight section: a separate inventory
+// alongside the audit report, never folded into Excluded/Ungradable/the
+// audited fraction (see the brief). When the pre-flight could not run
+// (Ran == false), only Note is printed and NO file list follows — there is
+// nothing to report a finding about.
+func printPreflightReport(w io.Writer, cm reposcan.CoverageMap, sourceFiles []string) {
+	fmt.Fprintln(w, "\nCoverage pre-flight (coverage-derived evidence from one instrumented suite run, not proof):")
+	if !cm.Ran {
+		fmt.Fprintf(w, "  could not run: %s\n", cm.Note)
+		return
+	}
+	f := splitPreflightFindings(sourceFiles, cm)
+	fmt.Fprintf(w, "  %d file(s) executed at least once\n", f.executed)
+	if f.notMeasured > 0 {
+		fmt.Fprintf(w, "  %d file(s) not measured by this run (never observed by the instrumentation — includes files outside its scope and files with nothing to measure — not a finding)\n", f.notMeasured)
+	}
+	if len(f.unexercised) == 0 {
+		fmt.Fprintln(w, "  0 file(s) measured and never executed by the suite")
+		return
+	}
+	fmt.Fprintf(w, "  %d file(s) measured and NEVER executed by the suite:\n", len(f.unexercised))
+	for _, p := range f.unexercised {
+		fmt.Fprintf(w, "    %s\n", p)
+	}
 }
 
 // repoScanExitCode is the scan's automated signal. A scan that measured

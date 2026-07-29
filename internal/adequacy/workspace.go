@@ -14,6 +14,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
 // WorkspaceRunner is a Jail (and Enumerator) that runs against a REAL
@@ -31,8 +33,40 @@ import (
 // its own. Use it only where the surrounding environment is already
 // disposable.
 type WorkspaceRunner struct {
-	root    string
-	timeout time.Duration
+	root      string
+	timeout   time.Duration
+	maxOutput int // 0 => unbounded (bytes.Buffer, today's behavior); see WithWorkspaceMaxOutput
+}
+
+// WorkspaceOption configures a WorkspaceRunner at construction
+// (NewWorkspaceRunner), the same variadic-functional-option shape
+// JailOption already uses for bwrapJail (WithReadOnlyBinds/WithMaxOutput).
+type WorkspaceOption func(*WorkspaceRunner)
+
+// WithWorkspaceMaxOutput bounds Enumerate's combined stdout+stderr to n
+// bytes (head-truncated via sandbox.CappedWriter, sandbox.TruncationMarker
+// appended) instead of buffering the command's output into an unbounded
+// bytes.Buffer.
+//
+// The workspace substrate never goes through sandbox.Run/Options.MaxOutput
+// at all — it execs the command directly, since the runner's own
+// environment (a CI job) IS the isolation boundary, not corral — so nothing
+// bounded its output before this option existed. That was fine for
+// RunTest's ordinary per-mutant runs (a compiler error or a test failure
+// summary is small), but reposcan's coverage pre-flight instruments the
+// WHOLE suite and reads back one combined profile: measured against
+// google.golang.org/grpc's own `go test ./...` with -coverpkg=./..., that
+// profile is 253 MB before reduction, read entirely into memory with no
+// cap on this substrate (827 MB peak RSS, vs 96 MB before -coverpkg — see
+// go.go's CoverageCmd doc comment for the reduction that also fixes this
+// from the other side). Default 0 (via NewWorkspaceRunner without this
+// option) preserves today's exact unbounded behavior for every other
+// caller — RunTest and RunTestVerbose never accept this option and stay on
+// bytes.Buffer unconditionally; only Enumerate consults maxOutput, and only
+// a WorkspaceRunner built specifically for the pre-flight call (never the
+// one certify_local.go builds for ordinary mutant runs) sets it.
+func WithWorkspaceMaxOutput(n int) WorkspaceOption {
+	return func(w *WorkspaceRunner) { w.maxOutput = n }
 }
 
 // defaultWorkspaceTimeout is the wall-clock bound a WorkspaceRunner built
@@ -56,11 +90,15 @@ const defaultWorkspaceTimeout = 60 * time.Second
 // hang the CI job forever instead of producing ErrTestTimeout.
 //
 // timeout <= 0 means defaultWorkspaceTimeout, never "unbounded".
-func NewWorkspaceRunner(root string, timeout time.Duration) *WorkspaceRunner {
+func NewWorkspaceRunner(root string, timeout time.Duration, opts ...WorkspaceOption) *WorkspaceRunner {
 	if timeout <= 0 {
 		timeout = defaultWorkspaceTimeout
 	}
-	return &WorkspaceRunner{root: root, timeout: timeout}
+	w := &WorkspaceRunner{root: root, timeout: timeout}
+	for _, o := range opts {
+		o(w)
+	}
+	return w
 }
 
 // bound derives the context one command runs under: the runner's own
@@ -261,7 +299,33 @@ func (w *WorkspaceRunner) applyRunRestore(ctx context.Context, files map[string]
 	cmd.Dir = w.root
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
+	// The wall-clock bound above is only a bound on the CONTEXT; without
+	// these three guards it is not a bound on the call. This substrate execs
+	// the command directly (the CI runner is the isolation boundary, so
+	// nothing here goes through sandbox.Run), and stdout/stderr are plain
+	// io.Writers, so os/exec hands the child an OS pipe and copies from it in
+	// a goroutine that cmd.Wait blocks on. A grandchild that outlives the
+	// command inherits the write end and keeps that goroutine — and therefore
+	// Wait — alive FOREVER, deadline or no deadline. An ordinary suite that
+	// leaves a background worker running is enough to trigger it. See
+	// sandbox.GuardProcess.
+	sandbox.GuardProcess(cmd)
 	runErr := cmd.Run()
+	// Order matters, and this check comes FIRST. Once WaitDelay exists, Wait
+	// can return late for a reason that has nothing to do with the command:
+	// the command exited on its own schedule and a leaked descendant held the
+	// pipe until either WaitDelay or the deadline force-closed it. In that
+	// case the command's own exit status is the honest answer, and
+	// ErrTestTimeout would be a claim about the command that is simply false
+	// ("corral could not run your suite" for a suite that ran and passed).
+	//
+	// st.Exited() is precisely the distinction: it is true only for a process
+	// that reached exit() itself, and false for one the cancel func killed —
+	// so a genuinely hanging command still falls through to ErrTestTimeout
+	// below, exactly as before.
+	if st := cmd.ProcessState; st != nil && st.Exited() {
+		return st.ExitCode() == 0, nil // a non-zero exit is a RESULT, not an error
+	}
 	if ctx.Err() != nil {
 		return false, ErrTestTimeout
 	}
@@ -282,6 +346,11 @@ func (w *WorkspaceRunner) applyRunRestore(ctx context.Context, files map[string]
 // caller wants whatever the command printed, e.g. a test listing that a
 // mutant made incomplete), not an error.
 func (w *WorkspaceRunner) Enumerate(ctx context.Context, files map[string]string, cmd []string) (string, error) {
+	if w.maxOutput > 0 {
+		buf := sandbox.NewCappedWriter(w.maxOutput)
+		_, err := w.applyRunRestore(ctx, files, cmd, buf, nil)
+		return buf.String(), err
+	}
 	var stdout bytes.Buffer
 	_, err := w.applyRunRestore(ctx, files, cmd, &stdout, nil)
 	return stdout.String(), err

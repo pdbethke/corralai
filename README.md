@@ -162,6 +162,37 @@ opt-in `min-kill-rate` input (`--min-kill-rate` on the CLI) fails the run
 when any *individual* audited file scores below the threshold you set. See
 **[docs/corral/github-action.md](docs/corral/github-action.md)**.
 
+**Coverage pre-flight (`--preflight`, CLI only, Go and Python).** `certify
+--repo --preflight` runs the project's test suite **one extra time**, with
+coverage instrumentation, and reports which source files it never touches at
+all — a whole-repo inventory for the cost of one suite run, instead of the
+~84-suite-runs-per-file the adversarial audit itself costs. It's
+**coverage-grade evidence, not proof**: instrumentation has blind spots
+(subprocesses, dynamic imports, native extensions), so the report separates
+what it actually knows into three buckets — files the suite **executed**,
+files it **measured and never executed** (the real finding, printed by
+name), and files it **never measured at all** (printed only as a count,
+never named — naming one would be an accusation about a file the run never
+looked at). On **both** Go and Python, "executed" can mean "imported" rather
+than "tested": Go runs `init()`/var-initializer code at import time, and in
+Python every module-scope `def` and `class` is a counted statement, so
+importing a module clears it outright — Python's exposure here is the wider
+of the two (see [docs/corral/github-action.md](docs/corral/github-action.md)
+for both measurements). Implemented for **Go and Python only** — Ruby, JS, and TS have
+no coverage-pre-flight plugin yet, so a scan in one of those languages reports
+that it could not run and names nothing, rather than guessing. A scan whose
+candidates span more than one language usually declines the same way — one
+instrumented run can't cover two — **unless** an explicit `-- <test-command>`
+unambiguously names exactly one of them (e.g. a Python+TypeScript repo with
+`-- pytest -q`: TypeScript has no coverage plugin at all, so Python is the
+only candidate, not merely the likeliest one — that repo is instrumented, its
+TypeScript files simply fall into "never measured"). Two languages that could
+both plausibly own the given command (e.g. Go, whose coverage command accepts
+any test invocation by design) still decline as ambiguous. Same fail-closed
+rule when the coverage tool itself is missing from the runner. Not yet wired
+into the GitHub Action as an input — today it's a `corral certify --repo`
+flag only.
+
 ## A knowledge corpus that makes every audit sharper
 
 Audit knowledge compounds instead of dying with each context.

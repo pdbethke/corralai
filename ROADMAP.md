@@ -144,6 +144,58 @@ Go binary.**
   `reposcan.RepoReport.Weakest`, never the aggregate, so one well-tested file can't mask
   a weak one. Docs:
   `docs/corral/github-action.md`.
+- **Coverage pre-flight (`--preflight`, `certify --repo`, Go and Python) — opt-in,
+  CLI only.** Test-pairing finds *some* untested files by guessing paired test names;
+  it finds nothing in a repo where that guess never lands (most JS/TS projects). The
+  pre-flight answers a narrower, cheaper question instead: run the suite **once**,
+  instrumented for coverage, and report which files it never executes at all — an
+  inventory, not an audit, and honest about the difference. Three buckets: **executed**
+  (not a finding), **measured and never executed** (the real finding, named), **never
+  measured** (a count only — coverage-scope and zero-statement files alike, never
+  named, never an accusation). Fails closed and says so — wrong language, an
+  irreducibly ambiguous multi-language scan, or the coverage tool itself missing from
+  the runner — and names zero files on any of those paths. A multi-language scan is
+  no longer an automatic refusal: with an explicit `-- <cmd>` that unambiguously names
+  one candidate language (Python + TypeScript with `-- pytest -q` — TypeScript has no
+  plugin, so Python is the only candidate, not merely the likeliest), the pre-flight
+  now runs instead of declining.
+  Proven on a foreign-repo sweep (`pallets/flask`, `psf/requests`, `andrewyng/aisuite`,
+  `gin-gonic/gin`, plus corral's own tree as the large-Go-module case): the design's
+  O(1)-in-file-count claim held (one suite invocation per repo, independent of file
+  count) but wall clock still tracks the *suite's own* runtime (flask ≈3s, requests
+  ≈80s, both instrumented once). **A four-finding review round followed the first
+  sweep and every one was closed before this shipped, not documented around:** (1) a
+  real false accusation in the Go path — a package with no tests of its own always
+  looked unexecuted, even when its code ran constantly via another package's tests —
+  fixed with `-coverpkg=./...`; (2) that fix's own cost — the raw profile scales
+  ~quadratically with package count (measured up to 253 MB on grpc-go, 53 MB on
+  corral's own tree) — closed by reducing the profile to one line per file inside the
+  same shell invocation before it ever reaches Go, verified byte-for-byte equivalent
+  to the unreduced tri-state answer; (3) the workspace substrate (what the GitHub
+  Action uses) had no output cap at all until this round — a 253 MB profile read
+  fully into memory, 827 MB peak RSS — now bounded the same way the jail substrate
+  always was; (4) a disclosed, not fixed, limitation — Go's `-coverpkg` makes
+  `init()`/var-initializer code at import time count as "executed" even with zero
+  tests run (measured: a test selector matching nothing still clears 3 of gin's files
+  and 135 of grpc-go's), which the docs now say plainly rather than implying "executed"
+  always means "tested" — and Python's version of that is **wider**, since every
+  module-scope `def`/`class` is a counted statement, so importing a module clears it
+  outright. Ruby/JS/TS have no plugin yet. Not wired into the GitHub
+  Action as an input — CLI flag only for now.
+
+  A **final whole-branch review** then hunted a fifth false accusation across 15
+  foreign repos and 3 synthetic ones, read every named file and grepped every suite,
+  and found **none** — but did find that the pre-flight **derived its language set
+  from the test-pairing candidate set**, so it declined outright on exactly the repos
+  it exists for (`jsonschema`, `filelock`, `itsdangerous`, `markupsafe` — 0 candidates
+  each, 31/35/10/7 unpaired Python files apiece). It now derives that set from every
+  enumerated *source* file. The same round fixed an unbounded hang in
+  `WorkspaceRunner` (no process group, `Cancel`, or `WaitDelay`, so a suite leaving a
+  background worker holding stdout blocked `Wait` forever — reproduced at 20s against
+  a 2s timeout, and hit for real on `python-dotenv` at 400s against a 5-minute bound),
+  made the documented multi-language `--` path actually reachable, stopped Go
+  discarding a usable profile whenever any test failed, and stopped a quoted or
+  comment-suffixed `go.mod` module line from silently voiding the whole Go report.
 
 **The substrate.**
 - **Multi-model, multi-forge; the `bwrap` + container jail; the attributed action

@@ -193,6 +193,27 @@ rule when the coverage tool itself is missing from the runner. Not yet wired
 into the GitHub Action as an input — today it's a `corral certify --repo`
 flag only.
 
+**The scan ledger (`--record`, CLI only).** `certify --repo --record` keeps
+what every scan already computes and normally just prints: a row per file
+the scan audited (with its kill rate) or rejected (with a machine-stable
+reason), plus one header row per invocation, in an embedded DuckDB file
+(`--record-db <path>`, default `$CORRALAI_SCANS_DB` or
+`~/.claude/corralai_scans.duckdb`). It's opt-in and off by default, and a
+recording failure — a full disk, a locked DuckDB file — never changes the
+scan's own verdict or exit code: it prints a loud line on stderr and the
+scan's result stands, because this command's exit code is a CI merge gate
+and a ledger write must never be able to red-build a PR over bookkeeping.
+**One writer at a time**: DuckDB locks its file for the process holding it
+open, so in a parallel CI matrix only the first concurrent `--record` run
+actually lands — the rest print the same loud fail-open line and lose
+their ledger entry, though their own gate verdict is unaffected. That's
+the right trade for a merge gate (a scan's pass/fail must never depend on
+winning a file lock), but point `--record-db` at a per-job path if you
+need every matrix leg's ledger kept. `--record` here is a **bool** —
+unlike `certify --local --record <file>.json` on the sibling subcommand,
+which takes a replayable-tape *path* — so don't hand it one; `--record-db`
+is where the ledger path goes.
+
 ## A knowledge corpus that makes every audit sharper
 
 Audit knowledge compounds instead of dying with each context.

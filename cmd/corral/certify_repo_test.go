@@ -6,8 +6,10 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"database/sql"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -18,6 +20,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	_ "github.com/marcboeker/go-duckdb/v2"
 
 	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/lang"
@@ -357,6 +361,645 @@ func TestCertifyRepoDiffBaseNonEmptyScopeNothingGradableExitsNonZero(t *testing.
 	}
 	if strings.Contains(out.String(), "NOTHING IN SCOPE") {
 		t.Errorf("a non-empty scope must not print the empty-scope line:\n%s", out.String())
+	}
+}
+
+// TestCertifyRepoRecordAbsentIsByteIdentical proves that adding --record and
+// --record-db did not change ANY existing behaviour when --record is not
+// given: same stdout, same stderr, same exit code as before this change, and
+// — because the flag decides whether scanstore.Open is ever called at all —
+// no ledger file appears even though --record-db names a path. The dry-run
+// fixture below runs the enumerate/select/emit accounting path without a
+// jail or a model call.
+func TestCertifyRepoRecordAbsentIsByteIdentical(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "pkg", "a_test.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "pkg", "b.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "README.md"), "# x\n")
+
+	goals := filepath.Join(root, "goals.json")
+	mustWrite(t, goals, `{"pkg/a.go": "must not panic"}`)
+
+	baseArgs := []string{"--repo", root, "--goals", goals, "--dry-run"}
+
+	var outWithout, errWithout bytes.Buffer
+	codeWithout := runCertifyRepo(baseArgs, &outWithout, &errWithout)
+
+	dsn := filepath.Join(t.TempDir(), "would-be-scans.duckdb")
+	argsWithDBFlag := append(append([]string{}, baseArgs...), "--record-db", dsn)
+	var outWithDBFlag, errWithDBFlag bytes.Buffer
+	codeWithDBFlag := runCertifyRepo(argsWithDBFlag, &outWithDBFlag, &errWithDBFlag)
+
+	if codeWithout != codeWithDBFlag {
+		t.Fatalf("exit code changed by merely naming --record-db (without --record): %d vs %d", codeWithout, codeWithDBFlag)
+	}
+	if outWithout.String() != outWithDBFlag.String() {
+		t.Fatalf("stdout changed by merely naming --record-db (without --record):\n--- baseline\n%s\n--- with --record-db\n%s", outWithout.String(), outWithDBFlag.String())
+	}
+	if errWithout.String() != errWithDBFlag.String() {
+		t.Fatalf("stderr changed by merely naming --record-db (without --record):\n--- baseline\n%s\n--- with --record-db\n%s", errWithout.String(), errWithDBFlag.String())
+	}
+	if _, statErr := os.Stat(dsn); !os.IsNotExist(statErr) {
+		t.Fatalf("--record-db named a path but --record was absent, yet a file exists there (stat err=%v) — no ledger may be opened when --record is off", statErr)
+	}
+}
+
+// TestCertifyRepoRecordFailsOpen proves the FAIL-OPEN contract: an
+// unopenable --record-db (a path inside a directory that does not exist)
+// prints a loud failure line on stderr, but the scan's own exit code is
+// UNCHANGED from the same scan run without --record at all — a full disk or
+// a busy DuckDB file must never red-build a CI merge gate over bookkeeping.
+// Both properties are asserted; asserting only one would not pin the
+// property (a bug that changed the exit code AND still printed the line
+// would slip past a test that checked only the stderr line, and vice
+// versa).
+//
+// The fixture is the SAME shape as
+// TestCertifyRepoDiffBaseNonEmptyScopeNothingGradableExitsNonZero: one
+// candidate is in scope (diff-base sees a real change) and its check
+// command is `-- false`, so the baseline fails deterministically and the
+// scan exits 1 (COULD-NOT-GRADE) — chosen deliberately over the
+// empty-diff-scope shape (which exits 0) because a fixture whose baseline
+// exit code is already 0 cannot distinguish "the exit code was preserved"
+// from "the record block returned 0 regardless" (an implementation that
+// hard-coded `return 0` after a failed write would still pass against a
+// 0-baseline fixture — the precise inversion that would silently turn a
+// real failing merge gate green). No jail or real model call is reached
+// either: `-- false` fails the baseline before any LLM would be invoked.
+func TestCertifyRepoRecordFailsOpen(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
+	root := t.TempDir()
+	gitRun := gitCmd(t, root)
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "pkg", "a_test.go"), "package pkg\n")
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+	base := gitRevParseHead(t, root)
+
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg // changed\n")
+	gitRun("add", "pkg/a.go")
+	gitRun("commit", "-q", "-m", "change", "--no-gpg-sign")
+
+	goals := filepath.Join(root, "goals.json")
+	mustWrite(t, goals, `{"pkg/a.go": "must not panic"}`)
+
+	// flagArgs and checkArgv (everything after "--") are split BEFORE flag
+	// parsing (splitCertifyArgs): --record/--record-db must be inserted
+	// before the "--", never appended after it, or they become arguments to
+	// the "false" check command instead of flags to this command.
+	flagArgs := []string{
+		"--repo", root, "--diff-base", base, "--goals", goals,
+		"--substrate", substrateWorkspace,
+	}
+	checkCmd := []string{"--", "false"}
+
+	var outNoRecord, errNoRecord bytes.Buffer
+	wantCode := runCertifyRepo(append(append([]string{}, flagArgs...), checkCmd...), &outNoRecord, &errNoRecord)
+	if wantCode != 1 {
+		t.Fatalf("fixture precondition failed: baseline run exited %d, want 1 (COULD-NOT-GRADE) — this test cannot tell a preserved exit code from a hard-coded 0 unless the baseline itself is non-zero: stdout=%s stderr=%s", wantCode, outNoRecord.String(), errNoRecord.String())
+	}
+
+	// A path inside a directory that was never created: scanstore.Open must
+	// fail (DuckDB cannot create the parent directory for its file).
+	badDSN := filepath.Join(root, "no-such-directory", "scans.duckdb")
+	recordArgs := append(append([]string{}, flagArgs...), "--record", "--record-db", badDSN)
+	recordArgs = append(recordArgs, checkCmd...)
+
+	var out, errb bytes.Buffer
+	code := runCertifyRepo(recordArgs, &out, &errb)
+
+	if code != wantCode {
+		t.Fatalf("a failed --record changed the exit code: got %d, want %d (identical to the same scan without --record)", code, wantCode)
+	}
+	if !strings.Contains(errb.String(), "scan ledger NOT written") {
+		t.Errorf("want a loud fail-open line on stderr, got: %q", errb.String())
+	}
+	if _, statErr := os.Stat(badDSN); statErr == nil {
+		t.Errorf("the unopenable DSN's parent directory does not exist, yet a file was created at %s", badDSN)
+	}
+}
+
+// TestCertifyRepoRecordRoundTripsReportedFiles proves the CLI actually wires
+// the report's own accounting into the ledger: every file the printed
+// report excluded, with its printed reason, is readable back from
+// scan_files with a matching disposition and reason. The fixture uses the
+// empty-diff-scope shape again (no jail, no model call) — it produces three
+// distinct exclusion reasons (no-language, no-paired-test, not-selected)
+// with zero audited files, which is enough to prove the wiring: the
+// audited-row shape (KillRate, Survivors, evidence "proven") is already
+// pinned directly against scanstore.Record by
+// TestRecordRoundTripsEveryDisposition in internal/scanstore — this test's
+// job is only to prove certify_repo_record.go hands the report's rows to it
+// correctly, not to re-prove scanstore's own contract.
+func TestCertifyRepoRecordRoundTripsReportedFiles(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
+	root := t.TempDir()
+	gitRun := gitCmd(t, root)
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "pkg", "a_test.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "pkg", "b.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "README.md"), "# x\n")
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+	base := gitRevParseHead(t, root)
+	// Nothing changes after base: a.go (a candidate) is excluded
+	// not-selected; b.go has no paired test; README.md has no language.
+
+	goals := filepath.Join(root, "goals.json")
+	mustWrite(t, goals, `{"pkg/a.go": "must not panic"}`)
+
+	dsn := filepath.Join(t.TempDir(), "scans.duckdb")
+	var out, errb bytes.Buffer
+	code := runCertifyRepo([]string{
+		"--repo", root, "--diff-base", base, "--goals", goals,
+		"--substrate", substrateWorkspace,
+		"--record", "--record-db", dsn,
+	}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit %d: stdout=%s stderr=%s", code, out.String(), errb.String())
+	}
+	if errb.Len() != 0 {
+		t.Fatalf("recording must not fail on a writable DSN, stderr=%q", errb.String())
+	}
+
+	re := regexp.MustCompile(`excluded (\S+) \((\S+)\)`)
+	matches := re.FindAllStringSubmatch(out.String(), -1)
+	if len(matches) < 3 {
+		t.Fatalf("fixture did not print the exclusion lines this test needs (want >= 3, got %d):\n%s", len(matches), out.String())
+	}
+
+	db, err := sql.Open("duckdb", dsn)
+	if err != nil {
+		t.Fatalf("open recorded ledger: %v", err)
+	}
+	defer db.Close()
+
+	for _, m := range matches {
+		path, wantReason := m[1], m[2]
+		var disposition, gotReason string
+		row := db.QueryRow(`SELECT disposition, reason FROM scan_files WHERE path = ?`, path)
+		if err := row.Scan(&disposition, &gotReason); err != nil {
+			t.Fatalf("no scan_files row for %s (printed as excluded with reason %s): %v", path, wantReason, err)
+		}
+		if disposition != "rejected" {
+			t.Errorf("%s recorded with disposition %q, want %q", path, disposition, "rejected")
+		}
+		if gotReason != wantReason {
+			t.Errorf("%s recorded with reason %q, want %q (from the printed report)", path, gotReason, wantReason)
+		}
+	}
+}
+
+// TestCertifyRepoRecordCoversExecutionStageRejections proves the fix for
+// the review finding that every EXECUTION-stage rejection (prep-failed,
+// baseline-failed, flaky-baseline, suite-ignores-file, executor-error,
+// cancelled) used to have NO row at all: reposcan.Aggregate tallies an
+// ungradable FileResult only into rep.Ungradable (a map[reason]int with no
+// per-file path), so a file the scan actually selected, emitted a job for,
+// and ran a check command against — the MOST EXPENSIVE rejections in the
+// product — was invisible to "why did file X get skipped on scan N", the
+// exact question internal/scanstore's package doc promises this ledger
+// answers.
+//
+// The fixture: one real candidate (pkg/a.go, paired with pkg/a_test.go,
+// goaled, and IN diff scope) whose check command is `-- false`, so its
+// baseline fails deterministically (ReasonBaselineFailed) — no jail, no
+// real model call, since a failed baseline short-circuits before any LLM
+// audit runs. Plus one enumerate-level exclusion (README.md, no-language)
+// to prove the fix didn't regress the OTHER source this function reads
+// from.
+//
+// Two things are asserted directly, both requested by the review:
+//  1. pkg/a.go — the file the scan actually worked on — has a scan_files
+//     row, disposition "rejected", reason "baseline-failed".
+//  2. count(scan_files) for this scan reconciles with scans.total_files:
+//     before this fix, total_files counted every file on disk (4:
+//     a.go, a_test.go, README.md, goals.json) while scan_files held only
+//     the 3 rows this function could see (a_test.go and README.md from
+//     Enumerate, goals.json is not a repo file at all so it was never a
+//     row) — a.go itself, the one file actually graded, was the missing
+//     row. This test would have failed before the fix: querying
+//     scan_files for pkg/a.go would have returned sql.ErrNoRows.
+func TestCertifyRepoRecordCoversExecutionStageRejections(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
+	root := t.TempDir()
+	gitRun := gitCmd(t, root)
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "pkg", "a_test.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "README.md"), "# x\n")
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+	base := gitRevParseHead(t, root)
+
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg // changed\n")
+	gitRun("add", "pkg/a.go")
+	gitRun("commit", "-q", "-m", "change", "--no-gpg-sign")
+
+	goals := filepath.Join(root, "goals.json")
+	mustWrite(t, goals, `{"pkg/a.go": "must not panic"}`)
+
+	dsn := filepath.Join(t.TempDir(), "scans.duckdb")
+	var out, errb bytes.Buffer
+	code := runCertifyRepo([]string{
+		"--repo", root, "--diff-base", base, "--goals", goals,
+		"--substrate", substrateWorkspace,
+		"--record", "--record-db", dsn,
+		"--", "false",
+	}, &out, &errb)
+	if code != 1 {
+		t.Fatalf("exit %d, want 1 (COULD-NOT-GRADE): stdout=%s stderr=%s", code, out.String(), errb.String())
+	}
+	if !strings.Contains(out.String(), "COULD-NOT-GRADE") {
+		t.Fatalf("fixture precondition failed: want the baseline-failed shape:\n%s", out.String())
+	}
+	if errb.Len() != 0 {
+		t.Fatalf("recording must not fail on a writable DSN, stderr=%q", errb.String())
+	}
+
+	db, err := sql.Open("duckdb", dsn)
+	if err != nil {
+		t.Fatalf("open recorded ledger: %v", err)
+	}
+	defer db.Close()
+
+	var scanID int64
+	var totalFiles int
+	if err := db.QueryRow(`SELECT id, total_files FROM scans ORDER BY id DESC LIMIT 1`).Scan(&scanID, &totalFiles); err != nil {
+		t.Fatalf("select the recorded scan header: %v", err)
+	}
+
+	var disposition, reason string
+	row := db.QueryRow(`SELECT disposition, reason FROM scan_files WHERE scan_id = ? AND path = ?`, scanID, "pkg/a.go")
+	if err := row.Scan(&disposition, &reason); err != nil {
+		t.Fatalf("pkg/a.go — the ONE file this scan actually ran a check command against — has no scan_files row: %v (this is the exact regression the review caught: execution-stage rejections were recorded nowhere)", err)
+	}
+	if disposition != "rejected" || reason != reposcan.ReasonBaselineFailed {
+		t.Errorf("pkg/a.go recorded as disposition=%q reason=%q, want rejected/%s", disposition, reason, reposcan.ReasonBaselineFailed)
+	}
+
+	// On disk: pkg/a.go, pkg/a_test.go, README.md, goals.json = 4 files, and
+	// goals.json IS inside the walked repo tree (it lives at root, same as
+	// the source files) — Enumerate classifies it no-language same as
+	// README.md, so it's an ordinary enumerate-level exclusion, not
+	// special-cased. cands = 1 (pkg/a.go); enumExcl = 3 (a_test.go is-test,
+	// README.md no-language, goals.json no-language); total_files =
+	// cands + enumExcl = 4. Pinned directly (not just cross-checked against
+	// rowCount below) so a future drift in this arithmetic fails loudly
+	// here instead of silently — this exact comment previously claimed 3,
+	// which was wrong, and nothing caught it because the only assertion was
+	// the reconciliation check, which passes for any matching pair.
+	if totalFiles != 4 {
+		t.Fatalf("scans.total_files = %d, want 4 (fixture precondition — see the comment above)", totalFiles)
+	}
+
+	var rowCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM scan_files WHERE scan_id = ?`, scanID).Scan(&rowCount); err != nil {
+		t.Fatalf("count scan_files: %v", err)
+	}
+	// This scan now records exactly 4 rows: a.go (rejected/baseline-failed),
+	// a_test.go (rejected/is-test), README.md (rejected/no-language),
+	// goals.json (rejected/no-language).
+	if rowCount != totalFiles {
+		t.Errorf("count(scan_files) = %d, scans.total_files = %d — the ledger's header and detail disagree; before this fix rowCount was 2 (a_test.go, README.md) against total_files 3, silently missing pkg/a.go", rowCount, totalFiles)
+	}
+}
+
+// TestCertifyRepoRecordTopReflectsTheEffectiveBound proves the fix for a
+// provenance overclaim the review caught: with --goals given and no
+// EXPLICIT --top, `limit` is forced to 0 (unbounded — a hand-written goals
+// map has already chosen the surface, see the comment above the else
+// branch in runCertifyRepo) while *topFlag stays its default (25). Before
+// the fix, scans.top recorded *topFlag — 25 — even though the scan applied
+// NO bound at all; a reader of the ledger could not tell that row apart
+// from a genuine top-25 scan. 0 is already --top's own sentinel for
+// "unbounded" (its help text: "0 or --all = every candidate"), so the fix
+// records the EFFECTIVE limit, which is already 0 in this exact shape —
+// no schema change needed, just recording the right number.
+//
+// The fixture: 3 goaled, paired candidates and no --top given at all —
+// mirrors TestCertifyRepoGoalsFileIsNotBoundedByTheDefaultTop's own
+// report-level assertion ("3 job(s)"), but checks the LEDGER's scans.top
+// column instead of stdout.
+func TestCertifyRepoRecordTopReflectsTheEffectiveBound(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
+	root := t.TempDir()
+	goalsMap := map[string]string{}
+	for _, n := range []string{"a", "b", "c"} {
+		mustWrite(t, filepath.Join(root, "pkg", n+".go"), "package pkg\n")
+		mustWrite(t, filepath.Join(root, "pkg", n+"_test.go"), "package pkg\n")
+		goalsMap["pkg/"+n+".go"] = "must not panic"
+	}
+	goalsJSON, err := json.Marshal(goalsMap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	goals := filepath.Join(root, "goals.json")
+	mustWrite(t, goals, string(goalsJSON))
+
+	dsn := filepath.Join(t.TempDir(), "scans.duckdb")
+	var out, errb bytes.Buffer
+	code := runCertifyRepo([]string{
+		"--repo", root, "--goals", goals, "--dry-run",
+		"--record", "--record-db", dsn,
+	}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit %d: stdout=%s stderr=%s", code, out.String(), errb.String())
+	}
+	if !strings.Contains(out.String(), "3 job(s)") {
+		t.Fatalf("fixture precondition failed: want all 3 goaled candidates unbounded (no --top given):\n%s", out.String())
+	}
+
+	// --dry-run never reaches the record block (see the fix for the
+	// sibling finding below), so this test drives a real
+	// (--substrate workspace, no jail/model-call-needed) run instead —
+	// baseline fails deterministically via `-- false`, so nothing is ever
+	// actually audited, but the SELECTION (all 3, unbounded) already
+	// happened before any job ran, which is what scans.top records.
+	dsn2 := filepath.Join(t.TempDir(), "scans2.duckdb")
+	var out2, errb2 bytes.Buffer
+	code2 := runCertifyRepo([]string{
+		"--repo", root, "--goals", goals, "--substrate", substrateWorkspace,
+		"--record", "--record-db", dsn2, "--", "false",
+	}, &out2, &errb2)
+	if code2 != 1 {
+		t.Fatalf("exit %d, want 1 (COULD-NOT-GRADE): stdout=%s stderr=%s", code2, out2.String(), errb2.String())
+	}
+	if errb2.Len() != 0 {
+		t.Fatalf("recording must not fail on a writable DSN, stderr=%q", errb2.String())
+	}
+
+	db, err := sql.Open("duckdb", dsn2)
+	if err != nil {
+		t.Fatalf("open recorded ledger: %v", err)
+	}
+	defer db.Close()
+
+	var top int
+	if err := db.QueryRow(`SELECT top FROM scans ORDER BY id DESC LIMIT 1`).Scan(&top); err != nil {
+		t.Fatalf("select scans.top: %v", err)
+	}
+	if top != 0 {
+		t.Errorf("scans.top = %d, want 0 (unbounded — this scan applied no --top bound at all; %d would positively assert a top-%d scan that never happened, indistinguishable from a real one)", top, defaultScanTop, defaultScanTop)
+	}
+}
+
+// TestCertifyRepoRecordDryRunSaysWhyItDidNotRecord proves the fix for a
+// review finding that --record --dry-run used to be silently inert: a dry
+// run computes and prints a complete disposition for every candidate
+// (exactly the payload this ledger exists to keep) but never runs a
+// single job, so there is nothing yet to record — and before this fix,
+// nothing was SAID about that either. Silence was the one option ruled
+// out (see the fix's own comment in runCertifyRepo): an operator watching
+// --record do nothing, with no message, cannot tell "this combination is
+// a no-op" from "the write silently failed".
+func TestCertifyRepoRecordDryRunSaysWhyItDidNotRecord(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "pkg", "a_test.go"), "package pkg\n")
+	goals := filepath.Join(root, "goals.json")
+	mustWrite(t, goals, `{"pkg/a.go": "must not panic"}`)
+
+	dsn := filepath.Join(t.TempDir(), "would-be-scans.duckdb")
+	var out, errb bytes.Buffer
+	code := runCertifyRepo([]string{
+		"--repo", root, "--goals", goals, "--dry-run",
+		"--record", "--record-db", dsn,
+	}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit %d: stdout=%s stderr=%s", code, out.String(), errb.String())
+	}
+	if !strings.Contains(errb.String(), "--record ignored") {
+		t.Errorf("want an explicit reason on stderr for why --record was a no-op on --dry-run, got: %q", errb.String())
+	}
+	if _, statErr := os.Stat(dsn); !os.IsNotExist(statErr) {
+		t.Errorf("--dry-run must still create no DB file even with --record given (stat err=%v)", statErr)
+	}
+}
+
+// TestCertifyRepoRecordUngradableEvidenceReflectsWhetherTheCheckRan proves
+// the fix for a review finding that every ungradable execution-stage
+// rejection was stamped evidence="proven", including prep-failed and
+// cancelled — the two reasons that mean the check command NEVER RAN at
+// all (prep-failed returns before localExecutor.Execute ever reaches
+// l.newBaseline; cancelled is written by reposcan.Scan itself before
+// ex.Execute is even called). "proven" is the label this table's
+// defensibility rests on ("corral actually executed something"), and
+// stamping it on a file nothing ever ran against is exactly the overclaim
+// evidence exists to prevent. This pins the unit directly (ungradableEvidence),
+// which is easier to drive across all 6 ungradable reasons than a full CLI
+// fixture for each one (prep-failed and cancelled specifically are hard to
+// reach through the public CLI without faking jail/context-cancellation
+// conditions) — the OTHER four reasons ARE covered end-to-end by
+// TestCertifyRepoRecordCoversExecutionStageRejections (baseline-failed).
+func TestCertifyRepoRecordUngradableEvidenceReflectsWhetherTheCheckRan(t *testing.T) {
+	neverRan := []string{reposcan.ReasonPrepFailed, reposcan.ReasonCancelled}
+	for _, reason := range neverRan {
+		if got := ungradableEvidence(reason); got != "" {
+			t.Errorf("ungradableEvidence(%q) = %q, want \"\" (the check command never ran for this reason)", reason, got)
+		}
+	}
+	ran := []string{reposcan.ReasonBaselineFailed, reposcan.ReasonFlakyBaseline, reposcan.ReasonSuiteIgnoresFile, reposcan.ReasonExecutorError}
+	for _, reason := range ran {
+		if got := ungradableEvidence(reason); got != "proven" {
+			t.Errorf("ungradableEvidence(%q) = %q, want \"proven\" (the check command ran at least once for this reason)", reason, got)
+		}
+	}
+}
+
+// TestCertifyRepoRecordPreflightOverlayRoundTrips proves --preflight's
+// finding actually reaches the ledger: preflight_state reads back
+// "executed" for a file the instrumented suite touched, "not-executed" for
+// a file it never touched, and "" for a path the pre-flight never measured
+// at all (a _test.go file, and go.mod — neither is a language-detected
+// SOURCE file the pre-flight instruments).
+//
+// This needs no jail, no API key and no real model call: the empty-diff-
+// scope shape (nothing changed since base) emits ZERO jobs, but the
+// pre-flight instruments every enumerated SOURCE file independent of
+// --diff-base (see runPreflight's own doc comment) — so a real
+// `go test ./...` DOES run, over a tiny two-function fixture module, on
+// --substrate workspace (no bwrap needed). It needs only the go toolchain
+// this test suite already depends on to build itself.
+func TestCertifyRepoRecordPreflightOverlayRoundTrips(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
+	root := t.TempDir()
+	gitRun := gitCmd(t, root)
+	mustWrite(t, filepath.Join(root, "go.mod"), "module fixture\n\ngo 1.21\n")
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n\nfunc Add(a, b int) int { return a + b }\n")
+	mustWrite(t, filepath.Join(root, "pkg", "a_test.go"), "package pkg\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) {\n\tif Add(1, 2) != 3 {\n\t\tt.Fatal(\"bad\")\n\t}\n}\n")
+	// b.go has no paired test — enumerate-level ReasonNoPairedTest, but it
+	// IS a language-detected source file, so the pre-flight still
+	// instruments it (see enumeratedSourcePaths): it must read back
+	// "not-executed", never absent, since nothing in this fixture ever
+	// calls Sub.
+	mustWrite(t, filepath.Join(root, "pkg", "b.go"), "package pkg\n\nfunc Sub(a, b int) int { return a - b }\n")
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+	base := gitRevParseHead(t, root)
+	// Nothing changes after base: the diff scope is empty (0 jobs), but the
+	// pre-flight still instruments the whole enumerated source set.
+
+	goals := filepath.Join(root, "goals.json")
+	mustWrite(t, goals, `{"pkg/a.go": "must not panic"}`)
+
+	dsn := filepath.Join(t.TempDir(), "scans.duckdb")
+	var out, errb bytes.Buffer
+	code := runCertifyRepo([]string{
+		"--repo", root, "--diff-base", base, "--goals", goals,
+		"--substrate", substrateWorkspace, "--preflight",
+		"--record", "--record-db", dsn,
+	}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit %d: stdout=%s stderr=%s", code, out.String(), errb.String())
+	}
+	if errb.Len() != 0 {
+		t.Fatalf("recording must not fail on a writable DSN, stderr=%q", errb.String())
+	}
+	if !strings.Contains(out.String(), "file(s) executed at least once") {
+		t.Fatalf("fixture precondition failed: --preflight did not actually run (need a working go toolchain):\n%s", out.String())
+	}
+
+	db, err := sql.Open("duckdb", dsn)
+	if err != nil {
+		t.Fatalf("open recorded ledger: %v", err)
+	}
+	defer db.Close()
+
+	for _, tc := range []struct{ path, want string }{
+		{"pkg/a.go", "executed"},
+		{"pkg/b.go", "not-executed"},
+		{"pkg/a_test.go", ""}, // a test file — never a pre-flight subject
+		{"go.mod", ""},        // not a language-detected source file
+	} {
+		var got string
+		if err := db.QueryRow(`SELECT preflight_state FROM scan_files WHERE path = ?`, tc.path).Scan(&got); err != nil {
+			t.Fatalf("%s: no scan_files row: %v", tc.path, err)
+		}
+		if got != tc.want {
+			t.Errorf("%s: preflight_state = %q, want %q", tc.path, got, tc.want)
+		}
+	}
+}
+
+// TestCertifyRepoRejectsFlagsAfterDashDash proves the fix for a silent-gate
+// bug: splitCertifyArgs (shared with `certify --local`) splits on the
+// first literal "--" with no idea which flags belong to `certify --repo`,
+// so a flag placed AFTER "--" by mistake used to be silently handed to the
+// check command as a plain argument instead of ever being parsed — no
+// error, no warning. For most flags that's confusing; for --min-kill-rate
+// it is dangerous: `-- pytest -q --min-kill-rate 0.5` used to run pytest
+// with "--min-kill-rate 0.5" as ordinary (ignored) arguments, apply NO
+// threshold at all, and let CI go green on a repo the threshold would have
+// failed. This must be a hard exit-2 usage error, never a warning (a
+// warning scrolls past in CI, and the failure mode is a gate that
+// silently never runs) — checked for both --min-kill-rate (the dangerous
+// one) and --record (this task's own flag).
+func TestCertifyRepoRejectsFlagsAfterDashDash(t *testing.T) {
+	root := t.TempDir()
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"min-kill-rate", []string{"--repo", root, "--dry-run", "--", "pytest", "-q", "--min-kill-rate", "0.5"}},
+		{"record", []string{"--repo", root, "--dry-run", "--", "pytest", "-q", "--record", "--record-db", "/tmp/x.duckdb"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out, errb bytes.Buffer
+			code := runCertifyRepo(tc.args, &out, &errb)
+			if code != 2 {
+				t.Fatalf("exit %d, want 2 (usage error): stdout=%s stderr=%s", code, out.String(), errb.String())
+			}
+			if !strings.Contains(errb.String(), "--"+tc.name) {
+				t.Errorf("stderr must name the offending flag %q, got: %q", "--"+tc.name, errb.String())
+			}
+		})
+	}
+}
+
+// TestCertifyRepoRejectsStrayPositionalAfterRecordPath is the OTHER door
+// the same silent-no-gate bug walks in through — the review's finding that
+// TestCertifyRepoRejectsFlagsAfterDashDash's own `--` fix (checkArgvNoFlagCollision)
+// does NOT close. `certify --local --record <file>.json` takes --record as
+// a STRING (a replayable tape path — README.md documents it at both
+// `corral certify --record <file>.json` and `--record <file>.json`), but
+// on `certify --repo` --record is a BOOL: an operator who types what they
+// already know from the sibling subcommand,
+// `--record tape.json --min-kill-rate abc`, gets "tape.json" as an
+// unconsumed positional. Go's flag.Parse stops at the first non-flag
+// argument and returns — --min-kill-rate is never even LOOKED at, let
+// alone validated or applied, and nothing says so: no error (the CONTROL
+// case below, `--min-kill-rate abc` alone, IS caught — "abc" is not a
+// number), no warning, the scan runs with the merge gate silently absent.
+// fs.NArg() > 0 after a clean Parse is what catches this, independent of
+// which flag or typo produced the stray token.
+func TestCertifyRepoRejectsStrayPositionalAfterRecordPath(t *testing.T) {
+	root := t.TempDir()
+
+	// Control: --min-kill-rate alone with a bad value IS caught today —
+	// this pins that the bug is specific to the stray-positional shape,
+	// not a general regression in --min-kill-rate validation.
+	var controlOut, controlErr bytes.Buffer
+	controlCode := runCertifyRepo([]string{"--repo", root, "--dry-run", "--min-kill-rate", "abc"}, &controlOut, &controlErr)
+	if controlCode != 2 {
+		t.Fatalf("control case: exit %d, want 2 (--min-kill-rate abc alone must already be rejected): stdout=%s stderr=%s", controlCode, controlOut.String(), controlErr.String())
+	}
+
+	// The bug: same bad --min-kill-rate value, but preceded by --record
+	// given the STRING-flag way (the sibling subcommand's own spelling).
+	var out, errb bytes.Buffer
+	code := runCertifyRepo([]string{
+		"--repo", root, "--dry-run",
+		"--record", "tape.json", "--min-kill-rate", "abc",
+	}, &out, &errb)
+	if code != 2 {
+		t.Fatalf("exit %d, want 2 (usage error: a stray positional must not silently swallow --min-kill-rate): stdout=%s stderr=%s", code, out.String(), errb.String())
+	}
+	if !strings.Contains(errb.String(), "tape.json") {
+		t.Errorf("stderr must name the stray positional %q, got: %q", "tape.json", errb.String())
+	}
+}
+
+// TestCertifyRepoAcceptsLegitimateCheckArgvWithUnrelatedFlags is the other
+// half of the same fix: a real check command carrying flags that are NOT
+// certify --repo's own must run completely untouched — a false positive
+// here would break every real invocation that gives -- <cmd> at all
+// (pytest, go test, and every other test runner's own flag surface).
+func TestCertifyRepoAcceptsLegitimateCheckArgvWithUnrelatedFlags(t *testing.T) {
+	root := t.TempDir()
+	for _, tc := range [][]string{
+		{"--repo", root, "--dry-run", "--", "pytest", "-q", "-x", "--tb=short"},
+		{"--repo", root, "--dry-run", "--", "go", "test", "./...", "-count=1"},
+	} {
+		var out, errb bytes.Buffer
+		code := runCertifyRepo(tc, &out, &errb)
+		if code != 0 {
+			t.Fatalf("args %v: exit %d, want 0 (a legitimate check command must not be rejected): stdout=%s stderr=%s", tc, code, out.String(), errb.String())
+		}
+	}
+}
+
+// TestCheckArgvNoFlagCollisionDerivesNamesFromTheFlagSet pins the
+// mechanism directly, without a full CLI invocation: names come from
+// fs.VisitAll (every flag ever registered, set or not), not a hardcoded
+// list, so a flag added to runCertifyRepo tomorrow is covered
+// automatically.
+func TestCheckArgvNoFlagCollisionDerivesNamesFromTheFlagSet(t *testing.T) {
+	fs := flag.NewFlagSet("t", flag.ContinueOnError)
+	fs.String("frobnicate", "", "made up for this test")
+
+	if err := checkArgvNoFlagCollision(fs, []string{"--frobnicate", "x"}); err == nil {
+		t.Fatal("want an error for a flag defined on fs, even one this test just invented")
+	}
+	if err := checkArgvNoFlagCollision(fs, []string{"-frobnicate=x"}); err == nil {
+		t.Fatal("want an error for the single-dash, =value spelling too")
+	}
+	if err := checkArgvNoFlagCollision(fs, []string{"--unrelated", "-q", "plain-arg"}); err != nil {
+		t.Fatalf("want no error for tokens that are not fs's own flags: %v", err)
 	}
 }
 

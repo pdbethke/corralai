@@ -475,3 +475,18 @@ measurement.
   deriver could not be CONSTRUCTED at all — the usual cause being no
   `model-key` (and no `goals` file) to derive goals with. Distinct from exit
   1: nothing was attempted, so nothing is being reported about your code.
+
+  **Also exit 2: a `test-command` containing one of corral's own flag names.**
+  Everything after `--` is your test command, and corral used to hand it
+  through unexamined — which meant `-- pytest -q --min-kill-rate 0.5` ran with
+  **no gate at all and no warning**, exiting green on a repo the threshold
+  would have failed. A silent-no-gate is the worst outcome available to a merge
+  gate, so corral now refuses instead, naming the offending token.
+
+  The cost of that trade is real: a few test runners have flags spelled the
+  same as corral's. Cypress's `--record` is the live example — `cypress run
+  --record` was accepted before and is refused now. Whole flag names only, so
+  `--recorder`, `--top-level` and `--substrate-foo` are untouched, and both
+  `--flag value` and `--flag=value` are caught. If your test command genuinely
+  needs a colliding flag, wrap it in a script and pass the script as
+  `test-command`.

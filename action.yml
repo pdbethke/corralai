@@ -2,7 +2,7 @@ name: "Corral adversarial test audit"
 description: "Breaks your code to check whether your tests notice. Runs in your own CI, on the checkout that is already there."
 inputs:
   test-command:
-    description: "The command that runs your tests, as a single-line invocation (e.g. 'go test ./...', 'pytest -k \"not slow\"'). Quoting is honoured; pipes, &&/||, redirection and globs are not."
+    description: "The command that runs your tests, as a single-line invocation (e.g. 'go test ./...', 'pytest -k \"not slow\"'). Quoting is honoured; pipes, &&/||, redirection and globs are not. It must not contain a flag spelled the same as one of corral's own (--min-kill-rate, --preflight, --record, --substrate, --diff-base, --top): corral refuses with exit 2 rather than silently swallowing it, because a swallowed --min-kill-rate is a merge gate that never runs. Cypress's --record is the live collision; wrap such a command in a script."
     required: true
   diff-base:
     description: "Audit only files changed against this ref. Defaults to the PR base; set empty to audit the whole repo (expensive)."

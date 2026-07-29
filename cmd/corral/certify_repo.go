@@ -22,6 +22,7 @@ import (
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/sandbox"
+	"github.com/pdbethke/corralai/internal/scanstore"
 )
 
 // defaultScanTop bounds a scan by default. Provisional: large enough to be
@@ -56,7 +57,48 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	diffBase := fs.String("diff-base", "", "bound the scan to files changed since this git ref, instead of ranking + --top. In a PR the diff IS the bound: ranking and --top do not apply on this path")
 	minKillRateFlag := fs.String("min-kill-rate", "", "fail the scan (exit 1) if ANY audited file's kill rate is below this value (0.0-1.0 inclusive; a minimum, so a file exactly at the threshold passes). Opt-in: unset by default, so exit codes are unchanged unless this is given. Applies PER FILE, not to the aggregate — a well-tested file must not mask a weak one")
 	preflightFlag := fs.Bool("preflight", false, "run the project's test suite once with coverage instrumentation and report which source files it never executes. One extra suite run; reports coverage-grade evidence, not proof")
+	recordFlag := fs.Bool("record", false, "record every file this scan audited or rejected, and why, into the DuckDB scan ledger (default: off). A BOOL here — unlike `certify --local`'s --record, which takes a tape PATH — see --record-db for where the ledger goes. A recording failure never changes the scan's verdict or exit code")
+	recordDSNFlag := fs.String("record-db", "", "path to the scan ledger (default: $CORRALAI_SCANS_DB, else ~/.claude/corralai_scans.duckdb)")
 	if err := fs.Parse(flagArgs); err != nil {
+		return 2
+	}
+
+	// splitCertifyArgs (shared with `certify --local`) knows nothing about
+	// this command's own flag set: it splits purely on the first literal
+	// "--", so any of THIS command's flags placed after it silently become
+	// arguments to the check command instead of being parsed at all. For
+	// most flags that is merely confusing; for --min-kill-rate it is a
+	// silent-no-gate: `-- pytest -q --min-kill-rate 0.5` hands
+	// "--min-kill-rate" and "0.5" to pytest as plain arguments, the
+	// threshold is never applied, and CI goes green on a repo the
+	// threshold would have failed — with NO error and NO warning. A
+	// warning is not enough here (it scrolls past in CI, and the failure
+	// mode is a gate that silently never ran), so this is a hard usage
+	// error naming the offending token, checked before anything else that
+	// could exit 0 or 1. Names are read from fs itself (fs.VisitAll),
+	// never hardcoded, so a flag added later is covered automatically
+	// instead of silently reproducing this exact bug class.
+	if err := checkArgvNoFlagCollision(fs, checkArgv); err != nil {
+		fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
+		return 2
+	}
+
+	// A stray positional argument almost always means a flag's VALUE spilled
+	// out of flag parsing and stopped it early — the exact trap this flag
+	// set sets for an operator who already knows `certify --local`: THERE,
+	// --record takes a STRING (a replayable tape path, `certify --local
+	// --record <file>.json`, documented in README.md); HERE it is a BOOL
+	// (see --record-db for the ledger path, above). An operator who types
+	// what they already know — `--record tape.json --min-kill-rate abc` —
+	// gets "tape.json" as an unconsumed positional, flag.Parse stops right
+	// there, and everything after it (here, --min-kill-rate) is silently
+	// NEVER PARSED: the scan runs with no gate and no ledger override, no
+	// error, no warning — the identical silent-no-gate
+	// checkArgvNoFlagCollision above exists to close, walking in through a
+	// different door. fs.NArg() catches it regardless of which flag or
+	// typo produced the stray token, not just this specific one.
+	if fs.NArg() > 0 {
+		fmt.Fprintf(stderr, "corral certify --repo: unexpected argument(s) %v — if this looks like a flag's value, note that --record here is a BOOL (see --record-db for the ledger path); flag.Parse stops at the first unrecognized positional and everything after it is silently never parsed\n", fs.Args())
 		return 2
 	}
 
@@ -90,6 +132,12 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		minKillRate = &v
 	}
 
+	// Captured here, before enumeration: this is the header row's
+	// provenance timestamp for the whole invocation, not just the audit
+	// portion of it. Read only if --record is given (see the fail-open call
+	// site near the bottom of this function).
+	startedAt := time.Now()
+
 	cands, excl, err := reposcan.Enumerate(*repoDir)
 	if err != nil {
 		fmt.Fprintf(stderr, "corral certify --repo: enumerating %s: %v\n", *repoDir, err)
@@ -106,6 +154,22 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// than exist on disk.
 	enumExcl := len(excl)
 
+	// effectiveTop is the bound this scan actually APPLIED, for the ledger
+	// header (see the --record call site) — deliberately NOT *topFlag. 0 is
+	// already --top's own sentinel for "unbounded" ("0 or --all = every
+	// candidate", per its help text above), so recording effectiveTop needs
+	// no new NULL/pointer plumbing: it just has to be the number that was
+	// actually checked, not the number the operator happened to type.
+	// Left at its zero value (0, unbounded) on the --diff-base branch below,
+	// where --top/--all are never consulted at all — the diff IS the bound
+	// there — and set from `limit` in the else branch. Recording *topFlag
+	// unconditionally was the bug: with --goals and no explicit --top,
+	// `limit` is forced to 0 a few lines down (an unbounded goals-map scan)
+	// while *topFlag stays its default 25 — measured on a real scan:
+	// "auditing 198 of 198 candidate(s)" recorded alongside `top=25`, a
+	// provenance row positively asserting a bound the scan never applied,
+	// indistinguishable from a genuine top-25 scan to any later reader.
+	var effectiveTop int
 	var selected []reposcan.Candidate
 	if *diffBase != "" {
 		// In a PR the diff IS the bound: ranking and --top exist to bound what
@@ -152,6 +216,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		if *goalsPath != "" && !flagWasSet(fs, "top") && !*allFlag {
 			limit = 0
 		}
+		effectiveTop = limit
 		var notSelected []reposcan.Exclusion
 		selected, notSelected = reposcan.Select(ranked, limit)
 		// Appending into excl is safe: notSelected is Select's own freshly
@@ -286,6 +351,20 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "corral certify --repo: %v\n", argvErr)
 			return 2
 		}
+		// --record is silently INERT on this path, never silently ignored:
+		// a dry run computes and prints a complete disposition for every
+		// file — precisely what the ledger exists to keep — but it never
+		// runs a single job (see the comment above), so there is nothing
+		// audited or execution-rejected to record yet; a --record write
+		// here would either record nothing real or misrepresent every
+		// still-pending job as a decided disposition. Silence was the one
+		// option ruled out: an operator who passed --record and sees
+		// neither a ledger write nor an explanation would reasonably
+		// assume either that the flag just did nothing, or worse, that
+		// it worked.
+		if *recordFlag {
+			fmt.Fprintln(stderr, "corral certify --repo: --record ignored — --dry-run performs no audit, so there is nothing yet to record")
+		}
 		return 0
 	}
 
@@ -344,7 +423,39 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	if *preflightFlag {
 		printPreflightReport(stdout, preflightResult, preflightSources)
 	}
-	return repoScanExitCode(rep, nothingInScope, minKillRate)
+
+	exitCode := repoScanExitCode(rep, nothingInScope, minKillRate)
+
+	// FAIL-OPEN, deliberately, and this is the one place in corral where
+	// uncertainty must not fail closed: this command's exit code is a CI
+	// merge gate. If a ledger write could change it, a full disk or a busy
+	// DuckDB file would red-build a pull request over bookkeeping. So a
+	// recording failure is printed loudly on stderr and the verdict and
+	// exit code decided above stand unchanged. Do not "fix" this into a
+	// failure path — that is precisely the bug this comment exists to head
+	// off. Placed after `code` is computed, and calling nothing that can
+	// panic into the exit path below.
+	if *recordFlag {
+		dsn := *recordDSNFlag
+		if dsn == "" {
+			dsn = defaultScanDSN()
+		}
+		scan := scanstore.Scan{
+			Owner: *owner, Repo: cfg.Repo, Commit: *commit,
+			Substrate: *substrateFlag, EngineVersion: version, ModelSet: cfg.ModelSet,
+			Top: effectiveTop, AllCandidates: *allFlag, DiffBase: *diffBase,
+			TotalFiles: totalFiles, Candidates: rep.Candidates, Audited: rep.Audited,
+			KillRate: killRatePtr(rep.KillRate), CacheHits: rep.CacheHits,
+			PreflightRan: preflightResult.Ran, PreflightNote: preflightResult.Note,
+			StartedAt: startedAt, FinishedAt: time.Now(),
+		}
+		files := buildScanFileRows(results, rep.Excluded, preflightResult)
+		if err := recordCertifyRepoScan(dsn, scan, files); err != nil {
+			fmt.Fprintf(stderr, "corral certify --repo: scan ledger NOT written: %v\n", err)
+		}
+	}
+
+	return exitCode
 }
 
 // parseMinKillRate parses and range-validates the --min-kill-rate flag value.
@@ -481,6 +592,56 @@ func resolveGoalSource(stderr io.Writer, repoDir, goalsPath, deriveModel string,
 	// rather than a nil interface: EmitJobs returns early on an empty candidate
 	// list today, and a nil GoalSource would be a trap the day that changes.
 	return noGoals{}, "", 0
+}
+
+// checkArgvNoFlagCollision reports whether checkArgv (the tokens after
+// "--", destined for the check command untouched) contains anything that
+// looks like one of fs's OWN flags — spelled with a leading "-" or "--",
+// optionally carrying "=value". splitCertifyArgs (shared with `certify
+// --local`) splits on the first literal "--" with zero knowledge of which
+// flags belong to this command, so a flag placed after "--" by mistake is
+// silently swallowed into the check command's own argv instead of being
+// parsed — see the call site for why that is dangerous specifically for
+// --min-kill-rate (a silently-skipped merge gate).
+//
+// Flag names come from fs.VisitAll — every flag ever registered on fs,
+// set or not — rather than a hardcoded list: a hardcoded list drifts the
+// first time a new flag is added to runCertifyRepo, silently stops
+// covering it, and reproduces exactly the bug class this check exists to
+// close.
+//
+// A bare token with no leading dash (the overwhelming majority of real
+// check-command arguments — "false", "-q"'s VALUE, a test path, "0.5")
+// never matches: TrimLeft strips leading dashes, and a token that had
+// none to begin with is left unchanged by it, which the equality check
+// below catches and skips. A single-dash short flag some OTHER tool
+// happens to define (pytest's "-q", "-x") only collides if its single
+// letter happens to equal one of THIS command's flag names outright,
+// which none of them do today (all are multi-letter) — so a real,
+// unrelated check command is never falsely rejected.
+func checkArgvNoFlagCollision(fs *flag.FlagSet, checkArgv []string) error {
+	names := map[string]bool{}
+	fs.VisitAll(func(f *flag.Flag) { names[f.Name] = true })
+
+	for _, tok := range checkArgv {
+		trimmed := strings.TrimLeft(tok, "-")
+		if trimmed == tok {
+			continue // no leading dash at all: not flag-shaped
+		}
+		if trimmed == "" {
+			continue // bare "--" or "-": not a named flag either
+		}
+		name := trimmed
+		if i := strings.IndexByte(name, '='); i >= 0 {
+			name = name[:i]
+		}
+		if names[name] {
+			return fmt.Errorf(
+				"the check command (after --) contains %q, which is one of this command's OWN flags — flags must be given BEFORE --, never after (splitCertifyArgs has no way to tell a real command-line argument from a misplaced flag). Move %q before -- ; if the check command genuinely needs a colliding token, wrap it in a script and pass the script as the check command instead",
+				tok, tok)
+		}
+	}
+	return nil
 }
 
 // flagWasSet reports whether the operator passed a flag explicitly, as opposed

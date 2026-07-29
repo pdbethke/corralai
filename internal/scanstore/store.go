@@ -49,10 +49,13 @@ type Scan struct {
 	// against this exact driver, MAX(kill_rate) over a table containing NaN
 	// returns NaN (displacing a real 0.9), `kill_rate > 0.5` MATCHES the NaN
 	// row, and `ORDER BY kill_rate DESC LIMIT 1` surfaces the never-measured
-	// scan FIRST — the exact inversion of "best-scoring". A caller must
+	// scan FIRST — the exact inversion of "best-scoring". A caller SHOULD
 	// convert math.NaN() to nil before constructing a Scan (see
-	// certify_repo_record.go's killRatePtr); Record does not re-check
-	// IsNaN itself, so this field is the load-bearing contract.
+	// certify_repo_record.go's killRatePtr, which does this at the
+	// source, where the intent is visible); Record additionally
+	// re-checks IsNaN itself as a backstop (see sanitizeKillRate below),
+	// so this field's *float64 type is the load-bearing contract, not
+	// caller discipline alone.
 	KillRate      *float64
 	CacheHits     int
 	PreflightRan  bool

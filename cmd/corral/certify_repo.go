@@ -379,7 +379,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			PreflightRan: preflightResult.Ran, PreflightNote: preflightResult.Note,
 			StartedAt: startedAt, FinishedAt: time.Now(),
 		}
-		files := buildScanFileRows(rep, preflightResult)
+		files := buildScanFileRows(results, rep.Excluded, preflightResult)
 		if err := recordCertifyRepoScan(dsn, scan, files); err != nil {
 			fmt.Fprintf(stderr, "corral certify --repo: scan ledger NOT written: %v\n", err)
 		}

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/scanstore"
 )
@@ -50,49 +51,119 @@ func killRatePtr(v float64) *float64 {
 }
 
 // buildScanFileRows turns one repo report into the rows scanstore.Record
-// wants — one per file the scan judged, audited or rejected. Both slices
-// are already complete and uncapped on rep (the printed report's top-10
-// "weakest files" list and 20-line exclusion listing are presentation
-// caps only; rep.Weakest and rep.Excluded themselves hold every file):
+// wants — one per file the scan judged, audited or rejected. It reads from
+// TWO sources, deliberately, not one:
 //
-//   - rep.Weakest holds every GRADABLE file, disposition "audited",
-//     evidence "proven" (execution, not a guess).
-//   - rep.Excluded holds every rejected file, both the enumerate-level
-//     reasons (no-language, is-test, no-paired-test, ambiguous-test,
-//     not-regular-file) and the candidate-level ones added later
-//     (ungoaled, source-too-large, derive-failed, not-selected),
-//     disposition "rejected", evidence "paired" (a filename-pairing
-//     decision, not a measurement).
+//   - results (reposcan.Scan's own return value, still in scope at the
+//     call site) — one FileResult per JOB actually run. A gradable result
+//     becomes an "audited" row (KillRate + Survivors, evidence "proven").
+//     An UNgradable result is still a row: prep-failed, baseline-failed,
+//     flaky-baseline, suite-ignores-file, executor-error and cancelled are
+//     the scan's MOST EXPENSIVE rejections — corral selected these files,
+//     emitted jobs for them, prepped a jail, and for every reason but
+//     cancelled actually ran the check command at least once — and before
+//     this fix they were tallied only in rep.Ungradable (a map[reason]int
+//     with no per-file paths) and had NO row here at all: a file the scan
+//     visibly worked on was invisible to "why did file X get skipped on
+//     scan N", the exact question this store exists to answer (see
+//     internal/scanstore/store.go's package doc). Evidence is "proven"
+//     here too — a failed run is still a real execution attempt, not a
+//     filename guess.
+//   - rep.Excluded — every file that never became a job at all: the
+//     enumerate-level reasons (no-language, is-test, no-paired-test,
+//     ambiguous-test, not-regular-file) and the candidate-level ones added
+//     before job emission (ungoaled, source-too-large, derive-failed,
+//     not-selected). These are decided by filename pairing or bookkeeping,
+//     never by running anything, so evidence defaults to "paired" — unless
+//     the coverage pre-flight (a SEPARATE, independent inventory over the
+//     same enumerated source set — see runPreflight) also measured this
+//     path, in which case evidence is promoted to "coverage": a row that
+//     carries a preflight_state IS carrying coverage-derived evidence, and
+//     Task 1's own TestRecordRoundTripsEveryDisposition models exactly
+//     that shape (reason "not-selected", preflight_state "not-executed",
+//     evidence "coverage") — leaving it "paired" here would silently
+//     contradict that fixture and make `WHERE evidence='coverage'` return
+//     nothing for a row that plainly has coverage evidence attached.
 //
-// preflightState overlays preflight_state onto both, but ONLY when the
-// coverage pre-flight actually ran — see preflightState's own doc comment
-// for why a path absent from the map must stay empty rather than being
-// recorded as "not-executed".
-func buildScanFileRows(rep reposcan.RepoReport, preflight reposcan.CoverageMap) []scanstore.File {
-	rows := make([]scanstore.File, 0, len(rep.Weakest)+len(rep.Excluded))
-	for _, f := range rep.Weakest {
-		kr := f.KillRate
+// A path cannot legitimately appear in both sources (results only holds
+// paths that became jobs; rep.Excluded only holds paths that never did),
+// but a `seen` set skips a second row for any path already written rather
+// than assume that invariant holds forever.
+//
+// preflightState overlays preflight_state onto every row, but ONLY when
+// the coverage pre-flight actually ran — see preflightState's own doc
+// comment for why a path absent from the map must stay empty rather than
+// being recorded as "not-executed".
+func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclusion, preflight reposcan.CoverageMap) []scanstore.File {
+	rows := make([]scanstore.File, 0, len(results)+len(excluded))
+	seen := make(map[string]bool, len(results)+len(excluded))
+
+	for _, r := range results {
+		path := r.Job.Path
+		if seen[path] {
+			continue
+		}
+		seen[path] = true
+
+		if r.Gradable {
+			kr := r.Verdict.DevKillRate
+			rows = append(rows, scanstore.File{
+				Path: path, Lang: r.Job.Lang, Disposition: "audited",
+				KillRate: &kr, Survivors: r.Verdict.Survivors, Gradable: true,
+				Evidence: "proven", PreflightState: preflightState(preflight, path),
+			})
+			continue
+		}
+
+		// Mirrors Aggregate's own fallback (internal/reposcan/report.go) so
+		// this row's reason always matches what rep.Ungradable[reason]
+		// counted for the same file — an empty Reason must not become an
+		// empty (and therefore useless) reason column.
+		reason := r.Reason
+		if reason == "" {
+			reason = reposcan.ReasonExecutorError
+		}
 		rows = append(rows, scanstore.File{
-			Path:           f.Path,
-			Disposition:    "audited",
-			KillRate:       &kr,
-			Survivors:      f.Survivors,
-			Gradable:       true,
-			Evidence:       "proven",
-			PreflightState: preflightState(preflight, f.Path),
+			Path: path, Lang: r.Job.Lang, Disposition: "rejected", Reason: reason,
+			Gradable: false, Evidence: "proven", PreflightState: preflightState(preflight, path),
 		})
 	}
-	for _, e := range rep.Excluded {
+
+	for _, e := range excluded {
+		if seen[e.Path] {
+			continue
+		}
+		seen[e.Path] = true
+
+		pfState := preflightState(preflight, e.Path)
 		rows = append(rows, scanstore.File{
-			Path:           e.Path,
-			Disposition:    "rejected",
-			Reason:         e.Reason,
-			Gradable:       false,
-			Evidence:       "paired",
-			PreflightState: preflightState(preflight, e.Path),
+			Path: e.Path, Lang: detectLang(e.Path), Disposition: "rejected", Reason: e.Reason,
+			Gradable: false, Evidence: exclusionEvidence(pfState), PreflightState: pfState,
 		})
 	}
 	return rows
+}
+
+// exclusionEvidence decides the evidence label for a file that was
+// excluded WITHOUT ever running (see buildScanFileRows). A non-empty
+// preflightState means the coverage pre-flight's own instrumented run
+// measured this exact path, which outranks a bare filename-pairing guess.
+func exclusionEvidence(preflightState string) string {
+	if preflightState != "" {
+		return "coverage"
+	}
+	return "paired"
+}
+
+// detectLang resolves a language name for a file the scan never ran (so
+// there is no Job.Lang to read) using the same lang.Detect the enumerator
+// itself uses. Empty when no plugin recognizes the path (e.g. README.md) —
+// never guessed.
+func detectLang(path string) string {
+	if plug, ok := lang.Detect(path); ok {
+		return plug.Name()
+	}
+	return ""
 }
 
 // preflightState answers, for one path, what the coverage pre-flight

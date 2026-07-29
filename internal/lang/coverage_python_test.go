@@ -3,9 +3,14 @@
 package lang
 
 import (
+	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The fixtures below are trimmed EXCERPTS of a real `coverage json -o -`
@@ -84,6 +89,32 @@ const fixtureAllZeroTotals = `{"meta": {"format": 3, "version": "7.15.2", "times
 const fixtureAbsolutePaths = `{"meta": {"format": 3, "version": "7.15.2", "timestamp": "2026-07-29T12:24:02.188610", "branch_coverage": false, "show_contexts": false}, "files": {"/tmp/claude-1000/-home-pdbethke-PycharmProjects-corralai/4b00f3f8-0a34-4550-a407-afd5b49fcd55/scratchpad/flask/src/flask/app.py": {"summary": {"covered_lines": 211, "num_statements": 435}}, "/usr/lib/python3.12/site-packages/somedep/__init__.py": {"summary": {"covered_lines": 3, "num_statements": 3}}}, "totals": {"covered_lines": 2056, "num_statements": 7808}}`
 
 const fixtureAbsolutePathsRoot = "/tmp/claude-1000/-home-pdbethke-PycharmProjects-corralai/4b00f3f8-0a34-4550-a407-afd5b49fcd55/scratchpad/flask"
+
+// fixtureAllCoveredOutsideRoot is a real captured `coverage json -o -`
+// report from a SECOND real project (not flask) built specifically to
+// reproduce review finding A: a src-layout package (src/mypkg2/__init__.py)
+// installed NON-EDITABLE (`pip install .`) into a venv OUTSIDE the repo
+// checkout, with `[tool.coverage.run] source = ["mypkg2"]` and — critically —
+// NO `[tool.coverage.paths]` remap (flask's own pyproject.toml has one,
+// which is why flask alone never exposed this). Reproduced directly:
+//
+//	$ python3 -m venv /…/pkgrepo2venv   # OUTSIDE the repo checkout
+//	$ source /…/pkgrepo2venv/bin/activate
+//	$ pip install -q .                  # non-editable
+//	$ python3 -m coverage run -m pytest -q
+//	$ python3 -m coverage json -o -
+//
+// gave a single file entry, covered_lines: 2, at an ABSOLUTE path under the
+// venv (…/pkgrepo2venv/lib/python3.12/site-packages/mypkg2/__init__.py) —
+// NOT under the repo root. totals.covered_lines is 2 (nonzero — the suite
+// genuinely ran), so the C1 zero-totals check does not fire; the one file
+// with real coverage is outside modulePath, so the old per-entry-skip-only
+// logic returned an empty map with a nil error — a suite that ran green,
+// reported as touching nothing in the repo. The fed-through-the-real-
+// ParseCoverage transcript (before the fix) is in task-2-report.md.
+const fixtureAllCoveredOutsideRoot = `{"meta": {"format": 3, "version": "7.15.2", "timestamp": "2026-07-29T12:44:21.124725", "branch_coverage": false, "show_contexts": false}, "files": {"/tmp/claude-1000/-home-pdbethke-PycharmProjects-corralai/4b00f3f8-0a34-4550-a407-afd5b49fcd55/scratchpad/pkgrepo2venv/lib/python3.12/site-packages/mypkg2/__init__.py": {"summary": {"covered_lines": 2, "num_statements": 2}}}, "totals": {"covered_lines": 2, "num_statements": 2}}`
+
+const fixtureAllCoveredOutsideRootRoot = "/tmp/claude-1000/-home-pdbethke-PycharmProjects-corralai/4b00f3f8-0a34-4550-a407-afd5b49fcd55/scratchpad/pkgrepo2"
 
 func TestPythonParseCoverageExecutedFiles(t *testing.T) {
 	p := pyPlugin{}
@@ -166,6 +197,62 @@ func TestPythonParseCoverageAbsolutePathWithNoModulePathIsError(t *testing.T) {
 	}
 }
 
+// TestPythonParseCoverageAllPositiveEntriesOutsideRootIsError pins the
+// finding-A fix: totals.covered_lines > 0 (the suite genuinely ran) but
+// EVERY entry with covered_lines > 0 lands outside modulePath after the
+// per-entry filter — not a legitimate empty result, an alignment failure
+// (wrong modulePath, or a project needing a coverage.py
+// [tool.coverage.paths] remap corral cannot see). Must be an error, not an
+// empty map with a nil error.
+func TestPythonParseCoverageAllPositiveEntriesOutsideRootIsError(t *testing.T) {
+	p := pyPlugin{}
+	got, err := p.ParseCoverage(fixtureAllCoveredOutsideRoot, fixtureAllCoveredOutsideRootRoot)
+	if err == nil {
+		t.Fatalf("ParseCoverage(fixtureAllCoveredOutsideRoot, root) = %v, nil error; want an error", got)
+	}
+	if got != nil {
+		t.Fatalf("ParseCoverage(fixtureAllCoveredOutsideRoot, root) returned non-nil map %v alongside an error", got)
+	}
+}
+
+// TestPythonParseCoverageModulePathTrailingSlashStillAligns pins the C fix:
+// modulePath is normalised (filepath.Clean) before use, so a caller passing
+// a trailing slash ("/root/") or the bare root ("/") still aligns absolute
+// report paths correctly instead of silently missing every entry the way an
+// un-normalised "root+\"/\"" prefix match would (a caller-contract slip
+// landing in exactly finding A's failure mode).
+func TestPythonParseCoverageModulePathTrailingSlashStillAligns(t *testing.T) {
+	p := pyPlugin{}
+	got, err := p.ParseCoverage(fixtureAbsolutePaths, fixtureAbsolutePathsRoot+"/")
+	if err != nil {
+		t.Fatalf("ParseCoverage with trailing-slash modulePath: %v", err)
+	}
+	want := map[string]bool{"src/flask/app.py": true}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("executed set = %v, want %v", got, want)
+	}
+}
+
+// TestPythonParseCoverageDotDotEscapeIsSkippedNotEmitted pins the other half
+// of the C fix: an absolute report path that only appears to be under
+// modulePath as an un-Clean'd string (e.g. "/root/../other/x.py") is
+// Clean'd before the prefix match, so it is correctly recognised as OUTSIDE
+// modulePath (and skipped) rather than relativized to a non-repo-relative
+// "../other/x.py" and emitted into the executed set.
+func TestPythonParseCoverageDotDotEscapeIsSkippedNotEmitted(t *testing.T) {
+	p := pyPlugin{}
+	root := "/repo"
+	report := `{"meta": {"format": 3}, "files": {"/repo/../repo-other/x.py": {"summary": {"covered_lines": 5}}, "/repo/real.py": {"summary": {"covered_lines": 1}}}, "totals": {"covered_lines": 6}}`
+	got, err := p.ParseCoverage(report, root)
+	if err != nil {
+		t.Fatalf("ParseCoverage: %v", err)
+	}
+	want := map[string]bool{"real.py": true}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("executed set = %v, want %v (the ../ escape must be skipped, not emitted)", got, want)
+	}
+}
+
 // TestPythonParseCoverageUnparseableIsError mirrors the Go plugin's test of
 // the same name: a report ParseCoverage cannot make sense of must come back
 // as an error, never a silently-empty map, because a later caller turns "no
@@ -213,6 +300,11 @@ func TestPythonCoverageCmdAcceptedShapes(t *testing.T) {
 		{"bare pytest", []string{"pytest", "-q"}},
 		{"bare py.test", []string{"py.test", "-q"}},
 		{"bare pytest, no extra args", []string{"pytest"}},
+		// Finding B: pytest's OWN "-m <marker-expression>" flag (action.yml-
+		// documented, mainstream) must not be misread by the
+		// [interpreter,"-m",<module>,...] branch as "run module -m as a
+		// module" — the bare-pytest branch must win.
+		{"bare pytest with -m marker expression", []string{"pytest", "-m", "not slow"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -228,6 +320,33 @@ func TestPythonCoverageCmdAcceptedShapes(t *testing.T) {
 				t.Fatalf("CoverageCmd(%v) script = %q, missing expected coverage invocations", c.testCmd, script)
 			}
 		})
+	}
+}
+
+// TestPythonCoverageCmdMarkerExpressionNotMisreadAsModule pins the exact
+// finding-B failure mode: before the fix, ["pytest","-m","not slow"] matched
+// the [interpreter,"-m",<module>,...] branch FIRST (interp="pytest",
+// module="not"?? no — interp="pytest", then testCmd[2:]=["not slow"] was
+// treated as the module+args to run under `coverage run -m`), building
+// `'pytest' -m coverage run -m 'not slow'` — running pytest with marker
+// expression "coverage" and positional args "run"/"not slow", never the
+// operator's actual suite. The fix reorders the switch so the bare-pytest
+// branch wins, building `coverage run -m pytest -m 'not slow'` instead —
+// pytest itself, given its own -m marker expression.
+func TestPythonCoverageCmdMarkerExpressionNotMisreadAsModule(t *testing.T) {
+	p := pyPlugin{}
+	cmd, ok := p.CoverageCmd([]string{"pytest", "-m", "not slow"})
+	if !ok {
+		t.Fatalf("CoverageCmd ok=false")
+	}
+	script := cmd[2]
+	wantRunPart := "-m coverage run -m " + shellQuote("pytest") + " " + shellQuote("-m") + " " + shellQuote("not slow")
+	if !strings.Contains(script, wantRunPart) {
+		t.Fatalf("script = %q, want it to contain %q (pytest run WITH its own -m marker expression, not misread as a module to run)", script, wantRunPart)
+	}
+	badRunPart := "coverage run -m " + shellQuote("not slow")
+	if strings.Contains(script, badRunPart) {
+		t.Fatalf("script = %q contains the finding-B bug shape (marker expression misread as a module)", script)
 	}
 }
 
@@ -282,6 +401,47 @@ func TestPythonCoverageCmdShellInjectionPayloadsAreInert(t *testing.T) {
 			// that shellQuote would have emitted.
 			if !strings.Contains(script, shellQuote(payload)) {
 				t.Fatalf("CoverageCmd script does not contain the shell-quoted form of payload %q; script = %q", payload, script)
+			}
+		})
+	}
+}
+
+// TestPythonCoverageCmdShellInjectionPayloadsAreInertWhenExecuted strengthens
+// the string-match test above by actually RUNNING the built script and
+// checking for a real side effect: each payload, if it escaped quoting,
+// would create a marker file via a separately-executed shell command. It
+// does not require coverage/pytest to be installed or importable — the
+// `python3 -m coverage ...` invocation itself is allowed to fail (module not
+// found, etc); the only thing under test is whether the injected shell
+// command ever ran at all. Skips cleanly if "sh" is not on PATH.
+func TestPythonCoverageCmdShellInjectionPayloadsAreInertWhenExecuted(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no sh on PATH")
+	}
+	p := pyPlugin{}
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "pwned")
+	payloads := []string{
+		`-q'; touch ` + marker + ` #`,
+		"-q\ntouch " + marker,
+		"-q$(touch " + marker + ")",
+		"-q`touch " + marker + "`",
+		"-q && touch " + marker,
+		"-q; touch " + marker,
+	}
+	for _, payload := range payloads {
+		t.Run(payload, func(t *testing.T) {
+			_ = os.Remove(marker)
+			cmd, ok := p.CoverageCmd([]string{"pytest", payload})
+			if !ok {
+				t.Fatalf("CoverageCmd ok=false")
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			c := exec.CommandContext(ctx, cmd[0], cmd[1:]...)
+			_ = c.Run() // exit status is irrelevant; only the marker matters.
+			if _, statErr := os.Stat(marker); statErr == nil {
+				t.Fatalf("injection payload %q executed for real — marker file %s was created", payload, marker)
 			}
 		})
 	}

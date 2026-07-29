@@ -740,7 +740,7 @@ func printPreflightReport(w io.Writer, cm reposcan.CoverageMap, sourceFiles []st
 	f := splitPreflightFindings(sourceFiles, cm)
 	fmt.Fprintf(w, "  %d file(s) executed at least once\n", f.executed)
 	if f.notMeasured > 0 {
-		fmt.Fprintf(w, "  %d file(s) not measured by this run (outside the instrumentation's own scope — not a finding)\n", f.notMeasured)
+		fmt.Fprintf(w, "  %d file(s) not measured by this run (never observed by the instrumentation — includes files outside its scope and files with nothing to measure — not a finding)\n", f.notMeasured)
 	}
 	if len(f.unexercised) == 0 {
 		fmt.Fprintln(w, "  0 file(s) measured and never executed by the suite")

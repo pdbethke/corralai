@@ -97,6 +97,25 @@ func (goPlugin) ListTestsCmd(testPath string) ([]string, bool) {
 // command and a single stdout stream), was verified clean. See
 // .superpowers/sdd/2026-07-29-coverage-preflight/task-1-report.md for the
 // transcript.
+//
+// -coverpkg=./... is REQUIRED, not cosmetic. Go's default (no -coverpkg)
+// instruments each test binary for ONLY the package it directly tests — a
+// package with no _test.go files of its own gets a synthetic all-zero
+// coverage line, even when its exported functions are called constantly by
+// OTHER packages' tests through a shared interface or package-level var.
+// Verified on gin (task 5 foreign-repo sweep): plain `go test -coverprofile
+// ./...` reported codec/json/json.go as "measured, never executed", but
+// errors_test.go (package gin, root) calls json.API.Marshal — which
+// dispatches to json.go's own jsonApi.Marshal at runtime under the default
+// build tags — every run. That is a false accusation of the exact kind
+// this feature exists to refuse: with -coverpkg=./... added, the same file
+// shows real (non-zero) execution counts, sourced from the root package's
+// test binary. The cost is real too — every test binary now instruments
+// every package the -coverpkg pattern resolves to that it actually
+// imports, so the profile carries one block set per (test binary ×
+// imported covered package) instead of one per test binary — and is
+// bounded the same way any other pre-flight output is, by
+// preflightMaxOutput / the truncation check in reposcan.Preflight.
 func (goPlugin) CoverageCmd(testCmd []string) (cmd []string, ok bool) {
 	if len(testCmd) == 0 {
 		return nil, false
@@ -106,7 +125,7 @@ func (goPlugin) CoverageCmd(testCmd []string) (cmd []string, ok bool) {
 		quoted[i] = shellQuote(arg)
 	}
 	script := `f=$(mktemp) && trap 'rm -f "$f"' EXIT && ` +
-		strings.Join(quoted, " ") + ` -coverprofile="$f" && cat "$f"`
+		strings.Join(quoted, " ") + ` -coverpkg=./... -coverprofile="$f" && cat "$f"`
 	return []string{"sh", "-c", script}, true
 }
 

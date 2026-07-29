@@ -4,6 +4,7 @@ package lang
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -77,5 +78,29 @@ func TestGoParseCoverageUnparseableIsError(t *testing.T) {
 				t.Fatalf("ParseCoverage(%q) returned non-nil map %v alongside an error", in, got)
 			}
 		})
+	}
+}
+
+// TestGoCoverageCmdIncludesCoverpkgAll pins the task-5 sweep fix: without
+// -coverpkg=./..., `go test ./...` instruments each test binary for ONLY
+// the package it directly tests, so a package with no _test.go files of
+// its own always reports synthetic all-zero coverage — even when its code
+// is genuinely executed via a shared interface from another package's
+// tests (verified on gin: codec/json/json.go, called every run through
+// json.API.Marshal from the root package's own errors_test.go, was
+// reported "measured, never executed" without this flag). -coverpkg=./...
+// is what makes cross-package execution visible to the tri-state map.
+func TestGoCoverageCmdIncludesCoverpkgAll(t *testing.T) {
+	p := goPlugin{}
+	cmd, ok := p.CoverageCmd([]string{"go", "test", "./..."})
+	if !ok {
+		t.Fatalf("CoverageCmd ok=false")
+	}
+	if len(cmd) != 3 || cmd[0] != "sh" || cmd[1] != "-c" {
+		t.Fatalf("CoverageCmd = %v, want [sh -c <script>]", cmd)
+	}
+	script := cmd[2]
+	if !strings.Contains(script, "-coverpkg=./...") {
+		t.Fatalf("CoverageCmd script = %q, missing -coverpkg=./... (without it, cross-package execution is invisible and untested packages are falsely reported as unexecuted)", script)
 	}
 }

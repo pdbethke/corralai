@@ -144,6 +144,25 @@ Go binary.**
   `reposcan.RepoReport.Weakest`, never the aggregate, so one well-tested file can't mask
   a weak one. Docs:
   `docs/corral/github-action.md`.
+- **Coverage pre-flight (`--preflight`, `certify --repo`, Go and Python) — opt-in,
+  CLI only.** Test-pairing finds *some* untested files by guessing paired test names;
+  it finds nothing in a repo where that guess never lands (most JS/TS projects). The
+  pre-flight answers a narrower, cheaper question instead: run the suite **once**,
+  instrumented for coverage, and report which files it never executes at all — an
+  inventory, not an audit, and honest about the difference. Three buckets: **executed**
+  (not a finding), **measured and never executed** (the real finding, named), **never
+  measured** (a count only — coverage-scope and zero-statement files alike, never
+  named, never an accusation). Fails closed and says so — wrong language, more than one
+  language in the same scan, or the coverage tool itself missing from the runner — and
+  names zero files on any of those paths. Proven on a foreign-repo sweep
+  (`pallets/flask`, `psf/requests`, `andrewyng/aisuite`, `gin-gonic/gin`): the design's
+  O(1)-in-file-count claim held (one suite invocation per repo, independent of file
+  count) but wall clock still tracks the *suite's own* runtime (flask ≈3s, requests
+  ≈80s, both instrumented once) — and the sweep caught a real false accusation in the
+  Go path (a package with no tests of its own always looked unexecuted, even when its
+  code ran constantly via another package's tests) — fixed with `-coverpkg=./...`
+  before this shipped, not documented around. Ruby/JS/TS have no plugin yet. Not wired
+  into the GitHub Action as an input — CLI flag only for now.
 
 **The substrate.**
 - **Multi-model, multi-forge; the `bwrap` + container jail; the attributed action

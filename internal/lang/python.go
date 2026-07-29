@@ -297,6 +297,9 @@ type pyCoverageReport struct {
 // stdout — so that is the structural marker ParseCoverage uses to find it.
 //
 // A file is "executed" if its summary.covered_lines is greater than zero.
+// The returned map records that per file the REPORT measured at all — see
+// the tri-state note directly above the alignment loop below for why a file
+// outside coverage.py's scope is left absent rather than inserted as false.
 //
 // modulePath is the REPO ROOT (an absolute filesystem path), NOT an
 // import-path-style prefix the way Go's module path is — coverage.py's own
@@ -359,7 +362,8 @@ type pyCoverageReport struct {
 // all — it does not describe a real, if unlucky, coverage outcome the way a
 // single legitimately-untouched FILE can (see the file-level check above,
 // which this does not change: fixtureAllZero below still has
-// totals.covered_lines: 7525, so it stays the legitimate empty-map case).
+// totals.covered_lines: 7525, so its files stay legitimate measured-but-
+// unexecuted (present, false) entries, never an error).
 //
 // A NARROWER form of the same misalignment survives per-entry skipping on
 // its own: if totals.covered_lines is positive (the suite genuinely ran and
@@ -413,18 +417,39 @@ func (pyPlugin) ParseCoverage(stdout, modulePath string) (executed map[string]bo
 		return nil, fmt.Errorf("lang: python coverage report totals.covered_lines is 0 — the suite most likely never ran (e.g. a broken pytest plugin or collection error), not a genuinely-empty result")
 	}
 
+	// The returned map is TRI-STATE: every file the report MEASURED gets an
+	// entry (true if covered_lines > 0, false if it was in scope and never
+	// executed), and a file the report never mentions at all is left ABSENT
+	// — never inserted as false. coverage.py's own [tool.coverage.run]
+	// source = [...] scoping routinely covers a SUBSET of the repo (flask:
+	// 58 files, not the whole tree); treating "outside that scope" the same
+	// as "measured and found unexecuted" would turn every file corral never
+	// even looked at into a false accusation. Only "present, false" is a
+	// real finding — "absent" must stay a silent, non-accusing fact a
+	// caller reports as a COUNT, never as a per-file claim.
 	root := normalizePyRepoRoot(modulePath)
 	sawPositiveEntry := false
+	sawPositiveAligned := false
 	executed = make(map[string]bool)
 	for path, f := range report.Files {
-		if f.Summary.CoveredLines <= 0 {
-			continue
+		exec := f.Summary.CoveredLines > 0
+		if exec {
+			sawPositiveEntry = true
 		}
-		sawPositiveEntry = true
 
 		p := filepath.ToSlash(path)
 		if filepath.IsAbs(path) {
 			if root == "" {
+				if !exec {
+					// An unexecuted, unaligned absolute path carries no
+					// finding either way — there is no repo-relative form to
+					// report it under, and "absent" (never measured, from
+					// this caller's point of view) is already the honest
+					// silence for it. Only a POSITIVE entry with nowhere to
+					// align is the alignment failure worth erroring on
+					// (see the unconditional case below).
+					continue
+				}
 				return nil, fmt.Errorf("lang: python coverage report contains an absolute path %q but no repo root (modulePath) was given to align it against", path)
 			}
 			cleanPath := filepath.ToSlash(filepath.Clean(path))
@@ -437,14 +462,18 @@ func (pyPlugin) ParseCoverage(stdout, modulePath string) (executed map[string]bo
 				// Outside the repo root entirely (e.g. a dependency
 				// imported from site-packages, or a path that only reaches
 				// under the root via a "..\" segment) — not this repo's
-				// source, skip rather than report a bogus path.
+				// source, skip rather than report a bogus path (executed
+				// OR not: either way it is not a file corral can name).
 				continue
 			}
 			p = rel
 		}
-		executed[p] = true
+		executed[p] = exec
+		if exec {
+			sawPositiveAligned = true
+		}
 	}
-	if sawPositiveEntry && len(executed) == 0 {
+	if sawPositiveEntry && !sawPositiveAligned {
 		return nil, fmt.Errorf("lang: python coverage report has file(s) with covered_lines > 0, but none aligned under repo root %q — likely a wrong modulePath or a coverage.py [tool.coverage.paths] remap corral cannot see, not a genuinely empty result", modulePath)
 	}
 	return executed, nil

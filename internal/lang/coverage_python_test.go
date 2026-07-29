@@ -44,10 +44,12 @@ const fixtureMixed = `..........................................................
 {"meta": {"format": 3, "version": "7.15.2", "timestamp": "2026-07-29T12:01:40.588790", "branch_coverage": true, "show_contexts": false}, "files": {"src/flask/app.py": {"summary": {"covered_lines": 395, "num_statements": 435}}, "src/flask/__main__.py": {"summary": {"covered_lines": 0, "num_statements": 2}}, "src/flask/helpers.py": {"summary": {"covered_lines": 124, "num_statements": 132}}}, "totals": {"covered_lines": 7525, "num_statements": 7913}}`
 
 // fixtureAllZero: every file entry in this real report has covered_lines: 0
-// (three files flask's suite never touches at all). This is the ONE
-// legitimate case ParseCoverage must return an EMPTY map with NO error —
-// a well-formed report saying "nothing here was executed" is data, not a
-// parse failure.
+// (three files flask's suite never touches at all), while totals.covered_lines
+// is positive (the suite genuinely ran). This is a legitimate case ParseCoverage
+// must return WITHOUT an error — a well-formed report saying "these measured
+// files were never executed" is data, not a parse failure — but under the
+// tri-state contract that means every one of these three files comes back as
+// a present-FALSE entry (measured, not executed), not an empty map.
 const fixtureAllZero = `{"meta": {"format": 3, "version": "7.15.2", "timestamp": "2026-07-29T12:01:40.588790", "branch_coverage": true, "show_contexts": false}, "files": {"src/flask/__main__.py": {"summary": {"covered_lines": 0, "num_statements": 2}}, "tests/test_apps/blueprintapp/apps/__init__.py": {"summary": {"covered_lines": 0, "num_statements": 0}}, "tests/test_apps/cliapp/__init__.py": {"summary": {"covered_lines": 0, "num_statements": 0}}}, "totals": {"covered_lines": 7525, "num_statements": 7913}}`
 
 // fixtureAllZeroTotals is a real captured `coverage json -o -` report from a
@@ -122,28 +124,42 @@ func TestPythonParseCoverageExecutedFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseCoverage: %v", err)
 	}
-	// __main__.py has covered_lines: 0 and must NOT appear.
-	want := map[string]bool{"src/flask/app.py": true, "src/flask/helpers.py": true}
+	// __main__.py has covered_lines: 0 — it was MEASURED (present in the
+	// report) but never executed, so it must appear as false, not be
+	// dropped: present-false is the real finding this contract exists to
+	// preserve, distinct from a file the report never mentions at all.
+	want := map[string]bool{
+		"src/flask/app.py":      true,
+		"src/flask/helpers.py":  true,
+		"src/flask/__main__.py": false,
+	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("executed set = %v, want %v", got, want)
 	}
 }
 
-// TestPythonParseCoverageAllZeroIsEmptyNotError pins the one legitimate empty
-// result: a well-formed report in which every file has zero coverage returns
-// an empty map and no error — distinct from an unparseable report, which must
-// error (see TestPythonParseCoverageUnparseableIsError below).
-func TestPythonParseCoverageAllZeroIsEmptyNotError(t *testing.T) {
+// TestPythonParseCoverageAllZeroPerFileIsMeasuredNotExecuted pins the
+// tri-state contract's other legitimate non-error case: a well-formed report
+// in which every individual file has zero coverage, but totals.covered_lines
+// is positive (the suite genuinely ran), returns every one of those files as
+// a present-false ("measured, not executed") entry — a real finding, not an
+// empty map — distinct from an unparseable report, which must error (see
+// TestPythonParseCoverageUnparseableIsError below), and distinct from
+// totals.covered_lines == 0, which means the suite never ran at all (see
+// TestPythonParseCoverageZeroTotalsIsError).
+func TestPythonParseCoverageAllZeroPerFileIsMeasuredNotExecuted(t *testing.T) {
 	p := pyPlugin{}
 	got, err := p.ParseCoverage(fixtureAllZero, "")
 	if err != nil {
 		t.Fatalf("ParseCoverage: %v", err)
 	}
-	if len(got) != 0 {
-		t.Fatalf("executed set = %v, want empty", got)
+	want := map[string]bool{
+		"src/flask/__main__.py":                         false,
+		"tests/test_apps/blueprintapp/apps/__init__.py": false,
+		"tests/test_apps/cliapp/__init__.py":            false,
 	}
-	if got == nil {
-		t.Fatalf("executed set is nil, want a non-nil empty map")
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("executed set = %v, want %v", got, want)
 	}
 }
 

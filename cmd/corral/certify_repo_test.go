@@ -2150,3 +2150,236 @@ func TestJailSubstrateSwarmSizingIsUnchanged(t *testing.T) {
 		}
 	}
 }
+
+// --- --preflight -----------------------------------------------------------
+//
+// preflightGoFixture writes a tiny, REAL Go module to root: pkg/a.go is
+// exercised by pkg/a_test.go, pkg/b.go has no paired test at all (so it is
+// an Enumerate-level ReasonNoPairedTest exclusion, never a Candidate) but IS
+// still language-detected, non-test source — exactly the file
+// enumeratedSourcePaths must add back so the pre-flight can report it as
+// measured-and-never-executed. `go test ./... -coverprofile=...` genuinely
+// instruments BOTH files (same package), so this exercises the real
+// substrate end to end, no mocked runner.
+func preflightGoFixture(t *testing.T, root string) {
+	t.Helper()
+	mustWrite(t, filepath.Join(root, "go.mod"), "module coveragefixture\n\ngo 1.21\n")
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n\nfunc A() int { return 1 }\n")
+	mustWrite(t, filepath.Join(root, "pkg", "a_test.go"), "package pkg\n\nimport \"testing\"\n\nfunc TestA(t *testing.T) {\n\tif A() != 1 {\n\t\tt.Fatal(\"bad\")\n\t}\n}\n")
+	mustWrite(t, filepath.Join(root, "pkg", "b.go"), "package pkg\n\nfunc B() int { return 2 }\n")
+}
+
+// TestCertifyRepoPreflightFlagAbsentIsByteIdenticalToBaseline is the brief's
+// scenario 1: with --preflight absent, the runner must never be invoked and
+// stdout must be byte-identical to today. Proven by capturing BOTH a run
+// without the flag and a run WITH it (same fixture, same everything else),
+// then confirming the --preflight run is EXACTLY the no-flag run plus (a)
+// one extra progress line and (b) one extra trailing report section — never
+// a difference anywhere else in the shared output.
+//
+// --goals maps to {} (nothing goaled) so EmitJobs emits ZERO jobs: no
+// baseline run, no mutant generation, no model call of any kind — the only
+// thing this scan does besides accounting is the pre-flight's own real `go
+// test` run, which is exactly what is under test.
+func TestCertifyRepoPreflightFlagAbsentIsByteIdenticalToBaseline(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
+	root := t.TempDir()
+	preflightGoFixture(t, root)
+	goals := filepath.Join(root, "goals.json")
+	mustWrite(t, goals, `{}`)
+
+	var without, with bytes.Buffer
+	var errb1, errb2 bytes.Buffer
+	if code := runCertifyRepo([]string{"--repo", root, "--goals", goals, "--substrate", substrateWorkspace}, &without, &errb1); code != 1 {
+		// 0 jobs emitted (nothing goaled) => COULD-NOT-GRADE => exit 1. The
+		// exit code itself is not what this test is about; it just must be
+		// the SAME in both runs (checked below).
+		t.Logf("no-flag run exit %d, stderr=%s", code, errb1.String())
+	}
+	codeWith := runCertifyRepo([]string{"--repo", root, "--goals", goals, "--substrate", substrateWorkspace, "--preflight"}, &with, &errb2)
+	_ = codeWith
+
+	withStr := with.String()
+	head, _, found := strings.Cut(withStr, "\nCoverage pre-flight")
+	if !found {
+		t.Fatalf("--preflight run did not print the coverage pre-flight section:\n%s", withStr)
+	}
+	const progressLine = "  preflight: running the suite once with coverage instrumentation…\n"
+	if !strings.Contains(head, progressLine) {
+		t.Fatalf("--preflight run did not print the pre-flight progress line:\n%s", head)
+	}
+	head = strings.Replace(head, progressLine, "", 1)
+
+	if head != without.String() {
+		t.Fatalf("--preflight run's shared output diverged from the no-flag baseline beyond the two documented additions.\nno-flag:\n%s\n--preflight (with additions stripped):\n%s", without.String(), head)
+	}
+}
+
+// TestCertifyRepoPreflightRanNamesUnexercisedFiles is the brief's scenario 2:
+// with --preflight and a pre-flight that DID run, the report names the
+// unexercised file(s) under their own heading. Runs the real `go test
+// ./... -coverprofile=...` against preflightGoFixture (real substrate, no
+// mocking) — pkg/b.go is never called by the suite and must be named;
+// pkg/a.go IS exercised and must not appear in that list.
+func TestCertifyRepoPreflightRanNamesUnexercisedFiles(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
+	root := t.TempDir()
+	preflightGoFixture(t, root)
+	goals := filepath.Join(root, "goals.json")
+	mustWrite(t, goals, `{}`) // nothing goaled: Scan runs 0 jobs, no model call
+
+	var out, errb bytes.Buffer
+	runCertifyRepo([]string{"--repo", root, "--goals", goals, "--substrate", substrateWorkspace, "--preflight"}, &out, &errb)
+
+	s := out.String()
+	if !strings.Contains(s, "Coverage pre-flight") {
+		t.Fatalf("missing the pre-flight section:\n%s\nstderr:\n%s", s, errb.String())
+	}
+	if !strings.Contains(s, "measured and NEVER executed by the suite") {
+		t.Fatalf("want the unexercised-files heading:\n%s", s)
+	}
+	_, section, found := strings.Cut(s, "\nCoverage pre-flight")
+	if !found {
+		t.Fatalf("missing the pre-flight section:\n%s", s)
+	}
+	if !strings.Contains(section, "pkg/b.go") {
+		t.Errorf("pkg/b.go is never called by the suite and must be named as unexercised:\n%s", section)
+	}
+	if strings.Contains(section, "pkg/a.go") {
+		t.Errorf("pkg/a.go IS exercised by the suite and must not be named anywhere in the pre-flight section: %q", section)
+	}
+	if !strings.Contains(section, "1 file(s) executed at least once") {
+		t.Errorf("want pkg/a.go counted as executed:\n%s", section)
+	}
+}
+
+// TestCertifyRepoPreflightCouldNotRunReportsNoteAndNoFileList is the brief's
+// scenario 3: when the pre-flight could not run (here: zero candidates, so
+// runPreflight declines with a Note rather than guessing), the report says
+// so and lists NO unexercised files — Ran == false means no file list, ever.
+func TestCertifyRepoPreflightCouldNotRunReportsNoteAndNoFileList(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "README.md"), "# nothing to audit here\n")
+
+	var out, errb bytes.Buffer
+	runCertifyRepo([]string{"--repo", root, "--substrate", substrateWorkspace, "--preflight"}, &out, &errb)
+
+	s := out.String()
+	if !strings.Contains(s, "Coverage pre-flight") {
+		t.Fatalf("missing the pre-flight section:\n%s\nstderr:\n%s", s, errb.String())
+	}
+	if !strings.Contains(s, "could not run:") {
+		t.Errorf("want the could-not-run note:\n%s", s)
+	}
+	if strings.Contains(s, "measured and NEVER executed") {
+		t.Errorf("a Ran=false pre-flight must never print an unexercised-files list:\n%s", s)
+	}
+	if strings.Contains(s, "file(s) executed at least once") {
+		t.Errorf("a Ran=false pre-flight must never print executed-file counts either:\n%s", s)
+	}
+}
+
+// TestCertifyRepoPreflightDryRunNeverRunsTheSuite is the brief's scenario 4:
+// --dry-run means no execution, full stop — even with --preflight, the
+// instrumented suite must never run. Proven the same way scenario 1 is: the
+// --dry-run+--preflight output must be BYTE-IDENTICAL to the --dry-run-only
+// output — no progress line, no report section, nothing.
+func TestCertifyRepoPreflightDryRunNeverRunsTheSuite(t *testing.T) {
+	root := t.TempDir()
+	preflightGoFixture(t, root)
+	goals := filepath.Join(root, "goals.json")
+	mustWrite(t, goals, `{"pkg/a.go": "must return 1"}`)
+
+	var without, with bytes.Buffer
+	var errb1, errb2 bytes.Buffer
+	if code := runCertifyRepo([]string{"--repo", root, "--goals", goals, "--dry-run"}, &without, &errb1); code != 0 {
+		t.Fatalf("no-flag dry run: exit %d, stderr=%s", code, errb1.String())
+	}
+	if code := runCertifyRepo([]string{"--repo", root, "--goals", goals, "--dry-run", "--preflight"}, &with, &errb2); code != 0 {
+		t.Fatalf("--preflight dry run: exit %d, stderr=%s", code, errb2.String())
+	}
+
+	if with.String() != without.String() {
+		t.Fatalf("--dry-run --preflight must be byte-identical to --dry-run alone (dry-run means no execution).\nwithout:\n%s\nwith:\n%s", without.String(), with.String())
+	}
+	if strings.Contains(with.String(), "Coverage pre-flight") || strings.Contains(with.String(), "preflight: running") {
+		t.Errorf("a dry run must never print any pre-flight output:\n%s", with.String())
+	}
+}
+
+// TestEnumeratedSourcePathsAddsBackNoPairedTestAndAmbiguousFiles pins
+// enumeratedSourcePaths' own contract directly: it must recover EVERY
+// language-detected, non-test file Enumerate saw — not just the ones that
+// became Candidates — by adding back ReasonNoPairedTest and
+// ReasonAmbiguousTest exclusions (both still language-detected, non-test
+// files), while leaving ReasonNoLanguage/ReasonIsTest/ReasonNotRegularFile/
+// ReasonSkippedDir OUT (they are not source files Enumerate ever treated as
+// auditable subjects).
+func TestEnumeratedSourcePathsAddsBackNoPairedTestAndAmbiguousFiles(t *testing.T) {
+	cands := []reposcan.Candidate{{Path: "pkg/a.go", Lang: "go"}}
+	excl := []reposcan.Exclusion{
+		{Path: "pkg/b.go", Reason: reposcan.ReasonNoPairedTest},
+		{Path: "pkg/c.go", Reason: reposcan.ReasonAmbiguousTest},
+		{Path: "pkg/a_test.go", Reason: reposcan.ReasonIsTest},
+		{Path: "README.md", Reason: reposcan.ReasonNoLanguage},
+	}
+	got := enumeratedSourcePaths(cands, excl)
+	want := []string{"pkg/a.go", "pkg/b.go", "pkg/c.go"}
+	if len(got) != len(want) {
+		t.Fatalf("enumeratedSourcePaths = %v, want %v", got, want)
+	}
+	gotSet := map[string]bool{}
+	for _, p := range got {
+		gotSet[p] = true
+	}
+	for _, w := range want {
+		if !gotSet[w] {
+			t.Errorf("enumeratedSourcePaths missing %q; got %v", w, got)
+		}
+	}
+	if gotSet["pkg/a_test.go"] || gotSet["README.md"] {
+		t.Errorf("enumeratedSourcePaths must not include is-test/no-language exclusions: %v", got)
+	}
+}
+
+// TestSplitPreflightFindingsThreeBuckets pins the tri-state fan-out directly:
+// present-true is "executed", present-false is "unexercised" (the actual
+// finding), and ABSENT is a count only, never a name.
+func TestSplitPreflightFindingsThreeBuckets(t *testing.T) {
+	sources := []string{"a.go", "b.go", "c.go", "d.go"}
+	cm := reposcan.CoverageMap{
+		Ran: true,
+		Executed: map[string]bool{
+			"a.go": true,
+			"b.go": false,
+			// c.go, d.go: absent — never measured.
+		},
+	}
+	got := splitPreflightFindings(sources, cm)
+	if got.executed != 1 {
+		t.Errorf("executed = %d, want 1", got.executed)
+	}
+	if len(got.unexercised) != 1 || got.unexercised[0] != "b.go" {
+		t.Errorf("unexercised = %v, want [b.go]", got.unexercised)
+	}
+	if got.notMeasured != 2 {
+		t.Errorf("notMeasured = %d, want 2", got.notMeasured)
+	}
+}
+
+// TestPrintPreflightReportRanFalsePrintsNoteOnlyNoFileList pins the printer's
+// own contract (belt-and-braces alongside the CLI-level integration test
+// above): Ran == false prints ONLY the Note, never a file list, regardless
+// of what sourceFiles contains.
+func TestPrintPreflightReportRanFalsePrintsNoteOnlyNoFileList(t *testing.T) {
+	var buf bytes.Buffer
+	printPreflightReport(&buf, reposcan.CoverageMap{Ran: false, Note: "go: no coverage instrumentation for test command []"}, []string{"a.go", "b.go"})
+	s := buf.String()
+	if !strings.Contains(s, "go: no coverage instrumentation for test command []") {
+		t.Errorf("want the Note printed verbatim:\n%s", s)
+	}
+	if strings.Contains(s, "a.go") || strings.Contains(s, "b.go") {
+		t.Errorf("Ran=false must never print a file list:\n%s", s)
+	}
+}

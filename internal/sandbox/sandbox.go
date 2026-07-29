@@ -162,10 +162,18 @@ func (c *capped) Write(p []byte) (int, error) {
 	return len(p), nil // always "accept" so the process isn't blocked
 }
 
+// TruncationMarker is appended to Result.Output whenever the combined
+// stdout+stderr exceeded Options.MaxOutput and was head-truncated. It is
+// exported so a caller that cares whether a run's output was cut off (rather
+// than merely reading the—now incomplete—text) can detect that structurally,
+// by substring search, instead of re-deriving the marker text itself and
+// risking it drifting out of sync with capped.String below.
+const TruncationMarker = "…[output truncated]"
+
 func (c *capped) String() string {
 	s := strings.TrimRight(c.buf.String(), "\n")
 	if c.truncated {
-		s += "\n…[output truncated]"
+		s += "\n" + TruncationMarker
 	}
 	return s
 }

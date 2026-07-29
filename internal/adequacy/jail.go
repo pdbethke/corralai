@@ -35,9 +35,10 @@ var ErrTestTimeout = errors.New("adequacy: test run timed out")
 // "a failed run must not read as success" invariant shared with
 // internal/brain/gate.go's jailAdapter.
 type bwrapJail struct {
-	backend sandbox.Isolator
-	timeout time.Duration
-	binds   []DepBind
+	backend   sandbox.Isolator
+	timeout   time.Duration
+	binds     []DepBind
+	maxOutput int // 0 => sandbox.Run's own default (16 KiB); see WithMaxOutput
 }
 
 // DepBind is a read-only dependency dir to mount into the jail: Host is the
@@ -59,6 +60,23 @@ type JailOption func(*bwrapJail)
 // per call.
 func WithReadOnlyBinds(binds []DepBind) JailOption {
 	return func(j *bwrapJail) { j.binds = binds }
+}
+
+// WithMaxOutput raises (or lowers) the combined stdout+stderr cap for every
+// run this jail performs, overriding sandbox.Run's own 16 KiB default. The
+// default is the right choice for graded test/mutant runs (their signal is
+// pass/fail, not the transcript), but it silently head-truncates anything
+// that legitimately needs to return a large machine-readable payload on
+// stdout — e.g. the coverage pre-flight's `coverage json` report, which was
+// measured at 467 KB on a real project (pallets/flask): every real run
+// through the 16 KiB default truncates before ParseCoverage ever sees valid
+// JSON, so the pre-flight could never succeed on any non-toy repository.
+// Callers that need this MUST build a jail/enumerator specifically for that
+// purpose (see reposcan's caller) rather than raising the cap for every
+// other run this jail also performs, which would let a runaway, misbehaving
+// test process buffer arbitrarily more into memory for no benefit.
+func WithMaxOutput(n int) JailOption {
+	return func(j *bwrapJail) { j.maxOutput = n }
 }
 
 // NewJail builds the real bwrap-sandboxed Jail for the adequacy scorer.
@@ -231,6 +249,7 @@ func (j bwrapJail) runInJail(ctx context.Context, files map[string]string, cmd [
 		Network:       false,
 		Timeout:       j.timeout,
 		ReadOnlyBinds: roBinds,
+		MaxOutput:     j.maxOutput, // 0 => sandbox.Run's own 16 KiB default
 	})
 	if err != nil {
 		if res.TimedOut {

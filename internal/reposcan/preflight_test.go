@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/pdbethke/corralai/internal/lang"
+	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
 // fakeRunner is a stub commandRunner returning canned stdout/err and
@@ -157,6 +158,37 @@ func TestPreflight_CommandFailed(t *testing.T) {
 	}
 	if !strings.Contains(got.Note, "boom: sandbox timeout") {
 		t.Fatalf("Note = %q, want it to carry the underlying error", got.Note)
+	}
+}
+
+// TestPreflight_TruncatedOutputIsItsOwnFailure pins the 64 KiB fix: a
+// runner's output carrying sandbox.TruncationMarker (the way sandbox.Run
+// reports a head-truncated combined stdout+stderr) must be reported as its
+// own distinct failure BEFORE ParseCoverage ever runs on it — never
+// forwarded to ParseCoverage, where a truncation that happens to land on a
+// clean boundary could parse as a valid-looking but incomplete report.
+func TestPreflight_TruncatedOutputIsItsOwnFailure(t *testing.T) {
+	p := covPlugin{
+		stubPlugin: stubPlugin{name: "python"},
+		cmd:        []string{"sh", "-c", "coverage json -o -"},
+		cmdOK:      true,
+		parseFn: func(string, string) (map[string]bool, error) {
+			t.Fatal("ParseCoverage must not be called on truncated output")
+			return nil, nil
+		},
+	}
+	runner := &fakeRunner{out: `{"meta": {"format": 3}, "files": {` + "\n" + sandbox.TruncationMarker}
+
+	got := Preflight(context.Background(), runner, nil, p, []string{"pytest", "-q"}, "repo")
+
+	if got.Ran {
+		t.Fatal("Ran = true, want false: the output was truncated")
+	}
+	if got.Executed != nil {
+		t.Fatalf("Executed = %v, want nil", got.Executed)
+	}
+	if !strings.Contains(got.Note, "truncated") {
+		t.Fatalf("Note = %q, want it to say the output was truncated", got.Note)
 	}
 }
 

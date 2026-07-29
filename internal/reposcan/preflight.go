@@ -5,8 +5,10 @@ package reposcan
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/pdbethke/corralai/internal/lang"
+	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
 // commandRunner runs one command in the scan's substrate and returns its
@@ -21,6 +23,17 @@ type commandRunner interface {
 // they are different claims and only one is a finding. Executed is nil
 // unless Ran is true: a caller that forgets to check Ran gets an empty
 // iteration, never a repo-wide accusation that no file is covered.
+//
+// Executed is itself TRI-STATE once Ran is true (see each
+// lang.CoverageReporter.ParseCoverage implementation): present-true is
+// executed, present-false is measured-and-never-executed (the real
+// finding), and a path ABSENT from the map was never measured by this run
+// at all (e.g. outside coverage.py's own [tool.coverage.run] source scope)
+// — a fact a caller must report as a count, never as a per-file accusation.
+// The number of files this run actually EXECUTED is therefore the count of
+// true VALUES in Executed, never len(Executed) — a caller that conflates
+// the two overcounts by exactly the size of the measured-but-unexecuted
+// set.
 type CoverageMap struct {
 	Executed map[string]bool // nil unless Ran
 	Ran      bool
@@ -62,6 +75,22 @@ func Preflight(ctx context.Context, runner commandRunner, files map[string]strin
 	if err != nil {
 		return CoverageMap{
 			Note: fmt.Sprintf("%s: coverage pre-flight run failed: %v", p.Name(), err),
+		}
+	}
+
+	// A head-truncated report usually fails ParseCoverage outright (broken
+	// JSON, a missing "mode:" header) — but "usually" is not a guarantee: a
+	// truncation that happens to land on a clean boundary yields a
+	// partially-parsed, VALID-looking report, which is a partial executed
+	// set — the same false-accusation shape this whole feature exists to
+	// avoid ("your suite never touches this", about files simply never
+	// reached before the cut). Detected structurally (the runner's own
+	// truncation marker), before ParseCoverage ever sees the bytes, so
+	// truncation is reported as its own distinct failure rather than
+	// masquerading as either a clean parse or a generic "unparseable" one.
+	if strings.Contains(stdout, sandbox.TruncationMarker) {
+		return CoverageMap{
+			Note: fmt.Sprintf("%s: coverage pre-flight output was truncated — the report is incomplete and cannot be trusted", p.Name()),
 		}
 	}
 

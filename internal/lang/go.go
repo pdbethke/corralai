@@ -140,6 +140,19 @@ func shellQuote(s string) string {
 // instrumented run still emits that header, so its absence means the
 // command's output was not a coverage profile at all (e.g. it failed before
 // ever running `go test`), which is a fact callers must see, not paper over.
+//
+// The returned map is TRI-STATE, not a plain "was it seen" set: a file gets
+// an entry (true or false) for every file the profile MEASURED at all —
+// true if any of its blocks has count > 0, false if every block it has is
+// count == 0. A file this profile never mentions at all — outside the
+// package(s) `go test` actually built — is left ABSENT from the map
+// entirely. Conflating "measured and found unexecuted" with "never
+// measured" would turn every file outside the instrumented package set into
+// an accusation ("your suite never touches this") about a file the run
+// never looked at; a caller must be able to tell the two apart, and only
+// "present, false" is a real finding. Once a file is recorded true (any
+// block executed), a later count-0 block for the SAME file must not
+// overwrite it back to false.
 func (goPlugin) ParseCoverage(stdout, modulePath string) (executed map[string]bool, err error) {
 	executed = make(map[string]bool)
 	sawMode := false
@@ -166,14 +179,15 @@ func (goPlugin) ParseCoverage(stdout, modulePath string) (executed map[string]bo
 		if colon <= 0 {
 			return nil, fmt.Errorf("lang: unparseable coverage block on line %d: %q", i+1, line)
 		}
-		if count <= 0 {
-			continue
-		}
 		path := fields[0][:colon]
 		if modulePath != "" {
 			path = strings.TrimPrefix(path, modulePath+"/")
 		}
-		executed[path] = true
+		if count > 0 {
+			executed[path] = true
+		} else if _, seen := executed[path]; !seen {
+			executed[path] = false
+		}
 	}
 	if !sawMode {
 		return nil, fmt.Errorf("lang: coverage report has no \"mode:\" header (got %d bytes)", len(stdout))

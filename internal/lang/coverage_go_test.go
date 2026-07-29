@@ -20,8 +20,33 @@ github.com/x/proj/c.go:1.1,2.2 1 3
 	if err != nil {
 		t.Fatalf("ParseCoverage: %v", err)
 	}
-	// count>0 means executed; b.go has count 0 and must NOT appear.
-	want := map[string]bool{"pkg/a.go": true, "c.go": true}
+	// count>0 means executed (true); b.go has count 0 so it is MEASURED but
+	// not executed (false) — present in the map either way, per the
+	// tri-state contract (present-true / present-false / absent).
+	want := map[string]bool{"pkg/a.go": true, "pkg/b.go": false, "c.go": true}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("executed set = %v, want %v", got, want)
+	}
+}
+
+// TestGoParseCoverageMeasuredNeverExecutedStaysFalseAcrossBlocks pins the
+// tri-state merge rule for a file with MULTIPLE blocks: once any block
+// reports count > 0, a later count-0 block for the same file must not
+// overwrite it back to false, and a file whose every block is count == 0
+// stays false rather than being dropped from the map.
+func TestGoParseCoverageMeasuredNeverExecutedStaysFalseAcrossBlocks(t *testing.T) {
+	const out = `mode: set
+github.com/x/proj/a.go:1.1,2.2 1 1
+github.com/x/proj/a.go:3.1,4.2 1 0
+github.com/x/proj/b.go:1.1,2.2 1 0
+github.com/x/proj/b.go:3.1,4.2 1 0
+`
+	p := goPlugin{}
+	got, err := p.ParseCoverage(out, "github.com/x/proj")
+	if err != nil {
+		t.Fatalf("ParseCoverage: %v", err)
+	}
+	want := map[string]bool{"a.go": true, "b.go": false}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("executed set = %v, want %v", got, want)
 	}

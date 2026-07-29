@@ -63,6 +63,26 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
+	// splitCertifyArgs (shared with `certify --local`) knows nothing about
+	// this command's own flag set: it splits purely on the first literal
+	// "--", so any of THIS command's flags placed after it silently become
+	// arguments to the check command instead of being parsed at all. For
+	// most flags that is merely confusing; for --min-kill-rate it is a
+	// silent-no-gate: `-- pytest -q --min-kill-rate 0.5` hands
+	// "--min-kill-rate" and "0.5" to pytest as plain arguments, the
+	// threshold is never applied, and CI goes green on a repo the
+	// threshold would have failed — with NO error and NO warning. A
+	// warning is not enough here (it scrolls past in CI, and the failure
+	// mode is a gate that silently never ran), so this is a hard usage
+	// error naming the offending token, checked before anything else that
+	// could exit 0 or 1. Names are read from fs itself (fs.VisitAll),
+	// never hardcoded, so a flag added later is covered automatically
+	// instead of silently reproducing this exact bug class.
+	if err := checkArgvNoFlagCollision(fs, checkArgv); err != nil {
+		fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
+		return 2
+	}
+
 	if *repoDir == "" {
 		fmt.Fprintln(stderr, "corral certify --repo: --repo is required")
 		return 2
@@ -522,6 +542,56 @@ func resolveGoalSource(stderr io.Writer, repoDir, goalsPath, deriveModel string,
 	// rather than a nil interface: EmitJobs returns early on an empty candidate
 	// list today, and a nil GoalSource would be a trap the day that changes.
 	return noGoals{}, "", 0
+}
+
+// checkArgvNoFlagCollision reports whether checkArgv (the tokens after
+// "--", destined for the check command untouched) contains anything that
+// looks like one of fs's OWN flags — spelled with a leading "-" or "--",
+// optionally carrying "=value". splitCertifyArgs (shared with `certify
+// --local`) splits on the first literal "--" with zero knowledge of which
+// flags belong to this command, so a flag placed after "--" by mistake is
+// silently swallowed into the check command's own argv instead of being
+// parsed — see the call site for why that is dangerous specifically for
+// --min-kill-rate (a silently-skipped merge gate).
+//
+// Flag names come from fs.VisitAll — every flag ever registered on fs,
+// set or not — rather than a hardcoded list: a hardcoded list drifts the
+// first time a new flag is added to runCertifyRepo, silently stops
+// covering it, and reproduces exactly the bug class this check exists to
+// close.
+//
+// A bare token with no leading dash (the overwhelming majority of real
+// check-command arguments — "false", "-q"'s VALUE, a test path, "0.5")
+// never matches: TrimLeft strips leading dashes, and a token that had
+// none to begin with is left unchanged by it, which the equality check
+// below catches and skips. A single-dash short flag some OTHER tool
+// happens to define (pytest's "-q", "-x") only collides if its single
+// letter happens to equal one of THIS command's flag names outright,
+// which none of them do today (all are multi-letter) — so a real,
+// unrelated check command is never falsely rejected.
+func checkArgvNoFlagCollision(fs *flag.FlagSet, checkArgv []string) error {
+	names := map[string]bool{}
+	fs.VisitAll(func(f *flag.Flag) { names[f.Name] = true })
+
+	for _, tok := range checkArgv {
+		trimmed := strings.TrimLeft(tok, "-")
+		if trimmed == tok {
+			continue // no leading dash at all: not flag-shaped
+		}
+		if trimmed == "" {
+			continue // bare "--" or "-": not a named flag either
+		}
+		name := trimmed
+		if i := strings.IndexByte(name, '='); i >= 0 {
+			name = name[:i]
+		}
+		if names[name] {
+			return fmt.Errorf(
+				"the check command (after --) contains %q, which is one of this command's OWN flags — flags must be given BEFORE --, never after (splitCertifyArgs has no way to tell a real command-line argument from a misplaced flag). Move %q before -- ; if the check command genuinely needs a colliding token, wrap it in a script and pass the script as the check command instead",
+				tok, tok)
+		}
+	}
+	return nil
 }
 
 // flagWasSet reports whether the operator passed a flag explicitly, as opposed

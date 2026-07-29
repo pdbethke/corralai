@@ -9,6 +9,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -728,6 +729,80 @@ func TestCertifyRepoRecordPreflightOverlayRoundTrips(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("%s: preflight_state = %q, want %q", tc.path, got, tc.want)
 		}
+	}
+}
+
+// TestCertifyRepoRejectsFlagsAfterDashDash proves the fix for a silent-gate
+// bug: splitCertifyArgs (shared with `certify --local`) splits on the
+// first literal "--" with no idea which flags belong to `certify --repo`,
+// so a flag placed AFTER "--" by mistake used to be silently handed to the
+// check command as a plain argument instead of ever being parsed — no
+// error, no warning. For most flags that's confusing; for --min-kill-rate
+// it is dangerous: `-- pytest -q --min-kill-rate 0.5` used to run pytest
+// with "--min-kill-rate 0.5" as ordinary (ignored) arguments, apply NO
+// threshold at all, and let CI go green on a repo the threshold would have
+// failed. This must be a hard exit-2 usage error, never a warning (a
+// warning scrolls past in CI, and the failure mode is a gate that
+// silently never runs) — checked for both --min-kill-rate (the dangerous
+// one) and --record (this task's own flag).
+func TestCertifyRepoRejectsFlagsAfterDashDash(t *testing.T) {
+	root := t.TempDir()
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"min-kill-rate", []string{"--repo", root, "--dry-run", "--", "pytest", "-q", "--min-kill-rate", "0.5"}},
+		{"record", []string{"--repo", root, "--dry-run", "--", "pytest", "-q", "--record", "--record-db", "/tmp/x.duckdb"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out, errb bytes.Buffer
+			code := runCertifyRepo(tc.args, &out, &errb)
+			if code != 2 {
+				t.Fatalf("exit %d, want 2 (usage error): stdout=%s stderr=%s", code, out.String(), errb.String())
+			}
+			if !strings.Contains(errb.String(), "--"+tc.name) {
+				t.Errorf("stderr must name the offending flag %q, got: %q", "--"+tc.name, errb.String())
+			}
+		})
+	}
+}
+
+// TestCertifyRepoAcceptsLegitimateCheckArgvWithUnrelatedFlags is the other
+// half of the same fix: a real check command carrying flags that are NOT
+// certify --repo's own must run completely untouched — a false positive
+// here would break every real invocation that gives -- <cmd> at all
+// (pytest, go test, and every other test runner's own flag surface).
+func TestCertifyRepoAcceptsLegitimateCheckArgvWithUnrelatedFlags(t *testing.T) {
+	root := t.TempDir()
+	for _, tc := range [][]string{
+		{"--repo", root, "--dry-run", "--", "pytest", "-q", "-x", "--tb=short"},
+		{"--repo", root, "--dry-run", "--", "go", "test", "./...", "-count=1"},
+	} {
+		var out, errb bytes.Buffer
+		code := runCertifyRepo(tc, &out, &errb)
+		if code != 0 {
+			t.Fatalf("args %v: exit %d, want 0 (a legitimate check command must not be rejected): stdout=%s stderr=%s", tc, code, out.String(), errb.String())
+		}
+	}
+}
+
+// TestCheckArgvNoFlagCollisionDerivesNamesFromTheFlagSet pins the
+// mechanism directly, without a full CLI invocation: names come from
+// fs.VisitAll (every flag ever registered, set or not), not a hardcoded
+// list, so a flag added to runCertifyRepo tomorrow is covered
+// automatically.
+func TestCheckArgvNoFlagCollisionDerivesNamesFromTheFlagSet(t *testing.T) {
+	fs := flag.NewFlagSet("t", flag.ContinueOnError)
+	fs.String("frobnicate", "", "made up for this test")
+
+	if err := checkArgvNoFlagCollision(fs, []string{"--frobnicate", "x"}); err == nil {
+		t.Fatal("want an error for a flag defined on fs, even one this test just invented")
+	}
+	if err := checkArgvNoFlagCollision(fs, []string{"-frobnicate=x"}); err == nil {
+		t.Fatal("want an error for the single-dash, =value spelling too")
+	}
+	if err := checkArgvNoFlagCollision(fs, []string{"--unrelated", "-q", "plain-arg"}); err != nil {
+		t.Fatalf("want no error for tokens that are not fs's own flags: %v", err)
 	}
 }
 

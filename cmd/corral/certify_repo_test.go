@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +19,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	_ "github.com/marcboeker/go-duckdb/v2"
 
 	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/lang"
@@ -357,6 +360,176 @@ func TestCertifyRepoDiffBaseNonEmptyScopeNothingGradableExitsNonZero(t *testing.
 	}
 	if strings.Contains(out.String(), "NOTHING IN SCOPE") {
 		t.Errorf("a non-empty scope must not print the empty-scope line:\n%s", out.String())
+	}
+}
+
+// TestCertifyRepoRecordAbsentIsByteIdentical proves that adding --record and
+// --record-db did not change ANY existing behaviour when --record is not
+// given: same stdout, same stderr, same exit code as before this change, and
+// — because the flag decides whether scanstore.Open is ever called at all —
+// no ledger file appears even though --record-db names a path. The dry-run
+// fixture below runs the enumerate/select/emit accounting path without a
+// jail or a model call.
+func TestCertifyRepoRecordAbsentIsByteIdentical(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "pkg", "a_test.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "pkg", "b.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "README.md"), "# x\n")
+
+	goals := filepath.Join(root, "goals.json")
+	mustWrite(t, goals, `{"pkg/a.go": "must not panic"}`)
+
+	baseArgs := []string{"--repo", root, "--goals", goals, "--dry-run"}
+
+	var outWithout, errWithout bytes.Buffer
+	codeWithout := runCertifyRepo(baseArgs, &outWithout, &errWithout)
+
+	dsn := filepath.Join(t.TempDir(), "would-be-scans.duckdb")
+	argsWithDBFlag := append(append([]string{}, baseArgs...), "--record-db", dsn)
+	var outWithDBFlag, errWithDBFlag bytes.Buffer
+	codeWithDBFlag := runCertifyRepo(argsWithDBFlag, &outWithDBFlag, &errWithDBFlag)
+
+	if codeWithout != codeWithDBFlag {
+		t.Fatalf("exit code changed by merely naming --record-db (without --record): %d vs %d", codeWithout, codeWithDBFlag)
+	}
+	if outWithout.String() != outWithDBFlag.String() {
+		t.Fatalf("stdout changed by merely naming --record-db (without --record):\n--- baseline\n%s\n--- with --record-db\n%s", outWithout.String(), outWithDBFlag.String())
+	}
+	if errWithout.String() != errWithDBFlag.String() {
+		t.Fatalf("stderr changed by merely naming --record-db (without --record):\n--- baseline\n%s\n--- with --record-db\n%s", errWithout.String(), errWithDBFlag.String())
+	}
+	if _, statErr := os.Stat(dsn); !os.IsNotExist(statErr) {
+		t.Fatalf("--record-db named a path but --record was absent, yet a file exists there (stat err=%v) — no ledger may be opened when --record is off", statErr)
+	}
+}
+
+// TestCertifyRepoRecordFailsOpen proves the FAIL-OPEN contract: an
+// unopenable --record-db (a path inside a directory that does not exist)
+// prints a loud failure line on stderr, but the scan's own exit code is
+// UNCHANGED from the same scan run without --record at all — a full disk or
+// a busy DuckDB file must never red-build a CI merge gate over bookkeeping.
+// Both properties are asserted; asserting only one would not pin the
+// property (a bug that changed the exit code AND still printed the line
+// would slip past a test that checked only the stderr line, and vice
+// versa).
+//
+// The scan itself uses the empty-diff-scope shape (nothing changed since
+// base), which reaches the final report/record call point without a jail or
+// a real model call: zero jobs are emitted, so no LLM audit ever runs.
+func TestCertifyRepoRecordFailsOpen(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
+	root := t.TempDir()
+	gitRun := gitCmd(t, root)
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "pkg", "a_test.go"), "package pkg\n")
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+	base := gitRevParseHead(t, root)
+	// Nothing changes after base: the diff scope is empty, so this reaches
+	// the report/record point (rep is computed) via zero jobs, no jail, no
+	// model call.
+
+	goals := filepath.Join(root, "goals.json")
+	mustWrite(t, goals, `{"pkg/a.go": "must not panic"}`)
+
+	baseArgs := []string{
+		"--repo", root, "--diff-base", base, "--goals", goals,
+		"--substrate", substrateWorkspace,
+	}
+
+	var outNoRecord, errNoRecord bytes.Buffer
+	wantCode := runCertifyRepo(baseArgs, &outNoRecord, &errNoRecord)
+
+	// A path inside a directory that was never created: scanstore.Open must
+	// fail (DuckDB cannot create the parent directory for its file).
+	badDSN := filepath.Join(root, "no-such-directory", "scans.duckdb")
+	recordArgs := append(append([]string{}, baseArgs...), "--record", "--record-db", badDSN)
+
+	var out, errb bytes.Buffer
+	code := runCertifyRepo(recordArgs, &out, &errb)
+
+	if code != wantCode {
+		t.Fatalf("a failed --record changed the exit code: got %d, want %d (identical to the same scan without --record)", code, wantCode)
+	}
+	if !strings.Contains(errb.String(), "scan ledger NOT written") {
+		t.Errorf("want a loud fail-open line on stderr, got: %q", errb.String())
+	}
+	if _, statErr := os.Stat(badDSN); statErr == nil {
+		t.Errorf("the unopenable DSN's parent directory does not exist, yet a file was created at %s", badDSN)
+	}
+}
+
+// TestCertifyRepoRecordRoundTripsReportedFiles proves the CLI actually wires
+// the report's own accounting into the ledger: every file the printed
+// report excluded, with its printed reason, is readable back from
+// scan_files with a matching disposition and reason. The fixture uses the
+// empty-diff-scope shape again (no jail, no model call) — it produces three
+// distinct exclusion reasons (no-language, no-paired-test, not-selected)
+// with zero audited files, which is enough to prove the wiring: the
+// audited-row shape (KillRate, Survivors, evidence "proven") is already
+// pinned directly against scanstore.Record by
+// TestRecordRoundTripsEveryDisposition in internal/scanstore — this test's
+// job is only to prove certify_repo_record.go hands the report's rows to it
+// correctly, not to re-prove scanstore's own contract.
+func TestCertifyRepoRecordRoundTripsReportedFiles(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
+	root := t.TempDir()
+	gitRun := gitCmd(t, root)
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "pkg", "a_test.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "pkg", "b.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "README.md"), "# x\n")
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+	base := gitRevParseHead(t, root)
+	// Nothing changes after base: a.go (a candidate) is excluded
+	// not-selected; b.go has no paired test; README.md has no language.
+
+	goals := filepath.Join(root, "goals.json")
+	mustWrite(t, goals, `{"pkg/a.go": "must not panic"}`)
+
+	dsn := filepath.Join(t.TempDir(), "scans.duckdb")
+	var out, errb bytes.Buffer
+	code := runCertifyRepo([]string{
+		"--repo", root, "--diff-base", base, "--goals", goals,
+		"--substrate", substrateWorkspace,
+		"--record", "--record-db", dsn,
+	}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit %d: stdout=%s stderr=%s", code, out.String(), errb.String())
+	}
+	if errb.Len() != 0 {
+		t.Fatalf("recording must not fail on a writable DSN, stderr=%q", errb.String())
+	}
+
+	re := regexp.MustCompile(`excluded (\S+) \((\S+)\)`)
+	matches := re.FindAllStringSubmatch(out.String(), -1)
+	if len(matches) < 3 {
+		t.Fatalf("fixture did not print the exclusion lines this test needs (want >= 3, got %d):\n%s", len(matches), out.String())
+	}
+
+	db, err := sql.Open("duckdb", dsn)
+	if err != nil {
+		t.Fatalf("open recorded ledger: %v", err)
+	}
+	defer db.Close()
+
+	for _, m := range matches {
+		path, wantReason := m[1], m[2]
+		var disposition, gotReason string
+		row := db.QueryRow(`SELECT disposition, reason FROM scan_files WHERE path = ?`, path)
+		if err := row.Scan(&disposition, &gotReason); err != nil {
+			t.Fatalf("no scan_files row for %s (printed as excluded with reason %s): %v", path, wantReason, err)
+		}
+		if disposition != "rejected" {
+			t.Errorf("%s recorded with disposition %q, want %q", path, disposition, "rejected")
+		}
+		if gotReason != wantReason {
+			t.Errorf("%s recorded with reason %q, want %q (from the printed report)", path, gotReason, wantReason)
+		}
 	}
 }
 

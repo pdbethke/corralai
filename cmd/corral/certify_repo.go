@@ -22,6 +22,7 @@ import (
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/sandbox"
+	"github.com/pdbethke/corralai/internal/scanstore"
 )
 
 // defaultScanTop bounds a scan by default. Provisional: large enough to be
@@ -56,6 +57,8 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	diffBase := fs.String("diff-base", "", "bound the scan to files changed since this git ref, instead of ranking + --top. In a PR the diff IS the bound: ranking and --top do not apply on this path")
 	minKillRateFlag := fs.String("min-kill-rate", "", "fail the scan (exit 1) if ANY audited file's kill rate is below this value (0.0-1.0 inclusive; a minimum, so a file exactly at the threshold passes). Opt-in: unset by default, so exit codes are unchanged unless this is given. Applies PER FILE, not to the aggregate — a well-tested file must not mask a weak one")
 	preflightFlag := fs.Bool("preflight", false, "run the project's test suite once with coverage instrumentation and report which source files it never executes. One extra suite run; reports coverage-grade evidence, not proof")
+	recordFlag := fs.Bool("record", false, "record every file this scan audited or rejected, and why, into the DuckDB scan ledger (default: off). A recording failure never changes the scan's verdict or exit code")
+	recordDSNFlag := fs.String("record-db", "", "path to the scan ledger (default: $CORRALAI_SCANS_DB, else ~/.claude/corralai_scans.duckdb)")
 	if err := fs.Parse(flagArgs); err != nil {
 		return 2
 	}
@@ -89,6 +92,12 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		}
 		minKillRate = &v
 	}
+
+	// Captured here, before enumeration: this is the header row's
+	// provenance timestamp for the whole invocation, not just the audit
+	// portion of it. Read only if --record is given (see the fail-open call
+	// site near the bottom of this function).
+	startedAt := time.Now()
 
 	cands, excl, err := reposcan.Enumerate(*repoDir)
 	if err != nil {
@@ -344,7 +353,39 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	if *preflightFlag {
 		printPreflightReport(stdout, preflightResult, preflightSources)
 	}
-	return repoScanExitCode(rep, nothingInScope, minKillRate)
+
+	exitCode := repoScanExitCode(rep, nothingInScope, minKillRate)
+
+	// FAIL-OPEN, deliberately, and this is the one place in corral where
+	// uncertainty must not fail closed: this command's exit code is a CI
+	// merge gate. If a ledger write could change it, a full disk or a busy
+	// DuckDB file would red-build a pull request over bookkeeping. So a
+	// recording failure is printed loudly on stderr and the verdict and
+	// exit code decided above stand unchanged. Do not "fix" this into a
+	// failure path — that is precisely the bug this comment exists to head
+	// off. Placed after `code` is computed, and calling nothing that can
+	// panic into the exit path below.
+	if *recordFlag {
+		dsn := *recordDSNFlag
+		if dsn == "" {
+			dsn = defaultScanDSN()
+		}
+		scan := scanstore.Scan{
+			Owner: *owner, Repo: cfg.Repo, Commit: *commit,
+			Substrate: *substrateFlag, EngineVersion: version, ModelSet: cfg.ModelSet,
+			Top: *topFlag, AllCandidates: *allFlag, DiffBase: *diffBase,
+			TotalFiles: totalFiles, Candidates: rep.Candidates, Audited: rep.Audited,
+			KillRate: killRatePtr(rep.KillRate), CacheHits: rep.CacheHits,
+			PreflightRan: preflightResult.Ran, PreflightNote: preflightResult.Note,
+			StartedAt: startedAt, FinishedAt: time.Now(),
+		}
+		files := buildScanFileRows(rep, preflightResult)
+		if err := recordCertifyRepoScan(dsn, scan, files); err != nil {
+			fmt.Fprintf(stderr, "corral certify --repo: scan ledger NOT written: %v\n", err)
+		}
+	}
+
+	return exitCode
 }
 
 // parseMinKillRate parses and range-validates the --min-kill-rate flag value.

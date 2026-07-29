@@ -16,6 +16,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"time"
 
 	_ "github.com/marcboeker/go-duckdb/v2"
@@ -40,12 +41,24 @@ type Scan struct {
 	TotalFiles          int
 	Candidates          int
 	Audited             int
-	KillRate            float64
-	CacheHits           int
-	PreflightRan        bool
-	PreflightNote       string
-	StartedAt           time.Time
-	FinishedAt          time.Time
+	// KillRate is *float64, not float64, for the same reason File.KillRate
+	// is: reposcan.RepoReport.KillRate is math.NaN() when Audited == 0 (a
+	// deliberate choice — see internal/reposcan/report.go — so a stored 0.0
+	// never misrepresents "no measurement was made" as "terrible tests").
+	// But DuckDB sorts NaN as larger than any other DOUBLE value: measured
+	// against this exact driver, MAX(kill_rate) over a table containing NaN
+	// returns NaN (displacing a real 0.9), `kill_rate > 0.5` MATCHES the NaN
+	// row, and `ORDER BY kill_rate DESC LIMIT 1` surfaces the never-measured
+	// scan FIRST — the exact inversion of "best-scoring". A caller must
+	// convert math.NaN() to nil before constructing a Scan (see
+	// certify_repo_record.go's killRatePtr); Record does not re-check
+	// IsNaN itself, so this field is the load-bearing contract.
+	KillRate      *float64
+	CacheHits     int
+	PreflightRan  bool
+	PreflightNote string
+	StartedAt     time.Time
+	FinishedAt    time.Time
 }
 
 // File is one row per file per scan: what corral decided about it, and, for
@@ -189,6 +202,26 @@ func migrateScanFiles(db *sql.DB) error {
 // Close closes the underlying database.
 func (s *Store) Close() error { return s.db.Close() }
 
+// sanitizeKillRate converts a NaN-valued *float64 to nil before it ever
+// reaches DuckDB. DuckDB sorts NaN as larger than any other DOUBLE value —
+// measured against this exact driver, MAX(kill_rate) over a table
+// containing NaN returns NaN (displacing a real 0.9), `kill_rate > 0.5`
+// MATCHES the NaN row, and `ORDER BY kill_rate DESC LIMIT 1` surfaces the
+// never-measured row FIRST. A caller that stores math.NaN() directly (e.g.
+// reposcan.RepoReport.KillRate, which is deliberately NaN when Audited ==
+// 0) would make the never-measured scan look like the ledger's
+// BEST-scoring one — the exact inversion "no measurement was made" was
+// supposed to prevent. This is the last line of defense: it runs
+// regardless of whether the caller already converted NaN to nil itself.
+// math.IsNaN is the check, not some proxy (e.g. Audited == 0) that could
+// drift from the actual value stored.
+func sanitizeKillRate(v *float64) *float64 {
+	if v == nil || math.IsNaN(*v) {
+		return nil
+	}
+	return v
+}
+
 // Record writes scan's header row and every file's disposition in one
 // transaction — a half-written scan is worse than none, because a later
 // report would present it as complete — and returns the assigned scan id.
@@ -208,7 +241,7 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 	RETURNING id`,
 		time.Now().UTC(), scan.Owner, scan.Repo, scan.Commit, scan.Substrate, scan.EngineVersion, scan.ModelSet,
 		scan.Top, scan.AllCandidates, scan.DiffBase, scan.TotalFiles, scan.Candidates, scan.Audited,
-		scan.KillRate, scan.CacheHits, scan.PreflightRan, scan.PreflightNote, scan.StartedAt, scan.FinishedAt,
+		sanitizeKillRate(scan.KillRate), scan.CacheHits, scan.PreflightRan, scan.PreflightNote, scan.StartedAt, scan.FinishedAt,
 	).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("scanstore: insert scan header: %w", err)
@@ -224,7 +257,7 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 			kill_rate, survivors, gradable, preflight_state, evidence
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id, f.Path, f.Lang, f.Disposition, f.Reason,
-			f.KillRate, f.Survivors, f.Gradable, f.PreflightState, f.Evidence,
+			sanitizeKillRate(f.KillRate), f.Survivors, f.Gradable, f.PreflightState, f.Evidence,
 		); err != nil {
 			return 0, fmt.Errorf("scanstore: insert scan_files row for %q: %w", f.Path, err)
 		}

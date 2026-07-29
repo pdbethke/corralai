@@ -178,8 +178,24 @@ Go binary.**
   `init()`/var-initializer code at import time count as "executed" even with zero
   tests run (measured: a test selector matching nothing still clears 3 of gin's files
   and 135 of grpc-go's), which the docs now say plainly rather than implying "executed"
-  always means "tested". Ruby/JS/TS have no plugin yet. Not wired into the GitHub
+  always means "tested" — and Python's version of that is **wider**, since every
+  module-scope `def`/`class` is a counted statement, so importing a module clears it
+  outright. Ruby/JS/TS have no plugin yet. Not wired into the GitHub
   Action as an input — CLI flag only for now.
+
+  A **final whole-branch review** then hunted a fifth false accusation across 15
+  foreign repos and 3 synthetic ones, read every named file and grepped every suite,
+  and found **none** — but did find that the pre-flight **derived its language set
+  from the test-pairing candidate set**, so it declined outright on exactly the repos
+  it exists for (`jsonschema`, `filelock`, `itsdangerous`, `markupsafe` — 0 candidates
+  each, 31/35/10/7 unpaired Python files apiece). It now derives that set from every
+  enumerated *source* file. The same round fixed an unbounded hang in
+  `WorkspaceRunner` (no process group, `Cancel`, or `WaitDelay`, so a suite leaving a
+  background worker holding stdout blocked `Wait` forever — reproduced at 20s against
+  a 2s timeout, and hit for real on `python-dotenv` at 400s against a 5-minute bound),
+  made the documented multi-language `--` path actually reachable, stopped Go
+  discarding a usable profile whenever any test failed, and stopped a quoted or
+  comment-suffixed `go.mod` module line from silently voiding the whole Go report.
 
 **The substrate.**
 - **Multi-model, multi-forge; the `bwrap` + container jail; the attributed action

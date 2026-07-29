@@ -309,12 +309,34 @@ you which. Distinguishing import-time execution from test-time execution
 properly needs different instrumentation (e.g. running with `-run
 ^$` first to get an import-only baseline, then subtracting it) and is
 **not implemented on this branch** — noted here rather than fixed, so this
-doc does not overclaim what a Go "executed" verdict is worth. Python does
-not have this failure mode the same way: `coverage.py`'s import-time
-execution of module-level code is exactly what Python programs already run
-just by being imported, and this pre-flight has always counted that as
-"executed" for Python too — the Go case is new only because `-coverpkg`
-widens *which* test binaries' imports count.
+doc does not overclaim what a Go "executed" verdict is worth.
+
+**Python's version of this is broader, not narrower.** In Python every
+module-scope `def` and `class` is itself a counted statement, so **merely
+importing a module clears it** — no `init()` equivalent required. Measured:
+a module containing one class (two methods) and two module-level functions,
+none of which any test calls, imported only transitively via its package
+`__init__.py`, reports **6 of its 12 statements covered** and lands in the
+**executed** bucket. Go's case needs the file's reachable statements to be
+specifically an `init()` or a var initializer; Python's fires on any
+imported module unconditionally. So on both languages a *cleared* file is a
+weaker claim than it looks, and on Python it is weaker still. The
+`--min-kill-rate` gate is unaffected — it grades measured kill rates, not
+this bucket.
+
+**A file exercised only by benchmarks reads as a finding.** `go test` does
+not run benchmarks, so a Go file reachable solely from a `Benchmark…`
+function is genuinely never executed by the suite and is reported as such.
+Literally accurate, occasionally surprising: `rs/zerolog`'s
+`diode/internal/diodes/poller.go` is reached only from a benchmark and is
+correctly named.
+
+**A repo where test-pairing finds nothing still gets a pre-flight.** The
+language set is derived from every enumerated *source* file, not from the
+paired-test candidate set — otherwise the pre-flight would inherit the exact
+limitation it exists to route around. Verified on
+`python-jsonschema/jsonschema`, which yields **0** audit candidates and 31
+Python files excluded as `no-paired-test`: the pre-flight runs.
 
 **Go and Python only.** The pre-flight is implemented for exactly two
 languages (`go test -coverpkg=./... -coverprofile=…` and `pytest`/`coverage

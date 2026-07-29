@@ -173,11 +173,12 @@ what it actually knows into three buckets — files the suite **executed**,
 files it **measured and never executed** (the real finding, printed by
 name), and files it **never measured at all** (printed only as a count,
 never named — naming one would be an accusation about a file the run never
-looked at). On Go specifically, "executed" can mean "imported" rather than
-"tested" — `init()`/var-initializer code runs at import time, so a file
-whose only reachable statements live there can clear as executed with zero
-tests run (see [docs/corral/github-action.md](docs/corral/github-action.md)
-for the measured effect). Implemented for **Go and Python only** — Ruby, JS, and TS have
+looked at). On **both** Go and Python, "executed" can mean "imported" rather
+than "tested": Go runs `init()`/var-initializer code at import time, and in
+Python every module-scope `def` and `class` is a counted statement, so
+importing a module clears it outright — Python's exposure here is the wider
+of the two (see [docs/corral/github-action.md](docs/corral/github-action.md)
+for both measurements). Implemented for **Go and Python only** — Ruby, JS, and TS have
 no coverage-pre-flight plugin yet, so a scan in one of those languages reports
 that it could not run and names nothing, rather than guessing. A scan whose
 candidates span more than one language usually declines the same way — one

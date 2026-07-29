@@ -57,7 +57,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	diffBase := fs.String("diff-base", "", "bound the scan to files changed since this git ref, instead of ranking + --top. In a PR the diff IS the bound: ranking and --top do not apply on this path")
 	minKillRateFlag := fs.String("min-kill-rate", "", "fail the scan (exit 1) if ANY audited file's kill rate is below this value (0.0-1.0 inclusive; a minimum, so a file exactly at the threshold passes). Opt-in: unset by default, so exit codes are unchanged unless this is given. Applies PER FILE, not to the aggregate — a well-tested file must not mask a weak one")
 	preflightFlag := fs.Bool("preflight", false, "run the project's test suite once with coverage instrumentation and report which source files it never executes. One extra suite run; reports coverage-grade evidence, not proof")
-	recordFlag := fs.Bool("record", false, "record every file this scan audited or rejected, and why, into the DuckDB scan ledger (default: off). A recording failure never changes the scan's verdict or exit code")
+	recordFlag := fs.Bool("record", false, "record every file this scan audited or rejected, and why, into the DuckDB scan ledger (default: off). A BOOL here — unlike `certify --local`'s --record, which takes a tape PATH — see --record-db for where the ledger goes. A recording failure never changes the scan's verdict or exit code")
 	recordDSNFlag := fs.String("record-db", "", "path to the scan ledger (default: $CORRALAI_SCANS_DB, else ~/.claude/corralai_scans.duckdb)")
 	if err := fs.Parse(flagArgs); err != nil {
 		return 2
@@ -80,6 +80,25 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// instead of silently reproducing this exact bug class.
 	if err := checkArgvNoFlagCollision(fs, checkArgv); err != nil {
 		fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
+		return 2
+	}
+
+	// A stray positional argument almost always means a flag's VALUE spilled
+	// out of flag parsing and stopped it early — the exact trap this flag
+	// set sets for an operator who already knows `certify --local`: THERE,
+	// --record takes a STRING (a replayable tape path, `certify --local
+	// --record <file>.json`, documented in README.md); HERE it is a BOOL
+	// (see --record-db for the ledger path, above). An operator who types
+	// what they already know — `--record tape.json --min-kill-rate abc` —
+	// gets "tape.json" as an unconsumed positional, flag.Parse stops right
+	// there, and everything after it (here, --min-kill-rate) is silently
+	// NEVER PARSED: the scan runs with no gate and no ledger override, no
+	// error, no warning — the identical silent-no-gate
+	// checkArgvNoFlagCollision above exists to close, walking in through a
+	// different door. fs.NArg() catches it regardless of which flag or
+	// typo produced the stray token, not just this specific one.
+	if fs.NArg() > 0 {
+		fmt.Fprintf(stderr, "corral certify --repo: unexpected argument(s) %v — if this looks like a flag's value, note that --record here is a BOOL (see --record-db for the ledger path); flag.Parse stops at the first unrecognized positional and everything after it is silently never parsed\n", fs.Args())
 		return 2
 	}
 
@@ -135,6 +154,22 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// than exist on disk.
 	enumExcl := len(excl)
 
+	// effectiveTop is the bound this scan actually APPLIED, for the ledger
+	// header (see the --record call site) — deliberately NOT *topFlag. 0 is
+	// already --top's own sentinel for "unbounded" ("0 or --all = every
+	// candidate", per its help text above), so recording effectiveTop needs
+	// no new NULL/pointer plumbing: it just has to be the number that was
+	// actually checked, not the number the operator happened to type.
+	// Left at its zero value (0, unbounded) on the --diff-base branch below,
+	// where --top/--all are never consulted at all — the diff IS the bound
+	// there — and set from `limit` in the else branch. Recording *topFlag
+	// unconditionally was the bug: with --goals and no explicit --top,
+	// `limit` is forced to 0 a few lines down (an unbounded goals-map scan)
+	// while *topFlag stays its default 25 — measured on a real scan:
+	// "auditing 198 of 198 candidate(s)" recorded alongside `top=25`, a
+	// provenance row positively asserting a bound the scan never applied,
+	// indistinguishable from a genuine top-25 scan to any later reader.
+	var effectiveTop int
 	var selected []reposcan.Candidate
 	if *diffBase != "" {
 		// In a PR the diff IS the bound: ranking and --top exist to bound what
@@ -181,6 +216,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		if *goalsPath != "" && !flagWasSet(fs, "top") && !*allFlag {
 			limit = 0
 		}
+		effectiveTop = limit
 		var notSelected []reposcan.Exclusion
 		selected, notSelected = reposcan.Select(ranked, limit)
 		// Appending into excl is safe: notSelected is Select's own freshly
@@ -315,6 +351,20 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "corral certify --repo: %v\n", argvErr)
 			return 2
 		}
+		// --record is silently INERT on this path, never silently ignored:
+		// a dry run computes and prints a complete disposition for every
+		// file — precisely what the ledger exists to keep — but it never
+		// runs a single job (see the comment above), so there is nothing
+		// audited or execution-rejected to record yet; a --record write
+		// here would either record nothing real or misrepresent every
+		// still-pending job as a decided disposition. Silence was the one
+		// option ruled out: an operator who passed --record and sees
+		// neither a ledger write nor an explanation would reasonably
+		// assume either that the flag just did nothing, or worse, that
+		// it worked.
+		if *recordFlag {
+			fmt.Fprintln(stderr, "corral certify --repo: --record ignored — --dry-run performs no audit, so there is nothing yet to record")
+		}
 		return 0
 	}
 
@@ -393,7 +443,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		scan := scanstore.Scan{
 			Owner: *owner, Repo: cfg.Repo, Commit: *commit,
 			Substrate: *substrateFlag, EngineVersion: version, ModelSet: cfg.ModelSet,
-			Top: *topFlag, AllCandidates: *allFlag, DiffBase: *diffBase,
+			Top: effectiveTop, AllCandidates: *allFlag, DiffBase: *diffBase,
 			TotalFiles: totalFiles, Candidates: rep.Candidates, Audited: rep.Audited,
 			KillRate: killRatePtr(rep.KillRate), CacheHits: rep.CacheHits,
 			PreflightRan: preflightResult.Ran, PreflightNote: preflightResult.Note,

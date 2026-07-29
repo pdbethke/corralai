@@ -128,13 +128,26 @@ func Open(dsn string) (*Store, error) {
 
 	// scan_files is one row per file per scan. evidence is first-class and
 	// NOT a detail: "paired" is a filename guess, "coverage" is an
-	// instrument's report, "proven" is execution. A table that averages
-	// proof with guesswork is a leaderboard nobody can defend.
+	// instrument's report, "proven" is execution, and "" means no evidence
+	// claim was ever made (a file the scan never ran anything against — see
+	// cmd/corral/certify_repo_record.go's ungradableEvidence/
+	// exclusionEvidence). A table that averages proof with guesswork is a
+	// leaderboard nobody can defend — the CHECK constraints below exist so
+	// a typo'd label (a future caller writing "prooven" or "n/a") fails
+	// loud at INSERT time instead of silently entering a table that is
+	// meant to be queried by exact string. They apply only to a table this
+	// CREATE actually creates: a pre-existing store from before this
+	// change keeps whatever it already had (DuckDB has no
+	// `ADD CONSTRAINT` this package uses for the additive migrations
+	// below), the same best-effort boundary migrateScanFiles already
+	// accepts for newly added columns.
 	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS scan_files (
 		scan_id BIGINT, path VARCHAR, lang VARCHAR,
-		disposition VARCHAR, reason VARCHAR,
+		disposition VARCHAR CHECK (disposition IN ('audited', 'rejected')),
+		reason VARCHAR,
 		kill_rate DOUBLE, survivors INTEGER, gradable BOOLEAN,
-		preflight_state VARCHAR, evidence VARCHAR
+		preflight_state VARCHAR CHECK (preflight_state IN ('', 'executed', 'not-executed')),
+		evidence VARCHAR CHECK (evidence IN ('', 'paired', 'coverage', 'proven'))
 	)`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("scanstore: create scan_files table: %w", err)
@@ -273,11 +286,19 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 }
 
 // FilesForScan returns every scan_files row recorded for scanID, in
-// insertion order.
+// insertion order — enforced with `ORDER BY rowid`, not left to whatever
+// order DuckDB happens to return. DuckDB's rowid pseudocolumn tracks
+// physical insertion order for a table this package only ever INSERTs
+// into within one transaction per Record call (never UPDATEs or DELETEs a
+// scan_files row), which is exactly this table's access pattern — an
+// ORDER BY that relied on rowid surviving updates/deletes would not be
+// safe here, but that case never arises. Confirmed against this exact
+// driver (github.com/marcboeker/go-duckdb/v2): three sequential inserts
+// read back via `SELECT rowid, ...` in insertion order (0, 1, 2).
 func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT path, lang, disposition, reason,
 		kill_rate, survivors, gradable, preflight_state, evidence
-		FROM scan_files WHERE scan_id = ?`, scanID)
+		FROM scan_files WHERE scan_id = ? ORDER BY rowid`, scanID)
 	if err != nil {
 		return nil, fmt.Errorf("scanstore: files for scan %d: %w", scanID, err)
 	}

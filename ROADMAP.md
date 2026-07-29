@@ -197,6 +197,33 @@ Go binary.**
   discarding a usable profile whenever any test failed, and stopped a quoted or
   comment-suffixed `go.mod` module line from silently voiding the whole Go report.
 
+- **The scan ledger (`--record`, `certify --repo`) — opt-in, CLI only.**
+  `certify --repo` computes a complete disposition for every file it walks —
+  audited with a kill rate, or rejected with one of a dozen machine-stable
+  reasons — and used to print it and throw it away. `--record` keeps it: one
+  header row per invocation and one row per file, in an embedded DuckDB
+  ledger (`--record-db`, default `~/.claude/corralai_scans.duckdb` or
+  `$CORRALAI_SCANS_DB`), so "why did file X get skipped on scan N" has an
+  answer later. Fail-open, deliberately — this command's exit code is a CI
+  merge gate, so a ledger write (a full disk, a locked file under a
+  concurrent writer) can never flip the scan's own verdict; it prints loudly
+  on stderr and the exit code stands, checked directly against a
+  `COULD-NOT-GRADE` fixture so a hard-coded 0 in the record path can't
+  masquerade as "preserved". `evidence` is first-class, not a detail:
+  `paired` (filename pairing), `coverage` (the `--preflight` overlay),
+  `proven` (real execution) — and it is NOT stamped on a file the check
+  command never actually ran against (`prep-failed`, `cancelled`), which a
+  review round caught as an early overclaim. A second review round closed a
+  silent-no-gate this flag's own naming invites: `--record` here is a BOOL,
+  while the sibling `certify --local --record <file>.json` takes a tape
+  PATH — an operator typing the pattern they already know
+  (`--record tape.json --min-kill-rate 0.5`) used to spill "tape.json" into
+  an unconsumed positional, silently stop flag parsing, and drop
+  `--min-kill-rate` — the merge-gate threshold — with no error at all; both
+  that door and the sibling one (a `certify --repo`-only flag placed after
+  `--`, handed to the check command instead of being parsed) are now hard
+  usage errors (exit 2) naming the offending token.
+
 **The substrate.**
 - **Multi-model, multi-forge; the `bwrap` + container jail; the attributed action
   ledger** — every consequential action recorded and attributed to a verified

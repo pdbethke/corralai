@@ -59,16 +59,16 @@ func killRatePtr(v float64) *float64 {
 //     becomes an "audited" row (KillRate + Survivors, evidence "proven").
 //     An UNgradable result is still a row: prep-failed, baseline-failed,
 //     flaky-baseline, suite-ignores-file, executor-error and cancelled are
-//     the scan's MOST EXPENSIVE rejections — corral selected these files,
-//     emitted jobs for them, prepped a jail, and for every reason but
-//     cancelled actually ran the check command at least once — and before
-//     this fix they were tallied only in rep.Ungradable (a map[reason]int
-//     with no per-file paths) and had NO row here at all: a file the scan
-//     visibly worked on was invisible to "why did file X get skipped on
-//     scan N", the exact question this store exists to answer (see
-//     internal/scanstore/store.go's package doc). Evidence is "proven"
-//     here too — a failed run is still a real execution attempt, not a
-//     filename guess.
+//     the scan's MOST EXPENSIVE rejections — corral selected most of these
+//     files, emitted jobs for them, prepped a jail, and ran the check
+//     command at least once — and before this fix they were tallied only
+//     in rep.Ungradable (a map[reason]int with no per-file paths) and had
+//     NO row here at all: a file the scan visibly worked on was invisible
+//     to "why did file X get skipped on scan N", the exact question this
+//     store exists to answer (see internal/scanstore/store.go's package
+//     doc). Evidence for these rows is NOT a blanket "proven" — see
+//     ungradableEvidence below, which is where "proven" earns its keep as
+//     the label this table's defensibility rests on.
 //   - rep.Excluded — every file that never became a job at all: the
 //     enumerate-level reasons (no-language, is-test, no-paired-test,
 //     ambiguous-test, not-regular-file) and the candidate-level ones added
@@ -125,7 +125,7 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 		}
 		rows = append(rows, scanstore.File{
 			Path: path, Lang: r.Job.Lang, Disposition: "rejected", Reason: reason,
-			Gradable: false, Evidence: "proven", PreflightState: preflightState(preflight, path),
+			Gradable: false, Evidence: ungradableEvidence(reason), PreflightState: preflightState(preflight, path),
 		})
 	}
 
@@ -142,6 +142,48 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 		})
 	}
 	return rows
+}
+
+// ungradableEvidence decides the evidence label for a job that ran (or
+// tried to) and came back ungradable — see buildScanFileRows. "proven" is
+// the single label this whole table's defensibility rests on: a later
+// grading query treats it as "corral actually executed something against
+// this file", and that claim must be TRUE, not merely "corral meant to".
+//
+// Two of the six ungradable reasons never reach that bar:
+//   - reposcan.ReasonCancelled is written by reposcan.Scan itself, BEFORE
+//     ex.Execute is ever called (see internal/reposcan/scan.go) — the
+//     check command never ran, full stop. This function's own earlier
+//     comment used to concede this and stamp "proven" anyway; that was
+//     the overclaim, not a defensible choice.
+//   - reposcan.ReasonPrepFailed is returned at the very top of
+//     localExecutor.Execute (cmd/corral/certify_repo.go), when the
+//     language-wide jail seed fails to build — BEFORE l.newBaseline is
+//     ever reached, so the check command never ran for this file either.
+//
+// Both get "" (no evidence claim), the same value an excluded file that
+// was never even a candidate gets — deliberately not a fifth enum value:
+// "no evidence" and "" already mean the same thing everywhere else in
+// this table (see exclusionEvidence), and reusing it means one fewer
+// distinct string a query has to know about, not one more.
+//
+// The other four reasons (baseline-failed, flaky-baseline,
+// suite-ignores-file, executor-error) DO clear the bar: baseline-failed
+// and flaky-baseline are decided FROM the check command's own baseline
+// runs (it ran — possibly more than once — and either failed
+// consistently or disagreed with itself); suite-ignores-file is decided
+// from a completed audit run (the canary survived); executor-error covers
+// every other failure inside Execute, all of which are reached only AFTER
+// at least one real baseline run has already happened (CheckBaselineStable
+// erroring mid-run, or the audit step itself failing once baseline passed
+// — see Execute's own ordering). All four keep "proven".
+func ungradableEvidence(reason string) string {
+	switch reason {
+	case reposcan.ReasonCancelled, reposcan.ReasonPrepFailed:
+		return ""
+	default:
+		return "proven"
+	}
 }
 
 // exclusionEvidence decides the evidence label for a file that was

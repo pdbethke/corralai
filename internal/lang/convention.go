@@ -99,6 +99,26 @@ func dirDepth(dir string) int {
 // "") must not have its genuine same-directory pairing devalued by that
 // coincidence. Hence the asymmetry: Rank 0 always wins the merge; only among
 // candidates that are ALL non-sibling does "least specific" apply.
+//
+// INVARIANT a future plugin must not break (guarded by the property test
+// TestDedupeMatchesPrincipledRuleForShippedPlugins in
+// dedupe_property_test.go): "attribute the max (least-specific) rank among
+// colliding non-sibling forms" is only correct because every shipped
+// plugin's non-sibling forms are, whenever they collide with something
+// weaker, VACUOUS at that collision — their directory component degenerated
+// to empty, so they carry no real evidence and "worst of several
+// no-evidence guesses" is a fine answer. A form that DOES carry real,
+// non-degenerate directory evidence (a genuine parallel-tree or full-mirror
+// match) must never be dragged down to a weaker colliding form's rank just
+// because the two happen to produce the same string — rank feeds a
+// CROSS-SOURCE comparison (reposcan.demoteAmbiguousPairings), so
+// understating one source's evidence can hand a wrongful strict win to a
+// different source, which is a mispairing, not a safe demotion. If a new
+// plugin can produce a collision between a non-vacuous, non-sibling form and
+// a weaker one, this function's max-rule silently mis-scores it; the correct
+// merge in that case is the MIN (strongest) rank among the non-vacuous
+// colliding forms, not the max. The property test above exists to fail
+// loudly the day that becomes possible, rather than let it mispair silently.
 func dedupeCandidates(cands []TestCandidate) []TestCandidate {
 	firstIdx := make(map[string]int, len(cands))
 	minRank := make(map[string]int, len(cands))

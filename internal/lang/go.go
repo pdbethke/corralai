@@ -110,12 +110,63 @@ func (goPlugin) ListTestsCmd(testPath string) ([]string, bool) {
 // build tags — every run. That is a false accusation of the exact kind
 // this feature exists to refuse: with -coverpkg=./... added, the same file
 // shows real (non-zero) execution counts, sourced from the root package's
-// test binary. The cost is real too — every test binary now instruments
-// every package the -coverpkg pattern resolves to that it actually
-// imports, so the profile carries one block set per (test binary ×
-// imported covered package) instead of one per test binary — and is
-// bounded the same way any other pre-flight output is, by
-// preflightMaxOutput / the truncation check in reposcan.Preflight.
+// test binary.
+//
+// The cost of -coverpkg=./... is real, and by itself unaffordable: every
+// test binary now instruments every package the pattern resolves to that it
+// actually imports, so the RAW profile carries one block set per (test
+// binary × imported covered package) — roughly quadratic in package count,
+// not linear in repo size. Measured on the task-5 review round: gin (7
+// packages) 90 KB -> 558 KB; prometheus/client_golang 236 KB -> 3.5 MB;
+// corralai's own tree (~90 packages) 848 KB -> 53 MB; grpc-go (~180
+// packages) 1.7 MB -> 253 MB. A raw profile that size blew straight through
+// the pre-flight's own output cap on any substrate that didn't enforce one
+// (see adequacy.WithWorkspaceMaxOutput) and would have made the pre-flight
+// simply never complete on corral's own repo or anything grpc-go-sized —
+// converting "works, with a false positive" into "never works" for a whole
+// size class, which is worse.
+//
+// goCoverageReduceScript closes that from the source side, inside the same
+// `sh -c` invocation, before the profile ever reaches stdout: it collapses
+// the raw profile to exactly ONE line per file, discarding the per-block,
+// per-test-binary duplication entirely — a file needs only ONE bit to
+// answer "did any block, in any test binary, ever execute" (present-true),
+// vs "every block, in every test binary that measured it, stayed at zero"
+// (present-false, the real finding) — see ParseCoverage's tri-state
+// contract, which this reduction preserves exactly, just pre-aggregated.
+// corral's own 53 MB raw profile reduces to ~15 KB (measured). This is the ONLY
+// piece of the coverage pipeline that moves into the shell: the reduction
+// is one comparison (a block's count > 0) applied once per file, not a
+// relocation of ParseCoverage's fail-closed guards, which stay in tested Go
+// exactly as before — the "mode:" header requirement, the malformed-line
+// error, and the empty-profile-is-not-an-error case are all still enforced
+// by ParseCoverage itself, on whatever this script hands it (see the
+// script's own pass-through-unchanged branch for anything that doesn't
+// match the expected block shape, so a genuinely malformed line still
+// reaches ParseCoverage byte-for-byte and still trips its validation).
+const goCoverageReduceScript = `awk '` +
+	// Line 1 is always "mode: <mode>" for a well-formed profile — pass it
+	// through untouched, so ParseCoverage's own header check still runs
+	// against the real thing, not a reduction artifact.
+	`NR==1{print;next} ` +
+	// A real block line is exactly 3 whitespace-separated fields:
+	// "<path>:<range> <numStmt> <count>". Anything else (garbled output, a
+	// truncated line) is passed through UNCHANGED rather than reduced —
+	// ParseCoverage sees the exact original bytes and still errors on it,
+	// the same as if this script did not exist.
+	`NF!=3{print;next} ` +
+	`{c=index($1,":"); if(c<=1||$3!~/^[0-9]+$/){print;next} ` +
+	`p=substr($1,1,c-1); if($3+0>0){any[p]=1} seen[p]=1} ` +
+	// One synthetic line per distinct file: count=1 if ANY occurrence
+	// anywhere (any test binary, any block) executed it, else 0 — never
+	// dropped, so a file that was measured and genuinely never executed
+	// (every block, every test binary, count 0) still gets its
+	// present-false entry; only a file with ZERO lines in the whole raw
+	// profile is absent, unchanged from before this reduction existed. The
+	// range/numStmt fields are placeholders — ParseCoverage never reads
+	// past the colon-prefixed path and the trailing count.
+	`END{for(p in seen) print p":0,0 1 "(p in any?1:0)}' "$f"`
+
 func (goPlugin) CoverageCmd(testCmd []string) (cmd []string, ok bool) {
 	if len(testCmd) == 0 {
 		return nil, false
@@ -125,7 +176,8 @@ func (goPlugin) CoverageCmd(testCmd []string) (cmd []string, ok bool) {
 		quoted[i] = shellQuote(arg)
 	}
 	script := `f=$(mktemp) && trap 'rm -f "$f"' EXIT && ` +
-		strings.Join(quoted, " ") + ` -coverpkg=./... -coverprofile="$f" && cat "$f"`
+		strings.Join(quoted, " ") + ` -coverpkg=./... -coverprofile="$f" && ` +
+		goCoverageReduceScript
 	return []string{"sh", "-c", script}, true
 }
 

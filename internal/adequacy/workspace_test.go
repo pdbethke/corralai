@@ -7,9 +7,12 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
 func wsTree(t *testing.T, files map[string]string) string {
@@ -277,6 +280,72 @@ func TestWorkspaceRunnerEnumerateIsBoundedToo(t *testing.T) {
 	if elapsed := time.Since(start); elapsed > 10*time.Second {
 		t.Errorf("the run took %s: the timeout did not bound it", elapsed)
 	}
+}
+
+// TestWorkspaceRunnerEnumerateWithoutMaxOutputStaysUnbounded pins F1's
+// backward-compatibility half: a WorkspaceRunner built WITHOUT
+// WithWorkspaceMaxOutput (every caller before this option existed,
+// including certify_local.go's ordinary per-mutant runs) must keep
+// buffering Enumerate's output completely unbounded, exactly as it always
+// has — this option is opt-in, and RunTest/RunTestVerbose never accept it
+// at all.
+func TestWorkspaceRunnerEnumerateWithoutMaxOutputStaysUnbounded(t *testing.T) {
+	root := wsTree(t, map[string]string{"a.txt": "x\n"})
+	w := NewWorkspaceRunner(root, 0)
+
+	// 100 KiB of 'x' — bigger than sandbox.Run's own 16 KiB default, to
+	// prove nothing is silently capping this path either.
+	const want = 100 << 10
+	out, err := w.Enumerate(context.Background(), nil,
+		[]string{"sh", "-c", "yes x | head -c " + itoa(want)})
+	if err != nil {
+		t.Fatalf("Enumerate: %v", err)
+	}
+	if len(out) != want {
+		t.Fatalf("output = %d bytes, want exactly %d (unbounded, no truncation marker expected)", len(out), want)
+	}
+}
+
+// TestWorkspaceRunnerEnumerateWithMaxOutputTruncates is the F1 fix itself:
+// this is the coverage pre-flight's own substrate, and before this option
+// existed nothing bounded what Enumerate buffered here at all — measured
+// against a real grpc-go run, a 253 MB coverage profile read entirely into
+// memory (827 MB peak RSS). WithWorkspaceMaxOutput must actually cap it,
+// using the same sandbox.CappedWriter + sandbox.TruncationMarker contract
+// reposcan.Preflight already knows how to detect (checked as a suffix, see
+// preflight.go), so a truncated run here reports exactly the way a
+// truncated jail run always has.
+func TestWorkspaceRunnerEnumerateWithMaxOutputTruncates(t *testing.T) {
+	root := wsTree(t, map[string]string{"a.txt": "x\n"})
+	const cap = 1024
+	w := NewWorkspaceRunner(root, 0, WithWorkspaceMaxOutput(cap))
+
+	out, err := w.Enumerate(context.Background(), nil,
+		[]string{"sh", "-c", "yes x | head -c " + itoa(cap*10)})
+	if err != nil {
+		t.Fatalf("Enumerate: %v", err)
+	}
+	if !strings.HasSuffix(out, sandbox.TruncationMarker) {
+		t.Fatalf("output does not end with sandbox.TruncationMarker: got %d bytes, tail %q", len(out), tail(out, 40))
+	}
+	// The captured payload itself (before the marker) must still be capped
+	// at cap bytes — a marker appended to an otherwise-unbounded buffer
+	// would defeat the whole point.
+	payload := strings.TrimSuffix(strings.TrimRight(out, "\n"), "\n"+sandbox.TruncationMarker)
+	if len(payload) > cap {
+		t.Fatalf("payload is %d bytes, want <= %d (the cap)", len(payload), cap)
+	}
+}
+
+func itoa(n int) string {
+	return strconv.Itoa(n)
+}
+
+func tail(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[len(s)-n:]
 }
 
 // The caller's own ctx still wins when it is TIGHTER than the runner's

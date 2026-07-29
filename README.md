@@ -173,12 +173,24 @@ what it actually knows into three buckets — files the suite **executed**,
 files it **measured and never executed** (the real finding, printed by
 name), and files it **never measured at all** (printed only as a count,
 never named — naming one would be an accusation about a file the run never
-looked at). Implemented for **Go and Python only** — Ruby, JS, and TS have
-no coverage-pre-flight plugin yet, and a scan in one of those languages (or
-spanning more than one language at once) reports that it could not run and
-names nothing, rather than guessing. Same fail-closed rule when the coverage
-tool itself is missing from the runner. Not yet wired into the GitHub Action
-as an input — today it's a `corral certify --repo` flag only.
+looked at). On Go specifically, "executed" can mean "imported" rather than
+"tested" — `init()`/var-initializer code runs at import time, so a file
+whose only reachable statements live there can clear as executed with zero
+tests run (see [docs/corral/github-action.md](docs/corral/github-action.md)
+for the measured effect). Implemented for **Go and Python only** — Ruby, JS, and TS have
+no coverage-pre-flight plugin yet, so a scan in one of those languages reports
+that it could not run and names nothing, rather than guessing. A scan whose
+candidates span more than one language usually declines the same way — one
+instrumented run can't cover two — **unless** an explicit `-- <test-command>`
+unambiguously names exactly one of them (e.g. a Python+TypeScript repo with
+`-- pytest -q`: TypeScript has no coverage plugin at all, so Python is the
+only candidate, not merely the likeliest one — that repo is instrumented, its
+TypeScript files simply fall into "never measured"). Two languages that could
+both plausibly own the given command (e.g. Go, whose coverage command accepts
+any test invocation by design) still decline as ambiguous. Same fail-closed
+rule when the coverage tool itself is missing from the runner. Not yet wired
+into the GitHub Action as an input — today it's a `corral certify --repo`
+flag only.
 
 ## A knowledge corpus that makes every audit sharper
 

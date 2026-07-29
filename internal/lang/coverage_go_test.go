@@ -3,9 +3,14 @@
 package lang
 
 import (
+	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestGoParseCoverageExecutedFiles(t *testing.T) {
@@ -102,5 +107,122 @@ func TestGoCoverageCmdIncludesCoverpkgAll(t *testing.T) {
 	script := cmd[2]
 	if !strings.Contains(script, "-coverpkg=./...") {
 		t.Fatalf("CoverageCmd script = %q, missing -coverpkg=./... (without it, cross-package execution is invisible and untested packages are falsely reported as unexecuted)", script)
+	}
+	// -coverpkg=./... makes the RAW profile carry one block set per (test
+	// binary × imported covered package) — measured up to 253 MB on a
+	// large real repo (grpc-go). The script must reduce it before it ever
+	// reaches stdout, or the fix for the false-unexecuted-finding bug
+	// converts "works, with a false positive" into "never completes" for
+	// any repo above a few dozen packages.
+	if !strings.Contains(script, "awk '") {
+		t.Fatalf("CoverageCmd script = %q, missing the awk profile reduction — -coverpkg=./... without it produces a profile that scales ~quadratically with package count", script)
+	}
+}
+
+// TestGoCoverageReduceScriptCollapsesDuplicateBlocksPreservingTriState
+// actually RUNS goCoverageReduceScript (not a string-containment check) —
+// the same shell reduction CoverageCmd wires after -coverpkg's raw profile
+// — against a synthetic raw profile shaped exactly like what -coverpkg=./...
+// produces on a real repo: the SAME file appearing multiple times (once per
+// test binary that imports it), with different per-occurrence counts. It
+// must collapse to exactly one line per file, and the tri-state answer
+// (executed / measured-and-never-executed) must be identical to what
+// ParseCoverage would have computed from the raw, unreduced profile — the
+// reduction is a size optimization, not a semantic change.
+func TestGoCoverageReduceScriptCollapsesDuplicateBlocksPreservingTriState(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no sh on PATH")
+	}
+	if _, err := exec.LookPath("awk"); err != nil {
+		t.Skip("no awk on PATH")
+	}
+	dir := t.TempDir()
+	profile := filepath.Join(dir, "profile.out")
+	// a.go: one test binary saw it unexecuted (0), another saw it executed
+	// (1) — the real shape -coverpkg=./... produces when a file is
+	// imported by two different tested packages. b.go: every occurrence,
+	// across every test binary, is 0 — genuinely measured and never
+	// executed. c.go: one occurrence, executed with a real statement count.
+	raw := "mode: set\n" +
+		"github.com/x/a.go:1.1,2.2 1 0\n" +
+		"github.com/x/a.go:3.1,4.2 1 0\n" +
+		"github.com/x/a.go:1.1,2.2 1 1\n" +
+		"github.com/x/b.go:1.1,2.2 1 0\n" +
+		"github.com/x/b.go:5.1,6.2 1 0\n" +
+		"github.com/x/c.go:1.1,2.2 1 5\n"
+	if err := os.WriteFile(profile, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// goCoverageReduceScript reads from "$f" — set it exactly the way
+	// CoverageCmd's own `f=$(mktemp)` does, just pointed at the fixture
+	// instead of a fresh mktemp, since this test cares about the reduction
+	// alone, not the surrounding test-command invocation.
+	script := `f=` + shellQuote(profile) + `; ` + goCoverageReduceScript
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "sh", "-c", script).Output()
+	if err != nil {
+		t.Fatalf("running goCoverageReduceScript: %v", err)
+	}
+
+	// Exactly one line per file: 1 mode line + 3 file lines, however many
+	// raw block lines fed in (6 here; -coverpkg=./... on a real repo can
+	// feed in orders of magnitude more per file without growing this).
+	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+	if len(lines) != 4 {
+		t.Fatalf("reduced output has %d lines, want 4 (mode + 3 files): %q", len(lines), out)
+	}
+
+	p := goPlugin{}
+	got, perr := p.ParseCoverage(string(out), "github.com/x")
+	if perr != nil {
+		t.Fatalf("ParseCoverage(reduced output): %v (reduced output was %q)", perr, out)
+	}
+	want := map[string]bool{"a.go": true, "b.go": false, "c.go": true}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ParseCoverage(reduced output) = %v, want %v; reduced output was %q", got, want, out)
+	}
+}
+
+// TestGoCoverageReduceScriptPassesMalformedLinesThroughUnchanged pins the
+// fail-closed guard the review round required explicitly stay in Go: the
+// shell reduction must never itself decide a malformed line is fine to drop
+// or coerce — it passes anything that doesn't match the exact 3-field
+// "<path>:<range> <numStmt> <count>" shape straight through, byte for byte,
+// so ParseCoverage's own validation (never relocated) still sees the exact
+// original bytes and still errors on it, identically to before this
+// reduction existed.
+func TestGoCoverageReduceScriptPassesMalformedLinesThroughUnchanged(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no sh on PATH")
+	}
+	if _, err := exec.LookPath("awk"); err != nil {
+		t.Skip("no awk on PATH")
+	}
+	cases := map[string]string{
+		"garbled line, wrong field count": "mode: set\nthis line is not a coverage block\n",
+		"non-numeric count":               "mode: set\ngithub.com/x/a.go:1.1,2.2 1 notanumber\n",
+		"no colon in the path field":      "mode: set\nnocolonhere 1 1\n",
+	}
+	for name, raw := range cases {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			profile := filepath.Join(dir, "profile.out")
+			if err := os.WriteFile(profile, []byte(raw), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			script := `f=` + shellQuote(profile) + `; ` + goCoverageReduceScript
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			out, err := exec.CommandContext(ctx, "sh", "-c", script).Output()
+			if err != nil {
+				t.Fatalf("running goCoverageReduceScript: %v", err)
+			}
+			p := goPlugin{}
+			if _, perr := p.ParseCoverage(string(out), ""); perr == nil {
+				t.Fatalf("ParseCoverage(reduced output) = nil error, want an error — the malformed line must survive the reduction unchanged, not be silently normalized away; reduced output was %q", out)
+			}
+		})
 	}
 }

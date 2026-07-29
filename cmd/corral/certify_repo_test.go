@@ -2383,3 +2383,67 @@ func TestPrintPreflightReportRanFalsePrintsNoteOnlyNoFileList(t *testing.T) {
 		t.Errorf("Ran=false must never print a file list:\n%s", s)
 	}
 }
+
+// TestSelectPreflightLanguageNoCheckArgvAlwaysDeclines pins the unchanged
+// half of F5: with no explicit `-- <cmd>`, there is no principled way to
+// pick a stock TestCmd() across multiple languages, so a multi-language
+// scan still declines exactly as it did before this function existed.
+func TestSelectPreflightLanguageNoCheckArgvAlwaysDeclines(t *testing.T) {
+	langName, note := selectPreflightLanguage(map[string]bool{"python": true, "typescript": true}, nil)
+	if langName != "" {
+		t.Fatalf("langName = %q, want \"\" (no checkArgv given)", langName)
+	}
+	if !strings.Contains(note, "scan spans 2 languages") {
+		t.Errorf("note = %q, want it to name the languages", note)
+	}
+}
+
+// TestSelectPreflightLanguageResolvesAisuiteShape pins the F5 fix itself:
+// andrewyng/aisuite has python + typescript candidates, but typescript has
+// no lang.CoverageReporter at all — so `-- pytest -q` is NOT ambiguous, it
+// is the only language among the candidates that can even answer the
+// question. Before this fix, runPreflight declined this repo outright;
+// after it, python is instrumented and typescript files simply never enter
+// CoverageMap.Executed (reported as a "not measured" count elsewhere, not
+// here).
+func TestSelectPreflightLanguageResolvesAisuiteShape(t *testing.T) {
+	langName, note := selectPreflightLanguage(map[string]bool{"python": true, "typescript": true}, []string{"pytest", "-q"})
+	if langName != "python" {
+		t.Fatalf("langName = %q, note = %q; want \"python\" (typescript has no CoverageReporter, so python is unambiguous)", langName, note)
+	}
+	if note != "" {
+		t.Errorf("note = %q, want empty on a resolved language", note)
+	}
+}
+
+// TestSelectPreflightLanguageGoAndPythonBothMatchStaysAmbiguous pins the
+// boundary F5 must NOT cross: goPlugin.CoverageCmd accepts ANY non-empty
+// argv by design (it never inspects shape), so a scan spanning go AND
+// python, given `-- pytest -q`, has TWO languages whose CoverageCmd
+// accepts it — genuinely ambiguous, and must still decline rather than
+// guess which one the operator meant.
+func TestSelectPreflightLanguageGoAndPythonBothMatchStaysAmbiguous(t *testing.T) {
+	langName, note := selectPreflightLanguage(map[string]bool{"python": true, "go": true}, []string{"pytest", "-q"})
+	if langName != "" {
+		t.Fatalf("langName = %q, want \"\" (go's CoverageCmd accepts any argv, so this is genuinely ambiguous)", langName)
+	}
+	if !strings.Contains(note, "ambiguous") {
+		t.Errorf("note = %q, want it to say ambiguous", note)
+	}
+}
+
+// TestSelectPreflightLanguageNoLanguageMatchesFallsBackToTheBlanketRefusal
+// covers the zero-match case: a `--` command shaped for neither candidate
+// language's coverage instrumentation (e.g. it isn't even a pytest/`-m`
+// shape) falls back to the same "spans N languages" refusal the
+// no-checkArgv case gives, rather than a confusing "ambiguous" message
+// about zero matches.
+func TestSelectPreflightLanguageNoLanguageMatchesFallsBackToTheBlanketRefusal(t *testing.T) {
+	langName, note := selectPreflightLanguage(map[string]bool{"python": true, "typescript": true}, []string{"npm", "test"})
+	if langName != "" {
+		t.Fatalf("langName = %q, want \"\" (neither candidate language's CoverageCmd accepts this argv)", langName)
+	}
+	if !strings.Contains(note, "scan spans 2 languages") || strings.Contains(note, "ambiguous") {
+		t.Errorf("note = %q, want the blanket refusal, not the ambiguous-match wording", note)
+	}
+}

@@ -525,13 +525,27 @@ func checkArgvSpansOneLanguage(checkArgv []string, jobs []reposcan.Job) error {
 // preflightMaxOutput caps the coverage pre-flight's own instrumented suite
 // run at 8 MiB of combined stdout+stderr — overriding sandbox.Run's own
 // 16 KiB default (see adequacy.WithMaxOutput) via a jail/enumerator built
-// specifically for this one call, never for the scan's ordinary mutant runs.
+// specifically for this one call, never for the scan's ordinary mutant runs
+// — and, on the workspace substrate, via adequacy.WithWorkspaceMaxOutput,
+// which did not exist until the review round below and left that substrate
+// completely unbounded until then (see the F1 note there).
+//
 // A real `coverage json` report was measured at 467 KB against a real
 // project (pallets/flask): at the 16 KiB default every real run truncates
 // before ParseCoverage ever sees valid JSON, so the pre-flight could not
-// succeed on any non-toy repository. 8 MiB is comfortably generous headroom
-// above that — enough for a large monorepo's report — while still bounding
-// memory rather than leaving the cap effectively unbounded.
+// succeed on any non-toy Python repository. 8 MiB is comfortably generous
+// headroom above that.
+//
+// For Go this cap is sized against the REDUCED profile
+// (goCoverageReduceScript in internal/lang/go.go), not the raw one
+// -coverpkg=./... produces. The raw profile is ~quadratic in package count
+// (measured up to 253 MB on grpc-go — see go.go's CoverageCmd doc comment)
+// and 8 MiB would not have been "generous headroom" for it at all; it would
+// have made the pre-flight fail closed (truncated, Ran=false) on any Go
+// repo above roughly a few dozen packages, including corral's own tree.
+// The reduction collapses that to one line per file BEFORE this cap ever
+// sees it — corral's own 53 MB raw profile reduces to a few KB — so 8 MiB
+// stays generous for Go too, for the profile this cap actually measures.
 const preflightMaxOutput = 8 << 20
 
 // preflightTimeout bounds the ONE instrumented suite run --preflight
@@ -550,18 +564,84 @@ type coverageRunner interface {
 	Enumerate(ctx context.Context, files map[string]string, cmd []string) (string, error)
 }
 
+// selectPreflightLanguage picks which language runPreflight instruments
+// when a scan's candidates span more than one — called only in that case;
+// the single-language case never reaches this function.
+//
+// With no explicit `-- <cmd>` there is no principled way to pick a stock
+// TestCmd() across multiple languages, so this always declines (langName
+// == "").
+//
+// With an explicit checkArgv, the operator's own command IS the
+// disambiguator, PROVIDED exactly one candidate language's
+// lang.CoverageReporter accepts it: try every candidate language's
+// CoverageCmd(checkArgv) (skipping any that doesn't implement
+// CoverageReporter at all, e.g. Ruby/JS/TS today — see internal/lang) and
+// count how many say yes. Exactly one match is unambiguous — this is what
+// makes andrewyng/aisuite (python + typescript candidates, `-- pytest -q`)
+// resolvable: typescript has no CoverageReporter, so python is the only
+// candidate at all, not merely the most likely one. Zero or more than one
+// match keeps the original blanket refusal: Go's CoverageCmd accepts ANY
+// non-empty argv by design (see go.go — it wraps whatever it's given
+// without inspecting shape), so a genuinely mixed python+go scan given `--
+// pytest -q` still declines rather than guess which language the operator
+// meant, exactly as before this function existed.
+func selectPreflightLanguage(langs map[string]bool, checkArgv []string) (langName string, note string) {
+	names := make([]string, 0, len(langs))
+	for n := range langs {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+
+	if len(checkArgv) > 0 {
+		var matches []string
+		for _, n := range names {
+			plug, ok := lang.ByName(n)
+			if !ok {
+				continue
+			}
+			reporter, ok := plug.(lang.CoverageReporter)
+			if !ok {
+				continue // no CoverageReporter for this language at all — never a match
+			}
+			if _, ok := reporter.CoverageCmd(checkArgv); ok {
+				matches = append(matches, n)
+			}
+		}
+		if len(matches) == 1 {
+			return matches[0], ""
+		}
+		if len(matches) > 1 {
+			return "", fmt.Sprintf(
+				"preflight: scan spans %d languages (%s) and the `--` test command matches more than one of them's coverage instrumentation (%s) — ambiguous, skipped",
+				len(names), strings.Join(names, ", "), strings.Join(matches, ", "))
+		}
+		// len(matches) == 0: none of the candidate languages' coverage
+		// instrumentation recognized the operator's own command either —
+		// falls through to the same refusal the no-checkArgv case returns.
+	}
+	return "", fmt.Sprintf(
+		"preflight: scan spans %d languages (%s) — one instrumented suite run cannot cover more than one, skipped",
+		len(names), strings.Join(names, ", "))
+}
+
 // runPreflight runs the coverage pre-flight ONCE for the whole scan (never
 // once per audited file) over the FULL set of repo candidates, independent
 // of --top/--diff-base: it answers "what does the suite ever touch in this
 // repo", not "what did this particular scan choose to audit".
 //
-// One instrumented command can only speak one language, so this only runs
-// when every candidate resolved to the SAME language plugin; a repo with no
-// candidates, or with more than one language among them, declines with an
-// explanatory Note (reposcan.Preflight's own Ran=false contract) rather than
-// guessing which suite to instrument. A file belonging to a language this
-// run never instruments is not silently accused either way: it is simply
-// ABSENT from the resulting CoverageMap.Executed (never measured), which
+// One instrumented command can only speak one language. When every
+// candidate resolved to the same language plugin, that is the obvious
+// choice. When candidates span more than one language, this DECLINES BY
+// DEFAULT (a repo with no candidates also declines) — but not
+// unconditionally: see selectPreflightLanguage, which resolves the
+// multi-language case when the operator's own `-- <cmd>` unambiguously
+// names one of them (andrewyng/aisuite — python + typescript candidates —
+// is the repo this distinction exists for: `-- pytest -q` is not
+// ambiguous just because the repo also has files in a language nothing
+// here can instrument). A file belonging to a language this run never
+// instruments is not silently accused either way: it is simply ABSENT
+// from the resulting CoverageMap.Executed (never measured), which
 // splitPreflightFindings reports as a count, never a name — see Part 1's
 // tri-state contract on lang.CoverageReporter.ParseCoverage.
 func (l *localExecutor) runPreflight(ctx context.Context, cands []reposcan.Candidate) reposcan.CoverageMap {
@@ -572,20 +652,20 @@ func (l *localExecutor) runPreflight(ctx context.Context, cands []reposcan.Candi
 	if len(langs) == 0 {
 		return reposcan.CoverageMap{Note: "preflight: no candidates to instrument"}
 	}
-	if len(langs) > 1 {
-		names := make([]string, 0, len(langs))
-		for n := range langs {
-			names = append(names, n)
-		}
-		sort.Strings(names)
-		return reposcan.CoverageMap{Note: fmt.Sprintf(
-			"preflight: scan spans %d languages (%s) — one instrumented suite run cannot cover more than one, skipped",
-			len(names), strings.Join(names, ", "))}
-	}
+
 	var langName string
-	for n := range langs {
-		langName = n
+	if len(langs) == 1 {
+		for n := range langs {
+			langName = n
+		}
+	} else {
+		var note string
+		langName, note = selectPreflightLanguage(langs, l.checkArgv)
+		if langName == "" {
+			return reposcan.CoverageMap{Note: note}
+		}
 	}
+
 	plug, ok := lang.ByName(langName)
 	if !ok {
 		return reposcan.CoverageMap{Note: fmt.Sprintf("preflight: unknown language %q", langName)}
@@ -605,7 +685,16 @@ func (l *localExecutor) runPreflight(ctx context.Context, cands []reposcan.Candi
 		// cwd == l.repoDir == reposcan.Enumerate's own root — coverage.py
 		// already reports paths relative to that (see python.go's
 		// ParseCoverage doc comment), so there is nothing to relativize.
-		runner = adequacy.NewWorkspaceRunner(l.repoDir, preflightTimeout)
+		//
+		// WithWorkspaceMaxOutput mirrors the jail branch's WithMaxOutput
+		// below — a WorkspaceRunner built SPECIFICALLY for this one call,
+		// never reused for RunTest's ordinary per-mutant runs (which stay
+		// on this substrate's original unbounded bytes.Buffer). Without
+		// this, the workspace substrate had no cap at all on the
+		// instrumented profile it reads back — measured against grpc-go: a
+		// 253 MB profile read entirely into memory (827 MB peak RSS).
+		runner = adequacy.NewWorkspaceRunner(l.repoDir, preflightTimeout,
+			adequacy.WithWorkspaceMaxOutput(preflightMaxOutput))
 		files = map[string]string{}
 	} else {
 		if l.jailErr != nil {

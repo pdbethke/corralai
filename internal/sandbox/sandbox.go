@@ -95,10 +95,9 @@ func Run(ctx context.Context, command string, opts Options) Result {
 	cmd.Cancel = func() error { return killProcGroup(cmd) }
 	cmd.WaitDelay = 2 * time.Second // backstop: force-close pipes if a child lingers
 
-	var buf capped
-	buf.max = opts.MaxOutput
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
+	buf := NewCappedWriter(opts.MaxOutput)
+	cmd.Stdout = buf
+	cmd.Stderr = buf
 
 	runErr := runCommand(cmd)
 	res := Result{Output: buf.String()}
@@ -139,17 +138,35 @@ func RunGuarded(ctx context.Context, command string, opts Options) (Result, erro
 	return res, nil
 }
 
-// capped is an io.Writer that stops storing past max bytes (so a runaway command
-// can't flood memory), noting the truncation.
-type capped struct {
+// CappedWriter is an io.Writer that stops storing past Max bytes (so a
+// runaway command can't flood memory), noting the truncation. Run and
+// RunInteractive use it internally to bound a Backend-wrapped command's
+// output; it is exported so a caller running a command directly via
+// os/exec — outside the isolation Backend entirely, e.g.
+// adequacy.WorkspaceRunner on the workspace substrate, which IS the
+// isolation boundary and so never goes through Run/Options.MaxOutput at
+// all — can bound its own buffering the identical way, with the identical
+// TruncationMarker a downstream caller already knows how to detect.
+type CappedWriter struct {
 	buf       bytes.Buffer
-	max       int
+	Max       int
 	truncated bool
 }
 
-func (c *capped) Write(p []byte) (int, error) {
-	if c.buf.Len() < c.max {
-		room := c.max - c.buf.Len()
+// NewCappedWriter returns a CappedWriter bounded to max bytes. max <= 0
+// falls back to 16 KiB — the same zero-value default Options.MaxOutput
+// documents — never "unbounded": a caller that wants a cap at all should
+// never silently get none because of an unset field.
+func NewCappedWriter(max int) *CappedWriter {
+	if max <= 0 {
+		max = 16 << 10
+	}
+	return &CappedWriter{Max: max}
+}
+
+func (c *CappedWriter) Write(p []byte) (int, error) {
+	if c.buf.Len() < c.Max {
+		room := c.Max - c.buf.Len()
 		if room >= len(p) {
 			c.buf.Write(p)
 		} else {
@@ -167,10 +184,10 @@ func (c *capped) Write(p []byte) (int, error) {
 // exported so a caller that cares whether a run's output was cut off (rather
 // than merely reading the—now incomplete—text) can detect that structurally,
 // by substring search, instead of re-deriving the marker text itself and
-// risking it drifting out of sync with capped.String below.
+// risking it drifting out of sync with CappedWriter.String below.
 const TruncationMarker = "…[output truncated]"
 
-func (c *capped) String() string {
+func (c *CappedWriter) String() string {
 	s := strings.TrimRight(c.buf.String(), "\n")
 	if c.truncated {
 		s += "\n" + TruncationMarker
@@ -210,12 +227,11 @@ func RunInteractive(ctx context.Context, command string, opts Options, ws io.Rea
 	cmd.Cancel = func() error { return killProcGroup(cmd) }
 	cmd.WaitDelay = 2 * time.Second
 
-	var buf capped
-	buf.max = opts.MaxOutput
+	buf := NewCappedWriter(opts.MaxOutput)
 
 	cmd.Stdin = ws
-	cmd.Stdout = io.MultiWriter(&buf, ws)
-	cmd.Stderr = io.MultiWriter(&buf, ws)
+	cmd.Stdout = io.MultiWriter(buf, ws)
+	cmd.Stderr = io.MultiWriter(buf, ws)
 
 	runErr := runCommand(cmd)
 	res := Result{Output: buf.String()}

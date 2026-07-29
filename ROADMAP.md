@@ -152,17 +152,34 @@ Go binary.**
   inventory, not an audit, and honest about the difference. Three buckets: **executed**
   (not a finding), **measured and never executed** (the real finding, named), **never
   measured** (a count only — coverage-scope and zero-statement files alike, never
-  named, never an accusation). Fails closed and says so — wrong language, more than one
-  language in the same scan, or the coverage tool itself missing from the runner — and
-  names zero files on any of those paths. Proven on a foreign-repo sweep
-  (`pallets/flask`, `psf/requests`, `andrewyng/aisuite`, `gin-gonic/gin`): the design's
+  named, never an accusation). Fails closed and says so — wrong language, an
+  irreducibly ambiguous multi-language scan, or the coverage tool itself missing from
+  the runner — and names zero files on any of those paths. A multi-language scan is
+  no longer an automatic refusal: with an explicit `-- <cmd>` that unambiguously names
+  one candidate language (Python + TypeScript with `-- pytest -q` — TypeScript has no
+  plugin, so Python is the only candidate, not merely the likeliest), the pre-flight
+  now runs instead of declining.
+  Proven on a foreign-repo sweep (`pallets/flask`, `psf/requests`, `andrewyng/aisuite`,
+  `gin-gonic/gin`, plus corral's own tree as the large-Go-module case): the design's
   O(1)-in-file-count claim held (one suite invocation per repo, independent of file
   count) but wall clock still tracks the *suite's own* runtime (flask ≈3s, requests
-  ≈80s, both instrumented once) — and the sweep caught a real false accusation in the
-  Go path (a package with no tests of its own always looked unexecuted, even when its
-  code ran constantly via another package's tests) — fixed with `-coverpkg=./...`
-  before this shipped, not documented around. Ruby/JS/TS have no plugin yet. Not wired
-  into the GitHub Action as an input — CLI flag only for now.
+  ≈80s, both instrumented once). **A four-finding review round followed the first
+  sweep and every one was closed before this shipped, not documented around:** (1) a
+  real false accusation in the Go path — a package with no tests of its own always
+  looked unexecuted, even when its code ran constantly via another package's tests —
+  fixed with `-coverpkg=./...`; (2) that fix's own cost — the raw profile scales
+  ~quadratically with package count (measured up to 253 MB on grpc-go, 53 MB on
+  corral's own tree) — closed by reducing the profile to one line per file inside the
+  same shell invocation before it ever reaches Go, verified byte-for-byte equivalent
+  to the unreduced tri-state answer; (3) the workspace substrate (what the GitHub
+  Action uses) had no output cap at all until this round — a 253 MB profile read
+  fully into memory, 827 MB peak RSS — now bounded the same way the jail substrate
+  always was; (4) a disclosed, not fixed, limitation — Go's `-coverpkg` makes
+  `init()`/var-initializer code at import time count as "executed" even with zero
+  tests run (measured: a test selector matching nothing still clears 3 of gin's files
+  and 135 of grpc-go's), which the docs now say plainly rather than implying "executed"
+  always means "tested". Ruby/JS/TS have no plugin yet. Not wired into the GitHub
+  Action as an input — CLI flag only for now.
 
 **The substrate.**
 - **Multi-model, multi-forge; the `bwrap` + container jail; the attributed action

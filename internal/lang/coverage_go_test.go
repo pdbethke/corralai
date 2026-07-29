@@ -226,3 +226,57 @@ func TestGoCoverageReduceScriptPassesMalformedLinesThroughUnchanged(t *testing.T
 		})
 	}
 }
+
+// TestGoCoverageCmdStillReportsWhenTestsFail is the regression for the
+// review's Minor 4. goPlugin.CoverageCmd joined the test invocation to the
+// reduction with `&&`, so an ordinary RED suite — `go test`'s exit 1 — meant
+// awk never ran and no profile ever reached stdout, even though `go test
+// -coverprofile` had already written a perfectly usable one. The pre-flight
+// then blamed the report ("no \"mode:\" header"), and silently no-opped on
+// precisely the weak-suite repos corral exists to audit.
+//
+// pyPlugin.CoverageCmd has handled this deliberately since it was written
+// (`rc=$?; case $rc in 0|1)`); this pins the same treatment for Go.
+func TestGoCoverageCmdStillReportsWhenTestsFail(t *testing.T) {
+	for _, bin := range []string{"sh", "awk", "go"} {
+		if _, err := exec.LookPath(bin); err != nil {
+			t.Skipf("no %s on PATH", bin)
+		}
+	}
+	dir := t.TempDir()
+	write := func(name, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("go.mod", "module example.com/redsuite\n\ngo 1.22\n")
+	write("used.go", "package redsuite\n\nfunc Used() int { return 1 }\n")
+	write("unused.go", "package redsuite\n\nfunc Unused() int { return 2 }\n")
+	// One ordinary failing test — a red suite, not a broken toolchain.
+	write("used_test.go", "package redsuite\n\nimport \"testing\"\n\n"+
+		"func TestUsed(t *testing.T) {\n\tif Used() != 99 {\n\t\tt.Fatal(\"deliberately red\")\n\t}\n}\n")
+
+	cmd, ok := goPlugin{}.CoverageCmd([]string{"go", "test", "./..."})
+	if !ok {
+		t.Fatal("CoverageCmd declined `go test ./...`")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	// #nosec G204 -- argv is this package's own CoverageCmd output.
+	c := exec.CommandContext(ctx, cmd[0], cmd[1:]...)
+	c.Dir = dir
+	c.Env = append(os.Environ(), "GOFLAGS=-mod=mod")
+	out, _ := c.Output() // a red suite exits non-zero; that is the point
+
+	got, err := goPlugin{}.ParseCoverage(string(out), "example.com/redsuite")
+	if err != nil {
+		t.Fatalf("ParseCoverage after a RED suite: %v (a failing test must not discard the profile go test already wrote); output was %q", err, out)
+	}
+	if v, measured := got["used.go"]; !measured || !v {
+		t.Errorf("used.go = (%v, measured=%v), want executed: the failing test still called Used()", v, measured)
+	}
+	if v, measured := got["unused.go"]; !measured || v {
+		t.Errorf("unused.go = (%v, measured=%v), want measured-and-never-executed", v, measured)
+	}
+}

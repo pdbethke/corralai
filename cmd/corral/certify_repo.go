@@ -261,16 +261,31 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// on the baseline AND green on every mutant, which is not an error
 	// anywhere in the pipeline — it is a confident 0.00 kill rate landing in
 	// the report as a real measurement. Never fabricate a score.
-	if err := checkArgvSpansOneLanguage(checkArgv, jobs); err != nil {
-		fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
-		return 2
-	}
+	//
+	// The error is CAPTURED rather than returned on the spot, because this
+	// gate bounds THE AUDIT and the coverage pre-flight is not the audit: it
+	// is one instrumented run of ONE language's suite, over the enumerated
+	// source set, that grades nothing and mutates nothing. Returning here
+	// made the documented multi-language path unreachable in composition —
+	// `certify --repo aisuite --preflight -- pytest -q` (Python +
+	// TypeScript) took this exit-2 branch before runPreflight was ever
+	// called, so selectPreflightLanguage, added specifically to make that
+	// invocation work, could only ever be reached by a scan whose JOBS were
+	// single-language. The refusal itself is unchanged in strength: the
+	// audit still refuses, with the same message and the same exit 2, on
+	// every input it refused before.
+	argvErr := checkArgvSpansOneLanguage(checkArgv, jobs)
 
-	// --dry-run returns above, before any suite ever runs — including the
+	// --dry-run returns here, before any suite ever runs — including the
 	// pre-flight's own instrumented run. Dry run means no execution, full
 	// stop; --preflight opts INTO an extra suite run, it does not opt a dry
-	// run out of being dry.
+	// run out of being dry. The audit's refusal still outranks it, exactly
+	// as when this check ran above.
 	if *dryRun {
+		if argvErr != nil {
+			fmt.Fprintf(stderr, "corral certify --repo: %v\n", argvErr)
+			return 2
+		}
 		return 0
 	}
 
@@ -287,7 +302,20 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// selected/audited subset — see enumeratedSourcePaths.
 		preflightSources = enumeratedSourcePaths(cands, excl[:enumExcl])
 		fmt.Fprintln(stdout, "  preflight: running the suite once with coverage instrumentation…")
-		preflightResult = ex.runPreflight(context.Background(), cands)
+		preflightResult = ex.runPreflight(context.Background(), preflightSources)
+	}
+
+	// The audit cannot proceed, but the pre-flight above already answered
+	// its own separate question — so its report is printed before the
+	// refusal, and the refusal still exits 2. Without --preflight this is
+	// byte-for-byte the pre-existing behaviour, just reached a few lines
+	// later.
+	if argvErr != nil {
+		if *preflightFlag {
+			printPreflightReport(stdout, preflightResult, preflightSources)
+		}
+		fmt.Fprintf(stderr, "corral certify --repo: %v\n", argvErr)
+		return 2
 	}
 
 	workers, swarmReadout := resolveScanWorkers(*swarmFlag, *substrateFlag)
@@ -625,9 +653,38 @@ func selectPreflightLanguage(langs map[string]bool, checkArgv []string) (langNam
 		len(names), strings.Join(names, ", "))
 }
 
+// preflightLanguages derives the language set the pre-flight may instrument
+// from the ENUMERATED SOURCE SET — every language-detected non-test file
+// reposcan.Enumerate walked — not from the candidate set.
+//
+// That distinction is the whole feature. Candidates are what corral's
+// test-PAIRING heuristic matched, and the pre-flight's stated justification
+// (README, docs/corral/github-action.md) is that pairing finds nothing in
+// repos that don't name tests after source files. Deriving the language set
+// from candidates made the pre-flight decline with "no candidates to
+// instrument" on exactly those repos — it inherited the limitation it was
+// built to route around. Measured before this fix: python-jsonschema/
+// jsonschema (0 candidates, 31 Python files excluded no-paired-test),
+// tox-dev/filelock (0/35), pallets/itsdangerous (0/10), pallets/markupsafe
+// (0/7) — four repos where the feature could not run at all.
+//
+// enumeratedSourcePaths is the same slice printPreflightReport buckets
+// against, so the languages instrumented and the files reported on are
+// derived from one set, not two that can drift apart.
+func preflightLanguages(sources []string) map[string]bool {
+	langs := map[string]bool{}
+	for _, p := range sources {
+		if plug, ok := lang.Detect(p); ok {
+			langs[plug.Name()] = true
+		}
+	}
+	return langs
+}
+
 // runPreflight runs the coverage pre-flight ONCE for the whole scan (never
-// once per audited file) over the FULL set of repo candidates, independent
-// of --top/--diff-base: it answers "what does the suite ever touch in this
+// once per audited file) over every ENUMERATED SOURCE FILE in the repo,
+// independent of --top/--diff-base AND of whether test-pairing made any of
+// them a candidate: it answers "what does the suite ever touch in this
 // repo", not "what did this particular scan choose to audit".
 //
 // One instrumented command can only speak one language. When every
@@ -644,13 +701,10 @@ func selectPreflightLanguage(langs map[string]bool, checkArgv []string) (langNam
 // from the resulting CoverageMap.Executed (never measured), which
 // splitPreflightFindings reports as a count, never a name — see Part 1's
 // tri-state contract on lang.CoverageReporter.ParseCoverage.
-func (l *localExecutor) runPreflight(ctx context.Context, cands []reposcan.Candidate) reposcan.CoverageMap {
-	langs := map[string]bool{}
-	for _, c := range cands {
-		langs[c.Lang] = true
-	}
+func (l *localExecutor) runPreflight(ctx context.Context, sources []string) reposcan.CoverageMap {
+	langs := preflightLanguages(sources)
 	if len(langs) == 0 {
-		return reposcan.CoverageMap{Note: "preflight: no candidates to instrument"}
+		return reposcan.CoverageMap{Note: "preflight: no source files to instrument"}
 	}
 
 	var langName string
@@ -721,32 +775,77 @@ func (l *localExecutor) runPreflight(ctx context.Context, cands []reposcan.Candi
 		// Go's coverage profile paths are import paths, not filesystem
 		// paths, on EITHER substrate — always need the module prefix to
 		// strip it back to a repo-relative path (see go.go's ParseCoverage).
-		repoRoot = goModulePath(l.repoDir)
+		//
+		// Fail-closed on a go.mod this cannot parse: without the prefix
+		// nothing aligns and the report would be a confident
+		// `0 executed, 0 findings, N not measured` — the silent empty result
+		// (see goModulePath).
+		mp, merr := goModulePath(l.repoDir)
+		if merr != nil {
+			return reposcan.CoverageMap{Note: fmt.Sprintf("preflight: cannot determine the Go module path, so no coverage path could be resolved: %v", merr)}
+		}
+		repoRoot = mp
 	}
 
 	return reposcan.Preflight(ctx, runner, files, plug, testCmd, repoRoot)
 }
 
-// goModulePath best-effort reads the `module ` directive out of repoDir's
-// go.mod, for stripping the import-path prefix goPlugin.ParseCoverage needs.
-// Returns "" on any failure (no go.mod, unreadable, no module line) — never
-// an error: the coverage pre-flight is opt-in extra evidence, not a gate,
-// and a missing prefix degrades to unstrippable (still non-fatal-looking)
-// paths rather than aborting the whole scan over a cosmetic miss.
-func goModulePath(repoDir string) string {
-	f, err := os.Open(filepath.Join(repoDir, "go.mod")) // #nosec G304,G703 -- repoDir is the operator's own --repo
+// goModulePath reads the `module` directive out of repoDir's go.mod, for
+// stripping the import-path prefix goPlugin.ParseCoverage needs.
+//
+// It returns an ERROR rather than "" when it cannot find one, and that is
+// the point of the signature. Failing to parse the module line is not a
+// cosmetic miss: without the prefix, no profile path aligns with any
+// repo-relative source path, so every Go file falls out of
+// CoverageMap.Executed and the report reads `0 executed, 0 findings, N not
+// measured` — confident, empty, and indistinguishable from a genuinely
+// uninstrumented repo. A silent empty result is the one outcome this
+// feature's whole tri-state contract exists to prevent, so the caller
+// reports the failure instead (see runPreflight).
+//
+// Both legal spellings the earlier prefix-cut mis-parsed are handled: a
+// quoted path (`module "example.com/x"`, and its backquoted variant) and a
+// trailing `//` comment (`module example.com/x // v2`), plus tab separation.
+func goModulePath(repoDir string) (string, error) {
+	p := filepath.Join(repoDir, "go.mod")
+	f, err := os.Open(p) // #nosec G304,G703 -- repoDir is the operator's own --repo
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("reading %s: %w", p, err)
 	}
 	defer func() { _ = f.Close() }()
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
-		if after, ok := strings.CutPrefix(line, "module "); ok {
-			return strings.TrimSpace(after)
+		rest, ok := strings.CutPrefix(line, "module")
+		if !ok {
+			continue
 		}
+		// "module" must be its own token: `moduleX ...` is not the
+		// directive, while `module\tpath` is.
+		if rest != "" && !strings.ContainsAny(rest[:1], " \t") {
+			continue
+		}
+		// A `//` comment may trail the directive; everything after it is
+		// commentary, not part of the path.
+		if i := strings.Index(rest, "//"); i >= 0 {
+			rest = rest[:i]
+		}
+		rest = strings.TrimSpace(rest)
+		// go.mod tokens may be quoted (") or raw-quoted (`).
+		if len(rest) >= 2 {
+			if (rest[0] == '"' && rest[len(rest)-1] == '"') || (rest[0] == '`' && rest[len(rest)-1] == '`') {
+				rest = rest[1 : len(rest)-1]
+			}
+		}
+		if rest == "" {
+			return "", fmt.Errorf("%s has a module directive with no path", p)
+		}
+		return rest, nil
 	}
-	return ""
+	if serr := scanner.Err(); serr != nil {
+		return "", fmt.Errorf("reading %s: %w", p, serr)
+	}
+	return "", fmt.Errorf("%s has no module directive", p)
 }
 
 // enumeratedSourcePaths reconstructs "every file reposcan.Enumerate treated

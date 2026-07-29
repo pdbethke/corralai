@@ -299,7 +299,33 @@ func (w *WorkspaceRunner) applyRunRestore(ctx context.Context, files map[string]
 	cmd.Dir = w.root
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
+	// The wall-clock bound above is only a bound on the CONTEXT; without
+	// these three guards it is not a bound on the call. This substrate execs
+	// the command directly (the CI runner is the isolation boundary, so
+	// nothing here goes through sandbox.Run), and stdout/stderr are plain
+	// io.Writers, so os/exec hands the child an OS pipe and copies from it in
+	// a goroutine that cmd.Wait blocks on. A grandchild that outlives the
+	// command inherits the write end and keeps that goroutine — and therefore
+	// Wait — alive FOREVER, deadline or no deadline. An ordinary suite that
+	// leaves a background worker running is enough to trigger it. See
+	// sandbox.GuardProcess.
+	sandbox.GuardProcess(cmd)
 	runErr := cmd.Run()
+	// Order matters, and this check comes FIRST. Once WaitDelay exists, Wait
+	// can return late for a reason that has nothing to do with the command:
+	// the command exited on its own schedule and a leaked descendant held the
+	// pipe until either WaitDelay or the deadline force-closed it. In that
+	// case the command's own exit status is the honest answer, and
+	// ErrTestTimeout would be a claim about the command that is simply false
+	// ("corral could not run your suite" for a suite that ran and passed).
+	//
+	// st.Exited() is precisely the distinction: it is true only for a process
+	// that reached exit() itself, and false for one the cancel func killed —
+	// so a genuinely hanging command still falls through to ErrTestTimeout
+	// below, exactly as before.
+	if st := cmd.ProcessState; st != nil && st.Exited() {
+		return st.ExitCode() == 0, nil // a non-zero exit is a RESULT, not an error
+	}
 	if ctx.Err() != nil {
 		return false, ErrTestTimeout
 	}

@@ -175,8 +175,26 @@ func (goPlugin) CoverageCmd(testCmd []string) (cmd []string, ok bool) {
 	for i, arg := range testCmd {
 		quoted[i] = shellQuote(arg)
 	}
+	// `;` + an explicit rc check between the test run and the reduction, NOT
+	// `&&`. This is the same treatment pyPlugin.CoverageCmd has carried since
+	// it was written, and Go was the asymmetry: with `&&`, `go test`'s exit 1
+	// on an ORDINARY failing test — the single most likely state of a suite
+	// corral is auditing, and the whole reason the pre-flight is interesting
+	// — short-circuited the reduction, so no profile ever reached stdout and
+	// the pre-flight reported `coverage report unparseable: no "mode:"
+	// header`. That blamed the report for a red suite, and silently no-opped
+	// on exactly the weak-suite repos this feature targets. `go test
+	// -coverprofile` writes a complete, usable profile whether the tests pass
+	// or fail, so discarding it on failure threw away the answer.
+	//
+	// Only 0 and 1 fall through: those are "the suite ran" (all passed / some
+	// failed). Anything else — a bad flag (2), a signal — re-raises that exit
+	// code and skips the reduction, leaving stdout non-profile, which
+	// ParseCoverage already turns into an error rather than an empty map. The
+	// fail-closed direction is preserved; only the red-suite case changes.
 	script := `f=$(mktemp) && trap 'rm -f "$f"' EXIT && ` +
-		strings.Join(quoted, " ") + ` -coverpkg=./... -coverprofile="$f" && ` +
+		strings.Join(quoted, " ") + ` -coverpkg=./... -coverprofile="$f"` +
+		`; rc=$?; case $rc in 0|1) ;; *) exit "$rc" ;; esac; ` +
 		goCoverageReduceScript
 	return []string{"sh", "-c", script}, true
 }

@@ -397,3 +397,70 @@ func TestWorkspaceRunnerRunTestVerboseReturnsTheOutput(t *testing.T) {
 		t.Errorf("file left as %q after RunTestVerbose", got)
 	}
 }
+
+// TestWorkspaceRunnerEnumerateReturnsWhenAChildOutlivesTheCommand is the
+// regression for the review's Important 3: applyRunRestore used
+// exec.CommandContext + cmd.Run() with no process group, no cmd.Cancel and no
+// cmd.WaitDelay, so a command that exits cleanly while leaving a background
+// grandchild alive left that grandchild holding the inherited write end of
+// the output pipe — and cmd.Wait blocked on the copying goroutine FOREVER,
+// past the runner's own wall-clock bound. sandbox.Run has carried all three
+// guards for exactly this reason; this substrate never goes through it.
+//
+// `sh -c "sleep 120 & echo hello; exit 0"` is the minimal shape of an
+// ordinary suite that leaves a worker running (the reproduction in the
+// review), and 120s is far past both the runner's 2s bound and this test's
+// own 20s ceiling, so a hang here cannot pass by accident.
+func TestWorkspaceRunnerEnumerateReturnsWhenAChildOutlivesTheCommand(t *testing.T) {
+	root := wsTree(t, map[string]string{"a.txt": "ORIGINAL\n"})
+	w := NewWorkspaceRunner(root, 2*time.Second, WithWorkspaceMaxOutput(1<<20))
+
+	done := make(chan struct{})
+	var out string
+	var err error
+	go func() {
+		defer close(done)
+		out, err = w.Enumerate(context.Background(), nil,
+			[]string{"sh", "-c", "sleep 120 & echo hello; exit 0"})
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(20 * time.Second):
+		t.Fatal("Enumerate did not return within 20s: a leaked grandchild held the output pipe open")
+	}
+	if err != nil {
+		t.Fatalf("Enumerate = %v, want nil: the command itself exited 0", err)
+	}
+	if !strings.Contains(out, "hello") {
+		t.Errorf("Enumerate output = %q, want it to contain the command's own stdout", out)
+	}
+}
+
+// The RunTest half of the same defect: RunTestVerbose shares applyRunRestore
+// (and, being the variant that captures output, shares the inherited pipe
+// that a grandchild holds open), so it shares both the bug and the fix. A
+// non-zero exit stays a RESULT, not an error, even when a grandchild
+// outlives the command.
+func TestWorkspaceRunnerRunTestVerboseReturnsWhenAChildOutlivesTheCommand(t *testing.T) {
+	root := wsTree(t, map[string]string{"a.txt": "ORIGINAL\n"})
+	w := NewWorkspaceRunner(root, 2*time.Second)
+
+	done := make(chan struct{})
+	var ok bool
+	var err error
+	go func() {
+		defer close(done)
+		ok, _, err = w.RunTestVerbose(context.Background(), nil,
+			[]string{"sh", "-c", "sleep 120 & exit 1"})
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(20 * time.Second):
+		t.Fatal("RunTestVerbose did not return within 20s: a leaked grandchild held the output pipe open")
+	}
+	if ok || err != nil {
+		t.Fatalf("RunTestVerbose = (%v, %v), want (false, nil): a non-zero exit is a result", ok, err)
+	}
+}

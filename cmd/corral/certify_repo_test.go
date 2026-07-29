@@ -2447,3 +2447,202 @@ func TestSelectPreflightLanguageNoLanguageMatchesFallsBackToTheBlanketRefusal(t 
 		t.Errorf("note = %q, want the blanket refusal, not the ambiguous-match wording", note)
 	}
 }
+
+// TestGoModulePathParsesLegalGoModForms is the regression for the review's
+// Minor 5. goModulePath did `strings.CutPrefix(line, "module ")` +
+// TrimSpace, which mis-parses two forms `go.mod` legally permits — a quoted
+// module path and a trailing `//` comment. The returned prefix then matches
+// no profile path, every Go file falls out of CoverageMap.Executed, and the
+// report reads `0 executed, 0 findings, N not measured`: confident, empty,
+// and indistinguishable from a genuinely uninstrumented repo.
+func TestGoModulePathParsesLegalGoModForms(t *testing.T) {
+	cases := []struct {
+		name    string
+		gomod   string
+		want    string
+		wantErr bool
+	}{
+		{"plain", "module example.com/x\n\ngo 1.22\n", "example.com/x", false},
+		{"quoted", "module \"example.com/x\"\n\ngo 1.22\n", "example.com/x", false},
+		{"trailing comment", "module example.com/x // v2\n\ngo 1.22\n", "example.com/x", false},
+		{"quoted and commented", "module \"example.com/x\" // why\n", "example.com/x", false},
+		{"tab separated", "module\texample.com/x\n", "example.com/x", false},
+		// A go.mod with no module line at all cannot yield a prefix, and a
+		// missing prefix silently voids the whole report — so it must be a
+		// REPORTED failure, never a silent empty string.
+		{"no module directive", "go 1.22\n", "", true},
+		{"empty module path", "module \n", "", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(tc.gomod), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			got, err := goModulePath(dir)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("goModulePath = (%q, nil), want an error: an unparseable module line voids the entire report", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("goModulePath = %v, want %q", err, tc.want)
+			}
+			if got != tc.want {
+				t.Errorf("goModulePath = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// A repo with no go.mod at all is the same class of failure: there is no
+// module prefix to strip, so every Go file would land in "never measured".
+// Reported, not silently empty.
+func TestGoModulePathReportsAMissingGoMod(t *testing.T) {
+	if _, err := goModulePath(t.TempDir()); err == nil {
+		t.Fatal("goModulePath on a directory with no go.mod returned no error")
+	}
+}
+
+// preflightUnpairedPythonFixture writes a small, REAL Python project in
+// which corral's test-PAIRING heuristic matches nothing at all — the exact
+// shape of the repos --preflight exists for. `mypkg/core.py` would pair with
+// `test_core.py`/`tests/test_core.py`; the suite instead lives in
+// `tests/test_smoke.py`, which pairs with no source file, so every source
+// file is an Enumerate-level ReasonNoPairedTest exclusion and the scan has
+// ZERO candidates.
+//
+// `mypkg/orphan.py` is never imported by anything; the coverage config's
+// `source = ["mypkg"]` is what makes coverage.py measure it anyway (real
+// projects — flask's own pyproject.toml among them — carry exactly this),
+// so it lands in the measured-and-never-executed bucket rather than
+// vanishing into "not measured".
+func preflightUnpairedPythonFixture(t *testing.T, root string) {
+	t.Helper()
+	mustWrite(t, filepath.Join(root, "pyproject.toml"), "[tool.coverage.run]\nsource = [\"mypkg\"]\n")
+	mustWrite(t, filepath.Join(root, "mypkg", "__init__.py"), "")
+	mustWrite(t, filepath.Join(root, "mypkg", "core.py"), "def used():\n    return 1\n")
+	mustWrite(t, filepath.Join(root, "mypkg", "orphan.py"), "def never_called():\n    return 2\n")
+	mustWrite(t, filepath.Join(root, "tests", "test_smoke.py"),
+		"from mypkg.core import used\n\n\ndef test_it():\n    assert used() == 1\n")
+}
+
+func skipWithoutPythonCoverage(t *testing.T) {
+	t.Helper()
+	// #nosec G204 -- fixed argv
+	if err := exec.Command("python3", "-c", "import coverage, pytest").Run(); err != nil {
+		t.Skipf("python3 with coverage+pytest not available: %v", err)
+	}
+}
+
+// TestCertifyRepoPreflightRunsWhenPairingFindsNoCandidates is the regression
+// for the review's Important 1. runPreflight derived its language set from
+// `cands` — the test-pairing-derived CANDIDATE set — so it declined with
+// "preflight: no candidates to instrument" on every repo where pairing lands
+// nowhere. That is the precise limitation the feature was built to route
+// around, and it was measured on four real repos (jsonschema 0/31, filelock
+// 0/35, itsdangerous 0/10, markupsafe 0/7).
+//
+// The language set now comes from the ENUMERATED SOURCE SET, which is the
+// same slice the report buckets against.
+func TestCertifyRepoPreflightRunsWhenPairingFindsNoCandidates(t *testing.T) {
+	skipWithoutPythonCoverage(t)
+	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
+	root := t.TempDir()
+	preflightUnpairedPythonFixture(t, root)
+
+	var out, errb bytes.Buffer
+	runCertifyRepo([]string{"--repo", root, "--goals", writeGoals(t, root, `{}`),
+		"--substrate", substrateWorkspace, "--preflight"}, &out, &errb)
+
+	s := out.String()
+	if !strings.Contains(s, "0 candidate(s)") {
+		t.Fatalf("fixture is wrong: this scan must have ZERO candidates:\n%s", s)
+	}
+	_, section, found := strings.Cut(s, "\nCoverage pre-flight")
+	if !found {
+		t.Fatalf("missing the pre-flight section:\n%s\nstderr:\n%s", s, errb.String())
+	}
+	if strings.Contains(section, "could not run:") {
+		t.Fatalf("the pre-flight declined on a repo with no candidates — the exact repos it exists for:\n%s", section)
+	}
+	if !strings.Contains(section, "mypkg/orphan.py") {
+		t.Errorf("mypkg/orphan.py is measured and never executed and must be named:\n%s", section)
+	}
+	if strings.Contains(section, "mypkg/core.py") {
+		t.Errorf("mypkg/core.py IS executed by the suite and must not be named:\n%s", section)
+	}
+}
+
+// writeGoals writes a --goals file into root and returns its path.
+func writeGoals(t *testing.T, root, body string) string {
+	t.Helper()
+	p := filepath.Join(root, "goals.json")
+	mustWrite(t, p, body)
+	return p
+}
+
+// preflightAisuiteShapeFixture reproduces andrewyng/aisuite's shape: PAIRED
+// candidates in BOTH Python and TypeScript, so the emitted jobs span two
+// languages — which is what makes an explicit `-- pytest -q` a refusal for
+// the audit.
+func preflightAisuiteShapeFixture(t *testing.T, root string) {
+	t.Helper()
+	mustWrite(t, filepath.Join(root, "pyproject.toml"), "[tool.coverage.run]\nsource = [\"mypkg\"]\n")
+	mustWrite(t, filepath.Join(root, "mypkg", "__init__.py"), "")
+	mustWrite(t, filepath.Join(root, "mypkg", "core.py"), "def used():\n    return 1\n")
+	mustWrite(t, filepath.Join(root, "mypkg", "orphan.py"), "def never_called():\n    return 2\n")
+	mustWrite(t, filepath.Join(root, "mypkg", "test_core.py"),
+		"from mypkg.core import used\n\n\ndef test_it():\n    assert used() == 1\n")
+	mustWrite(t, filepath.Join(root, "src", "thing.ts"), "export function thing(): number { return 1; }\n")
+	mustWrite(t, filepath.Join(root, "src", "thing.test.ts"), "import { thing } from './thing';\ntest('thing', () => { expect(thing()).toBe(1); });\n")
+}
+
+// TestCertifyRepoPreflightRunsOnTheAisuiteShape is the regression for the
+// review's Important 2. checkArgvSpansOneLanguage ran BEFORE runPreflight and
+// returned exit 2 outright, so the documented invocation
+// `certify --repo aisuite --preflight -- pytest -q` never reached the
+// pre-flight at all — selectPreflightLanguage, added specifically so that
+// repo would work, was unreachable in composition while README.md and
+// docs/corral/github-action.md both stated flatly that aisuite runs it.
+//
+// The gate now scopes to THE AUDIT, which still refuses with the same
+// message and the same exit 2 (asserted here, and independently in
+// TestCertifyRepoRefusesAnExplicitCommandAcrossLanguages).
+func TestCertifyRepoPreflightRunsOnTheAisuiteShape(t *testing.T) {
+	skipWithoutPythonCoverage(t)
+	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
+	root := t.TempDir()
+	preflightAisuiteShapeFixture(t, root)
+	goals := writeGoals(t, root, `{"mypkg/core.py": "must return 1", "src/thing.ts": "must return 1"}`)
+
+	var out, errb bytes.Buffer
+	code := runCertifyRepo([]string{"--repo", root, "--goals", goals,
+		"--substrate", substrateWorkspace, "--preflight", "--", "pytest", "-q"}, &out, &errb)
+
+	// The audit still refuses — unchanged.
+	if code != 2 {
+		t.Fatalf("exit %d, want 2: the AUDIT must still refuse a `--` command spanning two languages.\nstdout:\n%s\nstderr:\n%s", code, out.String(), errb.String())
+	}
+	if !strings.Contains(errb.String(), "spans 2 languages") {
+		t.Errorf("want the audit's own refusal on stderr:\n%s", errb.String())
+	}
+
+	// ...and the pre-flight, which is not the audit, still answered.
+	_, section, found := strings.Cut(out.String(), "\nCoverage pre-flight")
+	if !found {
+		t.Fatalf("the documented `--preflight -- pytest -q` invocation printed no pre-flight section:\n%s", out.String())
+	}
+	if strings.Contains(section, "could not run:") {
+		t.Fatalf("`-- pytest -q` unambiguously names python here; the pre-flight must run:\n%s", section)
+	}
+	if !strings.Contains(section, "mypkg/orphan.py") {
+		t.Errorf("mypkg/orphan.py is measured and never executed and must be named:\n%s", section)
+	}
+	// TypeScript was never instrumented, so its files are absent from the
+	// coverage map: a COUNT, never a name.
+	if strings.Contains(section, "src/thing.ts") {
+		t.Errorf("a file in a language this run never instrumented must never be named:\n%s", section)
+	}
+}

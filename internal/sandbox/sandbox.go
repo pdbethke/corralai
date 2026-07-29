@@ -88,12 +88,11 @@ func Run(ctx context.Context, command string, opts Options) Result {
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...) // #nosec G204 -- corral re-execs its own binary / bwrap by design; argv is constructed by the sandbox layer from server-controlled config, not raw agent input; agent command execution is separately sandboxed (bwrap)
 	cmd.Dir = opts.Workspace
 	cmd.Env = env
-	// Run in its own process group so a timeout kills the command AND its
-	// children (a bare process kill orphans them and holds the output pipe open).
-	// Process-group semantics are Unix-only — see proc_unix.go / proc_windows.go.
-	setProcGroup(cmd)
-	cmd.Cancel = func() error { return killProcGroup(cmd) }
-	cmd.WaitDelay = 2 * time.Second // backstop: force-close pipes if a child lingers
+	// Process group + Cancel + WaitDelay, so a timeout kills the command AND
+	// its children (a bare process kill orphans them and holds the output
+	// pipe open). Shared with adequacy.WorkspaceRunner via GuardProcess —
+	// see proc.go for why all three are load-bearing.
+	GuardProcess(cmd)
 
 	buf := NewCappedWriter(opts.MaxOutput)
 	cmd.Stdout = buf

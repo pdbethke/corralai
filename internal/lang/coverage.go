@@ -30,3 +30,7 @@ type CoverageReporter interface {
 // this line, not the Plugin interface, is what keeps it from silently
 // bit-rotting.
 var _ CoverageReporter = goPlugin{}
+
+// pyPlugin implements CoverageReporter too; verified against a real clone of
+// pallets/flask (see the task-2 report).
+var _ CoverageReporter = pyPlugin{}

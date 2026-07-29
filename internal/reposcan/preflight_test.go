@@ -192,6 +192,38 @@ func TestPreflight_TruncatedOutputIsItsOwnFailure(t *testing.T) {
 	}
 }
 
+// TestPreflight_MarkerTextMidStreamIsNotMistakenForTruncation pins the F2
+// fix: the truncation marker is checked as a SUFFIX, not a substring. stdout
+// carries the wrapped suite's own output ahead of the payload (pytest's
+// dot-progress, a test's own printed/asserted strings); a project whose
+// tests happen to print or assert on the literal marker text, anywhere
+// OTHER than the very end, must not be misdiagnosed as truncated forever.
+func TestPreflight_MarkerTextMidStreamIsNotMistakenForTruncation(t *testing.T) {
+	parsed := false
+	p := covPlugin{
+		stubPlugin: stubPlugin{name: "go"},
+		cmd:        []string{"sh", "-c", "go test -coverprofile=/dev/stdout"},
+		cmdOK:      true,
+		parseFn: func(string, string) (map[string]bool, error) {
+			parsed = true
+			return map[string]bool{"a.go": true}, nil
+		},
+	}
+	// The marker text appears mid-stream (e.g. a test asserting on it) but
+	// the ACTUAL end of stdout is a clean, untruncated coverage profile.
+	runner := &fakeRunner{out: "some test printed " + sandbox.TruncationMarker + " as part of its own output\n" +
+		"mode: set\nrepo/a.go:1.1,2.2 1 1\n"}
+
+	got := Preflight(context.Background(), runner, nil, p, []string{"go", "test", "./..."}, "repo")
+
+	if !got.Ran {
+		t.Fatalf("Ran = false, want true: the marker text mid-stream must not be mistaken for real truncation; Note=%q", got.Note)
+	}
+	if !parsed {
+		t.Fatal("ParseCoverage was never called — the mid-stream marker text short-circuited it")
+	}
+}
+
 func TestPreflight_Unparseable(t *testing.T) {
 	p := covPlugin{
 		stubPlugin: stubPlugin{name: "go"},

@@ -88,7 +88,15 @@ func Preflight(ctx context.Context, runner commandRunner, files map[string]strin
 	// truncation marker), before ParseCoverage ever sees the bytes, so
 	// truncation is reported as its own distinct failure rather than
 	// masquerading as either a clean parse or a generic "unparseable" one.
-	if strings.Contains(stdout, sandbox.TruncationMarker) {
+	//
+	// Checked as a SUFFIX, not a substring: stdout also carries the wrapped
+	// suite's own output (pytest's dot-progress, go test's summary line),
+	// and sandbox's capped writer only ever APPENDS the marker once, at the
+	// very end, after trimming trailing newlines (see capped.String). A
+	// substring search would misfire forever on a project whose tests
+	// happen to print or assert on the literal marker text; HasSuffix is
+	// exactly as sufficient to detect it and cannot be fooled that way.
+	if strings.HasSuffix(strings.TrimRight(stdout, "\n"), sandbox.TruncationMarker) {
 		return CoverageMap{
 			Note: fmt.Sprintf("%s: coverage pre-flight output was truncated — the report is incomplete and cannot be trusted", p.Name()),
 		}

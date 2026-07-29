@@ -263,9 +263,20 @@ func (pyPlugin) CoverageCmd(testCmd []string) (cmd []string, ok bool) {
 	for i, arg := range moduleArgs {
 		quotedModule[i] = shellQuote(arg)
 	}
-	script := quotedInterp + " -m coverage run -m " + strings.Join(quotedModule, " ") +
+	// F3: point coverage.py's own data file at a mktemp'd path via
+	// COVERAGE_FILE, cleaned up by an EXIT trap — the same discipline
+	// goPlugin.CoverageCmd already uses for `-coverprofile`. Without this,
+	// `coverage run` defaults to writing `.coverage` directly into the cwd
+	// (the operator's own --repo checkout on the workspace substrate),
+	// leaving a real, non-trivial artifact behind after every pre-flight
+	// run (475 KB, measured against a real flask run) — an audit tool must
+	// not litter the tree it is auditing. `coverage json` is pointed at the
+	// SAME COVERAGE_FILE so it reads the data the run just wrote, not
+	// whatever (if anything) happens to be sitting at the default path.
+	script := `f=$(mktemp) && trap 'rm -f "$f"' EXIT && ` +
+		`COVERAGE_FILE="$f" ` + quotedInterp + " -m coverage run -m " + strings.Join(quotedModule, " ") +
 		`; rc=$?; case $rc in 0|1) ;; *) exit "$rc" ;; esac; ` +
-		quotedInterp + " -m coverage json -o -"
+		`COVERAGE_FILE="$f" ` + quotedInterp + " -m coverage json -o -"
 	return []string{"sh", "-c", script}, true
 }
 
@@ -278,7 +289,8 @@ func (pyPlugin) CoverageCmd(testCmd []string) (cmd []string, ok bool) {
 type pyCoverageReport struct {
 	Files map[string]struct {
 		Summary struct {
-			CoveredLines int `json:"covered_lines"`
+			CoveredLines  int `json:"covered_lines"`
+			NumStatements int `json:"num_statements"`
 		} `json:"summary"`
 	} `json:"files"`
 	Totals struct {
@@ -427,11 +439,32 @@ func (pyPlugin) ParseCoverage(stdout, modulePath string) (executed map[string]bo
 	// even looked at into a false accusation. Only "present, false" is a
 	// real finding — "absent" must stay a silent, non-accusing fact a
 	// caller reports as a COUNT, never as a per-file claim.
+	//
+	// A file with num_statements == 0 gets the SAME absent treatment, for
+	// the same reason: coverage.py reports a real, empty file (e.g. a
+	// package's zero-byte __init__.py) with covered_lines: 0 alongside
+	// every genuinely-untouched file, and the two are indistinguishable
+	// from covered_lines alone. A file with nothing measurable cannot be
+	// "unexecuted" — there is no statement to have skipped — it can only be
+	// uninformative, and importing it (as a bare package init routinely is,
+	// with no statement of its own to record) leaves NO trace in
+	// covered_lines either. Reproduced directly against a real flask run:
+	// tests/test_apps/blueprintapp/apps/__init__.py and
+	// tests/test_apps/cliapp/__init__.py are both zero-byte files the suite
+	// DOES import (tests/test_blueprints.py, tests/test_cli.py), reported
+	// by coverage.py as num_statements: 0, and were WRONGLY surfaced as a
+	// "measured and never executed" finding before this check existed. Go
+	// needs no equivalent: a file with no statements emits no profile
+	// blocks at all and is already absent from goPlugin.ParseCoverage's
+	// map by construction — this num_statements guard is Python-only.
 	root := normalizePyRepoRoot(modulePath)
 	sawPositiveEntry := false
 	sawPositiveAligned := false
 	executed = make(map[string]bool)
 	for path, f := range report.Files {
+		if f.Summary.NumStatements == 0 {
+			continue
+		}
 		exec := f.Summary.CoveredLines > 0
 		if exec {
 			sawPositiveEntry = true

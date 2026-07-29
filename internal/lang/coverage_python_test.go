@@ -140,13 +140,25 @@ func TestPythonParseCoverageExecutedFiles(t *testing.T) {
 
 // TestPythonParseCoverageAllZeroPerFileIsMeasuredNotExecuted pins the
 // tri-state contract's other legitimate non-error case: a well-formed report
-// in which every individual file has zero coverage, but totals.covered_lines
-// is positive (the suite genuinely ran), returns every one of those files as
-// a present-false ("measured, not executed") entry — a real finding, not an
-// empty map — distinct from an unparseable report, which must error (see
+// in which every individual file has zero COVERED lines, but
+// totals.covered_lines is positive (the suite genuinely ran), returns a
+// present-false ("measured, not executed") entry for each such file that
+// has at least one STATEMENT to have skipped — a real finding, not an empty
+// map — distinct from an unparseable report, which must error (see
 // TestPythonParseCoverageUnparseableIsError below), and distinct from
 // totals.covered_lines == 0, which means the suite never ran at all (see
 // TestPythonParseCoverageZeroTotalsIsError).
+//
+// fixtureAllZero's two __init__.py entries have num_statements: 0 — real,
+// zero-byte package __init__.py files flask's suite DOES import
+// (tests/test_blueprints.py, tests/test_cli.py) but which have nothing
+// measurable to record either way. Only src/flask/__main__.py
+// (num_statements: 2, genuinely never imported by the suite) is a real
+// finding; the two num_statements: 0 files must be ABSENT, never a false
+// accusation that the suite "never executed" a file with no statement to
+// execute. This is the corrected form of a bug the review round after this
+// task caught: an earlier version of this test asserted BOTH __init__.py
+// paths as false, pinning the wrong (accusing) contract as correct.
 func TestPythonParseCoverageAllZeroPerFileIsMeasuredNotExecuted(t *testing.T) {
 	p := pyPlugin{}
 	got, err := p.ParseCoverage(fixtureAllZero, "")
@@ -154,12 +166,10 @@ func TestPythonParseCoverageAllZeroPerFileIsMeasuredNotExecuted(t *testing.T) {
 		t.Fatalf("ParseCoverage: %v", err)
 	}
 	want := map[string]bool{
-		"src/flask/__main__.py":                         false,
-		"tests/test_apps/blueprintapp/apps/__init__.py": false,
-		"tests/test_apps/cliapp/__init__.py":            false,
+		"src/flask/__main__.py": false,
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("executed set = %v, want %v", got, want)
+		t.Fatalf("executed set = %v, want %v (the two num_statements:0 __init__.py files must be ABSENT, not false)", got, want)
 	}
 }
 
@@ -258,7 +268,7 @@ func TestPythonParseCoverageModulePathTrailingSlashStillAligns(t *testing.T) {
 func TestPythonParseCoverageDotDotEscapeIsSkippedNotEmitted(t *testing.T) {
 	p := pyPlugin{}
 	root := "/repo"
-	report := `{"meta": {"format": 3}, "files": {"/repo/../repo-other/x.py": {"summary": {"covered_lines": 5}}, "/repo/real.py": {"summary": {"covered_lines": 1}}}, "totals": {"covered_lines": 6}}`
+	report := `{"meta": {"format": 3}, "files": {"/repo/../repo-other/x.py": {"summary": {"covered_lines": 5, "num_statements": 5}}, "/repo/real.py": {"summary": {"covered_lines": 1, "num_statements": 1}}}, "totals": {"covered_lines": 6}}`
 	got, err := p.ParseCoverage(report, root)
 	if err != nil {
 		t.Fatalf("ParseCoverage: %v", err)
@@ -336,6 +346,37 @@ func TestPythonCoverageCmdAcceptedShapes(t *testing.T) {
 				t.Fatalf("CoverageCmd(%v) script = %q, missing expected coverage invocations", c.testCmd, script)
 			}
 		})
+	}
+}
+
+// TestPythonCoverageCmdUsesATempCoverageFileNotTheCwdDefault pins F3: the
+// script must point coverage.py's data file at a mktemp'd path via
+// COVERAGE_FILE (cleaned up by an EXIT trap), for BOTH the `run` and the
+// `json` step — never let `coverage run` fall back to its own default of
+// writing `.coverage` straight into the cwd, which on the workspace
+// substrate IS the operator's own --repo checkout. Mirrors
+// goPlugin.CoverageCmd's existing `mktemp` + `trap rm` discipline for
+// `-coverprofile`.
+func TestPythonCoverageCmdUsesATempCoverageFileNotTheCwdDefault(t *testing.T) {
+	p := pyPlugin{}
+	cmd, ok := p.CoverageCmd([]string{"pytest", "-q"})
+	if !ok {
+		t.Fatalf("CoverageCmd ok=false")
+	}
+	script := cmd[2]
+	for _, want := range []string{
+		"f=$(mktemp)",
+		`trap 'rm -f "$f"' EXIT`,
+		`COVERAGE_FILE="$f"`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("script = %q, missing %q (coverage.py must not fall back to its own cwd-relative .coverage default)", script, want)
+		}
+	}
+	// COVERAGE_FILE must precede BOTH invocations — the run step and the
+	// json step both need to agree on where the data file is.
+	if n := strings.Count(script, `COVERAGE_FILE="$f"`); n != 2 {
+		t.Errorf("script has COVERAGE_FILE=\"$f\" %d time(s), want 2 (one per coverage invocation): %q", n, script)
 	}
 }
 

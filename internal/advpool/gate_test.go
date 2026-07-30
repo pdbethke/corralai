@@ -15,6 +15,7 @@ import (
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/buildstore"
 	"github.com/pdbethke/corralai/internal/certify"
+	golang "github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
@@ -130,6 +131,81 @@ func TestJailValidatorCompileTest_SubdirectoryNonCompilingTest(t *testing.T) {
 	}
 	if !strings.Contains(ce.Output, "ValidatePassword") && !strings.Contains(ce.Output, "123") {
 		t.Fatalf("CompileError.Output does not carry the real go-vet diagnostic:\n%s", ce.Output)
+	}
+}
+
+// emptySeqPlugin is a minimal golang.Plugin whose CompileCheck ALWAYS
+// returns an empty sequence — reproducing what a future plugin's early
+// return (or a test double like internal/reposcan/preflight_test.go's own
+// stubPlugin) would hand CompileTest. Registered under a private extension
+// (".emptyseqstub") that no other test uses, so this never shadows a real
+// language.
+type emptySeqPlugin struct{}
+
+func (emptySeqPlugin) Name() string                { return "emptyseqstub" }
+func (emptySeqPlugin) Detect(p string) bool        { return filepath.Ext(p) == ".emptyseqstub" }
+func (emptySeqPlugin) Scaffold() map[string]string { return nil }
+func (emptySeqPlugin) TestCmd() []string           { return []string{"true"} }
+func (emptySeqPlugin) CompileCheck(_, _ string) [][]string {
+	return nil // the exact shape this test guards against
+}
+
+// TestPaths must yield at least one candidate: advPoolTestPath indexes
+// TestPaths(codePath)[0] unconditionally (mirroring every real plugin's own
+// contract), so an empty slice here would panic before CompileTest ever
+// gets to the empty-CompileCheck-sequence check this test exists to prove.
+func (emptySeqPlugin) TestPaths(p string) []golang.TestCandidate {
+	return []golang.TestCandidate{{Path: p + ".test", Rank: 0}}
+}
+func (emptySeqPlugin) Preflight([]string) error                            { return nil }
+func (emptySeqPlugin) PromptLang() string                                  { return "" }
+func (emptySeqPlugin) TestWriterSystem() string                            { return "" }
+func (emptySeqPlugin) MutantSystem() string                                { return "" }
+func (emptySeqPlugin) ImportPath(string, func(string) bool) (string, bool) { return "", false }
+func (emptySeqPlugin) ImportNote(string, bool) string                      { return "" }
+func (emptySeqPlugin) SingleTestCmd(string, string) ([]string, bool)       { return nil, false }
+func (emptySeqPlugin) ListTestsCmd(string) ([]string, bool)                { return nil, false }
+func (emptySeqPlugin) ParseTestList(string) []string                       { return nil }
+
+func init() { golang.Register(emptySeqPlugin{}) }
+
+// countingJail counts every RunTest/RunTestVerbose call it receives, always
+// reporting a pass — a stand-in used to prove CompileTest never invokes the
+// jail at all when CompileCheck hands it an empty sequence.
+type countingJail struct{ calls int }
+
+func (c *countingJail) RunTest(context.Context, map[string]string, []string) (bool, error) {
+	c.calls++
+	return true, nil
+}
+
+func (c *countingJail) RunTestVerbose(context.Context, map[string]string, []string) (bool, string, error) {
+	c.calls++
+	return true, "", nil
+}
+
+// TestJailValidatorCompileTest_EmptySequenceErrors closes the exact class
+// this branch exists to end, one level up: an EMPTY CompileCheck sequence
+// must never read as "nothing to check, therefore compiles" — that is a
+// validation gate reporting success without invoking a single command.
+// Before this guard existed, CompileTest's loop simply never ran and
+// returned nil — measured directly here via countingJail.calls == 0 on the
+// PRE-fix code path (this test is written to fail loudly if that regresses:
+// it asserts calls==0 as a fact about emptySeqPlugin's behavior, and a
+// non-nil error is required regardless).
+func TestJailValidatorCompileTest_EmptySequenceErrors(t *testing.T) {
+	jail := &countingJail{}
+	v := JailValidator{Jail: jail}
+
+	err := v.CompileTest(context.Background(), "x.emptyseqstub", "code", "test")
+	if err == nil {
+		t.Fatal("CompileTest with an empty CompileCheck sequence returned nil — a compile-verify gate must not silently report \"compiles\" without running anything")
+	}
+	if jail.calls != 0 {
+		t.Fatalf("jail.calls = %d, want 0 — CompileTest must reject the empty sequence BEFORE ever touching the jail", jail.calls)
+	}
+	if !strings.Contains(err.Error(), "empty") {
+		t.Fatalf("error does not explain the empty-sequence cause: %v", err)
 	}
 }
 

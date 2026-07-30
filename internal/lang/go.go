@@ -30,12 +30,16 @@ func (goPlugin) TestCmd() []string { return []string{"go", "test", "./..."} }
 // has nothing to do with the authored test. This matches the (package-scoped)
 // command the scorer actually runs. A bare filename (single-file mode) has no
 // package dir, so it falls back to ./... over the one-package scaffold.
-func (goPlugin) CompileCheck(codePath, _ string) []string {
+// `go vet` already type-checks every .go file (source and test) in the
+// target package in one invocation, so this is a single-command sequence —
+// see lang.Plugin.CompileCheck's doc comment for why the return type is a
+// sequence at all.
+func (goPlugin) CompileCheck(codePath, _ string) [][]string {
 	dir := filepath.ToSlash(filepath.Dir(codePath))
 	if dir == "." || dir == "" || dir == "/" {
-		return []string{"go", "vet", "./..."}
+		return [][]string{{"go", "vet", "./..."}}
 	}
-	return []string{"go", "vet", "./" + dir + "/..."}
+	return [][]string{{"go", "vet", "./" + dir + "/..."}}
 }
 
 // TestPaths mirrors the prior advPoolTestPath: same base name, `_test.go`

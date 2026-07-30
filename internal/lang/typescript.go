@@ -72,8 +72,11 @@ func (tsPlugin) TestCmd() []string {
 // CompileCheck is a REAL type-check of the whole workspace via project-mode tsc
 // (no files on the command line, so the scaffold tsconfig governs which .ts are
 // checked). Needs `typescript` + `@types/node` host-present.
-func (tsPlugin) CompileCheck(codePath, testPath string) []string {
-	return []string{"tsc", "--noEmit", "-p", "tsconfig.json"}
+// tsc project-mode type-checks the whole workspace in one invocation, so
+// this is a single-command sequence — see lang.Plugin.CompileCheck's doc
+// comment for why the return type is a sequence at all.
+func (tsPlugin) CompileCheck(codePath, testPath string) [][]string {
+	return [][]string{{"tsc", "--noEmit", "-p", "tsconfig.json"}}
 }
 
 // TestPaths mirrors jsPlugin.TestPaths with the `.ts` suffix — see there for

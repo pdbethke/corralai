@@ -25,8 +25,12 @@ func TestJavaScriptPlugin(t *testing.T) {
 	if got := p.TestCmd(); !reflect.DeepEqual(got, []string{"node", "--test"}) {
 		t.Fatalf("TestCmd = %v", got)
 	}
+	// A two-command SEQUENCE, not a single `&&`-joined argv element: `node
+	// --check` only checks one file per invocation, and a bare `&&` argv
+	// element only means anything to a shell — the workspace substrate execs
+	// argv directly with no shell to interpret it.
 	cc := p.CompileCheck("foo.js", "foo.test.js")
-	if !reflect.DeepEqual(cc, []string{"node", "--check", "foo.js", "&&", "node", "--check", "foo.test.js"}) {
+	if !reflect.DeepEqual(cc, [][]string{{"node", "--check", "foo.js"}, {"node", "--check", "foo.test.js"}}) {
 		t.Fatalf("CompileCheck = %v", cc)
 	}
 	if len(p.Scaffold()) != 0 {

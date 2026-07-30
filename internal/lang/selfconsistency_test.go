@@ -103,6 +103,17 @@ func TestPluginCompileCheckIsDirectlyExecutable(t *testing.T) {
 		p := registry[name]
 		t.Run(name, func(t *testing.T) {
 			seq := p.CompileCheck("code.ext", "test.ext")
+			// An EMPTY sequence must never pass this guard: it means
+			// nothing would ever be exec'd, and advpool.JailValidator.
+			// CompileTest treats that as a hard error rather than "nothing
+			// to check, therefore compiles" — see lang.Plugin.CompileCheck's
+			// doc comment. Pinned here rather than merely relied upon: an
+			// empty seq previously passed the loop below trivially (there
+			// was nothing to iterate), so a plugin's early-return producing
+			// nil went undetected by this exact test.
+			if len(seq) == 0 {
+				t.Fatalf("%s: CompileCheck() returned an empty sequence — nothing would ever be exec'd; a caller treating this as \"nothing to check\" silently reports every test as compiling", name)
+			}
 			for i, cmd := range seq {
 				if len(cmd) == 0 {
 					t.Fatalf("%s: CompileCheck() sequence entry %d is empty — nothing to exec", name, i)

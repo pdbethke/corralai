@@ -52,7 +52,12 @@ type Plugin interface {
 	// exec.Command with no shell at all (the workspace substrate —
 	// internal/adequacy/workspace.go — execs argv directly), so nothing
 	// here may depend on shell interpretation of `&&`, `;`, or any other
-	// control operator. An empty sequence means nothing to check.
+	// control operator. An empty sequence is NEVER valid: every registered
+	// plugin has at least one real check to run, and a caller (see
+	// advpool.JailValidator.CompileTest) treats an empty sequence as an
+	// ERROR, not as "nothing to check, therefore compiles" — a validation
+	// gate that silently reports "compiles" without invoking a single
+	// command is exactly the failure class this type exists to prevent.
 	CompileCheck(codePath, testPath string) [][]string
 	// TestPaths returns the plausible test-file locations for codePath,
 	// ordered most specific (least likely to accidentally match a DIFFERENT

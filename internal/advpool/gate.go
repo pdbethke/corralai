@@ -215,18 +215,32 @@ type JailValidator struct {
 }
 
 // CompileError is returned by CompileTest when the authored test builds a
-// workspace but does not compile. It carries the jail's actual compiler output
-// so the driver can feed it back to the test-writer on retry instead of blindly
-// re-asking — a bare "does not compile" taught the writer nothing, so it
-// repeated the same mistake until it exhausted its attempts. Output is empty
-// only when the jail could not surface it (the RunTest fallback path).
-type CompileError struct{ Output string }
+// workspace but does not compile. It carries the FAILING command's own
+// compiler output (never a preceding command's — see the note in
+// CompileTest's loop) so the driver can feed it back to the test-writer on
+// retry instead of blindly re-asking — a bare "does not compile" taught the
+// writer nothing, so it repeated the same mistake until it exhausted its
+// attempts. Output is empty only when the jail could not surface it (the
+// RunTest fallback path).
+type CompileError struct {
+	Output string
+	// Cmd is the argv of the specific command in CompileCheck's sequence
+	// that failed (or is empty, for the RunTest fallback / the empty-sequence
+	// case), included in Error() so a multi-command sequence (ruby -c /
+	// node --check, one file per invocation) says WHICH file's check failed,
+	// not just that the sequence as a whole didn't pass.
+	Cmd []string
+}
 
 func (e *CompileError) Error() string {
-	if strings.TrimSpace(e.Output) == "" {
+	switch {
+	case strings.TrimSpace(e.Output) == "" && len(e.Cmd) == 0:
 		return "advpool: test does not compile"
+	case strings.TrimSpace(e.Output) == "":
+		return fmt.Sprintf("advpool: test does not compile (command %v)", e.Cmd)
+	default:
+		return fmt.Sprintf("advpool: test does not compile (command %v):\n%s", e.Cmd, e.Output)
 	}
-	return "advpool: test does not compile:\n" + e.Output
 }
 
 // verboseJail is the optional Jail extension that also returns the compiler
@@ -262,22 +276,40 @@ func (v JailValidator) CompileTest(ctx context.Context, codePath, code, test str
 	// joining it into a single shell command: v.Jail may be a bare
 	// exec.Command on the workspace substrate (internal/adequacy/workspace.go),
 	// which has no shell to interpret `&&` at all — see this method's own
-	// history (the pallets/flask PYTHONPYCACHEPREFIX regression) for exactly
-	// what silently breaks when a plugin's CompileCheck output assumes one.
+	// history (the pallets/flask PYTHONPYCACHEPREFIX regression, and its
+	// ruby/js && sibling) for exactly what silently breaks when a plugin's
+	// CompileCheck output assumes one.
+	seq := p.CompileCheck(codePath, testPath)
+	if len(seq) == 0 {
+		// An empty sequence must NOT read as "nothing to check, therefore
+		// compiles": that is exactly the failure mode this method's own
+		// history is about — a validation gate reporting "compiles" without
+		// ever invoking a single command. No plugin returns this today (all
+		// five yield >=1 command), but a future plugin's early-return, or a
+		// stub/fake Jail-adjacent Plugin (e.g. a test double) forgetting a
+		// case, must fail CLOSED here, not silently pass every test as
+		// compiling. See lang.Plugin.CompileCheck's doc comment for the
+		// contract this enforces.
+		return fmt.Errorf("advpool: compile-verify test: %s plugin's CompileCheck(%q, %q) returned an empty command sequence — refusing to report a compile pass without running anything", p.Name(), codePath, testPath)
+	}
 	vj, verbose := v.Jail.(verboseJail)
-	var combinedOutput strings.Builder
-	for i, cmd := range p.CompileCheck(codePath, testPath) {
+	for _, cmd := range seq {
 		if verbose {
 			compiles, output, err := vj.RunTestVerbose(ctx, ws, cmd)
 			if err != nil {
 				return fmt.Errorf("advpool: compile-verify test: %w", err)
 			}
-			if i > 0 && output != "" {
-				combinedOutput.WriteString("\n")
-			}
-			combinedOutput.WriteString(output)
 			if !compiles {
-				return &CompileError{Output: combinedOutput.String()}
+				// Output/Cmd carry ONLY this failing command's own output —
+				// never a preceding, PASSING command's output. A multi-command
+				// sequence (ruby -c code, ruby -c test) means a passing first
+				// command would otherwise prefix the real diagnostic with a
+				// success message ("Syntax OK\n<real error>"), which is noise
+				// the test-writer has to see past on retry, not a fact worth
+				// feeding it. Cmd names which command in the sequence failed,
+				// since "test does not compile" alone no longer says whether
+				// it was the code file or the test file's own check.
+				return &CompileError{Output: output, Cmd: cmd}
 			}
 			continue
 		}
@@ -286,7 +318,7 @@ func (v JailValidator) CompileTest(ctx context.Context, codePath, code, test str
 			return fmt.Errorf("advpool: compile-verify test: %w", err)
 		}
 		if !compiles {
-			return &CompileError{}
+			return &CompileError{Cmd: cmd}
 		}
 	}
 	return nil

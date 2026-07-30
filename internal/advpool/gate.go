@@ -252,24 +252,42 @@ func (v JailValidator) CompileTest(ctx context.Context, codePath, code, test str
 	ws[codePath] = code
 	testPath := advPoolTestPath(codePath)
 	ws[testPath] = test
-	cmd := p.CompileCheck(codePath, testPath)
 
-	if vj, ok := v.Jail.(verboseJail); ok {
-		compiles, output, err := vj.RunTestVerbose(ctx, ws, cmd)
+	// CompileCheck returns a SEQUENCE of commands (see lang.Plugin.CompileCheck's
+	// doc comment): most plugins yield exactly one, but a plugin whose checker
+	// can only look at one file per invocation (ruby -c, node --check) yields
+	// one per file, meant to run in order and stop at the first failure — the
+	// exact "run A, then B only if A succeeded" semantics a shell's `&&` used
+	// to express. This runs that sequence directly over v.Jail, WITHOUT ever
+	// joining it into a single shell command: v.Jail may be a bare
+	// exec.Command on the workspace substrate (internal/adequacy/workspace.go),
+	// which has no shell to interpret `&&` at all — see this method's own
+	// history (the pallets/flask PYTHONPYCACHEPREFIX regression) for exactly
+	// what silently breaks when a plugin's CompileCheck output assumes one.
+	vj, verbose := v.Jail.(verboseJail)
+	var combinedOutput strings.Builder
+	for i, cmd := range p.CompileCheck(codePath, testPath) {
+		if verbose {
+			compiles, output, err := vj.RunTestVerbose(ctx, ws, cmd)
+			if err != nil {
+				return fmt.Errorf("advpool: compile-verify test: %w", err)
+			}
+			if i > 0 && output != "" {
+				combinedOutput.WriteString("\n")
+			}
+			combinedOutput.WriteString(output)
+			if !compiles {
+				return &CompileError{Output: combinedOutput.String()}
+			}
+			continue
+		}
+		compiles, err := v.Jail.RunTest(ctx, ws, cmd)
 		if err != nil {
 			return fmt.Errorf("advpool: compile-verify test: %w", err)
 		}
 		if !compiles {
-			return &CompileError{Output: output}
+			return &CompileError{}
 		}
-		return nil
-	}
-	compiles, err := v.Jail.RunTest(ctx, ws, cmd)
-	if err != nil {
-		return fmt.Errorf("advpool: compile-verify test: %w", err)
-	}
-	if !compiles {
-		return &CompileError{}
 	}
 	return nil
 }

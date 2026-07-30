@@ -31,10 +31,16 @@ func TestPythonPlugin(t *testing.T) {
 	// shell-joins the command (the jail substrate) — the workspace substrate
 	// execs argv directly and would try to run a file literally named
 	// "PYTHONPYCACHEPREFIX=/tmp/corral-pyc".
+	// py_compile takes multiple files in one invocation, so CompileCheck's
+	// sequence is a single command.
 	cc := p.CompileCheck("pricing.py", "test_pricing.py")
-	if len(cc) != 7 || cc[0] != "env" || cc[1] != "PYTHONPYCACHEPREFIX=/tmp/corral-pyc" ||
-		(cc[2] != "python3" && cc[2] != "python") || cc[3] != "-m" || cc[4] != "py_compile" ||
-		cc[5] != "pricing.py" || cc[6] != "test_pricing.py" {
+	if len(cc) != 1 {
+		t.Fatalf("CompileCheck sequence = %v, want exactly 1 command", cc)
+	}
+	c0 := cc[0]
+	if len(c0) != 7 || c0[0] != "env" || c0[1] != "PYTHONPYCACHEPREFIX=/tmp/corral-pyc" ||
+		(c0[2] != "python3" && c0[2] != "python") || c0[3] != "-m" || c0[4] != "py_compile" ||
+		c0[5] != "pricing.py" || c0[6] != "test_pricing.py" {
 		t.Fatalf("CompileCheck = %v", cc)
 	}
 	if len(p.Scaffold()) != 0 {

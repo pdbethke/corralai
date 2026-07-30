@@ -86,8 +86,11 @@ const pyCachePrefixEnv = "PYTHONPYCACHEPREFIX=/tmp/corral-pyc"
 
 // CompileCheck is an offline, stdlib syntax check of both files, with bytecode
 // output redirected off the (jail-read-only) workspace — see pyCachePrefixEnv.
-func (pyPlugin) CompileCheck(codePath, testPath string) []string {
-	return []string{"env", pyCachePrefixEnv, pythonBin(), "-m", "py_compile", codePath, testPath}
+// py_compile accepts multiple files on one command line, so this is a
+// single-command sequence — see lang.Plugin.CompileCheck's doc comment for
+// why the return type is a sequence at all.
+func (pyPlugin) CompileCheck(codePath, testPath string) [][]string {
+	return [][]string{{"env", pyCachePrefixEnv, pythonBin(), "-m", "py_compile", codePath, testPath}}
 }
 
 // TestPaths returns pytest-convention candidates for codePath, most specific

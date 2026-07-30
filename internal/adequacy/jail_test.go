@@ -152,9 +152,11 @@ func TestJailAdapterContainerBackendCanCompilePythonInWorkspace(t *testing.T) {
 	j := NewJail(backend, 60*time.Second)
 	// The workspace dir the real jail creates is world-readable-but-not-writable
 	// to the container's uid — exactly the condition that made py_compile EACCES.
+	// python's CompileCheck sequence is always exactly one command (py_compile
+	// takes multiple files in a single invocation) — see lang.Plugin.CompileCheck.
 	pass, err := j.RunTest(context.Background(),
 		map[string]string{"recipes.py": code, "test_recipes.py": test},
-		p.CompileCheck("recipes.py", "test_recipes.py"))
+		p.CompileCheck("recipes.py", "test_recipes.py")[0])
 	if err != nil {
 		t.Fatalf("unexpected error running the python compile check in the container: %v", err)
 	}

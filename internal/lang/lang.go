@@ -36,11 +36,24 @@ type TestCandidate struct {
 // Plugin is everything the audit gate needs to grade one self-contained
 // source file + its test suite in a given language.
 type Plugin interface {
-	Name() string                                    // "go", "python"
-	Detect(codePath string) bool                     // by file extension
-	Scaffold() map[string]string                     // base workspace files (go.mod / none)
-	TestCmd() []string                               // default recursive test command
-	CompileCheck(codePath, testPath string) []string // syntax/type check for the authored test
+	Name() string                // "go", "python"
+	Detect(codePath string) bool // by file extension
+	Scaffold() map[string]string // base workspace files (go.mod / none)
+	TestCmd() []string           // default recursive test command
+	// CompileCheck returns a SEQUENCE of commands that together syntax/type
+	// check the authored test: run each in order, stop at the first
+	// non-zero exit (i.e. treat the sequence as chained by `&&`), and
+	// report an overall pass only if every command exits 0. Most plugins
+	// return exactly one command (their checker can look at both files —
+	// or the whole workspace — in a single invocation). Plugins whose
+	// checker only accepts ONE file per invocation (ruby -c, node --check)
+	// return one command per file instead of trying to splice `&&` into a
+	// single argv element: the caller may run this sequence via a bare
+	// exec.Command with no shell at all (the workspace substrate —
+	// internal/adequacy/workspace.go — execs argv directly), so nothing
+	// here may depend on shell interpretation of `&&`, `;`, or any other
+	// control operator. An empty sequence means nothing to check.
+	CompileCheck(codePath, testPath string) [][]string
 	// TestPaths returns the plausible test-file locations for codePath,
 	// ordered most specific (least likely to accidentally match a DIFFERENT
 	// source file's test) first, each carrying its evidentiary Rank (see

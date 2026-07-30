@@ -20,8 +20,12 @@ func TestRubyPlugin(t *testing.T) {
 	if got := p.TestPaths("pricing.rb")[0]; got.Path != "pricing_test.rb" || got.Rank != 0 {
 		t.Fatalf("TestPaths()[0] = %+v, want {pricing_test.rb, 0}", got)
 	}
+	// A two-command SEQUENCE, not a single `&&`-joined argv element: `ruby -c`
+	// only checks one file per invocation, and a bare `&&` argv element only
+	// means anything to a shell — the workspace substrate execs argv directly
+	// with no shell to interpret it.
 	cc := p.CompileCheck("pricing.rb", "pricing_test.rb")
-	if !reflect.DeepEqual(cc, []string{"ruby", "-c", "pricing.rb", "&&", "ruby", "-c", "pricing_test.rb"}) {
+	if !reflect.DeepEqual(cc, [][]string{{"ruby", "-c", "pricing.rb"}, {"ruby", "-c", "pricing_test.rb"}}) {
 		t.Fatalf("CompileCheck = %v", cc)
 	}
 	// TestCmd MUST be a single shell string: the jail space-joins the argv and

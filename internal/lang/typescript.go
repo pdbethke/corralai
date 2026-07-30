@@ -146,3 +146,15 @@ func (tsPlugin) SingleTestCmd(testPath, selector string) ([]string, bool) { retu
 func (tsPlugin) ListTestsCmd(string) ([]string, bool) { return nil, false }
 
 func (tsPlugin) ParseTestList(string) []string { return nil }
+
+// WorkspaceRunEnv is a no-op. TestCmd uses Node's native `--experimental-
+// strip-types`, an in-memory transform with no persistent on-disk cache
+// keyed off source metadata — so THIS plugin's own scoring path has no
+// analog of python.go's __pycache__ hole. Out of scope, not ruled out in
+// general: `ts-node` (not used by TestCmd here, but a plausible operator
+// `-- <cmd>` override) has its own transpile cache that CAN be keyed off
+// file mtime/size in some configurations — a project that overrides TestCmd
+// to run through ts-node on the workspace substrate could plausibly hit the
+// same class of bug this method exists to close for Python. See
+// lang.Plugin.WorkspaceRunEnv's doc comment.
+func (tsPlugin) WorkspaceRunEnv() (env []string, cleanup func()) { return nil, func() {} }

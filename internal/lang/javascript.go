@@ -111,3 +111,13 @@ func (jsPlugin) SingleTestCmd(testPath, selector string) ([]string, bool) { retu
 func (jsPlugin) ListTestsCmd(string) ([]string, bool) { return nil, false }
 
 func (jsPlugin) ParseTestList(string) []string { return nil }
+
+// WorkspaceRunEnv is a no-op. TestCmd runs Node's builtin test runner
+// directly against source (no separate persistent compile-cache step), so
+// there is no analog of python.go's __pycache__ hole in THIS plugin's own
+// scoring path today. This is NOT a claim that no JS/TS toolchain anywhere
+// has a same class of bug — a bundler or `ts-node`'s own transpile cache
+// keyed off file metadata could plausibly exhibit it — only that jsPlugin's
+// stock TestCmd doesn't route through one; see lang.Plugin.WorkspaceRunEnv's
+// doc comment and typescript.go's own note for the closer case.
+func (jsPlugin) WorkspaceRunEnv() (env []string, cleanup func()) { return nil, func() {} }

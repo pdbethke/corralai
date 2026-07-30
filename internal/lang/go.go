@@ -303,6 +303,13 @@ func (goPlugin) ParseCoverage(stdout, modulePath string) (executed map[string]bo
 	return executed, nil
 }
 
+// WorkspaceRunEnv is a no-op: the Go build/test cache (GOCACHE) is
+// content-addressed (a hash of the source, not its mtime+size), so a mutant
+// that changes a byte the compiler sees necessarily changes its cache key —
+// there is no analog of python.go's __pycache__ staleness hole here. See
+// lang.Plugin.WorkspaceRunEnv's doc comment.
+func (goPlugin) WorkspaceRunEnv() (env []string, cleanup func()) { return nil, func() {} }
+
 func (goPlugin) ParseTestList(output string) []string {
 	var out []string
 	for _, line := range strings.Split(output, "\n") {

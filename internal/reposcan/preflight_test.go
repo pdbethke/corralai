@@ -45,6 +45,7 @@ func (stubPlugin) ImportNote(string, bool) string                      { return 
 func (stubPlugin) SingleTestCmd(string, string) ([]string, bool)       { return nil, false }
 func (stubPlugin) ListTestsCmd(string) ([]string, bool)                { return nil, false }
 func (stubPlugin) ParseTestList(string) []string                       { return nil }
+func (stubPlugin) WorkspaceRunEnv() (env []string, cleanup func())     { return nil, func() {} }
 
 var _ lang.Plugin = stubPlugin{}
 

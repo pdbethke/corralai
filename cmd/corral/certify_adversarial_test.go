@@ -506,3 +506,88 @@ func TestAdvVerdictFromPoolCarriesSuiteIgnoresFile(t *testing.T) {
 		t.Error("advVerdictFromPool dropped SuiteIgnoresFile")
 	}
 }
+
+// TestAdvVerdictFromPoolCarriesTimedOut proves TimedOut survives the
+// pool→wire conversion — without it certify --local's own verdict block
+// (unlike --repo's report, which already marks it) would silently read
+// like a clean converged run.
+func TestAdvVerdictFromPoolCarriesTimedOut(t *testing.T) {
+	got := advVerdictFromPool(advpool.Verdict{TimedOut: true, DevScored: true})
+	if !got.TimedOut {
+		t.Error("advVerdictFromPool dropped TimedOut")
+	}
+	if !got.DevScored {
+		t.Error("advVerdictFromPool dropped DevScored — without it, renderAdvVerdict cannot tell an unmeasured timeout from a measured one on the wire")
+	}
+
+	// The false-negative direction matters just as much: an unmeasured
+	// timeout (DevScored: false) must round-trip as false, not silently
+	// upgrade to true.
+	unmeasured := advVerdictFromPool(advpool.Verdict{TimedOut: true, DevScored: false})
+	if unmeasured.DevScored {
+		t.Error("advVerdictFromPool turned an unmeasured timeout's DevScored=false into true")
+	}
+}
+
+// TestRenderAdvVerdictTimedOutDoesNotClaimTheTestWriterOrCriticRan is the
+// review-caught false-reassurance bug: a banked timeout verdict (real
+// dev_kill_rate/survivors, but the test-writer/critic never ran) used to
+// print "proven_missed: 0" and "no vacuous tests flagged" — both FALSE, and
+// indistinguishable from a converged below-threshold audit. It must instead
+// say plainly that the pool did not converge and that proven_missed/critic
+// review are not meaningful numbers.
+func TestRenderAdvVerdictTimedOutDoesNotClaimTheTestWriterOrCriticRan(t *testing.T) {
+	var b strings.Builder
+	renderAdvVerdict(&b, "src/flask/cli.py", advVerdict{
+		Lang: "python", Commit: "abc1234", MutantsTotal: 24,
+		DevKillRate: 0.46, Survivors: 13, Status: "needs-review",
+		TimedOut: true, DevScored: true,
+	})
+	out := b.String()
+	if !strings.Contains(out, "dev_kill_rate: 0.46") {
+		t.Fatalf("the real measured kill rate must still print:\n%s", out)
+	}
+	if !strings.Contains(out, "TIMED OUT") {
+		t.Fatalf("a timed-out verdict must say so plainly:\n%s", out)
+	}
+	if strings.Contains(out, "proven_missed: 0") {
+		t.Fatalf("must not claim proven_missed: 0 — the test-writer never ran, that is not a real zero:\n%s", out)
+	}
+	if strings.Contains(out, "no vacuous tests flagged") {
+		t.Fatalf("must not claim the critic found nothing — the critic never ran:\n%s", out)
+	}
+}
+
+// TestRenderAdvVerdictUnmeasuredTimeoutDoesNotFabricateAZeroKillRate is the
+// re-review catch: TimedOut alone does NOT mean the dev suite was measured
+// — a run reachable ONLY on the brain/--adversarial path (advpool.Driver.Tick's
+// own RunDeadline branch, not just --local's bankableTimeoutVerdict) can sign
+// a TimedOut verdict whose mutant-generator never finished, so DevKillRate is
+// a zero value nothing computed, not a real 0.00. Before this fix,
+// advVerdict had no DevScored field at all, so this exact shape printed
+// "status: NEEDS-REVIEW (dev suite killed 0/0 mutants)" / "dev_kill_rate:
+// 0.00" under the TIMED OUT banner — an operator would read that as "your
+// suite caught nothing," the fabricated accusation this whole codebase
+// exists to prevent.
+func TestRenderAdvVerdictUnmeasuredTimeoutDoesNotFabricateAZeroKillRate(t *testing.T) {
+	var b strings.Builder
+	renderAdvVerdict(&b, "src/flask/cli.py", advVerdict{
+		Lang: "python", Commit: "abc1234",
+		Status: "needs-review",
+		// DevKillRate/MutantsTotal/Survivors deliberately left at their zero
+		// values, mirroring a real timeoutVerdict() output when
+		// run.devScored was never set true — the mutant-generator itself
+		// never finished before RunDeadline fired.
+		TimedOut: true, DevScored: false,
+	})
+	out := b.String()
+	if !strings.Contains(out, "COULD-NOT-GRADE") {
+		t.Fatalf("an unmeasured timeout must report COULD-NOT-GRADE, got:\n%s", out)
+	}
+	if strings.Contains(out, "dev_kill_rate") {
+		t.Fatalf("nothing was measured — no kill rate may be printed at all:\n%s", out)
+	}
+	if strings.Contains(out, "killed 0/0") {
+		t.Fatalf("must not print a fabricated 0/0 killed tally:\n%s", out)
+	}
+}

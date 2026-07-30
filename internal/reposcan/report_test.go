@@ -38,6 +38,24 @@ func TestAggregateScoresOverAuditedSurfaceOnly(t *testing.T) {
 	}
 }
 
+// A gradable file's Detail (the executor's own error text) survives into
+// the report, keyed by reason — an operator reading "ungradable: 1
+// (executor-error)" must be able to find out WHY without a code trace.
+func TestAggregateCarriesUngradableDetailThrough(t *testing.T) {
+	results := []FileResult{
+		{Job: Job{Path: "app.py"}, Gradable: false, Reason: ReasonExecutorError, Detail: "python toolchain unavailable: pytest not importable"},
+	}
+	rep := Aggregate("o", "r", "c1", 1, 1, results, nil)
+
+	details := rep.UngradableDetails[ReasonExecutorError]
+	if len(details) != 1 {
+		t.Fatalf("UngradableDetails[executor-error] = %v, want 1 entry", details)
+	}
+	if details[0] != "app.py: python toolchain unavailable: pytest not importable" {
+		t.Errorf("detail = %q, want path-prefixed detail text", details[0])
+	}
+}
+
 // Zero audited files must not produce a 0.0 score that reads like "terrible
 // tests". It must be visibly unscored.
 func TestAggregateNothingAuditedIsNotZeroScore(t *testing.T) {
@@ -53,6 +71,45 @@ func TestAggregateNothingAuditedIsNotZeroScore(t *testing.T) {
 	}
 	if rep.AuditedFraction() != 0 {
 		t.Errorf("AuditedFraction = %v", rep.AuditedFraction())
+	}
+}
+
+// TestAggregateMarksTimedOutFiles proves a Gradable-but-unconverged file
+// (Verdict.TimedOut, banked by driveLocalRun's bankableTimeoutVerdict) is
+// counted separately AND carries the marker into its Weakest entry — a
+// report reader must never mistake "measured, but the pool didn't finish"
+// for a clean convergence just because the file is still Gradable.
+func TestAggregateMarksTimedOutFiles(t *testing.T) {
+	results := []FileResult{
+		gradable("clean.go", 0.9, 1),
+		{
+			Job:      Job{Path: "cli.py"},
+			Verdict:  advpool.Verdict{DevKillRate: 0.46, Survivors: 13, MutantsTotal: 24, TimedOut: true, DevScored: true},
+			Gradable: true,
+		},
+	}
+	rep := Aggregate("o", "r", "c1", 2, 2, results, nil)
+
+	if rep.Audited != 2 {
+		t.Fatalf("Audited = %d, want 2 (a timed-out-but-measured file is still audited)", rep.Audited)
+	}
+	if rep.TimedOut != 1 {
+		t.Fatalf("TimedOut = %d, want 1", rep.TimedOut)
+	}
+	var found bool
+	for _, f := range rep.Weakest {
+		if f.Path == "cli.py" {
+			found = true
+			if !f.TimedOut {
+				t.Error("cli.py's WeakFile.TimedOut = false, want true")
+			}
+		}
+		if f.Path == "clean.go" && f.TimedOut {
+			t.Error("clean.go's WeakFile.TimedOut = true, want false — it converged cleanly")
+		}
+	}
+	if !found {
+		t.Fatal("cli.py missing from rep.Weakest")
 	}
 }
 

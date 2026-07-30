@@ -3,14 +3,33 @@
 package lang
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
 func init() { Register(pyPlugin{}) }
+
+// preflightProbeTimeout bounds the `<bin> -m pytest --version`/`<bin>
+// --version` probe Preflight runs to confirm pytest is importable. Without
+// it a blocking wrapper (previously: only pythonBin()'s own two hardcoded
+// names could appear here; now testCmd lets the operator name ANY binary —
+// a shim, a version-manager wrapper, anything that ends up on PATH under
+// the name they gave) hangs the whole audit before any of --timeout's own
+// budget even starts. A plain `--version` probe has no legitimate reason to
+// take more than a few seconds.
+//
+// A var, not a const: preflight_test.go temporarily lowers it to keep the
+// timeout-path test fast (a real 10s sleep-and-wait per test run would be a
+// slow, silently-accepted tax on every `go test` invocation of this
+// package) — no production caller ever mutates it.
+var preflightProbeTimeout = 10 * time.Second
 
 // pythonBin resolves the interpreter to invoke: python3 (canonical on the
 // Linux hosts corral grades on) when present, else bare python. The bwrap
@@ -111,16 +130,163 @@ func (pyPlugin) TestPaths(codePath string) []TestCandidate {
 	return dedupeCandidates(out)
 }
 
-// Preflight fails CLOSED unless python3 (or python) is on PATH AND pytest is
-// importable (offline). The gate refuses to run rather than false-certify.
-func (pyPlugin) Preflight() error {
+// pytestPreflightProbe derives, from the operator's own test command
+// (testCmd), the argv that proves pytest is importable under the EXACT
+// interpreter/binary the operator named — never the host's stock
+// python3/python guess (see pythonBin's doc comment for why that guess is
+// wrong the instant the project lives in a venv: pythonBin() resolves off
+// PATH, and an operator-named venv interpreter like .venv/bin/python is
+// never on PATH under that name).
+//
+// Recognizes the same two invocation shapes CoverageCmd already keys off of
+// (see that method's doc comment) so the two checks read an operator's
+// command the same way:
+//
+//  1. bare `pytest`/`py.test ...` — the command itself IS the pytest
+//     binary; probe it directly with --version.
+//  2. `<interp> -m pytest ...` — probe pytest importability under that
+//     EXACT interp with --version.
+//
+// Any other shape (tox, poetry run, a project wrapper script, `python -m
+// unittest`, ...) returns ok=false: there is no reliable way to guess what
+// "pytest is importable" even means for an opaque wrapper, or whether the
+// named module supports --version at all. Preflight still owes those a real
+// presence check on testCmd[0] itself — see Preflight below — just not this
+// additional probe.
+//
+// Callers pass testCmd through stripLeadingEnvAssignments first (see
+// Preflight): a leading `VAR=value` prefix (`PYTHONPATH=src pytest -q`)
+// would otherwise land in testCmd[0] and hide the pytest/interp shape from
+// both cases below.
+func pytestPreflightProbe(testCmd []string) (probe []string, ok bool) {
+	switch {
+	case len(testCmd) >= 1 && (testCmd[0] == "pytest" || testCmd[0] == "py.test"):
+		return []string{testCmd[0], "--version"}, true
+	case len(testCmd) >= 3 && testCmd[1] == "-m" && testCmd[2] == "pytest":
+		return []string{testCmd[0], "-m", "pytest", "--version"}, true
+	default:
+		return nil, false
+	}
+}
+
+// Preflight fails CLOSED unless the toolchain that will actually run the
+// suite has pytest importable (offline). The gate refuses to run rather
+// than false-certify.
+//
+// With no explicit testCmd (certify --local with no override, or any other
+// caller that has none), this is BYTE-IDENTICAL to the pre-argv-aware
+// behavior: python3 (or python) on PATH, pytest importable under it.
+//
+// With an explicit testCmd — the operator's own `-- <cmd>` — that command IS
+// the assertion of how the suite runs, stronger evidence than this plugin's
+// stock guess, and MUST be what gets checked: the command's actual program
+// token must be present (exec.LookPath handles both a bare name on PATH and
+// an explicit path like .venv/bin/python identically — see toolOnPath), and
+// when the shape is a recognized pytest invocation (pytestPreflightProbe),
+// pytest's importability is probed under THAT interpreter, not pythonBin()'s
+// guess.
+//
+// testCmd's program token is resolved via firstExecutableToken, not
+// testCmd[0] directly: a leading `VAR=value` environment-assignment prefix
+// (`-- PYTHONPATH=src pytest -q`, the same idiom pyCachePrefixEnv itself
+// uses) is a legitimate, common operator idiom, not the executable, and
+// firstExecutableToken skips past it to find the real one — the
+// env-assignment case is genuinely FIXED, not merely downgraded.
+//
+// A shell-compound command (`-- cd sub && .venv/bin/python -m pytest`) is
+// different: it names no single executable at all, and firstExecutableToken
+// says so (ok=false) rather than guessing. This falls back to
+// pyPreflightStockDefault — which is NOT a strictly better outcome for this
+// one shape: it demands the HOST's stock python3/pytest be importable,
+// which is a DIFFERENT refusal (the venv named later in the compound
+// command is invisible to it), reinstating the original venv-not-found
+// symptom this whole argv-aware fix exists to remove, just for a shape this
+// function has no reliable way to parse a binary out of. That is the
+// deliberate, correct trade — guessing wrong from testCmd[0] (treating
+// "cd" as the executable) would be worse, a false diagnosis rather than an
+// honest, less-precise one — not a case where the fallback avoids failing
+// closed altogether.
+func (pyPlugin) Preflight(testCmd []string) error {
+	if len(testCmd) == 0 {
+		return pyPreflightStockDefault()
+	}
+	bin, ok := firstExecutableToken(testCmd)
+	if !ok {
+		return pyPreflightStockDefault()
+	}
+	if err := toolOnPath(bin); err != nil {
+		return fmt.Errorf("lang: python plugin preflight — the operator's test command names %q, which is not runnable: %w", bin, err)
+	}
+	probe, ok := pytestPreflightProbe(stripLeadingEnvAssignments(testCmd))
+	if !ok {
+		// An unrecognized shape (tox, poetry run, a wrapper script, ...):
+		// testCmd[0]'s presence above is the only toolchain fact that can be
+		// checked without guessing what the command actually needs.
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), preflightProbeTimeout)
+	defer cancel()
+	// #nosec G204 -- probe[0] is testCmd[0], the operator's OWN named
+	// interpreter/binary from `-- <cmd>` (already presence-checked above via
+	// toolOnPath, which rejects anything exec.LookPath can't resolve); the
+	// remaining args are the fixed "-m pytest --version"/"--version" probe
+	// this method constructs, never operator-controlled beyond that first
+	// token. This is the intentional replacement for the old "run the named
+	// tool with a fixed probe" pattern the pre-argv-aware version used too.
+	// bin is now operator-named (not one of pythonBin()'s two hardcoded
+	// choices), so this runs under preflightProbeTimeout — a wrapper that
+	// blocks must not hang the whole audit before --timeout's own budget
+	// even starts.
+	probeCmd := exec.CommandContext(ctx, probe[0], probe[1:]...)
+	// GuardProcess (internal/sandbox), not a bare WaitDelay: bin is now
+	// OPERATOR-named, someone else's code, which is exactly the case
+	// GuardProcess's own doc says it "MUST be applied to every os/exec
+	// command corral runs" for. A WaitDelay-only fix bounds the WAIT but
+	// leaves two other holes GuardProcess closes in one call: (1) no
+	// process-group kill, so a script interpreter's grandchild (e.g.
+	// `#!/bin/sh` backgrounding a worker) survives ctx cancellation as a
+	// leaked process — confirmed by reproducing exactly that against this
+	// probe: a backgrounding wrapper left 3 processes running after
+	// "Preflight" returned; (2) the default cmd.Cancel only signals the
+	// DIRECT child, so a WaitDelay-only fix still waits its FULL bound
+	// again on top of ctx's own timeout (doubling the reported bound)
+	// before it forces the pipes closed, rather than killing the whole
+	// group promptly the moment ctx expires.
+	sandbox.GuardProcess(probeCmd)
+	if out, err := probeCmd.CombinedOutput(); err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf("lang: python plugin preflight — pytest importability probe via %q did not finish within %s: %v",
+				bin, preflightProbeTimeout, ctx.Err())
+		}
+		return fmt.Errorf("lang: python plugin preflight — pytest not importable via %q (%s): %v: %s",
+			bin, strings.Join(probe, " "), err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// pyPreflightStockDefault is Preflight's fallback when the caller has no
+// explicit test command: the same behavior this plugin had before testCmd
+// existed (same interpreter resolution, same probe, same error text on a
+// genuine import failure) plus one addition — the probe now runs under
+// preflightProbeTimeout, so every existing caller with no `-- <cmd>` (or
+// none applicable) sees no change EXCEPT that a probe which used to be able
+// to hang forever now fails loud after a bounded wait instead.
+func pyPreflightStockDefault() error {
 	bin := pythonBin()
 	if err := toolOnPath(bin); err != nil {
 		return err
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), preflightProbeTimeout)
+	defer cancel()
 	// #nosec G204 -- bin is one of two hardcoded interpreter names ("python3" or
 	// "python") returned by pythonBin(); the args are constant. No external input.
-	if out, err := exec.Command(bin, "-m", "pytest", "--version").CombinedOutput(); err != nil {
+	// GuardProcess: see the identical comment in Preflight above.
+	stockCmd := exec.CommandContext(ctx, bin, "-m", "pytest", "--version")
+	sandbox.GuardProcess(stockCmd)
+	if out, err := stockCmd.CombinedOutput(); err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf("lang: python plugin preflight — pytest importability probe did not finish within %s: %v", preflightProbeTimeout, ctx.Err())
+		}
 		return fmt.Errorf("lang: python plugin preflight — pytest not importable (install it on the host): %v: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil

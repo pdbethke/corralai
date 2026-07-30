@@ -31,6 +31,12 @@ func aggregate(
 		ModelsByRole:     map[string]string(assign),
 		Status:           StatusCertified,
 		TestWriterFailed: testWriterFailed,
+		// aggregate is only ever reached via tickAggregate, which itself is
+		// gated on run.poolScored — reachable only once tickDevAdequacy has
+		// already set run.devScored (see driver.go's Tick). A converged
+		// verdict's numbers are always real measurements, never a fabricated
+		// zero — see Verdict.DevScored's doc.
+		DevScored: true,
 	}
 	// The SIGNED certify/needs-review decision rests on execution-proven signals:
 	// the mutation kill-rate against the threshold, run in the jail. The

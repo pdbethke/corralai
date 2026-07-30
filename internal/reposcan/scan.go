@@ -32,10 +32,16 @@ const (
 // unchanged, rather than discovering later that a scan silently reported
 // stale work as current.
 type FileResult struct {
-	Job        Job
-	Verdict    advpool.Verdict
-	Gradable   bool
-	Reason     string
+	Job      Job
+	Verdict  advpool.Verdict
+	Gradable bool
+	Reason   string
+	// Detail carries the underlying error text for an ungradable result,
+	// when one is available — today only ReasonExecutorError populates it
+	// (see Scan below). Never required: every other ungradable reason is
+	// already self-explanatory from Reason alone, and a caller must not
+	// assume Detail is non-empty just because Gradable is false.
+	Detail     string
 	ComputedAt time.Time
 	CacheHit   bool
 }
@@ -98,7 +104,13 @@ func Scan(ctx context.Context, jobs []Job, ex Executor, c Cache, workers int) []
 
 			res, err := ex.Execute(ctx, j)
 			if err != nil {
-				out[i] = FileResult{Job: j, Gradable: false, Reason: ReasonExecutorError, ComputedAt: time.Now()}
+				// err is the executor's own diagnosis (e.g. "python toolchain
+				// unavailable — refusing to grade: ..."), not a generic
+				// failure — carry it through as Detail rather than
+				// discarding it, so an operator reading the report sees WHY,
+				// not just that grading failed. See buildScanFileRows /
+				// printRepoReport for where Detail surfaces.
+				out[i] = FileResult{Job: j, Gradable: false, Reason: ReasonExecutorError, Detail: err.Error(), ComputedAt: time.Now()}
 				return
 			}
 			res.Job = j

@@ -55,7 +55,7 @@ func TestScorePythonKillsAndSurvives(t *testing.T) {
 	if !ok {
 		t.Skip("python plugin not registered")
 	}
-	if err := py.Preflight(); err != nil {
+	if err := py.Preflight(nil); err != nil {
 		t.Skipf("python/pytest not available: %v", err)
 	}
 	backend, err := sandbox.Resolve(sandbox.Config{Backend: "bwrap"})

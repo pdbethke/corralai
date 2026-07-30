@@ -29,7 +29,7 @@ func TestScoreTSKillsAndSurvives(t *testing.T) {
 	if !ok {
 		t.Skip("typescript plugin not registered")
 	}
-	if err := ts.Preflight(); err != nil {
+	if err := ts.Preflight(nil); err != nil {
 		t.Skipf("node/tsc not available: %v", err)
 	}
 	backend, err := sandbox.Resolve(sandbox.Config{Backend: "bwrap"})

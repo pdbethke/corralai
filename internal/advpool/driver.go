@@ -195,6 +195,24 @@ type Verdict struct {
 	SuiteIgnoresFile bool
 	RecordID         int64  // the signed build-record id (0 if signing skipped/failed)
 	RecordHead       string // the record's ledger head
+	// TimedOut is true when this verdict came from RunDeadline's backstop
+	// (see timeoutVerdict) rather than the pool actually converging — the
+	// test-writer/shadow/critic/aggregate steps never finished. Status is
+	// unconditionally StatusNeedsReview either way (a timed-out run is never
+	// certified); this says WHY in a way that must ride into any report or
+	// ledger row built from the verdict, so "measured, but the pool did not
+	// finish" reads differently from a clean below-threshold audit — a claim
+	// carries how it was earned.
+	TimedOut bool
+	// DevScored mirrors runState.devScored: true once the dev suite's OWN
+	// kill-rate was actually measured against real mutants in the real jail.
+	// On a TimedOut verdict this is the ONLY thing that makes
+	// DevKillRate/Survivors/MutantsTotal real numbers rather than zero
+	// values nothing ever computed. A caller must treat a TimedOut verdict
+	// with DevScored==false as UNGRADABLE — never print or bank its
+	// (fabricated) 0.00 kill rate as a measurement. See timeoutVerdict and
+	// cmd/corral/certify_local_drive.go's bankableTimeoutVerdict.
+	DevScored bool
 }
 
 // RunState is the observable status of one run: Converged is true once the run
@@ -1338,6 +1356,8 @@ func (d *Driver) timeoutVerdict(run *runState) Verdict {
 		DroppedRegions: run.droppedRegions,
 		ModelsByRole:   map[string]string(d.Assign),
 		Status:         StatusNeedsReview,
+		TimedOut:       true,
+		DevScored:      run.devScored,
 	}
 }
 

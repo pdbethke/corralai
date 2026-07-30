@@ -907,6 +907,11 @@ func TestCertifyRepoRejectsFlagsAfterDashDash(t *testing.T) {
 	}{
 		{"min-kill-rate", []string{"--repo", root, "--dry-run", "--", "pytest", "-q", "--min-kill-rate", "0.5"}},
 		{"record", []string{"--repo", root, "--dry-run", "--", "pytest", "-q", "--record", "--record-db", "/tmp/x.duckdb"}},
+		// --timeout is new: it joins the same guard automatically (names
+		// come from fs.VisitAll, not a hardcoded list — see
+		// TestCheckArgvNoFlagCollisionDerivesNamesFromTheFlagSet) and this
+		// pins that it actually does.
+		{"timeout", []string{"--repo", root, "--dry-run", "--", "pytest", "-q", "--timeout", "5m"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var out, errb bytes.Buffer
@@ -1114,7 +1119,7 @@ func TestNewLocalExecutorSkipsSandboxForWorkspaceSubstrate(t *testing.T) {
 	}
 	t.Cleanup(func() { resolveJailFn = orig })
 
-	ex := newLocalExecutor(t.TempDir(), nil, substrateWorkspace, io.Discard)
+	ex := newLocalExecutor(t.TempDir(), nil, substrateWorkspace, 0, io.Discard)
 	defer ex.Close()
 	if err := ex.preflight(); err != nil {
 		t.Fatalf("workspace substrate must not demand a sandbox: %v", err)
@@ -1137,7 +1142,7 @@ func TestNewLocalExecutorStillRequiresSandboxForJailSubstrate(t *testing.T) {
 	t.Cleanup(func() { resolveJailFn = orig })
 
 	for _, substrate := range []string{"", substrateJail} {
-		ex := newLocalExecutor(t.TempDir(), nil, substrate, io.Discard)
+		ex := newLocalExecutor(t.TempDir(), nil, substrate, 0, io.Discard)
 		err := ex.preflight()
 		ex.Close()
 		if err == nil {
@@ -1167,7 +1172,7 @@ func TestNewLocalExecutorSkipsTheSeedCacheForWorkspaceSubstrate(t *testing.T) {
 	mustWrite(t, filepath.Join(root, "a.go"), "package p\n")
 	mustWrite(t, filepath.Join(root, "a_test.go"), "package p\n")
 
-	ex := newLocalExecutor(root, nil, substrateWorkspace, io.Discard)
+	ex := newLocalExecutor(root, nil, substrateWorkspace, 0, io.Discard)
 	defer ex.Close()
 	if ex.seeds != nil {
 		t.Fatal("workspace substrate must not wire a seed cache at all")
@@ -1208,7 +1213,7 @@ func TestNewLocalExecutorSkipsTheSeedCacheForWorkspaceSubstrate(t *testing.T) {
 // substrateJail value both still wire a real cache.
 func TestNewLocalExecutorStillWiresTheSeedCacheForJailSubstrate(t *testing.T) {
 	for _, substrate := range []string{"", substrateJail} {
-		ex := newLocalExecutor(t.TempDir(), nil, substrate, io.Discard)
+		ex := newLocalExecutor(t.TempDir(), nil, substrate, 0, io.Discard)
 		if ex.seeds == nil {
 			t.Errorf("substrate %q: no seed cache wired — every job would re-prepare its own jail", substrate)
 		}
@@ -1240,6 +1245,59 @@ func TestLocalExecutorThreadsSubstrateIntoAuditInput(t *testing.T) {
 	}
 	if gotBaseline != substrateWorkspace || gotAudit != substrateWorkspace {
 		t.Fatalf("substrate did not reach localAuditInput: baseline=%q audit=%q, want %q", gotBaseline, gotAudit, substrateWorkspace)
+	}
+}
+
+// TestLocalExecutorThreadsTimeoutIntoAuditInput proves Fix 2's whole point:
+// `--timeout` was previously accepted nowhere on `certify --repo`, so every
+// job's localAuditInput.timeout was left at the zero value and auditOneFile
+// silently fell back to its own 10-minute default with no way for an
+// operator to give a large file more room — the exact reason the flask
+// repro (src/flask/cli.py) had nothing but its own 10 minutes to work with.
+// A value set on localExecutor.timeout (what newLocalExecutor wires from
+// the CLI's --timeout flag) must arrive at localAuditInput.timeout for
+// every job, mirroring TestLocalExecutorThreadsSubstrateIntoAuditInput's
+// proof for --substrate.
+func TestLocalExecutorThreadsTimeoutIntoAuditInput(t *testing.T) {
+	var gotBaseline, gotAudit time.Duration
+	want := 27 * time.Minute
+	ex := localExecutor{
+		baselineRuns: 2,
+		timeout:      want,
+		newBaseline: func(_ context.Context, in localAuditInput) (reposcan.BaselineRunner, func(), error) {
+			gotBaseline = in.timeout
+			return &scriptedBaseline{results: []bool{true, true}}, func() {}, nil
+		},
+		audit: func(_ context.Context, in localAuditInput) (advpool.Verdict, error) {
+			gotAudit = in.timeout
+			return advpool.Verdict{DevKillRate: 1}, nil
+		},
+	}
+	if _, err := ex.Execute(context.Background(), reposcan.Job{Path: "a.go", Goal: reposcan.Goal{Text: "g"}}); err != nil {
+		t.Fatal(err)
+	}
+	if gotBaseline != want || gotAudit != want {
+		t.Fatalf("timeout did not reach localAuditInput: baseline=%v audit=%v, want %v", gotBaseline, gotAudit, want)
+	}
+}
+
+// TestCertifyRepoTimeoutFlagThreadsThroughAndSurvivesTheFlagCollisionGuard
+// exercises the whole CLI path: --timeout given (legitimately) BEFORE `--`
+// must parse, must reach newLocalExecutor (proven via the same drive/resolve
+// seam TestNewLocalExecutorResolvesTheSandboxOnceAcrossJobs uses), and a
+// LEGITIMATE `-- pytest -q` after it must still run untouched — the new flag
+// must not itself trip checkArgvNoFlagCollision's guard when it is NOT the
+// one placed after `--` (that misuse is covered separately by the "timeout"
+// case in TestCertifyRepoRejectsFlagsAfterDashDash).
+func TestCertifyRepoTimeoutFlagParsesBeforeDashDash(t *testing.T) {
+	root := t.TempDir()
+	var out, errb bytes.Buffer
+	code := runCertifyRepo([]string{
+		"--repo", root, "--dry-run", "--timeout", "27m",
+		"--", "pytest", "-q",
+	}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit %d, want 0 (a legitimate --timeout before -- must parse and a real check command after it must run): stdout=%s stderr=%s", code, out.String(), errb.String())
 	}
 }
 
@@ -1395,6 +1453,40 @@ func TestRepoScanExitCodeNothingAuditedIsNonZero(t *testing.T) {
 	}, nil)
 	if got := repoScanExitCode(graded, false, nil); got != 0 {
 		t.Errorf("a scan that graded something must exit 0, got %d", got)
+	}
+}
+
+// TestRepoScanExitCodeAllTimedOutIsNonZero is review item 3: a scan whose
+// only graded files are Verdict.TimedOut (banked by driveLocalRun's
+// bankableTimeoutVerdict) has Audited > 0 — the dev-adequacy measurement is
+// real — but corral's own adversarial verification (test-writer, critic)
+// never ran to completion for ANY of them. A merge gate going green here
+// would be the silent-no-gate class this scan already closes three other
+// ways, arriving by a fourth: exit code must stay non-zero.
+func TestRepoScanExitCodeAllTimedOutIsNonZero(t *testing.T) {
+	allTimedOut := reposcan.Aggregate("o", "r", "c", 1, 1, []reposcan.FileResult{
+		{Job: reposcan.Job{Path: "src/flask/cli.py"}, Gradable: true,
+			Verdict: advpool.Verdict{DevKillRate: 0.46, Survivors: 13, MutantsTotal: 24, TimedOut: true, DevScored: true}},
+	}, nil)
+	if got := repoScanExitCode(allTimedOut, false, nil); got == 0 {
+		t.Errorf("a scan whose every audited file timed out before the pool converged must exit non-zero, got %d", got)
+	}
+}
+
+// TestRepoScanExitCodePartialTimeoutStillExitsZero proves the rule is
+// scoped to "EVERY audited file timed out", not "any file timed out": a
+// scan where most files converged cleanly and passed must not be failed
+// just because one OTHER file's run happened to hit its deadline — that
+// would be its own over-broad false alarm, not the silent-no-gate bug #3
+// targets.
+func TestRepoScanExitCodePartialTimeoutStillExitsZero(t *testing.T) {
+	mixed := reposcan.Aggregate("o", "r", "c", 2, 2, []reposcan.FileResult{
+		{Job: reposcan.Job{Path: "clean.go"}, Gradable: true, Verdict: advpool.Verdict{DevKillRate: 0.9}},
+		{Job: reposcan.Job{Path: "cli.py"}, Gradable: true,
+			Verdict: advpool.Verdict{DevKillRate: 0.46, TimedOut: true, DevScored: true}},
+	}, nil)
+	if got := repoScanExitCode(mixed, false, nil); got != 0 {
+		t.Errorf("a scan where NOT every audited file timed out must keep today's exit-code logic, got %d", got)
 	}
 }
 
@@ -1761,7 +1853,7 @@ func TestScanResolvesTheSandboxExactlyOnceForTheWholeScan(t *testing.T) {
 		}
 	}
 
-	ex := newLocalExecutor(repo, nil, "", io.Discard)
+	ex := newLocalExecutor(repo, nil, "", 0, io.Discard)
 	defer ex.Close()
 	if ex.jailErr != nil {
 		t.Fatalf("construction must resolve through the seam: %v", ex.jailErr)
@@ -2078,6 +2170,91 @@ func TestPrintRepoReportUngradableOrderIsStable(t *testing.T) {
 	}
 }
 
+// TestPrintRepoReportPrintsExecutorErrorDetail is the fix for the swallowed
+// executor error: `ungradable: 1 (executor-error)` alone gave no usable
+// diagnosis (see the flask preflight bug this fixes). The report must print
+// the underlying error text, not just the count.
+func TestPrintRepoReportPrintsExecutorErrorDetail(t *testing.T) {
+	rep := reposcan.Aggregate("o", "r", "c", 1, 1, []reposcan.FileResult{
+		{Job: reposcan.Job{Path: "app.py"}, Gradable: false, Reason: reposcan.ReasonExecutorError,
+			Detail: "python toolchain unavailable — refusing to grade: pytest not importable via \".venv/bin/python\""},
+	}, nil)
+
+	var buf bytes.Buffer
+	printRepoReport(&buf, rep, false, nil)
+	got := buf.String()
+	if !strings.Contains(got, "app.py: python toolchain unavailable") {
+		t.Errorf("report does not surface the executor's error detail:\n%s", got)
+	}
+}
+
+// TestPrintRepoReportMarksTimedOutFiles proves the report never lets a file
+// scored under an unconverged run (advpool.Verdict.TimedOut, banked by
+// driveLocalRun's bankableTimeoutVerdict) read like a clean audit: it must
+// carry a distinct marker in the weakest-files line AND a headline caveat
+// count, so a reader scanning "kill rate X% over N audited files" cannot
+// miss that some of that N didn't actually finish.
+func TestPrintRepoReportMarksTimedOutFiles(t *testing.T) {
+	rep := reposcan.Aggregate("o", "r", "c", 2, 2, []reposcan.FileResult{
+		{Job: reposcan.Job{Path: "clean.go"}, Gradable: true,
+			Verdict: advpool.Verdict{DevKillRate: 0.9, Survivors: 1, MutantsTotal: 10}},
+		{Job: reposcan.Job{Path: "src/flask/cli.py"}, Gradable: true,
+			Verdict: advpool.Verdict{DevKillRate: 0.46, Survivors: 13, MutantsTotal: 24, TimedOut: true, DevScored: true}},
+	}, nil)
+
+	var buf bytes.Buffer
+	printRepoReport(&buf, rep, false, nil)
+	got := buf.String()
+	if !strings.Contains(got, "1 of the audited file(s) scored under an UNCONVERGED run") {
+		t.Errorf("report is missing the headline timed-out caveat:\n%s", got)
+	}
+	if !strings.Contains(got, "src/flask/cli.py") || !strings.Contains(got, "[TIMED OUT") {
+		t.Errorf("report does not mark src/flask/cli.py as timed out:\n%s", got)
+	}
+	// The clean file's line must NOT carry the marker.
+	for _, line := range strings.Split(got, "\n") {
+		if strings.Contains(line, "clean.go") && strings.Contains(line, "TIMED OUT") {
+			t.Errorf("clean.go's line wrongly carries the TIMED OUT marker: %q", line)
+		}
+	}
+}
+
+// TestPrintRepoReportSaysDidNotFinishWhenEveryFileTimedOut pins the report
+// side of review item 3: when repoScanExitCode fails the scan because every
+// audited file timed out, the printed report must say so in the same terms
+// — not just leave an operator to infer "exit 1" means "did not finish"
+// from a bare kill-rate line and a per-file marker.
+func TestPrintRepoReportSaysDidNotFinishWhenEveryFileTimedOut(t *testing.T) {
+	allTimedOut := reposcan.Aggregate("o", "r", "c", 1, 1, []reposcan.FileResult{
+		{Job: reposcan.Job{Path: "src/flask/cli.py"}, Gradable: true,
+			Verdict: advpool.Verdict{DevKillRate: 0.46, Survivors: 13, MutantsTotal: 24, TimedOut: true, DevScored: true}},
+	}, nil)
+	var buf bytes.Buffer
+	printRepoReport(&buf, allTimedOut, false, nil)
+	got := buf.String()
+	if !strings.Contains(got, "DID NOT FINISH") {
+		t.Errorf("report must say DID NOT FINISH when every audited file timed out:\n%s", got)
+	}
+
+	// The mirror: a PARTIAL timeout (some files converged) must not print
+	// the all-timed-out line, even though it does print the per-file
+	// caveat.
+	mixed := reposcan.Aggregate("o", "r", "c", 2, 2, []reposcan.FileResult{
+		{Job: reposcan.Job{Path: "clean.go"}, Gradable: true, Verdict: advpool.Verdict{DevKillRate: 0.9}},
+		{Job: reposcan.Job{Path: "cli.py"}, Gradable: true,
+			Verdict: advpool.Verdict{DevKillRate: 0.46, TimedOut: true, DevScored: true}},
+	}, nil)
+	buf.Reset()
+	printRepoReport(&buf, mixed, false, nil)
+	got = buf.String()
+	if strings.Contains(got, "DID NOT FINISH") {
+		t.Errorf("a partial timeout (some files converged) must not print DID NOT FINISH:\n%s", got)
+	}
+	if !strings.Contains(got, "1 of the audited file(s) scored under an UNCONVERGED run") {
+		t.Errorf("a partial timeout must still print the per-count caveat:\n%s", got)
+	}
+}
+
 // Finding I6, still guarded: `--repo <dir>` used to fall through to the record
 // path, which certified the CURRENT directory while stamping the other repo's
 // path onto the record — a signed statement about the wrong subject. It was
@@ -2134,7 +2311,7 @@ func TestRunCertifyRepoDirEqualsFormGoesToTheScan(t *testing.T) {
 // copies and 378 vendor runs, up to NumCPU concurrently.
 func TestLocalExecutorSharesOneSeedAcrossJobs(t *testing.T) {
 	var builds atomic.Int32
-	ex := newLocalExecutor(t.TempDir(), nil, "", io.Discard)
+	ex := newLocalExecutor(t.TempDir(), nil, "", 0, io.Discard)
 	ex.seeds = newSeedCache(func(lang string) (repoSeed, error) {
 		builds.Add(1)
 		return repoSeed{seedDir: "/seed/" + lang, files: map[string]string{}, cleanup: func() {}}, nil
@@ -2166,7 +2343,7 @@ func TestLocalExecutorSharesOneSeedAcrossJobs(t *testing.T) {
 // inside prepareAuditJail.
 func TestLocalExecutorPassesTheSharedSeedToBothSeams(t *testing.T) {
 	want := repoSeed{seedDir: "/seed/go", files: map[string]string{"a.go": "package a\n"}, cleanup: func() {}}
-	ex := newLocalExecutor(t.TempDir(), nil, "", io.Discard)
+	ex := newLocalExecutor(t.TempDir(), nil, "", 0, io.Discard)
 	ex.seeds = newSeedCache(func(string) (repoSeed, error) { return want, nil })
 	defer ex.Close()
 
@@ -2199,7 +2376,7 @@ func TestLocalExecutorPassesTheSharedSeedToBothSeams(t *testing.T) {
 func TestLocalExecutorPrepFailureIsUngradable(t *testing.T) {
 	var builds atomic.Int32
 	audited := false
-	ex := newLocalExecutor(t.TempDir(), nil, "", io.Discard)
+	ex := newLocalExecutor(t.TempDir(), nil, "", 0, io.Discard)
 	ex.seeds = newSeedCache(func(string) (repoSeed, error) {
 		builds.Add(1)
 		return repoSeed{cleanup: func() {}}, errors.New("go mod vendor failed")
@@ -2237,7 +2414,7 @@ func TestLocalExecutorPrepFailureIsUngradable(t *testing.T) {
 
 func TestLocalExecutorCloseReleasesSeeds(t *testing.T) {
 	var cleaned atomic.Int32
-	ex := newLocalExecutor(t.TempDir(), nil, "", io.Discard)
+	ex := newLocalExecutor(t.TempDir(), nil, "", 0, io.Discard)
 	ex.seeds = newSeedCache(func(lang string) (repoSeed, error) {
 		return repoSeed{seedDir: lang, files: map[string]string{}, cleanup: func() { cleaned.Add(1) }}, nil
 	})
@@ -2271,7 +2448,7 @@ func TestLocalExecutorCloseReleasesSeeds(t *testing.T) {
 // silent regression to per-file jail prep (2 tree copies + 2 `go mod vendor`
 // runs per audited file), the exact bug this branch exists to remove.
 func TestNewLocalExecutorWiresASeedCache(t *testing.T) {
-	ex := newLocalExecutor(t.TempDir(), nil, "", io.Discard)
+	ex := newLocalExecutor(t.TempDir(), nil, "", 0, io.Discard)
 	defer ex.Close()
 	if ex.seeds == nil {
 		t.Fatal("no seed cache: every job would prepare its own jail")
@@ -2282,7 +2459,7 @@ func TestNewLocalExecutorWiresASeedCache(t *testing.T) {
 // reported by preflight, and a nil cache would silently change the fan-out's
 // prep strategy rather than fail.
 func TestNewLocalExecutorWiresASeedCacheEvenWhenTheJailIsUnavailable(t *testing.T) {
-	ex := newLocalExecutor(t.TempDir(), nil, "", io.Discard)
+	ex := newLocalExecutor(t.TempDir(), nil, "", 0, io.Discard)
 	defer ex.Close()
 	if ex.jailErr == nil {
 		t.Skip("this host has a working sandbox; the jail-unavailable path is covered on hosts without one")
@@ -2723,7 +2900,7 @@ func TestWorkspaceSubstrateNeverResolvesAJailPerFile(t *testing.T) {
 	// `true` stands in for the project's own test command: the point here is
 	// which SUBSTRATE runs it, not what it runs. It exits 0, so the baseline
 	// is stable and passing — and it runs through the real WorkspaceRunner.
-	ex := newLocalExecutor(repo, []string{"true"}, substrateWorkspace, io.Discard)
+	ex := newLocalExecutor(repo, []string{"true"}, substrateWorkspace, 0, io.Discard)
 	defer ex.Close()
 	// newBaseline is deliberately left REAL (baselineRunnerFor →
 	// prepareAuditJail): that is the layer under test. Only the audit itself

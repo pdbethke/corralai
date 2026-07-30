@@ -8,11 +8,24 @@ import (
 	"time"
 )
 
+// maxUngradableDetailsPerReason bounds how many sample detail lines
+// Aggregate keeps per ungradable reason — see RepoReport.UngradableDetails.
+const maxUngradableDetailsPerReason = 5
+
 // WeakFile is one entry in the ranked weakest-files list.
 type WeakFile struct {
 	Path      string
 	KillRate  float64
 	Survivors int
+	// TimedOut mirrors advpool.Verdict.TimedOut: true when this file's score
+	// was banked from a run that hit its wall-clock deadline before the pool
+	// converged, rather than a clean run. The number is real (the dev suite
+	// WAS measured — see advpool.Verdict.DevScored, which gates whether a
+	// timed-out file is even Gradable at all), but the pool's remaining
+	// "make the tests stronger" work (test-writer, shadow, critic) did not
+	// finish — a caller must print this distinctly, never silently alongside
+	// a clean convergence.
+	TimedOut bool
 }
 
 // RepoReport is the repo-level result. It is mostly ACCOUNTING, because that
@@ -31,11 +44,26 @@ type RepoReport struct {
 	Audited    int
 	Excluded   []Exclusion
 	Ungradable map[string]int
+	// UngradableDetails carries, per ungradable reason, a bounded sample of
+	// "path: detail" lines drawn from FileResult.Detail — today only
+	// executor-error results supply one. Ungradable alone is a COUNT ("1
+	// executor-error"); this is the part that lets an operator find out WHY
+	// without re-running with extra flags or reading source. Bounded
+	// (maxUngradableDetailsPerReason) so a repo-wide failure (e.g. every
+	// Python file failing the same toolchain preflight) does not turn the
+	// report into a wall of identical lines.
+	UngradableDetails map[string][]string
 
 	// KillRate is over Audited ONLY, never over the repo. NaN when nothing
 	// was audited — a 0.0 there would read as "terrible tests" when the truth
 	// is "no measurement was made".
 	KillRate float64
+	// TimedOut counts Audited files whose score was banked from a run that
+	// hit its wall-clock deadline before the pool converged (see
+	// WeakFile.TimedOut) — a report-level caveat so a reader scanning past
+	// "kill rate X% over N audited files" cannot mistake a repo with several
+	// unconverged runs for a fully clean audit.
+	TimedOut int
 
 	Weakest     []WeakFile
 	CacheHits   int
@@ -79,11 +107,12 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 	}
 	rep := RepoReport{
 		Owner: owner, Repo: repo, Commit: commit,
-		TotalFiles:  totalFiles,
-		Candidates:  candidates,
-		Excluded:    excl,
-		Ungradable:  map[string]int{},
-		GeneratedAt: time.Now(),
+		TotalFiles:        totalFiles,
+		Candidates:        candidates,
+		Excluded:          excl,
+		Ungradable:        map[string]int{},
+		UngradableDetails: map[string][]string{},
+		GeneratedAt:       time.Now(),
 	}
 	// Candidates dropped BEFORE they became jobs are absent from results, so
 	// they are counted from the exclusions. Each is folded under its own
@@ -114,14 +143,21 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 				reason = ReasonExecutorError
 			}
 			rep.Ungradable[reason]++
+			if r.Detail != "" && len(rep.UngradableDetails[reason]) < maxUngradableDetailsPerReason {
+				rep.UngradableDetails[reason] = append(rep.UngradableDetails[reason], r.Job.Path+": "+r.Detail)
+			}
 			continue
 		}
 		rep.Audited++
 		sum += r.Verdict.DevKillRate
+		if r.Verdict.TimedOut {
+			rep.TimedOut++
+		}
 		rep.Weakest = append(rep.Weakest, WeakFile{
 			Path:      r.Job.Path,
 			KillRate:  r.Verdict.DevKillRate,
 			Survivors: r.Verdict.Survivors,
+			TimedOut:  r.Verdict.TimedOut,
 		})
 	}
 

@@ -22,6 +22,19 @@ type RunSpec struct {
 	NMutants    int
 	Lang        string // "" defaults to "go" at render time (back-compat)
 
+	// ImportPath is the PRE-COMPUTED result of the run's language plugin's
+	// ImportPath(CodePath, exists) — the real, package-qualified import for
+	// CodePath, when the caller had a real checkout on disk to derive it
+	// from (see cmd/corral/certify_local.go's prepareAuditJail, the only
+	// caller with filesystem access). "" means either the language needs no
+	// such correction (every plugin but python) or a python file whose
+	// import path could not be established (no checkout available, e.g. the
+	// brain/MCP path in internal/brain/advpool.go, which never sets this —
+	// it has no filesystem to consult and must not guess). renderTestWriter
+	// turns this into the test-writer's per-task ImportNote — see
+	// internal/lang.Plugin.ImportNote and roles.renderTestWriterWithRepair.
+	ImportPath string
+
 	// MaxShards bounds how many mutant-generator seats fan out across the
 	// file's top-level symbols. 0 or 1 means unsharded (one generator, whole
 	// file — the pre-slice-2 behavior, byte-identical prompt). It bounds

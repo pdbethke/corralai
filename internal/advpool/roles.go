@@ -152,11 +152,12 @@ func renderTestWriterWithRepair(rs RunSpec, sigs []repoindex.Signature, survivor
 	// unique-names clause heads off the single most common compile failure: a
 	// white-box Go test redeclaring a helper/test name the dev's own suite (also
 	// seeded into the jail, same package) already defines.
-	named := fmt.Sprintf("The source file under review is named %q, and your test file will be placed in the SAME directory as it. Reference or import the code under test as appropriate for the language, using that exact file name — do not invent or assume any other name. Your test may share the package/namespace with the developer's OWN tests, so give your test function(s) and any helpers UNIQUE names — never redeclare an identifier the existing suite may already define.\n\n%s", filepath.Base(rs.CodePath), goal)
+	p := langFor(rs)
+	named := fmt.Sprintf("The source file under review is named %q, and your test file will be placed in the SAME directory as it. Reference or import the code under test as appropriate for the language, using that exact file name — do not invent or assume any other name. Your test may share the package/namespace with the developer's OWN tests, so give your test function(s) and any helpers UNIQUE names — never redeclare an identifier the existing suite may already define.\n\n%s%s",
+		filepath.Base(rs.CodePath), p.ImportNote(rs.ImportPath, rs.ImportPath != ""), goal)
 	if strings.TrimSpace(compileErr) != "" {
 		named = fmt.Sprintf("%s\n\n--- YOUR PREVIOUS ATTEMPT DID NOT COMPILE ---\nYou wrote:\n%s\n\nThe compiler reported:\n%s\n\nReturn a corrected FULL test file that compiles cleanly. Fix exactly what the compiler flagged; if it is a redeclared/duplicate identifier, rename yours to something unique.", named, prevTest, strings.TrimSpace(compileErr))
 	}
-	p := langFor(rs)
 	system, user := testgen.WriteTestPrompt(p.TestWriterSystem(), named, rs.Code, sigs)
 	return joinPrompt(system, user)
 }

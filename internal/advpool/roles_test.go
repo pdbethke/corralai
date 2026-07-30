@@ -320,6 +320,45 @@ func TestRenderTestWriterWithRepair(t *testing.T) {
 	}
 }
 
+// TestRenderTestWriterCarriesImportFactForPython pins Fix 1's actual wiring:
+// the per-file import fact belongs in the task INSTRUCTION (this render),
+// not the system prompt — and it must be the real derived import when
+// RunSpec.ImportPath is set, or an honest "could not be determined" when it
+// is empty. Both readouts come from pyPlugin.ImportNote via langFor(rs), so
+// this only proves the plumbing: the derivation itself is
+// TestPythonImportPath/TestPythonImportNote in internal/lang.
+func TestRenderTestWriterCarriesImportFactForPython(t *testing.T) {
+	survivors := []adequacy.Mutant{{ID: "m1", Code: "mutant one"}}
+
+	known := RunSpec{Goal: "reject bad input", CodePath: "src/flask/cli.py", Code: "def f(): pass\n", Lang: "python", ImportPath: "flask.cli"}
+	got := renderTestWriterWithRepair(known, nil, survivors, "", "")
+	if !strings.Contains(got, "flask.cli") {
+		t.Fatalf("python render with a known ImportPath must state it:\n%s", got)
+	}
+	if strings.Contains(got, "could not be determined") {
+		t.Fatalf("python render with a known ImportPath must not also hedge:\n%s", got)
+	}
+
+	unknown := RunSpec{Goal: "reject bad input", CodePath: "src/flask/cli.py", Code: "def f(): pass\n", Lang: "python"}
+	got = renderTestWriterWithRepair(unknown, nil, survivors, "", "")
+	if !strings.Contains(got, "could not be determined") {
+		t.Fatalf("python render with no ImportPath must say so honestly, not silently assume a base name:\n%s", got)
+	}
+	if strings.Contains(got, "base file name") {
+		t.Fatalf("python render with no ImportPath must not assert the base-name convention:\n%s", got)
+	}
+
+	// Go needs no such note — its convention (white-box same-package) has
+	// nothing to do with an import statement at all. Confirms the fact is
+	// injected behind the lang.Plugin seam, not unconditionally for every
+	// language.
+	goRS := RunSpec{Goal: "reject bad input", CodePath: "version4.go", Code: "package uuid\nfunc New() {}\n", Lang: "go"}
+	got = renderTestWriterWithRepair(goRS, nil, survivors, "", "")
+	if strings.Contains(got, "could not be determined") {
+		t.Fatalf("go render must not carry the python-specific import note:\n%s", got)
+	}
+}
+
 func TestCompileErrorMessage(t *testing.T) {
 	if got := (&CompileError{Output: "vet: x redeclared"}).Error(); !strings.Contains(got, "vet: x redeclared") {
 		t.Fatalf("CompileError with output must surface it, got %q", got)

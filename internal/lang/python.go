@@ -296,10 +296,71 @@ func (pyPlugin) PromptLang() string { return "Python" }
 
 func (pyPlugin) TestWriterSystem() string {
 	return `You are a TEST-WRITER. Given a security control GOAL, a target source file, and its signature surface, write ONE executable pytest test that verifies the code SATISFIES the goal.
-- Import the module under test (white-box); assume it is importable by its file's base name (e.g. ` + "`import pricing`" + ` for pricing.py).
+- Import the module under test (white-box), using EXACTLY the import given in the task instruction below — never guess a different one.
 - It MUST FAIL if the goal is violated — test the goal's boundary (what a weakened implementation would pass that a compliant one must not).
 - Standard library plus pytest only. Deterministic, no network.
 Return ONLY the raw Python test file content — no prose, no markdown fences.`
+}
+
+// ImportPath walks up from codePath's own directory while exists reports a
+// package marker (__init__.py) present, dot-joining each package directory
+// name it crosses onto the file's own base name — the same resolution
+// pytest's own package-aware import mode performs when it collects a test
+// file that lives inside a real package (rootdir insertion stops climbing
+// at the first ancestor WITHOUT an __init__.py, and everything below that
+// point becomes the dotted import). E.g. src/flask/cli.py with
+// src/flask/__init__.py present but no src/__init__.py resolves to
+// "flask.cli": climbing stops at "src" (the namespace boundary), "src"
+// itself is never a package and so never joins the dotted path.
+//
+// exists == nil means the caller has no real filesystem to consult (e.g. a
+// hosted/MCP run with no checkout on disk) — returning ok=false rather than
+// silently assuming "no packages here" is the fail-closed half of this fix:
+// a wrong assumption ("importable by bare base name") is exactly the bug
+// this method exists to stop making.
+//
+// A file with NO __init__.py anywhere above it (dir has none) climbs zero
+// levels and correctly resolves to just its own base name — that really is
+// how Python imports a rootless module, so this is not a "could not
+// determine" case, it is a genuine (if trivial) determination.
+func (pyPlugin) ImportPath(codePath string, exists func(path string) bool) (string, bool) {
+	if exists == nil {
+		return "", false
+	}
+	dir, base, ext := splitPath(codePath)
+	if ext != ".py" || base == "" {
+		return "", false
+	}
+	segments := []string{base}
+	for dir != "" {
+		if !exists(filepath.ToSlash(filepath.Join(dir, "__init__.py"))) {
+			break
+		}
+		segments = append([]string{filepath.Base(dir)}, segments...)
+		parent := filepath.Dir(dir)
+		if parent == "." {
+			parent = ""
+		}
+		if parent == dir {
+			break // defensive: filepath.Dir is a fixed point at the root ("/", "."); never loop forever.
+		}
+		dir = parent
+	}
+	return strings.Join(segments, "."), true
+}
+
+// ImportNote states the derived import as a FACT for this task, or says
+// plainly that it could not be determined — never the withdrawn "assume
+// base name" guess TestWriterSystem used to make unconditionally, which is
+// exactly what broke on a real package (src/flask/cli.py: "import cli"
+// cannot resolve — the module is flask.cli). A wrong instruction is worse
+// than an absent one; when ok is false this says so instead of guessing.
+func (pyPlugin) ImportNote(importPath string, ok bool) string {
+	if ok && importPath != "" {
+		return fmt.Sprintf("The correct import for the module under test is %q — write exactly `import %s` (or `from %s import ...`); do NOT import it by its bare file base name unless that IS the full path shown here.\n\n",
+			importPath, importPath, importPath)
+	}
+	return "The correct import path for the module under test could not be determined automatically (this file may live inside a real Python package this task was not given enough context to resolve). Do NOT assume it is importable by its bare file base name — if the source above shows package context (e.g. relative imports, an __init__.py sibling), infer the dotted import from that; otherwise load it via importlib.util.spec_from_file_location keyed off the file's own path rather than guessing a name.\n\n"
 }
 
 func (pyPlugin) MutantSystem() string {

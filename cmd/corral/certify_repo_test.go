@@ -2255,6 +2255,39 @@ func TestPrintRepoReportSaysDidNotFinishWhenEveryFileTimedOut(t *testing.T) {
 	}
 }
 
+// TestPrintRepoReportMarksTestWriterFailedFiles mirrors
+// TestPrintRepoReportMarksTimedOutFiles for the other converged-but-unproven
+// state: the pool found survivor(s) but exhausted its compile-retry budget
+// before it could author a killing test for any of them
+// (advpool.Verdict.TestWriterFailed). proven_missed reads 0 for that file,
+// which must not be printable as "clean" — the exact real-world case this
+// whole fix responds to (pallets/flask's src/flask/cli.py: 19 survivors, no
+// authored test, because `import cli` cannot resolve inside a real package).
+func TestPrintRepoReportMarksTestWriterFailedFiles(t *testing.T) {
+	rep := reposcan.Aggregate("o", "r", "c", 2, 2, []reposcan.FileResult{
+		{Job: reposcan.Job{Path: "clean.go"}, Gradable: true,
+			Verdict: advpool.Verdict{DevKillRate: 0.9, Survivors: 1, MutantsTotal: 10}},
+		{Job: reposcan.Job{Path: "src/flask/cli.py"}, Gradable: true,
+			Verdict: advpool.Verdict{DevKillRate: 0.457, Survivors: 19, MutantsTotal: 35, TestWriterFailed: true, DevScored: true}},
+	}, nil)
+
+	var buf bytes.Buffer
+	printRepoReport(&buf, rep, false, nil)
+	got := buf.String()
+	if !strings.Contains(got, "1 of the audited file(s) had survivor(s) the pool could not author a compiling test to kill") {
+		t.Errorf("report is missing the headline test-writer-failed caveat:\n%s", got)
+	}
+	if !strings.Contains(got, "src/flask/cli.py") || !strings.Contains(got, "[WRITER FAILED") {
+		t.Errorf("report does not mark src/flask/cli.py as writer-failed:\n%s", got)
+	}
+	// The clean file's line must NOT carry the marker.
+	for _, line := range strings.Split(got, "\n") {
+		if strings.Contains(line, "clean.go") && strings.Contains(line, "WRITER FAILED") {
+			t.Errorf("clean.go's line wrongly carries the WRITER FAILED marker: %q", line)
+		}
+	}
+}
+
 // Finding I6, still guarded: `--repo <dir>` used to fall through to the record
 // path, which certified the CURRENT directory while stamping the other repo's
 // path onto the record — a signed statement about the wrong subject. It was

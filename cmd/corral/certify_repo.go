@@ -909,8 +909,18 @@ func (l *localExecutor) runPreflight(ctx context.Context, sources []string) repo
 		// this, the workspace substrate had no cap at all on the
 		// instrumented profile it reads back — measured against grpc-go: a
 		// 253 MB profile read entirely into memory (827 MB peak RSS).
+		// WithPerRunEnv: this is a single one-off instrumented run, not a
+		// baseline/mutant loop, but it is still the SAME real checkout the
+		// workspace substrate's ordinary scoring runs mutate — a Python
+		// repo whose developer left a __pycache__ behind (or a run
+		// squeezed into the same wall-clock second as an earlier
+		// preflight call on a re-run) is exposed to the identical stale-
+		// bytecode read, just against coverage output instead of a
+		// kill/survive verdict. See lang.Plugin.WorkspaceRunEnv's doc
+		// comment.
 		runner = adequacy.NewWorkspaceRunner(l.repoDir, preflightTimeout,
-			adequacy.WithWorkspaceMaxOutput(preflightMaxOutput))
+			adequacy.WithWorkspaceMaxOutput(preflightMaxOutput),
+			adequacy.WithPerRunEnv(plug.WorkspaceRunEnv))
 		files = map[string]string{}
 	} else {
 		if l.jailErr != nil {

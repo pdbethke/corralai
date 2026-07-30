@@ -342,6 +342,7 @@ func (emptySeqPlugin) ImportNote(string, bool) string                      { ret
 func (emptySeqPlugin) SingleTestCmd(string, string) ([]string, bool)       { return nil, false }
 func (emptySeqPlugin) ListTestsCmd(string) ([]string, bool)                { return nil, false }
 func (emptySeqPlugin) ParseTestList(string) []string                       { return nil }
+func (emptySeqPlugin) WorkspaceRunEnv() (env []string, cleanup func())     { return nil, func() {} }
 
 func init() { golang.Register(emptySeqPlugin{}) }
 

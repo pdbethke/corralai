@@ -36,6 +36,15 @@ type WorkspaceRunner struct {
 	root      string
 	timeout   time.Duration
 	maxOutput int // 0 => unbounded (bytes.Buffer, today's behavior); see WithWorkspaceMaxOutput
+	// perRunEnv, when set, is called FRESH before EVERY individual command
+	// this runner executes (once per applyRunRestore call — see there) to
+	// get extra "VAR=value" env assignments plus a cleanup to run once that
+	// one command has finished. This is how a language plugin's
+	// lang.Plugin.WorkspaceRunEnv reaches this substrate — see
+	// WithPerRunEnv's doc comment for why "fresh before every call" (never
+	// once for the whole runner's lifetime) is the load-bearing part of
+	// this field's contract.
+	perRunEnv func() (env []string, cleanup func())
 }
 
 // WorkspaceOption configures a WorkspaceRunner at construction
@@ -67,6 +76,31 @@ type WorkspaceOption func(*WorkspaceRunner)
 // one certify_local.go builds for ordinary mutant runs) sets it.
 func WithWorkspaceMaxOutput(n int) WorkspaceOption {
 	return func(w *WorkspaceRunner) { w.maxOutput = n }
+}
+
+// WithPerRunEnv registers f as the runner's per-run environment source,
+// called by applyRunRestore immediately before EVERY command it execs —
+// RunTest, RunTestVerbose, and Enumerate all funnel through it — never once
+// at construction time and reused. That distinction is the entire point:
+// this substrate mutates the SAME real checkout in place across the
+// baseline, the canary, and every mutant in one audit, so a value computed
+// once (e.g. one temp directory) and shared across those calls would still
+// let a later call's same-second, same-length write collide with an
+// earlier call's own cache entry in that shared directory — see
+// lang.Plugin.WorkspaceRunEnv's doc comment for the measured mechanism this
+// exists to close (python.go's __pycache__ hole).
+//
+// f's cleanup return value is invoked once that single command has
+// finished (success, failure, or timeout alike — see applyRunRestore),
+// before the next call's f() runs.
+//
+// f is typically a language plugin's WorkspaceRunEnv method value; nil (the
+// zero value, never set) means "nothing extra" — every call's cmd.Env stays
+// the default (nil, meaning inherit this process's own environment
+// unmodified), preserving today's exact behavior for any caller that never
+// sets this option.
+func WithPerRunEnv(f func() (env []string, cleanup func())) WorkspaceOption {
+	return func(w *WorkspaceRunner) { w.perRunEnv = f }
 }
 
 // defaultWorkspaceTimeout is the wall-clock bound a WorkspaceRunner built
@@ -299,6 +333,18 @@ func (w *WorkspaceRunner) applyRunRestore(ctx context.Context, files map[string]
 	cmd.Dir = w.root
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
+	// perRunEnv is called FRESH for THIS call only — never once for the
+	// runner's whole lifetime — and its cleanup runs before applyRunRestore
+	// returns, regardless of how the command exited. See WithPerRunEnv's
+	// doc comment for why per-call freshness (not just "set once, reused")
+	// is what actually closes the hole it exists for.
+	if w.perRunEnv != nil {
+		extra, envCleanup := w.perRunEnv()
+		defer envCleanup()
+		if len(extra) > 0 {
+			cmd.Env = append(os.Environ(), extra...)
+		}
+	}
 	// The wall-clock bound above is only a bound on the CONTEXT; without
 	// these three guards it is not a bound on the call. This substrate execs
 	// the command directly (the CI runner is the isolation boundary, so

@@ -1004,7 +1004,23 @@ func buildJailWiring(in jailWiringInput) (w jailWiring, err error) {
 		if len(in.checkArgv) == 0 {
 			return w, fmt.Errorf("--repo-dir requires the project's own test command after `--`, e.g. `-- python3 -m pytest tests/test_recipes.py`")
 		}
-		runner := adequacy.NewWorkspaceRunner(in.repoDir, in.timeout)
+		// WithPerRunEnv wires the resolved language plugin's own
+		// per-run environment (e.g. python.go's fresh __pycache__
+		// redirect) into EVERY baseline/canary/mutant/authored-test
+		// invocation this runner makes — see WithPerRunEnv's and
+		// lang.Plugin.WorkspaceRunEnv's doc comments for why this
+		// substrate specifically needs it (it mutates the SAME real
+		// checkout across every one of those calls, unlike the jail).
+		// in.langName was set from the already-resolved plugin's own
+		// Name() (see buildJailWiring's caller), so ByName here can only
+		// fail if the registry itself changed between resolution and
+		// this call — never in practice — and degrades to no extra env
+		// rather than failing the whole audit over it.
+		var runnerOpts []adequacy.WorkspaceOption
+		if plug, ok := lang.ByName(in.langName); ok {
+			runnerOpts = append(runnerOpts, adequacy.WithPerRunEnv(plug.WorkspaceRunEnv))
+		}
+		runner := adequacy.NewWorkspaceRunner(in.repoDir, in.timeout, runnerOpts...)
 		if verr := runner.Verify(); verr != nil {
 			return w, verr
 		}

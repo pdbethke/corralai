@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"path/filepath"
@@ -155,18 +156,99 @@ func (s JailScorer) ScoreReport(ctx context.Context, codePath, code, test string
 func (s JailScorer) ScoreAuthoredReport(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (adequacy.Report, error) {
 	scoreBase, cmd := s.scoreWorkspace(codePath, test, testCmd)
 	if s.BaseFiles != nil {
-		scoreBase = make(map[string]string, len(s.BaseFiles)+1)
-		for k, v := range s.BaseFiles {
-			scoreBase[k] = v
-		}
-		scoreBase[advPoolTestPath(codePath)] = test
+		scoreBase = s.authoredWorkspace(codePath, test)
 	}
 
 	rep, err := adequacy.Score(ctx, s.Jail, scoreBase, codePath, code, mutants, cmd, adequacy.WithMutantTimeout(s.MutantTimeout))
 	if err != nil {
 		return adequacy.Report{}, fmt.Errorf("advpool: score authored report: %w", err)
 	}
+
+	// POSITIVE CONTROL (repo-aware mode only — single-file mode has no
+	// project discovery config to be excluded by; see
+	// verifyAuthoredTestReaches' own doc). CompliantPass and CanaryKilled
+	// above are checks on the WHOLE test command, which a dev suite that
+	// already transitively imports codePath satisfies on its own — they say
+	// nothing about whether cmd ever actually reached the authored test's
+	// own file. Only worth running once mutants were actually scored
+	// (rep.Total > 0); a CompliantPass==false or Total==0 run is already
+	// unsound via the existing checks below, with no need to spend another
+	// jail run proving it twice.
+	if s.BaseFiles != nil && rep.Total > 0 {
+		reaches, verr := s.verifyAuthoredTestReaches(ctx, codePath, cmd)
+		if verr != nil {
+			return adequacy.Report{}, fmt.Errorf("advpool: positive-control authored test: %w", verr)
+		}
+		if !reaches {
+			// A DIAGNOSIS, not a score: the run never actually reached the
+			// authored test, so nothing rep observed about the survivors
+			// means anything. Route it through the SAME CanaryKilled==false
+			// path tickPoolAdequacy already treats as PoolTestUnsound —
+			// no new state needed, this is exactly what "the suite never
+			// read the file" already means, just proven against the
+			// authored test's own path instead of codePath.
+			rep.CanaryKilled = false
+		}
+	}
 	return rep, nil
+}
+
+// authoredWorkspace builds the repo-aware scoring workspace with `content`
+// overlaid at the authored test's own path — the SAME overlay
+// ScoreAuthoredReport itself needs (a brand-new file the repo does not
+// already contain, so there is nothing to shadow; see the method's own doc)
+// and the positive control below needs too, just with the canary in place
+// of the real test. Extracted so both call sites build the identical
+// workspace shape.
+func (s JailScorer) authoredWorkspace(codePath, content string) map[string]string {
+	ws := make(map[string]string, len(s.BaseFiles)+1)
+	for k, v := range s.BaseFiles {
+		ws[k] = v
+	}
+	ws[advPoolTestPath(codePath)] = content
+	return ws
+}
+
+// verifyAuthoredTestReaches is corral's POSITIVE CONTROL for a pool-authored
+// test scored in repo-aware mode: the same idea as adequacy.CanaryCode
+// (deliberately invalid source that any check genuinely reading a file MUST
+// fail on), applied to the AUTHORED TEST'S OWN FILE instead of the code
+// under audit. ScoreAuthoredReport's ordinary CompliantPass/CanaryKilled
+// checks run the WHOLE project test command and ask "did SOMETHING fail" —
+// satisfied for free whenever the dev suite already imports codePath
+// (extremely common), regardless of whether the authored test ever ran at
+// all. This asks a narrower, unmasked question: does the project's own
+// unmodified test command even NOTICE the file at the authored test's own
+// path?
+//
+// It overlays adequacy.CanaryCode — invalid source in every language corral
+// supports — at exactly the path ScoreAuthoredReport itself writes the
+// authored test to (advPoolTestPath(codePath)), leaves codePath at its real,
+// compiling content, and runs cmd unmodified (the SAME command the real
+// scoring run used, never a scoped/explicit-path variant — the point is to
+// prove what the ACTUAL scoring invocation does, not what a more targeted
+// one could do). Two outcomes:
+//
+//   - The run FAILS (or times out — a hang IS a reaction, same convention
+//     adequacy.Score's own canary uses): the command genuinely parses/
+//     imports the file at that path, so it plausibly saw the real authored
+//     test too. reaches=true.
+//   - The run PASSES: nothing at that path affected the outcome — either
+//     the project's own discovery config never looks there (pallets/flask's
+//     `testpaths = ["tests"]` excluding src/flask/, the shape this fix
+//     exists for) or something else masks it. Either way the authored
+//     test's own verdict from the real scoring run is worthless.
+//     reaches=false.
+func (s JailScorer) verifyAuthoredTestReaches(ctx context.Context, codePath string, cmd []string) (bool, error) {
+	ws := s.authoredWorkspace(codePath, adequacy.CanaryCode)
+	passed, err := s.Jail.RunTest(ctx, ws, cmd)
+	if err != nil {
+		if errors.Is(err, adequacy.ErrTestTimeout) {
+			return true, nil // hung on invalid source at the authored test's path -> it reacted
+		}
+		return false, err
+	}
+	return !passed, nil
 }
 
 // scoreWorkspace builds the jail base file-map and the test command for a

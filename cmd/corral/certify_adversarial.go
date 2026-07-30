@@ -61,14 +61,27 @@ type advVerdict struct {
 	// pointed at this file.
 	SuiteIgnoresFile bool `json:"SuiteIgnoresFile"`
 	// TimedOut mirrors advpool.Verdict.TimedOut: true when this verdict was
-	// banked from a run that hit its wall-clock deadline before the pool
-	// converged (cmd/corral/certify_local_drive.go's bankableTimeoutVerdict)
-	// rather than a clean run. DevKillRate/Survivors/MutantsTotal are real —
-	// the dev suite WAS measured — but ProvenMissed and VacuousFindings are
-	// NOT: the test-writer and test-critic never ran, so a printed
-	// "proven_missed: 0" / "no vacuous tests flagged" would read as a clean
-	// result they are not. See renderAdvVerdict for the readout this drives.
+	// signed by a run that hit its wall-clock deadline before the pool
+	// converged (RunDeadline — advpool/driver.go's Tick, or the --local
+	// drive loop's own bankableTimeoutVerdict) rather than a clean run.
+	// ProvenMissed and VacuousFindings are NEVER trustworthy on a TimedOut
+	// verdict: the test-writer and test-critic never ran. Whether
+	// DevKillRate/Survivors/MutantsTotal are real measurements or zero
+	// values nothing computed depends ENTIRELY on DevScored, below — do not
+	// assume TimedOut alone means the dev suite was measured. See
+	// renderAdvVerdict for the readout this drives.
 	TimedOut bool `json:"TimedOut"`
+	// DevScored mirrors advpool.Verdict.DevScored: true once the dev
+	// suite's OWN kill-rate was actually measured against real mutants in
+	// the real jail. On a TimedOut verdict this is the ONLY thing that
+	// makes DevKillRate/Survivors/MutantsTotal real numbers rather than
+	// zero values nothing ever computed — a run that stalls before the
+	// mutant-generator itself finishes (reachable on the brain path via
+	// advpool.Driver.Tick's own RunDeadline branch, not just --local's)
+	// signs a TimedOut verdict with DevScored=false and a fabricated-
+	// looking 0.00. renderAdvVerdict must treat TimedOut && !DevScored as
+	// COULD-NOT-GRADE, never print the zero as a measurement.
+	DevScored bool `json:"DevScored"`
 }
 
 // advStatus mirrors brain.AdvPoolStatusOut (get_adversarial_run's output).
@@ -322,6 +335,21 @@ func renderAdvVerdict(w io.Writer, codePath string, v advVerdict) {
 	fmt.Fprintf(w, "\nadversarial verdict — %s @ %s\n", codePath, commit)
 	if v.Lang != "" {
 		fmt.Fprintf(w, "  language:      %s\n", v.Lang)
+	}
+	if v.TimedOut && !v.DevScored {
+		// The pool hit its wall-clock deadline before dev-adequacy ever ran
+		// (the mutant-generator itself never finished): DevKillRate/
+		// Survivors/MutantsTotal are zero values nothing computed, not a
+		// real 0.00 measurement. Checked BEFORE SuiteIgnoresFile/
+		// BaselineFailed — both of those are only ever set once dev-adequacy
+		// DID run (see runState.devScored's doc in internal/advpool/driver.go),
+		// so this is the more fundamental "nothing was measured at all"
+		// diagnosis, not merely a competing one.
+		fmt.Fprintf(w, "  status:        COULD-NOT-GRADE\n")
+		fmt.Fprintf(w, "  reason:        the pool timed out before the dev suite's own tests were ever scored\n")
+		fmt.Fprintf(w, "                 (the mutant-generator did not finish before the run's deadline —\n")
+		fmt.Fprintf(w, "                 not a test-quality verdict; nothing here was measured)\n")
+		return
 	}
 	if v.SuiteIgnoresFile {
 		// The suite PASSED on source that cannot compile: it provably never

@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
 func init() { Register(pyPlugin{}) }
@@ -187,11 +189,23 @@ func pytestPreflightProbe(testCmd []string) (probe []string, ok bool) {
 // testCmd's program token is resolved via firstExecutableToken, not
 // testCmd[0] directly: a leading `VAR=value` environment-assignment prefix
 // (`-- PYTHONPATH=src pytest -q`, the same idiom pyCachePrefixEnv itself
-// uses) is a legitimate, common operator idiom, not the executable — and a
-// shell-compound command (`-- cd sub && pytest -q`) names no single
-// executable at all. Either shape falls back to pyPreflightStockDefault
-// rather than refusing outright on a false "not runnable" (env-assignment
-// tokens are never on PATH) or guessing wrong from a literal testCmd[0].
+// uses) is a legitimate, common operator idiom, not the executable, and
+// firstExecutableToken skips past it to find the real one — the
+// env-assignment case is genuinely FIXED, not merely downgraded.
+//
+// A shell-compound command (`-- cd sub && .venv/bin/python -m pytest`) is
+// different: it names no single executable at all, and firstExecutableToken
+// says so (ok=false) rather than guessing. This falls back to
+// pyPreflightStockDefault — which is NOT a strictly better outcome for this
+// one shape: it demands the HOST's stock python3/pytest be importable,
+// which is a DIFFERENT refusal (the venv named later in the compound
+// command is invisible to it), reinstating the original venv-not-found
+// symptom this whole argv-aware fix exists to remove, just for a shape this
+// function has no reliable way to parse a binary out of. That is the
+// deliberate, correct trade — guessing wrong from testCmd[0] (treating
+// "cd" as the executable) would be worse, a false diagnosis rather than an
+// honest, less-precise one — not a case where the fallback avoids failing
+// closed altogether.
 func (pyPlugin) Preflight(testCmd []string) error {
 	if len(testCmd) == 0 {
 		return pyPreflightStockDefault()
@@ -224,18 +238,21 @@ func (pyPlugin) Preflight(testCmd []string) error {
 	// blocks must not hang the whole audit before --timeout's own budget
 	// even starts.
 	probeCmd := exec.CommandContext(ctx, probe[0], probe[1:]...)
-	// WaitDelay bounds Wait()'s own extra grace period after ctx cancels
-	// the process — without it, CombinedOutput can hang WELL past
-	// preflightProbeTimeout: exec.CommandContext kills the direct child on
-	// timeout, but a script interpreter (`#!/bin/sh` wrapping `sleep 3600`)
-	// commonly forks a GRANDCHILD that inherits the stdout/stderr pipe and
-	// is never itself sent a signal, so CombinedOutput's read blocks on
-	// that pipe forever even though the direct child is long dead.
-	// WaitDelay forces the pipes closed (SIGKILL to the whole process, then
-	// abandons unread I/O) after this many timeouts. Confirmed against this
-	// exact Go toolchain: without it, a `sleep 3600` grandchild kept
-	// CombinedOutput blocked for 10+ real seconds despite a 200ms ctx.
-	probeCmd.WaitDelay = preflightProbeTimeout
+	// GuardProcess (internal/sandbox), not a bare WaitDelay: bin is now
+	// OPERATOR-named, someone else's code, which is exactly the case
+	// GuardProcess's own doc says it "MUST be applied to every os/exec
+	// command corral runs" for. A WaitDelay-only fix bounds the WAIT but
+	// leaves two other holes GuardProcess closes in one call: (1) no
+	// process-group kill, so a script interpreter's grandchild (e.g.
+	// `#!/bin/sh` backgrounding a worker) survives ctx cancellation as a
+	// leaked process — confirmed by reproducing exactly that against this
+	// probe: a backgrounding wrapper left 3 processes running after
+	// "Preflight" returned; (2) the default cmd.Cancel only signals the
+	// DIRECT child, so a WaitDelay-only fix still waits its FULL bound
+	// again on top of ctx's own timeout (doubling the reported bound)
+	// before it forces the pipes closed, rather than killing the whole
+	// group promptly the moment ctx expires.
+	sandbox.GuardProcess(probeCmd)
 	if out, err := probeCmd.CombinedOutput(); err != nil {
 		if ctx.Err() != nil {
 			return fmt.Errorf("lang: python plugin preflight — pytest importability probe via %q did not finish within %s: %v",
@@ -263,10 +280,9 @@ func pyPreflightStockDefault() error {
 	defer cancel()
 	// #nosec G204 -- bin is one of two hardcoded interpreter names ("python3" or
 	// "python") returned by pythonBin(); the args are constant. No external input.
-	// WaitDelay: see the identical comment in Preflight above — bounds the
-	// same grandchild-holds-the-pipe-open hang.
+	// GuardProcess: see the identical comment in Preflight above.
 	stockCmd := exec.CommandContext(ctx, bin, "-m", "pytest", "--version")
-	stockCmd.WaitDelay = preflightProbeTimeout
+	sandbox.GuardProcess(stockCmd)
 	if out, err := stockCmd.CombinedOutput(); err != nil {
 		if ctx.Err() != nil {
 			return fmt.Errorf("lang: python plugin preflight — pytest importability probe did not finish within %s: %v", preflightProbeTimeout, ctx.Err())

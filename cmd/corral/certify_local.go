@@ -1216,6 +1216,7 @@ func advVerdictFromPool(v advpool.Verdict) advVerdict {
 		BaselineFailed:   v.BaselineFailed,
 		SuiteIgnoresFile: v.SuiteIgnoresFile,
 		TimedOut:         v.TimedOut,
+		DevScored:        v.DevScored,
 	}
 	for _, f := range v.VacuousFindings {
 		out.VacuousFindings = append(out.VacuousFindings, advFinding{

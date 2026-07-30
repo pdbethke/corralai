@@ -6,7 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -145,6 +147,17 @@ func writeFakeSleepingExe(t *testing.T, dir, name string) string {
 	return p
 }
 
+// lowered preflightProbeTimeout test bound. 300ms, not the 50ms this file
+// used before the re-review: at 50ms, a "doubling" regression (elapsed
+// ~100ms) is indistinguishable from ordinary process-spawn/scheduler jitter
+// on a shared CI machine, so the old `elapsed > 2*time.Second` ceiling could
+// never actually catch it — exactly the gap the re-review flagged. 300ms
+// mirrors the coordinator's own reproduction value; loweredProbeCeiling
+// below sits between the correct (~300-350ms) and doubled (~601ms observed
+// in that repro) outcomes, so it actually discriminates the two.
+const loweredProbeTimeout = 300 * time.Millisecond
+const loweredProbeCeiling = 500 * time.Millisecond
+
 // TestPythonPreflightProbeTimesOutRatherThanHanging is review item 5: with
 // testCmd argv-aware, the probe's binary is now OPERATOR-named — no longer
 // just pythonBin()'s two hardcoded choices — and a wrapper that blocks
@@ -154,7 +167,7 @@ func writeFakeSleepingExe(t *testing.T, dir, name string) string {
 // waiting out the real 10s production bound.
 func TestPythonPreflightProbeTimesOutRatherThanHanging(t *testing.T) {
 	orig := preflightProbeTimeout
-	preflightProbeTimeout = 50 * time.Millisecond
+	preflightProbeTimeout = loweredProbeTimeout
 	t.Cleanup(func() { preflightProbeTimeout = orig })
 
 	dir := t.TempDir()
@@ -171,8 +184,12 @@ func TestPythonPreflightProbeTimesOutRatherThanHanging(t *testing.T) {
 	if !strings.Contains(err.Error(), "did not finish within") {
 		t.Fatalf("error must say the probe TIMED OUT, not just that it failed: %v", err)
 	}
-	if elapsed > 2*time.Second {
-		t.Fatalf("Preflight took %s — the probe timeout did not bound the wait", elapsed)
+	// Tight enough to actually catch a "waits an extra full bound after ctx
+	// cancels" regression (WaitDelay alone, no process-group Cancel — the
+	// re-review's exact repro: a 300ms bound observed taking 601ms), not
+	// just a hang measured in whole seconds.
+	if elapsed > loweredProbeCeiling {
+		t.Fatalf("Preflight took %s (bound %s) — the probe is waiting roughly DOUBLE its bound, not just failing to bound the wait at all", elapsed, loweredProbeTimeout)
 	}
 }
 
@@ -187,7 +204,7 @@ func TestPythonPreflightStockDefaultProbeAlsoTimesOut(t *testing.T) {
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	orig := preflightProbeTimeout
-	preflightProbeTimeout = 50 * time.Millisecond
+	preflightProbeTimeout = loweredProbeTimeout
 	t.Cleanup(func() { preflightProbeTimeout = orig })
 
 	p, _ := ByName("python")
@@ -201,7 +218,57 @@ func TestPythonPreflightStockDefaultProbeAlsoTimesOut(t *testing.T) {
 	if !strings.Contains(err.Error(), "did not finish within") {
 		t.Fatalf("error must say the probe TIMED OUT: %v", err)
 	}
-	if elapsed > 2*time.Second {
-		t.Fatalf("Preflight (stock path) took %s — the probe timeout did not bound the wait", elapsed)
+	if elapsed > loweredProbeCeiling {
+		t.Fatalf("Preflight (stock path) took %s (bound %s) — the probe is waiting roughly DOUBLE its bound, not just failing to bound the wait at all", elapsed, loweredProbeTimeout)
+	}
+}
+
+// TestPythonPreflightProbeDoesNotLeakProcesses is the other half of review
+// item 2: a WaitDelay-only fix bounds the WAIT but does nothing about the
+// process itself — exec.CommandContext's default Cancel only signals the
+// DIRECT child, so a script interpreter's grandchild (a backgrounded
+// worker, exactly the shape `sh -c "sleep 120 & echo hello; exit 0"`
+// reproduces per sandbox.GuardProcess's own doc comment) survives as a
+// leaked, still-running process after Preflight returns. GuardProcess's
+// process-group kill must reap it.
+func TestPythonPreflightProbeDoesNotLeakProcesses(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process-group semantics are POSIX-only")
+	}
+	orig := preflightProbeTimeout
+	preflightProbeTimeout = loweredProbeTimeout
+	t.Cleanup(func() { preflightProbeTimeout = orig })
+
+	dir := t.TempDir()
+	p := filepath.Join(dir, "python")
+	// Backgrounds a grandchild that inherits the pipe and outlives the
+	// direct child (`sh`) by design — the exact shape GuardProcess's own
+	// doc comment names as the non-obvious failure mode.
+	marker := filepath.Join(dir, "still-running")
+	script := "#!/bin/sh\n(sleep 3600; ) & echo $! > " + marker + "\nsleep 3600\n"
+	if err := os.WriteFile(p, []byte(script), 0o755); err != nil { //nolint:gosec // test fixture, needs +x
+		t.Fatal(err)
+	}
+
+	plug, _ := ByName("python")
+	if err := plug.Preflight([]string{p, "-m", "pytest", "-q"}); err == nil {
+		t.Fatal("Preflight must fail on a hung probe binary")
+	}
+
+	pidBytes, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatalf("the backgrounded grandchild's pid marker was never written — the test fixture itself is broken: %v", err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(pidBytes)))
+	if err != nil {
+		t.Fatalf("could not parse the marked pid %q: %v", pidBytes, err)
+	}
+	// A brief grace period for the kill to actually land — process
+	// teardown is not synchronous with Preflight's return.
+	time.Sleep(300 * time.Millisecond)
+	if proc, err := os.FindProcess(pid); err == nil {
+		if err := proc.Signal(syscall.Signal(0)); err == nil {
+			t.Fatalf("grandchild pid %d is still running after Preflight returned — GuardProcess's process-group kill did not reap it", pid)
+		}
 	}
 }

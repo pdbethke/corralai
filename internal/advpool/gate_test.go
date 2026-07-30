@@ -79,6 +79,72 @@ func TestJailScorerReport(t *testing.T) {
 	}
 }
 
+// recordingJail is a deterministic adequacy.Jail stand-in that always passes
+// and remembers the LAST files map it was handed — used to prove (by
+// execution, not reasoning) whether a given piece of content actually reached
+// the workspace a RunTest call saw.
+type recordingJail struct{ lastFiles map[string]string }
+
+func (r *recordingJail) RunTest(ctx context.Context, files map[string]string, cmd []string) (bool, error) {
+	r.lastFiles = files
+	return true, nil
+}
+
+// hasContent reports whether any file in the last recorded workspace has
+// exactly this content.
+func (r *recordingJail) hasContent(content string) bool {
+	for _, v := range r.lastFiles {
+		if v == content {
+			return true
+		}
+	}
+	return false
+}
+
+// TestJailScorerScoreAuthoredReportOverlaysAuthoredTestInRepoMode is F1's
+// regression test: in repo-aware mode (BaseFiles set), scoreWorkspace
+// deliberately drops the `test` argument — correct for the DEV test (already
+// on disk, must not be shadowed) but WRONG for the pool's AUTHORED test (a
+// brand-new file the repo does not contain). Before the fix,
+// ScoreAuthoredReport did not exist and tickPoolAdequacy called
+// ScoreReport/Score directly, whose scoreWorkspace silently discarded the
+// authored test in repo-aware mode — the pool re-scored the DEV suite
+// against its own already-known survivors, so ProvenMissed was structurally
+// always 0. Proved here by execution: the authored test's own content must
+// appear in SOME file the jail's RunTest actually received.
+func TestJailScorerScoreAuthoredReportOverlaysAuthoredTestInRepoMode(t *testing.T) {
+	jail := &recordingJail{}
+	s := JailScorer{Jail: jail, BaseFiles: map[string]string{"go.mod": "module x\n"}}
+
+	const authoredTest = "AUTHORED-TEST-MARKER-CONTENT"
+	_, err := s.ScoreAuthoredReport(context.Background(), "pkg/a.go", "package pkg\n", authoredTest, nil, "go test ./...")
+	if err != nil {
+		t.Fatalf("ScoreAuthoredReport: %v", err)
+	}
+	if !jail.hasContent(authoredTest) {
+		t.Fatalf("the authored test's content never reached any file in the workspace RunTest saw: %+v", jail.lastFiles)
+	}
+}
+
+// TestJailScorerScoreAuthoredReportSingleFileModeUnchanged proves the fix is
+// scoped to repo-aware mode only: with BaseFiles nil, ScoreAuthoredReport
+// must behave exactly like ScoreReport already does (test overlaid at the
+// synthetic path) — no new asymmetry introduced for the mode that already
+// worked.
+func TestJailScorerScoreAuthoredReportSingleFileModeUnchanged(t *testing.T) {
+	jail := &recordingJail{}
+	s := JailScorer{Jail: jail}
+
+	const authoredTest = "AUTHORED-TEST-MARKER-CONTENT"
+	_, err := s.ScoreAuthoredReport(context.Background(), "pkg/a.go", "package pkg\n", authoredTest, nil, "")
+	if err != nil {
+		t.Fatalf("ScoreAuthoredReport: %v", err)
+	}
+	if !jail.hasContent(authoredTest) {
+		t.Fatalf("single-file mode regressed: authored test content missing from %+v", jail.lastFiles)
+	}
+}
+
 // TestJailValidatorCompileTest_SubdirectoryCodePath is I-1's regression test
 // (relocated from internal/brain/advpool_test.go's
 // TestAdvPoolValidatorCompileTest_SubdirectoryCodePath): a SUBDIRECTORY

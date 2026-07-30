@@ -132,6 +132,43 @@ func (s JailScorer) ScoreReport(ctx context.Context, codePath, code, test string
 	return rep, nil
 }
 
+// ScoreAuthoredReport scores a POOL-authored test (the test-writer's output)
+// against mutants — the AuthoredScorer extension tickPoolAdequacy prefers
+// over ScoreReport. Identical to ScoreReport in single-file mode (BaseFiles
+// nil): scoreWorkspace already overlays `test` at the synthetic path there.
+//
+// In repo-aware mode (BaseFiles set) it explicitly overlays `test` at
+// advPoolTestPath(codePath) — the same path JailValidator.CompileTest already
+// overlays it at (see CompileTest above) — instead of silently discarding it
+// the way scoreWorkspace does. scoreWorkspace's drop is CORRECT for the DEV
+// test (already on disk; overlaying would shadow the real suite — see its own
+// doc) but WRONG for an AUTHORED test: it is a brand-new file the repo does
+// not already contain, so there is nothing to shadow. Before this method
+// existed, tickPoolAdequacy called Score/ScoreReport directly, and in
+// repo-aware mode the authored test's content never reached any workspace the
+// jail ran — the pool silently re-scored the DEV suite against its own
+// already-known survivors, so they "survived" again and ProvenMissed computed
+// to 0 for EVERY repo-aware run, unconditionally. The asymmetry was easy to
+// miss because CompileTest DOES overlay (so the compile gate passed and
+// TestWriterFailed stayed false) while SCORING silently used a workspace that
+// never contained the test at all.
+func (s JailScorer) ScoreAuthoredReport(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (adequacy.Report, error) {
+	scoreBase, cmd := s.scoreWorkspace(codePath, test, testCmd)
+	if s.BaseFiles != nil {
+		scoreBase = make(map[string]string, len(s.BaseFiles)+1)
+		for k, v := range s.BaseFiles {
+			scoreBase[k] = v
+		}
+		scoreBase[advPoolTestPath(codePath)] = test
+	}
+
+	rep, err := adequacy.Score(ctx, s.Jail, scoreBase, codePath, code, mutants, cmd, adequacy.WithMutantTimeout(s.MutantTimeout))
+	if err != nil {
+		return adequacy.Report{}, fmt.Errorf("advpool: score authored report: %w", err)
+	}
+	return rep, nil
+}
+
 // scoreWorkspace builds the jail base file-map and the test command for a
 // scoring run. In single-file mode (BaseFiles nil) it reproduces the original
 // behavior exactly: the language scaffold plus the dev test overlaid at the

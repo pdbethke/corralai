@@ -575,6 +575,27 @@ func TestBuildScanFileRowsCarriesProvenMissed(t *testing.T) {
 	}
 }
 
+// TestBuildScanFileRowsCarriesPoolTestUnsound mirrors the above for the F2
+// fix's new diagnosis: a compiling authored test whose report never
+// genuinely graded must reach the ledger row distinctly from
+// TestWriterFailed.
+func TestBuildScanFileRowsCarriesPoolTestUnsound(t *testing.T) {
+	results := []reposcan.FileResult{
+		{Job: reposcan.Job{Path: "unsound.py", Lang: "python"}, Gradable: true,
+			Verdict: advpool.Verdict{DevKillRate: 0.5, Survivors: 4, MutantsTotal: 10, PoolTestUnsound: true, DevScored: true}},
+	}
+	rows := buildScanFileRows(results, nil, reposcan.CoverageMap{})
+	if len(rows) != 1 {
+		t.Fatalf("buildScanFileRows returned %d rows, want 1", len(rows))
+	}
+	if !rows[0].PoolTestUnsound {
+		t.Error("row.PoolTestUnsound = false, want true")
+	}
+	if rows[0].TestWriterFailed {
+		t.Error("row.TestWriterFailed = true, want false — the test DID compile")
+	}
+}
+
 // TestCertifyRepoRecordCoversExecutionStageRejections proves the fix for
 // the review finding that every EXECUTION-stage rejection (prep-failed,
 // baseline-failed, flaky-baseline, suite-ignores-file, executor-error,
@@ -2335,6 +2356,98 @@ func TestPrintRepoReportMarksTestWriterFailedFiles(t *testing.T) {
 		if strings.Contains(line, "clean.go") && strings.Contains(line, "WRITER FAILED") {
 			t.Errorf("clean.go's line wrongly carries the WRITER FAILED marker: %q", line)
 		}
+	}
+}
+
+// TestPrintRepoReportMarksPoolTestUnsoundFiles proves the F2 fix's new
+// diagnosis (advpool.Verdict.PoolTestUnsound: a compiling authored test that
+// never genuinely graded) reaches the printed report distinctly from
+// [WRITER FAILED] — a compiling test WAS produced here, so reusing that
+// marker's wording would misdescribe the file.
+func TestPrintRepoReportMarksPoolTestUnsoundFiles(t *testing.T) {
+	rep := reposcan.Aggregate("o", "r", "c", 2, 2, []reposcan.FileResult{
+		{Job: reposcan.Job{Path: "clean.go"}, Gradable: true,
+			Verdict: advpool.Verdict{DevKillRate: 0.9, Survivors: 1, MutantsTotal: 10}},
+		{Job: reposcan.Job{Path: "unsound.py"}, Gradable: true,
+			Verdict: advpool.Verdict{DevKillRate: 0.457, Survivors: 19, MutantsTotal: 35, PoolTestUnsound: true, DevScored: true}},
+	}, nil)
+
+	var buf bytes.Buffer
+	printRepoReport(&buf, rep, false, nil)
+	got := buf.String()
+	if !strings.Contains(got, "never genuinely graded") {
+		t.Errorf("report is missing the headline pool-test-unsound caveat:\n%s", got)
+	}
+	if !strings.Contains(got, "unsound.py") || !strings.Contains(got, "TEST UNSOUND") {
+		t.Errorf("report does not mark unsound.py as test-unsound:\n%s", got)
+	}
+	for _, line := range strings.Split(got, "\n") {
+		if strings.Contains(line, "unsound.py") && strings.Contains(line, "WRITER FAILED") {
+			t.Errorf("unsound.py must NOT carry the WRITER FAILED marker — its test compiled: %q", line)
+		}
+		if strings.Contains(line, "clean.go") && strings.Contains(line, "TEST UNSOUND") {
+			t.Errorf("clean.go's line wrongly carries the TEST UNSOUND marker: %q", line)
+		}
+	}
+}
+
+// TestPrintRepoReportZeroLineNamesAllThreeReasons is F5's regression test:
+// the repo-level "0 proven gaps" line must name every reason a per-file 0
+// can occur, including "timed out" — a report with a timed-out file and zero
+// ProvenMissed used to omit that reason entirely, leaving a reader unable to
+// map the marker below back to a cause named above.
+func TestPrintRepoReportZeroLineNamesAllThreeReasons(t *testing.T) {
+	rep := reposcan.Aggregate("o", "r", "c", 1, 1, []reposcan.FileResult{
+		{Job: reposcan.Job{Path: "stalled.py"}, Gradable: true,
+			Verdict: advpool.Verdict{DevKillRate: 0.5, Survivors: 3, MutantsTotal: 10, TimedOut: true, DevScored: true}},
+	}, nil)
+
+	var buf bytes.Buffer
+	printRepoReport(&buf, rep, false, nil)
+	got := buf.String()
+	var zeroLine string
+	for _, line := range strings.Split(got, "\n") {
+		if strings.Contains(line, "0 proven gaps") {
+			zeroLine = line
+		}
+	}
+	if zeroLine == "" {
+		t.Fatalf("no '0 proven gaps' line found:\n%s", got)
+	}
+	if !strings.Contains(zeroLine, "timed out") {
+		t.Errorf("the 0-proven-gaps line's own reason list must name \"timed out\" (not just elsewhere in the report):\n%q", zeroLine)
+	}
+}
+
+// TestPrintRepoReportProvenMissedFileSurvivesTruncation is F4's regression
+// test: the repo-level line promises "see weakest files below," but the
+// per-file listing truncates at 10 entries in weakest-first (ascending
+// kill-rate) order — a file with a real ProvenMissed can have a HIGH kill
+// rate and land past the cutoff, silently breaking that promise. 12 audited
+// files: 11 clean/weak ones plus one with a high kill rate and a proven
+// gap, sorted to the very end.
+func TestPrintRepoReportProvenMissedFileSurvivesTruncation(t *testing.T) {
+	var results []reposcan.FileResult
+	for i := 0; i < 11; i++ {
+		results = append(results, reposcan.FileResult{
+			Job: reposcan.Job{Path: fmt.Sprintf("weak%02d.go", i)}, Gradable: true,
+			Verdict: advpool.Verdict{DevKillRate: 0.1, Survivors: 5, MutantsTotal: 10, DevScored: true},
+		})
+	}
+	results = append(results, reposcan.FileResult{
+		Job: reposcan.Job{Path: "high_kill_rate_proven.py"}, Gradable: true,
+		Verdict: advpool.Verdict{DevKillRate: 0.95, Survivors: 2, MutantsTotal: 40, ProvenMissed: 2, DevScored: true},
+	})
+	rep := reposcan.Aggregate("o", "r", "c", 12, 12, results, nil)
+
+	var buf bytes.Buffer
+	printRepoReport(&buf, rep, false, nil)
+	got := buf.String()
+	if !strings.Contains(got, "... and 2 more") {
+		t.Fatalf("fixture must actually truncate (12 weakest, cap 10) — test setup assumption broken:\n%s", got)
+	}
+	if !strings.Contains(got, "high_kill_rate_proven.py") {
+		t.Errorf("the ONE file with a real proven gap must never be silently hidden behind the truncation:\n%s", got)
 	}
 }
 

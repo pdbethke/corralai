@@ -1231,6 +1231,7 @@ func advVerdictFromPool(v advpool.Verdict) advVerdict {
 		RegionsTotal: v.RegionsTotal, RegionsProbed: v.RegionsProbed,
 		DroppedRegions:   v.DroppedRegions,
 		TestWriterFailed: v.TestWriterFailed,
+		PoolTestUnsound:  v.PoolTestUnsound,
 		BaselineFailed:   v.BaselineFailed,
 		SuiteIgnoresFile: v.SuiteIgnoresFile,
 		TimedOut:         v.TimedOut,

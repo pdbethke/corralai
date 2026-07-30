@@ -56,6 +56,15 @@ type WeakFile struct {
 	// (Survivors, TestWriterFailed) alongside it that a reader can tell
 	// which case they are looking at without re-deriving it.
 	ProvenMissed int
+	// PoolTestUnsound mirrors advpool.Verdict.PoolTestUnsound: true when the
+	// pool's authored test DID compile (TestWriterFailed is false) but its
+	// scoring report never genuinely graded (it failed on the unmutated
+	// compliant code, or the canary was never killed, or nothing was
+	// scored). A DIFFERENT diagnosis from TestWriterFailed — a compiling
+	// test WAS produced — but the same honesty rule: ProvenMissed reads 0
+	// here for a reason that is neither "clean" nor "tried and missed," and
+	// a caller must print it distinctly, the same way TestWriterFailed is.
+	PoolTestUnsound bool
 }
 
 // RepoReport is the repo-level result. It is mostly ACCOUNTING, because that
@@ -101,12 +110,26 @@ type RepoReport struct {
 	// files" must not read as "every survivor was proven, or ruled out" when
 	// some were neither.
 	TestWriterFailed int
-	// ProvenMissed sums WeakFile.ProvenMissed over every audited file — the
-	// repo-wide count of survivors execution actually proved catchable.
-	// Corral's strongest claim, rolled up. Like the per-file field, 0 here
-	// is ambiguous on its own (see WeakFile.ProvenMissed's three cases) and
-	// a caller must not print it without the TestWriterFailed/TimedOut
-	// caveats alongside it.
+	// PoolTestUnsound counts Audited files whose pool authored a compiling
+	// test that never genuinely graded (see WeakFile.PoolTestUnsound) — a
+	// third report-level caveat alongside TimedOut/TestWriterFailed.
+	PoolTestUnsound int
+	// ProvenMissed sums WeakFile.ProvenMissed over every audited file whose
+	// score is a clean, converged run — the repo-wide count of survivors
+	// execution actually proved catchable. Corral's strongest claim, rolled
+	// up.
+	//
+	// TimedOut files are deliberately EXCLUDED from this sum: a banked
+	// timeout verdict can carry a real ProvenMissed from a pool-adequacy
+	// step that finished before the deadline hit, but printRepoReport
+	// suppresses the per-file "N proven missed" text for a timed-out file
+	// (its marker is [TIMED OUT], not a proven-missed count) — summing it in
+	// here anyway would make the repo-level total refer to a number the
+	// per-file listing never shows, an unlocatable claim. Like the per-file
+	// field, 0 here is ambiguous on its own (see WeakFile.ProvenMissed's
+	// three cases, plus PoolTestUnsound) and a caller must not print it
+	// without the TestWriterFailed/PoolTestUnsound/TimedOut caveats
+	// alongside it.
 	ProvenMissed int
 
 	Weakest     []WeakFile
@@ -200,7 +223,15 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 		if r.Verdict.TestWriterFailed {
 			rep.TestWriterFailed++
 		}
-		rep.ProvenMissed += r.Verdict.ProvenMissed
+		if r.Verdict.PoolTestUnsound {
+			rep.PoolTestUnsound++
+		}
+		// See RepoReport.ProvenMissed's doc: a timed-out file's proven-missed
+		// count (if any) is never shown per-file, so it must not be summed
+		// into a repo-level total the printed listing can't back up.
+		if !r.Verdict.TimedOut {
+			rep.ProvenMissed += r.Verdict.ProvenMissed
+		}
 		rep.Weakest = append(rep.Weakest, WeakFile{
 			Path:             r.Job.Path,
 			KillRate:         r.Verdict.DevKillRate,
@@ -208,6 +239,7 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 			TimedOut:         r.Verdict.TimedOut,
 			TestWriterFailed: r.Verdict.TestWriterFailed,
 			ProvenMissed:     r.Verdict.ProvenMissed,
+			PoolTestUnsound:  r.Verdict.PoolTestUnsound,
 		})
 	}
 

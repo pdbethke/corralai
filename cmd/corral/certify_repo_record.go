@@ -127,6 +127,12 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 				// `proven_missed > 0` instead of losing the distinction the
 				// moment this row is written.
 				ProvenMissed: r.Verdict.ProvenMissed,
+				// PoolTestUnsound rides through the same way, DISTINCT from
+				// TestWriterFailed: a compiling test WAS produced here, its
+				// own scoring report just never genuinely graded — without
+				// this a row with survivors > 0 and this diagnosis would be
+				// indistinguishable from an ordinary "tried and missed" 0.
+				PoolTestUnsound: r.Verdict.PoolTestUnsound,
 			})
 			continue
 		}

@@ -33,6 +33,37 @@ type Scorer interface {
 	ScoreReport(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (adequacy.Report, error)
 }
 
+// AuthoredScorer is an optional Scorer extension for scoring a POOL-authored
+// test — the test-writer's output — as opposed to the dev suite's own.
+// tickPoolAdequacy prefers this over ScoreReport when a Scorer implements it
+// (the same optional-extension pattern verboseJail already uses in gate.go).
+//
+// The distinction matters only in repo-aware mode: JailScorer.ScoreReport's
+// workspace-building deliberately does NOT overlay `test` there (correct for
+// the dev test, which is already on disk — overlaying would shadow the real
+// suite), but an AUTHORED test is a brand-new file the repo does not already
+// contain, so silently dropping it means the pool re-scores the DEV suite
+// against its own already-known survivors — every repo-aware run then
+// computes ProvenMissed=0 unconditionally, regardless of what the pool's test
+// actually proved. See JailScorer.ScoreAuthoredReport's doc for the full
+// history. A Scorer that does not implement this (only test fakes, today —
+// JailScorer, the only production implementation, always does) falls back to
+// ScoreReport via scoreAuthored below, which is fine in single-file mode.
+type AuthoredScorer interface {
+	ScoreAuthoredReport(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (adequacy.Report, error)
+}
+
+// scoreAuthored scores a pool-authored test through AuthoredScorer when the
+// wired Scorer implements it, else falls back to the plain ScoreReport —
+// see AuthoredScorer's doc for why the two differ and when the fallback is
+// safe.
+func scoreAuthored(ctx context.Context, scorer Scorer, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (adequacy.Report, error) {
+	if as, ok := scorer.(AuthoredScorer); ok {
+		return as.ScoreAuthoredReport(ctx, codePath, code, test, mutants, testCmd)
+	}
+	return scorer.ScoreReport(ctx, codePath, code, test, mutants, testCmd)
+}
+
 // Validator is brain-side artifact validation of a worker's structured
 // result, run before the driver trusts it enough to score or promote on it.
 type Validator interface {
@@ -181,6 +212,21 @@ type Verdict struct {
 	// run is never certified (aggregate forces needs-review whenever
 	// Survivors > 0 and ProvenMissed < Survivors — see aggregate).
 	TestWriterFailed bool
+	// PoolTestUnsound is true when the pool's authored test DID compile (so
+	// TestWriterFailed is false) but, when actually run against the
+	// survivors, its own report did not genuinely grade: it failed on the
+	// unmutated compliant code (CompliantPass false — an ordinary outcome
+	// for an LLM-written test, since the compile gate only checks syntax,
+	// never "passes"), or the canary was not killed (CanaryKilled false —
+	// the test never reads the file), or nothing was scored (Total == 0).
+	// HONESTY NOTE: this is a DIFFERENT diagnosis from TestWriterFailed (a
+	// compiling test WAS produced here), but the same rule applies —
+	// ProvenMissed==0 when this is true does NOT mean "no real gaps," and
+	// it must never be read as "the pool's test proved every survivor
+	// either" (the inverse false claim: fabricating proof from a run that
+	// graded nothing). A poolTestUnsound run is never certified — see
+	// aggregate.
+	PoolTestUnsound bool
 	// BaselineFailed is true when the dev suite did not pass on the UNMUTATED
 	// compliant code inside the jail — a build/environment failure, not a
 	// test-quality verdict. When true, DevKillRate (0) and Survivors (0) are
@@ -334,6 +380,12 @@ type runState struct {
 	// test not authored." Carried onto the signed Verdict (TestWriterFailed) so
 	// the CLI/cockpit can say so honestly instead of implying a clean suite.
 	testWriterFailed bool
+	// poolTestUnsound is set when the pool's authored test compiled (so
+	// testWriterFailed is false) but its scoring report did not genuinely
+	// grade (CompliantPass/CanaryKilled false, or Total 0) — see
+	// Verdict.PoolTestUnsound's doc for the full honesty rule this carries
+	// onto the signed verdict.
+	poolTestUnsound bool
 
 	// shardRetries counts parse failures per mutant-generator task KEY (never
 	// its id). Keying by key is deliberate: a lease-expiry re-claim and a
@@ -1147,11 +1199,38 @@ func (d *Driver) tickPoolAdequacy(ctx context.Context, missionID int64, run *run
 	run.authoredTest = writerTest
 	d.mu.Unlock()
 
-	_, poolSurvivors, serr := d.Scorer.Score(ctx, run.rs.CodePath, run.rs.Code, writerTest, run.devSurvivors, run.rs.TestCmd)
+	// ScoreReport (via scoreAuthored/AuthoredScorer), never the collapsed
+	// Score: a caller MUST be able to tell "the authored test genuinely
+	// killed N survivors" from "nothing was actually graded" — Score's bare
+	// (killRate, survivors) tuple cannot express CompliantPass/CanaryKilled/
+	// Total, so an ungraded run (e.g. the authored test fails on the
+	// unmutated compliant code — an ordinary outcome for an LLM-written
+	// test, since CompileTest only checks syntax, never "passes") would
+	// return an EMPTY survivors slice with no error, and the arithmetic
+	// below would silently compute provenMissed = len(devSurvivors) - 0,
+	// reporting EVERY survivor as execution-proven from a run in which no
+	// mutant ever executed — corral's strongest claim, fabricated.
+	rep, serr := scoreAuthored(ctx, d.Scorer, run.rs.CodePath, run.rs.Code, writerTest, run.devSurvivors, run.rs.TestCmd)
 	if serr != nil {
 		return fmt.Errorf("advpool: score pool test: %w", serr)
 	}
 	run.poolScored = true
+	if !rep.CompliantPass || !rep.CanaryKilled || rep.Total == 0 {
+		// A DIAGNOSIS, not a score: the compiling authored test did not
+		// genuinely grade against the survivors. provenMissed must not
+		// become len(devSurvivors) (a fabricated maximum, the false-proof
+		// inversion of the false-accusation class this codebase already
+		// guards against elsewhere) NOR a bare 0 read as "tried and missed"
+		// — poolTestUnsound carries the distinction onto the verdict so a
+		// caller can print it honestly, the same way testWriterFailed
+		// already is.
+		log.Printf("advpool: %s: the pool's authored test compiled but did not genuinely grade against the survivors (CompliantPass=%v CanaryKilled=%v Total=%d) — converging with proven_missed=0, not a maximum",
+			run.rs.CodePath, rep.CompliantPass, rep.CanaryKilled, rep.Total)
+		run.provenMissed = 0
+		run.poolTestUnsound = true
+		return nil
+	}
+	poolSurvivors := survivorsFrom(rep, run.devSurvivors)
 	run.provenMissed = len(run.devSurvivors) - len(poolSurvivors)
 	return nil
 }
@@ -1186,7 +1265,7 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	// opinion, which can hallucinate. blockingFindingOpen remains for a future
 	// execution-verified finding path.
 	v := aggregate(run.rs, d.Assign, run.devKillRate, run.mutantsTotal, len(run.devSurvivors), run.provenMissed,
-		criticFindings, d.Threshold, false, run.testWriterFailed)
+		criticFindings, d.Threshold, false, run.testWriterFailed, run.poolTestUnsound)
 	v.RegionsTotal = run.regionsTotal
 	v.RegionsProbed = run.regionsProbed
 	v.DroppedRegions = run.droppedRegions
@@ -1354,6 +1433,14 @@ func (d *Driver) timeoutVerdict(run *runState) Verdict {
 		// which is a fabricated measurement. Never fabricate a score.
 		BaselineFailed:   run.baselineFailed,
 		SuiteIgnoresFile: run.suiteIgnoresFile,
+		// TestWriterFailed/PoolTestUnsound must ride the TIMEOUT verdict too:
+		// a run that reached tickPoolAdequacy, converged its pool score (or
+		// gave up on a non-compiling test) and only THEN stalled (test-critic
+		// never finished) would otherwise sign a TimedOut verdict with a
+		// ProvenMissed that looks like an ordinary graded value, dropping the
+		// caveat that explains it.
+		TestWriterFailed: run.testWriterFailed,
+		PoolTestUnsound:  run.poolTestUnsound,
 		// Coverage fields (I-5): a run that dispatched N regions and dropped
 		// some before hitting RunDeadline must carry that shortfall on the
 		// timeout verdict too, or the CLI's RegionsTotal > 0 guard silently

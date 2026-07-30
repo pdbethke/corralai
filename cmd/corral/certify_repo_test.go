@@ -2078,6 +2078,24 @@ func TestPrintRepoReportUngradableOrderIsStable(t *testing.T) {
 	}
 }
 
+// TestPrintRepoReportPrintsExecutorErrorDetail is the fix for the swallowed
+// executor error: `ungradable: 1 (executor-error)` alone gave no usable
+// diagnosis (see the flask preflight bug this fixes). The report must print
+// the underlying error text, not just the count.
+func TestPrintRepoReportPrintsExecutorErrorDetail(t *testing.T) {
+	rep := reposcan.Aggregate("o", "r", "c", 1, 1, []reposcan.FileResult{
+		{Job: reposcan.Job{Path: "app.py"}, Gradable: false, Reason: reposcan.ReasonExecutorError,
+			Detail: "python toolchain unavailable — refusing to grade: pytest not importable via \".venv/bin/python\""},
+	}, nil)
+
+	var buf bytes.Buffer
+	printRepoReport(&buf, rep, false, nil)
+	got := buf.String()
+	if !strings.Contains(got, "app.py: python toolchain unavailable") {
+		t.Errorf("report does not surface the executor's error detail:\n%s", got)
+	}
+}
+
 // Finding I6, still guarded: `--repo <dir>` used to fall through to the record
 // path, which certified the CURRENT directory while stamping the other repo's
 // path onto the record — a signed statement about the wrong subject. It was

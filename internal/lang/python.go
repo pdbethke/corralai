@@ -111,9 +111,90 @@ func (pyPlugin) TestPaths(codePath string) []TestCandidate {
 	return dedupeCandidates(out)
 }
 
-// Preflight fails CLOSED unless python3 (or python) is on PATH AND pytest is
-// importable (offline). The gate refuses to run rather than false-certify.
-func (pyPlugin) Preflight() error {
+// pytestPreflightProbe derives, from the operator's own test command
+// (testCmd), the argv that proves pytest is importable under the EXACT
+// interpreter/binary the operator named — never the host's stock
+// python3/python guess (see pythonBin's doc comment for why that guess is
+// wrong the instant the project lives in a venv: pythonBin() resolves off
+// PATH, and an operator-named venv interpreter like .venv/bin/python is
+// never on PATH under that name).
+//
+// Recognizes the same two invocation shapes CoverageCmd already keys off of
+// (see that method's doc comment) so the two checks read an operator's
+// command the same way:
+//
+//  1. bare `pytest`/`py.test ...` — the command itself IS the pytest
+//     binary; probe it directly with --version.
+//  2. `<interp> -m pytest ...` — probe pytest importability under that
+//     EXACT interp with --version.
+//
+// Any other shape (tox, poetry run, a project wrapper script, `python -m
+// unittest`, ...) returns ok=false: there is no reliable way to guess what
+// "pytest is importable" even means for an opaque wrapper, or whether the
+// named module supports --version at all. Preflight still owes those a real
+// presence check on testCmd[0] itself — see Preflight below — just not this
+// additional probe.
+func pytestPreflightProbe(testCmd []string) (probe []string, ok bool) {
+	switch {
+	case len(testCmd) >= 1 && (testCmd[0] == "pytest" || testCmd[0] == "py.test"):
+		return []string{testCmd[0], "--version"}, true
+	case len(testCmd) >= 3 && testCmd[1] == "-m" && testCmd[2] == "pytest":
+		return []string{testCmd[0], "-m", "pytest", "--version"}, true
+	default:
+		return nil, false
+	}
+}
+
+// Preflight fails CLOSED unless the toolchain that will actually run the
+// suite has pytest importable (offline). The gate refuses to run rather
+// than false-certify.
+//
+// With no explicit testCmd (certify --local with no override, or any other
+// caller that has none), this is BYTE-IDENTICAL to the pre-argv-aware
+// behavior: python3 (or python) on PATH, pytest importable under it.
+//
+// With an explicit testCmd — the operator's own `-- <cmd>` — that command IS
+// the assertion of how the suite runs, stronger evidence than this plugin's
+// stock guess, and MUST be what gets checked: testCmd[0] must be present
+// (exec.LookPath handles both a bare name on PATH and an explicit path like
+// .venv/bin/python identically — see toolOnPath), and when the shape is a
+// recognized pytest invocation (pytestPreflightProbe), pytest's
+// importability is probed under THAT interpreter, not pythonBin()'s guess.
+func (pyPlugin) Preflight(testCmd []string) error {
+	if len(testCmd) == 0 {
+		return pyPreflightStockDefault()
+	}
+	bin := testCmd[0]
+	if err := toolOnPath(bin); err != nil {
+		return fmt.Errorf("lang: python plugin preflight — the operator's test command names %q, which is not runnable: %w", bin, err)
+	}
+	probe, ok := pytestPreflightProbe(testCmd)
+	if !ok {
+		// An unrecognized shape (tox, poetry run, a wrapper script, ...):
+		// testCmd[0]'s presence above is the only toolchain fact that can be
+		// checked without guessing what the command actually needs.
+		return nil
+	}
+	// #nosec G204 -- probe[0] is testCmd[0], the operator's OWN named
+	// interpreter/binary from `-- <cmd>` (already presence-checked above via
+	// toolOnPath, which rejects anything exec.LookPath can't resolve); the
+	// remaining args are the fixed "-m pytest --version"/"--version" probe
+	// this method constructs, never operator-controlled beyond that first
+	// token. This is the intentional replacement for the old "run the named
+	// tool with a fixed probe" pattern the pre-argv-aware version used too.
+	if out, err := exec.Command(probe[0], probe[1:]...).CombinedOutput(); err != nil {
+		return fmt.Errorf("lang: python plugin preflight — pytest not importable via %q (%s): %v: %s",
+			bin, strings.Join(probe, " "), err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// pyPreflightStockDefault is Preflight's fallback when the caller has no
+// explicit test command: the exact behavior this plugin had before testCmd
+// existed, kept byte-identical (same interpreter resolution, same probe,
+// same error text) so every existing caller with no `-- <cmd>` (or none
+// applicable) sees no change at all.
+func pyPreflightStockDefault() error {
 	bin := pythonBin()
 	if err := toolOnPath(bin); err != nil {
 		return err

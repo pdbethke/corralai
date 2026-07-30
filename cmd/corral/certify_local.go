@@ -378,7 +378,13 @@ func resolveAuditPlugin(in localAuditInput) (lang.Plugin, error) {
 		}
 		plug = p
 	}
-	if err := plug.Preflight(); err != nil {
+	// in.checkArgv is the operator's own `-- <cmd>` when one was given (both
+	// certify --local's own flag and certify --repo's per-job testCmd route
+	// through this same field, see localExecutor.Execute) — it names exactly
+	// how the suite runs and is stronger evidence than any stock guess this
+	// plugin could make about the host's default toolchain. See
+	// lang.Plugin.Preflight's doc comment.
+	if err := plug.Preflight(in.checkArgv); err != nil {
 		return nil, auditErr("%s toolchain unavailable — refusing to grade: %v", plug.Name(), err)
 	}
 	return plug, nil

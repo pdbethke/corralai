@@ -64,10 +64,16 @@ func (rubyPlugin) TestPaths(codePath string) []TestCandidate {
 	return dedupeCandidates(out)
 }
 
-// Preflight requires only `ruby` (minitest is bundled). It deliberately does
-// NOT require the rspec gem: only a run whose DEV suite is RSpec needs it, and a
-// missing gem then fails the jail command — fail-closed, never a false pass.
-func (rubyPlugin) Preflight() error { return toolOnPath("ruby") }
+// Preflight requires only `ruby` (minitest is bundled) — or, when the
+// operator named an explicit test command (e.g. `bundle exec rspec`, or an
+// interpreter under a version manager's shim not on PATH under "ruby"),
+// THAT command's own binary; see preflightBin and Plugin.Preflight's doc
+// comment. It deliberately does NOT require the rspec gem: only a run whose
+// DEV suite is RSpec needs it, and a missing gem then fails the jail
+// command — fail-closed, never a false pass.
+func (rubyPlugin) Preflight(testCmd []string) error {
+	return toolOnPath(preflightBin(testCmd, "ruby"))
+}
 
 func (rubyPlugin) PromptLang() string { return "Ruby" }
 

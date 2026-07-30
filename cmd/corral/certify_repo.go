@@ -1247,6 +1247,12 @@ func printRepoReport(w io.Writer, r reposcan.RepoReport, nothingInScope bool, mi
 	sort.Strings(ungradableReasons)
 	for _, reason := range ungradableReasons {
 		fmt.Fprintf(w, "  ungradable: %d (%s)\n", r.Ungradable[reason], reason)
+		// Detail is the operator's actual diagnosis (e.g. WHY the toolchain
+		// check failed) — the count alone answered "how many" but not "why",
+		// which used to mean a code trace instead of reading the report.
+		for _, detail := range r.UngradableDetails[reason] {
+			fmt.Fprintf(w, "    e.g. %s\n", detail)
+		}
 	}
 	if r.CacheHits > 0 {
 		fmt.Fprintf(w, "  %d verdict(s) reused from cache\n", r.CacheHits)

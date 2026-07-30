@@ -84,6 +84,13 @@ type File struct {
 	Gradable       bool
 	PreflightState string
 	Evidence       string // "paired" | "coverage" | "proven"
+	// Detail is the underlying error text behind Reason, when the caller
+	// has one (today: reposcan.FileResult.Detail, populated for
+	// executor-error rejections). "" for every other reason — Reason alone
+	// is self-explanatory for those. A rejected row with a bare reason code
+	// and no Detail is the ORIGINAL problem this field exists to fix: "why"
+	// used to require re-running with a code trace, not a query.
+	Detail string
 }
 
 // scanFilesMigrationCols is the additive set of columns this package has
@@ -99,6 +106,7 @@ type File struct {
 var scanFilesMigrationCols = []struct{ name, ddl string }{
 	{"preflight_state", "preflight_state VARCHAR"},
 	{"evidence", "evidence VARCHAR"},
+	{"detail", "detail VARCHAR"},
 }
 
 // Open opens (creating if absent) the scans/scan_files store at dsn.
@@ -147,7 +155,8 @@ func Open(dsn string) (*Store, error) {
 		reason VARCHAR,
 		kill_rate DOUBLE, survivors INTEGER, gradable BOOLEAN,
 		preflight_state VARCHAR CHECK (preflight_state IN ('', 'executed', 'not-executed')),
-		evidence VARCHAR CHECK (evidence IN ('', 'paired', 'coverage', 'proven'))
+		evidence VARCHAR CHECK (evidence IN ('', 'paired', 'coverage', 'proven')),
+		detail VARCHAR
 	)`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("scanstore: create scan_files table: %w", err)
@@ -270,10 +279,10 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 		// rejected files.
 		if _, err := tx.ExecContext(ctx, `INSERT INTO scan_files (
 			scan_id, path, lang, disposition, reason,
-			kill_rate, survivors, gradable, preflight_state, evidence
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			kill_rate, survivors, gradable, preflight_state, evidence, detail
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id, f.Path, f.Lang, f.Disposition, f.Reason,
-			sanitizeKillRate(f.KillRate), f.Survivors, f.Gradable, f.PreflightState, f.Evidence,
+			sanitizeKillRate(f.KillRate), f.Survivors, f.Gradable, f.PreflightState, f.Evidence, f.Detail,
 		); err != nil {
 			return 0, fmt.Errorf("scanstore: insert scan_files row for %q: %w", f.Path, err)
 		}
@@ -297,7 +306,7 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 // read back via `SELECT rowid, ...` in insertion order (0, 1, 2).
 func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT path, lang, disposition, reason,
-		kill_rate, survivors, gradable, preflight_state, evidence
+		kill_rate, survivors, gradable, preflight_state, evidence, detail
 		FROM scan_files WHERE scan_id = ? ORDER BY rowid`, scanID)
 	if err != nil {
 		return nil, fmt.Errorf("scanstore: files for scan %d: %w", scanID, err)
@@ -307,10 +316,12 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 	var out []File
 	for rows.Next() {
 		var f File
+		var detail sql.NullString
 		if err := rows.Scan(&f.Path, &f.Lang, &f.Disposition, &f.Reason,
-			&f.KillRate, &f.Survivors, &f.Gradable, &f.PreflightState, &f.Evidence); err != nil {
+			&f.KillRate, &f.Survivors, &f.Gradable, &f.PreflightState, &f.Evidence, &detail); err != nil {
 			return nil, fmt.Errorf("scanstore: scan scan_files row: %w", err)
 		}
+		f.Detail = detail.String
 		out = append(out, f)
 	}
 	return out, rows.Err()

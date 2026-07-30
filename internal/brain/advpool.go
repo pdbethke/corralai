@@ -691,7 +691,12 @@ func (rt *AdvPoolRuntime) StartRun(in AdvPoolRunSpec) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	if err := langPlugin.Preflight(); err != nil {
+	// strings.Fields splits in.TestCmd (an MCP-schema'd single string, e.g.
+	// "go test ./") into argv the SAME way gate.go's scoreWorkspace already
+	// does to build the actual jail command — so Preflight checks the exact
+	// toolchain the run is about to use, not a stock guess (see
+	// lang.Plugin.Preflight's doc comment).
+	if err := langPlugin.Preflight(strings.Fields(in.TestCmd)); err != nil {
 		return 0, fmt.Errorf("advpool: language toolchain unavailable — refusing to run: %w", err)
 	}
 

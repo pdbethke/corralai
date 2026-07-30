@@ -126,6 +126,7 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 		rows = append(rows, scanstore.File{
 			Path: path, Lang: r.Job.Lang, Disposition: "rejected", Reason: reason,
 			Gradable: false, Evidence: ungradableEvidence(reason), PreflightState: preflightState(preflight, path),
+			Detail: r.Detail,
 		})
 	}
 

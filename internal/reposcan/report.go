@@ -8,6 +8,10 @@ import (
 	"time"
 )
 
+// maxUngradableDetailsPerReason bounds how many sample detail lines
+// Aggregate keeps per ungradable reason — see RepoReport.UngradableDetails.
+const maxUngradableDetailsPerReason = 5
+
 // WeakFile is one entry in the ranked weakest-files list.
 type WeakFile struct {
 	Path      string
@@ -31,6 +35,15 @@ type RepoReport struct {
 	Audited    int
 	Excluded   []Exclusion
 	Ungradable map[string]int
+	// UngradableDetails carries, per ungradable reason, a bounded sample of
+	// "path: detail" lines drawn from FileResult.Detail — today only
+	// executor-error results supply one. Ungradable alone is a COUNT ("1
+	// executor-error"); this is the part that lets an operator find out WHY
+	// without re-running with extra flags or reading source. Bounded
+	// (maxUngradableDetailsPerReason) so a repo-wide failure (e.g. every
+	// Python file failing the same toolchain preflight) does not turn the
+	// report into a wall of identical lines.
+	UngradableDetails map[string][]string
 
 	// KillRate is over Audited ONLY, never over the repo. NaN when nothing
 	// was audited — a 0.0 there would read as "terrible tests" when the truth
@@ -79,11 +92,12 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 	}
 	rep := RepoReport{
 		Owner: owner, Repo: repo, Commit: commit,
-		TotalFiles:  totalFiles,
-		Candidates:  candidates,
-		Excluded:    excl,
-		Ungradable:  map[string]int{},
-		GeneratedAt: time.Now(),
+		TotalFiles:        totalFiles,
+		Candidates:        candidates,
+		Excluded:          excl,
+		Ungradable:        map[string]int{},
+		UngradableDetails: map[string][]string{},
+		GeneratedAt:       time.Now(),
 	}
 	// Candidates dropped BEFORE they became jobs are absent from results, so
 	// they are counted from the exclusions. Each is folded under its own
@@ -114,6 +128,9 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 				reason = ReasonExecutorError
 			}
 			rep.Ungradable[reason]++
+			if r.Detail != "" && len(rep.UngradableDetails[reason]) < maxUngradableDetailsPerReason {
+				rep.UngradableDetails[reason] = append(rep.UngradableDetails[reason], r.Job.Path+": "+r.Detail)
+			}
 			continue
 		}
 		rep.Audited++

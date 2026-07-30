@@ -38,6 +38,24 @@ func TestAggregateScoresOverAuditedSurfaceOnly(t *testing.T) {
 	}
 }
 
+// A gradable file's Detail (the executor's own error text) survives into
+// the report, keyed by reason — an operator reading "ungradable: 1
+// (executor-error)" must be able to find out WHY without a code trace.
+func TestAggregateCarriesUngradableDetailThrough(t *testing.T) {
+	results := []FileResult{
+		{Job: Job{Path: "app.py"}, Gradable: false, Reason: ReasonExecutorError, Detail: "python toolchain unavailable: pytest not importable"},
+	}
+	rep := Aggregate("o", "r", "c1", 1, 1, results, nil)
+
+	details := rep.UngradableDetails[ReasonExecutorError]
+	if len(details) != 1 {
+		t.Fatalf("UngradableDetails[executor-error] = %v, want 1 entry", details)
+	}
+	if details[0] != "app.py: python toolchain unavailable: pytest not importable" {
+		t.Errorf("detail = %q, want path-prefixed detail text", details[0])
+	}
+}
+
 // Zero audited files must not produce a 0.0 score that reads like "terrible
 // tests". It must be visibly unscored.
 func TestAggregateNothingAuditedIsNotZeroScore(t *testing.T) {

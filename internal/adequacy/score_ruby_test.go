@@ -29,7 +29,7 @@ func TestScoreRubyKillsAndSurvives(t *testing.T) {
 	if !ok {
 		t.Skip("ruby plugin not registered")
 	}
-	if err := rb.Preflight(); err != nil {
+	if err := rb.Preflight(nil); err != nil {
 		t.Skipf("ruby not available: %v", err)
 	}
 	backend, err := sandbox.Resolve(sandbox.Config{Backend: "bwrap"})

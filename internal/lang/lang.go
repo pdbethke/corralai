@@ -52,7 +52,19 @@ type Plugin interface {
 	// on disk, using its Rank (not its position) to resolve cross-source
 	// collisions.
 	TestPaths(codePath string) []TestCandidate
-	Preflight() error         // toolchain present? nil ok, else fail CLOSED
+	// Preflight checks the toolchain the jail is about to grade with — fail
+	// CLOSED, never a guess. testCmd, when non-empty, is the OPERATOR's own
+	// `-- <cmd>` (or advpool run spec TestCmd) argv: it is an assertion of
+	// exactly how the suite runs, stronger evidence than any stock guess
+	// this plugin could make about the host's default toolchain (e.g.
+	// python3/python on PATH), and MUST be what gets checked — a project
+	// living in a venv, a bundler-managed Ruby, or a locally-installed
+	// node_modules toolchain is invisible to the stock guess but named
+	// exactly by testCmd. testCmd == nil (or empty) means the caller has no
+	// explicit command (e.g. certify --local with no --code test command
+	// override); Preflight then falls back to its prior stock-toolchain
+	// check, UNCHANGED from before this parameter existed.
+	Preflight(testCmd []string) error
 	PromptLang() string       // human label, for verdict metadata + logs
 	TestWriterSystem() string // language-specific test-writer system prompt
 	MutantSystem() string     // language-specific mutant-generator system prompt

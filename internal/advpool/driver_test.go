@@ -3,9 +3,11 @@
 package advpool
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"fmt"
+	"log"
 	"math"
 	"path/filepath"
 	"sort"
@@ -1230,6 +1232,59 @@ func TestTick_PoolAdequacy_CompileError_ExhaustsAttemptsThenConverges(t *testing
 	}
 	if v.Status != StatusNeedsReview {
 		t.Fatalf("Status = %q, want %q — TestWriterFailed must force needs-review even at DevKillRate 0.9 >= threshold 0.5", v.Status, StatusNeedsReview)
+	}
+}
+
+// TestTick_PoolAdequacy_CompileError_ExhaustionLogsTheCompileError pins Fix
+// 2: the exhaustion log line at driver.go's tickPoolAdequacy must include
+// the LAST compile error, not just the attempt count. Before this fix the
+// log.Printf at the exhaustion branch dropped cerr entirely — on the repo
+// scan path (certify_repo.go's localExecutor), which sends progress to
+// io.Discard, that log line is the ONLY place the reason a test never
+// compiled survives at all; diagnosing the missing-import bug this whole
+// change fixes took a code trace instead of reading it there. Same
+// exhaustion scenario as
+// TestTick_PoolAdequacy_CompileError_ExhaustsAttemptsThenConverges, but
+// asserting on captured `log` package output instead of the verdict.
+func TestTick_PoolAdequacy_CompileError_ExhaustionLogsTheCompileError(t *testing.T) {
+	const wantCompileErr = "distinctive compile failure xyz123"
+	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}, {ID: "m2", Code: "c2"}}
+	scorer := &fakeScorer{devKillRate: 0.9, devSurvivors: survivors}
+	validator := &fakeValidator{
+		mutants:    []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0], survivors[1]},
+		compileErr: fmt.Errorf(wantCompileErr), // NEVER clears
+	}
+	d, _ := newTestDriver(t, 13, scorer, validator, 0.5)
+	d.Signer = &fakeSigner{}
+
+	var logBuf bytes.Buffer
+	prevOut, prevFlags := log.Writer(), log.Flags()
+	log.SetOutput(&logBuf)
+	log.SetFlags(0)
+	t.Cleanup(func() { log.SetOutput(prevOut); log.SetFlags(prevFlags) })
+
+	ctx := context.Background()
+	ready := claimAllReady(t, d.Q)
+	tc, mg := ready[RoleTestCritic], ready[RoleMutantGenerator]
+	if tc == nil || mg == nil {
+		t.Fatalf("expected test-critic and mutant-generator both ready, got: %v", keysOf(ready))
+	}
+	mustComplete(t, d.Q, tc.ID, "no vacuous tests found")
+	mustComplete(t, d.Q, mg.ID, "raw mutants")
+	if _, err := d.Tick(ctx, 13); err != nil {
+		t.Fatalf("Tick (dev-adequacy): %v", err)
+	}
+
+	for attempt := 1; attempt <= MaxTestWriterAttempts; attempt++ {
+		tw := claimTaskByID(t, d.Q, d.runs[13].testWriterTaskID)
+		mustComplete(t, d.Q, tw.ID, "test that never compiles")
+		if _, err := d.Tick(ctx, 13); attempt == MaxTestWriterAttempts && err != nil {
+			t.Fatalf("final attempt: expected no error (converge on exhaustion), got %v", err)
+		}
+	}
+
+	if !strings.Contains(logBuf.String(), wantCompileErr) {
+		t.Fatalf("exhaustion log must include the compile error %q, got:\n%s", wantCompileErr, logBuf.String())
 	}
 }
 

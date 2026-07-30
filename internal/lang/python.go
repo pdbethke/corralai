@@ -296,10 +296,139 @@ func (pyPlugin) PromptLang() string { return "Python" }
 
 func (pyPlugin) TestWriterSystem() string {
 	return `You are a TEST-WRITER. Given a security control GOAL, a target source file, and its signature surface, write ONE executable pytest test that verifies the code SATISFIES the goal.
-- Import the module under test (white-box); assume it is importable by its file's base name (e.g. ` + "`import pricing`" + ` for pricing.py).
+- Import the module under test (white-box), using EXACTLY the import given in the task instruction below — never guess a different one.
 - It MUST FAIL if the goal is violated — test the goal's boundary (what a weakened implementation would pass that a compliant one must not).
 - Standard library plus pytest only. Deterministic, no network.
 Return ONLY the raw Python test file content — no prose, no markdown fences.`
+}
+
+// ImportPath walks up from codePath's own directory while exists reports a
+// package marker (__init__.py) present, dot-joining each package directory
+// name it crosses onto the file's own base name — the same resolution
+// pytest's own package-aware import mode performs when it collects a test
+// file that lives inside a real package (rootdir insertion stops climbing
+// at the first ancestor WITHOUT an __init__.py, and everything below that
+// point becomes the dotted import). E.g. src/flask/cli.py with
+// src/flask/__init__.py present but no src/__init__.py resolves to
+// "flask.cli": climbing stops at "src" (the namespace boundary), "src"
+// itself is never a package and so never joins the dotted path.
+//
+// exists == nil means the caller has no real filesystem to consult (e.g. a
+// hosted/MCP run with no checkout on disk) — returning ok=false rather than
+// silently assuming "no packages here" is the fail-closed half of this fix:
+// a wrong assumption ("importable by bare base name") is exactly the bug
+// this method exists to stop making.
+//
+// A file with NO __init__.py anywhere above it (dir has none) climbs zero
+// levels and correctly resolves to just its own base name — that really is
+// how Python imports a rootless module, so this is not a "could not
+// determine" case, it is a genuine (if trivial) determination.
+//
+// Every directory name crossed while climbing (and the file's own base
+// name) is validated with isPythonIdentifier before it joins the dotted
+// path: a real repo's directory name is not guaranteed to BE one (a `2fa/`
+// package dir, a dashed `my-pkg/`, a dotted `my.pkg/`, one containing a
+// space, or one that collides with a Python keyword like `class/` all
+// appear in the wild) — joining it anyway would hand the test-writer a
+// dotted string that LOOKS like a real import but is a SyntaxError the
+// instant it is written (`import 2fa.totp`), which is exactly the class of
+// bug this whole fix exists to remove, just re-entered through a directory
+// name instead of a missing fact. ok=false there is the honest answer: the
+// already-correct ImportNote(_, false) fallback (importlib.util.
+// spec_from_file_location, keyed off the file's own path rather than a
+// name) is the right advice for a package whose directory isn't a legal
+// identifier, since Python itself cannot `import` it by name either.
+func (pyPlugin) ImportPath(codePath string, exists func(path string) bool) (string, bool) {
+	if exists == nil {
+		return "", false
+	}
+	dir, base, ext := splitPath(codePath)
+	if ext != ".py" || !isPythonIdentifier(base) {
+		return "", false
+	}
+	segments := []string{base}
+	for dir != "" {
+		if !exists(filepath.ToSlash(filepath.Join(dir, "__init__.py"))) {
+			break
+		}
+		seg := filepath.Base(dir)
+		if !isPythonIdentifier(seg) {
+			return "", false
+		}
+		segments = append([]string{seg}, segments...)
+		parent := filepath.Dir(dir)
+		if parent == "." {
+			parent = ""
+		}
+		if parent == dir {
+			break // defensive: filepath.Dir is a fixed point at the root ("/", "."); never loop forever.
+		}
+		dir = parent
+	}
+	// src/flask/__init__.py resolves segments to ["flask", "__init__"]: that
+	// DOES import (Python happily accepts "import flask.__init__"), but as a
+	// SECOND, distinct module object from the canonical "flask" — technically
+	// working, but not what any human (or a later reviewer of the authored
+	// test) would recognize as the real import. Strip a trailing ".__init__"
+	// down to its package.
+	if n := len(segments); n > 1 && segments[n-1] == "__init__" {
+		segments = segments[:n-1]
+	}
+	return strings.Join(segments, "."), true
+}
+
+// pythonKeywords is the reserved-word set that cannot appear as a Python
+// identifier — https://docs.python.org/3/reference/lexical_analysis.html#keywords
+// (soft keywords like "match"/"case"/"_" are valid identifiers and
+// deliberately excluded). A directory or file base name that collides with
+// one of these cannot be joined into a dotted import (`import class.foo` is
+// a SyntaxError) even though it is a syntactically ordinary path segment.
+var pythonKeywords = map[string]bool{
+	"False": true, "None": true, "True": true, "and": true, "as": true,
+	"assert": true, "async": true, "await": true, "break": true, "class": true,
+	"continue": true, "def": true, "del": true, "elif": true, "else": true,
+	"except": true, "finally": true, "for": true, "from": true, "global": true,
+	"if": true, "import": true, "in": true, "is": true, "lambda": true,
+	"nonlocal": true, "not": true, "or": true, "pass": true, "raise": true,
+	"return": true, "try": true, "while": true, "with": true, "yield": true,
+}
+
+// isPythonIdentifier reports whether s is a legal Python identifier: a
+// non-empty ASCII sequence starting with a letter or underscore, continuing
+// with letters/digits/underscores, and not a reserved keyword. Deliberately
+// ASCII-only and conservative — Python technically permits Unicode
+// identifiers, but a false "not an identifier" here only costs an honest
+// ok=false (the safe direction: see ImportPath's doc comment), while a false
+// "is an identifier" would hand the test-writer a broken import to write.
+func isPythonIdentifier(s string) bool {
+	if s == "" || pythonKeywords[s] {
+		return false
+	}
+	for i, r := range s {
+		switch {
+		case r == '_' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z'):
+			continue
+		case r >= '0' && r <= '9' && i > 0:
+			continue
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// ImportNote states the derived import as a FACT for this task, or says
+// plainly that it could not be determined — never the withdrawn "assume
+// base name" guess TestWriterSystem used to make unconditionally, which is
+// exactly what broke on a real package (src/flask/cli.py: "import cli"
+// cannot resolve — the module is flask.cli). A wrong instruction is worse
+// than an absent one; when ok is false this says so instead of guessing.
+func (pyPlugin) ImportNote(importPath string, ok bool) string {
+	if ok && importPath != "" {
+		return fmt.Sprintf("The correct import for the module under test is %q — write exactly `import %s` (or `from %s import ...`); do NOT import it by its bare file base name unless that IS the full path shown here.\n\n",
+			importPath, importPath, importPath)
+	}
+	return "The correct import path for the module under test could not be determined automatically (this file may live inside a real Python package this task was not given enough context to resolve). Do NOT assume it is importable by its bare file base name — if the source above shows package context (e.g. relative imports, an __init__.py sibling), infer the dotted import from that; otherwise load it via importlib.util.spec_from_file_location keyed off the file's own path rather than guessing a name.\n\n"
 }
 
 func (pyPlugin) MutantSystem() string {

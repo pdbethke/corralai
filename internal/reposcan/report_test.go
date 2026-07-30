@@ -113,6 +113,46 @@ func TestAggregateMarksTimedOutFiles(t *testing.T) {
 	}
 }
 
+// TestAggregateMarksTestWriterFailedFiles mirrors
+// TestAggregateMarksTimedOutFiles for the OTHER "converged but not fully
+// gated" state: the pool exhausted its compile-retry budget without
+// authoring a killing test (advpool.Verdict.TestWriterFailed). Survivors > 0
+// with proven_missed reading 0 here must not be printable as "no real
+// bugs" — see WeakFile.TestWriterFailed's doc comment.
+func TestAggregateMarksTestWriterFailedFiles(t *testing.T) {
+	results := []FileResult{
+		gradable("clean.go", 0.9, 1),
+		{
+			Job:      Job{Path: "cli.py"},
+			Verdict:  advpool.Verdict{DevKillRate: 0.457, Survivors: 19, MutantsTotal: 35, TestWriterFailed: true, DevScored: true},
+			Gradable: true,
+		},
+	}
+	rep := Aggregate("o", "r", "c1", 2, 2, results, nil)
+
+	if rep.Audited != 2 {
+		t.Fatalf("Audited = %d, want 2 (a writer-failed-but-measured file is still audited)", rep.Audited)
+	}
+	if rep.TestWriterFailed != 1 {
+		t.Fatalf("TestWriterFailed = %d, want 1", rep.TestWriterFailed)
+	}
+	var found bool
+	for _, f := range rep.Weakest {
+		if f.Path == "cli.py" {
+			found = true
+			if !f.TestWriterFailed {
+				t.Error("cli.py's WeakFile.TestWriterFailed = false, want true")
+			}
+		}
+		if f.Path == "clean.go" && f.TestWriterFailed {
+			t.Error("clean.go's WeakFile.TestWriterFailed = true, want false — its writer converged cleanly")
+		}
+	}
+	if !found {
+		t.Fatal("cli.py missing from rep.Weakest")
+	}
+}
+
 func TestAggregateRanksWeakestFirst(t *testing.T) {
 	rep := Aggregate("o", "r", "c1", 3, 3, []FileResult{
 		gradable("strong.go", 0.9, 1),

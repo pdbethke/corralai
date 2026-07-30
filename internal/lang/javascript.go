@@ -83,6 +83,18 @@ Given a GOAL, the compliant code, and its signature surface, produce mutants: va
 The output format (a SEARCH/REPLACE edit per mutant) is specified with the task.`
 }
 
+// ImportPath is always ok=false: node:test's `require('./pricing.js')` is a
+// relative path off the TEST FILE's own directory, and roles.go always
+// places the authored test in the SAME directory as the code under test —
+// that reference already resolves correctly no matter how deep the source
+// sits in the tree, so there is nothing here to correct (see
+// lang.Plugin.ImportPath's doc comment for the general rule this follows).
+func (jsPlugin) ImportPath(string, func(string) bool) (string, bool) { return "", false }
+
+// ImportNote is always "": see ImportPath — JS's relative require needs no
+// per-task correction.
+func (jsPlugin) ImportNote(string, bool) string { return "" }
+
 func (jsPlugin) SingleTestCmd(testPath, selector string) ([]string, bool) { return nil, false }
 
 func (jsPlugin) ListTestsCmd(string) ([]string, bool) { return nil, false }

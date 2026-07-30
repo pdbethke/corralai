@@ -30,19 +30,21 @@ func (f *fakeRunner) Enumerate(_ context.Context, _ map[string]string, cmd []str
 // state.
 type stubPlugin struct{ name string }
 
-func (p stubPlugin) Name() string                                { return p.name }
-func (stubPlugin) Detect(string) bool                            { return false }
-func (stubPlugin) Scaffold() map[string]string                   { return nil }
-func (stubPlugin) TestCmd() []string                             { return nil }
-func (stubPlugin) CompileCheck(string, string) []string          { return nil }
-func (stubPlugin) TestPaths(string) []lang.TestCandidate         { return nil }
-func (stubPlugin) Preflight([]string) error                      { return nil }
-func (stubPlugin) PromptLang() string                            { return "" }
-func (stubPlugin) TestWriterSystem() string                      { return "" }
-func (stubPlugin) MutantSystem() string                          { return "" }
-func (stubPlugin) SingleTestCmd(string, string) ([]string, bool) { return nil, false }
-func (stubPlugin) ListTestsCmd(string) ([]string, bool)          { return nil, false }
-func (stubPlugin) ParseTestList(string) []string                 { return nil }
+func (p stubPlugin) Name() string                                      { return p.name }
+func (stubPlugin) Detect(string) bool                                  { return false }
+func (stubPlugin) Scaffold() map[string]string                         { return nil }
+func (stubPlugin) TestCmd() []string                                   { return nil }
+func (stubPlugin) CompileCheck(string, string) []string                { return nil }
+func (stubPlugin) TestPaths(string) []lang.TestCandidate               { return nil }
+func (stubPlugin) Preflight([]string) error                            { return nil }
+func (stubPlugin) PromptLang() string                                  { return "" }
+func (stubPlugin) TestWriterSystem() string                            { return "" }
+func (stubPlugin) MutantSystem() string                                { return "" }
+func (stubPlugin) ImportPath(string, func(string) bool) (string, bool) { return "", false }
+func (stubPlugin) ImportNote(string, bool) string                      { return "" }
+func (stubPlugin) SingleTestCmd(string, string) ([]string, bool)       { return nil, false }
+func (stubPlugin) ListTestsCmd(string) ([]string, bool)                { return nil, false }
+func (stubPlugin) ParseTestList(string) []string                       { return nil }
 
 var _ lang.Plugin = stubPlugin{}
 

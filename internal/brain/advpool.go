@@ -728,6 +728,14 @@ func (rt *AdvPoolRuntime) StartRun(in AdvPoolRunSpec) (int64, error) {
 		shadowModel = advpool.ResolveShadowModel(s)
 	}
 
+	// RunSpec.ImportPath is deliberately left unset here: this MCP path
+	// receives in.Code as an in-memory string, with no checkout on disk to
+	// derive a real package-qualified import from (see
+	// cmd/corral/certify_local.go's prepareAuditJail, the only caller with
+	// filesystem access to do that derivation). An unset ImportPath makes
+	// the python test-writer's per-task instruction say the import path
+	// could not be determined, rather than silently guessing — the honest
+	// answer, not a regression. See lang.Plugin.ImportPath's doc comment.
 	rs := advpool.RunSpec{
 		Repo: in.Repo, Commit: in.Commit, Goal: in.Goal,
 		CodePath: in.CodePath, Code: in.Code,

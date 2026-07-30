@@ -126,6 +126,18 @@ Given a GOAL, the compliant code, and its signature surface, produce mutants: va
 The output format (a SEARCH/REPLACE edit per mutant) is specified with the task.`
 }
 
+// ImportPath is always ok=false: the `import ... from './pricing.ts'` form
+// is relative to the TEST FILE's own directory, and roles.go always places
+// the authored test in the SAME directory as the code under test — that
+// reference already resolves correctly no matter how deep the source sits
+// in the tree, so there is nothing here to correct (see
+// lang.Plugin.ImportPath's doc comment for the general rule this follows).
+func (tsPlugin) ImportPath(string, func(string) bool) (string, bool) { return "", false }
+
+// ImportNote is always "": see ImportPath — TS's relative import needs no
+// per-task correction.
+func (tsPlugin) ImportNote(string, bool) string { return "" }
+
 func (tsPlugin) SingleTestCmd(testPath, selector string) ([]string, bool) { return nil, false }
 
 func (tsPlugin) ListTestsCmd(string) ([]string, bool) { return nil, false }

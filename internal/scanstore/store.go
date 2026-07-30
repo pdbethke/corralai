@@ -98,6 +98,15 @@ type File struct {
 	// "measured, but the pool did not finish" apart from a clean audited
 	// row without re-deriving it from KillRate alone.
 	TimedOut bool
+	// TestWriterFailed mirrors advpool.Verdict.TestWriterFailed /
+	// reposcan.WeakFile.TestWriterFailed: true for an AUDITED row whose pool
+	// exhausted its compile-retry budget without authoring a compiling
+	// killing test for at least one survivor. HONESTY NOTE: a row with
+	// Survivors > 0 and this true is NOT a clean suite — no killing test was
+	// PROVEN, not "no gaps were found". A later query over this ledger must
+	// be able to tell that apart from an ordinary audited row without
+	// re-deriving it, the same way TimedOut already lets it.
+	TestWriterFailed bool
 }
 
 // scanFilesMigrationCols is the additive set of columns this package has
@@ -115,6 +124,7 @@ var scanFilesMigrationCols = []struct{ name, ddl string }{
 	{"evidence", "evidence VARCHAR"},
 	{"detail", "detail VARCHAR"},
 	{"timed_out", "timed_out BOOLEAN"},
+	{"test_writer_failed", "test_writer_failed BOOLEAN"},
 }
 
 // Open opens (creating if absent) the scans/scan_files store at dsn.
@@ -165,7 +175,8 @@ func Open(dsn string) (*Store, error) {
 		preflight_state VARCHAR CHECK (preflight_state IN ('', 'executed', 'not-executed')),
 		evidence VARCHAR CHECK (evidence IN ('', 'paired', 'coverage', 'proven')),
 		detail VARCHAR,
-		timed_out BOOLEAN
+		timed_out BOOLEAN,
+		test_writer_failed BOOLEAN
 	)`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("scanstore: create scan_files table: %w", err)
@@ -288,10 +299,10 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 		// rejected files.
 		if _, err := tx.ExecContext(ctx, `INSERT INTO scan_files (
 			scan_id, path, lang, disposition, reason,
-			kill_rate, survivors, gradable, preflight_state, evidence, detail, timed_out
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			kill_rate, survivors, gradable, preflight_state, evidence, detail, timed_out, test_writer_failed
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id, f.Path, f.Lang, f.Disposition, f.Reason,
-			sanitizeKillRate(f.KillRate), f.Survivors, f.Gradable, f.PreflightState, f.Evidence, f.Detail, f.TimedOut,
+			sanitizeKillRate(f.KillRate), f.Survivors, f.Gradable, f.PreflightState, f.Evidence, f.Detail, f.TimedOut, f.TestWriterFailed,
 		); err != nil {
 			return 0, fmt.Errorf("scanstore: insert scan_files row for %q: %w", f.Path, err)
 		}
@@ -315,7 +326,7 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 // read back via `SELECT rowid, ...` in insertion order (0, 1, 2).
 func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT path, lang, disposition, reason,
-		kill_rate, survivors, gradable, preflight_state, evidence, detail, timed_out
+		kill_rate, survivors, gradable, preflight_state, evidence, detail, timed_out, test_writer_failed
 		FROM scan_files WHERE scan_id = ? ORDER BY rowid`, scanID)
 	if err != nil {
 		return nil, fmt.Errorf("scanstore: files for scan %d: %w", scanID, err)
@@ -326,13 +337,14 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 	for rows.Next() {
 		var f File
 		var detail sql.NullString
-		var timedOut sql.NullBool
+		var timedOut, testWriterFailed sql.NullBool
 		if err := rows.Scan(&f.Path, &f.Lang, &f.Disposition, &f.Reason,
-			&f.KillRate, &f.Survivors, &f.Gradable, &f.PreflightState, &f.Evidence, &detail, &timedOut); err != nil {
+			&f.KillRate, &f.Survivors, &f.Gradable, &f.PreflightState, &f.Evidence, &detail, &timedOut, &testWriterFailed); err != nil {
 			return nil, fmt.Errorf("scanstore: scan scan_files row: %w", err)
 		}
 		f.Detail = detail.String
 		f.TimedOut = timedOut.Bool
+		f.TestWriterFailed = testWriterFailed.Bool
 		out = append(out, f)
 	}
 	return out, rows.Err()

@@ -1269,6 +1269,15 @@ func printRepoReport(w io.Writer, r reposcan.RepoReport, nothingInScope bool, mi
 			fmt.Fprintln(w, "  DID NOT FINISH: every audited file timed out before the pool converged — this scan did not actually gate anything")
 		}
 	}
+	// Same honesty rule as TimedOut, for a different failure mode: these
+	// files DID converge, but the pool found survivor(s) it could not author
+	// a compiling test to prove — proven_missed reads 0 for them not because
+	// the suite is clean, but because no killing test was ever authored.
+	// Printed unconditionally alongside TimedOut (not folded into it, and not
+	// mutually exclusive with it): a file can hit either independently.
+	if r.TestWriterFailed > 0 {
+		fmt.Fprintf(w, "  %d of the audited file(s) had survivor(s) the pool could not author a compiling test to kill — proven_missed reads 0 for them, NOT a clean suite (marked [WRITER FAILED] below)\n", r.TestWriterFailed)
+	}
 	// Sorted, like printExclusions: map iteration order is random, and a
 	// report a later slice signs and anchors has to be byte-reproducible.
 	ungradableReasons := make([]string, 0, len(r.Ungradable))
@@ -1296,8 +1305,11 @@ func printRepoReport(w io.Writer, r reposcan.RepoReport, nothingInScope bool, mi
 				break
 			}
 			marker := ""
-			if f.TimedOut {
+			switch {
+			case f.TimedOut:
 				marker = "  [TIMED OUT — pool did not converge]"
+			case f.TestWriterFailed:
+				marker = "  [WRITER FAILED — survivor(s) not proven-killed]"
 			}
 			fmt.Fprintf(w, "    %.2f  %s (%d survivor(s))%s\n", f.KillRate, f.Path, f.Survivors, marker)
 		}

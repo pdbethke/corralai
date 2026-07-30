@@ -91,6 +91,18 @@ Given a GOAL, the compliant code, and its signature surface, produce mutants: va
 The output format (a SEARCH/REPLACE edit per mutant) is specified with the task.`
 }
 
+// ImportPath is always ok=false: `require_relative 'pricing'` resolves
+// relative to the FILE ISSUING THE REQUIRE — i.e. the authored test's own
+// directory — and roles.go always places that test in the SAME directory
+// as the code under test, so the base-name require already works no matter
+// how deep the source sits in the tree. Nothing here to correct (see
+// lang.Plugin.ImportPath's doc comment for the general rule this follows).
+func (rubyPlugin) ImportPath(string, func(string) bool) (string, bool) { return "", false }
+
+// ImportNote is always "": see ImportPath — Ruby's require_relative needs
+// no per-task correction.
+func (rubyPlugin) ImportNote(string, bool) string { return "" }
+
 func (rubyPlugin) SingleTestCmd(testPath, selector string) ([]string, bool) { return nil, false }
 
 func (rubyPlugin) ListTestsCmd(string) ([]string, bool) { return nil, false }

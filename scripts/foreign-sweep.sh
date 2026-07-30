@@ -36,6 +36,27 @@ REPO_ROOT="$(pwd)"
 
 GOLDEN="$REPO_ROOT/testdata/foreign-sweep-expected.tsv"
 
+# This sweep's diagnostics (below) key on `grep -P` (PCRE), a GNU extension:
+# BSD/macOS grep and busybox grep silently treat -P as unsupported and every
+# capture comes back empty, so the parse-failure branch fires against
+# perfectly good `certify --repo` output and reports corral itself as
+# broken. Fail with an honest, specific message instead of that red herring.
+if ! printf 'x' | grep -oP 'x' >/dev/null 2>&1; then
+  echo "foreign-sweep: this script requires GNU grep (grep -P support) to parse dry-run output; the grep on PATH does not support -P. On macOS: brew install grep and put gnubin first on PATH." >&2
+  exit 1
+fi
+
+# Fail fast on a missing golden file (see the full explanation further down,
+# by the write) BEFORE paying for a build and 7 clones — a missing file that
+# is going to be a hard failure either way shouldn't cost network+CPU to
+# discover.
+if [ ! -f "$GOLDEN" ] && [ "${FOREIGN_SWEEP_BOOTSTRAP:-}" != "1" ]; then
+  echo "foreign-sweep: no golden file at $GOLDEN — refusing to pass silently." >&2
+  echo "foreign-sweep: if this is a deliberate regeneration, run: FOREIGN_SWEEP_BOOTSTRAP=1 bash scripts/foreign-sweep.sh" >&2
+  echo "foreign-sweep: if the file was deleted/lost by accident, restore it from git history instead." >&2
+  exit 1
+fi
+
 # repo | pinned commit SHA | why it is in the set
 #
 #   pallets/flask     src/ layout + a parallel tests/ tree
@@ -83,8 +104,22 @@ for entry in "${REPOS[@]}"; do
   echo "cloning $repo @ $sha..." >&2
   git init -q "$dir"
   git -C "$dir" remote add origin "https://github.com/$repo.git"
-  if ! git -C "$dir" fetch -q --depth 1 origin "$sha"; then
-    echo "foreign-sweep: failed to fetch $repo @ $sha" >&2
+
+  # Seven network round-trips run on every PR; a single transient GitHub
+  # blip must not red a PR that has nothing wrong with it (the same
+  # flaky-gate-gets-disabled argument this script's own header makes about
+  # pinning SHAs applies here too). Three attempts, short backoff.
+  fetched=0
+  for attempt in 1 2 3; do
+    if git -C "$dir" fetch -q --depth 1 origin "$sha"; then
+      fetched=1
+      break
+    fi
+    echo "foreign-sweep: fetch attempt $attempt/3 failed for $repo @ $sha" >&2
+    [ "$attempt" -lt 3 ] && sleep $((attempt * 2))
+  done
+  if [ "$fetched" -ne 1 ]; then
+    echo "foreign-sweep: failed to fetch $repo @ $sha after 3 attempts" >&2
     exit 1
   fi
   git -C "$dir" checkout -q FETCH_HEAD
@@ -113,7 +148,13 @@ done
 sort -o "$OUT" "$OUT"
 
 if [ ! -f "$GOLDEN" ]; then
-  echo "foreign-sweep: no golden file at $GOLDEN yet — writing the first one from this run" >&2
+  # Reachable only via the explicit FOREIGN_SWEEP_BOOTSTRAP=1 opt-in checked
+  # near the top of this script — a missing golden file otherwise fails
+  # fast, before the build/clone cost, rather than silently writing a fresh
+  # one and passing. A missing-by-default bootstrap would make an accidental
+  # deletion (a bad rebase, a careless PR) look like a healthy green gate
+  # forever; this path exists only for a deliberate regeneration.
+  echo "foreign-sweep: FOREIGN_SWEEP_BOOTSTRAP=1 — writing a fresh golden file at $GOLDEN from this run" >&2
   sort -o "$GOLDEN" "$OUT"
   cat "$GOLDEN"
   exit 0

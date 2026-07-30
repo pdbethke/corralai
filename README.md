@@ -254,9 +254,15 @@ the golden file and commit the diff:
 
 ```
 rm testdata/foreign-sweep-expected.tsv
-bash scripts/foreign-sweep.sh   # writes a fresh golden file since none exists
+FOREIGN_SWEEP_BOOTSTRAP=1 bash scripts/foreign-sweep.sh   # writes a fresh golden file
 git diff testdata/foreign-sweep-expected.tsv
 ```
+
+A missing golden file is refused (exit 1), not silently bootstrapped: if
+it's ever lost to a bad rebase or a careless PR, the gate must fail loudly
+rather than quietly regenerate itself against whatever the tree happens to
+produce and stay green forever. `FOREIGN_SWEEP_BOOTSTRAP=1` is the explicit
+opt-in that says "yes, I mean to write a new golden file right now."
 
 **Moving these numbers is a deliberate act, not something to do reflexively
 to make the gate pass.** The diff is the whole point — review it like a
@@ -266,6 +272,15 @@ than no gate at all. `expressjs/express` is pinned to pair **zero** test
 candidates on purpose: that's a known JS/TS test-pairing limitation, not a
 bug, and if a future change makes that number nonzero, look hard at *why*
 before accepting the new golden file.
+
+That `express` pin is a **one-directional** canary: it catches JS/TS test
+pairing going from zero candidates to nonzero, but would not notice the
+JS/TS plugin being removed or `express` being dropped from language
+detection entirely — a "still zero" diff looks identical to both "still
+broken as expected" and "the whole plugin silently disappeared." `gin-gonic/gin`
+is the positive canary that covers that direction (a live, working plugin
+whose count must never go to zero). The asymmetry is inherent to pinning a
+zero and doesn't prove more than it does.
 
 ## A knowledge corpus that makes every audit sharper
 

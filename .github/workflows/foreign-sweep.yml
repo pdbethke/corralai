@@ -28,6 +28,11 @@ on:
 jobs:
   sweep:
     runs-on: ubuntu-latest
+    # The script's own header budgets this at ~10s wall clock locally plus
+    # network for 7 clones; without an explicit cap a hung clone or a wedged
+    # runner falls back to GitHub's 6-hour default, which is not a "stays
+    # under five minutes" budget in any sense a reviewer would recognize.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:

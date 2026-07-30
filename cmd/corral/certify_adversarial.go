@@ -60,6 +60,15 @@ type advVerdict struct {
 	// from BaselineFailed — the suite is fine, the check command is not
 	// pointed at this file.
 	SuiteIgnoresFile bool `json:"SuiteIgnoresFile"`
+	// TimedOut mirrors advpool.Verdict.TimedOut: true when this verdict was
+	// banked from a run that hit its wall-clock deadline before the pool
+	// converged (cmd/corral/certify_local_drive.go's bankableTimeoutVerdict)
+	// rather than a clean run. DevKillRate/Survivors/MutantsTotal are real —
+	// the dev suite WAS measured — but ProvenMissed and VacuousFindings are
+	// NOT: the test-writer and test-critic never ran, so a printed
+	// "proven_missed: 0" / "no vacuous tests flagged" would read as a clean
+	// result they are not. See renderAdvVerdict for the readout this drives.
+	TimedOut bool `json:"TimedOut"`
 }
 
 // advStatus mirrors brain.AdvPoolStatusOut (get_adversarial_run's output).
@@ -342,7 +351,18 @@ func renderAdvVerdict(w io.Writer, codePath string, v advVerdict) {
 	fmt.Fprintf(w, "  status:        %-12s (dev suite killed %d/%d mutants)\n", status, killed, v.MutantsTotal)
 	fmt.Fprintf(w, "  dev_kill_rate: %.2f\n", v.DevKillRate)
 	fmt.Fprintf(w, "  survivors:     %d\n", v.Survivors)
-	fmt.Fprintf(w, "  proven_missed: %d\n", v.ProvenMissed)
+	if v.TimedOut {
+		// A claim carries how it was earned: dev_kill_rate/survivors above
+		// ARE real measurements (the run wouldn't be here, gradable, if they
+		// weren't — see Verdict.DevScored), but the pool's remaining
+		// "make the tests stronger" half — test-writer, test-critic — never
+		// ran. Printing "proven_missed: 0" or "no vacuous tests flagged"
+		// here would read as a clean, converged result, which this is not.
+		fmt.Fprintln(w, "  TIMED OUT:     the pool did not converge before its deadline — the test-writer/critic never ran")
+		fmt.Fprintln(w, "  proven_missed: (not run — pool did not converge)")
+	} else {
+		fmt.Fprintf(w, "  proven_missed: %d\n", v.ProvenMissed)
+	}
 	if v.TestWriterFailed && v.Survivors > 0 {
 		// Honesty: proven_missed=0 here does NOT mean the suite is clean — it
 		// means the pool could not author a compiling test to PROVE the gap.
@@ -352,7 +372,9 @@ func renderAdvVerdict(w io.Writer, codePath string, v advVerdict) {
 		fmt.Fprintf(w, "  PARTIAL AUDIT: %d of %d regions probed — these went unprobed: %s\n",
 			v.RegionsProbed, v.RegionsTotal, strings.Join(v.DroppedRegions, "; "))
 	}
-	if len(v.VacuousFindings) == 0 {
+	if v.TimedOut {
+		fmt.Fprintln(w, "  critic review: not run — pool did not converge before the critic executed")
+	} else if len(v.VacuousFindings) == 0 {
 		fmt.Fprintln(w, "  critic review: no vacuous tests flagged")
 	} else {
 		// The critic's flags are a SECOND MODEL'S UNVERIFIED opinion — not part

@@ -202,6 +202,17 @@ dropped — marked `[TIMED OUT — pool did not converge]` in the weakest-files
 list (and `timed_out` in `--record`'s ledger row) so it never reads as a
 clean convergence. Raise it for a large file that needs more room; not yet
 wired into the GitHub Action as an input — today it's a CLI flag only.
+**A scan whose only audited files are all `[TIMED OUT]` still exits non-zero**
+even without `--min-kill-rate`: the dev-adequacy measurement is real, but
+corral's own adversarial verification (test-writer, critic) never ran to
+completion for anything the scan touched, so there is nothing for a merge
+gate to certify — the report says `DID NOT FINISH` in that case. A scan
+where only SOME files timed out and the rest converged keeps today's
+exit-code logic. **`certify --local`'s own exit code for a banked,
+measured timeout changes from `1` to `3`** (both non-zero, so a CI gate
+still fails either way) — `3` is the same code an ordinary converged
+`needs-review` verdict already uses, since a banked timeout now prints a
+real (marked) verdict instead of a bare internal-failure error.
 
 **The scan ledger (`--record`, CLI only).** `certify --repo --record` keeps
 what every scan already computes and normally just prints: a row per file

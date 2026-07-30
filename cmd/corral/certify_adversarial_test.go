@@ -506,3 +506,43 @@ func TestAdvVerdictFromPoolCarriesSuiteIgnoresFile(t *testing.T) {
 		t.Error("advVerdictFromPool dropped SuiteIgnoresFile")
 	}
 }
+
+// TestAdvVerdictFromPoolCarriesTimedOut proves TimedOut survives the
+// pool→wire conversion — without it certify --local's own verdict block
+// (unlike --repo's report, which already marks it) would silently read
+// like a clean converged run.
+func TestAdvVerdictFromPoolCarriesTimedOut(t *testing.T) {
+	got := advVerdictFromPool(advpool.Verdict{TimedOut: true, DevScored: true})
+	if !got.TimedOut {
+		t.Error("advVerdictFromPool dropped TimedOut")
+	}
+}
+
+// TestRenderAdvVerdictTimedOutDoesNotClaimTheTestWriterOrCriticRan is the
+// review-caught false-reassurance bug: a banked timeout verdict (real
+// dev_kill_rate/survivors, but the test-writer/critic never ran) used to
+// print "proven_missed: 0" and "no vacuous tests flagged" — both FALSE, and
+// indistinguishable from a converged below-threshold audit. It must instead
+// say plainly that the pool did not converge and that proven_missed/critic
+// review are not meaningful numbers.
+func TestRenderAdvVerdictTimedOutDoesNotClaimTheTestWriterOrCriticRan(t *testing.T) {
+	var b strings.Builder
+	renderAdvVerdict(&b, "src/flask/cli.py", advVerdict{
+		Lang: "python", Commit: "abc1234", MutantsTotal: 24,
+		DevKillRate: 0.46, Survivors: 13, Status: "needs-review",
+		TimedOut: true,
+	})
+	out := b.String()
+	if !strings.Contains(out, "dev_kill_rate: 0.46") {
+		t.Fatalf("the real measured kill rate must still print:\n%s", out)
+	}
+	if !strings.Contains(out, "TIMED OUT") {
+		t.Fatalf("a timed-out verdict must say so plainly:\n%s", out)
+	}
+	if strings.Contains(out, "proven_missed: 0") {
+		t.Fatalf("must not claim proven_missed: 0 — the test-writer never ran, that is not a real zero:\n%s", out)
+	}
+	if strings.Contains(out, "no vacuous tests flagged") {
+		t.Fatalf("must not claim the critic found nothing — the critic never ran:\n%s", out)
+	}
+}

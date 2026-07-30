@@ -1456,6 +1456,40 @@ func TestRepoScanExitCodeNothingAuditedIsNonZero(t *testing.T) {
 	}
 }
 
+// TestRepoScanExitCodeAllTimedOutIsNonZero is review item 3: a scan whose
+// only graded files are Verdict.TimedOut (banked by driveLocalRun's
+// bankableTimeoutVerdict) has Audited > 0 — the dev-adequacy measurement is
+// real — but corral's own adversarial verification (test-writer, critic)
+// never ran to completion for ANY of them. A merge gate going green here
+// would be the silent-no-gate class this scan already closes three other
+// ways, arriving by a fourth: exit code must stay non-zero.
+func TestRepoScanExitCodeAllTimedOutIsNonZero(t *testing.T) {
+	allTimedOut := reposcan.Aggregate("o", "r", "c", 1, 1, []reposcan.FileResult{
+		{Job: reposcan.Job{Path: "src/flask/cli.py"}, Gradable: true,
+			Verdict: advpool.Verdict{DevKillRate: 0.46, Survivors: 13, MutantsTotal: 24, TimedOut: true, DevScored: true}},
+	}, nil)
+	if got := repoScanExitCode(allTimedOut, false, nil); got == 0 {
+		t.Errorf("a scan whose every audited file timed out before the pool converged must exit non-zero, got %d", got)
+	}
+}
+
+// TestRepoScanExitCodePartialTimeoutStillExitsZero proves the rule is
+// scoped to "EVERY audited file timed out", not "any file timed out": a
+// scan where most files converged cleanly and passed must not be failed
+// just because one OTHER file's run happened to hit its deadline — that
+// would be its own over-broad false alarm, not the silent-no-gate bug #3
+// targets.
+func TestRepoScanExitCodePartialTimeoutStillExitsZero(t *testing.T) {
+	mixed := reposcan.Aggregate("o", "r", "c", 2, 2, []reposcan.FileResult{
+		{Job: reposcan.Job{Path: "clean.go"}, Gradable: true, Verdict: advpool.Verdict{DevKillRate: 0.9}},
+		{Job: reposcan.Job{Path: "cli.py"}, Gradable: true,
+			Verdict: advpool.Verdict{DevKillRate: 0.46, TimedOut: true, DevScored: true}},
+	}, nil)
+	if got := repoScanExitCode(mixed, false, nil); got != 0 {
+		t.Errorf("a scan where NOT every audited file timed out must keep today's exit-code logic, got %d", got)
+	}
+}
+
 // TestRepoScanExitCodeDistinguishesEmptyScopeFromNothingGradable is the
 // --diff-base half of the exit-code contract: with diff scoping, the most
 // common PR in existence (docs-only, or touching only files with no paired
@@ -2182,6 +2216,42 @@ func TestPrintRepoReportMarksTimedOutFiles(t *testing.T) {
 		if strings.Contains(line, "clean.go") && strings.Contains(line, "TIMED OUT") {
 			t.Errorf("clean.go's line wrongly carries the TIMED OUT marker: %q", line)
 		}
+	}
+}
+
+// TestPrintRepoReportSaysDidNotFinishWhenEveryFileTimedOut pins the report
+// side of review item 3: when repoScanExitCode fails the scan because every
+// audited file timed out, the printed report must say so in the same terms
+// — not just leave an operator to infer "exit 1" means "did not finish"
+// from a bare kill-rate line and a per-file marker.
+func TestPrintRepoReportSaysDidNotFinishWhenEveryFileTimedOut(t *testing.T) {
+	allTimedOut := reposcan.Aggregate("o", "r", "c", 1, 1, []reposcan.FileResult{
+		{Job: reposcan.Job{Path: "src/flask/cli.py"}, Gradable: true,
+			Verdict: advpool.Verdict{DevKillRate: 0.46, Survivors: 13, MutantsTotal: 24, TimedOut: true, DevScored: true}},
+	}, nil)
+	var buf bytes.Buffer
+	printRepoReport(&buf, allTimedOut, false, nil)
+	got := buf.String()
+	if !strings.Contains(got, "DID NOT FINISH") {
+		t.Errorf("report must say DID NOT FINISH when every audited file timed out:\n%s", got)
+	}
+
+	// The mirror: a PARTIAL timeout (some files converged) must not print
+	// the all-timed-out line, even though it does print the per-file
+	// caveat.
+	mixed := reposcan.Aggregate("o", "r", "c", 2, 2, []reposcan.FileResult{
+		{Job: reposcan.Job{Path: "clean.go"}, Gradable: true, Verdict: advpool.Verdict{DevKillRate: 0.9}},
+		{Job: reposcan.Job{Path: "cli.py"}, Gradable: true,
+			Verdict: advpool.Verdict{DevKillRate: 0.46, TimedOut: true, DevScored: true}},
+	}, nil)
+	buf.Reset()
+	printRepoReport(&buf, mixed, false, nil)
+	got = buf.String()
+	if strings.Contains(got, "DID NOT FINISH") {
+		t.Errorf("a partial timeout (some files converged) must not print DID NOT FINISH:\n%s", got)
+	}
+	if !strings.Contains(got, "1 of the audited file(s) scored under an UNCONVERGED run") {
+		t.Errorf("a partial timeout must still print the per-count caveat:\n%s", got)
 	}
 }
 

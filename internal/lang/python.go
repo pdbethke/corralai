@@ -3,14 +3,31 @@
 package lang
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 func init() { Register(pyPlugin{}) }
+
+// preflightProbeTimeout bounds the `<bin> -m pytest --version`/`<bin>
+// --version` probe Preflight runs to confirm pytest is importable. Without
+// it a blocking wrapper (previously: only pythonBin()'s own two hardcoded
+// names could appear here; now testCmd lets the operator name ANY binary —
+// a shim, a version-manager wrapper, anything that ends up on PATH under
+// the name they gave) hangs the whole audit before any of --timeout's own
+// budget even starts. A plain `--version` probe has no legitimate reason to
+// take more than a few seconds.
+//
+// A var, not a const: preflight_test.go temporarily lowers it to keep the
+// timeout-path test fast (a real 10s sleep-and-wait per test run would be a
+// slow, silently-accepted tax on every `go test` invocation of this
+// package) — no production caller ever mutates it.
+var preflightProbeTimeout = 10 * time.Second
 
 // pythonBin resolves the interpreter to invoke: python3 (canonical on the
 // Linux hosts corral grades on) when present, else bare python. The bwrap
@@ -134,6 +151,11 @@ func (pyPlugin) TestPaths(codePath string) []TestCandidate {
 // named module supports --version at all. Preflight still owes those a real
 // presence check on testCmd[0] itself — see Preflight below — just not this
 // additional probe.
+//
+// Callers pass testCmd through stripLeadingEnvAssignments first (see
+// Preflight): a leading `VAR=value` prefix (`PYTHONPATH=src pytest -q`)
+// would otherwise land in testCmd[0] and hide the pytest/interp shape from
+// both cases below.
 func pytestPreflightProbe(testCmd []string) (probe []string, ok bool) {
 	switch {
 	case len(testCmd) >= 1 && (testCmd[0] == "pytest" || testCmd[0] == "py.test"):
@@ -155,26 +177,41 @@ func pytestPreflightProbe(testCmd []string) (probe []string, ok bool) {
 //
 // With an explicit testCmd — the operator's own `-- <cmd>` — that command IS
 // the assertion of how the suite runs, stronger evidence than this plugin's
-// stock guess, and MUST be what gets checked: testCmd[0] must be present
-// (exec.LookPath handles both a bare name on PATH and an explicit path like
-// .venv/bin/python identically — see toolOnPath), and when the shape is a
-// recognized pytest invocation (pytestPreflightProbe), pytest's
-// importability is probed under THAT interpreter, not pythonBin()'s guess.
+// stock guess, and MUST be what gets checked: the command's actual program
+// token must be present (exec.LookPath handles both a bare name on PATH and
+// an explicit path like .venv/bin/python identically — see toolOnPath), and
+// when the shape is a recognized pytest invocation (pytestPreflightProbe),
+// pytest's importability is probed under THAT interpreter, not pythonBin()'s
+// guess.
+//
+// testCmd's program token is resolved via firstExecutableToken, not
+// testCmd[0] directly: a leading `VAR=value` environment-assignment prefix
+// (`-- PYTHONPATH=src pytest -q`, the same idiom pyCachePrefixEnv itself
+// uses) is a legitimate, common operator idiom, not the executable — and a
+// shell-compound command (`-- cd sub && pytest -q`) names no single
+// executable at all. Either shape falls back to pyPreflightStockDefault
+// rather than refusing outright on a false "not runnable" (env-assignment
+// tokens are never on PATH) or guessing wrong from a literal testCmd[0].
 func (pyPlugin) Preflight(testCmd []string) error {
 	if len(testCmd) == 0 {
 		return pyPreflightStockDefault()
 	}
-	bin := testCmd[0]
+	bin, ok := firstExecutableToken(testCmd)
+	if !ok {
+		return pyPreflightStockDefault()
+	}
 	if err := toolOnPath(bin); err != nil {
 		return fmt.Errorf("lang: python plugin preflight — the operator's test command names %q, which is not runnable: %w", bin, err)
 	}
-	probe, ok := pytestPreflightProbe(testCmd)
+	probe, ok := pytestPreflightProbe(stripLeadingEnvAssignments(testCmd))
 	if !ok {
 		// An unrecognized shape (tox, poetry run, a wrapper script, ...):
 		// testCmd[0]'s presence above is the only toolchain fact that can be
 		// checked without guessing what the command actually needs.
 		return nil
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), preflightProbeTimeout)
+	defer cancel()
 	// #nosec G204 -- probe[0] is testCmd[0], the operator's OWN named
 	// interpreter/binary from `-- <cmd>` (already presence-checked above via
 	// toolOnPath, which rejects anything exec.LookPath can't resolve); the
@@ -182,7 +219,28 @@ func (pyPlugin) Preflight(testCmd []string) error {
 	// this method constructs, never operator-controlled beyond that first
 	// token. This is the intentional replacement for the old "run the named
 	// tool with a fixed probe" pattern the pre-argv-aware version used too.
-	if out, err := exec.Command(probe[0], probe[1:]...).CombinedOutput(); err != nil {
+	// bin is now operator-named (not one of pythonBin()'s two hardcoded
+	// choices), so this runs under preflightProbeTimeout — a wrapper that
+	// blocks must not hang the whole audit before --timeout's own budget
+	// even starts.
+	probeCmd := exec.CommandContext(ctx, probe[0], probe[1:]...)
+	// WaitDelay bounds Wait()'s own extra grace period after ctx cancels
+	// the process — without it, CombinedOutput can hang WELL past
+	// preflightProbeTimeout: exec.CommandContext kills the direct child on
+	// timeout, but a script interpreter (`#!/bin/sh` wrapping `sleep 3600`)
+	// commonly forks a GRANDCHILD that inherits the stdout/stderr pipe and
+	// is never itself sent a signal, so CombinedOutput's read blocks on
+	// that pipe forever even though the direct child is long dead.
+	// WaitDelay forces the pipes closed (SIGKILL to the whole process, then
+	// abandons unread I/O) after this many timeouts. Confirmed against this
+	// exact Go toolchain: without it, a `sleep 3600` grandchild kept
+	// CombinedOutput blocked for 10+ real seconds despite a 200ms ctx.
+	probeCmd.WaitDelay = preflightProbeTimeout
+	if out, err := probeCmd.CombinedOutput(); err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf("lang: python plugin preflight — pytest importability probe via %q did not finish within %s: %v",
+				bin, preflightProbeTimeout, ctx.Err())
+		}
 		return fmt.Errorf("lang: python plugin preflight — pytest not importable via %q (%s): %v: %s",
 			bin, strings.Join(probe, " "), err, strings.TrimSpace(string(out)))
 	}
@@ -190,18 +248,29 @@ func (pyPlugin) Preflight(testCmd []string) error {
 }
 
 // pyPreflightStockDefault is Preflight's fallback when the caller has no
-// explicit test command: the exact behavior this plugin had before testCmd
-// existed, kept byte-identical (same interpreter resolution, same probe,
-// same error text) so every existing caller with no `-- <cmd>` (or none
-// applicable) sees no change at all.
+// explicit test command: the same behavior this plugin had before testCmd
+// existed (same interpreter resolution, same probe, same error text on a
+// genuine import failure) plus one addition — the probe now runs under
+// preflightProbeTimeout, so every existing caller with no `-- <cmd>` (or
+// none applicable) sees no change EXCEPT that a probe which used to be able
+// to hang forever now fails loud after a bounded wait instead.
 func pyPreflightStockDefault() error {
 	bin := pythonBin()
 	if err := toolOnPath(bin); err != nil {
 		return err
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), preflightProbeTimeout)
+	defer cancel()
 	// #nosec G204 -- bin is one of two hardcoded interpreter names ("python3" or
 	// "python") returned by pythonBin(); the args are constant. No external input.
-	if out, err := exec.Command(bin, "-m", "pytest", "--version").CombinedOutput(); err != nil {
+	// WaitDelay: see the identical comment in Preflight above — bounds the
+	// same grandchild-holds-the-pipe-open hang.
+	stockCmd := exec.CommandContext(ctx, bin, "-m", "pytest", "--version")
+	stockCmd.WaitDelay = preflightProbeTimeout
+	if out, err := stockCmd.CombinedOutput(); err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf("lang: python plugin preflight — pytest importability probe did not finish within %s: %v", preflightProbeTimeout, ctx.Err())
+		}
 		return fmt.Errorf("lang: python plugin preflight — pytest not importable (install it on the host): %v: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil

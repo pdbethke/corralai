@@ -1141,6 +1141,19 @@ func repoScanExitCode(r reposcan.RepoReport, nothingInScope bool, minKillRate *f
 	if r.Audited == 0 {
 		return 1
 	}
+	// A scan whose only graded files never actually finished the pool —
+	// every one hit its wall-clock deadline before the test-writer/critic
+	// ran (advpool.Verdict.TimedOut) — must not read as a passing gate.
+	// The dev-adequacy MEASUREMENT is real and stays in the report
+	// (Audited > 0, a real KillRate), but corral's own adversarial
+	// verification never ran to completion for ANY file this scan touched,
+	// so there is nothing here for a merge gate to certify. Exiting 0 here
+	// would be the silent-no-gate class this scan already closes three
+	// other ways, arriving by a fourth route: a measurement banked, but
+	// never gated, reading as "pass".
+	if r.Audited > 0 && r.TimedOut == r.Audited {
+		return 1
+	}
 	if minKillRate != nil {
 		for _, f := range r.Weakest {
 			if f.KillRate < *minKillRate {
@@ -1247,6 +1260,14 @@ func printRepoReport(w io.Writer, r reposcan.RepoReport, nothingInScope bool, mi
 	// all — but it must not read as an ordinary clean audit alongside it.
 	if r.TimedOut > 0 {
 		fmt.Fprintf(w, "  %d of the audited file(s) scored under an UNCONVERGED run — timed out before the pool finished (marked [TIMED OUT] below)\n", r.TimedOut)
+		// When EVERY audited file timed out, corral's own adversarial
+		// verification never ran to completion for anything this scan
+		// touched — see repoScanExitCode, which fails the scan for exactly
+		// this reason (a merge gate must not go green on "we measured the
+		// dev suite but never actually gated it").
+		if r.Audited > 0 && r.TimedOut == r.Audited && !nothingInScope {
+			fmt.Fprintln(w, "  DID NOT FINISH: every audited file timed out before the pool converged — this scan did not actually gate anything")
+		}
 	}
 	// Sorted, like printExclusions: map iteration order is random, and a
 	// report a later slice signs and anchors has to be byte-reproducible.

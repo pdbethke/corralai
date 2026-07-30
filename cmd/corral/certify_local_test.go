@@ -1262,6 +1262,118 @@ func TestBuildJailWiringUsesTheSharedSeedAndDoesNotOwnIt(t *testing.T) {
 	}
 }
 
+// The workspace substrate must skip the jail entirely: no seed, no vendoring,
+// no bind mounts — the checkout on disk IS the workspace. BaseFiles must come
+// back empty-but-non-nil so scoreWorkspace (internal/advpool/gate.go:143)
+// takes the repo-aware path and overlays only the mutant, never rebuilding
+// the single-file scaffold.
+func TestBuildJailWiringWorkspaceSubstrateSkipsTheJail(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.go"), []byte("package a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "a_test.go"), []byte("package a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	w, err := buildJailWiring(jailWiringInput{
+		substrate: substrateWorkspace,
+		repoDir:   root,
+		codePath:  "a.go",
+		testPath:  "a_test.go",
+		langName:  "go",
+		checkArgv: []string{"go", "test", "./..."},
+		code:      []byte("package a\n"),
+		devTest:   []byte("package a\n"),
+		fsPath:    func(q string) string { return filepath.Join(root, q) },
+		stdout:    io.Discard,
+	})
+	if err != nil {
+		t.Fatalf("buildJailWiring: %v", err)
+	}
+	// The whole point: no seeded workspace, because the tree is already there.
+	if len(w.scorer.BaseFiles) != 0 {
+		t.Errorf("BaseFiles has %d entries; workspace mode seeds nothing", len(w.scorer.BaseFiles))
+	}
+	if w.scorer.BaseFiles == nil {
+		t.Error("BaseFiles is nil, which would take the single-file scaffold branch")
+	}
+	if w.codeKey != "a.go" || w.devTestKey != "a_test.go" {
+		t.Errorf("keys = %q/%q, want repo-relative a.go/a_test.go", w.codeKey, w.devTestKey)
+	}
+}
+
+// --substrate=workspace with no --repo-dir is a usage error: the workspace
+// runner mutates a real checkout, so there must be a checkout to mutate.
+func TestBuildJailWiringWorkspaceSubstrateRequiresRepoDir(t *testing.T) {
+	_, err := buildJailWiring(jailWiringInput{
+		substrate: substrateWorkspace,
+		codePath:  "a.go",
+		testPath:  "a_test.go",
+		langName:  "go",
+		checkArgv: []string{"go", "test", "./..."},
+		code:      []byte("package a\n"),
+		devTest:   []byte("package a\n"),
+		fsPath:    func(q string) string { return q },
+		stdout:    io.Discard,
+	})
+	if err == nil {
+		t.Fatal("expected an error for --substrate workspace without --repo-dir")
+	}
+	// buildJailWiring's contract (see its doc comment) is that every error it
+	// returns is already a usage error from the caller's point of view;
+	// prepareAuditJail wraps it in auditUsageErr, so it is not itself a
+	// localAuditError here. Just confirm the message names the real problem.
+	if !strings.Contains(err.Error(), "--repo-dir") {
+		t.Errorf("error %q does not mention --repo-dir", err.Error())
+	}
+}
+
+// The jail path must be BIT-FOR-BIT unchanged when substrate is left at its
+// zero value ("") — this is the shipped `certify --local` behavior, and it
+// must not regress by accidentally routing through the workspace branch.
+func TestBuildJailWiringDefaultSubstrateStillBuildsTheJail(t *testing.T) {
+	repoDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(repoDir, "a.go"), []byte("package pkg\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "a_test.go"), []byte("package pkg\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A prebuilt seed, exactly like TestBuildJailWiringUsesTheSharedSeedAndDoesNotOwnIt,
+	// so this test exercises buildJailWiring's jail-selection branch without
+	// needing a real isolator (in.iso.Name() is only reached when seed is nil).
+	seed := repoSeed{
+		seedDir: repoDir,
+		files:   map[string]string{"a.go": "package pkg\n", "a_test.go": "package pkg\n"},
+		cleanup: func() {},
+	}
+
+	w, err := buildJailWiring(jailWiringInput{
+		// substrate deliberately left unset ("").
+		iso: nil, timeout: time.Minute,
+		codePath: "a.go", testPath: "a_test.go", repoDir: repoDir, langName: "go",
+		fsPath:    func(q string) string { return filepath.Join(repoDir, q) },
+		code:      []byte("package pkg\n"),
+		devTest:   []byte("package pkg\n"),
+		checkArgv: []string{"go", "test", "./..."},
+		stdout:    io.Discard,
+		seed:      &seed,
+	})
+	if err != nil {
+		t.Fatalf("buildJailWiring: %v", err)
+	}
+	// The jail's repo-aware path seeds the workspace from the tree walk (via
+	// buildRepoSeed), so BaseFiles must contain at least the two files just
+	// written — a workspace-substrate BaseFiles would be empty instead.
+	if got := w.scorer.BaseFiles["a.go"]; got != "package pkg\n" {
+		t.Errorf("BaseFiles[a.go] = %q, want the seeded jail workspace to carry it", got)
+	}
+	if len(w.scorer.BaseFiles) == 0 {
+		t.Fatal("BaseFiles is empty; the jail path must seed the workspace, not skip it")
+	}
+}
+
 // prepareAuditJail must FORWARD the handed-in shared seed into buildJailWiring.
 // Without this, deleting `seed: in.seed` from that call passes the whole suite
 // while every scan job silently rebuilds its own seed — the regression this

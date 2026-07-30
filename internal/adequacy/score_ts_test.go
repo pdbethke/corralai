@@ -45,7 +45,7 @@ func TestScoreTSKillsAndSurvives(t *testing.T) {
 	mutants := []adequacy.Mutant{
 		{ID: "m1", Code: "export function isEven(n: number): boolean { return true; }\n"},
 	}
-	tp := ts.TestPath(codePath) // evenmod.test.ts
+	tp := ts.TestPaths(codePath)[0].Path // evenmod.test.ts
 
 	// Workspace map: the tsconfig from Scaffold() plus the test file — the TS
 	// run needs the scaffold's tsconfig present alongside the test.

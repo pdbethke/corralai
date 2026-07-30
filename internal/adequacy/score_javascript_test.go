@@ -45,7 +45,7 @@ func TestScoreJSKillsAndSurvives(t *testing.T) {
 	mutants := []adequacy.Mutant{
 		{ID: "m1", Code: "module.exports = { isEven: () => true };\n"},
 	}
-	tp := js.TestPath(codePath) // evenmod.test.js
+	tp := js.TestPaths(codePath)[0].Path // evenmod.test.js
 
 	// Thorough suite: checks both the true and false branches, so it kills
 	// the always-true mutant.

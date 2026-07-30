@@ -161,3 +161,58 @@ func TestAggregateBooksUngoaledFromExclusionsNotSubtraction(t *testing.T) {
 		t.Errorf("a pre-job exclusion was booked as ungradable: %+v", rep.Ungradable)
 	}
 }
+
+// --- final-review fix wave (I2) --------------------------------------------
+
+// TestAggregateFoldsDeriveFailedIntoUngradable: a scan where 24 of 25 files hit
+// rate limits used to print "kill rate 0.95 over 1 audited file(s)" with NO
+// ungradable line at all — a broken run reading as a healthy repo.
+func TestAggregateFoldsDeriveFailedIntoUngradable(t *testing.T) {
+	excl := make([]Exclusion, 0, 24)
+	for i := 0; i < 24; i++ {
+		excl = append(excl, Exclusion{Path: "f.go", Reason: ReasonDeriveFailed})
+	}
+	rep := Aggregate("o", "r", "c", 50, 25, []FileResult{
+		{Job: Job{Path: "a.go"}, Gradable: true, Verdict: advpool.Verdict{DevKillRate: 0.95}},
+	}, excl)
+	if rep.Ungradable[ReasonDeriveFailed] != 24 {
+		t.Errorf("ungradable[%s] = %d, want 24 — a broken run must not read as a healthy repo",
+			ReasonDeriveFailed, rep.Ungradable[ReasonDeriveFailed])
+	}
+}
+
+// source-too-large is the same kind of fact: a candidate that produced no
+// score. It keeps its OWN reason (it is a property of the file, not an outage).
+func TestAggregateFoldsSourceTooLargeIntoUngradable(t *testing.T) {
+	rep := Aggregate("o", "r", "c", 4, 2, []FileResult{
+		{Job: Job{Path: "a.go"}, Gradable: true, Verdict: advpool.Verdict{DevKillRate: 1}},
+	}, []Exclusion{{Path: "gen.go", Reason: ReasonSourceTooLarge}})
+	if rep.Ungradable[ReasonSourceTooLarge] != 1 {
+		t.Errorf("ungradable[%s] = %d, want 1", ReasonSourceTooLarge, rep.Ungradable[ReasonSourceTooLarge])
+	}
+	if rep.Ungradable[ReasonDeriveFailed] != 0 {
+		t.Errorf("an oversized file must not be counted as an outage: %v", rep.Ungradable)
+	}
+}
+
+// ...but a DELIBERATE bound is not a failure to grade. Folding not-selected
+// would report "189 ungradable" for a scan that did exactly what was asked.
+func TestAggregateDoesNotFoldNotSelectedIntoUngradable(t *testing.T) {
+	excl := make([]Exclusion, 0, 189)
+	for i := 0; i < 189; i++ {
+		excl = append(excl, Exclusion{Path: "f.go", Reason: ReasonNotSelected})
+	}
+	rep := Aggregate("o", "r", "c", 400, 214, []FileResult{
+		{Job: Job{Path: "a.go"}, Gradable: true, Verdict: advpool.Verdict{DevKillRate: 0.5}},
+	}, excl)
+	if n, ok := rep.Ungradable[ReasonNotSelected]; ok || n != 0 {
+		t.Errorf("not-selected must not appear as ungradable, got %d", n)
+	}
+	// It IS still accounted, in Excluded and in the AuditedFraction denominator.
+	if len(rep.Excluded) != 189 {
+		t.Errorf("not-selected must still be fully accounted: %d", len(rep.Excluded))
+	}
+	if got := rep.AuditedFraction(); got != 1.0/214.0 {
+		t.Errorf("AuditedFraction = %v, want 1/214 — the denominator is ALL candidates", got)
+	}
+}

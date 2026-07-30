@@ -124,6 +124,105 @@ Go binary.**
   always stored unvetted; only a human admin's `promote_control` vets it into the store
   the gate runs. It maps corral onto the recognized GRC **owner → operator → assessor**
   separation of duties: *a judge may not certify herself.*
+- **The GitHub Action — a second substrate, no brain required.** `certify --repo`
+  gained `--substrate {jail|workspace}`: `workspace` (`adequacy.WorkspaceRunner`)
+  mutates the CI runner's own checkout in place and grades each mutant with the
+  project's own test command — no bwrap jail, no tree copy, no `go mod vendor` seed;
+  the runner is the isolation boundary. `--diff-base <ref>` scopes a scan to the
+  files a PR actually touched (a three-dot range against the merge base), so a normal
+  PR audits the handful of files it changed rather than the whole repo — an
+  auditor's-own-time cost the *unbounded* case is deliberately not: roughly 84 suite
+  runs per audited file. `action.yml` wraps this as `pdbethke/corralai@main` (no version tag is cut for it
+  yet — pin a commit SHA if you want immutability); it installs `corral` itself via
+  `go install`, using whatever Go toolchain the runner already has (never
+  `actions/setup-go`, which would swap out the toolchain the audited project's own
+  tests run under). Check out with `fetch-depth: 0` (required — the diff needs the merge
+  base), and one step audits the PR's diff in the runner that's already there.
+  **`--min-kill-rate` (opt-in, `min-kill-rate` on the Action) gives the gate teeth**:
+  unset, a file that grades at 0.00 still exits 0 (today's behaviour, unchanged); set,
+  ANY audited file scoring below it fails the scan (exit 1) — checked per file against
+  `reposcan.RepoReport.Weakest`, never the aggregate, so one well-tested file can't mask
+  a weak one. Docs:
+  `docs/corral/github-action.md`.
+- **Coverage pre-flight (`--preflight`, `certify --repo`, Go and Python) — opt-in,
+  CLI only.** Test-pairing finds *some* untested files by guessing paired test names;
+  it finds nothing in a repo where that guess never lands (most JS/TS projects). The
+  pre-flight answers a narrower, cheaper question instead: run the suite **once**,
+  instrumented for coverage, and report which files it never executes at all — an
+  inventory, not an audit, and honest about the difference. Three buckets: **executed**
+  (not a finding), **measured and never executed** (the real finding, named), **never
+  measured** (a count only — coverage-scope and zero-statement files alike, never
+  named, never an accusation). Fails closed and says so — wrong language, an
+  irreducibly ambiguous multi-language scan, or the coverage tool itself missing from
+  the runner — and names zero files on any of those paths. A multi-language scan is
+  no longer an automatic refusal: with an explicit `-- <cmd>` that unambiguously names
+  one candidate language (Python + TypeScript with `-- pytest -q` — TypeScript has no
+  plugin, so Python is the only candidate, not merely the likeliest), the pre-flight
+  now runs instead of declining.
+  Proven on a foreign-repo sweep (`pallets/flask`, `psf/requests`, `andrewyng/aisuite`,
+  `gin-gonic/gin`, plus corral's own tree as the large-Go-module case): the design's
+  O(1)-in-file-count claim held (one suite invocation per repo, independent of file
+  count) but wall clock still tracks the *suite's own* runtime (flask ≈3s, requests
+  ≈80s, both instrumented once). **A four-finding review round followed the first
+  sweep and every one was closed before this shipped, not documented around:** (1) a
+  real false accusation in the Go path — a package with no tests of its own always
+  looked unexecuted, even when its code ran constantly via another package's tests —
+  fixed with `-coverpkg=./...`; (2) that fix's own cost — the raw profile scales
+  ~quadratically with package count (measured up to 253 MB on grpc-go, 53 MB on
+  corral's own tree) — closed by reducing the profile to one line per file inside the
+  same shell invocation before it ever reaches Go, verified byte-for-byte equivalent
+  to the unreduced tri-state answer; (3) the workspace substrate (what the GitHub
+  Action uses) had no output cap at all until this round — a 253 MB profile read
+  fully into memory, 827 MB peak RSS — now bounded the same way the jail substrate
+  always was; (4) a disclosed, not fixed, limitation — Go's `-coverpkg` makes
+  `init()`/var-initializer code at import time count as "executed" even with zero
+  tests run (measured: a test selector matching nothing still clears 3 of gin's files
+  and 135 of grpc-go's), which the docs now say plainly rather than implying "executed"
+  always means "tested" — and Python's version of that is **wider**, since every
+  module-scope `def`/`class` is a counted statement, so importing a module clears it
+  outright. Ruby/JS/TS have no plugin yet. Not wired into the GitHub
+  Action as an input — CLI flag only for now.
+
+  A **final whole-branch review** then hunted a fifth false accusation across 15
+  foreign repos and 3 synthetic ones, read every named file and grepped every suite,
+  and found **none** — but did find that the pre-flight **derived its language set
+  from the test-pairing candidate set**, so it declined outright on exactly the repos
+  it exists for (`jsonschema`, `filelock`, `itsdangerous`, `markupsafe` — 0 candidates
+  each, 31/35/10/7 unpaired Python files apiece). It now derives that set from every
+  enumerated *source* file. The same round fixed an unbounded hang in
+  `WorkspaceRunner` (no process group, `Cancel`, or `WaitDelay`, so a suite leaving a
+  background worker holding stdout blocked `Wait` forever — reproduced at 20s against
+  a 2s timeout, and hit for real on `python-dotenv` at 400s against a 5-minute bound),
+  made the documented multi-language `--` path actually reachable, stopped Go
+  discarding a usable profile whenever any test failed, and stopped a quoted or
+  comment-suffixed `go.mod` module line from silently voiding the whole Go report.
+
+- **The scan ledger (`--record`, `certify --repo`) — opt-in, CLI only.**
+  `certify --repo` computes a complete disposition for every file it walks —
+  audited with a kill rate, or rejected with one of a dozen machine-stable
+  reasons — and used to print it and throw it away. `--record` keeps it: one
+  header row per invocation and one row per file, in an embedded DuckDB
+  ledger (`--record-db`, default `~/.claude/corralai_scans.duckdb` or
+  `$CORRALAI_SCANS_DB`), so "why did file X get skipped on scan N" has an
+  answer later. Fail-open, deliberately — this command's exit code is a CI
+  merge gate, so a ledger write (a full disk, a locked file under a
+  concurrent writer) can never flip the scan's own verdict; it prints loudly
+  on stderr and the exit code stands, checked directly against a
+  `COULD-NOT-GRADE` fixture so a hard-coded 0 in the record path can't
+  masquerade as "preserved". `evidence` is first-class, not a detail:
+  `paired` (filename pairing), `coverage` (the `--preflight` overlay),
+  `proven` (real execution) — and it is NOT stamped on a file the check
+  command never actually ran against (`prep-failed`, `cancelled`), which a
+  review round caught as an early overclaim. A second review round closed a
+  silent-no-gate this flag's own naming invites: `--record` here is a BOOL,
+  while the sibling `certify --local --record <file>.json` takes a tape
+  PATH — an operator typing the pattern they already know
+  (`--record tape.json --min-kill-rate 0.5`) used to spill "tape.json" into
+  an unconsumed positional, silently stop flag parsing, and drop
+  `--min-kill-rate` — the merge-gate threshold — with no error at all; both
+  that door and the sibling one (a `certify --repo`-only flag placed after
+  `--`, handed to the check command instead of being parsed) are now hard
+  usage errors (exit 2) naming the offending token.
 
 **The substrate.**
 - **Multi-model, multi-forge; the `bwrap` + container jail; the attributed action

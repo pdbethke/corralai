@@ -88,17 +88,15 @@ func Run(ctx context.Context, command string, opts Options) Result {
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...) // #nosec G204 -- corral re-execs its own binary / bwrap by design; argv is constructed by the sandbox layer from server-controlled config, not raw agent input; agent command execution is separately sandboxed (bwrap)
 	cmd.Dir = opts.Workspace
 	cmd.Env = env
-	// Run in its own process group so a timeout kills the command AND its
-	// children (a bare process kill orphans them and holds the output pipe open).
-	// Process-group semantics are Unix-only — see proc_unix.go / proc_windows.go.
-	setProcGroup(cmd)
-	cmd.Cancel = func() error { return killProcGroup(cmd) }
-	cmd.WaitDelay = 2 * time.Second // backstop: force-close pipes if a child lingers
+	// Process group + Cancel + WaitDelay, so a timeout kills the command AND
+	// its children (a bare process kill orphans them and holds the output
+	// pipe open). Shared with adequacy.WorkspaceRunner via GuardProcess —
+	// see proc.go for why all three are load-bearing.
+	GuardProcess(cmd)
 
-	var buf capped
-	buf.max = opts.MaxOutput
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
+	buf := NewCappedWriter(opts.MaxOutput)
+	cmd.Stdout = buf
+	cmd.Stderr = buf
 
 	runErr := runCommand(cmd)
 	res := Result{Output: buf.String()}
@@ -139,17 +137,35 @@ func RunGuarded(ctx context.Context, command string, opts Options) (Result, erro
 	return res, nil
 }
 
-// capped is an io.Writer that stops storing past max bytes (so a runaway command
-// can't flood memory), noting the truncation.
-type capped struct {
+// CappedWriter is an io.Writer that stops storing past Max bytes (so a
+// runaway command can't flood memory), noting the truncation. Run and
+// RunInteractive use it internally to bound a Backend-wrapped command's
+// output; it is exported so a caller running a command directly via
+// os/exec — outside the isolation Backend entirely, e.g.
+// adequacy.WorkspaceRunner on the workspace substrate, which IS the
+// isolation boundary and so never goes through Run/Options.MaxOutput at
+// all — can bound its own buffering the identical way, with the identical
+// TruncationMarker a downstream caller already knows how to detect.
+type CappedWriter struct {
 	buf       bytes.Buffer
-	max       int
+	Max       int
 	truncated bool
 }
 
-func (c *capped) Write(p []byte) (int, error) {
-	if c.buf.Len() < c.max {
-		room := c.max - c.buf.Len()
+// NewCappedWriter returns a CappedWriter bounded to max bytes. max <= 0
+// falls back to 16 KiB — the same zero-value default Options.MaxOutput
+// documents — never "unbounded": a caller that wants a cap at all should
+// never silently get none because of an unset field.
+func NewCappedWriter(max int) *CappedWriter {
+	if max <= 0 {
+		max = 16 << 10
+	}
+	return &CappedWriter{Max: max}
+}
+
+func (c *CappedWriter) Write(p []byte) (int, error) {
+	if c.buf.Len() < c.Max {
+		room := c.Max - c.buf.Len()
 		if room >= len(p) {
 			c.buf.Write(p)
 		} else {
@@ -162,10 +178,18 @@ func (c *capped) Write(p []byte) (int, error) {
 	return len(p), nil // always "accept" so the process isn't blocked
 }
 
-func (c *capped) String() string {
+// TruncationMarker is appended to Result.Output whenever the combined
+// stdout+stderr exceeded Options.MaxOutput and was head-truncated. It is
+// exported so a caller that cares whether a run's output was cut off (rather
+// than merely reading the—now incomplete—text) can detect that structurally,
+// by substring search, instead of re-deriving the marker text itself and
+// risking it drifting out of sync with CappedWriter.String below.
+const TruncationMarker = "…[output truncated]"
+
+func (c *CappedWriter) String() string {
 	s := strings.TrimRight(c.buf.String(), "\n")
 	if c.truncated {
-		s += "\n…[output truncated]"
+		s += "\n" + TruncationMarker
 	}
 	return s
 }
@@ -202,12 +226,11 @@ func RunInteractive(ctx context.Context, command string, opts Options, ws io.Rea
 	cmd.Cancel = func() error { return killProcGroup(cmd) }
 	cmd.WaitDelay = 2 * time.Second
 
-	var buf capped
-	buf.max = opts.MaxOutput
+	buf := NewCappedWriter(opts.MaxOutput)
 
 	cmd.Stdin = ws
-	cmd.Stdout = io.MultiWriter(&buf, ws)
-	cmd.Stderr = io.MultiWriter(&buf, ws)
+	cmd.Stdout = io.MultiWriter(buf, ws)
+	cmd.Stderr = io.MultiWriter(buf, ws)
 
 	runErr := runCommand(cmd)
 	res := Result{Output: buf.String()}

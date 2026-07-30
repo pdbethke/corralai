@@ -5,6 +5,7 @@ package reposcan
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path"
 )
@@ -28,6 +29,12 @@ type Job struct {
 type EmitConfig struct {
 	Owner, Repo, Commit, Root            string
 	EngineVersion, ModelSet, AuditConfig string
+	// Substrate is where this scan's audits run — SubstrateJail or
+	// SubstrateWorkspace. Carried into every job's KeyInputs so a verdict
+	// earned under bwrap and one earned in a CI runner's own checkout never
+	// key identically: without it, a cached jail verdict would satisfy a
+	// seal claiming runner provenance.
+	Substrate string
 }
 
 // EmitJobs turns candidates into job envelopes, computing each one's cache
@@ -52,7 +59,19 @@ func EmitJobs(cfg EmitConfig, cands []Candidate, gs GoalSource) ([]Job, []Exclus
 	for _, c := range cands {
 		goal, ok, err := gs.GoalFor(c)
 		if err != nil {
-			return nil, nil, err
+			// A per-candidate goal failure is NOT fatal to the scan and is NOT
+			// ungoaled: the source of the goal failed, which says nothing about
+			// the file. Account it under its own reason and keep going, so one
+			// rate-limited file cannot cost the operator the other 24.
+			reason := ReasonDeriveFailed
+			// ...except when the failure is a property of the FILE. An oversized
+			// generated blob is not an outage, and filing it under derive-failed
+			// would tell an operator to go check their API key.
+			if errors.Is(err, ErrSourceTooLarge) {
+				reason = ReasonSourceTooLarge
+			}
+			excl = append(excl, Exclusion{Path: c.Path, Reason: reason})
+			continue
 		}
 		if !ok {
 			excl = append(excl, Exclusion{Path: c.Path, Reason: ReasonUngoaled})
@@ -80,6 +99,7 @@ func EmitJobs(cfg EmitConfig, cands []Candidate, gs GoalSource) ([]Job, []Exclus
 			EngineVersion:     cfg.EngineVersion,
 			ModelSet:          cfg.ModelSet,
 			AuditConfig:       cfg.AuditConfig,
+			Substrate:         cfg.Substrate,
 		}.CacheKey()
 
 		jobs = append(jobs, Job{

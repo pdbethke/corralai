@@ -4,7 +4,6 @@ package lang
 
 import (
 	"path/filepath"
-	"strings"
 )
 
 func init() { Register(rubyPlugin{}) }
@@ -39,16 +38,30 @@ func (rubyPlugin) CompileCheck(codePath, testPath string) []string {
 	return []string{"ruby", "-c", codePath, "&&", "ruby", "-c", testPath}
 }
 
-// TestPath is framework-neutral: pkg/foo.rb -> pkg/foo_test.rb (content, not the
-// name, selects minitest vs rspec at run time).
-func (rubyPlugin) TestPath(codePath string) string {
-	ext := filepath.Ext(codePath)
-	base := strings.TrimSuffix(codePath, ext)
-	dir := filepath.Dir(codePath)
-	if dir == "." {
-		return base + "_test.rb"
+// TestPaths covers Ruby's three common test-file conventions, framework-
+// neutral (content, not the name, selects minitest vs rspec at run time),
+// most specific first:
+//
+//  1. sibling foo_test.rb           — same directory as the source.
+//  2. test/<subpath>/foo_test.rb    — the classic lib/ vs test/ layout,
+//     where <subpath> is dir with its leading component (conventionally
+//     `lib`) replaced by `test` rather than nested under it.
+//  3. spec/<subpath>/foo_spec.rb    — the RSpec equivalent of (2).
+//
+// Unlike Python's list this does not also generate a full-directory-mirror
+// form: Ruby's lib/-vs-test/ (or lib/-vs-spec/) split is a single well-known
+// convention, not a family of layouts, so there is no comparably plausible
+// second parallel-tree shape to hedge against.
+func (rubyPlugin) TestPaths(codePath string) []TestCandidate {
+	dir, base, _ := splitPath(codePath)
+	sub := stripFirstSegment(dir)
+
+	out := []TestCandidate{
+		{Path: joinDir(dir, base+"_test.rb"), Rank: 0},
+		{Path: filepath.Join("test", sub, base+"_test.rb"), Rank: 1},
+		{Path: filepath.Join("spec", sub, base+"_spec.rb"), Rank: 1},
 	}
-	return filepath.Join(dir, filepath.Base(base)+"_test.rb")
+	return dedupeCandidates(out)
 }
 
 // Preflight requires only `ruby` (minitest is bundled). It deliberately does

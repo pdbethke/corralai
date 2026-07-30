@@ -309,3 +309,11 @@ func TestSignVerdictMarksShadowProducerNonGating(t *testing.T) {
 		t.Error("the PRIMARY mutant-generator was marked non-gating — it sets the exam")
 	}
 }
+
+// TestWorkspaceRunnerSatisfiesTheVerboseJailSeam: CompileTest feeds the
+// compiler's own output back to the test-writer on retry, but only for a Jail
+// that implements verboseJail; anything else degrades to a bare "does not
+// compile". adequacy.WorkspaceRunner is a Jail the product ships (the
+// --substrate workspace path), so it must be on the good side of that seam —
+// asserted at compile time, since the degradation is silent at runtime.
+var _ verboseJail = (*adequacy.WorkspaceRunner)(nil)

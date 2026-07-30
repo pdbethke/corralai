@@ -86,7 +86,7 @@ func TestScorePythonKillsAndSurvives(t *testing.T) {
 	// the inverted mutant.
 	thorough := importPrelude + "from evenmod import is_even\ndef test_even():\n    assert is_even(2)\n    assert not is_even(3)\n"
 	rep, err := adequacy.Score(context.Background(), jail,
-		map[string]string{py.TestPath(codePath): thorough}, codePath, code, mutants, py.TestCmd())
+		map[string]string{py.TestPaths(codePath)[0].Path: thorough}, codePath, code, mutants, py.TestCmd())
 	if err != nil {
 		if jailStartFailure(err) {
 			t.Skipf("jail could not start a sandboxed run: %v", err)
@@ -112,7 +112,7 @@ func TestScorePythonKillsAndSurvives(t *testing.T) {
 	// Gappy suite: only checks the true case, so the inverted mutant survives.
 	gappy := importPrelude + "from evenmod import is_even\ndef test_even():\n    assert is_even(2)\n"
 	rep2, err := adequacy.Score(context.Background(), jail,
-		map[string]string{py.TestPath(codePath): gappy}, codePath, code, mutants, py.TestCmd())
+		map[string]string{py.TestPaths(codePath)[0].Path: gappy}, codePath, code, mutants, py.TestCmd())
 	if err != nil {
 		if jailStartFailure(err) {
 			t.Skipf("jail could not start a sandboxed run: %v", err)

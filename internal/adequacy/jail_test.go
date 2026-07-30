@@ -216,6 +216,40 @@ func TestJailResolvesDepBindsToWorkspaceTarget(t *testing.T) {
 	}
 }
 
+// TestJailWithMaxOutputSetsSandboxOption pins that WithMaxOutput actually
+// reaches sandbox.Options.MaxOutput on every run this jail performs — the
+// seam the coverage pre-flight needs to raise the 16 KiB default that would
+// otherwise head-truncate a real `coverage json` report (467 KB, measured
+// against pallets/flask) before ParseCoverage ever sees it. Uses the fake
+// isolator (no real bwrap needed) so this is checkable on a bare host.
+func TestJailWithMaxOutputSetsSandboxOption(t *testing.T) {
+	var got sandbox.Options
+	fake := &captureIsolator{name: "bwrap", onWrap: func(o sandbox.Options) { got = o }}
+	j := NewJail(fake, time.Second, WithMaxOutput(8<<20))
+	_, _ = j.RunTest(context.Background(), map[string]string{"a.go": "1"}, []string{"true"})
+	if got.MaxOutput != 8<<20 {
+		t.Fatalf("MaxOutput = %d, want %d (WithMaxOutput must reach sandbox.Options)", got.MaxOutput, 8<<20)
+	}
+}
+
+// TestJailWithoutMaxOutputLeavesSandboxDefault pins the complement: a jail
+// built WITHOUT WithMaxOutput passes MaxOutput == 0 into sandbox.Options,
+// which sandbox.Run itself then defaults to its own 16 KiB (see
+// sandbox.go's `if opts.MaxOutput <= 0 { opts.MaxOutput = 16 << 10 }`,
+// applied BEFORE the backend even sees Options) — so every other caller
+// (RunTest/RunTestVerbose scoring mutants) keeps that stock default rather
+// than inheriting a raised cap it never asked for.
+func TestJailWithoutMaxOutputLeavesSandboxDefault(t *testing.T) {
+	var got sandbox.Options
+	fake := &captureIsolator{name: "bwrap", onWrap: func(o sandbox.Options) { got = o }}
+	j := NewJail(fake, time.Second)
+	_, _ = j.RunTest(context.Background(), map[string]string{"a.go": "1"}, []string{"true"})
+	const sandboxDefault = 16 << 10
+	if got.MaxOutput != sandboxDefault {
+		t.Fatalf("MaxOutput = %d, want %d (sandbox.Run's own default) when WithMaxOutput is not used", got.MaxOutput, sandboxDefault)
+	}
+}
+
 func TestJailAdapterTimeoutNeverReadsAsPassed(t *testing.T) {
 	backend, err := sandbox.Resolve(sandbox.Config{})
 	if err != nil || backend == nil {

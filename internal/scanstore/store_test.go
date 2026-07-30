@@ -40,6 +40,8 @@ func TestRecordRoundTripsEveryDisposition(t *testing.T) {
 			Detail: "python toolchain unavailable — refusing to grade: pytest not importable"},
 		{Path: "f.py", Lang: "python", Disposition: "audited", KillRate: ptr(0.46), Survivors: 13, Gradable: true,
 			Evidence: "proven", TimedOut: true},
+		{Path: "g.py", Lang: "python", Disposition: "audited", KillRate: ptr(0.457), Survivors: 19, Gradable: true,
+			Evidence: "proven", TestWriterFailed: true},
 	}
 
 	id, err := st.Record(context.Background(), scan, files)
@@ -79,6 +81,12 @@ func TestRecordRoundTripsEveryDisposition(t *testing.T) {
 	}
 	if a := byPath["a.go"]; a.TimedOut {
 		t.Fatalf("a.go TimedOut round-tripped as true, want false — a cleanly-converged row must not carry the marker")
+	}
+	if g := byPath["g.py"]; !g.TestWriterFailed {
+		t.Fatalf("g.py TestWriterFailed round-tripped as false, want true — a converged-but-unproven score (19 survivors, proven_missed unset) must be distinguishable in the ledger")
+	}
+	if a := byPath["a.go"]; a.TestWriterFailed {
+		t.Fatalf("a.go TestWriterFailed round-tripped as true, want false — a cleanly-authored killing test must not carry the marker")
 	}
 }
 

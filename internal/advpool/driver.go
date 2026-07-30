@@ -1125,8 +1125,16 @@ func (d *Driver) tickPoolAdequacy(ctx context.Context, missionID int64, run *run
 		// never compile must not spin the run to RunDeadline with no verdict —
 		// converge now with the real, already-computed dev-adequacy result
 		// (kill-rate, survivors, critic findings) rather than throwing it away.
-		log.Printf("advpool: %s: test-writer could not produce a compiling test after %d attempts — %d survivor(s) found but not proven-killed; converging without an authored test",
-			run.rs.CodePath, MaxTestWriterAttempts, len(run.devSurvivors))
+		// cerr rides into the log line itself: the retry path above already
+		// wraps it into the reissued instruction (renderTestWriterWithRepair),
+		// but the repo path (certify_repo.go's localExecutor) sends progress
+		// to io.Discard, so that instruction text never surfaces anywhere a
+		// human reads it. Diagnosing the missing-import bug this constant
+		// exists to prevent a repeat of took a code trace instead of a log
+		// line — this is the fix for that: the LAST compile error is always
+		// visible here, on the one path every caller's log actually reaches.
+		log.Printf("advpool: %s: test-writer could not produce a compiling test after %d attempts — %d survivor(s) found but not proven-killed; converging without an authored test: %v",
+			run.rs.CodePath, MaxTestWriterAttempts, len(run.devSurvivors), cerr)
 		run.poolScored = true
 		run.provenMissed = 0
 		run.testWriterFailed = true

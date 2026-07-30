@@ -26,6 +26,16 @@ type WeakFile struct {
 	// finish — a caller must print this distinctly, never silently alongside
 	// a clean convergence.
 	TimedOut bool
+	// TestWriterFailed mirrors advpool.Verdict.TestWriterFailed: true when
+	// this file's run exhausted its compile-retry budget without authoring
+	// a compiling killing test. HONESTY NOTE: Survivors > 0 here with
+	// TestWriterFailed true does NOT mean "no real bugs" — proven_missed
+	// (not carried on WeakFile; see advpool.Verdict.ProvenMissed) is 0
+	// because no killing test was ever authored, not because the survivors
+	// aren't real. A caller must print this distinctly, the same way
+	// TimedOut is — printing bare survivor counts here invites exactly the
+	// "corral found nothing" misreading this field exists to prevent.
+	TestWriterFailed bool
 }
 
 // RepoReport is the repo-level result. It is mostly ACCOUNTING, because that
@@ -64,6 +74,13 @@ type RepoReport struct {
 	// "kill rate X% over N audited files" cannot mistake a repo with several
 	// unconverged runs for a fully clean audit.
 	TimedOut int
+	// TestWriterFailed counts Audited files whose pool exhausted its
+	// compile-retry budget without authoring a killing test for at least
+	// one survivor (see WeakFile.TestWriterFailed) — a report-level caveat
+	// alongside TimedOut, for the same reason: "kill rate X% over N audited
+	// files" must not read as "every survivor was proven, or ruled out" when
+	// some were neither.
+	TestWriterFailed int
 
 	Weakest     []WeakFile
 	CacheHits   int
@@ -153,11 +170,15 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 		if r.Verdict.TimedOut {
 			rep.TimedOut++
 		}
+		if r.Verdict.TestWriterFailed {
+			rep.TestWriterFailed++
+		}
 		rep.Weakest = append(rep.Weakest, WeakFile{
-			Path:      r.Job.Path,
-			KillRate:  r.Verdict.DevKillRate,
-			Survivors: r.Verdict.Survivors,
-			TimedOut:  r.Verdict.TimedOut,
+			Path:             r.Job.Path,
+			KillRate:         r.Verdict.DevKillRate,
+			Survivors:        r.Verdict.Survivors,
+			TimedOut:         r.Verdict.TimedOut,
+			TestWriterFailed: r.Verdict.TestWriterFailed,
 		})
 	}
 

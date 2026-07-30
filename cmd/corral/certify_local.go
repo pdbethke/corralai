@@ -394,11 +394,12 @@ func resolveAuditPlugin(in localAuditInput) (lang.Plugin, error) {
 // the code + dev-test bytes, and the jail-backed scorer/validator/enumerator
 // wiring. cleanup releases any Go-vendor staging dir and is always non-nil.
 type auditJailPrep struct {
-	testPath string
-	code     []byte
-	devTest  []byte
-	wiring   jailWiring
-	cleanup  func()
+	testPath   string
+	code       []byte
+	devTest    []byte
+	wiring     jailWiring
+	importPath string
+	cleanup    func()
 }
 
 // prepareAuditJail reads the subject + its dev test and builds the jail-backed
@@ -475,7 +476,23 @@ func prepareAuditJail(in localAuditInput, plug lang.Plugin, timeout time.Duratio
 	if err != nil {
 		return p, auditUsageErr("%v", err)
 	}
-	return auditJailPrep{testPath: tp, code: code, devTest: devTest, wiring: wiring, cleanup: wiring.cleanup}, nil
+
+	// Derive the test-writer's real import fact NOW, while a real filesystem
+	// (fsPath, scoped to repoDir when one was given) is in scope — the ONLY
+	// place in the --local/--repo path that has one; the brain/MCP path
+	// (internal/brain/advpool.go) has no checkout to consult and leaves
+	// RunSpec.ImportPath unset, honestly. wiring.codeKey (not in.codePath) is
+	// what actually lands in RunSpec.CodePath below, so it is what must be
+	// derived from: in single-file mode it is already the bare base name
+	// (buildJailWiring's else branch), so the derivation below never even
+	// calls exists — the base name IS correct there, unchanged from before
+	// this fix (see lang.Plugin.ImportPath's doc comment).
+	importPath, _ := plug.ImportPath(wiring.codeKey, func(q string) bool {
+		_, statErr := os.Stat(fsPath(q))
+		return statErr == nil
+	})
+
+	return auditJailPrep{testPath: tp, code: code, devTest: devTest, wiring: wiring, importPath: importPath, cleanup: wiring.cleanup}, nil
 }
 
 // jailBaselineRunner runs a candidate's UNMUTATED suite in the jail, once per
@@ -786,6 +803,7 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 		MaxShards:   resolveMaxShards(in.maxShards),
 		ShadowModel: shadow,
 		Matrix:      in.matrix,
+		ImportPath:  prep.importPath,
 	}
 
 	// Signatures are best-effort (mirrors the brain's StartRun): a failure just

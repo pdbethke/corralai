@@ -68,6 +68,39 @@ type Plugin interface {
 	PromptLang() string       // human label, for verdict metadata + logs
 	TestWriterSystem() string // language-specific test-writer system prompt
 	MutantSystem() string     // language-specific mutant-generator system prompt
+	// ImportPath derives the importable module/package path for codePath —
+	// the fact a white-box test needs to reference the code under test
+	// correctly once it is no longer guaranteed to sit at a workspace root
+	// (a real repo's file lives inside a real package tree, e.g.
+	// src/flask/cli.py imports as flask.cli, not cli). It is PURE: codePath
+	// and exists are the only inputs, exists is consulted (never a real
+	// filesystem touched directly) to test whether a directory contains a
+	// package marker (e.g. Python's __init__.py), so a caller can exercise
+	// this with a fake exists function — no I/O, no jail, no live repo
+	// needed. exists may be nil when the caller has no filesystem context
+	// at all (e.g. a hosted/MCP run with no checkout on disk); a plugin
+	// that needs exists to answer honestly MUST return ok=false rather than
+	// guess when exists is nil, per ImportNote's fail-closed contract.
+	//
+	// ok=false also covers every language whose own test-authoring
+	// convention already resolves correctly regardless of nesting — Go's
+	// same-package white-box convention and JS/TS/Ruby's same-directory
+	// relative import/require all need no correction, because the authored
+	// test is always placed in the SAME directory as the code under test
+	// (see roles.renderTestWriterWithRepair's shared "named" fact) — only
+	// Python's `import <name>` is a NAMESPACE lookup rather than a
+	// same-directory reference, so only pyPlugin.ImportPath ever computes a
+	// real, non-trivial value. See each plugin's own ImportPath for why.
+	ImportPath(codePath string, exists func(path string) bool) (string, bool)
+	// ImportNote turns an ImportPath(codePath, exists) result into the
+	// per-task instruction text telling the test-writer how to import the
+	// code under test — "" when this language needs no such note (every
+	// plugin except python; see ImportPath's doc comment for why). Called
+	// with ok=false (importPath=="") this MUST say the import path could
+	// not be determined, rather than silently asserting the (possibly
+	// wrong) base-name convention — the whole point of this seam existing
+	// (see internal/advpool/roles.go's renderTestWriterWithRepair).
+	ImportNote(importPath string, ok bool) string
 	// SingleTestCmd yields a command that runs exactly the one test named by
 	// selector in testPath. ok=false when the language can't yet target a
 	// single test — callers must treat that as "no auto-signal", never a pass.

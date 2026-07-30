@@ -79,6 +79,16 @@ Given a GOAL, the compliant code, and its signature surface, produce mutants: va
 The output format (a SEARCH/REPLACE edit per mutant) is specified with the task.`
 }
 
+// ImportPath is always ok=false: Go's convention is white-box SAME PACKAGE
+// (see TestWriterSystem), never an import statement at all — there is
+// nothing for this method to derive. See lang.Plugin.ImportPath's doc
+// comment for the general rule this follows.
+func (goPlugin) ImportPath(string, func(string) bool) (string, bool) { return "", false }
+
+// ImportNote is always "": see ImportPath — Go's white-box convention needs
+// no per-task import correction.
+func (goPlugin) ImportNote(string, bool) string { return "" }
+
 func (goPlugin) SingleTestCmd(testPath, selector string) ([]string, bool) {
 	if selector == "" {
 		return nil, false

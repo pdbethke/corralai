@@ -17,6 +17,15 @@ type WeakFile struct {
 	Path      string
 	KillRate  float64
 	Survivors int
+	// TimedOut mirrors advpool.Verdict.TimedOut: true when this file's score
+	// was banked from a run that hit its wall-clock deadline before the pool
+	// converged, rather than a clean run. The number is real (the dev suite
+	// WAS measured — see advpool.Verdict.DevScored, which gates whether a
+	// timed-out file is even Gradable at all), but the pool's remaining
+	// "make the tests stronger" work (test-writer, shadow, critic) did not
+	// finish — a caller must print this distinctly, never silently alongside
+	// a clean convergence.
+	TimedOut bool
 }
 
 // RepoReport is the repo-level result. It is mostly ACCOUNTING, because that
@@ -49,6 +58,12 @@ type RepoReport struct {
 	// was audited — a 0.0 there would read as "terrible tests" when the truth
 	// is "no measurement was made".
 	KillRate float64
+	// TimedOut counts Audited files whose score was banked from a run that
+	// hit its wall-clock deadline before the pool converged (see
+	// WeakFile.TimedOut) — a report-level caveat so a reader scanning past
+	// "kill rate X% over N audited files" cannot mistake a repo with several
+	// unconverged runs for a fully clean audit.
+	TimedOut int
 
 	Weakest     []WeakFile
 	CacheHits   int
@@ -135,10 +150,14 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 		}
 		rep.Audited++
 		sum += r.Verdict.DevKillRate
+		if r.Verdict.TimedOut {
+			rep.TimedOut++
+		}
 		rep.Weakest = append(rep.Weakest, WeakFile{
 			Path:      r.Job.Path,
 			KillRate:  r.Verdict.DevKillRate,
 			Survivors: r.Verdict.Survivors,
+			TimedOut:  r.Verdict.TimedOut,
 		})
 	}
 

@@ -111,6 +111,11 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 				Path: path, Lang: r.Job.Lang, Disposition: "audited",
 				KillRate: &kr, Survivors: r.Verdict.Survivors, Gradable: true,
 				Evidence: "proven", PreflightState: preflightState(preflight, path),
+				// TimedOut rides straight through from the verdict: a claim
+				// carries how it was earned, and a query over this ledger
+				// must be able to tell a banked, unconverged score apart
+				// from a clean audited row.
+				TimedOut: r.Verdict.TimedOut,
 			})
 			continue
 		}

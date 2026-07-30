@@ -59,6 +59,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	preflightFlag := fs.Bool("preflight", false, "run the project's test suite once with coverage instrumentation and report which source files it never executes. One extra suite run; reports coverage-grade evidence, not proof")
 	recordFlag := fs.Bool("record", false, "record every file this scan audited or rejected, and why, into the DuckDB scan ledger (default: off). A BOOL here — unlike `certify --local`'s --record, which takes a tape PATH — see --record-db for where the ledger goes. A recording failure never changes the scan's verdict or exit code")
 	recordDSNFlag := fs.String("record-db", "", "path to the scan ledger (default: $CORRALAI_SCANS_DB, else ~/.claude/corralai_scans.duckdb)")
+	timeoutFlag := fs.Duration("timeout", 10*time.Minute, "per-file budget: give up on a single file's run if it makes no progress for this long (not a hard wall-clock cap — a single slow LLM call can overshoot it). Same default and semantics as `certify --local`'s --timeout; raise it for a large file that needs more room to converge")
 	if err := fs.Parse(flagArgs); err != nil {
 		return 2
 	}
@@ -250,7 +251,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// project's own test command. Given after `--`; absent, the language
 		// plugin's stock recursive command is used — resolved per job, since a
 		// repo can mix languages.
-		ex = newLocalExecutor(*repoDir, checkArgv, *substrateFlag, stdout)
+		ex = newLocalExecutor(*repoDir, checkArgv, *substrateFlag, *timeoutFlag, stdout)
 		// Deferred, not called at the end: a panic mid-scan must still release
 		// the staging dirs the shared seeds created. Deferred here so it also
 		// covers the early returns below.
@@ -1238,6 +1239,15 @@ func printRepoReport(w io.Writer, r reposcan.RepoReport, nothingInScope bool, mi
 		fmt.Fprintf(w, "  kill rate %.2f over %d audited file(s) (%.0f%% of %d candidates)\n",
 			r.KillRate, r.Audited, 100*r.AuditedFraction(), r.Candidates)
 	}
+	// A claim carries how it was earned: some of the "audited" files above
+	// were scored by a run that hit its wall-clock deadline before the pool
+	// converged (advpool.Verdict.TimedOut, banked by driveLocalRun's
+	// bankableTimeoutVerdict rather than discarded). The number is real —
+	// see Verdict.DevScored, which gates whether such a file is Gradable at
+	// all — but it must not read as an ordinary clean audit alongside it.
+	if r.TimedOut > 0 {
+		fmt.Fprintf(w, "  %d of the audited file(s) scored under an UNCONVERGED run — timed out before the pool finished (marked [TIMED OUT] below)\n", r.TimedOut)
+	}
 	// Sorted, like printExclusions: map iteration order is random, and a
 	// report a later slice signs and anchors has to be byte-reproducible.
 	ungradableReasons := make([]string, 0, len(r.Ungradable))
@@ -1264,7 +1274,11 @@ func printRepoReport(w io.Writer, r reposcan.RepoReport, nothingInScope bool, mi
 				fmt.Fprintf(w, "    ... and %d more\n", len(r.Weakest)-10)
 				break
 			}
-			fmt.Fprintf(w, "    %.2f  %s (%d survivor(s))\n", f.KillRate, f.Path, f.Survivors)
+			marker := ""
+			if f.TimedOut {
+				marker = "  [TIMED OUT — pool did not converge]"
+			}
+			fmt.Fprintf(w, "    %.2f  %s (%d survivor(s))%s\n", f.KillRate, f.Path, f.Survivors, marker)
 		}
 	}
 	// A distinct line from COULD-NOT-GRADE: that line means nothing was
@@ -1334,6 +1348,17 @@ type localExecutor struct {
 	baselineRuns int // how many times to run the unmutated suite; 2 is the floor
 	progress     io.Writer
 
+	// timeout is the per-file budget threaded into every job's
+	// localAuditInput.timeout (see Execute) — the `--timeout` passthrough:
+	// before it existed, a repo scan's per-file audit was silently pinned to
+	// auditOneFile's own 10-minute fallback (in.timeout <= 0), with no way
+	// for the operator to give a large file more room. Zero means "use that
+	// same fallback", so a caller that never sets it (every existing
+	// newLocalExecutor call site before this field existed, and the
+	// seam-level unit tests that construct a bare localExecutor) keeps
+	// today's behaviour exactly.
+	timeout time.Duration
+
 	// seeds memoizes the repo seed per language for this scan. Without it,
 	// prep runs twice per audited file (once for the baseline runner, once for
 	// the audit): on a 189-file Go repo that is 378 tree copies and 378 `go mod
@@ -1367,7 +1392,7 @@ type localExecutor struct {
 	audit       func(context.Context, localAuditInput) (advpool.Verdict, error)
 }
 
-func newLocalExecutor(repoDir string, checkArgv []string, substrate string, progress io.Writer) *localExecutor {
+func newLocalExecutor(repoDir string, checkArgv []string, substrate string, timeout time.Duration, progress io.Writer) *localExecutor {
 	if progress == nil {
 		progress = io.Discard
 	}
@@ -1376,6 +1401,7 @@ func newLocalExecutor(repoDir string, checkArgv []string, substrate string, prog
 		checkArgv:    checkArgv,
 		baselineRuns: 2,
 		substrate:    substrate,
+		timeout:      timeout,
 		// Concurrent jobs write progress; serialize so two files' notices
 		// cannot interleave mid-line.
 		progress:    &syncWriter{w: progress},
@@ -1461,6 +1487,7 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 		commit:    orDefault(j.Commit, "local"),
 		checkArgv: l.testCmd(j),
 		substrate: l.substrate,
+		timeout:   l.timeout,
 		// One worker per file: the scan's budget is spent on file-level
 		// fan-out, so a nested per-file swarm would multiply it by the worker
 		// count and melt the box the --swarm bound exists to protect.

@@ -74,6 +74,45 @@ func TestAggregateNothingAuditedIsNotZeroScore(t *testing.T) {
 	}
 }
 
+// TestAggregateMarksTimedOutFiles proves a Gradable-but-unconverged file
+// (Verdict.TimedOut, banked by driveLocalRun's bankableTimeoutVerdict) is
+// counted separately AND carries the marker into its Weakest entry — a
+// report reader must never mistake "measured, but the pool didn't finish"
+// for a clean convergence just because the file is still Gradable.
+func TestAggregateMarksTimedOutFiles(t *testing.T) {
+	results := []FileResult{
+		gradable("clean.go", 0.9, 1),
+		{
+			Job:      Job{Path: "cli.py"},
+			Verdict:  advpool.Verdict{DevKillRate: 0.46, Survivors: 13, MutantsTotal: 24, TimedOut: true, DevScored: true},
+			Gradable: true,
+		},
+	}
+	rep := Aggregate("o", "r", "c1", 2, 2, results, nil)
+
+	if rep.Audited != 2 {
+		t.Fatalf("Audited = %d, want 2 (a timed-out-but-measured file is still audited)", rep.Audited)
+	}
+	if rep.TimedOut != 1 {
+		t.Fatalf("TimedOut = %d, want 1", rep.TimedOut)
+	}
+	var found bool
+	for _, f := range rep.Weakest {
+		if f.Path == "cli.py" {
+			found = true
+			if !f.TimedOut {
+				t.Error("cli.py's WeakFile.TimedOut = false, want true")
+			}
+		}
+		if f.Path == "clean.go" && f.TimedOut {
+			t.Error("clean.go's WeakFile.TimedOut = true, want false — it converged cleanly")
+		}
+	}
+	if !found {
+		t.Fatal("cli.py missing from rep.Weakest")
+	}
+}
+
 func TestAggregateRanksWeakestFirst(t *testing.T) {
 	rep := Aggregate("o", "r", "c1", 3, 3, []FileResult{
 		gradable("strong.go", 0.9, 1),

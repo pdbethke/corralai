@@ -62,16 +62,35 @@ func (pyPlugin) TestCmd() []string { return []string{pythonBin(), "-m", "pytest"
 // compile" (the whole test-writer role was silently defeated this way on the
 // container backend). Both jail backends provide a writable /tmp tmpfs, so
 // pointing the bytecode cache there makes the syntax check succeed without
-// needing to write into the workspace. It is a single space- and
-// metacharacter-free token so it survives the jail's `strings.Join(cmd," ")` +
-// `sh -c` execution as a leading shell env assignment. Harmless on bwrap
-// (same-uid), where the workspace write already worked.
+// needing to write into the workspace.
+//
+// It is set on the CHILD PROCESS via the `env` coreutils command, not as a
+// bare "VAR=value" argv element run through a shell: CompileCheck's argv is
+// executed by TWO different substrates. The jail (internal/adequacy/jail.go)
+// shell-joins argv and runs it under `sh -c`, where a leading VAR=value
+// token IS a shell env-assignment idiom — but the workspace substrate
+// (internal/adequacy/workspace.go, what the GitHub Action uses) execs argv
+// directly via exec.Command(cmdArgv[0], cmdArgv[1:]...), with no shell to
+// interpret it; there "PYTHONPYCACHEPREFIX=/tmp/corral-pyc" as argv[0] is
+// just a nonexistent filename ("fork/exec ...: no such file or directory"),
+// so the compile check never runs at all and every Python audit on that
+// substrate loses its adversarial half silently. `env NAME=value <cmd>...`
+// is a real executable (present on every host this runs on, load-bearing
+// for `#!/usr/bin/env python3` shebangs already) that sets the variable on
+// its child process and execs it — identical, substrate-agnostic behavior
+// under a direct exec AND under `sh -c` (the jail's shellJoin still quotes
+// and joins each element; sh then simply runs `env`, same as any other
+// program). Harmless on bwrap (same-uid), where the workspace write already
+// worked.
 const pyCachePrefixEnv = "PYTHONPYCACHEPREFIX=/tmp/corral-pyc"
 
 // CompileCheck is an offline, stdlib syntax check of both files, with bytecode
 // output redirected off the (jail-read-only) workspace — see pyCachePrefixEnv.
-func (pyPlugin) CompileCheck(codePath, testPath string) []string {
-	return []string{pyCachePrefixEnv, pythonBin(), "-m", "py_compile", codePath, testPath}
+// py_compile accepts multiple files on one command line, so this is a
+// single-command sequence — see lang.Plugin.CompileCheck's doc comment for
+// why the return type is a sequence at all.
+func (pyPlugin) CompileCheck(codePath, testPath string) [][]string {
+	return [][]string{{"env", pyCachePrefixEnv, pythonBin(), "-m", "py_compile", codePath, testPath}}
 }
 
 // TestPaths returns pytest-convention candidates for codePath, most specific

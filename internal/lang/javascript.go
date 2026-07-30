@@ -25,10 +25,21 @@ func (jsPlugin) Scaffold() map[string]string { return map[string]string{} }
 // TestCmd uses Node's builtin test runner (zero external deps, offline).
 func (jsPlugin) TestCmd() []string { return []string{"node", "--test"} }
 
-// CompileCheck syntax-checks both files (`node --check`); the `&&` is honored
-// under the jail's `sh -c`.
-func (jsPlugin) CompileCheck(codePath, testPath string) []string {
-	return []string{"node", "--check", codePath, "&&", "node", "--check", testPath}
+// CompileCheck syntax-checks both files (`node --check`). `node --check`
+// only ever checks a SINGLE file per invocation, so this returns a
+// TWO-command sequence — codePath then testPath, run in order, stopping at
+// the first failure — rather than trying to splice a `&&` into one argv
+// element. A `&&`-joined single element only ever worked because the jail
+// substrate shell-joins argv and runs it under `sh -c`; the workspace
+// substrate execs argv directly with no shell, where `&&` would just be
+// handed to `node --check` as a literal (nonexistent) filename — see
+// lang.Plugin.CompileCheck's doc comment and python.go's pyCachePrefixEnv
+// comment for the identical class of bug this avoids.
+func (jsPlugin) CompileCheck(codePath, testPath string) [][]string {
+	return [][]string{
+		{"node", "--check", codePath},
+		{"node", "--check", testPath},
+	}
 }
 
 // TestPaths covers the common Node/JS test-file conventions, most specific

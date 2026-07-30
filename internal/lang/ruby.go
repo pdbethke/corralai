@@ -32,10 +32,21 @@ func (rubyPlugin) TestCmd() []string {
 	}
 }
 
-// CompileCheck syntax-checks BOTH files with `ruby -c` (offline); the `&&` is
-// honored because the jail executes the joined command under `sh -c`.
-func (rubyPlugin) CompileCheck(codePath, testPath string) []string {
-	return []string{"ruby", "-c", codePath, "&&", "ruby", "-c", testPath}
+// CompileCheck syntax-checks BOTH files with `ruby -c` (offline). `ruby -c`
+// only ever reports on a SINGLE file per invocation (`ruby -c a -c b` is not
+// valid), so this returns a TWO-command sequence — codePath then testPath,
+// run in order, stopping at the first failure — rather than trying to splice
+// a `&&` into one argv element. A `&&`-joined single element only ever
+// worked because the jail substrate shell-joins argv and runs it under
+// `sh -c`; the workspace substrate execs argv directly with no shell, where
+// `&&` would just be handed to `ruby -c` as a literal (nonexistent) filename
+// — see lang.Plugin.CompileCheck's doc comment and python.go's
+// pyCachePrefixEnv comment for the identical class of bug this avoids.
+func (rubyPlugin) CompileCheck(codePath, testPath string) [][]string {
+	return [][]string{
+		{"ruby", "-c", codePath},
+		{"ruby", "-c", testPath},
+	}
 }
 
 // TestPaths covers Ruby's three common test-file conventions, framework-

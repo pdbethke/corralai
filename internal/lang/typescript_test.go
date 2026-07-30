@@ -20,7 +20,7 @@ func TestTypeScriptPlugin(t *testing.T) {
 	if got := p.TestCmd(); !reflect.DeepEqual(got, []string{"node", "--experimental-strip-types", "--test"}) {
 		t.Fatalf("TestCmd = %v", got)
 	}
-	if got := p.CompileCheck("foo.ts", "foo.test.ts"); !reflect.DeepEqual(got, []string{"tsc", "--noEmit", "-p", "tsconfig.json"}) {
+	if got := p.CompileCheck("foo.ts", "foo.test.ts"); !reflect.DeepEqual(got, [][]string{{"tsc", "--noEmit", "-p", "tsconfig.json"}}) {
 		t.Fatalf("CompileCheck = %v", got)
 	}
 	sc := p.Scaffold()

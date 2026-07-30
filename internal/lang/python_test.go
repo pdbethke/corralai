@@ -23,13 +23,24 @@ func TestPythonPlugin(t *testing.T) {
 	if len(tc) != 4 || (tc[0] != "python3" && tc[0] != "python") || tc[1] != "-m" || tc[2] != "pytest" || tc[3] != "-q" {
 		t.Fatalf("TestCmd = %v", tc)
 	}
-	// The leading token MUST be the PYTHONPYCACHEPREFIX assignment: without it,
+	// The command MUST set PYTHONPYCACHEPREFIX on the child process via the
+	// `env` utility, not as a bare argv[0] env-assignment token: without it,
 	// py_compile writes bytecode into the jail-read-only workspace and a valid
-	// test is falsely rejected as "does not compile" on the container backend.
+	// test is falsely rejected as "does not compile" on the container
+	// backend; and a bare "VAR=value" argv[0] only works when something
+	// shell-joins the command (the jail substrate) — the workspace substrate
+	// execs argv directly and would try to run a file literally named
+	// "PYTHONPYCACHEPREFIX=/tmp/corral-pyc".
+	// py_compile takes multiple files in one invocation, so CompileCheck's
+	// sequence is a single command.
 	cc := p.CompileCheck("pricing.py", "test_pricing.py")
-	if len(cc) != 6 || cc[0] != "PYTHONPYCACHEPREFIX=/tmp/corral-pyc" ||
-		(cc[1] != "python3" && cc[1] != "python") || cc[2] != "-m" || cc[3] != "py_compile" ||
-		cc[4] != "pricing.py" || cc[5] != "test_pricing.py" {
+	if len(cc) != 1 {
+		t.Fatalf("CompileCheck sequence = %v, want exactly 1 command", cc)
+	}
+	c0 := cc[0]
+	if len(c0) != 7 || c0[0] != "env" || c0[1] != "PYTHONPYCACHEPREFIX=/tmp/corral-pyc" ||
+		(c0[2] != "python3" && c0[2] != "python") || c0[3] != "-m" || c0[4] != "py_compile" ||
+		c0[5] != "pricing.py" || c0[6] != "test_pricing.py" {
 		t.Fatalf("CompileCheck = %v", cc)
 	}
 	if len(p.Scaffold()) != 0 {

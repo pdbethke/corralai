@@ -36,6 +36,10 @@ func TestRecordRoundTripsEveryDisposition(t *testing.T) {
 		{Path: "b.go", Lang: "go", Disposition: "rejected", Reason: "no-paired-test", Evidence: "paired"},
 		{Path: "c.md", Disposition: "rejected", Reason: "no-language", Evidence: "paired"},
 		{Path: "d.go", Lang: "go", Disposition: "rejected", Reason: "not-selected", PreflightState: "not-executed", Evidence: "coverage"},
+		{Path: "e.py", Lang: "python", Disposition: "rejected", Reason: "executor-error", Evidence: "proven",
+			Detail: "python toolchain unavailable — refusing to grade: pytest not importable"},
+		{Path: "f.py", Lang: "python", Disposition: "audited", KillRate: ptr(0.46), Survivors: 13, Gradable: true,
+			Evidence: "proven", TimedOut: true},
 	}
 
 	id, err := st.Record(context.Background(), scan, files)
@@ -66,6 +70,15 @@ func TestRecordRoundTripsEveryDisposition(t *testing.T) {
 	}
 	if b := byPath["b.go"]; b.KillRate != nil {
 		t.Fatalf("b.go has a kill rate (%v); a rejected file was never scored and must read back NULL, not 0", *b.KillRate)
+	}
+	if e := byPath["e.py"]; e.Detail != "python toolchain unavailable — refusing to grade: pytest not importable" {
+		t.Fatalf("e.py Detail round-tripped as %q; the executor's diagnosis must survive into the ledger, not just the reason code", e.Detail)
+	}
+	if f := byPath["f.py"]; !f.TimedOut {
+		t.Fatalf("f.py TimedOut round-tripped as false, want true — a banked-but-unconverged score must be distinguishable in the ledger, not just by its reason column")
+	}
+	if a := byPath["a.go"]; a.TimedOut {
+		t.Fatalf("a.go TimedOut round-tripped as true, want false — a cleanly-converged row must not carry the marker")
 	}
 }
 

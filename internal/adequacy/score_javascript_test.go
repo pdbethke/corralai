@@ -29,7 +29,7 @@ func TestScoreJSKillsAndSurvives(t *testing.T) {
 	if !ok {
 		t.Skip("javascript plugin not registered")
 	}
-	if err := js.Preflight(); err != nil {
+	if err := js.Preflight(nil); err != nil {
 		t.Skipf("node not available: %v", err)
 	}
 	backend, err := sandbox.Resolve(sandbox.Config{Backend: "bwrap"})

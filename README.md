@@ -193,6 +193,27 @@ rule when the coverage tool itself is missing from the runner. Not yet wired
 into the GitHub Action as an input — today it's a `corral certify --repo`
 flag only.
 
+**Per-file timeout (`--timeout`, CLI only).** `certify --repo` shares
+`--local`'s own `--timeout` flag (default 10 minutes): the wall-clock budget
+each file's run gets before the pool is forced to a `needs-review` verdict
+instead of converging. A file whose run hits this deadline after the dev
+suite's own kill-rate was already measured is reported as **audited**, not
+dropped — marked `[TIMED OUT — pool did not converge]` in the weakest-files
+list (and `timed_out` in `--record`'s ledger row) so it never reads as a
+clean convergence. Raise it for a large file that needs more room; not yet
+wired into the GitHub Action as an input — today it's a CLI flag only.
+**A scan whose only audited files are all `[TIMED OUT]` still exits non-zero**
+even without `--min-kill-rate`: the dev-adequacy measurement is real, but
+corral's own adversarial verification (test-writer, critic) never ran to
+completion for anything the scan touched, so there is nothing for a merge
+gate to certify — the report says `DID NOT FINISH` in that case. A scan
+where only SOME files timed out and the rest converged keeps today's
+exit-code logic. **`certify --local`'s own exit code for a banked,
+measured timeout changes from `1` to `3`** (both non-zero, so a CI gate
+still fails either way) — `3` is the same code an ordinary converged
+`needs-review` verdict already uses, since a banked timeout now prints a
+real (marked) verdict instead of a bare internal-failure error.
+
 **The scan ledger (`--record`, CLI only).** `certify --repo --record` keeps
 what every scan already computes and normally just prints: a row per file
 the scan audited (with its kill rate) or rejected (with a machine-stable
@@ -213,6 +234,53 @@ need every matrix leg's ledger kept. `--record` here is a **bool** —
 unlike `certify --local --record <file>.json` on the sibling subcommand,
 which takes a replayable-tape *path* — so don't hand it one; `--record-db`
 is where the ledger path goes.
+
+**The foreign-repo sweep (CI, every PR).** `scripts/foreign-sweep.sh` runs
+`certify --repo --dry-run` — enumeration, language detection, test pairing,
+ambiguity demotion, ranking, and selection, but **no audit and no suite
+execution** — against seven SHA-pinned real-world repos nobody on this
+project wrote, and diffs the walked/candidate/ambiguous file counts against
+the checked-in golden file `testdata/foreign-sweep-expected.tsv`. It exists
+because pointing corral at foreign repos surfaces defects the in-repo suite
+never can (a suite only ever exercises repos shaped like this one); see the
+script's own header comment for the incident that motivated it. It runs in
+`.github/workflows/foreign-sweep.yml` on every pull request and every push
+to `main` — not just after merge — and needs only network access and the Go
+toolchain (no model key, no jail, no language toolchain beyond Go).
+
+If a change legitimately moves one of these counts (a pairing improvement
+that finds candidates it used to miss, a new demotion rule, etc.), regenerate
+the golden file and commit the diff:
+
+```
+rm testdata/foreign-sweep-expected.tsv
+FOREIGN_SWEEP_BOOTSTRAP=1 bash scripts/foreign-sweep.sh   # writes a fresh golden file
+git diff testdata/foreign-sweep-expected.tsv
+```
+
+A missing golden file is refused (exit 1), not silently bootstrapped: if
+it's ever lost to a bad rebase or a careless PR, the gate must fail loudly
+rather than quietly regenerate itself against whatever the tree happens to
+produce and stay green forever. `FOREIGN_SWEEP_BOOTSTRAP=1` is the explicit
+opt-in that says "yes, I mean to write a new golden file right now."
+
+**Moving these numbers is a deliberate act, not something to do reflexively
+to make the gate pass.** The diff is the whole point — review it like a
+production change, because a golden file that silently absorbs a regression
+(a pairing rule that quietly finds *fewer* real candidates, say) is worse
+than no gate at all. `expressjs/express` is pinned to pair **zero** test
+candidates on purpose: that's a known JS/TS test-pairing limitation, not a
+bug, and if a future change makes that number nonzero, look hard at *why*
+before accepting the new golden file.
+
+That `express` pin is a **one-directional** canary: it catches JS/TS test
+pairing going from zero candidates to nonzero, but would not notice the
+JS/TS plugin being removed or `express` being dropped from language
+detection entirely — a "still zero" diff looks identical to both "still
+broken as expected" and "the whole plugin silently disappeared." `gin-gonic/gin`
+is the positive canary that covers that direction (a live, working plugin
+whose count must never go to zero). The asymmetry is inherent to pinning a
+zero and doesn't prove more than it does.
 
 ## A knowledge corpus that makes every audit sharper
 

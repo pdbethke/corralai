@@ -95,10 +95,16 @@ func (tsPlugin) TestPaths(codePath string) []TestCandidate {
 	return dedupeCandidates(out)
 }
 
-// Preflight requires BOTH node AND tsc (TS genuinely needs the compiler; unlike
-// JS this is a hard dependency, preflighted fail-closed).
-func (tsPlugin) Preflight() error {
-	if err := toolOnPath("node"); err != nil {
+// Preflight requires BOTH the test runtime AND tsc (TS genuinely needs the
+// compiler; unlike JS this is a hard dependency, preflighted fail-closed).
+// The runtime check honors the operator's own test command's binary when one
+// is given (e.g. a node version manager's shim not on PATH under "node"),
+// else falls back to the stock "node" — see preflightBin and
+// Plugin.Preflight's doc comment. tsc is checked UNCONDITIONALLY either way:
+// CompileCheck always invokes it directly, never via testCmd, so there is no
+// operator-supplied command to defer to for it.
+func (tsPlugin) Preflight(testCmd []string) error {
+	if err := toolOnPath(preflightBin(testCmd, "node")); err != nil {
 		return err
 	}
 	return toolOnPath("tsc")

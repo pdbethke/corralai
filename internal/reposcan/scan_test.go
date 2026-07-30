@@ -93,6 +93,9 @@ func TestScanExecutorFailureIsUngradable(t *testing.T) {
 	if out[1].Reason != ReasonExecutorError {
 		t.Errorf("Reason = %q, want %q", out[1].Reason, ReasonExecutorError)
 	}
+	if out[1].Detail != "boom" {
+		t.Errorf("Detail = %q, want the executor's own error text %q — a swallowed error leaves the operator with no diagnosis", out[1].Detail, "boom")
+	}
 }
 
 // A cache hit skips execution and is disclosed as a hit.

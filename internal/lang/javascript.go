@@ -59,7 +59,13 @@ func (jsPlugin) TestPaths(codePath string) []TestCandidate {
 	return dedupeCandidates(out)
 }
 
-func (jsPlugin) Preflight() error { return toolOnPath("node") }
+// Preflight checks the operator's own test command's binary (e.g. a project
+// script or a node version manager's shim not on PATH under "node") when one
+// is given, else the stock "node" — see preflightBin and Plugin.Preflight's
+// doc comment.
+func (jsPlugin) Preflight(testCmd []string) error {
+	return toolOnPath(preflightBin(testCmd, "node"))
+}
 
 func (jsPlugin) PromptLang() string { return "JavaScript" }
 

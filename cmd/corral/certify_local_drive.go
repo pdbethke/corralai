@@ -52,6 +52,10 @@ func driveLocalRun(ctx context.Context, d *advpool.Driver, q *queue.Store, missi
 	consecutiveTickErrors := 0
 	for {
 		if err := ctx.Err(); err != nil {
+			if v := bankableTimeoutVerdict(d, missionID); v != nil {
+				fmt.Fprintf(progress, "certify --local: %s\n", timedOutBankedMsg)
+				return v, nil
+			}
 			return nil, fmt.Errorf("timed out before the pool converged: %w", err)
 		}
 		verdict, err := d.Tick(ctx, missionID)
@@ -70,6 +74,17 @@ func driveLocalRun(ctx context.Context, d *advpool.Driver, q *queue.Store, missi
 		}
 		ran, err := runReadyTasks(ctx, q, missionID, chatterFor, rec, actorFor, swarm, progress)
 		if err != nil {
+			// A task-level error CAN be the same ctx expiry surfacing from
+			// inside the jail/LLM call the task was blocked on (see
+			// bankableTimeoutVerdict's doc) rather than a genuine role
+			// failure — give the driver the same last chance before giving
+			// up on whatever it already measured.
+			if ctx.Err() != nil {
+				if v := bankableTimeoutVerdict(d, missionID); v != nil {
+					fmt.Fprintf(progress, "certify --local: %s\n", timedOutBankedMsg)
+					return v, nil
+				}
+			}
 			return nil, err
 		}
 		if !ran {
@@ -78,6 +93,56 @@ func driveLocalRun(ctx context.Context, d *advpool.Driver, q *queue.Store, missi
 			sleep(poll)
 		}
 	}
+}
+
+// timedOutBankedMsg is the progress line printed whenever bankableTimeoutVerdict
+// hands back a real verdict instead of the bare timeout error — the operator-
+// visible half of "a claim carries how it was earned" (the other half is
+// Verdict.TimedOut, which rides into the printed verdict and any report/ledger
+// built from it).
+const timedOutBankedMsg = "the pool did not converge before its deadline — banking the dev-adequacy score already measured (marked TIMED OUT, not a clean convergence)"
+
+// bankableTimeoutVerdict gives the driver one last chance, on a context
+// DETACHED from the (already expired) outer ctx, to notice its own
+// RunDeadline has elapsed and produce the signed timeout verdict Tick's
+// RunDeadline branch already knows how to build (advpool.Driver.Tick,
+// timeoutVerdict) — the exact mechanism certify_local.go's outerBound
+// comment promises ("the driver gets the chance to emit its signed timeout
+// verdict before ctx cancels the loop"). Before this helper existed, the
+// promise was never kept: driveLocalRun's bare `ctx.Err()` check fired and
+// returned BEFORE Tick was ever called again, so Tick's own timeout path —
+// proven to work by internal/advpool's TestRunDeadlineProducesNeedsReviewVerdict
+// — never got the chance to run.
+//
+// Detached, not derived from ctx, on purpose: Tick's RunDeadline check
+// compares wall-clock time (d.Now(), never ctx), so this call is cheap and
+// safe. By construction (see certify_local.go's outerBound, RunDeadline +
+// 30s) the outer ctx never expires before RunDeadline does, so by the time a
+// caller reaches here RunDeadline is already behind us — Tick takes the
+// deadline branch immediately, before any real jail/LLM call, and the only
+// ctx use left in that branch is signing, which deserves the chance to
+// finish even though the run's own time budget is gone.
+//
+// Returns nil (never bankable) in two cases the caller must fall back to the
+// original bare timeout error for:
+//   - Tick itself errors (e.g. signing failed) or still returns no verdict
+//     at all (RunDeadline not configured, or somehow not yet elapsed —
+//     should not happen given the construction above, but this is not the
+//     place to assume it).
+//   - The verdict IS a timeout verdict but DevScored is false: nothing was
+//     ever measured before the deadline, so its DevKillRate/Survivors are
+//     zero values nobody computed. Keeping TODAY's behaviour exactly means
+//     an error here, never a fabricated 0.00 — the false accusation this
+//     codebase already produced and killed five times.
+func bankableTimeoutVerdict(d *advpool.Driver, missionID int64) *advpool.Verdict {
+	v, err := d.Tick(context.Background(), missionID)
+	if err != nil || v == nil {
+		return nil
+	}
+	if !v.TimedOut || !v.DevScored {
+		return nil
+	}
+	return v
 }
 
 // runReadyTasks claims and runs every currently-ready task on the queue,

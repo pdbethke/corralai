@@ -51,7 +51,12 @@ func (goPlugin) TestPaths(codePath string) []TestCandidate {
 	return []TestCandidate{{Path: filepath.Join(dir, filepath.Base(base)+"_test.go"), Rank: 0}}
 }
 
-func (goPlugin) Preflight() error { return toolOnPath("go") }
+// Preflight checks the operator's own test command's binary (e.g. a
+// `gotestsum` wrapper named after `--`) when one is given, else the stock
+// "go" — see preflightBin and Plugin.Preflight's doc comment.
+func (goPlugin) Preflight(testCmd []string) error {
+	return toolOnPath(preflightBin(testCmd, "go"))
+}
 
 func (goPlugin) PromptLang() string { return "Go" }
 

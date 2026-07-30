@@ -153,6 +153,112 @@ func TestAggregateMarksTestWriterFailedFiles(t *testing.T) {
 	}
 }
 
+// TestAggregateMarksPoolTestUnsoundFiles mirrors
+// TestAggregateMarksTestWriterFailedFiles for the F2 fix's new diagnosis: a
+// compiling authored test (TestWriterFailed false) whose scoring report
+// never genuinely graded (advpool.Verdict.PoolTestUnsound). ProvenMissed
+// reading 0 here must be distinguishable from BOTH the writer-failed case
+// and a real "tried and missed" result.
+func TestAggregateMarksPoolTestUnsoundFiles(t *testing.T) {
+	results := []FileResult{
+		gradable("clean.go", 0.9, 1),
+		{
+			Job: Job{Path: "unsound.py"},
+			Verdict: advpool.Verdict{DevKillRate: 0.5, Survivors: 5, MutantsTotal: 10,
+				PoolTestUnsound: true, ProvenMissed: 0, DevScored: true},
+			Gradable: true,
+		},
+	}
+	rep := Aggregate("o", "r", "c1", 2, 2, results, nil)
+
+	if rep.PoolTestUnsound != 1 {
+		t.Fatalf("PoolTestUnsound = %d, want 1", rep.PoolTestUnsound)
+	}
+	var found bool
+	for _, f := range rep.Weakest {
+		if f.Path == "unsound.py" {
+			found = true
+			if !f.PoolTestUnsound {
+				t.Error("unsound.py's WeakFile.PoolTestUnsound = false, want true")
+			}
+			if f.TestWriterFailed {
+				t.Error("unsound.py's WeakFile.TestWriterFailed = true, want false — the test DID compile")
+			}
+		}
+		if f.Path == "clean.go" && f.PoolTestUnsound {
+			t.Error("clean.go's WeakFile.PoolTestUnsound = true, want false")
+		}
+	}
+	if !found {
+		t.Fatal("unsound.py missing from rep.Weakest")
+	}
+}
+
+// TestAggregateExcludesTimedOutFilesFromProvenMissedRollup is F3's
+// regression test: a timed-out verdict can still carry a real, nonzero
+// ProvenMissed (the pool-adequacy step finished before the deadline hit,
+// only test-critic stalled) — but printRepoReport never shows a per-file
+// proven-missed count for a [TIMED OUT] file, so the repo-level rollup must
+// not include it either: a reader seeing "N proven, catchable gap(s)" with
+// nothing but a [TIMED OUT] marker in the per-file listing has no way to
+// locate what the report claims.
+func TestAggregateExcludesTimedOutFilesFromProvenMissedRollup(t *testing.T) {
+	results := []FileResult{
+		{Job: Job{Path: "clean.py"}, Gradable: true,
+			Verdict: advpool.Verdict{DevKillRate: 0.9, Survivors: 2, MutantsTotal: 10, ProvenMissed: 2, DevScored: true}},
+		{Job: Job{Path: "timedout.py"}, Gradable: true,
+			Verdict: advpool.Verdict{DevKillRate: 0.5, Survivors: 3, MutantsTotal: 10, ProvenMissed: 3, TimedOut: true, DevScored: true}},
+	}
+	rep := Aggregate("o", "r", "c1", 2, 2, results, nil)
+
+	if rep.ProvenMissed != 2 {
+		t.Fatalf("rep.ProvenMissed = %d, want 2 — the timed-out file's 3 must be EXCLUDED from the rollup", rep.ProvenMissed)
+	}
+	// The per-file WeakFile still carries its own real ProvenMissed (a
+	// caller that prints per-file detail may still want it) — only the
+	// REPO-LEVEL sum excludes it.
+	for _, f := range rep.Weakest {
+		if f.Path == "timedout.py" && f.ProvenMissed != 3 {
+			t.Errorf("timedout.py's WeakFile.ProvenMissed = %d, want 3 (unchanged; only the rollup excludes it)", f.ProvenMissed)
+		}
+	}
+}
+
+// TestAggregateCarriesProvenMissedThrough proves the fix for the reporting
+// gap this whole change closes: a real converged verdict's ProvenMissed
+// (advpool's execution-proven "the pool's authored test killed a survivor")
+// must reach WeakFile AND roll up into the repo-level total — before this,
+// Aggregate silently dropped it (see report.go's now-updated WeakFile doc,
+// which used to say "not carried on WeakFile").
+func TestAggregateCarriesProvenMissedThrough(t *testing.T) {
+	results := []FileResult{
+		{Job: Job{Path: "clean.go"}, Gradable: true,
+			Verdict: advpool.Verdict{DevKillRate: 1.0, Survivors: 0, MutantsTotal: 5, ProvenMissed: 0}},
+		{Job: Job{Path: "src/flask/cli.py"}, Gradable: true,
+			Verdict: advpool.Verdict{DevKillRate: 0.467, Survivors: 16, MutantsTotal: 30, ProvenMissed: 7, DevScored: true}},
+	}
+	rep := Aggregate("o", "r", "c1", 2, 2, results, nil)
+
+	if rep.ProvenMissed != 7 {
+		t.Fatalf("rep.ProvenMissed = %d, want 7 (rolled up from the one file that proved anything)", rep.ProvenMissed)
+	}
+	var found bool
+	for _, f := range rep.Weakest {
+		if f.Path == "src/flask/cli.py" {
+			found = true
+			if f.ProvenMissed != 7 {
+				t.Errorf("cli.py's WeakFile.ProvenMissed = %d, want 7", f.ProvenMissed)
+			}
+		}
+		if f.Path == "clean.go" && f.ProvenMissed != 0 {
+			t.Errorf("clean.go's WeakFile.ProvenMissed = %d, want 0 — it had no survivors to prove", f.ProvenMissed)
+		}
+	}
+	if !found {
+		t.Fatal("cli.py missing from rep.Weakest")
+	}
+}
+
 func TestAggregateRanksWeakestFirst(t *testing.T) {
 	rep := Aggregate("o", "r", "c1", 3, 3, []FileResult{
 		gradable("strong.go", 0.9, 1),

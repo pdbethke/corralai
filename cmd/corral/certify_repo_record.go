@@ -116,12 +116,23 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 				// must be able to tell a banked, unconverged score apart
 				// from a clean audited row.
 				TimedOut: r.Verdict.TimedOut,
-				// TestWriterFailed rides through the same way: proven_missed
-				// isn't stored per-row, so without this a row with
-				// survivors > 0 and a clean-looking kill rate would read as
-				// "no real gaps" when it actually means "gaps found, no
-				// killing test could be authored to prove them."
+				// TestWriterFailed rides through the same way: without this
+				// a row with survivors > 0 and a clean-looking kill rate
+				// would read as "no real gaps" when it actually means "gaps
+				// found, no killing test could be authored to prove them."
 				TestWriterFailed: r.Verdict.TestWriterFailed,
+				// ProvenMissed rides through too — corral's strongest claim
+				// (a survivor its own authored test killed BY EXECUTION),
+				// now stored per-row so a later query can filter on
+				// `proven_missed > 0` instead of losing the distinction the
+				// moment this row is written.
+				ProvenMissed: r.Verdict.ProvenMissed,
+				// PoolTestUnsound rides through the same way, DISTINCT from
+				// TestWriterFailed: a compiling test WAS produced here, its
+				// own scoring report just never genuinely graded — without
+				// this a row with survivors > 0 and this diagnosis would be
+				// indistinguishable from an ordinary "tried and missed" 0.
+				PoolTestUnsound: r.Verdict.PoolTestUnsound,
 			})
 			continue
 		}

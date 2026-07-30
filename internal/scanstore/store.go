@@ -107,6 +107,26 @@ type File struct {
 	// be able to tell that apart from an ordinary audited row without
 	// re-deriving it, the same way TimedOut already lets it.
 	TestWriterFailed bool
+	// PoolTestUnsound mirrors advpool.Verdict.PoolTestUnsound /
+	// reposcan.WeakFile.PoolTestUnsound: true for an AUDITED row whose pool
+	// authored a COMPILING test (TestWriterFailed is false) whose scoring
+	// report never genuinely graded (failed on the unmutated compliant code,
+	// the canary was never killed, or nothing was scored). A DIFFERENT
+	// diagnosis from TestWriterFailed with the same honesty consequence:
+	// ProvenMissed reads 0 for a reason that is neither "clean" nor "tried
+	// and missed", and a later query must be able to tell that apart too.
+	PoolTestUnsound bool
+	// ProvenMissed mirrors advpool.Verdict.ProvenMissed /
+	// reposcan.WeakFile.ProvenMissed: survivors the pool's authored test
+	// then killed BY EXECUTION — corral's strongest claim, a specific
+	// demonstrated bug the dev suite misses. HONESTY NOTE: 0 here is
+	// ambiguous on its own — combined with Survivors and TestWriterFailed it
+	// resolves to one of three cases (no survivors to prove; writer never
+	// authored a compiling test; writer's test proved nothing) — see
+	// reposcan.WeakFile.ProvenMissed's doc for the full breakdown. A query
+	// over this ledger that wants the unambiguous "real, demonstrated gap"
+	// signal should filter on ProvenMissed > 0, not just != 0.
+	ProvenMissed int
 }
 
 // scanFilesMigrationCols is the additive set of columns this package has
@@ -125,6 +145,8 @@ var scanFilesMigrationCols = []struct{ name, ddl string }{
 	{"detail", "detail VARCHAR"},
 	{"timed_out", "timed_out BOOLEAN"},
 	{"test_writer_failed", "test_writer_failed BOOLEAN"},
+	{"proven_missed", "proven_missed INTEGER"},
+	{"pool_test_unsound", "pool_test_unsound BOOLEAN"},
 }
 
 // Open opens (creating if absent) the scans/scan_files store at dsn.
@@ -176,7 +198,9 @@ func Open(dsn string) (*Store, error) {
 		evidence VARCHAR CHECK (evidence IN ('', 'paired', 'coverage', 'proven')),
 		detail VARCHAR,
 		timed_out BOOLEAN,
-		test_writer_failed BOOLEAN
+		test_writer_failed BOOLEAN,
+		proven_missed INTEGER,
+		pool_test_unsound BOOLEAN
 	)`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("scanstore: create scan_files table: %w", err)
@@ -299,10 +323,10 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 		// rejected files.
 		if _, err := tx.ExecContext(ctx, `INSERT INTO scan_files (
 			scan_id, path, lang, disposition, reason,
-			kill_rate, survivors, gradable, preflight_state, evidence, detail, timed_out, test_writer_failed
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			kill_rate, survivors, gradable, preflight_state, evidence, detail, timed_out, test_writer_failed, proven_missed, pool_test_unsound
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id, f.Path, f.Lang, f.Disposition, f.Reason,
-			sanitizeKillRate(f.KillRate), f.Survivors, f.Gradable, f.PreflightState, f.Evidence, f.Detail, f.TimedOut, f.TestWriterFailed,
+			sanitizeKillRate(f.KillRate), f.Survivors, f.Gradable, f.PreflightState, f.Evidence, f.Detail, f.TimedOut, f.TestWriterFailed, f.ProvenMissed, f.PoolTestUnsound,
 		); err != nil {
 			return 0, fmt.Errorf("scanstore: insert scan_files row for %q: %w", f.Path, err)
 		}
@@ -326,7 +350,7 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 // read back via `SELECT rowid, ...` in insertion order (0, 1, 2).
 func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT path, lang, disposition, reason,
-		kill_rate, survivors, gradable, preflight_state, evidence, detail, timed_out, test_writer_failed
+		kill_rate, survivors, gradable, preflight_state, evidence, detail, timed_out, test_writer_failed, proven_missed, pool_test_unsound
 		FROM scan_files WHERE scan_id = ? ORDER BY rowid`, scanID)
 	if err != nil {
 		return nil, fmt.Errorf("scanstore: files for scan %d: %w", scanID, err)
@@ -337,14 +361,22 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 	for rows.Next() {
 		var f File
 		var detail sql.NullString
-		var timedOut, testWriterFailed sql.NullBool
+		var timedOut, testWriterFailed, poolTestUnsound sql.NullBool
+		var provenMissed sql.NullInt64
 		if err := rows.Scan(&f.Path, &f.Lang, &f.Disposition, &f.Reason,
-			&f.KillRate, &f.Survivors, &f.Gradable, &f.PreflightState, &f.Evidence, &detail, &timedOut, &testWriterFailed); err != nil {
+			&f.KillRate, &f.Survivors, &f.Gradable, &f.PreflightState, &f.Evidence, &detail, &timedOut, &testWriterFailed, &provenMissed, &poolTestUnsound); err != nil {
 			return nil, fmt.Errorf("scanstore: scan scan_files row: %w", err)
 		}
 		f.Detail = detail.String
 		f.TimedOut = timedOut.Bool
 		f.TestWriterFailed = testWriterFailed.Bool
+		f.PoolTestUnsound = poolTestUnsound.Bool
+		// NULL (a row written before this column existed, or a rejected file
+		// that was never scored) reads back as 0 — the same "nothing to
+		// report" value a fresh audited row with no proven gap would have,
+		// which is fine: Survivors/TestWriterFailed already carry the
+		// distinction a caller needs (see File.ProvenMissed's doc).
+		f.ProvenMissed = int(provenMissed.Int64)
 		out = append(out, f)
 	}
 	return out, rows.Err()

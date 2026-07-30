@@ -98,6 +98,33 @@ type fakeScorer struct {
 	// baseline and also passes on deliberately invalid source, i.e. one that
 	// never compiles or imports the file under audit.
 	devCanarySurvives bool
+
+	// poolReportFn, when set, drives ScoreAuthoredReport's return directly —
+	// the control knob for scripting an authored test that COMPILED but did
+	// not genuinely grade (CompliantPass false, CanaryKilled false, or Total
+	// 0 — the F2 fix's three unsound shapes). nil preserves the default:
+	// wrap the SAME Score()-scripted (killRate, poolSurvivors) into a
+	// genuinely-graded Report (Total > 0, CompliantPass/CanaryKilled true)
+	// via devReportFrom, so every existing fakeScorer literal — which never
+	// sets this — keeps behaving exactly as it did when tickPoolAdequacy
+	// called Score directly.
+	poolReportFn func(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (adequacy.Report, error)
+}
+
+// ScoreAuthoredReport implements AuthoredScorer: tickPoolAdequacy prefers
+// this over ScoreReport, so scripting the POOL call now happens here, not
+// via ScoreReport's devReported branch (which stays reserved for the dev
+// score + the matrix's per-test scores, exactly like before this method
+// existed).
+func (f *fakeScorer) ScoreAuthoredReport(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (adequacy.Report, error) {
+	if f.poolReportFn != nil {
+		return f.poolReportFn(ctx, codePath, code, test, mutants, testCmd)
+	}
+	kr, survivors, err := f.Score(ctx, codePath, code, test, mutants, testCmd)
+	if err != nil {
+		return adequacy.Report{}, err
+	}
+	return devReportFrom(kr, survivors, mutants), nil
 }
 
 // devReportFrom encodes a scripted (killRate, survivors) pair as the
@@ -394,6 +421,78 @@ func TestTick_PoolAdequacy_ScoresProvenMissed(t *testing.T) {
 	}
 	if rs, ok := d.RunStatus(2); !ok || rs.AuthoredTest != run.authoredTest {
 		t.Fatalf("RunState.AuthoredTest = %q, want %q (surfaced via RunStatus)", rs.AuthoredTest, run.authoredTest)
+	}
+}
+
+// TestTick_PoolAdequacy_UnsoundReportDoesNotFabricateProvenMissed is F2's
+// regression test: the pool's authored test COMPILED (TestWriterFailed stays
+// false) but, when actually scored, never genuinely graded — scripted here
+// as CompliantPass:false, Total:0 (an ordinary outcome for an LLM-written
+// test that fails on the unmutated compliant code; CompileTest only checks
+// syntax, never "passes"). Before the fix, tickPoolAdequacy read this
+// through the collapsed Score() tuple: an empty, error-free survivors slice,
+// so provenMissed computed to len(devSurvivors) - 0 == len(devSurvivors) —
+// EVERY survivor reported as execution-proven from a run that graded
+// nothing. This asserts the opposite: ProvenMissed must be 0 (not the
+// survivor count), PoolTestUnsound must be true, and the run must be
+// needs-review EVEN THOUGH DevKillRate clears the threshold on its own —
+// proving poolTestUnsound, not devKillRate, is what forced it.
+func TestTick_PoolAdequacy_UnsoundReportDoesNotFabricateProvenMissed(t *testing.T) {
+	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}, {ID: "m2", Code: "c2"}}
+	scorer := &fakeScorer{
+		devKillRate:  0.9, // clears a low threshold on its own
+		devSurvivors: survivors,
+		poolReportFn: func(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (adequacy.Report, error) {
+			// The authored test failed on the unmutated compliant code: no
+			// mutant was ever scored.
+			return adequacy.Report{CompliantPass: false, Total: 0}, nil
+		},
+	}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0], survivors[1]}}
+	d, _ := newTestDriver(t, 2, scorer, validator, 0.1)
+
+	v := completeFullRun(t, d, 2, "no findings")
+
+	if v.ProvenMissed != 0 {
+		t.Fatalf("ProvenMissed = %d, want 0 — must NOT fabricate len(devSurvivors)=%d as proof from an ungraded report", v.ProvenMissed, len(survivors))
+	}
+	if !v.PoolTestUnsound {
+		t.Fatal("PoolTestUnsound = false, want true — a compiling test that never genuinely graded must be flagged, distinctly from TestWriterFailed")
+	}
+	if v.TestWriterFailed {
+		t.Fatal("TestWriterFailed = true, want false — the test DID compile; this is a different diagnosis")
+	}
+	if v.Status != StatusNeedsReview {
+		t.Fatalf("Status = %q, want needs-review — poolTestUnsound must force it even though DevKillRate (0.9) clears the threshold on its own", v.Status)
+	}
+}
+
+// TestTick_PoolAdequacy_CanaryNotKilledDoesNotFabricateProvenMissed covers
+// the OTHER unsound shape F2 names: the authored test passed on the
+// unmutated code but never even reads the audited file (CanaryKilled false)
+// — same fabrication risk, different cause.
+func TestTick_PoolAdequacy_CanaryNotKilledDoesNotFabricateProvenMissed(t *testing.T) {
+	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}}
+	scorer := &fakeScorer{
+		devKillRate:  0.9,
+		devSurvivors: survivors,
+		poolReportFn: func(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (adequacy.Report, error) {
+			return adequacy.Report{CompliantPass: true, CanaryKilled: false, Total: 0}, nil
+		},
+	}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0]}}
+	d, _ := newTestDriver(t, 2, scorer, validator, 0.1)
+
+	v := completeFullRun(t, d, 2, "no findings")
+
+	if v.ProvenMissed != 0 {
+		t.Fatalf("ProvenMissed = %d, want 0", v.ProvenMissed)
+	}
+	if !v.PoolTestUnsound {
+		t.Fatal("PoolTestUnsound = false, want true")
+	}
+	if v.Status != StatusNeedsReview {
+		t.Fatalf("Status = %q, want needs-review", v.Status)
 	}
 }
 

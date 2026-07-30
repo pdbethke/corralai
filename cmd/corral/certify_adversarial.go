@@ -50,6 +50,13 @@ type advVerdict struct {
 	// pool exhausted its compile-retry budget without authoring a compiling
 	// killing test. See renderAdvVerdict for the honest readout this drives.
 	TestWriterFailed bool `json:"TestWriterFailed"`
+	// PoolTestUnsound mirrors advpool.Verdict.PoolTestUnsound: true when the
+	// pool's authored test DID compile (TestWriterFailed is false) but its
+	// own scoring report never genuinely graded (it failed on the unmutated
+	// compliant code, the canary was never killed, or nothing was scored).
+	// A DIFFERENT diagnosis from TestWriterFailed with the same honesty
+	// consequence — see renderAdvVerdict for the readout this drives.
+	PoolTestUnsound bool `json:"PoolTestUnsound"`
 	// BaselineFailed mirrors advpool.Verdict.BaselineFailed: the dev suite did
 	// not pass on the unmutated code in the jail, so nothing was graded. Drives
 	// the "could not grade" readout instead of a fabricated kill tally.
@@ -395,6 +402,14 @@ func renderAdvVerdict(w io.Writer, codePath string, v advVerdict) {
 		// Honesty: proven_missed=0 here does NOT mean the suite is clean — it
 		// means the pool could not author a compiling test to PROVE the gap.
 		fmt.Fprintf(w, "  the herd found %d survivor(s) your suite missed but could not author a compiling test to kill them — review these manually\n", v.Survivors)
+	}
+	if v.PoolTestUnsound && v.Survivors > 0 {
+		// A DIFFERENT diagnosis from TestWriterFailed: a compiling test WAS
+		// authored, but it never genuinely graded against the survivors (it
+		// failed on the unmutated compliant code, or never reads the file).
+		// proven_missed=0 here means the same thing TestWriterFailed's 0
+		// means — not a clean suite — for a different reason.
+		fmt.Fprintf(w, "  the herd authored a test for %d survivor(s) your suite missed, but it did not pass on the unmutated code (or never reads the file) — it was not scored, review these manually\n", v.Survivors)
 	}
 	if v.RegionsTotal > 0 && v.RegionsProbed < v.RegionsTotal {
 		fmt.Fprintf(w, "  PARTIAL AUDIT: %d of %d regions probed — these went unprobed: %s\n",

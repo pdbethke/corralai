@@ -79,6 +79,182 @@ func TestJailScorerReport(t *testing.T) {
 	}
 }
 
+// recordingJail is a deterministic adequacy.Jail stand-in that always passes
+// and remembers the LAST files map it was handed — used to prove (by
+// execution, not reasoning) whether a given piece of content actually reached
+// the workspace a RunTest call saw.
+type recordingJail struct{ lastFiles map[string]string }
+
+func (r *recordingJail) RunTest(ctx context.Context, files map[string]string, cmd []string) (bool, error) {
+	r.lastFiles = files
+	return true, nil
+}
+
+// hasContent reports whether any file in the last recorded workspace has
+// exactly this content.
+func (r *recordingJail) hasContent(content string) bool {
+	for _, v := range r.lastFiles {
+		if v == content {
+			return true
+		}
+	}
+	return false
+}
+
+// TestJailScorerScoreAuthoredReportOverlaysAuthoredTestInRepoMode is F1's
+// regression test: in repo-aware mode (BaseFiles set), scoreWorkspace
+// deliberately drops the `test` argument — correct for the DEV test (already
+// on disk, must not be shadowed) but WRONG for the pool's AUTHORED test (a
+// brand-new file the repo does not contain). Before the fix,
+// ScoreAuthoredReport did not exist and tickPoolAdequacy called
+// ScoreReport/Score directly, whose scoreWorkspace silently discarded the
+// authored test in repo-aware mode — the pool re-scored the DEV suite
+// against its own already-known survivors, so ProvenMissed was structurally
+// always 0. Proved here by execution: the authored test's own content must
+// appear in SOME file the jail's RunTest actually received.
+func TestJailScorerScoreAuthoredReportOverlaysAuthoredTestInRepoMode(t *testing.T) {
+	jail := &recordingJail{}
+	s := JailScorer{Jail: jail, BaseFiles: map[string]string{"go.mod": "module x\n"}}
+
+	const authoredTest = "AUTHORED-TEST-MARKER-CONTENT"
+	_, err := s.ScoreAuthoredReport(context.Background(), "pkg/a.go", "package pkg\n", authoredTest, nil, "go test ./...")
+	if err != nil {
+		t.Fatalf("ScoreAuthoredReport: %v", err)
+	}
+	if !jail.hasContent(authoredTest) {
+		t.Fatalf("the authored test's content never reached any file in the workspace RunTest saw: %+v", jail.lastFiles)
+	}
+}
+
+// TestJailScorerScoreAuthoredReportSingleFileModeUnchanged proves the fix is
+// scoped to repo-aware mode only: with BaseFiles nil, ScoreAuthoredReport
+// must behave exactly like ScoreReport already does (test overlaid at the
+// synthetic path) — no new asymmetry introduced for the mode that already
+// worked.
+func TestJailScorerScoreAuthoredReportSingleFileModeUnchanged(t *testing.T) {
+	jail := &recordingJail{}
+	s := JailScorer{Jail: jail}
+
+	const authoredTest = "AUTHORED-TEST-MARKER-CONTENT"
+	_, err := s.ScoreAuthoredReport(context.Background(), "pkg/a.go", "package pkg\n", authoredTest, nil, "")
+	if err != nil {
+		t.Fatalf("ScoreAuthoredReport: %v", err)
+	}
+	if !jail.hasContent(authoredTest) {
+		t.Fatalf("single-file mode regressed: authored test content missing from %+v", jail.lastFiles)
+	}
+}
+
+// shapeAJail simulates pallets/flask shape A: a project test command whose
+// own discovery configuration (pytest's `testpaths = ["tests"]`) excludes
+// the directory the authored test was written to. The dev suite (whatever
+// else lives in the workspace) DOES transitively import codePath — so it
+// reacts to codePath being canaried — but the authored test's own path is
+// invisible to the run: nothing at testPath ever affects the outcome,
+// exactly like pytest silently never looking outside testpaths.
+type shapeAJail struct{ codePath string }
+
+func (j *shapeAJail) RunTest(ctx context.Context, files map[string]string, cmd []string) (bool, error) {
+	if files[j.codePath] == adequacy.CanaryCode {
+		return false, nil // dev suite transitively imports codePath -> reacts
+	}
+	return true, nil // everything else (including the authored test's own path) is inert
+}
+
+// TestScoreAuthoredReport_PositiveControlCatchesUnreachablePath is the
+// regression test for the positive-control fix: without it, shapeAJail's
+// existing CompliantPass/CanaryKilled checks both read TRUE (the dev suite's
+// own sensitivity to codePath masks the fact the authored test never ran at
+// all), so ProvenMissed would be silently computed as if the authored test
+// had genuinely re-graded the survivors. The positive control must catch
+// this and report CanaryKilled=false so tickPoolAdequacy's existing
+// PoolTestUnsound guard fires instead of a false zero.
+func TestScoreAuthoredReport_PositiveControlCatchesUnreachablePath(t *testing.T) {
+	const codePath = "src/flask/cli.py"
+	jail := &shapeAJail{codePath: codePath}
+	s := JailScorer{Jail: jail, BaseFiles: map[string]string{"go.mod": "module x\n"}}
+
+	mutants := []adequacy.Mutant{{ID: "m1", Code: "MUTANT"}}
+	rep, err := s.ScoreAuthoredReport(context.Background(), codePath, "COMPLIANT", "AUTHORED-TEST", mutants, "pytest")
+	if err != nil {
+		t.Fatalf("ScoreAuthoredReport: %v", err)
+	}
+	if !rep.CompliantPass {
+		t.Fatalf("expected CompliantPass=true (shapeAJail always passes on non-canary codePath content), got %+v", rep)
+	}
+	if rep.CanaryKilled {
+		t.Fatalf("positive control should have caught the unreachable authored test and reported CanaryKilled=false, got %+v", rep)
+	}
+}
+
+// wellBehavedJail simulates a project where the authored test's own path IS
+// reachable by the project's test command: it reacts (fails) whenever EITHER
+// codePath or testPath holds the canary, and otherwise scores codePath's
+// content via passOn — proving the positive control does not false-positive
+// on a genuinely sound run, and a real proven kill still comes through.
+type wellBehavedJail struct {
+	codePath, testPath string
+	passOn             map[string]bool
+}
+
+func (j *wellBehavedJail) RunTest(ctx context.Context, files map[string]string, cmd []string) (bool, error) {
+	if files[j.testPath] == adequacy.CanaryCode {
+		return false, nil
+	}
+	if files[j.codePath] == adequacy.CanaryCode {
+		return false, nil
+	}
+	return j.passOn[files[j.codePath]], nil
+}
+
+// TestScoreAuthoredReport_PositiveControlPassesAndGenuineKillStillWorks
+// proves the fix does not regress a sound run: the positive control passes
+// (the authored test's own path IS reachable and reacts to being canaried),
+// and a mutant the authored test genuinely kills still shows up as Killed —
+// a fix that flags everything unsound would "pass" the shape-A test above
+// while destroying this.
+func TestScoreAuthoredReport_PositiveControlPassesAndGenuineKillStillWorks(t *testing.T) {
+	const codePath = "src/flask/cli.py"
+	testPath := advPoolTestPath(codePath)
+	jail := &wellBehavedJail{
+		codePath: codePath,
+		testPath: testPath,
+		passOn:   map[string]bool{"COMPLIANT": true, "MUTANT": false},
+	}
+	s := JailScorer{Jail: jail, BaseFiles: map[string]string{"go.mod": "module x\n"}}
+
+	mutants := []adequacy.Mutant{{ID: "m1", Code: "MUTANT"}}
+	rep, err := s.ScoreAuthoredReport(context.Background(), codePath, "COMPLIANT", "AUTHORED-TEST", mutants, "pytest")
+	if err != nil {
+		t.Fatalf("ScoreAuthoredReport: %v", err)
+	}
+	if !rep.CompliantPass || !rep.CanaryKilled {
+		t.Fatalf("positive control false-positived on a sound run: %+v", rep)
+	}
+	if len(rep.Killed) != 1 || rep.Killed[0] != "m1" {
+		t.Fatalf("genuine proven kill did not come through: %+v", rep)
+	}
+}
+
+// TestScoreAuthoredReport_PositiveControlSkippedInSingleFileMode proves the
+// fix is scoped to repo-aware mode only: single-file mode has no project
+// discovery configuration to be excluded by (the workspace holds exactly the
+// scaffold + code + test), so the positive control must not run there and
+// must not regress the existing single-file behavior.
+func TestScoreAuthoredReport_PositiveControlSkippedInSingleFileMode(t *testing.T) {
+	jail := &fakeReportJail{passOn: map[string]bool{"COMPLIANT": true, "MUTANT": false}}
+	s := JailScorer{Jail: jail} // no BaseFiles -> single-file mode
+
+	mutants := []adequacy.Mutant{{ID: "m1", Code: "MUTANT"}}
+	rep, err := s.ScoreAuthoredReport(context.Background(), "target.go", "COMPLIANT", "<test>", mutants, "go test ./...")
+	if err != nil {
+		t.Fatalf("ScoreAuthoredReport: %v", err)
+	}
+	if !rep.CompliantPass {
+		t.Fatalf("single-file mode regressed: CompliantPass=false: %+v", rep)
+	}
+}
+
 // TestJailValidatorCompileTest_SubdirectoryCodePath is I-1's regression test
 // (relocated from internal/brain/advpool_test.go's
 // TestAdvPoolValidatorCompileTest_SubdirectoryCodePath): a SUBDIRECTORY

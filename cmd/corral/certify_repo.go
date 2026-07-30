@@ -1231,6 +1231,40 @@ func orderExclusionsForListing(excl []reposcan.Exclusion) []reposcan.Exclusion {
 	return out
 }
 
+// printWeakFile prints one "weakest files" line, including the marker and
+// the disambiguating proven-missed count — factored out so the truncation
+// fallback (F4, below) renders a byte-identical line for a file that falls
+// outside the top 10.
+func printWeakFile(w io.Writer, f reposcan.WeakFile) {
+	marker := ""
+	switch {
+	case f.TimedOut:
+		marker = "  [TIMED OUT — pool did not converge]"
+	case f.TestWriterFailed:
+		marker = "  [WRITER FAILED — survivor(s) not proven-killed]"
+	case f.PoolTestUnsound:
+		marker = "  [TEST UNSOUND — authored test did not genuinely grade]"
+	}
+	// The explicit "N proven missed" count is printed ONLY when it is
+	// trustworthy AND needed to disambiguate: TimedOut, TestWriterFailed and
+	// PoolTestUnsound already carry their own marker explaining why
+	// ProvenMissed reads 0 (it is not meaningful on any of those three), so
+	// repeating "0 proven missed" next to a marker would be redundant at
+	// best. A file with Survivors == 0 has nothing to prove — the bare
+	// survivor count already says so. The remaining case — Survivors > 0, no
+	// marker — is exactly the ambiguous one this whole field exists to
+	// resolve: the writer ran, authored a compiling test that genuinely
+	// graded, and either proved a real gap (ProvenMissed > 0, corral's
+	// strongest claim) or proved nothing (0, a real "tried and missed"
+	// result) — either way it must be printed, never left as a bare survivor
+	// count that could be misread as silence on the question.
+	detail := fmt.Sprintf("(%d survivor(s))", f.Survivors)
+	if f.Survivors > 0 && !f.TestWriterFailed && !f.TimedOut && !f.PoolTestUnsound {
+		detail = fmt.Sprintf("(%d survivor(s), %d proven missed)", f.Survivors, f.ProvenMissed)
+	}
+	fmt.Fprintf(w, "    %.2f  %s %s%s\n", f.KillRate, f.Path, detail, marker)
+}
+
 func printRepoReport(w io.Writer, r reposcan.RepoReport, nothingInScope bool, minKillRate *float64) {
 	commit := r.Commit
 	if strings.TrimSpace(commit) == "" {
@@ -1278,6 +1312,28 @@ func printRepoReport(w io.Writer, r reposcan.RepoReport, nothingInScope bool, mi
 	if r.TestWriterFailed > 0 {
 		fmt.Fprintf(w, "  %d of the audited file(s) had survivor(s) the pool could not author a compiling test to kill — proven_missed reads 0 for them, NOT a clean suite (marked [WRITER FAILED] below)\n", r.TestWriterFailed)
 	}
+	// PoolTestUnsound is a DIFFERENT diagnosis from TestWriterFailed: a
+	// compiling test WAS produced, but its own scoring report never
+	// genuinely graded (it failed on the unmutated compliant code, or the
+	// canary was never killed, or nothing was scored). Same honesty rule,
+	// printed alongside TestWriterFailed/TimedOut, never folded into either.
+	if r.PoolTestUnsound > 0 {
+		fmt.Fprintf(w, "  %d of the audited file(s) had a compiling authored test that never genuinely graded (failed on clean code, or never reads the file) — proven_missed reads 0 for them, NOT a clean suite (marked [TEST UNSOUND] below)\n", r.PoolTestUnsound)
+	}
+	// ProvenMissed is corral's strongest claim — a survivor its authored
+	// test then killed BY EXECUTION, a specific demonstrated bug the dev
+	// suite misses — and it must read as that, not slide past as a bare
+	// number. r.ProvenMissed==0 is itself ambiguous across the whole repo
+	// (see WeakFile.ProvenMissed's doc for the four causes, TimedOut
+	// included), so this line's wording resolves it inline rather than
+	// printing a number a reader has to interpret unaided.
+	if r.Audited > 0 {
+		if r.ProvenMissed > 0 {
+			fmt.Fprintf(w, "  %d proven, catchable gap(s): the pool authored a test that killed a survivor by EXECUTION — see weakest files below\n", r.ProvenMissed)
+		} else {
+			fmt.Fprintln(w, "  0 proven gaps: no authored test killed a survivor in this run — see the per-file marker below for why (no survivors / writer failed / test unsound / timed out / tried and missed)")
+		}
+	}
 	// Sorted, like printExclusions: map iteration order is random, and a
 	// report a later slice signs and anchors has to be byte-reproducible.
 	ungradableReasons := make([]string, 0, len(r.Ungradable))
@@ -1299,19 +1355,26 @@ func printRepoReport(w io.Writer, r reposcan.RepoReport, nothingInScope bool, mi
 	}
 	if len(r.Weakest) > 0 {
 		fmt.Fprintln(w, "  weakest files:")
+		printed := make(map[string]bool, len(r.Weakest))
 		for i, f := range r.Weakest {
 			if i == 10 {
 				fmt.Fprintf(w, "    ... and %d more\n", len(r.Weakest)-10)
 				break
 			}
-			marker := ""
-			switch {
-			case f.TimedOut:
-				marker = "  [TIMED OUT — pool did not converge]"
-			case f.TestWriterFailed:
-				marker = "  [WRITER FAILED — survivor(s) not proven-killed]"
+			printWeakFile(w, f)
+			printed[f.Path] = true
+		}
+		// F4: the repo-level line above promises "see weakest files below"
+		// for every proven, catchable gap — a promise the truncation at 10
+		// entries (weakest-first, by kill rate) can silently break, because a
+		// proven gap can sit on a file with a HIGH kill rate that never makes
+		// the cut. Any such file is listed explicitly here instead of being
+		// hidden behind "... and N more".
+		for _, f := range r.Weakest {
+			if f.ProvenMissed > 0 && !printed[f.Path] {
+				fmt.Fprint(w, "    (not in the top 10 weakest, but has a proven gap) ")
+				printWeakFile(w, f)
 			}
-			fmt.Fprintf(w, "    %.2f  %s (%d survivor(s))%s\n", f.KillRate, f.Path, f.Survivors, marker)
 		}
 	}
 	// A distinct line from COULD-NOT-GRADE: that line means nothing was
@@ -1618,7 +1681,22 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 		l.note("%s: baseline failed — not graded\n", j.Path)
 		return res, nil
 	}
-	l.note("%s: kill rate %.2f (%d survivor(s))\n", j.Path, v.DevKillRate, v.Survivors)
+	// ProvenMissed rides along on the same line as DevKillRate/Survivors
+	// only when it is trustworthy AND has something to say: on a
+	// TestWriterFailed run no compiling test was ever authored, and on a
+	// PoolTestUnsound run one was authored but never genuinely graded — a "0
+	// proven missed" in either case would misread as a clean result instead
+	// of an unproven one (their own notes, printed elsewhere, already cover
+	// it); with 0 survivors there is nothing to prove. The remaining case —
+	// survivors found, a test was authored and genuinely graded — is exactly
+	// where ProvenMissed answers the question a bare kill rate leaves open:
+	// did the pool's own test demonstrate a real, catchable bug (corral's
+	// strongest claim), or did it try and prove nothing.
+	if v.Survivors > 0 && !v.TestWriterFailed && !v.PoolTestUnsound {
+		l.note("%s: kill rate %.2f (%d survivor(s), %d proven missed)\n", j.Path, v.DevKillRate, v.Survivors, v.ProvenMissed)
+	} else {
+		l.note("%s: kill rate %.2f (%d survivor(s))\n", j.Path, v.DevKillRate, v.Survivors)
+	}
 	return res, nil
 }
 

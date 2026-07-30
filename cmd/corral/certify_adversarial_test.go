@@ -558,6 +558,30 @@ func TestRenderAdvVerdictTimedOutDoesNotClaimTheTestWriterOrCriticRan(t *testing
 	}
 }
 
+// TestRenderAdvVerdictPoolTestUnsoundExplainsTheZero is F2's downstream
+// rendering check: a compiling authored test (TestWriterFailed false) whose
+// report never genuinely graded must print an explanation distinct from
+// TestWriterFailed's — proven_missed: 0 here means "not scored," not "the
+// pool could not author a compiling test."
+func TestRenderAdvVerdictPoolTestUnsoundExplainsTheZero(t *testing.T) {
+	var b strings.Builder
+	renderAdvVerdict(&b, "src/flask/cli.py", advVerdict{
+		Lang: "python", Commit: "abc1234", MutantsTotal: 24,
+		DevKillRate: 0.46, Survivors: 13, Status: "needs-review",
+		PoolTestUnsound: true, DevScored: true,
+	})
+	out := b.String()
+	if !strings.Contains(out, "proven_missed: 0") {
+		t.Fatalf("proven_missed must still print (this run DID converge, unlike TimedOut):\n%s", out)
+	}
+	if !strings.Contains(out, "did not pass on the unmutated code") {
+		t.Fatalf("must explain the PoolTestUnsound diagnosis distinctly from TestWriterFailed's:\n%s", out)
+	}
+	if strings.Contains(out, "could not author a compiling test") {
+		t.Fatalf("must NOT print TestWriterFailed's wording — this test DID compile:\n%s", out)
+	}
+}
+
 // TestRenderAdvVerdictUnmeasuredTimeoutDoesNotFabricateAZeroKillRate is the
 // re-review catch: TimedOut alone does NOT mean the dev suite was measured
 // — a run reachable ONLY on the brain/--adversarial path (advpool.Driver.Tick's

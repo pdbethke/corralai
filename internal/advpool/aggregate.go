@@ -18,6 +18,7 @@ func aggregate(
 	threshold float64,
 	blockingFindingOpen bool,
 	testWriterFailed bool,
+	poolTestUnsound bool,
 ) Verdict {
 	v := Verdict{
 		Repo:             rs.Repo,
@@ -31,6 +32,7 @@ func aggregate(
 		ModelsByRole:     map[string]string(assign),
 		Status:           StatusCertified,
 		TestWriterFailed: testWriterFailed,
+		PoolTestUnsound:  poolTestUnsound,
 		// aggregate is only ever reached via tickAggregate, which itself is
 		// gated on run.poolScored — reachable only once tickDevAdequacy has
 		// already set run.devScored (see driver.go's Tick). A converged
@@ -53,7 +55,11 @@ func aggregate(
 	// compiling test. A high devKillRate (e.g. 96%, 1 survivor) must never
 	// sail past the threshold check and auto-certify an unproven gap — that
 	// would silently misrepresent "gap found, not proven" as "clean."
-	if blockingFindingOpen || devKillRate < threshold || testWriterFailed {
+	// poolTestUnsound forces it the same way: a compiling test WAS produced,
+	// but its own report never genuinely graded — auto-certifying past that
+	// would be the same silent misrepresentation testWriterFailed guards
+	// against, from a different cause.
+	if blockingFindingOpen || devKillRate < threshold || testWriterFailed || poolTestUnsound {
 		v.Status = StatusNeedsReview
 	}
 	return v

@@ -1,0 +1,77 @@
+name: Foreign sweep
+
+# Runs scripts/foreign-sweep.sh — `certify --repo --dry-run` against 7
+# SHA-pinned foreign repos, diffed against testdata/foreign-sweep-expected.tsv
+# (see that script's own header for why it exists and what it does and does
+# not catch).
+#
+# A SEPARATE workflow from deploy.yml's `validate` job, deliberately: this
+# job needs only network (git clone) + the Go toolchain — no model key, no
+# jail, no bubblewrap, no per-language toolchain beyond Go, because
+# --dry-run returns before any audit or suite execution. Folding it into
+# `validate` would mean it inherits validate's much heavier provisioning
+# (Python/Ruby/JS toolchains, bubblewrap, gosec) for no reason, and a
+# required check that takes minutes to even START is a required check
+# someone eventually disables. Kept as its own five-minute-budget job so
+# there is never a reason to turn it off.
+#
+# Runs on PRs (not just pushes to main) — a gate that only fires after merge
+# is a report, not a gate — and reuses deploy.yml's docs-only detection
+# pattern so a Markdown-only PR doesn't pay for 7 clones + a Go build.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history so the changed-file diff below is exact
+      - name: Detect whether anything but docs changed
+        id: filter
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -uo pipefail
+          files=""
+          if [ "$EVENT" = "pull_request" ]; then
+            git fetch --no-tags --quiet origin "$BASE_REF" || true
+            base="$(git merge-base FETCH_HEAD HEAD 2>/dev/null || true)"
+            [ -n "$base" ] && files="$(git diff --name-only "$base" HEAD 2>/dev/null || true)"
+          elif [ -n "${BEFORE:-}" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] \
+               && git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            files="$(git diff --name-only "$BEFORE" HEAD 2>/dev/null || true)"
+          fi
+          # Fail-safe: if we couldn't enumerate the diff, run the sweep.
+          if [ -z "$files" ]; then
+            echo "changed files: <undetermined> — running sweep (fail-safe)"
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "changed files:"; printf '  %s\n' $files
+          # Any changed file that is not Markdown -> run the sweep.
+          if printf '%s\n' "$files" | grep -qvE '(^$|\.md$)'; then
+            code=true
+          else
+            code=false
+          fi
+          echo "non-docs changed: $code"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-go@v5
+        if: steps.filter.outputs.code == 'true'
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Run the foreign-repo enumeration sweep
+        if: steps.filter.outputs.code == 'true'
+        run: bash scripts/foreign-sweep.sh
+      - name: Docs-only change — sweep skipped
+        if: steps.filter.outputs.code != 'true'
+        run: echo "Only Markdown changed — foreign-sweep skipped; sweep passes."

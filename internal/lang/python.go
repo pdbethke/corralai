@@ -323,12 +323,27 @@ Return ONLY the raw Python test file content — no prose, no markdown fences.`
 // levels and correctly resolves to just its own base name — that really is
 // how Python imports a rootless module, so this is not a "could not
 // determine" case, it is a genuine (if trivial) determination.
+//
+// Every directory name crossed while climbing (and the file's own base
+// name) is validated with isPythonIdentifier before it joins the dotted
+// path: a real repo's directory name is not guaranteed to BE one (a `2fa/`
+// package dir, a dashed `my-pkg/`, a dotted `my.pkg/`, one containing a
+// space, or one that collides with a Python keyword like `class/` all
+// appear in the wild) — joining it anyway would hand the test-writer a
+// dotted string that LOOKS like a real import but is a SyntaxError the
+// instant it is written (`import 2fa.totp`), which is exactly the class of
+// bug this whole fix exists to remove, just re-entered through a directory
+// name instead of a missing fact. ok=false there is the honest answer: the
+// already-correct ImportNote(_, false) fallback (importlib.util.
+// spec_from_file_location, keyed off the file's own path rather than a
+// name) is the right advice for a package whose directory isn't a legal
+// identifier, since Python itself cannot `import` it by name either.
 func (pyPlugin) ImportPath(codePath string, exists func(path string) bool) (string, bool) {
 	if exists == nil {
 		return "", false
 	}
 	dir, base, ext := splitPath(codePath)
-	if ext != ".py" || base == "" {
+	if ext != ".py" || !isPythonIdentifier(base) {
 		return "", false
 	}
 	segments := []string{base}
@@ -336,7 +351,11 @@ func (pyPlugin) ImportPath(codePath string, exists func(path string) bool) (stri
 		if !exists(filepath.ToSlash(filepath.Join(dir, "__init__.py"))) {
 			break
 		}
-		segments = append([]string{filepath.Base(dir)}, segments...)
+		seg := filepath.Base(dir)
+		if !isPythonIdentifier(seg) {
+			return "", false
+		}
+		segments = append([]string{seg}, segments...)
 		parent := filepath.Dir(dir)
 		if parent == "." {
 			parent = ""
@@ -346,7 +365,56 @@ func (pyPlugin) ImportPath(codePath string, exists func(path string) bool) (stri
 		}
 		dir = parent
 	}
+	// src/flask/__init__.py resolves segments to ["flask", "__init__"]: that
+	// DOES import (Python happily accepts "import flask.__init__"), but as a
+	// SECOND, distinct module object from the canonical "flask" — technically
+	// working, but not what any human (or a later reviewer of the authored
+	// test) would recognize as the real import. Strip a trailing ".__init__"
+	// down to its package.
+	if n := len(segments); n > 1 && segments[n-1] == "__init__" {
+		segments = segments[:n-1]
+	}
 	return strings.Join(segments, "."), true
+}
+
+// pythonKeywords is the reserved-word set that cannot appear as a Python
+// identifier — https://docs.python.org/3/reference/lexical_analysis.html#keywords
+// (soft keywords like "match"/"case"/"_" are valid identifiers and
+// deliberately excluded). A directory or file base name that collides with
+// one of these cannot be joined into a dotted import (`import class.foo` is
+// a SyntaxError) even though it is a syntactically ordinary path segment.
+var pythonKeywords = map[string]bool{
+	"False": true, "None": true, "True": true, "and": true, "as": true,
+	"assert": true, "async": true, "await": true, "break": true, "class": true,
+	"continue": true, "def": true, "del": true, "elif": true, "else": true,
+	"except": true, "finally": true, "for": true, "from": true, "global": true,
+	"if": true, "import": true, "in": true, "is": true, "lambda": true,
+	"nonlocal": true, "not": true, "or": true, "pass": true, "raise": true,
+	"return": true, "try": true, "while": true, "with": true, "yield": true,
+}
+
+// isPythonIdentifier reports whether s is a legal Python identifier: a
+// non-empty ASCII sequence starting with a letter or underscore, continuing
+// with letters/digits/underscores, and not a reserved keyword. Deliberately
+// ASCII-only and conservative — Python technically permits Unicode
+// identifiers, but a false "not an identifier" here only costs an honest
+// ok=false (the safe direction: see ImportPath's doc comment), while a false
+// "is an identifier" would hand the test-writer a broken import to write.
+func isPythonIdentifier(s string) bool {
+	if s == "" || pythonKeywords[s] {
+		return false
+	}
+	for i, r := range s {
+		switch {
+		case r == '_' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z'):
+			continue
+		case r >= '0' && r <= '9' && i > 0:
+			continue
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // ImportNote states the derived import as a FACT for this task, or says

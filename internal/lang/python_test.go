@@ -218,6 +218,86 @@ func TestPythonImportPath(t *testing.T) {
 			t.Fatalf("ImportPath with nil exists = (%q, %v), want (\"\", false)", got, ok)
 		}
 	})
+
+	t.Run("__init__.py itself canonicalizes to the package, not pkg.__init__", func(t *testing.T) {
+		// src/flask/__init__.py resolves segments to ["flask","__init__"]
+		// before canonicalization: import flask.__init__ WOULD technically
+		// work (Python accepts it), but as a second, distinct module object
+		// from the canonical "flask" — not what a human reviewing the
+		// authored test would recognize. Canonical is "flask".
+		fs := fakeFS{"src/flask/__init__.py": true}
+		got, ok := p.ImportPath("src/flask/__init__.py", fs.exists)
+		if !ok || got != "flask" {
+			t.Fatalf("ImportPath(src/flask/__init__.py) = (%q, %v), want (flask, true)", got, ok)
+		}
+	})
+
+	t.Run("top-level __init__.py has nothing to canonicalize down to", func(t *testing.T) {
+		// A degenerate edge of the same rule: a top-level __init__.py with no
+		// package directory to climb into at all. There is no canonical
+		// package name to fall back to (stripping the sole segment would
+		// leave an empty import), so this must stay "__init__", not "".
+		fs := fakeFS{}
+		got, ok := p.ImportPath("__init__.py", fs.exists)
+		if !ok || got != "__init__" {
+			t.Fatalf("ImportPath(__init__.py) = (%q, %v), want (__init__, true)", got, ok)
+		}
+	})
+
+	// Package-directory-is-not-a-legal-identifier shapes: the bug re-entering
+	// through a directory name instead of a missing fact. Each of these MUST
+	// be ok=false — joining the segment anyway would hand the test-writer a
+	// dotted string that reads like a real import but is a SyntaxError the
+	// instant it is written (e.g. `import 2fa.totp`).
+	notIdentifierCases := []struct {
+		name string
+		dir  string
+	}{
+		{"leading digit", "2fa"},
+		{"dashed", "my-pkg"},
+		{"dotted", "my.pkg"},
+		{"spaced", "my pkg"},
+		{"python keyword", "class"},
+	}
+	for _, c := range notIdentifierCases {
+		t.Run("non-identifier package dir: "+c.name, func(t *testing.T) {
+			fs := fakeFS{c.dir + "/__init__.py": true}
+			codePath := c.dir + "/totp.py"
+			got, ok := p.ImportPath(codePath, fs.exists)
+			if ok || got != "" {
+				t.Fatalf("ImportPath(%q) = (%q, %v), want (\"\", false) — %q is not a legal Python identifier", codePath, got, ok, c.dir)
+			}
+		})
+	}
+
+	t.Run("2fa/totp.py returns ok=false while src/flask/cli.py still resolves", func(t *testing.T) {
+		// The exact pairing named in review: confirms the identifier guard
+		// does not collaterally break the flask case it sits right next to.
+		fs := fakeFS{"2fa/__init__.py": true, "src/flask/__init__.py": true}
+		if got, ok := p.ImportPath("2fa/totp.py", fs.exists); ok || got != "" {
+			t.Fatalf("ImportPath(2fa/totp.py) = (%q, %v), want (\"\", false)", got, ok)
+		}
+		if got, ok := p.ImportPath("src/flask/cli.py", fs.exists); !ok || got != "flask.cli" {
+			t.Fatalf("ImportPath(src/flask/cli.py) = (%q, %v), want (flask.cli, true)", got, ok)
+		}
+	})
+}
+
+// TestIsPythonIdentifier pins the identifier/keyword guard ImportPath relies
+// on directly, independent of the directory-climbing logic above.
+func TestIsPythonIdentifier(t *testing.T) {
+	valid := []string{"flask", "_private", "cli2", "a", "_", "totp"}
+	for _, s := range valid {
+		if !isPythonIdentifier(s) {
+			t.Errorf("isPythonIdentifier(%q) = false, want true", s)
+		}
+	}
+	invalid := []string{"", "2fa", "my-pkg", "my.pkg", "my pkg", "class", "def", "None", "import"}
+	for _, s := range invalid {
+		if isPythonIdentifier(s) {
+			t.Errorf("isPythonIdentifier(%q) = true, want false", s)
+		}
+	}
 }
 
 // TestPythonImportNote pins the two readouts ImportNote must produce: a

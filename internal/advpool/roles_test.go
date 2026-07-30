@@ -359,6 +359,37 @@ func TestRenderTestWriterCarriesImportFactForPython(t *testing.T) {
 	}
 }
 
+// TestRenderTestWriterDropsStaleFileNameClauseForPython pins a self-contradiction
+// review caught: whenever ImportNote has something to say (python, known OR
+// explicitly unknown ImportPath), the shared "Reference or import the code
+// under test as appropriate for the language, using that exact file name —
+// do not invent or assume any other name" clause must NOT also appear —
+// stating both that AND "do NOT import it by its bare file base name" in the
+// same instruction is exactly the kind of stale/contradicting clause a model
+// could obey instead of the specific note that follows it, in a prompt whose
+// entire failure mode is a model obeying a wrong instruction. Go (no
+// ImportNote) must keep the clause — it is the only guidance Go's own
+// same-package convention gets.
+func TestRenderTestWriterDropsStaleFileNameClauseForPython(t *testing.T) {
+	const staleClause = "using that exact file name — do not invent or assume any other name"
+	survivors := []adequacy.Mutant{{ID: "m1", Code: "mutant one"}}
+
+	known := RunSpec{Goal: "g", CodePath: "src/flask/cli.py", Code: "def f(): pass\n", Lang: "python", ImportPath: "flask.cli"}
+	if got := renderTestWriterWithRepair(known, nil, survivors, "", ""); strings.Contains(got, staleClause) {
+		t.Fatalf("python render with a known ImportPath must not also carry the stale file-name clause:\n%s", got)
+	}
+
+	unknown := RunSpec{Goal: "g", CodePath: "src/flask/cli.py", Code: "def f(): pass\n", Lang: "python"}
+	if got := renderTestWriterWithRepair(unknown, nil, survivors, "", ""); strings.Contains(got, staleClause) {
+		t.Fatalf("python render with an unknown ImportPath must not also carry the stale file-name clause:\n%s", got)
+	}
+
+	goRS := RunSpec{Goal: "g", CodePath: "version4.go", Code: "package uuid\nfunc New() {}\n", Lang: "go"}
+	if got := renderTestWriterWithRepair(goRS, nil, survivors, "", ""); !strings.Contains(got, staleClause) {
+		t.Fatalf("go render (no ImportNote) must KEEP the file-name clause — it is the only import guidance go gets:\n%s", got)
+	}
+}
+
 func TestCompileErrorMessage(t *testing.T) {
 	if got := (&CompileError{Output: "vet: x redeclared"}).Error(); !strings.Contains(got, "vet: x redeclared") {
 		t.Fatalf("CompileError with output must surface it, got %q", got)

@@ -27,6 +27,7 @@ import (
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/sandbox"
+	"github.com/pdbethke/corralai/internal/scanstore"
 )
 
 // gitCmd returns a helper that runs a git command in dir for a test fixture,
@@ -550,6 +551,27 @@ func TestCertifyRepoRecordRoundTripsReportedFiles(t *testing.T) {
 		if gotReason != wantReason {
 			t.Errorf("%s recorded with reason %q, want %q (from the printed report)", path, gotReason, wantReason)
 		}
+	}
+}
+
+// TestBuildScanFileRowsCarriesProvenMissed proves buildScanFileRows hands
+// advpool.Verdict.ProvenMissed through into the scanstore.File row for an
+// audited file, unit-level (no LLM call, no jail) — the direct fix for the
+// gap this whole change closes: `certify --repo` computed ProvenMissed on a
+// real converged verdict and then discarded it before it ever reached the
+// ledger.
+func TestBuildScanFileRowsCarriesProvenMissed(t *testing.T) {
+	results := []reposcan.FileResult{
+		{Job: reposcan.Job{Path: "src/flask/cli.py", Lang: "python"}, Gradable: true,
+			Verdict: advpool.Verdict{DevKillRate: 0.467, Survivors: 16, MutantsTotal: 30, ProvenMissed: 7, DevScored: true}},
+	}
+	rows := buildScanFileRows(results, nil, reposcan.CoverageMap{})
+	if len(rows) != 1 {
+		t.Fatalf("buildScanFileRows returned %d rows, want 1", len(rows))
+	}
+	var got scanstore.File = rows[0]
+	if got.ProvenMissed != 7 {
+		t.Errorf("row.ProvenMissed = %d, want 7", got.ProvenMissed)
 	}
 }
 
@@ -1622,6 +1644,34 @@ func TestLocalExecutorExecuteRedBaselineSkipsTheAudit(t *testing.T) {
 	}
 }
 
+// TestLocalExecutorExecuteLogsProvenMissed proves the per-file progress line
+// carries ProvenMissed the same way it already carries DevKillRate and
+// Survivors — corral's real audit converged with a verdict of
+// "kill_rate 0.467, 16 survivors, proven" (see internal/reposcan/report.go's
+// package doc for the pallets/flask/src/flask/cli.py case this responds to)
+// and the operator watching progress scroll by never saw the pool's actual
+// finding, only the raw survivor count.
+func TestLocalExecutorExecuteLogsProvenMissed(t *testing.T) {
+	var buf bytes.Buffer
+	ex := localExecutor{
+		baselineRuns: 2,
+		progress:     &buf,
+		newBaseline: func(context.Context, localAuditInput) (reposcan.BaselineRunner, func(), error) {
+			return &scriptedBaseline{results: []bool{true, true}}, func() {}, nil
+		},
+		audit: func(context.Context, localAuditInput) (advpool.Verdict, error) {
+			return advpool.Verdict{DevKillRate: 0.467, Survivors: 16, MutantsTotal: 30, ProvenMissed: 7, DevScored: true}, nil
+		},
+	}
+	if _, err := ex.Execute(context.Background(), reposcan.Job{Path: "src/flask/cli.py", Goal: reposcan.Goal{Text: "g"}}); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got := buf.String()
+	if !strings.Contains(got, "7 proven missed") {
+		t.Errorf("per-file progress line is missing proven_missed:\n%s", got)
+	}
+}
+
 // TestLocalExecutorReleasesTheBaselineJail proves the cleanup runs on every
 // path — including the early return for a red baseline, where a leak would
 // strand a vendor staging dir per file.
@@ -2285,6 +2335,89 @@ func TestPrintRepoReportMarksTestWriterFailedFiles(t *testing.T) {
 		if strings.Contains(line, "clean.go") && strings.Contains(line, "WRITER FAILED") {
 			t.Errorf("clean.go's line wrongly carries the WRITER FAILED marker: %q", line)
 		}
+	}
+}
+
+// TestPrintRepoReportShowsProvenMissed is the real pallets/flask case this
+// whole gap-closing change responds to: a run converges cleanly, the pool's
+// authored test kills some of the survivors, and that — corral's strongest
+// claim, an execution-demonstrated bug the dev suite misses — must actually
+// reach the printed report. Before this fix, ProvenMissed was computed and
+// discarded: it appeared nowhere in printRepoReport's output.
+func TestPrintRepoReportShowsProvenMissed(t *testing.T) {
+	rep := reposcan.Aggregate("o", "r", "c", 1, 1, []reposcan.FileResult{
+		{Job: reposcan.Job{Path: "src/flask/cli.py"}, Gradable: true,
+			Verdict: advpool.Verdict{DevKillRate: 0.467, Survivors: 16, MutantsTotal: 30, ProvenMissed: 7, DevScored: true}},
+	}, nil)
+
+	var buf bytes.Buffer
+	printRepoReport(&buf, rep, false, nil)
+	got := buf.String()
+
+	if !strings.Contains(got, "7 proven") {
+		t.Errorf("report is missing the repo-level proven_missed rollup:\n%s", got)
+	}
+	if !strings.Contains(got, "src/flask/cli.py") || !strings.Contains(got, "7 proven missed") {
+		t.Errorf("report does not show cli.py's per-file proven_missed count:\n%s", got)
+	}
+}
+
+// TestPrintRepoReportZeroProvenMissedIsLegible pins the honesty requirement
+// at the heart of this change: ProvenMissed==0 is ambiguous on its own (see
+// WeakFile.ProvenMissed's doc for the three cases), so a reader must be able
+// to tell, from the printed report alone, which of the three they are
+// looking at — never a bare "0" that could read as reassurance.
+func TestPrintRepoReportZeroProvenMissedIsLegible(t *testing.T) {
+	rep := reposcan.Aggregate("o", "r", "c", 3, 3, []reposcan.FileResult{
+		// Case 1: no survivors at all — the writer never ran (moot).
+		{Job: reposcan.Job{Path: "clean.go"}, Gradable: true,
+			Verdict: advpool.Verdict{DevKillRate: 1.0, Survivors: 0, MutantsTotal: 5, ProvenMissed: 0, DevScored: true}},
+		// Case 2: survivors, but the writer failed to author a compiling test.
+		{Job: reposcan.Job{Path: "writer_failed.py"}, Gradable: true,
+			Verdict: advpool.Verdict{DevKillRate: 0.5, Survivors: 5, MutantsTotal: 10, ProvenMissed: 0, TestWriterFailed: true, DevScored: true}},
+		// Case 3: writer ran, authored a compiling test, proved nothing.
+		{Job: reposcan.Job{Path: "tried_and_missed.py"}, Gradable: true,
+			Verdict: advpool.Verdict{DevKillRate: 0.6, Survivors: 4, MutantsTotal: 10, ProvenMissed: 0, DevScored: true}},
+	}, nil)
+
+	var buf bytes.Buffer
+	printRepoReport(&buf, rep, false, nil)
+	got := buf.String()
+	lines := strings.Split(got, "\n")
+
+	lineFor := func(path string) string {
+		for _, l := range lines {
+			if strings.Contains(l, path) {
+				return l
+			}
+		}
+		t.Fatalf("no line found for %s in:\n%s", path, got)
+		return ""
+	}
+
+	// Case 1 (moot): the survivor count itself (0) is what makes "nothing
+	// proven" legible — no proven-missed detail is needed or printed.
+	clean := lineFor("clean.go")
+	if strings.Contains(clean, "proven missed") {
+		t.Errorf("clean.go (0 survivors, nothing to prove) should not print a proven-missed count at all: %q", clean)
+	}
+
+	// Case 2 (writer failed): the existing [WRITER FAILED] marker is what
+	// makes the 0 legible — it must still be present.
+	wf := lineFor("writer_failed.py")
+	if !strings.Contains(wf, "WRITER FAILED") {
+		t.Errorf("writer_failed.py must carry the WRITER FAILED marker so its 0 proven_missed cannot be misread as clean: %q", wf)
+	}
+
+	// Case 3 (tried and missed): survivors > 0, no WRITER FAILED marker —
+	// the explicit "0 proven missed" on this line is what distinguishes it
+	// from case 2, and must be present.
+	tm := lineFor("tried_and_missed.py")
+	if !strings.Contains(tm, "0 proven missed") {
+		t.Errorf("tried_and_missed.py must explicitly print 0 proven missed (a real, demonstrated 'nothing proven' result): %q", tm)
+	}
+	if strings.Contains(tm, "WRITER FAILED") {
+		t.Errorf("tried_and_missed.py's writer did not fail — must not carry the WRITER FAILED marker: %q", tm)
 	}
 }
 

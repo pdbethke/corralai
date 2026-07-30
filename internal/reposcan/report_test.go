@@ -153,6 +153,41 @@ func TestAggregateMarksTestWriterFailedFiles(t *testing.T) {
 	}
 }
 
+// TestAggregateCarriesProvenMissedThrough proves the fix for the reporting
+// gap this whole change closes: a real converged verdict's ProvenMissed
+// (advpool's execution-proven "the pool's authored test killed a survivor")
+// must reach WeakFile AND roll up into the repo-level total — before this,
+// Aggregate silently dropped it (see report.go's now-updated WeakFile doc,
+// which used to say "not carried on WeakFile").
+func TestAggregateCarriesProvenMissedThrough(t *testing.T) {
+	results := []FileResult{
+		{Job: Job{Path: "clean.go"}, Gradable: true,
+			Verdict: advpool.Verdict{DevKillRate: 1.0, Survivors: 0, MutantsTotal: 5, ProvenMissed: 0}},
+		{Job: Job{Path: "src/flask/cli.py"}, Gradable: true,
+			Verdict: advpool.Verdict{DevKillRate: 0.467, Survivors: 16, MutantsTotal: 30, ProvenMissed: 7, DevScored: true}},
+	}
+	rep := Aggregate("o", "r", "c1", 2, 2, results, nil)
+
+	if rep.ProvenMissed != 7 {
+		t.Fatalf("rep.ProvenMissed = %d, want 7 (rolled up from the one file that proved anything)", rep.ProvenMissed)
+	}
+	var found bool
+	for _, f := range rep.Weakest {
+		if f.Path == "src/flask/cli.py" {
+			found = true
+			if f.ProvenMissed != 7 {
+				t.Errorf("cli.py's WeakFile.ProvenMissed = %d, want 7", f.ProvenMissed)
+			}
+		}
+		if f.Path == "clean.go" && f.ProvenMissed != 0 {
+			t.Errorf("clean.go's WeakFile.ProvenMissed = %d, want 0 — it had no survivors to prove", f.ProvenMissed)
+		}
+	}
+	if !found {
+		t.Fatal("cli.py missing from rep.Weakest")
+	}
+}
+
 func TestAggregateRanksWeakestFirst(t *testing.T) {
 	rep := Aggregate("o", "r", "c1", 3, 3, []FileResult{
 		gradable("strong.go", 0.9, 1),

@@ -1278,6 +1278,22 @@ func printRepoReport(w io.Writer, r reposcan.RepoReport, nothingInScope bool, mi
 	if r.TestWriterFailed > 0 {
 		fmt.Fprintf(w, "  %d of the audited file(s) had survivor(s) the pool could not author a compiling test to kill — proven_missed reads 0 for them, NOT a clean suite (marked [WRITER FAILED] below)\n", r.TestWriterFailed)
 	}
+	// ProvenMissed is corral's strongest claim — a survivor its authored
+	// test then killed BY EXECUTION, a specific demonstrated bug the dev
+	// suite misses — and it must read as that, not slide past as a bare
+	// number. r.ProvenMissed==0 is itself ambiguous across the whole repo
+	// (see WeakFile.ProvenMissed's three-case doc), so this line's wording
+	// resolves it inline rather than printing a number a reader has to
+	// interpret unaided: the TestWriterFailed/TimedOut caveats above already
+	// account for two of the three causes, so a repo-wide zero here reads as
+	// "no authored test killed a survivor in this run" rather than "clean".
+	if r.Audited > 0 {
+		if r.ProvenMissed > 0 {
+			fmt.Fprintf(w, "  %d proven, catchable gap(s): the pool authored a test that killed a survivor by EXECUTION — see weakest files below\n", r.ProvenMissed)
+		} else {
+			fmt.Fprintln(w, "  0 proven gaps: no authored test killed a survivor in this run — see the per-file marker below for why (no survivors / writer failed / tried and missed)")
+		}
+	}
 	// Sorted, like printExclusions: map iteration order is random, and a
 	// report a later slice signs and anchors has to be byte-reproducible.
 	ungradableReasons := make([]string, 0, len(r.Ungradable))
@@ -1311,7 +1327,27 @@ func printRepoReport(w io.Writer, r reposcan.RepoReport, nothingInScope bool, mi
 			case f.TestWriterFailed:
 				marker = "  [WRITER FAILED — survivor(s) not proven-killed]"
 			}
-			fmt.Fprintf(w, "    %.2f  %s (%d survivor(s))%s\n", f.KillRate, f.Path, f.Survivors, marker)
+			// The explicit "N proven missed" count is printed ONLY when it is
+			// trustworthy AND needed to disambiguate: TimedOut and
+			// TestWriterFailed already carry their own marker explaining why
+			// ProvenMissed reads 0 (it is not meaningful on a TimedOut run —
+			// the test-writer may never have finished — and TestWriterFailed
+			// means no compiling test was ever authored), so repeating "0
+			// proven missed" next to either marker would be redundant at
+			// best. A file with Survivors == 0 has nothing to prove — the
+			// bare survivor count already says so. The remaining case —
+			// Survivors > 0, no marker — is exactly the ambiguous one this
+			// whole field exists to resolve: the writer ran, authored a
+			// compiling test, and either proved a real gap (ProvenMissed >
+			// 0, corral's strongest claim) or proved nothing (0, a real
+			// "tried and missed" result) — either way it must be printed,
+			// never left as a bare survivor count that could be misread as
+			// silence on the question.
+			detail := fmt.Sprintf("(%d survivor(s))", f.Survivors)
+			if f.Survivors > 0 && !f.TestWriterFailed && !f.TimedOut {
+				detail = fmt.Sprintf("(%d survivor(s), %d proven missed)", f.Survivors, f.ProvenMissed)
+			}
+			fmt.Fprintf(w, "    %.2f  %s %s%s\n", f.KillRate, f.Path, detail, marker)
 		}
 	}
 	// A distinct line from COULD-NOT-GRADE: that line means nothing was
@@ -1618,7 +1654,21 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 		l.note("%s: baseline failed — not graded\n", j.Path)
 		return res, nil
 	}
-	l.note("%s: kill rate %.2f (%d survivor(s))\n", j.Path, v.DevKillRate, v.Survivors)
+	// ProvenMissed rides along on the same line as DevKillRate/Survivors
+	// only when it is trustworthy AND has something to say: on a
+	// TestWriterFailed run no compiling test was ever authored, so a "0
+	// proven missed" here would misread as a clean result instead of an
+	// unproven one (the WRITER FAILED note printed elsewhere already covers
+	// it); with 0 survivors there is nothing to prove. The remaining case —
+	// survivors found, a test was authored — is exactly where ProvenMissed
+	// answers the question a bare kill rate leaves open: did the pool's own
+	// test demonstrate a real, catchable bug (corral's strongest claim), or
+	// did it try and prove nothing.
+	if v.Survivors > 0 && !v.TestWriterFailed {
+		l.note("%s: kill rate %.2f (%d survivor(s), %d proven missed)\n", j.Path, v.DevKillRate, v.Survivors, v.ProvenMissed)
+	} else {
+		l.note("%s: kill rate %.2f (%d survivor(s))\n", j.Path, v.DevKillRate, v.Survivors)
+	}
 	return res, nil
 }
 

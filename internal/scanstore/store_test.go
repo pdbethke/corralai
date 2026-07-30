@@ -42,6 +42,8 @@ func TestRecordRoundTripsEveryDisposition(t *testing.T) {
 			Evidence: "proven", TimedOut: true},
 		{Path: "g.py", Lang: "python", Disposition: "audited", KillRate: ptr(0.457), Survivors: 19, Gradable: true,
 			Evidence: "proven", TestWriterFailed: true},
+		{Path: "h.py", Lang: "python", Disposition: "audited", KillRate: ptr(0.467), Survivors: 16, Gradable: true,
+			Evidence: "proven", ProvenMissed: 7},
 	}
 
 	id, err := st.Record(context.Background(), scan, files)
@@ -87,6 +89,12 @@ func TestRecordRoundTripsEveryDisposition(t *testing.T) {
 	}
 	if a := byPath["a.go"]; a.TestWriterFailed {
 		t.Fatalf("a.go TestWriterFailed round-tripped as true, want false — a cleanly-authored killing test must not carry the marker")
+	}
+	if h := byPath["h.py"]; h.ProvenMissed != 7 {
+		t.Fatalf("h.py ProvenMissed round-tripped as %d, want 7 — corral's strongest claim (an execution-proven, catchable gap) must survive into the ledger", h.ProvenMissed)
+	}
+	if a := byPath["a.go"]; a.ProvenMissed != 0 {
+		t.Fatalf("a.go ProvenMissed round-tripped as %d, want 0", a.ProvenMissed)
 	}
 }
 

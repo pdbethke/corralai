@@ -29,13 +29,33 @@ type WeakFile struct {
 	// TestWriterFailed mirrors advpool.Verdict.TestWriterFailed: true when
 	// this file's run exhausted its compile-retry budget without authoring
 	// a compiling killing test. HONESTY NOTE: Survivors > 0 here with
-	// TestWriterFailed true does NOT mean "no real bugs" — proven_missed
-	// (not carried on WeakFile; see advpool.Verdict.ProvenMissed) is 0
-	// because no killing test was ever authored, not because the survivors
-	// aren't real. A caller must print this distinctly, the same way
-	// TimedOut is — printing bare survivor counts here invites exactly the
-	// "corral found nothing" misreading this field exists to prevent.
+	// TestWriterFailed true does NOT mean "no real bugs" — ProvenMissed
+	// (below) is 0 because no killing test was ever authored, not because
+	// the survivors aren't real. A caller must print this distinctly, the
+	// same way TimedOut is — printing bare survivor counts here invites
+	// exactly the "corral found nothing" misreading this field exists to
+	// prevent.
 	TestWriterFailed bool
+	// ProvenMissed mirrors advpool.Verdict.ProvenMissed: survivors the
+	// pool's authored test then killed by EXECUTION — corral's strongest
+	// claim, a specific demonstrated bug the dev suite misses. It is
+	// carried on WeakFile precisely so a caller does not have to reach back
+	// into the verdict to report it.
+	//
+	// HONESTY NOTE — ProvenMissed==0 is ambiguous on its own and must never
+	// be printed bare. Combined with the other WeakFile fields it resolves
+	// to exactly one of three cases:
+	//   1. Survivors == 0: there was nothing to prove — the test-writer
+	//      never ran (advpool's testWriterMoot). A real "clean" result.
+	//   2. Survivors > 0 && TestWriterFailed: the writer never produced a
+	//      compiling test — see TestWriterFailed's doc above.
+	//   3. Survivors > 0 && !TestWriterFailed: the writer's authored test
+	//      ran and killed none of the survivors — a real "nothing proven"
+	//      result, distinct from both of the above.
+	// A caller printing this field must print enough of the other three
+	// (Survivors, TestWriterFailed) alongside it that a reader can tell
+	// which case they are looking at without re-deriving it.
+	ProvenMissed int
 }
 
 // RepoReport is the repo-level result. It is mostly ACCOUNTING, because that
@@ -81,6 +101,13 @@ type RepoReport struct {
 	// files" must not read as "every survivor was proven, or ruled out" when
 	// some were neither.
 	TestWriterFailed int
+	// ProvenMissed sums WeakFile.ProvenMissed over every audited file — the
+	// repo-wide count of survivors execution actually proved catchable.
+	// Corral's strongest claim, rolled up. Like the per-file field, 0 here
+	// is ambiguous on its own (see WeakFile.ProvenMissed's three cases) and
+	// a caller must not print it without the TestWriterFailed/TimedOut
+	// caveats alongside it.
+	ProvenMissed int
 
 	Weakest     []WeakFile
 	CacheHits   int
@@ -173,12 +200,14 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 		if r.Verdict.TestWriterFailed {
 			rep.TestWriterFailed++
 		}
+		rep.ProvenMissed += r.Verdict.ProvenMissed
 		rep.Weakest = append(rep.Weakest, WeakFile{
 			Path:             r.Job.Path,
 			KillRate:         r.Verdict.DevKillRate,
 			Survivors:        r.Verdict.Survivors,
 			TimedOut:         r.Verdict.TimedOut,
 			TestWriterFailed: r.Verdict.TestWriterFailed,
+			ProvenMissed:     r.Verdict.ProvenMissed,
 		})
 	}
 

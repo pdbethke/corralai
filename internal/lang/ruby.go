@@ -119,3 +119,10 @@ func (rubyPlugin) SingleTestCmd(testPath, selector string) ([]string, bool) { re
 func (rubyPlugin) ListTestsCmd(string) ([]string, bool) { return nil, false }
 
 func (rubyPlugin) ParseTestList(string) []string { return nil }
+
+// WorkspaceRunEnv is a no-op: MRI has no persistent, mtime/size-keyed
+// bytecode cache next to a .rb source file by default (unlike CPython's
+// __pycache__) — nothing here is exposed to the workspace substrate's
+// same-second, same-length staleness hole. See lang.Plugin.WorkspaceRunEnv's
+// doc comment.
+func (rubyPlugin) WorkspaceRunEnv() (env []string, cleanup func()) { return nil, func() {} }

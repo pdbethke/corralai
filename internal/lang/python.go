@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -91,6 +92,53 @@ const pyCachePrefixEnv = "PYTHONPYCACHEPREFIX=/tmp/corral-pyc"
 // why the return type is a sequence at all.
 func (pyPlugin) CompileCheck(codePath, testPath string) [][]string {
 	return [][]string{{"env", pyCachePrefixEnv, pythonBin(), "-m", "py_compile", codePath, testPath}}
+}
+
+// WorkspaceRunEnv closes the __pycache__ staleness hole on the WORKSPACE
+// substrate (internal/adequacy/workspace.go), which — unlike the jail — runs
+// every baseline/canary/mutant/authored-test invocation against the SAME
+// real checkout directory, in place. CPython's default source-based .pyc
+// cache is keyed off a source file's (mtime_seconds, size); measured
+// reproduction (see the pycache-invalidation branch's investigation): a
+// mutant written back to the SAME path, at the SAME byte length, within the
+// SAME wall-clock second as the run that populated that path's cache
+// silently reads the STALE bytecode instead of recompiling — the mutant
+// never actually executes, and a suite that would certainly have caught it
+// reads as a "survivor" instead, depressing the measured kill rate.
+//
+// PYTHONPYCACHEPREFIX redirects both the READ and the WRITE side of that
+// cache to dir — verified sufficient ON ITS OWN, with one condition: dir
+// MUST be fresh for every call (this method is called fresh by
+// WorkspaceRunner before each individual run, per lang.Plugin.WorkspaceRunEnv's
+// contract). A dir reused across calls (even one this method itself
+// created earlier) still lets a same-second, same-size mutant hit the
+// baseline's own entry in that shared dir — measured and confirmed to still
+// reproduce the bug. PYTHONDONTWRITEBYTECODE=1 is set too, defense in
+// depth: it costs nothing (dir is deleted immediately after this run
+// anyway) and it also means a run that somehow escapes cleanup (a killed
+// process, a panic before cleanup runs) leaves no cache behind to have
+// mattered in the first place. It is NOT, by itself, sufficient — verified:
+// it only stops corral WRITING a new stale entry; it does nothing about a
+// pre-existing __pycache__ a DEVELOPER's own earlier `pytest` run already
+// left next to the source file, which PYTHONDONTWRITEBYTECODE=1 alone would
+// still happily READ.
+//
+// A failed MkdirTemp degrades to PYTHONDONTWRITEBYTECODE=1 only — not a
+// hard failure — because refusing to grade over an environment hiccup here
+// would be a worse failure mode than "corral creates no new stale cache,
+// but a pre-existing one could still theoretically be read this one time";
+// see the doc comment above for why that residual is bounded and rare (it
+// requires a developer's OWN prior run to have left a same-second,
+// same-length cache entry at this exact path, not just corral's own).
+func (pyPlugin) WorkspaceRunEnv() (env []string, cleanup func()) {
+	dir, err := os.MkdirTemp("", "corral-pyc-run-*")
+	if err != nil {
+		return []string{"PYTHONDONTWRITEBYTECODE=1"}, func() {}
+	}
+	return []string{
+		"PYTHONDONTWRITEBYTECODE=1",
+		"PYTHONPYCACHEPREFIX=" + dir,
+	}, func() { _ = os.RemoveAll(dir) }
 }
 
 // TestPaths returns pytest-convention candidates for codePath, most specific

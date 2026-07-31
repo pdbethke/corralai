@@ -130,6 +130,44 @@ type Plugin interface {
 	// ParseTestList extracts SingleTestCmd-compatible selectors from the output
 	// of ListTestsCmd, in emission order. Pure.
 	ParseTestList(output string) []string
+	// WorkspaceRunEnv returns extra "VAR=value" environment assignments to
+	// apply to ONE scoring run (a single baseline, canary, mutant, or
+	// authored-test invocation) on the WORKSPACE substrate — where the
+	// runner mutates a REAL checkout in place across many runs, rather than
+	// materializing a fresh, disposable temp directory per run the way the
+	// bwrap jail's writeWorkspace does (internal/adequacy/jail.go). cleanup
+	// releases whatever that env's values needed (e.g. a temp directory);
+	// the caller MUST invoke it once that single run has finished, win or
+	// lose.
+	//
+	// THE CALLER MUST INVOKE THIS FRESH BEFORE **EVERY** RUN, never once
+	// for a whole audit and reused: internal/adequacy.WorkspaceRunner does
+	// exactly that (once per applyRunRestore call). A value computed once
+	// and shared across the baseline and its mutants does NOT close the
+	// hole this method exists for — see python.go's implementation and
+	// docs/superpowers (gitignored) for the measured mechanism: CPython
+	// keys a persistent .pyc cache off a source file's (mtime_seconds,
+	// size), and the workspace substrate can rewrite a mutant to the exact
+	// same path with the exact same size within the exact same wall-clock
+	// second as the run that populated that cache — a stale-cache HIT that
+	// silently skips re-executing the mutated code, reading as a phantom
+	// "survivor" no matter how obviously wrong the mutant is. A cache
+	// directory shared across calls (even a freshly-created one) still
+	// lets a later same-second, same-size mutant hit the entry an earlier
+	// call in the SAME audit left there; only a directory that is fresh
+	// PER RUN closes it.
+	//
+	// Most plugins have nothing to add here (nil, a no-op cleanup): the
+	// jail substrate is immune by construction (a fresh MkdirTemp workspace
+	// per run means there is never a pre-existing cache entry to alias
+	// against), and only a language whose toolchain keeps a PERSISTENT,
+	// content-addressed-by-mtime-and-size cache next to the source it
+	// compiles is exposed on the workspace substrate at all — currently
+	// only Python's own __pycache__. Ruby's compiler has no such cache by
+	// default. JS/TS bundlers and `ts-node` DO cache compiled output
+	// keyed off source metadata in some configurations, but closing that
+	// is out of scope here — see typescript.go's own note.
+	WorkspaceRunEnv() (env []string, cleanup func())
 }
 
 var registry = map[string]Plugin{}

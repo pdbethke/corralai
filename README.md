@@ -51,7 +51,17 @@ actually test anything, or do they just pass?* — and answers it by execution:
   back) rather than blindly repeating. A surviving mutant is *disclosed,
   unadjudicated* (a real gap, or an equivalent mutant no test can catch — your call);
   only a survivor a compiling test actually kills is a **proven** gap, handed back to
-  you.
+  you. **A compiling test that passes is not evidence of anything** — it may simply
+  never have been collected by your test runner (a project that confines discovery
+  to a test root, like flask's `testpaths = ["tests"]`, will not run a file written
+  elsewhere). corral writes its authored test into the directory your paired test
+  already lives in, and then *proves* the run reached it by planting deliberately
+  invalid source at that exact path and checking your unmodified command reacts. If
+  it doesn't, the file is reported `[TEST UNSOUND]` and its proven count is withheld
+  rather than reported as a clean zero. **Expect proven gaps to be the exception,
+  not the rule:** on a real third-party file, corral has converted survivors into
+  proven gaps in some runs and none in others. Zero proven gaps means *nothing was
+  proven this run* — never *your tests are fine*.
 - A **test-critic** — always a *different*, decorrelation-enforced model — reads your
   suite cold and flags vacuous, designed-to-pass tests. Its opinion is carried as
   **unverified advice; it never gates the verdict.**
@@ -77,7 +87,23 @@ then refuses unless you pass `--allow-unanchored`.
 
 Go, Python (pytest), Ruby (minitest/RSpec), JavaScript (node:test), and TypeScript
 (tsc + node:test) — the language is inferred from `--code`'s extension; C is next,
-each a plugin in `internal/lang`. By default the audit runs two distinct Claude
+each a plugin in `internal/lang`.
+
+> **Whole-repo scanning is not equally strong across those languages.** `certify
+> --local` audits any single file you name, in any of them — you give it the path,
+> so nothing has to be discovered. `certify --repo` must first *find* the files, by
+> pairing each source file with its test using naming conventions, and that pairing
+> is much better at some ecosystems than others. Measured on real repos:
+> `rubocop/rubocop` **736** candidates, `gin-gonic/gin` **29**, `pallets/flask`
+> **9** — and `expressjs/express` **zero**, because common JavaScript layouts don't
+> match the conventions corral knows. **If a `--repo` scan of your JS/TS project
+> reports `0 candidates`, that's a limitation of corral's pairing, not a verdict on
+> your tests** — audit the files directly with `--local --code <path> --test
+> <path>`, which never uses pairing at all. The `express` zero is pinned in CI
+> precisely so it can't be quietly papered over; see [the foreign-repo
+> sweep](#the-gate--for-a-repo-and-for-a-control-owner) below.
+
+By default the audit runs two distinct Claude
 models off one key (Sonnet writes/mutates, Haiku critiques) — decorrelation satisfied
 with a single key; on that same default path, `--critic-model gemini-3.5-flash` plus
 `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) routes the critic to Gemini via the

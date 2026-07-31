@@ -53,6 +53,23 @@ Go binary.**
   gates**. A converged run (certified or needs-review)
   is signed via the same certify chain; a low kill-rate or a blocking finding always
   routes to needs-review, never auto-certified.
+- **The authored test is sited where the project actually collects it — and that is
+  *proven*, not assumed.** A compiling test that passes proves nothing if the
+  project's own runner never collected it: writing it beside the code file is invisible
+  to any project that confines discovery to a test root (flask's `testpaths =
+  ["tests"]`). corral now writes its authored test into the directory the *paired
+  developer test* already lives in — collected by construction, since running that
+  suite is what produced the adequacy score — and derives the filename from the
+  language plugin's own convention, so it never parses `testpaths`, jest `roots`, or a
+  rake FileList (a per-language tail where every miss is a silent wrong verdict). A
+  **positive control** then plants deliberately invalid source at that exact path and
+  confirms the unmodified test command reacts; when it doesn't, the file is reported
+  `[TEST UNSOUND]` and its proven count is withheld instead of printed as a clean
+  zero. **Honest scope: this makes the authored test run and grade; it does not make
+  proving a gap reliable.** On a real third-party file, paid runs have converted
+  survivors into proven gaps in some runs and none in others — a genuinely-grading
+  authored test that kills no survivor ("tried and missed") is the next open layer,
+  and it was invisible while the test was never executing at all.
 - **The swarm.** `--local` runs its role tasks through a **bounded concurrent worker
   pool** (`--swarm N`), and the mutant-generator is **sharded** — the file's functions
   are bin-packed (complexity-balanced, deterministic) into up to `--max-shards`

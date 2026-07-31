@@ -47,6 +47,10 @@ page and `SECURITY.md`):
   so no test can catch) is the human's call, not the tool's. corral only calls a
   survivor a *proven* gap when its test-writer authors a compiling test that
   actually kills it; it never over-claims an unproven survivor as a real bug.
+  **And it does not promise to prove one.** Turning a survivor into a proven gap
+  requires the test-writer to author a test that genuinely kills it — on real
+  third-party code, some runs manage it and some don't. **Zero proven gaps means
+  "nothing was proven in this run", never "your tests are fine."**
 - **It does not make an LLM immune to instructions in the content it reads.**
   Fencing untrusted data is hardening, not a guarantee — the *control* is that
   unvetted content can never reach an authoritative position, and a fooled
@@ -73,6 +77,27 @@ Operationally, v0.1 has real, named ceilings, not "coming soon" hand-waving:
 - **No pentester role in the certify pool.** The adversarial pool runs
   mutant-generator, test-writer, and test-critic; a dedicated pentester role
   (as distinct from mutation-testing your suite) isn't part of it.
+- **Whole-repo scanning is much weaker in JavaScript/TypeScript than in
+  Go, Python, or Ruby.** `certify --local` audits any single file you name, in
+  any of the five languages — you give it the path, so nothing is discovered.
+  `certify --repo` must *find* the files first, pairing each source file with
+  its test by naming convention, and those conventions fit some ecosystems far
+  better than others. Measured on real repos: `rubocop/rubocop` **736**
+  candidates, `gin-gonic/gin` **29**, `pallets/flask` **9** — and
+  `expressjs/express` **zero**. If a repo scan of your JS/TS project reports
+  `0 candidates`, that's corral's pairing limitation, **not a verdict on your
+  tests**; audit files directly with `--local --code <path> --test <path>`,
+  which never pairs. The `express` zero is pinned in CI so a future change
+  can't quietly paper over it.
+- **An authored test only counts if your runner actually collects it.** A test
+  that compiles and passes proves nothing if the project's own test command
+  never ran it — a project that confines discovery to a test root (pytest's
+  `testpaths`, jest's `roots`) will silently ignore a file written elsewhere.
+  corral writes its authored test into the directory your paired test already
+  lives in, then *proves* the run reached it by planting deliberately invalid
+  source at that path and checking your unmodified command reacts. When it
+  doesn't, the file is reported `[TEST UNSOUND]` and its proven count is
+  withheld rather than printed as a clean zero.
 - **The language toolchain must be jail-visible.** Installed system-wide
   under `/usr`, not `--user`/snap/pyenv — an invisible-to-the-sandbox
   toolchain fails the run closed rather than degrading; see [Running

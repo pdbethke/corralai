@@ -131,6 +131,15 @@ func renderTestWriter(rs RunSpec, sigs []repoindex.Signature, survivors []adequa
 // see CompileError for why a bare "does not compile" left the writer unable to
 // improve.
 func renderTestWriterWithRepair(rs RunSpec, sigs []repoindex.Signature, survivors []adequacy.Mutant, prevTest, compileErr string) string {
+	return renderTestWriterRepairing(rs, sigs, survivors, prevTest, compileErr, "")
+}
+
+// renderTestWriterRepairing is renderTestWriterWithRepair with the second
+// repair mode: cleanFailure carries the output of a test that COMPILED and
+// then failed against the unmutated code. The two are mutually exclusive by
+// construction (a test that does not build never runs), and only one repair
+// block is ever appended.
+func renderTestWriterRepairing(rs RunSpec, sigs []repoindex.Signature, survivors []adequacy.Mutant, prevTest, compileErr, cleanFailure string) string {
 	goal := rs.Goal
 	if len(survivors) > 0 {
 		var b strings.Builder
@@ -208,6 +217,21 @@ func renderTestWriterWithRepair(rs RunSpec, sigs []repoindex.Signature, survivor
 	}
 	named := fmt.Sprintf("%s Your test may share the package/namespace with the developer's OWN tests, so give your test function(s) and any helpers UNIQUE names — never redeclare an identifier the existing suite may already define.\n\n%s%s",
 		fileFact, importNote, goal)
+	if strings.TrimSpace(cleanFailure) != "" {
+		// A DIFFERENT failure from a compile error, and it must not be worded
+		// as one: this test BUILT and RAN, and then failed against the
+		// unmutated, correct code — so it asserts something untrue about
+		// working software, and every mutant it might have caught is
+		// discarded (an invalid test may never earn a kill rate).
+		//
+		// The measured shape this exists for: a writer produced 13 tests
+		// against flask's internals, TEN of which passed; three carried wrong
+		// API assumptions and, because the compliant check is all-or-nothing
+		// per FILE, took the other ten down with them. Naming the failing
+		// tests specifically is what lets a model drop or fix three
+		// assumptions instead of rewriting thirteen tests it mostly got right.
+		named = fmt.Sprintf("%s\n\n--- YOUR PREVIOUS ATTEMPT FAILED ON THE UNMUTATED, CORRECT CODE ---\nYou wrote:\n%s\n\nRun against the ORIGINAL (unmodified) source, your test reported:\n%s\n\nThat means your test asserts something that is NOT true of the correct code — a wrong assumption about the API, not a bug you have found. The whole file is discarded when ANY test in it fails this way, so tests of yours that were fine are being thrown away too.\n\nReturn a corrected FULL test file that PASSES against the unmodified source. Fix or DELETE only the assertions that failed; keep the ones that already passed. Do not weaken a test into something that would pass against a broken implementation too — a test that cannot fail proves nothing.", named, prevTest, strings.TrimSpace(cleanFailure))
+	}
 	if strings.TrimSpace(compileErr) != "" {
 		named = fmt.Sprintf("%s\n\n--- YOUR PREVIOUS ATTEMPT DID NOT COMPILE ---\nYou wrote:\n%s\n\nThe compiler reported:\n%s\n\nReturn a corrected FULL test file that compiles cleanly. Fix exactly what the compiler flagged; if it is a redeclared/duplicate identifier, rename yours to something unique.", named, prevTest, strings.TrimSpace(compileErr))
 	}

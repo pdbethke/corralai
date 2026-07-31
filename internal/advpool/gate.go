@@ -286,6 +286,35 @@ func (s JailScorer) ScoreAuthoredReport(ctx context.Context, codePath, code, tes
 	return rep, nil
 }
 
+// CompliantFailure runs the authored test against the UNMUTATED code and
+// returns the runner's own combined output — the detail that turns a
+// clean-code-failure retry into a corrective one, exactly as CompileError's
+// output does for a build failure.
+//
+// Reuses the SAME verboseJail optional extension CompileTest already uses, so
+// a backend that can surface output does, and one that cannot degrades to ""
+// rather than failing the run. Costs one extra run, and only on the failure
+// path — the scoring run that produced CompliantPass=false has already
+// returned by the time this is called, and Report carries no output to reuse.
+func (s JailScorer) CompliantFailure(ctx context.Context, codePath, code, test, testCmd string) string {
+	vj, ok := s.Jail.(verboseJail)
+	if !ok {
+		return ""
+	}
+	ws, cmd := s.scoreWorkspace(codePath, test, testCmd)
+	if s.BaseFiles != nil {
+		ws = s.authoredWorkspace(codePath, test)
+	}
+	// The UNMUTATED code: this asks "why does your test fail on software that
+	// is correct", which is the only question worth feeding back.
+	ws[codePath] = code
+	_, out, err := vj.RunTestVerbose(ctx, ws, cmd)
+	if err != nil {
+		return ""
+	}
+	return out
+}
+
 // authoredWorkspace builds the repo-aware scoring workspace with `content`
 // overlaid at the authored test's own path — the SAME overlay
 // ScoreAuthoredReport itself needs (a brand-new file the repo does not

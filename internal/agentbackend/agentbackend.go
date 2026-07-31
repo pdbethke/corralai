@@ -142,7 +142,17 @@ type ModelSwitcher interface {
 func FromEnv() Backend {
 	model := env("AGENT_MODEL", "qwen2.5-coder:7b")
 	switch env("MODEL_BACKEND", "ollama") {
-	case "openai", "gemini", "openrouter":
+	case "gemini":
+		// Gemini speaks the OpenAI wire format but is NOT OpenAI: it has its
+		// own endpoint and its own key. It used to share the arm below, so
+		// MODEL_BACKEND=gemini read the OpenAI key and defaulted to
+		// api.openai.com — pointing "the gemini backend" at the wrong vendor,
+		// unauthenticated. ForModel had the correct routing all along, so the
+		// two disagreed about what "gemini" means depending on which door you
+		// came in: a cross-vendor CRITIC worked while aiming a WHOLE run at
+		// Gemini silently did not.
+		return &openaiBackend{base: geminiBase(), key: geminiKey(), model: model}
+	case "openai", "openrouter":
 		return &openaiBackend{
 			base:  env("OPENAI_BASE_URL", "https://api.openai.com/v1"),
 			key:   agentSecret("OPENAI_API_KEY"),
@@ -164,6 +174,38 @@ func FromEnv() Backend {
 // to a specific Ollama endpoint/model without going through env vars.
 func NewOllamaBackend(url, model string) Backend {
 	return &ollamaBackend{url: url, model: model}
+}
+
+// geminiBase and geminiKey are the SINGLE resolution of Gemini's endpoint and
+// credential, shared by FromEnv (MODEL_BACKEND=gemini, every role on Gemini)
+// and ForModel (a cross-vendor gemini-* role on another base backend). They
+// were duplicated in only one of the two, which is exactly how those paths
+// came to disagree — factoring them means a future change cannot fix one door
+// and leave the other pointing at api.openai.com.
+//
+// The credential falls back through GEMINI_API_KEY, then GOOGLE_API_KEY, then
+// OPENAI_API_KEY. That last hop is deliberate BACK-COMPAT, not sloppiness: the
+// OpenAI variable was the only thing that made MODEL_BACKEND=gemini reach any
+// endpoint at all before this, so an operator already configured that way must
+// keep working.
+func geminiBase() string {
+	if base := os.Getenv("CORRALAI_GEMINI_BASE_URL"); base != "" {
+		return base
+	}
+	if base := os.Getenv("OPENAI_BASE_URL"); base != "" {
+		return base
+	}
+	return "https://generativelanguage.googleapis.com/v1beta/openai"
+}
+
+func geminiKey() string {
+	if key := agentSecret("GEMINI_API_KEY"); key != "" {
+		return key
+	}
+	if key := agentSecret("GOOGLE_API_KEY"); key != "" {
+		return key
+	}
+	return agentSecret("OPENAI_API_KEY")
 }
 
 // ForModel infers the cloud vendor from model's name prefix and builds the
@@ -192,21 +234,11 @@ func ForModel(model string) (Backend, error) {
 			model: model,
 		}, nil
 	case hasAnyPrefix(model, "gemini-"):
-		key := agentSecret("GEMINI_API_KEY")
-		if key == "" {
-			key = agentSecret("GOOGLE_API_KEY")
-		}
+		key := geminiKey()
 		if key == "" {
 			return nil, fmt.Errorf("agentbackend: ForModel: model %q needs a Google key — set GEMINI_API_KEY (or GOOGLE_API_KEY)", model)
 		}
-		base := os.Getenv("CORRALAI_GEMINI_BASE_URL")
-		if base == "" {
-			base = os.Getenv("OPENAI_BASE_URL")
-		}
-		if base == "" {
-			base = "https://generativelanguage.googleapis.com/v1beta/openai"
-		}
-		return &openaiBackend{base: base, key: key, model: model}, nil
+		return &openaiBackend{base: geminiBase(), key: key, model: model}, nil
 	case hasAnyPrefix(model, "gpt-", "o1-", "o3-"):
 		key := agentSecret("OPENAI_API_KEY")
 		if key == "" {

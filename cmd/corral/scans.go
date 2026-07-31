@@ -173,15 +173,36 @@ func runScansShow(args []string, open func(string) (scansReader, error), stdout,
 				continue
 			}
 			fmt.Fprintf(stdout, "\n--- %s: the pool's authored test ---\n", f.Path)
-			if f.ProvenMutantIDs != "" {
-				fmt.Fprintf(stdout, "killed: %s\n", f.ProvenMutantIDs)
-			} else {
-				fmt.Fprintf(stdout, "killed: nothing — this test graded soundly against %d survivor(s) and proved none of them\n", f.Survivors)
-			}
+			fmt.Fprintln(stdout, authoredTestOutcome(f))
 			fmt.Fprintln(stdout, f.AuthoredTest)
 		}
 	}
 	return 0
+}
+
+// authoredTestOutcome states what actually became of the printed test. It
+// consults the SAME diagnosis flags scanFileNote does, because inferring the
+// outcome from an empty proven-id list alone gets it exactly backwards: a run
+// that failed on unmutated code and scored NOTHING has an empty list too, and
+// this used to report that as "graded soundly against N survivors and proved
+// none of them" — the opposite of what happened, printed directly beneath a
+// NOTE column already saying TEST UNSOUND. Caught on this command's first real
+// use, against a gemini-3.6-flash run of pallets/flask whose authored test
+// failed on clean code and was described as having soundly graded 17 survivors
+// it never touched.
+func authoredTestOutcome(f scanstore.File) string {
+	switch {
+	case f.TestWriterFailed:
+		return "killed: nothing — this test did not compile, so it never ran against any survivor"
+	case f.PoolTestUnsound:
+		return fmt.Sprintf("killed: nothing — this test never genuinely graded (it failed on the unmutated code, or never read the file under audit), so the %d survivor(s) were never actually tested against it", f.Survivors)
+	case f.TimedOut:
+		return "killed: unknown — the run hit its deadline before the pool converged"
+	case f.ProvenMutantIDs != "":
+		return fmt.Sprintf("killed: %s", f.ProvenMutantIDs)
+	default:
+		return fmt.Sprintf("killed: nothing — this test graded soundly against %d survivor(s) and proved none of them", f.Survivors)
+	}
 }
 
 // scanFileNote renders the honesty flags a bare proven_missed number cannot

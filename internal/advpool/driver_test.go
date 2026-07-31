@@ -57,6 +57,13 @@ type fakeScorer struct {
 	devKillRate  float64
 	devSurvivors []adequacy.Mutant
 
+	// compliantFailure, when set, makes this fake satisfy
+	// CompliantFailureExplainer and return this text as the clean-code
+	// failure output — the runner lines the deselect salvage parses. Empty
+	// (the default) leaves the fake without usable failure detail, which is
+	// the no-salvage path.
+	compliantFailure string
+
 	poolSurvivors []adequacy.Mutant
 
 	// successes counts calls that did NOT return f.err — used (rather than
@@ -2168,6 +2175,13 @@ type fakeBugCatch struct {
 func (f *fakeBugCatch) Record(recordID int64, _ string, obs []BugCatchObservation) {
 	f.recordID = recordID
 	f.obs = append(f.obs, obs...)
+}
+
+// CompliantFailure satisfies CompliantFailureExplainer. Additive: a fake with
+// no compliantFailure set returns "", which is exactly what a backend that
+// cannot surface output does.
+func (f *fakeScorer) CompliantFailure(context.Context, string, string, string, string) string {
+	return f.compliantFailure
 }
 
 func obsFor(obs []BugCatchObservation, role string) (BugCatchObservation, bool) {

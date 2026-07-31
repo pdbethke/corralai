@@ -192,3 +192,31 @@ func Detect(codePath string) (Plugin, bool) {
 	}
 	return nil, false
 }
+
+// FailureDeselector is an OPTIONAL plugin extension for salvaging a partially
+// broken authored test. The compliant check is all-or-nothing per FILE: if any
+// test in the authored file fails against the unmutated code, the whole file
+// is discarded and nothing is scored.
+//
+// Measured cost of that, on the first authored test corral ever retained
+// (gemini-3.6-flash on pallets/flask, 2026-07-31): 13 tests, TEN PASSED, and
+// all 13 were thrown away because 3 carried wrong API assumptions.
+//
+// Asking the model to repair itself is one answer and depends on the model
+// being able to. Deselecting the failures and scoring with the remainder does
+// not depend on the model at all — it is arithmetic over the runner's own
+// output.
+//
+// Deliberately OPTIONAL, and deliberately unimplemented for languages whose
+// runners corral cannot parse failures from precisely. A wrong selector would
+// deselect the wrong test and silently narrow the exam, which is worse than
+// not salvaging: the run would look healthier while proving less.
+type FailureDeselector interface {
+	// FailedTests extracts the runner's own failing-test selectors from its
+	// output. Empty when nothing failed or nothing could be parsed.
+	FailedTests(output string) []string
+	// DeselectArgs renders those selectors as arguments appended to the
+	// project's own test command. Empty for an empty selector list — never a
+	// bare flag with no argument.
+	DeselectArgs(selectors []string) []string
+}

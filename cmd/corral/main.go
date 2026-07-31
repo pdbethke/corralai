@@ -156,7 +156,7 @@ func subcommand(args []string) string {
 		return ""
 	}
 	switch args[0] {
-	case "certify", "secret", "control", "scorecard", "criticscore", "matrix", "eval":
+	case "certify", "secret", "control", "scorecard", "criticscore", "matrix", "scans", "eval":
 		return args[0]
 	}
 	return ""
@@ -252,6 +252,15 @@ Usage:
                                   execution-proven adequacy against a run's own mutant set, plus a
                                   safe-to-delete candidate list — populated only by runs opted in via
                                   certify --local --matrix (requires CORRAL_BRAIN — no offline mode)
+  corral scans list|show [flags]  read the scan ledger certify --repo --record writes: list
+                                  shows recent scans, show <id> their per-file dispositions —
+                                  including WHY a proven-gap count of 0 is 0 (writer failed / test
+                                  unsound / tried and missed), which the bare number cannot say.
+                                  show <id> --evidence prints the pool's own authored test, kept
+                                  even when it proved nothing — that is the case worth reading.
+                                  Local DuckDB file, no brain required:
+                                  --db <path> (default $CORRALAI_SCANS_DB, else
+                                  ~/.claude/corralai_scans.duckdb), --limit n, --json
   corral eval [flags]             run the adversarial pool across the versioned eval corpus and
                                   print a soundness report (does the recall metric catch known gaps?)
                                   flags: --corpus <path> (default eval/corpus/manifest.json)
@@ -651,6 +660,13 @@ func main() {
 			os.Exit(1)
 		}
 		os.Exit(runMatrix(os.Args[2:], newHTTPMatrixReader(brainURL, token), os.Stdout, os.Stderr))
+	case "scans":
+		// Unlike criticscore/matrix above, this needs NO brain: the scan
+		// ledger is a local DuckDB file `certify --repo --record` writes on
+		// this same machine, so the read side is deliberately offline too.
+		// DuckDB's single-writer lock still applies — openScanStore says so
+		// when a concurrent scan holds the file.
+		os.Exit(runScans(os.Args[2:], openScanStore, os.Stdout, os.Stderr))
 	case "eval":
 		os.Exit(runEval(os.Args[2:], func(brainURL, corpusVersion string) eval.PoolRunner {
 			return mcpPoolRunner{client: mcpAdvClient{}, brainURL: brainURL, corpusVersion: corpusVersion,

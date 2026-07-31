@@ -30,6 +30,22 @@ Usage:
   corral certify --adversarial --code <path> --goal "<text>" [--test <path>] -- <test cmd>
                                   grade a change's own tests: fire the adversarial pool on the
                                   brain, poll to a signed verdict
+  corral certify --repo <dir> [--top n|--all] [--goals <file>] [--dry-run] [--swarm n] [-- <test cmd>]
+                                  fan the --local audit out over a WHOLE repository: enumerate
+                                  every source file with a paired test, rank them by churn x size,
+                                  audit the top --top (default 25, --all for every one) through a
+                                  bounded swarm, and print a repo report whose kill rate is over
+                                  the AUDITED surface only, with every excluded file accounted for
+                                  by reason — including the ones the bound left out
+                                  each file's goal is DERIVED from its source by --derive-model;
+                                  --goals <file> instead takes goals from a JSON map and makes no
+                                  model call
+                                  --dry-run stops after enumeration (no jail, no LLM calls)
+                                  an explicit -- <test cmd> grades EVERY file, so it is refused
+                                  when the scan spans more than one language (omit it and each
+                                  file is graded with its own language's stock command)
+                                  the report is NOT signed yet — that lands with the sealed
+                                  repo statement
   corral certify verify <record-file> [--pubkey <hex>|--brain <url>] [--allow-unanchored]
                                   independently verify a --out (or report_build) record: the
                                   Ed25519 signature, the ledger's hash chain, and that the

@@ -369,6 +369,64 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 // safe here, but that case never arises. Confirmed against this exact
 // driver (github.com/marcboeker/go-duckdb/v2): three sequential inserts
 // read back via `SELECT rowid, ...` in insertion order (0, 1, 2).
+// ScanRow is one `scans` header row as READ BACK — Scan plus the id the store
+// assigned it, which a caller needs to then ask FilesForScan about.
+type ScanRow struct {
+	ID int64
+	TS time.Time
+	Scan
+}
+
+// Scans returns the most recent scan headers, newest first, capped at limit
+// (<= 0 means a default of 20).
+//
+// This is the read side of a ledger that was, in practice, WRITE-ONLY: the
+// store recorded every scan and every per-file disposition, and nothing could
+// get them back out without a duckdb CLI (not installed on the production
+// host) or a hand-written Go program. That is a cost with no product surface —
+// and it bit exactly when it mattered, the day the ledger first held evidence
+// worth reading. See `corral scans` (cmd/corral/scans.go) for the operator
+// surface over this.
+func (s *Store) Scans(ctx context.Context, limit int) ([]ScanRow, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id, ts, owner, repo, commit,
+		substrate, engine_version, model_set, top, all_candidates, diff_base,
+		total_files, candidates, audited, kill_rate, cache_hits,
+		preflight_ran, preflight_note, started_at, finished_at
+		FROM scans ORDER BY id DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("scanstore: list scans: %w", err)
+	}
+	defer rows.Close()
+
+	var out []ScanRow
+	for rows.Next() {
+		var r ScanRow
+		var ts, started, finished sql.NullTime
+		var diffBase, preflightNote, modelSet, engineVersion, substrate sql.NullString
+		// kill_rate is deliberately scanned into *float64: a scan that audited
+		// nothing stored NULL rather than 0.0 (see Scan.KillRate's doc for the
+		// DuckDB NaN-ordering trap that forced this), and it must read back as
+		// "no measurement", never as a terrible score.
+		if err := rows.Scan(&r.ID, &ts, &r.Owner, &r.Repo, &r.Commit,
+			&substrate, &engineVersion, &modelSet, &r.Top, &r.AllCandidates, &diffBase,
+			&r.TotalFiles, &r.Candidates, &r.Audited, &r.KillRate, &r.CacheHits,
+			&r.PreflightRan, &preflightNote, &started, &finished); err != nil {
+			return nil, fmt.Errorf("scanstore: scan scans row: %w", err)
+		}
+		r.TS, r.StartedAt, r.FinishedAt = ts.Time, started.Time, finished.Time
+		r.Substrate, r.EngineVersion, r.ModelSet = substrate.String, engineVersion.String, modelSet.String
+		r.DiffBase, r.PreflightNote = diffBase.String, preflightNote.String
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("scanstore: iterate scans: %w", err)
+	}
+	return out, nil
+}
+
 func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT path, lang, disposition, reason,
 		kill_rate, survivors, gradable, preflight_state, evidence, detail, timed_out, test_writer_failed, proven_missed, pool_test_unsound,

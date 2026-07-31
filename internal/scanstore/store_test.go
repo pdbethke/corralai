@@ -330,3 +330,85 @@ func TestProvenEvidenceRoundTrips(t *testing.T) {
 		t.Errorf("tried-and-missed row MUST retain the authored test — that is the whole point; got %q", got[1].AuthoredTest)
 	}
 }
+
+// TestScansListsHeadersNewestFirst pins the read side of the ledger. Until
+// this existed the store was WRITE-ONLY in practice: `certify --repo --record`
+// wrote scans and per-file dispositions, and nothing could read them back
+// without a duckdb CLI (absent from the production host) or a hand-rolled Go
+// program. A record nobody can query is not a record — it is a cost.
+func TestScansListsHeadersNewestFirst(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "scans.duckdb")
+	st, err := scanstore.Open(dsn)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer st.Close()
+
+	for _, s := range []scanstore.Scan{
+		{Owner: "local", Repo: "flask", Commit: "aaa", Substrate: "workspace", Audited: 1, KillRate: ptr(0.48)},
+		{Owner: "local", Repo: "gin", Commit: "bbb", Substrate: "jail", Audited: 2, KillRate: ptr(0.9)},
+	} {
+		if _, err := st.Record(context.Background(), s, nil); err != nil {
+			t.Fatalf("Record: %v", err)
+		}
+	}
+
+	got, err := st.Scans(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("Scans: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d scans, want 2", len(got))
+	}
+	// Newest first: the most recent scan is what an operator asks about.
+	if got[0].Repo != "gin" || got[1].Repo != "flask" {
+		t.Fatalf("order = [%s %s], want [gin flask] (newest first)", got[0].Repo, got[1].Repo)
+	}
+	if got[0].ID == 0 || got[0].ID == got[1].ID {
+		t.Fatalf("scan ids must be real and distinct, got %d and %d", got[0].ID, got[1].ID)
+	}
+	if got[0].Substrate != "jail" || got[0].Audited != 2 {
+		t.Fatalf("provenance did not round-trip: %+v", got[0])
+	}
+	// A never-measured scan must read back as NULL, never 0.0 — the same
+	// NaN/NULL discipline Scan.KillRate's own doc exists for.
+	if got[0].KillRate == nil || *got[0].KillRate != 0.9 {
+		t.Fatalf("kill rate did not round-trip: %+v", got[0].KillRate)
+	}
+
+	// limit is honoured, so an operator can ask for just the last scan.
+	one, err := st.Scans(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("Scans(limit=1): %v", err)
+	}
+	if len(one) != 1 || one[0].Repo != "gin" {
+		t.Fatalf("limit=1 returned %+v, want just the newest (gin)", one)
+	}
+}
+
+// TestScansNullKillRateReadsBackNil is the NaN/NULL trap this store already
+// documents on the write side, now asserted on the read side: a scan that
+// audited nothing must come back nil, not 0.0 — a stored 0.0 would later read
+// as "this scan scored terribly" about a scan that never graded anything.
+func TestScansNullKillRateReadsBackNil(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "scans.duckdb")
+	st, err := scanstore.Open(dsn)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer st.Close()
+
+	if _, err := st.Record(context.Background(), scanstore.Scan{Owner: "local", Repo: "empty", Audited: 0}, nil); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	got, err := st.Scans(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("Scans: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d scans, want 1", len(got))
+	}
+	if got[0].KillRate != nil {
+		t.Fatalf("a scan that audited nothing must read back NULL, got %v", *got[0].KillRate)
+	}
+}

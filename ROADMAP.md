@@ -240,6 +240,35 @@ Go binary.**
   that door and the sibling one (a `certify --repo`-only flag placed after
   `--`, handed to the check command instead of being parsed) are now hard
   usage errors (exit 2) naming the offending token.
+- **`corral scans list|show` — reading the ledger back.** For its whole life
+  that ledger was write-only in practice: every scan and every per-file
+  disposition was recorded, and nothing shipped could get any of it out. You
+  needed a `duckdb` CLI (absent from the host that writes them) or a
+  hand-written Go program. `scans list` shows recent scans; `scans show <id>`
+  their per-file rows — and, crucially, **why a proven-gap count of 0 is 0**:
+  writer-failed, test-unsound, or a genuine "tried and missed" where a sound
+  test graded and proved nothing. The ledger stored the flags telling those
+  apart from the start; nothing could say it out loud. Local DuckDB file, no
+  brain required, read-only by design (a scan ledger records what happened;
+  it is not adjudicated after the fact the way critic findings are). NULL kill
+  rates render `—`, never `0.00`, all the way to the terminal — the same
+  discipline that governs the column type now governs the display.
+- **The evidence behind `ProvenMissed`, not just its magnitude.** A count
+  cannot be interrogated. The verdict and the ledger now also carry which
+  survivors the authored test actually killed, and **the authored test itself
+  — retained even when it proved nothing**, which is the only case it exists
+  for. `scans show <id> --evidence` prints it. This was added the day a paid
+  third-party audit produced a sound, collected, genuinely-grading test that
+  killed 0 of 10 survivors and left no record of what it had tried, so the
+  only way to ask was to pay for another run.
+- **Honest evidence labels.** Reading the ledger for the first time
+  immediately exposed a false claim written into every scan ever recorded:
+  files rejected *before* any test-pairing was attempted (`no-language`,
+  `is-test`) were still labelled `paired`. The label now turns on whether a
+  pairing was actually attempted, and an unknown future reason falls back to
+  "no claim" rather than inheriting one. A write-only store hides its own
+  data-quality bugs; this one had also contradicted a contract written seven
+  lines above it in the same file, for months, unnoticed.
 
 **The substrate.**
 - **Multi-model, multi-forge; the `bwrap` + container jail; the attributed action

@@ -261,6 +261,25 @@ unlike `certify --local --record <file>.json` on the sibling subcommand,
 which takes a replayable-tape *path* — so don't hand it one; `--record-db`
 is where the ledger path goes.
 
+**Reading it back (`corral scans`).** The ledger is only worth writing if
+something can query it, so:
+
+```bash
+corral scans list                    # recent scans: repo, substrate, audited, kill rate
+corral scans show <id>               # per-file dispositions for one scan
+corral scans show <id> --evidence    # + the pool's own authored test
+```
+
+A local DuckDB file, no brain required, read-only by design. `show` renders
+what a bare number cannot: **why a proven-gap count of 0 is 0** — the pool
+never authored a compiling test, the test it authored never genuinely graded,
+or a perfectly sound test ran and proved nothing ("tried and missed"). Those
+are very different facts and the report has always known the difference.
+`--evidence` prints the authored test **even when it proved nothing** — that
+is the case worth reading, and it is stored precisely so diagnosing it never
+requires paying for a second audit. A never-graded scan renders `—`, never
+`0.00`: corral does not report a score for something it never measured.
+
 **The foreign-repo sweep (CI, every PR).** `scripts/foreign-sweep.sh` runs
 `certify --repo --dry-run` — enumeration, language detection, test pairing,
 ambiguity demotion, ranking, and selection, but **no audit and no suite

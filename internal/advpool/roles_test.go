@@ -370,8 +370,17 @@ func TestRenderTestWriterCarriesImportFactForPython(t *testing.T) {
 // entire failure mode is a model obeying a wrong instruction. Go (no
 // ImportNote) must keep the clause — it is the only guidance Go's own
 // same-package convention gets.
+// The assertion below guards the PROPERTY (does a competing reference
+// instruction appear at all?) rather than the clause's exact prose, which is
+// what it pinned originally. The wording changed when the clause started
+// naming the authored test's real path instead of asserting same-directory
+// placement; pinning the sentence made a prose edit look like a behavior
+// regression, while the invariant this test exists for — exactly one source
+// of import guidance, never two that contradict — was never in question.
 func TestRenderTestWriterDropsStaleFileNameClauseForPython(t *testing.T) {
-	const staleClause = "using that exact file name — do not invent or assume any other name"
+	// The stable head of the reference clause, emitted only when the plugin's
+	// ImportNote is empty.
+	const staleClause = "Reference or import the code under test by"
 	survivors := []adequacy.Mutant{{ID: "m1", Code: "mutant one"}}
 
 	known := RunSpec{Goal: "g", CodePath: "src/flask/cli.py", Code: "def f(): pass\n", Lang: "python", ImportPath: "flask.cli"}

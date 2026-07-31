@@ -1232,6 +1232,21 @@ func (d *Driver) tickPoolAdequacy(ctx context.Context, missionID int64, run *run
 	}
 	poolSurvivors := survivorsFrom(rep, run.devSurvivors)
 	run.provenMissed = len(run.devSurvivors) - len(poolSurvivors)
+	// The two failure paths above each log why they produced nothing. This one
+	// — the path that actually grades — logged nothing at all, in either
+	// direction. That asymmetry is why a real "tried and missed" (a sound,
+	// collected, genuinely-grading authored test that killed NO survivor) was
+	// undebuggable after the fact: `certify --repo` has no tape flag, so the
+	// run's whole record of the attempt was a single `0 proven missed` in the
+	// report. Log the outcome on the success path too, so the interesting case
+	// is distinguishable from the boring one without re-running anything.
+	if run.provenMissed > 0 {
+		log.Printf("advpool: %s: the pool's authored test PROVED %d of %d survivor(s) catchable by execution",
+			run.rs.CodePath, run.provenMissed, len(run.devSurvivors))
+	} else {
+		log.Printf("advpool: %s: the pool's authored test graded soundly (CompliantPass=true CanaryKilled=true Total=%d) but killed NONE of the %d survivor(s) — a real 'tried and missed', not an ungraded run",
+			run.rs.CodePath, rep.Total, len(run.devSurvivors))
+	}
 	return nil
 }
 

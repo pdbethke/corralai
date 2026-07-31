@@ -193,12 +193,25 @@ type EventSink interface {
 
 // Verdict is one run's final, gated outcome.
 type Verdict struct {
-	Repo, Commit    string
-	Lang            string          // the run's resolved language plugin name (e.g. "go", "python")
-	DevKillRate     float64         // the headline: the DEV suite's kill-rate, from Scorer — never a self-report
-	MutantsTotal    int             // total mutants the mutant-generator produced
-	Survivors       int             // mutants the dev's own tests did NOT kill
-	ProvenMissed    int             // survivors the pool's authored test then killed — real, catchable gaps
+	Repo, Commit string
+	Lang         string  // the run's resolved language plugin name (e.g. "go", "python")
+	DevKillRate  float64 // the headline: the DEV suite's kill-rate, from Scorer — never a self-report
+	MutantsTotal int     // total mutants the mutant-generator produced
+	Survivors    int     // mutants the dev's own tests did NOT kill
+	ProvenMissed int     // survivors the pool's authored test then killed — real, catchable gaps
+	// ProvenMutantIDs is the EVIDENCE behind ProvenMissed: which survivors the
+	// authored test actually killed, derived from the same scoring report so
+	// the two can never disagree. Empty on every path that did not grade
+	// (TestWriterFailed, PoolTestUnsound) AND on a genuine "tried and missed" —
+	// those are told apart by those flags, not by this being empty.
+	ProvenMutantIDs []string
+	// AuthoredTest is the pool's compiling authored test, retained as evidence.
+	// A count is not evidence: on 2026-07-31 a paid audit produced a sound,
+	// collected, genuinely-grading test that killed 0 of 10 survivors, and the
+	// whole surviving record of the attempt was the integer 0 — `certify
+	// --repo` has no tape flag, so diagnosing it meant paying to re-run. "" when
+	// the writer never produced a compiling test.
+	AuthoredTest    string
 	RegionsTotal    int             // mutant-generator seats the run dispatched
 	RegionsProbed   int             // seats that returned usable mutants
 	DroppedRegions  []string        // seats abandoned after MaxShardRetries — the coverage shortfall
@@ -448,6 +461,12 @@ type runState struct {
 	// per-region test-complexity claim would be unproven until then.
 	testComplexity int
 
+	// provenIDs are the ids of the survivors the authored test actually
+	// killed — the evidence behind provenMissed, carried onto the Verdict and
+	// into the scan ledger so a later query can tell WHICH gaps were proven
+	// (and, on a "tried and missed", that the attempt genuinely happened and
+	// caught nothing). Empty on every path that did not grade.
+	provenIDs []string
 	// authoredTest is the pool's compiling killing test (the test-writer's
 	// cleaned source), surfaced via RunState so `corral certify --adversarial`
 	// can hand it back to the dev ("add this test; it catches the gap your suite
@@ -860,6 +879,29 @@ func survivorsFrom(rep adequacy.Report, mutants []adequacy.Mutant) []adequacy.Mu
 	return survivors
 }
 
+// provenMutantIDs returns the ids of the survivors the POOL's authored test
+// actually killed: everything in `mutants` that is NOT in rep.Survived, in the
+// input's own order (deterministic, so a ledger row is stable across runs).
+//
+// This is the EVIDENCE behind ProvenMissed. The count on its own cannot
+// distinguish "killed these three, missed those seven" from a bare 0, which is
+// what made a real tried-and-missed on pallets/flask (2026-07-31) impossible
+// to diagnose without paying for another run: `certify --repo` has no tape
+// flag, so the integer was the entire surviving record of the attempt.
+func provenMutantIDs(rep adequacy.Report, mutants []adequacy.Mutant) []string {
+	stillAlive := make(map[string]struct{}, len(rep.Survived))
+	for _, id := range rep.Survived {
+		stillAlive[id] = struct{}{}
+	}
+	killed := make([]string, 0, len(mutants))
+	for _, m := range mutants {
+		if _, alive := stillAlive[m.ID]; !alive {
+			killed = append(killed, m.ID)
+		}
+	}
+	return killed
+}
+
 // tickDevAdequacy is step 2: once mutant-generator is done, parse its
 // mutants, score the dev's own tests against them (brain-side, via Scorer —
 // never the worker's self-report), and promote test-writer re-rendered with
@@ -1232,6 +1274,9 @@ func (d *Driver) tickPoolAdequacy(ctx context.Context, missionID int64, run *run
 	}
 	poolSurvivors := survivorsFrom(rep, run.devSurvivors)
 	run.provenMissed = len(run.devSurvivors) - len(poolSurvivors)
+	// The evidence behind that count — see provenMutantIDs. Derived from the
+	// SAME report, so the list can never disagree with the number.
+	run.provenIDs = provenMutantIDs(rep, run.devSurvivors)
 	// The two failure paths above each log why they produced nothing. This one
 	// — the path that actually grades — logged nothing at all, in either
 	// direction. That asymmetry is why a real "tried and missed" (a sound,
@@ -1284,6 +1329,11 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	v.RegionsTotal = run.regionsTotal
 	v.RegionsProbed = run.regionsProbed
 	v.DroppedRegions = run.droppedRegions
+	// The evidence behind ProvenMissed rides onto the verdict beside the count
+	// itself — set here, with the other post-aggregate fields, rather than
+	// widening aggregate()'s already-long signature.
+	v.ProvenMutantIDs = run.provenIDs
+	v.AuthoredTest = run.authoredTest
 	// A baseline that couldn't pass is fail-closed to needs-review by aggregate
 	// (devKillRate 0 < threshold); mark it so the readout says "could not grade"
 	// instead of reporting the 0 as if the suite were graded and scored zero.

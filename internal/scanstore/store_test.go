@@ -251,3 +251,82 @@ func TestOpenMigrationIsIdempotent(t *testing.T) {
 		t.Fatalf("migrated columns did not round-trip: %+v", got)
 	}
 }
+
+// TestProvenEvidenceRoundTrips pins that the evidence behind ProvenMissed
+// actually survives a write/read cycle — including through the legacy-store
+// migration path, since an existing ledger must gain the columns rather than
+// silently dropping the evidence written into it.
+//
+// This exists because the reader is where this class of bug hides: the INSERT
+// can be perfectly correct while SELECT never asks for the column, so the data
+// is written, unreadable, and nobody notices until someone needs it. That is
+// the same "computed, then discarded before reaching anyone" shape that has
+// bitten this codebase repeatedly — here it would have discarded the evidence
+// for corral's strongest claim.
+func TestProvenEvidenceRoundTrips(t *testing.T) {
+	// A legacy store: built with the ORIGINAL bare column set, so Open must
+	// migrate it before any of this can round-trip.
+	dsn := filepath.Join(t.TempDir(), "legacy-evidence.duckdb")
+	db, err := sql.Open("duckdb", dsn)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	if _, err := db.Exec(`CREATE TABLE scan_files (
+		scan_id BIGINT, path VARCHAR, lang VARCHAR,
+		disposition VARCHAR, reason VARCHAR,
+		kill_rate DOUBLE, survivors INTEGER, gradable BOOLEAN
+	)`); err != nil {
+		t.Fatalf("create legacy table: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close legacy db: %v", err)
+	}
+
+	st, err := scanstore.Open(dsn)
+	if err != nil {
+		t.Fatalf("Open (legacy): %v", err)
+	}
+	defer st.Close()
+
+	const authored = "def test_corral_kills_it():\n    assert False\n"
+	id, err := st.Record(context.Background(), scanstore.Scan{Owner: "local", Repo: "flask"}, []scanstore.File{
+		// A PROVEN row: three survivors, two of them killed by name.
+		{
+			Path: "src/flask/cli.py", Lang: "python", Disposition: "audited",
+			KillRate: ptr(0.48), Survivors: 3, Evidence: "proven",
+			ProvenMissed: 2, ProvenMutantIDs: "m1,m3", AuthoredTest: authored,
+		},
+		// A TRIED-AND-MISSED row: a real authored test, zero kills. The
+		// authored source must still be retained — that is the whole point.
+		{
+			Path: "src/flask/app.py", Lang: "python", Disposition: "audited",
+			KillRate: ptr(0.66), Survivors: 10, Evidence: "proven",
+			ProvenMissed: 0, ProvenMutantIDs: "", AuthoredTest: authored,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	got, err := st.FilesForScan(context.Background(), id)
+	if err != nil {
+		t.Fatalf("FilesForScan: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d rows, want 2", len(got))
+	}
+	if got[0].ProvenMutantIDs != "m1,m3" {
+		t.Errorf("proven row ids = %q, want %q", got[0].ProvenMutantIDs, "m1,m3")
+	}
+	if got[0].AuthoredTest != authored {
+		t.Errorf("proven row authored test did not round-trip: %q", got[0].AuthoredTest)
+	}
+	// The case that motivated the columns: 0 proven, but the attempt is still
+	// on the record and inspectable without paying for another audit.
+	if got[1].ProvenMissed != 0 || got[1].ProvenMutantIDs != "" {
+		t.Errorf("tried-and-missed row = (%d, %q), want (0, \"\")", got[1].ProvenMissed, got[1].ProvenMutantIDs)
+	}
+	if got[1].AuthoredTest != authored {
+		t.Errorf("tried-and-missed row MUST retain the authored test — that is the whole point; got %q", got[1].AuthoredTest)
+	}
+}

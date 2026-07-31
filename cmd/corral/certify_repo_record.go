@@ -133,6 +133,17 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 				// this a row with survivors > 0 and this diagnosis would be
 				// indistinguishable from an ordinary "tried and missed" 0.
 				PoolTestUnsound: r.Verdict.PoolTestUnsound,
+				// The EVIDENCE behind ProvenMissed, not just its magnitude.
+				// Every field above records a VERDICT about the attempt; these
+				// two record the attempt ITSELF. Without them a row reading
+				// `proven_missed = 0` is terminal — you can see that the pool
+				// tried and caught nothing, but never what it tried, and on the
+				// repo path there is no tape to fall back on, so the only way
+				// to ask again is to pay for another audit. That is exactly the
+				// wall a real pallets/flask "tried and missed" hit on
+				// 2026-07-31.
+				ProvenMutantIDs: strings.Join(r.Verdict.ProvenMutantIDs, ","),
+				AuthoredTest:    r.Verdict.AuthoredTest,
 			})
 			continue
 		}

@@ -413,6 +413,13 @@ func TestTick_PoolAdequacy_ScoresProvenMissed(t *testing.T) {
 	if run.provenMissed != 1 { // 2 dev-survivors, pool killed 1 (only m2 still survives)
 		t.Fatalf("ProvenMissed = %d, want 1", run.provenMissed)
 	}
+	// The count alone is not evidence. WHICH survivor the authored test killed
+	// must ride along, or a later "0 proven" is indistinguishable from a "3
+	// proven" without re-running the audit — the exact hole that made a real
+	// 2026-07-31 tried-and-missed on pallets/flask impossible to diagnose.
+	if len(run.provenIDs) != 1 || run.provenIDs[0] != "m1" {
+		t.Fatalf("run.provenIDs = %v, want [m1] — the id the authored test actually killed", run.provenIDs)
+	}
 	// The compiling killing test is captured for hand-back and surfaced on
 	// RunState (not the signed Verdict) so `corral certify --adversarial` can
 	// return it to the dev.

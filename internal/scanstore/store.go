@@ -127,6 +127,21 @@ type File struct {
 	// over this ledger that wants the unambiguous "real, demonstrated gap"
 	// signal should filter on ProvenMissed > 0, not just != 0.
 	ProvenMissed int
+	// ProvenMutantIDs is the EVIDENCE behind ProvenMissed: a comma-separated
+	// list of the mutant ids the pool's authored test actually killed, in the
+	// scoring report's own order. ProvenMissed is a COUNT, and a count cannot
+	// be interrogated — a row reading 0 could not be told apart from a row
+	// reading 3 without re-running the audit, which on the repo path means
+	// paying for it again (`certify --repo` has no tape flag).
+	ProvenMutantIDs string
+	// AuthoredTest is the pool's compiling authored test source, retained as
+	// evidence for exactly the case that motivated it: a sound, collected,
+	// genuinely-grading test that killed NOTHING. On 2026-07-31 a paid
+	// pallets/flask audit did precisely that against 10 survivors, and the
+	// entire surviving record of the attempt was a single integer, so the
+	// question "what did it actually try?" had no answer at any price short of
+	// another run. "" when no compiling test was ever produced.
+	AuthoredTest string
 }
 
 // scanFilesMigrationCols is the additive set of columns this package has
@@ -147,6 +162,8 @@ var scanFilesMigrationCols = []struct{ name, ddl string }{
 	{"test_writer_failed", "test_writer_failed BOOLEAN"},
 	{"proven_missed", "proven_missed INTEGER"},
 	{"pool_test_unsound", "pool_test_unsound BOOLEAN"},
+	{"proven_mutant_ids", "proven_mutant_ids VARCHAR"},
+	{"authored_test", "authored_test VARCHAR"},
 }
 
 // Open opens (creating if absent) the scans/scan_files store at dsn.
@@ -200,7 +217,9 @@ func Open(dsn string) (*Store, error) {
 		timed_out BOOLEAN,
 		test_writer_failed BOOLEAN,
 		proven_missed INTEGER,
-		pool_test_unsound BOOLEAN
+		pool_test_unsound BOOLEAN,
+		proven_mutant_ids VARCHAR,
+		authored_test VARCHAR
 	)`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("scanstore: create scan_files table: %w", err)
@@ -323,10 +342,12 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 		// rejected files.
 		if _, err := tx.ExecContext(ctx, `INSERT INTO scan_files (
 			scan_id, path, lang, disposition, reason,
-			kill_rate, survivors, gradable, preflight_state, evidence, detail, timed_out, test_writer_failed, proven_missed, pool_test_unsound
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			kill_rate, survivors, gradable, preflight_state, evidence, detail, timed_out, test_writer_failed, proven_missed, pool_test_unsound,
+			proven_mutant_ids, authored_test
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id, f.Path, f.Lang, f.Disposition, f.Reason,
 			sanitizeKillRate(f.KillRate), f.Survivors, f.Gradable, f.PreflightState, f.Evidence, f.Detail, f.TimedOut, f.TestWriterFailed, f.ProvenMissed, f.PoolTestUnsound,
+			f.ProvenMutantIDs, f.AuthoredTest,
 		); err != nil {
 			return 0, fmt.Errorf("scanstore: insert scan_files row for %q: %w", f.Path, err)
 		}
@@ -350,7 +371,8 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 // read back via `SELECT rowid, ...` in insertion order (0, 1, 2).
 func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT path, lang, disposition, reason,
-		kill_rate, survivors, gradable, preflight_state, evidence, detail, timed_out, test_writer_failed, proven_missed, pool_test_unsound
+		kill_rate, survivors, gradable, preflight_state, evidence, detail, timed_out, test_writer_failed, proven_missed, pool_test_unsound,
+		proven_mutant_ids, authored_test
 		FROM scan_files WHERE scan_id = ? ORDER BY rowid`, scanID)
 	if err != nil {
 		return nil, fmt.Errorf("scanstore: files for scan %d: %w", scanID, err)
@@ -363,8 +385,10 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		var detail sql.NullString
 		var timedOut, testWriterFailed, poolTestUnsound sql.NullBool
 		var provenMissed sql.NullInt64
+		var provenIDs, authoredTest sql.NullString
 		if err := rows.Scan(&f.Path, &f.Lang, &f.Disposition, &f.Reason,
-			&f.KillRate, &f.Survivors, &f.Gradable, &f.PreflightState, &f.Evidence, &detail, &timedOut, &testWriterFailed, &provenMissed, &poolTestUnsound); err != nil {
+			&f.KillRate, &f.Survivors, &f.Gradable, &f.PreflightState, &f.Evidence, &detail, &timedOut, &testWriterFailed, &provenMissed, &poolTestUnsound,
+			&provenIDs, &authoredTest); err != nil {
 			return nil, fmt.Errorf("scanstore: scan scan_files row: %w", err)
 		}
 		f.Detail = detail.String
@@ -377,6 +401,11 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		// which is fine: Survivors/TestWriterFailed already carry the
 		// distinction a caller needs (see File.ProvenMissed's doc).
 		f.ProvenMissed = int(provenMissed.Int64)
+		// NULL for a row written before these columns existed, and for every
+		// path that never authored a grading test. Empty is the honest value:
+		// "no evidence recorded", never a fabricated attempt.
+		f.ProvenMutantIDs = provenIDs.String
+		f.AuthoredTest = authoredTest.String
 		out = append(out, f)
 	}
 	return out, rows.Err()

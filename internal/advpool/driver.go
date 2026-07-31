@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
+	golang "github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/matrix"
 	"github.com/pdbethke/corralai/internal/queue"
 	"github.com/pdbethke/corralai/internal/repoindex"
@@ -879,6 +880,54 @@ func survivorsFrom(rep adequacy.Report, mutants []adequacy.Mutant) []adequacy.Mu
 	return survivors
 }
 
+// salvageByDeselect tries to rescue a partially-broken authored test: read the
+// runner's own failing-test selectors out of the clean-code failure, deselect
+// exactly those, and re-score with what remains.
+//
+// Returns ok=false — and changes nothing — unless the remainder is genuinely
+// sound (CompliantPass, CanaryKilled, Total > 0) AND proves at least one
+// survivor. Both halves matter. Without the soundness gate this would be the
+// fabrication path again; without the "proves something" gate it would consume
+// a run's one chance at salvage to record a zero, displacing a retry that
+// might have done better.
+//
+// Requires the language plugin to implement lang.FailureDeselector and the
+// Scorer to be able to report the failure output. Anything missing means no
+// salvage, never a guess: a wrong selector would deselect the wrong test and
+// silently narrow the exam, making the run look healthier while proving less.
+func (d *Driver) salvageByDeselect(ctx context.Context, run *runState, writerTest string, rep adequacy.Report) (proven int, ids []string, deselected int, ok bool) {
+	fd, canDeselect := langFor(run.rs).(golang.FailureDeselector)
+	if !canDeselect {
+		return 0, nil, 0, false
+	}
+	failure := compliantFailureOutput(ctx, d.Scorer, run, writerTest)
+	failing := fd.FailedTests(failure)
+	if len(failing) == 0 {
+		return 0, nil, 0, false
+	}
+	args := fd.DeselectArgs(failing)
+	if len(args) == 0 {
+		return 0, nil, 0, false
+	}
+
+	cmd := strings.TrimSpace(run.rs.TestCmd + " " + strings.Join(args, " "))
+	salvaged, serr := scoreAuthored(ctx, d.Scorer, run.rs.CodePath, run.rs.Code, writerTest, run.devSurvivors, cmd)
+	if serr != nil {
+		// A failed salvage attempt is not a failed run: fall back to the
+		// retry path rather than losing the dev-adequacy result already
+		// computed.
+		return 0, nil, 0, false
+	}
+	if !salvaged.CompliantPass || !salvaged.CanaryKilled || salvaged.Total == 0 {
+		return 0, nil, 0, false
+	}
+	killed := provenMutantIDs(salvaged, run.devSurvivors)
+	if len(killed) == 0 {
+		return 0, nil, 0, false
+	}
+	return len(killed), killed, len(failing), true
+}
+
 // CompliantFailureExplainer is the optional Scorer extension that reports WHY
 // an authored test failed against the unmutated code — the runner's own
 // output, the thing that makes the retry corrective rather than blind. A
@@ -1298,6 +1347,30 @@ func (d *Driver) tickPoolAdequacy(ctx context.Context, missionID int64, run *run
 	// !CanaryKilled means the project's own command never reads the file (a
 	// discovery/config fact), and Total==0 with a passing baseline means there
 	// was nothing to score.
+	if !rep.CompliantPass {
+		// SALVAGE FIRST, before spending another model call. The compliant
+		// check is all-or-nothing per FILE, and the measured cost of that is
+		// large: on the first authored test corral ever retained
+		// (gemini-3.6-flash on pallets/flask, 2026-07-31) 13 tests were
+		// written, TEN PASSED, and all 13 were discarded because 3 carried
+		// wrong API assumptions.
+		//
+		// Deselecting the failures and re-scoring with the remainder does not
+		// depend on the model being able to repair itself — it is arithmetic
+		// over the runner's own output. Accepted ONLY if the remainder
+		// actually proves something: a salvage that proves nothing is no
+		// better than the retry it would displace, so in that case we fall
+		// through and let the writer try again.
+		if salvaged, ids, n, ok := d.salvageByDeselect(ctx, run, writerTest, rep); ok {
+			run.poolScored = true
+			run.provenMissed = salvaged
+			run.provenIDs = ids
+			log.Printf("advpool: %s: the authored test failed on the unmutated code, but deselecting its %d failing test(s) left a sound remainder that PROVED %d of %d survivor(s)",
+				run.rs.CodePath, n, salvaged, len(run.devSurvivors))
+			return nil
+		}
+	}
+
 	if !rep.CompliantPass && run.testWriterAttempts < MaxTestWriterAttempts-1 {
 		run.testWriterAttempts++
 		failure := compliantFailureOutput(ctx, d.Scorer, run, writerTest)

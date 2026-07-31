@@ -902,3 +902,40 @@ func (pyPlugin) ParseTestList(output string) []string {
 	}
 	return out
 }
+
+// FailedTests parses pytest's "short test summary info" lines. pytest prints
+// one `FAILED <selector> - <error>` line per failure, and the selector is the
+// exact `path::test` form `--deselect` accepts. The trailing " - <error>"
+// summary must be stripped: passing it through would make the selector match
+// nothing and the deselect silently no-op.
+func (pyPlugin) FailedTests(output string) []string {
+	var out []string
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		rest, ok := strings.CutPrefix(line, "FAILED ")
+		if !ok {
+			continue
+		}
+		// The selector runs to the first space; everything after is pytest's
+		// own error summary, not part of the id.
+		if sel, _, found := strings.Cut(rest, " "); found {
+			rest = sel
+		}
+		if rest = strings.TrimSpace(rest); rest != "" {
+			out = append(out, rest)
+		}
+	}
+	return out
+}
+
+// DeselectArgs renders one --deselect per selector: pytest takes the flag
+// repeatedly and does NOT accept a comma-joined list.
+func (pyPlugin) DeselectArgs(selectors []string) []string {
+	args := make([]string, 0, len(selectors)*2)
+	for _, s := range selectors {
+		if s = strings.TrimSpace(s); s != "" {
+			args = append(args, "--deselect", s)
+		}
+	}
+	return args
+}

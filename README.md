@@ -58,10 +58,16 @@ actually test anything, or do they just pass?* — and answers it by execution:
   already lives in, and then *proves* the run reached it by planting deliberately
   invalid source at that exact path and checking your unmodified command reacts. If
   it doesn't, the file is reported `[TEST UNSOUND]` and its proven count is withheld
-  rather than reported as a clean zero. **Expect proven gaps to be the exception,
-  not the rule:** on a real third-party file, corral has converted survivors into
-  proven gaps in some runs and none in others. Zero proven gaps means *nothing was
-  proven this run* — never *your tests are fine*.
+  rather than reported as a clean zero. **What varies is whether the authored test
+  comes back sound — not whether corral can prove gaps once it does.** Measured on
+  `src/flask/cli.py` in pallets/flask across four runs: one authored test passed on
+  the unmodified source and then killed **14 of 14** survivors, proving every one by
+  execution; another failed on the unmodified source and proved nothing. The
+  determining factor was the test's own soundness, and a test that fails on correct
+  code is now reissued to the writer with the failure fed back rather than
+  abandoned. Zero proven gaps means *nothing was proven this run* — never *your
+  tests are fine*. (One file, one project: a measurement, not a guarantee about
+  your repo.)
 - A **test-critic** — always a *different*, decorrelation-enforced model — reads your
   suite cold and flags vacuous, designed-to-pass tests. Its opinion is carried as
   **unverified advice; it never gates the verdict.**

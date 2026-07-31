@@ -74,7 +74,10 @@ func killRatePtr(v float64) *float64 {
 //     ambiguous-test, not-regular-file) and the candidate-level ones added
 //     before job emission (ungoaled, source-too-large, derive-failed,
 //     not-selected). These are decided by filename pairing or bookkeeping,
-//     never by running anything, so evidence defaults to "paired" — unless
+//     never by running anything, so evidence is "paired" for the ones a
+//     pairing was actually ATTEMPTED for and "" for the ones rejected before
+//     TestPaths was ever called (see exclusionEvidence, which used to stamp
+//     "paired" on all of them indiscriminately) — unless
 //     the coverage pre-flight (a SEPARATE, independent inventory over the
 //     same enumerated source set — see runPreflight) also measured this
 //     path, in which case evidence is promoted to "coverage": a row that
@@ -172,7 +175,7 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 		pfState := preflightState(preflight, e.Path)
 		rows = append(rows, scanstore.File{
 			Path: e.Path, Lang: detectLang(e.Path), Disposition: "rejected", Reason: e.Reason,
-			Gradable: false, Evidence: exclusionEvidence(pfState), PreflightState: pfState,
+			Gradable: false, Evidence: exclusionEvidence(e.Reason, pfState), PreflightState: pfState,
 		})
 	}
 	return rows
@@ -223,12 +226,50 @@ func ungradableEvidence(reason string) string {
 // exclusionEvidence decides the evidence label for a file that was
 // excluded WITHOUT ever running (see buildScanFileRows). A non-empty
 // preflightState means the coverage pre-flight's own instrumented run
-// measured this exact path, which outranks a bare filename-pairing guess.
-func exclusionEvidence(preflightState string) string {
+// measured this exact path, which outranks a bare filename-pairing guess —
+// and applies even to a file pairing never looked at, because the
+// instrumented run really did measure it.
+//
+// Absent that, the label turns on ONE question: was a filename pairing
+// actually attempted for this file? This function used to answer "yes"
+// unconditionally, stamping "paired" on every exclusion — including a
+// .editorconfig rejected as no-language, which no plugin ever claimed and
+// TestPaths was never called for. That is a false evidence claim, in the one
+// column whose whole purpose is to keep proof and guesswork apart, and it was
+// written into every scan this ledger has ever recorded. It was invisible
+// until `corral scans` could SELECT it — a write-only store hides its own
+// data-quality bugs.
+//
+// It also contradicted the contract stated immediately above in
+// ungradableEvidence's own doc: that "" is "the same value an excluded file
+// that was never even a candidate gets — (see exclusionEvidence)". It never
+// was.
+//
+// The split follows internal/reposcan/candidate.go's own ordering, not
+// taste. Pairing was NOT attempted for:
+//   - no-language (:215) — no plugin matched, so TestPaths is never reached
+//   - is-test (:222) — the file IS a test, excluded before pairing
+//   - not-a-regular-file (:189), skipped-dir (:117,:142) — walk-time, earlier
+//     still, before language detection even runs
+//
+// Pairing WAS attempted, and its result is precisely what decided the row, for
+// no-paired-test (:241, the search came up empty), ambiguous-test (the search
+// collided), and not-selected (it WAS a candidate, so it has a pair — only the
+// --top bound excluded it).
+//
+// An UNKNOWN reason falls through to "" rather than "paired": a future
+// exclusion reason added elsewhere must not silently inherit an evidence claim
+// nobody decided it had earned.
+func exclusionEvidence(reason, preflightState string) string {
 	if preflightState != "" {
 		return "coverage"
 	}
-	return "paired"
+	switch reason {
+	case reposcan.ReasonNoPairedTest, reposcan.ReasonAmbiguousTest, reposcan.ReasonNotSelected:
+		return "paired"
+	default:
+		return ""
+	}
 }
 
 // detectLang resolves a language name for a file the scan never ran (so

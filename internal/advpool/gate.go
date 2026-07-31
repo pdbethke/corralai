@@ -54,6 +54,92 @@ func advPoolTestPath(codePath string) string {
 	return filepath.Join(dir, filepath.Base(base)+"_test.go")
 }
 
+// authoredTestMarker distinguishes the pool's authored test file from the
+// dev's own test living in the same directory. Deliberately part of the STEM
+// (not the extension or a prefix) so each plugin's own TestPaths convention
+// still wraps it into a discovery-matching name — `_corral` survives into
+// tests/test_cli_corral.py, login_corral_test.go, pricing_corral_test.rb and
+// foo_corral.test.js alike.
+const authoredTestMarker = "_corral"
+
+// authoredTestCollisionLimit bounds the disambiguation search below. Reaching
+// it means ten distinct candidate names were all already real repo files,
+// which is not a shape any real project has — falling back is honest
+// degradation, and the positive control still grades the result.
+const authoredTestCollisionLimit = 10
+
+// authoredTestPath derives the path the POOL-AUTHORED test is written to in
+// repo-aware mode. It differs from advPoolTestPath (which names the synthetic
+// SINGLE-FILE test path) in the one way that decides whether the authored
+// test grades anything at all: the file must land somewhere the project's own
+// unmodified test command actually COLLECTS.
+//
+// advPoolTestPath returns a sibling of the code file, which is wrong for any
+// project that confines discovery to a test root. pallets/flask is the
+// measured case: `testpaths = ["tests"]` in pyproject.toml means a test
+// written to src/flask/cli_test.py is never collected, so it compiles, it
+// "passes", and it grades NOTHING — the exact CompliantPass=true
+// CanaryKilled=false [TEST UNSOUND] verdict a paid audit produced on
+// 2026-07-31.
+//
+// The fix relocates the code file's STEM into the DEV TEST's own directory
+// and lets the language plugin name it from there. The dev test's directory
+// is collected BY CONSTRUCTION — it holds the test that paired with this code
+// file, and that suite demonstrably executes the file, since running it is
+// what produced the dev-adequacy score this whole run is measured against.
+// Deriving the NAME from the plugin keeps this language-agnostic: corral
+// never parses `testpaths`, jest `roots`, or a rake FileList, an endless
+// per-language tail in which every miss is a silent wrong verdict rather than
+// a loud one.
+//
+// `base` is the repo workspace (may be nil): the returned path is overlaid
+// onto it, so a name the repo ALREADY contains would silently replace real
+// source — the same class of defect as the stale-.pyc phantom survivors, a
+// measurement taken in a workspace that is not the one it claims to be. Any
+// clash is disambiguated away; an empty devTestPath (single-file mode, or any
+// caller with no dev test to offer) falls back to advPoolTestPath unchanged.
+func authoredTestPath(codePath, devTestPath string, base map[string]string) string {
+	fallback := advPoolTestPath(codePath)
+	if strings.TrimSpace(devTestPath) == "" {
+		return fallback
+	}
+	p, err := pluginFor(codePath)
+	if err != nil {
+		return fallback
+	}
+
+	dir := filepath.Dir(devTestPath)
+	ext := filepath.Ext(codePath)
+	stem := strings.TrimSuffix(filepath.Base(codePath), ext)
+
+	taken := func(q string) bool {
+		if q == "" || q == devTestPath || q == codePath {
+			return true
+		}
+		_, exists := base[q]
+		return exists
+	}
+
+	for i := 0; i < authoredTestCollisionLimit; i++ {
+		marker := authoredTestMarker
+		if i > 0 {
+			marker = fmt.Sprintf("%s%d", authoredTestMarker, i)
+		}
+		// Hand the plugin a synthetic SOURCE path (code stem + marker, sited
+		// in the dev test's directory) and take its own rank-0 test name for
+		// it — so the result matches whatever `_test.go` / `test_*.py` /
+		// `*_test.rb` / `*.test.js` shape that language's runners discover.
+		cands := p.TestPaths(filepath.Join(dir, stem+marker+ext))
+		if len(cands) == 0 {
+			return fallback
+		}
+		if got := filepath.ToSlash(cands[0].Path); !taken(got) {
+			return got
+		}
+	}
+	return fallback
+}
+
 // goScaffold is the exact go workspace scaffold/default test command kept
 // from the prior implementation's fallback (mirrors
 // internal/controlgate.LangScaffold("go"), duplicated here in miniature so
@@ -106,6 +192,13 @@ type JailScorer struct {
 	// value (so every existing JailScorer{} literal keeps today's behavior
 	// unchanged) means auto-derive from the healthy baseline's own runtime.
 	MutantTimeout time.Duration
+	// DevTestPath is the repo-relative path of the DEV's own paired test, used
+	// only to site the POOL-AUTHORED test somewhere the project actually
+	// collects — see authoredTestPath. Empty (the zero value, so every
+	// existing literal is unchanged) keeps the old sibling-of-the-code-file
+	// placement, which single-file mode wants and which silently graded
+	// nothing on any project that confines discovery to a test root.
+	DevTestPath string
 }
 
 func (s JailScorer) Score(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (float64, []adequacy.Mutant, error) {
@@ -205,7 +298,7 @@ func (s JailScorer) authoredWorkspace(codePath, content string) map[string]strin
 	for k, v := range s.BaseFiles {
 		ws[k] = v
 	}
-	ws[advPoolTestPath(codePath)] = content
+	ws[authoredTestPath(codePath, s.DevTestPath, s.BaseFiles)] = content
 	return ws
 }
 
@@ -331,6 +424,11 @@ type JailValidator struct {
 	// the package resolves), not the bare single-file scaffold. nil preserves
 	// the original single-file behavior.
 	BaseFiles map[string]string
+	// DevTestPath mirrors JailScorer.DevTestPath and MUST be set to the same
+	// value: CompileTest overlays the candidate test at authoredTestPath, and
+	// if the validator and the scorer disagreed about that path the pool would
+	// compile-check a file at one location and grade a file at another.
+	DevTestPath string
 }
 
 // CompileError is returned by CompileTest when the authored test builds a
@@ -383,7 +481,7 @@ func (v JailValidator) CompileTest(ctx context.Context, codePath, code, test str
 		ws[k] = val
 	}
 	ws[codePath] = code
-	testPath := advPoolTestPath(codePath)
+	testPath := authoredTestPath(codePath, v.DevTestPath, v.BaseFiles)
 	ws[testPath] = test
 
 	// CompileCheck returns a SEQUENCE of commands (see lang.Plugin.CompileCheck's

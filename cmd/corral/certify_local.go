@@ -1045,8 +1045,8 @@ func buildJailWiring(in jailWiringInput) (w jailWiring, err error) {
 		// mutant is overlaid — the rest of the repo is already on disk and
 		// must NOT be rewritten over itself.
 		base := map[string]string{}
-		w.scorer = advpool.JailScorer{Jail: runner, BaseFiles: base, MutantTimeout: in.testTimeout}
-		w.validator = advpool.JailValidator{Jail: runner, BaseFiles: base}
+		w.scorer = advpool.JailScorer{Jail: runner, BaseFiles: base, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey}
+		w.validator = advpool.JailValidator{Jail: runner, BaseFiles: base, DevTestPath: w.devTestKey}
 		w.jailEnum = advpool.JailEnumerator{Jail: runner, BaseFiles: base}
 		// w.depBinds stays nil: there is nothing to bind read-only when the
 		// real tree is already present.
@@ -1099,8 +1099,8 @@ func buildJailWiring(in jailWiringInput) (w jailWiring, err error) {
 		// RunSpec.Matrix, so wiring it here costs nothing when --matrix is off
 		// (the flag is the real gate).
 		enumerator := adequacy.NewEnumerator(in.iso, in.timeout, adequacy.WithReadOnlyBinds(depBinds))
-		w.scorer = advpool.JailScorer{Jail: jail, BaseFiles: repoFiles, MutantTimeout: in.testTimeout}
-		w.validator = advpool.JailValidator{Jail: jail, BaseFiles: repoFiles}
+		w.scorer = advpool.JailScorer{Jail: jail, BaseFiles: repoFiles, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey}
+		w.validator = advpool.JailValidator{Jail: jail, BaseFiles: repoFiles, DevTestPath: w.devTestKey}
 		w.jailEnum = advpool.JailEnumerator{Jail: enumerator, BaseFiles: repoFiles}
 		if len(depBinds) > 0 {
 			names := make([]string, 0, len(depBinds))

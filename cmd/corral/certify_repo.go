@@ -49,6 +49,12 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	topFlag := fs.Int("top", defaultScanTop, "audit only the N highest-ranked candidates (0 or --all = every candidate). Bounded by default: a whole-repo audit runs a full herd per file, so an unbounded first scan on a large repo costs hours and real money. The DEFAULT bound does not apply with --goals — a hand-written goals map has already chosen the surface — but an explicit --top does")
 	allFlag := fs.Bool("all", false, "audit every candidate, ignoring --top")
 	deriveModel := fs.String("derive-model", defaultDeriveModel, "model that derives a goal per file when --goals is not given")
+	// Per-role models. `certify --local` has had these all along; without them
+	// here a repo scan was locked to the Claude defaults with no override.
+	writerModelFlag := fs.String("writer-model", "", "model for the test-writer role (default "+defaultLocalWriterModel+")")
+	mutantModelFlag := fs.String("mutant-model", "", "model for the mutant-generator role (default "+defaultLocalMutantModel+")")
+	criticModelFlag := fs.String("critic-model", "", "model for the test-critic role, which must differ from the writer's (default "+defaultLocalCriticModel+")")
+	shadowModelFlag := fs.String("shadow-model", "", "challenger model that attacks every region a SECOND time (default "+defaultLocalShadowModel+"; \"off\" disables). Recorded for comparison — NEVER gates the verdict. The default is a Claude model, so a non-Anthropic scan must set or disable it")
 	owner := fs.String("owner", "local", "owning account for the scan (tenant identifier)")
 	commit := fs.String("commit", "", "commit SHA the report is bound to")
 	swarmFlag := fs.Int("swarm", 0, "max concurrent audit workers (0 = auto-size to this host's cores)")
@@ -252,6 +258,10 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// plugin's stock recursive command is used — resolved per job, since a
 		// repo can mix languages.
 		ex = newLocalExecutor(*repoDir, checkArgv, *substrateFlag, *timeoutFlag, stdout)
+		ex.models = auditModels{
+			writer: *writerModelFlag, mutant: *mutantModelFlag,
+			critic: *criticModelFlag, shadow: *shadowModelFlag,
+		}
 		// Deferred, not called at the end: a panic mid-scan must still release
 		// the staging dirs the shared seeds created. Deferred here so it also
 		// covers the early returns below.
@@ -265,7 +275,13 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		}
 		// Provider preflight: role models, decorrelation, and the API key are
 		// scan-wide facts too.
-		if _, err := resolveAuditRoles(localAuditInput{cmdName: "corral certify --repo"}, stderr); err != nil {
+		if _, err := resolveAuditRoles(localAuditInput{
+			cmdName:     "corral certify --repo",
+			writerModel: *writerModelFlag,
+			mutantModel: *mutantModelFlag,
+			criticModel: *criticModelFlag,
+			shadowModel: *shadowModelFlag,
+		}, stderr); err != nil {
 			fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
 			if isAuditUsageError(err) {
 				return 2
@@ -1448,7 +1464,26 @@ func resolveScanWorkers(swarmFlag int, substrate string) (int, string) {
 // implementations and exist so the adapter's honesty wiring can be exercised
 // without a jail (a jail needs bwrap/container privileges no unit test can
 // assume).
+// auditModels carries the operator's per-role model overrides for a repo
+// scan. `certify --local` has exposed these since it shipped; `certify --repo`
+// exposed only --derive-model, pinning every other role to the hardcoded
+// Claude defaults with no override and no env escape hatch — so corral's
+// flagship whole-repo command could ONLY ever run on Anthropic. That is a
+// limitation on its own (and it undercuts corral's own cross-vendor
+// decorrelation argument), and it became a hard blocker the day the Anthropic
+// account hit its usage limit mid-scan with a Google key already in the
+// credstore.
+//
+// Every field is empty unless the operator passed the flag; empty means
+// "apply auditRoles' own default", so a scan that names none is byte-identical
+// to before.
+type auditModels struct{ writer, mutant, critic, shadow string }
+
 type localExecutor struct {
+	// models are the per-role overrides threaded into every job's
+	// localAuditInput (see auditInputFor).
+	models auditModels
+
 	repoDir      string
 	checkArgv    []string
 	baselineRuns int // how many times to run the unmutated suite; 2 is the floor
@@ -1577,8 +1612,13 @@ func (l *localExecutor) Close() {
 	}
 }
 
-func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.FileResult, error) {
-	in := localAuditInput{
+// auditInputFor builds the per-file audit input for one job. Extracted from
+// Execute so the scan's role-model plumbing is assertable without standing up
+// a jail, a baseline runner and a whole audit: a "supported" model flag that
+// parses and is then dropped on the floor is exactly the silently-discarded-
+// input shape this codebase keeps producing.
+func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
+	return localAuditInput{
 		repoDir:  l.repoDir,
 		codePath: j.Path,
 		testPath: j.TestPath,
@@ -1603,7 +1643,19 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 		// contend on one single-process DuckDB file). Signing is H1c.
 		stdout: io.Discard,
 		stderr: io.Discard,
+
+		// Per-role models, empty unless the operator passed the flags — the
+		// zero value keeps auditRoles' own Claude defaults, so an invocation
+		// that names none behaves exactly as before.
+		writerModel: l.models.writer,
+		mutantModel: l.models.mutant,
+		criticModel: l.models.critic,
+		shadowModel: l.models.shadow,
 	}
+}
+
+func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.FileResult, error) {
+	in := l.auditInputFor(j)
 
 	// The scan-wide, per-language seed: the tree copy, the vendoring and the
 	// tree walk depend only on the repo + language, so they are done ONCE and

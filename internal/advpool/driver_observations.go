@@ -10,16 +10,47 @@ import "sort"
 func bugCatchObservations(run *runState, v Verdict) []BugCatchObservation {
 	var out []BugCatchObservation
 	// test-writer: the execution-proven catcher.
+	//
+	// "Graded" means the authored test actually ran against the survivors and
+	// produced a verdict corral can stand behind. runState.poolScored is NOT
+	// that test: tickPoolAdequacy sets it true BEFORE the soundness check
+	// (driver.go:1259 vs :1260) and on the writer-failed path too, so
+	// "poolScored && authoredTest != ''" was true for a run whose test never
+	// graded at all.
+	graded := run.poolScored && run.authoredTest != "" && !run.poolTestUnsound && !run.testWriterFailed
+
 	authored, sound := 0, 0
 	if !run.testWriterMoot {
 		authored = 1
-		if run.poolScored && run.authoredTest != "" { // compiled + scored ⇒ a valid discriminating test
+		if graded {
 			sound = 1
 		}
 	}
+
+	// Opportunities is the RECALL DENOMINATOR, so it must count only chances
+	// the writer actually got. On an ungraded run — no compiling test, or one
+	// that never genuinely graded — corral's own pipeline denied it any chance
+	// to catch anything, and charging that run's survivors here reports a
+	// pipeline failure as a property of the MODEL. It is the same
+	// false-accusation shape scanstore's NULL-never-0.0 rule exists to prevent
+	// ("a stored 0.0 would later read as 'your tests caught nothing here'
+	// about a file corral never graded"), aimed at a model instead of a file.
+	//
+	// This was not hypothetical: ProvenMissed was structurally pinned to zero
+	// on real repos until 2026-07-31, so every real-repo run scored the
+	// test-writer 0% recall — a number produced entirely by corral's own
+	// stacked defects. The survivors are not lost, they remain on the
+	// mutant-generator's own row (MutantsSurvived), and the writer's failure
+	// is still penalised where it belongs: SoundTests/AuthoredTests, which is
+	// what the PRECISION column measures.
+	opportunities := 0
+	if graded {
+		opportunities = v.Survivors
+	}
+
 	out = append(out, BugCatchObservation{
 		Model: v.ModelsByRole[RoleTestWriter], Role: RoleTestWriter,
-		Catches: v.ProvenMissed, Opportunities: v.Survivors,
+		Catches: v.ProvenMissed, Opportunities: opportunities,
 		AuthoredTests: authored, SoundTests: sound,
 	})
 	// test-critic: theater-detection (judgement, lower-confidence).

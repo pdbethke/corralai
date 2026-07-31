@@ -30,9 +30,21 @@ on:
 
 jobs:
   test:
-    # Same correctness gate as the main Deploy workflow — a site change can
-    # never ship against a red Go suite, since golden-run.json and
-    # replay-player.js both come from Go-side code.
+    # A site change can never ship against Go-side code that is red WHERE THE
+    # SITE DEPENDS ON IT — golden-run.json and replay-player.js both come from
+    # Go-side code, and internal/ui additionally carries the signed console
+    # bundle whose manifest hashes replay-player.js.
+    #
+    # Scoped to those packages ON PURPOSE, rather than `go test ./...`. The full
+    # suite is already gated on every push and PR by deploy.yml's validate job,
+    # so re-running it here protects nothing that isn't protected — while doing
+    # real harm: this workflow is path-filtered on `site/**`, so it runs only
+    # when someone edits the site, and it provisions none of the polyglot
+    # toolchains (Python/Ruby/JS) that validate installs for the audit-gate
+    # tests. The result was unrelated Go-side breakage lying dormant for weeks
+    # and then detonating on whoever next touched a docs page: a pytest-
+    # dependent adequacy test merged 2026-07-30 red-built the next site PR on
+    # 2026-07-31, whose diff was markdown only.
     name: Round up the Go test suite
     runs-on: ubuntu-latest
     steps:
@@ -42,7 +54,7 @@ jobs:
           go-version-file: go.mod
           cache: true
       - run: go vet ./...
-      - run: go test ./... -count=1
+      - run: go test ./internal/ui/ ./internal/recordings/ -count=1
 
   deploy:
     name: Drive the site to Cloudflare Pages
@@ -62,13 +74,15 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: site/package-lock.json
-      - name: Check the player hasn't drifted from the herd
-        # Belt-and-suspenders: `npm run build` already runs this via
-        # `prebuild`, but failing here — before npm ci — gives a faster,
-        # clearer signal that a stale committed copy can never ship.
-        run: bash scripts/sync-site-assets.sh --check
-      - name: Check the CLI reference hasn't drifted from the real binaries
-        run: bash scripts/gen-cli-docs.sh --check
+      # The player-sync and CLI-reference drift gates used to live here. They
+      # have moved to deploy.yml's validate job, which runs on EVERY push and
+      # pull request with no path filter — the only place that sees every change
+      # to their Go-side inputs. Here they were doubly unreachable: this
+      # workflow is path-filtered on `site/**`, and this job is additionally
+      # gated `if: github.event_name != 'pull_request'`, so a CLI-help change
+      # (which touches no site file and usually arrives BY pull request) could
+      # never trip them. `npm run build` below still runs sync-site-assets via
+      # its own `prebuild` hook, so a stale vendored player still cannot ship.
       - name: Corral dependencies
         working-directory: site
         run: npm ci

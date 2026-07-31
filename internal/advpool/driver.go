@@ -879,6 +879,27 @@ func survivorsFrom(rep adequacy.Report, mutants []adequacy.Mutant) []adequacy.Mu
 	return survivors
 }
 
+// CompliantFailureExplainer is the optional Scorer extension that reports WHY
+// an authored test failed against the unmutated code — the runner's own
+// output, the thing that makes the retry corrective rather than blind. A
+// Scorer that does not implement it simply yields no detail: the retry still
+// happens, because "your test failed on the correct code" is itself
+// information the writer never previously received, but it is far weaker than
+// handing over the actual failing assertion.
+type CompliantFailureExplainer interface {
+	CompliantFailure(ctx context.Context, codePath, code, test, testCmd string) string
+}
+
+// compliantFailureOutput asks the Scorer for the clean-code failure detail,
+// tolerating a Scorer that cannot supply it.
+func compliantFailureOutput(ctx context.Context, s Scorer, run *runState, test string) string {
+	ex, ok := s.(CompliantFailureExplainer)
+	if !ok {
+		return ""
+	}
+	return ex.CompliantFailure(ctx, run.rs.CodePath, run.rs.Code, test, run.rs.TestCmd)
+}
+
 // provenMutantIDs returns the ids of the survivors the POOL's authored test
 // actually killed: everything in `mutants` that is NOT in rep.Survived, in the
 // input's own order (deterministic, so a ledger row is stable across runs).
@@ -1256,6 +1277,49 @@ func (d *Driver) tickPoolAdequacy(ctx context.Context, missionID int64, run *run
 	if serr != nil {
 		return fmt.Errorf("advpool: score pool test: %w", serr)
 	}
+	// A test that COMPILED and then failed against the unmutated, correct code
+	// is repairable, and until now was not repaired. The compile-failure path
+	// above has fed the compiler's own error back since CompileError existed,
+	// precisely because a bare "does not compile" taught the writer nothing —
+	// but a clean-code failure, which is just as diagnosable (the runner says
+	// exactly which assertion broke), got no retry at all: the run logged it,
+	// marked poolTestUnsound and converged.
+	//
+	// Measured cost of that, on the first run whose authored test was ever
+	// retained (gemini-3.6-flash on pallets/flask, 2026-07-31): the writer
+	// produced 13 tests against real internals and TEN PASSED. Three carried
+	// wrong API assumptions, and because the compliant check is all-or-nothing
+	// per FILE, those three discarded all thirteen — Total=0, nothing scored,
+	// the whole run zeroed including ten tests that might have killed
+	// survivors. The writer was never told.
+	//
+	// Deliberately scoped to CompliantPass==false. The other two unsound
+	// shapes are NOT the writer's fault and retrying would only burn budget:
+	// !CanaryKilled means the project's own command never reads the file (a
+	// discovery/config fact), and Total==0 with a passing baseline means there
+	// was nothing to score.
+	if !rep.CompliantPass && run.testWriterAttempts < MaxTestWriterAttempts-1 {
+		run.testWriterAttempts++
+		failure := compliantFailureOutput(ctx, d.Scorer, run, writerTest)
+		newID, serr := d.Q.SupersedeTask(tw.ID, queue.TaskSpec{
+			Key:         RoleTestWriter,
+			Role:        RoleTestWriter,
+			Title:       tw.Title,
+			Instruction: renderTestWriterRepairing(run.rs, run.sigs, run.devSurvivors, writerTest, "", failure),
+			Model:       tw.Model,
+		})
+		if serr != nil {
+			return fmt.Errorf("advpool: reissue test-writer with clean-code failure: %w", serr)
+		}
+		run.testWriterTaskID = newID
+		if _, perr := d.Q.PromoteReady(missionID); perr != nil {
+			return fmt.Errorf("advpool: promote test-writer after clean-code-failure reissue: %w", perr)
+		}
+		log.Printf("advpool: %s: the authored test compiled but FAILED on the unmutated code — reissuing with the failure fed back (%d/%d)",
+			run.rs.CodePath, run.testWriterAttempts, MaxTestWriterAttempts)
+		return nil
+	}
+
 	run.poolScored = true
 	if !rep.CompliantPass || !rep.CanaryKilled || rep.Total == 0 {
 		// A DIAGNOSIS, not a score: the compiling authored test did not

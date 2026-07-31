@@ -458,7 +458,12 @@ func TestTick_PoolAdequacy_UnsoundReportDoesNotFabricateProvenMissed(t *testing.
 	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0], survivors[1]}}
 	d, _ := newTestDriver(t, 2, scorer, validator, 0.1)
 
-	v := completeFullRun(t, d, 2, "no findings")
+	// Retry-tolerant: a clean-code failure is now reissued to the writer with
+	// the failure fed back, so this run converges after the attempts exhaust
+	// rather than on the first tick. Every assertion below is unchanged — the
+	// PROPERTY (an ungraded run must never fabricate proof, and must land on
+	// the honest diagnosis) is exactly what it always was.
+	v := completeRunTolerantOfWriterRetries(t, d, 2, "no findings")
 
 	if v.ProvenMissed != 0 {
 		t.Fatalf("ProvenMissed = %d, want 0 — must NOT fabricate len(devSurvivors)=%d as proof from an ungraded report", v.ProvenMissed, len(survivors))

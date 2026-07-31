@@ -166,9 +166,45 @@ func renderTestWriterWithRepair(rs RunSpec, sigs []repoindex.Signature, survivor
 	// dropped, not the whole sentence.
 	p := langFor(rs)
 	importNote := p.ImportNote(rs.ImportPath, rs.ImportPath != "")
-	fileFact := fmt.Sprintf("The source file under review is named %q, and your test file will be placed in the SAME directory as it.", filepath.Base(rs.CodePath))
+
+	// Where the authored test ACTUALLY lands, computed from the same function
+	// the scorer and validator overlay it with — never assumed. This sentence
+	// used to assert same-directory placement unconditionally, which stopped
+	// being true when the authored test moved into the DEV TEST's directory so
+	// the project's own runner would collect it (e83ea8d). Go was unaffected
+	// (its dev tests are siblings, so only the filename changed) and Python
+	// survived on ImportNote's dotted import, but Ruby and JS/TS — whose
+	// plugins return an EMPTY ImportNote, so the model is told to reference the
+	// code "using that exact file name" — were handed an instruction that no
+	// longer resolved from the new location.
+	//
+	// `base` is nil here: a collision-disambiguated name would differ in the
+	// FILENAME only, never the directory, so the relative hop below stays
+	// correct either way.
+	authored := authoredTestPath(rs.CodePath, rs.DevTestPath, nil)
+	authoredDir, codeDir := filepath.Dir(authored), filepath.Dir(rs.CodePath)
+	rel, rerr := filepath.Rel(authoredDir, rs.CodePath)
+	if rerr != nil {
+		rel = filepath.Base(rs.CodePath)
+	}
+	rel = filepath.ToSlash(rel)
+
+	var fileFact string
+	if authoredDir == codeDir {
+		fileFact = fmt.Sprintf("Your test file will be created at %q — the same directory as the source file under review, %q.",
+			filepath.ToSlash(authored), filepath.Base(rs.CodePath))
+	} else {
+		fileFact = fmt.Sprintf("Your test file will be created at %q. The source file under review is %q, which from your test file's own location is %q — it is NOT in the same directory as your test.",
+			filepath.ToSlash(authored), filepath.ToSlash(rs.CodePath), rel)
+	}
 	if importNote == "" {
-		fileFact += " Reference or import the code under test as appropriate for the language, using that exact file name — do not invent or assume any other name."
+		// Only when the language has no absolute-import fact to give (every
+		// plugin but python). Stated as superseding, because a plugin's own
+		// TestWriterSystem may carry a same-directory EXAMPLE — ruby's says
+		// "require_relative the target module by its file's base name" — and a
+		// prompt that asserts both a path and its contradiction fails exactly
+		// the way ImportNote's doc warns about: the model obeys the stale half.
+		fileFact += fmt.Sprintf(" Reference or import the code under test by that exact path (%q) — not by its bare base name, and not by any other name. This overrides any same-directory example shown above.", rel)
 	}
 	named := fmt.Sprintf("%s Your test may share the package/namespace with the developer's OWN tests, so give your test function(s) and any helpers UNIQUE names — never redeclare an identifier the existing suite may already define.\n\n%s%s",
 		fileFact, importNote, goal)

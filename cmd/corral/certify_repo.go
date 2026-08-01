@@ -60,6 +60,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	commit := fs.String("commit", "", "commit SHA the report is bound to")
 	swarmFlag := fs.Int("swarm", 0, "max concurrent audit workers (0 = auto-size to this host's cores)")
 	dryRun := fs.Bool("dry-run", false, "enumerate and emit jobs, then stop — no audits run")
+	jsonOut := fs.Bool("json", false, "with --dry-run, emit the repository's audit surface as JSON instead of the human report: per-language counts, every auditable file with its inferred test pairing, and the machine-stable exclusion tally. Needs no key, no jail and no money — it is the free inventory a UI or a tenant's own tooling can consume instead of scraping stdout")
 	substrateFlag := fs.String("substrate", substrateJail, "where the audit runs: "+substrateJail+" (bwrap) or "+substrateWorkspace+" (mutate --repo in place; the caller IS the isolation boundary, e.g. an ephemeral CI runner)")
 	diffBase := fs.String("diff-base", "", "bound the scan to files changed since this git ref, instead of ranking + --top. In a PR the diff IS the bound: ranking and --top do not apply on this path")
 	minKillRateFlag := fs.String("min-kill-rate", "", "fail the scan (exit 1) if ANY audited file's kill rate is below this value (0.0-1.0 inclusive; a minimum, so a file exactly at the threshold passes). Opt-in: unset by default, so exit codes are unchanged unless this is given. Applies PER FILE, not to the aggregate — a well-tested file must not mask a weak one")
@@ -152,6 +153,25 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
+	// --json emits the inventory INSTEAD of the human report, matching the
+	// convention `corral scorecard`/`matrix` already set: a consumer must not
+	// have to strip prose off the front of a document. Placed BEFORE the first
+	// human line so not one byte of prose precedes the JSON; the report code
+	// stays a single path writing to a discarded sink, so the two renderings
+	// cannot drift apart.
+	jsonSink := stdout
+	if *jsonOut {
+		if !*dryRun {
+			// Loud, not silently inert: the audit path produces a verdict, not
+			// an inventory, so there is nothing here to serialise. An operator
+			// who passed --json and got a normal report would reasonably
+			// conclude the flag had worked.
+			fmt.Fprintln(stderr, "corral certify --repo: --json requires --dry-run (it serialises the enumeration, not an audit verdict)")
+			return 2
+		}
+		stdout = io.Discard
+	}
+
 	fmt.Fprintf(stdout, "corral certify --repo %s\n", *repoDir)
 
 	// Captured BEFORE any candidate-level exclusion is appended below. Only
@@ -179,6 +199,11 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// indistinguishable from a genuine top-25 scan to any later reader.
 	var effectiveTop int
 	var selected []reposcan.Candidate
+	// rankSignal names how candidates were ordered, captured from the same
+	// value the human report prints so the JSON inventory can never disagree
+	// with it. The diff-bound path never ranks at all, so it stays empty
+	// rather than claiming an ordering that was not applied.
+	rankSignal := ""
 	if *diffBase != "" {
 		// In a PR the diff IS the bound: ranking and --top exist to bound what
 		// DERIVATION costs over a whole repo, and that question does not apply
@@ -234,6 +259,11 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 
 		// The rule is disclosed. A selection nobody can explain is the same
 		// problem this project criticises in black-box model routing.
+		// Captured, not re-derived: the JSON inventory must name the SAME
+		// ordering signal the human report does. A shallow clone silently
+		// degrades churn to size alone, so a consumer has to be told which it
+		// actually got.
+		rankSignal = rankInfo.Signal
 		fmt.Fprintf(stdout, "  ranked by %s; auditing %d of %d candidate(s)\n",
 			rankInfo.Signal, len(selected), len(cands))
 		if rankInfo.Note != "" {
@@ -384,6 +414,13 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// it worked.
 		if *recordFlag {
 			fmt.Fprintln(stderr, "corral certify --repo: --record ignored — --dry-run performs no audit, so there is nothing yet to record")
+		}
+		if *jsonOut {
+			inv := buildScanInventory(filepath.Base(*repoDir), totalFiles, rankSignal, cands, len(jobs), excl)
+			if err := writeScanInventory(jsonSink, inv); err != nil {
+				fmt.Fprintf(stderr, "corral certify --repo: writing JSON inventory: %v\n", err)
+				return 1
+			}
 		}
 		return 0
 	}

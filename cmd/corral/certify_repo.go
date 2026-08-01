@@ -416,7 +416,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "corral certify --repo: --record ignored — --dry-run performs no audit, so there is nothing yet to record")
 		}
 		if *jsonOut {
-			inv := buildScanInventory(filepath.Base(*repoDir), totalFiles, rankSignal, cands, len(jobs), excl)
+			inv := buildScanInventoryAt(*repoDir, filepath.Base(*repoDir), totalFiles, rankSignal, cands, len(jobs), excl)
 			if err := writeScanInventory(jsonSink, inv); err != nil {
 				fmt.Fprintf(stderr, "corral certify --repo: writing JSON inventory: %v\n", err)
 				return 1

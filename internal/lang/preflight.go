@@ -80,6 +80,26 @@ func firstExecutableToken(testCmd []string) (string, bool) {
 			return "", false
 		}
 	}
+	// An explicit shell wrapper (`sh -c "<script>"`) names a REAL executable in
+	// argv[0], but not a MEANINGFUL one: the program that actually has to exist
+	// is buried inside the script, which cannot be parsed reliably. Reporting
+	// "sh" would make Preflight check that a shell is installed — true on every
+	// box — and silently stop checking for the language's own toolchain, so a
+	// host with no ruby would pass preflight and fail at run time instead of
+	// refusing up front.
+	//
+	// Ruby's stock TestCmd is exactly this shape: it must discover the test file
+	// and choose between rspec and ruby, so it invokes a shell explicitly rather
+	// than smuggling the script into argv[0] (which broke the workspace
+	// substrate, where argv is exec'd directly).
+	if len(testCmd) > 1 {
+		switch strings.TrimSpace(testCmd[0]) {
+		case "sh", "bash", "zsh":
+			if strings.TrimSpace(testCmd[1]) == "-c" {
+				return "", false
+			}
+		}
+	}
 	for _, tok := range stripLeadingEnvAssignments(testCmd) {
 		trimmed := strings.TrimSpace(tok)
 		if trimmed == "" {

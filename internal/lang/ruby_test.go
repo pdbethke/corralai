@@ -28,13 +28,14 @@ func TestRubyPlugin(t *testing.T) {
 	if !reflect.DeepEqual(cc, [][]string{{"ruby", "-c", "pricing.rb"}, {"ruby", "-c", "pricing_test.rb"}}) {
 		t.Fatalf("CompileCheck = %v", cc)
 	}
-	// TestCmd MUST be a single shell string: the jail space-joins the argv and
-	// runs it under `sh -c`, so a multi-token slice with an embedded snippet
-	// would lose its argument boundaries. One element keeps the snippet intact.
-	if len(p.TestCmd()) != 1 {
-		t.Fatalf("TestCmd must be a single shell string, got %v", p.TestCmd())
+	// TestCmd MUST invoke a shell EXPLICITLY. Smuggling the script into argv[0]
+	// only worked on the jail substrate, which shell-joins argv; the workspace
+	// substrate execs argv directly and tried to run a program literally named
+	// `t="$(ls`, which is how the first real rubocop audit died.
+	if cmd := p.TestCmd(); len(cmd) != 3 || cmd[0] != "sh" || cmd[1] != "-c" {
+		t.Fatalf("TestCmd must be an explicit sh -c invocation, got %v", cmd)
 	}
-	tc := p.TestCmd()[0]
+	tc := p.TestCmd()[2]
 	if !strings.Contains(tc, "rspec") || !strings.Contains(tc, "ruby ") {
 		t.Fatalf("TestCmd must dispatch rspec-or-ruby: %q", tc)
 	}

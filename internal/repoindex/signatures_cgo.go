@@ -18,6 +18,10 @@ func extractSignatures(text, lang string) ([]Signature, error) {
 		return extractGoSignatures(text)
 	case "python":
 		return extractPythonSignatures(text)
+	case "ruby":
+		return extractRubySignatures(text)
+	case "javascript", "typescript":
+		return extractCurlySignatures(text, lang)
 	}
 	return nil, ErrUnsupportedLang
 }
@@ -60,6 +64,21 @@ var branchNodeTypes = map[string]map[string]bool{
 		"communication_case": true,
 		"select_statement":   true,
 	},
+	"ruby": {
+		"if":     true,
+		"unless": true,
+		"while":  true,
+		"until":  true,
+		"for":    true,
+		// `when`, not `case`: counting the case statement AND each of its
+		// branches would charge one extra path per switch, which is not what
+		// gocyclo/radon/eslint do.
+		"when":        true,
+		"rescue":      true,
+		"conditional": true, // a ? b : c
+	},
+	"javascript": jsBranchNodes,
+	"typescript": jsBranchNodes,
 	"python": {
 		"if_statement":           true,
 		"elif_clause":            true,
@@ -70,6 +89,36 @@ var branchNodeTypes = map[string]map[string]bool{
 		"conditional_expression": true,
 		"boolean_operator":       true, // `and` / `or`
 	},
+}
+
+// jsBranchNodes is shared by javascript and typescript: the TS grammar is a
+// superset of JS and names these nodes identically, so duplicating the table
+// would only create an opportunity for the two to drift.
+//
+// switch_default is deliberately absent — a default arm is the fall-through,
+// not an independent decision, and neither eslint nor gocyclo counts it.
+var jsBranchNodes = map[string]bool{
+	"if_statement":       true,
+	"for_statement":      true,
+	"for_in_statement":   true,
+	"while_statement":    true,
+	"do_statement":       true,
+	"switch_case":        true,
+	"catch_clause":       true,
+	"ternary_expression": true,
+}
+
+// booleanOpNode names, per language, the node type whose `operator` field must
+// be inspected for && / || (and Ruby's and/or). These are ordinary binary
+// expressions rather than distinct node types, so they cannot live in
+// branchNodeTypes: counting every binary expression would charge arithmetic as
+// a branch. Python is absent because its `boolean_operator` IS its own node
+// type and falls out of the set above.
+var booleanOpNode = map[string]string{
+	"go":         "binary_expression",
+	"javascript": "binary_expression",
+	"typescript": "binary_expression",
+	"ruby":       "binary",
 }
 
 // symbolComplexity walks n's subtree counting branch nodes, returning the
@@ -89,9 +138,10 @@ func symbolComplexity(n *sitter.Node, src []byte, lang string) int {
 		switch {
 		case types[t]:
 			c++
-		case lang == "go" && t == "binary_expression":
+		case booleanOpNode[lang] != "" && t == booleanOpNode[lang]:
 			if op := node.ChildByFieldName("operator"); op != nil {
-				if s := op.Content(src); s == "&&" || s == "||" {
+				switch op.Content(src) {
+				case "&&", "||", "and", "or":
 					c++
 				}
 			}

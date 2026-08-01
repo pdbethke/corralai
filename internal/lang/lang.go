@@ -220,3 +220,31 @@ type FailureDeselector interface {
 	// bare flag with no argument.
 	DeselectArgs(selectors []string) []string
 }
+
+// FileScopedTester is an OPTIONAL plugin extension that runs ONLY a given test
+// file, instead of the project's whole suite.
+//
+// It exists for the cost model, measured 2026-07-31: an audit costs
+// O(mutants × the TARGET's suite runtime), because scoring runs the whole suite
+// once per mutant. flask's suite is 1.46s; psf/requests' is 77s, which is ~96%
+// of that file's audit. A repo with a 2-minute suite and 25 audited files is
+// roughly 35 hours of compute per audit.
+//
+// This is NOT a pure optimisation, and callers must treat it as a measurement
+// change. Running the whole suite asks "did ANYTHING in this repo catch the
+// bug?". Running the paired file asks "do the tests FOR THIS FILE actually test
+// it?" — which is the question corral's per-file kill rates and weakest-files
+// list already claim to answer. But a mutant that some unrelated test happened
+// to catch now reads as a SURVIVOR, so the reported gap count goes UP. Switching
+// silently would mean corral claiming more bugs than before with no explanation.
+//
+// Unimplemented for any language whose per-file invocation has not been
+// verified: guessing would run the wrong tests and silently change every kill
+// rate for that language.
+type FileScopedTester interface {
+	// FileScopedTestCmd returns a command running only testPath. ok=false means
+	// no scoping is available — the caller must fall back to the full suite
+	// rather than improvise, since a bare runner invocation would quietly run
+	// everything while the caller believed it was scoped.
+	FileScopedTestCmd(testPath string) (cmd []string, ok bool)
+}

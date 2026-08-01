@@ -54,6 +54,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	writerModelFlag := fs.String("writer-model", "", "model for the test-writer role (default "+defaultLocalWriterModel+")")
 	mutantModelFlag := fs.String("mutant-model", "", "model for the mutant-generator role (default "+defaultLocalMutantModel+")")
 	criticModelFlag := fs.String("critic-model", "", "model for the test-critic role, which must differ from the writer's (default "+defaultLocalCriticModel+")")
+	scopeTestsFlag := fs.Bool("scope-tests", false, "grade each file against its OWN paired test file instead of the project's whole suite. MUCH faster — scoring runs the suite once per mutant, so this collapses an O(mutants x suite runtime) cost — but it CHANGES THE MEASUREMENT: a mutant that some unrelated test happened to catch now reads as a survivor, so the reported gap count can go UP. Ignored when an explicit -- <cmd> is given, and for languages with no verified per-file invocation")
 	shadowModelFlag := fs.String("shadow-model", "", "challenger model that attacks every region a SECOND time (default "+defaultLocalShadowModel+"; \"off\" disables). Recorded for comparison — NEVER gates the verdict. The default is a Claude model, so a non-Anthropic scan must set or disable it")
 	owner := fs.String("owner", "local", "owning account for the scan (tenant identifier)")
 	commit := fs.String("commit", "", "commit SHA the report is bound to")
@@ -258,6 +259,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// plugin's stock recursive command is used — resolved per job, since a
 		// repo can mix languages.
 		ex = newLocalExecutor(*repoDir, checkArgv, *substrateFlag, *timeoutFlag, stdout)
+		ex.scopeTests = *scopeTestsFlag
 		ex.models = auditModels{
 			writer: *writerModelFlag, mutant: *mutantModelFlag,
 			critic: *criticModelFlag, shadow: *shadowModelFlag,
@@ -1515,6 +1517,11 @@ type localExecutor struct {
 	// revisit this.
 	perFileSwarm int
 
+	// scopeTests runs each file's mutants against its OWN paired test file
+	// instead of the project's whole suite. Off by default because it changes
+	// the MEASUREMENT, not just the cost — see lang.FileScopedTester.
+	scopeTests bool
+
 	repoDir      string
 	checkArgv    []string
 	baselineRuns int // how many times to run the unmutated suite; 2 is the floor
@@ -1809,14 +1816,33 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 // fall back on), and a repo can mix languages, so it is resolved per job. An
 // unknown language yields nil and the audit fails closed downstream rather
 // than grading with someone else's command.
+// testCmd resolves the command a job is graded with. This ONE function's result
+// becomes both the baseline command and the scoring command, which is why
+// --scope-tests is applied here and nowhere else: a scoped scoring run graded
+// against an unscoped baseline would be comparing different things and would
+// silently corrupt every kill rate.
 func (l *localExecutor) testCmd(j reposcan.Job) []string {
+	// An operator who named a command has already chosen the surface; scoping
+	// must never rewrite it out from under them.
 	if len(l.checkArgv) > 0 {
 		return l.checkArgv
 	}
-	if p, ok := lang.ByName(j.Lang); ok {
-		return p.TestCmd()
+	p, ok := lang.ByName(j.Lang)
+	if !ok {
+		return nil
 	}
-	return nil
+	if l.scopeTests {
+		// Only for a language whose per-file invocation is verified, and only
+		// with a paired test to scope TO. Both fall back to the full suite
+		// rather than improvising something that would quietly run everything
+		// (or nothing) while the caller believed it was scoped.
+		if fs, canScope := p.(lang.FileScopedTester); canScope {
+			if cmd, scoped := fs.FileScopedTestCmd(j.TestPath); scoped {
+				return cmd
+			}
+		}
+	}
+	return p.TestCmd()
 }
 
 // recordingBaseline wraps a BaselineRunner and remembers the last outcome it

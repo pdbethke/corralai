@@ -15,9 +15,11 @@ import (
 // corral, not against a specific tool's report, because tools disagree about
 // whether `else`, `default`, ternaries and boolean operators count.
 //
-// It is only computed where a signature extractor exists: Go and Python.
-// ExtractSignatures returns "no signature extractor for language" for ruby,
-// javascript and typescript — verified empirically, not assumed.
+// It is only computed where a signature extractor exists. Go, Python, Ruby,
+// JavaScript and TypeScript have one; the remaining grammars repoindex can
+// PARSE (rust, java, c, cpp, csharp, php, bash) do not, so ExtractSignatures
+// returns "no signature extractor for language" for them — verified
+// empirically, not assumed.
 //
 // So complexity MUST be nullable. Emitting 0, or the floor of 1, for an
 // unmeasured language would render "this code is trivial" where the truth is
@@ -25,8 +27,12 @@ import (
 // NULL kill rate printed as 0.00, and as the `evidence=paired` label applied to
 // files that were never paired.
 func TestFileComplexity_AbsentWhereNotMeasured(t *testing.T) {
-	for _, lang := range []string{"ruby", "javascript", "typescript"} {
-		got := fileComplexity("whatever.src", []byte("function f(a){ if(a){ return 1 } return 0 }"), lang)
+	// Languages repoindex can parse but has no signature extractor for. The
+	// original examples here were ruby/javascript/typescript; those now HAVE
+	// extractors, so the property is re-pinned against languages where it is
+	// still true rather than deleted.
+	for _, lang := range []string{"rust", "java", "php"} {
+		got := fileComplexity("whatever.src", []byte("fn f(a: i32) -> i32 { if a > 0 { 1 } else { 0 } }"), lang)
 		if got != nil {
 			t.Errorf("%s complexity = %+v, want nil — no signature extractor exists, so any number would be a fabricated measurement", lang, got)
 		}

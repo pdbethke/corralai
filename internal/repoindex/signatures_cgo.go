@@ -244,41 +244,95 @@ func extractPythonSignatures(text string) ([]Signature, error) {
 	defer tree.Close()
 	root := tree.RootNode()
 	var out []Signature
-	for i := 0; i < int(root.NamedChildCount()); i++ {
-		n := root.NamedChild(i)
-		if n == nil {
-			continue
-		}
-		// unwrap `decorated_definition` (mirror chunk_cgo.go's handling)
-		def := n
-		if n.Type() == "decorated_definition" {
-			for j := 0; j < int(n.NamedChildCount()); j++ {
-				inner := n.NamedChild(j)
-				if inner != nil && inner.Type() == "function_definition" {
-					def = inner
-					break
-				}
-			}
-		}
-		if def.Type() != "function_definition" {
-			continue
-		}
-		name := fieldText(def, "name", src)
-		sig := Signature{
-			Name:     name,
-			Kind:     "func",
-			Params:   pyParams(def.ChildByFieldName("parameters"), src),
-			Line:     int(def.StartPoint().Row) + 1,
-			Exported: !strings.HasPrefix(name, "_"),
-		}
-		if rt := def.ChildByFieldName("return_type"); rt != nil {
-			sig.Results = []string{rt.Content(src)}
-		}
-		sig.Complexity = symbolComplexity(def, src, "python")
-		sig.Lines = symbolLines(def)
-		out = append(out, sig)
-	}
+	pyWalkDefs(root, src, "", &out)
 	return out, nil
+}
+
+// pyUnwrapDecorated returns the function_definition or class_definition a
+// `decorated_definition` wraps (mirroring chunk_cgo.go's handling), or the node
+// itself when it is not decorated. Without this, @property, @staticmethod and
+// every framework decorator would hide the symbol beneath them.
+func pyUnwrapDecorated(n *sitter.Node) *sitter.Node {
+	if n == nil || n.Type() != "decorated_definition" {
+		return n
+	}
+	for j := 0; j < int(n.NamedChildCount()); j++ {
+		inner := n.NamedChild(j)
+		if inner == nil {
+			continue
+		}
+		if t := inner.Type(); t == "function_definition" || t == "class_definition" {
+			return inner
+		}
+	}
+	return n
+}
+
+// pyWalkDefs collects function definitions under `parent`, DESCENDING INTO
+// CLASSES and attributing each method to its class via Receiver.
+//
+// It previously walked only the module's top level and accepted only
+// function_definition, so class_definition was skipped and every method inside
+// was invisible. On psf/requests that reported ONE symbol for ~500 lines built
+// around HTTPAdapter — and most real Python is class-based, so this was the
+// common case rather than an edge.
+//
+// Three things downstream inherited that blind spot: complexity under-reported
+// class-heavy files; the mutant-generator's signature surface was near-empty,
+// leaving its prompt almost nothing to work from; and advpool.ShardSymbols
+// bin-packs SYMBOLS, so one visible symbol produced ONE shard instead of up to
+// eight — the parallel generator seats silently collapsing, taking the
+// per-shard mutant budget with them.
+//
+// Receiver is the class name, matching the Go extractor's convention and
+// keeping advpool.symbolIdentity (Receiver + "." + Name) unique: without it,
+// two classes each defining `send` would collapse to one identity and a shard
+// would probe one twice while the other went unprobed.
+func pyWalkDefs(parent *sitter.Node, src []byte, receiver string, out *[]Signature) {
+	if parent == nil {
+		return
+	}
+	for i := 0; i < int(parent.NamedChildCount()); i++ {
+		def := pyUnwrapDecorated(parent.NamedChild(i))
+		if def == nil {
+			continue
+		}
+		switch def.Type() {
+		case "function_definition":
+			*out = append(*out, pySignature(def, src, receiver))
+		case "class_definition":
+			// Nested classes recurse with the INNERMOST class as the receiver:
+			// that is the name a reader (and a mutant-generator prompt) needs
+			// to locate the method.
+			name := fieldText(def, "name", src)
+			pyWalkDefs(def.ChildByFieldName("body"), src, name, out)
+		}
+	}
+}
+
+// pySignature builds one Signature from a function_definition. receiver is the
+// enclosing class name, or "" for a module-level function — which keeps free
+// functions byte-identical to their previous shape.
+func pySignature(def *sitter.Node, src []byte, receiver string) Signature {
+	name := fieldText(def, "name", src)
+	kind := "func"
+	if receiver != "" {
+		kind = "method"
+	}
+	sig := Signature{
+		Name:     name,
+		Kind:     kind,
+		Receiver: receiver,
+		Params:   pyParams(def.ChildByFieldName("parameters"), src),
+		Line:     int(def.StartPoint().Row) + 1,
+		Exported: !strings.HasPrefix(name, "_"),
+	}
+	if rt := def.ChildByFieldName("return_type"); rt != nil {
+		sig.Results = []string{rt.Content(src)}
+	}
+	sig.Complexity = symbolComplexity(def, src, "python")
+	sig.Lines = symbolLines(def)
+	return sig
 }
 
 // pyParams flattens a Python `parameters` node. A plain `identifier` is an

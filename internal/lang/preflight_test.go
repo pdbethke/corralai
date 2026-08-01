@@ -50,25 +50,25 @@ func TestFirstExecutableTokenRejectsShellPipelines(t *testing.T) {
 	}
 }
 
-// TestFirstExecutableTokenRejectsRubyStockShellSnippet is the DIRECT
+// TestFirstExecutableTokenRejectsRubyStockShellWrapper is the DIRECT
 // regression test for the reported bug: rubyPlugin.TestCmd() returns a
 // single argv element that is an entire multi-line shell script (built to
 // be space-joined and run under `sh -c` inside the jail — see ruby.go's own
 // doc comment on TestCmd), not a literal executable name. Feeding it to
 // exec.LookPath as-is produced exactly the reported error: `required tool
 // "t=\"$(ls *_test.rb ...\"... not found on PATH`.
-func TestFirstExecutableTokenRejectsRubyStockShellSnippet(t *testing.T) {
+func TestFirstExecutableTokenRejectsRubyStockShellWrapper(t *testing.T) {
 	rp, ok := ByName("ruby")
 	if !ok {
 		t.Fatal("no ruby plugin registered")
 	}
 	stock := rp.TestCmd()
 	if _, ok := firstExecutableToken(stock); ok {
-		t.Fatalf("firstExecutableToken(ruby's stock TestCmd() = %v) = ok, want false — it is a shell snippet, not a literal executable", stock)
+		t.Fatalf("firstExecutableToken(ruby's stock TestCmd() = %v) = ok, want false — it is a shell WRAPPER; the binary that must exist is inside the script, so Preflight has to fall back to the language floor", stock)
 	}
 }
 
-// TestPreflightBinFallsBackForRubyStockShellSnippet is the end-to-end proof
+// TestPreflightBinFallsBackForRubyStockShellWrapper is the end-to-end proof
 // at the level `rubyPlugin.Preflight` actually calls: `certify --repo`'s
 // own `localExecutor.testCmd` (cmd/corral/certify_repo.go) substitutes the
 // plugin's stock TestCmd() whenever the operator gave no `-- <cmd>`, and
@@ -77,7 +77,7 @@ func TestFirstExecutableTokenRejectsRubyStockShellSnippet(t *testing.T) {
 // after, it must fall back to the plugin's own stock default ("ruby"),
 // host-independent (this asserts the RESOLVED name, not whether a real
 // ruby binary happens to be installed on the test host).
-func TestPreflightBinFallsBackForRubyStockShellSnippet(t *testing.T) {
+func TestPreflightBinFallsBackForRubyStockShellWrapper(t *testing.T) {
 	rp, ok := ByName("ruby")
 	if !ok {
 		t.Fatal("no ruby plugin registered")

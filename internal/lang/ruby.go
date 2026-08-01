@@ -17,15 +17,27 @@ func (rubyPlugin) Detect(codePath string) bool { return filepath.Ext(codePath) =
 // workspace root.
 func (rubyPlugin) Scaffold() map[string]string { return map[string]string{} }
 
-// TestCmd dispatches by test-file CONTENT at jail-run time. It returns a SINGLE
-// shell string: the jail space-joins the argv and runs it under `sh -c`, so the
-// snippet must be one element to survive intact (a multi-token slice would lose
-// its argument boundaries under the join). RSpec files (require rspec / RSpec.)
-// go to the rspec runner; everything else runs with plain `ruby` (minitest
-// self-runs via require 'minitest/autorun'). The pool renames the dev test to a
-// neutral TestPath, so the filename carries no framework signal — content does.
+// TestCmd dispatches by test-file CONTENT at run time: RSpec files (require
+// rspec / RSpec.) go to the rspec runner, everything else runs with plain
+// `ruby` (minitest self-runs via require 'minitest/autorun'). The pool renames
+// the dev test to a neutral TestPath, so the filename carries no framework
+// signal — content does.
+//
+// TestCmd genuinely needs shell logic — it discovers the test file and chooses
+// between rspec and plain ruby — so it invokes a shell EXPLICITLY rather than
+// relying on a caller to shell-join it.
+//
+// It previously returned the script as a single argv element. That works only
+// where something joins argv and runs it under `sh -c` (the jail substrate);
+// the workspace substrate execs argv directly, so argv[0] became the literal
+// program name `t="$(ls` and the run died with "executable file not found in
+// $PATH". That is how the first real rubocop audit failed — and CompileCheck,
+// immediately below, already documented this exact bug class and how to avoid
+// it. {"sh", "-c", script} is correct on BOTH substrates: the workspace execs
+// sh, and the jail's shell-join wraps it in another sh -c, which nests
+// harmlessly.
 func (rubyPlugin) TestCmd() []string {
-	return []string{
+	return []string{"sh", "-c",
 		`t="$(ls *_test.rb *_spec.rb test_*.rb spec_*.rb 2>/dev/null | head -n1)"; ` +
 			`[ -z "$t" ] && { echo "no ruby test file"; exit 1; }; ` +
 			`if grep -Eq "require ['\"](rspec|spec_helper)|RSpec[.:]" "$t"; then exec rspec "$t"; else exec ruby "$t"; fi`,

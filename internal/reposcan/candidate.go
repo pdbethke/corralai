@@ -149,6 +149,13 @@ func skippedDirFiles(dir, root string) ([]Exclusion, error) {
 // an exclusion with a reason. Results are sorted by path so a scan of the
 // same tree always produces the same job order.
 func Enumerate(root string) ([]Candidate, []Exclusion, error) {
+	return EnumerateWithTests(root, nil)
+}
+
+// EnumerateWithTests is Enumerate with a tenant-supplied source→test mapping
+// consulted BEFORE convention. See TestMap for why convention alone cannot pair
+// every repository. A nil map is exactly Enumerate.
+func EnumerateWithTests(root string, tests *TestMap) ([]Candidate, []Exclusion, error) {
 	var cands []Candidate
 	var excl []Exclusion
 
@@ -208,6 +215,11 @@ func Enumerate(root string) ([]Candidate, []Exclusion, error) {
 	// exists to resolve cross-source collisions below and is discarded once
 	// that pass is done — Candidate itself carries no notion of rank.
 	var rank []int
+	// explicitPairs is parallel to cands: true where the pairing came from the
+	// tenant's map rather than convention. Those are exempt from ambiguity
+	// demotion — a deliberate many-to-one mapping is not an accidental
+	// collision (see demoteAmbiguousPairings).
+	var explicitPairs []bool
 
 	for rel := range present {
 		p, ok := lang.Detect(rel)
@@ -229,12 +241,27 @@ func Enumerate(root string) ([]Candidate, []Exclusion, error) {
 		// plausibly belong to a different source file.
 		tp := ""
 		tpRank := -1
-		for _, cand := range p.TestPaths(rel) {
-			path := filepath.ToSlash(cand.Path)
-			if path != "" && present[path] {
-				tp = path
-				tpRank = cand.Rank
-				break
+		explicit := false
+
+		// The tenant's mapping wins: they know their layout, and corral cannot
+		// infer a project's own naming shorthand (see TestMap).
+		if mapped, ok := tests.TestFor(rel); ok {
+			if !present[mapped] {
+				// REFUSED, never a silent fallback to convention: falling back
+				// would pair the file to something the operator did not choose,
+				// and they would have no way to see their mapping was ignored.
+				excl = append(excl, Exclusion{Path: rel, Reason: ReasonMappedTestMissing})
+				continue
+			}
+			tp, tpRank, explicit = mapped, 0, true
+		} else {
+			for _, cand := range p.TestPaths(rel) {
+				path := filepath.ToSlash(cand.Path)
+				if path != "" && present[path] {
+					tp = path
+					tpRank = cand.Rank
+					break
+				}
 			}
 		}
 		if tp == "" {
@@ -243,9 +270,10 @@ func Enumerate(root string) ([]Candidate, []Exclusion, error) {
 		}
 		cands = append(cands, Candidate{Path: rel, TestPath: tp, Lang: p.Name()})
 		rank = append(rank, tpRank)
+		explicitPairs = append(explicitPairs, explicit)
 	}
 
-	cands, excl = demoteAmbiguousPairings(cands, rank, excl)
+	cands, excl = demoteAmbiguousPairings(cands, rank, excl, explicitPairs)
 
 	sort.Slice(cands, func(i, j int) bool { return cands[i].Path < cands[j].Path })
 	sort.Slice(excl, func(i, j int) bool { return excl[i].Path < excl[j].Path })
@@ -284,9 +312,19 @@ func Enumerate(root string) ([]Candidate, []Exclusion, error) {
 // happened to collapse onto the same string for this particular source". It
 // is parallel to cands and produced by the same loop in Enumerate, never
 // persisted on Candidate itself.
-func demoteAmbiguousPairings(cands []Candidate, rank []int, excl []Exclusion) ([]Candidate, []Exclusion) {
+func demoteAmbiguousPairings(cands []Candidate, rank []int, excl []Exclusion, explicit []bool) ([]Candidate, []Exclusion) {
 	groups := map[string][]int{} // TestPath -> indices into cands
 	for i, c := range cands {
+		// An EXPLICIT pairing is exempt. This guard exists to catch ACCIDENTAL
+		// collisions — two sources a filename heuristic happened to point at
+		// one test — because a wrong pairing plants mutants in one file and
+		// grades them against another's tests. A tenant deliberately mapping
+		// several sources onto one suite (express: every lib file to test/) is
+		// a choice, not a collision, and demoting it would discard exactly the
+		// pairings the operator supplied on purpose.
+		if i < len(explicit) && explicit[i] {
+			continue
+		}
 		groups[c.TestPath] = append(groups[c.TestPath], i)
 	}
 

@@ -939,3 +939,14 @@ func (pyPlugin) DeselectArgs(selectors []string) []string {
 	}
 	return args
 }
+
+// FileScopedTestCmd runs only the given test file. pytest takes a path
+// directly, so this is the stock command with the path appended — deliberately
+// derived from TestCmd() rather than rebuilt, so the interpreter selection and
+// flags cannot drift apart from the unscoped path.
+func (p pyPlugin) FileScopedTestCmd(testPath string) ([]string, bool) {
+	if strings.TrimSpace(testPath) == "" {
+		return nil, false
+	}
+	return append(p.TestCmd(), testPath), true
+}

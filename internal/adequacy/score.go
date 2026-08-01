@@ -20,6 +20,7 @@ package adequacy
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 )
 
@@ -58,6 +59,7 @@ type ScoreOption func(*scoreConfig)
 
 type scoreConfig struct {
 	mutantTimeout time.Duration
+	concurrency   int
 }
 
 // WithMutantTimeout overrides the auto-derived per-mutant timeout with an
@@ -65,6 +67,28 @@ type scoreConfig struct {
 // given at all).
 func WithMutantTimeout(d time.Duration) ScoreOption {
 	return func(c *scoreConfig) { c.mutantTimeout = d }
+}
+
+// WithConcurrency scores up to n mutants at once. The default (and anything
+// < 2) is strictly sequential, which is what every existing caller gets.
+//
+// OPT-IN ON PURPOSE, and the caller — not this package — owns the safety
+// argument, because it depends entirely on the Jail implementation:
+//
+//   - bwrapJail is a stateless value whose writeWorkspace does its own
+//     os.MkdirTemp per call, so concurrent runs are fully isolated. Safe.
+//   - WorkspaceRunner mutates ONE checkout in place and has NO mutex.
+//     Concurrent applyFiles would interleave and corrupt the tree. NEVER
+//     raise this for that substrate.
+//
+// This is the single biggest lever on audit wall-clock. Scoring runs the
+// target's whole suite once per mutant, so cost is O(mutants x suite runtime)
+// — measured at 1.46s/suite for pallets/flask but 77s for psf/requests, where
+// the suite is ~96% of a file's audit. Sequentially that is the wall a hosted
+// tier would hit; the work is embarrassingly parallel and was simply never
+// distributed.
+func WithConcurrency(n int) ScoreOption {
+	return func(c *scoreConfig) { c.concurrency = n }
 }
 
 // Mutant is a single goal-violating variant of the code under test.
@@ -217,7 +241,19 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 	}
 
 	rep.Total = len(mutants)
-	for _, m := range mutants {
+
+	// Results are collected into an INDEXED slice and assembled in mutants'
+	// own order below — never appended as they finish. Score's contract is
+	// that Killed/Survived follow the input order so the report is
+	// reproducible, and this ledger is signed: an ordering that depended on
+	// scheduling would make two runs of identical inputs disagree.
+	type outcome struct {
+		killed bool
+		err    error
+	}
+	outcomes := make([]outcome, len(mutants))
+
+	scoreOne := func(i int, m Mutant) {
 		mctx, cancel := context.WithTimeout(ctx, perMutant)
 		passed, err := run(mctx, m.Code)
 		cancel()
@@ -226,16 +262,47 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 				// Non-terminating mutant: the suite hanging IS a caught
 				// divergence from the healthy baseline — count it a kill,
 				// not an aborted run.
-				rep.Killed = append(rep.Killed, m.ID)
-				continue
+				outcomes[i] = outcome{killed: true}
+				return
 			}
-			return Report{}, err
+			outcomes[i] = outcome{err: err}
+			return
 		}
-		if passed { // test PASSED on a violation => it did NOT catch it
-			rep.Survived = append(rep.Survived, m.ID)
-		} else { // test FAILED on the violation => caught (killed)
+		// test PASSED on a violation => it did NOT catch it
+		outcomes[i] = outcome{killed: !passed}
+	}
+
+	if cfg.concurrency > 1 && len(mutants) > 1 {
+		sem := make(chan struct{}, cfg.concurrency)
+		var wg sync.WaitGroup
+		for i, m := range mutants {
+			wg.Add(1)
+			sem <- struct{}{}
+			go func(i int, m Mutant) {
+				defer wg.Done()
+				defer func() { <-sem }()
+				scoreOne(i, m)
+			}(i, m)
+		}
+		wg.Wait()
+	} else {
+		for i, m := range mutants {
+			scoreOne(i, m)
+		}
+	}
+
+	for i, m := range mutants {
+		if outcomes[i].err != nil {
+			// Fail the whole report, exactly as the sequential path did: a
+			// mutant that could not be RUN is not a mutant that survived, and
+			// must never be scored as one.
+			return Report{}, outcomes[i].err
+		}
+		if outcomes[i].killed {
 			rep.Killed = append(rep.Killed, m.ID)
+			continue
 		}
+		rep.Survived = append(rep.Survived, m.ID)
 	}
 	return rep, nil
 }

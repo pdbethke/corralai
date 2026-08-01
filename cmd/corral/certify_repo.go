@@ -337,6 +337,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// candidates + excluded is deliberately NOT the file count.
 	fmt.Fprintf(stdout, "  %d file(s) walked; %d candidate(s); %d job(s); %d file(s) excluded from the audit\n",
 		totalFiles, len(cands), len(jobs), len(excl))
+	printLanguageProfile(stdout, reposcan.BuildLanguageProfile(cands, excl))
 	printExclusions(stdout, excl)
 
 	// An explicit `-- <cmd>` is applied to EVERY job, so it is only meaningful
@@ -1843,6 +1844,34 @@ func (l *localExecutor) testCmd(j reposcan.Job) []string {
 		}
 	}
 	return p.TestCmd()
+}
+
+// printLanguageProfile renders the per-language inventory the enumeration
+// already knows but used to discard. Everything here is FREE — no model call,
+// no jail, no key — which is what makes it the right first thing to show
+// somebody pointing corral at a repository for the first time.
+//
+// "no paired test" is deliberately given equal billing to "auditable": it needs
+// no LLM and is often the most actionable line in the report, and it is the
+// number that explains a low candidate count instead of leaving it mysterious.
+func printLanguageProfile(w io.Writer, profile []reposcan.LanguageStat) {
+	if len(profile) == 0 {
+		return
+	}
+	fmt.Fprintln(w, "  languages detected:")
+	for _, s := range profile {
+		fmt.Fprintf(w, "    %-12s %3d source file(s): %d auditable, %d with no paired test",
+			s.Lang, s.Auditable+s.NoPairedTest+s.Ambiguous, s.Auditable, s.NoPairedTest)
+		if s.Ambiguous > 0 {
+			// Called out separately because this is where corral KNOWS it is
+			// uncertain — the right place to ask a human rather than guess.
+			fmt.Fprintf(w, ", %d ambiguous", s.Ambiguous)
+		}
+		if s.TestFiles > 0 {
+			fmt.Fprintf(w, " (+%d test file(s))", s.TestFiles)
+		}
+		fmt.Fprintln(w)
+	}
 }
 
 // recordingBaseline wraps a BaselineRunner and remembers the last outcome it

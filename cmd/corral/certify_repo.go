@@ -46,6 +46,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	repoDir := fs.String("repo", "", "path of the repository to audit (required)")
 	goalsPath := fs.String("goals", "", "JSON file mapping repo-relative paths to goals (default: derive a goal per file)")
+	testsPath := fs.String("tests", "", "JSON file mapping repo-relative SOURCE paths to their test files, consulted before filename convention. Convention cannot pair a project that names tests after behaviour rather than after source files (expressjs/express: lib/response.js is tested by test/res.send.js, res.json.js …), and it can pair the WRONG file (psf/requests pairs adapters.py to an 8-line test_adapters.py while its real coverage is in a 108KB test_requests.py). A mapping to a file that does not exist is refused, never silently fallen back to convention")
 	topFlag := fs.Int("top", defaultScanTop, "audit only the N highest-ranked candidates (0 or --all = every candidate). Bounded by default: a whole-repo audit runs a full herd per file, so an unbounded first scan on a large repo costs hours and real money. The DEFAULT bound does not apply with --goals — a hand-written goals map has already chosen the surface — but an explicit --top does")
 	allFlag := fs.Bool("all", false, "audit every candidate, ignoring --top")
 	deriveModel := fs.String("derive-model", defaultDeriveModel, "model that derives a goal per file when --goals is not given")
@@ -147,7 +148,16 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// site near the bottom of this function).
 	startedAt := time.Now()
 
-	cands, excl, err := reposcan.Enumerate(*repoDir)
+	var testMap *reposcan.TestMap
+	if *testsPath != "" {
+		tm, terr := reposcan.NewFileTestMap(*testsPath)
+		if terr != nil {
+			fmt.Fprintf(stderr, "corral certify --repo: reading --tests %s: %v\n", *testsPath, terr)
+			return 2
+		}
+		testMap = tm
+	}
+	cands, excl, err := reposcan.EnumerateWithTests(*repoDir, testMap)
 	if err != nil {
 		fmt.Fprintf(stderr, "corral certify --repo: enumerating %s: %v\n", *repoDir, err)
 		return 1
@@ -367,6 +377,12 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// candidates + excluded is deliberately NOT the file count.
 	fmt.Fprintf(stdout, "  %d file(s) walked; %d candidate(s); %d job(s); %d file(s) excluded from the audit\n",
 		totalFiles, len(cands), len(jobs), len(excl))
+	if n := testMap.Len(); n > 0 {
+		// Disclosed, so an operator can see their map was actually read — a
+		// mapping silently ignored would be indistinguishable from one that
+		// worked.
+		fmt.Fprintf(stdout, "  %d source file(s) paired from --tests, ahead of filename convention\n", n)
+	}
 	printLanguageProfile(stdout, reposcan.BuildLanguageProfile(cands, excl))
 	printExclusions(stdout, excl)
 

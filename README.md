@@ -286,6 +286,64 @@ is the case worth reading, and it is stored precisely so diagnosing it never
 requires paying for a second audit. A never-graded scan renders `—`, never
 `0.00`: corral does not report a score for something it never measured.
 
+**Look before you spend (`--dry-run`, `--json`).** Enumeration needs no model
+key, no jail and no money, and it already knows a great deal about your
+repository. It reports a per-language profile — how many source files corral can
+audit, how many have **no paired test at all**, and how many pairings are
+ambiguous — plus a machine-stable reason for every excluded file:
+
+```bash
+corral certify --repo . --dry-run            # human report, seconds
+corral certify --repo . --dry-run --json     # the same inventory as data
+```
+
+```
+languages detected:
+  python  28 source file(s): 6 auditable, 21 with no paired test, 1 ambiguous (+9 test file(s))
+```
+
+The JSON form carries every auditable file with its inferred test pairing and,
+for languages corral can parse symbols in, a per-file complexity measure
+(`symbols`, `max`, `total` — cyclomatic-style, the same decision-point
+approximation gocyclo and radon use). Complexity is **absent** rather than zero
+where corral has no extractor, because a `0` would read as "this code is
+trivial" when the truth is "never measured".
+
+There is deliberately **no headline percentage**. 6 auditable files out of 130
+walked is 4%; out of 6 candidates it is 100%. Neither is the truth, so the
+report gives you every term of the funnel and lets you draw the conclusion.
+
+**When convention can't pair your repo (`--tests`).** Pairing matches a source
+file to a conventionally-named test. That works when a project names tests after
+source files and cannot work when it doesn't — `expressjs/express` tests
+`lib/response.js` from `test/res.send.js`, `test/res.json.js`, and no filename
+rule derives `response → res`. A rule loose enough to try would pair the *wrong*
+files, planting mutants in one file and grading them against another's tests.
+
+So you can say it yourself — a JSON map of source path to test path, consulted
+before convention:
+
+```bash
+corral certify --repo . --tests corral-tests.json
+```
+
+Unmapped files still fall through to convention, so a partial map is normal: you
+correct only what convention gets wrong. A mapping to a file that does not exist
+is **refused and reported**, never silently ignored — a typo must be visible.
+
+**Grading against one file's own tests (`--scope-tests`, opt-in).** Scoring runs
+your suite once per mutant, so an audit costs roughly *mutants x suite runtime*.
+Scoping to a file's own paired test collapses that: measured 11x faster on
+`psf/requests`, whose suite takes 77 seconds.
+
+It is **off by default and should stay that way unless you have checked it**,
+because it changes the question being asked. On `flask/cli.py` the kill rate
+barely moved (0.65 → 0.68). On `requests/adapters.py` it inverted — **1.00 →
+0.00** — because that file's real coverage lives in a 108KB `test_requests.py`
+while convention paired it to an 8-line `test_adapters.py`. Scoping there
+reported five catchable gaps in a file whose tests catch everything. Use it when
+you know your pairings are right, which is exactly what `--tests` is for.
+
 **The foreign-repo sweep (CI, every PR).** `scripts/foreign-sweep.sh` runs
 `certify --repo --dry-run` — enumeration, language detection, test pairing,
 ambiguity demotion, ranking, and selection, but **no audit and no suite

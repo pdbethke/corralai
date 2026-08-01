@@ -240,6 +240,43 @@ Go binary.**
   that door and the sibling one (a `certify --repo`-only flag placed after
   `--`, handed to the check command instead of being parsed) are now hard
   usage errors (exit 2) naming the offending token.
+- **The free look, before anyone spends (`--dry-run --json`).** Enumeration
+  needs no key, no jail and no money, and it already knew far more than it
+  reported. It now emits a per-language profile — auditable files, files with
+  **no paired test at all**, ambiguous pairings — and a machine-readable
+  inventory a UI or a tenant's own tooling can consume instead of scraping
+  stdout. Per-file complexity rides along where corral can parse symbols
+  (cyclomatic-style, the decision-point approximation gocyclo and radon use),
+  and is **absent rather than zero** where it cannot: a `0` would read as "this
+  code is trivial" when the truth is "never measured". There is deliberately no
+  headline percentage — 6 of 130 walked is 4%, 6 of 6 candidates is 100%, and
+  neither is the truth, so every term of the funnel is reported instead.
+- **`--tests`: the tenant maps their own suite.** Pairing is convention-based,
+  which cannot work on a project that names tests after behaviour rather than
+  after source files — `expressjs/express` tests `lib/response.js` from
+  `test/res.send.js`, and no filename rule derives `response → res`. A rule
+  loose enough to try would pair the WRONG files, which plants mutants in one
+  file and grades them against another's tests. So the operator supplies the
+  map, the same way `--goals` lets them supply goals; unmapped files fall
+  through to convention, and a mapping to a file that does not exist is refused
+  rather than silently ignored. **express went from 0 auditable files to 4 —
+  corral's first JavaScript audit surface.**
+- **Signatures and complexity for five languages.** Go, Python, Ruby,
+  JavaScript and TypeScript. Python previously skipped class methods entirely
+  and the other three had no extractor at all, which mattered more than it
+  looks: the mutant-generator shards by SYMBOL, so a file corral could not read
+  symbols from collapsed to a single generator seat instead of up to eight —
+  silently, on a run that still reported as complete. Measured:
+  `requests/adapters.py` 1 symbol → 19, `rubocop` 729 of 736 files measured,
+  `express/lib/response.js` 2 → 20.
+- **`--scope-tests` (opt-in): grade a file against its own tests.** Scoring runs
+  the suite once per mutant, so cost is roughly *mutants x suite runtime* — 11x
+  faster on `psf/requests`, whose suite takes 77 seconds. Deliberately NOT the
+  default: it changes the question from "did anything in this repo catch the
+  bug?" to "do the tests for this file catch it?", and on `requests/adapters.py`
+  that inverted the verdict from 1.00 to 0.00, because the file's real coverage
+  lives elsewhere than its conventionally-named pair. Fast is not free, and the
+  honest default is the slow one.
 - **`corral scans list|show` — reading the ledger back.** For its whole life
   that ledger was write-only in practice: every scan and every per-file
   disposition was recorded, and nothing shipped could get any of it out. You

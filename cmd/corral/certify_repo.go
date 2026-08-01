@@ -417,6 +417,18 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	workers, swarmReadout := resolveScanWorkers(*swarmFlag, *substrateFlag)
 	fmt.Fprint(stdout, swarmReadout)
 
+	// The workspace substrate pins file-level concurrency to 1 (one checkout,
+	// mutated in place), so the operator's budget is unspent at that level.
+	// Hand it to each file's OWN audit instead of idling the box: see
+	// localExecutor.perFileSwarm for why this is safe only there.
+	if *substrateFlag == substrateWorkspace {
+		perFile := resolveSwarm(*swarmFlag)
+		ex.perFileSwarm = perFile
+		if perFile > 1 {
+			fmt.Fprintf(stdout, "  per-file: %d worker(s) — files are serialized on this substrate, so each file's own roles run concurrently instead\n", perFile)
+		}
+	}
+
 	// ex is non-nil here: it is constructed on every non-dry-run path above,
 	// and the dry run returned before this point.
 	//
@@ -1484,6 +1496,25 @@ type localExecutor struct {
 	// localAuditInput (see auditInputFor).
 	models auditModels
 
+	// perFileSwarm is how many workers ONE file's own audit may use. It is >1
+	// only on the workspace substrate, where resolveScanWorkers has already
+	// forced file-level concurrency to 1 (files share a single checkout), so
+	// the operator's --swarm budget would otherwise go entirely unspent — the
+	// box idling while a file's ~8 mutant-generator shards, its test-writer
+	// and its critic run strictly one after another.
+	//
+	// On a JAIL substrate this stays 1: files there really do run
+	// concurrently, so a nested per-file swarm would multiply the budget by
+	// the worker count.
+	//
+	// Safe only because in-process workers are LLM-ONLY — agentworker.RunRole
+	// is a single model.Chat call and the worker path never references
+	// sandbox, adequacy or the workspace. That matters: WorkspaceRunner has no
+	// mutex, and concurrent applyFiles against the shared checkout would
+	// corrupt the tree. Anything that gives workers workspace access must
+	// revisit this.
+	perFileSwarm int
+
 	repoDir      string
 	checkArgv    []string
 	baselineRuns int // how many times to run the unmutated suite; 2 is the floor
@@ -1531,6 +1562,16 @@ type localExecutor struct {
 
 	newBaseline func(context.Context, localAuditInput) (reposcan.BaselineRunner, func(), error)
 	audit       func(context.Context, localAuditInput) (advpool.Verdict, error)
+}
+
+// effectivePerFileSwarm is perFileSwarm clamped to the only substrate where a
+// per-file swarm is safe, and defaulted to today's single worker. A zero or
+// negative budget must never become unbounded concurrency.
+func (l *localExecutor) effectivePerFileSwarm() int {
+	if l.substrate != substrateWorkspace || l.perFileSwarm < 1 {
+		return 1
+	}
+	return l.perFileSwarm
 }
 
 func newLocalExecutor(repoDir string, checkArgv []string, substrate string, timeout time.Duration, progress io.Writer) *localExecutor {
@@ -1634,10 +1675,10 @@ func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
 		checkArgv: l.testCmd(j),
 		substrate: l.substrate,
 		timeout:   l.timeout,
-		// One worker per file: the scan's budget is spent on file-level
-		// fan-out, so a nested per-file swarm would multiply it by the worker
-		// count and melt the box the --swarm bound exists to protect.
-		swarm: 1,
+		// See localExecutor.perFileSwarm: 1 everywhere the scan really does
+		// fan out over files, and the otherwise-unspent budget on the
+		// workspace substrate, which serializes them.
+		swarm: l.effectivePerFileSwarm(),
 		// H1a produces a REPORT, not a sealed statement: no ledger, no
 		// signing key, no scorecard feed (N concurrent audits must not
 		// contend on one single-process DuckDB file). Signing is H1c.

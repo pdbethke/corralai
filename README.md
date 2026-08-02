@@ -104,18 +104,34 @@ each a plugin in `internal/lang`.
 > **9** — and `expressjs/express` **zero**, because common JavaScript layouts don't
 > match the conventions corral knows. **If a `--repo` scan of your JS/TS project
 > reports `0 candidates`, that's a limitation of corral's pairing, not a verdict on
-> your tests** — audit the files directly with `--local --code <path> --test
-> <path>`, which never uses pairing at all. The `express` zero is pinned in CI
-> precisely so it can't be quietly papered over; see [the foreign-repo
+> your tests** — and there are two ways out. Point corral at the files directly with
+> `--local --code <path> --test <path>`, which never uses pairing at all; or hand
+> `certify --repo` a **`--tests` map** (JSON, source path → test path) and let it scan
+> the repo normally. Express is the worked example: convention finds nothing, because
+> `lib/response.js` is covered by `test/res.send.js`, `res.json.js` and others and no
+> filename rule derives `response → res` — but a six-line map takes it from **0 to 6
+> auditable files**. A mapping to a file that doesn't exist is refused rather than
+> silently falling back, so a typo is visible. Both the `express` zero AND the mapped
+> result are pinned in CI so neither can be quietly papered over; see [the foreign-repo
 > sweep](#the-gate--for-a-repo-and-for-a-control-owner) below.
 
 By default the audit runs two distinct Claude
 models off one key (Sonnet writes/mutates, Haiku critiques) — decorrelation satisfied
-with a single key; on that same default path, `--critic-model gemini-3.5-flash` plus
+with a single key; on that same default path, `--critic-model gemini-3.6-flash` plus
 `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) routes the critic to Gemini via the
 OpenAI-compatible Google endpoint, a real cross-vendor critic, while the writer and
 mutant-generator stay on Claude — a missing key fails the run closed rather than
-silently falling back. Full walkthrough of a real verdict: **[the "first audit"
+silently falling back.
+
+Cross-vendor routing is **one-directional by design**: it applies to the critic, and
+only when you have *not* pinned `MODEL_BACKEND`. Setting `MODEL_BACKEND` explicitly
+means "every role on this endpoint," so pointing a whole run at one vendor and then
+naming a critic from a different one sends that model to the wrong endpoint. For a
+deliberately single-vendor run, use **`--critic-model off`**: the critic is advisory
+and never gates the verdict, so dropping it changes nothing about the
+execution-proven result — it only removes the second opinion. (Useful when a vendor
+offers just one model you're willing to run, since the critic must otherwise differ
+from the writer.) Full walkthrough of a real verdict: **[the "first audit"
 guide](https://corralai.dev/docs/first-audit/)**.
 
 ### Certify a change by its declared check
@@ -617,6 +633,14 @@ of.
   are scored and recorded to the scorecard (`corral scorecard`), but only the primary
   generator's mutants feed the kill-rate. It roughly doubles generator API calls and
   jail wall-clock; `--shadow-model off` disables it.
+- **Turning the critic off.** `--critic-model off` (same `off`/`none` spelling as
+  `--shadow-model`) drops the test-critic entirely. The critic is **advisory** — its
+  findings ride the verdict as unverified review and never gate certification — so a
+  run without it reports the same execution-proven kill-rate and proven-missed count,
+  just with no second opinion attached. That absence is reported as *empty*, not as a
+  clean review: "nobody looked" must not read as "looked and found nothing". Needed
+  whenever a single-vendor run has only one model you're willing to use, since the
+  critic must otherwise differ from the writer.
 - **Critic precision.** `corral scorecard`'s C-PREC column scores the test-critic role
   itself: how often a critic's findings, once a human adjudicates them
   (`corral criticscore list|show <id>|confirm <id>|refute <id>`), turn out to be real

@@ -1453,3 +1453,38 @@ func TestPrepareAuditJailForwardsTheSharedSeed(t *testing.T) {
 		t.Errorf("prepareAuditJail released a SHARED seed's staging dir (%d times)", cleaned)
 	}
 }
+
+// The critic is disablable for the same reason the shadow challenger is: it is
+// advisory and never gates the verdict. The failure this pins is the one that
+// would be silent — "off" being treated as a MODEL NAMED "off" and shipped to a
+// provider, which surfaces as a 404 mid-run rather than as a config error.
+func TestResolveCriticModelOffDisablesCritic(t *testing.T) {
+	for _, in := range []string{"off", "OFF", "Off", "none", "NONE", " off "} {
+		if got := advpool.ResolveOptionalModel(in, defaultLocalCriticModel); got != "" {
+			t.Errorf("critic %q = %q, want \"\" (disabled)", in, got)
+		}
+	}
+	if got := advpool.ResolveOptionalModel("", defaultLocalCriticModel); got != defaultLocalCriticModel {
+		t.Errorf("empty critic = %q, want the default %q", got, defaultLocalCriticModel)
+	}
+	// A real model name must pass through untouched — including one that merely
+	// CONTAINS "off", which the case switch must not match on.
+	for _, in := range []string{"claude-haiku-4-5", "gemini-3.6-flash", "offline-model-1"} {
+		if got := advpool.ResolveOptionalModel(in, defaultLocalCriticModel); got != in {
+			t.Errorf("critic %q = %q, want it passed through verbatim", in, got)
+		}
+	}
+}
+
+// A disabled critic must not trip the decorrelation guard: CheckDecorrelation
+// rejects a critic that EQUALS the writer, and "" never does.
+func TestDisabledCriticPassesDecorrelation(t *testing.T) {
+	assign := advpool.RoleAssignment{
+		advpool.RoleMutantGenerator: "gemini-3.6-flash",
+		advpool.RoleTestWriter:      "gemini-3.6-flash",
+		advpool.RoleTestCritic:      advpool.ResolveOptionalModel("off", defaultLocalCriticModel),
+	}
+	if err := advpool.CheckDecorrelation(assign); err != nil {
+		t.Fatalf("a disabled critic must not trip decorrelation: %v", err)
+	}
+}

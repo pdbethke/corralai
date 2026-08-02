@@ -1,0 +1,148 @@
+---
+title: Mutants, survivors, kill rates
+description: The vocabulary corral uses, what a "mutant" actually is (not the X-Men kind), and an honest account of which parts of this are a fifty-year-old idea and which parts are new.
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+
+corral's output is full of words like *mutant*, *survivor* and *kill rate*. They're
+borrowed from an established field, and if you haven't met them before the reports
+read like comic-book solicitations. This page is the vocabulary, plus a straight
+answer to the fair question *"isn't this just mutation testing?"*
+
+Short version: **the mutation part is not new and we don't claim it. What's new is
+what happens after a mutant survives.**
+
+## A mutant is a deliberately broken copy of your code
+
+Not a superpower. A *mutation* in the biological sense — a small, specific change
+to the original.
+
+Say this is your code:
+
+```python
+def is_adult(age):
+    return age >= 18
+```
+
+A mutant is that function with one thing wrong on purpose:
+
+```python
+def is_adult(age):
+    return age > 18      # >= became >
+```
+
+Now run **your existing test suite** against the broken version and watch what
+happens:
+
+- If a test **fails**, your suite noticed. The mutant is **killed**.
+- If every test still **passes**, your suite did not notice a real behaviour change.
+  The mutant **survived**.
+
+A survivor is the interesting outcome. It means there is a way your code can be
+wrong that your tests would sail straight past. If someone made that exact mistake
+in a PR, CI would go green.
+
+That's the whole trick, and it's why the numbers mean something a coverage
+percentage doesn't. Coverage tells you a line *ran*. A killed mutant tells you a
+line ran **and something was actually checking the result**. A line can have 100%
+coverage and kill nothing.
+
+## The rest of the vocabulary
+
+**Kill rate** — of the mutants planted, the fraction your suite caught. This is the
+adequacy grade. It is measured by executing your tests, never estimated and never
+self-reported by a model.
+
+**Baseline** — a run of your suite against your *unmodified* code, before any
+mutants. It has to pass. If your suite is red to begin with, every subsequent
+result is meaningless, so corral refuses to grade and tells you what your suite
+said. See [Limitations](/docs/limitations/).
+
+**Canary** — a deliberately invalid version of the file, broken so badly it cannot
+compile or import. Your suite *must* fail on it. If it passes, your tests provably
+never load the file under audit, so any kill rate would be a number about nothing.
+This catches the embarrassing case where the tests never exercised the target at
+all.
+
+**Survivor, disclosed but unadjudicated** — corral does not call a survivor a bug.
+A survivor is a *candidate*: a change your tests didn't catch. It stays disclosed
+and unproven until a test actually kills it by execution.
+
+**Proven missed** — a survivor that corral then wrote a test for, where that test
+compiled, ran, passed on your correct code, and **failed on the mutant**. That's no
+longer a claim. It's a demonstrated gap plus the test that closes it.
+
+## This technique is about fifty years old
+
+Worth saying plainly, because it's true and because you'd find out anyway.
+
+Mutation testing goes back to the 1970s. Richard Lipton proposed the idea as a
+student around 1971; the foundational papers are Hamlet's *Testing Programs with
+the Aid of a Compiler* (1977) and DeMillo, Lipton and Sayward's *Hints on Test Data
+Selection* (1978). Working tools existed by the late 1980s. There are mature
+implementations for most ecosystems today — PIT for Java, Stryker for
+JavaScript/TypeScript, mutmut and cosmic-ray for Python, several for Go and Ruby.
+
+If you already use one of those, you already understand corral's measurement half,
+and you should keep using them — a dedicated mutation-testing tool for your
+language will plant more mutants, faster, than corral does.
+
+So why didn't it take over the world? Two reasons that have dogged it since the
+beginning:
+
+**It's expensive.** You run the whole test suite once per mutant. Forty mutants
+against a two-minute suite is eighty minutes for one file. That cost is the reason
+mutation testing lives in research papers and specialist CI jobs rather than in
+everyone's pipeline, and it is still the honest constraint on corral —
+see [Limitations](/docs/limitations/).
+
+**Equivalent mutants.** Some mutations don't actually change behaviour. Swapping
+`<` for `<=` on a bound that can never be hit produces a mutant no test could ever
+kill, because there is nothing to catch. Classically these inflate your survivor
+count with noise, and deciding which survivors are equivalent is undecidable in
+general. corral's answer is procedural rather than clever: a survivor is never
+reported as a bug, only as a candidate, until a test kills it by execution. An
+equivalent mutant simply never gets proven, and never gets claimed.
+
+## What is actually new here
+
+Three things, and none of them is the mutation.
+
+**The faults are proposed against a stated goal, not by mechanical operator.**
+Classical mutation testing flips syntax: every `+` becomes `-`, every `<` becomes
+`<=`. That's cheap and thorough and produces a lot of uninteresting damage. corral
+asks a model to introduce violations of a specific correctness or security goal —
+the kind of mistake a tired human would plausibly make. Fewer mutants, aimed at
+behaviour that matters.
+
+**The loop closes.** Classical tools stop at the number: *here is your mutation
+score, good luck.* corral takes the survivors and has a **different** model write a
+test targeting them, then executes it. It must compile, pass on your correct code,
+and fail on the mutant. Only then does the gap count as proven — and you get the
+test, not just the diagnosis.
+
+**The result is evidence, not a report.** The verdict is signed, anchored to an
+external transparency log, and recorded so it can be queried later. It's built to
+gate a merge, which means it has to be something a skeptical third party can check
+rather than something you tell them.
+
+That's the honest split. The measurement is a well-understood technique we
+implement conventionally. The adversarial half — plant, survive, **author a killing
+test**, prove by execution, sign the result — is where corral is doing something the
+existing tools don't.
+
+## Reading a real verdict
+
+Putting it together, a line like this:
+
+```
+src/flask/cli.py: kill rate 0.47 (21 survivor(s), 12 proven missed)
+```
+
+says: corral planted faults in `cli.py` and ran flask's own tests against each one.
+The suite caught 47% of them. 21 got through unnoticed. For 12 of those 21, corral
+wrote a test that demonstrably catches the fault — so those are not opinions about
+test quality, they're twelve specific gaps with twelve specific tests.
+
+The other 9 remain survivors: disclosed, unproven, and never called bugs.

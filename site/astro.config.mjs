@@ -45,6 +45,9 @@ export default defineConfig({
         {
           label: 'Concepts',
           items: [
+            // First: it is the vocabulary every other page assumes, and the
+            // answer to "isn't this just mutation testing?".
+            { label: 'Mutants, survivors, kill rates', slug: 'docs/concepts/mutation-testing' },
             { label: 'The task queue + verify gate', slug: 'docs/concepts/queue-and-verify' },
             { label: 'Claims & leases', slug: 'docs/concepts/claims-and-leases' },
             { label: 'Memory tiers + the learning loop', slug: 'docs/concepts/memory-and-learning-loop' },

@@ -514,6 +514,11 @@ type jailBaselineRunner struct {
 	code    string
 	devTest string
 	testCmd string
+	// lastOutput is the runner's own output from the most recent FAILING
+	// baseline (see adequacy.Report.BaselineOutput). Pointer-shared so a value
+	// copy of this struct still reports it — reposcan.CheckBaselineStable
+	// takes the runner as an interface and calls it repeatedly.
+	lastOutput *string
 }
 
 func (b jailBaselineRunner) RunBaseline() (bool, error) {
@@ -521,7 +526,22 @@ func (b jailBaselineRunner) RunBaseline() (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	// Keep the runner's own words on a FAILING baseline. This is the string
+	// that turns "baseline does not pass unmutated" — the least debuggable
+	// outcome an audit can produce — into an actionable error.
+	if !rep.CompliantPass && b.lastOutput != nil {
+		*b.lastOutput = rep.BaselineOutput
+	}
 	return rep.CompliantPass, nil
+}
+
+// BaselineOutput reports the most recent failing baseline's output, if any.
+// Satisfied by the value receiver above via the shared pointer.
+func (b jailBaselineRunner) BaselineOutput() string {
+	if b.lastOutput == nil {
+		return ""
+	}
+	return *b.lastOutput
 }
 
 // baselineRunnerFor builds the baseline-only runner for one job — honesty
@@ -556,6 +576,9 @@ func baselineRunnerFor(ctx context.Context, in localAuditInput) (reposcan.Baseli
 		code:    string(prep.code),
 		devTest: string(prep.devTest),
 		testCmd: strings.Join(in.checkArgv, " "),
+		// Fresh per runner: two files' baseline failures must never be
+		// attributed to each other.
+		lastOutput: new(string),
 	}, prep.cleanup, nil
 }
 

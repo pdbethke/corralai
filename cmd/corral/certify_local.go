@@ -266,10 +266,10 @@ type localAuditInput struct {
 	// — see resolveMutantConcurrency, the single place that decision is made).
 	mutantConcurrency int
 	mutantTimeout     time.Duration
-	timeout       time.Duration
-	poll          time.Duration
-	nMutants      int
-	maxShards     int
+	timeout           time.Duration
+	poll              time.Duration
+	nMutants          int
+	maxShards         int
 
 	// Role models. Empty means this file's stock default.
 	writerModel, criticModel, mutantModel, shadowModel string

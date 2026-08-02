@@ -66,10 +66,23 @@ fi
 #   andrewyng/aisuite  multi-language: Python + TypeScript
 #   gin-gonic/gin      Go -- the regression canary, must never change
 #   rubocop/rubocop    Ruby, went 0 -> 735 candidates
-#   expressjs/express  JS -- expected to pair ZERO. This is not a bug: JS/TS
-#                      test pairing is a known model limitation, deliberately
-#                      pinned at 0 so nobody "fixes" it into a false positive
-#                      without noticing the regression here first.
+#   expressjs/express  JS -- expected to pair ZERO by CONVENTION. This is not a
+#                      bug: express names tests after behaviour (lib/response.js
+#                      is covered by test/res.send.js, res.json.js, ...), and no
+#                      filename rule derives `response -> res`. Pinned at 0 so
+#                      nobody "fixes" it into a false positive without noticing
+#                      the regression here first.
+#
+# A repo with a map at testdata/foreign-sweep-tests/<name>.json is scanned a
+# SECOND time with --tests, recorded as a separate `<name>+tests` row against
+# the SAME clone. Today that is express alone, and it closes a real hole: the
+# express row is ONE-DIRECTIONAL. Pinning it at 0 catches JS pairing going
+# nonzero, but 0 is also what a vanished JS plugin, a broken signature
+# extractor or a dropped `.js` extension would produce — so the gate's only JS
+# assertion was one that a total JS failure would satisfy. gin covers Go the
+# same way rubocop covers Ruby; nothing covered JS positively. The mapped row
+# does: it asserts 6 auditable files, which requires the JS plugin to exist,
+# the walk to see .js, and --tests to be consulted before convention.
 REPOS=(
   "pallets/flask     36e4a824f340fdee7ed50937ba8e7f6bc7d17f81"
   "psf/requests      414f0513c33883adf6f2b46901d4f0b38a455851"
@@ -92,6 +105,37 @@ if ! go build -o "$BIN" ./cmd/corral; then
 fi
 
 : > "$OUT"
+
+# scan_and_record <row-name> <repo-dir> [extra corral flags...]
+#
+# One dry run, parsed into one golden row. Factored out because a repo with a
+# tenant test map is scanned twice against the same clone and the parse is
+# finicky enough (three PCRE captures, one of which is legitimately absent)
+# that a second copy would drift from this one.
+scan_and_record() {
+  local row="$1" dir="$2"
+  shift 2
+
+  local report walked candidates ambiguous
+  report="$("$BIN" certify --repo "$dir" --dry-run --top 5 "$@")"
+
+  # "  <walked> file(s) walked; <candidates> candidate(s); <jobs> job(s); ..."
+  walked=$(printf '%s\n' "$report" | grep -oP '^\s+\K[0-9]+(?= file\(s\) walked)')
+  candidates=$(printf '%s\n' "$report" | grep -oP 'walked; \K[0-9]+(?= candidate\(s\))')
+  # The by-reason tally only prints a line for reasons that occurred at all,
+  # so a repo with zero ambiguous-test demotions has no such line — absence
+  # means 0, not a parse failure.
+  ambiguous=$(printf '%s\n' "$report" | grep -oP '^\s+\K[0-9]+(?= ambiguous-test$)' || true)
+  ambiguous="${ambiguous:-0}"
+
+  if [ -z "$walked" ] || [ -z "$candidates" ]; then
+    echo "foreign-sweep: could not parse dry-run output for $row:" >&2
+    printf '%s\n' "$report" >&2
+    exit 1
+  fi
+
+  printf '%s\t%s\t%s\t%s\n' "$row" "$walked" "$candidates" "$ambiguous" >> "$OUT"
+}
 
 for entry in "${REPOS[@]}"; do
   # shellcheck disable=SC2086
@@ -125,24 +169,18 @@ for entry in "${REPOS[@]}"; do
   git -C "$dir" checkout -q FETCH_HEAD
 
   echo "scanning $name..." >&2
-  report="$("$BIN" certify --repo "$dir" --dry-run --top 5)"
+  scan_and_record "$name" "$dir"
 
-  # "  <walked> file(s) walked; <candidates> candidate(s); <jobs> job(s); ..."
-  walked=$(printf '%s\n' "$report" | grep -oP '^\s+\K[0-9]+(?= file\(s\) walked)')
-  candidates=$(printf '%s\n' "$report" | grep -oP 'walked; \K[0-9]+(?= candidate\(s\))')
-  # The by-reason tally only prints a line for reasons that occurred at all,
-  # so a repo with zero ambiguous-test demotions has no such line — absence
-  # means 0, not a parse failure.
-  ambiguous=$(printf '%s\n' "$report" | grep -oP '^\s+\K[0-9]+(?= ambiguous-test$)' || true)
-  ambiguous="${ambiguous:-0}"
-
-  if [ -z "$walked" ] || [ -z "$candidates" ]; then
-    echo "foreign-sweep: could not parse dry-run output for $repo:" >&2
-    printf '%s\n' "$report" >&2
-    exit 1
+  # Second pass with the tenant test map, if this repo has one. A MISSING map
+  # is normal (most repos pair by convention and have none); a map that exists
+  # but produces no extra row would be a silent hole, so the golden file — not
+  # this script — is what makes the mapped row mandatory: drop the JSON and the
+  # `<name>+tests` row disappears from actual.tsv and the diff goes red.
+  testmap="$REPO_ROOT/testdata/foreign-sweep-tests/$name.json"
+  if [ -f "$testmap" ]; then
+    echo "scanning $name with tenant test map..." >&2
+    scan_and_record "$name+tests" "$dir" --tests "$testmap"
   fi
-
-  printf '%s\t%s\t%s\t%s\n' "$name" "$walked" "$candidates" "$ambiguous" >> "$OUT"
 done
 
 sort -o "$OUT" "$OUT"

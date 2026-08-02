@@ -1884,6 +1884,16 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 	// runs already gave. The BaselineFailed handling below stays as the
 	// backstop for anything this misses.
 	if !rec.last {
+		// Print the runner's OWN output, not just the fact of failure. Twice in
+		// one day a paid audit dead-ended here with nothing to go on: a Python
+		// venv the offline jail could not see, and a Go repo never diagnosed at
+		// all. The refusal to grade is correct; the silence about WHY was not.
+		if br, ok := runner.(interface{ BaselineOutput() string }); ok {
+			if out := strings.TrimSpace(br.BaselineOutput()); out != "" {
+				l.note("%s: baseline does not pass unmutated — not graded. The suite said:\n%s\n", j.Path, indentLines(out, "    "))
+				return reposcan.FileResult{Gradable: false, Reason: reposcan.ReasonBaselineFailed}, nil
+			}
+		}
 		l.note("%s: baseline does not pass unmutated — not graded\n", j.Path)
 		return reposcan.FileResult{Gradable: false, Reason: reposcan.ReasonBaselineFailed}, nil
 	}
@@ -2028,4 +2038,15 @@ func (l *localExecutor) note(format string, a ...any) {
 		return
 	}
 	fmt.Fprintf(l.progress, "  "+format, a...)
+}
+
+// indentLines prefixes every line of s with pad — used to set a subprocess's
+// own output apart from corral's report lines, so a multi-line traceback reads
+// as quoted evidence rather than as more report.
+func indentLines(s, pad string) string {
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		lines[i] = pad + l
+	}
+	return strings.Join(lines, "\n")
 }

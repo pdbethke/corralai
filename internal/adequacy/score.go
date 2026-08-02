@@ -138,9 +138,36 @@ type Report struct {
 	// KillRate is meaningless — the same fail-closed shape as
 	// CompliantPass. Callers MUST check this before reading KillRate.
 	CanaryKilled bool
-	Total        int
-	Killed       []string
-	Survived     []string
+	// BaselineOutput is the runner's OWN output from the compliant (unmutated)
+	// run, populated only when that run FAILED and only when the Jail can
+	// report it (see VerboseJail).
+	//
+	// A failing baseline is the most common way a real audit dies, and for a
+	// long time it reported nothing but "baseline does not pass unmutated" —
+	// discarding the compiler/runner text that says exactly why. Two paid
+	// audits on two different repos dead-ended on that missing string: one was
+	// a Python venv the offline jail could not see, one was never diagnosed at
+	// all. corral already feeds the compiler's own error back to the
+	// test-writer for the same reason; the baseline deserves the same respect.
+	//
+	// Empty on success (there is nothing to explain) and empty for a Jail that
+	// only implements RunTest.
+	BaselineOutput string
+	Total          int
+	Killed         []string
+	Survived       []string
+}
+
+// VerboseJail is a Jail that can also report what a run PRINTED, not just
+// whether it passed. bwrapJail implements it via RunTestVerbose over the same
+// workspace helper, so honouring it costs nothing extra — the baseline is one
+// run either way and the output is simply kept instead of dropped.
+//
+// Optional on purpose: Jail stays a one-method interface, so every existing
+// implementation (and every test fake) keeps compiling and simply reports no
+// output.
+type VerboseJail interface {
+	RunTestVerbose(ctx context.Context, files map[string]string, testCmd []string) (bool, string, error)
 }
 
 // KillRate is the adequacy score: the fraction of mutants the test caught.
@@ -195,21 +222,45 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 		return j.RunTest(rctx, files, testCmd)
 	}
 
+	// The BASELINE run alone goes through the verbose path when the jail offers
+	// one: it is a single run either way, so keeping the output costs nothing,
+	// and it is the one run whose failure a human must be able to diagnose.
+	// Mutant runs deliberately stay on the plain path — there are ~42 of them
+	// and their output is not evidence of anything.
+	baselineRun := func(rctx context.Context, code string) (bool, string, error) {
+		vj, ok := j.(VerboseJail)
+		if !ok {
+			p, err := run(rctx, code)
+			return p, "", err
+		}
+		files := make(map[string]string, len(base)+1)
+		for k, v := range base {
+			files[k] = v
+		}
+		files[codePath] = code
+		return vj.RunTestVerbose(rctx, files, testCmd)
+	}
+
 	start := time.Now()
-	pass, err := run(ctx, compliantCode)
+	pass, baseOut, err := baselineRun(ctx, compliantCode)
 	baseDur := time.Since(start)
 	if err != nil {
 		if errors.Is(err, ErrTestTimeout) {
 			// The healthy suite itself couldn't pass within the jail's own
 			// generous budget — it is broken or too slow. Fail closed: never
-			// score mutants against a baseline that can't even pass.
-			return Report{CompliantPass: false}, nil
+			// score mutants against a baseline that can't even pass. The
+			// output rides along: "which test hung" is exactly the question a
+			// timed-out baseline leaves open.
+			return Report{CompliantPass: false, BaselineOutput: baseOut}, nil
 		}
 		return Report{}, err
 	}
 	rep := Report{CompliantPass: pass}
 	if !pass {
-		// broken/overreaching test — do not score mutants (fail-safe: no kill rate for an invalid test)
+		// broken/overreaching test — do not score mutants (fail-safe: no kill
+		// rate for an invalid test). Carry the runner's own words: without them
+		// this is the single least debuggable outcome an audit can produce.
+		rep.BaselineOutput = baseOut
 		return rep, nil
 	}
 

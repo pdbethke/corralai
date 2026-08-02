@@ -258,12 +258,18 @@ type localAuditInput struct {
 	lang     string
 
 	// Budgets. Zero means the stock default for each.
-	swarm         int
-	mutantTimeout time.Duration
-	timeout       time.Duration
-	poll          time.Duration
-	nMutants      int
-	maxShards     int
+	swarm int
+	// mutantConcurrency scores this many mutants at once within ONE file.
+	// Zero/1 is strictly sequential — today's behavior for every caller that
+	// does not set it. It is only ever applied to a BWRAP-JAIL scorer, never to
+	// the workspace runner (which mutates one checkout in place, unsynchronized
+	// — see resolveMutantConcurrency, the single place that decision is made).
+	mutantConcurrency int
+	mutantTimeout     time.Duration
+	timeout           time.Duration
+	poll              time.Duration
+	nMutants          int
+	maxShards         int
 
 	// Role models. Empty means this file's stock default.
 	writerModel, criticModel, mutantModel, shadowModel string
@@ -471,7 +477,7 @@ func prepareAuditJail(in localAuditInput, plug lang.Plugin, timeout time.Duratio
 		codePath: in.codePath, testPath: tp, repoDir: repoDir, langName: plug.Name(), fsPath: fsPath,
 		code: code, devTest: devTest, checkArgv: in.checkArgv,
 		bindDirFlag: in.bindDirs, noBindDepsFlag: in.noBindDeps, stdout: stdout,
-		seed: in.seed, substrate: in.substrate,
+		seed: in.seed, substrate: in.substrate, mutantConcurrency: in.mutantConcurrency,
 	})
 	if err != nil {
 		return p, auditUsageErr("%v", err)
@@ -926,6 +932,9 @@ type jailWiringInput struct {
 	stdout         io.Writer
 	seed           *repoSeed // non-nil: use this prebuilt, SHARED seed instead of building one
 	substrate      string    // "" or substrateJail = the bwrap jail (today's behavior); substrateWorkspace = mutate repoDir in place, no jail
+	// mutantConcurrency is applied ONLY to the bwrap-jail scorers below, never
+	// to the workspace runner. See localAuditInput.mutantConcurrency.
+	mutantConcurrency int
 }
 
 // Substrate names for jailWiringInput.substrate / localAuditInput.substrate,
@@ -1099,7 +1108,7 @@ func buildJailWiring(in jailWiringInput) (w jailWiring, err error) {
 		// RunSpec.Matrix, so wiring it here costs nothing when --matrix is off
 		// (the flag is the real gate).
 		enumerator := adequacy.NewEnumerator(in.iso, in.timeout, adequacy.WithReadOnlyBinds(depBinds))
-		w.scorer = advpool.JailScorer{Jail: jail, BaseFiles: repoFiles, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey}
+		w.scorer = advpool.JailScorer{Jail: jail, BaseFiles: repoFiles, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Concurrency: in.mutantConcurrency}
 		w.validator = advpool.JailValidator{Jail: jail, BaseFiles: repoFiles, DevTestPath: w.devTestKey}
 		w.jailEnum = advpool.JailEnumerator{Jail: enumerator, BaseFiles: repoFiles}
 		if len(depBinds) > 0 {
@@ -1114,7 +1123,7 @@ func buildJailWiring(in jailWiringInput) (w jailWiring, err error) {
 		w.devTestKey = filepath.Base(in.testPath)
 		jail := adequacy.NewJail(in.iso, in.timeout)
 		enumerator := adequacy.NewEnumerator(in.iso, in.timeout)
-		w.scorer = advpool.JailScorer{Jail: jail, MutantTimeout: in.testTimeout}
+		w.scorer = advpool.JailScorer{Jail: jail, MutantTimeout: in.testTimeout, Concurrency: in.mutantConcurrency}
 		w.validator = advpool.JailValidator{Jail: jail}
 		w.jailEnum = advpool.JailEnumerator{Jail: enumerator}
 	}

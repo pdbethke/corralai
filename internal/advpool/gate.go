@@ -199,12 +199,35 @@ type JailScorer struct {
 	// placement, which single-file mode wants and which silently graded
 	// nothing on any project that confines discovery to a test root.
 	DevTestPath string
+	// Concurrency, when > 1, scores that many mutants at once. The zero value
+	// (every existing JailScorer{} literal) is strictly sequential — today's
+	// behavior, unchanged.
+	//
+	// THE CALLER OWNS THE SAFETY ARGUMENT, because it depends entirely on which
+	// Jail is wired in (see adequacy.WithConcurrency): bwrapJail does its own
+	// os.MkdirTemp per call and is safe; adequacy.WorkspaceRunner mutates ONE
+	// checkout in place with no mutex and MUST stay at 1. This field cannot
+	// tell the difference, so it must never be set from anywhere that doesn't
+	// know the substrate — see cmd/corral's resolveMutantConcurrency, which is
+	// the single place that decision is made.
+	Concurrency int
+}
+
+// scoreOpts is the option list every adequacy.Score call in this file shares.
+// Factored out because there are three such calls with identical options and a
+// fourth would be added by the next feature — a per-call copy is exactly how
+// one path silently keeps scoring sequentially while the others parallelize.
+func (s JailScorer) scoreOpts() []adequacy.ScoreOption {
+	return []adequacy.ScoreOption{
+		adequacy.WithMutantTimeout(s.MutantTimeout),
+		adequacy.WithConcurrency(s.Concurrency),
+	}
 }
 
 func (s JailScorer) Score(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (float64, []adequacy.Mutant, error) {
 	scoreBase, cmd := s.scoreWorkspace(codePath, test, testCmd)
 
-	rep, err := adequacy.Score(ctx, s.Jail, scoreBase, codePath, code, mutants, cmd, adequacy.WithMutantTimeout(s.MutantTimeout))
+	rep, err := adequacy.Score(ctx, s.Jail, scoreBase, codePath, code, mutants, cmd, s.scoreOpts()...)
 	if err != nil {
 		return 0, nil, fmt.Errorf("advpool: score: %w", err)
 	}
@@ -219,7 +242,7 @@ func (s JailScorer) Score(ctx context.Context, codePath, code, test string, muta
 func (s JailScorer) ScoreReport(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (adequacy.Report, error) {
 	scoreBase, cmd := s.scoreWorkspace(codePath, test, testCmd)
 
-	rep, err := adequacy.Score(ctx, s.Jail, scoreBase, codePath, code, mutants, cmd, adequacy.WithMutantTimeout(s.MutantTimeout))
+	rep, err := adequacy.Score(ctx, s.Jail, scoreBase, codePath, code, mutants, cmd, s.scoreOpts()...)
 	if err != nil {
 		return adequacy.Report{}, fmt.Errorf("advpool: score report: %w", err)
 	}
@@ -252,7 +275,7 @@ func (s JailScorer) ScoreAuthoredReport(ctx context.Context, codePath, code, tes
 		scoreBase = s.authoredWorkspace(codePath, test)
 	}
 
-	rep, err := adequacy.Score(ctx, s.Jail, scoreBase, codePath, code, mutants, cmd, adequacy.WithMutantTimeout(s.MutantTimeout))
+	rep, err := adequacy.Score(ctx, s.Jail, scoreBase, codePath, code, mutants, cmd, s.scoreOpts()...)
 	if err != nil {
 		return adequacy.Report{}, fmt.Errorf("advpool: score authored report: %w", err)
 	}

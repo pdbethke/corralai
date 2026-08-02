@@ -4,7 +4,9 @@ package lang
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -16,8 +18,26 @@ import (
 // separator (".venv/bin/python", "/abs/path/to/ruby") is tried directly, PATH
 // not consulted — exactly "is this binary the operator NAMED runnable",
 // whichever form they gave it in.
+// A RELATIVE name resolves against the CALLING PROCESS's working directory,
+// which is very often not the repo the command belongs to: `-- ./.venv/bin/
+// python -m pytest` is a perfectly good command that this refuses unless the
+// operator happened to run corral from inside the repo. Until Plugin.Preflight
+// can carry the repo root (a signature change across five plugins and ~37 call
+// sites, not worth doing behind a hotfix), the error at least has to say WHERE
+// it looked and what to do about it — the old wording blamed PATH, which for a
+// name containing a separator was never consulted at all, sending the reader
+// off to fix entirely the wrong thing. That misdirection cost a real audit an
+// afternoon.
 func toolOnPath(name string) error {
 	if _, err := exec.LookPath(name); err != nil {
+		if strings.ContainsRune(name, filepath.Separator) && !filepath.IsAbs(name) {
+			wd, wderr := os.Getwd()
+			if wderr != nil {
+				wd = "the current directory"
+			}
+			return fmt.Errorf("lang: required tool %q is a RELATIVE path and was not found under %s (PATH is not consulted for a name containing %q); if it is meant to be relative to the repository, run corral from the repository root, or give an absolute path: %w",
+				name, wd, string(filepath.Separator), err)
+		}
 		return fmt.Errorf("lang: required tool %q not found on PATH: %w", name, err)
 	}
 	return nil

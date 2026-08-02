@@ -472,6 +472,10 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 
 	workers, swarmReadout := resolveScanWorkers(*swarmFlag, *substrateFlag)
 	fmt.Fprint(stdout, swarmReadout)
+	mutantConc := resolveMutantConcurrency(resolveSwarm(*swarmFlag), *substrateFlag, workers)
+	if mutantConc > 1 {
+		fmt.Fprintf(stdout, "  mutant scoring: %d at once per file — the jail budget file-parallelism cannot spend (scoring runs the suite once per mutant, so this is the dominant cost on any repo with a real suite)\n", mutantConc)
+	}
 
 	// The workspace substrate pins file-level concurrency to 1 (one checkout,
 	// mutated in place), so the operator's budget is unspent at that level.
@@ -484,6 +488,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stdout, "  per-file: %d worker(s) — files are serialized on this substrate, so each file's own roles run concurrently instead\n", perFile)
 		}
 	}
+	ex.mutantConcurrency = mutantConc
 
 	// ex is non-nil here: it is constructed on every non-dry-run path above,
 	// and the dry run returned before this point.
@@ -1523,6 +1528,48 @@ func resolveScanWorkers(swarmFlag int, substrate string) (int, string) {
 	return n, fmt.Sprintf("  swarm: %d workers\n", n)
 }
 
+// resolveMutantConcurrency divides ONE bounded budget of concurrent jails
+// between the scan's two independent parallel axes: files scored at once
+// (resolveScanWorkers) and mutants scored at once WITHIN a file. They multiply,
+// so they cannot each take the budget — a 16-worker scan whose every file also
+// scored 16 mutants at once would open 256 jails and thrash the box. The
+// invariant is `workers × result <= budget`, and it is pinned by a test that
+// sweeps the whole space rather than a few chosen points.
+//
+// Why this is worth doing at all: scoring runs the target's whole suite once
+// per mutant, so an audit costs O(mutants × suite runtime) — 1.46s/suite on
+// pallets/flask but 77s on psf/requests, where the suite is ~96% of a file's
+// cost. That loop is embarrassingly parallel and was simply never distributed.
+//
+// The division targets the case that actually matters commercially. A
+// diff-scoped PR audits ONE changed file, so file-parallelism can spend NONE of
+// the budget: N-1 workers idle while ~42 mutants score strictly one at a time.
+// Giving the leftover to the mutant loop is what makes that shape fast. When
+// files already saturate the budget the result is 1 and nothing changes, which
+// is why this is safe to turn on by default.
+//
+// The workspace substrate is pinned to 1 and cannot spend the budget on this
+// axis at all: adequacy.WorkspaceRunner mutates ONE checkout in place with NO
+// mutex, so two concurrent applyFiles interleave and one job's suite runs
+// against another's mutant — recording SURVIVORS AS KILLED and signing an
+// inflated kill rate that is undetectable after the fact. Unlike the file axis
+// (where serialization is a throughput choice) this one is a correctness
+// boundary. Fails closed: any degenerate budget/worker count yields 1, never
+// unbounded.
+func resolveMutantConcurrency(budget int, substrate string, workers int) int {
+	if substrate == substrateWorkspace {
+		return 1
+	}
+	if budget < 1 || workers < 1 {
+		return 1
+	}
+	n := budget / workers
+	if n < 1 {
+		return 1
+	}
+	return n
+}
+
 // localExecutor runs one scan job through the SAME in-process adversarial
 // pool `corral certify --local` drives (auditOneFile), in repo-aware mode:
 // the whole tree is seeded into the jail and the audited file is mutated in
@@ -1570,6 +1617,10 @@ type localExecutor struct {
 	// corrupt the tree. Anything that gives workers workspace access must
 	// revisit this.
 	perFileSwarm int
+	// mutantConcurrency is how many mutants ONE file scores at once — the
+	// leftover of the jail budget that file-parallelism cannot spend. Always 1
+	// on the workspace substrate; see resolveMutantConcurrency.
+	mutantConcurrency int
 
 	// scopeTests runs each file's mutants against its OWN paired test file
 	// instead of the project's whole suite. Off by default because it changes
@@ -1740,6 +1791,10 @@ func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
 		// fan out over files, and the otherwise-unspent budget on the
 		// workspace substrate, which serializes them.
 		swarm: l.effectivePerFileSwarm(),
+		// The other half of the same budget: files in parallel x mutants in
+		// parallel. Reaches only the bwrap-jail scorer, never the workspace
+		// runner — resolveMutantConcurrency pins workspace at 1.
+		mutantConcurrency: l.mutantConcurrency,
 		// H1a produces a REPORT, not a sealed statement: no ledger, no
 		// signing key, no scorecard feed (N concurrent audits must not
 		// contend on one single-process DuckDB file). Signing is H1c.

@@ -472,7 +472,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 
 	workers, swarmReadout := resolveScanWorkers(*swarmFlag, *substrateFlag)
 	fmt.Fprint(stdout, swarmReadout)
-	mutantConc := resolveMutantConcurrency(resolveSwarm(*swarmFlag), *substrateFlag, workers)
+	mutantConc := resolveMutantConcurrency(resolveSwarm(*swarmFlag), *substrateFlag, workers, len(jobs))
 	if mutantConc > 1 {
 		fmt.Fprintf(stdout, "  mutant scoring: %d at once per file — the jail budget file-parallelism cannot spend (scoring runs the suite once per mutant, so this is the dominant cost on any repo with a real suite)\n", mutantConc)
 	}
@@ -1556,14 +1556,26 @@ func resolveScanWorkers(swarmFlag int, substrate string) (int, string) {
 // (where serialization is a throughput choice) this one is a correctness
 // boundary. Fails closed: any degenerate budget/worker count yields 1, never
 // unbounded.
-func resolveMutantConcurrency(budget int, substrate string, workers int) int {
+func resolveMutantConcurrency(budget int, substrate string, workers, jobs int) int {
 	if substrate == substrateWorkspace {
 		return 1
 	}
-	if budget < 1 || workers < 1 {
+	if budget < 1 || workers < 1 || jobs < 1 {
 		return 1
 	}
-	n := budget / workers
+	// Divide by the workers that will ACTUALLY run, not the configured pool.
+	// resolveScanWorkers sizes the pool from the host's cores with no knowledge
+	// of how many files the scan selected, so a 1-file scan on an 8-core box
+	// reports 7 workers and 6 of them never claim anything. Dividing by 7 there
+	// yields 1 and hands the mutant loop nothing — silently disabling this
+	// feature in exactly the diff-scoped case it exists for. Caught by measuring
+	// on the box, not by the unit tests, which had been fed the honest-but-wrong
+	// configured count.
+	active := workers
+	if jobs < active {
+		active = jobs
+	}
+	n := budget / active
 	if n < 1 {
 		return 1
 	}

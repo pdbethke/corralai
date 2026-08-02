@@ -390,6 +390,37 @@ exactly the engine that can *attest* and *federate*.
   model effectiveness (the tests × mutants matrix itself SHIPPED — see above), plus
   widening the matrix beyond go + python.
 
+## Ahead — the two things actually blocking whole-repo audits
+
+Named plainly because they gate everything above them, and because measuring them
+in August 2026 reversed an assumption this roadmap previously carried.
+
+- **Widen what a scan can even see.** On `pallets/flask`, 236 files walked yields
+  **9** auditable candidates: 153 aren't a language corral reads, 27 are tests, and
+  **47 are source files whose tests convention could not pair**. That last number is
+  the addressable one. Pairing is filename convention, which cannot work on a
+  project that names tests after behaviour rather than after source files — and a
+  looser rule is strictly worse, because a wrong pairing plants faults in one file
+  and grades them against another's tests, producing a confident signed wrong
+  answer. The `--tests` map (Shipped) is the current lever and it is homework, not
+  a product. Coverage-derived pairing, using the preflight's own instrumented run
+  to observe which tests actually execute which files, is the honest direction:
+  execution, not filenames.
+- **Make the substrate that works go faster.** An audit costs `O(mutants × the
+  TARGET's suite runtime)` — measured at 1.46s/suite on flask but ~74s on
+  `psf/requests`, a 50× spread between two ordinary Python projects. Parallel
+  mutant scoring shipped (above), and it is **only safe on the jail substrate**.
+  The catch, measured across three foreign repos: the jail could not run two of
+  their suites at all (one wants a live server on a fixed port, one generates a
+  TLS CA at test time), while the workspace substrate — which runs in the real
+  checkout with the real environment — handled all three and is pinned strictly
+  sequential because it mutates one tree with no locking. **So the unlock is making
+  the workspace runner concurrency-safe (per-file locking, or a per-job tree copy
+  re-priced now that it is the blocker), not making the jail more capable.**
+  Chasing foreign environments one repo at a time is the same endless tail as
+  parsing every ecosystem's test-discovery config, and is rejected for the same
+  reason.
+
 ## Ahead — operate the gate at scale
 
 The reviewer's seat moves from *author* to *assessor*: set the model mix, watch the

@@ -54,7 +54,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// here a repo scan was locked to the Claude defaults with no override.
 	writerModelFlag := fs.String("writer-model", "", "model for the test-writer role (default "+defaultLocalWriterModel+")")
 	mutantModelFlag := fs.String("mutant-model", "", "model for the mutant-generator role (default "+defaultLocalMutantModel+")")
-	criticModelFlag := fs.String("critic-model", "", "model for the test-critic role, which must differ from the writer's (default "+defaultLocalCriticModel+")")
+	criticModelFlag := fs.String("critic-model", "", "model for the test-critic role, which must differ from the writer's; \"off\" disables the critic entirely (it is advisory and never gates the verdict, so a single-vendor run with only one usable model can drop it) (default "+defaultLocalCriticModel+")")
 	scopeTestsFlag := fs.Bool("scope-tests", false, "grade each file against its OWN paired test file instead of the project's whole suite. MUCH faster — scoring runs the suite once per mutant, so this collapses an O(mutants x suite runtime) cost — but it CHANGES THE MEASUREMENT: a mutant that some unrelated test happened to catch now reads as a survivor, so the reported gap count can go UP. Ignored when an explicit -- <cmd> is given, and for languages with no verified per-file invocation")
 	shadowModelFlag := fs.String("shadow-model", "", "challenger model that attacks every region a SECOND time (default "+defaultLocalShadowModel+"; \"off\" disables). Recorded for comparison — NEVER gates the verdict. The default is a Claude model, so a non-Anthropic scan must set or disable it")
 	owner := fs.String("owner", "local", "owning account for the scan (tenant identifier)")

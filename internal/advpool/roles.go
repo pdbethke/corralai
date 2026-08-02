@@ -337,12 +337,24 @@ const DefaultShadowModel = "claude-haiku-4-5"
 // `certify --local`'s --shadow-model flag and the brain's per-run/env
 // overrides so "off" means the same thing on both paths.
 func ResolveShadowModel(flag string) string {
+	return ResolveOptionalModel(flag, DefaultShadowModel)
+}
+
+// ResolveOptionalModel is the shared resolution for every role a run may turn
+// OFF: "off"/"none" (case-insensitive) disables the role, an empty flag takes
+// def, anything else passes through verbatim.
+//
+// Factored out when the test-critic became disablable so the two roles cannot
+// drift on what "off" means — an operator who learns `--shadow-model off`
+// should not discover that `--critic-model off` was interpreted as a MODEL
+// NAMED "off" and sent to a provider.
+func ResolveOptionalModel(flag, def string) string {
 	f := strings.TrimSpace(flag)
 	switch strings.ToLower(f) {
 	case "off", "none":
 		return ""
 	case "":
-		return DefaultShadowModel
+		return def
 	}
 	return f
 }
@@ -392,6 +404,23 @@ func BuildDAG(rs RunSpec, assign RoleAssignment, sigs []repoindex.Signature) []q
 	shards := ShardSymbols(sigs, rs.MaxShards)
 	specs := make([]queue.TaskSpec, 0, len(roles)+len(shards))
 	for _, role := range roles {
+		// An UNASSIGNED test-critic seeds no task at all. The critic is the one
+		// role that is purely advisory — its findings ride the verdict as
+		// unverified review and never gate certification — so an operator with
+		// no second model available may legitimately run without it.
+		//
+		// Seeding it anyway with an empty Model would be worse than useless: the
+		// worker would fall back to the base backend's default model, which on a
+		// deliberately single-vendor run is a model that vendor does not serve
+		// (a Claude critic aimed at the Gemini endpoint 404s), and the run would
+		// then wait forever on a task nothing can complete.
+		//
+		// Only the critic is skippable. The mutant-generator and test-writer
+		// PRODUCE the execution-proven measurement; a run without them has
+		// nothing to certify.
+		if role.Name == RoleTestCritic && strings.TrimSpace(assign[RoleTestCritic]) == "" {
+			continue
+		}
 		// The mutant-generator fans out into one seat per shard when the file
 		// has an extractable symbol surface; otherwise it stays exactly one
 		// whole-file seat with an unchanged key and a byte-identical prompt.

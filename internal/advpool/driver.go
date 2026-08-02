@@ -1441,19 +1441,30 @@ func (d *Driver) tickPoolAdequacy(ctx context.Context, missionID int64, run *run
 // recomputes and retries — aggregate/sign are both deterministic/idempotent
 // over the same scored inputs.
 func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runState) (*Verdict, error) {
-	tc, err := d.taskByKey(missionID, RoleTestCritic)
-	if err != nil {
-		return nil, err
-	}
-	if tc == nil || tc.Status != queue.StatusDone {
-		return nil, nil
-	}
+	// A run with NO critic assigned seeds no critic task (see BuildDAG), so the
+	// wait below could never be satisfied and the run would spin to its
+	// --timeout and bank an unverified verdict — a silent hang, not an error.
+	// Skip straight to aggregation with no advisory review, which is the honest
+	// representation: no critic ran, so there are no findings, as distinct from
+	// a critic that ran and found nothing.
+	criticEnabled := strings.TrimSpace(d.Assign[RoleTestCritic]) != ""
 
-	findings, ferr := d.Q.Findings(missionID, "")
-	if ferr != nil {
-		return nil, fmt.Errorf("advpool: load findings: %w", ferr)
+	var criticFindings []queue.Finding
+	if criticEnabled {
+		tc, err := d.taskByKey(missionID, RoleTestCritic)
+		if err != nil {
+			return nil, err
+		}
+		if tc == nil || tc.Status != queue.StatusDone {
+			return nil, nil
+		}
+
+		findings, ferr := d.Q.Findings(missionID, "")
+		if ferr != nil {
+			return nil, fmt.Errorf("advpool: load findings: %w", ferr)
+		}
+		criticFindings = filterCriticFindings(findings, tc.ID)
 	}
-	criticFindings := filterCriticFindings(findings, tc.ID)
 
 	// The critic's findings are a second model's UNVERIFIED review — carried on
 	// the verdict as advisory (VacuousFindings) but NOT gating the signed record

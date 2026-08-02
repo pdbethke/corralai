@@ -50,9 +50,13 @@ Go binary.**
   calls an unproven survivor a real bug), **feeding the compiler's own error back on a
   non-compiling attempt so it corrects rather than blindly repeats**, and a decorrelated
   **test-critic** flags vacuous/designed-to-pass tests as **unverified advice that never
-  gates**. A converged run (certified or needs-review)
-  is signed via the same certify chain; a low kill-rate or a blocking finding always
-  routes to needs-review, never auto-certified.
+  gates** — and because it never gates, it can be turned off entirely
+  (`--critic-model off`), which a deliberately single-vendor run needs whenever that
+  vendor offers only one model worth running (the critic must otherwise differ from the
+  writer). A run with no critic reports no advisory review at all, rather than an empty
+  one that would read as a clean bill of health. A converged run (certified or
+  needs-review) is signed via the same certify chain; a low kill-rate or a blocking
+  finding always routes to needs-review, never auto-certified.
 - **The authored test is sited where the project actually collects it — and that is
   *proven*, not assumed.** A compiling test that passes proves nothing if the
   project's own runner never collected it: writing it beside the code file is invisible
@@ -259,8 +263,14 @@ Go binary.**
   file and grades them against another's tests. So the operator supplies the
   map, the same way `--goals` lets them supply goals; unmapped files fall
   through to convention, and a mapping to a file that does not exist is refused
-  rather than silently ignored. **express went from 0 auditable files to 4 —
-  corral's first JavaScript audit surface.**
+  rather than silently ignored. **express went from 0 auditable files to 6 —
+  corral's first JavaScript audit surface.** That mapped result is now pinned in
+  the CI sweep as its own row (`express+tests`) alongside the unmapped zero,
+  because the zero alone was one-directional: it catches JS pairing being loosened
+  into false positives, but a vanished JS plugin or a dropped `.js` extension
+  produces the same zero and would have kept the gate green. The mapped row is the
+  positive assertion — verified by removing `.js` from the plugin and confirming
+  only that row goes red.
 - **Signatures and complexity for five languages.** Go, Python, Ruby,
   JavaScript and TypeScript. Python previously skipped class methods entirely
   and the other three had no extractor at all, which mattered more than it

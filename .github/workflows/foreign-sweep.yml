@@ -1,9 +1,10 @@
 name: Foreign sweep
 
 # Runs scripts/foreign-sweep.sh — `certify --repo --dry-run` against 7
-# SHA-pinned foreign repos, diffed against testdata/foreign-sweep-expected.tsv
-# (see that script's own header for why it exists and what it does and does
-# not catch).
+# SHA-pinned foreign repos producing 8 golden rows (express is scanned twice:
+# once by convention, once with a tenant --tests map), diffed against
+# testdata/foreign-sweep-expected.tsv (see that script's own header for why it
+# exists and what it does and does not catch).
 #
 # A SEPARATE workflow from deploy.yml's `validate` job, deliberately: this
 # job needs only network (git clone) + the Go toolchain — no model key, no

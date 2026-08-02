@@ -1,0 +1,8 @@
+{
+  "lib/application.js": "test/app.js",
+  "lib/express.js": "test/exports.js",
+  "lib/request.js": "test/req.accepts.js",
+  "lib/response.js": "test/res.send.js",
+  "lib/utils.js": "test/utils.js",
+  "lib/view.js": "test/app.render.js"
+}

@@ -1,0 +1,163 @@
+---
+title: "Four words that cost me a day"
+description: "corral finally proved real bugs in someone else's code — reliably, ten times out of ten. Then it spent an afternoon telling me an audit had failed without telling me why. Plus an honest accounting of how far 'audit a whole repository' actually is: on a 236-file project, corral can currently see nine."
+pubDate: 2026-08-02
+draft: true
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+
+*Field note. corral's entire argument is that a claim without evidence is worthless — that's why it runs your tests instead of asking a model whether they're good. It took me until this weekend to notice I had never applied that standard to corral's own error messages.*
+
+---
+
+## First, the good news
+
+For most of this project's life, the adversarial half didn't work.
+
+The idea is simple enough to explain in a sentence: plant faults in your code, run *your* tests against them, and for anything your tests miss, have a model write a test that catches it. If that authored test actually kills the mutant when executed, you haven't got an opinion about your test suite. You've got a proof — a specific bug, and a specific test that catches it.
+
+That last step — the proof — had essentially never completed. Not because the idea was wrong, but because of four stacked bugs, each one hidden behind the one above it. When I finally got it to fire, it fired once in two runs, and I wrote in my notes: *do not quote this as a capability.*
+
+This weekend it ran five times on the same file and proved a gap every time. Then it ran across five *different* files and proved gaps in all five:
+
+| file | kill rate | survivors | proven |
+|---|---|---|---|
+| `cli.py` | 0.47 | 21 | **12** |
+| `config.py` | 0.65 | 14 | **13** |
+| `templating.py` | 0.74 | 10 | **9** |
+| `helpers.py` | 0.77 | 9 | **7** |
+| `testing.py` | 0.80 | 8 | **7** |
+
+Ten out of ten audited files. Forty-eight execution-proven gaps in a codebase I have never contributed to.
+
+The number I care about isn't the total. It's that `testing.py` sits at 0.80 and `helpers.py` at 0.77 — these are *well-tested* files — and corral still proved seven of eight and seven of nine. The obvious objection to any mutation-testing result is that you cherry-picked something weak. Not this time.
+
+So the correctness half is real. Which meant I could finally go after the thing that actually decides whether this can be a product: **cost.**
+
+---
+
+## The wall, and the four words
+
+An audit costs `mutants × your suite's runtime`. corral runs your whole suite once per planted fault. That multiplier isn't corral's — it's yours. On one project I measure 1.46 seconds a suite. On another, 74. That 50× is the difference between a tool and a business.
+
+The loop is embarrassingly parallel and had never been parallelized. So I wired it up: one bounded budget, split between "how many files at once" and "how many faults at once," with an invariant that they can't multiply into a fork bomb.
+
+Then I pointed it at a real repository, and it said:
+
+> `baseline does not pass unmutated — not graded`
+
+That's the whole message. It means: *before planting any faults, I ran your test suite on your unmodified code, and it failed — so there's nothing here I can honestly measure.*
+
+Refusing to grade is **correct**. A kill rate computed against a broken baseline is a fabricated number, and corral has been burned by fabricated numbers before. But "correct and useless" is still useless. Four words, no evidence, and an audit that costs real money to run.
+
+---
+
+## I guessed three times
+
+**Guess one: networking.** The sandbox unshares the network namespace. The repo I was testing spins up HTTP servers in its tests. Obvious, right? I very nearly spent the evening building loopback support.
+
+Instead I tested it first. Wrote nine lines of Go, ran it inside the sandbox, asked it to bind a socket:
+
+```
+LISTEN OK on 127.0.0.1:39823
+```
+
+Loopback works fine. Bubblewrap brings the interface up on its own. If I'd trusted my diagnosis I'd have shipped a fix for a problem that doesn't exist.
+
+**Guess two: the sandbox is broken.** So I ran the project's own suite inside a hand-built sandbox with the same flags. It passed. Cleanly.
+
+**Guess three: the file seeding drops something.** corral copies your tree into a disposable workspace. I checked whether it silently skips binary files, oversized files, test fixtures, the vendor directory. It doesn't. The seed was complete.
+
+Three theories. Three afternoons' worth of confidence. All wrong.
+
+---
+
+## The tool knew the whole time
+
+Here's the part that stings.
+
+Somewhere inside, corral runs your suite and gets back an exit code *and* the process's combined output. There is even a function called `RunTestVerbose` that returns that output — added months ago, for a different purpose, so a model could see a compiler error and fix its own broken test.
+
+The baseline check called the other one. It took the boolean and dropped the string on the floor.
+
+The answer to a question that had cost me an entire afternoon was sitting in a local variable, and the code deliberately discarded it.
+
+So I made it stop. `Report` gained a field. It's populated only on failure, only when the sandbox can report it, and — this mattered — at **no extra cost**: the baseline is one run either way, so keeping the output is free. There's a test asserting it takes exactly one run, because the naive version of this fix ("re-run it verbosely to find out why") would double the single most expensive step of an audit.
+
+Then I ran the repo that had beaten me all afternoon:
+
+```
+context.go: baseline does not pass unmutated — not graded. The suite said:
+    --- FAIL: TestRunEmpty (2.64s)
+        Error: server at http://localhost:8080/example did not become ready
+               after 10 attempts
+    --- FAIL: TestRunTLS (0.01s)
+```
+
+Ten seconds. Its integration tests want a live server on a real port. Not a corral bug at all — a fact about that project, which corral could have told me immediately and instead sat on.
+
+---
+
+## What the evidence said once I could read it
+
+With a diagnostic that works, I got through three real repositories in an hour instead of one in an afternoon. Each failed for a completely different reason:
+
+- **One** couldn't see its virtualenv. Solvable — four stacked problems deep, but solvable, and now documented.
+- **One** needs a live HTTP server on a fixed port.
+- **One** generates a TLS certificate authority at test time, which the sandbox doesn't trust. Dozens of failures.
+
+Three projects, three unrelated environmental needs. And that's the finding — not any single failure, but the shape of the set.
+
+Because it reverses the plan I'd been working from all day. I had assumed the job was *make the sandbox capable enough to run real test suites.* But that tail doesn't end. Every project wants a different thing from its environment, and I'd be chasing them one repository at a time forever.
+
+Meanwhile the *other* execution mode — the one that runs in your actual checkout with your actual environment — works on all three. It just can't be parallelized, because it mutates one directory in place with no locking, and running two jobs at once would let one job's suite grade another job's mutant. That's not a performance choice. It's the difference between a real measurement and a signed, confident, wrong one.
+
+So the speedup I built is correct, tested, merged — and **doesn't pay off yet**, because the mode it requires is the mode real projects can't use. The actual unlock is making the *other* mode concurrency-safe. I know that now. This morning I'd have told you the opposite with a straight face.
+
+I'd rather ship the honest version of that sentence than the flattering one.
+
+---
+
+## What "audit a whole repository" actually means right now
+
+I should be blunt about this, because the phrase does a lot of work in my own notes and it is currently writing cheques the tool can't cash.
+
+Take the run above. That project has **236 files**. Here is what corral did with them:
+
+| | count |
+|---|---|
+| files walked | 236 |
+| not a language corral reads | 153 |
+| test files (correctly not audited) | 27 |
+| source files with **no test corral could pair** | 47 |
+| **auditable candidates** | **9** |
+| actually audited in that run | 5 |
+
+So "corral audited the repo" means **corral audited five files out of two hundred and thirty-six.** The forty-eight proven gaps are real, and they are real in about 2% of the codebase. Every one of those exclusions is reported rather than hidden — the tool will tell you exactly what it didn't look at, which I insist on — but a report that accounts honestly for its own blind spots is still mostly blind spots.
+
+Four things are in the way, and only one of them is close to solved.
+
+**Pairing is a guess dressed as a fact.** corral finds your tests by filename convention. Forty-seven of those files had tests that convention couldn't match. On one popular JavaScript project it matches *nothing at all* — zero candidates out of a whole library — because that project names tests after behaviour (`res.send`) rather than after source files (`response.js`), and no filename rule derives one from the other. You can hand corral a map, and then it works fine. But "supply a map of your whole repository" is not a product, it's homework. And a *looser* rule is worse than none: it would pair the wrong files, plant faults in one and grade them against another's tests, and hand you a confidently signed wrong answer.
+
+**Cost is superlinear in the wrong variable.** Every planted fault runs your entire suite. A project with a two-minute suite and twenty-five auditable files is roughly `25 × 42 × 120s` ≈ **thirty-five hours of compute per audit.** Per commit. That is not a number you fix with a bigger machine, and as described above, the one lever I built this weekend doesn't apply to the execution mode that actually runs real projects.
+
+**Environments don't generalize.** Three repositories, three unrelated reasons the suite wouldn't run in a sandbox. There is no version of this where I enumerate everyone's environment.
+
+**And the counts wobble.** Two runs of the identical audit on the identical file gave kill rates of 0.49 and 0.33, and proven-gap counts anywhere from 1 to 15. The *finding* is stable — it proved something every single time — but the **magnitude is not a measurement you should quote to two decimal places.** The faults are model-generated, so each run plants a different set, and that variance is larger than most effects you'd try to detect. I report the number as a floor, and I'd rather say that out loud than let a chart imply a precision that isn't there.
+
+None of this makes the core claim smaller. When corral says *this specific fault survived your tests, and here is a test that catches it*, that is proof, and it's proof about code I didn't write. But between "proof about five files" and "audit your repository" there is a large amount of unglamorous work, and I'd rather you hear the size of it from me.
+
+---
+
+## The thing I should have already known
+
+corral exists because a passing test suite is a self-report, and a self-report is not evidence. Everything in it is built on that: a different model plants the faults than grades them; the kill rate comes from execution, never from a claim; a survivor stays *disclosed but unadjudicated* until a real test really kills it.
+
+And for the whole life of the project, its own most common failure said `it didn't work` and offered nothing to check.
+
+An error message that doesn't carry its evidence **is a self-report.** It's the same defect the tool was built to find, sitting in the tool, wearing the tool's own uniform.
+
+The fix was about forty lines. The lesson is that the standard you hold other people's code to is exactly the standard you're least likely to notice yourself failing — which, now that I write it down, is the entire thesis of this project, arriving by the long road.
+
+*A judge may not certify herself. She probably shouldn't be vague about her reasons, either.*

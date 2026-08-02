@@ -102,7 +102,18 @@ each a plugin in `internal/lang`.
 > is much better at some ecosystems than others. Measured on real repos:
 > `rubocop/rubocop` **736** candidates, `gin-gonic/gin` **29**, `pallets/flask`
 > **9** — and `expressjs/express` **zero**, because common JavaScript layouts don't
-> match the conventions corral knows. **If a `--repo` scan of your JS/TS project
+> match the conventions corral knows.
+>
+> **Read those as fractions, not totals.** flask's 9 candidates come out of **236
+> files walked** — 153 aren't a language corral reads, 27 are themselves tests, and
+> 47 are source files whose tests convention could not pair. So a default
+> `certify --repo` on flask audits a handful of files, not a repository. Every
+> exclusion is reported with a machine-stable reason (`corral certify --repo
+> --dry-run --json` gives you the whole inventory for free, no key and no money),
+> so you can always see exactly what was and wasn't looked at — but an audit that
+> accounts honestly for its blind spots still has them. Widening that fraction is
+> the main thing standing between this and "audit your repo", and the `--tests` map
+> below is the current lever. **If a `--repo` scan of your JS/TS project
 > reports `0 candidates`, that's a limitation of corral's pairing, not a verdict on
 > your tests** — and there are two ways out. Point corral at the files directly with
 > `--local --code <path> --test <path>`, which never uses pairing at all; or hand
@@ -633,6 +644,22 @@ of.
   are scored and recorded to the scorecard (`corral scorecard`), but only the primary
   generator's mutants feed the kill-rate. It roughly doubles generator API calls and
   jail wall-clock; `--shadow-model off` disables it.
+- **Parallel mutant scoring.** Scoring runs the target's whole suite once per
+  mutant, so an audit costs `O(mutants × your suite's runtime)` — the dominant cost
+  on any project whose suite isn't trivially fast. `certify --repo` now splits one
+  bounded jail budget between two axes, files-at-once and mutants-at-once, so
+  whatever file-parallelism can't spend goes to the mutant loop (the common case
+  being a diff-scoped PR with one changed file, where every other worker would
+  otherwise idle). No flag: it's derived from `--swarm` and reported in the scan
+  header. **Only on `--substrate jail`** — the workspace substrate mutates one
+  checkout in place with no locking, so it stays strictly sequential, and that is a
+  correctness boundary, not a tuning choice. Honest caveat: this pays in proportion
+  to how much of your audit is suite time, which on a very fast suite is not much.
+- **A failing baseline tells you why.** If your suite doesn't pass on its own
+  unmodified code, corral refuses to grade — a kill rate measured against a broken
+  baseline is a fabricated number. It now prints the runner's own output alongside
+  that refusal, so `baseline does not pass unmutated` comes with the traceback,
+  missing import or failing test that caused it. Costs no extra run.
 - **Turning the critic off.** `--critic-model off` (same `off`/`none` spelling as
   `--shadow-model`) drops the test-critic entirely. The critic is **advisory** — its
   findings ride the verdict as unverified review and never gate certification — so a

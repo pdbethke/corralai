@@ -80,6 +80,17 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # `go test ./...` is the suite UNDER AUDIT here, so it has to be able to
+      # PASS on this runner before corral can grade anything against it. On a
+      # bare runner it cannot: corral's own suite exercises each internal/lang
+      # plugin against the real tool, and without pytest the adequacy tests fail
+      # outright — the first real audit of this repo reported
+      # `COULD-NOT-GRADE … ungradable: 1 (baseline-failed)` for exactly that
+      # reason. Same script deploy.yml's validate job uses, so the audit grades
+      # the same suite CI validates rather than a degraded one.
+      - name: Provision language test toolchains
+        run: bash scripts/ci-provision-test-toolchains.sh
+
       # The audit needs a model key. Without one it would fail deep inside the
       # run, after the checkout and the toolchain setup, with an error about a
       # provider rather than about configuration. Say so up front, and skip

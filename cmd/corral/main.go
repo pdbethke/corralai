@@ -91,6 +91,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -575,8 +576,40 @@ func insecureBindRefused(authEnabled bool, addr string, allowInsecure bool) erro
 	return nil
 }
 
-// version is set at build time via -ldflags "-X main.version=...".
-var version = "dev"
+// version is set at build time via -ldflags "-X main.version=...", and falls
+// back to the module version Go embeds in the binary — see resolveVersion.
+var version = resolveVersion(stampedVersion, debug.ReadBuildInfo)
+
+// stampedVersion is what -ldflags "-X main.stampedVersion=..." writes. It stays
+// "dev" for any build that does not pass it, which includes the one that
+// matters most: `go install <module>/cmd/corral@latest`, the install line in
+// the README and the one every first-time reader uses. Before this, every such
+// user's `corral version` said "dev" and no bug report could name a build.
+var stampedVersion = "dev"
+
+// resolveVersion prefers an explicitly stamped version (a release build knows
+// more than the module graph, and may be building from a checkout rather than
+// a tagged module), then the module version Go records in the binary for a
+// `go install <module>@<version>`.
+//
+// "(devel)" — what a local `go build` reports — is NOT a version and must never
+// be printed as one; it, an empty string, and unavailable build info all fall
+// back to "dev", which is exactly today's behaviour for a developer in-tree.
+func resolveVersion(stamped string, readBuildInfo func() (*debug.BuildInfo, bool)) string {
+	if stamped != "" && stamped != "dev" {
+		return stamped
+	}
+	bi, ok := readBuildInfo()
+	if !ok || bi == nil {
+		return "dev"
+	}
+	switch v := bi.Main.Version; v {
+	case "", "(devel)":
+		return "dev"
+	default:
+		return v
+	}
+}
 
 func main() {
 	// Dispatch known subcommands BEFORE the version/help scan — see
@@ -682,6 +715,19 @@ func main() {
 		fmt.Print(usageText())
 		return
 	}
+	// Orient the reader BEFORE the startup log, because the bare binary being
+	// the long-running server is the single most confusing thing about corral's
+	// first five seconds. Someone who has just run
+	// `go install .../cmd/corral@latest` because they read about an audit tool
+	// types `corral`, and gets a wall of lines about MotherDuck, fleet oracles
+	// and delegation secrets from a process that never exits. Everything after
+	// this is correct and none of it answers "what is this and how do I stop
+	// it". Two lines, once, to stderr — never parsed, never gating, and it
+	// costs the systemd unit (which invokes exactly this argv) nothing but a
+	// signpost in its own journal.
+	fmt.Fprintf(os.Stderr, "corral %s — starting the coordination server on %s. Ctrl-C to stop.\n", version, env("CORRALAI_ADDR", "127.0.0.1:9019"))
+	fmt.Fprintln(os.Stderr, "  Looking for the audit CLI? `corral certify --local --help`, or `corral --help` for everything else.")
+
 	home, _ := os.UserHomeDir()
 	addr := env("CORRALAI_ADDR", "127.0.0.1:9019")
 	dbPath := env("CORRALAI_DB", filepath.Join(home, ".claude", "corralai_coord.sqlite3"))

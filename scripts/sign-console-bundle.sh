@@ -9,7 +9,7 @@
 #
 # The signature is over the EXACT canonical JSON bytes buildManifest
 # produces for VERSION — the same bytes the daemon serves at
-# /console/manifest.json once built with -ldflags "-X main.version=$VERSION".
+# /console/manifest.json once built with -ldflags "-X main.stampedVersion=$VERSION".
 # Signing with a version that doesn't match what the build actually stamps
 # produces a signature that will never verify against that daemon's served
 # manifest — always pass the version this build will actually carry.

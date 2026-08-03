@@ -725,3 +725,57 @@ func TestActionTestCommandPreservesEmptyArguments(t *testing.T) {
 		})
 	}
 }
+
+// The --tests map has to reach corral's argv, because the failure mode when it
+// doesn't is silent: on a project whose layout filename-pairing can't read
+// (routine in JS/TS) the scan finds no candidate, audits nothing, and the gate
+// passes GREEN on exactly the change it was installed to inspect.
+func TestActionPassesTestsMapOnlyWhenSet(t *testing.T) {
+	a := loadActionYAML(t)
+	runStep := findStepContaining(t, a, "certify --repo")
+
+	readFullArgv := func(tmp string) []string {
+		t.Helper()
+		argvBytes, err := os.ReadFile(filepath.Join(tmp, "argv.log"))
+		if err != nil {
+			t.Fatalf("no argv.log written — corral stub was never invoked: %v", err)
+		}
+		content := strings.TrimSuffix(string(argvBytes), "\x00")
+		if content == "" {
+			return nil
+		}
+		return strings.Split(content, "\x00")
+	}
+
+	t.Run("set", func(t *testing.T) {
+		tmp := t.TempDir()
+		out, runErr, _ := runRunCorralStep(t, runStep, tmp, "true", "TESTS=corral-tests.json")
+		if runErr != nil {
+			t.Fatalf("run-corral step failed: %v\n%s", runErr, out)
+		}
+		full := readFullArgv(tmp)
+		found := false
+		for i, a := range full {
+			if a == "--tests" && i+1 < len(full) && full[i+1] == "corral-tests.json" {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("want --tests corral-tests.json in corral's argv, got: %v", full)
+		}
+	})
+
+	t.Run("unset", func(t *testing.T) {
+		tmp := t.TempDir()
+		out, runErr, _ := runRunCorralStep(t, runStep, tmp, "true", "TESTS=")
+		if runErr != nil {
+			t.Fatalf("run-corral step failed: %v\n%s", runErr, out)
+		}
+		full := readFullArgv(tmp)
+		for _, a := range full {
+			if a == "--tests" {
+				t.Errorf("tests input was empty; --tests must not be passed at all, got: %v", full)
+			}
+		}
+	})
+}

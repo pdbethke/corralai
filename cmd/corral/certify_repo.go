@@ -209,6 +209,9 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// indistinguishable from a genuine top-25 scan to any later reader.
 	var effectiveTop int
 	var selected []reposcan.Candidate
+	// Changed source files with no pairable test — populated only on the
+	// diff-bound path, where a zero-candidate result is otherwise ambiguous.
+	var unpairableInDiff []string
 	// rankSignal names how candidates were ordered, captured from the same
 	// value the human report prints so the JSON inventory can never disagree
 	// with it. The diff-bound path never ranks at all, so it stays empty
@@ -240,6 +243,18 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			excl = append(excl, reposcan.Exclusion{Path: c.Path, Reason: reposcan.ReasonNotSelected})
 		}
 		selected = kept
+		// Which CHANGED files corral could not pair with a test. Enumerate
+		// already excluded them as no-paired-test, before the diff bound was
+		// applied, so they never reach `cands` and a zero-candidate diff cannot
+		// otherwise tell "nothing changed that we audit" from "the thing that
+		// changed is the thing we cannot read". The merge gate reports those
+		// two differently — see printRepoReport.
+		for _, e := range excl {
+			if e.Reason == reposcan.ReasonNoPairedTest && changedSet[e.Path] {
+				unpairableInDiff = append(unpairableInDiff, e.Path)
+			}
+		}
+		sort.Strings(unpairableInDiff)
 		fmt.Fprintf(stdout, "  diff against %s: auditing %d of %d candidate(s)\n", *diffBase, len(selected), len(cands))
 	} else {
 		// Selection precedes derivation, deliberately: bounding afterwards would
@@ -505,7 +520,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// conflate it with "files were in scope and none could be graded".
 	nothingInScope := *diffBase != "" && len(selected) == 0
 
-	printRepoReport(stdout, rep, nothingInScope, minKillRate)
+	printRepoReport(stdout, rep, nothingInScope, minKillRate, unpairableInDiff)
 	// A distinct section, never folded into Excluded/Ungradable/the audited
 	// fraction: this is an inventory alongside the audit, not a change to
 	// it (see the brief). Printed unconditionally when the flag was given,
@@ -1364,7 +1379,11 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 	fmt.Fprintf(w, "    %.2f  %s %s%s\n", f.KillRate, f.Path, detail, marker)
 }
 
-func printRepoReport(w io.Writer, r reposcan.RepoReport, nothingInScope bool, minKillRate *float64) {
+// unpairableInDiff, when non-empty, names source files the diff CHANGED that
+// corral could not pair with a test. It exists to keep the merge gate honest in
+// the one case where a green result is actively misleading: a zero-candidate
+// diff has two causes, and they are not the same answer.
+func printRepoReport(w io.Writer, r reposcan.RepoReport, nothingInScope bool, minKillRate *float64, unpairableInDiff []string) {
 	commit := r.Commit
 	if strings.TrimSpace(commit) == "" {
 		// Never print a bare dangling "@ " — say plainly that the report is
@@ -1374,6 +1393,18 @@ func printRepoReport(w io.Writer, r reposcan.RepoReport, nothingInScope bool, mi
 	}
 	fmt.Fprintf(w, "\nRepo adequacy — %s/%s @ %s\n", r.Owner, r.Repo, commit)
 	switch {
+	case nothingInScope && len(unpairableInDiff) > 0:
+		// The dangerous half of "zero candidates". These files DID change and
+		// corral could not pair them with tests, so no audit ran — reporting
+		// "no audit was needed" here would be a fail-open: the gate goes green
+		// on exactly the change it was installed to inspect. Filename pairing
+		// routinely finds nothing on JS/TS layouts, so this is not a corner
+		// case, and the reader is told the way out rather than left guessing.
+		fmt.Fprintf(w, "  NOT AUDITED: the diff changed %d source file(s) corral could not pair with a test, so nothing was graded. This is a pairing limitation, NOT a clean bill of health:\n", len(unpairableInDiff))
+		for _, p := range unpairableInDiff {
+			fmt.Fprintf(w, "    %s\n", p)
+		}
+		fmt.Fprintln(w, "    Supply a source→test map with --tests (see the docs), or audit these files directly with `corral certify --local`.")
 	case nothingInScope:
 		// "Nothing in scope" and "nothing could be graded" must not print the
 		// same line: one is the honest, expected outcome of a docs-only PR;

@@ -451,6 +451,7 @@ func runRunCorralStepWithStub(t *testing.T, runStep actionStep, tmp, testCommand
 		"WRITER_MODEL=",
 		"MUTANT_MODEL=",
 		"CRITIC_MODEL=",
+		"SHADOW_MODEL=",
 		"GITHUB_WORKSPACE="+workspace,
 		// Make sure a real pull_request base-ref fetch path isn't
 		// accidentally exercised in these unit tests.
@@ -1116,6 +1117,7 @@ func TestActionPassesRoleModelsOnlyWhenSet(t *testing.T) {
 		{"writer-model", "WRITER_MODEL", "--writer-model", "gemini-3.6-flash"},
 		{"mutant-model", "MUTANT_MODEL", "--mutant-model", "gemini-3.6-flash"},
 		{"critic-model", "CRITIC_MODEL", "--critic-model", "off"},
+		{"shadow-model", "SHADOW_MODEL", "--shadow-model", "off"},
 	}
 
 	for _, r := range roles {

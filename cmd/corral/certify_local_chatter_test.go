@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -195,4 +196,138 @@ func TestLocalChatterForExplicitBackendNeverCrossVendorRoutes(t *testing.T) {
 	if (*reqs)[0].model != "gemini-3.5-flash" {
 		t.Errorf("model = %q, want gemini-3.5-flash (WithModel on the SAME explicit backend, not cross-vendor routed)", (*reqs)[0].model)
 	}
+}
+
+// TestResolveAuditRolesDerivesBackendFromAssignedModels is the fence for a
+// defect found by the FIRST real CI run of the GitHub Action, 2026-08-03.
+//
+// Every role was assigned gemini-3.6-flash and GEMINI_API_KEY was present, and
+// corral still refused: "no $ANTHROPIC_API_KEY set — export your Claude key".
+// The preflight asked the wrong question. It read MODEL_BACKEND, found it
+// unset, concluded "default Claude path", and demanded a Claude key — without
+// ever looking at the models the run was actually going to use.
+//
+// The property it should enforce is that EVERY ASSIGNED MODEL HAS A USABLE
+// CREDENTIAL. MODEL_BACKEND is one way to say that and not the only one: an
+// operator who names gemini-* models for every seat has already said which
+// vendor this run uses, and requiring them to ALSO set MODEL_BACKEND is
+// requiring them to say it twice, with an error message that names the wrong
+// vendor when they don't.
+//
+// The default path is unchanged: Claude models with no MODEL_BACKEND still
+// select anthropic and still require ANTHROPIC_API_KEY.
+func TestResolveAuditRolesDerivesBackendFromAssignedModels(t *testing.T) {
+	geminiModels := func() localAuditInput {
+		return localAuditInput{
+			writerModel: "gemini-3.6-flash",
+			mutantModel: "gemini-3.6-flash",
+			criticModel: "off",
+			// The challenger seat defaults to a CLAUDE model and is on by
+			// default, so an otherwise all-Gemini run really does contain an
+			// Anthropic seat. Disabled here so these cases are about the
+			// graded seats; the shadow gets its own case below.
+			shadowModel: "off",
+		}
+	}
+
+	t.Run("all-gemini models with only a Gemini key", func(t *testing.T) {
+		t.Setenv("MODEL_BACKEND", "")
+		t.Setenv("ANTHROPIC_API_KEY", "")
+		t.Setenv("GEMINI_API_KEY", "gm-test")
+		t.Setenv("GOOGLE_API_KEY", "")
+		t.Setenv("OPENAI_API_KEY", "")
+
+		if _, err := resolveAuditRoles(geminiModels(), nil); err != nil {
+			t.Fatalf("an all-Gemini run with a Gemini key must be accepted; got: %v", err)
+		}
+		if got := os.Getenv("MODEL_BACKEND"); got != "gemini" {
+			t.Errorf("MODEL_BACKEND = %q, want %q — the backend must be derived from the assigned models so FromEnv builds the right one (unset would default to ollama)", got, "gemini")
+		}
+	})
+
+	t.Run("all-gemini models with NO key still refuses, naming Google", func(t *testing.T) {
+		t.Setenv("MODEL_BACKEND", "")
+		t.Setenv("ANTHROPIC_API_KEY", "")
+		t.Setenv("GEMINI_API_KEY", "")
+		t.Setenv("GOOGLE_API_KEY", "")
+		t.Setenv("OPENAI_API_KEY", "")
+
+		_, err := resolveAuditRoles(geminiModels(), nil)
+		if err == nil {
+			t.Fatal("a run with no usable credential must refuse before any jail or store is opened")
+		}
+		if strings.Contains(err.Error(), "ANTHROPIC_API_KEY") {
+			t.Errorf("the error names the wrong vendor — the run uses Gemini models, so it must ask for a Google key; got: %v", err)
+		}
+	})
+
+	t.Run("default Claude path is unchanged", func(t *testing.T) {
+		t.Setenv("MODEL_BACKEND", "")
+		t.Setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+		t.Setenv("GEMINI_API_KEY", "")
+
+		if _, err := resolveAuditRoles(localAuditInput{}, nil); err != nil {
+			t.Fatalf("the stock Claude default must keep working: %v", err)
+		}
+		if got := os.Getenv("MODEL_BACKEND"); got != "anthropic" {
+			t.Errorf("MODEL_BACKEND = %q, want anthropic on the default path", got)
+		}
+	})
+
+	t.Run("default Claude path with no key still names Anthropic", func(t *testing.T) {
+		t.Setenv("MODEL_BACKEND", "")
+		t.Setenv("ANTHROPIC_API_KEY", "")
+		t.Setenv("GEMINI_API_KEY", "")
+
+		_, err := resolveAuditRoles(localAuditInput{}, nil)
+		if err == nil || !strings.Contains(err.Error(), "ANTHROPIC_API_KEY") {
+			t.Errorf("the stock Claude default with no key must still ask for ANTHROPIC_API_KEY; got: %v", err)
+		}
+	})
+
+	// The case that actually broke CI. Graded seats all Gemini, a Gemini key
+	// present, and the CHALLENGER seat still carrying its Claude default — so
+	// the run really does need an Anthropic key. Refusing is right; refusing
+	// with "no $ANTHROPIC_API_KEY set — export your Claude key" is not, because
+	// it describes a run the operator did not configure and hides the one seat
+	// that is actually the problem. --shadow-model's own help already says the
+	// default is a Claude model; the error has to say it too.
+	t.Run("the Claude challenger seat is named as the reason", func(t *testing.T) {
+		t.Setenv("MODEL_BACKEND", "")
+		t.Setenv("ANTHROPIC_API_KEY", "")
+		t.Setenv("GEMINI_API_KEY", "gm-test")
+		t.Setenv("GOOGLE_API_KEY", "")
+		t.Setenv("OPENAI_API_KEY", "")
+
+		in := geminiModels()
+		in.shadowModel = "" // take the default: claude-haiku-4-5
+		_, err := resolveAuditRoles(in, nil)
+		if err == nil {
+			t.Fatal("a Claude challenger seat with no Anthropic key must refuse — it would fail mid-run otherwise")
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, "shadow-model") {
+			t.Errorf("the error must name --shadow-model as the way out, since that is the seat that needs the key; got: %v", err)
+		}
+		if !strings.Contains(msg, advpool.DefaultShadowModel) {
+			t.Errorf("the error must name the offending model so the operator can see which seat it is; got: %v", err)
+		}
+	})
+
+	// An explicit MODEL_BACKEND is an operator pointing every seat at one
+	// endpoint on purpose (a gateway, openrouter, a local ollama). Deriving a
+	// backend from model names would silently overrule that.
+	t.Run("an explicit MODEL_BACKEND is never overruled", func(t *testing.T) {
+		t.Setenv("MODEL_BACKEND", "openrouter")
+		t.Setenv("OPENAI_API_KEY", "oa-test")
+		t.Setenv("ANTHROPIC_API_KEY", "")
+		t.Setenv("GEMINI_API_KEY", "")
+
+		if _, err := resolveAuditRoles(geminiModels(), nil); err != nil {
+			t.Fatalf("an explicit MODEL_BACKEND must be honoured as-is: %v", err)
+		}
+		if got := os.Getenv("MODEL_BACKEND"); got != "openrouter" {
+			t.Errorf("MODEL_BACKEND = %q, want it left at openrouter", got)
+		}
+	})
 }

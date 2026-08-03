@@ -1,0 +1,100 @@
+# Corral audits its own pull requests.
+#
+# The project's whole claim is that a suite passing is not evidence the suite
+# would notice a bug. Shipping an Action that makes that claim while never
+# running it on our own changes is the disease this project diagnoses, so this
+# workflow exists to point corral at corral.
+#
+# It is deliberately NON-BLOCKING (`min-kill-rate` is unset, so a low kill rate
+# reports rather than fails, and the job is continue-on-error). The reason is
+# cost, not confidence: an audit costs roughly (mutants × the target's whole
+# suite runtime) per file, corral's own suite is ~45s cold, and that puts a
+# single audited file in the region of two hours on a 2-core runner. A required
+# check that can take hours is not a merge gate anyone will keep. Making this
+# blocking is a decision to take once there are real timings from real PRs on
+# this workflow — not before.
+name: Self-audit
+
+on:
+  pull_request:
+    # Only Go changes can move a kill rate. A docs PR would otherwise spend an
+    # hour to print "NOTHING IN SCOPE".
+    paths:
+      - "**.go"
+      - "go.mod"
+      - "go.sum"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # A push mid-audit makes the running audit's verdict describe code that no
+  # longer exists — and it would keep burning API spend to produce it.
+  group: self-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    # Reporting a verdict is the point; blocking the merge is not (yet). A red
+    # X here must not read as "this PR is broken".
+    continue-on-error: true
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The action derives its own --diff-base from the PR's base ref and
+          # asks git for the merge base. A shallow clone has no merge base to
+          # find, and the audit would silently widen to the whole repo.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # The audit needs a model key. Without one it would fail deep inside the
+      # run, after the checkout and the toolchain setup, with an error about a
+      # provider rather than about configuration. Say so up front, and skip
+      # rather than fail: a PR from a fork never gets the secret, and that is
+      # not the contributor's mistake to look at.
+      - id: key
+        env:
+          MODEL_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          if [ -z "${MODEL_KEY:-}" ]; then
+            echo "have=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping the self-audit: no GEMINI_API_KEY secret is available (expected on pull requests from forks). Add the secret in Settings → Secrets → Actions to enable it."
+          else
+            echo "have=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.key.outputs.have == 'true'
+        uses: ./
+        with:
+          test-command: "go test ./..."
+          # The ceiling on what one PR can cost. corral's own default is 25
+          # candidates, which at ~2h each is a job nobody meant to start; the
+          # diff already narrows the candidate set, and this bounds what is
+          # left. Raise it only alongside a real measurement of what a run
+          # here actually takes.
+          top: "1"
+          # All-Gemini on gemini-3.6-flash, because that is the configuration
+          # this project actually has evidence for: five paid flask replicates,
+          # ProvenMissed non-zero in every one. corral's own defaults are
+          # claude-* — coherent, but never the thing that was measured. Cost
+          # points the same way, and at hours per audited file the per-call
+          # price is not a rounding error.
+          #
+          # A key alone would not have moved providers: the model NAMES would
+          # still be Claude ones pointed at Google's endpoint.
+          model-key: ${{ secrets.GEMINI_API_KEY }}
+          model-key-env: GEMINI_API_KEY
+          derive-model: gemini-3.6-flash
+          writer-model: gemini-3.6-flash
+          mutant-model: gemini-3.6-flash
+          # The critic must differ from the writer, and it is advisory — it
+          # never gates the verdict. On a single-vendor run there is no second
+          # model to give it, and leaving it on is what silently hung the
+          # aggregate before #56.
+          critic-model: "off"

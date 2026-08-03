@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 )
 
@@ -62,5 +63,29 @@ func TestRunCertifyReachedDespiteVOrHelpInCheckedArgv(t *testing.T) {
 		if !post.called {
 			t.Fatalf("runCertify(%v): the check must have run and been reported, but post was never called", args)
 		}
+	}
+}
+
+// TestVersionGoesToStdout: `corral version` wrote via log.Println, which goes
+// to STDERR. So `corral version | grep`, `$(corral version)`, and every CI step
+// that captures a version got an EMPTY string while the text scrolled past on
+// the terminal looking perfectly fine — the failure is invisible exactly where
+// someone would check for it.
+//
+// A version banner is the most likely thing anyone pipes, and `corral -h` two
+// lines away in main() already prints to stdout. Stderr is for diagnostics; the
+// answer to a question the user asked is stdout.
+func TestVersionGoesToStdout(t *testing.T) {
+	var out, errb bytes.Buffer
+	printVersion(&out, &errb)
+
+	if got := strings.TrimSpace(out.String()); got == "" {
+		t.Fatalf("`corral version` wrote nothing to stdout — a piped or captured version is empty; stderr had %q", errb.String())
+	}
+	if !strings.Contains(out.String(), "corral") {
+		t.Errorf("version line should name the binary; got %q", out.String())
+	}
+	if errb.Len() != 0 {
+		t.Errorf("nothing should go to stderr for a successful version query; got %q", errb.String())
 	}
 }

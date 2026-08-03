@@ -715,6 +715,19 @@ func main() {
 		fmt.Print(usageText())
 		return
 	}
+	// Orient the reader BEFORE the startup log, because the bare binary being
+	// the long-running server is the single most confusing thing about corral's
+	// first five seconds. Someone who has just run
+	// `go install .../cmd/corral@latest` because they read about an audit tool
+	// types `corral`, and gets a wall of lines about MotherDuck, fleet oracles
+	// and delegation secrets from a process that never exits. Everything after
+	// this is correct and none of it answers "what is this and how do I stop
+	// it". Two lines, once, to stderr — never parsed, never gating, and it
+	// costs the systemd unit (which invokes exactly this argv) nothing but a
+	// signpost in its own journal.
+	fmt.Fprintf(os.Stderr, "corral %s — starting the coordination server on %s. Ctrl-C to stop.\n", version, env("CORRALAI_ADDR", "127.0.0.1:9019"))
+	fmt.Fprintln(os.Stderr, "  Looking for the audit CLI? `corral certify --local --help`, or `corral --help` for everything else.")
+
 	home, _ := os.UserHomeDir()
 	addr := env("CORRALAI_ADDR", "127.0.0.1:9019")
 	dbPath := env("CORRALAI_DB", filepath.Join(home, ".claude", "corralai_coord.sqlite3"))

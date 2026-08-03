@@ -444,6 +444,9 @@ func runRunCorralStepWithStub(t *testing.T, runStep actionStep, tmp, testCommand
 		// should become, rather than being hardwired to ANTHROPIC_API_KEY.
 		"MODEL_KEY=",
 		"MODEL_KEY_ENV=",
+		"ANTHROPIC_KEY_IN=",
+		"GEMINI_KEY_IN=",
+		"OPENAI_KEY_IN=",
 		"DERIVE_MODEL=",
 		"WRITER_MODEL=",
 		"MUTANT_MODEL=",
@@ -956,6 +959,123 @@ func TestActionRoutesTheKeyToTheNamedProvider(t *testing.T) {
 			"MODEL_KEY=k", "MODEL_KEY_ENV=PATH=/tmp/evil")
 		if runErr == nil {
 			t.Errorf("model-key-env must be rejected unless it is a plain environment variable name; step exited 0:\n%s", out)
+		}
+	})
+}
+
+// TestActionAcceptsSeveralProviderKeysAtOnce: one key is not enough, and the
+// reason is structural rather than a matter of taste.
+//
+// CheckDecorrelation (internal/advpool/driver.go) REJECTS a run whose
+// test-critic and test-writer share a model — a critic judging tests written by
+// its own model is the same failure mode grading its own homework. So a real
+// audit needs at least two models, and the natural way to get genuine
+// independence is two VENDORS. A single-key input cannot express that, and its
+// only escape is `critic-model: "off"` — turning off corral's independence
+// check because the plumbing could not carry a second credential.
+//
+// The keys are separate named inputs rather than one parsed blob: GitHub masks
+// each secret it knows about independently, and splitting credentials out of a
+// combined string is a place to get that wrong.
+func TestActionAcceptsSeveralProviderKeysAtOnce(t *testing.T) {
+	a := loadActionYAML(t)
+	runStep := findStepContaining(t, a, "certify --repo")
+
+	for _, in := range []string{"anthropic-key", "gemini-key", "openai-key"} {
+		if _, ok := a.Inputs[in]; !ok {
+			t.Fatalf("action.yml should declare a %q input — without independent per-provider keys a cross-vendor writer/critic pair cannot be configured, and the only way out is disabling the critic", in)
+		}
+	}
+
+	envDump := func(tmp string) string {
+		b, err := os.ReadFile(filepath.Join(tmp, "env.log"))
+		if err != nil {
+			t.Fatalf("no env.log written — corral stub was never invoked: %v", err)
+		}
+		return string(b)
+	}
+	dumpStub := func(tmp string) string {
+		return "env > \"" + filepath.Join(tmp, "env.log") + "\"\n"
+	}
+
+	t.Run("two vendors reach corral together", func(t *testing.T) {
+		tmp := t.TempDir()
+		out, runErr, _ := runRunCorralStepWithStub(t, runStep, tmp, "true", dumpStub(tmp),
+			"GEMINI_KEY_IN=gm-secret", "ANTHROPIC_KEY_IN=sk-ant-secret",
+			"WRITER_MODEL=gemini-3.6-flash", "CRITIC_MODEL=claude-haiku-4-5")
+		if runErr != nil {
+			t.Fatalf("run-corral step failed: %v\n%s", runErr, out)
+		}
+		env := envDump(tmp)
+		if !strings.Contains(env, "GEMINI_API_KEY=gm-secret") {
+			t.Error("gemini-key must reach corral as GEMINI_API_KEY")
+		}
+		if !strings.Contains(env, "ANTHROPIC_API_KEY=sk-ant-secret") {
+			t.Error("anthropic-key must reach corral as ANTHROPIC_API_KEY — this is the whole point: a cross-vendor writer/critic pair needs BOTH present in the same run")
+		}
+	})
+
+	t.Run("openai key maps to its canonical name", func(t *testing.T) {
+		tmp := t.TempDir()
+		out, runErr, _ := runRunCorralStepWithStub(t, runStep, tmp, "true", dumpStub(tmp),
+			"OPENAI_KEY_IN=oa-secret")
+		if runErr != nil {
+			t.Fatalf("run-corral step failed: %v\n%s", runErr, out)
+		}
+		if !strings.Contains(envDump(tmp), "OPENAI_API_KEY=oa-secret") {
+			t.Error("openai-key must reach corral as OPENAI_API_KEY")
+		}
+	})
+
+	t.Run("an unset key is not exported as empty", func(t *testing.T) {
+		tmp := t.TempDir()
+		out, runErr, _ := runRunCorralStepWithStub(t, runStep, tmp, "true", dumpStub(tmp),
+			"GEMINI_KEY_IN=gm-secret")
+		if runErr != nil {
+			t.Fatalf("run-corral step failed: %v\n%s", runErr, out)
+		}
+		// An empty ANTHROPIC_API_KEY= exported over an inherited one would
+		// BLANK a credential the runner legitimately had — the audit then
+		// fails on a missing key that was actually present.
+		if strings.Contains(envDump(tmp), "ANTHROPIC_API_KEY=\n") {
+			t.Error("an unset provider key must not be exported as an empty variable — that blanks a credential the environment may already carry")
+		}
+	})
+
+	t.Run("no key value reaches the log", func(t *testing.T) {
+		tmp := t.TempDir()
+		out, _, _ := runRunCorralStepWithStub(t, runStep, tmp, "true", dumpStub(tmp),
+			"GEMINI_KEY_IN=gm-leak-canary", "ANTHROPIC_KEY_IN=ant-leak-canary",
+			"OPENAI_KEY_IN=oa-leak-canary")
+		for _, canary := range []string{"gm-leak-canary", "ant-leak-canary", "oa-leak-canary"} {
+			if strings.Contains(string(out), canary) {
+				t.Errorf("key value %q was printed by the step — job logs are readable by anyone who can see the run; output:\n%s", canary, out)
+			}
+		}
+	})
+
+	// Two inputs that both name the same variable with DIFFERENT values have
+	// no correct answer, and a silent precedence rule is how the wrong key
+	// gets used with no sign of it. Refuse instead.
+	t.Run("a contradictory pair fails closed", func(t *testing.T) {
+		tmp := t.TempDir()
+		out, runErr, _ := runRunCorralStepWithStub(t, runStep, tmp, "true", dumpStub(tmp),
+			"GEMINI_KEY_IN=one-value",
+			"MODEL_KEY=a-different-value", "MODEL_KEY_ENV=GEMINI_API_KEY")
+		if runErr == nil {
+			t.Errorf("gemini-key and model-key/model-key-env both set GEMINI_API_KEY to different values; the step must refuse rather than silently pick one:\n%s", out)
+		}
+	})
+
+	// The same pair agreeing is not a conflict — it is just redundant, and
+	// failing on it would break a caller who set both harmlessly.
+	t.Run("an agreeing pair is allowed", func(t *testing.T) {
+		tmp := t.TempDir()
+		out, runErr, _ := runRunCorralStepWithStub(t, runStep, tmp, "true", dumpStub(tmp),
+			"GEMINI_KEY_IN=same-value",
+			"MODEL_KEY=same-value", "MODEL_KEY_ENV=GEMINI_API_KEY")
+		if runErr != nil {
+			t.Fatalf("two inputs naming the same variable with the SAME value is redundant, not contradictory, and must be allowed: %v\n%s", runErr, out)
 		}
 	})
 }

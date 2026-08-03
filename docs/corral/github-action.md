@@ -413,8 +413,16 @@ and the fix belongs in the code, not a caveat in these docs.
 | `tests` | no | `""` | Optional JSON file mapping repo-relative **source** paths to their test files, consulted before filename convention. Needed whenever your project names tests after behaviour rather than after source files — common in JS/TS, where convention can pair *nothing* and the gate would then have no file to audit. A mapping to a file that does not exist is refused, not silently ignored. |
 | `top` | no | `""` (corral's own default bound, 25) | Audit at most this many of the highest-ranked candidate files. An audit costs roughly (mutants × your suite's **whole** runtime) **per file**, and the file count comes from the PR's diff — a number the author picks, not you. See "What one run costs" below before raising it. |
 | `min-kill-rate` | no | `""` (unset) | Fail the run (exit 1) if **any individual audited file's** kill rate is below this value. Range 0.0-1.0 inclusive; a *minimum*, so a file exactly at the value passes. Opt-in — leave empty to keep the pre-`min-kill-rate` behaviour, where a weak-but-gradable suite still exits 0. See "Failing on a weak kill rate" below. |
-| `model-key` | no | `""` | Provider API key for the models corral runs. Required unless `goals` is supplied. Pass it as a secret — `${{ secrets.GEMINI_API_KEY }}` — and never write a key inline in the workflow. The step never echoes it. |
-| `model-key-env` | no | `ANTHROPIC_API_KEY` | Which environment variable `model-key` becomes, so the key can reach a provider other than Anthropic. These are corral's own credential names: `GEMINI_API_KEY` (which itself falls back to `GOOGLE_API_KEY`, then `OPENAI_API_KEY`), `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`. Must be a plain environment variable name; anything else is refused rather than exported. |
+| `anthropic-key` | no | `""` | Anthropic API key, supplied to the run as `ANTHROPIC_API_KEY`. |
+| `gemini-key` | no | `""` | Gemini API key, supplied as `GEMINI_API_KEY`. |
+| `openai-key` | no | `""` | OpenAI (or OpenAI-compatible) key, supplied as `OPENAI_API_KEY`. |
+| `model-key` | no | `""` | Generic escape hatch for a credential the three named inputs do not cover (e.g. `GOOGLE_API_KEY`, or a gateway reading its own variable). Prefer the named inputs. |
+| `model-key-env` | no | `ANTHROPIC_API_KEY` | Which environment variable `model-key` becomes. Must be a plain environment variable name. Naming a variable a named input already fills, with a *different* value, is refused. |
+
+**The provider keys are additive, not alternatives.** Set as many as your role
+routing needs; pass every one as a secret and never inline. The step never
+echoes a key value, and an unset key is never exported as an empty variable
+(which would blank a credential the runner already had).
 | `derive-model` | no | `""` (corral's default, `claude-sonnet-5`) | Model that derives a goal per file when `goals` is not supplied. See "Running on a provider other than Anthropic" below — **a key alone does not move providers.** |
 | `writer-model` | no | `""` (corral's default) | Model for the test-writer role — the half that authors a test to prove a survivor is a real gap. |
 | `mutant-model` | no | `""` (corral's default) | Model for the mutant-generator role. |
@@ -458,18 +466,40 @@ Both halves have to move together:
   with:
     test-command: "go test ./..."
     top: "1"
-    model-key: ${{ secrets.GEMINI_API_KEY }}
-    model-key-env: GEMINI_API_KEY
+    gemini-key: ${{ secrets.GEMINI_API_KEY }}
     derive-model: gemini-3.6-flash
     writer-model: gemini-3.6-flash
     mutant-model: gemini-3.6-flash
     critic-model: "off"
 ```
 
-`critic-model: "off"` is not a shortcut. The critic must differ from the
-writer, and on a single-vendor run there is no second model to give it. It is
-advisory and never gates the verdict, so dropping it costs nothing that the
-verdict depends on.
+### The critic needs a second model — and that is what more than one key is for
+
+corral refuses a run whose **test-critic shares a model with its test-writer**
+(`CheckDecorrelation`): a critic judging tests written by its own model is the
+same failure mode grading its own homework, not an independent check.
+
+The guard compares **model names, not vendors**, so there are two honest ways
+to satisfy it, and one dishonest one:
+
+```yaml
+    # Two models, one key — satisfies the guard.
+    writer-model: gemini-3.6-flash
+    critic-model: gemini-3.6-pro
+
+    # Two vendors — genuine independence. Keys are additive; set both.
+    gemini-key:    ${{ secrets.GEMINI_API_KEY }}
+    anthropic-key: ${{ secrets.ANTHROPIC_API_KEY }}
+    writer-model: gemini-3.6-flash
+    critic-model: claude-haiku-4-5
+
+    # Turning the independence check off because the plumbing was in the way.
+    critic-model: "off"
+```
+
+`off` is legitimate — the critic is advisory and never gates the verdict, so
+dropping it costs nothing the verdict depends on. But reach for it because you
+chose to, not because you could only supply one credential.
 
 This is also the configuration corral's own published measurements come from
 (five replicates on flask, `ProvenMissed` non-zero in every one), and it is

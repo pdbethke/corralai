@@ -24,12 +24,24 @@ inputs:
     description: "Audit at most this many of the highest-ranked candidate files, as a ceiling on what one run can cost. An audit costs roughly (mutants × your suite's whole runtime) PER FILE, and the file count comes from the PR's diff — a number the author picks, not you. On a repo whose suite takes a minute, a ten-file PR is a job measured in tens of hours, discovered only once it is running. Leave empty to keep corral's own default bound."
     required: false
     default: ""
+  anthropic-key:
+    description: "Anthropic API key, supplied to the run as ANTHROPIC_API_KEY. Set as many provider keys as your role→model routing needs — they are independent and additive, NOT alternatives. corral rejects a run whose test-critic shares a model with its test-writer (a critic grading its own model's homework is not an independent check), so a genuinely cross-vendor pair needs two keys present in the same run. Pass as a secret; never inline."
+    required: false
+    default: ""
+  gemini-key:
+    description: "Google Gemini API key, supplied to the run as GEMINI_API_KEY. Additive with the other provider keys — see 'anthropic-key'."
+    required: false
+    default: ""
+  openai-key:
+    description: "OpenAI (or OpenAI-compatible) API key, supplied to the run as OPENAI_API_KEY. Additive with the other provider keys — see 'anthropic-key'."
+    required: false
+    default: ""
   model-key:
-    description: "Provider API key for the models corral runs. Required unless 'goals' is supplied AND every role's model is already reachable some other way. Pass it as a secret (e.g. ${{ secrets.GEMINI_API_KEY }}); never write a key inline in a workflow."
+    description: "Generic escape hatch for a credential the named provider inputs above do not cover (e.g. GOOGLE_API_KEY, or a gateway that reads its own variable). Use 'anthropic-key' / 'gemini-key' / 'openai-key' in preference — they are clearer and compose. Pair with 'model-key-env' to say which variable it becomes."
     required: false
     default: ""
   model-key-env:
-    description: "Which environment variable 'model-key' becomes, so the key can reach a provider other than Anthropic. These are corral's own credential names: GEMINI_API_KEY (falling back to GOOGLE_API_KEY, then OPENAI_API_KEY), OPENAI_API_KEY, or ANTHROPIC_API_KEY. Must be a plain environment variable name; anything else is refused rather than exported. Defaults to ANTHROPIC_API_KEY, which matches corral's own default models."
+    description: "Which environment variable 'model-key' becomes. Must be a plain environment variable name; anything else is refused rather than exported. Defaults to ANTHROPIC_API_KEY, which matches corral's own default models. Setting this to the same variable a named provider input already fills, with a DIFFERENT value, is refused — there is no correct answer, and a silent precedence rule is how the wrong key gets used with no sign of it."
     required: false
     default: "ANTHROPIC_API_KEY"
   derive-model:
@@ -85,6 +97,9 @@ runs:
     - name: Run corral
       shell: bash
       env:
+        ANTHROPIC_KEY_IN: ${{ inputs.anthropic-key }}
+        GEMINI_KEY_IN: ${{ inputs.gemini-key }}
+        OPENAI_KEY_IN: ${{ inputs.openai-key }}
         MODEL_KEY: ${{ inputs.model-key }}
         MODEL_KEY_ENV: ${{ inputs.model-key-env }}
         DERIVE_MODEL: ${{ inputs.derive-model }}
@@ -101,26 +116,70 @@ runs:
         TEST_COMMAND: ${{ inputs.test-command }}
       run: |
         set -euo pipefail
-        # The key is wired into the run under the name corral's credential
-        # resolution actually reads (internal/agentbackend): GEMINI_API_KEY —
-        # which itself falls back to GOOGLE_API_KEY then OPENAI_API_KEY —
-        # OPENAI_API_KEY, or ANTHROPIC_API_KEY. It was hardwired to
-        # ANTHROPIC_API_KEY, which is coherent with corral's default models but
-        # made Anthropic the only provider reachable through this action.
+        # Provider credentials are wired in under the names corral's own
+        # resolution reads (internal/agentbackend): ANTHROPIC_API_KEY,
+        # GEMINI_API_KEY (which itself falls back to GOOGLE_API_KEY then
+        # OPENAI_API_KEY), OPENAI_API_KEY.
         #
-        # Exported under a computed name rather than declared in `env:` above,
-        # because the name is the input. It is validated first: an env-var
-        # assignment is `NAME=VALUE`, so a "name" containing an `=` would
+        # SEVERAL AT ONCE, deliberately. CheckDecorrelation rejects a run whose
+        # test-critic shares a model with its test-writer — a critic grading its
+        # own model's homework is not an independent check — so a real audit
+        # needs at least two models, and genuine independence usually means two
+        # VENDORS. A one-key-at-a-time input cannot express that, and its only
+        # escape is turning the critic off: disabling corral's independence
+        # check because the plumbing could not carry a second credential.
+        #
+        # No key value is ever echoed: a job log is readable by anyone who can
+        # see the run.
+        declared_names=()
+        declared_values=()
+        declare_key() { # name, value — records an intended export, empty ignored
+          [ -n "$2" ] || return 0
+          local i=0
+          while [ "$i" -lt "${#declared_names[@]}" ]; do
+            if [ "${declared_names[$i]}" = "$1" ]; then
+              # Two inputs naming the same variable with DIFFERENT values have
+              # no correct answer. A silent precedence rule is how the wrong
+              # key gets used with no sign of it, so refuse. Agreeing values
+              # are merely redundant and pass.
+              if [ "${declared_values[$i]}" != "$2" ]; then
+                echo "::error::two inputs set $1 to different values (a named provider key and model-key/model-key-env). Remove one — the action will not silently choose between two credentials for the same provider." >&2
+                exit 1
+              fi
+              return 0
+            fi
+            i=$((i + 1))
+          done
+          declared_names+=("$1")
+          declared_values+=("$2")
+        }
+
+        declare_key ANTHROPIC_API_KEY "${ANTHROPIC_KEY_IN:-}"
+        declare_key GEMINI_API_KEY "${GEMINI_KEY_IN:-}"
+        declare_key OPENAI_API_KEY "${OPENAI_KEY_IN:-}"
+
+        # The generic escape hatch, for a credential the named inputs do not
+        # cover. Its name is itself an input, so it is validated before use: an
+        # env assignment is `NAME=VALUE`, so a "name" containing an `=` would
         # smuggle a second assignment into the export, and a name with a shell
-        # metacharacter has no legitimate use here at all. Refuse rather than
-        # export something unintended.
-        key_env="${MODEL_KEY_ENV:-ANTHROPIC_API_KEY}"
-        if ! printf '%s' "$key_env" | grep -qE '^[A-Za-z_][A-Za-z0-9_]*$'; then
-          echo "::error::model-key-env must be a plain environment variable name (letters, digits and underscore, not starting with a digit) — got something else, which will not be exported. Use one of corral's credential names: GEMINI_API_KEY, GOOGLE_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY." >&2
-          exit 1
+        # metacharacter has no legitimate use here at all.
+        if [ -n "${MODEL_KEY:-}" ]; then
+          key_env="${MODEL_KEY_ENV:-ANTHROPIC_API_KEY}"
+          if ! printf '%s' "$key_env" | grep -qE '^[A-Za-z_][A-Za-z0-9_]*$'; then
+            echo "::error::model-key-env must be a plain environment variable name (letters, digits and underscore, not starting with a digit) — got something else, which will not be exported. Use one of corral's credential names: GEMINI_API_KEY, GOOGLE_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY." >&2
+            exit 1
+          fi
+          declare_key "$key_env" "$MODEL_KEY"
         fi
-        # Never echoed: a job log is readable by anyone who can see the run.
-        export "$key_env=${MODEL_KEY:-}"
+
+        # Only non-empty keys are exported. Exporting an empty value would
+        # BLANK a credential the runner legitimately carried, and the audit
+        # would then fail on a missing key that was in fact present.
+        i=0
+        while [ "$i" -lt "${#declared_names[@]}" ]; do
+          export "${declared_names[$i]}=${declared_values[$i]}"
+          i=$((i + 1))
+        done
 
         base="$DIFF_BASE"
         if [ -z "$base" ] && [ -n "${GITHUB_BASE_REF:-}" ]; then

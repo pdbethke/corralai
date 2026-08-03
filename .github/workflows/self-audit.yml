@@ -88,13 +88,16 @@ jobs:
           #
           # A key alone would not have moved providers: the model NAMES would
           # still be Claude ones pointed at Google's endpoint.
-          model-key: ${{ secrets.GEMINI_API_KEY }}
-          model-key-env: GEMINI_API_KEY
+          gemini-key: ${{ secrets.GEMINI_API_KEY }}
           derive-model: gemini-3.6-flash
           writer-model: gemini-3.6-flash
           mutant-model: gemini-3.6-flash
-          # The critic must differ from the writer, and it is advisory — it
-          # never gates the verdict. On a single-vendor run there is no second
-          # model to give it, and leaving it on is what silently hung the
-          # aggregate before #56.
+          # Off because that is what the five replicates actually ran, not
+          # because it has to be. CheckDecorrelation compares MODEL NAMES, not
+          # vendors, so `critic-model: gemini-3.6-pro` would satisfy it on this
+          # one key — and a second provider key here (they are additive) would
+          # give a genuinely cross-vendor critic. Both are untested from this
+          # workflow; the critic is advisory and never gates the verdict, so
+          # this stays on the measured configuration until there is a reason
+          # and a measurement to move it.
           critic-model: "off"

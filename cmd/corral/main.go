@@ -86,6 +86,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -171,6 +172,20 @@ func showVersion(args []string) bool {
 		}
 	}
 	return false
+}
+
+// printVersion writes the version banner to OUT, not to stderr. It used to go
+// through log.Println (stderr), so `corral version | grep`, `$(corral version)`
+// and any CI step capturing a version got an empty string while the text still
+// scrolled past on the terminal looking correct — a failure invisible exactly
+// where someone would look for it. stderr is for diagnostics; the answer to a
+// question the user asked is stdout, which is what `corral -h` already does.
+//
+// errOut is taken (and left unused on the success path) so the signature says
+// plainly that nothing about a successful version query belongs on stderr.
+func printVersion(out, errOut io.Writer) {
+	_ = errOut
+	fmt.Fprintln(out, "corral", version)
 }
 
 // showHelp reports whether the args ask for usage. Checked before the server
@@ -707,8 +722,7 @@ func main() {
 		}, os.Stdout, os.Stderr))
 	}
 	if showVersion(os.Args[1:]) {
-		log.SetFlags(0)
-		log.Println("corral", version)
+		printVersion(os.Stdout, os.Stderr)
 		return
 	}
 	if showHelp(os.Args[1:]) {

@@ -8,7 +8,11 @@
 # (The demo lives under deploy/demo — see deploy/demo/Makefile.)
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS := -X main.version=$(VERSION)
+# main.stampedVersion, not main.version: -X only works on a string var with a
+# CONSTANT initializer, and main.version is now computed (it falls back to the
+# module version Go embeds for `go install ...@latest`). Stamping the old name
+# would be a silent no-op.
+LDFLAGS := -X main.stampedVersion=$(VERSION)
 BINS    := corral corral-agent corral-observe corral-admin corral-desktop
 
 .PHONY: build install test vet tidy clean

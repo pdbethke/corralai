@@ -526,9 +526,42 @@ So:
 - Reach for `min-kill-rate` only once you have real timings from your own repo.
   A required check that can take hours is not a merge gate anyone will keep.
 
+### Who pays, and how not to pay for a stranger's pull request
+
+The bill lands on the repository that runs the workflow: your runner minutes,
+your API key. On a public repo that means **an outside contributor's pull
+request would spend your money**, once per push, for as long as they keep
+pushing.
+
+GitHub withholds secrets from fork pull requests, so an audit on a fork skips
+on its own. Do not rely on that alone — it is a platform default doing the work
+silently, and the specific way it gets undone is someone reaching for
+`pull_request_target` because "fork PRs skip". **That trigger runs with your
+secrets while checking out the contributor's code, so it does not just spend
+your key, it exposes it.** If fork PRs skipping looks like a bug, it is the
+feature.
+
+Say it in the workflow instead, and add an opt-in so no pull request — yours
+included — starts an hours-long paid job merely by existing:
+
+```yaml
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]   # `labeled` makes the opt-in usable
+    paths: ["**.go"]
+  workflow_dispatch:
+
+jobs:
+  audit:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+       contains(github.event.pull_request.labels.*.name, 'audit'))
+```
+
 `.github/workflows/self-audit.yml` in this repository is exactly this shape —
-non-blocking, `top: "1"`, Go-only paths — and is the honest starting point to
-copy.
+non-blocking, `top: "1"`, Go-only paths, fork-guarded and label-gated — and is
+the honest starting point to copy.
 
 ## Failing on a weak kill rate
 

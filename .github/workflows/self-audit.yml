@@ -53,18 +53,18 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # The audit needs a model key to derive a goal per file. Without one it
-      # would fail deep inside the run, after the checkout and the toolchain
-      # setup, with an error about a provider rather than about configuration.
-      # Say so up front, and skip rather than fail: a PR from a fork never gets
-      # the secret, and that is not the contributor's mistake to look at.
+      # The audit needs a model key. Without one it would fail deep inside the
+      # run, after the checkout and the toolchain setup, with an error about a
+      # provider rather than about configuration. Say so up front, and skip
+      # rather than fail: a PR from a fork never gets the secret, and that is
+      # not the contributor's mistake to look at.
       - id: key
         env:
-          MODEL_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          MODEL_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           if [ -z "${MODEL_KEY:-}" ]; then
             echo "have=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Skipping the self-audit: no ANTHROPIC_API_KEY secret is available (expected on pull requests from forks). Add the secret in Settings → Secrets → Actions to enable it."
+            echo "::notice::Skipping the self-audit: no GEMINI_API_KEY secret is available (expected on pull requests from forks). Add the secret in Settings → Secrets → Actions to enable it."
           else
             echo "have=true" >> "$GITHUB_OUTPUT"
           fi
@@ -79,4 +79,22 @@ jobs:
           # left. Raise it only alongside a real measurement of what a run
           # here actually takes.
           top: "1"
-          model-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # All-Gemini on gemini-3.6-flash, because that is the configuration
+          # this project actually has evidence for: five paid flask replicates,
+          # ProvenMissed non-zero in every one. corral's own defaults are
+          # claude-* — coherent, but never the thing that was measured. Cost
+          # points the same way, and at hours per audited file the per-call
+          # price is not a rounding error.
+          #
+          # A key alone would not have moved providers: the model NAMES would
+          # still be Claude ones pointed at Google's endpoint.
+          model-key: ${{ secrets.GEMINI_API_KEY }}
+          model-key-env: GEMINI_API_KEY
+          derive-model: gemini-3.6-flash
+          writer-model: gemini-3.6-flash
+          mutant-model: gemini-3.6-flash
+          # The critic must differ from the writer, and it is advisory — it
+          # never gates the verdict. On a single-vendor run there is no second
+          # model to give it, and leaving it on is what silently hung the
+          # aggregate before #56.
+          critic-model: "off"

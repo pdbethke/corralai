@@ -413,7 +413,12 @@ and the fix belongs in the code, not a caveat in these docs.
 | `tests` | no | `""` | Optional JSON file mapping repo-relative **source** paths to their test files, consulted before filename convention. Needed whenever your project names tests after behaviour rather than after source files — common in JS/TS, where convention can pair *nothing* and the gate would then have no file to audit. A mapping to a file that does not exist is refused, not silently ignored. |
 | `top` | no | `""` (corral's own default bound, 25) | Audit at most this many of the highest-ranked candidate files. An audit costs roughly (mutants × your suite's **whole** runtime) **per file**, and the file count comes from the PR's diff — a number the author picks, not you. See "What one run costs" below before raising it. |
 | `min-kill-rate` | no | `""` (unset) | Fail the run (exit 1) if **any individual audited file's** kill rate is below this value. Range 0.0-1.0 inclusive; a *minimum*, so a file exactly at the value passes. Opt-in — leave empty to keep the pre-`min-kill-rate` behaviour, where a weak-but-gradable suite still exits 0. See "Failing on a weak kill rate" below. |
-| `model-key` | no | `""` | Provider API key for goal derivation, wired into the run as `ANTHROPIC_API_KEY` — the same environment variable corral's default model backend reads everywhere else (`internal/creds`). Required unless `goals` is supplied. Pass it as `${{ secrets.ANTHROPIC_API_KEY }}`; never write a key inline in the workflow. |
+| `model-key` | no | `""` | Provider API key for the models corral runs. Required unless `goals` is supplied. Pass it as a secret — `${{ secrets.GEMINI_API_KEY }}` — and never write a key inline in the workflow. The step never echoes it. |
+| `model-key-env` | no | `ANTHROPIC_API_KEY` | Which environment variable `model-key` becomes, so the key can reach a provider other than Anthropic. These are corral's own credential names: `GEMINI_API_KEY` (which itself falls back to `GOOGLE_API_KEY`, then `OPENAI_API_KEY`), `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`. Must be a plain environment variable name; anything else is refused rather than exported. |
+| `derive-model` | no | `""` (corral's default, `claude-sonnet-5`) | Model that derives a goal per file when `goals` is not supplied. See "Running on a provider other than Anthropic" below — **a key alone does not move providers.** |
+| `writer-model` | no | `""` (corral's default) | Model for the test-writer role — the half that authors a test to prove a survivor is a real gap. |
+| `mutant-model` | no | `""` (corral's default) | Model for the mutant-generator role. |
+| `critic-model` | no | `""` (corral's default) | Model for the test-critic role, which must **differ** from the writer's. `off` disables it entirely — it is advisory and never gates the verdict, so a single-vendor run with only one usable model can drop it. |
 | `corral-version` | no | `""` (falls back to the action's own ref, `github.action_ref`) | Which `corral` to `go install`, as a version suffix (a tag, branch, or commit). Leave it empty unless you deliberately want a different `corral` release than the action you pinned in `uses:`. |
 
 ## Where the report shows up
@@ -438,6 +443,38 @@ Two things worth knowing:
   summary at 1MiB and rejects an oversized one outright, so a very long report
   is cut down — and says where it was cut, in the summary itself. A silently
   truncated report reads exactly like a short one.
+
+## Running on a provider other than Anthropic
+
+**A key alone does not move providers.** corral routes each *role* to its own
+model, and its defaults are `claude-*`. Swapping only `model-key-env` leaves
+those Claude model names pointed at another vendor's endpoint, where they do
+not exist — so the run fails, naming a model rather than the misconfiguration.
+
+Both halves have to move together:
+
+```yaml
+- uses: pdbethke/corralai@main
+  with:
+    test-command: "go test ./..."
+    top: "1"
+    model-key: ${{ secrets.GEMINI_API_KEY }}
+    model-key-env: GEMINI_API_KEY
+    derive-model: gemini-3.6-flash
+    writer-model: gemini-3.6-flash
+    mutant-model: gemini-3.6-flash
+    critic-model: "off"
+```
+
+`critic-model: "off"` is not a shortcut. The critic must differ from the
+writer, and on a single-vendor run there is no second model to give it. It is
+advisory and never gates the verdict, so dropping it costs nothing that the
+verdict depends on.
+
+This is also the configuration corral's own published measurements come from
+(five replicates on flask, `ProvenMissed` non-zero in every one), and it is
+markedly cheaper per call — which is not a rounding error when one audited file
+is an hours-long run.
 
 ## What one run costs
 

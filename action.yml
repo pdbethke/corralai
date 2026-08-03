@@ -25,7 +25,27 @@ inputs:
     required: false
     default: ""
   model-key:
-    description: "Provider API key for goal derivation. Required unless 'goals' is supplied."
+    description: "Provider API key for the models corral runs. Required unless 'goals' is supplied AND every role's model is already reachable some other way. Pass it as a secret (e.g. ${{ secrets.GEMINI_API_KEY }}); never write a key inline in a workflow."
+    required: false
+    default: ""
+  model-key-env:
+    description: "Which environment variable 'model-key' becomes, so the key can reach a provider other than Anthropic. These are corral's own credential names: GEMINI_API_KEY (falling back to GOOGLE_API_KEY, then OPENAI_API_KEY), OPENAI_API_KEY, or ANTHROPIC_API_KEY. Must be a plain environment variable name; anything else is refused rather than exported. Defaults to ANTHROPIC_API_KEY, which matches corral's own default models."
+    required: false
+    default: "ANTHROPIC_API_KEY"
+  derive-model:
+    description: "Model that derives a goal per file when 'goals' is not supplied. Leave empty to keep corral's default. Setting a key alone is NOT enough to move providers: the model NAMES are corral's defaults (claude-*), and a Claude name pointed at another vendor's endpoint fails there."
+    required: false
+    default: ""
+  writer-model:
+    description: "Model for the test-writer role — the half that authors a test to prove a survivor is a real gap. Leave empty for corral's default."
+    required: false
+    default: ""
+  mutant-model:
+    description: "Model for the mutant-generator role. Leave empty for corral's default."
+    required: false
+    default: ""
+  critic-model:
+    description: "Model for the test-critic role, which must DIFFER from the writer's. 'off' disables the critic entirely — it is advisory and never gates the verdict, so a single-vendor run with only one usable model can drop it. Leave empty for corral's default."
     required: false
     default: ""
   corral-version:
@@ -65,7 +85,12 @@ runs:
     - name: Run corral
       shell: bash
       env:
-        ANTHROPIC_API_KEY: ${{ inputs.model-key }}
+        MODEL_KEY: ${{ inputs.model-key }}
+        MODEL_KEY_ENV: ${{ inputs.model-key-env }}
+        DERIVE_MODEL: ${{ inputs.derive-model }}
+        WRITER_MODEL: ${{ inputs.writer-model }}
+        MUTANT_MODEL: ${{ inputs.mutant-model }}
+        CRITIC_MODEL: ${{ inputs.critic-model }}
         DIFF_BASE: ${{ inputs.diff-base }}
         GOALS: ${{ inputs.goals }}
         TESTS: ${{ inputs.tests }}
@@ -76,6 +101,27 @@ runs:
         TEST_COMMAND: ${{ inputs.test-command }}
       run: |
         set -euo pipefail
+        # The key is wired into the run under the name corral's credential
+        # resolution actually reads (internal/agentbackend): GEMINI_API_KEY —
+        # which itself falls back to GOOGLE_API_KEY then OPENAI_API_KEY —
+        # OPENAI_API_KEY, or ANTHROPIC_API_KEY. It was hardwired to
+        # ANTHROPIC_API_KEY, which is coherent with corral's default models but
+        # made Anthropic the only provider reachable through this action.
+        #
+        # Exported under a computed name rather than declared in `env:` above,
+        # because the name is the input. It is validated first: an env-var
+        # assignment is `NAME=VALUE`, so a "name" containing an `=` would
+        # smuggle a second assignment into the export, and a name with a shell
+        # metacharacter has no legitimate use here at all. Refuse rather than
+        # export something unintended.
+        key_env="${MODEL_KEY_ENV:-ANTHROPIC_API_KEY}"
+        if ! printf '%s' "$key_env" | grep -qE '^[A-Za-z_][A-Za-z0-9_]*$'; then
+          echo "::error::model-key-env must be a plain environment variable name (letters, digits and underscore, not starting with a digit) — got something else, which will not be exported. Use one of corral's credential names: GEMINI_API_KEY, GOOGLE_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY." >&2
+          exit 1
+        fi
+        # Never echoed: a job log is readable by anyone who can see the run.
+        export "$key_env=${MODEL_KEY:-}"
+
         base="$DIFF_BASE"
         if [ -z "$base" ] && [ -n "${GITHUB_BASE_REF:-}" ]; then
           git fetch --no-tags origin "+refs/heads/$GITHUB_BASE_REF:refs/remotes/origin/$GITHUB_BASE_REF"
@@ -93,6 +139,13 @@ runs:
         [ -n "${TESTS:-}" ] && args+=(--tests "$TESTS")
         [ -n "$MIN_KILL_RATE" ] && args+=(--min-kill-rate "$MIN_KILL_RATE")
         [ -n "${TOP:-}" ] && args+=(--top "$TOP")
+        # Role→model routing. Each is omitted when empty so corral keeps
+        # ownership of its own defaults — the action must never become a second
+        # place where a default model is decided.
+        [ -n "${DERIVE_MODEL:-}" ] && args+=(--derive-model "$DERIVE_MODEL")
+        [ -n "${WRITER_MODEL:-}" ] && args+=(--writer-model "$WRITER_MODEL")
+        [ -n "${MUTANT_MODEL:-}" ] && args+=(--mutant-model "$MUTANT_MODEL")
+        [ -n "${CRITIC_MODEL:-}" ] && args+=(--critic-model "$CRITIC_MODEL")
         # $TEST_COMMAND is data, not script: it is split into argv words the
         # way a real shell's own parser would (so "go test ./..." becomes
         # three args, and pytest -k "not slow" keeps "not slow" as one),

@@ -437,9 +437,17 @@ func runRunCorralStepWithStub(t *testing.T, runStep actionStep, tmp, testCommand
 		"DIFF_BASE=",
 		"GOALS=",
 		"MIN_KILL_RATE=",
+		"TOP=",
 		"REPO_OWNER=acme",
 		"COMMIT_SHA=deadbeef",
-		"ANTHROPIC_API_KEY=",
+		// The key now travels as MODEL_KEY plus the name of the variable it
+		// should become, rather than being hardwired to ANTHROPIC_API_KEY.
+		"MODEL_KEY=",
+		"MODEL_KEY_ENV=",
+		"DERIVE_MODEL=",
+		"WRITER_MODEL=",
+		"MUTANT_MODEL=",
+		"CRITIC_MODEL=",
 		"GITHUB_WORKSPACE="+workspace,
 		// Make sure a real pull_request base-ref fetch path isn't
 		// accidentally exercised in these unit tests.
@@ -864,6 +872,179 @@ func TestActionPassesTopOnlyWhenSet(t *testing.T) {
 			}
 		}
 	})
+}
+
+// TestActionRoutesTheKeyToTheNamedProvider: `model-key` was wired into the run
+// as ANTHROPIC_API_KEY and nothing else. That is coherent with corral's default
+// models (defaultDeriveModel == defaultLocalMutantModel == claude-sonnet-5), so
+// it was not broken — but it made the Anthropic path the ONLY reachable one
+// through the action, and the config this project actually has evidence for is
+// all-Gemini (five replicates, ProvenMissed non-zero in every one). Cost points
+// the same way: an audited file is a hours-long run, so the per-call price is
+// not a rounding error.
+//
+// `model-key-env` names the environment variable the key becomes, defaulting to
+// ANTHROPIC_API_KEY so every existing caller is unaffected. Those names are
+// corral's own credential vocabulary (internal/agentbackend resolves
+// GEMINI_API_KEY → GOOGLE_API_KEY → OPENAI_API_KEY, and ANTHROPIC_API_KEY), not
+// a new concept invented here.
+func TestActionRoutesTheKeyToTheNamedProvider(t *testing.T) {
+	a := loadActionYAML(t)
+	runStep := findStepContaining(t, a, "certify --repo")
+
+	if _, ok := a.Inputs["model-key-env"]; !ok {
+		t.Fatal(`action.yml should declare a "model-key-env" input so the key can reach a provider other than Anthropic`)
+	}
+
+	// The stub records the environment corral was actually launched with —
+	// the only way to see where the key landed, since it travels as env and
+	// never as argv.
+	envDump := func(tmp string) string {
+		b, err := os.ReadFile(filepath.Join(tmp, "env.log"))
+		if err != nil {
+			t.Fatalf("no env.log written — corral stub was never invoked: %v", err)
+		}
+		return string(b)
+	}
+	dumpStub := func(tmp string) string {
+		return "env > \"" + filepath.Join(tmp, "env.log") + "\"\n"
+	}
+
+	t.Run("defaults to Anthropic", func(t *testing.T) {
+		tmp := t.TempDir()
+		out, runErr, _ := runRunCorralStepWithStub(t, runStep, tmp, "true", dumpStub(tmp),
+			"MODEL_KEY=sk-ant-secret", "MODEL_KEY_ENV=")
+		if runErr != nil {
+			t.Fatalf("run-corral step failed: %v\n%s", runErr, out)
+		}
+		if !strings.Contains(envDump(tmp), "ANTHROPIC_API_KEY=sk-ant-secret") {
+			t.Error("with model-key-env unset the key must still become ANTHROPIC_API_KEY — every existing caller depends on it")
+		}
+	})
+
+	t.Run("routes to Gemini when asked", func(t *testing.T) {
+		tmp := t.TempDir()
+		out, runErr, _ := runRunCorralStepWithStub(t, runStep, tmp, "true", dumpStub(tmp),
+			"MODEL_KEY=gm-secret", "MODEL_KEY_ENV=GEMINI_API_KEY")
+		if runErr != nil {
+			t.Fatalf("run-corral step failed: %v\n%s", runErr, out)
+		}
+		env := envDump(tmp)
+		if !strings.Contains(env, "GEMINI_API_KEY=gm-secret") {
+			t.Error("model-key must reach corral as GEMINI_API_KEY when model-key-env names it")
+		}
+		if strings.Contains(env, "ANTHROPIC_API_KEY=gm-secret") {
+			t.Error("a Gemini key must not ALSO be exported as ANTHROPIC_API_KEY — corral would try the wrong vendor with a key that cannot work there, and the failure would name Anthropic")
+		}
+	})
+
+	t.Run("a key value never reaches the log", func(t *testing.T) {
+		tmp := t.TempDir()
+		out, _, _ := runRunCorralStepWithStub(t, runStep, tmp, "true", dumpStub(tmp),
+			"MODEL_KEY=gm-super-secret-value", "MODEL_KEY_ENV=GEMINI_API_KEY")
+		if strings.Contains(string(out), "gm-super-secret-value") {
+			t.Errorf("the key value was printed by the step — job logs are readable by anyone who can see the run; output:\n%s", out)
+		}
+	})
+
+	t.Run("a bogus env name fails closed", func(t *testing.T) {
+		tmp := t.TempDir()
+		// Not an environment variable name. Exporting this would either
+		// error deep in the script or, worse, be coerced into setting
+		// something unintended.
+		out, runErr, _ := runRunCorralStepWithStub(t, runStep, tmp, "true", dumpStub(tmp),
+			"MODEL_KEY=k", "MODEL_KEY_ENV=PATH=/tmp/evil")
+		if runErr == nil {
+			t.Errorf("model-key-env must be rejected unless it is a plain environment variable name; step exited 0:\n%s", out)
+		}
+	})
+}
+
+// TestActionPassesRoleModelsOnlyWhenSet: corral routes each ROLE to its own
+// model (--derive-model / --writer-model / --mutant-model / --critic-model),
+// and the action exposed none of them — so the all-Gemini configuration this
+// project's evidence comes from was unreachable through it. A key alone is not
+// enough: with only the key swapped, the model NAMES are still Claude ones
+// pointed at Google's endpoint.
+//
+// Each mirrors the CLI flag exactly, opt-in and omitted-when-empty like
+// --min-kill-rate and --top, so corral keeps ownership of every default.
+func TestActionPassesRoleModelsOnlyWhenSet(t *testing.T) {
+	a := loadActionYAML(t)
+	runStep := findStepContaining(t, a, "certify --repo")
+
+	readFullArgv := func(tmp string) []string {
+		t.Helper()
+		argvBytes, err := os.ReadFile(filepath.Join(tmp, "argv.log"))
+		if err != nil {
+			t.Fatalf("no argv.log written — corral stub was never invoked: %v", err)
+		}
+		content := strings.TrimSuffix(string(argvBytes), "\x00")
+		if content == "" {
+			return nil
+		}
+		return strings.Split(content, "\x00")
+	}
+
+	roles := []struct {
+		input string // action.yml input name
+		env   string // the env var the run step reads it through
+		flag  string // corral's own flag
+		value string
+	}{
+		{"derive-model", "DERIVE_MODEL", "--derive-model", "gemini-3.6-flash"},
+		{"writer-model", "WRITER_MODEL", "--writer-model", "gemini-3.6-flash"},
+		{"mutant-model", "MUTANT_MODEL", "--mutant-model", "gemini-3.6-flash"},
+		{"critic-model", "CRITIC_MODEL", "--critic-model", "off"},
+	}
+
+	for _, r := range roles {
+		t.Run(r.input, func(t *testing.T) {
+			if _, ok := a.Inputs[r.input]; !ok {
+				t.Fatalf("action.yml should declare a %q input — without it corral's own role routing is unreachable through the action", r.input)
+			}
+
+			// The flag must exist and parse on the real command, so this
+			// cannot pass on a flag that only looks plausible in YAML.
+			var out, errb bytes.Buffer
+			if code := runCertifyRepo([]string{
+				"--repo", t.TempDir(), "--dry-run", r.flag, r.value,
+			}, &out, &errb); code != 0 {
+				t.Fatalf("certify --repo rejected %s: exit %d, stderr=%s", r.flag, code, errb.String())
+			}
+
+			t.Run("set", func(t *testing.T) {
+				tmp := t.TempDir()
+				stepOut, runErr, _ := runRunCorralStep(t, runStep, tmp, "true", r.env+"="+r.value)
+				if runErr != nil {
+					t.Fatalf("run-corral step failed: %v\n%s", runErr, stepOut)
+				}
+				full := readFullArgv(tmp)
+				found := false
+				for i, arg := range full {
+					if arg == r.flag && i+1 < len(full) && full[i+1] == r.value {
+						found = true
+					}
+				}
+				if !found {
+					t.Errorf("want %s %s in corral's argv, got: %v", r.flag, r.value, full)
+				}
+			})
+
+			t.Run("unset", func(t *testing.T) {
+				tmp := t.TempDir()
+				stepOut, runErr, _ := runRunCorralStep(t, runStep, tmp, "true", r.env+"=")
+				if runErr != nil {
+					t.Fatalf("run-corral step failed: %v\n%s", runErr, stepOut)
+				}
+				for _, arg := range readFullArgv(tmp) {
+					if arg == r.flag {
+						t.Errorf("%s input was empty; %s must not be passed at all, leaving corral's own default in charge", r.input, r.flag)
+					}
+				}
+			})
+		})
+	}
 }
 
 // sampleRepoReport is the shape printRepoReport actually emits, used by the

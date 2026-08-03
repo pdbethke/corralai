@@ -410,9 +410,58 @@ and the fix belongs in the code, not a caveat in these docs.
 | `test-command` | yes | — | The command that runs your tests, as a single-line invocation (e.g. `go test ./...`, `pytest -k "not slow"`). Quoting is honoured; pipes, `&&`/`\|\|`, redirection and globs are not — see "Inputs never become script text" above. |
 | `diff-base` | no | `""` (falls back to the PR's base ref) | Audit only files changed against this ref. Left empty on a `pull_request` event, the action falls back to `origin/$GITHUB_BASE_REF` (the PR's own base). On any other event (e.g. a push to `main`), there is no base ref to fall back to, so an empty `diff-base` means a whole-repo audit. |
 | `goals` | no | `""` | Optional JSON file of per-file goals. Omitted means goals are derived per file by a model. |
+| `tests` | no | `""` | Optional JSON file mapping repo-relative **source** paths to their test files, consulted before filename convention. Needed whenever your project names tests after behaviour rather than after source files — common in JS/TS, where convention can pair *nothing* and the gate would then have no file to audit. A mapping to a file that does not exist is refused, not silently ignored. |
+| `top` | no | `""` (corral's own default bound, 25) | Audit at most this many of the highest-ranked candidate files. An audit costs roughly (mutants × your suite's **whole** runtime) **per file**, and the file count comes from the PR's diff — a number the author picks, not you. See "What one run costs" below before raising it. |
 | `min-kill-rate` | no | `""` (unset) | Fail the run (exit 1) if **any individual audited file's** kill rate is below this value. Range 0.0-1.0 inclusive; a *minimum*, so a file exactly at the value passes. Opt-in — leave empty to keep the pre-`min-kill-rate` behaviour, where a weak-but-gradable suite still exits 0. See "Failing on a weak kill rate" below. |
 | `model-key` | no | `""` | Provider API key for goal derivation, wired into the run as `ANTHROPIC_API_KEY` — the same environment variable corral's default model backend reads everywhere else (`internal/creds`). Required unless `goals` is supplied. Pass it as `${{ secrets.ANTHROPIC_API_KEY }}`; never write a key inline in the workflow. |
 | `corral-version` | no | `""` (falls back to the action's own ref, `github.action_ref`) | Which `corral` to `go install`, as a version suffix (a tag, branch, or commit). Leave it empty unless you deliberately want a different `corral` release than the action you pinned in `uses:`. |
+
+## Where the report shows up
+
+The run writes corral's report to the job summary — the page you land on when
+you click the check on a PR — as well as to the step's log. It is the report
+**verbatim**, not a rendering of it: the kill rate, the weakest files, and the
+lines that qualify what those numbers mean (`NOT AUDITED`, `DID NOT FINISH`,
+`WRITER FAILED`, `TEST UNSOUND`) are the same bytes corral printed. A second
+renderer would be free to drift from the first, and drift in a summary always
+flatters the run, because the lines that get dropped are the qualifying ones.
+
+This uses `$GITHUB_STEP_SUMMARY`, which needs no `permissions:` block and works
+on pull requests from forks, where a PR-comment token does not exist. Re-runs
+replace the summary rather than stacking up.
+
+Two things worth knowing:
+
+- **The report reaches the summary even when the run fails.** A red X whose
+  reason was discarded is the problem this exists to fix.
+- **The exit status is corral's own, not the reporting's.** GitHub caps a
+  summary at 1MiB and rejects an oversized one outright, so a very long report
+  is cut down — and says where it was cut, in the summary itself. A silently
+  truncated report reads exactly like a short one.
+
+## What one run costs
+
+An audit costs roughly **(mutants × your suite's whole runtime) per audited
+file**. It is not proportional to the size of the diff; it is proportional to
+how long your tests take, multiplied by how many files the PR touched.
+
+Corral's own repo is a worked example: a ~45-second suite puts a single audited
+file in the region of two hours on a 2-core runner. A repo whose suite takes a
+minute, on a ten-file PR, is a job measured in tens of hours — and the API spend
+to match, discovered only once it is already running.
+
+So:
+
+- Set `top` to bound what one PR can cost. The diff already narrows the
+  candidate set; `top` bounds what is left.
+- Scope the workflow with `paths:` so a docs-only PR does not spend an hour
+  printing `NOTHING IN SCOPE`.
+- Reach for `min-kill-rate` only once you have real timings from your own repo.
+  A required check that can take hours is not a merge gate anyone will keep.
+
+`.github/workflows/self-audit.yml` in this repository is exactly this shape —
+non-blocking, `top: "1"`, Go-only paths — and is the honest starting point to
+copy.
 
 ## Failing on a weak kill rate
 

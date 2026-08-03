@@ -4,6 +4,8 @@ package main
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -397,6 +399,17 @@ func TestActionInstallStepFailsClearlyWithoutGo(t *testing.T) {
 // when os/exec.Cmd.Env has a duplicate key.
 func runRunCorralStep(t *testing.T, runStep actionStep, tmp, testCommand string, extraEnv ...string) (out []byte, runErr error, argv []string) {
 	t.Helper()
+	return runRunCorralStepWithStub(t, runStep, tmp, testCommand, "", extraEnv...)
+}
+
+// runRunCorralStepWithStub is runRunCorralStep with control over what the stub
+// `corral` DOES once it has logged its argv. stubTail is appended to the stub
+// script, so a caller can make it print a report on stdout and exit non-zero —
+// which is what the step's own reporting and exit-status handling have to cope
+// with, and what a stub that always exits 0 can never exercise. An empty
+// stubTail keeps the original behaviour (log argv, exit 0).
+func runRunCorralStepWithStub(t *testing.T, runStep actionStep, tmp, testCommand, stubTail string, extraEnv ...string) (out []byte, runErr error, argv []string) {
+	t.Helper()
 	stubDir := filepath.Join(tmp, "stubbin")
 	if err := os.MkdirAll(stubDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -407,7 +420,7 @@ func runRunCorralStep(t *testing.T, runStep actionStep, tmp, testCommand string,
 	// trailing empty argument" from "one trailing empty argument", since
 	// both would just be a trailing newline. NUL cannot appear in argv at
 	// all, so it is an unambiguous separator.
-	stub := "#!/bin/sh\nprintf '%s\\0' \"$@\" > \"" + argvLog + "\"\n"
+	stub := "#!/bin/sh\nprintf '%s\\0' \"$@\" > \"" + argvLog + "\"\n" + stubTail
 	if err := os.WriteFile(filepath.Join(stubDir, "corral"), []byte(stub), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -778,4 +791,303 @@ func TestActionPassesTestsMapOnlyWhenSet(t *testing.T) {
 			}
 		}
 	})
+}
+
+// TestActionPassesTopOnlyWhenSet: an audit costs roughly (mutants × the
+// TARGET's whole suite runtime) PER FILE, so cost scales with how many files
+// the diff touched — a number the PR author picks, not the workflow author.
+// Without a bound, a ten-file PR is a ten-fold job: on a repo whose suite takes
+// a minute, that is a job measured in tens of hours and the API spend to match,
+// discovered only once it is running. `--top` already exists on the CLI (it is
+// named in this action's own reserved-flag list); this exposes it, opt-in and
+// omitted-when-empty like --min-kill-rate, so a workflow can put a ceiling on
+// what a single PR can cost.
+func TestActionPassesTopOnlyWhenSet(t *testing.T) {
+	a := loadActionYAML(t)
+	runStep := findStepContaining(t, a, "certify --repo")
+
+	readFullArgv := func(tmp string) []string {
+		t.Helper()
+		argvBytes, err := os.ReadFile(filepath.Join(tmp, "argv.log"))
+		if err != nil {
+			t.Fatalf("no argv.log written — corral stub was never invoked: %v", err)
+		}
+		content := strings.TrimSuffix(string(argvBytes), "\x00")
+		if content == "" {
+			return nil
+		}
+		return strings.Split(content, "\x00")
+	}
+
+	if _, ok := a.Inputs["top"]; !ok {
+		t.Fatal(`action.yml should declare a "top" input so a workflow can bound what one PR costs`)
+	}
+
+	// Same rule as TestActionNamesTheRecordItProduces: the flag must exist and
+	// parse on the real command, so this cannot pass on a flag that only looks
+	// plausible in YAML.
+	var out, errb bytes.Buffer
+	if code := runCertifyRepo([]string{
+		"--repo", t.TempDir(), "--dry-run", "--top", "3",
+	}, &out, &errb); code != 0 {
+		t.Fatalf("certify --repo rejected --top, the flag the action now passes: exit %d, stderr=%s", code, errb.String())
+	}
+
+	t.Run("set", func(t *testing.T) {
+		tmp := t.TempDir()
+		out, runErr, _ := runRunCorralStep(t, runStep, tmp, "true", "TOP=3")
+		if runErr != nil {
+			t.Fatalf("run-corral step failed: %v\n%s", runErr, out)
+		}
+		full := readFullArgv(tmp)
+		found := false
+		for i, a := range full {
+			if a == "--top" && i+1 < len(full) && full[i+1] == "3" {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("want --top 3 in corral's argv, got: %v", full)
+		}
+	})
+
+	t.Run("unset", func(t *testing.T) {
+		tmp := t.TempDir()
+		out, runErr, _ := runRunCorralStep(t, runStep, tmp, "true", "TOP=")
+		if runErr != nil {
+			t.Fatalf("run-corral step failed: %v\n%s", runErr, out)
+		}
+		full := readFullArgv(tmp)
+		for _, a := range full {
+			if a == "--top" {
+				t.Errorf("top input was empty; --top must not be passed at all (corral keeps its own default), got: %v", full)
+			}
+		}
+	})
+}
+
+// sampleRepoReport is the shape printRepoReport actually emits, used by the
+// step-summary tests below. It is a sample rather than the real renderer's
+// output on purpose: these tests are about the ACTION's handling of whatever
+// corral prints, so they must not start failing when the report's own wording
+// changes.
+const sampleRepoReport = `
+Repo adequacy — acme/widget @ deadbeef
+  kill rate 0.47 over 2 audited file(s) (22% of 9 candidates)
+  weakest files:
+    0.33  internal/pack/pack.go (6 survivor(s), 2 proven missed)
+    0.61  internal/pack/wire.go (3 survivor(s), 0 proven missed)
+`
+
+// stubPrintingReport builds a stub-`corral` tail that prints report on stdout
+// and exits with status.
+func stubPrintingReport(report string, status int) string {
+	return "cat <<'CORRAL_EOF'\n" + report + "CORRAL_EOF\n" + fmt.Sprintf("exit %d\n", status)
+}
+
+// readStepSummary returns the contents of the summary file the step was told
+// to write, or "" if the step never created it.
+func readStepSummary(t *testing.T, path string) string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return ""
+		}
+		t.Fatalf("reading step summary: %v", err)
+	}
+	return string(b)
+}
+
+// TestActionExitStatusSurvivesTheSummaryPipe is the load-bearing test of the
+// whole step-summary feature, and the reason it is written before the feature.
+//
+// The obvious way to capture corral's report for the summary is
+// `corral ... | tee "$report"`. Under bash's default (no pipefail) a pipeline's
+// status is its LAST command's — tee's — which is 0 essentially always. So a
+// --min-kill-rate failure, corral's entire merge gate, would exit 0 and the PR
+// would go green on exactly the change the gate was installed to block. That is
+// a silent no-gate, the failure mode this project has already shipped three
+// times through three different doors, and it is invisible in every green run.
+//
+// The status must therefore be corral's own, whatever the reporting does around
+// it — asserted here for both a failing and a passing corral, because a step
+// that simply propagated "always fail" would satisfy the first half alone.
+func TestActionExitStatusSurvivesTheSummaryPipe(t *testing.T) {
+	a := loadActionYAML(t)
+	runStep := findStepContaining(t, a, "certify --repo")
+
+	t.Run("corral fails", func(t *testing.T) {
+		tmp := t.TempDir()
+		summary := filepath.Join(tmp, "summary.md")
+		out, runErr, _ := runRunCorralStepWithStub(t, runStep, tmp, "true",
+			stubPrintingReport(sampleRepoReport, 7),
+			"GITHUB_STEP_SUMMARY="+summary)
+		if runErr == nil {
+			t.Fatalf("corral exited 7 (e.g. a --min-kill-rate failure) but the step exited 0 — the merge gate is silently disabled. Output:\n%s", out)
+		}
+		var exitErr *exec.ExitError
+		if errors.As(runErr, &exitErr) && exitErr.ExitCode() != 7 {
+			t.Errorf("step should exit with corral's own status 7, got %d — a rewritten status makes corral's exit codes unreadable to the caller. Output:\n%s", exitErr.ExitCode(), out)
+		}
+		// The report must still reach the summary on the failing path: a
+		// red X whose reason was discarded is the exact problem this
+		// feature exists to fix.
+		if got := readStepSummary(t, summary); !strings.Contains(got, "kill rate 0.47") {
+			t.Errorf("corral's report must reach the step summary even when corral fails — that is the run whose reason the reader most needs; summary was:\n%s", got)
+		}
+	})
+
+	t.Run("corral passes", func(t *testing.T) {
+		tmp := t.TempDir()
+		summary := filepath.Join(tmp, "summary.md")
+		out, runErr, _ := runRunCorralStepWithStub(t, runStep, tmp, "true",
+			stubPrintingReport(sampleRepoReport, 0),
+			"GITHUB_STEP_SUMMARY="+summary)
+		if runErr != nil {
+			t.Fatalf("corral exited 0 but the step failed: %v\n%s", runErr, out)
+		}
+	})
+}
+
+// TestActionWritesTheReportToStepSummary: corral's report is the product. Left
+// only on stdout it lands in a collapsed job log nobody opens, so a run that
+// proved a real gap and a run that found nothing look identical from the PR
+// page. The report goes to $GITHUB_STEP_SUMMARY, which needs no `permissions:`
+// block and works on fork PRs, where a PR-comment token does not exist.
+//
+// Asserted verbatim, line for line: printRepoReport carries a dozen branches of
+// deliberately-worded honesty (NOT AUDITED, DID NOT FINISH, WRITER FAILED, TEST
+// UNSOUND). Anything that re-renders or summarises it in the action would be a
+// second renderer free to drift from the first, and the drift would always be
+// in the direction of looking cleaner than the run was.
+func TestActionWritesTheReportToStepSummary(t *testing.T) {
+	a := loadActionYAML(t)
+	runStep := findStepContaining(t, a, "certify --repo")
+
+	tmp := t.TempDir()
+	summary := filepath.Join(tmp, "summary.md")
+	out, runErr, _ := runRunCorralStepWithStub(t, runStep, tmp, "true",
+		stubPrintingReport(sampleRepoReport, 0),
+		"GITHUB_STEP_SUMMARY="+summary)
+	if runErr != nil {
+		t.Fatalf("run-corral step failed: %v\n%s", runErr, out)
+	}
+
+	got := readStepSummary(t, summary)
+	if got == "" {
+		t.Fatal("nothing was written to $GITHUB_STEP_SUMMARY — corral's report reaches only the job log, so the PR page shows a bare pass/fail with no reason")
+	}
+	for _, line := range strings.Split(strings.TrimSpace(sampleRepoReport), "\n") {
+		if !strings.Contains(got, line) {
+			t.Errorf("step summary is missing report line %q — the report must be reproduced verbatim, not re-rendered; summary was:\n%s", line, got)
+		}
+	}
+	// stdout must keep the report too: the job log is what an operator
+	// re-reads when a summary is truncated or the run is inspected via the API.
+	if !strings.Contains(string(out), "kill rate 0.47") {
+		t.Errorf("the report must still reach stdout as well as the summary; step output was:\n%s", out)
+	}
+}
+
+// TestActionSummaryFenceIsNotBrokenByReportContent: the report is preformatted
+// text and has to sit in a code fence to survive markdown rendering (leading
+// spaces in the "weakest files" list are load-bearing). A fixed ``` fence is
+// closed early by any line in the report that itself starts with three
+// backticks — from that point the rest of the report renders as markdown, and
+// the honesty lines quietly lose their formatting or vanish into a heading.
+// Whatever fence is used must be longer than the longest backtick run in the
+// content it wraps.
+func TestActionSummaryFenceIsNotBrokenByReportContent(t *testing.T) {
+	a := loadActionYAML(t)
+	runStep := findStepContaining(t, a, "certify --repo")
+
+	hostile := sampleRepoReport + "```\n  NOT AUDITED: 1 source file(s) could not be paired\n"
+
+	tmp := t.TempDir()
+	summary := filepath.Join(tmp, "summary.md")
+	out, runErr, _ := runRunCorralStepWithStub(t, runStep, tmp, "true",
+		stubPrintingReport(hostile, 0),
+		"GITHUB_STEP_SUMMARY="+summary)
+	if runErr != nil {
+		t.Fatalf("run-corral step failed: %v\n%s", runErr, out)
+	}
+
+	got := readStepSummary(t, summary)
+	if !strings.Contains(got, "NOT AUDITED") {
+		t.Fatalf("the line after an embedded fence was lost from the summary:\n%s", got)
+	}
+	longestInReport := 0
+	for _, run := range regexp.MustCompile("`+").FindAllString(hostile, -1) {
+		if len(run) > longestInReport {
+			longestInReport = len(run)
+		}
+	}
+	fenceOK := false
+	for _, line := range strings.Split(got, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "```") && strings.Trim(trimmed, "`") == "" && len(trimmed) > longestInReport {
+			fenceOK = true
+			break
+		}
+	}
+	if !fenceOK {
+		t.Errorf("summary must wrap the report in a fence longer than the longest backtick run in the report itself (%d backticks), or the report closes the fence early and the rest renders as markdown; summary was:\n%s", longestInReport, got)
+	}
+}
+
+// TestActionSummaryTruncationIsAnnounced: GitHub rejects a step summary over
+// 1MiB outright, so an unbounded write can lose the whole report rather than
+// its tail. Bounding it is right; bounding it SILENTLY is not — a reader cannot
+// tell a short report from a cut-off one, and this action already refuses to
+// silently truncate a multi-line test-command for exactly that reason.
+func TestActionSummaryTruncationIsAnnounced(t *testing.T) {
+	a := loadActionYAML(t)
+	runStep := findStepContaining(t, a, "certify --repo")
+
+	huge := sampleRepoReport + strings.Repeat("    0.10  internal/pack/generated_file.go (9 survivor(s), 1 proven missed)\n", 40000)
+
+	tmp := t.TempDir()
+	summary := filepath.Join(tmp, "summary.md")
+	out, runErr, _ := runRunCorralStepWithStub(t, runStep, tmp, "true",
+		stubPrintingReport(huge, 0),
+		"GITHUB_STEP_SUMMARY="+summary)
+	if runErr != nil {
+		t.Fatalf("run-corral step failed: %v\n%s", runErr, out)
+	}
+
+	got := readStepSummary(t, summary)
+	const limit = 1 << 20
+	if len(got) >= limit {
+		t.Errorf("step summary is %d bytes, at or over GitHub's %d-byte limit — GitHub rejects it and the whole report is lost", len(got), limit)
+	}
+	if !strings.Contains(strings.ToLower(got), "truncat") {
+		t.Errorf("an oversized report was cut down without saying so — a reader cannot distinguish a short report from a cut-off one; summary ended:\n%s", got[max(0, len(got)-400):])
+	}
+	// The head of the report — the verdict line itself — is what must
+	// survive truncation, not just any 1MiB of it.
+	if !strings.Contains(got, "kill rate 0.47") {
+		t.Error("truncation dropped the verdict line; the head of the report must be what survives")
+	}
+}
+
+// TestActionRunsOutsideActionsWithoutAStepSummary: $GITHUB_STEP_SUMMARY is set
+// by the Actions runner and by nothing else. The step is also run by `act`, by
+// self-hosted setups, and by this repo's own tests; an unset variable must not
+// take the audit down with it. Reporting is a side channel — never the reason a
+// gate fails to run.
+func TestActionRunsOutsideActionsWithoutAStepSummary(t *testing.T) {
+	a := loadActionYAML(t)
+	runStep := findStepContaining(t, a, "certify --repo")
+
+	tmp := t.TempDir()
+	out, runErr, _ := runRunCorralStepWithStub(t, runStep, tmp, "true",
+		stubPrintingReport(sampleRepoReport, 0),
+		"GITHUB_STEP_SUMMARY=")
+	if runErr != nil {
+		t.Fatalf("step must survive an unset $GITHUB_STEP_SUMMARY (act, self-hosted, local runs): %v\n%s", runErr, out)
+	}
+	if !strings.Contains(string(out), "kill rate 0.47") {
+		t.Errorf("the report must still reach stdout when there is no summary to write to; got:\n%s", out)
+	}
 }

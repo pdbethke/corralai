@@ -20,6 +20,10 @@ inputs:
     description: "Fail the run if any audited file's kill rate is below this value (0.0-1.0 inclusive, a minimum so a file exactly at the value passes). Applies PER FILE, not to the aggregate. Opt-in: leave empty (the default) to keep today's behaviour, where the run does not fail on a low kill rate."
     required: false
     default: ""
+  top:
+    description: "Audit at most this many of the highest-ranked candidate files, as a ceiling on what one run can cost. An audit costs roughly (mutants × your suite's whole runtime) PER FILE, and the file count comes from the PR's diff — a number the author picks, not you. On a repo whose suite takes a minute, a ten-file PR is a job measured in tens of hours, discovered only once it is running. Leave empty to keep corral's own default bound."
+    required: false
+    default: ""
   model-key:
     description: "Provider API key for goal derivation. Required unless 'goals' is supplied."
     required: false
@@ -66,6 +70,7 @@ runs:
         GOALS: ${{ inputs.goals }}
         TESTS: ${{ inputs.tests }}
         MIN_KILL_RATE: ${{ inputs.min-kill-rate }}
+        TOP: ${{ inputs.top }}
         REPO_OWNER: ${{ github.repository_owner }}
         COMMIT_SHA: ${{ github.sha }}
         TEST_COMMAND: ${{ inputs.test-command }}
@@ -87,6 +92,7 @@ runs:
         [ -n "$GOALS" ] && args+=(--goals "$GOALS")
         [ -n "${TESTS:-}" ] && args+=(--tests "$TESTS")
         [ -n "$MIN_KILL_RATE" ] && args+=(--min-kill-rate "$MIN_KILL_RATE")
+        [ -n "${TOP:-}" ] && args+=(--top "$TOP")
         # $TEST_COMMAND is data, not script: it is split into argv words the
         # way a real shell's own parser would (so "go test ./..." becomes
         # three args, and pytest -k "not slow" keeps "not slow" as one),
@@ -151,4 +157,70 @@ runs:
           echo "::error::test-command has no command to run (the program name is empty or missing). It is required — corral will not silently fall back to a guessed test command." >&2
           exit 1
         fi
-        corral "${args[@]}" -- "${TEST_ARGV[@]}"
+        # corral's report IS the product — the kill rate, the survivors, and
+        # the honesty lines (NOT AUDITED / DID NOT FINISH / WRITER FAILED /
+        # TEST UNSOUND) that say what a number does and does not mean. On a
+        # runner, stdout is a collapsed job log nobody opens, so a run that
+        # proved a real gap and a run that found nothing look identical from
+        # the PR page. Mirror the report into the job summary, where it is the
+        # first thing visible on the run.
+        #
+        # $GITHUB_STEP_SUMMARY rather than a PR comment, deliberately: it needs
+        # no `permissions:` block, it works on fork PRs (where a comment token
+        # does not exist), and re-runs replace it instead of stacking up.
+        #
+        # The report is reproduced VERBATIM. Re-rendering it here would be a
+        # second renderer, free to drift from printRepoReport — and drift in a
+        # summary always flatters the run, because the lines that get lost are
+        # the qualifying ones.
+        report="${RUNNER_TEMP:-/tmp}/corral-report.txt"
+        status=0
+        # `set -o pipefail` is on (top of this script), so the pipeline's
+        # status is corral's, not tee's. Without it the status would be tee's,
+        # which is 0 essentially always: a --min-kill-rate failure — the entire
+        # merge gate — would exit 0 and the PR would go green on exactly the
+        # change the gate was installed to block. `|| status=$?` is what keeps
+        # `set -e` from taking the script down before the summary is written;
+        # the status is re-raised at the end, unchanged.
+        corral "${args[@]}" -- "${TEST_ARGV[@]}" | tee "$report" || status=$?
+
+        # Reporting is a side channel: it must never be the reason an audit
+        # fails. $GITHUB_STEP_SUMMARY is set by the Actions runner and by
+        # nothing else, so it is legitimately absent under `act`, on some
+        # self-hosted setups, and when this script is run directly.
+        if [ -n "${GITHUB_STEP_SUMMARY:-}" ] && [ -f "$report" ]; then
+          # GitHub rejects a summary over 1MiB OUTRIGHT — an unbounded write
+          # loses the whole report, not just its tail. Bound it, keeping the
+          # HEAD (the verdict line is the first thing printed), and say so
+          # where it was cut: a silently truncated report reads exactly like a
+          # short one, and this action already refuses to silently truncate a
+          # multi-line test-command for the same reason.
+          limit=900000
+          size=$(wc -c < "$report")
+          # A fixed ``` fence is closed early by any line in the report that
+          # itself begins with three backticks, after which the remainder
+          # renders as markdown and the preformatted layout (the indentation
+          # of the weakest-files list is load-bearing) is lost. Grow the fence
+          # past the longest backtick run the report actually contains.
+          longest=$( { grep -o '`\+' "$report" || true; } | awk '{ if (length($0) > n) n = length($0) } END { print n+0 }' )
+          fence='```'
+          while [ "${#fence}" -le "$longest" ]; do
+            fence="${fence}\`"
+          done
+          {
+            echo "## Corral — adversarial test audit"
+            echo
+            echo "$fence"
+            head -c "$limit" "$report"
+            # head -c can stop mid-line; without this the closing fence would
+            # be appended to that partial line and never open its own.
+            echo
+            echo "$fence"
+            if [ "$size" -gt "$limit" ]; then
+              echo
+              echo "_Report truncated at ${limit} of ${size} bytes to stay under GitHub's 1MiB step-summary limit. The full report is in this step's log._"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+        fi
+
+        exit "$status"

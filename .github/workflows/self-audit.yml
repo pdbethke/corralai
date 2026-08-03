@@ -99,6 +99,16 @@ jobs:
       - if: steps.key.outputs.have == 'true'
         uses: ./
         with:
+          # Audit with the corral of the commit we CHECKED OUT, not whatever
+          # `@main` resolves to. Left unpinned, `uses: ./` installs corral@main
+          # from the Go module proxy, which caches a branch head for minutes —
+          # so a run started just after a merge silently audits with the
+          # PREVIOUS corral. That is not only a flake: on a pull request the
+          # whole point is to exercise the corral in that PR, and @main is by
+          # definition not it. head.sha is the PR branch's own commit (fork PRs
+          # never reach here — see the job's `if:`); github.sha covers
+          # workflow_dispatch, where it is the branch head.
+          corral-version: ${{ github.event.pull_request.head.sha || github.sha }}
           test-command: "go test ./..."
           # The ceiling on what one PR can cost. corral's own default is 25
           # candidates, which at ~2h each is a job nobody meant to start; the

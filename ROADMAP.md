@@ -153,7 +153,18 @@ Go binary.**
   files a PR actually touched (a three-dot range against the merge base), so a normal
   PR audits the handful of files it changed rather than the whole repo — an
   auditor's-own-time cost the *unbounded* case is deliberately not: roughly 84 suite
-  runs per audited file. `action.yml` wraps this as `pdbethke/corralai@main` (no version tag is cut for it
+  runs per audited file.
+
+  **Measured, 2026-08-03, on this repo: 11m12s for one audited file** (40 mutants,
+  `workspace` substrate, 2-core GitHub runner). The suite-run COUNT above is right;
+  what a cold `go test ./...` costs is not what each of those runs costs, because
+  the build cache is warm after the first — ~8s a run here, not the ~45s a cold
+  suite takes. Price an audit on the repeat-run cost, never the cold one. A
+  diff-scoped PR touching one to three files therefore lands around 11–35 minutes;
+  a whole-repo scan of this repo's 205 candidates would be roughly 37 hours, which
+  is why `top` exists.
+
+  `action.yml` wraps this as `pdbethke/corralai@main` (no version tag is cut for it
   yet — pin a commit SHA if you want immutability); it installs `corral` itself via
   `go install`, using whatever Go toolchain the runner already has (never
   `actions/setup-go`, which would swap out the toolchain the audited project's own
@@ -163,8 +174,30 @@ Go binary.**
   unset, a file that grades at 0.00 still exits 0 (today's behaviour, unchanged); set,
   ANY audited file scoring below it fails the scan (exit 1) — checked per file against
   `reposcan.RepoReport.Weakest`, never the aggregate, so one well-tested file can't mask
-  a weak one. Docs:
-  `docs/corral/github-action.md`.
+  a weak one.
+
+  **Shipped 2026-08-03 (#66–#71), and it now audits this repo.** The run's verdict
+  goes to `$GITHUB_STEP_SUMMARY` *verbatim* — chosen over a PR comment because it
+  needs no `permissions:` block and works on fork PRs — so a red X carries its
+  reason instead of burying it in a collapsed log; corral's own exit status
+  survives the pipe, without which a `--min-kill-rate` failure would have exited 0.
+  `top` bounds what one PR can cost. Role→model routing (`derive`/`writer`/
+  `mutant`/`critic`/`shadow-model`) and **additive** per-provider keys
+  (`gemini-key`/`anthropic-key`/`openai-key`) are exposed, so a genuinely
+  cross-vendor writer/critic pair is expressible — one key structurally forces
+  `critic-model: off`, i.e. disabling corral's own independence check for want of
+  a credential.
+
+  `.github/workflows/self-audit.yml` points corral at corral: non-blocking,
+  `top: "1"`, fork-guarded and `audit`-label-gated so no pull request starts a
+  paid job merely by existing. First execution-proven CI verdict, on `c64deb6`:
+  `cmd/corral/main.go`, kill rate 0.25, 30 survivors, **1 proven missed** — the
+  pool authored a test that killed a survivor by execution. Getting there took
+  four fixes only a real run could surface, including an all-Gemini scan that
+  demanded a Claude key and a self-audit that installed `corral@main` from the
+  module proxy and so graded a *different* binary than the one under review.
+
+  Docs: `docs/corral/github-action.md`.
 - **Coverage pre-flight (`--preflight`, `certify --repo`, Go and Python) — opt-in,
   CLI only.** Test-pairing finds *some* untested files by guessing paired test names;
   it finds nothing in a repo where that guess never lands (most JS/TS projects). The

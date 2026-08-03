@@ -1167,6 +1167,83 @@ func TestActionPassesRoleModelsOnlyWhenSet(t *testing.T) {
 	}
 }
 
+// selfAuditWorkflow is a typed view of .github/workflows/self-audit.yml, enough
+// to inspect what can start a paid audit.
+type selfAuditWorkflow struct {
+	On struct {
+		PullRequest *struct {
+			Types []string `yaml:"types"`
+			Paths []string `yaml:"paths"`
+		} `yaml:"pull_request"`
+		PullRequestTarget *struct{} `yaml:"pull_request_target"`
+		WorkflowDispatch  *struct{} `yaml:"workflow_dispatch"`
+	} `yaml:"on"`
+	Jobs map[string]struct {
+		If string `yaml:"if"`
+	} `yaml:"jobs"`
+}
+
+// TestSelfAuditNeverSpendsOnAStrangersPullRequest guards a MONEY property, not
+// a code one: an audit is hours of runner time and hours of model calls, paid
+// by this repository's owner.
+//
+// GitHub already withholds secrets from fork pull requests, so a fork audit
+// skips today. That is a platform default doing the work silently — nothing in
+// the workflow says it, so nothing stops a later edit from removing it. The
+// specific way it gets removed is reaching for `pull_request_target` because
+// "fork PRs skip": that trigger runs with secrets while checking out the PR's
+// code, which is how a stranger's pull request gets to both spend and READ this
+// repo's API key. The correct answer is that fork PRs should skip.
+//
+// The `audit` label is the second half: opt-in per pull request, so no PR —
+// including ours — starts a two-hour paid job just by existing.
+func TestSelfAuditNeverSpendsOnAStrangersPullRequest(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "self-audit.yml"))
+	if err != nil {
+		t.Fatalf("reading self-audit.yml: %v", err)
+	}
+	var wf selfAuditWorkflow
+	if err := yaml.Unmarshal(b, &wf); err != nil {
+		t.Fatalf("parsing self-audit.yml: %v", err)
+	}
+
+	if wf.On.PullRequestTarget != nil {
+		t.Error("self-audit.yml must never trigger on pull_request_target: it exposes this repo's secrets to code from a fork, so a stranger's PR could both spend and read the API key")
+	}
+
+	job, ok := wf.Jobs["audit"]
+	if !ok {
+		t.Fatal("self-audit.yml has no `audit` job")
+	}
+	if strings.TrimSpace(job.If) == "" {
+		t.Fatal("the audit job has no `if:` — anything that triggers the workflow starts a paid, hours-long run")
+	}
+	// Checked as properties of the condition rather than as an exact string,
+	// so the guard can be rewritten but not dropped.
+	if !strings.Contains(job.If, "head.repo.full_name") || !strings.Contains(job.If, "github.repository") {
+		t.Errorf("the audit job's `if:` must compare the PR's head repo against this repository, so a fork PR cannot spend this repo's money; got: %s", job.If)
+	}
+	if !strings.Contains(job.If, "labels") {
+		t.Errorf("the audit job's `if:` must require an opt-in label, so no pull request starts a paid run merely by existing; got: %s", job.If)
+	}
+
+	// A label opt-in that cannot be applied to an already-open PR is not an
+	// opt-in: without `labeled`, adding the label starts nothing and the only
+	// way to trigger an audit is to push again.
+	if wf.On.PullRequest == nil {
+		t.Fatal("self-audit.yml should still trigger on pull_request")
+	}
+	hasLabeled := false
+	for _, ty := range wf.On.PullRequest.Types {
+		if ty == "labeled" {
+			hasLabeled = true
+		}
+	}
+	if !hasLabeled {
+		t.Errorf("pull_request types must include `labeled`, or applying the opt-in label to an open PR would not start the audit; got: %v", wf.On.PullRequest.Types)
+	}
+}
+
 // sampleRepoReport is the shape printRepoReport actually emits, used by the
 // step-summary tests below. It is a sample rather than the real renderer's
 // output on purpose: these tests are about the ACTION's handling of whatever

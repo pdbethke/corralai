@@ -15,8 +15,18 @@
 # this workflow — not before.
 name: Self-audit
 
+# NEVER pull_request_target. It runs with secrets available to a workflow
+# resolved from the BASE branch while checking out the PR's code — which is how
+# a stranger's pull request gets to spend this repo's API key, and to read it.
+# The `audit` label below would not save us: labels can be applied before the
+# author pushes again. If a future edit is tempted to reach for
+# pull_request_target because fork PRs skip, the correct answer is that fork
+# PRs SHOULD skip.
 on:
   pull_request:
+    # `labeled` is what makes the opt-in below usable: without it, adding the
+    # label to an open PR would not start anything.
+    types: [opened, synchronize, reopened, labeled]
     # Only Go changes can move a kill rate. A docs PR would otherwise spend an
     # hour to print "NOTHING IN SCOPE".
     paths:
@@ -36,6 +46,23 @@ concurrency:
 
 jobs:
   audit:
+    # An audit is a real bill — hours of runner time and hours of model calls —
+    # so it never starts on its own. Two independent conditions, both required:
+    #
+    #   1. The PR comes from a branch in THIS repository, not a fork. GitHub
+    #      already withholds secrets from fork PRs, so a fork audit would skip
+    #      anyway — but that is a platform default doing the work silently, and
+    #      it reads as "we forgot" rather than "we decided". Saying it here
+    #      means a stranger's pull request cannot spend this repo's money, and
+    #      the next person to read the file can see that is deliberate.
+    #
+    #   2. Someone applied the `audit` label. Opt-in per pull request, so no PR
+    #      — including our own — quietly starts a two-hour paid job just by
+    #      existing. `workflow_dispatch` is the manual door for the same thing.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+       contains(github.event.pull_request.labels.*.name, 'audit'))
     runs-on: ubuntu-latest
     # Reporting a verdict is the point; blocking the merge is not (yet). A red
     # X here must not read as "this PR is broken".

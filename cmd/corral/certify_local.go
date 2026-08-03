@@ -635,6 +635,44 @@ func resolveAuditRoles(in localAuditInput, stderr io.Writer) (auditRoles, error)
 	// MODEL_BACKEND is unset we default it to anthropic so FromEnv() builds the
 	// Claude backend the default models expect (rather than the ollama default).
 	backendSel := strings.TrimSpace(os.Getenv("MODEL_BACKEND"))
+	// When MODEL_BACKEND is unset, the backend this run needs is the one its
+	// ASSIGNED MODELS imply — not Claude by assumption. Naming gemini-* models
+	// for every seat has already said which vendor the run uses; requiring
+	// MODEL_BACKEND as well is requiring the operator to say it twice, and the
+	// error when they don't names the WRONG vendor ("export your Claude key"
+	// on an all-Gemini run — found by the first real CI run of the Action).
+	//
+	// Only the unambiguous case is inferred: every seat on one cloud vendor.
+	// A mixed assignment is the cross-vendor critic design and is left to
+	// localChatterFor below; an explicit MODEL_BACKEND is an operator pointing
+	// every seat at one endpoint on purpose and is never overruled.
+	if backendSel == "" {
+		if vendor, model := soleAssignedCloudModel(assign); vendor != "" && vendor != "anthropic" {
+			// ForModel is the single source of truth for which credential a
+			// model needs, and its error already names the right variable —
+			// so this both validates the key and refuses with an actionable
+			// message, before any jail or store is opened.
+			if _, err := agentbackend.ForModel(model); err != nil {
+				return r, auditUsageErr("%v", err)
+			}
+			backendSel = backendForVendor(vendor)
+			if err := os.Setenv("MODEL_BACKEND", backendSel); err != nil {
+				return r, auditErr("selecting %s backend: %v", backendSel, err)
+			}
+			// The challenger seat is excluded from the inference above (it
+			// never gates a verdict), but it still runs and still needs a
+			// credential — and it carries a CLAUDE default, so an otherwise
+			// all-Gemini scan really does contain an Anthropic seat. Refuse
+			// here naming THAT seat: the old message said "export your Claude
+			// key" about a run with no Claude in it anywhere the operator
+			// could see, which describes a configuration they never chose.
+			if sm := strings.TrimSpace(assign[advpool.RoleMutantGeneratorShadow]); sm != "" && agentbackend.VendorOf(sm) != vendor {
+				if _, err := agentbackend.ForModel(sm); err != nil {
+					return r, auditUsageErr("the challenger seat (--shadow-model) is %q, a different vendor from this run's graded %s seats, and %v. It only records a comparison and never gates the verdict — pass --shadow-model off to drop it, or give it a %s model", sm, vendor, err, vendor)
+				}
+			}
+		}
+	}
 	if onDefaultClaudePath() {
 		if agentbackend.Secret("ANTHROPIC_API_KEY") == "" {
 			return r, auditUsageErr("no $ANTHROPIC_API_KEY set — export your Claude key, or select another provider with MODEL_BACKEND + its key")

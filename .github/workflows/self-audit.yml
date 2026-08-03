@@ -128,3 +128,8 @@ jobs:
           # this stays on the measured configuration until there is a reason
           # and a measurement to move it.
           critic-model: "off"
+          # The challenger seat defaults to a CLAUDE model and is ON by
+          # default, so without this an "all-Gemini" run still contains an
+          # Anthropic seat and refuses for want of a key it was never given.
+          # It only records a comparison and never gates the verdict.
+          shadow-model: "off"

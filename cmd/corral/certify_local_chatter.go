@@ -23,6 +23,68 @@ func onDefaultClaudePath() bool {
 	return b == "" || b == "anthropic" || b == "claude"
 }
 
+// backendForVendor maps agentbackend.VendorOf's answer onto the MODEL_BACKEND
+// label FromEnv switches on. They are deliberately not the same vocabulary —
+// VendorOf says who makes the model ("google"), MODEL_BACKEND names the
+// backend implementation ("gemini") — so the translation lives in exactly one
+// place rather than being re-guessed per caller.
+func backendForVendor(vendor string) string {
+	switch vendor {
+	case "google":
+		return "gemini"
+	case "openai":
+		return "openai"
+	case "anthropic":
+		return "anthropic"
+	default:
+		return ""
+	}
+}
+
+// soleAssignedCloudModel reports the single cloud vendor every assigned seat
+// uses, plus one model that names it — or "", "" when the seats span more than
+// one vendor, or none resolves to a cloud vendor at all.
+//
+// "More than one vendor" is deliberately left alone: that is the cross-vendor
+// critic design (Claude writer + Gemini critic), which localChatterFor already
+// routes per-role from the base backend. Only the unambiguous case — every
+// seat on one vendor — is safe to infer a whole-run backend from.
+// Only the GRADED seats are considered. The challenger seat
+// (RoleMutantGeneratorShadow) is a measurement seat that never gates a verdict
+// and carries a Claude default, so letting it veto the inference would mean an
+// all-Gemini scan could never infer anything. It still needs its own credential
+// — resolveAuditRoles checks it separately so the error can name that seat
+// rather than blaming the whole run.
+func soleAssignedCloudModel(assign advpool.RoleAssignment) (vendor, model string) {
+	for _, role := range []string{
+		advpool.RoleMutantGenerator,
+		advpool.RoleTestWriter,
+		advpool.RoleTestCritic,
+	} {
+		m := strings.TrimSpace(assign[role])
+		// "off" is a disabled seat (the critic), not a model, and an empty
+		// assignment never reached a default. Neither says anything about
+		// which vendor the run needs.
+		if m == "" || m == "off" {
+			continue
+		}
+		v := agentbackend.VendorOf(m)
+		if v == "" {
+			// A local/ollama model name. Inferring a cloud backend from a set
+			// that includes one would point a local seat at a cloud endpoint.
+			return "", ""
+		}
+		if vendor == "" {
+			vendor, model = v, m
+			continue
+		}
+		if v != vendor {
+			return "", ""
+		}
+	}
+	return vendor, model
+}
+
 // localChatterFor builds the role→backend router for a real run: the base
 // backend from FromEnv() (MODEL_BACKEND-selected), switched to each role's
 // assigned model via WithModel when the backend supports it. A single ANTHROPIC

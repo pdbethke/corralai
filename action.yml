@@ -56,6 +56,10 @@ inputs:
     description: "Model for the mutant-generator role. Leave empty for corral's default."
     required: false
     default: ""
+  shadow-model:
+    description: "Challenger model that attacks every region a SECOND time, recorded for comparison and NEVER gating the verdict. Its default is a CLAUDE model and it is ON by default, so an otherwise all-Gemini (or all-OpenAI) run still contains an Anthropic seat and still needs that key: set 'off' to drop it, or name a model on the same vendor as the rest of the run."
+    required: false
+    default: ""
   critic-model:
     description: "Model for the test-critic role, which must DIFFER from the writer's. 'off' disables the critic entirely — it is advisory and never gates the verdict, so a single-vendor run with only one usable model can drop it. Leave empty for corral's default."
     required: false
@@ -106,6 +110,7 @@ runs:
         WRITER_MODEL: ${{ inputs.writer-model }}
         MUTANT_MODEL: ${{ inputs.mutant-model }}
         CRITIC_MODEL: ${{ inputs.critic-model }}
+        SHADOW_MODEL: ${{ inputs.shadow-model }}
         DIFF_BASE: ${{ inputs.diff-base }}
         GOALS: ${{ inputs.goals }}
         TESTS: ${{ inputs.tests }}
@@ -205,6 +210,7 @@ runs:
         [ -n "${WRITER_MODEL:-}" ] && args+=(--writer-model "$WRITER_MODEL")
         [ -n "${MUTANT_MODEL:-}" ] && args+=(--mutant-model "$MUTANT_MODEL")
         [ -n "${CRITIC_MODEL:-}" ] && args+=(--critic-model "$CRITIC_MODEL")
+        [ -n "${SHADOW_MODEL:-}" ] && args+=(--shadow-model "$SHADOW_MODEL")
         # $TEST_COMMAND is data, not script: it is split into argv words the
         # way a real shell's own parser would (so "go test ./..." becomes
         # three args, and pytest -k "not slow" keeps "not slow" as one),

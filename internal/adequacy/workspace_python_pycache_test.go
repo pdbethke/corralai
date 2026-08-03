@@ -5,7 +5,6 @@ package adequacy_test
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -33,15 +32,27 @@ import (
 // what "same mtime, same size" means to CPython's cache key without
 // depending on how fast the test process happens to run.
 func TestWorkspaceRunnerPythonPycacheStaleness(t *testing.T) {
-	if _, err := exec.LookPath("python3"); err != nil {
-		if _, err2 := exec.LookPath("python"); err2 != nil {
-			t.Skip("no python3/python on PATH on this host — cannot verify pycache handling")
-		}
-	}
-
 	p, ok := lang.ByName("python")
 	if !ok {
 		t.Fatal("python plugin not registered")
+	}
+	// Guard with the plugin's OWN preflight rather than a hand-rolled probe.
+	// This test grades THROUGH the python plugin, so "can this host run it"
+	// has exactly one correct answer and the plugin already owns it —
+	// python3 (or python) present AND pytest importable under it.
+	//
+	// The previous guard checked only for an interpreter. Every GitHub runner
+	// has python3; none has pytest by default. So on a bare runner this test
+	// FAILED rather than skipping — and that failure is precisely what made
+	// corral's first CI self-audit of its own repo report `COULD-NOT-GRADE …
+	// ungradable: 1 (baseline-failed)`: the suite under audit could not pass
+	// in a clean environment, so nothing could be graded against it.
+	//
+	// Skipping (not failing) is the established shape here: a missing
+	// toolchain makes a language test prove nothing, and deploy.yml's
+	// `-v` skip census exists so that a skip is never mistaken for a pass.
+	if err := p.Preflight(nil); err != nil {
+		t.Skipf("python toolchain cannot run this test on this host (%v) — this test is about __pycache__ handling, not about provisioning", err)
 	}
 
 	const original = "def add(a, b):\n    return a + b\n"

@@ -215,8 +215,8 @@ func renderTestWriterRepairing(rs RunSpec, sigs []repoindex.Signature, survivors
 		// the way ImportNote's doc warns about: the model obeys the stale half.
 		fileFact += fmt.Sprintf(" Reference or import the code under test by that exact path (%q) — not by its bare base name, and not by any other name. This overrides any same-directory example shown above.", rel)
 	}
-	named := fmt.Sprintf("%s Your test may share the package/namespace with the developer's OWN tests, so give your test function(s) and any helpers UNIQUE names — never redeclare an identifier the existing suite may already define.\n\n%s%s",
-		fileFact, importNote, goal)
+	named := fmt.Sprintf("%s Your test may share the package/namespace with the developer's OWN tests, so give your test function(s) and any helpers UNIQUE names — never redeclare an identifier the existing suite may already define.\n\n%s%s%s",
+		fileFact, harnessExemplar(rs), importNote, goal)
 	if strings.TrimSpace(cleanFailure) != "" {
 		// A DIFFERENT failure from a compile error, and it must not be worded
 		// as one: this test BUILT and RAN, and then failed against the
@@ -235,7 +235,7 @@ func renderTestWriterRepairing(rs RunSpec, sigs []repoindex.Signature, survivors
 	if strings.TrimSpace(compileErr) != "" {
 		named = fmt.Sprintf("%s\n\n--- YOUR PREVIOUS ATTEMPT DID NOT COMPILE ---\nYou wrote:\n%s\n\nThe compiler reported:\n%s\n\nReturn a corrected FULL test file that compiles cleanly. Fix exactly what the compiler flagged; if it is a redeclared/duplicate identifier, rename yours to something unique.", named, prevTest, strings.TrimSpace(compileErr))
 	}
-	system, user := testgen.WriteTestPrompt(p.TestWriterSystem(), named, rs.Code, sigs)
+	system, user := testgen.WriteTestPrompt(harnessOverride(p.TestWriterSystem(), rs), named, rs.Code, sigs)
 	return joinPrompt(system, user)
 }
 
@@ -476,4 +476,75 @@ func roleTitle(role string) string {
 	default:
 		return role
 	}
+}
+
+// harnessExemplarLimit bounds how much of the dev's test file is quoted into
+// the writer's instruction. The point is to show the harness and the import
+// style, which live in the first lines; a 3000-line suite would otherwise
+// crowd out the survivors the writer is actually being asked to kill.
+const harnessExemplarLimit = 6000
+
+// harnessExemplar shows the test-writer the developer's OWN test file as the
+// authority on how this project's tests are written.
+//
+// Each language plugin encodes exactly one harness — tsPlugin.TestCmd is
+// `node --experimental-strip-types --test`, so the writer authored
+// `import { test } from 'node:test'` against a project that runs vitest. The
+// test compiled, was overlaid into the project, and then did not run at all:
+// the survivors were real and the authored test may well have been correct,
+// but nothing could be proven and the verdict reported proven_missed 0. The
+// same mismatch is waiting in Python (pytest vs unittest) and Ruby (rspec vs
+// minitest): a plugin picks one harness, a real project picks its own.
+//
+// Detecting the framework from the test command or package.json was the
+// alternative. This is better: the dev's test file is ground truth that corral
+// already holds — it shows the harness, the import style, the assertion
+// idiom and the project's own conventions at once, with nothing to keep in
+// sync as ecosystems change. It is quoted as an example to MATCH, never as
+// something to edit; the writer's output is a separate new file.
+//
+// Returns "" when there is no dev test to show, so the instruction is simply
+// unchanged rather than carrying an empty, confusing block.
+func harnessExemplar(rs RunSpec) string {
+	code := strings.TrimSpace(rs.DevTestCode)
+	if code == "" {
+		return ""
+	}
+	truncated := ""
+	if len(code) > harnessExemplarLimit {
+		code = code[:harnessExemplarLimit]
+		truncated = "\n… (truncated — the harness and import style above are what matter)"
+	}
+	path := rs.DevTestPath
+	if path == "" {
+		path = "the project's existing test file"
+	}
+	return fmt.Sprintf("THE PROJECT'S OWN TEST FILE (%s) IS SHOWN BELOW AS AN EXAMPLE TO MATCH. Use the SAME test framework, the same import style and the same assertion idiom it uses — that harness is what this project actually runs, and a test written for a different framework will not execute here even if it compiles. Do NOT edit or reproduce this file; write your own new test file in its style.\n\n--- EXISTING TESTS (%s) ---\n%s%s\n--- END EXISTING TESTS ---\n\n",
+		path, path, code, truncated)
+}
+
+// harnessOverride appends an explicit precedence rule to the test-writer's
+// SYSTEM prompt when the project has tests of its own to copy the style of.
+//
+// Every plugin's TestWriterSystem pins one harness, because in single-file mode
+// corral owns the harness and pinning it is correct. tsPlugin's says "using the
+// builtin node:test runner", names the exact imports, and adds "Builtin modules
+// only. No external packages" — which does not merely fail to suggest vitest,
+// it FORBIDS it. Showing the project's own vitest tests in the task was not
+// enough: the model obeyed the system prompt and wrote node:test anyway, the
+// authored test never ran in the project's runner, and proven_missed stayed 0
+// with real survivors on the table.
+//
+// So the override is stated as a precedence rule rather than left implicit. A
+// prompt that contains two contradictory instructions and no way to rank them
+// fails exactly the way ImportNote's doc comment warns about — the model obeys
+// the stale half. Here the ranking is explicit and last.
+//
+// Returns system unchanged when there is no project harness to defer to, which
+// keeps single-file mode exactly as it was.
+func harnessOverride(system string, rs RunSpec) string {
+	if strings.TrimSpace(rs.DevTestCode) == "" {
+		return system
+	}
+	return system + "\n\nOVERRIDE — THE PROJECT'S OWN TEST HARNESS WINS. The task below shows this project's existing test file. Use ITS test framework, ITS import style and ITS assertion idiom, even where that contradicts the instructions above: ignore any rule above that names a specific runner, mandates particular imports, or restricts you to builtin modules only. Importing the framework that existing file imports is REQUIRED and permitted. A test written for a different runner will not execute in this project, so it proves nothing no matter how correct it is."
 }

@@ -407,3 +407,103 @@ func TestCompileErrorMessage(t *testing.T) {
 		t.Fatalf("empty CompileError = %q, want bare message", got)
 	}
 }
+
+// TestHarnessExemplarShowsTheProjectsOwnTests pins the fix for the last thing
+// keeping proven_missed at 0 on a real JS/TS project. Each plugin encodes ONE
+// harness — tsPlugin.TestCmd is `node --test` — so the writer authored
+// `import { test } from 'node:test'` against a project running vitest. The test
+// compiled, was overlaid, and then never executed: real survivors, a possibly
+// correct test, and nothing provable.
+//
+// The dev's own test file is ground truth corral already holds, and it carries
+// the framework, the import style and the assertion idiom at once.
+func TestHarnessExemplarShowsTheProjectsOwnTests(t *testing.T) {
+	got := harnessExemplar(RunSpec{
+		DevTestPath: "src/client/__tests__/ApiError.test.ts",
+		DevTestCode: "import { describe, it, expect } from 'vitest';\ndescribe('ApiError', () => {});",
+	})
+	for _, want := range []string{
+		"src/client/__tests__/ApiError.test.ts",
+		"vitest",
+		"SAME test framework",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected %q in the exemplar, got:\n%s", want, got)
+		}
+	}
+	if !strings.Contains(got, "Do NOT edit or reproduce this file") {
+		t.Fatal("the exemplar must be framed as a style to match, never as a file to edit")
+	}
+}
+
+// TestHarnessExemplarEmptyWithoutDevTests: with no dev test to show, the
+// instruction must be left unchanged rather than carrying an empty block that
+// reads as "the project has no conventions".
+func TestHarnessExemplarEmptyWithoutDevTests(t *testing.T) {
+	if got := harnessExemplar(RunSpec{DevTestPath: "x_test.go", DevTestCode: "   \n "}); got != "" {
+		t.Fatalf("expected no exemplar without dev tests, got %q", got)
+	}
+}
+
+// TestHarnessExemplarTruncatesHugeSuites: the harness and import style live in
+// the first lines. A very large suite must not crowd out the survivors the
+// writer is actually being asked to kill.
+func TestHarnessExemplarTruncatesHugeSuites(t *testing.T) {
+	got := harnessExemplar(RunSpec{
+		DevTestPath: "big_test.py",
+		DevTestCode: "import pytest\n" + strings.Repeat("x", harnessExemplarLimit*2),
+	})
+	if len(got) > harnessExemplarLimit+2000 {
+		t.Fatalf("exemplar not truncated: %d bytes", len(got))
+	}
+	if !strings.Contains(got, "truncated") {
+		t.Fatal("truncation must be visible, not silent")
+	}
+	if !strings.Contains(got, "import pytest") {
+		t.Fatal("the head of the file — where the harness is — must survive truncation")
+	}
+}
+
+// TestTestWriterPromptCarriesTheExemplar guards the wiring, not just the
+// helper: the exemplar has to actually reach the rendered instruction.
+func TestTestWriterPromptCarriesTheExemplar(t *testing.T) {
+	got := renderTestWriter(RunSpec{
+		Lang: "typescript", Goal: "g", CodePath: "src/a.ts", Code: "export const a = 1;",
+		DevTestPath: "src/__tests__/a.test.ts",
+		DevTestCode: "import { expect, test } from 'vitest';",
+	}, nil, nil)
+	if !strings.Contains(got, "vitest") {
+		t.Fatalf("the writer's instruction must show the project's harness:\n%s", got)
+	}
+}
+
+// TestHarnessOverrideRanksTheProjectAboveThePlugin pins the precedence rule.
+// Showing the project's tests in the TASK was not enough on its own: tsPlugin's
+// system prompt names node:test AND says "Builtin modules only. No external
+// packages", so the model kept writing node:test for a vitest project and the
+// authored test never ran. Two contradictory instructions with no stated
+// ranking is the documented failure mode; this states the ranking.
+func TestHarnessOverrideRanksTheProjectAboveThePlugin(t *testing.T) {
+	base := "You are a TEST-WRITER. Use the builtin node:test runner. Builtin modules only. No external packages."
+	got := harnessOverride(base, RunSpec{DevTestCode: "import { test } from 'vitest';"})
+	if !strings.HasPrefix(got, base) {
+		t.Fatal("the plugin's own system prompt must be preserved, not rewritten")
+	}
+	for _, want := range []string{"OVERRIDE", "even where that contradicts", "builtin modules only"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected %q in the override, got:\n%s", want, got)
+		}
+	}
+	if strings.Index(got, "OVERRIDE") < strings.Index(got, "Builtin modules only") {
+		t.Fatal("the override must come LAST, after the rule it supersedes")
+	}
+}
+
+// TestHarnessOverrideNoopWithoutProjectTests: single-file mode is unchanged.
+// There corral genuinely owns the harness and the plugin's pin is correct.
+func TestHarnessOverrideNoopWithoutProjectTests(t *testing.T) {
+	base := "You are a TEST-WRITER. Use node:test."
+	if got := harnessOverride(base, RunSpec{}); got != base {
+		t.Fatalf("system prompt must be untouched with no project tests, got:\n%s", got)
+	}
+}

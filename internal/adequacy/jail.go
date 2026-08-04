@@ -124,7 +124,17 @@ func (j bwrapJail) resolveBinds(dir string) ([]sandbox.Bind, error) {
 		if fi.Mode()&os.ModeSymlink != 0 {
 			return nil, fmt.Errorf("adequacy: refusing to bind %q: dependency directory is a symlink", b.Host)
 		}
-		roBinds = append(roBinds, sandbox.Bind{Host: b.Host, Target: filepath.Join(dir, filepath.FromSlash(b.Rel))})
+		// PerEntry: mount each top-level entry rather than the whole tree, so
+		// the dependency directory itself stays writable. Toolchains write
+		// caches inside their dep dir as a matter of course (node_modules/.vite,
+		// node_modules/.cache), and a whole-tree read-only mount turns that into
+		// an EROFS that surfaces as "the baseline failed" on a healthy project.
+		// Nothing is copied either way — this is the same mounts, one level down.
+		roBinds = append(roBinds, sandbox.Bind{
+			Host:     b.Host,
+			Target:   filepath.Join(dir, filepath.FromSlash(b.Rel)),
+			PerEntry: true,
+		})
 	}
 	return roBinds, nil
 }
@@ -249,6 +259,7 @@ func (j bwrapJail) runInJail(ctx context.Context, files map[string]string, cmd [
 		Network:       false,
 		Timeout:       j.timeout,
 		ReadOnlyBinds: roBinds,
+		Env:           envWithDepBinPaths(sandbox.MinimalEnv(), roBinds),
 		MaxOutput:     j.maxOutput, // 0 => sandbox.Run's own 16 KiB default
 	})
 	if err != nil {
@@ -294,4 +305,45 @@ func (j bwrapJail) Enumerate(ctx context.Context, files map[string]string, cmd [
 		return "", err
 	}
 	return res.Output, nil
+}
+
+// envWithDepBinPaths prepends each bound dependency directory's `.bin` to PATH
+// inside the jail.
+//
+// The host's PATH is useless here: a developer runs `tsc` or `vitest` because
+// their shell resolves it through ./node_modules/.bin in the REPO, and that
+// absolute path does not exist inside the jail, whose workspace is a fresh temp
+// directory. Without this, a language plugin's own compile check
+// (`tsc --noEmit`) dies with "tsc: not found" — so the test-writer can never
+// author a compiling test, and every survivor stays unproven no matter how good
+// the model was. The audit still grades, and quietly reports proven_missed 0.
+//
+// Only `.bin` under an actual dependency bind is added, and only paths, never
+// the host's own PATH entries: nothing on the host becomes reachable that the
+// binds did not already make reachable.
+func envWithDepBinPaths(env []string, binds []sandbox.Bind) []string {
+	var prefix []string
+	for _, b := range binds {
+		if filepath.Base(b.Target) != "node_modules" {
+			continue
+		}
+		prefix = append(prefix, filepath.Join(b.Target, ".bin"))
+	}
+	if len(prefix) == 0 {
+		return env
+	}
+	out := make([]string, 0, len(env))
+	found := false
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "PATH=") {
+			found = true
+			out = append(out, "PATH="+strings.Join(prefix, ":")+":"+strings.TrimPrefix(kv, "PATH="))
+			continue
+		}
+		out = append(out, kv)
+	}
+	if !found {
+		out = append(out, "PATH="+strings.Join(prefix, ":"))
+	}
+	return out
 }

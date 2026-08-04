@@ -20,7 +20,14 @@ func TestTypeScriptPlugin(t *testing.T) {
 	if got := p.TestCmd(); !reflect.DeepEqual(got, []string{"node", "--experimental-strip-types", "--test"}) {
 		t.Fatalf("TestCmd = %v", got)
 	}
-	if got := p.CompileCheck("foo.ts", "foo.test.ts"); !reflect.DeepEqual(got, [][]string{{"tsc", "--noEmit", "-p", "tsconfig.json"}}) {
+	// The compile check is SCOPED to the audited file and its test. It used to
+	// be project-mode (`-p tsconfig.json`), which is correct only in
+	// single-file mode where our scaffold is the only tsconfig — against a real
+	// repo the project's own config governs and any pre-existing error anywhere
+	// fails every authored test. See TestTSCompileCheckIsScopedNotProjectWide.
+	if got := p.CompileCheck("foo.ts", "foo.test.ts"); len(got) != 1 ||
+		!reflect.DeepEqual(got[0][:2], []string{"tsc", "--noEmit"}) ||
+		got[0][len(got[0])-2] != "foo.ts" || got[0][len(got[0])-1] != "foo.test.ts" {
 		t.Fatalf("CompileCheck = %v", got)
 	}
 	sc := p.Scaffold()
@@ -87,5 +94,39 @@ func TestTypeScriptTestPathsOrder(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestTSCompileCheckIsScopedNotProjectWide pins the fix for a compile gate that
+// could never pass on a real repository. Project mode (`-p tsconfig.json`) uses
+// the PROJECT's tsconfig under --repo-dir, so any pre-existing type error
+// anywhere in the repo fails the check — and the test-writer's authored test is
+// reported as non-compiling no matter how correct it is, leaving every survivor
+// unproven while the run still grades and looks healthy.
+//
+// Same defect, and same fix, as scoping `go vet` to the audited package.
+func TestTSCompileCheckIsScopedNotProjectWide(t *testing.T) {
+	cmds := tsPlugin{}.CompileCheck("src/client/ApiError.ts", "src/client/__tests__/ApiError.test.ts")
+	if len(cmds) != 1 {
+		t.Fatalf("expected a single command, got %v", cmds)
+	}
+	got := strings.Join(cmds[0], " ")
+	if strings.Contains(got, "-p") || strings.Contains(got, "tsconfig.json") {
+		t.Fatalf("compile check must not run project-wide: %q", got)
+	}
+	for _, want := range []string{"src/client/ApiError.ts", "src/client/__tests__/ApiError.test.ts", "--noEmit", "--strict"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected %q in the scoped check, got %q", want, got)
+		}
+	}
+}
+
+// TestTSCompileCheckNoDuplicateWhenTestIsTheCode guards the single-file shape,
+// where codePath and testPath can be the same file: naming it twice makes tsc
+// error on a duplicate input rather than type-check it.
+func TestTSCompileCheckNoDuplicateWhenTestIsTheCode(t *testing.T) {
+	got := strings.Join(tsPlugin{}.CompileCheck("a.ts", "a.ts")[0], " ")
+	if strings.Count(got, "a.ts") != 1 {
+		t.Fatalf("the same path must be named once, got %q", got)
 	}
 }

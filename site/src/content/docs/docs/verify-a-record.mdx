@@ -22,6 +22,12 @@ corral certify verify record-19.json \
 
 No API key. No network after the download. Nothing is sent anywhere.
 
+**Use v0.3.4 or later.** Every earlier release — including v0.3.3 — verified the
+statement embedded in the signature but never checked it against the readable
+copy in the file, so a hand-edited record still printed `verified`. We found
+that while preparing this page. If you already have an older corral, re-run the
+`go install` line above.
+
 ## What each record is
 
 | record | library | commit | herd |

@@ -767,7 +767,7 @@ self-host it. The one restriction that matters: you may **not** provide Corralai
 third parties as a hosted or managed service.
 
 Want to run it as a service anyway? A **commercial license** is available — contact
-pdbethke@gmail.com.
+licensing@corralai.dev.
 
 Contributions are welcome under a one-time [CLA](CLA.md); see
 [CONTRIBUTING.md](CONTRIBUTING.md).

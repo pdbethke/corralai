@@ -25,7 +25,11 @@ is the honest version: what it can't do yet, and what's next.
   brain, requiring the actual check to pass — not a self-report — before
   branch protection lets a PR merge.
 - **Multi-model, multi-language** (Go, Python, Ruby, JS, TS), decorrelation
-  enforced by construction, key-free on a local 7B if you want it.
+  enforced by construction — each role can be pointed at a different *vendor* —
+  key-free on a local 7B if you want it. Coverage across those five is uneven
+  and stated plainly: Go and Python are exercised hardest, while TypeScript,
+  JavaScript and Ruby each rest on a single third-party repository so far. The
+  evidence table is in the README.
 - The **jail** (`bwrap`/container/`sandbox-exec`), the **human gate** on
   admin actions and merges, and a fully **attributed action ledger**.
 - The **learning loop** (findings → human-approved skills), **shared memory /

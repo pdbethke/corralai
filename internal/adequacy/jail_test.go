@@ -343,3 +343,58 @@ func TestEnvWithDepBinPathsIgnoresNonDepBinds(t *testing.T) {
 		t.Fatalf("PATH must be untouched with no node_modules bind, got %v", got)
 	}
 }
+
+// TestShellSplitRoundTripsShellJoin is the property that matters: an argv
+// flattened into RunSpec.TestCmd must come back out unchanged.
+//
+// A plain strings.Join + strings.Fields is NOT reversible, and the failure is
+// silent. A Ruby one-liner passed as a single -e argument came back cut at its
+// first comma and was reported as the project's own syntax error.
+func TestShellSplitRoundTripsShellJoin(t *testing.T) {
+	for _, argv := range [][]string{
+		{"go", "test", "./..."},
+		{"rspec", "spec/chunky_png/color_spec.rb"},
+		{"node", "./node_modules/mocha/bin/mocha.js", "--reporter", "dot", "test*.js"},
+		{"go", "test", "-run", "^Foo$|^Bar"},
+		{"ruby", "-e", `Dir["test/*.rb"].each { |f| require File.expand_path(f) }`},
+		{"pytest", "-k", "not slow and not network"},
+		{"npx", "jest", "--testPathPattern=src/a b/c"},
+	} {
+		got := ShellSplit(ShellJoin(argv))
+		if len(got) != len(argv) {
+			t.Fatalf("argv %q: round-trip changed arity: %q", argv, got)
+		}
+		for i := range argv {
+			if got[i] != argv[i] {
+				t.Fatalf("argv %q: element %d became %q", argv, i, got[i])
+			}
+		}
+	}
+}
+
+// TestShellSplitMatchesFieldsOnSimpleCommands: every command already stored
+// without quoting must parse exactly as strings.Fields parsed it, or this
+// change would silently alter existing runs.
+func TestShellSplitMatchesFieldsOnSimpleCommands(t *testing.T) {
+	for _, s := range []string{"go test ./...", "  pytest   -q  ", "npm test", ""} {
+		got, want := ShellSplit(s), strings.Fields(s)
+		if len(got) != len(want) {
+			t.Fatalf("%q: got %q want %q", s, got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("%q: element %d got %q want %q", s, i, got[i], want[i])
+			}
+		}
+	}
+}
+
+// TestShellSplitUnterminatedQuoteDoesNotLoseInput: a malformed command must not
+// silently drop its tail. Running it and reporting the runner's own complaint
+// beats a parse error from us.
+func TestShellSplitUnterminatedQuoteDoesNotLoseInput(t *testing.T) {
+	got := ShellSplit(`ruby -e 'puts 1`)
+	if len(got) != 3 || got[2] != "puts 1" {
+		t.Fatalf("unterminated quote lost input: %q", got)
+	}
+}

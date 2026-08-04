@@ -864,7 +864,12 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 		Repo: repo, Commit: commit, Goal: strings.TrimSpace(in.goal),
 		CodePath: codeKey, Code: string(code),
 		DevTestPath: devTestKey, DevTestCode: string(devTest),
-		TestCmd:     strings.Join(in.checkArgv, " "),
+		// Quoted, not space-joined: TestCmd is a STRING that gets re-split
+		// downstream, and a plain Join is not reversible — an argument
+		// containing a space (an inline -e script, --filter="a b") comes back
+		// as several arguments and the command that runs is not the one the
+		// operator typed. Pairs with adequacy.ShellSplit.
+		TestCmd:     adequacy.ShellJoin(in.checkArgv),
 		NMutants:    n,
 		Lang:        plug.Name(),
 		MaxShards:   resolveMaxShards(in.maxShards),

@@ -156,11 +156,13 @@ slow"`), not a shell one-liner that chains multiple commands.
     model-key: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
-**There is no `v1` tag.** The action ships on `main`; the repo's cut tags
-(`v0.1.0`, `v0.2.0`) predate it, so no released tag contains an `action.yml`.
-Use `@main`, or pin the commit SHA you reviewed (`pdbethke/corralai@<sha>`) if
-you want an immutable reference. This document will name a version tag when one
-is actually cut, and not before.
+**There is no `v1` tag, but there are pinnable release tags.** `v0.1.0` and
+`v0.2.0` predate the action and carry no `action.yml`; **`v0.3.0` and later do**
+(`v0.3.2` is current). Prefer `pdbethke/corralai@v0.3.2` over `@main` — pinning
+a tag means a push to `main` cannot change what runs in your CI. Pin the commit
+SHA you reviewed (`pdbethke/corralai@<sha>`) if you want an immutable reference
+that a re-tag also cannot move. `@main` still works and tracks the newest
+action.
 
 That's the whole workflow — you don't install `corral` yourself. The one
 requirement is a `go` binary on the runner's `PATH`; GitHub-hosted runners
@@ -512,10 +514,16 @@ An audit costs roughly **(mutants × your suite's whole runtime) per audited
 file**. It is not proportional to the size of the diff; it is proportional to
 how long your tests take, multiplied by how many files the PR touched.
 
-Corral's own repo is a worked example: a ~45-second suite puts a single audited
-file in the region of two hours on a 2-core runner. A repo whose suite takes a
-minute, on a ten-file PR, is a job measured in tens of hours — and the API spend
-to match, discovered only once it is already running.
+Corral's own repo is a worked example, and it is a **measured** one rather than
+an estimate: auditing `cmd/corral/main.go` on a GitHub-hosted 2-core runner took
+**11m12s** end to end (run `30846983897`, 40 mutants planted, kill rate 0.25).
+
+An earlier version of this document predicted "in the region of two hours" for
+that same file. That prediction was wrong by roughly ten times, and it was wrong
+in the direction that would have talked you out of trying it. The number above is
+what a run actually took; treat the multiplier — your suite's runtime × how many
+files the PR touched — as the thing to reason from, and your own first run as the
+only timing that really applies to your repo.
 
 So:
 

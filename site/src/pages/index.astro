@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Elastic-2.0
 import '../styles/global.css';
 import Hero from '../components/Hero.astro';
+import CiGate from '../components/CiGate.astro';
 import HowItWorks from '../components/HowItWorks.astro';
 import ProofBand from '../components/ProofBand.astro';
 import LearningLoop from '../components/LearningLoop.astro';
@@ -46,13 +47,14 @@ const url = 'https://corralai.dev/';
 <body>
   <Header active="home" />
   <Hero />
+  <CiGate />
   <HowItWorks />
   <ProofBand />
+  <Quickstart />
   <LearningLoop />
   <KnowledgeCorpus />
   <WatchItBack />
   <TeamsInfra />
-  <Quickstart />
   <SiteFooter />
 </body>
 </html>

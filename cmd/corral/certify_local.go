@@ -1319,6 +1319,7 @@ func advVerdictFromPool(v advpool.Verdict) advVerdict {
 		TestWriterFailed: v.TestWriterFailed,
 		PoolTestUnsound:  v.PoolTestUnsound,
 		BaselineFailed:   v.BaselineFailed,
+		BaselineOutput:   v.BaselineOutput,
 		SuiteIgnoresFile: v.SuiteIgnoresFile,
 		TimedOut:         v.TimedOut,
 		DevScored:        v.DevScored,

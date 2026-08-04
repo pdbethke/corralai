@@ -50,6 +50,10 @@ type advVerdict struct {
 	// pool exhausted its compile-retry budget without authoring a compiling
 	// killing test. See renderAdvVerdict for the honest readout this drives.
 	TestWriterFailed bool `json:"TestWriterFailed"`
+	// BaselineOutput mirrors advpool.Verdict.BaselineOutput: the failing
+	// baseline's own output, so a COULD-NOT-GRADE readout can say WHY rather
+	// than only THAT. See renderAdvVerdict.
+	BaselineOutput string `json:"BaselineOutput"`
 	// PoolTestUnsound mirrors advpool.Verdict.PoolTestUnsound: true when the
 	// pool's authored test DID compile (TestWriterFailed is false) but its
 	// own scoring report never genuinely graded (it failed on the unmutated
@@ -381,6 +385,13 @@ func renderAdvVerdict(w io.Writer, codePath string, v advVerdict) {
 		fmt.Fprintf(w, "                 (baseline build/test failed — a build/environment issue, not a\n")
 		fmt.Fprintf(w, "                 test-quality verdict; e.g. toolchain floor, missing dep, bad --test cmd)\n")
 		fmt.Fprintf(w, "  mutants:       %d generated, 0 graded\n", v.MutantsTotal)
+		// Print the runner's OWN output, not just the fact of failure. certify
+		// --repo has done this since #59; --local computed the identical string
+		// and dropped it, so the most common first-run failure — a suite that
+		// cannot start inside the jail — arrived with no way to diagnose it.
+		if out := strings.TrimSpace(v.BaselineOutput); out != "" {
+			fmt.Fprintf(w, "  the suite said:\n%s\n", indentLines(out, "    "))
+		}
 		return
 	}
 	fmt.Fprintf(w, "  status:        %-12s (dev suite killed %d/%d mutants)\n", status, killed, v.MutantsTotal)

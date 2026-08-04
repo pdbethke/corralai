@@ -1488,3 +1488,26 @@ func TestDisabledCriticPassesDecorrelation(t *testing.T) {
 		t.Fatalf("a disabled critic must not trip decorrelation: %v", err)
 	}
 }
+
+// TestAdvVerdictFromPoolCarriesBaselineOutput guards the conversion boundary
+// where this string was being dropped. The driver computed the failing
+// baseline's output, advpool.Verdict carried it, and advVerdictFromPool — a
+// field-by-field copy — silently left it behind, so the readout printed
+// "a build/environment issue" with no way to learn which. A field-by-field
+// converter fails open on the field nobody remembered to add.
+func TestAdvVerdictFromPoolCarriesBaselineOutput(t *testing.T) {
+	got := advVerdictFromPool(advpool.Verdict{
+		Lang:           "typescript",
+		BaselineFailed: true,
+		BaselineOutput: "EROFS: read-only file system, open 'node_modules/.vite/vitest/results.json'",
+	})
+	if !got.BaselineFailed {
+		t.Fatal("BaselineFailed must survive the conversion")
+	}
+	if got.BaselineOutput == "" {
+		t.Fatal("BaselineOutput must survive the conversion: without it a COULD-NOT-GRADE verdict is undiagnosable")
+	}
+	if !strings.Contains(got.BaselineOutput, "EROFS") {
+		t.Fatalf("BaselineOutput mangled: %q", got.BaselineOutput)
+	}
+}

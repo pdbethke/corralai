@@ -77,6 +77,17 @@ func (bwrapIsolator) Wrap(command string, opts Options, env []string) ([]string,
 		"--symlink", "usr/lib64", "/lib64",
 		"--ro-bind-try", "/etc/ssl", "/etc/ssl",
 		"--ro-bind-try", "/etc/ca-certificates", "/etc/ca-certificates",
+		// Name resolution for LOOPBACK ONLY. `--unshare-all` gives the command its
+		// own network namespace, which still has a working `lo` — but with no
+		// /etc/hosts, resolving the literal name "localhost" fails with
+		// `EAI_AGAIN`. Test runners that coordinate workers over loopback (vitest
+		// and jest both do) then die before a single test runs, and the whole file
+		// reports COULD-NOT-GRADE as a "build/environment failure" — indistinguishable
+		// from a genuinely broken project. Binding these two files leaks no host
+		// state worth having (they map localhost and say "check /etc/hosts first")
+		// and grants no reachability: there is still no route off `lo`.
+		"--ro-bind-try", "/etc/hosts", "/etc/hosts",
+		"--ro-bind-try", "/etc/nsswitch.conf", "/etc/nsswitch.conf",
 		"--proc", "/proc",
 		"--dev", "/dev",
 		"--tmpfs", "/tmp",

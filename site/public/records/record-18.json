@@ -1,0 +1,123 @@
+{
+  "head": "fc9317fd872799ac16ca03307792795a81d59c14655069bdefe1e7cc34b7ec3d",
+  "signature": "{\"payloadType\":\"application/vnd.in-toto+json\",\"payload\":\"eyJfdHlwZSI6Imh0dHBzOi8vaW4tdG90by5pby9TdGF0ZW1lbnQvdjEiLCJwcmVkaWNhdGUiOnsiYnVpbGREZWZpbml0aW9uIjp7ImJ1aWxkVHlwZSI6Imh0dHBzOi8vY29ycmFsYWkuZGV2L2NlcnRpZnkvdjEiLCJleHRlcm5hbFBhcmFtZXRlcnMiOnsiYnJhbmNoIjoiIiwiY29tbWFuZCI6ImNvcnJhbC9hZHZlcnNhcmlhbC1wb29sIiwiY29tbWl0IjoiNGZmNDhjZWMwOTlmMDUxNGMzZTliYmNhMTg3MDZjOWMyMTEyMmJmYiIsInJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vdmVyY2VsL21zLmdpdCJ9LCJpbnRlcm5hbFBhcmFtZXRlcnMiOnsiYWN0b3IiOiJjb3JyYWwtYWR2cG9vbCJ9LCJyZXNvbHZlZERlcGVuZGVuY2llcyI6W3sidXJpIjoibW9kZWw6bXV0YW50LWdlbmVyYXRvcjpjbGF1ZGUtc29ubmV0LTUifSx7InVyaSI6Im1vZGVsOm11dGFudC1nZW5lcmF0b3Itc2hhZG93OmNsYXVkZS1oYWlrdS00LTUgKG5vbi1nYXRpbmcpIn0seyJ1cmkiOiJtb2RlbDp0ZXN0LWNyaXRpYzpjbGF1ZGUtaGFpa3UtNC01In0seyJ1cmkiOiJtb2RlbDp0ZXN0LXdyaXRlcjpjbGF1ZGUtc29ubmV0LTUifV19LCJydW5EZXRhaWxzIjp7ImJ1aWxkZXIiOnsiYnVpbGRlckRlcGVuZGVuY2llcyI6W3sidXJpIjoibW9kZWw6bXV0YW50LWdlbmVyYXRvcjpjbGF1ZGUtc29ubmV0LTUifSx7InVyaSI6Im1vZGVsOm11dGFudC1nZW5lcmF0b3Itc2hhZG93OmNsYXVkZS1oYWlrdS00LTUgKG5vbi1nYXRpbmcpIn0seyJ1cmkiOiJtb2RlbDp0ZXN0LWNyaXRpYzpjbGF1ZGUtaGFpa3UtNC01In0seyJ1cmkiOiJtb2RlbDp0ZXN0LXdyaXRlcjpjbGF1ZGUtc29ubmV0LTUifV0sImlkIjoiaHR0cHM6Ly9jb3JyYWxhaS5kZXYvY2VydGlmeSJ9LCJieXByb2R1Y3RzIjpbeyJkaWdlc3QiOnsic2hhMjU2IjoiZmM5MzE3ZmQ4NzI3OTlhYzE2Y2EwMzMwNzc5Mjc5NWE4MWQ1OWMxNDY1NTA2OWJkZWZlMWU3Y2MzNGI3ZWMzZCJ9LCJtZWRpYVR5cGUiOiJhcHBsaWNhdGlvbi92bmQuY29ycmFsYWkuYnVpbGQtbGVkZ2VyK2pzb24iLCJuYW1lIjoiYWNjb3VudGFiaWxpdHkvdGFtcGVyLWV2aWRlbnQtbGVkZ2VyIn0seyJhbm5vdGF0aW9ucyI6eyJjb21tYW5kIjoiY29ycmFsL2FkdmVyc2FyaWFsLXBvb2wiLCJkdXJhdGlvblMiOjAsImV4aXRDb2RlIjoxLCJvdXRwdXREaWdlc3QiOiJzaGEyNTY6NDBkNDIzODc4ODJmYjU3ZWJhOTNkNjZlOGMxMTdhYmM5MmQ3OGNlNTViZmM1MzE1NTFjZmUyMDIxZGQwMjg1YyIsInBhc3NlZCI6ZmFsc2V9LCJtZWRpYVR5cGUiOiJhcHBsaWNhdGlvbi92bmQuY29ycmFsYWkuY2VydGlmaWNhdGlvbitqc29uIiwibmFtZSI6ImNlcnRpZmljYXRpb24vZXhlY3V0aW9uIn1dLCJtZXRhZGF0YSI6eyJmaW5pc2hlZE9uIjowLCJzdGFydGVkT24iOjB9fX0sInByZWRpY2F0ZVR5cGUiOiJodHRwczovL3Nsc2EuZGV2L3Byb3ZlbmFuY2UvdjEiLCJzdWJqZWN0IjpbeyJkaWdlc3QiOnsic2hhMjU2IjoiZmM5MzE3ZmQ4NzI3OTlhYzE2Y2EwMzMwNzc5Mjc5NWE4MWQ1OWMxNDY1NTA2OWJkZWZlMWU3Y2MzNGI3ZWMzZCJ9LCJuYW1lIjoiaHR0cHM6Ly9naXRodWIuY29tL3ZlcmNlbC9tcy5naXRANGZmNDhjZWMwOTlmMDUxNGMzZTliYmNhMTg3MDZjOWMyMTEyMmJmYiJ9XX0=\",\"signatures\":[{\"keyid\":\"brain\",\"sig\":\"j8hZR8HkEec3VgI++1H2qEQE/s5phLFpLwMDEA61OmOluQciLqZYog77kcqRvCUkYyn1ys5xi7WC7hQaSTo4BQ==\"}]}",
+  "statement": {
+    "_type": "https://in-toto.io/Statement/v1",
+    "predicate": {
+      "buildDefinition": {
+        "buildType": "https://corralai.dev/certify/v1",
+        "externalParameters": {
+          "branch": "",
+          "command": "corral/adversarial-pool",
+          "commit": "4ff48cec099f0514c3e9bbca18706c9c21122bfb",
+          "repo": "https://github.com/vercel/ms.git"
+        },
+        "internalParameters": {
+          "actor": "corral-advpool"
+        },
+        "resolvedDependencies": [
+          {
+            "uri": "model:mutant-generator:claude-sonnet-5"
+          },
+          {
+            "uri": "model:mutant-generator-shadow:claude-haiku-4-5 (non-gating)"
+          },
+          {
+            "uri": "model:test-critic:claude-haiku-4-5"
+          },
+          {
+            "uri": "model:test-writer:claude-sonnet-5"
+          }
+        ]
+      },
+      "runDetails": {
+        "builder": {
+          "builderDependencies": [
+            {
+              "uri": "model:mutant-generator:claude-sonnet-5"
+            },
+            {
+              "uri": "model:mutant-generator-shadow:claude-haiku-4-5 (non-gating)"
+            },
+            {
+              "uri": "model:test-critic:claude-haiku-4-5"
+            },
+            {
+              "uri": "model:test-writer:claude-sonnet-5"
+            }
+          ],
+          "id": "https://corralai.dev/certify"
+        },
+        "byproducts": [
+          {
+            "digest": {
+              "sha256": "fc9317fd872799ac16ca03307792795a81d59c14655069bdefe1e7cc34b7ec3d"
+            },
+            "mediaType": "application/vnd.corralai.build-ledger+json",
+            "name": "accountability/tamper-evident-ledger"
+          },
+          {
+            "annotations": {
+              "command": "corral/adversarial-pool",
+              "durationS": 0,
+              "exitCode": 1,
+              "outputDigest": "sha256:40d42387882fb57eba93d66e8c117abc92d78ce55bfc531551cfe2021dd0285c",
+              "passed": false
+            },
+            "mediaType": "application/vnd.corralai.certification+json",
+            "name": "certification/execution"
+          }
+        ],
+        "metadata": {
+          "finishedOn": 0,
+          "startedOn": 0
+        }
+      }
+    },
+    "predicateType": "https://slsa.dev/provenance/v1",
+    "subject": [
+      {
+        "digest": {
+          "sha256": "fc9317fd872799ac16ca03307792795a81d59c14655069bdefe1e7cc34b7ec3d"
+        },
+        "name": "https://github.com/vercel/ms.git@4ff48cec099f0514c3e9bbca18706c9c21122bfb"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "actor": "corral-advpool",
+      "detail": {
+        "branch": "",
+        "commit": "4ff48cec099f0514c3e9bbca18706c9c21122bfb",
+        "repo": "https://github.com/vercel/ms.git"
+      },
+      "hash": "189ce18503c2cc0342d28fcab8feae7065eca7cf8ed128d8f0837f524872b280",
+      "kind": "context",
+      "model": "",
+      "prev": "0000000000000000000000000000000000000000000000000000000000000000",
+      "seq": 0,
+      "subject": "https://github.com/vercel/ms.git@4ff48cec099f0514c3e9bbca18706c9c21122bfb",
+      "ts": 0
+    },
+    {
+      "actor": "corral-advpool",
+      "detail": {
+        "dropped_regions": null,
+        "duration_s": 0,
+        "exit_code": 1,
+        "ok": false,
+        "output_digest": "sha256:40d42387882fb57eba93d66e8c117abc92d78ce55bfc531551cfe2021dd0285c",
+        "regions_probed": 7,
+        "regions_total": 7
+      },
+      "hash": "fc9317fd872799ac16ca03307792795a81d59c14655069bdefe1e7cc34b7ec3d",
+      "kind": "execution",
+      "model": "",
+      "prev": "189ce18503c2cc0342d28fcab8feae7065eca7cf8ed128d8f0837f524872b280",
+      "seq": 1,
+      "subject": "corral/adversarial-pool",
+      "ts": 0
+    }
+  ]
+}

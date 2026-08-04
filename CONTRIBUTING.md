@@ -25,6 +25,16 @@ future contributions.
 2. `go build ./...`, `go vet ./...`, and `go test ./...` must pass.
 3. New `.go` files must carry the SPDX header — run `bash scripts/add-spdx.sh`.
 4. `bash scripts/check-licensing.sh` must exit 0.
+5. `gofmt -l ./cmd ./internal` must print nothing, and
+   `bash scripts/check-security.sh` must exit 0 — both are CI gates.
+6. Merge through a pull request. Branch protection sets `enforce_admins: false`,
+   so a direct push to `main` bypasses every check above.
+
+**Working with an AI coding agent?** [AGENTS.md](AGENTS.md) is the operating
+guide for this repository — the gates, the merge rule, the audit-invocation
+traps that silently under-report results, and the recurring defect shape to
+watch for. It is written for an agent but is the fastest orientation for a
+human too.
 
 ## Contributing knowledge, not just code
 

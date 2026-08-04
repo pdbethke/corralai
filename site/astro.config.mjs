@@ -42,6 +42,10 @@ export default defineConfig({
         },
         { label: 'Getting started', slug: 'docs/getting-started' },
         { label: 'Your first audit, in detail', slug: 'docs/first-audit' },
+        // Third, and above Concepts: the Action is how corral is actually
+        // adopted. It sat unpublished while the console UI tour had seven
+        // pages — builder-era shelf space the audit product never claimed.
+        { label: 'The GitHub Action', slug: 'docs/github-action' },
         {
           label: 'Concepts',
           items: [
@@ -63,7 +67,10 @@ export default defineConfig({
         { label: 'MCP tools reference', slug: 'docs/mcp-tools' },
         { label: 'Publishing recordings', slug: 'docs/publishing-recordings' },
         {
-          label: 'The UI, tab by tab',
+          // The cockpit is a post-mortem instrument, not the front door: you
+          // never need it to run the gate. Kept, documented, and placed after
+          // the material someone adopting corral actually needs.
+          label: 'The UI, tab by tab (post-mortem)',
           items: [
             { label: 'Records (default landing view)', slug: 'docs/ui-tour/records' },
             { label: 'The corral (canvas view)', slug: 'docs/ui-tour/corral' },

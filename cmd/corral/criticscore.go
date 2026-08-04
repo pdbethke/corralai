@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os/user"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -201,4 +202,60 @@ func runCriticScore(args []string, lister criticScoreLister, admin criticScoreAd
 		fmt.Fprintln(stderr, "usage: corral criticscore list|show <id>|confirm <id>|refute <id>")
 		return 2
 	}
+}
+
+// localCriticScore adapts the on-disk criticscore store to the lister/admin
+// interfaces above, so `corral criticscore` works with no brain running.
+//
+// It exists because the corpus was unreachable for exactly the people who most
+// need it. `certify --local` is what the quickstart, the README and every
+// external user runs, and criticscore refused without CORRAL_BRAIN — so a
+// local user got critic findings printed once to a terminal and no way to
+// record that they had checked one. `corral scorecard`'s C-PREC column, whose
+// whole purpose is the critic's execution-checked precision from those human
+// verdicts, therefore read "—" forever for anyone without a daemon.
+//
+// The brain's admin gate is NOT weakened by this. That gate exists to attribute
+// an adjudication to a verified human principal on a shared, multi-user brain;
+// a local DuckDB file under the operator's own $HOME has exactly one principal,
+// who already has write access to the file. Adjudications made here are
+// attributed to the local OS user for the same reason the brain attributes to a
+// bearer identity: so the row says who decided.
+type localCriticScore struct{ store *criticscore.Store }
+
+func (l localCriticScore) ListPending(ctx context.Context) ([]criticscore.Finding, error) {
+	return l.store.ListPending(ctx)
+}
+
+func (l localCriticScore) Get(ctx context.Context, id string) (criticscore.Finding, error) {
+	f, ok, err := l.store.Get(ctx, id)
+	if err != nil {
+		return criticscore.Finding{}, err
+	}
+	if !ok {
+		return criticscore.Finding{}, fmt.Errorf("no critic finding %q — run `corral criticscore list` to see pending ids", id)
+	}
+	return f, nil
+}
+
+func (l localCriticScore) Adjudicate(ctx context.Context, id, verdict string) (string, error) {
+	by := localAdjudicator()
+	ok, err := l.store.Adjudicate(ctx, id, verdict, by)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", fmt.Errorf("no critic finding %q — nothing was recorded", id)
+	}
+	return fmt.Sprintf("%s recorded as %s by %s", id, verdict, by), nil
+}
+
+// localAdjudicator names who made a local adjudication. An unknown user is
+// recorded as "local" rather than left empty: a row that cannot say who
+// decided is worse than one that says "someone at this machine".
+func localAdjudicator() string {
+	if u, err := user.Current(); err == nil && strings.TrimSpace(u.Username) != "" {
+		return "local:" + u.Username
+	}
+	return "local"
 }

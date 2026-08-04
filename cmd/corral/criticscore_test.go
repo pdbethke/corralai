@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -143,5 +144,80 @@ func TestHTTPCriticScoreListerDecodesPending(t *testing.T) {
 	}
 	if gotAuth != "Bearer test-token" {
 		t.Fatalf("expected bearer auth, got %q", gotAuth)
+	}
+}
+
+// TestLocalCriticScoreRoundTrip pins the offline corpus: a finding recorded by
+// a --local run must be listable, showable and adjudicable with NO brain
+// running.
+//
+// Before this, criticscore refused without CORRAL_BRAIN — so `certify --local`,
+// the command the quickstart and README tell people to run, produced critic
+// findings that printed once and vanished. scorecard's C-PREC column, which
+// measures the critic's execution-checked precision from human verdicts, could
+// never be filled by anyone without a daemon.
+func TestLocalCriticScoreRoundTrip(t *testing.T) {
+	store, err := criticscore.Open(filepath.Join(t.TempDir(), "cs.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	ctx := context.Background()
+	if err := store.Record(ctx, []criticscore.Finding{{
+		ID: "31:1", TS: 1, RecordID: 31, RecordHead: "abc",
+		Repo: "local", Commit: "c0ffee", Model: "claude-haiku-4-5",
+		TargetTest: "TokenManager schedules a refresh", TestFile: "src/auth/__tests__/TokenManager.test.ts",
+		Scope: "dead-check", Evidence: "the setTimeout branch is never exercised",
+		Severity: "high", Adjudication: "unadjudicated", Source: "auto",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	local := localCriticScore{store: store}
+
+	pending, err := local.ListPending(ctx)
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("expected 1 pending finding offline, got %d (%v)", len(pending), err)
+	}
+	if _, err := local.Get(ctx, "31:1"); err != nil {
+		t.Fatalf("show should work offline: %v", err)
+	}
+	msg, err := local.Adjudicate(ctx, "31:1", "confirmed")
+	if err != nil {
+		t.Fatalf("confirm should work offline: %v", err)
+	}
+	if !strings.Contains(msg, "confirmed") {
+		t.Fatalf("adjudication message should name the verdict, got %q", msg)
+	}
+
+	// Confirmed findings leave the pending queue — that is what makes the
+	// corpus a worklist rather than an ever-growing log.
+	after, err := local.ListPending(ctx)
+	if err != nil || len(after) != 0 {
+		t.Fatalf("an adjudicated finding must leave the pending list, got %d (%v)", len(after), err)
+	}
+	// And the verdict must be attributed: a row that cannot say who decided is
+	// worse than one that says "someone at this machine".
+	f, _, err := store.Get(ctx, "31:1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Source != "human" || f.AdjudicatedBy == "" {
+		t.Fatalf("a local adjudication must be attributed to a human: %+v", f)
+	}
+}
+
+// TestLocalCriticScoreUnknownID: adjudicating something that does not exist
+// must say so rather than silently succeeding.
+func TestLocalCriticScoreUnknownID(t *testing.T) {
+	store, err := criticscore.Open(filepath.Join(t.TempDir(), "cs.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	local := localCriticScore{store: store}
+	if _, err := local.Adjudicate(context.Background(), "99:9", "confirmed"); err == nil {
+		t.Fatal("adjudicating an unknown finding must fail loudly")
 	}
 }

@@ -672,18 +672,40 @@ func main() {
 			os.Exit(1)
 		}
 		defer bugCatchStore.Close()
-		os.Exit(runScorecard(os.Args[2:], localScorecardReader{store: bugCatchStore}, os.Stdout))
+		// Best-effort critic join: a nil store just leaves C-PREC empty, which
+		// is the pre-existing behavior. Refusing to print a scorecard because
+		// the critic file is held elsewhere would trade the whole table for
+		// one column.
+		var localCritic *criticscore.Store
+		if cs, cerr := criticscore.Open(localCriticScoreDBPath()); cerr == nil {
+			localCritic = cs
+			defer func() { _ = cs.Close() }()
+		}
+		os.Exit(runScorecard(os.Args[2:], localScorecardReader{store: bugCatchStore, critic: localCritic}, os.Stdout))
 	case "criticscore":
-		// Unlike `scorecard`, criticscore has no local-file fallback:
-		// show/confirm/refute are ADMIN-gated MCP tools that only exist on
-		// a running brain (they need the caller's bearer identity for the
-		// isHumanAdmin check + audit trail — there is no offline
-		// equivalent), so a brain is required for every subcommand,
-		// including list.
+		// With CORRAL_BRAIN set, show/confirm/refute go through the brain's
+		// ADMIN-gated MCP tools, which need the caller's bearer identity for
+		// the isHumanAdmin check and the audit trail. Without one, they run
+		// against the local store `certify --local` writes — see
+		// localCriticScore for why a single-operator DuckDB file under $HOME
+		// does not need that gate to mean something.
 		brainURL := strings.TrimSpace(os.Getenv("CORRAL_BRAIN"))
 		if brainURL == "" {
-			fmt.Fprintln(os.Stderr, "corral criticscore: set CORRAL_BRAIN (and CORRALAI_BRAIN_TOKEN via `corral secret`) — criticscore has no offline mode")
-			os.Exit(1)
+			// No brain: fall back to the LOCAL store that `certify --local`
+			// now writes. Without this the findings corpus was unreachable for
+			// everyone who is not running a daemon — which is everyone the
+			// quickstart talks to — and scorecard's C-PREC column could never
+			// be filled by them. See localCriticScore's doc comment for why
+			// this does not weaken the brain's admin gate.
+			cs, err := criticscore.Open(localCriticScoreDBPath())
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "corral criticscore: opening the local critic store: %v\n", err)
+				fmt.Fprintln(os.Stderr, "corral criticscore: (or set CORRAL_BRAIN to adjudicate against a running brain instead)")
+				os.Exit(1)
+			}
+			defer func() { _ = cs.Close() }()
+			local := localCriticScore{store: cs}
+			os.Exit(runCriticScore(os.Args[2:], local, local, os.Stdout, os.Stderr))
 		}
 		token, err := brainToken()
 		if err != nil {

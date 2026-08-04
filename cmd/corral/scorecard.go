@@ -17,6 +17,7 @@ import (
 	"github.com/pdbethke/corralai/internal/brain"
 	"github.com/pdbethke/corralai/internal/brainclient"
 	"github.com/pdbethke/corralai/internal/bugcatch"
+	"github.com/pdbethke/corralai/internal/criticscore"
 )
 
 // scorecardReader is the read surface runScorecard needs — narrowed to a
@@ -30,16 +31,27 @@ type scorecardReader interface {
 
 // localScorecardReader adapts a directly-opened *bugcatch.Store (the
 // offline/no-brain-running fallback in main.go's `scorecard` case) to the
-// scorecardReader interface by running it through
-// brain.BuildBugCatchScorecard with a nil criticStore — the local file path
-// never has the criticscore store open at the same time (CORRALAI_CRITICSCORE_DB
-// is a separate single-process DuckDB file the running brain holds too), so
-// the C-PREC column is legitimately empty for this path; use `corral
-// criticscore` or CORRAL_BRAIN for that data.
-type localScorecardReader struct{ store *bugcatch.Store }
+// scorecardReader interface via brain.BuildBugCatchScorecard.
+//
+// critic is the critic-accuracy store, and may be nil. It used to ALWAYS be
+// nil here, on the reasoning that a local run never had that store open — true
+// only while nothing local ever wrote it. `certify --local` writes it now, and
+// `corral criticscore confirm` adjudicates it offline, so leaving the join out
+// meant the C-PREC column stayed empty on the very machine that had just
+// produced the human verdict it reports. A column measuring a signal the same
+// process had already collected is the same defect this codebase keeps
+// producing: computed, then not carried to the surface.
+//
+// Nil remains legitimate: the store is a separate single-process DuckDB file,
+// so if a running brain holds it, opening it here fails and the caller passes
+// nil rather than refusing to print a scorecard at all.
+type localScorecardReader struct {
+	store  *bugcatch.Store
+	critic *criticscore.Store
+}
 
 func (r localScorecardReader) Scorecard(ctx context.Context) ([]brain.ScorecardCell, error) {
-	sc, err := brain.BuildBugCatchScorecard(r.store, nil)
+	sc, err := brain.BuildBugCatchScorecard(r.store, r.critic)
 	if err != nil {
 		return nil, err
 	}

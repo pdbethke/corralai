@@ -91,9 +91,35 @@ the log — and tampering is detectable even by someone who doesn't trust the br
 witness outage degrades honestly (`anchored=false`, never a fabricated proof); verify
 then refuses unless you pass `--allow-unanchored`.
 
-Go, Python (pytest), Ruby (minitest/RSpec), JavaScript (node:test), and TypeScript
-(tsc + node:test) — the language is inferred from `--code`'s extension; C is next,
-each a plugin in `internal/lang`.
+Go, Python, Ruby, JavaScript and TypeScript — the language is inferred from
+`--code`'s extension, each a plugin in `internal/lang`. The authored test is
+written in **your project's own harness** (it is shown your existing test file
+and told to match it), so vitest, jest, pytest, minitest and RSpec all work
+without configuration.
+
+**Where each language's support actually stands.** A tool that argues for
+execution over self-report should not claim a language on the strength of a
+passing unit test, so here is what has actually been run, against what:
+
+| language | evidence | verdict |
+|---|---|---|
+| **Go** | this repo's own entry point, audited by the GitHub Action on a real commit | 40 faults planted, 10 killed, **0.25**, 1 gap proven |
+| **Python** | 6 whole-repo scans of [Flask](https://github.com/pallets/flask) | 10 files audited, **48 gaps proven by execution** |
+| **TypeScript** | a private SDK, and [vercel/ms](https://github.com/vercel/ms) | 0.79 / **0.94**, 3 and 2 gaps proven |
+| **JavaScript** | [vercel/ms](https://github.com/vercel/ms) under jest | **CERTIFIED**, 33 of 35 killed, 2 gaps proven |
+| **Ruby** | [minitest](https://github.com/minitest/minitest) itself | 36 of 40 killed, **0.90** |
+
+Go and Python are exercised hardest — Go continuously in CI, Python across
+repeated whole-repo scans. **TypeScript, JavaScript and Ruby each rest on a
+single third-party repository**, which is enough to show the plugin works and
+is not evidence about the ecosystem. Treat them accordingly.
+
+One number in that table deserves its own warning: kill rate moves **run to
+run on the same file with the same suite**, because the faults are generated
+afresh each time. Measured swing on one file: 0.55 to 0.80. A single run is
+evidence of specific gaps, **not a grade** — never quote one as a score.
+
+C is next.
 
 > **Whole-repo scanning is not equally strong across those languages.** `certify
 > --local` audits any single file you name, in any of them — you give it the path,

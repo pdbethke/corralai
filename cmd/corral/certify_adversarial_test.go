@@ -615,3 +615,51 @@ func TestRenderAdvVerdictUnmeasuredTimeoutDoesNotFabricateAZeroKillRate(t *testi
 		t.Fatalf("must not print a fabricated 0/0 killed tally:\n%s", out)
 	}
 }
+
+// TestRenderAdvVerdictBaselineFailedPrintsSuiteOutput pins the fix for the
+// least debuggable outcome an audit can produce. certify --repo has printed the
+// failing baseline's own output since the day two paid audits dead-ended with
+// nothing to go on; certify --local computed the identical string and dropped
+// it on the floor, so a first run against a real project reported
+// "a build/environment issue" and left the operator no way to find out which.
+//
+// Found by running corral against a TypeScript project for the first time: the
+// suite could not resolve "localhost" inside the jail, and none of that reached
+// the readout.
+func TestRenderAdvVerdictBaselineFailedPrintsSuiteOutput(t *testing.T) {
+	var b strings.Builder
+	renderAdvVerdict(&b, "src/client/ApiError.ts", advVerdict{
+		Lang: "typescript", Commit: "719343a", MutantsTotal: 14,
+		DevKillRate: 0, Survivors: 0, Status: "needs-review",
+		BaselineFailed: true,
+		BaselineOutput: "Error: getaddrinfo EAI_AGAIN localhost\n  code: 'EAI_AGAIN'",
+	})
+	out := b.String()
+	if !strings.Contains(out, "COULD-NOT-GRADE") {
+		t.Fatalf("a failed baseline must still refuse to grade:\n%s", out)
+	}
+	if !strings.Contains(out, "EAI_AGAIN") {
+		t.Fatalf("the failing baseline's own output must reach the readout:\n%s", out)
+	}
+	if strings.Contains(out, "dev_kill_rate") {
+		t.Fatalf("a failed baseline must never print a fabricated kill rate:\n%s", out)
+	}
+}
+
+// TestRenderAdvVerdictBaselineFailedWithoutOutput guards the empty case: a
+// runner that produced nothing must not print a dangling, empty "the suite
+// said:" header promising detail that isn't there.
+func TestRenderAdvVerdictBaselineFailedWithoutOutput(t *testing.T) {
+	var b strings.Builder
+	renderAdvVerdict(&b, "x.ts", advVerdict{
+		Lang: "typescript", MutantsTotal: 3, Status: "needs-review",
+		BaselineFailed: true, BaselineOutput: "   \n  ",
+	})
+	out := b.String()
+	if strings.Contains(out, "the suite said") {
+		t.Fatalf("must not print an empty suite-output header:\n%s", out)
+	}
+	if !strings.Contains(out, "COULD-NOT-GRADE") {
+		t.Fatalf("still must refuse to grade:\n%s", out)
+	}
+}

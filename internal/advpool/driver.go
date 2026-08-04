@@ -248,6 +248,12 @@ type Verdict struct {
 	// (fail-closed), but the readout says "could not grade" rather than
 	// reporting a fabricated kill tally. See runState.baselineFailed.
 	BaselineFailed bool
+	// BaselineOutput is the failing baseline's OWN output, when BaselineFailed
+	// is set. The refusal to grade is correct; silence about WHY is not — this
+	// is what turns "a build/environment issue" into something an operator can
+	// actually fix. Empty when the baseline passed, or when the runner produced
+	// no output at all.
+	BaselineOutput string
 	// SuiteIgnoresFile is true when the dev suite passed on deliberately
 	// invalid source — it provably never compiles or imports the file under
 	// audit, so DevKillRate is meaningless. DISTINCT from BaselineFailed:
@@ -355,6 +361,14 @@ type runState struct {
 	// meaningless 0 and devSurvivors is empty because NOTHING was actually
 	// graded, so the readout must say "could not grade", never fabricate a tally.
 	baselineFailed bool
+	// baselineOutput is the runner's OWN output from that failing baseline
+	// (adequacy.Report.BaselineOutput). Without it, baselineFailed says only
+	// THAT the suite did not pass, which is the least debuggable outcome an
+	// audit can produce: the operator is told their environment is broken and
+	// given nothing to act on. Carried on the verdict so the readout can print
+	// the suite's own words — see renderAdvVerdict. Only meaningful when
+	// baselineFailed is true.
+	baselineOutput string
 	// suiteIgnoresFile is true when the dev suite PASSED its baseline but also
 	// passed on deliberately invalid source (adequacy.Report.CanaryKilled=false):
 	// the check command provably never compiles or imports the file under audit,
@@ -849,6 +863,13 @@ func applyDevScore(ctx context.Context, run *runState, scorer Scorer, mutants []
 		return fmt.Errorf("advpool: score dev tests: %w", serr)
 	}
 	run.baselineFailed = !rep.CompliantPass
+	// Keep the runner's own words on a FAILING baseline. certify --repo has
+	// printed these since the day two paid audits dead-ended here with nothing
+	// to go on; certify --local computed the same string and discarded it, so
+	// the single most common first-run failure was undiagnosable.
+	if !rep.CompliantPass {
+		run.baselineOutput = rep.BaselineOutput
+	}
 	// Gated on CompliantPass: when the baseline itself failed, adequacy.Score
 	// returns BEFORE running the canary, so CanaryKilled is false for a reason
 	// that is not "the suite ignores this file". Only a suite that PASSED its
@@ -1486,6 +1507,7 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	// (devKillRate 0 < threshold); mark it so the readout says "could not grade"
 	// instead of reporting the 0 as if the suite were graded and scored zero.
 	v.BaselineFailed = run.baselineFailed
+	v.BaselineOutput = run.baselineOutput
 	// The other could-not-grade case, carried separately so the readout can
 	// name the right one: the suite passed but never reads the audited file.
 	v.SuiteIgnoresFile = run.suiteIgnoresFile
@@ -1645,6 +1667,7 @@ func (d *Driver) timeoutVerdict(run *runState) Verdict {
 		// renderAdvVerdict falls straight through to `dev_kill_rate: 0.00`,
 		// which is a fabricated measurement. Never fabricate a score.
 		BaselineFailed:   run.baselineFailed,
+		BaselineOutput:   run.baselineOutput,
 		SuiteIgnoresFile: run.suiteIgnoresFile,
 		// TestWriterFailed/PoolTestUnsound must ride the TIMEOUT verdict too:
 		// a run that reached tickPoolAdequacy, converged its pool score (or

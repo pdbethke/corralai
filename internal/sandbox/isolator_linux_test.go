@@ -32,6 +32,17 @@ func TestBwrapWrapNetOffByDefault(t *testing.T) {
 	if argvHas(argv, "--ro-bind-try", "/etc/resolv.conf", "/etc/resolv.conf") {
 		t.Fatal("resolv.conf should not be bound when net is off")
 	}
+	// Loopback name resolution must work even with the net unshared: without
+	// /etc/hosts, resolving "localhost" fails with EAI_AGAIN and any test runner
+	// that coordinates workers over loopback (vitest, jest) dies before running a
+	// single test — surfacing as COULD-NOT-GRADE, which reads like a broken
+	// project rather than a jail gap. This binds names, not reachability.
+	if !argvHas(argv, "--ro-bind-try", "/etc/hosts", "/etc/hosts") {
+		t.Fatal("expected /etc/hosts bound so 'localhost' resolves inside the jail")
+	}
+	if !argvHas(argv, "--ro-bind-try", "/etc/nsswitch.conf", "/etc/nsswitch.conf") {
+		t.Fatal("expected /etc/nsswitch.conf bound so the hosts file is consulted")
+	}
 	if !argvHas(argv, "--setenv", "HOME", "/home/agent") {
 		t.Fatal("expected a writable HOME set inside the jail")
 	}

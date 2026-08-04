@@ -43,6 +43,14 @@ func TestBwrapWrapNetOffByDefault(t *testing.T) {
 	if !argvHas(argv, "--ro-bind-try", "/etc/nsswitch.conf", "/etc/nsswitch.conf") {
 		t.Fatal("expected /etc/nsswitch.conf bound so the hosts file is consulted")
 	}
+	// Debian/Ubuntu put installed gems in /var/lib/gems, OUTSIDE /usr. Without
+	// this, `gem install rspec` is invisible in the jail while the executable in
+	// /usr/local/bin is not, producing "can't find gem rspec-core ... with
+	// executable rspec" — the whole RubyGems ecosystem, unusable. It hid because
+	// Ruby had only been exercised against minitest, a default gem under /usr.
+	if !argvHas(argv, "--ro-bind-try", "/var/lib/gems", "/var/lib/gems") {
+		t.Fatal("expected /var/lib/gems bound so Debian-installed gems are visible in the jail")
+	}
 	if !argvHas(argv, "--setenv", "HOME", "/home/agent") {
 		t.Fatal("expected a writable HOME set inside the jail")
 	}

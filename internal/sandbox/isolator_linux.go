@@ -88,6 +88,21 @@ func (bwrapIsolator) Wrap(command string, opts Options, env []string) ([]string,
 		// and grants no reachability: there is still no route off `lo`.
 		"--ro-bind-try", "/etc/hosts", "/etc/hosts",
 		"--ro-bind-try", "/etc/nsswitch.conf", "/etc/nsswitch.conf",
+		// Debian/Ubuntu install RubyGems OUTSIDE /usr — `gem install rspec`
+		// lands in /var/lib/gems/<ver>, not /usr/lib/ruby/gems. Binding only
+		// /usr therefore makes the entire RubyGems ecosystem invisible in the
+		// jail while the executable in /usr/local/bin stays visible, so the
+		// failure is the maximally confusing "can't find gem rspec-core (>=
+		// 0.a) with executable rspec" — the binary is right there.
+		//
+		// It hid for a long time because Ruby auditing had only ever been
+		// exercised against minitest, a DEFAULT gem shipped under
+		// /usr/lib/ruby/gems, which /usr already covered. Every gem a project
+		// actually installs was broken.
+		//
+		// Read-only, and only the gem root: this grants no writable state and
+		// no credentials, exactly like the toolchain in /usr it sits beside.
+		"--ro-bind-try", "/var/lib/gems", "/var/lib/gems",
 		"--proc", "/proc",
 		"--dev", "/dev",
 		"--tmpfs", "/tmp",

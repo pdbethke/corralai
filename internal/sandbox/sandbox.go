@@ -13,9 +13,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
-	"os/exec"
 	"strings"
 	"time"
 )

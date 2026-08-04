@@ -193,7 +193,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 
 		repo: strings.TrimSpace(*repoFlag), commit: strings.TrimSpace(*commitFlag),
 
-		matrix: *matrixFlag, record: rec, bugCatchDB: localBugCatchDBPath(),
+		matrix: *matrixFlag, record: rec, bugCatchDB: localBugCatchDBPath(), criticScoreDB: localCriticScoreDBPath(),
 		openStore: openStore,
 		stdout:    stdout, stderr: stderr,
 	})
@@ -314,7 +314,12 @@ type localAuditInput struct {
 	matrix     bool
 	record     *recordSink
 	bugCatchDB string
-	openStore  func() (*buildstore.Store, ed25519.PrivateKey, error)
+	// criticScoreDB is the critic-accuracy store for this run. Same contract
+	// as bugCatchDB: empty means no feed at all, which is what the repo scan
+	// wants (N concurrent audits must not contend on one single-process
+	// DuckDB file).
+	criticScoreDB string
+	openStore     func() (*buildstore.Store, ed25519.PrivateKey, error)
 
 	// Where the run's human-readable progress goes. nil = io.Discard (the
 	// repo scan's position: N concurrent files would interleave into mush).
@@ -855,6 +860,18 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 		closeBugCatch, _, shadowRowsRecorded = wireLocalBugCatch(d, in.bugCatchDB, repo, commit, stderr)
 		defer closeBugCatch()
 	}
+	// The critic feed, on the same terms. Wired here for the same reason the
+	// scorecard feed is: the brain was the only place CriticFindings was ever
+	// attached, so on the path everyone actually runs, every critic finding was
+	// computed, printed once and discarded — leaving `corral scorecard`'s
+	// C-PREC column permanently empty for anyone without a brain.
+	var criticRowsRecorded *int64
+	if strings.TrimSpace(in.criticScoreDB) != "" {
+		var closeCritic func()
+		closeCritic, _, criticRowsRecorded = wireLocalCriticScore(d, in.criticScoreDB, repo, commit, stderr)
+		defer closeCritic()
+	}
+	_ = criticRowsRecorded
 
 	n := in.nMutants
 	if n <= 0 {

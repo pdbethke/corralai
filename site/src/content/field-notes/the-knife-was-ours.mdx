@@ -1,0 +1,82 @@
+---
+title: "The knife was ours"
+description: "We told Sakana they shipped the capability and left out the containment. Today I found the same shape in my own code: the router that makes 'no model marks its own exam' true could only ever move one seat of three. Named, fixed, and proven cross-vendor."
+pubDate: 2026-08-04
+draft: false
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+
+*Field note. The first thing published here was a critique of somebody else's work. This is the bill for it.*
+
+---
+
+In July I wrote about Sakana's [Fugu report](https://sakana.ai/fugu) under the title *"Fugu, and the knife it leaves unwashed."* The argument was that Fugu is the strongest public case yet for orchestration as its own axis of capability — and that it ships the capability while leaving out the containment its own name is about. Pufferfish. Technique under a safety constraint. Handle the poison correctly and it's a delicacy.
+
+I stand by the critique. What I did not expect was to find the identical shape in my own repository, six hours after calling off my own launch.
+
+## The claim
+
+Corral's whole argument is one sentence: **no model may mark its own exam.** One model plants deliberate faults in your code. A *different* model writes the test that kills them. A *third*, deliberately decorrelated, reads your suite cold and tells you which of your tests assert nothing. The judge is never the author. I have written that sentence, in some form, on the front page, in a LinkedIn article, and in a Show HN draft.
+
+Underneath it sits a router: the thing that takes "this role should use that model" and actually points the call at the right vendor.
+
+Today, running my own tool for the first time against one of my own projects, I asked for a Gemini fault-planter and a Claude critic. It failed:
+
+```
+running role "mutant-generator": model unreachable: 404 Not Found:
+{"type":"not_found_error","message":"model: gemini-3.6-flash"}
+```
+
+The string `gemini-3.6-flash` had been sent to Anthropic's endpoint. Not at startup — mid-run, after the sandbox and the record store were already open.
+
+I went and read the router. It cross-routed exactly one role: the critic. The fault-planter and the test-writer were pinned to whatever single backend the process started on. So "a different model writes the killing test" could be satisfied, but only ever by two models **from the same vendor**. The three-vendor herd I had been describing in public was not reachable from the command line at all.
+
+## The part that stings
+
+Corral also keeps a scorecard. Every signed verdict feeds a record of which model actually catches bugs, **in which role**, proven by execution rather than self-report. The entire learning loop exists to answer one question: who should sit in which seat?
+
+And the router could act on that answer for one seat in three.
+
+A measurement you cannot act on is not different, in any way that matters, from a measurement you discard. That is the single most common defect I have found in this codebase — a real number, correctly computed, then dropped on the floor. I have written it down as a standing note to myself. I keep finding it anyway.
+
+So: capability shipped, containment missing. Role-to-model routing, without the part that makes routing mean anything. It is precisely what I accused Sakana of, in public, with my name on it, as the first thing this site ever published.
+
+## Fixed, and shown working
+
+Every seat now resolves its own backend from its own model name, before the run starts, so a missing credential refuses the whole audit and names the role you have to fix — instead of a 404 halfway through a job you're already paying for.
+
+One deliberate exception. If you have pinned `MODEL_BACKEND` to a gateway — OpenRouter, Ollama, anything the tool doesn't recognize — nothing is re-routed. Those front many vendors behind a single endpoint, so a `claude-` model name there is not an Anthropic call, and "helpfully" redirecting it would overrule you and spend your money at a vendor you didn't pick.
+
+Then I pointed it at [vercel/ms](https://github.com/vercel/ms) — a library I did not write — with the seats genuinely split across vendors:
+
+```
+  mutant-generator = gemini-3.6-flash
+  test-writer      = gemini-3.6-flash
+  test-critic      = claude-haiku-4-5
+
+  CERTIFIED   dev_kill_rate 0.91   32 of 35 mutants killed
+  survivors 3   proven_missed 3    signed record 20
+```
+
+Gemini planted 35 faults. The library's own tests caught 32 — genuinely strong, and it certified. Three survived, and corral wrote a test that killed all three and *ran* it, so those gaps are demonstrated rather than alleged.
+
+And the critic, this time from a different vendor than the model that wrote anything, flagged this:
+
+```js
+expect(() => { parse('1m'); }).not.toThrow();
+```
+
+That test passes as long as `parse('1m')` doesn't throw. It never checks that the answer is 60000. Return `NaN`, return `0`, return `undefined` — it passes. In a small, careful, widely-used library, in a suite that is otherwise good enough to kill 32 of 35 planted bugs.
+
+That is what a judge who didn't write the code is for. It took me until today to build the thing that lets one exist.
+
+## What I actually think
+
+The uncomfortable part isn't the bug. It's that the bug was in the exact place my public criticism of someone else pointed, and I didn't look there until a stranger's library forced me to.
+
+Fugu's authors shipped a genuinely excellent piece of work with a seam in it. I noticed, because noticing seams in other people's work is easy and free. My own seam sat in `certify_local_chatter.go` for weeks, under a function whose doc comment cheerfully described the single-role behavior as the design.
+
+The technique doesn't protect you from anything. Running it does.
+
+*A judge may not certify her own cause — and a router that can only move the judge was never going to be enough.*

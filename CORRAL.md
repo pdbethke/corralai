@@ -19,12 +19,22 @@ Two kinds of knowledge feed a run:
 - **Vetted memory** — lessons and guidance the herd itself discovered and a
   human promoted (`internal/learn`, `internal/brain/learn.go`). This is
   `shared=true`: trusted enough to auto-inject into new instructions.
-- **This repo's developer docs** — `CORRAL.md` (this file) plus
+- **This repo's developer docs** — `CORRAL.md` (this file), `AGENTS.md`, plus
   `docs/corral/*.md`. On a clone, the brain ingests these files as **advisory**
   memory entries (`shared=false`, tagged to this repo) — see
   `internal/brain/seeddocs.go`. Agents can find them via search but they never
   auto-inject; a repo you don't control can't smuggle "vetted" guidance in just
   by shipping a file.
+
+  `AGENTS.md` is the one that carries furthest. `CORRAL.md` is our own
+  convention, so a repository we did not write essentially never has one —
+  while `AGENTS.md` is an emerging cross-vendor standard for how an agent
+  should operate inside a specific codebase: its build commands, how to invoke
+  its tests, its project-specific traps. That is exactly what the herd is
+  missing when `certify --repo` drops it into a stranger's tree, and a project
+  that wrote one is telling us how to run its suite correctly. It is ingested
+  on the same terms as everything else here — advisory, never auto-vetted.
+  Being a recognized standard earns it no trust it has not otherwise been given.
 
 ## The docs/corral/ corpus
 

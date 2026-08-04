@@ -18,7 +18,21 @@ import (
 // seedDocGlobs are the paths (relative to a cloned repo's root) ingestSeedDocs
 // scans for the CORRAL.md convention: the repo's own developer-doc corpus (see
 // CORRAL.md at the repo root for the convention itself).
-var seedDocGlobs = []string{"CORRAL.md", "docs/corral/*.md"}
+//
+// AGENTS.md is included, and is the one that matters most on a repo we did not
+// write. CORRAL.md is OUR convention, so a third-party repo essentially never
+// has one — while AGENTS.md is an emerging cross-vendor standard for exactly
+// this: how an agent should operate inside THIS codebase. Its build commands,
+// test invocation and project-specific traps are precisely what the herd is
+// missing when `certify --repo` drops it into a stranger's tree, and a repo
+// that took the trouble to write one is telling us how to run its suite
+// correctly.
+//
+// It is ingested on the SAME terms as everything else here — advisory,
+// shared=false, capped — because it is still attacker-suppliable text from a
+// just-cloned repo. Being a recognized standard earns it no trust it has not
+// otherwise been given.
+var seedDocGlobs = []string{"CORRAL.md", "AGENTS.md", "docs/corral/*.md"}
 
 // Defensive caps: the seed docs come from a just-cloned, attacker-suppliable
 // repo, so both dimensions are bounded — at most maxSeedDocFiles files ingest,

@@ -1511,3 +1511,16 @@ func TestAdvVerdictFromPoolCarriesBaselineOutput(t *testing.T) {
 		t.Fatalf("BaselineOutput mangled: %q", got.BaselineOutput)
 	}
 }
+
+// TestAdvVerdictFromPoolCarriesAuthoredTestNotCollected guards the same
+// field-by-field converter that has already silently dropped a field twice in
+// one day. A converter like this fails open on whatever nobody remembered.
+func TestAdvVerdictFromPoolCarriesAuthoredTestNotCollected(t *testing.T) {
+	got := advVerdictFromPool(advpool.Verdict{
+		PoolTestUnsound:          true,
+		AuthoredTestNotCollected: true,
+	})
+	if !got.AuthoredTestNotCollected {
+		t.Fatal("AuthoredTestNotCollected must survive the conversion; without it the readout falls back to the ambiguous wording")
+	}
+}

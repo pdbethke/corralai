@@ -1320,9 +1320,12 @@ func advVerdictFromPool(v advpool.Verdict) advVerdict {
 		PoolTestUnsound:  v.PoolTestUnsound,
 		BaselineFailed:   v.BaselineFailed,
 		BaselineOutput:   v.BaselineOutput,
-		SuiteIgnoresFile: v.SuiteIgnoresFile,
-		TimedOut:         v.TimedOut,
-		DevScored:        v.DevScored,
+		// Field-by-field converters here have now dropped a field twice in one
+		// day. Anything added to advpool.Verdict must be added here too.
+		AuthoredTestNotCollected: v.AuthoredTestNotCollected,
+		SuiteIgnoresFile:         v.SuiteIgnoresFile,
+		TimedOut:                 v.TimedOut,
+		DevScored:                v.DevScored,
 	}
 	for _, f := range v.VacuousFindings {
 		out.VacuousFindings = append(out.VacuousFindings, advFinding{

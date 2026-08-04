@@ -13,23 +13,23 @@ import SiteFooter from '../components/SiteFooter.astro';
 
 const PRESETS = [
   {
-    label: 'The signed audit ledger',
-    sql: `-- Every verdict is a tamper-evident, hash-linked record.\nSELECT id, repo, record_head, certified, actor\nFROM audit_ledger\nORDER BY id;`,
+    label: 'Every audited file had a proven gap',
+    sql: `-- 10 files audited across 6 scans of Flask. A survivor is a planted fault\n-- the suite did not catch. proven_missed counts only the survivors corral\n-- then killed with a test it WROTE and RAN — not an opinion, an execution.\nSELECT scan_id, path, kill_rate, survivors, proven_missed\nFROM scan_files\nWHERE disposition = 'audited'\nORDER BY proven_missed DESC;`,
   },
   {
-    label: 'Verdict × execution-proven kill-rate',
-    sql: `-- Each audit's signed verdict joined to the kill-rate a jail actually\n-- measured — computed in SQL, never self-reported by a model.\nSELECT l.repo,\n       IF(l.certified, 'CERTIFIED', 'needs-review') AS verdict,\n       SUM(b.mutants_killed)  AS killed,\n       SUM(b.mutants_planted) AS planted,\n       ROUND(100.0*SUM(b.mutants_killed)/SUM(b.mutants_planted),1) AS kill_pct\nFROM audit_ledger l\nJOIN bug_catches b ON b.record_id = l.id\nGROUP BY 1,2\nORDER BY kill_pct DESC;`,
+    label: 'The same file, six times',
+    sql: '-- src/flask/cli.py, audited six times. Scans 1-5 are a deliberate replicate\n-- series -- same file, same suite, nothing changed but the seed. Scan 6 hit it\n-- again inside a 5-file sweep. The kill rate barely moves (0.375..0.525) while\n-- the proven-gap count swings 1..15. Generator variance is larger than most\n-- effects you would try to measure, which is why a comparison needs a FIXED\n-- mutant set -- and why a single run is evidence, not a grade.\nSELECT scan_id, kill_rate, survivors, proven_missed\nFROM scan_files\nWHERE path = \'src/flask/cli.py\'\nORDER BY scan_id;',
   },
   {
-    label: 'Which model catches bugs',
-    sql: `-- The decorrelated herd, by role — proven by execution in a jail.\n-- This is the metric corral's routing keys off.\nSELECT model, role,\n       COUNT(*)             AS seats,\n       SUM(mutants_planted) AS planted,\n       ROUND(100.0*SUM(mutants_killed)/SUM(mutants_planted),1) AS caught_pct\nFROM bug_catches\nGROUP BY 1,2\nORDER BY planted DESC;`,
+    label: 'The honest denominator',
+    sql: `-- What a whole-repo scan REJECTED, and why. 241 files, 9 candidates,\n-- 10 audited seats. A tool that hid this would look far more capable\n-- than it is: 'no-paired-test' is coverage corral cannot yet pair by\n-- filename, and it is counted, not quietly dropped.\nSELECT disposition, reason, COUNT(*) AS files\nFROM scan_files\nGROUP BY 1,2\nORDER BY files DESC;`,
   },
   {
-    label: 'Difficulty vs code complexity',
-    sql: `-- Does mutation difficulty track corral's per-symbol complexity score?\nSELECT IF(region_complexity >= 4, 'complex (>=4)', 'simple (<4)') AS band,\n       COUNT(*) AS regions,\n       ROUND(100.0*SUM(mutants_killed)/SUM(mutants_planted),1) AS kill_pct\nFROM bug_catches\nWHERE role = 'mutant-generator'\nGROUP BY 1\nORDER BY 1;`,
+    label: 'Scan-level receipts',
+    sql: `-- Six real scans of Flask on the workspace substrate. kill_rate here is\n-- the scan aggregate; 'audited' is how many files actually got graded,\n-- bounded on purpose because an audit costs (mutants x suite runtime).\nSELECT id, ts, repo, substrate, total_files, candidates, audited, kill_rate\nFROM scans\nORDER BY id;`,
   },
 ];
-const initialSql = PRESETS[1].sql;
+const initialSql = PRESETS[0].sql;
 ---
 <html lang="en">
 <head>
@@ -47,12 +47,14 @@ const initialSql = PRESETS[1].sql;
   <div class="section">
     <h1>The accountability warehouse</h1>
     <p class="lede">
-      corral stores every audit as a <strong>signed, hash-linked record</strong> plus
-      per-model <strong>execution telemetry</strong> — natively in <strong>DuckDB</strong>.
-      This page runs DuckDB itself, compiled to <strong>WebAssembly</strong>,
-      <em>in your browser</em>, against corral's real audit dataset. Real SQL, no
-      backend. The same schema federates to <strong>MotherDuck</strong> (a DSN flip)
-      as a shared warehouse across a distributed dev shop.
+      corral records every scan — <strong>what it audited, what it rejected, and
+      why</strong> — natively in <strong>DuckDB</strong>. This page runs DuckDB
+      itself, compiled to <strong>WebAssembly</strong>, <em>in your browser</em>,
+      against a real dataset: six scans of <strong>Flask</strong>, a library we
+      didn't write. Real SQL, no backend. Query the rejections as readily as the
+      results — the point of a ledger is that it also records the parts that
+      don't flatter you. The same schema federates to <strong>MotherDuck</strong>
+      (a DSN flip) as a shared warehouse across a distributed dev shop.
     </p>
 
     <div class="presets">
@@ -72,11 +74,14 @@ const initialSql = PRESETS[1].sql;
     <div id="out" class="out"></div>
 
     <p class="foot">
-      <strong>Tables:</strong> <code>audit_ledger</code> (signed verdict records) ·
-      <code>bug_catches</code> (per-model, per-region execution telemetry). Two real
-      DuckDB tables, shipped as parquet and queried client-side. Data is fresh as of
-      the last publish; <code>corral fleet</code> federates the same schema to
-      MotherDuck for streaming-live. <a href="/recordings/">See the audits these rows came from →</a>
+      <strong>Tables:</strong> <code>scans</code> (6 whole-repo scans) ·
+      <code>scan_files</code> (1,446 per-file rows — every candidate the scan
+      considered, audited or rejected, with the reason). Two real DuckDB tables,
+      shipped as parquet and queried client-side. <strong>Recorded 2026-08-02</strong>
+      against <a href="https://github.com/pallets/flask">Flask</a> — a library we
+      did not write — on the <code>workspace</code> substrate.
+      <code>corral fleet</code> federates the same schema to MotherDuck for
+      streaming-live. <a href="/recordings/">See the audits these rows came from →</a>
     </p>
   </div>
   <SiteFooter />
@@ -146,7 +151,7 @@ const initialSql = PRESETS[1].sql;
       await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
       conn = await db.connect();
 
-      for (const t of ['audit_ledger', 'bug_catches']) {
+      for (const t of ['scans', 'scan_files']) {
         const buf = new Uint8Array(await (await fetch('/data/' + t + '.parquet')).arrayBuffer());
         await db.registerFileBuffer(t + '.parquet', buf);
         await conn.query("CREATE VIEW " + t + " AS SELECT * FROM '" + t + ".parquet'");

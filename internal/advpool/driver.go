@@ -241,6 +241,10 @@ type Verdict struct {
 	// graded nothing). A poolTestUnsound run is never certified — see
 	// aggregate.
 	PoolTestUnsound bool
+	// AuthoredTestNotCollected narrows PoolTestUnsound: the run proved the
+	// test command never reached the authored test's file at all. See
+	// runState.authoredTestNotCollected.
+	AuthoredTestNotCollected bool
 	// BaselineFailed is true when the dev suite did not pass on the UNMUTATED
 	// compliant code inside the jail — a build/environment failure, not a
 	// test-quality verdict. When true, DevKillRate (0) and Survivors (0) are
@@ -414,6 +418,13 @@ type runState struct {
 	// Verdict.PoolTestUnsound's doc for the full honesty rule this carries
 	// onto the signed verdict.
 	poolTestUnsound bool
+	// authoredTestNotCollected narrows poolTestUnsound to its most common
+	// cause: the test command never collected the authored test's own file.
+	// Carried separately because the two fixes are different -- "your test
+	// asserts something untrue" vs "your command does not run that file" --
+	// and the second is nearly always a command pinned to a single path while
+	// the authored test is a NEW file beside the developer's.
+	authoredTestNotCollected bool
 
 	// shardRetries counts parse failures per mutant-generator task KEY (never
 	// its id). Keying by key is deliberate: a lease-expiry re-claim and a
@@ -1428,6 +1439,7 @@ func (d *Driver) tickPoolAdequacy(ctx context.Context, missionID int64, run *run
 			run.rs.CodePath, rep.CompliantPass, rep.CanaryKilled, rep.Total)
 		run.provenMissed = 0
 		run.poolTestUnsound = true
+		run.authoredTestNotCollected = rep.AuthoredTestUnreached
 		return nil
 	}
 	poolSurvivors := survivorsFrom(rep, run.devSurvivors)
@@ -1503,6 +1515,10 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	// widening aggregate()'s already-long signature.
 	v.ProvenMutantIDs = run.provenIDs
 	v.AuthoredTest = run.authoredTest
+	// Narrows PoolTestUnsound to "your test command never collected the
+	// authored test's file" -- set here rather than widening aggregate()'s
+	// signature, alongside the other post-aggregate diagnosis fields.
+	v.AuthoredTestNotCollected = run.authoredTestNotCollected
 	// A baseline that couldn't pass is fail-closed to needs-review by aggregate
 	// (devKillRate 0 < threshold); mark it so the readout says "could not grade"
 	// instead of reporting the 0 as if the suite were graded and scored zero.
@@ -1675,8 +1691,9 @@ func (d *Driver) timeoutVerdict(run *runState) Verdict {
 		// never finished) would otherwise sign a TimedOut verdict with a
 		// ProvenMissed that looks like an ordinary graded value, dropping the
 		// caveat that explains it.
-		TestWriterFailed: run.testWriterFailed,
-		PoolTestUnsound:  run.poolTestUnsound,
+		TestWriterFailed:         run.testWriterFailed,
+		PoolTestUnsound:          run.poolTestUnsound,
+		AuthoredTestNotCollected: run.authoredTestNotCollected,
 		// Coverage fields (I-5): a run that dispatched N regions and dropped
 		// some before hitting RunDeadline must carry that shortfall on the
 		// timeout verdict too, or the CLI's RegionsTotal > 0 guard silently

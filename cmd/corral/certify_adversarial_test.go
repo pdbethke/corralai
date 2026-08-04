@@ -663,3 +663,48 @@ func TestRenderAdvVerdictBaselineFailedWithoutOutput(t *testing.T) {
 		t.Fatalf("still must refuse to grade:\n%s", out)
 	}
 }
+
+// TestRenderAdvVerdictNamesTheUncollectedAuthoredTest pins the split of the
+// most misleading message this tool produces.
+//
+// corral runs a positive control that PROVES whether the test command ever
+// reached the authored test's own file — and then collapsed that answer into
+// "it did not pass on the unmutated code (or never reads the file)", leaving
+// the operator to guess between a broken test and a too-narrow command. It is
+// nearly always the command: the authored test is a NEW file beside the
+// developer's, so a command pinned to one path never collects it, and
+// proven_missed reads 0 forever while looking like a clean bill of health.
+func TestRenderAdvVerdictNamesTheUncollectedAuthoredTest(t *testing.T) {
+	var b strings.Builder
+	renderAdvVerdict(&b, "src/client/ApiError.ts", advVerdict{
+		Lang: "typescript", MutantsTotal: 15, Survivors: 3, DevKillRate: 0.8,
+		Status: "needs-review", DevScored: true,
+		PoolTestUnsound: true, AuthoredTestNotCollected: true,
+	})
+	out := b.String()
+	if !strings.Contains(out, "NEVER RAN IT") {
+		t.Fatalf("must say the command never ran the authored test:\n%s", out)
+	}
+	if strings.Contains(out, "did not pass on the unmutated code —") {
+		t.Fatalf("must NOT also offer the other diagnosis; that is the ambiguity being removed:\n%s", out)
+	}
+}
+
+// TestRenderAdvVerdictKeepsCleanCodeFailureWording: when the positive control
+// did NOT fire, the authored test really did fail against correct code, and the
+// operator must still be told that — not the command advice.
+func TestRenderAdvVerdictKeepsCleanCodeFailureWording(t *testing.T) {
+	var b strings.Builder
+	renderAdvVerdict(&b, "x.ts", advVerdict{
+		Lang: "typescript", MutantsTotal: 10, Survivors: 2, DevKillRate: 0.8,
+		Status: "needs-review", DevScored: true,
+		PoolTestUnsound: true, AuthoredTestNotCollected: false,
+	})
+	out := b.String()
+	if !strings.Contains(out, "did not pass on the unmutated code") {
+		t.Fatalf("a genuine clean-code failure must still say so:\n%s", out)
+	}
+	if strings.Contains(out, "NEVER RAN IT") {
+		t.Fatalf("must not blame the command when the control did not fire:\n%s", out)
+	}
+}

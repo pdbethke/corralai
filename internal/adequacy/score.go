@@ -138,6 +138,23 @@ type Report struct {
 	// KillRate is meaningless — the same fail-closed shape as
 	// CompliantPass. Callers MUST check this before reading KillRate.
 	CanaryKilled bool
+	// AuthoredTestUnreached narrows CanaryKilled==false for ONE specific,
+	// extremely common cause: the test command never collected the authored
+	// test's own file, so the run proved nothing about it.
+	//
+	// The two causes are wildly different to act on. "Your authored test fails
+	// on correct code" is a problem with the test. "Your test command doesn't
+	// run that file" is a problem with the COMMAND — usually because it was
+	// pinned to one path (`vitest run one.test.ts`, a `-run` regex, a narrow
+	// glob) while the authored test is a NEW file beside the developer's. That
+	// run grades perfectly and reports proven_missed 0 forever, which reads as
+	// "your suite has no provable gaps" when it means "nobody looked".
+	//
+	// Set only by the positive control in advpool's authored-scoring path,
+	// which already computes exactly this and used to discard the distinction.
+	// CanaryKilled stays false alongside it — this narrows the diagnosis, it
+	// never softens it.
+	AuthoredTestUnreached bool
 	// BaselineOutput is the runner's OWN output from the compliant (unmutated)
 	// run, populated only when that run FAILED and only when the Jail can
 	// report it (see VerboseJail).

@@ -54,6 +54,10 @@ type advVerdict struct {
 	// baseline's own output, so a COULD-NOT-GRADE readout can say WHY rather
 	// than only THAT. See renderAdvVerdict.
 	BaselineOutput string `json:"BaselineOutput"`
+	// AuthoredTestNotCollected mirrors advpool.Verdict: the run PROVED the
+	// test command never reached the authored test's file. Narrows
+	// PoolTestUnsound to the half the operator can fix in one edit.
+	AuthoredTestNotCollected bool `json:"AuthoredTestNotCollected"`
 	// PoolTestUnsound mirrors advpool.Verdict.PoolTestUnsound: true when the
 	// pool's authored test DID compile (TestWriterFailed is false) but its
 	// own scoring report never genuinely graded (it failed on the unmutated
@@ -420,7 +424,18 @@ func renderAdvVerdict(w io.Writer, codePath string, v advVerdict) {
 		// failed on the unmutated compliant code, or never reads the file).
 		// proven_missed=0 here means the same thing TestWriterFailed's 0
 		// means — not a clean suite — for a different reason.
-		fmt.Fprintf(w, "  the herd authored a test for %d survivor(s) your suite missed, but it did not pass on the unmutated code (or never reads the file) — it was not scored, review these manually\n", v.Survivors)
+		if v.AuthoredTestNotCollected {
+			// The narrowed, actionable half. corral PROVED the command never
+			// reached the authored test's own file, so this is a problem with
+			// the command, not with the test — almost always a command pinned
+			// to a single path while the authored test is a NEW file beside
+			// the developer's. Saying "or never reads the file" and leaving
+			// the operator to guess is how proven_missed reads 0 forever and
+			// gets mistaken for "no provable gaps".
+			fmt.Fprintf(w, "  the herd authored a test for %d survivor(s), but YOUR TEST COMMAND NEVER RAN IT — the authored test is a new file beside your own, and this command does not collect it (a single-file path, a narrow glob, or a -run filter). Widen the command to its directory and re-run; proven_missed reads 0 only because nothing looked.\n", v.Survivors)
+		} else {
+			fmt.Fprintf(w, "  the herd authored a test for %d survivor(s) your suite missed, but it did not pass on the unmutated code — it was not scored, review these manually\n", v.Survivors)
+		}
 	}
 	if v.RegionsTotal > 0 && v.RegionsProbed < v.RegionsTotal {
 		fmt.Fprintf(w, "  PARTIAL AUDIT: %d of %d regions probed — these went unprobed: %s\n",

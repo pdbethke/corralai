@@ -304,6 +304,13 @@ func (s JailScorer) ScoreAuthoredReport(ctx context.Context, codePath, code, tes
 			// read the file" already means, just proven against the
 			// authored test's own path instead of codePath.
 			rep.CanaryKilled = false
+			// ...and say WHICH of the two things went wrong. Routing this into
+			// CanaryKilled alone was correct about the mechanism and lossy
+			// about the diagnosis: the operator was told the authored test
+			// "did not pass on the unmutated code (or never reads the file)"
+			// and left to guess. It is nearly always the command, and the fix
+			// is one word wider — but only if we say so.
+			rep.AuthoredTestUnreached = true
 		}
 	}
 	return rep, nil

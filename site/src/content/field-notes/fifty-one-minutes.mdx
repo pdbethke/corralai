@@ -1,0 +1,124 @@
+---
+title: "Fifty-one minutes"
+description: "I was going to launch this morning. With the window still open, I finally ran corral against one of my own projects for the first time — and found out it couldn't audit it at all. The post I had written said it supported five languages."
+pubDate: 2026-08-04
+draft: false
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+
+*Field note. corral exists to catch claims that nobody executed. This morning it caught one of mine, in the copy I was forty minutes from posting.*
+
+---
+
+Today was supposed to be the launch. Tuesday, 8–10am Eastern, a Show HN, a post I had rewritten more times than I want to admit.
+
+By nine o'clock everything was green. The install tag was fresh and verified. Dependency alerts were at zero. The CI gate had a page on the site for the first time. The warehouse demo was serving real data from a real audit instead of rows I'd told myself to distrust. Every URL in the pre-flight returned 200. I had the first comment sitting in a text file, formatted for a site that doesn't render Markdown, because I'd learned that the hard way too.
+
+Then I said the sentence that killed it:
+
+**I have never actually seen this run on my own machine.**
+
+Not the CI job. Not the paid runs on someone else's library. My laptop, my code, the way a stranger would do it.
+
+## The first five minutes
+
+I picked a TypeScript project of mine — a real one, about a thousand source files, eighty-odd test files. I aimed at one small module whose tests run in half a second. Copied the whole thing to a scratch directory first, because corral mutates code in place and I am not brave.
+
+It refused to start. `tsc` wasn't on `PATH`. It's a devDependency, the way it is in essentially every TypeScript repo on earth, sitting in `node_modules/.bin` where corral never looked.
+
+Fixed that. It refused again: it wanted a test file sitting next to the source, and this project keeps tests in `__tests__/`, which is one of the two conventions the entire JavaScript ecosystem uses. Corral knows neither.
+
+Fixed that. Then it ran — and told me this:
+
+```
+  status:        COULD-NOT-GRADE
+  reason:        the dev suite did not pass on the unmutated code in the jail
+                 (baseline build/test failed — a build/environment issue, not a
+                 test-quality verdict)
+  mutants:       15 generated, 0 graded
+```
+
+Which is the correct answer. It refused to invent a score. That refusal is a fix I made weeks ago, after catching corral fabricating "killed 0 of 15" when what had actually happened was that nothing ran at all.
+
+But it's also, as an error message, completely useless. Your environment is broken. Good luck.
+
+## Two bugs, twenty minutes
+
+The suite ran fine outside the sandbox. So I rebuilt corral's jail by hand, line for line, and ran the tests inside it.
+
+```
+Error: getaddrinfo EAI_AGAIN localhost
+```
+
+The sandbox unshares the network, which is the point. It still has a working loopback interface. What it doesn't have is `/etc/hosts` — so the literal word `localhost` doesn't resolve to anything. And modern JavaScript test runners coordinate their worker processes over loopback. They die before running a single test.
+
+Two lines to fix. Bind the file that maps names; grant no reachability. There's still no route off the loopback.
+
+I have been telling myself for a while that corral's sandbox "can't run most real test suites," and treating that as a fact about other people's suites. Some of it was this.
+
+The second bug was worse, because it was mine twice over.
+
+corral has a mode that prints the failing suite's own output. I built it in July, after two expensive audits dead-ended with nothing to go on. I wrote a fairly self-satisfied note about it at the time.
+
+It only ever worked in one of the two commands. The other one — the one in the quickstart, the one I was about to tell a few thousand people to run — computed the identical string and threw it away. Twice, in fact: once where the driver had the text in hand and never stored it, and again in a function that copies a result field by field, where the field simply wasn't listed.
+
+That is the same bug I have found in this codebase more times than any other. A real measurement, correctly computed, then quietly dropped on the floor. I have a note to myself about it. I wrote the note and then did it again.
+
+## The thing that stopped the launch
+
+With those fixed, corral finally told me what was wrong:
+
+```
+  the suite said:
+     ✓ src/client/__tests__/ApiError.test.ts  (10 tests) 6ms
+     Test Files  1 passed (1)
+    Error: EROFS: read-only file system, open
+      '/tmp/corral-adequacy-552080173/node_modules/.vite/vitest/results.json'
+```
+
+Read that carefully, because it took me a second. **The tests passed.** All ten of them. And then the runner exited non-zero, because it tried to write its results cache into `node_modules`, which corral mounts read-only so the audit stays hermetic.
+
+Every modern JavaScript toolchain writes a cache in there. Vite, vitest, jest, eslint — all of them.
+
+There is a flag for that. It copies the dependencies into the sandbox instead of mounting them read-only. I tried it:
+
+```
+repo has more than 64 MiB of text — too large to seed the jail workspace
+```
+
+`node_modules` is 251 megabytes. It is always going to be 251 megabytes.
+
+So: mount the dependencies read-only and the test runner can't write its cache. Copy them instead and you blow the size ceiling. **There is no invocation that works.** Not for this project, and not for any normal Node project.
+
+My post said, in the plainest possible language:
+
+> Five languages today (Go, Python, Ruby, JS, TS), each a small plugin.
+
+Go is genuinely exercised — corral audits its own entry point in CI and publishes a kill rate of 0.25, which is bad and which is the honest number. Python is genuinely exercised — six scans of a library I didn't write, forty-eight gaps proven by execution, all of it queryable on this site.
+
+The other three I had never run against a real repository. One of them, I now know, cannot work at all.
+
+## Fifty-one minutes
+
+It was 9:09am. I had until ten.
+
+I could have posted. The fix isn't hard, the sentence could have been softened, and realistically most readers would have tried it on Go or on nothing at all.
+
+But the argument I was about to make — the entire argument, the reason this thing exists — is that a claim nobody executed is worth nothing, and that "all green" stopped being a proxy for "correct." I was going to say that in a post containing a claim I had never executed.
+
+You get one Show HN. There isn't a second first impression to spend on this.
+
+So I called it off with fifty-one minutes still on the clock, and wrote down the next date instead of leaving it vague: **Tuesday the 11th**. The gate isn't a feeling. It's two issues, in public, on the repo. Every language claimed has to produce a real graded verdict — from a clean install, against a repo I didn't write — or it comes out of the sentence.
+
+## What I actually think about this
+
+I'd rather have found this at 9:09 than at 9:11 in a comment thread. That's the whole of it.
+
+But I want to be precise about what happened, because the flattering version is available and it isn't true. The flattering version is that corral caught its own false claim. It didn't. Corral sat there for weeks with a language plugin that had never once produced a verdict, and said nothing, because nobody ran it.
+
+What caught it was doing the one thing I'd been putting off: using my own tool, on my own code, the way a stranger would. Twenty minutes of that produced two real bugs and killed a launch.
+
+The tool can't do that part. It can only tell you the truth about a thing you actually pointed it at. Pointing it at something is still a decision a person has to make, and I had been quietly not making it for a long time.
+
+*A judge may not certify her own cause. She also has to actually hear it.*

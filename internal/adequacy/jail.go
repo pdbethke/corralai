@@ -347,3 +347,83 @@ func envWithDepBinPaths(env []string, binds []sandbox.Bind) []string {
 	}
 	return out
 }
+
+// ShellJoin renders an argv as one sh-safe string, each element quoted — the
+// exported form of shellJoin, for callers that must FLATTEN an argv into the
+// single TestCmd string a RunSpec carries.
+//
+// Pair it with ShellSplit. A plain strings.Join is not reversible: an argument
+// containing a space (an inline `-e` script, a `--filter=a b`, a path with a
+// space) is silently torn into several arguments by the strings.Fields on the
+// far side, and the command that runs is not the command the operator typed.
+// That produced a syntax error from a Ruby one-liner cut at its first comma,
+// reported as "your suite failed".
+func ShellJoin(cmd []string) string { return shellJoin(cmd) }
+
+// ShellSplit is ShellJoin's inverse: it parses a command string into argv,
+// honoring single quotes, double quotes and backslash escapes the way sh does.
+//
+// It replaces strings.Fields, which splits on whitespace ALONE and so cannot
+// round-trip anything ShellJoin quoted. On a command with no quoting — every
+// simple `go test ./...` — it returns exactly what strings.Fields returned, so
+// existing stored commands are unaffected.
+//
+// An unterminated quote yields the remainder as one final argument rather than
+// an error: the caller's next step runs the command and reports the runner's
+// own complaint, which is a better diagnosis than a parse error from us.
+func ShellSplit(s string) []string {
+	var args []string
+	var cur strings.Builder
+	var quote rune // 0, '\'' or '"'
+	started := false
+
+	flush := func() {
+		if started {
+			args = append(args, cur.String())
+			cur.Reset()
+			started = false
+		}
+	}
+	rs := []rune(s)
+	for i := 0; i < len(rs); i++ {
+		c := rs[i]
+		switch {
+		case quote == '\'':
+			// Inside single quotes nothing is special, not even backslash.
+			if c == '\'' {
+				quote = 0
+				continue
+			}
+			cur.WriteRune(c)
+		case quote == '"':
+			if c == '\\' && i+1 < len(rs) {
+				// Only these are escapable inside double quotes in sh; any
+				// other backslash is literal.
+				if n := rs[i+1]; n == '"' || n == '\\' || n == '$' || n == '`' {
+					cur.WriteRune(n)
+					i++
+					continue
+				}
+			}
+			if c == '"' {
+				quote = 0
+				continue
+			}
+			cur.WriteRune(c)
+		case c == '\'' || c == '"':
+			quote = c
+			started = true
+		case c == '\\' && i+1 < len(rs):
+			cur.WriteRune(rs[i+1])
+			i++
+			started = true
+		case c == ' ' || c == '\t' || c == '\n' || c == '\r':
+			flush()
+		default:
+			cur.WriteRune(c)
+			started = true
+		}
+	}
+	flush()
+	return args
+}

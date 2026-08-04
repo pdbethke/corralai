@@ -417,10 +417,10 @@ func (s JailScorer) scoreWorkspace(codePath, test, testCmd string) (map[string]s
 		for k, v := range s.BaseFiles {
 			base[k] = v
 		}
-		return base, strings.Fields(testCmd)
+		return base, adequacy.ShellSplit(testCmd)
 	}
 	base, defaultCmd := advPoolBase(codePath)
-	cmd := strings.Fields(testCmd)
+	cmd := adequacy.ShellSplit(testCmd)
 	if len(cmd) == 0 {
 		cmd = defaultCmd
 	}

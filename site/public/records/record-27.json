@@ -1,0 +1,117 @@
+{
+  "head": "3230ba3eda0aea3a8a21d2298bc552cf8d74d9f2a28a0a3b84dee4ed51293b0c",
+  "signature": "{\"payloadType\":\"application/vnd.in-toto+json\",\"payload\":\"eyJfdHlwZSI6Imh0dHBzOi8vaW4tdG90by5pby9TdGF0ZW1lbnQvdjEiLCJwcmVkaWNhdGUiOnsiYnVpbGREZWZpbml0aW9uIjp7ImJ1aWxkVHlwZSI6Imh0dHBzOi8vY29ycmFsYWkuZGV2L2NlcnRpZnkvdjEiLCJleHRlcm5hbFBhcmFtZXRlcnMiOnsiYnJhbmNoIjoiIiwiY29tbWFuZCI6ImNvcnJhbC9hZHZlcnNhcmlhbC1wb29sIiwiY29tbWl0IjoiN2ExZmFmNjJmMTBiMTJhZDMxNzBkNTYzYjk5OGRiNzg5M2VkYTg0NSIsInJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vd3ZhbmJlcmdlbi9jaHVua3lfcG5nLmdpdCJ9LCJpbnRlcm5hbFBhcmFtZXRlcnMiOnsiYWN0b3IiOiJjb3JyYWwtYWR2cG9vbCJ9LCJyZXNvbHZlZERlcGVuZGVuY2llcyI6W3sidXJpIjoibW9kZWw6bXV0YW50LWdlbmVyYXRvcjpnZW1pbmktMy42LWZsYXNoIn0seyJ1cmkiOiJtb2RlbDp0ZXN0LWNyaXRpYzoifSx7InVyaSI6Im1vZGVsOnRlc3Qtd3JpdGVyOmdlbWluaS0zLjYtZmxhc2gifV19LCJydW5EZXRhaWxzIjp7ImJ1aWxkZXIiOnsiYnVpbGRlckRlcGVuZGVuY2llcyI6W3sidXJpIjoibW9kZWw6bXV0YW50LWdlbmVyYXRvcjpnZW1pbmktMy42LWZsYXNoIn0seyJ1cmkiOiJtb2RlbDp0ZXN0LWNyaXRpYzoifSx7InVyaSI6Im1vZGVsOnRlc3Qtd3JpdGVyOmdlbWluaS0zLjYtZmxhc2gifV0sImlkIjoiaHR0cHM6Ly9jb3JyYWxhaS5kZXYvY2VydGlmeSJ9LCJieXByb2R1Y3RzIjpbeyJkaWdlc3QiOnsic2hhMjU2IjoiMzIzMGJhM2VkYTBhZWEzYThhMjFkMjI5OGJjNTUyY2Y4ZDc0ZDlmMmEyOGEwYTNiODRkZWU0ZWQ1MTI5M2IwYyJ9LCJtZWRpYVR5cGUiOiJhcHBsaWNhdGlvbi92bmQuY29ycmFsYWkuYnVpbGQtbGVkZ2VyK2pzb24iLCJuYW1lIjoiYWNjb3VudGFiaWxpdHkvdGFtcGVyLWV2aWRlbnQtbGVkZ2VyIn0seyJhbm5vdGF0aW9ucyI6eyJjb21tYW5kIjoiY29ycmFsL2FkdmVyc2FyaWFsLXBvb2wiLCJkdXJhdGlvblMiOjAsImV4aXRDb2RlIjoxLCJvdXRwdXREaWdlc3QiOiJzaGEyNTY6N2U2ZTk3ZWVlOTJiODViNTgyYjQ0ZGE4OGY4YTE2MDdkNjg2YTFkMzBiNGQwM2I2MzBmYzhjODJlOGQ1NGNkMyIsInBhc3NlZCI6ZmFsc2V9LCJtZWRpYVR5cGUiOiJhcHBsaWNhdGlvbi92bmQuY29ycmFsYWkuY2VydGlmaWNhdGlvbitqc29uIiwibmFtZSI6ImNlcnRpZmljYXRpb24vZXhlY3V0aW9uIn1dLCJtZXRhZGF0YSI6eyJmaW5pc2hlZE9uIjowLCJzdGFydGVkT24iOjB9fX0sInByZWRpY2F0ZVR5cGUiOiJodHRwczovL3Nsc2EuZGV2L3Byb3ZlbmFuY2UvdjEiLCJzdWJqZWN0IjpbeyJkaWdlc3QiOnsic2hhMjU2IjoiMzIzMGJhM2VkYTBhZWEzYThhMjFkMjI5OGJjNTUyY2Y4ZDc0ZDlmMmEyOGEwYTNiODRkZWU0ZWQ1MTI5M2IwYyJ9LCJuYW1lIjoiaHR0cHM6Ly9naXRodWIuY29tL3d2YW5iZXJnZW4vY2h1bmt5X3BuZy5naXRAN2ExZmFmNjJmMTBiMTJhZDMxNzBkNTYzYjk5OGRiNzg5M2VkYTg0NSJ9XX0=\",\"signatures\":[{\"keyid\":\"brain\",\"sig\":\"z4wXJKcAF9UfPvxQhPUsNZrfEQuR29HAg709sw14ySFWHZnrWAxJhBNSGhiGsj1G6Ff/DS2JnDEHHnTkzUjzBg==\"}]}",
+  "statement": {
+    "_type": "https://in-toto.io/Statement/v1",
+    "predicate": {
+      "buildDefinition": {
+        "buildType": "https://corralai.dev/certify/v1",
+        "externalParameters": {
+          "branch": "",
+          "command": "corral/adversarial-pool",
+          "commit": "7a1faf62f10b12ad3170d563b998db7893eda845",
+          "repo": "https://github.com/wvanbergen/chunky_png.git"
+        },
+        "internalParameters": {
+          "actor": "corral-advpool"
+        },
+        "resolvedDependencies": [
+          {
+            "uri": "model:mutant-generator:gemini-3.6-flash"
+          },
+          {
+            "uri": "model:test-critic:"
+          },
+          {
+            "uri": "model:test-writer:gemini-3.6-flash"
+          }
+        ]
+      },
+      "runDetails": {
+        "builder": {
+          "builderDependencies": [
+            {
+              "uri": "model:mutant-generator:gemini-3.6-flash"
+            },
+            {
+              "uri": "model:test-critic:"
+            },
+            {
+              "uri": "model:test-writer:gemini-3.6-flash"
+            }
+          ],
+          "id": "https://corralai.dev/certify"
+        },
+        "byproducts": [
+          {
+            "digest": {
+              "sha256": "3230ba3eda0aea3a8a21d2298bc552cf8d74d9f2a28a0a3b84dee4ed51293b0c"
+            },
+            "mediaType": "application/vnd.corralai.build-ledger+json",
+            "name": "accountability/tamper-evident-ledger"
+          },
+          {
+            "annotations": {
+              "command": "corral/adversarial-pool",
+              "durationS": 0,
+              "exitCode": 1,
+              "outputDigest": "sha256:7e6e97eee92b85b582b44da88f8a1607d686a1d30b4d03b630fc8c82e8d54cd3",
+              "passed": false
+            },
+            "mediaType": "application/vnd.corralai.certification+json",
+            "name": "certification/execution"
+          }
+        ],
+        "metadata": {
+          "finishedOn": 0,
+          "startedOn": 0
+        }
+      }
+    },
+    "predicateType": "https://slsa.dev/provenance/v1",
+    "subject": [
+      {
+        "digest": {
+          "sha256": "3230ba3eda0aea3a8a21d2298bc552cf8d74d9f2a28a0a3b84dee4ed51293b0c"
+        },
+        "name": "https://github.com/wvanbergen/chunky_png.git@7a1faf62f10b12ad3170d563b998db7893eda845"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "actor": "corral-advpool",
+      "detail": {
+        "branch": "",
+        "commit": "7a1faf62f10b12ad3170d563b998db7893eda845",
+        "repo": "https://github.com/wvanbergen/chunky_png.git"
+      },
+      "hash": "71105d9cf4c45cb3bec571512e1f20729eab73fd98b0ad2b22fd5eb4f2383877",
+      "kind": "context",
+      "model": "",
+      "prev": "0000000000000000000000000000000000000000000000000000000000000000",
+      "seq": 0,
+      "subject": "https://github.com/wvanbergen/chunky_png.git@7a1faf62f10b12ad3170d563b998db7893eda845",
+      "ts": 0
+    },
+    {
+      "actor": "corral-advpool",
+      "detail": {
+        "dropped_regions": null,
+        "duration_s": 0,
+        "exit_code": 1,
+        "ok": false,
+        "output_digest": "sha256:7e6e97eee92b85b582b44da88f8a1607d686a1d30b4d03b630fc8c82e8d54cd3",
+        "regions_probed": 8,
+        "regions_total": 8
+      },
+      "hash": "3230ba3eda0aea3a8a21d2298bc552cf8d74d9f2a28a0a3b84dee4ed51293b0c",
+      "kind": "execution",
+      "model": "",
+      "prev": "71105d9cf4c45cb3bec571512e1f20729eab73fd98b0ad2b22fd5eb4f2383877",
+      "seq": 1,
+      "subject": "corral/adversarial-pool",
+      "ts": 0
+    }
+  ]
+}

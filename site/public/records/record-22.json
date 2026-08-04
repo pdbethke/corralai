@@ -1,0 +1,117 @@
+{
+  "head": "600e9be6c030ec34ace98bc4409a08526d4e326618fff3d29557a5bde2edb324",
+  "signature": "{\"payloadType\":\"application/vnd.in-toto+json\",\"payload\":\"eyJfdHlwZSI6Imh0dHBzOi8vaW4tdG90by5pby9TdGF0ZW1lbnQvdjEiLCJwcmVkaWNhdGUiOnsiYnVpbGREZWZpbml0aW9uIjp7ImJ1aWxkVHlwZSI6Imh0dHBzOi8vY29ycmFsYWkuZGV2L2NlcnRpZnkvdjEiLCJleHRlcm5hbFBhcmFtZXRlcnMiOnsiYnJhbmNoIjoiIiwiY29tbWFuZCI6ImNvcnJhbC9hZHZlcnNhcmlhbC1wb29sIiwiY29tbWl0IjoiNTgxZTdkNTM4NmRlZjcyMDQwZTQ5YjAzNmJhNDllMzZlOWNiMTRkZiIsInJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vbWluaXRlc3QvbWluaXRlc3QuZ2l0In0sImludGVybmFsUGFyYW1ldGVycyI6eyJhY3RvciI6ImNvcnJhbC1hZHZwb29sIn0sInJlc29sdmVkRGVwZW5kZW5jaWVzIjpbeyJ1cmkiOiJtb2RlbDptdXRhbnQtZ2VuZXJhdG9yOmdlbWluaS0zLjYtZmxhc2gifSx7InVyaSI6Im1vZGVsOnRlc3QtY3JpdGljOiJ9LHsidXJpIjoibW9kZWw6dGVzdC13cml0ZXI6Z2VtaW5pLTMuNi1mbGFzaCJ9XX0sInJ1bkRldGFpbHMiOnsiYnVpbGRlciI6eyJidWlsZGVyRGVwZW5kZW5jaWVzIjpbeyJ1cmkiOiJtb2RlbDptdXRhbnQtZ2VuZXJhdG9yOmdlbWluaS0zLjYtZmxhc2gifSx7InVyaSI6Im1vZGVsOnRlc3QtY3JpdGljOiJ9LHsidXJpIjoibW9kZWw6dGVzdC13cml0ZXI6Z2VtaW5pLTMuNi1mbGFzaCJ9XSwiaWQiOiJodHRwczovL2NvcnJhbGFpLmRldi9jZXJ0aWZ5In0sImJ5cHJvZHVjdHMiOlt7ImRpZ2VzdCI6eyJzaGEyNTYiOiI2MDBlOWJlNmMwMzBlYzM0YWNlOThiYzQ0MDlhMDg1MjZkNGUzMjY2MThmZmYzZDI5NTU3YTViZGUyZWRiMzI0In0sIm1lZGlhVHlwZSI6ImFwcGxpY2F0aW9uL3ZuZC5jb3JyYWxhaS5idWlsZC1sZWRnZXIranNvbiIsIm5hbWUiOiJhY2NvdW50YWJpbGl0eS90YW1wZXItZXZpZGVudC1sZWRnZXIifSx7ImFubm90YXRpb25zIjp7ImNvbW1hbmQiOiJjb3JyYWwvYWR2ZXJzYXJpYWwtcG9vbCIsImR1cmF0aW9uUyI6MCwiZXhpdENvZGUiOjEsIm91dHB1dERpZ2VzdCI6InNoYTI1NjpiODdhMjllODJlZDk5NWViYmRlNDIxNWUxMTVlYTlhMWUzYTQzYzBhMzFjYWJjMmExNDg3ZWJmMjAyMjNmYjE2IiwicGFzc2VkIjpmYWxzZX0sIm1lZGlhVHlwZSI6ImFwcGxpY2F0aW9uL3ZuZC5jb3JyYWxhaS5jZXJ0aWZpY2F0aW9uK2pzb24iLCJuYW1lIjoiY2VydGlmaWNhdGlvbi9leGVjdXRpb24ifV0sIm1ldGFkYXRhIjp7ImZpbmlzaGVkT24iOjAsInN0YXJ0ZWRPbiI6MH19fSwicHJlZGljYXRlVHlwZSI6Imh0dHBzOi8vc2xzYS5kZXYvcHJvdmVuYW5jZS92MSIsInN1YmplY3QiOlt7ImRpZ2VzdCI6eyJzaGEyNTYiOiI2MDBlOWJlNmMwMzBlYzM0YWNlOThiYzQ0MDlhMDg1MjZkNGUzMjY2MThmZmYzZDI5NTU3YTViZGUyZWRiMzI0In0sIm5hbWUiOiJodHRwczovL2dpdGh1Yi5jb20vbWluaXRlc3QvbWluaXRlc3QuZ2l0QDU4MWU3ZDUzODZkZWY3MjA0MGU0OWIwMzZiYTQ5ZTM2ZTljYjE0ZGYifV19\",\"signatures\":[{\"keyid\":\"brain\",\"sig\":\"lR26Rj6Y4DsH29+j+sigfOwlPlIN3BRbsPmXQ6FtpPzgFye8qmwHI9HMhinYoDlTX2d9YAHTBiYinPnY7V4sBA==\"}]}",
+  "statement": {
+    "_type": "https://in-toto.io/Statement/v1",
+    "predicate": {
+      "buildDefinition": {
+        "buildType": "https://corralai.dev/certify/v1",
+        "externalParameters": {
+          "branch": "",
+          "command": "corral/adversarial-pool",
+          "commit": "581e7d5386def72040e49b036ba49e36e9cb14df",
+          "repo": "https://github.com/minitest/minitest.git"
+        },
+        "internalParameters": {
+          "actor": "corral-advpool"
+        },
+        "resolvedDependencies": [
+          {
+            "uri": "model:mutant-generator:gemini-3.6-flash"
+          },
+          {
+            "uri": "model:test-critic:"
+          },
+          {
+            "uri": "model:test-writer:gemini-3.6-flash"
+          }
+        ]
+      },
+      "runDetails": {
+        "builder": {
+          "builderDependencies": [
+            {
+              "uri": "model:mutant-generator:gemini-3.6-flash"
+            },
+            {
+              "uri": "model:test-critic:"
+            },
+            {
+              "uri": "model:test-writer:gemini-3.6-flash"
+            }
+          ],
+          "id": "https://corralai.dev/certify"
+        },
+        "byproducts": [
+          {
+            "digest": {
+              "sha256": "600e9be6c030ec34ace98bc4409a08526d4e326618fff3d29557a5bde2edb324"
+            },
+            "mediaType": "application/vnd.corralai.build-ledger+json",
+            "name": "accountability/tamper-evident-ledger"
+          },
+          {
+            "annotations": {
+              "command": "corral/adversarial-pool",
+              "durationS": 0,
+              "exitCode": 1,
+              "outputDigest": "sha256:b87a29e82ed995ebbde4215e115ea9a1e3a43c0a31cabc2a1487ebf20223fb16",
+              "passed": false
+            },
+            "mediaType": "application/vnd.corralai.certification+json",
+            "name": "certification/execution"
+          }
+        ],
+        "metadata": {
+          "finishedOn": 0,
+          "startedOn": 0
+        }
+      }
+    },
+    "predicateType": "https://slsa.dev/provenance/v1",
+    "subject": [
+      {
+        "digest": {
+          "sha256": "600e9be6c030ec34ace98bc4409a08526d4e326618fff3d29557a5bde2edb324"
+        },
+        "name": "https://github.com/minitest/minitest.git@581e7d5386def72040e49b036ba49e36e9cb14df"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "actor": "corral-advpool",
+      "detail": {
+        "branch": "",
+        "commit": "581e7d5386def72040e49b036ba49e36e9cb14df",
+        "repo": "https://github.com/minitest/minitest.git"
+      },
+      "hash": "7445da30365429c0dd4d5cc3e78ace9a3318323e741444340759cec43dc5e179",
+      "kind": "context",
+      "model": "",
+      "prev": "0000000000000000000000000000000000000000000000000000000000000000",
+      "seq": 0,
+      "subject": "https://github.com/minitest/minitest.git@581e7d5386def72040e49b036ba49e36e9cb14df",
+      "ts": 0
+    },
+    {
+      "actor": "corral-advpool",
+      "detail": {
+        "dropped_regions": null,
+        "duration_s": 0,
+        "exit_code": 1,
+        "ok": false,
+        "output_digest": "sha256:b87a29e82ed995ebbde4215e115ea9a1e3a43c0a31cabc2a1487ebf20223fb16",
+        "regions_probed": 8,
+        "regions_total": 8
+      },
+      "hash": "600e9be6c030ec34ace98bc4409a08526d4e326618fff3d29557a5bde2edb324",
+      "kind": "execution",
+      "model": "",
+      "prev": "7445da30365429c0dd4d5cc3e78ace9a3318323e741444340759cec43dc5e179",
+      "seq": 1,
+      "subject": "corral/adversarial-pool",
+      "ts": 0
+    }
+  ]
+}

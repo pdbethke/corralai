@@ -183,8 +183,11 @@ func TestBuildDetailEndpoint(t *testing.T) {
 	if !detail.AllOK {
 		t.Fatalf("expected all_ok=true for a good record: %+v", detail.Checks)
 	}
-	if len(detail.Checks) != 4 {
-		t.Fatalf("expected 4 checks, got %d: %+v", len(detail.Checks), detail.Checks)
+	// 5 checks: signature, ledger, statement, subject, rekor. "statement"
+	// asserts the human-readable copy still agrees with what was signed —
+	// without it, a valid signature laundered an edited readable statement.
+	if len(detail.Checks) != 5 {
+		t.Fatalf("expected 5 checks, got %d: %+v", len(detail.Checks), detail.Checks)
 	}
 	for _, c := range detail.Checks {
 		if ok, _ := c["OK"].(bool); !ok {

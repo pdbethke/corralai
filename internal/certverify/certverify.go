@@ -108,6 +108,53 @@ func VerifyRecord(rec Record, pub ed25519.PublicKey, newWitness func() (transpar
 		allOK = false
 	}
 
+	// Check 2b: the record's HUMAN-READABLE statement must be the statement
+	// that was actually signed.
+	//
+	// The envelope carries its own embedded copy, and checks 1/3 use that
+	// copy — correctly, because it is the authenticated one. But a published
+	// record file also carries rec.Statement, and that is the half a person
+	// READS: the repo, the kill rate, which model sat in which seat. Nothing
+	// compared the two, so the readable half could be edited to say anything
+	// at all and `certify verify` still printed "verified". A reader checks
+	// the signature, sees it pass, and then believes doctored numbers — which
+	// is a worse outcome than no signature at all, because the checkmark did
+	// the convincing.
+	//
+	// Found while publishing real records for strangers to verify: a record
+	// whose model name was changed by hand still passed every check.
+	//
+	// An ABSENT readable statement is fine (nothing is being claimed to a
+	// reader); a PRESENT one that disagrees with the envelope is a hard fail.
+	if sigCheck.OK {
+		readableCheck := Check{Name: "statement"}
+		switch {
+		case len(rec.Statement) == 0:
+			readableCheck.OK = true // nothing shown to a human; nothing to mislead
+		default:
+			// SUBSET, not equality: every field the envelope SIGNED must
+			// appear unchanged in the readable copy. Extra unsigned keys are
+			// tolerated because real consumers legitimately carry them — the
+			// cockpit hands this a whole database row (pass, anchored, rekor,
+			// steps) alongside the statement fields. What must never pass is a
+			// SIGNED value that has been altered, which is the hole this
+			// closes.
+			bad, err := firstAlteredSignedField(rec.Statement, envelopeStmt)
+			switch {
+			case err != nil:
+				readableCheck.Detail = "statement could not be compared: " + err.Error()
+			case bad != "":
+				readableCheck.Detail = "the readable statement disagrees with the signature at " + quote(bad) + " — a signed value has been altered"
+			default:
+				readableCheck.OK = true
+			}
+		}
+		checks = append(checks, readableCheck)
+		if !readableCheck.OK {
+			allOK = false
+		}
+	}
+
 	// Check 3: the statement is bound to THIS exact ledger — its subject
 	// digest must equal the ledger head, or a valid statement could be
 	// paired with an unrelated (even individually valid) ledger. Checked
@@ -191,4 +238,44 @@ func quote(s string) string {
 		return `"` + s + `"`
 	}
 	return string(b)
+}
+
+// canonicalJSON renders a decoded JSON value in a stable form so two
+// independently-decoded copies of the same statement compare equal regardless
+// of the key order they arrived in. encoding/json sorts map keys on marshal,
+// which is exactly the property needed here.
+func canonicalJSON(v any) (string, error) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// firstAlteredSignedField reports the first key path where the readable
+// statement disagrees with the statement that was actually signed, or "" when
+// every signed field is present and identical.
+//
+// Extra keys in `readable` are allowed (see the call site); missing or changed
+// SIGNED keys are not. Comparison is by canonical JSON of each value, so two
+// independently-decoded copies compare equal regardless of key order.
+func firstAlteredSignedField(readable, signed map[string]any) (string, error) {
+	for k, want := range signed {
+		got, present := readable[k]
+		if !present {
+			return k, nil
+		}
+		wj, err := canonicalJSON(want)
+		if err != nil {
+			return "", err
+		}
+		gj, err := canonicalJSON(got)
+		if err != nil {
+			return "", err
+		}
+		if wj != gj {
+			return k, nil
+		}
+	}
+	return "", nil
 }

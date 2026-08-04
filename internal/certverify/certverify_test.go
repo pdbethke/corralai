@@ -239,3 +239,98 @@ func TestVerifyRecordUnanchoredAllowedWithFlag(t *testing.T) {
 		}
 	}
 }
+
+// TestVerifyRecordAlteredReadableStatementFails is the check that closes a real
+// trust hole: the envelope carries its own signed copy of the statement, and
+// checks 1 and 3 correctly use that copy — but a published record ALSO carries
+// rec.Statement, and that is the half a person reads. Nothing compared the two,
+// so the readable half could claim anything at all and verify still printed
+// "verified".
+//
+// A checkmark next to doctored numbers is worse than no checkmark, because the
+// checkmark is what does the convincing. Found while publishing real records
+// for strangers to verify.
+func TestVerifyRecordAlteredReadableStatementFails(t *testing.T) {
+	rec, pub := buildTestRecord(t)
+	if len(rec.Statement) == 0 {
+		t.Skip("fixture carries no readable statement")
+	}
+	// Alter a SIGNED field in the human-readable copy only; the envelope is
+	// untouched. Picking an existing key matters: the check is a subset test
+	// (extra unsigned keys are tolerated, see the sibling test), so what must
+	// fail is a signed value that no longer says what was signed.
+	altered := make(map[string]any, len(rec.Statement))
+	for k, v := range rec.Statement {
+		altered[k] = v
+	}
+	var victim string
+	for k := range altered {
+		victim = k
+		break
+	}
+	if victim == "" {
+		t.Skip("fixture statement has no fields to alter")
+	}
+	altered[victim] = "a claim nobody signed"
+	rec.Statement = altered
+
+	checks, allOK := VerifyRecord(rec, pub, failWitnessFactory(t), true)
+	if allOK {
+		t.Fatal("an altered readable statement must NOT verify")
+	}
+	c, ok := checkByName(checks, "statement")
+	if !ok {
+		t.Fatalf("expected a 'statement' check, got %+v", checks)
+	}
+	if c.OK {
+		t.Fatalf("the statement check must fail on an altered readable copy: %+v", c)
+	}
+	// The signature itself is still genuine — the point is that a valid
+	// signature must no longer launder an edited readable statement.
+	if sig, _ := checkByName(checks, "signature"); !sig.OK {
+		t.Fatal("the envelope signature should still verify; only the readable copy was altered")
+	}
+}
+
+// TestVerifyRecordGenuineReadableStatementPasses guards the other direction: an
+// untouched record must still verify, or this check would break every real one.
+func TestVerifyRecordGenuineReadableStatementPasses(t *testing.T) {
+	rec, pub := buildTestRecord(t)
+	checks, _ := VerifyRecord(rec, pub, failWitnessFactory(t), true)
+	c, ok := checkByName(checks, "statement")
+	if !ok {
+		t.Fatalf("expected a 'statement' check, got %+v", checks)
+	}
+	if !c.OK {
+		t.Fatalf("a genuine record's readable statement must pass: %+v", c)
+	}
+}
+
+// TestVerifyRecordExtraUnsignedKeysTolerated documents a deliberate limit of
+// the statement check: it asserts that every SIGNED field is unchanged, not
+// that the readable map contains nothing else.
+//
+// Real consumers carry extras — the cockpit hands VerifyRecord a whole
+// database row (pass, anchored, rekor, steps) alongside the statement fields,
+// and rejecting that would break the UI for every genuine record. The security
+// property kept is the one that was actually broken: a valid signature can no
+// longer launder an ALTERED signed value.
+func TestVerifyRecordExtraUnsignedKeysTolerated(t *testing.T) {
+	rec, pub := buildTestRecord(t)
+	withExtras := make(map[string]any, len(rec.Statement)+2)
+	for k, v := range rec.Statement {
+		withExtras[k] = v
+	}
+	withExtras["pass"] = true
+	withExtras["anchored"] = false
+	rec.Statement = withExtras
+
+	checks, _ := VerifyRecord(rec, pub, failWitnessFactory(t), true)
+	c, ok := checkByName(checks, "statement")
+	if !ok {
+		t.Fatalf("expected a 'statement' check, got %+v", checks)
+	}
+	if !c.OK {
+		t.Fatalf("extra unsigned keys must be tolerated: %+v", c)
+	}
+}

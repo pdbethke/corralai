@@ -1,0 +1,117 @@
+{
+  "head": "55318997a981e919b8b5f27d76b73a60bee453ae307bd949c98290f16ba2f9df",
+  "signature": "{\"payloadType\":\"application/vnd.in-toto+json\",\"payload\":\"eyJfdHlwZSI6Imh0dHBzOi8vaW4tdG90by5pby9TdGF0ZW1lbnQvdjEiLCJwcmVkaWNhdGUiOnsiYnVpbGREZWZpbml0aW9uIjp7ImJ1aWxkVHlwZSI6Imh0dHBzOi8vY29ycmFsYWkuZGV2L2NlcnRpZnkvdjEiLCJleHRlcm5hbFBhcmFtZXRlcnMiOnsiYnJhbmNoIjoiIiwiY29tbWFuZCI6ImNvcnJhbC9hZHZlcnNhcmlhbC1wb29sIiwiY29tbWl0IjoiZjQwNWFkZThhNGI3YTBkYzM1M2UwZjczOTBjMWJlOTAwNjBmMzYyMSIsInJlcG8iOiJodHRwczovL2dpdGh1Yi5jb20vZGVidWctanMvZGVidWcuZ2l0In0sImludGVybmFsUGFyYW1ldGVycyI6eyJhY3RvciI6ImNvcnJhbC1hZHZwb29sIn0sInJlc29sdmVkRGVwZW5kZW5jaWVzIjpbeyJ1cmkiOiJtb2RlbDptdXRhbnQtZ2VuZXJhdG9yOmdlbWluaS0zLjYtZmxhc2gifSx7InVyaSI6Im1vZGVsOnRlc3QtY3JpdGljOiJ9LHsidXJpIjoibW9kZWw6dGVzdC13cml0ZXI6Z2VtaW5pLTMuNi1mbGFzaCJ9XX0sInJ1bkRldGFpbHMiOnsiYnVpbGRlciI6eyJidWlsZGVyRGVwZW5kZW5jaWVzIjpbeyJ1cmkiOiJtb2RlbDptdXRhbnQtZ2VuZXJhdG9yOmdlbWluaS0zLjYtZmxhc2gifSx7InVyaSI6Im1vZGVsOnRlc3QtY3JpdGljOiJ9LHsidXJpIjoibW9kZWw6dGVzdC13cml0ZXI6Z2VtaW5pLTMuNi1mbGFzaCJ9XSwiaWQiOiJodHRwczovL2NvcnJhbGFpLmRldi9jZXJ0aWZ5In0sImJ5cHJvZHVjdHMiOlt7ImRpZ2VzdCI6eyJzaGEyNTYiOiI1NTMxODk5N2E5ODFlOTE5YjhiNWYyN2Q3NmI3M2E2MGJlZTQ1M2FlMzA3YmQ5NDljOTgyOTBmMTZiYTJmOWRmIn0sIm1lZGlhVHlwZSI6ImFwcGxpY2F0aW9uL3ZuZC5jb3JyYWxhaS5idWlsZC1sZWRnZXIranNvbiIsIm5hbWUiOiJhY2NvdW50YWJpbGl0eS90YW1wZXItZXZpZGVudC1sZWRnZXIifSx7ImFubm90YXRpb25zIjp7ImNvbW1hbmQiOiJjb3JyYWwvYWR2ZXJzYXJpYWwtcG9vbCIsImR1cmF0aW9uUyI6MCwiZXhpdENvZGUiOjEsIm91dHB1dERpZ2VzdCI6InNoYTI1Njo1MzU5ZWQ0NTg1OGY5YzExYTA1MjZkZmY0OTBhNDZkZWJmN2E2ZmVlOTIzYjc1MjhkNmU2NDJhMzVlMTNhNTI4IiwicGFzc2VkIjpmYWxzZX0sIm1lZGlhVHlwZSI6ImFwcGxpY2F0aW9uL3ZuZC5jb3JyYWxhaS5jZXJ0aWZpY2F0aW9uK2pzb24iLCJuYW1lIjoiY2VydGlmaWNhdGlvbi9leGVjdXRpb24ifV0sIm1ldGFkYXRhIjp7ImZpbmlzaGVkT24iOjAsInN0YXJ0ZWRPbiI6MH19fSwicHJlZGljYXRlVHlwZSI6Imh0dHBzOi8vc2xzYS5kZXYvcHJvdmVuYW5jZS92MSIsInN1YmplY3QiOlt7ImRpZ2VzdCI6eyJzaGEyNTYiOiI1NTMxODk5N2E5ODFlOTE5YjhiNWYyN2Q3NmI3M2E2MGJlZTQ1M2FlMzA3YmQ5NDljOTgyOTBmMTZiYTJmOWRmIn0sIm5hbWUiOiJodHRwczovL2dpdGh1Yi5jb20vZGVidWctanMvZGVidWcuZ2l0QGY0MDVhZGU4YTRiN2EwZGMzNTNlMGY3MzkwYzFiZTkwMDYwZjM2MjEifV19\",\"signatures\":[{\"keyid\":\"brain\",\"sig\":\"M8aljOz09Y1eywSss6SO+VMPAvfWj/yzr+YymmNF/lzjCQg5gdwhbtmFPC8NW/3p+7yxesUYWI4wXb3FeYulBw==\"}]}",
+  "statement": {
+    "_type": "https://in-toto.io/Statement/v1",
+    "predicate": {
+      "buildDefinition": {
+        "buildType": "https://corralai.dev/certify/v1",
+        "externalParameters": {
+          "branch": "",
+          "command": "corral/adversarial-pool",
+          "commit": "f405ade8a4b7a0dc353e0f7390c1be90060f3621",
+          "repo": "https://github.com/debug-js/debug.git"
+        },
+        "internalParameters": {
+          "actor": "corral-advpool"
+        },
+        "resolvedDependencies": [
+          {
+            "uri": "model:mutant-generator:gemini-3.6-flash"
+          },
+          {
+            "uri": "model:test-critic:"
+          },
+          {
+            "uri": "model:test-writer:gemini-3.6-flash"
+          }
+        ]
+      },
+      "runDetails": {
+        "builder": {
+          "builderDependencies": [
+            {
+              "uri": "model:mutant-generator:gemini-3.6-flash"
+            },
+            {
+              "uri": "model:test-critic:"
+            },
+            {
+              "uri": "model:test-writer:gemini-3.6-flash"
+            }
+          ],
+          "id": "https://corralai.dev/certify"
+        },
+        "byproducts": [
+          {
+            "digest": {
+              "sha256": "55318997a981e919b8b5f27d76b73a60bee453ae307bd949c98290f16ba2f9df"
+            },
+            "mediaType": "application/vnd.corralai.build-ledger+json",
+            "name": "accountability/tamper-evident-ledger"
+          },
+          {
+            "annotations": {
+              "command": "corral/adversarial-pool",
+              "durationS": 0,
+              "exitCode": 1,
+              "outputDigest": "sha256:5359ed45858f9c11a0526dff490a46debf7a6fee923b7528d6e642a35e13a528",
+              "passed": false
+            },
+            "mediaType": "application/vnd.corralai.certification+json",
+            "name": "certification/execution"
+          }
+        ],
+        "metadata": {
+          "finishedOn": 0,
+          "startedOn": 0
+        }
+      }
+    },
+    "predicateType": "https://slsa.dev/provenance/v1",
+    "subject": [
+      {
+        "digest": {
+          "sha256": "55318997a981e919b8b5f27d76b73a60bee453ae307bd949c98290f16ba2f9df"
+        },
+        "name": "https://github.com/debug-js/debug.git@f405ade8a4b7a0dc353e0f7390c1be90060f3621"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "actor": "corral-advpool",
+      "detail": {
+        "branch": "",
+        "commit": "f405ade8a4b7a0dc353e0f7390c1be90060f3621",
+        "repo": "https://github.com/debug-js/debug.git"
+      },
+      "hash": "e8e56a5453ca6be09258e27aa9b685a8a9d3a9af2b845fca9424265c8eda3cac",
+      "kind": "context",
+      "model": "",
+      "prev": "0000000000000000000000000000000000000000000000000000000000000000",
+      "seq": 0,
+      "subject": "https://github.com/debug-js/debug.git@f405ade8a4b7a0dc353e0f7390c1be90060f3621",
+      "ts": 0
+    },
+    {
+      "actor": "corral-advpool",
+      "detail": {
+        "dropped_regions": null,
+        "duration_s": 0,
+        "exit_code": 1,
+        "ok": false,
+        "output_digest": "sha256:5359ed45858f9c11a0526dff490a46debf7a6fee923b7528d6e642a35e13a528",
+        "regions_probed": 1,
+        "regions_total": 1
+      },
+      "hash": "55318997a981e919b8b5f27d76b73a60bee453ae307bd949c98290f16ba2f9df",
+      "kind": "execution",
+      "model": "",
+      "prev": "e8e56a5453ca6be09258e27aa9b685a8a9d3a9af2b845fca9424265c8eda3cac",
+      "seq": 1,
+      "subject": "corral/adversarial-pool",
+      "ts": 0
+    }
+  ]
+}

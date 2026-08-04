@@ -1,0 +1,83 @@
+---
+title: Verify a record yourself
+description: Twelve signed verdicts from audits of third-party libraries, published as files. Check them offline with no API key, no network, and no reason to take our word for anything.
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+
+Every audit ends in a signed, hash-linked record. Below are twelve of them, from
+runs against **libraries we did not write**. You can check each one on your own
+machine, offline.
+
+## Do it
+
+```bash
+go install github.com/pdbethke/corralai/cmd/corral@latest
+curl -O https://corralai.dev/records/record-19.json
+
+corral certify verify record-19.json \
+  --pubkey 909429443700441a9f662c07c5f1b7110333fd7fb94fb21e8991e40f2cb6dc09 \
+  --allow-unanchored
+```
+
+No API key. No network after the download. Nothing is sent anywhere.
+
+## What each record is
+
+| record | library | commit | herd |
+|---|---|---|---|
+| [18](/records/record-18.json) | vercel/ms | `4ff48ce` | Claude (planter + writer), Claude critic |
+| [19](/records/record-19.json) | vercel/ms | `4ff48ce` | Gemini, no critic |
+| [20](/records/record-20.json) | vercel/ms | `4ff48ce` | **Gemini planter + writer, Claude critic** |
+| [21–23](/records/record-21.json) | minitest/minitest | `581e7d5` | Gemini |
+| [24–26](/records/record-24.json) | debug-js/debug | `f405ade` | Gemini |
+| [27–29](/records/record-27.json) | wvanbergen/chunky_png | `7a1faf6` | Gemini |
+
+Record 20 is the interesting one: the model that planted the faults and the
+model that judged the suite are **from different vendors**. That is the claim
+this whole tool rests on, in a file you can check.
+
+Each record is an in-toto statement naming the repository and the exact commit
+as its subject, the role→model assignment as builder dependencies, and a
+hash-linked step ledger. Change one byte of any of it and the signature fails.
+
+## What this proves, and what it does not
+
+**It proves integrity.** The verdict you are reading is byte-for-byte the
+verdict that was produced, and the numbers in it were not edited afterwards.
+
+**It does not prove independent authenticity.** The signing key is ours, and we
+are also the ones publishing the public key above — so a reader who distrusts us
+entirely gains nothing from checking a signature against a key we handed them.
+That is a real limit and we would rather state it than let the word "signed" do
+work it hasn't earned.
+
+**These records are signed but not publicly witnessed** — that is why
+`--allow-unanchored` is required. Anchoring a signature in a public
+transparency log is what would close the gap above, because then the timestamp
+and the signature would be attested by someone who is not us. The code path
+exists; these particular records did not use it.
+
+**The one thing you don't have to trust at all** is the kill rate. It is not a
+model's opinion about a suite — it is the exit code of *that library's own test
+command*, run against each planted fault inside a sandbox. You can reproduce it:
+clone the repo at the commit named in the record, run corral against the same
+file, and compare. It will not match exactly, and that is expected — see below.
+
+## Expect the numbers to move
+
+Faults are generated fresh on every run, so two audits of the same file with the
+same suite return different kill rates. Measured swing on one file: **0.55 to
+0.80**.
+
+That is why there are three records for most repositories here rather than one.
+A single run is evidence of *specific gaps*, never a grade — and anyone quoting
+one of these numbers as a score for a library is misreading it.
+
+## The honest footnote on chunky_png
+
+Records 27–29 required one change to the repository: `spec_helper.rb` calls
+`bundler/setup`, bundler was not installed on the machine that ran the audit, and
+that line was replaced with a `$LOAD_PATH` adjustment. The library and its specs
+are untouched, but it is not quite "third-party as shipped," and you should know
+that before treating it as a clean-room result.

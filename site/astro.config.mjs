@@ -46,6 +46,9 @@ export default defineConfig({
         // adopted. It sat unpublished while the console UI tour had seven
         // pages — builder-era shelf space the audit product never claimed.
         { label: 'The GitHub Action', slug: 'docs/github-action' },
+        // Near the top on purpose: the fastest way to stop taking our word
+        // for anything is to check a real verdict yourself, offline.
+        { label: 'Verify a record yourself', slug: 'docs/verify-a-record' },
         {
           label: 'Concepts',
           items: [

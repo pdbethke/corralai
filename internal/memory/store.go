@@ -25,6 +25,21 @@ import (
 var (
 	home      = mustHome()
 	DefaultDB = filepath.Join(home, ".claude", "corralai_memory.duckdb")
+	// dirGlob is NOT live configuration and nothing in this package reads it.
+	// It exists solely as the fixture TestBuildNilSkipsPersonalGlobByDefault
+	// swaps out to prove the operator's PERSONAL memory corpus is NOT indexed:
+	// Build(nil) resolves to CORRALAI_MEMORY_DIR or an EMPTY list, and
+	// iterEntries walks only the dirs it is handed, with no fallback.
+	//
+	// Auto-indexing this glob was a real privacy bug (it bit the project four
+	// times, once putting 413 personal entries into a demo) and was fixed in
+	// cc170ce. The var is kept — deliberately named after the thing that must
+	// never happen — so the regression test can point at a realistic shape.
+	//
+	// It nearly caused its own incident: on 2026-08-04 a pre-launch scan read
+	// this line as live config and concluded the leak was still open. If you
+	// are here for the same reason, run the two tests named above; the answer
+	// is that grep for production callers returns nothing.
 	dirGlob   = filepath.Join(home, ".claude", "projects", "*", "memory")
 	skipNames = map[string]bool{"MEMORY.md": true, "ARCHIVE.md": true}
 	fmRe      = regexp.MustCompile(`(?s)^---\n(.*?)\n---\n?(.*)$`)

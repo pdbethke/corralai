@@ -109,33 +109,78 @@ func soleAssignedCloudModel(assign advpool.RoleAssignment) (vendor, model string
 func localChatterFor(assign advpool.RoleAssignment) (func(role string) agentworker.Chatter, error) {
 	base := agentbackend.FromEnv()
 	sw, canSwitch := base.(agentbackend.ModelSwitcher)
+	bv := baseVendor()
 
-	var criticChatter agentworker.Chatter
-	if onDefaultClaudePath() && canSwitch {
-		criticModel := assign[advpool.RoleTestCritic]
-		// On the default path the base backend is definitively anthropic
-		// (onDefaultClaudePath gates that), so the base vendor is "anthropic"
-		// regardless of the base backend's default model string — do NOT
-		// derive it from sw.Model() (which is the local AGENT_MODEL default,
-		// vendor ""). Cross-route only when the critic resolves to a
-		// recognized cloud vendor that is NOT anthropic; a same-vendor Claude
-		// critic keeps the base+WithModel path below.
-		if v := agentbackend.VendorOf(criticModel); criticModel != "" && v != "" && v != "anthropic" {
-			cb, err := agentbackend.ForModel(criticModel)
-			if err != nil {
-				return nil, fmt.Errorf("cross-vendor critic: %w", err)
+	// Resolve EVERY seat, not just the critic. This used to cross-route the
+	// test-critic alone, which quietly made the product's central claim
+	// unreachable: the mutant-generator and the test-writer were pinned to
+	// whatever single backend the run started on, so "one model plants the
+	// faults, a DIFFERENT one writes the killing test" could only ever mean
+	// two models from the same vendor. Asking for a Gemini generator and a
+	// Claude critic did not fail loudly either — the Gemini name was sent to
+	// Anthropic's endpoint and came back 404.
+	//
+	// It also stranded the scorecard. The learning loop measures which model
+	// actually catches bugs IN WHICH ROLE, and routing could act on that for
+	// one role in three; a measurement computed and then not actable is the
+	// same shape as a measurement computed and discarded.
+	//
+	// Resolved UP FRONT so a missing credential refuses the run before any
+	// jail or store is opened, naming the role the operator has to fix.
+	perRole := map[string]agentworker.Chatter{}
+	if bv != "" {
+		for _, role := range []string{
+			advpool.RoleMutantGenerator,
+			advpool.RoleTestWriter,
+			advpool.RoleTestCritic,
+			advpool.RoleMutantGeneratorShadow,
+		} {
+			model := strings.TrimSpace(assign[role])
+			if model == "" {
+				continue
 			}
-			criticChatter = agentbackend.AsChatter(cb)
+			v := agentbackend.VendorOf(model)
+			if v == "" || v == bv {
+				continue // unrecognized, or already this backend's vendor
+			}
+			cb, err := agentbackend.ForModel(model)
+			if err != nil {
+				return nil, fmt.Errorf("cross-vendor %s: %w", role, err)
+			}
+			perRole[role] = agentbackend.AsChatter(cb)
 		}
 	}
 
 	return func(role string) agentworker.Chatter {
-		if role == advpool.RoleTestCritic && criticChatter != nil {
-			return criticChatter
+		if c, ok := perRole[role]; ok {
+			return c
 		}
 		if model := assign[role]; canSwitch && model != "" {
 			return agentbackend.AsChatter(sw.WithModel(model))
 		}
 		return agentbackend.AsChatter(base)
 	}, nil
+}
+
+// baseVendor is the vendor the process-wide backend actually talks to, as a
+// VendorOf-comparable string — the thing a per-role model must DIFFER from to
+// need its own backend.
+//
+// Returns "" for a gateway the operator pinned deliberately (openrouter,
+// ollama, or anything unrecognized). Those front many vendors behind one
+// endpoint, so a "claude-" model name there is not an Anthropic call and must
+// not be re-routed to Anthropic: an explicit MODEL_BACKEND means every seat
+// goes to that endpoint on purpose, and cross-routing would silently overrule
+// the operator and spend on a vendor they did not choose.
+func baseVendor() string {
+	switch strings.TrimSpace(os.Getenv("MODEL_BACKEND")) {
+	case "", "anthropic", "claude":
+		return "anthropic"
+	case "gemini":
+		return "google"
+	case "openai":
+		return "openai"
+	default:
+		return ""
+	}
 }

@@ -331,3 +331,100 @@ func TestResolveAuditRolesDerivesBackendFromAssignedModels(t *testing.T) {
 		}
 	})
 }
+
+// TestBaseVendorMapsBackendLabels: the base backend's vendor is what a per-role
+// model must differ from. A pinned gateway (openrouter/ollama) returns "" —
+// those front many vendors behind one endpoint, so a "claude-" name there is
+// NOT an Anthropic call and must never be re-routed to Anthropic behind the
+// operator's back.
+func TestBaseVendorMapsBackendLabels(t *testing.T) {
+	for _, tc := range []struct{ env, want string }{
+		{"", "anthropic"},
+		{"anthropic", "anthropic"},
+		{"claude", "anthropic"},
+		{"gemini", "google"},
+		{"openai", "openai"},
+		{"openrouter", ""},
+		{"ollama", ""},
+	} {
+		t.Setenv("MODEL_BACKEND", tc.env)
+		if got := baseVendor(); got != tc.want {
+			t.Errorf("MODEL_BACKEND=%q: baseVendor()=%q want %q", tc.env, got, tc.want)
+		}
+	}
+}
+
+// TestLocalChatterFailsClosedOnAnyRoleNotJustTheCritic is the regression that
+// matters. The router used to cross-route ONLY the test-critic, which made the
+// product's central claim unreachable: the generator and the writer were pinned
+// to whichever single backend the run started on, so "a different model marks
+// the exam" could only mean two models from the same vendor. Worse, it did not
+// fail loudly — a Gemini generator name was sent to Anthropic and came back 404
+// mid-run.
+//
+// With no Gemini credential present, asking for a Gemini GENERATOR must now
+// refuse up front and name that role.
+func TestLocalChatterFailsClosedOnAnyRoleNotJustTheCritic(t *testing.T) {
+	t.Setenv("MODEL_BACKEND", "")
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+	t.Setenv("GEMINI_API_KEY", "")
+	t.Setenv("GOOGLE_API_KEY", "")
+
+	_, err := localChatterFor(advpool.RoleAssignment{
+		advpool.RoleMutantGenerator: "gemini-3.6-flash",
+		advpool.RoleTestWriter:      "claude-sonnet-5",
+		advpool.RoleTestCritic:      "claude-haiku-4-5",
+	})
+	if err == nil {
+		t.Fatal("a Gemini generator with no Gemini key must refuse the run, not 404 mid-run")
+	}
+	if !strings.Contains(err.Error(), advpool.RoleMutantGenerator) {
+		t.Fatalf("the error must name the offending role, got: %v", err)
+	}
+}
+
+// TestLocalChatterRoutesThreeVendorsAtOnce: the herd the product actually
+// argues for — the fault-planter, the test-writer and the critic each from a
+// different vendor. Before this, only one of the three could leave the base.
+func TestLocalChatterRoutesThreeVendorsAtOnce(t *testing.T) {
+	t.Setenv("MODEL_BACKEND", "")
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+	t.Setenv("GEMINI_API_KEY", "gm-test")
+	t.Setenv("OPENAI_API_KEY", "sk-oai-test")
+
+	pick, err := localChatterFor(advpool.RoleAssignment{
+		advpool.RoleMutantGenerator: "gemini-3.6-flash",
+		advpool.RoleTestWriter:      "claude-sonnet-5",
+		advpool.RoleTestCritic:      "gpt-5",
+	})
+	if err != nil {
+		t.Fatalf("all three credentials present, want no error: %v", err)
+	}
+	gen, writer, critic := pick(advpool.RoleMutantGenerator), pick(advpool.RoleTestWriter), pick(advpool.RoleTestCritic)
+	if gen == nil || writer == nil || critic == nil {
+		t.Fatal("every role must resolve to a chatter")
+	}
+	// The generator and the critic are off-base vendors, so each must have been
+	// given its OWN backend rather than the shared base-with-model.
+	if gen == writer {
+		t.Fatal("a Gemini generator must not share the Anthropic base backend with a Claude writer")
+	}
+	if critic == writer {
+		t.Fatal("an OpenAI critic must not share the Anthropic base backend with a Claude writer")
+	}
+}
+
+// TestLocalChatterLeavesAPinnedGatewayAlone: MODEL_BACKEND=openrouter means the
+// operator pointed every seat at one endpoint on purpose. Re-routing a
+// "claude-" name there to Anthropic would overrule them and spend on a vendor
+// they did not choose.
+func TestLocalChatterLeavesAPinnedGatewayAlone(t *testing.T) {
+	t.Setenv("MODEL_BACKEND", "openrouter")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	if _, err := localChatterFor(advpool.RoleAssignment{
+		advpool.RoleMutantGenerator: "anthropic/claude-sonnet-5",
+		advpool.RoleTestCritic:      "google/gemini-3.6-flash",
+	}); err != nil {
+		t.Fatalf("a pinned gateway must not be cross-routed or key-checked: %v", err)
+	}
+}

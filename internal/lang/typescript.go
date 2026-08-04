@@ -69,14 +69,44 @@ func (tsPlugin) TestCmd() []string {
 	return []string{"node", "--experimental-strip-types", "--test"}
 }
 
-// CompileCheck is a REAL type-check of the whole workspace via project-mode tsc
-// (no files on the command line, so the scaffold tsconfig governs which .ts are
-// checked). Needs `typescript` + `@types/node` host-present.
-// tsc project-mode type-checks the whole workspace in one invocation, so
-// this is a single-command sequence — see lang.Plugin.CompileCheck's doc
-// comment for why the return type is a sequence at all.
+// CompileCheck is a REAL type-check, SCOPED to the audited file and the test
+// under consideration — not the whole project.
+//
+// It used to run project-mode (`tsc --noEmit -p tsconfig.json`). In single-file
+// mode that was fine: the only tsconfig present was our own scaffold. Against a
+// real repository (--repo-dir) the PROJECT's tsconfig governs, so the check
+// type-checks every file the project includes — and any pre-existing error
+// anywhere in the repo fails it. Observed on a real TypeScript project whose
+// unrelated modules import workspace-sibling packages that were not installed:
+// the test-writer authored a perfectly good test, the gate reported "does not
+// compile" three times over errors in files the audit never touched, and every
+// survivor was reported unproven. The run still graded and looked healthy.
+//
+// This is the same defect that was fixed for Go by scoping `go vet` to the
+// audited package instead of ./... — a compile gate must answer "does THIS test
+// compile", never "is this entire repository clean".
+//
+// Naming files on the command line makes tsc ignore tsconfig's file selection,
+// so the compiler options it needs are passed explicitly and mirror the
+// scaffold's. Imports of the named files are still followed and checked, so a
+// test that genuinely fails to type-check is still caught.
 func (tsPlugin) CompileCheck(codePath, testPath string) [][]string {
-	return [][]string{{"tsc", "--noEmit", "-p", "tsconfig.json"}}
+	cmd := []string{
+		"tsc", "--noEmit",
+		"--skipLibCheck",
+		"--target", "es2022",
+		"--module", "nodenext",
+		"--moduleResolution", "nodenext",
+		"--strict",
+		"--allowImportingTsExtensions",
+	}
+	if codePath != "" {
+		cmd = append(cmd, codePath)
+	}
+	if testPath != "" && testPath != codePath {
+		cmd = append(cmd, testPath)
+	}
+	return [][]string{cmd}
 }
 
 // TestPaths mirrors jsPlugin.TestPaths with the `.ts` suffix — see there for

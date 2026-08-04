@@ -305,3 +305,41 @@ func TestShellJoinQuotesMetacharacters(t *testing.T) {
 		t.Fatalf("shellQuote embedded quote: got %s", q)
 	}
 }
+
+// TestEnvWithDepBinPaths pins the fix that lets the test-writer's own compile
+// check run at all. The host's PATH is meaningless inside the jail: a developer
+// resolves `tsc` or `vitest` through the repo's node_modules/.bin, and that
+// absolute host path does not exist in a fresh temp workspace. Without the
+// jail-side .bin on PATH, `tsc --noEmit` fails "not found", no authored test
+// ever compiles, and every survivor is reported unproven — while the run still
+// grades and looks fine.
+func TestEnvWithDepBinPaths(t *testing.T) {
+	got := envWithDepBinPaths(
+		[]string{"PATH=/usr/bin", "HOME=/home/agent"},
+		[]sandbox.Bind{{Target: "/ws/node_modules"}},
+	)
+	var path string
+	for _, kv := range got {
+		if strings.HasPrefix(kv, "PATH=") {
+			path = strings.TrimPrefix(kv, "PATH=")
+		}
+	}
+	if !strings.HasPrefix(path, "/ws/node_modules/.bin:") {
+		t.Fatalf("dep .bin must come FIRST on PATH, got %q", path)
+	}
+	if !strings.Contains(path, "/usr/bin") {
+		t.Fatalf("the existing PATH must be preserved, got %q", path)
+	}
+}
+
+// TestEnvWithDepBinPathsIgnoresNonDepBinds: only a real dependency directory
+// contributes a PATH entry. A vendor/ or .venv bind has no .bin convention, and
+// inventing PATH entries would make host tooling reachable that the binds did
+// not already make reachable.
+func TestEnvWithDepBinPathsIgnoresNonDepBinds(t *testing.T) {
+	in := []string{"PATH=/usr/bin"}
+	got := envWithDepBinPaths(in, []sandbox.Bind{{Target: "/ws/vendor"}})
+	if len(got) != 1 || got[0] != "PATH=/usr/bin" {
+		t.Fatalf("PATH must be untouched with no node_modules bind, got %v", got)
+	}
+}

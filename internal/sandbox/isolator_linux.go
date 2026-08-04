@@ -96,6 +96,17 @@ func (bwrapIsolator) Wrap(command string, opts Options, env []string) ([]string,
 		"--chdir", opts.Workspace,
 	)
 	for _, bnd := range opts.ReadOnlyBinds {
+		// A PerEntry bind becomes one --ro-bind per top-level entry, so the
+		// parent stays a writable workspace directory a toolchain can create
+		// its cache in. Ordering is load-bearing: these come AFTER the
+		// workspace --bind above, because bwrap creates a mountpoint only when
+		// its parent already exists and is writable.
+		if bnd.PerEntry {
+			for _, e := range perEntryBinds(bnd) {
+				argv = append(argv, "--ro-bind", e.Host, e.Target)
+			}
+			continue
+		}
 		argv = append(argv, "--ro-bind", bnd.Host, bnd.Target)
 	}
 	if opts.Network {

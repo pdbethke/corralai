@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
+	"path/filepath"
 	"os/exec"
 	"strings"
 	"time"
@@ -22,6 +24,53 @@ import (
 type Bind struct {
 	Host   string // absolute host directory
 	Target string // absolute path inside the jail (under Workspace)
+
+	// PerEntry mounts each top-level ENTRY of Host separately, leaving Target
+	// itself a writable directory in the workspace, instead of mounting Host
+	// over Target as one read-only tree.
+	//
+	// This exists because a dependency tree is not purely read-only in
+	// practice: essentially every JavaScript toolchain writes a cache INSIDE
+	// node_modules (vite and vitest use .vite, jest and others use .cache), and
+	// a whole-tree read-only mount makes that write fail with EROFS. The tests
+	// themselves pass and the runner then exits non-zero, which the audit can
+	// only report as "the baseline failed" — a build/environment verdict on a
+	// project that is fine.
+	//
+	// Mounting per entry keeps every real path identical (node resolves module
+	// realpaths, so a symlink farm would give the test file and the runner two
+	// different copies of the same package and break test registration), copies
+	// nothing, and leaves the parent writable so a cache directory can simply
+	// be created — in the workspace, thrown away with it.
+	//
+	// Dot-entries are skipped, except .bin: a cache directory that already
+	// exists on the host would otherwise be re-mounted read-only and reproduce
+	// the very failure this avoids, while .bin holds the executables the test
+	// command needs.
+	PerEntry bool
+}
+
+// perEntryBinds expands a PerEntry bind into one Bind per top-level entry of
+// b.Host. A Host that cannot be read expands to nothing rather than failing the
+// run: the jail is then missing dependencies and the suite says so in its own
+// words, which is a better diagnosis than an argv-construction error.
+func perEntryBinds(b Bind) []Bind {
+	ents, err := os.ReadDir(b.Host)
+	if err != nil {
+		return nil
+	}
+	out := make([]Bind, 0, len(ents))
+	for _, e := range ents {
+		name := e.Name()
+		if strings.HasPrefix(name, ".") && name != ".bin" {
+			continue
+		}
+		out = append(out, Bind{
+			Host:   filepath.Join(b.Host, name),
+			Target: path.Join(b.Target, name),
+		})
+	}
+	return out
 }
 
 // Options configure a single Run.

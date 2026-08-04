@@ -3,7 +3,7 @@
 CorralAI is **source-available** under the [Elastic License 2.0](LICENSE):
 read it, modify it, self-host it. The one thing you can't do is offer it to
 third parties as a hosted or managed service — that path is available under a
-commercial license (contact pdbethke@gmail.com).
+commercial license (contact licensing@corralai.dev).
 
 ## Contributor License Agreement
 

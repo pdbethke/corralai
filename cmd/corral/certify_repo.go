@@ -1377,6 +1377,23 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 		detail = fmt.Sprintf("(%d survivor(s), %d proven missed)", f.Survivors, f.ProvenMissed)
 	}
 	fmt.Fprintf(w, "    %.2f  %s %s%s\n", f.KillRate, f.Path, detail, marker)
+
+	// The artifact that makes "N proven, catchable gap(s)" actionable. --repo
+	// is the mode the GitHub Action runs, and it reported the COUNT while
+	// dropping the test that produced it — so a developer was told a gap is
+	// provable and handed nothing to act on, for a test that had already
+	// compiled and executed. Printed here so it reaches stdout and therefore
+	// the job summary, which the Action copies verbatim.
+	//
+	// Only when the run actually proved something: on TimedOut /
+	// TestWriterFailed / PoolTestUnsound, ProvenMissed is not meaningful and
+	// the markers above already say why.
+	if f.ProvenMissed > 0 && strings.TrimSpace(f.AuthoredTest) != "" {
+		fmt.Fprintf(w, "      the pool wrote this test and RAN it to prove the gap — add it to your suite:\n")
+		for _, line := range strings.Split(strings.TrimRight(f.AuthoredTest, "\n"), "\n") {
+			fmt.Fprintf(w, "        %s\n", line)
+		}
+	}
 }
 
 // unpairableInDiff, when non-empty, names source files the diff CHANGED that

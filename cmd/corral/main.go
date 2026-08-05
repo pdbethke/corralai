@@ -158,7 +158,7 @@ func subcommand(args []string) string {
 		return ""
 	}
 	switch args[0] {
-	case "certify", "secret", "control", "scorecard", "criticscore", "matrix", "scans", "eval", "mcp":
+	case "certify", "secret", "control", "scorecard", "criticscore", "matrix", "scans", "eval", "mcp", "doctor":
 		return args[0]
 	}
 	return ""
@@ -682,6 +682,10 @@ func main() {
 			defer func() { _ = cs.Close() }()
 		}
 		os.Exit(runScorecard(os.Args[2:], localScorecardReader{store: bugCatchStore, critic: localCritic}, os.Stdout))
+	case "doctor":
+		// Free, fast, and BEFORE any spend: see doctor.go for why the checks
+		// are ordered the way the audit itself would hit them.
+		os.Exit(runDoctor(os.Args[2:], os.Stdout, os.Stderr))
 	case "mcp":
 		// Serve the findings to a coding agent over stdio, read-only, from the
 		// same local store `certify --local` writes. See mcp_findings.go for

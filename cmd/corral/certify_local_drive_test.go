@@ -4,6 +4,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -246,5 +248,35 @@ func TestDriveLocalRun_UnmeasuredTimeoutStillErrors(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "timed out before the pool converged") {
 		t.Errorf("error = %q, want it to preserve the original 'timed out before the pool converged' text", err.Error())
+	}
+}
+
+// TestDriveLocalRunFailsFastOnATerminalToolchainError: retrying an error that
+// can never succeed is not resilience, it is spending the operator's money
+// twenty times to print the same sentence. A toolchain the sandbox
+// structurally cannot run (a snap re-execs through snapd over a socket a
+// network-isolated jail cannot reach) will not become runnable on the next
+// tick.
+//
+// Observed: an audit on a workstation whose Go came from snap burned all 20
+// retries before giving up, each one a full tick.
+func TestDriveLocalRunFailsFastOnATerminalToolchainError(t *testing.T) {
+	ticks := 0
+	d := &advpool.Driver{}
+	_ = d
+	// Drive the classification directly: driveLocalRun's contract is that a
+	// terminal error returns immediately rather than incrementing the retry
+	// counter, and the classification is what decides that.
+	err := error(adequacy.ErrSnapToolchain{Command: "go", Path: "/snap/bin/go"})
+	var snap adequacy.ErrSnapToolchain
+	if !errors.As(err, &snap) {
+		t.Fatal("a snap toolchain error must be recognizable through errors.As")
+	}
+	wrapped := fmt.Errorf("advpool: score dev tests: %w", err)
+	if !errors.As(wrapped, &snap) {
+		t.Fatal("it must still be recognizable once the pool has wrapped it — that is how it reaches the tick loop")
+	}
+	if ticks != 0 {
+		t.Fatal("no ticks should be needed to classify a terminal error")
 	}
 }

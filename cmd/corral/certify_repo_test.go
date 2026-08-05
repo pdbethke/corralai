@@ -3785,3 +3785,41 @@ func TestPrintRepoReportDocsOnlyDiffStillSaysNoAuditNeeded(t *testing.T) {
 		t.Errorf("a docs-only diff must still report that no audit was needed:\n%s", s)
 	}
 }
+
+// TestPrintWeakFileEmitsTheAuthoredTest pins the artifact that makes a proven
+// gap actionable.
+//
+// `--repo` is the mode the GitHub Action runs. It reported "N proven, catchable
+// gap(s)" and dropped the test that produced that number — a test the pool had
+// already compiled AND executed against the survivor. A developer reading a CI
+// run was told a gap is provable and handed nothing to act on, which is the
+// difference between a report and a task.
+func TestPrintWeakFileEmitsTheAuthoredTest(t *testing.T) {
+	var b strings.Builder
+	printWeakFile(&b, reposcan.WeakFile{
+		Path: "cmd/corral/main.go", KillRate: 0.33, Survivors: 27, ProvenMissed: 1,
+		AuthoredTest: "func TestCorral_ProvesTheGap(t *testing.T) {\n\tt.Fatal(\"boom\")\n}",
+	})
+	out := b.String()
+	if !strings.Contains(out, "TestCorral_ProvesTheGap") {
+		t.Fatalf("the authored test must reach the report:\n%s", out)
+	}
+	if !strings.Contains(out, "RAN it to prove the gap") {
+		t.Fatalf("the output must say the test was executed, not merely written:\n%s", out)
+	}
+}
+
+// TestPrintWeakFileOmitsAuthoredTestWhenNothingWasProven: on TimedOut /
+// TestWriterFailed / PoolTestUnsound, ProvenMissed is not meaningful, and
+// printing a test beside a marker explaining that nothing graded would invite
+// a reader to trust an artifact the run itself disclaims.
+func TestPrintWeakFileOmitsAuthoredTestWhenNothingWasProven(t *testing.T) {
+	var b strings.Builder
+	printWeakFile(&b, reposcan.WeakFile{
+		Path: "x.go", KillRate: 0, Survivors: 4, ProvenMissed: 0, PoolTestUnsound: true,
+		AuthoredTest: "func TestShouldNotAppear(t *testing.T) {}",
+	})
+	if strings.Contains(b.String(), "TestShouldNotAppear") {
+		t.Fatalf("must not print an authored test that proved nothing:\n%s", b.String())
+	}
+}

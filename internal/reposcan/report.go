@@ -56,6 +56,15 @@ type WeakFile struct {
 	// (Survivors, TestWriterFailed) alongside it that a reader can tell
 	// which case they are looking at without re-deriving it.
 	ProvenMissed int
+	// AuthoredTest is the test the pool WROTE and RAN to prove a survivor was
+	// a real, catchable gap. Carried onto the report because `--repo` — the
+	// mode the GitHub Action runs — reported "N proven, catchable gap(s)" and
+	// then dropped the one artifact that makes that number actionable. A
+	// developer was told a gap is provable and handed nothing to act on; the
+	// test existed, had already compiled and executed, and went to the floor.
+	//
+	// Only meaningful alongside ProvenMissed > 0.
+	AuthoredTest string
 	// PoolTestUnsound mirrors advpool.Verdict.PoolTestUnsound: true when the
 	// pool's authored test DID compile (TestWriterFailed is false) but its
 	// scoring report never genuinely graded (it failed on the unmutated
@@ -240,6 +249,7 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 			TestWriterFailed: r.Verdict.TestWriterFailed,
 			ProvenMissed:     r.Verdict.ProvenMissed,
 			PoolTestUnsound:  r.Verdict.PoolTestUnsound,
+			AuthoredTest:     r.Verdict.AuthoredTest,
 		})
 	}
 

@@ -331,7 +331,8 @@ func ValidatePassword(pw string) error {
 }
 `
 
-// The dev suite kills m1 (accepts all) and m2 (len<4) but MISSES m3 (len<11):
+// The dev suite kills m1 (guard unreachable, so all passwords accepted) and
+// m2 (len<4) but MISSES m3 (len<11):
 // its 8-char probe can't distinguish the 11-char boundary.
 const localDevTest = `package control
 
@@ -347,19 +348,33 @@ func TestValidatePassword(t *testing.T) {
 }
 `
 
-// Three seeded-violation mutants in testgen's parseable format. Each is a
-// complete, compiling drop-in for validate.go that no longer satisfies the goal.
+// Three seeded-violation mutants, each a SEARCH/REPLACE hunk against
+// localTargetCode — testgen's actual format (internal/testgen/parse.go).
+//
+// This fixture used to emit whole files under "===MUTATION_N===". That stopped
+// parsing when mutants moved to hunks, and NOBODY NOTICED, because the tests
+// that exercise it skip unless `go` is reachable inside the jail — which it is
+// not on a snap host, and was not on CI runners either (Go lives in
+// /opt/hostedtoolcache, outside the only path the jail bound). The fix that
+// made the toolchain visible is what finally ran them.
 const localMutants = "===MUTATION_1===\n" +
-	"package control\n\n" +
-	"func ValidatePassword(pw string) error {\n\treturn nil\n}\n" +
+	"<<<<<<< SEARCH\n" +
+	"\tif len(pw) < 12 {\n" +
+	"=======\n" +
+	"\tif len(pw) < 0 {\n" +
+	">>>>>>> REPLACE\n" +
 	"===MUTATION_2===\n" +
-	"package control\n\n" +
-	"import \"errors\"\n\n" +
-	"func ValidatePassword(pw string) error {\n\tif len(pw) < 4 {\n\t\treturn errors.New(\"password too short\")\n\t}\n\treturn nil\n}\n" +
+	"<<<<<<< SEARCH\n" +
+	"\tif len(pw) < 12 {\n" +
+	"=======\n" +
+	"\tif len(pw) < 4 {\n" +
+	">>>>>>> REPLACE\n" +
 	"===MUTATION_3===\n" +
-	"package control\n\n" +
-	"import \"errors\"\n\n" +
-	"func ValidatePassword(pw string) error {\n\tif len(pw) < 11 {\n\t\treturn errors.New(\"password too short\")\n\t}\n\treturn nil\n}\n"
+	"<<<<<<< SEARCH\n" +
+	"\tif len(pw) < 12 {\n" +
+	"=======\n" +
+	"\tif len(pw) < 11 {\n" +
+	">>>>>>> REPLACE\n"
 
 // The pool's authored test kills the survivor m3: an 11-char password must be
 // rejected, which the compliant code does (11 < 12) but m3 (len<11) does not.
@@ -450,6 +465,18 @@ func TestDriveLocalRun_EndToEnd(t *testing.T) {
 		Lang:        "go",
 	}
 	const missionID = 7
+	// Mirror production (runCertifyLocal): the recordSink doubles as the
+	// driver's EventSink. It must be attached BEFORE StartRun, because the
+	// "pool_subject" beat — the goal, the code and the dev tests, i.e. what
+	// this audit is ABOUT — is emitted inside StartRun and is lost forever if
+	// the sink is nil at that moment.
+	//
+	// The assertions below have been checking for beats this test never wired
+	// up. Nobody noticed because the whole test skips unless `go` is reachable
+	// inside the jail, which excluded every snap host AND the CI runners (Go
+	// lives in /opt/hostedtoolcache, outside the only path the jail bound).
+	tape := &recordSink{}
+	d.Events = tape
 	if err := d.StartRun(missionID, rs, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -470,7 +497,6 @@ func TestDriveLocalRun_EndToEnd(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
-	tape := &recordSink{}
 	actorFor := func(role string) string { return recordActor(role, assign[role]) }
 	verdict, err := driveLocalRun(ctx, d, q, missionID, chatterFor, time.Millisecond, func(time.Duration) {}, io.Discard, tape, actorFor, 2)
 	if err != nil {

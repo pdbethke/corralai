@@ -42,10 +42,19 @@ SIGNED VERDICT ── certified   (kill-rate clears the bar, no blocking gap)
         the model that writes the exposing test, and the model that critiques
         the suite are <em>genuinely different models</em>, enforced at
         assignment — <code>CheckDecorrelation</code> refuses a run where the
-        critic and the test-writer are the same model. Mix cheap local models
-        with frontier ones, and pay for it however you already do — a metered
-        API key <em>or</em> a subscription CLI like Codex or Claude Max. Bring
-        anything OpenAI-compatible or a local model: no vendor lock-in.
+        critic and the test-writer are the same model. Each role can be pointed
+        at a different <em>vendor</em>, so a Gemini fault-planter with a Claude
+        critic is one run. Mix cheap local models with frontier ones: bring
+        anything OpenAI-compatible, or a local model, on your own key — no
+        vendor lock-in.
+      </p>
+      <p>
+        And decorrelate from whoever wrote the code. corral separates its own
+        three roles; it cannot see the <em>fourth</em> participant — the model
+        that authored the file under audit. If that was Claude and you audit
+        with Claude, the lineage that wrote the code is planting the faults and
+        grading the tests for it. Point the roles at a different vendor than
+        your code came from.
       </p>
       <a href="/docs/concepts/multi-model-herds/">Multi-model herds →</a>
     </div>

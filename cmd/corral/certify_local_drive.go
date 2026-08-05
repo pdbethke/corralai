@@ -4,11 +4,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
 	"time"
 
+	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/agentworker"
 	"github.com/pdbethke/corralai/internal/queue"
@@ -60,6 +62,14 @@ func driveLocalRun(ctx context.Context, d *advpool.Driver, q *queue.Store, missi
 		}
 		verdict, err := d.Tick(ctx, missionID)
 		if err != nil {
+			// Some failures are TERMINAL, and retrying them is not resilience
+			// — it is spending the operator's money twenty times to print the
+			// same sentence. A toolchain the sandbox structurally cannot run
+			// will not become runnable on the next tick.
+			var snap adequacy.ErrSnapToolchain
+			if errors.As(err, &snap) {
+				return nil, err
+			}
 			consecutiveTickErrors++
 			fmt.Fprintf(progress, "certify --local: tick error, reissued for retry (%d/%d): %v\n", consecutiveTickErrors, localTickMaxErrors, err)
 			if consecutiveTickErrors >= localTickMaxErrors {

@@ -253,6 +253,20 @@ func (j bwrapJail) runInJail(ctx context.Context, files map[string]string, cmd [
 	if berr != nil {
 		return sandbox.Result{}, berr
 	}
+	// Make the operator's OWN toolchain reachable. The jail mounts /usr, which
+	// covers a distribution package and /usr/local — and nothing else, so a
+	// compiler installed by asdf, nvm, rustup, pyenv, mise or Homebrew was
+	// invisible and the run failed with "<tool>: not found", blaming the
+	// project. Resolved from the command itself, so nothing is guessed.
+	if len(cmd) > 0 {
+		tb, terr := toolchainBindFor(cmd[0])
+		if terr != nil {
+			return sandbox.Result{}, terr
+		}
+		if tb.Host != "" {
+			roBinds = append(roBinds, tb)
+		}
+	}
 	res, err := sandbox.RunGuarded(ctx, shellJoin(cmd), sandbox.Options{
 		Workspace:     dir,
 		Backend:       j.backend,

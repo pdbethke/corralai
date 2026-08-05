@@ -158,7 +158,7 @@ func subcommand(args []string) string {
 		return ""
 	}
 	switch args[0] {
-	case "certify", "secret", "control", "scorecard", "criticscore", "matrix", "scans", "eval":
+	case "certify", "secret", "control", "scorecard", "criticscore", "matrix", "scans", "eval", "mcp":
 		return args[0]
 	}
 	return ""
@@ -682,6 +682,17 @@ func main() {
 			defer func() { _ = cs.Close() }()
 		}
 		os.Exit(runScorecard(os.Args[2:], localScorecardReader{store: bugCatchStore, critic: localCritic}, os.Stdout))
+	case "mcp":
+		// Serve the findings to a coding agent over stdio, read-only, from the
+		// same local store `certify --local` writes. See mcp_findings.go for
+		// why adjudication is deliberately absent from that surface.
+		cs, err := criticscore.Open(localCriticScoreDBPath())
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "corral mcp: opening the local findings store: %v\n", err)
+			os.Exit(1)
+		}
+		defer func() { _ = cs.Close() }()
+		os.Exit(runFindingsMCP(context.Background(), cs, os.Stderr))
 	case "criticscore":
 		// With CORRAL_BRAIN set, show/confirm/refute go through the brain's
 		// ADMIN-gated MCP tools, which need the caller's bearer identity for

@@ -32,13 +32,17 @@ type fakeCriticAdmin struct {
 	getErr  error
 	message string
 	adjErr  error
+	// gotRationale captures what --why actually forwarded, so the flag is
+	// tested end to end rather than merely parsed.
+	gotRationale string
 }
 
 func (f fakeCriticAdmin) Get(context.Context, string) (criticscore.Finding, error) {
 	return f.finding, f.getErr
 }
 
-func (f fakeCriticAdmin) Adjudicate(context.Context, string, string) (string, error) {
+func (f *fakeCriticAdmin) Adjudicate(_ context.Context, _, _, rationale string) (string, error) {
+	f.gotRationale = rationale
 	return f.message, f.adjErr
 }
 
@@ -47,7 +51,7 @@ func TestRunCriticScoreListPrintsPendingTable(t *testing.T) {
 		{ID: "42:5", Model: "haiku", TargetTest: "TestFoo", Scope: "whole-test", Severity: "high"},
 	}}
 	var out, errOut bytes.Buffer
-	rc := runCriticScore([]string{"list"}, lister, fakeCriticAdmin{}, &out, &errOut)
+	rc := runCriticScore([]string{"list"}, lister, &fakeCriticAdmin{}, &out, &errOut)
 	if rc != 0 {
 		t.Fatalf("rc=%d stderr=%s", rc, errOut.String())
 	}
@@ -58,7 +62,7 @@ func TestRunCriticScoreListPrintsPendingTable(t *testing.T) {
 
 func TestRunCriticScoreListEmpty(t *testing.T) {
 	var out, errOut bytes.Buffer
-	rc := runCriticScore([]string{"list"}, fakeCriticLister{}, fakeCriticAdmin{}, &out, &errOut)
+	rc := runCriticScore([]string{"list"}, fakeCriticLister{}, &fakeCriticAdmin{}, &out, &errOut)
 	if rc != 0 {
 		t.Fatalf("rc=%d", rc)
 	}
@@ -68,7 +72,7 @@ func TestRunCriticScoreListEmpty(t *testing.T) {
 }
 
 func TestRunCriticScoreShowPrintsFinding(t *testing.T) {
-	admin := fakeCriticAdmin{finding: criticscore.Finding{ID: "42:5", Model: "haiku", TargetTest: "TestFoo", Evidence: "the mutant survived", Adjudication: "unadjudicated"}}
+	admin := &fakeCriticAdmin{finding: criticscore.Finding{ID: "42:5", Model: "haiku", TargetTest: "TestFoo", Evidence: "the mutant survived", Adjudication: "unadjudicated"}}
 	var out, errOut bytes.Buffer
 	rc := runCriticScore([]string{"show", "42:5"}, fakeCriticLister{}, admin, &out, &errOut)
 	if rc != 0 {
@@ -81,7 +85,7 @@ func TestRunCriticScoreShowPrintsFinding(t *testing.T) {
 
 func TestRunCriticScoreConfirmAndRefute(t *testing.T) {
 	for _, verdict := range []string{"confirm", "refute"} {
-		admin := fakeCriticAdmin{message: "42:5 adjudicated " + verdict + "d"}
+		admin := &fakeCriticAdmin{message: "42:5 adjudicated " + verdict + "d"}
 		var out, errOut bytes.Buffer
 		rc := runCriticScore([]string{verdict, "42:5"}, fakeCriticLister{}, admin, &out, &errOut)
 		if rc != 0 {
@@ -94,7 +98,7 @@ func TestRunCriticScoreConfirmAndRefute(t *testing.T) {
 }
 
 func TestRunCriticScoreAdjudicateErrorSurfacesAndFails(t *testing.T) {
-	admin := fakeCriticAdmin{adjErr: errBoom}
+	admin := &fakeCriticAdmin{adjErr: errBoom}
 	var out, errOut bytes.Buffer
 	rc := runCriticScore([]string{"confirm", "42:5"}, fakeCriticLister{}, admin, &out, &errOut)
 	if rc == 0 {
@@ -107,11 +111,11 @@ func TestRunCriticScoreAdjudicateErrorSurfacesAndFails(t *testing.T) {
 
 func TestRunCriticScoreUsageOnBadArgs(t *testing.T) {
 	var out, errOut bytes.Buffer
-	rc := runCriticScore(nil, fakeCriticLister{}, fakeCriticAdmin{}, &out, &errOut)
+	rc := runCriticScore(nil, fakeCriticLister{}, &fakeCriticAdmin{}, &out, &errOut)
 	if rc != 2 {
 		t.Fatalf("expected rc=2 on missing subcommand, got %d", rc)
 	}
-	rc = runCriticScore([]string{"confirm"}, fakeCriticLister{}, fakeCriticAdmin{}, &out, &errOut)
+	rc = runCriticScore([]string{"confirm"}, fakeCriticLister{}, &fakeCriticAdmin{}, &out, &errOut)
 	if rc != 2 {
 		t.Fatalf("expected rc=2 on missing id, got %d", rc)
 	}
@@ -183,7 +187,7 @@ func TestLocalCriticScoreRoundTrip(t *testing.T) {
 	if _, err := local.Get(ctx, "31:1"); err != nil {
 		t.Fatalf("show should work offline: %v", err)
 	}
-	msg, err := local.Adjudicate(ctx, "31:1", "confirmed")
+	msg, err := local.Adjudicate(ctx, "31:1", "confirmed", "deleted the branch; only the new tests failed")
 	if err != nil {
 		t.Fatalf("confirm should work offline: %v", err)
 	}
@@ -217,7 +221,39 @@ func TestLocalCriticScoreUnknownID(t *testing.T) {
 	}
 	defer store.Close()
 	local := localCriticScore{store: store}
-	if _, err := local.Adjudicate(context.Background(), "99:9", "confirmed"); err == nil {
+	if _, err := local.Adjudicate(context.Background(), "99:9", "confirmed", ""); err == nil {
 		t.Fatal("adjudicating an unknown finding must fail loudly")
+	}
+}
+
+// TestCriticScoreWhyIsForwarded pins the flag that turns the corpus from a
+// tally into an auditable record. Without a rationale the store says a human
+// confirmed or refuted a finding and nothing about the basis — so C-PREC
+// becomes a number derived from judgments nobody can review, and a careless
+// refutation is indistinguishable from a considered one.
+func TestCriticScoreWhyIsForwarded(t *testing.T) {
+	admin := &fakeCriticAdmin{message: "ok"}
+	var out, errOut bytes.Buffer
+	rc := runCriticScore(
+		[]string{"refute", "42:5", "--why", "deleted the guard; the suite still failed, so the check is live"},
+		fakeCriticLister{}, admin, &out, &errOut)
+	if rc != 0 {
+		t.Fatalf("rc=%d stderr=%s", rc, errOut.String())
+	}
+	if !strings.Contains(admin.gotRationale, "deleted the guard") {
+		t.Fatalf("--why must reach the adjudicator, got %q", admin.gotRationale)
+	}
+}
+
+// TestCriticScoreWhyIsOptional: a verdict must never be blocked on prose. A
+// required justification is how you get "ok" typed a hundred times.
+func TestCriticScoreWhyIsOptional(t *testing.T) {
+	admin := &fakeCriticAdmin{message: "ok"}
+	var out, errOut bytes.Buffer
+	if rc := runCriticScore([]string{"confirm", "42:5"}, fakeCriticLister{}, admin, &out, &errOut); rc != 0 {
+		t.Fatalf("a bare verdict must still be accepted: rc=%d stderr=%s", rc, errOut.String())
+	}
+	if admin.gotRationale != "" {
+		t.Fatalf("expected no rationale, got %q", admin.gotRationale)
 	}
 }

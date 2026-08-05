@@ -33,6 +33,10 @@ type pendingCriticFindingsOut struct {
 type adjudicateCriticFindingIn struct {
 	ID      string `json:"id" jsonschema:"the finding id, e.g. \"42:5\""`
 	Verdict string `json:"verdict" jsonschema:"confirmed|refuted"`
+	// Why, not just what. Optional so a verdict is never blocked on prose,
+	// but recorded when given: without it the store keeps a tally rather
+	// than an auditable judgment.
+	Rationale string `json:"rationale,omitempty" jsonschema:"why this verdict was reached — the evidence you checked"`
 }
 
 // registerCriticScoreTools wires the human-gate over the adversarial pool's
@@ -79,11 +83,11 @@ func registerCriticScoreTools(s *mcp.Server, opts Options) {
 			if !opts.isHumanAdmin(req) {
 				return nil, okMsg{}, errAdminOnly
 			}
-			ok, err := store.Adjudicate(ctx, in.ID, in.Verdict, identity(req, ""))
+			ok, err := store.Adjudicate(ctx, in.ID, in.Verdict, identity(req, ""), in.Rationale)
 			if err != nil || !ok {
 				return nil, okMsg{OK: false, Message: "no such finding to adjudicate"}, err
 			}
-			auditKnowledge(opts, req, "adjudicate_critic_finding", map[string]any{"id": in.ID, "verdict": in.Verdict})
+			auditKnowledge(opts, req, "adjudicate_critic_finding", map[string]any{"id": in.ID, "verdict": in.Verdict, "rationale": in.Rationale})
 			return nil, okMsg{OK: true, Message: in.ID + " adjudicated " + in.Verdict}, nil
 		})
 }

@@ -1,0 +1,72 @@
+---
+title: "The fourth participant"
+description: "corral keeps three models apart so none of them marks its own exam. It never asked who wrote the code — and if that was the same model, the judge is grading its own work. This was the default configuration."
+pubDate: 2026-08-05
+draft: false
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+
+*Field note. We were an hour into building a feature when the founder said six words that killed it: "the judge wrote the code."*
+
+---
+
+Corral's design has three seats, and the whole argument is that they must not be filled by the same model.
+
+One model plants deliberate faults in your code. A **different** model writes the test that kills them. A **third**, deliberately decorrelated, reads your suite cold and says which of your tests assert nothing. There is a function called `CheckDecorrelation` that refuses to start a run where the critic and the test-writer are the same model. A judge may not certify her own cause; we named the product after the idea.
+
+Three seats. We counted wrong.
+
+## The feature that exposed it
+
+The hardest part of adopting a tool like this isn't installing it — that's one command and a static binary. It's everything between installing it and seeing it do something: a sandbox, a toolchain the sandbox can see, a test command, and **an API key**. The key is the barrier that costs a signup, a credit card, and a decision about money before you have any evidence the thing is worth it.
+
+So the obvious idea: skip the key. Most developers evaluating this already have Claude Code or Codex installed and logged in. Shell out to the CLI they've already authenticated, and the first run costs nothing.
+
+I had verified the invocations and was about to write the backend when the objection landed.
+
+**The person most likely to try this tool is someone whose code was written by Claude Code.** Route corral's three roles through that same logged-in CLI, and the model that wrote the code is now planting the faults in it, writing the tests for it, and judging whether the existing tests are any good.
+
+Not a quality compromise. The exact failure the product exists to prevent, shipped as the recommended path, by the tool named after not doing it.
+
+## It was already the default
+
+The convenient thing would be to file that under "good thing we didn't build it." But the CLI backend wasn't going to *introduce* the problem. It was going to make it unavoidable.
+
+Corral's default assignment today is `claude-sonnet-5` planting faults, `claude-sonnet-5` writing the killing test, and `claude-haiku-4-5` reading the suite. `CheckDecorrelation` passes: the critic differs from the writer. Every seat is one vendor, one lineage.
+
+Now think about where the code came from. A large and growing share of the code anyone will point this at was written by an AI assistant, and right now that assistant is very often Claude. So the default configuration of a tool whose entire claim is *no model may mark its own exam* is: **the model that wrote your code marks your exam.**
+
+Nobody put that in. It's what you get when your model of the problem has three participants and the world has four.
+
+## Why it's worse than it sounds
+
+The obvious harm is at the judge. Less obvious, and probably worse, is at the fault-planter.
+
+The mutant-generator's job is to imagine ways the code could be wrong. A model planting faults in code it wrote will plant the faults it can imagine — which are, by construction, close to the cases it already thought about while writing it. The bugs it never conceived of are the bugs it won't inject, so your tests are never asked about them.
+
+The kill rate that comes back is not just optimistic. It's **optimistic for a reason invisible in the number**. A suite could score 0.90 against faults planted by its code's own author and 0.55 against a stranger's, and nothing in the verdict would tell you which one you were reading.
+
+That's the specific thing this project is supposed to be good at: not the measurement, but knowing what the measurement is worth.
+
+## What we're actually doing about it
+
+Not much code, which is itself the point.
+
+**Say it.** If an AI wrote the code, audit it with a different vendor. That's now on the front page next to the decorrelation claim, because a guarantee about three models is misleading if a reader doesn't know there's a fourth.
+
+**Warn.** Corral can't detect what wrote a file — nobody can, reliably. But it knows the vendor of every seat it assigned, and "all three roles are one vendor" is a fact it can state on the verdict, the same way a critic's finding is stamped `UNVERIFIED` rather than silently trusted.
+
+**Make the alternative real.** Yesterday the cross-vendor router only worked for the critic — asking for a Gemini fault-planter with a Claude critic sent a Gemini model name to Anthropic and 404'd mid-run. That's fixed, so a genuinely three-vendor herd is now a run you can do. It looked like a cost feature when we fixed it. It isn't; it's what makes an audit mean anything when the code has an AI author.
+
+## The part I can't resolve
+
+Cross-vendor decorrelation is an **assumption**, not a proof.
+
+Two models from different labs still share an enormous amount: overlapping training corpora, the same public code, the same Stack Overflow answers, the same idioms. "Different vendor" is a proxy for "different blind spots," and we have not measured how good a proxy it is. It could be excellent. It could be much weaker than the word "decorrelated" implies.
+
+What corral *can* prove is narrower and worth keeping straight: it proves a mutant died, by execution, against your real suite. That part is a fact. The claim that a herd of different-vendor models has genuinely independent blind spots is a hypothesis we're running on, and I'd rather say so than let the architecture imply an answer we don't have.
+
+The scorecard is the beginning of an answer — it measures which model actually catches bugs in which role, by execution. Give it enough runs across enough vendors and it starts to say something real about correlation. It has, at this moment, four adjudicated findings. That's not evidence. It's a start.
+
+*Three models kept apart, and a fourth nobody counted. The uncomfortable ones are always the ones you didn't model.*

@@ -34,7 +34,7 @@ func TestRecordAndPrecision(t *testing.T) {
 		{ID: "2:12", RecordID: 2, Model: "gemini-pro", Scope: "dead-check", Adjudication: "confirmed", Source: "human"},
 	}))
 	// human-confirm the pending haiku one
-	ok, err := s.Adjudicate(ctx, "1:11", "confirmed", "alice")
+	ok, err := s.Adjudicate(ctx, "1:11", "confirmed", "alice", "checked by deleting the guard: the suite still passed")
 	must(err)
 	if !ok {
 		t.Fatal("adjudicate should report changed")

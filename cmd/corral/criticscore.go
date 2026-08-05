@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -33,7 +34,7 @@ type criticScoreLister interface {
 // go over MCP, not a REST endpoint.
 type criticScoreAdmin interface {
 	Get(ctx context.Context, id string) (criticscore.Finding, error)
-	Adjudicate(ctx context.Context, id, verdict string) (string, error)
+	Adjudicate(ctx context.Context, id, verdict, rationale string) (string, error)
 }
 
 // httpCriticScoreLister reads the pending list over the wire from a running
@@ -117,8 +118,15 @@ func (a mcpCriticScoreAdmin) Get(ctx context.Context, id string) (criticscore.Fi
 	return f, nil
 }
 
-func (a mcpCriticScoreAdmin) Adjudicate(ctx context.Context, id, verdict string) (string, error) {
-	text, err := a.call(ctx, "adjudicate_critic_finding", map[string]any{"id": id, "verdict": verdict})
+func (a mcpCriticScoreAdmin) Adjudicate(ctx context.Context, id, verdict, rationale string) (string, error) {
+	args := map[string]any{"id": id, "verdict": verdict}
+	// Omitted rather than sent empty: the brain's tool treats rationale as
+	// optional, and an explicit "" would overwrite a rationale a previous
+	// adjudication recorded.
+	if rationale != "" {
+		args["rationale"] = rationale
+	}
+	text, err := a.call(ctx, "adjudicate_critic_finding", args)
 	if err != nil {
 		return "", err
 	}
@@ -143,7 +151,7 @@ func (a mcpCriticScoreAdmin) Adjudicate(ctx context.Context, id, verdict string)
 // gets that tool's own rejection surfaced as an error here.
 func runCriticScore(args []string, lister criticScoreLister, admin criticScoreAdmin, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: corral criticscore list|show <id>|confirm <id>|refute <id>")
+		fmt.Fprintln(stderr, "usage: corral criticscore list|show <id>|confirm <id> [--why ...]|refute <id> [--why ...]")
 		return 2
 	}
 	ctx := context.Background()
@@ -183,14 +191,25 @@ func runCriticScore(args []string, lister criticScoreLister, admin criticScoreAd
 
 	case "confirm", "refute":
 		if len(args) < 2 {
-			fmt.Fprintf(stderr, "usage: corral criticscore %s <id>\n", args[0])
+			fmt.Fprintf(stderr, "usage: corral criticscore %s <id> [--why \"...\"]\n", args[0])
 			return 2
 		}
 		verdict := "confirmed"
 		if args[0] == "refute" {
 			verdict = "refuted"
 		}
-		msg, err := admin.Adjudicate(ctx, args[1], verdict)
+		// --why records the BASIS for the verdict. Optional on purpose: a
+		// required justification is how you get "ok" typed a hundred times.
+		// But a corpus that stores only the verdict makes C-PREC a number
+		// nobody can audit — you cannot tell a considered refutation from a
+		// careless one.
+		fs := flag.NewFlagSet("criticscore "+args[0], flag.ContinueOnError)
+		fs.SetOutput(stderr)
+		why := fs.String("why", "", "why this verdict was reached — the evidence you actually checked")
+		if err := fs.Parse(args[2:]); err != nil {
+			return 2
+		}
+		msg, err := admin.Adjudicate(ctx, args[1], verdict, strings.TrimSpace(*why))
 		if err != nil {
 			fmt.Fprintln(stderr, "corral criticscore "+args[0]+":", err)
 			return 1
@@ -199,7 +218,7 @@ func runCriticScore(args []string, lister criticScoreLister, admin criticScoreAd
 		return 0
 
 	default:
-		fmt.Fprintln(stderr, "usage: corral criticscore list|show <id>|confirm <id>|refute <id>")
+		fmt.Fprintln(stderr, "usage: corral criticscore list|show <id>|confirm <id> [--why ...]|refute <id> [--why ...]")
 		return 2
 	}
 }
@@ -238,9 +257,9 @@ func (l localCriticScore) Get(ctx context.Context, id string) (criticscore.Findi
 	return f, nil
 }
 
-func (l localCriticScore) Adjudicate(ctx context.Context, id, verdict string) (string, error) {
+func (l localCriticScore) Adjudicate(ctx context.Context, id, verdict, rationale string) (string, error) {
 	by := localAdjudicator()
-	ok, err := l.store.Adjudicate(ctx, id, verdict, by)
+	ok, err := l.store.Adjudicate(ctx, id, verdict, by, rationale)
 	if err != nil {
 		return "", err
 	}

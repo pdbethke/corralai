@@ -30,6 +30,10 @@ type Finding struct {
 	Source        string // auto|human
 	AdjudicatedBy string
 	AdjudicatedTS float64
+	// Rationale is WHY the human verdict was reached. Empty is legitimate
+	// (see Store.Adjudicate); when present it is what lets a reader tell a
+	// considered judgment from a careless one.
+	Rationale string
 }
 
 // CriticCell is one row of the per-model precision rollup: how often a

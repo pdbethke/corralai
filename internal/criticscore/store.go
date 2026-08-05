@@ -33,7 +33,14 @@ type Store struct{ db *sql.DB }
 // has ever needed beyond the original CREATE TABLE, in the order they must
 // be added — mirrors bugcatch's migration ledger so a store opened against
 // an older schema version gets brought forward on open, idempotently.
-var criticFindingsMigrationCols = []struct{ name, ddl string }{}
+var criticFindingsMigrationCols = []struct{ name, ddl string }{
+	// Why a verdict was reached, not merely what it was. Without it the store
+	// records that a human confirmed or refuted a finding and nothing about the
+	// basis — so C-PREC becomes a number derived from judgments whose reasoning
+	// exists only in whoever's memory. The metric is auditable; the judgments
+	// behind it were not.
+	{name: "adjudication_rationale", ddl: "adjudication_rationale VARCHAR"},
+}
 
 // Open opens (creating if absent) the critic_findings store at dsn. dsn is
 // kept opaque, matching controlspec.OpenStore, so both a local `.duckdb`
@@ -49,7 +56,7 @@ func Open(dsn string) (*Store, error) {
 		target_test VARCHAR, test_file VARCHAR, test_selector VARCHAR, scope VARCHAR,
 		evidence VARCHAR, severity VARCHAR,
 		adjudication VARCHAR NOT NULL DEFAULT 'unadjudicated', source VARCHAR NOT NULL DEFAULT 'auto',
-		adjudicated_by VARCHAR, adjudicated_ts DOUBLE
+		adjudicated_by VARCHAR, adjudicated_ts DOUBLE, adjudication_rationale VARCHAR
 	)`); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("criticscore: create table: %w", err)
@@ -111,6 +118,15 @@ func (s *Store) Close() error { return s.db.Close() }
 // input.
 const findingCols = `id, ts, record_id, record_head, repo, commit, mission_id, model, ` +
 	`target_test, test_file, test_selector, scope, evidence, severity, ` +
+	`adjudication, source, adjudicated_by, adjudicated_ts, adjudication_rationale`
+
+// insertFindingCols is findingCols WITHOUT adjudication_rationale: a rationale
+// is written by Adjudicate (a human explaining a verdict), never by Record (the
+// pool reporting a finding). Spelled out separately rather than reusing
+// findingCols so adding a future adjudication-side column cannot silently
+// break the positional INSERT the way this one did.
+const insertFindingCols = `id, ts, record_id, record_head, repo, commit, mission_id, model, ` +
+	`target_test, test_file, test_selector, scope, evidence, severity, ` +
 	`adjudication, source, adjudicated_by, adjudicated_ts`
 
 // rowScanner is satisfied by both *sql.Row (QueryRow) and *sql.Rows.
@@ -122,15 +138,16 @@ type rowScanner interface{ Scan(dest ...any) error }
 // fields.
 func scanFinding(sc rowScanner) (Finding, error) {
 	var f Finding
-	var adjudicatedBy sql.NullString
+	var adjudicatedBy, rationale sql.NullString
 	var adjudicatedTS sql.NullFloat64
 	if err := sc.Scan(&f.ID, &f.TS, &f.RecordID, &f.RecordHead, &f.Repo, &f.Commit, &f.MissionID, &f.Model,
 		&f.TargetTest, &f.TestFile, &f.TestSelector, &f.Scope, &f.Evidence, &f.Severity,
-		&f.Adjudication, &f.Source, &adjudicatedBy, &adjudicatedTS); err != nil {
+		&f.Adjudication, &f.Source, &adjudicatedBy, &adjudicatedTS, &rationale); err != nil {
 		return Finding{}, err
 	}
 	f.AdjudicatedBy = adjudicatedBy.String
 	f.AdjudicatedTS = adjudicatedTS.Float64
+	f.Rationale = rationale.String
 	return f, nil
 }
 
@@ -167,7 +184,7 @@ func (s *Store) Record(ctx context.Context, fs []Finding) error {
 		err := tx.QueryRowContext(ctx, `SELECT source FROM critic_findings WHERE id = ?`, f.ID).Scan(&existingSource)
 		switch {
 		case err == sql.ErrNoRows:
-			if _, err := tx.ExecContext(ctx, `INSERT INTO critic_findings (`+findingCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			if _, err := tx.ExecContext(ctx, `INSERT INTO critic_findings (`+insertFindingCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 				f.ID, f.TS, f.RecordID, f.RecordHead, f.Repo, f.Commit, f.MissionID, f.Model,
 				f.TargetTest, f.TestFile, f.TestSelector, f.Scope, f.Evidence, f.Severity,
 				f.Adjudication, f.Source, nullIfEmpty(f.AdjudicatedBy), nullIfZero(f.AdjudicatedTS)); err != nil {
@@ -223,13 +240,18 @@ func nullIfZero(f float64) any {
 // back to pending via this call). It always sets source="human", which is
 // what makes the verdict win over any later auto Record. Returns whether a
 // row was actually changed (false only when id doesn't exist).
-func (s *Store) Adjudicate(ctx context.Context, id, verdict, by string) (bool, error) {
+// Adjudicate records a human verdict. rationale is WHY, and may be empty —
+// a bare verdict is still recorded rather than refused, because forcing a
+// justification is how you get "ok" typed a hundred times. But it is stored
+// when given, so a later reader can tell a considered refutation from a
+// careless one, which is the difference between an auditable metric and a tally.
+func (s *Store) Adjudicate(ctx context.Context, id, verdict, by, rationale string) (bool, error) {
 	if verdict != "confirmed" && verdict != "refuted" {
 		return false, fmt.Errorf("criticscore: adjudicate: invalid verdict %q (want confirmed|refuted)", verdict)
 	}
-	res, err := s.db.ExecContext(ctx, `UPDATE critic_findings SET adjudication = ?, source = 'human', adjudicated_by = ?, adjudicated_ts = ?
+	res, err := s.db.ExecContext(ctx, `UPDATE critic_findings SET adjudication = ?, source = 'human', adjudicated_by = ?, adjudicated_ts = ?, adjudication_rationale = ?
 		WHERE id = ? AND adjudication IN ('unadjudicated', 'confirmed', 'refuted')`,
-		verdict, by, nowUnix(), id)
+		verdict, by, nowUnix(), rationale, id)
 	if err != nil {
 		return false, fmt.Errorf("criticscore: adjudicate %s: %w", id, err)
 	}
@@ -253,6 +275,31 @@ func (s *Store) ListPending(ctx context.Context) ([]Finding, error) {
 		f, err := scanFinding(rows)
 		if err != nil {
 			return nil, fmt.Errorf("criticscore: list pending: scan: %w", err)
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+// All returns every finding, adjudicated or not, ordered by ID.
+//
+// ListPending answers "what still needs a human"; All answers "what has this
+// audit ever said about my tests", which is the question a developer — or the
+// coding agent reading over their shoulder via `corral mcp` — actually asks. A
+// confirmed finding is not finished business: it names a test that is still
+// weak until someone changes it, and a refuted one is how you learn this
+// critic's failure modes.
+func (s *Store) All(ctx context.Context) ([]Finding, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+findingCols+` FROM critic_findings ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("criticscore: all: %w", err)
+	}
+	defer rows.Close()
+	var out []Finding
+	for rows.Next() {
+		f, err := scanFinding(rows)
+		if err != nil {
+			return nil, fmt.Errorf("criticscore: all: scan: %w", err)
 		}
 		out = append(out, f)
 	}

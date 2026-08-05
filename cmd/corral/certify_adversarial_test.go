@@ -708,3 +708,84 @@ func TestRenderAdvVerdictKeepsCleanCodeFailureWording(t *testing.T) {
 		t.Fatalf("must not blame the command when the control did not fire:\n%s", out)
 	}
 }
+
+// TestVerdictNamesASingleVendorHerd is the fourth participant (#104) surfacing
+// on the readout. CheckDecorrelation keeps corral's three seats apart and knows
+// nothing about whatever WROTE the code — and the DEFAULT assignment is one
+// vendor in every seat. When the code was also written by that vendor's model,
+// the lineage under audit planted the faults and graded the tests for its own
+// work, and the kill rate is optimistic for a reason invisible in the number.
+func TestVerdictNamesASingleVendorHerd(t *testing.T) {
+	var b strings.Builder
+	renderAdvVerdict(&b, "x.go", advVerdict{
+		Lang: "go", MutantsTotal: 20, Survivors: 4, DevKillRate: 0.8, Status: "needs-review", DevScored: true,
+		ModelsByRole: map[string]string{
+			advpool.RoleMutantGenerator: "claude-sonnet-5",
+			advpool.RoleTestWriter:      "claude-sonnet-5",
+			advpool.RoleTestCritic:      "claude-haiku-4-5",
+		},
+	})
+	out := b.String()
+	if !strings.Contains(out, "decorrelation:") {
+		t.Fatalf("a single-vendor herd must be stated on the verdict:\n%s", out)
+	}
+	if !strings.Contains(out, "WRITTEN by") {
+		t.Fatalf("the caveat must name the actual risk — that the same lineage wrote the code:\n%s", out)
+	}
+}
+
+// TestVerdictSilentOnACrossVendorHerd: when the seats genuinely span vendors
+// there is nothing to warn about, and a caveat printed every time is a caveat
+// readers learn to skip.
+func TestVerdictSilentOnACrossVendorHerd(t *testing.T) {
+	var b strings.Builder
+	renderAdvVerdict(&b, "x.go", advVerdict{
+		Lang: "go", MutantsTotal: 20, Survivors: 4, DevKillRate: 0.8, Status: "needs-review", DevScored: true,
+		ModelsByRole: map[string]string{
+			advpool.RoleMutantGenerator: "gemini-3.6-flash",
+			advpool.RoleTestWriter:      "gemini-3.6-flash",
+			advpool.RoleTestCritic:      "claude-haiku-4-5",
+		},
+	})
+	if strings.Contains(b.String(), "decorrelation:") {
+		t.Fatalf("a cross-vendor herd needs no caveat:\n%s", b.String())
+	}
+}
+
+// TestSoleGradedVendorIgnoresTheShadowSeat: the challenger records a
+// head-to-head and never gates a verdict, so its vendor says nothing about the
+// independence of the result.
+func TestSoleGradedVendorIgnoresTheShadowSeat(t *testing.T) {
+	got := soleGradedVendor(map[string]string{
+		advpool.RoleMutantGenerator:       "claude-sonnet-5",
+		advpool.RoleTestWriter:            "claude-sonnet-5",
+		advpool.RoleTestCritic:            "claude-haiku-4-5",
+		advpool.RoleMutantGeneratorShadow: "gemini-3.6-flash",
+	})
+	if got != "anthropic" {
+		t.Fatalf("the shadow seat must not break a single-vendor finding, got %q", got)
+	}
+}
+
+// TestSoleGradedVendorSilentOnAnUnknownModel: silence is the honest answer when
+// we cannot tell, and a caveat printed on a guess trains readers to ignore it.
+func TestSoleGradedVendorSilentOnAnUnknownModel(t *testing.T) {
+	if got := soleGradedVendor(map[string]string{
+		advpool.RoleMutantGenerator: "some-local-7b",
+		advpool.RoleTestWriter:      "claude-sonnet-5",
+	}); got != "" {
+		t.Fatalf("an unrecognized model must yield no claim, got %q", got)
+	}
+}
+
+// TestSoleGradedVendorSkipsAnOffRole: `--critic-model off` is supported, and a
+// seat that never ran says nothing either way.
+func TestSoleGradedVendorSkipsAnOffRole(t *testing.T) {
+	if got := soleGradedVendor(map[string]string{
+		advpool.RoleMutantGenerator: "gemini-3.6-flash",
+		advpool.RoleTestWriter:      "gemini-3.6-flash",
+		advpool.RoleTestCritic:      "off",
+	}); got != "google" {
+		t.Fatalf("an off role must not block the finding, got %q", got)
+	}
+}

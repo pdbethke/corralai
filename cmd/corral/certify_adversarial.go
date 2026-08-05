@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pdbethke/corralai/internal/advpool"
+	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/brainclient"
 	"github.com/pdbethke/corralai/internal/lang"
 )
@@ -452,6 +454,24 @@ func renderAdvVerdict(w io.Writer, codePath string, v advVerdict) {
 		fmt.Fprintf(w, "  critic review: %d test(s) flagged — UNVERIFIED (a second model's opinion, not execution-proven; check before acting)\n", len(v.VacuousFindings))
 	}
 	fmt.Fprintf(w, "  models:        %s\n", formatModels(v.ModelsByRole))
+	if vendor := soleGradedVendor(v.ModelsByRole); vendor != "" {
+		// The fourth participant (#104). CheckDecorrelation keeps corral's own
+		// three seats apart and knows nothing about whatever WROTE the code
+		// under audit. When every graded seat is one vendor — which is the
+		// DEFAULT assignment — and that vendor also wrote the file, the lineage
+		// being audited is planting the faults and grading the tests for its
+		// own work.
+		//
+		// The harm at the fault-planter is the quiet one: a model plants the
+		// faults it can imagine, which are the cases it already considered
+		// while writing the code, so its blind spots go unprobed and the kill
+		// rate is optimistic for a reason invisible in the number.
+		//
+		// Stated, never enforced: corral cannot know what wrote the file, and
+		// hand-written code makes this a non-issue. A caveat the reader can
+		// dismiss beats a refusal based on a guess.
+		fmt.Fprintf(w, "  decorrelation: every graded seat is %s — if this code was WRITTEN by a %s model, the same lineage planted the faults and graded the tests. Point a role at another vendor (--critic-model / --mutant-model) for an independent read.\n", vendor, vendor)
+	}
 	if v.RecordID != 0 {
 		// No inline verify command here: the record lands in a ledger, and
 		// `certify verify` reads a self-contained FILE, not a bare id. The
@@ -487,4 +507,35 @@ func formatModels(m map[string]string) string {
 		parts = append(parts, r+"="+m[r])
 	}
 	return strings.Join(parts, "  ")
+}
+
+// soleGradedVendor returns the vendor shared by every GRADED seat, or "" when
+// the seats span more than one vendor (or none can be recognized).
+//
+// The shadow challenger is excluded on purpose: it records a head-to-head
+// comparison and never gates a verdict, so its vendor says nothing about the
+// independence of the result. An unrecognized model name also yields "" —
+// silence is the honest answer when we cannot tell, and a caveat printed on a
+// guess would train readers to ignore it.
+func soleGradedVendor(models map[string]string) string {
+	graded := []string{advpool.RoleMutantGenerator, advpool.RoleTestWriter, advpool.RoleTestCritic}
+	vendor := ""
+	for _, role := range graded {
+		m := strings.TrimSpace(models[role])
+		if m == "" || strings.EqualFold(m, "off") {
+			continue // a seat that did not run says nothing either way
+		}
+		v := agentbackend.VendorOf(m)
+		if v == "" {
+			return ""
+		}
+		if vendor == "" {
+			vendor = v
+			continue
+		}
+		if v != vendor {
+			return ""
+		}
+	}
+	return vendor
 }

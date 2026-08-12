@@ -192,6 +192,31 @@ type EventSink interface {
 	Emit(missionID int64, kind, subject string, detail map[string]any)
 }
 
+// MutantRef identifies a mutant without carrying its SOURCE.
+//
+// The ledger stores parent_sha256 and an id, never a patch: that is enough to
+// group, count and compare, and it keeps a tenant's code out of the warehouse.
+// This type exists so that choice is enforced by the TYPE rather than by every
+// future caller remembering to strip a field — Verdict is marshalled whole
+// (CertSigner.SignVerdict, and scan_files.verdict_json is documented as "stored
+// whole"), so any field reachable from here reaches the warehouse eventually.
+type MutantRef struct {
+	ID           string
+	ParentSHA256 string
+}
+
+// toMutantRefs strips MUTANT SOURCE down to the reference scan_mutants needs:
+// id and parent hash. See MutantRef's own doc for why this must happen by
+// TYPE, not by caller discipline — anything reachable from a Verdict field
+// eventually reaches the warehouse.
+func toMutantRefs(ms []adequacy.Mutant) []MutantRef {
+	refs := make([]MutantRef, len(ms))
+	for i, m := range ms {
+		refs[i] = MutantRef{ID: m.ID, ParentSHA256: m.ParentSHA256}
+	}
+	return refs
+}
+
 // Verdict is one run's final, gated outcome.
 type Verdict struct {
 	Repo, Commit string
@@ -296,8 +321,8 @@ type Verdict struct {
 	// DevKillRate/Survivors alone. Set on every scored run (mirrors
 	// BaselineDuration), empty on the could-not-grade paths where no mutant
 	// was ever run.
-	DevKilledMutants   []adequacy.Mutant
-	DevSurvivedMutants []adequacy.Mutant
+	DevKilledMutants   []MutantRef
+	DevSurvivedMutants []MutantRef
 }
 
 // RunState is the observable status of one run: Converged is true once the run
@@ -374,10 +399,12 @@ type runState struct {
 	mutantsTotal int
 	devSurvivors []adequacy.Mutant
 	// devKilled is the mutant-level counterpart to devSurvivors: the mutants
-	// the dev suite's OWN tests killed (rep.Killed), each still carrying
-	// ParentSHA256. Set alongside devSurvivors in applyDevScore, carried onto
-	// Verdict.DevKilledMutants — see that field's doc for why.
-	devKilled []adequacy.Mutant
+	// the dev suite's OWN tests killed (rep.Killed), reduced to MutantRef (id
+	// + ParentSHA256, no source) at the point it's built, since nothing else
+	// downstream needs Code for a KILLED mutant the way renderTestWriter etc.
+	// need it for survivors. Set alongside devSurvivors in applyDevScore,
+	// carried onto Verdict.DevKilledMutants — see that field's doc for why.
+	devKilled []MutantRef
 	// baselineFailed is true when the dev suite did not pass on the UNMUTATED
 	// compliant code inside the jail (adequacy.Report.CompliantPass=false) — a
 	// build/environment failure (bad toolchain, missing dep, a shell-mangled
@@ -917,7 +944,7 @@ func applyDevScore(ctx context.Context, run *runState, scorer Scorer, mutants []
 	run.devKillRate = rep.KillRate()
 	run.mutantsTotal = len(mutants)
 	run.devSurvivors = survivorsFrom(rep, mutants)
-	run.devKilled = killedFrom(rep, mutants)
+	run.devKilled = toMutantRefs(killedFrom(rep, mutants))
 	run.mutants = mutants
 	return nil
 }
@@ -1579,7 +1606,7 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	// The mutant-level evidence behind DevKillRate/Survivors, carried the same
 	// way — see Verdict.DevKilledMutants.
 	v.DevKilledMutants = run.devKilled
-	v.DevSurvivedMutants = run.devSurvivors
+	v.DevSurvivedMutants = toMutantRefs(run.devSurvivors)
 
 	if d.Signer != nil {
 		recordID, head, serr := d.Signer.SignVerdict(ctx, v)
@@ -1735,7 +1762,7 @@ func (d *Driver) timeoutVerdict(run *runState) Verdict {
 		// a run that scored dev adequacy and only then stalled has real
 		// per-mutant data, not zero values nothing ever computed.
 		DevKilledMutants:   run.devKilled,
-		DevSurvivedMutants: run.devSurvivors,
+		DevSurvivedMutants: toMutantRefs(run.devSurvivors),
 		// The could-not-grade flags must ride the TIMEOUT verdict too. A run
 		// that scored dev adequacy, could not grade it (failed baseline, or a
 		// surviving canary), and only then stalled would otherwise be SIGNED

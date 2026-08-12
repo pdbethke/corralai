@@ -161,6 +161,54 @@ type File struct {
 	// saying how old it is presents stale measurement as current — the exact
 	// self-flattering record corral exists to prevent.
 	ComputedAt time.Time
+	// ModelsByRole is advpool.Verdict.ModelsByRole, serialized with
+	// reposcan.CanonicalKV so a per-file role assignment is byte-comparable
+	// with the scan-wide model_set — the same canonicalization, not a
+	// second one that could drift from it.
+	ModelsByRole string
+	// MutantsTotal is advpool.Verdict.MutantsTotal — the denominator a kill
+	// rate is computed over. Kept as its own column, not just inside
+	// VerdictJSON, because grading models means GROUP BY / SUM, and a blob
+	// cannot be aggregated.
+	MutantsTotal int
+	// RegionsTotal and RegionsProbed are advpool.Verdict.RegionsTotal /
+	// RegionsProbed — the mutant-generator seats the run dispatched, and the
+	// seats that actually returned usable mutants.
+	RegionsTotal  int
+	RegionsProbed int
+	// DroppedRegions are mutant-generator seats abandoned after
+	// MaxShardRetries — the run's COVERAGE SHORTFALL. A kill rate is over the
+	// mutants that were produced, not the ones that should have been, so a
+	// row with dropped regions is a weaker claim than one without, and a
+	// leaderboard that cannot see the difference is comparing unlike runs.
+	DroppedRegions string
+	// VacuousFindings is the COUNT of advpool.Verdict.VacuousFindings —
+	// test-critic's designed-to-pass/vacuous flags on this file's run.
+	VacuousFindings int
+	// Status is advpool.Verdict.Status ("certified" | "needs-review").
+	Status string
+	// AuthoredTestNotCollected mirrors advpool.Verdict.AuthoredTestNotCollected:
+	// the run proved a killing test compiled and ran, but the dev suite's own
+	// collection never picked it up, so ProvenMissed on this row is earned
+	// against a test the target project would never actually execute.
+	AuthoredTestNotCollected bool
+	// BaselineFailed mirrors advpool.Verdict.BaselineFailed: the dev suite did
+	// not pass on the UNMUTATED code, so DevKillRate on this row is
+	// meaningless — the audit had nothing sound to measure a mutant against.
+	BaselineFailed bool
+	// CacheHit mirrors reposcan.FileResult.CacheHit: true when this row's
+	// verdict was served from a prior scan's cache_key match rather than
+	// earned by running this scan's own mutants. Exists alongside
+	// ReusedFromScanID so an aggregate can exclude reused rows — without it,
+	// enabling the cache would make one measurement count once per scan
+	// forever, and whatever happened to be cached would dominate every
+	// average.
+	CacheHit bool
+	// ReusedFromScanID is the id of the scan whose row this one reused, or
+	// nil when this row was measured fresh. *int64, not int64: "not reused"
+	// must read back as NULL, not a scan id of 0, which would be a foreign
+	// key to nothing.
+	ReusedFromScanID *int64
 }
 
 // scanFilesMigrationCols is the additive set of columns this package has
@@ -186,6 +234,17 @@ var scanFilesMigrationCols = []struct{ name, ddl string }{
 	{"cache_key", "cache_key VARCHAR"},
 	{"verdict_json", "verdict_json VARCHAR"},
 	{"computed_at", "computed_at TIMESTAMP"},
+	{"models_by_role", "models_by_role VARCHAR"},
+	{"mutants_total", "mutants_total INTEGER"},
+	{"regions_total", "regions_total INTEGER"},
+	{"regions_probed", "regions_probed INTEGER"},
+	{"dropped_regions", "dropped_regions VARCHAR"},
+	{"vacuous_findings", "vacuous_findings INTEGER"},
+	{"status", "status VARCHAR"},
+	{"authored_test_not_collected", "authored_test_not_collected BOOLEAN"},
+	{"baseline_failed", "baseline_failed BOOLEAN"},
+	{"cache_hit", "cache_hit BOOLEAN"},
+	{"reused_from_scan_id", "reused_from_scan_id BIGINT"},
 }
 
 // Open opens (creating if absent) the scans/scan_files store at dsn.
@@ -244,7 +303,18 @@ func Open(dsn string) (*Store, error) {
 		authored_test VARCHAR,
 		cache_key VARCHAR,
 		verdict_json VARCHAR,
-		computed_at TIMESTAMP
+		computed_at TIMESTAMP,
+		models_by_role VARCHAR,
+		mutants_total INTEGER,
+		regions_total INTEGER,
+		regions_probed INTEGER,
+		dropped_regions VARCHAR,
+		vacuous_findings INTEGER,
+		status VARCHAR,
+		authored_test_not_collected BOOLEAN,
+		baseline_failed BOOLEAN,
+		cache_hit BOOLEAN,
+		reused_from_scan_id BIGINT
 	)`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("scanstore: create scan_files table: %w", err)
@@ -368,11 +438,15 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 		if _, err := tx.ExecContext(ctx, `INSERT INTO scan_files (
 			scan_id, path, lang, disposition, reason,
 			kill_rate, survivors, gradable, preflight_state, evidence, detail, timed_out, test_writer_failed, proven_missed, pool_test_unsound,
-			proven_mutant_ids, authored_test, cache_key, verdict_json, computed_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			proven_mutant_ids, authored_test, cache_key, verdict_json, computed_at,
+			models_by_role, mutants_total, regions_total, regions_probed, dropped_regions, vacuous_findings, status,
+			authored_test_not_collected, baseline_failed, cache_hit, reused_from_scan_id
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id, f.Path, f.Lang, f.Disposition, f.Reason,
 			sanitizeKillRate(f.KillRate), f.Survivors, f.Gradable, f.PreflightState, f.Evidence, f.Detail, f.TimedOut, f.TestWriterFailed, f.ProvenMissed, f.PoolTestUnsound,
 			f.ProvenMutantIDs, f.AuthoredTest, f.CacheKey, f.VerdictJSON, f.ComputedAt,
+			f.ModelsByRole, f.MutantsTotal, f.RegionsTotal, f.RegionsProbed, f.DroppedRegions, f.VacuousFindings, f.Status,
+			f.AuthoredTestNotCollected, f.BaselineFailed, f.CacheHit, f.ReusedFromScanID,
 		); err != nil {
 			return 0, fmt.Errorf("scanstore: insert scan_files row for %q: %w", f.Path, err)
 		}
@@ -455,7 +529,9 @@ func (s *Store) Scans(ctx context.Context, limit int) ([]ScanRow, error) {
 func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT path, lang, disposition, reason,
 		kill_rate, survivors, gradable, preflight_state, evidence, detail, timed_out, test_writer_failed, proven_missed, pool_test_unsound,
-		proven_mutant_ids, authored_test
+		proven_mutant_ids, authored_test,
+		models_by_role, mutants_total, regions_total, regions_probed, dropped_regions, vacuous_findings, status,
+		authored_test_not_collected, baseline_failed, cache_hit, reused_from_scan_id
 		FROM scan_files WHERE scan_id = ? ORDER BY rowid`, scanID)
 	if err != nil {
 		return nil, fmt.Errorf("scanstore: files for scan %d: %w", scanID, err)
@@ -469,9 +545,18 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		var timedOut, testWriterFailed, poolTestUnsound sql.NullBool
 		var provenMissed sql.NullInt64
 		var provenIDs, authoredTest sql.NullString
+		// The eleven verdict columns all read back nullable: a row written
+		// before this migration ran will not have them, and a rejected file
+		// was never scored, so NULL is the honest value for its counts too.
+		var modelsByRole, droppedRegions, status sql.NullString
+		var mutantsTotal, regionsTotal, regionsProbed, vacuousFindings sql.NullInt64
+		var authoredTestNotCollected, baselineFailed, cacheHit sql.NullBool
+		var reusedFromScanID sql.NullInt64
 		if err := rows.Scan(&f.Path, &f.Lang, &f.Disposition, &f.Reason,
 			&f.KillRate, &f.Survivors, &f.Gradable, &f.PreflightState, &f.Evidence, &detail, &timedOut, &testWriterFailed, &provenMissed, &poolTestUnsound,
-			&provenIDs, &authoredTest); err != nil {
+			&provenIDs, &authoredTest,
+			&modelsByRole, &mutantsTotal, &regionsTotal, &regionsProbed, &droppedRegions, &vacuousFindings, &status,
+			&authoredTestNotCollected, &baselineFailed, &cacheHit, &reusedFromScanID); err != nil {
 			return nil, fmt.Errorf("scanstore: scan scan_files row: %w", err)
 		}
 		f.Detail = detail.String
@@ -489,6 +574,23 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		// "no evidence recorded", never a fabricated attempt.
 		f.ProvenMutantIDs = provenIDs.String
 		f.AuthoredTest = authoredTest.String
+		f.ModelsByRole = modelsByRole.String
+		f.MutantsTotal = int(mutantsTotal.Int64)
+		f.RegionsTotal = int(regionsTotal.Int64)
+		f.RegionsProbed = int(regionsProbed.Int64)
+		f.DroppedRegions = droppedRegions.String
+		f.VacuousFindings = int(vacuousFindings.Int64)
+		f.Status = status.String
+		f.AuthoredTestNotCollected = authoredTestNotCollected.Bool
+		f.BaselineFailed = baselineFailed.Bool
+		f.CacheHit = cacheHit.Bool
+		// ReusedFromScanID stays *int64: NULL (never reused, or a
+		// pre-migration row) must read back as nil, not a scan id of 0 — see
+		// the field's own doc.
+		if reusedFromScanID.Valid {
+			v := reusedFromScanID.Int64
+			f.ReusedFromScanID = &v
+		}
 		out = append(out, f)
 	}
 	return out, rows.Err()

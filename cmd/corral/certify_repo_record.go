@@ -147,6 +147,27 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 				// 2026-07-31.
 				ProvenMutantIDs: strings.Join(r.Verdict.ProvenMutantIDs, ","),
 				AuthoredTest:    r.Verdict.AuthoredTest,
+				// ModelsByRole is canonicalized the same way the scan-wide
+				// model_set is (reposcan.CanonicalKV), so a per-file role
+				// assignment is byte-comparable with it rather than a second,
+				// possibly-drifting serialization.
+				ModelsByRole:             reposcan.CanonicalKV(r.Verdict.ModelsByRole),
+				MutantsTotal:             r.Verdict.MutantsTotal,
+				RegionsTotal:             r.Verdict.RegionsTotal,
+				RegionsProbed:            r.Verdict.RegionsProbed,
+				DroppedRegions:           strings.Join(r.Verdict.DroppedRegions, ","),
+				VacuousFindings:          len(r.Verdict.VacuousFindings),
+				Status:                   r.Verdict.Status,
+				AuthoredTestNotCollected: r.Verdict.AuthoredTestNotCollected,
+				BaselineFailed:           r.Verdict.BaselineFailed,
+				// CacheHit rides through from reposcan.FileResult — this row's
+				// verdict was served from a prior scan's cache_key match, not
+				// earned by this scan. ReusedFromScanID stays nil here: the
+				// cache doesn't hand back the source scan id yet (that's a
+				// later task's job), and a nil is the honest value in the
+				// meantime — "reused, source scan not recorded" — not a
+				// fabricated lineage.
+				CacheHit: r.CacheHit,
 			})
 			continue
 		}

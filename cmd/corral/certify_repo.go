@@ -739,6 +739,16 @@ func testSurfacePaths(cands []reposcan.Candidate, excl []reposcan.Exclusion) []s
 //     is in the cache key too (auditConfigKey), so a different subset keys
 //     differently anyway, and the whole-suite digest still covers every file
 //     inside that directory.
+//     ONE named test is not enough: testCmd hands the SAME argv to every job,
+//     so `-- pytest tests/test_a.py` with a.py and b.py both selected grades
+//     BOTH files with tests/test_a.py. Keying that as file-scoped would give
+//     b.py the digest of tests/test_b.py — a file that never runs — while the
+//     file that really grades it appears in no key at all (auditConfigKey
+//     digests the argv TEXT, which does not move when the named test's
+//     CONTENTS change). So every selected candidate's own test must be named;
+//     anything less keys as whole-suite. That over-invalidates a mixed argv,
+//     which costs a miss — money — where the other direction signs a kill rate
+//     for a surface that was never measured.
 //   - --scope-tests only takes effect for a language with a VERIFIED per-file
 //     invocation and a paired test to scope to; otherwise testCmd silently
 //     falls back to the full suite. If even one selected file would fall back,
@@ -750,21 +760,24 @@ func gradesFileScoped(checkArgv []string, scopeTests bool, selected []reposcan.C
 		return false
 	}
 	if len(checkArgv) > 0 {
-		named := make(map[string]bool, len(selected))
-		for _, c := range selected {
-			named[path.Clean(filepath.ToSlash(c.TestPath))] = true
-		}
+		named := make(map[string]bool, len(checkArgv))
 		for _, tok := range checkArgv {
 			t := filepath.ToSlash(tok)
 			// A pytest node id (`tests/test_a.py::test_x`) names the same file.
 			if i := strings.Index(t, "::"); i >= 0 {
 				t = t[:i]
 			}
-			if named[path.Clean(t)] {
-				return true
+			named[path.Clean(t)] = true
+		}
+		for _, c := range selected {
+			if c.TestPath == "" {
+				return false
+			}
+			if !named[path.Clean(filepath.ToSlash(c.TestPath))] {
+				return false
 			}
 		}
-		return false
+		return true
 	}
 	if !scopeTests {
 		return false

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -190,6 +191,15 @@ func TestActionNamesTheRecordItProduces(t *testing.T) {
 // project's rule is that documentation describes what exists, so every
 // `pdbethke/corralai@<ref>` in the docs must name a ref that resolves: a
 // branch that exists, or a tag that has actually been cut.
+//
+// Scope is every documentation-shaped file in the repo, found by walking (see
+// docsAdvertisingAnActionRef) — the site included. It used to be a list of
+// three filenames, and the site drifted past it.
+//
+// NOTE ON ORDERING, because this gate makes it load-bearing: a pin can only be
+// bumped AFTER its tag is cut. Merge the release content, push the tag, then
+// bump the pins in a follow-up. Putting the bump in the release PR fails here,
+// correctly.
 func TestDocsNeverAdvertiseAnUncutActionTag(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
@@ -209,18 +219,79 @@ func TestDocsNeverAdvertiseAnUncutActionTag(t *testing.T) {
 	// Branches are resolvable refs too; `main` is where the action lands.
 	tags["main"] = true
 
-	ref := regexp.MustCompile(`pdbethke/corralai@([A-Za-z0-9._-]+)`)
-	for _, doc := range []string{"README.md", "ROADMAP.md", filepath.Join("docs", "corral", "github-action.md")} {
-		b, rerr := os.ReadFile(filepath.Join(repoRoot, doc))
-		if rerr != nil {
-			t.Fatalf("reading %s: %v", doc, rerr)
+	docs := docsAdvertisingAnActionRef(t, repoRoot)
+	// A walk that silently found nothing would pass green forever. The three
+	// files this gate was born checking must always be among the scanned set;
+	// if they aren't, the walk is broken, not the docs.
+	for _, must := range []string{"README.md", "ROADMAP.md", filepath.Join("docs", "corral", "github-action.md")} {
+		if _, ok := docs[must]; !ok {
+			t.Fatalf("walk did not scan %s — the gate is not looking where it thinks it is", must)
 		}
-		for _, m := range ref.FindAllStringSubmatch(string(b), -1) {
+	}
+
+	ref := regexp.MustCompile(`pdbethke/corralai@([A-Za-z0-9._-]+)`)
+	for doc, body := range docs {
+		for _, m := range ref.FindAllStringSubmatch(body, -1) {
 			if !tags[m[1]] {
 				t.Errorf("%s advertises %s, but %q is neither an existing tag nor `main` — the snippet does not resolve", doc, m[0], m[1])
 			}
 		}
 	}
+}
+
+// docsAdvertisingAnActionRef returns every documentation-shaped file in the
+// repo, keyed by its repo-relative path.
+//
+// This walks rather than reading a hand-maintained list because the list is
+// what failed: the gate named README.md, ROADMAP.md and
+// docs/corral/github-action.md, while the SAME `uses:` snippet also lived in
+// site/src/content/docs/docs/github-action.mdx and
+// site/src/components/CiGate.astro — so corralai.dev could advertise an uncut
+// tag with CI fully green. Guard the property (no document anywhere names an
+// unresolvable ref), not an enumeration of the places it happened to hold.
+//
+// .go is excluded deliberately: this test's own comment and regex mention
+// `pdbethke/corralai@v1` as the historical example, and a gate that flagged its
+// own explanation would be unfixable without deleting the explanation.
+func docsAdvertisingAnActionRef(t *testing.T, repoRoot string) map[string]string {
+	t.Helper()
+	docExt := map[string]bool{
+		".md": true, ".mdx": true, ".astro": true,
+		".html": true, ".yml": true, ".yaml": true, ".txt": true,
+	}
+	skipDir := map[string]bool{
+		".git": true, "node_modules": true, "dist": true, "vendor": true,
+		".astro": true, "test-results": true,
+	}
+	out := map[string]string{}
+	err := filepath.WalkDir(repoRoot, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if skipDir[d.Name()] {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !docExt[strings.ToLower(filepath.Ext(d.Name()))] {
+			return nil
+		}
+		b, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return rerr
+		}
+		rel, rerr := filepath.Rel(repoRoot, path)
+		if rerr != nil {
+			return rerr
+		}
+		out[rel] = string(b)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking %s for documentation: %v", repoRoot, err)
+	}
+	return out
 }
 
 // actionStep is a single composite step within action.yml's `runs.steps`.

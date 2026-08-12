@@ -382,7 +382,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 
 	cfg := reposcan.EmitConfig{
 		Owner: *owner, Repo: filepath.Base(*repoDir), Commit: *commit, Root: *repoDir,
-		EngineVersion: version, ModelSet: modelSet, AuditConfig: auditConfig,
+		EngineVersion: reposcan.VerdictGeneration, ModelSet: modelSet, AuditConfig: auditConfig,
 		Substrate: *substrateFlag,
 	}
 	jobs, goalExcl, err := reposcan.EmitJobs(cfg, selected, gs)

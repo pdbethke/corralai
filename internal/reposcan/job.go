@@ -35,6 +35,19 @@ type EmitConfig struct {
 	// key identically: without it, a cached jail verdict would satisfy a
 	// seal claiming runner provenance.
 	Substrate string
+	// FileScopedTests is true when this scan grades each file against its OWN
+	// paired test file only (--scope-tests on a language with a verified
+	// per-file invocation, or an explicit `-- <cmd>` that names one test
+	// file). It decides what TestSurfaceDigest has to cover: one file, or the
+	// whole suite. See DigestTestSurface.
+	FileScopedTests bool
+	// TestSurfacePaths are test files that grade in a whole-suite run but are
+	// nobody's paired test — shared helpers, conftest.py, fixtures. Enumerate
+	// hands them back as `is-test` exclusions, so they never appear as a
+	// Candidate.TestPath, yet weakening one really does change what the suite
+	// grades. Ignored when FileScopedTests is set. No new walk: the caller
+	// already has this list.
+	TestSurfacePaths []string
 }
 
 // EmitJobs turns candidates into job envelopes, computing each one's cache
@@ -55,6 +68,28 @@ func EmitJobs(cfg EmitConfig, cands []Candidate, gs GoalSource) ([]Job, []Exclus
 		return nil, nil, err
 	}
 	defer func() { _ = root.Close() }()
+
+	// The grading surface decides the digest. Unless this scan grades each
+	// file against its own paired test (see EmitConfig.FileScopedTests), the
+	// command every baseline and every mutant runs is the project's WHOLE
+	// recursive suite — so TestSurfaceDigest has to cover the whole suite, not
+	// the one paired file. Computed ONCE for the scan, not per candidate:
+	// every job on this path is graded by the same suite.
+	suiteDigest := ""
+	if !cfg.FileScopedTests {
+		paths := make([]string, 0, len(cands)+len(cfg.TestSurfacePaths))
+		for _, c := range cands {
+			if c.TestPath != "" {
+				paths = append(paths, c.TestPath)
+			}
+		}
+		paths = append(paths, cfg.TestSurfacePaths...)
+		d, derr := DigestTestSurface(root, paths)
+		if derr != nil {
+			return nil, nil, derr
+		}
+		suiteDigest = d
+	}
 
 	for _, c := range cands {
 		goal, ok, err := gs.GoalFor(c)
@@ -86,9 +121,15 @@ func EmitJobs(cfg EmitConfig, cands []Candidate, gs GoalSource) ([]Job, []Exclus
 		if err != nil {
 			return nil, nil, err
 		}
-		testDigest, err := DigestFile(root, c.TestPath)
-		if err != nil {
-			return nil, nil, err
+		testDigest := suiteDigest
+		if cfg.FileScopedTests {
+			// One file is genuinely the whole grading surface here, so keying
+			// on the whole suite would throw away every verdict in the repo
+			// for a change that cannot reach them.
+			testDigest, err = DigestFile(root, c.TestPath)
+			if err != nil {
+				return nil, nil, err
+			}
 		}
 
 		key := KeyInputs{

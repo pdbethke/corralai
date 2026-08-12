@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -386,6 +387,13 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		Owner: *owner, Repo: filepath.Base(*repoDir), Commit: *commit, Root: *repoDir,
 		EngineVersion: reposcan.VerdictGeneration, ModelSet: modelSet, AuditConfig: auditConfig,
 		Substrate: *substrateFlag,
+		// What the verdicts are GRADED BY decides what TestSurfaceDigest has
+		// to cover — one paired test file, or the whole suite. Both are
+		// computed from the same facts testCmd itself resolves the command
+		// from, so the key can never claim a narrower surface than the one
+		// that actually ran.
+		FileScopedTests:  gradesFileScoped(checkArgv, *scopeTestsFlag, selected),
+		TestSurfacePaths: testSurfacePaths(cands, excl),
 	}
 	jobs, goalExcl, err := reposcan.EmitJobs(cfg, selected, gs)
 	if err != nil {
@@ -679,6 +687,94 @@ func auditConfigKey(scopeTests bool, checkArgv []string) string {
 		m["check-argv"] = hex.EncodeToString(sum[:])
 	}
 	return reposcan.CanonicalKV(m)
+}
+
+// testSurfacePaths is every test file this repository's whole recursive suite
+// would run — the grading surface of a scan with no --scope-tests and no
+// explicit `-- <cmd>`. Two sources, because neither alone is the suite:
+//
+//   - every CANDIDATE's paired test, including candidates --top or --diff-base
+//     left unselected. The suite does not stop running a test because this
+//     scan chose not to audit its source file.
+//   - every file Enumerate rejected as `is-test`. A shared helper, a
+//     conftest.py or a fixture module is nobody's paired test, so it appears
+//     in no Candidate.TestPath — and weakening one is exactly the change that
+//     silently made a suite worse while every file's key stayed put.
+//
+// No new walk: both lists are already in hand at the call site.
+func testSurfacePaths(cands []reposcan.Candidate, excl []reposcan.Exclusion) []string {
+	paths := make([]string, 0, len(cands))
+	for _, c := range cands {
+		if c.TestPath != "" {
+			paths = append(paths, c.TestPath)
+		}
+	}
+	for _, e := range excl {
+		if e.Reason == reposcan.ReasonIsTest {
+			paths = append(paths, e.Path)
+		}
+	}
+	return paths
+}
+
+// gradesFileScoped answers the ONE question KeyInputs.TestSurfaceDigest turns
+// on: will every job in this scan really be graded against its own paired test
+// file alone? It deliberately mirrors localExecutor.testCmd's own resolution
+// order rather than reading the flags naively, because the flags are not the
+// answer:
+//
+//   - An explicit `-- <cmd>` outranks --scope-tests entirely (testCmd returns
+//     it verbatim), so the only file-scoped case there is a command that names
+//     a test file — `pytest -q tests/test_a.py`, or a pytest node id with a
+//     `::selector` on it. A command naming a DIRECTORY (`pytest -q tests/unit`)
+//     is a subset of the suite, not one file, so it stays whole-suite: the argv
+//     is in the cache key too (auditConfigKey), so a different subset keys
+//     differently anyway, and the whole-suite digest still covers every file
+//     inside that directory.
+//   - --scope-tests only takes effect for a language with a VERIFIED per-file
+//     invocation and a paired test to scope to; otherwise testCmd silently
+//     falls back to the full suite. If even one selected file would fall back,
+//     this returns false for the whole scan. That over-invalidates the genuinely
+//     scoped files, which only costs money — the other direction would key a
+//     whole-suite grading run as if one file were the surface.
+func gradesFileScoped(checkArgv []string, scopeTests bool, selected []reposcan.Candidate) bool {
+	if len(selected) == 0 {
+		return false
+	}
+	if len(checkArgv) > 0 {
+		named := make(map[string]bool, len(selected))
+		for _, c := range selected {
+			named[path.Clean(filepath.ToSlash(c.TestPath))] = true
+		}
+		for _, tok := range checkArgv {
+			t := filepath.ToSlash(tok)
+			// A pytest node id (`tests/test_a.py::test_x`) names the same file.
+			if i := strings.Index(t, "::"); i >= 0 {
+				t = t[:i]
+			}
+			if named[path.Clean(t)] {
+				return true
+			}
+		}
+		return false
+	}
+	if !scopeTests {
+		return false
+	}
+	for _, c := range selected {
+		p, ok := lang.ByName(c.Lang)
+		if !ok {
+			return false
+		}
+		fs, canScope := p.(lang.FileScopedTester)
+		if !canScope {
+			return false
+		}
+		if _, scoped := fs.FileScopedTestCmd(c.TestPath); !scoped {
+			return false
+		}
+	}
+	return true
 }
 
 // parseMinKillRate parses and range-validates the --min-kill-rate flag value.

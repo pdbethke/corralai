@@ -158,7 +158,7 @@ slow"`), not a shell one-liner that chains multiple commands.
 
 **There is no `v1` tag, but there are pinnable release tags.** `v0.1.0` and
 `v0.2.0` predate the action and carry no `action.yml`; **`v0.3.0` and later do**
-(`v0.3.5` is current). Prefer `pdbethke/corralai@v0.3.5` over `@main` — pinning
+(`v0.3.6` is current). Prefer `pdbethke/corralai@v0.3.6` over `@main` — pinning
 a tag means a push to `main` cannot change what runs in your CI. Pin the commit
 SHA you reviewed (`pdbethke/corralai@<sha>`) if you want an immutable reference
 that a re-tag also cannot move. `@main` still works and tracks the newest

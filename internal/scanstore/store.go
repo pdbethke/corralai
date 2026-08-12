@@ -196,6 +196,16 @@ type File struct {
 	// not pass on the UNMUTATED code, so DevKillRate on this row is
 	// meaningless — the audit had nothing sound to measure a mutant against.
 	BaselineFailed bool
+	// SuiteBaselineMillis mirrors advpool.Verdict.BaselineDuration, in
+	// milliseconds: the compliant (unmutated) suite's own wall-clock runtime.
+	// It is the single input to the audit cost model — O(mutants x the
+	// TARGET's suite runtime), measured at 1.46s for pallets/flask and 77s
+	// for psf/requests, a 53x spread — so AVG(suite_baseline_ms) over this
+	// ledger is what capacity planning should be computed FROM, not
+	// extrapolated from one repo. Milliseconds, not a Go duration: this
+	// column is read by SQL and by DuckDB-WASM in the browser, neither of
+	// which has a decoder for time.Duration.
+	SuiteBaselineMillis int64
 	// CacheHit mirrors reposcan.FileResult.CacheHit: true when this row's
 	// verdict was served from a prior scan's cache_key match rather than
 	// earned by running this scan's own mutants. Exists alongside
@@ -245,6 +255,7 @@ var scanFilesMigrationCols = []struct{ name, ddl string }{
 	{"baseline_failed", "baseline_failed BOOLEAN"},
 	{"cache_hit", "cache_hit BOOLEAN"},
 	{"reused_from_scan_id", "reused_from_scan_id BIGINT"},
+	{"suite_baseline_ms", "suite_baseline_ms BIGINT"},
 }
 
 // Open opens (creating if absent) the scans/scan_files store at dsn.
@@ -314,7 +325,8 @@ func Open(dsn string) (*Store, error) {
 		authored_test_not_collected BOOLEAN,
 		baseline_failed BOOLEAN,
 		cache_hit BOOLEAN,
-		reused_from_scan_id BIGINT
+		reused_from_scan_id BIGINT,
+		suite_baseline_ms BIGINT
 	)`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("scanstore: create scan_files table: %w", err)
@@ -440,13 +452,13 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 			kill_rate, survivors, gradable, preflight_state, evidence, detail, timed_out, test_writer_failed, proven_missed, pool_test_unsound,
 			proven_mutant_ids, authored_test, cache_key, verdict_json, computed_at,
 			models_by_role, mutants_total, regions_total, regions_probed, dropped_regions, vacuous_findings, status,
-			authored_test_not_collected, baseline_failed, cache_hit, reused_from_scan_id
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			authored_test_not_collected, baseline_failed, cache_hit, reused_from_scan_id, suite_baseline_ms
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id, f.Path, f.Lang, f.Disposition, f.Reason,
 			sanitizeKillRate(f.KillRate), f.Survivors, f.Gradable, f.PreflightState, f.Evidence, f.Detail, f.TimedOut, f.TestWriterFailed, f.ProvenMissed, f.PoolTestUnsound,
 			f.ProvenMutantIDs, f.AuthoredTest, f.CacheKey, f.VerdictJSON, f.ComputedAt,
 			f.ModelsByRole, f.MutantsTotal, f.RegionsTotal, f.RegionsProbed, f.DroppedRegions, f.VacuousFindings, f.Status,
-			f.AuthoredTestNotCollected, f.BaselineFailed, f.CacheHit, f.ReusedFromScanID,
+			f.AuthoredTestNotCollected, f.BaselineFailed, f.CacheHit, f.ReusedFromScanID, f.SuiteBaselineMillis,
 		); err != nil {
 			return 0, fmt.Errorf("scanstore: insert scan_files row for %q: %w", f.Path, err)
 		}

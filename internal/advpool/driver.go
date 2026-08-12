@@ -197,9 +197,13 @@ type Verdict struct {
 	Repo, Commit string
 	Lang         string  // the run's resolved language plugin name (e.g. "go", "python")
 	DevKillRate  float64 // the headline: the DEV suite's kill-rate, from Scorer — never a self-report
-	MutantsTotal int     // total mutants the mutant-generator produced
-	Survivors    int     // mutants the dev's own tests did NOT kill
-	ProvenMissed int     // survivors the pool's authored test then killed — real, catchable gaps
+	// BaselineDuration is the dev suite's compliant (unmutated) wall-clock
+	// runtime — the single input to the audit cost model (O(mutants x the
+	// TARGET's suite runtime)). See adequacy.Report.BaselineDuration.
+	BaselineDuration time.Duration
+	MutantsTotal     int // total mutants the mutant-generator produced
+	Survivors        int // mutants the dev's own tests did NOT kill
+	ProvenMissed     int // survivors the pool's authored test then killed — real, catchable gaps
 	// ProvenMutantIDs is the EVIDENCE behind ProvenMissed: which survivors the
 	// authored test actually killed, derived from the same scoring report so
 	// the two can never disagree. Empty on every path that did not grade
@@ -373,6 +377,11 @@ type runState struct {
 	// the suite's own words — see renderAdvVerdict. Only meaningful when
 	// baselineFailed is true.
 	baselineOutput string
+	// baselineDuration is how long the dev suite's compliant (unmutated) run
+	// took (adequacy.Report.BaselineDuration) — set on every scored run,
+	// including a failed baseline, since a suite that took 90s to fail is the
+	// case an operator most needs the number for. See Verdict.BaselineDuration.
+	baselineDuration time.Duration
 	// suiteIgnoresFile is true when the dev suite PASSED its baseline but also
 	// passed on deliberately invalid source (adequacy.Report.CanaryKilled=false):
 	// the check command provably never compiles or imports the file under audit,
@@ -874,6 +883,7 @@ func applyDevScore(ctx context.Context, run *runState, scorer Scorer, mutants []
 		return fmt.Errorf("advpool: score dev tests: %w", serr)
 	}
 	run.baselineFailed = !rep.CompliantPass
+	run.baselineDuration = rep.BaselineDuration
 	// Keep the runner's own words on a FAILING baseline. certify --repo has
 	// printed these since the day two paid audits dead-ended here with nothing
 	// to go on; certify --local computed the same string and discarded it, so
@@ -1527,6 +1537,9 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	// The other could-not-grade case, carried separately so the readout can
 	// name the right one: the suite passed but never reads the audited file.
 	v.SuiteIgnoresFile = run.suiteIgnoresFile
+	// Carried alongside the other could-not-grade / baseline fields, set here
+	// rather than widening aggregate()'s signature — see Verdict.BaselineDuration.
+	v.BaselineDuration = run.baselineDuration
 
 	if d.Signer != nil {
 		recordID, head, serr := d.Signer.SignVerdict(ctx, v)
@@ -1669,13 +1682,14 @@ func (d *Driver) adjudicateCriticFindings(ctx context.Context, missionID int64, 
 // earns no leaderboard fitness for any model: a stalled run proved nothing.
 func (d *Driver) timeoutVerdict(run *runState) Verdict {
 	return Verdict{
-		Repo:         run.rs.Repo,
-		Commit:       run.rs.Commit,
-		Lang:         run.rs.Lang,
-		DevKillRate:  run.devKillRate,
-		MutantsTotal: run.mutantsTotal,
-		Survivors:    len(run.devSurvivors),
-		ProvenMissed: run.provenMissed,
+		Repo:             run.rs.Repo,
+		Commit:           run.rs.Commit,
+		Lang:             run.rs.Lang,
+		DevKillRate:      run.devKillRate,
+		BaselineDuration: run.baselineDuration,
+		MutantsTotal:     run.mutantsTotal,
+		Survivors:        len(run.devSurvivors),
+		ProvenMissed:     run.provenMissed,
 		// The could-not-grade flags must ride the TIMEOUT verdict too. A run
 		// that scored dev adequacy, could not grade it (failed baseline, or a
 		// surviving canary), and only then stalled would otherwise be SIGNED

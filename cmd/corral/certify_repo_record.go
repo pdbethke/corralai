@@ -160,6 +160,10 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 				Status:                   r.Verdict.Status,
 				AuthoredTestNotCollected: r.Verdict.AuthoredTestNotCollected,
 				BaselineFailed:           r.Verdict.BaselineFailed,
+				// SuiteBaselineMillis is the cost-model input: how long the
+				// dev suite's own compliant run took, in milliseconds — see
+				// scanstore.File.SuiteBaselineMillis.
+				SuiteBaselineMillis: r.Verdict.BaselineDuration.Milliseconds(),
 				// CacheHit rides through from reposcan.FileResult — this row's
 				// verdict was served from a prior scan's cache_key match, not
 				// earned by this scan. ReusedFromScanID stays nil here: the

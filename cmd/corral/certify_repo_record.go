@@ -4,7 +4,8 @@ package main
 
 import (
 	"context"
-	"log"
+	"fmt"
+	"io"
 	"math"
 	"os"
 	"os/user"
@@ -92,21 +93,23 @@ func killRatePtr(v float64) *float64 {
 // A path cannot legitimately appear in both sources (results only holds
 // paths that became jobs; rep.Excluded only holds paths that never did),
 // but a `seen` set skips a second row for any path already written rather
-// than assume that invariant holds forever.
+// than assume that invariant holds forever. The results half of that guard
+// is dedupeResultsByPath, SHARED with buildScanMutantRows: a duplicate path
+// that produced one scan_files row and two full sets of scan_mutants rows
+// would silently double-count in exactly the grain that exists for grading
+// models.
 //
 // preflightState overlays preflight_state onto every row, but ONLY when
 // the coverage pre-flight actually ran — see preflightState's own doc
 // comment for why a path absent from the map must stay empty rather than
 // being recorded as "not-executed".
-func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclusion, preflight reposcan.CoverageMap) []scanstore.File {
+func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclusion, preflight reposcan.CoverageMap, stderr io.Writer) []scanstore.File {
+	results = dedupeResultsByPath(results)
 	rows := make([]scanstore.File, 0, len(results)+len(excluded))
 	seen := make(map[string]bool, len(results)+len(excluded))
 
 	for _, r := range results {
 		path := r.Job.Path
-		if seen[path] {
-			continue
-		}
 		seen[path] = true
 
 		if r.Gradable {
@@ -126,7 +129,11 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 				// cacheable — a future re-audit of this exact content pays
 				// for it again — which is far cheaper than losing the whole
 				// run's recording over a serialization bug.
-				log.Printf("corral certify --repo: %s: verdict not cached (marshal failed): %v", path, merr)
+				// Routed to the caller's own stderr, not the global logger:
+				// this command threads a stderr writer everywhere else,
+				// and a caller capturing stderr must actually SEE a
+				// fail-open disclosure.
+				fmt.Fprintf(stderr, "corral certify --repo: %s: verdict not cached (marshal failed): %v\n", path, merr)
 				verdictJSON = ""
 			}
 			rows = append(rows, scanstore.File{
@@ -366,10 +373,37 @@ func preflightState(cm reposcan.CoverageMap, path string) string {
 	return "not-executed"
 }
 
+// dedupeResultsByPath keeps the FIRST result for each source path, and is
+// the one place that invariant is enforced for BOTH row builders.
+//
+// reposcan.Scan produces one result per job and jobs are one per candidate
+// path, so a duplicate should not arise today. Neither builder assumes that
+// holds forever: buildScanFileRows would write one row for a repeated path
+// while buildScanMutantRows wrote two complete sets of mutant rows, and the
+// per-mutant grain is precisely the grain a "which generator produces mutants
+// a suite misses" leaderboard is computed over — a silent double-count there
+// grades the models wrong.
+func dedupeResultsByPath(results []reposcan.FileResult) []reposcan.FileResult {
+	seen := make(map[string]bool, len(results))
+	out := make([]reposcan.FileResult, 0, len(results))
+	for _, r := range results {
+		if seen[r.Job.Path] {
+			continue
+		}
+		seen[r.Job.Path] = true
+		out = append(out, r)
+	}
+	return out
+}
+
 // buildScanMutantRows turns the scan's gradable results into scan_mutants
 // rows — one per mutant the dev suite's own tests killed OR left surviving,
 // keyed to scanID (the id Record just handed back). Ungradable results are
 // skipped: nothing was ever scored, so they have no mutant fates to record.
+//
+// Duplicate source paths are filtered by dedupeResultsByPath, the SAME guard
+// buildScanFileRows applies — see there for what a divergence between the two
+// would silently do to a per-mutant leaderboard.
 //
 // A survivor's Proven flag is looked up from r.Verdict.ProvenMutantIDs — the
 // same ids that back Verdict.ProvenMissed — never derived by any other
@@ -377,7 +411,7 @@ func preflightState(cm reposcan.CoverageMap, path string) string {
 // disagree on which survivors were proven.
 func buildScanMutantRows(scanID int64, results []reposcan.FileResult) []scanstore.Mutant {
 	var rows []scanstore.Mutant
-	for _, r := range results {
+	for _, r := range dedupeResultsByPath(results) {
 		if !r.Gradable {
 			continue
 		}
@@ -419,13 +453,16 @@ func buildScanMutantRows(scanID int64, results []reposcan.FileResult) []scanstor
 // recorded in scan_files above, so losing mutant detail costs analysis, not
 // correctness, and must not turn into "scan ledger NOT written" for a scan
 // that, in every way that matters, was.
-func recordCertifyRepoScan(st *scanstore.Store, scan scanstore.Scan, files []scanstore.File, results []reposcan.FileResult) error {
+func recordCertifyRepoScan(st *scanstore.Store, scan scanstore.Scan, files []scanstore.File, results []reposcan.FileResult, stderr io.Writer) error {
 	id, err := st.Record(context.Background(), scan, files)
 	if err != nil {
 		return err
 	}
 	if err := st.RecordMutants(context.Background(), buildScanMutantRows(id, results)); err != nil {
-		log.Printf("corral certify --repo: scan %d recorded, but scan_mutants was NOT written: %v", id, err)
+		// The caller's stderr, not the global logger, for the same reason as
+		// in buildScanFileRows: fail-open still has to be LOUD where the
+		// operator is actually looking.
+		fmt.Fprintf(stderr, "corral certify --repo: scan %d recorded, but scan_mutants was NOT written: %v\n", id, err)
 	}
 	return nil
 }

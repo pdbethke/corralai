@@ -529,6 +529,14 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// alone still records nothing, silently — that behaviour is entirely
 	// gated by *recordFlag below, unchanged.
 	//
+	// One consequence is correct but surprising, so it is stated here rather
+	// than discovered: the handle is now held for the WHOLE scan, not just the
+	// instant of the final write. DuckDB is single-process-exclusive on a
+	// file, so during a long `--record` audit a concurrent `corral scans`
+	// against the same (default) DSN cannot open the ledger at all — see
+	// openScanStore, which already says so in its error. Nothing is lost; the
+	// reader simply has to wait, or be pointed at a copy.
+	//
 	// An unopenable DSN does not fail the scan: scanStoreErr is carried
 	// forward and reported in the --record block at the bottom, in the same
 	// place and the same words a write failure has always been reported —
@@ -590,15 +598,15 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// conflate it with "files were in scope and none could be graded".
 	nothingInScope := *diffBase != "" && len(selected) == 0
 
-	printRepoReport(stdout, rep, nothingInScope, minKillRate, unpairableInDiff)
-	// A hit COUNT alone is not disclosure — see oldestReuse's own doc
-	// comment. Placed right after printRepoReport's own "N verdict(s)
-	// reused from cache" line: the reader sees the count and, in the same
-	// breath, how old the oldest of those reused verdicts actually is.
-	if at, ok := oldestReuse(results); ok {
-		fmt.Fprintf(stdout, "  reused verdicts: oldest earned %s (%s ago)\n",
-			at.UTC().Format(time.RFC3339), time.Since(at).Round(time.Hour))
-	}
+	// The age of the oldest reused verdict is handed to printRepoReport, not
+	// printed here: it belongs beside the "N verdict(s) reused from cache"
+	// count, which is emitted MID-report (weakest files and more follow it).
+	// Printed from here it landed detached at the very end, so the count and
+	// the age — one number that is meaningless without the other — were
+	// separated by everything in between. A zero time means nothing was
+	// reused.
+	oldestReused, _ := oldestReuse(results)
+	printRepoReport(stdout, rep, nothingInScope, minKillRate, unpairableInDiff, oldestReused)
 	// A distinct section, never folded into Excluded/Ungradable/the audited
 	// fraction: this is an inventory alongside the audit, not a change to
 	// it (see the brief). Printed unconditionally when the flag was given,
@@ -636,8 +644,8 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 				PreflightRan: preflightResult.Ran, PreflightNote: preflightResult.Note,
 				StartedAt: startedAt, FinishedAt: time.Now(),
 			}
-			files := buildScanFileRows(results, rep.Excluded, preflightResult)
-			if err := recordCertifyRepoScan(scanStore, scan, files, results); err != nil {
+			files := buildScanFileRows(results, rep.Excluded, preflightResult, stderr)
+			if err := recordCertifyRepoScan(scanStore, scan, files, results, stderr); err != nil {
 				fmt.Fprintf(stderr, "corral certify --repo: scan ledger NOT written: %v\n", err)
 			}
 		}
@@ -1614,7 +1622,7 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 // corral could not pair with a test. It exists to keep the merge gate honest in
 // the one case where a green result is actively misleading: a zero-candidate
 // diff has two causes, and they are not the same answer.
-func printRepoReport(w io.Writer, r reposcan.RepoReport, nothingInScope bool, minKillRate *float64, unpairableInDiff []string) {
+func printRepoReport(w io.Writer, r reposcan.RepoReport, nothingInScope bool, minKillRate *float64, unpairableInDiff []string, oldestReused time.Time) {
 	commit := r.Commit
 	if strings.TrimSpace(commit) == "" {
 		// Never print a bare dangling "@ " — say plainly that the report is
@@ -1713,6 +1721,19 @@ func printRepoReport(w io.Writer, r reposcan.RepoReport, nothingInScope bool, mi
 	}
 	if r.CacheHits > 0 {
 		fmt.Fprintf(w, "  %d verdict(s) reused from cache\n", r.CacheHits)
+		// A hit COUNT alone is not disclosure — see oldestReuse's own doc
+		// comment. It goes here, in the same breath as the count, so the
+		// reader learns how old the oldest contributing verdict is before
+		// reading a single number the reuse helped produce.
+		//
+		// Rounded to the MINUTE, not the hour: an hour-rounded duration
+		// prints "(0s ago)" for anything under thirty minutes, so the
+		// commonest case of all — a CI re-run minutes after the first —
+		// read as though there were no age to disclose at all.
+		if !oldestReused.IsZero() {
+			fmt.Fprintf(w, "  reused verdicts: oldest earned %s (%s ago)\n",
+				oldestReused.UTC().Format(time.RFC3339), time.Since(oldestReused).Round(time.Minute))
+		}
 	}
 	if len(r.Weakest) > 0 {
 		fmt.Fprintln(w, "  weakest files:")

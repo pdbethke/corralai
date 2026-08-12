@@ -3,6 +3,7 @@
 package main
 
 import (
+	"io"
 	"testing"
 
 	"github.com/pdbethke/corralai/internal/advpool"
@@ -146,5 +147,29 @@ func TestExclusionEvidence_NeverInventsALabel(t *testing.T) {
 		if got := exclusionEvidence(reason, ""); got == "paired" {
 			t.Fatalf("an UNKNOWN reason must not claim pairing evidence, got %q", got)
 		}
+	}
+}
+
+// buildScanFileRows de-dupes on path and says it will not assume that
+// invariant holds forever; buildScanMutantRows iterated the same results with
+// no guard at all. A repeated path would therefore write ONE scan_files row
+// and TWO complete sets of scan_mutants rows — a silent double-count in
+// exactly the grain that exists for grading generators.
+func TestBuildScanMutantRowsDeDupesPathsLikeItsSibling(t *testing.T) {
+	one := reposcan.FileResult{
+		Job:      reposcan.Job{Path: "pkg/a.go", Lang: "go"},
+		Gradable: true,
+		Verdict: advpool.Verdict{
+			DevKilledMutants:   []advpool.MutantRef{{ID: "m1", ParentSHA256: "p"}},
+			DevSurvivedMutants: []advpool.MutantRef{{ID: "m2", ParentSHA256: "p"}},
+		},
+	}
+	rows := buildScanMutantRows(1, []reposcan.FileResult{one, one})
+	if len(rows) != 2 {
+		t.Fatalf("want 2 mutant rows for one duplicated path, got %d — the same measurement was counted twice", len(rows))
+	}
+	files := buildScanFileRows([]reposcan.FileResult{one, one}, nil, reposcan.CoverageMap{}, io.Discard)
+	if len(files) != 1 {
+		t.Fatalf("want 1 file row, got %d", len(files))
 	}
 }

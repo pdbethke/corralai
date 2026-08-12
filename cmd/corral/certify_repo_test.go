@@ -565,7 +565,7 @@ func TestBuildScanFileRowsCarriesProvenMissed(t *testing.T) {
 		{Job: reposcan.Job{Path: "src/flask/cli.py", Lang: "python"}, Gradable: true,
 			Verdict: advpool.Verdict{DevKillRate: 0.467, Survivors: 16, MutantsTotal: 30, ProvenMissed: 7, DevScored: true}},
 	}
-	rows := buildScanFileRows(results, nil, reposcan.CoverageMap{})
+	rows := buildScanFileRows(results, nil, reposcan.CoverageMap{}, io.Discard)
 	if len(rows) != 1 {
 		t.Fatalf("buildScanFileRows returned %d rows, want 1", len(rows))
 	}
@@ -584,7 +584,7 @@ func TestBuildScanFileRowsCarriesPoolTestUnsound(t *testing.T) {
 		{Job: reposcan.Job{Path: "unsound.py", Lang: "python"}, Gradable: true,
 			Verdict: advpool.Verdict{DevKillRate: 0.5, Survivors: 4, MutantsTotal: 10, PoolTestUnsound: true, DevScored: true}},
 	}
-	rows := buildScanFileRows(results, nil, reposcan.CoverageMap{})
+	rows := buildScanFileRows(results, nil, reposcan.CoverageMap{}, io.Discard)
 	if len(rows) != 1 {
 		t.Fatalf("buildScanFileRows returned %d rows, want 1", len(rows))
 	}
@@ -1974,7 +1974,7 @@ func TestPrintRepoReportNothingAuditedSaysSo(t *testing.T) {
 	rep := reposcan.Aggregate("local", "r", "c", 3, 1, []reposcan.FileResult{
 		{Job: reposcan.Job{Path: "a.go"}, Gradable: false, Reason: reposcan.ReasonFlakyBaseline},
 	}, []reposcan.Exclusion{{Path: "b.go", Reason: reposcan.ReasonNoPairedTest}})
-	printRepoReport(&out, rep, false, nil, nil)
+	printRepoReport(&out, rep, false, nil, nil, time.Time{})
 	s := out.String()
 	if !strings.Contains(s, "COULD-NOT-GRADE") {
 		t.Errorf("want COULD-NOT-GRADE, got:\n%s", s)
@@ -1995,7 +1995,7 @@ func TestPrintRepoReportEmptyScopeSaysADifferentLineThanCouldNotGrade(t *testing
 	rep := reposcan.Aggregate("local", "r", "c", 0, 0, nil, nil)
 
 	var scoped bytes.Buffer
-	printRepoReport(&scoped, rep, true, nil, nil)
+	printRepoReport(&scoped, rep, true, nil, nil, time.Time{})
 	if strings.Contains(scoped.String(), "COULD-NOT-GRADE") {
 		t.Errorf("an empty diff scope must not print COULD-NOT-GRADE:\n%s", scoped.String())
 	}
@@ -2004,7 +2004,7 @@ func TestPrintRepoReportEmptyScopeSaysADifferentLineThanCouldNotGrade(t *testing
 	}
 
 	var notScoped bytes.Buffer
-	printRepoReport(&notScoped, rep, false, nil, nil)
+	printRepoReport(&notScoped, rep, false, nil, nil, time.Time{})
 	if strings.Contains(notScoped.String(), "NOTHING IN SCOPE") {
 		t.Errorf("the non-diff/nothing-gradable case must not print the scope line:\n%s", notScoped.String())
 	}
@@ -2025,7 +2025,7 @@ func TestPrintRepoReportMinKillRateBreachIsLabelledDistinctlyFromCouldNotGrade(t
 	}, nil)
 	threshold := 0.8
 	var out bytes.Buffer
-	printRepoReport(&out, rep, false, &threshold, nil)
+	printRepoReport(&out, rep, false, &threshold, nil, time.Time{})
 	s := out.String()
 	if !strings.Contains(s, "KILL-RATE BREACH") {
 		t.Errorf("want a distinct breach line, got:\n%s", s)
@@ -2051,7 +2051,7 @@ func TestPrintRepoReportMinKillRateNoBreachPrintsNoBreachLine(t *testing.T) {
 	}, nil)
 	threshold := 0.8
 	var out bytes.Buffer
-	printRepoReport(&out, rep, false, &threshold, nil)
+	printRepoReport(&out, rep, false, &threshold, nil, time.Time{})
 	if strings.Contains(out.String(), "KILL-RATE BREACH") {
 		t.Errorf("no file breached the threshold; the breach line must not print:\n%s", out.String())
 	}
@@ -2069,7 +2069,7 @@ func TestPrintRepoReportWeakestIsCapped(t *testing.T) {
 		})
 	}
 	var out bytes.Buffer
-	printRepoReport(&out, reposcan.Aggregate("o", "r", "c", 12, len(results), results, nil), false, nil, nil)
+	printRepoReport(&out, reposcan.Aggregate("o", "r", "c", 12, len(results), results, nil), false, nil, nil, time.Time{})
 	s := out.String()
 	if !strings.Contains(s, "... and 2 more") {
 		t.Errorf("want the weakest list capped at 10 with a remainder line:\n%s", s)
@@ -2201,7 +2201,7 @@ func TestCertifyRepoReportsEnumeratedCandidatesNotJobs(t *testing.T) {
 		{Job: reposcan.Job{Path: "a.go"}, Gradable: true, Verdict: advpool.Verdict{DevKillRate: 0.8}},
 	}, excl)
 	var out bytes.Buffer
-	printRepoReport(&out, rep, false, nil, nil)
+	printRepoReport(&out, rep, false, nil, nil, time.Time{})
 	s := out.String()
 	if !strings.Contains(s, "20% of 5 candidates") {
 		t.Errorf("want the ratio over the 5 enumerated candidates, got:\n%s", s)
@@ -2226,10 +2226,10 @@ func TestPrintRepoReportUngradableOrderIsStable(t *testing.T) {
 	}, excl)
 
 	var first bytes.Buffer
-	printRepoReport(&first, rep, false, nil, nil)
+	printRepoReport(&first, rep, false, nil, nil, time.Time{})
 	for i := 0; i < 50; i++ {
 		var again bytes.Buffer
-		printRepoReport(&again, rep, false, nil, nil)
+		printRepoReport(&again, rep, false, nil, nil, time.Time{})
 		if again.String() != first.String() {
 			t.Fatalf("report is not reproducible:\n--- run 1 ---\n%s\n--- run %d ---\n%s", first.String(), i+2, again.String())
 		}
@@ -2252,7 +2252,7 @@ func TestPrintRepoReportPrintsExecutorErrorDetail(t *testing.T) {
 	}, nil)
 
 	var buf bytes.Buffer
-	printRepoReport(&buf, rep, false, nil, nil)
+	printRepoReport(&buf, rep, false, nil, nil, time.Time{})
 	got := buf.String()
 	if !strings.Contains(got, "app.py: python toolchain unavailable") {
 		t.Errorf("report does not surface the executor's error detail:\n%s", got)
@@ -2274,7 +2274,7 @@ func TestPrintRepoReportMarksTimedOutFiles(t *testing.T) {
 	}, nil)
 
 	var buf bytes.Buffer
-	printRepoReport(&buf, rep, false, nil, nil)
+	printRepoReport(&buf, rep, false, nil, nil, time.Time{})
 	got := buf.String()
 	if !strings.Contains(got, "1 of the audited file(s) scored under an UNCONVERGED run") {
 		t.Errorf("report is missing the headline timed-out caveat:\n%s", got)
@@ -2301,7 +2301,7 @@ func TestPrintRepoReportSaysDidNotFinishWhenEveryFileTimedOut(t *testing.T) {
 			Verdict: advpool.Verdict{DevKillRate: 0.46, Survivors: 13, MutantsTotal: 24, TimedOut: true, DevScored: true}},
 	}, nil)
 	var buf bytes.Buffer
-	printRepoReport(&buf, allTimedOut, false, nil, nil)
+	printRepoReport(&buf, allTimedOut, false, nil, nil, time.Time{})
 	got := buf.String()
 	if !strings.Contains(got, "DID NOT FINISH") {
 		t.Errorf("report must say DID NOT FINISH when every audited file timed out:\n%s", got)
@@ -2316,7 +2316,7 @@ func TestPrintRepoReportSaysDidNotFinishWhenEveryFileTimedOut(t *testing.T) {
 			Verdict: advpool.Verdict{DevKillRate: 0.46, TimedOut: true, DevScored: true}},
 	}, nil)
 	buf.Reset()
-	printRepoReport(&buf, mixed, false, nil, nil)
+	printRepoReport(&buf, mixed, false, nil, nil, time.Time{})
 	got = buf.String()
 	if strings.Contains(got, "DID NOT FINISH") {
 		t.Errorf("a partial timeout (some files converged) must not print DID NOT FINISH:\n%s", got)
@@ -2343,7 +2343,7 @@ func TestPrintRepoReportMarksTestWriterFailedFiles(t *testing.T) {
 	}, nil)
 
 	var buf bytes.Buffer
-	printRepoReport(&buf, rep, false, nil, nil)
+	printRepoReport(&buf, rep, false, nil, nil, time.Time{})
 	got := buf.String()
 	if !strings.Contains(got, "1 of the audited file(s) had survivor(s) the pool could not author a compiling test to kill") {
 		t.Errorf("report is missing the headline test-writer-failed caveat:\n%s", got)
@@ -2373,7 +2373,7 @@ func TestPrintRepoReportMarksPoolTestUnsoundFiles(t *testing.T) {
 	}, nil)
 
 	var buf bytes.Buffer
-	printRepoReport(&buf, rep, false, nil, nil)
+	printRepoReport(&buf, rep, false, nil, nil, time.Time{})
 	got := buf.String()
 	if !strings.Contains(got, "never genuinely graded") {
 		t.Errorf("report is missing the headline pool-test-unsound caveat:\n%s", got)
@@ -2403,7 +2403,7 @@ func TestPrintRepoReportZeroLineNamesAllThreeReasons(t *testing.T) {
 	}, nil)
 
 	var buf bytes.Buffer
-	printRepoReport(&buf, rep, false, nil, nil)
+	printRepoReport(&buf, rep, false, nil, nil, time.Time{})
 	got := buf.String()
 	var zeroLine string
 	for _, line := range strings.Split(got, "\n") {
@@ -2441,7 +2441,7 @@ func TestPrintRepoReportProvenMissedFileSurvivesTruncation(t *testing.T) {
 	rep := reposcan.Aggregate("o", "r", "c", 12, 12, results, nil)
 
 	var buf bytes.Buffer
-	printRepoReport(&buf, rep, false, nil, nil)
+	printRepoReport(&buf, rep, false, nil, nil, time.Time{})
 	got := buf.String()
 	if !strings.Contains(got, "... and 2 more") {
 		t.Fatalf("fixture must actually truncate (12 weakest, cap 10) — test setup assumption broken:\n%s", got)
@@ -2464,7 +2464,7 @@ func TestPrintRepoReportShowsProvenMissed(t *testing.T) {
 	}, nil)
 
 	var buf bytes.Buffer
-	printRepoReport(&buf, rep, false, nil, nil)
+	printRepoReport(&buf, rep, false, nil, nil, time.Time{})
 	got := buf.String()
 
 	if !strings.Contains(got, "7 proven") {
@@ -2494,7 +2494,7 @@ func TestPrintRepoReportZeroProvenMissedIsLegible(t *testing.T) {
 	}, nil)
 
 	var buf bytes.Buffer
-	printRepoReport(&buf, rep, false, nil, nil)
+	printRepoReport(&buf, rep, false, nil, nil, time.Time{})
 	got := buf.String()
 	lines := strings.Split(got, "\n")
 
@@ -3759,7 +3759,7 @@ func TestPrintRepoReportUnpairableDiffIsNotReportedAsNothingNeeded(t *testing.T)
 	rep := reposcan.Aggregate("local", "r", "c", 0, 0, nil, nil)
 
 	var out bytes.Buffer
-	printRepoReport(&out, rep, true, nil, []string{"lib/response.js", "lib/request.js"})
+	printRepoReport(&out, rep, true, nil, []string{"lib/response.js", "lib/request.js"}, time.Time{})
 	s := out.String()
 
 	if strings.Contains(s, "no audit was needed") {
@@ -3779,7 +3779,7 @@ func TestPrintRepoReportDocsOnlyDiffStillSaysNoAuditNeeded(t *testing.T) {
 	rep := reposcan.Aggregate("local", "r", "c", 0, 0, nil, nil)
 
 	var out bytes.Buffer
-	printRepoReport(&out, rep, true, nil, nil)
+	printRepoReport(&out, rep, true, nil, nil, time.Time{})
 	s := out.String()
 	if !strings.Contains(s, "no audit was needed") {
 		t.Errorf("a docs-only diff must still report that no audit was needed:\n%s", s)

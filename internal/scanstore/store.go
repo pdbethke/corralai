@@ -348,6 +348,14 @@ func Open(dsn string) (*Store, error) {
 	// Storing patches is a later, deliberate decision — it can be added, it
 	// cannot be un-added.
 	//
+	// There is NO reuse marker of its own here, and that is worth stating
+	// because it surprises: when a file's verdict is served from the verdict
+	// cache, its mutants are re-recorded under the new scan_id exactly like
+	// freshly-earned ones, so a naive leaderboard counts one measurement once
+	// per scan forever. Excluding reused mutants requires joining back to
+	// scan_files on (scan_id, path) and filtering on cache_hit — the flag
+	// lives there, at the grain the cache actually operates on.
+	//
 	// The CHECK on outcome exists for the same reason scan_files has one on
 	// evidence: this table is queried by exact string, and a typo'd label
 	// should fail loud at INSERT rather than quietly enter a leaderboard.
@@ -567,7 +575,8 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		kill_rate, survivors, gradable, preflight_state, evidence, detail, timed_out, test_writer_failed, proven_missed, pool_test_unsound,
 		proven_mutant_ids, authored_test,
 		models_by_role, mutants_total, regions_total, regions_probed, dropped_regions, vacuous_findings, status,
-		authored_test_not_collected, baseline_failed, cache_hit, reused_from_scan_id
+		authored_test_not_collected, baseline_failed, cache_hit, reused_from_scan_id,
+		suite_baseline_ms
 		FROM scan_files WHERE scan_id = ? ORDER BY rowid`, scanID)
 	if err != nil {
 		return nil, fmt.Errorf("scanstore: files for scan %d: %w", scanID, err)
@@ -588,11 +597,19 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		var mutantsTotal, regionsTotal, regionsProbed, vacuousFindings sql.NullInt64
 		var authoredTestNotCollected, baselineFailed, cacheHit sql.NullBool
 		var reusedFromScanID sql.NullInt64
+		// suite_baseline_ms reads back nullable for the same reason the
+		// columns above do (pre-migration rows, and rejected files that were
+		// never scored). It is read back at all because capacity planning is
+		// meant to be a QUERY over this ledger — and this reader IS the query
+		// surface: DuckDB is single-process on a file, so ad-hoc CLI SQL is
+		// not a reliable fallback while a scan holds the handle open.
+		var suiteBaselineMS sql.NullInt64
 		if err := rows.Scan(&f.Path, &f.Lang, &f.Disposition, &f.Reason,
 			&f.KillRate, &f.Survivors, &f.Gradable, &f.PreflightState, &f.Evidence, &detail, &timedOut, &testWriterFailed, &provenMissed, &poolTestUnsound,
 			&provenIDs, &authoredTest,
 			&modelsByRole, &mutantsTotal, &regionsTotal, &regionsProbed, &droppedRegions, &vacuousFindings, &status,
-			&authoredTestNotCollected, &baselineFailed, &cacheHit, &reusedFromScanID); err != nil {
+			&authoredTestNotCollected, &baselineFailed, &cacheHit, &reusedFromScanID,
+			&suiteBaselineMS); err != nil {
 			return nil, fmt.Errorf("scanstore: scan scan_files row: %w", err)
 		}
 		f.Detail = detail.String
@@ -620,6 +637,7 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		f.AuthoredTestNotCollected = authoredTestNotCollected.Bool
 		f.BaselineFailed = baselineFailed.Bool
 		f.CacheHit = cacheHit.Bool
+		f.SuiteBaselineMillis = suiteBaselineMS.Int64
 		// ReusedFromScanID stays *int64: NULL (never reused, or a
 		// pre-migration row) must read back as nil, not a scan id of 0 — see
 		// the field's own doc.

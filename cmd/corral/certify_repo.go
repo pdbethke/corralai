@@ -5,6 +5,8 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -378,7 +380,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// carries the flags that change what a mutant run against a given file
 	// MEASURES, not which files get audited. See auditConfigKey for the
 	// inclusion/exclusion rationale.
-	auditConfig := auditConfigKey(*scopeTestsFlag, *minKillRateFlag)
+	auditConfig := auditConfigKey(*scopeTestsFlag, checkArgv)
 
 	cfg := reposcan.EmitConfig{
 		Owner: *owner, Repo: filepath.Base(*repoDir), Commit: *commit, Root: *repoDir,
@@ -645,13 +647,36 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 // reusing a nightly full-repo verdict for the same unchanged file — which is
 // most of the value the cache exists to deliver.
 //
+// --min-kill-rate is NOT here either, for a different reason: it decides this
+// process's EXIT CODE (see repoScanExitCode) and cannot change a measurement.
+// Keying it meant the CI merge-gate invocation — the one that always passes a
+// threshold — could never reuse a nightly verdict.
+//
+// The operator's `-- <cmd>` IS here, and it is the most load-bearing entry:
+// that argv is what testCmd hands to the baseline AND to every mutant, so it
+// is the grading surface itself. Without it, `-- pytest -q tests/unit` and a
+// later `-- pytest -q` key identically for unchanged source, and the
+// whole-suite run signs a kill rate measured against a subset it never ran.
+//
+// It is folded to a sha256 rather than written verbatim, for two reasons: a
+// real check command is long, and it routinely contains `=` and `,` — the
+// delimiters CanonicalKV itself uses, so operator text could otherwise forge
+// or corrupt neighbouring components. The words are joined on \x00 (a byte no
+// argv word can contain) so no re-splitting of the same characters can
+// collide. An EMPTY argv serializes as absent, never as the digest of an empty
+// string: the plugin-default path must key exactly as it always has.
+//
 // Bias when adding to this list: include. Over-inclusion causes a needless
 // miss, which costs money. Under-inclusion serves a stale verdict, which
 // signs an unmeasured claim.
-func auditConfigKey(scopeTests bool, minKillRate string) string {
-	m := map[string]string{"min-kill-rate": minKillRate}
+func auditConfigKey(scopeTests bool, checkArgv []string) string {
+	m := map[string]string{}
 	if scopeTests {
 		m["scope-tests"] = "true"
+	}
+	if len(checkArgv) > 0 {
+		sum := sha256.Sum256([]byte(strings.Join(checkArgv, "\x00")))
+		m["check-argv"] = hex.EncodeToString(sum[:])
 	}
 	return reposcan.CanonicalKV(m)
 }

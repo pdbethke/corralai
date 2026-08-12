@@ -51,22 +51,77 @@ func TestResolveRoleModelsFillsDefaults(t *testing.T) {
 }
 
 func TestAuditConfigKeyVariesWithScopeTests(t *testing.T) {
-	if auditConfigKey(false, "") == auditConfigKey(true, "") {
+	if auditConfigKey(false, nil) == auditConfigKey(true, nil) {
 		t.Fatal("--scope-tests did not change AuditConfig — it changes which tests run per mutant, so it changes the verdict")
 	}
 }
 
 func TestAuditConfigKeyOmitsUnsetSettings(t *testing.T) {
-	if got := auditConfigKey(false, ""); got != "" {
+	if got := auditConfigKey(false, nil); got != "" {
 		t.Fatalf("auditConfigKey with nothing set = %q, want empty", got)
+	}
+	// An empty argv must serialize as ABSENT, not as the digest of an empty
+	// string: the plugin-default path has to key exactly as it always has, or
+	// enabling this fix would invalidate every verdict already earned.
+	if got := auditConfigKey(false, []string{}); got != "" {
+		t.Fatalf("auditConfigKey with an empty argv = %q, want empty", got)
 	}
 }
 
 func TestAuditConfigKeyIsStable(t *testing.T) {
-	if a, b := auditConfigKey(true, "0.5"), auditConfigKey(true, "0.5"); a != b {
+	if a, b := auditConfigKey(true, nil), auditConfigKey(true, nil); a != b {
 		t.Fatalf("auditConfigKey is not deterministic: %q vs %q", a, b)
 	}
-	if want := "min-kill-rate=0.5,scope-tests=true"; auditConfigKey(true, "0.5") != want {
-		t.Fatalf("auditConfigKey = %q, want %q", auditConfigKey(true, "0.5"), want)
+	if want := "scope-tests=true"; auditConfigKey(true, nil) != want {
+		t.Fatalf("auditConfigKey = %q, want %q", auditConfigKey(true, nil), want)
+	}
+}
+
+// CRITICAL: the operator's `-- <cmd>` IS the grading surface — the baseline
+// and every mutant are run with it. Without it in the key, `certify --repo .
+// --record -- pytest -q tests/unit` and a later `-- pytest -q` (the whole
+// suite) compute an identical KeyInputs for unchanged source: the full-suite
+// run HITS, then reports and signs a kill rate measured against a subset it
+// never ran.
+func TestCacheKeyVariesWithTheOperatorsTestCommand(t *testing.T) {
+	base := reposcan.KeyInputs{
+		SourceDigest: "src", PackageDigest: "pkg", GoalDigest: "goal",
+		TestSurfaceDigest: "test", EngineVersion: "gen1", ModelSet: "m",
+		Substrate: reposcan.SubstrateWorkspace,
+	}
+	subset, whole := base, base
+	subset.AuditConfig = auditConfigKey(false, []string{"pytest", "-q", "tests/unit"})
+	whole.AuditConfig = auditConfigKey(false, []string{"pytest", "-q"})
+
+	if subset.CacheKey() == whole.CacheKey() {
+		t.Fatal("two different `-- <cmd>` test commands produced the same cache key — a whole-suite run would sign a kill rate measured against a subset it never ran")
+	}
+}
+
+// The argv is folded to a sha256 rather than written verbatim: a real check
+// command is long and routinely contains `=` and `,`, which are CanonicalKV's
+// OWN delimiters — a verbatim value could forge or corrupt other components.
+func TestAuditConfigKeyHashesTheArgvRatherThanEmbeddingIt(t *testing.T) {
+	got := auditConfigKey(false, []string{"pytest", "-q", "--cov=src", "-k", "a,b"})
+	if strings.Contains(got, "pytest") || strings.Contains(got, ",b") {
+		t.Fatalf("auditConfigKey embedded the raw argv (%q) — CanonicalKV delimiters (= and ,) must not come from operator text", got)
+	}
+	if !strings.HasPrefix(got, "check-argv=") {
+		t.Fatalf("auditConfigKey = %q, want a check-argv=<hex> component", got)
+	}
+	// Joined on \x00, so no re-splitting of the argv can collide: ["a b"] and
+	// ["a", "b"] are different commands and must key differently.
+	if auditConfigKey(false, []string{"a b"}) == auditConfigKey(false, []string{"a", "b"}) {
+		t.Fatal("argv words were joined ambiguously — two different commands share a key")
+	}
+}
+
+// --min-kill-rate decides the process EXIT CODE (repoScanExitCode); it cannot
+// change a measurement. Keying it meant the CI merge-gate invocation — the one
+// that always passes a threshold — could never reuse a nightly verdict, which
+// is most of the value the cache exists to deliver.
+func TestAuditConfigKeyIgnoresMinKillRate(t *testing.T) {
+	if got := auditConfigKey(false, nil); strings.Contains(got, "min-kill-rate") {
+		t.Fatalf("auditConfigKey = %q, want no min-kill-rate component", got)
 	}
 }

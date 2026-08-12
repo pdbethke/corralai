@@ -39,6 +39,39 @@ corral certify --local \
   -- python -m pytest
 ```
 
+**Before you spend a run: `corral doctor`.** An audit costs real money and real
+minutes, and it is almost always the *environment* that stops one — the sandbox
+won't start, the toolchain is invisible inside it, the key for the model you
+assigned is missing, the file has no paired test. Discovered one at a time, each
+of those costs another run, and most of them cost money to learn. `doctor` checks
+them all up front for **free** — no model is ever called — in the order the audit
+itself would hit them, so the first `FAIL` is the first thing to fix:
+
+```bash
+corral doctor --code path/to/your/file.py -- python -m pytest
+```
+
+```
+  [ok  ] sandbox starts
+  [ok  ] toolchain reachable inside the sandbox
+  [FAIL] credential for mutant-generator (claude-sonnet-5)
+         agentbackend: ForModel: model "claude-sonnet-5" needs an Anthropic key — set ANTHROPIC_API_KEY
+
+1 check(s) failed — fix these before spending a run.
+```
+
+Every argument is optional and each one unlocks more checks: `--code`/`--test` add
+the test-pairing check, a test command after `--` adds the in-sandbox toolchain
+check, and `--mutant-model`/`--writer-model`/`--critic-model` check the credential
+for exactly the models you plan to route to. It exits non-zero if anything failed.
+
+Two things it deliberately does **not** check, because both need a real seeded
+workspace: whether your suite passes on *unmutated* code inside the sandbox — the
+most common way an audit dies — and whether a multi-file project needs
+`--repo-dir` (it does; the bare `--code` form seeds only that file and its test).
+`certify --local` reports the first as `COULD-NOT-GRADE`, with the runner's own
+output.
+
 It asks the question you can never answer honestly about your own code — *do my tests
 actually test anything, or do they just pass?* — and answers it by execution:
 

@@ -67,6 +67,29 @@ func (c *ledgerCache) Get(owner, cacheKey string) (reposcan.FileResult, bool) {
 	}, true
 }
 
+// oldestReuse returns the earliest ComputedAt among results that were REUSED,
+// and whether any were.
+//
+// A CacheHits count alone is not disclosure. Continuous re-evaluation's whole
+// claim is freshness, so a report where most files were reused from weeks ago,
+// presented as a current audit, is precisely the self-flattering record this
+// tool exists to prevent. The OLDEST contributing verdict is the honest
+// summary number: it is the strongest thing that can be said about how current
+// the report is as a whole.
+func oldestReuse(results []reposcan.FileResult) (time.Time, bool) {
+	var oldest time.Time
+	found := false
+	for _, r := range results {
+		if !r.CacheHit || r.ComputedAt.IsZero() {
+			continue
+		}
+		if !found || r.ComputedAt.Before(oldest) {
+			oldest, found = r.ComputedAt, true
+		}
+	}
+	return oldest, found
+}
+
 // Put is deliberately a no-op.
 //
 // Verdicts reach the ledger through the single Record call at the end of a

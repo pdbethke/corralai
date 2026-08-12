@@ -111,6 +111,24 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 
 		if r.Gradable {
 			kr := r.Verdict.DevKillRate
+			// CacheKey and VerdictJSON are written on THIS branch only — the
+			// load-bearing invariant is ledgerCache.Get's own: it hands back
+			// Gradable:true unconditionally on a hit, justified by "only
+			// gradable results are ever recorded with a key" (verdict_cache.go).
+			// A rejected/excluded row (below, and in the second loop) must
+			// carry an empty CacheKey and VerdictJSON, or a LATER scan's cache
+			// lookup would resurrect a non-verdict as a graded one.
+			verdictJSON, merr := marshalVerdict(r.Verdict)
+			if merr != nil {
+				// A marshalling failure must NOT fail the scan: the audit
+				// already ran and the verdict already stands on every other
+				// column of this row. The only cost is that this row is not
+				// cacheable — a future re-audit of this exact content pays
+				// for it again — which is far cheaper than losing the whole
+				// run's recording over a serialization bug.
+				log.Printf("corral certify --repo: %s: verdict not cached (marshal failed): %v", path, merr)
+				verdictJSON = ""
+			}
 			rows = append(rows, scanstore.File{
 				Path: path, Lang: r.Job.Lang, Disposition: "audited",
 				KillRate: &kr, Survivors: r.Verdict.Survivors, Gradable: true,
@@ -173,6 +191,22 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 				// meantime — "reused, source scan not recorded" — not a
 				// fabricated lineage.
 				CacheHit: r.CacheHit,
+				// VerdictJSON is the single serialization every future Get
+				// has to parse (marshalVerdict, verdict_cache.go) — "" above
+				// on a marshal failure, never a partial or hand-rolled blob.
+				VerdictJSON: verdictJSON,
+				// CacheKey is reposcan's content address for this exact
+				// verdict; a future scan's ledgerCache.Get matches on this
+				// column. r.Job.CacheKey is populated for every job
+				// (fresh-computed or itself a cache hit — Scan sets
+				// hit.Job = j on a hit, so CacheKey rides through reuse too).
+				CacheKey: r.Job.CacheKey,
+				// ComputedAt is when this verdict was actually EARNED — the
+				// original audit's timestamp, not this scan's. On a cache
+				// hit it rides through from ledgerCache.Get unchanged, which
+				// is what lets oldestReuse (verdict_cache.go) report how old
+				// a reused verdict really is instead of when it was reused.
+				ComputedAt: r.ComputedAt,
 			})
 			continue
 		}
@@ -368,11 +402,16 @@ func buildScanMutantRows(scanID int64, results []reposcan.FileResult) []scanstor
 	return rows
 }
 
-// recordCertifyRepoScan opens the ledger at dsn, writes scan and files in
-// one transaction, and closes it again. Every error case (an unopenable
-// DSN, a failed write) is returned unchanged to the caller, which is
-// responsible for the fail-open handling — this function does not print
-// anything itself, so it stays testable as a pure function of its inputs.
+// recordCertifyRepoScan writes scan and files to st in one transaction.
+// st is opened (and later closed) by the caller — BEFORE the scan even runs
+// — so the identical handle also serves reposcan.Scan's verdict cache during
+// the run (see runCertifyRepo and newLedgerCache). Opening it here, as this
+// function used to, would have meant two separate handles on the same DuckDB
+// file within one process: one for the cache's reads during the scan, a
+// second opened fresh at the very end for this write. Every error case (a
+// failed write) is returned unchanged to the caller, which is responsible
+// for the fail-open handling — this function does not print anything
+// itself, so it stays testable as a pure function of its inputs.
 //
 // scan_mutants is written separately, AFTER scan+files have already
 // committed and the scan id is known. A RecordMutants failure is logged and
@@ -380,12 +419,7 @@ func buildScanMutantRows(scanID int64, results []reposcan.FileResult) []scanstor
 // recorded in scan_files above, so losing mutant detail costs analysis, not
 // correctness, and must not turn into "scan ledger NOT written" for a scan
 // that, in every way that matters, was.
-func recordCertifyRepoScan(dsn string, scan scanstore.Scan, files []scanstore.File, results []reposcan.FileResult) error {
-	st, err := scanstore.Open(dsn)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = st.Close() }()
+func recordCertifyRepoScan(st *scanstore.Store, scan scanstore.Scan, files []scanstore.File, results []reposcan.FileResult) error {
 	id, err := st.Record(context.Background(), scan, files)
 	if err != nil {
 		return err

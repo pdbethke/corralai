@@ -505,6 +505,45 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
+	// Opened here, BEFORE the scan, so ONE handle serves two purposes: it is
+	// the verdict cache's read path during reposcan.Scan below (see
+	// newLedgerCache), and it is the ledger's write path in the --record
+	// block at the end of this function. Opening it only at the end, as this
+	// used to, would mean two separate handles on the same DuckDB file within
+	// one process — the cache would have nothing to read from during the
+	// scan it exists to speed up.
+	//
+	// This does NOT change --record's own meaning or when recording happens:
+	// the store is opened only when *recordFlag is set, exactly as it was
+	// opened only inside the (now-shorter) --record block before. --record-db
+	// alone still records nothing, silently — that behaviour is entirely
+	// gated by *recordFlag below, unchanged.
+	//
+	// An unopenable DSN does not fail the scan: scanStoreErr is carried
+	// forward and reported in the --record block at the bottom, in the same
+	// place and the same words a write failure has always been reported —
+	// this is not a new failure path, just the existing one's error surfacing
+	// earlier in the run than the write itself does.
+	var scanStore *scanstore.Store
+	var scanStoreErr error
+	if *recordFlag {
+		dsn := *recordDSNFlag
+		if dsn == "" {
+			dsn = defaultScanDSN()
+		}
+		st, err := scanstore.Open(dsn)
+		if err != nil {
+			scanStoreErr = err
+		} else {
+			scanStore = st
+			// Deferred here, not in the --record block: this function has
+			// several early-return paths above --record's own site (the
+			// argvErr refusal just above, for one), and every one of them
+			// must still release the DuckDB handle.
+			defer func() { _ = scanStore.Close() }()
+		}
+	}
+
 	workers, swarmReadout := resolveScanWorkers(*swarmFlag, *substrateFlag)
 	fmt.Fprint(stdout, swarmReadout)
 	mutantConc := resolveMutantConcurrency(resolveSwarm(*swarmFlag), *substrateFlag, workers, len(jobs))
@@ -528,10 +567,11 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// ex is non-nil here: it is constructed on every non-dry-run path above,
 	// and the dry run returned before this point.
 	//
-	// Cache is nil in H1a: the content-addressed key exists (Task 2) but the
-	// persistent store behind it is H1b. A nil Cache means every job is
-	// computed fresh — slow, never stale.
-	results := reposcan.Scan(context.Background(), jobs, ex, nil, workers)
+	// scanStore was opened above, BEFORE this call, specifically so it could
+	// serve as the cache's read path here: newLedgerCache(nil) (no --record,
+	// or an unopenable DSN) already misses every key, so this needs no extra
+	// nil-guard — the cache is simply inactive for the run.
+	results := reposcan.Scan(context.Background(), jobs, ex, newLedgerCache(scanStore), workers)
 	rep := reposcan.Aggregate(*owner, cfg.Repo, *commit, totalFiles, len(cands), results, excl)
 
 	// The diff selected zero candidates: a docs-only (or no-paired-test-only)
@@ -541,6 +581,14 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	nothingInScope := *diffBase != "" && len(selected) == 0
 
 	printRepoReport(stdout, rep, nothingInScope, minKillRate, unpairableInDiff)
+	// A hit COUNT alone is not disclosure — see oldestReuse's own doc
+	// comment. Placed right after printRepoReport's own "N verdict(s)
+	// reused from cache" line: the reader sees the count and, in the same
+	// breath, how old the oldest of those reused verdicts actually is.
+	if at, ok := oldestReuse(results); ok {
+		fmt.Fprintf(stdout, "  reused verdicts: oldest earned %s (%s ago)\n",
+			at.UTC().Format(time.RFC3339), time.Since(at).Round(time.Hour))
+	}
 	// A distinct section, never folded into Excluded/Ungradable/the audited
 	// fraction: this is an inventory alongside the audit, not a change to
 	// it (see the brief). Printed unconditionally when the flag was given,
@@ -561,22 +609,27 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// off. Placed after `code` is computed, and calling nothing that can
 	// panic into the exit path below.
 	if *recordFlag {
-		dsn := *recordDSNFlag
-		if dsn == "" {
-			dsn = defaultScanDSN()
-		}
-		scan := scanstore.Scan{
-			Owner: *owner, Repo: cfg.Repo, Commit: *commit,
-			Substrate: *substrateFlag, EngineVersion: version, ModelSet: cfg.ModelSet,
-			Top: effectiveTop, AllCandidates: *allFlag, DiffBase: *diffBase,
-			TotalFiles: totalFiles, Candidates: rep.Candidates, Audited: rep.Audited,
-			KillRate: killRatePtr(rep.KillRate), CacheHits: rep.CacheHits,
-			PreflightRan: preflightResult.Ran, PreflightNote: preflightResult.Note,
-			StartedAt: startedAt, FinishedAt: time.Now(),
-		}
-		files := buildScanFileRows(results, rep.Excluded, preflightResult)
-		if err := recordCertifyRepoScan(dsn, scan, files, results); err != nil {
-			fmt.Fprintf(stderr, "corral certify --repo: scan ledger NOT written: %v\n", err)
+		if scanStoreErr != nil {
+			// The open failure happened earlier (above, before the scan) but
+			// is reported HERE — the same place and the same words a write
+			// failure has always been reported in, so this is not a new
+			// failure surface, just the pre-existing one's error arriving
+			// from an earlier point in the run.
+			fmt.Fprintf(stderr, "corral certify --repo: scan ledger NOT written: %v\n", scanStoreErr)
+		} else {
+			scan := scanstore.Scan{
+				Owner: *owner, Repo: cfg.Repo, Commit: *commit,
+				Substrate: *substrateFlag, EngineVersion: version, ModelSet: cfg.ModelSet,
+				Top: effectiveTop, AllCandidates: *allFlag, DiffBase: *diffBase,
+				TotalFiles: totalFiles, Candidates: rep.Candidates, Audited: rep.Audited,
+				KillRate: killRatePtr(rep.KillRate), CacheHits: rep.CacheHits,
+				PreflightRan: preflightResult.Ran, PreflightNote: preflightResult.Note,
+				StartedAt: startedAt, FinishedAt: time.Now(),
+			}
+			files := buildScanFileRows(results, rep.Excluded, preflightResult)
+			if err := recordCertifyRepoScan(scanStore, scan, files, results); err != nil {
+				fmt.Fprintf(stderr, "corral certify --repo: scan ledger NOT written: %v\n", err)
+			}
 		}
 	}
 

@@ -508,6 +508,19 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 // Rows with no verdict JSON are skipped rather than returned as an empty hit:
 // a row recorded before this column existed has nothing to reuse, and serving
 // "" as a verdict would be worse than missing.
+//
+// "Most recent" orders by (s.ts, s.id), not s.ts alone. s.ts is a TIMESTAMP
+// set from time.Now().UTC() at Record time, so two scans recorded within the
+// same tick (reachable on a fast machine, or under batched recording) would
+// tie on ts alone — and picking between two rows that could hold different
+// verdicts for the same content address on an arbitrary tiebreak is exactly
+// the ambiguity the package's fail-closed rule forbids. s.id is allocated
+// from the scans_id DuckDB SEQUENCE (see Open's comment on it), so it is
+// unique and monotonic with insertion order; ordering by (ts, id) makes
+// "most recent" a TOTAL order, so the tie case cannot arise rather than
+// being resolved arbitrarily — cheaper than falling back to a miss on tie,
+// which would force a needless full re-audit over what is really just clock
+// granularity.
 func (s *Store) VerdictByCacheKey(ctx context.Context, owner, cacheKey string) (string, time.Time, bool, error) {
 	if strings.TrimSpace(owner) == "" {
 		return "", time.Time{}, false, fmt.Errorf("scanstore: VerdictByCacheKey: empty owner")
@@ -520,7 +533,7 @@ func (s *Store) VerdictByCacheKey(ctx context.Context, owner, cacheKey string) (
 		FROM scan_files f JOIN scans s ON s.id = f.scan_id
 		WHERE s.owner = ? AND f.cache_key = ?
 		  AND f.verdict_json IS NOT NULL AND f.verdict_json <> ''
-		ORDER BY s.ts DESC
+		ORDER BY s.ts DESC, s.id DESC
 		LIMIT 1`, owner, cacheKey)
 	var js sql.NullString
 	var at sql.NullTime

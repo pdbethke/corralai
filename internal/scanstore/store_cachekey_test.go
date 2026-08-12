@@ -95,3 +95,42 @@ func TestVerdictByCacheKeyTakesTheNewestAndSkipsEmpty(t *testing.T) {
 		t.Fatalf("got the stale row: %q", js)
 	}
 }
+
+// TestVerdictByCacheKeyBreaksTieOnID pins the tiebreak property itself,
+// rather than relying on two Record calls landing at different wall-clock
+// instants (which is what "newest wins" alone would depend on, and which is
+// exactly the ambiguity a fast machine or batched recording can collapse).
+// Record always stamps ts with time.Now().UTC() and offers no way to pin it,
+// so this test reaches through Store's unexported db handle (legal: same
+// package) to insert two scans rows with an IDENTICAL ts and different,
+// sequence-allocated ids directly, then asserts the higher-id row wins.
+func TestVerdictByCacheKeyBreaksTieOnID(t *testing.T) {
+	s := openTemp(t)
+	ctx := context.Background()
+	tied := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+
+	insertScanAndFile := func(js string) {
+		t.Helper()
+		var id int64
+		if err := s.db.QueryRowContext(ctx, `INSERT INTO scans (id, ts, owner, repo)
+			VALUES (nextval('scans_id'), ?, 'acme', 'r') RETURNING id`, tied).Scan(&id); err != nil {
+			t.Fatalf("insert scan: %v", err)
+		}
+		if _, err := s.db.ExecContext(ctx, `INSERT INTO scan_files
+			(scan_id, path, disposition, gradable, cache_key, verdict_json, computed_at)
+			VALUES (?, 'a.go', 'audited', true, 'TIE', ?, ?)`, id, js, tied); err != nil {
+			t.Fatalf("insert scan_files: %v", err)
+		}
+	}
+
+	insertScanAndFile(`{"v":"lower-id"}`)
+	insertScanAndFile(`{"v":"higher-id"}`)
+
+	js, _, ok, err := s.VerdictByCacheKey(ctx, "acme", "TIE")
+	if err != nil || !ok {
+		t.Fatalf("expected a hit: ok=%v err=%v", ok, err)
+	}
+	if js != `{"v":"higher-id"}` {
+		t.Fatalf("tie must resolve to the higher (later-allocated) id, got %q", js)
+	}
+}

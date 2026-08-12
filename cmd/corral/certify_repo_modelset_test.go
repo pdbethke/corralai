@@ -49,3 +49,24 @@ func TestResolveRoleModelsFillsDefaults(t *testing.T) {
 		t.Fatal("writer resolved to empty")
 	}
 }
+
+func TestAuditConfigKeyVariesWithScopeTests(t *testing.T) {
+	if auditConfigKey(false, "") == auditConfigKey(true, "") {
+		t.Fatal("--scope-tests did not change AuditConfig — it changes which tests run per mutant, so it changes the verdict")
+	}
+}
+
+func TestAuditConfigKeyOmitsUnsetSettings(t *testing.T) {
+	if got := auditConfigKey(false, ""); got != "" {
+		t.Fatalf("auditConfigKey with nothing set = %q, want empty", got)
+	}
+}
+
+func TestAuditConfigKeyIsStable(t *testing.T) {
+	if a, b := auditConfigKey(true, "0.5"), auditConfigKey(true, "0.5"); a != b {
+		t.Fatalf("auditConfigKey is not deterministic: %q vs %q", a, b)
+	}
+	if want := "min-kill-rate=0.5,scope-tests=true"; auditConfigKey(true, "0.5") != want {
+		t.Fatalf("auditConfigKey = %q, want %q", auditConfigKey(true, "0.5"), want)
+	}
+}

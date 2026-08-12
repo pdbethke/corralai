@@ -374,9 +374,15 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	})
 	modelSet := modelSetKey(rmWriter, rmMutant, rmCritic, rmShadow)
 
+	// AuditConfig, like ModelSet above, is part of a verdict's identity: it
+	// carries the flags that change what a mutant run against a given file
+	// MEASURES, not which files get audited. See auditConfigKey for the
+	// inclusion/exclusion rationale.
+	auditConfig := auditConfigKey(*scopeTestsFlag, *minKillRateFlag)
+
 	cfg := reposcan.EmitConfig{
 		Owner: *owner, Repo: filepath.Base(*repoDir), Commit: *commit, Root: *repoDir,
-		EngineVersion: version, ModelSet: modelSet, AuditConfig: "default",
+		EngineVersion: version, ModelSet: modelSet, AuditConfig: auditConfig,
 		Substrate: *substrateFlag,
 	}
 	jobs, goalExcl, err := reposcan.EmitJobs(cfg, selected, gs)
@@ -575,6 +581,26 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	}
 
 	return exitCode
+}
+
+// auditConfigKey is the canonical KeyInputs.AuditConfig: the settings that can
+// change a given FILE's measured verdict.
+//
+// --top, --all and --diff-base are deliberately NOT here. They select which
+// files get audited; they do not change what a mutant run against an audited
+// file measures. Including them would stop a diff-scoped PR run from ever
+// reusing a nightly full-repo verdict for the same unchanged file — which is
+// most of the value the cache exists to deliver.
+//
+// Bias when adding to this list: include. Over-inclusion causes a needless
+// miss, which costs money. Under-inclusion serves a stale verdict, which
+// signs an unmeasured claim.
+func auditConfigKey(scopeTests bool, minKillRate string) string {
+	m := map[string]string{"min-kill-rate": minKillRate}
+	if scopeTests {
+		m["scope-tests"] = "true"
+	}
+	return reposcan.CanonicalKV(m)
 }
 
 // parseMinKillRate parses and range-validates the --min-kill-rate flag value.

@@ -15,8 +15,10 @@ package scanstore
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	_ "github.com/marcboeker/go-duckdb/v2"
@@ -142,6 +144,23 @@ type File struct {
 	// question "what did it actually try?" had no answer at any price short of
 	// another run. "" when no compiling test was ever produced.
 	AuthoredTest string
+	// CacheKey is reposcan's content address for this file's audit — every
+	// input that can change the verdict, hashed. It is what makes a later
+	// scan able to reuse this row instead of re-running the suite once per
+	// mutant. "" for a rejected file: nothing was measured, so there is
+	// nothing to reuse.
+	CacheKey string
+	// VerdictJSON is the marshalled advpool.Verdict, stored whole rather than
+	// rebuilt from this row's individual columns. A reconstitution assembled
+	// field-by-field silently drops whatever the column list does not cover,
+	// and a verdict served back MISSING a field is a different claim from the
+	// one that was signed.
+	VerdictJSON string
+	// ComputedAt is when this verdict was actually earned, carried so a later
+	// reuse can disclose its AGE. A scan that reports reused work without
+	// saying how old it is presents stale measurement as current — the exact
+	// self-flattering record corral exists to prevent.
+	ComputedAt time.Time
 }
 
 // scanFilesMigrationCols is the additive set of columns this package has
@@ -164,6 +183,9 @@ var scanFilesMigrationCols = []struct{ name, ddl string }{
 	{"pool_test_unsound", "pool_test_unsound BOOLEAN"},
 	{"proven_mutant_ids", "proven_mutant_ids VARCHAR"},
 	{"authored_test", "authored_test VARCHAR"},
+	{"cache_key", "cache_key VARCHAR"},
+	{"verdict_json", "verdict_json VARCHAR"},
+	{"computed_at", "computed_at TIMESTAMP"},
 }
 
 // Open opens (creating if absent) the scans/scan_files store at dsn.
@@ -219,7 +241,10 @@ func Open(dsn string) (*Store, error) {
 		proven_missed INTEGER,
 		pool_test_unsound BOOLEAN,
 		proven_mutant_ids VARCHAR,
-		authored_test VARCHAR
+		authored_test VARCHAR,
+		cache_key VARCHAR,
+		verdict_json VARCHAR,
+		computed_at TIMESTAMP
 	)`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("scanstore: create scan_files table: %w", err)
@@ -343,11 +368,11 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 		if _, err := tx.ExecContext(ctx, `INSERT INTO scan_files (
 			scan_id, path, lang, disposition, reason,
 			kill_rate, survivors, gradable, preflight_state, evidence, detail, timed_out, test_writer_failed, proven_missed, pool_test_unsound,
-			proven_mutant_ids, authored_test
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			proven_mutant_ids, authored_test, cache_key, verdict_json, computed_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id, f.Path, f.Lang, f.Disposition, f.Reason,
 			sanitizeKillRate(f.KillRate), f.Survivors, f.Gradable, f.PreflightState, f.Evidence, f.Detail, f.TimedOut, f.TestWriterFailed, f.ProvenMissed, f.PoolTestUnsound,
-			f.ProvenMutantIDs, f.AuthoredTest,
+			f.ProvenMutantIDs, f.AuthoredTest, f.CacheKey, f.VerdictJSON, f.ComputedAt,
 		); err != nil {
 			return 0, fmt.Errorf("scanstore: insert scan_files row for %q: %w", f.Path, err)
 		}
@@ -467,4 +492,46 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		out = append(out, f)
 	}
 	return out, rows.Err()
+}
+
+// VerdictByCacheKey returns the most recently recorded verdict for (owner,
+// cacheKey), if any.
+//
+// Owner scoping is in the WHERE clause, not applied in Go after fetching:
+// this is the query that keeps one tenant's verdict from satisfying another
+// tenant's audit, and a filter that runs after the rows are already in memory
+// is one refactor away from being dropped.
+//
+// An empty owner is an ERROR, never a wildcard. The alternative is a shared
+// bucket that every tenant with an unset owner reads and writes.
+//
+// Rows with no verdict JSON are skipped rather than returned as an empty hit:
+// a row recorded before this column existed has nothing to reuse, and serving
+// "" as a verdict would be worse than missing.
+func (s *Store) VerdictByCacheKey(ctx context.Context, owner, cacheKey string) (string, time.Time, bool, error) {
+	if strings.TrimSpace(owner) == "" {
+		return "", time.Time{}, false, fmt.Errorf("scanstore: VerdictByCacheKey: empty owner")
+	}
+	if strings.TrimSpace(cacheKey) == "" {
+		return "", time.Time{}, false, nil
+	}
+	row := s.db.QueryRowContext(ctx, `
+		SELECT f.verdict_json, f.computed_at
+		FROM scan_files f JOIN scans s ON s.id = f.scan_id
+		WHERE s.owner = ? AND f.cache_key = ?
+		  AND f.verdict_json IS NOT NULL AND f.verdict_json <> ''
+		ORDER BY s.ts DESC
+		LIMIT 1`, owner, cacheKey)
+	var js sql.NullString
+	var at sql.NullTime
+	switch err := row.Scan(&js, &at); {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", time.Time{}, false, nil
+	case err != nil:
+		return "", time.Time{}, false, fmt.Errorf("scanstore: VerdictByCacheKey: %w", err)
+	}
+	if !js.Valid || js.String == "" {
+		return "", time.Time{}, false, nil
+	}
+	return js.String, at.Time, true, nil
 }

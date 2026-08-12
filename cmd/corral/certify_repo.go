@@ -360,9 +360,23 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, disclosure)
 	}
 
+	// The resolved role models are part of a verdict's identity: an audit run
+	// with a different mutant-generator is a different audit. Until this was
+	// wired, EmitConfig hardcoded ModelSet: "unset", so the cache key could
+	// not tell two model sets apart and every ledger row recorded "unset" —
+	// meaning the ledger could not be used to grade the models it exists to
+	// grade.
+	rmWriter, rmMutant, rmCritic, rmShadow := resolveRoleModels(localAuditInput{
+		writerModel: *writerModelFlag,
+		mutantModel: *mutantModelFlag,
+		criticModel: *criticModelFlag,
+		shadowModel: *shadowModelFlag,
+	})
+	modelSet := modelSetKey(rmWriter, rmMutant, rmCritic, rmShadow)
+
 	cfg := reposcan.EmitConfig{
 		Owner: *owner, Repo: filepath.Base(*repoDir), Commit: *commit, Root: *repoDir,
-		EngineVersion: version, ModelSet: "unset", AuditConfig: "default",
+		EngineVersion: version, ModelSet: modelSet, AuditConfig: "default",
 		Substrate: *substrateFlag,
 	}
 	jobs, goalExcl, err := reposcan.EmitJobs(cfg, selected, gs)

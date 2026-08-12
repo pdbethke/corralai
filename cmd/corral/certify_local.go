@@ -596,6 +596,37 @@ type auditRoles struct {
 	chatterFor             func(role string) agentworker.Chatter
 }
 
+// resolveRoleModels is the naming half of resolveAuditRoles: it applies the
+// defaults and the "off" spellings, and does nothing else — no decorrelation
+// check, no credential requirement, no backend construction.
+//
+// It exists separately because the cache key needs the RESOLVED model names on
+// the free `--dry-run` path too, where there is no key to check and nothing to
+// spend. Keeping one spelling of "what model does this role actually use"
+// stops the key and the preflight from ever disagreeing.
+func resolveRoleModels(in localAuditInput) (writer, mutant, critic, shadow string) {
+	return orDefault(in.writerModel, defaultLocalWriterModel),
+		orDefault(in.mutantModel, defaultLocalMutantModel),
+		advpool.ResolveOptionalModel(in.criticModel, defaultLocalCriticModel),
+		resolveShadowModel(in.shadowModel)
+}
+
+// modelSetKey is the canonical KeyInputs.ModelSet for a resolved role set.
+//
+// Role names are the wire names used everywhere else in this codebase
+// (test-writer, mutant-generator, critic, shadow) so a ledger row is legible
+// without a decoder ring. A disabled role keeps its resolved value ("off")
+// rather than being dropped: "the critic was deliberately disabled" and "the
+// critic ran" are different audits and must key differently.
+func modelSetKey(writer, mutant, critic, shadow string) string {
+	return reposcan.CanonicalKV(map[string]string{
+		"test-writer":      writer,
+		"mutant-generator": mutant,
+		"critic":           critic,
+		"shadow":           shadow,
+	})
+}
+
 // resolveAuditRoles resolves the role models, enforces decorrelation, requires
 // the provider credential, and builds the role→backend router. It is pure of
 // jail/store I/O on purpose so a caller can run it ONCE as a preflight — a
@@ -609,10 +640,7 @@ func resolveAuditRoles(in localAuditInput, stderr io.Writer) (auditRoles, error)
 	// Resolve the models and enforce decorrelation BEFORE doing any I/O — an
 	// operator override that collapses critic==writer must fail fast, not after
 	// opening stores and a jail.
-	writer := orDefault(in.writerModel, defaultLocalWriterModel)
-	mutant := orDefault(in.mutantModel, defaultLocalMutantModel)
-	critic := advpool.ResolveOptionalModel(in.criticModel, defaultLocalCriticModel)
-	shadow := resolveShadowModel(in.shadowModel)
+	writer, mutant, critic, shadow := resolveRoleModels(in)
 	assign := advpool.RoleAssignment{
 		advpool.RoleMutantGenerator: mutant,
 		advpool.RoleTestWriter:      writer,

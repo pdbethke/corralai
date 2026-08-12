@@ -287,6 +287,17 @@ type Verdict struct {
 	// (fabricated) 0.00 kill rate as a measurement. See timeoutVerdict and
 	// cmd/corral/certify_local_drive.go's bankableTimeoutVerdict.
 	DevScored bool
+	// DevKilledMutants and DevSurvivedMutants are the mutant-level EVIDENCE
+	// behind DevKillRate and Survivors: which mutants the DEV suite's own
+	// tests killed, and which it did not, each carrying ParentSHA256 — the
+	// per-mutant grain scan_mutants records, that a per-file kill rate
+	// averages away. "Which generator produces mutants a suite does not
+	// catch" is a question about mutants, and cannot be asked of
+	// DevKillRate/Survivors alone. Set on every scored run (mirrors
+	// BaselineDuration), empty on the could-not-grade paths where no mutant
+	// was ever run.
+	DevKilledMutants   []adequacy.Mutant
+	DevSurvivedMutants []adequacy.Mutant
 }
 
 // RunState is the observable status of one run: Converged is true once the run
@@ -362,6 +373,11 @@ type runState struct {
 	devKillRate  float64
 	mutantsTotal int
 	devSurvivors []adequacy.Mutant
+	// devKilled is the mutant-level counterpart to devSurvivors: the mutants
+	// the dev suite's OWN tests killed (rep.Killed), each still carrying
+	// ParentSHA256. Set alongside devSurvivors in applyDevScore, carried onto
+	// Verdict.DevKilledMutants — see that field's doc for why.
+	devKilled []adequacy.Mutant
 	// baselineFailed is true when the dev suite did not pass on the UNMUTATED
 	// compliant code inside the jail (adequacy.Report.CompliantPass=false) — a
 	// build/environment failure (bad toolchain, missing dep, a shell-mangled
@@ -901,6 +917,7 @@ func applyDevScore(ctx context.Context, run *runState, scorer Scorer, mutants []
 	run.devKillRate = rep.KillRate()
 	run.mutantsTotal = len(mutants)
 	run.devSurvivors = survivorsFrom(rep, mutants)
+	run.devKilled = killedFrom(rep, mutants)
 	run.mutants = mutants
 	return nil
 }
@@ -920,6 +937,25 @@ func survivorsFrom(rep adequacy.Report, mutants []adequacy.Mutant) []adequacy.Mu
 		}
 	}
 	return survivors
+}
+
+// killedFrom is survivorsFrom's counterpart: it maps a report's KILLED mutant
+// ids back to the mutants they name, preserving the report's order. Together
+// with survivorsFrom this is the mutant-level evidence behind
+// Verdict.DevKilledMutants/DevSurvivedMutants — a per-file kill rate averages
+// this away; scan_mutants needs it at the mutant grain.
+func killedFrom(rep adequacy.Report, mutants []adequacy.Mutant) []adequacy.Mutant {
+	byID := make(map[string]adequacy.Mutant, len(mutants))
+	for _, m := range mutants {
+		byID[m.ID] = m
+	}
+	killed := make([]adequacy.Mutant, 0, len(rep.Killed))
+	for _, id := range rep.Killed {
+		if m, ok := byID[id]; ok {
+			killed = append(killed, m)
+		}
+	}
+	return killed
 }
 
 // salvageByDeselect tries to rescue a partially-broken authored test: read the
@@ -1540,6 +1576,10 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	// Carried alongside the other could-not-grade / baseline fields, set here
 	// rather than widening aggregate()'s signature — see Verdict.BaselineDuration.
 	v.BaselineDuration = run.baselineDuration
+	// The mutant-level evidence behind DevKillRate/Survivors, carried the same
+	// way — see Verdict.DevKilledMutants.
+	v.DevKilledMutants = run.devKilled
+	v.DevSurvivedMutants = run.devSurvivors
 
 	if d.Signer != nil {
 		recordID, head, serr := d.Signer.SignVerdict(ctx, v)
@@ -1690,6 +1730,12 @@ func (d *Driver) timeoutVerdict(run *runState) Verdict {
 		MutantsTotal:     run.mutantsTotal,
 		Survivors:        len(run.devSurvivors),
 		ProvenMissed:     run.provenMissed,
+		// The mutant-level evidence must ride the TIMEOUT verdict too, for the
+		// same reason BaselineDuration and the could-not-grade flags do below:
+		// a run that scored dev adequacy and only then stalled has real
+		// per-mutant data, not zero values nothing ever computed.
+		DevKilledMutants:   run.devKilled,
+		DevSurvivedMutants: run.devSurvivors,
 		// The could-not-grade flags must ride the TIMEOUT verdict too. A run
 		// that scored dev adequacy, could not grade it (failed baseline, or a
 		// surviving canary), and only then stalled would otherwise be SIGNED

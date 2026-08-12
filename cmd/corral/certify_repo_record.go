@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"log"
 	"math"
 	"os"
 	"os/user"
@@ -331,19 +332,66 @@ func preflightState(cm reposcan.CoverageMap, path string) string {
 	return "not-executed"
 }
 
+// buildScanMutantRows turns the scan's gradable results into scan_mutants
+// rows — one per mutant the dev suite's own tests killed OR left surviving,
+// keyed to scanID (the id Record just handed back). Ungradable results are
+// skipped: nothing was ever scored, so they have no mutant fates to record.
+//
+// A survivor's Proven flag is looked up from r.Verdict.ProvenMutantIDs — the
+// same ids that back Verdict.ProvenMissed — never derived by any other
+// means, so a scan_mutants row and the verdict it came from can never
+// disagree on which survivors were proven.
+func buildScanMutantRows(scanID int64, results []reposcan.FileResult) []scanstore.Mutant {
+	var rows []scanstore.Mutant
+	for _, r := range results {
+		if !r.Gradable {
+			continue
+		}
+		proven := make(map[string]bool, len(r.Verdict.ProvenMutantIDs))
+		for _, id := range r.Verdict.ProvenMutantIDs {
+			proven[id] = true
+		}
+		for _, m := range r.Verdict.DevKilledMutants {
+			rows = append(rows, scanstore.Mutant{
+				ScanID: scanID, Path: r.Job.Path, MutantID: m.ID,
+				Outcome: "killed", ParentSHA256: m.ParentSHA256,
+			})
+		}
+		for _, m := range r.Verdict.DevSurvivedMutants {
+			rows = append(rows, scanstore.Mutant{
+				ScanID: scanID, Path: r.Job.Path, MutantID: m.ID,
+				Outcome: "survived", ParentSHA256: m.ParentSHA256,
+				Proven: proven[m.ID],
+			})
+		}
+	}
+	return rows
+}
+
 // recordCertifyRepoScan opens the ledger at dsn, writes scan and files in
 // one transaction, and closes it again. Every error case (an unopenable
 // DSN, a failed write) is returned unchanged to the caller, which is
 // responsible for the fail-open handling — this function does not print
 // anything itself, so it stays testable as a pure function of its inputs.
-func recordCertifyRepoScan(dsn string, scan scanstore.Scan, files []scanstore.File) error {
+//
+// scan_mutants is written separately, AFTER scan+files have already
+// committed and the scan id is known. A RecordMutants failure is logged and
+// swallowed here, not returned: the verdict is already computed and
+// recorded in scan_files above, so losing mutant detail costs analysis, not
+// correctness, and must not turn into "scan ledger NOT written" for a scan
+// that, in every way that matters, was.
+func recordCertifyRepoScan(dsn string, scan scanstore.Scan, files []scanstore.File, results []reposcan.FileResult) error {
 	st, err := scanstore.Open(dsn)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = st.Close() }()
-	if _, err := st.Record(context.Background(), scan, files); err != nil {
+	id, err := st.Record(context.Background(), scan, files)
+	if err != nil {
 		return err
+	}
+	if err := st.RecordMutants(context.Background(), buildScanMutantRows(id, results)); err != nil {
+		log.Printf("corral certify --repo: scan %d recorded, but scan_mutants was NOT written: %v", id, err)
 	}
 	return nil
 }

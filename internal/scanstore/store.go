@@ -337,6 +337,30 @@ func Open(dsn string) (*Store, error) {
 		return nil, err
 	}
 
+	// scan_mutants is one row per mutant per file per scan — the grain a
+	// per-file kill rate averages away. "Which generator produces mutants a
+	// suite does not catch" is a question about mutants, and it cannot be
+	// asked of a table whose finest row is a file.
+	//
+	// The mutant's SOURCE is deliberately absent. ParentSHA256 ties the row to
+	// the exact bytes it was derived from, which is enough to group, count and
+	// compare, without putting a tenant's code at rest in the warehouse.
+	// Storing patches is a later, deliberate decision — it can be added, it
+	// cannot be un-added.
+	//
+	// The CHECK on outcome exists for the same reason scan_files has one on
+	// evidence: this table is queried by exact string, and a typo'd label
+	// should fail loud at INSERT rather than quietly enter a leaderboard.
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS scan_mutants (
+		scan_id BIGINT, path VARCHAR, mutant_id VARCHAR,
+		outcome VARCHAR CHECK (outcome IN ('killed', 'survived')),
+		parent_sha256 VARCHAR,
+		proven BOOLEAN
+	)`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("scanstore: create scan_mutants table: %w", err)
+	}
+
 	// scans.id allocation: a CREATE SEQUENCE + nextval(), the same approach
 	// internal/buildstore, internal/telemetry, internal/reference and
 	// internal/repoindex already use for their own BIGINT PRIMARY KEYs on
@@ -661,4 +685,71 @@ func (s *Store) VerdictByCacheKey(ctx context.Context, owner, cacheKey string) (
 		return "", time.Time{}, false, nil
 	}
 	return js.String, at.Time, true, nil
+}
+
+// Mutant is one mutant's fate in one scan.
+type Mutant struct {
+	ScanID       int64
+	Path         string
+	MutantID     string
+	Outcome      string // "killed" | "survived"
+	ParentSHA256 string
+	// Proven is true when this survivor was subsequently killed by the pool's
+	// AUTHORED test — a gap demonstrated by execution, not merely disclosed.
+	// Survived-and-proven and survived-and-unadjudicated are different claims
+	// and a leaderboard that conflates them is indefensible.
+	Proven bool
+}
+
+// RecordMutants appends mutant rows. An empty slice is a no-op, not an error:
+// a file whose baseline failed produced no mutants, and that is a normal
+// outcome the caller should not have to special-case.
+func (s *Store) RecordMutants(ctx context.Context, ms []Mutant) error {
+	if len(ms) == 0 {
+		return nil
+	}
+	for _, m := range ms {
+		if m.Outcome != "killed" && m.Outcome != "survived" {
+			return fmt.Errorf("scanstore: RecordMutants: %s/%s: unknown outcome %q", m.Path, m.MutantID, m.Outcome)
+		}
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("scanstore: RecordMutants: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, m := range ms {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO scan_mutants (scan_id, path, mutant_id, outcome, parent_sha256, proven) VALUES (?, ?, ?, ?, ?, ?)`,
+			m.ScanID, m.Path, m.MutantID, m.Outcome, m.ParentSHA256, m.Proven,
+		); err != nil {
+			return fmt.Errorf("scanstore: RecordMutants: insert %s/%s: %w", m.Path, m.MutantID, err)
+		}
+	}
+	return tx.Commit()
+}
+
+// MutantsForScan returns every mutant row for a scan, for round-trip tests and
+// for the CLI reader.
+func (s *Store) MutantsForScan(ctx context.Context, scanID int64) ([]Mutant, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT scan_id, path, mutant_id, outcome, parent_sha256, proven FROM scan_mutants WHERE scan_id = ? ORDER BY path, mutant_id`, scanID)
+	if err != nil {
+		return nil, fmt.Errorf("scanstore: MutantsForScan: %w", err)
+	}
+	defer rows.Close()
+	var out []Mutant
+	for rows.Next() {
+		var m Mutant
+		var parent sql.NullString
+		if err := rows.Scan(&m.ScanID, &m.Path, &m.MutantID, &m.Outcome, &parent, &m.Proven); err != nil {
+			return nil, fmt.Errorf("scanstore: MutantsForScan: scan row: %w", err)
+		}
+		m.ParentSHA256 = parent.String
+		out = append(out, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("scanstore: MutantsForScan: %w", err)
+	}
+	return out, nil
 }

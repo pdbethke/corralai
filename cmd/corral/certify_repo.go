@@ -697,29 +697,79 @@ func auditConfigKey(scopeTests bool, checkArgv []string) string {
 	return reposcan.CanonicalKV(m)
 }
 
-// testSurfacePaths is every test file this repository's whole recursive suite
-// would run — the grading surface of a scan with no --scope-tests and no
-// explicit `-- <cmd>`. Two sources, because neither alone is the suite:
+// testSurfacePaths is every file that can change what this repository's whole
+// recursive suite MEASURES — the grading surface of a scan with no
+// --scope-tests and no explicit `-- <cmd>`.
+//
+// The rule is DIRECTORY-based, not filename-based. A file counts if it lives
+// in a directory that holds at least one recognized test file, where the
+// recognized tests are:
 //
 //   - every CANDIDATE's paired test, including candidates --top or --diff-base
 //     left unselected. The suite does not stop running a test because this
 //     scan chose not to audit its source file.
-//   - every file Enumerate rejected as `is-test`. A shared helper, a
-//     conftest.py or a fixture module is nobody's paired test, so it appears
-//     in no Candidate.TestPath — and weakening one is exactly the change that
-//     silently made a suite worse while every file's key stayed put.
+//   - every file Enumerate rejected as `is-test`.
+//
+// Filename markers alone are not enough, and that gap was live: `conftest.py`
+// — the most common Python shared-fixture file there is — matches none of the
+// `_test.` / `test_` / `_spec.` / `.test.` / `.spec.` / `spec_` markers, so
+// Enumerate files it as `no-paired-test` and it reached no key at all. Same
+// for tests/helpers.py, tests/fixtures.py, jest.setup.js and golden fixture
+// data. Weaken a fixture in any of them and every file's key used to stay put:
+// HIT, and the ledger repeats a kill rate for a suite that genuinely got worse.
+//
+// The widening is deliberately confined to the SURFACE. isTestFile still
+// decides which files are audit CANDIDATES and is untouched — widening that
+// would change what gets audited, a far larger blast radius than the cache.
+//
+// Over-inclusion is expected and fine: a README beside the tests now
+// invalidates. Over-invalidation costs a miss, which costs money.
+// Under-invalidation signs a claim about content that was never measured.
+//
+// Two exclusion reasons are still held out, because including them would break
+// the scan rather than widen it: `not-a-regular-file` (a symlink cannot be
+// read through the *os.Root and a FIFO would block forever) and `skipped-dir`
+// (build output the walk deliberately did not look at).
 //
 // No new walk: both lists are already in hand at the call site.
 func testSurfacePaths(cands []reposcan.Candidate, excl []reposcan.Exclusion) []string {
-	paths := make([]string, 0, len(cands))
+	dirOf := func(p string) string { return path.Dir(path.Clean(filepath.ToSlash(p))) }
+
+	// Pass 1: which directories hold a recognized test file.
+	testDirs := map[string]bool{}
 	for _, c := range cands {
 		if c.TestPath != "" {
-			paths = append(paths, c.TestPath)
+			testDirs[dirOf(c.TestPath)] = true
 		}
 	}
 	for _, e := range excl {
 		if e.Reason == reposcan.ReasonIsTest {
+			testDirs[dirOf(e.Path)] = true
+		}
+	}
+
+	// Pass 2: the recognized tests themselves, plus everything living beside
+	// one. DigestTestSurface cleans, de-duplicates and sorts, so repeats and
+	// order here are harmless.
+	paths := make([]string, 0, len(cands)+len(excl))
+	for _, c := range cands {
+		if c.TestPath != "" {
+			paths = append(paths, c.TestPath)
+		}
+		if testDirs[dirOf(c.Path)] {
+			paths = append(paths, c.Path)
+		}
+	}
+	for _, e := range excl {
+		switch e.Reason {
+		case reposcan.ReasonIsTest:
 			paths = append(paths, e.Path)
+		case reposcan.ReasonNotRegularFile, reposcan.ReasonSkippedDir:
+			// Never digested — see the comment above.
+		default:
+			if testDirs[dirOf(e.Path)] {
+				paths = append(paths, e.Path)
+			}
 		}
 	}
 	return paths

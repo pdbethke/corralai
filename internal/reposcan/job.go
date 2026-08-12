@@ -41,12 +41,23 @@ type EmitConfig struct {
 	// file). It decides what TestSurfaceDigest has to cover: one file, or the
 	// whole suite. See DigestTestSurface.
 	FileScopedTests bool
-	// TestSurfacePaths are test files that grade in a whole-suite run but are
-	// nobody's paired test — shared helpers, conftest.py, fixtures. Enumerate
-	// hands them back as `is-test` exclusions, so they never appear as a
-	// Candidate.TestPath, yet weakening one really does change what the suite
-	// grades. Ignored when FileScopedTests is set. No new walk: the caller
-	// already has this list.
+	// TestSurfacePaths are files that grade in a whole-suite run but are
+	// nobody's paired test, so they never appear as a Candidate.TestPath —
+	// yet changing one really does change what the suite measures.
+	//
+	// Two kinds, and only the first is caught by a filename marker:
+	//   - files Enumerate rejected as `is-test` (foo_test.go, spec_helper.rb).
+	//   - everything else living in a directory that holds a test file:
+	//     conftest.py, helpers.py, fixtures.py, jest.setup.js, golden JSON.
+	//     These match no test-filename marker, so Enumerate classifies them
+	//     `no-paired-test` or `no-language`; the CALLER, not this package,
+	//     decides they belong to the surface (see testSurfacePaths in
+	//     cmd/corral). Deliberately over-inclusive.
+	//
+	// Files in a directory with no test in it are NOT covered — a fixture
+	// module kept outside the test tree, or a conftest.py in a directory whose
+	// only tests live in subdirectories, still reaches no key. Ignored when
+	// FileScopedTests is set. No new walk: the caller already has this list.
 	TestSurfacePaths []string
 }
 
@@ -86,6 +97,14 @@ func EmitJobs(cfg EmitConfig, cands []Candidate, gs GoalSource) ([]Job, []Exclus
 		paths = append(paths, cfg.TestSurfacePaths...)
 		d, derr := DigestTestSurface(root, paths)
 		if derr != nil {
+			// NOTE, because this is a WIDER hard failure than before the whole
+			// suite was keyed: any unreadable path in the surface — a test
+			// file removed or made non-regular between Enumerate and EmitJobs,
+			// including one belonging to a candidate this scan never selected
+			// — now aborts the ENTIRE scan, where previously only a SELECTED
+			// candidate's own test file could do that. Fail-closed on purpose:
+			// a surface we cannot read is a surface we cannot key, and a key
+			// computed over a guess would sign an unmeasured claim.
 			return nil, nil, derr
 		}
 		suiteDigest = d

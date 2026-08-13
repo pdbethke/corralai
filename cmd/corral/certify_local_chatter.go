@@ -12,17 +12,6 @@ import (
 	"github.com/pdbethke/corralai/internal/agentworker"
 )
 
-// onDefaultClaudePath reports whether the run is on the default direct-Claude
-// path — MODEL_BACKEND unset, "anthropic", or "claude" — vs an operator-pinned
-// backend. It reads MODEL_BACKEND fresh, so after runCertifyLocal defaults an
-// unset MODEL_BACKEND to "anthropic" this still reports true. Both the
-// provider-key gate and the cross-vendor router consult it, so the policy lives
-// in one place.
-func onDefaultClaudePath() bool {
-	b := strings.TrimSpace(os.Getenv("MODEL_BACKEND"))
-	return b == "" || b == "anthropic" || b == "claude"
-}
-
 // backendForVendor maps agentbackend.VendorOf's answer onto the MODEL_BACKEND
 // label FromEnv switches on. They are deliberately not the same vocabulary —
 // VendorOf says who makes the model ("google"), MODEL_BACKEND names the

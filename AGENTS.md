@@ -116,14 +116,22 @@ user-local install.
 
 ## Model routing and spend
 
-`certify --local` defaults to `claude-sonnet-5` for **both** the mutant-generator
-and the test-writer, plus `claude-haiku-4-5` as critic. A plain run bills all
-three to Anthropic. Flags: `--mutant-model`, `--writer-model`, `--critic-model`,
-`--shadow-model`.
+**corral has NO default models.** `--writer-model` and `--mutant-model` are
+required on `certify --local` and `--repo`; `--critic-model` has no fallback
+(`off` disables the critic); `--derive-model` is required on `--repo` unless
+`--goals` is supplied. A run with an unnamed grading seat is refused before any
+jail, store or spend, and the refusal reports which provider credentials it can
+actually see. The brain is the same: with no `CORRALAI_ADVPOOL_MODELS` and no
+leaderboard evidence, the pool is DISABLED rather than cold-starting on
+something nobody chose.
 
-**The shadow challenger is ON by default, defaults to a Claude model, and
-doubles the mutant count.** Pass `--shadow-model off` unless you are deliberately
-measuring a head-to-head.
+This is deliberate. corral claims to be model-agnostic, and a binary that names
+one vendor's models when the operator named none is making an exception to that
+claim. We run Claude; we do not make anyone else.
+
+**The shadow challenger is OFF unless named**, and it doubles the mutant count
+when on. It used to default to a Claude model and be on, which quietly kept an
+Anthropic seat alive through an otherwise all-Gemini run.
 
 **A key alone does not move providers.** Each role resolves its own backend from
 its own model name; a Gemini model name with only an Anthropic key configured is
@@ -131,8 +139,9 @@ a 404 from Anthropic, not a Gemini call. Set the role models *and* the matching
 key. An explicit `MODEL_BACKEND` pointing at a gateway (OpenRouter, Ollama) is
 never re-routed — those front many vendors behind one endpoint.
 
-`CheckDecorrelation` enforces only **critic ≠ writer**. It is legal, and was
-long the default, to run every seat on one vendor — which satisfies the letter
+`CheckDecorrelation` enforces only **critic ≠ writer** — a property, not a
+vendor, so any two distinct models satisfy it. It is legal to run every seat on
+one vendor — which satisfies the letter
 of "decorrelated" and not its point. Prefer genuinely different vendors.
 
 ## Adding or changing a language plugin

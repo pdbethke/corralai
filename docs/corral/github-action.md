@@ -425,16 +425,17 @@ and the fix belongs in the code, not a caveat in these docs.
 | `gemini-key` | no | `""` | Gemini API key, supplied as `GEMINI_API_KEY`. |
 | `openai-key` | no | `""` | OpenAI (or OpenAI-compatible) key, supplied as `OPENAI_API_KEY`. |
 | `model-key` | no | `""` | Generic escape hatch for a credential the three named inputs do not cover (e.g. `GOOGLE_API_KEY`, or a gateway reading its own variable). Prefer the named inputs. |
-| `model-key-env` | no | `ANTHROPIC_API_KEY` | Which environment variable `model-key` becomes. Must be a plain environment variable name. Naming a variable a named input already fills, with a *different* value, is refused. |
+| `model-key-env` | no | `""` | Which environment variable `model-key` becomes. Must be a plain environment variable name. **Required when `model-key` is set** — it no longer defaults to `ANTHROPIC_API_KEY`, because corral has no default models and guessing a vendor here puts the key in the wrong variable. Naming a variable a named input already fills, with a *different* value, is refused. |
 
 **The provider keys are additive, not alternatives.** Set as many as your role
 routing needs; pass every one as a secret and never inline. The step never
 echoes a key value, and an unset key is never exported as an empty variable
 (which would blank a credential the runner already had).
-| `derive-model` | no | `""` (corral's default, `claude-sonnet-5`) | Model that derives a goal per file when `goals` is not supplied. See "Running on a provider other than Anthropic" below — **a key alone does not move providers.** |
-| `writer-model` | no | `""` (corral's default) | Model for the test-writer role — the half that authors a test to prove a survivor is a real gap. |
-| `mutant-model` | no | `""` (corral's default) | Model for the mutant-generator role. |
-| `critic-model` | no | `""` (corral's default) | Model for the test-critic role, which must **differ** from the writer's. `off` disables it entirely — it is advisory and never gates the verdict, so a single-vendor run with only one usable model can drop it. |
+| `derive-model` | **yes**, unless `goals` is set | `""` | Model that derives a goal per file. `goals` skips derivation entirely and needs no model or key. **corral has no default models** — see "Naming the herd" below. |
+| `writer-model` | **yes** | `""` | Model for the test-writer role — the half that authors a test to prove a survivor is a real gap. |
+| `mutant-model` | **yes** | `""` | Model for the mutant-generator role. |
+| `critic-model` | no | `""` | Model for the test-critic role, which must **differ** from the writer's. `off` disables it entirely — it is advisory and never gates the verdict, so a single-vendor run with only one usable model can drop it. No default. |
+| `shadow-model` | no | `""` (OFF) | Challenger model that attacks every region a second time. Recorded for comparison, never gates the verdict. Off unless named. |
 | `corral-version` | no | `""` (falls back to the action's own ref, `github.action_ref`) | Which `corral` to `go install`, as a version suffix (a tag, branch, or commit). Leave it empty unless you deliberately want a different `corral` release than the action you pinned in `uses:`. |
 
 ## Where the report shows up
@@ -460,13 +461,16 @@ Two things worth knowing:
   is cut down — and says where it was cut, in the summary itself. A silently
   truncated report reads exactly like a short one.
 
-## Running on a provider other than Anthropic
+## Naming the herd
 
-**A key alone does not move providers.** corral routes each *role* to its own
-model, and its defaults are `claude-*`. Swapping only `model-key-env` leaves
-those Claude model names pointed at another vendor's endpoint, where they do
-not exist — so the run fails, naming a model rather than the misconfiguration.
+**corral has no default models.** Every grading seat is named by you, from
+whichever provider you supply a key for — the action fails fast if a seat is
+empty rather than picking a vendor on your behalf. This is the same rule the CLI
+follows, and it is why `writer-model` and `mutant-model` are required above.
 
+**A key alone is not enough, and neither is a model alone.** corral routes each
+*role* to its own backend from that role's model name, so a Gemini model with
+only an Anthropic key configured is a 404 from Anthropic, not a Gemini call.
 Both halves have to move together:
 
 ```yaml

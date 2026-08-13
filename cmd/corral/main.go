@@ -277,6 +277,21 @@ Usage:
                                   Local DuckDB file, no brain required:
                                   --db <path> (default $CORRALAI_SCANS_DB, else
                                   ~/.claude/corralai_scans.duckdb), --limit n, --json
+  corral doctor [flags] [-- <test cmd>]
+                                  check the environment BEFORE paying for a run: does the
+                                  sandbox start, is your test command's toolchain reachable
+                                  INSIDE it, has every grading seat been given a model (corral
+                                  has no defaults) with a credential for it, and does the file
+                                  you named have a test corral can pair with. Every check is free — no model is ever called — and
+                                  they run in the order an audit would hit them, so the first
+                                  FAIL is the first thing to fix. Exits non-zero if any failed.
+                                  flags: --code <path> --test <path> (adds the pairing check)
+                                         --jail <backend> (default: auto-detect)
+                                         --mutant-model/--writer-model/--critic-model <name>
+                                  It does NOT check two things that need a real seeded
+                                  workspace: whether your suite passes on UNMUTATED code inside
+                                  the sandbox (the most common way an audit dies), and whether a
+                                  multi-file project needs --repo-dir.
   corral eval [flags]             run the adversarial pool across the versioned eval corpus and
                                   print a soundness report (does the recall metric catch known gaps?)
                                   flags: --corpus <path> (default eval/corpus/manifest.json)

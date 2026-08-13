@@ -31,25 +31,26 @@ import (
 	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
-// Decorrelation default (design 2026-07-18): two DISTINCT Claude models off a
-// single ANTHROPIC_API_KEY. test-writer and mutant-generator share the strong
-// model; the test-critic is a different (cheaper, decorrelated) model so it is
-// never grading tests written by its own model — CheckDecorrelation is
-// satisfied with one key. Any of the three is overridable via
-// --writer-model / --critic-model / --mutant-model.
-const (
-	defaultLocalWriterModel = "claude-sonnet-5"
-	defaultLocalMutantModel = "claude-sonnet-5"
-	defaultLocalCriticModel = "claude-haiku-4-5"
-)
-
-// defaultLocalShadowModel is the challenger seat's model. Cheap and already the
-// critic's model, so it needs no additional provider credential. Mirrors
-// advpool.DefaultShadowModel — kept as a local alias (not a straight `=
-// advpool.DefaultShadowModel`) only so this file's existing doc comment/name
-// stay put; the brain's hosted path resolves the SAME constant via
-// advpool.ResolveShadowModel.
-const defaultLocalShadowModel = advpool.DefaultShadowModel
+// THERE ARE NO DEFAULT MODELS. Not here, not anywhere on the audit path.
+//
+// corral's claim is that it is model-agnostic — "across any model, local 7B to
+// frontier" — and a binary that ships with one vendor's model names baked in
+// does not make that claim, it makes an exception to it. The defaults used to
+// be two Claude models off a single ANTHROPIC_API_KEY, which meant a stranger
+// arriving with an OpenAI key, a Gemini key, an OpenRouter key or a local
+// Ollama daemon hit a failure on their first command and had to discover five
+// flags to get past it. We use Claude; we do not make anyone else.
+//
+// So every seat is named by the operator, and a run with an unnamed seat is
+// REFUSED with a message that says which seats are empty and which provider
+// credentials it can actually see (see herdNotConfiguredErr). The one rule that
+// survives is decorrelation — the test-critic must differ from the test-writer
+// — and that is a PROPERTY, not a vendor: it is satisfied by any two distinct
+// models from any provider.
+//
+// The challenger (shadow) seat is OFF unless named, for the same reason: its
+// default was a Claude model that stayed on through an otherwise all-Gemini
+// run, silently requiring an Anthropic key nobody asked for.
 
 // localBee is the queue bee name the single in-process worker claims under.
 // A local run has exactly one claimant, so the name is a constant.
@@ -91,9 +92,9 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	langFlag := fs.String("lang", "", "source language (default: inferred from --code extension)")
 	goal := fs.String("goal", "", "the correctness/security goal the code must satisfy (required)")
 	nMutants := fs.Int("n-mutants", 0, "PER-SHARD seeded-violation mutant budget (default 5) — this is NOT the run's total: total mutants scored scale with --max-shards (default "+fmt.Sprint(advpool.DefaultMaxShards)+") shards, and DOUBLE again if the shadow challenger is on (default). E.g. the default 5 with the default 8 shards means up to ~40 primary + ~40 shadow = ~80 full dev-suite jail executions, not 5 — `--n-mutants 20` means roughly ~320")
-	writerModel := fs.String("writer-model", "", "model for the test-writer role (default "+defaultLocalWriterModel+")")
-	criticModel := fs.String("critic-model", "", "model for the test-critic role, which must differ from the writer's; \"off\" disables the critic entirely (it is advisory and never gates the verdict, so a single-vendor run with only one usable model can drop it) (default "+defaultLocalCriticModel+")")
-	mutantModel := fs.String("mutant-model", "", "model for the mutant-generator role (default "+defaultLocalMutantModel+")")
+	writerModel := fs.String("writer-model", "", "model for the test-writer role — REQUIRED, corral has no default models")
+	criticModel := fs.String("critic-model", "", "model for the test-critic role, which must differ from the writer's; \"off\" disables the critic entirely (it is advisory and never gates the verdict, so a single-vendor run with only one usable model can drop it). No default")
+	mutantModel := fs.String("mutant-model", "", "model for the mutant-generator role — REQUIRED, corral has no default models")
 	jailFlag := fs.String("jail", "", "sandbox backend: bwrap|container (Linux), sandbox-exec (macOS) (default: auto-detect for this OS; \"none\" is not supported — --local always sandboxes)")
 	timeout := fs.Duration("timeout", 10*time.Minute, "give up if the run makes no progress for this long (not a hard wall-clock cap — a single slow LLM call can overshoot it)")
 	testTimeout := fs.Duration("test-timeout", 0, "hard cap on a SINGLE test-suite run in the jail (0 = auto: derived from the healthy suite's own runtime, so a mutant that makes the suite hang is killed fast instead of eating the whole --timeout). Raise it only if your suite legitimately runs long")
@@ -105,7 +106,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	recordFlag := fs.String("record", "", "write a replayable tape of the run (the pool's reasoning beats, task lifecycle, and findings) to this JSON file — the same {events:[…]} shape the corralai.dev cockpit replays")
 	swarmFlag := fs.Int("swarm", 0, "max concurrent audit workers (0 = auto-size to this host's cores). The BUDGET clamp: independent role tasks run in parallel up to this bound, so a big audit swarms without melting the box")
 	maxShardsFlag := fs.Int("max-shards", 0, "max mutant-generator seats fanned out across the file's functions (0 = "+fmt.Sprint(advpool.DefaultMaxShards)+"). Bounds PARALLELISM only — every function is probed regardless; --n-mutants is the PER-SHARD budget")
-	shadowModelFlag := fs.String("shadow-model", "", "challenger model that attacks every region a SECOND time for a region-controlled head-to-head (default "+defaultLocalShadowModel+"; \"off\" disables). Recorded for comparison — NEVER gates the verdict")
+	shadowModelFlag := fs.String("shadow-model", "", "challenger model that attacks every region a SECOND time for a region-controlled head-to-head. OFF unless named. Recorded for comparison — NEVER gates the verdict")
 	matrixFlag := fs.Bool("matrix", false, "opt into the tests×mutants matrix: after the primary pass, re-score EVERY dev test ALONE against the run's mutants — a per-test adequacy readout + a delete-candidate list, instead of one dev-suite-wide number. COSTLY: T tests × M mutants extra jail runs (T×M, on top of the primary pass), so leave off by default on a big suite")
 	var bindDirFlag stringSlice
 	fs.Var(&bindDirFlag, "bind-dir", "extra repo-relative dependency dir to mount read-only into the jail instead of copying it into the workspace (repeatable; node_modules/vendor/.venv/venv/.bundle are auto-detected) — --repo-dir mode only")
@@ -594,6 +595,69 @@ type auditRoles struct {
 	shadow                 string
 	writer, mutant, critic string
 	chatterFor             func(role string) agentworker.Chatter
+	// meter accumulates every seat's reported token usage for the whole run.
+	// An audit's cost is O(mutants x suite runtime) on the execution side and
+	// O(tokens) on the model side; the ledger already records the first half,
+	// and this is the second.
+	meter *agentbackend.UsageMeter
+}
+
+// herdNotConfiguredErr refuses a run whose grading seats have no model, and
+// says what to do about it.
+//
+// This is the failure a stranger meets first, so it is the most important error
+// message in the tool. It does two things a bare "flag required" cannot: it
+// names WHICH seats are empty, and it reports which provider credentials are
+// actually visible in this environment — because the usual cause is "I have a
+// key, I just don't know what corral wants from me."
+//
+// It deliberately does NOT suggest a model name. Naming one would reintroduce
+// the default through the error message, and the vendor whose key happens to be
+// present is not our choice to make. It names the provider and lets the
+// operator pick from that provider's own catalogue.
+func herdNotConfiguredErr(cmdName, writer, mutant string) error {
+	var empty []string
+	if writer == "" {
+		empty = append(empty, "--writer-model (test-writer)")
+	}
+	if mutant == "" {
+		empty = append(empty, "--mutant-model (mutant-generator)")
+	}
+	if len(empty) == 0 {
+		return nil
+	}
+	cmd := orDefault(cmdName, "corral certify --local")
+
+	var seen []string
+	for _, probe := range []struct{ env, provider string }{
+		{"ANTHROPIC_API_KEY", "Anthropic"},
+		{"OPENAI_API_KEY", "OpenAI"},
+		{"GEMINI_API_KEY", "Google"},
+		{"GOOGLE_API_KEY", "Google"},
+		{"OPENROUTER_API_KEY", "OpenRouter"},
+	} {
+		if strings.TrimSpace(os.Getenv(probe.env)) != "" {
+			seen = append(seen, fmt.Sprintf("%s (%s)", probe.env, probe.provider))
+		}
+	}
+	creds := "none — no provider credential is set in this environment"
+	if len(seen) > 0 {
+		creds = strings.Join(seen, ", ")
+	}
+	if b := strings.TrimSpace(os.Getenv("MODEL_BACKEND")); b != "" {
+		creds += fmt.Sprintf("; MODEL_BACKEND=%s", b)
+	}
+
+	return auditUsageErr(
+		"no model is assigned to %s.\n"+
+			"corral has no default models on purpose — it is model-agnostic, so every seat is yours to name.\n"+
+			"credentials visible here: %s\n"+
+			"assign each seat a model that provider serves, e.g.:\n"+
+			"  %s --writer-model <model> --mutant-model <model> --critic-model <model>\n"+
+			"the only rule is that the critic must differ from the writer (that is the decorrelation the verdict rests on);\n"+
+			"--critic-model off drops the critic entirely — it is advisory and never gates the verdict.\n"+
+			"`corral doctor` checks a herd, and its credentials, for free before you spend anything",
+		strings.Join(empty, " and "), creds, cmd)
 }
 
 // resolveRoleModels is the naming half of resolveAuditRoles: it applies the
@@ -605,9 +669,17 @@ type auditRoles struct {
 // spend. Keeping one spelling of "what model does this role actually use"
 // stops the key and the preflight from ever disagreeing.
 func resolveRoleModels(in localAuditInput) (writer, mutant, critic, shadow string) {
-	return orDefault(in.writerModel, defaultLocalWriterModel),
-		orDefault(in.mutantModel, defaultLocalMutantModel),
-		advpool.ResolveOptionalModel(in.criticModel, defaultLocalCriticModel),
+	// No defaults behind any seat — corral has none. "off" resolves to "" for
+	// the two optional seats, and an empty grading seat is refused by the
+	// caller (herdNotConfiguredErr) rather than filled.
+	//
+	// This is the ONE place a seat's model is resolved, so the cache key and
+	// the run always agree about which models an audit used. They must: the
+	// key records the herd, and a key derived from a different resolution than
+	// the run would let a verdict be reused across a model change.
+	return strings.TrimSpace(in.writerModel),
+		strings.TrimSpace(in.mutantModel),
+		advpool.ResolveOptionalModel(in.criticModel, ""),
 		resolveShadowModel(in.shadowModel)
 }
 
@@ -641,6 +713,9 @@ func resolveAuditRoles(in localAuditInput, stderr io.Writer) (auditRoles, error)
 	// operator override that collapses critic==writer must fail fast, not after
 	// opening stores and a jail.
 	writer, mutant, critic, shadow := resolveRoleModels(in)
+	if err := herdNotConfiguredErr(in.cmdName, writer, mutant); err != nil {
+		return r, err
+	}
 	assign := advpool.RoleAssignment{
 		advpool.RoleMutantGenerator: mutant,
 		advpool.RoleTestWriter:      writer,
@@ -663,10 +738,9 @@ func resolveAuditRoles(in localAuditInput, stderr io.Writer) (auditRoles, error)
 		return r, auditUsageErr("%v — pass distinct --writer-model / --critic-model", err)
 	}
 
-	// Require a provider key. The default role models are Claude, so unless the
-	// operator selected a different MODEL_BACKEND we need ANTHROPIC_API_KEY. When
-	// MODEL_BACKEND is unset we default it to anthropic so FromEnv() builds the
-	// Claude backend the default models expect (rather than the ollama default).
+	// Require a provider key for whatever the operator actually named. There
+	// are no default models, so nothing here assumes a vendor: the backend a
+	// run needs is the one its ASSIGNED models imply.
 	backendSel := strings.TrimSpace(os.Getenv("MODEL_BACKEND"))
 	// When MODEL_BACKEND is unset, the backend this run needs is the one its
 	// ASSIGNED MODELS imply — not Claude by assumption. Naming gemini-* models
@@ -718,16 +792,17 @@ func resolveAuditRoles(in localAuditInput, stderr io.Writer) (auditRoles, error)
 	}
 
 	// Resolve the role→backend router NOW, before opening the jail or any
-	// store: a cross-vendor critic (e.g. --critic-model gemini-3.5-flash on
-	// the default Claude path) needs its own vendor's key, and a missing key
-	// must refuse the run here — fail closed at the top, not mid-run after
-	// jails/stores/mutants are already in flight.
-	chatterFor, err := localChatterFor(assign)
+	// store: a cross-vendor critic (e.g. a Gemini critic against a Claude
+	// writer) needs its own vendor's key, and a missing key must refuse the
+	// run here — fail closed at the top, not mid-run after jails, stores and
+	// mutants are already in flight.
+	meter := &agentbackend.UsageMeter{}
+	chatterFor, err := localChatterFor(assign, meter)
 	if err != nil {
 		return r, auditUsageErr("%v", err)
 	}
 
-	return auditRoles{assign: assign, shadow: shadow, writer: writer, mutant: mutant, critic: critic, chatterFor: chatterFor}, nil
+	return auditRoles{assign: assign, shadow: shadow, writer: writer, mutant: mutant, critic: critic, chatterFor: chatterFor, meter: meter}, nil
 }
 
 // auditOneFile runs ONE file's complete adversarial-pool audit in-process and
@@ -986,6 +1061,7 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 	}
 
 	renderAdvVerdict(stdout, in.codePath, advVerdictFromPool(*verdict))
+	renderModelSpend(stdout, roles.meter)
 
 	// --matrix: print the per-test adequacy summary + delete-candidate list.
 	// st.Matrix is nil unless --matrix was set AND the phase actually ran
@@ -1417,4 +1493,26 @@ func localBuildDBPath() string {
 		home = usr.HomeDir
 	}
 	return filepath.Join(home, ".claude", "corralai_build.duckdb")
+}
+
+// renderModelSpend reports what the run actually consumed from the providers.
+//
+// An audit costs O(mutants x the target's suite runtime) in execution and
+// O(tokens) in model calls, and until now corral reported neither half at the
+// end of a run — so "what did that cost me" had no answer, from the tool whose
+// central caveat is that audits are expensive.
+//
+// TOKENS, NOT DOLLARS. Prices change and differ by contract; a token count
+// stays true. Anyone who wants a figure multiplies by their own rate.
+//
+// The call count is printed alongside because a provider that reports no usage
+// leaves the tokens at zero: "0 tokens over 41 calls" says the run happened and
+// the provider said nothing, which is a different fact from "0 over 0", and a
+// bare token total cannot tell them apart.
+func renderModelSpend(w io.Writer, m *agentbackend.UsageMeter) {
+	in, out, calls := m.Totals()
+	if calls == 0 {
+		return
+	}
+	fmt.Fprintf(w, "  model spend:   %d in / %d out token(s) over %d model call(s)\n", in, out, calls)
 }

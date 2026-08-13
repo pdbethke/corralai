@@ -27,6 +27,11 @@ import (
 	"github.com/pdbethke/corralai/internal/telemetry"
 )
 
+// testShadowModel is a concrete challenger model name for tests that need one.
+// It is NOT a product default — corral has no default models; this constant
+// exists so these tests keep asserting on a fixed name of their own choosing.
+const testShadowModel = "claude-haiku-4-5"
+
 // TestAdvPoolEventSinkRecordsToTelemetry proves advpoolEventSink.Emit is a
 // working adapter to the brain's telemetry store: a pool_verdict event
 // emitted for a mission id must come back out of EventsForMission for that
@@ -84,6 +89,18 @@ func (stubValidator) ParseTest(raw string) string                         { retu
 // newTestAdvPoolRuntime wires an AdvPoolRuntime over fresh queue/mission
 // stores with stub Scorer/Validator — enough to exercise StartRun's
 // admin-gate/enqueue/decorrelation behavior without a real sandbox jail.
+// testAdvPoolHerd is the role assignment these tests run under. It exists
+// because there are no default models: an unconfigured pool refuses to start,
+// which is the product behavior, so every test that wants a running pool has to
+// say what it is running — the same as any operator.
+func testAdvPoolHerd() advpool.RoleAssignment {
+	return advpool.RoleAssignment{
+		advpool.RoleMutantGenerator: "qwen2.5-coder:7b",
+		advpool.RoleTestWriter:      "qwen2.5-coder:7b",
+		advpool.RoleTestCritic:      "llama3.2:3b",
+	}
+}
+
 func newTestAdvPoolRuntime(t *testing.T, staffing *mission.StaffingManager) (*AdvPoolRuntime, *queue.Store) {
 	t.Helper()
 	dir := t.TempDir()
@@ -98,12 +115,15 @@ func newTestAdvPoolRuntime(t *testing.T, staffing *mission.StaffingManager) (*Ad
 	}
 	t.Cleanup(func() { _ = ms.Close() })
 
-	assign := advPoolAssign(staffing, nil)
+	// corral has no default models, so a test runtime must name its own herd
+	// exactly as an operator would with CORRALAI_ADVPOOL_MODELS. These are the
+	// TEST's models, not product defaults.
+	assign := advPoolAssign(staffing, testAdvPoolHerd())
 	driver, err := advpool.NewDriver(q, stubScorer{}, stubValidator{}, assign, 0.8)
 	if err != nil {
 		t.Fatal(err)
 	}
-	rt := &AdvPoolRuntime{driver: driver, missions: ms, staffing: staffing, tickErrors: map[int64]int{}}
+	rt := &AdvPoolRuntime{driver: driver, missions: ms, staffing: staffing, defaults: testAdvPoolHerd(), tickErrors: map[int64]int{}}
 	return rt, q
 }
 
@@ -126,10 +146,11 @@ func testRunSpecIn() AdvPoolRunSpec {
 // leaderboard evidence — this is the guarantee StartRun leans on instead of
 // re-deriving decorrelation logic itself.
 func TestAdvPoolAssign_AlwaysDecorrelated(t *testing.T) {
-	// Cold start: no staffing at all.
-	assign := advPoolAssign(nil, nil)
+	// A configured herd (there is no cold-start default to test — an
+	// unconfigured pool refuses; see TestAdvPoolAssignRefusesWithNoHerd).
+	assign := advPoolAssign(nil, testAdvPoolHerd())
 	if err := advpool.CheckDecorrelation(assign); err != nil {
-		t.Fatalf("cold-start assignment must be decorrelated: %v (%+v)", err, assign)
+		t.Fatalf("a configured assignment must be decorrelated: %v (%+v)", err, assign)
 	}
 	if assign[advpool.RoleTestCritic] == assign[advpool.RoleTestWriter] {
 		t.Fatalf("test-critic must differ from test-writer, got %+v", assign)
@@ -154,13 +175,15 @@ func TestAdvPoolAssign_AlwaysDecorrelated(t *testing.T) {
 		t.Fatalf("test-critic must NOT take the writer's dominant model, got %+v", assign2)
 	}
 
-	// A leaderboard with a genuinely BETTER, distinct critic candidate must
-	// be preferred over the static fallback.
+	// A leaderboard with a genuinely BETTER, distinct critic candidate must be
+	// preferred over the configured one. The configured herd is passed here
+	// because this leaderboard carries no mutant-generator evidence, and with
+	// no default models an unstaffed grading seat means no run at all.
 	staffing3 := &mission.StaffingManager{Perf: fakePerf{stats: []mission.ModelStats{
 		{Model: "writer-model", Role: advpool.RoleTestWriter, TasksCompleted: 10, ExecPassRatePct: 99},
 		{Model: "critic-model", Role: advpool.RoleTestCritic, TasksCompleted: 10, ExecPassRatePct: 95},
 	}}}
-	assign3 := advPoolAssign(staffing3, nil)
+	assign3 := advPoolAssign(staffing3, testAdvPoolHerd())
 	if assign3[advpool.RoleTestWriter] != "writer-model" || assign3[advpool.RoleTestCritic] != "critic-model" {
 		t.Fatalf("expected leaderboard-earned writer/critic models, got %+v", assign3)
 	}
@@ -468,20 +491,22 @@ func TestParseAdvPoolModels(t *testing.T) {
 		t.Fatalf("empty model must be rejected")
 	}
 
-	// Empty string → (nil, nil): "unset", caller uses hardcoded defaults.
+	// Empty string → (nil, nil): "unset". There are no hardcoded defaults
+	// behind it — the caller either has leaderboard evidence or does not start.
 	got, err = parseAdvPoolModels("")
 	if err != nil || got != nil {
 		t.Fatalf("empty string should be (nil,nil), got (%v,%v)", got, err)
 	}
 }
 
-func TestAdvPoolAssignUsesDefaults_UnsetIdenticalToToday(t *testing.T) {
-	// nil defaults → the hardcoded qwen/llama assignment (no behavior change).
-	got := advPoolAssign(nil, nil)
-	if got[advpool.RoleMutantGenerator] != defaultAdvPoolModel ||
-		got[advpool.RoleTestWriter] != defaultAdvPoolModel ||
-		got[advpool.RoleTestCritic] != defaultAdvPoolCriticModel {
-		t.Fatalf("nil defaults must reproduce today's assignment, got %+v", got)
+func TestAdvPoolAssignRefusesWithNoHerd(t *testing.T) {
+	// nil defaults, no leaderboard evidence → NIL, not a hardcoded assignment.
+	// This replaces a test that asserted the cold start reproduced a qwen/llama
+	// pair. corral has no default models: a brain nobody configured has not
+	// been told what to run, and running something anyway is the behavior being
+	// removed.
+	if got := advPoolAssign(nil, nil); got != nil {
+		t.Fatalf("an unconfigured pool must refuse, not invent a herd; got %+v", got)
 	}
 
 	// Provided defaults (no leaderboard staffing) → those models, decorrelation intact.
@@ -490,7 +515,7 @@ func TestAdvPoolAssignUsesDefaults_UnsetIdenticalToToday(t *testing.T) {
 		advpool.RoleTestWriter:      "anthropic/claude-sonnet-4-6",
 		advpool.RoleTestCritic:      "google/gemini-2.5-flash",
 	}
-	got = advPoolAssign(nil, base)
+	got := advPoolAssign(nil, base)
 	if got[advpool.RoleTestWriter] != "anthropic/claude-sonnet-4-6" || got[advpool.RoleTestCritic] != "google/gemini-2.5-flash" {
 		t.Fatalf("provided defaults not used: %+v", got)
 	}
@@ -784,7 +809,7 @@ func TestAdvPoolStartRun_ShadowOffByDefaultForABareRuntime(t *testing.T) {
 // the queue exactly like the primary shards.
 func TestAdvPoolStartRun_ShadowSeatsWhenDaemonDefaultConfigured(t *testing.T) {
 	rt, q := newTestAdvPoolRuntime(t, nil)
-	rt.shadowModel = advpool.DefaultShadowModel
+	rt.shadowModel = testShadowModel
 
 	runID, err := rt.StartRun(multiSymbolRunSpecIn())
 	if err != nil {
@@ -803,8 +828,8 @@ func TestAdvPoolStartRun_ShadowSeatsWhenDaemonDefaultConfigured(t *testing.T) {
 		t.Fatalf("expected one shadow seat per primary shard (%d), got %d shadow seats", len(mgs), len(shadows))
 	}
 	for key, tk := range shadows {
-		if tk.Model != advpool.DefaultShadowModel {
-			t.Errorf("shadow task %q has model %q, want the daemon default %q", key, tk.Model, advpool.DefaultShadowModel)
+		if tk.Model != testShadowModel {
+			t.Errorf("shadow task %q has model %q, want the daemon default %q", key, tk.Model, testShadowModel)
 		}
 	}
 }
@@ -843,7 +868,7 @@ func TestAdvPoolStartRun_ShadowModelPerCallOverride(t *testing.T) {
 
 	t.Run(`"off" disables shadow despite an on daemon default`, func(t *testing.T) {
 		rt, q := newTestAdvPoolRuntime(t, nil)
-		rt.shadowModel = advpool.DefaultShadowModel
+		rt.shadowModel = testShadowModel
 		in := multiSymbolRunSpecIn()
 		in.ShadowModel = "off"
 
@@ -869,7 +894,7 @@ func TestAdvPoolStartRun_ShadowModelPerCallOverride(t *testing.T) {
 // challenger against, even with the daemon default shadow model configured.
 func TestAdvPoolStartRun_NoShadowSeatsWithoutSymbolSurface(t *testing.T) {
 	rt, q := newTestAdvPoolRuntime(t, nil)
-	rt.shadowModel = advpool.DefaultShadowModel
+	rt.shadowModel = testShadowModel
 
 	in := testRunSpecIn()
 	in.Code = "package target\nvar Threshold = 12\n"
@@ -1093,7 +1118,7 @@ func TestResolveAdvPoolRunDeadline(t *testing.T) {
 	})
 	t.Run("a configured daemon shadow model widens by ShadowTimeBudget", func(t *testing.T) {
 		base := 12 * time.Minute
-		got := resolveAdvPoolRunDeadline(base, advpool.DefaultShadowModel)
+		got := resolveAdvPoolRunDeadline(base, testShadowModel)
 		want := base + advpool.ShadowTimeBudget(base)
 		if got != want {
 			t.Fatalf("got %s, want %s (base + ShadowTimeBudget(base))", got, want)
@@ -1126,7 +1151,7 @@ func TestResolveAdvPoolRunDeadline(t *testing.T) {
 // defect (the mutant clamp).
 func TestStartAdversarialPool_RunDeadlineCallSitePinned(t *testing.T) {
 	t.Setenv("CORRALAI_ADVPOOL_RUN_DEADLINE_S", "90")
-	t.Setenv("CORRALAI_ADVPOOL_SHADOW_MODEL", advpool.DefaultShadowModel)
+	t.Setenv("CORRALAI_ADVPOOL_SHADOW_MODEL", testShadowModel)
 
 	dir := t.TempDir()
 	q, err := queue.Open(filepath.Join(dir, "q.sqlite3"))
@@ -1148,6 +1173,10 @@ func TestStartAdversarialPool_RunDeadlineCallSitePinned(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	// The pool refuses to start with no herd — corral has no default models —
+	// so this test names one exactly as an operator would.
+	t.Setenv("CORRALAI_ADVPOOL_MODELS", "mutant-generator=qwen2.5-coder:7b,test-writer=qwen2.5-coder:7b,test-critic=llama3.2:3b")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)

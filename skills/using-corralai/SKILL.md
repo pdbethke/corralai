@@ -22,9 +22,17 @@ mutant in a jail, and score what fraction it kills.
 corral certify --local \
   --code path/to/file.py \
   --goal "what this code must guarantee" \
+  --writer-model claude-sonnet-5 \
+  --mutant-model claude-sonnet-5 \
+  --critic-model claude-haiku-4-5 \
   --out verdict.json \
   -- python -m pytest
 ```
+
+**corral has no default models.** Every seat must be named or the run is refused
+(the refusal reports which provider credentials it can see). The models above are
+an example — use whichever provider has a key configured. The one rule is that the
+test-critic must differ from the test-writer.
 
 - A mutant-generator seeds real, goal-violating bugs into the code.
 - The suite runs against every mutant, **in a jail**; the kill-rate is the

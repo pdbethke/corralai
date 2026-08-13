@@ -151,14 +151,33 @@ func checkToolchain(iso sandbox.Isolator, cmd []string) checkResult {
 // whether any key exists.
 func checkCredentials(mutant, writer, critic string) []checkResult {
 	roles := []struct{ role, model string }{
-		{advpool.RoleMutantGenerator, orDefault(mutant, "claude-sonnet-5")},
-		{advpool.RoleTestWriter, orDefault(writer, "claude-sonnet-5")},
-		{advpool.RoleTestCritic, orDefault(critic, "claude-haiku-4-5")},
+		{advpool.RoleMutantGenerator, strings.TrimSpace(mutant)},
+		{advpool.RoleTestWriter, strings.TrimSpace(writer)},
+		{advpool.RoleTestCritic, strings.TrimSpace(critic)},
 	}
 	seen := map[string]bool{}
 	var out []checkResult
 	for _, r := range roles {
-		if strings.EqualFold(strings.TrimSpace(r.model), "off") || seen[r.model] {
+		// An UNNAMED seat is the finding, not an excuse to check a model the
+		// operator never chose. doctor used to substitute claude-sonnet-5 here
+		// and then report a credential failure for it — telling someone with a
+		// Gemini key to go get an Anthropic one. corral has no default models;
+		// the honest check is whether this seat has been filled at all.
+		//
+		// The critic is exempt: it is advisory, "off" is a legitimate answer,
+		// and unnamed is treated the same as off.
+		if r.model == "" {
+			if r.role == advpool.RoleTestCritic {
+				out = append(out, checkResult{name: fmt.Sprintf("model for %s", r.role), ok: true,
+					detail: "not named — the critic is advisory and may be left off"})
+				continue
+			}
+			out = append(out, checkResult{name: fmt.Sprintf("model for %s", r.role), detail: fmt.Sprintf(
+				"no model named. corral has no default models — pass --%s-model <model>, from whichever provider you have a key for",
+				map[string]string{advpool.RoleMutantGenerator: "mutant", advpool.RoleTestWriter: "writer"}[r.role])})
+			continue
+		}
+		if strings.EqualFold(r.model, "off") || seen[r.model] {
 			continue
 		}
 		seen[r.model] = true

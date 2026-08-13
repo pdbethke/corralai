@@ -26,13 +26,24 @@ The fastest way to see corral do the thing it's for — certify a change **by
 execution**, not opinion — is one command, off your own key, no daemon:
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...            # your own key
+export ANTHROPIC_API_KEY=sk-ant-...   # or OPENAI_/GEMINI_/OPENROUTER_API_KEY
 
 corral certify --local \
   --code path/to/your/file.go \
   --goal "what this code must guarantee" \
+  --writer-model claude-sonnet-5 \
+  --mutant-model claude-sonnet-5 \
+  --critic-model claude-haiku-4-5 \
   -- go test ./...
 ```
+
+**Those model names are an example, not a default — corral has none.** Every seat is
+yours to name, from whichever provider you hold a key for; the models above are what
+*we* run. The only rule is that the **test-critic must differ from the test-writer**,
+because that decorrelation is what the verdict rests on — a property, not a vendor,
+so any two distinct models satisfy it. `--critic-model off` drops the critic
+entirely (advisory, never gates the verdict). A run with an unnamed seat is refused,
+and the refusal reports which provider credentials it can see.
 
 That runs the full **adversarial testing pool** in-process: mutant-generators
 seed goal-violating bugs into your code, your own test is scored against them
@@ -44,6 +55,42 @@ test-critic reads your suite cold. You get a signed verdict — `certified` or
 ```bash
 corral certify verify <record>
 ```
+
+### Before you spend a run: `corral doctor`
+
+An audit costs real money and real minutes, and it is almost always the
+*environment* that stops one — the sandbox won't start, the toolchain is invisible
+inside it, the key for the model you assigned is missing, the file has no paired
+test. Discovered one at a time, each of those costs another run, and most cost money
+to learn. `doctor` checks them all up front for **free** — no model is ever called —
+in the order the audit itself would hit them, so the first `FAIL` is the first thing
+to fix:
+
+```bash
+corral doctor --code path/to/your/file.go \
+  --writer-model claude-sonnet-5 --mutant-model claude-sonnet-5 \
+  -- go test ./...
+```
+
+```
+  [ok  ] sandbox starts
+  [ok  ] toolchain reachable inside the sandbox
+  [FAIL] credential for mutant-generator (claude-sonnet-5)
+         agentbackend: ForModel: model "claude-sonnet-5" needs an Anthropic key — set ANTHROPIC_API_KEY
+
+1 check(s) failed — fix these before spending a run.
+```
+
+Every argument is optional and each unlocks more checks: `--code`/`--test` add the
+test-pairing check, a test command after `--` adds the in-sandbox toolchain check,
+and `--mutant-model`/`--writer-model`/`--critic-model` check the credential for
+exactly the models you plan to route to. It exits non-zero if anything failed.
+
+Two things it deliberately does **not** check, because both need a real seeded
+workspace: whether your suite passes on *unmutated* code inside the sandbox — the
+most common way an audit dies — and whether a multi-file project needs `--repo-dir`.
+`certify --local` reports the first as `COULD-NOT-GRADE`, with the runner's own
+output.
 
 On a file with several functions the generation **fans out** — one seat per
 group of functions, so every function gets probed, not just whichever one a
@@ -57,7 +104,7 @@ loop can't stall the audit (`--test-timeout` overrides the auto-derived cap).
 
 By default the audit runs two distinct Claude models off that single
 `ANTHROPIC_API_KEY` (Sonnet writes/mutates, Haiku critiques); on that same
-default path, `--critic-model gemini-3.5-flash` plus a Google key
+default path, `--critic-model gemini-3.6-flash` plus a Google key
 (`GEMINI_API_KEY` or `GOOGLE_API_KEY`) routes the critic to Gemini via the
 OpenAI-compatible Google endpoint — a real cross-vendor critic, writer and
 mutant-generator unchanged on Claude. A missing key fails the run closed

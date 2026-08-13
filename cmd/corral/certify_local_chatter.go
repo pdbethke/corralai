@@ -106,7 +106,10 @@ func soleAssignedCloudModel(assign advpool.RoleAssignment) (vendor, model string
 // missing, this returns the actionable error from ForModel instead of
 // silently falling back to the base backend — the caller must refuse to
 // start the run, not fail mid-run.
-func localChatterFor(assign advpool.RoleAssignment) (func(role string) agentworker.Chatter, error) {
+// meter, when non-nil, accumulates every seat's reported token usage across the
+// whole run — including the cross-vendor seats, which each get their own
+// backend and would otherwise be counted by nobody.
+func localChatterFor(assign advpool.RoleAssignment, meter *agentbackend.UsageMeter) (func(role string) agentworker.Chatter, error) {
 	base := agentbackend.FromEnv()
 	sw, canSwitch := base.(agentbackend.ModelSwitcher)
 	bv := baseVendor()
@@ -147,7 +150,7 @@ func localChatterFor(assign advpool.RoleAssignment) (func(role string) agentwork
 			if err != nil {
 				return nil, fmt.Errorf("cross-vendor %s: %w", role, err)
 			}
-			perRole[role] = agentbackend.AsChatter(cb)
+			perRole[role] = agentbackend.AsChatterMetered(cb, meter)
 		}
 	}
 
@@ -156,9 +159,9 @@ func localChatterFor(assign advpool.RoleAssignment) (func(role string) agentwork
 			return c
 		}
 		if model := assign[role]; canSwitch && model != "" {
-			return agentbackend.AsChatter(sw.WithModel(model))
+			return agentbackend.AsChatterMetered(sw.WithModel(model), meter)
 		}
-		return agentbackend.AsChatter(base)
+		return agentbackend.AsChatterMetered(base, meter)
 	}, nil
 }
 

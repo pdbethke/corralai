@@ -15,6 +15,11 @@ import (
 	"github.com/pdbethke/corralai/internal/agentworker"
 )
 
+// testShadowModel is a concrete challenger model name for tests that need one.
+// It is NOT a product default — corral has no default models; this constant
+// exists so these tests keep asserting on a fixed name of their own choosing.
+const testShadowModel = "claude-haiku-4-5"
+
 // captureServer records every request it receives (path + decoded JSON body)
 // and answers with whichever shape resShape produces — "anthropic" or
 // "openai" — so a test can prove which vendor's endpoint + wire shape a
@@ -62,7 +67,7 @@ func TestLocalChatterForSameVendorCriticSharesBaseBackend(t *testing.T) {
 		advpool.RoleTestWriter:      "claude-sonnet-5",
 		advpool.RoleTestCritic:      "claude-haiku-4-5",
 	}
-	chatterFor, err := localChatterFor(assign)
+	chatterFor, err := localChatterFor(assign, nil)
 	if err != nil {
 		t.Fatalf("localChatterFor: %v", err)
 	}
@@ -105,7 +110,7 @@ func TestLocalChatterForCrossVendorCriticRoutesToGemini(t *testing.T) {
 		advpool.RoleTestWriter:      "claude-sonnet-5",
 		advpool.RoleTestCritic:      "gemini-3.5-flash",
 	}
-	chatterFor, err := localChatterFor(assign)
+	chatterFor, err := localChatterFor(assign, nil)
 	if err != nil {
 		t.Fatalf("localChatterFor: %v", err)
 	}
@@ -152,7 +157,7 @@ func TestLocalChatterForCrossVendorCriticFailsClosedWithoutKey(t *testing.T) {
 		advpool.RoleTestWriter:      "claude-sonnet-5",
 		advpool.RoleTestCritic:      "gemini-3.5-flash",
 	}
-	_, err := localChatterFor(assign)
+	_, err := localChatterFor(assign, nil)
 	if err == nil {
 		t.Fatal("localChatterFor with missing GEMINI_API_KEY: want error, got nil")
 	}
@@ -182,7 +187,7 @@ func TestLocalChatterForExplicitBackendNeverCrossVendorRoutes(t *testing.T) {
 		advpool.RoleTestWriter:      "some-router-model",
 		advpool.RoleTestCritic:      "gemini-3.5-flash",
 	}
-	chatterFor, err := localChatterFor(assign)
+	chatterFor, err := localChatterFor(assign, nil)
 	if err != nil {
 		t.Fatalf("localChatterFor: %v", err)
 	}
@@ -222,10 +227,9 @@ func TestResolveAuditRolesDerivesBackendFromAssignedModels(t *testing.T) {
 			writerModel: "gemini-3.6-flash",
 			mutantModel: "gemini-3.6-flash",
 			criticModel: "off",
-			// The challenger seat defaults to a CLAUDE model and is on by
-			// default, so an otherwise all-Gemini run really does contain an
-			// Anthropic seat. Disabled here so these cases are about the
-			// graded seats; the shadow gets its own case below.
+			// The challenger is OFF unless named, so this is belt-and-braces
+			// rather than load-bearing: kept explicit so these cases stay
+			// about the graded seats even if that default ever moves back.
 			shadowModel: "off",
 		}
 	}
@@ -261,27 +265,45 @@ func TestResolveAuditRolesDerivesBackendFromAssignedModels(t *testing.T) {
 		}
 	})
 
-	t.Run("default Claude path is unchanged", func(t *testing.T) {
+	// THERE IS NO DEFAULT HERD. These two subtests replace a pair that asserted
+	// "the stock Claude default keeps working" — the behavior this change
+	// removes. A binary that names a vendor's models when the operator named
+	// none is not model-agnostic, and it made corral unusable on the first
+	// command for anyone holding a different provider's key.
+	t.Run("no models named is refused, not defaulted", func(t *testing.T) {
 		t.Setenv("MODEL_BACKEND", "")
 		t.Setenv("ANTHROPIC_API_KEY", "sk-ant-test")
 		t.Setenv("GEMINI_API_KEY", "")
 
-		if _, err := resolveAuditRoles(localAuditInput{}, nil); err != nil {
-			t.Fatalf("the stock Claude default must keep working: %v", err)
+		_, err := resolveAuditRoles(localAuditInput{}, nil)
+		if err == nil {
+			t.Fatal("an unnamed herd must be refused — a present Anthropic key must NOT cause Claude models to be assumed")
 		}
-		if got := os.Getenv("MODEL_BACKEND"); got != "anthropic" {
-			t.Errorf("MODEL_BACKEND = %q, want anthropic on the default path", got)
+		for _, want := range []string{"--writer-model", "--mutant-model"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("the refusal must name the empty seat %s; got: %v", want, err)
+			}
+		}
+		if strings.Contains(err.Error(), "claude-") {
+			t.Errorf("the refusal must NOT suggest a model name — that reintroduces the default through the error; got: %v", err)
 		}
 	})
 
-	t.Run("default Claude path with no key still names Anthropic", func(t *testing.T) {
+	t.Run("the refusal reports which credentials it can see", func(t *testing.T) {
 		t.Setenv("MODEL_BACKEND", "")
 		t.Setenv("ANTHROPIC_API_KEY", "")
-		t.Setenv("GEMINI_API_KEY", "")
+		t.Setenv("GEMINI_API_KEY", "gm-test")
+		t.Setenv("GOOGLE_API_KEY", "")
+		t.Setenv("OPENAI_API_KEY", "")
 
 		_, err := resolveAuditRoles(localAuditInput{}, nil)
-		if err == nil || !strings.Contains(err.Error(), "ANTHROPIC_API_KEY") {
-			t.Errorf("the stock Claude default with no key must still ask for ANTHROPIC_API_KEY; got: %v", err)
+		if err == nil {
+			t.Fatal("an unnamed herd must be refused")
+		}
+		// The usual cause is "I have a key, I just don't know what corral
+		// wants from me" — so the error has to say what it can see.
+		if !strings.Contains(err.Error(), "GEMINI_API_KEY") {
+			t.Errorf("the refusal must report the credential that IS present, so the operator knows which catalogue to pick from; got: %v", err)
 		}
 	})
 
@@ -292,7 +314,10 @@ func TestResolveAuditRolesDerivesBackendFromAssignedModels(t *testing.T) {
 	// it describes a run the operator did not configure and hides the one seat
 	// that is actually the problem. --shadow-model's own help already says the
 	// default is a Claude model; the error has to say it too.
-	t.Run("the Claude challenger seat is named as the reason", func(t *testing.T) {
+	// An EXPLICITLY named cross-vendor challenger still has to be refused when
+	// its key is absent — it would fail mid-run otherwise, after the operator
+	// had already paid for the graded seats.
+	t.Run("an explicitly named cross-vendor challenger is named as the reason", func(t *testing.T) {
 		t.Setenv("MODEL_BACKEND", "")
 		t.Setenv("ANTHROPIC_API_KEY", "")
 		t.Setenv("GEMINI_API_KEY", "gm-test")
@@ -300,17 +325,42 @@ func TestResolveAuditRolesDerivesBackendFromAssignedModels(t *testing.T) {
 		t.Setenv("OPENAI_API_KEY", "")
 
 		in := geminiModels()
-		in.shadowModel = "" // take the default: claude-haiku-4-5
+		in.shadowModel = testShadowModel // an Anthropic model, named on purpose
 		_, err := resolveAuditRoles(in, nil)
 		if err == nil {
-			t.Fatal("a Claude challenger seat with no Anthropic key must refuse — it would fail mid-run otherwise")
+			t.Fatal("a challenger seat whose provider key is absent must refuse — it would fail mid-run otherwise")
 		}
 		msg := err.Error()
 		if !strings.Contains(msg, "shadow-model") {
 			t.Errorf("the error must name --shadow-model as the way out, since that is the seat that needs the key; got: %v", err)
 		}
-		if !strings.Contains(msg, advpool.DefaultShadowModel) {
+		if !strings.Contains(msg, testShadowModel) {
 			t.Errorf("the error must name the offending model so the operator can see which seat it is; got: %v", err)
+		}
+	})
+
+	// The counterpart, and the whole reason the shadow default was removed: an
+	// UNNAMED challenger must not quietly add a seat from another vendor and
+	// then demand that vendor's key. This is the trap an all-Gemini operator
+	// used to hit with every graded seat already moved off Anthropic.
+	t.Run("an unnamed challenger adds no seat and demands no key", func(t *testing.T) {
+		t.Setenv("MODEL_BACKEND", "")
+		t.Setenv("ANTHROPIC_API_KEY", "")
+		t.Setenv("GEMINI_API_KEY", "gm-test")
+		t.Setenv("GOOGLE_API_KEY", "")
+		t.Setenv("OPENAI_API_KEY", "")
+
+		in := geminiModels()
+		in.shadowModel = "" // unnamed: the challenger is simply off
+		roles, err := resolveAuditRoles(in, nil)
+		if err != nil {
+			t.Fatalf("an all-Gemini run with a Gemini key must be accepted when no challenger is named; got: %v", err)
+		}
+		if roles.shadow != "" {
+			t.Errorf("shadow = %q, want \"\" — an unnamed challenger seat stays empty", roles.shadow)
+		}
+		if _, ok := roles.assign[advpool.RoleMutantGeneratorShadow]; ok {
+			t.Error("an unnamed challenger must not appear in the role assignment at all")
 		}
 	})
 
@@ -374,7 +424,7 @@ func TestLocalChatterFailsClosedOnAnyRoleNotJustTheCritic(t *testing.T) {
 		advpool.RoleMutantGenerator: "gemini-3.6-flash",
 		advpool.RoleTestWriter:      "claude-sonnet-5",
 		advpool.RoleTestCritic:      "claude-haiku-4-5",
-	})
+	}, nil)
 	if err == nil {
 		t.Fatal("a Gemini generator with no Gemini key must refuse the run, not 404 mid-run")
 	}
@@ -396,7 +446,7 @@ func TestLocalChatterRoutesThreeVendorsAtOnce(t *testing.T) {
 		advpool.RoleMutantGenerator: "gemini-3.6-flash",
 		advpool.RoleTestWriter:      "claude-sonnet-5",
 		advpool.RoleTestCritic:      "gpt-5",
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("all three credentials present, want no error: %v", err)
 	}
@@ -424,7 +474,7 @@ func TestLocalChatterLeavesAPinnedGatewayAlone(t *testing.T) {
 	if _, err := localChatterFor(advpool.RoleAssignment{
 		advpool.RoleMutantGenerator: "anthropic/claude-sonnet-5",
 		advpool.RoleTestCritic:      "google/gemini-3.6-flash",
-	}); err != nil {
+	}, nil); err != nil {
 		t.Fatalf("a pinned gateway must not be cross-routed or key-checked: %v", err)
 	}
 }

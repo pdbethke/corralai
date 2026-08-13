@@ -39,6 +39,8 @@ export ANTHROPIC_API_KEY=sk-ant-...
 
 corral certify --local --code eval/corpus/passwd_ts/passwd.ts \
   --goal "valid iff length >= 12 AND it contains an uppercase letter, a lowercase letter, a digit, and a symbol" \
+  --writer-model claude-sonnet-5 --mutant-model claude-sonnet-5 \
+  --critic-model claude-haiku-4-5 \
   --max-shards 1 --shadow-model off
 ```
 

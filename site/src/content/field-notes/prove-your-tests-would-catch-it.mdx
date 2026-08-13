@@ -1,0 +1,62 @@
+---
+title: "Prove your tests would catch a real bug, by breaking your code"
+description: "Your suite passes. That tells you the tests ran, not that they would notice if the code were wrong. Corral answers the question by execution — and hands you the test you were missing."
+pubDate: 2026-08-13
+draft: false
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+
+*This is the Show HN post, kept here in full.*
+
+---
+
+Your test suite passes. That tells you the tests ran, not that they would notice if the code were wrong. Coverage has the same problem: it says a line executed, never that an assertion would fail if that line broke.
+
+Corral answers the question directly. It plants goal-violating faults in one file, runs your own suite against each one in a sandbox, and reports what fraction your tests caught. Then it writes a test that kills a survivor, and only counts that gap once the test provably kills the fault by execution.
+
+```bash
+corral certify --local \
+  --code path/to/file.py \
+  --goal "what this code must guarantee" \
+  --writer-model <model> \
+  --mutant-model <model> \
+  --critic-model <model> \
+  -- python -m pytest
+```
+
+On [pallets/flask](https://github.com/pallets/flask), across 6 whole-repo scans: **10 files audited, 48 gaps proven by execution**. On [vercel/ms](https://github.com/vercel/ms) under jest: 33 of 35 killed, 2 gaps proven. On [minitest](https://github.com/minitest/minitest) itself: 36 of 40 killed.
+
+## What makes it different from mutmut, Stryker or PIT
+
+Those are mature and free. Three things here are not the same.
+
+**It hands you the test, not a line number.** Traditional mutation testing tells you "mutant survived at line 47." Corral writes the test that kills it and proves the kill by running it. A report becomes a patch.
+
+**The faults are semantic, not syntactic.** Instead of flipping `>` to `>=`, it plants violations of a stated goal — so it measures whether your suite defends the contract, rather than whether it notices a character change.
+
+**The grader is never the author.** The model that writes the killing test cannot be the model that critiques the suite; the run is refused otherwise. That is the whole point of the project, and it is why this exists now. A large and growing share of code is written by an assistant, that assistant writes the tests, and the tests pass. Nothing in that loop is an independent check.
+
+## What it is not, up front, because you will find these anyway
+
+**It is not a CI gate.** Cost is `O(mutants × your suite's runtime)`. One audited file on this repo took **11m12s** on a 2-core runner (40 mutants, kill rate 0.25). Nobody should run this per commit.
+
+**It is not repo-wide coverage.** Whole-repo scanning pairs source files to tests by naming convention, and that is weak. On flask it finds **9 candidates out of 236 files walked**. On `expressjs/express` it finds **zero**. The single-file path is the product; the repo scan is a convenience with known limits, and every exclusion is reported with a reason.
+
+**A kill rate is not a grade.** Faults are generated afresh each run, so the number moves: measured swing on one file was **0.55 to 0.80**, same file, same suite. Treat a run as evidence of specific gaps, never as a score.
+
+**The weakest link is honest too.** What varies is whether the authored test comes back *sound*. On one flask file across four runs, one authored test proved **14 of 14** survivors by execution and another proved nothing. When corral cannot prove its own test ran, it reports `TEST UNSOUND` and withholds the count rather than printing a clean zero.
+
+## Bring your own models
+
+There are no default models. You name every seat, from whichever provider you have a key for; the only rule is that the critic must differ from the writer. A run with an unnamed seat is refused and tells you which credentials it can see. `corral doctor` checks a herd and its environment for free before you spend anything.
+
+Go, Python, Ruby, JavaScript and TypeScript. Go and Python are exercised hardest; the other three each rest on a single third-party repository so far, which shows the plugin works and is not evidence about the ecosystem.
+
+```bash
+go install github.com/pdbethke/corralai/cmd/corral@latest
+```
+
+Source: [github.com/pdbethke/corralai](https://github.com/pdbethke/corralai) · [Getting started](/docs/getting-started/) · License: Elastic-2.0.
+
+The most useful thing you can do with it is point it at a file you are about to trust, and see whether your tests would have caught the bug.

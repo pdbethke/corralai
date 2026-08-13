@@ -36,17 +36,33 @@ func TestModelSetKeyIsCanonicalAndNamesEveryRole(t *testing.T) {
 	}
 }
 
-// resolveRoleModels must return RESOLVED names, never the raw flag text: an
-// empty --writer-model means the default, and if the key recorded "" the
-// default-flagged run and the explicitly-flagged run would key differently
-// for an identical audit.
-func TestResolveRoleModelsFillsDefaults(t *testing.T) {
-	w, m, c, _ := resolveRoleModels(localAuditInput{})
-	if w != defaultLocalWriterModel || m != defaultLocalMutantModel || c != defaultLocalCriticModel {
-		t.Fatalf("resolveRoleModels with no overrides = (%q, %q, %q), want the defaults", w, m, c)
+// resolveRoleModels is the ONE place a seat's model is resolved, so the cache
+// key and the run can never disagree about which models an audit used. They
+// must not: the key records the herd, and a key derived from a different
+// resolution than the run would let a verdict be reused across a model change.
+//
+// This replaces a test asserting that an unnamed seat resolved to a DEFAULT.
+// corral has no default models — an unnamed grading seat is refused by
+// resolveAuditRoles, not filled — so the contract here is that the resolver
+// reports exactly what it was given.
+func TestResolveRoleModelsAppliesNoDefaults(t *testing.T) {
+	w, m, c, sh := resolveRoleModels(localAuditInput{})
+	if w != "" || m != "" || c != "" || sh != "" {
+		t.Fatalf("unnamed seats resolved to (%q, %q, %q, %q), want all empty — no seat has a default", w, m, c, sh)
 	}
-	if strings.TrimSpace(w) == "" {
-		t.Fatal("writer resolved to empty")
+
+	// "off" is a resolution, not a model name: it must reach the key as "",
+	// so a deliberately disabled critic never keys as a model called "off".
+	_, _, off, _ := resolveRoleModels(localAuditInput{criticModel: "off"})
+	if off != "" {
+		t.Fatalf("critic \"off\" resolved to %q, want \"\"", off)
+	}
+
+	// Whitespace is trimmed, so " claude-sonnet-5 " and "claude-sonnet-5"
+	// cannot key as two different herds for the same audit.
+	w2, m2, _, _ := resolveRoleModels(localAuditInput{writerModel: "  gemini-3.6-flash  ", mutantModel: "x"})
+	if w2 != "gemini-3.6-flash" || m2 != "x" {
+		t.Fatalf("resolved = (%q, %q), want trimmed passthrough", w2, m2)
 	}
 }
 

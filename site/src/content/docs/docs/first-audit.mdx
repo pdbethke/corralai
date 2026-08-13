@@ -70,10 +70,17 @@ export ANTHROPIC_API_KEY=sk-ant-...
 corral certify --local \
   --code passwd.go \
   --test passwd_gappy_test.go \
+  --writer-model claude-sonnet-5 \
+  --mutant-model claude-sonnet-5 \
+  --critic-model claude-haiku-4-5 \
   --goal "Valid must require length >= 12, an uppercase letter, a lowercase letter, a digit, and a symbol" \
   --out verdict.json \
   -- go test ./...
 ```
+
+**The model names above are an example, not a default — corral has none.** Every seat
+is yours to name, from whichever provider you hold a key for; the only rule is that
+the test-critic must differ from the test-writer.
 
 `--code`/`--test` may be absolute or relative paths. On Ubuntu 24.04, if `bwrap`
 won't start (apparmor disables unprivileged user namespaces by default), add

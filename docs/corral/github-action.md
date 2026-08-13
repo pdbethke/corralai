@@ -153,7 +153,13 @@ slow"`), not a shell one-liner that chains multiple commands.
 - uses: pdbethke/corralai@main
   with:
     test-command: "go test ./..."
-    model-key: ${{ secrets.ANTHROPIC_API_KEY }}
+    anthropic-key: ${{ secrets.ANTHROPIC_API_KEY }}
+    # corral has no default models: name every seat you want filled.
+    # These are an example — use whichever provider you supplied a key for.
+    derive-model: claude-sonnet-5
+    writer-model: claude-sonnet-5
+    mutant-model: claude-sonnet-5
+    critic-model: claude-haiku-4-5
 ```
 
 **There is no `v1` tag, but there are pinnable release tags.** `v0.1.0` and

@@ -30,10 +30,11 @@ import (
 // repo scan before relying on it.
 const defaultScanTop = 25
 
-// defaultDeriveModel is the goal-deriver's model. It is intentionally the same
-// tier as the mutant generator: deriving one sentence from a file is not the
-// hard part of this pipeline.
-const defaultDeriveModel = defaultLocalMutantModel
+// There is no default goal-deriver model, for the same reason there are no
+// default role models: see the block at the top of certify_local.go. Deriving
+// one sentence from a file is not the hard part of this pipeline, but picking
+// a vendor on the operator's behalf is not ours to do either. --goals skips
+// derivation entirely and needs no model at all.
 
 // runCertifyRepo fans the single-file audit out over a whole repository.
 // Goals come from a checked-in JSON file when --goals is given, and are
@@ -49,14 +50,14 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	testsPath := fs.String("tests", "", "JSON file mapping repo-relative SOURCE paths to their test files, consulted before filename convention. Convention cannot pair a project that names tests after behaviour rather than after source files (expressjs/express: lib/response.js is tested by test/res.send.js, res.json.js …), and it can pair the WRONG file (psf/requests pairs adapters.py to an 8-line test_adapters.py while its real coverage is in a 108KB test_requests.py). A mapping to a file that does not exist is refused, never silently fallen back to convention")
 	topFlag := fs.Int("top", defaultScanTop, "audit only the N highest-ranked candidates (0 or --all = every candidate). Bounded by default: a whole-repo audit runs a full herd per file, so an unbounded first scan on a large repo costs hours and real money. The DEFAULT bound does not apply with --goals — a hand-written goals map has already chosen the surface — but an explicit --top does")
 	allFlag := fs.Bool("all", false, "audit every candidate, ignoring --top")
-	deriveModel := fs.String("derive-model", defaultDeriveModel, "model that derives a goal per file when --goals is not given")
+	deriveModel := fs.String("derive-model", "", "model that derives a goal per file when --goals is not given — REQUIRED unless --goals is supplied; corral has no default models")
 	// Per-role models. `certify --local` has had these all along; without them
 	// here a repo scan was locked to the Claude defaults with no override.
-	writerModelFlag := fs.String("writer-model", "", "model for the test-writer role (default "+defaultLocalWriterModel+")")
-	mutantModelFlag := fs.String("mutant-model", "", "model for the mutant-generator role (default "+defaultLocalMutantModel+")")
-	criticModelFlag := fs.String("critic-model", "", "model for the test-critic role, which must differ from the writer's; \"off\" disables the critic entirely (it is advisory and never gates the verdict, so a single-vendor run with only one usable model can drop it) (default "+defaultLocalCriticModel+")")
+	writerModelFlag := fs.String("writer-model", "", "model for the test-writer role — REQUIRED, corral has no default models")
+	mutantModelFlag := fs.String("mutant-model", "", "model for the mutant-generator role — REQUIRED, corral has no default models")
+	criticModelFlag := fs.String("critic-model", "", "model for the test-critic role, which must differ from the writer's; \"off\" disables the critic entirely (it is advisory and never gates the verdict, so a single-vendor run with only one usable model can drop it). No default")
 	scopeTestsFlag := fs.Bool("scope-tests", false, "grade each file against its OWN paired test file instead of the project's whole suite. MUCH faster — scoring runs the suite once per mutant, so this collapses an O(mutants x suite runtime) cost — but it CHANGES THE MEASUREMENT: a mutant that some unrelated test happened to catch now reads as a survivor, so the reported gap count can go UP. Ignored when an explicit -- <cmd> is given, and for languages with no verified per-file invocation")
-	shadowModelFlag := fs.String("shadow-model", "", "challenger model that attacks every region a SECOND time (default "+defaultLocalShadowModel+"; \"off\" disables). Recorded for comparison — NEVER gates the verdict. The default is a Claude model, so a non-Anthropic scan must set or disable it")
+	shadowModelFlag := fs.String("shadow-model", "", "challenger model that attacks every region a SECOND time. OFF unless named. Recorded for comparison — NEVER gates the verdict")
 	owner := fs.String("owner", "local", "owning account for the scan (tenant identifier)")
 	commit := fs.String("commit", "", "commit SHA the report is bound to")
 	swarmFlag := fs.Int("swarm", 0, "max concurrent audit workers (0 = auto-size to this host's cores)")
@@ -680,6 +681,14 @@ func resolveGoalSource(stderr io.Writer, repoDir, goalsPath, deriveModel string,
 		return notDerivedGoals{}, "  dry run: goals were NOT derived (no model calls); jobs below are what the scan would emit", 0
 	}
 	if nSelected > 0 {
+		// No default deriver model: --goals or --derive-model, pick one. This
+		// refuses BEFORE the credential check below so the message names the
+		// actual problem (no model chosen) rather than the symptom a missing
+		// key would produce.
+		if strings.TrimSpace(deriveModel) == "" {
+			fmt.Fprintf(stderr, "corral certify --repo: no goal source. corral has no default models, so deriving a goal per file needs --derive-model <model>; or supply --goals <file> to skip derivation entirely (that path calls no model and needs no key)\n")
+			return nil, "", 2
+		}
 		// Constructed only when there is something to derive FOR. It fails
 		// closed on a missing credential, which is the right answer for a real
 		// scan — but demanding a provider key to report "0 candidates" would

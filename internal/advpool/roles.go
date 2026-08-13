@@ -321,23 +321,21 @@ func shardTitle(sh Shard) string {
 // and the kill-rate rises) under a fixed certification threshold.
 const RoleMutantGeneratorShadow = "mutant-generator-shadow"
 
-// DefaultShadowModel is the challenger seat's stock model: cheap, and it
-// shares the same provider credential (Anthropic) the mutant-generator's own
-// cold-start default routinely runs under once an operator sets
-// MODEL_BACKEND=anthropic — no NEW credential is required to turn shadow on,
-// only a worker capable of serving it. Named here (not in cmd/corral) so both
-// `certify --local` and the hosted brain resolve the SAME default rather than
-// keeping two constants in lockstep by hand.
-const DefaultShadowModel = "claude-haiku-4-5"
-
 // ResolveShadowModel resolves an operator's shadow-model override into the
 // RunSpec.ShadowModel value: "off"/"none" (case-insensitive) disables the
-// challenger entirely, an empty string uses DefaultShadowModel, and anything
-// else passes through verbatim as the challenger's model name. Shared by
-// `certify --local`'s --shadow-model flag and the brain's per-run/env
-// overrides so "off" means the same thing on both paths.
+// challenger, and anything else passes through verbatim as the challenger's
+// model name. Shared by `certify --local`'s --shadow-model flag and the brain's
+// per-run/env overrides so the spelling means the same thing on both paths.
+//
+// THE CHALLENGER IS OFF UNLESS NAMED. It used to default to a Claude model,
+// which made it the quietest way corral forced a vendor on someone: an operator
+// who moved the writer, mutant-generator and critic to another provider still
+// had an Anthropic seat running, still needed that key, and got an error naming
+// a vendor they had deliberately left behind. The challenger is a measurement
+// seat that never gates a verdict, so the cost of it being off by default is
+// nothing but a comparison nobody asked for.
 func ResolveShadowModel(flag string) string {
-	return ResolveOptionalModel(flag, DefaultShadowModel)
+	return ResolveOptionalModel(flag, "")
 }
 
 // ResolveOptionalModel is the shared resolution for every role a run may turn

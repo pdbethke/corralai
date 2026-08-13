@@ -30,6 +30,13 @@ import (
 	"github.com/pdbethke/corralai/internal/scanstore"
 )
 
+// corral has no default models, so every fixture that reaches role resolution
+// must name its own herd. These are the TEST's models, not product defaults.
+const (
+	testHerdWriter = "claude-sonnet-5"
+	testHerdMutant = "claude-sonnet-5"
+)
+
 // gitCmd returns a helper that runs a git command in dir for a test fixture,
 // skipping (not failing) the test when git is unusable in this environment —
 // diff scoping's own logic is unit-tested regardless; these fixtures only
@@ -260,7 +267,7 @@ func TestCertifyRepoDiffBaseBoundsTheJobSet(t *testing.T) {
 	mustWrite(t, goals, `{"pkg/a.go": "must not panic", "pkg/b.go": "must not panic either"}`)
 
 	var out, errb bytes.Buffer
-	code := runCertifyRepo([]string{"--repo", root, "--diff-base", base, "--goals", goals, "--dry-run"}, &out, &errb)
+	code := runCertifyRepo([]string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--diff-base", base, "--goals", goals, "--dry-run"}, &out, &errb)
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, errb.String())
 	}
@@ -302,7 +309,7 @@ func TestCertifyRepoDiffBaseEmptyScopeExitsZero(t *testing.T) {
 
 	var out, errb bytes.Buffer
 	code := runCertifyRepo([]string{
-		"--repo", root, "--diff-base", base, "--goals", goals,
+		"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--diff-base", base, "--goals", goals,
 		"--substrate", substrateWorkspace,
 	}, &out, &errb)
 	if code != 0 {
@@ -348,7 +355,7 @@ func TestCertifyRepoDiffBaseNonEmptyScopeNothingGradableExitsNonZero(t *testing.
 
 	var out, errb bytes.Buffer
 	code := runCertifyRepo([]string{
-		"--repo", root, "--diff-base", base, "--goals", goals,
+		"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--diff-base", base, "--goals", goals,
 		"--substrate", substrateWorkspace, "--", "false",
 	}, &out, &errb)
 	if code != 1 {
@@ -382,7 +389,7 @@ func TestCertifyRepoRecordAbsentIsByteIdentical(t *testing.T) {
 	goals := filepath.Join(root, "goals.json")
 	mustWrite(t, goals, `{"pkg/a.go": "must not panic"}`)
 
-	baseArgs := []string{"--repo", root, "--goals", goals, "--dry-run"}
+	baseArgs := []string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--goals", goals, "--dry-run"}
 
 	var outWithout, errWithout bytes.Buffer
 	codeWithout := runCertifyRepo(baseArgs, &outWithout, &errWithout)
@@ -451,7 +458,7 @@ func TestCertifyRepoRecordFailsOpen(t *testing.T) {
 	// before the "--", never appended after it, or they become arguments to
 	// the "false" check command instead of flags to this command.
 	flagArgs := []string{
-		"--repo", root, "--diff-base", base, "--goals", goals,
+		"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--diff-base", base, "--goals", goals,
 		"--substrate", substrateWorkspace,
 	}
 	checkCmd := []string{"--", "false"}
@@ -515,7 +522,7 @@ func TestCertifyRepoRecordRoundTripsReportedFiles(t *testing.T) {
 	dsn := filepath.Join(t.TempDir(), "scans.duckdb")
 	var out, errb bytes.Buffer
 	code := runCertifyRepo([]string{
-		"--repo", root, "--diff-base", base, "--goals", goals,
+		"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--diff-base", base, "--goals", goals,
 		"--substrate", substrateWorkspace,
 		"--record", "--record-db", dsn,
 	}, &out, &errb)
@@ -648,7 +655,7 @@ func TestCertifyRepoRecordCoversExecutionStageRejections(t *testing.T) {
 	dsn := filepath.Join(t.TempDir(), "scans.duckdb")
 	var out, errb bytes.Buffer
 	code := runCertifyRepo([]string{
-		"--repo", root, "--diff-base", base, "--goals", goals,
+		"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--diff-base", base, "--goals", goals,
 		"--substrate", substrateWorkspace,
 		"--record", "--record-db", dsn,
 		"--", "false",
@@ -746,7 +753,7 @@ func TestCertifyRepoRecordTopReflectsTheEffectiveBound(t *testing.T) {
 	dsn := filepath.Join(t.TempDir(), "scans.duckdb")
 	var out, errb bytes.Buffer
 	code := runCertifyRepo([]string{
-		"--repo", root, "--goals", goals, "--dry-run",
+		"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--goals", goals, "--dry-run",
 		"--record", "--record-db", dsn,
 	}, &out, &errb)
 	if code != 0 {
@@ -765,7 +772,7 @@ func TestCertifyRepoRecordTopReflectsTheEffectiveBound(t *testing.T) {
 	dsn2 := filepath.Join(t.TempDir(), "scans2.duckdb")
 	var out2, errb2 bytes.Buffer
 	code2 := runCertifyRepo([]string{
-		"--repo", root, "--goals", goals, "--substrate", substrateWorkspace,
+		"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--goals", goals, "--substrate", substrateWorkspace,
 		"--record", "--record-db", dsn2, "--", "false",
 	}, &out2, &errb2)
 	if code2 != 1 {
@@ -809,7 +816,7 @@ func TestCertifyRepoRecordDryRunSaysWhyItDidNotRecord(t *testing.T) {
 	dsn := filepath.Join(t.TempDir(), "would-be-scans.duckdb")
 	var out, errb bytes.Buffer
 	code := runCertifyRepo([]string{
-		"--repo", root, "--goals", goals, "--dry-run",
+		"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--goals", goals, "--dry-run",
 		"--record", "--record-db", dsn,
 	}, &out, &errb)
 	if code != 0 {
@@ -893,7 +900,7 @@ func TestCertifyRepoRecordPreflightOverlayRoundTrips(t *testing.T) {
 	dsn := filepath.Join(t.TempDir(), "scans.duckdb")
 	var out, errb bytes.Buffer
 	code := runCertifyRepo([]string{
-		"--repo", root, "--diff-base", base, "--goals", goals,
+		"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--diff-base", base, "--goals", goals,
 		"--substrate", substrateWorkspace, "--preflight",
 		"--record", "--record-db", dsn,
 	}, &out, &errb)
@@ -948,13 +955,13 @@ func TestCertifyRepoRejectsFlagsAfterDashDash(t *testing.T) {
 		name string
 		args []string
 	}{
-		{"min-kill-rate", []string{"--repo", root, "--dry-run", "--", "pytest", "-q", "--min-kill-rate", "0.5"}},
-		{"record", []string{"--repo", root, "--dry-run", "--", "pytest", "-q", "--record", "--record-db", "/tmp/x.duckdb"}},
+		{"min-kill-rate", []string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--dry-run", "--", "pytest", "-q", "--min-kill-rate", "0.5"}},
+		{"record", []string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--dry-run", "--", "pytest", "-q", "--record", "--record-db", "/tmp/x.duckdb"}},
 		// --timeout is new: it joins the same guard automatically (names
 		// come from fs.VisitAll, not a hardcoded list — see
 		// TestCheckArgvNoFlagCollisionDerivesNamesFromTheFlagSet) and this
 		// pins that it actually does.
-		{"timeout", []string{"--repo", root, "--dry-run", "--", "pytest", "-q", "--timeout", "5m"}},
+		{"timeout", []string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--dry-run", "--", "pytest", "-q", "--timeout", "5m"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var out, errb bytes.Buffer
@@ -992,7 +999,7 @@ func TestCertifyRepoRejectsStrayPositionalAfterRecordPath(t *testing.T) {
 	// this pins that the bug is specific to the stray-positional shape,
 	// not a general regression in --min-kill-rate validation.
 	var controlOut, controlErr bytes.Buffer
-	controlCode := runCertifyRepo([]string{"--repo", root, "--dry-run", "--min-kill-rate", "abc"}, &controlOut, &controlErr)
+	controlCode := runCertifyRepo([]string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--dry-run", "--min-kill-rate", "abc"}, &controlOut, &controlErr)
 	if controlCode != 2 {
 		t.Fatalf("control case: exit %d, want 2 (--min-kill-rate abc alone must already be rejected): stdout=%s stderr=%s", controlCode, controlOut.String(), controlErr.String())
 	}
@@ -1001,7 +1008,7 @@ func TestCertifyRepoRejectsStrayPositionalAfterRecordPath(t *testing.T) {
 	// given the STRING-flag way (the sibling subcommand's own spelling).
 	var out, errb bytes.Buffer
 	code := runCertifyRepo([]string{
-		"--repo", root, "--dry-run",
+		"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--dry-run",
 		"--record", "tape.json", "--min-kill-rate", "abc",
 	}, &out, &errb)
 	if code != 2 {
@@ -1020,8 +1027,8 @@ func TestCertifyRepoRejectsStrayPositionalAfterRecordPath(t *testing.T) {
 func TestCertifyRepoAcceptsLegitimateCheckArgvWithUnrelatedFlags(t *testing.T) {
 	root := t.TempDir()
 	for _, tc := range [][]string{
-		{"--repo", root, "--dry-run", "--", "pytest", "-q", "-x", "--tb=short"},
-		{"--repo", root, "--dry-run", "--", "go", "test", "./...", "-count=1"},
+		{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--dry-run", "--", "pytest", "-q", "-x", "--tb=short"},
+		{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--dry-run", "--", "go", "test", "./...", "-count=1"},
 	} {
 		var out, errb bytes.Buffer
 		code := runCertifyRepo(tc, &out, &errb)
@@ -1058,7 +1065,7 @@ func TestCheckArgvNoFlagCollisionDerivesNamesFromTheFlagSet(t *testing.T) {
 func TestCertifyRepoRejectsUnknownSubstrate(t *testing.T) {
 	root := t.TempDir()
 	var out, errb bytes.Buffer
-	code := runCertifyRepo([]string{"--repo", root, "--substrate", "docker", "--dry-run"}, &out, &errb)
+	code := runCertifyRepo([]string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--substrate", "docker", "--dry-run"}, &out, &errb)
 	if code != 2 {
 		t.Fatalf("exit %d, want 2 (usage error) for an unrecognized substrate; stdout=%s stderr=%s", code, out.String(), errb.String())
 	}
@@ -1073,7 +1080,7 @@ func TestCertifyRepoAcceptsKnownSubstrateValues(t *testing.T) {
 	root := t.TempDir()
 	for _, s := range []string{substrateJail, substrateWorkspace} {
 		var out, errb bytes.Buffer
-		code := runCertifyRepo([]string{"--repo", root, "--substrate", s, "--dry-run"}, &out, &errb)
+		code := runCertifyRepo([]string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--substrate", s, "--dry-run"}, &out, &errb)
 		if code != 0 {
 			t.Fatalf("--substrate %s: exit %d, stderr=%s", s, code, errb.String())
 		}
@@ -1088,7 +1095,7 @@ func TestCertifyRepoRejectsOutOfRangeMinKillRate(t *testing.T) {
 	root := t.TempDir()
 	for _, bad := range []string{"1.5", "-0.1", "2", "-1"} {
 		var out, errb bytes.Buffer
-		code := runCertifyRepo([]string{"--repo", root, "--min-kill-rate", bad, "--dry-run"}, &out, &errb)
+		code := runCertifyRepo([]string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--min-kill-rate", bad, "--dry-run"}, &out, &errb)
 		if code != 2 {
 			t.Fatalf("--min-kill-rate %s: exit %d, want 2 (usage error); stdout=%s stderr=%s", bad, code, out.String(), errb.String())
 		}
@@ -1103,7 +1110,7 @@ func TestCertifyRepoRejectsOutOfRangeMinKillRate(t *testing.T) {
 func TestCertifyRepoRejectsUnparseableMinKillRate(t *testing.T) {
 	root := t.TempDir()
 	var out, errb bytes.Buffer
-	code := runCertifyRepo([]string{"--repo", root, "--min-kill-rate", "not-a-number", "--dry-run"}, &out, &errb)
+	code := runCertifyRepo([]string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--min-kill-rate", "not-a-number", "--dry-run"}, &out, &errb)
 	if code != 2 {
 		t.Fatalf("exit %d, want 2 (usage error); stdout=%s stderr=%s", code, out.String(), errb.String())
 	}
@@ -1119,7 +1126,7 @@ func TestCertifyRepoAcceptsBoundaryMinKillRateValues(t *testing.T) {
 	root := t.TempDir()
 	for _, ok := range []string{"0", "0.0", "1", "1.0", "0.5"} {
 		var out, errb bytes.Buffer
-		code := runCertifyRepo([]string{"--repo", root, "--min-kill-rate", ok, "--dry-run"}, &out, &errb)
+		code := runCertifyRepo([]string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--min-kill-rate", ok, "--dry-run"}, &out, &errb)
 		if code != 0 {
 			t.Fatalf("--min-kill-rate %s: exit %d, want 0; stdout=%s stderr=%s", ok, code, out.String(), errb.String())
 		}
@@ -1336,7 +1343,7 @@ func TestCertifyRepoTimeoutFlagParsesBeforeDashDash(t *testing.T) {
 	root := t.TempDir()
 	var out, errb bytes.Buffer
 	code := runCertifyRepo([]string{
-		"--repo", root, "--dry-run", "--timeout", "27m",
+		"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--dry-run", "--timeout", "27m",
 		"--", "pytest", "-q",
 	}, &out, &errb)
 	if code != 0 {
@@ -1363,7 +1370,7 @@ func TestCertifyRepoWithoutGoalsDoesNotDemandThem(t *testing.T) {
 	// provider credential is needed — the point is only that the old
 	// "--goals is required" refusal is gone.
 	var out, errb bytes.Buffer
-	code := runCertifyRepo([]string{"--repo", root, "--dry-run"}, &out, &errb)
+	code := runCertifyRepo([]string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--dry-run"}, &out, &errb)
 	if code != 0 {
 		t.Fatalf("exit %d, stderr=%s", code, errb.String())
 	}
@@ -1385,7 +1392,7 @@ func TestCertifyRepoDryRunReportsAccounting(t *testing.T) {
 	mustWrite(t, goals, `{"pkg/a.go": "must not panic on empty input"}`)
 
 	var out, errb bytes.Buffer
-	code := runCertifyRepo([]string{"--repo", root, "--goals", goals, "--dry-run"}, &out, &errb)
+	code := runCertifyRepo([]string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--goals", goals, "--dry-run"}, &out, &errb)
 	if code != 0 {
 		t.Fatalf("exit %d, stderr=%s", code, errb.String())
 	}
@@ -1416,7 +1423,7 @@ func TestCertifyRepoReportsBothExclusionSources(t *testing.T) {
 	mustWrite(t, goals, `{"pkg/a.go": "must not panic on empty input"}`)
 
 	var out, errb bytes.Buffer
-	if code := runCertifyRepo([]string{"--repo", root, "--goals", goals, "--dry-run"}, &out, &errb); code != 0 {
+	if code := runCertifyRepo([]string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--goals", goals, "--dry-run"}, &out, &errb); code != 0 {
 		t.Fatalf("exit %d, stderr=%s", code, errb.String())
 	}
 	s := out.String()
@@ -1460,7 +1467,7 @@ func TestCertifyRepoFileTotalMatchesDiskWithManyUngoaled(t *testing.T) {
 	mustWrite(t, goals, `{"pkg/a.go": "must not panic"}`)
 
 	var out, errb bytes.Buffer
-	if code := runCertifyRepo([]string{"--repo", root, "--goals", goals, "--dry-run"}, &out, &errb); code != 0 {
+	if code := runCertifyRepo([]string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--goals", goals, "--dry-run"}, &out, &errb); code != 0 {
 		t.Fatalf("exit %d, stderr=%s", code, errb.String())
 	}
 	s := out.String()
@@ -1757,7 +1764,7 @@ func TestResolveAuditRolesWarningCarriesTheCommandPrefix(t *testing.T) {
 func TestCertifyRepoMissingGoalsFileFailsClosed(t *testing.T) {
 	root := t.TempDir()
 	var out, errb bytes.Buffer
-	code := runCertifyRepo([]string{"--repo", root, "--goals", filepath.Join(root, "nope.json"), "--dry-run"}, &out, &errb)
+	code := runCertifyRepo([]string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--goals", filepath.Join(root, "nope.json"), "--dry-run"}, &out, &errb)
 	if code == 0 {
 		t.Fatal("an unreadable --goals file must not exit 0")
 	}
@@ -2092,7 +2099,7 @@ func TestRunCertifyDispatchesRepoScanOnGoals(t *testing.T) {
 	run := &fakeRunner{exitCode: 0}
 	post := &fakePoster{result: stubResult()}
 	var stdout, stderr bytes.Buffer
-	code := runCertify([]string{"--repo", root, "--goals", goals, "--dry-run"},
+	code := runCertify([]string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--goals", goals, "--dry-run"},
 		run, post, fakeJail{exit: 0, out: "ok"},
 		func() (ed25519.PrivateKey, error) { return nil, errors.New("unused") },
 		&stdout, &stderr)
@@ -2157,7 +2164,7 @@ func TestCertifyRepoRefusesExplicitCheckCommandAcrossLanguages(t *testing.T) {
 	mustWrite(t, goals, `{"pkg/a.go": "must not panic", "py/m.py": "must not divide by zero"}`)
 
 	var out, errb bytes.Buffer
-	code := runCertifyRepo([]string{"--repo", root, "--goals", goals, "--dry-run", "--", "go", "test", "./..."}, &out, &errb)
+	code := runCertifyRepo([]string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--goals", goals, "--dry-run", "--", "go", "test", "./..."}, &out, &errb)
 	if code != 2 {
 		t.Fatalf("exit %d, want 2 (usage error); stdout=%s stderr=%s", code, out.String(), errb.String())
 	}
@@ -2181,7 +2188,7 @@ func TestCertifyRepoAllowsExplicitCheckCommandForOneLanguage(t *testing.T) {
 	mustWrite(t, goals, `{"pkg/a.go": "must not panic"}`)
 
 	var out, errb bytes.Buffer
-	code := runCertifyRepo([]string{"--repo", root, "--goals", goals, "--dry-run", "--", "go", "test", "./..."}, &out, &errb)
+	code := runCertifyRepo([]string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--goals", goals, "--dry-run", "--", "go", "test", "./..."}, &out, &errb)
 	if code != 0 {
 		t.Fatalf("exit %d, want 0; stderr=%s", code, errb.String())
 	}
@@ -2545,7 +2552,7 @@ func TestRunCertifyRepoDirWithoutGoalsGoesToTheScan(t *testing.T) {
 	run := &fakeRunner{exitCode: 0}
 	post := &fakePoster{result: stubResult()}
 	var stdout, stderr bytes.Buffer
-	code := runCertify([]string{"--repo", root, "--dry-run", "--", "true"},
+	code := runCertify([]string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--dry-run", "--", "true"},
 		run, post, fakeJail{exit: 0, out: "ok"},
 		func() (ed25519.PrivateKey, error) { return nil, errors.New("unused") },
 		&stdout, &stderr)
@@ -2809,7 +2816,7 @@ func TestCertifyRepoDryRunRanksSelectsAndAccounts(t *testing.T) {
 	mustWrite(t, filepath.Join(root, "pkg", "b_test.go"), "package pkg\n")
 
 	var out, errb bytes.Buffer
-	code := runCertifyRepo([]string{"--repo", root, "--top", "1", "--dry-run"}, &out, &errb)
+	code := runCertifyRepo([]string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--top", "1", "--dry-run"}, &out, &errb)
 	if code != 0 {
 		t.Fatalf("exit %d, stderr=%s", code, errb.String())
 	}
@@ -2842,7 +2849,7 @@ func TestCertifyRepoGoalsFileTakesPrecedenceOverDerivation(t *testing.T) {
 	var out, errb bytes.Buffer
 	// No provider credential is needed on this path — proof derivation was
 	// not attempted.
-	code := runCertifyRepo([]string{"--repo", root, "--goals", goals, "--dry-run"}, &out, &errb)
+	code := runCertifyRepo([]string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--goals", goals, "--dry-run"}, &out, &errb)
 	if code != 0 {
 		t.Fatalf("exit %d, stderr=%s", code, errb.String())
 	}
@@ -2875,7 +2882,7 @@ func TestCertifyRepoGoalsFileIsNotBoundedByTheDefaultTop(t *testing.T) {
 	mustWrite(t, goalsFile, string(b))
 
 	var out, errb bytes.Buffer
-	if code := runCertifyRepo([]string{"--repo", root, "--goals", goalsFile, "--dry-run"}, &out, &errb); code != 0 {
+	if code := runCertifyRepo([]string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--goals", goalsFile, "--dry-run"}, &out, &errb); code != 0 {
 		t.Fatalf("exit %d, stderr=%s", code, errb.String())
 	}
 	want := fmt.Sprintf("%d job(s)", defaultScanTop+5)
@@ -2905,7 +2912,7 @@ func TestCertifyRepoExplicitTopStillBoundsTheGoalsPath(t *testing.T) {
 	mustWrite(t, goalsFile, string(b))
 
 	var out, errb bytes.Buffer
-	if code := runCertifyRepo([]string{"--repo", root, "--goals", goalsFile, "--top", "2", "--dry-run"}, &out, &errb); code != 0 {
+	if code := runCertifyRepo([]string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--goals", goalsFile, "--top", "2", "--dry-run"}, &out, &errb); code != 0 {
 		t.Fatalf("exit %d, stderr=%s", code, errb.String())
 	}
 	if !strings.Contains(out.String(), "2 job(s)") {
@@ -3044,7 +3051,7 @@ func TestCertifyRepoDryRunSaysGoalsWereNotDerived(t *testing.T) {
 	mustWrite(t, filepath.Join(root, "pkg", "a_test.go"), "package pkg\n")
 
 	var out, errb bytes.Buffer
-	if code := runCertifyRepo([]string{"--repo", root, "--dry-run"}, &out, &errb); code != 0 {
+	if code := runCertifyRepo([]string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--dry-run"}, &out, &errb); code != 0 {
 		t.Fatalf("exit %d, stderr=%s", code, errb.String())
 	}
 	if !strings.Contains(out.String(), "goals were NOT derived (no model calls)") {
@@ -3103,7 +3110,7 @@ func TestCertifyRepoAllIgnoresTheDefaultBound(t *testing.T) {
 		mustWrite(t, filepath.Join(root, "pkg", name+"_test.go"), "package pkg\n")
 	}
 	var out, errb bytes.Buffer
-	if code := runCertifyRepo([]string{"--repo", root, "--all", "--dry-run"}, &out, &errb); code != 0 {
+	if code := runCertifyRepo([]string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--all", "--dry-run"}, &out, &errb); code != 0 {
 		t.Fatalf("exit %d, stderr=%s", code, errb.String())
 	}
 	want := fmt.Sprintf("auditing %d of %d candidate(s)", defaultScanTop+3, defaultScanTop+3)
@@ -3125,7 +3132,7 @@ func TestCertifyRepoTopZeroAndNegativeMeanUnbounded(t *testing.T) {
 	}
 	for _, top := range []string{"0", "-1"} {
 		var out, errb bytes.Buffer
-		if code := runCertifyRepo([]string{"--repo", root, "--top", top, "--dry-run"}, &out, &errb); code != 0 {
+		if code := runCertifyRepo([]string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--top", top, "--dry-run"}, &out, &errb); code != 0 {
 			t.Fatalf("--top %s: exit %d, stderr=%s", top, code, errb.String())
 		}
 		want := fmt.Sprintf("auditing %d of %d candidate(s)", defaultScanTop+2, defaultScanTop+2)
@@ -3289,13 +3296,13 @@ func TestCertifyRepoPreflightFlagAbsentIsByteIdenticalToBaseline(t *testing.T) {
 
 	var without, with bytes.Buffer
 	var errb1, errb2 bytes.Buffer
-	if code := runCertifyRepo([]string{"--repo", root, "--goals", goals, "--substrate", substrateWorkspace}, &without, &errb1); code != 1 {
+	if code := runCertifyRepo([]string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--goals", goals, "--substrate", substrateWorkspace}, &without, &errb1); code != 1 {
 		// 0 jobs emitted (nothing goaled) => COULD-NOT-GRADE => exit 1. The
 		// exit code itself is not what this test is about; it just must be
 		// the SAME in both runs (checked below).
 		t.Logf("no-flag run exit %d, stderr=%s", code, errb1.String())
 	}
-	codeWith := runCertifyRepo([]string{"--repo", root, "--goals", goals, "--substrate", substrateWorkspace, "--preflight"}, &with, &errb2)
+	codeWith := runCertifyRepo([]string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--goals", goals, "--substrate", substrateWorkspace, "--preflight"}, &with, &errb2)
 	_ = codeWith
 
 	withStr := with.String()
@@ -3328,7 +3335,7 @@ func TestCertifyRepoPreflightRanNamesUnexercisedFiles(t *testing.T) {
 	mustWrite(t, goals, `{}`) // nothing goaled: Scan runs 0 jobs, no model call
 
 	var out, errb bytes.Buffer
-	runCertifyRepo([]string{"--repo", root, "--goals", goals, "--substrate", substrateWorkspace, "--preflight"}, &out, &errb)
+	runCertifyRepo([]string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--goals", goals, "--substrate", substrateWorkspace, "--preflight"}, &out, &errb)
 
 	s := out.String()
 	if !strings.Contains(s, "Coverage pre-flight") {
@@ -3362,7 +3369,7 @@ func TestCertifyRepoPreflightCouldNotRunReportsNoteAndNoFileList(t *testing.T) {
 	mustWrite(t, filepath.Join(root, "README.md"), "# nothing to audit here\n")
 
 	var out, errb bytes.Buffer
-	runCertifyRepo([]string{"--repo", root, "--substrate", substrateWorkspace, "--preflight"}, &out, &errb)
+	runCertifyRepo([]string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--substrate", substrateWorkspace, "--preflight"}, &out, &errb)
 
 	s := out.String()
 	if !strings.Contains(s, "Coverage pre-flight") {
@@ -3392,10 +3399,10 @@ func TestCertifyRepoPreflightDryRunNeverRunsTheSuite(t *testing.T) {
 
 	var without, with bytes.Buffer
 	var errb1, errb2 bytes.Buffer
-	if code := runCertifyRepo([]string{"--repo", root, "--goals", goals, "--dry-run"}, &without, &errb1); code != 0 {
+	if code := runCertifyRepo([]string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--goals", goals, "--dry-run"}, &without, &errb1); code != 0 {
 		t.Fatalf("no-flag dry run: exit %d, stderr=%s", code, errb1.String())
 	}
-	if code := runCertifyRepo([]string{"--repo", root, "--goals", goals, "--dry-run", "--preflight"}, &with, &errb2); code != 0 {
+	if code := runCertifyRepo([]string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--goals", goals, "--dry-run", "--preflight"}, &with, &errb2); code != 0 {
 		t.Fatalf("--preflight dry run: exit %d, stderr=%s", code, errb2.String())
 	}
 
@@ -3652,7 +3659,7 @@ func TestCertifyRepoPreflightRunsWhenPairingFindsNoCandidates(t *testing.T) {
 	preflightUnpairedPythonFixture(t, root)
 
 	var out, errb bytes.Buffer
-	runCertifyRepo([]string{"--repo", root, "--goals", writeGoals(t, root, `{}`),
+	runCertifyRepo([]string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--goals", writeGoals(t, root, `{}`),
 		"--substrate", substrateWorkspace, "--preflight"}, &out, &errb)
 
 	s := out.String()
@@ -3717,7 +3724,7 @@ func TestCertifyRepoPreflightRunsOnTheAisuiteShape(t *testing.T) {
 	goals := writeGoals(t, root, `{"mypkg/core.py": "must return 1", "src/thing.ts": "must return 1"}`)
 
 	var out, errb bytes.Buffer
-	code := runCertifyRepo([]string{"--repo", root, "--goals", goals,
+	code := runCertifyRepo([]string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--goals", goals,
 		"--substrate", substrateWorkspace, "--preflight", "--", "pytest", "-q"}, &out, &errb)
 
 	// The audit still refuses — unchanged.

@@ -260,7 +260,12 @@ Historical Leaderboard:
 
 func (s *StaffingManager) Clamp(assignments map[string]string, resources WorkstationResources) map[string]string {
 	clamped := make(map[string]string)
-	defaultModel := "qwen2.5-coder:7b"
+	// No hardcoded fallback model. Clamping means "swap this assignment for a
+	// LOCAL model that fits" — so the candidates are the models this
+	// workstation has actually pulled. With none pulled there is nothing to
+	// clamp to, and naming one here would be corral choosing a vendor's model
+	// on the operator's behalf, which it does not do anywhere else.
+	defaultModel := ""
 	if len(resources.PulledModels) > 0 {
 		smallestQwen := ""
 		smallestQwenSize := 999.0
@@ -298,9 +303,13 @@ func (s *StaffingManager) Clamp(assignments map[string]string, resources Worksta
 			}
 		}
 
-		if !pulled {
+		if !pulled && defaultModel != "" {
 			model = defaultModel
 		}
+		// defaultModel == "" means nothing is pulled locally, so there is no
+		// model to clamp TO. Keep the proposal as-is rather than blanking the
+		// role: an assignment nobody can serve fails honestly downstream,
+		// where an empty one would look like a role that was never staffed.
 
 		if !assignedModels[model] {
 			assignedModels[model] = true
@@ -310,7 +319,7 @@ func (s *StaffingManager) Clamp(assignments map[string]string, resources Worksta
 		clamped[role] = model
 	}
 
-	if resources.GPUVRAMGB > 0 && totalVRAMNeeded > resources.GPUVRAMGB {
+	if resources.GPUVRAMGB > 0 && totalVRAMNeeded > resources.GPUVRAMGB && defaultModel != "" {
 		log.Printf("staffing: proposed models need %.1f GB VRAM, exceeding physical %.1f GB. Consolidating all local roles to %s.",
 			totalVRAMNeeded, resources.GPUVRAMGB, defaultModel)
 		for role, model := range clamped {
@@ -320,11 +329,16 @@ func (s *StaffingManager) Clamp(assignments map[string]string, resources Worksta
 		}
 	}
 
-	if clamped["security-breaker"] == "" {
-		clamped["security-breaker"] = defaultModel
-	}
-	if clamped["correctness-reviewer"] == "" {
-		clamped["correctness-reviewer"] = defaultModel
+	// Only fill an unstaffed role when this workstation actually has a local
+	// model to fill it with. With nothing pulled, the role stays empty and the
+	// caller sees it was never staffed — corral does not name a model for you.
+	if defaultModel != "" {
+		if clamped["security-breaker"] == "" {
+			clamped["security-breaker"] = defaultModel
+		}
+		if clamped["correctness-reviewer"] == "" {
+			clamped["correctness-reviewer"] = defaultModel
+		}
 	}
 
 	return clamped

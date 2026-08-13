@@ -88,6 +88,28 @@ func (bwrapIsolator) Wrap(command string, opts Options, env []string) ([]string,
 		// and grants no reachability: there is still no route off `lo`.
 		"--ro-bind-try", "/etc/hosts", "/etc/hosts",
 		"--ro-bind-try", "/etc/nsswitch.conf", "/etc/nsswitch.conf",
+		// The passwd database, for the same reason and with the same shape as
+		// the two lines above: it is a system database the RUNTIME expects to
+		// exist, and its absence fails at import time rather than in a test.
+		//
+		// Without it the jail's uid has no passwd entry, so getpass.getuser()
+		// raises `KeyError: getpwuid(): uid not found: 1000`. PyTorch calls
+		// exactly that while computing its cache directory, at import — so any
+		// Python project that transitively imports torch or transformers dies
+		// before collection, and the file reports COULD-NOT-GRADE as a
+		// "build/environment failure" indistinguishable from a broken project.
+		// Found by auditing a third-party FastAPI service whose conftest imports
+		// the app, which imports sentence-transformers.
+		//
+		// /etc/group comes along because the same lookups reach for it (Python's
+		// getpass falls back through the group database on some paths, and Go's
+		// os/user resolves gids the same way).
+		//
+		// This leaks usernames and home paths into the jail and nothing else.
+		// /etc/shadow is NOT bound and must never be: the hashes live there, and
+		// nothing a test runner does needs them.
+		"--ro-bind-try", "/etc/passwd", "/etc/passwd",
+		"--ro-bind-try", "/etc/group", "/etc/group",
 		// Debian/Ubuntu install RubyGems OUTSIDE /usr — `gem install rspec`
 		// lands in /var/lib/gems/<ver>, not /usr/lib/ruby/gems. Binding only
 		// /usr therefore makes the entire RubyGems ecosystem invisible in the

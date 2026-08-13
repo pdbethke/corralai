@@ -111,6 +111,71 @@ pytest's discovery convention (matching the synthetic `test_<code>.py` path)
 or collection finds nothing and the matrix is silently skipped (fail-soft,
 no crash). Repo-dir mode and go are unaffected.
 
+## Verdict reuse — the cache, and what it will and will not do
+
+`certify --repo --record` consults a content-addressed cache before auditing a
+file, and reuses a verdict when **every input that could change it** is unchanged:
+the file's contents, its package, its goal, the test surface, the substrate, the
+resolved model set, the verdict-affecting flags, and a hand-bumped engine
+generation. Change any one and the file is re-audited.
+
+**Reuse is always disclosed.** The report names how many verdicts were reused and
+the age of the **oldest** one, because a scan that reports reused work without
+saying how old it is presents stale measurement as current — the exact
+self-flattering record this tool exists to prevent. The ledger marks each row
+with `cache_hit`, so an aggregate that grades models can exclude reused rows
+rather than counting one measurement once per scan forever.
+
+**It fails closed.** An unreadable row, verdict JSON that will not parse, a
+missing store or an empty owner all resolve to a miss. A miss costs money; a
+wrong hit signs a claim about content that was never measured.
+
+Two things decide what it is actually worth to you, and both are easy to be
+surprised by:
+
+- **Any change to any test file invalidates every file's verdict** on the
+  whole-suite path. That is correct — the grading surface really did change for
+  every file — but it means the hit rate is lower than the word "cache" suggests.
+- **Goals are derived per run unless you pin them.** The goal is part of the key,
+  and an LLM-derived goal is not byte-identical between runs, so **without
+  `--goals` the cache is largely inert.** If you want reuse, check your goals into
+  a file and pass `--goals`.
+
+Known gaps, documented here because they are wrong-hit paths rather than design:
+the file-scoped path (`--scope-tests`, or a test command naming specific files)
+does not key on the wider test surface, so weakening a shared `tests/conftest.py`
+leaves the key unmoved; a repo-root `conftest.py` with tests under `tests/` is
+not covered; and argv tokens given as absolute paths or symlinked directories do
+not disqualify a file-scoped scan.
+
+## What a run prints while it works
+
+A run echoes the pool's own beats to **stderr** as they happen — a seat starting,
+mutants landing, your suite being scored, the verdict signed:
+
+```
+· auditing kirby/characters/xp_service.py
+· mutant-generator/3 started (seat 3)
+· mutant-generator/3 produced 5 mutant(s)
+· scored your suite: killed 22 of 39
+· verdict signed
+```
+
+These are the same events `--record` captures as a replayable tape. They go to
+stderr so nothing parsing stdout — the verdict, `--out` — is affected, and
+`--quiet` turns them off.
+
+A `certify --local` run also ends with what it consumed:
+
+```
+model spend:   18432 in / 5120 out token(s) over 41 model call(s)
+```
+
+**Tokens, not dollars**: prices change and differ by contract, so multiply by your
+own rate. The call count is printed alongside because a provider that reports no
+usage leaves the token counts at zero, and "0 tokens over 41 calls" is a different
+fact from "0 over 0".
+
 ## Dependency dirs — bound read-only, never copied (`--repo-dir`)
 
 `corral certify --local --repo-dir <path>` seeds the whole cloned tree into the

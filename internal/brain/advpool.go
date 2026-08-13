@@ -27,14 +27,14 @@ import (
 	"github.com/pdbethke/corralai/internal/telemetry"
 )
 
-// defaultAdvPoolModel and defaultAdvPoolCriticModel are the static fallback
-// role assignment used when no leaderboard evidence is available yet (cold
-// start) — deliberately TWO DISTINCT models so the pool is decorrelated from
-// its very first run, never just "whatever happens to be configured".
-const (
-	defaultAdvPoolModel       = "qwen2.5-coder:7b"
-	defaultAdvPoolCriticModel = "llama3.2:3b"
-)
+// THERE ARE NO DEFAULT MODELS on the brain path either — see the block at the
+// top of cmd/corral/certify_local.go for why. The hosted pool used to cold-start
+// on a hardcoded pair (a small local coder model and a smaller local critic),
+// which meant a brain with no configuration silently ran SOMETHING rather than
+// saying it had not been told what to run. An operator names the herd with
+// CORRALAI_ADVPOOL_MODELS
+// ("mutant-generator=<m>,test-writer=<m>,test-critic=<m>"), or the leaderboard
+// supplies it from earned evidence. With neither, the pool does not start.
 
 // resolveRunLang resolves the ONE language plugin a run's grading path will
 // actually use — from the code file's extension (a .py file is pytest-graded
@@ -313,20 +313,22 @@ func advPoolBestExcluding(stats []mission.ModelStats, role, exclude string) stri
 	return best.Model
 }
 
-// advPoolFallbackCritic picks a static critic model guaranteed to differ
-// from writer — the cold-start (no leaderboard evidence) decorrelation
-// backstop.
-func advPoolFallbackCritic(writer string) string {
-	if writer != defaultAdvPoolCriticModel {
-		return defaultAdvPoolCriticModel
-	}
-	return defaultAdvPoolModel
-}
+// advPoolNoDistinctCritic is what the cold-start decorrelation backstop returns
+// now that there is no static model to fall back to: nothing.
+//
+// It used to hand back a hardcoded model guaranteed to differ from the writer.
+// With no defaults there is no such model to reach for, and inventing one is
+// exactly the behavior being removed. Disabling the critic is the honest
+// alternative and an already-supported state: the critic is ADVISORY and never
+// gates the verdict, so a run without one is weaker but not wrong — and the
+// verdict says so rather than implying a second opinion that never happened.
+const advPoolNoDistinctCritic = ""
 
 // parseAdvPoolModels parses CORRALAI_ADVPOOL_MODELS
 // ("mutant-generator=<m>,test-writer=<m>,test-critic=<m>") into a base
-// RoleAssignment. Returns (nil, nil) for the empty string (unset → caller uses
-// the hardcoded defaults). Every one of the three known roles must be present
+// RoleAssignment. Returns (nil, nil) for the empty string (unset → the caller
+// has no operator herd, and must get one from the leaderboard or refuse: there
+// are no hardcoded defaults). Every one of the three known roles must be present
 // with a non-empty model, no unknown role keys are allowed, and the result
 // must pass decorrelation (test-critic != test-writer) — otherwise an error is
 // returned and the caller falls back to the hardcoded defaults rather than
@@ -367,15 +369,20 @@ func parseAdvPoolModels(s string) (advpool.RoleAssignment, error) {
 	return out, nil
 }
 
-// advPoolAssign builds a decorrelation-enforced role assignment. The base
-// mutant-generator/test-writer models come from `defaults` (the operator's
-// CORRALAI_ADVPOOL_MODELS, or the hardcoded constants when defaults is nil);
-// the leaderboard's best-earned model per role still overrides when it has
-// evidence; test-critic is then forced to the best-earned model that is NOT
-// the test-writer's (falling back to a distinct default) so the result can
-// never fail CheckDecorrelation.
+// advPoolAssign builds a decorrelation-enforced role assignment, or returns nil
+// when it has not been told what to run.
+//
+// The base mutant-generator/test-writer models come from `defaults` (the
+// operator's CORRALAI_ADVPOOL_MODELS); the leaderboard's best-earned model per
+// role overrides when it has evidence. There is no hardcoded fallback: a nil
+// return means "no herd was configured and none was earned", and the caller
+// leaves the pool off rather than running an assignment nobody chose.
+//
+// test-critic is still forced to a model that is NOT the test-writer's, so the
+// result can never fail CheckDecorrelation — but when no distinct model is
+// available it is left EMPTY (disabled) instead of reaching for a constant.
 func advPoolAssign(staffing *mission.StaffingManager, defaults advpool.RoleAssignment) advpool.RoleAssignment {
-	mg, tw, tc := defaultAdvPoolModel, defaultAdvPoolModel, defaultAdvPoolCriticModel
+	var mg, tw, tc string
 	if defaults != nil {
 		if m := defaults[advpool.RoleMutantGenerator]; m != "" {
 			mg = m
@@ -408,12 +415,20 @@ func advPoolAssign(staffing *mission.StaffingManager, defaults advpool.RoleAssig
 
 	critic := tc
 	if critic == assign[advpool.RoleTestWriter] {
-		critic = advPoolFallbackCritic(assign[advpool.RoleTestWriter])
+		critic = advPoolNoDistinctCritic
 	}
 	if m := advPoolBestExcluding(stats, advpool.RoleTestCritic, assign[advpool.RoleTestWriter]); m != "" {
 		critic = m
 	}
 	assign[advpool.RoleTestCritic] = critic
+
+	// The two GRADING seats are what a run cannot proceed without. Neither
+	// configured nor earned means nobody has said what this brain should run,
+	// and there is no constant left to reach for — so say so instead of
+	// inventing one. (The critic may legitimately be empty: it is advisory.)
+	if assign[advpool.RoleMutantGenerator] == "" || assign[advpool.RoleTestWriter] == "" {
+		return nil
+	}
 	return assign
 }
 
@@ -436,7 +451,7 @@ type AdvPoolRuntime struct {
 	driver      *advpool.Driver
 	missions    *mission.Store
 	staffing    *mission.StaffingManager
-	defaults    advpool.RoleAssignment // operator CORRALAI_ADVPOOL_MODELS base (nil = hardcoded)
+	defaults    advpool.RoleAssignment // operator CORRALAI_ADVPOOL_MODELS base (nil = unset; no hardcoded fallback)
 	bugCatch    *bugcatch.Store        // optional scorecard store; nil = feature off (see StartRun)
 	criticScore *criticscore.Store     // optional critic-accuracy store; nil = feature off (see StartRun)
 	matrixStore *matrixstore.Store     // optional tests×mutants matrix store; nil = per-test rows not persisted (see StartRun)
@@ -754,6 +769,9 @@ func (rt *AdvPoolRuntime) StartRun(in AdvPoolRunSpec) (int64, error) {
 	}
 
 	assign := advPoolAssign(rt.staffing, rt.defaults)
+	if assign == nil {
+		return 0, fmt.Errorf("advpool: no models assigned — set CORRALAI_ADVPOOL_MODELS=\"mutant-generator=<m>,test-writer=<m>,test-critic=<m>\" (corral has no default models)")
+	}
 	if err := advpool.CheckDecorrelation(assign); err != nil {
 		// Unreachable given advPoolAssign's construction — fail loudly rather
 		// than silently starting a run under a decorrelation bug.
@@ -895,12 +913,23 @@ func StartAdversarialPool(ctx context.Context, opts Options) (*AdvPoolRuntime, e
 
 	defaults, derr := parseAdvPoolModels(os.Getenv("CORRALAI_ADVPOOL_MODELS"))
 	if derr != nil {
-		log.Printf("advpool: CORRALAI_ADVPOOL_MODELS invalid (%v) — falling back to defaults %s/%s", derr, defaultAdvPoolModel, defaultAdvPoolCriticModel)
-		defaults = nil
+		// Refuse rather than fall back. There is nothing to fall back TO, and
+		// a malformed herd is an operator mistake worth surfacing — running
+		// some other assignment would hide it behind results.
+		log.Printf("advpool: DISABLED — CORRALAI_ADVPOOL_MODELS is invalid (%v). Fix it, or unset it and let the leaderboard supply the herd", derr)
+		return nil, nil
 	}
 
 	jail := adequacy.NewJail(opts.GateBackend, gate.DefaultGateTimeout)
 	assign := advPoolAssign(opts.Staffing, defaults)
+	if assign == nil {
+		// No herd configured and none earned. corral has no default models, so
+		// there is nothing to start — and starting SOMETHING would be the
+		// behavior this removes. Same shape as the disabled branch above: the
+		// tool is simply never registered.
+		log.Printf("advpool: DISABLED — no models assigned. Set CORRALAI_ADVPOOL_MODELS=\"mutant-generator=<m>,test-writer=<m>,test-critic=<m>\", or let the leaderboard earn an assignment first")
+		return nil, nil
+	}
 	driver, err := advpool.NewDriver(opts.Queue, advpool.JailScorer{Jail: jail}, advpool.JailValidator{Jail: jail}, assign, 0.8)
 	if err != nil {
 		return nil, fmt.Errorf("advpool: new driver: %w", err)

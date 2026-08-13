@@ -936,11 +936,19 @@ func isRegularInRoot(root *os.Root, rel string) bool {
 //     keyed, but a named directory's CONTENTS are not, so a test inside it
 //     can grade the run without ever moving the key. Both halves compare
 //     through normalizeTestToken, so a trailing slash (`tests/unit/`) names
-//     the same directory. A directory holding only SELECTED tests is still
-//     allowed: it names nothing the key does not already cover.
+//     the same directory, and the repo root ("." or "./") gets an empty
+//     prefix so it matches every path — its tok+"/" form is "./", which
+//     prefixes no repo-relative path, so the general rule alone would ignore
+//     a token that names the entire suite. A directory holding only SELECTED
+//     tests is still allowed: it names nothing the key does not already
+//     cover.
 //     Everything else — a flag like -q or -k, a flag value like "not slow",
-//     a directory with no known test under it — is IGNORED: it cannot make a
-//     scan file-scoped.
+//     a directory with no known test under it — is IGNORED. Note which
+//     direction "ignored" points: an ignored token does not force whole-suite,
+//     so it LEAVES the scan file-scoped. That is the unsafe direction, and it
+//     is why the two residuals below are stated rather than filed away:
+//     everything the matching fails to recognize silently becomes a
+//     file-scoped key.
 //     RESIDUAL: exclusivity can only recognize tests the ENUMERATION knows
 //     about. An argv naming a test file Enumerate never saw — one under a
 //     skipped directory, or an unpaired file matching no test-filename
@@ -948,6 +956,15 @@ func isRegularInRoot(root *os.Root, rel string) bool {
 //     no key. Deliberately the same recognition set testSurfacePaths uses; a
 //     second, wider notion of "what is a test" would be free to drift from
 //     the first.
+//     RESIDUAL: exact and prefix matching are both TEXTUAL and
+//     repo-relative. An argv naming tests by an ABSOLUTE path
+//     (`/home/me/repo/tests/unit`) or through a SYMLINKED directory
+//     normalizes to a string the enumeration's repo-relative paths do not
+//     match, so it does not disqualify — and by the paragraph above, that
+//     leaves the scan file-scoped while those tests grade it. Closing this
+//     means resolving argv tokens against the repo root (and through
+//     symlinks) rather than comparing text, which is a larger change than
+//     this check.
 //   - --scope-tests only takes effect for a language with a VERIFIED per-file
 //     invocation and a paired test to scope to; otherwise testCmd silently
 //     falls back to the full suite. If even one selected file would fall back,
@@ -984,11 +1001,20 @@ func gradesFileScoped(checkArgv []string, scopeTests bool, selected, cands []rep
 			if known[tok] && !selectedTests[tok] {
 				return false
 			}
+			// The repo root is spelled "." (and "./", which normalizes to the
+			// same thing), and its tok+"/" form is "./" — which prefixes NO
+			// repo-relative path. Left to the general rule the root token
+			// would be silently ignored while naming every test in the tree,
+			// so it gets an empty prefix, which every path matches.
+			prefix := tok + "/"
+			if tok == "." {
+				prefix = ""
+			}
 			for kt := range known {
 				if selectedTests[kt] {
 					continue
 				}
-				if strings.HasPrefix(kt, tok+"/") {
+				if strings.HasPrefix(kt, prefix) {
 					return false
 				}
 			}

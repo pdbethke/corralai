@@ -420,3 +420,42 @@ func TestGradesFileScopedAllowsADirectoryHoldingOnlySelectedTests(t *testing.T) 
 		t.Fatal("`tests/other/` and `tests/other` name the same directory — a trailing slash must not defeat the check")
 	}
 }
+
+// RESIDUAL 1, third shape. `.` is the repo root, so it names every test in the
+// tree — but its prefix form is "./", which prefixes no repo-relative path, so
+// the directory check ignored it and the scan keyed file-scoped while the whole
+// suite graded the run.
+func TestKeyMovesWhenTheUnselectedTestIsNamedViaTheRepoRoot(t *testing.T) {
+	cands := []reposcan.Candidate{
+		{Path: "a.py", TestPath: "tests/test_a.py", Lang: "python"},
+		{Path: "b.py", TestPath: "tests/unit/test_b.py", Lang: "python"},
+	}
+	selected := cands[:1]
+	for _, root := range []string{".", "./"} {
+		if gradesFileScoped([]string{"pytest", "tests/test_a.py", root}, false, selected, cands, nil) {
+			t.Fatalf("an argv naming the repo root (%q) was called file-scoped — it runs every test in the tree, including the one grading a.py", root)
+		}
+	}
+	argv := []string{"pytest", "-q", "tests/test_a.py", "."}
+	mk := func(otherTest string) string {
+		dir := t.TempDir()
+		writeTree(t, dir, map[string]string{
+			"a.py": "def a():\n    return 1\n", "b.py": "def b():\n    return 2\n",
+			"tests/test_a.py":      "def test_a():\n    assert True\n",
+			"tests/unit/test_b.py": otherTest,
+		})
+		return dir
+	}
+	strong := keysFor(t, mk("def test_b():\n    assert b() == 2\n"), cands, selected, nil, argv, false)
+	weak := keysFor(t, mk("def test_b():\n    pass\n"), cands, selected, nil, argv, false)
+
+	if strong["a.py"] == weak["a.py"] {
+		t.Fatal("weakening tests/unit/test_b.py left a.py's key unchanged — the argv named the repo root, so every test runs and grades a.py, and auditConfigKey digests only the argv TEXT")
+	}
+	// The root token must still be allowed when there is no test outside the
+	// selected set for it to pull in.
+	one := []reposcan.Candidate{{Path: "a.py", TestPath: "tests/test_a.py", Lang: "python"}}
+	if !gradesFileScoped([]string{"pytest", ".", "tests/test_a.py"}, false, one, one, nil) {
+		t.Fatal("the repo root names nothing outside the selected set when the selected set is every known test")
+	}
+}

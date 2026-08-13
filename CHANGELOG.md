@@ -9,6 +9,77 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
+## [v0.5.0] — 2026-08-13
+
+### Added
+
+- **The verdict cache is real.** `reposcan` has carried a content-addressed cache
+  key, a `Cache` interface and consult/populate call sites since v0.3.0 — with no
+  implementation, and `nil` passed in production. Every scan recomputed every file
+  forever while honestly reporting `CacheHits: 0`. There is now a DuckDB-backed
+  implementation, owner-scoped in SQL, and it is enabled.
+  **It fails closed without exception:** an unreadable row, verdict JSON that will
+  not parse, a missing store or an empty owner all resolve to a MISS. A miss costs
+  money; a wrong hit signs a claim about content that was never measured.
+- **The ledger records what it measures.** `scan_files` gains the verdict's own
+  numbers as columns — model attribution, mutant and region counts, the coverage
+  shortfall, status, and the honesty flags — plus `cache_hit`/`reused_from_scan_id`
+  so an aggregate can EXCLUDE reused rows. Without that, enabling the cache would
+  have made one measurement count once per scan forever.
+- **`scan_mutants`** — one row per mutant per file per scan. "Which generator
+  produces mutants a suite does not catch" is a question about mutants and could
+  not be asked of a table whose finest row was a file. The mutant SOURCE is
+  deliberately not stored: `parent_sha256` is enough to group and compare without
+  putting tenant code at rest in the warehouse.
+- **`suite_baseline_ms`** — the target suite's runtime, which `adequacy.Score` has
+  measured on every run since the package existed and then thrown away. It is the
+  single input to the audit cost model (`O(mutants × suite runtime)`), so every
+  capacity estimate before this was an extrapolation.
+- **Token accounting.** Every provider reports usage on every response and corral
+  discarded it at the JSON boundary. `certify --local` now ends with
+  `model spend: N in / M out token(s) over K model call(s)`. Tokens, not dollars —
+  prices change, a token count stays true.
+- **Reuse is disclosed by AGE**, not just counted: the report names the oldest
+  reused verdict. A scan where most files were reused from weeks ago, presented as
+  current, is the self-flattering record this tool exists to prevent.
+
+### Fixed
+
+- **The jail can see the passwd database.** Without `/etc/passwd` the jail's uid
+  has no entry, so `getpass.getuser()` raises — and PyTorch calls it at import
+  while computing its cache directory. Any Python project transitively importing
+  `torch` or `transformers` died before pytest collected a test, reporting
+  `COULD-NOT-GRADE` indistinguishably from a broken project. `/etc/shadow` is not
+  bound and a test pins that it never will be.
+- **The cache key was blind to what it keyed.** `ModelSet` and `AuditConfig` were
+  hardcoded literals, so the key could not tell two model sets apart — and the
+  same constant reached the ledger, meaning every row ever written recorded
+  `model_set='unset'`. Both now carry real values.
+- **`EngineVersion` is a deliberate `VerdictGeneration`**, hand-bumped when engine
+  behavior can move a verdict. It was the release version, so a documentation-only
+  release invalidated every cached verdict for every tenant.
+- **Five wrong-hit paths**, each of which would have signed a claim about content
+  that was never measured: mutant source reachable from a marshalled `Verdict`
+  (closed by type, via `advpool.MutantRef`); the operator's own `-- <cmd>` absent
+  from the key; `TestSurfaceDigest` covering one paired test file while the whole
+  suite grades; Go `testdata/` goldens outside the keying surface; and a
+  file-scoped scan declared on an argv that names tests beyond the selected set
+  (closed across exact-path, directory and repo-root token forms).
+
+### Known limitations
+
+Documented in code as open wrong-hit paths, not as design: the file-scoped path
+ignores the test-surface list, so weakening `tests/conftest.py` leaves the key
+unmoved; a repo-root `conftest.py` with tests under `tests/` is uncovered; and
+argv tokens given as absolute paths or symlinked directories do not disqualify a
+file-scoped scan.
+
+Two properties worth knowing before judging the cache on hit rate: **any test-file
+change invalidates every verdict** on the whole-suite path (correct — the grading
+surface really did change for every file), and **`GoalDigest` moves between runs**
+because goals are LLM-derived per run, so unless `--goals` is pinned the cache is
+largely inert.
+
 ## [v0.4.0] — 2026-08-13
 
 ### Changed — BREAKING
@@ -212,6 +283,7 @@ and a long run of honesty fixes.
 
 First tagged release.
 
+[v0.5.0]: https://github.com/pdbethke/corralai/releases/tag/v0.5.0
 [v0.4.0]: https://github.com/pdbethke/corralai/releases/tag/v0.4.0
 [v0.3.6]: https://github.com/pdbethke/corralai/releases/tag/v0.3.6
 [v0.3.5]: https://github.com/pdbethke/corralai/releases/tag/v0.3.5

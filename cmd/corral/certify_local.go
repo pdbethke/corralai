@@ -102,6 +102,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	repoFlag := fs.String("repo", "", "repository (default: git remote.origin.url, else \"local\")")
 	commitFlag := fs.String("commit", "", "commit sha (default: git rev-parse HEAD, else \"local\")")
 	outFlag := fs.String("out", "", "also write the signed verdict as a self-contained record file, re-verifiable offline with `corral certify verify <file> --pubkey <hex> --allow-unanchored`")
+	quietFlag := fs.Bool("quiet", false, "suppress the live progress echo on stderr (the verdict, --out and --record are unaffected)")
 	repoDirFlag := fs.String("repo-dir", "", "audit --code IN THE CONTEXT of this cloned repo/package: the whole tree is seeded into the jail, the file is mutated in place, and the project's OWN test command (given after `--`) grades it — so real multi-file projects with package imports work (--code/--test are repo-relative)")
 	recordFlag := fs.String("record", "", "write a replayable tape of the run (the pool's reasoning beats, task lifecycle, and findings) to this JSON file — the same {events:[…]} shape the corralai.dev cockpit replays")
 	swarmFlag := fs.Int("swarm", 0, "max concurrent audit workers (0 = auto-size to this host's cores). The BUDGET clamp: independent role tasks run in parallel up to this bound, so a big audit swarms without melting the box")
@@ -144,9 +145,14 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	// --record: collect the run into a replayable tape. The sink is the driver's
 	// EventSink (pool reasoning beats) and is also fed the task lifecycle +
 	// findings from the drive loop, so one ordered stream is the tape.
-	var rec *recordSink
-	if strings.TrimSpace(*recordFlag) != "" {
-		rec = &recordSink{}
+	// The sink now exists on EVERY run, not only under --record: it is what
+	// feeds the live progress echo. Without it a run printed four lines and
+	// then went silent for minutes while eight seats worked, which reads as a
+	// hang rather than as work. The tape is still only WRITTEN when --record
+	// asks for one.
+	rec := &recordSink{}
+	if !*quietFlag {
+		rec.live = stderr
 	}
 
 	// The persistent build ledger + signing key `corral certify`/`corral certify

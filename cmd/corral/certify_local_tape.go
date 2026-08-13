@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"sync"
 
 	"github.com/pdbethke/corralai/internal/matrix"
@@ -88,6 +89,17 @@ type recordSink struct {
 	mu     sync.Mutex
 	ts     int
 	events []recEvent
+	// live, when set, echoes every beat as a human-readable line as it
+	// happens. The beats already existed — they were captured for REPLAY and
+	// never shown live, so a run printed four lines and then went silent for
+	// minutes while eight seats worked. Watching the herd work is most of what
+	// makes the tool legible, and it was being written to a file instead of
+	// the terminal.
+	//
+	// It writes to STDERR by design: stdout carries the verdict and anything
+	// --out/--json produces, and progress must never contaminate a stream
+	// something else is parsing.
+	live io.Writer
 }
 
 func (r *recordSink) add(kind, actor, subject string, detail map[string]any) {
@@ -98,6 +110,59 @@ func (r *recordSink) add(kind, actor, subject string, detail map[string]any) {
 	defer r.mu.Unlock()
 	r.ts++
 	r.events = append(r.events, recEvent{Ts: r.ts, Kind: kind, Actor: actor, Subject: subject, Detail: detail})
+	if r.live != nil {
+		if line := renderBeat(kind, actor, subject, detail); line != "" {
+			fmt.Fprintln(r.live, line)
+		}
+	}
+}
+
+// renderBeat turns one tape event into a line worth watching, or "" for the
+// beats that are only meaningful to a replay.
+//
+// Deliberately selective: echoing every event verbatim would be a firehose that
+// tells a newcomer less than silence did. These are the beats that answer "is
+// it working, and what is it doing" — a seat starting, mutants landing, the
+// suite being scored, a retry, and the two results.
+func renderBeat(kind, actor, subject string, detail map[string]any) string {
+	num := func(k string) (int, bool) {
+		switch v := detail[k].(type) {
+		case int:
+			return v, true
+		case int64:
+			return int(v), true
+		case float64:
+			return int(v), true
+		}
+		return 0, false
+	}
+	short := subject
+	if i := strings.LastIndexByte(short, '/'); i >= 0 && len(short) > 40 {
+		short = short[i+1:]
+	}
+	switch kind {
+	case "task_claimed":
+		return fmt.Sprintf("  · %s started (%s)", actor, short)
+	case "pool_subject":
+		return fmt.Sprintf("  · auditing %s", short)
+	case "task_done":
+		if n, ok := num("mutants"); ok {
+			return fmt.Sprintf("  · %s produced %d mutant(s)", actor, n)
+		}
+		return fmt.Sprintf("  · %s finished", actor)
+	case "task_retry":
+		return fmt.Sprintf("  · %s retrying (%s)", actor, short)
+	case "pool_dev_adequacy":
+		killed, kok := num("killed")
+		total, tok := num("mutants_total")
+		if kok && tok {
+			return fmt.Sprintf("  · scored your suite: killed %d of %d", killed, total)
+		}
+		return "  · scored your suite"
+	case "pool_verdict":
+		return "  · verdict signed"
+	}
+	return ""
 }
 
 // Emit implements advpool.EventSink: the driver's pool reasoning beats, all

@@ -11,6 +11,16 @@ draft: false
 
 ---
 
+> **Update, 2026-08-13.** The default configuration this note is about no longer
+> exists. corral now ships with **no default models at all** — on the CLI, in the
+> GitHub Action, and on the hosted brain. Every seat is named by the operator, and
+> a run with an unnamed grading seat is refused rather than quietly filled. The
+> argument below is left exactly as written, because it is the diagnosis that led
+> to the change: the problem was never that Claude is a poor default, it was that
+> *having* one made the failure the recommended path.
+
+---
+
 Corral's design has three seats, and the whole argument is that they must not be filled by the same model.
 
 One model plants deliberate faults in your code. A **different** model writes the test that kills them. A **third**, deliberately decorrelated, reads your suite cold and says which of your tests assert nothing. There is a function called `CheckDecorrelation` that refuses to start a run where the critic and the test-writer are the same model. A judge may not certify her own cause; we named the product after the idea.
@@ -33,7 +43,7 @@ Not a quality compromise. The exact failure the product exists to prevent, shipp
 
 The convenient thing would be to file that under "good thing we didn't build it." But the CLI backend wasn't going to *introduce* the problem. It was going to make it unavoidable.
 
-Corral's default assignment today is `claude-sonnet-5` planting faults, `claude-sonnet-5` writing the killing test, and `claude-haiku-4-5` reading the suite. `CheckDecorrelation` passes: the critic differs from the writer. Every seat is one vendor, one lineage.
+Corral's default assignment, when this was written, is `claude-sonnet-5` planting faults, `claude-sonnet-5` writing the killing test, and `claude-haiku-4-5` reading the suite. `CheckDecorrelation` passes: the critic differs from the writer. Every seat is one vendor, one lineage.
 
 Now think about where the code came from. A large and growing share of the code anyone will point this at was written by an AI assistant, and right now that assistant is very often Claude. So the default configuration of a tool whose entire claim is *no model may mark its own exam* is: **the model that wrote your code marks your exam.**
 

@@ -106,11 +106,16 @@ func runScansList(args []string, open func(string) (scansReader, error), stdout,
 	}
 
 	tw := tabwriter.NewWriter(stdout, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, "ID\tWHEN\tREPO\tCOMMIT\tSUBSTRATE\tAUDITED\tCANDIDATES\tKILL RATE\t")
+	// REUSED sits next to AUDITED deliberately: those two numbers only mean
+	// something together. cache_hits was always 0 before the verdict cache
+	// shipped, so leaving it unprinted was harmless — now a scan can be 24 of
+	// 25 files reused from three weeks ago, and a reader shown only a kill
+	// rate would take it for a fresh measurement of today's code.
+	fmt.Fprintln(tw, "ID\tWHEN\tREPO\tCOMMIT\tSUBSTRATE\tAUDITED\tREUSED\tCANDIDATES\tKILL RATE\t")
 	for _, r := range rows {
-		fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%d\t%d\t%s\t\n",
+		fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%d\t%d\t%d\t%s\t\n",
 			r.ID, r.TS.Format("2006-01-02 15:04"), r.Repo, shortCommit(r.Commit),
-			r.Substrate, r.Audited, r.Candidates, formatKillRate(r.KillRate))
+			r.Substrate, r.Audited, r.CacheHits, r.Candidates, formatKillRate(r.KillRate))
 	}
 	tw.Flush()
 	return 0
@@ -210,6 +215,22 @@ func authoredTestOutcome(f scanstore.File) string {
 // and the whole point of storing these flags was that a later reader must not
 // have to re-derive which — so the reader must actually say it.
 func scanFileNote(f scanstore.File) string {
+	note := baseScanFileNote(f)
+	// Reuse is disclosed ALONGSIDE the diagnosis, never instead of it: this
+	// row's numbers were not measured by the scan being read, they were served
+	// from a prior scan's cache_key match, and a reader comparing two scans
+	// must not mistake a repeat for a re-measurement. It leads the note
+	// because it qualifies everything after it.
+	if f.CacheHit {
+		if note == "" {
+			return "REUSED — verdict served from an earlier scan"
+		}
+		return "REUSED — verdict served from an earlier scan; " + note
+	}
+	return note
+}
+
+func baseScanFileNote(f scanstore.File) string {
 	switch {
 	case f.TimedOut:
 		return "TIMED OUT — pool did not converge"

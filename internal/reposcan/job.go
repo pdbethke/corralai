@@ -35,6 +35,45 @@ type EmitConfig struct {
 	// key identically: without it, a cached jail verdict would satisfy a
 	// seal claiming runner provenance.
 	Substrate string
+	// FileScopedTests is true when this scan grades each file against its OWN
+	// paired test file only (--scope-tests on a language with a verified
+	// per-file invocation, or an explicit `-- <cmd>` that names one test
+	// file). It decides what TestSurfaceDigest has to cover: one file, or the
+	// whole suite. See DigestTestSurface.
+	FileScopedTests bool
+	// TestSurfacePaths are files that grade in a whole-suite run but are
+	// nobody's paired test, so they never appear as a Candidate.TestPath —
+	// yet changing one really does change what the suite measures.
+	//
+	// Two kinds, and only the first is caught by a filename marker:
+	//   - files Enumerate rejected as `is-test` (foo_test.go, spec_helper.rb).
+	//   - everything else living in a directory that holds a test file:
+	//     conftest.py, helpers.py, fixtures.py, jest.setup.js, golden JSON.
+	//     These match no test-filename marker, so Enumerate classifies them
+	//     `no-paired-test` or `no-language`; the CALLER, not this package,
+	//     decides they belong to the surface (see testSurfacePaths in
+	//     cmd/corral). Deliberately over-inclusive.
+	//   - regular files under a `testdata` segment. That directory is in
+	//     skipDirs, so a Go golden comes back `skipped-dir` and its directory
+	//     holds no recognized test — neither rule above reaches it. Weakening
+	//     a golden is the commonest way a Go suite changes what it measures.
+	//
+	// WHAT IS STILL NOT COVERED, so a maintainer can decide how far to trust
+	// the key:
+	//   - a fixture file in a directory that holds no test file. A repo-root
+	//     conftest.py with all its tests under tests/ is the live example: it
+	//     configures every one of them and reaches no key.
+	//   - a non-regular entry under testdata (it is skipped rather than
+	//     erroring, since a scan-fatal error would be the worse failure).
+	//   - THE FILE-SCOPED PATH IGNORES THIS LIST ENTIRELY. When
+	//     FileScopedTests is set the digest is the one paired test file, so
+	//     `-- pytest tests/test_a.py` — which really does load
+	//     tests/conftest.py — leaves the key unmoved when that fixture is
+	//     weakened. That is an OPEN WRONG-HIT PATH, not a design statement:
+	//     the cache can serve a kill rate for a grading surface that changed.
+	//
+	// No new walk: the caller already has this list.
+	TestSurfacePaths []string
 }
 
 // EmitJobs turns candidates into job envelopes, computing each one's cache
@@ -55,6 +94,36 @@ func EmitJobs(cfg EmitConfig, cands []Candidate, gs GoalSource) ([]Job, []Exclus
 		return nil, nil, err
 	}
 	defer func() { _ = root.Close() }()
+
+	// The grading surface decides the digest. Unless this scan grades each
+	// file against its own paired test (see EmitConfig.FileScopedTests), the
+	// command every baseline and every mutant runs is the project's WHOLE
+	// recursive suite — so TestSurfaceDigest has to cover the whole suite, not
+	// the one paired file. Computed ONCE for the scan, not per candidate:
+	// every job on this path is graded by the same suite.
+	suiteDigest := ""
+	if !cfg.FileScopedTests {
+		paths := make([]string, 0, len(cands)+len(cfg.TestSurfacePaths))
+		for _, c := range cands {
+			if c.TestPath != "" {
+				paths = append(paths, c.TestPath)
+			}
+		}
+		paths = append(paths, cfg.TestSurfacePaths...)
+		d, derr := DigestTestSurface(root, paths)
+		if derr != nil {
+			// NOTE, because this is a WIDER hard failure than before the whole
+			// suite was keyed: any unreadable path in the surface — a test
+			// file removed or made non-regular between Enumerate and EmitJobs,
+			// including one belonging to a candidate this scan never selected
+			// — now aborts the ENTIRE scan, where previously only a SELECTED
+			// candidate's own test file could do that. Fail-closed on purpose:
+			// a surface we cannot read is a surface we cannot key, and a key
+			// computed over a guess would sign an unmeasured claim.
+			return nil, nil, derr
+		}
+		suiteDigest = d
+	}
 
 	for _, c := range cands {
 		goal, ok, err := gs.GoalFor(c)
@@ -86,9 +155,15 @@ func EmitJobs(cfg EmitConfig, cands []Candidate, gs GoalSource) ([]Job, []Exclus
 		if err != nil {
 			return nil, nil, err
 		}
-		testDigest, err := DigestFile(root, c.TestPath)
-		if err != nil {
-			return nil, nil, err
+		testDigest := suiteDigest
+		if cfg.FileScopedTests {
+			// One file is genuinely the whole grading surface here, so keying
+			// on the whole suite would throw away every verdict in the repo
+			// for a change that cannot reach them.
+			testDigest, err = DigestFile(root, c.TestPath)
+			if err != nil {
+				return nil, nil, err
+			}
 		}
 
 		key := KeyInputs{

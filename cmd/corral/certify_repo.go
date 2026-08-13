@@ -5,12 +5,15 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -361,10 +364,51 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, disclosure)
 	}
 
+	// The resolved role models are part of a verdict's identity: an audit run
+	// with a different mutant-generator is a different audit. Until this was
+	// wired, EmitConfig hardcoded ModelSet: "unset", so the cache key could
+	// not tell two model sets apart and every ledger row recorded "unset" —
+	// meaning the ledger could not be used to grade the models it exists to
+	// grade.
+	rmWriter, rmMutant, rmCritic, rmShadow := resolveRoleModels(localAuditInput{
+		writerModel: *writerModelFlag,
+		mutantModel: *mutantModelFlag,
+		criticModel: *criticModelFlag,
+		shadowModel: *shadowModelFlag,
+	})
+	modelSet := modelSetKey(rmWriter, rmMutant, rmCritic, rmShadow)
+
+	// AuditConfig, like ModelSet above, is part of a verdict's identity: it
+	// carries the flags that change what a mutant run against a given file
+	// MEASURES, not which files get audited. See auditConfigKey for the
+	// inclusion/exclusion rationale.
+	auditConfig := auditConfigKey(*scopeTestsFlag, checkArgv)
+
+	// testSurfacePaths has to STAT the testdata entries it admits, and every
+	// read a scan performs is confined to the repository through an *os.Root —
+	// a symlink pointing out of the checkout is the exfiltration path that
+	// confinement exists to block. Opened here and closed immediately: this is
+	// the same root EmitJobs opens for its own digests, held only as long as
+	// the surface list takes to build.
+	surfaceRoot, rerr := os.OpenRoot(*repoDir)
+	if rerr != nil {
+		fmt.Fprintf(stderr, "corral certify --repo: opening %s: %v\n", *repoDir, rerr)
+		return 1
+	}
+	surfacePaths := testSurfacePaths(surfaceRoot, cands, excl)
+	_ = surfaceRoot.Close()
+
 	cfg := reposcan.EmitConfig{
 		Owner: *owner, Repo: filepath.Base(*repoDir), Commit: *commit, Root: *repoDir,
-		EngineVersion: version, ModelSet: "unset", AuditConfig: "default",
+		EngineVersion: reposcan.VerdictGeneration, ModelSet: modelSet, AuditConfig: auditConfig,
 		Substrate: *substrateFlag,
+		// What the verdicts are GRADED BY decides what TestSurfaceDigest has
+		// to cover — one paired test file, or the whole suite. Both are
+		// computed from the same facts testCmd itself resolves the command
+		// from, so the key can never claim a narrower surface than the one
+		// that actually ran.
+		FileScopedTests:  gradesFileScoped(checkArgv, *scopeTestsFlag, selected, cands, excl),
+		TestSurfacePaths: surfacePaths,
 	}
 	jobs, goalExcl, err := reposcan.EmitJobs(cfg, selected, gs)
 	if err != nil {
@@ -486,6 +530,53 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
+	// Opened here, BEFORE the scan, so ONE handle serves two purposes: it is
+	// the verdict cache's read path during reposcan.Scan below (see
+	// newLedgerCache), and it is the ledger's write path in the --record
+	// block at the end of this function. Opening it only at the end, as this
+	// used to, would mean two separate handles on the same DuckDB file within
+	// one process — the cache would have nothing to read from during the
+	// scan it exists to speed up.
+	//
+	// This does NOT change --record's own meaning or when recording happens:
+	// the store is opened only when *recordFlag is set, exactly as it was
+	// opened only inside the (now-shorter) --record block before. --record-db
+	// alone still records nothing, silently — that behaviour is entirely
+	// gated by *recordFlag below, unchanged.
+	//
+	// One consequence is correct but surprising, so it is stated here rather
+	// than discovered: the handle is now held for the WHOLE scan, not just the
+	// instant of the final write. DuckDB is single-process-exclusive on a
+	// file, so during a long `--record` audit a concurrent `corral scans`
+	// against the same (default) DSN cannot open the ledger at all — see
+	// openScanStore, which already says so in its error. Nothing is lost; the
+	// reader simply has to wait, or be pointed at a copy.
+	//
+	// An unopenable DSN does not fail the scan: scanStoreErr is carried
+	// forward and reported in the --record block at the bottom, in the same
+	// place and the same words a write failure has always been reported —
+	// this is not a new failure path, just the existing one's error surfacing
+	// earlier in the run than the write itself does.
+	var scanStore *scanstore.Store
+	var scanStoreErr error
+	if *recordFlag {
+		dsn := *recordDSNFlag
+		if dsn == "" {
+			dsn = defaultScanDSN()
+		}
+		st, err := scanstore.Open(dsn)
+		if err != nil {
+			scanStoreErr = err
+		} else {
+			scanStore = st
+			// Deferred here, not in the --record block: this function has
+			// several early-return paths above --record's own site (the
+			// argvErr refusal just above, for one), and every one of them
+			// must still release the DuckDB handle.
+			defer func() { _ = scanStore.Close() }()
+		}
+	}
+
 	workers, swarmReadout := resolveScanWorkers(*swarmFlag, *substrateFlag)
 	fmt.Fprint(stdout, swarmReadout)
 	mutantConc := resolveMutantConcurrency(resolveSwarm(*swarmFlag), *substrateFlag, workers, len(jobs))
@@ -509,10 +600,11 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// ex is non-nil here: it is constructed on every non-dry-run path above,
 	// and the dry run returned before this point.
 	//
-	// Cache is nil in H1a: the content-addressed key exists (Task 2) but the
-	// persistent store behind it is H1b. A nil Cache means every job is
-	// computed fresh — slow, never stale.
-	results := reposcan.Scan(context.Background(), jobs, ex, nil, workers)
+	// scanStore was opened above, BEFORE this call, specifically so it could
+	// serve as the cache's read path here: newLedgerCache(nil) (no --record,
+	// or an unopenable DSN) already misses every key, so this needs no extra
+	// nil-guard — the cache is simply inactive for the run.
+	results := reposcan.Scan(context.Background(), jobs, ex, newLedgerCache(scanStore), workers)
 	rep := reposcan.Aggregate(*owner, cfg.Repo, *commit, totalFiles, len(cands), results, excl)
 
 	// The diff selected zero candidates: a docs-only (or no-paired-test-only)
@@ -521,7 +613,15 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// conflate it with "files were in scope and none could be graded".
 	nothingInScope := *diffBase != "" && len(selected) == 0
 
-	printRepoReport(stdout, rep, nothingInScope, minKillRate, unpairableInDiff)
+	// The age of the oldest reused verdict is handed to printRepoReport, not
+	// printed here: it belongs beside the "N verdict(s) reused from cache"
+	// count, which is emitted MID-report (weakest files and more follow it).
+	// Printed from here it landed detached at the very end, so the count and
+	// the age — one number that is meaningless without the other — were
+	// separated by everything in between. A zero time means nothing was
+	// reused.
+	oldestReused, _ := oldestReuse(results)
+	printRepoReport(stdout, rep, nothingInScope, minKillRate, unpairableInDiff, oldestReused)
 	// A distinct section, never folded into Excluded/Ungradable/the audited
 	// fraction: this is an inventory alongside the audit, not a change to
 	// it (see the brief). Printed unconditionally when the flag was given,
@@ -542,26 +642,403 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// off. Placed after `code` is computed, and calling nothing that can
 	// panic into the exit path below.
 	if *recordFlag {
-		dsn := *recordDSNFlag
-		if dsn == "" {
-			dsn = defaultScanDSN()
-		}
-		scan := scanstore.Scan{
-			Owner: *owner, Repo: cfg.Repo, Commit: *commit,
-			Substrate: *substrateFlag, EngineVersion: version, ModelSet: cfg.ModelSet,
-			Top: effectiveTop, AllCandidates: *allFlag, DiffBase: *diffBase,
-			TotalFiles: totalFiles, Candidates: rep.Candidates, Audited: rep.Audited,
-			KillRate: killRatePtr(rep.KillRate), CacheHits: rep.CacheHits,
-			PreflightRan: preflightResult.Ran, PreflightNote: preflightResult.Note,
-			StartedAt: startedAt, FinishedAt: time.Now(),
-		}
-		files := buildScanFileRows(results, rep.Excluded, preflightResult)
-		if err := recordCertifyRepoScan(dsn, scan, files); err != nil {
-			fmt.Fprintf(stderr, "corral certify --repo: scan ledger NOT written: %v\n", err)
+		if scanStoreErr != nil {
+			// The open failure happened earlier (above, before the scan) but
+			// is reported HERE — the same place and the same words a write
+			// failure has always been reported in, so this is not a new
+			// failure surface, just the pre-existing one's error arriving
+			// from an earlier point in the run.
+			fmt.Fprintf(stderr, "corral certify --repo: scan ledger NOT written: %v\n", scanStoreErr)
+		} else {
+			scan := scanstore.Scan{
+				Owner: *owner, Repo: cfg.Repo, Commit: *commit,
+				Substrate: *substrateFlag, EngineVersion: version, ModelSet: cfg.ModelSet,
+				Top: effectiveTop, AllCandidates: *allFlag, DiffBase: *diffBase,
+				TotalFiles: totalFiles, Candidates: rep.Candidates, Audited: rep.Audited,
+				KillRate: killRatePtr(rep.KillRate), CacheHits: rep.CacheHits,
+				PreflightRan: preflightResult.Ran, PreflightNote: preflightResult.Note,
+				StartedAt: startedAt, FinishedAt: time.Now(),
+			}
+			files := buildScanFileRows(results, rep.Excluded, preflightResult, stderr)
+			if err := recordCertifyRepoScan(scanStore, scan, files, results, stderr); err != nil {
+				fmt.Fprintf(stderr, "corral certify --repo: scan ledger NOT written: %v\n", err)
+			}
 		}
 	}
 
 	return exitCode
+}
+
+// auditConfigKey is the canonical KeyInputs.AuditConfig: the settings that can
+// change a given FILE's measured verdict.
+//
+// --top, --all and --diff-base are deliberately NOT here. They select which
+// files get audited; they do not change what a mutant run against an audited
+// file measures. Including them would stop a diff-scoped PR run from ever
+// reusing a nightly full-repo verdict for the same unchanged file — which is
+// most of the value the cache exists to deliver.
+//
+// --min-kill-rate is NOT here either, for a different reason: it decides this
+// process's EXIT CODE (see repoScanExitCode) and cannot change a measurement.
+// Keying it meant the CI merge-gate invocation — the one that always passes a
+// threshold — could never reuse a nightly verdict.
+//
+// The operator's `-- <cmd>` IS here, and it is the most load-bearing entry:
+// that argv is what testCmd hands to the baseline AND to every mutant, so it
+// is the grading surface itself. Without it, `-- pytest -q tests/unit` and a
+// later `-- pytest -q` key identically for unchanged source, and the
+// whole-suite run signs a kill rate measured against a subset it never ran.
+//
+// It is folded to a sha256 rather than written verbatim, for two reasons: a
+// real check command is long, and it routinely contains `=` and `,` — the
+// delimiters CanonicalKV itself uses, so operator text could otherwise forge
+// or corrupt neighbouring components. The words are joined on \x00 (a byte no
+// argv word can contain) so no re-splitting of the same characters can
+// collide. An EMPTY argv serializes as absent, never as the digest of an empty
+// string: the plugin-default path must key exactly as it always has.
+//
+// Bias when adding to this list: include. Over-inclusion causes a needless
+// miss, which costs money. Under-inclusion serves a stale verdict, which
+// signs an unmeasured claim.
+func auditConfigKey(scopeTests bool, checkArgv []string) string {
+	m := map[string]string{}
+	if scopeTests {
+		m["scope-tests"] = "true"
+	}
+	if len(checkArgv) > 0 {
+		sum := sha256.Sum256([]byte(strings.Join(checkArgv, "\x00")))
+		m["check-argv"] = hex.EncodeToString(sum[:])
+	}
+	return reposcan.CanonicalKV(m)
+}
+
+// testSurfacePaths is every file that can change what this repository's whole
+// recursive suite MEASURES — the grading surface of a scan with no
+// --scope-tests and no explicit `-- <cmd>`.
+//
+// The rule is DIRECTORY-based, not filename-based. A file counts if it lives
+// in a directory that holds at least one recognized test file, where the
+// recognized tests are:
+//
+//   - every CANDIDATE's paired test, including candidates --top or --diff-base
+//     left unselected. The suite does not stop running a test because this
+//     scan chose not to audit its source file.
+//   - every file Enumerate rejected as `is-test`.
+//
+// Filename markers alone are not enough, and that gap was live: `conftest.py`
+// — the most common Python shared-fixture file there is — matches none of the
+// `_test.` / `test_` / `_spec.` / `.test.` / `.spec.` / `spec_` markers, so
+// Enumerate files it as `no-paired-test` and it reached no key at all. Same
+// for tests/helpers.py, tests/fixtures.py, jest.setup.js and golden fixture
+// data. Weaken a fixture in any of them and every file's key used to stay put:
+// HIT, and the ledger repeats a kill rate for a suite that genuinely got worse.
+//
+// The widening is deliberately confined to the SURFACE. isTestFile still
+// decides which files are audit CANDIDATES and is untouched — widening that
+// would change what gets audited, a far larger blast radius than the cache.
+//
+// Over-inclusion is expected and fine: a README beside the tests now
+// invalidates. Over-invalidation costs a miss, which costs money.
+// Under-invalidation signs a claim about content that was never measured.
+//
+// Two exclusion reasons are still held out, because including them would break
+// the scan rather than widen it: `not-a-regular-file` (a symlink cannot be
+// read through the *os.Root and a FIFO would block forever) and `skipped-dir`
+// (build output the walk deliberately did not look at).
+//
+// ...with ONE carve-out in the skipped-dir holdout: `testdata`. It is in
+// skipDirs, so a Go golden fixture comes back as a skipped-dir exclusion, and
+// internal/foo/testdata/ holds no recognized test file either, so the directory
+// rule never reaches it. Weakening a golden is the commonest way a Go suite
+// changes what it measures — and Go is this repository's own language, so the
+// gap applied to corral auditing itself. Anything under a path segment named
+// exactly `testdata` is admitted.
+//
+// The carve-out is narrowed twice, both load-bearing:
+//   - It admits only entries CONFIRMED to be regular files, stat'ed through
+//     the scan's own *os.Root. skippedDirFiles emits a DIRECTORY path for an
+//     unreadable subtree, and DigestTestSurface hashes through DigestFile,
+//     which hard-errors on any non-regular entry — scan-fatal. So admitting a
+//     directory would abort scans rather than widen keys.
+//   - The stat goes through the SAME root the scan uses for its confined
+//     reads, never bare os.Stat: a symlink out of the checkout is exactly the
+//     exfiltration path that confinement exists to block.
+//
+// Residual: a testdata entry that is not a regular file is left OUT rather
+// than erroring. It cannot be a golden, and a scan-fatal error here would be
+// a worse failure than a slightly narrower surface — but it does mean such an
+// entry reaches no key.
+//
+// WHAT THIS STILL DOES NOT COVER — stated plainly, because a maintainer reads
+// this to decide whether to trust the key:
+//   - a fixture file in a directory that holds no recognized test. A repo-root
+//     conftest.py whose tests all live under tests/ configures every one of
+//     them and reaches no key at all.
+//   - a non-regular entry under testdata (see above).
+//   - THE FILE-SCOPED PATH IGNORES THIS LIST ENTIRELY. EmitJobs only digests
+//     the surface when FileScopedTests is false; when it is true the digest is
+//     the one paired test file. So `-- pytest tests/test_a.py` really does
+//     load tests/conftest.py, and weakening that fixture leaves the key
+//     unmoved: a HIT on a kill rate the changed suite would no longer
+//     produce. That is an OPEN WRONG-HIT PATH, not an intended narrowing.
+//
+// No new walk: both lists are already in hand at the call site; root is only
+// stat'ed for the testdata carve-out.
+func testSurfacePaths(root *os.Root, cands []reposcan.Candidate, excl []reposcan.Exclusion) []string {
+	dirOf := func(p string) string { return path.Dir(path.Clean(filepath.ToSlash(p))) }
+
+	// Pass 1: which directories hold a recognized test file.
+	testDirs := map[string]bool{}
+	for _, c := range cands {
+		if c.TestPath != "" {
+			testDirs[dirOf(c.TestPath)] = true
+		}
+	}
+	for _, e := range excl {
+		if e.Reason == reposcan.ReasonIsTest {
+			testDirs[dirOf(e.Path)] = true
+		}
+	}
+
+	// Pass 2: the recognized tests themselves, plus everything living beside
+	// one. DigestTestSurface cleans, de-duplicates and sorts, so repeats and
+	// order here are harmless.
+	paths := make([]string, 0, len(cands)+len(excl))
+	for _, c := range cands {
+		if c.TestPath != "" {
+			paths = append(paths, c.TestPath)
+		}
+		if testDirs[dirOf(c.Path)] {
+			paths = append(paths, c.Path)
+		}
+	}
+	for _, e := range excl {
+		switch e.Reason {
+		case reposcan.ReasonIsTest:
+			paths = append(paths, e.Path)
+		case reposcan.ReasonSkippedDir:
+			if underTestdata(e.Path) && isRegularInRoot(root, e.Path) {
+				paths = append(paths, e.Path)
+			}
+		case reposcan.ReasonNotRegularFile:
+			// Never digested — see the comment above.
+		default:
+			if testDirs[dirOf(e.Path)] {
+				paths = append(paths, e.Path)
+			}
+		}
+	}
+	return paths
+}
+
+// normalizeTestToken reduces an argv token or a candidate's TestPath to the
+// repo-relative file path it names, so the two can be compared. A pytest node
+// id (`tests/test_a.py::test_x`) names the same FILE as `tests/test_a.py`, and
+// the file is what the digest covers.
+func normalizeTestToken(tok string) string {
+	t := filepath.ToSlash(tok)
+	if i := strings.Index(t, "::"); i >= 0 {
+		t = t[:i]
+	}
+	return path.Clean(t)
+}
+
+// knownTestPaths is every path this scan's enumeration already recognizes as a
+// test FILE: each candidate's paired test (selected or not — the suite does
+// not stop running a test because this scan chose not to audit its source) and
+// every file Enumerate rejected as `is-test`.
+//
+// It exists for gradesFileScoped's exclusivity check, and it is deliberately
+// the same data testSurfacePaths draws on, from the same in-hand lists: no new
+// filesystem walk, and no second notion of "what is a test" to drift from the
+// first.
+func knownTestPaths(cands []reposcan.Candidate, excl []reposcan.Exclusion) map[string]bool {
+	known := make(map[string]bool, len(cands)+len(excl))
+	for _, c := range cands {
+		if c.TestPath != "" {
+			known[normalizeTestToken(c.TestPath)] = true
+		}
+	}
+	for _, e := range excl {
+		if e.Reason == reposcan.ReasonIsTest {
+			known[normalizeTestToken(e.Path)] = true
+		}
+	}
+	return known
+}
+
+// underTestdata reports whether rel has a path segment named exactly
+// `testdata` — the Go convention for fixture data, and a directory the walk
+// skips. Segment equality, not a substring: `internal/testdata_helpers/x.go`
+// is ordinary source, not fixture data.
+func underTestdata(rel string) bool {
+	for _, seg := range strings.Split(path.Clean(filepath.ToSlash(rel)), "/") {
+		if seg == "testdata" {
+			return true
+		}
+	}
+	return false
+}
+
+// isRegularInRoot reports whether rel is a regular file, stat'ed through the
+// scan's own confined root. Lstat, not Stat: a symlink must answer "no" on its
+// own terms rather than on its target's, since the target is not this
+// repository's content. Any error is a "no" — the caller's contract is to
+// leave the entry out of the surface rather than fail the scan.
+func isRegularInRoot(root *os.Root, rel string) bool {
+	if root == nil {
+		return false
+	}
+	fi, err := root.Lstat(path.Clean(filepath.ToSlash(rel)))
+	return err == nil && fi.Mode().IsRegular()
+}
+
+// gradesFileScoped answers the ONE question KeyInputs.TestSurfaceDigest turns
+// on: will every job in this scan really be graded against its own paired test
+// file alone? It deliberately mirrors localExecutor.testCmd's own resolution
+// order rather than reading the flags naively, because the flags are not the
+// answer:
+//
+//   - An explicit `-- <cmd>` outranks --scope-tests entirely (testCmd returns
+//     it verbatim), so the only file-scoped case there is a command that names
+//     a test file — `pytest -q tests/test_a.py`, or a pytest node id with a
+//     `::selector` on it. A command naming a DIRECTORY (`pytest -q tests/unit`)
+//     is a subset of the suite, not one file, so it stays whole-suite: the argv
+//     is in the cache key too (auditConfigKey), so a different subset keys
+//     differently anyway, and the whole-suite digest still covers every file
+//     inside that directory.
+//     ONE named test is not enough: testCmd hands the SAME argv to every job,
+//     so `-- pytest tests/test_a.py` with a.py and b.py both selected grades
+//     BOTH files with tests/test_a.py. Keying that as file-scoped would give
+//     b.py the digest of tests/test_b.py — a file that never runs — while the
+//     file that really grades it appears in no key at all (auditConfigKey
+//     digests the argv TEXT, which does not move when the named test's
+//     CONTENTS change). So every selected candidate's own test must be named;
+//     anything less keys as whole-suite. That over-invalidates a mixed argv,
+//     which costs a miss — money — where the other direction signs a kill rate
+//     for a surface that was never measured.
+//     Coverage alone is still not enough, and the converse hole was live:
+//     `-- pytest tests/test_a.py tests/test_b.py` with --top 1 (or a
+//     --diff-base) selecting only a.py names every SELECTED candidate's test,
+//     yet tests/test_b.py runs in that same command and its assertions kill
+//     a.py's mutants. Keyed file-scoped, a.py's key is digest(tests/test_a.py)
+//     alone; weaken tests/test_b.py and the key does not move — a HIT on a
+//     kill rate the weakened suite would no longer produce. So the argv must
+//     ALSO name no test file OUTSIDE the selected set. The known-test set is
+//     the enumeration's own (candidates' TestPaths plus the `is-test`
+//     exclusions, the same facts testSurfacePaths draws on) — no new walk.
+//     A token disqualifies the scan two ways: when it IS a known test path
+//     outside the selected set, and when it is a DIRECTORY PREFIX of one.
+//     The prefix half is not belt-and-braces — it was its own live hole:
+//     `-- pytest tests/test_a.py tests/unit` covers the one selected
+//     candidate's test, and `tests/unit` is not itself a known test FILE, so
+//     an exact-match-only check let it through — while tests/unit/test_b.py
+//     ran in that same command and killed a.py's mutants. The argv TEXT is
+//     keyed, but a named directory's CONTENTS are not, so a test inside it
+//     can grade the run without ever moving the key. Both halves compare
+//     through normalizeTestToken, so a trailing slash (`tests/unit/`) names
+//     the same directory, and the repo root ("." or "./") gets an empty
+//     prefix so it matches every path — its tok+"/" form is "./", which
+//     prefixes no repo-relative path, so the general rule alone would ignore
+//     a token that names the entire suite. A directory holding only SELECTED
+//     tests is still allowed: it names nothing the key does not already
+//     cover.
+//     Everything else — a flag like -q or -k, a flag value like "not slow",
+//     a directory with no known test under it — is IGNORED. Note which
+//     direction "ignored" points: an ignored token does not force whole-suite,
+//     so it LEAVES the scan file-scoped. That is the unsafe direction, and it
+//     is why the two residuals below are stated rather than filed away:
+//     everything the matching fails to recognize silently becomes a
+//     file-scoped key.
+//     RESIDUAL: exclusivity can only recognize tests the ENUMERATION knows
+//     about. An argv naming a test file Enumerate never saw — one under a
+//     skipped directory, or an unpaired file matching no test-filename
+//     marker — does not disqualify, so that file grades the run and reaches
+//     no key. Deliberately the same recognition set testSurfacePaths uses; a
+//     second, wider notion of "what is a test" would be free to drift from
+//     the first.
+//     RESIDUAL: exact and prefix matching are both TEXTUAL and
+//     repo-relative. An argv naming tests by an ABSOLUTE path
+//     (`/home/me/repo/tests/unit`) or through a SYMLINKED directory
+//     normalizes to a string the enumeration's repo-relative paths do not
+//     match, so it does not disqualify — and by the paragraph above, that
+//     leaves the scan file-scoped while those tests grade it. Closing this
+//     means resolving argv tokens against the repo root (and through
+//     symlinks) rather than comparing text, which is a larger change than
+//     this check.
+//   - --scope-tests only takes effect for a language with a VERIFIED per-file
+//     invocation and a paired test to scope to; otherwise testCmd silently
+//     falls back to the full suite. If even one selected file would fall back,
+//     this returns false for the whole scan. That over-invalidates the genuinely
+//     scoped files, which only costs money — the other direction would key a
+//     whole-suite grading run as if one file were the surface.
+func gradesFileScoped(checkArgv []string, scopeTests bool, selected, cands []reposcan.Candidate, excl []reposcan.Exclusion) bool {
+	if len(selected) == 0 {
+		return false
+	}
+	if len(checkArgv) > 0 {
+		named := make(map[string]bool, len(checkArgv))
+		for _, tok := range checkArgv {
+			named[normalizeTestToken(tok)] = true
+		}
+		// The tests this scan is allowed to be scoped to.
+		selectedTests := make(map[string]bool, len(selected))
+		for _, c := range selected {
+			if c.TestPath == "" {
+				return false
+			}
+			selectedTests[normalizeTestToken(c.TestPath)] = true
+		}
+		// Coverage: every selected candidate's own test must be named.
+		for t := range selectedTests {
+			if !named[t] {
+				return false
+			}
+		}
+		// Exclusivity: and NO test file outside that set may be named —
+		// directly, or by naming a directory that CONTAINS one.
+		known := knownTestPaths(cands, excl)
+		for tok := range named {
+			if known[tok] && !selectedTests[tok] {
+				return false
+			}
+			// The repo root is spelled "." (and "./", which normalizes to the
+			// same thing), and its tok+"/" form is "./" — which prefixes NO
+			// repo-relative path. Left to the general rule the root token
+			// would be silently ignored while naming every test in the tree,
+			// so it gets an empty prefix, which every path matches.
+			prefix := tok + "/"
+			if tok == "." {
+				prefix = ""
+			}
+			for kt := range known {
+				if selectedTests[kt] {
+					continue
+				}
+				if strings.HasPrefix(kt, prefix) {
+					return false
+				}
+			}
+		}
+		return true
+	}
+	if !scopeTests {
+		return false
+	}
+	for _, c := range selected {
+		p, ok := lang.ByName(c.Lang)
+		if !ok {
+			return false
+		}
+		fs, canScope := p.(lang.FileScopedTester)
+		if !canScope {
+			return false
+		}
+		if _, scoped := fs.FileScopedTestCmd(c.TestPath); !scoped {
+			return false
+		}
+	}
+	return true
 }
 
 // parseMinKillRate parses and range-validates the --min-kill-rate flag value.
@@ -1409,7 +1886,7 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 // corral could not pair with a test. It exists to keep the merge gate honest in
 // the one case where a green result is actively misleading: a zero-candidate
 // diff has two causes, and they are not the same answer.
-func printRepoReport(w io.Writer, r reposcan.RepoReport, nothingInScope bool, minKillRate *float64, unpairableInDiff []string) {
+func printRepoReport(w io.Writer, r reposcan.RepoReport, nothingInScope bool, minKillRate *float64, unpairableInDiff []string, oldestReused time.Time) {
 	commit := r.Commit
 	if strings.TrimSpace(commit) == "" {
 		// Never print a bare dangling "@ " — say plainly that the report is
@@ -1508,6 +1985,19 @@ func printRepoReport(w io.Writer, r reposcan.RepoReport, nothingInScope bool, mi
 	}
 	if r.CacheHits > 0 {
 		fmt.Fprintf(w, "  %d verdict(s) reused from cache\n", r.CacheHits)
+		// A hit COUNT alone is not disclosure — see oldestReuse's own doc
+		// comment. It goes here, in the same breath as the count, so the
+		// reader learns how old the oldest contributing verdict is before
+		// reading a single number the reuse helped produce.
+		//
+		// Rounded to the MINUTE, not the hour: an hour-rounded duration
+		// prints "(0s ago)" for anything under thirty minutes, so the
+		// commonest case of all — a CI re-run minutes after the first —
+		// read as though there were no age to disclose at all.
+		if !oldestReused.IsZero() {
+			fmt.Fprintf(w, "  reused verdicts: oldest earned %s (%s ago)\n",
+				oldestReused.UTC().Format(time.RFC3339), time.Since(oldestReused).Round(time.Minute))
+		}
 	}
 	if len(r.Weakest) > 0 {
 		fmt.Fprintln(w, "  weakest files:")

@@ -145,3 +145,48 @@ func TestScansList_LimitReachesTheStore(t *testing.T) {
 		t.Fatalf("store saw limit=%d, want 3", r.limit)
 	}
 }
+
+// A scan can be 24 of 25 files reused from three weeks ago, and before this
+// the reader showed only a kill rate: cache_hits and cache_hit were both read
+// back from SQL and neither was ever printed. That is precisely the
+// self-flattering record this tool exists to prevent — the number looks like a
+// fresh measurement of today's code.
+func TestScansListDisclosesCacheHits(t *testing.T) {
+	r := &fakeScansReader{scans: []scanstore.ScanRow{
+		{ID: 9, Scan: scanstore.Scan{Repo: "flask", Substrate: "workspace", Audited: 25, Candidates: 25, KillRate: ptrF(0.5), CacheHits: 24}},
+	}}
+	var out, errOut bytes.Buffer
+	if code := runScans([]string{"list"}, openFake(r), &out, &errOut); code != 0 {
+		t.Fatalf("exit = %d, stderr=%s", code, errOut.String())
+	}
+	got := out.String()
+	if !strings.Contains(got, "REUSED") {
+		t.Errorf("list view has no reuse column:\n%s", got)
+	}
+	if !strings.Contains(got, "24") {
+		t.Errorf("list view never printed the 24 reused verdicts:\n%s", got)
+	}
+}
+
+func TestScansShowMarksAReusedFile(t *testing.T) {
+	r := &fakeScansReader{files: []scanstore.File{
+		{Path: "fresh.py", Disposition: "audited", Survivors: 0, KillRate: ptrF(1)},
+		{Path: "reused.py", Disposition: "audited", Survivors: 0, KillRate: ptrF(1), CacheHit: true},
+	}}
+	var out, errOut bytes.Buffer
+	if code := runScans([]string{"show", "9"}, openFake(r), &out, &errOut); code != 0 {
+		t.Fatalf("exit = %d, stderr=%s", code, errOut.String())
+	}
+	got := out.String()
+	for _, line := range strings.Split(got, "\n") {
+		if strings.HasPrefix(line, "reused.py") && !strings.Contains(line, "REUSED") {
+			t.Errorf("a reused row does not say so:\n%s", got)
+		}
+		if strings.HasPrefix(line, "fresh.py") && strings.Contains(line, "REUSED") {
+			t.Errorf("a freshly earned row was marked reused:\n%s", got)
+		}
+	}
+	if !strings.Contains(got, "REUSED") {
+		t.Errorf("no reuse marker at all:\n%s", got)
+	}
+}

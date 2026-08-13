@@ -660,6 +660,45 @@ func herdNotConfiguredErr(cmdName, writer, mutant string) error {
 		strings.Join(empty, " and "), creds, cmd)
 }
 
+// resolveRoleModels is the naming half of resolveAuditRoles: it applies the
+// defaults and the "off" spellings, and does nothing else — no decorrelation
+// check, no credential requirement, no backend construction.
+//
+// It exists separately because the cache key needs the RESOLVED model names on
+// the free `--dry-run` path too, where there is no key to check and nothing to
+// spend. Keeping one spelling of "what model does this role actually use"
+// stops the key and the preflight from ever disagreeing.
+func resolveRoleModels(in localAuditInput) (writer, mutant, critic, shadow string) {
+	// No defaults behind any seat — corral has none. "off" resolves to "" for
+	// the two optional seats, and an empty grading seat is refused by the
+	// caller (herdNotConfiguredErr) rather than filled.
+	//
+	// This is the ONE place a seat's model is resolved, so the cache key and
+	// the run always agree about which models an audit used. They must: the
+	// key records the herd, and a key derived from a different resolution than
+	// the run would let a verdict be reused across a model change.
+	return strings.TrimSpace(in.writerModel),
+		strings.TrimSpace(in.mutantModel),
+		advpool.ResolveOptionalModel(in.criticModel, ""),
+		resolveShadowModel(in.shadowModel)
+}
+
+// modelSetKey is the canonical KeyInputs.ModelSet for a resolved role set.
+//
+// Role names are the wire names used everywhere else in this codebase
+// (test-writer, mutant-generator, critic, shadow) so a ledger row is legible
+// without a decoder ring. A disabled role keeps its resolved value ("off")
+// rather than being dropped: "the critic was deliberately disabled" and "the
+// critic ran" are different audits and must key differently.
+func modelSetKey(writer, mutant, critic, shadow string) string {
+	return reposcan.CanonicalKV(map[string]string{
+		"test-writer":      writer,
+		"mutant-generator": mutant,
+		"critic":           critic,
+		"shadow":           shadow,
+	})
+}
+
 // resolveAuditRoles resolves the role models, enforces decorrelation, requires
 // the provider credential, and builds the role→backend router. It is pure of
 // jail/store I/O on purpose so a caller can run it ONCE as a preflight — a
@@ -673,12 +712,7 @@ func resolveAuditRoles(in localAuditInput, stderr io.Writer) (auditRoles, error)
 	// Resolve the models and enforce decorrelation BEFORE doing any I/O — an
 	// operator override that collapses critic==writer must fail fast, not after
 	// opening stores and a jail.
-	writer := strings.TrimSpace(in.writerModel)
-	mutant := strings.TrimSpace(in.mutantModel)
-	// "off" resolves to "" for both optional seats; there is no fallback model
-	// behind either of them.
-	critic := advpool.ResolveOptionalModel(in.criticModel, "")
-	shadow := resolveShadowModel(in.shadowModel)
+	writer, mutant, critic, shadow := resolveRoleModels(in)
 	if err := herdNotConfiguredErr(in.cmdName, writer, mutant); err != nil {
 		return r, err
 	}
@@ -704,10 +738,9 @@ func resolveAuditRoles(in localAuditInput, stderr io.Writer) (auditRoles, error)
 		return r, auditUsageErr("%v — pass distinct --writer-model / --critic-model", err)
 	}
 
-	// Require a provider key. The default role models are Claude, so unless the
-	// operator selected a different MODEL_BACKEND we need ANTHROPIC_API_KEY. When
-	// MODEL_BACKEND is unset we default it to anthropic so FromEnv() builds the
-	// Claude backend the default models expect (rather than the ollama default).
+	// Require a provider key for whatever the operator actually named. There
+	// are no default models, so nothing here assumes a vendor: the backend a
+	// run needs is the one its ASSIGNED models imply.
 	backendSel := strings.TrimSpace(os.Getenv("MODEL_BACKEND"))
 	// When MODEL_BACKEND is unset, the backend this run needs is the one its
 	// ASSIGNED MODELS imply — not Claude by assumption. Naming gemini-* models

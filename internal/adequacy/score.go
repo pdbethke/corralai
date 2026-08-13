@@ -170,9 +170,19 @@ type Report struct {
 	// Empty on success (there is nothing to explain) and empty for a Jail that
 	// only implements RunTest.
 	BaselineOutput string
-	Total          int
-	Killed         []string
-	Survived       []string
+	// BaselineDuration is how long the compliant (unmutated) suite took.
+	//
+	// It was computed on every run since this package existed — to derive the
+	// per-mutant timeout — and then discarded. It is the single input to the
+	// audit cost model: cost is O(mutants x the TARGET's suite runtime), and
+	// that multiplier is the target's, not ours. Measured at 1.46s for
+	// pallets/flask and 77s for psf/requests, a 53x spread between two
+	// ordinary Python repos, which is why an estimate extrapolated from one
+	// repo is worthless. Recording it turns capacity planning into a query.
+	BaselineDuration time.Duration
+	Total            int
+	Killed           []string
+	Survived         []string
 }
 
 // VerboseJail is a Jail that can also report what a run PRINTED, not just
@@ -268,11 +278,12 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 			// score mutants against a baseline that can't even pass. The
 			// output rides along: "which test hung" is exactly the question a
 			// timed-out baseline leaves open.
-			return Report{CompliantPass: false, BaselineOutput: baseOut}, nil
+			return Report{CompliantPass: false, BaselineOutput: baseOut, BaselineDuration: baseDur}, nil
 		}
 		return Report{}, err
 	}
 	rep := Report{CompliantPass: pass}
+	rep.BaselineDuration = baseDur
 	if !pass {
 		// broken/overreaching test — do not score mutants (fail-safe: no kill
 		// rate for an invalid test). Carry the runner's own words: without them

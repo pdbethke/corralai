@@ -3,10 +3,95 @@
 package main
 
 import (
+	"io"
 	"testing"
 
+	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/reposcan"
+	"github.com/pdbethke/corralai/internal/scanstore"
 )
+
+// TestBuildScanMutantRows proves buildScanMutantRows — the one function
+// translating a Verdict's mutant-level evidence into scan_mutants rows — gets
+// the killed/survived outcome assignment and the Proven lookup right, and
+// that an ungradable result contributes nothing (nothing was ever scored for
+// it, so it has no mutant fates to record).
+func TestBuildScanMutantRows(t *testing.T) {
+	results := []reposcan.FileResult{
+		{
+			Job:      reposcan.Job{Path: "a.go", Lang: "go"},
+			Gradable: true,
+			Verdict: advpool.Verdict{
+				DevKilledMutants:   []advpool.MutantRef{{ID: "m1", ParentSHA256: "sha-m1"}},
+				DevSurvivedMutants: []advpool.MutantRef{{ID: "m2", ParentSHA256: "sha-m2"}, {ID: "m3", ParentSHA256: "sha-m3"}},
+				ProvenMutantIDs:    []string{"m2"},
+			},
+		},
+		{
+			Job:      reposcan.Job{Path: "b.go", Lang: "go"},
+			Gradable: false,
+			Reason:   reposcan.ReasonExecutorError,
+		},
+	}
+
+	rows := buildScanMutantRows(42, results)
+
+	if len(rows) != 3 {
+		t.Fatalf("buildScanMutantRows returned %d rows, want 3 (ungradable b.go must contribute nothing)", len(rows))
+	}
+	for _, r := range rows {
+		if r.Path != "a.go" {
+			t.Errorf("row for %s: ungradable result contributed a row, want none", r.Path)
+		}
+		if r.ScanID != 42 {
+			t.Errorf("row %+v: ScanID = %d, want 42", r, r.ScanID)
+		}
+	}
+
+	byID := make(map[string]scanstore.Mutant, len(rows))
+	for _, r := range rows {
+		byID[r.MutantID] = r
+	}
+
+	killed, ok := byID["m1"]
+	if !ok {
+		t.Fatalf("no row for killed mutant m1")
+	}
+	if killed.Outcome != "killed" {
+		t.Errorf("m1.Outcome = %q, want %q", killed.Outcome, "killed")
+	}
+	if killed.Proven {
+		t.Error("m1.Proven = true, want false — a killed mutant is not a survivor")
+	}
+	if killed.ParentSHA256 != "sha-m1" {
+		t.Errorf("m1.ParentSHA256 = %q, want %q", killed.ParentSHA256, "sha-m1")
+	}
+
+	provenSurvivor, ok := byID["m2"]
+	if !ok {
+		t.Fatalf("no row for survivor m2")
+	}
+	if provenSurvivor.Outcome != "survived" {
+		t.Errorf("m2.Outcome = %q, want %q", provenSurvivor.Outcome, "survived")
+	}
+	if !provenSurvivor.Proven {
+		t.Error("m2.Proven = false, want true — m2 is in ProvenMutantIDs")
+	}
+	if provenSurvivor.ParentSHA256 != "sha-m2" {
+		t.Errorf("m2.ParentSHA256 = %q, want %q", provenSurvivor.ParentSHA256, "sha-m2")
+	}
+
+	unprovenSurvivor, ok := byID["m3"]
+	if !ok {
+		t.Fatalf("no row for survivor m3")
+	}
+	if unprovenSurvivor.Outcome != "survived" {
+		t.Errorf("m3.Outcome = %q, want %q", unprovenSurvivor.Outcome, "survived")
+	}
+	if unprovenSurvivor.Proven {
+		t.Error("m3.Proven = true, want false — m3 is disclosed but unadjudicated, not in ProvenMutantIDs")
+	}
+}
 
 // TestExclusionEvidence_OnlyClaimsPairingWhenPairingWasAttempted fixes a
 // false evidence claim that sat in every scan ever recorded and was invisible
@@ -62,5 +147,29 @@ func TestExclusionEvidence_NeverInventsALabel(t *testing.T) {
 		if got := exclusionEvidence(reason, ""); got == "paired" {
 			t.Fatalf("an UNKNOWN reason must not claim pairing evidence, got %q", got)
 		}
+	}
+}
+
+// buildScanFileRows de-dupes on path and says it will not assume that
+// invariant holds forever; buildScanMutantRows iterated the same results with
+// no guard at all. A repeated path would therefore write ONE scan_files row
+// and TWO complete sets of scan_mutants rows — a silent double-count in
+// exactly the grain that exists for grading generators.
+func TestBuildScanMutantRowsDeDupesPathsLikeItsSibling(t *testing.T) {
+	one := reposcan.FileResult{
+		Job:      reposcan.Job{Path: "pkg/a.go", Lang: "go"},
+		Gradable: true,
+		Verdict: advpool.Verdict{
+			DevKilledMutants:   []advpool.MutantRef{{ID: "m1", ParentSHA256: "p"}},
+			DevSurvivedMutants: []advpool.MutantRef{{ID: "m2", ParentSHA256: "p"}},
+		},
+	}
+	rows := buildScanMutantRows(1, []reposcan.FileResult{one, one})
+	if len(rows) != 2 {
+		t.Fatalf("want 2 mutant rows for one duplicated path, got %d — the same measurement was counted twice", len(rows))
+	}
+	files := buildScanFileRows([]reposcan.FileResult{one, one}, nil, reposcan.CoverageMap{}, io.Discard)
+	if len(files) != 1 {
+		t.Fatalf("want 1 file row, got %d", len(files))
 	}
 }

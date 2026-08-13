@@ -15,7 +15,10 @@ import (
 // may be reused only when all of these are unchanged.
 //
 // TestSurfaceDigest is present because adequacy is a joint property of code
-// AND tests: a suite can be weakened without the source changing.
+// AND tests: a suite can be weakened without the source changing. It must
+// cover whatever the run is actually GRADED BY — one paired test file on the
+// file-scoped path, the whole enumerated test surface otherwise (see
+// DigestTestSurface, and EmitConfig.FileScopedTests for which applies).
 // PackageDigest is present because a file's kill rate can move when a helper
 // it calls changes. Keying on the file alone UNDER-invalidates, which serves
 // stale verdicts; keying on the package OVER-invalidates, which only costs
@@ -92,6 +95,55 @@ func DigestFile(root *os.Root, rel string) (string, error) {
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
 		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// DigestTestSurface is the sha256 over a SET of test files — every path in
+// paths, deduplicated and folded in sorted path order, name and content both.
+// It is the TestSurfaceDigest for a scan graded by the project's whole
+// recursive suite, where a single paired test file is not the grading surface:
+// the suite is.
+//
+// Under-keying here is the dangerous direction. Weaken a shared helper and,
+// with only the audited file's own paired test in the key, source, package and
+// paired test are all byte-identical — a HIT, and the ledger repeats an old
+// kill rate for a suite that genuinely got worse, signed, into a
+// tamper-evident record where nobody can find it afterwards.
+//
+// The consequence is deliberate and worth stating plainly: on the whole-suite
+// path, ANY change to ANY test file invalidates EVERY file's verdict in the
+// repo. That is CORRECT — the grading surface really did change for every
+// file — and it is the cheap direction of the asymmetry: over-invalidation
+// only costs money, under-invalidation signs an unmeasured claim.
+//
+// Length-prefixing follows DigestDir's discipline (see there): the path and
+// its content digest are both prefixed with their lengths, so no two different
+// path/digest SETS can fold to the same value by concatenation. Contents are
+// hashed via DigestFile, so every read is confined to root and non-regular
+// entries are refused rather than followed.
+func DigestTestSurface(root *os.Root, paths []string) (string, error) {
+	uniq := make(map[string]bool, len(paths))
+	clean := make([]string, 0, len(paths))
+	for _, p := range paths {
+		p = path.Clean(p)
+		if p == "" || p == "." || uniq[p] {
+			continue
+		}
+		uniq[p] = true
+		clean = append(clean, p)
+	}
+	// Sorted, not enumeration order: the key must not move because the walker
+	// happened to visit a directory in a different order on another machine.
+	sort.Strings(clean)
+
+	h := sha256.New()
+	for _, p := range clean {
+		d, err := DigestFile(root, p)
+		if err != nil {
+			return "", err
+		}
+		fmt.Fprintf(h, "%d:%s|%d:%s|", len(p), p, len(d), d)
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
 }

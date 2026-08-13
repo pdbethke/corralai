@@ -15,8 +15,10 @@ package scanstore
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	_ "github.com/marcboeker/go-duckdb/v2"
@@ -142,6 +144,81 @@ type File struct {
 	// question "what did it actually try?" had no answer at any price short of
 	// another run. "" when no compiling test was ever produced.
 	AuthoredTest string
+	// CacheKey is reposcan's content address for this file's audit — every
+	// input that can change the verdict, hashed. It is what makes a later
+	// scan able to reuse this row instead of re-running the suite once per
+	// mutant. "" for a rejected file: nothing was measured, so there is
+	// nothing to reuse.
+	CacheKey string
+	// VerdictJSON is the marshalled advpool.Verdict, stored whole rather than
+	// rebuilt from this row's individual columns. A reconstitution assembled
+	// field-by-field silently drops whatever the column list does not cover,
+	// and a verdict served back MISSING a field is a different claim from the
+	// one that was signed.
+	VerdictJSON string
+	// ComputedAt is when this verdict was actually earned, carried so a later
+	// reuse can disclose its AGE. A scan that reports reused work without
+	// saying how old it is presents stale measurement as current — the exact
+	// self-flattering record corral exists to prevent.
+	ComputedAt time.Time
+	// ModelsByRole is advpool.Verdict.ModelsByRole, serialized with
+	// reposcan.CanonicalKV so a per-file role assignment is byte-comparable
+	// with the scan-wide model_set — the same canonicalization, not a
+	// second one that could drift from it.
+	ModelsByRole string
+	// MutantsTotal is advpool.Verdict.MutantsTotal — the denominator a kill
+	// rate is computed over. Kept as its own column, not just inside
+	// VerdictJSON, because grading models means GROUP BY / SUM, and a blob
+	// cannot be aggregated.
+	MutantsTotal int
+	// RegionsTotal and RegionsProbed are advpool.Verdict.RegionsTotal /
+	// RegionsProbed — the mutant-generator seats the run dispatched, and the
+	// seats that actually returned usable mutants.
+	RegionsTotal  int
+	RegionsProbed int
+	// DroppedRegions are mutant-generator seats abandoned after
+	// MaxShardRetries — the run's COVERAGE SHORTFALL. A kill rate is over the
+	// mutants that were produced, not the ones that should have been, so a
+	// row with dropped regions is a weaker claim than one without, and a
+	// leaderboard that cannot see the difference is comparing unlike runs.
+	DroppedRegions string
+	// VacuousFindings is the COUNT of advpool.Verdict.VacuousFindings —
+	// test-critic's designed-to-pass/vacuous flags on this file's run.
+	VacuousFindings int
+	// Status is advpool.Verdict.Status ("certified" | "needs-review").
+	Status string
+	// AuthoredTestNotCollected mirrors advpool.Verdict.AuthoredTestNotCollected:
+	// the run proved a killing test compiled and ran, but the dev suite's own
+	// collection never picked it up, so ProvenMissed on this row is earned
+	// against a test the target project would never actually execute.
+	AuthoredTestNotCollected bool
+	// BaselineFailed mirrors advpool.Verdict.BaselineFailed: the dev suite did
+	// not pass on the UNMUTATED code, so DevKillRate on this row is
+	// meaningless — the audit had nothing sound to measure a mutant against.
+	BaselineFailed bool
+	// SuiteBaselineMillis mirrors advpool.Verdict.BaselineDuration, in
+	// milliseconds: the compliant (unmutated) suite's own wall-clock runtime.
+	// It is the single input to the audit cost model — O(mutants x the
+	// TARGET's suite runtime), measured at 1.46s for pallets/flask and 77s
+	// for psf/requests, a 53x spread — so AVG(suite_baseline_ms) over this
+	// ledger is what capacity planning should be computed FROM, not
+	// extrapolated from one repo. Milliseconds, not a Go duration: this
+	// column is read by SQL and by DuckDB-WASM in the browser, neither of
+	// which has a decoder for time.Duration.
+	SuiteBaselineMillis int64
+	// CacheHit mirrors reposcan.FileResult.CacheHit: true when this row's
+	// verdict was served from a prior scan's cache_key match rather than
+	// earned by running this scan's own mutants. Exists alongside
+	// ReusedFromScanID so an aggregate can exclude reused rows — without it,
+	// enabling the cache would make one measurement count once per scan
+	// forever, and whatever happened to be cached would dominate every
+	// average.
+	CacheHit bool
+	// ReusedFromScanID is the id of the scan whose row this one reused, or
+	// nil when this row was measured fresh. *int64, not int64: "not reused"
+	// must read back as NULL, not a scan id of 0, which would be a foreign
+	// key to nothing.
+	ReusedFromScanID *int64
 }
 
 // scanFilesMigrationCols is the additive set of columns this package has
@@ -164,6 +241,21 @@ var scanFilesMigrationCols = []struct{ name, ddl string }{
 	{"pool_test_unsound", "pool_test_unsound BOOLEAN"},
 	{"proven_mutant_ids", "proven_mutant_ids VARCHAR"},
 	{"authored_test", "authored_test VARCHAR"},
+	{"cache_key", "cache_key VARCHAR"},
+	{"verdict_json", "verdict_json VARCHAR"},
+	{"computed_at", "computed_at TIMESTAMP"},
+	{"models_by_role", "models_by_role VARCHAR"},
+	{"mutants_total", "mutants_total INTEGER"},
+	{"regions_total", "regions_total INTEGER"},
+	{"regions_probed", "regions_probed INTEGER"},
+	{"dropped_regions", "dropped_regions VARCHAR"},
+	{"vacuous_findings", "vacuous_findings INTEGER"},
+	{"status", "status VARCHAR"},
+	{"authored_test_not_collected", "authored_test_not_collected BOOLEAN"},
+	{"baseline_failed", "baseline_failed BOOLEAN"},
+	{"cache_hit", "cache_hit BOOLEAN"},
+	{"reused_from_scan_id", "reused_from_scan_id BIGINT"},
+	{"suite_baseline_ms", "suite_baseline_ms BIGINT"},
 }
 
 // Open opens (creating if absent) the scans/scan_files store at dsn.
@@ -219,7 +311,22 @@ func Open(dsn string) (*Store, error) {
 		proven_missed INTEGER,
 		pool_test_unsound BOOLEAN,
 		proven_mutant_ids VARCHAR,
-		authored_test VARCHAR
+		authored_test VARCHAR,
+		cache_key VARCHAR,
+		verdict_json VARCHAR,
+		computed_at TIMESTAMP,
+		models_by_role VARCHAR,
+		mutants_total INTEGER,
+		regions_total INTEGER,
+		regions_probed INTEGER,
+		dropped_regions VARCHAR,
+		vacuous_findings INTEGER,
+		status VARCHAR,
+		authored_test_not_collected BOOLEAN,
+		baseline_failed BOOLEAN,
+		cache_hit BOOLEAN,
+		reused_from_scan_id BIGINT,
+		suite_baseline_ms BIGINT
 	)`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("scanstore: create scan_files table: %w", err)
@@ -228,6 +335,38 @@ func Open(dsn string) (*Store, error) {
 	if err := migrateScanFiles(db); err != nil {
 		db.Close()
 		return nil, err
+	}
+
+	// scan_mutants is one row per mutant per file per scan — the grain a
+	// per-file kill rate averages away. "Which generator produces mutants a
+	// suite does not catch" is a question about mutants, and it cannot be
+	// asked of a table whose finest row is a file.
+	//
+	// The mutant's SOURCE is deliberately absent. ParentSHA256 ties the row to
+	// the exact bytes it was derived from, which is enough to group, count and
+	// compare, without putting a tenant's code at rest in the warehouse.
+	// Storing patches is a later, deliberate decision — it can be added, it
+	// cannot be un-added.
+	//
+	// There is NO reuse marker of its own here, and that is worth stating
+	// because it surprises: when a file's verdict is served from the verdict
+	// cache, its mutants are re-recorded under the new scan_id exactly like
+	// freshly-earned ones, so a naive leaderboard counts one measurement once
+	// per scan forever. Excluding reused mutants requires joining back to
+	// scan_files on (scan_id, path) and filtering on cache_hit — the flag
+	// lives there, at the grain the cache actually operates on.
+	//
+	// The CHECK on outcome exists for the same reason scan_files has one on
+	// evidence: this table is queried by exact string, and a typo'd label
+	// should fail loud at INSERT rather than quietly enter a leaderboard.
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS scan_mutants (
+		scan_id BIGINT, path VARCHAR, mutant_id VARCHAR,
+		outcome VARCHAR CHECK (outcome IN ('killed', 'survived')),
+		parent_sha256 VARCHAR,
+		proven BOOLEAN
+	)`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("scanstore: create scan_mutants table: %w", err)
 	}
 
 	// scans.id allocation: a CREATE SEQUENCE + nextval(), the same approach
@@ -343,11 +482,15 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 		if _, err := tx.ExecContext(ctx, `INSERT INTO scan_files (
 			scan_id, path, lang, disposition, reason,
 			kill_rate, survivors, gradable, preflight_state, evidence, detail, timed_out, test_writer_failed, proven_missed, pool_test_unsound,
-			proven_mutant_ids, authored_test
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			proven_mutant_ids, authored_test, cache_key, verdict_json, computed_at,
+			models_by_role, mutants_total, regions_total, regions_probed, dropped_regions, vacuous_findings, status,
+			authored_test_not_collected, baseline_failed, cache_hit, reused_from_scan_id, suite_baseline_ms
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id, f.Path, f.Lang, f.Disposition, f.Reason,
 			sanitizeKillRate(f.KillRate), f.Survivors, f.Gradable, f.PreflightState, f.Evidence, f.Detail, f.TimedOut, f.TestWriterFailed, f.ProvenMissed, f.PoolTestUnsound,
-			f.ProvenMutantIDs, f.AuthoredTest,
+			f.ProvenMutantIDs, f.AuthoredTest, f.CacheKey, f.VerdictJSON, f.ComputedAt,
+			f.ModelsByRole, f.MutantsTotal, f.RegionsTotal, f.RegionsProbed, f.DroppedRegions, f.VacuousFindings, f.Status,
+			f.AuthoredTestNotCollected, f.BaselineFailed, f.CacheHit, f.ReusedFromScanID, f.SuiteBaselineMillis,
 		); err != nil {
 			return 0, fmt.Errorf("scanstore: insert scan_files row for %q: %w", f.Path, err)
 		}
@@ -430,7 +573,10 @@ func (s *Store) Scans(ctx context.Context, limit int) ([]ScanRow, error) {
 func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT path, lang, disposition, reason,
 		kill_rate, survivors, gradable, preflight_state, evidence, detail, timed_out, test_writer_failed, proven_missed, pool_test_unsound,
-		proven_mutant_ids, authored_test
+		proven_mutant_ids, authored_test,
+		models_by_role, mutants_total, regions_total, regions_probed, dropped_regions, vacuous_findings, status,
+		authored_test_not_collected, baseline_failed, cache_hit, reused_from_scan_id,
+		suite_baseline_ms
 		FROM scan_files WHERE scan_id = ? ORDER BY rowid`, scanID)
 	if err != nil {
 		return nil, fmt.Errorf("scanstore: files for scan %d: %w", scanID, err)
@@ -444,9 +590,26 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		var timedOut, testWriterFailed, poolTestUnsound sql.NullBool
 		var provenMissed sql.NullInt64
 		var provenIDs, authoredTest sql.NullString
+		// The eleven verdict columns all read back nullable: a row written
+		// before this migration ran will not have them, and a rejected file
+		// was never scored, so NULL is the honest value for its counts too.
+		var modelsByRole, droppedRegions, status sql.NullString
+		var mutantsTotal, regionsTotal, regionsProbed, vacuousFindings sql.NullInt64
+		var authoredTestNotCollected, baselineFailed, cacheHit sql.NullBool
+		var reusedFromScanID sql.NullInt64
+		// suite_baseline_ms reads back nullable for the same reason the
+		// columns above do (pre-migration rows, and rejected files that were
+		// never scored). It is read back at all because capacity planning is
+		// meant to be a QUERY over this ledger — and this reader IS the query
+		// surface: DuckDB is single-process on a file, so ad-hoc CLI SQL is
+		// not a reliable fallback while a scan holds the handle open.
+		var suiteBaselineMS sql.NullInt64
 		if err := rows.Scan(&f.Path, &f.Lang, &f.Disposition, &f.Reason,
 			&f.KillRate, &f.Survivors, &f.Gradable, &f.PreflightState, &f.Evidence, &detail, &timedOut, &testWriterFailed, &provenMissed, &poolTestUnsound,
-			&provenIDs, &authoredTest); err != nil {
+			&provenIDs, &authoredTest,
+			&modelsByRole, &mutantsTotal, &regionsTotal, &regionsProbed, &droppedRegions, &vacuousFindings, &status,
+			&authoredTestNotCollected, &baselineFailed, &cacheHit, &reusedFromScanID,
+			&suiteBaselineMS); err != nil {
 			return nil, fmt.Errorf("scanstore: scan scan_files row: %w", err)
 		}
 		f.Detail = detail.String
@@ -464,7 +627,147 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		// "no evidence recorded", never a fabricated attempt.
 		f.ProvenMutantIDs = provenIDs.String
 		f.AuthoredTest = authoredTest.String
+		f.ModelsByRole = modelsByRole.String
+		f.MutantsTotal = int(mutantsTotal.Int64)
+		f.RegionsTotal = int(regionsTotal.Int64)
+		f.RegionsProbed = int(regionsProbed.Int64)
+		f.DroppedRegions = droppedRegions.String
+		f.VacuousFindings = int(vacuousFindings.Int64)
+		f.Status = status.String
+		f.AuthoredTestNotCollected = authoredTestNotCollected.Bool
+		f.BaselineFailed = baselineFailed.Bool
+		f.CacheHit = cacheHit.Bool
+		f.SuiteBaselineMillis = suiteBaselineMS.Int64
+		// ReusedFromScanID stays *int64: NULL (never reused, or a
+		// pre-migration row) must read back as nil, not a scan id of 0 — see
+		// the field's own doc.
+		if reusedFromScanID.Valid {
+			v := reusedFromScanID.Int64
+			f.ReusedFromScanID = &v
+		}
 		out = append(out, f)
 	}
 	return out, rows.Err()
+}
+
+// VerdictByCacheKey returns the most recently recorded verdict for (owner,
+// cacheKey), if any.
+//
+// Owner scoping is in the WHERE clause, not applied in Go after fetching:
+// this is the query that keeps one tenant's verdict from satisfying another
+// tenant's audit, and a filter that runs after the rows are already in memory
+// is one refactor away from being dropped.
+//
+// An empty owner is an ERROR, never a wildcard. The alternative is a shared
+// bucket that every tenant with an unset owner reads and writes.
+//
+// Rows with no verdict JSON are skipped rather than returned as an empty hit:
+// a row recorded before this column existed has nothing to reuse, and serving
+// "" as a verdict would be worse than missing.
+//
+// "Most recent" orders by (s.ts, s.id), not s.ts alone. s.ts is a TIMESTAMP
+// set from time.Now().UTC() at Record time, so two scans recorded within the
+// same tick (reachable on a fast machine, or under batched recording) would
+// tie on ts alone — and picking between two rows that could hold different
+// verdicts for the same content address on an arbitrary tiebreak is exactly
+// the ambiguity the package's fail-closed rule forbids. s.id is allocated
+// from the scans_id DuckDB SEQUENCE (see Open's comment on it), so it is
+// unique and monotonic with insertion order; ordering by (ts, id) makes
+// "most recent" a TOTAL order, so the tie case cannot arise rather than
+// being resolved arbitrarily — cheaper than falling back to a miss on tie,
+// which would force a needless full re-audit over what is really just clock
+// granularity.
+func (s *Store) VerdictByCacheKey(ctx context.Context, owner, cacheKey string) (string, time.Time, bool, error) {
+	if strings.TrimSpace(owner) == "" {
+		return "", time.Time{}, false, fmt.Errorf("scanstore: VerdictByCacheKey: empty owner")
+	}
+	if strings.TrimSpace(cacheKey) == "" {
+		return "", time.Time{}, false, nil
+	}
+	row := s.db.QueryRowContext(ctx, `
+		SELECT f.verdict_json, f.computed_at
+		FROM scan_files f JOIN scans s ON s.id = f.scan_id
+		WHERE s.owner = ? AND f.cache_key = ?
+		  AND f.verdict_json IS NOT NULL AND f.verdict_json <> ''
+		ORDER BY s.ts DESC, s.id DESC
+		LIMIT 1`, owner, cacheKey)
+	var js sql.NullString
+	var at sql.NullTime
+	switch err := row.Scan(&js, &at); {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", time.Time{}, false, nil
+	case err != nil:
+		return "", time.Time{}, false, fmt.Errorf("scanstore: VerdictByCacheKey: %w", err)
+	}
+	if !js.Valid || js.String == "" {
+		return "", time.Time{}, false, nil
+	}
+	return js.String, at.Time, true, nil
+}
+
+// Mutant is one mutant's fate in one scan.
+type Mutant struct {
+	ScanID       int64
+	Path         string
+	MutantID     string
+	Outcome      string // "killed" | "survived"
+	ParentSHA256 string
+	// Proven is true when this survivor was subsequently killed by the pool's
+	// AUTHORED test — a gap demonstrated by execution, not merely disclosed.
+	// Survived-and-proven and survived-and-unadjudicated are different claims
+	// and a leaderboard that conflates them is indefensible.
+	Proven bool
+}
+
+// RecordMutants appends mutant rows. An empty slice is a no-op, not an error:
+// a file whose baseline failed produced no mutants, and that is a normal
+// outcome the caller should not have to special-case.
+func (s *Store) RecordMutants(ctx context.Context, ms []Mutant) error {
+	if len(ms) == 0 {
+		return nil
+	}
+	for _, m := range ms {
+		if m.Outcome != "killed" && m.Outcome != "survived" {
+			return fmt.Errorf("scanstore: RecordMutants: %s/%s: unknown outcome %q", m.Path, m.MutantID, m.Outcome)
+		}
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("scanstore: RecordMutants: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, m := range ms {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO scan_mutants (scan_id, path, mutant_id, outcome, parent_sha256, proven) VALUES (?, ?, ?, ?, ?, ?)`,
+			m.ScanID, m.Path, m.MutantID, m.Outcome, m.ParentSHA256, m.Proven,
+		); err != nil {
+			return fmt.Errorf("scanstore: RecordMutants: insert %s/%s: %w", m.Path, m.MutantID, err)
+		}
+	}
+	return tx.Commit()
+}
+
+// MutantsForScan returns every mutant row for a scan, for round-trip tests and
+// for the CLI reader.
+func (s *Store) MutantsForScan(ctx context.Context, scanID int64) ([]Mutant, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT scan_id, path, mutant_id, outcome, parent_sha256, proven FROM scan_mutants WHERE scan_id = ? ORDER BY path, mutant_id`, scanID)
+	if err != nil {
+		return nil, fmt.Errorf("scanstore: MutantsForScan: %w", err)
+	}
+	defer rows.Close()
+	var out []Mutant
+	for rows.Next() {
+		var m Mutant
+		var parent sql.NullString
+		if err := rows.Scan(&m.ScanID, &m.Path, &m.MutantID, &m.Outcome, &parent, &m.Proven); err != nil {
+			return nil, fmt.Errorf("scanstore: MutantsForScan: scan row: %w", err)
+		}
+		m.ParentSHA256 = parent.String
+		out = append(out, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("scanstore: MutantsForScan: %w", err)
+	}
+	return out, nil
 }

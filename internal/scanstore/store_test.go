@@ -412,3 +412,43 @@ func TestScansNullKillRateReadsBackNil(t *testing.T) {
 		t.Fatalf("a scan that audited nothing must read back NULL, got %v", *got[0].KillRate)
 	}
 }
+
+// suite_baseline_ms is written by every audited row and, until this fix, could
+// not be read back: FilesForScan never selected it. Commit 7's whole
+// justification is that capacity planning — O(mutants x the TARGET's suite
+// runtime), a 53x spread between pallets/flask and psf/requests — becomes a
+// query over this ledger, and this reader IS the query surface. DuckDB is
+// single-process on a file, so ad-hoc CLI SQL is not a fallback while a scan
+// holds the handle.
+func TestFilesForScanReadsBackTheSuiteBaseline(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "scans.duckdb")
+	st, err := scanstore.Open(dsn)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer st.Close()
+
+	id, err := st.Record(context.Background(),
+		scanstore.Scan{Owner: "local", Repo: "demo", Substrate: "workspace"},
+		[]scanstore.File{
+			{Path: "a.py", Lang: "python", Disposition: "audited", KillRate: ptr(0.5), Gradable: true,
+				Evidence: "proven", SuiteBaselineMillis: 77000},
+			{Path: "b.py", Lang: "python", Disposition: "rejected", Reason: "no-paired-test", Evidence: "paired"},
+		})
+	if err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	got, err := st.FilesForScan(context.Background(), id)
+	if err != nil {
+		t.Fatalf("FilesForScan: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want 2 rows, got %d", len(got))
+	}
+	if got[0].SuiteBaselineMillis != 77000 {
+		t.Errorf("suite_baseline_ms = %d, want 77000 — the cost model's only input is unreadable", got[0].SuiteBaselineMillis)
+	}
+	if got[1].SuiteBaselineMillis != 0 {
+		t.Errorf("a never-scored row reported a suite baseline of %d", got[1].SuiteBaselineMillis)
+	}
+}

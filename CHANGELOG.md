@@ -9,6 +9,37 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
+## [v0.5.1] — 2026-08-13
+
+### Added
+
+- **`corral demo`** — the two-minute first run. One command, no setup beyond a
+  provider key: it writes a small Go package (a five-clause password rule and a
+  test that checks exactly two of them, and passes) and audits it with the real
+  `certify --local`. Go on purpose — you installed corral with a Go toolchain, so
+  it is the one dependency you are guaranteed to have, and it normally lives under
+  `/usr` where the jail can see it.
+  It exists because the honest first run was not two minutes: auditing real
+  third-party repositories took six attempts to produce one verdict, five lost to
+  the environment. That is not a fair first impression of what the tool does.
+- **Live progress.** A run used to print a few lines and then go silent for
+  minutes while eight seats worked, which reads as a hang. The pool already
+  emitted fine-grained beats — `--record` captured them for replay — and they were
+  being written to a file instead of the terminal. They now echo as they happen,
+  to stderr so nothing parsing stdout is affected. `--quiet` turns it off.
+
+### Fixed
+
+- **An unset `MODEL_BACKEND` is not "Claude".** The last place corral assumed a
+  vendor: an unset backend was read as "the default direct-Claude path", so a run
+  demanded `ANTHROPIC_API_KEY` no matter which models had been named. All-Gemini
+  runs escaped it only because vendor inference happened to fire first; a local or
+  unroutable herd fell straight through to it. Unset now means "infer from the
+  assigned models" — which the code already did for every vendor except Anthropic,
+  the one it handled by assumption instead of by evidence. When the models name no
+  cloud vendor, nothing is demanded.
+- The demo project is written 0750/0600 rather than 0755/0644.
+
 ## [v0.5.0] — 2026-08-13
 
 ### Added
@@ -283,6 +314,7 @@ and a long run of honesty fixes.
 
 First tagged release.
 
+[v0.5.1]: https://github.com/pdbethke/corralai/releases/tag/v0.5.1
 [v0.5.0]: https://github.com/pdbethke/corralai/releases/tag/v0.5.0
 [v0.4.0]: https://github.com/pdbethke/corralai/releases/tag/v0.4.0
 [v0.3.6]: https://github.com/pdbethke/corralai/releases/tag/v0.3.6

@@ -383,6 +383,20 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// inclusion/exclusion rationale.
 	auditConfig := auditConfigKey(*scopeTestsFlag, checkArgv)
 
+	// testSurfacePaths has to STAT the testdata entries it admits, and every
+	// read a scan performs is confined to the repository through an *os.Root —
+	// a symlink pointing out of the checkout is the exfiltration path that
+	// confinement exists to block. Opened here and closed immediately: this is
+	// the same root EmitJobs opens for its own digests, held only as long as
+	// the surface list takes to build.
+	surfaceRoot, rerr := os.OpenRoot(*repoDir)
+	if rerr != nil {
+		fmt.Fprintf(stderr, "corral certify --repo: opening %s: %v\n", *repoDir, rerr)
+		return 1
+	}
+	surfacePaths := testSurfacePaths(surfaceRoot, cands, excl)
+	_ = surfaceRoot.Close()
+
 	cfg := reposcan.EmitConfig{
 		Owner: *owner, Repo: filepath.Base(*repoDir), Commit: *commit, Root: *repoDir,
 		EngineVersion: reposcan.VerdictGeneration, ModelSet: modelSet, AuditConfig: auditConfig,
@@ -393,7 +407,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// from, so the key can never claim a narrower surface than the one
 		// that actually ran.
 		FileScopedTests:  gradesFileScoped(checkArgv, *scopeTestsFlag, selected, cands, excl),
-		TestSurfacePaths: testSurfacePaths(cands, excl),
+		TestSurfacePaths: surfacePaths,
 	}
 	jobs, goalExcl, err := reposcan.EmitJobs(cfg, selected, gs)
 	if err != nil {
@@ -731,8 +745,45 @@ func auditConfigKey(scopeTests bool, checkArgv []string) string {
 // read through the *os.Root and a FIFO would block forever) and `skipped-dir`
 // (build output the walk deliberately did not look at).
 //
-// No new walk: both lists are already in hand at the call site.
-func testSurfacePaths(cands []reposcan.Candidate, excl []reposcan.Exclusion) []string {
+// ...with ONE carve-out in the skipped-dir holdout: `testdata`. It is in
+// skipDirs, so a Go golden fixture comes back as a skipped-dir exclusion, and
+// internal/foo/testdata/ holds no recognized test file either, so the directory
+// rule never reaches it. Weakening a golden is the commonest way a Go suite
+// changes what it measures — and Go is this repository's own language, so the
+// gap applied to corral auditing itself. Anything under a path segment named
+// exactly `testdata` is admitted.
+//
+// The carve-out is narrowed twice, both load-bearing:
+//   - It admits only entries CONFIRMED to be regular files, stat'ed through
+//     the scan's own *os.Root. skippedDirFiles emits a DIRECTORY path for an
+//     unreadable subtree, and DigestTestSurface hashes through DigestFile,
+//     which hard-errors on any non-regular entry — scan-fatal. So admitting a
+//     directory would abort scans rather than widen keys.
+//   - The stat goes through the SAME root the scan uses for its confined
+//     reads, never bare os.Stat: a symlink out of the checkout is exactly the
+//     exfiltration path that confinement exists to block.
+//
+// Residual: a testdata entry that is not a regular file is left OUT rather
+// than erroring. It cannot be a golden, and a scan-fatal error here would be
+// a worse failure than a slightly narrower surface — but it does mean such an
+// entry reaches no key.
+//
+// WHAT THIS STILL DOES NOT COVER — stated plainly, because a maintainer reads
+// this to decide whether to trust the key:
+//   - a fixture file in a directory that holds no recognized test. A repo-root
+//     conftest.py whose tests all live under tests/ configures every one of
+//     them and reaches no key at all.
+//   - a non-regular entry under testdata (see above).
+//   - THE FILE-SCOPED PATH IGNORES THIS LIST ENTIRELY. EmitJobs only digests
+//     the surface when FileScopedTests is false; when it is true the digest is
+//     the one paired test file. So `-- pytest tests/test_a.py` really does
+//     load tests/conftest.py, and weakening that fixture leaves the key
+//     unmoved: a HIT on a kill rate the changed suite would no longer
+//     produce. That is an OPEN WRONG-HIT PATH, not an intended narrowing.
+//
+// No new walk: both lists are already in hand at the call site; root is only
+// stat'ed for the testdata carve-out.
+func testSurfacePaths(root *os.Root, cands []reposcan.Candidate, excl []reposcan.Exclusion) []string {
 	dirOf := func(p string) string { return path.Dir(path.Clean(filepath.ToSlash(p))) }
 
 	// Pass 1: which directories hold a recognized test file.
@@ -764,7 +815,11 @@ func testSurfacePaths(cands []reposcan.Candidate, excl []reposcan.Exclusion) []s
 		switch e.Reason {
 		case reposcan.ReasonIsTest:
 			paths = append(paths, e.Path)
-		case reposcan.ReasonNotRegularFile, reposcan.ReasonSkippedDir:
+		case reposcan.ReasonSkippedDir:
+			if underTestdata(e.Path) && isRegularInRoot(root, e.Path) {
+				paths = append(paths, e.Path)
+			}
+		case reposcan.ReasonNotRegularFile:
 			// Never digested — see the comment above.
 		default:
 			if testDirs[dirOf(e.Path)] {
@@ -809,6 +864,32 @@ func knownTestPaths(cands []reposcan.Candidate, excl []reposcan.Exclusion) map[s
 		}
 	}
 	return known
+}
+
+// underTestdata reports whether rel has a path segment named exactly
+// `testdata` — the Go convention for fixture data, and a directory the walk
+// skips. Segment equality, not a substring: `internal/testdata_helpers/x.go`
+// is ordinary source, not fixture data.
+func underTestdata(rel string) bool {
+	for _, seg := range strings.Split(path.Clean(filepath.ToSlash(rel)), "/") {
+		if seg == "testdata" {
+			return true
+		}
+	}
+	return false
+}
+
+// isRegularInRoot reports whether rel is a regular file, stat'ed through the
+// scan's own confined root. Lstat, not Stat: a symlink must answer "no" on its
+// own terms rather than on its target's, since the target is not this
+// repository's content. Any error is a "no" — the caller's contract is to
+// leave the entry out of the surface rather than fail the scan.
+func isRegularInRoot(root *os.Root, rel string) bool {
+	if root == nil {
+		return false
+	}
+	fi, err := root.Lstat(path.Clean(filepath.ToSlash(rel)))
+	return err == nil && fi.Mode().IsRegular()
 }
 
 // gradesFileScoped answers the ONE question KeyInputs.TestSurfaceDigest turns

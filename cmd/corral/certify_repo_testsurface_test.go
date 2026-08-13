@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"sort"
 	"testing"
 
@@ -18,6 +19,18 @@ func (surfaceGoals) GoalFor(reposcan.Candidate) (reposcan.Goal, bool, error) {
 	return reposcan.Goal{Text: "g", Provenance: "file"}, true, nil
 }
 
+// surfacePathsIn calls testSurfacePaths through a root opened on the tree, the
+// way runCertifyRepo does — reads stay confined to the repository.
+func surfacePathsIn(t *testing.T, root string, cands []reposcan.Candidate, excl []reposcan.Exclusion) []string {
+	t.Helper()
+	r, err := os.OpenRoot(root)
+	if err != nil {
+		t.Fatalf("OpenRoot: %v", err)
+	}
+	defer func() { _ = r.Close() }()
+	return testSurfacePaths(r, cands, excl)
+}
+
 // keysFor emits jobs against a tree and returns path->cache key, wiring the
 // two production decisions (gradesFileScoped, testSurfacePaths) exactly as
 // runCertifyRepo does.
@@ -26,7 +39,7 @@ func keysFor(t *testing.T, root string, cands, selected []reposcan.Candidate, ex
 	jobs, _, err := reposcan.EmitJobs(reposcan.EmitConfig{
 		Owner: "o", Repo: "r", Commit: "c", Root: root,
 		FileScopedTests:  gradesFileScoped(argv, scopeTests, selected, cands, excl),
-		TestSurfacePaths: testSurfacePaths(cands, excl),
+		TestSurfacePaths: surfacePathsIn(t, root, cands, excl),
 	}, selected, surfaceGoals{})
 	if err != nil {
 		t.Fatalf("EmitJobs: %v", err)
@@ -150,7 +163,7 @@ func TestTestSurfacePathsCoversTheWholeTestDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := map[string]bool{}
-	for _, p := range testSurfacePaths(cands, excl) {
+	for _, p := range surfacePathsIn(t, root, cands, excl) {
 		got[p] = true
 	}
 	for _, want := range []string{
@@ -253,6 +266,40 @@ func TestKeyMovesWhenAnUnselectedNamedTestIsWeakened(t *testing.T) {
 	}
 }
 
+// RESIDUAL 3. Go golden fixtures live in testdata/, which is in skipDirs, so
+// they come back as `skipped-dir` exclusions — held out of the surface
+// wholesale. Weakening a golden is the commonest way a Go suite changes what
+// it measures, and Go is this repository's own language.
+func TestKeyMovesWhenAGoTestdataGoldenIsWeakened(t *testing.T) {
+	mk := func(golden string) (string, []reposcan.Candidate, []reposcan.Exclusion) {
+		root := t.TempDir()
+		writeTree(t, root, map[string]string{
+			"internal/foo/foo.go":               "package foo\n\nfunc Foo() int { return 1 }\n",
+			"internal/foo/foo_test.go":          "package foo\n\nimport \"testing\"\n\nfunc TestFoo(t *testing.T) {}\n",
+			"internal/foo/testdata/golden.json": golden,
+		})
+		cands, excl, err := reposcan.Enumerate(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return root, cands, excl
+	}
+	rootA, candsA, exclA := mk("{\"want\":1}\n")
+	rootB, candsB, exclB := mk("{\"want\":2}\n")
+
+	strong := keysFor(t, rootA, candsA, candsA, exclA, nil, false)
+	weak := keysFor(t, rootB, candsB, candsB, exclB, nil, false)
+
+	if len(strong) == 0 {
+		t.Fatal("no jobs emitted — the Go tree paired nothing")
+	}
+	for p, k := range strong {
+		if weak[p] == k {
+			t.Fatalf("weakening internal/foo/testdata/golden.json left %s's key unchanged — the golden decides what the suite asserts, so the ledger would repeat the old kill rate", p)
+		}
+	}
+}
+
 // The exclusivity rule at unit level, plus the tokens that must NOT trip it:
 // flags and flag values are not test paths, so they are simply ignored.
 func TestGradesFileScopedRejectsATestNamedOutsideTheSelectedSet(t *testing.T) {
@@ -273,5 +320,54 @@ func TestGradesFileScopedRejectsATestNamedOutsideTheSelectedSet(t *testing.T) {
 	// Flags and flag values are not test paths and must not change the answer.
 	if !gradesFileScoped([]string{"pytest", "-q", "-k", "not slow", "tests/test_a.py"}, false, one, cands, nil) {
 		t.Fatal("flag tokens and their values are not test paths — they must not force whole-suite")
+	}
+}
+
+// The testdata widening is a KEYING rule only. It must never change which
+// files get audited: a golden fixture is not a candidate and its directory
+// stays a skipped-dir exclusion.
+func TestTestdataWideningDoesNotChangeCandidateClassification(t *testing.T) {
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		"internal/foo/foo.go":               "package foo\n\nfunc Foo() int { return 1 }\n",
+		"internal/foo/foo_test.go":          "package foo\n\nimport \"testing\"\n\nfunc TestFoo(t *testing.T) {}\n",
+		"internal/foo/testdata/golden.json": "{}\n",
+		"internal/foo/testdata/in/deep.txt": "x\n",
+	})
+	cands, excl, err := reposcan.Enumerate(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotCands []string
+	for _, c := range cands {
+		gotCands = append(gotCands, fmt.Sprintf("%s->%s", c.Path, c.TestPath))
+	}
+	sort.Strings(gotCands)
+	if len(gotCands) != 1 || gotCands[0] != "internal/foo/foo.go->internal/foo/foo_test.go" {
+		t.Fatalf("candidates = %v, want just internal/foo/foo.go->internal/foo/foo_test.go", gotCands)
+	}
+	gotReason := map[string]string{}
+	for _, e := range excl {
+		gotReason[e.Path] = e.Reason
+	}
+	for _, p := range []string{"internal/foo/testdata/golden.json", "internal/foo/testdata/in/deep.txt"} {
+		if gotReason[p] != reposcan.ReasonSkippedDir {
+			t.Errorf("%s classified %q, want %q — widening the KEYING surface must not change what gets audited", p, gotReason[p], reposcan.ReasonSkippedDir)
+		}
+	}
+	// ...and both are nonetheless in the surface, at any depth under testdata.
+	r, err := os.OpenRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = r.Close() }()
+	got := map[string]bool{}
+	for _, p := range testSurfacePaths(r, cands, excl) {
+		got[p] = true
+	}
+	for _, want := range []string{"internal/foo/testdata/golden.json", "internal/foo/testdata/in/deep.txt"} {
+		if !got[want] {
+			t.Errorf("%s is missing from the test surface — a golden decides what the suite asserts", want)
+		}
 	}
 }

@@ -53,11 +53,26 @@ type EmitConfig struct {
 	//     `no-paired-test` or `no-language`; the CALLER, not this package,
 	//     decides they belong to the surface (see testSurfacePaths in
 	//     cmd/corral). Deliberately over-inclusive.
+	//   - regular files under a `testdata` segment. That directory is in
+	//     skipDirs, so a Go golden comes back `skipped-dir` and its directory
+	//     holds no recognized test — neither rule above reaches it. Weakening
+	//     a golden is the commonest way a Go suite changes what it measures.
 	//
-	// Files in a directory with no test in it are NOT covered — a fixture
-	// module kept outside the test tree, or a conftest.py in a directory whose
-	// only tests live in subdirectories, still reaches no key. Ignored when
-	// FileScopedTests is set. No new walk: the caller already has this list.
+	// WHAT IS STILL NOT COVERED, so a maintainer can decide how far to trust
+	// the key:
+	//   - a fixture file in a directory that holds no test file. A repo-root
+	//     conftest.py with all its tests under tests/ is the live example: it
+	//     configures every one of them and reaches no key.
+	//   - a non-regular entry under testdata (it is skipped rather than
+	//     erroring, since a scan-fatal error would be the worse failure).
+	//   - THE FILE-SCOPED PATH IGNORES THIS LIST ENTIRELY. When
+	//     FileScopedTests is set the digest is the one paired test file, so
+	//     `-- pytest tests/test_a.py` — which really does load
+	//     tests/conftest.py — leaves the key unmoved when that fixture is
+	//     weakened. That is an OPEN WRONG-HIT PATH, not a design statement:
+	//     the cache can serve a kill rate for a grading surface that changed.
+	//
+	// No new walk: the caller already has this list.
 	TestSurfacePaths []string
 }
 

@@ -15,6 +15,14 @@ Your test suite passes. That tells you the tests ran, not that they would notice
 
 Corral answers the question directly. It plants goal-violating faults in one file, runs your own suite against each one in a sandbox, and reports what fraction your tests caught. Then it writes a test that kills a survivor, and only counts that gap once the test provably kills the fault by execution.
 
+See it on a fixture first — one command, nothing of yours to configure:
+
+```bash
+corral demo --writer-model <model> --mutant-model <model> --critic-model <model>
+```
+
+That writes a small Go package with a five-clause password rule and a test that checks two of them, then audits it. You watch eight seats plant faults, your suite get scored, and a verdict get signed. Then point it at your own code:
+
 ```bash
 corral certify --local \
   --code path/to/file.py \

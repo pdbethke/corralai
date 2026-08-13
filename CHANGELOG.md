@@ -9,6 +9,63 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
+## [v0.4.0] — 2026-08-13
+
+### Changed — BREAKING
+
+- **corral has no default models.** Every grading seat is named by the operator.
+  `--writer-model` and `--mutant-model` are **required** on `certify --local` and
+  `certify --repo`; `--critic-model` has no fallback (`off` still disables it);
+  `--derive-model` is required on `--repo` unless `--goals` is supplied (`--goals`
+  skips derivation and calls no model at all). A run with an unnamed grading seat
+  is refused before any jail, store or spend, and **the refusal reports which
+  provider credentials it can actually see** — the usual cause is "I have a key, I
+  just don't know what corral wants from me."
+- **The challenger (shadow) seat is OFF unless named.** It defaulted to a Claude
+  model and was on, which quietly kept an Anthropic seat alive through an otherwise
+  all-Gemini run and then failed for want of a key the operator had deliberately
+  left behind.
+- **The GitHub Action's `model-key-env` no longer defaults to `ANTHROPIC_API_KEY`.**
+  A `model-key` with no `model-key-env` is refused rather than guessed; `writer-model`
+  and `mutant-model` are required inputs.
+- **An unconfigured hosted pool is DISABLED rather than cold-starting.** With no
+  `CORRALAI_ADVPOOL_MODELS` and no leaderboard evidence the adversarial pool is never
+  registered; a malformed `CORRALAI_ADVPOOL_MODELS` is refused instead of falling back.
+
+Why: corral's claim is that it is model-agnostic — *across any model, local 7B to
+frontier*. A binary that names one vendor's models when the operator named none was
+making an exception to that claim, and it meant anyone arriving with an OpenAI,
+Gemini or OpenRouter key hit a failure on their first command and had to discover
+five flags to get past it. We run Claude; we do not make anyone else.
+
+**The one rule that survives is decorrelation** — the test-critic must differ from
+the test-writer. That is a *property*, not a vendor: any two distinct models from
+any provider satisfy it.
+
+**Upgrading:** add `--writer-model`, `--mutant-model` and `--critic-model` (or
+`--critic-model off`) to existing invocations, and the equivalent inputs to Action
+workflows. `corral doctor` checks a herd and its credentials for free before you
+spend anything.
+
+### Fixed
+
+- **`corral doctor` had its own hardcoded Claude defaults.** With no model named it
+  substituted `claude-sonnet-5` and reported a credential failure for it — telling an
+  operator holding a Gemini key to go get an Anthropic one, from the command that
+  exists to prevent wasted runs. It now reports the real finding, per seat.
+- **`corral doctor` was missing from `corral -h`** — routed and working since it
+  shipped, but absent from the usage text and therefore from the generated CLI
+  reference on the site.
+- The site advertised an older Gemini model than the README in the same worked
+  example; both now agree.
+
+### Documentation
+
+- The README leads with what the tool does; the test-soundness argument moved from
+  the third bullet into its own section rather than being cut.
+- Every runnable example names a herd and says plainly that its model names are an
+  example rather than a default.
+
 ## [v0.3.6] — 2026-08-12
 
 ### Added
@@ -155,6 +212,7 @@ and a long run of honesty fixes.
 
 First tagged release.
 
+[v0.4.0]: https://github.com/pdbethke/corralai/releases/tag/v0.4.0
 [v0.3.6]: https://github.com/pdbethke/corralai/releases/tag/v0.3.6
 [v0.3.5]: https://github.com/pdbethke/corralai/releases/tag/v0.3.5
 [v0.3.4]: https://github.com/pdbethke/corralai/releases/tag/v0.3.4

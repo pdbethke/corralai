@@ -68,6 +68,11 @@ type Message struct {
 	Role      string     `json:"role"`
 	Content   string     `json:"content"`
 	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+	// Usage is what the provider reported for the call that PRODUCED this
+	// message; it is meaningless on a message being SENT. `json:"-"` keeps it
+	// out of the request body entirely — a stray "usage" field on an outbound
+	// message is the kind of thing a strict endpoint rejects.
+	Usage Usage `json:"-"`
 }
 
 // ToolCall is one function-call request inside a Message: the tool name and
@@ -93,6 +98,16 @@ type chatter struct{ b Backend }
 func AsChatter(b Backend) agentworker.Chatter { return chatter{b} }
 
 func (c chatter) Chat(messages []agentworker.Message, tools []any) (agentworker.Message, error) {
+	out, _, err := chatConverting(c.b, messages, tools)
+	return out, err
+}
+
+// chatConverting is the whole of chatter.Chat plus the reply's reported token
+// usage, which the agentworker.Message shape has no room for. Shared with
+// meteredChatter (see usage.go) so the message/tool-call translation exists in
+// exactly one place: two copies of this conversion would drift, and the drift
+// would show up as tool calls silently losing their arguments.
+func chatConverting(b Backend, messages []agentworker.Message, tools []any) (agentworker.Message, Usage, error) {
 	oms := make([]Message, len(messages))
 	for i, m := range messages {
 		oms[i] = Message{Role: m.Role, Content: m.Content}
@@ -105,9 +120,11 @@ func (c chatter) Chat(messages []agentworker.Message, tools []any) (agentworker.
 			oms[i].ToolCalls = tcs
 		}
 	}
-	m, err := c.b.Chat(oms, tools)
+	m, err := b.Chat(oms, tools)
 	if err != nil {
-		return agentworker.Message{}, err
+		// m may still carry usage for a call the provider billed before
+		// failing, so it is returned rather than dropped with the error.
+		return agentworker.Message{}, m.Usage, err
 	}
 	out := agentworker.Message{Role: m.Role, Content: m.Content}
 	if len(m.ToolCalls) > 0 {
@@ -116,7 +133,7 @@ func (c chatter) Chat(messages []agentworker.Message, tools []any) (agentworker.
 			out.ToolCalls[j] = agentworker.ToolCall{Name: tc.Function.Name, Arguments: tc.Function.Arguments}
 		}
 	}
-	return out, nil
+	return out, m.Usage, nil
 }
 
 // ModelSwitcher is an optional capability: backends that can serve more than
@@ -460,6 +477,13 @@ func (b *openaiBackend) Chat(messages []Message, tools []any) (Message, error) {
 				ToolCalls []ToolCall `json:"tool_calls"`
 			} `json:"message"`
 		} `json:"choices"`
+		// Reported by OpenAI, Gemini's OpenAI-compatible endpoint and
+		// OpenRouter alike. Absent from a provider that does not report it,
+		// which reads as zero — never as a guess.
+		Usage struct {
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+		} `json:"usage"`
 	}
 	hdr := map[string]string{}
 	if b.key != "" {
@@ -470,11 +494,14 @@ func (b *openaiBackend) Chat(messages []Message, tools []any) (Message, error) {
 	}, &out); err != nil {
 		return Message{}, err
 	}
+	usage := Usage{InputTokens: out.Usage.PromptTokens, OutputTokens: out.Usage.CompletionTokens}
 	if len(out.Choices) == 0 {
-		return Message{}, nil
+		// No choice returned, but the call still happened and may have been
+		// billed — carry the usage rather than reporting a free call.
+		return Message{Usage: usage}, nil
 	}
 	m := out.Choices[0].Message
-	return Message{Role: "assistant", Content: m.Content, ToolCalls: m.ToolCalls}, nil
+	return Message{Role: "assistant", Content: m.Content, ToolCalls: m.ToolCalls, Usage: usage}, nil
 }
 
 // ---- Anthropic (Claude, Messages API with native tool use) ----
@@ -555,12 +582,19 @@ func (b *anthropicBackend) Chat(messages []Message, tools []any) (Message, error
 			Name  string          `json:"name"`
 			Input json.RawMessage `json:"input"`
 		} `json:"content"`
+		Usage struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+		} `json:"usage"`
 	}
 	hdr := map[string]string{"x-api-key": b.key, "anthropic-version": "2023-06-01"}
 	if err := postJSON(b.base+"/v1/messages", hdr, body, &out); err != nil {
 		return Message{}, err
 	}
-	res := Message{Role: "assistant"}
+	res := Message{Role: "assistant", Usage: Usage{
+		InputTokens:  out.Usage.InputTokens,
+		OutputTokens: out.Usage.OutputTokens,
+	}}
 	for _, c := range out.Content {
 		switch c.Type {
 		case "text":

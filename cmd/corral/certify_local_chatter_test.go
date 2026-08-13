@@ -67,7 +67,7 @@ func TestLocalChatterForSameVendorCriticSharesBaseBackend(t *testing.T) {
 		advpool.RoleTestWriter:      "claude-sonnet-5",
 		advpool.RoleTestCritic:      "claude-haiku-4-5",
 	}
-	chatterFor, err := localChatterFor(assign)
+	chatterFor, err := localChatterFor(assign, nil)
 	if err != nil {
 		t.Fatalf("localChatterFor: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestLocalChatterForCrossVendorCriticRoutesToGemini(t *testing.T) {
 		advpool.RoleTestWriter:      "claude-sonnet-5",
 		advpool.RoleTestCritic:      "gemini-3.5-flash",
 	}
-	chatterFor, err := localChatterFor(assign)
+	chatterFor, err := localChatterFor(assign, nil)
 	if err != nil {
 		t.Fatalf("localChatterFor: %v", err)
 	}
@@ -157,7 +157,7 @@ func TestLocalChatterForCrossVendorCriticFailsClosedWithoutKey(t *testing.T) {
 		advpool.RoleTestWriter:      "claude-sonnet-5",
 		advpool.RoleTestCritic:      "gemini-3.5-flash",
 	}
-	_, err := localChatterFor(assign)
+	_, err := localChatterFor(assign, nil)
 	if err == nil {
 		t.Fatal("localChatterFor with missing GEMINI_API_KEY: want error, got nil")
 	}
@@ -187,7 +187,7 @@ func TestLocalChatterForExplicitBackendNeverCrossVendorRoutes(t *testing.T) {
 		advpool.RoleTestWriter:      "some-router-model",
 		advpool.RoleTestCritic:      "gemini-3.5-flash",
 	}
-	chatterFor, err := localChatterFor(assign)
+	chatterFor, err := localChatterFor(assign, nil)
 	if err != nil {
 		t.Fatalf("localChatterFor: %v", err)
 	}
@@ -424,7 +424,7 @@ func TestLocalChatterFailsClosedOnAnyRoleNotJustTheCritic(t *testing.T) {
 		advpool.RoleMutantGenerator: "gemini-3.6-flash",
 		advpool.RoleTestWriter:      "claude-sonnet-5",
 		advpool.RoleTestCritic:      "claude-haiku-4-5",
-	})
+	}, nil)
 	if err == nil {
 		t.Fatal("a Gemini generator with no Gemini key must refuse the run, not 404 mid-run")
 	}
@@ -446,7 +446,7 @@ func TestLocalChatterRoutesThreeVendorsAtOnce(t *testing.T) {
 		advpool.RoleMutantGenerator: "gemini-3.6-flash",
 		advpool.RoleTestWriter:      "claude-sonnet-5",
 		advpool.RoleTestCritic:      "gpt-5",
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("all three credentials present, want no error: %v", err)
 	}
@@ -474,7 +474,7 @@ func TestLocalChatterLeavesAPinnedGatewayAlone(t *testing.T) {
 	if _, err := localChatterFor(advpool.RoleAssignment{
 		advpool.RoleMutantGenerator: "anthropic/claude-sonnet-5",
 		advpool.RoleTestCritic:      "google/gemini-3.6-flash",
-	}); err != nil {
+	}, nil); err != nil {
 		t.Fatalf("a pinned gateway must not be cross-routed or key-checked: %v", err)
 	}
 }

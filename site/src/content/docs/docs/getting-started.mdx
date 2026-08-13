@@ -26,13 +26,24 @@ The fastest way to see corral do the thing it's for — certify a change **by
 execution**, not opinion — is one command, off your own key, no daemon:
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...            # your own key
+export ANTHROPIC_API_KEY=sk-ant-...   # or OPENAI_/GEMINI_/OPENROUTER_API_KEY
 
 corral certify --local \
   --code path/to/your/file.go \
   --goal "what this code must guarantee" \
+  --writer-model claude-sonnet-5 \
+  --mutant-model claude-sonnet-5 \
+  --critic-model claude-haiku-4-5 \
   -- go test ./...
 ```
+
+**Those model names are an example, not a default — corral has none.** Every seat is
+yours to name, from whichever provider you hold a key for; the models above are what
+*we* run. The only rule is that the **test-critic must differ from the test-writer**,
+because that decorrelation is what the verdict rests on — a property, not a vendor,
+so any two distinct models satisfy it. `--critic-model off` drops the critic
+entirely (advisory, never gates the verdict). A run with an unnamed seat is refused,
+and the refusal reports which provider credentials it can see.
 
 That runs the full **adversarial testing pool** in-process: mutant-generators
 seed goal-violating bugs into your code, your own test is scored against them
@@ -56,7 +67,9 @@ in the order the audit itself would hit them, so the first `FAIL` is the first t
 to fix:
 
 ```bash
-corral doctor --code path/to/your/file.go -- go test ./...
+corral doctor --code path/to/your/file.go \
+  --writer-model claude-sonnet-5 --mutant-model claude-sonnet-5 \
+  -- go test ./...
 ```
 
 ```

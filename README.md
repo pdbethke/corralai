@@ -30,14 +30,26 @@ your own key, no server.
 
 ```bash
 go install github.com/pdbethke/corralai/cmd/corral@latest
-export ANTHROPIC_API_KEY=sk-ant-...
+export ANTHROPIC_API_KEY=sk-ant-...     # or OPENAI_/GEMINI_/OPENROUTER_API_KEY
 
 corral certify --local \
   --code path/to/your/file.py \
   --goal "what this code must guarantee" \
+  --writer-model claude-sonnet-5 \
+  --mutant-model claude-sonnet-5 \
+  --critic-model claude-haiku-4-5 \
   --out verdict.json \
   -- python -m pytest
 ```
+
+**Those model names are an example, not a default — corral has none.** Every seat
+is yours to name, from whichever provider you have a key for; the models above are
+simply what *we* run. The one rule is that the **critic must differ from the
+writer**, because that decorrelation is what the verdict rests on — and it's a
+property, not a vendor, so any two distinct models satisfy it. `--critic-model off`
+drops the critic entirely (it's advisory and never gates the verdict). A run with an
+unnamed seat is refused, and the refusal tells you which provider credentials it can
+actually see.
 
 It asks the question you can never answer honestly about your own code — *do my tests
 actually test anything, or do they just pass?* — and answers it by execution:
@@ -167,7 +179,9 @@ them all up front for **free** — no model is ever called — in the order the 
 itself would hit them, so the first `FAIL` is the first thing to fix:
 
 ```bash
-corral doctor --code path/to/your/file.py -- python -m pytest
+corral doctor --code path/to/your/file.py \
+  --writer-model claude-sonnet-5 --mutant-model claude-sonnet-5 \
+  -- python -m pytest
 ```
 
 ```

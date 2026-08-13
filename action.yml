@@ -41,27 +41,27 @@ inputs:
     required: false
     default: ""
   model-key-env:
-    description: "Which environment variable 'model-key' becomes. Must be a plain environment variable name; anything else is refused rather than exported. Defaults to ANTHROPIC_API_KEY, which matches corral's own default models. Setting this to the same variable a named provider input already fills, with a DIFFERENT value, is refused — there is no correct answer, and a silent precedence rule is how the wrong key gets used with no sign of it."
+    description: "Which environment variable 'model-key' becomes. Must be a plain environment variable name; anything else is refused rather than exported. REQUIRED when 'model-key' is set — it used to default to ANTHROPIC_API_KEY to match corral's own default models, and corral no longer has default models, so guessing a vendor here would put the wrong key in the wrong variable. Setting this to the same variable a named provider input already fills, with a DIFFERENT value, is refused — there is no correct answer, and a silent precedence rule is how the wrong key gets used with no sign of it."
     required: false
-    default: "ANTHROPIC_API_KEY"
+    default: ""
   derive-model:
-    description: "Model that derives a goal per file when 'goals' is not supplied. Leave empty to keep corral's default. Setting a key alone is NOT enough to move providers: the model NAMES are corral's defaults (claude-*), and a Claude name pointed at another vendor's endpoint fails there."
+    description: "Model that derives a goal per file. REQUIRED unless 'goals' is supplied — corral has no default models, and 'goals' skips derivation entirely (that path calls no model and needs no key)."
     required: false
     default: ""
   writer-model:
-    description: "Model for the test-writer role — the half that authors a test to prove a survivor is a real gap. Leave empty for corral's default."
+    description: "Model for the test-writer role — the half that authors a test to prove a survivor is a real gap. REQUIRED: corral has no default models. Any provider you supply a key for."
     required: false
     default: ""
   mutant-model:
-    description: "Model for the mutant-generator role. Leave empty for corral's default."
+    description: "Model for the mutant-generator role. REQUIRED: corral has no default models."
     required: false
     default: ""
   shadow-model:
-    description: "Challenger model that attacks every region a SECOND time, recorded for comparison and NEVER gating the verdict. Its default is a CLAUDE model and it is ON by default, so an otherwise all-Gemini (or all-OpenAI) run still contains an Anthropic seat and still needs that key: set 'off' to drop it, or name a model on the same vendor as the rest of the run."
+    description: "Challenger model that attacks every region a SECOND time, recorded for comparison and NEVER gating the verdict. OFF unless named — it used to default to a Claude model that stayed on through an otherwise all-Gemini run and silently demanded an Anthropic key. Name a model on the same vendor as the rest of the run to turn it on."
     required: false
     default: ""
   critic-model:
-    description: "Model for the test-critic role, which must DIFFER from the writer's. 'off' disables the critic entirely — it is advisory and never gates the verdict, so a single-vendor run with only one usable model can drop it. Leave empty for corral's default."
+    description: "Model for the test-critic role, which must DIFFER from the writer's. 'off' disables the critic entirely — it is advisory and never gates the verdict, so a single-vendor run with only one usable model can drop it. No default: name a model or 'off'."
     required: false
     default: ""
   corral-version:
@@ -169,7 +169,15 @@ runs:
         # smuggle a second assignment into the export, and a name with a shell
         # metacharacter has no legitimate use here at all.
         if [ -n "${MODEL_KEY:-}" ]; then
-          key_env="${MODEL_KEY_ENV:-ANTHROPIC_API_KEY}"
+          # No fallback variable. This used to default to ANTHROPIC_API_KEY to
+          # match corral's own default models; corral has no default models
+          # now, so guessing a vendor here would silently put the operator's
+          # key into the wrong variable and fail later as "missing key".
+          key_env="$MODEL_KEY_ENV"
+          if [ -z "$key_env" ]; then
+            echo "::error::model-key is set but model-key-env is empty — say which environment variable the key becomes (e.g. GEMINI_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, OPENROUTER_API_KEY). Prefer the named 'gemini-key'/'openai-key'/'anthropic-key' inputs, which need no second field." >&2
+            exit 1
+          fi
           if ! printf '%s' "$key_env" | grep -qE '^[A-Za-z_][A-Za-z0-9_]*$'; then
             echo "::error::model-key-env must be a plain environment variable name (letters, digits and underscore, not starting with a digit) — got something else, which will not be exported. Use one of corral's credential names: GEMINI_API_KEY, GOOGLE_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY." >&2
             exit 1

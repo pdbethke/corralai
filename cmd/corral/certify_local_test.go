@@ -947,8 +947,12 @@ func TestResolveShadowModelDisableIsCaseInsensitive(t *testing.T) {
 			t.Errorf("resolveShadowModel(%q) = %q, want \"\" (disabled)", in, got)
 		}
 	}
-	if got := resolveShadowModel(""); got != defaultLocalShadowModel {
-		t.Errorf("resolveShadowModel(\"\") = %q, want the default %q", got, defaultLocalShadowModel)
+	// UNSET IS OFF. There is no default challenger model — that default used
+	// to be a Claude model that stayed on through an otherwise all-Gemini run
+	// and silently demanded an Anthropic key. An empty flag must leave the seat
+	// empty, exactly like "off".
+	if got := resolveShadowModel(""); got != "" {
+		t.Errorf("resolveShadowModel(\"\") = %q, want \"\" — the challenger is OFF unless named", got)
 	}
 	if got := resolveShadowModel("claude-haiku-4-5"); got != "claude-haiku-4-5" {
 		t.Errorf("resolveShadowModel: a real model name must pass through, got %q", got)
@@ -1485,18 +1489,22 @@ func TestPrepareAuditJailForwardsTheSharedSeed(t *testing.T) {
 // would be silent — "off" being treated as a MODEL NAMED "off" and shipped to a
 // provider, which surfaces as a 404 mid-run rather than as a config error.
 func TestResolveCriticModelOffDisablesCritic(t *testing.T) {
+	// A default of the TEST's own choosing: ResolveOptionalModel is a generic
+	// resolver that takes one, but corral itself passes "" — there are no
+	// default models.
+	const testCriticDefault = "claude-haiku-4-5"
 	for _, in := range []string{"off", "OFF", "Off", "none", "NONE", " off "} {
-		if got := advpool.ResolveOptionalModel(in, defaultLocalCriticModel); got != "" {
+		if got := advpool.ResolveOptionalModel(in, testCriticDefault); got != "" {
 			t.Errorf("critic %q = %q, want \"\" (disabled)", in, got)
 		}
 	}
-	if got := advpool.ResolveOptionalModel("", defaultLocalCriticModel); got != defaultLocalCriticModel {
-		t.Errorf("empty critic = %q, want the default %q", got, defaultLocalCriticModel)
+	if got := advpool.ResolveOptionalModel("", testCriticDefault); got != testCriticDefault {
+		t.Errorf("empty critic = %q, want the default %q", got, testCriticDefault)
 	}
 	// A real model name must pass through untouched — including one that merely
 	// CONTAINS "off", which the case switch must not match on.
 	for _, in := range []string{"claude-haiku-4-5", "gemini-3.6-flash", "offline-model-1"} {
-		if got := advpool.ResolveOptionalModel(in, defaultLocalCriticModel); got != in {
+		if got := advpool.ResolveOptionalModel(in, testCriticDefault); got != in {
 			t.Errorf("critic %q = %q, want it passed through verbatim", in, got)
 		}
 	}
@@ -1505,10 +1513,11 @@ func TestResolveCriticModelOffDisablesCritic(t *testing.T) {
 // A disabled critic must not trip the decorrelation guard: CheckDecorrelation
 // rejects a critic that EQUALS the writer, and "" never does.
 func TestDisabledCriticPassesDecorrelation(t *testing.T) {
+	const testCriticDefault = "claude-haiku-4-5"
 	assign := advpool.RoleAssignment{
 		advpool.RoleMutantGenerator: "gemini-3.6-flash",
 		advpool.RoleTestWriter:      "gemini-3.6-flash",
-		advpool.RoleTestCritic:      advpool.ResolveOptionalModel("off", defaultLocalCriticModel),
+		advpool.RoleTestCritic:      advpool.ResolveOptionalModel("off", testCriticDefault),
 	}
 	if err := advpool.CheckDecorrelation(assign); err != nil {
 		t.Fatalf("a disabled critic must not trip decorrelation: %v", err)

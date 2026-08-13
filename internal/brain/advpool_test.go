@@ -27,6 +27,11 @@ import (
 	"github.com/pdbethke/corralai/internal/telemetry"
 )
 
+// testShadowModel is a concrete challenger model name for tests that need one.
+// It is NOT a product default — corral has no default models; this constant
+// exists so these tests keep asserting on a fixed name of their own choosing.
+const testShadowModel = "claude-haiku-4-5"
+
 // TestAdvPoolEventSinkRecordsToTelemetry proves advpoolEventSink.Emit is a
 // working adapter to the brain's telemetry store: a pool_verdict event
 // emitted for a mission id must come back out of EventsForMission for that
@@ -784,7 +789,7 @@ func TestAdvPoolStartRun_ShadowOffByDefaultForABareRuntime(t *testing.T) {
 // the queue exactly like the primary shards.
 func TestAdvPoolStartRun_ShadowSeatsWhenDaemonDefaultConfigured(t *testing.T) {
 	rt, q := newTestAdvPoolRuntime(t, nil)
-	rt.shadowModel = advpool.DefaultShadowModel
+	rt.shadowModel = testShadowModel
 
 	runID, err := rt.StartRun(multiSymbolRunSpecIn())
 	if err != nil {
@@ -803,8 +808,8 @@ func TestAdvPoolStartRun_ShadowSeatsWhenDaemonDefaultConfigured(t *testing.T) {
 		t.Fatalf("expected one shadow seat per primary shard (%d), got %d shadow seats", len(mgs), len(shadows))
 	}
 	for key, tk := range shadows {
-		if tk.Model != advpool.DefaultShadowModel {
-			t.Errorf("shadow task %q has model %q, want the daemon default %q", key, tk.Model, advpool.DefaultShadowModel)
+		if tk.Model != testShadowModel {
+			t.Errorf("shadow task %q has model %q, want the daemon default %q", key, tk.Model, testShadowModel)
 		}
 	}
 }
@@ -843,7 +848,7 @@ func TestAdvPoolStartRun_ShadowModelPerCallOverride(t *testing.T) {
 
 	t.Run(`"off" disables shadow despite an on daemon default`, func(t *testing.T) {
 		rt, q := newTestAdvPoolRuntime(t, nil)
-		rt.shadowModel = advpool.DefaultShadowModel
+		rt.shadowModel = testShadowModel
 		in := multiSymbolRunSpecIn()
 		in.ShadowModel = "off"
 
@@ -869,7 +874,7 @@ func TestAdvPoolStartRun_ShadowModelPerCallOverride(t *testing.T) {
 // challenger against, even with the daemon default shadow model configured.
 func TestAdvPoolStartRun_NoShadowSeatsWithoutSymbolSurface(t *testing.T) {
 	rt, q := newTestAdvPoolRuntime(t, nil)
-	rt.shadowModel = advpool.DefaultShadowModel
+	rt.shadowModel = testShadowModel
 
 	in := testRunSpecIn()
 	in.Code = "package target\nvar Threshold = 12\n"
@@ -1093,7 +1098,7 @@ func TestResolveAdvPoolRunDeadline(t *testing.T) {
 	})
 	t.Run("a configured daemon shadow model widens by ShadowTimeBudget", func(t *testing.T) {
 		base := 12 * time.Minute
-		got := resolveAdvPoolRunDeadline(base, advpool.DefaultShadowModel)
+		got := resolveAdvPoolRunDeadline(base, testShadowModel)
 		want := base + advpool.ShadowTimeBudget(base)
 		if got != want {
 			t.Fatalf("got %s, want %s (base + ShadowTimeBudget(base))", got, want)
@@ -1126,7 +1131,7 @@ func TestResolveAdvPoolRunDeadline(t *testing.T) {
 // defect (the mutant clamp).
 func TestStartAdversarialPool_RunDeadlineCallSitePinned(t *testing.T) {
 	t.Setenv("CORRALAI_ADVPOOL_RUN_DEADLINE_S", "90")
-	t.Setenv("CORRALAI_ADVPOOL_SHADOW_MODEL", advpool.DefaultShadowModel)
+	t.Setenv("CORRALAI_ADVPOOL_SHADOW_MODEL", testShadowModel)
 
 	dir := t.TempDir()
 	q, err := queue.Open(filepath.Join(dir, "q.sqlite3"))

@@ -442,7 +442,7 @@ type AdvPoolRuntime struct {
 	matrixStore *matrixstore.Store     // optional tests×mutants matrix store; nil = per-test rows not persisted (see StartRun)
 	// shadowModel is the daemon-wide default challenger model (resolved once
 	// in StartAdversarialPool from CORRALAI_ADVPOOL_SHADOW_MODEL, "" =
-	// advpool.DefaultShadowModel). Left at its Go zero value ("") by a test
+	// off unless named). Left at its Go zero value ("") by a test
 	// that constructs AdvPoolRuntime directly rather than through
 	// StartAdversarialPool — shadow stays OFF for those unless the test
 	// sets it explicitly, matching every pre-existing Driver/StartRun test's
@@ -939,11 +939,12 @@ func StartAdversarialPool(ctx context.Context, opts Options) (*AdvPoolRuntime, e
 	}
 
 	// CORRALAI_ADVPOOL_SHADOW_MODEL: the daemon-wide default challenger model.
-	// Unset/empty resolves to advpool.DefaultShadowModel (shadow ON by
-	// default for a hosted run, mirroring certify --local's own default);
-	// "off"/"none" (case-insensitive) disables it daemon-wide as an operator
-	// kill switch, still overridable per-call via start_adversarial_run's
-	// shadow_model field.
+	// Unset/empty leaves the challenger OFF — corral has no default models, so
+	// nothing fills this seat unless an operator names it (mirroring
+	// certify --local, which resolves the same way through
+	// advpool.ResolveShadowModel); "off"/"none" (case-insensitive) is the
+	// explicit daemon-wide kill switch, still overridable per-call via
+	// start_adversarial_run's shadow_model field.
 	shadowModel := advpool.ResolveShadowModel(os.Getenv("CORRALAI_ADVPOOL_SHADOW_MODEL"))
 
 	// Widen RunDeadline for the daemon's shadow allowance — see

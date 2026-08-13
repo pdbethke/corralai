@@ -985,15 +985,25 @@ func TestActionRoutesTheKeyToTheNamedProvider(t *testing.T) {
 		return "env > \"" + filepath.Join(tmp, "env.log") + "\"\n"
 	}
 
-	t.Run("defaults to Anthropic", func(t *testing.T) {
+	// Replaces a subtest that asserted an unset model-key-env silently became
+	// ANTHROPIC_API_KEY. That fallback existed to match corral's own default
+	// models; corral has no default models now, so guessing a vendor here
+	// would put the operator's key in the wrong variable and surface later as
+	// a missing-key error naming a provider they never chose.
+	t.Run("model-key with no model-key-env is refused, not guessed", func(t *testing.T) {
 		tmp := t.TempDir()
 		out, runErr, _ := runRunCorralStepWithStub(t, runStep, tmp, "true", dumpStub(tmp),
-			"MODEL_KEY=sk-ant-secret", "MODEL_KEY_ENV=")
-		if runErr != nil {
-			t.Fatalf("run-corral step failed: %v\n%s", runErr, out)
+			"MODEL_KEY=sk-secret", "MODEL_KEY_ENV=")
+		if runErr == nil {
+			t.Fatalf("a model-key with no model-key-env must fail the step rather than pick a vendor:\n%s", out)
 		}
-		if !strings.Contains(envDump(tmp), "ANTHROPIC_API_KEY=sk-ant-secret") {
-			t.Error("with model-key-env unset the key must still become ANTHROPIC_API_KEY — every existing caller depends on it")
+		if !strings.Contains(string(out), "model-key-env") {
+			t.Errorf("the error must name model-key-env as the missing field; got:\n%s", out)
+		}
+		// The step must fail BEFORE invoking corral at all — so there is no
+		// env.log, and no credential was exported anywhere.
+		if _, err := os.Stat(filepath.Join(tmp, "env.log")); !os.IsNotExist(err) {
+			t.Errorf("corral must never be invoked when the key's target variable was not named (stat env.log: %v)", err)
 		}
 	})
 

@@ -127,7 +127,11 @@ Flags:
 // interpreter AND pytest visible inside the sandbox — which is precisely the
 // class of environment problem this command exists to route around.
 func writeDemoProject(root string) error {
-	if err := os.MkdirAll(root, 0o755); err != nil {
+	// 0750/0600 below, not 0755/0644: the demo project is written, read and
+	// test-run by one owner, and the jail runs as that same uid. Nothing here
+	// needs to be group- or world-readable, and the security gate is right to
+	// insist.
+	if err := os.MkdirAll(root, 0o750); err != nil {
 		return err
 	}
 	files := map[string]string{
@@ -136,7 +140,7 @@ func writeDemoProject(root string) error {
 		"passwd_test.go": demoTest,
 	}
 	for name, body := range files {
-		if err := os.WriteFile(filepath.Join(root, name), []byte(body), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(body), 0o600); err != nil {
 			return fmt.Errorf("%s: %w", name, err)
 		}
 	}

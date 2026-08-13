@@ -478,3 +478,49 @@ func TestLocalChatterLeavesAPinnedGatewayAlone(t *testing.T) {
 		t.Fatalf("a pinned gateway must not be cross-routed or key-checked: %v", err)
 	}
 }
+
+// UNSET IS NOT CLAUDE. An unset MODEL_BACKEND used to be read as "the default
+// direct-Claude path", so a run demanded ANTHROPIC_API_KEY no matter which
+// models the operator had actually named — the last place corral assumed a
+// vendor on someone's behalf. Unset means "infer from the assigned models", and
+// when those name no cloud vendor at all it means the local/ollama backend,
+// which needs no key.
+func TestUnsetBackendDoesNotDemandAnthropic(t *testing.T) {
+	t.Setenv("MODEL_BACKEND", "")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("GEMINI_API_KEY", "")
+	t.Setenv("GOOGLE_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "")
+
+	_, err := resolveAuditRoles(localAuditInput{
+		writerModel: "qwen2.5-coder:7b",
+		mutantModel: "qwen2.5-coder:7b",
+		criticModel: "off",
+		shadowModel: "off",
+	}, nil)
+	if err != nil {
+		t.Fatalf("a local herd names no cloud vendor and must need no key; got: %v", err)
+	}
+}
+
+// The converse, so removing the special case did not remove the guarantee: a
+// herd that DOES name Anthropic models still refuses without the key, and the
+// refusal comes from the models rather than from an assumption.
+func TestAnthropicHerdStillRefusesWithoutItsKey(t *testing.T) {
+	t.Setenv("MODEL_BACKEND", "")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("GEMINI_API_KEY", "")
+
+	_, err := resolveAuditRoles(localAuditInput{
+		writerModel: "claude-sonnet-5",
+		mutantModel: "claude-sonnet-5",
+		criticModel: "off",
+		shadowModel: "off",
+	}, nil)
+	if err == nil {
+		t.Fatal("a Claude herd with no Anthropic key must refuse before any jail or store is opened")
+	}
+	if !strings.Contains(err.Error(), "ANTHROPIC_API_KEY") {
+		t.Errorf("the refusal must name the key the ASSIGNED models need; got: %v", err)
+	}
+}

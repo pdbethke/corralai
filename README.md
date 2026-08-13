@@ -51,6 +51,23 @@ drops the critic entirely (it's advisory and never gates the verdict). A run wit
 unnamed seat is refused, and the refusal tells you which provider credentials it can
 actually see.
 
+### See it work first: `corral demo`
+
+One command, no setup beyond a provider key. It writes a small Go package with a
+five-clause password rule and a test that checks only two of them, then audits it
+with the real `certify --local`:
+
+```bash
+corral demo --writer-model <model> --mutant-model <model> --critic-model <model>
+```
+
+You need a Go toolchain — you installed corral with one — and one key. No venv, no
+database, no fixtures, nothing of yours to configure. It leaves the project on disk
+so you can read the test and see what it never asserts.
+
+Then point it at your own code, and run `corral doctor` first: the environment stops
+an audit far more often than the tests do.
+
 It asks the question you can never answer honestly about your own code — *do my tests
 actually test anything, or do they just pass?* — and answers it by execution:
 

@@ -158,7 +158,7 @@ func subcommand(args []string) string {
 		return ""
 	}
 	switch args[0] {
-	case "certify", "secret", "control", "scorecard", "criticscore", "matrix", "scans", "eval", "mcp", "doctor":
+	case "certify", "secret", "control", "scorecard", "criticscore", "matrix", "scans", "eval", "mcp", "doctor", "demo":
 		return args[0]
 	}
 	return ""
@@ -277,6 +277,14 @@ Usage:
                                   Local DuckDB file, no brain required:
                                   --db <path> (default $CORRALAI_SCANS_DB, else
                                   ~/.claude/corralai_scans.duckdb), --limit n, --json
+  corral demo [flags]             a complete audit of a tiny project, in ONE command: writes a
+                                  small Go package with a five-clause password rule and a test
+                                  that checks only two of them, then audits it with the real
+                                  certify --local. Needs a Go toolchain (you installed corral
+                                  with one) and a provider key — no venv, no database, no
+                                  fixtures. The fastest honest answer to "what does this do?"
+                                  flags: --writer-model/--mutant-model (required; corral has no
+                                         default models) --critic-model --dir
   corral doctor [flags] [-- <test cmd>]
                                   check the environment BEFORE paying for a run: does the
                                   sandbox start, is your test command's toolchain reachable
@@ -697,6 +705,11 @@ func main() {
 			defer func() { _ = cs.Close() }()
 		}
 		os.Exit(runScorecard(os.Args[2:], localScorecardReader{store: bugCatchStore, critic: localCritic}, os.Stdout))
+	case "demo":
+		// The two-minute first run: a self-contained project plus the REAL
+		// certify --local, so nothing about the environment can spoil a
+		// newcomer's first impression of what the tool does.
+		os.Exit(runDemo(os.Args[2:], os.Stdout, os.Stderr))
 	case "doctor":
 		// Free, fast, and BEFORE any spend: see doctor.go for why the checks
 		// are ordered the way the audit itself would hit them.

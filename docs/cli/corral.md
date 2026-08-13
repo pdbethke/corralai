@@ -79,6 +79,14 @@ Usage:
                                   Local DuckDB file, no brain required:
                                   --db <path> (default $CORRALAI_SCANS_DB, else
                                   ~/.claude/corralai_scans.duckdb), --limit n, --json
+  corral demo [flags]             a complete audit of a tiny project, in ONE command: writes a
+                                  small Go package with a five-clause password rule and a test
+                                  that checks only two of them, then audits it with the real
+                                  certify --local. Needs a Go toolchain (you installed corral
+                                  with one) and a provider key — no venv, no database, no
+                                  fixtures. The fastest honest answer to "what does this do?"
+                                  flags: --writer-model/--mutant-model (required; corral has no
+                                         default models) --critic-model --dir
   corral doctor [flags] [-- <test cmd>]
                                   check the environment BEFORE paying for a run: does the
                                   sandbox start, is your test command's toolchain reachable

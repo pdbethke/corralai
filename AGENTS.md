@@ -114,6 +114,21 @@ user-local install.
 
 **The jail is offline.** Anything needing the network fails inside it, by design.
 
+## Trying it quickly
+
+`corral demo --writer-model <m> --mutant-model <m> --critic-model <m>` writes a
+self-contained Go package and audits it with the real `certify --local`. Use it
+to check a change end to end without needing a cooperative target repo — five of
+six audits on real third-party code died on the ENVIRONMENT, not on the tool.
+
+`corral doctor` checks sandbox, toolchain-inside-the-sandbox, credentials and
+test pairing for free, before any spend. It cannot check whether the suite passes
+on unmutated code inside the jail, which is the most common way an audit dies —
+run the target's own test command by hand first.
+
+A run echoes the pool's beats to stderr as they happen (`--quiet` disables), and
+`certify --local` ends with the tokens it consumed.
+
 ## Model routing and spend
 
 **corral has NO default models.** `--writer-model` and `--mutant-model` are

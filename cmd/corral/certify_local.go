@@ -595,6 +595,11 @@ type auditRoles struct {
 	shadow                 string
 	writer, mutant, critic string
 	chatterFor             func(role string) agentworker.Chatter
+	// meter accumulates every seat's reported token usage for the whole run.
+	// An audit's cost is O(mutants x suite runtime) on the execution side and
+	// O(tokens) on the model side; the ledger already records the first half,
+	// and this is the second.
+	meter *agentbackend.UsageMeter
 }
 
 // herdNotConfiguredErr refuses a run whose grading seats have no model, and
@@ -754,16 +759,17 @@ func resolveAuditRoles(in localAuditInput, stderr io.Writer) (auditRoles, error)
 	}
 
 	// Resolve the role→backend router NOW, before opening the jail or any
-	// store: a cross-vendor critic (e.g. --critic-model gemini-3.5-flash on
-	// the default Claude path) needs its own vendor's key, and a missing key
-	// must refuse the run here — fail closed at the top, not mid-run after
-	// jails/stores/mutants are already in flight.
-	chatterFor, err := localChatterFor(assign)
+	// store: a cross-vendor critic (e.g. a Gemini critic against a Claude
+	// writer) needs its own vendor's key, and a missing key must refuse the
+	// run here — fail closed at the top, not mid-run after jails, stores and
+	// mutants are already in flight.
+	meter := &agentbackend.UsageMeter{}
+	chatterFor, err := localChatterFor(assign, meter)
 	if err != nil {
 		return r, auditUsageErr("%v", err)
 	}
 
-	return auditRoles{assign: assign, shadow: shadow, writer: writer, mutant: mutant, critic: critic, chatterFor: chatterFor}, nil
+	return auditRoles{assign: assign, shadow: shadow, writer: writer, mutant: mutant, critic: critic, chatterFor: chatterFor, meter: meter}, nil
 }
 
 // auditOneFile runs ONE file's complete adversarial-pool audit in-process and
@@ -1022,6 +1028,7 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 	}
 
 	renderAdvVerdict(stdout, in.codePath, advVerdictFromPool(*verdict))
+	renderModelSpend(stdout, roles.meter)
 
 	// --matrix: print the per-test adequacy summary + delete-candidate list.
 	// st.Matrix is nil unless --matrix was set AND the phase actually ran
@@ -1453,4 +1460,26 @@ func localBuildDBPath() string {
 		home = usr.HomeDir
 	}
 	return filepath.Join(home, ".claude", "corralai_build.duckdb")
+}
+
+// renderModelSpend reports what the run actually consumed from the providers.
+//
+// An audit costs O(mutants x the target's suite runtime) in execution and
+// O(tokens) in model calls, and until now corral reported neither half at the
+// end of a run — so "what did that cost me" had no answer, from the tool whose
+// central caveat is that audits are expensive.
+//
+// TOKENS, NOT DOLLARS. Prices change and differ by contract; a token count
+// stays true. Anyone who wants a figure multiplies by their own rate.
+//
+// The call count is printed alongside because a provider that reports no usage
+// leaves the tokens at zero: "0 tokens over 41 calls" says the run happened and
+// the provider said nothing, which is a different fact from "0 over 0", and a
+// bare token total cannot tell them apart.
+func renderModelSpend(w io.Writer, m *agentbackend.UsageMeter) {
+	in, out, calls := m.Totals()
+	if calls == 0 {
+		return
+	}
+	fmt.Fprintf(w, "  model spend:   %d in / %d out token(s) over %d model call(s)\n", in, out, calls)
 }

@@ -43,6 +43,26 @@ func TestBwrapWrapNetOffByDefault(t *testing.T) {
 	if !argvHas(argv, "--ro-bind-try", "/etc/nsswitch.conf", "/etc/nsswitch.conf") {
 		t.Fatal("expected /etc/nsswitch.conf bound so the hosts file is consulted")
 	}
+	// The passwd database, same shape as the two above: a system database the
+	// RUNTIME expects, whose absence fails at IMPORT rather than in a test.
+	// Without it the jail's uid has no passwd entry and getpass.getuser() raises
+	// `KeyError: getpwuid(): uid not found: 1000`. PyTorch calls exactly that
+	// while computing its cache directory, at import — so any Python project
+	// transitively importing torch or transformers dies before collection and
+	// reports COULD-NOT-GRADE, indistinguishable from a broken project. Found by
+	// auditing a third-party FastAPI service whose conftest imports the app.
+	if !argvHas(argv, "--ro-bind-try", "/etc/passwd", "/etc/passwd") {
+		t.Fatal("expected /etc/passwd bound so getpwuid()/getpass.getuser() resolve inside the jail")
+	}
+	if !argvHas(argv, "--ro-bind-try", "/etc/group", "/etc/group") {
+		t.Fatal("expected /etc/group bound so gid lookups resolve alongside passwd")
+	}
+	// The hashes live in /etc/shadow and nothing a test runner does needs them.
+	// Binding it would be a real leak, so this pins the absence rather than
+	// leaving it to reviewer vigilance.
+	if argvHas(argv, "--ro-bind-try", "/etc/shadow", "/etc/shadow") {
+		t.Fatal("/etc/shadow must NEVER be bound into the jail")
+	}
 	// Debian/Ubuntu put installed gems in /var/lib/gems, OUTSIDE /usr. Without
 	// this, `gem install rspec` is invisible in the jail while the executable in
 	// /usr/local/bin is not, producing "can't find gem rspec-core ... with

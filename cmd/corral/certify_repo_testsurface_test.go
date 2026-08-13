@@ -25,7 +25,7 @@ func keysFor(t *testing.T, root string, cands, selected []reposcan.Candidate, ex
 	t.Helper()
 	jobs, _, err := reposcan.EmitJobs(reposcan.EmitConfig{
 		Owner: "o", Repo: "r", Commit: "c", Root: root,
-		FileScopedTests:  gradesFileScoped(argv, scopeTests, selected),
+		FileScopedTests:  gradesFileScoped(argv, scopeTests, selected, cands, excl),
 		TestSurfacePaths: testSurfacePaths(cands, excl),
 	}, selected, surfaceGoals{})
 	if err != nil {
@@ -48,23 +48,23 @@ func TestGradesFileScopedNeedsEverySelectedCandidatesTest(t *testing.T) {
 		{Path: "a.py", TestPath: "tests/test_a.py", Lang: "python"},
 		{Path: "b.py", TestPath: "tests/test_b.py", Lang: "python"},
 	}
-	if gradesFileScoped([]string{"pytest", "-q", "tests/test_a.py"}, false, sel) {
+	if gradesFileScoped([]string{"pytest", "-q", "tests/test_a.py"}, false, sel, sel, nil) {
 		t.Fatal("an argv naming only ONE of two selected candidates' tests was called file-scoped — b.py would key on a test that never runs, and the test that really grades it would appear in no key at all")
 	}
 	// The genuine single-file case must still be file-scoped: over-invalidating
 	// there throws away every verdict in the repo for a change that cannot
 	// reach them.
 	one := sel[:1]
-	if !gradesFileScoped([]string{"pytest", "-q", "tests/test_a.py"}, false, one) {
+	if !gradesFileScoped([]string{"pytest", "-q", "tests/test_a.py"}, false, one, sel, nil) {
 		t.Fatal("a one-candidate scan whose only test is named in the argv is genuinely file-scoped")
 	}
-	if !gradesFileScoped([]string{"pytest", "tests/test_a.py::test_x"}, false, one) {
+	if !gradesFileScoped([]string{"pytest", "tests/test_a.py::test_x"}, false, one, sel, nil) {
 		t.Fatal("a pytest node id names the same file")
 	}
-	if gradesFileScoped([]string{"pytest", "-q", "tests/unit"}, false, one) {
+	if gradesFileScoped([]string{"pytest", "-q", "tests/unit"}, false, one, sel, nil) {
 		t.Fatal("an argv naming a DIRECTORY is a subset of the suite, not one file")
 	}
-	if gradesFileScoped([]string{"pytest", "-q"}, false, one) {
+	if gradesFileScoped([]string{"pytest", "-q"}, false, one, sel, nil) {
 		t.Fatal("an argv naming no test file at all runs the whole suite")
 	}
 }
@@ -219,5 +219,59 @@ func TestSurfaceWideningDoesNotChangeCandidateClassification(t *testing.T) {
 		if gotReason[p] != want {
 			t.Errorf("%s classified %q, want %q — the test-surface rule must not change what gets audited", p, gotReason[p], want)
 		}
+	}
+}
+
+// RESIDUAL 1. The coverage rule ("every selected candidate's test is named")
+// is necessary but not sufficient. `-- pytest tests/test_a.py tests/test_b.py`
+// with only a.py selected passes coverage, yet tests/test_b.py runs in that
+// same command and its assertions kill a.py's mutants. Keying a.py on
+// tests/test_a.py alone leaves the other grading file out of the key entirely
+// — and auditConfigKey digests the argv TEXT, which does not move when a named
+// file's CONTENTS change.
+func TestKeyMovesWhenAnUnselectedNamedTestIsWeakened(t *testing.T) {
+	cands := []reposcan.Candidate{
+		{Path: "a.py", TestPath: "tests/test_a.py", Lang: "python"},
+		{Path: "b.py", TestPath: "tests/test_b.py", Lang: "python"},
+	}
+	selected := cands[:1] // as --top 1 or --diff-base would leave it
+	argv := []string{"pytest", "-q", "tests/test_a.py", "tests/test_b.py"}
+	mk := func(otherTest string) string {
+		root := t.TempDir()
+		writeTree(t, root, map[string]string{
+			"a.py": "def a():\n    return 1\n", "b.py": "def b():\n    return 2\n",
+			"tests/test_a.py": "def test_a():\n    assert True\n",
+			"tests/test_b.py": otherTest,
+		})
+		return root
+	}
+	strong := keysFor(t, mk("def test_b():\n    assert b() == 2\n"), cands, selected, nil, argv, false)
+	weak := keysFor(t, mk("def test_b():\n    pass\n"), cands, selected, nil, argv, false)
+
+	if strong["a.py"] == weak["a.py"] {
+		t.Fatal("weakening tests/test_b.py left a.py's key unchanged — that file runs in the same command and grades a.py's mutants, so the cache would serve a.py's old kill rate for a suite that got worse")
+	}
+}
+
+// The exclusivity rule at unit level, plus the tokens that must NOT trip it:
+// flags and flag values are not test paths, so they are simply ignored.
+func TestGradesFileScopedRejectsATestNamedOutsideTheSelectedSet(t *testing.T) {
+	cands := []reposcan.Candidate{
+		{Path: "a.py", TestPath: "tests/test_a.py", Lang: "python"},
+		{Path: "b.py", TestPath: "tests/test_b.py", Lang: "python"},
+	}
+	one := cands[:1]
+	if gradesFileScoped([]string{"pytest", "tests/test_a.py", "tests/test_b.py"}, false, one, cands, nil) {
+		t.Fatal("an argv naming an UNSELECTED candidate's test was called file-scoped — that test runs in the same command and grades a.py, so weakening it would leave a.py's key unmoved")
+	}
+	// A test file that is nobody's pair (Enumerate calls it `is-test`) counts
+	// too: it runs and it grades.
+	excl := []reposcan.Exclusion{{Path: "tests/test_extra.py", Reason: reposcan.ReasonIsTest}}
+	if gradesFileScoped([]string{"pytest", "tests/test_a.py", "tests/test_extra.py"}, false, one, one, excl) {
+		t.Fatal("an argv naming an is-test file outside the selected set was called file-scoped")
+	}
+	// Flags and flag values are not test paths and must not change the answer.
+	if !gradesFileScoped([]string{"pytest", "-q", "-k", "not slow", "tests/test_a.py"}, false, one, cands, nil) {
+		t.Fatal("flag tokens and their values are not test paths — they must not force whole-suite")
 	}
 }

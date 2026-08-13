@@ -392,7 +392,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// computed from the same facts testCmd itself resolves the command
 		// from, so the key can never claim a narrower surface than the one
 		// that actually ran.
-		FileScopedTests:  gradesFileScoped(checkArgv, *scopeTestsFlag, selected),
+		FileScopedTests:  gradesFileScoped(checkArgv, *scopeTestsFlag, selected, cands, excl),
 		TestSurfacePaths: testSurfacePaths(cands, excl),
 	}
 	jobs, goalExcl, err := reposcan.EmitJobs(cfg, selected, gs)
@@ -775,6 +775,42 @@ func testSurfacePaths(cands []reposcan.Candidate, excl []reposcan.Exclusion) []s
 	return paths
 }
 
+// normalizeTestToken reduces an argv token or a candidate's TestPath to the
+// repo-relative file path it names, so the two can be compared. A pytest node
+// id (`tests/test_a.py::test_x`) names the same FILE as `tests/test_a.py`, and
+// the file is what the digest covers.
+func normalizeTestToken(tok string) string {
+	t := filepath.ToSlash(tok)
+	if i := strings.Index(t, "::"); i >= 0 {
+		t = t[:i]
+	}
+	return path.Clean(t)
+}
+
+// knownTestPaths is every path this scan's enumeration already recognizes as a
+// test FILE: each candidate's paired test (selected or not — the suite does
+// not stop running a test because this scan chose not to audit its source) and
+// every file Enumerate rejected as `is-test`.
+//
+// It exists for gradesFileScoped's exclusivity check, and it is deliberately
+// the same data testSurfacePaths draws on, from the same in-hand lists: no new
+// filesystem walk, and no second notion of "what is a test" to drift from the
+// first.
+func knownTestPaths(cands []reposcan.Candidate, excl []reposcan.Exclusion) map[string]bool {
+	known := make(map[string]bool, len(cands)+len(excl))
+	for _, c := range cands {
+		if c.TestPath != "" {
+			known[normalizeTestToken(c.TestPath)] = true
+		}
+	}
+	for _, e := range excl {
+		if e.Reason == reposcan.ReasonIsTest {
+			known[normalizeTestToken(e.Path)] = true
+		}
+	}
+	return known
+}
+
 // gradesFileScoped answers the ONE question KeyInputs.TestSurfaceDigest turns
 // on: will every job in this scan really be graded against its own paired test
 // file alone? It deliberately mirrors localExecutor.testCmd's own resolution
@@ -799,31 +835,53 @@ func testSurfacePaths(cands []reposcan.Candidate, excl []reposcan.Exclusion) []s
 //     anything less keys as whole-suite. That over-invalidates a mixed argv,
 //     which costs a miss — money — where the other direction signs a kill rate
 //     for a surface that was never measured.
+//     Coverage alone is still not enough, and the converse hole was live:
+//     `-- pytest tests/test_a.py tests/test_b.py` with --top 1 (or a
+//     --diff-base) selecting only a.py names every SELECTED candidate's test,
+//     yet tests/test_b.py runs in that same command and its assertions kill
+//     a.py's mutants. Keyed file-scoped, a.py's key is digest(tests/test_a.py)
+//     alone; weaken tests/test_b.py and the key does not move — a HIT on a
+//     kill rate the weakened suite would no longer produce. So the argv must
+//     ALSO name no test file OUTSIDE the selected set. The known-test set is
+//     the enumeration's own (candidates' TestPaths plus the `is-test`
+//     exclusions, the same facts testSurfacePaths draws on) — no new walk. A
+//     token that is not a known test path (a flag like -q or -k, a flag value
+//     like "not slow", a directory) is IGNORED here: it cannot make a scan
+//     file-scoped, and the coverage rule above already forces a directory
+//     token to whole-suite.
 //   - --scope-tests only takes effect for a language with a VERIFIED per-file
 //     invocation and a paired test to scope to; otherwise testCmd silently
 //     falls back to the full suite. If even one selected file would fall back,
 //     this returns false for the whole scan. That over-invalidates the genuinely
 //     scoped files, which only costs money — the other direction would key a
 //     whole-suite grading run as if one file were the surface.
-func gradesFileScoped(checkArgv []string, scopeTests bool, selected []reposcan.Candidate) bool {
+func gradesFileScoped(checkArgv []string, scopeTests bool, selected, cands []reposcan.Candidate, excl []reposcan.Exclusion) bool {
 	if len(selected) == 0 {
 		return false
 	}
 	if len(checkArgv) > 0 {
 		named := make(map[string]bool, len(checkArgv))
 		for _, tok := range checkArgv {
-			t := filepath.ToSlash(tok)
-			// A pytest node id (`tests/test_a.py::test_x`) names the same file.
-			if i := strings.Index(t, "::"); i >= 0 {
-				t = t[:i]
-			}
-			named[path.Clean(t)] = true
+			named[normalizeTestToken(tok)] = true
 		}
+		// The tests this scan is allowed to be scoped to.
+		selectedTests := make(map[string]bool, len(selected))
 		for _, c := range selected {
 			if c.TestPath == "" {
 				return false
 			}
-			if !named[path.Clean(filepath.ToSlash(c.TestPath))] {
+			selectedTests[normalizeTestToken(c.TestPath)] = true
+		}
+		// Coverage: every selected candidate's own test must be named.
+		for t := range selectedTests {
+			if !named[t] {
+				return false
+			}
+		}
+		// Exclusivity: and NO test file outside that set may be named.
+		known := knownTestPaths(cands, excl)
+		for tok := range named {
+			if known[tok] && !selectedTests[tok] {
 				return false
 			}
 		}

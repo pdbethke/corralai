@@ -20,6 +20,22 @@ cd corralai
 go build ./...
 ```
 
+## See it work first: `corral demo`
+
+One command, no setup beyond a provider key:
+
+```bash
+corral demo --writer-model <model> --mutant-model <model> --critic-model <model>
+```
+
+It writes a small Go package with a five-clause password rule and a test that checks
+only two of them, then audits it with the real `certify --local`. You need a Go
+toolchain — you installed corral with one — and one provider key. No venv, no
+database, no fixtures. The project is left on disk so you can read the test and see
+what it never asserts.
+
+Then point it at your own code, with `corral doctor` first.
+
 ## Your first audit: `corral certify --local`
 
 The fastest way to see corral do the thing it's for — certify a change **by

@@ -39,39 +39,6 @@ corral certify --local \
   -- python -m pytest
 ```
 
-**Before you spend a run: `corral doctor`.** An audit costs real money and real
-minutes, and it is almost always the *environment* that stops one — the sandbox
-won't start, the toolchain is invisible inside it, the key for the model you
-assigned is missing, the file has no paired test. Discovered one at a time, each
-of those costs another run, and most of them cost money to learn. `doctor` checks
-them all up front for **free** — no model is ever called — in the order the audit
-itself would hit them, so the first `FAIL` is the first thing to fix:
-
-```bash
-corral doctor --code path/to/your/file.py -- python -m pytest
-```
-
-```
-  [ok  ] sandbox starts
-  [ok  ] toolchain reachable inside the sandbox
-  [FAIL] credential for mutant-generator (claude-sonnet-5)
-         agentbackend: ForModel: model "claude-sonnet-5" needs an Anthropic key — set ANTHROPIC_API_KEY
-
-1 check(s) failed — fix these before spending a run.
-```
-
-Every argument is optional and each one unlocks more checks: `--code`/`--test` add
-the test-pairing check, a test command after `--` adds the in-sandbox toolchain
-check, and `--mutant-model`/`--writer-model`/`--critic-model` check the credential
-for exactly the models you plan to route to. It exits non-zero if anything failed.
-
-Two things it deliberately does **not** check, because both need a real seeded
-workspace: whether your suite passes on *unmutated* code inside the sandbox — the
-most common way an audit dies — and whether a multi-file project needs
-`--repo-dir` (it does; the bare `--code` form seeds only that file and its test).
-`certify --local` reports the first as `COULD-NOT-GRADE`, with the runner's own
-output.
-
 It asks the question you can never answer honestly about your own code — *do my tests
 actually test anything, or do they just pass?* — and answers it by execution:
 
@@ -79,28 +46,13 @@ actually test anything, or do they just pass?* — and answers it by execution:
 - Your **own test suite** is run against every one of them, **in a jail** — the
   fraction it catches (the *kill-rate*) is the adequacy score, measured, never a
   self-report.
-- A **test-writer** authors a compiling test that kills whatever your suite missed —
-  correcting itself when its test doesn't compile (the compiler's own error is fed
-  back) rather than blindly repeating. A surviving mutant is *disclosed,
-  unadjudicated* (a real gap, or an equivalent mutant no test can catch — your call);
-  only a survivor a compiling test actually kills is a **proven** gap, handed back to
-  you. **A compiling test that passes is not evidence of anything** — it may simply
-  never have been collected by your test runner (a project that confines discovery
-  to a test root, like flask's `testpaths = ["tests"]`, will not run a file written
-  elsewhere). corral writes its authored test into the directory your paired test
-  already lives in, and then *proves* the run reached it by planting deliberately
-  invalid source at that exact path and checking your unmodified command reacts. If
-  it doesn't, the file is reported `[TEST UNSOUND]` and its proven count is withheld
-  rather than reported as a clean zero. **What varies is whether the authored test
-  comes back sound — not whether corral can prove gaps once it does.** Measured on
-  `src/flask/cli.py` in pallets/flask across four runs: one authored test passed on
-  the unmodified source and then killed **14 of 14** survivors, proving every one by
-  execution; another failed on the unmodified source and proved nothing. The
-  determining factor was the test's own soundness, and a test that fails on correct
-  code is now reissued to the writer with the failure fed back rather than
-  abandoned. Zero proven gaps means *nothing was proven this run* — never *your
-  tests are fine*. (One file, one project: a measurement, not a guarantee about
-  your repo.)
+- A **test-writer** authors a compiling test that kills whatever your suite missed,
+  correcting itself when its test doesn't compile rather than blindly repeating. A
+  surviving mutant is *disclosed, unadjudicated* — a real gap, or an equivalent
+  mutant no test can catch, your call. Only a survivor a compiling test actually
+  kills is a **proven** gap. Zero proven gaps means *nothing was proven this run* —
+  never *your tests are fine*. ([why that distinction is the whole
+  point](#when-corral-proves-a-gap-and-when-it-proves-nothing))
 - A **test-critic** — always a *different*, decorrelation-enforced model — reads your
   suite cold and flags vacuous, designed-to-pass tests. Its opinion is carried as
   **unverified advice; it never gates the verdict.**
@@ -203,6 +155,67 @@ execution-proven result — it only removes the second opinion. (Useful when a v
 offers just one model you're willing to run, since the critic must otherwise differ
 from the writer.) Full walkthrough of a real verdict: **[the "first audit"
 guide](https://corralai.dev/docs/first-audit/)**.
+
+### Before you spend a run: `corral doctor`
+
+An audit costs real money and real minutes, and it is almost always the
+*environment* that stops one — the sandbox won't start, the toolchain is invisible
+inside it, the key for the model you assigned is missing, the file has no paired
+test. Discovered one at a time, each of those costs another run, and most of them
+cost money to learn. `doctor` checks
+them all up front for **free** — no model is ever called — in the order the audit
+itself would hit them, so the first `FAIL` is the first thing to fix:
+
+```bash
+corral doctor --code path/to/your/file.py -- python -m pytest
+```
+
+```
+  [ok  ] sandbox starts
+  [ok  ] toolchain reachable inside the sandbox
+  [FAIL] credential for mutant-generator (claude-sonnet-5)
+         agentbackend: ForModel: model "claude-sonnet-5" needs an Anthropic key — set ANTHROPIC_API_KEY
+
+1 check(s) failed — fix these before spending a run.
+```
+
+Every argument is optional and each one unlocks more checks: `--code`/`--test` add
+the test-pairing check, a test command after `--` adds the in-sandbox toolchain
+check, and `--mutant-model`/`--writer-model`/`--critic-model` check the credential
+for exactly the models you plan to route to. It exits non-zero if anything failed.
+
+Two things it deliberately does **not** check, because both need a real seeded
+workspace: whether your suite passes on *unmutated* code inside the sandbox — the
+most common way an audit dies — and whether a multi-file project needs
+`--repo-dir` (it does; the bare `--code` form seeds only that file and its test).
+`certify --local` reports the first as `COULD-NOT-GRADE`, with the runner's own
+output.
+
+### When corral proves a gap, and when it proves nothing
+
+**A compiling test that passes is not evidence of anything.** It may simply never
+have been collected by your test runner — a project that confines discovery to a
+test root, like flask's `testpaths = ["tests"]`, will not run a file written
+elsewhere. A tool that counted that as a clean result would report *your tests are
+fine* on the strength of a test nobody ran.
+
+So corral writes its authored test into the directory your paired test already lives
+in, and then *proves* the run reached it: it plants deliberately invalid source at
+that exact path and checks your unmodified command reacts. If it doesn't, the file is
+reported `[TEST UNSOUND]` and its proven count is **withheld** rather than reported
+as a clean zero.
+
+**What varies is whether the authored test comes back sound — not whether corral can
+prove gaps once it does.** Measured on `src/flask/cli.py` in pallets/flask across
+four runs: one authored test passed on the unmodified source and then killed **14 of
+14** survivors, proving every one by execution; another failed on the unmodified
+source and proved nothing. The determining factor was the test's own soundness, and a
+test that fails on correct code is now reissued to the writer with the failure fed
+back rather than abandoned. (One file, one project: a measurement, not a guarantee
+about your repo.)
+
+Which is why zero proven gaps means *nothing was proven this run*, and never *your
+tests are fine*.
 
 ### Certify a change by its declared check
 

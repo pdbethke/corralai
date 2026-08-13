@@ -1,0 +1,78 @@
+---
+title: "The audit question nobody can answer yet"
+description: "AI-authored code is entering regulated systems, and no one can show that the model which wrote it did not also grade it. Corral enforces that separation and attests to it — here is exactly what the artifact proves, and what it does not."
+pubDate: 2026-08-13
+draft: false
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+
+*For anyone who has to defend a change to someone else: a regulator, an assessor, a risk committee, a customer's security team.*
+
+---
+
+Change-management evidence has always been soft. A ticket says the change was reviewed. A CI log says a suite ran green. A sign-off says a human looked. Every one of those is an **assertion**, and auditors accept them because there has never been an alternative.
+
+That was tolerable while the assertions came from people. It is becoming untenable now, for a reason that has nothing to do with cryptography.
+
+## The question
+
+A growing share of code entering regulated systems is written by an AI assistant. That assistant usually writes the tests too. The tests pass.
+
+So: **how do you know the thing that wrote the code did not also grade it?**
+
+Nobody has an answer. Not "the answer is unsatisfying" — there is no artifact anywhere in a normal pipeline that speaks to it. The tests are green, the coverage number is high, and the same model produced both the work and the evidence that the work is good. That is an author reading his own verdict into the record, and authors are kind to themselves.
+
+This is going to become an audit question. It is a natural one to ask, it is easy to ask, and right now the honest response from almost every organization is a shrug.
+
+## What corral does about it
+
+Corral's constraint is that the party that did the work never certifies the work. In practice:
+
+- The model that authors a test to prove a gap **cannot** be the model that critiques the suite. The run is refused otherwise — this is not advice, it is `CheckDecorrelation`, and it fails closed.
+- The adequacy number is never a self-report. It is what happened when your own suite was executed against deliberately broken code in a sandbox.
+- A verdict where every seat resolved to a single vendor **says so in the record**, rather than leaving independence to be inferred from silence.
+- Since v0.4.0 there are no default models at all. The operator names every seat, so the record reflects a herd somebody chose rather than one the tool assumed.
+
+## What the artifact actually is
+
+This is the part a security team will want to inspect, so here it is without varnish.
+
+A signed verdict is a **DSSE envelope** — the in-toto attestation format — carrying the statement it signs. Alongside it the record carries a hash-chained ledger head, and, when the verdict was signed by a brain, a **Sigstore Rekor** transparency-log entry *with its inclusion proof inside the record*.
+
+Verification runs four checks — signature, ledger, subject, rekor — and it runs **offline**. The Rekor proof is checked against the TUF-rooted Rekor key without a round trip to the log or to the signer. The verifying public key is always taken from an external trust anchor supplied by the verifier; it is **never** read from the record. A record cannot vouch for itself.
+
+```bash
+corral certify verify verdict.json --pubkey "$(corral certify pubkey)" --allow-unanchored
+```
+
+That `--allow-unanchored` flag is deliberate, and it is the tell for how the rest of this is built. A record minted off your own key with no server was never submitted to a public witness. It is signed by you, not third-party attested — a weaker claim, and `verify` makes you say so out loud before it will accept one. A witness outage degrades to `anchored=false`; it never fabricates a proof.
+
+Twelve verifiable records are published as of v0.3.4, so none of the above has to be taken on trust.
+
+## What it certifies — and what it does not
+
+Be careful here, because this is where a tool like this earns or loses its credibility.
+
+**It certifies that a specific check ran against specific code, what that check found, and that the record has not been altered since.** Given the public key, a third party can confirm all of that without trusting us, the brain, or the developer.
+
+**It does not certify that the testing was adequate.** No signature can. And there is a specific reason not to lean on the headline number: corral's kill rate **moves between runs on the same file with the same suite**, because the faults are generated afresh each time — a measured swing of 0.55 to 0.80 on one file. A compliance artifact whose central metric is not reproducible is a weak artifact, and anyone who deals with assessors knows what happens to a control that produces a different number on Tuesday.
+
+So the durable claim is not the score. **It is the proven gap:** a specific fault, a specific test that kills it, and the execution that demonstrated the kill. That is reproducible in the way that matters, it survives questioning, and it is the thing worth putting inside a signed statement. When corral cannot prove its own authored test ran, it reports `TEST UNSOUND` and withholds the count rather than printing a clean zero — the same discipline applied to itself.
+
+## Honest limits
+
+- **No assessor has evaluated this.** Corral has not been mapped to a control ID, tested against a framework, or accepted by any auditor. If someone tells you it "satisfies" a control, they are ahead of the evidence.
+- **Anchoring uses a public transparency log by default.** What lands there is an attestation entry, not your source — but if any external log is unacceptable in your environment, that endpoint is configurable and unanchored records remain fully verifiable against your own key, with the weaker claim stated on their face.
+- **No threshold is calibrated.** A minimum kill rate can be enforced, but nobody can yet tell you which number means "adequately tested." Treat a verdict as evidence about specific gaps, not as a grade.
+- **Whole-repo coverage is limited.** Pairing source files to tests by naming convention finds 9 candidates out of 236 files walked on Flask, and zero on expressjs/express. The per-file audit is the reliable path.
+
+## Why this is worth your attention now
+
+Not because signed test records are novel in themselves. Because the question at the top of this note is about to be asked in earnest, and the useful thing corral produces is not "a certificate that tests ran." It is **evidence that the grader was independent of the author, and that the finding was demonstrated by execution rather than asserted.**
+
+That is a narrow claim. It is also, as far as I can tell, one that nothing else in a normal pipeline makes at all.
+
+---
+
+Source: [github.com/pdbethke/corralai](https://github.com/pdbethke/corralai) · [Verify a record yourself](/docs/verify-a-record/) · License: Elastic-2.0.

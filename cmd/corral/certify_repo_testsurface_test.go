@@ -371,3 +371,52 @@ func TestTestdataWideningDoesNotChangeCandidateClassification(t *testing.T) {
 		}
 	}
 }
+
+// RESIDUAL 1, second shape. Exclusivity matched known test paths EXACTLY, so
+// a DIRECTORY token slipped through: `-- pytest tests/test_a.py tests/unit`
+// covers the one selected candidate's test, and tests/unit is not itself a
+// known test file — so the scan keyed file-scoped while tests/unit/test_b.py
+// ran in that same command and graded a.py's mutants.
+func TestKeyMovesWhenAnUnselectedTestIsNamedViaItsDirectory(t *testing.T) {
+	cands := []reposcan.Candidate{
+		{Path: "a.py", TestPath: "tests/test_a.py", Lang: "python"},
+		{Path: "b.py", TestPath: "tests/unit/test_b.py", Lang: "python"},
+	}
+	selected := cands[:1]
+	argv := []string{"pytest", "-q", "tests/test_a.py", "tests/unit"}
+	if gradesFileScoped(argv, false, selected, cands, nil) {
+		t.Fatal("an argv naming the DIRECTORY holding an unselected candidate's test was called file-scoped — that test runs in the same command and grades a.py")
+	}
+	mk := func(otherTest string) string {
+		root := t.TempDir()
+		writeTree(t, root, map[string]string{
+			"a.py": "def a():\n    return 1\n", "b.py": "def b():\n    return 2\n",
+			"tests/test_a.py":      "def test_a():\n    assert True\n",
+			"tests/unit/test_b.py": otherTest,
+		})
+		return root
+	}
+	strong := keysFor(t, mk("def test_b():\n    assert b() == 2\n"), cands, selected, nil, argv, false)
+	weak := keysFor(t, mk("def test_b():\n    pass\n"), cands, selected, nil, argv, false)
+
+	if strong["a.py"] == weak["a.py"] {
+		t.Fatal("weakening tests/unit/test_b.py left a.py's key unchanged — the argv named its directory, so it runs and grades a.py, and auditConfigKey digests only the argv TEXT")
+	}
+}
+
+// ...and the converse must stay allowed: a directory token that contains ONLY
+// selected candidates' tests names nothing outside the set, so it cannot make
+// the scan grade by anything the key does not already cover.
+func TestGradesFileScopedAllowsADirectoryHoldingOnlySelectedTests(t *testing.T) {
+	sel := []reposcan.Candidate{{Path: "a.py", TestPath: "tests/unit/test_a.py", Lang: "python"}}
+	argv := []string{"pytest", "tests/unit", "tests/unit/test_a.py"}
+	if !gradesFileScoped(argv, false, sel, sel, nil) {
+		t.Fatal("a directory token holding only the selected candidate's own test must not force whole-suite — over-invalidating there throws away every verdict for a change that cannot reach them")
+	}
+	// A trailing slash is the same directory.
+	if gradesFileScoped([]string{"pytest", "tests/unit/test_a.py", "tests/other/"}, false, sel,
+		append(append([]reposcan.Candidate{}, sel...),
+			reposcan.Candidate{Path: "b.py", TestPath: "tests/other/test_b.py", Lang: "python"}), nil) {
+		t.Fatal("`tests/other/` and `tests/other` name the same directory — a trailing slash must not defeat the check")
+	}
+}

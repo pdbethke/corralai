@@ -925,11 +925,29 @@ func isRegularInRoot(root *os.Root, rel string) bool {
 //     kill rate the weakened suite would no longer produce. So the argv must
 //     ALSO name no test file OUTSIDE the selected set. The known-test set is
 //     the enumeration's own (candidates' TestPaths plus the `is-test`
-//     exclusions, the same facts testSurfacePaths draws on) — no new walk. A
-//     token that is not a known test path (a flag like -q or -k, a flag value
-//     like "not slow", a directory) is IGNORED here: it cannot make a scan
-//     file-scoped, and the coverage rule above already forces a directory
-//     token to whole-suite.
+//     exclusions, the same facts testSurfacePaths draws on) — no new walk.
+//     A token disqualifies the scan two ways: when it IS a known test path
+//     outside the selected set, and when it is a DIRECTORY PREFIX of one.
+//     The prefix half is not belt-and-braces — it was its own live hole:
+//     `-- pytest tests/test_a.py tests/unit` covers the one selected
+//     candidate's test, and `tests/unit` is not itself a known test FILE, so
+//     an exact-match-only check let it through — while tests/unit/test_b.py
+//     ran in that same command and killed a.py's mutants. The argv TEXT is
+//     keyed, but a named directory's CONTENTS are not, so a test inside it
+//     can grade the run without ever moving the key. Both halves compare
+//     through normalizeTestToken, so a trailing slash (`tests/unit/`) names
+//     the same directory. A directory holding only SELECTED tests is still
+//     allowed: it names nothing the key does not already cover.
+//     Everything else — a flag like -q or -k, a flag value like "not slow",
+//     a directory with no known test under it — is IGNORED: it cannot make a
+//     scan file-scoped.
+//     RESIDUAL: exclusivity can only recognize tests the ENUMERATION knows
+//     about. An argv naming a test file Enumerate never saw — one under a
+//     skipped directory, or an unpaired file matching no test-filename
+//     marker — does not disqualify, so that file grades the run and reaches
+//     no key. Deliberately the same recognition set testSurfacePaths uses; a
+//     second, wider notion of "what is a test" would be free to drift from
+//     the first.
 //   - --scope-tests only takes effect for a language with a VERIFIED per-file
 //     invocation and a paired test to scope to; otherwise testCmd silently
 //     falls back to the full suite. If even one selected file would fall back,
@@ -959,11 +977,20 @@ func gradesFileScoped(checkArgv []string, scopeTests bool, selected, cands []rep
 				return false
 			}
 		}
-		// Exclusivity: and NO test file outside that set may be named.
+		// Exclusivity: and NO test file outside that set may be named —
+		// directly, or by naming a directory that CONTAINS one.
 		known := knownTestPaths(cands, excl)
 		for tok := range named {
 			if known[tok] && !selectedTests[tok] {
 				return false
+			}
+			for kt := range known {
+				if selectedTests[kt] {
+					continue
+				}
+				if strings.HasPrefix(kt, tok+"/") {
+					return false
+				}
 			}
 		}
 		return true

@@ -789,3 +789,44 @@ func TestSoleGradedVendorSkipsAnOffRole(t *testing.T) {
 		t.Fatalf("an off role must not block the finding, got %q", got)
 	}
 }
+
+// A critic that was switched off must not report a clean bill of health. The
+// line used to read "no vacuous tests flagged" whenever the findings list was
+// empty — which is also what an ABSENT critic produces, so a single-vendor run
+// with --critic-model off announced a reviewer's approval that no reviewer gave.
+// An absent check reporting a pass is the exact failure corral measures in
+// other people's pipelines.
+func TestVerdictSaysTheCriticDidNotRunWhenItWasTurnedOff(t *testing.T) {
+	for _, model := range []string{"", "off", "OFF"} {
+		var buf bytes.Buffer
+		renderAdvVerdict(&buf, "pkg/thing.py", advVerdict{
+			Status: "certified", DevScored: true,
+			MutantsTotal: 5, Survivors: 1, DevKillRate: 0.8,
+			ModelsByRole: map[string]string{
+				advpool.RoleMutantGenerator: "gemini-3.6-flash",
+				advpool.RoleTestWriter:      "gemini-3.6-flash",
+				advpool.RoleTestCritic:      model,
+			},
+		})
+		got := buf.String()
+		if strings.Contains(got, "no vacuous tests flagged") {
+			t.Errorf("critic-model %q: claimed a clean critic review with no critic assigned:\n%s", model, got)
+		}
+		if !strings.Contains(got, "critic review: not run") {
+			t.Errorf("critic-model %q: did not say the critic never ran:\n%s", model, got)
+		}
+	}
+}
+
+// And an assigned critic that genuinely found nothing must still say so.
+func TestVerdictStillReportsACleanCriticWhenOneActuallyRan(t *testing.T) {
+	var buf bytes.Buffer
+	renderAdvVerdict(&buf, "pkg/thing.py", advVerdict{
+		Status: "certified", DevScored: true,
+		MutantsTotal: 5, Survivors: 1, DevKillRate: 0.8,
+		ModelsByRole: map[string]string{advpool.RoleTestCritic: "claude-haiku-4-5"},
+	})
+	if !strings.Contains(buf.String(), "no vacuous tests flagged") {
+		t.Errorf("a critic that ran and found nothing must say so:\n%s", buf.String())
+	}
+}

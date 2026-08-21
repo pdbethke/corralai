@@ -174,6 +174,48 @@ advisory — and `critic-model: off` disables it entirely, which is reasonable
 when one vendor gives you only one usable model. The critic never gates the
 verdict either way.
 
+## One key, if that is all you have
+
+Three provider inputs and a decorrelation rule read like corral needs an
+account with every vendor. It does not. The gate's verdict is measured by
+execution in a jail — the critic is advisory and never gates it — so a single
+key runs the whole thing:
+
+```yaml
+- uses: pdbethke/corralai@v0.5.1
+  with:
+    test-command:  "pytest -q"
+    openai-key:    ${{ secrets.OPENAI_API_KEY }}
+    mutant-model:  gpt-5.1-codex
+    writer-model:  gpt-5.1-codex
+    critic-model:  "off"
+    shadow-model:  "off"
+    min-kill-rate: "0.8"
+```
+
+That is a real gate. Faults get planted, your suite runs against every one of
+them in the jail, and the kill-rate either clears the bar or fails the check.
+
+**What you give up, and corral says so out loud.** With every graded seat on one
+vendor there is no independent read, and the verdict block prints:
+
+```
+decorrelation: every graded seat is google — if this code was WRITTEN by a
+google model, the same lineage planted the faults and graded the tests. Point a
+role at another vendor (--critic-model / --mutant-model) for an independent
+read.
+```
+
+That warning is the point of the mode, not an apology for it. If an agent from
+one lineage wrote the change, having the same lineage decide what counts as a
+fault is a narrower check than it looks — the failures a model cannot imagine
+in its own output are exactly the ones it will not plant. A second vendor in any
+one seat costs one more key and buys back the independence.
+
+**A disabled critic reports as disabled.** The verdict says `critic review: not
+run — no test-critic was assigned`, never "no vacuous tests flagged". An absent
+reviewer does not get to hand out a clean bill of health.
+
 ## Exit codes
 
 - **0** — the scan graded at least one file and every audited file met

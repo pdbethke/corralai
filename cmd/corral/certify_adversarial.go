@@ -443,8 +443,17 @@ func renderAdvVerdict(w io.Writer, codePath string, v advVerdict) {
 		fmt.Fprintf(w, "  PARTIAL AUDIT: %d of %d regions probed — these went unprobed: %s\n",
 			v.RegionsProbed, v.RegionsTotal, strings.Join(v.DroppedRegions, "; "))
 	}
+	criticModel := strings.TrimSpace(v.ModelsByRole[advpool.RoleTestCritic])
+	criticOff := criticModel == "" || strings.EqualFold(criticModel, "off")
 	if v.TimedOut {
 		fmt.Fprintln(w, "  critic review: not run — pool did not converge before the critic executed")
+	} else if criticOff {
+		// The same reasoning as the TIMED OUT branch above, for the seat the
+		// operator turned off. "no vacuous tests flagged" reads as a clean bill
+		// of health from a reviewer who never looked — an absent check
+		// reporting a pass, which is precisely the failure this tool exists to
+		// measure in other people's pipelines. Say nothing ran.
+		fmt.Fprintln(w, "  critic review: not run — no test-critic was assigned (--critic-model off)")
 	} else if len(v.VacuousFindings) == 0 {
 		fmt.Fprintln(w, "  critic review: no vacuous tests flagged")
 	} else {

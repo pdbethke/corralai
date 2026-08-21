@@ -1063,6 +1063,26 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 		fmt.Fprintf(stdout, "shadow: %d challenger seat(s) (%s) — a head-to-head measurement, never gating\n", len(shards), shadow)
 	}
 
+	// PREFLIGHT, before a single model call: would the project's own test
+	// command actually RUN the test this audit is going to author?
+	//
+	// If it would not, everything downstream still happens — mutants get
+	// planted, the suite gets scored, money gets spent — and the verdict comes
+	// back with proven_missed: 0 plus a note telling the operator to widen
+	// their command and run the whole thing again. The check costs one jail
+	// execution and no inference, so paying for it afterwards was never a
+	// trade, just an ordering mistake. Refuse here, and name the fix.
+	if collected, cerr := scorer.AuthoredTestWouldBeCollected(ctx, rs.CodePath, adequacy.ShellSplit(rs.TestCmd)); cerr == nil && !collected {
+		return zero, auditUsageErr(
+			"your test command would not run the test this audit writes, so it could not prove a gap even if it found one.\n"+
+				"  corral writes its killing test beside your own, as: %s\n"+
+				"  Your command does not collect that file — a command naming a single test file is the usual cause.\n"+
+				"  Widen it to the directory or the runner's own discovery: `-- pytest tests/` rather than `-- pytest tests/test_one.py`;\n"+
+				"  `-- npx jest tests/` rather than a single spec path.\n"+
+				"  Nothing was spent — this is checked before any model runs.",
+			advpool.AuthoredTestPathFor(rs.CodePath, rs.DevTestPath))
+	}
+
 	verdict, err := driveLocalRun(ctx, d, q, localMissionID, chatterFor, poll, time.Sleep, stdout, rec, actorFor, swarm)
 	if err != nil {
 		return zero, auditErr("%v", err)

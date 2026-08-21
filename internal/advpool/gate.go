@@ -403,6 +403,41 @@ func (s JailScorer) verifyAuthoredTestReaches(ctx context.Context, codePath stri
 	return !passed, nil
 }
 
+// AuthoredTestPathFor is the path the pool-authored test is written to, for
+// an error message that can name the file rather than describe it.
+func AuthoredTestPathFor(codePath, devTestPath string) string {
+	return authoredTestPath(codePath, devTestPath, nil)
+}
+
+// AuthoredTestWouldBeCollected reports whether the project's own test command
+// would RUN a test written to the authored path — the exported form of the
+// positive control, so a caller can ask BEFORE spending a run rather than
+// learning it from an unsound verdict afterwards.
+//
+// The check existed already; only its timing was wrong. It ran after the
+// test-writer had authored a killing test, which meant an operator whose
+// command names a single FILE paid for a full audit, received
+// proven_missed: 0, and was then told to widen the command and run again. Two
+// runs and a contradictory-looking pair of verdicts to discover something one
+// jail execution and no model calls can settle up front.
+//
+// authoredTestPath deliberately lands the file in the DEV TEST's directory on
+// the reasoning that the directory is "collected by construction". That holds
+// for a command naming a directory or a discovery-based runner, and fails for
+// a command naming one file — `node tests/x.test.js`, `pytest tests/x_test.py`
+// — which is an ordinary way to invoke a suite, not an exotic one.
+//
+// Returns (true, nil) when the authored test would be collected. Costs one
+// jail run and nothing else.
+func (s JailScorer) AuthoredTestWouldBeCollected(ctx context.Context, codePath string, cmd []string) (bool, error) {
+	if s.BaseFiles == nil {
+		// Single-file mode overlays the test at the plugin's own synthetic
+		// path and supplies the command, so collection is not in question.
+		return true, nil
+	}
+	return s.verifyAuthoredTestReaches(ctx, codePath, cmd)
+}
+
 // scoreWorkspace builds the jail base file-map and the test command for a
 // scoring run. In single-file mode (BaseFiles nil) it reproduces the original
 // behavior exactly: the language scaffold plus the dev test overlaid at the

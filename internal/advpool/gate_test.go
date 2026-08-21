@@ -570,3 +570,62 @@ func TestSignVerdictMarksShadowProducerNonGating(t *testing.T) {
 // --substrate workspace path), so it must be on the good side of that seam —
 // asserted at compile time, since the degradation is silent at runtime.
 var _ verboseJail = (*adequacy.WorkspaceRunner)(nil)
+
+// collectionProbeJail answers the positive control: `collects` decides whether
+// the command "runs" the file the authored test would be written to. A command
+// that does not collect it leaves the deliberately-invalid canary unexecuted,
+// so the suite still PASSES — which is exactly how an uncollected authored test
+// hides.
+type collectionProbeJail struct{ collects bool }
+
+func (j *collectionProbeJail) RunTest(ctx context.Context, files map[string]string, cmd []string) (bool, error) {
+	if j.collects {
+		return false, nil // the canary ran and failed the suite: collected
+	}
+	return true, nil // nothing ran it, so the suite passed regardless
+}
+
+// The check has to be answerable BEFORE the pool spends anything. It used to
+// run only after the test-writer had authored a killing test, so an operator
+// whose command names a single file paid for a whole audit, got
+// proven_missed: 0, and was told to widen the command and run it again.
+func TestAuthoredTestWouldBeCollectedDetectsAnUncollectedPath(t *testing.T) {
+	base := map[string]string{"scripts/x.js": "// code", "tests/x.test.js": "// dev test"}
+
+	notCollected := JailScorer{Jail: &collectionProbeJail{collects: false}, BaseFiles: base, DevTestPath: "tests/x.test.js"}
+	ok, err := notCollected.AuthoredTestWouldBeCollected(context.Background(), "scripts/x.js", []string{"node", "tests/x.test.js"})
+	if err != nil {
+		t.Fatalf("AuthoredTestWouldBeCollected: %v", err)
+	}
+	if ok {
+		t.Error("a single-file command was reported as collecting a NEW sibling file it never names")
+	}
+
+	collected := JailScorer{Jail: &collectionProbeJail{collects: true}, BaseFiles: base, DevTestPath: "tests/x.test.js"}
+	ok, err = collected.AuthoredTestWouldBeCollected(context.Background(), "scripts/x.js", []string{"npx", "jest", "tests/"})
+	if err != nil {
+		t.Fatalf("AuthoredTestWouldBeCollected: %v", err)
+	}
+	if !ok {
+		t.Error("a directory-wide command was refused — a false positive here blocks a correct setup")
+	}
+}
+
+// Single-file mode overlays the test at the plugin's own path and supplies the
+// command, so collection is never in question and the probe must not run.
+func TestAuthoredTestCollectionIsNotQuestionedInSingleFileMode(t *testing.T) {
+	s := JailScorer{Jail: &collectionProbeJail{collects: false}} // BaseFiles nil
+	ok, err := s.AuthoredTestWouldBeCollected(context.Background(), "scripts/x.js", []string{"node", "x.test.js"})
+	if err != nil || !ok {
+		t.Errorf("single-file mode must answer true without probing; got (%v, %v)", ok, err)
+	}
+}
+
+// The error message names the file, so the operator does not have to grep
+// corral's source for its naming convention — which is what this session did.
+func TestAuthoredTestPathForNamesTheFile(t *testing.T) {
+	got := AuthoredTestPathFor("scripts/ci/check-unicode-safety.js", "tests/scripts/check-unicode-safety.test.js")
+	if !strings.Contains(got, "_corral") || !strings.Contains(got, "tests/scripts/") {
+		t.Errorf("AuthoredTestPathFor = %q, want a _corral-marked file in the dev test's directory", got)
+	}
+}

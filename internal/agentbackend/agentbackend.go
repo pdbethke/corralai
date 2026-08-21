@@ -170,8 +170,16 @@ func FromEnv() Backend {
 		// Gemini silently did not.
 		return &openaiBackend{base: geminiBase(), key: geminiKey(), model: model}
 	case "openai", "openrouter":
+		// Same per-model wire choice as ForModel — a Codex model named through
+		// MODEL_BACKEND=openai must reach /responses, not /chat/completions.
+		// OpenRouter fronts many vendors on the chat-completions shape, so a
+		// "-codex" name there is left alone unless the operator points
+		// OPENAI_BASE_URL at OpenAI itself.
+		if env("MODEL_BACKEND", "") == "openai" {
+			return newOpenAIBackend(agentSecret("OPENAI_API_KEY"), model)
+		}
 		return &openaiBackend{
-			base:  env("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+			base:  openAIBase(),
 			key:   agentSecret("OPENAI_API_KEY"),
 			model: model,
 		}
@@ -261,11 +269,11 @@ func ForModel(model string) (Backend, error) {
 		if key == "" {
 			return nil, fmt.Errorf("agentbackend: ForModel: model %q needs an OpenAI key — set OPENAI_API_KEY", model)
 		}
-		return &openaiBackend{
-			base:  env("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-			key:   key,
-			model: model,
-		}, nil
+		// Not every OpenAI model speaks the same wire format: the Codex models
+		// are served on the Responses API only. newOpenAIBackend picks by model
+		// rather than by vendor, so naming one no longer routes to an endpoint
+		// that cannot serve it.
+		return newOpenAIBackend(key, model), nil
 	default:
 		return nil, fmt.Errorf("agentbackend: ForModel: cannot infer a cloud vendor for model %q (this path is for cross-vendor cloud critics; local/ollama models use the base backend)", model)
 	}

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Elastic-2.0
 import { cockpitHud, cockpitViews, cockpitTasks, cockpitAgents, cockpitFindings, cockpitExec } from '../lib/cockpitShell';
 import ReplayBarControls from './ReplayBarControls.astro';
+import { buildReplayCorpus } from '../lib/replayCorpus';
 
 const generatedRecordings = import.meta.glob('../data/generated/recordings/*.json', { eager: true });
 const legacyRecordings = import.meta.glob('../data/recordings/*.json', { eager: true });
@@ -35,6 +36,15 @@ const minutes = Math.round((meta.duration_seconds || 0) / 60);
 // Optional per-recording line of context the tape itself cannot carry (e.g.
 // "the suite was green"). Recordings without one render exactly as before.
 const heroNote = (meta.hero_note || '').trim();
+
+// Every recorded audit's verdict, reduced at build time, so the end card can
+// answer "is this kill-rate good?" — which one tape alone cannot.
+const allTapes: Record<string, unknown> = {};
+for (const [path, mod] of Object.entries(preferredRecordings)) {
+  if (path.endsWith('.meta.json')) continue;
+  allTapes[path.split('/').pop()!.replace(/\.json$/, '')] = (mod as any).default ?? mod;
+}
+const replayCorpus = buildReplayCorpus(allTapes, heroSlug);
 
 // Every hero tape is an adversarial-pool audit: its signed verdict — a
 // kill-rate + survivors, not a task/finding count — is the real story. Read it
@@ -282,6 +292,8 @@ const pool = poolVerdict
   :global(#cockpit .tests-lens .tv-ok) { color: var(--stage-green,#8fdcab); border-left-color: var(--stage-green,#8fdcab); }
   :global(#cockpit .tests-lens .tv-review) { color: var(--stage-red,#e8503a); border-left-color: var(--stage-red,#e8503a); }
   :global(#cockpit .tests-lens .tests-models) { color: var(--stage-muted,#8a8170); font-size: 11.5px; margin-top: 4px; }
+  /* the replaced line reads as context; the planted one reads as the fault */
+  :global(#cockpit .tests-lens .faultwas) { color: #8a8170; text-decoration: line-through; text-decoration-color: rgba(138,129,112,.5); }
   :global(#cockpit .tests-lens .faultline) { background: rgba(232,80,58,.32); color: #ff7a63; font-weight: 700; border-radius: 3px; padding: 0 2px; }
   :global(#cockpit .cv-mission), :global(#cockpit .cv-prop), :global(#cockpit .cv-hub) {
     border: 1px solid var(--stage-line); border-radius: 8px; padding: 12px 14px; margin-bottom: 12px; background: var(--stage-panel);
@@ -476,7 +488,10 @@ const pool = poolVerdict
      brand look. Must run before the player <script src>. -->
 <script is:inline>document.documentElement.setAttribute('data-skin-lock', 'ranch');</script>
 <script src="/replay-player.js" is:inline></script>
-<script define:vars={{ golden }} is:inline>
+<script define:vars={{ golden, replayCorpus }} is:inline>
+  // Handed to the shared player, never fetched: the site makes no external
+  // requests, so the corpus behind the end card is baked in at build time.
+  window.CORRAL_REPLAY_CORPUS = replayCorpus;
   // The site's minimal DOM contract implementation (see replay-player.js's
   // header): only 'replay' exists here, so setView just needs to keep the
   // control bar visible — there is no tab system to dispatch between.

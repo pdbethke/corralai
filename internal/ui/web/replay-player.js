@@ -2893,13 +2893,63 @@ function renderSampleMemory(){
 }
 function renderSampleSkills(){
   const el = document.getElementById('skills'); if(!el) return;
-  const skills = [
-    ['mutation-hunks', 'skills/mutate/search-replace', 'minimal single-point, goal-violating edits that still compile'],
-    ['decorrelated-critic', 'skills/audit/decorrelated-critic', 'a cross-vendor critic reads the suite cold for vacuous tests'],
-    ['certify-by-execution', 'skills/audit/kill-rate-gate', 'grade the suite by the kill-rate a jail measures, never a model’s word'],
-  ];
-  el.innerHTML = `<div class="cv-pane"><div class="cv-explain">${cvSampleTag()} Audit skills the fleet shares — how to plant faults, decorrelate the critic, certify by execution — synced by every member, versioned in the brain so one improvement propagates to all.${whLink(WH_SCORECARD, 'see which model catches bugs in DuckDB')}</div>`
-    + skills.map(([n,p,d]) => `<div class="cv-skrow"><b>${esc(n)}</b> <span class="cv-meta">${esc(p)}</span><div class="cv-meta">${esc(d)}</div></div>`).join('') + '</div>';
+  // Grounded in THIS tape, not in a fixed list. Every row below is something
+  // the run actually did — the goal it had to violate, the regions it sharded
+  // across, the vendor split, the bar it was graded against — so the pane
+  // describes the audit on screen instead of a generic one. Nothing here comes
+  // from anywhere but the recording.
+  const V = replayPoolVerdict, S = replayPoolSubject;
+  const shards = [];
+  for(let i=0; replayEvents && i<replayEvents.length; i++){
+    const ev = replayEvents[i];
+    if(ev.kind === 'pool_shard' && ev.detail) shards.push(ev.detail);
+  }
+  const skills = [];
+  if(S && S.goal){
+    const goal = S.goal.length > 190 ? S.goal.slice(0, 190).replace(/\s+\S*$/, '') + '…' : S.goal;
+    skills.push(['goal-first mutation', 'skills/mutate/violate-the-stated-goal',
+      'a fault only counts if it breaks the guarantee under audit — here: “' + goal + '”']);
+  }
+  if(shards.length){
+    const regions = shards.map(s => s.region).filter(Boolean);
+    const planted = shards.reduce((n, s) => n + (s.mutants || 0), 0);
+    skills.push(['region sharding', 'skills/mutate/shard-by-function',
+      'one generator seat per function so no corner goes unprobed — ' + shards.length + ' seats over '
+      + regions.join(', ') + ', ' + planted + ' faults planted']);
+  }
+  if(V && V.models){
+    const gen = V.models['mutant-generator'], crit = V.models['test-critic'];
+    if(gen && crit){
+      skills.push(['decorrelated critic', 'skills/audit/decorrelated-critic',
+        crit + ' read the suite cold, a different model from ' + gen + ' which planted the faults'
+        + (crit.split('-')[0] !== gen.split('-')[0] ? ' — and a different vendor' : '')
+        + '. Advisory: it never gates the verdict.']);
+    }
+  }
+  if(V && typeof V.killRate === 'number'){
+    skills.push(['certify by execution', 'skills/audit/kill-rate-gate',
+      'the grade is what a jail measured — ' + Math.round(V.killRate * 100)
+      + '% of planted faults killed, against the 80% bar — never a model’s own account of its work']);
+  } else if(skills.length){
+    // The verdict is the last beat of a run, so for most of the replay there is
+    // no grade yet. Say that, rather than quietly dropping the row and leaving
+    // the impression the audit does not measure anything.
+    skills.push(['certify by execution', 'skills/audit/kill-rate-gate',
+      'the grade is whatever a jail measures — still being scored at this point in the run; the verdict lands on the final beat']);
+  }
+  const sampled = !skills.length;
+  if(sampled){
+    skills.push(
+      ['mutation-hunks', 'skills/mutate/search-replace', 'minimal single-point, goal-violating edits that still compile'],
+      ['decorrelated-critic', 'skills/audit/decorrelated-critic', 'a cross-vendor critic reads the suite cold for vacuous tests'],
+      ['certify-by-execution', 'skills/audit/kill-rate-gate', 'grade the suite by the kill-rate a jail measures, never a model’s word'],
+    );
+  }
+  const lede = sampled
+    ? cvSampleTag() + ' Audit skills the fleet shares — how to plant faults, decorrelate the critic, certify by execution — synced by every member, versioned in the brain so one improvement propagates to all.'
+    : 'The audit skills THIS run exercised — how it planted faults, how it split the work, who was allowed to judge, and what the grade was measured with. Skills are shared and versioned in the brain, so one improvement propagates to every member.';
+  el.innerHTML = `<div class="cv-pane"><div class="cv-explain">${lede}${whLink(WH_SCORECARD, 'see which model catches bugs in DuckDB')}</div>`
+    + skills.map(([n,pth,d]) => `<div class="cv-skrow"><b>${esc(n)}</b> <span class="cv-meta">${esc(pth)}</span><div class="cv-meta">${esc(d)}</div></div>`).join('') + '</div>';
 }
 // renderReplayProposals: the herd's PROPOSED TESTS, reconstructed from the tape
 // up to the playhead. corral doesn't just grade your suite — when a planted

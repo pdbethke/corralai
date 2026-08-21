@@ -615,3 +615,28 @@ test('the surviving fault shows what replaced what, not the original line', asyn
   expect(was).not.toEqual(now);
   expect(now.length).toBeGreaterThan(0);
 });
+
+// The skills pane used to list three fixed techniques regardless of the tape.
+// Every row now comes from the recording itself — the goal the faults had to
+// violate, the functions the work was sharded across, the vendor split, the bar
+// the grade was measured against. Nothing is sourced from outside the tape.
+test('the skills lens describes the audit on screen, not a generic one', async ({ page }) => {
+  await page.goto('/');
+  await expect(async () => {
+    expect(Number(await page.locator('#replay-scrub').getAttribute('max'))).toBeGreaterThan(0);
+  }).toPass({ timeout: 5000 });
+
+  // The verdict is the final beat, so park the playhead at the end before
+  // asserting on the measured grade.
+  const max = Number(await page.locator('#replay-scrub').getAttribute('max'));
+  await page.evaluate((n) => (window as any).seekReplay(n), max);
+  await page.evaluate(() => (window as any).setView('skills'));
+  const skills = page.locator('#skills');
+  // This run's own subject matter, straight off the pool_subject beat.
+  await expect(skills).toContainText('goal-first mutation');
+  await expect(skills).toContainText(/contributes exactly its budget/);
+  // The functions it actually sharded across.
+  await expect(skills).toContainText('effective_pot');
+  // The measured grade, not a slogan.
+  await expect(skills).toContainText(/\d+% of planted faults killed/);
+});

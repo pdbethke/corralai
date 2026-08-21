@@ -65,11 +65,14 @@ for (const [p, mod] of Object.entries(streamModules)) {
     video: fs.existsSync(`public/recordings/${slug}.mp4`) ? `/recordings/${slug}.mp4` : undefined,
   });
 }
-// Lead with the real-library tape (more-itertools — a package we didn't write,
-// the longest run, with real findings): the most legible "aha" for a first-time
-// viewer, and it recognizably audits code that isn't ours. Then the cross-vendor
-// mixtape thesis tape, then the rest alphabetically.
-const LEAD_ORDER = ['more-itertools-reliable-critic', 'pool-fence-crossvendor'];
+// Lead with the sportspicker pair, in that order: the same file audited twice,
+// once on a branch whose green suite hides a real bug (NEEDS-REVIEW) and once on
+// main (CERTIFIED). Read together they are the clearest statement of what corral
+// measures and what CI cannot. Then the real-library tape (more-itertools — a
+// package we didn't write), then the cross-vendor mixtape thesis tape, then the
+// rest alphabetically.
+const LEAD_ORDER = ['sportspicker-green-suite-gap', 'sportspicker-pickem-certified',
+                    'more-itertools-reliable-critic', 'pool-fence-crossvendor'];
 const leadRank = (slug: string) => {
   const i = LEAD_ORDER.indexOf(slug);
   return i === -1 ? LEAD_ORDER.length : i;

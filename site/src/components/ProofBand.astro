@@ -7,6 +7,8 @@
 // Rendered as plain theme-aware HTML/CSS: no images, no external requests,
 // nothing to fetch (the site's test-enforced zero-external-requests posture).
 const audits = [
+  { lang: 'Python',     target: 'sportspicker-core · awards.py (green branch)', slug: 'sportspicker-green-suite-gap',   status: 'needs-review', killed: 15, total: 20, note: 'a green 80-test suite hiding a real bug' },
+  { lang: 'Python',     target: 'sportspicker-core · awards.py (main)',         slug: 'sportspicker-pickem-certified',  status: 'certified',    killed: 18, total: 20, note: 'the same file, one test richer' },
   { lang: 'Python',     target: 'more-itertools · recipes.py',          slug: 'more-itertools-reliable-critic', status: 'certified',   killed: 18, total: 20, note: "a library we didn't write — 2 survivors disclosed, unadjudicated" },
   { lang: 'TypeScript', target: 'vercel/ms · index.ts',                 slug: 'vercel-ms-audit',                status: 'needs-review', killed: 4,  total: 5,  note: '1 planted fault the suite did not catch' },
   { lang: 'Go',         target: 'google/uuid · version4.go',            slug: 'google-uuid-audit',              status: 'needs-review', killed: 13, total: 20, note: '7 survivors — below the bar, handed to review' },
@@ -16,16 +18,19 @@ const audits = [
 ];
 ---
 <section class="section wide" id="proof-band">
-  <h2>Six real audits, six signed verdicts</h2>
+  <h2>Eight real audits, eight signed verdicts</h2>
   <p class="lede">
     We pointed corral at real code across four languages — libraries we didn't
     write, plus our own — and graded each suite <em>by execution</em>: plant
     goal-violating faults, run the developer's <strong>own</strong> tests against
-    them in a jail, sign the kill-rate. more-itertools' suite caught 90% and
-    <strong>CERTIFIED</strong>. The rest fell short of the bar and were sent back
-    with their survivors <em>disclosed</em> — corral hands those to a human to
-    judge, it doesn't rule them defects. Every verdict is a signed record you can
-    replay and verify offline — pick any row.
+    them in a jail, sign the kill-rate. The first two rows are the same file
+    twice: on a branch whose suite is green but thin it scored 75% and came back
+    <strong>NEEDS-REVIEW</strong>; on main, one test richer, 90% and
+    <strong>CERTIFIED</strong>. more-itertools certified at 90% too. The rest
+    fell short of the bar and were sent back with their survivors
+    <em>disclosed</em> — corral hands those to a human to judge, it doesn't rule
+    them defects. Every verdict is a signed record you can replay and verify
+    offline — pick any row.
   </p>
 
   <ul class="verdicts" role="list">

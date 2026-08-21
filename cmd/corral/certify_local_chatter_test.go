@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/pdbethke/corralai/internal/advpool"
+	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/agentworker"
 )
 
@@ -389,7 +390,9 @@ func TestResolveAuditRolesDerivesBackendFromAssignedModels(t *testing.T) {
 // operator's back.
 func TestBaseVendorMapsBackendLabels(t *testing.T) {
 	for _, tc := range []struct{ env, want string }{
-		{"", "anthropic"},
+		// UNSET is not a vendor — FromEnv answers it with ollama, and this
+		// must agree or a mixed-vendor run routes a cloud seat to ollama.
+		{"", ""},
 		{"anthropic", "anthropic"},
 		{"claude", "anthropic"},
 		{"gemini", "google"},
@@ -401,6 +404,57 @@ func TestBaseVendorMapsBackendLabels(t *testing.T) {
 		if got := baseVendor(); got != tc.want {
 			t.Errorf("MODEL_BACKEND=%q: baseVendor()=%q want %q", tc.env, got, tc.want)
 		}
+	}
+}
+
+// TestUnpinnedMixedVendorRunRoutesEverySeatByName is the regression for a
+// cross-vendor run with no MODEL_BACKEND set — the documented shape of
+// `certify --local` (a cheap generator/writer on one vendor, a decorrelated
+// critic on another). resolveAuditRoles cannot infer a single backend from
+// mixed vendors, so it leaves MODEL_BACKEND unset; baseVendor used to answer
+// "anthropic" anyway, which made the Claude seat look like it was already on
+// the base backend. It was skipped, fell through to the ollama default, and
+// died on a 404 for a model ollama had never pulled.
+//
+// Asserted by its credential requirement, which is the observable difference:
+// a seat that is genuinely routed to Anthropic REFUSES without an Anthropic
+// key. Before the fix this returned a working chatter and no error at all.
+func TestUnpinnedMixedVendorRunRoutesEverySeatByName(t *testing.T) {
+	t.Setenv("MODEL_BACKEND", "")
+	t.Setenv("GEMINI_API_KEY", "test-google-key")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+
+	_, err := localChatterFor(advpool.RoleAssignment{
+		advpool.RoleMutantGenerator: "gemini-3.6-flash",
+		advpool.RoleTestWriter:      "gemini-3.6-flash",
+		advpool.RoleTestCritic:      "claude-haiku-4-5-20251001",
+	}, &agentbackend.UsageMeter{})
+	if err == nil {
+		t.Fatal("an unpinned mixed-vendor run accepted a Claude critic with no Anthropic key: " +
+			"the seat was not routed by name and would reach the ollama default instead")
+	}
+	if !strings.Contains(err.Error(), advpool.RoleTestCritic) {
+		t.Errorf("error must name the seat to fix, got: %v", err)
+	}
+}
+
+// TestPinnedGatewayIsNeverReRoutedBehindTheOperator guards the other half of
+// the same branch: an EXPLICIT gateway (openrouter/ollama) fronts many vendors
+// on one endpoint, so a "claude-" name there is NOT an Anthropic call. It must
+// stay on the gateway — and therefore must not demand an Anthropic key.
+func TestPinnedGatewayIsNeverReRoutedBehindTheOperator(t *testing.T) {
+	t.Setenv("MODEL_BACKEND", "openrouter")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "test-openrouter-key")
+
+	chatterFor, err := localChatterFor(advpool.RoleAssignment{
+		advpool.RoleMutantGenerator: "claude-sonnet-5",
+	}, &agentbackend.UsageMeter{})
+	if err != nil {
+		t.Fatalf("a gateway-pinned claude- name was re-routed to Anthropic behind the operator: %v", err)
+	}
+	if chatterFor(advpool.RoleMutantGenerator) == nil {
+		t.Fatal("gateway-pinned seat resolved to nil")
 	}
 }
 

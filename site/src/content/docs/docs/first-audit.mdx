@@ -170,3 +170,34 @@ guarantee in `--goal`, and pass whatever check command actually exercises it
 [Getting started](/docs/getting-started/) for the jail-visibility gotcha
 (system-installed toolchain, not a `--user`/snap install) and the
 Ubuntu-apparmor fix if `bwrap` won't start.
+
+## Reproduce a published audit yourself
+
+The two `sportspicker-core` tapes on the [recordings
+page](/recordings/) are the easiest published runs to reproduce, because the
+subject is a public, zero-dependency library and the audit needs nothing but
+`pytest`. It scores sports pick'em contests, and the guarantee it has to defend
+is one anyone can hold in their head: *a contest contributes exactly its budget*
+— whatever scoring rule is used, however many people played, the points awarded
+in a round sum to that round's pot.
+
+```bash
+git clone https://github.com/pdbethke/sportspicker-core && cd sportspicker-core
+python3 -m venv .venv && .venv/bin/pip install pytest
+
+corral certify --local --repo-dir . \
+  --code sportspicker_core/awards.py --test tests_core/test_awards.py \
+  --goal "A contest contributes exactly its budget: for any round, the points awarded across the field sum to that round's pot — whatever normalization strategy is chosen, however many members played, and however they scored, including a round nobody scored in. min_participants gates on members who SCORED, not members who merely submitted picks." \
+  --mutant-model gemini-3.6-flash --writer-model gemini-3.6-flash \
+  --critic-model claude-haiku-4-5-20251001 \
+  -- .venv/bin/python -m pytest tests_core -q
+```
+
+`main` scored **18/20 — CERTIFIED**. Then run the identical command on
+`git checkout demo/bug-counts-pickers`, a branch that carries a real bug and a
+**green** 80-test suite: **15/20 — NEEDS-REVIEW**. Same file, same command, and
+CI is happy with both. That gap is the whole product in one command.
+
+Your numbers will not match ours exactly — the mutants are generated fresh each
+run, so the two verdicts are samples, not constants. What reproduces is the
+direction: the thinner suite scores materially worse on the same code.

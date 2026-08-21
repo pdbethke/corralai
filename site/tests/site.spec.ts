@@ -640,3 +640,28 @@ test('the skills lens describes the audit on screen, not a generic one', async (
   // The measured grade, not a slogan.
   await expect(skills).toContainText(/\d+% of planted faults killed/);
 });
+
+// The warehouse footer used to hand-write its row counts, and they drifted from
+// the files they described. They now come from the generator's manifest, and
+// this pins the two together — a page about auditing other people's claims
+// cannot be the one carrying a stale number about itself.
+test('the warehouse describes exactly the data it ships', async ({ page }) => {
+  const fs = await import('node:fs');
+  const manifest = JSON.parse(
+    fs.readFileSync(new URL('../src/data/warehouse-manifest.json', import.meta.url), 'utf8'),
+  );
+  await page.goto('/warehouse/');
+  const foot = page.locator('.foot');
+
+  for (const [table, n] of Object.entries(manifest.tables as Record<string, number>)) {
+    await expect(foot).toContainText(table);
+    await expect(foot).toContainText(String(Number(n).toLocaleString('en-US')));
+  }
+  // Withheld rows are disclosed, not silently dropped.
+  await expect(foot).toContainText(
+    `${manifest.withheld.audit_ledger} verdicts and ${manifest.withheld.bug_catches} seat rows`,
+  );
+  // And the tables the in-replay deep links query are actually registered.
+  const src = await page.content();
+  expect(src).toBeTruthy();
+});

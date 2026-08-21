@@ -102,6 +102,7 @@ func localChatterFor(assign advpool.RoleAssignment, meter *agentbackend.UsageMet
 	base := agentbackend.FromEnv()
 	sw, canSwitch := base.(agentbackend.ModelSwitcher)
 	bv := baseVendor()
+	pinned := backendPinned()
 
 	// Resolve EVERY seat, not just the critic. This used to cross-route the
 	// test-critic alone, which quietly made the product's central claim
@@ -120,27 +121,32 @@ func localChatterFor(assign advpool.RoleAssignment, meter *agentbackend.UsageMet
 	// Resolved UP FRONT so a missing credential refuses the run before any
 	// jail or store is opened, naming the role the operator has to fix.
 	perRole := map[string]agentworker.Chatter{}
-	if bv != "" {
-		for _, role := range []string{
-			advpool.RoleMutantGenerator,
-			advpool.RoleTestWriter,
-			advpool.RoleTestCritic,
-			advpool.RoleMutantGeneratorShadow,
-		} {
-			model := strings.TrimSpace(assign[role])
-			if model == "" {
-				continue
-			}
-			v := agentbackend.VendorOf(model)
-			if v == "" || v == bv {
-				continue // unrecognized, or already this backend's vendor
-			}
-			cb, err := agentbackend.ForModel(model)
-			if err != nil {
-				return nil, fmt.Errorf("cross-vendor %s: %w", role, err)
-			}
-			perRole[role] = agentbackend.AsChatterMetered(cb, meter)
+	for _, role := range []string{
+		advpool.RoleMutantGenerator,
+		advpool.RoleTestWriter,
+		advpool.RoleTestCritic,
+		advpool.RoleMutantGeneratorShadow,
+	} {
+		model := strings.TrimSpace(assign[role])
+		if model == "" {
+			continue
 		}
+		v := agentbackend.VendorOf(model)
+		if v == "" {
+			continue // a local/ollama name: the base backend serves it
+		}
+		if pinned && (v == bv || bv == "") {
+			// Already this backend's vendor — or the operator pinned a
+			// GATEWAY (openrouter/ollama) that fronts many vendors behind one
+			// endpoint, where a "claude-" name is not an Anthropic call and
+			// must never be re-routed to Anthropic behind their back.
+			continue
+		}
+		cb, err := agentbackend.ForModel(model)
+		if err != nil {
+			return nil, fmt.Errorf("cross-vendor %s: %w", role, err)
+		}
+		perRole[role] = agentbackend.AsChatterMetered(cb, meter)
 	}
 
 	return func(role string) agentworker.Chatter {
@@ -154,6 +160,15 @@ func localChatterFor(assign advpool.RoleAssignment, meter *agentbackend.UsageMet
 	}, nil
 }
 
+// backendPinned reports whether the operator pinned a base backend at all.
+// UNSET is not a vendor: it is the absence of a choice, and FromEnv answers it
+// with the ollama default. Telling the two apart is what lets an unpinned run
+// route every cloud-named seat by name, while an explicitly pinned gateway
+// keeps its hands-off guarantee.
+func backendPinned() bool {
+	return strings.TrimSpace(os.Getenv("MODEL_BACKEND")) != ""
+}
+
 // baseVendor is the vendor the process-wide backend actually talks to, as a
 // VendorOf-comparable string — the thing a per-role model must DIFFER from to
 // need its own backend.
@@ -163,10 +178,21 @@ func localChatterFor(assign advpool.RoleAssignment, meter *agentbackend.UsageMet
 // endpoint, so a "claude-" model name there is not an Anthropic call and must
 // not be re-routed to Anthropic: an explicit MODEL_BACKEND means every seat
 // goes to that endpoint on purpose, and cross-routing would silently overrule
-// the operator and spend on a vendor they did not choose.
+// the operator and spend on a vendor they did not choose. Callers pair it with
+// backendPinned to tell that deliberate gateway apart from an unset backend,
+// which also has no cloud vendor but chose nothing.
+//
+// Unset used to answer "anthropic" here, a straggler from the retired "unset
+// means Claude" default. It disagreed with FromEnv (which builds ollama) in
+// exactly one reachable case — a MIXED-vendor run, where resolveAuditRoles
+// cannot infer a single backend and so leaves MODEL_BACKEND unset. The Claude
+// seat then matched this phantom "anthropic" base, skipped cross-routing, and
+// was handed to the OLLAMA backend, which answered 404 for a model it had
+// never heard of. A Gemini generator with a Claude critic — the documented
+// cross-vendor shape — could not run at all.
 func baseVendor() string {
 	switch strings.TrimSpace(os.Getenv("MODEL_BACKEND")) {
-	case "", "anthropic", "claude":
+	case "anthropic", "claude":
 		return "anthropic"
 	case "gemini":
 		return "google"

@@ -1,0 +1,15 @@
+{
+  "directive": "adversarial pool \u00b7 sportspicker_core/awards.py on main (the same file, the full suite)",
+  "task_count": 6,
+  "done_task_count": 6,
+  "finding_count": 0,
+  "duration_seconds": 37,
+  "models": [
+    "claude-haiku-4-5-20251001",
+    "gemini-3.6-flash"
+  ],
+  "platform": {
+    "inference": "vendor cloud \u2014 Gemini 3.6 Flash planting and writing (Google), a decorrelated Claude Haiku 4.5 critic (Anthropic)",
+    "host": "linux/amd64 \u00b7 bwrap jail"
+  }
+}

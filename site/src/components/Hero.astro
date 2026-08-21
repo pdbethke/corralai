@@ -10,7 +10,7 @@ const hasGeneratedRecordings = Object.keys(generatedRecordings).some(
 );
 const preferredRecordings = hasGeneratedRecordings ? generatedRecordings : legacyRecordings;
 const fallbackRecordings = hasGeneratedRecordings ? legacyRecordings : {};
-const heroSlug = (process.env.CORRALAI_HERO_SLUG || 'more-itertools-reliable-critic').trim() || 'more-itertools-reliable-critic';
+const heroSlug = (process.env.CORRALAI_HERO_SLUG || 'sportspicker-green-suite-gap').trim() || 'sportspicker-green-suite-gap';
 
 function readRecordingModule(modules: Record<string, any>, slug: string, suffix: string) {
   const key = Object.keys(modules).find((p) => p.endsWith(`/${slug}${suffix}`));
@@ -32,6 +32,9 @@ if (!golden || !meta) {
 }
 
 const minutes = Math.round((meta.duration_seconds || 0) / 60);
+// Optional per-recording line of context the tape itself cannot carry (e.g.
+// "the suite was green"). Recordings without one render exactly as before.
+const heroNote = (meta.hero_note || '').trim();
 
 // Every hero tape is an adversarial-pool audit: its signed verdict — a
 // kill-rate + survivors, not a task/finding count — is the real story. Read it
@@ -95,6 +98,7 @@ const pool = poolVerdict
         Below is a real run, replaying now — {minutes}m, every step scrubbable.
       </p>
     )}
+    {heroNote && <p class="caption hero-note">{heroNote}</p>}
   </div>
   <div id="stage-frame">
     <div class="cockpit-hud" set:html={cockpitHud} />
@@ -163,7 +167,7 @@ const pool = poolVerdict
           <section class="bd-block bd-wide">
             <h4>What it does — and doesn’t — claim</h4>
             <ul>
-              <li><strong>{pool.survivors} survivor{pool.survivors === 1 ? '' : 's'}</strong> disclosed, <em>unadjudicated</em>: an injected mutant the suite didn’t kill — a real untested edge, <em>or</em> an equivalent mutant nothing can catch. Corral hands it to a human to judge; it doesn’t rule a well-loved library buggy.</li>
+              <li><strong>{pool.survivors} survivor{pool.survivors === 1 ? '' : 's'}</strong> disclosed, <em>unadjudicated</em>: an injected mutant the suite didn’t kill — a real untested edge, <em>or</em> an equivalent mutant nothing can catch. Corral hands it to a human to judge; it doesn’t rule the code buggy.</li>
               {pool.criticCount > 0 && (
                 <li>The decorrelated critic flagged <strong>{pool.criticCount}</strong> possible dead test{pool.criticCount === 1 ? '' : 's'} — <em>advisory, unverified, and structurally barred from gating the signed verdict</em>.{pool.criticEvidence && <span class="bd-ev"> {pool.criticEvidence.slice(0, 200)}…</span>}</li>
               )}
@@ -228,6 +232,8 @@ const pool = poolVerdict
   .proof-row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; color: var(--fg); font-size: 0.95rem; font-weight: 600; margin: 0 0 10px; }
   .proof-row span[aria-hidden] { color: var(--muted); font-weight: 400; }
   .caption { color: var(--muted); font-size: 0.9rem; margin-bottom: 20px; }
+  /* The note is the punchline of the caption above it, so it sits tight to it. */
+  .hero-note { color: var(--amber); margin-top: -12px; }
   .ctas { display: flex; gap: 12px; justify-content: center; }
   .cta { background: var(--amber); color: #fff; padding: 10px 20px; border-radius: 6px; font-weight: 600; text-decoration: none; }
   .cta.secondary { background: var(--panel); color: var(--fg); border: 1px solid var(--line); }

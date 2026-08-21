@@ -139,6 +139,28 @@ one-line fix (or pass `--jail container`). And the language toolchain has to be
 a `pip install --user pytest` is invisible inside the sandboxed mount
 namespace and the run will fail closed looking for it.
 
+**Python: you do not have to install pytest system-wide.** Plenty of developers
+will not contaminate their system interpreter for an audit tool, and they
+shouldn't have to. The jail binds `/usr` but not your home directory, so what
+actually breaks is a runner living under `$HOME` — `pip install --user`, pyenv,
+or a virtualenv in the default `~/.local/share/virtualenvs`. Put the virtualenv
+**inside the project** instead, at `./.venv` or `./venv`, and `--repo-dir`
+auto-detects it and bind-mounts it read-only into the jail (see
+[Dependency dirs](/docs/running-it/#dependency-dirs--bound-read-only-never-copied---repo-dir)).
+Then run your suite through it:
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install pytest   # or:
+PIPENV_VENV_IN_PROJECT=1 pipenv install --dev pytest
+
+corral certify --local --repo-dir . --code pkg/thing.py --test tests/test_thing.py \
+  --goal "…" -- .venv/bin/python -m pytest -q
+```
+
+pipenv's default venv location is outside the project, which is exactly the
+invisible case — `PIPENV_VENV_IN_PROJECT=1` is what moves it somewhere the jail
+can see.
+
 Walk through a real verdict end to end in
 [Your first audit, in detail](/docs/first-audit/).
 

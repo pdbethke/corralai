@@ -5,6 +5,7 @@ import '../styles/global.css';
 import { cockpitHud, cockpitViews, cockpitTasks, cockpitAgents, cockpitFindings, cockpitExec } from '../lib/cockpitShell';
 import Header from '../components/Header.astro';
 import ReplayBarControls from '../components/ReplayBarControls.astro';
+import { buildReplayCorpus } from '../lib/replayCorpus';
 
 
 // Prefer generated recordings materialized from DuckDB during prebuild; fall
@@ -78,6 +79,9 @@ const leadRank = (slug: string) => {
   return i === -1 ? LEAD_ORDER.length : i;
 };
 cards.sort((a, b) => leadRank(a.slug) - leadRank(b.slug) || a.slug.localeCompare(b.slug));
+// Every recorded verdict, reduced at build time for the replay's end card.
+// Seeded with the first card's slug; the client re-points it on each switch.
+const replayCorpus = buildReplayCorpus(streams, cards[0]?.slug ?? '');
 ---
 <html lang="en">
 <head>
@@ -240,6 +244,8 @@ cards.sort((a, b) => leadRank(a.slug) - leadRank(b.slug) || a.slug.localeCompare
   :global(#cockpit .tests-lens .tv-ok) { color: var(--stage-green,#8fdcab); border-left-color: var(--stage-green,#8fdcab); }
   :global(#cockpit .tests-lens .tv-review) { color: var(--stage-red,#e8503a); border-left-color: var(--stage-red,#e8503a); }
   :global(#cockpit .tests-lens .tests-models) { color: var(--stage-muted,#8a8170); font-size: 11.5px; margin-top: 4px; }
+  /* the replaced line reads as context; the planted one reads as the fault */
+  :global(#cockpit .tests-lens .faultwas) { color: #8a8170; text-decoration: line-through; text-decoration-color: rgba(138,129,112,.5); }
   :global(#cockpit .tests-lens .faultline) { background: rgba(232,80,58,.32); color: #ff7a63; font-weight: 700; border-radius: 3px; padding: 0 2px; }
   :global(#cockpit .cv-mission), :global(#cockpit .cv-prop), :global(#cockpit .cv-hub) {
     border: 1px solid var(--stage-line); border-radius: 8px; padding: 12px 14px; margin-bottom: 12px; background: var(--stage-panel);
@@ -410,7 +416,11 @@ cards.sort((a, b) => leadRank(a.slug) - leadRank(b.slug) || a.slug.localeCompare
 </style>
 
 <script src="/replay-player.js" is:inline></script>
-<script define:vars={{ streams }} is:inline>
+<script define:vars={{ streams, replayCorpus }} is:inline>
+  // See Hero.astro: build-time corpus, no runtime fetch. The gallery switches
+  // recordings in place, so `.slug` is re-pointed on each activation to keep
+  // the end card highlighting the tape actually being watched.
+  window.CORRAL_REPLAY_CORPUS = replayCorpus;
   // Same minimal DOM contract as Hero.astro (see replay-player.js's header).
   // Real tabs: cockpitView() (replay-player.js) switches the cockpit to the
   // selected view, reducing the active recording's tape into progress/topology/
@@ -430,6 +440,9 @@ cards.sort((a, b) => leadRank(a.slug) - leadRank(b.slug) || a.slug.localeCompare
       for (const panel of document.querySelectorAll('.analysis-panel')) {
         panel.hidden = panel.dataset.analysisSlug !== btn.dataset.slug;
       }
+      // Re-point the corpus at the tape now being watched so the end card
+      // highlights the right bar (the rows themselves never change).
+      if (window.CORRAL_REPLAY_CORPUS) window.CORRAL_REPLAY_CORPUS.slug = btn.dataset.slug;
       // startReplay already accepts a resolved {events:[...]} object — no
       // player change needed; this is the same call shape as the hero.
       startReplay(streams[btn.dataset.slug]).then(() => {

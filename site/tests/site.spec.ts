@@ -484,3 +484,134 @@ test('a drag-pan released OFF-canvas does not eat the next legit click', async (
   expect(suppressed, "the on-canvas pan's own trailing click must be suppressed").toBeGreaterThanOrEqual(1);
   expect(honoredOnCanvas, "the pan's trailing click must not be honored").toBe(0);
 });
+
+// The run has to end by SAYING something. A replay used to reach its last beat
+// and simply flip the button back to "▶ play": the verdict was on the tape and
+// rendered in the audit lens, but that lens is behind a tab, so a viewer who
+// watched the whole thing was told nothing. These pin the summary that closes
+// the story — including the corpus graph, which is the one claim a single tape
+// cannot make on its own.
+test('the replay ends with a verdict summary, not silence', async ({ page }) => {
+  await page.goto('/');
+  const scrub = page.locator('#replay-scrub');
+  await expect(async () => {
+    expect(Number(await scrub.getAttribute('max'))).toBeGreaterThan(0);
+  }).toPass({ timeout: 5000 });
+
+  // Scrub to the last beat — the same end state reaching it by playback gives.
+  const max = Number(await scrub.getAttribute('max'));
+  await page.evaluate((n) => (window as any).seekReplay(n), max);
+
+  const card = page.locator('#replay-endcard');
+  await expect(card).toBeVisible();
+  // The verdict, in the words a non-expert can act on.
+  await expect(card).toContainText(/NEEDS-REVIEW|CERTIFIED/);
+  await expect(card).toContainText(/killed \d+ of \d+ planted faults/i);
+  // Decorrelation stops being a slogan only when the roles are named.
+  await expect(card).toContainText('mutant-generator');
+  await expect(card).toContainText('test-critic');
+});
+
+test('the end card places the run against every other recorded audit', async ({ page }) => {
+  await page.goto('/');
+  const scrub = page.locator('#replay-scrub');
+  await expect(async () => {
+    expect(Number(await scrub.getAttribute('max'))).toBeGreaterThan(0);
+  }).toPass({ timeout: 5000 });
+  await page.evaluate((n) => (window as any).seekReplay(n), Number(await scrub.getAttribute('max')));
+
+  const card = page.locator('#replay-endcard');
+  await expect(card).toBeVisible();
+  // More than one bar, or the comparison is not a comparison.
+  expect(await card.locator('.rec-row').count()).toBeGreaterThan(1);
+  // The run being watched is the highlighted one.
+  await expect(card.locator('.rec-row.rec-this')).toHaveCount(1);
+  // The corpus is baked at build time — the site makes no external requests.
+  const corpus = await page.evaluate(() => (window as any).CORRAL_REPLAY_CORPUS);
+  expect(corpus.audits.length).toBeGreaterThan(1);
+});
+
+test('the end card can be dismissed and stays dismissed while scrubbing', async ({ page }) => {
+  await page.goto('/');
+  const scrub = page.locator('#replay-scrub');
+  await expect(async () => {
+    expect(Number(await scrub.getAttribute('max'))).toBeGreaterThan(0);
+  }).toPass({ timeout: 5000 });
+  const max = Number(await scrub.getAttribute('max'));
+  await page.evaluate((n) => (window as any).seekReplay(n), max);
+
+  const card = page.locator('#replay-endcard');
+  await expect(card).toBeVisible();
+  await card.locator('.rec-x').click();
+  await expect(card).toBeHidden();
+
+  // Re-arriving at the end must not re-open what someone just closed.
+  await page.evaluate((n) => (window as any).seekReplay(n - 3), max);
+  await page.evaluate((n) => (window as any).seekReplay(n), max);
+  await expect(page.locator('#replay-endcard')).toBeHidden();
+});
+
+// The panes have to tell the story of THIS run. Two of them used to not:
+// memory rendered three fixed strings about a password toy whatever tape was
+// playing, and proposals said only "scrub forward…" for a run whose proposal
+// lands in its final beat — which reads as "nothing here" for the whole replay.
+test('the memory lens reports measured kill-rates, not a fixed sample', async ({ page }) => {
+  await page.goto('/');
+  await expect(async () => {
+    expect(Number(await page.locator('#replay-scrub').getAttribute('max'))).toBeGreaterThan(0);
+  }).toPass({ timeout: 5000 });
+
+  await page.evaluate(() => (window as any).setView('memory'));
+  const memory = page.locator('#memory');
+  await expect(memory).toContainText(/kill-rate \d+%|killed \d+%/);
+  // The sample rows must be gone when a real corpus is available.
+  await expect(memory).not.toContainText('a length-only password test');
+  await expect(memory).not.toContainText('range == tuple');
+});
+
+test('the proposals lens says when the herd hands its test back', async ({ page }) => {
+  await page.goto('/');
+  await expect(async () => {
+    expect(Number(await page.locator('#replay-scrub').getAttribute('max'))).toBeGreaterThan(0);
+  }).toPass({ timeout: 5000 });
+
+  // Park the playhead at the very start: the honest "not yet" state.
+  await page.evaluate(() => (window as any).seekReplay(0));
+  await page.evaluate(() => (window as any).setView('proposals'));
+  const proposals = page.locator('#proposals');
+  await expect(proposals).toContainText(/hands its test back at step \d+ of \d+/);
+  await expect(proposals).not.toContainText('Scrub forward');
+
+  // At the end, the actual proposal is there.
+  const max = Number(await page.locator('#replay-scrub').getAttribute('max'));
+  await page.evaluate((n) => (window as any).seekReplay(n), max);
+  await expect(proposals).toContainText('the proposed test');
+});
+
+// Seven of the eight published tapes carry mutants as SEARCH/REPLACE hunks, and
+// the parser used to cut each one at its own "=======" divider — keeping the
+// SEARCH half and rendering the UNMUTATED line as the planted fault. The fault
+// highlight is the single most persuasive thing an audit produces, so showing
+// the original code there was worse than showing nothing.
+test('the surviving fault shows what replaced what, not the original line', async ({ page }) => {
+  await page.goto('/');
+  const scrub = page.locator('#replay-scrub');
+  await expect(async () => {
+    expect(Number(await scrub.getAttribute('max'))).toBeGreaterThan(0);
+  }).toPass({ timeout: 5000 });
+  await page.evaluate((n) => (window as any).seekReplay(n), Number(await scrub.getAttribute('max')));
+
+  const fault = page.locator('#replay-endcard .rec-code');
+  await expect(fault).toBeVisible();
+  // The merge-conflict scaffolding is not the fault and must never be shown.
+  await expect(fault).not.toContainText('SEARCH');
+  await expect(fault).not.toContainText('REPLACE');
+  await expect(fault).not.toContainText('<<<<<<<');
+  // Both halves are present, and the planted one is the one marked as the fault.
+  await expect(fault.locator('.faultwas')).toHaveCount(1);
+  await expect(fault.locator('.faultline')).toHaveCount(1);
+  const was = (await fault.locator('.faultwas').textContent())!.trim();
+  const now = (await fault.locator('.faultline').textContent())!.trim();
+  expect(was).not.toEqual(now);
+  expect(now.length).toBeGreaterThan(0);
+});

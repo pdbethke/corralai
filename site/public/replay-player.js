@@ -665,6 +665,20 @@ function parseMutants(result){
     const close = p.indexOf('===');
     if(close < 0) continue;
     let body = p.slice(close + 3);
+    // A SEARCH/REPLACE hunk is the shape a generator emits for anything bigger
+    // than a toy: an exact excerpt to find and what to put in its place. It has
+    // to be recognized BEFORE the "cut at any residual ===" rule below, because
+    // that rule would slice the hunk at its own "=======" divider and keep only
+    // the SEARCH half — i.e. render the ORIGINAL line and label it the planted
+    // fault. Seven of the eight published recordings are in this format, so the
+    // fault highlight was showing the unmutated code nearly everywhere.
+    const sr = body.match(/<<<<<<<+\s*SEARCH\s*\n([\s\S]*?)\n=======+\s*\n([\s\S]*?)\n>>>>>>>+\s*REPLACE/);
+    if(sr){
+      const search = sr[1].replace(/\s+$/, ''), replace = sr[2].replace(/\s+$/, '');
+      if(search.trim() === '' && replace.trim() === '') continue;
+      out.push({id: 'm' + (out.length + 1), code: replace, search, replace});
+      continue;
+    }
     // A trailing "..._END===" (or the next marker, already split off) may remain — cut at any residual "===".
     const end = body.indexOf('===');
     if(end >= 0) body = body.slice(0, end);
@@ -673,6 +687,19 @@ function parseMutants(result){
     out.push({id: 'm' + (out.length + 1), code});
   }
   return out;
+}
+
+// renderMutantFault: the planted fault, rendered in whichever form the tape
+// carries. A SEARCH/REPLACE hunk already states the change exactly — what was
+// there, what replaced it — so showing both beats running a line diff over a
+// fragment. A whole-block mutant keeps the original diff against the source.
+function renderMutantFault(original, mu){
+  if(!mu) return '';
+  if(mu.search && mu.replace){
+    return '<pre class="aw-result faultdiff"><span class="faultwas">' + esc(mu.search) + '</span>\n'
+         + '<span class="faultline">' + esc(mu.replace) + '</span></pre>';
+  }
+  return renderFaultDiff(original, mu.code);
 }
 
 // simple force layout
@@ -1342,6 +1369,50 @@ function renderReplayFileNode(node, depth){
 // renderFaultDiff/parseMutants), the test it handed back (when one was authored),
 // and the dev suite it graded. Reconstructed from the tape up to the playhead.
 // Returns false when this isn't a pool run, so cockpitView falls back to files.
+// collectReplayMutants: every planted mutant on the tape, keyed by the id the
+// adequacy beat uses to name survivors.
+//
+// There are TWO id schemes in recorded tapes and only one of them used to
+// resolve. An unsharded run names its mutants "m1".."mN"; a SHARDED run — one
+// generator seat per function, which is the normal shape for any file with
+// more than a couple of functions — qualifies them by seat: "s0/m4". Callers
+// matched the bare form only, so on a sharded tape no survivor id ever matched
+// a parsed mutant and the surviving fault silently failed to highlight. Four of
+// the eight published recordings are sharded, so "silently" is doing a lot of
+// work there: the single most persuasive thing an audit produces — the line the
+// developer's own suite passed anyway — was missing wherever it mattered most.
+//
+// Bounded by `upto` so a scrub shows only what had been planted by that point.
+function collectReplayMutants(upto){
+  const byId = new Map();
+  const limit = (typeof upto === 'number') ? upto : (replayEvents ? replayEvents.length : 0);
+  for(let i=0; i<limit && replayEvents && i<replayEvents.length; i++){
+    const ev = replayEvents[i];
+    if(ev.kind !== 'task_done' || !ev.detail || !ev.detail.result) continue;
+    const subject = String(ev.subject || '');
+    if(!/mutant/.test(subject)) continue;
+    const mutants = parseMutants(ev.detail.result);
+    // "mutant-generator/2" -> shard 2. A seat with no index is an unsharded run.
+    const m = subject.match(/\/(\d+)\s*$/);
+    const shard = m ? m[1] : null;
+    for(const mu of mutants){
+      byId.set(mu.id, mu);                                  // bare "m4"
+      if(shard !== null) byId.set('s' + shard + '/' + mu.id, mu); // "s2/m4"
+    }
+  }
+  return byId;
+}
+
+// The one surviving fault worth showing, resolved under either id scheme.
+function firstSurvivingMutant(upto){
+  const A = replayDevAdequacy;
+  const ids = (A && Array.isArray(A.survivor_ids)) ? A.survivor_ids : [];
+  if(!ids.length) return null;
+  const byId = collectReplayMutants(upto);
+  for(const id of ids){ if(byId.has(id)) return Object.assign({}, byId.get(id), {id}); }
+  return null;
+}
+
 function renderReplayTests(){
   const el = document.getElementById('files');
   if(!el) return false;
@@ -1377,12 +1448,10 @@ function renderReplayTests(){
   // against it in place (renderFaultDiff), so you see the code AND the exact
   // planted line your suite passed anyway.
   if(S && S.code){
-    const mutants = mutantGen ? parseMutants(mutantGen) : [];
-    const survIds = (A && A.survivor_ids) || [];
-    const surv = mutants.find(m => survIds.includes(m.id));
+    const surv = firstSurvivingMutant(upto);
     if(surv){
       h += '<div class="tests-sec">the code under review <span class="tests-note">· the surviving fault highlighted — your suite passed anyway</span></div>';
-      h += '<pre class="tests-code">' + renderFaultDiff(S.code, surv.code) + '</pre>';
+      h += '<pre class="tests-code">' + renderMutantFault(S.code, surv) + '</pre>';
     } else {
       h += '<div class="tests-sec">the code under review' + (S.code_path ? ' <span class="tests-note">· ' + esc(S.code_path) + '</span>' : '') + '</div>';
       h += '<pre class="tests-code">' + esc(S.code) + '</pre>';
@@ -1876,6 +1945,7 @@ function ensureReplayTaskStyles(){
 .aw-body .aw-timing { color: var(--stage-muted,#8a8170); font-size:11.5px; line-height:1.6; }
 .aw-body .aw-result { max-height:220px; overflow:auto; font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11px; line-height:1.5; color: var(--stage-fg,#e6e1d8); background: var(--stage-bg,#0e1116); border: 1px solid var(--stage-line,#33405a); border-radius:6px; padding:8px; white-space:pre-wrap; word-break:break-word; margin:2px 0 4px; }
 .aw-body .aw-fev { max-height:180px; overflow:auto; font-size:12px; line-height:1.55; color: var(--stage-muted,#b8b0a0); background: var(--stage-bg,#0e1116); border-left:2px solid var(--stage-line,#33405a); border-radius:0 4px 4px 0; padding:6px 10px; white-space:pre-wrap; overflow-wrap:anywhere; margin:2px 0 8px; }
+.aw-body .faultwas { color: var(--stage-muted,#8a8170); text-decoration:line-through; text-decoration-color:rgba(138,129,112,.5); }
 .aw-body .faultline { background: rgba(232,80,58,.32); color: var(--stage-red,#ff7a63); font-weight:700; border-radius:3px; padding:0 2px; margin:0 -2px; box-decoration-break:clone; -webkit-box-decoration-break:clone; }
 `;
   document.head.appendChild(s);
@@ -2156,10 +2226,194 @@ function setReplaySpeed(x){
   const stat = document.getElementById('stat');
   if(stat && /replaying/.test(stat.textContent)) stat.textContent = 'replaying'; // speed now shows in the #hud-speed dropdown beside it
 }
+// ---------------------------------------------------------------------------
+// The end card — what the run MEANT, at the moment it ends.
+//
+// A replay used to just stop: the play button flipped back to "▶ play" and a
+// viewer who had watched dots move for a minute got nothing. The verdict was
+// already on the tape and already rendered well (renderReplayTests), but it
+// lived behind the files tab, which is to say nobody read it. An audit that
+// cannot say what it found in the place people are looking is not much of an
+// audit.
+//
+// Sectioned on purpose. Today it carries the verdict, the roster, the fault
+// that survived, and one corpus graph; the shape is meant to take more
+// timelines and charts without a rewrite.
+function ensureReplayEndCardStyles(){
+  if(document.getElementById('replay-endcard-style')) return;
+  const s = document.createElement('style');
+  s.id = 'replay-endcard-style';
+  s.textContent = `
+#replay-endcard { position:absolute; inset:0; z-index:40; display:flex; align-items:center; justify-content:center; padding:16px; background:color-mix(in srgb, var(--stage-bg,#0e1116) 78%, transparent); backdrop-filter:blur(2px); }
+#replay-endcard .rec-card { width:min(560px,100%); max-height:100%; display:flex; flex-direction:column; background:var(--stage-bg,#0e1116); border:1px solid var(--stage-line,#33405a); border-radius:10px; padding:14px 16px 12px; box-shadow:0 18px 50px -20px rgba(0,0,0,.75); font-size:12px; line-height:1.55; color:var(--stage-fg,#e6e1d8); }
+#replay-endcard .rec-body { overflow-y:auto; min-height:0; }
+#replay-endcard .rec-hd { flex:none; display:flex; align-items:center; gap:9px; margin-bottom:9px; }
+#replay-endcard .rec-status { font-size:10px; font-weight:700; letter-spacing:.5px; text-transform:uppercase; padding:2px 9px; border-radius:999px; white-space:nowrap; }
+#replay-endcard .rec-ok { background:rgba(143,220,171,.16); color:var(--stage-green,#8fdcab); }
+#replay-endcard .rec-review { background:rgba(232,168,56,.16); color:var(--stage-amber,#e8a838); }
+#replay-endcard .rec-subj { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11.5px; color:var(--stage-muted,#8a8170); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#replay-endcard .rec-x { margin-left:auto; flex:none; background:none; border:none; color:var(--stage-muted,#8a8170); cursor:pointer; font-size:13px; line-height:1; padding:2px 4px; }
+#replay-endcard .rec-x:hover { color:var(--stage-fg,#e6e1d8); }
+#replay-endcard .rec-line { margin-bottom:4px; }
+#replay-endcard .rec-line b { color:var(--stage-fg,#e6e1d8); }
+#replay-endcard .rec-sec { margin:11px 0 4px; font-size:9.5px; text-transform:uppercase; letter-spacing:.5px; color:var(--stage-muted,#8a8170); }
+#replay-endcard .rec-roles { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11px; color:var(--stage-muted,#b8b0a0); }
+#replay-endcard .rec-roles b { color:var(--stage-fg,#e6e1d8); font-weight:600; }
+#replay-endcard .rec-code { max-height:112px; overflow:auto; margin:0; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:10.5px; line-height:1.5; background:var(--stage-panel,#141922); border:1px solid var(--stage-line,#33405a); border-radius:6px; padding:7px 9px; white-space:pre-wrap; overflow-wrap:anywhere; }
+#replay-endcard .rec-code .faultwas { color:var(--stage-muted,#8a8170); text-decoration:line-through; text-decoration-color:rgba(138,129,112,.5); }
+#replay-endcard .rec-code .faultline { background:rgba(232,80,58,.32); color:var(--stage-red,#ff7a63); font-weight:700; border-radius:3px; padding:0 2px; }
+#replay-endcard .rec-row { display:flex; align-items:center; gap:7px; margin:2px 0; }
+#replay-endcard .rec-name { flex:none; width:170px; font-size:10.5px; color:var(--stage-muted,#8a8170); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#replay-endcard .rec-track { position:relative; flex:1; height:9px; background:var(--stage-panel,#141922); border-radius:3px; overflow:hidden; }
+#replay-endcard .rec-bar { position:absolute; inset:0 auto 0 0; background:var(--stage-line,#33405a); border-radius:3px; }
+#replay-endcard .rec-this .rec-bar { background:var(--stage-amber,#e8a838); }
+#replay-endcard .rec-this .rec-name { color:var(--stage-fg,#e6e1d8); font-weight:700; }
+#replay-endcard .rec-pct { flex:none; width:34px; text-align:right; font-size:10.5px; color:var(--stage-muted,#8a8170); font-variant-numeric:tabular-nums; }
+#replay-endcard .rec-this .rec-pct { color:var(--stage-fg,#e6e1d8); }
+#replay-endcard .rec-barline { position:absolute; top:-2px; bottom:-2px; width:1px; background:var(--stage-muted,#8a8170); opacity:.65; }
+#replay-endcard .rec-note { margin-top:5px; font-size:10.5px; color:var(--stage-muted,#8a8170); font-style:italic; }
+#replay-endcard .rec-actions { flex:none; display:flex; gap:8px; margin-top:13px; padding-top:11px; border-top:1px solid var(--stage-line,#33405a); }
+#replay-endcard .rec-btn { flex:none; cursor:pointer; font:inherit; font-size:11px; padding:5px 11px; border-radius:6px; border:1px solid var(--stage-line,#33405a); background:var(--stage-panel,#141922); color:var(--stage-fg,#e6e1d8); }
+#replay-endcard .rec-btn:hover { border-color:var(--stage-amber,#e8a838); color:var(--stage-amber,#e8a838); }
+`;
+  document.head.appendChild(s);
+}
+
+// The card overlays the canvas, so it hangs off the canvas's own parent rather
+// than #stage: on the site those are the same element, but the product's #stage
+// is a three-column grid and covering the whole of it would blank the roster
+// and the plan alongside the run.
+function replayEndCardHost(){
+  const host = cv && cv.parentElement;
+  if(!host) return null;
+  if(getComputedStyle(host).position === 'static') host.style.position = 'relative';
+  return host;
+}
+
+// The corpus, supplied by the HOST page rather than fetched: the static site is
+// backend-free by test, so its numbers are baked at build time from the same
+// recordings store this tape came out of. A product cockpit can hand over live
+// rows instead. Absent (or malformed) means the card simply omits the graph.
+function replayCorpus(){
+  const c = (typeof window !== 'undefined') && window.CORRAL_REPLAY_CORPUS;
+  if(!c || !Array.isArray(c.audits) || !c.audits.length) return null;
+  return c;
+}
+
+// One graph, and a deliberately plain one: a kill-rate per recorded audit with
+// this run highlighted and the certification bar drawn across them. It answers
+// the question the single verdict cannot — "is 75% bad?" — which is the whole
+// reason the results go to a store instead of scrolling past in a terminal.
+function renderReplayCorpusGraph(){
+  const c = replayCorpus();
+  if(!c) return '';
+  const rows = c.audits
+    .filter(a => a && typeof a.killRate === 'number' && isFinite(a.killRate))
+    .sort((a, b) => b.killRate - a.killRate);
+  if(!rows.length) return '';
+  const BAR = 0.8; // the certification threshold the verdict is graded against
+  let h = '<div class="rec-sec">where it sits — every audit on record</div>';
+  for(const a of rows){
+    const pct = Math.max(0, Math.min(1, a.killRate));
+    const mine = (a.slug && c.slug && a.slug === c.slug) ? ' rec-this' : '';
+    h += '<div class="rec-row' + mine + '">'
+      + '<span class="rec-name" title="' + esc(a.path || a.slug || '') + '">' + esc(a.label || a.slug || '') + '</span>'
+      + '<span class="rec-track"><span class="rec-bar" style="width:' + (pct * 100).toFixed(1) + '%"></span>'
+      + '<span class="rec-barline" style="left:' + (BAR * 100) + '%"></span></span>'
+      + '<span class="rec-pct">' + Math.round(pct * 100) + '%</span>'
+      + '</div>';
+  }
+  h += '<div class="rec-note">the line is the ' + Math.round(BAR * 100) + '% bar a run must clear to certify</div>';
+  return h;
+}
+
+let replayEndCardDismissed = false;
+
+function hideReplayEndCard(){
+  const el = document.getElementById('replay-endcard');
+  if(el) el.remove();
+}
+
+// Shown when the playhead reaches the last beat — by playing there OR by
+// scrubbing there, because a viewer who drags to the end is asking the same
+// question as one who waits.
+function showReplayEndCard(){
+  if(replayEndCardDismissed) return;
+  const V = replayPoolVerdict;
+  if(!V) return; // not an audit tape — nothing to summarize
+  const host = replayEndCardHost();
+  if(!host) return;
+  ensureReplayEndCardStyles();
+  hideReplayEndCard();
+
+  const S = replayPoolSubject, A = replayDevAdequacy;
+  const killed = Math.max(0, (V.mutantsTotal || 0) - (V.survivors || 0));
+  const certified = V.status === 'certified';
+
+  let h = '<div class="rec-card">';
+  h += '<div class="rec-hd"><span class="rec-status ' + (certified ? 'rec-ok' : 'rec-review') + '">'
+     + esc((V.status || '').toUpperCase() || 'done') + '</span>'
+     + '<span class="rec-subj">' + esc((S && S.code_path) || 'the change') + '</span>'
+     + '<button class="rec-x" onclick="dismissReplayEndCard()" aria-label="close the summary">✕</button></div>';
+
+  h += '<div class="rec-body">';
+  h += '<div class="rec-line">The suite killed <b>' + killed + '</b> of <b>' + (V.mutantsTotal || 0)
+     + '</b> planted faults — <b>' + (V.survivors || 0) + '</b> survived'
+     + (V.provenMissed > 0 ? ', and the herd handed back a test that catches ' + (V.provenMissed === 1 ? 'it' : 'them') : '')
+     + '.</div>';
+  if(V.recordId) h += '<div class="rec-line">Signed record ' + esc(String(V.recordId)) + ' — verifiable offline.</div>';
+
+  const roles = Object.keys(V.models || {}).sort();
+  if(roles.length){
+    h += '<div class="rec-sec">who graded it — no model marks its own work</div><div class="rec-roles">'
+       + roles.map(r => esc(r) + '=<b>' + esc(V.models[r]) + '</b>').join('<br>') + '</div>';
+  }
+
+  // The surviving fault, when there is one: the single most convincing thing on
+  // the card, because it is the line the developer's own suite passed anyway.
+  if(S && S.code){
+    const surv = firstSurvivingMutant(replayEvents.length);
+    if(surv){
+      h += '<div class="rec-sec">one fault it missed — your tests passed this</div>';
+      h += '<pre class="rec-code">' + renderMutantFault(S.code, surv) + '</pre>';
+    }
+  }
+
+  h += renderReplayCorpusGraph();
+  h += '</div>'; // .rec-body
+
+  h += '<div class="rec-actions">'
+     + '<button class="rec-btn" onclick="replayFromStart()">↻ watch it again</button>'
+     + '<button class="rec-btn" onclick="dismissReplayEndCard(); setView(\'files\')">open the audit lens →</button>'
+     + '</div>';
+  h += '</div>';
+
+  const el = document.createElement('div');
+  el.id = 'replay-endcard';
+  el.innerHTML = h;
+  host.appendChild(el);
+}
+
+// Dismissal sticks for the rest of the session: re-showing a card someone just
+// closed every time they nudge the scrubber would be a nuisance, not a summary.
+function dismissReplayEndCard(){
+  replayEndCardDismissed = true;
+  hideReplayEndCard();
+}
+
+function replayFromStart(){
+  replayEndCardDismissed = false;
+  hideReplayEndCard();
+  replayIdx = 0;
+  seekReplay(0);
+  if(!replayPlaying) toggleReplayPlay();
+}
+
 function replayStep(){
   if(replayIdx >= replayEvents.length){
     replayPlaying = false;
     const btn = document.getElementById('replay-playbtn'); if(btn) btn.textContent = '▶ play';
+    showReplayEndCard();
     return;
   }
   applyReplayEvent(replayEvents[replayIdx++]);
@@ -2177,6 +2431,10 @@ function seekReplay(target){
   resetReplayPanels();
   while(replayIdx < target && replayIdx < replayEvents.length) applyReplayEvent(replayEvents[replayIdx++]);
   renderReplayScrub();
+  // Dragging to the end asks the same question as watching to the end, so the
+  // summary follows the playhead rather than only the play loop. Scrubbing back
+  // off the last beat takes it away again — the run is no longer over.
+  if(replayIdx >= replayEvents.length) showReplayEndCard(); else hideReplayEndCard();
   if(replayPlaying) replayTimer = setTimeout(replayStep, Math.max(16, 250 / replaySpeed));
 }
 // applyReplayEvent: the read-only translation from one ReplayEvent (brain.go's
@@ -2594,15 +2852,44 @@ function whLink(q, label){
   if(!document.querySelector('a[href="/warehouse/"]')) return '';
   return ' <a class="cv-whlink" href="/warehouse/?q=' + encodeURIComponent(q) + '">▸ ' + esc(label) + '</a>';
 }
+// The memory lens — the corpus of what previous audits actually established.
+//
+// It used to render three hardcoded rows about a password toy and a
+// more-itertools assertion, tagged SAMPLE, regardless of which tape was
+// playing beside it. Honest (it said SAMPLE) but inert, and on a page whose
+// argument is "every claim here is checkable against the tape", the weakest
+// thing on screen. When the host supplies the corpus, this now says what the
+// recorded audits MEASURED — kill-rates, by execution, this run included.
 function renderSampleMemory(){
   const el = document.getElementById('memory'); if(!el) return;
-  const rows = [
-    ['pattern', 'a length-only password test misses the digit/uppercase rules', 'planted 5 goal-violating mutants — a length-only suite killed 0'],
-    ['finding', 'range == tuple is always False in Python 3', 'a dead assertion the decorrelated critic flagged, execution-confirmed'],
-    ['adequacy', 'a 100%-passing suite still missed 40% of planted faults', 'kill-rate, not pass-count, is the real adequacy signal'],
-  ];
-  el.innerHTML = `<div class="cv-pane"><div class="cv-explain">${cvSampleTag()} The shared corpus of execution-VERIFIED audit findings every connected client reads from and writes back to — patterns, not code. It grows as the herd audits. Populated live from the brain in the product.${whLink(WH_SCORECARD, 'see the execution telemetry in DuckDB')}</div>`
-    + rows.map(([k,t,w]) => `<div class="cv-memrow"><span class="cv-kind">${esc(k)}</span><b>${esc(t)}</b><div class="cv-meta">${esc(w)}</div></div>`).join('') + '</div>';
+  const c = replayCorpus();
+  const rows = [];
+  if(c){
+    const mine = c.audits.find(a => a.slug === c.slug);
+    if(mine){
+      rows.push(['adequacy', 'this run — ' + (mine.label || mine.slug),
+        'the suite killed ' + Math.round(mine.killRate * 100) + '% of the faults planted against it, measured in a jail']);
+    }
+    for(const a of c.audits.filter(a => a.slug !== c.slug).sort((x, y) => y.killRate - x.killRate)){
+      rows.push([a.status === 'certified' ? 'certified' : 'needs-review', a.label || a.slug,
+        'kill-rate ' + Math.round(a.killRate * 100) + '% — established by execution, not by a model’s word']);
+    }
+  }
+  // No corpus handed over (a product cockpit before the brain answers, or an
+  // older host): keep the illustrative rows, still tagged as a sample.
+  const sampled = !rows.length;
+  if(sampled){
+    rows.push(
+      ['pattern', 'a length-only password test misses the digit/uppercase rules', 'planted 5 goal-violating mutants — a length-only suite killed 0'],
+      ['finding', 'range == tuple is always False in Python 3', 'a dead assertion the decorrelated critic flagged, execution-confirmed'],
+      ['adequacy', 'a 100%-passing suite still missed 40% of planted faults', 'kill-rate, not pass-count, is the real adequacy signal'],
+    );
+  }
+  const lede = sampled
+    ? cvSampleTag() + ' The shared corpus of execution-VERIFIED audit findings every connected client reads from and writes back to — patterns, not code. It grows as the herd audits. Populated live from the brain in the product.'
+    : 'The corpus every audit writes back to — what the recorded runs MEASURED, this one included. Every row is a kill-rate an execution in a jail produced, never a model’s self-report. In the product this is populated live from the brain as the herd audits.';
+  el.innerHTML = `<div class="cv-pane"><div class="cv-explain">${lede}${whLink(WH_SCORECARD, 'see the execution telemetry in DuckDB')}</div>`
+    + rows.map(([k,t2,w]) => `<div class="cv-memrow"><span class="cv-kind">${esc(k)}</span><b>${esc(t2)}</b><div class="cv-meta">${esc(w)}</div></div>`).join('') + '</div>';
 }
 function renderSampleSkills(){
   const el = document.getElementById('skills'); if(!el) return;
@@ -2637,7 +2924,25 @@ function renderReplayProposals(){
   const proven = V && V.provenMissed > 0;
   let h = '<div class="cv-pane"><div class="cv-explain">The herd doesn’t just grade your suite — when a planted fault survives, it <b>proposes a test that kills it</b>. You approve what goes into the suite: the brain suggests, a human accepts. This is the human gate the audit runs on.' + whLink(WH_KILLRATE, 'see this run’s kill-rate in DuckDB') + '</div>';
   if(!proposed){
-    h += '<div class="ft-empty">▌ No proposed test on this tape yet — the herd hands one back when the dev suite leaves a survivor it can target. Scrub forward…</div>';
+    // "Scrub forward…" is not a story. The proposal is the LAST thing a run
+    // produces — on a short tape it lands in the final beat or two — so an
+    // empty pane is the normal state for almost the whole replay, and saying
+    // only "not yet" reads as "nothing here". Look ahead on the tape and say
+    // what is coming and how far off it is; when the tape truly has none, say
+    // that instead of implying the viewer scrubbed too early.
+    let at = -1;
+    for(let i=0; replayEvents && i<replayEvents.length; i++){
+      const ev = replayEvents[i];
+      if(ev.kind === 'task_done' && ev.detail && ev.detail.result && /test-writer/.test(String(ev.subject||''))){ at = i + 1; break; }
+    }
+    if(at > 0){
+      const away = Math.max(0, at - upto);
+      h += '<div class="ft-empty">▌ The herd hands its test back at step <b>' + at + '</b> of ' + replayEvents.length
+         + ' — the proposal is the last thing a run produces, after the jail has scored every planted fault. '
+         + (away > 0 ? away + ' step' + (away === 1 ? '' : 's') + ' from here.' : 'Any moment now.') + '</div>';
+    } else {
+      h += '<div class="ft-empty">▌ This run left no survivor for the herd to target, so it proposed no test — the suite killed everything planted against it.</div>';
+    }
   } else {
     h += '<div class="cv-prop"><div class="cv-mhdr"><span class="cv-sig">the herd proposes a test</span><span class="cv-count">' + (proven ? 'PROVEN — kills the survivor' : 'candidate') + '</span></div>';
     // GOAL — what the code under review must satisfy (the test's reason to exist).
@@ -2645,12 +2950,10 @@ function renderReplayProposals(){
     // THE GAP — the surviving planted fault the proposal targets, highlighted
     // against the original (the "test data": what this test is up against).
     if(S && S.code){
-      const mutants = mutantGen ? parseMutants(mutantGen) : [];
-      const survIds = (A && A.survivor_ids) || [];
-      const surv = mutants.find(m => survIds.includes(m.id));
+      const surv = firstSurvivingMutant(upto);
       if(surv){
         h += '<div class="tests-sec">the surviving fault it targets <span class="tests-note">· your suite passed this anyway</span></div>';
-        h += '<pre class="tests-code">' + renderFaultDiff(S.code, surv.code) + '</pre>';
+        h += '<pre class="tests-code">' + renderMutantFault(S.code, surv) + '</pre>';
       }
     }
     // THE PROPOSED TEST — the authored source.

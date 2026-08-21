@@ -114,6 +114,16 @@ jobs:
       - name: Install gosec
         if: steps.filter.outputs.code == 'true'
         run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+      # check-security.sh runs govulncheck only when the binary is present, so
+      # without this step the vulnerability scan silently did not run in CI at
+      # all — the gate reported "all security invariants hold" having checked
+      # gofmt and gosec and nothing else. It fired only on a developer machine
+      # that happened to have it installed, which is where these advisories were
+      # actually found. A gate that reports a pass it never measured is the
+      # exact failure mode this project exists to catch.
+      - name: Install govulncheck
+        if: steps.filter.outputs.code == 'true'
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
       - name: Security gate
         if: steps.filter.outputs.code == 'true'
         run: bash scripts/check-security.sh

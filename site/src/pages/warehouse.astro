@@ -10,8 +10,23 @@
 import '../styles/global.css';
 import Header from '../components/Header.astro';
 import SiteFooter from '../components/SiteFooter.astro';
+// Row counts come from the generator, never from a human retyping them: the
+// footer used to describe a dataset the files had moved on from.
+import warehouse from '../data/warehouse-manifest.json';
+
+const rows = (t: string) => (warehouse.tables as Record<string, number>)[t]?.toLocaleString() ?? '?';
+const withheldRecords = warehouse.withheld.audit_ledger;
+const withheldSeats = warehouse.withheld.bug_catches;
 
 const PRESETS = [
+  {
+    label: 'Which model catches bugs, in which role',
+    sql: `-- The scorecard the replay's panes link to. Every row is EXECUTION:\n-- mutants a seat planted, and how many the developer's suite killed.\n-- A test-critic plants nothing, so its planted count is 0 by design --\n-- it reads the suite, it never gates the verdict.\nSELECT model, role, COUNT(*) AS seats, SUM(mutants_planted) AS planted,\n       SUM(mutants_killed) AS killed,\n       ROUND(100.0*SUM(mutants_killed)/NULLIF(SUM(mutants_planted),0),1) AS caught_pct\nFROM bug_catches\nGROUP BY 1,2\nORDER BY planted DESC;`,
+  },
+  {
+    label: 'Every signed verdict, by repo',
+    sql: `-- One row per repo per verdict, joined from the signed ledger to the\n-- per-seat telemetry. Libraries we did not write sit beside our own code,\n-- and corral's own repo is not the best score on the board.\nSELECT l.repo, IF(l.certified,'CERTIFIED','needs-review') AS verdict,\n       COUNT(DISTINCT l.id) AS records,\n       SUM(b.mutants_killed) AS killed, SUM(b.mutants_planted) AS planted,\n       ROUND(100.0*SUM(b.mutants_killed)/SUM(b.mutants_planted),1) AS kill_pct\nFROM audit_ledger l JOIN bug_catches b ON b.record_id = l.id\nGROUP BY 1,2\nORDER BY kill_pct DESC;`,
+  },
   {
     label: 'Every audited file had a proven gap',
     sql: `-- 10 files audited across 6 scans of Flask. A survivor is a planted fault\n-- the suite did not catch. proven_missed counts only the survivors corral\n-- then killed with a test it WROTE and RAN — not an opinion, an execution.\nSELECT scan_id, path, kill_rate, survivors, proven_missed\nFROM scan_files\nWHERE disposition = 'audited'\nORDER BY proven_missed DESC;`,
@@ -74,12 +89,23 @@ const initialSql = PRESETS[0].sql;
     <div id="out" class="out"></div>
 
     <p class="foot">
-      <strong>Tables:</strong> <code>scans</code> (6 whole-repo scans) ·
-      <code>scan_files</code> (1,446 per-file rows — every candidate the scan
-      considered, audited or rejected, with the reason). Two real DuckDB tables,
-      shipped as parquet and queried client-side. <strong>Recorded 2026-08-02</strong>
-      against <a href="https://github.com/pallets/flask">Flask</a> — a library we
-      did not write — on the <code>workspace</code> substrate.
+      <strong>Tables:</strong> <code>audit_ledger</code> ({rows('audit_ledger')} signed
+      verdicts) · <code>bug_catches</code> ({rows('bug_catches')} per-seat rows — which
+      model planted what, in which role, and how many the suite killed) ·
+      <code>scans</code> ({rows('scans')} whole-repo scans) · <code>scan_files</code>
+      ({rows('scan_files')} per-file rows — every candidate the scan considered,
+      audited or rejected, with the reason). Four real DuckDB tables, shipped as
+      parquet and queried client-side.
+      <br /><br />
+      <strong>What is not here, and why.</strong> The ledger on the machine that
+      produced these extracts also records audits of PRIVATE repositories. Those
+      are withheld by an explicit allowlist in
+      <code>scripts/build-warehouse-parquet.py</code> — <strong>{withheldRecords} verdicts
+      and {withheldSeats} seat rows</strong>, counted here rather than quietly dropped, because a
+      truncated table that does not say so looks more complete than it is. The
+      scan series was <strong>recorded 2026-08-02</strong> against
+      <a href="https://github.com/pallets/flask">Flask</a> — a library we did not
+      write — on the <code>workspace</code> substrate.
       <code>corral fleet</code> federates the same schema to MotherDuck for
       streaming-live. <a href="/recordings/">See the audits these rows came from →</a>
     </p>
@@ -151,7 +177,7 @@ const initialSql = PRESETS[0].sql;
       await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
       conn = await db.connect();
 
-      for (const t of ['scans', 'scan_files']) {
+      for (const t of ['scans', 'scan_files', 'audit_ledger', 'bug_catches']) {
         const buf = new Uint8Array(await (await fetch('/data/' + t + '.parquet')).arrayBuffer());
         await db.registerFileBuffer(t + '.parquet', buf);
         await conn.query("CREATE VIEW " + t + " AS SELECT * FROM '" + t + ".parquet'");

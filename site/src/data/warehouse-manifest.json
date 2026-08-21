@@ -1,0 +1,13 @@
+{
+  "generated_note": "built by scripts/build-warehouse-parquet.py \u2014 do not hand-edit",
+  "tables": {
+    "audit_ledger": 40,
+    "bug_catches": 328,
+    "scans": 6,
+    "scan_files": 1446
+  },
+  "withheld": {
+    "audit_ledger": 4,
+    "bug_catches": 40
+  }
+}

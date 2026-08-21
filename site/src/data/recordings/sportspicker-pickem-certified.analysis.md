@@ -34,3 +34,29 @@ stake in the author's assumptions planted two faults he had not imagined, and
 his suite let both through — one of which silently zeroes out every one-round
 contest. A 90% CERTIFIED verdict is not a gold star; it is a measurement, with
 the two gaps named and a killing test attached.
+
+## What happened next
+
+Both survivors were real, and both are now covered. The library added a test
+pinning `pot_for(budget, 1)` to the full budget, and another pinning a field
+landing exactly on `min_participants` — asserted in **void** mode, because the
+existing test at that boundary ran in scale mode, where `pot * (scoring /
+minimum)` equals `pot` and the right answer comes back under either comparison.
+It read as coverage and discriminated nothing.
+
+The critic earned its keep on the re-run too. It flagged a test asserting that
+a zero-scoring member receives zero points — which holds arithmetically whatever
+the code does, since normalized weights already give a non-scorer nothing. That
+member now scores, so the assertion has to be earned.
+
+A re-audit of the fixed suite scored **0.95, CERTIFIED**, with one survivor.
+
+Read the improvement carefully, because this is exactly where a kill-rate can be
+oversold: mutants are generated fresh each run, so 0.90 → 0.95 is two samples,
+not a controlled measurement. What is *not* a sample is that two specific faults
+got through before and are now covered by tests checked against those faults
+directly — apply the mutant, watch that test and only that test fail.
+
+The tape above is left as it was recorded. It is a dated artifact of the commit
+it graded, and `demo/thin-boundaries` in the repository preserves that exact
+suite so the gaps stay readable rather than disappearing into a diff.

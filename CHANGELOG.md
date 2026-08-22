@@ -9,6 +9,39 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
+## [v0.5.4] — 2026-08-22
+
+### Added
+
+- **`--max-proven-missed`** (and a `max-proven-missed` Action input) — the merge
+  gate that does not flap. `--min-kill-rate` is the obvious one and the wrong
+  default: a kill rate is a proportion of FRESHLY GENERATED mutants, so it moves
+  between runs on unchanged code. A demonstration pull request that deleted
+  every assertion pinning a library's central guarantee scored 0.85 and then
+  0.90 on the identical diff — the higher number on the more weakened suite —
+  and a 0.8 bar passed it both times. A proven-missed gap is a survivor the herd
+  then KILLED with a test it wrote and ran: a demonstrated bug, not a
+  proportion. `0` means any demonstrated gap fails the build.
+  It fails CLOSED. With survivors present and no test that graded them,
+  `proven_missed` reads 0 because nothing was proven, not because the suite is
+  clean; those files fail and report as `PROVEN-GAP UNMEASURED` rather than
+  passing on a question nobody answered.
+
+## [v0.5.3] — 2026-08-22
+
+### Fixed
+
+- **A changed TEST puts its source in scope.** Diff scoping matched a candidate
+  only on its source path, so a pull request that deletes assertions — touching
+  no source file — was scoped to nothing: `NOTHING IN SCOPE: the diff touched no
+  candidate; no audit was needed`, and the check passed green while the suite it
+  guarded had just been gutted. Weakening a suite is the pure form of "tests
+  that pass and defend nothing", the exact change this gate exists to catch, and
+  it was the one change that could not reach it. The pairing was already
+  resolved (`reposcan.Candidate.TestPath`, from `--tests` or the language
+  plugin's convention), so scoping on either side of the pair needs no new
+  configuration.
+
 ## [v0.5.2] — 2026-08-22
 
 ### Fixed

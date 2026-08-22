@@ -174,6 +174,34 @@ advisory — and `critic-model: off` disables it entirely, which is reasonable
 when one vendor gives you only one usable model. The critic never gates the
 verdict either way.
 
+## The gate that does not flap
+
+`min-kill-rate` is the obvious merge gate and the wrong default. A kill rate is
+a proportion of **freshly generated** mutants, so it moves between runs on code
+nobody touched — this project's own warehouse records a file whose rate swung
+0.375 to 0.525 across a replicate series with nothing changed but the seed. Set
+the threshold near a healthy value and it goes red on good work; the team turns
+it off, and you have no gate at all.
+
+`max-proven-missed` keys on the claim that does not move:
+
+```yaml
+    max-proven-missed: "0"
+```
+
+A **proven-missed gap** is a survivor the herd then killed with a test it wrote
+and ran. Not a proportion, not an opinion — a specific demonstrated bug your
+suite does not catch, established by execution. `0` means any demonstrated gap
+fails the build.
+
+It **fails closed**. If the herd had survivors but could author no test that
+graded them, `proven_missed` reads 0 because nothing was proven — not because
+the suite is clean. The run reports that case separately (`PROVEN-GAP
+UNMEASURED`) and fails rather than passing on a question nobody answered.
+
+Both gates compose: `min-kill-rate` as a loose floor, `max-proven-missed` as the
+thing that actually blocks a merge.
+
 ## One key, if that is all you have
 
 Three provider inputs and a decorrelation rule read like corral needs an

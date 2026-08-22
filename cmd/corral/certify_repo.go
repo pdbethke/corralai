@@ -240,7 +240,18 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		}
 		var kept []reposcan.Candidate
 		for _, c := range cands {
-			if changedSet[c.Path] {
+			// A changed TEST puts its source in scope, not just a changed
+			// source. Scoping on c.Path alone made the one change this gate
+			// exists to catch invisible to it: a pull request that deletes
+			// assertions touches no source file, so the audit reported
+			// "NOTHING IN SCOPE" and passed green. Weakening a suite is the
+			// pure form of "tests that pass and defend nothing" — the gate
+			// cannot be blind to precisely that.
+			//
+			// The pairing is already resolved (c.TestPath), from the --tests
+			// map or from the language plugin's convention, so this costs a
+			// map lookup and no new configuration.
+			if changedSet[c.Path] || (c.TestPath != "" && changedSet[c.TestPath]) {
 				kept = append(kept, c)
 				continue
 			}

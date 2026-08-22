@@ -3830,3 +3830,52 @@ func TestPrintWeakFileOmitsAuthoredTestWhenNothingWasProven(t *testing.T) {
 		t.Fatalf("must not print an authored test that proved nothing:\n%s", b.String())
 	}
 }
+
+// TestCertifyRepoDiffBaseScopesAChangedTestToItsSource: a pull request that
+// changes ONLY a test file must still be audited.
+//
+// This was the gate's blind spot, and it was aimed at its own thesis. Scoping
+// on the source path alone meant a PR that deleted assertions touched no
+// candidate, so the audit printed "NOTHING IN SCOPE" and passed green — while
+// the suite it was supposedly guarding had just been gutted. Weakening a suite
+// is the pure form of "tests that pass and defend nothing"; a gate blind to
+// precisely that is worse than no gate, because it certifies the change.
+//
+// Found by opening a real pull request against a real repository that deleted
+// the assertions pinning its central guarantee, and watching the check go
+// green.
+func TestCertifyRepoDiffBaseScopesAChangedTestToItsSource(t *testing.T) {
+	root := t.TempDir()
+	gitRun := gitCmd(t, root)
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "pkg", "a_test.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "pkg", "b.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "pkg", "b_test.go"), "package pkg\n")
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+	base := gitRevParseHead(t, root)
+
+	// Only the TEST changes — the shape of a PR that weakens a suite.
+	mustWrite(t, filepath.Join(root, "pkg", "a_test.go"), "package pkg // assertions removed\n")
+	gitRun("add", "pkg/a_test.go")
+	gitRun("commit", "-q", "-m", "weaken the tests", "--no-gpg-sign")
+
+	goals := filepath.Join(root, "goals.json")
+	mustWrite(t, goals, `{"pkg/a.go": "must not panic", "pkg/b.go": "must not panic either"}`)
+
+	var out, errb bytes.Buffer
+	code := runCertifyRepo([]string{
+		"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant,
+		"--critic-model", "off", "--diff-base", base, "--goals", goals, "--dry-run",
+	}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	if strings.Contains(out.String(), "NOTHING IN SCOPE") {
+		t.Fatalf("a PR that gutted pkg/a_test.go was reported as nothing to audit:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "1 job(s)") {
+		t.Errorf("expected the changed test to put pkg/a.go in scope (and only it):\n%s", out.String())
+	}
+}

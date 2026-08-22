@@ -9,6 +9,65 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
+## [v0.5.2] — 2026-08-22
+
+### Fixed
+
+- **A too-narrow test command is refused before the audit, not after.** corral
+  writes its killing test beside your own, and if your command names a single
+  test file rather than a directory, nothing collects it. That was detected —
+  but only *after* the test-writer had authored a test, so you paid for a whole
+  audit to be told `proven_missed: 0` and "widen the command and re-run". The
+  same check now runs before any model call: one jail execution, no inference,
+  and the refusal names the exact file it would have written. 1.2 seconds
+  instead of a wasted run. The assumption underneath was that the dev test's
+  directory is "collected by construction" — true for a discovery-based runner,
+  false for `node tests/x.test.js` or `pytest tests/x_test.py`, which is an
+  ordinary way to invoke a suite.
+- **A cross-vendor run no longer routes a seat to Ollama.** `baseVendor()` read
+  an unset `MODEL_BACKEND` as "anthropic" while `FromEnv()` read it as ollama.
+  They disagreed in exactly one reachable case — a MIXED-vendor run, where no
+  single backend can be inferred and the variable stays unset — so a Claude
+  critic beside a Gemini generator matched a phantom Anthropic base, skipped
+  cross-routing, and was handed to Ollama, which 404s a model it has never
+  pulled. The documented cross-vendor shape could not run without pinning
+  `MODEL_BACKEND` by hand. Unset is now told apart from a deliberately pinned
+  gateway: an unpinned run routes every cloud-named seat by name, while an
+  explicit `openrouter`/`ollama` keeps its hands-off guarantee.
+- **A disabled critic reports as disabled.** With `--critic-model off` the
+  verdict printed "critic review: no vacuous tests flagged" — a clean bill of
+  health from a reviewer that never ran, because the line keyed on an empty
+  findings list. It now says "not run — no test-critic was assigned". A critic
+  that ran and found nothing still says so.
+- **Go 1.26.6.** Seven stdlib advisories reachable from corral's own call paths
+  (`net/url`, `net/http`, `crypto/tls`, `encoding/asn1`, `encoding/xml`,
+  `html/template`), all fixed in that patch release. They went unnoticed because
+  `scripts/check-security.sh` runs `govulncheck` only when the binary is present
+  and CI never installed it — so the security gate printed "OK: all security
+  invariants hold" having checked formatting and nothing else. CI now installs
+  it, and the gate means what it says.
+
+### Added
+
+- **The Responses API.** OpenAI serves its Codex models — `gpt-5-codex`,
+  `gpt-5.1-codex`, `gpt-5.1-codex-mini`, `gpt-5.3-codex` — on `/v1/responses`
+  only; they are not available on `/chat/completions` at all. Naming one used to
+  resolve cleanly and then fail at the API boundary, telling an operator that a
+  model they can see in the docs does not exist. Routing is now per model rather
+  than per vendor.
+- **One key is enough.** Three provider inputs and an enforced decorrelation
+  rule read like corral needs an account with every vendor. It does not: the
+  verdict is measured by execution and the critic is advisory. The GitHub Action
+  docs now carry a single-key workflow, along with what that mode costs — corral
+  prints a decorrelation warning naming the lineage that both planted the faults
+  and graded the tests.
+
+### Note
+
+`v0.1.0` was the day-zero, builder-era release and remained the only published
+release until now, so the Releases page advertised a July build while the docs
+told you to pin a much later tag. This is the first release published since.
+
 ## [v0.5.1] — 2026-08-13
 
 ### Added

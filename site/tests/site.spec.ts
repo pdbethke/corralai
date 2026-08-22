@@ -190,12 +190,19 @@ test('zero non-local network requests across the whole page session, including s
 });
 
 test('replay-player.js does not clobber the site title', async ({ page }) => {
-  // Regression guard for Minor-3: setSkin() in replay-player.js sets
-  // document.title to the product UI's own title ("CorralAI — the corral")
-  // at script-load time. Hero.astro's inline script restores the site's
-  // title afterward — assert the restored value wins, not the clobbered one.
-  await page.goto('/');
-  await expect(page).toHaveTitle('Corralai — a headless brain for a herd of AI agents');
+  // setSkin() in replay-player.js sets document.title to the product UI's own
+  // title ("CorralAI — the corral") at script-load time; Hero.astro restores
+  // the site's afterwards. Assert the restored value wins.
+  //
+  // Asserted against the SERVED HTML's own <title>, never a literal. This test
+  // used to pin the string, and so did the restoring code — two copies that
+  // both fell stale while index.astro moved on, leaving every browser tab
+  // advertising a retired product with a green test suite agreeing. A guard
+  // that hardcodes the thing it guards cannot notice when it drifts.
+  const res = await page.goto('/');
+  const served = /<title>([^<]*)<\/title>/.exec((await res!.text()))?.[1];
+  expect(served, 'the served HTML must carry a <title>').toBeTruthy();
+  await expect(page).toHaveTitle(served!);
 });
 
 test('the landing hero shows the full cockpit AND the skin/theme selector, defaulting to ranch', async ({ page }) => {
@@ -232,7 +239,12 @@ test('the hero skin selector applies a real visual palette (matrix → green pho
   expect(accent.toLowerCase(), 'matrix accent must be phosphor green').toContain('#39ff14');
 
   // The picked skin repaints but must not steal the branded page title.
-  await expect(page).toHaveTitle('Corralai — a headless brain for a herd of AI agents');
+  {
+    // Same rule as above: compare against the served <title>, not a literal.
+    const res = await page.request.get('/');
+    const served = /<title>([^<]*)<\/title>/.exec(await res.text())?.[1];
+    await expect(page).toHaveTitle(served!);
+  }
 });
 
 test('the GitHub link resolves and points at the real repo, everywhere it appears', async ({ page, request }) => {

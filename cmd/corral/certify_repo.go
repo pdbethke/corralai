@@ -68,6 +68,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	jsonOut := fs.Bool("json", false, "with --dry-run, emit the repository's audit surface as JSON instead of the human report: per-language counts, every auditable file with its inferred test pairing, and the machine-stable exclusion tally. Needs no key, no jail and no money — it is the free inventory a UI or a tenant's own tooling can consume instead of scraping stdout")
 	substrateFlag := fs.String("substrate", substrateJail, "where the audit runs: "+substrateJail+" (bwrap) or "+substrateWorkspace+" (mutate --repo in place; the caller IS the isolation boundary, e.g. an ephemeral CI runner)")
 	diffBase := fs.String("diff-base", "", "bound the scan to files changed since this git ref, instead of ranking + --top. In a PR the diff IS the bound: ranking and --top do not apply on this path")
+	maxProvenMissedFlag := fs.String("max-proven-missed", "", "fail the scan (exit 1) if ANY audited file has MORE than this many proven-missed gaps — survivors the pool then killed with a test it WROTE and RAN. Opt-in and unset by default. Prefer this to --min-kill-rate as a merge gate: a kill rate is a proportion of freshly generated mutants and moves between runs on unchanged code, so a threshold set near a healthy value flaps red and gets switched off. A proven-missed gap is a specific demonstrated bug the suite does not catch, established by execution, and 0 means the pool proved nothing — not that it sampled well")
 	minKillRateFlag := fs.String("min-kill-rate", "", "fail the scan (exit 1) if ANY audited file's kill rate is below this value (0.0-1.0 inclusive; a minimum, so a file exactly at the threshold passes). Opt-in: unset by default, so exit codes are unchanged unless this is given. Applies PER FILE, not to the aggregate — a well-tested file must not mask a weak one")
 	preflightFlag := fs.Bool("preflight", false, "run the project's test suite once with coverage instrumentation and report which source files it never executes. One extra suite run; reports coverage-grade evidence, not proof")
 	recordFlag := fs.Bool("record", false, "record every file this scan audited or rejected, and why, into the DuckDB scan ledger (default: off). A BOOL here — unlike `certify --local`'s --record, which takes a tape PATH — see --record-db for where the ledger goes. A recording failure never changes the scan's verdict or exit code")
@@ -144,6 +145,19 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 		minKillRate = &v
+	}
+
+	// Same opt-in shape as --min-kill-rate: nil means unset, and an
+	// unparseable value is a usage error rather than a gate that silently
+	// never fires.
+	var maxProvenMissed *int
+	if *maxProvenMissedFlag != "" {
+		v, perr := strconv.Atoi(strings.TrimSpace(*maxProvenMissedFlag))
+		if perr != nil || v < 0 {
+			fmt.Fprintf(stderr, "corral certify --repo: --max-proven-missed must be a non-negative whole number, got %q\n", *maxProvenMissedFlag)
+			return 2
+		}
+		maxProvenMissed = &v
 	}
 
 	// Captured here, before enumeration: this is the header row's
@@ -632,7 +646,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// separated by everything in between. A zero time means nothing was
 	// reused.
 	oldestReused, _ := oldestReuse(results)
-	printRepoReport(stdout, rep, nothingInScope, minKillRate, unpairableInDiff, oldestReused)
+	printRepoReport(stdout, rep, nothingInScope, minKillRate, maxProvenMissed, unpairableInDiff, oldestReused)
 	// A distinct section, never folded into Excluded/Ungradable/the audited
 	// fraction: this is an inventory alongside the audit, not a change to
 	// it (see the brief). Printed unconditionally when the flag was given,
@@ -641,7 +655,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		printPreflightReport(stdout, preflightResult, preflightSources)
 	}
 
-	exitCode := repoScanExitCode(rep, nothingInScope, minKillRate)
+	exitCode := repoScanExitCode(rep, nothingInScope, minKillRate, maxProvenMissed)
 
 	// FAIL-OPEN, deliberately, and this is the one place in corral where
 	// uncertainty must not fail closed: this command's exit code is a CI
@@ -1745,7 +1759,7 @@ func printPreflightReport(w io.Writer, cm reposcan.CoverageMap, sourceFiles []st
 // against NaN is false, so a threshold check reached in that state would
 // silently never fire — checking Audited == 0 first, and returning early,
 // is what keeps that failure from being maskable by (or masking) a breach.
-func repoScanExitCode(r reposcan.RepoReport, nothingInScope bool, minKillRate *float64) int {
+func repoScanExitCode(r reposcan.RepoReport, nothingInScope bool, minKillRate *float64, maxProvenMissed *int) int {
 	if nothingInScope {
 		return 0
 	}
@@ -1768,6 +1782,23 @@ func repoScanExitCode(r reposcan.RepoReport, nothingInScope bool, minKillRate *f
 	if minKillRate != nil {
 		for _, f := range r.Weakest {
 			if f.KillRate < *minKillRate {
+				return 1
+			}
+		}
+	}
+	if maxProvenMissed != nil {
+		for _, f := range r.Weakest {
+			if f.ProvenMissed > *maxProvenMissed {
+				return 1
+			}
+			// A zero here is only trustworthy when the pool actually got to
+			// try. With survivors present and the writer having failed — or
+			// having produced a test that never genuinely graded — ProvenMissed
+			// reads 0 because nothing proved anything, not because the suite is
+			// clean. Failing closed is the only honest reading: a gate that
+			// passes on an unmeasured question is the failure this tool exists
+			// to find in other people's pipelines.
+			if f.Survivors > 0 && (f.TestWriterFailed || f.PoolTestUnsound) {
 				return 1
 			}
 		}
@@ -1897,7 +1928,7 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 // corral could not pair with a test. It exists to keep the merge gate honest in
 // the one case where a green result is actively misleading: a zero-candidate
 // diff has two causes, and they are not the same answer.
-func printRepoReport(w io.Writer, r reposcan.RepoReport, nothingInScope bool, minKillRate *float64, unpairableInDiff []string, oldestReused time.Time) {
+func printRepoReport(w io.Writer, r reposcan.RepoReport, nothingInScope bool, minKillRate *float64, maxProvenMissed *int, unpairableInDiff []string, oldestReused time.Time) {
 	commit := r.Commit
 	if strings.TrimSpace(commit) == "" {
 		// Never print a bare dangling "@ " — say plainly that the report is
@@ -2052,6 +2083,39 @@ func printRepoReport(w io.Writer, r reposcan.RepoReport, nothingInScope bool, mi
 			fmt.Fprintf(w, "  KILL-RATE BREACH: %d file(s) below --min-kill-rate %.2f:\n", len(breaches), *minKillRate)
 			for _, f := range breaches {
 				fmt.Fprintf(w, "    %.2f  %s (%.2f below threshold)\n", f.KillRate, f.Path, *minKillRate-f.KillRate)
+			}
+		}
+	}
+	// The proven-missed gate, reported the same way and for the same reason:
+	// an operator whose build just went red must be able to see WHICH file and
+	// WHY without re-reading the whole report.
+	if maxProvenMissed != nil && !nothingInScope && r.Audited > 0 {
+		var breaches, unmeasured []reposcan.WeakFile
+		for _, f := range r.Weakest {
+			switch {
+			case f.ProvenMissed > *maxProvenMissed:
+				breaches = append(breaches, f)
+			case f.Survivors > 0 && (f.TestWriterFailed || f.PoolTestUnsound):
+				unmeasured = append(unmeasured, f)
+			}
+		}
+		if len(breaches) > 0 {
+			fmt.Fprintf(w, "  PROVEN-GAP BREACH: %d file(s) above --max-proven-missed %d:\n", len(breaches), *maxProvenMissed)
+			for _, f := range breaches {
+				fmt.Fprintf(w, "    %d proven gap(s)  %s — each one a bug the pool DEMONSTRATED your tests miss, by writing a test and running it\n", f.ProvenMissed, f.Path)
+			}
+		}
+		if len(unmeasured) > 0 {
+			// Failing closed, and saying so. A 0 here is not a clean bill of
+			// health: the pool had survivors to prove and could not author a
+			// test that graded, so nothing was established either way.
+			fmt.Fprintf(w, "  PROVEN-GAP UNMEASURED: %d file(s) left survivors the pool could not test:\n", len(unmeasured))
+			for _, f := range unmeasured {
+				why := "the authored test never graded"
+				if f.TestWriterFailed {
+					why = "no compiling test could be authored"
+				}
+				fmt.Fprintf(w, "    %s — %d survivor(s), %s, so 'proven_missed: 0' means nothing was proven, NOT that the suite is clean\n", f.Path, f.Survivors, why)
 			}
 		}
 	}

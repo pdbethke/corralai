@@ -20,6 +20,10 @@ inputs:
     description: "Fail the run if any audited file's kill rate is below this value (0.0-1.0 inclusive, a minimum so a file exactly at the value passes). Applies PER FILE, not to the aggregate. Opt-in: leave empty (the default) to keep today's behaviour, where the run does not fail on a low kill rate."
     required: false
     default: ""
+  max-proven-missed:
+    description: "Fail the run if any audited file has MORE than this many PROVEN-MISSED gaps — survivors the herd then killed with a test it wrote and ran. Opt-in; leave empty for today's behaviour. Prefer this to min-kill-rate as the merge gate. A kill rate is a proportion of freshly generated mutants and moves between runs on unchanged code, so a threshold near a healthy value flaps red on good work and gets switched off; a proven gap is a specific demonstrated bug your tests miss, established by execution. '0' means any demonstrated gap fails the build. It fails CLOSED when the herd had survivors but could author no test that graded — a zero there means nothing was proven, not that the suite is clean."
+    required: false
+    default: ""
   top:
     description: "Audit at most this many of the highest-ranked candidate files, as a ceiling on what one run can cost. An audit costs roughly (mutants × your suite's whole runtime) PER FILE, and the file count comes from the PR's diff — a number the author picks, not you. On a repo whose suite takes a minute, a ten-file PR is a job measured in tens of hours, discovered only once it is running. Leave empty to keep corral's own default bound."
     required: false
@@ -115,6 +119,7 @@ runs:
         GOALS: ${{ inputs.goals }}
         TESTS: ${{ inputs.tests }}
         MIN_KILL_RATE: ${{ inputs.min-kill-rate }}
+        MAX_PROVEN_MISSED: ${{ inputs.max-proven-missed }}
         TOP: ${{ inputs.top }}
         REPO_OWNER: ${{ github.repository_owner }}
         COMMIT_SHA: ${{ github.sha }}
@@ -210,6 +215,7 @@ runs:
         [ -n "$GOALS" ] && args+=(--goals "$GOALS")
         [ -n "${TESTS:-}" ] && args+=(--tests "$TESTS")
         [ -n "$MIN_KILL_RATE" ] && args+=(--min-kill-rate "$MIN_KILL_RATE")
+        [ -n "${MAX_PROVEN_MISSED:-}" ] && args+=(--max-proven-missed "${MAX_PROVEN_MISSED:-}")
         [ -n "${TOP:-}" ] && args+=(--top "$TOP")
         # Role→model routing. Each is omitted when empty so corral keeps
         # ownership of its own defaults — the action must never become a second

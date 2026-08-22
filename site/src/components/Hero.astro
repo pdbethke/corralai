@@ -91,6 +91,7 @@ const pool = poolVerdict
 ---
 <section id="hero">
   <div class="hero-copy hero-top">
+    <p class="kicker">Corral breaks your code on purpose and checks whether your tests notice.</p>
     <h1>No one may be judge in their own cause.</h1>
     <p class="latin"><em>Nemo iudex in causa sua.</em></p>
     <p class="lead">So Corral doesn't <em>build</em> your code — it <em>certifies a change by execution</em>: a decorrelated herd grades the tests meant to guard it, in a jail, and signs a tamper-evident verdict. Not a builder — a gate.</p>
@@ -241,6 +242,10 @@ const pool = poolVerdict
   .pitch { font-size: 1.02rem; color: var(--fg); max-width: 740px; margin: 0 auto 14px; line-height: 1.6; }
   .proof-row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; color: var(--fg); font-size: 0.95rem; font-weight: 600; margin: 0 0 10px; }
   .proof-row span[aria-hidden] { color: var(--muted); font-weight: 400; }
+  /* The plain claim, above the maxim: the maxim is the ARGUMENT and reads
+     beautifully, but a stranger should not have to reach the third sentence to
+     learn what the tool does. */
+  .kicker { font-size: 1.05rem; font-weight: 600; color: var(--amber); margin: 0 0 10px; }
   .caption { color: var(--muted); font-size: 0.9rem; margin-bottom: 20px; }
   /* The note is the punchline of the caption above it, so it sits tight to it. */
   .hero-note { color: var(--amber); margin-top: -12px; }
@@ -486,7 +491,17 @@ const pool = poolVerdict
      key on this origin. data-skin-lock makes the hero ignore that persisted
      pick (and not overwrite it) so the landing page always leads with the
      brand look. Must run before the player <script src>. -->
-<script is:inline>document.documentElement.setAttribute('data-skin-lock', 'ranch');</script>
+<script is:inline>
+  document.documentElement.setAttribute('data-skin-lock', 'ranch');
+  /* replay-player.js's setSkin() clobbers document.title with the PRODUCT UI's
+     own title as soon as it loads. The site's title was previously restored
+     from a string hardcoded here — twice — with a comment promising it stayed
+     "verbatim against the <title> in index.astro". It did not: index.astro
+     moved on and these copies kept advertising the retired builder in every
+     browser tab. Stash the real one before anything can overwrite it, so the
+     two cannot drift again. */
+  window.__siteTitle = document.title;
+</script>
 <script src="/replay-player.js" is:inline></script>
 <script define:vars={{ golden, replayCorpus }} is:inline>
   // Handed to the shared player, never fetched: the site makes no external
@@ -516,7 +531,7 @@ const pool = poolVerdict
   // canvas/panels in the picked palette (matrix → green phosphor, etc.) AND
   // clobbers document.title with the product's skin subtitle — restore the
   // site's own title after each pick so the tab stays branded.
-  const HERO_TITLE = 'Corralai — a headless brain for a herd of AI agents';
+  const HERO_TITLE = window.__siteTitle || document.title;
   if (typeof window.setSkin === 'function') {
     const _setSkin = window.setSkin;
     window.setSkin = function (v) { _setSkin(v); document.title = HERO_TITLE; };
@@ -555,10 +570,9 @@ const pool = poolVerdict
       tick();
     });
   });
-  // replay-player.js's setSkin() (run synchronously at its own script-load
-  // time, before this block even executes) clobbers document.title to
-  // 'CorralAI — the corral' — the product UI's own title, not the site's.
-  // Restore the site's title here, verbatim against the <title> in
-  // index.astro so this and the a11y "has a <title>" check never drift.
-  document.title = 'Corralai — a headless brain for a herd of AI agents';
+  // replay-player.js's setSkin() runs synchronously at its own script-load
+  // time — before this block executes — and clobbers document.title with the
+  // product UI's title. Restore the SITE's, captured above before the player
+  // could touch it, so there is no second copy of the string to fall stale.
+  document.title = window.__siteTitle || document.title;
 </script>

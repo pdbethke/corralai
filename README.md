@@ -1,9 +1,11 @@
-# Corralai
+# Corral — prove your tests would catch it
 
 [![CI](https://github.com/pdbethke/corralai/actions/workflows/deploy.yml/badge.svg?branch=main)](https://github.com/pdbethke/corralai/actions/workflows/deploy.yml)
 [![License: Elastic 2.0](https://img.shields.io/badge/license-Elastic--2.0-e8a838)](LICENSE)
 [![docs](https://img.shields.io/badge/docs-corralai.dev-2f6f4e)](https://corralai.dev/docs/getting-started/)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/pdbethke/corralai/badge)](https://securityscorecards.dev/viewer/?uri=github.com/pdbethke/corralai)
+
+Corral breaks your code on purpose and checks whether your tests notice. It plants faults that violate a stated guarantee, runs **your own suite** against each one in a sandbox, and reports how many it killed — measured by execution, never taken on a model's word.
 
 ***Nemo iudex in causa sua*** — no one may be judge in their own cause. The one who
 wrote the code doesn't get to certify it: the verdict is **measured by execution**, by

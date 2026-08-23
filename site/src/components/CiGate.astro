@@ -15,11 +15,39 @@
   <pre class="yml"><code>- uses: actions/checkout@v4
   with:
     fetch-depth: 0            # required — the diff needs a merge base
-- uses: pdbethke/corralai@v0.5.9
+- uses: pdbethke/corralai@v0.6.0
   with:
     test-command: "go test ./..."
     anthropic-key: $&#123;&#123; secrets.ANTHROPIC_API_KEY &#125;&#125;
-    min-kill-rate: "0.7"      # opt-in teeth: fails the run, per file</code></pre>
+    max-proven-missed: "0"    # fail on a DEMONSTRATED gap
+    attest: "true"            # publish a receipt anyone can verify</code></pre>
+
+  <p>
+    <code>max-proven-missed</code> rather than a kill-rate threshold, and the
+    difference matters. A kill rate is a proportion of <em>freshly generated</em>
+    faults, so it moves between runs on code nobody touched — we have watched an
+    unchanged file score 0.375 and then 0.525, and a deliberately weakened suite
+    score <em>higher</em> than it had a moment earlier. Set a bar near a healthy
+    value and it reddens good work until someone switches it off. A
+    <strong>proven gap</strong> does not drift: it is a survivor the herd then
+    killed with a test it wrote and ran — a specific demonstrated bug your suite
+    misses.
+  </p>
+
+  <p>
+    <code>attest</code> publishes the verdict as a signed in-toto statement
+    through GitHub's attestation API, keyless, chained to the repository and
+    workflow rather than to a key on a disposable runner. A reviewer verifies it
+    without trusting the log, or you:
+  </p>
+
+  <pre class="yml"><code>gh attestation verify corral-audit-statement.json --repo &lt;owner&gt;/&lt;repo&gt;</code></pre>
+
+  <p>
+    It is written <em>before</em> the gate's exit code is honoured, so a failing
+    audit still leaves a receipt. A verdict you only keep when it flatters you is
+    not evidence.
+  </p>
 
   <div class="receipt">
     <h3>What it said about this repository</h3>

@@ -174,6 +174,85 @@ advisory — and `critic-model: off` disables it entirely, which is reasonable
 when one vendor gives you only one usable model. The critic never gates the
 verdict either way.
 
+## A receipt a reviewer can verify
+
+A job summary is a screenshot. `attest: "true"` publishes the verdict as a
+signed [in-toto](https://in-toto.io) statement through GitHub's attestation API,
+and attaches the statement itself to the run as an artifact:
+
+```yaml
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+  artifact-metadata: write
+
+# ...
+    attest: "true"
+```
+
+Signing is **keyless**, through the workflow's own OIDC identity. That matters
+more than the format. A `certify --local` run signs with a key generated on the
+machine, so on a disposable runner every audit is signed by a fresh key that
+chains to nothing; an attestation chains to the repository, the workflow and the
+commit — which is what a reviewer actually wants to check. Free on public
+repositories.
+
+Anyone can then verify it without trusting the log, or you:
+
+```bash
+gh attestation verify corral-audit-statement.json --repo <owner>/<repo>
+```
+
+`gh attestation` needs a recent GitHub CLI — it does not exist in 2.45, which
+some distributions still ship, and an older CLI answers with a help dump rather
+than an error. The same answer straight from the API, with no CLI version to
+care about:
+
+```bash
+DIGEST=$(sha256sum corral-audit-statement.json | cut -d" " -f1)
+gh api repos/<owner>/<repo>/attestations/sha256:$DIGEST
+```
+
+### What the statement says
+
+Every audited file's kill rate, survivors and proven gaps — **with the flags
+that say what a zero means** (`timedOut`, `testWriterFailed`, `poolTestUnsound`,
+because `provenMissed: 0` means *nothing was proven* rather than *the suite is
+clean* whenever one is set) — plus the thresholds it was judged against, the
+model in each role, and the audited-of-candidates denominator, so a clean result
+cannot be flattered by omitting how little was looked at.
+
+It is written **before** the gate's exit code is honoured, and the attest steps
+run under `always()`. A receipt you only keep when the verdict flatters you is
+not evidence, and the failing runs are the ones a reviewer most needs.
+
+## Sending verdicts to your own warehouse
+
+One audit answers *is this change defended*. It cannot answer whether your tests
+are doing anything across your projects over time, and that needs somewhere to
+put the rows:
+
+```yaml
+    push: "md:my_database"                     # or a DuckDB path
+    motherduck-token: ${{ secrets.MOTHERDUCK_TOKEN }}
+```
+
+The warehouse is **yours**. corral has no hosted tier and collects nothing —
+your key, your runner, your database — and any DuckDB works, so this is a
+destination rather than a lock-in.
+
+It is append-only, because a receipt you can `UPDATE` is not a receipt and
+overwriting is how a trend is lost. Every row carries the sha256 of the signed
+statement it came from and the run URL, so a row traces back to something a
+third party can verify.
+
+What it is for is the question a single run cannot answer. A kill rate is a
+**sample**: mutants are generated fresh each time, and the same unchanged file
+has scored 0.375 and then 0.525 here. Forty rows are a distribution — *"this
+file drifted from 0.9 to 0.6 over two months"* is a claim no individual run
+supports. See [the warehouse](/docs/warehouse/) for the queries worth running.
+
 ## The gate that does not flap
 
 `min-kill-rate` is the obvious merge gate and the wrong default. A kill rate is

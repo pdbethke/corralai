@@ -35,6 +35,60 @@ behind a run. The verdicts you see (more-itertools **certified at 90%**, a Ruby
 edit-distance suite **sent back at 60%**) are the same signed records the
 [recordings](/recordings/) come from.
 
+## Getting your own
+
+The page on this site queries **our** audit data. The point is that you can have
+the same table of your own, because `certify --repo` takes a target and appends
+every run's per-file verdict to it:
+
+```bash
+corral certify --repo . --push md:my_database -- pytest -q
+# or a plain file, if you would rather not involve anyone
+corral certify --repo . --push ./audits.duckdb -- pytest -q
+```
+
+From the [Action](/docs/github-action/), the same thing is `push:` plus a
+`motherduck-token:` secret when the target is `md:`.
+
+There is no hosted tier and nothing is collected: your key, your runner, your
+warehouse. Any DuckDB works, so MotherDuck is a destination rather than a
+requirement.
+
+Rows are **append-only** — overwriting is how a trend is lost — and each carries
+the sha256 of the signed statement it came from plus the run URL, so any row
+traces back to an attestation a third party can verify. The qualifier columns
+(`timed_out`, `test_writer_failed`, `pool_test_unsound`) sit beside the numbers
+rather than in another table, because aggregation is exactly where a
+`proven_missed` of 0 that means *nothing could be proven* gets read as *clean*.
+
+### The queries that need a warehouse
+
+A single run cannot answer these, and that is the whole reason to keep the rows:
+
+```sql
+-- Which files keep shipping DEMONSTRATED gaps. Countable across repos, unlike
+-- kill rates: a dense function and a small accessor are not the same
+-- measurement, so averaging their rates says nothing.
+SELECT repo, path, count(*) AS runs, sum(proven_missed) AS demonstrated_gaps
+FROM corral_audits
+GROUP BY 1, 2
+HAVING demonstrated_gaps > 0
+ORDER BY demonstrated_gaps DESC;
+
+-- Drift, or sampling? Mutants are generated fresh per run, so one number is a
+-- sample. A spread tells you whether a change is real.
+SELECT path, count(*) AS runs,
+       round(avg(kill_rate), 2) AS mean,
+       round(min(kill_rate), 2) AS worst,
+       round(max(kill_rate), 2) AS best
+FROM corral_audits
+GROUP BY 1 ORDER BY mean;
+
+-- The honest denominator: how much of what changed could be audited at all.
+SELECT repo, sum(audited) AS audited, sum(candidates) AS candidates
+FROM corral_audits GROUP BY 1;
+```
+
 ## Why in the browser
 
 The DuckDB **runtime** loads from a CDN (the WebAssembly build is larger than a

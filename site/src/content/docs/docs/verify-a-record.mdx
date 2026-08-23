@@ -47,6 +47,37 @@ Each record is an in-toto statement naming the repository and the exact commit
 as its subject, the role→model assignment as builder dependencies, and a
 hash-linked step ledger. Change one byte of any of it and the signature fails.
 
+## The other kind: an attestation from CI
+
+The record above is signed by a key on the machine that ran the audit. That is
+the right shape for a local run and the wrong one for CI, where the machine is
+disposable: a fresh key per run chains to nothing, and a signature nobody can
+tie to an origin proves only that *something* signed it.
+
+A run of the [GitHub Action](/docs/github-action/) with `attest: "true"` instead
+publishes the verdict through GitHub's attestation API, signed **keylessly** by
+the workflow's own OIDC identity. Verifying it answers *which repository, which
+workflow, which commit* — without trusting the log or the person who linked you
+to it:
+
+```bash
+gh attestation verify corral-audit-statement.json --repo <owner>/<repo>
+```
+
+`gh attestation` needs a recent GitHub CLI; it is absent in 2.45, which some
+distributions still ship, and an older CLI answers with a help dump rather than
+an error. The API needs no particular version:
+
+```bash
+DIGEST=$(sha256sum corral-audit-statement.json | cut -d" " -f1)
+gh api repos/<owner>/<repo>/attestations/sha256:$DIGEST
+```
+
+Both are the same in-toto envelope; they differ in who vouches for it. The local
+record says *this key signed this verdict*. The attestation says *this
+repository's workflow produced this verdict at this commit*, which is the claim a
+reviewer actually needs.
+
 ## What this proves, and what it does not
 
 **It proves integrity.** The verdict you are reading is byte-for-byte the

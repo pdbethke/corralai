@@ -23,6 +23,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/advpool"
+	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/certify"
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/reposcan"
@@ -70,6 +71,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	jsonOut := fs.Bool("json", false, "with --dry-run, emit the repository's audit surface as JSON instead of the human report: per-language counts, every auditable file with its inferred test pairing, and the machine-stable exclusion tally. Needs no key, no jail and no money — it is the free inventory a UI or a tenant's own tooling can consume instead of scraping stdout")
 	substrateFlag := fs.String("substrate", substrateJail, "where the audit runs: "+substrateJail+" (bwrap) or "+substrateWorkspace+" (mutate --repo in place; the caller IS the isolation boundary, e.g. an ephemeral CI runner)")
 	diffBase := fs.String("diff-base", "", "bound the scan to files changed since this git ref, instead of ranking + --top. In a PR the diff IS the bound: ranking and --top do not apply on this path")
+	pushFlag := fs.String("push", "", "append this scan's per-file verdicts to a DuckDB you own — a path, or `md:<db>` for MotherDuck (which reads motherduck_token from the environment). corral has no hosted tier and keeps nothing: the warehouse is yours, and any DuckDB works, so this is a destination rather than a lock-in. Append-only, and every row carries the sha256 of the signed statement it came from, so a row traces back to something a third party can verify. It answers what one pull request cannot — a single kill rate is a sample, and the same unchanged diff has scored 0.85 and 0.90; forty of them are a distribution")
 	attestFlag := fs.String("attest", "", "write the scan's verdict as an in-toto Statement to this file — the receipt a reviewer can verify without trusting the run that produced it. Consumed by GitHub's attestation API (actions/attest), which signs it keylessly through the workflow's own OIDC identity, so the signature chains to the repository and workflow rather than to a key that lived on an ephemeral runner. Carries every file's kill rate, survivors and proven gaps WITH the honesty flags that say what a zero means, the thresholds it was judged against, and the models in each role")
 	maxProvenMissedFlag := fs.String("max-proven-missed", "", "fail the scan (exit 1) if ANY audited file has MORE than this many proven-missed gaps — survivors the pool then killed with a test it WROTE and RAN. Opt-in and unset by default. Prefer this to --min-kill-rate as a merge gate: a kill rate is a proportion of freshly generated mutants and moves between runs on unchanged code, so a threshold set near a healthy value flaps red and gets switched off. A proven-missed gap is a specific demonstrated bug the suite does not catch, established by execution, and 0 means the pool proved nothing — not that it sampled well")
 	minKillRateFlag := fs.String("min-kill-rate", "", "fail the scan (exit 1) if ANY audited file's kill rate is below this value (0.0-1.0 inclusive; a minimum, so a file exactly at the threshold passes). Opt-in: unset by default, so exit codes are unchanged unless this is given. Applies PER FILE, not to the aggregate — a well-tested file must not mask a weak one")
@@ -660,6 +662,22 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 
 	exitCode := repoScanExitCode(rep, nothingInScope, minKillRate, maxProvenMissed)
 
+	// One roster, shared by the push and the statement, so the two can never
+	// disagree about which model held which seat.
+	models := func() map[string]string {
+		m := map[string]string{
+			"mutant-generator": strings.TrimSpace(*mutantModelFlag),
+			"test-writer":      strings.TrimSpace(*writerModelFlag),
+			"test-critic":      strings.TrimSpace(*criticModelFlag),
+		}
+		for role, v := range m {
+			if v == "" || v == "off" {
+				delete(m, role)
+			}
+		}
+		return m
+	}
+
 	// The audit statement, written after the exit code is known so `passed`
 	// records the verdict this run actually returned rather than a guess made
 	// before the gates were applied.
@@ -668,18 +686,23 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// a merge gate, and a full disk must not red-build a pull request over
 	// bookkeeping — the same fail-open rule the ledger write below follows, for
 	// the same reason.
+	// Push before the statement write below, so a push failure is reported on
+	// its own rather than confused with an attestation problem. Like the ledger
+	// write, it never changes the exit code: this command is a merge gate, and
+	// an unreachable warehouse must not red-build a pull request over
+	// bookkeeping.
+	if strings.TrimSpace(*pushFlag) != "" {
+		n, perr := pushAuditRows(*pushFlag, *repoDir, rep, models(), minKillRate, maxProvenMissed, exitCode == 0)
+		switch {
+		case perr != nil:
+			fmt.Fprintf(stderr, "corral certify --repo: pushing to %s: %v\n", *pushFlag, perr)
+		case n > 0:
+			fmt.Fprintf(stdout, "  pushed %d row(s) to %s\n", n, *pushFlag)
+		}
+	}
+
 	if strings.TrimSpace(*attestFlag) != "" {
-		models := map[string]string{
-			"mutant-generator": strings.TrimSpace(*mutantModelFlag),
-			"test-writer":      strings.TrimSpace(*writerModelFlag),
-			"test-critic":      strings.TrimSpace(*criticModelFlag),
-		}
-		for role, m := range models {
-			if m == "" || m == "off" {
-				delete(models, role)
-			}
-		}
-		if err := writeAuditStatement(*attestFlag, *repoDir, rep, models, minKillRate, maxProvenMissed, exitCode == 0); err != nil {
+		if err := writeAuditStatement(*attestFlag, *repoDir, rep, models(), minKillRate, maxProvenMissed, exitCode == 0); err != nil {
 			fmt.Fprintf(stderr, "corral certify --repo: writing --attest statement: %v\n", err)
 		} else {
 			fmt.Fprintf(stdout, "  wrote the audit statement to %s — attest it with actions/attest, verify with `gh attestation verify`\n", *attestFlag)
@@ -2721,27 +2744,12 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 			PoolTestUnsound:  f.PoolTestUnsound,
 		})
 	}
-	// A statement whose subject names no revision is worse than no statement:
-	// it looks authoritative and binds to nothing, so a reviewer could verify
-	// the signature and still not know WHAT was audited. Resolve the commit
-	// from git when the caller did not supply one, and refuse to write an
-	// unbound receipt rather than emit a confident-looking blank.
-	commit := strings.TrimSpace(r.Commit)
-	if commit == "" {
-		// #nosec G204 -- fixed argv; repoDir is the operator's own --repo path, never remote input, and is passed as an argument rather than interpolated into a shell
-		if out, err := exec.Command("git", "-C", repoDir, "rev-parse", "HEAD").Output(); err == nil {
-			commit = strings.TrimSpace(string(out))
-		}
-	}
-	if commit == "" {
-		return fmt.Errorf("refusing to write an audit statement with no commit: the subject would bind to nothing. Pass --commit <sha>, or run inside a git checkout")
-	}
-	repo := strings.TrimSpace(r.Repo)
-	if repo == "" || repo == "." {
-		// #nosec G204 -- same: fixed argv, operator-supplied path, no shell involved
-		if out, err := exec.Command("git", "-C", repoDir, "remote", "get-url", "origin").Output(); err == nil {
-			repo = strings.TrimSuffix(strings.TrimSpace(string(out)), ".git")
-		}
+	// Same resolution the warehouse push uses: a statement whose subject names
+	// no revision is worse than none — it looks authoritative and binds to
+	// nothing — and two copies of this logic would drift.
+	repo, commit, err := auditSubject(repoDir, r)
+	if err != nil {
+		return fmt.Errorf("refusing to write an audit statement: %w", err)
 	}
 
 	stmt := certify.BuildAuditAttestation(certify.AuditStatement{
@@ -2760,4 +2768,75 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 		return err
 	}
 	return os.WriteFile(path, b, 0o600)
+}
+
+// pushAuditRows appends this scan's per-file verdicts to a warehouse the
+// operator owns.
+//
+// Reuses writeAuditStatement's subject resolution deliberately: a row whose
+// commit is blank cannot be joined to anything, and the two would drift if each
+// worked it out separately.
+func pushAuditRows(target, repoDir string, r reposcan.RepoReport, models map[string]string, minKillRate *float64, maxProvenMissed *int, passed bool) (int, error) {
+	repo, commit, err := auditSubject(repoDir, r)
+	if err != nil {
+		return 0, err
+	}
+	rosterJSON, err := json.Marshal(models)
+	if err != nil {
+		return 0, err
+	}
+
+	// A GitHub run URL when we are in one, so a row in the warehouse leads back
+	// to the run that produced it. Absent elsewhere rather than fabricated.
+	runURL := ""
+	if srv, repoEnv, id := os.Getenv("GITHUB_SERVER_URL"), os.Getenv("GITHUB_REPOSITORY"), os.Getenv("GITHUB_RUN_ID"); srv != "" && repoEnv != "" && id != "" {
+		runURL = fmt.Sprintf("%s/%s/actions/runs/%s", srv, repoEnv, id)
+	}
+
+	rows := make([]auditpush.Row, 0, len(r.Weakest))
+	for _, f := range r.Weakest {
+		rows = append(rows, auditpush.Row{
+			Repo: repo, Commit: commit, Path: f.Path,
+			KillRate: f.KillRate, Survivors: f.Survivors, ProvenMissed: f.ProvenMissed,
+			TimedOut: f.TimedOut, TestWriterFailed: f.TestWriterFailed, PoolTestUnsound: f.PoolTestUnsound,
+			Audited: r.Audited, Candidates: r.Candidates,
+			ModelsByRole: string(rosterJSON),
+			MinKillRate:  minKillRate, MaxProvenMissed: maxProvenMissed,
+			Passed: passed, RunURL: runURL,
+		})
+	}
+	return auditpush.Push(target, rows)
+}
+
+// auditSubject resolves the repo and commit a statement or a warehouse row is
+// bound to, refusing rather than emitting one that names no revision.
+func auditSubject(repoDir string, r reposcan.RepoReport) (repo, commit string, err error) {
+	commit = strings.TrimSpace(r.Commit)
+	if commit == "" {
+		// #nosec G204 -- fixed argv; repoDir is the operator's own --repo path, never remote input
+		if out, gerr := exec.Command("git", "-C", repoDir, "rev-parse", "HEAD").Output(); gerr == nil {
+			commit = strings.TrimSpace(string(out))
+		}
+	}
+	if commit == "" {
+		return "", "", fmt.Errorf("no commit: a verdict that names no revision cannot be verified or joined to anything. Pass --commit <sha>, or run inside a git checkout")
+	}
+	repo = strings.TrimSpace(r.Repo)
+	if repo == "" || repo == "." {
+		// #nosec G204 -- same: fixed argv, operator-supplied path, no shell involved
+		if out, gerr := exec.Command("git", "-C", repoDir, "remote", "get-url", "origin").Output(); gerr == nil {
+			repo = strings.TrimSuffix(strings.TrimSpace(string(out)), ".git")
+		}
+	}
+	if repo == "" || repo == "." {
+		// A checkout with no remote still has to name itself: repo is the KEY
+		// dimension in a warehouse that spans projects, and a row filed under
+		// "." cannot be told apart from every other project audited from a
+		// directory. The absolute path's last element is a poor name but a
+		// distinguishing one, which is the whole requirement here.
+		if abs, aerr := filepath.Abs(repoDir); aerr == nil {
+			repo = filepath.Base(abs)
+		}
+	}
+	return repo, commit, nil
 }

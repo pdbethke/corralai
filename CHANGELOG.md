@@ -9,6 +9,19 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
+## [v0.5.9] — 2026-08-23
+
+### Fixed
+
+- **The release title is read from the API rather than guessed from the
+  checkout.** Two git incantations were tried — `git tag -l`, then
+  `for-each-ref` added specifically to fix it — and both returned the COMMIT's
+  subject on the runner. Neither errored; both produced a plausible wrong title,
+  and two releases were published named after whatever had just been merged.
+  Whatever actions/checkout leaves behind for a tag ref is not reliably the
+  annotated object. The workflow now asks GitHub, which knows, and refuses a
+  lightweight tag rather than naming a release after an unrelated commit.
+
 ## [v0.5.8] — 2026-08-23
 
 ### Fixed

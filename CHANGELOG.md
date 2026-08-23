@@ -9,6 +9,17 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
+## [v0.5.7] — 2026-08-23
+
+### Added
+
+- **The release publishes itself when a tag is pushed.** Three times in one week
+  a tag was cut, the docs were updated to pin it, and no release followed — so
+  the Releases page advertised an older build than the docs told people to
+  install. The tag is the intent; the release now follows from it, with notes
+  taken from this file's section for that exact version. A tag with no section
+  fails rather than publishing a page that describes nothing.
+
 ## [v0.5.6] — 2026-08-23
 
 ### Fixed

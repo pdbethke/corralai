@@ -432,4 +432,13 @@ runs:
           echo
           echo "That answers which repository, which workflow and which commit produced this audit,"
           echo "without trusting the log above or the person who linked you to it."
+          echo
+          echo "\`gh attestation\` needs a reasonably recent GitHub CLI — it does not exist in 2.45,"
+          echo "which is still what some distributions ship, and an older CLI answers with a help"
+          echo "dump rather than an error. Same answer straight from the API, no CLI version to care about:"
+          echo
+          echo '```'
+          echo "DIGEST=\$(sha256sum corral-audit-statement.json | cut -d\" \" -f1)"
+          echo "gh api repos/${GITHUB_REPOSITORY}/attestations/sha256:\$DIGEST"
+          echo '```'
         } >> "$GITHUB_STEP_SUMMARY"

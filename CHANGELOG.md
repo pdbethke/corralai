@@ -9,6 +9,45 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
+## [v0.5.6] — 2026-08-23
+
+### Fixed
+
+- **Verify instructions that work on the CLI people have.** The Action's job
+  summary told a reviewer to run `gh attestation verify`. That command does not
+  exist in gh 2.45, which some distributions still ship — and an older CLI
+  answers it with a help dump rather than an error, so the reader concludes they
+  mistyped. Found by verifying corral's own first attestation on a machine with
+  2.45. The summary now names the version constraint and gives the plain API
+  call the command wraps, which needs no particular CLI version.
+
+## [v0.5.5] — 2026-08-23
+
+### Added
+
+- **`--attest` — the verdict becomes a receipt.** A signed record existed only
+  from `certify --local`, and only where the run happened; the Action runs
+  `certify --repo`, which had no way to emit one. So a pull-request audit
+  produced a readable summary and nothing anyone could keep.
+  `--attest <file>` writes the scan as an in-toto Statement — every audited
+  file's kill rate, survivors and proven gaps WITH the flags that say what a
+  zero means, the thresholds it was judged against, the models in each role, and
+  the denominator, so a clean result cannot be flattered by omitting how little
+  was looked at. The Action publishes it through `actions/attest`, signed
+  keylessly by the workflow's own OIDC identity, so the signature chains to the
+  repository and workflow rather than to a key that lived on an ephemeral
+  runner. Free on public repositories.
+  The statement is written BEFORE the gate's exit code is honoured and the
+  attest steps run under `always()`: a receipt you only keep when the verdict
+  flatters you is not evidence, and the failing runs are the ones a reviewer
+  most needs.
+
+### Fixed
+
+- **A changed TEST puts its source in scope** (also in v0.5.3): a pull request
+  that deletes assertions touches no source file, so the gate reported
+  `NOTHING IN SCOPE` and passed green on the exact change it exists to catch.
+
 ## [v0.5.4] — 2026-08-22
 
 ### Added

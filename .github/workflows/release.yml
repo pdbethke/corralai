@@ -1,0 +1,74 @@
+# SPDX-License-Identifier: Elastic-2.0
+#
+# Publish a GitHub Release whenever a version tag is pushed.
+#
+# This exists because the same mistake happened three times in one week: a tag
+# was cut, the docs were updated to pin it, and no release was ever published —
+# so the Releases page (the first thing a curious reader clicks) advertised an
+# older build than the docs told people to install. Once it was the day-zero
+# v0.1.0, seven weeks stale.
+#
+# Publishing by hand is a step that can be forgotten, and a step that can be
+# forgotten eventually is. The tag is the intent; the release should follow from
+# it rather than depend on someone remembering.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Notes come from CHANGELOG.md's section for this exact version. A tag
+      # with no changelog entry is a release nobody described, so it fails
+      # rather than publishing an empty one — the point is that the page tells
+      # a reader what changed.
+      - name: Extract this version's changelog section
+        id: notes
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME}"
+          if ! grep -q "^## \[${version}\]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no '## [${version}]' section. A release with no notes is a page that tells a reader nothing — add the entry and re-tag." >&2
+            exit 1
+          fi
+          # index(...)==1 is a LITERAL prefix match. `$0 ~ v` would treat the
+          # heading as a regex, where "[v0.5.6]" is a character class rather
+          # than the text — it matches nothing and the notes come out empty,
+          # which is exactly what happened the first time this was written.
+          awk -v v="## [${version}]" '
+            index($0, v) == 1 {found=1; next}
+            found && index($0, "## [") == 1 {exit}
+            found {print}
+          ' CHANGELOG.md > "${RUNNER_TEMP}/notes.md"
+          if [ ! -s "${RUNNER_TEMP}/notes.md" ]; then
+            echo "::error::the '${version}' changelog section is empty." >&2
+            exit 1
+          fi
+          echo "path=${RUNNER_TEMP}/notes.md" >> "$GITHUB_OUTPUT"
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME}"
+          # The changelog heading carries a DATE, not a title, so the release
+          # name comes from the annotated tag's own subject line — which is
+          # where a one-line description of the release already lives.
+          title="$(git tag -l --format='%(contents:subject)' "$version")"
+          [ -n "$title" ] || title="$version"
+          gh release create "$version" \
+            --title "$title" \
+            --notes-file "${{ steps.notes.outputs.path }}" \
+            --latest \
+            --verify-tag

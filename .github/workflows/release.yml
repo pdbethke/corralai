@@ -71,10 +71,26 @@ jobs:
           # The changelog heading carries a DATE, not a title, so the release
           # name comes from the annotated tag's own subject line — which is
           # where a one-line description of the release already lives.
-          # Read the TAG OBJECT explicitly. for-each-ref over refs/tags is
-          # unambiguous where `git tag -l` will happily answer from the commit
-          # when the tag object is missing.
-          title="$(git for-each-ref "refs/tags/${version}" --format='%(contents:subject)')"
+          # Ask the API, not the checkout.
+          #
+          # Two git incantations were tried here and both returned the COMMIT's
+          # subject on the runner — `git tag -l` and then `for-each-ref`, the
+          # second added specifically to fix the first. Neither errored; both
+          # produced a plausible wrong title, and two releases were published
+          # named after whatever had just been merged. Whatever actions/checkout
+          # leaves behind for a tag ref, it is not reliably the annotated
+          # object, and guessing at it a third time is not a strategy.
+          #
+          # The API knows: the ref reports type "tag" for an annotated tag, and
+          # the tag object carries the message. No dependence on how the
+          # workspace was fetched.
+          ref_type="$(gh api "repos/${GITHUB_REPOSITORY}/git/refs/tags/${version}" -q .object.type)"
+          if [ "$ref_type" != "tag" ]; then
+            echo "::error::${version} is a lightweight tag. Release titles come from the tag's own message — create it with 'git tag -a ${version} -m \"<one line>\"' so the release is named after the release rather than after whatever was merged last." >&2
+            exit 1
+          fi
+          tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/refs/tags/${version}" -q .object.sha)"
+          title="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_sha}" -q .message | head -1)"
           if [ -z "$title" ]; then
             echo "::error::${version} has no annotated tag message. Tag with 'git tag -a' and a one-line subject — the release title comes from it, and falling back to the commit subject names releases after whatever happened to be merged last." >&2
             exit 1

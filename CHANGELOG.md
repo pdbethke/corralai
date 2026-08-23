@@ -9,6 +9,18 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
+## [v0.5.8] — 2026-08-23
+
+### Fixed
+
+- **The release title comes from the tag, not from whatever was merged last.**
+  actions/checkout does not fetch annotated tag OBJECTS by default, so
+  `%(contents:subject)` resolved to the tag's commit and the first
+  auto-published release was named after the changelog commit that triggered
+  it — a plausible-looking wrong title rather than an error. The workflow now
+  fetches tag objects, reads the annotation explicitly, and refuses a tag with
+  no message rather than naming a release after an unrelated commit.
+
 ## [v0.5.7] — 2026-08-23
 
 ### Added

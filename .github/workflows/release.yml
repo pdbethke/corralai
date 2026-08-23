@@ -27,6 +27,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # Annotated TAG OBJECTS, not just the refs. Without this the tag
+          # resolves to its commit and `%(contents:subject)` silently returns
+          # the COMMIT's subject — a plausible-looking wrong title rather than
+          # an error. The first auto-published release was named after the
+          # changelog commit that triggered it.
+          fetch-tags: true
 
       # Notes come from CHANGELOG.md's section for this exact version. A tag
       # with no changelog entry is a release nobody described, so it fails
@@ -65,8 +71,14 @@ jobs:
           # The changelog heading carries a DATE, not a title, so the release
           # name comes from the annotated tag's own subject line — which is
           # where a one-line description of the release already lives.
-          title="$(git tag -l --format='%(contents:subject)' "$version")"
-          [ -n "$title" ] || title="$version"
+          # Read the TAG OBJECT explicitly. for-each-ref over refs/tags is
+          # unambiguous where `git tag -l` will happily answer from the commit
+          # when the tag object is missing.
+          title="$(git for-each-ref "refs/tags/${version}" --format='%(contents:subject)')"
+          if [ -z "$title" ]; then
+            echo "::error::${version} has no annotated tag message. Tag with 'git tag -a' and a one-line subject — the release title comes from it, and falling back to the commit subject names releases after whatever happened to be merged last." >&2
+            exit 1
+          fi
           gh release create "$version" \
             --title "$title" \
             --notes-file "${{ steps.notes.outputs.path }}" \

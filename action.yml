@@ -20,6 +20,10 @@ inputs:
     description: "Fail the run if any audited file's kill rate is below this value (0.0-1.0 inclusive, a minimum so a file exactly at the value passes). Applies PER FILE, not to the aggregate. Opt-in: leave empty (the default) to keep today's behaviour, where the run does not fail on a low kill rate."
     required: false
     default: ""
+  attest:
+    description: "Write the scan's verdict as an in-toto Statement and publish it as a GitHub artifact attestation — the receipt a reviewer can verify WITHOUT trusting the run that produced it (`gh attestation verify`). Off by default; set to 'true' to enable. Requires `permissions: { id-token: write, attestations: write, contents: read }` in the calling workflow, and works on public repositories at no cost. Signing is keyless, through the workflow's own OIDC identity, so the signature chains to the repository and workflow rather than to a key that lived on an ephemeral runner."
+    required: false
+    default: ""
   max-proven-missed:
     description: "Fail the run if any audited file has MORE than this many PROVEN-MISSED gaps — survivors the herd then killed with a test it wrote and ran. Opt-in; leave empty for today's behaviour. Prefer this to min-kill-rate as the merge gate. A kill rate is a proportion of freshly generated mutants and moves between runs on unchanged code, so a threshold near a healthy value flaps red on good work and gets switched off; a proven gap is a specific demonstrated bug your tests miss, established by execution. '0' means any demonstrated gap fails the build. It fails CLOSED when the herd had survivors but could author no test that graded — a zero there means nothing was proven, not that the suite is clean."
     required: false
@@ -120,6 +124,7 @@ runs:
         TESTS: ${{ inputs.tests }}
         MIN_KILL_RATE: ${{ inputs.min-kill-rate }}
         MAX_PROVEN_MISSED: ${{ inputs.max-proven-missed }}
+        ATTEST: ${{ inputs.attest }}
         TOP: ${{ inputs.top }}
         REPO_OWNER: ${{ github.repository_owner }}
         COMMIT_SHA: ${{ github.sha }}
@@ -216,6 +221,13 @@ runs:
         [ -n "${TESTS:-}" ] && args+=(--tests "$TESTS")
         [ -n "$MIN_KILL_RATE" ] && args+=(--min-kill-rate "$MIN_KILL_RATE")
         [ -n "${MAX_PROVEN_MISSED:-}" ] && args+=(--max-proven-missed "${MAX_PROVEN_MISSED:-}")
+        # The statement is written BEFORE the gate's exit code is honoured
+        # below, so a FAILING audit still produces a receipt. A verdict you only
+        # get to keep when it is flattering is not evidence.
+        if [ "${ATTEST:-}" = "true" ]; then
+          args+=(--attest "${RUNNER_TEMP:-/tmp}/corral-audit-statement.json")
+          echo "CORRAL_ATTEST_PATH=${RUNNER_TEMP:-/tmp}/corral-audit-statement.json" >> "$GITHUB_ENV"
+        fi
         [ -n "${TOP:-}" ] && args+=(--top "$TOP")
         # Role→model routing. Each is omitted when empty so corral keeps
         # ownership of its own defaults — the action must never become a second
@@ -356,3 +368,68 @@ runs:
         fi
 
         exit "$status"
+
+    # Publish the verdict as a GitHub artifact attestation.
+    #
+    # always(): the run step above exits with the gate's status, so without it
+    # a FAILING audit would produce no receipt — and a verdict you only keep
+    # when it flatters you is not evidence. The failing runs are the ones a
+    # reviewer most needs to be able to check.
+    #
+    # Signing is keyless, through the workflow's own OIDC identity. A
+    # `certify --local` run signs with a key generated on the machine, which on
+    # an ephemeral runner means a fresh key per run that chains to nothing; an
+    # attestation chains to the repository and the workflow, which is what a
+    # reviewer actually wants to verify.
+    - name: Extract the predicate for attestation
+      id: corral-predicate
+      if: always() && env.CORRAL_ATTEST_PATH != ''
+      shell: bash
+      run: |
+        set -euo pipefail
+        stmt="$CORRAL_ATTEST_PATH"
+        if [ ! -s "$stmt" ]; then
+          echo "::notice::corral wrote no audit statement (nothing was audited), so nothing is attested."
+          echo "present=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        # actions/attest builds its OWN in-toto envelope from subject + predicate,
+        # so hand it the predicate alone. The full statement is uploaded intact
+        # as an artifact beside it, so the standalone document survives too.
+        jq -e '.predicate' "$stmt" > "${RUNNER_TEMP}/corral-predicate.json"
+        echo "present=true" >> "$GITHUB_OUTPUT"
+
+    - name: Attest the audit verdict
+      if: always() && steps.corral-predicate.outputs.present == 'true'
+      uses: actions/attest@v4.2.2
+      with:
+        subject-path: ${{ env.CORRAL_ATTEST_PATH }}
+        predicate-type: https://corralai.dev/certify/audit/v1
+        predicate-path: ${{ runner.temp }}/corral-predicate.json
+
+    - name: Upload the audit statement
+      if: always() && steps.corral-predicate.outputs.present == 'true'
+      uses: actions/upload-artifact@v7.0.1
+      with:
+        name: corral-audit-statement
+        path: ${{ env.CORRAL_ATTEST_PATH }}
+        if-no-files-found: error
+
+    - name: How to verify this verdict
+      if: always() && steps.corral-predicate.outputs.present == 'true'
+      shell: bash
+      run: |
+        {
+          echo
+          echo "### Verify this verdict yourself"
+          echo
+          echo "The audit statement is attached to this run as \`corral-audit-statement\`, and signed"
+          echo "by this workflow's own identity — not by a key that lived on the runner. Download it and:"
+          echo
+          echo '```'
+          echo "gh attestation verify corral-audit-statement.json --repo ${GITHUB_REPOSITORY}"
+          echo '```'
+          echo
+          echo "That answers which repository, which workflow and which commit produced this audit,"
+          echo "without trusting the log above or the person who linked you to it."
+        } >> "$GITHUB_STEP_SUMMARY"

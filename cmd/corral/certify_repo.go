@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -22,6 +23,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/advpool"
+	"github.com/pdbethke/corralai/internal/certify"
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/sandbox"
@@ -68,6 +70,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	jsonOut := fs.Bool("json", false, "with --dry-run, emit the repository's audit surface as JSON instead of the human report: per-language counts, every auditable file with its inferred test pairing, and the machine-stable exclusion tally. Needs no key, no jail and no money — it is the free inventory a UI or a tenant's own tooling can consume instead of scraping stdout")
 	substrateFlag := fs.String("substrate", substrateJail, "where the audit runs: "+substrateJail+" (bwrap) or "+substrateWorkspace+" (mutate --repo in place; the caller IS the isolation boundary, e.g. an ephemeral CI runner)")
 	diffBase := fs.String("diff-base", "", "bound the scan to files changed since this git ref, instead of ranking + --top. In a PR the diff IS the bound: ranking and --top do not apply on this path")
+	attestFlag := fs.String("attest", "", "write the scan's verdict as an in-toto Statement to this file — the receipt a reviewer can verify without trusting the run that produced it. Consumed by GitHub's attestation API (actions/attest), which signs it keylessly through the workflow's own OIDC identity, so the signature chains to the repository and workflow rather than to a key that lived on an ephemeral runner. Carries every file's kill rate, survivors and proven gaps WITH the honesty flags that say what a zero means, the thresholds it was judged against, and the models in each role")
 	maxProvenMissedFlag := fs.String("max-proven-missed", "", "fail the scan (exit 1) if ANY audited file has MORE than this many proven-missed gaps — survivors the pool then killed with a test it WROTE and RAN. Opt-in and unset by default. Prefer this to --min-kill-rate as a merge gate: a kill rate is a proportion of freshly generated mutants and moves between runs on unchanged code, so a threshold set near a healthy value flaps red and gets switched off. A proven-missed gap is a specific demonstrated bug the suite does not catch, established by execution, and 0 means the pool proved nothing — not that it sampled well")
 	minKillRateFlag := fs.String("min-kill-rate", "", "fail the scan (exit 1) if ANY audited file's kill rate is below this value (0.0-1.0 inclusive; a minimum, so a file exactly at the threshold passes). Opt-in: unset by default, so exit codes are unchanged unless this is given. Applies PER FILE, not to the aggregate — a well-tested file must not mask a weak one")
 	preflightFlag := fs.Bool("preflight", false, "run the project's test suite once with coverage instrumentation and report which source files it never executes. One extra suite run; reports coverage-grade evidence, not proof")
@@ -656,6 +659,32 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	}
 
 	exitCode := repoScanExitCode(rep, nothingInScope, minKillRate, maxProvenMissed)
+
+	// The audit statement, written after the exit code is known so `passed`
+	// records the verdict this run actually returned rather than a guess made
+	// before the gates were applied.
+	//
+	// A write failure is loud but never changes the exit code: this command is
+	// a merge gate, and a full disk must not red-build a pull request over
+	// bookkeeping — the same fail-open rule the ledger write below follows, for
+	// the same reason.
+	if strings.TrimSpace(*attestFlag) != "" {
+		models := map[string]string{
+			"mutant-generator": strings.TrimSpace(*mutantModelFlag),
+			"test-writer":      strings.TrimSpace(*writerModelFlag),
+			"test-critic":      strings.TrimSpace(*criticModelFlag),
+		}
+		for role, m := range models {
+			if m == "" || m == "off" {
+				delete(models, role)
+			}
+		}
+		if err := writeAuditStatement(*attestFlag, *repoDir, rep, models, minKillRate, maxProvenMissed, exitCode == 0); err != nil {
+			fmt.Fprintf(stderr, "corral certify --repo: writing --attest statement: %v\n", err)
+		} else {
+			fmt.Fprintf(stdout, "  wrote the audit statement to %s — attest it with actions/attest, verify with `gh attestation verify`\n", *attestFlag)
+		}
+	}
 
 	// FAIL-OPEN, deliberately, and this is the one place in corral where
 	// uncertainty must not fail closed: this command's exit code is a CI
@@ -2671,4 +2700,64 @@ func indentLines(s, pad string) string {
 		lines[i] = pad + l
 	}
 	return strings.Join(lines, "\n")
+}
+
+// writeAuditStatement renders the scan into certify's in-toto audit statement
+// and writes it to path.
+//
+// Every file the report scored is carried, not only the weakest: a statement
+// that listed only the failures would be a highlight reel, and the claim a
+// reviewer is being asked to accept is about the whole audited surface.
+func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map[string]string, minKillRate *float64, maxProvenMissed *int, passed bool) error {
+	files := make([]certify.AuditedFile, 0, len(r.Weakest))
+	for _, f := range r.Weakest {
+		files = append(files, certify.AuditedFile{
+			Path:             f.Path,
+			KillRate:         f.KillRate,
+			Survivors:        f.Survivors,
+			ProvenMissed:     f.ProvenMissed,
+			TimedOut:         f.TimedOut,
+			TestWriterFailed: f.TestWriterFailed,
+			PoolTestUnsound:  f.PoolTestUnsound,
+		})
+	}
+	// A statement whose subject names no revision is worse than no statement:
+	// it looks authoritative and binds to nothing, so a reviewer could verify
+	// the signature and still not know WHAT was audited. Resolve the commit
+	// from git when the caller did not supply one, and refuse to write an
+	// unbound receipt rather than emit a confident-looking blank.
+	commit := strings.TrimSpace(r.Commit)
+	if commit == "" {
+		// #nosec G204 -- fixed argv; repoDir is the operator's own --repo path, never remote input, and is passed as an argument rather than interpolated into a shell
+		if out, err := exec.Command("git", "-C", repoDir, "rev-parse", "HEAD").Output(); err == nil {
+			commit = strings.TrimSpace(string(out))
+		}
+	}
+	if commit == "" {
+		return fmt.Errorf("refusing to write an audit statement with no commit: the subject would bind to nothing. Pass --commit <sha>, or run inside a git checkout")
+	}
+	repo := strings.TrimSpace(r.Repo)
+	if repo == "" || repo == "." {
+		// #nosec G204 -- same: fixed argv, operator-supplied path, no shell involved
+		if out, err := exec.Command("git", "-C", repoDir, "remote", "get-url", "origin").Output(); err == nil {
+			repo = strings.TrimSuffix(strings.TrimSpace(string(out)), ".git")
+		}
+	}
+
+	stmt := certify.BuildAuditAttestation(certify.AuditStatement{
+		Repo:            repo,
+		Commit:          commit,
+		Files:           files,
+		Audited:         r.Audited,
+		Candidates:      r.Candidates,
+		ModelsByRole:    models,
+		MinKillRate:     minKillRate,
+		MaxProvenMissed: maxProvenMissed,
+		Passed:          passed,
+	})
+	b, err := json.MarshalIndent(stmt, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, b, 0o600)
 }

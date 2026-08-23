@@ -2728,6 +2728,7 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 	// unbound receipt rather than emit a confident-looking blank.
 	commit := strings.TrimSpace(r.Commit)
 	if commit == "" {
+		// #nosec G204 -- fixed argv; repoDir is the operator's own --repo path, never remote input, and is passed as an argument rather than interpolated into a shell
 		if out, err := exec.Command("git", "-C", repoDir, "rev-parse", "HEAD").Output(); err == nil {
 			commit = strings.TrimSpace(string(out))
 		}
@@ -2737,6 +2738,7 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 	}
 	repo := strings.TrimSpace(r.Repo)
 	if repo == "" || repo == "." {
+		// #nosec G204 -- same: fixed argv, operator-supplied path, no shell involved
 		if out, err := exec.Command("git", "-C", repoDir, "remote", "get-url", "origin").Output(); err == nil {
 			repo = strings.TrimSuffix(strings.TrimSpace(string(out)), ".git")
 		}

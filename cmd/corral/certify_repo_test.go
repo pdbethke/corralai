@@ -3960,3 +3960,37 @@ func TestProvenGapBreachIsReported(t *testing.T) {
 		t.Errorf("an unprovable 0 must be reported distinctly, not as a pass:\n%s", unmeasured.String())
 	}
 }
+
+// TestDocsPinTheNewestCutTag: the docs must not advertise an OLDER action tag
+// than the newest one released.
+//
+// Its sibling, TestDocsNeverAdvertiseAnUncutActionTag, catches a pin pointing
+// at a tag that does not exist yet. This catches the opposite drift, which has
+// happened repeatedly: tags get cut, the docs keep naming an older one, and a
+// reader installs something behind what the Releases page calls current. Both
+// halves are the same defect — the page and the docs disagreeing about what to
+// install — and only one of them was guarded.
+//
+// Deliberately compares against the newest tag in THIS clone rather than the
+// GitHub API: a test that needs the network is a test that gets skipped.
+func TestDocsPinTheNewestCutTag(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	repoRoot := filepath.Join("..", "..")
+	out, err := runGit(t, repoRoot, "tag", "-l", "v*", "--sort=-v:refname")
+	if err != nil || strings.TrimSpace(out) == "" {
+		t.Skipf("no tags in this clone (shallow/tagless): %v", err)
+	}
+	newest := strings.Fields(out)[0]
+
+	docs := docsAdvertisingAnActionRef(t, repoRoot)
+	ref := regexp.MustCompile(`pdbethke/corralai@(v[0-9][A-Za-z0-9._-]*)`)
+	for doc, body := range docs {
+		for _, m := range ref.FindAllStringSubmatch(body, -1) {
+			if m[1] != newest {
+				t.Errorf("%s pins %s but %s is cut — a reader following the docs installs something older than the Releases page calls current", doc, m[1], newest)
+			}
+		}
+	}
+}

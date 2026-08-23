@@ -1,0 +1,170 @@
+---
+title: "Four green checks that measured nothing"
+description: "A week of pointing corral at corral. The security gate that never ran its scanner, the fault highlight showing unmodified code, the critic that reported a clean review while switched off, and the audit gate blind to the one change it exists to catch. Every one looked like a working check from the outside."
+pubDate: 2026-08-23
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+
+*Field note. Four of these are ours. The last one is in the gate itself.*
+
+---
+
+## The claim, and the week that tested it
+
+Corral exists to answer one question: **would your tests have caught it?** Not
+*do they pass* — whether they would notice if the code were wrong.
+
+Last week we spent seven days using it in earnest, on a public library and on
+this repository. It found four checks in our own pipeline that reported success
+without measuring anything. Not one was carelessness. Every one looked exactly
+like a working check from the outside, which is the entire thesis, and we were
+the last people who should have been surprised.
+
+## 1. `OK: all security invariants hold`
+
+Our CI printed that line on every build. It had printed it for months.
+
+`scripts/check-security.sh` runs three things: `gofmt`, `gosec`, and
+`govulncheck`. The third is invoked *only if the binary happens to be present*
+— "optional; non-fatal if not installed" — and the validate job installed
+`gosec` and never installed `govulncheck`.
+
+So the vulnerability scan had never run in CI. The step checked code formatting
+and called itself a security gate. It fired only on a developer machine that
+happened to have the binary, which is the only reason it was ever found.
+
+When it actually ran: **seven stdlib advisories** reachable from our own call
+paths — `net/url`, `net/http`, `crypto/tls`, `encoding/asn1`, `encoding/xml`,
+`html/template` — every one fixed in a Go patch release we had not taken.
+
+The gate now installs it. The line means what it says.
+
+## 2. The fault highlight was showing unmutated code
+
+When an audit finds a survivor, the cockpit highlights it against your source:
+*here is the exact fault, and your tests passed anyway.* It is the single most
+persuasive thing the tool produces.
+
+It was showing the **original line**.
+
+Mutants arrive as search/replace hunks. The parser split each block at the first
+`===` — which, in a search/replace hunk, is its own `=======` divider. It kept
+the SEARCH half. Seven of our eight published recordings are in that format, so
+across nearly the whole gallery the "planted fault" on screen was the unmodified
+code, rendered in red, extremely convincing.
+
+A second bug hid behind it. Sharded runs qualify mutant ids by seat — `s0/m4` —
+and the resolver matched only the bare `m4`, so on four of eight recordings the
+highlight silently failed to appear at all. The one test covering this was
+named, accurately, *"(Go id scheme)"* — it covered the single tape that used the
+other format.
+
+## 3. A clean review from a critic that was switched off
+
+Run with `--critic-model off` and the verdict printed:
+
+```
+critic review: no vacuous tests flagged
+models:        mutant-generator=gemini-3.6-flash  test-critic=  test-writer=gemini-3.6-flash
+```
+
+There was no critic. The line keyed on an empty findings list, and an absent
+critic produces an empty findings list.
+
+What makes this one instructive is that the same function already got it right
+for a different case. When a run times out it prints *"critic review: not run —
+pool did not converge"*, with a comment explaining that printing a clean result
+there would misrepresent a check that never executed. The reasoning was written
+down. The disabled case simply had no branch.
+
+## 4. The gate was blind to the change it exists to catch
+
+This is the one worth the walk.
+
+We built a demo: a small public library, [sportspicker-core][repo], that scores
+sports pick'em contests. One guarantee, statable in a sentence — *a contest
+contributes exactly its budget* — so a one-night fight card and an 18-round
+season can sit in the same championship without the longer season deciding it.
+83 tests, no dependencies, and a suite that finishes well under a second.
+
+Then we opened a pull request that deleted every assertion pinning that
+guarantee, keeping one that checks the *shape* of the returned awards. The suite
+stayed green: 75 passed. That is the point — plain CI has nothing to say about
+that change.
+
+The audit gate said:
+
+```
+diff against origin/main: auditing 0 of 11 candidate(s)
+NOTHING IN SCOPE: the diff touched no candidate; no audit was needed.
+```
+
+Green. The gate scopes on changed **source** files; the PR changed only a
+**test** file. So a pull request that guts a suite was the one change that could
+not reach the gate whose entire purpose is to catch exactly that.
+
+Nothing lied. `NOTHING IN SCOPE` was true of what the scan scoped on. Which is
+what makes it the same species as the other three: **a check reporting success
+about a question it never asked.**
+
+## The fix that wasn't a bigger number
+
+With scoping fixed, the audit saw the damage — and passed anyway. Kill rate
+**0.85** against our 0.8 bar.
+
+The obvious response is to raise the bar. It is wrong, and re-running showed
+why: the identical diff scored **0.90**. A higher number on the more-weakened
+code, because the faults are generated fresh each run. Our own warehouse records
+a file swinging 0.375 to 0.525 across a replicate series with nothing changed
+but the seed.
+
+Set a threshold near a healthy value and it goes red on good work, someone
+switches it off, and you have no gate at all.
+
+So the gate now keys on a different quantity. A **proven-missed gap** is a
+survivor the herd then *killed* with a test it wrote and ran — not a proportion,
+not an opinion, a demonstrated bug your suite does not catch. `max-proven-missed: 0`
+means any of them fails the build:
+
+```
+PROVEN-GAP BREACH: 1 file(s) above --max-proven-missed 0:
+  2 proven gap(s)  sportspicker_core/awards.py — each one a bug the pool
+  DEMONSTRATED your tests miss, by writing a test and running it
+##[error]Process completed with exit code 1
+```
+
+And it fails **closed**. If the herd leaves survivors it cannot author a grading
+test for, `proven_missed` reads 0 because nothing was proven — not because the
+suite is clean. Those report separately as `PROVEN-GAP UNMEASURED` and fail,
+rather than passing on a question nobody answered.
+
+## What we'd take from this
+
+**A check you have only ever seen pass is a check nobody has verified can
+fail.** All four of these were green for weeks. Three were found by using the
+tool; the fourth was found by insisting on watching a gate go red rather than
+trusting that it would.
+
+**A number that drifts cannot be a gate.** It can be a signal, a report, a thing
+you look at. The moment you attach a merge decision to it, sampling noise
+becomes a false red, and a false red becomes a disabled gate.
+
+**Hardcoding the thing you guard guarantees the drift you were guarding
+against.** A fifth one, smaller, from the same week: our browser tab advertised a
+product we retired in July, because a script restored `document.title` from a
+string hardcoded in two places — under a comment promising it stayed "verbatim
+against the `<title>` so this and the a11y check never drift." It had drifted.
+The tests agreed, because they held the same stale copy.
+
+None of this makes corral trustworthy. It makes it checkable, which is the most
+any of this can honestly claim. Every verdict is a signed, replayable record;
+survivors are disclosed rather than adjudicated; exclusions are printed. The
+blind spot in §4 was visible *because the tool prints what it did not audit*.
+
+If you want to reproduce any of it, the library is public and so are the
+recordings — [sportspicker-core][repo], and the two tapes of the same file on a
+green-but-thin branch (15 of 20, needs-review) and on main (18 of 20,
+certified). Same code path, same command, CI happy with both.
+
+[repo]: https://github.com/pdbethke/sportspicker-core

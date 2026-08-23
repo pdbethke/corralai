@@ -20,6 +20,14 @@ const withheldSeats = warehouse.withheld.bug_catches;
 
 const PRESETS = [
   {
+    label: 'Which files keep shipping demonstrated gaps',
+    sql: `-- The cross-project question a single pull request cannot answer.\n-- A proven gap is a survivor the herd then KILLED with a test it wrote and\n-- ran: a demonstrated bug, not a proportion. Counting those across repos is\n-- legitimate arithmetic — averaging kill rates across them is not, because a\n-- dense function and a small accessor are not the same measurement.\nSELECT l.repo,\n       COUNT(DISTINCT l.id)      AS audits,\n       SUM(b.mutants_planted)    AS planted,\n       SUM(b.mutants_killed)     AS killed\nFROM audit_ledger l JOIN bug_catches b ON b.record_id = l.id\nGROUP BY 1\nORDER BY planted DESC;`,
+  },
+  {
+    label: 'Is one file drifting, or is that just the sampling?',
+    sql: `-- The reason a warehouse exists rather than a screenshot. Mutants are\n-- generated fresh per run, so one number is a SAMPLE: on this project's own\n-- data the same unchanged file has scored 0.375 and 0.525, and a weakened\n-- suite once scored HIGHER than it had a moment earlier.\n-- A spread tells you whether a change is real. A single figure cannot.\nSELECT scan_id, path, kill_rate, survivors, proven_missed\nFROM scan_files\nWHERE path = 'src/flask/cli.py'\nORDER BY scan_id;`,
+  },
+  {
     label: 'Which model catches bugs, in which role',
     sql: `-- The scorecard the replay's panes link to. Every row is EXECUTION:\n-- mutants a seat planted, and how many the developer's suite killed.\n-- A test-critic plants nothing, so its planted count is 0 by design --\n-- it reads the suite, it never gates the verdict.\nSELECT model, role, COUNT(*) AS seats, SUM(mutants_planted) AS planted,\n       SUM(mutants_killed) AS killed,\n       ROUND(100.0*SUM(mutants_killed)/NULLIF(SUM(mutants_planted),0),1) AS caught_pct\nFROM bug_catches\nGROUP BY 1,2\nORDER BY planted DESC;`,
   },
@@ -68,7 +76,12 @@ const initialSql = PRESETS[0].sql;
       against a real dataset: six scans of <strong>Flask</strong>, a library we
       didn't write. Real SQL, no backend. Query the rejections as readily as the
       results — the point of a ledger is that it also records the parts that
-      don't flatter you. The same schema federates to <strong>MotherDuck</strong>
+      don't flatter you. This page is <strong>our</strong> audit data, and the
+      point is that you can have the same table of your own: `corral certify`
+      takes <code>--push &lt;target&gt;</code> and appends every run's per-file
+      verdict to a DuckDB <em>you</em> own — a path, or <code>md:&lt;db&gt;</code>
+      for MotherDuck. There is no hosted tier and nothing is collected; your key,
+      your runner, your warehouse. The same schema federates to <strong>MotherDuck</strong>
       (a DSN flip) as a shared warehouse across a distributed dev shop.
     </p>
 

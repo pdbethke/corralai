@@ -20,6 +20,14 @@ inputs:
     description: "Fail the run if any audited file's kill rate is below this value (0.0-1.0 inclusive, a minimum so a file exactly at the value passes). Applies PER FILE, not to the aggregate. Opt-in: leave empty (the default) to keep today's behaviour, where the run does not fail on a low kill rate."
     required: false
     default: ""
+  push:
+    description: "Append this run's per-file verdicts to a DuckDB YOU own — a path, or 'md:<db>' for MotherDuck. corral has no hosted tier and keeps nothing: your key, your runner, your warehouse, and any DuckDB works. Append-only, and every row carries the sha256 of the signed statement it came from plus the run URL, so a row traces back to something verifiable. This is what answers the question one pull request cannot: a single kill rate is a sample — the same unchanged diff has scored 0.85 and 0.90 — while forty of them are a distribution you can read a trend from. For MotherDuck, also set 'motherduck-token'."
+    required: false
+    default: ""
+  motherduck-token:
+    description: "MotherDuck token, exported as motherduck_token for a 'md:<db>' push target. Pass as a secret; never inline. Not needed for a local DuckDB path."
+    required: false
+    default: ""
   attest:
     description: "Write the scan's verdict as an in-toto Statement and publish it as a GitHub artifact attestation — the receipt a reviewer can verify WITHOUT trusting the run that produced it (`gh attestation verify`). Off by default; set to 'true' to enable. Requires `permissions: { id-token: write, attestations: write, contents: read }` in the calling workflow, and works on public repositories at no cost. Signing is keyless, through the workflow's own OIDC identity, so the signature chains to the repository and workflow rather than to a key that lived on an ephemeral runner."
     required: false
@@ -125,6 +133,8 @@ runs:
         MIN_KILL_RATE: ${{ inputs.min-kill-rate }}
         MAX_PROVEN_MISSED: ${{ inputs.max-proven-missed }}
         ATTEST: ${{ inputs.attest }}
+        PUSH_TARGET: ${{ inputs.push }}
+        motherduck_token: ${{ inputs.motherduck-token }}
         TOP: ${{ inputs.top }}
         REPO_OWNER: ${{ github.repository_owner }}
         COMMIT_SHA: ${{ github.sha }}
@@ -221,6 +231,7 @@ runs:
         [ -n "${TESTS:-}" ] && args+=(--tests "$TESTS")
         [ -n "$MIN_KILL_RATE" ] && args+=(--min-kill-rate "$MIN_KILL_RATE")
         [ -n "${MAX_PROVEN_MISSED:-}" ] && args+=(--max-proven-missed "${MAX_PROVEN_MISSED:-}")
+        [ -n "${PUSH_TARGET:-}" ] && args+=(--push "${PUSH_TARGET:-}")
         # The statement is written BEFORE the gate's exit code is honoured
         # below, so a FAILING audit still produces a receipt. A verdict you only
         # get to keep when it is flattering is not evidence.

@@ -9,6 +9,34 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
+## [v0.6.0] — 2026-08-23
+
+### Added
+
+- **`--push <target>` — the cross-project view.** Appends a scan's per-file
+  verdicts to a DuckDB the operator owns: a path, or `md:<db>` for MotherDuck.
+  corral has no hosted tier and keeps nothing — your key, your runner, your
+  warehouse — and any DuckDB works, so the target is a destination rather than
+  a lock-in.
+  It answers the question one pull request cannot. A single kill rate is a
+  sample: the same unchanged diff has scored 0.85 and then 0.90, and in testing
+  this feature one unchanged file scored 0.80 and then 0.60. Forty rows are a
+  distribution, and "this file drifted from 0.9 to 0.6 over two months" is a
+  claim no individual run supports.
+  Two properties the schema enforces rather than documents. **Append-only**: a
+  receipt that can be UPDATEd is not a receipt, and overwriting is exactly how
+  a trend is lost. **The qualifiers travel with the numbers**: `proven_missed`
+  of 0 means "nothing was proven" rather than "the suite is clean" whenever the
+  writer failed or its test never graded, and aggregation is precisely where
+  that distinction gets dropped and a zero silently becomes good news.
+  Every row carries the sha256 of the signed statement it came from and the run
+  URL, so a row in the warehouse traces back to an attestation a third party can
+  verify — the table is evidence rather than self-report.
+  Comparability metadata travels too (language, mutants planted, models by
+  role, the thresholds, and the audited/candidates denominator), because a kill
+  rate on a dense function and one on a small accessor are not the same
+  measurement and a reader cannot otherwise tell a hard file from a weak suite.
+
 ## [v0.5.9] — 2026-08-23
 
 ### Fixed

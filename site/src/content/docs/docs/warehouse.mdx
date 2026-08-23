@@ -35,6 +35,17 @@ behind a run. The verdicts you see (more-itertools **certified at 90%**, a Ruby
 edit-distance suite **sent back at 60%**) are the same signed records the
 [recordings](/recordings/) come from.
 
+## Two shapes, and which is which
+
+The [page on this site](/warehouse/) queries corral's own historical stores —
+`audit_ledger`, `bug_catches`, `scans`, `scan_files` — hand-exported from the
+machine that produced them.
+
+`--push` writes something newer and simpler: one **`corral_audits`** row per
+audited file. Same subject, different shape, and everything below describes
+`corral_audits`, because that is what you get. The published page has not been
+backfilled into it.
+
 ## Getting your own
 
 The page on this site queries **our** audit data. The point is that you can have

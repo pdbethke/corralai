@@ -193,6 +193,19 @@ corral certify --local --repo-dir . \
   -- .venv/bin/python -m pytest tests_core -q
 ```
 
+If you want to see what the library actually does before auditing it, there is
+a command line over the same arithmetic in
+[sportspicker-cli](https://github.com/pdbethke/sportspicker-cli) — one
+dependency, which is the library itself:
+
+```bash
+sportspicker award round.json --budget 1000 --rounds 4
+#   pot 250.0000   awarded 250.0000
+```
+
+Change the strategy and the split changes while that total does not. That is the
+guarantee the audit is grading, visible in one command.
+
 `main` scored **18/20 — CERTIFIED**. Then run the identical command on
 `git checkout demo/bug-counts-pickers`, a branch that carries a real bug and a
 **green** 80-test suite: **15/20 — NEEDS-REVIEW**. Same file, same command, and

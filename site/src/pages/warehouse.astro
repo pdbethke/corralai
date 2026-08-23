@@ -110,6 +110,19 @@ const initialSql = PRESETS[0].sql;
       audited or rejected, with the reason). Four real DuckDB tables, shipped as
       parquet and queried client-side.
       <br /><br />
+      <strong>These are not the table `--push` writes.</strong> The four above
+      are corral's own historical stores, hand-exported from the machine that
+      produced them: a signed verdict per audit, a row per model seat, and a
+      whole-repo scan series. A run with <code>--push</code> writes something
+      newer and simpler — one <code>corral_audits</code> row per audited file,
+      carrying the kill rate, the survivors, the proven gaps, the qualifier
+      flags that say what a zero means, the thresholds, the roster, and the
+      sha256 of the signed statement it came from. Same subject, different
+      shape, and the <a href="/docs/warehouse/">documentation</a> describes that
+      one, because it is the shape you get. This page has not been backfilled
+      into it, and saying so is cheaper than pretending the two are the same
+      table.
+
       <strong>What is not here, and why.</strong> The ledger on the machine that
       produced these extracts also records audits of PRIVATE repositories. Those
       are withheld by an explicit allowlist in

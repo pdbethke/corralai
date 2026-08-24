@@ -29,6 +29,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/agentworker"
 	"github.com/pdbethke/corralai/internal/creds"
+	"github.com/pdbethke/corralai/internal/thinkmode"
 )
 
 // ErrModelUnreachable is returned by a Backend when the model endpoint responds
@@ -459,10 +460,17 @@ func (b *ollamaBackend) Chat(messages []Message, tools []any) (Message, error) {
 	var out struct {
 		Message Message `json:"message"`
 	}
-	err := postJSON(b.url+"/api/chat", nil, map[string]any{
+	body := map[string]any{
 		"model": b.model, "messages": messages, "tools": tools, "stream": false,
 		"options": map[string]any{"temperature": 0.2},
-	}, &out)
+	}
+	// Qwen 3+ reasons into a separate `thinking` field and would hand back an
+	// EMPTY content on a truncated reply — a silent failure, not an error. An
+	// agent loop reading only Content would see "" and have nothing to retry on.
+	if thinkmode.Suppress(b.model) {
+		body["think"] = false
+	}
+	err := postJSON(b.url+"/api/chat", nil, body, &out)
 	return out.Message, err
 }
 

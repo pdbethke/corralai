@@ -34,6 +34,10 @@ func TestMirroredConstantsMatchAdvpool(t *testing.T) {
 		t.Fatalf("roleMutantGeneratorShadow (%q) has drifted from advpool.RoleMutantGeneratorShadow (%q)",
 			roleMutantGeneratorShadow, advpool.RoleMutantGeneratorShadow)
 	}
+	if roleTestWriterShadow != advpool.RoleTestWriterShadow {
+		t.Fatalf("roleTestWriterShadow (%q) has drifted from advpool.RoleTestWriterShadow (%q)",
+			roleTestWriterShadow, advpool.RoleTestWriterShadow)
+	}
 	if shadowProviderFailedResult != advpool.ShadowProviderFailedResult {
 		t.Fatalf("shadowProviderFailedResult (%q) has drifted from advpool.ShadowProviderFailedResult (%q)",
 			shadowProviderFailedResult, advpool.ShadowProviderFailedResult)

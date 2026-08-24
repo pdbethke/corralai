@@ -595,7 +595,8 @@ func taskModel(assignedModel, defaultModel string) string {
 // the freeform builder loop, which returns a tool-loop summary the brain's
 // ParseMutants cannot parse.
 func isStructuredRole(role string) bool {
-	return role == "test-writer" || role == "mutant-generator" || role == roleMutantGeneratorShadow
+	return role == "test-writer" || role == "mutant-generator" ||
+		role == roleMutantGeneratorShadow || role == roleTestWriterShadow
 }
 
 // roleMutantGeneratorShadow / shadowProviderFailedResult mirror
@@ -613,6 +614,7 @@ func isStructuredRole(role string) bool {
 // on drift instead of silently mismatching the driver's sentinel.
 const (
 	roleMutantGeneratorShadow  = "mutant-generator-shadow"
+	roleTestWriterShadow       = "test-writer-shadow"
 	shadowProviderFailedResult = "\x00shadow-provider-call-failed\x00"
 )
 
@@ -699,7 +701,7 @@ func handleTaskError(taskID, missionID int64, role, modelDesc string, err error,
 	if !errors.Is(err, ErrModelUnreachable) {
 		return notHandled
 	}
-	if role == roleMutantGeneratorShadow {
+	if role == roleMutantGeneratorShadow || role == roleTestWriterShadow {
 		raw := brain("complete_task", map[string]any{"id": taskID, "result": shadowProviderFailedResult})
 		var out struct {
 			OK bool `json:"ok"`

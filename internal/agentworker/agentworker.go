@@ -74,7 +74,14 @@ func isStructuredRole(role string) bool {
 	// structured single-shot path as its primary — it renders the SAME testgen
 	// prompt shape, just under a different model/role key, and is never routed
 	// through the critic's freeform tool loop.
-	return role == "test-writer" || role == "mutant-generator" || role == "mutant-generator-shadow"
+	// test-writer-shadow (the challenger WRITER seat) is here for the same
+	// reason: it receives the SAME rendered test-writer prompt as its primary
+	// and hands back raw test source. Without it RunRole has "no single-shot
+	// runner" for the role, which the local drive loop turns into a FATAL
+	// error — a measurement seat taking the whole audit down, the one thing a
+	// challenger must never do.
+	return role == "test-writer" || role == "mutant-generator" ||
+		role == "mutant-generator-shadow" || role == "test-writer-shadow"
 }
 
 // isPoolCriticRole mirrors cmd/corral-agent's isPoolCriticRole.

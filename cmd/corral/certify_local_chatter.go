@@ -126,6 +126,7 @@ func localChatterFor(assign advpool.RoleAssignment, meter *agentbackend.UsageMet
 		advpool.RoleTestWriter,
 		advpool.RoleTestCritic,
 		advpool.RoleMutantGeneratorShadow,
+		advpool.RoleTestWriterShadow,
 	} {
 		model := strings.TrimSpace(assign[role])
 		if model == "" {

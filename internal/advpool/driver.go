@@ -452,6 +452,31 @@ type runState struct {
 	matrix     *matrix.Result
 	matrixDone bool
 
+	// shadowWriter* hold the CHALLENGER writer seat's outcome. They are
+	// deliberately separate from devKilled/devSurvivors: nothing here may
+	// reach aggregate(), the Verdict, or the signed record. Verdict is hashed
+	// WHOLE by CertSigner.SignVerdict, so a single leaked field would change
+	// every previously signed record's digest — see writer_shadow_test.go.
+	shadowWriterKilled   []MutantRef
+	shadowWriterMeasured bool
+	// shadowWriterAttempts is the challenger's OWN compile-retry budget.
+	// Sharing testWriterAttempts would let a failing measurement seat exhaust
+	// the graded seat's retries and change the verdict.
+	shadowWriterAttempts int
+	// shadowWriterTaskID is the live challenger writer task's id, tracked the
+	// same way testWriterTaskID is and for the same reason: SupersedeTask
+	// auto-uniquifies a replacement that reuses the old key, so the seat can
+	// never be re-looked-up by RoleTestWriterShadow's key after a retry.
+	// 0 when the challenger is off or was never enqueued.
+	shadowWriterTaskID int64
+	// shadowWriterSpent is the CUMULATIVE wall-clock this run has credited
+	// back to the deadline clock for challenger-writer work. runShadowWriterPass
+	// may be entered on several ticks (unlike runShadowPass, which runs once),
+	// so the credit is capped in aggregate at ShadowTimeBudget rather than
+	// per-call — otherwise repeated entries could extend the primary's
+	// deadline without bound.
+	shadowWriterSpent time.Duration
+
 	// testWriterAttempts counts compile-failure reopens of the test-writer
 	// task, guarded against MaxTestWriterAttempts in tickPoolAdequacy. Once
 	// exhausted, testWriterFailed is set and the run converges instead of
@@ -1322,6 +1347,24 @@ func (d *Driver) tickDevAdequacy(ctx context.Context, missionID int64, run *runS
 		return fmt.Errorf("advpool: promote test-writer with survivors: %w", serr2)
 	}
 	run.testWriterTaskID = newID
+
+	// The CHALLENGER writer seat, enqueued from the SAME rendered instruction
+	// the primary was just superseded with — the same survivors, the same
+	// target, under its OWN role key (RoleTestWriterShadow), so
+	// tasksByRole(RoleTestWriter) structurally cannot return it.
+	//
+	// Enqueued HERE, beside the primary, rather than at the point it is read
+	// (tickPoolAdequacy): a challenger asked only once the primary has already
+	// finished would have to hold the run open to be answered, and shadow work
+	// must never delay or gate the primary. Asked in parallel it costs the run
+	// nothing.
+	//
+	// NEVER fatal: the seat is measurement, so an enqueue failure is logged
+	// and the challenger is simply skipped.
+	if strings.TrimSpace(run.rs.ShadowWriterModel) != "" {
+		d.enqueueShadowWriter(missionID, run, tw.Title, renderTestWriter(run.rs, run.sigs, survivors))
+	}
+
 	if _, err := d.Q.PromoteReady(missionID); err != nil {
 		return fmt.Errorf("advpool: promote after test-writer supersede: %w", err)
 	}
@@ -1333,6 +1376,16 @@ func (d *Driver) tickDevAdequacy(ctx context.Context, missionID int64, run *runS
 // survivors the dev's tests missed. ProvenMissed is how many of those
 // survivors the pool's test then killed — real, catchable gaps.
 func (d *Driver) tickPoolAdequacy(ctx context.Context, missionID int64, run *runState) error {
+	// The challenger writer pass, mirroring the challenger GENERATOR pass in
+	// tickDevAdequacy: guarded on a trimmed non-empty model, errors logged, the
+	// seat skipped. A shadow failure is NEVER fatal — it is measurement, not
+	// the gate — so this returns nothing and is run BEFORE the primary's own
+	// early return, giving the challenger every tick the primary's pipeline
+	// happens to take without ever adding one of its own.
+	if strings.TrimSpace(run.rs.ShadowWriterModel) != "" {
+		d.runShadowWriterPass(ctx, missionID, run)
+	}
+
 	tw, err := d.Q.TaskByID(run.testWriterTaskID)
 	if err != nil {
 		return fmt.Errorf("advpool: load test-writer task: %w", err)

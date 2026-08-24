@@ -51,6 +51,12 @@ const MaxShardRetries = 2
 // auto-authored killing test" for "an honest signed verdict every time."
 const MaxTestWriterAttempts = 3
 
+// MaxShadowWriterAttempts bounds the CHALLENGER writer's compile retries. It is
+// lower than the primary's on purpose: the challenger only records a
+// comparison, so spending the primary's retry budget on it would trade a
+// graded outcome for a measurement.
+const MaxShadowWriterAttempts = 2
+
 // Role is a role defined as data: a prompt-render, a result contract
 // (Structured vs freeform-findings), and its DAG deps. New adversarial
 // roles compose by adding an entry here — no new driver plumbing.

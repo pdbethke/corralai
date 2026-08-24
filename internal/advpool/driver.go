@@ -602,6 +602,25 @@ type runState struct {
 	// (and, on a "tried and missed", that the attempt genuinely happened and
 	// caught nothing). Empty on every path that did not grade.
 	provenIDs []string
+	// primaryWriterMeasured is true only once the PRIMARY writer's suite has
+	// genuinely graded against run.devSurvivors — the positive counterpart of
+	// shadowWriterMeasured, and for exactly the same reason: UNMEASURED IS NOT
+	// ZERO.
+	//
+	// run.provenIDs is nil on every path that did not grade, and two of those
+	// paths reach a signed verdict: testWriterFailed (no compiling test after
+	// MaxTestWriterAttempts) and poolTestUnsound (a suite that compiled but
+	// whose canary survived / whose file the command never reached / that
+	// scored nothing). Reading provenIDs on either path writes EVERY survivor
+	// as `survived` for the primary and manufactures a total blind spot for a
+	// seat that never ran the code — the same fabrication the challenger's
+	// `measured` flag has always refused.
+	//
+	// A POSITIVE flag, deliberately, rather than a growing list of negatives:
+	// a new non-grading path added later is unmeasured by DEFAULT and cannot
+	// silently start fabricating a vector because nobody remembered to extend
+	// the exclusion list.
+	primaryWriterMeasured bool
 	// writerSalvaged is true when the primary writer's provenIDs came from a
 	// DESELECTED re-score rather than a clean run. The challenger seat has no
 	// equivalent rescue, so a salvaged run's head-to-head is confounded in the
@@ -1565,6 +1584,12 @@ func (d *Driver) tickPoolAdequacy(ctx context.Context, missionID int64, run *run
 		if salvaged, ids, n, ok := d.salvageByDeselect(ctx, run, writerTest, rep); ok {
 			run.poolScored = true
 			run.writerSalvaged = true
+			// GRADED, and therefore measured: the salvaged remainder proved
+			// these survivors by execution. It is measured-but-CONFOUNDED (the
+			// challenger gets no equivalent rescue), which is a separate
+			// question, gated separately by writerSalvaged in
+			// recordMutantAttempts — see RULING P11 there.
+			run.primaryWriterMeasured = true
 			run.provenMissed = salvaged
 			run.provenIDs = ids
 			log.Printf("advpool: %s: the authored test failed on the unmutated code, but deselecting its %d failing test(s) left a sound remainder that PROVED %d of %d survivor(s)",
@@ -1612,6 +1637,10 @@ func (d *Driver) tickPoolAdequacy(ctx context.Context, missionID int64, run *run
 		run.authoredTestNotCollected = rep.AuthoredTestUnreached
 		return nil
 	}
+	// PAST the three non-grading diagnoses above: this suite passed on the
+	// unmutated code, killed its canary and scored something, so its kill
+	// vector is a real observation rather than an absence of one.
+	run.primaryWriterMeasured = true
 	poolSurvivors := survivorsFrom(rep, run.devSurvivors)
 	run.provenMissed = len(run.devSurvivors) - len(poolSurvivors)
 	// The evidence behind that count — see provenMutantIDs. Derived from the
@@ -1793,6 +1822,16 @@ func (d *Driver) recordMutantAttempts(run *runState, v Verdict) {
 	// Signer leaves RecordID at zero, and rows carrying record_id=0 are
 	// unlinkable to the audit that produced them.
 	if d.MutantAttempts == nil || v.RecordID == 0 || run.rs.ShadowWriterModel == "" || !run.shadowWriterMeasured {
+		return
+	}
+	// UNMEASURED IS NOT ZERO — for the PRIMARY too. This guard was originally
+	// written for the challenger alone, which left two reachable paths to a
+	// signed verdict with run.provenIDs still nil (testWriterFailed and
+	// poolTestUnsound). On either, killedByPrimary below is empty and every
+	// survivor is written as `survived` for the primary: a total blind spot
+	// fabricated from a seat that never ran the code. See
+	// runState.primaryWriterMeasured for why this is a positive flag.
+	if !run.primaryWriterMeasured {
 		return
 	}
 	// RULING P11 — a SALVAGED primary is not comparable.

@@ -31,6 +31,15 @@ func (f *fakeMutantAttemptSink) Record(recordID int64, _ string, attempts []Muta
 // already pins, plus the challenger's own compile failure.
 func runAndCaptureAttempts(t *testing.T, rs RunSpec) []MutantAttempt {
 	t.Helper()
+	rows, _ := runAndCaptureAttemptsWithState(t, rs)
+	return rows
+}
+
+// runAndCaptureAttemptsWithState is runAndCaptureAttempts plus the driver's own
+// runState, so a case can prove its fixture actually reached the cause it is
+// named for instead of passing vacuously.
+func runAndCaptureAttemptsWithState(t *testing.T, rs RunSpec) ([]MutantAttempt, *runState) {
+	t.Helper()
 	mutants := writerShadowMutants()
 	scorer := &writerShadowScorer{}
 	var validator Validator = &fakeValidator{mutants: mutants}
@@ -38,6 +47,15 @@ func runAndCaptureAttempts(t *testing.T, rs RunSpec) []MutantAttempt {
 	switch rs.ShadowWriterModel {
 	case "challenger-compile-failure":
 		validator = shadowCompileFailValidator{fakeValidator: &fakeValidator{mutants: mutants}}
+	case "primary-test-writer-failed":
+		// The PRIMARY never produces a compiling test; the challenger is
+		// measured cleanly. run.provenIDs stays nil.
+		validator = primaryCompileFailValidator{fakeValidator: &fakeValidator{mutants: mutants}}
+	case "primary-pool-test-unsound":
+		// The PRIMARY's test compiles but never genuinely grades (its canary
+		// survived), so poolTestUnsound is set and run.provenIDs stays nil.
+		rep := adequacy.Report{CompliantPass: true, CanaryKilled: false, Total: 2}
+		scorer.primaryRep = &rep
 	case "challenger-canary-not-killed":
 		rep := adequacy.Report{CompliantPass: true, CanaryKilled: false, Total: 2}
 		scorer.shadowRep = &rep
@@ -54,8 +72,54 @@ func runAndCaptureAttempts(t *testing.T, rs RunSpec) []MutantAttempt {
 	d := newWriterShadowRun(t, missionID, rs, scorer, validator)
 	sink := &fakeMutantAttemptSink{}
 	d.MutantAttempts = sink
-	driveWriterShadow(t, d, missionID)
-	return sink.attempts
+	// Tolerant on EVERY case: a primary that will not compile makes
+	// tickPoolAdequacy SIGNAL its corrective reissue through a returned error,
+	// which is the fixture rather than a failure, and no case here asserts on
+	// Tick's error. See driveWriterShadowTolerant.
+	driveWriterShadowTolerant(t, d, missionID)
+	return sink.attempts, d.runs[missionID]
+}
+
+// UNMEASURED IS NOT ZERO — ON THE PRIMARY SEAT TOO.
+//
+// The original guard checked only the challenger, so two reachable paths to a
+// signed verdict left run.provenIDs nil and wrote every survivor as `survived`
+// for the primary: a total blind spot manufactured from a seat that never ran
+// the code. One case per cause, mirroring the four the challenger's causes
+// already get, so deleting the guard fails a test named for the reason.
+func TestUnmeasuredPrimaryEmitsNoAttemptRows(t *testing.T) {
+	for _, tc := range []struct {
+		name, model string
+		want        func(*runState) bool
+	}{
+		{"test writer failed", "primary-test-writer-failed", func(st *runState) bool { return st.testWriterFailed }},
+		{"pool test unsound", "primary-pool-test-unsound", func(st *runState) bool { return st.poolTestUnsound }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rs := newTestRunSpec(t)
+			rs.ShadowWriterModel = tc.model
+			rows, st := runAndCaptureAttemptsWithState(t, rs)
+
+			// The fixture must actually reach the cause it is named for, and
+			// the CHALLENGER must be cleanly measured — otherwise the assertion
+			// below is satisfied by the challenger-side guard and pins nothing.
+			if !tc.want(st) {
+				t.Fatalf("fixture did not reach %s — it is not exercising this cause", tc.name)
+			}
+			if !st.shadowWriterMeasured {
+				t.Fatal("the challenger was not measured — this case would then be caught by the challenger-side guard and pin nothing")
+			}
+			if st.primaryWriterMeasured {
+				t.Error("primaryWriterMeasured = true for a primary that never genuinely graded")
+			}
+			if len(st.provenIDs) != 0 {
+				t.Fatalf("provenIDs = %v — the fixture is not producing the nil-vector shape this guard exists for", st.provenIDs)
+			}
+			if len(rows) != 0 {
+				t.Fatalf("wrote %d attempt rows for an unmeasured PRIMARY, want 0 — every survivor would be recorded as `survived` for a seat that never ran the code", len(rows))
+			}
+		})
+	}
 }
 
 // PAIR OR NOTHING. An unpaired primary vector cannot contribute to a

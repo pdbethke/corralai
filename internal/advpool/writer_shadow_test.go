@@ -73,6 +73,11 @@ type writerShadowScorer struct {
 	// the knob the ungraded-suite cases use to script a report that never
 	// genuinely graded.
 	shadowRep *adequacy.Report
+	// primaryRep is the same knob for the PRIMARY writer's test, so a fixture
+	// can script a primary that compiled but never genuinely graded while the
+	// challenger is measured cleanly — the shape that proves the
+	// unmeasured-is-not-zero guard is enforced on BOTH seats.
+	primaryRep *adequacy.Report
 }
 
 // gradedReport is the report a suite that genuinely ran produces: everything it
@@ -109,6 +114,9 @@ func (s *writerShadowScorer) ScoreAuthoredReport(_ context.Context, _, code, tes
 			return *s.shadowRep, nil
 		}
 		return gradedReport(mutants, writerShadowChallengerMiss), nil
+	}
+	if s.primaryRep != nil {
+		return *s.primaryRep, nil
 	}
 	return gradedReport(mutants, nil), nil
 }
@@ -190,6 +198,25 @@ func driveWriterShadow(t *testing.T, d *Driver, missionID int64) Verdict {
 	return Verdict{}
 }
 
+// driveWriterShadowTolerant is driveWriterShadow for fixtures in which the
+// PRIMARY writer's test fails to compile. That path is not an error condition
+// — the driver reissues the writer with the compiler's feedback — but it
+// SIGNALS through a returned error (see tickPoolAdequacy: "test-writer result
+// does not compile, reissued for retry"), which driveWriterShadow treats as
+// fatal. Errors are ignored here rather than asserted on because the assertion
+// this fixture exists for is about the rows the run does or does not write.
+func driveWriterShadowTolerant(t *testing.T, d *Driver, missionID int64) {
+	t.Helper()
+	for i := 0; i < 50; i++ {
+		v, _ := d.Tick(context.Background(), missionID)
+		if v != nil {
+			return
+		}
+		completeAllReadyWriterTagged(t, d)
+	}
+	t.Fatal("run did not converge in 50 ticks")
+}
+
 // runWriterShadow is the shared body of the three helpers below: one run of rs
 // driven to convergence, handing back everything the tests assert on.
 func runWriterShadow(t *testing.T, rs RunSpec, validator Validator) (Verdict, *writerShadowScorer, *runState) {
@@ -244,6 +271,22 @@ func runAndCaptureScoredMutantSets(t *testing.T, rs RunSpec) (primary, shadow []
 		t.Fatal("the challenger writer was never scored — the fixture is not exercising the seat")
 	}
 	return primary, shadow, st
+}
+
+// primaryCompileFailValidator is shadowCompileFailValidator's mirror: it fails
+// CompileTest for the PRIMARY writer's test ONLY, leaving the challenger's
+// compiling. That is the only shape that reaches a signed verdict with
+// run.testWriterFailed set and a cleanly MEASURED challenger — the pairing the
+// primary-side unmeasured guard has to refuse.
+type primaryCompileFailValidator struct {
+	*fakeValidator
+}
+
+func (v primaryCompileFailValidator) CompileTest(ctx context.Context, codePath, code, test string) error {
+	if test == shadowWriterResultTag {
+		return v.fakeValidator.CompileTest(ctx, codePath, code, test)
+	}
+	return &CompileError{Output: "primary test does not compile"}
 }
 
 // shadowCompileFailValidator fails CompileTest for the CHALLENGER writer's

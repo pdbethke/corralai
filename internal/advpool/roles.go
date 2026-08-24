@@ -149,7 +149,7 @@ func renderTestWriterRepairing(rs RunSpec, sigs []repoindex.Signature, survivors
 	goal := rs.Goal
 	if len(survivors) > 0 {
 		var b strings.Builder
-		fmt.Fprintf(&b, "%s\n\nThe developer's own tests did NOT catch the following goal-violating mutants (they passed undetected). Write a test that specifically kills these survivors — proving the missed bugs are real and catchable, not equivalent mutants.\n", rs.Goal)
+		fmt.Fprintf(&b, "%s\n\nThe developer's own tests did NOT catch the following goal-violating mutants (they passed undetected). Write a test that specifically kills these survivors — proving the missed bugs are real and catchable, not equivalent mutants.\n\n%s\n", rs.Goal, testgen.StrictnessNote())
 		for _, m := range survivors {
 			fmt.Fprintf(&b, "\n--- SURVIVOR %s ---\n%s\n", m.ID, m.Code)
 		}

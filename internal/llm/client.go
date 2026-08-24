@@ -19,6 +19,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/pdbethke/corralai/internal/thinkmode"
 )
 
 // Client is a single-shot text chat client. Construct with FromEnv.
@@ -157,13 +159,19 @@ func (c *Client) askOllama(ctx context.Context, system, user string) (string, er
 			Content string `json:"content"`
 		} `json:"message"`
 	}
-	err := c.post(ctx, c.ollamaURL+"/api/chat", nil, map[string]any{
+	body := map[string]any{
 		"model": c.model, "stream": false, "options": map[string]any{"temperature": 0.2},
 		"messages": []map[string]string{
 			{"role": "system", "content": system},
 			{"role": "user", "content": user},
 		},
-	}, &out)
+	}
+	// Qwen 3+ reasons into a separate `thinking` field and would hand back an
+	// EMPTY content on a truncated reply — a silent failure, not an error.
+	if thinkmode.Suppress(c.model) {
+		body["think"] = false
+	}
+	err := c.post(ctx, c.ollamaURL+"/api/chat", nil, body, &out)
 	if err != nil {
 		return "", err
 	}

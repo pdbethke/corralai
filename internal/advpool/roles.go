@@ -51,6 +51,12 @@ const MaxShardRetries = 2
 // auto-authored killing test" for "an honest signed verdict every time."
 const MaxTestWriterAttempts = 3
 
+// MaxShadowWriterAttempts bounds the CHALLENGER writer's compile retries. It is
+// lower than the primary's on purpose: the challenger only records a
+// comparison, so spending the primary's retry budget on it would trade a
+// graded outcome for a measurement.
+const MaxShadowWriterAttempts = 2
+
 // Role is a role defined as data: a prompt-render, a result contract
 // (Structured vs freeform-findings), and its DAG deps. New adversarial
 // roles compose by adding an entry here — no new driver plumbing.
@@ -320,6 +326,24 @@ func shardTitle(sh Shard) string {
 // weaker model on one shard plants easier mutants, the dev suite kills them,
 // and the kill-rate rises) under a fixed certification threshold.
 const RoleMutantGeneratorShadow = "mutant-generator-shadow"
+
+// RoleTestWriterShadow is the CHALLENGER writer seat: a second model authoring
+// its own suite against the SAME mutant set as the primary writer, for a
+// mutant-controlled head-to-head.
+//
+// It is a DISTINCT role key on purpose, exactly as RoleMutantGeneratorShadow
+// is: tasksByRole(RoleTestWriter) therefore CANNOT return a shadow task, and
+// the exclusion is structural rather than a boolean someone must remember to
+// check. This is the gate.
+//
+// Scoring both writers against the IDENTICAL mutant set is the controlled-
+// comparison invariant. Two writers facing different mutants is confounded by
+// mutant difficulty, exactly as assigning models to different SHARDS would be
+// confounded by region difficulty.
+//
+// The seat NEVER gates: its outcome cannot reach the verdict, the aggregate,
+// or the certification record.
+const RoleTestWriterShadow = "test-writer-shadow"
 
 // ResolveShadowModel resolves an operator's shadow-model override into the
 // RunSpec.ShadowModel value: "off"/"none" (case-insensitive) disables the

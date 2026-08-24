@@ -108,6 +108,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	swarmFlag := fs.Int("swarm", 0, "max concurrent audit workers (0 = auto-size to this host's cores). The BUDGET clamp: independent role tasks run in parallel up to this bound, so a big audit swarms without melting the box")
 	maxShardsFlag := fs.Int("max-shards", 0, "max mutant-generator seats fanned out across the file's functions (0 = "+fmt.Sprint(advpool.DefaultMaxShards)+"). Bounds PARALLELISM only — every function is probed regardless; --n-mutants is the PER-SHARD budget")
 	shadowModelFlag := fs.String("shadow-model", "", "challenger model that attacks every region a SECOND time for a region-controlled head-to-head. OFF unless named. Recorded for comparison — NEVER gates the verdict")
+	shadowWriterModelFlag := fs.String("shadow-writer-model", "", "challenger WRITER model that authors a second suite against the SAME mutant set for a mutant-controlled head-to-head. OFF unless named. Recorded for correlation — NEVER gates the verdict")
 	matrixFlag := fs.Bool("matrix", false, "opt into the tests×mutants matrix: after the primary pass, re-score EVERY dev test ALONE against the run's mutants — a per-test adequacy readout + a delete-candidate list, instead of one dev-suite-wide number. COSTLY: T tests × M mutants extra jail runs (T×M, on top of the primary pass), so leave off by default on a big suite")
 	var bindDirFlag stringSlice
 	fs.Var(&bindDirFlag, "bind-dir", "extra repo-relative dependency dir to mount read-only into the jail instead of copying it into the workspace (repeatable; node_modules/vendor/.venv/venv/.bundle are auto-detected) — --repo-dir mode only")
@@ -194,6 +195,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 
 		writerModel: *writerModel, criticModel: *criticModel,
 		mutantModel: *mutantModel, shadowModel: *shadowModelFlag,
+		shadowWriterModel: *shadowWriterModelFlag,
 
 		jail: *jailFlag, checkArgv: checkArgv,
 		bindDirs: bindDirFlag, noBindDeps: *noBindDepsFlag,
@@ -201,8 +203,9 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		repo: strings.TrimSpace(*repoFlag), commit: strings.TrimSpace(*commitFlag),
 
 		matrix: *matrixFlag, record: rec, bugCatchDB: localBugCatchDBPath(), criticScoreDB: localCriticScoreDBPath(),
-		openStore: openStore,
-		stdout:    stdout, stderr: stderr,
+		mutantAttemptsDB: localMutantAttemptsDBPath(),
+		openStore:        openStore,
+		stdout:           stdout, stderr: stderr,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "corral certify --local: %v\n", err)
@@ -280,6 +283,7 @@ type localAuditInput struct {
 
 	// Role models. Empty means this file's stock default.
 	writerModel, criticModel, mutantModel, shadowModel string
+	shadowWriterModel                                  string
 
 	// Jail + workspace. jail empty = auto-detect this OS's backend (never
 	// unsandboxed). checkArgv is the project's own test command, required in
@@ -326,7 +330,12 @@ type localAuditInput struct {
 	// wants (N concurrent audits must not contend on one single-process
 	// DuckDB file).
 	criticScoreDB string
-	openStore     func() (*buildstore.Store, ed25519.PrivateKey, error)
+	// mutantAttemptsDB is the writer-seat correlation store for this run. Same
+	// contract again: empty means no feed. The repo scan leaves it empty for
+	// the same DuckDB-contention reason AND because it exposes no
+	// --shadow-writer-model, so it can never produce a pair to record.
+	mutantAttemptsDB string
+	openStore        func() (*buildstore.Store, ed25519.PrivateKey, error)
 
 	// Where the run's human-readable progress goes. nil = io.Discard (the
 	// repo scan's position: N concurrent files would interleave into mush).
@@ -600,7 +609,15 @@ type auditRoles struct {
 	assign                 advpool.RoleAssignment
 	shadow                 string
 	writer, mutant, critic string
-	chatterFor             func(role string) agentworker.Chatter
+	// shadowWriter is the CHALLENGER writer model, carried here for the SAME
+	// reason shadow is: resolveRoleModels resolves it, but the only consumer
+	// that can act on it is the RunSpec, and a field that stops at the
+	// RoleAssignment never reaches advpool's driver. Dropping it here is
+	// precisely how --shadow-writer-model came to force a cache miss, demand a
+	// credential, and name a seat in the SIGNED record while never enqueueing
+	// one line of challenger work — see newAuditRunSpec.
+	shadowWriter string
+	chatterFor   func(role string) agentworker.Chatter
 	// meter accumulates every seat's reported token usage for the whole run.
 	// An audit's cost is O(mutants x suite runtime) on the execution side and
 	// O(tokens) on the model side; the ledger already records the first half,
@@ -674,9 +691,9 @@ func herdNotConfiguredErr(cmdName, writer, mutant string) error {
 // the free `--dry-run` path too, where there is no key to check and nothing to
 // spend. Keeping one spelling of "what model does this role actually use"
 // stops the key and the preflight from ever disagreeing.
-func resolveRoleModels(in localAuditInput) (writer, mutant, critic, shadow string) {
+func resolveRoleModels(in localAuditInput) (writer, mutant, critic, shadow, shadowWriter string) {
 	// No defaults behind any seat — corral has none. "off" resolves to "" for
-	// the two optional seats, and an empty grading seat is refused by the
+	// the optional seats, and an empty grading seat is refused by the
 	// caller (herdNotConfiguredErr) rather than filled.
 	//
 	// This is the ONE place a seat's model is resolved, so the cache key and
@@ -686,7 +703,8 @@ func resolveRoleModels(in localAuditInput) (writer, mutant, critic, shadow strin
 	return strings.TrimSpace(in.writerModel),
 		strings.TrimSpace(in.mutantModel),
 		advpool.ResolveOptionalModel(in.criticModel, ""),
-		resolveShadowModel(in.shadowModel)
+		resolveShadowModel(in.shadowModel),
+		advpool.ResolveOptionalModel(in.shadowWriterModel, "")
 }
 
 // modelSetKey is the canonical KeyInputs.ModelSet for a resolved role set.
@@ -696,13 +714,27 @@ func resolveRoleModels(in localAuditInput) (writer, mutant, critic, shadow strin
 // without a decoder ring. A disabled role keeps its resolved value ("off")
 // rather than being dropped: "the critic was deliberately disabled" and "the
 // critic ran" are different audits and must key differently.
-func modelSetKey(writer, mutant, critic, shadow string) string {
-	return reposcan.CanonicalKV(map[string]string{
+func modelSetKey(writer, mutant, critic, shadow, shadowWriter string) string {
+	kv := map[string]string{
 		"test-writer":      writer,
 		"mutant-generator": mutant,
 		"critic":           critic,
 		"shadow":           shadow,
-	})
+	}
+	// Omitted when off, DELIBERATELY breaking the keep-disabled-seats-in-the-key
+	// convention the other optional seats follow. The critic's on/off changes
+	// what an audit MEASURES, so it must key differently. The challenger writer
+	// cannot change the verdict at all — a run with it off is byte-identical to
+	// a pre-feature run, so including an empty entry would invalidate every
+	// cached verdict in existence on upgrade, for no change in meaning.
+	//
+	// Naming a challenger DOES add the entry, which is required: without it,
+	// enabling the challenger would hit a cached verdict, skip the run, and
+	// silently collect no measurement at all.
+	if shadowWriter != "" {
+		kv["test-writer-shadow"] = shadowWriter
+	}
+	return reposcan.CanonicalKV(kv)
 }
 
 // resolveAuditRoles resolves the role models, enforces decorrelation, requires
@@ -718,7 +750,7 @@ func resolveAuditRoles(in localAuditInput, stderr io.Writer) (auditRoles, error)
 	// Resolve the models and enforce decorrelation BEFORE doing any I/O — an
 	// operator override that collapses critic==writer must fail fast, not after
 	// opening stores and a jail.
-	writer, mutant, critic, shadow := resolveRoleModels(in)
+	writer, mutant, critic, shadow, shadowWriter := resolveRoleModels(in)
 	if err := herdNotConfiguredErr(in.cmdName, writer, mutant); err != nil {
 		return r, err
 	}
@@ -732,6 +764,9 @@ func resolveAuditRoles(in localAuditInput, stderr io.Writer) (auditRoles, error)
 		// a shadow model equal to the critic's (the stock default) is expected
 		// and must NOT error — it is a measurement seat, never a grading one.
 		assign[advpool.RoleMutantGeneratorShadow] = shadow
+	}
+	if shadowWriter != "" {
+		assign[advpool.RoleTestWriterShadow] = shadowWriter
 	}
 	if shadow != "" && shadow == mutant {
 		// A head-to-head of a model against ITSELF is not a comparison — it
@@ -810,7 +845,55 @@ func resolveAuditRoles(in localAuditInput, stderr io.Writer) (auditRoles, error)
 		return r, auditUsageErr("%v", err)
 	}
 
-	return auditRoles{assign: assign, shadow: shadow, writer: writer, mutant: mutant, critic: critic, chatterFor: chatterFor, meter: meter}, nil
+	return auditRoles{assign: assign, shadow: shadow, shadowWriter: shadowWriter, writer: writer, mutant: mutant, critic: critic, chatterFor: chatterFor, meter: meter}, nil
+}
+
+// runSubject is the FILE-and-repo half of a RunSpec: everything
+// prepareAuditJail and the git lookups resolved, as distinct from the
+// flag-and-model half that localAuditInput and auditRoles already carry.
+// Grouping it keeps newAuditRunSpec to three parameters instead of eleven.
+type runSubject struct {
+	repo, commit         string
+	codePath, code       string
+	devTestPath, devTest string
+	lang, importPath     string
+}
+
+// newAuditRunSpec assembles one file's RunSpec from the resolved flags, the
+// resolved role models, and the prepared subject.
+//
+// It is a FUNCTION, not the inline literal it used to be, because the
+// CLI→RunSpec seam had no test at all — and that is exactly what hid the
+// challenger writer being resolved, credential-checked, written into the cache
+// key and into the signed record's ModelsByRole, and then never placed on the
+// RunSpec any consumer reads. Every seat model this run will use is now
+// assembled in one testable place.
+func newAuditRunSpec(in localAuditInput, roles auditRoles, subj runSubject) advpool.RunSpec {
+	n := in.nMutants
+	if n <= 0 {
+		n = 5
+	}
+	return advpool.RunSpec{
+		Repo: subj.repo, Commit: subj.commit, Goal: strings.TrimSpace(in.goal),
+		CodePath: subj.codePath, Code: subj.code,
+		DevTestPath: subj.devTestPath, DevTestCode: subj.devTest,
+		// Quoted, not space-joined: TestCmd is a STRING that gets re-split
+		// downstream, and a plain Join is not reversible — an argument
+		// containing a space (an inline -e script, --filter="a b") comes back
+		// as several arguments and the command that runs is not the one the
+		// operator typed. Pairs with adequacy.ShellSplit.
+		TestCmd:   adequacy.ShellJoin(in.checkArgv),
+		NMutants:  n,
+		Lang:      subj.lang,
+		MaxShards: resolveMaxShards(in.maxShards),
+		// Both challenger seats, from the SAME resolved struct the
+		// RoleAssignment was built from — so a seat that is named, paid for and
+		// recorded is also a seat the driver can actually run.
+		ShadowModel:       roles.shadow,
+		ShadowWriterModel: roles.shadowWriter,
+		Matrix:            in.matrix,
+		ImportPath:        subj.importPath,
+	}
 }
 
 // auditOneFile runs ONE file's complete adversarial-pool audit in-process and
@@ -984,27 +1067,23 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 	}
 	_ = criticRowsRecorded
 
-	n := in.nMutants
-	if n <= 0 {
-		n = 5
+	// The writer-seat correlation feed, on the same terms. Wired ONLY here
+	// because `certify --local` is the only command that can set
+	// RunSpec.ShadowWriterModel — and until this existed, advpool computed the
+	// pair, found d.MutantAttempts nil, and threw every row away.
+	var attemptRowsRecorded *int64
+	if strings.TrimSpace(in.mutantAttemptsDB) != "" {
+		var closeAttempts func()
+		closeAttempts, _, attemptRowsRecorded = wireLocalMutantAttempts(d, in.mutantAttemptsDB, repo, commit, stderr)
+		defer closeAttempts()
 	}
-	rs := advpool.RunSpec{
-		Repo: repo, Commit: commit, Goal: strings.TrimSpace(in.goal),
-		CodePath: codeKey, Code: string(code),
-		DevTestPath: devTestKey, DevTestCode: string(devTest),
-		// Quoted, not space-joined: TestCmd is a STRING that gets re-split
-		// downstream, and a plain Join is not reversible — an argument
-		// containing a space (an inline -e script, --filter="a b") comes back
-		// as several arguments and the command that runs is not the one the
-		// operator typed. Pairs with adequacy.ShellSplit.
-		TestCmd:     adequacy.ShellJoin(in.checkArgv),
-		NMutants:    n,
-		Lang:        plug.Name(),
-		MaxShards:   resolveMaxShards(in.maxShards),
-		ShadowModel: shadow,
-		Matrix:      in.matrix,
-		ImportPath:  prep.importPath,
-	}
+
+	rs := newAuditRunSpec(in, roles, runSubject{
+		repo: repo, commit: commit,
+		codePath: codeKey, code: string(code),
+		devTestPath: devTestKey, devTest: string(devTest),
+		lang: plug.Name(), importPath: prep.importPath,
+	})
 
 	// Signatures are best-effort (mirrors the brain's StartRun): a failure just
 	// degrades the prompt to no signatures, never refuses the run.
@@ -1114,6 +1193,16 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 	if shadow != "" && len(shards) > 0 && shadowRowsRecorded != nil {
 		if n := atomic.LoadInt64(shadowRowsRecorded); n > 0 {
 			fmt.Fprintf(stdout, "shadow: recorded %d row(s) to the scorecard\n", n)
+		}
+	}
+
+	// Same PAST-TENSE discipline for the challenger WRITER's head-to-head, and
+	// the same silence when nothing landed: a challenger that was named but
+	// ended unmeasured, or a primary that never genuinely graded, writes no
+	// rows PAIR-OR-NOTHING and must not be reported as if it had.
+	if rs.ShadowWriterModel != "" && attemptRowsRecorded != nil {
+		if n := atomic.LoadInt64(attemptRowsRecorded); n > 0 {
+			fmt.Fprintf(stdout, "shadow-writer: recorded %d per-mutant outcome(s) for the two writer seats\n", n)
 		}
 	}
 

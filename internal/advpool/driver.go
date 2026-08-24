@@ -133,6 +133,29 @@ type BugCatchSink interface {
 	Record(recordID int64, recordHead string, obs []BugCatchObservation)
 }
 
+// MutantAttempt is one SEAT's outcome for one mutant. Two attempts sharing a
+// mutant id and differing in Model are the paired observation the correlation
+// statistic needs.
+type MutantAttempt struct {
+	Path     string
+	MutantID string
+	Model    string
+	Role     string // RoleTestWriter | RoleTestWriterShadow
+	Shadow   bool
+	Outcome  string // "killed" | "survived"
+}
+
+// MutantAttemptSink is the optional per-run feed of per-seat mutant outcomes
+// (nil ⇒ no-op), mirroring BugCatchSink. advpool deliberately does NOT import
+// internal/scanstore: the composition root adapts this to
+// scanstore.RecordMutantAttempts, exactly as it does for the other sinks.
+//
+// This is a MEASUREMENT feed. Nothing written here may reach the Verdict, the
+// aggregate, or the signed record.
+type MutantAttemptSink interface {
+	Record(recordID int64, recordHead string, attempts []MutantAttempt)
+}
+
 // CriticFindingObservation is one test-critic finding's execution-checked
 // outcome from a single converged run: whether the flagged test, run ALONE
 // against the run's own mutants, actually killed anything. Populated ONLY by
@@ -452,6 +475,40 @@ type runState struct {
 	matrix     *matrix.Result
 	matrixDone bool
 
+	// shadowWriter* hold the CHALLENGER writer seat's outcome. They are
+	// deliberately separate from devKilled/devSurvivors: nothing here may
+	// reach aggregate(), the Verdict, or the signed record. Verdict is hashed
+	// WHOLE by CertSigner.SignVerdict, so a single leaked outcome field would
+	// change every previously signed record's digest — see
+	// writer_shadow_test.go.
+	//
+	// shadowWriterKilled is the challenger writer's PROVEN-KILL set over
+	// run.devSurvivors — the mutant-level counterpart of provenIDs, which is
+	// the PRIMARY writer's vector over that same set (RULING P9). The two pair
+	// one-for-one by MutantRef.ID: both are produced by provenMutantIDs, both
+	// over run.devSurvivors, so the head-to-head compares the two WRITERS.
+	// Deliberately NOT paired against devKilled, which is the DEV SUITE's
+	// vector over every mutant and answers a different question.
+	shadowWriterKilled   []MutantRef
+	shadowWriterMeasured bool
+	// shadowWriterAttempts is the challenger's OWN compile-retry budget.
+	// Sharing testWriterAttempts would let a failing measurement seat exhaust
+	// the graded seat's retries and change the verdict.
+	shadowWriterAttempts int
+	// shadowWriterTaskID is the live challenger writer task's id, tracked the
+	// same way testWriterTaskID is and for the same reason: SupersedeTask
+	// auto-uniquifies a replacement that reuses the old key, so the seat can
+	// never be re-looked-up by RoleTestWriterShadow's key after a retry.
+	// 0 when the challenger is off or was never enqueued.
+	shadowWriterTaskID int64
+	// shadowWriterSpent is the CUMULATIVE wall-clock this run has credited
+	// back to the deadline clock for challenger-writer work. runShadowWriterPass
+	// may be entered on several ticks (unlike runShadowPass, which runs once),
+	// so the credit is capped in aggregate at ShadowTimeBudget rather than
+	// per-call — otherwise repeated entries could extend the primary's
+	// deadline without bound.
+	shadowWriterSpent time.Duration
+
 	// testWriterAttempts counts compile-failure reopens of the test-writer
 	// task, guarded against MaxTestWriterAttempts in tickPoolAdequacy. Once
 	// exhausted, testWriterFailed is set and the run converges instead of
@@ -545,6 +602,30 @@ type runState struct {
 	// (and, on a "tried and missed", that the attempt genuinely happened and
 	// caught nothing). Empty on every path that did not grade.
 	provenIDs []string
+	// primaryWriterMeasured is true only once the PRIMARY writer's suite has
+	// genuinely graded against run.devSurvivors — the positive counterpart of
+	// shadowWriterMeasured, and for exactly the same reason: UNMEASURED IS NOT
+	// ZERO.
+	//
+	// run.provenIDs is nil on every path that did not grade, and two of those
+	// paths reach a signed verdict: testWriterFailed (no compiling test after
+	// MaxTestWriterAttempts) and poolTestUnsound (a suite that compiled but
+	// whose canary survived / whose file the command never reached / that
+	// scored nothing). Reading provenIDs on either path writes EVERY survivor
+	// as `survived` for the primary and manufactures a total blind spot for a
+	// seat that never ran the code — the same fabrication the challenger's
+	// `measured` flag has always refused.
+	//
+	// A POSITIVE flag, deliberately, rather than a growing list of negatives:
+	// a new non-grading path added later is unmeasured by DEFAULT and cannot
+	// silently start fabricating a vector because nobody remembered to extend
+	// the exclusion list.
+	primaryWriterMeasured bool
+	// writerSalvaged is true when the primary writer's provenIDs came from a
+	// DESELECTED re-score rather than a clean run. The challenger seat has no
+	// equivalent rescue, so a salvaged run's head-to-head is confounded in the
+	// primary's favour and must not be recorded as a comparison.
+	writerSalvaged bool
 	// authoredTest is the pool's compiling killing test (the test-writer's
 	// cleaned source), surfaced via RunState so `corral certify --adversarial`
 	// can hand it back to the dev ("add this test; it catches the gap your suite
@@ -603,6 +684,12 @@ type Driver struct {
 	// RecordID/RecordHead are set) on every terminal verdict. See
 	// tickAggregate's auto-refute step.
 	CriticFindings CriticFindingSink
+
+	// MutantAttempts is the optional per-run feed of BOTH writer seats'
+	// per-mutant outcomes (nil = no-op), mirroring BugCatch/CriticFindings.
+	// Fed pair-or-nothing by recordMutantAttempts: see its doc for the full
+	// gating (challenger configured AND measured AND primary not salvaged).
+	MutantAttempts MutantAttemptSink
 
 	// Enumerator is the optional jail-backed test-list seam (nil = the matrix
 	// phase is always skipped, regardless of any run's RunSpec.Matrix). When
@@ -1322,6 +1409,24 @@ func (d *Driver) tickDevAdequacy(ctx context.Context, missionID int64, run *runS
 		return fmt.Errorf("advpool: promote test-writer with survivors: %w", serr2)
 	}
 	run.testWriterTaskID = newID
+
+	// The CHALLENGER writer seat, enqueued from the SAME rendered instruction
+	// the primary was just superseded with — the same survivors, the same
+	// target, under its OWN role key (RoleTestWriterShadow), so
+	// tasksByRole(RoleTestWriter) structurally cannot return it.
+	//
+	// Enqueued HERE, beside the primary, rather than at the point it is read
+	// (tickPoolAdequacy): a challenger asked only once the primary has already
+	// finished would have to hold the run open to be answered, and shadow work
+	// must never delay or gate the primary. Asked in parallel it costs the run
+	// nothing.
+	//
+	// NEVER fatal: the seat is measurement, so an enqueue failure is logged
+	// and the challenger is simply skipped.
+	if strings.TrimSpace(run.rs.ShadowWriterModel) != "" {
+		d.enqueueShadowWriter(missionID, run, tw.Title, renderTestWriter(run.rs, run.sigs, survivors))
+	}
+
 	if _, err := d.Q.PromoteReady(missionID); err != nil {
 		return fmt.Errorf("advpool: promote after test-writer supersede: %w", err)
 	}
@@ -1333,6 +1438,16 @@ func (d *Driver) tickDevAdequacy(ctx context.Context, missionID int64, run *runS
 // survivors the dev's tests missed. ProvenMissed is how many of those
 // survivors the pool's test then killed — real, catchable gaps.
 func (d *Driver) tickPoolAdequacy(ctx context.Context, missionID int64, run *runState) error {
+	// The challenger writer pass, mirroring the challenger GENERATOR pass in
+	// tickDevAdequacy: guarded on a trimmed non-empty model, errors logged, the
+	// seat skipped. A shadow failure is NEVER fatal — it is measurement, not
+	// the gate — so this returns nothing and is run BEFORE the primary's own
+	// early return, giving the challenger every tick the primary's pipeline
+	// happens to take without ever adding one of its own.
+	if strings.TrimSpace(run.rs.ShadowWriterModel) != "" {
+		d.runShadowWriterPass(ctx, missionID, run)
+	}
+
 	tw, err := d.Q.TaskByID(run.testWriterTaskID)
 	if err != nil {
 		return fmt.Errorf("advpool: load test-writer task: %w", err)
@@ -1468,6 +1583,13 @@ func (d *Driver) tickPoolAdequacy(ctx context.Context, missionID int64, run *run
 		// through and let the writer try again.
 		if salvaged, ids, n, ok := d.salvageByDeselect(ctx, run, writerTest, rep); ok {
 			run.poolScored = true
+			run.writerSalvaged = true
+			// GRADED, and therefore measured: the salvaged remainder proved
+			// these survivors by execution. It is measured-but-CONFOUNDED (the
+			// challenger gets no equivalent rescue), which is a separate
+			// question, gated separately by writerSalvaged in
+			// recordMutantAttempts — see RULING P11 there.
+			run.primaryWriterMeasured = true
 			run.provenMissed = salvaged
 			run.provenIDs = ids
 			log.Printf("advpool: %s: the authored test failed on the unmutated code, but deselecting its %d failing test(s) left a sound remainder that PROVED %d of %d survivor(s)",
@@ -1515,6 +1637,10 @@ func (d *Driver) tickPoolAdequacy(ctx context.Context, missionID int64, run *run
 		run.authoredTestNotCollected = rep.AuthoredTestUnreached
 		return nil
 	}
+	// PAST the three non-grading diagnoses above: this suite passed on the
+	// unmutated code, killed its canary and scored something, so its kill
+	// vector is a real observation rather than an absence of one.
+	run.primaryWriterMeasured = true
 	poolSurvivors := survivorsFrom(rep, run.devSurvivors)
 	run.provenMissed = len(run.devSurvivors) - len(poolSurvivors)
 	// The evidence behind that count — see provenMutantIDs. Derived from the
@@ -1649,6 +1775,11 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 		}
 	}
 
+	// Feed both writer seats' per-mutant outcomes, pair-or-nothing. Same
+	// RecordID!=0 guard as BugCatch/CriticFindings above; see
+	// recordMutantAttempts' own doc for the rest of the gating.
+	d.recordMutantAttempts(run, v)
+
 	// Feed the matrix sink with the SAME matrix result tickMatrix already
 	// computed — only when the matrix actually ran (run.matrix != nil) and a
 	// sink is wired. Same RecordID!=0 guard as CriticFindings/BugCatch above.
@@ -1676,6 +1807,86 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	run.verdict = &v
 	d.mu.Unlock()
 	return &v, nil
+}
+
+// recordMutantAttempts feeds BOTH writer seats' per-mutant outcomes, or
+// neither.
+//
+// The pair rule is the point: an unpaired vector cannot contribute to a
+// within-run correlation, and a sink half-fed with unpairable rows would
+// invite pooling correlation across runs — which is confounded, because each
+// run has its own mutant set.
+func (d *Driver) recordMutantAttempts(run *runState, v Verdict) {
+	// The v.RecordID != 0 guard is the SAME one BugCatch and CriticFindings
+	// use, for the same reason (driver.go:1630): a Driver wired without a
+	// Signer leaves RecordID at zero, and rows carrying record_id=0 are
+	// unlinkable to the audit that produced them.
+	if d.MutantAttempts == nil || v.RecordID == 0 || run.rs.ShadowWriterModel == "" || !run.shadowWriterMeasured {
+		return
+	}
+	// UNMEASURED IS NOT ZERO — for the PRIMARY too. This guard was originally
+	// written for the challenger alone, which left two reachable paths to a
+	// signed verdict with run.provenIDs still nil (testWriterFailed and
+	// poolTestUnsound). On either, killedByPrimary below is empty and every
+	// survivor is written as `survived` for the primary: a total blind spot
+	// fabricated from a seat that never ran the code. See
+	// runState.primaryWriterMeasured for why this is a positive flag.
+	if !run.primaryWriterMeasured {
+		return
+	}
+	// RULING P11 — a SALVAGED primary is not comparable.
+	//
+	// The two seats run under asymmetric leniency: the primary gets
+	// salvageByDeselect (driver.go:1531 — a partially-broken suite has its
+	// failing selectors deselected and is re-scored, and that salvaged
+	// remainder becomes provenIDs), a clean-code repair round, and 3 attempts.
+	// The challenger gets 2 compile retries and neither rescue.
+	//
+	// So when the primary salvaged, its vector came from a deselected
+	// remainder and the challenger's did not, and the head-to-head quietly
+	// favours the primary. That is CONFOUNDED — the same class of error as
+	// scoring the two seats against different mutant sets — and this pool's
+	// standing discipline is to record no comparison rather than a confounded
+	// one.
+	if run.writerSalvaged {
+		return
+	}
+	// RULING P9: pair the two WRITERS over run.devSurvivors — the set both are
+	// asked to kill. `run.provenIDs` is the PRIMARY writer's proven-kill vector
+	// (driver.go:581, from provenMutantIDs(rep, run.devSurvivors)).
+	// Do NOT use run.devKilled: that is the DEV SUITE's vector over every
+	// mutant, so pairing it against a writer compares a writer to the
+	// developer's own tests, not writer to writer.
+	killedByPrimary := make(map[string]bool, len(run.provenIDs))
+	for _, id := range run.provenIDs {
+		killedByPrimary[id] = true
+	}
+	killedByShadow := make(map[string]bool, len(run.shadowWriterKilled))
+	for _, m := range run.shadowWriterKilled {
+		killedByShadow[m.ID] = true
+	}
+	outcome := func(killed bool) string {
+		if killed {
+			return "killed"
+		}
+		return "survived"
+	}
+	attempts := make([]MutantAttempt, 0, 2*len(run.devSurvivors))
+	for _, m := range run.devSurvivors {
+		attempts = append(attempts,
+			MutantAttempt{
+				Path: run.rs.CodePath, MutantID: m.ID,
+				Model: d.Assign[RoleTestWriter], Role: RoleTestWriter,
+				Shadow: false, Outcome: outcome(killedByPrimary[m.ID]),
+			},
+			MutantAttempt{
+				Path: run.rs.CodePath, MutantID: m.ID,
+				Model: run.rs.ShadowWriterModel, Role: RoleTestWriterShadow,
+				Shadow: true, Outcome: outcome(killedByShadow[m.ID]),
+			},
+		)
+	}
+	d.MutantAttempts.Record(v.RecordID, v.RecordHead, attempts)
 }
 
 // adjudicateCriticFindings builds the execution-checked adjudication for each

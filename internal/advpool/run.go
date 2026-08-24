@@ -49,6 +49,17 @@ type RunSpec struct {
 	// certification means exactly what it meant before. "" disables.
 	ShadowModel string
 
+	// ShadowWriterModel is the CHALLENGER writer model. When set, a second
+	// model authors its own suite against the SAME mutant set the primary
+	// writer faced, and both seats' per-mutant outcomes are recorded for a
+	// correlation measurement.
+	//
+	// OFF unless named, for the same reason ShadowModel is: it is a
+	// measurement seat that never gates a verdict, so the cost of it being off
+	// by default is nothing but a comparison nobody asked for — whereas a
+	// default would silently spend tokens and force a vendor.
+	ShadowWriterModel string
+
 	// Matrix opts a run into the tests×mutants matrix (swarm slice 5): after
 	// pool-adequacy, the driver enumerates the dev suite's individual tests
 	// and scores each ALONE against the run's own mutants, then drives critic

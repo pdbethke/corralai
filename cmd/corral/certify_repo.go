@@ -400,13 +400,17 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// not tell two model sets apart and every ledger row recorded "unset" —
 	// meaning the ledger could not be used to grade the models it exists to
 	// grade.
-	rmWriter, rmMutant, rmCritic, rmShadow := resolveRoleModels(localAuditInput{
+	// The repo-scan path exposes no --shadow-writer-model flag, so the
+	// challenger writer is always off here; resolveRoleModels/modelSetKey
+	// still take the empty value explicitly so the two paths never disagree
+	// about how a seat resolves.
+	rmWriter, rmMutant, rmCritic, rmShadow, rmShadowWriter := resolveRoleModels(localAuditInput{
 		writerModel: *writerModelFlag,
 		mutantModel: *mutantModelFlag,
 		criticModel: *criticModelFlag,
 		shadowModel: *shadowModelFlag,
 	})
-	modelSet := modelSetKey(rmWriter, rmMutant, rmCritic, rmShadow)
+	modelSet := modelSetKey(rmWriter, rmMutant, rmCritic, rmShadow, rmShadowWriter)
 
 	// AuditConfig, like ModelSet above, is part of a verdict's identity: it
 	// carries the flags that change what a mutant run against a given file

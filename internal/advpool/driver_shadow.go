@@ -4,10 +4,12 @@ package advpool
 
 import (
 	"context"
+	"errors"
 	"log"
 	"strings"
 	"time"
 
+	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/queue"
 )
 
@@ -207,4 +209,224 @@ func (d *Driver) runShadowPass(ctx context.Context, missionID int64, run *runSta
 		st.measured = true
 		run.shadowStats[idx] = st
 	}
+}
+
+// enqueueShadowWriter adds the CHALLENGER writer seat to the run, carrying the
+// SAME instruction and the same target as the primary writer's task under its
+// own role key. Called once, from tickDevAdequacy, at the moment the primary
+// is promoted with the survivors.
+//
+// Never fatal, and never returns an error: the seat records a comparison and
+// nothing else, so an enqueue failure logs and leaves the challenger absent —
+// exactly the outcome an operator who never named a challenger model gets.
+func (d *Driver) enqueueShadowWriter(missionID int64, run *runState, title, instruction string) {
+	if run.shadowWriterTaskID != 0 {
+		return
+	}
+	if err := d.Q.Enqueue(missionID, []queue.TaskSpec{{
+		Key:         RoleTestWriterShadow,
+		Role:        RoleTestWriterShadow,
+		Title:       "Challenger: " + title,
+		Instruction: instruction,
+		Model:       run.rs.ShadowWriterModel,
+	}}); err != nil {
+		log.Printf("advpool: run %d: could not enqueue the challenger writer seat (measurement only): %v", missionID, err)
+		return
+	}
+	tasks, lerr := d.tasksByRole(missionID, RoleTestWriterShadow)
+	if lerr != nil || len(tasks) == 0 {
+		log.Printf("advpool: run %d: challenger writer seat enqueued but not found (measurement only): %v", missionID, lerr)
+		return
+	}
+	run.shadowWriterTaskID = tasks[len(tasks)-1].ID
+}
+
+// runShadowWriterPass scores the CHALLENGER writer's own authored suite against
+// run.devSurvivors — the IDENTICAL set the primary writer is scored against
+// (tickPoolAdequacy's scoreAuthored call), and the set both writers were
+// actually asked to kill — so the head-to-head measures the WRITERS and not the
+// difficulty of two different exams.
+//
+// RULING P9: the universe is devSurvivors, NOT run.mutants. The paired vectors
+// are the two WRITERS' proven-kill sets — run.provenIDs for the primary and
+// run.shadowWriterKilled here — never run.devKilled, which is the DEV SUITE's
+// vector over every mutant. Pairing a writer against the dev suite would
+// compare a writer to the developer's own tests, which is a different question
+// from the one this seat exists to answer. devSurvivors is typically small, so
+// the downstream comparison will often be honestly under-powered; a correct
+// measurement that says "insufficient data" beats a confident measurement of
+// the wrong quantity.
+//
+// It is MEASUREMENT, held to the same invariants runShadowPass is:
+//
+//  1. A challenger failure is NEVER fatal. Every error path logs and leaves the
+//     seat unmeasured; nothing returns an error to Tick.
+//
+//  2. It cannot change the run's grade. It never writes devKilled,
+//     devSurvivors, testWriterAttempts, testWriterFailed or poolTestUnsound;
+//     its outcome never reaches aggregate() or the Verdict; it has its OWN
+//     retry budget (MaxShadowWriterAttempts) so a challenger that will not
+//     compile cannot starve the graded seat's retries; and the wall-clock it
+//     spends is credited back to the run's deadline clock (bounded, in
+//     aggregate across every entry, by ShadowTimeBudget) so enabling the
+//     challenger cannot tip a would-be-certified run into a needs-review
+//     TIMEOUT.
+//
+// UNMEASURED IS NOT ZERO. A suite that never compiled, never passed its
+// baseline, or never reached the file under audit produces an all-survive
+// vector that would read as a catastrophic blind spot in the challenger. Every
+// such path leaves shadowWriterMeasured false — recording nothing rather than a
+// fabricated zero, for the same reason the challenger generator's `measured`
+// flag exists.
+func (d *Driver) runShadowWriterPass(ctx context.Context, missionID int64, run *runState) {
+	if strings.TrimSpace(run.rs.ShadowWriterModel) == "" {
+		return
+	}
+	if run.shadowWriterMeasured || run.shadowWriterAttempts >= MaxShadowWriterAttempts {
+		return
+	}
+	if run.shadowWriterTaskID == 0 {
+		return
+	}
+	task, terr := d.Q.TaskByID(run.shadowWriterTaskID)
+	if terr != nil {
+		log.Printf("advpool: run %d: challenger writer seat unavailable (measurement only): %v", missionID, terr)
+		return
+	}
+	if task == nil || task.Status != queue.StatusDone {
+		// Never finished (still pending/claimed, or superseded): there is
+		// nothing to measure, and — critically — this must NOT hold up the
+		// primary run.
+		return
+	}
+	if task.Result == ShadowProviderFailedResult {
+		// The challenger's LLM call itself failed: there is no output to parse,
+		// and parsing it anyway would record a fabricated failure for a model
+		// that was never asked the question. Leave it unmeasured, and do NOT
+		// charge its own retry budget for something it never did.
+		return
+	}
+
+	budget := ShadowTimeBudget(d.RunDeadline)
+	started := d.Now()
+	if budget > 0 {
+		// Credit this pass's wall-clock spend back to the run's deadline clock
+		// on EVERY exit path, capped so the CUMULATIVE credit across every
+		// entry cannot exceed the shadow budget — see runShadowPass's
+		// invariant (2b) for why the cap matters, and shadowWriterSpent for why
+		// it is cumulative here.
+		defer func() {
+			elapsed := d.Now().Sub(started)
+			if left := budget - run.shadowWriterSpent; elapsed > left {
+				elapsed = left
+			}
+			if elapsed <= 0 {
+				return
+			}
+			run.shadowWriterSpent += elapsed
+			run.startedAt = run.startedAt.Add(elapsed)
+		}()
+	}
+
+	shadowTest := d.Validator.ParseTest(task.Result)
+	if cerr := d.Validator.CompileTest(ctx, run.rs.CodePath, run.rs.Code, shadowTest); cerr != nil {
+		// The challenger's OWN budget — never run.testWriterAttempts.
+		run.shadowWriterAttempts++
+		if run.shadowWriterAttempts >= MaxShadowWriterAttempts {
+			log.Printf("advpool: run %d: the challenger writer produced no compiling test after %d attempt(s) — recorded as UNMEASURED, not as zero kills: %v",
+				missionID, run.shadowWriterAttempts, cerr)
+			return
+		}
+		// A corrective retry, mirroring the primary's: feed the compiler's own
+		// error back, except when the model returned nothing at all (a repair
+		// prompt over an empty test only begets more emptiness) — then re-issue
+		// a fresh prompt.
+		instr := task.Instruction
+		if strings.TrimSpace(shadowTest) != "" {
+			var ce *CompileError
+			compileMsg := cerr.Error()
+			if errors.As(cerr, &ce) && strings.TrimSpace(ce.Output) != "" {
+				compileMsg = ce.Output
+			}
+			instr = renderTestWriterWithRepair(run.rs, run.sigs, run.devSurvivors, shadowTest, compileMsg)
+		}
+		newID, serr := d.Q.SupersedeTask(task.ID, queue.TaskSpec{
+			Key:         RoleTestWriterShadow,
+			Role:        RoleTestWriterShadow,
+			Title:       task.Title,
+			Instruction: instr,
+			Model:       run.rs.ShadowWriterModel,
+		})
+		if serr != nil {
+			log.Printf("advpool: run %d: could not reissue the challenger writer (measurement only): %v", missionID, serr)
+			return
+		}
+		run.shadowWriterTaskID = newID
+		if _, perr := d.Q.PromoteReady(missionID); perr != nil {
+			log.Printf("advpool: run %d: could not promote the reissued challenger writer (measurement only): %v", missionID, perr)
+		}
+		return
+	}
+
+	sctx := ctx
+	if budget > 0 {
+		left := budget - run.shadowWriterSpent - d.Now().Sub(started)
+		if left <= 0 {
+			log.Printf("advpool: run %d: shadow budget (%s) spent — the challenger writer is recorded as UNMEASURED, not as zero kills", missionID, budget)
+			return
+		}
+		var cancel context.CancelFunc
+		sctx, cancel = context.WithTimeout(ctx, left)
+		defer cancel()
+	}
+
+	// The SAME adequacy path the primary's authored test goes through, against
+	// the SAME slice (run.devSurvivors). Neither the mutants nor the survivor
+	// set is ever regenerated for the challenger: two writers facing different
+	// mutants is confounded by mutant difficulty.
+	rep, serr := scoreAuthored(sctx, d.Scorer, run.rs.CodePath, run.rs.Code, shadowTest, run.devSurvivors, run.rs.TestCmd)
+	if serr != nil {
+		// Infrastructure, not a challenger verdict — leave it unmeasured rather
+		// than recording a zero the comparison would read as a blind spot.
+		log.Printf("advpool: run %d: challenger writer scoring failed (measurement only): %v", missionID, serr)
+		return
+	}
+	// BEFORE any kill data is read: a suite that did not pass on the unmutated
+	// code, whose canary survived, whose own file the command never reached, or
+	// that scored nothing at all never ran the code under audit. Its empty
+	// Killed list is an ABSENCE OF MEASUREMENT, and reading it as a kill vector
+	// would report a challenger that never ran as one that caught nothing.
+	if !rep.CompliantPass || !rep.CanaryKilled || rep.AuthoredTestUnreached || rep.Total == 0 {
+		log.Printf("advpool: run %d: the challenger writer's test compiled but did not genuinely grade (CompliantPass=%v CanaryKilled=%v AuthoredTestUnreached=%v Total=%d) — recorded as UNMEASURED, not as zero kills",
+			missionID, rep.CompliantPass, rep.CanaryKilled, rep.AuthoredTestUnreached, rep.Total)
+		return
+	}
+	// Derived through provenMutantIDs — the SAME function that produces the
+	// primary's run.provenIDs — so the two paired vectors are computed by one
+	// rule and can never disagree about what "proven" means.
+	run.shadowWriterKilled = provenRefs(rep, run.devSurvivors)
+	run.shadowWriterMeasured = true
+	log.Printf("advpool: run %d: the challenger writer (%s) proved %d of %d survivor(s) — measurement only, it does not gate this verdict",
+		missionID, run.rs.ShadowWriterModel, len(run.shadowWriterKilled), len(run.devSurvivors))
+}
+
+// provenRefs is provenMutantIDs in MutantRef shape: the survivors an authored
+// suite actually killed, carrying ParentSHA256 so a recorded attempt names the
+// mutant the way scan_mutants does. Deliberately derived FROM provenMutantIDs
+// rather than re-deriving the same set from rep.Killed — one rule for "proven",
+// shared by both writers' vectors, so MutantRef.ID pairs one-for-one with the
+// primary's run.provenIDs.
+func provenRefs(rep adequacy.Report, survivors []adequacy.Mutant) []MutantRef {
+	byID := make(map[string]adequacy.Mutant, len(survivors))
+	for _, m := range survivors {
+		byID[m.ID] = m
+	}
+	ids := provenMutantIDs(rep, survivors)
+	refs := make([]MutantRef, 0, len(ids))
+	for _, id := range ids {
+		if m, ok := byID[id]; ok {
+			refs = append(refs, MutantRef{ID: m.ID, ParentSHA256: m.ParentSHA256})
+		}
+	}
+	return refs
 }

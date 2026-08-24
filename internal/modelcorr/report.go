@@ -5,23 +5,28 @@ package modelcorr
 import (
 	"sort"
 
-	"github.com/pdbethke/corralai/internal/scanstore"
+	"github.com/pdbethke/corralai/internal/mutantattempts"
 )
 
-// FromAttempts groups stored seat outcomes by (scan, path) and compares the
+// FromAttempts groups stored seat outcomes by (RECORD, path) and compares the
 // two models that faced that mutant set.
 //
+// The RECORD id is the run discriminator, and it is not optional. Grouping by
+// path alone would merge two audits of the same file — different mutants,
+// different survivor sets — into one last-write-wins vector, which is exactly
+// the cross-run pooling this package rejects: correlation is defined WITHIN a
+// run, over one fixed mutant set.
+//
 // A group with anything other than exactly two models is SKIPPED, not
-// approximated: correlation is defined here as a within-run, two-seat
-// comparison over one fixed mutant set.
-func FromAttempts(as []scanstore.MutantAttempt) ([]Pair, error) {
+// approximated, for the same reason.
+func FromAttempts(as []mutantattempts.Attempt) ([]Pair, error) {
 	type key struct {
-		scanID int64
-		path   string
+		recordID int64
+		path     string
 	}
 	groups := map[key]map[string]map[string]bool{}
 	for _, a := range as {
-		k := key{a.ScanID, a.Path}
+		k := key{a.RecordID, a.Path}
 		if groups[k] == nil {
 			groups[k] = map[string]map[string]bool{}
 		}

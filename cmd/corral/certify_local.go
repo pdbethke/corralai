@@ -203,8 +203,9 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		repo: strings.TrimSpace(*repoFlag), commit: strings.TrimSpace(*commitFlag),
 
 		matrix: *matrixFlag, record: rec, bugCatchDB: localBugCatchDBPath(), criticScoreDB: localCriticScoreDBPath(),
-		openStore: openStore,
-		stdout:    stdout, stderr: stderr,
+		mutantAttemptsDB: localMutantAttemptsDBPath(),
+		openStore:        openStore,
+		stdout:           stdout, stderr: stderr,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "corral certify --local: %v\n", err)
@@ -329,7 +330,12 @@ type localAuditInput struct {
 	// wants (N concurrent audits must not contend on one single-process
 	// DuckDB file).
 	criticScoreDB string
-	openStore     func() (*buildstore.Store, ed25519.PrivateKey, error)
+	// mutantAttemptsDB is the writer-seat correlation store for this run. Same
+	// contract again: empty means no feed. The repo scan leaves it empty for
+	// the same DuckDB-contention reason AND because it exposes no
+	// --shadow-writer-model, so it can never produce a pair to record.
+	mutantAttemptsDB string
+	openStore        func() (*buildstore.Store, ed25519.PrivateKey, error)
 
 	// Where the run's human-readable progress goes. nil = io.Discard (the
 	// repo scan's position: N concurrent files would interleave into mush).
@@ -1061,6 +1067,17 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 	}
 	_ = criticRowsRecorded
 
+	// The writer-seat correlation feed, on the same terms. Wired ONLY here
+	// because `certify --local` is the only command that can set
+	// RunSpec.ShadowWriterModel — and until this existed, advpool computed the
+	// pair, found d.MutantAttempts nil, and threw every row away.
+	var attemptRowsRecorded *int64
+	if strings.TrimSpace(in.mutantAttemptsDB) != "" {
+		var closeAttempts func()
+		closeAttempts, _, attemptRowsRecorded = wireLocalMutantAttempts(d, in.mutantAttemptsDB, repo, commit, stderr)
+		defer closeAttempts()
+	}
+
 	rs := newAuditRunSpec(in, roles, runSubject{
 		repo: repo, commit: commit,
 		codePath: codeKey, code: string(code),
@@ -1176,6 +1193,16 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 	if shadow != "" && len(shards) > 0 && shadowRowsRecorded != nil {
 		if n := atomic.LoadInt64(shadowRowsRecorded); n > 0 {
 			fmt.Fprintf(stdout, "shadow: recorded %d row(s) to the scorecard\n", n)
+		}
+	}
+
+	// Same PAST-TENSE discipline for the challenger WRITER's head-to-head, and
+	// the same silence when nothing landed: a challenger that was named but
+	// ended unmeasured, or a primary that never genuinely graded, writes no
+	// rows PAIR-OR-NOTHING and must not be reported as if it had.
+	if rs.ShadowWriterModel != "" && attemptRowsRecorded != nil {
+		if n := atomic.LoadInt64(attemptRowsRecorded); n > 0 {
+			fmt.Fprintf(stdout, "shadow-writer: recorded %d per-mutant outcome(s) for the two writer seats\n", n)
 		}
 	}
 

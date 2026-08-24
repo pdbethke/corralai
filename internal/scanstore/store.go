@@ -369,30 +369,6 @@ func Open(dsn string) (*Store, error) {
 		return nil, fmt.Errorf("scanstore: create scan_mutants table: %w", err)
 	}
 
-	// mutant_attempts is one row per SEAT per mutant — the grain scan_mutants
-	// deliberately does not have, because scan_mutants answers "what happened
-	// to this mutant" for the ONE graded suite and is read back as a flat list
-	// by MutantsForScan. Adding a model column there would silently double
-	// that list for every existing consumer, so the measurement lives in its
-	// own table where it cannot corrupt the gating path by omission.
-	//
-	// Rows are written as a PAIR or not at all (see advpool's shadow writer
-	// pass): an unpaired vector cannot contribute to a within-run correlation,
-	// and a table half-full of unpairable rows would invite exactly the
-	// cross-run pooling the design rejects.
-	//
-	// The CHECK on outcome exists for the same reason scan_mutants has one:
-	// this table is queried by exact string, and a typo'd label should fail
-	// loud at INSERT rather than quietly enter a leaderboard.
-	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS mutant_attempts (
-		scan_id BIGINT, path VARCHAR, mutant_id VARCHAR,
-		model VARCHAR, role VARCHAR, shadow BOOLEAN,
-		outcome VARCHAR CHECK (outcome IN ('killed', 'survived'))
-	)`); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("scanstore: create mutant_attempts table: %w", err)
-	}
-
 	// scans.id allocation: a CREATE SEQUENCE + nextval(), the same approach
 	// internal/buildstore, internal/telemetry, internal/reference and
 	// internal/repoindex already use for their own BIGINT PRIMARY KEYs on

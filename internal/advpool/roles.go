@@ -321,6 +321,24 @@ func shardTitle(sh Shard) string {
 // and the kill-rate rises) under a fixed certification threshold.
 const RoleMutantGeneratorShadow = "mutant-generator-shadow"
 
+// RoleTestWriterShadow is the CHALLENGER writer seat: a second model authoring
+// its own suite against the SAME mutant set as the primary writer, for a
+// mutant-controlled head-to-head.
+//
+// It is a DISTINCT role key on purpose, exactly as RoleMutantGeneratorShadow
+// is: tasksByRole(RoleTestWriter) therefore CANNOT return a shadow task, and
+// the exclusion is structural rather than a boolean someone must remember to
+// check. This is the gate.
+//
+// Scoring both writers against the IDENTICAL mutant set is the controlled-
+// comparison invariant. Two writers facing different mutants is confounded by
+// mutant difficulty, exactly as assigning models to different SHARDS would be
+// confounded by region difficulty.
+//
+// The seat NEVER gates: its outcome cannot reach the verdict, the aggregate,
+// or the certification record.
+const RoleTestWriterShadow = "test-writer-shadow"
+
 // ResolveShadowModel resolves an operator's shadow-model override into the
 // RunSpec.ShadowModel value: "off"/"none" (case-insensitive) disables the
 // challenger, and anything else passes through verbatim as the challenger's

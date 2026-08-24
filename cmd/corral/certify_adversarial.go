@@ -38,6 +38,7 @@ type advVerdict struct {
 	Lang            string            `json:"Lang"`
 	DevKillRate     float64           `json:"DevKillRate"`
 	MutantsTotal    int               `json:"MutantsTotal"`
+	MutantsInvalid  int               `json:"MutantsInvalid"`
 	Survivors       int               `json:"Survivors"`
 	ProvenMissed    int               `json:"ProvenMissed"`
 	RegionsTotal    int               `json:"RegionsTotal"`
@@ -403,6 +404,12 @@ func renderAdvVerdict(w io.Writer, codePath string, v advVerdict) {
 	fmt.Fprintf(w, "  status:        %-12s (dev suite killed %d/%d mutants)\n", status, killed, v.MutantsTotal)
 	fmt.Fprintf(w, "  dev_kill_rate: %.2f\n", v.DevKillRate)
 	fmt.Fprintf(w, "  survivors:     %d\n", v.Survivors)
+	if v.MutantsInvalid > 0 {
+		// Never hidden. A run whose generator produced mostly unbuildable
+		// mutants graded a far smaller exam than the budget implies, and the
+		// kill rate above is over the GRADED ones only.
+		fmt.Fprintf(w, "  invalid:       %d mutant(s) failed the compile check and were not graded (evidence about the generator, not your tests)\n", v.MutantsInvalid)
+	}
 	if v.TimedOut {
 		// A claim carries how it was earned: dev_kill_rate/survivors above
 		// ARE real measurements (the run wouldn't be here, gradable, if they

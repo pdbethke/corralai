@@ -470,7 +470,9 @@ func (b *ollamaBackend) Chat(messages []Message, tools []any) (Message, error) {
 	// already paid for duplicated judgment at these two loops.
 	ollamareq.Decorate(body, b.model)
 	err := postJSON(b.url+"/api/chat", nil, body, &out)
-	return out.Message, err
+	// A context-size rejection names a limit that is corral's own num_ctx, not
+	// the model's trained maximum, so the obvious reading is the wrong one.
+	return out.Message, ollamareq.WrapErr(err)
 }
 
 // ---- OpenAI-compatible (/v1/chat/completions) — also Gemini, OpenRouter, local ----

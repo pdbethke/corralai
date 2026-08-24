@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -63,5 +64,26 @@ func TestOllamaSendsThinkFalseOnlyForQwen3Plus(t *testing.T) {
 				t.Errorf("think = %v, want false", v)
 			}
 		})
+	}
+}
+
+// THE WIRE, again: a hint that never reaches a caller is a hint nobody reads.
+// This branch has now shipped three features whose value died at an unwired
+// boundary, so the guidance gets a test that it survives the backend's error
+// path rather than only existing in ollamareq.
+func TestOllamaBackendWrapsContextOverflow(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		io.WriteString(w, `{"error":"request (15802 tokens) exceeds the available context size (4096)"}`)
+	}))
+	defer srv.Close()
+
+	b := &ollamaBackend{url: srv.URL, model: "deepseek-r1:14b"}
+	_, err := b.Chat([]Message{{Role: "user", Content: "hi"}}, nil)
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	if !strings.Contains(err.Error(), "CORRALAI_OLLAMA_NUM_CTX") {
+		t.Errorf("the context-overflow hint did not survive the backend's error path: %v", err)
 	}
 }

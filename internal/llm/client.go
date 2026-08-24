@@ -170,7 +170,7 @@ func (c *Client) askOllama(ctx context.Context, system, user string) (string, er
 	ollamareq.Decorate(body, c.model)
 	err := c.post(ctx, c.ollamaURL+"/api/chat", nil, body, &out)
 	if err != nil {
-		return "", err
+		return "", ollamareq.WrapErr(err)
 	}
 	return strings.TrimSpace(out.Message.Content), nil
 }

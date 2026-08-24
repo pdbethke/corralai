@@ -3,6 +3,8 @@
 package ollamareq
 
 import (
+	"errors"
+	"strings"
 	"testing"
 )
 
@@ -70,5 +72,48 @@ func TestDecorateLeavesThinkUnsetForNonReasoningModels(t *testing.T) {
 	Decorate(body, "qwen2.5-coder:14b")
 	if _, ok := body["think"]; ok {
 		t.Error("think must be OMITTED for a model with no reasoning pass — it is an ollama-specific field")
+	}
+}
+
+// The default is a VRAM budget, not a preference. Measured on a 16.37GB card
+// with a 9.5GB model: 16384 -> 12.0GB resident, 32768 -> 15.1GB (92% of the
+// card). At 32768 two writer seats cannot both stay resident, each load evicts
+// the other and re-reads ~9GB from disk, and a real audit died on the 180s HTTP
+// timeout doing exactly that.
+func TestDefaultNumCtxLeavesVRAMHeadroom(t *testing.T) {
+	if DefaultNumCtx > 16384 {
+		t.Errorf("DefaultNumCtx = %d: measured at 15.1GB of a 16.37GB card at 32768, which starves seat swapping", DefaultNumCtx)
+	}
+	// It must still clear the 15802-token prompt that originally failed.
+	if DefaultNumCtx < 15802 {
+		t.Errorf("DefaultNumCtx = %d does not clear the 15802-token prompt that motivated setting num_ctx at all", DefaultNumCtx)
+	}
+}
+
+// The raw Ollama error names a token count and a limit but not the KNOB, and
+// the limit is corral's own num_ctx rather than the model's trained maximum —
+// so the obvious reading ("this model is too small") is the wrong one.
+func TestContextOverflowHintNamesTheKnob(t *testing.T) {
+	err := errors.New(`400 Bad Request: request (15802 tokens) exceeds the available context size (4096)`)
+	hint := ContextOverflowHint(err)
+	if hint == "" {
+		t.Fatal("no hint produced for a context-size rejection")
+	}
+	for _, want := range []string{NumCtxEnv, "num_ctx"} {
+		if !strings.Contains(hint, want) {
+			t.Errorf("hint does not mention %q: %s", want, hint)
+		}
+	}
+	if !strings.Contains(strings.ToLower(hint), "not the model") {
+		t.Errorf("hint must correct the obvious wrong conclusion (that the MODEL is too small): %s", hint)
+	}
+}
+
+func TestContextOverflowHintIgnoresOtherErrors(t *testing.T) {
+	if h := ContextOverflowHint(errors.New("connection refused")); h != "" {
+		t.Errorf("hint = %q for an unrelated error, want empty so callers can wrap unconditionally", h)
+	}
+	if h := ContextOverflowHint(nil); h != "" {
+		t.Errorf("hint = %q for nil", h)
 	}
 }

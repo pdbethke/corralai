@@ -25,10 +25,10 @@ package modelcorr
 import "fmt"
 
 // MinSurvivorUnion is the smallest survivor union that yields a reportable
-// coefficient. Below it, Compare returns Sufficient=false and zeroed
-// coefficients: a Jaccard over three survivors is noise, and emitting it
-// anyway is how a number outlives its caveats. Same fail-closed reflex as
-// adequacy.Report's CanaryKilled gating KillRate.
+// coefficient. Below it, Compare returns Sufficient=false, KappaDefined=false
+// and zeroed coefficients: a Jaccard over three survivors is noise, and
+// emitting it anyway is how a number outlives its caveats. Same fail-closed
+// reflex as adequacy.Report's CanaryKilled gating KillRate.
 const MinSurvivorUnion = 10
 
 // Vector is one seat's per-mutant outcome for a single run: mutant ID -> was
@@ -55,11 +55,28 @@ type Pair struct {
 	Jaccard float64
 	// Kappa is Cohen's kappa over the full vector: is their agreement more
 	// than chance predicts from their individual kill rates? A DIFFERENT
-	// question from Jaccard — report both, never blend them.
+	// question from Jaccard — report both, never blend them. Meaningless, and
+	// NOT zero, unless KappaDefined.
 	Kappa float64
-	// Sufficient is false when UnionSurvivors < MinSurvivorUnion. Callers MUST
-	// check it before reading Jaccard or Kappa.
+	// Sufficient governs JACCARD ALONE: it is false exactly when
+	// UnionSurvivors < MinSurvivorUnion, i.e. when the survivor union is too
+	// small for the headline coefficient to mean anything. Callers MUST check
+	// it before reading Jaccard.
 	Sufficient bool
+	// KappaDefined governs KAPPA ALONE. Cohen's kappa divides by (1 - p_e),
+	// which is zero when both seats are degenerate over the same outcome —
+	// chance agreement is already total, so "agreement beyond chance" has no
+	// value, not a value of 0. Callers MUST check this before reading Kappa.
+	//
+	// TWO INDEPENDENT STATISTICS, TWO INDEPENDENT SUFFICIENCY FLAGS. One bool
+	// gating both is precisely the blending the spec forbids ("report both;
+	// never blend them into one score"), and it suppressed the single most
+	// important result this package can produce: past the MinSurvivorUnion
+	// return, p_e == 1 means both seats survived EVERYTHING, so the union is
+	// |M| >= MinSurvivorUnion and the intersection is |M| — Jaccard 1.0, a
+	// TOTAL shared blind spot, which used to be zeroed and reported as
+	// indistinguishable from "insufficient data".
+	KappaDefined bool
 }
 
 // Compare computes the pairwise statistics for two seats that faced the
@@ -106,12 +123,17 @@ func Compare(a, b Vector) (Pair, error) {
 	killedB := n - float64(p.SurvivedB)
 	pe := (killedA/n)*(killedB/n) + (float64(p.SurvivedA)/n)*(float64(p.SurvivedB)/n)
 	if pe == 1 {
-		// Both seats were degenerate (all-kill or all-survive); kappa is
-		// undefined. Report no coefficient rather than a fabricated 0 or 1.
-		p.Sufficient = false
-		p.Jaccard = 0
-		return p, nil
+		// Both seats were degenerate over the same outcome, so kappa is
+		// undefined: report NO coefficient rather than a fabricated 0 or 1.
+		//
+		// The Jaccard above is untouched and stays reported. It is not
+		// affected by kappa's degeneracy — and past the MinSurvivorUnion
+		// return this branch can only be reached by both seats surviving
+		// everything, which is Jaccard 1.0: the total shared blind spot this
+		// package exists to surface.
+		return p, nil // KappaDefined stays false; Kappa stays zero.
 	}
+	p.KappaDefined = true
 	p.Kappa = (po - pe) / (1 - pe)
 	return p, nil
 }

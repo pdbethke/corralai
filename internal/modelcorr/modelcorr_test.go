@@ -113,8 +113,62 @@ func TestCompareBelowThresholdIsInsufficient(t *testing.T) {
 	if got.Sufficient {
 		t.Error("Sufficient = true on a union of 1 survivor — that is noise, not a measurement")
 	}
+	if got.KappaDefined {
+		t.Error("KappaDefined = true below the survivor threshold — no coefficient is reportable there")
+	}
 	if got.Jaccard != 0 || got.Kappa != 0 {
 		t.Errorf("Jaccard/Kappa = %v/%v, want 0/0 when insufficient — a coefficient must not be emitted", got.Jaccard, got.Kappa)
+	}
+}
+
+// THE HEADLINE RESULT, previously suppressed. Past the MinSurvivorUnion early
+// return, p_e == 1 can only mean both seats survived EVERYTHING: union = |M|,
+// intersection = |M|, Jaccard 1.0 — a TOTAL shared blind spot, the single most
+// important thing this package can say. The old code zeroed that Jaccard and
+// set Sufficient=false along with it, making the worst possible finding
+// indistinguishable from "not enough data".
+//
+// Kappa genuinely IS undefined here (1 - p_e is zero), which is a fact about
+// kappa and not about Jaccard. Two statistics, two flags.
+func TestBothSeatsSurvivingEverythingIsATotalSharedBlindSpot(t *testing.T) {
+	// 12 mutants, nothing killed by either seat.
+	a := vec("A", twelve())
+	b := vec("B", twelve())
+	got, err := Compare(a, b)
+	if err != nil {
+		t.Fatalf("Compare: %v", err)
+	}
+	if !got.Sufficient {
+		t.Fatalf("Sufficient = false over a survivor union of %d — the Jaccard question is fully answerable and this is the worst answer there is", got.UnionSurvivors)
+	}
+	if got.Jaccard != 1 {
+		t.Errorf("Jaccard = %v, want 1 — both seats missed every mutant, which is a total shared blind spot", got.Jaccard)
+	}
+	if got.UnionSurvivors != 12 || got.SharedSurvivors != 12 {
+		t.Errorf("shared/union = %d/%d, want 12/12", got.SharedSurvivors, got.UnionSurvivors)
+	}
+	if got.KappaDefined {
+		t.Error("KappaDefined = true where 1 - p_e is zero — kappa has no value here")
+	}
+	if got.Kappa != 0 {
+		t.Errorf("Kappa = %v with KappaDefined false; the zero must be inert, and callers must read the flag, never the number", got.Kappa)
+	}
+}
+
+// The mirror: both seats killing everything is degenerate for kappa too, but
+// there the survivor union is EMPTY, so the Jaccard question is unanswerable
+// for the ordinary reason (below threshold) rather than because of kappa.
+func TestBothSeatsKillingEverythingIsInsufficientNotABlindSpot(t *testing.T) {
+	all := ids(1, 12)
+	got, err := Compare(vec("A", twelve(all...)), vec("B", twelve(all...)))
+	if err != nil {
+		t.Fatalf("Compare: %v", err)
+	}
+	if got.Sufficient || got.Jaccard != 0 {
+		t.Errorf("Sufficient/Jaccard = %v/%v — an EMPTY survivor union answers nothing about shared blind spots", got.Sufficient, got.Jaccard)
+	}
+	if got.KappaDefined {
+		t.Error("KappaDefined = true where both seats killed everything")
 	}
 }
 
@@ -136,6 +190,9 @@ func TestKappaIsChanceCorrected(t *testing.T) {
 	got, err := Compare(a, b)
 	if err != nil {
 		t.Fatalf("Compare: %v", err)
+	}
+	if !got.KappaDefined {
+		t.Fatal("KappaDefined = false on a balanced split — kappa is perfectly well defined here")
 	}
 	if math.Abs(got.Kappa-1) > 1e-9 {
 		t.Errorf("Kappa = %v, want 1 for perfect agreement", got.Kappa)

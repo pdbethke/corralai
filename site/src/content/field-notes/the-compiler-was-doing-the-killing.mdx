@@ -1,0 +1,168 @@
+---
+title: "The compiler was doing the killing"
+description: "Corral signed a record saying a test suite caught 10 of 13 injected bugs in a file its tests never execute. The suite caught none of them. A mutant that fails to build makes the test command exit non-zero, and that was being scored as a kill — so the number the whole product rests on was crediting the compiler's work to the tests."
+pubDate: 2026-08-24
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+
+*Field note. This one is ours, it was in the number we sign, and it had been there the whole time.*
+
+---
+
+## The claim the product rests on
+
+Corral answers one question: **would your tests have caught it?** It plants mutants
+in your code, runs your suite against each one, and signs a record saying what
+fraction got caught.
+
+That fraction is the product. Everything else — the jail, the signature, the
+transparency log — exists to make it trustworthy. So it matters a great deal what
+counts as "caught."
+
+Here is what counted as caught:
+
+```go
+// test PASSED on a violation => it did NOT catch it
+outcomes[i] = outcome{killed: !passed}
+```
+
+`passed` means the test command exited zero. And `go test` exits non-zero for a
+failing test, for a build failure, and for a vet rejection — three different
+things, scored identically.
+
+A mutant that never compiled was being recorded as a bug your tests caught.
+
+## What it looked like from outside
+
+We pointed corral at `internal/transparency/rekor.go`, a 328-line file in our own
+repo with **0% statement coverage on every one of its functions**. Nothing in the
+test suite executes it.
+
+The signed verdict:
+
+```
+status:        NEEDS-REVIEW (dev suite killed 10/13 mutants)
+dev_kill_rate: 0.77
+```
+
+Seventy-seven percent. On a file whose tests never run.
+
+That number is not a rounding error or an off-by-one. It is a cryptographically
+signed, offline-verifiable attestation that a suite caught ten bugs it could not
+possibly have noticed.
+
+## The asymmetry that hid it
+
+Corral was already careful about this — in the other direction.
+
+When the pool authors a test, `Validator.CompileTest` builds it before the driver
+trusts it, and there is a retry loop that feeds the compiler error back so the
+model can fix it. We watched that work three times in one run.
+
+Mutants got none of that. `ParseMutants` applied the search/replace hunk and
+handed the result straight to scoring. Nothing checked that a mutant built.
+
+So the tool verified that a **test** compiles before believing it, and never
+verified that a **mutant** compiles before scoring against it. Both halves were
+written by people who understood the risk. Neither noticed the other half was
+missing.
+
+## The fix, and what it exposed
+
+A mutant that fails the language's own compile check is now `Invalid` — not
+killed, not survived. It leaves the denominator entirely, because it is evidence
+about the generator, not about your suite.
+
+The check is the language plugin's own `CompileCheck`, the same one already used
+for authored tests. Nothing pattern-matches compiler output, which would have
+quietly misclassified Python, Ruby, JavaScript and TypeScript while looking fine
+on Go.
+
+Same file, same seats, with the gate on:
+
+```
+status:        NEEDS-REVIEW (dev suite killed 0/4 mutants)
+dev_kill_rate: 0.00
+invalid:       11 mutant(s) failed the compile check and were not graded
+```
+
+Of the mutants that actually built, the suite killed **none**. Which is the only
+honest answer for a file it never executes.
+
+**A caveat we owe you:** those two runs generated different mutant sets — 13 and
+15 — because generation is not deterministic. It is not a controlled A/B. The
+argument does not rest on the pairing. It rests on this: when only buildable
+mutants were graded, this suite killed **0 of 4**. A suite that detects nothing
+cannot have detected ten.
+
+## Then it got worse, and then it got better
+
+With the gate on, a second file told us something we had not been looking for.
+`internal/admission/admission.go` is 117 lines and imports nothing outside the
+standard library. The generator produced 12 mutants. **11 of them did not
+compile.**
+
+Under the old scoring, 11 of 12 would have been counted as kills.
+
+So we made the gate say *why*, capturing what the compiler actually printed. Three
+causes, all the same shape:
+
+```
+expected '(', found readLoadAvg    -> a dropped closing brace
+undefined: time                    -> referenced a package that is not imported
+"fmt" imported and not used        -> removed the LAST use of an import
+```
+
+The third one is the lesson. That mutation was **correct**. It replaced both
+refusal paths with `return &localLease{l: l}, nil`, making the admission
+controller always grant a lease — violating the stated goal precisely as
+instructed. It was a good mutant. It failed because deleting both `fmt.Errorf`
+calls orphaned the `fmt` import, and Go rejects an unused import outright where
+most languages warn.
+
+A model editing through a minimal hunk cannot reach the import block. It could not
+have fixed what it broke.
+
+We had spent most of a day concluding that small local models had a capability
+ceiling at this seat. They did not. They were doing the task correctly and losing
+to a language rule nobody had told them about. We added four sentences to the
+prompt naming the traps. On the same file, the next two runs graded 6 of 7 and 10
+of 12 mutants — against 1 of 12 before.
+
+## What we got wrong along the way
+
+We kept the mistakes in because they are the same mistake.
+
+Adding `Report.Invalid` was not enough: the count never left the scoring package,
+so the fix silently shrank the exam without telling anyone. Then the count reached
+the log but not the signed verdict, because the driver builds a `Verdict` in two
+places and only one was updated. That converter already carried a comment reading
+*"Field-by-field converters here have now dropped a field twice in one day."* We
+made it three.
+
+Every one of those was found by running the real command and reading the output.
+None was found by the test suite, which stayed green throughout — because each
+piece was correct in isolation.
+
+## Why this one is different
+
+Most bugs cost you time. This one cost credibility, which is the only thing an
+audit tool has.
+
+A wrong kill rate is not a wrong number in a dashboard. It is a signed statement,
+verifiable offline, that someone could reasonably rely on to decide a change is
+adequately tested. The signature was valid. The claim inside it was not.
+
+And the inflation was worst exactly where an honest number matters most: on
+low-coverage code, where more mutations fail to build and fewer are genuinely
+caught. The worse your tests, the better corral said they were.
+
+Kill rates will now be lower, and some runs that were certified will move to
+needs-review. That is the point. Those certifications were not earned. Records
+signed under the old scoring are not comparable to new ones, and we would rather
+say so than quietly renumber the past.
+
+If your tooling grades work an AI produced, it is worth asking which of your
+"passed" answers merely failed to fail — and whether anything in your pipeline
+would tell you the difference.

@@ -603,7 +603,15 @@ type auditRoles struct {
 	assign                 advpool.RoleAssignment
 	shadow                 string
 	writer, mutant, critic string
-	chatterFor             func(role string) agentworker.Chatter
+	// shadowWriter is the CHALLENGER writer model, carried here for the SAME
+	// reason shadow is: resolveRoleModels resolves it, but the only consumer
+	// that can act on it is the RunSpec, and a field that stops at the
+	// RoleAssignment never reaches advpool's driver. Dropping it here is
+	// precisely how --shadow-writer-model came to force a cache miss, demand a
+	// credential, and name a seat in the SIGNED record while never enqueueing
+	// one line of challenger work — see newAuditRunSpec.
+	shadowWriter string
+	chatterFor   func(role string) agentworker.Chatter
 	// meter accumulates every seat's reported token usage for the whole run.
 	// An audit's cost is O(mutants x suite runtime) on the execution side and
 	// O(tokens) on the model side; the ledger already records the first half,
@@ -831,7 +839,55 @@ func resolveAuditRoles(in localAuditInput, stderr io.Writer) (auditRoles, error)
 		return r, auditUsageErr("%v", err)
 	}
 
-	return auditRoles{assign: assign, shadow: shadow, writer: writer, mutant: mutant, critic: critic, chatterFor: chatterFor, meter: meter}, nil
+	return auditRoles{assign: assign, shadow: shadow, shadowWriter: shadowWriter, writer: writer, mutant: mutant, critic: critic, chatterFor: chatterFor, meter: meter}, nil
+}
+
+// runSubject is the FILE-and-repo half of a RunSpec: everything
+// prepareAuditJail and the git lookups resolved, as distinct from the
+// flag-and-model half that localAuditInput and auditRoles already carry.
+// Grouping it keeps newAuditRunSpec to three parameters instead of eleven.
+type runSubject struct {
+	repo, commit         string
+	codePath, code       string
+	devTestPath, devTest string
+	lang, importPath     string
+}
+
+// newAuditRunSpec assembles one file's RunSpec from the resolved flags, the
+// resolved role models, and the prepared subject.
+//
+// It is a FUNCTION, not the inline literal it used to be, because the
+// CLI→RunSpec seam had no test at all — and that is exactly what hid the
+// challenger writer being resolved, credential-checked, written into the cache
+// key and into the signed record's ModelsByRole, and then never placed on the
+// RunSpec any consumer reads. Every seat model this run will use is now
+// assembled in one testable place.
+func newAuditRunSpec(in localAuditInput, roles auditRoles, subj runSubject) advpool.RunSpec {
+	n := in.nMutants
+	if n <= 0 {
+		n = 5
+	}
+	return advpool.RunSpec{
+		Repo: subj.repo, Commit: subj.commit, Goal: strings.TrimSpace(in.goal),
+		CodePath: subj.codePath, Code: subj.code,
+		DevTestPath: subj.devTestPath, DevTestCode: subj.devTest,
+		// Quoted, not space-joined: TestCmd is a STRING that gets re-split
+		// downstream, and a plain Join is not reversible — an argument
+		// containing a space (an inline -e script, --filter="a b") comes back
+		// as several arguments and the command that runs is not the one the
+		// operator typed. Pairs with adequacy.ShellSplit.
+		TestCmd:   adequacy.ShellJoin(in.checkArgv),
+		NMutants:  n,
+		Lang:      subj.lang,
+		MaxShards: resolveMaxShards(in.maxShards),
+		// Both challenger seats, from the SAME resolved struct the
+		// RoleAssignment was built from — so a seat that is named, paid for and
+		// recorded is also a seat the driver can actually run.
+		ShadowModel:       roles.shadow,
+		ShadowWriterModel: roles.shadowWriter,
+		Matrix:            in.matrix,
+		ImportPath:        subj.importPath,
+	}
 }
 
 // auditOneFile runs ONE file's complete adversarial-pool audit in-process and
@@ -1005,27 +1061,12 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 	}
 	_ = criticRowsRecorded
 
-	n := in.nMutants
-	if n <= 0 {
-		n = 5
-	}
-	rs := advpool.RunSpec{
-		Repo: repo, Commit: commit, Goal: strings.TrimSpace(in.goal),
-		CodePath: codeKey, Code: string(code),
-		DevTestPath: devTestKey, DevTestCode: string(devTest),
-		// Quoted, not space-joined: TestCmd is a STRING that gets re-split
-		// downstream, and a plain Join is not reversible — an argument
-		// containing a space (an inline -e script, --filter="a b") comes back
-		// as several arguments and the command that runs is not the one the
-		// operator typed. Pairs with adequacy.ShellSplit.
-		TestCmd:     adequacy.ShellJoin(in.checkArgv),
-		NMutants:    n,
-		Lang:        plug.Name(),
-		MaxShards:   resolveMaxShards(in.maxShards),
-		ShadowModel: shadow,
-		Matrix:      in.matrix,
-		ImportPath:  prep.importPath,
-	}
+	rs := newAuditRunSpec(in, roles, runSubject{
+		repo: repo, commit: commit,
+		codePath: codeKey, code: string(code),
+		devTestPath: devTestKey, devTest: string(devTest),
+		lang: plug.Name(), importPath: prep.importPath,
+	})
 
 	// Signatures are best-effort (mirrors the brain's StartRun): a failure just
 	// degrades the prompt to no signatures, never refuses the run.

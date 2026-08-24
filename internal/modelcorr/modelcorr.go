@@ -25,11 +25,32 @@ package modelcorr
 import "fmt"
 
 // MinSurvivorUnion is the smallest survivor union that yields a reportable
-// coefficient. Below it, Compare returns Sufficient=false, KappaDefined=false
-// and zeroed coefficients: a Jaccard over three survivors is noise, and
-// emitting it anyway is how a number outlives its caveats. Same fail-closed
-// reflex as adequacy.Report's CanaryKilled gating KillRate.
-const MinSurvivorUnion = 10
+// coefficient. Below it, Compare returns Sufficient=false with zeroed
+// coefficients rather than a number.
+//
+// SET FROM MEASUREMENT, NOT FROM TASTE. It was originally 10, guessed before
+// any run existed, and the spec listed it as an open risk to be settled
+// against real distributions. Those distributions arrived and said 10 is
+// unreachable:
+//
+//	internal/modelcorr/modelcorr.go   thorough tests   3 mutants   0 survivors
+//	internal/transparency/rekor.go    0% coverage     13 mutants   3 survivors
+//	internal/transparency/rekor.go    0% coverage     15 mutants   4 survivors
+//
+// The universe is the DEV SUITE'S SURVIVORS, so a union of 10 needs ten missed
+// bugs in one file. The second and third rows are the best case available — a
+// 328-line file nothing exercises — and they top out at four. A floor of 10
+// does not make the statistic careful; it makes it silent forever.
+//
+// READ THE DENOMINATORS. A Jaccard over three or four survivors is COARSE: it
+// can only take a handful of values, and one mutant moving between sets swings
+// it hard. That is precisely why Pair carries |M|, |S_A|, |S_B| and the
+// intersection, and why they must be reported beside any coefficient. This
+// floor separates "no evidence" from "little evidence"; it does not turn
+// little evidence into much.
+//
+// Revisit it as real runs accumulate — with data this time.
+const MinSurvivorUnion = 3
 
 // Vector is one seat's per-mutant outcome for a single run: mutant ID -> was
 // it killed. Both vectors in a Compare MUST cover the identical mutant set.

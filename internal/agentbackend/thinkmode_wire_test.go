@@ -45,6 +45,16 @@ func TestOllamaSendsThinkFalseOnlyForQwen3Plus(t *testing.T) {
 				t.Fatalf("Chat: %v", err)
 			}
 
+			// num_ctx must reach the wire for EVERY model: without it ollama
+			// silently uses its own small default and a normal-sized prompt
+			// fails with "exceeds the available context size" on a model
+			// trained for 30x that.
+			if o, ok := body["options"].(map[string]any); !ok {
+				t.Errorf("no options map on the wire — num_ctx cannot be set")
+			} else if o["num_ctx"] == nil {
+				t.Errorf("num_ctx absent from the wire body: %v", o)
+			}
+
 			v, present := body["think"]
 			if present != c.wantSent {
 				t.Fatalf("think field present = %v, want %v (body: %v)", present, c.wantSent, body)

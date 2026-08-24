@@ -20,7 +20,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pdbethke/corralai/internal/thinkmode"
+	"github.com/pdbethke/corralai/internal/ollamareq"
 )
 
 // Client is a single-shot text chat client. Construct with FromEnv.
@@ -166,11 +166,8 @@ func (c *Client) askOllama(ctx context.Context, system, user string) (string, er
 			{"role": "user", "content": user},
 		},
 	}
-	// Qwen 3+ reasons into a separate `thinking` field and would hand back an
-	// EMPTY content on a truncated reply — a silent failure, not an error.
-	if thinkmode.Suppress(c.model) {
-		body["think"] = false
-	}
+	// See ollamareq.Decorate: num_ctx plus think-suppression, in one place.
+	ollamareq.Decorate(body, c.model)
 	err := c.post(ctx, c.ollamaURL+"/api/chat", nil, body, &out)
 	if err != nil {
 		return "", err

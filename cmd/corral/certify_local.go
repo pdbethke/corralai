@@ -1554,7 +1554,8 @@ func advVerdictFromPool(v advpool.Verdict) advVerdict {
 	out := advVerdict{
 		Repo: v.Repo, Commit: v.Commit, Lang: v.Lang,
 		DevKillRate: v.DevKillRate, MutantsTotal: v.MutantsTotal,
-		Survivors: v.Survivors, ProvenMissed: v.ProvenMissed,
+		MutantsInvalid: v.MutantsInvalid,
+		Survivors:      v.Survivors, ProvenMissed: v.ProvenMissed,
 		ModelsByRole: v.ModelsByRole, Status: v.Status,
 		RecordID: v.RecordID, RecordHead: v.RecordHead,
 		RegionsTotal: v.RegionsTotal, RegionsProbed: v.RegionsProbed,

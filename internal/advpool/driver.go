@@ -1361,8 +1361,16 @@ func (d *Driver) tickDevAdequacy(ctx context.Context, missionID int64, run *runS
 		// is fine, the check command is pointed somewhere else.
 		log.Printf("advpool: run %d dev-adequacy: COULD NOT GRADE — the dev suite PASSED on deliberately invalid source, so it never compiles or imports %s; the suite is fine, the check command does not exercise this file", missionID, run.rs.CodePath)
 	default:
-		log.Printf("advpool: run %d dev-adequacy: the dev's OWN tests scored %.0f%% (killed %d of %d mutants, %d survived — bugs the dev's tests miss)",
-			missionID, killRate*100, len(mutants)-len(survivors), len(mutants), len(survivors))
+		// Counts come from the GRADED set. Inferring kills as
+		// len(mutants)-len(survivors) treated every compile-gate reject as a
+		// kill, which printed "killed 11 of 15" beside a rate of 0% — the exact
+		// inflation the gate removes, reappearing in the log line.
+		invalidNote := ""
+		if run.mutantsInvalid > 0 {
+			invalidNote = fmt.Sprintf("; %d mutant(s) failed the compile check and were NOT graded", run.mutantsInvalid)
+		}
+		log.Printf("advpool: run %d dev-adequacy: the dev's OWN tests scored %.0f%% (killed %d of %d graded mutants, %d survived — bugs the dev's tests miss)%s",
+			missionID, killRate*100, run.mutantsTotal-len(survivors), run.mutantsTotal, len(survivors), invalidNote)
 	}
 	d.emit(missionID, "pool_dev_adequacy", "", map[string]any{
 		"dev_kill_rate": run.devKillRate, "mutants_total": run.mutantsTotal,

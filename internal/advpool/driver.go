@@ -429,6 +429,11 @@ type runState struct {
 	// are evidence about the GENERATOR, not the suite, so they are excluded
 	// from mutantsTotal and reported separately rather than hidden.
 	mutantsInvalid int
+	// invalidReasons maps a rejected mutant's ID to what the compile checker
+	// printed. Kept so the run can SAY why the exam shrank — a bare count
+	// cannot distinguish a generator dropping a used import from one changing a
+	// signature, and cannot be fed back to the model that made the mistake.
+	invalidReasons map[string]string
 	devSurvivors   []adequacy.Mutant
 	// devKilled is the mutant-level counterpart to devSurvivors: the mutants
 	// the dev suite's OWN tests killed (rep.Killed), reduced to MutantRef (id
@@ -1047,6 +1052,7 @@ func applyDevScore(ctx context.Context, run *runState, scorer Scorer, mutants []
 	// the exam it assembled rather than from a scorer's self-report — the same
 	// soundness-#1 reflex that keeps DevKillRate off a worker's word.
 	run.mutantsInvalid = len(rep.Invalid)
+	run.invalidReasons = rep.InvalidReasons
 	run.mutantsTotal = len(mutants) - run.mutantsInvalid
 	run.devSurvivors = survivorsFrom(rep, mutants)
 	run.devKilled = toMutantRefs(killedFrom(rep, mutants))
@@ -1368,6 +1374,12 @@ func (d *Driver) tickDevAdequacy(ctx context.Context, missionID int64, run *runS
 		invalidNote := ""
 		if run.mutantsInvalid > 0 {
 			invalidNote = fmt.Sprintf("; %d mutant(s) failed the compile check and were NOT graded", run.mutantsInvalid)
+		}
+		// A COUNT cannot be acted on. Sample the compiler's own words so the
+		// operator (and, later, a repair round) can see what the generator got
+		// wrong, rather than only that it got something wrong.
+		for _, id := range sampleInvalidReasons(run, 3) {
+			log.Printf("advpool: run %d invalid mutant %s: %s", missionID, id, firstLine(run.invalidReasons[id]))
 		}
 		log.Printf("advpool: run %d dev-adequacy: the dev's OWN tests scored %.0f%% (killed %d of %d graded mutants, %d survived — bugs the dev's tests miss)%s",
 			missionID, killRate*100, run.mutantsTotal-len(survivors), run.mutantsTotal, len(survivors), invalidNote)
@@ -2226,4 +2238,34 @@ func (d *Driver) tasksByRole(missionID int64, role string) ([]queue.Task, error)
 		return out[i].Key < out[j].Key
 	})
 	return out, nil
+}
+
+// sampleInvalidReasons returns up to n IDs of rejected mutants that carry a
+// recorded reason, in Invalid order so the sample is deterministic.
+func sampleInvalidReasons(run *runState, n int) []string {
+	if len(run.invalidReasons) == 0 {
+		return nil
+	}
+	out := make([]string, 0, n)
+	for _, m := range run.mutants {
+		if len(out) >= n {
+			break
+		}
+		if _, ok := run.invalidReasons[m.ID]; ok {
+			out = append(out, m.ID)
+		}
+	}
+	return out
+}
+
+// firstLine trims a compiler's multi-line output to its first meaningful line,
+// which is the diagnosis; the rest is usually position noise.
+func firstLine(s string) string {
+	for _, l := range strings.Split(s, "\n") {
+		l = strings.TrimSpace(l)
+		if l != "" && !strings.HasPrefix(l, "#") {
+			return l
+		}
+	}
+	return strings.TrimSpace(s)
 }

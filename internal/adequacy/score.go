@@ -20,6 +20,7 @@ package adequacy
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 )
@@ -220,6 +221,15 @@ type Report struct {
 	// reported, never silently dropped — hiding it would trade one dishonesty
 	// for another.
 	Invalid []string
+	// InvalidReasons maps an Invalid mutant's ID to what the compile checker
+	// actually printed, when the Jail can report output (VerboseJail).
+	//
+	// The COUNT says the exam shrank; only the REASON says why. Live audits
+	// rejected 56-92% of mutants and the count alone could not distinguish a
+	// generator dropping a used import from one changing a signature — nor
+	// could anything feed the mistake back so the model could correct it. A
+	// plain Jail leaves this empty rather than failing.
+	InvalidReasons map[string]string
 }
 
 // VerboseJail is a Jail that can also report what a run PRINTED, not just
@@ -288,6 +298,24 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 
 	run := func(rctx context.Context, code string) (bool, error) {
 		return runCmd(rctx, code, testCmd)
+	}
+
+	// runCmdVerbose keeps the checker's OUTPUT when the Jail can report it.
+	// Mutant test runs deliberately stay on the plain path (their output is not
+	// evidence), but a COMPILE rejection's output is the only thing that says
+	// why — and is what a future repair round would feed back to the generator.
+	runCmdVerbose := func(rctx context.Context, code string, cmd []string) (bool, string, error) {
+		vj, ok := j.(VerboseJail)
+		if !ok {
+			pass, err := runCmd(rctx, code, cmd)
+			return pass, "", err
+		}
+		files := make(map[string]string, len(base)+1)
+		for k, v := range base {
+			files[k] = v
+		}
+		files[codePath] = code
+		return vj.RunTestVerbose(rctx, files, cmd)
 	}
 
 	// The BASELINE run alone goes through the verbose path when the jail offers
@@ -371,9 +399,10 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 	// reproducible, and this ledger is signed: an ordering that depended on
 	// scheduling would make two runs of identical inputs disagree.
 	type outcome struct {
-		killed  bool
-		err     error
-		invalid bool
+		killed        bool
+		err           error
+		invalid       bool
+		invalidReason string
 	}
 	outcomes := make([]outcome, len(mutants))
 
@@ -383,7 +412,7 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 		if len(cfg.mutantCompileCheck) > 0 {
 			gctx, gcancel := context.WithTimeout(ctx, perMutant)
 			for _, cmd := range cfg.mutantCompileCheck {
-				ok, err := runCmd(gctx, m.Code, cmd)
+				ok, out, err := runCmdVerbose(gctx, m.Code, cmd)
 				if err != nil {
 					// FAIL CLOSED. A gate that could not RUN says nothing about
 					// the mutant; treating that as "invalid" would quietly erase
@@ -394,7 +423,7 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 				}
 				if !ok {
 					gcancel()
-					outcomes[i] = outcome{invalid: true}
+					outcomes[i] = outcome{invalid: true, invalidReason: strings.TrimSpace(out)}
 					return
 				}
 			}
@@ -446,6 +475,12 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 		}
 		if outcomes[i].invalid {
 			rep.Invalid = append(rep.Invalid, m.ID)
+			if r := outcomes[i].invalidReason; r != "" {
+				if rep.InvalidReasons == nil {
+					rep.InvalidReasons = map[string]string{}
+				}
+				rep.InvalidReasons[m.ID] = r
+			}
 			continue
 		}
 		if outcomes[i].killed {

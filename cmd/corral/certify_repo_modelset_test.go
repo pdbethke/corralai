@@ -20,8 +20,8 @@ func TestCacheKeyVariesWithTheCriticModel(t *testing.T) {
 		AuditConfig: "", Substrate: reposcan.SubstrateWorkspace,
 	}
 	a, b := base, base
-	a.ModelSet = modelSetKey("claude-sonnet-5", "claude-sonnet-5", "claude-haiku-4-5", "off")
-	b.ModelSet = modelSetKey("claude-sonnet-5", "claude-sonnet-5", "gemini-3.6-flash", "off")
+	a.ModelSet = modelSetKey("claude-sonnet-5", "claude-sonnet-5", "claude-haiku-4-5", "off", "")
+	b.ModelSet = modelSetKey("claude-sonnet-5", "claude-sonnet-5", "gemini-3.6-flash", "off", "")
 
 	if a.CacheKey() == b.CacheKey() {
 		t.Fatal("two different critic models produced the same cache key — a cached verdict would cross a model switch")
@@ -29,7 +29,7 @@ func TestCacheKeyVariesWithTheCriticModel(t *testing.T) {
 }
 
 func TestModelSetKeyIsCanonicalAndNamesEveryRole(t *testing.T) {
-	got := modelSetKey("claude-sonnet-5", "claude-sonnet-5", "claude-haiku-4-5", "off")
+	got := modelSetKey("claude-sonnet-5", "claude-sonnet-5", "claude-haiku-4-5", "off", "")
 	want := "critic=claude-haiku-4-5,mutant-generator=claude-sonnet-5,shadow=off,test-writer=claude-sonnet-5"
 	if got != want {
 		t.Fatalf("modelSetKey = %q, want %q", got, want)
@@ -46,23 +46,42 @@ func TestModelSetKeyIsCanonicalAndNamesEveryRole(t *testing.T) {
 // resolveAuditRoles, not filled — so the contract here is that the resolver
 // reports exactly what it was given.
 func TestResolveRoleModelsAppliesNoDefaults(t *testing.T) {
-	w, m, c, sh := resolveRoleModels(localAuditInput{})
-	if w != "" || m != "" || c != "" || sh != "" {
-		t.Fatalf("unnamed seats resolved to (%q, %q, %q, %q), want all empty — no seat has a default", w, m, c, sh)
+	w, m, c, sh, shw := resolveRoleModels(localAuditInput{})
+	if w != "" || m != "" || c != "" || sh != "" || shw != "" {
+		t.Fatalf("unnamed seats resolved to (%q, %q, %q, %q, %q), want all empty — no seat has a default", w, m, c, sh, shw)
 	}
 
 	// "off" is a resolution, not a model name: it must reach the key as "",
 	// so a deliberately disabled critic never keys as a model called "off".
-	_, _, off, _ := resolveRoleModels(localAuditInput{criticModel: "off"})
+	_, _, off, _, _ := resolveRoleModels(localAuditInput{criticModel: "off"})
 	if off != "" {
 		t.Fatalf("critic \"off\" resolved to %q, want \"\"", off)
 	}
 
 	// Whitespace is trimmed, so " claude-sonnet-5 " and "claude-sonnet-5"
 	// cannot key as two different herds for the same audit.
-	w2, m2, _, _ := resolveRoleModels(localAuditInput{writerModel: "  gemini-3.6-flash  ", mutantModel: "x"})
+	w2, m2, _, _, _ := resolveRoleModels(localAuditInput{writerModel: "  gemini-3.6-flash  ", mutantModel: "x"})
 	if w2 != "gemini-3.6-flash" || m2 != "x" {
 		t.Fatalf("resolved = (%q, %q), want trimmed passthrough", w2, m2)
+	}
+}
+
+// The challenger writer must NOT change the key when off: a run with it off
+// is byte-identical to a pre-feature run, so the cache key must be too, or
+// shipping this feature invalidates every cached verdict in existence.
+// Naming a challenger DOES change the key, which is required so enabling it
+// forces the re-run that collects the measurement instead of hitting cache.
+func TestModelSetKeyOmitsShadowWriterWhenEmptyButIncludesItWhenNamed(t *testing.T) {
+	preFeature := "critic=claude-haiku-4-5,mutant-generator=claude-sonnet-5,shadow=off,test-writer=claude-sonnet-5"
+
+	off := modelSetKey("claude-sonnet-5", "claude-sonnet-5", "claude-haiku-4-5", "off", "")
+	if off != preFeature {
+		t.Fatalf("modelSetKey with an empty shadow writer = %q, want the pre-feature key %q — an off-by-default seat must not invalidate existing cache entries", off, preFeature)
+	}
+
+	named := modelSetKey("claude-sonnet-5", "claude-sonnet-5", "claude-haiku-4-5", "off", "gemma4")
+	if named == preFeature {
+		t.Fatal("modelSetKey did not change when a shadow writer was named — enabling the challenger would silently hit a cached verdict and collect no measurement")
 	}
 }
 

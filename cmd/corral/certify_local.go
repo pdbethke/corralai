@@ -108,6 +108,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	swarmFlag := fs.Int("swarm", 0, "max concurrent audit workers (0 = auto-size to this host's cores). The BUDGET clamp: independent role tasks run in parallel up to this bound, so a big audit swarms without melting the box")
 	maxShardsFlag := fs.Int("max-shards", 0, "max mutant-generator seats fanned out across the file's functions (0 = "+fmt.Sprint(advpool.DefaultMaxShards)+"). Bounds PARALLELISM only — every function is probed regardless; --n-mutants is the PER-SHARD budget")
 	shadowModelFlag := fs.String("shadow-model", "", "challenger model that attacks every region a SECOND time for a region-controlled head-to-head. OFF unless named. Recorded for comparison — NEVER gates the verdict")
+	shadowWriterModelFlag := fs.String("shadow-writer-model", "", "challenger WRITER model that authors a second suite against the SAME mutant set for a mutant-controlled head-to-head. OFF unless named. Recorded for correlation — NEVER gates the verdict")
 	matrixFlag := fs.Bool("matrix", false, "opt into the tests×mutants matrix: after the primary pass, re-score EVERY dev test ALONE against the run's mutants — a per-test adequacy readout + a delete-candidate list, instead of one dev-suite-wide number. COSTLY: T tests × M mutants extra jail runs (T×M, on top of the primary pass), so leave off by default on a big suite")
 	var bindDirFlag stringSlice
 	fs.Var(&bindDirFlag, "bind-dir", "extra repo-relative dependency dir to mount read-only into the jail instead of copying it into the workspace (repeatable; node_modules/vendor/.venv/venv/.bundle are auto-detected) — --repo-dir mode only")
@@ -194,6 +195,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 
 		writerModel: *writerModel, criticModel: *criticModel,
 		mutantModel: *mutantModel, shadowModel: *shadowModelFlag,
+		shadowWriterModel: *shadowWriterModelFlag,
 
 		jail: *jailFlag, checkArgv: checkArgv,
 		bindDirs: bindDirFlag, noBindDeps: *noBindDepsFlag,
@@ -280,6 +282,7 @@ type localAuditInput struct {
 
 	// Role models. Empty means this file's stock default.
 	writerModel, criticModel, mutantModel, shadowModel string
+	shadowWriterModel                                  string
 
 	// Jail + workspace. jail empty = auto-detect this OS's backend (never
 	// unsandboxed). checkArgv is the project's own test command, required in
@@ -674,9 +677,9 @@ func herdNotConfiguredErr(cmdName, writer, mutant string) error {
 // the free `--dry-run` path too, where there is no key to check and nothing to
 // spend. Keeping one spelling of "what model does this role actually use"
 // stops the key and the preflight from ever disagreeing.
-func resolveRoleModels(in localAuditInput) (writer, mutant, critic, shadow string) {
+func resolveRoleModels(in localAuditInput) (writer, mutant, critic, shadow, shadowWriter string) {
 	// No defaults behind any seat — corral has none. "off" resolves to "" for
-	// the two optional seats, and an empty grading seat is refused by the
+	// the optional seats, and an empty grading seat is refused by the
 	// caller (herdNotConfiguredErr) rather than filled.
 	//
 	// This is the ONE place a seat's model is resolved, so the cache key and
@@ -686,7 +689,8 @@ func resolveRoleModels(in localAuditInput) (writer, mutant, critic, shadow strin
 	return strings.TrimSpace(in.writerModel),
 		strings.TrimSpace(in.mutantModel),
 		advpool.ResolveOptionalModel(in.criticModel, ""),
-		resolveShadowModel(in.shadowModel)
+		resolveShadowModel(in.shadowModel),
+		advpool.ResolveOptionalModel(in.shadowWriterModel, "")
 }
 
 // modelSetKey is the canonical KeyInputs.ModelSet for a resolved role set.
@@ -696,13 +700,27 @@ func resolveRoleModels(in localAuditInput) (writer, mutant, critic, shadow strin
 // without a decoder ring. A disabled role keeps its resolved value ("off")
 // rather than being dropped: "the critic was deliberately disabled" and "the
 // critic ran" are different audits and must key differently.
-func modelSetKey(writer, mutant, critic, shadow string) string {
-	return reposcan.CanonicalKV(map[string]string{
+func modelSetKey(writer, mutant, critic, shadow, shadowWriter string) string {
+	kv := map[string]string{
 		"test-writer":      writer,
 		"mutant-generator": mutant,
 		"critic":           critic,
 		"shadow":           shadow,
-	})
+	}
+	// Omitted when off, DELIBERATELY breaking the keep-disabled-seats-in-the-key
+	// convention the other optional seats follow. The critic's on/off changes
+	// what an audit MEASURES, so it must key differently. The challenger writer
+	// cannot change the verdict at all — a run with it off is byte-identical to
+	// a pre-feature run, so including an empty entry would invalidate every
+	// cached verdict in existence on upgrade, for no change in meaning.
+	//
+	// Naming a challenger DOES add the entry, which is required: without it,
+	// enabling the challenger would hit a cached verdict, skip the run, and
+	// silently collect no measurement at all.
+	if shadowWriter != "" {
+		kv["test-writer-shadow"] = shadowWriter
+	}
+	return reposcan.CanonicalKV(kv)
 }
 
 // resolveAuditRoles resolves the role models, enforces decorrelation, requires
@@ -718,7 +736,7 @@ func resolveAuditRoles(in localAuditInput, stderr io.Writer) (auditRoles, error)
 	// Resolve the models and enforce decorrelation BEFORE doing any I/O — an
 	// operator override that collapses critic==writer must fail fast, not after
 	// opening stores and a jail.
-	writer, mutant, critic, shadow := resolveRoleModels(in)
+	writer, mutant, critic, shadow, shadowWriter := resolveRoleModels(in)
 	if err := herdNotConfiguredErr(in.cmdName, writer, mutant); err != nil {
 		return r, err
 	}
@@ -732,6 +750,9 @@ func resolveAuditRoles(in localAuditInput, stderr io.Writer) (auditRoles, error)
 		// a shadow model equal to the critic's (the stock default) is expected
 		// and must NOT error — it is a measurement seat, never a grading one.
 		assign[advpool.RoleMutantGeneratorShadow] = shadow
+	}
+	if shadowWriter != "" {
+		assign[advpool.RoleTestWriterShadow] = shadowWriter
 	}
 	if shadow != "" && shadow == mutant {
 		// A head-to-head of a model against ITSELF is not a comparison — it

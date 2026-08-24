@@ -43,8 +43,9 @@ type scoreCall struct {
 // the second the pool score (survivors against the pool's authored test) —
 // matching the order Tick's state machine actually calls Score in.
 type fakeScorer struct {
-	calls []scoreCall
-	err   error
+	devInvalid []string // mutant IDs the compile gate rejected (scripted)
+	calls      []scoreCall
+	err        error
 	// failFirstN, when > 0 (together with err), makes Score fail with err on
 	// exactly the first failFirstN call ATTEMPTS (successful or not — this
 	// counts total attempts), then succeed on every attempt after —
@@ -199,7 +200,9 @@ func (f *fakeScorer) ScoreReport(ctx context.Context, codePath, code, test strin
 		if f.devCanarySurvives {
 			return adequacy.Report{CompliantPass: true, CanaryKilled: false}, nil
 		}
-		return devReportFrom(kr, survivors, mutants), nil
+		rep := devReportFrom(kr, survivors, mutants)
+		rep.Invalid = f.devInvalid
+		return rep, nil
 	}
 	if f.reportFn != nil {
 		return f.reportFn(ctx, codePath, code, test, mutants, testCmd)
@@ -2199,6 +2202,9 @@ func obsFor(obs []BugCatchObservation, role string) (BugCatchObservation, bool) 
 type scoredRun struct {
 	survivors, provenMissed, mutantsTotal, vacuous int
 	writerModel, criticModel                       string
+	// invalid scripts how many mutants the compile gate rejected, so a test can
+	// prove the count survives to the SIGNED verdict.
+	invalid int
 }
 
 // scoredRunVacuous stashes each newScoredRun's vacuous-finding count, keyed
@@ -2230,6 +2236,9 @@ func newScoredRun(t *testing.T, cfg scoredRun) (*Driver, int64) {
 	poolSurvivors := append([]adequacy.Mutant(nil), devSurvivors[:poolSurvivorCount]...)
 
 	scorer := &fakeScorer{devKillRate: 0.5, devSurvivors: devSurvivors, poolSurvivors: poolSurvivors}
+	for i := 0; i < cfg.invalid; i++ {
+		scorer.devInvalid = append(scorer.devInvalid, fmt.Sprintf("invalid%d", i+1))
+	}
 
 	mutants := make([]adequacy.Mutant, cfg.mutantsTotal)
 	copy(mutants, devSurvivors)

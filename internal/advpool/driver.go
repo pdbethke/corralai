@@ -249,9 +249,14 @@ type Verdict struct {
 	// runtime — the single input to the audit cost model (O(mutants x the
 	// TARGET's suite runtime)). See adequacy.Report.BaselineDuration.
 	BaselineDuration time.Duration
-	MutantsTotal     int // total mutants the mutant-generator produced
-	Survivors        int // mutants the dev's own tests did NOT kill
-	ProvenMissed     int // survivors the pool's authored test then killed — real, catchable gaps
+	MutantsTotal     int // mutants actually GRADED (compile-gate rejects excluded)
+	// MutantsInvalid counts mutants that failed the language's own compile
+	// check and were never run. Surfaced rather than dropped: a run where the
+	// generator produced mostly unbuildable mutants graded a much smaller exam
+	// than its mutant budget suggests, and the operator must be able to see it.
+	MutantsInvalid int
+	Survivors      int // mutants the dev's own tests did NOT kill
+	ProvenMissed   int // survivors the pool's authored test then killed — real, catchable gaps
 	// ProvenMutantIDs is the EVIDENCE behind ProvenMissed: which survivors the
 	// authored test actually killed, derived from the same scoring report so
 	// the two can never disagree. Empty on every path that did not grade
@@ -420,7 +425,11 @@ type runState struct {
 	devScored    bool
 	devKillRate  float64
 	mutantsTotal int
-	devSurvivors []adequacy.Mutant
+	// mutantsInvalid counts mutants the language's compile gate rejected. They
+	// are evidence about the GENERATOR, not the suite, so they are excluded
+	// from mutantsTotal and reported separately rather than hidden.
+	mutantsInvalid int
+	devSurvivors   []adequacy.Mutant
 	// devKilled is the mutant-level counterpart to devSurvivors: the mutants
 	// the dev suite's OWN tests killed (rep.Killed), reduced to MutantRef (id
 	// + ParentSHA256, no source) at the point it's built, since nothing else
@@ -1029,7 +1038,16 @@ func applyDevScore(ctx context.Context, run *runState, scorer Scorer, mutants []
 	run.suiteIgnoresFile = rep.CompliantPass && !rep.CanaryKilled
 	run.devScored = true
 	run.devKillRate = rep.KillRate()
-	run.mutantsTotal = len(mutants)
+	// The GRADED count: emitted minus what the compile gate rejected. Reporting
+	// the emitted count would print "killed 10 of 13" beside a rate computed
+	// over 9 — the same inflation the gate removes, moved into the summary line.
+	//
+	// Derived from the mutant SLICE (minus invalids), not from rep.Total, to
+	// preserve the driver's standing invariant that its mutant total comes from
+	// the exam it assembled rather than from a scorer's self-report — the same
+	// soundness-#1 reflex that keeps DevKillRate off a worker's word.
+	run.mutantsInvalid = len(rep.Invalid)
+	run.mutantsTotal = len(mutants) - run.mutantsInvalid
 	run.devSurvivors = survivorsFrom(rep, mutants)
 	run.devKilled = toMutantRefs(killedFrom(rep, mutants))
 	run.mutants = mutants
@@ -1343,8 +1361,16 @@ func (d *Driver) tickDevAdequacy(ctx context.Context, missionID int64, run *runS
 		// is fine, the check command is pointed somewhere else.
 		log.Printf("advpool: run %d dev-adequacy: COULD NOT GRADE — the dev suite PASSED on deliberately invalid source, so it never compiles or imports %s; the suite is fine, the check command does not exercise this file", missionID, run.rs.CodePath)
 	default:
-		log.Printf("advpool: run %d dev-adequacy: the dev's OWN tests scored %.0f%% (killed %d of %d mutants, %d survived — bugs the dev's tests miss)",
-			missionID, killRate*100, len(mutants)-len(survivors), len(mutants), len(survivors))
+		// Counts come from the GRADED set. Inferring kills as
+		// len(mutants)-len(survivors) treated every compile-gate reject as a
+		// kill, which printed "killed 11 of 15" beside a rate of 0% — the exact
+		// inflation the gate removes, reappearing in the log line.
+		invalidNote := ""
+		if run.mutantsInvalid > 0 {
+			invalidNote = fmt.Sprintf("; %d mutant(s) failed the compile check and were NOT graded", run.mutantsInvalid)
+		}
+		log.Printf("advpool: run %d dev-adequacy: the dev's OWN tests scored %.0f%% (killed %d of %d graded mutants, %d survived — bugs the dev's tests miss)%s",
+			missionID, killRate*100, run.mutantsTotal-len(survivors), run.mutantsTotal, len(survivors), invalidNote)
 	}
 	d.emit(missionID, "pool_dev_adequacy", "", map[string]any{
 		"dev_kill_rate": run.devKillRate, "mutants_total": run.mutantsTotal,
@@ -1968,6 +1994,7 @@ func (d *Driver) timeoutVerdict(run *runState) Verdict {
 		DevKillRate:      run.devKillRate,
 		BaselineDuration: run.baselineDuration,
 		MutantsTotal:     run.mutantsTotal,
+		MutantsInvalid:   run.mutantsInvalid,
 		Survivors:        len(run.devSurvivors),
 		ProvenMissed:     run.provenMissed,
 		// The mutant-level evidence must ride the TIMEOUT verdict too, for the

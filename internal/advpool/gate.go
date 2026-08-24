@@ -217,17 +217,62 @@ type JailScorer struct {
 // Factored out because there are three such calls with identical options and a
 // fourth would be added by the next feature — a per-call copy is exactly how
 // one path silently keeps scoring sequentially while the others parallelize.
-func (s JailScorer) scoreOpts() []adequacy.ScoreOption {
+func (s JailScorer) baseScoreOpts() []adequacy.ScoreOption {
 	return []adequacy.ScoreOption{
 		adequacy.WithMutantTimeout(s.MutantTimeout),
 		adequacy.WithConcurrency(s.Concurrency),
 	}
 }
 
+// gatedScoreOpts is baseScoreOpts PLUS the mutant compile gate. It is used by
+// the DEV-scoring paths only — the ones that produce DevKillRate, the number
+// the signed record asserts.
+//
+// ScoreAuthoredReport deliberately does NOT use it. The mutants it is handed
+// are SURVIVORS of the dev pass, so they have already demonstrated they build
+// and run; re-gating them buys nothing, costs a check per survivor, and adds a
+// real failure mode — the authored test shares the workspace, so a test that
+// compiles but trips a stricter checker would mark every survivor invalid and
+// erase the very set being adjudicated.
+func (s JailScorer) gatedScoreOpts(codePath string, base map[string]string) []adequacy.ScoreOption {
+	opts := s.baseScoreOpts()
+
+	// THE MUTANT COMPILE GATE. Without it, a mutant that does not build makes
+	// the test command exit non-zero and adequacy scored that as a KILL — the
+	// suite credited with catching a bug that never existed in runnable form.
+	// The inflation lands hardest on low-coverage code, where more mutations
+	// fail to build and fewer are genuinely caught, and corral's product is a
+	// SIGNED record asserting "your tests catch K% of injected bugs".
+	//
+	// The check is the LANGUAGE PLUGIN's own (the same CompileCheck sequence
+	// JailValidator.CompileTest already uses for authored tests), so nothing
+	// here pattern-matches compiler output — which would silently misclassify
+	// for python, ruby, javascript and typescript.
+	p, err := pluginFor(codePath)
+	if err != nil {
+		// An unsupported language cannot be audited at all; it fails with a
+		// real message elsewhere. Inventing a gate here would only turn that
+		// into "every mutant invalid", which is a worse diagnosis.
+		return opts
+	}
+	testPath := authoredTestPath(codePath, s.DevTestPath, s.BaseFiles)
+	if _, ok := base[testPath]; !ok {
+		// A per-file checker (python, ruby, node) is handed BOTH paths and
+		// fails on one that is not in the workspace — which would mark EVERY
+		// mutant invalid and erase the exam entirely. The code file is always
+		// present, and gating the mutant is what this is for.
+		testPath = codePath
+	}
+	if cc := p.CompileCheck(codePath, testPath); len(cc) > 0 {
+		opts = append(opts, adequacy.WithMutantCompileCheck(cc))
+	}
+	return opts
+}
+
 func (s JailScorer) Score(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (float64, []adequacy.Mutant, error) {
 	scoreBase, cmd := s.scoreWorkspace(codePath, test, testCmd)
 
-	rep, err := adequacy.Score(ctx, s.Jail, scoreBase, codePath, code, mutants, cmd, s.scoreOpts()...)
+	rep, err := adequacy.Score(ctx, s.Jail, scoreBase, codePath, code, mutants, cmd, s.gatedScoreOpts(codePath, scoreBase)...)
 	if err != nil {
 		return 0, nil, fmt.Errorf("advpool: score: %w", err)
 	}
@@ -242,7 +287,7 @@ func (s JailScorer) Score(ctx context.Context, codePath, code, test string, muta
 func (s JailScorer) ScoreReport(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (adequacy.Report, error) {
 	scoreBase, cmd := s.scoreWorkspace(codePath, test, testCmd)
 
-	rep, err := adequacy.Score(ctx, s.Jail, scoreBase, codePath, code, mutants, cmd, s.scoreOpts()...)
+	rep, err := adequacy.Score(ctx, s.Jail, scoreBase, codePath, code, mutants, cmd, s.gatedScoreOpts(codePath, scoreBase)...)
 	if err != nil {
 		return adequacy.Report{}, fmt.Errorf("advpool: score report: %w", err)
 	}
@@ -275,7 +320,7 @@ func (s JailScorer) ScoreAuthoredReport(ctx context.Context, codePath, code, tes
 		scoreBase = s.authoredWorkspace(codePath, test)
 	}
 
-	rep, err := adequacy.Score(ctx, s.Jail, scoreBase, codePath, code, mutants, cmd, s.scoreOpts()...)
+	rep, err := adequacy.Score(ctx, s.Jail, scoreBase, codePath, code, mutants, cmd, s.baseScoreOpts()...)
 	if err != nil {
 		return adequacy.Report{}, fmt.Errorf("advpool: score authored report: %w", err)
 	}

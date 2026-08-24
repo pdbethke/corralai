@@ -499,9 +499,24 @@ func TestShadowWriterUngradedSuiteIsUnmeasuredNotZero(t *testing.T) {
 		name string
 		rep  adequacy.Report
 	}{
+		// EXACTLY ONE clause of the guard may fire per case. A case that
+		// satisfies two of them pins neither: deleting either clause leaves the
+		// other to catch it and the test goes on passing. That is how
+		// `|| rep.AuthoredTestUnreached` came to have no coverage at all — the
+		// case named for it also carried CanaryKilled:false, which
+		// short-circuits first.
+		//
+		// Some of these shapes are therefore deliberately UNREAL — a real
+		// adequacy.Score returns before the canary when the baseline fails, so
+		// it would never report CompliantPass:false with CanaryKilled:true.
+		// Isolating the clause is the point; the driver must refuse to measure
+		// on each condition INDEPENDENTLY, since each is a different diagnosis
+		// (see adequacy.Report.AuthoredTestUnreached: "your test fails on
+		// correct code" and "your command never collected that file" send an
+		// operator to completely different places).
 		{"canary survived", adequacy.Report{CompliantPass: true, CanaryKilled: false, Total: 2}},
-		{"authored test unreached", adequacy.Report{CompliantPass: true, CanaryKilled: false, AuthoredTestUnreached: true, Total: 2}},
-		{"baseline failed", adequacy.Report{CompliantPass: false}},
+		{"authored test unreached", adequacy.Report{CompliantPass: true, CanaryKilled: true, AuthoredTestUnreached: true, Total: 2}},
+		{"baseline failed", adequacy.Report{CompliantPass: false, CanaryKilled: true, Total: 2}},
 		{"nothing scored", adequacy.Report{CompliantPass: true, CanaryKilled: true, Total: 0}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

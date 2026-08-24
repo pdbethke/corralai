@@ -60,6 +60,10 @@ type ScoreOption func(*scoreConfig)
 type scoreConfig struct {
 	mutantTimeout time.Duration
 	concurrency   int
+	// mutantCompileCheck is the language plugin's own CompileCheck sequence,
+	// run against each mutant BEFORE the suite. Empty disables the gate, which
+	// preserves the pre-gate behavior for every caller that has not opted in.
+	mutantCompileCheck [][]string
 }
 
 // WithMutantTimeout overrides the auto-derived per-mutant timeout with an
@@ -67,6 +71,19 @@ type scoreConfig struct {
 // given at all).
 func WithMutantTimeout(d time.Duration) ScoreOption {
 	return func(c *scoreConfig) { c.mutantTimeout = d }
+}
+
+// WithMutantCompileCheck gates every mutant on the language's own compile
+// check before it is scored. A mutant that fails the check is recorded in
+// Report.Invalid, never in Killed or Survived, and never reaches the suite.
+//
+// The sequence is the plugin's Plugin.CompileCheck output and is chained as by
+// `&&`: run in order, stop at the first non-zero exit. Passing it in rather
+// than deriving it here keeps adequacy language-agnostic — no Go-specific
+// string matching on compiler output, which would silently misclassify for
+// python, ruby, javascript and typescript.
+func WithMutantCompileCheck(cmds [][]string) ScoreOption {
+	return func(c *scoreConfig) { c.mutantCompileCheck = cmds }
 }
 
 // WithConcurrency scores up to n mutants at once. The default (and anything
@@ -180,9 +197,29 @@ type Report struct {
 	// ordinary Python repos, which is why an estimate extrapolated from one
 	// repo is worthless. Recording it turns capacity planning into a query.
 	BaselineDuration time.Duration
-	Total            int
-	Killed           []string
-	Survived         []string
+	// Total is the number of mutants actually GRADED — killed + survived. It
+	// deliberately EXCLUDES Invalid, because KillRate divides by it and a
+	// mutant the compiler rejected is not part of any exam the suite sat.
+	Total    int
+	Killed   []string
+	Survived []string
+	// Invalid are mutants that failed the language's own compile check and so
+	// were never run against the suite.
+	//
+	// WHY THIS EXISTS. Before the gate, a mutant that did not compile made the
+	// test command exit non-zero, and `killed: !passed` scored that as a KILL —
+	// the suite was credited with catching a bug that never existed in runnable
+	// form. On low-coverage code, where more mutations fail to build and fewer
+	// are genuinely caught, that inflated the headline rate exactly where an
+	// honest number matters most. corral's product is a SIGNED, offline-
+	// verifiable record asserting "this change's tests catch K% of injected
+	// bugs"; an inflated K signs a false claim, which in a system whose value is
+	// trust is not a rounding error.
+	//
+	// An invalid mutant is evidence about the GENERATOR, not the suite. It is
+	// reported, never silently dropped — hiding it would trade one dishonesty
+	// for another.
+	Invalid []string
 }
 
 // VerboseJail is a Jail that can also report what a run PRINTED, not just
@@ -240,13 +277,17 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 		o(&cfg)
 	}
 
-	run := func(rctx context.Context, code string) (bool, error) {
+	runCmd := func(rctx context.Context, code string, cmd []string) (bool, error) {
 		files := make(map[string]string, len(base)+1)
 		for k, v := range base {
 			files[k] = v
 		}
 		files[codePath] = code
-		return j.RunTest(rctx, files, testCmd)
+		return j.RunTest(rctx, files, cmd)
+	}
+
+	run := func(rctx context.Context, code string) (bool, error) {
+		return runCmd(rctx, code, testCmd)
 	}
 
 	// The BASELINE run alone goes through the verbose path when the jail offers
@@ -319,7 +360,10 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 		perMutant = clampMutantTimeout(baseDur)
 	}
 
-	rep.Total = len(mutants)
+	// rep.Total is NOT set from len(mutants) here: with the compile gate on,
+	// the graded count is only known once invalid mutants have been separated
+	// out (see the assignment after the assembly loop). Setting it up front is
+	// how invalid mutants would sneak back into KillRate's denominator.
 
 	// Results are collected into an INDEXED slice and assembled in mutants'
 	// own order below — never appended as they finish. Score's contract is
@@ -327,12 +371,35 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 	// reproducible, and this ledger is signed: an ordering that depended on
 	// scheduling would make two runs of identical inputs disagree.
 	type outcome struct {
-		killed bool
-		err    error
+		killed  bool
+		err     error
+		invalid bool
 	}
 	outcomes := make([]outcome, len(mutants))
 
 	scoreOne := func(i int, m Mutant) {
+		// The compile gate runs FIRST and is cheap relative to a suite run, so
+		// an invalid mutant costs one type-check instead of a full execution.
+		if len(cfg.mutantCompileCheck) > 0 {
+			gctx, gcancel := context.WithTimeout(ctx, perMutant)
+			for _, cmd := range cfg.mutantCompileCheck {
+				ok, err := runCmd(gctx, m.Code, cmd)
+				if err != nil {
+					// FAIL CLOSED. A gate that could not RUN says nothing about
+					// the mutant; treating that as "invalid" would quietly erase
+					// the exam whenever the jail misbehaved.
+					gcancel()
+					outcomes[i] = outcome{err: err}
+					return
+				}
+				if !ok {
+					gcancel()
+					outcomes[i] = outcome{invalid: true}
+					return
+				}
+			}
+			gcancel()
+		}
 		mctx, cancel := context.WithTimeout(ctx, perMutant)
 		passed, err := run(mctx, m.Code)
 		cancel()
@@ -377,11 +444,19 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 			// must never be scored as one.
 			return Report{}, outcomes[i].err
 		}
+		if outcomes[i].invalid {
+			rep.Invalid = append(rep.Invalid, m.ID)
+			continue
+		}
 		if outcomes[i].killed {
 			rep.Killed = append(rep.Killed, m.ID)
 			continue
 		}
 		rep.Survived = append(rep.Survived, m.ID)
 	}
+	// Total is the GRADED count. Set here, after the gate has run, rather than
+	// from len(mutants) up front: dividing by the emitted count would put the
+	// invalid mutants back into the denominator by the back door.
+	rep.Total = len(rep.Killed) + len(rep.Survived)
 	return rep, nil
 }

@@ -49,10 +49,33 @@ func advPoolJailSkipUnlessGoWorks(t *testing.T) sandbox.Isolator {
 // package's boundary, not adequacy's).
 type fakeReportJail struct {
 	passOn map[string]bool
+	// uncompilable marks code that fails the MUTANT COMPILE GATE. nil means
+	// everything builds, which is the right default: these fixtures model
+	// SEMANTIC mutations that compile fine and are caught (or missed) by the
+	// suite. Modelling the gate matters because Score now asks two different
+	// questions — "does this build?" then "does the suite catch it?" — and a
+	// fake that answers both with the suite's verdict would report a mutant
+	// the tests killed as one that never compiled.
+	uncompilable map[string]bool
 }
 
-func (f *fakeReportJail) RunTest(ctx context.Context, files map[string]string, testCmd []string) (bool, error) {
-	return f.passOn[files["target.go"]], nil
+func (f *fakeReportJail) RunTest(ctx context.Context, files map[string]string, cmd []string) (bool, error) {
+	code := files["target.go"]
+	if isCompileGateCmd(cmd) {
+		return !f.uncompilable[code], nil
+	}
+	return f.passOn[code], nil
+}
+
+// isCompileGateCmd distinguishes the compile gate from the suite run. The go
+// plugin's CompileCheck is `go vet ...`; the test command is `go test ...`.
+func isCompileGateCmd(cmd []string) bool {
+	for _, a := range cmd {
+		if a == "vet" {
+			return true
+		}
+	}
+	return false
 }
 
 // TestJailScorerReport proves ScoreReport surfaces the full adequacy.Report
@@ -198,6 +221,9 @@ type wellBehavedJail struct {
 }
 
 func (j *wellBehavedJail) RunTest(ctx context.Context, files map[string]string, cmd []string) (bool, error) {
+	if isCompileGateCmd(cmd) {
+		return true, nil // these fixtures model semantic mutations; they build
+	}
 	if files[j.testPath] == adequacy.CanaryCode {
 		return false, nil
 	}

@@ -81,6 +81,27 @@ func GenerateMutantsPrompt(system, goal, code string, sigs []repoindex.Signature
 	return system, buildUser(goal, code, sigs, mutantFormatInstruction(n))
 }
 
+// StrictnessNote is the SINGLE source of the language-strictness warnings both
+// generating seats need. It is shared rather than duplicated because BOTH seats
+// were observed failing on the SAME class of rule.
+//
+// The mutant-generator was defeated by unused IMPORTS ("fmt" imported and not
+// used) after correctly removing the last call into a package. The test-writer
+// was defeated by unused VARIABLES ("declared and not used: l2"). A third
+// mutant died on "no new variables on left side of :=". All are the same
+// family: constructs most languages merely warn about, and Go rejects outright.
+//
+// This is not a model-capability problem. In each case the artifact was
+// semantically right and the language refused it, so telling the model the rule
+// is worth more than telling it to try harder.
+func StrictnessNote() string {
+	return `LANGUAGE STRICTNESS — these are HARD ERRORS in Go (not warnings), and are the most common reason an otherwise-correct artifact is thrown away:
+- An IMPORT that is no longer used will not compile. If your change removes the last use of a package, the file breaks.
+- A DECLARED VARIABLE that is never used will not compile. Do not declare a value you do not then assert on.
+- ` + "`:=`" + ` requires at least one NEW variable on the left. Use ` + "`=`" + ` when reassigning existing ones.
+- Every symbol you reference must already exist or be imported; you cannot add an import from inside a partial edit.`
+}
+
 // mutantFormatInstruction is the SINGLE source of the mutant output format —
 // centralized here rather than duplicated in every language plugin's
 // MutantSystem (DRY). It asks for minimal, uniquely-anchored SEARCH/REPLACE
@@ -105,12 +126,13 @@ func mutantFormatInstruction(n int) string {
 
 Rules: the SEARCH block MUST match the original bytes exactly, indentation included, and occur exactly once; the REPLACE block MUST differ from it and keep the code compiling/importing (a drop-in replacement, same signatures). Vary HOW each mutant fails the goal. No no-ops, no whole-file dumps, no prose.
 
-Your edit is LOCAL but compilation is a WHOLE-FILE property, and these three mistakes are what actually make mutations unusable:
-1. DO NOT reference any package or symbol that is not already imported/declared in the file. Your hunk cannot add an import, so a new dependency will not compile.
-2. DO NOT remove the LAST remaining use of an imported package. Some languages (Go) reject an unused import as a hard error, so deleting the only call into a package breaks the file even though your edit looks local.
-3. KEEP BRACES/BLOCKS BALANCED: the REPLACE block must open and close exactly the blocks the SEARCH block did. Dropping a closing brace makes everything after it unparseable.
+Your edit is LOCAL but compilation is a WHOLE-FILE property.
+
+%s
+
+Also KEEP BRACES/BLOCKS BALANCED: the REPLACE block must open and close exactly the blocks the SEARCH block did. Dropping a closing brace makes everything after it unparseable.
 Prefer edits that change a CONDITION, a COMPARISON, a CONSTANT, or an ORDER of operations — those violate a goal without touching imports or block structure.`,
-		n, srSearchHead, srDivider, srReplaceEnd, srSearchHead, srDivider, srReplaceEnd, n)
+		n, srSearchHead, srDivider, srReplaceEnd, srSearchHead, srDivider, srReplaceEnd, n, StrictnessNote())
 }
 
 // ParseMutantsOutput extracts the seeded-violation mutants from a model's raw

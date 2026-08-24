@@ -198,3 +198,27 @@ func TestKappaIsChanceCorrected(t *testing.T) {
 		t.Errorf("Kappa = %v, want 1 for perfect agreement", got.Kappa)
 	}
 }
+
+// The floor is evidence-based: two live audits of a 0%-coverage file produced
+// 3 and 4 survivors, so a floor of 10 could never report anything. This pins
+// that a union at the floor IS reportable, and that one below it is not.
+func TestFloorIsReachableByRealRuns(t *testing.T) {
+	if MinSurvivorUnion > 4 {
+		t.Fatalf("MinSurvivorUnion = %d, but the best measured single-file run yielded 4 survivors — the statistic would be silent forever", MinSurvivorUnion)
+	}
+	// A union exactly at the floor reports.
+	const n = 6
+	a := vec("A", set(n, ids(1, 3)...)) // survives m4,m5,m6
+	b := vec("B", set(n, ids(1, 3)...))
+	got, err := Compare(a, b)
+	if err != nil {
+		t.Fatalf("Compare: %v", err)
+	}
+	if !got.Sufficient {
+		t.Errorf("Sufficient = false at a union of %d with the floor at %d", got.UnionSurvivors, MinSurvivorUnion)
+	}
+	// And the denominators travel, because a coefficient over this few is coarse.
+	if got.UnionSurvivors == 0 || got.Mutants == 0 {
+		t.Error("denominators missing — a coefficient this coarse must never travel alone")
+	}
+}

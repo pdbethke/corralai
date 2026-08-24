@@ -29,7 +29,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/agentworker"
 	"github.com/pdbethke/corralai/internal/creds"
-	"github.com/pdbethke/corralai/internal/thinkmode"
+	"github.com/pdbethke/corralai/internal/ollamareq"
 )
 
 // ErrModelUnreachable is returned by a Backend when the model endpoint responds
@@ -464,12 +464,11 @@ func (b *ollamaBackend) Chat(messages []Message, tools []any) (Message, error) {
 		"model": b.model, "messages": messages, "tools": tools, "stream": false,
 		"options": map[string]any{"temperature": 0.2},
 	}
-	// Qwen 3+ reasons into a separate `thinking` field and would hand back an
-	// EMPTY content on a truncated reply — a silent failure, not an error. An
-	// agent loop reading only Content would see "" and have nothing to retry on.
-	if thinkmode.Suppress(b.model) {
-		body["think"] = false
-	}
+	// One decorator owns corral's Ollama request options (num_ctx, and the
+	// think-suppression that keeps a reasoning model from returning empty
+	// content). Both concerns used to be per-call-site, and this repo has
+	// already paid for duplicated judgment at these two loops.
+	ollamareq.Decorate(body, b.model)
 	err := postJSON(b.url+"/api/chat", nil, body, &out)
 	return out.Message, err
 }

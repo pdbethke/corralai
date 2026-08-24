@@ -1741,6 +1741,13 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	// itself — set here, with the other post-aggregate fields, rather than
 	// widening aggregate()'s already-long signature.
 	v.ProvenMutantIDs = run.provenIDs
+	// MutantsInvalid rides here for the same reason: aggregate() composes the
+	// SIGNED verdict and is the second Verdict construction site in this
+	// package. Setting it only on the other one (driver.go's Verdict literal)
+	// left the count correct in the log and ZERO in the printed, signed
+	// verdict — the fourth time on this branch that a value was added in one
+	// place and a second construction/conversion site was missed.
+	v.MutantsInvalid = run.mutantsInvalid
 	v.AuthoredTest = run.authoredTest
 	// Narrows PoolTestUnsound to "your test command never collected the
 	// authored test's file" -- set here rather than widening aggregate()'s

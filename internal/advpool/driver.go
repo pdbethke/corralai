@@ -455,8 +455,17 @@ type runState struct {
 	// shadowWriter* hold the CHALLENGER writer seat's outcome. They are
 	// deliberately separate from devKilled/devSurvivors: nothing here may
 	// reach aggregate(), the Verdict, or the signed record. Verdict is hashed
-	// WHOLE by CertSigner.SignVerdict, so a single leaked field would change
-	// every previously signed record's digest — see writer_shadow_test.go.
+	// WHOLE by CertSigner.SignVerdict, so a single leaked outcome field would
+	// change every previously signed record's digest — see
+	// writer_shadow_test.go.
+	//
+	// shadowWriterKilled is the challenger writer's PROVEN-KILL set over
+	// run.devSurvivors — the mutant-level counterpart of provenIDs, which is
+	// the PRIMARY writer's vector over that same set (RULING P9). The two pair
+	// one-for-one by MutantRef.ID: both are produced by provenMutantIDs, both
+	// over run.devSurvivors, so the head-to-head compares the two WRITERS.
+	// Deliberately NOT paired against devKilled, which is the DEV SUITE's
+	// vector over every mutant and answers a different question.
 	shadowWriterKilled   []MutantRef
 	shadowWriterMeasured bool
 	// shadowWriterAttempts is the challenger's OWN compile-retry budget.

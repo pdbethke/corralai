@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/queue"
 )
 
@@ -241,9 +242,22 @@ func (d *Driver) enqueueShadowWriter(missionID int64, run *runState, title, inst
 }
 
 // runShadowWriterPass scores the CHALLENGER writer's own authored suite against
-// the SAME mutant set the primary exam was built from (run.mutants), so the
-// head-to-head measures the WRITERS and not the difficulty of two different
-// mutant sets. It is MEASUREMENT, held to the same invariants runShadowPass is:
+// run.devSurvivors — the IDENTICAL set the primary writer is scored against
+// (tickPoolAdequacy's scoreAuthored call), and the set both writers were
+// actually asked to kill — so the head-to-head measures the WRITERS and not the
+// difficulty of two different exams.
+//
+// RULING P9: the universe is devSurvivors, NOT run.mutants. The paired vectors
+// are the two WRITERS' proven-kill sets — run.provenIDs for the primary and
+// run.shadowWriterKilled here — never run.devKilled, which is the DEV SUITE's
+// vector over every mutant. Pairing a writer against the dev suite would
+// compare a writer to the developer's own tests, which is a different question
+// from the one this seat exists to answer. devSurvivors is typically small, so
+// the downstream comparison will often be honestly under-powered; a correct
+// measurement that says "insufficient data" beats a confident measurement of
+// the wrong quantity.
+//
+// It is MEASUREMENT, held to the same invariants runShadowPass is:
 //
 //  1. A challenger failure is NEVER fatal. Every error path logs and leaves the
 //     seat unmeasured; nothing returns an error to Tick.
@@ -367,10 +381,10 @@ func (d *Driver) runShadowWriterPass(ctx context.Context, missionID int64, run *
 	}
 
 	// The SAME adequacy path the primary's authored test goes through, against
-	// run.mutants — the identical set the primary exam was scored on. Mutants
-	// are NEVER regenerated for the challenger: two writers facing different
+	// the SAME slice (run.devSurvivors). Neither the mutants nor the survivor
+	// set is ever regenerated for the challenger: two writers facing different
 	// mutants is confounded by mutant difficulty.
-	rep, serr := scoreAuthored(sctx, d.Scorer, run.rs.CodePath, run.rs.Code, shadowTest, run.mutants, run.rs.TestCmd)
+	rep, serr := scoreAuthored(sctx, d.Scorer, run.rs.CodePath, run.rs.Code, shadowTest, run.devSurvivors, run.rs.TestCmd)
 	if serr != nil {
 		// Infrastructure, not a challenger verdict — leave it unmeasured rather
 		// than recording a zero the comparison would read as a blind spot.
@@ -387,8 +401,32 @@ func (d *Driver) runShadowWriterPass(ctx context.Context, missionID int64, run *
 			missionID, rep.CompliantPass, rep.CanaryKilled, rep.AuthoredTestUnreached, rep.Total)
 		return
 	}
-	run.shadowWriterKilled = toMutantRefs(killedFrom(rep, run.mutants))
+	// Derived through provenMutantIDs — the SAME function that produces the
+	// primary's run.provenIDs — so the two paired vectors are computed by one
+	// rule and can never disagree about what "proven" means.
+	run.shadowWriterKilled = provenRefs(rep, run.devSurvivors)
 	run.shadowWriterMeasured = true
-	log.Printf("advpool: run %d: the challenger writer (%s) killed %d of %d mutants — measurement only, it does not gate this verdict",
-		missionID, run.rs.ShadowWriterModel, len(run.shadowWriterKilled), len(run.mutants))
+	log.Printf("advpool: run %d: the challenger writer (%s) proved %d of %d survivor(s) — measurement only, it does not gate this verdict",
+		missionID, run.rs.ShadowWriterModel, len(run.shadowWriterKilled), len(run.devSurvivors))
+}
+
+// provenRefs is provenMutantIDs in MutantRef shape: the survivors an authored
+// suite actually killed, carrying ParentSHA256 so a recorded attempt names the
+// mutant the way scan_mutants does. Deliberately derived FROM provenMutantIDs
+// rather than re-deriving the same set from rep.Killed — one rule for "proven",
+// shared by both writers' vectors, so MutantRef.ID pairs one-for-one with the
+// primary's run.provenIDs.
+func provenRefs(rep adequacy.Report, survivors []adequacy.Mutant) []MutantRef {
+	byID := make(map[string]adequacy.Mutant, len(survivors))
+	for _, m := range survivors {
+		byID[m.ID] = m
+	}
+	ids := provenMutantIDs(rep, survivors)
+	refs := make([]MutantRef, 0, len(ids))
+	for _, id := range ids {
+		if m, ok := byID[id]; ok {
+			refs = append(refs, MutantRef{ID: m.ID, ParentSHA256: m.ParentSHA256})
+		}
+	}
+	return refs
 }

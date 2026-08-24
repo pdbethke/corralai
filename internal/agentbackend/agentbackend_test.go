@@ -71,10 +71,15 @@ func TestBackendConnectionRefusedIsUnreachable(t *testing.T) {
 	}
 }
 
+// The default moved 180s -> 300s after a hosted challenger seat exceeded 180s
+// "while awaiting headers" on a 103130-token prompt (a 328-line file plus its 10
+// survivors) and the measurement was lost. Prompt size scales with the audited
+// file AND with how much the dev suite missed, so the worst case is a big file
+// with bad tests — the case an audit exists for.
 func TestLLMHTTPTimeout(t *testing.T) {
 	t.Setenv("AGENT_LLM_TIMEOUT_SECONDS", "")
-	if got := llmHTTPTimeout(); got != 180*time.Second {
-		t.Errorf("unset default = %v, want 180s", got)
+	if got := llmHTTPTimeout(); got != 300*time.Second {
+		t.Errorf("unset default = %v, want 300s", got)
 	}
 	t.Setenv("AGENT_LLM_TIMEOUT_SECONDS", "600")
 	if got := llmHTTPTimeout(); got != 600*time.Second {
@@ -82,8 +87,8 @@ func TestLLMHTTPTimeout(t *testing.T) {
 	}
 	for _, bad := range []string{"-5", "0", "abc", "  "} {
 		t.Setenv("AGENT_LLM_TIMEOUT_SECONDS", bad)
-		if got := llmHTTPTimeout(); got != 180*time.Second {
-			t.Errorf("invalid %q = %v, want default 180s", bad, got)
+		if got := llmHTTPTimeout(); got != 300*time.Second {
+			t.Errorf("invalid %q = %v, want default 300s", bad, got)
 		}
 	}
 }

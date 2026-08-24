@@ -849,6 +849,22 @@ func (rt *AdvPoolRuntime) tick(ctx context.Context) {
 
 	verdict, err := rt.driver.Tick(ctx, id)
 	if err != nil {
+		// A TERMINAL failure must not be retried: once every mutant-generator
+		// region is dropped it is never re-probed within the run, so each retry
+		// re-derives the identical failure from identical state without ever
+		// invoking the seat again. Retrying it holds the single active slot for
+		// advPoolTickMaxErrors ticks while logging the same sentence — the same
+		// gap cmd/corral's local drive loop had.
+		if advpool.IsTerminalRunErr(err) {
+			log.Printf("advpool: run %d terminal, not retrying: %v — clearing the active slot", id, err)
+			rt.mu.Lock()
+			if rt.activeID == id {
+				rt.activeID = 0
+			}
+			delete(rt.tickErrors, id)
+			rt.mu.Unlock()
+			return
+		}
 		rt.mu.Lock()
 		rt.tickErrors[id]++
 		n := rt.tickErrors[id]

@@ -115,9 +115,13 @@ Rules: the SEARCH block MUST match the original bytes exactly, indentation inclu
 // is parsed the same way the brain would parse its own model's — which is why
 // it takes the original code the worker was given, to apply the hunks against.
 func ParseMutantsOutput(raw, original string) ([]adequacy.Mutant, error) {
-	muts := parseMutants(raw, original)
-	if len(muts) == 0 {
-		return nil, errors.New("testgen: generator returned no parseable, cleanly-applying mutations")
+	muts, diag := parseMutantsDiag(raw, original)
+	if err := diag.Error(); err != nil {
+		// The diagnosis names WHICH gate rejected each block. The old message
+		// ("no parseable, cleanly-applying mutations") was true of a malformed
+		// block, a missing marker and a one-tab indentation slip alike, and
+		// told an operator nothing about which had happened.
+		return nil, err
 	}
 	return muts, nil
 }

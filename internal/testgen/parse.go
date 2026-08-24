@@ -4,8 +4,6 @@ package testgen
 
 import (
 	"crypto/sha256"
-	"encoding/hex"
-	"fmt"
 	"strings"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
@@ -75,30 +73,8 @@ const (
 // over the kept (successfully-applied) blocks; a block whose hunk is malformed
 // or does not apply cleanly is DROPPED, never scored.
 func parseMutants(resp, original string) []adequacy.Mutant {
-	const mark = "===MUTATION_"
-	parentHash := hex.EncodeToString(sha256Sum(original))
-	var out []adequacy.Mutant
-	for _, p := range strings.Split(resp, mark)[1:] { // [0] is any preamble
-		// p looks like "1===\n<hunk>…": drop up to and including the marker's closing "===".
-		close := strings.Index(p, "===")
-		if close < 0 {
-			continue
-		}
-		search, replace, ok := parseSearchReplace(p[close+3:])
-		if !ok {
-			continue
-		}
-		mutant, ok := applyMutation(original, search, replace)
-		if !ok {
-			continue
-		}
-		out = append(out, adequacy.Mutant{
-			ID:           fmt.Sprintf("m%d", len(out)+1),
-			Code:         mutant,
-			ParentSHA256: parentHash,
-		})
-	}
-	return out
+	muts, _ := parseMutantsDiag(resp, original)
+	return muts
 }
 
 // parseSearchReplace pulls the SEARCH and REPLACE bodies out of one mutation

@@ -1278,8 +1278,10 @@ func (d *Driver) tickDevAdequacy(ctx context.Context, missionID int64, run *runS
 		// this guard (nothing was DROPPED), score against an empty exam, and
 		// still claim full coverage. Zero mutants to grade against is fatal
 		// regardless of why.
-		return fmt.Errorf("advpool: no usable mutants from any of %d mutant-generator region(s) (%d dropped) — nothing to grade the dev suite against",
-			run.regionsTotal, len(run.droppedRegions))
+		// Typed so the caller can recognize this as TERMINAL rather than feed
+		// it to a transient-retry loop — see ErrNoUsableMutants' doc for the
+		// 21-retries-without-re-invoking observation that motivated it.
+		return ErrNoUsableMutants{Regions: run.regionsTotal, Dropped: len(run.droppedRegions)}
 	}
 
 	if err := applyDevScore(ctx, run, d.Scorer, mutants); err != nil {

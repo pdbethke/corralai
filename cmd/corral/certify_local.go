@@ -285,6 +285,14 @@ type localAuditInput struct {
 	writerModel, criticModel, mutantModel, shadowModel string
 	shadowWriterModel                                  string
 
+	// meter, when non-nil, is the UsageMeter this audit reports its provider
+	// usage into INSTEAD of a fresh per-file one. A whole-repo scan runs many
+	// audits and has to answer "what did that cost me" for the RUN, not for
+	// each file in isolation; sharing one meter is how the totals survive the
+	// fan-out. Nil keeps the single-file behavior: an audit that meters only
+	// itself.
+	meter *agentbackend.UsageMeter
+
 	// Jail + workspace. jail empty = auto-detect this OS's backend (never
 	// unsandboxed). checkArgv is the project's own test command, required in
 	// repo-aware mode.
@@ -839,7 +847,10 @@ func resolveAuditRoles(in localAuditInput, stderr io.Writer) (auditRoles, error)
 	// writer) needs its own vendor's key, and a missing key must refuse the
 	// run here — fail closed at the top, not mid-run after jails, stores and
 	// mutants are already in flight.
-	meter := &agentbackend.UsageMeter{}
+	meter := in.meter
+	if meter == nil {
+		meter = &agentbackend.UsageMeter{}
+	}
 	chatterFor, err := localChatterFor(assign, meter)
 	if err != nil {
 		return r, auditUsageErr("%v", err)

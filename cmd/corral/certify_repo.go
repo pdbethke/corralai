@@ -23,6 +23,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/advpool"
+	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/certify"
 	"github.com/pdbethke/corralai/internal/lang"
@@ -666,6 +667,17 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// reused.
 	oldestReused, _ := oldestReuse(results)
 	printRepoReport(stdout, rep, nothingInScope, minKillRate, maxProvenMissed, unpairableInDiff, oldestReused)
+	// What the scan consumed from the providers. A whole-repo audit is the
+	// mode that actually costs money — it runs a full herd per file — and it
+	// reported nothing at all, so "what did that cost me" had no answer from
+	// the tool whose central caveat is that audits are expensive. Tokens, not
+	// dollars, for the reason renderModelSpend gives: prices change and differ
+	// by contract; a token count stays true.
+	if ex != nil {
+		if in, out, calls := ex.meterTotals(); calls > 0 {
+			fmt.Fprintf(stdout, "  model spend:   %d in / %d out token(s) over %d model call(s)\n", in, out, calls)
+		}
+	}
 	// A distinct section, never folded into Excluded/Ungradable/the audited
 	// fraction: this is an inventory alongside the audit, not a change to
 	// it (see the brief). Printed unconditionally when the flag was given,
@@ -2299,6 +2311,11 @@ type localExecutor struct {
 	// localAuditInput (see auditInputFor).
 	models auditModels
 
+	// meter accumulates provider usage across EVERY file this scan audits, so
+	// the run can report what it spent. Per-file meters cannot answer that:
+	// they are created and discarded inside each audit.
+	meter *agentbackend.UsageMeter
+
 	// perFileSwarm is how many workers ONE file's own audit may use. It is >1
 	// only on the workspace substrate, where resolveScanWorkers has already
 	// forced file-level concurrency to 1 (files share a single checkout), so
@@ -2391,6 +2408,7 @@ func newLocalExecutor(repoDir string, checkArgv []string, substrate string, time
 		progress = io.Discard
 	}
 	l := &localExecutor{
+		meter:        &agentbackend.UsageMeter{},
 		repoDir:      repoDir,
 		checkArgv:    checkArgv,
 		baselineRuns: 2,
@@ -2459,6 +2477,14 @@ func newLocalExecutor(repoDir string, checkArgv []string, substrate string, time
 func (l *localExecutor) preflight() error { return l.jailErr }
 
 // Close releases every staging dir this scan's seeds created. Idempotent.
+// meterTotals reports what every audit this executor ran consumed.
+func (l *localExecutor) meterTotals() (in, out, calls int64) {
+	if l.meter == nil {
+		return 0, 0, 0
+	}
+	return l.meter.Totals()
+}
+
 func (l *localExecutor) Close() {
 	if l.seeds != nil {
 		l.seeds.close()
@@ -2472,6 +2498,11 @@ func (l *localExecutor) Close() {
 // input shape this codebase keeps producing.
 func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
 	return localAuditInput{
+		// One meter for the WHOLE scan. Each file's audit would otherwise
+		// meter only itself and the totals would die with it, leaving a
+		// whole-repo run — the mode that actually costs money — unable to say
+		// what it spent. See renderModelSpend.
+		meter:    l.meter,
 		repoDir:  l.repoDir,
 		codePath: j.Path,
 		testPath: j.TestPath,

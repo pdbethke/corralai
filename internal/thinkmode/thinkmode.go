@@ -20,6 +20,7 @@
 //	qwen3.5:9b-q8_0    thinking=467c  content=0c   done=length   <-- silent empty
 //	qwen3:14b          thinking=613c  content=0c   done=length   <-- silent empty
 //	deepseek-r1:14b    thinking=600c  content=0c   done=length   <-- silent empty
+//	gemma4:12b         thinking=424c  content=0c   done=length   <-- silent empty
 //	qwen2.5-coder:14b  thinking=0c    content=32c  done=stop     <-- fine as-is
 //
 // With "think": false, all four return content and done=stop.
@@ -41,6 +42,7 @@ import "strings"
 // `thinking` field. Add to it ONLY after probing (see the package doc).
 var probed = []string{
 	"deepseek-r1", // measured: thinking=600c content=0c done=length
+	"gemma4",      // measured: thinking=424c content=0c done=length
 }
 
 // Suppress reports whether an Ollama request for model should carry

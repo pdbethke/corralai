@@ -24,6 +24,10 @@ func TestSuppress(t *testing.T) {
 		{"deepseek-r1:14b", true, "measured: thinking=600c content=0c"},
 		{"deepseek-r1:8b", true, "same family"},
 		{"deepseek-r1", true, "bare name"},
+		{"gemma4:12b", true, "measured: thinking=424c content=0c done=length"},
+		{"gemma4", true, "bare name"},
+		{"gemma3:12b", false, "earlier gemma line, NOT probed"},
+		{"gemma2:9b", false, "earlier gemma line, NOT probed"},
 
 		// Probed: no thinking field, works as-is.
 		{"qwen2.5-coder:14b", false, "measured: thinking=0c content=32c"},

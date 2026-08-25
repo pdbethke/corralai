@@ -1,0 +1,152 @@
+---
+title: "Both models missed the same nine"
+description: "Corral's design document has claimed a decorrelated herd for months. Nothing measured it. We built the measurement, pointed it at two writers from different labs, and got a Jaccard of 0.750 over their misses — of everything either one missed, both missed three quarters of it."
+pubDate: 2026-08-25
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+
+*Field note. One number, thirteen mutants, and a claim we had been making without evidence.*
+
+---
+
+## The sentence that went unchecked
+
+Corral's adversarial pool design says what the pool is for:
+
+> …and adversarially (**a decorrelated herd** trying to prove the suite hollow).
+
+That sentence sat in the spec for weeks. Nothing in the system measured
+decorrelation. The performance tracker returned per-model statistics only —
+tasks completed, average duration, pass rate — so there was no shape in the code
+where a *pairwise* fact about two models could even be expressed.
+
+The claim was not a lie. The models genuinely were different models. What was
+missing was any way to know whether being different models made them fail
+differently, which is the only property that does any work.
+
+## Why the obvious statistic is worthless
+
+The first instinct is a correlation over the two kill vectors: for each mutant,
+did each model kill it, and do those agree more than chance?
+
+That number is close to useless. If two writers each kill most of the mutants,
+they agree on most items **by construction** — the agreement is driven by the
+mutants being easy, not by the models being similar. Base rates swamp the signal
+and two genuinely independent models come back reading as highly correlated. Not
+noisy. Confidently wrong, which is worse.
+
+The signal lives entirely in the **misses**. Agreement on kills is cheap. The
+question an adversarial system cares about is conditional: *when one seat fails,
+does the other fail too?*
+
+So the headline is Jaccard over survivors — of everything either writer missed,
+what fraction did both miss. Kills are excluded outright, which makes it immune
+to base-rate inflation. Cohen's kappa rides along as a chance-corrected
+companion answering a different question, and the two are reported separately,
+never blended into one score.
+
+## The number
+
+`internal/admission/admission.go`, 117 lines, standard library only. The
+mutant-generator ran locally; the two writers were `claude-haiku-4-5-20251001`
+and `gemini-3.5-flash`.
+
+53 mutants emitted. 24 rejected by the compile gate as unbuildable. 29 graded.
+The developer's own tests killed 16 and missed 13.
+
+Those 13 survivors are the exam. Both writers were asked to kill them:
+
+```
+graded mutants   |M|          = 13
+survivors A      |S_A|        = 12     (Claude missed 12)
+survivors B      |S_B|        =  9     (Gemini missed  9)
+both missed      |S_A ∩ S_B|  =  9
+either missed    |S_A ∪ S_B|  = 12
+
+JACCARD over survivors        = 0.750
+Cohen's kappa                 = 0.316
+```
+
+**Of everything either writer missed, both missed three quarters of it.**
+
+Two models, two labs, one file — and their blind spots land on top of each other
+nine times out of twelve.
+
+## What that does and does not mean
+
+**n is 13. One file. One run.** This is a datapoint, not a finding about
+Anthropic or Google, and anyone extending it to "frontier models are correlated"
+is doing something we did not do.
+
+The gap between the two statistics is the interesting part. Jaccard says the
+misses coincide heavily. Kappa says the agreement is only modestly above what
+their individual rates predict — because **both models miss a lot**, 12 and 9 of
+13, so a large overlap is partly arithmetic. Reporting them separately is what
+makes that visible. One blended score would have hidden the tension and read as
+a cleaner result than the evidence supports.
+
+The denominators travel with the coefficient for exactly this reason. A Jaccard
+with no *n* beside it is the number that ends up on a slide outliving its
+caveats.
+
+One more thing we will not tidy away: the **challenger outperformed the
+primary**. Gemini killed 4 survivors, Claude killed 1. We had assigned them to
+those seats arbitrarily.
+
+## The envelope nobody predicted
+
+Getting one number took seven blocked attempts, and the last obstacle was not a
+bug. It was that the measurement only lives in a narrow band of target
+difficulty.
+
+**Too easy and the writers miss nothing.** An earlier run on the same file with
+a smaller mutant budget produced 3 survivors, and both writers killed all three.
+Union of misses: zero. The statistic correctly reported `insufficient-data` —
+two seats agreeing on *success* says nothing about whether they would fail in the
+same places.
+
+**Too hard and the writers produce nothing.** Pointed at a 328-line file with
+heavy external dependencies, one writer could not author a compiling test in
+three attempts, and the other compiled but wrote a test that failed against the
+*correct* code — recorded as unmeasured, four times, rather than as zero kills.
+
+What finally worked was not a different file. It was a **bigger exam on the same
+file**: 14 mutants across 3 shards instead of 6 across 2. Enough surface for the
+two writers to diverge. Most of our repo sits at 88–92% coverage, which just
+reproduces the too-easy failure — the measurement wants code whose tests are
+already missing things.
+
+## The mixed herd turned out to be load-bearing
+
+We advertise that corral runs local models, frontier models, or a mix. Until
+this week that was a feature. It became the thing that made the measurement
+possible at all.
+
+Three consecutive runs died because two local writer seats, roughly 9–10 GB
+each, cannot both stay resident on a 16 GB card. They evicted each other,
+re-read from disk, and blew the request timeout. A hosted seat consumes no VRAM,
+so putting the challenger on a frontier model removed the contention entirely —
+and gave real lineage separation at the same time. Two local models might share
+distillation ancestry. Two labs do not.
+
+That reframes the local-only story honestly. Corral can run fully local. On one
+consumer GPU it cannot run two large writer seats at once, and the advertised mix
+is what makes a two-writer comparison practical rather than a premium upgrade.
+
+## Why we are publishing a number that flatters nobody
+
+Corral exists to tell you when your tests do less than you think. It would be a
+poor look to build that and then quietly not measure our own central claim.
+
+We have one datapoint. It says two capable models from different labs shared most
+of their blind spots on one small file. It might not replicate. The next file
+might show 0.2 and we will publish that too.
+
+What we will not do is keep asserting decorrelation because it sounds right. The
+apparatus is merged, the guards refuse to report a coefficient when the evidence
+is thin, and every number now travels with the counts it was computed from.
+
+If you run a panel of models and treat their agreement as corroboration, the
+question worth asking is whether you have ever measured them failing in different
+places — and whether anything in your pipeline could tell you if they don't.

@@ -432,6 +432,16 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	surfacePaths := testSurfacePaths(surfaceRoot, cands, excl)
 	_ = surfaceRoot.Close()
 
+	// Default --commit from the checkout, the way every other certify mode
+	// does. Without this the --record scan ledger stored an EMPTY commit, so a
+	// recorded scan named no revision and could not be joined to the code it
+	// graded. Resolved once here so both the EmitConfig below and the ledger
+	// row see the same value; "" is left as-is, and the downstream refusal in
+	// auditSubject still reports it honestly.
+	if strings.TrimSpace(*commit) == "" {
+		*commit = gitHeadCommit(*repoDir)
+	}
+
 	cfg := reposcan.EmitConfig{
 		Owner: *owner, Repo: filepath.Base(*repoDir), Commit: *commit, Root: *repoDir,
 		EngineVersion: reposcan.VerdictGeneration, ModelSet: modelSet, AuditConfig: auditConfig,
@@ -2812,15 +2822,24 @@ func pushAuditRows(target, repoDir string, r reposcan.RepoReport, models map[str
 	return auditpush.Push(target, rows)
 }
 
+// gitHeadCommit resolves repoDir's HEAD, or "" when repoDir is not a checkout
+// (or git is unavailable). Callers turn "" into an explicit refusal rather than
+// recording a row that names no revision.
+func gitHeadCommit(repoDir string) string {
+	// #nosec G204 -- fixed argv; repoDir is the operator's own --repo path, never remote input
+	out, err := exec.Command("git", "-C", repoDir, "rev-parse", "HEAD").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // auditSubject resolves the repo and commit a statement or a warehouse row is
 // bound to, refusing rather than emitting one that names no revision.
 func auditSubject(repoDir string, r reposcan.RepoReport) (repo, commit string, err error) {
 	commit = strings.TrimSpace(r.Commit)
 	if commit == "" {
-		// #nosec G204 -- fixed argv; repoDir is the operator's own --repo path, never remote input
-		if out, gerr := exec.Command("git", "-C", repoDir, "rev-parse", "HEAD").Output(); gerr == nil {
-			commit = strings.TrimSpace(string(out))
-		}
+		commit = gitHeadCommit(repoDir)
 	}
 	if commit == "" {
 		return "", "", fmt.Errorf("no commit: a verdict that names no revision cannot be verified or joined to anything. Pass --commit <sha>, or run inside a git checkout")

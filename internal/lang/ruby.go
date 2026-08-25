@@ -70,6 +70,11 @@ func (rubyPlugin) CompileCheck(codePath, testPath string) [][]string {
 //     where <subpath> is dir with its leading component (conventionally
 //     `lib`) replaced by `test` rather than nested under it.
 //  3. spec/<subpath>/foo_spec.rb    — the RSpec equivalent of (2).
+//  4. test/<subpath>/test_foo.rb    — the PREFIX form, minitest's own house
+//     style, at a strictly lower specificity rank than (1)-(3). Measured on
+//     minitest/minitest: forms (1)-(3) pair 0 of 24 lib files, form (4) pairs
+//     4. A repo using this layout was previously invisible to the scanner
+//     entirely, reported as `no-paired-test`.
 //
 // Unlike Python's list this does not also generate a full-directory-mirror
 // form: Ruby's lib/-vs-test/ (or lib/-vs-spec/) split is a single well-known
@@ -83,6 +88,11 @@ func (rubyPlugin) TestPaths(codePath string) []TestCandidate {
 		{Path: joinDir(dir, base+"_test.rb"), Rank: 0},
 		{Path: filepath.Join("test", sub, base+"_test.rb"), Rank: 1},
 		{Path: filepath.Join("spec", sub, base+"_spec.rb"), Rank: 1},
+		// The PREFIX form, minitest's own house style. Rank 2 — strictly less
+		// specific than the suffix forms above, because `test_foo.rb` is also
+		// what a file *named* `test_foo` would pair to under form (1), so a
+		// collision here should lose to a suffix match rather than race it.
+		{Path: filepath.Join("test", sub, "test_"+base+".rb"), Rank: 2},
 	}
 	return dedupeCandidates(out)
 }

@@ -145,6 +145,7 @@ func rubyRawForms(codePath string) []rawForm {
 		{Path: joinDir(dir, base+"_test.rb"), Rank: 0, Sibling: true},
 		{Path: filepath.Join("test", sub, base+"_test.rb"), Rank: 1, Vacuous: sub == ""},
 		{Path: filepath.Join("spec", sub, base+"_spec.rb"), Rank: 1, Vacuous: sub == ""},
+		{Path: filepath.Join("test", sub, "test_"+base+".rb"), Rank: 2, Vacuous: sub == ""},
 	}
 }
 

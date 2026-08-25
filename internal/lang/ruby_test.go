@@ -67,6 +67,7 @@ func TestRubyTestPathsOrder(t *testing.T) {
 				{Path: "pricing_test.rb", Rank: 0},
 				{Path: "test/pricing_test.rb", Rank: 1},
 				{Path: "spec/pricing_spec.rb", Rank: 1},
+				{Path: "test/test_pricing.rb", Rank: 2},
 			},
 		},
 		{
@@ -76,6 +77,20 @@ func TestRubyTestPathsOrder(t *testing.T) {
 				{Path: "lib/foo_test.rb", Rank: 0},
 				{Path: "test/foo_test.rb", Rank: 1},
 				{Path: "spec/foo_spec.rb", Rank: 1},
+				{Path: "test/test_foo.rb", Rank: 2},
+			},
+		},
+		{
+			// minitest's own house style: test/<sub>/test_<base>.rb, the
+			// PREFIX form. Measured on minitest/minitest at depth 20: the
+			// suffix forms above pair 0 of 24 files, the prefix form pairs 4.
+			name: "nested lib dir, minitest prefix form",
+			in:   "lib/minitest/server.rb",
+			want: []TestCandidate{
+				{Path: "lib/minitest/server_test.rb", Rank: 0},
+				{Path: "test/minitest/server_test.rb", Rank: 1},
+				{Path: "spec/minitest/server_spec.rb", Rank: 1},
+				{Path: "test/minitest/test_server.rb", Rank: 2},
 			},
 		},
 		{
@@ -85,6 +100,7 @@ func TestRubyTestPathsOrder(t *testing.T) {
 				{Path: "lib/mypkg/foo_test.rb", Rank: 0},
 				{Path: "test/mypkg/foo_test.rb", Rank: 1},
 				{Path: "spec/mypkg/foo_spec.rb", Rank: 1},
+				{Path: "test/mypkg/test_foo.rb", Rank: 2},
 			},
 		},
 	}

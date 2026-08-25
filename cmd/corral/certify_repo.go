@@ -443,7 +443,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	}
 
 	cfg := reposcan.EmitConfig{
-		Owner: *owner, Repo: filepath.Base(*repoDir), Commit: *commit, Root: *repoDir,
+		Owner: *owner, Repo: resolveRepoName(*repoDir, ""), Commit: *commit, Root: *repoDir,
 		EngineVersion: reposcan.VerdictGeneration, ModelSet: modelSet, AuditConfig: auditConfig,
 		Substrate: *substrateFlag,
 		// What the verdicts are GRADED BY decides what TestSurfaceDigest has
@@ -2844,22 +2844,30 @@ func auditSubject(repoDir string, r reposcan.RepoReport) (repo, commit string, e
 	if commit == "" {
 		return "", "", fmt.Errorf("no commit: a verdict that names no revision cannot be verified or joined to anything. Pass --commit <sha>, or run inside a git checkout")
 	}
-	repo = strings.TrimSpace(r.Repo)
-	if repo == "" || repo == "." {
-		// #nosec G204 -- same: fixed argv, operator-supplied path, no shell involved
-		if out, gerr := exec.Command("git", "-C", repoDir, "remote", "get-url", "origin").Output(); gerr == nil {
-			repo = strings.TrimSuffix(strings.TrimSpace(string(out)), ".git")
-		}
+	return resolveRepoName(repoDir, r.Repo), commit, nil
+}
+
+// resolveRepoName names the repository a row is filed under: an explicit name
+// wins, then origin's URL, then the checkout directory's own name.
+//
+// A checkout with no remote still has to name itself: repo is the KEY
+// dimension in a warehouse that spans projects, and a row filed under "."
+// cannot be told apart from every other project audited from a directory. The
+// absolute path's last element is a poor name but a distinguishing one, which
+// is the whole requirement here.
+func resolveRepoName(repoDir, given string) string {
+	repo := strings.TrimSpace(given)
+	if repo != "" && repo != "." {
+		return repo
+	}
+	// #nosec G204 -- fixed argv; repoDir is the operator's own --repo path, never remote input
+	if out, gerr := exec.Command("git", "-C", repoDir, "remote", "get-url", "origin").Output(); gerr == nil {
+		repo = strings.TrimSuffix(strings.TrimSpace(string(out)), ".git")
 	}
 	if repo == "" || repo == "." {
-		// A checkout with no remote still has to name itself: repo is the KEY
-		// dimension in a warehouse that spans projects, and a row filed under
-		// "." cannot be told apart from every other project audited from a
-		// directory. The absolute path's last element is a poor name but a
-		// distinguishing one, which is the whole requirement here.
 		if abs, aerr := filepath.Abs(repoDir); aerr == nil {
 			repo = filepath.Base(abs)
 		}
 	}
-	return repo, commit, nil
+	return repo
 }

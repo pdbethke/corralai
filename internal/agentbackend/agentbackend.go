@@ -386,17 +386,26 @@ func scrubSecretEnv() {
 	}
 }
 
-// llmHTTPTimeout is the per-request timeout for a model call. The default 180s
-// is fine for hosted/frontier models but too tight for a large local model
-// generating a big structured artifact (e.g. many full-file mutants of a real
-// source file), so it's overridable via AGENT_LLM_TIMEOUT_SECONDS.
+// llmHTTPTimeout is the per-request timeout for a model call, overridable via
+// AGENT_LLM_TIMEOUT_SECONDS.
+//
+// The old comment here said 180s "is fine for hosted/frontier models". That is
+// FALSIFIED: a hosted challenger seat was sent a 103130-token prompt (a
+// 328-line file plus its 10 survivors) and exceeded 180s "while awaiting
+// headers", losing the measurement. Prompt size scales with the audited file
+// and with how much the dev suite missed, so the worst case is a big file whose
+// tests are bad — exactly the case an audit exists for.
+//
+// 300s is chosen to cover that observed case with margin rather than to be
+// generous: a request that genuinely hangs still fails, just not one that was
+// only slow.
 func llmHTTPTimeout() time.Duration {
 	if v := strings.TrimSpace(os.Getenv("AGENT_LLM_TIMEOUT_SECONDS")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			return time.Duration(n) * time.Second
 		}
 	}
-	return 180 * time.Second
+	return 300 * time.Second
 }
 
 var httpc = &http.Client{Timeout: llmHTTPTimeout()}

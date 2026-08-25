@@ -81,25 +81,46 @@ func GenerateMutantsPrompt(system, goal, code string, sigs []repoindex.Signature
 	return system, buildUser(goal, code, sigs, mutantFormatInstruction(n))
 }
 
-// StrictnessNote is the SINGLE source of the language-strictness warnings both
-// generating seats need. It is shared rather than duplicated because BOTH seats
-// were observed failing on the SAME class of rule.
+// strictnessCore is the half that is genuinely shared: rules every seat
+// producing code must obey, regardless of whether it edits a hunk or authors a
+// whole file. All were MEASURED as failures, not imagined.
+func strictnessCore() string {
+	return `- A DECLARED VARIABLE that is never used will not compile in Go. Do not declare a value you do not then use.
+- ` + "`:=`" + ` requires at least one NEW variable on the left. Use ` + "`=`" + ` when reassigning existing ones.`
+}
+
+// MutantStrictnessNote is the generator's version. Its defining constraint is
+// that a minimal SEARCH/REPLACE hunk CANNOT REACH THE IMPORT BLOCK: it can
+// neither add an import it needs nor remove one it stranded.
 //
-// The mutant-generator was defeated by unused IMPORTS ("fmt" imported and not
-// used) after correctly removing the last call into a package. The test-writer
-// was defeated by unused VARIABLES ("declared and not used: l2"). A third
-// mutant died on "no new variables on left side of :=". All are the same
-// family: constructs most languages merely warn about, and Go rejects outright.
+// Measured failures behind each line:
 //
-// This is not a model-capability problem. In each case the artifact was
-// semantically right and the language refused it, so telling the model the rule
-// is worth more than telling it to try harder.
-func StrictnessNote() string {
-	return `LANGUAGE STRICTNESS — these are HARD ERRORS in Go (not warnings), and are the most common reason an otherwise-correct artifact is thrown away:
-- An IMPORT that is no longer used will not compile. If your change removes the last use of a package, the file breaks.
-- A DECLARED VARIABLE that is never used will not compile. Do not declare a value you do not then assert on.
-- ` + "`:=`" + ` requires at least one NEW variable on the left. Use ` + "`=`" + ` when reassigning existing ones.
-- Every symbol you reference must already exist or be imported; you cannot add an import from inside a partial edit.`
+//	"fmt" imported and not used      -> removed the last call into a package
+//	undefined: time                  -> referenced a package not imported
+//	expected '(', found readLoadAvg   -> dropped a closing brace
+func MutantStrictnessNote() string {
+	return `LANGUAGE STRICTNESS — these are HARD ERRORS in Go (not warnings), and are the most common reason an otherwise-correct mutation is thrown away:
+` + strictnessCore() + `
+- Your edit is a PARTIAL hunk and CANNOT ADD AN IMPORT. Never reference a package that is not already imported in the file.
+- Never remove the LAST remaining use of an imported package: the import becomes unused and the file stops compiling, even though your edit looks local.
+- KEEP BRACES/BLOCKS BALANCED: the REPLACE block must open and close exactly the blocks the SEARCH block did. Dropping a closing brace makes everything after it unparseable.
+Prefer edits that change a CONDITION, a COMPARISON, a CONSTANT, or an ORDER of operations — those violate a goal without touching imports or block structure.`
+}
+
+// WriterStrictnessNote is the test-writer's version, and it says the OPPOSITE
+// about imports on purpose. The writer authors a WHOLE FILE, so it MUST declare
+// every import its test uses.
+//
+// The two seats briefly shared one note, which told the writer it "cannot add an
+// import" — true for a hunk, actively wrong for a file author. A writer was
+// observed failing with `undefined: models` on a dependency-heavy target, which
+// is precisely the mistake that instruction would encourage. Sharing the CORE is
+// right; sharing the import rule was not.
+func WriterStrictnessNote() string {
+	return `LANGUAGE STRICTNESS — these are HARD ERRORS in Go (not warnings), and are the most common reason an otherwise-correct test is thrown away:
+` + strictnessCore() + `
+- You are writing a COMPLETE file: DECLARE EVERY IMPORT your test uses, including packages referenced only inside a helper or a struct literal.
+- Do not invent helpers, methods or fields. Use only what the code under test actually exposes; if you need to inject a value, look for an existing seam (a constructor parameter, an exported field) rather than assuming a setter exists.`
 }
 
 // mutantFormatInstruction is the SINGLE source of the mutant output format —
@@ -128,11 +149,8 @@ Rules: the SEARCH block MUST match the original bytes exactly, indentation inclu
 
 Your edit is LOCAL but compilation is a WHOLE-FILE property.
 
-%s
-
-Also KEEP BRACES/BLOCKS BALANCED: the REPLACE block must open and close exactly the blocks the SEARCH block did. Dropping a closing brace makes everything after it unparseable.
-Prefer edits that change a CONDITION, a COMPARISON, a CONSTANT, or an ORDER of operations — those violate a goal without touching imports or block structure.`,
-		n, srSearchHead, srDivider, srReplaceEnd, srSearchHead, srDivider, srReplaceEnd, n, StrictnessNote())
+%s`,
+		n, srSearchHead, srDivider, srReplaceEnd, srSearchHead, srDivider, srReplaceEnd, n, MutantStrictnessNote())
 }
 
 // ParseMutantsOutput extracts the seeded-violation mutants from a model's raw

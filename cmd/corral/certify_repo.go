@@ -661,7 +661,10 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// serve as the cache's read path here: newLedgerCache(nil) (no --record,
 	// or an unopenable DSN) already misses every key, so this needs no extra
 	// nil-guard — the cache is simply inactive for the run.
-	results := reposcan.Scan(context.Background(), jobs, ex, newLedgerCache(scanStore), workers)
+	auditCtx, stopSignals := auditContext(stderr)
+	defer stopSignals()
+
+	results := reposcan.Scan(auditCtx, jobs, ex, newLedgerCache(scanStore), workers)
 	rep := reposcan.Aggregate(*owner, cfg.Repo, *commit, totalFiles, len(cands), results, excl)
 
 	// The diff selected zero candidates: a docs-only (or no-paired-test-only)

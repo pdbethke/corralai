@@ -194,7 +194,10 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		return st, k, nil
 	}
 
-	verdict, err := auditOneFile(context.Background(), localAuditInput{
+	auditCtx, stopSignals := auditContext(stderr)
+	defer stopSignals()
+
+	verdict, err := auditOneFile(auditCtx, localAuditInput{
 		repoDir: strings.TrimSpace(*repoDirFlag), codePath: *codePath,
 		testPath: strings.TrimSpace(*testPath), goal: strings.TrimSpace(*goal),
 		lang: strings.TrimSpace(*langFlag),

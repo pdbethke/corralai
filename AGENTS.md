@@ -221,3 +221,7 @@ standard.
 - `site/` — the Astro/Starlight site (`npm run build` in `site/`)
 - `docs/corral/` — the public knowledge corpus that ships to users
 - `scripts/` — the gates; read the header comment before changing one
+- `private/` — **gitignored, never committed.** Machine-specific operator notes for
+  whoever's box you're on (host setup, local GPU/model plans). This repo is public;
+  nothing host-specific goes in a tracked path. If `private/local-gpu-plan.md` exists,
+  read it before planning local-model work — the hardware it describes may be mid-change.

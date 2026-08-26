@@ -110,6 +110,9 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	shadowModelFlag := fs.String("shadow-model", "", "challenger model that attacks every region a SECOND time for a region-controlled head-to-head. OFF unless named. Recorded for comparison — NEVER gates the verdict")
 	shadowWriterModelFlag := fs.String("shadow-writer-model", "", "challenger WRITER model that authors a second suite against the SAME mutant set for a mutant-controlled head-to-head. OFF unless named. Recorded for correlation — NEVER gates the verdict")
 	matrixFlag := fs.Bool("matrix", false, "opt into the tests×mutants matrix: after the primary pass, re-score EVERY dev test ALONE against the run's mutants — a per-test adequacy readout + a delete-candidate list, instead of one dev-suite-wide number. COSTLY: T tests × M mutants extra jail runs (T×M, on top of the primary pass), so leave off by default on a big suite")
+	var localEndpointFlag stringSlice
+	fs.Var(&localEndpointFlag, "local-endpoint", "place a LOCAL seat on a specific ollama daemon, as <role>=<url> (repeatable; e.g. test-writer=http://localhost:11436). A daemon is pinned to a GPU by its own environment (HIP_VISIBLE_DEVICES / CUDA_VISIBLE_DEVICES), so this is how two models occupy two cards at once — corral selects the DAEMON, never the device. Without it every local seat shares OLLAMA_URL, one card and one VRAM budget. Roles: mutant-generator, test-writer, test-critic, mutant-generator-shadow, test-writer-shadow. An unknown role, a duplicate role, a non-absolute url, or an endpoint on a seat holding a CLOUD model is refused rather than ignored")
+
 	var bindDirFlag stringSlice
 	fs.Var(&bindDirFlag, "bind-dir", "extra repo-relative dependency dir to mount read-only into the jail instead of copying it into the workspace (repeatable; node_modules/vendor/.venv/venv/.bundle are auto-detected) — --repo-dir mode only")
 	noBindDepsFlag := fs.Bool("no-bind-deps", false, "copy dependency dirs into the jail workspace instead of bind-mounting them read-only (the pre-bind behavior; subject to the workspace size cap)")
@@ -130,6 +133,12 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	// --code path. Without --repo-dir they'd be silently unread — refuse
 	// loudly instead so an operator's misplaced flag doesn't look like a
 	// no-op.
+	localEndpoints, lerr := parseLocalEndpoints(localEndpointFlag)
+	if lerr != nil {
+		fmt.Fprintf(stderr, "corral certify --local: %v\n", lerr)
+		return 2
+	}
+
 	if strings.TrimSpace(*repoDirFlag) == "" && (len(bindDirFlag) > 0 || *noBindDepsFlag) {
 		fmt.Fprintln(stderr, "corral certify --local: --bind-dir/--no-bind-deps require --repo-dir (they configure how the cloned tree is seeded into the jail; a single --code file has no dependency dirs to bind or copy)")
 		return 2
@@ -198,7 +207,8 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		shadowWriterModel: *shadowWriterModelFlag,
 
 		jail: *jailFlag, checkArgv: checkArgv,
-		bindDirs: bindDirFlag, noBindDeps: *noBindDepsFlag,
+		localEndpoints: localEndpoints,
+		bindDirs:       bindDirFlag, noBindDeps: *noBindDepsFlag,
 
 		repo: strings.TrimSpace(*repoFlag), commit: strings.TrimSpace(*commitFlag),
 
@@ -284,6 +294,12 @@ type localAuditInput struct {
 	// Role models. Empty means this file's stock default.
 	writerModel, criticModel, mutantModel, shadowModel string
 	shadowWriterModel                                  string
+
+	// localEndpoints places a LOCAL seat on a specific ollama daemon
+	// (role -> base URL). A daemon is pinned to a GPU by its own environment,
+	// so this is how two models occupy two cards at once; corral selects the
+	// daemon, never the device. Empty keeps every local seat on OLLAMA_URL.
+	localEndpoints map[string]string
 
 	// meter, when non-nil, is the UsageMeter this audit reports its provider
 	// usage into INSTEAD of a fresh per-file one. A whole-repo scan runs many
@@ -851,7 +867,7 @@ func resolveAuditRoles(in localAuditInput, stderr io.Writer) (auditRoles, error)
 	if meter == nil {
 		meter = &agentbackend.UsageMeter{}
 	}
-	chatterFor, err := localChatterFor(assign, meter)
+	chatterFor, err := localChatterFor(assign, meter, in.localEndpoints)
 	if err != nil {
 		return r, auditUsageErr("%v", err)
 	}

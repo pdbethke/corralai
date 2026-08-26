@@ -78,6 +78,9 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	minKillRateFlag := fs.String("min-kill-rate", "", "fail the scan (exit 1) if ANY audited file's kill rate is below this value (0.0-1.0 inclusive; a minimum, so a file exactly at the threshold passes). Opt-in: unset by default, so exit codes are unchanged unless this is given. Applies PER FILE, not to the aggregate — a well-tested file must not mask a weak one")
 	preflightFlag := fs.Bool("preflight", false, "run the project's test suite once with coverage instrumentation and report which source files it never executes. One extra suite run; reports coverage-grade evidence, not proof")
 	recordFlag := fs.Bool("record", false, "record every file this scan audited or rejected, and why, into the DuckDB scan ledger (default: off). A BOOL here — unlike `certify --local`'s --record, which takes a tape PATH — see --record-db for where the ledger goes. A recording failure never changes the scan's verdict or exit code")
+	var localEndpointFlag stringSlice
+	fs.Var(&localEndpointFlag, "local-endpoint", "place a LOCAL seat on a specific ollama daemon, as <role>=<url> (repeatable; e.g. mutant-generator=http://localhost:11436). A daemon is pinned to a GPU by its own environment, so this is how two models occupy two cards at once — corral selects the DAEMON, never the device. Without it every local seat shares OLLAMA_URL, one card and one VRAM budget")
+
 	recordDSNFlag := fs.String("record-db", "", "path to the scan ledger (default: $CORRALAI_SCANS_DB, else ~/.claude/corralai_scans.duckdb)")
 	timeoutFlag := fs.Duration("timeout", 10*time.Minute, "per-file budget: give up on a single file's run if it makes no progress for this long (not a hard wall-clock cap — a single slow LLM call can overshoot it). Same default and semantics as `certify --local`'s --timeout; raise it for a large file that needs more room to converge")
 	if err := fs.Parse(flagArgs); err != nil {
@@ -441,6 +444,15 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// auditSubject still reports it honestly.
 	if strings.TrimSpace(*commit) == "" {
 		*commit = gitHeadCommit(*repoDir)
+	}
+
+	localEndpoints, lerr := parseLocalEndpoints(localEndpointFlag)
+	if lerr != nil {
+		fmt.Fprintf(stderr, "corral certify --repo: %v\n", lerr)
+		return 2
+	}
+	if ex != nil {
+		ex.localEndpoints = localEndpoints
 	}
 
 	cfg := reposcan.EmitConfig{
@@ -2311,6 +2323,10 @@ type localExecutor struct {
 	// localAuditInput (see auditInputFor).
 	models auditModels
 
+	// localEndpoints places local seats on specific ollama daemons for every
+	// file this scan audits — one daemon per GPU. See parseLocalEndpoints.
+	localEndpoints map[string]string
+
 	// meter accumulates provider usage across EVERY file this scan audits, so
 	// the run can report what it spent. Per-file meters cannot answer that:
 	// they are created and discarded inside each audit.
@@ -2502,14 +2518,15 @@ func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
 		// meter only itself and the totals would die with it, leaving a
 		// whole-repo run — the mode that actually costs money — unable to say
 		// what it spent. See renderModelSpend.
-		meter:    l.meter,
-		repoDir:  l.repoDir,
-		codePath: j.Path,
-		testPath: j.TestPath,
-		goal:     j.Goal.Text,
-		lang:     j.Lang,
-		repo:     j.Repo,
-		iso:      l.iso,
+		meter:          l.meter,
+		localEndpoints: l.localEndpoints,
+		repoDir:        l.repoDir,
+		codePath:       j.Path,
+		testPath:       j.TestPath,
+		goal:           j.Goal.Text,
+		lang:           j.Lang,
+		repo:           j.Repo,
+		iso:            l.iso,
 		// "local" rather than "" when the operator gave no --commit: an empty
 		// commit makes auditOneFile fall back to `git rev-parse HEAD` — which
 		// reads the CWD's repo, not the SCANNED one, and would stamp every

@@ -98,7 +98,7 @@ func soleAssignedCloudModel(assign advpool.RoleAssignment) (vendor, model string
 // meter, when non-nil, accumulates every seat's reported token usage across the
 // whole run — including the cross-vendor seats, which each get their own
 // backend and would otherwise be counted by nobody.
-func localChatterFor(assign advpool.RoleAssignment, meter *agentbackend.UsageMeter) (func(role string) agentworker.Chatter, error) {
+func localChatterFor(assign advpool.RoleAssignment, meter *agentbackend.UsageMeter, endpoints map[string]string) (func(role string) agentworker.Chatter, error) {
 	base := agentbackend.FromEnv()
 	sw, canSwitch := base.(agentbackend.ModelSwitcher)
 	bv := baseVendor()
@@ -134,7 +134,23 @@ func localChatterFor(assign advpool.RoleAssignment, meter *agentbackend.UsageMet
 		}
 		v := agentbackend.VendorOf(model)
 		if v == "" {
-			continue // a local/ollama name: the base backend serves it
+			// A local/ollama name: the base backend serves it — UNLESS the
+			// operator placed this seat on a specific daemon. That is how two
+			// models occupy two GPUs at once: one daemon per card, each pinned
+			// by its own environment, corral choosing the daemon rather than
+			// the device. Without it every local seat shares OLLAMA_URL, one
+			// card, and one VRAM budget.
+			if url := endpoints[role]; url != "" {
+				perRole[role] = agentbackend.AsChatterMetered(agentbackend.NewOllamaBackend(url, model), meter)
+			}
+			continue
+		}
+		// A CLOUD model is served by its vendor, not by a local daemon, so an
+		// endpoint for this seat cannot do what the operator is asking for.
+		// Refuse rather than ignore it: silently dropping the placement would
+		// leave them believing a seat runs somewhere it does not.
+		if url := endpoints[role]; url != "" {
+			return nil, fmt.Errorf("--local-endpoint %s=%s: seat %s runs the CLOUD model %q (vendor %s), which is not served by a local daemon — remove the endpoint, or give this seat a local model", role, url, role, model, v)
 		}
 		if pinned && (v == bv || bv == "") {
 			// Already this backend's vendor — or the operator pinned a

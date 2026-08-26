@@ -1,0 +1,127 @@
+---
+title: "Eighty-eight tests that were not there"
+description: "We pointed corral at three third-party Go libraries with good reputations and real test suites. It planted bugs their tests missed, then wrote and RAN tests that catch them — 88 of those, across 15 files. Here is the whole result, including the third of the panel it could not grade at all."
+pubDate: 2026-08-26
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+
+*Field note. One arm, three repositories, and every number that came with it.*
+
+---
+
+## The result
+
+Three third-party Go libraries. Not ours, not chosen for weakness — chosen
+because they are small, widely used, and have real test suites.
+
+```
+15 files audited across 3 repositories
+121 survivors      — mutants the projects' own tests did not catch
+ 88 proven-missed  — survivors corral then KILLED with a test it wrote and ran
+```
+
+| repository | commit | audited | kill rate | survivors | proven-missed |
+|---|---|---|---|---|---|
+| `google/uuid` | `2d3c2a9cc518` | 5 of 5 | 0.73 | 35 | 30 |
+| `gorilla/mux` | `db9d1d0073d2` | 4 of 4 | 0.66 | 37 | 22 |
+| `spf13/afero` | `768f1fb0e553` | 6 of 16 | 0.48 | 49 | 36 |
+
+**Proven-missed is the only number here worth much.** A survivor on its own is
+ambiguous — it might be an *equivalent mutant*, a change no test could ever
+catch, which is mutation testing's oldest measurement problem. Proven-missed
+resolves it by construction: corral wrote a test, executed it, and watched it
+kill the mutant. That test exists. It compiled, it ran, it passed against the
+real code and failed against the planted bug.
+
+So the claim is not "your tests missed 121 things." It is: **here are 88
+executable tests that catch bugs these suites do not.**
+
+## How it was run
+
+Three seats, one model each:
+
+| seat | model | where |
+|---|---|---|
+| mutant-generator | `qwen3.5:9b-q8_0` | local, one 16GB GPU |
+| goal derivation | `qwen3.5:9b-q8_0` | local |
+| test-writer | `gemini-3.7-flash` | hosted |
+| test-critic | off | — |
+
+One pinned corral build for every arm. Each row records its repository, its
+commit, that build's revision, and the model in each seat, so any line above can
+be re-run and checked.
+
+The whole arm cost **634,788 input and 12,610 output tokens** — the writer seat
+only. The generator plants dozens of mutants per file and is by far the heaviest
+consumer; it ran locally, at no API cost. Wall-clock was about three and a
+quarter hours, serialized.
+
+## What it could not do
+
+**`spf13/afero` graded 6 files of 16.** Eight failed with executor errors — the
+local model daemon timing out under load — and two produced no usable goal. Its
+0.48 is a kill rate over the *gradable subset*, not over the repository. We are
+reporting the number with its denominator rather than quietly showing 6 of 6.
+
+**Two files reported "tried and missed."** `afero.go` scored 0.00 and
+`util.go` 0.84, and in both cases the writer authored a sound test that killed
+none of the survivors. That is recorded as a distinct outcome from "no gaps
+found" and from "the writer failed," because collapsing the three would let a
+tool claim a clean bill of health it never earned.
+
+**One file was clean.** `match.go` killed every mutant. It is in the table at
+1.00 because a result that only ever finds problems is not a measurement.
+
+## The number nobody should quote alone
+
+`google/uuid` was audited five times today, at the same commit, with the same
+models. `null.go` scored:
+
+```
+kill rate      0.48   0.29   0.40   0.37
+proven-missed    16     15     18     20
+```
+
+Same file. Same commit. Same seats. The mutants are regenerated on every run, so
+each audit is a *sample*, not a verdict — a different draw from the same
+distribution.
+
+This is the most important caveat on the page. Any single kill rate above,
+including ours, carries that spread. We publish the variance because we measured
+it, and because a tool that reports one confident number per run while behaving
+like this would be misleading by construction.
+
+## What this does not show
+
+It does not show decorrelation. corral can measure whether two models miss the
+same mutants, but that seat only exists in single-file mode — so nothing in this
+run speaks to it. The one measured coefficient we have (Jaccard 0.750 over 13
+survivors, two frontier models) came from a different mode entirely and remains
+n=13.
+
+It is also not a cross-language claim. Three Go repositories, one arm, one
+writer model. A fourth repository was dropped because it predates Go modules and
+its suite cannot resolve inside the sandbox — corral refused to grade it rather
+than report a zero.
+
+## Where help would matter
+
+The panel is the bottleneck, and it is a solvable one.
+
+- **Pairing.** corral pairs a source file to its test by convention. Two of four
+  repositories we first tried yielded *zero* auditable files — `minitest/minitest`
+  names tests `test/test_foo.rb` where the walk expected `foo_test.rb`, and
+  `debug-js/debug` has one root-level test file covering everything. The first is
+  fixed. The second needs a source→test map, which corral accepts but nobody has
+  written for a real project.
+- **Languages.** Go's enforced `foo_test.go` convention pairs almost perfectly.
+  Ruby, JavaScript and Python do not, and every unpaired file is a file corral
+  cannot see.
+- **Repositories.** If you maintain something with a real suite and you want to
+  know what it misses, that is the experiment we want to run — and the result is
+  yours whichever way it goes.
+
+corral is source-available under Elastic-2.0. The numbers above are reproducible
+from the commits and build revisions recorded with them; if you re-run one and
+get something different, we would rather hear about that than not.

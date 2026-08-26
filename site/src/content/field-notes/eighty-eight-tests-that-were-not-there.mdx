@@ -16,16 +16,22 @@ Three third-party Go libraries. Not ours, not chosen for weakness — chosen
 because they are small, widely used, and have real test suites.
 
 ```
-15 files audited across 3 repositories
-121 survivors      — mutants the projects' own tests did not catch
- 88 proven-missed  — survivors corral then KILLED with a test it wrote and ran
+21 files audited across 3 repositories
+156 survivors      — mutants the projects' own tests did not catch
+105 proven-missed  — survivors corral then KILLED with a test it wrote and ran
 ```
+
+*Updated 2026-08-26, later the same day. The first version of this note reported
+15 files / 121 survivors / 88 proven-missed. See [the correction](#correction-the-first-pass-under-reported-afero)
+at the end: six more afero files became gradable once a timeout was raised, and
+the numbers above are the fuller run. Nothing was retracted — every earlier
+figure still stands, there is simply more of it.*
 
 | repository | commit | audited | kill rate | survivors | proven-missed |
 |---|---|---|---|---|---|
 | `google/uuid` | `2d3c2a9cc518` | 5 of 5 | 0.73 | 35 | 30 |
 | `gorilla/mux` | `db9d1d0073d2` | 4 of 4 | 0.66 | 37 | 22 |
-| `spf13/afero` | `768f1fb0e553` | 6 of 16 | 0.48 | 49 | 36 |
+| `spf13/afero` | `768f1fb0e553` | 12 of 16 | 0.56 | 84 | 53 |
 
 **Proven-missed is the only number here worth much.** A survivor on its own is
 ambiguous — it might be an *equivalent mutant*, a change no test could ever
@@ -59,16 +65,21 @@ quarter hours, serialized.
 
 ## What it could not do
 
-**`spf13/afero` graded 6 files of 16.** Eight failed with executor errors — the
-local model daemon timing out under load — and two produced no usable goal. Its
-0.48 is a kill rate over the *gradable subset*, not over the repository. We are
-reporting the number with its denominator rather than quietly showing 6 of 6.
+**`spf13/afero` graded 12 files of 16.** Two still fail with executor errors and
+two produce no usable goal. Its 0.56 is a kill rate over the *gradable subset*,
+not over the repository. We report the number with its denominator rather than
+quietly showing 12 of 12.
 
-**Two files reported "tried and missed."** `afero.go` scored 0.00 and
-`util.go` 0.84, and in both cases the writer authored a sound test that killed
-none of the survivors. That is recorded as a distinct outcome from "no gaps
-found" and from "the writer failed," because collapsing the three would let a
-tool claim a clean bill of health it never earned.
+**One file reported "tried and missed."** `memmap.go` scored 0.79 with five
+survivors, and the writer authored a sound test that killed none of them. That
+is recorded as a distinct outcome from "no gaps found" and from "the writer
+failed," because collapsing the three would let a tool claim a clean bill of
+health it never earned.
+
+The re-run is a good illustration of why: in the first pass `afero.go` and
+`util.go` both read "tried and missed"; in the fuller run they proved 1 and 2
+gaps respectively. Same files, same commit, same models. "Tried and missed" is a
+statement about one run, not about the code.
 
 **One file was clean.** `match.go` killed every mutant. It is in the table at
 1.00 because a result that only ever finds problems is not a measurement.
@@ -125,3 +136,49 @@ The panel is the bottleneck, and it is a solvable one.
 corral is source-available under Elastic-2.0. The numbers above are reproducible
 from the commits and build revisions recorded with them; if you re-run one and
 get something different, we would rather hear about that than not.
+
+## Correction: the first pass under-reported afero
+
+This note first published `spf13/afero` at **6 of 16 files**, and said eight
+files "failed with executor errors — the local model daemon timing out under
+load." That was true, and the diagnosis was incomplete in a way worth naming.
+
+The cause was not load and not the repository. It was a **300-second
+per-request HTTP timeout**, a default chosen against hosted models, applied
+unchanged to a 9B model running locally on one 16GB consumer GPU. afero's
+larger files generate dozens of mutants per call, and prefill on that hardware
+is slow enough to cross five minutes. Raising `AGENT_LLM_TIMEOUT_SECONDS` to
+900 and re-running the same commit, with the same models and the same corral
+build, graded six more files:
+
+| | first pass | re-run |
+|---|---|---|
+| files graded | 6 of 16 | **12 of 16** |
+| kill rate | 0.48 | 0.56 |
+| survivors | 49 | 84 |
+| proven-missed | 36 | **53** |
+
+Two files still fail on executor errors and two still produce no usable goal, so
+12 of 16 is where it stands rather than a clean sweep.
+
+Three things we would rather say plainly than bury:
+
+**No earlier number was wrong.** Each row reported what that run measured. The
+panel was smaller than it should have been, and the reason was a knob, not the
+code under audit.
+
+**The failure named the wrong thing.** An operator saw `executor-error` and
+`context deadline exceeded` — the transport, not the cause. Nothing said "raise
+the request timeout." A tool that refuses to grade should also say what would
+let it grade, and this one did not.
+
+**"Tried and missed" is per-run, not per-file.** `afero.go` and `util.go` both
+read "tried and missed" in the first pass and proved 1 and 2 gaps in the second.
+That is the same variance the section above documents, showing up in a different
+column.
+
+The headline moved from 88 proven-missed to 105. We are leaving the original
+figures visible above rather than overwriting the page, because a result that
+quietly improves between readings is indistinguishable from one that was tuned
+until it looked good.
+

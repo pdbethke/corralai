@@ -195,6 +195,21 @@ func FromEnv() Backend {
 	}
 }
 
+// ForModelOrLocal is ForModel with a LOCAL fallback: a model name that matches
+// no cloud vendor prefix is an Ollama model, served by the local daemon.
+//
+// ForModel alone is the cross-vendor CLOUD path and refuses such a name. That
+// is right for a cross-vendor critic, and wrong for any seat an operator may
+// legitimately fill with a local model — which is every seat corral has. A
+// caller that wants "whatever backend serves this model" wants this function;
+// a caller that specifically requires a cloud vendor still wants ForModel.
+func ForModelOrLocal(model string) (Backend, error) {
+	if VendorOf(model) == "" {
+		return NewOllamaBackend(env("OLLAMA_URL", "http://127.0.0.1:11434"), model), nil
+	}
+	return ForModel(model)
+}
+
 // NewOllamaBackend builds an ollama Backend directly (bypassing MODEL_BACKEND
 // selection) — used by tests, and available to any caller that wants to talk
 // to a specific Ollama endpoint/model without going through env vars.

@@ -23,8 +23,14 @@ type llmDeriver struct{ b agentbackend.Backend }
 
 // newLLMDeriver routes to the vendor that owns the model and fails closed when
 // that vendor's credential is absent.
+//
+// A LOCAL (ollama) model name is served by the local daemon rather than
+// refused: goal derivation is the only seat that demanded a cloud vendor, which
+// made `certify --repo` the one mode that could not run locally — against
+// corral's own local-first claim, and for a summarizing task a local model
+// handles well. A cloud model with no credential still fails closed.
 func newLLMDeriver(model string) (reposcan.Deriver, error) {
-	b, err := agentbackend.ForModel(model)
+	b, err := agentbackend.ForModelOrLocal(model)
 	if err != nil {
 		return nil, fmt.Errorf("goal deriver: %w", err)
 	}

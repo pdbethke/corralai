@@ -104,6 +104,8 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	outFlag := fs.String("out", "", "also write the signed verdict as a self-contained record file, re-verifiable offline with `corral certify verify <file> --pubkey <hex> --allow-unanchored`")
 	quietFlag := fs.Bool("quiet", false, "suppress the live progress echo on stderr (the verdict, --out and --record are unaffected)")
 	repoDirFlag := fs.String("repo-dir", "", "audit --code IN THE CONTEXT of this cloned repo/package: the whole tree is seeded into the jail, the file is mutated in place, and the project's OWN test command (given after `--`) grades it — so real multi-file projects with package imports work (--code/--test are repo-relative)")
+	recordStreamFlag := fs.String("record-stream", "", "stream each run event as newline-delimited JSON to this file AS IT HAPPENS — the same events --record collects into a tape at the end, so a watcher (`tail -f`, the cockpit) can follow a run in flight instead of waiting hours for it to finish. Independent of --record: either, both, or neither")
+
 	recordFlag := fs.String("record", "", "write a replayable tape of the run (the pool's reasoning beats, task lifecycle, and findings) to this JSON file — the same {events:[…]} shape the corralai.dev cockpit replays")
 	swarmFlag := fs.Int("swarm", 0, "max concurrent audit workers (0 = auto-size to this host's cores). The BUDGET clamp: independent role tasks run in parallel up to this bound, so a big audit swarms without melting the box")
 	maxShardsFlag := fs.Int("max-shards", 0, "max mutant-generator seats fanned out across the file's functions (0 = "+fmt.Sprint(advpool.DefaultMaxShards)+"). Bounds PARALLELISM only — every function is probed regardless; --n-mutants is the PER-SHARD budget")
@@ -163,6 +165,19 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	rec := &recordSink{}
 	if !*quietFlag {
 		rec.live = stderr
+	}
+	// --record-stream: open the live event stream BEFORE any work starts, so a
+	// watcher attached at t=0 sees the first beat. Truncated rather than
+	// appended: a stream is one run's, and silently continuing a previous run's
+	// file would hand a watcher two interleaved timelines.
+	if p := strings.TrimSpace(*recordStreamFlag); p != "" {
+		f, ferr := os.Create(p) // #nosec G304 -- operator-supplied output path, same contract as --record
+		if ferr != nil {
+			fmt.Fprintf(stderr, "corral certify --local: --record-stream %s: %v\n", p, ferr)
+			return 2
+		}
+		defer func() { _ = f.Close() }()
+		rec.stream = f
 	}
 
 	// The persistent build ledger + signing key `corral certify`/`corral certify

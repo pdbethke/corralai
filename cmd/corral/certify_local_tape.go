@@ -100,6 +100,18 @@ type recordSink struct {
 	// --out/--json produces, and progress must never contaminate a stream
 	// something else is parsing.
 	live io.Writer
+	// stream, when set, emits each event as newline-delimited JSON the moment
+	// it is recorded — the same objects writeTape later collects.
+	//
+	// --record writes the tape ONCE, at the end, so a multi-hour audit produced
+	// nothing watchable until it finished and the cockpit could only replay
+	// history. This is the live view of what becomes the recording, and it
+	// needs no server, no port and no database protocol: a watcher tails a
+	// file. `live` is the human-readable sibling of the same stream; this one
+	// is for machines.
+	//
+	// Written INSIDE add's lock so the stream's order is the tape's order.
+	stream io.Writer
 }
 
 func (r *recordSink) add(kind, actor, subject string, detail map[string]any) {
@@ -113,6 +125,14 @@ func (r *recordSink) add(kind, actor, subject string, detail map[string]any) {
 	if r.live != nil {
 		if line := renderBeat(kind, actor, subject, detail); line != "" {
 			fmt.Fprintln(r.live, line)
+		}
+	}
+	if r.stream != nil {
+		// A streaming failure must never take down the audit: the tape is
+		// still written at the end, and a broken pipe (a watcher that quit) is
+		// the ordinary case, not an error the run should care about.
+		if b, err := json.Marshal(r.events[len(r.events)-1]); err == nil {
+			_, _ = r.stream.Write(append(b, '\n'))
 		}
 	}
 }

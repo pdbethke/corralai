@@ -77,14 +77,35 @@ Commit messages here are full sentences explaining *why*, not just what. Look at
 recent history before writing one — that convention is load-bearing for a
 codebase whose comments carry most of its institutional memory.
 
-## Never point corral at a working repository you care about
+## Where corral writes, and the one mode that touches your checkout
 
-`certify --local` **mutates files in place** and restores them afterward. A
-crash, a timeout, or a kill signal mid-run can leave a mutant on disk.
+**By default corral never writes to your repository.** Both `certify --local`
+and `certify --repo` run on the `jail` substrate: the tree is copied into a
+disposable bwrap sandbox, dependency dirs are bound read-only, and every mutant
+is applied to the COPY. `certify --local` has no `--substrate` flag at all, so
+it cannot select anything else.
 
-Copy the target to a scratch directory and audit the copy. Never run it against
-a checkout with uncommitted work, and never against a repository belonging to
-someone who has not agreed to it.
+**One substrate mutates the real checkout, and it is opt-in:**
+`certify --repo --substrate workspace`. That is what the GitHub Action uses
+(`action.yml`), and it is correct there for the reason the flag's own help
+gives — an ephemeral CI runner IS the isolation boundary. `--repo-dir` is a
+*precondition* of that substrate, not a trigger for it.
+
+Under the workspace substrate the apply/restore ledger is defended: writes go
+through `os.OpenRoot` so a symlink cannot escape the root, originals are
+journaled, files that did not exist are removed rather than left as strays, and
+restore runs via `defer` — covering a failing command, a timeout, and a panic,
+each asserted by its own test.
+
+**The residual risk, stated exactly:** there is no SIGINT/SIGTERM handler in
+`cmd/corral`, so Ctrl-C during a `--substrate workspace` run can leave a mutant
+on disk, and nothing detects a stale mutant on the next start. That is a real
+gap on the opt-in path. It does not apply to jailed runs, which is every
+default invocation.
+
+So: run `--substrate workspace` only where the caller is the isolation boundary
+(CI, a scratch copy, a tree with no uncommitted work). And never audit a
+repository belonging to someone who has not agreed to it.
 
 ## Running an audit: the traps, in the order you will hit them
 

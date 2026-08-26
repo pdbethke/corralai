@@ -335,8 +335,21 @@ func loadRepoFiles(root string, opts loadOpts) (map[string]string, []adequacy.De
 		if rerr != nil {
 			return rerr
 		}
-		if !utf8.Valid(b) {
-			return nil // binary — the jail workspace is text-only
+		if !utf8.Valid(b) && !underTestdata(rel) {
+			// Binary — the jail workspace is text-only, with ONE carve-out:
+			// a fixture under a `testdata` path segment. A suite that opens
+			// testdata/small.zip cannot pass its UNMUTATED baseline without
+			// it, so dropping it does not narrow the audit — it makes the
+			// whole file ungradable, and the operator sees a confusing
+			// `no such file or directory` rather than a seeding decision.
+			// Measured on spf13/afero: 13 of 16 candidate files lost this way.
+			//
+			// The carve-out is deliberately narrow — a golden fixture is part
+			// of what the suite measures, an arbitrary binary elsewhere in the
+			// tree is not — and mirrors the same `testdata` carve-out the
+			// test-surface digest already makes, for the same reason.
+			// maxFile/maxTotal still bound it.
+			return nil
 		}
 		total += int64(len(b))
 		if total > maxTotal {

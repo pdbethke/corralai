@@ -397,12 +397,27 @@ type localAuditInput struct {
 type localAuditError struct {
 	usage bool
 	msg   string
+	// scanReason, when set, is the reposcan disposition this error deserves in
+	// a whole-repo report — see ScanReason.
+	scanReason string
 }
 
 func (e localAuditError) Error() string { return e.msg }
 
+// ScanReason implements reposcan.ReasonCarrier: a repo scan asks an executor
+// error which disposition it deserves, so a precise refusal is not flattened
+// into the catch-all executor-error. Empty means "no opinion".
+func (e localAuditError) ScanReason() string { return e.scanReason }
+
 func auditUsageErr(format string, a ...any) error {
 	return localAuditError{usage: true, msg: fmt.Sprintf(format, a...)}
+}
+
+// auditNotCollectedErr is auditUsageErr for the ONE refusal a repo scan must
+// report distinctly: the caller's test command would not run the test this
+// audit writes. It is a fact about the invocation, not a corral failure.
+func auditNotCollectedErr(format string, a ...any) error {
+	return localAuditError{usage: true, scanReason: reposcan.ReasonTestCmdCannotCollect, msg: fmt.Sprintf(format, a...)}
 }
 
 func auditErr(format string, a ...any) error {
@@ -1197,7 +1212,7 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 	// execution and no inference, so paying for it afterwards was never a
 	// trade, just an ordering mistake. Refuse here, and name the fix.
 	if collected, cerr := scorer.AuthoredTestWouldBeCollected(ctx, rs.CodePath, adequacy.ShellSplit(rs.TestCmd)); cerr == nil && !collected {
-		return zero, auditUsageErr(
+		return zero, auditNotCollectedErr(
 			"your test command would not run the test this audit writes, so it could not prove a gap even if it found one.\n"+
 				"  corral writes its killing test beside your own, as: %s\n"+
 				"  Your command does not collect that file — a command naming a single test file is the usual cause.\n"+

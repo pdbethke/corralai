@@ -2021,6 +2021,42 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 // corral could not pair with a test. It exists to keep the merge gate honest in
 // the one case where a green result is actively misleading: a zero-candidate
 // diff has two causes, and they are not the same answer.
+// reasonGloss explains, in one clause, what an ungradable disposition MEANS —
+// and specifically whether it is corral failing, the caller's invocation, or a
+// file with nothing to audit.
+//
+// Every reason printed as a bare code read as a failure. On spf13/afero that
+// made FOUR correct calls look like four crashes: two files live in separate Go
+// modules the test command cannot reach, and two are pure interface
+// declarations with no behavior a mutant could violate. An audit whose report
+// understates its own accuracy is telling less than the truth, in the direction
+// that happens to look worse — which is still not the full story.
+//
+// Unknown reasons get no gloss rather than a guessed one.
+func reasonGloss(reason string) string {
+	switch reason {
+	case reposcan.ReasonTestCmdCannotCollect:
+		return " — your test command would not run the test corral writes, so no gap could be proven; NOT a corral failure, and nothing was spent"
+	case reposcan.ReasonUngoaled:
+		return " — no testable property: the file is purely declarative (interfaces, constants, generated code), so there is nothing a mutant could violate"
+	case reposcan.ReasonBaselineFailed:
+		return " — the project's own suite did not pass on the UNMUTATED code in this environment; a build/environment problem, not a test-quality verdict"
+	case reposcan.ReasonFlakyBaseline:
+		return " — the unmutated suite gave different answers on repeated runs, so no mutant result from it could be trusted"
+	case reposcan.ReasonExecutorError:
+		return " — the audit itself failed to run; see the detail below"
+	case reposcan.ReasonSuiteIgnoresFile:
+		return " — the suite never exercises this file, so a mutant in it cannot be caught by construction"
+	case reposcan.ReasonCancelled:
+		return " — the run was interrupted before this file was graded"
+	case reposcan.ReasonPrepFailed:
+		return " — the workspace could not be prepared for this file"
+	case reposcan.ReasonMappedTestMissing:
+		return " — the --tests map names a test file that does not exist"
+	}
+	return ""
+}
+
 func printRepoReport(w io.Writer, r reposcan.RepoReport, nothingInScope bool, minKillRate *float64, maxProvenMissed *int, unpairableInDiff []string, oldestReused time.Time) {
 	commit := r.Commit
 	if strings.TrimSpace(commit) == "" {
@@ -2110,7 +2146,7 @@ func printRepoReport(w io.Writer, r reposcan.RepoReport, nothingInScope bool, mi
 	}
 	sort.Strings(ungradableReasons)
 	for _, reason := range ungradableReasons {
-		fmt.Fprintf(w, "  ungradable: %d (%s)\n", r.Ungradable[reason], reason)
+		fmt.Fprintf(w, "  ungradable: %d (%s)%s\n", r.Ungradable[reason], reason, reasonGloss(reason))
 		// Detail is the operator's actual diagnosis (e.g. WHY the toolchain
 		// check failed) — the count alone answered "how many" but not "why",
 		// which used to mean a code trace instead of reading the report.

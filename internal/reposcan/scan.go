@@ -2,6 +2,8 @@ package reposcan
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,7 +15,13 @@ const (
 	ReasonBaselineFailed = "baseline-failed"
 	ReasonFlakyBaseline  = "flaky-baseline"
 	ReasonExecutorError  = "executor-error"
-	ReasonCancelled      = "cancelled"
+	// ReasonTestCmdCannotCollect: the project's own test command would not RUN
+	// the test this audit writes, so no gap could be proven even if one were
+	// found. corral refuses before spending anything. This is a fact about the
+	// invocation, not a corral failure, and flattening it into
+	// ReasonExecutorError made four correct refusals read as four crashes.
+	ReasonTestCmdCannotCollect = "test-cmd-cannot-collect"
+	ReasonCancelled            = "cancelled"
 	// ReasonPrepFailed marks a job whose language-wide jail preparation failed
 	// (e.g. `go mod vendor`). The failure is cached per language, so the WORK is
 	// attempted once per language rather than once per file — but every file of
@@ -69,6 +77,23 @@ type Cache interface {
 // interface does not promise concurrency-safe implementations (a plain
 // map-backed cache is the common case), and Put is called from concurrent
 // worker goroutines, so Scan — not its caller — owns making that safe.
+// ReasonCarrier lets an Executor say WHY a file could not be audited, so a
+// PRECISE refusal keeps its identity instead of being flattened into the
+// catch-all ReasonExecutorError. An executor that has no opinion returns "" and
+// gets the catch-all, which is the existing behavior.
+type ReasonCarrier interface{ ScanReason() string }
+
+// executorErrReason picks the most specific reason an executor error carries.
+func executorErrReason(err error) string {
+	var rc ReasonCarrier
+	if errors.As(err, &rc) {
+		if s := strings.TrimSpace(rc.ScanReason()); s != "" {
+			return s
+		}
+	}
+	return ReasonExecutorError
+}
+
 func Scan(ctx context.Context, jobs []Job, ex Executor, c Cache, workers int) []FileResult {
 	if workers < 1 {
 		workers = 1
@@ -110,7 +135,7 @@ func Scan(ctx context.Context, jobs []Job, ex Executor, c Cache, workers int) []
 				// discarding it, so an operator reading the report sees WHY,
 				// not just that grading failed. See buildScanFileRows /
 				// printRepoReport for where Detail surfaces.
-				out[i] = FileResult{Job: j, Gradable: false, Reason: ReasonExecutorError, Detail: err.Error(), ComputedAt: time.Now()}
+				out[i] = FileResult{Job: j, Gradable: false, Reason: executorErrReason(err), Detail: err.Error(), ComputedAt: time.Now()}
 				return
 			}
 			res.Job = j

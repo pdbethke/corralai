@@ -224,6 +224,8 @@ Usage of certify --repo:
     	grade each file against its OWN paired test file instead of the project's whole suite. MUCH faster — scoring runs the suite once per mutant, so this collapses an O(mutants x suite runtime) cost — but it CHANGES THE MEASUREMENT: a mutant that some unrelated test happened to catch now reads as a survivor, so the reported gap count can go UP. Ignored when an explicit -- <cmd> is given, and for languages with no verified per-file invocation
   -shadow-model string
     	challenger model that attacks every region a SECOND time. OFF unless named. Recorded for comparison — NEVER gates the verdict
+  -shadow-writer-model string
+    	CHALLENGER test-writer: a second writer attacks the SAME survivors as the primary, so the two seats' misses can be compared (Jaccard over survivors, Cohen's kappa). Measurement only — it NEVER gates the verdict. OFF unless named. Recording the per-mutant outcomes additionally needs --mutant-attempts-db
   -substrate string
     	where the audit runs: jail (bwrap) or workspace (mutate --repo in place; the caller IS the isolation boundary, e.g. an ephemeral CI runner) (default "jail")
   -swarm int

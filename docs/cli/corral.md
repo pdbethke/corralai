@@ -116,6 +116,142 @@ CORRALAI_DB, and the rest of the // Env: block at the top of this binary's
 main.go (also reproduced in the generated CLI reference).
 ```
 
+## `corral certify --local` flags
+
+```
+Usage of certify --local:
+  -bind-dir value
+    	extra repo-relative dependency dir to mount read-only into the jail instead of copying it into the workspace (repeatable; node_modules/vendor/.venv/venv/.bundle are auto-detected) — --repo-dir mode only
+  -code string
+    	path of the code under review (required)
+  -commit string
+    	commit sha (default: git rev-parse HEAD, else "local")
+  -critic-model string
+    	model for the test-critic role, which must differ from the writer's; "off" disables the critic entirely (it is advisory and never gates the verdict, so a single-vendor run with only one usable model can drop it). No default
+  -goal string
+    	the correctness/security goal the code must satisfy (required)
+  -jail string
+    	sandbox backend: bwrap|container (Linux), sandbox-exec (macOS) (default: auto-detect for this OS; "none" is not supported — --local always sandboxes)
+  -lang string
+    	source language (default: inferred from --code extension)
+  -local
+    	run the adversarial pool in-process (this mode)
+  -local-endpoint value
+    	place a LOCAL seat on a specific ollama daemon, as <role>=<url> (repeatable; e.g. test-writer=http://localhost:11436). A daemon is pinned to a GPU by its own environment (HIP_VISIBLE_DEVICES / CUDA_VISIBLE_DEVICES), so this is how two models occupy two cards at once — corral selects the DAEMON, never the device. Without it every local seat shares OLLAMA_URL, one card and one VRAM budget. Roles: mutant-generator, test-writer, test-critic, mutant-generator-shadow, test-writer-shadow. An unknown role, a duplicate role, a non-absolute url, or an endpoint on a seat holding a CLOUD model is refused rather than ignored
+  -matrix
+    	opt into the tests×mutants matrix: after the primary pass, re-score EVERY dev test ALONE against the run's mutants — a per-test adequacy readout + a delete-candidate list, instead of one dev-suite-wide number. COSTLY: T tests × M mutants extra jail runs (T×M, on top of the primary pass), so leave off by default on a big suite
+  -max-shards int
+    	max mutant-generator seats fanned out across the file's functions (0 = 8). Bounds PARALLELISM only — every function is probed regardless; --n-mutants is the PER-SHARD budget
+  -mutant-model string
+    	model for the mutant-generator role — REQUIRED, corral has no default models
+  -n-mutants --n-mutants 20
+    	PER-SHARD seeded-violation mutant budget (default 5) — this is NOT the run's total: total mutants scored scale with --max-shards (default 8) shards, and DOUBLE again if the shadow challenger is on (default). E.g. the default 5 with the default 8 shards means up to ~40 primary + ~40 shadow = ~80 full dev-suite jail executions, not 5 — --n-mutants 20 means roughly ~320
+  -no-bind-deps
+    	copy dependency dirs into the jail workspace instead of bind-mounting them read-only (the pre-bind behavior; subject to the workspace size cap)
+  -out corral certify verify <file> --pubkey <hex> --allow-unanchored
+    	also write the signed verdict as a self-contained record file, re-verifiable offline with corral certify verify <file> --pubkey <hex> --allow-unanchored
+  -poll duration
+    	how long to wait between drive iterations when nothing is claimable (default 2s)
+  -quiet
+    	suppress the live progress echo on stderr (the verdict, --out and --record are unaffected)
+  -record string
+    	write a replayable tape of the run (the pool's reasoning beats, task lifecycle, and findings) to this JSON file — the same {events:[…]} shape the corralai.dev cockpit replays
+  -record-stream tail -f
+    	stream each run event as newline-delimited JSON to this file AS IT HAPPENS — the same events --record collects into a tape at the end, so a watcher (tail -f, the cockpit) can follow a run in flight instead of waiting hours for it to finish. Independent of --record: either, both, or neither
+  -repo string
+    	repository (default: git remote.origin.url, else "local")
+  -repo-dir --
+    	audit --code IN THE CONTEXT of this cloned repo/package: the whole tree is seeded into the jail, the file is mutated in place, and the project's OWN test command (given after --) grades it — so real multi-file projects with package imports work (--code/--test are repo-relative)
+  -shadow-model string
+    	challenger model that attacks every region a SECOND time for a region-controlled head-to-head. OFF unless named. Recorded for comparison — NEVER gates the verdict
+  -shadow-writer-model string
+    	challenger WRITER model that authors a second suite against the SAME mutant set for a mutant-controlled head-to-head. OFF unless named. Recorded for correlation — NEVER gates the verdict
+  -swarm int
+    	max concurrent audit workers (0 = auto-size to this host's cores). The BUDGET clamp: independent role tasks run in parallel up to this bound, so a big audit swarms without melting the box
+  -test string
+    	path of the dev's test (default: the sibling test of --code)
+  -test-timeout duration
+    	hard cap on a SINGLE test-suite run in the jail (0 = auto: derived from the healthy suite's own runtime, so a mutant that makes the suite hang is killed fast instead of eating the whole --timeout). Raise it only if your suite legitimately runs long
+  -timeout duration
+    	give up if the run makes no progress for this long (not a hard wall-clock cap — a single slow LLM call can overshoot it) (default 10m0s)
+  -writer-model string
+    	model for the test-writer role — REQUIRED, corral has no default models
+```
+
+## `corral certify --repo` flags
+
+```
+Usage of certify --repo:
+  -all
+    	audit every candidate, ignoring --top
+  -attest string
+    	write the scan's verdict as an in-toto Statement to this file — the receipt a reviewer can verify without trusting the run that produced it. Consumed by GitHub's attestation API (actions/attest), which signs it keylessly through the workflow's own OIDC identity, so the signature chains to the repository and workflow rather than to a key that lived on an ephemeral runner. Carries every file's kill rate, survivors and proven gaps WITH the honesty flags that say what a zero means, the thresholds it was judged against, and the models in each role
+  -commit string
+    	commit SHA the report is bound to
+  -critic-model string
+    	model for the test-critic role, which must differ from the writer's; "off" disables the critic entirely (it is advisory and never gates the verdict, so a single-vendor run with only one usable model can drop it). No default
+  -derive-model string
+    	model that derives a goal per file when --goals is not given — REQUIRED unless --goals is supplied; corral has no default models
+  -diff-base string
+    	bound the scan to files changed since this git ref, instead of ranking + --top. In a PR the diff IS the bound: ranking and --top do not apply on this path
+  -dry-run
+    	enumerate and emit jobs, then stop — no audits run
+  -goals string
+    	JSON file mapping repo-relative paths to goals (default: derive a goal per file)
+  -json
+    	with --dry-run, emit the repository's audit surface as JSON instead of the human report: per-language counts, every auditable file with its inferred test pairing, and the machine-stable exclusion tally. Needs no key, no jail and no money — it is the free inventory a UI or a tenant's own tooling can consume instead of scraping stdout
+  -local-endpoint value
+    	place a LOCAL seat on a specific ollama daemon, as <role>=<url> (repeatable; e.g. mutant-generator=http://localhost:11436). A daemon is pinned to a GPU by its own environment, so this is how two models occupy two cards at once — corral selects the DAEMON, never the device. Without it every local seat shares OLLAMA_URL, one card and one VRAM budget
+  -max-proven-missed string
+    	fail the scan (exit 1) if ANY audited file has MORE than this many proven-missed gaps — survivors the pool then killed with a test it WROTE and RAN. Opt-in and unset by default. Prefer this to --min-kill-rate as a merge gate: a kill rate is a proportion of freshly generated mutants and moves between runs on unchanged code, so a threshold set near a healthy value flaps red and gets switched off. A proven-missed gap is a specific demonstrated bug the suite does not catch, established by execution, and 0 means the pool proved nothing — not that it sampled well
+  -min-kill-rate string
+    	fail the scan (exit 1) if ANY audited file's kill rate is below this value (0.0-1.0 inclusive; a minimum, so a file exactly at the threshold passes). Opt-in: unset by default, so exit codes are unchanged unless this is given. Applies PER FILE, not to the aggregate — a well-tested file must not mask a weak one
+  -mutant-model string
+    	model for the mutant-generator role — REQUIRED, corral has no default models
+  -owner string
+    	owning account for the scan (tenant identifier) (default "local")
+  -preflight
+    	run the project's test suite once with coverage instrumentation and report which source files it never executes. One extra suite run; reports coverage-grade evidence, not proof
+  -push md:<db>
+    	append this scan's per-file verdicts to a DuckDB you own — a path, or md:<db> for MotherDuck (which reads motherduck_token from the environment). corral has no hosted tier and keeps nothing: the warehouse is yours, and any DuckDB works, so this is a destination rather than a lock-in. Append-only, and every row carries the sha256 of the signed statement it came from, so a row traces back to something a third party can verify. It answers what one pull request cannot — a single kill rate is a sample, and the same unchanged diff has scored 0.85 and 0.90; forty of them are a distribution
+  -record certify --local
+    	record every file this scan audited or rejected, and why, into the DuckDB scan ledger (default: off). A BOOL here — unlike certify --local's --record, which takes a tape PATH — see --record-db for where the ledger goes. A recording failure never changes the scan's verdict or exit code
+  -record-db string
+    	path to the scan ledger (default: $CORRALAI_SCANS_DB, else ~/.claude/corralai_scans.duckdb)
+  -repo string
+    	path of the repository to audit (required)
+  -scope-tests
+    	grade each file against its OWN paired test file instead of the project's whole suite. MUCH faster — scoring runs the suite once per mutant, so this collapses an O(mutants x suite runtime) cost — but it CHANGES THE MEASUREMENT: a mutant that some unrelated test happened to catch now reads as a survivor, so the reported gap count can go UP. Ignored when an explicit -- <cmd> is given, and for languages with no verified per-file invocation
+  -shadow-model string
+    	challenger model that attacks every region a SECOND time. OFF unless named. Recorded for comparison — NEVER gates the verdict
+  -substrate string
+    	where the audit runs: jail (bwrap) or workspace (mutate --repo in place; the caller IS the isolation boundary, e.g. an ephemeral CI runner) (default "jail")
+  -swarm int
+    	max concurrent audit workers (0 = auto-size to this host's cores)
+  -tests string
+    	JSON file mapping repo-relative SOURCE paths to their test files, consulted before filename convention. Convention cannot pair a project that names tests after behaviour rather than after source files (expressjs/express: lib/response.js is tested by test/res.send.js, res.json.js …), and it can pair the WRONG file (psf/requests pairs adapters.py to an 8-line test_adapters.py while its real coverage is in a 108KB test_requests.py). A mapping to a file that does not exist is refused, never silently fallen back to convention
+  -timeout certify --local
+    	per-file budget: give up on a single file's run if it makes no progress for this long (not a hard wall-clock cap — a single slow LLM call can overshoot it). Same default and semantics as certify --local's --timeout; raise it for a large file that needs more room to converge (default 10m0s)
+  -top int
+    	audit only the N highest-ranked candidates (0 or --all = every candidate). Bounded by default: a whole-repo audit runs a full herd per file, so an unbounded first scan on a large repo costs hours and real money. The DEFAULT bound does not apply with --goals — a hand-written goals map has already chosen the surface — but an explicit --top does (default 25)
+  -writer-model string
+    	model for the test-writer role — REQUIRED, corral has no default models
+```
+
+## `corral certify verify` flags
+
+```
+Usage of certify verify:
+  -allow-unanchored
+    	accept a signed-but-not-publicly-witnessed record (weaker: no third-party transparency guarantee)
+  -brain string
+    	fetch the public key from this brain's /api/certify/pubkey
+  -pubkey string
+    	hex-encoded Ed25519 public key to verify against
+  -rekor-url string
+    	Rekor instance to verify the inclusion proof against (default $CORRALAI_REKOR_URL or https://rekor.sigstore.dev)
+```
+
 ## Environment variables
 
 ```

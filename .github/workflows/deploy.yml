@@ -113,7 +113,12 @@ jobs:
         run: bash scripts/sync-site-assets.sh --check
       - name: Install gosec
         if: steps.filter.outputs.code == 'true'
-        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+        # PINNED, not @latest. An unpinned linter makes the gate
+        # non-deterministic: a new gosec release turns CI red with zero code
+        # changes, on a rule that did not exist when the code was written
+        # (G703 taint analysis did exactly that here). Bump deliberately, so a
+        # new rule is reviewed as a change rather than discovered as an outage.
+        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.29.0
       # check-security.sh runs govulncheck only when the binary is present, so
       # without this step the vulnerability scan silently did not run in CI at
       # all — the gate reported "all security invariants hold" having checked

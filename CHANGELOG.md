@@ -9,6 +9,108 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
+## [v0.7.0] — 2026-08-27
+
+The release that made corral's own numbers trustworthy. A mutant the compiler
+rejected used to be scored as a KILL, so a suite could be credited with catching
+bugs that never built — on a file with 0% coverage on every function, corral
+signed a record claiming a 0.77 kill rate that was truthfully 0.00. That is
+fixed, and much of what follows is the same theme: measure honestly, say what
+was not measured, and never report a number the run did not earn.
+
+### Added
+
+- **A challenger test-writer, and the measurement it exists for.**
+  `--shadow-writer-model` runs a SECOND writer against the same survivors as the
+  primary, so the two seats' misses can be compared: Jaccard over survivors
+  (agreement on kills is cheap; the signal is in what both models MISS) plus
+  Cohen's kappa, reported separately and never blended. Off unless named,
+  measurement only, and it never gates a verdict. Per-mutant outcomes are stored
+  per seat, pair-or-nothing: if one seat produced no usable test, NOTHING is
+  recorded rather than a zero that would read as a catastrophic blind spot.
+
+  The first coefficient: **Jaccard 0.750 over 13 survivors** between two frontier
+  models from different labs — they shared three quarters of their blind spots.
+  Enforcing that two seats differ is necessary and demonstrably not sufficient.
+
+- **`--local-endpoint <role>=<url>`** places a LOCAL seat on a specific ollama
+  daemon. A daemon is pinned to a GPU by its own environment, so this is how two
+  models occupy two cards at once; corral selects the daemon, never the device.
+  Without it every local seat shares one `OLLAMA_URL`, one card and one VRAM
+  budget. Unknown role, duplicate role, non-absolute URL, or an endpoint on a
+  seat holding a cloud model are all refused rather than ignored.
+
+- **`--record-stream <file>`** emits each run event as newline-delimited JSON as
+  it happens — the same events `--record` collects into a tape at the end. A
+  multi-hour audit used to produce nothing watchable until it finished; now a
+  watcher (`tail -f`, or the cockpit) can follow a run in flight.
+
+- **`certify --repo` reports what it spent.** A whole-repo scan is the mode that
+  actually costs money and it reported no usage at all. Tokens, not dollars:
+  prices change and differ by contract; a token count stays true.
+
+- **Every ungradable file now explains itself** in one clause — whether it is
+  corral failing, your invocation, or a file with nothing to audit. Bare codes
+  made correct refusals read as crashes: on `spf13/afero`, two files in separate
+  Go modules (unreachable by the test command) and two pure interface
+  declarations (nothing a mutant could violate) were filed alongside real errors.
+
+### Fixed
+
+- **A mutant the compiler rejected is INVALID, not killed.** `passed` meant only
+  "exit zero", so a build failure counted as the tests catching the bug. Kill
+  rates of 0.77 and ~0.92 were truthfully 0.00. Mutants now pass a compile gate
+  before grading, invalid ones are excluded from the denominator and reported
+  separately as evidence about the GENERATOR rather than about your tests.
+
+- **Reasoning models returned empty content, silently.** Qwen 3+, DeepSeek-R1 and
+  gemma4 route their answer through a separate `thinking` field; when the budget
+  runs out mid-reasoning the request still returns HTTP 200 with an EMPTY body.
+  A seat looked incapable when it was never asked correctly — gemma4 produced
+  three empty Go test files in a row and read as a model that cannot write Go.
+
+- **`certify --repo` recorded rows that named no revision and no repository.**
+  `--record` stored an empty commit and `repo='.'`, so a scan could not be joined
+  to the code it graded — and repo is the key dimension in a warehouse spanning
+  projects.
+
+- **The jail dropped binary test fixtures.** Any suite reading `testdata/*.zip`
+  failed its UNMUTATED baseline with `no such file or directory`; on
+  `spf13/afero` 13 of 16 files were lost this way.
+
+- **An interrupted audit now restores your tree.** On the `workspace` substrate
+  the apply/restore ledger covered a failing command, a timeout and a panic — but
+  a signal kills the process without running deferred functions, and Ctrl-C is
+  how a human stops a long audit.
+
+- **The goal deriver required a cloud vendor**, which made `certify --repo` the
+  one mode that could not run locally, against corral's own local-first claim.
+
+- **Per-request model timeout raised 300s → 600s.** 300s was itself a fix for a
+  falsified 180s, and was falsified in turn from the other end of the hardware
+  range: auditing `spf13/afero` with a 9B model on one 16GB GPU, 8 of 16 files
+  died on `context deadline exceeded`. Nothing was hanging. Re-running at 900s
+  graded 12 files and raised that panel's proven-missed count from 36 to 53.
+
+- **Ruby: pair minitest's prefix form** `test/<sub>/test_foo.rb`. Repos using
+  minitest's own house style paired at ZERO and were invisible to the scanner.
+
+- **`num_ctx` is sized to the VRAM budget**, and a context overflow says what to
+  do about it instead of failing opaquely.
+
+- **Retries stop on a terminal failure** instead of reissuing a doomed run twenty
+  times.
+
+### Documentation
+
+- **Corrected where corral writes.** `AGENTS.md` said "never point corral at a
+  working repository you care about" and that `certify --local` mutates files in
+  place. Both are false for every default invocation: both modes run in a bwrap
+  jail, and `certify --local` has no `--substrate` flag at all. Only
+  `certify --repo --substrate workspace` touches a real checkout — which the
+  GitHub Action opts into deliberately, because an ephemeral runner IS the
+  isolation boundary.
+
 ## [v0.6.0] — 2026-08-23
 
 ### Added
@@ -509,6 +611,16 @@ and a long run of honesty fixes.
 
 First tagged release.
 
+[v0.7.0]: https://github.com/pdbethke/corralai/releases/tag/v0.7.0
+[v0.6.0]: https://github.com/pdbethke/corralai/releases/tag/v0.6.0
+[v0.5.9]: https://github.com/pdbethke/corralai/releases/tag/v0.5.9
+[v0.5.8]: https://github.com/pdbethke/corralai/releases/tag/v0.5.8
+[v0.5.7]: https://github.com/pdbethke/corralai/releases/tag/v0.5.7
+[v0.5.6]: https://github.com/pdbethke/corralai/releases/tag/v0.5.6
+[v0.5.5]: https://github.com/pdbethke/corralai/releases/tag/v0.5.5
+[v0.5.4]: https://github.com/pdbethke/corralai/releases/tag/v0.5.4
+[v0.5.3]: https://github.com/pdbethke/corralai/releases/tag/v0.5.3
+[v0.5.2]: https://github.com/pdbethke/corralai/releases/tag/v0.5.2
 [v0.5.1]: https://github.com/pdbethke/corralai/releases/tag/v0.5.1
 [v0.5.0]: https://github.com/pdbethke/corralai/releases/tag/v0.5.0
 [v0.4.0]: https://github.com/pdbethke/corralai/releases/tag/v0.4.0

@@ -78,17 +78,19 @@ func TestBackendConnectionRefusedIsUnreachable(t *testing.T) {
 // with bad tests — the case an audit exists for.
 func TestLLMHTTPTimeout(t *testing.T) {
 	t.Setenv("AGENT_LLM_TIMEOUT_SECONDS", "")
-	if got := llmHTTPTimeout(); got != 300*time.Second {
-		t.Errorf("unset default = %v, want 300s", got)
-	}
-	t.Setenv("AGENT_LLM_TIMEOUT_SECONDS", "600")
 	if got := llmHTTPTimeout(); got != 600*time.Second {
-		t.Errorf("override = %v, want 600s", got)
+		t.Errorf("unset default = %v, want 600s", got)
+	}
+	// Deliberately NOT the default: an override asserted at the same value as
+	// the default proves nothing about overriding.
+	t.Setenv("AGENT_LLM_TIMEOUT_SECONDS", "900")
+	if got := llmHTTPTimeout(); got != 900*time.Second {
+		t.Errorf("override = %v, want 900s", got)
 	}
 	for _, bad := range []string{"-5", "0", "abc", "  "} {
 		t.Setenv("AGENT_LLM_TIMEOUT_SECONDS", bad)
-		if got := llmHTTPTimeout(); got != 300*time.Second {
-			t.Errorf("invalid %q = %v, want default 300s", bad, got)
+		if got := llmHTTPTimeout(); got != 600*time.Second {
+			t.Errorf("invalid %q = %v, want default 600s", bad, got)
 		}
 	}
 }

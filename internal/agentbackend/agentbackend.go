@@ -411,16 +411,30 @@ func scrubSecretEnv() {
 // and with how much the dev suite missed, so the worst case is a big file whose
 // tests are bad — exactly the case an audit exists for.
 //
-// 300s is chosen to cover that observed case with margin rather than to be
+// 300s covered that case — and was then falsified in turn, by the OTHER end of
+// the hardware range. Auditing spf13/afero with a 9B model on one 16GB consumer
+// GPU, 8 of 16 files died on `context deadline exceeded` at 300s. Nothing was
+// hanging: re-running the same commit, same models and same build with
+// AGENT_LLM_TIMEOUT_SECONDS=900 graded 12 of 16 and raised that panel's
+// proven-missed count from 36 to 53.
+//
+// The pattern in both falsifications is the same. A local model's prefill on
+// consumer hardware, and a hosted model's on a large prompt, are both slow in a
+// way this default was not sized for — and the failure it produces names the
+// TRANSPORT ("context deadline exceeded", surfaced as executor-error) and never
+// the cause, so an operator has no reason to suspect a knob.
+//
+// 600s is chosen to cover the measured local case with margin rather than to be
 // generous: a request that genuinely hangs still fails, just not one that was
-// only slow.
+// only slow. Raise AGENT_LLM_TIMEOUT_SECONDS further for a big model on a slow
+// card; the 900s used above is a reasonable ceiling for a 16GB GPU.
 func llmHTTPTimeout() time.Duration {
 	if v := strings.TrimSpace(os.Getenv("AGENT_LLM_TIMEOUT_SECONDS")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			return time.Duration(n) * time.Second
 		}
 	}
-	return 300 * time.Second
+	return 600 * time.Second
 }
 
 var httpc = &http.Client{Timeout: llmHTTPTimeout()}

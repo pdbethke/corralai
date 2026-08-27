@@ -78,6 +78,8 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	minKillRateFlag := fs.String("min-kill-rate", "", "fail the scan (exit 1) if ANY audited file's kill rate is below this value (0.0-1.0 inclusive; a minimum, so a file exactly at the threshold passes). Opt-in: unset by default, so exit codes are unchanged unless this is given. Applies PER FILE, not to the aggregate — a well-tested file must not mask a weak one")
 	preflightFlag := fs.Bool("preflight", false, "run the project's test suite once with coverage instrumentation and report which source files it never executes. One extra suite run; reports coverage-grade evidence, not proof")
 	recordFlag := fs.Bool("record", false, "record every file this scan audited or rejected, and why, into the DuckDB scan ledger (default: off). A BOOL here — unlike `certify --local`'s --record, which takes a tape PATH — see --record-db for where the ledger goes. A recording failure never changes the scan's verdict or exit code")
+	shadowWriterModelFlag := fs.String("shadow-writer-model", "", "CHALLENGER test-writer: a second writer attacks the SAME survivors as the primary, so the two seats' misses can be compared (Jaccard over survivors, Cohen's kappa). Measurement only — it NEVER gates the verdict. OFF unless named. Recording the per-mutant outcomes additionally needs --mutant-attempts-db")
+
 	var localEndpointFlag stringSlice
 	fs.Var(&localEndpointFlag, "local-endpoint", "place a LOCAL seat on a specific ollama daemon, as <role>=<url> (repeatable; e.g. mutant-generator=http://localhost:11436). A daemon is pinned to a GPU by its own environment, so this is how two models occupy two cards at once — corral selects the DAEMON, never the device. Without it every local seat shares OLLAMA_URL, one card and one VRAM budget")
 
@@ -356,6 +358,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		ex.models = auditModels{
 			writer: *writerModelFlag, mutant: *mutantModelFlag,
 			critic: *criticModelFlag, shadow: *shadowModelFlag,
+			shadowWriter: *shadowWriterModelFlag,
 		}
 		// Deferred, not called at the end: a panic mid-scan must still release
 		// the staging dirs the shared seeds created. Deferred here so it also
@@ -371,11 +374,12 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// Provider preflight: role models, decorrelation, and the API key are
 		// scan-wide facts too.
 		if _, err := resolveAuditRoles(localAuditInput{
-			cmdName:     "corral certify --repo",
-			writerModel: *writerModelFlag,
-			mutantModel: *mutantModelFlag,
-			criticModel: *criticModelFlag,
-			shadowModel: *shadowModelFlag,
+			cmdName:           "corral certify --repo",
+			writerModel:       *writerModelFlag,
+			mutantModel:       *mutantModelFlag,
+			criticModel:       *criticModelFlag,
+			shadowModel:       *shadowModelFlag,
+			shadowWriterModel: *shadowWriterModelFlag,
 		}, stderr); err != nil {
 			fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
 			if isAuditUsageError(err) {
@@ -404,15 +408,20 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// not tell two model sets apart and every ledger row recorded "unset" —
 	// meaning the ledger could not be used to grade the models it exists to
 	// grade.
-	// The repo-scan path exposes no --shadow-writer-model flag, so the
-	// challenger writer is always off here; resolveRoleModels/modelSetKey
-	// still take the empty value explicitly so the two paths never disagree
-	// about how a seat resolves.
+	// The challenger writer is resolved here like every other seat. It used to
+	// be structurally absent from this path — no flag, always empty — which
+	// meant the decorrelation measurement could only ever run on ONE FILE at a
+	// time via `certify --local`, and a whole-repo scan (the mode with the
+	// scale to make a coefficient worth reading) could not produce one at all.
+	// resolveRoleModels/modelSetKey take it explicitly so the two paths never
+	// disagree about how a seat resolves, and so the model set in the cache key
+	// and the ledger names the challenger when one ran.
 	rmWriter, rmMutant, rmCritic, rmShadow, rmShadowWriter := resolveRoleModels(localAuditInput{
-		writerModel: *writerModelFlag,
-		mutantModel: *mutantModelFlag,
-		criticModel: *criticModelFlag,
-		shadowModel: *shadowModelFlag,
+		writerModel:       *writerModelFlag,
+		mutantModel:       *mutantModelFlag,
+		criticModel:       *criticModelFlag,
+		shadowModel:       *shadowModelFlag,
+		shadowWriterModel: *shadowWriterModelFlag,
 	})
 	modelSet := modelSetKey(rmWriter, rmMutant, rmCritic, rmShadow, rmShadowWriter)
 
@@ -2355,7 +2364,7 @@ func resolveMutantConcurrency(budget int, substrate string, workers, jobs int) i
 // Every field is empty unless the operator passed the flag; empty means
 // "apply auditRoles' own default", so a scan that names none is byte-identical
 // to before.
-type auditModels struct{ writer, mutant, critic, shadow string }
+type auditModels struct{ writer, mutant, critic, shadow, shadowWriter string }
 
 type localExecutor struct {
 	// models are the per-role overrides threaded into every job's
@@ -2591,10 +2600,11 @@ func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
 		// Per-role models, empty unless the operator passed the flags — the
 		// zero value keeps auditRoles' own Claude defaults, so an invocation
 		// that names none behaves exactly as before.
-		writerModel: l.models.writer,
-		mutantModel: l.models.mutant,
-		criticModel: l.models.critic,
-		shadowModel: l.models.shadow,
+		writerModel:       l.models.writer,
+		mutantModel:       l.models.mutant,
+		criticModel:       l.models.critic,
+		shadowModel:       l.models.shadow,
+		shadowWriterModel: l.models.shadowWriter,
 	}
 }
 

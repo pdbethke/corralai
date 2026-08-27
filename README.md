@@ -47,8 +47,14 @@ corral certify --local \
 **Those model names are an example, not a default — corral has none.** Every seat
 is yours to name, from whichever provider you have a key for; the models above are
 simply what *we* run. The one rule is that the **critic must differ from the
-writer**, because that decorrelation is what the verdict rests on — and it's a
-property, not a vendor, so any two distinct models satisfy it. `--critic-model off`
+writer** — the run refuses to start where they collapse onto one model. That rule
+enforces *distinctness*, which is necessary and, on our own evidence, not
+sufficient: two frontier models from different labs still shared three quarters
+of their blind spots ([Jaccard 0.750 over 13
+survivors](https://corralai.dev/field-notes/both-models-missed-the-same-nine/)).
+Distinctness is a property rather than a vendor, so any two different models
+satisfy the *rule* — how much independence that actually buys is a separate
+question, and corral measures it rather than assuming it. `--critic-model off`
 drops the critic entirely (it's advisory and never gates the verdict). A run with an
 unnamed seat is refused, and the refusal tells you which provider credentials it can
 actually see.
@@ -84,7 +90,7 @@ actually test anything, or do they just pass?* — and answers it by execution:
   kills is a **proven** gap. Zero proven gaps means *nothing was proven this run* —
   never *your tests are fine*. ([why that distinction is the whole
   point](#when-corral-proves-a-gap-and-when-it-proves-nothing))
-- A **test-critic** — always a *different*, decorrelation-enforced model — reads your
+- A **test-critic** — always a *different* model, enforced — reads your
   suite cold and flags vacuous, designed-to-pass tests. Its opinion is carried as
   **unverified advice; it never gates the verdict.**
 
@@ -169,8 +175,9 @@ C is next.
 > sweep](#the-gate--for-a-repo-and-for-a-control-owner) below.
 
 By default the audit runs two distinct Claude
-models off one key (Sonnet writes/mutates, Haiku critiques) — decorrelation satisfied
-with a single key; on that same default path, `--critic-model gemini-3.6-flash` plus
+models off one key (Sonnet writes/mutates, Haiku critiques) — the distinctness rule
+satisfied with a single key, though two models from one lab are the WEAKEST form of
+it and share the most lineage; on that same default path, `--critic-model gemini-3.6-flash` plus
 `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) routes the critic to Gemini via the
 OpenAI-compatible Google endpoint, a real cross-vendor critic, while the writer and
 mutant-generator stay on Claude — a missing key fails the run closed rather than
@@ -266,12 +273,14 @@ signed record you verify offline with `corral certify verify` — no server requ
 
 Not a slogan — the code refuses to do otherwise.
 
-1. **The judge is a different judge.** Cross-model checking is **decorrelated by
+1. **The judge is a different judge.** Cross-model checking is **distinct by
    construction**: the model that critiques a suite is *forced* to differ from the one
    that wrote the exposing test — the run refuses to start where they collapse onto
    one model. Most swarm frameworks run one LLM in N roles: parallelism with
    *correlated* blind spots, because the "reviewer" shares the "builder's" failure
-   modes when it's the same model. Bring Claude, Gemini, GPT, anything
+   modes when it's the same model. Distinctness raises the floor; it does not buy
+   independence outright, and corral is the only tool we know of that **measures**
+   the difference rather than asserting it — see `--shadow-writer-model` below. Bring Claude, Gemini, GPT, anything
    OpenAI-compatible, or a local model — no lock-in.
 2. **The verdict is measured, not reported.** The gate **runs the actual check** —
    `go test`, the build, the control owner's tests, your suite against the mutants —
@@ -749,6 +758,20 @@ of.
   are scored and recorded to the scorecard (`corral scorecard`), but only the primary
   generator's mutants feed the kill-rate. It roughly doubles generator API calls and
   jail wall-clock; `--shadow-model off` disables it.
+- **The challenger writer, and the decorrelation measurement.**
+  `--shadow-writer-model` (off unless named) runs a SECOND test-writer against the
+  same survivors as the primary, so the two seats' misses can be compared. The
+  headline is **Jaccard over survivors** — of everything either writer missed, what
+  fraction did both miss — because agreement on *kills* is cheap: any competent
+  suite kills the easy mutants, so a correlation over kill vectors is driven by the
+  mutants being easy rather than by the models being alike. Cohen's kappa rides
+  along as a chance-corrected companion, reported separately and never blended.
+  Recording is **pair-or-nothing**: if either seat produced no usable test, nothing
+  is stored, because a zero for a seat that never ran is a fabricated comparison.
+  **It never gates the verdict** — it is measurement, and it is how corral checks
+  its own central claim instead of asserting it. First result: [Jaccard 0.750 over
+  13 survivors](https://corralai.dev/field-notes/both-models-missed-the-same-nine/)
+  between two frontier models from different labs.
 - **Parallel mutant scoring.** Scoring runs the target's whole suite once per
   mutant, so an audit costs `O(mutants × your suite's runtime)` — the dominant cost
   on any project whose suite isn't trivially fast. `certify --repo` now splits one

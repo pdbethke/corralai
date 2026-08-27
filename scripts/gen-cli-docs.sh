@@ -62,6 +62,20 @@ capture_help() {
   ( cd "$WORKDIR" && "./$bin" -h 2>&1 ) || true
 }
 
+# SUBCOMMANDS whose FLAGS are worth documenting. The top-level `-h` lists the
+# subcommands but not their flag sets, so every flag added to `certify --local`
+# or `certify --repo` shipped undocumented — that is exactly how --local-endpoint
+# and --record-stream reached a release with zero mentions anywhere user-facing.
+CORRAL_SUBCOMMANDS=("certify --local" "certify --repo ." "certify verify")
+
+capture_sub_help() {
+  local bin="$1"
+  shift
+  # Same stdout+stderr merge and same ./$bin invocation as capture_help, for the
+  # same determinism reason: os.Args[0] must not carry the temp dir.
+  ( cd "$WORKDIR" && "./$bin" "$@" -h 2>&1 ) || true
+}
+
 gen_one() {
   local b="$1" out="$2"
   local help env_block
@@ -80,6 +94,22 @@ gen_one() {
     echo '```'
     echo "$help"
     echo '```'
+    if [ "$b" = "corral" ]; then
+      for sub in "${CORRAL_SUBCOMMANDS[@]}"; do
+        # shellcheck disable=SC2086 -- deliberate word splitting: an argv prefix
+        subhelp="$(capture_sub_help "$b" $sub)"
+        [ -n "$subhelp" ] || continue
+        echo
+        # The heading names the command a READER types; a positional argument
+        # this script supplies only to reach the flag set (e.g. the "." in
+        # `certify --repo .`) is not part of that and is trimmed.
+        echo "## \`$b ${sub% .}\` flags"
+        echo
+        echo '```'
+        echo "$subhelp"
+        echo '```'
+      done
+    fi
     if [ -n "$env_block" ]; then
       echo
       echo "## Environment variables"

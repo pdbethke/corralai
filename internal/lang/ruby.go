@@ -73,7 +73,7 @@ func (rubyPlugin) CompileCheck(codePath, testPath string) [][]string {
 //  4. test/<subpath>/test_foo.rb    — the PREFIX form, minitest's own house
 //     style, at a strictly lower specificity rank than (1)-(3). Measured on
 //     minitest/minitest: forms (1)-(3) pair 0 of 24 lib files, form (4) pairs
-//     4. A repo using this layout was previously invisible to the scanner
+//  4. A repo using this layout was previously invisible to the scanner
 //     entirely, reported as `no-paired-test`.
 //
 // Unlike Python's list this does not also generate a full-directory-mirror

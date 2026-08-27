@@ -31,7 +31,7 @@ figure still stands, there is simply more of it.*
 |---|---|---|---|---|---|
 | `google/uuid` | `2d3c2a9cc518` | 5 of 5 | 0.73 | 35 | 30 |
 | `gorilla/mux` | `db9d1d0073d2` | 4 of 4 | 0.66 | 37 | 22 |
-| `spf13/afero` | `768f1fb0e553` | 12 of 16 | 0.56 | 84 | 53 |
+| `spf13/afero` | `768f1fb0e553` | 12 of 12 auditable (16 candidates) | 0.56 | 84 | 53 |
 
 **Proven-missed is the only number here worth much.** A survivor on its own is
 ambiguous — it might be an *equivalent mutant*, a change no test could ever
@@ -65,10 +65,21 @@ quarter hours, serialized.
 
 ## What it could not do
 
-**`spf13/afero` graded 12 files of 16.** Two still fail with executor errors and
-two produce no usable goal. Its 0.56 is a kill rate over the *gradable subset*,
-not over the repository. We report the number with its denominator rather than
-quietly showing 12 of 12.
+**`spf13/afero` graded every file it could legitimately grade — 12 of 12**, out
+of 16 candidates. We first reported this as "12 of 16" with four failures, which
+was unfair to the tool in a way we only caught by reading the four:
+
+- `gcsfs/gcs.go` and `sftpfs/sftp.go` live in **separate Go modules**
+  (`gcsfs/go.mod`, `sftpfs/go.mod`), so `go test ./...` from the repository root
+  cannot reach them at all. corral's preflight refused before spending anything,
+  because a test it wrote there would never be collected — and a gap it cannot
+  prove is a gap it will not claim.
+- `lstater.go` and `symlink.go` are **pure interface declarations**
+  (`type Lstater interface { … }`). There is no behavior a mutant could violate,
+  and the goal deriver correctly returned "none".
+
+Its 0.56 is still a kill rate over the audited files, not over the whole
+repository, and we report it with its denominator either way.
 
 **One file reported "tried and missed."** `memmap.go` scored 0.79 with five
 survivors, and the writer authored a sound test that killed none of them. That
@@ -153,13 +164,21 @@ build, graded six more files:
 
 | | first pass | re-run |
 |---|---|---|
-| files graded | 6 of 16 | **12 of 16** |
+| files graded | 6 of 16 | **12 of 12 auditable** |
 | kill rate | 0.48 | 0.56 |
 | survivors | 49 | 84 |
 | proven-missed | 36 | **53** |
 
-Two files still fail on executor errors and two still produce no usable goal, so
-12 of 16 is where it stands rather than a clean sweep.
+The remaining four of the 16 candidates are not failures at all — two are in
+separate Go modules the test command cannot reach, and two are pure interface
+declarations with nothing to violate. See the section above.
+
+That was a second thing this note got wrong, and in the opposite direction from
+the first: we published four correct refusals as four failures. A report that
+understates its own accuracy is still not telling the truth — it just errs
+toward looking worse, which is easy to mistake for rigor. corral now prints a
+one-clause explanation beside every ungradable file saying whether it is the
+tool failing, the invocation, or a file with nothing to audit.
 
 Three things we would rather say plainly than bury:
 

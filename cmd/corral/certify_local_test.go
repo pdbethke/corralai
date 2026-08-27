@@ -494,7 +494,16 @@ func TestDriveLocalRun_EndToEnd(t *testing.T) {
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	// 5 minutes, not 90 seconds. This drives the WHOLE pool end to end — real
+	// jail executions, a baseline, a canary, three mutants scored one at a
+	// time, and an authored test — so its wall-clock is dominated by process
+	// execution on whatever box it lands on. A shared CI runner is routinely
+	// 2-4x a developer laptop: this took ~40s locally and 90.17s on CI, where
+	// the 90s budget cut it off MID-RUN and the truncated result surfaced as a
+	// bogus assertion failure ("Survivors = 0") rather than as a timeout —
+	// which is why main's CI was red for days while every local run was green.
+	// The budget is patience for a slow machine, never a measurement.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
 	actorFor := func(role string) string { return recordActor(role, assign[role]) }
@@ -650,7 +659,10 @@ func TestDriveLocalRun_TolerateOneRecoverableTickError(t *testing.T) {
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	// See the sibling end-to-end test: this also drives the whole pool, and CI
+	// has already clocked it at 84s against the old 90s budget — a flake
+	// waiting for a slightly busier runner.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
 	var progress bytes.Buffer

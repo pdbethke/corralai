@@ -20,6 +20,7 @@ package adequacy
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -434,10 +435,45 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 		cancel()
 		if err != nil {
 			if errors.Is(err, ErrTestTimeout) {
-				// Non-terminating mutant: the suite hanging IS a caught
-				// divergence from the healthy baseline — count it a kill,
-				// not an aborted run.
-				outcomes[i] = outcome{killed: true}
+				// A timeout has TWO causes and they are opposite verdicts:
+				//
+				//   1. The mutant is non-terminating. The suite hanging IS a
+				//      caught divergence from the healthy baseline — a kill.
+				//   2. The MACHINE was slow. A loaded shared runner (which is
+				//      exactly where the GitHub Action executes) can push an
+				//      ordinary run past a timeout derived from a baseline
+				//      measured when the box was idle.
+				//
+				// Counting both as kills silently INFLATES the kill rate on a
+				// busy machine — the same defect class as scoring a mutant the
+				// compiler rejected as caught: crediting the tests with a
+				// divergence they never detected.
+				//
+				// Tell them apart by re-probing the COMPLIANT baseline under
+				// the same budget, not by re-running the mutant. Re-running the
+				// mutant makes a genuine infinite loop wait twice (it must
+				// exhaust a second, larger budget before the kill is recorded),
+				// which is why the fast-kill guarantee this scorer advertises
+				// belongs to the baseline probe instead:
+				//
+				//   - baseline still finishes  -> the box is fine, so the
+				//     mutant really does not terminate. Kill, immediately.
+				//   - baseline ALSO times out  -> the box is slow, and this
+				//     mutant's run proves nothing. Not a kill, and not a
+				//     survivor either: it is UNMEASURED, and an error is the
+				//     honest report.
+				bctx, bcancel := context.WithTimeout(ctx, perMutant)
+				_, berr := run(bctx, compliantCode)
+				bcancel()
+				if berr == nil {
+					outcomes[i] = outcome{killed: true}
+					return
+				}
+				if errors.Is(berr, ErrTestTimeout) {
+					outcomes[i] = outcome{err: fmt.Errorf("mutant %s: run timed out AND the compliant baseline timed out under the same budget (%s) — the machine is too loaded to grade this mutant; nothing is inferred from it", m.ID, perMutant)}
+					return
+				}
+				outcomes[i] = outcome{err: berr}
 				return
 			}
 			outcomes[i] = outcome{err: err}

@@ -294,7 +294,7 @@ func bundleHandler(dir string, m ui.BundleManifest, sessionSecret string) http.H
 			http.NotFound(w, r)
 			return
 		}
-		data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(clean))) // #nosec G304 -- clean was validated above to reject "..", absolute paths, and any path.Clean escape, and must additionally match a path key in the signature-verified manifest (the assets map) before this line runs; dir is this process's own cache directory, not attacker-controlled
+		data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(clean))) // #nosec G304,G703 -- clean was validated above to reject "..", absolute paths, and any path.Clean escape, and must additionally match a path key in the signature-verified manifest (the assets map) before this line runs; dir is this process's own cache directory, not attacker-controlled
 		if err != nil {
 			http.NotFound(w, r)
 			return

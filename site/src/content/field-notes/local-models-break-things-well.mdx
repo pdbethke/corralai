@@ -1,0 +1,175 @@
+---
+title: "Local models break things well and test them badly"
+description: "We ran the same 9B model in two seats of the same audit. As the bug-planter it beat a human test suite thirteen times. As the test-writer it could not produce a file that compiled. That asymmetry decides where a local model belongs — and it happens to put the free one in the expensive seat."
+pubDate: 2026-08-28
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+
+*Field note. One model, two seats, one run — and the economics that fall out of it.*
+
+---
+
+## The comparison, inside a single process
+
+corral's adversarial pool has three seats. A **mutant-generator** plants
+violations in your code. A **test-writer** authors tests to kill the ones your
+suite missed. A **test-critic** reads the result for tests that pass without
+testing anything.
+
+In one run we put `qwen3.5:9b-q8_0` — a 9-billion-parameter model on one
+consumer GPU — in *both* the generator and the writer seat. Same model, same
+file, same process, same forty-five minutes. The target was
+`internal/admission/admission.go`: 117 lines, standard library only, with a real
+test suite written by a human.
+
+As the **generator** it worked:
+
+```
+dev-adequacy: the dev's OWN tests scored 41%
+  (killed 9 of 22 graded mutants, 13 survived — bugs the dev's tests miss)
+```
+
+Twenty-two of its mutants compiled and were graded. **Thirteen defeated a real,
+human-written test suite.**
+
+As the **writer**, in the same run:
+
+```
+test-writer could not produce a compiling test after 3 attempts
+  — 13 survivor(s) found but not proven-killed
+```
+
+Not a bad test. No test. Three attempts, none of which got past `go vet`.
+
+A hosted model on the identical thirteen survivors proved eight of them.
+
+## It is not a Qwen problem
+
+One model family proves nothing, so we swapped the writer seat to `gemma4:12b` —
+different lab, larger model — and changed nothing else. It also failed, three
+attempts, and the failures are worth reading:
+
+```
+admission_corral_test.go:1:1:  expected 'package', found The
+admission_corral_test.go:21:6: Lease redeclared in this block
+```
+
+Prose leaking above the `package` line, and a model redefining a type the
+package already exports. Both are the same miss: it wrote a **self-contained
+answer** instead of a file that composes with the code around it. The hosted
+challenger, same run, proved 13 of 15.
+
+## It is not simply "Go is strict", either
+
+Go rejects a lot at the gate — an unused import, a redeclared type, wrong arity.
+So we ran the same shape against Python, where the compile check is
+`py_compile`, which validates syntax and nothing more.
+
+We predicted the local writer would clear the weaker gate and then fail at
+runtime. That prediction was wrong, and the way it was wrong is the finding:
+
+```
+the pool's authored test graded soundly
+  (CompliantPass=true CanaryKilled=true Total=3)
+  but killed NONE of the 3 survivor(s)
+  — a real 'tried and missed', not an ungraded run
+```
+
+It wrote a **valid, sound, correctly-passing** 15-case test suite. It parsed, it
+ran, it passed against the unmutated code. It simply killed nothing. The tests
+it wrote were `test_thumb`, `test_large`, `test_all_presets` — a textbook
+*characterization* suite, re-verifying the happy paths the developer's tests
+already covered. It never went near the survivors. The hosted model, same three,
+killed two.
+
+So the gate was never the barrier. It only changed **where the failure became
+visible**: Go rejects the local writer before it can be graded, Python lets it
+through to be measured, and the measurement says it tried and missed.
+
+## What the generator seat actually delivers
+
+Meanwhile the same class of model, in the destructive seat, is doing real work.
+Auditing `mahmoud/boltons` — a pure-Python utility library with 472 passing
+tests — a local generator produced **261 gradeable mutants** across ten files.
+Of those, **142 survived** the project's own suite, and a hosted writer then
+proved **46** of them catchable by execution.
+
+Not one of those 261 mutants cost an API call.
+
+## The economics nobody mentions
+
+The generator is the heaviest seat in the pool. It plants dozens of mutants per
+file; the writer authors one test per file. So the seat that consumes the most
+compute is exactly the seat a local model is good at.
+
+Measured on a 5-file Go cell, with the generator and goal-derivation local and
+only the writer billed:
+
+```
+39,043 input / 1,700 output tokens   ·  18 model calls  ·  13 minutes
+```
+
+That is roughly **7,800 paid input tokens per file** for a full adversarial
+audit. Our earlier estimate — made when the generator was also hosted — was
+about three times higher. Moving the heavy seat onto hardware you already own is
+most of the difference.
+
+## Four things that will bite you
+
+**A reasoning model can return an empty answer with no error.** Qwen 3+,
+DeepSeek-R1 and Gemma 4 route their answer through a separate `thinking` field.
+When the budget runs out mid-reasoning the request still returns HTTP 200 with an
+**empty** body:
+
+```
+gemma4:12b   plain        thinking=424c  content=0c   done=length
+gemma4:12b   think:false  thinking=0c    content=19c  done=stop
+```
+
+We nearly published "a Google 12B model cannot author a Go test" on the strength
+of three reproducible empty files. It was our missing `think: false`. Three
+identical failures is not evidence when you have not checked the transport.
+
+**Newer beats bigger.** `qwen2.5-coder:14b` produced *zero* usable mutants on a
+Go file — every SEARCH anchor carried one extra leading tab, so nothing applied.
+The smaller, newer `qwen3.5:9b` does the same job well. Patch-structure fidelity
+tracks model generation, not parameter count.
+
+**Concurrency costs VRAM, and nothing warns you.** A `--swarm N` flag reads as
+"audit N files at once", which is right for hosted models — someone else's GPU.
+Against a local daemon it also means N concurrent KV caches stacked on a resident
+model. With 9.8GB of weights on a 16GB card, `--swarm 2` timed out; `--swarm 1`
+graded the same file at 0.84.
+
+**Default timeouts are written for hosted latency.** Eight of sixteen files in
+one repo failed with `context deadline exceeded` at a 300-second per-request
+ceiling. Nothing was hanging — the box was a consumer GPU doing a long prefill.
+Raising it graded twelve of them and took that panel's proven-gap count from 36
+to 53. The default is now 600s.
+
+## What we would tell someone standing up a local herd
+
+Put the local model where the work is **destructive**. Planting a fault needs no
+compositional understanding of the surrounding package, and a bad output is free
+— the compile gate throws it away and records it as evidence about the
+generator rather than about your tests.
+
+Keep a hosted model where the work is **constructive**. Authoring a test means
+composing with existing code, satisfying a compiler, and aiming at a specific
+gap. That is where every local model we tried fell over, in two languages, from
+two labs.
+
+A mixed herd is not a compromise between a cheap tier and a good one. It is
+putting each model where its actual strength is — and the pleasant accident is
+that the expensive seat is the one that runs for free.
+
+---
+
+*Evidence: two Go repositories and one Python library, one arm each, single
+runs. The writer-seat failures reproduce across two model families and two
+languages; the generator results are from `internal/admission/admission.go` and
+`mahmoud/boltons`. Numbers are counts, not rates, because n is small — and every
+kill rate we publish carries run-to-run variance we have
+[measured](https://corralai.dev/field-notes/eighty-eight-tests-that-were-not-there/)
+and do not hide.*

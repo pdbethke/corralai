@@ -91,7 +91,37 @@ const pyCachePrefixEnv = "PYTHONPYCACHEPREFIX=/tmp/corral-pyc"
 // single-command sequence — see lang.Plugin.CompileCheck's doc comment for
 // why the return type is a sequence at all.
 func (pyPlugin) CompileCheck(codePath, testPath string) [][]string {
-	return [][]string{{"env", pyCachePrefixEnv, pythonBin(), "-m", "py_compile", codePath, testPath}}
+	cmds := [][]string{{"env", pyCachePrefixEnv, pythonBin(), "-m", "py_compile", codePath, testPath}}
+
+	// py_compile validates SYNTAX and nothing else. A mutant that calls a
+	// function which does not exist compiles clean, reaches GRADING, fails the
+	// suite for the wrong reason, and is scored as KILLED — crediting the
+	// developer's tests with catching a mutant that was never valid code. That
+	// is the same defect family as scoring a compiler-rejected mutant as
+	// caught, and Go's gate (go vet) rejects exactly this class.
+	//
+	// ruff's F821 is go vet's analogue for undefined names; F401 matches "imported
+	// and not used"; F811 catches a redefinition. Measured at ~11ms, so it is
+	// free relative to a suite run.
+	//
+	// OPTIONAL, and deliberately so. corral's Python path otherwise needs only
+	// an interpreter, and an absent optional tool must never mark every mutant
+	// invalid — the caller treats any non-zero command as a rejection, so a
+	// missing binary would fail the whole gate closed on nothing. Included only
+	// when it resolves on PATH.
+	//
+	// CAVEAT worth knowing: this resolves on the HOST, while the command runs
+	// in the jail. A ruff installed somewhere the jail does not bind (a user
+	// site directory, a virtualenv) will be selected here and then not found
+	// there. The jail binds the system paths, so a system-installed ruff is the
+	// supported shape.
+	//
+	// E999 is NOT selected: ruff removed it as a selectable rule, which is why
+	// py_compile stays as the syntax gate rather than being replaced by this.
+	if ruff, err := exec.LookPath("ruff"); err == nil {
+		cmds = append(cmds, []string{ruff, "check", "--no-cache", "--select", "F821,F401,F811", codePath, testPath})
+	}
+	return cmds
 }
 
 // WorkspaceRunEnv closes the __pycache__ staleness hole on the WORKSPACE

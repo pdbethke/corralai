@@ -3,6 +3,8 @@
 package lang
 
 import (
+	"os"
+	"os/exec"
 	"path/filepath"
 )
 
@@ -36,10 +38,64 @@ func (jsPlugin) TestCmd() []string { return []string{"node", "--test"} }
 // lang.Plugin.CompileCheck's doc comment and python.go's pyCachePrefixEnv
 // comment for the identical class of bug this avoids.
 func (jsPlugin) CompileCheck(codePath, testPath string) [][]string {
-	return [][]string{
+	cmds := [][]string{
 		{"node", "--check", codePath},
 		{"node", "--check", testPath},
 	}
+	if undef := jsUndefCheck(codePath, testPath); undef != nil {
+		cmds = append(cmds, undef)
+	}
+	return cmds
+}
+
+// jsLintConfigs are the files a project uses to declare which globals exist.
+var jsLintConfigs = []string{
+	".oxlintrc.json", ".oxlintrc",
+	"eslint.config.js", "eslint.config.mjs", "eslint.config.cjs",
+	".eslintrc.json", ".eslintrc.js", ".eslintrc.cjs", ".eslintrc",
+}
+
+// jsUndefCheck returns an undefined-name check for the JS gate, or nil.
+//
+// `node --check` validates SYNTAX only. A mutant calling a function that does
+// not exist passes it, reaches GRADING, fails the suite for the wrong reason,
+// and is scored as KILLED — crediting the developer's tests with catching a
+// mutant that was never valid code. Go's `go vet` rejects exactly this class,
+// and Python's gate now does too via ruff's F821.
+//
+// TWO conditions, and the second is the interesting one.
+//
+// The linter must be on PATH — an absent optional tool must never fail the
+// gate closed on nothing, since the caller treats any non-zero command as a
+// rejection.
+//
+// And the PROJECT must declare its own environment. `no-undef` has to know
+// which globals exist: `require` and `module` in CommonJS, `window` in a
+// browser, `describe` under a test runner. Measured on an ordinary CommonJS
+// file, oxlint with no configuration reports `require` and `module` as
+// undefined — so a guessed environment would reject VALID mutants, drop them
+// from the denominator, and silently shrink the measurement. corral therefore
+// uses the project's own declaration or does not run the check at all. That
+// deliberately trades coverage for correctness: repos without a lint config
+// keep the weaker syntax-only gate rather than an unsound stronger one.
+//
+// Unlike Python's ruff, this cannot be run configuration-free, which is why
+// the two languages are gated differently.
+func jsUndefCheck(codePath, testPath string) []string {
+	var haveConfig bool
+	for _, c := range jsLintConfigs {
+		if _, err := os.Stat(c); err == nil {
+			haveConfig = true
+			break
+		}
+	}
+	if !haveConfig {
+		return nil
+	}
+	if bin, err := exec.LookPath("oxlint"); err == nil {
+		return []string{bin, "--deny", "no-undef", codePath, testPath}
+	}
+	return nil
 }
 
 // TestPaths covers the common Node/JS test-file conventions, most specific

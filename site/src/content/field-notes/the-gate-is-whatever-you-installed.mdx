@@ -1,0 +1,146 @@
+---
+title: "The gate is whatever you happened to install"
+description: "Three times this week we found corral crediting a test suite with catching a bug it never detected. Fixing the third one exposed the shape underneath: the check that decides whether a mutant counts at all depends on what is installed on the machine — so the same audit can report a different denominator on two boxes."
+pubDate: 2026-08-28
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+
+*Field note. A defect we fixed three times before noticing it was one defect.*
+
+---
+
+## The same bug, three times
+
+corral plants a bug in your code, runs your tests, and asks whether they caught
+it. Everything rests on that one question, so it is worth being precise about
+what "caught it" means.
+
+Three times this week, it meant the wrong thing.
+
+**A mutant the compiler rejected was scored as a kill.** The check was "did the
+test command exit non-zero", and a build failure exits non-zero. A file with 0%
+coverage on every function produced a signed record claiming a **0.77** kill rate
+that was truthfully **0.00**.
+
+**A mutant that timed out was scored as a kill.** Defensible for a genuinely
+non-terminating mutant — a hanging suite *is* a caught divergence — and wrong
+for a merely slow machine. On a loaded CI runner, ordinary mutants crossed a
+timeout derived from an idle baseline and were credited to the developer's tests.
+
+**A Python mutant calling a function that does not exist was scored as a kill.**
+`py_compile` validates syntax and nothing else, so the mutant compiled clean,
+reached grading, failed the suite for the wrong reason, and was counted as
+caught.
+
+Each got its own fix. It took the third to see they were one defect wearing
+three costumes: **something that was not "your tests caught this" being counted
+as "your tests caught this."**
+
+## What the third one exposed
+
+The fix for the Python case was to add `ruff` to the gate — its `F821` rule is
+the analogue of what `go vet` already does for Go. On a file `py_compile` passes
+clean:
+
+```
+py_compile  ->  PASS
+ruff        ->  Undefined name `_normalise_the_thing`
+                Undefined name `compute`
+```
+
+Eleven milliseconds. Silent on valid code. An easy win.
+
+Except ruff is not part of Python. It has to be installed. And corral cannot
+require it, because the gate treats any non-zero command as a rejection — so if
+the tool is missing, the command fails, and **every mutant is marked invalid**.
+The only safe move is to look for it and skip the check when it is absent.
+
+Which produces this:
+
+> The same audit, on the same commit, with the same models, can report a
+> different denominator on two machines. A mutant rejected as invalid on a box
+> with ruff is graded on a box without it — and if it then fails the suite for
+> the wrong reason, it is scored as a kill.
+
+That is the same defect again. Not a mutant, not a timeout — the *toolchain*.
+
+## The gates are not equal, and they never were
+
+| language | gate | catches |
+|---|---|---|
+| Go | `go vet` | syntax, types, arity, unused imports, unreachable code |
+| TypeScript | `tsc --noEmit` | full type check |
+| Python | `py_compile` + ruff | syntax; undefined names, unused imports |
+| JavaScript | `node --check` + oxlint | syntax; undefined names |
+| Ruby | `ruby -c` | syntax only |
+
+We had a number that looked like a finding: Python mutants were invalid **12%**
+of the time against Go's **21–46%**. Read quickly, that says the model writes
+better Python than Go.
+
+It says nothing of the sort. Go's gate rejects type errors, wrong arity and
+unused imports; Python's gate — before ruff — rejected none of those. The gap
+was measuring **gate strictness**, not generator quality. We did not publish it,
+and that is the only reason it is not now a sentence someone has to walk back.
+
+## JavaScript would not behave
+
+The obvious next step was the same fix for JS: `node --check` is syntax-only, and
+`oxlint --deny no-undef` catches the invented call. It does — and out of the box
+it also reports `require` and `module` as undefined, because it does not know the
+file is CommonJS.
+
+A gate that rejects valid code is worse than a weak one. It drops good mutants
+from the denominator and quietly shrinks the measurement.
+
+So the JS check runs only when the **project itself** declares its environment —
+an oxlint or eslint config in the repo. Corral uses the project's own declaration
+of which globals exist, or it does not run the check at all. Repos without a lint
+config keep the weaker gate rather than an unsound stronger one.
+
+Two languages, two different answers, for a reason: ruff's `F821` is safe with no
+configuration and oxlint's `no-undef` is not.
+
+## Ruby is where honesty runs out
+
+There is no fix for Ruby, and it is worth saying why rather than leaving a gap in
+the table.
+
+Ruby resolves methods at runtime. "This method does not exist" is not statically
+decidable, so there is no `no-undef` to reach for. RuboCop's `Lint/` department
+catches some of it; Sorbet and Steep type-check annotated code only.
+
+A Ruby kill rate therefore carries more gate-slack than a Go one. That is a
+property of the language, not a gap in the tool — and it means **cross-language
+kill rates are not directly comparable**. Anyone publishing a comparison
+including ours owes readers that sentence.
+
+## Where this goes
+
+The direction that actually fixes it is to stop letting the host decide: pin the
+toolchain to the audit, so the gate is a property of the run rather than of the
+laptop. Per-language runtime images would do it — a Python runtime that carries
+ruff at a known version, so two people running the same audit get the same
+denominator, and a third party re-running a published row gets our answer.
+
+We are not building that yet, and the reason is worth stating. corral installs as
+one binary and audits offline, on a laptop, against a private repo, with no
+vendor in the path. Shipping a container fleet changes what the tool *is*, and
+that is a trade to make deliberately rather than in passing.
+
+So the near-term answer is smaller and duller: **record which checks actually
+ran**, in the signed record and the scan ledger. That does not make two runs
+comparable. It makes them *legibly* incomparable — a reader can see this scan's
+Python gate was syntax-only — which is the difference between a caveat and a
+silent error.
+
+The [design note](https://github.com/pdbethke/corralai/blob/main/docs/design/language-runtimes.md)
+lays out all three options and recommends the boring one first.
+
+---
+
+*If there is a general lesson, it is that we found the first two of these by
+running the tool and the third by reading the code, and only saw the pattern
+after the third. A measurement tool's real failure mode is not a wrong answer.
+It is a right answer that quietly depends on something nobody wrote down.*

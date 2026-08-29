@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -862,36 +863,27 @@ func (pyPlugin) ParseCoverage(stdout, modulePath string) (executed map[string]bo
 			sawPositiveEntry = true
 		}
 
-		p := filepath.ToSlash(path)
-		if filepath.IsAbs(path) {
-			if root == "" {
-				if !exec {
-					// An unexecuted, unaligned absolute path carries no
-					// finding either way — there is no repo-relative form to
-					// report it under, and "absent" (never measured, from
-					// this caller's point of view) is already the honest
-					// silence for it. Only a POSITIVE entry with nowhere to
-					// align is the alignment failure worth erroring on
-					// (see the unconditional case below).
-					continue
-				}
-				return nil, fmt.Errorf("lang: python coverage report contains an absolute path %q but no repo root (modulePath) was given to align it against", path)
-			}
-			cleanPath := filepath.ToSlash(filepath.Clean(path))
-			prefix := root + "/"
-			if root == "/" {
-				prefix = "/"
-			}
-			rel, cut := strings.CutPrefix(cleanPath, prefix)
-			if !cut || rel == "" || rel == ".." || strings.HasPrefix(rel, "../") {
-				// Outside the repo root entirely (e.g. a dependency
-				// imported from site-packages, or a path that only reaches
-				// under the root via a "..\" segment) — not this repo's
-				// source, skip rather than report a bogus path (executed
-				// OR not: either way it is not a file corral can name).
+		if filepath.IsAbs(path) && root == "" {
+			if !exec {
+				// An unexecuted, unaligned absolute path carries no
+				// finding either way — there is no repo-relative form to
+				// report it under, and "absent" (never measured, from
+				// this caller's point of view) is already the honest
+				// silence for it. Only a POSITIVE entry with nowhere to
+				// align is the alignment failure worth erroring on
+				// (see the unconditional case below).
 				continue
 			}
-			p = rel
+			return nil, fmt.Errorf("lang: python coverage report contains an absolute path %q but no repo root (modulePath) was given to align it against", path)
+		}
+		p, ok := alignPyPath(path, root)
+		if !ok {
+			// Outside the repo root entirely (e.g. a dependency imported
+			// from site-packages, or a path that only reaches under the
+			// root via a "..\" segment) — not this repo's source, skip
+			// rather than report a bogus path (executed OR not: either way
+			// it is not a file corral can name).
+			continue
 		}
 		executed[p] = exec
 		if exec {
@@ -970,13 +962,241 @@ func (pyPlugin) DeselectArgs(selectors []string) []string {
 	return args
 }
 
-// FileScopedTestCmd runs only the given test file. pytest takes a path
-// directly, so this is the stock command with the path appended — deliberately
-// derived from TestCmd() rather than rebuilt, so the interpreter selection and
-// flags cannot drift apart from the unscoped path.
-func (p pyPlugin) FileScopedTestCmd(testPath string) ([]string, bool) {
-	if strings.TrimSpace(testPath) == "" {
+// selectionMaxArgv bounds the node-id list Select puts on one command line.
+// Past it, Select names the test FILES those ids live in instead — a
+// superset, still evidence-derived, and never a whole-suite fallback.
+const selectionMaxArgv = 32 * 1024
+
+// Instrument builds the one instrumented run selection evidence comes from.
+// Same command-shape rules as CoverageCmd (a `pytest` or `<interp> -m pytest`
+// argv; anything else is refused rather than guessed at), but the
+// instrumentation is pytest-cov's, because only pytest-cov records
+// per-TEST dynamic contexts while keeping the project's own coverage
+// configuration (source/omit) in force. `--cov-report=` suppresses the
+// terminal report; the JSON is emitted afterwards by coverage itself with
+// contexts shown. The data file is a temp path so the project's own
+// .coverage is never touched.
+func (pyPlugin) Instrument(testCmd []string) (cmd []string, ok bool) {
+	var interp string
+	var args []string
+	switch {
+	case len(testCmd) >= 1 && (testCmd[0] == "pytest" || testCmd[0] == "py.test"):
+		interp = pythonBin()
+		args = append([]string{"pytest"}, testCmd[1:]...)
+	case len(testCmd) >= 3 && testCmd[1] == "-m" && testCmd[2] == "pytest":
+		interp = testCmd[0]
+		args = testCmd[2:]
+	default:
 		return nil, false
 	}
-	return append(p.TestCmd(), testPath), true
+	q := make([]string, len(args))
+	for i, a := range args {
+		q[i] = shellArg(a)
+	}
+	qi := shellArg(interp)
+	script := `f=$(mktemp) && trap 'rm -f "$f"' EXIT && ` +
+		`COVERAGE_FILE="$f" ` + qi + " -m " + strings.Join(q, " ") +
+		` --cov --cov-context=test --cov-report= -p no:cacheprovider` +
+		`; rc=$?; case $rc in 0|1) ;; *) exit "$rc" ;; esac; ` +
+		`COVERAGE_FILE="$f" ` + qi + " -m coverage json --show-contexts -o -"
+	return []string{"sh", "-c", script}, true
+}
+
+// shellArg renders one Instrument argv element for inclusion in its sh -c
+// script: bare when it is already safe unquoted (so a plain pytest
+// invocation reads naturally, matching what an operator actually typed),
+// shellQuote'd only when it contains a character shellArg does not
+// recognise as safe (a space, in the common case of a marker expression
+// like "not slow").
+func shellArg(s string) string {
+	if s == "" {
+		return shellQuote(s)
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '_' || r == '.' || r == '/' || r == '=' || r == ':' || r == ',' || r == '+' || r == '-':
+		default:
+			return shellQuote(s)
+		}
+	}
+	return s
+}
+
+// pyContextReport is the subset of `coverage json --show-contexts` Select
+// reads. contexts maps a line number (as a string) to the contexts that
+// executed it; pytest-cov names a test context `<nodeid>|<phase>`.
+type pyContextReport struct {
+	Meta   map[string]any `json:"meta"`
+	Totals struct {
+		CoveredLines int `json:"covered_lines"`
+	} `json:"totals"`
+	Files map[string]struct {
+		Summary struct {
+			NumStatements int `json:"num_statements"`
+			CoveredLines  int `json:"covered_lines"`
+		} `json:"summary"`
+		Contexts map[string][]string `json:"contexts"`
+	} `json:"files"`
+}
+
+// Select narrows testCmd to the tests whose recorded context executed any
+// line of codePath. Node ids are sorted so the command — and therefore the
+// cache key — is stable for the same evidence.
+func (pyPlugin) Select(evidence []byte, repoRoot, codePath, testPath string, testCmd []string) (Selection, error) {
+	// The evidence is usually a raw `coverage json` capture: whatever the
+	// wrapped test run printed, then the JSON as the LAST line (Instrument's
+	// own shape). It may also be the JSON alone, pretty-printed across many
+	// lines (a recorded fixture) — try the whole trimmed payload first, and
+	// only fall back to the last-line-of-stdout rule on failure.
+	var rep pyContextReport
+	whole := strings.TrimSpace(string(evidence))
+	if whole == "" {
+		return Selection{}, fmt.Errorf("lang: python selection evidence is empty")
+	}
+	if err := json.Unmarshal([]byte(whole), &rep); err != nil {
+		payload := lastNonEmptyLine(evidence)
+		if payload == "" {
+			return Selection{}, fmt.Errorf("lang: python selection evidence is empty")
+		}
+		if err := json.Unmarshal([]byte(payload), &rep); err != nil {
+			return Selection{}, fmt.Errorf("lang: unparseable python selection evidence (last line is not JSON): %w", err)
+		}
+	}
+	if rep.Meta == nil || rep.Files == nil {
+		return Selection{}, fmt.Errorf("lang: python selection evidence is not a coverage-json report")
+	}
+	if rep.Totals.CoveredLines == 0 {
+		return Selection{}, fmt.Errorf("lang: python selection evidence covers 0 lines — the suite most likely never ran")
+	}
+
+	root := normalizePyRepoRoot(repoRoot)
+	want := filepath.ToSlash(codePath)
+	wantTest := filepath.ToSlash(testPath)
+	all := map[string]bool{}
+	var mine map[string]bool
+	rawArgv := 0 // every matching occurrence, undeduped — the argv Instrument
+	// would have to emit if it named a context per LINE rather than per file,
+	// which is the actual blow-up risk on a file with many covered lines
+	// each hit by a large, mostly-overlapping set of tests.
+	sawTest := false
+	for path, f := range rep.Files {
+		p, ok := alignPyPath(path, root)
+		if !ok {
+			continue
+		}
+		if wantTest != "" && p == wantTest {
+			sawTest = true
+		}
+		for _, cs := range f.Contexts {
+			for _, c := range cs {
+				id := contextNodeID(c)
+				if id == "" {
+					continue
+				}
+				all[id] = true
+				if p == want {
+					if mine == nil {
+						mine = map[string]bool{}
+					}
+					mine[id] = true
+					rawArgv += len(id) + 1
+				}
+			}
+		}
+		if p == want && mine == nil {
+			mine = map[string]bool{} // measured, executed by no test
+		}
+	}
+	if mine == nil {
+		// Absent from the report. coverage only lists files the suite
+		// imported, so absence means no test executed it — PROVIDED the
+		// suite actually ran the test meant to cover it. Without that
+		// evidence, "uncovered" would accuse a file whose test was simply
+		// filtered out or failed to collect.
+		if !sawTest {
+			return Selection{}, fmt.Errorf("lang: python selection evidence never saw %s or its paired test %q — did the suite run it?", codePath, testPath)
+		}
+		mine = map[string]bool{}
+	}
+	sel := Selection{Method: "coverage-context", Of: len(all)}
+	if len(mine) == 0 {
+		return sel, nil
+	}
+	ids := make([]string, 0, len(mine))
+	for id := range mine {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	if rawArgv > selectionMaxArgv {
+		files := map[string]bool{}
+		for _, id := range ids {
+			files[strings.SplitN(id, "::", 2)[0]] = true
+		}
+		ids = ids[:0]
+		for f := range files {
+			ids = append(ids, f)
+		}
+		sort.Strings(ids)
+	}
+	sel.Tests = ids
+	sel.Cmd = append(append([]string{}, testCmd...), ids...)
+	return sel, nil
+}
+
+// WithAuthoredTest appends the authored test's path so pytest collects it
+// alongside the selection; with an empty selection it runs the authored
+// test alone — the uncovered case, where the pool's test is the only test.
+func (pyPlugin) WithAuthoredTest(sel Selection, testCmd []string, authoredTestPath string) []string {
+	base := sel.Cmd
+	if len(sel.Tests) == 0 {
+		base = testCmd
+	}
+	return append(append([]string{}, base...), authoredTestPath)
+}
+
+// contextNodeID reduces a pytest-cov context (`tests/test_a.py::test_x|run`)
+// to its node id. The empty context ("" — code executed outside any test,
+// e.g. at import) is not a test and yields "".
+func contextNodeID(ctx string) string {
+	if ctx == "" {
+		return ""
+	}
+	if i := strings.LastIndex(ctx, "|"); i >= 0 {
+		ctx = ctx[:i]
+	}
+	return filepath.ToSlash(ctx)
+}
+
+func lastNonEmptyLine(b []byte) string {
+	lines := strings.Split(string(b), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.TrimSpace(lines[i]) != "" {
+			return lines[i]
+		}
+	}
+	return ""
+}
+
+// alignPyPath is ParseCoverage's absolute-path rule, shared: a relative
+// report path is taken as repo-relative; an absolute one is aligned under
+// root, and dropped (ok=false) when it lies outside it.
+func alignPyPath(path, root string) (string, bool) {
+	p := filepath.ToSlash(path)
+	if !filepath.IsAbs(path) {
+		return p, true
+	}
+	if root == "" {
+		return "", false
+	}
+	clean := filepath.ToSlash(filepath.Clean(path))
+	prefix := root + "/"
+	if root == "/" {
+		prefix = "/"
+	}
+	rel, cut := strings.CutPrefix(clean, prefix)
+	if !cut || rel == "" || rel == ".." || strings.HasPrefix(rel, "../") {
+		return "", false
+	}
+	return rel, true
 }

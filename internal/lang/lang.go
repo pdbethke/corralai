@@ -221,30 +221,51 @@ type FailureDeselector interface {
 	DeselectArgs(selectors []string) []string
 }
 
-// FileScopedTester is an OPTIONAL plugin extension that runs ONLY a given test
-// file, instead of the project's whole suite.
+// Selection is what one TestSelector.Select call decided for one source
+// file: the tests that EXECUTED it, as evidence from a run, and the narrowed
+// command that runs just those.
 //
-// It exists for the cost model, measured 2026-07-31: an audit costs
-// O(mutants × the TARGET's suite runtime), because scoring runs the whole suite
-// once per mutant. flask's suite is 1.46s; psf/requests' is 77s, which is ~96%
-// of that file's audit. A repo with a 2-minute suite and 25 audited files is
-// roughly 35 hours of compute per audit.
+// Empty Tests with Method set means the evidence ran and no test executed
+// the file — a finding (the file is uncovered), not a failure. Fallback is
+// non-empty exactly when the whole suite must run instead, and says why; a
+// caller must surface it — a whole-suite grade under selection is a
+// different measurement and the record must say which one it is.
+type Selection struct {
+	Cmd      []string
+	Tests    []string
+	Method   string
+	Of       int
+	Fallback string
+}
+
+// TestSelector is an OPTIONAL plugin extension that narrows the project's
+// own test command to the tests that EXECUTE a given source file, using
+// evidence from a run — coverage contexts or the harness's module graph —
+// never a filename convention.
 //
-// This is NOT a pure optimisation, and callers must treat it as a measurement
-// change. Running the whole suite asks "did ANYTHING in this repo catch the
-// bug?". Running the paired file asks "do the tests FOR THIS FILE actually test
-// it?" — which is the question corral's per-file kill rates and weakest-files
-// list already claim to answer. But a mutant that some unrelated test happened
-// to catch now reads as a SURVIVOR, so the reported gap count goes UP. Switching
-// silently would mean corral claiming more bugs than before with no explanation.
-//
-// Unimplemented for any language whose per-file invocation has not been
-// verified: guessing would run the wrong tests and silently change every kill
-// rate for that language.
-type FileScopedTester interface {
-	// FileScopedTestCmd returns a command running only testPath. ok=false means
-	// no scoping is available — the caller must fall back to the full suite
-	// rather than improvise, since a bare runner invocation would quietly run
-	// everything while the caller believed it was scoped.
-	FileScopedTestCmd(testPath string) (cmd []string, ok bool)
+// It exists for the cost model: scoring runs the command once per mutant,
+// so an audit costs O(mutants × runtime of that command). It is also a
+// MEASUREMENT change, deliberately: "do the tests FOR THIS FILE catch the
+// bug?" is the question a per-file kill rate claims to answer. The design
+// note docs/superpowers/specs/2026-08-28-coverage-guided-selection-and-concurrent-scoring-design.md
+// records the filename-based scoping that inverted a verdict (1.00 → 0.00)
+// and why only execution evidence is acceptable here.
+type TestSelector interface {
+	// Instrument returns the command that produces selection evidence for
+	// the whole suite in ONE run, derived from the operator's own testCmd so
+	// their markers and flags are honoured. ok=false: this command cannot be
+	// instrumented — the caller grades whole-suite, disclosed.
+	Instrument(testCmd []string) (cmd []string, ok bool)
+	// Select reads that run's output and returns the narrowed command for
+	// codePath plus what it selected. testPath is the file's paired test:
+	// a codePath ABSENT from the evidence is uncovered only when testPath is
+	// present (the suite ran the tests meant to cover it); absent both, the
+	// suite may never have run that test, and Select errors — the caller
+	// grades whole-suite and discloses the error text.
+	Select(evidence []byte, repoRoot, codePath, testPath string, testCmd []string) (Selection, error)
+	// WithAuthoredTest returns the command for the POOL pass: the selection
+	// plus the pool's authored test at authoredTestPath, so the authored
+	// test is collected even though no evidence run ever saw it. When
+	// sel.Tests is empty the result runs the authored test alone.
+	WithAuthoredTest(sel Selection, testCmd []string, authoredTestPath string) []string
 }

@@ -79,7 +79,7 @@ Go binary.**
   are bin-packed (complexity-balanced, deterministic) into up to `--max-shards`
   (default 8) generator seats, so every function is probed, with per-shard retry/drop
   and the coverage shortfall carried into the **signed** verdict. A **shadow
-  challenger** (`--shadow-model`, on by default) attacks every shard a second time for
+  challenger** (`--shadow-model`, off unless named since v0.4.0) attacks every shard a second time for
   a region-controlled, execution-proven head-to-head between generator models,
   recorded to the scorecard — **it never feeds the kill-rate**. Wired for the hosted
   brain too (`start_adversarial_run`, `max_shards` ceilinged at 20, `shadow_model`

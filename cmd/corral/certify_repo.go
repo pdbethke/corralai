@@ -2822,8 +2822,9 @@ func (l *localExecutor) Close() {
 // input shape this codebase keeps producing.
 func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
 	// Resolved ONCE per job and carried on the input, so the narrowed command
-	// the executor's own baseline runs and the Selection the scorer applies
-	// per pass can never be derived twice and disagree.
+	// the executor's own baseline runs and the Selection the pool applies per
+	// pass (advpool.DevCommand, JailScorer.authoredCmd) can never be derived
+	// twice and disagree.
 	sel := l.selectionFor(j)
 	return localAuditInput{
 		// One meter for the WHOLE scan. Each file's audit would otherwise
@@ -2846,10 +2847,11 @@ func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
 		commit:    orDefault(j.Commit, "local"),
 		checkArgv: l.testCmd(j, sel),
 		// The BASE command, before narrowing: RunSpec.TestCmd must stay the
-		// whole-suite command because advpool's scorer applies the Selection
-		// itself, per pass. Handing it the already-narrowed command would
-		// narrow twice — and would drop the pool's own authored test, which
-		// no evidence run ever saw.
+		// whole-suite command because the Selection is applied downstream,
+		// per pass (advpool.DevCommand for the dev/shadow passes, the
+		// scorer's authoredCmd for the authored pass). Handing it the
+		// already-narrowed command would narrow twice — and would drop the
+		// pool's own authored test, which no evidence run ever saw.
 		baseArgv:  l.baseCmd(j),
 		selection: sel,
 		substrate: l.substrate,
@@ -3032,8 +3034,8 @@ func (l *localExecutor) selectionFor(j reposcan.Job) lang.Selection {
 
 // baseCmd is the job's UNNARROWED command: the operator's `-- <cmd>` if they
 // gave one, else the job language's stock recursive command. It is what the
-// selector narrowed FROM, and what advpool's scorer narrows again per pass —
-// see localAuditInput.baseArgv.
+// selector narrowed FROM, and what advpool.DevCommand / the scorer's
+// authoredCmd narrow again per pass — see localAuditInput.baseArgv.
 func (l *localExecutor) baseCmd(j reposcan.Job) []string {
 	if len(l.checkArgv) > 0 {
 		return l.checkArgv

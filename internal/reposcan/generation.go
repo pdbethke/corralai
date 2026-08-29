@@ -30,4 +30,6 @@ package reposcan
 //
 // It is also the purge lever: a generation of verdicts later found to be wrong
 // is invalidated wholesale by bumping this, without deleting any ledger data.
-const VerdictGeneration = "1"
+//
+// "2" (2026-08-28): coverage-guided test selection changed what the scorer runs.
+const VerdictGeneration = "2"

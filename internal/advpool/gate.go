@@ -199,6 +199,13 @@ type JailScorer struct {
 	// placement, which single-file mode wants and which silently graded
 	// nothing on any project that confines discovery to a test root.
 	DevTestPath string
+	// Lang and Selection shape the commands the two passes run (devCmd,
+	// authoredCmd). Lang names the plugin whose WithAuthoredTest appends a
+	// test file's path — under selection the authored test is not in the
+	// evidence and would otherwise never be collected, which reads as TEST
+	// UNSOUND for every file.
+	Lang      string
+	Selection golang.Selection
 	// Concurrency, when > 1, scores that many mutants at once. The zero value
 	// (every existing JailScorer{} literal) is strictly sequential — today's
 	// behavior, unchanged.
@@ -286,6 +293,7 @@ func (s JailScorer) Score(ctx context.Context, codePath, code, test string, muta
 // false) from a genuine zero-kill (CompliantPass true, len(Killed)==0).
 func (s JailScorer) ScoreReport(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (adequacy.Report, error) {
 	scoreBase, cmd := s.scoreWorkspace(codePath, test, testCmd)
+	cmd = s.devCmd(codePath, cmd)
 
 	rep, err := adequacy.Score(ctx, s.Jail, scoreBase, codePath, code, mutants, cmd, s.gatedScoreOpts(codePath, scoreBase)...)
 	if err != nil {
@@ -316,6 +324,7 @@ func (s JailScorer) ScoreReport(ctx context.Context, codePath, code, test string
 // never contained the test at all.
 func (s JailScorer) ScoreAuthoredReport(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (adequacy.Report, error) {
 	scoreBase, cmd := s.scoreWorkspace(codePath, test, testCmd)
+	cmd = s.authoredCmd(codePath, cmd)
 	if s.BaseFiles != nil {
 		scoreBase = s.authoredWorkspace(codePath, test)
 	}
@@ -481,6 +490,51 @@ func (s JailScorer) AuthoredTestWouldBeCollected(ctx context.Context, codePath s
 		return true, nil
 	}
 	return s.verifyAuthoredTestReaches(ctx, codePath, cmd)
+}
+
+// selector is the run's TestSelector, or nil when the run has no Selection
+// or the language has no selector — in which case both passes run the
+// resolved command untouched, exactly as before selection existed.
+func (s JailScorer) selector() golang.TestSelector {
+	if s.Selection.Method == "" {
+		return nil
+	}
+	p, ok := golang.ByName(s.Lang)
+	if !ok {
+		return nil
+	}
+	ts, _ := p.(golang.TestSelector)
+	return ts
+}
+
+// devCmd is the DEV pass's command: the selection's own narrowed command.
+// The dev suite already lives in the checkout, so nothing is appended —
+// except when the selection is EMPTY (uncovered): then the paired dev test
+// file runs alone, which the evidence says never reaches the code, so
+// every mutant survives BY MEASUREMENT at the cost of one small file, and
+// the verdict is marked Uncovered rather than printing that 0.00.
+func (s JailScorer) devCmd(codePath string, cmd []string) []string {
+	ts := s.selector()
+	if ts == nil {
+		return cmd
+	}
+	if len(s.Selection.Tests) > 0 {
+		return append([]string{}, s.Selection.Cmd...)
+	}
+	return ts.WithAuthoredTest(s.Selection, cmd, s.DevTestPath)
+}
+
+// authoredCmd is the AUTHORED pass's command: the selection plus the path
+// the authored test is actually placed at (authoredWorkspace writes it
+// there). The evidence run never saw that file, so without this the
+// narrowed command would never collect it and every file would read
+// TEST UNSOUND.
+func (s JailScorer) authoredCmd(codePath string, cmd []string) []string {
+	ts := s.selector()
+	if ts == nil {
+		return cmd
+	}
+	return ts.WithAuthoredTest(s.Selection, cmd, authoredTestPath(codePath, s.DevTestPath, s.BaseFiles))
 }
 
 // scoreWorkspace builds the jail base file-map and the test command for a

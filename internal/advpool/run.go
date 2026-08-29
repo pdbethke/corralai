@@ -6,6 +6,8 @@
 // enqueue the returned specs and drive completions themselves (Phase 5).
 package advpool
 
+import "github.com/pdbethke/corralai/internal/lang"
+
 // RunSpec is one adversarial-pool run: the code under review PLUS the
 // developer's own tests for it. The pool's central question is not "does
 // the code pass its tests" but "do the dev's tests actually test anything" —
@@ -20,7 +22,14 @@ type RunSpec struct {
 	DevTestCode string
 	TestCmd     string
 	NMutants    int
-	Lang        string // "" defaults to "go" at render time (back-compat)
+
+	// Selection narrows TestCmd to the tests that EXECUTED CodePath, from
+	// evidence recorded once per scan (lang.TestSelector). The zero value
+	// is the whole suite. When Method is set and Tests is empty the file is
+	// UNCOVERED: no test executes it, the dev pass runs nothing, and the
+	// verdict says so instead of printing a 0.00 nobody measured.
+	Selection lang.Selection
+	Lang      string // "" defaults to "go" at render time (back-compat)
 
 	// ImportPath is the PRE-COMPUTED result of the run's language plugin's
 	// ImportPath(CodePath, exists) — the real, package-qualified import for

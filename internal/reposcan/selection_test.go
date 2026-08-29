@@ -69,3 +69,14 @@ func TestSelectionEvidenceInstrumentRefusalIsDisclosed(t *testing.T) {
 		t.Errorf("got %+v", ev)
 	}
 }
+
+// A zero-value SelectionEvidence — never collected, no note — must not yield
+// an UNDISCLOSED whole-suite grade. Structural: every non-answer says why.
+func TestSelectionEvidenceZeroValueIsDisclosedWholeSuite(t *testing.T) {
+	py, _ := lang.ByName("python")
+	var ev SelectionEvidence
+	sel := ev.For(py, "", "pkg/a.py", "tests/test_a.py", []string{"pytest"})
+	if sel.Fallback != "no selection evidence was collected" || sel.Method != "" || sel.Cmd != nil {
+		t.Errorf("got %+v", sel)
+	}
+}

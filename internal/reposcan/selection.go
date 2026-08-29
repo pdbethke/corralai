@@ -44,6 +44,13 @@ func CollectSelectionEvidence(ctx context.Context, runner commandRunner, files m
 // and a non-empty Fallback; the caller runs testCmd and records Fallback.
 func (e SelectionEvidence) For(p lang.Plugin, repoRoot, codePath, testPath string, testCmd []string) lang.Selection {
 	if !e.Ran {
+		// A zero-value evidence (never collected at all) has no Note, and an
+		// empty Fallback would be an UNDISCLOSED whole-suite grade — the one
+		// outcome this type exists to make impossible. Say it structurally
+		// rather than relying on every caller to have set a Note.
+		if e.Note == "" {
+			return lang.Selection{Fallback: "no selection evidence was collected"}
+		}
 		return lang.Selection{Fallback: e.Note}
 	}
 	sel, ok := p.(lang.TestSelector)

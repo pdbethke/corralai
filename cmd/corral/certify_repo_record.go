@@ -197,7 +197,20 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 				// later task's job), and a nil is the honest value in the
 				// meantime — "reused, source scan not recorded" — not a
 				// fabricated lineage.
-				CacheHit: r.CacheHit,
+				// WHICH MEASUREMENT this row's kill rate is. Without these the
+				// ledger stores a number and loses the question it answers:
+				// 0.65 against the 14 tests that execute the file and 0.65
+				// against all 1431 are different claims, and no other column
+				// can tell them apart afterwards.
+				TestSelection:     r.Verdict.TestSelection.Method,
+				SelectedTests:     r.Verdict.TestSelection.Selected,
+				SuiteTests:        r.Verdict.TestSelection.Of,
+				SelectionFallback: r.Verdict.TestSelection.Fallback,
+				// Uncovered also makes the store write kill_rate NULL (see
+				// scanstore.fileKillRate): no test executes this file, so
+				// there is no measurement to record.
+				Uncovered: r.Verdict.Uncovered,
+				CacheHit:  r.CacheHit,
 				// VerdictJSON is the single serialization every future Get
 				// has to parse (marshalVerdict, verdict_cache.go) — "" above
 				// on a marshal failure, never a partial or hand-rolled blob.

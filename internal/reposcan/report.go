@@ -74,6 +74,27 @@ type WeakFile struct {
 	// here for a reason that is neither "clean" nor "tried and missed," and
 	// a caller must print it distinctly, the same way TestWriterFailed is.
 	PoolTestUnsound bool
+	// SelectionMethod, SelectedTests and SuiteTests mirror
+	// advpool.Verdict.TestSelection: WHICH measurement this kill rate is —
+	// the tests coverage evidence showed execute this file (Method, e.g.
+	// "coverage-context", SelectedTests of SuiteTests), rather than the whole
+	// suite. A rate earned against 14 of 1431 tests and one earned against
+	// all 1431 answer different questions, and a line that prints only the
+	// number leaves the reader to assume the wrong one.
+	SelectionMethod string
+	SelectedTests   int
+	SuiteTests      int
+	// SelectionFallback mirrors advpool.Verdict.TestSelection.Fallback: this
+	// file was graded by the WHOLE suite, and this is why (no selector for
+	// the language, --whole-suite, an evidence run that failed). Empty when
+	// SelectionMethod is set. Never both.
+	SelectionFallback string
+	// Uncovered mirrors advpool.Verdict.Uncovered: the evidence ran and found
+	// NO test executing this file. Its kill rate is not a measurement of the
+	// suite's strength — nothing graded the file — so a caller must withhold
+	// the number rather than print the 0.00 that would read as "your tests
+	// caught nothing here".
+	Uncovered bool
 }
 
 // RepoReport is the repo-level result. It is mostly ACCOUNTING, because that
@@ -140,6 +161,17 @@ type RepoReport struct {
 	// without the TestWriterFailed/PoolTestUnsound/TimedOut caveats
 	// alongside it.
 	ProvenMissed int
+
+	// SelectedFiles, WholeSuiteFiles and UncoveredFiles partition the audited
+	// files by WHICH MEASUREMENT they got. SelectedFiles + WholeSuiteFiles ==
+	// Audited; UncoveredFiles is a SUBSET of SelectedFiles, not a third bucket:
+	// "no test executes this file" is a finding of the selection evidence, so
+	// an uncovered file was graded under selection — it just had nothing to
+	// select. A reader must be told all three, because a repo-level kill rate
+	// averaged across two different questions is not one number.
+	SelectedFiles   int
+	WholeSuiteFiles int
+	UncoveredFiles  int
 
 	Weakest     []WeakFile
 	CacheHits   int
@@ -241,6 +273,14 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 		if !r.Verdict.TimedOut {
 			rep.ProvenMissed += r.Verdict.ProvenMissed
 		}
+		if r.Verdict.TestSelection.Method != "" {
+			rep.SelectedFiles++
+		} else {
+			rep.WholeSuiteFiles++
+		}
+		if r.Verdict.Uncovered {
+			rep.UncoveredFiles++
+		}
 		rep.Weakest = append(rep.Weakest, WeakFile{
 			Path:             r.Job.Path,
 			KillRate:         r.Verdict.DevKillRate,
@@ -250,6 +290,14 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 			ProvenMissed:     r.Verdict.ProvenMissed,
 			PoolTestUnsound:  r.Verdict.PoolTestUnsound,
 			AuthoredTest:     r.Verdict.AuthoredTest,
+			// Which measurement this file's rate IS, carried onto the report
+			// so the printer never has to reach back into the verdict — and
+			// so it cannot print a rate without the question it answers.
+			SelectionMethod:   r.Verdict.TestSelection.Method,
+			SelectedTests:     r.Verdict.TestSelection.Selected,
+			SuiteTests:        r.Verdict.TestSelection.Of,
+			SelectionFallback: r.Verdict.TestSelection.Fallback,
+			Uncovered:         r.Verdict.Uncovered,
 		})
 	}
 

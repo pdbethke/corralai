@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/reposcan"
 )
 
@@ -57,5 +58,22 @@ func TestAuditInputCarriesTheSelection(t *testing.T) {
 	in = ex.auditInputFor(reposcan.Job{Path: "pkg/a.py", TestPath: "tests/test_a.py", Lang: "python"})
 	if in.selection.Method != "" || in.selection.Fallback != "--whole-suite" {
 		t.Errorf("--whole-suite must disclose itself: %+v", in.selection)
+	}
+}
+
+// A pytest node id for a PARAMETRIZED test contains a space, so an argv
+// carrying one cannot be re-split with strings.Fields. The baseline runner
+// joins and the scorer splits, so the pair must round-trip exactly — a
+// baseline that fails on a mangled node id reads as COULD-NOT-GRADE.
+func TestSelectionCommandSurvivesShellRoundTrip(t *testing.T) {
+	cmd := []string{"pytest", "-q", "tests/test_a.py::test_x[hello world]"}
+	got := adequacy.ShellSplit(adequacy.ShellJoin(cmd))
+	if len(got) != len(cmd) {
+		t.Fatalf("round trip changed the argv length: %q -> %q", cmd, got)
+	}
+	for i := range cmd {
+		if got[i] != cmd[i] {
+			t.Fatalf("round trip mangled %q -> %q", cmd, got)
+		}
 	}
 }

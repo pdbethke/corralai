@@ -164,11 +164,11 @@ func runScansShow(args []string, open func(string) (scansReader, error), stdout,
 	}
 
 	tw := tabwriter.NewWriter(stdout, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, "PATH\tDISPOSITION\tREASON\tKILL RATE\tSURVIVORS\tPROVEN\tEVIDENCE\tNOTE\t")
+	fmt.Fprintln(tw, "PATH\tDISPOSITION\tREASON\tKILL RATE\tSURVIVORS\tPROVEN\tSELECTION\tEVIDENCE\tNOTE\t")
 	for _, f := range files {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\t%d\t%s\t%s\t\n",
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\t%d\t%s\t%s\t%s\t\n",
 			f.Path, f.Disposition, f.Reason, formatKillRate(f.KillRate),
-			f.Survivors, f.ProvenMissed, f.Evidence, scanFileNote(f))
+			f.Survivors, f.ProvenMissed, scanFileSelection(f), f.Evidence, scanFileNote(f))
 	}
 	tw.Flush()
 
@@ -242,6 +242,26 @@ func baseScanFileNote(f scanstore.File) string {
 		return "tried and missed — authored test graded, proved nothing"
 	default:
 		return ""
+	}
+}
+
+// scanFileSelection renders WHICH MEASUREMENT a row's kill rate is, in one
+// column. A ledger reader comparing two rows is comparing two answers, and
+// they are only comparable if they answered the same question: "0.65 over 14
+// of 1431 tests" and "0.65 over the whole suite" are different claims. "—"
+// means the ledger does not say — a row written before these columns existed,
+// or a rejected file that was never graded at all — never a positive
+// whole-suite claim, which such a row cannot make.
+func scanFileSelection(f scanstore.File) string {
+	switch {
+	case f.Uncovered:
+		return "UNCOVERED"
+	case f.TestSelection != "":
+		return fmt.Sprintf("%s %d/%d", f.TestSelection, f.SelectedTests, f.SuiteTests)
+	case f.SelectionFallback != "":
+		return fmt.Sprintf("whole-suite (%s)", f.SelectionFallback)
+	default:
+		return "—"
 	}
 }
 

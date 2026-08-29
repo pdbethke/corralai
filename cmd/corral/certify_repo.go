@@ -507,6 +507,27 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// that actually ran.
 		FileScopedTests:  gradesFileScoped(checkArgv, selected, cands, excl),
 		TestSurfacePaths: surfacePaths,
+		// auditConfig above says the SCAN ran selection; it cannot say that
+		// THIS file fell back to the whole suite because the evidence never
+		// saw it. Without a per-file component a re-scan could serve a
+		// whole-suite verdict as a selected one, which is the single rule the
+		// verdict cache has. The MODE only — never the Fallback text, which
+		// can carry an error string (a path, a pid) and would make the key
+		// unstable across identical runs.
+		FileAuditConfig: func(c reposcan.Candidate) string {
+			if ex == nil {
+				return ""
+			}
+			sel := ex.selectionFor(reposcan.Job{Path: c.Path, TestPath: c.TestPath, Lang: c.Lang})
+			switch {
+			case sel.Method == "":
+				return "file-selection=whole-suite"
+			case len(sel.Tests) == 0:
+				return "file-selection=uncovered"
+			default:
+				return "file-selection=" + sel.Method
+			}
+		},
 	}
 	jobs, goalExcl, err := reposcan.EmitJobs(cfg, selected, gs)
 	if err != nil {
@@ -1967,6 +1988,14 @@ func repoScanExitCode(r reposcan.RepoReport, nothingInScope bool, minKillRate *f
 	}
 	if minKillRate != nil {
 		for _, f := range r.Weakest {
+			// An uncovered file fails the gate BEFORE the rate is consulted.
+			// Its rate is withheld (nothing executes the file, so nothing
+			// graded it), and a withheld number must never satisfy a
+			// threshold: a file no test touches is the worst case the gate
+			// exists to catch, not a pass on an unmeasured 0.
+			if f.Uncovered {
+				return 1
+			}
 			if f.KillRate < *minKillRate {
 				return 1
 			}
@@ -2066,6 +2095,13 @@ func orderExclusionsForListing(excl []reposcan.Exclusion) []reposcan.Exclusion {
 func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 	marker := ""
 	switch {
+	case f.Uncovered:
+		// FIRST, and it withholds the rate below: the selection evidence
+		// found NO test executing this file, so its kill rate measures
+		// nothing. Printing "0.00" here would read as "your tests caught
+		// nothing" — an accusation about a measurement that was never made,
+		// when the real finding is that the file is untested outright.
+		marker = "  [UNCOVERED — no test executes this file]"
 	case f.TimedOut:
 		marker = "  [TIMED OUT — pool did not converge]"
 	case f.TestWriterFailed:
@@ -2090,7 +2126,23 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 	if f.Survivors > 0 && !f.TestWriterFailed && !f.TimedOut && !f.PoolTestUnsound {
 		detail = fmt.Sprintf("(%d survivor(s), %d proven missed)", f.Survivors, f.ProvenMissed)
 	}
-	fmt.Fprintf(w, "    %.2f  %s %s%s\n", f.KillRate, f.Path, detail, marker)
+	rate := fmt.Sprintf("%.2f", f.KillRate)
+	if f.Uncovered {
+		rate = "withheld"
+	}
+	fmt.Fprintf(w, "    %s  %s %s%s", rate, f.Path, detail, marker)
+	// Which measurement this line's number IS. Printed on EVERY line, not
+	// only the interesting ones: a report where the selected files say so and
+	// the whole-suite files say nothing leaves the reader to infer the mode
+	// from an absence, which is exactly how two different questions get read
+	// as one number.
+	switch {
+	case f.SelectionMethod != "" && !f.Uncovered:
+		fmt.Fprintf(w, "   graded by %d of %d tests (%s)", f.SelectedTests, f.SuiteTests, f.SelectionMethod)
+	case f.SelectionFallback != "":
+		fmt.Fprintf(w, "   graded by the whole suite (%s)", f.SelectionFallback)
+	}
+	fmt.Fprintln(w)
 
 	// The artifact that makes "N proven, catchable gap(s)" actionable. --repo
 	// is the mode the GitHub Action runs, and it reported the COUNT while
@@ -2231,6 +2283,17 @@ func printRepoReport(w io.Writer, r reposcan.RepoReport, nothingInScope bool, mi
 			fmt.Fprintln(w, "  0 proven gaps: no authored test killed a survivor in this run — see the per-file marker below for why (no survivors / writer failed / test unsound / timed out / tried and missed)")
 		}
 	}
+	// WHICH MEASUREMENT the numbers above are. Selection and whole-suite
+	// answer different questions, and a scan can mix them file by file (the
+	// evidence covers most files and misses one), so the split is stated
+	// rather than left to the per-file lines to imply. Uncovered files are a
+	// SUBSET of the selected ones — the evidence ran and found nothing that
+	// executes them — so they are named inside that clause, not as a third
+	// bucket that would not add up.
+	if r.Audited > 0 {
+		fmt.Fprintf(w, "  test selection: %d file(s) graded by the tests that execute them (%d of those UNCOVERED — no test executes them at all), %d by the whole suite\n",
+			r.SelectedFiles, r.UncoveredFiles, r.WholeSuiteFiles)
+	}
 	// Sorted, like printExclusions: map iteration order is random, and a
 	// report a later slice signs and anchors has to be byte-reproducible.
 	ungradableReasons := make([]string, 0, len(r.Ungradable))
@@ -2295,9 +2358,12 @@ func printRepoReport(w io.Writer, r reposcan.RepoReport, nothingInScope bool, mi
 	// the two never disagree about what happened: r.Weakest is empty in both
 	// of those states anyway, but the guard keeps the intent explicit.
 	if minKillRate != nil && !nothingInScope && r.Audited > 0 {
-		var breaches []reposcan.WeakFile
+		var breaches, uncovered []reposcan.WeakFile
 		for _, f := range r.Weakest {
-			if f.KillRate < *minKillRate {
+			switch {
+			case f.Uncovered:
+				uncovered = append(uncovered, f)
+			case f.KillRate < *minKillRate:
 				breaches = append(breaches, f)
 			}
 		}
@@ -2305,6 +2371,17 @@ func printRepoReport(w io.Writer, r reposcan.RepoReport, nothingInScope bool, mi
 			fmt.Fprintf(w, "  KILL-RATE BREACH: %d file(s) below --min-kill-rate %.2f:\n", len(breaches), *minKillRate)
 			for _, f := range breaches {
 				fmt.Fprintf(w, "    %.2f  %s (%.2f below threshold)\n", f.KillRate, f.Path, *minKillRate-f.KillRate)
+			}
+		}
+		// Reported separately, and with no number: these files have no rate
+		// to be "below" the threshold — nothing executes them. They fail the
+		// gate (see repoScanExitCode) and an operator whose build just went
+		// red must be able to see WHY without hunting for a 0.00 that is not
+		// printed anywhere.
+		if len(uncovered) > 0 {
+			fmt.Fprintf(w, "  UNCOVERED: %d file(s) no test executes at all:\n", len(uncovered))
+			for _, f := range uncovered {
+				fmt.Fprintf(w, "    %s: UNCOVERED — no test executes it (fails --min-kill-rate)\n", f.Path)
 			}
 		}
 	}

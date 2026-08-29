@@ -35,6 +35,17 @@ type EmitConfig struct {
 	// key identically: without it, a cached jail verdict would satisfy a
 	// seal claiming runner provenance.
 	Substrate string
+	// FileAuditConfig, when set, contributes a per-candidate component to
+	// that job's cache key, appended to AuditConfig. It exists because the
+	// grading MODE can differ per file inside one scan (selection for most
+	// files, the whole suite for one the evidence never saw), and a verdict
+	// earned under one mode must never be served for the other. The
+	// scan-level AuditConfig can only say that selection RAN.
+	//
+	// Return "" to contribute nothing — a job then keys exactly as it would
+	// with no hook at all, which is what a dry run (which grades nothing)
+	// and every pre-selection caller rely on.
+	FileAuditConfig func(c Candidate) string
 	// FileScopedTests is true when this scan grades each file against its OWN
 	// paired test file only (--scope-tests on a language with a verified
 	// per-file invocation, or an explicit `-- <cmd>` that names one test
@@ -166,6 +177,21 @@ func EmitJobs(cfg EmitConfig, cands []Candidate, gs GoalSource) ([]Job, []Exclus
 			}
 		}
 
+		// The per-file grading mode, folded into the same component the
+		// scan-wide settings use. Joined with CanonicalKV's own delimiter
+		// (a comma) so the whole string stays one well-formed name=value
+		// list rather than two serializations that could drift apart.
+		auditConfig := cfg.AuditConfig
+		if cfg.FileAuditConfig != nil {
+			if extra := cfg.FileAuditConfig(c); extra != "" {
+				if auditConfig == "" {
+					auditConfig = extra
+				} else {
+					auditConfig = auditConfig + "," + extra
+				}
+			}
+		}
+
 		key := KeyInputs{
 			SourceDigest:      srcDigest,
 			PackageDigest:     pkgDigest,
@@ -173,7 +199,7 @@ func EmitJobs(cfg EmitConfig, cands []Candidate, gs GoalSource) ([]Job, []Exclus
 			TestSurfaceDigest: testDigest,
 			EngineVersion:     cfg.EngineVersion,
 			ModelSet:          cfg.ModelSet,
-			AuditConfig:       cfg.AuditConfig,
+			AuditConfig:       auditConfig,
 			Substrate:         cfg.Substrate,
 		}.CacheKey()
 

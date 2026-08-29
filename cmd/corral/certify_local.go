@@ -669,7 +669,14 @@ func baselineRunnerFor(ctx context.Context, in localAuditInput) (reposcan.Baseli
 		codeKey: prep.wiring.codeKey,
 		code:    string(prep.code),
 		devTest: string(prep.devTest),
-		testCmd: strings.Join(in.checkArgv, " "),
+		// ShellJoin, not strings.Join: under test selection checkArgv carries
+		// pytest node ids, and a parametrized id
+		// (tests/test_a.py::test_x[hello world]) contains a SPACE. A plain
+		// join is not reversible, so the re-split downstream would tear that
+		// id in two and the baseline would fail on a test that does not
+		// exist — surfacing as COULD-NOT-GRADE, blamed on the project. Same
+		// joiner newAuditRunSpec already uses; pairs with adequacy.ShellSplit.
+		testCmd: adequacy.ShellJoin(in.checkArgv),
 		// Fresh per runner: two files' baseline failures must never be
 		// attributed to each other.
 		lastOutput: new(string),

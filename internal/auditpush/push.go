@@ -110,6 +110,72 @@ CREATE TABLE IF NOT EXISTS corral_audits (
   uncovered          BOOLEAN
 );`
 
+// corralAuditsMigrationCols is the additive set of columns this package has
+// ever needed on corral_audits beyond the original shape (ts … run_url), in
+// the order they must be added.
+//
+// It exists because `CREATE TABLE IF NOT EXISTS` is a NO-OP on a warehouse an
+// earlier corral already created: that table keeps its old column set forever,
+// and an INSERT naming a column it does not have fails the whole push — a
+// working `--push` breaking on upgrade, against the one table this tool asks
+// operators to trust as a durable record. Both this list and the fresh
+// CREATE TABLE above carry the columns, so a brand-new warehouse never runs
+// an ALTER; this path is only for a table that predates them.
+//
+// DuckDB has no `ADD COLUMN IF NOT EXISTS`, and silently swallowing every
+// ALTER error would make a genuinely broken migration indistinguishable from
+// an already-applied one — so the existing columns are probed first and any
+// other failure is surfaced. Same rule scanstore's scanFilesMigrationCols
+// follows, for the same reason.
+var corralAuditsMigrationCols = []struct{ name, ddl string }{
+	{"test_selection", "test_selection VARCHAR"},
+	{"selected_tests", "selected_tests INTEGER"},
+	{"suite_tests", "suite_tests INTEGER"},
+	{"selection_fallback", "selection_fallback VARCHAR"},
+	{"uncovered", "uncovered BOOLEAN"},
+}
+
+// migrateCorralAudits additively brings a corral_audits table created before
+// a later column existed up to the current column set. Idempotent: a table
+// that already has every column runs zero ALTERs.
+//
+// The columns are probed through duckdb_columns() rather than
+// information_schema.columns because the target is an ATTACHed catalog
+// (`warehouse`), and information_schema is scoped to the current one — it
+// would report the attached table as having no columns at all, and every
+// ALTER would then run and fail on a table that was already current.
+func migrateCorralAudits(db *sql.DB) error {
+	rows, err := db.Query(`SELECT column_name FROM duckdb_columns()
+	    WHERE database_name = 'warehouse' AND table_name = 'corral_audits'`)
+	if err != nil {
+		return fmt.Errorf("auditpush: probe existing columns: %w", err)
+	}
+	existing := map[string]bool{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			rows.Close()
+			return fmt.Errorf("auditpush: scan existing column: %w", err)
+		}
+		existing[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("auditpush: probe existing columns: %w", err)
+	}
+	rows.Close()
+
+	for _, col := range corralAuditsMigrationCols {
+		if existing[col.name] {
+			continue
+		}
+		if _, err := db.Exec("ALTER TABLE warehouse.corral_audits ADD COLUMN " + col.ddl); err != nil {
+			return fmt.Errorf("auditpush: migrate: add column %s: %w", col.name, err)
+		}
+	}
+	return nil
+}
+
 // Push appends rows to target, creating the table if it is not there.
 //
 // target is a DuckDB path or `md:<db>`. For MotherDuck the caller must have set
@@ -139,6 +205,13 @@ func Push(target string, rows []Row) (int, error) {
 	}
 	if _, err := db.Exec(strings.Replace(schema, "corral_audits", "warehouse.corral_audits", 1)); err != nil {
 		return 0, fmt.Errorf("auditpush: create table: %w", err)
+	}
+	// A warehouse an earlier corral created already exists, so the CREATE
+	// above did nothing and its column set is whatever that version wrote.
+	// The INSERT below names every current column, so without this an
+	// upgrade turns a working push into a hard failure.
+	if err := migrateCorralAudits(db); err != nil {
+		return 0, err
 	}
 
 	// Columns named explicitly rather than positionally: the list has grown

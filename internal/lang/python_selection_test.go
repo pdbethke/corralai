@@ -3,6 +3,7 @@
 package lang
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -116,10 +117,14 @@ func TestPythonSelectAlignsAbsoluteReportPaths(t *testing.T) {
 }
 
 func TestPythonSelectFallsBackToFilesWhenArgvWouldBeTooLong(t *testing.T) {
-	// Build evidence where one file is executed by 3000 tests in one module.
+	// Build evidence where one file is executed by 3000 GENUINELY DISTINCT
+	// tests in one module — each node id carries its own index so the
+	// deduplicated set really is 3000 entries, not a handful cycling
+	// through a short suffix, and the sorted argv genuinely exceeds
+	// selectionMaxArgv.
 	var ctxs []string
 	for i := 0; i < 3000; i++ {
-		ctxs = append(ctxs, `"tests/test_big.py::test_`+strings.Repeat("x", 20)+string(rune('a'+i%26))+`|run"`)
+		ctxs = append(ctxs, fmt.Sprintf(`"tests/test_big.py::test_%04d_%s|run"`, i, strings.Repeat("x", 20)))
 	}
 	ev := `{"meta":{"show_contexts":true},"totals":{"covered_lines":1},"files":{"pkg/calc.py":{"summary":{"num_statements":1,"covered_lines":1},"contexts":{"1":[` + strings.Join(ctxs, ",") + `]}},"tests/test_big.py":{"summary":{"num_statements":1,"covered_lines":1},"contexts":{"1":[` + ctxs[0] + `]}}}}`
 	sel, err := pyPlugin{}.Select([]byte(ev), "", "pkg/calc.py", "tests/test_big.py", []string{"pytest"})

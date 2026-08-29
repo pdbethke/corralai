@@ -1075,10 +1075,6 @@ func (pyPlugin) Select(evidence []byte, repoRoot, codePath, testPath string, tes
 	wantTest := filepath.ToSlash(testPath)
 	all := map[string]bool{}
 	var mine map[string]bool
-	rawArgv := 0 // every matching occurrence, undeduped — the argv Instrument
-	// would have to emit if it named a context per LINE rather than per file,
-	// which is the actual blow-up risk on a file with many covered lines
-	// each hit by a large, mostly-overlapping set of tests.
 	sawTest := false
 	for path, f := range rep.Files {
 		p, ok := alignPyPath(path, root)
@@ -1100,7 +1096,6 @@ func (pyPlugin) Select(evidence []byte, repoRoot, codePath, testPath string, tes
 						mine = map[string]bool{}
 					}
 					mine[id] = true
-					rawArgv += len(id) + 1
 				}
 			}
 		}
@@ -1128,7 +1123,7 @@ func (pyPlugin) Select(evidence []byte, repoRoot, codePath, testPath string, tes
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
-	if rawArgv > selectionMaxArgv {
+	if argvLen(ids) > selectionMaxArgv {
 		files := map[string]bool{}
 		for _, id := range ids {
 			files[strings.SplitN(id, "::", 2)[0]] = true
@@ -1166,6 +1161,16 @@ func contextNodeID(ctx string) string {
 		ctx = ctx[:i]
 	}
 	return filepath.ToSlash(ctx)
+}
+
+// argvLen approximates the length of a command line carrying args, as one
+// space-joined string — the metric selectionMaxArgv bounds.
+func argvLen(args []string) int {
+	n := 0
+	for _, a := range args {
+		n += len(a) + 1
+	}
+	return n
 }
 
 func lastNonEmptyLine(b []byte) string {

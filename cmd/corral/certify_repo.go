@@ -63,7 +63,8 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	writerModelFlag := fs.String("writer-model", "", "model for the test-writer role — REQUIRED, corral has no default models")
 	mutantModelFlag := fs.String("mutant-model", "", "model for the mutant-generator role — REQUIRED, corral has no default models")
 	criticModelFlag := fs.String("critic-model", "", "model for the test-critic role, which must differ from the writer's; \"off\" disables the critic entirely (it is advisory and never gates the verdict, so a single-vendor run with only one usable model can drop it). No default")
-	scopeTestsFlag := fs.Bool("scope-tests", false, "grade each file against its OWN paired test file instead of the project's whole suite. MUCH faster — scoring runs the suite once per mutant, so this collapses an O(mutants x suite runtime) cost — but it CHANGES THE MEASUREMENT: a mutant that some unrelated test happened to catch now reads as a survivor, so the reported gap count can go UP. Ignored when an explicit -- <cmd> is given, and for languages with no verified per-file invocation")
+	scopeTestsFlag := fs.Bool("scope-tests", false, "REMOVED — see --whole-suite. Selection by coverage evidence is now the default")
+	wholeSuiteFlag := fs.Bool("whole-suite", false, "grade every mutant against the project's WHOLE suite instead of the tests that demonstrably execute each file (the default, from one instrumented run per scan). Costs O(mutants x whole-suite runtime) per file and answers a different question — 'did ANY test catch it' rather than 'do this file's tests test it'. The verdict records which was used")
 	shadowModelFlag := fs.String("shadow-model", "", "challenger model that attacks every region a SECOND time. OFF unless named. Recorded for comparison — NEVER gates the verdict")
 	owner := fs.String("owner", "local", "owning account for the scan (tenant identifier)")
 	commit := fs.String("commit", "", "commit SHA the report is bound to")
@@ -86,6 +87,16 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	recordDSNFlag := fs.String("record-db", "", "path to the scan ledger (default: $CORRALAI_SCANS_DB, else ~/.claude/corralai_scans.duckdb)")
 	timeoutFlag := fs.Duration("timeout", 10*time.Minute, "per-file budget: give up on a single file's run if it makes no progress for this long (not a hard wall-clock cap — a single slow LLM call can overshoot it). Same default and semantics as `certify --local`'s --timeout; raise it for a large file that needs more room to converge")
 	if err := fs.Parse(flagArgs); err != nil {
+		return 2
+	}
+	// Removed with a POINTER, not deprecated into a warning: --scope-tests
+	// picked a file's grading surface by FILENAME convention, which inverted
+	// real verdicts. An operator who typed it wanted the cost collapse, and
+	// they now get it by default — but from execution evidence, and the
+	// replacement flag goes the OTHER way, so silently honouring the old
+	// spelling would mean the opposite of what it used to.
+	if *scopeTestsFlag {
+		fmt.Fprintln(stderr, "corral certify --repo: --scope-tests was removed. Its paired-FILE scoping inverted verdicts (requests/adapters.py 1.00 -> 0.00). Selection is now by coverage evidence and on by default; pass --whole-suite to grade against the whole suite. See docs/superpowers/specs/2026-08-28-coverage-guided-selection-and-concurrent-scoring-design.md")
 		return 2
 	}
 
@@ -354,7 +365,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// plugin's stock recursive command is used — resolved per job, since a
 		// repo can mix languages.
 		ex = newLocalExecutor(*repoDir, checkArgv, *substrateFlag, *timeoutFlag, stdout)
-		ex.scopeTests = *scopeTestsFlag
+		ex.wholeSuite = *wholeSuiteFlag
 		ex.models = auditModels{
 			writer: *writerModelFlag, mutant: *mutantModelFlag,
 			critic: *criticModelFlag, shadow: *shadowModelFlag,
@@ -425,11 +436,32 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	})
 	modelSet := modelSetKey(rmWriter, rmMutant, rmCritic, rmShadow, rmShadowWriter)
 
+	// Selection evidence: ONE instrumented run of the suite for the whole
+	// scan, whose answer every job then asks about its own file. Collected
+	// HERE — before auditConfig below — because the grading mode is part of a
+	// verdict's identity and the key has to spell which measurement was made.
+	//
+	// Never fatal, and never on a dry run (ex is nil there: a dry run audits
+	// nothing, so it must not run the project's suite). A failure is a Note
+	// printed to the operator, and the scan grades whole-suite — a real
+	// measurement, just a different question, said out loud.
+	if ex != nil && len(selected) > 0 {
+		fmt.Fprintln(stdout, "  selection: running the suite once with per-test coverage instrumentation…")
+		ex.selection = ex.collectSelection(context.Background(), enumeratedSourcePaths(cands, excl[:enumExcl]))
+		if !ex.selection.Ran {
+			fmt.Fprintf(stdout, "  selection: grading by the WHOLE suite — %s\n", ex.selection.Note)
+		}
+	}
+	selectionMethod := ""
+	if ex != nil && ex.selection.Ran {
+		selectionMethod = "coverage-context"
+	}
+
 	// AuditConfig, like ModelSet above, is part of a verdict's identity: it
 	// carries the flags that change what a mutant run against a given file
 	// MEASURES, not which files get audited. See auditConfigKey for the
 	// inclusion/exclusion rationale.
-	auditConfig := auditConfigKey(*scopeTestsFlag, checkArgv)
+	auditConfig := auditConfigKey(*wholeSuiteFlag, selectionMethod, checkArgv)
 
 	// testSurfacePaths has to STAT the testdata entries it admits, and every
 	// read a scan performs is confined to the repository through an *os.Root —
@@ -473,7 +505,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// computed from the same facts testCmd itself resolves the command
 		// from, so the key can never claim a narrower surface than the one
 		// that actually ran.
-		FileScopedTests:  gradesFileScoped(checkArgv, *scopeTestsFlag, selected, cands, excl),
+		FileScopedTests:  gradesFileScoped(checkArgv, selected, cands, excl),
 		TestSurfacePaths: surfacePaths,
 	}
 	jobs, goalExcl, err := reposcan.EmitJobs(cfg, selected, gs)
@@ -824,13 +856,25 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 // collide. An EMPTY argv serializes as absent, never as the digest of an empty
 // string: the plugin-default path must key exactly as it always has.
 //
+// The GRADING MODE is here for the same reason: a kill rate earned against
+// the tests that demonstrably execute a file and one earned against the whole
+// suite are answers to different questions, and a verdict may only be reused
+// for the question it was measured under. Both halves are keyed — whole-suite
+// as an explicit component, and selection by its METHOD (the evidence kind,
+// e.g. coverage-context), so a scan whose instrumented run failed and fell
+// back to the whole suite cannot silently reuse a selected verdict. The
+// selected TESTS are not keyed: they are derived from the test surface, whose
+// digest already moves when any test file changes.
+//
 // Bias when adding to this list: include. Over-inclusion causes a needless
 // miss, which costs money. Under-inclusion serves a stale verdict, which
 // signs an unmeasured claim.
-func auditConfigKey(scopeTests bool, checkArgv []string) string {
+func auditConfigKey(wholeSuite bool, method string, checkArgv []string) string {
 	m := map[string]string{}
-	if scopeTests {
-		m["scope-tests"] = "true"
+	if wholeSuite {
+		m["whole-suite"] = "true"
+	} else if method != "" {
+		m["test-selection"] = method
 	}
 	if len(checkArgv) > 0 {
 		sum := sha256.Sum256([]byte(strings.Join(checkArgv, "\x00")))
@@ -1093,13 +1137,14 @@ func isRegularInRoot(root *os.Root, rel string) bool {
 //     means resolving argv tokens against the repo root (and through
 //     symlinks) rather than comparing text, which is a larger change than
 //     this check.
-//   - --scope-tests only takes effect for a language with a VERIFIED per-file
-//     invocation and a paired test to scope to; otherwise testCmd silently
-//     falls back to the full suite. If even one selected file would fall back,
-//     this returns false for the whole scan. That over-invalidates the genuinely
-//     scoped files, which only costs money — the other direction would key a
-//     whole-suite grading run as if one file were the surface.
-func gradesFileScoped(checkArgv []string, scopeTests bool, selected, cands []reposcan.Candidate, excl []reposcan.Exclusion) bool {
+//   - With no explicit argv the answer is always false, even though
+//     coverage-guided selection does narrow each file's command: the
+//     selection is derived from a whole-suite instrumented run, so every test
+//     file in the tree can change what it picks. Keying the whole-suite
+//     digest over-invalidates the narrowly-graded files, which only costs
+//     money — the other direction would key a run as if one file were the
+//     surface while a change anywhere else silently moved the selection.
+func gradesFileScoped(checkArgv []string, selected, cands []reposcan.Candidate, excl []reposcan.Exclusion) bool {
 	if len(selected) == 0 {
 		return false
 	}
@@ -1149,23 +1194,15 @@ func gradesFileScoped(checkArgv []string, scopeTests bool, selected, cands []rep
 		}
 		return true
 	}
-	if !scopeTests {
-		return false
-	}
-	for _, c := range selected {
-		p, ok := lang.ByName(c.Lang)
-		if !ok {
-			return false
-		}
-		fs, canScope := p.(lang.FileScopedTester)
-		if !canScope {
-			return false
-		}
-		if _, scoped := fs.FileScopedTestCmd(c.TestPath); !scoped {
-			return false
-		}
-	}
-	return true
+	// No explicit `-- <cmd>`: the scan runs the language plugin's own whole
+	// recursive suite, and coverage-guided selection narrows it PER FILE from
+	// evidence produced by that same whole suite. The grading surface is
+	// therefore a SUBSET of the whole suite chosen by evidence that itself
+	// depends on every test file in the tree — so the key keeps the
+	// whole-suite digest. A superset is always a safe invalidation: it can
+	// only cost a needless re-audit, never serve a verdict measured against a
+	// surface that has since changed.
+	return false
 }
 
 // parseMinKillRate parses and range-validates the --min-kill-rate flag value.
@@ -1560,6 +1597,61 @@ func preflightLanguages(sources []string) map[string]bool {
 	return langs
 }
 
+// scanRunner builds the substrate runner ONE whole-suite instrumented run
+// uses (the coverage pre-flight, and selection evidence), with the files
+// it needs seeded. Shared so the two runs cannot drift in how they reach
+// the suite.
+func (l *localExecutor) scanRunner(langName string, plug lang.Plugin) (runner coverageRunner, files map[string]string, err error) {
+	if l.substrate == substrateWorkspace {
+		// The real checkout IS the workspace, and the command runs with
+		// cwd == l.repoDir == reposcan.Enumerate's own root — coverage.py
+		// already reports paths relative to that (see python.go's
+		// ParseCoverage doc comment), so there is nothing to relativize.
+		//
+		// WithWorkspaceMaxOutput mirrors the jail branch's WithMaxOutput
+		// below — a WorkspaceRunner built SPECIFICALLY for this one call,
+		// never reused for RunTest's ordinary per-mutant runs (which stay
+		// on this substrate's original unbounded bytes.Buffer). Without
+		// this, the workspace substrate had no cap at all on the
+		// instrumented profile it reads back — measured against grpc-go: a
+		// 253 MB profile read entirely into memory (827 MB peak RSS).
+		// WithPerRunEnv: this is a single one-off instrumented run, not a
+		// baseline/mutant loop, but it is still the SAME real checkout the
+		// workspace substrate's ordinary scoring runs mutate — a Python
+		// repo whose developer left a __pycache__ behind (or a run
+		// squeezed into the same wall-clock second as an earlier
+		// preflight call on a re-run) is exposed to the identical stale-
+		// bytecode read, just against coverage output instead of a
+		// kill/survive verdict. See lang.Plugin.WorkspaceRunEnv's doc
+		// comment.
+		runner = adequacy.NewWorkspaceRunner(l.repoDir, preflightTimeout,
+			adequacy.WithWorkspaceMaxOutput(preflightMaxOutput),
+			adequacy.WithPerRunEnv(plug.WorkspaceRunEnv))
+		files = map[string]string{}
+	} else {
+		if l.jailErr != nil {
+			return nil, nil, l.jailErr
+		}
+		if l.seeds == nil {
+			return nil, nil, errors.New("no repo seed available")
+		}
+		seed, serr := l.seeds.get(langName)
+		if serr != nil {
+			return nil, nil, fmt.Errorf("jail preparation failed for %s: %w", langName, serr)
+		}
+		// A jail/enumerator built SPECIFICALLY for this one call — never
+		// reused for the scan's ordinary per-mutant runs, which must keep
+		// sandbox.Run's stock 16 KiB default (see preflightMaxOutput).
+		runner = adequacy.NewEnumerator(l.iso, preflightTimeout,
+			adequacy.WithReadOnlyBinds(seed.binds), adequacy.WithMaxOutput(preflightMaxOutput))
+		files = seed.files
+		// Same reasoning as the workspace branch: cmd.Dir is the jail's own
+		// ephemeral workspace root, which IS the seeded repo root, so
+		// coverage.py's paths are already relative to it.
+	}
+	return runner, files, nil
+}
+
 // runPreflight runs the coverage pre-flight ONCE for the whole scan (never
 // once per audited file) over every ENUMERATED SOURCE FILE in the repo,
 // independent of --top/--diff-base AND of whether test-pairing made any of
@@ -1609,57 +1701,12 @@ func (l *localExecutor) runPreflight(ctx context.Context, sources []string) repo
 		testCmd = plug.TestCmd()
 	}
 
-	var runner coverageRunner
-	var files map[string]string
-	var repoRoot string
-
-	if l.substrate == substrateWorkspace {
-		// The real checkout IS the workspace, and the command runs with
-		// cwd == l.repoDir == reposcan.Enumerate's own root — coverage.py
-		// already reports paths relative to that (see python.go's
-		// ParseCoverage doc comment), so there is nothing to relativize.
-		//
-		// WithWorkspaceMaxOutput mirrors the jail branch's WithMaxOutput
-		// below — a WorkspaceRunner built SPECIFICALLY for this one call,
-		// never reused for RunTest's ordinary per-mutant runs (which stay
-		// on this substrate's original unbounded bytes.Buffer). Without
-		// this, the workspace substrate had no cap at all on the
-		// instrumented profile it reads back — measured against grpc-go: a
-		// 253 MB profile read entirely into memory (827 MB peak RSS).
-		// WithPerRunEnv: this is a single one-off instrumented run, not a
-		// baseline/mutant loop, but it is still the SAME real checkout the
-		// workspace substrate's ordinary scoring runs mutate — a Python
-		// repo whose developer left a __pycache__ behind (or a run
-		// squeezed into the same wall-clock second as an earlier
-		// preflight call on a re-run) is exposed to the identical stale-
-		// bytecode read, just against coverage output instead of a
-		// kill/survive verdict. See lang.Plugin.WorkspaceRunEnv's doc
-		// comment.
-		runner = adequacy.NewWorkspaceRunner(l.repoDir, preflightTimeout,
-			adequacy.WithWorkspaceMaxOutput(preflightMaxOutput),
-			adequacy.WithPerRunEnv(plug.WorkspaceRunEnv))
-		files = map[string]string{}
-	} else {
-		if l.jailErr != nil {
-			return reposcan.CoverageMap{Note: fmt.Sprintf("preflight: %v", l.jailErr)}
-		}
-		if l.seeds == nil {
-			return reposcan.CoverageMap{Note: "preflight: no repo seed available"}
-		}
-		seed, serr := l.seeds.get(langName)
-		if serr != nil {
-			return reposcan.CoverageMap{Note: fmt.Sprintf("preflight: jail preparation failed for %s: %v", langName, serr)}
-		}
-		// A jail/enumerator built SPECIFICALLY for this one call — never
-		// reused for the scan's ordinary per-mutant runs, which must keep
-		// sandbox.Run's stock 16 KiB default (see preflightMaxOutput).
-		runner = adequacy.NewEnumerator(l.iso, preflightTimeout,
-			adequacy.WithReadOnlyBinds(seed.binds), adequacy.WithMaxOutput(preflightMaxOutput))
-		files = seed.files
-		// Same reasoning as the workspace branch: cmd.Dir is the jail's own
-		// ephemeral workspace root, which IS the seeded repo root, so
-		// coverage.py's paths are already relative to it.
+	runner, files, rerr := l.scanRunner(langName, plug)
+	if rerr != nil {
+		return reposcan.CoverageMap{Note: fmt.Sprintf("preflight: %v", rerr)}
 	}
+
+	var repoRoot string
 	if langName == "go" {
 		// Go's coverage profile paths are import paths, not filesystem
 		// paths, on EITHER substrate — always need the module prefix to
@@ -1677,6 +1724,43 @@ func (l *localExecutor) runPreflight(ctx context.Context, sources []string) repo
 	}
 
 	return reposcan.Preflight(ctx, runner, files, plug, testCmd, repoRoot)
+}
+
+// collectSelection runs the selector's instrumented command once for the
+// scan's language, unless --whole-suite. Any failure is a Note, never
+// fatal: the scan still has a real measurement to make.
+func (l *localExecutor) collectSelection(ctx context.Context, sources []string) reposcan.SelectionEvidence {
+	if l.wholeSuite {
+		return reposcan.SelectionEvidence{Note: "--whole-suite"}
+	}
+	langs := preflightLanguages(sources)
+	if len(langs) == 0 {
+		return reposcan.SelectionEvidence{Note: "no source files"}
+	}
+	langName := ""
+	if len(langs) == 1 {
+		for n := range langs {
+			langName = n
+		}
+	} else {
+		var note string
+		if langName, note = selectPreflightLanguage(langs, l.checkArgv); langName == "" {
+			return reposcan.SelectionEvidence{Note: note}
+		}
+	}
+	plug, ok := lang.ByName(langName)
+	if !ok {
+		return reposcan.SelectionEvidence{Note: fmt.Sprintf("unknown language %q", langName)}
+	}
+	testCmd := l.checkArgv
+	if len(testCmd) == 0 {
+		testCmd = plug.TestCmd()
+	}
+	runner, files, err := l.scanRunner(langName, plug)
+	if err != nil {
+		return reposcan.SelectionEvidence{Note: fmt.Sprintf("selection: %v", err)}
+	}
+	return reposcan.CollectSelectionEvidence(ctx, runner, files, plug, testCmd)
 }
 
 // goModulePath reads the `module` directive out of repoDir's go.mod, for
@@ -2403,10 +2487,17 @@ type localExecutor struct {
 	// on the workspace substrate; see resolveMutantConcurrency.
 	mutantConcurrency int
 
-	// scopeTests runs each file's mutants against its OWN paired test file
-	// instead of the project's whole suite. Off by default because it changes
-	// the MEASUREMENT, not just the cost — see lang.FileScopedTester.
-	scopeTests bool
+	// selection is what ONE instrumented run of this repo's suite learned
+	// about which tests execute which files, collected once per scan (see
+	// collectSelection) and asked per job (see selectionFor). Its zero value
+	// means no evidence — every file grades whole-suite, disclosed.
+	selection reposcan.SelectionEvidence
+
+	// wholeSuite is the operator's --whole-suite opt-out: grade every mutant
+	// against the project's whole suite instead of the tests that
+	// demonstrably execute the file. It changes the MEASUREMENT, not just the
+	// cost, which is why the verdict records which one was made.
+	wholeSuite bool
 
 	repoDir      string
 	checkArgv    []string
@@ -2561,6 +2652,10 @@ func (l *localExecutor) Close() {
 // parses and is then dropped on the floor is exactly the silently-discarded-
 // input shape this codebase keeps producing.
 func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
+	// Resolved ONCE per job and carried on the input, so the narrowed command
+	// the executor's own baseline runs and the Selection the scorer applies
+	// per pass can never be derived twice and disagree.
+	sel := l.selectionFor(j)
 	return localAuditInput{
 		// One meter for the WHOLE scan. Each file's audit would otherwise
 		// meter only itself and the totals would die with it, leaving a
@@ -2580,7 +2675,14 @@ func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
 		// reads the CWD's repo, not the SCANNED one, and would stamp every
 		// verdict with an unrelated sha.
 		commit:    orDefault(j.Commit, "local"),
-		checkArgv: l.testCmd(j),
+		checkArgv: l.testCmd(j, sel),
+		// The BASE command, before narrowing: RunSpec.TestCmd must stay the
+		// whole-suite command because advpool's scorer applies the Selection
+		// itself, per pass. Handing it the already-narrowed command would
+		// narrow twice — and would drop the pool's own authored test, which
+		// no evidence run ever saw.
+		baseArgv:  l.baseCmd(j),
+		selection: sel,
 		substrate: l.substrate,
 		timeout:   l.timeout,
 		// See localExecutor.perFileSwarm: 1 everywhere the scan really does
@@ -2726,39 +2828,70 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 	return res, nil
 }
 
-// testCmd resolves the project's own test command for one job: the operator's
-// `-- <cmd>` if given, else the job language's stock recursive command.
-// Repo-aware jail wiring REQUIRES a command (there is no synthetic scaffold to
-// fall back on), and a repo can mix languages, so it is resolved per job. An
-// unknown language yields nil and the audit fails closed downstream rather
-// than grading with someone else's command.
-// testCmd resolves the command a job is graded with. This ONE function's result
-// becomes both the baseline command and the scoring command, which is why
-// --scope-tests is applied here and nowhere else: a scoped scoring run graded
-// against an unscoped baseline would be comparing different things and would
-// silently corrupt every kill rate.
-func (l *localExecutor) testCmd(j reposcan.Job) []string {
-	// An operator who named a command has already chosen the surface; scoping
-	// must never rewrite it out from under them.
-	if len(l.checkArgv) > 0 {
-		return l.checkArgv
+// selectionFor answers ONE job from the scan's single instrumented run: which
+// tests demonstrably execute this file, and the narrowed command that runs
+// just those. Every non-answer is a Selection with an empty Method and a
+// non-empty Fallback saying why — --whole-suite, an unknown language, no
+// evidence, or a selector that refused this file — because a whole-suite
+// grade under selection is a DIFFERENT measurement and the record has to say
+// which one it is.
+//
+// The base handed to the selector is the operator's `-- <cmd>` when they gave
+// one, else the plugin's stock recursive command: the operator's markers and
+// flags are honoured, and the selection only ever narrows what they chose.
+func (l *localExecutor) selectionFor(j reposcan.Job) lang.Selection {
+	if l.wholeSuite {
+		return lang.Selection{Fallback: "--whole-suite"}
 	}
 	p, ok := lang.ByName(j.Lang)
 	if !ok {
-		return nil
+		return lang.Selection{Fallback: "unknown language " + j.Lang}
 	}
-	if l.scopeTests {
-		// Only for a language whose per-file invocation is verified, and only
-		// with a paired test to scope TO. Both fall back to the full suite
-		// rather than improvising something that would quietly run everything
-		// (or nothing) while the caller believed it was scoped.
-		if fs, canScope := p.(lang.FileScopedTester); canScope {
-			if cmd, scoped := fs.FileScopedTestCmd(j.TestPath); scoped {
-				return cmd
-			}
-		}
+	base := l.checkArgv
+	if len(base) == 0 {
+		base = p.TestCmd()
 	}
-	return p.TestCmd()
+	return l.selection.For(p, l.repoDir, j.Path, j.TestPath, base)
+}
+
+// baseCmd is the job's UNNARROWED command: the operator's `-- <cmd>` if they
+// gave one, else the job language's stock recursive command. It is what the
+// selector narrowed FROM, and what advpool's scorer narrows again per pass —
+// see localAuditInput.baseArgv.
+func (l *localExecutor) baseCmd(j reposcan.Job) []string {
+	if len(l.checkArgv) > 0 {
+		return l.checkArgv
+	}
+	if p, ok := lang.ByName(j.Lang); ok {
+		return p.TestCmd()
+	}
+	return nil
+}
+
+// testCmd resolves the command a job is graded with. This ONE function's
+// result becomes both the baseline command and the executor's own scoring
+// command, which is why the selection is applied here and nowhere else on
+// this path: a narrowed scoring run graded against an unnarrowed baseline
+// would be comparing different things and would silently corrupt every kill
+// rate.
+//
+// With no selection it falls back exactly as before: the operator's `-- <cmd>`
+// if given, else the job language's stock recursive command. Repo-aware jail
+// wiring REQUIRES a command (there is no synthetic scaffold to fall back on),
+// and a repo can mix languages, so it is resolved per job. An unknown language
+// yields nil and the audit fails closed downstream rather than grading with
+// someone else's command.
+func (l *localExecutor) testCmd(j reposcan.Job, sel lang.Selection) []string {
+	if len(sel.Cmd) > 0 {
+		return sel.Cmd
+	}
+	if len(l.checkArgv) > 0 {
+		return l.checkArgv
+	}
+	if p, ok := lang.ByName(j.Lang); ok {
+		return p.TestCmd()
+	}
+	return nil
 }
 
 // printLanguageProfile renders the per-language inventory the enumeration

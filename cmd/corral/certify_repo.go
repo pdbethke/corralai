@@ -1561,6 +1561,40 @@ const preflightMaxOutput = 8 << 20
 // runs fall back to today.
 const preflightTimeout = 5 * time.Minute
 
+// selectionMaxOutput and selectionTimeout bound the ONE instrumented run
+// selection evidence comes from. They are SEPARATE from the pre-flight's own
+// bounds above, and much larger, because they bound a different payload: the
+// pre-flight reads a coverage SUMMARY, while selection reads
+// `coverage json --show-contexts`, which lists every executing test's node id
+// against every line it touched. That is quadratic-ish in (tests × lines) and
+// nothing reduces it before the cap sees it.
+//
+// MEASURED 2026-08-29, running lang.pyPlugin.Instrument's exact `sh -c`
+// script in a venv of each project's own pinned dependencies, on this
+// workstation:
+//
+//	pallets/flask   4,716,984 bytes (4.5 MiB)   19.9 s
+//	psf/requests   29,513,163 bytes (28.1 MiB)  47.4 s
+//
+// requests is the sizing case, and it is not a large project: 28 MiB of
+// context JSON from a suite that runs in well under a minute. The 8 MiB
+// pre-flight cap would have TRUNCATED it — mid-JSON, so Select would report
+// unparseable evidence and the whole scan would fall back to the whole suite,
+// which is exactly the silent-degradation shape this feature exists to avoid.
+//
+// Sized at ≥8× the measured bytes and ≥3× the measured seconds, with floors
+// of 64 MiB / 15 min so a project several times requests' size still fits:
+// 256 MiB is ~9× requests, and 15 min is ~19×. Generous on purpose — the cost
+// of over-sizing is bounded memory on one run, and the cost of under-sizing
+// is a scan that silently grades a different question.
+//
+// REDUCING the payload before it is read (the way goCoverageReduceScript
+// already does for Go profiles) is the real answer and is not built; see
+// docs/design/test-selection.md.
+const selectionMaxOutput = 256 << 20
+
+const selectionTimeout = 15 * time.Minute
+
 // coverageRunner is the minimal seam runPreflight needs to hand to
 // reposcan.Preflight — satisfied structurally by both *adequacy.WorkspaceRunner
 // and adequacy.Enumerator (bwrapJail), matching reposcan's own unexported
@@ -1663,7 +1697,12 @@ func preflightLanguages(sources []string) map[string]bool {
 // uses (the coverage pre-flight, and selection evidence), with the files
 // it needs seeded. Shared so the two runs cannot drift in how they reach
 // the suite.
-func (l *localExecutor) scanRunner(langName string, plug lang.Plugin) (runner coverageRunner, files map[string]string, err error) {
+// maxOutput and timeout are the CALLER's own bounds: the coverage pre-flight
+// and the selection evidence run read payloads that differ by more than an
+// order of magnitude (see selectionMaxOutput), and a single shared pair would
+// have to be the looser of the two for both — spending the pre-flight's
+// memory ceiling on a payload it never produces.
+func (l *localExecutor) scanRunner(langName string, plug lang.Plugin, maxOutput int, timeout time.Duration) (runner coverageRunner, files map[string]string, err error) {
 	if l.substrate == substrateWorkspace {
 		// The real checkout IS the workspace, and the command runs with
 		// cwd == l.repoDir == reposcan.Enumerate's own root — coverage.py
@@ -1686,8 +1725,8 @@ func (l *localExecutor) scanRunner(langName string, plug lang.Plugin) (runner co
 		// bytecode read, just against coverage output instead of a
 		// kill/survive verdict. See lang.Plugin.WorkspaceRunEnv's doc
 		// comment.
-		runner = adequacy.NewWorkspaceRunner(l.repoDir, preflightTimeout,
-			adequacy.WithWorkspaceMaxOutput(preflightMaxOutput),
+		runner = adequacy.NewWorkspaceRunner(l.repoDir, timeout,
+			adequacy.WithWorkspaceMaxOutput(maxOutput),
 			adequacy.WithPerRunEnv(plug.WorkspaceRunEnv))
 		files = map[string]string{}
 	} else {
@@ -1704,8 +1743,8 @@ func (l *localExecutor) scanRunner(langName string, plug lang.Plugin) (runner co
 		// A jail/enumerator built SPECIFICALLY for this one call — never
 		// reused for the scan's ordinary per-mutant runs, which must keep
 		// sandbox.Run's stock 16 KiB default (see preflightMaxOutput).
-		runner = adequacy.NewEnumerator(l.iso, preflightTimeout,
-			adequacy.WithReadOnlyBinds(seed.binds), adequacy.WithMaxOutput(preflightMaxOutput))
+		runner = adequacy.NewEnumerator(l.iso, timeout,
+			adequacy.WithReadOnlyBinds(seed.binds), adequacy.WithMaxOutput(maxOutput))
 		files = seed.files
 		// Same reasoning as the workspace branch: cmd.Dir is the jail's own
 		// ephemeral workspace root, which IS the seeded repo root, so
@@ -1763,7 +1802,7 @@ func (l *localExecutor) runPreflight(ctx context.Context, sources []string) repo
 		testCmd = plug.TestCmd()
 	}
 
-	runner, files, rerr := l.scanRunner(langName, plug)
+	runner, files, rerr := l.scanRunner(langName, plug, preflightMaxOutput, preflightTimeout)
 	if rerr != nil {
 		return reposcan.CoverageMap{Note: fmt.Sprintf("preflight: %v", rerr)}
 	}
@@ -1818,7 +1857,7 @@ func (l *localExecutor) collectSelection(ctx context.Context, sources []string) 
 	if len(testCmd) == 0 {
 		testCmd = plug.TestCmd()
 	}
-	runner, files, err := l.scanRunner(langName, plug)
+	runner, files, err := l.scanRunner(langName, plug, selectionMaxOutput, selectionTimeout)
 	if err != nil {
 		return reposcan.SelectionEvidence{Note: fmt.Sprintf("selection: %v", err)}
 	}

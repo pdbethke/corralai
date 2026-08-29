@@ -307,8 +307,8 @@ Go binary.**
 - **Signatures and complexity for five languages.** Go, Python, Ruby,
   JavaScript and TypeScript. Python previously skipped class methods entirely
   and the other three had no extractor at all, which mattered more than it
-  looks: the mutant-generator shards by SYMBOL, so a file corral could not read
-  symbols from collapsed to a single generator seat instead of up to eight —
+  looks: the mutant-generator shards by SYMBOL, so a file that corral could not
+  read symbols from collapsed to a single generator seat instead of up to eight —
   silently, on a run that still reported as complete. Measured:
   `requests/adapters.py` 1 symbol → 19, `rubocop` 729 of 736 files measured,
   `express/lib/response.js` 2 → 20.

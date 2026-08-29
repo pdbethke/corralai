@@ -24,6 +24,37 @@ the whole suite's time, grading it against only those tests divides the
 multiplier by the same fraction, for free, with no change to what gets
 proven.
 
+## Measured (evidence run)
+
+Selection costs one extra instrumented run of the whole suite per scan, and
+that run's output is the payload the scan reads back. Measured 2026-08-29 by
+running `lang.pyPlugin.Instrument`'s exact `sh -c` script in a venv of each
+project's own pinned dependencies:
+
+| project | payload | wall time |
+|---|---|---|
+| pallets/flask | 4,716,984 bytes (4.5 MiB) | 19.9 s |
+| psf/requests | 29,513,163 bytes (28.1 MiB) | 47.4 s |
+
+`coverage json --show-contexts` lists every executing test's node id against
+every line it touched, so the payload grows with *tests × lines*, not with
+either alone. requests is not a large project and still emits 28 MiB from a
+suite that finishes in under a minute.
+
+The evidence run therefore has its own bounds — `selectionMaxOutput`
+(256 MiB) and `selectionTimeout` (15 min) in `cmd/corral/certify_repo.go` —
+separate from the coverage pre-flight's 8 MiB / 5 min, which bound a coverage
+*summary*. At 8 MiB the requests payload truncates mid-JSON, `Select` reports
+unparseable evidence, and the whole scan silently falls back to the whole
+suite: a different measurement, arrived at by a size limit.
+
+**Next step, not built:** reducing the payload inside the run, the way
+`goCoverageReduceScript` already reduces Go's raw coverage profile before
+anything reads it. A per-file line→contexts map collapses to a per-file set
+of node ids, which is all `Select` ever uses. Until that lands the cap is the
+only thing standing between a very large repository and a scan that grades a
+question it did not announce.
+
 ## Why selection is by execution evidence only
 
 The obvious shortcut is a filename convention: pair `foo.py` with
@@ -97,6 +128,26 @@ the selection already chose, so it is always collected alongside the
 selected tests; for an uncovered file, where selection chose nothing, the
 authored test runs alone rather than dragging in the whole suite it was
 never covered by.
+
+## Appending is not narrowing
+
+pytest treats positional arguments as a UNION of collection roots:
+`pytest tests/ tests/test_a.py::test_x` collects all of `tests/`. The GitHub
+Action's required `test-command` and corral's own not-collected advice both
+recommend exactly the `-- pytest tests/` shape, so on the most common
+invocation a selection appended to the operator's command narrowed nothing at
+all — while the verdict, the report, the ledger, the warehouse, the
+attestation and the cache key every one of them said `coverage-context`.
+
+`Selection.Base` is the operator's command with its collection targets
+removed, and everything the selection builds — `Cmd`, the dev pass, the
+authored pass — builds on it. A token is a collection target only when it is
+not an option, not the separate value of one (an explicit table of the pytest
+options that take a separate value), and either contains `::` or names a path
+that exists in the checkout. Anything else is left exactly where the operator
+put it: it survived the evidence run, so pytest accepted it as something
+other than a missing path, and removing it would change a command that
+demonstrably works.
 
 ## Part B — not built
 

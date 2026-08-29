@@ -111,20 +111,21 @@ output.
 On a file with several functions the generation **fans out** — one seat per
 group of functions, so every function gets probed, not just whichever one a
 single generator happened to pick (`--max-shards N` bounds the width; the
-default auto-sizes to your machine). Alongside each region a cheaper
-**challenger model** attacks the same code in parallel, purely to measure one
+default auto-sizes to your machine). Name a `--shadow-model` and a
+**challenger model** attacks the same regions in parallel, purely to measure one
 model against another on identical ground — it's recorded for comparison and
-**never** part of the verdict (`--shadow-model off` disables it). And a mutant
+**never** part of the verdict (off unless named, like every seat). And a mutant
 that makes your suite *hang* is killed fast and counted as caught, so a runaway
 loop can't stall the audit (`--test-timeout` overrides the auto-derived cap).
 
-By default the audit runs two distinct Claude models off that single
-`ANTHROPIC_API_KEY` (Sonnet writes/mutates, Haiku critiques); on that same
-default path, `--critic-model gemini-3.6-flash` plus a Google key
-(`GEMINI_API_KEY` or `GOOGLE_API_KEY`) routes the critic to Gemini via the
-OpenAI-compatible Google endpoint — a real cross-vendor critic, writer and
-mutant-generator unchanged on Claude. A missing key fails the run closed
-instead of silently falling back. It supports
+Corral has no default models — every seat is named by you, and a run with an
+unnamed seat is refused. One key can still satisfy the distinctness rule on its
+own: two different models from the same provider (Sonnet writing and mutating,
+Haiku critiquing, say) off that single `ANTHROPIC_API_KEY`. Naming
+`--critic-model gemini-3.6-flash` plus a Google key (`GEMINI_API_KEY` or
+`GOOGLE_API_KEY`) routes the critic to Gemini via the OpenAI-compatible Google
+endpoint — a real cross-vendor critic, writer and mutant-generator unchanged. A
+missing key fails the run closed instead of silently falling back. It supports
 Go, Python (pytest), Ruby (minitest/RSpec), JavaScript (node:test), and
 TypeScript (tsc + node:test) — the language is inferred from `--code`'s
 extension.

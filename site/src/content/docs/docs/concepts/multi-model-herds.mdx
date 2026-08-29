@@ -19,10 +19,11 @@ modes when it's the same model underneath.
 `corral certify --local` runs distinct roles — mutant-generator, test-writer,
 test-critic — each with its own model assignment, and the critic role is
 **decorrelation-enforced**: it must differ from the model that authored the
-exposing test, checked at run start, not advised after the fact. By default a
-single `ANTHROPIC_API_KEY` already satisfies this (Sonnet writes/mutates,
-Haiku critiques); `--critic-model` plus a second vendor's key crosses a vendor
-boundary entirely. Bring Claude, Gemini, GPT, anything OpenAI-compatible, or a
+exposing test, checked at run start, not advised after the fact. There are no
+default models — you name every seat — but a single `ANTHROPIC_API_KEY` can
+satisfy the rule on its own (Sonnet writing and mutating, Haiku critiquing) —
+the weakest form of it, since two models from one lab share the most lineage;
+`--critic-model` plus a second vendor's key crosses a vendor boundary entirely. Bring Claude, Gemini, GPT, anything OpenAI-compatible, or a
 local model — no lock-in.
 
 ## A role-model policy for the hosted brain

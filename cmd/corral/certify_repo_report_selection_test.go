@@ -30,7 +30,9 @@ func TestPrintWeakFileNamesTheMeasurement(t *testing.T) {
 
 func TestMinKillRateFailsAnUncoveredFile(t *testing.T) {
 	min := 0.5
-	r := reposcan.RepoReport{Weakest: []reposcan.WeakFile{{Path: "pkg/u.py", Uncovered: true, KillRate: 0}}}
+	// Audited: 1 so the Audited == 0 early return cannot answer this, and a
+	// rate ABOVE the threshold so ONLY the Uncovered branch can fail it.
+	r := reposcan.RepoReport{Audited: 1, GradedFiles: 1, Weakest: []reposcan.WeakFile{{Path: "pkg/u.py", Uncovered: true, KillRate: 0.9}}}
 	if code := repoScanExitCode(r, false, &min, nil); code != 1 {
 		t.Errorf("exit %d, want 1: an uncovered file under a --min-kill-rate gate is a failure, not a pass on a withheld number", code)
 	}

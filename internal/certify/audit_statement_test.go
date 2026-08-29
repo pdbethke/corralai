@@ -7,12 +7,14 @@ import (
 	"testing"
 )
 
+func killRate(f float64) *float64 { return &f }
+
 // The statement has to be a valid in-toto Statement, because GitHub's
 // attestation API is the consumer and it will reject anything else.
 func TestAuditAttestationIsAnInTotoStatement(t *testing.T) {
 	got := BuildAuditAttestation(AuditStatement{
 		Repo: "pdbethke/sportspicker-core", Commit: "abc123",
-		Files:   []AuditedFile{{Path: "a.py", KillRate: 0.9, Survivors: 2, ProvenMissed: 1}},
+		Files:   []AuditedFile{{Path: "a.py", KillRate: killRate(0.9), Survivors: 2, ProvenMissed: 1}},
 		Audited: 1, Candidates: 11, Passed: false,
 	})
 
@@ -80,5 +82,39 @@ func TestAuditAttestationMarshals(t *testing.T) {
 	var back map[string]any
 	if err := json.Unmarshal(b, &back); err != nil {
 		t.Fatalf("unmarshal: %v", err)
+	}
+}
+
+// An UNCOVERED file has no rate to sign. The report withholds it and the
+// ledger stores NULL; the attestation is the one artifact a third party
+// verifies, so a 0.0 signed here would be the withheld number coming back as
+// a fact — with a signature on it.
+func TestUncoveredFileSignsNoKillRate(t *testing.T) {
+	got := BuildAuditAttestation(AuditStatement{
+		Repo: "r", Commit: "c",
+		Files: []AuditedFile{
+			{Path: "pkg/u.py", Survivors: 2, Uncovered: true, TestSelection: "coverage-context", SuiteTests: 1431},
+			{Path: "pkg/a.py", KillRate: killRate(0.65), Survivors: 4, TestSelection: "coverage-context", SelectedTests: 14, SuiteTests: 1431},
+		},
+	})
+	files := got["predicate"].(map[string]any)["files"].([]map[string]any)
+	u := files[0]
+	if _, ok := u["killRate"]; ok {
+		t.Errorf("an uncovered file must sign NO kill rate, got %#v", u)
+	}
+	if u["uncovered"] != true {
+		t.Errorf("the missing rate must be explained, not merely absent: %#v", u)
+	}
+	a := files[1]
+	if a["killRate"] != 0.65 {
+		t.Errorf("a measured rate must still be signed: %#v", a)
+	}
+	// A signed number without the question it answers is not verifiable.
+	if a["testSelection"] != "coverage-context" || a["selectedTests"] != 14 || a["suiteTests"] != 1431 {
+		t.Errorf("the statement must say WHICH measurement it signed: %#v", a)
+	}
+	// The JSON tags must agree with the map the attestation is built from.
+	if _, err := json.Marshal(got); err != nil {
+		t.Fatalf("statement does not marshal: %v", err)
 	}
 }

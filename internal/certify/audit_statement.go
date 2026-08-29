@@ -26,10 +26,15 @@ const AuditPredicateType = "https://corralai.dev/certify/audit/v1"
 
 // AuditedFile is one file's result inside an audit statement.
 type AuditedFile struct {
-	Path         string  `json:"path"`
-	KillRate     float64 `json:"killRate"`
-	Survivors    int     `json:"survivors"`
-	ProvenMissed int     `json:"provenMissed"`
+	Path string `json:"path"`
+	// KillRate is a POINTER so that "not measured" is expressible. An
+	// uncovered file — no test executes it — has no rate to sign: the report
+	// withholds the number and the ledger stores NULL, and a statement that
+	// signed a 0.0 anyway would be the one place the withheld number leaked
+	// out, over a signature. nil is omitted from the attestation entirely.
+	KillRate     *float64 `json:"killRate,omitempty"`
+	Survivors    int      `json:"survivors"`
+	ProvenMissed int      `json:"provenMissed"`
 	// The honesty flags travel WITH the numbers, never separately. A
 	// provenMissed of 0 means "nothing was proven" rather than "the suite is
 	// clean" whenever one of these is set, and a consumer reading the number
@@ -37,6 +42,16 @@ type AuditedFile struct {
 	TimedOut         bool `json:"timedOut,omitempty"`
 	TestWriterFailed bool `json:"testWriterFailed,omitempty"`
 	PoolTestUnsound  bool `json:"poolTestUnsound,omitempty"`
+	// Which measurement the rate above IS — the tests coverage evidence
+	// showed execute this file (TestSelection, SelectedTests of SuiteTests),
+	// or the whole suite and why (SelectionFallback). Uncovered says no test
+	// executes the file at all, which is why KillRate may be nil. A signed
+	// number without the question it answers is not verifiable.
+	TestSelection     string `json:"testSelection,omitempty"`
+	SelectedTests     int    `json:"selectedTests,omitempty"`
+	SuiteTests        int    `json:"suiteTests,omitempty"`
+	SelectionFallback string `json:"selectionFallback,omitempty"`
+	Uncovered         bool   `json:"uncovered,omitempty"`
 }
 
 // AuditStatement describes one scan: which commit, which files, what was
@@ -68,9 +83,25 @@ func BuildAuditAttestation(s AuditStatement) map[string]any {
 	for _, f := range s.Files {
 		entry := map[string]any{
 			"path":         f.Path,
-			"killRate":     f.KillRate,
 			"survivors":    f.Survivors,
 			"provenMissed": f.ProvenMissed,
+		}
+		// Omitted, never zero-filled: an absent killRate says "no rate was
+		// measured for this file", and a consumer that reads a 0.0 instead
+		// would sign — and report — a number nobody measured.
+		if f.KillRate != nil {
+			entry["killRate"] = *f.KillRate
+		}
+		if f.Uncovered {
+			entry["uncovered"] = true
+		}
+		if f.TestSelection != "" {
+			entry["testSelection"] = f.TestSelection
+			entry["selectedTests"] = f.SelectedTests
+			entry["suiteTests"] = f.SuiteTests
+		}
+		if f.SelectionFallback != "" {
+			entry["selectionFallback"] = f.SelectionFallback
 		}
 		if f.TimedOut {
 			entry["timedOut"] = true

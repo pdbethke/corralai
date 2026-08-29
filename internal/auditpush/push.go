@@ -38,10 +38,13 @@ import (
 
 // Row is one audited file, as it lands in the warehouse.
 type Row struct {
-	Repo             string
-	Commit           string
-	Path             string
-	KillRate         float64
+	Repo   string
+	Commit string
+	Path   string
+	// KillRate is a POINTER so an UNCOVERED file writes SQL NULL rather than
+	// a 0.0 the report itself refuses to print. A warehouse that stores the
+	// fabricated zero is where the withheld number comes back as fact.
+	KillRate         *float64
 	Survivors        int
 	ProvenMissed     int
 	TimedOut         bool
@@ -68,6 +71,14 @@ type Row struct {
 	// any row can be traced to an attestation a third party verifies.
 	StatementSHA256 string
 	RunURL          string
+	// Which measurement KillRate IS — the same five facts the scan ledger
+	// records. Without them a cross-repo query averages selection rates and
+	// whole-suite rates together, which is two questions in one number.
+	TestSelection     string
+	SelectedTests     int
+	SuiteTests        int
+	SelectionFallback string
+	Uncovered         bool
 }
 
 const schema = `
@@ -91,7 +102,12 @@ CREATE TABLE IF NOT EXISTS corral_audits (
   max_proven_missed  INTEGER,
   passed             BOOLEAN,
   statement_sha256   VARCHAR,
-  run_url            VARCHAR
+  run_url            VARCHAR,
+  test_selection     VARCHAR,
+  selected_tests     INTEGER,
+  suite_tests        INTEGER,
+  selection_fallback VARCHAR,
+  uncovered          BOOLEAN
 );`
 
 // Push appends rows to target, creating the table if it is not there.
@@ -125,8 +141,18 @@ func Push(target string, rows []Row) (int, error) {
 		return 0, fmt.Errorf("auditpush: create table: %w", err)
 	}
 
-	stmt, err := db.Prepare(`INSERT INTO warehouse.corral_audits VALUES
-	  (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+	// Columns named explicitly rather than positionally: the list has grown
+	// (test selection), and a warehouse table created by an older corral is
+	// then a clear "column not found" instead of a silent column-order
+	// mismatch that would file kill rates under the wrong heading.
+	stmt, err := db.Prepare(`INSERT INTO warehouse.corral_audits (
+	    ts, repo, commit_sha, path, lang,
+	    kill_rate, survivors, proven_missed,
+	    timed_out, test_writer_failed, pool_test_unsound,
+	    audited, candidates, mutants_planted, models_by_role,
+	    min_kill_rate, max_proven_missed, passed, statement_sha256, run_url,
+	    test_selection, selected_tests, suite_tests, selection_fallback, uncovered
+	  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 	if err != nil {
 		return 0, err
 	}
@@ -143,11 +169,20 @@ func Push(target string, rows []Row) (int, error) {
 		if r.MaxProvenMissed != nil {
 			maxGaps = *r.MaxProvenMissed
 		}
+		// NULL, never 0.0, for a file nothing graded — a nil *float64 binds
+		// SQL NULL, which is the only honest value for a rate that was never
+		// measured. Belt and braces on Uncovered: the caller sets the rate
+		// nil, and an uncovered row cannot carry one even if it did not.
+		var killRate any
+		if r.KillRate != nil && !r.Uncovered {
+			killRate = *r.KillRate
+		}
 		if _, err := stmt.Exec(now, r.Repo, r.Commit, r.Path, r.Lang,
-			r.KillRate, r.Survivors, r.ProvenMissed,
+			killRate, r.Survivors, r.ProvenMissed,
 			r.TimedOut, r.TestWriterFailed, r.PoolTestUnsound,
 			r.Audited, r.Candidates, r.MutantsPlanted, r.ModelsByRole,
-			minKill, maxGaps, r.Passed, r.StatementSHA256, r.RunURL); err != nil {
+			minKill, maxGaps, r.Passed, r.StatementSHA256, r.RunURL,
+			r.TestSelection, r.SelectedTests, r.SuiteTests, r.SelectionFallback, r.Uncovered); err != nil {
 			return n, fmt.Errorf("auditpush: insert %s: %w", r.Path, err)
 		}
 		n++

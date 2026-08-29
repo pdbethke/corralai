@@ -2231,6 +2231,18 @@ func printRepoReport(w io.Writer, r reposcan.RepoReport, nothingInScope bool, mi
 		fmt.Fprintln(w, "  NOTHING IN SCOPE: the diff touched no candidate; no audit was needed.")
 	case r.Audited == 0:
 		fmt.Fprintln(w, "  COULD-NOT-GRADE: nothing was audited; no score is reported.")
+	case r.GradedFiles == 0:
+		// Audited, but nothing graded: every audited file is UNCOVERED. There
+		// is no mean to print (KillRate is NaN by construction) and a 0.00
+		// here would be the withheld number arriving as a repo-wide verdict.
+		fmt.Fprintf(w, "  NO GRADED FILE: all %d audited file(s) are UNCOVERED — no test executes them, so no kill rate was measured\n", r.Audited)
+	case r.UncoveredFiles > 0:
+		// The denominator is stated whenever it differs from Audited: the
+		// mean is over the files that were actually graded, and a reader
+		// dividing by "audited" would get a different number than the one
+		// printed.
+		fmt.Fprintf(w, "  kill rate %.2f over %d graded file(s) — %d audited, %d UNCOVERED and excluded from the mean (%.0f%% of %d candidates audited)\n",
+			r.KillRate, r.GradedFiles, r.Audited, r.UncoveredFiles, 100*r.AuditedFraction(), r.Candidates)
 	default:
 		fmt.Fprintf(w, "  kill rate %.2f over %d audited file(s) (%.0f%% of %d candidates)\n",
 			r.KillRate, r.Audited, 100*r.AuditedFraction(), r.Candidates)
@@ -2897,9 +2909,16 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 	// where ProvenMissed answers the question a bare kill rate leaves open:
 	// did the pool's own test demonstrate a real, catchable bug (corral's
 	// strongest claim), or did it try and prove nothing.
-	if v.Survivors > 0 && !v.TestWriterFailed && !v.PoolTestUnsound {
+	switch {
+	case v.Uncovered:
+		// The live note is a reader too, and the first one an operator sees.
+		// No test executes this file, so its rate measures nothing — printing
+		// it here would put the withheld number on screen minutes before the
+		// report refuses to.
+		l.note("%s: UNCOVERED — no test executes it (rate withheld)\n", j.Path)
+	case v.Survivors > 0 && !v.TestWriterFailed && !v.PoolTestUnsound:
 		l.note("%s: kill rate %.2f (%d survivor(s), %d proven missed)\n", j.Path, v.DevKillRate, v.Survivors, v.ProvenMissed)
-	} else {
+	default:
 		l.note("%s: kill rate %.2f (%d survivor(s))\n", j.Path, v.DevKillRate, v.Survivors)
 	}
 	return res, nil
@@ -3046,6 +3065,20 @@ func indentLines(s, pad string) string {
 	return strings.Join(lines, "\n")
 }
 
+// signableKillRate is the rate a statement or a warehouse row may carry for
+// one file: nil for an UNCOVERED file, whose rate the report withholds and
+// the ledger stores NULL because no test executes the file and nothing graded
+// it. Shared by the attestation and the push so the two can never disagree
+// about which numbers are real — a withheld number that leaks into either one
+// comes back as fact, and one of them is signed.
+func signableKillRate(f reposcan.WeakFile) *float64 {
+	if f.Uncovered {
+		return nil
+	}
+	kr := f.KillRate
+	return &kr
+}
+
 // writeAuditStatement renders the scan into certify's in-toto audit statement
 // and writes it to path.
 //
@@ -3057,12 +3090,20 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 	for _, f := range r.Weakest {
 		files = append(files, certify.AuditedFile{
 			Path:             f.Path,
-			KillRate:         f.KillRate,
+			KillRate:         signableKillRate(f),
 			Survivors:        f.Survivors,
 			ProvenMissed:     f.ProvenMissed,
 			TimedOut:         f.TimedOut,
 			TestWriterFailed: f.TestWriterFailed,
 			PoolTestUnsound:  f.PoolTestUnsound,
+			// The statement is the one artifact a third party verifies, so it
+			// must say which measurement it is signing — and must not sign a
+			// rate for a file nothing executes.
+			TestSelection:     f.SelectionMethod,
+			SelectedTests:     f.SelectedTests,
+			SuiteTests:        f.SuiteTests,
+			SelectionFallback: f.SelectionFallback,
+			Uncovered:         f.Uncovered,
 		})
 	}
 	// Same resolution the warehouse push uses: a statement whose subject names
@@ -3118,9 +3159,16 @@ func pushAuditRows(target, repoDir string, r reposcan.RepoReport, models map[str
 	for _, f := range r.Weakest {
 		rows = append(rows, auditpush.Row{
 			Repo: repo, Commit: commit, Path: f.Path,
-			KillRate: f.KillRate, Survivors: f.Survivors, ProvenMissed: f.ProvenMissed,
+			KillRate: signableKillRate(f), Survivors: f.Survivors, ProvenMissed: f.ProvenMissed,
 			TimedOut: f.TimedOut, TestWriterFailed: f.TestWriterFailed, PoolTestUnsound: f.PoolTestUnsound,
-			Audited: r.Audited, Candidates: r.Candidates,
+			// The same five facts the scan ledger records: a warehouse row
+			// carrying a bare rate cannot say which question it answers, and
+			// a cross-repo average of selection and whole-suite rates is two
+			// measurements reported as one.
+			TestSelection: f.SelectionMethod, SelectedTests: f.SelectedTests,
+			SuiteTests: f.SuiteTests, SelectionFallback: f.SelectionFallback,
+			Uncovered: f.Uncovered,
+			Audited:   r.Audited, Candidates: r.Candidates,
 			ModelsByRole: string(rosterJSON),
 			MinKillRate:  minKillRate, MaxProvenMissed: maxProvenMissed,
 			Passed: passed, RunURL: runURL,

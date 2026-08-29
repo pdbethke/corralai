@@ -172,6 +172,13 @@ type RepoReport struct {
 	SelectedFiles   int
 	WholeSuiteFiles int
 	UncoveredFiles  int
+	// GradedFiles is Audited MINUS UncoveredFiles — the denominator KillRate
+	// is actually averaged over. It is a separate number because an uncovered
+	// file was audited (corral looked at it, and found that nothing executes
+	// it) but never GRADED, so including it in the mean would publish a
+	// number no measurement supports. A printer must show this denominator
+	// whenever it differs from Audited.
+	GradedFiles int
 
 	Weakest     []WeakFile
 	CacheHits   int
@@ -257,7 +264,14 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 			continue
 		}
 		rep.Audited++
-		sum += r.Verdict.DevKillRate
+		// An UNCOVERED file's rate is not a measurement: the selection
+		// evidence found no test that executes it, so nothing graded it, and
+		// its 0.0 averaged into the headline would report the repo's suite as
+		// weaker than anything actually measured says it is — the same
+		// fabricated number the per-file line and the ledger both refuse to
+		// print, arriving through the mean instead. It stays counted in
+		// Audited (it WAS looked at, and UncoveredFiles says what was found)
+		// but out of the numerator and out of GradedFiles below.
 		if r.Verdict.TimedOut {
 			rep.TimedOut++
 		}
@@ -280,6 +294,9 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 		}
 		if r.Verdict.Uncovered {
 			rep.UncoveredFiles++
+		} else {
+			rep.GradedFiles++
+			sum += r.Verdict.DevKillRate
 		}
 		rep.Weakest = append(rep.Weakest, WeakFile{
 			Path:             r.Job.Path,
@@ -301,10 +318,14 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 		})
 	}
 
-	if rep.Audited == 0 {
+	// The denominator is GradedFiles, not Audited: see the uncovered note
+	// above. NaN when nothing was actually graded — a 0.0 there would read as
+	// "terrible tests" when the truth is "no measurement was made", which is
+	// exactly the state a repo whose every audited file is uncovered is in.
+	if rep.GradedFiles == 0 {
 		rep.KillRate = math.NaN()
 	} else {
-		rep.KillRate = sum / float64(rep.Audited)
+		rep.KillRate = sum / float64(rep.GradedFiles)
 	}
 
 	sort.SliceStable(rep.Weakest, func(i, j int) bool {

@@ -238,6 +238,16 @@ func baseScanFileNote(f scanstore.File) string {
 		return "WRITER FAILED — survivor(s) not proven-killed"
 	case f.PoolTestUnsound:
 		return "TEST UNSOUND — authored test did not genuinely grade"
+	case f.Uncovered:
+		// BEFORE the tried-and-missed clause, and never merged into it. An
+		// uncovered file has survivors and, usually, proven_missed 0 for a
+		// reason that has nothing to do with the writer: NO TEST EXECUTES
+		// THE FILE. Reading that as "the authored test graded and proved
+		// nothing" accuses the writer of failing at work the run never asked
+		// it to do, and hides the actual finding. The proven count still
+		// prints in its own column when the writer did prove something —
+		// being uncovered does not erase that.
+		return "uncovered — no test executes it; rate withheld"
 	case f.Disposition == "audited" && f.Survivors > 0 && f.ProvenMissed == 0:
 		return "tried and missed — authored test graded, proved nothing"
 	default:

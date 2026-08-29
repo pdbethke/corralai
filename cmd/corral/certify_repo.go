@@ -446,7 +446,13 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// printed to the operator, and the scan grades whole-suite — a real
 	// measurement, just a different question, said out loud.
 	if ex != nil && len(selected) > 0 {
-		fmt.Fprintln(stdout, "  selection: running the suite once with per-test coverage instrumentation…")
+		// Announced only when it is about to happen: under --whole-suite
+		// collectSelection returns immediately without running anything, and
+		// printing "running the suite once with instrumentation…" for a run
+		// that instruments nothing is a claim about work never done.
+		if !*wholeSuiteFlag {
+			fmt.Fprintln(stdout, "  selection: running the suite once with per-test coverage instrumentation…")
+		}
 		ex.selection = ex.collectSelection(context.Background(), enumeratedSourcePaths(cands, excl[:enumExcl]))
 		if !ex.selection.Ran {
 			fmt.Fprintf(stdout, "  selection: grading by the WHOLE suite — %s\n", ex.selection.Note)
@@ -2211,14 +2217,23 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 		rate = "withheld"
 	}
 	fmt.Fprintf(w, "    %s  %s %s%s", rate, f.Path, detail, marker)
-	// Which measurement this line's number IS. Printed on EVERY line, not
-	// only the interesting ones: a report where the selected files say so and
-	// the whole-suite files say nothing leaves the reader to infer the mode
-	// from an absence, which is exactly how two different questions get read
-	// as one number.
+	// Which measurement this line's number IS. Printed on EVERY line that
+	// has one to name — selected, uncovered, or whole-suite-with-a-reason —
+	// not only the interesting ones: a report where the selected files say so
+	// and the others say nothing leaves the reader to infer the mode from an
+	// absence, which is exactly how two different questions get read as one
+	// number. A row carrying neither a method nor a fallback (a pre-selection
+	// scan's own record) still prints nothing, because it genuinely does not
+	// know.
 	switch {
 	case f.SelectionMethod != "" && !f.Uncovered:
 		fmt.Fprintf(w, "   graded by %d of %d tests (%s)", f.SelectedTests, f.SuiteTests, f.SelectionMethod)
+	case f.SelectionMethod != "" && f.Uncovered:
+		// The uncovered line used to fall through to nothing — the ONE line
+		// where the mode is most load-bearing was the one line that said
+		// which measurement it was by saying nothing at all. "None execute
+		// it" IS the selection's answer, not the absence of one.
+		fmt.Fprintf(w, "   graded by the tests for this file — none execute it (%s)", f.SelectionMethod)
 	case f.SelectionFallback != "":
 		fmt.Fprintf(w, "   graded by the whole suite (%s)", f.SelectionFallback)
 	}

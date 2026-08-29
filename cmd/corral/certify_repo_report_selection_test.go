@@ -22,9 +22,16 @@ func TestPrintWeakFileNamesTheMeasurement(t *testing.T) {
 		t.Errorf("got %q", b.String())
 	}
 	b.Reset()
-	printWeakFile(&b, reposcan.WeakFile{Path: "pkg/u.py", Uncovered: true, ProvenMissed: 3})
+	printWeakFile(&b, reposcan.WeakFile{Path: "pkg/u.py", Uncovered: true, ProvenMissed: 3, SelectionMethod: "coverage-context"})
 	if !strings.Contains(b.String(), "[UNCOVERED — no test executes this file]") || strings.Contains(b.String(), "0.00") {
 		t.Errorf("uncovered must withhold the rate: %q", b.String())
+	}
+	// The "which measurement is this" clause is printed on EVERY line — the
+	// point of it is that a reader never has to infer the mode from an
+	// absence. The uncovered case had no clause at all, so the one line
+	// where the mode is most load-bearing was the one line that said nothing.
+	if !strings.Contains(b.String(), "graded by the tests for this file — none execute it (coverage-context)") {
+		t.Errorf("uncovered must still say which measurement it is: %q", b.String())
 	}
 }
 

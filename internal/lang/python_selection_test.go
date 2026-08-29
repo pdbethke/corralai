@@ -5,6 +5,7 @@ package lang
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -149,6 +150,45 @@ func TestPythonWithAuthoredTestAppendsThePath(t *testing.T) {
 	want = []string{"python3", "-m", "pytest", "-q", "tests/test_corral_x.py"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("uncovered: got %v, want %v", got, want)
+	}
+}
+
+// Runs Instrument's real command on the fixture and feeds its stdout to
+// Select. This is the guard against the recorded JSON drifting from what
+// pytest-cov actually emits. Skips, never fails, when pytest-cov is absent.
+func TestPythonSelectionEndToEndOnFixture(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not on PATH")
+	}
+	if out, err := exec.Command("python3", "-c", "import pytest_cov, coverage").CombinedOutput(); err != nil {
+		t.Skipf("pytest-cov not importable: %s", out)
+	}
+	fixture, _ := filepath.Abs(filepath.Join("testdata", "pycov-fixture"))
+	cmd, ok := pyPlugin{}.Instrument([]string{"python3", "-m", "pytest", "-q"})
+	if !ok {
+		t.Fatal("Instrument refused the fixture command")
+	}
+	c := exec.Command(cmd[0], cmd[1:]...)
+	c.Dir = fixture
+	c.Env = append(os.Environ(), "PYTHONPATH="+fixture, "PYTHONDONTWRITEBYTECODE=1")
+	out, err := c.Output()
+	if err != nil {
+		t.Fatalf("instrumented run: %v\n%s", err, out)
+	}
+	sel, err := pyPlugin{}.Select(out, fixture, "pkg/calc.py", "tests/test_calc.py", []string{"python3", "-m", "pytest", "-q"})
+	if err != nil {
+		t.Fatalf("Select on live evidence: %v\n%s", err, out)
+	}
+	want := []string{"tests/test_calc.py::test_add", "tests/test_other.py::test_sub"}
+	if !reflect.DeepEqual(sel.Tests, want) {
+		t.Errorf("live Tests = %v, want %v", sel.Tests, want)
+	}
+	// And the narrowed command actually runs, collecting exactly those.
+	run := exec.Command(sel.Cmd[0], sel.Cmd[1:]...)
+	run.Dir = fixture
+	run.Env = c.Env
+	if out, err := run.CombinedOutput(); err != nil || !strings.Contains(string(out), "2 passed") {
+		t.Errorf("narrowed command: err=%v\n%s", err, out)
 	}
 }
 

@@ -29,6 +29,9 @@ echo "== Python (internal/lang python plugin) =="
 sudo apt-get install -y python3-pytest ||
 	python3 -m pip install --break-system-packages --quiet pytest || true
 python3 -m pytest --version || echo "pytest not available — python-in-jail test will SKIP"
+sudo apt-get install -y python3-pytest-cov ||
+	python3 -m pip install --break-system-packages --quiet pytest-cov || true
+python3 -c "import pytest_cov" || echo "pytest-cov not available — python selection integration test will SKIP"
 
 echo "== Ruby (internal/lang ruby plugin) =="
 sudo apt-get install -y ruby ruby-rspec || true

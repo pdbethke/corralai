@@ -3,9 +3,11 @@
 package advpool
 
 import (
+	"context"
 	"reflect"
 	"testing"
 
+	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/lang"
 )
 
@@ -21,7 +23,7 @@ func TestDevPassRunsTheSelection(t *testing.T) {
 		Cmd:   []string{"python3", "-m", "pytest", "-q", "tests/test_a.py::test_x"},
 		Tests: []string{"tests/test_a.py::test_x"}, Method: "coverage-context",
 	})
-	got := s.devCmd("pkg/a.py", []string{"python3", "-m", "pytest", "-q"})
+	got := DevCommandArgv(s.Selection, s.Lang, []string{"python3", "-m", "pytest", "-q"}, s.DevTestPath)
 	want := []string{"python3", "-m", "pytest", "-q", "tests/test_a.py::test_x"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("dev cmd = %v, want the selection's own command %v", got, want)
@@ -30,7 +32,7 @@ func TestDevPassRunsTheSelection(t *testing.T) {
 
 func TestDevPassUncoveredRunsOnlyThePairedTestFile(t *testing.T) {
 	s := repoScorer(lang.Selection{Method: "coverage-context"})
-	got := s.devCmd("pkg/a.py", []string{"python3", "-m", "pytest", "-q"})
+	got := DevCommandArgv(s.Selection, s.Lang, []string{"python3", "-m", "pytest", "-q"}, s.DevTestPath)
 	want := []string{"python3", "-m", "pytest", "-q", "tests/test_a.py"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("uncovered dev cmd = %v, want the paired test file alone %v", got, want)
@@ -69,7 +71,7 @@ func TestBothPassesBuildOnTheSelectionsStrippedBase(t *testing.T) {
 		Cmd:   []string{"pytest", "tests/test_a.py::test_x"},
 		Tests: []string{"tests/test_a.py::test_x"}, Method: "coverage-context",
 	})
-	if got, want := s.devCmd("pkg/a.py", raw), []string{"pytest", "tests/test_a.py::test_x"}; !reflect.DeepEqual(got, want) {
+	if got, want := DevCommandArgv(s.Selection, s.Lang, raw, s.DevTestPath), []string{"pytest", "tests/test_a.py::test_x"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("dev cmd = %v, want %v — tests/ must not survive", got, want)
 	}
 	authored := authoredTestPath("pkg/a.py", s.DevTestPath, s.BaseFiles)
@@ -78,7 +80,7 @@ func TestBothPassesBuildOnTheSelectionsStrippedBase(t *testing.T) {
 	}
 	// Uncovered: Base alone plus the one test being run.
 	u := repoScorer(lang.Selection{Base: []string{"pytest"}, Method: "coverage-context"})
-	if got, want := u.devCmd("pkg/a.py", raw), []string{"pytest", "tests/test_a.py"}; !reflect.DeepEqual(got, want) {
+	if got, want := DevCommandArgv(u.Selection, u.Lang, raw, u.DevTestPath), []string{"pytest", "tests/test_a.py"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("uncovered dev cmd = %v, want %v", got, want)
 	}
 	if got, want := u.authoredCmd("pkg/a.py", raw), []string{"pytest", authored}; !reflect.DeepEqual(got, want) {
@@ -89,7 +91,7 @@ func TestBothPassesBuildOnTheSelectionsStrippedBase(t *testing.T) {
 func TestWholeSuiteLeavesBothPassesUnchanged(t *testing.T) {
 	s := repoScorer(lang.Selection{})
 	base := []string{"python3", "-m", "pytest", "-q"}
-	if got := s.devCmd("pkg/a.py", base); !reflect.DeepEqual(got, base) {
+	if got := DevCommandArgv(s.Selection, s.Lang, base, s.DevTestPath); !reflect.DeepEqual(got, base) {
 		t.Errorf("zero Selection must leave the dev command as before: %v", got)
 	}
 	if got := s.authoredCmd("pkg/a.py", base); !reflect.DeepEqual(got, base) {
@@ -111,4 +113,70 @@ func TestAggregateCarriesTheSelectionOntoTheVerdict(t *testing.T) {
 	if v := verdictFromSpec(rs); v.Uncovered || v.TestSelection.Fallback != "no selector for ruby" {
 		t.Errorf("a fallback is not uncovered: %+v", v)
 	}
+}
+
+// I2/I3. The narrowing belongs to the CALLER that means "the run's command",
+// not to ScoreReport: as a scorer-internal rewrite it silently narrowed a
+// caller-supplied command (the matrix's own per-test selector) and silently
+// FAILED to narrow the shadow pass, which grades the same mutants against the
+// same dev suite and must ask the same question.
+func TestDevCommandIsTheRunsNarrowedCommand(t *testing.T) {
+	rs := RunSpec{
+		Lang: "python", DevTestPath: "tests/test_a.py", TestCmd: "pytest tests/",
+		Selection: lang.Selection{
+			Base:  []string{"pytest"},
+			Cmd:   []string{"pytest", "tests/test_a.py::test_x"},
+			Tests: []string{"tests/test_a.py::test_x"}, Method: "coverage-context",
+		},
+	}
+	if got, want := DevCommand(rs), adequacy.ShellJoin([]string{"pytest", "tests/test_a.py::test_x"}); got != want {
+		t.Errorf("DevCommand = %q, want %q", got, want)
+	}
+	// Uncovered: the paired test file alone, on the stripped base.
+	u := rs
+	u.Selection = lang.Selection{Base: []string{"pytest"}, Method: "coverage-context"}
+	if got, want := DevCommand(u), adequacy.ShellJoin([]string{"pytest", "tests/test_a.py"}); got != want {
+		t.Errorf("uncovered DevCommand = %q, want %q", got, want)
+	}
+	// A zero Selection leaves the run's own command byte-identical.
+	z := rs
+	z.Selection = lang.Selection{}
+	if got, want := DevCommand(z), "pytest tests/"; got != want {
+		t.Errorf("zero-Selection DevCommand = %q, want the run's own command %q", got, want)
+	}
+	// Uncovered with no paired test path: nothing to narrow TO, so the base
+	// stands rather than becoming a bare `pytest` that collects everything.
+	n := u
+	n.DevTestPath = ""
+	if got, want := DevCommand(n), "pytest tests/"; got != want {
+		t.Errorf("uncovered with no DevTestPath = %q, want the base %q", got, want)
+	}
+}
+
+// I3. ScoreReport must run exactly the command it is handed — the matrix
+// issues a per-test selector and a scorer that rewrote it would grade a
+// different thing than the row claims.
+func TestScoreReportRunsTheCommandItIsGiven(t *testing.T) {
+	rec := &cmdRecordingJail{}
+	s := repoScorer(lang.Selection{
+		Base:  []string{"pytest"},
+		Cmd:   []string{"pytest", "tests/test_a.py::test_x"},
+		Tests: []string{"tests/test_a.py::test_x"}, Method: "coverage-context",
+	})
+	s.Jail = rec
+	_, _ = s.ScoreReport(context.Background(), "pkg/a.py", "x = 1\n", "", nil,
+		"pytest tests/test_a.py::test_other")
+	want := []string{"pytest", "tests/test_a.py::test_other"}
+	if len(rec.cmds) == 0 || !reflect.DeepEqual(rec.cmds[0], want) {
+		t.Errorf("ScoreReport ran %v, want the caller's own command %v", rec.cmds, want)
+	}
+}
+
+// cmdRecordingJail records the commands it is asked to run and fails every
+// baseline, so adequacy.Score returns early — the command is all this needs.
+type cmdRecordingJail struct{ cmds [][]string }
+
+func (r *cmdRecordingJail) RunTest(_ context.Context, _ map[string]string, cmd []string) (bool, error) {
+	r.cmds = append(r.cmds, append([]string{}, cmd...))
+	return false, nil
 }

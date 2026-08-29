@@ -1043,7 +1043,10 @@ func (d *Driver) Tick(ctx context.Context, missionID int64) (*Verdict, error) {
 // empty report — and conflating them sends an operator to debug the wrong
 // thing entirely.
 func applyDevScore(ctx context.Context, run *runState, scorer Scorer, mutants []adequacy.Mutant) error {
-	rep, serr := scorer.ScoreReport(ctx, run.rs.CodePath, run.rs.Code, run.rs.DevTestCode, mutants, run.rs.TestCmd)
+	// DevCommand, not rs.TestCmd: the run's command narrowed to the tests
+	// that execute this file. The scorer no longer does it — see DevCommand
+	// for why the caller has to be the one that means it.
+	rep, serr := scorer.ScoreReport(ctx, run.rs.CodePath, run.rs.Code, run.rs.DevTestCode, mutants, DevCommand(run.rs))
 	if serr != nil {
 		return fmt.Errorf("advpool: score dev tests: %w", serr)
 	}
@@ -1988,6 +1991,11 @@ func (d *Driver) adjudicateCriticFindings(ctx context.Context, missionID int64, 
 			ran, kills := false, 0
 			if scope == ScopeWholeTest && f.TestSelector != "" {
 				if cmd, ok := p.SingleTestCmd(f.TestFile, f.TestSelector); ok {
+					// Deliberately NOT narrowed to the run's Selection: this
+					// call already names ONE test, which is the whole
+					// question ("does this single test kill anything?").
+					// Unioning it with the selection would answer a
+					// different one.
 					if kr, survivors, serr := d.Scorer.Score(ctx, run.rs.CodePath, run.rs.Code, run.rs.DevTestCode, run.mutants, strings.Join(cmd, " ")); serr != nil {
 						log.Printf("advpool: run %d: critic auto-refute score failed for %q: %v", missionID, f.TestSelector, serr)
 					} else if kr > 0 {

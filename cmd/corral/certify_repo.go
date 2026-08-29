@@ -2971,23 +2971,21 @@ func (l *localExecutor) baseCmd(j reposcan.Job) []string {
 // would be comparing different things and would silently corrupt every kill
 // rate.
 //
+// It is advpool.DevCommandArgv — the SAME function the dev pass itself uses —
+// rather than a second local rendering of the same rule. The two had already
+// drifted on the UNCOVERED case: the dev pass ran the paired test file alone
+// (which is what "no test executes this file" MEASURES), while this resolved
+// the operator's whole command, so the baseline and the scoring run were not
+// the same exam. See TestExecutorBaselineMatchesTheDevPassCommand.
+//
 // With no selection it falls back exactly as before: the operator's `-- <cmd>`
-// if given, else the job language's stock recursive command. Repo-aware jail
-// wiring REQUIRES a command (there is no synthetic scaffold to fall back on),
-// and a repo can mix languages, so it is resolved per job. An unknown language
-// yields nil and the audit fails closed downstream rather than grading with
-// someone else's command.
+// if given, else the job language's stock recursive command (baseCmd). Repo-
+// aware jail wiring REQUIRES a command (there is no synthetic scaffold to fall
+// back on), and a repo can mix languages, so it is resolved per job. An
+// unknown language yields nil and the audit fails closed downstream rather
+// than grading with someone else's command.
 func (l *localExecutor) testCmd(j reposcan.Job, sel lang.Selection) []string {
-	if len(sel.Cmd) > 0 {
-		return sel.Cmd
-	}
-	if len(l.checkArgv) > 0 {
-		return l.checkArgv
-	}
-	if p, ok := lang.ByName(j.Lang); ok {
-		return p.TestCmd()
-	}
-	return nil
+	return advpool.DevCommandArgv(sel, j.Lang, l.baseCmd(j), j.TestPath)
 }
 
 // printLanguageProfile renders the per-language inventory the enumeration

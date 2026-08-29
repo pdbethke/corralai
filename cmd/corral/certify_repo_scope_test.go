@@ -3,8 +3,10 @@
 package main
 
 import (
+	"reflect"
 	"testing"
 
+	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/reposcan"
 )
@@ -123,4 +125,37 @@ func TestSelectionResolvesThePerJobCommand(t *testing.T) {
 			t.Fatalf("testCmd = %v — go must keep its stock command", got)
 		}
 	})
+}
+
+// I2. The executor's own baseline command and the advpool dev pass's command
+// must be the SAME command for the same job — a narrowed scoring run graded
+// against an unnarrowed baseline compares different things. They are two
+// separate resolutions in two packages, so pin them against each other rather
+// than trusting that both were remembered.
+//
+// The UNCOVERED case is the one that had drifted: the dev pass ran the paired
+// test file alone (the measurement Uncovered means), while the executor's
+// baseline still ran the operator's whole command.
+func TestExecutorBaselineMatchesTheDevPassCommand(t *testing.T) {
+	job := reposcan.Job{Path: "src/pkg/target.py", TestPath: "tests/test_target.py", Lang: "python"}
+	for _, tc := range []struct {
+		name string
+		sel  lang.Selection
+	}{
+		{"selected", lang.Selection{
+			Base: []string{"pytest"}, Cmd: []string{"pytest", "tests/test_target.py::test_t"},
+			Tests: []string{"tests/test_target.py::test_t"}, Method: "coverage-context",
+		}},
+		{"uncovered", lang.Selection{Base: []string{"pytest"}, Method: "coverage-context"}},
+		{"whole suite", lang.Selection{Fallback: "--whole-suite"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ex := newLocalExecutor(t.TempDir(), []string{"pytest", "tests/"}, substrateWorkspace, 0, nil)
+			got := ex.testCmd(job, tc.sel)
+			want := advpool.DevCommandArgv(tc.sel, job.Lang, ex.baseCmd(job), job.TestPath)
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("executor baseline = %v, dev pass = %v — they must be one command", got, want)
+			}
+		})
+	}
 }

@@ -189,7 +189,12 @@ func (d *Driver) runShadowPass(ctx context.Context, missionID int64, run *runSta
 			}
 			continue
 		}
-		_, shadowSurvivors, sserr := d.Scorer.Score(sctx, run.rs.CodePath, run.rs.Code, run.rs.DevTestCode, parsed, run.rs.TestCmd)
+		// The SAME command the primary dev pass ran (DevCommand), not the
+		// run's raw TestCmd: this is a region-controlled head-to-head, and
+		// grading the challenger's mutants against the whole suite while the
+		// primary's were graded against the selection compares two different
+		// exams and calls the difference a model result.
+		_, shadowSurvivors, sserr := d.Scorer.Score(sctx, run.rs.CodePath, run.rs.Code, run.rs.DevTestCode, parsed, DevCommand(run.rs))
 		// Release sctx's timeout right after the call it bounded, rather than
 		// deferring to the end of the pass — correctness must not depend on
 		// reasoning about how many shards (and therefore deferred cancels) may

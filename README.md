@@ -472,18 +472,26 @@ Unmapped files still fall through to convention, so a partial map is normal: you
 correct only what convention gets wrong. A mapping to a file that does not exist
 is **refused and reported**, never silently ignored — a typo must be visible.
 
-**Grading against one file's own tests (`--scope-tests`, opt-in).** Scoring runs
-your suite once per mutant, so an audit costs roughly *mutants x suite runtime*.
-Scoping to a file's own paired test collapses that: measured 11x faster on
-`psf/requests`, whose suite takes 77 seconds.
+**Which tests grade a file — the ones that execute it (default).** Scoring runs
+a test command once per mutant, so an audit costs roughly *mutants × that
+command's runtime*. corral runs your suite **once** per scan with per-test
+coverage instrumentation, learns which tests actually execute each file, and
+grades that file's mutants with only those tests. Every verdict says so —
+`graded by 14 of 1,431 tests (coverage-context)` — because it is a different
+measurement from the whole suite: *do the tests for this file test it?* rather
+than *did anything in the repo happen to catch it?* The selection comes from
+execution evidence, never from filenames: scoping by the conventionally-paired
+test file was tried in July and inverted a verdict on `requests/adapters.py`
+(1.00 → 0.00) because that file's real tests live in `test_requests.py`.
+Coverage finds them; a filename rule cannot.
 
-It is **off by default and should stay that way unless you have checked it**,
-because it changes the question being asked. On `flask/cli.py` the kill rate
-barely moved (0.65 → 0.68). On `requests/adapters.py` it inverted — **1.00 →
-0.00** — because that file's real coverage lives in a 108KB `test_requests.py`
-while convention paired it to an 8-line `test_adapters.py`. Scoping there
-reported five catchable gaps in a file whose tests catch everything. Use it when
-you know your pairings are right, which is exactly what `--tests` is for.
+Today this is implemented for Python (pytest with `pytest-cov`). A language
+or harness without a selector, a project without `pytest-cov`, or a run whose
+evidence cannot be read grades against the **whole suite, and the record says
+why** (`graded by the whole suite (no selector for ruby)`). `--whole-suite`
+asks for that deliberately. A file no test executes is reported
+`[UNCOVERED — no test executes this file]` with its kill rate withheld — the
+pool still writes and proves tests against it, and it fails `--min-kill-rate`.
 
 **The foreign-repo sweep (CI, every PR).** `scripts/foreign-sweep.sh` runs
 `certify --repo --dry-run` — enumeration, language detection, test pairing,

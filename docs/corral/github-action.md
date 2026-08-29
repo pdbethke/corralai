@@ -520,9 +520,14 @@ is an hours-long run.
 
 ## What one run costs
 
-An audit costs roughly **(mutants × your suite's whole runtime) per audited
-file**. It is not proportional to the size of the diff; it is proportional to
-how long your tests take, multiplied by how many files the PR touched.
+An audit costs roughly **mutants × the runtime of the tests that execute the
+file**, per audited file, on Python — corral runs your suite once with
+coverage instrumentation and grades each file against only the tests that
+execute it. Everything else today costs **mutants × the whole suite** per
+audited file, because no selector exists yet for that language. Either way it
+is not proportional to the size of the diff; it is proportional to how long
+the graded tests take, multiplied by how many files the PR touched. The step
+summary's per-file line says which measurement produced its number.
 
 Corral's own repo is a worked example, and it is a **measured** one rather than
 an estimate: auditing `cmd/corral/main.go` on a GitHub-hosted 2-core runner took

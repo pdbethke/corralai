@@ -312,14 +312,11 @@ Go binary.**
   silently, on a run that still reported as complete. Measured:
   `requests/adapters.py` 1 symbol → 19, `rubocop` 729 of 736 files measured,
   `express/lib/response.js` 2 → 20.
-- **`--scope-tests` (opt-in): grade a file against its own tests.** Scoring runs
-  the suite once per mutant, so cost is roughly *mutants x suite runtime* — 11x
-  faster on `psf/requests`, whose suite takes 77 seconds. Deliberately NOT the
-  default: it changes the question from "did anything in this repo catch the
-  bug?" to "do the tests for this file catch it?", and on `requests/adapters.py`
-  that inverted the verdict from 1.00 to 0.00, because the file's real coverage
-  lives elsewhere than its conventionally-named pair. Fast is not free, and the
-  honest default is the slow one.
+- **Coverage-guided test selection is now the default for Python**, replacing
+  the paired-file scoping this section used to describe (`--scope-tests`,
+  since removed): a file is graded by the tests execution evidence shows
+  actually run it, not by a filename convention, with `--whole-suite` as the
+  disclosed opt-out.
 - **`corral scans list|show` — reading the ledger back.** For its whole life
   that ledger was write-only in practice: every scan and every per-file
   disposition was recorded, and nothing shipped could get any of it out. You

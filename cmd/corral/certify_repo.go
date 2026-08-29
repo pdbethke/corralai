@@ -96,7 +96,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// replacement flag goes the OTHER way, so silently honouring the old
 	// spelling would mean the opposite of what it used to.
 	if *scopeTestsFlag {
-		fmt.Fprintln(stderr, "corral certify --repo: --scope-tests was removed. Its paired-FILE scoping inverted verdicts (requests/adapters.py 1.00 -> 0.00). Selection is now by coverage evidence and on by default; pass --whole-suite to grade against the whole suite. See docs/superpowers/specs/2026-08-28-coverage-guided-selection-and-concurrent-scoring-design.md")
+		fmt.Fprintln(stderr, "corral certify --repo: --scope-tests was removed. Its paired-FILE scoping inverted verdicts (requests/adapters.py 1.00 -> 0.00). Selection is now by coverage evidence and on by default; pass --whole-suite to grade against the whole suite. See docs/design/test-selection.md")
 		return 2
 	}
 

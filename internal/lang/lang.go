@@ -145,7 +145,7 @@ type Plugin interface {
 	// exactly that (once per applyRunRestore call). A value computed once
 	// and shared across the baseline and its mutants does NOT close the
 	// hole this method exists for — see python.go's implementation and
-	// docs/superpowers (gitignored) for the measured mechanism: CPython
+	// docs/design/test-selection.md's "Part B" for the measured mechanism: CPython
 	// keys a persistent .pyc cache off a source file's (mtime_seconds,
 	// size), and the workspace substrate can rewrite a mutant to the exact
 	// same path with the exact same size within the exact same wall-clock
@@ -247,7 +247,7 @@ type Selection struct {
 // so an audit costs O(mutants × runtime of that command). It is also a
 // MEASUREMENT change, deliberately: "do the tests FOR THIS FILE catch the
 // bug?" is the question a per-file kill rate claims to answer. The design
-// note docs/superpowers/specs/2026-08-28-coverage-guided-selection-and-concurrent-scoring-design.md
+// note docs/design/test-selection.md
 // records the filename-based scoping that inverted a verdict (1.00 → 0.00)
 // and why only execution evidence is acceptable here.
 type TestSelector interface {

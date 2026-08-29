@@ -34,12 +34,27 @@ func TestPythonInstrumentDerivesFromOperatorCommand(t *testing.T) {
 	script := cmd[2]
 	for _, want := range []string{
 		"python3 -m pytest -q -k 'not slow' --cov --cov-context=test --cov-report= -p no:cacheprovider",
-		"COVERAGE_FILE=",
-		"-m coverage json --show-contexts -o -",
+		// The C tracer is pinned: coverage's sysmon core (the default on
+		// Python 3.12+) does not support dynamic contexts, warns "context
+		// data may be incomplete", and under a project's filterwarnings=error
+		// that warning fails every test at setup (flask: 985 errors, every
+		// file "uncovered").
+		"COVERAGE_CORE=ctrace COVERAGE_FILE=",
+		// The suite must PASS: exit 1 (tests failed/errored) is refused, so
+		// selection cannot grade a suite the whole-suite baseline would
+		// refuse (#164).
+		`[ "$rc" -eq 0 ] || exit "$rc"`,
+		// The evidence is reduced INSIDE the run to {file: [node ids]} — the
+		// full coverage-json with contexts was 411 MB on flask (#165).
+		`"format": "corral-selection-1"`,
+		"contexts_by_lineno",
 	} {
 		if !strings.Contains(script, want) {
 			t.Errorf("script lacks %q:\n%s", want, script)
 		}
+	}
+	if strings.Contains(script, "coverage json") || strings.Contains(script, "0|1)") {
+		t.Errorf("script must neither emit the full coverage json nor accept a failing suite:\n%s", script)
 	}
 }
 
@@ -98,6 +113,15 @@ func TestPythonSelectAbsentTestFileIsAnError(t *testing.T) {
 	}
 }
 
+// The reducer stamps its shape; anything else — including the full
+// coverage-json this used to parse — is refused rather than misread.
+func TestPythonSelectRejectsAnUnknownEvidenceFormat(t *testing.T) {
+	old := `{"meta":{"show_contexts":true},"totals":{"covered_lines":1},"files":{"pkg/calc.py":{"summary":{"num_statements":1,"covered_lines":1},"contexts":{"1":["tests/test_calc.py::test_add|run"]}}}}`
+	if _, err := (pyPlugin{}).Select([]byte(old), "", "pkg/calc.py", "tests/test_calc.py", []string{"pytest"}); err == nil || !strings.Contains(err.Error(), "corral-selection-1") {
+		t.Errorf("the old coverage-json shape must be refused by name, got err=%v", err)
+	}
+}
+
 func TestPythonSelectRejectsNonCoverageJSON(t *testing.T) {
 	if _, err := (pyPlugin{}).Select([]byte(`{"hello":1}`), "", "pkg/calc.py", "tests/test_calc.py", []string{"pytest"}); err == nil {
 		t.Error("want an error on a document that is not a coverage report")
@@ -125,9 +149,9 @@ func TestPythonSelectFallsBackToFilesWhenArgvWouldBeTooLong(t *testing.T) {
 	// selectionMaxArgv.
 	var ctxs []string
 	for i := 0; i < 3000; i++ {
-		ctxs = append(ctxs, fmt.Sprintf(`"tests/test_big.py::test_%04d_%s|run"`, i, strings.Repeat("x", 20)))
+		ctxs = append(ctxs, fmt.Sprintf(`"tests/test_big.py::test_%04d_%s"`, i, strings.Repeat("x", 20)))
 	}
-	ev := `{"meta":{"show_contexts":true},"totals":{"covered_lines":1},"files":{"pkg/calc.py":{"summary":{"num_statements":1,"covered_lines":1},"contexts":{"1":[` + strings.Join(ctxs, ",") + `]}},"tests/test_big.py":{"summary":{"num_statements":1,"covered_lines":1},"contexts":{"1":[` + ctxs[0] + `]}}}}`
+	ev := `{"format":"corral-selection-1","tests":3000,"files":{"pkg/calc.py":[` + strings.Join(ctxs, ",") + `],"tests/test_big.py":[` + ctxs[0] + `]}}`
 	sel, err := pyPlugin{}.Select([]byte(ev), "", "pkg/calc.py", "tests/test_big.py", []string{"pytest"})
 	if err != nil {
 		t.Fatal(err)

@@ -337,11 +337,12 @@ type localAuditInput struct {
 
 	// baseArgv is checkArgv BEFORE coverage-guided narrowing: the operator's
 	// own `-- <cmd>` or the plugin's stock recursive command. It is what
-	// RunSpec.TestCmd carries, because advpool's scorer applies `selection`
-	// itself once per pass (the dev pass runs the selection; the authored
-	// pass runs the selection PLUS the pool's own test, which no evidence run
-	// ever saw). Empty means "same as checkArgv" — the `--local` path, which
-	// never narrows.
+	// RunSpec.TestCmd carries, because the narrowing happens downstream from
+	// the run's Selection, once per pass: the driver runs advpool.DevCommand
+	// for the dev pass (and the shadow pass), and the scorer's authoredCmd
+	// adds the pool's own test — which no evidence run ever saw — for the
+	// authored pass. Empty means "same as checkArgv" — the `--local` path,
+	// which never narrows.
 	baseArgv []string
 
 	// selection is what the scan's one instrumented run decided for THIS
@@ -975,11 +976,12 @@ func newAuditRunSpec(in localAuditInput, roles auditRoles, subj runSubject) advp
 		// containing a space (an inline -e script, --filter="a b") comes back
 		// as several arguments and the command that runs is not the one the
 		// operator typed. Pairs with adequacy.ShellSplit.
-		// The BASE command, never the narrowed one: JailScorer carries the
-		// same Selection and applies it per pass (see its devCmd/authoredCmd),
-		// so narrowing here would narrow twice and would drop the authored
-		// test from the pool's own pass. Empty baseArgv is the `--local` path,
-		// where checkArgv IS the base.
+		// The BASE command, never the narrowed one: the run's Selection is
+		// applied downstream, per pass (advpool.DevCommand at the driver's
+		// dev and shadow call sites; JailScorer.authoredCmd for the authored
+		// pass), so narrowing here would narrow twice and would drop the
+		// authored test from the pool's own pass. Empty baseArgv is the
+		// `--local` path, where checkArgv IS the base.
 		TestCmd:   adequacy.ShellJoin(orArgv(in.baseArgv, in.checkArgv)),
 		Selection: in.selection,
 		NMutants:  n,

@@ -240,6 +240,18 @@ func toMutantRefs(ms []adequacy.Mutant) []MutantRef {
 	return refs
 }
 
+// TestSelection discloses which measurement a Verdict's kill rate is: the
+// whole suite (Method "") or the narrowed set of tests that evidence showed
+// executed the file under audit (Method set, Selected of Of). Fallback
+// carries why a selector could not narrow (no selector for the language,
+// stale/missing evidence) even though Method is set.
+type TestSelection struct {
+	Method   string `json:"method"` // "" = whole suite
+	Selected int    `json:"selected"`
+	Of       int    `json:"of"`
+	Fallback string `json:"fallback"`
+}
+
 // Verdict is one run's final, gated outcome.
 type Verdict struct {
 	Repo, Commit string
@@ -320,8 +332,17 @@ type Verdict struct {
 	// audit, so DevKillRate is meaningless. DISTINCT from BaselineFailed:
 	// the suite is fine, the check command points somewhere else.
 	SuiteIgnoresFile bool
-	RecordID         int64  // the signed build-record id (0 if signing skipped/failed)
-	RecordHead       string // the record's ledger head
+	// TestSelection says WHICH measurement this kill rate is: the tests
+	// that executed the file (Method set, Selected of Of), or the whole
+	// suite (Method "", and Fallback says why under selection). Two
+	// verdicts with different Methods are not comparable.
+	TestSelection TestSelection
+	// Uncovered: the evidence run found no test executing this file. The
+	// dev kill rate is WITHHELD by every reader (report, ledger, gate) —
+	// the survivors are real, the 0.00 is not a measurement.
+	Uncovered  bool
+	RecordID   int64  // the signed build-record id (0 if signing skipped/failed)
+	RecordHead string // the record's ledger head
 	// TimedOut is true when this verdict came from RunDeadline's backstop
 	// (see timeoutVerdict) rather than the pool actually converging — the
 	// test-writer/shadow/critic/aggregate steps never finished. Status is
@@ -1022,7 +1043,10 @@ func (d *Driver) Tick(ctx context.Context, missionID int64) (*Verdict, error) {
 // empty report — and conflating them sends an operator to debug the wrong
 // thing entirely.
 func applyDevScore(ctx context.Context, run *runState, scorer Scorer, mutants []adequacy.Mutant) error {
-	rep, serr := scorer.ScoreReport(ctx, run.rs.CodePath, run.rs.Code, run.rs.DevTestCode, mutants, run.rs.TestCmd)
+	// DevCommand, not rs.TestCmd: the run's command narrowed to the tests
+	// that execute this file. The scorer no longer does it — see DevCommand
+	// for why the caller has to be the one that means it.
+	rep, serr := scorer.ScoreReport(ctx, run.rs.CodePath, run.rs.Code, run.rs.DevTestCode, mutants, DevCommand(run.rs))
 	if serr != nil {
 		return fmt.Errorf("advpool: score dev tests: %w", serr)
 	}
@@ -1967,6 +1991,11 @@ func (d *Driver) adjudicateCriticFindings(ctx context.Context, missionID int64, 
 			ran, kills := false, 0
 			if scope == ScopeWholeTest && f.TestSelector != "" {
 				if cmd, ok := p.SingleTestCmd(f.TestFile, f.TestSelector); ok {
+					// Deliberately NOT narrowed to the run's Selection: this
+					// call already names ONE test, which is the whole
+					// question ("does this single test kill anything?").
+					// Unioning it with the selection would answer a
+					// different one.
 					if kr, survivors, serr := d.Scorer.Score(ctx, run.rs.CodePath, run.rs.Code, run.rs.DevTestCode, run.mutants, strings.Join(cmd, " ")); serr != nil {
 						log.Printf("advpool: run %d: critic auto-refute score failed for %q: %v", missionID, f.TestSelector, serr)
 					} else if kr > 0 {

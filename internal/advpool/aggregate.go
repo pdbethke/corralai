@@ -4,6 +4,24 @@ package advpool
 
 import "github.com/pdbethke/corralai/internal/queue"
 
+// verdictFromSpec builds the spec-derived fields of a Verdict: the run's own
+// identity (Repo, Commit, Lang) and how it discloses its Selection
+// (TestSelection, Uncovered). Factored out of aggregate so a test can assert
+// the Selection-to-Verdict mapping without also supplying every scored
+// component aggregate itself requires.
+func verdictFromSpec(rs RunSpec) Verdict {
+	return Verdict{
+		Repo:   rs.Repo,
+		Commit: rs.Commit,
+		Lang:   rs.Lang,
+		TestSelection: TestSelection{
+			Method: rs.Selection.Method, Selected: len(rs.Selection.Tests),
+			Of: rs.Selection.Of, Fallback: rs.Selection.Fallback,
+		},
+		Uncovered: rs.Selection.Method != "" && len(rs.Selection.Tests) == 0,
+	}
+}
+
 // aggregate composes a run's Verdict from its scored components and applies
 // the human gate: a blocking finding (open, at/above BlockSeverity) OR a
 // below-threshold DevKillRate always routes to needs-review. The pool never
@@ -20,26 +38,22 @@ func aggregate(
 	testWriterFailed bool,
 	poolTestUnsound bool,
 ) Verdict {
-	v := Verdict{
-		Repo:             rs.Repo,
-		Commit:           rs.Commit,
-		Lang:             rs.Lang,
-		DevKillRate:      devKillRate,
-		MutantsTotal:     mutantsTotal,
-		Survivors:        survivors,
-		ProvenMissed:     provenMissed,
-		VacuousFindings:  vacuousFindings,
-		ModelsByRole:     map[string]string(assign),
-		Status:           StatusCertified,
-		TestWriterFailed: testWriterFailed,
-		PoolTestUnsound:  poolTestUnsound,
-		// aggregate is only ever reached via tickAggregate, which itself is
-		// gated on run.poolScored — reachable only once tickDevAdequacy has
-		// already set run.devScored (see driver.go's Tick). A converged
-		// verdict's numbers are always real measurements, never a fabricated
-		// zero — see Verdict.DevScored's doc.
-		DevScored: true,
-	}
+	v := verdictFromSpec(rs)
+	v.DevKillRate = devKillRate
+	v.MutantsTotal = mutantsTotal
+	v.Survivors = survivors
+	v.ProvenMissed = provenMissed
+	v.VacuousFindings = vacuousFindings
+	v.ModelsByRole = map[string]string(assign)
+	v.Status = StatusCertified
+	v.TestWriterFailed = testWriterFailed
+	v.PoolTestUnsound = poolTestUnsound
+	// aggregate is only ever reached via tickAggregate, which itself is
+	// gated on run.poolScored — reachable only once tickDevAdequacy has
+	// already set run.devScored (see driver.go's Tick). A converged
+	// verdict's numbers are always real measurements, never a fabricated
+	// zero — see Verdict.DevScored's doc.
+	v.DevScored = true
 	// The SIGNED certify/needs-review decision rests on execution-proven signals:
 	// the mutation kill-rate against the threshold, run in the jail. The
 	// test-critic's vacuous-test flags are a SECOND MODEL'S UNVERIFIED OPINION

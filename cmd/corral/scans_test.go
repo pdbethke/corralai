@@ -44,6 +44,13 @@ func TestScansShow_DistinguishesTheThreeWaysProvenCanBeZero(t *testing.T) {
 		{Path: "unsound.py", Disposition: "audited", Survivors: 5, ProvenMissed: 0, PoolTestUnsound: true},
 		{Path: "missed.py", Disposition: "audited", Survivors: 10, ProvenMissed: 0},
 		{Path: "proven.py", Disposition: "audited", Survivors: 3, ProvenMissed: 2, ProvenMutantIDs: "m1,m3"},
+		// A FOURTH way, and the note read it as the third: an uncovered file
+		// has survivors and (usually) proven_missed 0 because NO TEST
+		// EXECUTES IT, not because a writer tried and missed. Saying "the
+		// authored test graded and proved nothing" about a file nothing
+		// grades is a false diagnosis of the writer.
+		{Path: "uncovered.py", Disposition: "audited", Survivors: 7, ProvenMissed: 0, Uncovered: true},
+		{Path: "uncovered_proven.py", Disposition: "audited", Survivors: 7, ProvenMissed: 2, Uncovered: true},
 	}}
 	var out, errOut bytes.Buffer
 	if code := runScans([]string{"show", "7"}, openFake(r), &out, &errOut); code != 0 {
@@ -59,6 +66,25 @@ func TestScansShow_DistinguishesTheThreeWaysProvenCanBeZero(t *testing.T) {
 			t.Errorf("output must distinguish %q; it does not:\n%s", want, got)
 		}
 	}
+	for _, line := range strings.Split(got, "\n") {
+		if !strings.HasPrefix(line, "uncovered") {
+			continue
+		}
+		if strings.Contains(line, "tried and missed") {
+			t.Errorf("an uncovered row must not accuse the writer: %q", line)
+		}
+		if !strings.Contains(line, "uncovered — no test executes it; rate withheld") {
+			t.Errorf("an uncovered row must say what it is: %q", line)
+		}
+	}
+	// The proven count still prints when an uncovered file's writer DID
+	// prove something — the file being uncovered does not erase that.
+	for _, line := range strings.Split(got, "\n") {
+		if strings.HasPrefix(line, "uncovered_proven.py") && !strings.Contains(line, "2") {
+			t.Errorf("a proven gap on an uncovered file must still be reported: %q", line)
+		}
+	}
+
 	// A genuinely proven row must NOT be labelled with any of the caveats.
 	for _, line := range strings.Split(got, "\n") {
 		if strings.HasPrefix(line, "proven.py") && strings.Contains(line, "missed") {

@@ -144,6 +144,25 @@ type File struct {
 	// question "what did it actually try?" had no answer at any price short of
 	// another run. "" when no compiling test was ever produced.
 	AuthoredTest string
+	// TestSelection, SelectedTests and SuiteTests say WHICH MEASUREMENT this
+	// row's kill rate is: the tests coverage evidence showed execute this
+	// file ("coverage-context", SelectedTests of SuiteTests), rather than the
+	// whole suite. A ledger that stores the number without the question it
+	// answers cannot be queried honestly afterwards: a rate earned against 14
+	// of 1431 tests and one earned against all 1431 are not comparable, and
+	// nothing else in the row can tell them apart.
+	TestSelection string
+	SelectedTests int
+	SuiteTests    int
+	// SelectionFallback is the REASON this row was graded by the whole suite
+	// (no selector for the language, --whole-suite, an evidence run that
+	// failed). Empty when TestSelection is set — never both.
+	SelectionFallback string
+	// Uncovered: the evidence ran and found NO test executing this file. Its
+	// KillRate is written NULL for the same reason a rejected file's is —
+	// nothing graded the file, so a stored 0.0 would later read as "your
+	// tests caught nothing here" about a measurement that was never made.
+	Uncovered bool
 	// CacheKey is reposcan's content address for this file's audit — every
 	// input that can change the verdict, hashed. It is what makes a later
 	// scan able to reuse this row instead of re-running the suite once per
@@ -256,6 +275,11 @@ var scanFilesMigrationCols = []struct{ name, ddl string }{
 	{"cache_hit", "cache_hit BOOLEAN"},
 	{"reused_from_scan_id", "reused_from_scan_id BIGINT"},
 	{"suite_baseline_ms", "suite_baseline_ms BIGINT"},
+	{"test_selection", "test_selection VARCHAR"},
+	{"selected_tests", "selected_tests INTEGER"},
+	{"suite_tests", "suite_tests INTEGER"},
+	{"selection_fallback", "selection_fallback VARCHAR"},
+	{"uncovered", "uncovered BOOLEAN"},
 }
 
 // Open opens (creating if absent) the scans/scan_files store at dsn.
@@ -326,7 +350,12 @@ func Open(dsn string) (*Store, error) {
 		baseline_failed BOOLEAN,
 		cache_hit BOOLEAN,
 		reused_from_scan_id BIGINT,
-		suite_baseline_ms BIGINT
+		suite_baseline_ms BIGINT,
+		test_selection VARCHAR,
+		selected_tests INTEGER,
+		suite_tests INTEGER,
+		selection_fallback VARCHAR,
+		uncovered BOOLEAN
 	)`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("scanstore: create scan_files table: %w", err)
@@ -449,6 +478,21 @@ func sanitizeKillRate(v *float64) *float64 {
 	return v
 }
 
+// fileKillRate is sanitizeKillRate plus the one row-level rule the value
+// alone cannot express: an UNCOVERED file was never graded by anything — the
+// selection evidence found no test that executes it — so whatever number the
+// verdict carries is not a measurement of the suite's strength here. It is
+// written NULL, exactly like a rejected file's, rather than a 0.0 that reads
+// as "your tests caught nothing" about a question nobody asked. Enforced in
+// the store, not left to each caller, because the caller getting it wrong is
+// how a false accusation gets persisted.
+func fileKillRate(f File) *float64 {
+	if f.Uncovered {
+		return nil
+	}
+	return sanitizeKillRate(f.KillRate)
+}
+
 // Record writes scan's header row and every file's disposition in one
 // transaction — a half-written scan is worse than none, because a later
 // report would present it as complete — and returns the assigned scan id.
@@ -484,13 +528,15 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 			kill_rate, survivors, gradable, preflight_state, evidence, detail, timed_out, test_writer_failed, proven_missed, pool_test_unsound,
 			proven_mutant_ids, authored_test, cache_key, verdict_json, computed_at,
 			models_by_role, mutants_total, regions_total, regions_probed, dropped_regions, vacuous_findings, status,
-			authored_test_not_collected, baseline_failed, cache_hit, reused_from_scan_id, suite_baseline_ms
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			authored_test_not_collected, baseline_failed, cache_hit, reused_from_scan_id, suite_baseline_ms,
+			test_selection, selected_tests, suite_tests, selection_fallback, uncovered
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id, f.Path, f.Lang, f.Disposition, f.Reason,
-			sanitizeKillRate(f.KillRate), f.Survivors, f.Gradable, f.PreflightState, f.Evidence, f.Detail, f.TimedOut, f.TestWriterFailed, f.ProvenMissed, f.PoolTestUnsound,
+			fileKillRate(f), f.Survivors, f.Gradable, f.PreflightState, f.Evidence, f.Detail, f.TimedOut, f.TestWriterFailed, f.ProvenMissed, f.PoolTestUnsound,
 			f.ProvenMutantIDs, f.AuthoredTest, f.CacheKey, f.VerdictJSON, f.ComputedAt,
 			f.ModelsByRole, f.MutantsTotal, f.RegionsTotal, f.RegionsProbed, f.DroppedRegions, f.VacuousFindings, f.Status,
 			f.AuthoredTestNotCollected, f.BaselineFailed, f.CacheHit, f.ReusedFromScanID, f.SuiteBaselineMillis,
+			f.TestSelection, f.SelectedTests, f.SuiteTests, f.SelectionFallback, f.Uncovered,
 		); err != nil {
 			return 0, fmt.Errorf("scanstore: insert scan_files row for %q: %w", f.Path, err)
 		}
@@ -576,7 +622,8 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		proven_mutant_ids, authored_test,
 		models_by_role, mutants_total, regions_total, regions_probed, dropped_regions, vacuous_findings, status,
 		authored_test_not_collected, baseline_failed, cache_hit, reused_from_scan_id,
-		suite_baseline_ms
+		suite_baseline_ms,
+		test_selection, selected_tests, suite_tests, selection_fallback, uncovered
 		FROM scan_files WHERE scan_id = ? ORDER BY rowid`, scanID)
 	if err != nil {
 		return nil, fmt.Errorf("scanstore: files for scan %d: %w", scanID, err)
@@ -604,12 +651,21 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		// surface: DuckDB is single-process on a file, so ad-hoc CLI SQL is
 		// not a reliable fallback while a scan holds the handle open.
 		var suiteBaselineMS sql.NullInt64
+		// The five selection columns read back nullable for the same reason:
+		// a row written before this migration ran has none of them, and a
+		// rejected file never had a grading mode at all. NULL here means
+		// "this ledger does not say" — never "graded by the whole suite",
+		// which is a positive claim a pre-change row cannot make.
+		var testSelection, selectionFallback sql.NullString
+		var selectedTests, suiteTests sql.NullInt64
+		var uncovered sql.NullBool
 		if err := rows.Scan(&f.Path, &f.Lang, &f.Disposition, &f.Reason,
 			&f.KillRate, &f.Survivors, &f.Gradable, &f.PreflightState, &f.Evidence, &detail, &timedOut, &testWriterFailed, &provenMissed, &poolTestUnsound,
 			&provenIDs, &authoredTest,
 			&modelsByRole, &mutantsTotal, &regionsTotal, &regionsProbed, &droppedRegions, &vacuousFindings, &status,
 			&authoredTestNotCollected, &baselineFailed, &cacheHit, &reusedFromScanID,
-			&suiteBaselineMS); err != nil {
+			&suiteBaselineMS,
+			&testSelection, &selectedTests, &suiteTests, &selectionFallback, &uncovered); err != nil {
 			return nil, fmt.Errorf("scanstore: scan scan_files row: %w", err)
 		}
 		f.Detail = detail.String
@@ -638,6 +694,11 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		f.BaselineFailed = baselineFailed.Bool
 		f.CacheHit = cacheHit.Bool
 		f.SuiteBaselineMillis = suiteBaselineMS.Int64
+		f.TestSelection = testSelection.String
+		f.SelectedTests = int(selectedTests.Int64)
+		f.SuiteTests = int(suiteTests.Int64)
+		f.SelectionFallback = selectionFallback.String
+		f.Uncovered = uncovered.Bool
 		// ReusedFromScanID stays *int64: NULL (never reused, or a
 		// pre-migration row) must read back as nil, not a scan id of 0 — see
 		// the field's own doc.

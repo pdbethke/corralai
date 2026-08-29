@@ -142,11 +142,11 @@ surprised by:
   a file and pass `--goals`.
 
 Known gaps, documented here because they are wrong-hit paths rather than design:
-the file-scoped path (`--scope-tests`, or a test command naming specific files)
-does not key on the wider test surface, so weakening a shared `tests/conftest.py`
-leaves the key unmoved; a repo-root `conftest.py` with tests under `tests/` is
-not covered; and argv tokens given as absolute paths or symlinked directories do
-not disqualify a file-scoped scan.
+the file-scoped path (coverage-guided selection, or a test command naming
+specific files) does not key on the wider test surface, so weakening a shared
+`tests/conftest.py` leaves the key unmoved; a repo-root `conftest.py` with tests
+under `tests/` is not covered; and argv tokens given as absolute paths or
+symlinked directories do not disqualify a file-scoped scan.
 
 ## What a run prints while it works
 

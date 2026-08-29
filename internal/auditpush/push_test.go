@@ -28,7 +28,7 @@ func TestPushCreatesTheTableAndAppends(t *testing.T) {
 
 	n, err := Push(target, []Row{{
 		Repo: "o/r", Commit: "abc", Path: "a.py", Lang: "python",
-		KillRate: 0.9, Survivors: 2, ProvenMissed: 1,
+		KillRate: rate(0.9), Survivors: 2, ProvenMissed: 1,
 		Audited: 1, Candidates: 11, MutantsPlanted: 20,
 		ModelsByRole: `{"mutant-generator":"gemini-3.6-flash"}`,
 		MinKillRate:  rate(0.7), MaxProvenMissed: gaps(0),
@@ -68,12 +68,12 @@ func TestPushCreatesTheTableAndAppends(t *testing.T) {
 // see a file drift over time instead of only its latest number.
 func TestPushIsAppendOnly(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "w.duckdb")
-	row := Row{Repo: "o/r", Commit: "c1", Path: "a.py", KillRate: 0.9}
+	row := Row{Repo: "o/r", Commit: "c1", Path: "a.py", KillRate: rate(0.9)}
 
 	if _, err := Push(target, []Row{row}); err != nil {
 		t.Fatal(err)
 	}
-	row.Commit, row.KillRate = "c2", 0.6
+	row.Commit, row.KillRate = "c2", rate(0.6)
 	if _, err := Push(target, []Row{row}); err != nil {
 		t.Fatal(err)
 	}
@@ -130,4 +130,132 @@ func contains(s, sub string) bool {
 		}
 		return false
 	})()
+}
+
+// The warehouse is a reader too. An uncovered file's rate is withheld
+// everywhere else — report, ledger, attestation — and a 0.0 stored here would
+// be the one copy that comes back as a measured fact in a query.
+func TestUncoveredRowStoresANullRateAndItsSelection(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "w.duckdb")
+	if _, err := Push(target, []Row{
+		{Repo: "o/r", Commit: "c", Path: "pkg/u.py", Survivors: 2,
+			TestSelection: "coverage-context", SuiteTests: 1431, Uncovered: true},
+		{Repo: "o/r", Commit: "c", Path: "pkg/a.py", KillRate: rate(0.65),
+			TestSelection: "coverage-context", SelectedTests: 14, SuiteTests: 1431},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	db := openTarget(t, target)
+	var killRate *float64
+	var method string
+	var selected, suite int
+	var uncovered bool
+	if err := db.QueryRow(`SELECT kill_rate, test_selection, selected_tests, suite_tests, uncovered
+	    FROM corral_audits WHERE path = 'pkg/u.py'`).
+		Scan(&killRate, &method, &selected, &suite, &uncovered); err != nil {
+		t.Fatalf("read back uncovered row: %v", err)
+	}
+	if killRate != nil {
+		t.Errorf("uncovered row kill_rate = %v, want NULL: nothing graded that file", *killRate)
+	}
+	if !uncovered || method != "coverage-context" || suite != 1431 {
+		t.Errorf("uncovered row lost its selection facts: %v %q %d", uncovered, method, suite)
+	}
+
+	if err := db.QueryRow(`SELECT kill_rate, selected_tests FROM corral_audits WHERE path = 'pkg/a.py'`).
+		Scan(&killRate, &selected); err != nil {
+		t.Fatalf("read back graded row: %v", err)
+	}
+	if killRate == nil || *killRate != 0.65 || selected != 14 {
+		t.Errorf("a measured row must keep its rate and its denominator: %v %d", killRate, selected)
+	}
+}
+
+// TestPushMigratesAPreExistingWarehouse pins the upgrade path. An operator's
+// corral_audits was created by an earlier corral, so `CREATE TABLE IF NOT
+// EXISTS` is a no-op and the table keeps its old 20 columns — while the
+// INSERT now names 25. Without an additive migration a push that worked
+// yesterday fails outright on the one table this tool asks operators to trust
+// as a durable record.
+func TestPushMigratesAPreExistingWarehouse(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "legacy.duckdb")
+
+	// The PRE-selection column list, verbatim, built by hand.
+	legacy := openTarget(t, target)
+	if _, err := legacy.Exec(`CREATE TABLE corral_audits (
+  ts                 TIMESTAMPTZ NOT NULL,
+  repo               VARCHAR     NOT NULL,
+  commit_sha         VARCHAR     NOT NULL,
+  path               VARCHAR     NOT NULL,
+  lang               VARCHAR,
+  kill_rate          DOUBLE,
+  survivors          INTEGER,
+  proven_missed      INTEGER,
+  timed_out          BOOLEAN,
+  test_writer_failed BOOLEAN,
+  pool_test_unsound  BOOLEAN,
+  audited            INTEGER,
+  candidates         INTEGER,
+  mutants_planted    INTEGER,
+  models_by_role     VARCHAR,
+  min_kill_rate      DOUBLE,
+  max_proven_missed  INTEGER,
+  passed             BOOLEAN,
+  statement_sha256   VARCHAR,
+  run_url            VARCHAR
+)`); err != nil {
+		t.Fatalf("create legacy table: %v", err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatalf("close legacy target: %v", err)
+	}
+
+	n, err := Push(target, []Row{
+		{Repo: "o/r", Commit: "c", Path: "pkg/u.py", Lang: "python", Survivors: 2,
+			TestSelection: "coverage-context", SuiteTests: 1431, Uncovered: true},
+		{Repo: "o/r", Commit: "c", Path: "pkg/a.py", Lang: "python", KillRate: rate(0.65), Survivors: 4,
+			TestSelection: "coverage-context", SelectedTests: 14, SuiteTests: 1431},
+	})
+	if err != nil {
+		t.Fatalf("Push onto a pre-existing warehouse must migrate it, not fail: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("Push wrote %d rows, want 2", n)
+	}
+
+	db := openTarget(t, target)
+	var killRate *float64
+	var method, fallback *string
+	var selected, suite *int
+	var uncovered bool
+	if err := db.QueryRow(`SELECT kill_rate, test_selection, selected_tests, suite_tests, selection_fallback, uncovered
+	    FROM corral_audits WHERE path = 'pkg/u.py'`).
+		Scan(&killRate, &method, &selected, &suite, &fallback, &uncovered); err != nil {
+		t.Fatalf("read back the uncovered row: %v", err)
+	}
+	if killRate != nil {
+		t.Errorf("uncovered row kill_rate = %v, want NULL: nothing graded that file", *killRate)
+	}
+	if !uncovered || method == nil || *method != "coverage-context" || suite == nil || *suite != 1431 {
+		t.Errorf("migrated columns did not carry the uncovered row's facts: %v %v %v", uncovered, method, suite)
+	}
+	// Nothing to say is NULL, not a fabricated reason.
+	if fallback != nil && *fallback != "" {
+		t.Errorf("selection_fallback = %q, want empty: this row did not fall back", *fallback)
+	}
+
+	if err := db.QueryRow(`SELECT kill_rate, selected_tests, uncovered FROM corral_audits WHERE path = 'pkg/a.py'`).
+		Scan(&killRate, &selected, &uncovered); err != nil {
+		t.Fatalf("read back the graded row: %v", err)
+	}
+	if killRate == nil || *killRate != 0.65 || selected == nil || *selected != 14 || uncovered {
+		t.Errorf("graded row = %v %v %v; the rate and its denominator must survive the migration", killRate, selected, uncovered)
+	}
+
+	// Idempotent: a second push over the now-current table runs no ALTER and
+	// appends normally.
+	if _, err := Push(target, []Row{{Repo: "o/r", Commit: "c2", Path: "pkg/a.py", KillRate: rate(0.7)}}); err != nil {
+		t.Fatalf("second push over a migrated warehouse: %v", err)
+	}
 }

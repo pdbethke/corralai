@@ -335,6 +335,21 @@ type localAuditInput struct {
 	bindDirs   []string
 	noBindDeps bool
 
+	// baseArgv is checkArgv BEFORE coverage-guided narrowing: the operator's
+	// own `-- <cmd>` or the plugin's stock recursive command. It is what
+	// RunSpec.TestCmd carries, because advpool's scorer applies `selection`
+	// itself once per pass (the dev pass runs the selection; the authored
+	// pass runs the selection PLUS the pool's own test, which no evidence run
+	// ever saw). Empty means "same as checkArgv" — the `--local` path, which
+	// never narrows.
+	baseArgv []string
+
+	// selection is what the scan's one instrumented run decided for THIS
+	// file: the tests that executed it, or a Fallback saying why the whole
+	// suite must run instead. Zero on the `--local` path, which is exactly
+	// the pre-selection behaviour.
+	selection lang.Selection
+
 	// substrate selects where the audit runs: "" or substrateJail (today's
 	// behavior) builds and mutates inside the bwrap jail; substrateWorkspace
 	// mutates repoDir in place and skips jail construction entirely — the
@@ -554,6 +569,7 @@ func prepareAuditJail(in localAuditInput, plug lang.Plugin, timeout time.Duratio
 		iso: iso, timeout: timeout, testTimeout: in.mutantTimeout,
 		codePath: in.codePath, testPath: tp, repoDir: repoDir, langName: plug.Name(), fsPath: fsPath,
 		code: code, devTest: devTest, checkArgv: in.checkArgv,
+		baseArgv: in.baseArgv, selection: in.selection,
 		bindDirFlag: in.bindDirs, noBindDepsFlag: in.noBindDeps, stdout: stdout,
 		seed: in.seed, substrate: in.substrate, mutantConcurrency: in.mutantConcurrency,
 	})
@@ -653,7 +669,14 @@ func baselineRunnerFor(ctx context.Context, in localAuditInput) (reposcan.Baseli
 		codeKey: prep.wiring.codeKey,
 		code:    string(prep.code),
 		devTest: string(prep.devTest),
-		testCmd: strings.Join(in.checkArgv, " "),
+		// ShellJoin, not strings.Join: under test selection checkArgv carries
+		// pytest node ids, and a parametrized id
+		// (tests/test_a.py::test_x[hello world]) contains a SPACE. A plain
+		// join is not reversible, so the re-split downstream would tear that
+		// id in two and the baseline would fail on a test that does not
+		// exist — surfacing as COULD-NOT-GRADE, blamed on the project. Same
+		// joiner newAuditRunSpec already uses; pairs with adequacy.ShellSplit.
+		testCmd: adequacy.ShellJoin(in.checkArgv),
 		// Fresh per runner: two files' baseline failures must never be
 		// attributed to each other.
 		lastOutput: new(string),
@@ -919,6 +942,16 @@ type runSubject struct {
 	lang, importPath     string
 }
 
+// orArgv returns a when it has words, else b. The narrowed and the base
+// command are two different things and only one caller ever sets both; this
+// keeps "unset means the base IS the check command" in one place.
+func orArgv(a, b []string) []string {
+	if len(a) > 0 {
+		return a
+	}
+	return b
+}
+
 // newAuditRunSpec assembles one file's RunSpec from the resolved flags, the
 // resolved role models, and the prepared subject.
 //
@@ -942,7 +975,13 @@ func newAuditRunSpec(in localAuditInput, roles auditRoles, subj runSubject) advp
 		// containing a space (an inline -e script, --filter="a b") comes back
 		// as several arguments and the command that runs is not the one the
 		// operator typed. Pairs with adequacy.ShellSplit.
-		TestCmd:   adequacy.ShellJoin(in.checkArgv),
+		// The BASE command, never the narrowed one: JailScorer carries the
+		// same Selection and applies it per pass (see its devCmd/authoredCmd),
+		// so narrowing here would narrow twice and would drop the authored
+		// test from the pool's own pass. Empty baseArgv is the `--local` path,
+		// where checkArgv IS the base.
+		TestCmd:   adequacy.ShellJoin(orArgv(in.baseArgv, in.checkArgv)),
+		Selection: in.selection,
 		NMutants:  n,
 		Lang:      subj.lang,
 		MaxShards: resolveMaxShards(in.maxShards),
@@ -1211,7 +1250,14 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 	// their command and run the whole thing again. The check costs one jail
 	// execution and no inference, so paying for it afterwards was never a
 	// trade, just an ordering mistake. Refuse here, and name the fix.
-	if collected, cerr := scorer.AuthoredTestWouldBeCollected(ctx, rs.CodePath, adequacy.ShellSplit(rs.TestCmd)); cerr == nil && !collected {
+	//
+	// Asked about the command the AUTHORED PASS actually runs, not rs.TestCmd
+	// (the base): under selection that pass NAMES the authored test's own
+	// path, so a project whose discovery config would never find it collects
+	// it anyway. Checking the base command refused those audits for a problem
+	// the run had already solved.
+	authoredArgv := scorer.AuthoredCommand(rs.CodePath, adequacy.ShellSplit(rs.TestCmd))
+	if collected, cerr := scorer.AuthoredTestWouldBeCollected(ctx, rs.CodePath, authoredArgv); cerr == nil && !collected {
 		return zero, auditNotCollectedErr(
 			"your test command would not run the test this audit writes, so it could not prove a gap even if it found one.\n"+
 				"  corral writes its killing test beside your own, as: %s\n"+
@@ -1291,6 +1337,8 @@ type jailWiringInput struct {
 	code           []byte
 	devTest        []byte
 	checkArgv      []string
+	baseArgv       []string
+	selection      lang.Selection
 	bindDirFlag    []string
 	noBindDepsFlag bool
 	stdout         io.Writer
@@ -1418,7 +1466,7 @@ func buildJailWiring(in jailWiringInput) (w jailWiring, err error) {
 		// mutant is overlaid — the rest of the repo is already on disk and
 		// must NOT be rewritten over itself.
 		base := map[string]string{}
-		w.scorer = advpool.JailScorer{Jail: runner, BaseFiles: base, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey}
+		w.scorer = advpool.JailScorer{Jail: runner, BaseFiles: base, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Lang: in.langName, Selection: in.selection}
 		w.validator = advpool.JailValidator{Jail: runner, BaseFiles: base, DevTestPath: w.devTestKey}
 		w.jailEnum = advpool.JailEnumerator{Jail: runner, BaseFiles: base}
 		// w.depBinds stays nil: there is nothing to bind read-only when the
@@ -1472,7 +1520,7 @@ func buildJailWiring(in jailWiringInput) (w jailWiring, err error) {
 		// RunSpec.Matrix, so wiring it here costs nothing when --matrix is off
 		// (the flag is the real gate).
 		enumerator := adequacy.NewEnumerator(in.iso, in.timeout, adequacy.WithReadOnlyBinds(depBinds))
-		w.scorer = advpool.JailScorer{Jail: jail, BaseFiles: repoFiles, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Concurrency: in.mutantConcurrency}
+		w.scorer = advpool.JailScorer{Jail: jail, BaseFiles: repoFiles, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection}
 		w.validator = advpool.JailValidator{Jail: jail, BaseFiles: repoFiles, DevTestPath: w.devTestKey}
 		w.jailEnum = advpool.JailEnumerator{Jail: enumerator, BaseFiles: repoFiles}
 		if len(depBinds) > 0 {
@@ -1487,7 +1535,7 @@ func buildJailWiring(in jailWiringInput) (w jailWiring, err error) {
 		w.devTestKey = filepath.Base(in.testPath)
 		jail := adequacy.NewJail(in.iso, in.timeout)
 		enumerator := adequacy.NewEnumerator(in.iso, in.timeout)
-		w.scorer = advpool.JailScorer{Jail: jail, MutantTimeout: in.testTimeout, Concurrency: in.mutantConcurrency}
+		w.scorer = advpool.JailScorer{Jail: jail, MutantTimeout: in.testTimeout, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection}
 		w.validator = advpool.JailValidator{Jail: jail}
 		w.jailEnum = advpool.JailEnumerator{Jail: enumerator}
 	}

@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -199,6 +200,14 @@ type JailScorer struct {
 	// placement, which single-file mode wants and which silently graded
 	// nothing on any project that confines discovery to a test root.
 	DevTestPath string
+	// Lang and Selection shape the AUTHORED pass's command (authoredCmd);
+	// the DEV pass's is built by its callers, from the same fields on the
+	// RunSpec, via DevCommand. Lang names the plugin whose WithAuthoredTest appends a
+	// test file's path — under selection the authored test is not in the
+	// evidence and would otherwise never be collected, which reads as TEST
+	// UNSOUND for every file.
+	Lang      string
+	Selection golang.Selection
 	// Concurrency, when > 1, scores that many mutants at once. The zero value
 	// (every existing JailScorer{} literal) is strictly sequential — today's
 	// behavior, unchanged.
@@ -284,6 +293,11 @@ func (s JailScorer) Score(ctx context.Context, codePath, code, test string, muta
 // adequacy.Report instead of collapsing it to a kill rate + survivor slice —
 // so a caller can distinguish a baseline that couldn't pass (CompliantPass
 // false) from a genuine zero-kill (CompliantPass true, len(Killed)==0).
+//
+// It runs EXACTLY the command it is handed. It used to narrow that command to
+// the run's Selection itself, which broke the matrix — whose whole point is to
+// score one named test selector at a time — and which is why narrowing now
+// lives at the callers that mean "the run's command" (see DevCommand).
 func (s JailScorer) ScoreReport(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (adequacy.Report, error) {
 	scoreBase, cmd := s.scoreWorkspace(codePath, test, testCmd)
 
@@ -316,6 +330,7 @@ func (s JailScorer) ScoreReport(ctx context.Context, codePath, code, test string
 // never contained the test at all.
 func (s JailScorer) ScoreAuthoredReport(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (adequacy.Report, error) {
 	scoreBase, cmd := s.scoreWorkspace(codePath, test, testCmd)
+	cmd = s.authoredCmd(codePath, cmd)
 	if s.BaseFiles != nil {
 		scoreBase = s.authoredWorkspace(codePath, test)
 	}
@@ -481,6 +496,121 @@ func (s JailScorer) AuthoredTestWouldBeCollected(ctx context.Context, codePath s
 		return true, nil
 	}
 	return s.verifyAuthoredTestReaches(ctx, codePath, cmd)
+}
+
+// selector is the run's TestSelector, or nil when the run has no Selection
+// or the language has no selector — in which case the authored pass runs the
+// resolved command untouched, exactly as before selection existed.
+func (s JailScorer) selector() golang.TestSelector {
+	return selectorFor(s.Lang, s.Selection)
+}
+
+// DevCommand is the DEV pass's command for a run: the string a caller that
+// means "grade the dev suite as this run grades it" hands to a Scorer.
+//
+// It is a CALLER-side helper, not a scorer-internal rewrite, and that is the
+// fix it embodies. As a rewrite inside ScoreReport it did two wrong things at
+// once: it narrowed a command the caller had chosen deliberately (the
+// matrix's own per-test selector — see driver_matrix.go), and it did nothing
+// at all for Score, so the shadow pass graded the WHOLE suite against the
+// same mutants the primary graded against the selection. Two passes that are
+// meant to be a controlled comparison were answering different questions.
+//
+// Every caller that means "the run's command" calls this; a caller that
+// issues its own command (the matrix, the critic's auto-refute) passes that
+// command through untouched.
+// The run's own TestCmd string is returned VERBATIM when nothing narrowed,
+// not re-rendered: ShellJoin quotes every element, so round-tripping an
+// unchanged command would rewrite `pytest tests/` as `'pytest' 'tests/'` on
+// every pre-selection path. Equivalent to a shell, but not byte-identical,
+// and this string is carried, logged and compared.
+func DevCommand(rs RunSpec) string {
+	base := adequacy.ShellSplit(rs.TestCmd)
+	narrowed := DevCommandArgv(rs.Selection, rs.Lang, base, rs.DevTestPath)
+	if slices.Equal(narrowed, base) {
+		return rs.TestCmd
+	}
+	return adequacy.ShellJoin(narrowed)
+}
+
+// DevCommandArgv is DevCommand's argv form, and the SINGLE definition of what
+// the dev pass runs. cmd/corral's executor resolves its own baseline command
+// for the same job (see localExecutor.testCmd) and the two must be identical
+// — a narrowed scoring run graded against an unnarrowed baseline compares
+// different things and silently corrupts every kill rate — so both go through
+// here rather than each re-deriving it.
+//
+// The selection's own narrowed command when it selected tests. Nothing is
+// appended: the dev suite already lives in the checkout. When the selection
+// is EMPTY (uncovered) the paired dev test file runs ALONE — the evidence
+// says it never reaches the code, so every mutant survives BY MEASUREMENT at
+// the cost of one small file, and the verdict is marked Uncovered rather than
+// printing that 0.00.
+//
+// A zero Selection (or a language with no selector) returns base unchanged,
+// byte-identical to every pre-selection path.
+func DevCommandArgv(sel golang.Selection, langName string, base []string, devTestPath string) []string {
+	ts := selectorFor(langName, sel)
+	if ts == nil {
+		return base
+	}
+	if len(sel.Tests) > 0 {
+		return append([]string{}, sel.Cmd...)
+	}
+	if devTestPath == "" {
+		// Uncovered, but there is no paired test file to run alone. A repo
+		// candidate always has one (pairing is what made it a candidate), so
+		// this is the defensive branch: appending "" would hand pytest an
+		// empty positional argument, and falling through to a bare stripped
+		// base would collect the ENTIRE suite while the record said
+		// "uncovered". Return the base the caller already had — the same
+		// whole-suite command every pre-selection path ran — and let the
+		// Selection's own Fallback/Uncovered fields say what happened.
+		return base
+	}
+	return ts.WithAuthoredTest(sel, base, devTestPath)
+}
+
+// selectorFor is the run's TestSelector, or nil when the run has no
+// Selection or the language has no selector.
+func selectorFor(langName string, sel golang.Selection) golang.TestSelector {
+	if sel.Method == "" {
+		return nil
+	}
+	p, ok := golang.ByName(langName)
+	if !ok {
+		return nil
+	}
+	ts, _ := p.(golang.TestSelector)
+	return ts
+}
+
+// AuthoredCommand is the command the AUTHORED pass really runs for codePath,
+// given the run's own base command — the exported form of authoredCmd, for a
+// caller that must ask a question ABOUT that pass before it happens.
+//
+// The pre-flight (AuthoredTestWouldBeCollected) is the caller this exists
+// for. It was being handed the run's BASE command, which is not what the
+// authored pass runs: the authored pass appends the authored test's own path
+// precisely so a project whose discovery config excludes it still collects
+// it. Checking the base command therefore refused audits — before any model
+// ran, naming the operator's command as the fault — for a problem the run had
+// already solved.
+func (s JailScorer) AuthoredCommand(codePath string, base []string) []string {
+	return s.authoredCmd(codePath, base)
+}
+
+// authoredCmd is the AUTHORED pass's command: the selection plus the path
+// the authored test is actually placed at (authoredWorkspace writes it
+// there). The evidence run never saw that file, so without this the
+// narrowed command would never collect it and every file would read
+// TEST UNSOUND.
+func (s JailScorer) authoredCmd(codePath string, cmd []string) []string {
+	ts := s.selector()
+	if ts == nil {
+		return cmd
+	}
+	return ts.WithAuthoredTest(s.Selection, cmd, authoredTestPath(codePath, s.DevTestPath, s.BaseFiles))
 }
 
 // scoreWorkspace builds the jail base file-map and the test command for a

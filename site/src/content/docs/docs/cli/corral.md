@@ -221,7 +221,7 @@ Usage of certify --repo:
   -repo string
     	path of the repository to audit (required)
   -scope-tests
-    	grade each file against its OWN paired test file instead of the project's whole suite. MUCH faster — scoring runs the suite once per mutant, so this collapses an O(mutants x suite runtime) cost — but it CHANGES THE MEASUREMENT: a mutant that some unrelated test happened to catch now reads as a survivor, so the reported gap count can go UP. Ignored when an explicit -- <cmd> is given, and for languages with no verified per-file invocation
+    	REMOVED — see --whole-suite. Selection by coverage evidence is now the default
   -shadow-model string
     	challenger model that attacks every region a SECOND time. OFF unless named. Recorded for comparison — NEVER gates the verdict
   -shadow-writer-model string
@@ -236,6 +236,8 @@ Usage of certify --repo:
     	per-file budget: give up on a single file's run if it makes no progress for this long (not a hard wall-clock cap — a single slow LLM call can overshoot it). Same default and semantics as certify --local's --timeout; raise it for a large file that needs more room to converge (default 10m0s)
   -top int
     	audit only the N highest-ranked candidates (0 or --all = every candidate). Bounded by default: a whole-repo audit runs a full herd per file, so an unbounded first scan on a large repo costs hours and real money. The DEFAULT bound does not apply with --goals — a hand-written goals map has already chosen the surface — but an explicit --top does (default 25)
+  -whole-suite
+    	grade every mutant against the project's WHOLE suite instead of the tests that demonstrably execute each file (the default, from one instrumented run per scan). Costs O(mutants x whole-suite runtime) per file and answers a different question — 'did ANY test catch it' rather than 'do this file's tests test it'. The verdict records which was used
   -writer-model string
     	model for the test-writer role — REQUIRED, corral has no default models
 ```

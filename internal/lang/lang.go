@@ -231,6 +231,18 @@ type FailureDeselector interface {
 // caller must surface it — a whole-suite grade under selection is a
 // different measurement and the record must say which one it is.
 type Selection struct {
+	// Base is the operator's own command with its COLLECTION TARGETS
+	// removed — the prefix Cmd (and WithAuthoredTest) append to. It exists
+	// because appending is not narrowing on a runner that unions positional
+	// arguments: `pytest tests/ tests/test_a.py::test_x` collects all of
+	// tests/, so a selection appended to the common `-- pytest tests/`
+	// shape would run the whole suite while the verdict, the ledger, the
+	// warehouse, the attestation and the cache key all said
+	// "coverage-context". Options and their values survive; only tokens the
+	// evidence run proves are collection targets are dropped. nil means the
+	// plugin computed no base (e.g. a zero Selection) and a caller falls
+	// back to the command it already had.
+	Base     []string
 	Cmd      []string
 	Tests    []string
 	Method   string
@@ -257,7 +269,11 @@ type TestSelector interface {
 	// instrumented — the caller grades whole-suite, disclosed.
 	Instrument(testCmd []string) (cmd []string, ok bool)
 	// Select reads that run's output and returns the narrowed command for
-	// codePath plus what it selected. testPath is the file's paired test:
+	// codePath plus what it selected. It also returns Base — testCmd with
+	// the operator's own collection targets removed, resolved against
+	// repoRoot — because on a runner that UNIONS positional arguments
+	// (pytest does) appending to the raw command narrows nothing at all.
+	// testPath is the file's paired test:
 	// a codePath ABSENT from the evidence is uncovered only when testPath is
 	// present (the suite ran the tests meant to cover it); absent both, the
 	// suite may never have run that test, and Select errors — the caller
@@ -266,6 +282,8 @@ type TestSelector interface {
 	// WithAuthoredTest returns the command for the POOL pass: the selection
 	// plus the pool's authored test at authoredTestPath, so the authored
 	// test is collected even though no evidence run ever saw it. When
-	// sel.Tests is empty the result runs the authored test alone.
+	// sel.Tests is empty the result runs the authored test alone — built on
+	// sel.Base when the Selection carries one, so "alone" is true rather
+	// than "alongside whatever the operator's targets collect".
 	WithAuthoredTest(sel Selection, testCmd []string, authoredTestPath string) []string
 }

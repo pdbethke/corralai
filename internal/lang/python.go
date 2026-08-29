@@ -1114,7 +1114,7 @@ func (pyPlugin) Select(evidence []byte, repoRoot, codePath, testPath string, tes
 		}
 		mine = map[string]bool{}
 	}
-	sel := Selection{Method: "coverage-context", Of: len(all)}
+	sel := Selection{Method: "coverage-context", Of: len(all), Base: stripPyCollectionTargets(testCmd, root)}
 	if len(mine) == 0 {
 		return sel, nil
 	}
@@ -1135,17 +1135,123 @@ func (pyPlugin) Select(evidence []byte, repoRoot, codePath, testPath string, tes
 		sort.Strings(ids)
 	}
 	sel.Tests = ids
-	sel.Cmd = append(append([]string{}, testCmd...), ids...)
+	sel.Cmd = append(append([]string{}, sel.Base...), ids...)
 	return sel, nil
+}
+
+// pyValueOptions are the pytest options that take their value as a SEPARATE
+// argv word. The word after one of these is that option's value, never a
+// collection target — `pytest --maxfail 3` names no path called "3", and
+// stripping it would change the run. A token containing `=` carries its own
+// value (`--maxfail=3`) and consumes nothing.
+//
+// The list is explicit rather than a heuristic ("a bare word after any
+// flag") for the reason the whole feature exists: guessing wrong here either
+// leaves the suite unnarrowed (silently grading the wrong thing) or eats an
+// option's value (changing what the operator asked to run). Options that
+// take NO value — -x, -q, -s, -v — are deliberately absent, so the word
+// after them is examined like any other.
+var pyValueOptions = map[string]bool{
+	"-k": true, "-m": true, "-p": true, "-c": true, "-o": true, "-W": true,
+	"-n": true, "-r": true,
+	"--maxfail": true, "--rootdir": true, "--confcutdir": true,
+	"--basetemp": true, "--junitxml": true, "--log-level": true,
+	"--log-file": true, "--import-mode": true, "--deselect": true,
+	"--ignore": true, "--ignore-glob": true, "--override-ini": true,
+	"--tb": true, "--durations": true, "--cov": true, "--cov-config": true,
+	"--cov-report": true, "--cov-context": true, "--cov-fail-under": true,
+}
+
+// stripPyCollectionTargets returns testCmd with its collection targets
+// removed, so appended node ids actually NARROW the run instead of joining a
+// union. pytest treats positional arguments as a union of collection roots:
+// `pytest tests/ tests/test_a.py::test_x` runs all of tests/. The Action's
+// required test-command and corral's own not-collected advice both recommend
+// exactly the `pytest tests/` shape, so on the most common invocation nothing
+// would be narrowed while every record claimed coverage-context.
+//
+// A token is a collection target — and only then is it removed — when ALL of:
+//
+//   - it does not start with `-` (options stay, always);
+//   - it is not the separate value of the preceding option (pyValueOptions);
+//   - it contains `::` (a node id can be nothing else) OR names a path that
+//     exists under repoRoot.
+//
+// A positional token that is NOT an existing path is LEFT ALONE: it survived
+// the evidence run, so pytest accepted it as something other than a missing
+// path (an ini-configured value, a plugin's own positional), and removing it
+// would change a command that demonstrably works. Index 0 is the program
+// itself and is never examined.
+//
+// repoRoot may be "" (a caller with no checkout — the recorded-evidence and
+// hosted paths): existence cannot then be tested, so only `::` tokens are
+// recognised, which is the fail-open direction — the run stays exactly as
+// wide as it is today rather than losing a target nothing verified.
+func stripPyCollectionTargets(testCmd []string, repoRoot string) []string {
+	if len(testCmd) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(testCmd))
+	out = append(out, testCmd[0])
+	for i := 1; i < len(testCmd); i++ {
+		tok := testCmd[i]
+		if strings.HasPrefix(tok, "-") {
+			out = append(out, tok)
+			continue
+		}
+		prev := testCmd[i-1]
+		if strings.HasPrefix(prev, "-") && !strings.Contains(prev, "=") && pyValueOptions[prev] {
+			out = append(out, tok)
+			continue
+		}
+		if isPyCollectionTarget(tok, repoRoot) {
+			continue
+		}
+		out = append(out, tok)
+	}
+	return out
+}
+
+// isPyCollectionTarget reports whether tok names tests to collect: a node id
+// (`path::selector`), or an existing file/directory under repoRoot. The path
+// is resolved against repoRoot, never the process's own cwd, and an absolute
+// or escaping token is refused rather than statted — a scan confines every
+// read to the checkout it was pointed at.
+func isPyCollectionTarget(tok, repoRoot string) bool {
+	if tok == "" {
+		return false
+	}
+	if strings.Contains(tok, "::") {
+		return true
+	}
+	if repoRoot == "" || filepath.IsAbs(tok) {
+		return false
+	}
+	rel := filepath.Clean(filepath.FromSlash(tok))
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(repoRoot, rel))
+	return err == nil
 }
 
 // WithAuthoredTest appends the authored test's path so pytest collects it
 // alongside the selection; with an empty selection it runs the authored
 // test alone — the uncovered case, where the pool's test is the only test.
+//
+// "Alone" has to mean alone: the uncovered branch builds on sel.Base (the
+// operator's command with its collection targets stripped), not on the raw
+// testCmd, or `pytest tests/` + the authored path would collect all of
+// tests/ and grade a file the evidence says nothing executes against the
+// entire suite. sel.Base is nil only for a Selection this plugin did not
+// compute, where testCmd is all there is.
 func (pyPlugin) WithAuthoredTest(sel Selection, testCmd []string, authoredTestPath string) []string {
 	base := sel.Cmd
 	if len(sel.Tests) == 0 {
 		base = testCmd
+		if sel.Base != nil {
+			base = sel.Base
+		}
 	}
 	return append(append([]string{}, base...), authoredTestPath)
 }

@@ -195,3 +195,68 @@ func TestPythonSelectionEndToEndOnFixture(t *testing.T) {
 // The plugin must satisfy the extension, and nothing may still satisfy the
 // retired one.
 var _ TestSelector = pyPlugin{}
+
+// C1. pytest UNIONS positional args: `pytest tests/ tests/test_a.py::test_x`
+// collects all of tests/, so appending node ids to a command that names a
+// collection target narrows NOTHING while the verdict, the ledger and the
+// cache key all say "coverage-context". Select therefore strips the
+// operator's collection targets and keeps everything else — options, their
+// values, and any positional token that is not a path this repo has.
+func TestPythonSelectStripsCollectionTargetsFromTheBaseCommand(t *testing.T) {
+	fixture, err := filepath.Abs(filepath.Join("testdata", "pycov-fixture"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := []string{"tests/test_calc.py::test_add", "tests/test_other.py::test_sub"}
+	for _, tc := range []struct {
+		name string
+		base []string
+		want []string // the expected Base (command with targets stripped)
+	}{
+		{"a directory target", []string{"pytest", "tests/"}, []string{"pytest"}},
+		{
+			"marker option keeps its value, the directory goes",
+			[]string{"python3", "-m", "pytest", "-q", "-k", "not slow", "tests/"},
+			[]string{"python3", "-m", "pytest", "-q", "-k", "not slow"},
+		},
+		{"a node id target", []string{"pytest", "tests/test_calc.py::test_add"}, []string{"pytest"}},
+		{"an option value that is not a path is untouched", []string{"pytest", "--maxfail", "3"}, []string{"pytest", "--maxfail", "3"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sel, err := pyPlugin{}.Select(recordedEvidence(t), fixture, "pkg/calc.py", "tests/test_calc.py", tc.base)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(sel.Base, tc.want) {
+				t.Errorf("Base = %v, want %v", sel.Base, tc.want)
+			}
+			wantCmd := append(append([]string{}, tc.want...), ids...)
+			if !reflect.DeepEqual(sel.Cmd, wantCmd) {
+				t.Errorf("Cmd = %v, want %v", sel.Cmd, wantCmd)
+			}
+		})
+	}
+}
+
+// The uncovered pass inverts the same way: without the strip, the authored
+// test's path is appended to a command that still names tests/, so the whole
+// suite runs and the "no test executes this file" finding is graded against
+// everything.
+func TestPythonWithAuthoredTestUsesTheStrippedBase(t *testing.T) {
+	fixture, err := filepath.Abs(filepath.Join("testdata", "pycov-fixture"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel, err := pyPlugin{}.Select(recordedEvidence(t), fixture, "pkg/untested.py", "tests/test_calc.py", []string{"pytest", "tests/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sel.Tests) != 0 {
+		t.Fatalf("fixture setup: want an uncovered selection, got %v", sel.Tests)
+	}
+	got := pyPlugin{}.WithAuthoredTest(sel, []string{"pytest", "tests/"}, "tests/test_corral_untested.py")
+	want := []string{"pytest", "tests/test_corral_untested.py"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("uncovered authored cmd = %v, want %v (the stripped base + the authored test alone)", got, want)
+	}
+}

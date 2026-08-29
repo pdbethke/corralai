@@ -58,6 +58,34 @@ func TestAuthoredPassAppendsTheAuthoredTestsRealPath(t *testing.T) {
 	}
 }
 
+// C1. The operator's command names a collection target (`pytest tests/`),
+// which pytest UNIONS with anything appended — so both passes must build on
+// the Selection's stripped Base, never on the raw command, or the narrowing
+// is a claim with no run behind it.
+func TestBothPassesBuildOnTheSelectionsStrippedBase(t *testing.T) {
+	raw := []string{"pytest", "tests/"}
+	s := repoScorer(lang.Selection{
+		Base:  []string{"pytest"},
+		Cmd:   []string{"pytest", "tests/test_a.py::test_x"},
+		Tests: []string{"tests/test_a.py::test_x"}, Method: "coverage-context",
+	})
+	if got, want := s.devCmd("pkg/a.py", raw), []string{"pytest", "tests/test_a.py::test_x"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("dev cmd = %v, want %v — tests/ must not survive", got, want)
+	}
+	authored := authoredTestPath("pkg/a.py", s.DevTestPath, s.BaseFiles)
+	if got, want := s.authoredCmd("pkg/a.py", raw), []string{"pytest", "tests/test_a.py::test_x", authored}; !reflect.DeepEqual(got, want) {
+		t.Errorf("authored cmd = %v, want %v", got, want)
+	}
+	// Uncovered: Base alone plus the one test being run.
+	u := repoScorer(lang.Selection{Base: []string{"pytest"}, Method: "coverage-context"})
+	if got, want := u.devCmd("pkg/a.py", raw), []string{"pytest", "tests/test_a.py"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("uncovered dev cmd = %v, want %v", got, want)
+	}
+	if got, want := u.authoredCmd("pkg/a.py", raw), []string{"pytest", authored}; !reflect.DeepEqual(got, want) {
+		t.Errorf("uncovered authored cmd = %v, want %v", got, want)
+	}
+}
+
 func TestWholeSuiteLeavesBothPassesUnchanged(t *testing.T) {
 	s := repoScorer(lang.Selection{})
 	base := []string{"python3", "-m", "pytest", "-q"}
@@ -71,7 +99,7 @@ func TestWholeSuiteLeavesBothPassesUnchanged(t *testing.T) {
 
 func TestAggregateCarriesTheSelectionOntoTheVerdict(t *testing.T) {
 	rs := RunSpec{Selection: lang.Selection{Method: "coverage-context", Tests: []string{"a", "b"}, Of: 40}}
-	v := verdictFromSpec(rs) // whatever aggregate.go's constructor is named — see Step 3
+	v := verdictFromSpec(rs)
 	if v.TestSelection.Method != "coverage-context" || v.TestSelection.Selected != 2 || v.TestSelection.Of != 40 || v.Uncovered {
 		t.Errorf("got %+v", v.TestSelection)
 	}

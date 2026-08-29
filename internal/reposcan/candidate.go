@@ -176,7 +176,7 @@ func gitIgnored(root string) (files, dirs map[string]bool, err error) {
 	if lerr != nil {
 		return nil, nil, nil
 	}
-	probe := exec.Command(git, "-C", root, "rev-parse", "--is-inside-work-tree")
+	probe := exec.Command(git, "-C", root, "rev-parse", "--is-inside-work-tree") // #nosec G204 -- git resolved via LookPath; root is the operator's own scan root; every other arg literal
 	if out, perr := probe.Output(); perr != nil || strings.TrimSpace(string(out)) != "true" {
 		var exit *exec.ExitError
 		if perr != nil && !errors.As(perr, &exit) {
@@ -184,7 +184,7 @@ func gitIgnored(root string) (files, dirs map[string]bool, err error) {
 		}
 		return nil, nil, nil
 	}
-	ls := exec.Command(git, "-C", root, "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory")
+	ls := exec.Command(git, "-C", root, "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory") // #nosec G204 -- same: LookPath binary, operator's root, literal args
 	out, lserr := ls.Output()
 	if lserr != nil {
 		return nil, nil, fmt.Errorf("git ls-files --ignored in %s: %w", root, lserr)

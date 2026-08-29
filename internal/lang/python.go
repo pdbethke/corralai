@@ -994,13 +994,61 @@ func (pyPlugin) Instrument(testCmd []string) (cmd []string, ok bool) {
 		q[i] = shellArg(a)
 	}
 	qi := shellArg(interp)
+	// COVERAGE_CORE=ctrace on BOTH steps: coverage's sysmon core — its
+	// default on Python 3.12+ — does not support dynamic contexts. It warns
+	// "context data may be incomplete", which under a project's
+	// filterwarnings=error fails every test at setup (flask: 985 errors,
+	// every file read as uncovered) and otherwise records partial contexts
+	// (requests: 11 of the 234 tests that execute adapters.py). The C
+	// tracer supports contexts on every supported Python; a build without
+	// it fails loudly here and the scan grades whole-suite, disclosed.
+	//
+	// The suite must PASS (rc 0). CoverageCmd tolerates rc 1 because a
+	// failing suite still yields useful file-level coverage; for selection
+	// that tolerance is wrong — the tests that fail at setup execute
+	// nothing, are never selected, and the narrowed baseline then passes on
+	// a suite the whole-suite baseline would refuse (#164).
+	//
+	// The evidence is reduced INSIDE the run, from the coverage API, to
+	// {file: [node ids]} — `coverage json --show-contexts` emits every
+	// context of every line and was 411 MB on flask (branch=true); the
+	// reduced form of the same run is 331 KB (#165).
 	script := `f=$(mktemp) && trap 'rm -f "$f"' EXIT && ` +
-		`COVERAGE_FILE="$f" ` + qi + " -m " + strings.Join(q, " ") +
+		`COVERAGE_CORE=ctrace COVERAGE_FILE="$f" ` + qi + " -m " + strings.Join(q, " ") +
 		` --cov --cov-context=test --cov-report= -p no:cacheprovider` +
-		`; rc=$?; case $rc in 0|1) ;; *) exit "$rc" ;; esac; ` +
-		`COVERAGE_FILE="$f" ` + qi + " -m coverage json --show-contexts -o -"
+		`; rc=$?; [ "$rc" -eq 0 ] || exit "$rc"; ` +
+		`COVERAGE_CORE=ctrace COVERAGE_FILE="$f" ` + qi + " - <<'PY'\n" + pySelectionReducer + "PY\n"
 	return []string{"sh", "-c", script}, true
 }
+
+// pySelectionReducer runs after the instrumented suite, in the same shell,
+// against the data file the run wrote. It emits ONE compact JSON document:
+// per measured file (repo-relative, from the cwd the suite ran in), the
+// sorted node ids of every test whose context executed a line of it, with
+// pytest-cov's `|setup`/`|run`/`|teardown` phase suffix stripped; and the
+// number of distinct tests seen anywhere. Nothing per line, nothing per
+// context — Select needs the set, not the trace.
+const pySelectionReducer = `import json, os, sys
+import coverage
+cov = coverage.Coverage(data_file=os.environ["COVERAGE_FILE"])
+cov.load()
+data = cov.get_data()
+root = os.getcwd()
+files = {}
+tests = set()
+for path in data.measured_files():
+    rel = os.path.relpath(path, root)
+    if rel.startswith(".."):
+        continue
+    ids = set()
+    for ctxs in data.contexts_by_lineno(path).values():
+        for c in ctxs:
+            if c:
+                ids.add(c.rsplit("|", 1)[0])
+    tests.update(ids)
+    files[rel] = sorted(ids)
+json.dump({"format": "corral-selection-1", "tests": len(tests), "files": files}, sys.stdout, separators=(",", ":"))
+`
 
 // shellArg renders one Instrument argv element for inclusion in its sh -c
 // script: bare when it is already safe unquoted (so a plain pytest
@@ -1026,18 +1074,24 @@ func shellArg(s string) string {
 // pyContextReport is the subset of `coverage json --show-contexts` Select
 // reads. contexts maps a line number (as a string) to the contexts that
 // executed it; pytest-cov names a test context `<nodeid>|<phase>`.
-type pyContextReport struct {
-	Meta   map[string]any `json:"meta"`
-	Totals struct {
-		CoveredLines int `json:"covered_lines"`
-	} `json:"totals"`
-	Files map[string]struct {
-		Summary struct {
-			NumStatements int `json:"num_statements"`
-			CoveredLines  int `json:"covered_lines"`
-		} `json:"summary"`
-		Contexts map[string][]string `json:"contexts"`
-	} `json:"files"`
+// pySelectionFormat stamps the reducer's output so Select refuses any other
+// document — including the full coverage-json it used to parse — by name.
+const pySelectionFormat = "corral-selection-1"
+
+// pySelectionEvidence is what pySelectionReducer emits: repo-relative file →
+// sorted node ids of the tests that executed it; Tests is the count of
+// distinct tests seen across the whole run.
+type pySelectionEvidence struct {
+	Format string `json:"format"`
+	Tests  int    `json:"tests"`
+	// Files is decoded in a second step, after Format has been checked, so
+	// a document of another shape is refused BY NAME rather than with an
+	// unmarshal error about a field it was never meant to have.
+	Files map[string][]string `json:"-"`
+}
+
+type pySelectionEvidenceFiles struct {
+	Files map[string][]string `json:"files"`
 }
 
 // Select narrows testCmd to the tests whose recorded context executed any
@@ -1049,13 +1103,13 @@ func (pyPlugin) Select(evidence []byte, repoRoot, codePath, testPath string, tes
 	// own shape). It may also be the JSON alone, pretty-printed across many
 	// lines (a recorded fixture) — try the whole trimmed payload first, and
 	// only fall back to the last-line-of-stdout rule on failure.
-	var rep pyContextReport
-	whole := strings.TrimSpace(string(evidence))
-	if whole == "" {
+	var rep pySelectionEvidence
+	payload := strings.TrimSpace(string(evidence))
+	if payload == "" {
 		return Selection{}, fmt.Errorf("lang: python selection evidence is empty")
 	}
-	if err := json.Unmarshal([]byte(whole), &rep); err != nil {
-		payload := lastNonEmptyLine(evidence)
+	if err := json.Unmarshal([]byte(payload), &rep); err != nil {
+		payload = lastNonEmptyLine(evidence)
 		if payload == "" {
 			return Selection{}, fmt.Errorf("lang: python selection evidence is empty")
 		}
@@ -1063,20 +1117,24 @@ func (pyPlugin) Select(evidence []byte, repoRoot, codePath, testPath string, tes
 			return Selection{}, fmt.Errorf("lang: unparseable python selection evidence (last line is not JSON): %w", err)
 		}
 	}
-	if rep.Meta == nil || rep.Files == nil {
-		return Selection{}, fmt.Errorf("lang: python selection evidence is not a coverage-json report")
+	if rep.Format != pySelectionFormat {
+		return Selection{}, fmt.Errorf("lang: python selection evidence is not a %s document (format %q)", pySelectionFormat, rep.Format)
 	}
-	if rep.Totals.CoveredLines == 0 {
-		return Selection{}, fmt.Errorf("lang: python selection evidence covers 0 lines — the suite most likely never ran")
+	var files pySelectionEvidenceFiles
+	if err := json.Unmarshal([]byte(payload), &files); err != nil {
+		return Selection{}, fmt.Errorf("lang: unparseable %s files: %w", pySelectionFormat, err)
+	}
+	rep.Files = files.Files
+	if rep.Files == nil {
+		return Selection{}, fmt.Errorf("lang: python selection evidence has no files — the suite most likely never ran")
 	}
 
 	root := normalizePyRepoRoot(repoRoot)
 	want := filepath.ToSlash(codePath)
 	wantTest := filepath.ToSlash(testPath)
-	all := map[string]bool{}
 	var mine map[string]bool
 	sawTest := false
-	for path, f := range rep.Files {
+	for path, ids := range rep.Files {
 		p, ok := alignPyPath(path, root)
 		if !ok {
 			continue
@@ -1084,23 +1142,11 @@ func (pyPlugin) Select(evidence []byte, repoRoot, codePath, testPath string, tes
 		if wantTest != "" && p == wantTest {
 			sawTest = true
 		}
-		for _, cs := range f.Contexts {
-			for _, c := range cs {
-				id := contextNodeID(c)
-				if id == "" {
-					continue
-				}
-				all[id] = true
-				if p == want {
-					if mine == nil {
-						mine = map[string]bool{}
-					}
-					mine[id] = true
-				}
+		if p == want {
+			mine = map[string]bool{} // measured; executed by these tests, or by none
+			for _, id := range ids {
+				mine[id] = true
 			}
-		}
-		if p == want && mine == nil {
-			mine = map[string]bool{} // measured, executed by no test
 		}
 	}
 	if mine == nil {
@@ -1114,7 +1160,7 @@ func (pyPlugin) Select(evidence []byte, repoRoot, codePath, testPath string, tes
 		}
 		mine = map[string]bool{}
 	}
-	sel := Selection{Method: "coverage-context", Of: len(all), Base: stripPyCollectionTargets(testCmd, root)}
+	sel := Selection{Method: "coverage-context", Of: rep.Tests, Base: stripPyCollectionTargets(testCmd, root)}
 	if len(mine) == 0 {
 		return sel, nil
 	}
@@ -1254,19 +1300,6 @@ func (pyPlugin) WithAuthoredTest(sel Selection, testCmd []string, authoredTestPa
 		}
 	}
 	return append(append([]string{}, base...), authoredTestPath)
-}
-
-// contextNodeID reduces a pytest-cov context (`tests/test_a.py::test_x|run`)
-// to its node id. The empty context ("" — code executed outside any test,
-// e.g. at import) is not a test and yields "".
-func contextNodeID(ctx string) string {
-	if ctx == "" {
-		return ""
-	}
-	if i := strings.LastIndex(ctx, "|"); i >= 0 {
-		ctx = ctx[:i]
-	}
-	return filepath.ToSlash(ctx)
 }
 
 // argvLen approximates the length of a command line carrying args, as one

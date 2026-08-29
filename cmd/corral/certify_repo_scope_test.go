@@ -13,9 +13,9 @@ import (
 
 // pyEvidence is one instrumented run's answer for a repo where
 // tests/test_target.py (and nothing else) executes src/pkg/target.py.
-const pyEvidence = `{"meta":{},"totals":{"covered_lines":2},"files":{` +
-	`"src/pkg/target.py":{"summary":{"num_statements":1,"covered_lines":1},"contexts":{"1":["tests/test_target.py::test_t|run"]}},` +
-	`"src/pkg/other.py":{"summary":{"num_statements":1,"covered_lines":1},"contexts":{"1":["tests/test_other.py::test_o|run"]}}}}`
+const pyEvidence = `{"format":"corral-selection-1","tests":2,"files":{` +
+	`"src/pkg/target.py":["tests/test_target.py::test_t"],"tests/test_target.py":["tests/test_target.py::test_t"],` +
+	`"src/pkg/other.py":["tests/test_other.py::test_o"],"tests/test_other.py":["tests/test_other.py::test_o"]}}`
 
 // TestSelectionResolvesThePerJobCommand covers the one change that decides
 // whether corral is practical. Scoring runs the target's whole suite once per

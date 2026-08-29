@@ -1568,37 +1568,22 @@ const preflightMaxOutput = 8 << 20
 const preflightTimeout = 5 * time.Minute
 
 // selectionMaxOutput and selectionTimeout bound the ONE instrumented run
-// selection evidence comes from. They are SEPARATE from the pre-flight's own
-// bounds above, and much larger, because they bound a different payload: the
-// pre-flight reads a coverage SUMMARY, while selection reads
-// `coverage json --show-contexts`, which lists every executing test's node id
-// against every line it touched. That is quadratic-ish in (tests × lines) and
-// nothing reduces it before the cap sees it.
+// selection evidence comes from — separately from the coverage pre-flight's
+// bounds, which were sized for a payload Go reduces to a few KB before the
+// cap ever sees it. A truncated evidence document is unparseable evidence,
+// and the whole scan then grades whole-suite — disclosed, but the exact
+// silent-degradation shape this feature exists to avoid.
 //
-// MEASURED 2026-08-29, running lang.pyPlugin.Instrument's exact `sh -c`
-// script in a venv of each project's own pinned dependencies, on this
-// workstation:
-//
-//	pallets/flask   4,716,984 bytes (4.5 MiB)   19.9 s
-//	psf/requests   29,513,163 bytes (28.1 MiB)  47.4 s
-//
-// requests is the sizing case, and it is not a large project: 28 MiB of
-// context JSON from a suite that runs in well under a minute. The 8 MiB
-// pre-flight cap would have TRUNCATED it — mid-JSON, so Select would report
-// unparseable evidence and the whole scan would fall back to the whole suite,
-// which is exactly the silent-degradation shape this feature exists to avoid.
-//
-// Sized at ≥8× the measured bytes and ≥3× the measured seconds, with floors
-// of 64 MiB / 15 min so a project several times requests' size still fits:
-// 256 MiB is ~9× requests, and 15 min is ~19×. Generous on purpose — the cost
-// of over-sizing is bounded memory on one run, and the cost of under-sizing
-// is a scan that silently grades a different question.
-//
-// REDUCING the payload before it is read (the way goCoverageReduceScript
-// already does for Go profiles) is the real answer and is not built; see
-// docs/design/test-selection.md.
-const selectionMaxOutput = 256 << 20
+// The Python reducer runs inside the instrumented shell and emits
+// {file: [node ids]}, measured 2026-08-29: flask 331,457 bytes, requests
+// 364,300 bytes (the unreduced `coverage json --show-contexts` for the same
+// flask run was 411 MB — see docs/design/test-selection.md). 64 MiB is ~180×
+// that; 15 min is ~11× requests' 79 s suite. Generous on purpose: over-sizing
+// costs bounded memory on one run, under-sizing costs a scan that silently
+// grades a different question.
+const selectionMaxOutput = 64 << 20
 
+// selectionTimeout: see selectionMaxOutput.
 const selectionTimeout = 15 * time.Minute
 
 // coverageRunner is the minimal seam runPreflight needs to hand to

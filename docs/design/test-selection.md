@@ -29,31 +29,39 @@ proven.
 Selection costs one extra instrumented run of the whole suite per scan, and
 that run's output is the payload the scan reads back. Measured 2026-08-29 by
 running `lang.pyPlugin.Instrument`'s exact `sh -c` script in a venv of each
-project's own pinned dependencies:
+project's own pinned test dependencies (`requirements-dev.txt` for requests),
+on Python 3.14 / coverage 7.16:
 
-| project | payload | wall time |
-|---|---|---|
-| pallets/flask | 4,716,984 bytes (4.5 MiB) | 19.9 s |
-| psf/requests | 29,513,163 bytes (28.1 MiB) | 47.4 s |
+| project | suite | tests seen | evidence for the audited file | reduced payload | wall time |
+|---|---|---|---|---|---|
+| pallets/flask | 491 passed | 491 | `src/flask/cli.py` ← 91 tests | 331,457 bytes | 3.4 s (suite) + 0.24 s (reduce) |
+| psf/requests | 620 passed | 620 | `src/requests/adapters.py` ← 234 tests | 364,300 bytes | 79 s + 0.16 s |
 
-`coverage json --show-contexts` lists every executing test's node id against
-every line it touched, so the payload grows with *tests × lines*, not with
-either alone. requests is not a large project and still emits 28 MiB from a
-suite that finishes in under a minute.
+Two facts under those numbers, both learned the expensive way on the first
+acceptance run:
 
-The evidence run therefore has its own bounds — `selectionMaxOutput`
-(256 MiB) and `selectionTimeout` (15 min) in `cmd/corral/certify_repo.go` —
-separate from the coverage pre-flight's 8 MiB / 5 min, which bound a coverage
-*summary*. At 8 MiB the requests payload truncates mid-JSON, `Select` reports
-unparseable evidence, and the whole scan silently falls back to the whole
-suite: a different measurement, arrived at by a size limit.
+- **The tracer is pinned.** coverage.py's `sysmon` core — its default on
+  Python 3.12+ — does not support dynamic contexts. It warns "context data may
+  be incomplete"; under flask's `filterwarnings = ["error"]` that warning
+  failed all 985 tests at setup and every file read as *uncovered*, and on
+  requests it recorded 11 of the 234 tests that actually execute
+  `adapters.py`. `Instrument` sets `COVERAGE_CORE=ctrace` on both steps.
+- **The payload is reduced inside the run.** `coverage json --show-contexts`
+  lists every context of every line: on flask (`branch = true`) that is
+  **411,563,128 bytes** for the run above. The reducer that now runs after the
+  suite, from the coverage API, emits `{file: [node ids]}` — the same facts in
+  331 KB, 1,240× smaller — as a `corral-selection-1` document that `Select`
+  refuses to confuse with anything else.
 
-**Next step, not built:** reducing the payload inside the run, the way
-`goCoverageReduceScript` already reduces Go's raw coverage profile before
-anything reads it. A per-file line→contexts map collapses to a per-file set
-of node ids, which is all `Select` ever uses. Until that lands the cap is the
-only thing standing between a very large repository and a scan that grades a
-question it did not announce.
+The evidence run must also **pass** (exit 0). A suite whose tests error at
+setup executes nothing in those tests, so they are never selected, the
+narrowed baseline passes, and a kill rate is reported for a suite the
+whole-suite baseline would have refused (#164). Selection is a subset of the
+whole suite's guarantees only when the whole suite is green.
+
+The scan bounds the evidence run separately from the coverage pre-flight —
+`selectionMaxOutput` (64 MiB, ~180× the measured payload) and
+`selectionTimeout` (15 min, ~11× requests) in `cmd/corral/certify_repo.go`.
 
 ## Why selection is by execution evidence only
 

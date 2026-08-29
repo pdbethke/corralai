@@ -48,6 +48,26 @@ func TestFileAuditConfigKeysThePerFileGradingMode(t *testing.T) {
 		}
 	}
 
+	// The MODE is not the whole measurement: two files graded by
+	// coverage-context against DIFFERENT sets of tests are two different
+	// answers, and the caller keys the ids (see cmd/corral's
+	// fileSelectionKey). Pin that a component differing only in that digest
+	// really does move the key.
+	ids := base
+	ids.FileAuditConfig = func(c Candidate) string {
+		if c.Path == "pkg/a.go" {
+			return "file-selection=coverage-context,selected-tests=aaaa"
+		}
+		return "file-selection=coverage-context,selected-tests=bbbb"
+	}
+	byIDs, _, err := EmitJobs(ids, cands, gs)
+	if err != nil {
+		t.Fatalf("EmitJobs (selected-tests): %v", err)
+	}
+	if byIDs[0].CacheKey == byIDs[1].CacheKey {
+		t.Error("two selections differing in one id key identically — a verdict measured by tests that no longer grade the file would be served")
+	}
+
 	// An empty per-file component must key exactly as no hook at all: a dry
 	// run supplies nothing, and it must not invalidate every cached verdict.
 	empty := base

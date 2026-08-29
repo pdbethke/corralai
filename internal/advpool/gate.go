@@ -585,6 +585,21 @@ func selectorFor(langName string, sel golang.Selection) golang.TestSelector {
 	return ts
 }
 
+// AuthoredCommand is the command the AUTHORED pass really runs for codePath,
+// given the run's own base command — the exported form of authoredCmd, for a
+// caller that must ask a question ABOUT that pass before it happens.
+//
+// The pre-flight (AuthoredTestWouldBeCollected) is the caller this exists
+// for. It was being handed the run's BASE command, which is not what the
+// authored pass runs: the authored pass appends the authored test's own path
+// precisely so a project whose discovery config excludes it still collects
+// it. Checking the base command therefore refused audits — before any model
+// ran, naming the operator's command as the fault — for a problem the run had
+// already solved.
+func (s JailScorer) AuthoredCommand(codePath string, base []string) []string {
+	return s.authoredCmd(codePath, base)
+}
+
 // authoredCmd is the AUTHORED pass's command: the selection plus the path
 // the authored test is actually placed at (authoredWorkspace writes it
 // there). The evidence run never saw that file, so without this the

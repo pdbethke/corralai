@@ -509,24 +509,12 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		TestSurfacePaths: surfacePaths,
 		// auditConfig above says the SCAN ran selection; it cannot say that
 		// THIS file fell back to the whole suite because the evidence never
-		// saw it. Without a per-file component a re-scan could serve a
-		// whole-suite verdict as a selected one, which is the single rule the
-		// verdict cache has. The MODE only — never the Fallback text, which
-		// can carry an error string (a path, a pid) and would make the key
-		// unstable across identical runs.
+		// saw it, nor WHICH tests it selected. See fileSelectionKey.
 		FileAuditConfig: func(c reposcan.Candidate) string {
 			if ex == nil {
 				return ""
 			}
-			sel := ex.selectionFor(reposcan.Job{Path: c.Path, TestPath: c.TestPath, Lang: c.Lang})
-			switch {
-			case sel.Method == "":
-				return "file-selection=whole-suite"
-			case len(sel.Tests) == 0:
-				return "file-selection=uncovered"
-			default:
-				return "file-selection=" + sel.Method
-			}
+			return fileSelectionKey(ex.selectionFor(reposcan.Job{Path: c.Path, TestPath: c.TestPath, Lang: c.Lang}))
 		},
 	}
 	jobs, goalExcl, err := reposcan.EmitJobs(cfg, selected, gs)
@@ -849,8 +837,57 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	return exitCode
 }
 
-// auditConfigKey is the canonical KeyInputs.AuditConfig: the settings that can
-// change a given FILE's measured verdict.
+// fileSelectionKey is the per-file half of the audit config: WHICH question
+// this one file's kill rate answers. The scan-level auditConfigKey can only
+// say that selection ran.
+//
+// Two components, and the second is the one a review caught missing:
+//
+//   - file-selection=<mode> — coverage-context, uncovered, or whole-suite.
+//     Never the Fallback TEXT, which can carry an error string (a path, a
+//     pid) and would make the key unstable across identical runs.
+//   - selected-tests=<digest> — the ids themselves, for a non-empty
+//     selection. The selection is derived from COVERAGE EVIDENCE, so a
+//     change anywhere in the repo's source can route a test through this
+//     file or away from it while the file, the test surface and the argv are
+//     all byte-identical. The test-surface digest cannot catch that: it
+//     moves when a test FILE changes, and nothing about a test file changed.
+//     Without this the cache serves a verdict measured by a set of tests
+//     that no longer grades the file.
+//
+// The ids are sorted (Select already sorts them; sorted again here so the key
+// cannot depend on that) and joined on \x00 — a byte no node id can contain —
+// then folded to a sha256, for the same two reasons auditConfigKey folds the
+// argv: the list is long, and it routinely contains `=` and `,`, which are
+// CanonicalKV's own delimiters.
+func fileSelectionKey(sel lang.Selection) string {
+	mode := "file-selection=whole-suite"
+	switch {
+	case sel.Method == "":
+	case len(sel.Tests) == 0:
+		mode = "file-selection=uncovered"
+	default:
+		mode = "file-selection=" + sel.Method
+	}
+	if len(sel.Tests) == 0 {
+		return mode
+	}
+	ids := append([]string{}, sel.Tests...)
+	sort.Strings(ids)
+	sum := sha256.Sum256([]byte(strings.Join(ids, "\x00")))
+	return mode + ",selected-tests=" + hex.EncodeToString(sum[:])
+}
+
+// auditConfigKey is the SCAN-WIDE half of KeyInputs.AuditConfig: the settings
+// that can change a given FILE's measured verdict.
+//
+// "Canonical" here means CanonicalKV's sorted name=value rendering of THIS
+// map, and no more than that. EmitJobs appends the per-file component
+// (fileSelectionKey) after this function's output, with a comma, so the full
+// AuditConfig string a job carries is scan-wide-sorted-then-per-file — a
+// deterministic order, not a globally sorted one. That is fine, and it is
+// written down because reading the result as one sorted list is the way a
+// future change starts inserting into the middle of it.
 //
 // --top, --all and --diff-base are deliberately NOT here. They select which
 // files get audited; they do not change what a mutant run against an audited
@@ -883,9 +920,13 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 // for the question it was measured under. Both halves are keyed — whole-suite
 // as an explicit component, and selection by its METHOD (the evidence kind,
 // e.g. coverage-context), so a scan whose instrumented run failed and fell
-// back to the whole suite cannot silently reuse a selected verdict. The
-// selected TESTS are not keyed: they are derived from the test surface, whose
-// digest already moves when any test file changes.
+// back to the whole suite cannot silently reuse a selected verdict.
+//
+// WHICH tests were selected is keyed too, but PER FILE and not here — see
+// fileSelectionKey. This comment used to claim the test-surface digest
+// covered them; it does not. That digest moves when a test FILE changes,
+// and the selection is derived from coverage evidence, which an ordinary
+// non-test source change elsewhere in the repo can move on its own.
 //
 // Bias when adding to this list: include. Over-inclusion causes a needless
 // miss, which costs money. Under-inclusion serves a stale verdict, which

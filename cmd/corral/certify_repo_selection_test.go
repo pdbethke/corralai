@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
+	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/reposcan"
 )
 
@@ -75,5 +76,42 @@ func TestSelectionCommandSurvivesShellRoundTrip(t *testing.T) {
 		if got[i] != cmd[i] {
 			t.Fatalf("round trip mangled %q -> %q", cmd, got)
 		}
+	}
+}
+
+// I4. The scan-level AuditConfig names the MODE; the per-file component has
+// to name the actual measurement, because WHICH tests were selected can move
+// without any digest in the key moving with it. The selection comes from
+// coverage EVIDENCE, so an ordinary source change elsewhere in the repo — a
+// new import, a changed branch — can route a test through this file or away
+// from it while every test file, the argv and the file itself are byte-
+// identical. Without the ids in the key, the next scan serves a verdict
+// measured by a set of tests that no longer grade this file.
+func TestFileSelectionKeyCoversTheSelectedTests(t *testing.T) {
+	a := fileSelectionKey(lang.Selection{Method: "coverage-context", Tests: []string{"t/a.py::x", "t/b.py::y"}})
+	b := fileSelectionKey(lang.Selection{Method: "coverage-context", Tests: []string{"t/a.py::x", "t/b.py::z"}})
+	if a == b {
+		t.Fatalf("two selections differing in one id key identically: %q", a)
+	}
+	if !strings.Contains(a, "file-selection=coverage-context") || !strings.Contains(a, "selected-tests=") {
+		t.Fatalf("key must name both the mode and the digest: %q", a)
+	}
+	// Order is not a measurement: the same set keys the same either way.
+	rev := fileSelectionKey(lang.Selection{Method: "coverage-context", Tests: []string{"t/b.py::y", "t/a.py::x"}})
+	if rev != a {
+		t.Fatalf("id ORDER moved the key: %q vs %q", a, rev)
+	}
+	// The two no-selection modes carry a mode and no digest — there is no
+	// selected set to digest, and inventing one would be a fabricated number.
+	for _, sel := range []lang.Selection{{}, {Method: "coverage-context"}} {
+		if k := fileSelectionKey(sel); strings.Contains(k, "selected-tests=") {
+			t.Errorf("%+v keyed a digest of nothing: %q", sel, k)
+		}
+	}
+	if k := fileSelectionKey(lang.Selection{}); k != "file-selection=whole-suite" {
+		t.Errorf("whole-suite key = %q", k)
+	}
+	if k := fileSelectionKey(lang.Selection{Method: "coverage-context"}); k != "file-selection=uncovered" {
+		t.Errorf("uncovered key = %q", k)
 	}
 }

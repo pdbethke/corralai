@@ -1250,7 +1250,14 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 	// their command and run the whole thing again. The check costs one jail
 	// execution and no inference, so paying for it afterwards was never a
 	// trade, just an ordering mistake. Refuse here, and name the fix.
-	if collected, cerr := scorer.AuthoredTestWouldBeCollected(ctx, rs.CodePath, adequacy.ShellSplit(rs.TestCmd)); cerr == nil && !collected {
+	//
+	// Asked about the command the AUTHORED PASS actually runs, not rs.TestCmd
+	// (the base): under selection that pass NAMES the authored test's own
+	// path, so a project whose discovery config would never find it collects
+	// it anyway. Checking the base command refused those audits for a problem
+	// the run had already solved.
+	authoredArgv := scorer.AuthoredCommand(rs.CodePath, adequacy.ShellSplit(rs.TestCmd))
+	if collected, cerr := scorer.AuthoredTestWouldBeCollected(ctx, rs.CodePath, authoredArgv); cerr == nil && !collected {
 		return zero, auditNotCollectedErr(
 			"your test command would not run the test this audit writes, so it could not prove a gap even if it found one.\n"+
 				"  corral writes its killing test beside your own, as: %s\n"+

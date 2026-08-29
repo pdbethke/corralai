@@ -180,3 +180,48 @@ func (r *cmdRecordingJail) RunTest(_ context.Context, _ map[string]string, cmd [
 	r.cmds = append(r.cmds, append([]string{}, cmd...))
 	return false, nil
 }
+
+// discoveryJail is a project whose own test command collects nothing at the
+// authored test's path: a run only observes the file when the command NAMES
+// it. `pytest tests/` with testpaths = ["tests"] and an authored test outside
+// that root is exactly this shape.
+type discoveryJail struct{ authored string }
+
+func (d discoveryJail) RunTest(_ context.Context, _ map[string]string, cmd []string) (bool, error) {
+	for _, a := range cmd {
+		if a == d.authored {
+			return false, nil // the broken canary at that path failed the run
+		}
+	}
+	return true, nil // never collected it; the run passes regardless
+}
+
+// I5. The pre-flight asked "would your command collect the authored test?"
+// while checking the BASE command — not the command the authored pass
+// actually runs, which appends the authored path precisely so that a
+// discovery config which excludes it stops mattering. So an operator whose
+// project confines discovery to a test root was refused before any model ran,
+// for a problem selection had already solved.
+func TestAuthoredCollectionPreflightChecksTheAuthoredPassesCommand(t *testing.T) {
+	s := repoScorer(lang.Selection{
+		Base:  []string{"pytest"},
+		Cmd:   []string{"pytest", "tests/test_a.py::test_x"},
+		Tests: []string{"tests/test_a.py::test_x"}, Method: "coverage-context",
+	})
+	authored := authoredTestPath("pkg/a.py", s.DevTestPath, s.BaseFiles)
+	s.Jail = discoveryJail{authored: authored}
+	base := []string{"pytest", "tests/"}
+
+	if got := s.AuthoredCommand("pkg/a.py", base); got[len(got)-1] != authored {
+		t.Fatalf("AuthoredCommand = %v, want it to name %q", got, authored)
+	}
+	// The base command alone: correctly reported as not collecting it.
+	if ok, err := s.AuthoredTestWouldBeCollected(context.Background(), "pkg/a.py", base); err != nil || ok {
+		t.Fatalf("base command: collected=%v err=%v, want false", ok, err)
+	}
+	// The command the authored pass really runs: collected, so the audit
+	// must NOT be refused.
+	if ok, err := s.AuthoredTestWouldBeCollected(context.Background(), "pkg/a.py", s.AuthoredCommand("pkg/a.py", base)); err != nil || !ok {
+		t.Fatalf("authored pass command: collected=%v err=%v, want true — the selection names the file explicitly", ok, err)
+	}
+}

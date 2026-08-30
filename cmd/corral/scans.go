@@ -30,6 +30,11 @@ type scansReader interface {
 	// a reader that cannot answer it fails to compile instead of quietly
 	// printing the narrower claim.
 	MutantsForScan(ctx context.Context, scanID int64) ([]scanstore.Mutant, error)
+	// ModelCallsForScan backs the money half of `--timing`'s readout — the
+	// per-role cost line printed beside each file's timing line. Part of the
+	// interface for the same reason MutantsForScan is: a reader that cannot
+	// answer it fails to compile, not quietly prints nothing.
+	ModelCallsForScan(ctx context.Context, scanID int64) ([]scanstore.ModelCall, error)
 	// ScanByID backs the facts that live at the SCAN grain rather than the
 	// file grain — selection_ms above all, the one instrumented coverage run
 	// a whole scan shares. ok is false for an unknown id, which is an answer,
@@ -229,6 +234,15 @@ func runScansShow(args []string, open func(string) (scansReader, error), stdout,
 			sel := time.Duration(*row.SelectionMillis) * time.Millisecond
 			fmt.Fprintf(stdout, "\nselection %s (once per scan)\n", durationText(sel))
 		}
+		// The money half of the same readout, by the same per-file grouping:
+		// best-effort, like the spread above — a ledger written before
+		// scan_model_calls existed still prints every file's timing, with
+		// this line simply absent.
+		calls, cerr := st.ModelCallsForScan(context.Background(), id)
+		if cerr != nil {
+			fmt.Fprintln(stderr, "corral scans show: model calls unavailable:", cerr)
+		}
+		callsByPath := modelCallsByPath(calls)
 		for _, f := range files {
 			t, med, max := timingOf(f)
 			if !t.Measured() {
@@ -237,6 +251,9 @@ func runScansShow(args []string, open func(string) (scansReader, error), stdout,
 				continue
 			}
 			fmt.Fprintf(stdout, "\n%s\n%s\n", f.Path, timingLine(t, f.MutantsGraded, med, max))
+			if line := costLine(callsByPath[f.Path]); line != "" {
+				fmt.Fprintln(stdout, line)
+			}
 		}
 	}
 

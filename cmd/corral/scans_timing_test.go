@@ -73,6 +73,43 @@ func TestScansShowWithoutTimingSaysNothing(t *testing.T) {
 	}
 }
 
+// TestScansShowTimingPrintsTheCostLineBesideTheTimingLine: the money half of
+// the same readout — one costLine per file, built from that file's own
+// scan_model_calls rows, right under its timing line.
+func TestScansShowTimingPrintsTheCostLineBesideTheTimingLine(t *testing.T) {
+	r := &fakeScansReader{files: []scanstore.File{{
+		Path: "pkg/a.py", Disposition: "audited", Gradable: true, DevPassMillis: ms(2104000),
+	}}}
+	r.modelCalls = []scanstore.ModelCall{
+		{ScanID: 1, Path: "pkg/a.py", Role: "mutant-generator", Model: "m-1", Calls: 24, InputTokens: 900_000, OutputTokens: 31_000},
+		{ScanID: 1, Path: "pkg/a.py", Role: "test-writer", Model: "w-1", Calls: 5, InputTokens: 300_000, OutputTokens: 17_000},
+	}
+	var out, errOut bytes.Buffer
+	if code := runScans([]string{"show", "1", "--timing"}, openFake(r), &out, &errOut); code != 0 {
+		t.Fatalf("exit = %d, stderr=%s", code, errOut.String())
+	}
+	want := "  cost: 1.2M tokens in / 48k out across 29 calls — mutant-generator 0.9M/31k (24 calls), test-writer 0.3M/17k (5 calls)"
+	if !strings.Contains(out.String(), want) {
+		t.Errorf("`scans show --timing` did not print the cost line:\n%s\nwant it to contain:\n%s", out.String(), want)
+	}
+}
+
+// TestScansShowTimingSaysNothingAboutCostWhenNoCallsWereRecorded: a scan
+// ledger written before scan_model_calls existed (or a run that made no
+// calls at all) must not print an empty "  cost: " line.
+func TestScansShowTimingSaysNothingAboutCostWhenNoCallsWereRecorded(t *testing.T) {
+	r := &fakeScansReader{files: []scanstore.File{{
+		Path: "pkg/a.py", Disposition: "audited", Gradable: true, DevPassMillis: ms(2104000),
+	}}}
+	var out, errOut bytes.Buffer
+	if code := runScans([]string{"show", "1", "--timing"}, openFake(r), &out, &errOut); code != 0 {
+		t.Fatalf("exit = %d, stderr=%s", code, errOut.String())
+	}
+	if strings.Contains(out.String(), "cost:") {
+		t.Errorf("a scan with no recorded model calls printed a cost line:\n%s", out.String())
+	}
+}
+
 // TestScansShowTimingSaysNothingForAnUntimedFile: every row corral recorded
 // before this change has NULL in all seven columns, and an em-dashed line for
 // a file nothing timed would read as a measurement of nothing.

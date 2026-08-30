@@ -551,6 +551,57 @@ func buildScanMutantRows(scanID int64, results []reposcan.FileResult) []scanstor
 	return rows
 }
 
+// buildScanModelCallRows maps every file's Verdict.ModelCalls into the
+// ledger's per-(file, role) money grain. Unlike buildScanMutantRows, this is
+// NOT restricted to Gradable results: a file whose baseline failed, or whose
+// test-writer exhausted its retries, can still have dispatched a
+// mutant-generator or test-writer seat before the run gave up on it, and that
+// spend is real whether or not the file ended up graded.
+func buildScanModelCallRows(results []reposcan.FileResult) []scanstore.ModelCall {
+	var rows []scanstore.ModelCall
+	for _, r := range dedupeResultsByPath(results) {
+		for _, c := range r.Verdict.ModelCalls {
+			rows = append(rows, scanstore.ModelCall{
+				Path: r.Job.Path, Role: c.Role, Model: c.Model,
+				Calls: c.Calls, Retries: c.Retries,
+				InputTokens: c.InputTokens, OutputTokens: c.OutputTokens,
+				WallMillis: c.Wall.Milliseconds(),
+			})
+		}
+	}
+	return rows
+}
+
+// scanModelCallTotals sums buildScanModelCallRows' per-(file, role) grain
+// into ONE []advpool.ModelCall per role for the WHOLE scan, in roster order —
+// the shape costLine takes, for the end-of-scan stdout line. A role's model
+// is assumed constant across the scan (the roster is resolved once, before
+// the fan-out); the first non-empty Model seen for a role is kept.
+func scanModelCallTotals(results []reposcan.FileResult) []advpool.ModelCall {
+	totals := make(map[string]*advpool.ModelCall, len(rosterRoleOrder))
+	for _, r := range dedupeResultsByPath(results) {
+		for _, c := range r.Verdict.ModelCalls {
+			t, ok := totals[c.Role]
+			if !ok {
+				t = &advpool.ModelCall{Role: c.Role, Model: c.Model}
+				totals[c.Role] = t
+			}
+			t.Calls += c.Calls
+			t.Retries += c.Retries
+			t.InputTokens += c.InputTokens
+			t.OutputTokens += c.OutputTokens
+			t.Wall += c.Wall
+		}
+	}
+	out := make([]advpool.ModelCall, 0, len(totals))
+	for _, role := range rosterRoleOrder {
+		if t, ok := totals[role]; ok {
+			out = append(out, *t)
+		}
+	}
+	return out
+}
+
 // recordCertifyRepoScan writes scan and files to st in one transaction.
 // st is opened (and later closed) by the caller — BEFORE the scan even runs
 // — so the identical handle also serves reposcan.Scan's verdict cache during

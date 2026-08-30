@@ -204,6 +204,47 @@ func TestBundleIsTheLedgerRowForRow(t *testing.T) {
 	}
 }
 
+// TestBuildModelCallRowsIsFieldForField is TestBundleIsTheLedgerRowForRow's
+// sibling for the money grain: every scanstore.ModelCall field, walked by
+// reflection with REAL (nonzero, mutually distinct) values so a mapping bug
+// that dropped or swapped a field could not hide behind two zeros comparing
+// equal.
+func TestBuildModelCallRowsIsFieldForField(t *testing.T) {
+	call := scanstore.ModelCall{
+		ScanID: 11, Path: "a.go", Role: "mutant-generator", Model: "m-1",
+		Calls: 24, Retries: 3, InputTokens: 900_000, OutputTokens: 31_000, WallMillis: 45_000,
+	}
+	rows := buildModelCallRows([]scanstore.ModelCall{call}, 11, bundleMeta{Repo: "o/r", RunURL: "https://ci/1"})
+	if len(rows) != 1 {
+		t.Fatalf("buildModelCallRows returned %d row(s), want 1", len(rows))
+	}
+	row := rows[0]
+
+	lv, rv := reflect.ValueOf(call), reflect.ValueOf(row)
+	lt := lv.Type()
+	// deliberatelyUnmappedCall names every scanstore.ModelCall field with no
+	// identically-named, identically-typed auditpush.ModelCallRow field.
+	deliberatelyUnmappedCall := map[string]string{}
+	for i := 0; i < lt.NumField(); i++ {
+		name := lt.Field(i).Name
+		if _, skip := deliberatelyUnmappedCall[name]; skip {
+			continue
+		}
+		rf := rv.FieldByName(name)
+		if !rf.IsValid() {
+			t.Errorf("scanstore.ModelCall.%s has no warehouse column of the same name", name)
+			continue
+		}
+		if !reflect.DeepEqual(lv.Field(i).Interface(), rf.Interface()) {
+			t.Errorf("%s was dropped or changed on the way to the warehouse: ledger %v, row %v",
+				name, lv.Field(i).Interface(), rf.Interface())
+		}
+	}
+	if row.Repo != "o/r" || row.RunURL != "https://ci/1" {
+		t.Errorf("row = %+v, want the scan-wide Repo/RunURL from meta", row)
+	}
+}
+
 // TestAuditedParentSHAIsTheMutantsOwn is the validity key stated as the one
 // question it has to answer: "is this verdict still current for HEAD?" is
 // `parent_sha256 == sha256(HEAD:path)`, and that only works if the file's
@@ -396,7 +437,7 @@ func TestWarehouseRowsSHA256IsDeterministic(t *testing.T) {
 	meta := bundleMeta{ModelsByRole: `{"writer":"m"}`, Passed: true}
 	// Every grain, not just the files: the hash covers the whole bundle, and
 	// a determinism claim that exercises one table is not the claim.
-	calls := []scanstore.ModelCall{{Path: "a.go", Role: "test-writer", Model: "w-1", Calls: 2}}
+	calls := []scanstore.ModelCall{{Path: "a.go", Role: "test-writer", Model: "w-1", Calls: 2, Retries: 1, InputTokens: 900, OutputTokens: 210, WallMillis: 4100}}
 	events := []scanstore.Event{{Path: "a.go", Seq: 1, Kind: "phase-start", Actor: "driver"}}
 
 	first := buildBundle(scan, 11, files, mutants, calls, events, auditpush.Link{}, false, "o/r", "deadbeef", "", meta)

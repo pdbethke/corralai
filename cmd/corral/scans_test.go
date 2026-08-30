@@ -12,11 +12,12 @@ import (
 )
 
 type fakeScansReader struct {
-	scans   []scanstore.ScanRow
-	scan    scanstore.ScanRow // what ScanByID answers with; zero ID = not found
-	files   []scanstore.File
-	mutants []scanstore.Mutant
-	limit   int // records what the command asked for
+	scans      []scanstore.ScanRow
+	scan       scanstore.ScanRow // what ScanByID answers with; zero ID = not found
+	files      []scanstore.File
+	mutants    []scanstore.Mutant
+	modelCalls []scanstore.ModelCall
+	limit      int // records what the command asked for
 }
 
 func (f *fakeScansReader) Scans(_ context.Context, limit int) ([]scanstore.ScanRow, error) {
@@ -28,6 +29,9 @@ func (f *fakeScansReader) FilesForScan(context.Context, int64) ([]scanstore.File
 }
 func (f *fakeScansReader) MutantsForScan(context.Context, int64) ([]scanstore.Mutant, error) {
 	return f.mutants, nil
+}
+func (f *fakeScansReader) ModelCallsForScan(context.Context, int64) ([]scanstore.ModelCall, error) {
+	return f.modelCalls, nil
 }
 
 // ScanByID answers with the fixture's scan header. A zero ID stands for "no

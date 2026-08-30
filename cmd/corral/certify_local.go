@@ -377,14 +377,6 @@ type localAuditInput struct {
 	// daemon, never the device. Empty keeps every local seat on OLLAMA_URL.
 	localEndpoints map[string]string
 
-	// meter, when non-nil, is the UsageMeter this audit reports its provider
-	// usage into INSTEAD of a fresh per-file one. A whole-repo scan runs many
-	// audits and has to answer "what did that cost me" for the RUN, not for
-	// each file in isolation; sharing one meter is how the totals survive the
-	// fan-out. Nil keeps the single-file behavior: an audit that meters only
-	// itself.
-	meter *agentbackend.UsageMeter
-
 	// Jail + workspace. jail empty = auto-detect this OS's backend (never
 	// unsandboxed). checkArgv is the project's own test command, required in
 	// repo-aware mode.
@@ -804,11 +796,14 @@ type auditRoles struct {
 	// one line of challenger work — see newAuditRunSpec.
 	shadowWriter string
 	chatterFor   func(role string) agentworker.Chatter
-	// meter accumulates every seat's reported token usage for the whole run.
-	// An audit's cost is O(mutants x suite runtime) on the execution side and
-	// O(tokens) on the model side; the ledger already records the first half,
-	// and this is the second.
-	meter *agentbackend.UsageMeter
+	// meters is ONE agentbackend.UsageMeter PER ROLE this run actually
+	// dispatches — built by auditRoleMeters and never populated for a role
+	// left empty or resolved to "off". An audit's cost is O(mutants x suite
+	// runtime) on the execution side and O(tokens) on the model side; the
+	// ledger already records the first half (per file, per phase), and this
+	// is the second (per file, per ROLE — see modelCallsFromMeters, which
+	// turns this map into the []advpool.ModelCall a Verdict carries).
+	meters map[string]*agentbackend.UsageMeter
 }
 
 // herdNotConfiguredErr refuses a run whose grading seats have no model, and
@@ -1025,16 +1020,13 @@ func resolveAuditRoles(in localAuditInput, stderr io.Writer) (auditRoles, error)
 	// writer) needs its own vendor's key, and a missing key must refuse the
 	// run here — fail closed at the top, not mid-run after jails, stores and
 	// mutants are already in flight.
-	meter := in.meter
-	if meter == nil {
-		meter = &agentbackend.UsageMeter{}
-	}
-	chatterFor, err := localChatterFor(assign, meter, in.localEndpoints)
+	meters := auditRoleMeters(assign)
+	chatterFor, err := localChatterFor(assign, meters, in.localEndpoints)
 	if err != nil {
 		return r, auditUsageErr("%v", err)
 	}
 
-	return auditRoles{assign: assign, shadow: shadow, shadowWriter: shadowWriter, writer: writer, mutant: mutant, critic: critic, chatterFor: chatterFor, meter: meter}, nil
+	return auditRoles{assign: assign, shadow: shadow, shadowWriter: shadowWriter, writer: writer, mutant: mutant, critic: critic, chatterFor: chatterFor, meters: meters}, nil
 }
 
 // runSubject is the FILE-and-repo half of a RunSpec: everything
@@ -1436,9 +1428,14 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 	if err != nil {
 		return zero, auditErr("%v", err)
 	}
+	// Carried onto the verdict from the SAME meters localChatterFor wrote
+	// into — never re-derived — so the ledger and warehouse (once --record
+	// or --push carry this verdict onward) match exactly what this run's
+	// stdout line reports below.
+	verdict.ModelCalls = modelCallsFromMeters(roles.meters)
 
 	renderAdvVerdict(stdout, in.codePath, advVerdictFromPool(*verdict))
-	renderModelSpend(stdout, roles.meter)
+	renderModelSpend(stdout, verdict.ModelCalls)
 
 	// --matrix: print the per-test adequacy summary + delete-candidate list.
 	// st.Matrix is nil unless --matrix was set AND the phase actually ran
@@ -2022,24 +2019,16 @@ func localBuildDBPath() string {
 	return filepath.Join(home, ".claude", "corralai_build.duckdb")
 }
 
-// renderModelSpend reports what the run actually consumed from the providers.
+// renderModelSpend reports what the run actually consumed from the
+// providers, broken out by role — see costLine, the one place this format is
+// spelled out, shared with `corral scans show --timing`.
 //
 // An audit costs O(mutants x the target's suite runtime) in execution and
 // O(tokens) in model calls, and until now corral reported neither half at the
 // end of a run — so "what did that cost me" had no answer, from the tool whose
 // central caveat is that audits are expensive.
-//
-// TOKENS, NOT DOLLARS. Prices change and differ by contract; a token count
-// stays true. Anyone who wants a figure multiplies by their own rate.
-//
-// The call count is printed alongside because a provider that reports no usage
-// leaves the tokens at zero: "0 tokens over 41 calls" says the run happened and
-// the provider said nothing, which is a different fact from "0 over 0", and a
-// bare token total cannot tell them apart.
-func renderModelSpend(w io.Writer, m *agentbackend.UsageMeter) {
-	in, out, calls := m.Totals()
-	if calls == 0 {
-		return
+func renderModelSpend(w io.Writer, calls []advpool.ModelCall) {
+	if line := costLine(calls); line != "" {
+		fmt.Fprintln(w, line)
 	}
-	fmt.Fprintf(w, "  model spend:   %d in / %d out token(s) over %d model call(s)\n", in, out, calls)
 }

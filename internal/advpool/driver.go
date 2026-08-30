@@ -527,6 +527,16 @@ type Verdict struct {
 	// Timing type. Every phase that did not run reads zero, which every
 	// reader renders as "—" and the ledger stores as NULL.
 	Timing Timing `json:"timing"`
+	// ModelCalls is what this file's audit cost, broken out by role — the
+	// money half of Timing's time half. One entry per role that made at
+	// least one call; a role with zero calls (an unassigned optional seat,
+	// or `--critic-model off`) has NO entry — never a zero-valued one, which
+	// a reader could mistake for "ran and cost nothing". Built from each
+	// role's own agentbackend.UsageMeter (see auditRoles.meters in
+	// cmd/corral) and carried here so the ledger (scanstore.ModelCall) and
+	// the warehouse can be built from the SAME numbers the run measured,
+	// rather than re-deriving them.
+	ModelCalls []ModelCall `json:"model_calls,omitempty"`
 	// MutantDurationMedian and MutantDurationMax summarize how long grading
 	// ONE mutant took, over the mutants that were actually graded
 	// (compile-gate rejects have no duration and are excluded — see

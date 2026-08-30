@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 )
 
 // Every provider returns its token counts on every response, and corral used to
@@ -133,5 +134,34 @@ func TestMeteredChatterTolueratesNilMeter(t *testing.T) {
 	c := AsChatterMetered(&openaiBackend{base: srv.URL, key: "k", model: "m"}, nil)
 	if _, err := c.Chat(nil, nil); err != nil {
 		t.Fatalf("a nil meter must be a no-op, got: %v", err)
+	}
+}
+
+// TestMeterRecordsWallAndModel pins the fix for a meter that could say WHAT a
+// role spent but not WHICH model it spent it on or HOW LONG the provider took
+// — both needed once a meter is scoped to one role instead of a whole run.
+func TestMeterRecordsWallAndModel(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(5 * time.Millisecond)
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"hi"}}],
+			"usage":{"prompt_tokens":10,"completion_tokens":5}}`))
+	}))
+	defer srv.Close()
+
+	meter := &UsageMeter{Model: "test-model"}
+	c := AsChatterMetered(&openaiBackend{base: srv.URL, key: "k", model: "test-model"}, meter)
+	if _, err := c.Chat(nil, nil); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+
+	snap := meter.Snapshot()
+	if snap.Model != "test-model" {
+		t.Errorf("Snapshot().Model = %q, want %q", snap.Model, "test-model")
+	}
+	if snap.Calls != 1 {
+		t.Errorf("Snapshot().Calls = %d, want 1", snap.Calls)
+	}
+	if snap.Wall < 5*time.Millisecond {
+		t.Errorf("Snapshot().Wall = %v, want >= 5ms — the call was timed around a 5ms sleep", snap.Wall)
 	}
 }

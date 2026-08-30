@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	"github.com/pdbethke/corralai/internal/advpool"
-	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/agentworker"
 )
 
@@ -428,7 +427,7 @@ func TestUnpinnedMixedVendorRunRoutesEverySeatByName(t *testing.T) {
 		advpool.RoleMutantGenerator: "gemini-3.6-flash",
 		advpool.RoleTestWriter:      "gemini-3.6-flash",
 		advpool.RoleTestCritic:      "claude-haiku-4-5-20251001",
-	}, &agentbackend.UsageMeter{}, nil)
+	}, nil, nil)
 	if err == nil {
 		t.Fatal("an unpinned mixed-vendor run accepted a Claude critic with no Anthropic key: " +
 			"the seat was not routed by name and would reach the ollama default instead")
@@ -449,7 +448,7 @@ func TestPinnedGatewayIsNeverReRoutedBehindTheOperator(t *testing.T) {
 
 	chatterFor, err := localChatterFor(advpool.RoleAssignment{
 		advpool.RoleMutantGenerator: "claude-sonnet-5",
-	}, &agentbackend.UsageMeter{}, nil)
+	}, nil, nil)
 	if err != nil {
 		t.Fatalf("a gateway-pinned claude- name was re-routed to Anthropic behind the operator: %v", err)
 	}

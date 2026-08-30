@@ -145,6 +145,12 @@ type WeakFile struct {
 	// stores. Every phase that did not run is zero, and every reader renders
 	// that as "—" rather than as a phase that cost nothing.
 	Timing advpool.Timing
+	// ModelCalls mirrors advpool.Verdict.ModelCalls: what this file's audit
+	// cost, broken out by role. Carried onto the report for the same reason
+	// Timing is — so the ledger mapping and the cost line are built from the
+	// SAME rows the printer would read, never a second derivation from the
+	// verdict.
+	ModelCalls []advpool.ModelCall
 	// MutantsGraded mirrors advpool.Verdict.MutantsTotal: the denominator the
 	// per-mutant spread below is over. The dev-pass duration alone cannot say
 	// whether a slow file had four mutants or four hundred.
@@ -401,6 +407,7 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 			SharedDirs:      r.Verdict.Concurrency.Shared,
 			// And where the minutes went — see WeakFile.Timing.
 			Timing:             r.Verdict.Timing,
+			ModelCalls:         r.Verdict.ModelCalls,
 			MutantsGraded:      r.Verdict.MutantsTotal,
 			MutantMillisMedian: r.Verdict.MutantDurationMedian.Milliseconds(),
 			MutantMillisMax:    r.Verdict.MutantDurationMax.Milliseconds(),

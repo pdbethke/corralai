@@ -108,6 +108,36 @@ func timingOf(f scanstore.File) (advpool.Timing, time.Duration, time.Duration) {
 		ms(f.MutantMillisMedian), ms(f.MutantMillisMax)
 }
 
+// modelCallsByPath groups a scan's whole scan_model_calls result by path,
+// converting each row into the advpool.ModelCall shape costLine takes, and
+// orders each file's rows in rosterRoleOrder — the same order the end-of-scan
+// stdout line uses, so a stored scan reads identically to the run that
+// produced it (the same guarantee timingLine already gives Timing).
+func modelCallsByPath(calls []scanstore.ModelCall) map[string][]advpool.ModelCall {
+	byPath := make(map[string][]advpool.ModelCall, len(calls))
+	for _, c := range calls {
+		byPath[c.Path] = append(byPath[c.Path], advpool.ModelCall{
+			Role: c.Role, Model: c.Model, Calls: c.Calls, Retries: c.Retries,
+			InputTokens: c.InputTokens, OutputTokens: c.OutputTokens,
+			Wall: time.Duration(c.WallMillis) * time.Millisecond,
+		})
+	}
+	for path, cs := range byPath {
+		idx := make(map[string]advpool.ModelCall, len(cs))
+		for _, c := range cs {
+			idx[c.Role] = c
+		}
+		ordered := make([]advpool.ModelCall, 0, len(cs))
+		for _, role := range rosterRoleOrder {
+			if c, ok := idx[role]; ok {
+				ordered = append(ordered, c)
+			}
+		}
+		byPath[path] = ordered
+	}
+	return byPath
+}
+
 // millisOrNil converts a measured duration to the ledger's nullable
 // millisecond column. Zero — a phase that did not run — becomes NULL, never
 // 0: a stored zero is a positive claim that the phase was free, and averaged

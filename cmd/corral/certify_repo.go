@@ -24,7 +24,6 @@ import (
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/advpool"
-	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/certify"
 	"github.com/pdbethke/corralai/internal/lang"
@@ -851,16 +850,15 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// reused.
 	oldestReused, _ := oldestReuse(results)
 	printRepoReport(stdout, rep, nothingInScope, minKillRate, maxProvenMissed, unpairableInDiff, oldestReused)
-	// What the scan consumed from the providers. A whole-repo audit is the
-	// mode that actually costs money — it runs a full herd per file — and it
-	// reported nothing at all, so "what did that cost me" had no answer from
-	// the tool whose central caveat is that audits are expensive. Tokens, not
-	// dollars, for the reason renderModelSpend gives: prices change and differ
-	// by contract; a token count stays true.
-	if ex != nil {
-		if in, out, calls := ex.meterTotals(); calls > 0 {
-			fmt.Fprintf(stdout, "  model spend:   %d in / %d out token(s) over %d model call(s)\n", in, out, calls)
-		}
+	// What the scan consumed from the providers, broken out by role. A
+	// whole-repo audit is the mode that actually costs money — it runs a full
+	// herd per file — and it reported nothing at all, so "what did that cost
+	// me" had no answer from the tool whose central caveat is that audits are
+	// expensive. Built from the SAME per-file ModelCalls that feed the
+	// ledger and warehouse below — never a second measurement — so this line
+	// and scan_model_calls can never disagree.
+	if line := costLine(scanModelCallTotals(results)); line != "" {
+		fmt.Fprintln(stdout, line)
 	}
 	// A distinct section, never folded into Excluded/Ungradable/the audited
 	// fraction: this is an inventory alongside the audit, not a change to
@@ -915,9 +913,15 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// this code used to do) is how the two records came to disagree — the
 	// report path carried only the files a scan AUDITED, so the warehouse
 	// never held a row for the files corral refused.
+	// Built from the same per-file ModelCalls the ledger's scan_model_calls
+	// rows come from (modelCallRows, below) — never a second measurement, so
+	// the scan header's totals and the per-role grain can never disagree.
+	modelCallRows := buildScanModelCallRows(results)
 	var inTokens, outTokens, modelCallCount int64
-	if ex != nil {
-		inTokens, outTokens, modelCallCount = ex.meterTotals()
+	for _, c := range modelCallRows {
+		inTokens += c.InputTokens
+		outTokens += c.OutputTokens
+		modelCallCount += int64(c.Calls)
 	}
 	host, _ := os.Hostname()
 	finishedAt := time.Now()
@@ -960,12 +964,12 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	}
 	files := buildScanFileRows(results, rep.Excluded, preflightResult, mutantsFromSHA, *repoDir, stderr)
 	mutants := buildScanMutantRows(0, results)
-	// The model-call and event grains have no producer yet: the tables, the
-	// columns and this wiring exist so the tasks that instrument the driver
-	// add a measurement rather than a measurement plus a schema plus a
-	// migration. Empty is the honest value in the meantime — never a
+	// modelCallRows was built above, before the scan row, so its totals could
+	// feed InputTokens/OutputTokens/ModelCalls without a second measurement.
+	// The event grain still has no producer: the table and this wiring exist
+	// so a future task can add one rather than a measurement plus a schema
+	// plus a migration. Empty is the honest value in the meantime — never a
 	// fabricated row.
-	var modelCallRows []scanstore.ModelCall
 	var eventRows []scanstore.Event
 
 	var scanID int64
@@ -3000,11 +3004,6 @@ type localExecutor struct {
 	// file this scan audits — one daemon per GPU. See parseLocalEndpoints.
 	localEndpoints map[string]string
 
-	// meter accumulates provider usage across EVERY file this scan audits, so
-	// the run can report what it spent. Per-file meters cannot answer that:
-	// they are created and discarded inside each audit.
-	meter *agentbackend.UsageMeter
-
 	// perFileSwarm is how many workers ONE file's own audit may use. It is >1
 	// only on the workspace substrate, where resolveScanWorkers has already
 	// forced file-level concurrency to 1 (files share a single checkout), so
@@ -3131,7 +3130,6 @@ func newLocalExecutor(repoDir string, checkArgv []string, substrate string, time
 		progress = io.Discard
 	}
 	l := &localExecutor{
-		meter:        &agentbackend.UsageMeter{},
 		repoDir:      repoDir,
 		checkArgv:    checkArgv,
 		baselineRuns: 2,
@@ -3200,13 +3198,6 @@ func newLocalExecutor(repoDir string, checkArgv []string, substrate string, time
 func (l *localExecutor) preflight() error { return l.jailErr }
 
 // Close releases every staging dir this scan's seeds created. Idempotent.
-// meterTotals reports what every audit this executor ran consumed.
-func (l *localExecutor) meterTotals() (in, out, calls int64) {
-	if l.meter == nil {
-		return 0, 0, 0
-	}
-	return l.meter.Totals()
-}
 
 func (l *localExecutor) Close() {
 	if l.seeds != nil {
@@ -3226,11 +3217,6 @@ func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
 	// twice and disagree.
 	sel := l.selectionFor(j)
 	return localAuditInput{
-		// One meter for the WHOLE scan. Each file's audit would otherwise
-		// meter only itself and the totals would die with it, leaving a
-		// whole-repo run — the mode that actually costs money — unable to say
-		// what it spent. See renderModelSpend.
-		meter:          l.meter,
 		localEndpoints: l.localEndpoints,
 		repoDir:        l.repoDir,
 		codePath:       j.Path,

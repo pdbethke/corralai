@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"strings"
 	"testing"
+
+	"github.com/pdbethke/corralai/internal/lang"
 )
 
 func TestExtractCode(t *testing.T) {
@@ -76,19 +78,53 @@ func TestParseMutants_DropsUnappliableHunks(t *testing.T) {
 
 func TestApplyMutation_IntegrityGuarantees(t *testing.T) {
 	orig := "abc\ndef\nghi\n"
-	if m, ok := applyMutation(orig, "def", "DEF"); !ok || m != "abc\nDEF\nghi\n" {
+	if m, _, ok := applyMutation(orig, "def", "DEF"); !ok || m != "abc\nDEF\nghi\n" {
 		t.Fatalf("unique real edit: got (%q, %v)", m, ok)
 	}
-	if _, ok := applyMutation(orig, "def", "def"); ok {
+	if _, _, ok := applyMutation(orig, "def", "def"); ok {
 		t.Error("no-op (REPLACE == SEARCH) must be rejected")
 	}
-	if _, ok := applyMutation(orig, "", "x"); ok {
+	if _, _, ok := applyMutation(orig, "", "x"); ok {
 		t.Error("empty SEARCH must be rejected")
 	}
-	if _, ok := applyMutation(orig, "zzz", "y"); ok {
+	if _, _, ok := applyMutation(orig, "zzz", "y"); ok {
 		t.Error("anchor-not-found must be rejected")
 	}
-	if _, ok := applyMutation("aa\naa\n", "aa", "bb"); ok {
+	if _, _, ok := applyMutation("aa\naa\n", "aa", "bb"); ok {
 		t.Error("ambiguous (non-unique) anchor must be rejected")
+	}
+}
+
+func TestApplyMutationReportsTheAnchorsOriginalLines(t *testing.T) {
+	original := "a\nb\nc\nd\ne\n"
+	cases := []struct {
+		search, replace string
+		want            lang.LineRange
+	}{
+		{"c\n", "C\n", lang.LineRange{Start: 3, End: 3}},         // one-line replacement
+		{"b\nc\n", "X\n", lang.LineRange{Start: 2, End: 3}},      // two lines collapse to one
+		{"d\n", "d\nd2\nd3\n", lang.LineRange{Start: 4, End: 4}}, // growth: span is the ORIGINAL lines
+		{"b\nc\nd\n", "", lang.LineRange{Start: 2, End: 4}},      // deletion spans the removed lines
+		{"a\nb", "A\nB", lang.LineRange{Start: 1, End: 2}},       // no trailing newline in the anchor
+	}
+	for _, c := range cases {
+		_, span, ok := applyMutation(original, c.search, c.replace)
+		if !ok {
+			t.Fatalf("%q: ok=false", c.search)
+		}
+		if span != c.want {
+			t.Errorf("%q: span = %v, want %v", c.search, span, c.want)
+		}
+	}
+}
+
+func TestParsedMutantsCarryTheirSpan(t *testing.T) {
+	// Use the existing SEARCH/REPLACE parsing test's fixture shape; assert
+	// every kept mutant has a non-zero Span within the original's line count.
+	original := "def f():\n    return 1\n\ndef g():\n    return 2\n"
+	raw := "===MUTATION_1===\n<<<<<<< SEARCH\n    return 2\n=======\n    return 3\n>>>>>>> REPLACE\n"
+	ms, _ := parseMutantsDiag(raw, original)
+	if len(ms) != 1 || ms[0].Span != (lang.LineRange{Start: 5, End: 5}) {
+		t.Fatalf("got %+v", ms)
 	}
 }

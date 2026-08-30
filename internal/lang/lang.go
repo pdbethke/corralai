@@ -248,6 +248,46 @@ type Selection struct {
 	Method   string
 	Of       int
 	Fallback string
+	// Lines, when the evidence carried them, maps each selected test to the
+	// ranges of the audited file's lines it executed; Static is the file's
+	// lines executed under no test context (import time). Both nil for a
+	// whole-suite selection or evidence that did not record lines. They are
+	// what ForSpan narrows by.
+	Lines  map[string][]LineRange
+	Static []LineRange
+}
+
+// NarrowableByLine reports whether the Selection's line evidence can actually
+// narrow the tests it will run: at least one of the tests that WILL run has
+// recorded lines. It is false for evidence that carried no lines at all, and
+// — the case that made it a method rather than a `len(Lines) > 0` check at
+// each caller — for a selection whose Tests were collapsed to containing
+// FILES while Lines stayed keyed by node id. Looking a file path up in a
+// node-id map misses every time, which reads as "no test reaches this span"
+// when the truth is "this evidence cannot be narrowed".
+func (s Selection) NarrowableByLine() bool {
+	if len(s.Lines) == 0 || len(s.Tests) == 0 {
+		return false
+	}
+	for _, t := range s.Tests {
+		if len(s.Lines[t]) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// LineRange is a closed, 1-based range of source lines.
+type LineRange struct{ Start, End int }
+
+// IsZero reports the zero LineRange, which Overlaps treats as never
+// overlapping anything.
+func (r LineRange) IsZero() bool { return r.Start == 0 && r.End == 0 }
+
+// Overlaps reports whether r and o share at least one line. Neither range
+// overlaps anything when either is the zero LineRange.
+func (r LineRange) Overlaps(o LineRange) bool {
+	return !r.IsZero() && !o.IsZero() && r.Start <= o.End && o.Start <= r.End
 }
 
 // TestSelector is an OPTIONAL plugin extension that narrows the project's
@@ -286,4 +326,17 @@ type TestSelector interface {
 	// sel.Base when the Selection carries one, so "alone" is true rather
 	// than "alongside whatever the operator's targets collect".
 	WithAuthoredTest(sel Selection, testCmd []string, authoredTestPath string) []string
+	// ForSpan narrows sel to the tests whose recorded coverage reaches span.
+	// It never returns an empty command: the fallbacks all run the file's
+	// selection, because corral reports what it ran, not what coverage
+	// predicted. Only meaningful when len(sel.Tests) > 0.
+	ForSpan(sel Selection, span LineRange) (cmd []string, tests []string, rule string)
 }
+
+// SpanRule names why ForSpan chose what it chose.
+const (
+	SpanRuleLines     = "lines"     // a strict subset reaches the span
+	SpanRuleStatic    = "static"    // the span touches an import-time line: the whole file selection
+	SpanRuleUnreached = "unreached" // no test reaches the span: the whole file selection runs anyway
+	SpanRuleFile      = "file"      // no span, or no line evidence: today's behaviour
+)

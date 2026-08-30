@@ -432,17 +432,24 @@ func buildScanMutantRows(scanID int64, results []reposcan.FileResult) []scanstor
 		for _, id := range r.Verdict.ProvenMutantIDs {
 			proven[id] = true
 		}
+		// TestsRun/Rule ride at the grain the grading happened: when the run
+		// graded each mutant with the tests that reach its own lines, the
+		// file's kill rate averages over mutants that faced DIFFERENT test
+		// sets, and only these two columns can say which set each one faced.
+		// Both are zero on a run graded by one shared command per file.
 		for _, m := range r.Verdict.DevKilledMutants {
 			rows = append(rows, scanstore.Mutant{
 				ScanID: scanID, Path: r.Job.Path, MutantID: m.ID,
 				Outcome: "killed", ParentSHA256: m.ParentSHA256,
+				TestsRun: m.TestsRun, SelectionRule: m.Rule,
 			})
 		}
 		for _, m := range r.Verdict.DevSurvivedMutants {
 			rows = append(rows, scanstore.Mutant{
 				ScanID: scanID, Path: r.Job.Path, MutantID: m.ID,
 				Outcome: "survived", ParentSHA256: m.ParentSHA256,
-				Proven: proven[m.ID],
+				Proven:   proven[m.ID],
+				TestsRun: m.TestsRun, SelectionRule: m.Rule,
 			})
 		}
 	}

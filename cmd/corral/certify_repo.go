@@ -1574,11 +1574,13 @@ const preflightTimeout = 5 * time.Minute
 // and the whole scan then grades whole-suite — disclosed, but the exact
 // silent-degradation shape this feature exists to avoid.
 //
-// The Python reducer runs inside the instrumented shell and emits
-// {file: [node ids]}, measured 2026-08-29: flask 331,457 bytes, requests
-// 364,300 bytes (the unreduced `coverage json --show-contexts` for the same
-// flask run was 411 MB — see docs/design/test-selection.md). 64 MiB is ~180×
-// that; 15 min is ~11× requests' 79 s suite. Generous on purpose: over-sizing
+// The Python reducer runs inside the instrumented shell and emits, per
+// file, the node ids that executed it plus each test's line ranges and the
+// import-time ranges (corral-selection-2), measured 2026-08-30: flask
+// 1,331,508 bytes, requests 1,053,331 bytes (the unreduced `coverage json
+// --show-contexts` for the same flask run was 411 MB — see
+// docs/design/test-selection.md). 64 MiB is ~50× that; 15 min is ~11×
+// requests' 79 s suite. Generous on purpose: over-sizing
 // costs bounded memory on one run, under-sizing costs a scan that silently
 // grades a different question.
 const selectionMaxOutput = 64 << 20
@@ -2159,6 +2161,33 @@ func orderExclusionsForListing(excl []reposcan.Exclusion) []reposcan.Exclusion {
 	return out
 }
 
+// nonLineSpanRules are the rules under which a mutant did NOT get a narrowed
+// command, in the order the breakdown prints them. Listed explicitly rather
+// than derived by ranging the map: the order must be stable across runs, and
+// "lines" — the case where the narrowing worked — is deliberately absent,
+// because a breakdown that printed it would bury the qualifier in the number
+// it qualifies.
+var nonLineSpanRules = []string{lang.SpanRuleStatic, lang.SpanRuleUnreached, lang.SpanRuleFile}
+
+// selectionRuleBreakdown renders the mutants that were NOT narrowed by their
+// own lines: "; 4 static, 1 unreached, 2 file", or "" when every mutant was.
+// A "coverage-lines" run whose mutants mostly ran the file's whole selection
+// narrowed almost nothing, and the spread alone cannot say that — 3 to 41
+// tests per mutant reads the same whether the 41s were measured or were the
+// file's selection standing in for evidence nobody had.
+func selectionRuleBreakdown(rules map[string]int) string {
+	var parts []string
+	for _, r := range nonLineSpanRules {
+		if n := rules[r]; n > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", n, r))
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "; " + strings.Join(parts, ", ")
+}
+
 // printWeakFile prints one "weakest files" line, including the marker and
 // the disambiguating proven-missed count — factored out so the truncation
 // fallback (F4, below) renders a byte-identical line for a file that falls
@@ -2211,6 +2240,24 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 	// scan's own record) still prints nothing, because it genuinely does not
 	// know.
 	switch {
+	case f.SelectionMethod != "" && !f.Uncovered && f.PerMutant && f.MeasuredSpread():
+		// Per-mutant grading makes SelectedTests the file's UNION — the
+		// tests SOME mutant faced — and no mutant's own denominator. The
+		// spread is the honest half: "234 of 620" alone invites the reader
+		// to take 234 for the number every mutant survived, when the true
+		// figure may be 3. The method is the verdict's own, never stamped
+		// here, so the label cannot outlive the measurement it names.
+		fmt.Fprintf(w, "   graded by %d of %d tests — %d to %d per mutant, median %d (%s%s)",
+			f.SelectedTests, f.SuiteTests,
+			f.TestsPerMutant.Min, f.TestsPerMutant.Max, f.TestsPerMutant.Median,
+			f.SelectionMethod, selectionRuleBreakdown(f.Rules))
+	case f.SelectionMethod != "" && !f.Uncovered && f.PerMutant:
+		// Per-mutant, but no mutant was graded — every one was rejected by
+		// the compile gate, which leaves the spread at {0,0,0}. "0 to 0 per
+		// mutant, median 0" would report a range as measured when nothing
+		// was measured at all, so the line says which measurement it is and
+		// then says it found nothing to measure.
+		fmt.Fprintf(w, "   graded by %d of %d tests (%s; no mutant graded)", f.SelectedTests, f.SuiteTests, f.SelectionMethod)
 	case f.SelectionMethod != "" && !f.Uncovered:
 		fmt.Fprintf(w, "   graded by %d of %d tests (%s)", f.SelectedTests, f.SuiteTests, f.SelectionMethod)
 	case f.SelectionMethod != "" && f.Uncovered:
@@ -3159,6 +3206,29 @@ func signableKillRate(f reposcan.WeakFile) *float64 {
 	return &kr
 }
 
+// signableSpread and pushableSpread carry a file's per-mutant spread across
+// the package boundary — into the signed statement and into the warehouse
+// row — and carry NOTHING when none was measured. Two functions rather than
+// one because certify and auditpush each own their copy of the type (see
+// their own docs: certify cannot import advpool, and auditpush imports no
+// engine package at all); the rule they share is the single nil-check in
+// MeasuredSpread, so neither of them re-derives "was this measured?".
+func signableSpread(f reposcan.WeakFile) *certify.TestsPerMutantSpread {
+	if !f.MeasuredSpread() {
+		return nil
+	}
+	s := f.TestsPerMutant
+	return &certify.TestsPerMutantSpread{Min: s.Min, Median: s.Median, Max: s.Max}
+}
+
+func pushableSpread(f reposcan.WeakFile) *auditpush.TestsPerMutantSpread {
+	if !f.MeasuredSpread() {
+		return nil
+	}
+	s := f.TestsPerMutant
+	return &auditpush.TestsPerMutantSpread{Min: s.Min, Median: s.Median, Max: s.Max}
+}
+
 // writeAuditStatement renders the scan into certify's in-toto audit statement
 // and writes it to path.
 //
@@ -3184,6 +3254,11 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 			SuiteTests:        f.SuiteTests,
 			SelectionFallback: f.SelectionFallback,
 			Uncovered:         f.Uncovered,
+			// And at which grain: a signed rate averaged over mutants that
+			// each faced a different test set needs the spread to be read
+			// as the measurement it is.
+			PerMutant:      f.PerMutant,
+			TestsPerMutant: signableSpread(f),
 		})
 	}
 	// Same resolution the warehouse push uses: a statement whose subject names
@@ -3248,7 +3323,13 @@ func pushAuditRows(target, repoDir string, r reposcan.RepoReport, models map[str
 			TestSelection: f.SelectionMethod, SelectedTests: f.SelectedTests,
 			SuiteTests: f.SuiteTests, SelectionFallback: f.SelectionFallback,
 			Uncovered: f.Uncovered,
-			Audited:   r.Audited, Candidates: r.Candidates,
+			// And at which grain — the same qualifier the statement signs. A
+			// warehouse query averaging kill_rate across repos cannot tell a
+			// rate measured over 3 tests per mutant from one over 620
+			// without it, which is two measurements reported as one.
+			PerMutant:      f.PerMutant,
+			TestsPerMutant: pushableSpread(f),
+			Audited:        r.Audited, Candidates: r.Candidates,
 			ModelsByRole: string(rosterJSON),
 			MinKillRate:  minKillRate, MaxProvenMissed: maxProvenMissed,
 			Passed: passed, RunURL: runURL,

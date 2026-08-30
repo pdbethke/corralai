@@ -63,3 +63,42 @@ func TestUncoveredFileIsExcludedFromTheHeadlineMean(t *testing.T) {
 		t.Errorf("all-uncovered scan: kill rate = %v, graded = %d; want NaN over 0", r.KillRate, r.GradedFiles)
 	}
 }
+
+// The report is what the printer, the signer and the warehouse read; the
+// verdict is not. Whatever the run disclosed about the per-mutant grain has
+// to survive the copy — the spread AND the rule counts, and the absence of a
+// spread just as faithfully as a measured one.
+func TestAggregateCarriesThePerMutantGrainOntoTheReport(t *testing.T) {
+	results := []FileResult{
+		{Gradable: true, Verdict: advpool.Verdict{TestSelection: advpool.TestSelection{
+			Method: advpool.MethodCoverageLines, Selected: 234, Of: 620, PerMutant: true,
+			TestsPerMutant: &advpool.TestsPerMutantSpread{Min: 3, Median: 9, Max: 41},
+			Rules:          map[string]int{"lines": 30, "static": 4},
+		}}},
+		// Per-mutant, but the compile gate left nothing graded: no spread was
+		// measured, and the report must carry that absence, not three zeros.
+		{Gradable: true, Verdict: advpool.Verdict{TestSelection: advpool.TestSelection{
+			Method: advpool.MethodCoverageLines, PerMutant: true,
+		}}},
+	}
+	for i := range results {
+		results[i].Job.Path = fmt.Sprintf("pkg/f%d.py", i)
+	}
+	byPath := map[string]WeakFile{}
+	for _, w := range Aggregate("o", "r", "c", 2, 2, results, nil).Weakest {
+		byPath[w.Path] = w
+	}
+	got := byPath["pkg/f0.py"]
+	if !got.PerMutant || !got.MeasuredSpread() {
+		t.Fatalf("the per-mutant grain did not reach the report: %+v", got)
+	}
+	if *got.TestsPerMutant != (advpool.TestsPerMutantSpread{Min: 3, Median: 9, Max: 41}) {
+		t.Errorf("spread = %+v", got.TestsPerMutant)
+	}
+	if got.Rules["static"] != 4 || got.Rules["lines"] != 30 {
+		t.Errorf("rule counts = %v", got.Rules)
+	}
+	if none := byPath["pkg/f1.py"]; !none.PerMutant || none.MeasuredSpread() {
+		t.Errorf("a run that measured no spread must carry none: %+v", none)
+	}
+}

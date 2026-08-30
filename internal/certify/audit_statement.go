@@ -52,6 +52,31 @@ type AuditedFile struct {
 	SuiteTests        int    `json:"suiteTests,omitempty"`
 	SelectionFallback string `json:"selectionFallback,omitempty"`
 	Uncovered         bool   `json:"uncovered,omitempty"`
+	// And at which GRAIN the rate was measured. PerMutant says each mutant
+	// was graded by the tests that reach its own lines, which makes
+	// SelectedTests the file's UNION rather than any mutant's denominator —
+	// so the spread travels with it. A verifier handed "0.65 over 234 of
+	// 620" and nothing else would reasonably conclude every mutant faced
+	// 234 tests; the spread is what refutes that.
+	// TestsPerMutant is nil — never a zero-filled struct — when no spread was
+	// measured: an ordinary shared-command run, or a per-mutant run whose
+	// every mutant was rejected by the compile gate before anything could be
+	// graded. A signed 0-to-0 range would be a measurement nobody made.
+	PerMutant      bool                  `json:"perMutant,omitempty"`
+	TestsPerMutant *TestsPerMutantSpread `json:"testsPerMutant,omitempty"`
+}
+
+// TestsPerMutantSpread is how many tests each graded mutant ran: the
+// smallest, the middle and the largest.
+//
+// It is this package's own copy of advpool.TestsPerMutantSpread rather than
+// that type: advpool imports certify (it signs its verdicts), so certify
+// cannot import advpool back. The pointer is the load-bearing half either
+// way — an unmeasured spread is absent, not three zeros.
+type TestsPerMutantSpread struct {
+	Min    int `json:"min"`
+	Median int `json:"median"`
+	Max    int `json:"max"`
 }
 
 // AuditStatement describes one scan: which commit, which files, what was
@@ -99,6 +124,23 @@ func BuildAuditAttestation(s AuditStatement) map[string]any {
 			entry["testSelection"] = f.TestSelection
 			entry["selectedTests"] = f.SelectedTests
 			entry["suiteTests"] = f.SuiteTests
+		}
+		// Only when the run actually graded per mutant: a zero-filled spread
+		// on a shared-command file would be a signed claim about a
+		// measurement that was never made.
+		if f.PerMutant {
+			entry["perMutant"] = true
+			// The spread only when one was actually MEASURED. A per-mutant
+			// run whose every mutant was rejected by the compile gate
+			// measured none, and signing zeros for it would put a range
+			// nobody measured over a signature — the same reason an
+			// uncovered file signs no killRate. The absence is structural:
+			// the field is a pointer, so there are no zeros to sign.
+			if s := f.TestsPerMutant; s != nil {
+				entry["testsPerMutantMin"] = s.Min
+				entry["testsPerMutantMedian"] = s.Median
+				entry["testsPerMutantMax"] = s.Max
+			}
 		}
 		if f.SelectionFallback != "" {
 			entry["selectionFallback"] = f.SelectionFallback

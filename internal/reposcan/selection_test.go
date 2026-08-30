@@ -40,7 +40,9 @@ func TestSelectionEvidenceRunFailureIsDisclosedPerFile(t *testing.T) {
 
 func TestSelectionEvidenceForNarrowsFromRecordedEvidence(t *testing.T) {
 	py, _ := lang.ByName("python")
-	raw := `{"format":"corral-selection-1","tests":1,"files":{"pkg/a.py":["tests/test_a.py::test_x"],"tests/test_a.py":["tests/test_a.py::test_x"]}}`
+	raw := `{"format":"corral-selection-2","tests":1,"files":{` +
+		`"pkg/a.py":{"tests":["tests/test_a.py::test_x"],"lines":{},"static":[]},` +
+		`"tests/test_a.py":{"tests":["tests/test_a.py::test_x"],"lines":{},"static":[]}}}`
 	ev := CollectSelectionEvidence(context.Background(), &fakeRunner{out: raw}, nil, py, []string{"pytest"})
 	if !ev.Ran {
 		t.Fatalf("did not run: %s", ev.Note)

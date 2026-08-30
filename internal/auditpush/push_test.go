@@ -259,3 +259,126 @@ func TestPushMigratesAPreExistingWarehouse(t *testing.T) {
 		t.Fatalf("second push over a migrated warehouse: %v", err)
 	}
 }
+
+// TestPerMutantRowCarriesTheSpread pins the warehouse half of "the qualifiers
+// travel with the numbers" at the grain the grading now happens. A kill rate
+// measured over mutants that each faced 3 tests and one measured over the
+// whole 620 are different measurements, and a query that averages kill_rate
+// across both without these columns cannot tell them apart.
+func TestPerMutantRowCarriesTheSpread(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "w.duckdb")
+	if _, err := Push(target, []Row{
+		{Repo: "o/r", Commit: "c", Path: "src/flask/cli.py", KillRate: rate(0.65), Survivors: 4,
+			TestSelection: "coverage-lines", SelectedTests: 234, SuiteTests: 620,
+			PerMutant: true, TestsPerMutant: &TestsPerMutantSpread{Min: 3, Median: 9, Max: 41}},
+		{Repo: "o/r", Commit: "c", Path: "pkg/a.py", KillRate: rate(0.9), Survivors: 1,
+			TestSelection: "coverage-context", SelectedTests: 14, SuiteTests: 1431},
+		// Per-mutant, but the compile gate left no mutant graded: the run
+		// DID measure per mutant and measured no spread. A stored 0-0 would
+		// be a number nothing measured.
+		{Repo: "o/r", Commit: "c", Path: "pkg/none.py", KillRate: rate(0), Survivors: 0,
+			TestSelection: "coverage-lines", PerMutant: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	db := openTarget(t, target)
+	var perMutant bool
+	var min, median, max *int
+	if err := db.QueryRow(`SELECT per_mutant, tests_per_mutant_min, tests_per_mutant_median, tests_per_mutant_max
+	    FROM corral_audits WHERE path = 'src/flask/cli.py'`).Scan(&perMutant, &min, &median, &max); err != nil {
+		t.Fatalf("read back the per-mutant row: %v", err)
+	}
+	if !perMutant || min == nil || *min != 3 || median == nil || *median != 9 || max == nil || *max != 41 {
+		t.Errorf("per-mutant row = %v %v %v %v; the spread must travel with the rate", perMutant, min, median, max)
+	}
+
+	if err := db.QueryRow(`SELECT per_mutant, tests_per_mutant_min, tests_per_mutant_max
+	    FROM corral_audits WHERE path = 'pkg/a.py'`).Scan(&perMutant, &min, &max); err != nil {
+		t.Fatalf("read back the shared-command row: %v", err)
+	}
+	if perMutant {
+		t.Errorf("a file graded by one shared command must not read as per-mutant")
+	}
+	if min != nil || max != nil {
+		t.Errorf("a shared-command row must store NULL, not 0: %v %v", min, max)
+	}
+
+	if err := db.QueryRow(`SELECT per_mutant, tests_per_mutant_min, tests_per_mutant_max
+	    FROM corral_audits WHERE path = 'pkg/none.py'`).Scan(&perMutant, &min, &max); err != nil {
+		t.Fatalf("read back the unmeasured per-mutant row: %v", err)
+	}
+	if !perMutant {
+		t.Errorf("a run that graded per mutant must say so even when no mutant survived the compile gate")
+	}
+	if min != nil || max != nil {
+		t.Errorf("an unmeasured spread must be NULL, not 0-0: %v %v", min, max)
+	}
+}
+
+// TestPushMigratesAPreExistingWarehouseOntoThePerMutantColumns is the same
+// upgrade path one column set later: a warehouse whose newest columns are the
+// FILE-grain selection five must gain the per-mutant four rather than failing
+// every push.
+func TestPushMigratesAPreExistingWarehouseOntoThePerMutantColumns(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "legacy-permutant.duckdb")
+
+	// The pre-per-mutant column list, verbatim.
+	legacy := openTarget(t, target)
+	if _, err := legacy.Exec(`CREATE TABLE corral_audits (
+  ts                 TIMESTAMPTZ NOT NULL,
+  repo               VARCHAR     NOT NULL,
+  commit_sha         VARCHAR     NOT NULL,
+  path               VARCHAR     NOT NULL,
+  lang               VARCHAR,
+  kill_rate          DOUBLE,
+  survivors          INTEGER,
+  proven_missed      INTEGER,
+  timed_out          BOOLEAN,
+  test_writer_failed BOOLEAN,
+  pool_test_unsound  BOOLEAN,
+  audited            INTEGER,
+  candidates         INTEGER,
+  mutants_planted    INTEGER,
+  models_by_role     VARCHAR,
+  min_kill_rate      DOUBLE,
+  max_proven_missed  INTEGER,
+  passed             BOOLEAN,
+  statement_sha256   VARCHAR,
+  run_url            VARCHAR,
+  test_selection     VARCHAR,
+  selected_tests     INTEGER,
+  suite_tests        INTEGER,
+  selection_fallback VARCHAR,
+  uncovered          BOOLEAN
+)`); err != nil {
+		t.Fatalf("create legacy table: %v", err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatalf("close legacy target: %v", err)
+	}
+
+	n, err := Push(target, []Row{{
+		Repo: "o/r", Commit: "c", Path: "src/flask/cli.py", Lang: "python",
+		KillRate: rate(0.65), Survivors: 4,
+		TestSelection: "coverage-lines", SelectedTests: 234, SuiteTests: 620,
+		PerMutant: true, TestsPerMutant: &TestsPerMutantSpread{Min: 3, Median: 9, Max: 41},
+	}})
+	if err != nil {
+		t.Fatalf("Push onto a pre-per-mutant warehouse must migrate it, not fail: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("Push wrote %d rows, want 1", n)
+	}
+
+	db := openTarget(t, target)
+	var perMutant bool
+	var min, median, max *int
+	if err := db.QueryRow(`SELECT per_mutant, tests_per_mutant_min, tests_per_mutant_median, tests_per_mutant_max
+	    FROM corral_audits WHERE path = 'src/flask/cli.py'`).Scan(&perMutant, &min, &median, &max); err != nil {
+		t.Fatalf("read back the migrated row: %v", err)
+	}
+	if !perMutant || min == nil || *min != 3 || median == nil || *median != 9 || max == nil || *max != 41 {
+		t.Errorf("migrated per-mutant columns did not round-trip: %v %v %v %v", perMutant, min, median, max)
+	}
+}

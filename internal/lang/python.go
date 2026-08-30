@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1024,30 +1025,54 @@ func (pyPlugin) Instrument(testCmd []string) (cmd []string, ok bool) {
 // pySelectionReducer runs after the instrumented suite, in the same shell,
 // against the data file the run wrote. It emits ONE compact JSON document:
 // per measured file (repo-relative, from the cwd the suite ran in), the
-// sorted node ids of every test whose context executed a line of it, with
-// pytest-cov's `|setup`/`|run`/`|teardown` phase suffix stripped; and the
-// number of distinct tests seen anywhere. Nothing per line, nothing per
-// context — Select needs the set, not the trace.
+// sorted node ids of every test whose context executed a line of it (with
+// pytest-cov's `|setup`/`|run`/`|teardown` phase suffix stripped), the
+// closed line ranges each of those tests executed (by index into that
+// test list), the ranges executed under no test context at all (import
+// time), and the number of distinct tests seen anywhere.
 const pySelectionReducer = `import json, os, sys
 import coverage
 cov = coverage.Coverage(data_file=os.environ["COVERAGE_FILE"])
 cov.load()
 data = cov.get_data()
 root = os.getcwd()
+
+def ranges(lines):
+    out = []
+    for n in sorted(lines):
+        if out and out[-1][1] + 1 == n:
+            out[-1][1] = n
+        else:
+            out.append([n, n])
+    return out
+
 files = {}
 tests = set()
 for path in data.measured_files():
     rel = os.path.relpath(path, root)
     if rel.startswith(".."):
         continue
-    ids = set()
-    for ctxs in data.contexts_by_lineno(path).values():
+    by_test = {}
+    static = set()
+    for lineno, ctxs in data.contexts_by_lineno(path).items():
+        # coverage reports line 0 for a module with nothing executable in it
+        # (an empty __init__.py), and a [[0,0]] range is a line that does not
+        # exist: no mutant span can overlap it, and it reads as evidence.
+        if lineno <= 0:
+            continue
         for c in ctxs:
-            if c:
-                ids.add(c.rsplit("|", 1)[0])
+            if not c:
+                static.add(lineno)
+                continue
+            by_test.setdefault(c.rsplit("|", 1)[0], set()).add(lineno)
+    ids = sorted(by_test)
     tests.update(ids)
-    files[rel] = sorted(ids)
-json.dump({"format": "corral-selection-1", "tests": len(tests), "files": files}, sys.stdout, separators=(",", ":"))
+    files[rel] = {
+        "tests": ids,
+        "lines": {str(i): ranges(by_test[t]) for i, t in enumerate(ids)},
+        "static": ranges(static),
+    }
+json.dump({"format": "corral-selection-2", "tests": len(tests), "files": files}, sys.stdout, separators=(",", ":"))
 `
 
 // shellArg renders one Instrument argv element for inclusion in its sh -c
@@ -1076,22 +1101,31 @@ func shellArg(s string) string {
 // executed it; pytest-cov names a test context `<nodeid>|<phase>`.
 // pySelectionFormat stamps the reducer's output so Select refuses any other
 // document — including the full coverage-json it used to parse — by name.
-const pySelectionFormat = "corral-selection-1"
+const pySelectionFormat = "corral-selection-2"
 
-// pySelectionEvidence is what pySelectionReducer emits: repo-relative file →
-// sorted node ids of the tests that executed it; Tests is the count of
-// distinct tests seen across the whole run.
+// pySelectionEvidence is what pySelectionReducer emits: Tests is the count
+// of distinct tests seen across the whole run; Files is decoded separately
+// (see pySelectionEvidenceFiles) after Format has been checked.
 type pySelectionEvidence struct {
 	Format string `json:"format"`
 	Tests  int    `json:"tests"`
 	// Files is decoded in a second step, after Format has been checked, so
 	// a document of another shape is refused BY NAME rather than with an
 	// unmarshal error about a field it was never meant to have.
-	Files map[string][]string `json:"-"`
+	Files map[string]pySelectionFile `json:"-"`
+}
+
+// pySelectionFile is one measured file's entry: the node ids of the tests
+// that executed it, each test's executed line ranges (by index into
+// Tests), and the ranges executed under no test context (import time).
+type pySelectionFile struct {
+	Tests  []string            `json:"tests"`
+	Lines  map[string][][2]int `json:"lines"`
+	Static [][2]int            `json:"static"`
 }
 
 type pySelectionEvidenceFiles struct {
-	Files map[string][]string `json:"files"`
+	Files map[string]pySelectionFile `json:"files"`
 }
 
 // Select narrows testCmd to the tests whose recorded context executed any
@@ -1133,8 +1167,10 @@ func (pyPlugin) Select(evidence []byte, repoRoot, codePath, testPath string, tes
 	want := filepath.ToSlash(codePath)
 	wantTest := filepath.ToSlash(testPath)
 	var mine map[string]bool
+	var lines map[string][]LineRange
+	var static []LineRange
 	sawTest := false
-	for path, ids := range rep.Files {
+	for path, f := range rep.Files {
 		p, ok := alignPyPath(path, root)
 		if !ok {
 			continue
@@ -1144,8 +1180,22 @@ func (pyPlugin) Select(evidence []byte, repoRoot, codePath, testPath string, tes
 		}
 		if p == want {
 			mine = map[string]bool{} // measured; executed by these tests, or by none
-			for _, id := range ids {
+			for _, id := range f.Tests {
 				mine[id] = true
+			}
+			lines = map[string][]LineRange{}
+			for idxStr, rngs := range f.Lines {
+				idx, err := strconv.Atoi(idxStr)
+				if err != nil || idx < 0 || idx >= len(f.Tests) {
+					return Selection{}, fmt.Errorf("lang: %s evidence for %s has a lines index %q out of range for %d tests", pySelectionFormat, path, idxStr, len(f.Tests))
+				}
+				id := f.Tests[idx]
+				for _, r := range rngs {
+					lines[id] = append(lines[id], LineRange{Start: r[0], End: r[1]})
+				}
+			}
+			for _, r := range f.Static {
+				static = append(static, LineRange{Start: r[0], End: r[1]})
 			}
 		}
 	}
@@ -1160,7 +1210,7 @@ func (pyPlugin) Select(evidence []byte, repoRoot, codePath, testPath string, tes
 		}
 		mine = map[string]bool{}
 	}
-	sel := Selection{Method: "coverage-context", Of: rep.Tests, Base: stripPyCollectionTargets(testCmd, root)}
+	sel := Selection{Method: "coverage-context", Of: rep.Tests, Base: stripPyCollectionTargets(testCmd, root), Lines: lines, Static: static}
 	if len(mine) == 0 {
 		return sel, nil
 	}
@@ -1169,20 +1219,89 @@ func (pyPlugin) Select(evidence []byte, repoRoot, codePath, testPath string, tes
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
-	if argvLen(ids) > selectionMaxArgv {
-		files := map[string]bool{}
-		for _, id := range ids {
-			files[strings.SplitN(id, "::", 2)[0]] = true
-		}
-		ids = ids[:0]
-		for f := range files {
-			ids = append(ids, f)
-		}
-		sort.Strings(ids)
+	ids, collapsed := collapseToFilesIfTooLong(ids)
+	if collapsed {
+		// The line evidence is keyed by NODE ID, and the collapse just
+		// discarded every node id in favour of the containing files. Keeping
+		// it would leave ForSpan looking up ids that are no longer in Tests,
+		// matching nothing, and labelling every mutant "unreached" — a
+		// positive claim that no test reaches those lines, for a file that
+		// was not narrowed at all. Evidence in a shape that cannot be
+		// narrowed is no line evidence: dropping it reproduces the per-file
+		// behaviour byte for byte.
+		sel.Lines, sel.Static = nil, nil
 	}
 	sel.Tests = ids
 	sel.Cmd = append(append([]string{}, sel.Base...), ids...)
 	return sel, nil
+}
+
+// collapseToFilesIfTooLong collapses ids (sorted node ids) to their
+// containing files when the sorted argv would exceed selectionMaxArgv —
+// still evidence-derived, just a coarser (superset) selection than the
+// individual node ids would give. A no-op when ids already fits.
+//
+// The bool says whether the collapse HAPPENED, because it invalidates
+// anything else keyed by node id (see Select).
+func collapseToFilesIfTooLong(ids []string) ([]string, bool) {
+	if argvLen(ids) <= selectionMaxArgv {
+		return ids, false
+	}
+	files := map[string]bool{}
+	for _, id := range ids {
+		files[strings.SplitN(id, "::", 2)[0]] = true
+	}
+	out := make([]string, 0, len(files))
+	for f := range files {
+		out = append(out, f)
+	}
+	sort.Strings(out)
+	return out, true
+}
+
+// ForSpan narrows sel to the tests whose recorded coverage reaches span. See
+// TestSelector.ForSpan and SpanRule for the contract.
+func (pyPlugin) ForSpan(sel Selection, span LineRange) ([]string, []string, string) {
+	file := func(rule string) ([]string, []string, string) {
+		return append([]string{}, sel.Cmd...), append([]string{}, sel.Tests...), rule
+	}
+	// Never "unreached" for evidence that cannot be narrowed at all: a
+	// selection whose Tests were collapsed to files still carries Lines
+	// keyed by node id, and every lookup below would miss. See
+	// Selection.NarrowableByLine.
+	if span.IsZero() || !sel.NarrowableByLine() {
+		return file(SpanRuleFile)
+	}
+	for _, s := range sel.Static {
+		if s.Overlaps(span) {
+			return file(SpanRuleStatic)
+		}
+	}
+	var ids []string
+	for _, id := range sel.Tests {
+		for _, r := range sel.Lines[id] {
+			if r.Overlaps(span) {
+				ids = append(ids, id)
+				break
+			}
+		}
+	}
+	if len(ids) == 0 {
+		return file(SpanRuleUnreached)
+	}
+	sort.Strings(ids)
+	ids, _ = collapseToFilesIfTooLong(ids)
+	base := sel.Base
+	if base == nil {
+		// Cmd is Base + Tests by construction. A Selection that does not
+		// hold that runs the file selection rather than slicing a command
+		// apart on an assumption it just failed.
+		if len(sel.Cmd) < len(sel.Tests) {
+			return file(SpanRuleFile)
+		}
+		base = sel.Cmd[:len(sel.Cmd)-len(sel.Tests)]
+	}
+	return append(append([]string{}, base...), ids...), ids, SpanRuleLines
 }
 
 // pyValueOptions are the pytest options that take their value as a SEPARATE

@@ -27,6 +27,17 @@ import (
 // renegotiated; a token count is a measurement that stays true. Pricing belongs
 // in the query that reads the ledger, not in the record.
 type Usage struct {
+	// InputTokens is the WHOLE prompt this call sent, cached part included —
+	// one meaning for every provider, so the ledger's input_tokens series can
+	// be summed across seats of different vendors.
+	//
+	// It is NORMALISED at the backend where a wire disagrees. The
+	// OpenAI-compatible wire's prompt_tokens already includes its cached
+	// half. Anthropic's three input counters are DISJOINT — `input_tokens`
+	// is only the uncached remainder — so the Anthropic backend adds the two
+	// cache counters back in before filling this field. Without that, a seat
+	// whose prefix cached well would report a smaller prompt than the
+	// identical uncached one, which reads as a saving in the wrong column.
 	InputTokens  int
 	OutputTokens int
 	// CachedInputTokens is how many of InputTokens the provider served from
@@ -42,6 +53,11 @@ type Usage struct {
 	// costs N x the file and one that costs the file once — and InputTokens
 	// alone cannot express it: a cached 40k-token prompt and a fresh one
 	// report the same total.
+	//
+	// A SUBSET of InputTokens, on every provider — see that field: the
+	// Anthropic backend normalises its disjoint counters so the subset
+	// relation holds there too, rather than leaving one vendor's numbers to
+	// mean something else.
 	//
 	// A POINTER, and nil is the common case. A response that says nothing
 	// about caching has not reported a MISS; it has reported nothing. A

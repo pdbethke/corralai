@@ -198,3 +198,79 @@ func TestUsageMeterAccumulatesCacheWritesSeparately(t *testing.T) {
 		t.Errorf("CacheWriteInputTokens = %d, want nil", *s.CacheWriteInputTokens)
 	}
 }
+
+// TestAnthropicInputTokensIncludeTheCacheCounters is the units fix.
+//
+// Anthropic's three input counters are DISJOINT: `input_tokens` is the
+// uncached remainder, and cache_read_input_tokens / cache_creation_input_tokens
+// are the rest of the same prompt. Every other wire corral speaks reports a
+// prompt total that ALREADY contains its cached half (OpenAI's prompt_tokens),
+// so storing Anthropic's remainder under the same column name would give
+// scan_model_calls.input_tokens two different meanings depending on the seat's
+// vendor — and would make `(N cached)` read as N of a total that excludes it.
+//
+// So the backend normalises: InputTokens is the WHOLE prompt, everywhere, and
+// the two cache counters stay the breakdown of it.
+func TestAnthropicInputTokensIncludeTheCacheCounters(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"ok"}],
+		  "usage":{"input_tokens":40,"output_tokens":7,
+		           "cache_read_input_tokens":1200,"cache_creation_input_tokens":300}}`)
+	}))
+	defer srv.Close()
+
+	b := &anthropicBackend{base: srv.URL, key: "k", model: "claude-test"}
+	m, err := b.Chat([]Message{{Role: "user", Content: "hi"}}, nil)
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if got := m.Usage.InputTokens; got != 1540 {
+		t.Errorf("InputTokens = %d, want 1540 (40 uncached + 1200 read + 300 written) — Anthropic's three input counters are disjoint, so the raw input_tokens is only the remainder", got)
+	}
+	if m.Usage.CachedInputTokens == nil || *m.Usage.CachedInputTokens != 1200 {
+		t.Errorf("CachedInputTokens = %v, want the reported 1200 unchanged — it is the breakdown of InputTokens, not a second total", m.Usage.CachedInputTokens)
+	}
+	if m.Usage.CacheWriteInputTokens == nil || *m.Usage.CacheWriteInputTokens != 300 {
+		t.Errorf("CacheWriteInputTokens = %v, want the reported 300 unchanged", m.Usage.CacheWriteInputTokens)
+	}
+}
+
+// TestAnthropicInputTokensUnchangedWithoutCacheCounters: a response that
+// reports no cache activity must not have its total moved. Normalising must
+// add what was reported and nothing else.
+func TestAnthropicInputTokensUnchangedWithoutCacheCounters(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":40,"output_tokens":7}}`)
+	}))
+	defer srv.Close()
+
+	b := &anthropicBackend{base: srv.URL, key: "k", model: "claude-test"}
+	m, err := b.Chat([]Message{{Role: "user", Content: "hi"}}, nil)
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if got := m.Usage.InputTokens; got != 40 {
+		t.Errorf("InputTokens = %d, want the reported 40", got)
+	}
+}
+
+// TestOpenAICompatInputTokensAreNotDoubleCounted is the other half of the
+// units rule: prompt_tokens ALREADY includes cached_tokens on this wire, so
+// the normalisation that Anthropic needs must NOT be applied here — 900 with
+// 800 of it cached is a 900-token prompt, never a 1700-token one.
+func TestOpenAICompatInputTokensAreNotDoubleCounted(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"ok"}}],
+		  "usage":{"prompt_tokens":900,"completion_tokens":5,"prompt_tokens_details":{"cached_tokens":800}}}`)
+	}))
+	defer srv.Close()
+
+	b := &openaiBackend{base: srv.URL, model: "gemini-test"}
+	m, err := b.Chat([]Message{{Role: "user", Content: "hi"}}, nil)
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if got := m.Usage.InputTokens; got != 900 {
+		t.Errorf("InputTokens = %d, want the reported prompt_tokens 900 — it already contains the 800 cached", got)
+	}
+}

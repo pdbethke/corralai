@@ -75,7 +75,7 @@ func TestScorePythonKillsAndSurvives(t *testing.T) {
 		// but survives the gappy suite, which only ever asserts the even
 		// case — giving both scenarios a mutant with the behavior their
 		// assertions expect.
-		{ID: "m1", Code: "def is_even(n):\n    return True\n"},
+		{ID: "m1", Replace: "def is_even(n):\n    return True\n"},
 	}
 
 	// If a workspace import of the module fails because the workspace root

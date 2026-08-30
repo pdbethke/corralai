@@ -290,7 +290,7 @@ func TestShadowShardTaskKeyRoundTrip(t *testing.T) {
 
 func TestRenderTestWriterWithRepair(t *testing.T) {
 	rs := RunSpec{Goal: "reject bad input", CodePath: "version4.go", Code: "package uuid\nfunc New() {}\n", Lang: "go"}
-	survivors := []adequacy.Mutant{{ID: "m1", Code: "mutant one"}}
+	survivors := []adequacy.Mutant{{ID: "m1", Replace: "mutant one"}}
 
 	// Base render (no repair): carries the goal + the same-package unique-names
 	// hint, but no repair block.
@@ -328,7 +328,7 @@ func TestRenderTestWriterWithRepair(t *testing.T) {
 // this only proves the plumbing: the derivation itself is
 // TestPythonImportPath/TestPythonImportNote in internal/lang.
 func TestRenderTestWriterCarriesImportFactForPython(t *testing.T) {
-	survivors := []adequacy.Mutant{{ID: "m1", Code: "mutant one"}}
+	survivors := []adequacy.Mutant{{ID: "m1", Replace: "mutant one"}}
 
 	known := RunSpec{Goal: "reject bad input", CodePath: "src/flask/cli.py", Code: "def f(): pass\n", Lang: "python", ImportPath: "flask.cli"}
 	got := renderTestWriterWithRepair(known, nil, survivors, "", "")
@@ -381,7 +381,7 @@ func TestRenderTestWriterDropsStaleFileNameClauseForPython(t *testing.T) {
 	// The stable head of the reference clause, emitted only when the plugin's
 	// ImportNote is empty.
 	const staleClause = "Reference or import the code under test by"
-	survivors := []adequacy.Mutant{{ID: "m1", Code: "mutant one"}}
+	survivors := []adequacy.Mutant{{ID: "m1", Replace: "mutant one"}}
 
 	known := RunSpec{Goal: "g", CodePath: "src/flask/cli.py", Code: "def f(): pass\n", Lang: "python", ImportPath: "flask.cli"}
 	if got := renderTestWriterWithRepair(known, nil, survivors, "", ""); strings.Contains(got, staleClause) {

@@ -66,7 +66,7 @@ func Author(ctx context.Context, m testgen.LLM, jail adequacy.Jail, req Request)
 	if err != nil {
 		return Result{}, fmt.Errorf("authoring: generate mutants: %w", err)
 	}
-	valid, discarded, err := compileVerify(ctx, jail, req.Base, req.CodePath, mutants, req.BuildCmd)
+	valid, discarded, err := compileVerify(ctx, jail, req.Base, req.CodePath, req.Code, mutants, req.BuildCmd)
 	if err != nil {
 		return Result{}, err
 	}

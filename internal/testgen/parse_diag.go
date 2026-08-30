@@ -132,9 +132,24 @@ func parseMutantsDiag(resp, original string) ([]adequacy.Mutant, MutantParseDiag
 			}
 			continue
 		}
-		mutant, span, ok := applyMutation(original, search, replace)
-		if !ok {
-			// applyMutation refused after the anchor was known present, so the
+		// The hunk is VALIDATED here and then KEPT as the mutant. Apply is the
+		// same algorithm that used to run at this point and materialise the
+		// whole file; the difference is that the file it produces is thrown
+		// away and re-made inside the jail, so nothing between here and there
+		// carries a copy of the source.
+		m := adequacy.Mutant{
+			ID:           fmt.Sprintf("m%d", len(out)+1),
+			ParentSHA256: parentHash,
+			// VERBATIM, whatever the model emitted. stripLeading above is a
+			// DIAGNOSIS and never an anchor: a SEARCH whose indentation was
+			// mangled is counted and dropped, never matched loosely. So the
+			// only anchors that reach a Mutant are ones that matched these
+			// exact bytes, and storing them as-is reproduces this same splice.
+			Search:  search,
+			Replace: replace,
+		}
+		if _, aerr := m.Apply(original); aerr != nil {
+			// Apply refused after the anchor was known present, so the
 			// remaining causes are non-uniqueness and the integrity round-trip.
 			i := strings.Index(original, search)
 			if strings.Contains(original[i+len(search):], search) {
@@ -144,13 +159,9 @@ func parseMutantsDiag(resp, original string) ([]adequacy.Mutant, MutantParseDiag
 			}
 			continue
 		}
+		m.Span = adequacy.HunkSpan(original, search)
 		d.Kept++
-		out = append(out, adequacy.Mutant{
-			ID:           fmt.Sprintf("m%d", len(out)+1),
-			Code:         mutant,
-			ParentSHA256: parentHash,
-			Span:         span,
-		})
+		out = append(out, m)
 	}
 	return out, d
 }

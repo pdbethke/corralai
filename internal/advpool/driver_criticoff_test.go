@@ -53,9 +53,9 @@ func TestBuildDAG_NoCriticAssigned_OmitsCriticTask(t *testing.T) {
 // critic-less run would spin to its --timeout and bank an unverified verdict
 // instead of certifying — a silent hang, not an error.
 func TestTick_NoCriticAssigned_StillConverges(t *testing.T) {
-	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}}
+	survivors := []adequacy.Mutant{{ID: "m1", Replace: "c1"}}
 	scorer := &fakeScorer{devKillRate: 0.9, devSurvivors: survivors, poolSurvivors: nil}
-	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0]}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Replace: "c0"}, survivors[0]}}
 
 	q := newTestQueue(t)
 	d, err := NewDriver(q, scorer, validator, criticOffAssign(), 0.5)

@@ -65,7 +65,7 @@ func completeRunTolerantOfWriterRetries(t *testing.T, d *Driver, missionID int64
 // and converged. A test that compiles and then fails on unmutated code is just
 // as diagnosable — pytest says exactly what broke — and the model never saw it.
 func TestTick_PoolAdequacy_CleanCodeFailureIsRetried(t *testing.T) {
-	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}, {ID: "m2", Code: "c2"}}
+	survivors := []adequacy.Mutant{{ID: "m1", Replace: "c1"}, {ID: "m2", Replace: "c2"}}
 
 	calls := 0
 	scorer := &fakeScorer{
@@ -85,7 +85,7 @@ func TestTick_PoolAdequacy_CleanCodeFailureIsRetried(t *testing.T) {
 			}, nil
 		},
 	}
-	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0], survivors[1]}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Replace: "c0"}, survivors[0], survivors[1]}}
 	d, _ := newTestDriver(t, 2, scorer, validator, 0.1)
 
 	v := completeRunTolerantOfWriterRetries(t, d, 2, "no findings")
@@ -107,7 +107,7 @@ func TestTick_PoolAdequacy_CleanCodeFailureIsRetried(t *testing.T) {
 // still be marked unsound rather than spinning to the run deadline or inventing
 // proof from a run that graded nothing.
 func TestTick_PoolAdequacy_CleanCodeFailureStillConvergesWhenRetriesExhaust(t *testing.T) {
-	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}, {ID: "m2", Code: "c2"}}
+	survivors := []adequacy.Mutant{{ID: "m1", Replace: "c1"}, {ID: "m2", Replace: "c2"}}
 	scorer := &fakeScorer{
 		devKillRate:  0.9,
 		devSurvivors: survivors,
@@ -115,7 +115,7 @@ func TestTick_PoolAdequacy_CleanCodeFailureStillConvergesWhenRetriesExhaust(t *t
 			return adequacy.Report{CompliantPass: false, Total: 0}, nil // never recovers
 		},
 	}
-	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0], survivors[1]}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Replace: "c0"}, survivors[0], survivors[1]}}
 	d, _ := newTestDriver(t, 2, scorer, validator, 0.1)
 
 	v := completeRunTolerantOfWriterRetries(t, d, 2, "no findings")

@@ -38,7 +38,7 @@ func (f *eventsFakeScorer) Score(ctx context.Context, codePath, code, test strin
 	if !f.devDone {
 		f.clk.advance(f.dev)
 		f.devDone = true
-		return 0.5, []adequacy.Mutant{{ID: "m2", Code: "s"}}, nil
+		return 0.5, []adequacy.Mutant{{ID: "m2", Replace: "s"}}, nil
 	}
 	f.clk.advance(f.pool)
 	return 1.0, nil, nil
@@ -97,7 +97,7 @@ func driveEventsRun(t *testing.T, sink *scanEventSink, path string, clk *eventsF
 	t.Helper()
 	const mission int64 = 501
 	scorer := &eventsFakeScorer{clk: clk, dev: 2 * time.Minute, pool: time.Minute}
-	validator := &eventsFakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Code: "k"}, {ID: "m2", Code: "s"}}}
+	validator := &eventsFakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Replace: "k"}, {ID: "m2", Replace: "s"}}}
 	q, err := queue.Open(filepath.Join(t.TempDir(), "q.sqlite3"))
 	if err != nil {
 		t.Fatalf("queue.Open: %v", err)

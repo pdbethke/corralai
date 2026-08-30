@@ -156,14 +156,14 @@ func devReportFrom(killRate float64, survivors, mutants []adequacy.Mutant) adequ
 	byCode := map[string]string{}
 	for _, m := range mutants {
 		byID[m.ID] = true
-		byCode[m.Code] = m.ID
+		byCode[m.Replace] = m.ID
 	}
 	for _, s := range survivors {
 		switch {
 		case byID[s.ID]:
 			rep.Survived = append(rep.Survived, s.ID)
-		case byCode[s.Code] != "":
-			rep.Survived = append(rep.Survived, byCode[s.Code])
+		case byCode[s.Replace] != "":
+			rep.Survived = append(rep.Survived, byCode[s.Replace])
 		default:
 			rep.Survived = append(rep.Survived, s.ID)
 		}
@@ -337,9 +337,9 @@ func newTestDriver(t *testing.T, missionID int64, scorer *fakeScorer, validator 
 // (a) mutant-generator done -> Tick scores the dev's own tests and promotes
 // test-writer, re-rendered with the real survivors.
 func TestTick_DevAdequacy_PromotesTestWriterWithSurvivors(t *testing.T) {
-	survivor := adequacy.Mutant{ID: "m1", Code: "SURVIVOR-MARKER-m1"}
+	survivor := adequacy.Mutant{ID: "m1", Replace: "SURVIVOR-MARKER-m1"}
 	scorer := &fakeScorer{devKillRate: 0.9, devSurvivors: []adequacy.Mutant{survivor}}
-	validator := &fakeValidator{mutants: []adequacy.Mutant{survivor, {ID: "m2", Code: "killed-m2"}}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{survivor, {ID: "m2", Replace: "killed-m2"}}}
 	d, _ := newTestDriver(t, 1, scorer, validator, 0.5)
 
 	mg := claimByKey(t, d.Q, RoleMutantGenerator)
@@ -377,13 +377,13 @@ func TestTick_DevAdequacy_PromotesTestWriterWithSurvivors(t *testing.T) {
 // (b) test-writer done -> Tick validates it compiles and scores it against
 // the survivors, producing ProvenMissed.
 func TestTick_PoolAdequacy_ScoresProvenMissed(t *testing.T) {
-	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}, {ID: "m2", Code: "c2"}}
+	survivors := []adequacy.Mutant{{ID: "m1", Replace: "c1"}, {ID: "m2", Replace: "c2"}}
 	scorer := &fakeScorer{
 		devKillRate:   0.5,
 		devSurvivors:  survivors,
-		poolSurvivors: []adequacy.Mutant{{ID: "m2", Code: "c2"}}, // pool test killed m1 but not m2
+		poolSurvivors: []adequacy.Mutant{{ID: "m2", Replace: "c2"}}, // pool test killed m1 but not m2
 	}
-	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0], survivors[1]}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Replace: "c0"}, survivors[0], survivors[1]}}
 	d, _ := newTestDriver(t, 2, scorer, validator, 0.1)
 
 	mg := claimByKey(t, d.Q, RoleMutantGenerator)
@@ -455,7 +455,7 @@ func TestTick_PoolAdequacy_ScoresProvenMissed(t *testing.T) {
 // needs-review EVEN THOUGH DevKillRate clears the threshold on its own —
 // proving poolTestUnsound, not devKillRate, is what forced it.
 func TestTick_PoolAdequacy_UnsoundReportDoesNotFabricateProvenMissed(t *testing.T) {
-	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}, {ID: "m2", Code: "c2"}}
+	survivors := []adequacy.Mutant{{ID: "m1", Replace: "c1"}, {ID: "m2", Replace: "c2"}}
 	scorer := &fakeScorer{
 		devKillRate:  0.9, // clears a low threshold on its own
 		devSurvivors: survivors,
@@ -465,7 +465,7 @@ func TestTick_PoolAdequacy_UnsoundReportDoesNotFabricateProvenMissed(t *testing.
 			return adequacy.Report{CompliantPass: false, Total: 0}, nil
 		},
 	}
-	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0], survivors[1]}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Replace: "c0"}, survivors[0], survivors[1]}}
 	d, _ := newTestDriver(t, 2, scorer, validator, 0.1)
 
 	// Retry-tolerant: a clean-code failure is now reissued to the writer with
@@ -494,7 +494,7 @@ func TestTick_PoolAdequacy_UnsoundReportDoesNotFabricateProvenMissed(t *testing.
 // unmutated code but never even reads the audited file (CanaryKilled false)
 // — same fabrication risk, different cause.
 func TestTick_PoolAdequacy_CanaryNotKilledDoesNotFabricateProvenMissed(t *testing.T) {
-	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}}
+	survivors := []adequacy.Mutant{{ID: "m1", Replace: "c1"}}
 	scorer := &fakeScorer{
 		devKillRate:  0.9,
 		devSurvivors: survivors,
@@ -502,7 +502,7 @@ func TestTick_PoolAdequacy_CanaryNotKilledDoesNotFabricateProvenMissed(t *testin
 			return adequacy.Report{CompliantPass: true, CanaryKilled: false, Total: 0}, nil
 		},
 	}
-	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0]}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Replace: "c0"}, survivors[0]}}
 	d, _ := newTestDriver(t, 2, scorer, validator, 0.1)
 
 	v := completeFullRun(t, d, 2, "no findings")
@@ -553,9 +553,9 @@ func completeFullRun(t *testing.T, d *Driver, missionID int64, criticResult stri
 // (c) test-critic + pool-adequacy done, no blocking finding, DevKillRate
 // above threshold -> certified.
 func TestTick_Aggregate_Certified(t *testing.T) {
-	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}}
+	survivors := []adequacy.Mutant{{ID: "m1", Replace: "c1"}}
 	scorer := &fakeScorer{devKillRate: 0.9, devSurvivors: survivors, poolSurvivors: nil}
-	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0]}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Replace: "c0"}, survivors[0]}}
 	d, _ := newTestDriver(t, 3, scorer, validator, 0.5)
 
 	v := completeFullRun(t, d, 3, "no vacuous tests found")
@@ -580,9 +580,9 @@ func TestTick_Aggregate_Certified(t *testing.T) {
 // kill-rate (0.95) at/above threshold (0.5), the run CERTIFIES despite the
 // critic's flag — execution proves adequacy; an LLM opinion does not un-prove it.
 func TestTick_CriticFindingIsAdvisory_CertifiesOnKillRate(t *testing.T) {
-	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}}
+	survivors := []adequacy.Mutant{{ID: "m1", Replace: "c1"}}
 	scorer := &fakeScorer{devKillRate: 0.95, devSurvivors: survivors, poolSurvivors: nil}
-	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0]}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Replace: "c0"}, survivors[0]}}
 	d, _ := newTestDriver(t, 4, scorer, validator, 0.5)
 
 	ctx := context.Background()
@@ -646,12 +646,12 @@ func (f *fakeCriticSink) Record(_ int64, _ string, o []CriticFindingObservation)
 // and must stay unadjudicated even though the SAME test just proved it can
 // fail.
 func TestCriticAutoRefute(t *testing.T) {
-	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}}
+	survivors := []adequacy.Mutant{{ID: "m1", Replace: "c1"}}
 	// poolSurvivors=nil: both the pool-adequacy call (2nd success) AND the
 	// auto-refute single-test call (3rd success) come back with zero
 	// survivors, i.e. the killing test kills every mutant it's run against.
 	scorer := &fakeScorer{devKillRate: 0.9, devSurvivors: survivors, poolSurvivors: nil}
-	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0]}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Replace: "c0"}, survivors[0]}}
 	d, _ := newTestDriver(t, 20, scorer, validator, 0.5)
 	d.Signer = &fakeSigner{}
 	sink := &fakeCriticSink{}
@@ -736,9 +736,9 @@ func TestCriticAutoRefute(t *testing.T) {
 // finding unadjudicated (inconclusive), the same as any other run that
 // couldn't be scored.
 func TestCriticAutoRefute_BaselineFail_StaysUnadjudicated(t *testing.T) {
-	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}}
+	survivors := []adequacy.Mutant{{ID: "m1", Replace: "c1"}}
 	scorer := &fakeScorer{devKillRate: 0.9, devSurvivors: survivors, poolSurvivors: nil, refuteBaselineFail: true}
-	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0]}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Replace: "c0"}, survivors[0]}}
 	d, _ := newTestDriver(t, 21, scorer, validator, 0.5)
 	d.Signer = &fakeSigner{}
 	sink := &fakeCriticSink{}
@@ -852,7 +852,7 @@ func newTestDriverWithSpec(t *testing.T, missionID int64, scorer Scorer, validat
 // floor — Catchable — proves that absence is meaningful, not just an
 // untestable claim).
 func TestMatrixDrivesAdjudicationAndCandidates(t *testing.T) {
-	mutants := []adequacy.Mutant{{ID: "m1", Code: "c1"}, {ID: "m2", Code: "c2"}}
+	mutants := []adequacy.Mutant{{ID: "m1", Replace: "c1"}, {ID: "m2", Replace: "c2"}}
 	scorer := &fakeScorer{
 		devKillRate: 0.9, devSurvivors: mutants, poolSurvivors: nil,
 		reportFn: func(_ context.Context, _, _, _ string, _ []adequacy.Mutant, testCmd string) (adequacy.Report, error) {
@@ -993,9 +993,9 @@ func TestMatrixDrivesAdjudicationAndCandidates(t *testing.T) {
 // via the pre-matrix single-test re-score path (AutoAdjudication), exactly as
 // TestCriticAutoRefute already proves without an Enumerator wired at all.
 func TestMatrixOff_PreservesSingleTestCriticPath(t *testing.T) {
-	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}}
+	survivors := []adequacy.Mutant{{ID: "m1", Replace: "c1"}}
 	scorer := &fakeScorer{devKillRate: 0.9, devSurvivors: survivors, poolSurvivors: nil}
-	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0]}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Replace: "c0"}, survivors[0]}}
 	rs := testRunSpec() // Matrix left false
 	d := newTestDriverWithSpec(t, 31, scorer, validator, 0.5, rs)
 	d.Signer = &fakeSigner{}
@@ -1046,9 +1046,9 @@ func TestMatrixOff_PreservesSingleTestCriticPath(t *testing.T) {
 
 // (e) DevKillRate below threshold -> needs-review, even with no findings.
 func TestTick_Aggregate_BelowThreshold_NeedsReview(t *testing.T) {
-	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}, {ID: "m2", Code: "c2"}}
+	survivors := []adequacy.Mutant{{ID: "m1", Replace: "c1"}, {ID: "m2", Replace: "c2"}}
 	scorer := &fakeScorer{devKillRate: 0.2, devSurvivors: survivors, poolSurvivors: nil}
-	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0], survivors[1]}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Replace: "c0"}, survivors[0], survivors[1]}}
 	d, _ := newTestDriver(t, 5, scorer, validator, 0.8)
 
 	v := completeFullRun(t, d, 5, "no vacuous tests found")
@@ -1062,9 +1062,9 @@ func TestTick_Aggregate_BelowThreshold_NeedsReview(t *testing.T) {
 // fitness (soundness #6: fitness only from CERTIFIED outcomes — a run parked
 // for human review has not earned credit for any model yet).
 func TestTick_Aggregate_NeedsReview_SignsButFeedsNoLeaderboard(t *testing.T) {
-	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}}
+	survivors := []adequacy.Mutant{{ID: "m1", Replace: "c1"}}
 	scorer := &fakeScorer{devKillRate: 0.2, devSurvivors: survivors, poolSurvivors: nil}
-	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0]}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Replace: "c0"}, survivors[0]}}
 	d, _ := newTestDriver(t, 9, scorer, validator, 0.8)
 	signer := &fakeSigner{}
 	leaderboard := &fakeLeaderboard{}
@@ -1163,10 +1163,10 @@ func TestTick_DevAdequacy_ParseError_ReopensAndSkipsScore(t *testing.T) {
 // artifact — reopen test-writer for retry and never let it reach the pool
 // Scorer.Score call.
 func TestTick_PoolAdequacy_CompileError_ReopensAndSkipsScore(t *testing.T) {
-	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}, {ID: "m2", Code: "c2"}}
+	survivors := []adequacy.Mutant{{ID: "m1", Replace: "c1"}, {ID: "m2", Replace: "c2"}}
 	scorer := &fakeScorer{devKillRate: 0.5, devSurvivors: survivors}
 	validator := &fakeValidator{
-		mutants:    []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0], survivors[1]},
+		mutants:    []adequacy.Mutant{{ID: "m0", Replace: "c0"}, survivors[0], survivors[1]},
 		compileErr: fmt.Errorf("syntax error in generated test"),
 	}
 	d, _ := newTestDriver(t, 7, scorer, validator, 0.1)
@@ -1228,10 +1228,10 @@ func TestTick_PoolAdequacy_CompileError_ReopensAndSkipsScore(t *testing.T) {
 // budget so a later good attempt never gets a slot. An empty result must reissue
 // a FRESH prompt, not the repair variant.
 func TestTick_PoolAdequacy_EmptyTestWriterResult_ReissuesFresh(t *testing.T) {
-	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}, {ID: "m2", Code: "c2"}}
+	survivors := []adequacy.Mutant{{ID: "m1", Replace: "c1"}, {ID: "m2", Replace: "c2"}}
 	scorer := &fakeScorer{devKillRate: 0.5, devSurvivors: survivors}
 	validator := &fakeValidator{
-		mutants:    []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0], survivors[1]},
+		mutants:    []adequacy.Mutant{{ID: "m0", Replace: "c0"}, survivors[0], survivors[1]},
 		compileErr: fmt.Errorf("expected 'package', found 'EOF'"), // what an empty test yields
 	}
 	d, _ := newTestDriver(t, 7, scorer, validator, 0.1)
@@ -1277,10 +1277,10 @@ func TestTick_PoolAdequacy_EmptyTestWriterResult_ReissuesFresh(t *testing.T) {
 // must never auto-certify a run that found a survivor it could not prove
 // killable.
 func TestTick_PoolAdequacy_CompileError_ExhaustsAttemptsThenConverges(t *testing.T) {
-	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}, {ID: "m2", Code: "c2"}}
+	survivors := []adequacy.Mutant{{ID: "m1", Replace: "c1"}, {ID: "m2", Replace: "c2"}}
 	scorer := &fakeScorer{devKillRate: 0.9, devSurvivors: survivors}
 	validator := &fakeValidator{
-		mutants:    []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0], survivors[1]},
+		mutants:    []adequacy.Mutant{{ID: "m0", Replace: "c0"}, survivors[0], survivors[1]},
 		compileErr: fmt.Errorf("syntax error in generated test"), // NEVER clears
 	}
 	d, _ := newTestDriver(t, 12, scorer, validator, 0.5)
@@ -1373,10 +1373,10 @@ func TestTick_PoolAdequacy_CompileError_ExhaustsAttemptsThenConverges(t *testing
 // asserting on captured `log` package output instead of the verdict.
 func TestTick_PoolAdequacy_CompileError_ExhaustionLogsTheCompileError(t *testing.T) {
 	const wantCompileErr = "distinctive compile failure xyz123"
-	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}, {ID: "m2", Code: "c2"}}
+	survivors := []adequacy.Mutant{{ID: "m1", Replace: "c1"}, {ID: "m2", Replace: "c2"}}
 	scorer := &fakeScorer{devKillRate: 0.9, devSurvivors: survivors}
 	validator := &fakeValidator{
-		mutants:    []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0], survivors[1]},
+		mutants:    []adequacy.Mutant{{ID: "m0", Replace: "c0"}, survivors[0], survivors[1]},
 		compileErr: fmt.Errorf(wantCompileErr), // NEVER clears
 	}
 	d, _ := newTestDriver(t, 13, scorer, validator, 0.5)
@@ -1416,9 +1416,9 @@ func TestTick_PoolAdequacy_CompileError_ExhaustionLogsTheCompileError(t *testing
 // (i3) the happy path must not regress: when the test-writer's output DOES
 // compile (first try), TestWriterFailed must be false.
 func TestTick_PoolAdequacy_CompileSucceeds_TestWriterFailedFalse(t *testing.T) {
-	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}}
+	survivors := []adequacy.Mutant{{ID: "m1", Replace: "c1"}}
 	scorer := &fakeScorer{devKillRate: 0.9, devSurvivors: survivors, poolSurvivors: nil}
-	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0]}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Replace: "c0"}, survivors[0]}}
 	d, _ := newTestDriver(t, 13, scorer, validator, 0.5)
 	d.Signer = &fakeSigner{}
 
@@ -1470,9 +1470,9 @@ func (f *fakeLeaderboard) Record(model, role, outcome string) {
 // (model, role, outcome) for all three roles — soundness #5: the fitness
 // feed never runs before the deterministic gate has scored and signed.
 func TestTick_Aggregate_Certified_SignsAndFeedsLeaderboard(t *testing.T) {
-	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}}
+	survivors := []adequacy.Mutant{{ID: "m1", Replace: "c1"}}
 	scorer := &fakeScorer{devKillRate: 0.9, devSurvivors: survivors, poolSurvivors: nil}
-	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0]}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Replace: "c0"}, survivors[0]}}
 	d, _ := newTestDriver(t, 8, scorer, validator, 0.5)
 	signer := &fakeSigner{}
 	leaderboard := &fakeLeaderboard{}
@@ -1532,9 +1532,9 @@ func TestTick_Aggregate_Certified_SignsAndFeedsLeaderboard(t *testing.T) {
 // stored Verdict — Task 2's RunStatus and Task 4's advVerdict both read
 // these fields off the converged verdict.
 func TestVerdictCarriesSignedRecordID(t *testing.T) {
-	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}}
+	survivors := []adequacy.Mutant{{ID: "m1", Replace: "c1"}}
 	scorer := &fakeScorer{devKillRate: 0.9, devSurvivors: survivors, poolSurvivors: nil}
-	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0]}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Replace: "c0"}, survivors[0]}}
 	d, _ := newTestDriver(t, 11, scorer, validator, 0.5)
 	d.Signer = &fakeSigner{}
 
@@ -1553,9 +1553,9 @@ func TestVerdictCarriesSignedRecordID(t *testing.T) {
 // still sign a needs-review one, but the signed verdict's Status must never
 // read "certified" on a run that didn't clear the human gate.
 func TestTick_Aggregate_NeedsReview_NeverSignsCertified(t *testing.T) {
-	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}, {ID: "m2", Code: "c2"}}
+	survivors := []adequacy.Mutant{{ID: "m1", Replace: "c1"}, {ID: "m2", Replace: "c2"}}
 	scorer := &fakeScorer{devKillRate: 0.2, devSurvivors: survivors, poolSurvivors: nil}
-	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0], survivors[1]}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Replace: "c0"}, survivors[0], survivors[1]}}
 	d, _ := newTestDriver(t, 9, scorer, validator, 0.8)
 	signer := &fakeSigner{}
 	leaderboard := &fakeLeaderboard{}
@@ -1585,9 +1585,9 @@ func TestTick_Aggregate_NeedsReview_NeverSignsCertified(t *testing.T) {
 // unsigned verdict (soundness #5), and must leave the run non-terminal so a
 // later Tick can retry the (idempotent) aggregate+sign sequence.
 func TestTick_Aggregate_SignFails_SkipsLeaderboardAndRetries(t *testing.T) {
-	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}}
+	survivors := []adequacy.Mutant{{ID: "m1", Replace: "c1"}}
 	scorer := &fakeScorer{devKillRate: 0.9, devSurvivors: survivors, poolSurvivors: nil}
-	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0]}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Replace: "c0"}, survivors[0]}}
 	d, _ := newTestDriver(t, 10, scorer, validator, 0.5)
 	signer := &fakeSigner{err: fmt.Errorf("certify chain unavailable")}
 	leaderboard := &fakeLeaderboard{}
@@ -1643,9 +1643,9 @@ func (f *fakeEventSink) Emit(missionID int64, kind, subject string, detail map[s
 // the expected detail keys.
 func TestDriverEmitsReasoningEvents(t *testing.T) {
 	const mission int64 = 88
-	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}}
+	survivors := []adequacy.Mutant{{ID: "m1", Replace: "c1"}}
 	scorer := &fakeScorer{devKillRate: 0.9, devSurvivors: survivors, poolSurvivors: nil}
-	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0]}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Replace: "c0"}, survivors[0]}}
 	q := newTestQueue(t)
 	d, err := NewDriver(q, scorer, validator, decorrelatedAssign(), 0.5)
 	if err != nil {
@@ -1717,9 +1717,9 @@ func keysOf2(m map[string]map[string]any) []string {
 // without panicking: the emit helper must no-op cleanly.
 func TestDriverNilEventSinkNoop(t *testing.T) {
 	const mission int64 = 89
-	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}}
+	survivors := []adequacy.Mutant{{ID: "m1", Replace: "c1"}}
 	scorer := &fakeScorer{devKillRate: 0.9, devSurvivors: survivors, poolSurvivors: nil}
-	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0]}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Replace: "c0"}, survivors[0]}}
 	d, _ := newTestDriver(t, mission, scorer, validator, 0.5)
 	// d.Events left nil deliberately.
 
@@ -1777,9 +1777,9 @@ func TestCheckDecorrelation_ShadowModelNeverParticipates(t *testing.T) {
 // compiles (the bug the live e2e exercise surfaced).
 func TestTick_PoolAdequacy_StripsRawTestBeforeCompile(t *testing.T) {
 	const mission int64 = 33
-	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}}
+	survivors := []adequacy.Mutant{{ID: "m1", Replace: "c1"}}
 	scorer := &fakeScorer{devKillRate: 0.9, devSurvivors: survivors, poolSurvivors: nil}
-	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0]}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Replace: "c0"}, survivors[0]}}
 	d, _ := newTestDriver(t, mission, scorer, validator, 0.5)
 
 	ctx := context.Background()
@@ -1806,7 +1806,7 @@ func TestTick_PoolAdequacy_StripsRawTestBeforeCompile(t *testing.T) {
 func TestTick_PerfectSuite_SkipsTestWriterAndCertifies(t *testing.T) {
 	const mission int64 = 77
 	scorer := &fakeScorer{devKillRate: 1.0, devSurvivors: nil} // killed every mutant, 0 survivors
-	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, {ID: "m1", Code: "c1"}}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Replace: "c0"}, {ID: "m1", Replace: "c1"}}}
 	d, _ := newTestDriver(t, mission, scorer, validator, 0.8)
 
 	ctx := context.Background()
@@ -1848,7 +1848,7 @@ func TestTick_PerfectSuite_SkipsTestWriterAndCertifies(t *testing.T) {
 func TestTick_PerfectSuite_DoesNotPenalizeMootTestWriter(t *testing.T) {
 	const mission int64 = 78
 	scorer := &fakeScorer{devKillRate: 1.0, devSurvivors: nil}
-	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, {ID: "m1", Code: "c1"}}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Replace: "c0"}, {ID: "m1", Replace: "c1"}}}
 	d, _ := newTestDriver(t, mission, scorer, validator, 0.8)
 	d.Signer = &fakeSigner{}
 	lb := &fakeLeaderboard{}
@@ -1889,7 +1889,7 @@ func TestTick_PerfectSuite_DoesNotPenalizeMootTestWriter(t *testing.T) {
 func TestTick_PerfectSuite_CriticFlagIsAdvisory_Certifies(t *testing.T) {
 	const mission int64 = 79
 	scorer := &fakeScorer{devKillRate: 1.0, devSurvivors: nil}
-	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, {ID: "m1", Code: "c1"}}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Replace: "c0"}, {ID: "m1", Replace: "c1"}}}
 	d, _ := newTestDriver(t, mission, scorer, validator, 0.8)
 
 	ctx := context.Background()
@@ -1921,9 +1921,9 @@ func TestTick_PerfectSuite_CriticFlagIsAdvisory_Certifies(t *testing.T) {
 // found-and-converged (with the real Verdict) once completeFullRun finishes.
 func TestRunStatusUnknownRunningConverged(t *testing.T) {
 	const mission int64 = 7
-	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}}
+	survivors := []adequacy.Mutant{{ID: "m1", Replace: "c1"}}
 	scorer := &fakeScorer{devKillRate: 0.9, devSurvivors: survivors, poolSurvivors: nil}
-	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0]}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Replace: "c0"}, survivors[0]}}
 	d, _ := newTestDriver(t, mission, scorer, validator, 0.5)
 
 	if st, found := d.RunStatus(999); found || st.Converged {
@@ -1950,9 +1950,9 @@ func TestRunStatusUnknownRunningConverged(t *testing.T) {
 // run's ticks to convergence.
 func TestRunStatusRaceWithTick(t *testing.T) {
 	const mission int64 = 7
-	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}}
+	survivors := []adequacy.Mutant{{ID: "m1", Replace: "c1"}}
 	scorer := &fakeScorer{devKillRate: 0.9, devSurvivors: survivors, poolSurvivors: nil}
-	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0]}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Replace: "c0"}, survivors[0]}}
 	d, _ := newTestDriver(t, mission, scorer, validator, 0.5)
 
 	done := make(chan struct{})
@@ -1979,7 +1979,7 @@ func TestRunStatusRaceWithTick(t *testing.T) {
 // touching the field.
 func TestRunStatusRaceWithTick_Matrix(t *testing.T) {
 	const mission int64 = 31
-	mutants := []adequacy.Mutant{{ID: "m1", Code: "c1"}, {ID: "m2", Code: "c2"}}
+	mutants := []adequacy.Mutant{{ID: "m1", Replace: "c1"}, {ID: "m2", Replace: "c2"}}
 	scorer := &fakeScorer{
 		devKillRate: 0.9, devSurvivors: mutants, poolSurvivors: nil,
 		// A small sleep widens the window matrix.Build spends inside
@@ -2231,7 +2231,7 @@ func newScoredRun(t *testing.T, cfg scoredRun) (*Driver, int64) {
 
 	devSurvivors := make([]adequacy.Mutant, cfg.survivors)
 	for i := range devSurvivors {
-		devSurvivors[i] = adequacy.Mutant{ID: fmt.Sprintf("survivor%d", i+1), Code: fmt.Sprintf("s%d", i+1)}
+		devSurvivors[i] = adequacy.Mutant{ID: fmt.Sprintf("survivor%d", i+1), Replace: fmt.Sprintf("s%d", i+1)}
 	}
 	poolSurvivorCount := cfg.survivors - cfg.provenMissed
 	if poolSurvivorCount < 0 {
@@ -2247,7 +2247,7 @@ func newScoredRun(t *testing.T, cfg scoredRun) (*Driver, int64) {
 	mutants := make([]adequacy.Mutant, cfg.mutantsTotal)
 	copy(mutants, devSurvivors)
 	for i := len(devSurvivors); i < cfg.mutantsTotal; i++ {
-		mutants[i] = adequacy.Mutant{ID: fmt.Sprintf("filler%d", i), Code: fmt.Sprintf("f%d", i)}
+		mutants[i] = adequacy.Mutant{ID: fmt.Sprintf("filler%d", i), Replace: fmt.Sprintf("f%d", i)}
 	}
 	validator := &fakeValidator{mutants: mutants}
 
@@ -2445,7 +2445,7 @@ func driveShardedToVerdict(t *testing.T, d *Driver, missionID int64, result stri
 func TestTickDevAdequacyWaitsForEveryShard(t *testing.T) {
 	const missionID = int64(200)
 	scorer := &fakeScorer{devKillRate: 0.9}
-	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Replace: "c1"}}}
 	d := newShardedRun(t, missionID, 3, scorer, validator)
 
 	mgs, err := d.tasksByRole(missionID, RoleMutantGenerator)
@@ -2510,7 +2510,7 @@ func TestTickDevAdequacyWaitsForEveryShard(t *testing.T) {
 func TestShardedMutantIDsArePrefixed(t *testing.T) {
 	const missionID = int64(201)
 	scorer := &fakeScorer{devKillRate: 1.0}
-	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Replace: "c1"}}}
 	d := newShardedRun(t, missionID, 2, scorer, validator)
 
 	completeAllReady(t, d, "raw")
@@ -2540,7 +2540,7 @@ func TestShardedMutantIDsArePrefixed(t *testing.T) {
 func TestUnshardedMutantIDsUnchanged(t *testing.T) {
 	const missionID = int64(202)
 	scorer := &fakeScorer{devKillRate: 1.0}
-	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Replace: "c1"}}}
 	d := newShardedRun(t, missionID, 0, scorer, validator) // MaxShards 0 => unsharded
 
 	mgs, _ := d.tasksByRole(missionID, RoleMutantGenerator)
@@ -2664,7 +2664,7 @@ func TestShardDroppedAfterRetriesAndRecorded(t *testing.T) {
 	const missionID = int64(210)
 	const bad = "UNPARSEABLE"
 	scorer := &fakeScorer{devKillRate: 1.0}
-	validator := &shardValidator{failRaw: bad, mutants: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
+	validator := &shardValidator{failRaw: bad, mutants: []adequacy.Mutant{{ID: "m1", Replace: "c1"}}}
 	d := newShardedRun(t, missionID, 3, scorer, validator)
 
 	// One chosen shard always returns junk; the others return parseable output.
@@ -2709,7 +2709,7 @@ func TestShardDroppedAfterRetriesAndRecorded(t *testing.T) {
 func TestVerdictCarriesRegionCoverage(t *testing.T) {
 	const missionID = int64(211)
 	scorer := &fakeScorer{devKillRate: 1.0}
-	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Replace: "c1"}}}
 	d := newShardedRun(t, missionID, 3, scorer, validator)
 
 	v := driveShardedToVerdict(t, d, missionID, "raw")
@@ -2751,7 +2751,7 @@ func TestShardDropReachesSignedVerdict(t *testing.T) {
 	const missionID = int64(220)
 	const bad = "UNPARSEABLE"
 	scorer := &fakeScorer{devKillRate: 1.0}
-	validator := &shardValidator{failRaw: bad, mutants: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
+	validator := &shardValidator{failRaw: bad, mutants: []adequacy.Mutant{{ID: "m1", Replace: "c1"}}}
 	d := newShardedRun(t, missionID, 3, scorer, validator)
 
 	badKey := ShardTaskKey(0) // packs to the single heaviest symbol, "A" — see shard.go's greedy packer
@@ -2856,7 +2856,7 @@ func TestZeroMutantShardIsNotCountedAsProbed(t *testing.T) {
 	const missionID = int64(222)
 	const empty = "EMPTY"
 	scorer := &fakeScorer{devKillRate: 1.0}
-	validator := &shardValidator{emptyRaw: empty, mutants: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
+	validator := &shardValidator{emptyRaw: empty, mutants: []adequacy.Mutant{{ID: "m1", Replace: "c1"}}}
 	d := newShardedRun(t, missionID, 3, scorer, validator)
 
 	emptyKey := ShardTaskKey(2) // packs to the lightest symbol, "C"
@@ -2890,7 +2890,7 @@ func TestDropAndTransientScorerFailureIsIdempotent(t *testing.T) {
 	const missionID = int64(223)
 	const bad = "UNPARSEABLE"
 	scorer := &fakeScorer{devKillRate: 1.0, err: fmt.Errorf("transient jail failure"), failFirstN: 1}
-	validator := &shardValidator{failRaw: bad, mutants: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
+	validator := &shardValidator{failRaw: bad, mutants: []adequacy.Mutant{{ID: "m1", Replace: "c1"}}}
 	d := newShardedRun(t, missionID, 3, scorer, validator)
 
 	badKey := ShardTaskKey(0)
@@ -3048,8 +3048,8 @@ func TestTimeoutVerdictCarriesRegionCoverage(t *testing.T) {
 	// check runs, exactly like the stall TestRunDeadlineProducesNeedsReviewVerdict
 	// simulates. A perfect dev score would certify immediately after the drop
 	// (no pool stage needed) and never reach the timeout path at all.
-	scorer := &fakeScorer{devKillRate: 0.5, devSurvivors: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
-	validator := &shardValidator{failRaw: bad, mutants: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
+	scorer := &fakeScorer{devKillRate: 0.5, devSurvivors: []adequacy.Mutant{{ID: "m1", Replace: "c1"}}}
+	validator := &shardValidator{failRaw: bad, mutants: []adequacy.Mutant{{ID: "m1", Replace: "c1"}}}
 	d := newShardedRun(t, missionID, 3, scorer, validator)
 	d.Signer = &fakeSigner{}
 
@@ -3127,8 +3127,8 @@ func TestBugCatchRowsArePerShard(t *testing.T) {
 	// perfect (1.0) suite would leave Survivors == 0, which cannot
 	// distinguish "correctly on exactly one row" from "correctly zero
 	// everywhere by construction" for the MutantsSurvived assertion below.
-	scorer := &fakeScorer{devKillRate: 0.5, devSurvivors: []adequacy.Mutant{{ID: "s0/m1", Code: "c1"}}}
-	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
+	scorer := &fakeScorer{devKillRate: 0.5, devSurvivors: []adequacy.Mutant{{ID: "s0/m1", Replace: "c1"}}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Replace: "c1"}}}
 	d := newShardedRun(t, missionID, 3, scorer, validator)
 	sink := &fakeBugCatch{}
 	d.BugCatch = sink
@@ -3231,7 +3231,7 @@ func TestBugCatchRowsCarryDropAndParseRetries(t *testing.T) {
 	const missionID = int64(221)
 	const bad = "UNPARSEABLE"
 	scorer := &fakeScorer{devKillRate: 1.0}
-	validator := &shardValidator{failRaw: bad, mutants: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
+	validator := &shardValidator{failRaw: bad, mutants: []adequacy.Mutant{{ID: "m1", Replace: "c1"}}}
 	d := newShardedRun(t, missionID, 3, scorer, validator)
 	sink := &fakeBugCatch{}
 	d.BugCatch = sink
@@ -3307,8 +3307,8 @@ func TestBugCatchRowsSurvivorsSkipDroppedShard(t *testing.T) {
 	// driver prefixes it with the shard index ("s1/m1", "s2/m1") once
 	// unioned, so the surviving mutant must be named with the prefix it will
 	// actually carry once it comes from shard 1.
-	validator := &shardValidator{failRaw: bad, mutants: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
-	scorer := &fakeScorer{devKillRate: 0.5, devSurvivors: []adequacy.Mutant{{ID: "s1/m1", Code: "c1"}}}
+	validator := &shardValidator{failRaw: bad, mutants: []adequacy.Mutant{{ID: "m1", Replace: "c1"}}}
+	scorer := &fakeScorer{devKillRate: 0.5, devSurvivors: []adequacy.Mutant{{ID: "s1/m1", Replace: "c1"}}}
 	d := newShardedRun(t, missionID, 3, scorer, validator)
 	sink := &fakeBugCatch{}
 	d.BugCatch = sink
@@ -3391,7 +3391,7 @@ func TestBugCatchRowsCarryTestComplexity(t *testing.T) {
 		{Name: "C", Complexity: 1, Lines: 2},
 	}
 	scorer := &fakeScorer{devKillRate: 1.0}
-	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Replace: "c1"}}}
 	q := newTestQueue(t)
 	d, err := NewDriver(q, scorer, validator, decorrelatedAssign(), 0.5)
 	if err != nil {
@@ -3437,7 +3437,7 @@ func TestBugCatchRowsCarryTestComplexity(t *testing.T) {
 func TestPoolShardTelemetryEmitted(t *testing.T) {
 	const missionID = int64(223)
 	scorer := &fakeScorer{devKillRate: 1.0}
-	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Replace: "c1"}}}
 	d := newShardedRun(t, missionID, 3, scorer, validator)
 	sink := &fakeEventSink{}
 	d.Events = sink
@@ -3504,7 +3504,7 @@ func TestPoolShardTelemetryEmitted(t *testing.T) {
 func TestShadowMutantsNeverReachTheGate(t *testing.T) {
 	const missionID = int64(230)
 	scorer := &fakeScorer{devKillRate: 1.0}
-	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Replace: "c1"}}}
 	d := newShadowedRun(t, missionID, 2, "challenger-model", scorer, validator)
 
 	primary, err := d.tasksByRole(missionID, RoleMutantGenerator)
@@ -3554,7 +3554,7 @@ func TestShadowMutantsNeverReachTheGate(t *testing.T) {
 func TestShadowRowsArePairedAndFlagged(t *testing.T) {
 	const missionID = int64(231)
 	scorer := &fakeScorer{devKillRate: 1.0}
-	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Replace: "c1"}}}
 	d := newShadowedRun(t, missionID, 2, "challenger-model", scorer, validator)
 	sink := &fakeBugCatch{}
 	d.BugCatch = sink
@@ -3676,7 +3676,7 @@ func (v *shadowParseFailValidator) CompileTest(_ context.Context, _, _, _ string
 func TestShadowParseFailureIsNotFatal(t *testing.T) {
 	const missionID = int64(240)
 	scorer := &fakeScorer{devKillRate: 1.0}
-	validator := &shadowParseFailValidator{mutants: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
+	validator := &shadowParseFailValidator{mutants: []adequacy.Mutant{{ID: "m1", Replace: "c1"}}}
 	d := newShadowedRun(t, missionID, 2, "challenger-model", scorer, validator)
 	d.Signer = &fakeSigner{}
 
@@ -3704,7 +3704,7 @@ func TestShadowParseFailureIsNotFatal(t *testing.T) {
 func TestShadowProviderFailureIsRecordedUnmeasuredNotDropped(t *testing.T) {
 	const missionID = int64(245)
 	scorer := &fakeScorer{devKillRate: 1.0}
-	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Replace: "c1"}}}
 	d := newShadowedRun(t, missionID, 2, "challenger-model", scorer, validator)
 	d.Signer = &fakeSigner{}
 	sink := &fakeBugCatch{}
@@ -3801,7 +3801,7 @@ func (s *shadowScoreFailScorer) ScoreReport(ctx context.Context, codePath, code,
 func TestShadowScoringFailureIsNotFatal(t *testing.T) {
 	const missionID = int64(241)
 	scorer := &shadowScoreFailScorer{}
-	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Replace: "c1"}}}
 	d := newShadowedRun(t, missionID, 2, "challenger-model", scorer, validator)
 	sink := &fakeBugCatch{}
 	d.BugCatch = sink
@@ -3833,8 +3833,8 @@ func TestShadowScoringFailureIsNotFatal(t *testing.T) {
 // every run with shadow on — which is the default.
 func TestIncompleteShadowSeatDoesNotBlockDevAdequacy(t *testing.T) {
 	const missionID = int64(242)
-	scorer := &fakeScorer{devKillRate: 0.9, devSurvivors: []adequacy.Mutant{{ID: "s1", Code: "c1"}}}
-	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
+	scorer := &fakeScorer{devKillRate: 0.9, devSurvivors: []adequacy.Mutant{{ID: "s1", Replace: "c1"}}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Replace: "c1"}}}
 	d := newShadowedRun(t, missionID, 2, "challenger-model", scorer, validator)
 
 	// Claim everything, then complete ONLY the primary generator seats. The
@@ -3916,10 +3916,10 @@ func TestShadowBudgetSkipsRatherThanTimingOutTheRun(t *testing.T) {
 	scorer := &clockAdvancingScorer{
 		devKillRate:  0.5,
 		devTest:      rs.DevTestCode,
-		devSurvivors: []adequacy.Mutant{{ID: "s1", Code: "c1"}},
+		devSurvivors: []adequacy.Mutant{{ID: "s1", Replace: "c1"}},
 		now:          &now, perShadowCall: 11 * time.Minute,
 	}
-	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Replace: "c1"}}}
 	q := newTestQueue(t)
 	d, err := NewDriver(q, scorer, validator, decorrelatedAssign(), 0.5)
 	if err != nil {
@@ -3998,10 +3998,10 @@ func TestShadowCreditIsCappedAtBudget(t *testing.T) {
 	scorer := &clockAdvancingScorer{
 		devKillRate:  0.5,
 		devTest:      rs.DevTestCode,
-		devSurvivors: []adequacy.Mutant{{ID: "s1", Code: "c1"}},
+		devSurvivors: []adequacy.Mutant{{ID: "s1", Replace: "c1"}},
 		now:          &now, perShadowCall: 100 * time.Minute,
 	}
-	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Replace: "c1"}}}
 	q := newTestQueue(t)
 	d, err := NewDriver(q, scorer, validator, decorrelatedAssign(), 0.5)
 	if err != nil {
@@ -4112,7 +4112,7 @@ func newShadowedRun(t *testing.T, missionID int64, maxShards int, shadowModel st
 func TestShadowShardTelemetryEmitted(t *testing.T) {
 	const missionID = int64(244)
 	scorer := &fakeScorer{devKillRate: 1.0}
-	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Code: "c1"}}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Replace: "c1"}}}
 	d := newShadowedRun(t, missionID, 2, "challenger-model", scorer, validator)
 	sink := &fakeEventSink{}
 	d.Events = sink
@@ -4235,7 +4235,7 @@ func TestGenuineZeroKillIsStillGraded(t *testing.T) {
 	}
 }
 
-func oneMutant() []adequacy.Mutant { return []adequacy.Mutant{{ID: "m1", Code: "x"}} }
+func oneMutant() []adequacy.Mutant { return []adequacy.Mutant{{ID: "m1", Replace: "x"}} }
 
 // TestTick_SuiteIgnoresFile_CarriesTheDiagnosisOntoTheVerdict drives a whole
 // run whose suite passes on deliberately invalid source. It must converge to a
@@ -4244,7 +4244,7 @@ func oneMutant() []adequacy.Mutant { return []adequacy.Mutant{{ID: "m1", Code: "
 func TestTick_SuiteIgnoresFile_CarriesTheDiagnosisOntoTheVerdict(t *testing.T) {
 	const mission int64 = 991
 	scorer := &fakeScorer{devCanarySurvives: true}
-	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, {ID: "m1", Code: "c1"}}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Replace: "c0"}, {ID: "m1", Replace: "c1"}}}
 	d, _ := newTestDriver(t, mission, scorer, validator, 0.8)
 
 	ready := claimAllReady(t, d.Q)
@@ -4287,7 +4287,7 @@ func TestTick_SuiteIgnoresFile_CarriesTheDiagnosisOntoTheVerdict(t *testing.T) {
 // CriticFindings sinks. The row must come back UNSCORED instead.
 func TestMatrix_PerTestCanarySurvival_IsUnscoredNotADeleteCandidate(t *testing.T) {
 	const mission int64 = 32
-	mutants := []adequacy.Mutant{{ID: "m1", Code: "c1"}, {ID: "m2", Code: "c2"}}
+	mutants := []adequacy.Mutant{{ID: "m1", Replace: "c1"}, {ID: "m2", Replace: "c2"}}
 	scorer := &fakeScorer{
 		devKillRate: 0.9, devSurvivors: mutants, poolSurvivors: nil,
 		reportFn: func(_ context.Context, _, _, _ string, _ []adequacy.Mutant, testCmd string) (adequacy.Report, error) {

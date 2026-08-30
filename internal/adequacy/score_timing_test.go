@@ -35,8 +35,8 @@ func (j *sleepyJail) RunTest(ctx context.Context, files map[string]string, cmd [
 func TestEveryGradedMutantHasADuration(t *testing.T) {
 	j := &sleepyJail{hold: 20 * time.Millisecond}
 	mutants := []Mutant{
-		{ID: "m1", Code: "a"}, {ID: "m2", Code: "b"}, {ID: "m3", Code: "c"},
-		{ID: "m4", Code: "BROKEN"},
+		{ID: "m1", Replace: "a"}, {ID: "m2", Replace: "b"}, {ID: "m3", Replace: "c"},
+		{ID: "m4", Replace: "BROKEN"},
 	}
 	rep, err := Score(context.Background(), j, map[string]string{}, "code.py", "COMPLIANT",
 		mutants, []string{"pytest"}, WithMutantCompileCheck([][]string{{"compile"}}))
@@ -73,7 +73,7 @@ func TestEveryGradedMutantHasADuration(t *testing.T) {
 // unmutated code grades nothing, so the spread is not "zero", it is absent.
 func TestUngradedRunMeasuresNoMutantSpread(t *testing.T) {
 	rep, err := Score(context.Background(), failingJail{}, map[string]string{}, "code.py", "COMPLIANT",
-		[]Mutant{{ID: "m1", Code: "a"}}, []string{"pytest"})
+		[]Mutant{{ID: "m1", Replace: "a"}}, []string{"pytest"})
 	if err != nil {
 		t.Fatalf("Score: %v", err)
 	}

@@ -43,7 +43,7 @@ func TestScoreTSKillsAndSurvives(t *testing.T) {
 	// Always-true mutant: killed by the thorough suite's `!isEven(3)`
 	// assertion, survives the gappy suite that only checks an even input.
 	mutants := []adequacy.Mutant{
-		{ID: "m1", Code: "export function isEven(n: number): boolean { return true; }\n"},
+		{ID: "m1", Replace: "export function isEven(n: number): boolean { return true; }\n"},
 	}
 	tp := ts.TestPaths(codePath)[0].Path // evenmod.test.ts
 

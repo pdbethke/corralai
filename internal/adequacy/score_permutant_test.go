@@ -39,7 +39,7 @@ func (r *recordingJail) RunTest(_ context.Context, files map[string]string, cmd 
 func TestScoreRunsEachMutantWithItsOwnCommand(t *testing.T) {
 	j := &recordingJail{}
 	base := map[string]string{"test_a.py": "def test(): pass\n"}
-	mutants := []Mutant{{ID: "m1", Code: "x = 1\n"}, {ID: "m2", Code: "x = 2\n"}}
+	mutants := []Mutant{{ID: "m1", Replace: "x = 1\n"}, {ID: "m2", Replace: "x = 2\n"}}
 	suite := []string{"pytest", "-q"}
 	rep, err := Score(context.Background(), j, base, "a.py", "x = 0\n", mutants, suite,
 		WithCommandFor(func(m Mutant) MutantCommand {
@@ -77,7 +77,7 @@ func TestScoreRunsEachMutantWithItsOwnCommand(t *testing.T) {
 
 func TestScoreWithoutCommandForIsUnchanged(t *testing.T) {
 	j := &recordingJail{}
-	mutants := []Mutant{{ID: "m1", Code: "x = 1\n"}}
+	mutants := []Mutant{{ID: "m1", Replace: "x = 1\n"}}
 	suite := []string{"pytest", "-q"}
 	rep, err := Score(context.Background(), j, map[string]string{}, "a.py", "x = 0\n", mutants, suite)
 	if err != nil {

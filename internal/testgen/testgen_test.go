@@ -67,9 +67,13 @@ func TestGenerateMutants(t *testing.T) {
 	if len(muts) != 2 || muts[0].ID != "m1" {
 		t.Fatalf("mutants wrong: %+v", muts)
 	}
-	// The hunks were applied to the original, producing full mutant files.
-	if !strings.Contains(muts[0].Code, "return 9") || !strings.Contains(muts[0].Code, "package target") {
-		t.Errorf("m1 should be the full file with the applied edit: %q", muts[0].Code)
+	// The mutant is its HUNK; the full file exists only where Apply makes it.
+	if muts[0].Search != "return 1" || muts[0].Replace != "return 9" {
+		t.Errorf("m1 hunk = %q -> %q", muts[0].Search, muts[0].Replace)
+	}
+	applied, aerr := muts[0].Apply(code)
+	if aerr != nil || !strings.Contains(applied, "return 9") || !strings.Contains(applied, "package target") {
+		t.Errorf("m1 must apply to the full file with the edit: %q (err=%v)", applied, aerr)
 	}
 	if !strings.Contains(f.gotUser, "2 distinct") { // instruction carried the count
 		t.Errorf("generator prompt missing the count instruction: %s", f.gotUser)
@@ -151,7 +155,7 @@ func TestParseMutantsOutput(t *testing.T) {
 	if len(muts) != 2 || muts[0].ID != "m1" || muts[1].ID != "m2" {
 		t.Fatalf("mutants wrong: %+v", muts)
 	}
-	if !strings.Contains(muts[0].Code, "return 9") || !strings.Contains(muts[1].Code, "return 8") {
+	if !strings.Contains(muts[0].Replace, "return 9") || !strings.Contains(muts[1].Replace, "return 8") {
 		t.Errorf("hunks not applied to the original: %+v", muts)
 	}
 	// Tamper-evident link to the exact original, identical across its mutants.

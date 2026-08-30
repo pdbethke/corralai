@@ -38,12 +38,12 @@ func TestScoreIsIdenticalUnderOneTreeAndFour(t *testing.T) {
 	// parallel path's result collection shows up as a DIFFERENT set, not just
 	// a different order.
 	mutants := []Mutant{
-		{ID: "m0", Code: "def f():\n    return 0\n"},
-		{ID: "m1", Code: "def f():\n    return 1  # noop\n"},
-		{ID: "m2", Code: "def f():\n    return 2\n"},
-		{ID: "m3", Code: "def f():\n    x = 2\n    return 1\n"},
-		{ID: "m4", Code: "def f():\n    pass\n"},
-		{ID: "m5", Code: "def f():\n    return 1\n    # tail\n"},
+		{ID: "m0", Replace: "def f():\n    return 0\n"},
+		{ID: "m1", Replace: "def f():\n    return 1  # noop\n"},
+		{ID: "m2", Replace: "def f():\n    return 2\n"},
+		{ID: "m3", Replace: "def f():\n    x = 2\n    return 1\n"},
+		{ID: "m4", Replace: "def f():\n    pass\n"},
+		{ID: "m5", Replace: "def f():\n    return 1\n    # tail\n"},
 	}
 	// The audited file is the only thing Score writes; the suite reads it off
 	// disk, in whichever tree the run borrowed.

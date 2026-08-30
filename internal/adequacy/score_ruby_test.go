@@ -43,7 +43,7 @@ func TestScoreRubyKillsAndSurvives(t *testing.T) {
 	// Always-even mutant: killed by the thorough suite's odd-case assertion,
 	// survives the gappy suite that only checks an even input.
 	mutants := []adequacy.Mutant{
-		{ID: "m1", Code: "def is_even(n)\n  true\nend\n"},
+		{ID: "m1", Replace: "def is_even(n)\n  true\nend\n"},
 	}
 	tp := rb.TestPaths(codePath)[0].Path // evenmod_test.rb
 

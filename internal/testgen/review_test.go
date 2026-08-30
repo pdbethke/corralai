@@ -29,7 +29,7 @@ func TestParseVerdicts(t *testing.T) {
 
 func TestTriageSurvivors(t *testing.T) {
 	f := &fakeLLM{resp: "MUTANT m2: GAP: the test does not cover the wildcard path\n"}
-	survivors := []adequacy.Mutant{{ID: "m2", Code: "package target\nfunc F() bool { return true }"}}
+	survivors := []adequacy.Mutant{{ID: "m2", Replace: "package target\nfunc F() bool { return true }"}}
 	vs, err := TriageSurvivors(context.Background(), f, "deny by default", "package target\nfunc F() bool { return false }", "package target\n// test", survivors)
 	if err != nil {
 		t.Fatal(err)
@@ -62,7 +62,7 @@ func TestTriageSurvivorsEmpty(t *testing.T) {
 
 func TestTriageSurvivorsNoneParseable(t *testing.T) {
 	if _, err := TriageSurvivors(context.Background(), &fakeLLM{resp: "no verdicts here"},
-		"g", "c", "t", []adequacy.Mutant{{ID: "m1", Code: "x"}}); err == nil {
+		"g", "c", "t", []adequacy.Mutant{{ID: "m1", Replace: "x"}}); err == nil {
 		t.Fatal("unparseable reviewer response must error")
 	}
 }

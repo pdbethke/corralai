@@ -43,9 +43,9 @@ func newTestRunSpec(t *testing.T) RunSpec {
 // the dev suite misses and both writers are therefore asked to kill.
 func writerShadowMutants() []adequacy.Mutant {
 	return []adequacy.Mutant{
-		{ID: "m1", Code: "c1", ParentSHA256: "p1"},
-		{ID: "m2", Code: "c2", ParentSHA256: "p2"},
-		{ID: "m3", Code: "c3", ParentSHA256: "p3"},
+		{ID: "m1", Replace: "c1", ParentSHA256: "p1"},
+		{ID: "m2", Replace: "c2", ParentSHA256: "p2"},
+		{ID: "m3", Replace: "c3", ParentSHA256: "p3"},
 	}
 }
 

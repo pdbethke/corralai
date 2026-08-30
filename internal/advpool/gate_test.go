@@ -89,7 +89,7 @@ func TestJailScorerReport(t *testing.T) {
 	}}
 	s := JailScorer{Jail: jail}
 
-	mutants := []adequacy.Mutant{{ID: "m1", Code: "MUTANT"}}
+	mutants := []adequacy.Mutant{{ID: "m1", Replace: "MUTANT"}}
 	rep, err := s.ScoreReport(context.Background(), "target.go", "COMPLIANT", "<test>", mutants, "go test ./...")
 	if err != nil {
 		t.Fatalf("ScoreReport: %v", err)
@@ -197,7 +197,7 @@ func TestScoreAuthoredReport_PositiveControlCatchesUnreachablePath(t *testing.T)
 	jail := &shapeAJail{codePath: codePath}
 	s := JailScorer{Jail: jail, BaseFiles: map[string]string{"go.mod": "module x\n"}}
 
-	mutants := []adequacy.Mutant{{ID: "m1", Code: "MUTANT"}}
+	mutants := []adequacy.Mutant{{ID: "m1", Replace: "MUTANT"}}
 	rep, err := s.ScoreAuthoredReport(context.Background(), codePath, "COMPLIANT", "AUTHORED-TEST", mutants, "pytest")
 	if err != nil {
 		t.Fatalf("ScoreAuthoredReport: %v", err)
@@ -249,7 +249,7 @@ func TestScoreAuthoredReport_PositiveControlPassesAndGenuineKillStillWorks(t *te
 	}
 	s := JailScorer{Jail: jail, BaseFiles: map[string]string{"go.mod": "module x\n"}}
 
-	mutants := []adequacy.Mutant{{ID: "m1", Code: "MUTANT"}}
+	mutants := []adequacy.Mutant{{ID: "m1", Replace: "MUTANT"}}
 	rep, err := s.ScoreAuthoredReport(context.Background(), codePath, "COMPLIANT", "AUTHORED-TEST", mutants, "pytest")
 	if err != nil {
 		t.Fatalf("ScoreAuthoredReport: %v", err)
@@ -271,7 +271,7 @@ func TestScoreAuthoredReport_PositiveControlSkippedInSingleFileMode(t *testing.T
 	jail := &fakeReportJail{passOn: map[string]bool{"COMPLIANT": true, "MUTANT": false}}
 	s := JailScorer{Jail: jail} // no BaseFiles -> single-file mode
 
-	mutants := []adequacy.Mutant{{ID: "m1", Code: "MUTANT"}}
+	mutants := []adequacy.Mutant{{ID: "m1", Replace: "MUTANT"}}
 	rep, err := s.ScoreAuthoredReport(context.Background(), "target.go", "COMPLIANT", "<test>", mutants, "go test ./...")
 	if err != nil {
 		t.Fatalf("ScoreAuthoredReport: %v", err)

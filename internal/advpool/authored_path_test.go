@@ -122,7 +122,7 @@ func TestScoreAuthoredReport_OverlaysAtTheRelocatedPath(t *testing.T) {
 		DevTestPath: devTest,
 	}
 
-	mutants := []adequacy.Mutant{{ID: "m1", Code: "MUTANT"}}
+	mutants := []adequacy.Mutant{{ID: "m1", Replace: "MUTANT"}}
 	rep, err := s.ScoreAuthoredReport(context.Background(), codePath, "COMPLIANT", "AUTHORED-TEST", mutants, "pytest")
 	if err != nil {
 		t.Fatalf("ScoreAuthoredReport: %v", err)

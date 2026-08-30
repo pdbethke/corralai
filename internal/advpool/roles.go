@@ -152,7 +152,18 @@ func renderTestWriterRepairing(rs RunSpec, sigs []repoindex.Signature, survivors
 		var b strings.Builder
 		fmt.Fprintf(&b, "%s\n\nThe developer's own tests did NOT catch the following goal-violating mutants (they passed undetected). Write a test that specifically kills these survivors — proving the missed bugs are real and catchable, not equivalent mutants.\n\n%s\n", rs.Goal, testgen.WriterStrictnessNote())
 		for _, m := range survivors {
-			fmt.Fprintf(&b, "\n--- SURVIVOR %s ---\n%s\n", m.ID, m.Code)
+			// TEMPORARY, replaced in Task 2 by the diff renderer. A mutant is
+			// its hunk now; materialising the whole file here is exactly the
+			// 0.5M-token-per-file waste the representation change exists to
+			// remove, and it survives only so the writer seat keeps working
+			// until RenderHunk lands. TODO(Task 2): render the hunk.
+			code, aerr := m.Apply(rs.Code)
+			if aerr != nil {
+				// Skip rather than fail the seat: a survivor the prompt cannot
+				// show is one fewer example, not a broken run.
+				continue
+			}
+			fmt.Fprintf(&b, "\n--- SURVIVOR %s ---\n%s\n", m.ID, code)
 		}
 		goal = b.String()
 	}

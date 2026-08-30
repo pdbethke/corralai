@@ -106,7 +106,7 @@ func scoreOneMutant(j Jail) (Report, error) {
 		context.Background(), j,
 		map[string]string{guardPathForTimeoutTest: compliantForTimeoutTest},
 		guardPathForTimeoutTest, compliantForTimeoutTest,
-		[]Mutant{{ID: "m1", Code: mutantForTimeoutTest}},
+		[]Mutant{{ID: "m1", Replace: mutantForTimeoutTest}},
 		[]string{"go", "test", "./..."},
 	)
 }

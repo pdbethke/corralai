@@ -52,8 +52,8 @@ func drivePresetToConvergence(t *testing.T, d *Driver, missionID int64) *Verdict
 // concurrency claim can only be proven on.
 func TestPresetMutantsReplaceTheGeneratorSeat(t *testing.T) {
 	preset := []adequacy.Mutant{
-		{ID: "p1", Code: "preset-one", ParentSHA256: "abc"},
-		{ID: "p2", Code: "preset-two", ParentSHA256: "abc"},
+		{ID: "p1", Replace: "preset-one", ParentSHA256: "abc"},
+		{ID: "p2", Replace: "preset-two", ParentSHA256: "abc"},
 	}
 	rs := testRunSpec()
 	rs.PresetMutants = preset
@@ -66,7 +66,7 @@ func TestPresetMutantsReplaceTheGeneratorSeat(t *testing.T) {
 	scorer := &fakeScorer{devKillRate: 0.5, devSurvivors: []adequacy.Mutant{preset[1]}}
 	// Deliberately loaded with mutants the validator would return if anything
 	// ever asked it to parse: nothing must, so these must never be scored.
-	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "generated", Code: "must-not-appear"}}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "generated", Replace: "must-not-appear"}}}
 	d := newTestDriverWithSpec(t, 41, scorer, validator, 0.1, rs)
 
 	var sinkCalls int
@@ -98,7 +98,7 @@ func TestPresetMutantsReplaceTheGeneratorSeat(t *testing.T) {
 		t.Fatalf("dev pass graded %d mutant(s) (%+v), want exactly the %d preset mutants", len(graded), graded, len(preset))
 	}
 	for i := range preset {
-		if graded[i].ID != preset[i].ID || graded[i].Code != preset[i].Code {
+		if graded[i].ID != preset[i].ID || graded[i].Replace != preset[i].Replace {
 			t.Fatalf("dev pass mutant[%d] = %+v, want the preset %+v", i, graded[i], preset[i])
 		}
 	}
@@ -121,9 +121,9 @@ func TestPresetMutantsReplaceTheGeneratorSeat(t *testing.T) {
 // mutants the scorer refused to grade.
 func TestMutantSinkRecordsGeneratedMutants(t *testing.T) {
 	generated := []adequacy.Mutant{
-		{ID: "m1", Code: "c1"},
-		{ID: "m2", Code: "c2"},
-		{ID: "m3", Code: "c3"},
+		{ID: "m1", Replace: "c1"},
+		{ID: "m2", Replace: "c2"},
+		{ID: "m3", Replace: "c3"},
 	}
 	scorer := &fakeScorer{
 		devKillRate:  0.5,
@@ -177,7 +177,7 @@ func TestPresetMutantsSayTheChallengerSeatIsSkipped(t *testing.T) {
 	t.Cleanup(func() { log.SetOutput(os.Stderr) })
 
 	rs := testRunSpec()
-	rs.PresetMutants = []adequacy.Mutant{{ID: "p1", Code: "preset-one", ParentSHA256: "abc"}}
+	rs.PresetMutants = []adequacy.Mutant{{ID: "p1", Replace: "preset-one", ParentSHA256: "abc"}}
 	assign := RoleAssignment{
 		RoleMutantGenerator:       "model-a",
 		RoleTestWriter:            "model-b",

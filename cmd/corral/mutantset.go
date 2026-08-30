@@ -61,7 +61,7 @@ func (r *mutantSetRecorder) sink(codePath string, ms []adequacy.Mutant) {
 			parent = ""
 			break
 		}
-		recorded = append(recorded, adequacy.RecordedMutant{ID: m.ID, Code: m.Code, Span: m.Span})
+		recorded = append(recorded, adequacy.RecordedMutant{ID: m.ID, Span: m.Span, Search: m.Search, Replace: m.Replace})
 	}
 
 	r.mu.Lock()
@@ -75,7 +75,7 @@ func (r *mutantSetRecorder) sink(codePath string, ms []adequacy.Mutant) {
 
 // write flushes the accumulated set to path and returns how many files it
 // holds. A recorder with nothing in it still writes: an empty
-// corral-mutants-1 document is an honest answer ("this scan graded nothing"),
+// corral-mutants-2 document is an honest answer ("this scan graded nothing"),
 // and a missing file would be indistinguishable from a crashed run.
 func (r *mutantSetRecorder) write(path string) (int, error) {
 	r.mu.Lock()

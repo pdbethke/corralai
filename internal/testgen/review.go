@@ -74,7 +74,15 @@ func TriageSurvivors(ctx context.Context, m LLM, goal, code, test string, surviv
 	var b strings.Builder
 	fmt.Fprintf(&b, "GOAL:\n%s\n\nCOMPLIANT CODE:\n%s\n\nCANDIDATE TEST:\n%s\n\nUNCAUGHT MUTATIONS:\n", goal, code, test)
 	for _, s := range survivors {
-		fmt.Fprintf(&b, "MUTANT %s:\n%s\n\n", s.ID, s.Code)
+		// A mutant is its hunk; the reviewer is shown the file it makes. The
+		// compliant code is already above in the same prompt, so this is
+		// redundant bulk — Task 2 replaces it with a rendered diff. TODO(Task
+		// 2): render the hunk instead of materialising the file here.
+		code, aerr := s.Apply(code)
+		if aerr != nil {
+			return nil, fmt.Errorf("testgen: survivor %s does not apply to the code under review: %w", s.ID, aerr)
+		}
+		fmt.Fprintf(&b, "MUTANT %s:\n%s\n\n", s.ID, code)
 	}
 	resp, err := m.Ask(ctx, reviewSystem, b.String())
 	if err != nil {

@@ -74,3 +74,8 @@ scratch/
 # launch prep — drafts + assets stay LOCAL until the reveal, never in the public repo
 docs/launch/
 docs/superpowers/
+
+# scripts/verify-mutantset-bytes.sh builds its go-run helper inside the
+# module (internal/ imports demand it) and removes it on exit; this covers an
+# interrupted run.
+.verify-mutantset-*/

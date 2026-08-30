@@ -34,7 +34,7 @@ func pythonSalvageSpec() RunSpec {
 // output — so it recovers the ten instead of spending another model call and
 // hoping.
 func TestTick_PoolAdequacy_SalvagesPassingTestsFromABrokenFile(t *testing.T) {
-	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}, {ID: "m2", Code: "c2"}}
+	survivors := []adequacy.Mutant{{ID: "m1", Replace: "c1"}, {ID: "m2", Replace: "c2"}}
 	sawDeselect := false
 	scorer := &fakeScorer{
 		devKillRate:      0.9,
@@ -53,7 +53,7 @@ func TestTick_PoolAdequacy_SalvagesPassingTestsFromABrokenFile(t *testing.T) {
 			return adequacy.Report{CompliantPass: false, Total: 0}, nil
 		},
 	}
-	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0], survivors[1]}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Replace: "c0"}, survivors[0], survivors[1]}}
 	// PYTHON specifically: the salvage is gated on the language plugin
 	// implementing lang.FailureDeselector, and only python does — go (the
 	// default test spec) deliberately does not, because corral cannot parse
@@ -82,7 +82,7 @@ func TestTick_PoolAdequacy_SalvagesPassingTestsFromABrokenFile(t *testing.T) {
 // one salvage and displace a retry that might have done better. The run must
 // fall through to the reissue path instead.
 func TestTick_PoolAdequacy_SalvageRejectedWhenItProvesNothing(t *testing.T) {
-	survivors := []adequacy.Mutant{{ID: "m1", Code: "c1"}, {ID: "m2", Code: "c2"}}
+	survivors := []adequacy.Mutant{{ID: "m1", Replace: "c1"}, {ID: "m2", Replace: "c2"}}
 	scorer := &fakeScorer{
 		devKillRate:      0.9,
 		devSurvivors:     survivors,
@@ -98,7 +98,7 @@ func TestTick_PoolAdequacy_SalvageRejectedWhenItProvesNothing(t *testing.T) {
 			return adequacy.Report{CompliantPass: false, Total: 0}, nil
 		},
 	}
-	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "c0"}, survivors[0], survivors[1]}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Replace: "c0"}, survivors[0], survivors[1]}}
 	// PYTHON specifically: the salvage is gated on the language plugin
 	// implementing lang.FailureDeselector, and only python does — go (the
 	// default test spec) deliberately does not, because corral cannot parse

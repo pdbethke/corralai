@@ -2404,7 +2404,12 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 	// How many private trees scored this file at once, or why it only got
 	// one — the same wording noteConcurrency printed live during the run,
 	// through the one shared helper, so the screen and the record agree.
-	fmt.Fprintf(w, "   concurrency: %s\n", concurrencyDisclosure(f.Trees, f.ConcurrencyNote))
+	// Silent when nothing was recorded (Trees < 1): the jail substrate builds
+	// no trees, and a verdict served from a pre-concurrency cache row carries
+	// none — matching noteConcurrency, which already stays quiet there.
+	if f.Trees >= 1 {
+		fmt.Fprintf(w, "   concurrency: %s\n", concurrencyDisclosure(f.Trees, f.ConcurrencyNote, f.SharedDirs))
+	}
 
 	// The artifact that makes "N proven, catchable gap(s)" actionable. --repo
 	// is the mode the GitHub Action runs, and it reported the COUNT while
@@ -3146,15 +3151,32 @@ func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
 // attestation. An operator who sees "concurrency: 1 (…)" on screen and a
 // different phrase in the record would have no way to tell whether they are
 // the same fact; a second copy of this string is exactly how that drifts.
-func concurrencyDisclosure(trees int, note string) string {
-	switch {
-	case trees > 1:
-		return fmt.Sprintf("%d trees (baseline passed under %d)", trees, trees)
-	case note != "":
-		return fmt.Sprintf("1 (%s)", note)
-	default:
-		return "1"
+func concurrencyDisclosure(trees int, note string, shared []string) string {
+	if trees < 1 {
+		// Not a measurement of one tree — no measurement at all. Only the
+		// ledger reader ever renders this: the live line and the report line
+		// print nothing rather than a row of prose. See advpool.Concurrency.
+		return "not recorded"
 	}
+	head := "1"
+	var parts []string
+	if trees > 1 {
+		head = fmt.Sprintf("%d trees", trees)
+		parts = append(parts, fmt.Sprintf("baseline passed under %d", trees))
+	}
+	if note != "" {
+		parts = append(parts, note)
+	}
+	// The dep dirs the trees SHARED, named on the same line as the count
+	// they qualify: "6 trees" is an isolation claim, and these directories
+	// are the exact places it does not hold.
+	if len(shared) > 0 {
+		parts = append(parts, "shared: "+strings.Join(shared, ", "))
+	}
+	if len(parts) == 0 {
+		return head
+	}
+	return head + " (" + strings.Join(parts, "; ") + ")"
 }
 
 // noteConcurrency prints one file's concurrency disclosure: how many private
@@ -3172,7 +3194,7 @@ func (l *localExecutor) noteConcurrency(path string, d *adequacy.Disclosure) {
 	if d.Trees == 1 && d.Note == "" {
 		return
 	}
-	l.note("%s: concurrency: %s\n", path, concurrencyDisclosure(d.Trees, d.Note))
+	l.note("%s: concurrency: %s\n", path, concurrencyDisclosure(d.Trees, d.Note, d.Shared))
 }
 
 // workspacePoolBox returns the box this job's private-tree pool will live in,
@@ -3536,9 +3558,12 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 			PerMutant:      f.PerMutant,
 			TestsPerMutant: signableSpread(f),
 			// How many private trees scored this file at once, or why it
-			// only got one — the same fact the screen and the ledger say.
+			// only got one — the same fact the screen and the ledger say —
+			// plus the dep dirs those trees shared, which is where the
+			// isolation the count implies does not hold.
 			Trees:           f.Trees,
 			ConcurrencyNote: f.ConcurrencyNote,
+			SharedDirs:      f.SharedDirs,
 		})
 	}
 	// Same resolution the warehouse push uses: a statement whose subject names
@@ -3611,9 +3636,10 @@ func pushAuditRows(target, repoDir string, r reposcan.RepoReport, models map[str
 			TestsPerMutant: pushableSpread(f),
 			// How many private trees scored this file at once, or why it
 			// only got one — denormalized onto the row like the rest of
-			// the qualifiers above.
+			// the qualifiers above, with the dep dirs those trees shared.
 			Trees:           f.Trees,
 			ConcurrencyNote: f.ConcurrencyNote,
+			SharedDirs:      strings.Join(f.SharedDirs, ","),
 			Audited:         r.Audited, Candidates: r.Candidates,
 			ModelsByRole: string(rosterJSON),
 			MinKillRate:  minKillRate, MaxProvenMissed: maxProvenMissed,

@@ -360,14 +360,26 @@ type TestSelection struct {
 // (the jail path), the budget only bought one, or the probe downgraded a
 // suite that failed under concurrency (Note carries the reason, verbatim,
 // so the screen and the record never disagree — see
-// cmd/corral/certify_repo.go's noteConcurrency). Trees is never 0 in a
-// populated Verdict: the caller that builds the RunSpec normalizes an absent
-// or zero probe answer to "1 tree, no note" before it ever reaches here, so
-// a reader of the signed record never has to wonder whether 0 means
-// "one tree" or "never measured".
+// cmd/corral/certify_repo.go's noteConcurrency).
+//
+// Trees < 1 is the single explicit "NOT RECORDED" state, and every reader
+// treats it as one: the report prints no concurrency line, the attestation
+// signs no trees key, the ledger and the warehouse store SQL NULL, and
+// `corral scans show` prints "not recorded". It is what a jail-substrate run
+// carries (that substrate builds no trees) and what a verdict served from a
+// cache row written before this column existed carries. A measured ONE tree
+// is Trees 1 and is disclosed like any other measurement — the absence of a
+// measurement is never rounded up to it.
 type Concurrency struct {
 	Trees int    `json:"trees"`
 	Note  string `json:"note,omitempty"`
+	// Shared names the dependency directories that were SYMLINKED into every
+	// tree rather than copied (adequacy.Disclosure.Shared). They are the one
+	// thing the trees do NOT hold privately — a channel between them, and a
+	// path back into the operator's real checkout — so a reader told "6
+	// trees" has to be told what those 6 had in common. Empty when the run
+	// shared nothing, which includes every pool of one.
+	Shared []string `json:"shared,omitempty"`
 }
 
 // TestsPerMutantSpread is how many tests the graded mutants each ran: the

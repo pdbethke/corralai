@@ -391,7 +391,7 @@ func TestPushMigratesAPreExistingWarehouseOntoThePerMutantColumns(t *testing.T) 
 func TestConcurrencyColumnsRoundTrip(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "w.duckdb")
 	if _, err := Push(target, []Row{
-		{Repo: "o/r", Commit: "c", Path: "src/flask/cli.py", KillRate: rate(0.65), Survivors: 4, Trees: 6},
+		{Repo: "o/r", Commit: "c", Path: "src/flask/cli.py", KillRate: rate(0.65), Survivors: 4, Trees: 6, SharedDirs: ".venv"},
 		{Repo: "o/r", Commit: "c", Path: "pkg/a.py", KillRate: rate(0.9), Survivors: 1, Trees: 1,
 			ConcurrencyNote: "suite is not concurrency-safe: baseline failed under 3"},
 	}); err != nil {
@@ -400,21 +400,51 @@ func TestConcurrencyColumnsRoundTrip(t *testing.T) {
 
 	db := openTarget(t, target)
 	var trees int
-	var note sql.NullString
-	if err := db.QueryRow(`SELECT trees, concurrency_note FROM corral_audits WHERE path = 'src/flask/cli.py'`).
-		Scan(&trees, &note); err != nil {
+	var note, shared sql.NullString
+	if err := db.QueryRow(`SELECT trees, concurrency_note, shared_dirs FROM corral_audits WHERE path = 'src/flask/cli.py'`).
+		Scan(&trees, &note, &shared); err != nil {
 		t.Fatalf("read back the many-tree row: %v", err)
 	}
 	if trees != 6 || note.Valid {
 		t.Errorf("got trees=%d note=%v, want 6 and no note", trees, note)
 	}
+	// The dep dirs the trees shared are the channel between them; a
+	// cross-repo query has to be able to see it.
+	if !shared.Valid || shared.String != ".venv" {
+		t.Errorf("got shared_dirs=%v, want .venv", shared)
+	}
 
-	if err := db.QueryRow(`SELECT trees, concurrency_note FROM corral_audits WHERE path = 'pkg/a.py'`).
-		Scan(&trees, &note); err != nil {
+	if err := db.QueryRow(`SELECT trees, concurrency_note, shared_dirs FROM corral_audits WHERE path = 'pkg/a.py'`).
+		Scan(&trees, &note, &shared); err != nil {
 		t.Fatalf("read back the downgraded row: %v", err)
+	}
+	if shared.Valid {
+		t.Errorf("a row that shared nothing must store SQL NULL, got %v", shared)
 	}
 	if trees != 1 || !note.Valid || note.String != "suite is not concurrency-safe: baseline failed under 3" {
 		t.Errorf("got trees=%d note=%v, want the downgrade note preserved", trees, note)
+	}
+}
+
+// TestUnrecordedConcurrencyIsPushedNull pins the same rule the ledger keeps:
+// a row whose concurrency was never measured (the jail substrate builds no
+// trees; a cached pre-concurrency verdict carries none) writes SQL NULL, not
+// 0. A 0 in an INTEGER column is a value a cross-repo query will average and
+// rank; NULL is the only encoding of "this warehouse does not say".
+func TestUnrecordedConcurrencyIsPushedNull(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "w.duckdb")
+	if _, err := Push(target, []Row{
+		{Repo: "o/r", Commit: "c", Path: "pkg/jail.py", KillRate: rate(0.65), Survivors: 4},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	db := openTarget(t, target)
+	var trees sql.NullInt64
+	if err := db.QueryRow(`SELECT trees FROM corral_audits WHERE path = 'pkg/jail.py'`).Scan(&trees); err != nil {
+		t.Fatalf("read back the unrecorded row: %v", err)
+	}
+	if trees.Valid {
+		t.Errorf("an unrecorded concurrency must be stored SQL NULL, got %d", trees.Int64)
 	}
 }
 
@@ -465,7 +495,7 @@ func TestPushMigratesAPreExistingWarehouseOntoTheConcurrencyColumns(t *testing.T
 
 	n, err := Push(target, []Row{{
 		Repo: "o/r", Commit: "c", Path: "src/flask/cli.py", Lang: "python",
-		KillRate: rate(0.65), Survivors: 4, Trees: 6,
+		KillRate: rate(0.65), Survivors: 4, Trees: 6, SharedDirs: ".venv",
 	}})
 	if err != nil {
 		t.Fatalf("Push onto a pre-concurrency warehouse must migrate it, not fail: %v", err)
@@ -476,10 +506,11 @@ func TestPushMigratesAPreExistingWarehouseOntoTheConcurrencyColumns(t *testing.T
 
 	db := openTarget(t, target)
 	var trees int
-	if err := db.QueryRow(`SELECT trees FROM corral_audits WHERE path = 'src/flask/cli.py'`).Scan(&trees); err != nil {
+	var shared sql.NullString
+	if err := db.QueryRow(`SELECT trees, shared_dirs FROM corral_audits WHERE path = 'src/flask/cli.py'`).Scan(&trees, &shared); err != nil {
 		t.Fatalf("read back the migrated row: %v", err)
 	}
-	if trees != 6 {
-		t.Errorf("migrated concurrency columns did not round-trip: trees=%d", trees)
+	if trees != 6 || !shared.Valid || shared.String != ".venv" {
+		t.Errorf("migrated concurrency columns did not round-trip: trees=%d shared=%v", trees, shared)
 	}
 }

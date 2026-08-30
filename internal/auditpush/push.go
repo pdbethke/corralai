@@ -97,9 +97,14 @@ type Row struct {
 	// Trees and ConcurrencyNote disclose how many private trees scored this
 	// file at once, or — when it only got one — why. The same fact the
 	// report line and the signed attestation carry, denormalized onto this
-	// row so a cross-repo query does not need to reconstruct it.
+	// row so a cross-repo query does not need to reconstruct it. Trees < 1
+	// means nothing measured it and is written SQL NULL, never 0.
 	Trees           int
 	ConcurrencyNote string
+	// SharedDirs is the comma-joined list of dependency directories that were
+	// symlinked into every tree rather than copied — the one thing the trees
+	// did NOT hold privately. SQL NULL, not "", when nothing was shared.
+	SharedDirs string
 }
 
 // TestsPerMutantSpread is how many tests each graded mutant ran: the
@@ -141,7 +146,8 @@ CREATE TABLE IF NOT EXISTS corral_audits (
   tests_per_mutant_median INTEGER,
   tests_per_mutant_max    INTEGER,
   trees                   INTEGER,
-  concurrency_note        VARCHAR
+  concurrency_note        VARCHAR,
+  shared_dirs             VARCHAR
 );`
 
 // corralAuditsMigrationCols is the additive set of columns this package has
@@ -173,6 +179,7 @@ var corralAuditsMigrationCols = []struct{ name, ddl string }{
 	{"tests_per_mutant_max", "tests_per_mutant_max INTEGER"},
 	{"trees", "trees INTEGER"},
 	{"concurrency_note", "concurrency_note VARCHAR"},
+	{"shared_dirs", "shared_dirs VARCHAR"},
 }
 
 // migrateCorralAudits additively brings a corral_audits table created before
@@ -266,8 +273,8 @@ func Push(target string, rows []Row) (int, error) {
 	    min_kill_rate, max_proven_missed, passed, statement_sha256, run_url,
 	    test_selection, selected_tests, suite_tests, selection_fallback, uncovered,
 	    per_mutant, tests_per_mutant_min, tests_per_mutant_median, tests_per_mutant_max,
-	    trees, concurrency_note
-	  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+	    trees, concurrency_note, shared_dirs
+	  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 	if err != nil {
 		return 0, err
 	}
@@ -307,6 +314,22 @@ func Push(target string, rows []Row) (int, error) {
 		if r.ConcurrencyNote != "" {
 			concurrencyNote = r.ConcurrencyNote
 		}
+		// And trees is SQL NULL, not 0, when nothing measured it: the jail
+		// substrate builds no trees and a cached pre-concurrency verdict
+		// carries none. A 0 in an INTEGER column is a value a cross-repo
+		// query will average and rank on; NULL is the only encoding of
+		// "this warehouse does not say".
+		var trees any
+		if r.Trees >= 1 {
+			trees = r.Trees
+		}
+		// Same rule for the shared dep dirs: "" is "nothing was shared",
+		// which is a positive claim a row that never measured concurrency
+		// cannot make.
+		var sharedDirs any
+		if r.SharedDirs != "" {
+			sharedDirs = r.SharedDirs
+		}
 		if _, err := stmt.Exec(now, r.Repo, r.Commit, r.Path, r.Lang,
 			killRate, r.Survivors, r.ProvenMissed,
 			r.TimedOut, r.TestWriterFailed, r.PoolTestUnsound,
@@ -314,7 +337,7 @@ func Push(target string, rows []Row) (int, error) {
 			minKill, maxGaps, r.Passed, r.StatementSHA256, r.RunURL,
 			r.TestSelection, r.SelectedTests, r.SuiteTests, r.SelectionFallback, r.Uncovered,
 			r.PerMutant, pmMin, pmMedian, pmMax,
-			r.Trees, concurrencyNote); err != nil {
+			trees, concurrencyNote, sharedDirs); err != nil {
 			return n, fmt.Errorf("auditpush: insert %s: %w", r.Path, err)
 		}
 		n++

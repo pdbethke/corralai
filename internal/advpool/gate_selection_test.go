@@ -125,6 +125,11 @@ func TestAggregateCarriesConcurrencyOntoTheVerdict(t *testing.T) {
 		t.Errorf("got %+v, want Trees 6, no note", v.Concurrency)
 	}
 
+	rs = RunSpec{Concurrency: Concurrency{Trees: 6, Shared: []string{".venv"}}}
+	if v := verdictFromSpec(rs); len(v.Concurrency.Shared) != 1 || v.Concurrency.Shared[0] != ".venv" {
+		t.Errorf("got %+v, want the shared dep dirs preserved", v.Concurrency)
+	}
+
 	rs = RunSpec{Concurrency: Concurrency{Trees: 1, Note: "suite is not concurrency-safe: baseline failed under 3"}}
 	if v := verdictFromSpec(rs); v.Concurrency.Trees != 1 || v.Concurrency.Note != "suite is not concurrency-safe: baseline failed under 3" {
 		t.Errorf("got %+v, want the downgrade note preserved", v.Concurrency)

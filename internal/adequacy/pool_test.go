@@ -356,3 +356,28 @@ func TestPoolLinksDepDirsByAbsolutePathFromARelativeRoot(t *testing.T) {
 		mustExist(t, filepath.Join(tree, ".venv", "bin", "marker"))
 	}
 }
+
+// TestToxIsNeverSharedBetweenTrees pins the one dep dir that must NOT be
+// symlinked. tox WRITES into .tox — it builds and reuses its envs there — so
+// N trees sharing one is cross-tree interference on a directory the run is
+// mutating, AND a write through the link into the operator's real checkout.
+// Every other entry in symlinkedDepDirs is a read-only build product.
+func TestToxIsNeverSharedBetweenTrees(t *testing.T) {
+	root := newGitRepo(t, map[string]string{"a.py": "x=1\n"}, []string{".venv/", ".tox/"})
+	for _, d := range []string{".venv", ".tox"} {
+		if err := os.MkdirAll(filepath.Join(root, d, "lib"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p, d, err := NewWorkspacePool(context.Background(), root, 2, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	if !reflect.DeepEqual(d.Shared, []string{".venv"}) {
+		t.Errorf("Shared = %q, want only [.venv]: .tox is written to, so it is never shared", d.Shared)
+	}
+	for _, tree := range p.treeRoots() {
+		mustNotExist(t, filepath.Join(tree, ".tox"))
+	}
+}

@@ -4,6 +4,7 @@ package advpool
 
 import (
 	"fmt"
+	"log"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -451,6 +452,14 @@ func BuildDAG(rs RunSpec, assign RoleAssignment, sigs []repoindex.Signature) []q
 		// is no fourth place a generator task can come from, so there is no
 		// path by which a preset run pays for generation.
 		if role.Name == RoleMutantGenerator && rs.PresetMutants != nil {
+			// Said out loud when a challenger model WAS configured. The skip
+			// is correct — there is nothing to challenge when the exam is
+			// fixed — but the operator asked for a second opinion and is not
+			// getting one, and an UNMEASURED challenger must never be left
+			// looking like a challenger that found nothing.
+			if m := strings.TrimSpace(assign[RoleMutantGeneratorShadow]); m != "" {
+				log.Printf("advpool: --mutants replays a recorded set, so nothing is generated: the challenger generator seat (%s) is SKIPPED — its yield this run is unmeasured, not zero", m)
+			}
 			continue
 		}
 		// The mutant-generator fans out into one seat per shard when the file

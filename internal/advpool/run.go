@@ -35,8 +35,8 @@ type RunSpec struct {
 	// Concurrency carries how many private trees the workspace substrate's
 	// probe granted this file (or why it granted only one), from
 	// cmd/corral/certify_local.go's buildJailWiring — see
-	// advpool.Concurrency's doc for the normalization guarantee (Trees is
-	// never 0 once this reaches a Verdict).
+	// advpool.Concurrency's doc: Trees < 1 is the explicit "not recorded"
+	// state, never rounded up to a 1 nothing measured.
 	Concurrency Concurrency
 	Lang        string // "" defaults to "go" at render time (back-compat)
 

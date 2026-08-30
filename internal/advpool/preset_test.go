@@ -3,7 +3,11 @@
 package advpool
 
 import (
+	"bytes"
 	"context"
+	"log"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
@@ -158,5 +162,38 @@ func TestMutantSinkRecordsGeneratedMutants(t *testing.T) {
 	}
 	if len(sunk) != 2 || ids[0] != "m1" || ids[1] != "m2" {
 		t.Fatalf("MutantSink got %v, want the GRADED mutants [m1 m2] (m3 failed the compile gate)", ids)
+	}
+}
+
+// TestPresetMutantsSayTheChallengerSeatIsSkipped pins the operator-facing half
+// of the same skip. Silently dropping the challenger generator under
+// `--mutants` is the RIGHT behaviour — there is nothing to challenge when the
+// exam is fixed — but an operator who configured a challenger model and paid
+// for nothing must be told that, or a run with an UNMEASURED challenger reads
+// exactly like a run whose challenger found nothing.
+func TestPresetMutantsSayTheChallengerSeatIsSkipped(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	rs := testRunSpec()
+	rs.PresetMutants = []adequacy.Mutant{{ID: "p1", Code: "preset-one", ParentSHA256: "abc"}}
+	assign := RoleAssignment{
+		RoleMutantGenerator:       "model-a",
+		RoleTestWriter:            "model-b",
+		RoleMutantGeneratorShadow: "model-shadow",
+	}
+	BuildDAG(rs, assign, nil)
+	if !strings.Contains(buf.String(), "challenger") || !strings.Contains(buf.String(), "--mutants") {
+		t.Errorf("a configured challenger seat skipped under --mutants must say so; got %q", buf.String())
+	}
+
+	// And no line at all when no challenger was configured: there is nothing
+	// the operator did not get.
+	buf.Reset()
+	delete(assign, RoleMutantGeneratorShadow)
+	BuildDAG(rs, assign, nil)
+	if strings.Contains(buf.String(), "challenger") {
+		t.Errorf("no challenger was configured, so there is nothing to report: %q", buf.String())
 	}
 }

@@ -50,7 +50,15 @@ const maxUniverseBytes = 2 << 30 // 2 GiB
 // a suite that cannot import its own dependencies fails for a reason that has
 // nothing to do with the mutant. They are symlinked, not copied — they are
 // large, they are build products, and no mutant is ever written into them.
-var symlinkedDepDirs = []string{"node_modules", "vendor", ".venv", "venv", ".bundle", ".tox"}
+//
+// Every entry has to satisfy that last clause: the RUN must not write into
+// it. That is why .tox is NOT here. tox creates, updates and reuses its
+// environments inside .tox as part of running the suite, so a shared .tox
+// would be N trees writing to one directory at once (cross-tree interference
+// on the very isolation this pool exists to provide) AND a write through the
+// link into the operator's real checkout. A tox suite in a tree simply
+// rebuilds its own .tox, which is slower and correct.
+var symlinkedDepDirs = []string{"node_modules", "vendor", ".venv", "venv", ".bundle"}
 
 // WorkspacePool is a Jail backed by N private copies of one checkout. Each
 // RunTest borrows a free tree, applies the files there, runs, restores, and
@@ -492,6 +500,13 @@ const probeOutputCap = 2 << 10 // 2 KiB
 //     where a .pth or an installed package points back at the ORIGINAL
 //     checkout. Left alone it survives every mutant and reports a kill rate
 //     of zero, which is worse than not running.
+//
+// Probe runs the WHOLE testCmd it is handed — the file's baseline command —
+// which may be a superset of the selection-narrowed per-mutant command the
+// scorer later runs. That is conservative in the safe direction: more tests
+// contend for more shared resources, so the error is a false DOWNGRADE (a
+// slower audit, disclosed), never a false pass that scores mutants in trees
+// the suite cannot actually share.
 //
 // Each tree is exercised on its OWN runner rather than through the borrow
 // queue, because running all N at once is the entire measurement — borrowing

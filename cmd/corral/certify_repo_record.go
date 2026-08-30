@@ -222,7 +222,10 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 				// attestation say. See scanstore.File.Trees.
 				Trees:           r.Verdict.Concurrency.Trees,
 				ConcurrencyNote: r.Verdict.Concurrency.Note,
-				CacheHit:        r.CacheHit,
+				// And which dep dirs those trees SHARED — comma-joined,
+				// NULL when none. See scanstore.File.SharedDirs.
+				SharedDirs: strings.Join(r.Verdict.Concurrency.Shared, ","),
+				CacheHit:   r.CacheHit,
 				// VerdictJSON is the single serialization every future Get
 				// has to parse (marshalVerdict, verdict_cache.go) — "" above
 				// on a marshal failure, never a partial or hand-rolled blob.

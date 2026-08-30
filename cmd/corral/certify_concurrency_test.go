@@ -254,7 +254,11 @@ func TestOnePoolIsBuiltAndProbedPerFileJob(t *testing.T) {
 		t.Fatal("no go plugin")
 	}
 	var scored int
+	// The box the EXECUTED job used — not a fresh one from auditInputFor,
+	// which is always nil and made the release assertion below vacuous.
+	var used *workspacePool
 	ex.audit = func(ctx context.Context, in localAuditInput) (advpool.Verdict, error) {
+		used = in.pool
 		prep, err := prepareAuditJail(ctx, in, plug, time.Minute, io.Discard)
 		if err != nil {
 			return advpool.Verdict{}, err
@@ -275,8 +279,13 @@ func TestOnePoolIsBuiltAndProbedPerFileJob(t *testing.T) {
 	if scored != 3 {
 		t.Fatalf("the audit scored against %d tree(s), want 3 — the audit must reuse the job's probed pool, not fall back to one tree", scored)
 	}
-	// And the trees are gone: the JOB owns them, so Execute releases them.
-	if ex.auditInputFor(job).pool.pool != nil {
-		t.Fatal("a fresh input must start with no pool")
+	// And the trees are gone: the JOB owns them, so Execute releases them —
+	// asserted on the box the job ACTUALLY used. N copies of a checkout left
+	// in /tmp per file is how a long scan fills the disk.
+	if used == nil {
+		t.Fatal("the audit never saw the job's pool box")
+	}
+	if used.pool != nil {
+		t.Fatal("Execute must release the job's trees; the box still holds a pool")
 	}
 }

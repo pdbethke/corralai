@@ -156,6 +156,15 @@ func TestPrintWeakFileNamesTheConcurrency(t *testing.T) {
 		t.Errorf("got %q", b.String())
 	}
 
+	// The dep dirs shared by every tree ride on the SAME line, through the
+	// same helper, so the live progress, the report and `corral scans show`
+	// cannot disagree about what was shared.
+	b.Reset()
+	printWeakFile(&b, reposcan.WeakFile{Path: "pkg/shared.py", KillRate: 0.65, Trees: 6, SharedDirs: []string{".venv"}})
+	if !strings.Contains(b.String(), "   concurrency: 6 trees (baseline passed under 6; shared: .venv)") {
+		t.Errorf("got %q", b.String())
+	}
+
 	b.Reset()
 	printWeakFile(&b, reposcan.WeakFile{Path: "pkg/b.py", KillRate: 0.65, Trees: 1,
 		ConcurrencyNote: "suite is not concurrency-safe: baseline failed under 3"})
@@ -170,5 +179,16 @@ func TestPrintWeakFileNamesTheConcurrency(t *testing.T) {
 	}
 	if strings.Contains(b.String(), "   concurrency: 1 (") {
 		t.Errorf("no note must print bare '1', not an empty parenthetical: %q", b.String())
+	}
+
+	// Trees 0 is "not recorded", and the report says nothing rather than
+	// inventing a "1". This is the shape a jail-substrate file has (it builds
+	// no trees at all) and the shape a verdict served from a cache row
+	// written before this branch has — the same silence noteConcurrency
+	// already keeps live.
+	b.Reset()
+	printWeakFile(&b, reposcan.WeakFile{Path: "pkg/d.py", KillRate: 0.65})
+	if strings.Contains(b.String(), "concurrency:") {
+		t.Errorf("an unrecorded concurrency must print NO line: %q", b.String())
 	}
 }

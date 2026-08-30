@@ -267,19 +267,27 @@ func TestScanFileSelectionShowsThePerMutantSpread(t *testing.T) {
 func TestScansShow_DisclosesConcurrency(t *testing.T) {
 	r := &fakeScansReader{
 		files: []scanstore.File{
-			{Path: "src/flask/cli.py", Disposition: "audited", Trees: 6},
+			{Path: "src/flask/cli.py", Disposition: "audited", Trees: 6, SharedDirs: ".venv"},
 			{Path: "downgraded.py", Disposition: "audited", Trees: 1,
 				ConcurrencyNote: "suite is not concurrency-safe: baseline failed under 3"},
+			// Trees 0 is the ledger's "not recorded": a row written before
+			// the column existed, a rejected file that was never scored, or
+			// a jail-substrate run that builds no trees at all. Printing a
+			// "1" for it would invent a measurement the ledger never holds.
+			{Path: "unrecorded.py", Disposition: "audited"},
 		},
 	}
 	var out, errOut bytes.Buffer
 	if code := runScans([]string{"show", "7"}, openFake(r), &out, &errOut); code != 0 {
 		t.Fatalf("exit = %d, stderr=%s", code, errOut.String())
 	}
-	if !strings.Contains(out.String(), "6 trees (baseline passed under 6)") {
-		t.Errorf("scans show did not disclose the tree count:\n%s", out.String())
+	if !strings.Contains(out.String(), "6 trees (baseline passed under 6; shared: .venv)") {
+		t.Errorf("scans show did not disclose the tree count and the shared dep dirs:\n%s", out.String())
 	}
 	if !strings.Contains(out.String(), "1 (suite is not concurrency-safe: baseline failed under 3)") {
 		t.Errorf("scans show did not disclose the downgrade note:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "not recorded") {
+		t.Errorf("an unrecorded concurrency must read as such, never as 1 tree:\n%s", out.String())
 	}
 }

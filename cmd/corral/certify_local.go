@@ -1055,15 +1055,22 @@ func orArgv(a, b []string) []string {
 // RunSpec any consumer reads. Every seat model this run will use is now
 // assembled in one testable place.
 // normalizedConcurrency turns the workspace substrate's raw probe answer
-// (a nil pointer, or a zero-value Disclosure on the jail substrate, which
-// builds no trees) into the one Concurrency a Verdict is allowed to carry:
-// Trees is never 0, because the probe itself never asserts that — it either
-// measured N trees or downgraded to 1 and said why.
+// into the Concurrency a Verdict carries.
+//
+// A nil pointer, or any Trees < 1, is the ONE "not recorded" state and stays
+// the zero value — it is NOT rounded up to 1. The jail substrate never sets
+// in.concurrency at all (it scores in N disposable jails, not trees), so a
+// normalized "1" there would print, store and SIGN a measurement nothing
+// made. A real workspace measurement of one tree IS Trees 1 and is disclosed
+// like any other; what is never disclosed is the absence of a measurement.
 func normalizedConcurrency(d *adequacy.Disclosure) advpool.Concurrency {
 	if d == nil || d.Trees < 1 {
-		return advpool.Concurrency{Trees: 1}
+		return advpool.Concurrency{}
 	}
-	return advpool.Concurrency{Trees: d.Trees, Note: d.Note}
+	// Shared rides along with the count: the dep dirs every tree links are
+	// half the disclosure, and a reader told "6 trees" without them cannot
+	// see the one channel between those trees.
+	return advpool.Concurrency{Trees: d.Trees, Note: d.Note, Shared: d.Shared}
 }
 
 func newAuditRunSpec(in localAuditInput, roles auditRoles, subj runSubject) advpool.RunSpec {

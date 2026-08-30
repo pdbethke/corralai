@@ -85,7 +85,7 @@ func TestAggregateCarriesThePerMutantGrainOntoTheReport(t *testing.T) {
 		results[i].Job.Path = fmt.Sprintf("pkg/f%d.py", i)
 	}
 	byPath := map[string]WeakFile{}
-	for _, w := range Aggregate("o", "r", "c", 2, 2, results, nil).Weakest {
+	for _, w := range Aggregate("o", "r", "c", 3, 3, results, nil).Weakest {
 		byPath[w.Path] = w
 	}
 	got := byPath["pkg/f0.py"]
@@ -110,20 +110,36 @@ func TestAggregateCarriesThePerMutantGrainOntoTheReport(t *testing.T) {
 // everywhere that matters.
 func TestAggregateCarriesConcurrencyOntoTheReport(t *testing.T) {
 	results := []FileResult{
-		{Gradable: true, Verdict: advpool.Verdict{Concurrency: advpool.Concurrency{Trees: 6}}},
+		{Gradable: true, Verdict: advpool.Verdict{Concurrency: advpool.Concurrency{
+			Trees: 6, Shared: []string{".venv"},
+		}}},
 		{Gradable: true, Verdict: advpool.Verdict{Concurrency: advpool.Concurrency{
 			Trees: 1, Note: "suite is not concurrency-safe: baseline failed under 3",
 		}}},
+		// A verdict served from the ledger cache, recorded before this
+		// column existed: it carries NO Concurrency at all. That must reach
+		// the report as the "not recorded" 0 — the printer then prints no
+		// line and the signer signs no key — and never be rounded to a 1
+		// the cached run never measured.
+		{Gradable: true, CacheHit: true, Verdict: advpool.Verdict{}},
 	}
-	results[0].Job.Path, results[1].Job.Path = "pkg/a.py", "pkg/b.py"
+	results[0].Job.Path, results[1].Job.Path, results[2].Job.Path = "pkg/a.py", "pkg/b.py", "pkg/cached.py"
 	byPath := map[string]WeakFile{}
-	for _, w := range Aggregate("o", "r", "c", 2, 2, results, nil).Weakest {
+	for _, w := range Aggregate("o", "r", "c", 3, 3, results, nil).Weakest {
 		byPath[w.Path] = w
 	}
 	if got := byPath["pkg/a.py"]; got.Trees != 6 || got.ConcurrencyNote != "" {
 		t.Errorf("got Trees=%d Note=%q, want Trees=6, no note", got.Trees, got.ConcurrencyNote)
 	}
+	// The dep dirs the trees SHARE are disclosure too: they are the channel
+	// between trees the isolation argument otherwise rules out.
+	if got := byPath["pkg/a.py"]; len(got.SharedDirs) != 1 || got.SharedDirs[0] != ".venv" {
+		t.Errorf("got SharedDirs=%q, want [.venv] on the report", got.SharedDirs)
+	}
 	if got := byPath["pkg/b.py"]; got.Trees != 1 || got.ConcurrencyNote != "suite is not concurrency-safe: baseline failed under 3" {
 		t.Errorf("got Trees=%d Note=%q, want the downgrade note preserved", got.Trees, got.ConcurrencyNote)
+	}
+	if got := byPath["pkg/cached.py"]; got.Trees != 0 || got.ConcurrencyNote != "" {
+		t.Errorf("got Trees=%d Note=%q, want 0: a cache hit with no Concurrency measured nothing", got.Trees, got.ConcurrencyNote)
 	}
 }

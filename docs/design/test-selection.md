@@ -32,10 +32,10 @@ running `lang.pyPlugin.Instrument`'s exact `sh -c` script in a venv of each
 project's own pinned test dependencies (`requirements-dev.txt` for requests),
 on Python 3.14 / coverage 7.16:
 
-| project | suite | tests seen | evidence for the audited file | reduced payload | wall time |
+| project | suite | tests seen | evidence for the audited file | reduced payload (`corral-selection-2`) | wall time |
 |---|---|---|---|---|---|
-| pallets/flask | 491 passed | 491 | `src/flask/cli.py` ← 91 tests | 331,457 bytes | 3.4 s (suite) + 0.24 s (reduce) |
-| psf/requests | 620 passed | 620 | `src/requests/adapters.py` ← 234 tests | 364,300 bytes | 79 s + 0.16 s |
+| pallets/flask | 491 passed | 491 | `src/flask/cli.py` ← 91 tests, 81 static ranges | 1,331,508 bytes | 3.2 s (suite) + 0.41 s (reduce) |
+| psf/requests | 620 passed | 620 | `src/requests/adapters.py` ← 234 tests, 36 static ranges | 1,053,331 bytes | 79 s + 0.28 s |
 
 Two facts under those numbers, both learned the expensive way on the first
 acceptance run:
@@ -58,11 +58,10 @@ acceptance run:
   uses for a module with nothing executable in it, are dropped: line 0 is not
   a source line, and no mutant span can overlap it.
 
-  The two byte counts in the table above were measured on the earlier
-  `corral-selection-1` shape, which carried only `{file: [node ids]}` — 331 KB
-  for flask, 1,240× smaller than the raw contexts JSON. Per-test line ranges
-  make the v2 payload larger; it has not been re-measured, and the numbers
-  above are not restated as though it had.
+  For scale: the earlier `corral-selection-1` shape, which carried only
+  `{file: [node ids]}`, was 331 KB for the same flask run — 1,240× smaller
+  than the raw contexts JSON. Carrying every test's line ranges quadruples
+  it to the 1.3 MB above, still ~300× smaller than the raw form.
 
 The evidence run must also **pass** (exit 0). A suite whose tests error at
 setup executes nothing in those tests, so they are never selected, the
@@ -71,7 +70,7 @@ whole-suite baseline would have refused (#164). Selection is a subset of the
 whole suite's guarantees only when the whole suite is green.
 
 The scan bounds the evidence run separately from the coverage pre-flight —
-`selectionMaxOutput` (64 MiB, ~180× the measured payload) and
+`selectionMaxOutput` (64 MiB, ~50× the measured v2 payload) and
 `selectionTimeout` (15 min, ~11× requests) in `cmd/corral/certify_repo.go`.
 
 ## Why selection is by execution evidence only
@@ -248,11 +247,43 @@ than fixed:
 
 ### Measured
 
-The acceptance run (`requests/adapters.py` and `flask/cli.py` per mutant,
-whole-suite as the control on requests) records the wall clock, the
-per-mutant test counts and the two kill rates. Those numbers land here in
-the commit that runs it. Nothing is projected into this table in the
-meantime.
+Run 2026-08-30, same setup as the table above (all `gemini-3.6-flash`,
+`--critic-model off`, `--substrate workspace`, 24 cores), against the per-file
+numbers from #163's acceptance the day before:
+
+| target | mode | graded by | per mutant (min–max, median) | kill rate | survivors | proven | wall |
+|---|---|---|---|---|---|---|---|
+| `requests/adapters.py` | **per mutant** | 234 of 620 | **1–234, median 158** | 0.55 | 18 | 18 | 79m32s |
+| same file, same session | whole suite (control) | 620 | — | 0.50 | 20 | 15 | 86m24s |
+| same file, previous day | per file (#163) | 234 of 620 | — | 0.53 | 18 | 17 | 79m07s |
+| `flask/cli.py` | **per mutant** | 91 of 491 | **1–91, median 14** | 0.50 | 20 | 0 `[TEST UNSOUND]` | 4m52s |
+| same file, previous day | per file (#163) | 91 of 491 | — | 0.50 | 20 | 0 `[TEST UNSOUND]` | 4m09s |
+
+What that says, plainly:
+
+- **The measurement is faithful.** Per-mutant, per-file and whole-suite agree
+  within the generator's own run-to-run swing on `adapters.py` (0.55 / 0.53 /
+  0.50), and the two soundness residuals above did not show themselves — a
+  false-kill drift would have pushed the per-mutant rate up, not held it.
+- **The narrowing is real and the wall clock did not move.** On
+  `adapters.py` the median mutant is reached by 158 of the 234 tests: the
+  mutants concentrate in `HTTPAdapter.send`, which almost every test
+  exercises, so "only the tests that reach the span" is most of the file's
+  tests. On `cli.py` the median is 14 of 91 — a 6× narrowing — on a suite
+  that takes three seconds, where the run is dominated by the writer's
+  attempts. Neither file is the shape per-mutant selection pays off on: that
+  shape is a *slow* suite whose mutants land in *cold* functions, and it is
+  not measured here.
+- **The authored pass is now the cost.** On `adapters.py`, 18 survivors were
+  each proven against the full per-file selection plus writer retries; that
+  pass is unchanged by design and is a large share of the 79 minutes. The
+  authored test is named explicitly on the command, so narrowing the *rest*
+  of that command to the survivor's own span is sound and is the next step
+  — not taken here, because it is a separate measurement change.
+
+Every row above was produced with the disclosure in place: the
+`1–234, median 158` is the report line's own text, and the same numbers are
+in `scan_mutants`, the attestation and the warehouse row for those scans.
 
 ## Part B — not built
 

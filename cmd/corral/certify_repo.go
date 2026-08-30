@@ -1574,11 +1574,13 @@ const preflightTimeout = 5 * time.Minute
 // and the whole scan then grades whole-suite — disclosed, but the exact
 // silent-degradation shape this feature exists to avoid.
 //
-// The Python reducer runs inside the instrumented shell and emits
-// {file: [node ids]}, measured 2026-08-29: flask 331,457 bytes, requests
-// 364,300 bytes (the unreduced `coverage json --show-contexts` for the same
-// flask run was 411 MB — see docs/design/test-selection.md). 64 MiB is ~180×
-// that; 15 min is ~11× requests' 79 s suite. Generous on purpose: over-sizing
+// The Python reducer runs inside the instrumented shell and emits, per
+// file, the node ids that executed it plus each test's line ranges and the
+// import-time ranges (corral-selection-2), measured 2026-08-30: flask
+// 1,331,508 bytes, requests 1,053,331 bytes (the unreduced `coverage json
+// --show-contexts` for the same flask run was 411 MB — see
+// docs/design/test-selection.md). 64 MiB is ~50× that; 15 min is ~11×
+// requests' 79 s suite. Generous on purpose: over-sizing
 // costs bounded memory on one run, under-sizing costs a scan that silently
 // grades a different question.
 const selectionMaxOutput = 64 << 20

@@ -68,6 +68,27 @@ type scoreConfig struct {
 	// run against each mutant BEFORE the suite. Empty disables the gate, which
 	// preserves the pre-gate behavior for every caller that has not opted in.
 	mutantCompileCheck [][]string
+	// commandFor, when set, grades each mutant with the command it chooses
+	// for that mutant instead of the shared testCmd. nil (the default)
+	// reproduces today's behavior byte-for-byte.
+	commandFor CommandFor
+}
+
+// MutantCommand is what CommandFor decides for one mutant.
+type MutantCommand struct {
+	Cmd   []string
+	Tests int    // tests the command runs; 0 when unknown
+	Rule  string // lang.SpanRule*; "" when CommandFor was not set
+}
+
+// CommandFor chooses the test command to grade a single mutant with.
+type CommandFor func(m Mutant) MutantCommand
+
+// WithCommandFor grades each mutant with the command f returns for it,
+// instead of the testCmd every mutant shares. nil is today's behaviour.
+// The baseline and the compile gate are unaffected — they run with testCmd.
+func WithCommandFor(f CommandFor) ScoreOption {
+	return func(c *scoreConfig) { c.commandFor = f }
 }
 
 // WithMutantTimeout overrides the auto-derived per-mutant timeout with an
@@ -238,6 +259,17 @@ type Report struct {
 	// could anything feed the mistake back so the model could correct it. A
 	// plain Jail leaves this empty rather than failing.
 	InvalidReasons map[string]string
+	// PerMutant records what each GRADED mutant was actually graded with,
+	// keyed by Mutant.ID. Populated only when WithCommandFor was set; nil
+	// otherwise, so a caller that never opted in sees no behavior change.
+	PerMutant map[string]MutantGrading
+}
+
+// MutantGrading is what a single mutant was actually graded with, when
+// WithCommandFor chose a command for it.
+type MutantGrading struct {
+	TestsRun int
+	Rule     string
 }
 
 // VerboseJail is a Jail that can also report what a run PRINTED, not just
@@ -411,6 +443,7 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 		err           error
 		invalid       bool
 		invalidReason string
+		grading       *MutantGrading
 	}
 	outcomes := make([]outcome, len(mutants))
 
@@ -437,8 +470,17 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 			}
 			gcancel()
 		}
+		cmd := testCmd
+		var grading *MutantGrading
+		if cfg.commandFor != nil {
+			mc := cfg.commandFor(m)
+			if len(mc.Cmd) > 0 {
+				cmd = mc.Cmd
+			}
+			grading = &MutantGrading{TestsRun: mc.Tests, Rule: mc.Rule}
+		}
 		mctx, cancel := context.WithTimeout(ctx, perMutant)
-		passed, err := run(mctx, m.Code)
+		passed, err := runCmd(mctx, m.Code, cmd)
 		cancel()
 		if err != nil {
 			if errors.Is(err, ErrTestTimeout) {
@@ -473,7 +515,7 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 				_, berr := run(bctx, compliantCode)
 				bcancel()
 				if berr == nil {
-					outcomes[i] = outcome{killed: true}
+					outcomes[i] = outcome{killed: true, grading: grading}
 					return
 				}
 				if errors.Is(berr, ErrTestTimeout) {
@@ -487,7 +529,7 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 			return
 		}
 		// test PASSED on a violation => it did NOT catch it
-		outcomes[i] = outcome{killed: !passed}
+		outcomes[i] = outcome{killed: !passed, grading: grading}
 	}
 
 	if cfg.concurrency > 1 && len(mutants) > 1 {
@@ -525,6 +567,12 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 				rep.InvalidReasons[m.ID] = r
 			}
 			continue
+		}
+		if g := outcomes[i].grading; g != nil {
+			if rep.PerMutant == nil {
+				rep.PerMutant = map[string]MutantGrading{}
+			}
+			rep.PerMutant[m.ID] = *g
 		}
 		if outcomes[i].killed {
 			rep.Killed = append(rep.Killed, m.ID)

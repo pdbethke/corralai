@@ -200,7 +200,7 @@ func runSeal(args []string, open func(dsn string) (sealReader, error), stdout, s
 	fs := flag.NewFlagSet("seal", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	dsn := fs.String("db", "", "warehouse to read (default: $CORRALAI_SCANS_DB, else ~/.claude/corralai_scans.duckdb — the same resolution `corral scans` uses, since a single-operator setup ordinarily pushes to the same local file it records to)")
-	repoDir := fs.String("repo", "", "a checkout to judge validity against: each hot file's seal row is marked live (bytes unchanged since the audit), stale (changed since), or never audited. Without this flag, seal prints the raw ledger with no such judgement")
+	repoDir := fs.String("repo", "", "a checkout to judge validity against: each hot file's seal row is marked live (bytes unchanged since the audit), stale (changed since), never audited, unreadable, or unknown when the row recorded no validity key to compare against. Only live counts toward coverage. Without this flag, seal prints the raw ledger with no such judgement")
 	top := fs.Int("top", defaultSealTop, "how many of the repo's highest-ranked (churn x size) files count as \"hot\" for the coverage line — same ranking `certify --repo` uses to bound a scan")
 	asJSON := fs.Bool("json", false, "emit the rows as JSON")
 	if err := fs.Parse(args); err != nil {
@@ -317,6 +317,21 @@ func runSealWithRepo(st sealReader, repoDir string, top int, asJSON bool, stdout
 			// validity key could not be computed, so the honest state is
 			// that the reader does not know.
 			states = append(states, sealState{Path: c.Path, State: "unreadable", Row: &rc})
+		case strings.TrimSpace(r.ParentSHA256) == "":
+			// The ROW has no validity key: parent_sha256 was NULL (the
+			// reader COALESCEs it to ""), because the verdict predates the
+			// column, or because the file's own mutants disagreed about what
+			// was audited and buildScanFileRows recorded nothing rather than
+			// pick one. There is no hash to compare the checkout against, so
+			// the comparison below cannot run at all — and it must not be
+			// allowed to, because "" never equals a real sha256 and the
+			// default branch would announce that the file CHANGED. That is a
+			// claim about bytes nothing here ever saw.
+			//
+			// Not live, for the same reason as unreadable: a verdict whose
+			// validity cannot be checked is not a verdict this reader can
+			// call current.
+			states = append(states, sealState{Path: c.Path, State: "unknown (no validity key recorded)", Row: &rc})
 		case sum == r.ParentSHA256:
 			states = append(states, sealState{Path: c.Path, State: "live", Row: &rc})
 			live++

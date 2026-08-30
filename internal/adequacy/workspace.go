@@ -349,6 +349,18 @@ func (w *WorkspaceRunner) RunTestVerbose(ctx context.Context, files map[string]s
 // printed, dozens of times over, to return 64 KiB of it. See tailWriter's
 // own doc.
 //
+// A NOTE ON WHAT THIS COSTS, since it is not free the way "discard the
+// output" is. Handing applyRunRestore a non-nil writer makes os/exec give the
+// child an OS PIPE (a nil writer gets /dev/null and no goroutine at all), and
+// cmd.Wait then blocks on a copying goroutine that only finishes when every
+// holder of the write end closes it. A grandchild the suite leaves running
+// inherits that descriptor and would otherwise hold Wait open past the
+// deadline, forever. What bounds it is sandbox.GuardProcess's WaitDelay,
+// applied in applyRunRestore — see the comment there, and GuardProcess's own.
+// So the detailed path is safe, but it is safe BECAUSE of that guard, not
+// because the capture is small: do not remove the guard on the grounds that
+// this runner has a timeout.
+//
 // Output rides along even on a non-nil error, exactly as RunTestVerbose does.
 func (w *WorkspaceRunner) RunTestDetailed(ctx context.Context, files map[string]string, testCmd []string) (bool, []byte, error) {
 	out := newTailWriter(maxDetailedOutput)

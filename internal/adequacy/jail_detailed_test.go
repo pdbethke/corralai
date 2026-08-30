@@ -68,3 +68,41 @@ func TestJailDetailedOutputIsCapped(t *testing.T) {
 		t.Errorf("returned %d bytes, want at most the %d-byte cap", len(out), maxDetailedOutput)
 	}
 }
+
+// TestJailDetailedKeepsTheTailOfAVerboseSuite is the bug the two tests above
+// walked straight past.
+//
+// runInJail passes MaxOutput 0 for the ordinary path, which sandbox.Run reads
+// as its 16 KiB default, and sandbox.CappedWriter keeps the HEAD — it stops
+// storing once it is full. So on any suite that prints more than 16 KiB
+// (pytest -v on a few hundred tests does it comfortably), the bytes
+// RunTestDetailed got back were the run's OPENING, tailBytes trimmed a buffer
+// that no longer contained the summary, and the parser found nothing to name.
+// killed_by was silently NULL on the jail substrate for exactly the verbose
+// suites where naming the test matters most — and the failure is invisible:
+// the run passes, the verdict is right, one column is just empty.
+//
+// A test that asks for a big MaxOutput cannot see this. The point is what the
+// DEFAULT jail does, so this one configures nothing.
+func TestJailDetailedKeepsTheTailOfAVerboseSuite(t *testing.T) {
+	// 200 KiB of chatter, then the one line a parser can use, last.
+	script := `head -c 204800 /dev/zero | tr '\0' 'x'; echo; echo "FAILED a.py::test_x - boom"; exit 1`
+	j := NewJail(&scriptIsolator{script: script}, 0)
+	dj, ok := j.(DetailedJail)
+	if !ok {
+		t.Fatal("the bwrap jail does not implement DetailedJail")
+	}
+	pass, out, err := dj.RunTestDetailed(context.Background(), map[string]string{"a.py": "x\n"}, []string{"pytest"})
+	if err != nil {
+		t.Fatalf("RunTestDetailed: %v", err)
+	}
+	if pass {
+		t.Error("a script exiting 1 reported a pass")
+	}
+	if len(out) > maxDetailedOutput {
+		t.Errorf("returned %d bytes, want at most the %d-byte cap", len(out), maxDetailedOutput)
+	}
+	if got := pythonFailureParser(t).FirstFailure(out); got != "a.py::test_x" {
+		t.Errorf("parsed %q from the jail's captured output, want a.py::test_x — the trailing summary was cut off", got)
+	}
+}

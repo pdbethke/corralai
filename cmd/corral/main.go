@@ -283,8 +283,10 @@ Usage:
                                   (latest kill-rate-bearing row per path), creating the view if
                                   a writer never has. With --repo <dir>: judges each of the
                                   repo's churn x size top-N ("hot") files live (bytes unchanged
-                                  since the audit), stale (changed since), or never audited —
-                                  and prints "coverage: N of M hot files carry a live verdict".
+                                  since the audit), stale (changed since), never audited,
+                                  unreadable, or unknown (the row recorded no validity key) —
+                                  and prints "coverage: N of M hot files carry a live verdict",
+                                  which counts the live ones only.
                                   Without --repo: the warehouse's latest verdict per path, no
                                   live/stale judgement. Read-only — never writes a row.
                                   flags: --db <dsn> (default $CORRALAI_SCANS_DB, else

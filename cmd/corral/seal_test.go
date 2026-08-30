@@ -342,3 +342,42 @@ func TestSealUnreadableFileIsNotStale(t *testing.T) {
 		t.Errorf("an unreadable hot file was reported as stale — a diagnosis nothing measured:\n%s", got)
 	}
 }
+
+// TestSealNoValidityKeyIsNotStale: a corral_seal row whose parent_sha256 is
+// NULL — a verdict recorded before the validity key existed, or one whose own
+// mutants disagreed about what was audited, so buildScanFileRows honestly
+// recorded nothing — cannot be compared against anything.
+//
+// The reader COALESCEs that NULL to "", and "" never equals a real sha256, so
+// every such file fell through to the default branch and was reported "stale
+// (file changed since ...)" — a claim that the bytes CHANGED, made about a
+// row that never said what the bytes were. Nothing measured that. It is the
+// same shape as the unreadable case above and takes the same answer: say the
+// reader does not know, and do not count it live.
+func TestSealNoValidityKeyIsNotStale(t *testing.T) {
+	dir, repo := sealFixtureRepo(t)
+	ts := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
+	reader := fakeSealReader{rows: []sealRow{
+		// COALESCE(parent_sha256, '') is what dbSealReader hands back for a
+		// NULL column, so an empty string IS the shape under test.
+		{Repo: repo, Path: "live.go", ParentSHA256: "", KillRate: 0.9, TS: ts},
+	}}
+	var out, errOut bytes.Buffer
+	code := runSeal([]string{"--db", "unused", "--repo", dir, "--top", "3"},
+		func(string) (sealReader, error) { return reader, nil }, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("runSeal exit %d, stderr=%s", code, errOut.String())
+	}
+	got := out.String()
+	if !strings.Contains(got, "unknown (no validity key recorded)") {
+		t.Errorf("a row with no validity key must say so; got:\n%s", got)
+	}
+	if strings.Contains(got, "stale (") {
+		t.Errorf("a row with no validity key was reported as stale — a diagnosis nothing made:\n%s", got)
+	}
+	// And it is NOT live: the key could not be compared, exactly as for an
+	// unreadable file.
+	if !strings.Contains(got, "coverage: 0 of 3") {
+		t.Errorf("a row with no validity key was counted as live coverage:\n%s", got)
+	}
+}

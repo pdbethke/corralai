@@ -15,7 +15,7 @@ import (
 // That reasoning holds for the JAIL substrate, where files really do run
 // concurrently. It does NOT hold for the WORKSPACE substrate: that one mutates a
 // single checkout in place, so resolveScanWorkers already forces file-level
-// concurrency to exactly 1 and prints "jobs run one at a time".
+// concurrency to exactly 1 (it audits "one file at a time").
 //
 // So on the workspace substrate the budget was never spent by anyone. The box
 // sat idle while a file's ~8 mutant-generator shards, its test-writer and its

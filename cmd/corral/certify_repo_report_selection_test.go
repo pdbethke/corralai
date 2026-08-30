@@ -72,7 +72,8 @@ func TestPrintWeakFileNamesTheMeasurement(t *testing.T) {
 		PerMutant: true, TestsPerMutant: &advpool.TestsPerMutantSpread{Min: 3, Median: 9, Max: 41},
 		Rules: map[string]int{"lines": 30},
 	})
-	if !strings.HasSuffix(strings.TrimRight(b.String(), "\n"), "(coverage-lines)") {
+	lines := strings.Split(strings.TrimRight(b.String(), "\n"), "\n")
+	if !strings.HasSuffix(lines[0], "(coverage-lines)") {
 		t.Errorf("an all-lines run prints no breakdown: %q", b.String())
 	}
 }
@@ -140,5 +141,54 @@ func TestPrintWeakFileSaysProvenByTheAuthoredTestAlone(t *testing.T) {
 	printWeakFile(&b, reposcan.WeakFile{Path: "pkg/c.py", KillRate: 0.55, Survivors: 18, ProvenMissed: 3, SelectionFallback: "--whole-suite"})
 	if strings.Contains(b.String(), "authored test alone") {
 		t.Errorf("a whole-suite run proves the old way: %q", b.String())
+	}
+}
+
+// TestPrintWeakFileNamesTheConcurrency pins the report's half of "every
+// reader says how many trees scored the file, or why one". The wording must
+// be the SAME as noteConcurrency's live progress line — both go through
+// concurrencyDisclosure — so an operator reading the report after the fact
+// sees exactly what they saw scroll past during the run.
+func TestPrintWeakFileNamesTheConcurrency(t *testing.T) {
+	var b bytes.Buffer
+	printWeakFile(&b, reposcan.WeakFile{Path: "pkg/a.py", KillRate: 0.65, Trees: 6})
+	if !strings.Contains(b.String(), "   concurrency: 6 trees (baseline passed under 6)") {
+		t.Errorf("got %q", b.String())
+	}
+
+	// The dep dirs shared by every tree ride on the SAME line, through the
+	// same helper, so the live progress, the report and `corral scans show`
+	// cannot disagree about what was shared.
+	b.Reset()
+	printWeakFile(&b, reposcan.WeakFile{Path: "pkg/shared.py", KillRate: 0.65, Trees: 6, SharedDirs: []string{".venv"}})
+	if !strings.Contains(b.String(), "   concurrency: 6 trees (baseline passed under 6; shared: .venv)") {
+		t.Errorf("got %q", b.String())
+	}
+
+	b.Reset()
+	printWeakFile(&b, reposcan.WeakFile{Path: "pkg/b.py", KillRate: 0.65, Trees: 1,
+		ConcurrencyNote: "suite is not concurrency-safe: baseline failed under 3"})
+	if !strings.Contains(b.String(), "   concurrency: 1 (suite is not concurrency-safe: baseline failed under 3)") {
+		t.Errorf("got %q", b.String())
+	}
+
+	b.Reset()
+	printWeakFile(&b, reposcan.WeakFile{Path: "pkg/c.py", KillRate: 0.65, Trees: 1})
+	if !strings.Contains(b.String(), "   concurrency: 1") {
+		t.Errorf("got %q", b.String())
+	}
+	if strings.Contains(b.String(), "   concurrency: 1 (") {
+		t.Errorf("no note must print bare '1', not an empty parenthetical: %q", b.String())
+	}
+
+	// Trees 0 is "not recorded", and the report says nothing rather than
+	// inventing a "1". This is the shape a jail-substrate file has (it builds
+	// no trees at all) and the shape a verdict served from a cache row
+	// written before this branch has — the same silence noteConcurrency
+	// already keeps live.
+	b.Reset()
+	printWeakFile(&b, reposcan.WeakFile{Path: "pkg/d.py", KillRate: 0.65})
+	if strings.Contains(b.String(), "concurrency:") {
+		t.Errorf("an unrecorded concurrency must print NO line: %q", b.String())
 	}
 }

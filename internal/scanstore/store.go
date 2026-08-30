@@ -163,6 +163,29 @@ type File struct {
 	// nothing graded the file, so a stored 0.0 would later read as "your
 	// tests caught nothing here" about a measurement that was never made.
 	Uncovered bool
+	// MutantsFrom is the sha256 of the RECORDED MUTANT SET this row's audit
+	// replayed (`certify --repo --mutants`), and empty when the run generated
+	// its own mutants — which is the normal case and every pre-`--mutants`
+	// row. It is what makes two rows comparable: a kill rate is a score
+	// against a specific exam, and mutants are authored by a model, so two
+	// ordinary runs of the same file sat different exams. A shared
+	// mutants_from is the evidence that they did not.
+	MutantsFrom string
+	// Trees and ConcurrencyNote mirror advpool.Verdict.Concurrency: how
+	// many private trees the workspace substrate's probe scored this file
+	// with at once, or — when it granted only one — why. Trees 0 is the one
+	// explicit "not recorded" state — a row written before this column
+	// existed, a rejected file that was never scored, or a substrate that
+	// builds no trees — and is stored SQL NULL, never the integer 0, so a
+	// caller (and a query) can always tell it from a measured one tree.
+	Trees           int
+	ConcurrencyNote string
+	// SharedDirs is the comma-joined list of dependency directories that were
+	// symlinked into every tree rather than copied (advpool.Concurrency's
+	// Shared). Stored SQL NULL, not "", when the run shared nothing: they are
+	// the one thing the trees did NOT hold privately, so "none" and "this
+	// ledger does not say" are different answers.
+	SharedDirs string
 	// CacheKey is reposcan's content address for this file's audit — every
 	// input that can change the verdict, hashed. It is what makes a later
 	// scan able to reuse this row instead of re-running the suite once per
@@ -280,6 +303,10 @@ var scanFilesMigrationCols = []struct{ name, ddl string }{
 	{"suite_tests", "suite_tests INTEGER"},
 	{"selection_fallback", "selection_fallback VARCHAR"},
 	{"uncovered", "uncovered BOOLEAN"},
+	{"mutants_from", "mutants_from VARCHAR"},
+	{"trees", "trees INTEGER"},
+	{"concurrency_note", "concurrency_note VARCHAR"},
+	{"shared_dirs", "shared_dirs VARCHAR"},
 }
 
 // scanMutantsMigrationCols is the same ledger, at the mutant grain: the
@@ -367,7 +394,11 @@ func Open(dsn string) (*Store, error) {
 		selected_tests INTEGER,
 		suite_tests INTEGER,
 		selection_fallback VARCHAR,
-		uncovered BOOLEAN
+		uncovered BOOLEAN,
+		mutants_from VARCHAR,
+		trees INTEGER,
+		concurrency_note VARCHAR,
+		shared_dirs VARCHAR
 	)`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("scanstore: create scan_files table: %w", err)
@@ -542,6 +573,32 @@ func sanitizeKillRate(v *float64) *float64 {
 // as "your tests caught nothing" about a question nobody asked. Enforced in
 // the store, not left to each caller, because the caller getting it wrong is
 // how a false accusation gets persisted.
+// nullableString binds SQL NULL for an empty string rather than an empty
+// VARCHAR. It matters for mutants_from specifically: NULL is the honest value
+// for "this run generated its own mutants", and ” would be a set identifier
+// that names nothing — indistinguishable, in a later query, from a recorded
+// set whose hash was lost.
+func nullableString(v string) any {
+	if v == "" {
+		return nil
+	}
+	return v
+}
+
+// nullableTrees binds SQL NULL for a concurrency that was never recorded.
+// Trees < 1 is the one "not recorded" state (see advpool.Concurrency): the
+// jail substrate builds no trees, a rejected file was never scored, and a
+// verdict served from a pre-concurrency cache row carries none. A stored 0
+// is a NUMBER — a later query would average it, compare it and rank on it —
+// where NULL is the only encoding of "this ledger does not say". Same rule
+// as mutants_from above, for the same reason.
+func nullableTrees(v int) any {
+	if v < 1 {
+		return nil
+	}
+	return v
+}
+
 func fileKillRate(f File) *float64 {
 	if f.Uncovered {
 		return nil
@@ -585,14 +642,16 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 			proven_mutant_ids, authored_test, cache_key, verdict_json, computed_at,
 			models_by_role, mutants_total, regions_total, regions_probed, dropped_regions, vacuous_findings, status,
 			authored_test_not_collected, baseline_failed, cache_hit, reused_from_scan_id, suite_baseline_ms,
-			test_selection, selected_tests, suite_tests, selection_fallback, uncovered
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			test_selection, selected_tests, suite_tests, selection_fallback, uncovered, mutants_from,
+			trees, concurrency_note, shared_dirs
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id, f.Path, f.Lang, f.Disposition, f.Reason,
 			fileKillRate(f), f.Survivors, f.Gradable, f.PreflightState, f.Evidence, f.Detail, f.TimedOut, f.TestWriterFailed, f.ProvenMissed, f.PoolTestUnsound,
 			f.ProvenMutantIDs, f.AuthoredTest, f.CacheKey, f.VerdictJSON, f.ComputedAt,
 			f.ModelsByRole, f.MutantsTotal, f.RegionsTotal, f.RegionsProbed, f.DroppedRegions, f.VacuousFindings, f.Status,
 			f.AuthoredTestNotCollected, f.BaselineFailed, f.CacheHit, f.ReusedFromScanID, f.SuiteBaselineMillis,
-			f.TestSelection, f.SelectedTests, f.SuiteTests, f.SelectionFallback, f.Uncovered,
+			f.TestSelection, f.SelectedTests, f.SuiteTests, f.SelectionFallback, f.Uncovered, nullableString(f.MutantsFrom),
+			nullableTrees(f.Trees), nullableString(f.ConcurrencyNote), nullableString(f.SharedDirs),
 		); err != nil {
 			return 0, fmt.Errorf("scanstore: insert scan_files row for %q: %w", f.Path, err)
 		}
@@ -679,7 +738,8 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		models_by_role, mutants_total, regions_total, regions_probed, dropped_regions, vacuous_findings, status,
 		authored_test_not_collected, baseline_failed, cache_hit, reused_from_scan_id,
 		suite_baseline_ms,
-		test_selection, selected_tests, suite_tests, selection_fallback, uncovered
+		test_selection, selected_tests, suite_tests, selection_fallback, uncovered, mutants_from,
+		trees, concurrency_note, shared_dirs
 		FROM scan_files WHERE scan_id = ? ORDER BY rowid`, scanID)
 	if err != nil {
 		return nil, fmt.Errorf("scanstore: files for scan %d: %w", scanID, err)
@@ -715,13 +775,26 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		var testSelection, selectionFallback sql.NullString
 		var selectedTests, suiteTests sql.NullInt64
 		var uncovered sql.NullBool
+		// mutants_from is NULL on every row that generated its own mutants —
+		// which is every row written before --mutants existed, and every
+		// ordinary run since. Empty means "this row's exam was generated by
+		// this run", never "the set is unknown".
+		var mutantsFrom sql.NullString
+		// trees/concurrency_note read back nullable for the same reason:
+		// a row written before this migration ran has neither, and a
+		// rejected file was never scored at all. NULL here means "this
+		// ledger does not say" — never a claimed "1 tree", which a
+		// pre-change row cannot assert.
+		var trees sql.NullInt64
+		var concurrencyNote, sharedDirs sql.NullString
 		if err := rows.Scan(&f.Path, &f.Lang, &f.Disposition, &f.Reason,
 			&f.KillRate, &f.Survivors, &f.Gradable, &f.PreflightState, &f.Evidence, &detail, &timedOut, &testWriterFailed, &provenMissed, &poolTestUnsound,
 			&provenIDs, &authoredTest,
 			&modelsByRole, &mutantsTotal, &regionsTotal, &regionsProbed, &droppedRegions, &vacuousFindings, &status,
 			&authoredTestNotCollected, &baselineFailed, &cacheHit, &reusedFromScanID,
 			&suiteBaselineMS,
-			&testSelection, &selectedTests, &suiteTests, &selectionFallback, &uncovered); err != nil {
+			&testSelection, &selectedTests, &suiteTests, &selectionFallback, &uncovered, &mutantsFrom,
+			&trees, &concurrencyNote, &sharedDirs); err != nil {
 			return nil, fmt.Errorf("scanstore: scan scan_files row: %w", err)
 		}
 		f.Detail = detail.String
@@ -755,6 +828,10 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		f.SuiteTests = int(suiteTests.Int64)
 		f.SelectionFallback = selectionFallback.String
 		f.Uncovered = uncovered.Bool
+		f.Trees = int(trees.Int64)
+		f.ConcurrencyNote = concurrencyNote.String
+		f.SharedDirs = sharedDirs.String
+		f.MutantsFrom = mutantsFrom.String
 		// ReusedFromScanID stays *int64: NULL (never reused, or a
 		// pre-migration row) must read back as nil, not a scan id of 0 — see
 		// the field's own doc.

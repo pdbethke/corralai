@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -68,7 +69,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	shadowModelFlag := fs.String("shadow-model", "", "challenger model that attacks every region a SECOND time. OFF unless named. Recorded for comparison — NEVER gates the verdict")
 	owner := fs.String("owner", "local", "owning account for the scan (tenant identifier)")
 	commit := fs.String("commit", "", "commit SHA the report is bound to")
-	swarmFlag := fs.Int("swarm", 0, "max concurrent audit workers (0 = auto-size to this host's cores)")
+	swarmFlag := fs.Int("swarm", 0, "max concurrent audit workers (0 = auto-size to this host's cores); on --substrate workspace it also sizes the private trees that score one file's mutants at once (budget/4, min 1), so --swarm 4 is one tree")
 	dryRun := fs.Bool("dry-run", false, "enumerate and emit jobs, then stop — no audits run")
 	jsonOut := fs.Bool("json", false, "with --dry-run, emit the repository's audit surface as JSON instead of the human report: per-language counts, every auditable file with its inferred test pairing, and the machine-stable exclusion tally. Needs no key, no jail and no money — it is the free inventory a UI or a tenant's own tooling can consume instead of scraping stdout")
 	substrateFlag := fs.String("substrate", substrateJail, "where the audit runs: "+substrateJail+" (bwrap) or "+substrateWorkspace+" (mutate --repo in place; the caller IS the isolation boundary, e.g. an ephemeral CI runner)")
@@ -79,6 +80,8 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	minKillRateFlag := fs.String("min-kill-rate", "", "fail the scan (exit 1) if ANY audited file's kill rate is below this value (0.0-1.0 inclusive; a minimum, so a file exactly at the threshold passes). Opt-in: unset by default, so exit codes are unchanged unless this is given. Applies PER FILE, not to the aggregate — a well-tested file must not mask a weak one")
 	preflightFlag := fs.Bool("preflight", false, "run the project's test suite once with coverage instrumentation and report which source files it never executes. One extra suite run; reports coverage-grade evidence, not proof")
 	recordFlag := fs.Bool("record", false, "record every file this scan audited or rejected, and why, into the DuckDB scan ledger (default: off). A BOOL here — unlike `certify --local`'s --record, which takes a tape PATH — see --record-db for where the ledger goes. A recording failure never changes the scan's verdict or exit code")
+	mutantsFlag := fs.String("mutants", "", "REPLAY a recorded mutant set (see --record-mutants) instead of generating one: every audited file is graded against exactly the mutants in this file, and not one generator model call is made. Mutants are authored by a model, so an ordinary run re-draws the exam every time and two runs of the same audit are not two samples of one measurement — pin the set and a change to anything ELSE becomes measurable. Every selected file must appear in the set with the SAME bytes it was recorded from; a missing file or a changed one is refused (exit 2) up front, never half-replayed")
+	recordMutantsFlag := fs.String("record-mutants", "", "write the mutants this scan actually GRADED to this file, as a replayable corral-mutants-1 document — one entry per audited file, each tied to the sha256 of the source it was derived from. Written even when the scan's gates fail: a red verdict is still a recorded exam")
 	shadowWriterModelFlag := fs.String("shadow-writer-model", "", "CHALLENGER test-writer: a second writer attacks the SAME survivors as the primary, so the two seats' misses can be compared (Jaccard over survivors, Cohen's kappa). Measurement only — it NEVER gates the verdict. OFF unless named. Recording the per-mutant outcomes additionally needs --mutant-attempts-db")
 
 	var localEndpointFlag stringSlice
@@ -347,6 +350,88 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
+	// --mutants: resolved HERE, after selection and before EVERY model-facing
+	// step below — the jail preflight, the provider preflight, and goal
+	// derivation, which is where the money starts. The point of a replayed set
+	// is that it costs no generation, so a refusal that arrives after a scan
+	// has already paid for a goal per file would be the one failure mode this
+	// flag exists to avoid. Placed before the dry-run return too, so a dry run
+	// checks the set as strictly as a real scan does.
+	var presetMutants map[string][]adequacy.Mutant
+	var mutantsFromSHA string
+	if p := strings.TrimSpace(*mutantsFlag); p != "" {
+		set, serr := adequacy.ReadMutantSet(p)
+		if serr != nil {
+			fmt.Fprintf(stderr, "corral certify --repo: %v\n", serr)
+			return 2
+		}
+		sum, herr := fileSHA256(p)
+		if herr != nil {
+			fmt.Fprintf(stderr, "corral certify --repo: hashing --mutants %s: %v\n", p, herr)
+			return 2
+		}
+		mutantsFromSHA = sum
+		mutRoot, merr := os.OpenRoot(*repoDir)
+		if merr != nil {
+			fmt.Fprintf(stderr, "corral certify --repo: opening %s: %v\n", *repoDir, merr)
+			return 1
+		}
+		selPaths := make([]string, 0, len(selected))
+		for _, c := range selected {
+			selPaths = append(selPaths, c.Path)
+		}
+		sort.Strings(selPaths)
+		presetMutants, merr = presetMutantsForSelection(mutRoot, set, selPaths)
+		_ = mutRoot.Close()
+		if merr != nil {
+			fmt.Fprintf(stderr, "corral certify --repo: %v\n", merr)
+			return 2
+		}
+		fmt.Fprintf(stdout, "  replaying a recorded mutant set for %d file(s) from %s — no mutant-generator model call will be made\n", len(presetMutants), p)
+	}
+
+	// --record-mutants: the accumulator every audited file's driver feeds. It
+	// is flushed once at the very end of this function, on EVERY exit path
+	// past this point (see the deferred write), because a scan whose gate
+	// failed is still a scan whose exam is worth keeping — reproducing a red
+	// verdict is the first thing anyone does with one.
+	// Declared here, not at the Scan call below, so the --record-mutants
+	// closure can read the scan's own per-file results: a file served from
+	// the verdict cache never runs a dev pass and so never reaches the sink,
+	// and the record line has to be able to say so.
+	var results []reposcan.FileResult
+	var mutantRecorder *mutantSetRecorder
+	if p := strings.TrimSpace(*recordMutantsFlag); p != "" {
+		mutantRecorder = newMutantSetRecorder()
+		defer func() {
+			if *dryRun {
+				// Inert, and said so rather than left silent (the same rule
+				// --record follows just below): a dry run audits nothing, so
+				// there are no graded mutants to record, and writing an empty
+				// document here would be indistinguishable from a real scan
+				// that graded nothing.
+				fmt.Fprintln(stderr, "corral certify --repo: --record-mutants ignored — --dry-run grades nothing, so there are no mutants to record")
+				return
+			}
+			n, werr := mutantRecorder.write(p)
+			if werr != nil {
+				fmt.Fprintf(stderr, "corral certify --repo: --record-mutants NOT written: %v\n", werr)
+				return
+			}
+			audited, cacheHits := 0, 0
+			for _, r := range results {
+				if !r.Gradable {
+					continue
+				}
+				audited++
+				if r.CacheHit {
+					cacheHits++
+				}
+			}
+			mutantRecorder.report(stdout, p, n, audited, cacheHits)
+		}()
+	}
+
 	// EVERY scan-fatal preflight runs BEFORE the first derivation, because
 	// derivation is where the money goes: EmitJobs below performs up to --top
 	// sequential model calls, and an operator on a host that cannot sandbox
@@ -366,6 +451,10 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// repo can mix languages.
 		ex = newLocalExecutor(*repoDir, checkArgv, *substrateFlag, *timeoutFlag, stdout)
 		ex.wholeSuite = *wholeSuiteFlag
+		ex.presetMutants = presetMutants
+		if mutantRecorder != nil {
+			ex.mutantSink = mutantRecorder.sink
+		}
 		ex.models = auditModels{
 			writer: *writerModelFlag, mutant: *mutantModelFlag,
 			critic: *criticModelFlag, shadow: *shadowModelFlag,
@@ -400,7 +489,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
-	gs, disclosure, code := resolveGoalSource(stderr, *repoDir, *goalsPath, *deriveModel, *dryRun, len(selected), newLLMDeriver)
+	gs, disclosure, code := resolveGoalSource(stderr, *repoDir, *goalsPath, *deriveModel, *dryRun, len(selected), certifyRepoDeriver)
 	if code != 0 {
 		return code
 	}
@@ -467,7 +556,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// carries the flags that change what a mutant run against a given file
 	// MEASURES, not which files get audited. See auditConfigKey for the
 	// inclusion/exclusion rationale.
-	auditConfig := auditConfigKey(*wholeSuiteFlag, selectionMethod, checkArgv)
+	auditConfig := auditConfigKey(*wholeSuiteFlag, selectionMethod, checkArgv, mutantsFromSHA)
 
 	// testSurfacePaths has to STAT the testdata entries it admits, and every
 	// read a scan performs is confined to the repository through an *os.Root —
@@ -692,9 +781,28 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 
 	workers, swarmReadout := resolveScanWorkers(*swarmFlag, *substrateFlag)
 	fmt.Fprint(stdout, swarmReadout)
-	mutantConc := resolveMutantConcurrency(resolveSwarm(*swarmFlag), *substrateFlag, workers, len(jobs))
+	// Two budgets, on purpose. The jail divides the LLM-worker budget
+	// (resolveSwarm, auto-capped so a box does not open 23 model
+	// conversations at once); the workspace sizes TREES, which are CPU, not
+	// conversations — cores/4 by design, capped by nothing but an explicit
+	// --swarm. Feeding it the capped number gave a 24-core box two trees.
+	budget := resolveSwarm(*swarmFlag)
+	if *substrateFlag == substrateWorkspace {
+		budget = treeBudget(*swarmFlag)
+	}
+	mutantConc := resolveMutantConcurrency(budget, *substrateFlag, workers, len(jobs))
 	if mutantConc > 1 {
-		fmt.Fprintf(stdout, "  mutant scoring: %d at once per file — the jail budget file-parallelism cannot spend (scoring runs the suite once per mutant, so this is the dominant cost on any repo with a real suite)\n", mutantConc)
+		// Named for what each concurrent mutant actually gets, because the
+		// two substrates buy different things with the same number: a
+		// disposable jail apiece, or a private copy of the checkout apiece.
+		// The workspace line is an INTENTION, not a result — each file's own
+		// probe decides whether its suite survives that many trees, and the
+		// per-file `concurrency:` line reports what it decided.
+		what := "the jail budget file-parallelism cannot spend"
+		if *substrateFlag == substrateWorkspace {
+			what = "one private tree each, where the file's own probe allows it"
+		}
+		fmt.Fprintf(stdout, "  mutant scoring: %d at once per file — %s (scoring runs the suite once per mutant, so this is the dominant cost on any repo with a real suite)\n", mutantConc, what)
 	}
 
 	// The workspace substrate pins file-level concurrency to 1 (one checkout,
@@ -720,7 +828,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	auditCtx, stopSignals := auditContext(stderr)
 	defer stopSignals()
 
-	results := reposcan.Scan(auditCtx, jobs, ex, newLedgerCache(scanStore), workers)
+	results = reposcan.Scan(auditCtx, jobs, ex, newLedgerCache(scanStore), workers)
 	rep := reposcan.Aggregate(*owner, cfg.Repo, *commit, totalFiles, len(cands), results, excl)
 
 	// The diff selected zero candidates: a docs-only (or no-paired-test-only)
@@ -833,7 +941,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 				PreflightRan: preflightResult.Ran, PreflightNote: preflightResult.Note,
 				StartedAt: startedAt, FinishedAt: time.Now(),
 			}
-			files := buildScanFileRows(results, rep.Excluded, preflightResult, stderr)
+			files := buildScanFileRows(results, rep.Excluded, preflightResult, mutantsFromSHA, stderr)
 			if err := recordCertifyRepoScan(scanStore, scan, files, results, stderr); err != nil {
 				fmt.Fprintf(stderr, "corral certify --repo: scan ledger NOT written: %v\n", err)
 			}
@@ -937,8 +1045,18 @@ func fileSelectionKey(sel lang.Selection) string {
 // Bias when adding to this list: include. Over-inclusion causes a needless
 // miss, which costs money. Under-inclusion serves a stale verdict, which
 // signs an unmeasured claim.
-func auditConfigKey(wholeSuite bool, method string, checkArgv []string) string {
+func auditConfigKey(wholeSuite bool, method string, checkArgv []string, mutantsFrom string) string {
 	m := map[string]string{}
+	// A REPLAYED run sat a different exam from a generated one, so its
+	// verdict is not interchangeable with a cached generated verdict for the
+	// same content — and a generated verdict is not interchangeable with a
+	// replay of some OTHER set either. Without this the cache would serve one
+	// exam's kill rate under another exam's name, silently: exactly the
+	// blindness the hardcoded ModelSet:"unset" key had, in the one dimension
+	// --mutants exists to control.
+	if mutantsFrom != "" {
+		m["mutants-from"] = mutantsFrom
+	}
 	if wholeSuite {
 		m["whole-suite"] = "true"
 	} else if method != "" {
@@ -1359,6 +1477,13 @@ func changedFiles(root, baseRef string) ([]string, error) {
 // wiring can be tested without a provider credential — and, more importantly,
 // without any possibility of a real model call from a unit test.
 type deriverFactory func(model string) (reposcan.Deriver, error)
+
+// certifyRepoDeriver is the factory runCertifyRepo actually uses. A package
+// var rather than a direct call to newLLMDeriver so a test can prove a
+// refusal happens BEFORE derivation — "no model was called" is not something
+// stdout can be asked about, and the only honest way to assert it is to make
+// the construction observable.
+var certifyRepoDeriver deriverFactory = newLLMDeriver
 
 // resolveGoalSource picks where goals come from and returns the ONE line that
 // discloses it. Split out of runCertifyRepo so both the choice and its
@@ -2276,6 +2401,15 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 		fmt.Fprint(w, " — proven by the authored test alone")
 	}
 	fmt.Fprintln(w)
+	// How many private trees scored this file at once, or why it only got
+	// one — the same wording noteConcurrency printed live during the run,
+	// through the one shared helper, so the screen and the record agree.
+	// Silent when nothing was recorded (Trees < 1): the jail substrate builds
+	// no trees, and a verdict served from a pre-concurrency cache row carries
+	// none — matching noteConcurrency, which already stays quiet there.
+	if f.Trees >= 1 {
+		fmt.Fprintf(w, "   concurrency: %s\n", concurrencyDisclosure(f.Trees, f.ConcurrencyNote, f.SharedDirs))
+	}
 
 	// The artifact that makes "N proven, catchable gap(s)" actionable. --repo
 	// is the mode the GitHub Action runs, and it reported the COUNT while
@@ -2574,21 +2708,21 @@ func printRepoReport(w io.Writer, r reposcan.RepoReport, nothingInScope bool, mi
 // concurrency is free correctness-wise.
 //
 // The workspace substrate is clamped to ONE worker, whatever the operator
-// asked for. Every job on that substrate mutates the SAME checkout in place
-// (adequacy.NewWorkspaceRunner over --repo), and the apply/restore ledger is
-// per-runner: it assumes exclusivity. Run two jobs at once and job B's suite
-// executes while job A has a mutant — or adequacy.CanaryCode, which does not
-// compile — written into A's file. B's surviving mutants are then recorded as
-// KILLED (an inflated kill rate on a record this product signs) and B's
-// baseline can fail into a spurious baseline-failed/flaky-baseline. Neither
-// is detectable after the fact.
+// asked for — but it is no longer clamped to one RUN. Files are serialized
+// because a tree is a copy of the whole checkout and N files' pools at once
+// is N times that disk; WITHIN a file, adequacy.WorkspacePool gives each
+// concurrent mutant its own private tree, so the suite really does run many
+// at a time (see resolveMutantConcurrency, and the per-file `concurrency:`
+// line the executor prints once the pool's probe has answered).
 //
-// The fix is serialization, not a per-job tree copy: copying the tree per job
-// is the memory ceiling this substrate exists to escape. That cost is real, so
-// the readout STATES the clamp rather than silently differing from --swarm.
+// The readout must not claim more than that. It used to say the substrate
+// "mutates one checkout in place, so jobs run one at a time", which was true
+// of the whole audit and is now true only of the file axis; an operator who
+// reads it as "corral cannot use my box" is being told something false about
+// the thing this design changed.
 func resolveScanWorkers(swarmFlag int, substrate string) (int, string) {
 	if substrate == substrateWorkspace {
-		return 1, fmt.Sprintf("  swarm: 1 worker — --substrate %s mutates one checkout in place, so jobs run one at a time\n", substrateWorkspace)
+		return 1, fmt.Sprintf("  swarm: 1 worker — --substrate %s audits one file at a time (mutants within a file run concurrently, in private trees)\n", substrateWorkspace)
 	}
 	n := resolveSwarm(swarmFlag)
 	return n, fmt.Sprintf("  swarm: %d workers\n", n)
@@ -2614,17 +2748,62 @@ func resolveScanWorkers(swarmFlag int, substrate string) (int, string) {
 // files already saturate the budget the result is 1 and nothing changes, which
 // is why this is safe to turn on by default.
 //
-// The workspace substrate is pinned to 1 and cannot spend the budget on this
-// axis at all: adequacy.WorkspaceRunner mutates ONE checkout in place with NO
-// mutex, so two concurrent applyFiles interleave and one job's suite runs
-// against another's mutant — recording SURVIVORS AS KILLED and signing an
-// inflated kill rate that is undetectable after the fact. Unlike the file axis
-// (where serialization is a throughput choice) this one is a correctness
-// boundary. Fails closed: any degenerate budget/worker count yields 1, never
-// unbounded.
+// The workspace substrate divides the budget differently, and used to be
+// pinned to 1. The pin was a correctness boundary, not a throughput choice:
+// adequacy.WorkspaceRunner mutates ONE checkout in place with NO mutex, so two
+// concurrent applyFiles interleave and one job's suite runs against another's
+// mutant — recording SURVIVORS AS KILLED and signing an inflated kill rate
+// that is undetectable after the fact. adequacy.WorkspacePool removes the
+// shared tree (one private copy per worker) and with it the reason for the
+// pin, so the budget can finally reach the axis that dominates the cost of a
+// real audit: scoring runs the target's whole suite once per mutant.
+//
+// The share is a QUARTER of the budget, not all of it, and it does not divide
+// by the file workers because resolveScanWorkers already holds the workspace
+// substrate at one file at a time. A quarter because a tree is not a jail: it
+// is a copy of the checkout on disk running a REAL suite that wants CPU,
+// memory and I/O of its own (the spec's cores/4 default, --swarm overriding
+// the cores half).
+//
+// It is NOT capped by jobs, and that asymmetry with the jail branch is
+// deliberate. jobs is the FILE count, and the number this branch sizes is
+// trees-per-file — the two are unrelated the moment files stop running
+// concurrently. Capping by it would have pinned a diff-scoped one-file audit
+// to a single tree forever, which is the exact shape (one changed file, ~40
+// mutants, 23 of 24 cores idle) this whole design exists for. There is no
+// mutant count to cap by either: mutants do not exist until the generator has
+// run, long after this decision. An unused tree costs one copy of the
+// checkout and nothing else — adequacy.Score never runs more mutants at once
+// than it has mutants.
+//
+// Whether the trees are actually USED is not decided here: the pool's probe
+// runs the unmutated baseline in all N at once and downgrades to 1, disclosed,
+// if the suite is not concurrency-safe. This function sizes the ambition; the
+// probe is what keeps it honest.
+//
+// Fails closed on both branches: any degenerate budget/worker/job count yields
+// 1, never unbounded.
+// treeBudget is the budget the workspace substrate divides into private
+// trees: the operator's --swarm when given, else every core on the host. It
+// deliberately bypasses resolveSwarm's localSwarmAutoCap — that cap bounds
+// concurrent MODEL calls, and a tree is a test process, not a model call.
+func treeBudget(swarmFlag int) int {
+	if swarmFlag > 0 {
+		return swarmFlag
+	}
+	return runtime.NumCPU()
+}
+
 func resolveMutantConcurrency(budget int, substrate string, workers, jobs int) int {
 	if substrate == substrateWorkspace {
-		return 1
+		if budget < 1 {
+			return 1
+		}
+		n := budget / 4
+		if n < 1 {
+			return 1
+		}
+		return n
 	}
 	if budget < 1 || workers < 1 || jobs < 1 {
 		return 1
@@ -2708,6 +2887,17 @@ type localExecutor struct {
 	// leftover of the jail budget that file-parallelism cannot spend. Always 1
 	// on the workspace substrate; see resolveMutantConcurrency.
 	mutantConcurrency int
+
+	// presetMutants is the `--mutants` replay set, keyed by repo-relative
+	// path: a file present here is graded against exactly these mutants and
+	// seeds no generator. Every SELECTED file is present or the scan already
+	// refused (see presetMutantsForSelection), so a nil lookup here means an
+	// ordinary generated run, never a silent half-replay.
+	presetMutants map[string][]adequacy.Mutant
+
+	// mutantSink is `--record-mutants`: fed the mutants each file's dev pass
+	// actually graded. nil records nothing.
+	mutantSink func(codePath string, ms []adequacy.Mutant)
 
 	// selection is what ONE instrumented run of this repo's suite learned
 	// about which tests execute which files, collected once per scan (see
@@ -2914,9 +3104,25 @@ func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
 		// workspace substrate, which serializes them.
 		swarm: l.effectivePerFileSwarm(),
 		// The other half of the same budget: files in parallel x mutants in
-		// parallel. Reaches only the bwrap-jail scorer, never the workspace
-		// runner — resolveMutantConcurrency pins workspace at 1.
+		// parallel. On the jail substrate that many disposable jails; on the
+		// workspace substrate that many PRIVATE TREES in the pool (see
+		// resolveMutantConcurrency, which no longer pins the workspace to 1
+		// because adequacy.WorkspacePool removed the shared checkout that
+		// made the pin necessary).
 		mutantConcurrency: l.mutantConcurrency,
+		// Where the pool's concurrency probe writes its answer for this file.
+		// A pointer because the input travels BY VALUE from here to
+		// buildJailWiring; allocated for every job so the executor can print
+		// the disclosure below and the verdict can carry it, and left at its
+		// zero value (Trees 0) by the jail substrate, which builds no trees
+		// and has nothing to disclose.
+		concurrency: new(adequacy.Disclosure),
+		// And the box the job's ONE pool of private trees lives in. Created
+		// here, on the workspace substrate only, because THIS is the scope
+		// that owns it: the baseline-stability check and the audit are two
+		// consumers of one pool, and Execute closes it when both are done.
+		// nil on the jail substrate, which has no trees to share.
+		pool: l.workspacePoolBox(),
 		// H1a produces a REPORT, not a sealed statement: no ledger, no
 		// signing key, no scorecard feed (N concurrent audits must not
 		// contend on one single-process DuckDB file). Signing is H1c.
@@ -2931,11 +3137,88 @@ func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
 		criticModel:       l.models.critic,
 		shadowModel:       l.models.shadow,
 		shadowWriterModel: l.models.shadowWriter,
+
+		// A nil entry is an ordinary generated run — see localExecutor.presetMutants.
+		presetMutants: l.presetMutants[j.Path],
+		mutantSink:    l.mutantSink,
 	}
+}
+
+// concurrencyDisclosure renders the human-readable half of "how many trees
+// scored this file, or why one" — the ONE place that wording is spelled out,
+// shared by the live progress line (noteConcurrency, below), the per-file
+// report line (printWeakFile) and, through them, the ledger and the
+// attestation. An operator who sees "concurrency: 1 (…)" on screen and a
+// different phrase in the record would have no way to tell whether they are
+// the same fact; a second copy of this string is exactly how that drifts.
+func concurrencyDisclosure(trees int, note string, shared []string) string {
+	if trees < 1 {
+		// Not a measurement of one tree — no measurement at all. Only the
+		// ledger reader ever renders this: the live line and the report line
+		// print nothing rather than a row of prose. See advpool.Concurrency.
+		return "not recorded"
+	}
+	head := "1"
+	var parts []string
+	if trees > 1 {
+		head = fmt.Sprintf("%d trees", trees)
+		parts = append(parts, fmt.Sprintf("baseline passed under %d", trees))
+	}
+	if note != "" {
+		parts = append(parts, note)
+	}
+	// The dep dirs the trees SHARED, named on the same line as the count
+	// they qualify: "6 trees" is an isolation claim, and these directories
+	// are the exact places it does not hold.
+	if len(shared) > 0 {
+		parts = append(parts, "shared: "+strings.Join(shared, ", "))
+	}
+	if len(parts) == 0 {
+		return head
+	}
+	return head + " (" + strings.Join(parts, "; ") + ")"
+}
+
+// noteConcurrency prints one file's concurrency disclosure: how many private
+// trees its pool got, or that it got one and WHY.
+//
+// Nothing is printed for a disclosure that was never written (Trees 0): the
+// jail substrate has no trees to disclose, and inventing a line for it would
+// claim a measurement that never happened. Trees == 1 with no note is the
+// ordinary "the budget only bought one tree" case — the substrate's own
+// default, and not news either.
+func (l *localExecutor) noteConcurrency(path string, d *adequacy.Disclosure) {
+	if d == nil || d.Trees < 1 {
+		return
+	}
+	if d.Trees == 1 && d.Note == "" {
+		return
+	}
+	l.note("%s: concurrency: %s\n", path, concurrencyDisclosure(d.Trees, d.Note, d.Shared))
+}
+
+// workspacePoolBox returns the box this job's private-tree pool will live in,
+// or nil on a substrate that builds no trees. One box per JOB: two files must
+// never share trees (the second file's mutants would be written into a tree
+// the first file's suite is reading), and the same file's baseline check and
+// audit must never build two (a second copy of the checkout and a second
+// probe, for an answer the first one already has).
+func (l *localExecutor) workspacePoolBox() *workspacePool {
+	if l.substrate != substrateWorkspace {
+		return nil
+	}
+	return &workspacePool{}
 }
 
 func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.FileResult, error) {
 	in := l.auditInputFor(j)
+	// The job owns its private trees for as long as the job lasts — through
+	// the baseline-stability check AND the audit, which is the whole point of
+	// hanging them here rather than on the wiring's own cleanup (that one is
+	// deliberately released between the two). Deferred immediately so every
+	// early return below still deletes the copies. A no-op when there are
+	// none, which is every jail-substrate job.
+	defer in.pool.close()
 
 	// The scan-wide, per-language seed: the tree copy, the vendoring and the
 	// tree walk depend only on the repo + language, so they are done ONCE and
@@ -2961,6 +3244,14 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 	if err != nil {
 		return reposcan.FileResult{}, l.fail(j, err)
 	}
+	// The concurrency probe has run by now (building the baseline runner is
+	// what builds — and probes — this file's pool), so its answer is available
+	// and is said out loud, per file. The DOWNGRADE is the interesting event:
+	// an operator watching a workspace audit crawl has to be able to see that
+	// their suite failed under N trees, and why, rather than inferring it from
+	// the wall clock. Silent when nothing was measured (the jail substrate,
+	// which builds no trees).
+	l.noteConcurrency(j.Path, in.concurrency)
 	// Deferred, not called inline: a panic in CheckBaselineStable or in the
 	// jail beneath it would otherwise leak the vendor staging dir. Released
 	// explicitly before l.audit too, since the audit builds its own jail and
@@ -3266,6 +3557,13 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 			// as the measurement it is.
 			PerMutant:      f.PerMutant,
 			TestsPerMutant: signableSpread(f),
+			// How many private trees scored this file at once, or why it
+			// only got one — the same fact the screen and the ledger say —
+			// plus the dep dirs those trees shared, which is where the
+			// isolation the count implies does not hold.
+			Trees:           f.Trees,
+			ConcurrencyNote: f.ConcurrencyNote,
+			SharedDirs:      f.SharedDirs,
 		})
 	}
 	// Same resolution the warehouse push uses: a statement whose subject names
@@ -3336,7 +3634,13 @@ func pushAuditRows(target, repoDir string, r reposcan.RepoReport, models map[str
 			// without it, which is two measurements reported as one.
 			PerMutant:      f.PerMutant,
 			TestsPerMutant: pushableSpread(f),
-			Audited:        r.Audited, Candidates: r.Candidates,
+			// How many private trees scored this file at once, or why it
+			// only got one — denormalized onto the row like the rest of
+			// the qualifiers above, with the dep dirs those trees shared.
+			Trees:           f.Trees,
+			ConcurrencyNote: f.ConcurrencyNote,
+			SharedDirs:      strings.Join(f.SharedDirs, ","),
+			Audited:         r.Audited, Candidates: r.Candidates,
 			ModelsByRole: string(rosterJSON),
 			MinKillRate:  minKillRate, MaxProvenMissed: maxProvenMissed,
 			Passed: passed, RunURL: runURL,

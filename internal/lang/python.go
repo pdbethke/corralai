@@ -173,6 +173,44 @@ func (pyPlugin) WorkspaceRunEnv() (env []string, cleanup func()) {
 	}, func() { _ = os.RemoveAll(dir) }
 }
 
+// TreeEnv gives ONE private tree of a concurrent workspace pool its own
+// import path — the single thing standing between N copies of a checkout and
+// a run in which every mutant "survives".
+//
+// The trap, stated plainly: a project installed with `pip install -e .` leaves
+// a .pth (or a __editable__ finder) in site-packages pointing at the ORIGINAL
+// checkout. A tree is a copy at a different path, so an unqualified `import
+// yourpkg` inside it resolves to the OPERATOR'S unmutated source. The suite
+// then passes for every mutant and corral records a kill rate of zero on a
+// signed verdict — an accusation with nothing behind it.
+//
+// PYTHONPATH entries are searched BEFORE site-packages' .pth targets, so
+// putting the tree (and its src/ when the project uses that layout, since
+// that is where the package actually lives there) at the FRONT is what makes
+// the tree import itself. The operator's own PYTHONPATH follows, never
+// leads: in front, the original checkout could win the import again.
+//
+// cores is ignored: CPython runs one interpreter per process and does not
+// fan out over the box on its own, so there is nothing here to divide.
+//
+// This is belt; the concurrency probe's canary (adequacy.CanaryCode written
+// to the audited path must make the command FAIL in every tree) is braces —
+// it is what proves the tree really is importing its own copy, in the cases
+// this env cannot reach (a non-editable install of the package, an
+// installed console script).
+func (pyPlugin) TreeEnv(tree string, cores int) []string {
+	paths := []string{tree}
+	if fi, err := os.Stat(filepath.Join(tree, "src")); err == nil && fi.IsDir() {
+		// src/ FIRST: in a src-layout project the importable package is
+		// under it, and the tree root holds only the packaging files.
+		paths = []string{filepath.Join(tree, "src"), tree}
+	}
+	if existing := strings.TrimSpace(os.Getenv("PYTHONPATH")); existing != "" {
+		paths = append(paths, existing)
+	}
+	return []string{"PYTHONPATH=" + strings.Join(paths, string(os.PathListSeparator))}
+}
+
 // TestPaths returns pytest-convention candidates for codePath, most specific
 // (least likely to collide with a DIFFERENT source file's test) first:
 //

@@ -5,6 +5,7 @@ package main
 import (
 	"testing"
 
+	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/advpool"
 )
 
@@ -84,5 +85,53 @@ func TestUnnamedChallengerWriterLeavesTheRunSpecEmpty(t *testing.T) {
 	}
 	if _, ok := roles.assign[advpool.RoleTestWriterShadow]; ok {
 		t.Error("an unnamed challenger writer must not appear in the role assignment at all")
+	}
+}
+
+// TestConcurrencyReachesTheRunSpec walks the same CLI→RunSpec seam for the
+// workspace substrate's concurrency probe: buildJailWiring writes its answer
+// into in.concurrency, and newAuditRunSpec is the ONLY place that copies it
+// onto the RunSpec the driver actually reads — miss this hop and every
+// verdict, report line and ledger row downstream discloses nothing.
+//
+// A nil pointer or a Trees < 1 must normalize to the ZERO Concurrency, never
+// an invented {Trees: 1}: the jail substrate builds no trees at all and never
+// sets in.concurrency, so a normalized "1" there would sign a measurement
+// nothing made. Trees 0 is the one explicit "not recorded" state, and every
+// reader downstream renders and signs it as such.
+func TestConcurrencyReachesTheRunSpec(t *testing.T) {
+	roles := auditRoles{}
+	subj := runSubject{repo: "r", commit: "c", codePath: "a.go", lang: "go"}
+
+	rs := newAuditRunSpec(localAuditInput{checkArgv: []string{"go", "test", "./..."}}, roles, subj)
+	if rs.Concurrency.Trees != 0 || rs.Concurrency.Note != "" {
+		t.Errorf("nil concurrency pointer (the jail substrate) = %+v, want the zero Concurrency", rs.Concurrency)
+	}
+
+	zero := &adequacy.Disclosure{}
+	rs = newAuditRunSpec(localAuditInput{checkArgv: []string{"go", "test", "./..."}, concurrency: zero}, roles, subj)
+	if rs.Concurrency.Trees != 0 || rs.Concurrency.Note != "" {
+		t.Errorf("zero-value disclosure = %+v, want the zero Concurrency, not an invented 1", rs.Concurrency)
+	}
+
+	many := &adequacy.Disclosure{Trees: 6}
+	rs = newAuditRunSpec(localAuditInput{checkArgv: []string{"go", "test", "./..."}, concurrency: many}, roles, subj)
+	if rs.Concurrency.Trees != 6 || rs.Concurrency.Note != "" {
+		t.Errorf("6-tree disclosure = %+v, want {Trees: 6, Note: \"\"}", rs.Concurrency)
+	}
+
+	// The dep dirs symlinked into every tree are the one thing the trees do
+	// NOT hold privately — a channel between them — so they ride onto the
+	// RunSpec with the count, not beside it.
+	shared := &adequacy.Disclosure{Trees: 6, Shared: []string{".venv"}}
+	rs = newAuditRunSpec(localAuditInput{checkArgv: []string{"go", "test", "./..."}, concurrency: shared}, roles, subj)
+	if len(rs.Concurrency.Shared) != 1 || rs.Concurrency.Shared[0] != ".venv" {
+		t.Errorf("shared dep dirs = %+v, want [.venv] carried onto the RunSpec", rs.Concurrency)
+	}
+
+	downgraded := &adequacy.Disclosure{Trees: 1, Note: "suite is not concurrency-safe: baseline failed under 3"}
+	rs = newAuditRunSpec(localAuditInput{checkArgv: []string{"go", "test", "./..."}, concurrency: downgraded}, roles, subj)
+	if rs.Concurrency.Trees != 1 || rs.Concurrency.Note != downgraded.Note {
+		t.Errorf("downgraded disclosure = %+v, want the note preserved", rs.Concurrency)
 	}
 }

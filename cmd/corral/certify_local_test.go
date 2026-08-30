@@ -1261,7 +1261,7 @@ func TestBuildJailWiringUsesTheSharedSeedAndDoesNotOwnIt(t *testing.T) {
 		cleanup: func() { cleaned++ },
 	}
 
-	w, err := buildJailWiring(jailWiringInput{
+	w, err := buildJailWiring(context.Background(), jailWiringInput{
 		iso: nil, timeout: time.Minute,
 		codePath: "pkg/a.go", testPath: "pkg/a_test.go", repoDir: repoDir, langName: "go",
 		fsPath:    func(q string) string { return filepath.Join(repoDir, q) },
@@ -1318,7 +1318,7 @@ func TestBuildJailWiringWorkspaceSubstrateSkipsTheJail(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w, err := buildJailWiring(jailWiringInput{
+	w, err := buildJailWiring(context.Background(), jailWiringInput{
 		substrate: substrateWorkspace,
 		repoDir:   root,
 		codePath:  "a.go",
@@ -1348,7 +1348,7 @@ func TestBuildJailWiringWorkspaceSubstrateSkipsTheJail(t *testing.T) {
 // --substrate=workspace with no --repo-dir is a usage error: the workspace
 // runner mutates a real checkout, so there must be a checkout to mutate.
 func TestBuildJailWiringWorkspaceSubstrateRequiresRepoDir(t *testing.T) {
-	_, err := buildJailWiring(jailWiringInput{
+	_, err := buildJailWiring(context.Background(), jailWiringInput{
 		substrate: substrateWorkspace,
 		codePath:  "a.go",
 		testPath:  "a_test.go",
@@ -1391,7 +1391,7 @@ func TestBuildJailWiringDefaultSubstrateStillBuildsTheJail(t *testing.T) {
 		cleanup: func() {},
 	}
 
-	w, err := buildJailWiring(jailWiringInput{
+	w, err := buildJailWiring(context.Background(), jailWiringInput{
 		// substrate deliberately left unset ("").
 		iso: nil, timeout: time.Minute,
 		codePath: "a.go", testPath: "a_test.go", repoDir: repoDir, langName: "go",
@@ -1457,7 +1457,7 @@ func TestPrepareAuditJailForwardsTheSharedSeed(t *testing.T) {
 		cleanup: func() { cleaned++ },
 	}
 
-	prep, err := prepareAuditJail(localAuditInput{
+	prep, err := prepareAuditJail(context.Background(), localAuditInput{
 		repoDir:   repoDir,
 		codePath:  "pkg/a.go",
 		testPath:  "pkg/a_test.go",

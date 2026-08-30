@@ -30,7 +30,12 @@ func verdictFromSpec(rs RunSpec) Verdict {
 			Of: rs.Selection.Of, Fallback: rs.Selection.Fallback,
 			AuthoredAlone: AuthoredAlone(rs),
 		},
-		Uncovered: rs.Selection.Method != "" && len(rs.Selection.Tests) == 0,
+		// Concurrency rides straight through — including onto a timed-out
+		// verdict (timeoutVerdict builds off this same function), since the
+		// probe ran and the pool's trees were established before the pool
+		// itself ever failed to converge.
+		Concurrency: rs.Concurrency,
+		Uncovered:   rs.Selection.Method != "" && len(rs.Selection.Tests) == 0,
 	}
 }
 

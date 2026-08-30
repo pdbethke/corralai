@@ -4190,7 +4190,7 @@ func (gradedScorer) ScoreReport(ctx context.Context, codePath, code, test string
 // is fine but points elsewhere" send an operator to different places.
 func TestCanarySurvivalIsNotReportedAsABaselineFailure(t *testing.T) {
 	run := &runState{}
-	if err := applyDevScore(context.Background(), run, canaryScorer{}, oneMutant()); err != nil {
+	if err := applyDevScore(context.Background(), run, canaryScorer{}, oneMutant(), nil); err != nil {
 		t.Fatalf("applyDevScore: %v", err)
 	}
 	if run.baselineFailed {
@@ -4203,7 +4203,7 @@ func TestCanarySurvivalIsNotReportedAsABaselineFailure(t *testing.T) {
 
 func TestBrokenBaselineIsStillABaselineFailure(t *testing.T) {
 	run := &runState{}
-	if err := applyDevScore(context.Background(), run, brokenBaselineScorer{}, oneMutant()); err != nil {
+	if err := applyDevScore(context.Background(), run, brokenBaselineScorer{}, oneMutant(), nil); err != nil {
 		t.Fatalf("applyDevScore: %v", err)
 	}
 	if !run.baselineFailed {
@@ -4220,7 +4220,7 @@ func TestBrokenBaselineIsStillABaselineFailure(t *testing.T) {
 func TestGenuineZeroKillIsStillGraded(t *testing.T) {
 	run := &runState{}
 	mutants := oneMutant()
-	if err := applyDevScore(context.Background(), run, gradedScorer{}, mutants); err != nil {
+	if err := applyDevScore(context.Background(), run, gradedScorer{}, mutants, nil); err != nil {
 		t.Fatalf("applyDevScore: %v", err)
 	}
 	if run.baselineFailed || run.suiteIgnoresFile {

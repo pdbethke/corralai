@@ -238,10 +238,18 @@ run's readout says so. There is exactly one checkout, and every job mutates it i
 place: two jobs at once would mean one job's suite running while the other job
 has a mutant — or corral's deliberately non-compiling canary — written into a
 file, which silently records surviving mutants as killed and can fail a healthy
-baseline. Giving each job its own copy of the tree is the memory ceiling this
-substrate exists to escape, so serialization is the accepted cost. Combined with
-`--diff-base` scoping (the default), it is a cost measured against the handful of
-files a PR touched.
+baseline. Files therefore stay serialized.
+
+The mutants **within** one file are a different question. corral scores them in
+private copies of the checkout — one "tree" per mutant in flight, sized at a
+quarter of the run's budget (`--swarm`, or the host's cores when it is unset).
+Each file's pool is probed first by running that file's own baseline command in
+the copies at once; a suite that fails under concurrency is downgraded to a
+single tree and the `concurrency:` line on that file's report says why. On the
+Action's 4-vCPU runner that budget works out to one tree, so **nothing about a
+CI run changes** — expect the same wall clock. Combined with `--diff-base`
+scoping (the default), it is a cost measured against the handful of files a PR
+touched.
 
 ## Why scoped by default, and why whole-repo is opt-in
 

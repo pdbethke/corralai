@@ -4,6 +4,7 @@ package lang
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -309,6 +310,44 @@ func (goPlugin) ParseCoverage(stdout, modulePath string) (executed map[string]bo
 // there is no analog of python.go's __pycache__ staleness hole here. See
 // lang.Plugin.WorkspaceRunEnv's doc comment.
 func (goPlugin) WorkspaceRunEnv() (env []string, cleanup func()) { return nil, func() {} }
+
+// TreeEnv divides the box between the pool's trees instead of letting each
+// one assume all of it. `go test` already builds and runs packages in
+// parallel (GOMAXPROCS for the test binary, -p for the build), so N trees
+// each taking every core is N-times oversubscribed: the machine thrashes,
+// every suite gets slower, and the concurrency probe — whose whole job is to
+// decide whether the suite PASSES under N — can fail on contention alone and
+// downgrade a perfectly safe suite to one tree.
+//
+// cores is this tree's share, already divided by the pool; a degenerate share
+// floors at 1 (GOMAXPROCS=0 is rejected outright by the runtime, and -p=0
+// means "unlimited" — exactly the oversubscription this exists to prevent).
+//
+// GOFLAGS APPENDS to whatever the operator already set rather than replacing
+// it: GOFLAGS is a single space-separated variable, so assigning it outright
+// silently drops a `-mod=vendor` or a `-tags=integration` the project's suite
+// needs — the mutant would then be graded by a build the operator never runs,
+// or by no build at all. -p is placed LAST so it wins if their GOFLAGS
+// happens to set one too (later flags override earlier ones), which is the
+// one value this tree is not free to give up.
+//
+// -trimpath is also appended: the Go build cache is keyed in part on the
+// absolute path baked into each object, so the SAME module built from two
+// different tree directories misses the cache on the second copy — measured
+// on this box at 5.05s cold vs 2.42s warm. -trimpath drops that path from the
+// cache key, so every tree after the first hits the shared cache (2.42s),
+// at the cost of one full rebuild per machine the first time (22s).
+func (goPlugin) TreeEnv(tree string, cores int) []string {
+	if cores < 1 {
+		cores = 1
+	}
+	n := strconv.Itoa(cores)
+	flags := "-trimpath -p=" + n
+	if existing := strings.TrimSpace(os.Getenv("GOFLAGS")); existing != "" {
+		flags = existing + " " + flags
+	}
+	return []string{"GOMAXPROCS=" + n, "GOFLAGS=" + flags}
+}
 
 func (goPlugin) ParseTestList(output string) []string {
 	var out []string

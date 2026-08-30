@@ -122,6 +122,22 @@ type WeakFile struct {
 	// the number rather than print the 0.00 that would read as "your tests
 	// caught nothing here".
 	Uncovered bool
+	// Trees and ConcurrencyNote mirror advpool.Verdict.Concurrency: how many
+	// private trees the workspace substrate's probe scored this file with
+	// at once, or — when it granted only one — why (a downgrade after a
+	// baseline that failed under concurrency, or simply the substrate that
+	// builds no trees at all). Trees < 1 is the one "not recorded" state —
+	// the jail substrate, or a verdict served from a cache row written
+	// before this column existed — and every reader of it (the printer, the
+	// signer, the ledger, the warehouse) says so rather than inventing a 1.
+	// See advpool.Concurrency's doc.
+	Trees           int
+	ConcurrencyNote string
+	// SharedDirs mirrors advpool.Verdict.Concurrency.Shared: the dependency
+	// directories symlinked into every tree rather than copied. Disclosure,
+	// not decoration — they are the one thing the trees did not hold
+	// privately. Empty when nothing was shared.
+	SharedDirs []string
 }
 
 // MeasuredSpread reports whether this file's run actually measured a
@@ -356,6 +372,11 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 			TestsPerMutant:        r.Verdict.TestSelection.TestsPerMutant,
 			Rules:                 r.Verdict.TestSelection.Rules,
 			Uncovered:             r.Verdict.Uncovered,
+			// How many trees scored this file at once, or why it only got
+			// one — see advpool.Verdict.Concurrency's doc.
+			Trees:           r.Verdict.Concurrency.Trees,
+			ConcurrencyNote: r.Verdict.Concurrency.Note,
+			SharedDirs:      r.Verdict.Concurrency.Shared,
 		})
 	}
 

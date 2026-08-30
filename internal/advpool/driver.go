@@ -354,6 +354,34 @@ type TestSelection struct {
 	AuthoredAlone bool `json:"authored_alone,omitempty"`
 }
 
+// Concurrency discloses how many private trees the workspace substrate's
+// concurrency probe granted this file — how many mutants were scored AT ONCE
+// — or, when it granted only one, WHY: the substrate builds no trees at all
+// (the jail path), the budget only bought one, or the probe downgraded a
+// suite that failed under concurrency (Note carries the reason, verbatim,
+// so the screen and the record never disagree — see
+// cmd/corral/certify_repo.go's noteConcurrency).
+//
+// Trees < 1 is the single explicit "NOT RECORDED" state, and every reader
+// treats it as one: the report prints no concurrency line, the attestation
+// signs no trees key, the ledger and the warehouse store SQL NULL, and
+// `corral scans show` prints "not recorded". It is what a jail-substrate run
+// carries (that substrate builds no trees) and what a verdict served from a
+// cache row written before this column existed carries. A measured ONE tree
+// is Trees 1 and is disclosed like any other measurement — the absence of a
+// measurement is never rounded up to it.
+type Concurrency struct {
+	Trees int    `json:"trees"`
+	Note  string `json:"note,omitempty"`
+	// Shared names the dependency directories that were SYMLINKED into every
+	// tree rather than copied (adequacy.Disclosure.Shared). They are the one
+	// thing the trees do NOT hold privately — a channel between them, and a
+	// path back into the operator's real checkout — so a reader told "6
+	// trees" has to be told what those 6 had in common. Empty when the run
+	// shared nothing, which includes every pool of one.
+	Shared []string `json:"shared,omitempty"`
+}
+
 // TestsPerMutantSpread is how many tests the graded mutants each ran: the
 // smallest, the middle and the largest. Named (and always reached through a
 // pointer) so that an unmeasured spread is ABSENT everywhere it travels
@@ -449,6 +477,9 @@ type Verdict struct {
 	// suite (Method "", and Fallback says why under selection). Two
 	// verdicts with different Methods are not comparable.
 	TestSelection TestSelection
+	// Concurrency discloses how many private trees scored this file at
+	// once, or why it only got one. See the Concurrency type's doc.
+	Concurrency Concurrency
 	// Uncovered: the evidence run found no test executing this file. The
 	// dev kill rate is WITHHELD by every reader (report, ledger, gate) —
 	// the survivors are real, the 0.00 is not a measurement.
@@ -875,6 +906,21 @@ type Driver struct {
 	// pool_verdict at the three milestones below via the d.emit helper.
 	Events EventSink
 
+	// MutantSink, when set, is handed the exact mutant set the dev pass
+	// GRADED — one call per run, right after that pass scores, with the
+	// mutants the compile gate rejected already removed. nil (the brain's
+	// position, and every pre-existing caller's) records nothing.
+	//
+	// Only the GRADED set is offered, deliberately: the point of recording a
+	// set is to be able to REPLAY it, and a replay of a mutant that the
+	// language's own compile check refuses would grade nothing while
+	// pretending to be the same exam. What gets written back has to be what
+	// was actually measured.
+	//
+	// Fed the preset mutants unchanged on a replayed run, so re-recording a
+	// replay is a fixed point rather than a slow drift.
+	MutantSink func(codePath string, ms []adequacy.Mutant)
+
 	// Threshold is the minimum DevKillRate a run may be auto-certified at;
 	// below it (or with any blocking finding open) the run is routed to
 	// needs-review — the human gate never auto-certifies a weak dev suite.
@@ -997,7 +1043,15 @@ func (d *Driver) StartRun(missionID int64, rs RunSpec, sigs []repoindex.Signatur
 	// BuildDAG makes internally, so a dropped shard's coverage-shortfall entry
 	// can name the functions it left unprobed (M-2) instead of the task-UI
 	// title string.
-	shards := ShardSymbols(sigs, rs.MaxShards)
+	// A preset run has no generator seats (see BuildDAG), so it has no shards
+	// either: the shard bookkeeping below describes regions that were probed
+	// by a model, and a replayed set was not probed by this run at all.
+	// Seeding it anyway would emit per-shard telemetry for seats that never
+	// existed — a positive claim about work nobody did.
+	var shards []Shard
+	if rs.PresetMutants == nil {
+		shards = ShardSymbols(sigs, rs.MaxShards)
+	}
 	shardSymbols := make(map[string][]string, len(shards))
 	// shardStats seeds the metrics substrate with each shard's difficulty
 	// control (region/complexity/lines), computed once here from the SAME
@@ -1167,7 +1221,7 @@ func (d *Driver) Tick(ctx context.Context, missionID int64) (*Verdict, error) {
 // from a suite that never reads the file, because BOTH return early with an
 // empty report — and conflating them sends an operator to debug the wrong
 // thing entirely.
-func applyDevScore(ctx context.Context, run *runState, scorer Scorer, mutants []adequacy.Mutant) error {
+func applyDevScore(ctx context.Context, run *runState, scorer Scorer, mutants []adequacy.Mutant, sink func(string, []adequacy.Mutant)) error {
 	// DevCommand, not rs.TestCmd: the run's command narrowed to the tests
 	// that execute this file. The scorer no longer does it — see DevCommand
 	// for why the caller has to be the one that means it.
@@ -1220,6 +1274,23 @@ func applyDevScore(ctx context.Context, run *runState, scorer Scorer, mutants []
 	run.devSurvivors = survivorsFrom(rep, mutants)
 	run.devKilled = toMutantRefsWith(killedFrom(rep, mutants), rep.PerMutant)
 	run.mutants = mutants
+	// Handed the GRADED set, once, at the only point in the run where it is
+	// both complete and known-gradable. Placed here rather than at the
+	// caller so the recorded set can never be assembled from a different
+	// slice than the one the kill rate was computed over.
+	if sink != nil {
+		invalid := make(map[string]bool, len(rep.Invalid))
+		for _, id := range rep.Invalid {
+			invalid[id] = true
+		}
+		graded := make([]adequacy.Mutant, 0, len(mutants))
+		for _, m := range mutants {
+			if !invalid[m.ID] {
+				graded = append(graded, m)
+			}
+		}
+		sink(run.rs.CodePath, graded)
+	}
 	return nil
 }
 
@@ -1356,107 +1427,132 @@ func provenMutantIDs(rep adequacy.Report, mutants []adequacy.Mutant) []string {
 // never the worker's self-report), and promote test-writer re-rendered with
 // the real survivors.
 func (d *Driver) tickDevAdequacy(ctx context.Context, missionID int64, run *runState) error {
-	mgs, err := d.tasksByRole(missionID, RoleMutantGenerator)
-	if err != nil {
-		return err
-	}
-	if len(mgs) == 0 {
-		return nil
-	}
-	// EVERY shard must be terminal before the dev's tests are scored. Scoring a
-	// partial mutant set would grade the suite against a smaller exam than the
-	// run claims to have set — the kill-rate would be real but would not mean
-	// what the verdict says it means.
-	for i := range mgs {
-		if mgs[i].Status != queue.StatusDone {
-			return nil
-		}
-	}
-
-	// Union every shard's mutants. IDs are prefixed with the shard index so two
-	// shards returning "m1" cannot collide, and so each survivor names the
-	// region it came from (including in the test-writer's prompt). An UNSHARDED
-	// run keeps its original, unprefixed IDs.
-	//
-	// This whole scan re-runs on EVERY tick until run.devScored is true (Tick
-	// re-calls tickDevAdequacy unconditionally each pass), and two paths below
-	// return an error AFTER a region has already been dropped and recorded:
-	// the all-regions-failed guard just past this loop, and a transient
-	// Scorer.Score error further down (the scorer runs a suite in a sandbox —
-	// a transient failure there is exactly the condition dropping exists to
-	// survive). Both are ordinary re-entry, not a fresh event, so every
-	// mutation to run state in this loop must be idempotent per shard key:
-	// already-dropped regions are skipped via droppedKeys rather than
-	// re-counted or re-appended, and regionsProbed is recomputed fresh from
-	// this pass's results rather than accumulated.
+	// The PRESET branch comes first, and it has to: everything below is the
+	// machinery of turning generator TASKS into mutants, and the very next
+	// statement returns early when there are none — which on a preset run is
+	// always, by construction (BuildDAG seeds no generator seat). Put after
+	// that gate, a replayed run would return nil on every tick, never score,
+	// and hang until the deadline signed a needs-review verdict nobody
+	// measured. So the preset path assembles `mutants`/`probed` itself and
+	// then joins the SAME scoring path an ordinary run takes — one dev pass,
+	// one place kill rate and survivors are computed, no second copy to drift.
 	var mutants []adequacy.Mutant
 	probed := 0
-	for i := range mgs {
-		key := mgs[i].Key
-		if run.droppedKeys[key] {
-			// Already exhausted its retry budget and recorded as dropped on a
-			// prior pass: this task's Result hasn't changed (it was never
-			// reopened past the budget), so re-parsing it would only rediscover
-			// the same failure. Skip it silently — the drop is already honestly
-			// recorded, and re-running the drop bookkeeping here is what
-			// corrupts the signed counts.
-			continue
+	regionsTotal := 0
+
+	if run.rs.PresetMutants != nil {
+		// A replayed set IS the exam, already assembled. regionsTotal and
+		// probed both stay 0 on purpose: they count mutant-generator SEATS
+		// this run dispatched and the ones that came back usable, and a
+		// preset run dispatched none. Reporting a probe count here (the
+		// mutant count, say) would assert regions were attacked by this run
+		// when the attacking happened in some earlier run this one is only
+		// replaying — and the coverage-shortfall readout, which is gated on
+		// regionsTotal > 0, correctly stays silent on 0/0 rather than
+		// accusing a replay of dropping regions it never had.
+		mutants = run.rs.PresetMutants
+	} else {
+		mgs, err := d.tasksByRole(missionID, RoleMutantGenerator)
+		if err != nil {
+			return err
 		}
-		shardIdx, sharded := ShardIndexFromKey(key)
-		parsed, perr := d.Validator.ParseMutants(mgs[i].Result, run.rs.Code)
-		if perr != nil {
-			run.shardRetries[key]++
-			if run.shardRetries[key] <= MaxShardRetries {
-				if _, rerr := d.Q.ReopenTask(mgs[i].ID); rerr != nil {
-					return fmt.Errorf("advpool: reopen %s after parse failure: %w", key, rerr)
+		if len(mgs) == 0 {
+			return nil
+		}
+		// EVERY shard must be terminal before the dev's tests are scored. Scoring a
+		// partial mutant set would grade the suite against a smaller exam than the
+		// run claims to have set — the kill-rate would be real but would not mean
+		// what the verdict says it means.
+		for i := range mgs {
+			if mgs[i].Status != queue.StatusDone {
+				return nil
+			}
+		}
+
+		// Union every shard's mutants. IDs are prefixed with the shard index so two
+		// shards returning "m1" cannot collide, and so each survivor names the
+		// region it came from (including in the test-writer's prompt). An UNSHARDED
+		// run keeps its original, unprefixed IDs.
+		//
+		// This whole scan re-runs on EVERY tick until run.devScored is true (Tick
+		// re-calls tickDevAdequacy unconditionally each pass), and two paths below
+		// return an error AFTER a region has already been dropped and recorded:
+		// the all-regions-failed guard just past this loop, and a transient
+		// Scorer.Score error further down (the scorer runs a suite in a sandbox —
+		// a transient failure there is exactly the condition dropping exists to
+		// survive). Both are ordinary re-entry, not a fresh event, so every
+		// mutation to run state in this loop must be idempotent per shard key:
+		// already-dropped regions are skipped via droppedKeys rather than
+		// re-counted or re-appended, and regionsProbed is recomputed fresh from
+		// this pass's results rather than accumulated.
+		for i := range mgs {
+			key := mgs[i].Key
+			if run.droppedKeys[key] {
+				// Already exhausted its retry budget and recorded as dropped on a
+				// prior pass: this task's Result hasn't changed (it was never
+				// reopened past the budget), so re-parsing it would only rediscover
+				// the same failure. Skip it silently — the drop is already honestly
+				// recorded, and re-running the drop bookkeeping here is what
+				// corrupts the signed counts.
+				continue
+			}
+			shardIdx, sharded := ShardIndexFromKey(key)
+			parsed, perr := d.Validator.ParseMutants(mgs[i].Result, run.rs.Code)
+			if perr != nil {
+				run.shardRetries[key]++
+				if run.shardRetries[key] <= MaxShardRetries {
+					if _, rerr := d.Q.ReopenTask(mgs[i].ID); rerr != nil {
+						return fmt.Errorf("advpool: reopen %s after parse failure: %w", key, rerr)
+					}
+					return fmt.Errorf("advpool: %s result unparseable, reissued for retry (%d/%d): %w",
+						key, run.shardRetries[key], MaxShardRetries, perr)
 				}
-				return fmt.Errorf("advpool: %s result unparseable, reissued for retry (%d/%d): %w",
-					key, run.shardRetries[key], MaxShardRetries, perr)
+				// Budget exhausted: DROP this region and proceed on the shards that
+				// parsed. Recorded exactly once (droppedKeys), never swallowed.
+				log.Printf("advpool: run %d: dropping region %s after %d unparseable results — its functions go unprobed",
+					missionID, key, run.shardRetries[key])
+				label := mgs[i].Title
+				if symbols := run.shardSymbols[key]; len(symbols) > 0 {
+					label = strings.Join(symbols, ", ")
+				}
+				run.droppedKeys[key] = true
+				run.droppedRegions = append(run.droppedRegions, label)
+				// Guarded by `sharded`: an unsharded run's shardStats map starts
+				// (and must stay) empty — bugCatchObservations reads its length
+				// to decide whether to emit the single-seat row or the per-shard
+				// rows, so writing a key here for the bare, unsharded task would
+				// silently flip that decision.
+				if sharded {
+					st := run.shardStats[shardIdx]
+					st.parseRetries = run.shardRetries[key]
+					st.dropped = true
+					run.shardStats[shardIdx] = st
+				}
+				continue
 			}
-			// Budget exhausted: DROP this region and proceed on the shards that
-			// parsed. Recorded exactly once (droppedKeys), never swallowed.
-			log.Printf("advpool: run %d: dropping region %s after %d unparseable results — its functions go unprobed",
-				missionID, key, run.shardRetries[key])
-			label := mgs[i].Title
-			if symbols := run.shardSymbols[key]; len(symbols) > 0 {
-				label = strings.Join(symbols, ", ")
+			if len(parsed) > 0 {
+				// "Probed" means this region actually contributed to the exam the
+				// dev suite is graded against — a shard that parsed cleanly but
+				// produced zero mutants contributed nothing, and must not count as
+				// probed just because it wasn't dropped.
+				probed++
 			}
-			run.droppedKeys[key] = true
-			run.droppedRegions = append(run.droppedRegions, label)
-			// Guarded by `sharded`: an unsharded run's shardStats map starts
-			// (and must stay) empty — bugCatchObservations reads its length
-			// to decide whether to emit the single-seat row or the per-shard
-			// rows, so writing a key here for the bare, unsharded task would
-			// silently flip that decision.
+			for _, m := range parsed {
+				if sharded {
+					m.ID = fmt.Sprintf("s%d/%s", shardIdx, m.ID)
+				}
+				mutants = append(mutants, m)
+			}
 			if sharded {
 				st := run.shardStats[shardIdx]
-				st.parseRetries = run.shardRetries[key]
-				st.dropped = true
+				st.mutants = len(parsed)
+				st.parseRetries = run.shardRetries[mgs[i].Key]
 				run.shardStats[shardIdx] = st
 			}
-			continue
 		}
-		if len(parsed) > 0 {
-			// "Probed" means this region actually contributed to the exam the
-			// dev suite is graded against — a shard that parsed cleanly but
-			// produced zero mutants contributed nothing, and must not count as
-			// probed just because it wasn't dropped.
-			probed++
-		}
-		for _, m := range parsed {
-			if sharded {
-				m.ID = fmt.Sprintf("s%d/%s", shardIdx, m.ID)
-			}
-			mutants = append(mutants, m)
-		}
-		if sharded {
-			st := run.shardStats[shardIdx]
-			st.mutants = len(parsed)
-			st.parseRetries = run.shardRetries[mgs[i].Key]
-			run.shardStats[shardIdx] = st
-		}
+		regionsTotal = len(mgs)
 	}
-	run.regionsTotal = len(mgs)
+	run.regionsTotal = regionsTotal
 	run.regionsProbed = probed
 
 	if len(mutants) == 0 {
@@ -1471,7 +1567,7 @@ func (d *Driver) tickDevAdequacy(ctx context.Context, missionID int64, run *runS
 		return ErrNoUsableMutants{Regions: run.regionsTotal, Dropped: len(run.droppedRegions)}
 	}
 
-	if err := applyDevScore(ctx, run, d.Scorer, mutants); err != nil {
+	if err := applyDevScore(ctx, run, d.Scorer, mutants, d.MutantSink); err != nil {
 		return err
 	}
 	killRate, survivors := run.devKillRate, run.devSurvivors

@@ -214,8 +214,10 @@ type JailScorer struct {
 	//
 	// THE CALLER OWNS THE SAFETY ARGUMENT, because it depends entirely on which
 	// Jail is wired in (see adequacy.WithConcurrency): bwrapJail does its own
-	// os.MkdirTemp per call and is safe; adequacy.WorkspaceRunner mutates ONE
-	// checkout in place with no mutex and MUST stay at 1. This field cannot
+	// os.MkdirTemp per call and is safe; adequacy.WorkspacePool borrows one of
+	// its N private trees per call and is safe up to N (its Trees() is the
+	// only honest value); a bare adequacy.WorkspaceRunner mutates ONE checkout
+	// in place with no mutex and MUST stay at 1. This field cannot
 	// tell the difference, so it must never be set from anywhere that doesn't
 	// know the substrate — see cmd/corral's resolveMutantConcurrency, which is
 	// the single place that decision is made.

@@ -103,7 +103,11 @@ func killRatePtr(v float64) *float64 {
 // the coverage pre-flight actually ran — see preflightState's own doc
 // comment for why a path absent from the map must stay empty rather than
 // being recorded as "not-executed".
-func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclusion, preflight reposcan.CoverageMap, stderr io.Writer) []scanstore.File {
+// mutantsFrom is the sha256 of the recorded mutant set this scan REPLAYED
+// (`--mutants`), or "" when it generated its own. It rides only on AUDITED
+// rows: a rejected or excluded file sat no exam at all, and stamping a set
+// identifier on it would claim it was graded against one.
+func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclusion, preflight reposcan.CoverageMap, mutantsFrom string, stderr io.Writer) []scanstore.File {
 	results = dedupeResultsByPath(results)
 	rows := make([]scanstore.File, 0, len(results)+len(excluded))
 	seen := make(map[string]bool, len(results)+len(excluded))
@@ -210,7 +214,18 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 				// scanstore.fileKillRate): no test executes this file, so
 				// there is no measurement to record.
 				Uncovered: r.Verdict.Uncovered,
-				CacheHit:  r.CacheHit,
+				// WHICH exam this kill rate answers, when it was a recorded
+				// one. See scanstore.File.MutantsFrom.
+				MutantsFrom: mutantsFrom,
+				// How many private trees scored this file at once, or why
+				// it only got one — the same fact the screen and the
+				// attestation say. See scanstore.File.Trees.
+				Trees:           r.Verdict.Concurrency.Trees,
+				ConcurrencyNote: r.Verdict.Concurrency.Note,
+				// And which dep dirs those trees SHARED — comma-joined,
+				// NULL when none. See scanstore.File.SharedDirs.
+				SharedDirs: strings.Join(r.Verdict.Concurrency.Shared, ","),
+				CacheHit:   r.CacheHit,
 				// VerdictJSON is the single serialization every future Get
 				// has to parse (marshalVerdict, verdict_cache.go) — "" above
 				// on a marshal failure, never a partial or hand-rolled blob.

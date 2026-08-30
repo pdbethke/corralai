@@ -198,3 +198,49 @@ func TestProvenByTheAuthoredTestAloneIsSigned(t *testing.T) {
 		t.Errorf("a whole-suite file must not carry the key: %v", files[1])
 	}
 }
+
+// TestConcurrencyIsSigned pins the attestation's half of "every reader says
+// how many trees scored the file, or why one": trees is signed on EVERY
+// file (a verifier must be able to see the exam ran at concurrency 1
+// without inferring it from an absent key), while concurrencyNote signs
+// only when the substrate actually had one to give.
+func TestConcurrencyIsSigned(t *testing.T) {
+	got := BuildAuditAttestation(AuditStatement{
+		Repo: "r", Commit: "c",
+		Files: []AuditedFile{
+			{Path: "pkg/a.py", KillRate: killRate(0.55), Survivors: 4, Trees: 6, SharedDirs: []string{".venv"}},
+			{Path: "pkg/b.py", KillRate: killRate(0.9), Survivors: 1, Trees: 1,
+				ConcurrencyNote: "suite is not concurrency-safe: baseline failed under 3"},
+			// Trees 0 is "not recorded" — the jail substrate builds no trees,
+			// and a verdict served from a pre-concurrency cache row carries
+			// none. Signing "trees": 0 would be a number no measurement
+			// supports, so the key is ABSENT instead.
+			{Path: "pkg/c.py", KillRate: killRate(0.4), Survivors: 2},
+		},
+	})
+	files := got["predicate"].(map[string]any)["files"].([]map[string]any)
+	if v, ok := files[0]["trees"]; !ok || v != 6 {
+		t.Errorf("trees must always be signed: %v", files[0])
+	}
+	if _, ok := files[0]["concurrencyNote"]; ok {
+		t.Errorf("a file with no note must not carry the key: %v", files[0])
+	}
+	if v, ok := files[1]["trees"]; !ok || v != 1 {
+		t.Errorf("trees must always be signed: %v", files[1])
+	}
+	if v, ok := files[1]["concurrencyNote"]; !ok || v != "suite is not concurrency-safe: baseline failed under 3" {
+		t.Errorf("a downgraded file must sign its note: %v", files[1])
+	}
+	if _, ok := files[2]["trees"]; ok {
+		t.Errorf("an unrecorded concurrency must sign NO trees key: %v", files[2])
+	}
+	// The dep dirs every tree shared are signed too: they are the one thing
+	// the trees did not hold privately, so a verifier reading "6 trees" must
+	// also be able to read what those 6 had in common.
+	if v, ok := files[0]["sharedDirs"]; !ok || len(v.([]string)) != 1 || v.([]string)[0] != ".venv" {
+		t.Errorf("shared dep dirs must be signed: %v", files[0])
+	}
+	if _, ok := files[1]["sharedDirs"]; ok {
+		t.Errorf("a file that shared nothing must not carry the key: %v", files[1])
+	}
+}

@@ -89,32 +89,32 @@ func TestModelSetKeyOmitsShadowWriterWhenEmptyButIncludesItWhenNamed(t *testing.
 // coverage-guided selection run different tests per mutant, so they are
 // answers to different questions and must never share a cache key.
 func TestAuditConfigKeyVariesWithTheGradingMode(t *testing.T) {
-	if auditConfigKey(false, "", nil) == auditConfigKey(true, "", nil) {
+	if auditConfigKey(false, "", nil, "") == auditConfigKey(true, "", nil, "") {
 		t.Fatal("--whole-suite did not change AuditConfig — it changes which tests run per mutant, so it changes the verdict")
 	}
-	if auditConfigKey(false, "", nil) == auditConfigKey(false, "coverage-context", nil) {
+	if auditConfigKey(false, "", nil, "") == auditConfigKey(false, "coverage-context", nil, "") {
 		t.Fatal("a scan that SELECTED keys the same as one whose instrumented run failed and fell back to the whole suite — the fallback would serve a selected verdict")
 	}
 }
 
 func TestAuditConfigKeyOmitsUnsetSettings(t *testing.T) {
-	if got := auditConfigKey(false, "", nil); got != "" {
+	if got := auditConfigKey(false, "", nil, ""); got != "" {
 		t.Fatalf("auditConfigKey with nothing set = %q, want empty", got)
 	}
 	// An empty argv must serialize as ABSENT, not as the digest of an empty
 	// string: the plugin-default path has to key exactly as it always has, or
 	// enabling this fix would invalidate every verdict already earned.
-	if got := auditConfigKey(false, "", []string{}); got != "" {
+	if got := auditConfigKey(false, "", []string{}, ""); got != "" {
 		t.Fatalf("auditConfigKey with an empty argv = %q, want empty", got)
 	}
 }
 
 func TestAuditConfigKeyIsStable(t *testing.T) {
-	if a, b := auditConfigKey(true, "", nil), auditConfigKey(true, "", nil); a != b {
+	if a, b := auditConfigKey(true, "", nil, ""), auditConfigKey(true, "", nil, ""); a != b {
 		t.Fatalf("auditConfigKey is not deterministic: %q vs %q", a, b)
 	}
-	if want := "whole-suite=true"; auditConfigKey(true, "", nil) != want {
-		t.Fatalf("auditConfigKey = %q, want %q", auditConfigKey(true, "", nil), want)
+	if want := "whole-suite=true"; auditConfigKey(true, "", nil, "") != want {
+		t.Fatalf("auditConfigKey = %q, want %q", auditConfigKey(true, "", nil, ""), want)
 	}
 }
 
@@ -131,8 +131,8 @@ func TestCacheKeyVariesWithTheOperatorsTestCommand(t *testing.T) {
 		Substrate: reposcan.SubstrateWorkspace,
 	}
 	subset, whole := base, base
-	subset.AuditConfig = auditConfigKey(false, "", []string{"pytest", "-q", "tests/unit"})
-	whole.AuditConfig = auditConfigKey(false, "", []string{"pytest", "-q"})
+	subset.AuditConfig = auditConfigKey(false, "", []string{"pytest", "-q", "tests/unit"}, "")
+	whole.AuditConfig = auditConfigKey(false, "", []string{"pytest", "-q"}, "")
 
 	if subset.CacheKey() == whole.CacheKey() {
 		t.Fatal("two different `-- <cmd>` test commands produced the same cache key — a whole-suite run would sign a kill rate measured against a subset it never ran")
@@ -143,7 +143,7 @@ func TestCacheKeyVariesWithTheOperatorsTestCommand(t *testing.T) {
 // command is long and routinely contains `=` and `,`, which are CanonicalKV's
 // OWN delimiters — a verbatim value could forge or corrupt other components.
 func TestAuditConfigKeyHashesTheArgvRatherThanEmbeddingIt(t *testing.T) {
-	got := auditConfigKey(false, "", []string{"pytest", "-q", "--cov=src", "-k", "a,b"})
+	got := auditConfigKey(false, "", []string{"pytest", "-q", "--cov=src", "-k", "a,b"}, "")
 	if strings.Contains(got, "pytest") || strings.Contains(got, ",b") {
 		t.Fatalf("auditConfigKey embedded the raw argv (%q) — CanonicalKV delimiters (= and ,) must not come from operator text", got)
 	}
@@ -152,7 +152,7 @@ func TestAuditConfigKeyHashesTheArgvRatherThanEmbeddingIt(t *testing.T) {
 	}
 	// Joined on \x00, so no re-splitting of the argv can collide: ["a b"] and
 	// ["a", "b"] are different commands and must key differently.
-	if auditConfigKey(false, "", []string{"a b"}) == auditConfigKey(false, "", []string{"a", "b"}) {
+	if auditConfigKey(false, "", []string{"a b"}, "") == auditConfigKey(false, "", []string{"a", "b"}, "") {
 		t.Fatal("argv words were joined ambiguously — two different commands share a key")
 	}
 }
@@ -162,7 +162,7 @@ func TestAuditConfigKeyHashesTheArgvRatherThanEmbeddingIt(t *testing.T) {
 // that always passes a threshold — could never reuse a nightly verdict, which
 // is most of the value the cache exists to deliver.
 func TestAuditConfigKeyIgnoresMinKillRate(t *testing.T) {
-	if got := auditConfigKey(false, "", nil); strings.Contains(got, "min-kill-rate") {
+	if got := auditConfigKey(false, "", nil, ""); strings.Contains(got, "min-kill-rate") {
 		t.Fatalf("auditConfigKey = %q, want no min-kill-rate component", got)
 	}
 }

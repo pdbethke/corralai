@@ -68,6 +68,23 @@ type AuditedFile struct {
 	// should expect from any selection-graded file.
 	ProvenByAuthoredAlone bool                  `json:"provenByAuthoredAlone,omitempty"`
 	TestsPerMutant        *TestsPerMutantSpread `json:"testsPerMutant,omitempty"`
+	// Trees and ConcurrencyNote disclose how many private trees the
+	// workspace substrate's probe scored this file with at once, or —
+	// when it granted only one — why. A MEASURED one is signed like any
+	// other count: a verifier must be able to see the exam ran at
+	// concurrency 1 without inferring it from an absent key. Trees < 1 is
+	// the other thing entirely — nothing measured it (the jail substrate
+	// builds no trees; a cached pre-concurrency verdict carries none) — and
+	// is omitted rather than signed as a 0 no measurement supports.
+	// ConcurrencyNote signs only when the substrate had a reason to give.
+	Trees           int    `json:"trees,omitempty"`
+	ConcurrencyNote string `json:"concurrencyNote,omitempty"`
+	// SharedDirs names the dependency directories symlinked into every tree
+	// rather than copied. Signed alongside the count because "6 trees" is an
+	// isolation claim and these are the exact places it does not hold: a
+	// suite that writes into its own .venv during a run writes through a
+	// shared link. Absent when nothing was shared.
+	SharedDirs []string `json:"sharedDirs,omitempty"`
 }
 
 // TestsPerMutantSpread is how many tests each graded mutant ran: the
@@ -114,6 +131,19 @@ func BuildAuditAttestation(s AuditStatement) map[string]any {
 			"path":         f.Path,
 			"survivors":    f.Survivors,
 			"provenMissed": f.ProvenMissed,
+		}
+		// Signed whenever a measurement exists — including a measured ONE, so
+		// a verifier can see the exam ran at concurrency 1 without inferring
+		// it from an absent key. Absent when nothing measured it: the key is
+		// missing, never a 0 that reads as a count.
+		if f.Trees >= 1 {
+			entry["trees"] = f.Trees
+			if f.ConcurrencyNote != "" {
+				entry["concurrencyNote"] = f.ConcurrencyNote
+			}
+			if len(f.SharedDirs) > 0 {
+				entry["sharedDirs"] = f.SharedDirs
+			}
 		}
 		// Omitted, never zero-filled: an absent killRate says "no rate was
 		// measured for this file", and a consumer that reads a 0.0 instead

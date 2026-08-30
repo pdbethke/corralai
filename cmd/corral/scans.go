@@ -60,6 +60,16 @@ func defaultScansDSN() string {
 // Read-only by design, like `corral matrix list`: a scan ledger is a record of
 // what happened, and nothing a human adjudicates after the fact (contrast
 // `corral criticscore confirm/refute`, which records a human verdict).
+// splitSharedDirs turns the ledger's comma-joined shared_dirs back into the
+// list concurrencyDisclosure renders. NULL/"" is "nothing shared" and stays
+// nil, so the disclosure gains no suffix rather than an empty one.
+func splitSharedDirs(v string) []string {
+	if strings.TrimSpace(v) == "" {
+		return nil
+	}
+	return strings.Split(v, ",")
+}
+
 func runScans(args []string, open func(dsn string) (scansReader, error), stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, "usage: corral scans list [--db <path>] [--limit n] [--json]")
@@ -181,11 +191,13 @@ func runScansShow(args []string, open func(string) (scansReader, error), stdout,
 	}
 
 	tw := tabwriter.NewWriter(stdout, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, "PATH\tDISPOSITION\tREASON\tKILL RATE\tSURVIVORS\tPROVEN\tSELECTION\tEVIDENCE\tNOTE\t")
+	fmt.Fprintln(tw, "PATH\tDISPOSITION\tREASON\tKILL RATE\tSURVIVORS\tPROVEN\tSELECTION\tCONCURRENCY\tEVIDENCE\tNOTE\t")
 	for _, f := range files {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\t%d\t%s\t%s\t%s\t\n",
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\t%d\t%s\t%s\t%s\t%s\t\n",
 			f.Path, f.Disposition, f.Reason, formatKillRate(f.KillRate),
-			f.Survivors, f.ProvenMissed, scanFileSelectionWith(f, spreads[f.Path]), f.Evidence, scanFileNote(f))
+			f.Survivors, f.ProvenMissed, scanFileSelectionWith(f, spreads[f.Path]),
+			concurrencyDisclosure(f.Trees, f.ConcurrencyNote, splitSharedDirs(f.SharedDirs)),
+			f.Evidence, scanFileNote(f))
 	}
 	tw.Flush()
 

@@ -33,6 +33,19 @@ func TestPrintWeakFileNamesTheMeasurement(t *testing.T) {
 	if !strings.Contains(b.String(), "graded by the tests for this file — none execute it (coverage-context)") {
 		t.Errorf("uncovered must still say which measurement it is: %q", b.String())
 	}
+
+	// A per-mutant run whose every mutant was rejected by the compile gate
+	// carries PerMutant with a spread of {0,0,0} — a reachable state, and
+	// "0 to 0 per mutant, median 0" would report a range nothing measured as
+	// though it had been.
+	b.Reset()
+	printWeakFile(&b, reposcan.WeakFile{Path: "pkg/none.py", KillRate: 0, SelectionMethod: "coverage-lines", PerMutant: true})
+	if strings.Contains(b.String(), "per mutant") {
+		t.Errorf("an unmeasured spread must not be printed as a range: %q", b.String())
+	}
+	if !strings.Contains(b.String(), "(coverage-lines; no mutant graded)") {
+		t.Errorf("a per-mutant run that graded nothing must say so: %q", b.String())
+	}
 }
 
 func TestMinKillRateFailsAnUncoveredFile(t *testing.T) {

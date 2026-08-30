@@ -79,6 +79,21 @@ type Row struct {
 	SuiteTests        int
 	SelectionFallback string
 	Uncovered         bool
+	// And at which GRAIN it was measured. PerMutant says each mutant was
+	// graded by the tests that reach its own lines, which makes SelectedTests
+	// the file's UNION and no mutant's denominator — so the spread travels
+	// with it, or a cross-repo average of kill_rate silently mixes a rate
+	// earned over 3 tests per mutant with one earned over 620.
+	//
+	// The three counts are written as SQL NULL, not 0, when PerMutant is set
+	// but nothing was graded (every mutant rejected by the compile gate
+	// leaves the spread at {0,0,0}): a stored 0-to-0 range is a measurement
+	// nobody made, and the whole point of these columns is that a number in
+	// this table was measured.
+	PerMutant            bool
+	TestsPerMutantMin    int
+	TestsPerMutantMedian int
+	TestsPerMutantMax    int
 }
 
 const schema = `
@@ -107,7 +122,11 @@ CREATE TABLE IF NOT EXISTS corral_audits (
   selected_tests     INTEGER,
   suite_tests        INTEGER,
   selection_fallback VARCHAR,
-  uncovered          BOOLEAN
+  uncovered          BOOLEAN,
+  per_mutant              BOOLEAN,
+  tests_per_mutant_min    INTEGER,
+  tests_per_mutant_median INTEGER,
+  tests_per_mutant_max    INTEGER
 );`
 
 // corralAuditsMigrationCols is the additive set of columns this package has
@@ -133,6 +152,10 @@ var corralAuditsMigrationCols = []struct{ name, ddl string }{
 	{"suite_tests", "suite_tests INTEGER"},
 	{"selection_fallback", "selection_fallback VARCHAR"},
 	{"uncovered", "uncovered BOOLEAN"},
+	{"per_mutant", "per_mutant BOOLEAN"},
+	{"tests_per_mutant_min", "tests_per_mutant_min INTEGER"},
+	{"tests_per_mutant_median", "tests_per_mutant_median INTEGER"},
+	{"tests_per_mutant_max", "tests_per_mutant_max INTEGER"},
 }
 
 // migrateCorralAudits additively brings a corral_audits table created before
@@ -224,8 +247,9 @@ func Push(target string, rows []Row) (int, error) {
 	    timed_out, test_writer_failed, pool_test_unsound,
 	    audited, candidates, mutants_planted, models_by_role,
 	    min_kill_rate, max_proven_missed, passed, statement_sha256, run_url,
-	    test_selection, selected_tests, suite_tests, selection_fallback, uncovered
-	  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+	    test_selection, selected_tests, suite_tests, selection_fallback, uncovered,
+	    per_mutant, tests_per_mutant_min, tests_per_mutant_median, tests_per_mutant_max
+	  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 	if err != nil {
 		return 0, err
 	}
@@ -250,12 +274,21 @@ func Push(target string, rows []Row) (int, error) {
 		if r.KillRate != nil && !r.Uncovered {
 			killRate = *r.KillRate
 		}
+		// NULL, never 0, for a spread that was never measured — a
+		// per-mutant run can end with no graded mutant at all, and a stored
+		// 0-to-0 range would read as "every mutant ran no tests" instead of
+		// "no mutant was graded".
+		var pmMin, pmMedian, pmMax any
+		if r.PerMutant && r.TestsPerMutantMax > 0 {
+			pmMin, pmMedian, pmMax = r.TestsPerMutantMin, r.TestsPerMutantMedian, r.TestsPerMutantMax
+		}
 		if _, err := stmt.Exec(now, r.Repo, r.Commit, r.Path, r.Lang,
 			killRate, r.Survivors, r.ProvenMissed,
 			r.TimedOut, r.TestWriterFailed, r.PoolTestUnsound,
 			r.Audited, r.Candidates, r.MutantsPlanted, r.ModelsByRole,
 			minKill, maxGaps, r.Passed, r.StatementSHA256, r.RunURL,
-			r.TestSelection, r.SelectedTests, r.SuiteTests, r.SelectionFallback, r.Uncovered); err != nil {
+			r.TestSelection, r.SelectedTests, r.SuiteTests, r.SelectionFallback, r.Uncovered,
+			r.PerMutant, pmMin, pmMedian, pmMax); err != nil {
 			return n, fmt.Errorf("auditpush: insert %s: %w", r.Path, err)
 		}
 		n++

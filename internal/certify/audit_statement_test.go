@@ -156,3 +156,28 @@ func TestPerMutantEntrySignsTheSpread(t *testing.T) {
 		t.Fatalf("statement does not marshal: %v", err)
 	}
 }
+
+// TestPerMutantWithNoGradedMutantSignsNoSpread pins the reachable state the
+// first pass got wrong: a per-mutant run whose every mutant was rejected by
+// the compile gate has PerMutant set and a spread of {0,0,0}. Signing
+// "3 to 0" — or a min/median/max of zero — would put a measurement nobody
+// made over a signature.
+func TestPerMutantWithNoGradedMutantSignsNoSpread(t *testing.T) {
+	got := BuildAuditAttestation(AuditStatement{
+		Repo: "r", Commit: "c",
+		Files: []AuditedFile{{Path: "pkg/none.py", KillRate: killRate(0), TestSelection: "coverage-lines", PerMutant: true}},
+	})
+	files := got["predicate"].(map[string]any)["files"].([]map[string]any)
+	f := files[0]
+	if f["perMutant"] != true {
+		t.Errorf("the run DID grade per mutant and must say so: %#v", f)
+	}
+	for _, k := range []string{"testsPerMutantMin", "testsPerMutantMedian", "testsPerMutantMax"} {
+		if _, ok := f[k]; ok {
+			t.Errorf("%s must be ABSENT when no mutant was graded, not signed as 0: %#v", k, f)
+		}
+	}
+	if _, err := json.Marshal(got); err != nil {
+		t.Fatalf("statement does not marshal: %v", err)
+	}
+}

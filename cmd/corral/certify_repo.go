@@ -2211,7 +2211,7 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 	// scan's own record) still prints nothing, because it genuinely does not
 	// know.
 	switch {
-	case f.SelectionMethod != "" && !f.Uncovered && f.PerMutant:
+	case f.SelectionMethod != "" && !f.Uncovered && f.PerMutant && f.TestsPerMutantMax > 0:
 		// Per-mutant grading makes SelectedTests the file's UNION — the
 		// tests SOME mutant faced — and no mutant's own denominator. The
 		// spread is the honest half: "234 of 620" alone invites the reader
@@ -2221,6 +2221,13 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 		fmt.Fprintf(w, "   graded by %d of %d tests — %d to %d per mutant, median %d (%s)",
 			f.SelectedTests, f.SuiteTests,
 			f.TestsPerMutantMin, f.TestsPerMutantMax, f.TestsPerMutantMedian, f.SelectionMethod)
+	case f.SelectionMethod != "" && !f.Uncovered && f.PerMutant:
+		// Per-mutant, but no mutant was graded — every one was rejected by
+		// the compile gate, which leaves the spread at {0,0,0}. "0 to 0 per
+		// mutant, median 0" would report a range as measured when nothing
+		// was measured at all, so the line says which measurement it is and
+		// then says it found nothing to measure.
+		fmt.Fprintf(w, "   graded by %d of %d tests (%s; no mutant graded)", f.SelectedTests, f.SuiteTests, f.SelectionMethod)
 	case f.SelectionMethod != "" && !f.Uncovered:
 		fmt.Fprintf(w, "   graded by %d of %d tests (%s)", f.SelectedTests, f.SuiteTests, f.SelectionMethod)
 	case f.SelectionMethod != "" && f.Uncovered:
@@ -3265,7 +3272,14 @@ func pushAuditRows(target, repoDir string, r reposcan.RepoReport, models map[str
 			TestSelection: f.SelectionMethod, SelectedTests: f.SelectedTests,
 			SuiteTests: f.SuiteTests, SelectionFallback: f.SelectionFallback,
 			Uncovered: f.Uncovered,
-			Audited:   r.Audited, Candidates: r.Candidates,
+			// And at which grain — the same qualifier the statement signs. A
+			// warehouse query averaging kill_rate across repos cannot tell a
+			// rate measured over 3 tests per mutant from one over 620
+			// without it, which is two measurements reported as one.
+			PerMutant:         f.PerMutant,
+			TestsPerMutantMin: f.TestsPerMutantMin, TestsPerMutantMedian: f.TestsPerMutantMedian,
+			TestsPerMutantMax: f.TestsPerMutantMax,
+			Audited:           r.Audited, Candidates: r.Candidates,
 			ModelsByRole: string(rosterJSON),
 			MinKillRate:  minKillRate, MaxProvenMissed: maxProvenMissed,
 			Passed: passed, RunURL: runURL,

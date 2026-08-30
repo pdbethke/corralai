@@ -58,6 +58,10 @@ type AuditedFile struct {
 	// so the spread travels with it. A verifier handed "0.65 over 234 of
 	// 620" and nothing else would reasonably conclude every mutant faced
 	// 234 tests; TestsPerMutantMin/Max is what refutes that.
+	// TestsPerMutant* are ABSENT, never zero, when the run graded per mutant
+	// but no mutant survived the compile gate to be graded: PerMutant is
+	// true and the spread is {0,0,0}, and a signed 0-to-0 range would be a
+	// measurement nobody made.
 	PerMutant            bool `json:"perMutant,omitempty"`
 	TestsPerMutantMin    int  `json:"testsPerMutantMin,omitempty"`
 	TestsPerMutantMedian int  `json:"testsPerMutantMedian,omitempty"`
@@ -115,9 +119,16 @@ func BuildAuditAttestation(s AuditStatement) map[string]any {
 		// measurement that was never made.
 		if f.PerMutant {
 			entry["perMutant"] = true
-			entry["testsPerMutantMin"] = f.TestsPerMutantMin
-			entry["testsPerMutantMedian"] = f.TestsPerMutantMedian
-			entry["testsPerMutantMax"] = f.TestsPerMutantMax
+			// The spread only when one was actually MEASURED. A per-mutant
+			// run whose every mutant was rejected by the compile gate
+			// carries {0,0,0}, and signing those zeros would put a range
+			// nobody measured over a signature — the same reason an
+			// uncovered file signs no killRate.
+			if f.TestsPerMutantMax > 0 {
+				entry["testsPerMutantMin"] = f.TestsPerMutantMin
+				entry["testsPerMutantMedian"] = f.TestsPerMutantMedian
+				entry["testsPerMutantMax"] = f.TestsPerMutantMax
+			}
 		}
 		if f.SelectionFallback != "" {
 			entry["selectionFallback"] = f.SelectionFallback

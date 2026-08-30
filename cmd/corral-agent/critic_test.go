@@ -50,7 +50,7 @@ func TestRunTaskCriticForwardsFindingsToBrain(t *testing.T) {
 	}
 
 	summary, err := runTask(context.Background(), backend, "test-agent", "test-critic",
-		t.TempDir(), brain, nil, 42, 7, "critique tests", "TESTS HERE", nil, nil, "")
+		t.TempDir(), brain, nil, 42, 7, "critique tests", "" /* no system half */, "TESTS HERE", nil, nil, "")
 	if err != nil {
 		t.Fatalf("runTask: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestRunTaskCriticPropagatesModelUnreachable(t *testing.T) {
 	brain := func(tool string, args map[string]any) string { return `{"ok":true}` }
 
 	_, err := runTask(context.Background(), backend, "test-agent", "test-critic",
-		t.TempDir(), brain, nil, 1, 1, "critique tests", "TESTS HERE", nil, nil, "")
+		t.TempDir(), brain, nil, 1, 1, "critique tests", "" /* no system half */, "TESTS HERE", nil, nil, "")
 	if !errors.Is(err, ErrModelUnreachable) {
 		t.Fatalf("expected errors.Is(err, ErrModelUnreachable); got err=%v", err)
 	}

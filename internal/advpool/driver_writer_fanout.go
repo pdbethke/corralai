@@ -35,11 +35,13 @@ func writerSeatTitle(m adequacy.Mutant) string {
 // that reuses the old key.
 func (d *Driver) promotePerSurvivorWriters(missionID int64, run *runState, tw *queue.Task, survivors []adequacy.Mutant) error {
 	first := survivors[0]
+	firstSys, firstUser := renderTestWriterSeat(run.rs, run.sigs, first, "", "", "")
 	newID, err := d.Q.SupersedeTask(tw.ID, queue.TaskSpec{
 		Key:         TestWriterTaskKey(first.ID),
 		Role:        RoleTestWriter,
 		Title:       writerSeatTitle(first),
-		Instruction: renderTestWriterFor(run.rs, run.sigs, first, "", "", ""),
+		System:      firstSys,
+		Instruction: firstUser,
 		Model:       tw.Model,
 	})
 	if err != nil {
@@ -52,11 +54,13 @@ func (d *Driver) promotePerSurvivorWriters(missionID int64, run *runState, tw *q
 	if len(survivors) > 1 {
 		specs := make([]queue.TaskSpec, 0, len(survivors)-1)
 		for _, m := range survivors[1:] {
+			sys, user := renderTestWriterSeat(run.rs, run.sigs, m, "", "", "")
 			specs = append(specs, queue.TaskSpec{
 				Key:         TestWriterTaskKey(m.ID),
 				Role:        RoleTestWriter,
 				Title:       writerSeatTitle(m),
-				Instruction: renderTestWriterFor(run.rs, run.sigs, m, "", "", ""),
+				System:      sys,
+				Instruction: user,
 				Model:       tw.Model,
 			})
 		}
@@ -157,7 +161,7 @@ func (d *Driver) advanceWriterAttempt(ctx context.Context, missionID int64, run 
 			a.done = true
 			return true, nil
 		}
-		instr := renderTestWriterFor(run.rs, run.sigs, a.mutant, "", "", "")
+		sys, instr := renderTestWriterSeat(run.rs, run.sigs, a.mutant, "", "", "")
 		if strings.TrimSpace(test) != "" {
 			// A corrective retry: feed the compiler's own error back, except
 			// when the model returned nothing at all — a repair prompt over
@@ -168,9 +172,9 @@ func (d *Driver) advanceWriterAttempt(ctx context.Context, missionID int64, run 
 			if errors.As(cerr, &ce) && strings.TrimSpace(ce.Output) != "" {
 				msg = ce.Output
 			}
-			instr = renderTestWriterFor(run.rs, run.sigs, a.mutant, test, msg, "")
+			sys, instr = renderTestWriterSeat(run.rs, run.sigs, a.mutant, test, msg, "")
 		}
-		if rerr := d.reissueWriterSeat(missionID, run, a, task, instr); rerr != nil {
+		if rerr := d.reissueWriterSeat(missionID, run, a, task, sys, instr); rerr != nil {
 			return true, rerr
 		}
 		return true, fmt.Errorf("advpool: writer seat for survivor %s does not compile, reissued for retry (%d/%d): %w",
@@ -203,8 +207,8 @@ func (d *Driver) advanceWriterAttempt(ctx context.Context, missionID int64, run 
 		if a.repairs < MaxTestWriterAttempts-1 {
 			a.repairs++
 			failure := compliantFailureOutput(ctx, d.Scorer, run, test)
-			instr := renderTestWriterFor(run.rs, run.sigs, a.mutant, test, "", failure)
-			if rerr := d.reissueWriterSeat(missionID, run, a, task, instr); rerr != nil {
+			sys, instr := renderTestWriterSeat(run.rs, run.sigs, a.mutant, test, "", failure)
+			if rerr := d.reissueWriterSeat(missionID, run, a, task, sys, instr); rerr != nil {
 				return true, rerr
 			}
 			log.Printf("advpool: %s: the authored test for survivor %s compiled but FAILED on the unmutated code — reissuing with the failure fed back (%d/%d)",
@@ -235,10 +239,14 @@ func (d *Driver) advanceWriterAttempt(ctx context.Context, missionID int64, run 
 // leaving the attempt pointing at the new task id. Only this survivor's row
 // moves — its siblings' task ids are untouched, which is the property the
 // fan-out exists for.
-func (d *Driver) reissueWriterSeat(missionID int64, run *runState, a *writerAttempt, task *queue.Task, instruction string) error {
+func (d *Driver) reissueWriterSeat(missionID int64, run *runState, a *writerAttempt, task *queue.Task, system, instruction string) error {
 	newID, serr := d.Q.SupersedeTask(task.ID, queue.TaskSpec{
-		Key:         TestWriterTaskKey(a.mutant.ID),
-		Role:        RoleTestWriter,
+		Key:  TestWriterTaskKey(a.mutant.ID),
+		Role: RoleTestWriter,
+		// The prefix is re-rendered, not copied off the old row, and it is
+		// byte-identical either way — a repaired seat must keep sharing its
+		// siblings' cacheable prefix.
+		System:      system,
 		Title:       task.Title,
 		Instruction: instruction,
 		Model:       task.Model,

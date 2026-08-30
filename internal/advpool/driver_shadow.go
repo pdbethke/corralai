@@ -463,11 +463,13 @@ func (d *Driver) enqueueShadowWritersPerSurvivor(missionID int64, run *runState,
 	}
 	specs := make([]queue.TaskSpec, 0, len(survivors))
 	for _, m := range survivors {
+		sys, user := renderTestWriterSeat(run.rs, run.sigs, m, "", "", "")
 		specs = append(specs, queue.TaskSpec{
 			Key:         ShadowTestWriterTaskKey(m.ID),
 			Role:        RoleTestWriterShadow,
 			Title:       "Challenger: " + writerSeatTitle(m),
-			Instruction: renderTestWriterFor(run.rs, run.sigs, m, "", "", ""),
+			System:      sys,
+			Instruction: user,
 			Model:       run.rs.ShadowWriterModel,
 		})
 	}
@@ -548,19 +550,20 @@ func (d *Driver) runShadowWriterFanout(ctx context.Context, missionID int64, run
 				a.done = true
 				continue
 			}
-			instr := renderTestWriterFor(run.rs, run.sigs, a.mutant, "", "", "")
+			sys, instr := renderTestWriterSeat(run.rs, run.sigs, a.mutant, "", "", "")
 			if strings.TrimSpace(test) != "" {
 				var ce *CompileError
 				msg := cerr.Error()
 				if errors.As(cerr, &ce) && strings.TrimSpace(ce.Output) != "" {
 					msg = ce.Output
 				}
-				instr = renderTestWriterFor(run.rs, run.sigs, a.mutant, test, msg, "")
+				sys, instr = renderTestWriterSeat(run.rs, run.sigs, a.mutant, test, msg, "")
 			}
 			newID, serr := d.Q.SupersedeTask(task.ID, queue.TaskSpec{
 				Key:         ShadowTestWriterTaskKey(a.mutant.ID),
 				Role:        RoleTestWriterShadow,
 				Title:       task.Title,
+				System:      sys,
 				Instruction: instr,
 				Model:       run.rs.ShadowWriterModel,
 			})

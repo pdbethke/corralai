@@ -639,13 +639,19 @@ func (b *anthropicBackend) Chat(messages []Message, tools []any) (Message, error
 		// The system prompt as a CACHEABLE content block, not a bare string.
 		//
 		// Anthropic caches nothing unless a request asks it to, and the
-		// writer seat now makes one call PER SURVIVOR against one file — a
-		// fan-out whose prompts share a long, byte-identical prefix (the
-		// language's writer system prompt plus the harness-precedence
-		// override; see advpool.renderTestWriterPrefix). Marking that prefix
-		// ephemeral is what turns N calls over one file into one full-price
-		// prompt and N-1 cache reads. The saving is then RECORDED, never
-		// assumed, from the response's own cache_read_input_tokens.
+		// writer seat now makes one call PER SURVIVOR against one file. Those
+		// calls share a long, byte-identical prefix — the writer system
+		// prompt, the goal, the whole TARGET FILE, its signature surface and
+		// the harness exemplar (advpool.renderTestWriterPrefix) — which
+		// reaches this backend as the request's SYSTEM half, because
+		// queue.TaskSpec.System carries it and agentworker.RunRoleWithSystem
+		// sends it as its own turn. That routing is load-bearing: folded into
+		// the user message (as advpool's joinPrompt did before the fan-out)
+		// there would be no system field on the request at all and this block
+		// would have nothing to attach to. Marking it ephemeral is what turns
+		// N calls over one file into one full-price prompt and N-1 cache
+		// reads. The saving is then RECORDED, never assumed, from the
+		// response's own cache_read_input_tokens.
 		//
 		// Applied to every Anthropic call, not only the writer's: the block
 		// is a request for reuse, the provider decides whether there is

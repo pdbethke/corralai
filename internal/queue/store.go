@@ -38,23 +38,43 @@ var now = realNow
 
 // TaskSpec is one unit of a seed plan: what the mission engine enqueues.
 type TaskSpec struct {
-	Key         string   // per-mission unique key (e.g. "build-ui")
-	Role        string   // builder|tester|pentester|reviewer|"" (any role)
-	Title       string   // short label for the UI
-	Instruction string   // what the bee must do
-	DependsOn   []string // task keys (within the mission) that must be done first
-	Verify      string   // command that MUST pass (exit 0) before this task can complete; "" = ungated
-	Model       string   // gate-earned model the worker should run this task on; "" = worker's own default
+	Key         string // per-mission unique key (e.g. "build-ui")
+	Role        string // builder|tester|pentester|reviewer|"" (any role)
+	Title       string // short label for the UI
+	Instruction string // what the bee must do
+	// System is the SYSTEM half of the prompt, sent as its own turn when
+	// non-empty. Empty (every task but the per-survivor writer's) keeps the
+	// historical shape exactly: one user message holding Instruction.
+	//
+	// It exists so a fan-out of tasks over one subject can share a
+	// byte-identical prefix that a provider will CACHE. advpool's
+	// per-survivor writer sends the file, its signatures and the harness
+	// once per survivor; putting that in the system turn is what lets
+	// agentbackend mark it cacheable (Anthropic's cache_control block, which
+	// only exists on the system field) and lets Gemini's implicit cache
+	// match a repeated prefix. Folded into the user turn — as it was before
+	// this field — there is no system field on the request at all, and the
+	// cacheable block has nothing to attach to.
+	System    string
+	DependsOn []string // task keys (within the mission) that must be done first
+	Verify    string   // command that MUST pass (exit 0) before this task can complete; "" = ungated
+	Model     string   // gate-earned model the worker should run this task on; "" = worker's own default
 }
 
 // Task is a queued unit of work.
 type Task struct {
-	ID             int64    `json:"id"`
-	MissionID      int64    `json:"mission_id"`
-	Key            string   `json:"key"`
-	Role           string   `json:"role"`
-	Title          string   `json:"title"`
-	Instruction    string   `json:"instruction,omitempty"`
+	ID          int64  `json:"id"`
+	MissionID   int64  `json:"mission_id"`
+	Key         string `json:"key"`
+	Role        string `json:"role"`
+	Title       string `json:"title"`
+	Instruction string `json:"instruction,omitempty"`
+	// System is the system half of this task's prompt — see TaskSpec.System.
+	// Carried on the wire so a REMOTE worker claiming this task sends the
+	// same two-turn request an in-process one does; a worker from before
+	// this field simply sees no key and sends one user turn, which is the
+	// pre-fan-out shape and still correct (it just pays full price).
+	System         string   `json:"system,omitempty"`
 	Status         string   `json:"status"`
 	DependsOn      []string `json:"depends_on,omitempty"`
 	ClaimedBy      string   `json:"claimed_by,omitempty"`
@@ -91,6 +111,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   verify           TEXT    NOT NULL DEFAULT '',
   claimed_instance TEXT    NOT NULL DEFAULT '',
   model            TEXT    NOT NULL DEFAULT '',
+  system           TEXT    NOT NULL DEFAULT '',
   UNIQUE(mission_id, key)
 );
 CREATE INDEX IF NOT EXISTS ix_tasks_claimable ON tasks(status, role);
@@ -164,6 +185,7 @@ func Open(path string) (*Store, error) {
 		`ALTER TABLE findings ADD COLUMN scope TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE findings ADD COLUMN test_file TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE findings ADD COLUMN test_selector TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE tasks ADD COLUMN system TEXT NOT NULL DEFAULT ''`,
 	} {
 		if _, err := db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			return nil, err
@@ -189,9 +211,9 @@ func (s *Store) Enqueue(missionID int64, specs []TaskSpec) error {
 		}
 		b, _ := json.Marshal(deps)
 		if _, err := tx.Exec(
-			`INSERT INTO tasks (mission_id,key,role,title,instruction,status,depends_on,verify,created_ts,model)
-			 VALUES (?,?,?,?,?,?,?,?,?,?)`,
-			missionID, sp.Key, sp.Role, sp.Title, sp.Instruction, StatusPending, string(b), sp.Verify, now(), sp.Model,
+			`INSERT INTO tasks (mission_id,key,role,title,instruction,status,depends_on,verify,created_ts,model,system)
+			 VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+			missionID, sp.Key, sp.Role, sp.Title, sp.Instruction, StatusPending, string(b), sp.Verify, now(), sp.Model, sp.System,
 		); err != nil {
 			return err
 		}
@@ -366,7 +388,7 @@ func (s *Store) ClaimNextAs(bee, instance string, roles []string, leaseSeconds f
 		// would re-dispatch work the halt was meant to stop. A genuinely in-flight
 		// claim still finishes via Complete (unaffected); the bee re-acquires a
 		// re-issue on resume. Cancel, being terminal, never re-issues at all.
-		selfHealQ := `SELECT id,mission_id,key,role,title,instruction,depends_on,created_ts,model FROM tasks
+		selfHealQ := `SELECT id,mission_id,key,role,title,instruction,depends_on,created_ts,model,system FROM tasks
 			 WHERE status=? AND claimed_by=?
 			   AND ((claimed_instance=? AND ?!='') OR claim_expires_ts < ?)
 			   AND mission_id NOT IN (SELECT mission_id FROM mission_halts)`
@@ -384,7 +406,7 @@ func (s *Store) ClaimNextAs(bee, instance string, roles []string, leaseSeconds f
 			shArgs = append(shArgs, "")
 		}
 		selfHealQ += ` ORDER BY claimed_ts, id LIMIT 1`
-		err := tx.QueryRow(selfHealQ, shArgs...).Scan(&t.ID, &t.MissionID, &t.Key, &t.Role, &t.Title, &t.Instruction, &depJSON, &t.CreatedTS, &t.Model)
+		err := tx.QueryRow(selfHealQ, shArgs...).Scan(&t.ID, &t.MissionID, &t.Key, &t.Role, &t.Title, &t.Instruction, &depJSON, &t.CreatedTS, &t.Model, &t.System)
 		if err != nil && err != sql.ErrNoRows {
 			return nil, err
 		}
@@ -419,7 +441,7 @@ func (s *Store) ClaimNextAs(bee, instance string, roles []string, leaseSeconds f
 	// already claimed before the halt are untouched (they live in status
 	// StatusClaimed, not StatusReady, so this WHERE never sees them) and may
 	// still finish — only new dispatch stops.
-	q := `SELECT id,mission_id,key,role,title,instruction,depends_on,created_ts,model FROM tasks
+	q := `SELECT id,mission_id,key,role,title,instruction,depends_on,created_ts,model,system FROM tasks
 		WHERE status=? AND mission_id NOT IN (SELECT mission_id FROM mission_halts)`
 	args := []any{StatusReady}
 	if len(roles) > 0 {
@@ -435,7 +457,7 @@ func (s *Store) ClaimNextAs(bee, instance string, roles []string, leaseSeconds f
 
 	var t Task
 	var depJSON string
-	err = tx.QueryRow(q, args...).Scan(&t.ID, &t.MissionID, &t.Key, &t.Role, &t.Title, &t.Instruction, &depJSON, &t.CreatedTS, &t.Model)
+	err = tx.QueryRow(q, args...).Scan(&t.ID, &t.MissionID, &t.Key, &t.Role, &t.Title, &t.Instruction, &depJSON, &t.CreatedTS, &t.Model, &t.System)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -732,7 +754,7 @@ func (s *Store) query(q string, args ...any) ([]Task, error) {
 		var claimedBy, result sql.NullString
 		var claimedTS, doneTS, exp sql.NullFloat64
 		if err := rows.Scan(&t.ID, &t.MissionID, &t.Key, &t.Role, &t.Title, &t.Instruction,
-			&t.Status, &depJSON, &claimedBy, &result, &t.CreatedTS, &claimedTS, &doneTS, &exp, &t.Supersedes, &t.Verify, &t.Model); err != nil {
+			&t.Status, &depJSON, &claimedBy, &result, &t.CreatedTS, &claimedTS, &doneTS, &exp, &t.Supersedes, &t.Verify, &t.Model, &t.System); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(depJSON), &t.DependsOn)

@@ -301,8 +301,12 @@ func compileRepairBlock(prevTest, compileErr string) string {
 // repeated prefix bills it once instead of N times. A single differing byte —
 // a survivor id, a count, a timestamp — defeats the cache entirely, so nothing
 // per-survivor may appear here. See renderTestWriterSuffix for the half that
-// varies, and internal/agentbackend for the request-side cache_control block
-// that asks Anthropic to actually reuse it.
+// varies.
+//
+// It is sent as the task's SYSTEM half (queue.TaskSpec.System), not folded
+// into the instruction: Anthropic's cache_control block only exists on the
+// system field, so a joined prompt has nowhere to carry the request to cache
+// and pays full price on every seat. See renderTestWriterSeat.
 func renderTestWriterPrefix(rs RunSpec, sigs []repoindex.Signature) string {
 	return renderTestWriter(rs, sigs, nil)
 }
@@ -314,17 +318,25 @@ func renderTestWriterSuffix(rs RunSpec, m adequacy.Mutant) string {
 	return "\n\n" + survivorBlock(rs, []adequacy.Mutant{m})
 }
 
-// renderTestWriterFor renders ONE survivor's writer instruction: the shared
-// prefix, that survivor's diff, and (on a retry) the repair block for whichever
-// of the two failure modes this seat hit. prevTest/compileErr/cleanFailure are
-// all empty on a first attempt.
+// renderTestWriterSeat renders ONE survivor's writer task as the two halves a
+// caching provider needs them in: the SYSTEM half (the shared prefix, byte-
+// identical across the file's seats) and the USER half (that survivor's diff,
+// plus the repair block for whichever of the two failure modes this seat hit).
+// prevTest/compileErr/cleanFailure are all empty on a first attempt.
 //
-// The repair block goes AFTER the survivor, not inside the prefix, for the
-// cache reason above: a repaired seat still shares its prefix with its
-// siblings.
-func renderTestWriterFor(rs RunSpec, sigs []repoindex.Signature, m adequacy.Mutant, prevTest, compileErr, cleanFailure string) string {
-	return renderTestWriterPrefix(rs, sigs) + renderTestWriterSuffix(rs, m) +
-		cleanFailureRepairBlock(prevTest, cleanFailure) + compileRepairBlock(prevTest, compileErr)
+// TWO RETURNS, not one joined string, and that is the whole mechanism. A
+// joined prompt goes out as a single user message with NO system field on the
+// request, so Anthropic's cache_control block — which attaches to the system
+// field and nowhere else — has nothing to attach to, and the cacheable prefix
+// is re-billed in full on every seat. queue.TaskSpec.System carries this half
+// to the worker, and agentworker.RunRoleWithSystem sends it as its own turn.
+//
+// The repair block goes in the USER half, after the survivor: a repaired seat
+// must still share its prefix with its siblings, byte for byte.
+func renderTestWriterSeat(rs RunSpec, sigs []repoindex.Signature, m adequacy.Mutant, prevTest, compileErr, cleanFailure string) (system, user string) {
+	return renderTestWriterPrefix(rs, sigs),
+		strings.TrimPrefix(renderTestWriterSuffix(rs, m), "\n\n") +
+			cleanFailureRepairBlock(prevTest, cleanFailure) + compileRepairBlock(prevTest, compileErr)
 }
 
 // DefaultMaxShards is the stock generator width. It matches

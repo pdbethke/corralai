@@ -250,7 +250,7 @@ func runOneTask(ctx context.Context, q *queue.Store, missionID int64, workerID s
 	}
 	rec.add("task_created", "", task.Key, map[string]any{"role": task.Role, "title": task.Title})
 	rec.add("task_claimed", actor, task.Key, map[string]any{"role": task.Role, "title": task.Title})
-	result, findings, rerr := agentworker.RunRole(ctx, ch, task.Role, task.Instruction)
+	result, findings, rerr := agentworker.RunRoleWithSystem(ctx, ch, task.Role, task.System, task.Instruction)
 	if rerr != nil {
 		if task.Role == advpool.RoleMutantGeneratorShadow || task.Role == advpool.RoleTestWriterShadow {
 			// A challenger seat is MEASUREMENT, never the gate — so its LLM

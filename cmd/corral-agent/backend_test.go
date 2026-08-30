@@ -191,7 +191,7 @@ func TestRunTaskPropagatesModelUnreachable(t *testing.T) {
 	tools := []any{}
 
 	_, err := runTask(context.Background(), backend, "test-agent", "builder",
-		t.TempDir(), brain, tools, 1, 1, "test task", "do nothing", nil, nil, "")
+		t.TempDir(), brain, tools, 1, 1, "test task", "" /* no system half */, "do nothing", nil, nil, "")
 
 	if !errors.Is(err, ErrModelUnreachable) {
 		t.Errorf("runTask with 404 backend must return ErrModelUnreachable; got %v", err)
@@ -243,7 +243,7 @@ func TestRunTaskStampsReportThought(t *testing.T) {
 	}
 
 	_, err := runTask(context.Background(), backend, "Ada", "builder",
-		t.TempDir(), brain, nil, 99, 7, "test task", "do nothing", nil, nil, "")
+		t.TempDir(), brain, nil, 99, 7, "test task", "" /* no system half */, "do nothing", nil, nil, "")
 	if err != nil {
 		t.Fatalf("runTask: %v", err)
 	}

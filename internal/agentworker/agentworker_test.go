@@ -17,6 +17,10 @@ import (
 type fakeChatter struct {
 	scripted []Message
 	calls    int
+	// sent records the messages of the LAST call, so a test can assert the
+	// SHAPE of the request (a system turn separate from the user turn), not
+	// only its answer.
+	sent []Message
 }
 
 func (f *fakeChatter) Chat(messages []Message, tools []any) (Message, error) {
@@ -25,6 +29,7 @@ func (f *fakeChatter) Chat(messages []Message, tools []any) (Message, error) {
 		i = len(f.scripted) - 1
 	}
 	f.calls++
+	f.sent = messages
 	return f.scripted[i], nil
 }
 
@@ -274,5 +279,45 @@ func TestCriticLoopBoundsReportThought(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("after 2 report_thought calls, the loop must inject a nudge to conclude; messages: %+v", fake.lastMessages)
+	}
+}
+
+// TestRunRoleWithSystemSendsASystemTurn is the mechanism the per-survivor
+// writer's cost story rests on. The shared, byte-identical prefix must arrive
+// as its OWN system turn: agentbackend attaches Anthropic's
+// `cache_control: {type: ephemeral}` to the system field and nowhere else, so
+// a prefix folded into the user message is re-billed in full on every one of a
+// file's seats no matter how identical it is.
+func TestRunRoleWithSystemSendsASystemTurn(t *testing.T) {
+	fake := &fakeChatter{scripted: []Message{{Role: "assistant", Content: "package p"}}}
+	const prefix = "THE SHARED FILE CONTEXT"
+	const suffix = "--- SURVIVOR m1 (lines 3-3) ---"
+
+	if _, _, err := RunRoleWithSystem(context.Background(), fake, "test-writer", prefix, suffix); err != nil {
+		t.Fatalf("RunRoleWithSystem: %v", err)
+	}
+	if len(fake.sent) != 2 {
+		t.Fatalf("sent %d message(s), want a system turn and a user turn: %+v", len(fake.sent), fake.sent)
+	}
+	if fake.sent[0].Role != "system" || fake.sent[0].Content != prefix {
+		t.Errorf("first turn = %+v, want the prefix as role=system", fake.sent[0])
+	}
+	if fake.sent[1].Role != "user" || fake.sent[1].Content != suffix {
+		t.Errorf("second turn = %+v, want the survivor as role=user", fake.sent[1])
+	}
+}
+
+// TestRunRoleWithoutSystemIsUnchanged: every caller with no system half — the
+// batched writer, the mutant generator, the challenger generator — must keep
+// sending exactly the one user message it always sent.
+func TestRunRoleWithoutSystemIsUnchanged(t *testing.T) {
+	for _, system := range []string{"", "   \n\t "} {
+		fake := &fakeChatter{scripted: []Message{{Role: "assistant", Content: "ok"}}}
+		if _, _, err := RunRoleWithSystem(context.Background(), fake, "mutant-generator", system, "do it"); err != nil {
+			t.Fatalf("RunRoleWithSystem: %v", err)
+		}
+		if len(fake.sent) != 1 || fake.sent[0].Role != "user" || fake.sent[0].Content != "do it" {
+			t.Errorf("system=%q sent %+v, want exactly one user turn", system, fake.sent)
+		}
 	}
 }

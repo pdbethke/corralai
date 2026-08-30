@@ -4,7 +4,6 @@ package advpool
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"testing"
 
@@ -178,24 +177,69 @@ func TestPerSurvivorFansOutOneTaskPerSurvivor(t *testing.T) {
 	if strings.TrimSpace(prefix) == "" {
 		t.Fatal("the shared prefix is empty — there is nothing for a provider to cache")
 	}
+	// THE SYSTEM HALF, not a prefix of the instruction. A joined prompt goes
+	// out as one user message with no system field on the request, and
+	// Anthropic's cache_control block attaches to the system field and
+	// nowhere else — so a "prefix" folded into the instruction is re-billed
+	// in full on every seat, however byte-identical it is.
 	for _, task := range tasks {
-		if !strings.HasPrefix(task.Instruction, prefix) {
-			t.Fatalf("task %q does not start with the byte-identical shared prefix — a caching provider re-bills the whole file for every seat", task.Key)
+		if task.System != prefix {
+			t.Fatalf("task %q does not carry the byte-identical shared prefix as its SYSTEM half — a caching provider re-bills the whole file for every seat", task.Key)
 		}
-		suffix := strings.TrimPrefix(task.Instruction, prefix)
-		if n := strings.Count(suffix, "--- SURVIVOR "); n != 1 {
-			t.Errorf("task %q suffix names %d survivors, want exactly 1", task.Key, n)
+		if strings.Contains(task.Instruction, prefix) {
+			t.Errorf("task %q also repeats the prefix in its instruction — it is sent (and billed) twice", task.Key)
+		}
+		if n := strings.Count(task.Instruction, "--- SURVIVOR "); n != 1 {
+			t.Errorf("task %q names %d survivors, want exactly 1", task.Key, n)
 		}
 	}
-	// Distinct suffixes: three seats told to kill the same mutant would be
+	// Distinct user halves: three seats told to kill the same mutant would be
 	// three copies of one measurement.
 	seen := map[string]bool{}
 	for _, task := range tasks {
-		suffix := strings.TrimPrefix(task.Instruction, prefix)
-		if seen[suffix] {
-			t.Fatalf("two writer tasks carry the identical suffix — they are aimed at the same survivor")
+		if seen[task.Instruction] {
+			t.Fatalf("two writer tasks carry the identical instruction — they are aimed at the same survivor")
 		}
-		seen[suffix] = true
+		seen[task.Instruction] = true
+	}
+}
+
+// TestBatchedModeSendsNoSystemHalf: the system half exists for the fan-out's
+// shared prefix. A batched run has one seat and nothing to share, so it must
+// keep the exact one-user-message request it has always sent.
+func TestBatchedModeSendsNoSystemHalf(t *testing.T) {
+	d, missionID, _ := fanoutRun(t, WriterModeBatched, nil, nil)
+	devTick(t, d, missionID)
+	for _, task := range writerTasks(t, d, missionID) {
+		if task.System != "" {
+			t.Errorf("batched writer task %q carries a system half (%d bytes) — the request shape changed", task.Key, len(task.System))
+		}
+	}
+}
+
+// TestPerSurvivorRepairKeepsTheSharedPrefix: a repaired seat must keep sharing
+// its siblings' cacheable prefix byte for byte, or the repair costs a full
+// re-bill of the file on top of the retry.
+func TestPerSurvivorRepairKeepsTheSharedPrefix(t *testing.T) {
+	const badTest = "package target\nthis does not compile\n"
+	d, missionID, _ := fanoutRun(t, WriterModePerSurvivor, nil, map[string]bool{badTest: true})
+	devTick(t, d, missionID)
+	prefix := renderTestWriterPrefix(d.runs[missionID].rs, nil)
+
+	for _, task := range writerTasks(t, d, missionID) {
+		claimed := claimTaskByID(t, d.Q, task.ID)
+		result := "package target\n\nfunc TestOK(t *testing.T) {}\n"
+		if task.Key == "test-writer/m2" {
+			result = badTest
+		}
+		mustComplete(t, d.Q, claimed.ID, result)
+	}
+	_, _ = d.Tick(context.Background(), missionID)
+
+	for _, task := range writerTasks(t, d, missionID) {
+		if task.System != prefix {
+			t.Errorf("after a repair, task %q no longer carries the shared prefix as its system half", task.Key)
+		}
 	}
 }
 
@@ -407,5 +451,4 @@ func TestPerSurvivorTaskKeyIsUniquePerMutant(t *testing.T) {
 			t.Errorf("shadow key %q does not carry the challenger role prefix", got)
 		}
 	}
-	_ = fmt.Sprint()
 }

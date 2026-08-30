@@ -131,8 +131,15 @@ func TestLedgerRecordsEveryGrain(t *testing.T) {
 	calls := []scanstore.ModelCall{
 		{ScanID: id, Path: "pkg/a.go", Role: "mutant-generator", Model: "m-1",
 			Calls: 3, Retries: iptr(1), InputTokens: 900, OutputTokens: 210, WallMillis: 4100},
+		// CachedInputTokens is the same nullable discipline for a DIFFERENT
+		// cause: the writer seat sends a byte-identical prefix on every one
+		// of a file's per-survivor calls, so a caching provider reports how
+		// much of the prompt it reused. A provider that says nothing has
+		// reported NOTHING, not a miss — the mutant-generator row above
+		// leaves it nil and must read back as SQL NULL, never 0.
 		{ScanID: id, Path: "pkg/a.go", Role: "test-writer", Model: "w-1",
-			Calls: 4, Retries: nil, InputTokens: 300, OutputTokens: 130, WallMillis: 2200},
+			Calls: 4, Retries: nil, InputTokens: 300, OutputTokens: 130,
+			CachedInputTokens: i64(1200), WallMillis: 2200},
 	}
 	if err := st.RecordModelCalls(ctx, calls); err != nil {
 		t.Fatalf("RecordModelCalls: %v", err)
@@ -150,6 +157,12 @@ func TestLedgerRecordsEveryGrain(t *testing.T) {
 		}
 		if c.Role == "mutant-generator" && (c.Retries == nil || *c.Retries != 1) {
 			t.Errorf("mutant-generator's retries = %v, want a measured 1", c.Retries)
+		}
+		if c.Role == "mutant-generator" && c.CachedInputTokens != nil {
+			t.Errorf("mutant-generator's unreported cached tokens read back as %d, want SQL NULL (nil)", *c.CachedInputTokens)
+		}
+		if c.Role == "test-writer" && (c.CachedInputTokens == nil || *c.CachedInputTokens != 1200) {
+			t.Errorf("test-writer's cached tokens = %v, want a measured 1200", c.CachedInputTokens)
 		}
 	}
 

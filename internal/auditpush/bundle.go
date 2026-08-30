@@ -141,10 +141,15 @@ type ModelCallRow struct {
 	// Retries is nullable: nil means "not measured" (every producer today,
 	// since agentbackend has no retry loop to observe), never a stored 0
 	// that would read as "measured: zero retries".
-	Retries      *int
-	InputTokens  int64
-	OutputTokens int64
-	WallMillis   int64
+	Retries     *int
+	InputTokens int64
+	// CachedInputTokens is how many of InputTokens the provider served from
+	// its own prompt cache. Nullable for the same NULL-not-zero reason
+	// Retries is: silence from a provider is not a measured miss. See
+	// scanstore.ModelCall.CachedInputTokens.
+	CachedInputTokens *int64
+	OutputTokens      int64
+	WallMillis        int64
 
 	StatementSHA256 string
 }
@@ -352,6 +357,7 @@ CREATE TABLE IF NOT EXISTS corral_model_calls (
   retries          INTEGER,
   input_tokens     BIGINT,
   output_tokens    BIGINT,
+  cached_input_tokens BIGINT,
   wall_ms          BIGINT,
   statement_sha256 VARCHAR,
   schema_version   INTEGER
@@ -467,9 +473,15 @@ var (
 	corralScansMigrationCols = []struct{ name, ddl string }{
 		{"selection_ms", "selection_ms BIGINT"},
 	}
-	corralMutantsMigrationCols    = []struct{ name, ddl string }{}
-	corralModelCallsMigrationCols = []struct{ name, ddl string }{}
-	corralEventsMigrationCols     = []struct{ name, ddl string }{}
+	corralMutantsMigrationCols = []struct{ name, ddl string }{}
+	// cached_input_tokens is additive: a warehouse an earlier corral created
+	// gets it on the next push, and its existing rows keep NULL — correct,
+	// since those runs never asked a provider to cache a prefix and never
+	// read one back.
+	corralModelCallsMigrationCols = []struct{ name, ddl string }{
+		{"cached_input_tokens", "cached_input_tokens BIGINT"},
+	}
+	corralEventsMigrationCols = []struct{ name, ddl string }{}
 )
 
 // migrateTable additively brings one warehouse table up to the current
@@ -859,10 +871,12 @@ func pushBundleOnce(target string, b Bundle) (Counts, error) {
 	for _, mc := range b.Calls {
 		if _, err := tx.Exec(`INSERT INTO corral_model_calls (
 		    ts, repo, run_url, scan_id, path, role, model, calls, retries,
-		    input_tokens, output_tokens, wall_ms, statement_sha256, schema_version
-		  ) VALUES (`+placeholders(14)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+		    input_tokens, output_tokens, cached_input_tokens, wall_ms,
+		    statement_sha256, schema_version
+		  ) VALUES (`+placeholders(15)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 			now, mc.Repo, mc.RunURL, mc.ScanID, mc.Path, mc.Role, mc.Model,
-			mc.Calls, mc.Retries, mc.InputTokens, mc.OutputTokens, mc.WallMillis,
+			mc.Calls, mc.Retries, mc.InputTokens, mc.OutputTokens,
+			nullIfNilInt64(mc.CachedInputTokens), mc.WallMillis,
 			mc.StatementSHA256, SchemaVersion,
 		); err != nil {
 			return Counts{}, fmt.Errorf("auditpush: insert model call %s/%s: %w", mc.Path, mc.Role, err)
@@ -1003,4 +1017,15 @@ func nullIfZeroInt(v int) any {
 		return nil
 	}
 	return v
+}
+
+// nullIfNilInt64 writes a nullable measured count: NULL when nothing measured
+// it, the value otherwise — including a measured 0, which is a real
+// observation and must not be collapsed with silence the way nullIfZeroInt's
+// only-ever-positive counts can be.
+func nullIfNilInt64(v *int64) any {
+	if v == nil {
+		return nil
+	}
+	return *v
 }

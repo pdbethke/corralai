@@ -663,7 +663,7 @@ func Open(dsn string) (*Store, error) {
 	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS scan_model_calls (
 		scan_id BIGINT, path VARCHAR, role VARCHAR, model VARCHAR,
 		calls INTEGER, retries INTEGER,
-		input_tokens BIGINT, output_tokens BIGINT, wall_ms BIGINT
+		input_tokens BIGINT, output_tokens BIGINT, cached_input_tokens BIGINT, wall_ms BIGINT
 	)`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("scanstore: create scan_model_calls table: %w", err)
@@ -775,13 +775,21 @@ func migrateScanMutants(db *sql.DB) error {
 	return migrateColumns(db, "scan_mutants", scanMutantsMigrationCols)
 }
 
-// migrateScanModelCalls and migrateScanEvents exist with EMPTY lists on
-// purpose: both tables are new at this schema version, so nothing predates
-// their CREATE and there is nothing to add today. They are here so the next
-// column added to either goes through the same additive path as every other
-// column in this package, rather than being appended to a CREATE TABLE that
-// an existing ledger will never re-run.
-var scanModelCallsMigrationCols = []struct{ name, ddl string }{}
+// scanModelCallsMigrationCols carries the columns scan_model_calls has grown
+// since its original CREATE. cached_input_tokens is the first: a ledger an
+// earlier corral wrote gets it added on open, and every row already in it
+// keeps NULL — which is correct, not a gap. Those runs never asked a provider
+// for a cached prompt and never read one back, so "not measured" is exactly
+// what they mean.
+//
+// migrateScanEvents keeps an EMPTY list on purpose: nothing predates
+// scan_events' CREATE, and the list is here so the next column added to it
+// goes through the same additive path as every other column in this package
+// rather than being appended to a CREATE TABLE an existing ledger will never
+// re-run.
+var scanModelCallsMigrationCols = []struct{ name, ddl string }{
+	{"cached_input_tokens", "cached_input_tokens BIGINT"},
+}
 
 var scanEventsMigrationCols = []struct{ name, ddl string }{}
 
@@ -898,6 +906,15 @@ func nullCount(v sql.NullInt64) *int {
 // this column's nil-ness is decided cannot silently drift from the read
 // side's nullCount.
 func retriesParam(v *int) any {
+	if v == nil {
+		return nil
+	}
+	return *v
+}
+
+// cachedTokensParam is retriesParam for the cached-prompt count: NULL when
+// nothing measured one, never a stored 0 a later query would average.
+func cachedTokensParam(v *int64) any {
 	if v == nil {
 		return nil
 	}
@@ -1426,10 +1443,17 @@ type ModelCall struct {
 	// is a NUMBER a later query averages and ranks on; NULL is the only
 	// honest encoding of "this ledger does not say" — same rule as
 	// nullablePositive/nullCount elsewhere in this file.
-	Retries      *int
-	InputTokens  int64
-	OutputTokens int64
-	WallMillis   int64
+	Retries     *int
+	InputTokens int64
+	// CachedInputTokens is how many of InputTokens the provider served from
+	// its own prompt cache. NULLABLE for the same reason Retries is, but for
+	// a different cause: a provider that says nothing about caching has
+	// reported nothing, not a miss, and a stored 0 is a number a later query
+	// would average as a measured zero. See
+	// agentbackend.Usage.CachedInputTokens.
+	CachedInputTokens *int64
+	OutputTokens      int64
+	WallMillis        int64
 }
 
 // Event is one entry on the tape: an ordered log of what the pool did, at
@@ -1554,9 +1578,10 @@ func (s *Store) RecordModelCalls(ctx context.Context, cs []ModelCall) error {
 	defer func() { _ = tx.Rollback() }()
 	for _, c := range cs {
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO scan_model_calls (scan_id, path, role, model, calls, retries, input_tokens, output_tokens, wall_ms)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			c.ScanID, c.Path, c.Role, c.Model, c.Calls, retriesParam(c.Retries), c.InputTokens, c.OutputTokens, c.WallMillis,
+			`INSERT INTO scan_model_calls (scan_id, path, role, model, calls, retries, input_tokens, output_tokens, cached_input_tokens, wall_ms)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			c.ScanID, c.Path, c.Role, c.Model, c.Calls, retriesParam(c.Retries),
+			c.InputTokens, c.OutputTokens, cachedTokensParam(c.CachedInputTokens), c.WallMillis,
 		); err != nil {
 			return fmt.Errorf("scanstore: RecordModelCalls: insert %s/%s: %w", c.Path, c.Role, err)
 		}
@@ -1569,7 +1594,7 @@ func (s *Store) RecordModelCalls(ctx context.Context, cs []ModelCall) error {
 // than whatever the storage layer happens to return.
 func (s *Store) ModelCallsForScan(ctx context.Context, scanID int64) ([]ModelCall, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT scan_id, path, role, model, calls, retries, input_tokens, output_tokens, wall_ms
+		`SELECT scan_id, path, role, model, calls, retries, input_tokens, output_tokens, cached_input_tokens, wall_ms
 		 FROM scan_model_calls WHERE scan_id = ? ORDER BY path, role`, scanID)
 	if err != nil {
 		return nil, fmt.Errorf("scanstore: ModelCallsForScan: %w", err)
@@ -1579,13 +1604,17 @@ func (s *Store) ModelCallsForScan(ctx context.Context, scanID int64) ([]ModelCal
 	for rows.Next() {
 		var c ModelCall
 		var path, role, model sql.NullString
-		var calls, retries, in, outTok, wall sql.NullInt64
-		if err := rows.Scan(&c.ScanID, &path, &role, &model, &calls, &retries, &in, &outTok, &wall); err != nil {
+		var calls, retries, in, outTok, cached, wall sql.NullInt64
+		if err := rows.Scan(&c.ScanID, &path, &role, &model, &calls, &retries, &in, &outTok, &cached, &wall); err != nil {
 			return nil, fmt.Errorf("scanstore: ModelCallsForScan: scan row: %w", err)
 		}
 		c.Path, c.Role, c.Model = path.String, role.String, model.String
 		c.Calls = int(calls.Int64)
 		c.Retries = nullCount(retries)
+		if cached.Valid {
+			v := cached.Int64
+			c.CachedInputTokens = &v
+		}
 		c.InputTokens, c.OutputTokens, c.WallMillis = in.Int64, outTok.Int64, wall.Int64
 		out = append(out, c)
 	}

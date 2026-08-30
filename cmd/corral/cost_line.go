@@ -68,7 +68,11 @@ func modelCallsFromMeters(meters map[string]*agentbackend.UsageMeter) []advpool.
 			// put here. nil, never a stored 0, which would read as
 			// "measured: zero retries".
 			InputTokens: snap.InputTokens, OutputTokens: snap.OutputTokens,
-			Wall: snap.Wall,
+			// nil unless at least one of this seat's calls actually
+			// reported a cached-prompt count — see
+			// agentbackend.ModelUsage.CachedInputTokens.
+			CachedInputTokens: snap.CachedInputTokens,
+			Wall:              snap.Wall,
 		})
 	}
 	return out

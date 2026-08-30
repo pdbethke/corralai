@@ -120,6 +120,13 @@ func (b *responsesBackend) Chat(messages []Message, tools []any) (Message, error
 		Usage struct {
 			InputTokens  int `json:"input_tokens"`
 			OutputTokens int `json:"output_tokens"`
+			// The /responses wire spells the cached half
+			// input_tokens_details.cached_tokens (the chat-completions wire
+			// says prompt_tokens_details). A POINTER, so a response that
+			// omits it stays NULL — see Usage.CachedInputTokens.
+			InputTokensDetails *struct {
+				CachedTokens *int64 `json:"cached_tokens"`
+			} `json:"input_tokens_details"`
 		} `json:"usage"`
 	}
 
@@ -139,6 +146,9 @@ func (b *responsesBackend) Chat(messages []Message, tools []any) (Message, error
 	}
 
 	usage := Usage{InputTokens: out.Usage.InputTokens, OutputTokens: out.Usage.OutputTokens}
+	if d := out.Usage.InputTokensDetails; d != nil && d.CachedTokens != nil {
+		usage.CachedInputTokens = d.CachedTokens
+	}
 	var text strings.Builder
 	var calls []ToolCall
 	for _, item := range out.Output {

@@ -613,7 +613,8 @@ func buildScanModelCallRows(results []reposcan.FileResult) []scanstore.ModelCall
 				Path: r.Job.Path, Role: c.Role, Model: c.Model,
 				Calls: c.Calls, Retries: c.Retries,
 				InputTokens: c.InputTokens, OutputTokens: c.OutputTokens,
-				WallMillis: c.Wall.Milliseconds(),
+				CachedInputTokens: c.CachedInputTokens,
+				WallMillis:        c.Wall.Milliseconds(),
 			})
 		}
 	}

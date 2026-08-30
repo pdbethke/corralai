@@ -538,6 +538,15 @@ func (b *openaiBackend) Chat(messages []Message, tools []any) (Message, error) {
 		Usage struct {
 			PromptTokens     int `json:"prompt_tokens"`
 			CompletionTokens int `json:"completion_tokens"`
+			// PromptTokensDetails.CachedTokens is the cached half of
+			// prompt_tokens — reported by OpenAI, by Gemini's
+			// OpenAI-compatible endpoint (its implicit cache needs nothing
+			// sent to be used; it only has to be READ back) and by
+			// OpenRouter. A POINTER so a provider that does not report it
+			// stays NULL rather than claiming a measured zero.
+			PromptTokensDetails *struct {
+				CachedTokens *int64 `json:"cached_tokens"`
+			} `json:"prompt_tokens_details"`
 		} `json:"usage"`
 	}
 	hdr := map[string]string{}
@@ -550,6 +559,9 @@ func (b *openaiBackend) Chat(messages []Message, tools []any) (Message, error) {
 		return Message{}, err
 	}
 	usage := Usage{InputTokens: out.Usage.PromptTokens, OutputTokens: out.Usage.CompletionTokens}
+	if d := out.Usage.PromptTokensDetails; d != nil && d.CachedTokens != nil {
+		usage.CachedInputTokens = d.CachedTokens
+	}
 	if len(out.Choices) == 0 {
 		// No choice returned, but the call still happened and may have been
 		// billed — carry the usage rather than reporting a free call.
@@ -624,7 +636,29 @@ func (b *anthropicBackend) Chat(messages []Message, tools []any) (Message, error
 		"model": b.model, "max_tokens": 4096, "messages": msgs,
 	}
 	if sys.Len() > 0 {
-		body["system"] = sys.String()
+		// The system prompt as a CACHEABLE content block, not a bare string.
+		//
+		// Anthropic caches nothing unless a request asks it to, and the
+		// writer seat now makes one call PER SURVIVOR against one file — a
+		// fan-out whose prompts share a long, byte-identical prefix (the
+		// language's writer system prompt plus the harness-precedence
+		// override; see advpool.renderTestWriterPrefix). Marking that prefix
+		// ephemeral is what turns N calls over one file into one full-price
+		// prompt and N-1 cache reads. The saving is then RECORDED, never
+		// assumed, from the response's own cache_read_input_tokens.
+		//
+		// Applied to every Anthropic call, not only the writer's: the block
+		// is a request for reuse, the provider decides whether there is
+		// anything to reuse, and a prefix that never repeats simply reads
+		// back as no cached tokens. Gemini needs no equivalent — its implicit
+		// cache matches a repeated prefix with nothing sent — and the
+		// OpenAI-compatible wire has no per-block control to send either, so
+		// this is the one backend with a request-side change to make.
+		body["system"] = []map[string]any{{
+			"type":          "text",
+			"text":          sys.String(),
+			"cache_control": map[string]any{"type": "ephemeral"},
+		}}
 	}
 	if len(atools) > 0 {
 		body["tools"] = atools
@@ -640,6 +674,11 @@ func (b *anthropicBackend) Chat(messages []Message, tools []any) (Message, error
 		Usage struct {
 			InputTokens  int `json:"input_tokens"`
 			OutputTokens int `json:"output_tokens"`
+			// CacheReadInputTokens is the half of this prompt Anthropic
+			// served from the cache the cache_control block above asks for.
+			// A POINTER: a response that omits it has reported nothing, not
+			// a miss — see Usage.CachedInputTokens.
+			CacheReadInputTokens *int64 `json:"cache_read_input_tokens"`
 		} `json:"usage"`
 	}
 	hdr := map[string]string{"x-api-key": b.key, "anthropic-version": "2023-06-01"}
@@ -647,8 +686,9 @@ func (b *anthropicBackend) Chat(messages []Message, tools []any) (Message, error
 		return Message{}, err
 	}
 	res := Message{Role: "assistant", Usage: Usage{
-		InputTokens:  out.Usage.InputTokens,
-		OutputTokens: out.Usage.OutputTokens,
+		InputTokens:       out.Usage.InputTokens,
+		OutputTokens:      out.Usage.OutputTokens,
+		CachedInputTokens: out.Usage.CacheReadInputTokens,
 	}}
 	for _, c := range out.Content {
 		switch c.Type {

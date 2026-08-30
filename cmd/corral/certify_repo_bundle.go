@@ -222,7 +222,8 @@ func buildModelCallRows(calls []scanstore.ModelCall, scanID int64, meta bundleMe
 			Path: c.Path, Role: c.Role, Model: c.Model,
 			Calls: c.Calls, Retries: c.Retries,
 			InputTokens: c.InputTokens, OutputTokens: c.OutputTokens,
-			WallMillis: c.WallMillis,
+			CachedInputTokens: c.CachedInputTokens,
+			WallMillis:        c.WallMillis,
 		})
 	}
 	return rows

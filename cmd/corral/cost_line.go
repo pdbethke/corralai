@@ -62,9 +62,11 @@ func modelCallsFromMeters(meters map[string]*agentbackend.UsageMeter) []advpool.
 		out = append(out, advpool.ModelCall{
 			Role: role, Model: snap.Model,
 			Calls: int(snap.Calls),
-			// Retries stays 0 — see advpool.ModelCall's doc and
+			// Retries stays nil — see advpool.ModelCall's doc and
 			// agentbackend.UsageMeter's: nothing in this codebase has a
-			// retry loop to observe yet.
+			// retry loop to observe yet, so there is no measured count to
+			// put here. nil, never a stored 0, which would read as
+			// "measured: zero retries".
 			InputTokens: snap.InputTokens, OutputTokens: snap.OutputTokens,
 			Wall: snap.Wall,
 		})

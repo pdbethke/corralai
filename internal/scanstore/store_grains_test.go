@@ -16,8 +16,9 @@ import (
 )
 
 func i64(v int64) *int64 { return &v }
-func iptr(v int) *int    { return &v }
-func bptr(v bool) *bool  { return &v }
+
+func iptr(v int) *int   { return &v }
+func bptr(v bool) *bool { return &v }
 
 // TestLedgerRecordsEveryGrain is the whole of Task 2's local half in one
 // assertion: the ledger holds a scan at FIVE grains (scan, file, mutant,
@@ -121,11 +122,17 @@ func TestLedgerRecordsEveryGrain(t *testing.T) {
 		t.Errorf("scan_mutants did not round-trip.\n got: %+v\nwant: %+v", gotMutants, mutants)
 	}
 
+	// Retries is nullable: one row here carries a MEASURED count (proving the
+	// plumbing round-trips a non-nil value, should a backend ever report
+	// one), the other carries nil — the value every producer in this
+	// codebase actually sets today, since nothing has a retry loop to
+	// observe. A stored 0 would read as "measured: none happened"; nil must
+	// read back as SQL NULL, not 0.
 	calls := []scanstore.ModelCall{
 		{ScanID: id, Path: "pkg/a.go", Role: "mutant-generator", Model: "m-1",
-			Calls: 3, Retries: 1, InputTokens: 900, OutputTokens: 210, WallMillis: 4100},
+			Calls: 3, Retries: iptr(1), InputTokens: 900, OutputTokens: 210, WallMillis: 4100},
 		{ScanID: id, Path: "pkg/a.go", Role: "test-writer", Model: "w-1",
-			Calls: 4, Retries: 0, InputTokens: 300, OutputTokens: 130, WallMillis: 2200},
+			Calls: 4, Retries: nil, InputTokens: 300, OutputTokens: 130, WallMillis: 2200},
 	}
 	if err := st.RecordModelCalls(ctx, calls); err != nil {
 		t.Fatalf("RecordModelCalls: %v", err)
@@ -136,6 +143,14 @@ func TestLedgerRecordsEveryGrain(t *testing.T) {
 	}
 	if !reflect.DeepEqual(gotCalls, calls) {
 		t.Errorf("scan_model_calls did not round-trip.\n got: %+v\nwant: %+v", gotCalls, calls)
+	}
+	for _, c := range gotCalls {
+		if c.Role == "test-writer" && c.Retries != nil {
+			t.Errorf("test-writer's unmeasured retries read back as %d, want SQL NULL (nil)", *c.Retries)
+		}
+		if c.Role == "mutant-generator" && (c.Retries == nil || *c.Retries != 1) {
+			t.Errorf("mutant-generator's retries = %v, want a measured 1", c.Retries)
+		}
 	}
 
 	ts := time.Unix(1700000010, 0).UTC()

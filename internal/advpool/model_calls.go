@@ -16,16 +16,20 @@ import (
 // the same reason scanstore.ModelCall (the ledger row this mirrors into)
 // exists.
 //
-// Retries is always 0 today. agentbackend has no retry or backoff loop in
-// any of its backends — every Chat call is exactly one HTTP round trip — so
-// there is nothing this field could report short of inventing a number. It
-// stays in the type because the interface this package promises callers
-// includes it, and because a backend that DOES grow a retry loop should not
-// need a new field to report it. Until then, read it as "not measured", not
-// "zero retries occurred".
+// Retries is *int, not int, and is nil on every ModelCall this package
+// produces today. agentbackend has no retry or backoff loop in any of its
+// backends — every Chat call is exactly one HTTP round trip — so there is
+// nothing this field could report short of inventing a number. A stored 0
+// is a MEASUREMENT ("this seat retried zero times"); nil is the honest
+// value for "nothing here observes retries yet", the same NULL-not-zero rule
+// every other unmeasured column in this ledger follows. It stays a pointer
+// field, not a bool "was this measured" flag beside a bare int, because a
+// backend that DOES grow a retry loop should not need a second field to say
+// so — a non-nil value already means "measured".
 type ModelCall struct {
 	Role, Model               string
-	Calls, Retries            int
+	Calls                     int
+	Retries                   *int
 	InputTokens, OutputTokens int64
 	// Wall is this role's accumulated wall-clock time across every call this
 	// file's audit made it — a MEASUREMENT (agentbackend.UsageMeter times
@@ -42,12 +46,15 @@ type ModelCall struct {
 
 // modelCallWire is ModelCall on the wire: milliseconds, not a raw
 // time.Duration nanosecond count — the same reasoning as timingWire. A phase
-// that made no calls is omitted rather than written as an explicit zero.
+// that made no calls is omitted rather than written as an explicit zero, and
+// an unmeasured Retries is ABSENT rather than an explicit `"retries":0` —
+// the same NULL-not-zero rule the ledger column follows, carried onto the
+// wire so a cached verdict cannot round-trip nil into 0.
 type modelCallWire struct {
 	Role         string `json:"role"`
 	Model        string `json:"model"`
 	Calls        int    `json:"calls"`
-	Retries      int    `json:"retries,omitempty"`
+	Retries      *int   `json:"retries,omitempty"`
 	InputTokens  int64  `json:"input_tokens,omitempty"`
 	OutputTokens int64  `json:"output_tokens,omitempty"`
 	WallMillis   int64  `json:"wall_ms,omitempty"`

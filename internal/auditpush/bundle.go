@@ -131,14 +131,17 @@ type MutantRow struct {
 // The scan header's totals answer "what did this audit cost"; only this
 // grain answers "which seat was slow, and on which file".
 type ModelCallRow struct {
-	Repo         string
-	RunURL       string
-	ScanID       int64
-	Path         string
-	Role         string
-	Model        string
-	Calls        int
-	Retries      int
+	Repo   string
+	RunURL string
+	ScanID int64
+	Path   string
+	Role   string
+	Model  string
+	Calls  int
+	// Retries is nullable: nil means "not measured" (every producer today,
+	// since agentbackend has no retry loop to observe), never a stored 0
+	// that would read as "measured: zero retries".
+	Retries      *int
 	InputTokens  int64
 	OutputTokens int64
 	WallMillis   int64

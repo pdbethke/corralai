@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,6 +29,29 @@ func TestCostLineGolden(t *testing.T) {
 	want := "  cost: 1.2M tokens in / 48k out across 29 calls — mutant-generator 0.9M/31k (24 calls), test-writer 0.3M/17k (5 calls)"
 	if got != want {
 		t.Errorf("costLine =\n%q\nwant\n%q", got, want)
+	}
+}
+
+// TestCostLineDoesNotPrintRetries: Retries is nullable and unmeasured on
+// every ModelCall this codebase produces today. costLine's format has no
+// retries field at all — this pins that both a nil and a measured Retries
+// value produce the IDENTICAL line, so a future edit that starts printing
+// retries has to make that a deliberate, tested choice rather than a nil
+// dereference away from panicking on the common (nil) case.
+func TestCostLineDoesNotPrintRetries(t *testing.T) {
+	one := intPtr(4)
+	withNilRetries := []advpool.ModelCall{
+		{Role: advpool.RoleMutantGenerator, Model: "m-1", Calls: 3, InputTokens: 100, OutputTokens: 50, Retries: nil},
+	}
+	withMeasuredRetries := []advpool.ModelCall{
+		{Role: advpool.RoleMutantGenerator, Model: "m-1", Calls: 3, InputTokens: 100, OutputTokens: 50, Retries: one},
+	}
+	got := costLine(withNilRetries)
+	if strings.Contains(got, "retr") {
+		t.Errorf("costLine printed something about retries: %q", got)
+	}
+	if got2 := costLine(withMeasuredRetries); got2 != got {
+		t.Errorf("costLine(nil retries) = %q, costLine(measured retries) = %q, want identical — retries is not part of the format", got, got2)
 	}
 }
 

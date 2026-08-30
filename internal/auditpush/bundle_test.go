@@ -12,6 +12,7 @@ import (
 
 func f64(v float64) *float64 { return &v }
 func ms(v int64) *int64      { return &v }
+func ip(v int) *int          { return &v }
 
 // openWarehouse opens the pushed file for reading. A push closes its own
 // handle, so a reader can take DuckDB's single-writer lock afterwards.
@@ -73,7 +74,7 @@ func sampleBundle() Bundle {
 		},
 		Calls: []ModelCallRow{
 			{Repo: "o/r", RunURL: "https://ci/1", ScanID: 7, Path: "pkg/a.go",
-				Role: "mutant-generator", Model: "m-1", Calls: 3, Retries: 1,
+				Role: "mutant-generator", Model: "m-1", Calls: 3, Retries: ip(1),
 				InputTokens: 900, OutputTokens: 210, WallMillis: 4100},
 			{Repo: "o/r", RunURL: "https://ci/1", ScanID: 7, Path: "pkg/a.go",
 				Role: "test-writer", Model: "w-1", Calls: 4,
@@ -171,6 +172,37 @@ func TestPushBundleWritesFiveTablesInOneTransaction(t *testing.T) {
 		if c := countRows(t, db2, table); c != n {
 			t.Errorf("after the failed push %s has %d rows, want %d — the transaction did not roll back", table, c, n)
 		}
+	}
+}
+
+// TestModelCallRetriesIsNullNotZero pins the NULL-not-zero rule for the one
+// nullable column on the money grain: sampleBundle's test-writer row never
+// sets Retries (nil — the value every real producer sets today, since
+// agentbackend has no retry loop to observe), and its mutant-generator row
+// sets a MEASURED one. The warehouse column must tell them apart: NULL for
+// the first, 1 for the second — never a stored 0 that a later query would
+// read as "measured: zero retries".
+func TestModelCallRetriesIsNullNotZero(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "w.duckdb")
+	if _, err := PushBundle(target, sampleBundle()); err != nil {
+		t.Fatalf("PushBundle: %v", err)
+	}
+	db := openWarehouse(t, target)
+
+	var nullCount int
+	if err := db.QueryRow(`SELECT count(*) FROM corral_model_calls WHERE role = 'test-writer' AND retries IS NULL`).Scan(&nullCount); err != nil {
+		t.Fatalf("query test-writer retries: %v", err)
+	}
+	if nullCount != 1 {
+		t.Errorf("test-writer's unmeasured retries: %d row(s) read NULL, want 1", nullCount)
+	}
+
+	var measured sql.NullInt64
+	if err := db.QueryRow(`SELECT retries FROM corral_model_calls WHERE role = 'mutant-generator'`).Scan(&measured); err != nil {
+		t.Fatalf("query mutant-generator retries: %v", err)
+	}
+	if !measured.Valid || measured.Int64 != 1 {
+		t.Errorf("mutant-generator retries = %+v, want a measured 1", measured)
 	}
 }
 

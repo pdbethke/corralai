@@ -18,6 +18,12 @@ import (
 	"github.com/pdbethke/corralai/internal/scanstore"
 )
 
+// intPtr is the one helper this package's tests use for a nullable *int
+// fixture value (scanstore.ModelCall.Retries, advpool.ModelCall.Retries) —
+// so a measured (non-nil) retries count in a test literal does not need its
+// own named local everywhere it appears.
+func intPtr(v int) *int { return &v }
+
 // twoFileLedgerRows builds the ledger rows for a scan that audited one file
 // and refused another — the shape the warehouse used to lose. repoDir holds
 // the audited file so ParentSHA256 is a real hash of real bytes.
@@ -209,39 +215,64 @@ func TestBundleIsTheLedgerRowForRow(t *testing.T) {
 // reflection with REAL (nonzero, mutually distinct) values so a mapping bug
 // that dropped or swapped a field could not hide behind two zeros comparing
 // equal.
+//
+// Run twice — once with Retries nil (the value every producer in this
+// codebase actually sets, since nothing has a retry loop to observe) and
+// once with a measured non-nil value — so the mapping is proven for BOTH
+// states of the nullable column, not just the common one. A mapping that
+// coerced nil to a stored 0 (or vice versa) would pass a fixture that only
+// ever exercised one of the two.
 func TestBuildModelCallRowsIsFieldForField(t *testing.T) {
-	call := scanstore.ModelCall{
-		ScanID: 11, Path: "a.go", Role: "mutant-generator", Model: "m-1",
-		Calls: 24, Retries: 3, InputTokens: 900_000, OutputTokens: 31_000, WallMillis: 45_000,
+	retriesCases := []struct {
+		name    string
+		retries *int
+	}{
+		{"nil (unmeasured)", nil},
+		{"measured", intPtr(3)},
 	}
-	rows := buildModelCallRows([]scanstore.ModelCall{call}, 11, bundleMeta{Repo: "o/r", RunURL: "https://ci/1"})
-	if len(rows) != 1 {
-		t.Fatalf("buildModelCallRows returned %d row(s), want 1", len(rows))
-	}
-	row := rows[0]
+	for _, tc := range retriesCases {
+		t.Run(tc.name, func(t *testing.T) {
+			call := scanstore.ModelCall{
+				ScanID: 11, Path: "a.go", Role: "mutant-generator", Model: "m-1",
+				Calls: 24, Retries: tc.retries, InputTokens: 900_000, OutputTokens: 31_000, WallMillis: 45_000,
+			}
+			rows := buildModelCallRows([]scanstore.ModelCall{call}, 11, bundleMeta{Repo: "o/r", RunURL: "https://ci/1"})
+			if len(rows) != 1 {
+				t.Fatalf("buildModelCallRows returned %d row(s), want 1", len(rows))
+			}
+			row := rows[0]
 
-	lv, rv := reflect.ValueOf(call), reflect.ValueOf(row)
-	lt := lv.Type()
-	// deliberatelyUnmappedCall names every scanstore.ModelCall field with no
-	// identically-named, identically-typed auditpush.ModelCallRow field.
-	deliberatelyUnmappedCall := map[string]string{}
-	for i := 0; i < lt.NumField(); i++ {
-		name := lt.Field(i).Name
-		if _, skip := deliberatelyUnmappedCall[name]; skip {
-			continue
-		}
-		rf := rv.FieldByName(name)
-		if !rf.IsValid() {
-			t.Errorf("scanstore.ModelCall.%s has no warehouse column of the same name", name)
-			continue
-		}
-		if !reflect.DeepEqual(lv.Field(i).Interface(), rf.Interface()) {
-			t.Errorf("%s was dropped or changed on the way to the warehouse: ledger %v, row %v",
-				name, lv.Field(i).Interface(), rf.Interface())
-		}
-	}
-	if row.Repo != "o/r" || row.RunURL != "https://ci/1" {
-		t.Errorf("row = %+v, want the scan-wide Repo/RunURL from meta", row)
+			lv, rv := reflect.ValueOf(call), reflect.ValueOf(row)
+			lt := lv.Type()
+			// deliberatelyUnmappedCall names every scanstore.ModelCall field with no
+			// identically-named, identically-typed auditpush.ModelCallRow field.
+			deliberatelyUnmappedCall := map[string]string{}
+			for i := 0; i < lt.NumField(); i++ {
+				name := lt.Field(i).Name
+				if _, skip := deliberatelyUnmappedCall[name]; skip {
+					continue
+				}
+				rf := rv.FieldByName(name)
+				if !rf.IsValid() {
+					t.Errorf("scanstore.ModelCall.%s has no warehouse column of the same name", name)
+					continue
+				}
+				if !reflect.DeepEqual(lv.Field(i).Interface(), rf.Interface()) {
+					t.Errorf("%s was dropped or changed on the way to the warehouse: ledger %v, row %v",
+						name, lv.Field(i).Interface(), rf.Interface())
+				}
+			}
+			if (row.Retries == nil) != (tc.retries == nil) {
+				t.Errorf("row.Retries nil-ness = %v, want %v (nil must stay nil, a measured value must survive)",
+					row.Retries == nil, tc.retries == nil)
+			}
+			if row.Retries != nil && tc.retries != nil && *row.Retries != *tc.retries {
+				t.Errorf("row.Retries = %d, want %d", *row.Retries, *tc.retries)
+			}
+			if row.Repo != "o/r" || row.RunURL != "https://ci/1" {
+				t.Errorf("row = %+v, want the scan-wide Repo/RunURL from meta", row)
+			}
+		})
 	}
 }
 
@@ -437,7 +468,7 @@ func TestWarehouseRowsSHA256IsDeterministic(t *testing.T) {
 	meta := bundleMeta{ModelsByRole: `{"writer":"m"}`, Passed: true}
 	// Every grain, not just the files: the hash covers the whole bundle, and
 	// a determinism claim that exercises one table is not the claim.
-	calls := []scanstore.ModelCall{{Path: "a.go", Role: "test-writer", Model: "w-1", Calls: 2, Retries: 1, InputTokens: 900, OutputTokens: 210, WallMillis: 4100}}
+	calls := []scanstore.ModelCall{{Path: "a.go", Role: "test-writer", Model: "w-1", Calls: 2, Retries: intPtr(1), InputTokens: 900, OutputTokens: 210, WallMillis: 4100}}
 	events := []scanstore.Event{{Path: "a.go", Seq: 1, Kind: "phase-start", Actor: "driver"}}
 
 	first := buildBundle(scan, 11, files, mutants, calls, events, auditpush.Link{}, false, "o/r", "deadbeef", "", meta)

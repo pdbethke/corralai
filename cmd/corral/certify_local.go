@@ -1426,6 +1426,16 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 
 	verdict, err := driveLocalRun(ctx, d, q, localMissionID, chatterFor, poll, time.Sleep, stdout, rec, actorFor, swarm)
 	if err != nil {
+		// The meters are exercised INSIDE driveLocalRun — a seat can dispatch
+		// several calls before an infrastructure failure (a closed queue, a
+		// marshalling error) aborts the run partway through. That spend
+		// already happened and already cost money; losing it from the
+		// returned verdict is how a scan's totals would undercount a file
+		// that errored after spending, not before. Stamped on the zero
+		// verdict this returns — the failure state, not a fabricated success
+		// — so the caller's scan-wide total (built by summing every file's
+		// own ModelCalls) still includes it.
+		zero.ModelCalls = modelCallsFromMeters(roles.meters)
 		return zero, auditErr("%v", err)
 	}
 	// Carried onto the verdict from the SAME meters localChatterFor wrote

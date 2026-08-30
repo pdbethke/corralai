@@ -880,6 +880,19 @@ func nullCount(v sql.NullInt64) *int {
 	return &n
 }
 
+// retriesParam is the WRITE half of nullCount's read: a nil *int (the only
+// value any producer in this codebase sets today — see ModelCall.Retries'
+// doc) binds SQL NULL; a non-nil pointer binds the measured count. Kept as
+// its own function, rather than inlining `any(c.Retries)`, so the one place
+// this column's nil-ness is decided cannot silently drift from the read
+// side's nullCount.
+func retriesParam(v *int) any {
+	if v == nil {
+		return nil
+	}
+	return *v
+}
+
 func fileKillRate(f File) *float64 {
 	if f.Uncovered {
 		return nil
@@ -1395,7 +1408,14 @@ type ModelCall struct {
 	// a malformed response. They are counted separately from Calls because a
 	// seat that needs four attempts per mutant is a different (and more
 	// expensive) failure from one that needs four mutants.
-	Retries      int
+	//
+	// NULLABLE, not 0-when-unknown: nothing in agentbackend has a retry loop
+	// to observe today (checked before this column was ever written to), so
+	// every row this codebase produces has retries UNMEASURED. A stored 0
+	// is a NUMBER a later query averages and ranks on; NULL is the only
+	// honest encoding of "this ledger does not say" — same rule as
+	// nullablePositive/nullCount elsewhere in this file.
+	Retries      *int
 	InputTokens  int64
 	OutputTokens int64
 	WallMillis   int64
@@ -1519,7 +1539,7 @@ func (s *Store) RecordModelCalls(ctx context.Context, cs []ModelCall) error {
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO scan_model_calls (scan_id, path, role, model, calls, retries, input_tokens, output_tokens, wall_ms)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			c.ScanID, c.Path, c.Role, c.Model, c.Calls, c.Retries, c.InputTokens, c.OutputTokens, c.WallMillis,
+			c.ScanID, c.Path, c.Role, c.Model, c.Calls, retriesParam(c.Retries), c.InputTokens, c.OutputTokens, c.WallMillis,
 		); err != nil {
 			return fmt.Errorf("scanstore: RecordModelCalls: insert %s/%s: %w", c.Path, c.Role, err)
 		}
@@ -1547,7 +1567,8 @@ func (s *Store) ModelCallsForScan(ctx context.Context, scanID int64) ([]ModelCal
 			return nil, fmt.Errorf("scanstore: ModelCallsForScan: scan row: %w", err)
 		}
 		c.Path, c.Role, c.Model = path.String, role.String, model.String
-		c.Calls, c.Retries = int(calls.Int64), int(retries.Int64)
+		c.Calls = int(calls.Int64)
+		c.Retries = nullCount(retries)
 		c.InputTokens, c.OutputTokens, c.WallMillis = in.Int64, outTok.Int64, wall.Int64
 		out = append(out, c)
 	}

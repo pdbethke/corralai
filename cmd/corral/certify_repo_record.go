@@ -587,7 +587,20 @@ func scanModelCallTotals(results []reposcan.FileResult) []advpool.ModelCall {
 				totals[c.Role] = t
 			}
 			t.Calls += c.Calls
-			t.Retries += c.Retries
+			// Retries is nullable: sum only what was actually measured, and
+			// leave the total nil (not 0) when nothing contributing to it
+			// ever measured a retry — the same NULL-not-zero rule the
+			// column follows end to end. Today this branch never runs
+			// (nothing produces a non-nil Retries yet), but the summation
+			// must not silently coerce a future measured value to 0 via a
+			// nil pointer arithmetic panic or a wrong default.
+			if c.Retries != nil {
+				if t.Retries == nil {
+					zero := 0
+					t.Retries = &zero
+				}
+				*t.Retries += *c.Retries
+			}
 			t.InputTokens += c.InputTokens
 			t.OutputTokens += c.OutputTokens
 			t.Wall += c.Wall

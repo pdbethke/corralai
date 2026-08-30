@@ -219,8 +219,12 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 				BaselineFailed:           r.Verdict.BaselineFailed,
 				// SuiteBaselineMillis is the cost-model input: how long the
 				// dev suite's own compliant run took, in milliseconds — see
-				// scanstore.File.SuiteBaselineMillis.
-				SuiteBaselineMillis: r.Verdict.BaselineDuration.Milliseconds(),
+				// scanstore.File.SuiteBaselineMillis. Like every timing
+				// column, it says what THIS scan spent: a reused verdict
+				// carries the ORIGINAL run's baseline in its JSON, and
+				// recording that here would be another scan's measurement
+				// under this scan's id — 0 stores as NULL downstream.
+				SuiteBaselineMillis: baselineMillisUnlessReused(r),
 				// CacheHit rides through from reposcan.FileResult — this row's
 				// verdict was served from a prior scan's cache_key match, not
 				// earned by this scan. ReusedFromScanID stays nil here: the
@@ -872,6 +876,15 @@ func goalsDerivedFor(g reposcan.Goal) int {
 // spend on this file", and the answer for a reused verdict is "nothing worth
 // a clock". The run that earned the verdict still holds the real numbers on
 // its own row, reachable through reused_from_scan_id.
+// baselineMillisUnlessReused is unmeasuredOnReuse for the one timing column
+// that predates the timing work and is a plain int64 (0 = NULL downstream).
+func baselineMillisUnlessReused(r reposcan.FileResult) int64 {
+	if r.CacheHit {
+		return 0
+	}
+	return r.Verdict.BaselineDuration.Milliseconds()
+}
+
 func unmeasuredOnReuse(r reposcan.FileResult, ms *int64) *int64 {
 	if r.CacheHit {
 		return nil

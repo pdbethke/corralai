@@ -38,6 +38,7 @@ func cacheHitResults() []reposcan.FileResult {
 			Verdict: advpool.Verdict{
 				DevKillRate: 0.5, MutantsTotal: 4,
 				ModelCalls: spend(3), Timing: clock,
+				BaselineDuration:     45 * time.Second,
 				MutantDurationMedian: 20 * time.Second, MutantDurationMax: 40 * time.Second,
 			},
 		},
@@ -45,7 +46,8 @@ func cacheHitResults() []reposcan.FileResult {
 			Job: reposcan.Job{Path: "reused.go", Lang: "go"}, Gradable: true,
 			CacheHit: true, ComputedAt: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC),
 			Verdict: advpool.Verdict{
-				DevKillRate: 0.9, MutantsTotal: 4,
+				BaselineDuration: 45 * time.Second,
+				DevKillRate:      0.9, MutantsTotal: 4,
 				ModelCalls: spend(7), Timing: clock,
 				MutantDurationMedian: 20 * time.Second, MutantDurationMax: 40 * time.Second,
 			},
@@ -152,5 +154,31 @@ func TestACacheHitPrintsNoTimeLine(t *testing.T) {
 	})
 	if !strings.Contains(fresh.String(), "time:") {
 		t.Errorf("a fresh verdict lost its clock: %q", fresh.String())
+	}
+}
+
+// The baseline-suite wall clock is a timing column like any other: a row
+// whose verdict was reused must not record the ORIGINAL run's baseline as
+// this scan's. Found by the fix wave's own re-review — every other timing
+// column was gated and this one, which predates the timing work, was not.
+func TestACacheHitStoresNoBaselineMillis(t *testing.T) {
+	rows := buildScanFileRows(cacheHitResults(), nil, reposcan.CoverageMap{}, "", t.TempDir(), io.Discard)
+	fresh, reused := -1, -1
+	for i, r := range rows {
+		switch r.Path {
+		case "fresh.go":
+			fresh = i
+		case "reused.go":
+			reused = i
+		}
+	}
+	if fresh < 0 || reused < 0 {
+		t.Fatalf("rows = %+v", rows)
+	}
+	if rows[fresh].SuiteBaselineMillis != 45000 {
+		t.Errorf("fresh row baseline = %d, want 45000", rows[fresh].SuiteBaselineMillis)
+	}
+	if rows[reused].SuiteBaselineMillis != 0 {
+		t.Errorf("reused row baseline = %d ms — another scan's measurement recorded as this one's; want 0 (stored NULL)", rows[reused].SuiteBaselineMillis)
 	}
 }

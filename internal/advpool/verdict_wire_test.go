@@ -195,3 +195,26 @@ func TestVerdictBaselineAndMutantRefDurationsAreMilliseconds(t *testing.T) {
 		}
 	}
 }
+
+// A verdict_json written by a build BEFORE the millisecond wire form carried
+// the four durations as raw nanoseconds under Go field names. Loading one
+// must not error, and the durations are simply absent — an old cached
+// verdict has no baseline duration, which is the honest reading.
+func TestOldNanosecondVerdictJSONLoadsWithAbsentDurations(t *testing.T) {
+	old := []byte(`{"DevKillRate":0.5,"BaselineDuration":45000000000,"MutantDurationMedian":20000000000,"MutantDurationMax":40000000000,"DevKilledMutants":[{"ID":"s0/m1","Duration":1234000000}]}`)
+	var v Verdict
+	if err := json.Unmarshal(old, &v); err != nil {
+		t.Fatalf("an old cached verdict must still load: %v", err)
+	}
+	if v.DevKillRate != 0.5 {
+		t.Fatalf("payload lost: %+v", v)
+	}
+	if v.BaselineDuration != 0 || v.MutantDurationMedian != 0 || v.MutantDurationMax != 0 {
+		t.Errorf("old ns keys must read as ABSENT, not reinterpreted: %v %v %v", v.BaselineDuration, v.MutantDurationMedian, v.MutantDurationMax)
+	}
+	for _, m := range v.DevKilledMutants {
+		if m.Duration != 0 {
+			t.Errorf("MutantRef.Duration from an old ns key must be absent, got %v", m.Duration)
+		}
+	}
+}

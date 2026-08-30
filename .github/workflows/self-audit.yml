@@ -152,7 +152,17 @@ jobs:
           # still be Claude ones pointed at Google's endpoint.
           gemini-key: ${{ secrets.GEMINI_API_KEY }}
           derive-model: gemini-3.6-flash
-          writer-model: gemini-3.6-flash
+          # The writer seat is the one place flash has been measured to fall
+          # short on THIS repo: the first full self-audit (run 33226112930)
+          # found 11 survivors in cmd/corral/certify_repo.go and gemini-3.6-flash
+          # could not produce a compiling Go test in three attempts
+          # ("encoding/json" imported and not used) — [WRITER FAILED], 0
+          # proven. The same model proved 17 Python gaps on requests the next
+          # day. The self-audit is Go, so its writer is gemini-3.6-pro: same
+          # key, a few more cents per run, and the seat that decides whether a
+          # survivor becomes a PROVEN gap gets the model that can write the
+          # language. Generator and deriver stay on flash — measured fine.
+          writer-model: gemini-3.6-pro
           mutant-model: gemini-3.6-flash
           # Off because that is what the five replicates actually ran, not
           # because it has to be. CheckDecorrelation compares MODEL NAMES, not

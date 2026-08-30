@@ -291,17 +291,26 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 				// millisOrNil, not a bare Milliseconds(): a phase that did
 				// not run must read back as unknown, and a stored 0 would be
 				// averaged into the cost model as a phase that is free.
-				SelectionMillis:    millisOrNil(r.Verdict.Timing.Selection),
-				GenerationMillis:   millisOrNil(r.Verdict.Timing.Generation),
-				PoolMillis:         millisOrNil(r.Verdict.Timing.Pool),
-				DevPassMillis:      millisOrNil(r.Verdict.Timing.DevPass),
-				AuthoredPassMillis: millisOrNil(r.Verdict.Timing.AuthoredPass),
-				CriticMillis:       millisOrNil(r.Verdict.Timing.Critic),
-				TotalMillis:        millisOrNil(r.Verdict.Timing.Total),
+				//
+				// ALL NULL ON A CACHE HIT (unmeasuredOnReuse). A reused
+				// verdict's Timing round-trips through verdict_json and comes
+				// back fully populated with the minutes the run that EARNED
+				// it spent; storing them again on this scan's row would tell
+				// a cost query that a cache hit costs as much as the audit it
+				// replaced. The row still says the verdict was reused
+				// (CacheHit, ReusedFromScanID), and the scan it was reused
+				// FROM still holds the real clock.
+				SelectionMillis:    unmeasuredOnReuse(r, millisOrNil(r.Verdict.Timing.Selection)),
+				GenerationMillis:   unmeasuredOnReuse(r, millisOrNil(r.Verdict.Timing.Generation)),
+				PoolMillis:         unmeasuredOnReuse(r, millisOrNil(r.Verdict.Timing.Pool)),
+				DevPassMillis:      unmeasuredOnReuse(r, millisOrNil(r.Verdict.Timing.DevPass)),
+				AuthoredPassMillis: unmeasuredOnReuse(r, millisOrNil(r.Verdict.Timing.AuthoredPass)),
+				CriticMillis:       unmeasuredOnReuse(r, millisOrNil(r.Verdict.Timing.Critic)),
+				TotalMillis:        unmeasuredOnReuse(r, millisOrNil(r.Verdict.Timing.Total)),
 				// And the shape of the dev pass at the file grain: one slow
 				// mutant or forty ordinary ones.
-				MutantMillisMedian: millisOrNil(r.Verdict.MutantDurationMedian),
-				MutantMillisMax:    millisOrNil(r.Verdict.MutantDurationMax),
+				MutantMillisMedian: unmeasuredOnReuse(r, millisOrNil(r.Verdict.MutantDurationMedian)),
+				MutantMillisMax:    unmeasuredOnReuse(r, millisOrNil(r.Verdict.MutantDurationMax)),
 				// The primary/challenger agreement — NULL (all three
 				// pointers nil) unless a comparable pair was actually
 				// computed. See advpool.Verdict.ChallengerAgreement's doc
@@ -581,9 +590,20 @@ func buildScanMutantRows(scanID int64, results []reposcan.FileResult) []scanstor
 // test-writer exhausted its retries, can still have dispatched a
 // mutant-generator or test-writer seat before the run gave up on it, and that
 // spend is real whether or not the file ended up graded.
+//
+// A CACHE HIT IS EXCLUDED, and that is the one exclusion here. A reused
+// verdict's ModelCalls round-trip through verdict_json and ledgerCache.Get
+// restores them verbatim, so the slice is fully populated with the tokens the
+// run that EARNED the verdict already recorded under its own scan id. Writing
+// them again would bill the same calls twice, and a warehouse summing
+// scan_model_calls across scans would read a repo audited nightly from cache
+// as costing full price every night.
 func buildScanModelCallRows(results []reposcan.FileResult) []scanstore.ModelCall {
 	var rows []scanstore.ModelCall
 	for _, r := range dedupeResultsByPath(results) {
+		if r.CacheHit {
+			continue
+		}
 		for _, c := range r.Verdict.ModelCalls {
 			rows = append(rows, scanstore.ModelCall{
 				Path: r.Job.Path, Role: c.Role, Model: c.Model,
@@ -601,9 +621,17 @@ func buildScanModelCallRows(results []reposcan.FileResult) []scanstore.ModelCall
 // the shape costLine takes, for the end-of-scan stdout line. A role's model
 // is assumed constant across the scan (the roster is resolved once, before
 // the fan-out); the first non-empty Model seen for a role is kept.
+//
+// Excludes a cache hit for the same reason buildScanModelCallRows does — see
+// its doc. The scan header's token/call totals and the end-of-scan `cost:`
+// line are both built from here, so a scan that reused every verdict prints
+// no cost line at all, which is the truth: it bought nothing.
 func scanModelCallTotals(results []reposcan.FileResult) []advpool.ModelCall {
 	totals := make(map[string]*advpool.ModelCall, len(rosterRoleOrder))
 	for _, r := range dedupeResultsByPath(results) {
+		if r.CacheHit {
+			continue
+		}
 		for _, c := range r.Verdict.ModelCalls {
 			t, ok := totals[c.Role]
 			if !ok {
@@ -827,4 +855,26 @@ func goalsDerivedFor(g reposcan.Goal) int {
 		return 1
 	}
 	return 0
+}
+
+// unmeasuredOnReuse returns ms for a file this scan actually audited, and nil
+// — SQL NULL — for one whose verdict was REUSED from the ledger cache.
+//
+// It exists because a cached verdict is indistinguishable from a fresh one by
+// its contents: Timing and the mutant-duration summaries ride through
+// verdict_json and ledgerCache.Get restores them exactly. So the only thing
+// that can tell a reader "this scan did not spend these minutes" is the
+// FileResult's own CacheHit flag, and every timing column on the row goes
+// through here rather than each one remembering the rule.
+//
+// NULL is the same value a phase that never ran gets, and that is correct at
+// this grain: the question the column answers is "how long did THIS scan
+// spend on this file", and the answer for a reused verdict is "nothing worth
+// a clock". The run that earned the verdict still holds the real numbers on
+// its own row, reachable through reused_from_scan_id.
+func unmeasuredOnReuse(r reposcan.FileResult, ms *int64) *int64 {
+	if r.CacheHit {
+		return nil
+	}
+	return ms
 }

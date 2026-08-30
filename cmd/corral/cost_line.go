@@ -82,8 +82,16 @@ func modelCallsFromMeters(meters map[string]*agentbackend.UsageMeter) []advpool.
 //
 // TOKENS, NOT DOLLARS — see agentbackend.Usage's doc for why. Returns "" when
 // calls carries no calls at all (every role's Calls is 0, or the slice is
-// empty): a scan that reused every verdict from the cache spent nothing, and
-// the caller must print no line rather than a cost line for zero calls.
+// empty), and the caller must print no line rather than a cost line for zero
+// calls.
+//
+// A scan that reused every verdict from the cache reaches that empty case,
+// but NOT because a cached verdict carries no ModelCalls — it carries the
+// full slice the run that earned it recorded, restored verbatim from
+// verdict_json. It reaches it because scanModelCallTotals drops a cache hit
+// before summing. This function is a formatter and enforces nothing about
+// reuse; the exclusion lives at the one place both the line and
+// scan_model_calls are built from (see buildScanModelCallRows).
 func costLine(calls []advpool.ModelCall) string {
 	var totalIn, totalOut int64
 	var totalCalls int

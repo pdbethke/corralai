@@ -146,6 +146,14 @@ type WeakFile struct {
 	// stores. Every phase that did not run is zero, and every reader renders
 	// that as "—" rather than as a phase that cost nothing.
 	Timing advpool.Timing
+	// CacheHit mirrors FileResult.CacheHit: this file's verdict was REUSED,
+	// not earned by this run. It rides onto the report because Timing and
+	// ModelCalls round-trip through verdict_json and come back off a cache
+	// hit fully populated — with ANOTHER run's minutes and tokens. Every
+	// reader that reports what this scan spent (the per-file `time:` line,
+	// the scan totals, the `cost:` line, the ledger's timing columns and
+	// scan_model_calls) must exclude a row carrying this flag.
+	CacheHit bool
 	// ModelCalls mirrors advpool.Verdict.ModelCalls: what this file's audit
 	// cost, broken out by role. Carried onto the report for the same reason
 	// Timing is — so the ledger mapping and the cost line are built from the
@@ -415,7 +423,10 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 			Trees:           r.Verdict.Concurrency.Trees,
 			ConcurrencyNote: r.Verdict.Concurrency.Note,
 			SharedDirs:      r.Verdict.Concurrency.Shared,
-			// And where the minutes went — see WeakFile.Timing.
+			// And where the minutes went — see WeakFile.Timing. CacheHit
+			// rides beside them because on a reused verdict they are not
+			// this run's minutes; see WeakFile.CacheHit.
+			CacheHit:           r.CacheHit,
 			Timing:             r.Verdict.Timing,
 			ModelCalls:         r.Verdict.ModelCalls,
 			MutantsGraded:      r.Verdict.MutantsTotal,

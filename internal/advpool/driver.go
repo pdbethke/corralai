@@ -566,8 +566,16 @@ type Verdict struct {
 	// clock measured while N-1 siblings ran beside it, so median x graded
 	// routinely EXCEEDS the dev pass it happened inside. Read them as the
 	// per-mutant cost distribution, never as a budget that must sum.
-	MutantDurationMedian time.Duration
-	MutantDurationMax    time.Duration
+	//
+	// `json:"-"` on both, and NOT because they are omitted: Verdict's own
+	// MarshalJSON/UnmarshalJSON write them as mutant_duration_median_ms /
+	// _max_ms (see verdict_wire.go). Left to encoding/json's default they
+	// went out as raw NANOSECONDS under their Go names — a number no reader
+	// of verdict_json outside Go could interpret, sitting beside a Timing
+	// that spells its milliseconds out for exactly that reason. The tag is
+	// what keeps the default rendering from appearing alongside the real one.
+	MutantDurationMedian time.Duration `json:"-"`
+	MutantDurationMax    time.Duration `json:"-"`
 	// ChallengerAgreement is the primary writer's agreement with the
 	// challenger writer over the SAME survivor set — Jaccard-over-survivors
 	// and Cohen's kappa, from internal/modelcorr. nil whenever no comparable

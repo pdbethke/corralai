@@ -2565,7 +2565,14 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 	// Silent when the run measured no phase at all — a verdict served from a
 	// cache row written before any of this existed. Seven em dashes would be
 	// noise, and worse, would look like a measurement of nothing.
-	if f.Timing.Measured() {
+	//
+	// And silent for a REUSED verdict, whatever it carries. A cached verdict's
+	// Timing round-trips through verdict_json intact, so the line would render
+	// a full, plausible clock for a file this run spent no time on at all —
+	// the reader has no way to tell it apart from minutes actually spent, and
+	// the "N verdict(s) reused from cache" disclosure above is the honest
+	// statement about this file's cost.
+	if f.Timing.Measured() && !f.CacheHit {
 		fmt.Fprintln(w, timingLine(f.Timing, f.MutantsGraded,
 			time.Duration(f.MutantMillisMedian)*time.Millisecond,
 			time.Duration(f.MutantMillisMax)*time.Millisecond))

@@ -209,3 +209,54 @@ func TestPoolTreeEnvIsPerTree(t *testing.T) {
 		t.Errorf("the run must see ITS tree in the env: ok=%v err=%v", ok, err)
 	}
 }
+
+// TestProbeDowngradesASuiteThatIsNotConcurrencySafe: a suite that takes an
+// exclusive lock passes alone and fails when two trees run it at once — the
+// fixed-port shape, without a port.
+func TestProbeDowngradesASuiteThatIsNotConcurrencySafe(t *testing.T) {
+	if _, err := exec.LookPath("flock"); err != nil {
+		t.Skip("flock not on PATH")
+	}
+	root := newGitRepo(t, map[string]string{"a.py": "x=0\n"}, nil)
+	lock := filepath.Join(t.TempDir(), "lock")
+	cmd := []string{"sh", "-c", fmt.Sprintf(`exec 9>%s; flock -n 9 || exit 1; sleep 0.3; [ "$(cat a.py)" != "!!!corral canary!!!" ]`, lock)}
+	p, _, _ := NewWorkspacePool(context.Background(), root, 3, time.Minute)
+	defer p.Close()
+	q, d := p.Probe(context.Background(), nil, "a.py", "x=0\n", cmd)
+	defer q.Close()
+	if d.Trees != 1 || !strings.HasPrefix(d.Note, "suite is not concurrency-safe: baseline failed under 3") {
+		t.Errorf("got %+v", d)
+	}
+	if q.Trees() != 1 || q.treeRoots()[0] != root {
+		t.Errorf("downgrade must score on the checkout itself")
+	}
+}
+
+// TestProbePassesAConcurrencySafeSuite: the healthy path returns the pool the
+// caller already has, untouched.
+func TestProbePassesAConcurrencySafeSuite(t *testing.T) {
+	root := newGitRepo(t, map[string]string{"a.py": "x=0\n"}, nil)
+	cmd := []string{"sh", "-c", `[ "$(cat a.py)" = "x=0" ]`} // fails on the canary, passes on compliant
+	p, _, _ := NewWorkspacePool(context.Background(), root, 3, time.Minute)
+	defer p.Close()
+	q, d := p.Probe(context.Background(), nil, "a.py", "x=0\n", cmd)
+	if d.Trees != 3 || d.Note != "" || q != p {
+		t.Errorf("got %+v", d)
+	}
+}
+
+// TestProbeCatchesATreeThatImportsTheOriginal: a tree that reads the ORIGINAL
+// checkout (an editable install's .pth) sees compliant code even when its own
+// file is the canary — the probe must catch that, because otherwise every
+// mutant would survive.
+func TestProbeCatchesATreeThatImportsTheOriginal(t *testing.T) {
+	root := newGitRepo(t, map[string]string{"a.py": "x=0\n"}, nil)
+	cmd := []string{"sh", "-c", fmt.Sprintf(`[ "$(cat %s/a.py)" = "x=0" ]`, root)} // reads root, not $PWD
+	p, _, _ := NewWorkspacePool(context.Background(), root, 2, time.Minute)
+	defer p.Close()
+	q, d := p.Probe(context.Background(), nil, "a.py", "x=0\n", cmd)
+	defer q.Close()
+	if d.Trees != 1 || !strings.Contains(d.Note, "imports the original") {
+		t.Errorf("got %+v", d)
+	}
+}

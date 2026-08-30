@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -82,6 +83,12 @@ type WorkspacePool struct {
 	root    string
 	timeout time.Duration
 	opts    []WorkspaceOption
+
+	// shared is the Disclosure.Shared this pool was built with, retained so
+	// Probe can restate it on the disclosure it returns: the dep dirs stay
+	// shared for as long as these trees do, and a caller that records only
+	// the probe's answer must not lose that half of the disclosure.
+	shared []string
 }
 
 // The pool must be substitutable for a WorkspaceRunner everywhere one is used
@@ -175,7 +182,9 @@ func NewWorkspacePool(ctx context.Context, root string, n int, timeout time.Dura
 		}
 		linked = shared // identical for every tree: same root, same probe
 	}
-	return newPool(root, temps, temps, timeout, treeEnv, plugEnv, opts), Disclosure{Trees: n, Shared: linked}, nil
+	p := newPool(root, temps, temps, timeout, treeEnv, plugEnv, opts)
+	p.shared = linked
+	return p, Disclosure{Trees: n, Shared: linked}, nil
 }
 
 // newPool wires one runner per tree. temps is the subset of trees Close may
@@ -433,4 +442,120 @@ func (p *WorkspacePool) Close() {
 		_ = os.RemoveAll(d)
 	}
 	p.temps = nil
+}
+
+// probeOutputCap bounds how much of a failing tree's output the note carries.
+// The note travels into the verdict and the report, where it has to stay
+// readable next to the numbers; a suite that fails under concurrency usually
+// says so in its first few lines, and a full pytest dump would bury it.
+const probeOutputCap = 2 << 10 // 2 KiB
+
+// Probe runs the unmutated baseline AND the canary in every tree at once.
+// It returns the pool to score with: this one, or a 1-tree pool on the
+// checkout with the reason — never an error for a suite that merely is not
+// concurrency-safe. A pool of one returns itself untouched.
+//
+// The two questions it asks are the two ways N private trees can be wrong:
+//
+//   - The baseline must PASS in every tree simultaneously. It fails when the
+//     suite is not concurrency-safe (a fixed port, a shared lock, one
+//     scratch database) — and equally when the copies are missing something
+//     the suite needs that git could not report: a .git directory the suite
+//     shells out to, a tracked-empty directory it writes into. Either way the
+//     baseline output says what broke, and THAT output is the disclosure.
+//   - The canary must FAIL in every tree. A canary that passes means the tree
+//     ran against code that is not the tree's — the editable-install trap,
+//     where a .pth or an installed package points back at the ORIGINAL
+//     checkout. Left alone it survives every mutant and reports a kill rate
+//     of zero, which is worse than not running.
+//
+// Each tree is exercised on its OWN runner rather than through the borrow
+// queue, because running all N at once is the entire measurement — borrowing
+// would happily serve the same tree twice. That makes the pool's exclusive
+// idleness a PRECONDITION: no other run may be in flight against p while
+// Probe is running.
+func (p *WorkspacePool) Probe(ctx context.Context, base map[string]string, codePath, compliantCode string, testCmd []string) (*WorkspacePool, Disclosure) {
+	n := p.Trees()
+	if n <= 1 {
+		return p, Disclosure{Trees: 1}
+	}
+
+	downgrade := func(note string) (*WorkspacePool, Disclosure) {
+		// The copies are dead the moment the answer is "one tree": nothing
+		// will run in them again, and they are the operator's disk.
+		one, _, err := NewWorkspacePool(ctx, p.root, 1, p.timeout, p.opts...)
+		if err != nil || one == nil {
+			// A pool of one has nothing to construct and nothing to fail at,
+			// so this is unreachable in practice; if it ever is reached, the
+			// honest answer is to keep scoring on the pool we have and say
+			// only what we know.
+			return p, Disclosure{Trees: n, Note: note}
+		}
+		p.Close()
+		// Shared is deliberately nil: a pool of one runs on the checkout
+		// itself and links nothing, so the copies' shared dep dirs are no
+		// longer true of the pool being returned.
+		return one, Disclosure{Trees: 1, Note: note}
+	}
+
+	baseOK, baseOut := p.runEverywhere(ctx, base, codePath, compliantCode, testCmd)
+	for i, ok := range baseOK {
+		if !ok {
+			return downgrade(fmt.Sprintf("suite is not concurrency-safe: baseline failed under %d — %s", n, capOutput(baseOut[i])))
+		}
+	}
+	canaryOK, _ := p.runEverywhere(ctx, base, codePath, CanaryCode, testCmd)
+	for _, ok := range canaryOK {
+		if ok {
+			return downgrade(fmt.Sprintf("a tree imports the original checkout (canary passed under %d)", n))
+		}
+	}
+	return p, Disclosure{Trees: n, Shared: p.shared}
+}
+
+// runEverywhere runs one variant of codePath in EVERY tree simultaneously,
+// one goroutine per tree pinned to that tree's own runner, and returns the
+// pass flag and output per tree in tree order. An error from the runner is a
+// failure with the error as its output: the probe's whole job is to answer
+// "did this work in all N", and a tree that could not even run did not.
+func (p *WorkspacePool) runEverywhere(ctx context.Context, base map[string]string, codePath, code string, testCmd []string) ([]bool, []string) {
+	oks := make([]bool, len(p.runners))
+	outs := make([]string, len(p.runners))
+	files := make(map[string]string, len(base)+1)
+	for k, v := range base {
+		files[k] = v
+	}
+	files[codePath] = code
+
+	var wg sync.WaitGroup
+	for i, r := range p.runners {
+		wg.Add(1)
+		go func(i int, r *WorkspaceRunner) {
+			defer wg.Done()
+			// Each tree gets its own copy of the map: applyFiles must never
+			// see one shared map mutated from N goroutines.
+			mine := make(map[string]string, len(files))
+			for k, v := range files {
+				mine[k] = v
+			}
+			ok, out, err := r.RunTestVerbose(ctx, mine, testCmd)
+			if err != nil {
+				oks[i], outs[i] = false, err.Error()
+				return
+			}
+			oks[i], outs[i] = ok, out
+		}(i, r)
+	}
+	wg.Wait()
+	return oks, outs
+}
+
+// capOutput trims a tree's output to what a note can carry, collapsing the
+// whitespace a shell leaves around it so the reason reads as one sentence.
+func capOutput(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) > probeOutputCap {
+		s = s[:probeOutputCap] + "… (truncated)"
+	}
+	return s
 }

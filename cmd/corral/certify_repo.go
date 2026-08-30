@@ -3818,26 +3818,24 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 // that names them, so hashing them WITH that field would make the statement's
 // hash depend on itself.
 func warehouseRowsSHA256(b auditpush.Bundle) (string, error) {
+	// The hash must cover what the WAREHOUSE receives, not what this process
+	// happens to hold. Without --push-source the writer stores SQL NULL for
+	// the source columns, so hashing them here would sign a number no
+	// verifier could ever reproduce from the rows they can actually see — a
+	// cross-check that never checks out is worse than none.
+	//
+	// THE SAME FUNCTION THE WRITER CALLS (auditpush.PushBundle runs it too).
+	// This rule used to be spelled out twice, and two copies of a custody set
+	// is one copy that gets a field added to it and one that does not.
+	auditpush.BlankUnpushedSource(&b)
 	b.Scan.StatementSHA256 = ""
 	b.Files = append([]auditpush.Row(nil), b.Files...)
 	for i := range b.Files {
 		b.Files[i].StatementSHA256 = ""
-		// The hash must cover what the WAREHOUSE receives, not what this
-		// process happens to hold. Without --push-source the writer stores
-		// SQL NULL for these, so hashing them here would sign a number no
-		// verifier could ever reproduce from the rows they can actually see
-		// — a cross-check that never checks out is worse than none.
-		if !b.SourcePushed {
-			b.Files[i].AuthoredTest = ""
-			b.Files[i].VerdictJSON = ""
-		}
 	}
 	b.Mutants = append([]auditpush.MutantRow(nil), b.Mutants...)
 	for i := range b.Mutants {
 		b.Mutants[i].StatementSHA256 = ""
-		if !b.SourcePushed {
-			b.Mutants[i].Code = ""
-		}
 	}
 	b.Calls = append([]auditpush.ModelCallRow(nil), b.Calls...)
 	for i := range b.Calls {

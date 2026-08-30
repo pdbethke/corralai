@@ -136,13 +136,91 @@ func (s *scanEventSink) drain() []scanstore.Event {
 	return out
 }
 
+// sourceBearingDetailKeys names every event-detail key whose VALUE is source
+// — the audited file's bytes, a suite's bytes, a mutant's bytes, or a
+// runner's raw output. The sink drops each one before the detail map is ever
+// encoded, so neither the local ledger's scan_events nor the warehouse's
+// corral_events can hold source bytes, with or without --push-source.
+//
+// THE BUG THIS CLOSES. advpool's pool_subject beat carries the whole audited
+// file (`code`) and the whole dev suite (`dev_test_code`); the sink JSON-
+// encodes a beat's entire detail map into one column and the warehouse
+// writer inserts that column with no custody guard on it at all. Every
+// audited file's source therefore reached the operator's warehouse on every
+// push. Redacting HERE — at the one sink both stores are fed from — is what
+// makes the rule hold for both at once, rather than being re-litigated at
+// each writer.
+//
+// `code` and `dev_test_code` are the only two any emit in internal/advpool
+// produces today (audited beat by beat: pool_subject, phase_pool,
+// phase_generation, pool_shard, pool_dev_adequacy, phase_authored_pass,
+// phase_critic, pool_verdict, plus the scan-scoped phase_selection). The
+// rest are named in advance because this is a leak that is invisible until
+// someone reads a warehouse: a future emit that reaches for the obvious name
+// is redacted on arrival instead of shipping source for a release.
+var sourceBearingDetailKeys = map[string]bool{
+	"code":          true,
+	"dev_test_code": true,
+	"authored_test": true,
+	"test_code":     true,
+	"pool_test":     true,
+	"mutant_code":   true,
+	"output":        true,
+	"stdout":        true,
+	"stderr":        true,
+}
+
+// redactSourceDetail returns detail with every source-bearing key replaced by
+// a `<key>_bytes` LENGTH, or detail itself when it carries none. The length,
+// not a bare deletion: "the file had 4,102 bytes we did not ship" and "there
+// was no file" are different answers, and a tape that cannot tell them apart
+// has lost a measurement to protect a custody rule it could have kept
+// anyway.
+//
+// Copy-on-write: the caller's map belongs to the driver that built it (and,
+// on the local-run path, to a second sink that renders the same beat), so it
+// is never mutated in place.
+func redactSourceDetail(detail map[string]any) map[string]any {
+	needs := false
+	for k := range detail {
+		if sourceBearingDetailKeys[k] {
+			needs = true
+			break
+		}
+	}
+	if !needs {
+		return detail
+	}
+	out := make(map[string]any, len(detail))
+	for k, v := range detail {
+		if !sourceBearingDetailKeys[k] {
+			out[k] = v
+			continue
+		}
+		switch b := v.(type) {
+		case string:
+			out[k+"_bytes"] = len(b)
+		case []byte:
+			out[k+"_bytes"] = len(b)
+		default:
+			// Not a shape whose length means anything. Say that it was
+			// withheld rather than guess a size — or, worse, keep it.
+			out[k+"_redacted"] = true
+		}
+	}
+	return out
+}
+
 // buildScanEvent turns one driver beat into a scanstore.Event: detail
-// marshalled to JSON text (defaulting to "{}", never empty/NULL), and
-// DurationMillis lifted from a positive "duration_ms" detail key.
+// REDACTED of source (see redactSourceDetail — the custody rule, applied at
+// the one sink both the ledger and the warehouse are fed from), marshalled
+// to JSON text (defaulting to "{}", never empty/NULL), and DurationMillis
+// lifted from a positive "duration_ms" detail key.
 func buildScanEvent(path string, seq int64, ts time.Time, kind, subject string, detail map[string]any) scanstore.Event {
 	if detail == nil {
 		detail = map[string]any{}
 	}
+	detail = redactSourceDetail(detail)
 	b, err := json.Marshal(detail)
 	if err != nil {
 		b = []byte("{}")

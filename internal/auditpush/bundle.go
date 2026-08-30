@@ -539,6 +539,10 @@ func PushBundle(target string, b Bundle) (Counts, error) {
 		return Counts{}, fmt.Errorf("auditpush: no target")
 	}
 	b = stampLink(b)
+	// The custody switch, enforced by the WRITER and in ONE place — see
+	// BlankUnpushedSource. A caller that forgets to blank a field cannot
+	// leak it, and the hasher blanks exactly the same set.
+	BlankUnpushedSource(&b)
 	if err := requireStatements(b); err != nil {
 		return Counts{}, err
 	}
@@ -606,6 +610,42 @@ func stampLink(b Bundle) Bundle {
 	b.Files, b.Mutants, b.Calls, b.Events = files, mutants, calls, events
 	b.Scan.StatementSHA256 = sha
 	return b
+}
+
+// BlankUnpushedSource withholds every source-bearing field on a bundle whose
+// run did not opt in with --push-source. It is THE definition of the custody
+// set — the one list of "these fields are source" — and both the warehouse
+// writer (PushBundle) and the statement hasher (certify --repo's
+// warehouseRowsSHA256) call it.
+//
+// One function because the rule used to exist twice, and two copies of a
+// custody rule is one copy that gets a field added to it and one that does
+// not. The hasher's divergence is the silent kind: it signs
+// warehouseRowsSha256 over bytes the warehouse never received, so the
+// cross-check a third party is invited to run can never check out.
+//
+// It replaces the bundle's slices with copies rather than blanking in place:
+// the caller (certify --repo) hands the SAME bundle to the writer and to the
+// hasher and goes on using its rows afterwards, and a withholding rule that
+// destroys the caller's data is a different rule.
+//
+// SourcePushed true is a no-op: the operator asked for the bytes.
+func BlankUnpushedSource(b *Bundle) {
+	if b == nil || b.SourcePushed {
+		return
+	}
+	files := append([]Row(nil), b.Files...)
+	for i := range files {
+		files[i].AuthoredTest = ""
+		files[i].VerdictJSON = ""
+	}
+	b.Files = files
+
+	mutants := append([]MutantRow(nil), b.Mutants...)
+	for i := range mutants {
+		mutants[i].Code = ""
+	}
+	b.Mutants = mutants
 }
 
 // requireStatements enforces Link.Require: refuse the whole push, naming the
@@ -750,20 +790,17 @@ func pushBundleOnce(target string, b Bundle) (Counts, error) {
 	}
 
 	for _, r := range b.Files {
-		if err := insertFileRow(tx, now, r, b.SourcePushed); err != nil {
+		if err := insertFileRow(tx, now, r); err != nil {
 			return Counts{}, err
 		}
 		c.Files++
 	}
 
 	for _, m := range b.Mutants {
-		// Code IS the audited source: withheld by the WRITER unless the run
-		// opted in, so a caller that forgets to blank the field cannot leak
-		// it.
-		var code any
-		if b.SourcePushed && m.Code != "" {
-			code = m.Code
-		}
+		// Code IS the audited source. It is already withheld — PushBundle
+		// ran BlankUnpushedSource before this transaction opened — so all
+		// that is left here is the ordinary empty-means-NULL rule.
+		code := nullIfEmpty(m.Code)
 		if _, err := tx.Exec(`INSERT INTO corral_mutants (
 		    ts, repo, run_url, scan_id, path, mutant_id, parent_sha256, outcome,
 		    invalid_reason, proven, proven_by_authored_alone, tests_run,
@@ -818,7 +855,7 @@ func pushBundleOnce(target string, b Bundle) (Counts, error) {
 // insertFileRow writes one corral_audits row. Kept as its own function only
 // because seventy columns in the middle of the transaction loop hid the four
 // rules that actually matter — the NULL-not-zero conversions below.
-func insertFileRow(tx *sql.Tx, now time.Time, r Row, sourcePushed bool) error {
+func insertFileRow(tx *sql.Tx, now time.Time, r Row) error {
 	var minKill any
 	if r.MinKillRate != nil {
 		minKill = *r.MinKillRate
@@ -842,12 +879,12 @@ func insertFileRow(tx *sql.Tx, now time.Time, r Row, sourcePushed bool) error {
 	if s := r.TestsPerMutant; r.PerMutant && s != nil {
 		pmMin, pmMedian, pmMax = s.Min, s.Median, s.Max
 	}
-	// The source columns: withheld by the writer, not by the caller.
-	var authoredTest, verdictJSON any
-	if sourcePushed {
-		authoredTest = nullIfEmpty(r.AuthoredTest)
-		verdictJSON = nullIfEmpty(r.VerdictJSON)
-	}
+	// The source columns. Already withheld — PushBundle ran
+	// BlankUnpushedSource before this transaction opened (the ONE custody
+	// rule, shared with the statement hasher) — so all that is left here is
+	// the ordinary empty-means-NULL rule.
+	authoredTest := nullIfEmpty(r.AuthoredTest)
+	verdictJSON := nullIfEmpty(r.VerdictJSON)
 	_, err := tx.Exec(`INSERT INTO corral_audits (
 	    ts, repo, commit_sha, path, lang,
 	    kill_rate, survivors, proven_missed,

@@ -77,6 +77,16 @@ func (eventsFakeSigner) SignVerdict(ctx context.Context, v advpool.Verdict) (int
 	return 1, "deadhead", nil
 }
 
+// eventsRunCode / eventsRunDevTestCode are the audited file's bytes and its
+// dev suite's bytes for every run this file drives. They carry a SENTINEL
+// each so a custody test can assert, by substring, that the audited source
+// reached neither the local ledger's scan_events nor the warehouse's
+// corral_events — see TestEventsNeverCarrySourceBytes.
+const (
+	eventsRunCode        = "package target\n// SENTINEL-AUDITED-SOURCE-8f21\nfunc F() {}"
+	eventsRunDevTestCode = "package target\n// SENTINEL-DEV-TEST-SOURCE-3c40\nfunc TestF(t *testing.T) {}"
+)
+
 // driveEventsRun builds a Driver over eventsFakeScorer/eventsFakeValidator,
 // attaches sink.forFile(path) as its EventSink, and drives one file's run
 // from StartRun to a signed verdict — mirroring completeFullRun/
@@ -109,8 +119,8 @@ func driveEventsRun(t *testing.T, sink *scanEventSink, path string, clk *eventsF
 
 	rs := advpool.RunSpec{
 		Repo: "example/repo", Commit: "deadbeef", Goal: "passwords >= 12 chars",
-		CodePath: path, Code: "package target\nfunc F() {}",
-		DevTestPath: "target_test.go", DevTestCode: "package target\nfunc TestF(t *testing.T) {}",
+		CodePath: path, Code: eventsRunCode,
+		DevTestPath: "target_test.go", DevTestCode: eventsRunDevTestCode,
 		TestCmd: "go test ./...", NMutants: 3, Lang: "go",
 		// PoolDuration exercises phase_pool, which the driver reports at
 		// StartRun (see advpool.Driver.StartRun) rather than at a Tick-time

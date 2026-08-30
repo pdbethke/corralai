@@ -45,6 +45,16 @@ type WorkspaceRunner struct {
 	// once for the whole runner's lifetime) is the load-bearing part of
 	// this field's contract.
 	perRunEnv func() (env []string, cleanup func())
+	// treeEnv is set by WithTreeEnv and DELIBERATELY never read by this
+	// runner: the option is declared as a WorkspaceOption purely so a caller
+	// can pass it in the same list as every other option, but it applies per
+	// TREE, which only WorkspacePool knows about. The pool applies the
+	// caller's option list to a probe runner, lifts this field out for
+	// itself, and composes it with perRunEnv per tree. A WorkspaceRunner
+	// constructed directly with WithTreeEnv therefore ignores it — there is
+	// exactly one tree in that case and it is the checkout the caller already
+	// named. See WithTreeEnv.
+	treeEnv func(treeRoot string) []string
 }
 
 // WorkspaceOption configures a WorkspaceRunner at construction
@@ -101,6 +111,22 @@ func WithWorkspaceMaxOutput(n int) WorkspaceOption {
 // sets this option.
 func WithPerRunEnv(f func() (env []string, cleanup func())) WorkspaceOption {
 	return func(w *WorkspaceRunner) { w.perRunEnv = f }
+}
+
+// WithTreeEnv supplies extra "VAR=value" env assignments derived from the
+// root of the tree a command is about to run in — the seam a caller needs to
+// state a rule like "PYTHONPATH must point at THIS copy of the checkout, not
+// the original" without knowing how many copies exist or where they are.
+//
+// It is a WorkspaceOption so callers pass it in the same variadic list as
+// WithPerRunEnv and friends, but it is honoured only by WorkspacePool, which
+// calls f once per tree and prepends the result to that tree's per-run env
+// (tree env first, then the language plugin's own WithPerRunEnv output, so a
+// plugin can still override). On a bare WorkspaceRunner it is a NO-OP: a
+// single runner has one tree, the root the caller already chose, so there is
+// nothing this could tell it that it does not already know.
+func WithTreeEnv(f func(treeRoot string) []string) WorkspaceOption {
+	return func(w *WorkspaceRunner) { w.treeEnv = f }
 }
 
 // defaultWorkspaceTimeout is the wall-clock bound a WorkspaceRunner built

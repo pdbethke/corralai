@@ -1,0 +1,381 @@
+// SPDX-License-Identifier: Elastic-2.0
+
+package adequacy
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
+)
+
+// Disclosure is what the verdict and the report say about concurrency: how
+// many private trees the run actually got, and — when that is one — WHY.
+//
+// It exists because the downgrade is silent otherwise. A pool that could not
+// copy the checkout still runs, correctly, at concurrency 1; without the note
+// the operator sees a slow audit and no reason for it, and a report that
+// claims nothing about the substrate it ran on.
+type Disclosure struct {
+	Trees int    // 1 when downgraded
+	Note  string // "" when Trees > 1; otherwise WHY
+}
+
+// maxUniverseBytes bounds the checkout a pool is willing to copy N times.
+// Above it the copies are the dominant cost of the audit rather than a
+// rounding error against the suite runtime the parallelism exists to overlap,
+// so the pool downgrades to the checkout itself and says so.
+const maxUniverseBytes = 2 << 30 // 2 GiB
+
+// symlinkedDepDirs are dependency trees that are ignored by git (so they are
+// not in the universe to copy) but MUST still be reachable from every tree:
+// a suite that cannot import its own dependencies fails for a reason that has
+// nothing to do with the mutant. They are symlinked, not copied — they are
+// large, they are build products, and no mutant is ever written into them.
+var symlinkedDepDirs = []string{"node_modules", "vendor", ".venv", "venv", ".bundle", ".tox"}
+
+// WorkspacePool is a Jail backed by N private copies of one checkout. Each
+// RunTest borrows a free tree, applies the files there, runs, restores, and
+// returns it — so adequacy.Score's WithConcurrency becomes safe on the
+// workspace substrate, which a single WorkspaceRunner can never make it (it
+// mutates ONE tree in place with no mutex; two concurrent runs interleave
+// their mutants and every verdict after that is fiction).
+//
+// With n == 1 it IS a WorkspaceRunner on the checkout: no copy, nothing to
+// clean up, and Close is a no-op on the operator's own tree.
+type WorkspacePool struct {
+	// runners holds one runner per tree, in tree order, for treeRoots,
+	// Verify and Enumerate. Ownership for RUNS is handed out through free.
+	runners []*WorkspaceRunner
+	// free is the borrow queue: a receive takes a tree out of circulation for
+	// the duration of one run, a send puts it back. A channel rather than a
+	// mutex+slice because a borrower must BLOCK when every tree is busy,
+	// which is exactly how Score's concurrency limiter and this pool's size
+	// stay consistent even when the caller sets them differently.
+	free chan *WorkspaceRunner
+	// temps are the directories Close removes. Empty for a pool of one: root
+	// belongs to the operator and is NEVER removed.
+	temps []string
+}
+
+// NewWorkspacePool builds a pool of n private trees copied from the checkout
+// at root, each a WorkspaceRunner bounded by timeout and configured with
+// opts.
+//
+// The construction is best-effort by design: every reason it cannot give the
+// caller n trees produces a working pool of ONE (the checkout itself) plus a
+// Disclosure saying why, never an error — an audit that runs slowly and says
+// so beats an audit that refuses to run. err is reserved for a failure that
+// leaves nothing usable at all.
+//
+//   - n <= 1: the checkout itself, no copy, Disclosure{Trees: 1}.
+//   - root is not inside a git work tree (or git is missing): there is no
+//     authority on what the checkout CONTAINS — copying a raw walk would
+//     drag in build output, caches and dep trees — so Trees: 1, note
+//     "not a git work tree".
+//   - the universe exceeds 2 GiB: Trees: 1, note "checkout over 2 GiB".
+//
+// WithTreeEnv is lifted out of opts and honoured here, per tree; every other
+// option is passed through to each tree's NewWorkspaceRunner unchanged.
+func NewWorkspacePool(ctx context.Context, root string, n int, timeout time.Duration, opts ...WorkspaceOption) (*WorkspacePool, Disclosure, error) {
+	// The probe exists to read the two env-shaped options back out: they are
+	// opaque funcs, so there is no way to inspect the list without applying
+	// it. Applying it to a throwaway runner is that inspection.
+	probe := &WorkspaceRunner{}
+	for _, o := range opts {
+		o(probe)
+	}
+	treeEnv, plugEnv := probe.treeEnv, probe.perRunEnv
+
+	single := func(note string) (*WorkspacePool, Disclosure, error) {
+		p := newPool([]string{root}, nil, timeout, treeEnv, plugEnv, opts)
+		return p, Disclosure{Trees: 1, Note: note}, nil
+	}
+
+	if n <= 1 {
+		return single("")
+	}
+	if !insideGitWorkTree(root) {
+		return single("not a git work tree")
+	}
+	universe, size, err := gitUniverse(root)
+	if err != nil {
+		return single("git could not list the checkout: " + err.Error())
+	}
+	if size > maxUniverseBytes {
+		return single("checkout over 2 GiB")
+	}
+
+	var temps []string
+	cleanup := func() {
+		for _, d := range temps {
+			_ = os.RemoveAll(d)
+		}
+	}
+	for i := 0; i < n; i++ {
+		if cerr := ctx.Err(); cerr != nil {
+			cleanup()
+			return single("cancelled while copying the checkout")
+		}
+		tree, terr := os.MkdirTemp("", "corral-tree-*")
+		if terr != nil {
+			cleanup()
+			return single("could not create a tree: " + terr.Error())
+		}
+		temps = append(temps, tree)
+		if cerr := copyTree(root, tree, universe); cerr != nil {
+			cleanup()
+			return single("could not copy the checkout: " + cerr.Error())
+		}
+	}
+	return newPool(temps, temps, timeout, treeEnv, plugEnv, opts), Disclosure{Trees: n}, nil
+}
+
+// newPool wires one runner per tree. temps is the subset of trees Close may
+// remove (nil when the single "tree" is the operator's own checkout).
+func newPool(trees, temps []string, timeout time.Duration, treeEnv func(string) []string, plugEnv func() ([]string, func()), opts []WorkspaceOption) *WorkspacePool {
+	p := &WorkspacePool{free: make(chan *WorkspaceRunner, len(trees)), temps: temps}
+	for _, tree := range trees {
+		// The composed per-run env is appended LAST so it wins over any
+		// WithPerRunEnv already in opts — that option's func is not dropped,
+		// it is called from inside this one. Tree env first, plugin env
+		// second, so a plugin can still override a tree-derived value.
+		treeOpts := append(append([]WorkspaceOption{}, opts...), WithPerRunEnv(composeRunEnv(tree, treeEnv, plugEnv)))
+		r := NewWorkspaceRunner(tree, timeout, treeOpts...)
+		p.runners = append(p.runners, r)
+		p.free <- r
+	}
+	return p
+}
+
+// composeRunEnv returns the per-run env source for one tree: the caller's
+// tree rules evaluated for THIS tree, then the language plugin's own per-run
+// env, whose cleanup is preserved and run exactly as it would be without the
+// pool. nil when neither is set, so a pool adds no env of its own.
+func composeRunEnv(tree string, treeEnv func(string) []string, plugEnv func() ([]string, func())) func() ([]string, func()) {
+	if treeEnv == nil && plugEnv == nil {
+		return nil
+	}
+	return func() ([]string, func()) {
+		var env []string
+		if treeEnv != nil {
+			env = append(env, treeEnv(tree)...)
+		}
+		cleanup := func() {}
+		if plugEnv != nil {
+			// Called FRESH per run, exactly as WithPerRunEnv's contract
+			// requires — the pool never hoists it to construction time.
+			extra, c := plugEnv()
+			env = append(env, extra...)
+			if c != nil {
+				cleanup = c
+			}
+		}
+		return env, cleanup
+	}
+}
+
+// insideGitWorkTree reports whether root is inside a git work tree, the same
+// probe internal/reposcan uses: git is the only authority on what a checkout
+// contains, and a non-zero exit ("not a git repository") is an ANSWER, not a
+// failure.
+func insideGitWorkTree(root string) bool {
+	git, lerr := exec.LookPath("git")
+	if lerr != nil {
+		return false
+	}
+	probe := exec.Command(git, "-C", root, "rev-parse", "--is-inside-work-tree") // #nosec G204 -- git via LookPath; root is the operator's own checkout; literal args
+	// A non-zero exit ("not a git repository") and a failure to run git at
+	// all are the same answer here: there is no authority to consult, so the
+	// pool downgrades rather than guessing at the checkout's contents.
+	out, perr := probe.Output()
+	if perr != nil {
+		return false
+	}
+	return strings.TrimSpace(string(out)) == "true"
+}
+
+// gitUniverse is what a tree must contain to be a usable copy of the
+// checkout: every tracked file plus every untracked-but-not-ignored one —
+// git's own answer, so nested .gitignore files, core.excludesFile and
+// negations are all honoured without this package reimplementing any of it.
+// Ignored paths (build output, caches, dep trees) are deliberately absent;
+// the dep dirs a suite actually needs come back as symlinks in copyTree.
+//
+// Returns the repo-relative paths in git's order and their total size in
+// bytes. A path that has vanished between the listing and the stat is skipped
+// rather than fatal: an untracked file is exactly the kind of thing an editor
+// or a test run deletes underneath us.
+func gitUniverse(root string) (paths []string, size int64, err error) {
+	git, lerr := exec.LookPath("git")
+	if lerr != nil {
+		return nil, 0, lerr
+	}
+	ls := exec.Command(git, "-C", root, "ls-files", "-z", "--cached", "--others", "--exclude-standard") // #nosec G204 -- git via LookPath; root is the operator's own checkout; literal args
+	out, lserr := ls.Output()
+	if lserr != nil {
+		return nil, 0, fmt.Errorf("git ls-files in %s: %w", root, lserr)
+	}
+	seen := make(map[string]bool)
+	for _, rel := range strings.Split(string(out), "\x00") {
+		if rel == "" || seen[rel] {
+			continue
+		}
+		seen[rel] = true
+		fi, serr := os.Lstat(filepath.Join(root, filepath.FromSlash(rel)))
+		if serr != nil || !fi.Mode().IsRegular() {
+			continue // gone, or a symlink/submodule/device: not ours to copy
+		}
+		paths = append(paths, rel)
+		size += fi.Size()
+	}
+	return paths, size, nil
+}
+
+// copyTree materialises one private tree: the dep-dir symlinks first, then
+// every universe file copied in with its mode preserved.
+//
+// Symlinks go first on purpose. A path under a symlinked dep dir must never
+// be written through it — that would write into the ORIGINAL checkout, which
+// is the one thing a private tree exists to prevent — so anything in the
+// universe that lands under one of them is skipped, and skipping requires
+// knowing which links exist.
+func copyTree(root, tree string, universe []string) error {
+	linked := make(map[string]bool)
+	for _, d := range symlinkedDepDirs {
+		if _, err := os.Lstat(filepath.Join(root, d)); err != nil {
+			continue
+		}
+		if err := os.Symlink(filepath.Join(root, d), filepath.Join(tree, d)); err != nil {
+			return fmt.Errorf("adequacy: linking %s into %s: %w", d, tree, err)
+		}
+		linked[d] = true
+	}
+	for _, rel := range universe {
+		if top, _, ok := strings.Cut(filepath.ToSlash(rel), "/"); ok && linked[top] {
+			continue
+		}
+		if err := copyFile(filepath.Join(root, filepath.FromSlash(rel)), filepath.Join(tree, filepath.FromSlash(rel))); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// copyFile copies src to dst, creating dst's parents and giving dst src's
+// permission bits — an executable in the checkout (a test script, a hook)
+// must still be executable in the copy.
+func copyFile(src, dst string) error {
+	fi, err := os.Stat(src)
+	if err != nil {
+		return fmt.Errorf("adequacy: stat %s: %w", src, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
+		return fmt.Errorf("adequacy: creating %s: %w", filepath.Dir(dst), err)
+	}
+	in, err := os.Open(src) // #nosec G304 -- a path git itself listed inside the operator's checkout
+	if err != nil {
+		return fmt.Errorf("adequacy: opening %s: %w", src, err)
+	}
+	defer func() { _ = in.Close() }()
+	out, err := os.Create(dst) // #nosec G304 -- inside a temp tree this call created
+	if err != nil {
+		return fmt.Errorf("adequacy: creating %s: %w", dst, err)
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		return fmt.Errorf("adequacy: copying %s: %w", src, err)
+	}
+	if err := out.Close(); err != nil {
+		return fmt.Errorf("adequacy: closing %s: %w", dst, err)
+	}
+	if err := os.Chmod(dst, fi.Mode().Perm()); err != nil {
+		return fmt.Errorf("adequacy: chmod %s: %w", dst, err)
+	}
+	return nil
+}
+
+// borrow takes a free tree out of circulation, blocking until one is
+// available or ctx is done. The returned func puts it back and MUST be
+// deferred: a tree that is never returned is one worker's worth of
+// concurrency gone for the rest of the audit.
+func (p *WorkspacePool) borrow(ctx context.Context) (*WorkspaceRunner, func(), error) {
+	select {
+	case r := <-p.free:
+		return r, func() { p.free <- r }, nil
+	case <-ctx.Done():
+		return nil, nil, ctx.Err()
+	}
+}
+
+// RunTest borrows a tree, runs there, and returns it — the Jail contract,
+// now safe to call concurrently up to Trees() at a time.
+func (p *WorkspacePool) RunTest(ctx context.Context, files map[string]string, testCmd []string) (bool, error) {
+	r, release, err := p.borrow(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer release()
+	return r.RunTest(ctx, files, testCmd)
+}
+
+// RunTestVerbose is RunTest that also returns the command's combined output,
+// the optional interface advpool's compile-verify path type-asserts for. The
+// pool implements it so substituting a pool for a WorkspaceRunner never
+// silently costs the test-writer its compiler output.
+func (p *WorkspacePool) RunTestVerbose(ctx context.Context, files map[string]string, testCmd []string) (bool, string, error) {
+	r, release, err := p.borrow(ctx)
+	if err != nil {
+		return false, "", err
+	}
+	defer release()
+	return r.RunTestVerbose(ctx, files, testCmd)
+}
+
+// Enumerate runs on tree 0 WITHOUT borrowing. Enumeration is a pre-flight
+// (list the suite's tests, read a coverage profile) that happens before any
+// mutant is scored, so there is nothing to contend with; borrowing here would
+// instead let an enumeration block behind sixteen mutant runs.
+func (p *WorkspacePool) Enumerate(ctx context.Context, files map[string]string, cmd []string) (string, error) {
+	return p.runners[0].Enumerate(ctx, files, cmd)
+}
+
+// Verify pre-flights every tree, so a copy that failed to materialise is
+// caught before the first job wastes time discovering it.
+func (p *WorkspacePool) Verify() error {
+	for _, r := range p.runners {
+		if err := r.Verify(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Trees is how many runs the pool can serve at once — the number the caller
+// should cap adequacy.Score's WithConcurrency at.
+func (p *WorkspacePool) Trees() int { return len(p.runners) }
+
+// treeRoots is the pool's trees in order, for tests and for a caller that
+// needs to name them (a tree-env rule). Not exported: nothing outside this
+// package has any business writing into a tree directly.
+func (p *WorkspacePool) treeRoots() []string {
+	roots := make([]string, 0, len(p.runners))
+	for _, r := range p.runners {
+		roots = append(roots, r.root)
+	}
+	return roots
+}
+
+// Close removes the copies. It NEVER removes root: a pool of one has no
+// temp trees at all, and its temps slice is empty by construction. Safe to
+// call more than once.
+func (p *WorkspacePool) Close() {
+	for _, d := range p.temps {
+		_ = os.RemoveAll(d)
+	}
+	p.temps = nil
+}

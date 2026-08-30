@@ -13,12 +13,30 @@ func bugCatchObservations(run *runState, v Verdict) []BugCatchObservation {
 	//
 	// "Graded" means the authored test actually ran against the survivors and
 	// produced a verdict corral can stand behind. runState.poolScored is NOT
-	// that test: tickPoolAdequacy sets it true BEFORE the soundness check
-	// (driver.go:1259 vs :1260) and on the writer-failed path too, so
-	// "poolScored && authoredTest != ''" was true for a run whose test never
-	// graded at all.
-	graded := run.poolScored && run.authoredTest != "" && !run.poolTestUnsound && !run.testWriterFailed
+	// that test: tickPoolAdequacy sets it true BEFORE the soundness check and
+	// on the writer-failed path too, so "poolScored" alone was true for a run
+	// whose test never graded at all.
+	//
+	// primaryWriterMeasured is the POSITIVE flag for exactly this question —
+	// see its own doc — and asking it directly replaced a proxy that broke
+	// under the per-survivor fan-out. That proxy was
+	// `authoredTest != "" && !poolTestUnsound && !testWriterFailed`, and
+	// authoredTest is EMPTY whenever the language's concatenator refused
+	// every proven part (the ordinary case on a language whose helpers
+	// collide). A sound run whose proofs all rode out in AuthoredExtra then
+	// scored as though corral had never let the model try: zero authored
+	// tests, zero opportunities, a model penalised for corral's merge.
+	//
+	// It is also the same question in BOTH modes, which is the property that
+	// makes the scorecard comparable across them: identical writer behaviour
+	// must score identically whether it arrived as one call or as N.
+	graded := run.poolScored && run.primaryWriterMeasured
 
+	// PER FILE, not per seat, in both modes. A per-survivor run makes N calls
+	// where a batched one makes 1, and counting seats here would weight one
+	// file's evidence N times as heavily in a scorecard whose whole purpose is
+	// to compare MODELS — the mode would move the ranking. One file, one
+	// authored suite, one soundness observation.
 	authored, sound := 0, 0
 	if !run.testWriterMoot {
 		authored = 1

@@ -479,13 +479,32 @@ type Verdict struct {
 	// kill a specific survivor. Losing it to make a tidy single file would
 	// throw away exactly the evidence ProvenMissed is a count OF. Empty on a
 	// batched run, which has only ever had one file.
-	AuthoredExtra   []golang.AuthoredPart `json:"authored_extra,omitempty"`
-	RegionsTotal    int                   // mutant-generator seats the run dispatched
-	RegionsProbed   int                   // seats that returned usable mutants
-	DroppedRegions  []string              // seats abandoned after MaxShardRetries — the coverage shortfall
-	VacuousFindings []queue.Finding       // test-critic's designed-to-pass/vacuous flags
-	ModelsByRole    map[string]string
-	Status          string // certified | needs-review
+	AuthoredExtra []golang.AuthoredPart `json:"authored_extra,omitempty"`
+	// WriterSeatsUngraded is how many of a per-survivor run's writer seats
+	// never produced a test that genuinely graded — no compiling test within
+	// their own budget, or one that compiled and then failed on the
+	// unmutated code / never reached the file.
+	//
+	// It exists because the fan-out made PARTIAL failure the common case, and
+	// the two flags beside it cannot express it: TestWriterFailed means
+	// NOTHING compiled anywhere and PoolTestUnsound means nothing graded
+	// anywhere, so a file where twenty-one of twenty-four seats graded
+	// carries neither — and its ProvenMissed then reads like a count over all
+	// twenty-four. Three seats unattempted changes what a 5 means.
+	//
+	// 0 is omitted, and is also what a BATCHED run reports: that mode has one
+	// seat for the whole file, and its total failure is already
+	// TestWriterFailed or PoolTestUnsound. It rides in verdict_json only —
+	// there is deliberately NO ledger column for it this round, so a query
+	// that wants it must read the JSON rather than find a half-populated
+	// column.
+	WriterSeatsUngraded int             `json:"writer_seats_ungraded,omitempty"`
+	RegionsTotal        int             // mutant-generator seats the run dispatched
+	RegionsProbed       int             // seats that returned usable mutants
+	DroppedRegions      []string        // seats abandoned after MaxShardRetries — the coverage shortfall
+	VacuousFindings     []queue.Finding // test-critic's designed-to-pass/vacuous flags
+	ModelsByRole        map[string]string
+	Status              string // certified | needs-review
 	// TestWriterFailed is true when the pool exhausted MaxTestWriterAttempts
 	// without producing a compiling killing test. HONESTY NOTE: when this is
 	// true, ProvenMissed==0 does NOT mean "no real gaps" — it means "gaps
@@ -2415,6 +2434,7 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	// say which measurement this is in the same words a reader can look up.
 	v.WriterMode = run.writerMode
 	v.AuthoredExtra = run.authoredExtra
+	v.WriterSeatsUngraded = run.writerSeatsUngraded()
 	// Narrows PoolTestUnsound to "your test command never collected the
 	// authored test's file" -- set here rather than widening aggregate()'s
 	// signature, alongside the other post-aggregate diagnosis fields.
@@ -2597,20 +2617,29 @@ func (d *Driver) recordMutantAttempts(run *runState, v Verdict) {
 		}
 		return "survived"
 	}
+	// PER SEAT, not per file. Under the fan-out one survivor's seat grading
+	// sets primaryWriterMeasured for the WHOLE run, and stamping a `survived`
+	// row for the seats that never produced a grading test would record a
+	// blind spot for a model that was never given a chance to answer — the
+	// same fabrication the file-level guard above already refuses, one grain
+	// down. In batched mode both helpers report the file-level flag, because
+	// there really is one seat covering every survivor.
 	attempts := make([]MutantAttempt, 0, 2*len(run.devSurvivors))
 	for _, m := range run.devSurvivors {
-		attempts = append(attempts,
-			MutantAttempt{
+		if run.primarySeatMeasured(m.ID) {
+			attempts = append(attempts, MutantAttempt{
 				Path: run.rs.CodePath, MutantID: m.ID,
 				Model: d.Assign[RoleTestWriter], Role: RoleTestWriter,
 				Shadow: false, Outcome: outcome(killedByPrimary[m.ID]),
-			},
-			MutantAttempt{
+			})
+		}
+		if run.shadowSeatMeasured(m.ID) {
+			attempts = append(attempts, MutantAttempt{
 				Path: run.rs.CodePath, MutantID: m.ID,
 				Model: run.rs.ShadowWriterModel, Role: RoleTestWriterShadow,
 				Shadow: true, Outcome: outcome(killedByShadow[m.ID]),
-			},
-		)
+			})
+		}
 	}
 	d.MutantAttempts.Record(v.RecordID, v.RecordHead, attempts)
 }
@@ -2769,6 +2798,15 @@ func (d *Driver) timeoutVerdict(run *runState) Verdict {
 	v.TestWriterFailed = run.testWriterFailed
 	v.PoolTestUnsound = run.poolTestUnsound
 	v.AuthoredTestNotCollected = run.authoredTestNotCollected
+	// The writer's own disclosure, for the same reason as the flags above: a
+	// run that fanned out, graded some seats and only THEN stalled must sign
+	// WHICH measurement its partial numbers are, keep the proofs it earned,
+	// and say how many seats never graded. This function's doc records that
+	// it has been the place a field was forgotten more than once; these three
+	// are pinned by TestTimeoutVerdictCarriesTheWriterDisclosure.
+	v.WriterMode = run.writerMode
+	v.AuthoredExtra = run.authoredExtra
+	v.WriterSeatsUngraded = run.writerSeatsUngraded()
 	// Coverage fields (I-5): a run that dispatched N regions and dropped
 	// some before hitting RunDeadline must carry that shortfall on the
 	// timeout verdict too, or the CLI's RegionsTotal > 0 guard silently

@@ -115,6 +115,13 @@ type WeakFile struct {
 	// and a reader must print nothing rather than pick a mode.
 	WriterMode  string
 	WriterCalls int
+	// WriterSeatsUngraded mirrors advpool.Verdict.WriterSeatsUngraded: how
+	// many of a per-survivor run's seats never produced a test that genuinely
+	// graded. It rides beside the mode because a proven count over
+	// twenty-four survivors means something different when three of them were
+	// never actually attempted. 0 on a batched run and on a fully-graded
+	// fan-out, and the line prints nothing for it.
+	WriterSeatsUngraded int
 	// PerMutant and TestsPerMutant mirror
 	// advpool.Verdict.TestSelection.PerMutant / .TestsPerMutant: each mutant
 	// was graded by the tests that reach ITS OWN lines, not by one command
@@ -429,13 +436,14 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 			// Which measurement this file's rate IS, carried onto the report
 			// so the printer never has to reach back into the verdict — and
 			// so it cannot print a rate without the question it answers.
-			SelectionMethod:   r.Verdict.TestSelection.Method,
-			SelectedTests:     r.Verdict.TestSelection.Selected,
-			SuiteTests:        r.Verdict.TestSelection.Of,
-			SelectionFallback: r.Verdict.TestSelection.Fallback,
-			AuthoredExtra:     r.Verdict.AuthoredExtra,
-			WriterMode:        r.Verdict.WriterMode,
-			WriterCalls:       writerCallsOf(r.Verdict),
+			SelectionMethod:     r.Verdict.TestSelection.Method,
+			SelectedTests:       r.Verdict.TestSelection.Selected,
+			SuiteTests:          r.Verdict.TestSelection.Of,
+			SelectionFallback:   r.Verdict.TestSelection.Fallback,
+			AuthoredExtra:       r.Verdict.AuthoredExtra,
+			WriterMode:          r.Verdict.WriterMode,
+			WriterCalls:         writerCallsOf(r.Verdict),
+			WriterSeatsUngraded: r.Verdict.WriterSeatsUngraded,
 			// And at which GRAIN it was measured: a rate averaged over
 			// mutants that each faced a different test set is not one
 			// measurement unless the report carries the spread.

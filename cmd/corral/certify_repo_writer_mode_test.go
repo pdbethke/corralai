@@ -221,3 +221,38 @@ func TestAuthoredRecordJoinsTheUnmergeableParts(t *testing.T) {
 		t.Errorf("a Go record used a # comment:\n%s", goV.AuthoredRecord())
 	}
 }
+
+// TestWriterLineDisclosesUngradedSeatsAndSuppressesACachedCount.
+//
+// Partial failure is the fan-out's common case and neither honesty marker
+// covers it: WRITER FAILED means nothing compiled anywhere, TEST UNSOUND means
+// nothing graded anywhere, so a file where 3 of 24 seats never graded carries
+// neither and its proven count silently reads as a count over all 24.
+//
+// And on a CACHE HIT the count is another run's. It round-trips through
+// verdict_json and comes back fully populated, exactly like Timing — which the
+// line above this one suppresses for the same reason. The MODE survives (it is
+// a property of the verdict, however it was served); the cost does not.
+func TestWriterLineDisclosesUngradedSeatsAndSuppressesACachedCount(t *testing.T) {
+	var b bytes.Buffer
+	printWeakFile(&b, reposcan.WeakFile{
+		Path: "pkg/a.py", KillRate: 0.5, Survivors: 24, ProvenMissed: 5,
+		WriterMode: advpool.WriterModePerSurvivor, WriterCalls: 31, WriterSeatsUngraded: 3,
+	})
+	if !strings.Contains(b.String(), "writer: per-survivor (31 calls, 3 seats ungraded") {
+		t.Errorf("the ungraded seats are not disclosed: %q", b.String())
+	}
+
+	b.Reset()
+	printWeakFile(&b, reposcan.WeakFile{
+		Path: "pkg/a.py", KillRate: 0.5, Survivors: 24, ProvenMissed: 5, CacheHit: true,
+		WriterMode: advpool.WriterModePerSurvivor, WriterCalls: 31, WriterSeatsUngraded: 3,
+	})
+	out := b.String()
+	if !strings.Contains(out, "writer: per-survivor") {
+		t.Errorf("a cached verdict lost its mode, which is true however it was served: %q", out)
+	}
+	if strings.Contains(out, "31 calls") || strings.Contains(out, "seats ungraded") {
+		t.Errorf("a cached verdict printed the EARNING run's cost as this scan's: %q", out)
+	}
+}

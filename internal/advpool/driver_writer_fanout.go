@@ -356,3 +356,50 @@ func liveTasks(tasks []queue.Task) []queue.Task {
 	}
 	return out
 }
+
+// writerSeatsUngraded counts the per-survivor writer seats that never produced
+// a test which genuinely graded — see Verdict.WriterSeatsUngraded.
+//
+// 0 in batched mode, which has no seats to count: that mode's total failure is
+// already TestWriterFailed or PoolTestUnsound, and a 1 here would be a second,
+// differently-shaped way of saying the same thing.
+func (r *runState) writerSeatsUngraded() int {
+	if r.writerMode != WriterModePerSurvivor {
+		return 0
+	}
+	n := 0
+	for _, id := range r.writerOrder {
+		if !r.writerAttempts[id].measured {
+			n++
+		}
+	}
+	return n
+}
+
+// primarySeatMeasured reports whether the PRIMARY writer genuinely graded a
+// test against THIS survivor.
+//
+// In batched mode there is one seat for the whole file, so the file-level flag
+// is the per-survivor answer — anything narrower would silently stop recording
+// rows the batched path has always recorded. Under the fan-out each survivor
+// has its own seat and its own answer, and the file-level flag is true as soon
+// as ANY seat grades, which is exactly why it cannot be reused here.
+func (r *runState) primarySeatMeasured(mutantID string) bool {
+	if r.writerMode != WriterModePerSurvivor {
+		return r.primaryWriterMeasured
+	}
+	a, ok := r.writerAttempts[mutantID]
+	return ok && a.measured
+}
+
+// shadowSeatMeasured is primarySeatMeasured for the CHALLENGER seat. The two
+// sides are filtered independently: a survivor whose primary seat graded and
+// whose challenger seat did not contributes the primary's row and no
+// challenger row, rather than an invented pair.
+func (r *runState) shadowSeatMeasured(mutantID string) bool {
+	if r.writerMode != WriterModePerSurvivor {
+		return r.shadowWriterMeasured
+	}
+	a, ok := r.shadowWriterAttempts[mutantID]
+	return ok && a.measured
+}

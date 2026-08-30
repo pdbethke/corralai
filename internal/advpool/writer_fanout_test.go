@@ -4,10 +4,12 @@ package advpool
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
+	golang "github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/queue"
 )
 
@@ -252,10 +254,11 @@ func TestPerSurvivorRepairTouchesOnlyItsOwnSeat(t *testing.T) {
 	d, missionID, _ := fanoutRun(t, WriterModePerSurvivor, nil, map[string]bool{badTest: true})
 	devTick(t, d, missionID)
 
-	before := map[string]int64{}
-	for _, task := range writerTasks(t, d, missionID) {
-		before[task.Key] = task.ID
-	}
+	// Read the SEAT ids off the driver, not the queue keys: a repair
+	// supersedes the row under an auto-uniquified key, so a key-indexed map
+	// would show the repaired seat as simply absent and the assertion would
+	// pass without proving anything.
+	before := seatTaskIDs(d, missionID)
 
 	// Complete every seat; only m2's returns a test that will not compile.
 	for _, task := range writerTasks(t, d, missionID) {
@@ -270,18 +273,38 @@ func TestPerSurvivorRepairTouchesOnlyItsOwnSeat(t *testing.T) {
 	// always has) while still reissuing the one seat that failed.
 	_, _ = d.Tick(context.Background(), missionID)
 
-	after := map[string]int64{}
-	for _, task := range writerTasks(t, d, missionID) {
-		after[task.Key] = task.ID
-	}
-	for _, key := range []string{"test-writer/m1", "test-writer/m3"} {
-		if after[key] != before[key] {
-			t.Errorf("%s was reissued (task %d -> %d) because a SIBLING failed to compile", key, before[key], after[key])
+	after := seatTaskIDs(d, missionID)
+	for _, id := range []string{"m1", "m3"} {
+		if after[id] != before[id] {
+			t.Errorf("the seat for %s was reissued (task %d -> %d) because a SIBLING failed to compile", id, before[id], after[id])
 		}
 	}
-	if after["test-writer/m2"] == before["test-writer/m2"] {
-		t.Error("test-writer/m2 was not reissued after its own compile failure")
+	if after["m2"] == before["m2"] {
+		t.Error("the seat for m2 was not reissued after its own compile failure")
 	}
+}
+
+// seatKeyBase strips the "-rN" suffix SupersedeTask adds when a replacement
+// reuses its predecessor's key, so a test can script a seat by the key it was
+// first created under.
+func seatKeyBase(key string) string {
+	if i := strings.LastIndex(key, "-r"); i > 0 {
+		if _, err := strconv.Atoi(key[i+2:]); err == nil {
+			return key[:i]
+		}
+	}
+	return key
+}
+
+// seatTaskIDs reads the driver's own per-survivor task ids — the only stable
+// handle on a seat, since its queue key changes every time it is repaired.
+func seatTaskIDs(d *Driver, missionID int64) map[string]int64 {
+	out := map[string]int64{}
+	run := d.runs[missionID]
+	for _, id := range run.writerOrder {
+		out[id] = run.writerAttempts[id].taskID
+	}
+	return out
 }
 
 // driveFanout completes every claimable writer task with the scripted result
@@ -298,7 +321,13 @@ func driveFanout(t *testing.T, d *Driver, missionID int64, results map[string]st
 			continue
 		}
 		for key, task := range ready {
-			result, ok := results[key]
+			// Resolved by SEAT, not by exact key: a repair supersedes the row
+			// and SupersedeTask auto-uniquifies the reused key to
+			// "<key>-rN", so an exact-match lookup would silently hand the
+			// retry a DIFFERENT scripted result than its first attempt got —
+			// which is how a "this never compiles" fixture quietly turns into
+			// one that compiles on the retry.
+			result, ok := results[seatKeyBase(key)]
 			if !ok {
 				result = "raw"
 			}
@@ -510,5 +539,193 @@ func TestUnmergeableProvenTestsRideTheVerdict(t *testing.T) {
 	st, ok := d.RunStatus(missionID)
 	if !ok || len(st.AuthoredExtra) != 1 {
 		t.Fatalf("RunStatus.AuthoredExtra = %+v, want the one carried-out part", st.AuthoredExtra)
+	}
+}
+
+// TestTimeoutVerdictCarriesTheWriterDisclosure. timeoutVerdict is the second
+// Verdict construction site in this package and its own doc says it "has now
+// been the place a field was forgotten more than once" — so every field the
+// fan-out added is pinned here. A run that fanned out, graded some seats and
+// only THEN stalled must sign what it measured and how, not a verdict that
+// claims no mode and holds none of the proofs.
+func TestTimeoutVerdictCarriesTheWriterDisclosure(t *testing.T) {
+	d := &Driver{}
+	run := &runState{
+		rs:            RunSpec{Repo: "r", Commit: "c", Lang: "go", WriterMode: WriterModePerSurvivor},
+		writerMode:    WriterModePerSurvivor,
+		devScored:     true,
+		devSurvivors:  []adequacy.Mutant{{ID: "m1"}, {ID: "m2"}, {ID: "m3"}},
+		provenMissed:  1,
+		authoredExtra: []golang.AuthoredPart{{MutantID: "m2", Source: "x", Reason: "helper collision"}},
+		writerOrder:   []string{"m1", "m2", "m3"},
+		writerAttempts: map[string]*writerAttempt{
+			"m1": {mutant: adequacy.Mutant{ID: "m1"}, done: true, measured: true, proven: true},
+			"m2": {mutant: adequacy.Mutant{ID: "m2"}, done: true, measured: true},
+			"m3": {mutant: adequacy.Mutant{ID: "m3"}, done: true},
+		},
+	}
+	v := d.timeoutVerdict(run)
+	if v.WriterMode != WriterModePerSurvivor {
+		t.Errorf("WriterMode = %q — the timeout verdict cannot say which measurement its numbers are", v.WriterMode)
+	}
+	if len(v.AuthoredExtra) != 1 {
+		t.Errorf("AuthoredExtra = %+v, want the proven part that could not merge", v.AuthoredExtra)
+	}
+	if v.WriterSeatsUngraded != 1 {
+		t.Errorf("WriterSeatsUngraded = %d, want 1 (m3 never graded)", v.WriterSeatsUngraded)
+	}
+}
+
+// TestWriterSeatsUngradedCountsTheSeatsThatNeverGraded: a partial fan-out is
+// the honest middle between "clean" and "the writer failed". Three of
+// twenty-four seats that never produced a grading test means twenty-one
+// survivors were genuinely attempted and three were not attempted at all —
+// and a proven count of 5 reads very differently once you know that.
+func TestWriterSeatsUngradedCountsTheSeatsThatNeverGraded(t *testing.T) {
+	const (
+		testA   = "package target\n\nimport \"testing\"\n\nfunc TestKillsA(t *testing.T) {}\n"
+		badTest = "package target\nthis does not compile\n"
+	)
+	d, missionID, _ := fanoutRun(t, WriterModePerSurvivor,
+		map[string]string{testA: "m1"}, map[string]bool{badTest: true})
+	devTick(t, d, missionID)
+
+	v := driveFanout(t, d, missionID, map[string]string{
+		"test-writer/m1": testA,
+		"test-writer/m2": badTest,
+		"test-writer/m3": badTest,
+	})
+	if v.WriterSeatsUngraded != 2 {
+		t.Errorf("WriterSeatsUngraded = %d, want 2 — two seats never produced a grading test", v.WriterSeatsUngraded)
+	}
+	// One seat DID grade, so this is neither a writer failure nor an unsound
+	// pool: those diagnoses are for a file where nothing graded at all.
+	if v.TestWriterFailed || v.PoolTestUnsound {
+		t.Errorf("TestWriterFailed=%v PoolTestUnsound=%v — a partly-graded file is neither", v.TestWriterFailed, v.PoolTestUnsound)
+	}
+	if v.ProvenMissed != 1 {
+		t.Errorf("ProvenMissed = %d, want 1", v.ProvenMissed)
+	}
+}
+
+// TestScorecardAgreesAcrossModesOnASoundButUnluckyRun. The scorecard grades
+// MODELS, so the same writer behaviour must score the same in either mode: a
+// suite that graded soundly and killed nothing is a real "tried and missed" —
+// one authored test, one SOUND test, every survivor an opportunity, zero
+// catches. The per-survivor path used to gate that on `authoredTest != ""`,
+// which is empty exactly when the concatenator refused every part, so a sound
+// run scored as though corral had never let the model try.
+func TestScorecardAgreesAcrossModesOnASoundButUnluckyRun(t *testing.T) {
+	// A test that kills nothing: `kills` is empty, so every authored pass
+	// grades soundly and reports its mutant as still surviving.
+	const test = "package target\n\nimport \"testing\"\n\nfunc TestNothing(t *testing.T) {}\n"
+
+	got := map[string]BugCatchObservation{}
+	for _, mode := range []string{WriterModePerSurvivor, WriterModeBatched} {
+		d, missionID, _ := fanoutRun(t, mode, nil, nil)
+		bc := &fakeBugCatch{}
+		d.BugCatch = bc
+		devTick(t, d, missionID)
+
+		results := map[string]string{}
+		for _, task := range writerTasks(t, d, missionID) {
+			results[task.Key] = test
+		}
+		v := driveFanout(t, d, missionID, results)
+		if v.ProvenMissed != 0 {
+			t.Fatalf("%s: ProvenMissed = %d, want 0 for this fixture", mode, v.ProvenMissed)
+		}
+		obs, ok := obsFor(bc.obs, RoleTestWriter)
+		if !ok {
+			t.Fatalf("%s: no test-writer observation was recorded", mode)
+		}
+		got[mode] = obs
+	}
+
+	per, batched := got[WriterModePerSurvivor], got[WriterModeBatched]
+	if per.SoundTests != 1 || per.AuthoredTests != 1 {
+		t.Errorf("per-survivor authored/sound = %d/%d, want 1/1 — the writer DID author a sound suite",
+			per.AuthoredTests, per.SoundTests)
+	}
+	if per.Opportunities != 3 {
+		t.Errorf("per-survivor opportunities = %d, want 3 — every survivor was genuinely attempted", per.Opportunities)
+	}
+	if per.Catches != 0 {
+		t.Errorf("per-survivor catches = %d, want 0", per.Catches)
+	}
+	if per != batched {
+		t.Errorf("the two modes score the same behaviour differently:\n per-survivor: %+v\n batched:      %+v", per, batched)
+	}
+}
+
+// TestAttemptRowsOnlyForSeatsThatMeasured. UNMEASURED IS NOT ZERO holds PER
+// SEAT under the fan-out, not just per file. Once one survivor's writer seat
+// grades, primaryWriterMeasured is true for the whole run — and stamping a
+// `survived` row for the two seats that never produced a grading test would
+// record a total blind spot for a model that was never given an answer to
+// give. These rows feed the shared scorecard that routes models.
+func TestAttemptRowsOnlyForSeatsThatMeasured(t *testing.T) {
+	sink := &fakeMutantAttemptSink{}
+	d := &Driver{
+		MutantAttempts: sink,
+		Assign:         RoleAssignment{RoleTestWriter: "primary-model"},
+	}
+	survivors := []adequacy.Mutant{{ID: "m1"}, {ID: "m2"}, {ID: "m3"}}
+	run := &runState{
+		rs:           RunSpec{CodePath: "a.go", ShadowWriterModel: "challenger-model", WriterMode: WriterModePerSurvivor},
+		writerMode:   WriterModePerSurvivor,
+		devSurvivors: survivors,
+		provenIDs:    []string{"m1"},
+		// The file-level flags are both TRUE — one seat on each side did
+		// grade — which is exactly why a file-level check is not enough.
+		primaryWriterMeasured: true,
+		shadowWriterMeasured:  true,
+		shadowWriterKilled:    []MutantRef{{ID: "m1"}},
+		writerOrder:           []string{"m1", "m2", "m3"},
+		writerAttempts: map[string]*writerAttempt{
+			"m1": {mutant: survivors[0], done: true, measured: true, proven: true},
+			"m2": {mutant: survivors[1], done: true},
+			"m3": {mutant: survivors[2], done: true},
+		},
+		shadowWriterOrder: []string{"m1", "m2", "m3"},
+		shadowWriterAttempts: map[string]*writerAttempt{
+			"m1": {mutant: survivors[0], done: true, measured: true, proven: true},
+			"m2": {mutant: survivors[1], done: true},
+			"m3": {mutant: survivors[2], done: true},
+		},
+	}
+	d.recordMutantAttempts(run, Verdict{RecordID: 7})
+
+	for _, a := range sink.attempts {
+		if a.MutantID != "m1" {
+			t.Errorf("recorded a %s row for %s, whose seat never graded — a blind spot invented for a seat that never ran the code",
+				a.Role, a.MutantID)
+		}
+	}
+	if len(sink.attempts) != 2 {
+		t.Fatalf("wrote %d rows, want 2 — the one measured survivor, once per writer: %+v", len(sink.attempts), sink.attempts)
+	}
+}
+
+// TestAttemptRowsForEverySurvivorInBatchedMode: batched has ONE seat for the
+// whole file, so a measured run measured every survivor and every one gets
+// its pair of rows. The per-seat filter must not quietly narrow the batched
+// path's recording.
+func TestAttemptRowsForEverySurvivorInBatchedMode(t *testing.T) {
+	sink := &fakeMutantAttemptSink{}
+	d := &Driver{MutantAttempts: sink, Assign: RoleAssignment{RoleTestWriter: "primary-model"}}
+	survivors := []adequacy.Mutant{{ID: "m1"}, {ID: "m2"}}
+	run := &runState{
+		rs:                    RunSpec{CodePath: "a.go", ShadowWriterModel: "challenger-model"},
+		writerMode:            WriterModeBatched,
+		devSurvivors:          survivors,
+		provenIDs:             []string{"m1"},
+		primaryWriterMeasured: true,
+		shadowWriterMeasured:  true,
+		shadowWriterKilled:    []MutantRef{{ID: "m2"}},
+	}
+	d.recordMutantAttempts(run, Verdict{RecordID: 7})
+	if len(sink.attempts) != 4 {
+		t.Fatalf("wrote %d rows, want 4 (2 survivors x 2 writers): %+v", len(sink.attempts), sink.attempts)
 	}
 }

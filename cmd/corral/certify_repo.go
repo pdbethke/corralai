@@ -2587,7 +2587,18 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 	// nothing recorded a mode (a run that named none, or a verdict from
 	// before the mode existed): a reader is told nothing rather than told the
 	// wrong one.
-	if line := writerModeDisclosure(f.WriterMode, f.WriterCalls); line != "" {
+	//
+	// A CACHE HIT prints the mode and NOTHING ELSE, for the same reason the
+	// timing line above is suppressed entirely: the call count round-trips
+	// through verdict_json and comes back fully populated with the EARNING
+	// run's calls, which this scan did not make. The mode is a property of
+	// the verdict and stays true however it was served; the count is a cost
+	// this run did not pay.
+	calls, ungraded := f.WriterCalls, f.WriterSeatsUngraded
+	if f.CacheHit {
+		calls, ungraded = 0, 0
+	}
+	if line := writerModeDisclosure(f.WriterMode, calls, ungraded); line != "" {
 		fmt.Fprintf(w, "   %s\n", line)
 	}
 	// WHERE THE MINUTES WENT. Printed through the same helper `corral scans
@@ -4049,7 +4060,7 @@ func resolveRepoName(repoDir, given string) string {
 // mode, or a verdict earned before the mode existed. Silence is the honest
 // rendering: neither spelling is true of such a row, and printing one would
 // be an invented fact about how a measurement was made.
-func writerModeDisclosure(mode string, calls int) string {
+func writerModeDisclosure(mode string, calls, seatsUngraded int) string {
 	if strings.TrimSpace(mode) == "" {
 		return ""
 	}
@@ -4063,6 +4074,14 @@ func writerModeDisclosure(mode string, calls int) string {
 	unit := "calls"
 	if calls == 1 {
 		unit = "call"
+	}
+	// Partial failure, said out loud. Neither WRITER FAILED nor TEST UNSOUND
+	// fires when SOME seats graded, so without this a file where three of
+	// twenty-four survivors were never actually attempted reads exactly like
+	// one where all twenty-four were.
+	if seatsUngraded > 0 {
+		return fmt.Sprintf("writer: %s (%d %s, %d seats ungraded — those survivors were never attempted, so the proven count is over the rest)",
+			mode, calls, unit, seatsUngraded)
 	}
 	return fmt.Sprintf("writer: %s (%d %s)", mode, calls, unit)
 }

@@ -280,6 +280,54 @@ func TestBuildModelCallRowsIsFieldForField(t *testing.T) {
 	}
 }
 
+// TestBuildEventRowsIsFieldForField is TestBuildModelCallRowsIsFieldForField's
+// sibling for the tape grain: every scanstore.Event field, walked by
+// reflection with REAL (nonzero, mutually distinct) values so a mapping bug
+// that dropped or swapped a field could not hide behind two zeros comparing
+// equal.
+func TestBuildEventRowsIsFieldForField(t *testing.T) {
+	dur := int64(4500)
+	event := scanstore.Event{
+		ScanID: 11, Path: "a.go", Seq: 7, TS: time.Date(2026, 8, 30, 9, 0, 0, 0, time.UTC),
+		Kind: "phase_authored_pass", Actor: "corral-advpool", Subject: "target.go",
+		Model: "m-1", DurationMillis: &dur, Detail: `{"duration_ms":4500}`,
+	}
+	rows := buildEventRows([]scanstore.Event{event}, 11, bundleMeta{Repo: "o/r", RunURL: "https://ci/1"})
+	if len(rows) != 1 {
+		t.Fatalf("buildEventRows returned %d row(s), want 1", len(rows))
+	}
+	row := rows[0]
+
+	lv, rv := reflect.ValueOf(event), reflect.ValueOf(row)
+	lt := lv.Type()
+	// deliberatelyUnmappedEvent names every scanstore.Event field with no
+	// identically-named, identically-typed auditpush.EventRow field.
+	deliberatelyUnmappedEvent := map[string]string{
+		// corral_events.ts is stamped with the PUSH time (see PushBundle),
+		// not the ledger's own event TS — EventRow carries no TS field at
+		// all, so there is nothing here for the reflection walk to compare.
+		"TS": "corral_events.ts is the push time, not the ledger event's own TS",
+	}
+	for i := 0; i < lt.NumField(); i++ {
+		name := lt.Field(i).Name
+		if _, skip := deliberatelyUnmappedEvent[name]; skip {
+			continue
+		}
+		rf := rv.FieldByName(name)
+		if !rf.IsValid() {
+			t.Errorf("scanstore.Event.%s has no warehouse column of the same name", name)
+			continue
+		}
+		if !reflect.DeepEqual(lv.Field(i).Interface(), rf.Interface()) {
+			t.Errorf("%s was dropped or changed on the way to the warehouse: ledger %v, row %v",
+				name, lv.Field(i).Interface(), rf.Interface())
+		}
+	}
+	if row.Repo != "o/r" || row.RunURL != "https://ci/1" {
+		t.Errorf("row = %+v, want the scan-wide Repo/RunURL from meta", row)
+	}
+}
+
 // TestAuditedParentSHAIsTheMutantsOwn is the validity key stated as the one
 // question it has to answer: "is this verdict still current for HEAD?" is
 // `parent_sha256 == sha256(HEAD:path)`, and that only works if the file's

@@ -414,6 +414,14 @@ type localAuditInput struct {
 	// replayable set across a whole scan. nil records nothing.
 	mutantSink func(codePath string, ms []adequacy.Mutant)
 
+	// eventSink, when non-nil, is wired to the driver as its EventSink
+	// instead of `record` — the `certify --repo` position (a scan-wide
+	// scanEventSink, one adapter per file, see localExecutor.auditInputFor),
+	// as distinct from `certify --local`'s `record` tape sink. The two are
+	// mutually exclusive in practice: nil is every `--local` caller's
+	// position, and `record` is nil on every `--repo` caller's.
+	eventSink advpool.EventSink
+
 	// concurrency, when non-nil, is where the workspace substrate RECORDS
 	// what its concurrency probe decided for this file: how many private
 	// trees the pool actually got, and why, if it was downgraded to one (see
@@ -1254,6 +1262,12 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 	rec := in.record
 	if rec != nil {
 		d.Events = rec
+	}
+	// `certify --repo`'s position: no tape, but the scan's own event sink —
+	// see localAuditInput.eventSink's doc for why the two are mutually
+	// exclusive in practice.
+	if in.eventSink != nil {
+		d.Events = in.eventSink
 	}
 	actorFor := func(role string) string { return recordActor(role, assign[role]) }
 	// The wall-clock backstop: a run that hasn't converged by --timeout is signed

@@ -550,6 +550,18 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		if !ex.selection.Ran {
 			fmt.Fprintf(stdout, "  selection: grading by the WHOLE suite — %s\n", ex.selection.Note)
 		}
+		// SCAN-SCOPED: this instrumented run happens ONCE, for the whole
+		// repo, before any per-file driver exists — the driver has no
+		// notion of it (see RunSpec.SelectionDuration's doc), so it is
+		// recorded here directly rather than through a file's EventSink.
+		// Path "" is the scan-scoped marker; omitted (not zero) when the
+		// pass never ran (--whole-suite, an unsupported language, no
+		// runner) — see scanEventSink.record.
+		if ex.selectionDuration > 0 {
+			ex.events.forScan("phase_selection", "", map[string]any{
+				"duration_ms": ex.selectionDuration.Milliseconds(),
+			})
+		}
 	}
 	selectionMethod := ""
 	if ex != nil && ex.selection.Ran {
@@ -966,11 +978,11 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	mutants := buildScanMutantRows(0, results)
 	// modelCallRows was built above, before the scan row, so its totals could
 	// feed InputTokens/OutputTokens/ModelCalls without a second measurement.
-	// The event grain still has no producer: the table and this wiring exist
-	// so a future task can add one rather than a measurement plus a schema
-	// plus a migration. Empty is the honest value in the meantime — never a
-	// fabricated row.
-	var eventRows []scanstore.Event
+	// The event grain's producer is the scan's own scanEventSink (see
+	// localExecutor.events): every job's driver fed it through auditInputFor,
+	// and this is the ONE place its accumulated tape is read out, after every
+	// file has finished.
+	eventRows := scanEventRows(ex)
 
 	var scanID int64
 	if *recordFlag {
@@ -3038,6 +3050,14 @@ type localExecutor struct {
 	// actually graded. nil records nothing.
 	mutantSink func(codePath string, ms []adequacy.Mutant)
 
+	// events is the scan's own tape: every driver beat, across every audited
+	// file, landing as a scanstore.Event row (see scanEventSink's doc). One
+	// sink per scan, shared by every file job — newLocalExecutor always
+	// constructs one, so it is never nil for a real scan; a bare
+	// localExecutor{} built directly by a seam-level test leaves it nil,
+	// which forFile/forScan both treat as "record nothing".
+	events *scanEventSink
+
 	// selection is what ONE instrumented run of this repo's suite learned
 	// about which tests execute which files, collected once per scan (see
 	// collectSelection) and asked per job (see selectionFor). Its zero value
@@ -3140,6 +3160,7 @@ func newLocalExecutor(repoDir string, checkArgv []string, substrate string, time
 		progress:    &syncWriter{w: progress},
 		newBaseline: baselineRunnerFor,
 		audit:       auditOneFile,
+		events:      newScanEventSink(nil),
 	}
 	// The substrate must be known BEFORE this preflight runs: the workspace
 	// substrate needs no sandbox by construction (buildJailWiring's workspace
@@ -3286,6 +3307,10 @@ func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
 		// A nil entry is an ordinary generated run — see localExecutor.presetMutants.
 		presetMutants: l.presetMutants[j.Path],
 		mutantSink:    l.mutantSink,
+		// This file's own adapter onto the scan's shared tape — see
+		// scanEventSink.forFile's doc for why every file needs its own
+		// (the driver's Emit carries no path).
+		eventSink: l.events.forFile(j.Path),
 	}
 }
 
@@ -3298,6 +3323,16 @@ func scanSelectionMillis(ex *localExecutor) *int64 {
 		return nil
 	}
 	return millisOrNil(ex.selectionDuration)
+}
+
+// scanEventRows drains the scan's accumulated tape, or nil when ex is nil —
+// a --dry-run, which audits nothing and builds no executor (and so no sink)
+// at all. The honest empty tape, never a fabricated one.
+func scanEventRows(ex *localExecutor) []scanstore.Event {
+	if ex == nil {
+		return nil
+	}
+	return ex.events.drain()
 }
 
 // concurrencyDisclosure renders the human-readable half of "how many trees

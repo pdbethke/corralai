@@ -262,8 +262,13 @@ type MatrixSink interface {
 // EventSink receives the pool's reasoning milestones as replay/telemetry
 // events. Optional (nil ⇒ no-op), like Signer/Leaderboard — the pure Driver
 // takes no telemetry dependency; the brain wires this to its telemetry store
-// keyed on the run's missionID. Kinds: pool_subject, pool_dev_adequacy,
-// pool_verdict. detail carries the real values/evidence, never a summary.
+// keyed on the run's missionID. Kinds: pool_subject, pool_dev_adequacy
+// (dev_pass's phase boundary — carries duration_ms once the dev pass has
+// closed), pool_verdict, plus the phase-boundary beats phase_pool,
+// phase_generation, phase_authored_pass and phase_critic, each carrying
+// detail.duration_ms and each fired only when that phase actually ran (a
+// phase that never started emits nothing — see Timing's own doc). detail
+// carries the real values/evidence, never a summary.
 type EventSink interface {
 	Emit(missionID int64, kind, subject string, detail map[string]any)
 }
@@ -967,8 +972,8 @@ type Driver struct {
 
 	// Events is the optional reasoning-event sink (nil = no-op), mirroring
 	// Signer/Leaderboard: every pre-existing Driver test keeps working
-	// unwired. When set, the driver emits pool_subject/pool_dev_adequacy/
-	// pool_verdict at the three milestones below via the d.emit helper.
+	// unwired. When set, the driver emits every beat named on EventSink's own
+	// doc via the d.emit helper.
 	Events EventSink
 
 	// MutantSink, when set, is handed the exact mutant set the dev pass
@@ -1227,6 +1232,18 @@ func (d *Driver) StartRun(missionID int64, rs RunSpec, sigs []repoindex.Signatur
 		"goal": rs.Goal, "code": rs.Code, "dev_test_code": rs.DevTestCode,
 		"code_path": rs.CodePath, "dev_test_path": rs.DevTestPath,
 	})
+	// PHASE_POOL: the workspace substrate's copy of the checkout plus its
+	// concurrency probe (RunSpec.PoolDuration) — the driver never measures
+	// this itself (it happens before the driver is even constructed, see
+	// RunSpec.PoolDuration's doc), so it is reported here as the one
+	// phase-boundary event for it. Zero (jail substrate, or a pool of one)
+	// means the phase did not run, and emitting nothing is the honest
+	// disclosure — never a false "ran in 0ms".
+	if rs.PoolDuration > 0 {
+		d.emit(missionID, "phase_pool", rs.CodePath, map[string]any{
+			"duration_ms": rs.PoolDuration.Milliseconds(),
+		})
+	}
 	return nil
 }
 
@@ -1322,6 +1339,9 @@ func (d *Driver) Tick(ctx context.Context, missionID int64) (*Verdict, error) {
 			// nothing on the fifth.
 			if a := d.endPhase(run, phaseAuthored); a > 0 {
 				run.timing.AuthoredPass = a
+				d.emit(missionID, "phase_authored_pass", run.rs.CodePath, map[string]any{
+					"duration_ms": a.Milliseconds(),
+				})
 			}
 			// And the CRITIC's clock starts: the critic seat runs in
 			// parallel with everything above, so what it COSTS this run is
@@ -1716,6 +1736,9 @@ func (d *Driver) tickDevAdequacy(ctx context.Context, missionID int64, run *runS
 	// dev suite is scored.
 	if g := d.endPhase(run, phaseGeneration); g > 0 {
 		run.timing.Generation = g
+		d.emit(missionID, "phase_generation", run.rs.CodePath, map[string]any{
+			"duration_ms": g.Milliseconds(),
+		})
 	}
 
 	// THE DEV PASS: the mutants against the dev's own suite. On real repos
@@ -1803,10 +1826,18 @@ func (d *Driver) tickDevAdequacy(ctx context.Context, missionID int64, run *runS
 		log.Printf("advpool: run %d dev-adequacy: the dev's OWN tests scored %.0f%% (killed %d of %d graded mutants, %d survived — bugs the dev's tests miss)%s",
 			missionID, killRate*100, run.mutantsTotal-len(survivors), run.mutantsTotal, len(survivors), invalidNote)
 	}
-	d.emit(missionID, "pool_dev_adequacy", "", map[string]any{
+	devAdequacyDetail := map[string]any{
 		"dev_kill_rate": run.devKillRate, "mutants_total": run.mutantsTotal,
 		"survivors": len(run.devSurvivors), "survivor_ids": survivorIDs(run.devSurvivors),
-	})
+	}
+	// dev_pass's phase-boundary duration rides on THIS emit rather than a
+	// second one: pool_dev_adequacy already fires at the exact moment the
+	// phase closes (run.timing.DevPass was just set, above). Omitted (not
+	// zero) when the phase never ran — see Timing's own field doc.
+	if run.timing.DevPass > 0 {
+		devAdequacyDetail["duration_ms"] = run.timing.DevPass.Milliseconds()
+	}
+	d.emit(missionID, "pool_dev_adequacy", "", devAdequacyDetail)
 
 	if len(survivors) == 0 {
 		// THREE different runs reach here, and only one of them is good news:
@@ -2168,6 +2199,9 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 		// leaves the phase open, because the run is still waiting.
 		if c := d.endPhase(run, phaseCritic); c > 0 {
 			run.timing.Critic = c
+			d.emit(missionID, "phase_critic", run.rs.CodePath, map[string]any{
+				"duration_ms": c.Milliseconds(),
+			})
 		}
 	}
 

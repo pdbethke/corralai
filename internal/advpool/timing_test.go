@@ -53,6 +53,8 @@ func TestVerdictTimingSumsWithinTotal(t *testing.T) {
 	}
 	d.Now = clk.Now // BEFORE StartRun: startedAt is the run's own zero.
 	d.Signer = &fakeSigner{}
+	sink := &fakeEventSink{}
+	d.Events = sink
 	// The two phases the CALLER measured. Non-zero on purpose: they are spent
 	// BEFORE StartRun, so a Total read as "now minus startedAt" excludes them
 	// and the sum-within-total invariant below would pass vacuously on the
@@ -133,6 +135,34 @@ func TestVerdictTimingSumsWithinTotal(t *testing.T) {
 	}
 	if tm.Selection == 0 {
 		t.Fatal("the fixture measured no selection, so nothing above proves it is EXCLUDED from Total")
+	}
+
+	// Every phase boundary this fixture actually crossed must have EMITTED a
+	// beat with the SAME duration Timing itself carries — the ledger's tape
+	// and the signed verdict must never disagree about what a phase spent.
+	byKind := map[string]map[string]any{}
+	for _, e := range sink.events {
+		byKind[e.kind] = e.detail
+	}
+	wantDurations := map[string]time.Duration{
+		"phase_pool":          tm.Pool,
+		"phase_generation":    tm.Generation,
+		"pool_dev_adequacy":   tm.DevPass,
+		"phase_authored_pass": tm.AuthoredPass,
+		"phase_critic":        tm.Critic,
+	}
+	for kind, want := range wantDurations {
+		detail, ok := byKind[kind]
+		if !ok {
+			t.Fatalf("no %q event emitted; got kinds %v", kind, keysOf2(byKind))
+		}
+		got, ok := detail["duration_ms"].(int64)
+		if !ok {
+			t.Fatalf("%s detail.duration_ms = %v (%T), want int64", kind, detail["duration_ms"], detail["duration_ms"])
+		}
+		if got != want.Milliseconds() {
+			t.Errorf("%s detail.duration_ms = %d, want %d (Timing's own %v)", kind, got, want.Milliseconds(), want)
+		}
 	}
 }
 

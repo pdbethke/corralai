@@ -19,6 +19,8 @@ package adequacy
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sort"
@@ -208,11 +210,24 @@ func (m Mutant) IsWholeFile() bool { return m.Search == "" }
 // Apply materialises the mutated file.
 //
 // It is the ONLY place a mutant becomes a file, and it is byte-for-byte the
-// algorithm testgen.applyMutation used to run at parse time — including the
-// integrity round-trip, which undoes the single splice and demands the exact
-// original back. That guarantee is what a signed verdict rests on: a mutant
-// corral grades is provably `original` with exactly one contiguous region
-// changed, never a file a model wrote.
+// algorithm testgen.applyMutation used to run at parse time.
+//
+// THE GUARANTEE IS THE PARENT HASH, not a round-trip. This used to end by
+// undoing its own splice and demanding the original back, described as the
+// thing a signed verdict rests on. It was not: mutated[:i] + Search +
+// mutated[i+len(Replace):] is arithmetic over the string Apply built one line
+// earlier, so it reconstructs `original` for ANY source the anchor occurs in
+// and can only fail if Go's own slicing is wrong. It proved that the splice
+// was a splice, which was never in doubt, and said nothing about WHICH bytes
+// were spliced.
+//
+// So when the mutant records one (ParentSHA256, set by the generator's patch
+// applier), the real check is made instead: sha256(original) must be the
+// bytes this mutant is a single-point edit OF. A replay against a file that
+// has changed since — the case --mutants exists to make safe — is refused on
+// the anchor-invalid path rather than grading an exam nobody wrote. An EMPTY
+// ParentSHA256 is not a claim (hand-built fixtures, pre-hash producers) and
+// is checked against nothing.
 //
 // A whole-file mutant (Search == "") returns Replace verbatim, whatever
 // original says — that is the v1 compatibility path, where the recorded
@@ -231,6 +246,16 @@ func (m Mutant) IsWholeFile() bool { return m.Search == "" }
 // unanchored mutant scored as a survivor would be a coverage gap that does
 // not exist, and scored as a kill would be credit for catching nothing.
 func (m Mutant) Apply(original string) (string, error) {
+	// BEFORE the whole-file shortcut, deliberately: the v1 path returns
+	// Replace without ever reading original, so it was the one shape with no
+	// tie to the bytes at all. A v1 document that recorded a parent hash
+	// still names the only source its finished file is a derivative of.
+	if m.ParentSHA256 != "" {
+		sum := sha256.Sum256([]byte(original))
+		if got := hex.EncodeToString(sum[:]); got != m.ParentSHA256 {
+			return "", fmt.Errorf("adequacy: mutant %s is an edit of source %s, not the %s being graded — a mutant is a single-point edit of SPECIFIC bytes and re-applying it to different ones grades an exam nobody wrote", m.ID, short(m.ParentSHA256), short(got))
+		}
+	}
 	if m.IsWholeFile() {
 		return m.Replace, nil
 	}
@@ -244,13 +269,18 @@ func (m Mutant) Apply(original string) (string, error) {
 	if strings.Contains(original[i+len(m.Search):], m.Search) {
 		return "", fmt.Errorf("adequacy: mutant %s does not anchor uniquely: its SEARCH occurs more than once", m.ID)
 	}
-	mutated := original[:i] + m.Replace + original[i+len(m.Search):]
-	// Integrity round-trip: undo the one change and demand the EXACT original
-	// back — nothing outside the replaced span may have moved.
-	if mutated[:i]+m.Search+mutated[i+len(m.Replace):] != original {
-		return "", fmt.Errorf("adequacy: mutant %s failed the integrity round-trip: undoing it does not reproduce the source", m.ID)
+	return original[:i] + m.Replace + original[i+len(m.Search):], nil
+}
+
+// short renders a hex digest for an error message. Full 64-hex digests in a
+// one-line rejection push the sentence off the operator's terminal, and the
+// first twelve are already unambiguous for telling "these two files differ"
+// apart at a glance.
+func short(hexDigest string) string {
+	if len(hexDigest) <= 12 {
+		return hexDigest
 	}
-	return mutated, nil
+	return hexDigest[:12]
 }
 
 // HunkSpan is the 1-based, inclusive range of ORIGINAL lines that search

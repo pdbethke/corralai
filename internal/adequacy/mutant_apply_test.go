@@ -3,6 +3,8 @@
 package adequacy
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"strings"
 	"testing"
 
@@ -155,4 +157,67 @@ func TestHunkSpanReportsTheAnchorsOriginalLines(t *testing.T) {
 			t.Errorf("%q: span = %v, want %v", c.search, got, c.want)
 		}
 	}
+}
+
+// TestApplyRefusesSourceThatIsNotTheMutantsParent is the guarantee the
+// integrity round-trip only LOOKED like it gave.
+//
+// A mutant is a single-point edit of SPECIFIC bytes. Undoing the splice and
+// getting the original back proves nothing about which original: it is
+// arithmetic on the string Apply itself just built, and it holds for any
+// source the anchor happens to occur in. ParentSHA256 is the fact that
+// actually names those bytes, and now Apply checks it — a mutant replayed
+// against a file that has since changed is refused, on the anchor-invalid
+// path, rather than grading an exam nobody wrote.
+func TestApplyRefusesSourceThatIsNotTheMutantsParent(t *testing.T) {
+	const parent = "def f(x):\n    return x + 1\n"
+	other := "# a comment that moved the bytes\n" + parent
+
+	m := Mutant{ID: "m1", ParentSHA256: sha256Hex(parent), Search: "x + 1", Replace: "x - 1"}
+
+	if _, err := m.Apply(parent); err != nil {
+		t.Fatalf("Apply against the mutant's OWN parent must succeed: %v", err)
+	}
+	_, err := m.Apply(other)
+	if err == nil {
+		t.Fatal("Apply accepted a source that is not the mutant's parent — the anchor happens to occur there, so the round-trip passes and a file nobody generated gets graded")
+	}
+	if !strings.Contains(err.Error(), "m1") {
+		t.Errorf("error %q must name the mutant, the way every other anchor rejection does", err)
+	}
+}
+
+// TestApplyChecksTheParentOfAWholeFileMutantToo: the v1 shape returns Replace
+// verbatim without ever reading original, so it had NO check at all — a
+// recorded whole-file mutant would be handed to the jail against whatever
+// source the caller passed. When the v1 document recorded a parent hash, that
+// hash still names the only bytes the mutant is a derivative of.
+func TestApplyChecksTheParentOfAWholeFileMutantToo(t *testing.T) {
+	const parent = "def f(x):\n    return x + 1\n"
+	m := Mutant{ID: "v1", ParentSHA256: sha256Hex(parent), Replace: "def f(x):\n    return x - 1\n"}
+	if !m.IsWholeFile() {
+		t.Fatal("fixture is not the whole-file shape")
+	}
+	if got, err := m.Apply(parent); err != nil || got != m.Replace {
+		t.Fatalf("Apply against its own parent = (%q, %v), want the recorded file verbatim", got, err)
+	}
+	if _, err := m.Apply(parent + "\n# changed\n"); err == nil {
+		t.Fatal("a whole-file mutant applied to bytes that are not its parent must be refused")
+	}
+}
+
+// TestApplyWithNoRecordedParentIsUnchanged: hand-built fixtures and every
+// pre-hash producer leave ParentSHA256 empty, and an empty hash is not a
+// claim. Checking it would refuse every fixture in this package.
+func TestApplyWithNoRecordedParentIsUnchanged(t *testing.T) {
+	const src = "def f(x):\n    return x + 1\n"
+	m := Mutant{ID: "m1", Search: "x + 1", Replace: "x - 1"}
+	if _, err := m.Apply(src); err != nil {
+		t.Fatalf("a mutant with no recorded parent must apply anywhere its anchor is unique: %v", err)
+	}
+}
+
+func sha256Hex(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
 }

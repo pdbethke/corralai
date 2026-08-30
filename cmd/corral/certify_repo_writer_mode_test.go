@@ -113,6 +113,55 @@ func TestWriterModeRoundTripsThroughTheLedger(t *testing.T) {
 	}
 }
 
+// TestWriterModeAndPromptShapeLandOnTheirOwnColumns.
+//
+// writer_mode and prompt_shape are two adjacent VARCHARs appended to
+// scan_files in the same change, read back through two adjacent scan
+// destinations. Nothing in the type system tells them apart, so a
+// transposition — the ordinary cost of a hand-resolved rebase over a
+// sixty-column INSERT — would compile, round-trip, and report every
+// per-survivor run as prompt-shaped and every chunked prompt as a writer
+// mode. Recorded with DISTINCT values on purpose: two equal strings prove
+// nothing about which column holds which.
+func TestWriterModeAndPromptShapeLandOnTheirOwnColumns(t *testing.T) {
+	st, err := scanstore.Open(filepath.Join(t.TempDir(), "s.duckdb"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+
+	id, err := st.Record(ctx, scanstore.Scan{Owner: "o", Repo: "r", Commit: "c"}, []scanstore.File{
+		{Path: "a.py", Disposition: "audited", Evidence: "proven",
+			WriterMode: advpool.WriterModePerSurvivor, PromptShape: "chunk"},
+		{Path: "b.py", Disposition: "audited", Evidence: "proven"},
+	})
+	if err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	files, err := st.FilesForScan(ctx, id)
+	if err != nil {
+		t.Fatalf("FilesForScan: %v", err)
+	}
+	if len(files) != 2 {
+		t.Fatalf("FilesForScan returned %d rows, want 2", len(files))
+	}
+	if got := files[0].WriterMode; got != advpool.WriterModePerSurvivor {
+		t.Errorf("a.py writer_mode = %q, want %q", got, advpool.WriterModePerSurvivor)
+	}
+	if got := files[0].PromptShape; got != "chunk" {
+		t.Errorf("a.py prompt_shape = %q, want %q — the two adjacent VARCHARs are transposed", got, "chunk")
+	}
+	// The NULL half, for both: a row that named neither must read back empty
+	// on both fields, never one column's value bleeding into the other's.
+	if got := files[1].WriterMode; got != "" {
+		t.Errorf("b.py writer_mode = %q, want empty (SQL NULL)", got)
+	}
+	if got := files[1].PromptShape; got != "" {
+		t.Errorf("b.py prompt_shape = %q, want empty (SQL NULL)", got)
+	}
+}
+
 // TestAttestationCarriesTheWriterMode: the statement is the one artifact a
 // third party verifies without trusting the run, so it must say which shape
 // earned the proven count it signs.

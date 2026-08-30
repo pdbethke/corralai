@@ -634,9 +634,11 @@ type Verdict struct {
 	// and Cohen's kappa, from internal/modelcorr. nil whenever no comparable
 	// pair exists: no challenger was configured, either seat's own kill
 	// vector was never measured (see runState.primaryWriterMeasured /
-	// shadowWriterMeasured), the primary salvaged (RULING P11 — a
-	// salvaged primary is not comparable to a challenger that got no rescue),
-	// or the two seats' measured sets do not overlap at all.
+	// shadowWriterMeasured), every comparable seat was salvaged (RULING P11
+	// — a salvaged proof came from a deselected remainder the challenger got
+	// no equivalent of; batched refuses the whole file, per-survivor drops
+	// the salvaged seats' own survivors), or the two seats' measured sets do
+	// not overlap at all.
 	//
 	// THE PAIR COVERS ONLY THE SURVIVORS BOTH SEATS GENUINELY ATTEMPTED, not
 	// every survivor the file had. Under WriterModePerSurvivor each survivor
@@ -1047,10 +1049,16 @@ type runState struct {
 	// silently start fabricating a vector because nobody remembered to extend
 	// the exclusion list.
 	primaryWriterMeasured bool
-	// writerSalvaged is true when the primary writer's provenIDs came from a
-	// DESELECTED re-score rather than a clean run. The challenger seat has no
-	// equivalent rescue, so a salvaged run's head-to-head is confounded in the
-	// primary's favour and must not be recorded as a comparison.
+	// writerSalvaged is true when ANY of the primary writer's provenIDs came
+	// from a DESELECTED re-score rather than a clean run. The challenger seat
+	// has no equivalent rescue, so a salvaged proof is confounded in the
+	// primary's favour and must not enter a comparison.
+	//
+	// FILE-WIDE, which is the right grain only in batched mode — one seat
+	// there covers every survivor. Under the fan-out consult
+	// primarySeatSalvaged instead: this flag is true as soon as one of a
+	// file's many seats needed the rescue, and treating that as a fact about
+	// the file discards every clean pair beside it.
 	writerSalvaged bool
 	// authoredTest is the pool's compiling killing test (the test-writer's
 	// cleaned source), surfaced via RunState so `corral certify --adversarial`
@@ -1132,7 +1140,8 @@ type Driver struct {
 	// MutantAttempts is the optional per-run feed of BOTH writer seats'
 	// per-mutant outcomes (nil = no-op), mirroring BugCatch/CriticFindings.
 	// Fed pair-or-nothing by recordMutantAttempts: see its doc for the full
-	// gating (challenger configured AND measured AND primary not salvaged).
+	// gating (challenger configured AND measured, per-seat graded, and the
+	// primary's proof for that survivor not salvaged).
 	MutantAttempts MutantAttemptSink
 
 	// Enumerator is the optional jail-backed test-list seam (nil = the matrix
@@ -2642,8 +2651,20 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 // the same class of error as scoring the two seats against different mutant
 // sets. This pool's standing discipline is to record no comparison rather
 // than a confounded one.
+//
+// P11 IS A PER-SEAT RULING UNDER THE FAN-OUT, and only a file-wide one in
+// batched mode. Batched has one primary seat covering every survivor, so a
+// salvage there confounds all of them and the whole file is refused. Under
+// per-survivor each survivor has its OWN seat and its own salvage, and
+// run.writerSalvaged is true as soon as one of them needed the rescue —
+// refusing the file on that threw away every clean, symmetric pair on it
+// because one seat was partially broken. The salvaged seats' survivors are
+// excluded (runState.primarySeatComparable) and the rest are compared.
 func challengerVectors(run *runState) (killedByPrimary, killedByShadow map[string]bool, ok bool) {
-	if run.rs.ShadowWriterModel == "" || !run.shadowWriterMeasured || !run.primaryWriterMeasured || run.writerSalvaged {
+	if run.rs.ShadowWriterModel == "" || !run.shadowWriterMeasured || !run.primaryWriterMeasured {
+		return nil, nil, false
+	}
+	if run.writerMode != WriterModePerSurvivor && run.writerSalvaged {
 		return nil, nil, false
 	}
 	// `run.provenIDs` is the PRIMARY writer's proven-kill vector (from
@@ -2689,7 +2710,7 @@ func (d *Driver) recordMutantAttempts(run *runState, v Verdict) {
 	// there really is one seat covering every survivor.
 	attempts := make([]MutantAttempt, 0, 2*len(run.devSurvivors))
 	for _, m := range run.devSurvivors {
-		if run.primarySeatMeasured(m.ID) {
+		if run.primarySeatComparable(m.ID) {
 			attempts = append(attempts, MutantAttempt{
 				Path: run.rs.CodePath, MutantID: m.ID,
 				Model: d.Assign[RoleTestWriter], Role: RoleTestWriter,
@@ -2743,7 +2764,7 @@ func challengerPair(d *Driver, run *runState) *modelcorr.Pair {
 	primaryVec := make(map[string]bool, len(run.devSurvivors))
 	shadowVec := make(map[string]bool, len(run.devSurvivors))
 	for _, m := range run.devSurvivors {
-		if !run.primarySeatMeasured(m.ID) || !run.shadowSeatMeasured(m.ID) {
+		if !run.primarySeatComparable(m.ID) || !run.shadowSeatMeasured(m.ID) {
 			continue
 		}
 		primaryVec[m.ID] = killedByPrimary[m.ID]

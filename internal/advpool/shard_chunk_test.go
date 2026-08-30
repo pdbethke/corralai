@@ -3,6 +3,7 @@
 package advpool
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -201,5 +202,114 @@ func TestAnchorNotUniqueStillRunsAgainstTheWholeFile(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "anchor-not-unique") {
 		t.Fatalf("error = %v, want it to name anchor-not-unique", err)
+	}
+}
+
+// TestShardCodeDoesNotDuplicateAPreambleOverlap: the preamble is emitted
+// first and `shown` is set to its line count, so a symbol whose span STARTS
+// inside it was written out a second time — the model saw the same lines
+// twice and the elision arithmetic (sp.from-1-shown) went negative, hiding
+// that anything had happened. A doc comment the language's preamble scanner
+// consumes and the extractor counts as part of the declaration is exactly
+// that shape.
+func TestShardCodeDoesNotDuplicateAPreambleOverlap(t *testing.T) {
+	// 1: package p
+	// 2: (blank)
+	// 3: // Alpha does a thing      <- consumed by goPlugin.Preamble
+	// 4: func Alpha() int {
+	// 5:     return 1
+	// 6: }
+	code := "package p\n\n// Alpha does a thing\nfunc Alpha() int {\n\treturn 1\n}\n"
+	sigs := []repoindex.Signature{{Name: "Alpha", Line: 3, Lines: 4}} // span 3-6, overlapping the preamble
+
+	got, chunked := shardCode(langFor(RunSpec{Lang: "go"}), code, sigs)
+	if !chunked {
+		t.Fatalf("the signature has a real Lines span and must chunk, got the whole-file fallback:\n%s", got)
+	}
+	if n := strings.Count(got, "// Alpha does a thing"); n != 1 {
+		t.Errorf("the doc comment appears %d times, want 1 — the preamble already emitted it:\n%s", n, got)
+	}
+	if !strings.Contains(got, "return 1") {
+		t.Errorf("the symbol's own body must still be shown:\n%s", got)
+	}
+	if strings.Contains(got, "lines elided") {
+		t.Errorf("nothing was cut between the preamble and a span that overlaps it, so no elision note belongs:\n%s", got)
+	}
+}
+
+// TestShardCodeWithAnEmptyPreambleHasNoLeadingBlankLine: a file that begins
+// straight at a definition has no preamble at all, and the unconditional
+// newline after it opened every such shard's view with a blank line — a
+// cosmetic lie about the file's first line that the elision arithmetic then
+// counted as shown.
+func TestShardCodeWithAnEmptyPreambleHasNoLeadingBlankLine(t *testing.T) {
+	code := "def alpha(x):\n    return x\n\n\ndef beta(y):\n    return y\n"
+	sigs := []repoindex.Signature{{Name: "alpha", Line: 1, Lines: 2}}
+
+	got, chunked := shardCode(langFor(RunSpec{Lang: "python"}), code, sigs)
+	if !chunked {
+		t.Fatalf("want a chunked slice, got the whole-file fallback:\n%s", got)
+	}
+	if strings.HasPrefix(got, "\n") {
+		t.Errorf("the slice opens with a blank line although the file has no preamble:\n%q", got)
+	}
+	if !strings.HasPrefix(got, "def alpha(x):") {
+		t.Errorf("the slice must open at the file's own first line, got:\n%q", got)
+	}
+}
+
+// longTwoFuncPythonFile is a realistic two-function file — bodies long enough
+// that showing one function costs far less than showing both, which is the
+// entire economic claim chunking makes.
+func longTwoFuncPythonFile() (string, []repoindex.Signature) {
+	var b strings.Builder
+	b.WriteString("import os\nimport sys\n\n\n")
+	sigs := []repoindex.Signature{}
+	line := 5
+	for _, name := range []string{"alpha", "beta"} {
+		fmt.Fprintf(&b, "def %s(x):\n", name)
+		for i := 0; i < 40; i++ {
+			fmt.Fprintf(&b, "    x = x + %d  # %s step %d\n", i, name, i)
+		}
+		b.WriteString("    return x\n\n\n")
+		sigs = append(sigs, repoindex.Signature{Name: name, Complexity: 1, Line: line, Lines: 42})
+		line += 44
+	}
+	return b.String(), sigs
+}
+
+// TestShardPromptIsStrictlySmallerThanTheWholeFile is the cost claim, stated
+// as an inequality rather than left to inference from "it contains one body
+// and not the other". A slice that showed one function and then elided
+// nothing would satisfy every containment assertion in this file and still
+// send the whole file's worth of tokens.
+func TestShardPromptIsStrictlySmallerThanTheWholeFile(t *testing.T) {
+	code, sigs := longTwoFuncPythonFile()
+	rs := RunSpec{
+		Repo: "r", Commit: "c", Goal: "g",
+		CodePath: "a.py", Code: code,
+		DevTestPath: "a_test.py", DevTestCode: "def test_ok(): pass\n",
+		NMutants: 1, Lang: "python", MaxShards: 2,
+	}
+	sh := shardByFirstSymbol(t, sigs, rs.MaxShards, "alpha")
+
+	shardPrompt, chunked := renderMutantGeneratorShard(rs, sigs, sh)
+	if !chunked {
+		t.Fatal("both signatures carry a real Lines span, so the shard must chunk")
+	}
+	// The SAME shard rendered with no chunkable span — the whole-file prompt
+	// this shard would otherwise have sent. Rendered through the same
+	// function so the comparison is prompt to prompt, not prompt to source.
+	blind := append([]repoindex.Signature(nil), sigs...)
+	for i := range blind {
+		blind[i].Lines = 0
+	}
+	wholeFilePrompt, stillChunked := renderMutantGeneratorShard(rs, blind, sh)
+	if stillChunked {
+		t.Fatal("with Lines zeroed the render must fall back to the whole file")
+	}
+	if len(shardPrompt) >= len(wholeFilePrompt) {
+		t.Errorf("the chunked prompt is %d bytes and the whole-file prompt is %d — chunking must send STRICTLY less, or the fan-out's cost argument does not hold",
+			len(shardPrompt), len(wholeFilePrompt))
 	}
 }

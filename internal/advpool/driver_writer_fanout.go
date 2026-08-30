@@ -403,3 +403,28 @@ func (r *runState) shadowSeatMeasured(mutantID string) bool {
 	a, ok := r.shadowWriterAttempts[mutantID]
 	return ok && a.measured
 }
+
+// primarySeatSalvaged reports whether THIS survivor's primary proof came from
+// a deselected remainder rather than the suite the writer actually authored.
+//
+// Batched mode has one seat for the whole file, so the run-wide flag IS the
+// per-survivor answer. Under the fan-out the rescue is per seat, and the
+// run-wide flag is true as soon as ANY seat needed it — which is exactly why
+// it cannot be reused here.
+func (r *runState) primarySeatSalvaged(mutantID string) bool {
+	if r.writerMode != WriterModePerSurvivor {
+		return r.writerSalvaged
+	}
+	a, ok := r.writerAttempts[mutantID]
+	return ok && a.salvaged
+}
+
+// primarySeatComparable is the primary side's full admission test for a
+// head-to-head: the seat genuinely graded this survivor, AND its proof was
+// not confounded by the salvage rescue the challenger never gets (RULING P11,
+// see challengerVectors). Both consumers of the vectors — the durable attempt
+// rows and the in-memory pair — filter through this one predicate so they
+// cannot disagree about which survivors are comparable.
+func (r *runState) primarySeatComparable(mutantID string) bool {
+	return r.primarySeatMeasured(mutantID) && !r.primarySeatSalvaged(mutantID)
+}

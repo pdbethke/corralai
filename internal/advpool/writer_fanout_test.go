@@ -861,3 +861,92 @@ func TestNoPairWhenNoSurvivorWasAttemptedByBothSeats(t *testing.T) {
 			pair.Mutants, *pair)
 	}
 }
+
+// TestOneSalvagedSeatDoesNotVoidTheWholeFilesComparison.
+//
+// RULING P11 refined to the grain the fan-out actually has. A SALVAGED proof
+// is confounded — the primary's failing selectors were deselected and the
+// remainder re-scored, a rescue the challenger never gets — so it must not
+// enter a head-to-head. Under the fan-out that rescue happens PER SEAT, and
+// run.writerSalvaged is true as soon as ONE of a file's survivors was
+// salvaged. Gating the whole file on it threw away every clean, symmetric
+// pair on the file because one seat needed help: a real measurement,
+// computed and then discarded, which is this pool's oldest bug shape.
+//
+// So the salvaged seat's own survivor is excluded and the rest are compared.
+func TestOneSalvagedSeatDoesNotVoidTheWholeFilesComparison(t *testing.T) {
+	survivors := []adequacy.Mutant{{ID: "m1"}, {ID: "m2"}, {ID: "m3"}}
+	d := &Driver{Assign: RoleAssignment{RoleTestWriter: "primary-model"}}
+	run := &runState{
+		rs:           RunSpec{CodePath: "a.go", ShadowWriterModel: "challenger-model", WriterMode: WriterModePerSurvivor},
+		writerMode:   WriterModePerSurvivor,
+		devSurvivors: survivors,
+		// m2's seat only proved its survivor after its failing selectors
+		// were deselected. m1 and m3 graded cleanly.
+		provenIDs:             []string{"m1", "m2"},
+		primaryWriterMeasured: true,
+		writerSalvaged:        true,
+		writerOrder:           []string{"m1", "m2", "m3"},
+		writerAttempts: map[string]*writerAttempt{
+			"m1": {mutant: survivors[0], done: true, measured: true, proven: true},
+			"m2": {mutant: survivors[1], done: true, measured: true, proven: true, salvaged: true},
+			"m3": {mutant: survivors[2], done: true, measured: true},
+		},
+		shadowWriterMeasured: true,
+		shadowWriterKilled:   []MutantRef{{ID: "m1"}},
+		shadowWriterOrder:    []string{"m1", "m2", "m3"},
+		shadowWriterAttempts: map[string]*writerAttempt{
+			"m1": {mutant: survivors[0], done: true, measured: true, proven: true},
+			"m2": {mutant: survivors[1], done: true, measured: true},
+			"m3": {mutant: survivors[2], done: true, measured: true},
+		},
+	}
+
+	pair := challengerPair(d, run)
+	if pair == nil {
+		t.Fatal("no pair at all — one salvaged seat of three voided two clean, symmetric comparisons")
+	}
+	if pair.Mutants != 2 {
+		t.Errorf("compared %d survivors, want 2 (m1 and m3; m2's primary seat was salvaged)", pair.Mutants)
+	}
+
+	sink := &fakeMutantAttemptSink{}
+	d.MutantAttempts = sink
+	d.recordMutantAttempts(run, Verdict{RecordID: 7})
+	for _, a := range sink.attempts {
+		if a.MutantID == "m2" && a.Role == RoleTestWriter {
+			t.Error("recorded a primary row for the SALVAGED seat — its proof came from a deselected remainder the challenger got no equivalent of")
+		}
+	}
+	if len(sink.attempts) == 0 {
+		t.Error("wrote no rows at all — the two unsalvaged seats are a legitimate pair")
+	}
+}
+
+// TestSalvageStillVoidsTheWholeFileInBatchedMode: batched has ONE writer seat
+// covering every survivor, so a salvaged proof confounds every one of them
+// and RULING P11's file-wide refusal is exactly right there. The per-seat
+// refinement must not loosen it.
+func TestSalvageStillVoidsTheWholeFileInBatchedMode(t *testing.T) {
+	survivors := []adequacy.Mutant{{ID: "m1"}, {ID: "m2"}}
+	d := &Driver{Assign: RoleAssignment{RoleTestWriter: "primary-model"}}
+	run := &runState{
+		rs:                    RunSpec{CodePath: "a.go", ShadowWriterModel: "challenger-model"},
+		writerMode:            WriterModeBatched,
+		devSurvivors:          survivors,
+		provenIDs:             []string{"m1"},
+		primaryWriterMeasured: true,
+		writerSalvaged:        true,
+		shadowWriterMeasured:  true,
+		shadowWriterKilled:    []MutantRef{{ID: "m2"}},
+	}
+	if pair := challengerPair(d, run); pair != nil {
+		t.Errorf("a salvaged BATCHED run produced a pair (%+v) — its one seat's proof is confounded for every survivor", pair)
+	}
+	sink := &fakeMutantAttemptSink{}
+	d.MutantAttempts = sink
+	d.recordMutantAttempts(run, Verdict{RecordID: 7})
+	if len(sink.attempts) != 0 {
+		t.Errorf("wrote %d attempt rows for a salvaged batched run, want 0", len(sink.attempts))
+	}
+}

@@ -493,10 +493,30 @@ func shardCode(p golang.Plugin, code string, shardSigs []repoindex.Signature) (s
 	cprefix := commentPrefix(p.Name())
 
 	var b strings.Builder
-	b.WriteString(preamble)
-	b.WriteString("\n")
+	if preamble != "" {
+		// Only when there IS one. A file that begins straight at a
+		// definition has no preamble, and an unconditional newline opened
+		// its slice with a blank line the file does not have — a cosmetic
+		// lie about where the code starts, in a view whose whole job is to
+		// be verbatim enough to anchor a SEARCH against.
+		b.WriteString(preamble)
+		b.WriteString("\n")
+	}
 	shown := preambleLines
 	for _, sp := range merged {
+		// CLAMPED past the preamble, which was already written. A symbol
+		// whose span starts inside it — a doc comment the language's
+		// preamble scanner consumes and the extractor counts as part of the
+		// declaration is the ordinary case — would otherwise be emitted a
+		// second time, and the elision arithmetic below would go negative
+		// and say nothing about it.
+		if sp.from <= preambleLines {
+			sp.from = preambleLines + 1
+		}
+		if sp.from > sp.to {
+			// Wholly inside the preamble: already shown, in full.
+			continue
+		}
 		if elided := sp.from - 1 - shown; elided > 0 {
 			fmt.Fprintf(&b, "%s … %d lines elided — SEARCH anchors must be verbatim from the code shown and unique in the WHOLE file\n", cprefix, elided)
 		}

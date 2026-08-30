@@ -65,7 +65,12 @@ func twoFileLedgerRows(t *testing.T) (string, []scanstore.File, []scanstore.Muta
 				// actually exercises PromptShape rather than comparing "" to
 				// "" — see PromptShape's own doc for what the value means.
 				PromptShape: "chunk",
-				Status:      "needs-review", AuthoredTest: "func TestX(t *testing.T) {}",
+				// DISTINCT from PromptShape above, and non-empty, so the
+				// reflection walk below proves each value reaches its OWN
+				// warehouse column: two adjacent strings that happen to
+				// match would let a transposition pass.
+				WriterMode: advpool.WriterModePerSurvivor,
+				Status:     "needs-review", AuthoredTest: "func TestX(t *testing.T) {}",
 				ProvenMutantIDs: []string{"m2"},
 				TestSelection: advpool.TestSelection{
 					Method: "coverage-lines", Selected: 4, Of: 41, PerMutant: true,

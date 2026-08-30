@@ -17,9 +17,12 @@
 // Two rules the schema enforces rather than documents:
 //
 //   - APPEND ONLY. A verified receipt that can be UPDATEd is not a receipt.
-//     Rows are inserted, never modified, and each carries the sha256 of the
-//     signed statement it came from so a row traces back to something a third
-//     party can verify.
+//     Rows are inserted, never modified, and — whenever --attest ran too —
+//     each carries the sha256 of the signed statement it came from, so a row
+//     traces back to something a third party can verify. Without --attest
+//     there is no statement to point to, and a row's statement_sha256 is
+//     honestly empty rather than fabricated; scan_id is always the ledger's
+//     row id, or 0 when --record was not given.
 //   - THE QUALIFIERS TRAVEL WITH THE NUMBERS. proven_missed = 0 means "nothing
 //     was proven" rather than "the suite is clean" whenever the writer failed
 //     or its test never graded. Aggregation is exactly where that distinction
@@ -28,12 +31,8 @@
 package auditpush
 
 import (
-	"database/sql"
 	"fmt"
 	"strings"
-	"time"
-
-	_ "github.com/marcboeker/go-duckdb/v2"
 )
 
 // Row is one audited file, as it lands in the warehouse.
@@ -105,6 +104,115 @@ type Row struct {
 	// symlinked into every tree rather than copied — the one thing the trees
 	// did NOT hold privately. SQL NULL, not "", when nothing was shared.
 	SharedDirs string
+	// ScanID is the local scan ledger's row id this row was pushed alongside
+	// (see scanstore.Store.Record), or 0 when the ledger was not written.
+	// It is the join key back to scan_files/scan_mutants, and — together
+	// with StatementSHA256 — the other half of the link a signed statement
+	// makes to this row: the statement names ScanID and the hash of the
+	// rows it was written with, and this row names the statement's own
+	// hash. Two pointers, not one, so either can be checked against the
+	// other.
+	ScanID int64
+
+	// ---- Every file, at every disposition (schema_version 2) ----
+	//
+	// Until this version the warehouse held only the files a scan AUDITED.
+	// A table of audited files cannot answer the question an operator
+	// actually has — "is this repo covered?" — because the files corral
+	// refused are exactly the ones nobody is looking at. Disposition and
+	// Reason are what make a rejected file a row rather than an absence.
+	Disposition    string // "audited" | "rejected"
+	Reason         string // populated when Disposition == "rejected"
+	PreflightState string
+	Evidence       string // "" | "paired" | "coverage" | "proven"
+	Detail         string
+	Status         string // advpool's "certified" | "needs-review"
+	CacheHit       bool
+	// ReusedFromScanID is nil, never 0, when this row was measured fresh: 0
+	// would be a foreign key to nothing.
+	ReusedFromScanID *int64
+	CacheKey         string
+	// ParentSHA256 is the sha256 of the audited file's own bytes — the
+	// VALIDITY key. A verdict is about bytes, not about a commit, so
+	// "is this verdict still current for HEAD?" is
+	// `parent_sha256 == sha256(HEAD:path)`: answerable by a reader holding
+	// the checkout, and by the corral_seal view, with no re-audit.
+	ParentSHA256 string
+	// The denominators behind the rate, split by what happened to each
+	// mutant. corral_mutants carries all four outcomes at the mutant grain;
+	// these are the same facts summarised per file so the common query does
+	// not need the join.
+	MutantsGraded  int
+	MutantsInvalid int
+	// MutantsTimedOut is *int because nothing produces it yet: no verdict
+	// field counts mutants that hit their deadline. A stored 0 would be the
+	// positive claim "none timed out" on every row in the warehouse — a
+	// measurement nobody made — so it is written SQL NULL until there is
+	// something to write.
+	MutantsTimedOut *int
+	RegionsTotal    int
+	RegionsProbed   int
+	DroppedRegions  string
+	VacuousFindings int
+	// AuthoredTestNotCollected and BaselineFailed are the two qualifiers
+	// that turn a clean-looking number into a meaningless one. They travel
+	// with the number, on the row, for the reason this package's doc gives:
+	// aggregation is exactly where a qualifier gets dropped.
+	AuthoredTestNotCollected bool
+	BaselineFailed           bool
+	// SuiteBaselineMillis is the compliant suite's own wall clock — the one
+	// input to the audit cost model. *int64, and NULL for a file nothing
+	// ran: a stored 0 would be averaged in as a suite that takes no time.
+	SuiteBaselineMillis *int64
+	ProvenMutantIDs     string
+	// The challenger seat's agreement with the primary writer. All three are
+	// pointers: "the challenger did not run" and "the challenger agreed on
+	// nothing" are different claims and 0.0 cannot tell them apart.
+	ChallengerJaccard    *float64
+	ChallengerKappa      *float64
+	ChallengerSufficient *bool
+	GoalsDerived         int
+	// The per-phase clock. NULL until the phase is actually timed — see the
+	// same fields on scanstore.File. A 0 here would report a phase that
+	// costs nothing into the page whose entire purpose is the cost model.
+	SelectionMillis    *int64
+	GenerationMillis   *int64
+	PoolMillis         *int64
+	DevPassMillis      *int64
+	AuthoredPassMillis *int64
+	CriticMillis       *int64
+	TotalMillis        *int64
+	MutantMillisMedian *int64
+	MutantMillisMax    *int64
+	// AuthoredTest and VerdictJSON are SOURCE. They are written only when
+	// the bundle says --push-source was given; otherwise the columns are
+	// SQL NULL no matter what this struct carries. Enforced by the writer,
+	// not by the caller remembering to blank them — see PushBundle.
+	AuthoredTest string
+	VerdictJSON  string
+}
+
+// Link identifies the ledger scan and signed statement a pushed row belongs
+// to — the fields stampLink (internal/auditpush/bundle.go) writes onto every
+// row of every table from a single source, so a row and the statement it
+// names can never disagree about which run produced them. (It used to name
+// cmd/corral's pushAuditRows, which was replaced by the bundle path in the
+// same change that made the warehouse hold every disposition rather than only
+// the audited files.)
+type Link struct {
+	// ScanID is written onto Row.ScanID — and onto the scan, mutant,
+	// model-call and event rows too. Zero writes nothing: it is the absence
+	// of a ledger id, not an id, and the legacy Push path sets the field on
+	// its rows directly. See stampLink.
+	ScanID int64
+	// StatementSHA256 is written onto Row.StatementSHA256.
+	StatementSHA256 string
+	// Require, when true, refuses to push any row whose StatementSHA256 is
+	// empty. The certify --repo path sets this whenever --attest produced a
+	// statement, so a row that would otherwise claim traceability actually
+	// has it; without --attest there is no statement to point to, Require
+	// is false, and a row with statement_sha256 = '' pushes honestly.
+	Require bool
 }
 
 // TestsPerMutantSpread is how many tests each graded mutant ran: the
@@ -114,233 +222,37 @@ type Row struct {
 // than three zeros.
 type TestsPerMutantSpread struct{ Min, Median, Max int }
 
-const schema = `
-CREATE TABLE IF NOT EXISTS corral_audits (
-  ts                 TIMESTAMPTZ NOT NULL,
-  repo               VARCHAR     NOT NULL,
-  commit_sha         VARCHAR     NOT NULL,
-  path               VARCHAR     NOT NULL,
-  lang               VARCHAR,
-  kill_rate          DOUBLE,
-  survivors          INTEGER,
-  proven_missed      INTEGER,
-  timed_out          BOOLEAN,
-  test_writer_failed BOOLEAN,
-  pool_test_unsound  BOOLEAN,
-  audited            INTEGER,
-  candidates         INTEGER,
-  mutants_planted    INTEGER,
-  models_by_role     VARCHAR,
-  min_kill_rate      DOUBLE,
-  max_proven_missed  INTEGER,
-  passed             BOOLEAN,
-  statement_sha256   VARCHAR,
-  run_url            VARCHAR,
-  test_selection     VARCHAR,
-  selected_tests     INTEGER,
-  suite_tests        INTEGER,
-  selection_fallback VARCHAR,
-  uncovered          BOOLEAN,
-  per_mutant              BOOLEAN,
-  tests_per_mutant_min    INTEGER,
-  tests_per_mutant_median INTEGER,
-  tests_per_mutant_max    INTEGER,
-  trees                   INTEGER,
-  concurrency_note        VARCHAR,
-  shared_dirs             VARCHAR
-);`
-
-// corralAuditsMigrationCols is the additive set of columns this package has
-// ever needed on corral_audits beyond the original shape (ts … run_url), in
-// the order they must be added.
+// Push appends file rows to target, creating the tables if they are not
+// there.
 //
-// It exists because `CREATE TABLE IF NOT EXISTS` is a NO-OP on a warehouse an
-// earlier corral already created: that table keeps its old column set forever,
-// and an INSERT naming a column it does not have fails the whole push — a
-// working `--push` breaking on upgrade, against the one table this tool asks
-// operators to trust as a durable record. Both this list and the fresh
-// CREATE TABLE above carry the columns, so a brand-new warehouse never runs
-// an ALTER; this path is only for a table that predates them.
-//
-// DuckDB has no `ADD COLUMN IF NOT EXISTS`, and silently swallowing every
-// ALTER error would make a genuinely broken migration indistinguishable from
-// an already-applied one — so the existing columns are probed first and any
-// other failure is surfaced. Same rule scanstore's scanFilesMigrationCols
-// follows, for the same reason.
-var corralAuditsMigrationCols = []struct{ name, ddl string }{
-	{"test_selection", "test_selection VARCHAR"},
-	{"selected_tests", "selected_tests INTEGER"},
-	{"suite_tests", "suite_tests INTEGER"},
-	{"selection_fallback", "selection_fallback VARCHAR"},
-	{"uncovered", "uncovered BOOLEAN"},
-	{"per_mutant", "per_mutant BOOLEAN"},
-	{"tests_per_mutant_min", "tests_per_mutant_min INTEGER"},
-	{"tests_per_mutant_median", "tests_per_mutant_median INTEGER"},
-	{"tests_per_mutant_max", "tests_per_mutant_max INTEGER"},
-	{"trees", "trees INTEGER"},
-	{"concurrency_note", "concurrency_note VARCHAR"},
-	{"shared_dirs", "shared_dirs VARCHAR"},
-}
-
-// migrateCorralAudits additively brings a corral_audits table created before
-// a later column existed up to the current column set. Idempotent: a table
-// that already has every column runs zero ALTERs.
-//
-// The columns are probed through duckdb_columns() rather than
-// information_schema.columns because the target is an ATTACHed catalog
-// (`warehouse`), and information_schema is scoped to the current one — it
-// would report the attached table as having no columns at all, and every
-// ALTER would then run and fail on a table that was already current.
-func migrateCorralAudits(db *sql.DB) error {
-	rows, err := db.Query(`SELECT column_name FROM duckdb_columns()
-	    WHERE database_name = 'warehouse' AND table_name = 'corral_audits'`)
-	if err != nil {
-		return fmt.Errorf("auditpush: probe existing columns: %w", err)
-	}
-	existing := map[string]bool{}
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			rows.Close()
-			return fmt.Errorf("auditpush: scan existing column: %w", err)
-		}
-		existing[name] = true
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return fmt.Errorf("auditpush: probe existing columns: %w", err)
-	}
-	rows.Close()
-
-	for _, col := range corralAuditsMigrationCols {
-		if existing[col.name] {
-			continue
-		}
-		if _, err := db.Exec("ALTER TABLE warehouse.corral_audits ADD COLUMN " + col.ddl); err != nil {
-			return fmt.Errorf("auditpush: migrate: add column %s: %w", col.name, err)
-		}
-	}
-	return nil
-}
-
-// Push appends rows to target, creating the table if it is not there.
+// DEPRECATED, and kept because it is the shape every pre-bundle caller was
+// written against: it pushes ONE of the five grains. New callers build a
+// Bundle and call PushBundle, which is what this now delegates to (with an
+// empty scan row and no mutants, calls or events).
 //
 // target is a DuckDB path or `md:<db>`. For MotherDuck the caller must have set
 // motherduck_token in the environment — the same contract fleet sync uses, and
 // the reason this takes no credential of its own: corral never holds one.
-func Push(target string, rows []Row) (int, error) {
-	if strings.TrimSpace(target) == "" {
-		return 0, fmt.Errorf("auditpush: no target")
+//
+// link is variadic so Push(target, rows) keeps working for every caller that
+// has no statement to link rows to — the test-only/legacy path, and any
+// caller pushing rows without --attest. MORE THAN ONE link is an error, not
+// a silent "first one wins": the dropped link is precisely the traceability
+// a row would then claim and not have.
+func Push(target string, rows []Row, link ...Link) (int, error) {
+	if len(link) > 1 {
+		return 0, fmt.Errorf("auditpush: Push takes at most one Link, got %d", len(link))
 	}
 	if len(rows) == 0 {
+		if strings.TrimSpace(target) == "" {
+			return 0, fmt.Errorf("auditpush: no target")
+		}
 		return 0, nil
 	}
-
-	db, err := sql.Open("duckdb", "")
-	if err != nil {
-		return 0, err
+	var lk Link
+	if len(link) == 1 {
+		lk = link[0]
 	}
-	defer db.Close()
-
-	if strings.HasPrefix(target, "md:") {
-		if _, err := db.Exec("INSTALL motherduck; LOAD motherduck;"); err != nil {
-			return 0, fmt.Errorf("auditpush: load motherduck extension: %w", err)
-		}
-	}
-	if _, err := db.Exec(fmt.Sprintf("ATTACH '%s' AS warehouse", strings.ReplaceAll(target, "'", "''"))); err != nil {
-		return 0, fmt.Errorf("auditpush: attach %q: %w", target, err)
-	}
-	if _, err := db.Exec(strings.Replace(schema, "corral_audits", "warehouse.corral_audits", 1)); err != nil {
-		return 0, fmt.Errorf("auditpush: create table: %w", err)
-	}
-	// A warehouse an earlier corral created already exists, so the CREATE
-	// above did nothing and its column set is whatever that version wrote.
-	// The INSERT below names every current column, so without this an
-	// upgrade turns a working push into a hard failure.
-	if err := migrateCorralAudits(db); err != nil {
-		return 0, err
-	}
-
-	// Columns named explicitly rather than positionally: the list has grown
-	// (test selection), and a warehouse table created by an older corral is
-	// then a clear "column not found" instead of a silent column-order
-	// mismatch that would file kill rates under the wrong heading.
-	stmt, err := db.Prepare(`INSERT INTO warehouse.corral_audits (
-	    ts, repo, commit_sha, path, lang,
-	    kill_rate, survivors, proven_missed,
-	    timed_out, test_writer_failed, pool_test_unsound,
-	    audited, candidates, mutants_planted, models_by_role,
-	    min_kill_rate, max_proven_missed, passed, statement_sha256, run_url,
-	    test_selection, selected_tests, suite_tests, selection_fallback, uncovered,
-	    per_mutant, tests_per_mutant_min, tests_per_mutant_median, tests_per_mutant_max,
-	    trees, concurrency_note, shared_dirs
-	  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-	if err != nil {
-		return 0, err
-	}
-	defer stmt.Close()
-
-	now := time.Now().UTC()
-	n := 0
-	for _, r := range rows {
-		var minKill any
-		if r.MinKillRate != nil {
-			minKill = *r.MinKillRate
-		}
-		var maxGaps any
-		if r.MaxProvenMissed != nil {
-			maxGaps = *r.MaxProvenMissed
-		}
-		// NULL, never 0.0, for a file nothing graded — a nil *float64 binds
-		// SQL NULL, which is the only honest value for a rate that was never
-		// measured. Belt and braces on Uncovered: the caller sets the rate
-		// nil, and an uncovered row cannot carry one even if it did not.
-		var killRate any
-		if r.KillRate != nil && !r.Uncovered {
-			killRate = *r.KillRate
-		}
-		// NULL, never 0, for a spread that was never measured — a
-		// per-mutant run can end with no graded mutant at all, and a stored
-		// 0-to-0 range would read as "every mutant ran no tests" instead of
-		// "no mutant was graded".
-		var pmMin, pmMedian, pmMax any
-		if s := r.TestsPerMutant; r.PerMutant && s != nil {
-			pmMin, pmMedian, pmMax = s.Min, s.Median, s.Max
-		}
-		// concurrencyNote is SQL NULL, not "", for a row with no note: an
-		// empty string would be indistinguishable from "the substrate had
-		// nothing to say" and "this column predates the row".
-		var concurrencyNote any
-		if r.ConcurrencyNote != "" {
-			concurrencyNote = r.ConcurrencyNote
-		}
-		// And trees is SQL NULL, not 0, when nothing measured it: the jail
-		// substrate builds no trees and a cached pre-concurrency verdict
-		// carries none. A 0 in an INTEGER column is a value a cross-repo
-		// query will average and rank on; NULL is the only encoding of
-		// "this warehouse does not say".
-		var trees any
-		if r.Trees >= 1 {
-			trees = r.Trees
-		}
-		// Same rule for the shared dep dirs: "" is "nothing was shared",
-		// which is a positive claim a row that never measured concurrency
-		// cannot make.
-		var sharedDirs any
-		if r.SharedDirs != "" {
-			sharedDirs = r.SharedDirs
-		}
-		if _, err := stmt.Exec(now, r.Repo, r.Commit, r.Path, r.Lang,
-			killRate, r.Survivors, r.ProvenMissed,
-			r.TimedOut, r.TestWriterFailed, r.PoolTestUnsound,
-			r.Audited, r.Candidates, r.MutantsPlanted, r.ModelsByRole,
-			minKill, maxGaps, r.Passed, r.StatementSHA256, r.RunURL,
-			r.TestSelection, r.SelectedTests, r.SuiteTests, r.SelectionFallback, r.Uncovered,
-			r.PerMutant, pmMin, pmMedian, pmMax,
-			trees, concurrencyNote, sharedDirs); err != nil {
-			return n, fmt.Errorf("auditpush: insert %s: %w", r.Path, err)
-		}
-		n++
-	}
-	return n, nil
+	c, err := PushBundle(target, Bundle{Files: rows, Link: lk})
+	return c.Files, err
 }

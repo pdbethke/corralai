@@ -12,7 +12,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/lang"
+	"github.com/pdbethke/corralai/internal/modelcorr"
 	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/scanstore"
 )
@@ -107,7 +109,32 @@ func killRatePtr(v float64) *float64 {
 // (`--mutants`), or "" when it generated its own. It rides only on AUDITED
 // rows: a rejected or excluded file sat no exam at all, and stamping a set
 // identifier on it would claim it was graded against one.
-func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclusion, preflight reposcan.CoverageMap, mutantsFrom string, stderr io.Writer) []scanstore.File {
+// ParentSHA256 — the validity key a later reader checks against its own
+// checkout to tell a live verdict from a stale one — has ONE source per
+// disposition, and which source is not a detail:
+//
+//   - An AUDITED file takes the hash its own MUTANTS carry
+//     (advpool.MutantRef.ParentSHA256). The generator hashed the exact bytes
+//     it mutated, before anything overlaid the file, so that hash IS what
+//     was graded. All of a file's mutants must agree; if they do not, there
+//     is no single answer to "what was audited" and the row records NOTHING
+//     (with a line on stderr) rather than picking one and making a stale
+//     verdict look live.
+//   - A file that was never graded — rejected, or excluded before it ever
+//     became a job — has no mutants to take a hash from, so and only so is
+//     repoDir/path read here. "Never audited" is a state the seal reader has
+//     to be able to report, and it needs a hash to report it against.
+//
+// Re-reading the checkout for an AUDITED file would be a different source,
+// not a second one: on the workspace substrate the audit writes each mutant
+// into the file in place and restores it afterwards, so a read at record
+// time is not guaranteed to be the bytes the generator hashed — and a
+// validity key that can disagree with the mutants it was derived from is
+// worse than none. (An earlier version of this comment claimed
+// `certify --repo` "never writes into --repo". It does.)
+//
+// A file that cannot be read gets "" rather than a fabricated hash.
+func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclusion, preflight reposcan.CoverageMap, mutantsFrom string, repoDir string, stderr io.Writer) []scanstore.File {
 	results = dedupeResultsByPath(results)
 	rows := make([]scanstore.File, 0, len(results)+len(excluded))
 	seen := make(map[string]bool, len(results)+len(excluded))
@@ -192,8 +219,12 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 				BaselineFailed:           r.Verdict.BaselineFailed,
 				// SuiteBaselineMillis is the cost-model input: how long the
 				// dev suite's own compliant run took, in milliseconds — see
-				// scanstore.File.SuiteBaselineMillis.
-				SuiteBaselineMillis: r.Verdict.BaselineDuration.Milliseconds(),
+				// scanstore.File.SuiteBaselineMillis. Like every timing
+				// column, it says what THIS scan spent: a reused verdict
+				// carries the ORIGINAL run's baseline in its JSON, and
+				// recording that here would be another scan's measurement
+				// under this scan's id — 0 stores as NULL downstream.
+				SuiteBaselineMillis: baselineMillisUnlessReused(r),
 				// CacheHit rides through from reposcan.FileResult — this row's
 				// verdict was served from a prior scan's cache_key match, not
 				// earned by this scan. ReusedFromScanID stays nil here: the
@@ -242,6 +273,60 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 				// is what lets oldestReuse (verdict_cache.go) report how old
 				// a reused verdict really is instead of when it was reused.
 				ComputedAt: r.ComputedAt,
+				// The validity key: the bytes the generator mutated, taken
+				// from this file's own mutants. See the doc above.
+				ParentSHA256: auditedParentSHA256(path, r.Verdict, stderr),
+				// The denominators the rate is over, split. MutantsGraded is
+				// the verdict's own "actually graded" count (compile-gate
+				// rejects excluded) and MutantsInvalid is what the gate threw
+				// out — a rate over 8 of 12 mutants and one over 8 of 8 are
+				// different claims. MutantsTimedOut has no source in the
+				// verdict yet and stays nil — SQL NULL — rather than
+				// claiming, on every row, that nothing timed out.
+				MutantsGraded:  r.Verdict.MutantsTotal,
+				MutantsInvalid: r.Verdict.MutantsInvalid,
+				// At which GRAIN the rate was measured, carried in the ledger
+				// so the warehouse row can be built from the ledger alone.
+				PerMutant:            r.Verdict.TestSelection.PerMutant,
+				TestsPerMutantMin:    spreadMin(r.Verdict.TestSelection.TestsPerMutant),
+				TestsPerMutantMedian: spreadMedian(r.Verdict.TestSelection.TestsPerMutant),
+				TestsPerMutantMax:    spreadMax(r.Verdict.TestSelection.TestsPerMutant),
+				// WHERE THE MINUTES WENT, one nullable column per phase.
+				// millisOrNil, not a bare Milliseconds(): a phase that did
+				// not run must read back as unknown, and a stored 0 would be
+				// averaged into the cost model as a phase that is free.
+				//
+				// ALL NULL ON A CACHE HIT (unmeasuredOnReuse). A reused
+				// verdict's Timing round-trips through verdict_json and comes
+				// back fully populated with the minutes the run that EARNED
+				// it spent; storing them again on this scan's row would tell
+				// a cost query that a cache hit costs as much as the audit it
+				// replaced. The row still says the verdict was reused
+				// (CacheHit, ReusedFromScanID), and the scan it was reused
+				// FROM still holds the real clock.
+				SelectionMillis:    unmeasuredOnReuse(r, millisOrNil(r.Verdict.Timing.Selection)),
+				GenerationMillis:   unmeasuredOnReuse(r, millisOrNil(r.Verdict.Timing.Generation)),
+				PoolMillis:         unmeasuredOnReuse(r, millisOrNil(r.Verdict.Timing.Pool)),
+				DevPassMillis:      unmeasuredOnReuse(r, millisOrNil(r.Verdict.Timing.DevPass)),
+				AuthoredPassMillis: unmeasuredOnReuse(r, millisOrNil(r.Verdict.Timing.AuthoredPass)),
+				CriticMillis:       unmeasuredOnReuse(r, millisOrNil(r.Verdict.Timing.Critic)),
+				TotalMillis:        unmeasuredOnReuse(r, millisOrNil(r.Verdict.Timing.Total)),
+				// And the shape of the dev pass at the file grain: one slow
+				// mutant or forty ordinary ones.
+				MutantMillisMedian: unmeasuredOnReuse(r, millisOrNil(r.Verdict.MutantDurationMedian)),
+				MutantMillisMax:    unmeasuredOnReuse(r, millisOrNil(r.Verdict.MutantDurationMax)),
+				// The primary/challenger agreement — NULL (all three
+				// pointers nil) unless a comparable pair was actually
+				// computed. See advpool.Verdict.ChallengerAgreement's doc
+				// for the full gating.
+				ChallengerJaccard:    challengerJaccard(r.Verdict.ChallengerAgreement),
+				ChallengerKappa:      challengerKappa(r.Verdict.ChallengerAgreement),
+				ChallengerSufficient: challengerSufficient(r.Verdict.ChallengerAgreement),
+				// How many goals reposcan's DERIVER produced for this file —
+				// 0 (not NULL: the column is a plain int, see
+				// scanstore.File.GoalsDerived's doc) unless this file's goal
+				// actually came from derivingGoalSource.
+				GoalsDerived: goalsDerivedFor(r.Job.Goal),
 			})
 			continue
 		}
@@ -258,6 +343,13 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 			Path: path, Lang: r.Job.Lang, Disposition: "rejected", Reason: reason,
 			Gradable: false, Evidence: ungradableEvidence(reason), PreflightState: preflightState(preflight, path),
 			Detail: r.Detail,
+			// Ungradable: no verdict, so no mutants, so the hash is a read
+			// of the checkout — the same rule the excluded rows below follow.
+			ParentSHA256: auditedFileSHA256(repoDir, path),
+			// A job WAS emitted for this file (it has a Goal — EmitJobs never
+			// emits one without), so the same GoalsDerived question has a real
+			// answer here too, even though the file never got a verdict.
+			GoalsDerived: goalsDerivedFor(r.Job.Goal),
 		})
 	}
 
@@ -271,6 +363,10 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 		rows = append(rows, scanstore.File{
 			Path: e.Path, Lang: detectLang(e.Path), Disposition: "rejected", Reason: e.Reason,
 			Gradable: false, Evidence: exclusionEvidence(e.Reason, pfState), PreflightState: pfState,
+			// Never graded, so there are no mutants to take a hash from:
+			// this is the one disposition whose hash is a read of the
+			// checkout. See buildScanFileRows' doc.
+			ParentSHA256: auditedFileSHA256(repoDir, e.Path),
 		})
 	}
 	return rows
@@ -457,30 +553,133 @@ func buildScanMutantRows(scanID int64, results []reposcan.FileResult) []scanstor
 				ScanID: scanID, Path: r.Job.Path, MutantID: m.ID,
 				Outcome: "killed", ParentSHA256: m.ParentSHA256,
 				TestsRun: m.TestsRun, SelectionRule: m.Rule,
+				// How long THIS mutant's own grading run took. NULL, never
+				// 0, on a run that did not time its mutants — the whole
+				// point of the column is to let a query name the mutants
+				// that ate the dev pass, and a zero would name all of them.
+				DurationMillis: millisOrNil(m.Duration),
+				// WHICH TEST CAUGHT IT — on the killed rows only. A survivor
+				// row has no killer by construction, so the column is not
+				// even written there: an empty string beside a survivor
+				// would read as "we looked and could not tell" instead of
+				// "nothing caught it". Empty here too whenever the runner's
+				// output did not say, and stored as NULL rather than "".
+				KilledBy: m.KilledBy,
 			})
 		}
 		for _, m := range r.Verdict.DevSurvivedMutants {
 			rows = append(rows, scanstore.Mutant{
 				ScanID: scanID, Path: r.Job.Path, MutantID: m.ID,
 				Outcome: "survived", ParentSHA256: m.ParentSHA256,
-				Proven:   proven[m.ID],
-				TestsRun: m.TestsRun, SelectionRule: m.Rule,
+				Proven: proven[m.ID],
+				// A survivor the AUTHORED test killed is, by construction, one
+				// the dev suite did not: it is in DevSurvivedMutants. So for
+				// this grain proven and proven-by-authored-alone coincide, and
+				// the column is written from the same lookup rather than from a
+				// second derivation that could disagree with it. It is a
+				// separate column because the mutant table admits killed rows
+				// too, where the two are NOT the same claim.
+				ProvenByAuthoredAlone: proven[m.ID],
+				TestsRun:              m.TestsRun, SelectionRule: m.Rule,
+				DurationMillis: millisOrNil(m.Duration),
 			})
 		}
 	}
 	return rows
 }
 
+// buildScanModelCallRows maps every file's Verdict.ModelCalls into the
+// ledger's per-(file, role) money grain. Unlike buildScanMutantRows, this is
+// NOT restricted to Gradable results: a file whose baseline failed, or whose
+// test-writer exhausted its retries, can still have dispatched a
+// mutant-generator or test-writer seat before the run gave up on it, and that
+// spend is real whether or not the file ended up graded.
+//
+// A CACHE HIT IS EXCLUDED, and that is the one exclusion here. A reused
+// verdict's ModelCalls round-trip through verdict_json and ledgerCache.Get
+// restores them verbatim, so the slice is fully populated with the tokens the
+// run that EARNED the verdict already recorded under its own scan id. Writing
+// them again would bill the same calls twice, and a warehouse summing
+// scan_model_calls across scans would read a repo audited nightly from cache
+// as costing full price every night.
+func buildScanModelCallRows(results []reposcan.FileResult) []scanstore.ModelCall {
+	var rows []scanstore.ModelCall
+	for _, r := range dedupeResultsByPath(results) {
+		if r.CacheHit {
+			continue
+		}
+		for _, c := range r.Verdict.ModelCalls {
+			rows = append(rows, scanstore.ModelCall{
+				Path: r.Job.Path, Role: c.Role, Model: c.Model,
+				Calls: c.Calls, Retries: c.Retries,
+				InputTokens: c.InputTokens, OutputTokens: c.OutputTokens,
+				WallMillis: c.Wall.Milliseconds(),
+			})
+		}
+	}
+	return rows
+}
+
+// scanModelCallTotals sums buildScanModelCallRows' per-(file, role) grain
+// into ONE []advpool.ModelCall per role for the WHOLE scan, in roster order —
+// the shape costLine takes, for the end-of-scan stdout line. A role's model
+// is assumed constant across the scan (the roster is resolved once, before
+// the fan-out); the first non-empty Model seen for a role is kept.
+//
+// Excludes a cache hit for the same reason buildScanModelCallRows does — see
+// its doc. The scan header's token/call totals and the end-of-scan `cost:`
+// line are both built from here, so a scan that reused every verdict prints
+// no cost line at all, which is the truth: it bought nothing.
+func scanModelCallTotals(results []reposcan.FileResult) []advpool.ModelCall {
+	totals := make(map[string]*advpool.ModelCall, len(rosterRoleOrder))
+	for _, r := range dedupeResultsByPath(results) {
+		if r.CacheHit {
+			continue
+		}
+		for _, c := range r.Verdict.ModelCalls {
+			t, ok := totals[c.Role]
+			if !ok {
+				t = &advpool.ModelCall{Role: c.Role, Model: c.Model}
+				totals[c.Role] = t
+			}
+			t.Calls += c.Calls
+			// Retries is nullable: sum only what was actually measured, and
+			// leave the total nil (not 0) when nothing contributing to it
+			// ever measured a retry — the same NULL-not-zero rule the
+			// column follows end to end. Today this branch never runs
+			// (nothing produces a non-nil Retries yet), but the summation
+			// must not silently coerce a future measured value to 0 via a
+			// nil pointer arithmetic panic or a wrong default.
+			if c.Retries != nil {
+				if t.Retries == nil {
+					zero := 0
+					t.Retries = &zero
+				}
+				*t.Retries += *c.Retries
+			}
+			t.InputTokens += c.InputTokens
+			t.OutputTokens += c.OutputTokens
+			t.Wall += c.Wall
+		}
+	}
+	out := make([]advpool.ModelCall, 0, len(totals))
+	for _, role := range rosterRoleOrder {
+		if t, ok := totals[role]; ok {
+			out = append(out, *t)
+		}
+	}
+	return out
+}
+
 // recordCertifyRepoScan writes scan and files to st in one transaction.
-// st is opened (and later closed) by the caller — BEFORE the scan even runs
-// — so the identical handle also serves reposcan.Scan's verdict cache during
-// the run (see runCertifyRepo and newLedgerCache). Opening it here, as this
-// function used to, would have meant two separate handles on the same DuckDB
-// file within one process: one for the cache's reads during the scan, a
-// second opened fresh at the very end for this write. Every error case (a
-// failed write) is returned unchanged to the caller, which is responsible
-// for the fail-open handling — this function does not print anything
-// itself, so it stays testable as a pure function of its inputs.
+// st is opened, and closed, by the caller AROUND THIS CALL — not held across
+// the scan. DuckDB is single-writer per file, and a handle held for the whole
+// run locked the operator's ledger out of `corral scans` for the duration of
+// every audit (see runCertifyRepo's DSN resolution, and ledgerCache, which
+// opens per lookup for the same reason). Every error case (a failed write) is
+// returned unchanged to the caller, which is responsible for the fail-open
+// handling — this function does not print anything itself, so it stays
+// testable as a pure function of its inputs.
 //
 // scan_mutants is written separately, AFTER scan+files have already
 // committed and the scan id is known. A RecordMutants failure is logged and
@@ -488,16 +687,207 @@ func buildScanMutantRows(scanID int64, results []reposcan.FileResult) []scanstor
 // recorded in scan_files above, so losing mutant detail costs analysis, not
 // correctness, and must not turn into "scan ledger NOT written" for a scan
 // that, in every way that matters, was.
-func recordCertifyRepoScan(st *scanstore.Store, scan scanstore.Scan, files []scanstore.File, results []reposcan.FileResult, stderr io.Writer) error {
+// It returns the ledger's scan id so the caller can thread it into the
+// audit statement and warehouse push that follow — the link this function's
+// own package comment set out to make traceable.
+func recordCertifyRepoScan(st *scanstore.Store, scan scanstore.Scan, files []scanstore.File, mutants []scanstore.Mutant, calls []scanstore.ModelCall, events []scanstore.Event, stderr io.Writer) (int64, error) {
 	id, err := st.Record(context.Background(), scan, files)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	if err := st.RecordMutants(context.Background(), buildScanMutantRows(id, results)); err != nil {
+	// The mutant, model-call and event rows are built by the CALLER and
+	// stamped with the id here. They are the same slices the warehouse bundle
+	// is built from, which is the point: rebuilding them from the report a
+	// second time is how the ledger and the warehouse start disagreeing about
+	// what the scan found.
+	stampScanID(id, mutants, calls, events)
+	if err := st.RecordMutants(context.Background(), mutants); err != nil {
 		// The caller's stderr, not the global logger, for the same reason as
 		// in buildScanFileRows: fail-open still has to be LOUD where the
 		// operator is actually looking.
 		fmt.Fprintf(stderr, "corral certify --repo: scan %d recorded, but scan_mutants was NOT written: %v\n", id, err)
 	}
-	return nil
+	if err := st.RecordModelCalls(context.Background(), calls); err != nil {
+		fmt.Fprintf(stderr, "corral certify --repo: scan %d recorded, but scan_model_calls was NOT written: %v\n", id, err)
+	}
+	if err := st.RecordEvents(context.Background(), events); err != nil {
+		fmt.Fprintf(stderr, "corral certify --repo: scan %d recorded, but scan_events was NOT written: %v\n", id, err)
+	}
+	return id, nil
+}
+
+// stampScanID writes the ledger's assigned id onto rows the caller built
+// before that id existed. One place, so a grain cannot be forgotten: a row
+// with scan_id 0 is a row that joins to nothing.
+func stampScanID(id int64, mutants []scanstore.Mutant, calls []scanstore.ModelCall, events []scanstore.Event) {
+	for i := range mutants {
+		mutants[i].ScanID = id
+	}
+	for i := range calls {
+		calls[i].ScanID = id
+	}
+	for i := range events {
+		events[i].ScanID = id
+	}
+}
+
+// auditedParentSHA256 is the hash a graded file's own mutants carry. Every
+// mutant of one file must report the same parent: they were all derived from
+// one set of bytes, and a disagreement means either two different sources
+// reached the generator or something rewrote the file mid-audit. Either way
+// there is no single answer to "which bytes does this verdict describe", and
+// the honest record is none — announced, not swallowed, because a validity
+// key going silently missing is how a stale verdict later reads as live.
+func auditedParentSHA256(path string, v advpool.Verdict, stderr io.Writer) string {
+	sha := ""
+	for _, group := range [][]advpool.MutantRef{v.DevKilledMutants, v.DevSurvivedMutants} {
+		for _, m := range group {
+			if m.ParentSHA256 == "" {
+				continue
+			}
+			if sha == "" {
+				sha = m.ParentSHA256
+				continue
+			}
+			if m.ParentSHA256 != sha {
+				fmt.Fprintf(stderr, "corral certify --repo: %s: mutants disagree about the parent they came from (%s vs %s) — recording no parent_sha256 for this file\n",
+					path, sha, m.ParentSHA256)
+				return ""
+			}
+		}
+	}
+	return sha
+}
+
+// auditedFileSHA256 hashes the file at repoDir/path — the audited bytes —
+// through the same fileSHA256 the recorded-mutant-set path uses, so a hash in
+// this ledger and one in a recorded set are the same function of the same
+// bytes. "" when the file cannot be read: a missing hash is honest, an
+// invented one is a validity claim that would tell a later reader a stale
+// verdict is live.
+func auditedFileSHA256(repoDir, path string) string {
+	sum, err := fileSHA256(filepath.Join(repoDir, path))
+	if err != nil {
+		return ""
+	}
+	return sum
+}
+
+// spreadMin/Median/Max lift advpool's per-mutant spread into the three
+// nullable ledger columns. A nil spread means no mutant was graded per
+// mutant, and all three stay nil — never {0,0,0}, which would read as "every
+// mutant ran no tests".
+// Each returns a COPY. Handing back &s.Min would leave the recorded row
+// pointing into the verdict it was derived from, so a later mutation of the
+// verdict would silently rewrite a number already treated as recorded — and
+// a record that can change after the fact is not a record.
+func spreadMin(s *advpool.TestsPerMutantSpread) *int {
+	if s == nil {
+		return nil
+	}
+	v := s.Min
+	return &v
+}
+
+func spreadMedian(s *advpool.TestsPerMutantSpread) *int {
+	if s == nil {
+		return nil
+	}
+	v := s.Median
+	return &v
+}
+
+func spreadMax(s *advpool.TestsPerMutantSpread) *int {
+	if s == nil {
+		return nil
+	}
+	v := s.Max
+	return &v
+}
+
+// challengerJaccard/Kappa/Sufficient lift a *modelcorr.Pair onto the
+// ledger's three nullable columns. All three stay nil on a nil pair — "the
+// challenger did not run" — never a fabricated 0.0/false, which would read
+// as "the challenger ran and disagreed completely".
+//
+// Kappa additionally stays nil when the pair itself says it is undefined
+// (p_e == 1, both seats degenerate over the same outcome — see
+// modelcorr.Pair.KappaDefined's doc): a caller storing Kappa unconditionally
+// would write a fabricated 0 for exactly the case modelcorr invented the
+// flag to keep distinct from a real zero.
+//
+// And JACCARD stays nil unless the pair says Sufficient. modelcorr.Compare
+// ZEROES Jaccard when the survivor union is below MinSurvivorUnion, and
+// Pair.Sufficient's own doc is explicit that callers MUST check it first.
+// Storing that zero would file "the union was too small for the coefficient
+// to mean anything" as "the two writers missed nothing in common" — the
+// strongest possible claim in the opposite direction, in a column a
+// cross-repo query averages. Sufficient itself is still recorded, so "we
+// compared, and the sample was too small" stays legible.
+func challengerJaccard(p *modelcorr.Pair) *float64 {
+	if p == nil || !p.Sufficient {
+		return nil
+	}
+	v := p.Jaccard
+	return &v
+}
+
+func challengerKappa(p *modelcorr.Pair) *float64 {
+	if p == nil || !p.KappaDefined {
+		return nil
+	}
+	v := p.Kappa
+	return &v
+}
+
+func challengerSufficient(p *modelcorr.Pair) *bool {
+	if p == nil {
+		return nil
+	}
+	v := p.Sufficient
+	return &v
+}
+
+// goalsDerivedFor answers scanstore.File.GoalsDerived for one file: 1 when
+// this file's goal actually came from reposcan's DERIVER
+// (reposcan.GoalWasDerived), 0 otherwise — a hand-written --goals entry, or
+// no goal at all. 0 is the field's own documented default (see its doc in
+// internal/scanstore/store.go): a plain int, not a pointer, so there is no
+// NULL to preserve here the way there is for the Challenger columns above.
+func goalsDerivedFor(g reposcan.Goal) int {
+	if reposcan.GoalWasDerived(g) {
+		return 1
+	}
+	return 0
+}
+
+// unmeasuredOnReuse returns ms for a file this scan actually audited, and nil
+// — SQL NULL — for one whose verdict was REUSED from the ledger cache.
+//
+// It exists because a cached verdict is indistinguishable from a fresh one by
+// its contents: Timing and the mutant-duration summaries ride through
+// verdict_json and ledgerCache.Get restores them exactly. So the only thing
+// that can tell a reader "this scan did not spend these minutes" is the
+// FileResult's own CacheHit flag, and every timing column on the row goes
+// through here rather than each one remembering the rule.
+//
+// NULL is the same value a phase that never ran gets, and that is correct at
+// this grain: the question the column answers is "how long did THIS scan
+// spend on this file", and the answer for a reused verdict is "nothing worth
+// a clock". The run that earned the verdict still holds the real numbers on
+// its own row, reachable through reused_from_scan_id.
+// baselineMillisUnlessReused is unmeasuredOnReuse for the one timing column
+// that predates the timing work and is a plain int64 (0 = NULL downstream).
+func baselineMillisUnlessReused(r reposcan.FileResult) int64 {
+	if r.CacheHit {
+		return 0
+	}
+	return r.Verdict.BaselineDuration.Milliseconds()
+}
+
+func unmeasuredOnReuse(r reposcan.FileResult, ms *int64) *int64 {
+	if r.CacheHit {
+		return nil
+	}
+	return ms
 }

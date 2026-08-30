@@ -24,7 +24,6 @@ import (
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/advpool"
-	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/certify"
 	"github.com/pdbethke/corralai/internal/lang"
@@ -74,7 +73,8 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	jsonOut := fs.Bool("json", false, "with --dry-run, emit the repository's audit surface as JSON instead of the human report: per-language counts, every auditable file with its inferred test pairing, and the machine-stable exclusion tally. Needs no key, no jail and no money — it is the free inventory a UI or a tenant's own tooling can consume instead of scraping stdout")
 	substrateFlag := fs.String("substrate", substrateJail, "where the audit runs: "+substrateJail+" (bwrap) or "+substrateWorkspace+" (mutate --repo in place; the caller IS the isolation boundary, e.g. an ephemeral CI runner)")
 	diffBase := fs.String("diff-base", "", "bound the scan to files changed since this git ref, instead of ranking + --top. In a PR the diff IS the bound: ranking and --top do not apply on this path")
-	pushFlag := fs.String("push", "", "append this scan's per-file verdicts to a DuckDB you own — a path, or `md:<db>` for MotherDuck (which reads motherduck_token from the environment). corral has no hosted tier and keeps nothing: the warehouse is yours, and any DuckDB works, so this is a destination rather than a lock-in. Append-only, and every row carries the sha256 of the signed statement it came from, so a row traces back to something a third party can verify. It answers what one pull request cannot — a single kill rate is a sample, and the same unchanged diff has scored 0.85 and 0.90; forty of them are a distribution")
+	pushFlag := fs.String("push", "", "append this scan's per-file verdicts to a DuckDB you own — a path, or `md:<db>` for MotherDuck (which reads motherduck_token from the environment). corral has no hosted tier and keeps nothing: the warehouse is yours, and any DuckDB works, so this is a destination rather than a lock-in. Append-only. Every row carries the ledger's scan id (0 when --record was not given), and — traceable only with --attest — the sha256 of the signed statement it came from, so a row can be checked against something a third party can verify; without --attest, statement_sha256 is honestly empty rather than fabricated; and with --attest, a statement that FAILS to write withholds the push too, since a row that cannot name the statement it came from is not written. It answers what one pull request cannot — a single kill rate is a sample, and the same unchanged diff has scored 0.85 and 0.90; forty of them are a distribution")
+	pushSourceFlag := fs.Bool("push-source", false, "with --push, also send the SOURCE BYTES corral holds to your warehouse: the pool's authored test, and the full verdict JSON. Off by default because those bytes are derived from — and quote — your audited code; without this the pushed rows carry numbers, hashes, reasons and model names, and no source leaves the box. Mutant code is NOT carried, by either setting: corral does not keep mutant source at rest, so the corral_mutants.code column exists and is always NULL until something records it. The scan row records which setting was used, so the custody question is answerable from the table rather than from whoever remembers the argv")
 	attestFlag := fs.String("attest", "", "write the scan's verdict as an in-toto Statement to this file — the receipt a reviewer can verify without trusting the run that produced it. Consumed by GitHub's attestation API (actions/attest), which signs it keylessly through the workflow's own OIDC identity, so the signature chains to the repository and workflow rather than to a key that lived on an ephemeral runner. Carries every file's kill rate, survivors and proven gaps WITH the honesty flags that say what a zero means, the thresholds it was judged against, and the models in each role")
 	maxProvenMissedFlag := fs.String("max-proven-missed", "", "fail the scan (exit 1) if ANY audited file has MORE than this many proven-missed gaps — survivors the pool then killed with a test it WROTE and RAN. Opt-in and unset by default. Prefer this to --min-kill-rate as a merge gate: a kill rate is a proportion of freshly generated mutants and moves between runs on unchanged code, so a threshold set near a healthy value flaps red and gets switched off. A proven-missed gap is a specific demonstrated bug the suite does not catch, established by execution, and 0 means the pool proved nothing — not that it sampled well")
 	minKillRateFlag := fs.String("min-kill-rate", "", "fail the scan (exit 1) if ANY audited file's kill rate is below this value (0.0-1.0 inclusive; a minimum, so a file exactly at the threshold passes). Opt-in: unset by default, so exit codes are unchanged unless this is given. Applies PER FILE, not to the aggregate — a well-tested file must not mask a weak one")
@@ -542,9 +542,25 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		if !*wholeSuiteFlag {
 			fmt.Fprintln(stdout, "  selection: running the suite once with per-test coverage instrumentation…")
 		}
+		// collectSelection times ITSELF, around the instrumented run and
+		// nowhere else — see localExecutor.selectionDuration. A clock started
+		// here would tick for --whole-suite too, which returns from that call
+		// having run nothing at all.
 		ex.selection = ex.collectSelection(context.Background(), enumeratedSourcePaths(cands, excl[:enumExcl]))
 		if !ex.selection.Ran {
 			fmt.Fprintf(stdout, "  selection: grading by the WHOLE suite — %s\n", ex.selection.Note)
+		}
+		// SCAN-SCOPED: this instrumented run happens ONCE, for the whole
+		// repo, before any per-file driver exists — the driver has no
+		// notion of it (see RunSpec.SelectionDuration's doc), so it is
+		// recorded here directly rather than through a file's EventSink.
+		// Path "" is the scan-scoped marker; omitted (not zero) when the
+		// pass never ran (--whole-suite, an unsupported language, no
+		// runner) — see scanEventSink.record.
+		if ex.selectionDuration > 0 {
+			ex.events.forScan("phase_selection", "", map[string]any{
+				"duration_ms": ex.selectionDuration.Milliseconds(),
+			})
 		}
 	}
 	selectionMethod := ""
@@ -732,50 +748,42 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	// Opened here, BEFORE the scan, so ONE handle serves two purposes: it is
-	// the verdict cache's read path during reposcan.Scan below (see
-	// newLedgerCache), and it is the ledger's write path in the --record
-	// block at the end of this function. Opening it only at the end, as this
-	// used to, would mean two separate handles on the same DuckDB file within
-	// one process — the cache would have nothing to read from during the
-	// scan it exists to speed up.
+	// The ledger is opened PER OPERATION, never held across the scan.
 	//
-	// This does NOT change --record's own meaning or when recording happens:
-	// the store is opened only when *recordFlag is set, exactly as it was
-	// opened only inside the (now-shorter) --record block before. --record-db
-	// alone still records nothing, silently — that behaviour is entirely
-	// gated by *recordFlag below, unchanged.
+	// DuckDB is single-writer per file. This used to open one handle before
+	// the scan and hold it until the final write, so for an entire hours-long
+	// audit a concurrent `corral scans` against the same (default) DSN failed
+	// with "Conflicting lock is held" — the record of the audits already paid
+	// for went dark for the duration of the next one. Now the verdict cache
+	// opens and closes around each lookup (see ledgerCache.withStore) and the
+	// recording sequence below opens and closes around its own writes.
 	//
-	// One consequence is correct but surprising, so it is stated here rather
-	// than discovered: the handle is now held for the WHOLE scan, not just the
-	// instant of the final write. DuckDB is single-process-exclusive on a
-	// file, so during a long `--record` audit a concurrent `corral scans`
-	// against the same (default) DSN cannot open the ledger at all — see
-	// openScanStore, which already says so in its error. Nothing is lost; the
-	// reader simply has to wait, or be pointed at a copy.
+	// The DSN is still RESOLVED here, and probed once by opening and
+	// immediately closing it: an unopenable ledger must be reported, and
+	// reporting it at the end of a paid scan (where it was always reported)
+	// is too late to be useful without also saying so now. --record-db alone
+	// still records nothing, silently — that behaviour is gated entirely by
+	// *recordFlag, unchanged.
 	//
 	// An unopenable DSN does not fail the scan: scanStoreErr is carried
 	// forward and reported in the --record block at the bottom, in the same
-	// place and the same words a write failure has always been reported —
-	// this is not a new failure path, just the existing one's error surfacing
-	// earlier in the run than the write itself does.
-	var scanStore *scanstore.Store
+	// place and the same words a write failure has always been reported.
+	var ledgerDSN string
 	var scanStoreErr error
 	if *recordFlag {
-		dsn := *recordDSNFlag
-		if dsn == "" {
-			dsn = defaultScanDSN()
+		ledgerDSN = *recordDSNFlag
+		if ledgerDSN == "" {
+			ledgerDSN = defaultScanDSN()
 		}
-		st, err := scanstore.Open(dsn)
+		st, err := scanstore.Open(ledgerDSN)
 		if err != nil {
 			scanStoreErr = err
-		} else {
-			scanStore = st
-			// Deferred here, not in the --record block: this function has
-			// several early-return paths above --record's own site (the
-			// argvErr refusal just above, for one), and every one of them
-			// must still release the DuckDB handle.
-			defer func() { _ = scanStore.Close() }()
+			// A DSN that cannot be opened must not be handed to the cache:
+			// every lookup would pay an open that cannot succeed.
+			ledgerDSN = ""
+		} else if cerr := st.Close(); cerr != nil {
+			scanStoreErr = cerr
+			ledgerDSN = ""
 		}
 	}
 
@@ -821,14 +829,14 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// ex is non-nil here: it is constructed on every non-dry-run path above,
 	// and the dry run returned before this point.
 	//
-	// scanStore was opened above, BEFORE this call, specifically so it could
-	// serve as the cache's read path here: newLedgerCache(nil) (no --record,
-	// or an unopenable DSN) already misses every key, so this needs no extra
-	// nil-guard — the cache is simply inactive for the run.
+	// The cache is addressed by DSN and opens the ledger only for the instant
+	// of a lookup: newLedgerCache("") (no --record, or an unopenable DSN)
+	// misses every key, so this needs no extra guard — the cache is simply
+	// inactive for the run.
 	auditCtx, stopSignals := auditContext(stderr)
 	defer stopSignals()
 
-	results = reposcan.Scan(auditCtx, jobs, ex, newLedgerCache(scanStore), workers)
+	results = reposcan.Scan(auditCtx, jobs, ex, newLedgerCache(ledgerDSN), workers)
 	rep := reposcan.Aggregate(*owner, cfg.Repo, *commit, totalFiles, len(cands), results, excl)
 
 	// The diff selected zero candidates: a docs-only (or no-paired-test-only)
@@ -846,16 +854,15 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// reused.
 	oldestReused, _ := oldestReuse(results)
 	printRepoReport(stdout, rep, nothingInScope, minKillRate, maxProvenMissed, unpairableInDiff, oldestReused)
-	// What the scan consumed from the providers. A whole-repo audit is the
-	// mode that actually costs money — it runs a full herd per file — and it
-	// reported nothing at all, so "what did that cost me" had no answer from
-	// the tool whose central caveat is that audits are expensive. Tokens, not
-	// dollars, for the reason renderModelSpend gives: prices change and differ
-	// by contract; a token count stays true.
-	if ex != nil {
-		if in, out, calls := ex.meterTotals(); calls > 0 {
-			fmt.Fprintf(stdout, "  model spend:   %d in / %d out token(s) over %d model call(s)\n", in, out, calls)
-		}
+	// What the scan consumed from the providers, broken out by role. A
+	// whole-repo audit is the mode that actually costs money — it runs a full
+	// herd per file — and it reported nothing at all, so "what did that cost
+	// me" had no answer from the tool whose central caveat is that audits are
+	// expensive. Built from the SAME per-file ModelCalls that feed the
+	// ledger and warehouse below — never a second measurement — so this line
+	// and scan_model_calls can never disagree.
+	if line := costLine(scanModelCallTotals(results)); line != "" {
+		fmt.Fprintln(stdout, line)
 	}
 	// A distinct section, never folded into Excluded/Ungradable/the audited
 	// fraction: this is an inventory alongside the audit, not a change to
@@ -883,46 +890,93 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		return m
 	}
 
-	// The audit statement, written after the exit code is known so `passed`
-	// records the verdict this run actually returned rather than a guess made
-	// before the gates were applied.
+	// End-of-scan sequence: ledger record → attestation → push, in that
+	// order, because each later step needs something the one before it
+	// produces. scanID is the ledger's row id (0 when --record was not
+	// given, or when the ledger write failed — 0 is the honest value
+	// either way, never a fabricated id). statementSHA256 is the sha256 of
+	// the --attest statement writeAuditStatement wrote (empty when --attest
+	// was not given, or its write failed). Both are folded into the rows
+	// --push writes, which is why push must run last: it is the only step
+	// with nothing later depending on it.
 	//
-	// A write failure is loud but never changes the exit code: this command is
-	// a merge gate, and a full disk must not red-build a pull request over
-	// bookkeeping — the same fail-open rule the ledger write below follows, for
-	// the same reason.
-	// Push before the statement write below, so a push failure is reported on
-	// its own rather than confused with an attestation problem. Like the ledger
-	// write, it never changes the exit code: this command is a merge gate, and
-	// an unreachable warehouse must not red-build a pull request over
-	// bookkeeping.
-	if strings.TrimSpace(*pushFlag) != "" {
-		n, perr := pushAuditRows(*pushFlag, *repoDir, rep, models(), minKillRate, maxProvenMissed, exitCode == 0)
-		switch {
-		case perr != nil:
-			fmt.Fprintf(stderr, "corral certify --repo: pushing to %s: %v\n", *pushFlag, perr)
-		case n > 0:
-			fmt.Fprintf(stdout, "  pushed %d row(s) to %s\n", n, *pushFlag)
-		}
+	// Every one of the three writes below is FAIL-OPEN, deliberately, and
+	// this is the one place in corral where uncertainty must not fail
+	// closed: this command's exit code is a CI merge gate. If a ledger
+	// write, a statement write, or a push could change it, a full disk or
+	// an unreachable warehouse would red-build a pull request over
+	// bookkeeping. So each failure is printed loudly on stderr and the
+	// verdict and exit code decided above stand unchanged. Do not "fix"
+	// this into a failure path — that is precisely the bug this comment
+	// exists to head off. Placed after `code` is computed, and calling
+	// nothing that can panic into the exit path below.
+	//
+	// The ledger rows are built ONCE, here, whether or not --record was
+	// given: they are also what the attestation hashes and what --push
+	// writes. Rebuilding them from the report for the push (which is what
+	// this code used to do) is how the two records came to disagree — the
+	// report path carried only the files a scan AUDITED, so the warehouse
+	// never held a row for the files corral refused.
+	// Built from the same per-file ModelCalls the ledger's scan_model_calls
+	// rows come from (modelCallRows, below) — never a second measurement, so
+	// the scan header's totals and the per-role grain can never disagree.
+	modelCallRows := buildScanModelCallRows(results)
+	var inTokens, outTokens, modelCallCount int64
+	for _, c := range modelCallRows {
+		inTokens += c.InputTokens
+		outTokens += c.OutputTokens
+		modelCallCount += int64(c.Calls)
 	}
-
-	if strings.TrimSpace(*attestFlag) != "" {
-		if err := writeAuditStatement(*attestFlag, *repoDir, rep, models(), minKillRate, maxProvenMissed, exitCode == 0); err != nil {
-			fmt.Fprintf(stderr, "corral certify --repo: writing --attest statement: %v\n", err)
-		} else {
-			fmt.Fprintf(stdout, "  wrote the audit statement to %s — attest it with actions/attest, verify with `gh attestation verify`\n", *attestFlag)
-		}
+	host, _ := os.Hostname()
+	finishedAt := time.Now()
+	scan := scanstore.Scan{
+		Owner: *owner, Repo: cfg.Repo, Commit: *commit,
+		Substrate: *substrateFlag, EngineVersion: version, ModelSet: cfg.ModelSet,
+		Top: effectiveTop, AllCandidates: *allFlag, DiffBase: *diffBase,
+		TotalFiles: totalFiles, Candidates: rep.Candidates, Audited: rep.Audited,
+		KillRate: killRatePtr(rep.KillRate), CacheHits: rep.CacheHits,
+		PreflightRan: preflightResult.Ran, PreflightNote: preflightResult.Note,
+		StartedAt: startedAt, FinishedAt: finishedAt,
+		// The box and the build, so a wall-clock number in this ledger can be
+		// interpreted at all. TreesRequested is the workspace substrate's
+		// resolved per-file tree count — an INTENTION; the per-file probe
+		// decides what each file got. 0 (and SQL NULL) on the jail, which
+		// builds no trees.
+		CorralVersion: version, Host: host, Cores: runtime.NumCPU(),
+		TreesRequested: func() int {
+			if *substrateFlag == substrateWorkspace {
+				return mutantConc
+			}
+			return 0
+		}(),
+		TotalMillis: finishedAt.Sub(startedAt).Milliseconds(),
+		// The instrumented coverage run, at the grain it HAPPENS at: once per
+		// scan. Every file's verdict carries the same duration too (so a
+		// per-file readout can name each phase of that file's audit), but
+		// this is the copy a cost query sums — adding the per-file column
+		// would count one run once per file. NULL when no pass ran.
+		SelectionMillis: scanSelectionMillis(ex),
+		// What the scan consumed. The run already printed these to stdout and
+		// then discarded them, which is how "what did that cost me" had no
+		// answer from the tool whose central caveat is that audits are
+		// expensive.
+		InputTokens: inTokens, OutputTokens: outTokens, ModelCalls: modelCallCount,
+		// True only when source bytes ACTUALLY left the box: --push-source
+		// with no --push sends nothing, and a ledger row claiming otherwise
+		// would answer the custody question wrongly.
+		SourcePushed: *pushSourceFlag && strings.TrimSpace(*pushFlag) != "",
 	}
+	files := buildScanFileRows(results, rep.Excluded, preflightResult, mutantsFromSHA, *repoDir, stderr)
+	mutants := buildScanMutantRows(0, results)
+	// modelCallRows was built above, before the scan row, so its totals could
+	// feed InputTokens/OutputTokens/ModelCalls without a second measurement.
+	// The event grain's producer is the scan's own scanEventSink (see
+	// localExecutor.events): every job's driver fed it through auditInputFor,
+	// and this is the ONE place its accumulated tape is read out, after every
+	// file has finished.
+	eventRows := scanEventRows(ex)
 
-	// FAIL-OPEN, deliberately, and this is the one place in corral where
-	// uncertainty must not fail closed: this command's exit code is a CI
-	// merge gate. If a ledger write could change it, a full disk or a busy
-	// DuckDB file would red-build a pull request over bookkeeping. So a
-	// recording failure is printed loudly on stderr and the verdict and
-	// exit code decided above stand unchanged. Do not "fix" this into a
-	// failure path — that is precisely the bug this comment exists to head
-	// off. Placed after `code` is computed, and calling nothing that can
-	// panic into the exit path below.
+	var scanID int64
 	if *recordFlag {
 		if scanStoreErr != nil {
 			// The open failure happened earlier (above, before the scan) but
@@ -932,18 +986,106 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			// from an earlier point in the run.
 			fmt.Fprintf(stderr, "corral certify --repo: scan ledger NOT written: %v\n", scanStoreErr)
 		} else {
-			scan := scanstore.Scan{
-				Owner: *owner, Repo: cfg.Repo, Commit: *commit,
-				Substrate: *substrateFlag, EngineVersion: version, ModelSet: cfg.ModelSet,
-				Top: effectiveTop, AllCandidates: *allFlag, DiffBase: *diffBase,
-				TotalFiles: totalFiles, Candidates: rep.Candidates, Audited: rep.Audited,
-				KillRate: killRatePtr(rep.KillRate), CacheHits: rep.CacheHits,
-				PreflightRan: preflightResult.Ran, PreflightNote: preflightResult.Note,
-				StartedAt: startedAt, FinishedAt: time.Now(),
-			}
-			files := buildScanFileRows(results, rep.Excluded, preflightResult, mutantsFromSHA, stderr)
-			if err := recordCertifyRepoScan(scanStore, scan, files, results, stderr); err != nil {
+			// Opened for THIS write and closed immediately: the whole point
+			// of not holding the handle across the scan (see the DSN
+			// resolution above) is that the ledger is readable by anything
+			// else in between.
+			st, err := scanstore.Open(ledgerDSN)
+			if err != nil {
 				fmt.Fprintf(stderr, "corral certify --repo: scan ledger NOT written: %v\n", err)
+			} else {
+				id, rerr := recordCertifyRepoScan(st, scan, files, mutants, modelCallRows, eventRows, stderr)
+				if cerr := st.Close(); cerr != nil && rerr == nil {
+					fmt.Fprintf(stderr, "corral certify --repo: scan %d recorded, but closing the ledger failed: %v\n", id, cerr)
+				}
+				if rerr != nil {
+					fmt.Fprintf(stderr, "corral certify --repo: scan ledger NOT written: %v\n", rerr)
+				} else {
+					scanID = id
+				}
+			}
+		}
+	}
+
+	// The bundle: the ledger rows, mapped to the warehouse's shape, ONCE.
+	// Built here — after the ledger write, so it carries the scan id, and
+	// before the attestation, so the statement can sign its hash — and used
+	// by both of the steps that follow. Built even when neither --attest nor
+	// --push was given, which costs a few slices and keeps the two paths from
+	// diverging.
+	//
+	// A failure to resolve the repo/commit is NOT fatal here: it only means
+	// no bundle can be built, and both consumers already refuse for
+	// themselves (writeAuditStatement below, and --push, which never runs
+	// with an empty target).
+	bundleRepo, bundleCommit, subjErr := auditSubject(*repoDir, rep)
+	rosterJSON, _ := json.Marshal(models())
+	bundle := buildBundle(scan, scanID, files, mutants, modelCallRows, eventRows,
+		auditpush.Link{}, scan.SourcePushed, bundleRepo, bundleCommit, githubRunURL(),
+		bundleMeta{
+			ModelsByRole: string(rosterJSON),
+			MinKillRate:  minKillRate, MaxProvenMissed: maxProvenMissed,
+			Passed: exitCode == 0,
+		})
+
+	// The audit statement, written after the exit code is known so `passed`
+	// records the verdict this run actually returned rather than a guess
+	// made before the gates were applied, and after the ledger record above
+	// so it can name the scan it belongs to (scanId: 0, honestly, when
+	// --record was not given or its write failed).
+	var statementSHA256 string
+	if strings.TrimSpace(*attestFlag) != "" {
+		sha, err := writeAuditStatement(*attestFlag, *repoDir, rep, models(), minKillRate, maxProvenMissed, exitCode == 0, scanID, bundle)
+		if err != nil {
+			fmt.Fprintf(stderr, "corral certify --repo: writing --attest statement: %v\n", err)
+		} else {
+			statementSHA256 = sha
+			// Close the loop the ordering opens: the statement had to be
+			// written after the scan row (it names the scan id), so the row
+			// went in with this column empty. Stamp it now, or the local
+			// ledger permanently disagrees with the pushed row about whether
+			// this scan produced a statement. Fail-open like every other
+			// write in this sequence.
+			if scanID != 0 && ledgerDSN != "" {
+				if uerr := stampStatementSHA256(ledgerDSN, scanID, sha); uerr != nil {
+					fmt.Fprintf(stderr, "corral certify --repo: scan %d recorded, but its statement_sha256 was NOT stamped: %v\n", scanID, uerr)
+				}
+			}
+			bundle.Scan.StatementSHA256 = sha
+			fmt.Fprintf(stdout, "  wrote the audit statement to %s — attest it with actions/attest, verify with `gh attestation verify`\n", *attestFlag)
+		}
+	}
+
+	// Push last: its rows carry scanID and statementSHA256 from the two
+	// steps above, so a pushed row and the statement it names can be
+	// checked against each other. Link.Require mirrors --attest: when it
+	// was given, a row without a statement_sha256 is refused rather than
+	// pushed looking traceable when it is not; without --attest there is no
+	// statement to point to, and a row's statement_sha256 is honestly
+	// empty.
+	//
+	// A CONSEQUENCE WORTH NAMING, because it is a real operator surprise:
+	// with --attest, a FAILED statement write withholds the whole push.
+	// statementSHA256 stays empty, Require is still true (it is set from the
+	// flag, not from the outcome), and PushBundle then refuses every row.
+	// That is the intended direction — an untraceable row is worse than a
+	// missing one, and the failure was already printed loudly on stderr —
+	// but it means one fail-open write turning bad silently takes the next
+	// one with it. Neither changes the exit code; see the block comment
+	// above.
+	if strings.TrimSpace(*pushFlag) != "" {
+		bundle.Link = auditpush.Link{ScanID: scanID, StatementSHA256: statementSHA256, Require: strings.TrimSpace(*attestFlag) != ""}
+		switch {
+		case subjErr != nil:
+			fmt.Fprintf(stderr, "corral certify --repo: pushing to %s: %v\n", *pushFlag, subjErr)
+		default:
+			c, perr := pushBundle(*pushFlag, bundle)
+			switch {
+			case perr != nil:
+				fmt.Fprintf(stderr, "corral certify --repo: pushing to %s: %v\n", *pushFlag, perr)
+			case c.Total() > 0:
+				fmt.Fprintf(stdout, "  pushed %d scan, %d file(s), %d mutant(s), %d model-call row(s), %d event(s) to %s\n",
+					c.Scans, c.Files, c.Mutants, c.Calls, c.Events, *pushFlag)
 			}
 		}
 	}
@@ -1979,7 +2121,23 @@ func (l *localExecutor) collectSelection(ctx context.Context, sources []string) 
 	if err != nil {
 		return reposcan.SelectionEvidence{Note: fmt.Sprintf("selection: %v", err)}
 	}
-	return reposcan.CollectSelectionEvidence(ctx, runner, files, plug, testCmd)
+	// THE INSTRUMENTED RUN, and the only statement in this function that runs
+	// the project's suite. The clock is here, and only here: every return
+	// above is a decision, not a run, and must record no time.
+	start := time.Now()
+	ev := collectSelectionEvidence(ctx, runner, files, plug, testCmd)
+	// Recorded even when the run produced no usable evidence: the suite still
+	// executed, and the minutes it burned are part of what this scan cost.
+	l.selectionDuration = time.Since(start)
+	return ev
+}
+
+// collectSelectionEvidence is reposcan.CollectSelectionEvidence behind a
+// package var, the same seam newWorkspacePool/probeWorkspacePool use: it is
+// the one call in collectSelection that runs the project's whole suite, and a
+// test of what is TIMED must be able to stand in for it without one.
+var collectSelectionEvidence = func(ctx context.Context, runner coverageRunner, files map[string]string, p lang.Plugin, testCmd []string) reposcan.SelectionEvidence {
+	return reposcan.CollectSelectionEvidence(ctx, runner, files, p, testCmd)
 }
 
 // goModulePath reads the `module` directive out of repoDir's go.mod, for
@@ -2409,6 +2567,25 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 	// none — matching noteConcurrency, which already stays quiet there.
 	if f.Trees >= 1 {
 		fmt.Fprintf(w, "   concurrency: %s\n", concurrencyDisclosure(f.Trees, f.ConcurrencyNote, f.SharedDirs))
+	}
+	// WHERE THE MINUTES WENT. Printed through the same helper `corral scans
+	// show --timing` uses, so the line an operator reads now and the line
+	// they read back out of the ledger are the same sentence.
+	//
+	// Silent when the run measured no phase at all — a verdict served from a
+	// cache row written before any of this existed. Seven em dashes would be
+	// noise, and worse, would look like a measurement of nothing.
+	//
+	// And silent for a REUSED verdict, whatever it carries. A cached verdict's
+	// Timing round-trips through verdict_json intact, so the line would render
+	// a full, plausible clock for a file this run spent no time on at all —
+	// the reader has no way to tell it apart from minutes actually spent, and
+	// the "N verdict(s) reused from cache" disclosure above is the honest
+	// statement about this file's cost.
+	if f.Timing.Measured() && !f.CacheHit {
+		fmt.Fprintln(w, timingLine(f.Timing, f.MutantsGraded,
+			time.Duration(f.MutantMillisMedian)*time.Millisecond,
+			time.Duration(f.MutantMillisMax)*time.Millisecond))
 	}
 
 	// The artifact that makes "N proven, catchable gap(s)" actionable. --repo
@@ -2860,11 +3037,6 @@ type localExecutor struct {
 	// file this scan audits — one daemon per GPU. See parseLocalEndpoints.
 	localEndpoints map[string]string
 
-	// meter accumulates provider usage across EVERY file this scan audits, so
-	// the run can report what it spent. Per-file meters cannot answer that:
-	// they are created and discarded inside each audit.
-	meter *agentbackend.UsageMeter
-
 	// perFileSwarm is how many workers ONE file's own audit may use. It is >1
 	// only on the workspace substrate, where resolveScanWorkers has already
 	// forced file-level concurrency to 1 (files share a single checkout), so
@@ -2899,11 +3071,35 @@ type localExecutor struct {
 	// actually graded. nil records nothing.
 	mutantSink func(codePath string, ms []adequacy.Mutant)
 
+	// events is the scan's own tape: every driver beat, across every audited
+	// file, landing as a scanstore.Event row (see scanEventSink's doc). One
+	// sink per scan, shared by every file job — newLocalExecutor always
+	// constructs one, so it is never nil for a real scan; a bare
+	// localExecutor{} built directly by a seam-level test leaves it nil,
+	// which forFile/forScan both treat as "record nothing".
+	events *scanEventSink
+
 	// selection is what ONE instrumented run of this repo's suite learned
 	// about which tests execute which files, collected once per scan (see
 	// collectSelection) and asked per job (see selectionFor). Its zero value
 	// means no evidence — every file grades whole-suite, disclosed.
 	selection reposcan.SelectionEvidence
+	// selectionDuration is how long the scan's ONE instrumented coverage run
+	// took, and ZERO when there was no such run. It is measured inside
+	// collectSelection, around the run itself — never around the CALL, which
+	// returns immediately under --whole-suite, for an unsupported language,
+	// or when the runner could not be built. A clock around the call recorded
+	// microseconds for those, which the ledger stored as 1ms and the report
+	// printed as `selection 0s`: a scan claiming it ran a selection pass, for
+	// free, when it ran none.
+	//
+	// The driver cannot measure this itself — it happens once, for the whole
+	// repo, before any file's run exists — so every file's RunSpec is handed
+	// the answer (advpool.RunSpec.SelectionDuration).
+	//
+	// It is a PER-SCAN cost carried on every file's verdict, not a per-file
+	// measurement: summing it across files would invent time nobody spent.
+	selectionDuration time.Duration
 
 	// wholeSuite is the operator's --whole-suite opt-out: grade every mutant
 	// against the project's whole suite instead of the tests that
@@ -2975,7 +3171,6 @@ func newLocalExecutor(repoDir string, checkArgv []string, substrate string, time
 		progress = io.Discard
 	}
 	l := &localExecutor{
-		meter:        &agentbackend.UsageMeter{},
 		repoDir:      repoDir,
 		checkArgv:    checkArgv,
 		baselineRuns: 2,
@@ -2986,6 +3181,7 @@ func newLocalExecutor(repoDir string, checkArgv []string, substrate string, time
 		progress:    &syncWriter{w: progress},
 		newBaseline: baselineRunnerFor,
 		audit:       auditOneFile,
+		events:      newScanEventSink(nil),
 	}
 	// The substrate must be known BEFORE this preflight runs: the workspace
 	// substrate needs no sandbox by construction (buildJailWiring's workspace
@@ -3044,13 +3240,6 @@ func newLocalExecutor(repoDir string, checkArgv []string, substrate string, time
 func (l *localExecutor) preflight() error { return l.jailErr }
 
 // Close releases every staging dir this scan's seeds created. Idempotent.
-// meterTotals reports what every audit this executor ran consumed.
-func (l *localExecutor) meterTotals() (in, out, calls int64) {
-	if l.meter == nil {
-		return 0, 0, 0
-	}
-	return l.meter.Totals()
-}
 
 func (l *localExecutor) Close() {
 	if l.seeds != nil {
@@ -3070,11 +3259,6 @@ func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
 	// twice and disagree.
 	sel := l.selectionFor(j)
 	return localAuditInput{
-		// One meter for the WHOLE scan. Each file's audit would otherwise
-		// meter only itself and the totals would die with it, leaving a
-		// whole-repo run — the mode that actually costs money — unable to say
-		// what it spent. See renderModelSpend.
-		meter:          l.meter,
 		localEndpoints: l.localEndpoints,
 		repoDir:        l.repoDir,
 		codePath:       j.Path,
@@ -3097,8 +3281,11 @@ func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
 		// pool's own authored test, which no evidence run ever saw.
 		baseArgv:  l.baseCmd(j),
 		selection: sel,
-		substrate: l.substrate,
-		timeout:   l.timeout,
+		// The scan's one instrumented run, carried onto every file's spec —
+		// see localExecutor.selectionDuration.
+		selectionDuration: l.selectionDuration,
+		substrate:         l.substrate,
+		timeout:           l.timeout,
 		// See localExecutor.perFileSwarm: 1 everywhere the scan really does
 		// fan out over files, and the otherwise-unspent budget on the
 		// workspace substrate, which serializes them.
@@ -3141,7 +3328,32 @@ func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
 		// A nil entry is an ordinary generated run — see localExecutor.presetMutants.
 		presetMutants: l.presetMutants[j.Path],
 		mutantSink:    l.mutantSink,
+		// This file's own adapter onto the scan's shared tape — see
+		// scanEventSink.forFile's doc for why every file needs its own
+		// (the driver's Emit carries no path).
+		eventSink: l.events.forFile(j.Path),
 	}
+}
+
+// scanSelectionMillis is the scan header's selection_ms: how long the ONE
+// instrumented coverage run took, or nil when there was no such run —
+// --whole-suite, an unsupported language, a --dry-run that built no executor
+// at all. nil is SQL NULL; a 0 would claim the pass ran and cost nothing.
+func scanSelectionMillis(ex *localExecutor) *int64 {
+	if ex == nil {
+		return nil
+	}
+	return millisOrNil(ex.selectionDuration)
+}
+
+// scanEventRows drains the scan's accumulated tape, or nil when ex is nil —
+// a --dry-run, which audits nothing and builds no executor (and so no sink)
+// at all. The honest empty tape, never a fabricated one.
+func scanEventRows(ex *localExecutor) []scanstore.Event {
+	if ex == nil {
+		return nil
+	}
+	return ex.events.drain()
 }
 
 // concurrencyDisclosure renders the human-readable half of "how many trees
@@ -3527,12 +3739,17 @@ func pushableSpread(f reposcan.WeakFile) *auditpush.TestsPerMutantSpread {
 }
 
 // writeAuditStatement renders the scan into certify's in-toto audit statement
-// and writes it to path.
+// and writes it to path, returning the sha256 (hex) of the bytes it wrote —
+// the hash a pushed row carries so it can be traced back to this statement.
+//
+// scanID is the local scan ledger's row id (0 when --record was not given —
+// the honest value, not a sentinel: this statement then signs scanId: 0
+// rather than fabricate a ledger row that does not exist).
 //
 // Every file the report scored is carried, not only the weakest: a statement
 // that listed only the failures would be a highlight reel, and the claim a
 // reviewer is being asked to accept is about the whole audited surface.
-func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map[string]string, minKillRate *float64, maxProvenMissed *int, passed bool) error {
+func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map[string]string, minKillRate *float64, maxProvenMissed *int, passed bool, scanID int64, bundle auditpush.Bundle) (string, error) {
 	files := make([]certify.AuditedFile, 0, len(r.Weakest))
 	for _, f := range r.Weakest {
 		files = append(files, certify.AuditedFile{
@@ -3571,82 +3788,147 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 	// nothing — and two copies of this logic would drift.
 	repo, commit, err := auditSubject(repoDir, r)
 	if err != nil {
-		return fmt.Errorf("refusing to write an audit statement: %w", err)
+		return "", fmt.Errorf("refusing to write an audit statement: %w", err)
+	}
+
+	// The WHOLE bundle this scan would push (or did, if --push also ran) —
+	// all five grains, not just the file rows. Hashing only the file rows
+	// would sign a fraction of what the push writes, and the mutant grain is
+	// exactly where the evidence behind proven_missed lives.
+	//
+	// Every StatementSHA256 is blanked first: the statement's own hash cannot
+	// depend on itself. Hashed and signed here so a verifier holding the
+	// statement and the pushed rows can check either one against the other,
+	// in either order, rather than trusting only the row's one-way pointer
+	// back.
+	rowsSHA, err := warehouseRowsSHA256(bundle)
+	if err != nil {
+		return "", err
 	}
 
 	stmt := certify.BuildAuditAttestation(certify.AuditStatement{
-		Repo:            repo,
-		Commit:          commit,
-		Files:           files,
-		Audited:         r.Audited,
-		Candidates:      r.Candidates,
-		ModelsByRole:    models,
-		MinKillRate:     minKillRate,
-		MaxProvenMissed: maxProvenMissed,
-		Passed:          passed,
+		Repo:                repo,
+		Commit:              commit,
+		Files:               files,
+		Audited:             r.Audited,
+		Candidates:          r.Candidates,
+		ModelsByRole:        models,
+		MinKillRate:         minKillRate,
+		MaxProvenMissed:     maxProvenMissed,
+		Passed:              passed,
+		ScanID:              scanID,
+		WarehouseRowsSHA256: rowsSHA,
 	})
 	b, err := json.MarshalIndent(stmt, "", "  ")
 	if err != nil {
-		return err
+		return "", err
 	}
-	return os.WriteFile(path, b, 0o600)
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:]), nil
 }
 
-// pushAuditRows appends this scan's per-file verdicts to a warehouse the
-// operator owns.
+// warehouseRowsSHA256 is the hex sha256 of the bundle's canonical JSON, with
+// BlankUnpushedSource applied and every StatementSHA256 blanked — the value
+// the signed statement carries as warehouseRowsSha256.
 //
-// Reuses writeAuditStatement's subject resolution deliberately: a row whose
-// commit is blank cannot be joined to anything, and the two would drift if each
-// worked it out separately.
-func pushAuditRows(target, repoDir string, r reposcan.RepoReport, models map[string]string, minKillRate *float64, maxProvenMissed *int, passed bool) (int, error) {
-	repo, commit, err := auditSubject(repoDir, r)
+// Blanking the statement hash is not cosmetic: the pushed rows carry the hash
+// of the statement that names them, so hashing them WITH that field would
+// make the statement's hash depend on itself.
+//
+// WHAT THIS HASH IS, EXACTLY: a SELF-CONSISTENCY CHECK over the canonical
+// JSON of the bundle this process built and pushed. It binds the statement to
+// the rows the run produced, so the two cannot be swapped or edited
+// independently, and a holder of BOTH artifacts can check them against each
+// other in either order.
+//
+// WHAT IT IS NOT: a hash a third party can reproduce from the warehouse
+// alone. The writer's SQL conversions are lossy by design, and rebuilding the
+// bundle from a SELECT would not give these bytes back:
+//
+//   - kill_rate is written NULL for an uncovered file (insertFileRow), while
+//     the bundle row carries the *float64 the run held. NULL back out is not
+//     the value that went in.
+//   - tests_per_mutant_min/median/max are dropped entirely unless PerMutant
+//     is set, so a whole-suite row's spread — present in the bundle, absent
+//     from the table — cannot be recovered.
+//
+// (The source columns are NOT in this category: BlankUnpushedSource runs
+// here and in PushBundle, from the same function, so what is hashed is what
+// the warehouse receives.)
+//
+// So the honest claim is "the statement and the pushed rows came from one
+// run and neither has been altered since", not "anyone can recompute this
+// from your warehouse". Reproducing it needs the bundle, which means the
+// pushing side. Do not upgrade the claim in a doc or a README without first
+// making the two conversions above lossless.
+func warehouseRowsSHA256(b auditpush.Bundle) (string, error) {
+	// The hash must cover what the WAREHOUSE receives, not what this process
+	// happens to hold. Without --push-source the writer stores SQL NULL for
+	// the source columns, so hashing them here would sign a number no
+	// verifier could ever reproduce from the rows they can actually see — a
+	// cross-check that never checks out is worse than none.
+	//
+	// THE SAME FUNCTION THE WRITER CALLS (auditpush.PushBundle runs it too).
+	// This rule used to be spelled out twice, and two copies of a custody set
+	// is one copy that gets a field added to it and one that does not.
+	auditpush.BlankUnpushedSource(&b)
+	b.Scan.StatementSHA256 = ""
+	b.Files = append([]auditpush.Row(nil), b.Files...)
+	for i := range b.Files {
+		b.Files[i].StatementSHA256 = ""
+	}
+	b.Mutants = append([]auditpush.MutantRow(nil), b.Mutants...)
+	for i := range b.Mutants {
+		b.Mutants[i].StatementSHA256 = ""
+	}
+	b.Calls = append([]auditpush.ModelCallRow(nil), b.Calls...)
+	for i := range b.Calls {
+		b.Calls[i].StatementSHA256 = ""
+	}
+	b.Events = append([]auditpush.EventRow(nil), b.Events...)
+	for i := range b.Events {
+		b.Events[i].StatementSHA256 = ""
+	}
+	// Link is deliberately NOT hashed: it holds the statement hash itself.
+	b.Link = auditpush.Link{}
+	js, err := json.Marshal(b)
 	if err != nil {
-		return 0, err
+		return "", err
 	}
-	rosterJSON, err := json.Marshal(models)
+	sum := sha256.Sum256(js)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+// stampStatementSHA256 opens the ledger, stamps one scan's statement hash,
+// and closes it again — one more operation-scoped handle, for the same
+// reason as every other one in this function: DuckDB is single-writer per
+// file, and a reader must never have to wait out an audit to see the audits
+// that came before it.
+func stampStatementSHA256(dsn string, scanID int64, sha string) error {
+	st, err := scanstore.Open(dsn)
 	if err != nil {
-		return 0, err
+		return err
 	}
+	if uerr := st.SetStatementSHA256(context.Background(), scanID, sha); uerr != nil {
+		_ = st.Close()
+		return uerr
+	}
+	return st.Close()
+}
 
-	// A GitHub run URL when we are in one, so a row in the warehouse leads back
-	// to the run that produced it. Absent elsewhere rather than fabricated.
-	runURL := ""
-	if srv, repoEnv, id := os.Getenv("GITHUB_SERVER_URL"), os.Getenv("GITHUB_REPOSITORY"), os.Getenv("GITHUB_RUN_ID"); srv != "" && repoEnv != "" && id != "" {
-		runURL = fmt.Sprintf("%s/%s/actions/runs/%s", srv, repoEnv, id)
-	}
-
-	rows := make([]auditpush.Row, 0, len(r.Weakest))
-	for _, f := range r.Weakest {
-		rows = append(rows, auditpush.Row{
-			Repo: repo, Commit: commit, Path: f.Path,
-			KillRate: signableKillRate(f), Survivors: f.Survivors, ProvenMissed: f.ProvenMissed,
-			TimedOut: f.TimedOut, TestWriterFailed: f.TestWriterFailed, PoolTestUnsound: f.PoolTestUnsound,
-			// The same five facts the scan ledger records: a warehouse row
-			// carrying a bare rate cannot say which question it answers, and
-			// a cross-repo average of selection and whole-suite rates is two
-			// measurements reported as one.
-			TestSelection: f.SelectionMethod, SelectedTests: f.SelectedTests,
-			SuiteTests: f.SuiteTests, SelectionFallback: f.SelectionFallback,
-			Uncovered: f.Uncovered,
-			// And at which grain — the same qualifier the statement signs. A
-			// warehouse query averaging kill_rate across repos cannot tell a
-			// rate measured over 3 tests per mutant from one over 620
-			// without it, which is two measurements reported as one.
-			PerMutant:      f.PerMutant,
-			TestsPerMutant: pushableSpread(f),
-			// How many private trees scored this file at once, or why it
-			// only got one — denormalized onto the row like the rest of
-			// the qualifiers above, with the dep dirs those trees shared.
-			Trees:           f.Trees,
-			ConcurrencyNote: f.ConcurrencyNote,
-			SharedDirs:      strings.Join(f.SharedDirs, ","),
-			Audited:         r.Audited, Candidates: r.Candidates,
-			ModelsByRole: string(rosterJSON),
-			MinKillRate:  minKillRate, MaxProvenMissed: maxProvenMissed,
-			Passed: passed, RunURL: runURL,
-		})
-	}
-	return auditpush.Push(target, rows)
+// pushBundle appends one recorded scan, at all five grains, to a warehouse
+// the operator owns. It replaced pushAuditRows, which built its rows from
+// the REPORT — and so pushed only the files a scan audited, leaving the
+// files corral refused invisible to the one question the warehouse exists to
+// answer.
+//
+// A thin wrapper on purpose: the mapping lives in certify_repo_bundle.go and
+// there is only one of it.
+func pushBundle(target string, b auditpush.Bundle) (auditpush.Counts, error) {
+	return auditpush.PushBundle(target, b)
 }
 
 // gitHeadCommit resolves repoDir's HEAD, or "" when repoDir is not a checkout

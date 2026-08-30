@@ -158,7 +158,7 @@ func subcommand(args []string) string {
 		return ""
 	}
 	switch args[0] {
-	case "certify", "secret", "control", "scorecard", "criticscore", "matrix", "scans", "eval", "mcp", "doctor", "demo":
+	case "certify", "secret", "control", "scorecard", "criticscore", "matrix", "scans", "seal", "eval", "mcp", "doctor", "demo":
 		return args[0]
 	}
 	return ""
@@ -277,6 +277,21 @@ Usage:
                                   Local DuckDB file, no brain required:
                                   --db <path> (default $CORRALAI_SCANS_DB, else
                                   ~/.claude/corralai_scans.duckdb), --limit n, --json
+  corral seal [flags]            the repo's CURRENT state as the union of still-valid verdicts,
+                                  read from a certify --repo --push warehouse (many audits, one
+                                  current state — not one scan's snapshot). Reads corral_seal
+                                  (latest kill-rate-bearing row per path), creating the view if
+                                  a writer never has. With --repo <dir>: judges each of the
+                                  repo's churn x size top-N ("hot") files live (bytes unchanged
+                                  since the audit), stale (changed since), never audited,
+                                  unreadable, or unknown (the row recorded no validity key) —
+                                  and prints "coverage: N of M hot files carry a live verdict",
+                                  which counts the live ones only.
+                                  Without --repo: the warehouse's latest verdict per path, no
+                                  live/stale judgement. Read-only — never writes a row.
+                                  flags: --db <dsn> (default $CORRALAI_SCANS_DB, else
+                                  ~/.claude/corralai_scans.duckdb) --repo <dir> --top n (default 20)
+                                  --json
   corral demo [flags]             a complete audit of a tiny project, in ONE command: writes a
                                   small Go package with a five-clause password rule and a test
                                   that checks only two of them, then audits it with the real
@@ -780,6 +795,11 @@ func main() {
 		// DuckDB's single-writer lock still applies — openScanStore says so
 		// when a concurrent scan holds the file.
 		os.Exit(runScans(os.Args[2:], openScanStore, os.Stdout, os.Stderr))
+	case "seal":
+		// Also fully offline: a `--push` warehouse is any DuckDB the
+		// operator owns, and this reader only ever SELECTs from it (and, on
+		// a first read, creates corral_seal if a writer never has).
+		os.Exit(runSeal(os.Args[2:], openSealDB, os.Stdout, os.Stderr))
 	case "eval":
 		os.Exit(runEval(os.Args[2:], func(brainURL, corpusVersion string) eval.PoolRunner {
 			return mcpPoolRunner{client: mcpAdvClient{}, brainURL: brainURL, corpusVersion: corpusVersion,

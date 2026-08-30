@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -72,6 +73,11 @@ type scoreConfig struct {
 	// for that mutant instead of the shared testCmd. nil (the default)
 	// reproduces today's behavior byte-for-byte.
 	commandFor CommandFor
+	// failureParser, when set AND the Jail implements DetailedJail, reads the
+	// id of the first failing test out of each KILLED mutant's run output.
+	// nil (the default) leaves every KilledBy empty and keeps the mutant runs
+	// on the plain, output-discarding path they have always used.
+	failureParser lang.FailureParser
 }
 
 // MutantCommand is what CommandFor decides for one mutant.
@@ -109,6 +115,21 @@ func WithMutantTimeout(d time.Duration) ScoreOption {
 // python, ruby, javascript and typescript.
 func WithMutantCompileCheck(cmds [][]string) ScoreOption {
 	return func(c *scoreConfig) { c.mutantCompileCheck = cmds }
+}
+
+// WithFailureParser names, for each KILLED mutant, the first test the runner
+// reported as failing — best effort, and only ever the id the output itself
+// printed (see lang.FailureParser).
+//
+// It changes NOTHING that is measured. The kill/survive verdict is the same
+// run and the same exit code; the only difference is that the run's output is
+// kept and read instead of discarded. Two conditions must BOTH hold or the
+// column simply stays empty: a parser is supplied here, and the Jail
+// implements DetailedJail. A survivor never gets an id, because nothing
+// caught it, and an output whose summary cannot be parsed gets "" rather than
+// a guess.
+func WithFailureParser(p lang.FailureParser) ScoreOption {
+	return func(c *scoreConfig) { c.failureParser = p }
 }
 
 // WithConcurrency scores up to n mutants at once. The default (and anything
@@ -260,16 +281,60 @@ type Report struct {
 	// plain Jail leaves this empty rather than failing.
 	InvalidReasons map[string]string
 	// PerMutant records what each GRADED mutant was actually graded with,
-	// keyed by Mutant.ID. Populated only when WithCommandFor was set; nil
-	// otherwise, so a caller that never opted in sees no behavior change.
+	// keyed by Mutant.ID. There is one entry per mutant that reached the
+	// suite — a mutant the compile gate rejected is absent, because nothing
+	// graded it and it has nothing to report.
+	//
+	// It used to be populated only under WithCommandFor. It is now filled on
+	// every run because every graded mutant is TIMED, and a per-mutant
+	// duration is the only thing that can say whether a slow file is one
+	// pathological mutant or forty ordinary ones. TestsRun and Rule stay
+	// zero for a caller that did not opt in, exactly as before, and nothing
+	// downstream infers the grading MODE from this map (see the driver's
+	// perMutantGraded, which is recorded from the call, not from here).
 	PerMutant map[string]MutantGrading
+	// MutantDurationMedian and MutantDurationMax summarize PerMutant's
+	// durations — CONTENDED ones under concurrency, so median x graded can
+	// exceed the pass they were measured in; see MutantGrading.Duration —
+	// over the GRADED mutants — the compile-gate rejects are
+	// excluded, for the same reason they are excluded from Total: they never
+	// sat the exam, and a run of zeros folded into the spread would report a
+	// file as faster than any mutant of it ever was.
+	//
+	// The median is the upper of the two middle values on an even count,
+	// never their mean: it is a duration something actually took.
+	MutantDurationMedian time.Duration
+	MutantDurationMax    time.Duration
 }
 
-// MutantGrading is what a single mutant was actually graded with, when
-// WithCommandFor chose a command for it.
+// MutantGrading is what a single mutant was actually graded with.
 type MutantGrading struct {
+	// TestsRun and Rule are set only when WithCommandFor chose a command for
+	// this mutant; both stay zero on a run graded by one shared command.
 	TestsRun int
 	Rule     string
+	// Duration is the wall clock of the ONE suite run that graded this
+	// mutant — not the compile gate that preceded it (which is not the
+	// exam), and not a timed-out mutant's second, baseline-reprobing run
+	// (which measures the machine, not the mutant).
+	//
+	// CONTENDED under WithConcurrency(N>1): the run was one of N sharing the
+	// box, so this is how long it took under that load, not how long it
+	// would take alone. The durations of N mutants therefore OVERLAP, and
+	// summing them (or multiplying the median by the graded count) exceeds
+	// the wall clock of the pass they happened in. They are a cost
+	// distribution — which mutants are expensive — never a budget.
+	Duration time.Duration
+	// KilledBy is the id of the FIRST test the runner reported as failing on
+	// this mutant — the test that was awake. Set only for KILLED mutants, and
+	// only when WithFailureParser supplied a parser AND the Jail could hand
+	// back the run's output (DetailedJail); "" everywhere else, including for
+	// a mutant killed by a TIMEOUT, where no test reported anything at all.
+	//
+	// Best effort and never inferred: it is lifted verbatim from the output's
+	// own summary, so an unparsable run stores NULL rather than naming a test
+	// that may not have run.
+	KilledBy string
 }
 
 // VerboseJail is a Jail that can also report what a run PRINTED, not just
@@ -282,6 +347,40 @@ type MutantGrading struct {
 // output.
 type VerboseJail interface {
 	RunTestVerbose(ctx context.Context, files map[string]string, testCmd []string) (bool, string, error)
+}
+
+// maxDetailedOutput bounds what a DetailedJail hands back: the LAST 64 KiB of
+// the run. A failing suite's summary is at the END of its output — pytest's
+// "short test summary info" block and `go test`'s FAIL lines both trail
+// everything else — so the tail is the half that can answer "which test", and
+// a stack-trace-heavy run must not be able to hold megabytes per mutant.
+const maxDetailedOutput = 64 << 10
+
+// DetailedJail is a Jail that can hand back what a run PRINTED as bytes, for
+// the ONE reader that needs them: the language plugin's failure parser, which
+// turns the runner's own summary into the id of the first test that failed
+// (lang.FailureParser). VerboseJail already returns output, but only the
+// baseline and the compile gate go through it; this is the mutant path, and
+// it is separated so that the mutant path's cost is opted into rather than
+// inherited.
+//
+// Optional on purpose, exactly like VerboseJail: a Jail that only implements
+// RunTest keeps working and simply reports no killer. Nothing MEASURED
+// changes either way — the pass/fail that decides the verdict is the same
+// run, the same exit code, the same semantics.
+type DetailedJail interface {
+	RunTestDetailed(ctx context.Context, files map[string]string, testCmd []string) (ok bool, output []byte, err error)
+}
+
+// tailBytes keeps the last n bytes of b, copying rather than aliasing so the
+// runner's buffer can be reused.
+func tailBytes(b []byte, n int) []byte {
+	if len(b) > n {
+		b = b[len(b)-n:]
+	}
+	out := make([]byte, len(b))
+	copy(out, b)
+	return out
 }
 
 // KillRate is the adequacy score: the fraction of mutants the test caught.
@@ -338,6 +437,21 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 
 	run := func(rctx context.Context, code string) (bool, error) {
 		return runCmd(rctx, code, testCmd)
+	}
+
+	// THE MUTANT PATH, when — and only when — both halves of the killed_by
+	// feature are present: a parser to read the output and a jail that can
+	// hand it over. Everything else about the run is identical to runCmd's,
+	// including which exit code means killed.
+	dj, detailed := j.(DetailedJail)
+	nameKiller := cfg.failureParser != nil && detailed
+	runCmdDetailed := func(rctx context.Context, code string, cmd []string) (bool, []byte, error) {
+		files := make(map[string]string, len(base)+1)
+		for k, v := range base {
+			files[k] = v
+		}
+		files[codePath] = code
+		return dj.RunTestDetailed(rctx, files, cmd)
 	}
 
 	// runCmdVerbose keeps the checker's OUTPUT when the Jail can report it.
@@ -479,8 +593,34 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 			}
 			grading = &MutantGrading{TestsRun: mc.Tests, Rule: mc.Rule}
 		}
+		if grading == nil {
+			// Every graded mutant gets an entry, because every graded mutant
+			// is timed. A caller that never set WithCommandFor still gets
+			// TestsRun 0 / Rule "" here, which is what it always got.
+			grading = &MutantGrading{}
+		}
 		mctx, cancel := context.WithTimeout(ctx, perMutant)
-		passed, err := runCmd(mctx, m.Code, cmd)
+		// THE measurement: the single suite run that decides this mutant's
+		// verdict. Recorded even when that run errors or times out, so a
+		// mutant that ate its whole budget says so.
+		mstart := time.Now()
+		var (
+			passed   bool
+			err      error
+			killedBy string
+		)
+		if nameKiller {
+			var out []byte
+			passed, out, err = runCmdDetailed(mctx, m.Code, cmd)
+			if err == nil && !passed {
+				// A kill, and the output is the only thing entitled to say
+				// which test made it one. "" when the summary says nothing.
+				killedBy = cfg.failureParser.FirstFailure(out)
+			}
+		} else {
+			passed, err = runCmd(mctx, m.Code, cmd)
+		}
+		grading.Duration = time.Since(mstart)
 		cancel()
 		if err != nil {
 			if errors.Is(err, ErrTestTimeout) {
@@ -529,6 +669,9 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 			return
 		}
 		// test PASSED on a violation => it did NOT catch it
+		if !passed {
+			grading.KilledBy = killedBy
+		}
 		outcomes[i] = outcome{killed: !passed, grading: grading}
 	}
 
@@ -584,5 +727,31 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 	// from len(mutants) up front: dividing by the emitted count would put the
 	// invalid mutants back into the denominator by the back door.
 	rep.Total = len(rep.Killed) + len(rep.Survived)
+	rep.MutantDurationMedian, rep.MutantDurationMax = mutantSpread(rep.PerMutant)
 	return rep, nil
+}
+
+// mutantSpread is the middle and the worst of what grading one mutant cost,
+// over the mutants that were actually graded. Both are zero when nothing was
+// timed — a run whose baseline failed, or one on a Jail so fast every run
+// rounds to nothing — and every reader stores that as NULL rather than as a
+// file whose mutants were free.
+func mutantSpread(per map[string]MutantGrading) (median, max time.Duration) {
+	if len(per) == 0 {
+		return 0, 0
+	}
+	ds := make([]time.Duration, 0, len(per))
+	for _, g := range per {
+		if g.Duration > 0 {
+			ds = append(ds, g.Duration)
+		}
+	}
+	if len(ds) == 0 {
+		return 0, 0
+	}
+	sort.Slice(ds, func(i, j int) bool { return ds[i] < ds[j] })
+	// The UPPER of the two middle values on an even count, matching the
+	// tests-per-mutant spread beside it: this is a duration some mutant
+	// really took, not an average of two that nothing did.
+	return ds[len(ds)/2], ds[len(ds)-1]
 }

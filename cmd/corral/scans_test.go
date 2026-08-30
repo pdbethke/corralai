@@ -12,10 +12,12 @@ import (
 )
 
 type fakeScansReader struct {
-	scans   []scanstore.ScanRow
-	files   []scanstore.File
-	mutants []scanstore.Mutant
-	limit   int // records what the command asked for
+	scans      []scanstore.ScanRow
+	scan       scanstore.ScanRow // what ScanByID answers with; zero ID = not found
+	files      []scanstore.File
+	mutants    []scanstore.Mutant
+	modelCalls []scanstore.ModelCall
+	limit      int // records what the command asked for
 }
 
 func (f *fakeScansReader) Scans(_ context.Context, limit int) ([]scanstore.ScanRow, error) {
@@ -27,6 +29,19 @@ func (f *fakeScansReader) FilesForScan(context.Context, int64) ([]scanstore.File
 }
 func (f *fakeScansReader) MutantsForScan(context.Context, int64) ([]scanstore.Mutant, error) {
 	return f.mutants, nil
+}
+func (f *fakeScansReader) ModelCallsForScan(context.Context, int64) ([]scanstore.ModelCall, error) {
+	return f.modelCalls, nil
+}
+
+// ScanByID answers with the fixture's scan header. A zero ID stands for "no
+// such scan", the same ANSWER (not error) the real store returns — every
+// pre-existing fixture leaves it unset, so the header is simply absent.
+func (f *fakeScansReader) ScanByID(context.Context, int64) (scanstore.ScanRow, bool, error) {
+	if f.scan.ID == 0 {
+		return scanstore.ScanRow{}, false, nil
+	}
+	return f.scan, true, nil
 }
 func (f *fakeScansReader) Close() error { return nil }
 
@@ -289,5 +304,52 @@ func TestScansShow_DisclosesConcurrency(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "not recorded") {
 		t.Errorf("an unrecorded concurrency must read as such, never as 1 tree:\n%s", out.String())
+	}
+}
+
+// The ledger records WHICH TEST killed each mutant when the runner said so.
+// A reader that stored it and never showed it would have answered "which
+// test was awake" for nobody.
+func TestScansShow_NamesTheTestThatKilledEachMutant(t *testing.T) {
+	r := &fakeScansReader{
+		files: []scanstore.File{{Path: "recipes.py", Disposition: "audited", KillRate: ptrF(0.5), Survivors: 1}},
+		mutants: []scanstore.Mutant{
+			{Path: "recipes.py", MutantID: "m1", Outcome: "killed", KilledBy: "tests/test_recipes.py::test_scale"},
+			// Killed, but the runner's output named nobody (a timeout-kill, or
+			// a language corral does not parse). No line, no invented id.
+			{Path: "recipes.py", MutantID: "m2", Outcome: "killed"},
+			// A survivor has no killer by construction.
+			{Path: "recipes.py", MutantID: "m3", Outcome: "survived"},
+		},
+	}
+	var out, errOut bytes.Buffer
+	if code := runScansShow([]string{"7"}, openFake(r), &out, &errOut); code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut.String())
+	}
+	got := out.String()
+	if !strings.Contains(got, "killed by:") {
+		t.Fatalf("no killed-by block in:\n%s", got)
+	}
+	if !strings.Contains(got, "tests/test_recipes.py::test_scale") {
+		t.Errorf("the killer is not named:\n%s", got)
+	}
+	if strings.Contains(got, "m2") || strings.Contains(got, "m3") {
+		t.Errorf("a mutant with no recorded killer was listed anyway:\n%s", got)
+	}
+}
+
+// ...and stays silent when nothing was recorded: a header with no rows under
+// it announces a measurement that was never made.
+func TestScansShow_SaysNothingAboutKillersWhenNoneWereRecorded(t *testing.T) {
+	r := &fakeScansReader{
+		files:   []scanstore.File{{Path: "recipes.py", Disposition: "audited", KillRate: ptrF(0.5)}},
+		mutants: []scanstore.Mutant{{Path: "recipes.py", MutantID: "m1", Outcome: "killed"}},
+	}
+	var out, errOut bytes.Buffer
+	if code := runScansShow([]string{"7"}, openFake(r), &out, &errOut); code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut.String())
+	}
+	if strings.Contains(out.String(), "killed by:") {
+		t.Errorf("a killed-by block was printed with nothing to put in it:\n%s", out.String())
 	}
 }

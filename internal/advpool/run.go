@@ -7,6 +7,8 @@
 package advpool
 
 import (
+	"time"
+
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/lang"
 )
@@ -104,6 +106,29 @@ type RunSpec struct {
 	//
 	// nil — the default, and every pre-existing caller — generates as before.
 	PresetMutants []adequacy.Mutant
+
+	// SelectionDuration and PoolDuration are the two phases of a file's audit
+	// the driver CANNOT time, handed to it by the caller that did.
+	//
+	// Selection is the scan's single instrumented coverage run
+	// (cmd/corral's collectSelection): it happens once for the whole repo
+	// and is SHARED BY EVERY FILE of it, before any run is started. It rides
+	// every RunSpec so a file's readout can name each phase of its audit, but
+	// it is never added into that file's Timing.Total — the scan header
+	// records it once, which is the copy a cost query sums.
+	//
+	// PoolDuration, by contrast, is per FILE: the workspace substrate's copy of the
+	// checkout and its concurrency probe (adequacy.Disclosure.CopyDuration +
+	// ProbeDuration), which happen while the jail wiring is being built —
+	// again before the driver exists.
+	//
+	// They ride the spec rather than being re-derived downstream so there is
+	// ONE measurement of each, taken where the work actually happened. Zero
+	// (every caller that does not set them, including the brain/MCP path)
+	// means the phase did not run, and every reader prints and stores it as
+	// unknown rather than as a phase that was free.
+	SelectionDuration time.Duration
+	PoolDuration      time.Duration
 }
 
 // RoleAssignment maps a role name (Role.Name) to the gate-earned model that

@@ -168,7 +168,7 @@ func TestBuildScanMutantRowsDeDupesPathsLikeItsSibling(t *testing.T) {
 	if len(rows) != 2 {
 		t.Fatalf("want 2 mutant rows for one duplicated path, got %d — the same measurement was counted twice", len(rows))
 	}
-	files := buildScanFileRows([]reposcan.FileResult{one, one}, nil, reposcan.CoverageMap{}, "", io.Discard)
+	files := buildScanFileRows([]reposcan.FileResult{one, one}, nil, reposcan.CoverageMap{}, "", "", io.Discard)
 	if len(files) != 1 {
 		t.Fatalf("want 1 file row, got %d", len(files))
 	}

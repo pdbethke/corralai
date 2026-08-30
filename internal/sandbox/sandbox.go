@@ -80,7 +80,15 @@ type Options struct {
 	MaxOutput int           // cap on combined stdout+stderr bytes (default 16 KiB)
 	Env       []string      // environment; nil => MinimalEnv() (no inherited secrets)
 	Network   bool          // allow network egress for the command (default false)
-	Backend   Isolator      // isolation backend; nil => execution is disabled (used from Task 2)
+	// KeepTail flips WHICH END of an over-long output survives MaxOutput:
+	// false (the default) keeps the first MaxOutput bytes, true keeps the
+	// last. It exists for callers whose reader wants the END of a run — a
+	// test runner's failure summary is printed last, so a head-kept capture
+	// of a verbose suite yields the banner and nothing a failure parser can
+	// use. Only the capture differs; the command, its exit code, TimedOut
+	// and Err are identical either way. See TailWriter.
+	KeepTail bool
+	Backend  Isolator // isolation backend; nil => execution is disabled (used from Task 2)
 
 	// ReadOnlyBinds are host directories mounted read-only into the jail at
 	// Target (an absolute path under Workspace), so large read-only trees
@@ -143,7 +151,13 @@ func Run(ctx context.Context, command string, opts Options) Result {
 	// see proc.go for why all three are load-bearing.
 	GuardProcess(cmd)
 
-	buf := NewCappedWriter(opts.MaxOutput)
+	// Which end of an over-long run survives — see Options.KeepTail. Both
+	// writers accept every byte and bound only what they HOLD, so neither can
+	// block the command.
+	var buf outputCapture = NewCappedWriter(opts.MaxOutput)
+	if opts.KeepTail {
+		buf = NewTailWriter(opts.MaxOutput)
+	}
 	cmd.Stdout = buf
 	cmd.Stderr = buf
 
@@ -184,6 +198,15 @@ func RunGuarded(ctx context.Context, command string, opts Options) (Result, erro
 		return res, fmt.Errorf("sandbox: %s", res.Err)
 	}
 	return res, nil
+}
+
+// outputCapture is the seam Run holds its output buffer through: an
+// io.Writer that can render what it kept. CappedWriter and TailWriter both
+// satisfy it, and Run picks between them on Options.KeepTail — the ONE place
+// the choice is made, so nothing downstream has to know which end was kept.
+type outputCapture interface {
+	io.Writer
+	String() string
 }
 
 // CappedWriter is an io.Writer that stops storing past Max bytes (so a

@@ -377,14 +377,6 @@ type localAuditInput struct {
 	// daemon, never the device. Empty keeps every local seat on OLLAMA_URL.
 	localEndpoints map[string]string
 
-	// meter, when non-nil, is the UsageMeter this audit reports its provider
-	// usage into INSTEAD of a fresh per-file one. A whole-repo scan runs many
-	// audits and has to answer "what did that cost me" for the RUN, not for
-	// each file in isolation; sharing one meter is how the totals survive the
-	// fan-out. Nil keeps the single-file behavior: an audit that meters only
-	// itself.
-	meter *agentbackend.UsageMeter
-
 	// Jail + workspace. jail empty = auto-detect this OS's backend (never
 	// unsandboxed). checkArgv is the project's own test command, required in
 	// repo-aware mode.
@@ -422,6 +414,14 @@ type localAuditInput struct {
 	// replayable set across a whole scan. nil records nothing.
 	mutantSink func(codePath string, ms []adequacy.Mutant)
 
+	// eventSink, when non-nil, is wired to the driver as its EventSink
+	// instead of `record` — the `certify --repo` position (a scan-wide
+	// scanEventSink, one adapter per file, see localExecutor.auditInputFor),
+	// as distinct from `certify --local`'s `record` tape sink. The two are
+	// mutually exclusive in practice: nil is every `--local` caller's
+	// position, and `record` is nil on every `--repo` caller's.
+	eventSink advpool.EventSink
+
 	// concurrency, when non-nil, is where the workspace substrate RECORDS
 	// what its concurrency probe decided for this file: how many private
 	// trees the pool actually got, and why, if it was downgraded to one (see
@@ -434,6 +434,19 @@ type localAuditInput struct {
 	// nil records nothing, which is every caller that is not on the workspace
 	// substrate: the jail builds no trees and has nothing to disclose.
 	concurrency *adequacy.Disclosure
+
+	// selectionDuration is how long the SCAN's single instrumented coverage
+	// run took (cmd/corral's collectSelection), handed down so this file's
+	// RunSpec can carry it onto the verdict.
+	//
+	// Zero whenever no such run happened: `certify --local` runs no scan-wide
+	// selection pass at all, and --whole-suite (or an unsupported language)
+	// returns from collectSelection before it instruments anything. The
+	// measurement is taken around the RUN, not around the call, precisely so
+	// those cases record nothing — the ledger then stores NULL and the report
+	// prints "—", rather than a near-zero that reads as a selection pass that
+	// was free.
+	selectionDuration time.Duration
 
 	// pool, when non-nil, is where THIS file-job's workspace pool lives: the
 	// first thing that needs it builds and probes it, everything after that
@@ -791,11 +804,14 @@ type auditRoles struct {
 	// one line of challenger work — see newAuditRunSpec.
 	shadowWriter string
 	chatterFor   func(role string) agentworker.Chatter
-	// meter accumulates every seat's reported token usage for the whole run.
-	// An audit's cost is O(mutants x suite runtime) on the execution side and
-	// O(tokens) on the model side; the ledger already records the first half,
-	// and this is the second.
-	meter *agentbackend.UsageMeter
+	// meters is ONE agentbackend.UsageMeter PER ROLE this run actually
+	// dispatches — built by auditRoleMeters and never populated for a role
+	// left empty or resolved to "off". An audit's cost is O(mutants x suite
+	// runtime) on the execution side and O(tokens) on the model side; the
+	// ledger already records the first half (per file, per phase), and this
+	// is the second (per file, per ROLE — see modelCallsFromMeters, which
+	// turns this map into the []advpool.ModelCall a Verdict carries).
+	meters map[string]*agentbackend.UsageMeter
 }
 
 // herdNotConfiguredErr refuses a run whose grading seats have no model, and
@@ -1012,16 +1028,13 @@ func resolveAuditRoles(in localAuditInput, stderr io.Writer) (auditRoles, error)
 	// writer) needs its own vendor's key, and a missing key must refuse the
 	// run here — fail closed at the top, not mid-run after jails, stores and
 	// mutants are already in flight.
-	meter := in.meter
-	if meter == nil {
-		meter = &agentbackend.UsageMeter{}
-	}
-	chatterFor, err := localChatterFor(assign, meter, in.localEndpoints)
+	meters := auditRoleMeters(assign)
+	chatterFor, err := localChatterFor(assign, meters, in.localEndpoints)
 	if err != nil {
 		return r, auditUsageErr("%v", err)
 	}
 
-	return auditRoles{assign: assign, shadow: shadow, shadowWriter: shadowWriter, writer: writer, mutant: mutant, critic: critic, chatterFor: chatterFor, meter: meter}, nil
+	return auditRoles{assign: assign, shadow: shadow, shadowWriter: shadowWriter, writer: writer, mutant: mutant, critic: critic, chatterFor: chatterFor, meters: meters}, nil
 }
 
 // runSubject is the FILE-and-repo half of a RunSpec: everything
@@ -1073,6 +1086,22 @@ func normalizedConcurrency(d *adequacy.Disclosure) advpool.Concurrency {
 	return advpool.Concurrency{Trees: d.Trees, Note: d.Note, Shared: d.Shared}
 }
 
+// poolDuration is what the workspace substrate spent before it could score
+// anything: copying the checkout into N private trees, then probing them with
+// the baseline and the canary. Both halves come from the ONE Disclosure the
+// probe wrote (adequacy.WorkspacePool.Probe), so the number on the verdict is
+// the number the pool actually measured, not a second derivation.
+//
+// nil is the jail substrate, which builds no trees and has nothing to
+// disclose; a pool of one copies and probes nothing and reports zero. Either
+// way the phase did not happen and the ledger stores NULL.
+func poolDuration(d *adequacy.Disclosure) time.Duration {
+	if d == nil {
+		return 0
+	}
+	return d.CopyDuration + d.ProbeDuration
+}
+
 func newAuditRunSpec(in localAuditInput, roles auditRoles, subj runSubject) advpool.RunSpec {
 	n := in.nMutants
 	if n <= 0 {
@@ -1105,9 +1134,16 @@ func newAuditRunSpec(in localAuditInput, roles auditRoles, subj runSubject) advp
 		// that out as Trees 1 is what keeps a signed record from ever
 		// reading "trees: 0", a claim nothing measured.
 		Concurrency: normalizedConcurrency(in.concurrency),
-		NMutants:    n,
-		Lang:        subj.lang,
-		MaxShards:   resolveMaxShards(in.maxShards),
+		// The two phases the DRIVER cannot time, measured by the code that
+		// ran them: the scan's one instrumented selection pass, and the
+		// workspace pool's copies plus its concurrency probe. Both are zero
+		// for a caller that did neither, and zero reaches the ledger as NULL
+		// — see advpool.RunSpec.SelectionDuration.
+		SelectionDuration: in.selectionDuration,
+		PoolDuration:      poolDuration(in.concurrency),
+		NMutants:          n,
+		Lang:              subj.lang,
+		MaxShards:         resolveMaxShards(in.maxShards),
 		// Both challenger seats, from the SAME resolved struct the
 		// RoleAssignment was built from — so a seat that is named, paid for and
 		// recorded is also a seat the driver can actually run.
@@ -1226,6 +1262,12 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 	rec := in.record
 	if rec != nil {
 		d.Events = rec
+	}
+	// `certify --repo`'s position: no tape, but the scan's own event sink —
+	// see localAuditInput.eventSink's doc for why the two are mutually
+	// exclusive in practice.
+	if in.eventSink != nil {
+		d.Events = in.eventSink
 	}
 	actorFor := func(role string) string { return recordActor(role, assign[role]) }
 	// The wall-clock backstop: a run that hasn't converged by --timeout is signed
@@ -1398,11 +1440,26 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 
 	verdict, err := driveLocalRun(ctx, d, q, localMissionID, chatterFor, poll, time.Sleep, stdout, rec, actorFor, swarm)
 	if err != nil {
+		// The meters are exercised INSIDE driveLocalRun — a seat can dispatch
+		// several calls before an infrastructure failure (a closed queue, a
+		// marshalling error) aborts the run partway through. That spend
+		// already happened and already cost money; losing it from the
+		// returned verdict is how a scan's totals would undercount a file
+		// that errored after spending, not before. Stamped on the zero
+		// verdict this returns — the failure state, not a fabricated success
+		// — so the caller's scan-wide total (built by summing every file's
+		// own ModelCalls) still includes it.
+		zero.ModelCalls = modelCallsFromMeters(roles.meters)
 		return zero, auditErr("%v", err)
 	}
+	// Carried onto the verdict from the SAME meters localChatterFor wrote
+	// into — never re-derived — so the ledger and warehouse (once --record
+	// or --push carry this verdict onward) match exactly what this run's
+	// stdout line reports below.
+	verdict.ModelCalls = modelCallsFromMeters(roles.meters)
 
 	renderAdvVerdict(stdout, in.codePath, advVerdictFromPool(*verdict))
-	renderModelSpend(stdout, roles.meter)
+	renderModelSpend(stdout, verdict.ModelCalls)
 
 	// --matrix: print the per-test adequacy summary + delete-candidate list.
 	// st.Matrix is nil unless --matrix was set AND the phase actually ran
@@ -1594,6 +1651,18 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 			w.cleanup = func() {}
 		}
 	}()
+	// WHICH TEST WAS AWAKE. The language plugin either can read its runner's
+	// failure summary or it cannot; there is no middle answer, and a plugin
+	// that does not implement lang.FailureParser leaves every killed_by NULL
+	// rather than having an id guessed for it. Resolved ONCE here, off the
+	// same in.langName every other plugin lookup in this function uses, and
+	// handed to all three scorer wirings so no substrate silently drops the
+	// column.
+	var failureParser lang.FailureParser
+	if plug, ok := lang.ByName(in.langName); ok {
+		failureParser, _ = plug.(lang.FailureParser)
+	}
+
 	if in.substrate == substrateWorkspace {
 		// The runner IS the isolation boundary — an ephemeral VM with the repo
 		// checked out and the toolchain installed. Nothing to seed, nothing to
@@ -1731,7 +1800,7 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		// has ONE tree, and a scorer told to run six mutants at once against
 		// it would queue five of them behind the borrow channel for the whole
 		// audit. The number that scores must be the number that exists.
-		w.scorer = advpool.JailScorer{Jail: pool, BaseFiles: base, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Concurrency: pool.Trees(), Lang: in.langName, Selection: in.selection}
+		w.scorer = advpool.JailScorer{Jail: pool, BaseFiles: base, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Concurrency: pool.Trees(), Lang: in.langName, Selection: in.selection, FailureParser: failureParser}
 		w.validator = advpool.JailValidator{Jail: pool, BaseFiles: base, DevTestPath: w.devTestKey}
 		w.jailEnum = advpool.JailEnumerator{Jail: pool, BaseFiles: base}
 		// w.depBinds stays nil: there is nothing to bind read-only when the
@@ -1785,7 +1854,7 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		// RunSpec.Matrix, so wiring it here costs nothing when --matrix is off
 		// (the flag is the real gate).
 		enumerator := adequacy.NewEnumerator(in.iso, in.timeout, adequacy.WithReadOnlyBinds(depBinds))
-		w.scorer = advpool.JailScorer{Jail: jail, BaseFiles: repoFiles, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection}
+		w.scorer = advpool.JailScorer{Jail: jail, BaseFiles: repoFiles, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, FailureParser: failureParser}
 		w.validator = advpool.JailValidator{Jail: jail, BaseFiles: repoFiles, DevTestPath: w.devTestKey}
 		w.jailEnum = advpool.JailEnumerator{Jail: enumerator, BaseFiles: repoFiles}
 		if len(depBinds) > 0 {
@@ -1800,7 +1869,7 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		w.devTestKey = filepath.Base(in.testPath)
 		jail := adequacy.NewJail(in.iso, in.timeout)
 		enumerator := adequacy.NewEnumerator(in.iso, in.timeout)
-		w.scorer = advpool.JailScorer{Jail: jail, MutantTimeout: in.testTimeout, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection}
+		w.scorer = advpool.JailScorer{Jail: jail, MutantTimeout: in.testTimeout, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, FailureParser: failureParser}
 		w.validator = advpool.JailValidator{Jail: jail}
 		w.jailEnum = advpool.JailEnumerator{Jail: enumerator}
 	}
@@ -1986,24 +2055,16 @@ func localBuildDBPath() string {
 	return filepath.Join(home, ".claude", "corralai_build.duckdb")
 }
 
-// renderModelSpend reports what the run actually consumed from the providers.
+// renderModelSpend reports what the run actually consumed from the
+// providers, broken out by role — see costLine, the one place this format is
+// spelled out, shared with `corral scans show --timing`.
 //
 // An audit costs O(mutants x the target's suite runtime) in execution and
 // O(tokens) in model calls, and until now corral reported neither half at the
 // end of a run — so "what did that cost me" had no answer, from the tool whose
 // central caveat is that audits are expensive.
-//
-// TOKENS, NOT DOLLARS. Prices change and differ by contract; a token count
-// stays true. Anyone who wants a figure multiplies by their own rate.
-//
-// The call count is printed alongside because a provider that reports no usage
-// leaves the tokens at zero: "0 tokens over 41 calls" says the run happened and
-// the provider said nothing, which is a different fact from "0 over 0", and a
-// bare token total cannot tell them apart.
-func renderModelSpend(w io.Writer, m *agentbackend.UsageMeter) {
-	in, out, calls := m.Totals()
-	if calls == 0 {
-		return
+func renderModelSpend(w io.Writer, calls []advpool.ModelCall) {
+	if line := costLine(calls); line != "" {
+		fmt.Fprintln(w, line)
 	}
-	fmt.Fprintf(w, "  model spend:   %d in / %d out token(s) over %d model call(s)\n", in, out, calls)
 }

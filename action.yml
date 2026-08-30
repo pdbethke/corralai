@@ -21,9 +21,13 @@ inputs:
     required: false
     default: ""
   push:
-    description: "Append this run's per-file verdicts to a DuckDB YOU own — a path, or 'md:<db>' for MotherDuck. corral has no hosted tier and keeps nothing: your key, your runner, your warehouse, and any DuckDB works. Append-only, and every row carries the sha256 of the signed statement it came from plus the run URL, so a row traces back to something verifiable. This is what answers the question one pull request cannot: a single kill rate is a sample — the same unchanged diff has scored 0.85 and 0.90 — while forty of them are a distribution you can read a trend from. For MotherDuck, also set 'motherduck-token'."
+    description: "Append this run's per-file verdicts to a DuckDB YOU own — a path, or 'md:<db>' for MotherDuck. corral has no hosted tier and keeps nothing: your key, your runner, your warehouse, and any DuckDB works. Append-only. Every row carries the local scan ledger's row id (0, since this Action does not enable corral's own --record) plus the run URL, and — traceable only when 'attest' is also set — the sha256 of the signed statement it came from, so a row can be checked against something verifiable; without 'attest', statement_sha256 is honestly empty rather than fabricated. This is what answers the question one pull request cannot: a single kill rate is a sample — the same unchanged diff has scored 0.85 and 0.90 — while forty of them are a distribution you can read a trend from. For MotherDuck, also set 'motherduck-token'."
     required: false
     default: ""
+  push-source:
+    description: "With 'push', also send the SOURCE BYTES corral holds to your warehouse: the pool's authored test, and the full verdict JSON. Default false, because those bytes are derived from — and quote — the code being audited; with it off, the pushed rows carry numbers, hashes, reasons and model names, and no source leaves the runner. Mutant code is NOT carried by either setting: corral keeps no mutant source at rest, so corral_mutants.code is always NULL today. The scan row records which setting was used, so the custody question is answerable from the table."
+    required: false
+    default: "false"
   motherduck-token:
     description: "MotherDuck token, exported as motherduck_token for a 'md:<db>' push target. Pass as a secret; never inline. Not needed for a local DuckDB path."
     required: false
@@ -138,6 +142,7 @@ runs:
         MAX_PROVEN_MISSED: ${{ inputs.max-proven-missed }}
         ATTEST: ${{ inputs.attest }}
         PUSH_TARGET: ${{ inputs.push }}
+        PUSH_SOURCE: ${{ inputs.push-source }}
         motherduck_token: ${{ inputs.motherduck-token }}
         TOP: ${{ inputs.top }}
         TIMEOUT: ${{ inputs.timeout }}
@@ -237,6 +242,7 @@ runs:
         [ -n "$MIN_KILL_RATE" ] && args+=(--min-kill-rate "$MIN_KILL_RATE")
         [ -n "${MAX_PROVEN_MISSED:-}" ] && args+=(--max-proven-missed "${MAX_PROVEN_MISSED:-}")
         [ -n "${PUSH_TARGET:-}" ] && args+=(--push "${PUSH_TARGET:-}")
+        [ "${PUSH_SOURCE:-false}" = "true" ] && args+=(--push-source)
         # The statement is written BEFORE the gate's exit code is honoured
         # below, so a FAILING audit still produces a receipt. A verdict you only
         # get to keep when it is flattering is not evidence.

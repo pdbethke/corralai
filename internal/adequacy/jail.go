@@ -239,7 +239,19 @@ func shellJoin(cmd []string) string {
 	return strings.Join(quoted, " ")
 }
 
+// runInJail runs cmd over files in a fresh disposable workspace, capturing
+// the run's OPENING up to the jail's own output cap (see WithMaxOutput).
 func (j bwrapJail) runInJail(ctx context.Context, files map[string]string, cmd []string) (sandbox.Result, error) {
+	return j.runInJailCapturing(ctx, files, cmd, j.maxOutput, false)
+}
+
+// runInJailCapturing is runInJail with the capture policy spelled out:
+// maxOutput bounds what is held (0 => sandbox.Run's own 16 KiB default), and
+// keepTail decides WHICH END survives it. Every other aspect of the run —
+// binds, env, timeout, exit code, timeout classification — is identical, and
+// deliberately so: the two capture policies must never become two different
+// runs.
+func (j bwrapJail) runInJailCapturing(ctx context.Context, files map[string]string, cmd []string, maxOutput int, keepTail bool) (sandbox.Result, error) {
 	if len(cmd) == 0 {
 		return sandbox.Result{}, errors.New("adequacy: empty command")
 	}
@@ -274,7 +286,8 @@ func (j bwrapJail) runInJail(ctx context.Context, files map[string]string, cmd [
 		Timeout:       j.timeout,
 		ReadOnlyBinds: roBinds,
 		Env:           envWithDepBinPaths(sandbox.MinimalEnv(), roBinds),
-		MaxOutput:     j.maxOutput, // 0 => sandbox.Run's own 16 KiB default
+		MaxOutput:     maxOutput, // 0 => sandbox.Run's own 16 KiB default
+		KeepTail:      keepTail,
 	})
 	if err != nil {
 		if res.TimedOut {
@@ -305,6 +318,46 @@ func (j bwrapJail) RunTestVerbose(ctx context.Context, files map[string]string, 
 		return false, res.Output, err
 	}
 	return res.ExitCode == 0, res.Output, nil
+}
+
+// RunTestDetailed is RunTestVerbose's byte-returning sibling: the
+// adequacy.DetailedJail contract the scorer uses to name the test that killed
+// a mutant (killed_by).
+//
+// The jail already KEEPS the run's output — RunTestVerbose returns the same
+// bytes — so implementing this costs nothing: the same run, the same exit
+// code, the same verdict. Without it, `--substrate jail` recorded NULL in
+// killed_by for every mutant it killed, and a column that exists for one
+// substrate out of two is a column no cross-repo query can trust.
+//
+// Capped to the LAST maxDetailedOutput: a runner puts its failure summary at
+// the end, which is the half that can answer "which test".
+//
+// THE TAIL HAS TO BE KEPT AT THE SOURCE, and for a long time it was not. This
+// path ran through runInJail's ordinary capture, which passes MaxOutput 0 —
+// sandbox.Run's 16 KiB default — and sandbox.CappedWriter keeps the HEAD. So
+// on any suite verbose enough to print past 16 KiB (pytest -v over a few
+// hundred tests, comfortably), the bytes that arrived here were the run's
+// OPENING and the trailing summary was already gone; the tailBytes call below
+// then trimmed a buffer that no longer contained what it was trimming for.
+// killed_by came back NULL on `--substrate jail` for exactly the verbose
+// suites where naming the killing test matters most, with nothing to show it
+// had happened: the run passed, the verdict was right, one column was empty.
+//
+// So this path asks the sandbox for a TAIL-keeping capture of
+// maxDetailedOutput (sandbox.Options.KeepTail). Pass/fail semantics are
+// untouched — same command, same exit code, same timeout handling — only
+// which end of an over-long output survives. tailBytes stays as the belt on
+// the contract's own cap.
+//
+// Output rides along even on a non-nil error, exactly as RunTestVerbose does.
+func (j bwrapJail) RunTestDetailed(ctx context.Context, files map[string]string, testCmd []string) (bool, []byte, error) {
+	res, err := j.runInJailCapturing(ctx, files, testCmd, maxDetailedOutput, true)
+	out := tailBytes([]byte(res.Output), maxDetailedOutput)
+	if err != nil {
+		return false, out, err
+	}
+	return res.ExitCode == 0, out, nil
 }
 
 // Enumerate is RunTest's stdout-returning sibling: same disposable

@@ -362,3 +362,32 @@ func (goPlugin) ParseTestList(output string) []string {
 	}
 	return out
 }
+
+// FirstFailure names the first test `go test` reported as failing. The
+// runner prints one `--- FAIL: <name> (<elapsed>)` line per failing test,
+// indented one level per subtest depth; the name is taken VERBATIM, so a
+// subtest comes back as `TestA/sub` — the form `go test -run` accepts.
+//
+// The FIRST such line in the stream is the answer, whether that turns out to
+// be a parent or one of its subtests: which of the two `go test` flushes
+// first is a property of the runner, not a judgement this parser is entitled
+// to make.
+//
+// Output with no `--- FAIL:` line at all — a passing package, or one that
+// failed to BUILD — names nothing. No test ran, so no test can be blamed.
+func (goPlugin) FirstFailure(output []byte) string {
+	for _, line := range strings.Split(string(output), "\n") {
+		line = strings.TrimSpace(line)
+		rest, ok := strings.CutPrefix(line, "--- FAIL: ")
+		if !ok {
+			continue
+		}
+		if name, _, found := strings.Cut(rest, " "); found {
+			rest = name
+		}
+		if rest = strings.TrimSpace(rest); rest != "" {
+			return rest
+		}
+	}
+	return ""
+}

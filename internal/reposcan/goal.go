@@ -17,7 +17,19 @@ type Goal struct {
 // Goal provenance values.
 const (
 	GoalFromFile = "file"
+	// goalDerivedPrefix opens every Provenance a derivingGoalSource writes
+	// (see derive.go's "derived:%s@%s") — the one thing that distinguishes a
+	// machine-derived goal from a hand-written one after the job is built.
+	goalDerivedPrefix = "derived:"
 )
+
+// GoalWasDerived reports whether g came from a model (derivingGoalSource),
+// as opposed to a hand-written --goals map. Used to decide
+// scanstore.File.GoalsDerived: that column counts goals the DERIVER
+// produced, and a hand-written goal was never asked of a deriver at all.
+func GoalWasDerived(g Goal) bool {
+	return strings.HasPrefix(g.Provenance, goalDerivedPrefix)
+}
 
 // GoalSource supplies the goal for a candidate. ok=false means UNGOALED:
 // the file drops out of the scored surface and is accounted for in the

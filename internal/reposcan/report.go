@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/pdbethke/corralai/internal/advpool"
+	"github.com/pdbethke/corralai/internal/modelcorr"
 )
 
 // maxUngradableDetailsPerReason bounds how many sample detail lines
@@ -138,6 +139,51 @@ type WeakFile struct {
 	// not decoration — they are the one thing the trees did not hold
 	// privately. Empty when nothing was shared.
 	SharedDirs []string
+	// Timing mirrors advpool.Verdict.Timing: where this file's audit spent
+	// its wall clock, phase by phase. Carried onto the report so the printer
+	// never reaches back into the verdict — and so the one line an operator
+	// reads to find the slow phase is built from the same numbers the ledger
+	// stores. Every phase that did not run is zero, and every reader renders
+	// that as "—" rather than as a phase that cost nothing.
+	Timing advpool.Timing
+	// CacheHit mirrors FileResult.CacheHit: this file's verdict was REUSED,
+	// not earned by this run. It rides onto the report because Timing and
+	// ModelCalls round-trip through verdict_json and come back off a cache
+	// hit fully populated — with ANOTHER run's minutes and tokens. Every
+	// reader that reports what this scan spent (the per-file `time:` line,
+	// the scan totals, the `cost:` line, the ledger's timing columns and
+	// scan_model_calls) must exclude a row carrying this flag.
+	CacheHit bool
+	// ModelCalls mirrors advpool.Verdict.ModelCalls: what this file's audit
+	// cost, broken out by role. Carried onto the report for the same reason
+	// Timing is — so the ledger mapping and the cost line are built from the
+	// SAME rows the printer would read, never a second derivation from the
+	// verdict.
+	ModelCalls []advpool.ModelCall
+	// MutantsGraded mirrors advpool.Verdict.MutantsTotal: the denominator the
+	// per-mutant spread below is over. The dev-pass duration alone cannot say
+	// whether a slow file had four mutants or four hundred.
+	MutantsGraded int
+	// MutantMillisMedian and MutantMillisMax are how long grading ONE mutant
+	// took — the middle and the worst, in milliseconds, over the mutants that
+	// were actually graded. They answer the question the file total cannot:
+	// one pathological mutant, or all of them. 0 means nothing timed a
+	// mutant, and the line prints no spread rather than "median 0s".
+	//
+	// Under mutant concurrency each is a CONTENDED wall clock, so median x
+	// MutantsGraded can exceed Timing.DevPass — see
+	// adequacy.MutantGrading.Duration. A distribution, not a budget.
+	MutantMillisMedian int64
+	MutantMillisMax    int64
+	// Challenger mirrors advpool.Verdict.ChallengerAgreement: the primary
+	// writer's agreement with the challenger writer over the same survivor
+	// set. nil whenever no comparable pair exists — no challenger ran,
+	// either seat's kill vector was never measured, or the primary salvaged
+	// (see ChallengerAgreement's own doc for the full gating). Non-nil does
+	// NOT mean Jaccard/Kappa are individually meaningful: a caller must
+	// still check Challenger.Sufficient / Challenger.KappaDefined before
+	// printing or storing either coefficient.
+	Challenger *modelcorr.Pair
 }
 
 // MeasuredSpread reports whether this file's run actually measured a
@@ -377,6 +423,19 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 			Trees:           r.Verdict.Concurrency.Trees,
 			ConcurrencyNote: r.Verdict.Concurrency.Note,
 			SharedDirs:      r.Verdict.Concurrency.Shared,
+			// And where the minutes went — see WeakFile.Timing. CacheHit
+			// rides beside them because on a reused verdict they are not
+			// this run's minutes; see WeakFile.CacheHit.
+			CacheHit:           r.CacheHit,
+			Timing:             r.Verdict.Timing,
+			ModelCalls:         r.Verdict.ModelCalls,
+			MutantsGraded:      r.Verdict.MutantsTotal,
+			MutantMillisMedian: r.Verdict.MutantDurationMedian.Milliseconds(),
+			MutantMillisMax:    r.Verdict.MutantDurationMax.Milliseconds(),
+			// The primary/challenger agreement, carried straight through —
+			// nil whenever no comparable pair exists (see
+			// advpool.Verdict.ChallengerAgreement's doc).
+			Challenger: r.Verdict.ChallengerAgreement,
 		})
 	}
 

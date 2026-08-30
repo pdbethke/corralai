@@ -73,3 +73,39 @@ func TestRecordMutantsEmptyIsNotAnError(t *testing.T) {
 		t.Fatalf("empty RecordMutants: %v", err)
 	}
 }
+
+// TestKilledByIsNullWhenNothingNamedATest: "" and "this ledger does not say"
+// are different answers, and only one of them is true when a mutant was
+// killed by a run whose output nothing could parse (or by a TIMEOUT, where no
+// test reported anything at all). The column was binding the empty string,
+// while the comments at both producers — certify_repo_record.go and advpool's
+// driver — said NULL. A cross-repo query counting "mutants whose killer we
+// know" got every row.
+func TestKilledByIsNullWhenNothingNamedATest(t *testing.T) {
+	st := openTempMutantStore(t)
+	id, err := st.Record(context.Background(), Scan{Owner: "o", Repo: "o/r"}, nil)
+	if err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	if err := st.RecordMutants(context.Background(), []Mutant{
+		{ScanID: id, Path: "a.go", MutantID: "m-unknown", Outcome: "killed"},
+		{ScanID: id, Path: "a.go", MutantID: "m-named", Outcome: "killed", KilledBy: "a_test.go::TestX"},
+	}); err != nil {
+		t.Fatalf("RecordMutants: %v", err)
+	}
+
+	var nulls int
+	if err := st.db.QueryRow(`SELECT count(*) FROM scan_mutants WHERE killed_by IS NULL`).Scan(&nulls); err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if nulls != 1 {
+		t.Errorf("%d row(s) with killed_by NULL, want 1 — an unparsed killer must be NULL, never ''", nulls)
+	}
+	var named string
+	if err := st.db.QueryRow(`SELECT killed_by FROM scan_mutants WHERE mutant_id = 'm-named'`).Scan(&named); err != nil {
+		t.Fatalf("query named: %v", err)
+	}
+	if named != "a_test.go::TestX" {
+		t.Errorf("killed_by = %q, want the test that caught it", named)
+	}
+}

@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 )
@@ -153,6 +154,14 @@ func newWriterShadowRun(t *testing.T, missionID int64, rs RunSpec, scorer Scorer
 	if err != nil {
 		t.Fatalf("NewDriver: %v", err)
 	}
+	// A FROZEN clock, set before StartRun. The verdict carries the run's
+	// per-phase timing, and TestShadowWriterNeverChangesVerdict's arm 1
+	// compares two runs' digests byte for byte: on a real clock the two would
+	// differ by microseconds of wall time and the comparison would say
+	// "nondeterministic" about a fixture that is perfectly deterministic in
+	// every field this test is actually about.
+	frozen := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	d.Now = func() time.Time { return frozen }
 	if err := d.StartRun(missionID, rs, nil); err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -324,10 +333,12 @@ func digestOf(t *testing.T, v Verdict) string {
 //
 //  1. challenger OFF vs OFF — the digest must be byte-identical, which is what
 //     proves the run is deterministic enough for arm 2 to mean anything;
-//  2. challenger NAMED — the ONLY permitted difference is the ModelsByRole
-//     provenance entry (a signed record should say what ran). Every OUTCOME
-//     field is asserted individually rather than through the digest, so a field
-//     added to Verdict later cannot silently pass this test.
+//  2. challenger NAMED — the ONLY permitted differences are the ModelsByRole
+//     provenance entry (a signed record should say what ran) and
+//     ChallengerAgreement (the measurement the challenger exists to produce —
+//     necessarily nil when it did not run). Every OUTCOME field is asserted
+//     individually rather than through the digest, so a field added to
+//     Verdict later cannot silently pass this test.
 func TestShadowWriterNeverChangesVerdict(t *testing.T) {
 	base := newTestRunSpec(t)
 
@@ -399,13 +410,40 @@ func TestShadowWriterNeverChangesVerdict(t *testing.T) {
 	if got.AuthoredTest != off.AuthoredTest {
 		t.Errorf("AuthoredTest changed %q -> %q — the CHALLENGER's suite is being handed back as the pool's", off.AuthoredTest, got.AuthoredTest)
 	}
+	// ChallengerAgreement is asserted on its own terms — it is SUPPOSED to be
+	// nil with the challenger off and non-nil with it on; that difference IS
+	// the measurement, not a leak.
+	if off.ChallengerAgreement != nil {
+		t.Errorf("ChallengerAgreement = %+v with no challenger named — there is nothing to compare", off.ChallengerAgreement)
+	}
+	// And the ON arm, positively. Every assertion above (and the digest
+	// below) is satisfied by a challenger that RAN and produced NOTHING: the
+	// isolation this test exists to prove is vacuous if the seat never
+	// yielded the one measurement it is paid for. The pair must name BOTH
+	// writers, or a reader of the record cannot tell which two models were
+	// compared.
+	pair := got.ChallengerAgreement
+	if pair == nil {
+		t.Fatal("ChallengerAgreement is nil with a challenger named and measured — the seat's whole output is the comparison, and nothing else in this test would notice its absence")
+	}
+	if pair.ModelA != decorrelatedAssign()[RoleTestWriter] {
+		t.Errorf("ChallengerAgreement.ModelA = %q, want the PRIMARY writer %q", pair.ModelA, decorrelatedAssign()[RoleTestWriter])
+	}
+	if pair.ModelB != "challenger-model" {
+		t.Errorf("ChallengerAgreement.ModelB = %q, want the challenger %q", pair.ModelB, "challenger-model")
+	}
+	if pair.Mutants == 0 {
+		t.Error("ChallengerAgreement carries no denominator — a coefficient with no N is the number that ends up on a slide outliving its caveats")
+	}
 
-	// Belt and braces: with the provenance entry removed, the whole verdict
-	// must hash identically — this catches any field the list above forgot.
+	// Belt and braces: with the provenance entry AND the challenger's own
+	// measurement removed, the whole verdict must hash identically — this
+	// catches any field the list above forgot.
 	sameProvenance := got
 	sameProvenance.ModelsByRole = off.ModelsByRole
+	sameProvenance.ChallengerAgreement = off.ChallengerAgreement
 	if digestOf(t, sameProvenance) != digestOf(t, off) {
-		t.Fatalf("a Verdict field OTHER than ModelsByRole changed when the challenger ran:\n without = %s\n with    = %s\na measurement seat has leaked into a gating artifact",
+		t.Fatalf("a Verdict field OTHER than ModelsByRole/ChallengerAgreement changed when the challenger ran:\n without = %s\n with    = %s\na measurement seat has leaked into a gating artifact",
 			digestOf(t, off), digestOf(t, sameProvenance))
 	}
 }

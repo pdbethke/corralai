@@ -79,6 +79,21 @@ Usage:
                                   Local DuckDB file, no brain required:
                                   --db <path> (default $CORRALAI_SCANS_DB, else
                                   ~/.claude/corralai_scans.duckdb), --limit n, --json
+  corral seal [flags]            the repo's CURRENT state as the union of still-valid verdicts,
+                                  read from a certify --repo --push warehouse (many audits, one
+                                  current state — not one scan's snapshot). Reads corral_seal
+                                  (latest kill-rate-bearing row per path), creating the view if
+                                  a writer never has. With --repo <dir>: judges each of the
+                                  repo's churn x size top-N ("hot") files live (bytes unchanged
+                                  since the audit), stale (changed since), never audited,
+                                  unreadable, or unknown (the row recorded no validity key) —
+                                  and prints "coverage: N of M hot files carry a live verdict",
+                                  which counts the live ones only.
+                                  Without --repo: the warehouse's latest verdict per path, no
+                                  live/stale judgement. Read-only — never writes a row.
+                                  flags: --db <dsn> (default $CORRALAI_SCANS_DB, else
+                                  ~/.claude/corralai_scans.duckdb) --repo <dir> --top n (default 20)
+                                  --json
   corral demo [flags]             a complete audit of a tiny project, in ONE command: writes a
                                   small Go package with a five-clause password rule and a test
                                   that checks only two of them, then audits it with the real
@@ -219,7 +234,9 @@ Usage of certify --repo:
   -preflight
     	run the project's test suite once with coverage instrumentation and report which source files it never executes. One extra suite run; reports coverage-grade evidence, not proof
   -push md:<db>
-    	append this scan's per-file verdicts to a DuckDB you own — a path, or md:<db> for MotherDuck (which reads motherduck_token from the environment). corral has no hosted tier and keeps nothing: the warehouse is yours, and any DuckDB works, so this is a destination rather than a lock-in. Append-only, and every row carries the sha256 of the signed statement it came from, so a row traces back to something a third party can verify. It answers what one pull request cannot — a single kill rate is a sample, and the same unchanged diff has scored 0.85 and 0.90; forty of them are a distribution
+    	append this scan's per-file verdicts to a DuckDB you own — a path, or md:<db> for MotherDuck (which reads motherduck_token from the environment). corral has no hosted tier and keeps nothing: the warehouse is yours, and any DuckDB works, so this is a destination rather than a lock-in. Append-only. Every row carries the ledger's scan id (0 when --record was not given), and — traceable only with --attest — the sha256 of the signed statement it came from, so a row can be checked against something a third party can verify; without --attest, statement_sha256 is honestly empty rather than fabricated; and with --attest, a statement that FAILS to write withholds the push too, since a row that cannot name the statement it came from is not written. It answers what one pull request cannot — a single kill rate is a sample, and the same unchanged diff has scored 0.85 and 0.90; forty of them are a distribution
+  -push-source
+    	with --push, also send the SOURCE BYTES corral holds to your warehouse: the pool's authored test, and the full verdict JSON. Off by default because those bytes are derived from — and quote — your audited code; without this the pushed rows carry numbers, hashes, reasons and model names, and no source leaves the box. Mutant code is NOT carried, by either setting: corral does not keep mutant source at rest, so the corral_mutants.code column exists and is always NULL until something records it. The scan row records which setting was used, so the custody question is answerable from the table rather than from whoever remembers the argv
   -record certify --local
     	record every file this scan audited or rejected, and why, into the DuckDB scan ledger (default: off). A BOOL here — unlike certify --local's --record, which takes a tape PATH — see --record-db for where the ledger goes. A recording failure never changes the scan's verdict or exit code
   -record-db string

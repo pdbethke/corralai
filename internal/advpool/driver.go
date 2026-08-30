@@ -15,6 +15,7 @@ import (
 	"github.com/pdbethke/corralai/internal/adequacy"
 	golang "github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/matrix"
+	"github.com/pdbethke/corralai/internal/modelcorr"
 	"github.com/pdbethke/corralai/internal/queue"
 	"github.com/pdbethke/corralai/internal/repoindex"
 )
@@ -262,8 +263,13 @@ type MatrixSink interface {
 // EventSink receives the pool's reasoning milestones as replay/telemetry
 // events. Optional (nil ⇒ no-op), like Signer/Leaderboard — the pure Driver
 // takes no telemetry dependency; the brain wires this to its telemetry store
-// keyed on the run's missionID. Kinds: pool_subject, pool_dev_adequacy,
-// pool_verdict. detail carries the real values/evidence, never a summary.
+// keyed on the run's missionID. Kinds: pool_subject, pool_dev_adequacy
+// (dev_pass's phase boundary — carries duration_ms once the dev pass has
+// closed), pool_verdict, plus the phase-boundary beats phase_pool,
+// phase_generation, phase_authored_pass and phase_critic, each carrying
+// detail.duration_ms and each fired only when that phase actually ran (a
+// phase that never started emits nothing — see Timing's own doc). detail
+// carries the real values/evidence, never a summary.
 type EventSink interface {
 	Emit(missionID int64, kind, subject string, detail map[string]any)
 }
@@ -287,6 +293,26 @@ type MutantRef struct {
 	// run that graded every mutant with the file's shared command.
 	TestsRun int
 	Rule     string // lang.SpanRule*; "" when the run was not graded per mutant
+	// Duration is how long the suite run that GRADED this mutant took
+	// (adequacy.MutantGrading.Duration). The dev pass is where an audit's
+	// minutes go — 35 of 43 on one reference file — and a file-grain total
+	// cannot say whether that was one pathological mutant or forty ordinary
+	// ones. Zero when the run was not timed, and stored as SQL NULL rather
+	// than 0 for exactly that reason (see scanstore.Mutant.DurationMillis).
+	//
+	// `json:"-"`: the wire form is duration_ms, written by MutantRef's own
+	// MarshalJSON below — the same reason Verdict.BaselineDuration carries
+	// this tag.
+	Duration time.Duration `json:"-"`
+	// KilledBy is the id of the first test that FAILED on this mutant, when
+	// the language's runner said so in words corral can parse
+	// (adequacy.MutantGrading.KilledBy). It answers "which test was awake",
+	// which the ledger could never say: a kill was recorded as a bare fact.
+	// Empty on a survivor (nothing caught it), on a timeout-kill (no test
+	// reported anything), and for every language whose runner output corral
+	// declines to parse — stored as SQL NULL rather than "" for exactly that
+	// reason, and never inferred from anything but the output.
+	KilledBy string
 }
 
 // toMutantRefs strips MUTANT SOURCE down to the reference scan_mutants needs:
@@ -308,6 +334,8 @@ func toMutantRefsWith(ms []adequacy.Mutant, grading map[string]adequacy.MutantGr
 		if g, ok := grading[m.ID]; ok {
 			refs[i].TestsRun = g.TestsRun
 			refs[i].Rule = g.Rule
+			refs[i].Duration = g.Duration
+			refs[i].KilledBy = g.KilledBy
 		}
 	}
 	return refs
@@ -400,8 +428,12 @@ type Verdict struct {
 	// BaselineDuration is the dev suite's compliant (unmutated) wall-clock
 	// runtime — the single input to the audit cost model (O(mutants x the
 	// TARGET's suite runtime)). See adequacy.Report.BaselineDuration.
-	BaselineDuration time.Duration
-	MutantsTotal     int // mutants actually GRADED (compile-gate rejects excluded)
+	//
+	// `json:"-"`: the wire form is baseline_duration_ms, written by
+	// verdictWire in verdict_wire.go (the same reason MutantDurationMedian
+	// and MutantDurationMax carry this tag — see that type's doc).
+	BaselineDuration time.Duration `json:"-"`
+	MutantsTotal     int           // mutants actually GRADED (compile-gate rejects excluded)
 	// MutantsInvalid counts mutants that failed the language's own compile
 	// check and were never run. Surfaced rather than dropped: a run where the
 	// generator produced mostly unbuildable mutants graded a much smaller exam
@@ -515,6 +547,54 @@ type Verdict struct {
 	// was ever run.
 	DevKilledMutants   []MutantRef
 	DevSurvivedMutants []MutantRef
+	// Timing is where this run's wall clock went, phase by phase — see the
+	// Timing type. Every phase that did not run reads zero, which every
+	// reader renders as "—" and the ledger stores as NULL.
+	Timing Timing `json:"timing"`
+	// ModelCalls is what this file's audit cost, broken out by role — the
+	// money half of Timing's time half. One entry per role that made at
+	// least one call; a role with zero calls (an unassigned optional seat,
+	// or `--critic-model off`) has NO entry — never a zero-valued one, which
+	// a reader could mistake for "ran and cost nothing". Built from each
+	// role's own agentbackend.UsageMeter (see auditRoles.meters in
+	// cmd/corral) and carried here so the ledger (scanstore.ModelCall) and
+	// the warehouse can be built from the SAME numbers the run measured,
+	// rather than re-deriving them.
+	ModelCalls []ModelCall `json:"model_calls,omitempty"`
+	// MutantDurationMedian and MutantDurationMax summarize how long grading
+	// ONE mutant took, over the mutants that were actually graded
+	// (compile-gate rejects have no duration and are excluded — see
+	// adequacy.Report). They sit beside Timing rather than inside it because
+	// they are not a phase: they are the SHAPE of the dev pass, and the
+	// question "is this file slow because of one mutant or all of them" has
+	// no other answer at the file grain. Zero when nothing timed a mutant.
+	//
+	// NOT a decomposition of Timing.DevPass, and the arithmetic does not
+	// close: at mutant concurrency N > 1 each duration is a CONTENDED wall
+	// clock measured while N-1 siblings ran beside it, so median x graded
+	// routinely EXCEEDS the dev pass it happened inside. Read them as the
+	// per-mutant cost distribution, never as a budget that must sum.
+	//
+	// `json:"-"` on both, and NOT because they are omitted: Verdict's own
+	// MarshalJSON/UnmarshalJSON write them as mutant_duration_median_ms /
+	// _max_ms (see verdict_wire.go). Left to encoding/json's default they
+	// went out as raw NANOSECONDS under their Go names — a number no reader
+	// of verdict_json outside Go could interpret, sitting beside a Timing
+	// that spells its milliseconds out for exactly that reason. The tag is
+	// what keeps the default rendering from appearing alongside the real one.
+	MutantDurationMedian time.Duration `json:"-"`
+	MutantDurationMax    time.Duration `json:"-"`
+	// ChallengerAgreement is the primary writer's agreement with the
+	// challenger writer over the SAME survivor set — Jaccard-over-survivors
+	// and Cohen's kappa, from internal/modelcorr. nil whenever no comparable
+	// pair exists: no challenger was configured, either seat's own kill
+	// vector was never measured (see runState.primaryWriterMeasured /
+	// shadowWriterMeasured), or the primary salvaged (RULING P11 — a
+	// salvaged primary is not comparable to a challenger that got no rescue).
+	// Non-nil does NOT mean the coefficients are meaningful on their own —
+	// callers must still check Pair.Sufficient before reading Jaccard and
+	// Pair.KappaDefined before reading Kappa, exactly as modelcorr documents.
+	ChallengerAgreement *modelcorr.Pair
 }
 
 // RunState is the observable status of one run: Converged is true once the run
@@ -831,6 +911,24 @@ type runState struct {
 
 	verdict *Verdict
 
+	// mutantDurationMedian/Max are how long grading ONE mutant took, from
+	// the dev pass's own report (adequacy.Report). They summarize the dev
+	// pass's shape at the file grain — one slow mutant or forty ordinary
+	// ones — which the per-mutant rows can answer only in aggregate.
+	mutantDurationMedian time.Duration
+	mutantDurationMax    time.Duration
+
+	// timing is what this run has spent so far, phase by phase (see Timing).
+	// Filled in at the DAG's own boundaries — the same points emit() already
+	// fires at — and copied onto both the converged verdict and the
+	// timed-out one, because a run that stalled still spent what it spent.
+	timing Timing
+	// phaseStart is when each still-open phase began, keyed by the phase
+	// names below. A phase with no entry never started, which is how a
+	// duration stays ABSENT (and the ledger stores NULL) instead of being
+	// computed from a zero time.Time.
+	phaseStart map[string]time.Time
+
 	// startedAt is the run's start time (from Driver.Now, set in StartRun),
 	// used by the RunDeadline backstop below. It is advanced by exactly the
 	// wall-clock time runShadowPass spends, so the deadline measures PRIMARY
@@ -902,8 +1000,8 @@ type Driver struct {
 
 	// Events is the optional reasoning-event sink (nil = no-op), mirroring
 	// Signer/Leaderboard: every pre-existing Driver test keeps working
-	// unwired. When set, the driver emits pool_subject/pool_dev_adequacy/
-	// pool_verdict at the three milestones below via the d.emit helper.
+	// unwired. When set, the driver emits every beat named on EventSink's own
+	// doc via the d.emit helper.
 	Events EventSink
 
 	// MutantSink, when set, is handed the exact mutant set the dev pass
@@ -1015,6 +1113,53 @@ func survivorIDs(survivors []adequacy.Mutant) []string {
 // wires it to a real mission.Store id); the driver has no mission package of
 // its own, mirroring the RepoOps/Indexer decoupling pattern elsewhere in the
 // codebase.
+// The phase names runState.phaseStart is keyed by. Constants rather than
+// string literals at four call sites: a phase whose start is filed under a
+// typo never ends, and its duration is silently absent — which is
+// indistinguishable, in the record, from a phase that never ran.
+const (
+	phaseGeneration = "generation"
+	phaseDevPass    = "dev-pass"
+	phaseAuthored   = "authored-pass"
+	phaseCritic     = "critic"
+)
+
+// now is d.Now with a fallback. Every production Driver comes from
+// NewDriver, which fills the field in — but a hand-built Driver (several
+// tests) has a nil Now, and a timing read must never be the thing that
+// panics a verdict path.
+func (d *Driver) now() time.Time {
+	if d.Now == nil {
+		return time.Now()
+	}
+	return d.Now()
+}
+
+// beginPhase records that a phase started NOW, unless it already has. Every
+// tick* function is re-entered on later ticks, so an unguarded write would
+// keep resetting the start and report only the final tick's slice of a phase
+// that took an hour.
+func (d *Driver) beginPhase(run *runState, phase string) {
+	if run.phaseStart == nil {
+		run.phaseStart = map[string]time.Time{}
+	}
+	if _, open := run.phaseStart[phase]; !open {
+		run.phaseStart[phase] = d.now()
+	}
+}
+
+// endPhase closes a phase and returns what it spent, or 0 if it never
+// started. Zero is the honest answer for a phase that did not happen, and
+// every reader treats it as "not measured" rather than "free".
+func (d *Driver) endPhase(run *runState, phase string) time.Duration {
+	start, open := run.phaseStart[phase]
+	if !open {
+		return 0
+	}
+	delete(run.phaseStart, phase)
+	return d.now().Sub(start)
+}
+
 func (d *Driver) StartRun(missionID int64, rs RunSpec, sigs []repoindex.Signature) error {
 	d.mu.Lock()
 	_, exists := d.runs[missionID]
@@ -1091,7 +1236,7 @@ func (d *Driver) StartRun(missionID int64, rs RunSpec, sigs []repoindex.Signatur
 	}
 
 	d.mu.Lock()
-	d.runs[missionID] = &runState{
+	run := &runState{
 		rs: rs, sigs: sigs, testWriterTaskID: twID, startedAt: d.Now(),
 		shardRetries:   map[string]int{},
 		droppedKeys:    map[string]bool{},
@@ -1099,12 +1244,34 @@ func (d *Driver) StartRun(missionID int64, rs RunSpec, sigs []repoindex.Signatur
 		shardStats:     stats,
 		shadowStats:    shadowStats,
 		testComplexity: testComplexity,
+		phaseStart:     map[string]time.Time{},
 	}
+	// GENERATION starts the moment its seats are enqueued and claimable —
+	// the model's thinking time is the phase, and the driver only ever sees
+	// the result. A preset (--mutants) run dispatches no generator at all,
+	// so the phase never starts and its duration stays absent rather than
+	// being recorded as an instant generation that never happened.
+	if rs.PresetMutants == nil {
+		run.phaseStart[phaseGeneration] = run.startedAt
+	}
+	d.runs[missionID] = run
 	d.mu.Unlock()
 	d.emit(missionID, "pool_subject", rs.CodePath, map[string]any{
 		"goal": rs.Goal, "code": rs.Code, "dev_test_code": rs.DevTestCode,
 		"code_path": rs.CodePath, "dev_test_path": rs.DevTestPath,
 	})
+	// PHASE_POOL: the workspace substrate's copy of the checkout plus its
+	// concurrency probe (RunSpec.PoolDuration) — the driver never measures
+	// this itself (it happens before the driver is even constructed, see
+	// RunSpec.PoolDuration's doc), so it is reported here as the one
+	// phase-boundary event for it. Zero (jail substrate, or a pool of one)
+	// means the phase did not run, and emitting nothing is the honest
+	// disclosure — never a false "ran in 0ms".
+	if rs.PoolDuration > 0 {
+		d.emit(missionID, "phase_pool", rs.CodePath, map[string]any{
+			"duration_ms": rs.PoolDuration.Milliseconds(),
+		})
+	}
 	return nil
 }
 
@@ -1192,6 +1359,28 @@ func (d *Driver) Tick(ctx context.Context, missionID int64) (*Verdict, error) {
 		if err := d.tickPoolAdequacy(ctx, missionID, run); err != nil {
 			return nil, err
 		}
+		if run.poolScored {
+			// Closed HERE rather than inside tickPoolAdequacy: that function
+			// sets poolScored at five different points (unsound, writer
+			// exhausted, graded, and the two early converge paths), and a
+			// phase closed at four of five is a phase that silently reports
+			// nothing on the fifth.
+			if a := d.endPhase(run, phaseAuthored); a > 0 {
+				run.timing.AuthoredPass = a
+				d.emit(missionID, "phase_authored_pass", run.rs.CodePath, map[string]any{
+					"duration_ms": a.Milliseconds(),
+				})
+			}
+			// And the CRITIC's clock starts: the critic seat runs in
+			// parallel with everything above, so what it COSTS this run is
+			// the time the run now waits on it before it can aggregate. A
+			// run with no critic assigned (`--critic-model off`) seeds no
+			// critic task, so the phase never starts and reads as absent
+			// rather than as a critic that answered instantly.
+			if strings.TrimSpace(d.Assign[RoleTestCritic]) != "" {
+				d.beginPhase(run, phaseCritic)
+			}
+		}
 	}
 
 	if run.poolScored && !run.matrixDone {
@@ -1271,6 +1460,8 @@ func applyDevScore(ctx context.Context, run *runState, scorer Scorer, mutants []
 	// the same command AND on a per-mutant run with nothing left to grade —
 	// run.perMutantGraded above, not this map, is what tells those apart.
 	run.perMutant = rep.PerMutant
+	run.mutantDurationMedian = rep.MutantDurationMedian
+	run.mutantDurationMax = rep.MutantDurationMax
 	run.devSurvivors = survivorsFrom(rep, mutants)
 	run.devKilled = toMutantRefsWith(killedFrom(rep, mutants), rep.PerMutant)
 	run.mutants = mutants
@@ -1567,9 +1758,29 @@ func (d *Driver) tickDevAdequacy(ctx context.Context, missionID int64, run *runS
 		return ErrNoUsableMutants{Regions: run.regionsTotal, Dropped: len(run.droppedRegions)}
 	}
 
+	// GENERATION ends here, at the one point the seats' results become the
+	// exam — not when the tasks were marked done, which is a queue fact, and
+	// not at the top of this function, which re-runs on every tick until the
+	// dev suite is scored.
+	if g := d.endPhase(run, phaseGeneration); g > 0 {
+		run.timing.Generation = g
+		d.emit(missionID, "phase_generation", run.rs.CodePath, map[string]any{
+			"duration_ms": g.Milliseconds(),
+		})
+	}
+
+	// THE DEV PASS: the mutants against the dev's own suite. On real repos
+	// this is most of the audit (35 of 43 minutes on psf/requests'
+	// adapters.py), and until this measurement existed the only way to know
+	// that was to subtract two log timestamps by hand.
+	d.beginPhase(run, phaseDevPass)
 	if err := applyDevScore(ctx, run, d.Scorer, mutants, d.MutantSink); err != nil {
+		// The phase stays OPEN on a transient scorer error: tickDevAdequacy
+		// is re-entered and scores again, and the run really has been in its
+		// dev pass the whole time.
 		return err
 	}
+	run.timing.DevPass = d.endPhase(run, phaseDevPass)
 	killRate, survivors := run.devKillRate, run.devSurvivors
 
 	// The challenger pass: score the shadow seats' mutants against the SAME dev
@@ -1643,10 +1854,18 @@ func (d *Driver) tickDevAdequacy(ctx context.Context, missionID int64, run *runS
 		log.Printf("advpool: run %d dev-adequacy: the dev's OWN tests scored %.0f%% (killed %d of %d graded mutants, %d survived — bugs the dev's tests miss)%s",
 			missionID, killRate*100, run.mutantsTotal-len(survivors), run.mutantsTotal, len(survivors), invalidNote)
 	}
-	d.emit(missionID, "pool_dev_adequacy", "", map[string]any{
+	devAdequacyDetail := map[string]any{
 		"dev_kill_rate": run.devKillRate, "mutants_total": run.mutantsTotal,
 		"survivors": len(run.devSurvivors), "survivor_ids": survivorIDs(run.devSurvivors),
-	})
+	}
+	// dev_pass's phase-boundary duration rides on THIS emit rather than a
+	// second one: pool_dev_adequacy already fires at the exact moment the
+	// phase closes (run.timing.DevPass was just set, above). Omitted (not
+	// zero) when the phase never ran — see Timing's own field doc.
+	if run.timing.DevPass > 0 {
+		devAdequacyDetail["duration_ms"] = run.timing.DevPass.Milliseconds()
+	}
+	d.emit(missionID, "pool_dev_adequacy", "", devAdequacyDetail)
 
 	if len(survivors) == 0 {
 		// THREE different runs reach here, and only one of them is good news:
@@ -1677,6 +1896,13 @@ func (d *Driver) tickDevAdequacy(ctx context.Context, missionID int64, run *runS
 		}
 		return nil
 	}
+
+	// THE AUTHORED PASS begins the moment the dev pass leaves survivors for
+	// the writer to attack: its cost is the writer seat's model time, its
+	// compile retries AND the scored run of its test, and a phase that
+	// started only when the result came back would report just the last of
+	// the three. A perfect dev suite returns above and never opens it.
+	d.beginPhase(run, phaseAuthored)
 
 	tw, terr := d.Q.TaskByID(run.testWriterTaskID)
 	if terr != nil {
@@ -1995,6 +2221,16 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 			return nil, fmt.Errorf("advpool: load findings: %w", ferr)
 		}
 		criticFindings = filterCriticFindings(findings, tc.ID)
+		// The wait is over: everything from the pool score to this moment is
+		// what having a critic cost the run. Closed only on the path that
+		// actually READ the critic's findings — the early return above
+		// leaves the phase open, because the run is still waiting.
+		if c := d.endPhase(run, phaseCritic); c > 0 {
+			run.timing.Critic = c
+			d.emit(missionID, "phase_critic", run.rs.CodePath, map[string]any{
+				"duration_ms": c.Milliseconds(),
+			})
+		}
 	}
 
 	// The critic's findings are a second model's UNVERIFIED review — carried on
@@ -2035,6 +2271,14 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	// Carried alongside the other could-not-grade / baseline fields, set here
 	// rather than widening aggregate()'s signature — see Verdict.BaselineDuration.
 	v.BaselineDuration = run.baselineDuration
+	// The run's own clock. verdictFromSpec has already put the two phases
+	// the caller measured (Selection, Pool) on v.Timing; these are the five
+	// this driver measured itself. Total is read last, here, because THIS is
+	// where the run ends.
+	v.Timing = timingWith(v.Timing, run.timing)
+	v.Timing.Total = totalWith(v.Timing, d.now().Sub(run.startedAt))
+	v.MutantDurationMedian = run.mutantDurationMedian
+	v.MutantDurationMax = run.mutantDurationMax
 	// The mutant-level evidence behind DevKillRate/Survivors, carried the same
 	// way — see Verdict.DevKilledMutants.
 	v.DevKilledMutants = run.devKilled
@@ -2085,9 +2329,15 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 		}
 	}
 
-	// Feed both writer seats' per-mutant outcomes, pair-or-nothing. Same
-	// RecordID!=0 guard as BugCatch/CriticFindings above; see
-	// recordMutantAttempts' own doc for the rest of the gating.
+	// The in-memory agreement measurement, carried onto the verdict itself —
+	// UNGATED by RecordID/Signer, unlike every sink above: `certify --repo`
+	// signs no per-file record and wires no MutantAttempts sink, so this is
+	// the only path that measurement reaches that command's verdict at all.
+	v.ChallengerAgreement = challengerPair(d, run)
+
+	// Feed both writer seats' per-mutant outcomes, pair-or-nothing, to the
+	// DURABLE store (a DIFFERENT sink, gated on RecordID!=0 same as
+	// BugCatch/CriticFindings above — see recordMutantAttempts' own doc).
 	d.recordMutantAttempts(run, v)
 
 	// Feed the matrix sink with the SAME matrix result tickMatrix already
@@ -2126,54 +2376,61 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 // within-run correlation, and a sink half-fed with unpairable rows would
 // invite pooling correlation across runs — which is confounded, because each
 // run has its own mutant set.
+// challengerVectors builds the two writer seats' per-mutant kill vectors over
+// run.devSurvivors — the set both are asked to kill — or reports ok=false
+// when no comparable pair exists. Shared by recordMutantAttempts (the
+// durable, per-mutant DB rows) and challengerPair (the in-memory Jaccard/kappa
+// carried straight onto the Verdict), so the two never disagree about WHEN a
+// comparison is legitimate.
+//
+// UNMEASURED IS NOT ZERO, for the primary and the challenger alike: this
+// guard was originally written for the challenger alone, which left two
+// reachable paths to a signed verdict with run.provenIDs still nil
+// (testWriterFailed and poolTestUnsound) — on either, killedByPrimary would
+// be empty and every survivor would read `survived` for a seat that never
+// ran. See runState.primaryWriterMeasured / shadowWriterMeasured.
+//
+// RULING P11 — a SALVAGED primary is not comparable. The two seats run under
+// asymmetric leniency: the primary gets salvageByDeselect (a partially-broken
+// suite has its failing selectors deselected and is re-scored, and that
+// salvaged remainder becomes provenIDs), a clean-code repair round, and 3
+// attempts. The challenger gets 2 compile retries and neither rescue. So when
+// the primary salvaged, its vector came from a deselected remainder and the
+// challenger's did not, and the head-to-head quietly favours the primary —
+// the same class of error as scoring the two seats against different mutant
+// sets. This pool's standing discipline is to record no comparison rather
+// than a confounded one.
+func challengerVectors(run *runState) (killedByPrimary, killedByShadow map[string]bool, ok bool) {
+	if run.rs.ShadowWriterModel == "" || !run.shadowWriterMeasured || !run.primaryWriterMeasured || run.writerSalvaged {
+		return nil, nil, false
+	}
+	// `run.provenIDs` is the PRIMARY writer's proven-kill vector (from
+	// provenMutantIDs(rep, run.devSurvivors)). Do NOT use run.devKilled: that
+	// is the DEV SUITE's vector over every mutant, so pairing it against a
+	// writer compares a writer to the developer's own tests, not writer to
+	// writer.
+	killedByPrimary = make(map[string]bool, len(run.provenIDs))
+	for _, id := range run.provenIDs {
+		killedByPrimary[id] = true
+	}
+	killedByShadow = make(map[string]bool, len(run.shadowWriterKilled))
+	for _, m := range run.shadowWriterKilled {
+		killedByShadow[m.ID] = true
+	}
+	return killedByPrimary, killedByShadow, true
+}
+
 func (d *Driver) recordMutantAttempts(run *runState, v Verdict) {
 	// The v.RecordID != 0 guard is the SAME one BugCatch and CriticFindings
 	// use, for the same reason (driver.go:1630): a Driver wired without a
 	// Signer leaves RecordID at zero, and rows carrying record_id=0 are
 	// unlinkable to the audit that produced them.
-	if d.MutantAttempts == nil || v.RecordID == 0 || run.rs.ShadowWriterModel == "" || !run.shadowWriterMeasured {
+	if d.MutantAttempts == nil || v.RecordID == 0 {
 		return
 	}
-	// UNMEASURED IS NOT ZERO — for the PRIMARY too. This guard was originally
-	// written for the challenger alone, which left two reachable paths to a
-	// signed verdict with run.provenIDs still nil (testWriterFailed and
-	// poolTestUnsound). On either, killedByPrimary below is empty and every
-	// survivor is written as `survived` for the primary: a total blind spot
-	// fabricated from a seat that never ran the code. See
-	// runState.primaryWriterMeasured for why this is a positive flag.
-	if !run.primaryWriterMeasured {
+	killedByPrimary, killedByShadow, ok := challengerVectors(run)
+	if !ok {
 		return
-	}
-	// RULING P11 — a SALVAGED primary is not comparable.
-	//
-	// The two seats run under asymmetric leniency: the primary gets
-	// salvageByDeselect (driver.go:1531 — a partially-broken suite has its
-	// failing selectors deselected and is re-scored, and that salvaged
-	// remainder becomes provenIDs), a clean-code repair round, and 3 attempts.
-	// The challenger gets 2 compile retries and neither rescue.
-	//
-	// So when the primary salvaged, its vector came from a deselected
-	// remainder and the challenger's did not, and the head-to-head quietly
-	// favours the primary. That is CONFOUNDED — the same class of error as
-	// scoring the two seats against different mutant sets — and this pool's
-	// standing discipline is to record no comparison rather than a confounded
-	// one.
-	if run.writerSalvaged {
-		return
-	}
-	// RULING P9: pair the two WRITERS over run.devSurvivors — the set both are
-	// asked to kill. `run.provenIDs` is the PRIMARY writer's proven-kill vector
-	// (driver.go:581, from provenMutantIDs(rep, run.devSurvivors)).
-	// Do NOT use run.devKilled: that is the DEV SUITE's vector over every
-	// mutant, so pairing it against a writer compares a writer to the
-	// developer's own tests, not writer to writer.
-	killedByPrimary := make(map[string]bool, len(run.provenIDs))
-	for _, id := range run.provenIDs {
-		killedByPrimary[id] = true
-	}
-	killedByShadow := make(map[string]bool, len(run.shadowWriterKilled))
-	for _, m := range run.shadowWriterKilled {
-		killedByShadow[m.ID] = true
 	}
 	outcome := func(killed bool) string {
 		if killed {
@@ -2197,6 +2454,40 @@ func (d *Driver) recordMutantAttempts(run *runState, v Verdict) {
 		)
 	}
 	d.MutantAttempts.Record(v.RecordID, v.RecordHead, attempts)
+}
+
+// challengerPair computes the primary/challenger agreement DIRECTLY from the
+// run's own in-memory kill vectors — no store, no RecordID/Signer required.
+// It is the measurement `corral certify --repo` needs for the warehouse
+// (internal/scanstore.File.ChallengerJaccard/Kappa/Sufficient): that path
+// signs nothing per file and wires no MutantAttemptSink, so a comparison
+// gated on d.MutantAttempts or v.RecordID would be structurally inert there,
+// exactly the failure mode recordMutantAttempts' own doc warns about
+// ("advpool computed the pair, found d.MutantAttempts nil, and threw every
+// row away").
+//
+// nil whenever challengerVectors reports no comparable pair, or Compare
+// itself errors (which construction here should make unreachable: both
+// vectors are built over the identical run.devSurvivors set).
+func challengerPair(d *Driver, run *runState) *modelcorr.Pair {
+	killedByPrimary, killedByShadow, ok := challengerVectors(run)
+	if !ok {
+		return nil
+	}
+	primaryVec := make(map[string]bool, len(run.devSurvivors))
+	shadowVec := make(map[string]bool, len(run.devSurvivors))
+	for _, m := range run.devSurvivors {
+		primaryVec[m.ID] = killedByPrimary[m.ID]
+		shadowVec[m.ID] = killedByShadow[m.ID]
+	}
+	pair, err := modelcorr.Compare(
+		modelcorr.Vector{Model: d.Assign[RoleTestWriter], Killed: primaryVec},
+		modelcorr.Vector{Model: run.rs.ShadowWriterModel, Killed: shadowVec},
+	)
+	if err != nil {
+		return nil
+	}
+	return &pair
 }
 
 // adjudicateCriticFindings builds the execution-checked adjudication for each
@@ -2328,6 +2619,16 @@ func (d *Driver) timeoutVerdict(run *runState) Verdict {
 	v.RegionsProbed = run.regionsProbed
 	v.DroppedRegions = run.droppedRegions
 	v.ModelsByRole = map[string]string(d.Assign)
+	// A stalled run still spent everything it spent, and it is the run an
+	// operator most needs the clock for: "which phase was it sitting in when
+	// the deadline hit" is answerable only from the phases that DID close,
+	// plus a Total that says how long it sat. Any phase still open when the
+	// deadline fired stays absent rather than being closed at an arbitrary
+	// moment and passed off as complete.
+	v.Timing = timingWith(v.Timing, run.timing)
+	v.Timing.Total = totalWith(v.Timing, d.now().Sub(run.startedAt))
+	v.MutantDurationMedian = run.mutantDurationMedian
+	v.MutantDurationMax = run.mutantDurationMax
 	v.Status = StatusNeedsReview
 	v.TimedOut = true
 	v.DevScored = run.devScored

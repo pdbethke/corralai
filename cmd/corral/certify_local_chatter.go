@@ -95,10 +95,12 @@ func soleAssignedCloudModel(assign advpool.RoleAssignment) (vendor, model string
 // missing, this returns the actionable error from ForModel instead of
 // silently falling back to the base backend — the caller must refuse to
 // start the run, not fail mid-run.
-// meter, when non-nil, accumulates every seat's reported token usage across the
-// whole run — including the cross-vendor seats, which each get their own
-// backend and would otherwise be counted by nobody.
-func localChatterFor(assign advpool.RoleAssignment, meter *agentbackend.UsageMeter, endpoints map[string]string) (func(role string) agentworker.Chatter, error) {
+// meters, when non-nil, is ONE UsageMeter PER ROLE — built by
+// auditRoleMeters — that this seat's reported token usage is recorded into,
+// including the cross-vendor seats, which each get their own backend and
+// would otherwise be counted by nobody. A role absent from meters (or a nil
+// map) records nothing, the same as a nil single meter always has.
+func localChatterFor(assign advpool.RoleAssignment, meters map[string]*agentbackend.UsageMeter, endpoints map[string]string) (func(role string) agentworker.Chatter, error) {
 	base := agentbackend.FromEnv()
 	sw, canSwitch := base.(agentbackend.ModelSwitcher)
 	bv := baseVendor()
@@ -141,7 +143,7 @@ func localChatterFor(assign advpool.RoleAssignment, meter *agentbackend.UsageMet
 			// the device. Without it every local seat shares OLLAMA_URL, one
 			// card, and one VRAM budget.
 			if url := endpoints[role]; url != "" {
-				perRole[role] = agentbackend.AsChatterMetered(agentbackend.NewOllamaBackend(url, model), meter)
+				perRole[role] = agentbackend.AsChatterMetered(agentbackend.NewOllamaBackend(url, model), meters[role])
 			}
 			continue
 		}
@@ -163,7 +165,7 @@ func localChatterFor(assign advpool.RoleAssignment, meter *agentbackend.UsageMet
 		if err != nil {
 			return nil, fmt.Errorf("cross-vendor %s: %w", role, err)
 		}
-		perRole[role] = agentbackend.AsChatterMetered(cb, meter)
+		perRole[role] = agentbackend.AsChatterMetered(cb, meters[role])
 	}
 
 	return func(role string) agentworker.Chatter {
@@ -171,9 +173,9 @@ func localChatterFor(assign advpool.RoleAssignment, meter *agentbackend.UsageMet
 			return c
 		}
 		if model := assign[role]; canSwitch && model != "" {
-			return agentbackend.AsChatterMetered(sw.WithModel(model), meter)
+			return agentbackend.AsChatterMetered(sw.WithModel(model), meters[role])
 		}
-		return agentbackend.AsChatterMetered(base, meter)
+		return agentbackend.AsChatterMetered(base, meters[role])
 	}, nil
 }
 

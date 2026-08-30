@@ -1,0 +1,232 @@
+// SPDX-License-Identifier: Elastic-2.0
+
+package main
+
+import (
+	"bytes"
+	"testing"
+
+	"github.com/pdbethke/corralai/internal/scanstore"
+)
+
+// scansShowJSONFixture is the one-file, two-model-call fixture both tests
+// below share: a golden test for `--json --timing` and a byte-compare test
+// proving `--json` alone is untouched need to agree on what the ledger holds,
+// or a divergence in the fixture itself could hide a real regression.
+func scansShowJSONFixture() *fakeScansReader {
+	retries := 1
+	return &fakeScansReader{
+		files: []scanstore.File{{
+			Path: "pkg/a.py", Lang: "python", Disposition: "audited", Gradable: true,
+			KillRate: ptrF(0.72), Survivors: 3, ProvenMissed: 1,
+		}},
+		scan: scanstore.ScanRow{ID: 1, Scan: scanstore.Scan{SelectionMillis: ms(92000)}},
+		modelCalls: []scanstore.ModelCall{
+			{ScanID: 1, Path: "pkg/a.py", Role: "mutant-generator", Model: "m-1",
+				Calls: 24, Retries: &retries, InputTokens: 900000, OutputTokens: 31000, WallMillis: 4100},
+			{ScanID: 1, Path: "pkg/a.py", Role: "test-writer", Model: "w-1",
+				Calls: 5, InputTokens: 300000, OutputTokens: 17000, WallMillis: 2200},
+		},
+	}
+}
+
+// wantScansShowJSONWithTiming is the golden `--json --timing` document: the
+// file array under "files", the scan-grain selection_ms this ledger reads
+// nowhere else, and one model_calls row per scan_model_calls row —
+// snake_case keys, NULLs where the ledger genuinely has none (retries on the
+// second call, cached_input_tokens on both — nothing measures that column
+// yet), never a stored 0 standing in for "not measured".
+const wantScansShowJSONWithTiming = `{
+  "files": [
+    {
+      "Path": "pkg/a.py",
+      "Lang": "python",
+      "Disposition": "audited",
+      "Reason": "",
+      "KillRate": 0.72,
+      "Survivors": 3,
+      "Gradable": true,
+      "PreflightState": "",
+      "Evidence": "",
+      "Detail": "",
+      "TimedOut": false,
+      "TestWriterFailed": false,
+      "PoolTestUnsound": false,
+      "ProvenMissed": 1,
+      "ProvenMutantIDs": "",
+      "AuthoredTest": "",
+      "TestSelection": "",
+      "SelectedTests": 0,
+      "SuiteTests": 0,
+      "SelectionFallback": "",
+      "Uncovered": false,
+      "MutantsFrom": "",
+      "Trees": 0,
+      "ConcurrencyNote": "",
+      "SharedDirs": "",
+      "CacheKey": "",
+      "VerdictJSON": "",
+      "ComputedAt": "0001-01-01T00:00:00Z",
+      "ModelsByRole": "",
+      "MutantsTotal": 0,
+      "RegionsTotal": 0,
+      "RegionsProbed": 0,
+      "DroppedRegions": "",
+      "VacuousFindings": 0,
+      "Status": "",
+      "AuthoredTestNotCollected": false,
+      "BaselineFailed": false,
+      "SuiteBaselineMillis": 0,
+      "CacheHit": false,
+      "ReusedFromScanID": null,
+      "ParentSHA256": "",
+      "MutantsGraded": 0,
+      "MutantsInvalid": 0,
+      "MutantsTimedOut": null,
+      "SelectionMillis": null,
+      "GenerationMillis": null,
+      "PoolMillis": null,
+      "DevPassMillis": null,
+      "AuthoredPassMillis": null,
+      "CriticMillis": null,
+      "TotalMillis": null,
+      "MutantMillisMedian": null,
+      "MutantMillisMax": null,
+      "ChallengerJaccard": null,
+      "ChallengerKappa": null,
+      "ChallengerSufficient": null,
+      "GoalsDerived": 0,
+      "PerMutant": false,
+      "TestsPerMutantMin": null,
+      "TestsPerMutantMedian": null,
+      "TestsPerMutantMax": null
+    }
+  ],
+  "selection_ms": 92000,
+  "model_calls": [
+    {
+      "path": "pkg/a.py",
+      "role": "mutant-generator",
+      "model": "m-1",
+      "calls": 24,
+      "retries": 1,
+      "input_tokens": 900000,
+      "output_tokens": 31000,
+      "cached_input_tokens": null,
+      "wall_ms": 4100
+    },
+    {
+      "path": "pkg/a.py",
+      "role": "test-writer",
+      "model": "w-1",
+      "calls": 5,
+      "retries": null,
+      "input_tokens": 300000,
+      "output_tokens": 17000,
+      "cached_input_tokens": null,
+      "wall_ms": 2200
+    }
+  ]
+}
+`
+
+// TestScansShowJSONWithTimingCarriesTheSelectionAndModelCalls is the golden
+// test for the new shape: it exists because the text `--timing` readout
+// already prints scan_model_calls rows and the scan-grain selection_ms, and
+// `--json` had no way to carry either — forcing a docs fixture to
+// hand-transcribe cost numbers out of text instead of reading them back.
+func TestScansShowJSONWithTimingCarriesTheSelectionAndModelCalls(t *testing.T) {
+	r := scansShowJSONFixture()
+	var out, errOut bytes.Buffer
+	if code := runScans([]string{"show", "1", "--json", "--timing"}, openFake(r), &out, &errOut); code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, errOut.String())
+	}
+	if out.String() != wantScansShowJSONWithTiming {
+		t.Errorf("`scans show --json --timing` =\n%s\nwant:\n%s", out.String(), wantScansShowJSONWithTiming)
+	}
+}
+
+// wantScansShowJSONBare is `--json` alone over the SAME fixture: the bare
+// file array, unwrapped, exactly what this command has always printed.
+const wantScansShowJSONBare = `[
+  {
+    "Path": "pkg/a.py",
+    "Lang": "python",
+    "Disposition": "audited",
+    "Reason": "",
+    "KillRate": 0.72,
+    "Survivors": 3,
+    "Gradable": true,
+    "PreflightState": "",
+    "Evidence": "",
+    "Detail": "",
+    "TimedOut": false,
+    "TestWriterFailed": false,
+    "PoolTestUnsound": false,
+    "ProvenMissed": 1,
+    "ProvenMutantIDs": "",
+    "AuthoredTest": "",
+    "TestSelection": "",
+    "SelectedTests": 0,
+    "SuiteTests": 0,
+    "SelectionFallback": "",
+    "Uncovered": false,
+    "MutantsFrom": "",
+    "Trees": 0,
+    "ConcurrencyNote": "",
+    "SharedDirs": "",
+    "CacheKey": "",
+    "VerdictJSON": "",
+    "ComputedAt": "0001-01-01T00:00:00Z",
+    "ModelsByRole": "",
+    "MutantsTotal": 0,
+    "RegionsTotal": 0,
+    "RegionsProbed": 0,
+    "DroppedRegions": "",
+    "VacuousFindings": 0,
+    "Status": "",
+    "AuthoredTestNotCollected": false,
+    "BaselineFailed": false,
+    "SuiteBaselineMillis": 0,
+    "CacheHit": false,
+    "ReusedFromScanID": null,
+    "ParentSHA256": "",
+    "MutantsGraded": 0,
+    "MutantsInvalid": 0,
+    "MutantsTimedOut": null,
+    "SelectionMillis": null,
+    "GenerationMillis": null,
+    "PoolMillis": null,
+    "DevPassMillis": null,
+    "AuthoredPassMillis": null,
+    "CriticMillis": null,
+    "TotalMillis": null,
+    "MutantMillisMedian": null,
+    "MutantMillisMax": null,
+    "ChallengerJaccard": null,
+    "ChallengerKappa": null,
+    "ChallengerSufficient": null,
+    "GoalsDerived": 0,
+    "PerMutant": false,
+    "TestsPerMutantMin": null,
+    "TestsPerMutantMedian": null,
+    "TestsPerMutantMax": null
+  }
+]
+`
+
+// TestScansShowJSONWithoutTimingIsByteIdenticalToTheOldShape pins the OTHER
+// half of the contract: --json without --timing must be indistinguishable
+// from before this change, byte for byte, over the very fixture that now
+// carries model-call rows and a selection_ms — proving the wrap only ever
+// happens when --timing asks for it.
+func TestScansShowJSONWithoutTimingIsByteIdenticalToTheOldShape(t *testing.T) {
+	r := scansShowJSONFixture()
+	var out, errOut bytes.Buffer
+	if code := runScans([]string{"show", "1", "--json"}, openFake(r), &out, &errOut); code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, errOut.String())
+	}
+	if out.String() != wantScansShowJSONBare {
+		t.Errorf("`scans show --json` (no --timing) =\n%s\nwant (unchanged, pre-existing shape):\n%s", out.String(), wantScansShowJSONBare)
+	}
+}

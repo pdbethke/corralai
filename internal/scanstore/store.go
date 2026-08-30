@@ -64,6 +64,64 @@ type Scan struct {
 	PreflightNote string
 	StartedAt     time.Time
 	FinishedAt    time.Time
+	// CorralVersion is the version string `corral version` prints for the
+	// binary that ran this scan. EngineVersion above is the same value today,
+	// but it is an INPUT to the verdict cache key (a job keyed under one
+	// engine version must never be served for another), and a cache key is
+	// free to stop being a version string. This column is the provenance
+	// answer to "which build produced this row", and it must not change
+	// meaning because the key did.
+	CorralVersion string
+	// Host and Cores are the box. The audit cost model is
+	// O(mutants x the target's suite runtime) and the only lever an operator
+	// has is the machine, so a wall-clock number in this ledger is
+	// uninterpretable without the hardware it was earned on.
+	Host  string
+	Cores int
+	// TreesRequested is how many private trees this scan ASKED each file's
+	// pool for (resolveMutantConcurrency on the workspace substrate). It is
+	// an intention, not a result — each file's own probe decides what it got,
+	// and scan_files.trees records that. 0 on the jail substrate, which
+	// builds no trees, and stored SQL NULL there for the same reason
+	// File.Trees is: 0 is a number a query would average.
+	TreesRequested int
+	// TotalMillis is the scan's own wall clock, in milliseconds. Derivable
+	// from FinishedAt - StartedAt, and stored anyway: this is the column the
+	// cost-model page groups by, and a warehouse reader (DuckDB-WASM in a
+	// browser, a MotherDuck share) should not have to subtract two
+	// timestamps in every query to ask the first question anyone asks.
+	TotalMillis int64
+	// SelectionMillis is how long the scan's ONE instrumented coverage run
+	// took — the pass that decides which tests execute which file.
+	//
+	// It lives at the SCAN grain because that is the grain it happens at. It
+	// is also carried on every file's verdict (advpool.Timing.Selection) so a
+	// per-file readout can name every phase of that file's audit, but it is
+	// the SAME run shared by all of them: summing a per-file copy across a
+	// scan would count one instrumented run once per file and invent time
+	// nobody spent. This column is the one a cost query adds.
+	//
+	// *int64, and NULL under --whole-suite (or an unsupported language, or a
+	// runner that could not be built): no pass ran, and a stored 0 would say
+	// the pass ran for free.
+	SelectionMillis *int64
+	// InputTokens, OutputTokens and ModelCalls are what the scan consumed
+	// from the providers, scan-wide. The per-role breakdown lives in
+	// scan_model_calls; these are the totals the run already printed to
+	// stdout and, until now, discarded.
+	InputTokens  int64
+	OutputTokens int64
+	ModelCalls   int64
+	// SourcePushed records whether this scan's --push carried source bytes
+	// (mutant code, the authored test, the verdict blob) to the operator's
+	// warehouse. It is a CUSTODY fact and belongs in the record: "did our
+	// code leave the box on that run" must be answerable from the ledger,
+	// not from whoever remembers the argv.
+	SourcePushed bool
+	// StatementSHA256 is the sha256 of the signed --attest statement this
+	// scan produced, or "" when --attest was not given. The warehouse row
+	// carries the same value; this is the local half of the same link.
+	StatementSHA256 string
 }
 
 // File is one row per file per scan: what corral decided about it, and, for
@@ -261,6 +319,74 @@ type File struct {
 	// must read back as NULL, not a scan id of 0, which would be a foreign
 	// key to nothing.
 	ReusedFromScanID *int64
+	// ParentSHA256 is the sha256 of the FILE'S OWN BYTES as audited — the
+	// validity key the whole "is this verdict still current" question turns
+	// on. A verdict is about bytes, not about a commit: a commit sha says the
+	// repo moved, this says whether THIS file did. A reader holding the
+	// checkout can answer "live or stale" with a hash and no re-audit.
+	// Empty for a file nothing read (an exclusion decided at walk time).
+	ParentSHA256 string
+	// MutantsGraded, MutantsInvalid and MutantsTimedOut are the denominators
+	// behind the kill rate, split by what actually happened to each mutant.
+	// The local scan_mutants table only admits killed|survived (its CHECK
+	// predates this change and DuckDB cannot alter a CHECK in place), so the
+	// invalid and timed-out mutants have no row of their own here and are
+	// carried at the FILE grain instead — a disclosed asymmetry with the
+	// warehouse's corral_mutants, which is a new table and can be complete.
+	MutantsGraded  int
+	MutantsInvalid int
+	// MutantsTimedOut is *int, not int, because NOTHING produces it yet: no
+	// verdict field counts mutants that hit their deadline. A stored 0 would
+	// be the positive claim "none timed out" on every row corral has ever
+	// written, which is a measurement nobody made. nil until the task that
+	// measures it lands; a genuine zero then means a genuine zero.
+	MutantsTimedOut *int
+	// The per-phase clock. Every one is *int64 and every one is SQL NULL
+	// until the task that measures it lands: the single timing number that
+	// existed before this change (SuiteBaselineMillis) is not where the
+	// minutes go, and a stored 0 for a phase nothing timed would be averaged
+	// into the cost model as a phase that costs nothing.
+	SelectionMillis    *int64
+	GenerationMillis   *int64
+	PoolMillis         *int64
+	DevPassMillis      *int64
+	AuthoredPassMillis *int64
+	CriticMillis       *int64
+	TotalMillis        *int64
+	// MutantMillisMedian and MutantMillisMax summarize scan_mutants.duration_ms
+	// at the file grain, so the "which files are slow, and is it one mutant or
+	// all of them" question is one row rather than an aggregate over the
+	// mutant table. NULL until anything times a mutant.
+	MutantMillisMedian *int64
+	MutantMillisMax    *int64
+	// ChallengerJaccard, ChallengerKappa and ChallengerSufficient are the
+	// agreement between the primary test-writer seat and the challenger seat.
+	// All three are pointers because "the challenger did not run" and "the
+	// challenger agreed on nothing" are different claims, and a 0.0 cannot
+	// tell them apart. NULL until the challenger task fills them.
+	ChallengerJaccard    *float64
+	ChallengerKappa      *float64
+	ChallengerSufficient *bool
+	// GoalsDerived is how many goals reposcan derived for this file. 0 means
+	// none were derived, which is a real and common answer, so this one is a
+	// plain int rather than a pointer.
+	GoalsDerived int
+	// PerMutant and TestsPerMutantMin/Median/Max are
+	// advpool.Verdict.TestSelection.PerMutant / .TestsPerMutant: whether each
+	// mutant was graded by the tests that reach its own lines, and the spread
+	// of how many tests that was. They live in the ledger, not only in the
+	// pushed row, because the warehouse is the ledger pushed — a column the
+	// warehouse carries and the ledger cannot supply would force a second,
+	// drifting mapping straight out of the report.
+	//
+	// The three counts are pointers so an unmeasured spread is ABSENT rather
+	// than {0,0,0}: a per-mutant run whose every mutant was rejected by the
+	// compile gate graded nothing, and a stored 0-to-0 range would read as
+	// "every mutant ran no tests".
+	PerMutant            bool
+	TestsPerMutantMin    *int
+	TestsPerMutantMedian *int
+	TestsPerMutantMax    *int
 }
 
 // scanFilesMigrationCols is the additive set of columns this package has
@@ -307,6 +433,47 @@ var scanFilesMigrationCols = []struct{ name, ddl string }{
 	{"trees", "trees INTEGER"},
 	{"concurrency_note", "concurrency_note VARCHAR"},
 	{"shared_dirs", "shared_dirs VARCHAR"},
+	{"parent_sha256", "parent_sha256 VARCHAR"},
+	{"mutants_graded", "mutants_graded INTEGER"},
+	{"mutants_invalid", "mutants_invalid INTEGER"},
+	{"mutants_timed_out", "mutants_timed_out INTEGER"},
+	{"selection_ms", "selection_ms BIGINT"},
+	{"generation_ms", "generation_ms BIGINT"},
+	{"pool_ms", "pool_ms BIGINT"},
+	{"dev_pass_ms", "dev_pass_ms BIGINT"},
+	{"authored_pass_ms", "authored_pass_ms BIGINT"},
+	{"critic_ms", "critic_ms BIGINT"},
+	{"total_ms", "total_ms BIGINT"},
+	{"mutant_ms_median", "mutant_ms_median BIGINT"},
+	{"mutant_ms_max", "mutant_ms_max BIGINT"},
+	{"challenger_jaccard", "challenger_jaccard DOUBLE"},
+	{"challenger_kappa", "challenger_kappa DOUBLE"},
+	{"challenger_sufficient", "challenger_sufficient BOOLEAN"},
+	{"goals_derived", "goals_derived INTEGER"},
+	{"per_mutant", "per_mutant BOOLEAN"},
+	{"tests_per_mutant_min", "tests_per_mutant_min INTEGER"},
+	{"tests_per_mutant_median", "tests_per_mutant_median INTEGER"},
+	{"tests_per_mutant_max", "tests_per_mutant_max INTEGER"},
+}
+
+// scansMigrationCols is the same ledger at the SCAN grain. `scans` had no
+// migration list at all until this change — every column it has ever had was
+// in its original CREATE TABLE — so this list starts with the provenance and
+// cost columns added here. A ledger an earlier corral created gets them
+// added on open; a fresh one already has them from the CREATE below and runs
+// zero ALTERs.
+var scansMigrationCols = []struct{ name, ddl string }{
+	{"corral_version", "corral_version VARCHAR"},
+	{"host", "host VARCHAR"},
+	{"cores", "cores INTEGER"},
+	{"trees_requested", "trees_requested INTEGER"},
+	{"total_ms", "total_ms BIGINT"},
+	{"input_tokens", "input_tokens BIGINT"},
+	{"output_tokens", "output_tokens BIGINT"},
+	{"model_calls", "model_calls BIGINT"},
+	{"source_pushed", "source_pushed BOOLEAN"},
+	{"statement_sha256", "statement_sha256 VARCHAR"},
+	{"selection_ms", "selection_ms BIGINT"},
 }
 
 // scanMutantsMigrationCols is the same ledger, at the mutant grain: the
@@ -319,6 +486,11 @@ var scanFilesMigrationCols = []struct{ name, ddl string }{
 var scanMutantsMigrationCols = []struct{ name, ddl string }{
 	{"tests_run", "tests_run INTEGER"},
 	{"selection_rule", "selection_rule VARCHAR"},
+	{"duration_ms", "duration_ms BIGINT"},
+	{"killed_by", "killed_by VARCHAR"},
+	{"span_start", "span_start INTEGER"},
+	{"span_end", "span_end INTEGER"},
+	{"proven_by_authored_alone", "proven_by_authored_alone BOOLEAN"},
 }
 
 // Open opens (creating if absent) the scans/scan_files store at dsn.
@@ -340,10 +512,19 @@ func Open(dsn string) (*Store, error) {
 		total_files INTEGER, candidates INTEGER, audited INTEGER,
 		kill_rate DOUBLE, cache_hits INTEGER,
 		preflight_ran BOOLEAN, preflight_note VARCHAR,
-		started_at TIMESTAMP, finished_at TIMESTAMP
+		started_at TIMESTAMP, finished_at TIMESTAMP,
+		corral_version VARCHAR, host VARCHAR, cores INTEGER, trees_requested INTEGER,
+		total_ms BIGINT, input_tokens BIGINT, output_tokens BIGINT, model_calls BIGINT,
+		source_pushed BOOLEAN, statement_sha256 VARCHAR,
+		selection_ms BIGINT
 	)`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("scanstore: create scans table: %w", err)
+	}
+
+	if err := migrateScans(db); err != nil {
+		db.Close()
+		return nil, err
 	}
 
 	// scan_files is one row per file per scan. evidence is first-class and
@@ -398,7 +579,28 @@ func Open(dsn string) (*Store, error) {
 		mutants_from VARCHAR,
 		trees INTEGER,
 		concurrency_note VARCHAR,
-		shared_dirs VARCHAR
+		shared_dirs VARCHAR,
+		parent_sha256 VARCHAR,
+		mutants_graded INTEGER,
+		mutants_invalid INTEGER,
+		mutants_timed_out INTEGER,
+		selection_ms BIGINT,
+		generation_ms BIGINT,
+		pool_ms BIGINT,
+		dev_pass_ms BIGINT,
+		authored_pass_ms BIGINT,
+		critic_ms BIGINT,
+		total_ms BIGINT,
+		mutant_ms_median BIGINT,
+		mutant_ms_max BIGINT,
+		challenger_jaccard DOUBLE,
+		challenger_kappa DOUBLE,
+		challenger_sufficient BOOLEAN,
+		goals_derived INTEGER,
+		per_mutant BOOLEAN,
+		tests_per_mutant_min INTEGER,
+		tests_per_mutant_median INTEGER,
+		tests_per_mutant_max INTEGER
 	)`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("scanstore: create scan_files table: %w", err)
@@ -437,13 +639,64 @@ func Open(dsn string) (*Store, error) {
 		parent_sha256 VARCHAR,
 		proven BOOLEAN,
 		tests_run INTEGER,
-		selection_rule VARCHAR
+		selection_rule VARCHAR,
+		duration_ms BIGINT,
+		killed_by VARCHAR,
+		span_start INTEGER,
+		span_end INTEGER,
+		proven_by_authored_alone BOOLEAN
 	)`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("scanstore: create scan_mutants table: %w", err)
 	}
 
 	if err := migrateScanMutants(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+
+	// scan_model_calls is one row per (file, role): what that seat cost. The
+	// scan header carries the run's totals, which answer "what did this
+	// audit cost" and nothing else — "which seat was slow, and on which
+	// file" is the operator's actual second question and the warehouse's
+	// first GROUP BY, and it cannot be asked of a scan-wide total.
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS scan_model_calls (
+		scan_id BIGINT, path VARCHAR, role VARCHAR, model VARCHAR,
+		calls INTEGER, retries INTEGER,
+		input_tokens BIGINT, output_tokens BIGINT, wall_ms BIGINT
+	)`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("scanstore: create scan_model_calls table: %w", err)
+	}
+
+	if err := migrateScanModelCalls(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+
+	// scan_events is the tape: an ordered log of what the pool did, at the
+	// grain a phase boundary happens. Everything else in this ledger is a
+	// SUMMARY — a rate, a count, a duration — and a summary cannot answer
+	// "what was it doing for those 35 minutes". seq (not ts) is the ordering
+	// key: two events inside one millisecond are ordinary, and a tape whose
+	// order depends on clock granularity is not a tape.
+	//
+	// detail is VARCHAR holding JSON TEXT, deliberately, not DuckDB's JSON
+	// type: the target of a push may be any DuckDB the operator owns,
+	// including one with no extensions installed and no network to fetch
+	// them, and a schema that cannot be created on the operator's own
+	// machine is not a schema. Readers parse it; DuckDB's json functions
+	// still work on a VARCHAR.
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS scan_events (
+		scan_id BIGINT, path VARCHAR, seq BIGINT, ts TIMESTAMP,
+		kind VARCHAR, actor VARCHAR, subject VARCHAR, model VARCHAR,
+		duration_ms BIGINT, detail VARCHAR
+	)`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("scanstore: create scan_events table: %w", err)
+	}
+
+	if err := migrateScanEvents(db); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -466,80 +719,78 @@ func Open(dsn string) (*Store, error) {
 	return &Store{db: db}, nil
 }
 
-// migrateScanFiles additively brings a scan_files table created before a
-// later column existed up to the current column set. DuckDB has no
+// migrateColumns additively brings `table` up to `cols`. DuckDB has no
 // `ADD COLUMN IF NOT EXISTS`, and this is a ledger — silently discarding
-// every ALTER error would make a genuinely broken migration indistinguishable
-// from an already-applied one. Instead: probe information_schema.columns for
-// what already exists, add only what's missing, and surface any other ALTER
-// failure as a real error. Idempotent across repeated opens: a table that
-// already has every column runs zero ALTERs.
-func migrateScanFiles(db *sql.DB) error {
-	rows, err := db.Query(`SELECT column_name FROM information_schema.columns WHERE table_name = ?`, "scan_files")
+// every ALTER error would make a genuinely broken migration
+// indistinguishable from an already-applied one. Instead: probe
+// information_schema.columns for what already exists, add only what is
+// missing, and surface any other ALTER failure as a real error. Idempotent
+// across repeated opens: a table that already has every column runs zero
+// ALTERs.
+//
+// One loop, four lists. The lists stay separate — they are separate ledgers
+// of separate decisions, and a shared list would invite adding a column to
+// the wrong table — but the loop over them was copied verbatim per table and
+// had begun to drift only in its error strings.
+func migrateColumns(db *sql.DB, table string, cols []struct{ name, ddl string }) error {
+	rows, err := db.Query(`SELECT column_name FROM information_schema.columns WHERE table_name = ?`, table)
 	if err != nil {
-		return fmt.Errorf("scanstore: probe existing columns: %w", err)
+		return fmt.Errorf("scanstore: probe existing %s columns: %w", table, err)
 	}
 	existing := map[string]bool{}
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err != nil {
 			rows.Close()
-			return fmt.Errorf("scanstore: scan existing column: %w", err)
+			return fmt.Errorf("scanstore: scan existing %s column: %w", table, err)
 		}
 		existing[name] = true
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
-		return fmt.Errorf("scanstore: probe existing columns: %w", err)
+		return fmt.Errorf("scanstore: probe existing %s columns: %w", table, err)
 	}
 	rows.Close()
 
-	for _, col := range scanFilesMigrationCols {
+	for _, col := range cols {
 		if existing[col.name] {
 			continue
 		}
-		if _, err := db.Exec("ALTER TABLE scan_files ADD COLUMN " + col.ddl); err != nil {
-			return fmt.Errorf("scanstore: migrate: add column %s: %w", col.name, err)
+		if _, err := db.Exec("ALTER TABLE " + table + " ADD COLUMN " + col.ddl); err != nil {
+			return fmt.Errorf("scanstore: migrate %s: add column %s: %w", table, col.name, err)
 		}
 	}
 	return nil
 }
 
-// migrateScanMutants is migrateScanFiles for scan_mutants: probe
-// information_schema.columns, add only what is missing, and surface any other
-// ALTER failure rather than swallowing it. Idempotent across opens. Kept as
-// its own function rather than folded into a generic helper because the two
-// tables' column lists are separate ledgers of separate decisions, and a
-// shared loop would invite adding a column to the wrong one.
-func migrateScanMutants(db *sql.DB) error {
-	rows, err := db.Query(`SELECT column_name FROM information_schema.columns WHERE table_name = ?`, "scan_mutants")
-	if err != nil {
-		return fmt.Errorf("scanstore: probe existing scan_mutants columns: %w", err)
-	}
-	existing := map[string]bool{}
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			rows.Close()
-			return fmt.Errorf("scanstore: scan existing scan_mutants column: %w", err)
-		}
-		existing[name] = true
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return fmt.Errorf("scanstore: probe existing scan_mutants columns: %w", err)
-	}
-	rows.Close()
+func migrateScans(db *sql.DB) error {
+	return migrateColumns(db, "scans", scansMigrationCols)
+}
 
-	for _, col := range scanMutantsMigrationCols {
-		if existing[col.name] {
-			continue
-		}
-		if _, err := db.Exec("ALTER TABLE scan_mutants ADD COLUMN " + col.ddl); err != nil {
-			return fmt.Errorf("scanstore: migrate scan_mutants: add column %s: %w", col.name, err)
-		}
-	}
-	return nil
+func migrateScanFiles(db *sql.DB) error {
+	return migrateColumns(db, "scan_files", scanFilesMigrationCols)
+}
+
+func migrateScanMutants(db *sql.DB) error {
+	return migrateColumns(db, "scan_mutants", scanMutantsMigrationCols)
+}
+
+// migrateScanModelCalls and migrateScanEvents exist with EMPTY lists on
+// purpose: both tables are new at this schema version, so nothing predates
+// their CREATE and there is nothing to add today. They are here so the next
+// column added to either goes through the same additive path as every other
+// column in this package, rather than being appended to a CREATE TABLE that
+// an existing ledger will never re-run.
+var scanModelCallsMigrationCols = []struct{ name, ddl string }{}
+
+var scanEventsMigrationCols = []struct{ name, ddl string }{}
+
+func migrateScanModelCalls(db *sql.DB) error {
+	return migrateColumns(db, "scan_model_calls", scanModelCallsMigrationCols)
+}
+
+func migrateScanEvents(db *sql.DB) error {
+	return migrateColumns(db, "scan_events", scanEventsMigrationCols)
 }
 
 // Close closes the underlying database.
@@ -585,6 +836,28 @@ func nullableString(v string) any {
 	return v
 }
 
+// nullIfEmptyString binds SQL NULL for an empty string. "" and "this ledger
+// does not say" are different answers, and an empty string is a VALUE: a
+// query filtering `killed_by <> ”` and one filtering `killed_by IS NOT NULL`
+// must agree, and they only can if nothing ever writes the empty string.
+func nullIfEmptyString(v string) any {
+	if v == "" {
+		return nil
+	}
+	return v
+}
+
+// nullablePositive binds SQL NULL for a count that is only ever positive
+// when something actually recorded it. A stored 0 is a NUMBER — a later
+// query averages it, compares it and ranks on it — where NULL is the only
+// encoding of "this ledger does not say".
+func nullablePositive(v int) any {
+	if v < 1 {
+		return nil
+	}
+	return v
+}
+
 // nullableTrees binds SQL NULL for a concurrency that was never recorded.
 // Trees < 1 is the one "not recorded" state (see advpool.Concurrency): the
 // jail substrate builds no trees, a rejected file was never scored, and a
@@ -592,11 +865,43 @@ func nullableString(v string) any {
 // is a NUMBER — a later query would average it, compare it and rank on it —
 // where NULL is the only encoding of "this ledger does not say". Same rule
 // as mutants_from above, for the same reason.
-func nullableTrees(v int) any {
-	if v < 1 {
+func nullableTrees(v int) any { return nullablePositive(v) }
+
+// nullMillis turns a nullable BIGINT column into the *int64 the File struct
+// carries. It is the READ half of the rule the write half enforces by taking
+// a pointer: a duration nothing measured is NULL in the column and nil in
+// the struct, all the way out to the caller. Copying into a fresh variable
+// (rather than taking &v.Int64) matters because v is reused by the row loop.
+func nullMillis(v sql.NullInt64) *int64 {
+	if !v.Valid {
 		return nil
 	}
-	return v
+	ms := v.Int64
+	return &ms
+}
+
+// nullCount is nullMillis for an INTEGER column read back as *int — the
+// per-mutant test-count spread, where an absent measurement must stay absent
+// rather than becoming a 0 that reads as "this mutant ran no tests".
+func nullCount(v sql.NullInt64) *int {
+	if !v.Valid {
+		return nil
+	}
+	n := int(v.Int64)
+	return &n
+}
+
+// retriesParam is the WRITE half of nullCount's read: a nil *int (the only
+// value any producer in this codebase sets today — see ModelCall.Retries'
+// doc) binds SQL NULL; a non-nil pointer binds the measured count. Kept as
+// its own function, rather than inlining `any(c.Retries)`, so the one place
+// this column's nil-ness is decided cannot silently drift from the read
+// side's nullCount.
+func retriesParam(v *int) any {
+	if v == nil {
+		return nil
+	}
+	return *v
 }
 
 func fileKillRate(f File) *float64 {
@@ -620,12 +925,18 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 	err = tx.QueryRowContext(ctx, `INSERT INTO scans (
 		id, ts, owner, repo, commit, substrate, engine_version, model_set,
 		top, all_candidates, diff_base, total_files, candidates, audited,
-		kill_rate, cache_hits, preflight_ran, preflight_note, started_at, finished_at
-	) VALUES (nextval('scans_id'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		kill_rate, cache_hits, preflight_ran, preflight_note, started_at, finished_at,
+		corral_version, host, cores, trees_requested,
+		total_ms, input_tokens, output_tokens, model_calls,
+		source_pushed, statement_sha256, selection_ms
+	) VALUES (nextval('scans_id'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	RETURNING id`,
 		time.Now().UTC(), scan.Owner, scan.Repo, scan.Commit, scan.Substrate, scan.EngineVersion, scan.ModelSet,
 		scan.Top, scan.AllCandidates, scan.DiffBase, scan.TotalFiles, scan.Candidates, scan.Audited,
 		sanitizeKillRate(scan.KillRate), scan.CacheHits, scan.PreflightRan, scan.PreflightNote, scan.StartedAt, scan.FinishedAt,
+		scan.CorralVersion, scan.Host, scan.Cores, nullableTrees(scan.TreesRequested),
+		scan.TotalMillis, scan.InputTokens, scan.OutputTokens, scan.ModelCalls,
+		scan.SourcePushed, scan.StatementSHA256, scan.SelectionMillis,
 	).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("scanstore: insert scan header: %w", err)
@@ -643,8 +954,14 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 			models_by_role, mutants_total, regions_total, regions_probed, dropped_regions, vacuous_findings, status,
 			authored_test_not_collected, baseline_failed, cache_hit, reused_from_scan_id, suite_baseline_ms,
 			test_selection, selected_tests, suite_tests, selection_fallback, uncovered, mutants_from,
-			trees, concurrency_note, shared_dirs
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			trees, concurrency_note, shared_dirs,
+			parent_sha256, mutants_graded, mutants_invalid, mutants_timed_out,
+			selection_ms, generation_ms, pool_ms, dev_pass_ms, authored_pass_ms, critic_ms, total_ms,
+			mutant_ms_median, mutant_ms_max,
+			challenger_jaccard, challenger_kappa, challenger_sufficient, goals_derived,
+			per_mutant, tests_per_mutant_min, tests_per_mutant_median, tests_per_mutant_max
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id, f.Path, f.Lang, f.Disposition, f.Reason,
 			fileKillRate(f), f.Survivors, f.Gradable, f.PreflightState, f.Evidence, f.Detail, f.TimedOut, f.TestWriterFailed, f.ProvenMissed, f.PoolTestUnsound,
 			f.ProvenMutantIDs, f.AuthoredTest, f.CacheKey, f.VerdictJSON, f.ComputedAt,
@@ -652,6 +969,11 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 			f.AuthoredTestNotCollected, f.BaselineFailed, f.CacheHit, f.ReusedFromScanID, f.SuiteBaselineMillis,
 			f.TestSelection, f.SelectedTests, f.SuiteTests, f.SelectionFallback, f.Uncovered, nullableString(f.MutantsFrom),
 			nullableTrees(f.Trees), nullableString(f.ConcurrencyNote), nullableString(f.SharedDirs),
+			f.ParentSHA256, f.MutantsGraded, f.MutantsInvalid, f.MutantsTimedOut,
+			f.SelectionMillis, f.GenerationMillis, f.PoolMillis, f.DevPassMillis, f.AuthoredPassMillis, f.CriticMillis, f.TotalMillis,
+			f.MutantMillisMedian, f.MutantMillisMax,
+			f.ChallengerJaccard, f.ChallengerKappa, f.ChallengerSufficient, f.GoalsDerived,
+			f.PerMutant, f.TestsPerMutantMin, f.TestsPerMutantMedian, f.TestsPerMutantMax,
 		); err != nil {
 			return 0, fmt.Errorf("scanstore: insert scan_files row for %q: %w", f.Path, err)
 		}
@@ -695,10 +1017,7 @@ func (s *Store) Scans(ctx context.Context, limit int) ([]ScanRow, error) {
 	if limit <= 0 {
 		limit = 20
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id, ts, owner, repo, commit,
-		substrate, engine_version, model_set, top, all_candidates, diff_base,
-		total_files, candidates, audited, kill_rate, cache_hits,
-		preflight_ran, preflight_note, started_at, finished_at
+	rows, err := s.db.QueryContext(ctx, `SELECT `+scanHeaderCols+`
 		FROM scans ORDER BY id DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("scanstore: list scans: %w", err)
@@ -707,28 +1026,103 @@ func (s *Store) Scans(ctx context.Context, limit int) ([]ScanRow, error) {
 
 	var out []ScanRow
 	for rows.Next() {
-		var r ScanRow
-		var ts, started, finished sql.NullTime
-		var diffBase, preflightNote, modelSet, engineVersion, substrate sql.NullString
-		// kill_rate is deliberately scanned into *float64: a scan that audited
-		// nothing stored NULL rather than 0.0 (see Scan.KillRate's doc for the
-		// DuckDB NaN-ordering trap that forced this), and it must read back as
-		// "no measurement", never as a terrible score.
-		if err := rows.Scan(&r.ID, &ts, &r.Owner, &r.Repo, &r.Commit,
-			&substrate, &engineVersion, &modelSet, &r.Top, &r.AllCandidates, &diffBase,
-			&r.TotalFiles, &r.Candidates, &r.Audited, &r.KillRate, &r.CacheHits,
-			&r.PreflightRan, &preflightNote, &started, &finished); err != nil {
-			return nil, fmt.Errorf("scanstore: scan scans row: %w", err)
+		r, err := scanScanRow(rows)
+		if err != nil {
+			return nil, err
 		}
-		r.TS, r.StartedAt, r.FinishedAt = ts.Time, started.Time, finished.Time
-		r.Substrate, r.EngineVersion, r.ModelSet = substrate.String, engineVersion.String, modelSet.String
-		r.DiffBase, r.PreflightNote = diffBase.String, preflightNote.String
 		out = append(out, r)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("scanstore: iterate scans: %w", err)
 	}
 	return out, nil
+}
+
+// scanHeaderCols is the scans SELECT list, spelled ONCE. Two readers of this
+// table (Scans and ScanByID) with two hand-maintained column lists is two
+// chances for a column added to one to be silently absent from the other —
+// and a reader that silently returns the zero value for a real stored number
+// is the exact failure this ledger's nullable columns exist to prevent.
+const scanHeaderCols = `id, ts, owner, repo, commit,
+		substrate, engine_version, model_set, top, all_candidates, diff_base,
+		total_files, candidates, audited, kill_rate, cache_hits,
+		preflight_ran, preflight_note, started_at, finished_at,
+		corral_version, host, cores, trees_requested,
+		total_ms, input_tokens, output_tokens, model_calls,
+		source_pushed, statement_sha256, selection_ms`
+
+// scanScanRow decodes one scans row, in scanHeaderCols' order. Shared by both
+// readers for the same reason the column list is.
+func scanScanRow(rows *sql.Rows) (ScanRow, error) {
+	var r ScanRow
+	var ts, started, finished sql.NullTime
+	var diffBase, preflightNote, modelSet, engineVersion, substrate sql.NullString
+	// kill_rate is deliberately scanned into *float64: a scan that audited
+	// nothing stored NULL rather than 0.0 (see Scan.KillRate's doc for the
+	// DuckDB NaN-ordering trap that forced this), and it must read back as
+	// "no measurement", never as a terrible score.
+	// The scan-grain columns added at schema_version 2 all read back
+	// nullable: a header written by an earlier corral has none of them,
+	// trees_requested is stored NULL on the jail substrate, which builds no
+	// trees at all, and selection_ms is NULL for a scan that instrumented
+	// nothing.
+	var corralVersion, host, statementSHA sql.NullString
+	var cores, treesRequested, totalMS, inputTokens, outputTokens, modelCalls sql.NullInt64
+	var selectionMS sql.NullInt64
+	var sourcePushed sql.NullBool
+	if err := rows.Scan(&r.ID, &ts, &r.Owner, &r.Repo, &r.Commit,
+		&substrate, &engineVersion, &modelSet, &r.Top, &r.AllCandidates, &diffBase,
+		&r.TotalFiles, &r.Candidates, &r.Audited, &r.KillRate, &r.CacheHits,
+		&r.PreflightRan, &preflightNote, &started, &finished,
+		&corralVersion, &host, &cores, &treesRequested,
+		&totalMS, &inputTokens, &outputTokens, &modelCalls,
+		&sourcePushed, &statementSHA, &selectionMS); err != nil {
+		return ScanRow{}, fmt.Errorf("scanstore: scan scans row: %w", err)
+	}
+	r.TS, r.StartedAt, r.FinishedAt = ts.Time, started.Time, finished.Time
+	r.Substrate, r.EngineVersion, r.ModelSet = substrate.String, engineVersion.String, modelSet.String
+	r.DiffBase, r.PreflightNote = diffBase.String, preflightNote.String
+	r.CorralVersion, r.Host, r.StatementSHA256 = corralVersion.String, host.String, statementSHA.String
+	r.Cores, r.TreesRequested = int(cores.Int64), int(treesRequested.Int64)
+	r.TotalMillis, r.InputTokens = totalMS.Int64, inputTokens.Int64
+	r.OutputTokens, r.ModelCalls = outputTokens.Int64, modelCalls.Int64
+	r.SourcePushed = sourcePushed.Bool
+	// A pointer, so "this scan ran no selection pass" survives the read as
+	// nil rather than becoming a 0 nobody measured.
+	if selectionMS.Valid {
+		v := selectionMS.Int64
+		r.SelectionMillis = &v
+	}
+	return r, nil
+}
+
+// ScanByID returns ONE scan header. ok is false when no scan has that id,
+// which is an ANSWER (the operator typed a number from a different ledger),
+// not an error.
+//
+// It exists because the scan grain now carries facts a per-file readout has
+// to name — selection_ms above all, the one phase that happens once for the
+// whole scan — and reaching them through Scans(limit) would mean guessing a
+// limit large enough to contain the row, which silently reports "no such
+// scan" for anything older than the guess.
+func (s *Store) ScanByID(ctx context.Context, id int64) (ScanRow, bool, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+scanHeaderCols+`
+		FROM scans WHERE id = ?`, id)
+	if err != nil {
+		return ScanRow{}, false, fmt.Errorf("scanstore: scan %d: %w", id, err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		if rerr := rows.Err(); rerr != nil {
+			return ScanRow{}, false, fmt.Errorf("scanstore: scan %d: %w", id, rerr)
+		}
+		return ScanRow{}, false, nil
+	}
+	r, err := scanScanRow(rows)
+	if err != nil {
+		return ScanRow{}, false, err
+	}
+	return r, true, nil
 }
 
 func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) {
@@ -739,7 +1133,12 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		authored_test_not_collected, baseline_failed, cache_hit, reused_from_scan_id,
 		suite_baseline_ms,
 		test_selection, selected_tests, suite_tests, selection_fallback, uncovered, mutants_from,
-		trees, concurrency_note, shared_dirs
+		trees, concurrency_note, shared_dirs,
+		parent_sha256, mutants_graded, mutants_invalid, mutants_timed_out,
+		selection_ms, generation_ms, pool_ms, dev_pass_ms, authored_pass_ms, critic_ms, total_ms,
+		mutant_ms_median, mutant_ms_max,
+		challenger_jaccard, challenger_kappa, challenger_sufficient, goals_derived,
+		per_mutant, tests_per_mutant_min, tests_per_mutant_median, tests_per_mutant_max
 		FROM scan_files WHERE scan_id = ? ORDER BY rowid`, scanID)
 	if err != nil {
 		return nil, fmt.Errorf("scanstore: files for scan %d: %w", scanID, err)
@@ -787,6 +1186,18 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		// pre-change row cannot assert.
 		var trees sql.NullInt64
 		var concurrencyNote, sharedDirs sql.NullString
+		// The schema_version 2 grain columns. Every millisecond column is
+		// read into a NullInt64 and copied out as a POINTER, never as an
+		// int64: NULL means nothing timed that phase, and a 0 would be
+		// averaged into the cost model as a phase that costs nothing. Same
+		// rule for the two challenger coefficients and the per-mutant spread.
+		var parentSHA sql.NullString
+		var mutantsGraded, mutantsInvalid, mutantsTimedOut, goalsDerived sql.NullInt64
+		var selectionMS, generationMS, poolMS, devPassMS, authoredPassMS, criticMS, totalMS sql.NullInt64
+		var mutantMSMedian, mutantMSMax sql.NullInt64
+		var challengerJaccard, challengerKappa sql.NullFloat64
+		var challengerSufficient, perMutant sql.NullBool
+		var tpmMin, tpmMedian, tpmMax sql.NullInt64
 		if err := rows.Scan(&f.Path, &f.Lang, &f.Disposition, &f.Reason,
 			&f.KillRate, &f.Survivors, &f.Gradable, &f.PreflightState, &f.Evidence, &detail, &timedOut, &testWriterFailed, &provenMissed, &poolTestUnsound,
 			&provenIDs, &authoredTest,
@@ -794,7 +1205,12 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 			&authoredTestNotCollected, &baselineFailed, &cacheHit, &reusedFromScanID,
 			&suiteBaselineMS,
 			&testSelection, &selectedTests, &suiteTests, &selectionFallback, &uncovered, &mutantsFrom,
-			&trees, &concurrencyNote, &sharedDirs); err != nil {
+			&trees, &concurrencyNote, &sharedDirs,
+			&parentSHA, &mutantsGraded, &mutantsInvalid, &mutantsTimedOut,
+			&selectionMS, &generationMS, &poolMS, &devPassMS, &authoredPassMS, &criticMS, &totalMS,
+			&mutantMSMedian, &mutantMSMax,
+			&challengerJaccard, &challengerKappa, &challengerSufficient, &goalsDerived,
+			&perMutant, &tpmMin, &tpmMedian, &tpmMax); err != nil {
 			return nil, fmt.Errorf("scanstore: scan scan_files row: %w", err)
 		}
 		f.Detail = detail.String
@@ -839,6 +1255,36 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 			v := reusedFromScanID.Int64
 			f.ReusedFromScanID = &v
 		}
+		f.ParentSHA256 = parentSHA.String
+		f.MutantsGraded = int(mutantsGraded.Int64)
+		f.MutantsInvalid = int(mutantsInvalid.Int64)
+		f.MutantsTimedOut = nullCount(mutantsTimedOut)
+		f.GoalsDerived = int(goalsDerived.Int64)
+		f.SelectionMillis = nullMillis(selectionMS)
+		f.GenerationMillis = nullMillis(generationMS)
+		f.PoolMillis = nullMillis(poolMS)
+		f.DevPassMillis = nullMillis(devPassMS)
+		f.AuthoredPassMillis = nullMillis(authoredPassMS)
+		f.CriticMillis = nullMillis(criticMS)
+		f.TotalMillis = nullMillis(totalMS)
+		f.MutantMillisMedian = nullMillis(mutantMSMedian)
+		f.MutantMillisMax = nullMillis(mutantMSMax)
+		if challengerJaccard.Valid {
+			v := challengerJaccard.Float64
+			f.ChallengerJaccard = &v
+		}
+		if challengerKappa.Valid {
+			v := challengerKappa.Float64
+			f.ChallengerKappa = &v
+		}
+		if challengerSufficient.Valid {
+			v := challengerSufficient.Bool
+			f.ChallengerSufficient = &v
+		}
+		f.PerMutant = perMutant.Bool
+		f.TestsPerMutantMin = nullCount(tpmMin)
+		f.TestsPerMutantMedian = nullCount(tpmMedian)
+		f.TestsPerMutantMax = nullCount(tpmMax)
 		out = append(out, f)
 	}
 	return out, rows.Err()
@@ -929,6 +1375,86 @@ type Mutant struct {
 	// then did, not that the authored test ran those three.
 	TestsRun      int
 	SelectionRule string
+	// DurationMillis is how long grading THIS mutant took. *int64 because a
+	// run that did not time its mutants must read back as "unknown", not as
+	// a mutant that took no time: the dev pass is where the minutes go (35
+	// of 43 on one reference file), and the whole point of this column is to
+	// let a query say which mutants ate them.
+	DurationMillis *int64
+	// KilledBy is the first failing test id, best effort, when the language
+	// plugin can parse one out of the runner's own output. "" when it
+	// cannot — NEVER inferred: a wrong test id here would send a reader to
+	// read the wrong test, which is worse than sending them nowhere.
+	KilledBy string
+	// SpanStart and SpanEnd are the mutated line range in the parent file
+	// (advpool's lang.LineRange). They are what turns a mutant id into a
+	// place: "which lines survive" is the question a reader actually has,
+	// and an opaque id cannot answer it.
+	//
+	// NOTHING produces them yet — advpool.MutantRef, which is what reaches
+	// this package, carries no span — so every row written today stores SQL
+	// NULL. They are 1-based, so 0 is unambiguously "not recorded" rather
+	// than a line.
+	SpanStart int
+	SpanEnd   int
+	// ProvenByAuthoredAlone marks a survivor the pool's AUTHORED test killed
+	// where the dev suite's own tests never did — the strict subset of
+	// Proven that is a demonstrated gap rather than a demonstrated kill.
+	// Distinct from Proven so a leaderboard can count the strong claim
+	// without recomputing the difference from two tables.
+	ProvenByAuthoredAlone bool
+}
+
+// ModelCall is what ONE role's seat cost on ONE file: the money grain. The
+// scan header carries the run's totals, and a total cannot answer "which
+// seat was slow" — the operator's second question, and the warehouse's first
+// GROUP BY.
+type ModelCall struct {
+	ScanID int64
+	Path   string
+	Role   string
+	Model  string
+	Calls  int
+	// Retries are calls that had to be made AGAIN — a compile-gate rejection,
+	// a malformed response. They are counted separately from Calls because a
+	// seat that needs four attempts per mutant is a different (and more
+	// expensive) failure from one that needs four mutants.
+	//
+	// NULLABLE, not 0-when-unknown: nothing in agentbackend has a retry loop
+	// to observe today (checked before this column was ever written to), so
+	// every row this codebase produces has retries UNMEASURED. A stored 0
+	// is a NUMBER a later query averages and ranks on; NULL is the only
+	// honest encoding of "this ledger does not say" — same rule as
+	// nullablePositive/nullCount elsewhere in this file.
+	Retries      *int
+	InputTokens  int64
+	OutputTokens int64
+	WallMillis   int64
+}
+
+// Event is one entry on the tape: an ordered log of what the pool did, at
+// the grain a phase boundary happens. Everything else in this ledger is a
+// SUMMARY, and a summary cannot answer "what was it doing for those 35
+// minutes".
+type Event struct {
+	ScanID int64
+	Path   string
+	// Seq, not TS, is the ordering key. Two events inside one millisecond are
+	// ordinary, and a tape whose order depends on clock granularity is not a
+	// tape.
+	Seq     int64
+	TS      time.Time
+	Kind    string
+	Actor   string
+	Subject string
+	Model   string
+	// DurationMillis is set on the events that HAVE a duration (a completed
+	// phase, a returned model call) and nil on the ones that are a moment
+	// (a phase start). Never 0 for the latter — see nullMillis.
+	DurationMillis *int64
+	// Detail is JSON TEXT, in a VARCHAR column. See the scan_events CREATE
+	// TABLE in Open for why the column is not DuckDB's JSON type.
+	Detail string
 }
 
 // RecordMutants appends mutant rows. An empty slice is a no-op, not an error:
@@ -950,8 +1476,21 @@ func (s *Store) RecordMutants(ctx context.Context, ms []Mutant) error {
 	defer func() { _ = tx.Rollback() }()
 	for _, m := range ms {
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO scan_mutants (scan_id, path, mutant_id, outcome, parent_sha256, proven, tests_run, selection_rule) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			`INSERT INTO scan_mutants (scan_id, path, mutant_id, outcome, parent_sha256, proven, tests_run, selection_rule,
+				duration_ms, killed_by, span_start, span_end, proven_by_authored_alone)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			m.ScanID, m.Path, m.MutantID, m.Outcome, m.ParentSHA256, m.Proven, m.TestsRun, m.SelectionRule,
+			// Line numbers are 1-BASED, so 0 is the one "not recorded" state
+			// — and today it is the only state: advpool.MutantRef carries no
+			// span, so nothing produces one. Line 0 does not exist, and a
+			// reader jumping to it would be sent to the top of the file.
+			// killed_by is NULL, never '': a mutant killed by a run whose
+			// output nothing could parse — or by a TIMEOUT, where no test
+			// reported anything at all — has no killer to name, and an empty
+			// string is a VALUE a query counts as "we know who caught it".
+			// Both producers' comments already said NULL; only the bind did
+			// not.
+			m.DurationMillis, nullIfEmptyString(m.KilledBy), nullablePositive(m.SpanStart), nullablePositive(m.SpanEnd), m.ProvenByAuthoredAlone,
 		); err != nil {
 			return fmt.Errorf("scanstore: RecordMutants: insert %s/%s: %w", m.Path, m.MutantID, err)
 		}
@@ -963,7 +1502,9 @@ func (s *Store) RecordMutants(ctx context.Context, ms []Mutant) error {
 // for the CLI reader.
 func (s *Store) MutantsForScan(ctx context.Context, scanID int64) ([]Mutant, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT scan_id, path, mutant_id, outcome, parent_sha256, proven, tests_run, selection_rule FROM scan_mutants WHERE scan_id = ? ORDER BY path, mutant_id`, scanID)
+		`SELECT scan_id, path, mutant_id, outcome, parent_sha256, proven, tests_run, selection_rule,
+			duration_ms, killed_by, span_start, span_end, proven_by_authored_alone
+		 FROM scan_mutants WHERE scan_id = ? ORDER BY path, mutant_id`, scanID)
 	if err != nil {
 		return nil, fmt.Errorf("scanstore: MutantsForScan: %w", err)
 	}
@@ -976,16 +1517,155 @@ func (s *Store) MutantsForScan(ctx context.Context, scanID int64) ([]Mutant, err
 		// existed (and rows from a run that did not grade per mutant) read
 		// back as zero rather than as a scan error.
 		var testsRun sql.NullInt64
-		if err := rows.Scan(&m.ScanID, &m.Path, &m.MutantID, &m.Outcome, &parent, &m.Proven, &testsRun, &rule); err != nil {
+		var durationMS, spanStart, spanEnd sql.NullInt64
+		var killedBy sql.NullString
+		var provenByAuthoredAlone sql.NullBool
+		if err := rows.Scan(&m.ScanID, &m.Path, &m.MutantID, &m.Outcome, &parent, &m.Proven, &testsRun, &rule,
+			&durationMS, &killedBy, &spanStart, &spanEnd, &provenByAuthoredAlone); err != nil {
 			return nil, fmt.Errorf("scanstore: MutantsForScan: scan row: %w", err)
 		}
 		m.ParentSHA256 = parent.String
 		m.TestsRun = int(testsRun.Int64)
 		m.SelectionRule = rule.String
+		m.DurationMillis = nullMillis(durationMS)
+		m.KilledBy = killedBy.String
+		m.SpanStart, m.SpanEnd = int(spanStart.Int64), int(spanEnd.Int64)
+		m.ProvenByAuthoredAlone = provenByAuthoredAlone.Bool
 		out = append(out, m)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("scanstore: MutantsForScan: %w", err)
 	}
 	return out, nil
+}
+
+// RecordModelCalls appends per-(file, role) usage rows. An empty slice is a
+// no-op, not an error: a scan that reused every verdict from the cache made
+// no model calls at all, and that is a normal outcome the caller should not
+// have to special-case.
+func (s *Store) RecordModelCalls(ctx context.Context, cs []ModelCall) error {
+	if len(cs) == 0 {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("scanstore: RecordModelCalls: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, c := range cs {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO scan_model_calls (scan_id, path, role, model, calls, retries, input_tokens, output_tokens, wall_ms)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			c.ScanID, c.Path, c.Role, c.Model, c.Calls, retriesParam(c.Retries), c.InputTokens, c.OutputTokens, c.WallMillis,
+		); err != nil {
+			return fmt.Errorf("scanstore: RecordModelCalls: insert %s/%s: %w", c.Path, c.Role, err)
+		}
+	}
+	return tx.Commit()
+}
+
+// ModelCallsForScan returns every model-call row for a scan, ordered by
+// (path, role) so a reader and a round-trip test see a stable order rather
+// than whatever the storage layer happens to return.
+func (s *Store) ModelCallsForScan(ctx context.Context, scanID int64) ([]ModelCall, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT scan_id, path, role, model, calls, retries, input_tokens, output_tokens, wall_ms
+		 FROM scan_model_calls WHERE scan_id = ? ORDER BY path, role`, scanID)
+	if err != nil {
+		return nil, fmt.Errorf("scanstore: ModelCallsForScan: %w", err)
+	}
+	defer rows.Close()
+	var out []ModelCall
+	for rows.Next() {
+		var c ModelCall
+		var path, role, model sql.NullString
+		var calls, retries, in, outTok, wall sql.NullInt64
+		if err := rows.Scan(&c.ScanID, &path, &role, &model, &calls, &retries, &in, &outTok, &wall); err != nil {
+			return nil, fmt.Errorf("scanstore: ModelCallsForScan: scan row: %w", err)
+		}
+		c.Path, c.Role, c.Model = path.String, role.String, model.String
+		c.Calls = int(calls.Int64)
+		c.Retries = nullCount(retries)
+		c.InputTokens, c.OutputTokens, c.WallMillis = in.Int64, outTok.Int64, wall.Int64
+		out = append(out, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("scanstore: ModelCallsForScan: %w", err)
+	}
+	return out, nil
+}
+
+// RecordEvents appends tape entries. An empty slice is a no-op, for the same
+// reason RecordMutants' is: a scan that graded nothing emitted nothing.
+func (s *Store) RecordEvents(ctx context.Context, es []Event) error {
+	if len(es) == 0 {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("scanstore: RecordEvents: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, e := range es {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO scan_events (scan_id, path, seq, ts, kind, actor, subject, model, duration_ms, detail)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			e.ScanID, e.Path, e.Seq, e.TS, e.Kind, e.Actor, e.Subject, e.Model, e.DurationMillis, e.Detail,
+		); err != nil {
+			return fmt.Errorf("scanstore: RecordEvents: insert %s#%d: %w", e.Path, e.Seq, err)
+		}
+	}
+	return tx.Commit()
+}
+
+// EventsForScan returns a scan's tape in SEQ order — see Event.Seq for why
+// the sequence, not the timestamp, is what orders it.
+func (s *Store) EventsForScan(ctx context.Context, scanID int64) ([]Event, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT scan_id, path, seq, ts, kind, actor, subject, model, duration_ms, detail
+		 FROM scan_events WHERE scan_id = ? ORDER BY seq, path`, scanID)
+	if err != nil {
+		return nil, fmt.Errorf("scanstore: EventsForScan: %w", err)
+	}
+	defer rows.Close()
+	var out []Event
+	for rows.Next() {
+		var e Event
+		var path, kind, actor, subject, model, detail sql.NullString
+		var seq, durationMS sql.NullInt64
+		var ts sql.NullTime
+		if err := rows.Scan(&e.ScanID, &path, &seq, &ts, &kind, &actor, &subject, &model, &durationMS, &detail); err != nil {
+			return nil, fmt.Errorf("scanstore: EventsForScan: scan row: %w", err)
+		}
+		e.Path, e.Seq, e.TS = path.String, seq.Int64, ts.Time.UTC()
+		e.Kind, e.Actor, e.Subject, e.Model = kind.String, actor.String, subject.String, model.String
+		e.DurationMillis = nullMillis(durationMS)
+		e.Detail = detail.String
+		out = append(out, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("scanstore: EventsForScan: %w", err)
+	}
+	return out, nil
+}
+
+// SetStatementSHA256 stamps the signed statement's hash onto a scan header
+// after the fact.
+//
+// It exists because of an ordering the scan cannot avoid: the statement has
+// to NAME the scan id, so it is written after the header row, and the header
+// row therefore has nothing to write in this column at INSERT time. Without
+// this the local ledger's statement_sha256 was empty on every run that used
+// --attest — while the pushed warehouse row carried the hash — which is
+// exactly the asymmetry the column was added to remove.
+//
+// This is the ONE UPDATE this package performs. The ledger is otherwise
+// append-only, and that is deliberate; the exception is narrow (one column,
+// one row, a value that was unknowable when the row was written) and it
+// cannot rewrite a measurement.
+func (s *Store) SetStatementSHA256(ctx context.Context, id int64, sha string) error {
+	if _, err := s.db.ExecContext(ctx, `UPDATE scans SET statement_sha256 = ? WHERE id = ?`, sha, id); err != nil {
+		return fmt.Errorf("scanstore: SetStatementSHA256 for scan %d: %w", id, err)
+	}
+	return nil
 }

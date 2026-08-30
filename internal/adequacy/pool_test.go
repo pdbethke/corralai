@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -81,6 +82,11 @@ func TestPoolBuildsTreesFromTheGitUniverse(t *testing.T) {
 	if d.Trees != 3 || d.Note != "" {
 		t.Fatalf("disclosure = %+v", d)
 	}
+	// The shared dep dirs are the one thing the trees do NOT hold privately,
+	// so the disclosure has to name them even on a healthy pool.
+	if !reflect.DeepEqual(d.Shared, []string{".venv"}) {
+		t.Errorf("disclosure Shared = %q, want [.venv]", d.Shared)
+	}
 	for _, tree := range p.treeRoots() {
 		mustExist(t, filepath.Join(tree, "a.py"))
 		mustExist(t, filepath.Join(tree, "untracked.py"))
@@ -96,6 +102,9 @@ func TestPoolOfOneIsTheCheckoutItself(t *testing.T) {
 	p, d, _ := NewWorkspacePool(context.Background(), root, 1, time.Minute)
 	if d.Trees != 1 || d.Note != "" || len(p.treeRoots()) != 1 || p.treeRoots()[0] != root {
 		t.Errorf("n=1 must run on the checkout with no copy: %+v %v", d, p.treeRoots())
+	}
+	if d.Shared != nil {
+		t.Errorf("a pool of one links nothing, so Shared must be nil: %q", d.Shared)
 	}
 }
 
@@ -143,12 +152,59 @@ func TestPoolConcurrentRunsNeverObserveAnotherMutant(t *testing.T) {
 	}
 }
 
+// Enumerate goes through the SAME applyFiles/restore ledger a mutant run
+// does, so it must borrow a tree too: an enumeration sharing tree 0 with an
+// in-flight RunTest would interleave two ledgers on one checkout. Two trees,
+// many of each call, so contention is guaranteed.
+func TestPoolEnumerateNeverSharesATreeWithAConcurrentRun(t *testing.T) {
+	root := newGitRepo(t, map[string]string{"a.py": "x=0\n"}, nil)
+	p, d, err := NewWorkspacePool(context.Background(), root, 2, time.Minute)
+	if err != nil || d.Trees != 2 {
+		t.Fatalf("pool: %+v %v", d, err)
+	}
+	defer p.Close()
+	var wg sync.WaitGroup
+	errs := make(chan error, 32)
+	for i := 1; i <= 8; i++ {
+		wg.Add(2)
+		go func(i int) {
+			defer wg.Done()
+			ok, rerr := p.RunTest(context.Background(), map[string]string{"a.py": fmt.Sprintf("x=%d\n", i)},
+				[]string{"sh", "-c", fmt.Sprintf(`sleep 0.05; [ "$(cat a.py)" = "x=%d" ]`, i)})
+			if rerr != nil || !ok {
+				errs <- fmt.Errorf("run %d: ok=%v err=%v", i, ok, rerr)
+			}
+		}(i)
+		go func(i int) {
+			defer wg.Done()
+			want := fmt.Sprintf("enum=%d\n", i)
+			out, eerr := p.Enumerate(context.Background(), map[string]string{"a.py": want},
+				[]string{"sh", "-c", "sleep 0.05; cat a.py"})
+			if eerr != nil {
+				errs <- fmt.Errorf("enumerate %d: %v", i, eerr)
+			} else if out != want {
+				errs <- fmt.Errorf("enumerate %d saw another run's file: %q, want %q", i, out, want)
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for e := range errs {
+		t.Error(e)
+	}
+	for _, tree := range p.treeRoots() {
+		if b, _ := os.ReadFile(filepath.Join(tree, "a.py")); string(b) != "x=0\n" {
+			t.Errorf("%s not restored: %q", tree, b)
+		}
+	}
+}
+
 func TestPoolTreeEnvIsPerTree(t *testing.T) {
 	root := newGitRepo(t, map[string]string{"a.py": "x=0\n"}, nil)
 	p, _, _ := NewWorkspacePool(context.Background(), root, 2, time.Minute,
 		WithTreeEnv(func(tree string) []string { return []string{"CORRAL_TREE=" + tree} }))
 	defer p.Close()
-	ok, err := p.RunTest(context.Background(), nil, []string{"sh", "-c", `[ "$CORRAL_TREE" = "$PWD" ]`})
+	ok, err := p.RunTest(context.Background(), nil, []string{"sh", "-c", `[ "$CORRAL_TREE" = "$(pwd -P)" ]`})
 	if err != nil || !ok {
 		t.Errorf("the run must see ITS tree in the env: ok=%v err=%v", ok, err)
 	}

@@ -22,7 +22,20 @@ import (
 // claims nothing about the substrate it ran on.
 type Disclosure struct {
 	Trees int    // 1 when downgraded
-	Note  string // "" when Trees > 1; otherwise WHY
+	Note  string // "" when Trees > 1; otherwise WHY the downgrade happened
+	// Shared names the dependency directories (in symlinkedDepDirs order)
+	// that exist at the checkout and were SYMLINKED into every tree rather
+	// than copied. It is populated whenever such links were made — including
+	// on a healthy Trees > 1 pool — and is nil for a pool of one, which links
+	// nothing because it runs on the checkout itself.
+	//
+	// It is disclosure, not decoration: these directories are the one thing
+	// the trees do NOT hold privately. A suite that writes into its own
+	// .venv/node_modules/.tox during a run is writing through a shared link
+	// into the operator's real checkout, and that is a channel between trees
+	// the isolation argument otherwise rules out. The report has to be able
+	// to say which ones they were.
+	Shared []string
 }
 
 // maxUniverseBytes bounds the checkout a pool is willing to copy N times.
@@ -60,7 +73,32 @@ type WorkspacePool struct {
 	// temps are the directories Close removes. Empty for a pool of one: root
 	// belongs to the operator and is NEVER removed.
 	temps []string
+
+	// root, timeout and opts are the construction inputs, retained so a
+	// caller that has to DOWNGRADE mid-flight (a copy went bad, the operator
+	// capped concurrency) can rebuild a one-tree pool on the same checkout
+	// with the same configuration instead of threading all three through its
+	// own call stack alongside the pool.
+	root    string
+	timeout time.Duration
+	opts    []WorkspaceOption
 }
+
+// The pool must be substitutable for a WorkspaceRunner everywhere one is used
+// today, so every interface a caller may assert is asserted here at COMPILE
+// time — a missing method would otherwise degrade silently at run time (a
+// failed type assertion in advpool costs the test-writer its compiler output;
+// a missing Enumerate costs reposcan its coverage pre-flight) rather than
+// failing the build.
+var (
+	_ Jail       = (*WorkspacePool)(nil)
+	_ Enumerator = (*WorkspacePool)(nil)
+	// advpool's verboseJail is unexported, so the method set is asserted
+	// against a local interface literal of the identical shape.
+	_ interface {
+		RunTestVerbose(ctx context.Context, files map[string]string, cmd []string) (bool, string, error)
+	} = (*WorkspacePool)(nil)
+)
 
 // NewWorkspacePool builds a pool of n private trees copied from the checkout
 // at root, each a WorkspaceRunner bounded by timeout and configured with
@@ -92,7 +130,9 @@ func NewWorkspacePool(ctx context.Context, root string, n int, timeout time.Dura
 	treeEnv, plugEnv := probe.treeEnv, probe.perRunEnv
 
 	single := func(note string) (*WorkspacePool, Disclosure, error) {
-		p := newPool([]string{root}, nil, timeout, treeEnv, plugEnv, opts)
+		// A pool of one links nothing — it IS the checkout — so Shared stays
+		// nil no matter what dep dirs are present.
+		p := newPool(root, []string{root}, nil, timeout, treeEnv, plugEnv, opts)
 		return p, Disclosure{Trees: 1, Note: note}, nil
 	}
 
@@ -111,6 +151,7 @@ func NewWorkspacePool(ctx context.Context, root string, n int, timeout time.Dura
 	}
 
 	var temps []string
+	var linked []string
 	cleanup := func() {
 		for _, d := range temps {
 			_ = os.RemoveAll(d)
@@ -127,18 +168,20 @@ func NewWorkspacePool(ctx context.Context, root string, n int, timeout time.Dura
 			return single("could not create a tree: " + terr.Error())
 		}
 		temps = append(temps, tree)
-		if cerr := copyTree(root, tree, universe); cerr != nil {
+		shared, cerr := copyTree(root, tree, universe)
+		if cerr != nil {
 			cleanup()
 			return single("could not copy the checkout: " + cerr.Error())
 		}
+		linked = shared // identical for every tree: same root, same probe
 	}
-	return newPool(temps, temps, timeout, treeEnv, plugEnv, opts), Disclosure{Trees: n}, nil
+	return newPool(root, temps, temps, timeout, treeEnv, plugEnv, opts), Disclosure{Trees: n, Shared: linked}, nil
 }
 
 // newPool wires one runner per tree. temps is the subset of trees Close may
 // remove (nil when the single "tree" is the operator's own checkout).
-func newPool(trees, temps []string, timeout time.Duration, treeEnv func(string) []string, plugEnv func() ([]string, func()), opts []WorkspaceOption) *WorkspacePool {
-	p := &WorkspacePool{free: make(chan *WorkspaceRunner, len(trees)), temps: temps}
+func newPool(root string, trees, temps []string, timeout time.Duration, treeEnv func(string) []string, plugEnv func() ([]string, func()), opts []WorkspaceOption) *WorkspacePool {
+	p := &WorkspacePool{free: make(chan *WorkspaceRunner, len(trees)), temps: temps, root: root, timeout: timeout, opts: opts}
 	for _, tree := range trees {
 		// The composed per-run env is appended LAST so it wins over any
 		// WithPerRunEnv already in opts — that option's func is not dropped,
@@ -237,33 +280,35 @@ func gitUniverse(root string) (paths []string, size int64, err error) {
 }
 
 // copyTree materialises one private tree: the dep-dir symlinks first, then
-// every universe file copied in with its mode preserved.
+// every universe file copied in with its mode preserved. It returns the
+// dep dirs it actually linked, which is what Disclosure.Shared reports.
 //
 // Symlinks go first on purpose. A path under a symlinked dep dir must never
 // be written through it — that would write into the ORIGINAL checkout, which
 // is the one thing a private tree exists to prevent — so anything in the
 // universe that lands under one of them is skipped, and skipping requires
 // knowing which links exist.
-func copyTree(root, tree string, universe []string) error {
+func copyTree(root, tree string, universe []string) (shared []string, err error) {
 	linked := make(map[string]bool)
 	for _, d := range symlinkedDepDirs {
-		if _, err := os.Lstat(filepath.Join(root, d)); err != nil {
+		if _, lerr := os.Lstat(filepath.Join(root, d)); lerr != nil {
 			continue
 		}
-		if err := os.Symlink(filepath.Join(root, d), filepath.Join(tree, d)); err != nil {
-			return fmt.Errorf("adequacy: linking %s into %s: %w", d, tree, err)
+		if serr := os.Symlink(filepath.Join(root, d), filepath.Join(tree, d)); serr != nil {
+			return nil, fmt.Errorf("adequacy: linking %s into %s: %w", d, tree, serr)
 		}
 		linked[d] = true
+		shared = append(shared, d)
 	}
 	for _, rel := range universe {
 		if top, _, ok := strings.Cut(filepath.ToSlash(rel), "/"); ok && linked[top] {
 			continue
 		}
-		if err := copyFile(filepath.Join(root, filepath.FromSlash(rel)), filepath.Join(tree, filepath.FromSlash(rel))); err != nil {
-			return err
+		if cerr := copyFile(filepath.Join(root, filepath.FromSlash(rel)), filepath.Join(tree, filepath.FromSlash(rel))); cerr != nil {
+			return nil, cerr
 		}
 	}
-	return nil
+	return shared, nil
 }
 
 // copyFile copies src to dst, creating dst's parents and giving dst src's
@@ -336,12 +381,22 @@ func (p *WorkspacePool) RunTestVerbose(ctx context.Context, files map[string]str
 	return r.RunTestVerbose(ctx, files, testCmd)
 }
 
-// Enumerate runs on tree 0 WITHOUT borrowing. Enumeration is a pre-flight
-// (list the suite's tests, read a coverage profile) that happens before any
-// mutant is scored, so there is nothing to contend with; borrowing here would
-// instead let an enumeration block behind sixteen mutant runs.
+// Enumerate borrows a tree exactly as RunTest does, then runs there.
+//
+// Borrowing is NOT optional even though enumeration is nominally a pre-flight.
+// Enumerate goes through the identical applyFiles/restore ledger a mutant run
+// does, so an enumeration sharing a tree with an in-flight RunTest interleaves
+// two ledgers on one checkout — each restoring what it believes the original
+// bytes were — which is precisely the false-kill this whole type exists to
+// prevent. "Nothing else is running right now" is a claim about the caller,
+// not a property of this type, and it is not one Enumerate can check.
 func (p *WorkspacePool) Enumerate(ctx context.Context, files map[string]string, cmd []string) (string, error) {
-	return p.runners[0].Enumerate(ctx, files, cmd)
+	r, release, err := p.borrow(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer release()
+	return r.Enumerate(ctx, files, cmd)
 }
 
 // Verify pre-flights every tree, so a copy that failed to materialise is

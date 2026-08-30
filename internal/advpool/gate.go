@@ -620,7 +620,12 @@ func DevCommandArgv(sel golang.Selection, langName string, base []string, devTes
 // pre-per-mutant path rather than a second, subtly different one.
 func DevCommandFor(rs RunSpec) adequacy.CommandFor {
 	sel := rs.Selection
-	if len(sel.Lines) == 0 || len(sel.Tests) == 0 {
+	// Evidence that cannot narrow the tests that will actually run is no
+	// evidence: a whole-suite run, a v1-shaped Selection, an uncovered file,
+	// or one whose node ids were collapsed to containing files. Each of them
+	// must grade with the file's one shared command — today's behaviour,
+	// byte for byte — rather than per mutant against a lookup that misses.
+	if !sel.NarrowableByLine() {
 		return nil
 	}
 	ts := selectorFor(rs.Lang, sel)

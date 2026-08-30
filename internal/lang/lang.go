@@ -257,6 +257,26 @@ type Selection struct {
 	Static []LineRange
 }
 
+// NarrowableByLine reports whether the Selection's line evidence can actually
+// narrow the tests it will run: at least one of the tests that WILL run has
+// recorded lines. It is false for evidence that carried no lines at all, and
+// — the case that made it a method rather than a `len(Lines) > 0` check at
+// each caller — for a selection whose Tests were collapsed to containing
+// FILES while Lines stayed keyed by node id. Looking a file path up in a
+// node-id map misses every time, which reads as "no test reaches this span"
+// when the truth is "this evidence cannot be narrowed".
+func (s Selection) NarrowableByLine() bool {
+	if len(s.Lines) == 0 || len(s.Tests) == 0 {
+		return false
+	}
+	for _, t := range s.Tests {
+		if len(s.Lines[t]) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // LineRange is a closed, 1-based range of source lines.
 type LineRange struct{ Start, End int }
 

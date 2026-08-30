@@ -1214,7 +1214,18 @@ func (pyPlugin) Select(evidence []byte, repoRoot, codePath, testPath string, tes
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
-	ids = collapseToFilesIfTooLong(ids)
+	ids, collapsed := collapseToFilesIfTooLong(ids)
+	if collapsed {
+		// The line evidence is keyed by NODE ID, and the collapse just
+		// discarded every node id in favour of the containing files. Keeping
+		// it would leave ForSpan looking up ids that are no longer in Tests,
+		// matching nothing, and labelling every mutant "unreached" — a
+		// positive claim that no test reaches those lines, for a file that
+		// was not narrowed at all. Evidence in a shape that cannot be
+		// narrowed is no line evidence: dropping it reproduces the per-file
+		// behaviour byte for byte.
+		sel.Lines, sel.Static = nil, nil
+	}
 	sel.Tests = ids
 	sel.Cmd = append(append([]string{}, sel.Base...), ids...)
 	return sel, nil
@@ -1224,9 +1235,12 @@ func (pyPlugin) Select(evidence []byte, repoRoot, codePath, testPath string, tes
 // containing files when the sorted argv would exceed selectionMaxArgv —
 // still evidence-derived, just a coarser (superset) selection than the
 // individual node ids would give. A no-op when ids already fits.
-func collapseToFilesIfTooLong(ids []string) []string {
+//
+// The bool says whether the collapse HAPPENED, because it invalidates
+// anything else keyed by node id (see Select).
+func collapseToFilesIfTooLong(ids []string) ([]string, bool) {
 	if argvLen(ids) <= selectionMaxArgv {
-		return ids
+		return ids, false
 	}
 	files := map[string]bool{}
 	for _, id := range ids {
@@ -1237,7 +1251,7 @@ func collapseToFilesIfTooLong(ids []string) []string {
 		out = append(out, f)
 	}
 	sort.Strings(out)
-	return out
+	return out, true
 }
 
 // ForSpan narrows sel to the tests whose recorded coverage reaches span. See
@@ -1246,7 +1260,11 @@ func (pyPlugin) ForSpan(sel Selection, span LineRange) ([]string, []string, stri
 	file := func(rule string) ([]string, []string, string) {
 		return append([]string{}, sel.Cmd...), append([]string{}, sel.Tests...), rule
 	}
-	if span.IsZero() || len(sel.Lines) == 0 {
+	// Never "unreached" for evidence that cannot be narrowed at all: a
+	// selection whose Tests were collapsed to files still carries Lines
+	// keyed by node id, and every lookup below would miss. See
+	// Selection.NarrowableByLine.
+	if span.IsZero() || !sel.NarrowableByLine() {
 		return file(SpanRuleFile)
 	}
 	for _, s := range sel.Static {
@@ -1267,10 +1285,16 @@ func (pyPlugin) ForSpan(sel Selection, span LineRange) ([]string, []string, stri
 		return file(SpanRuleUnreached)
 	}
 	sort.Strings(ids)
-	ids = collapseToFilesIfTooLong(ids)
+	ids, _ = collapseToFilesIfTooLong(ids)
 	base := sel.Base
 	if base == nil {
-		base = sel.Cmd[:len(sel.Cmd)-len(sel.Tests)] // Cmd is Base + Tests by construction
+		// Cmd is Base + Tests by construction. A Selection that does not
+		// hold that runs the file selection rather than slicing a command
+		// apart on an assumption it just failed.
+		if len(sel.Cmd) < len(sel.Tests) {
+			return file(SpanRuleFile)
+		}
+		base = sel.Cmd[:len(sel.Cmd)-len(sel.Tests)]
 	}
 	return append(append([]string{}, base...), ids...), ids, SpanRuleLines
 }

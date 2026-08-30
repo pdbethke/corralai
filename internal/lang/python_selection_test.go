@@ -152,7 +152,7 @@ func TestPythonSelectFallsBackToFilesWhenArgvWouldBeTooLong(t *testing.T) {
 		ctxs = append(ctxs, fmt.Sprintf(`"tests/test_big.py::test_%04d_%s"`, i, strings.Repeat("x", 20)))
 	}
 	ev := `{"format":"corral-selection-2","tests":3000,"files":{` +
-		`"pkg/calc.py":{"tests":[` + strings.Join(ctxs, ",") + `],"lines":{},"static":[]},` +
+		`"pkg/calc.py":{"tests":[` + strings.Join(ctxs, ",") + `],"lines":{"0":[[2,2]],"1":[[6,6]]},"static":[[1,1]]},` +
 		`"tests/test_big.py":{"tests":[` + ctxs[0] + `],"lines":{},"static":[]}}}`
 	sel, err := pyPlugin{}.Select([]byte(ev), "", "pkg/calc.py", "tests/test_big.py", []string{"pytest"})
 	if err != nil {
@@ -160,6 +160,15 @@ func TestPythonSelectFallsBackToFilesWhenArgvWouldBeTooLong(t *testing.T) {
 	}
 	if !reflect.DeepEqual(sel.Tests, []string{"tests/test_big.py"}) {
 		t.Errorf("Tests = %v, want the containing FILE (a superset, still evidence-derived)", sel.Tests)
+	}
+	// The line evidence is keyed by NODE ID, and the collapse just threw
+	// every node id away. Keeping it would leave ForSpan looking up ids that
+	// are no longer in Tests, finding nothing, and calling every mutant
+	// "unreached" — a positive coverage claim about a file that was not
+	// narrowed at all. Evidence in a shape that cannot be narrowed is no
+	// line evidence.
+	if sel.Lines != nil || sel.Static != nil {
+		t.Errorf("a collapsed selection must carry NO line evidence: Lines=%v Static=%v", sel.Lines, sel.Static)
 	}
 }
 
@@ -406,5 +415,36 @@ func TestForSpanArgvFallbackStillApplies(t *testing.T) {
 	_, tests, rule := pyPlugin{}.ForSpan(sel, LineRange{41, 42})
 	if rule != SpanRuleLines || len(tests) != 3 || tests[len(tests)-1] != "tests/test_big.py" {
 		t.Errorf("over the argv cap the subset collapses to files: %v", tests)
+	}
+}
+
+// A Selection whose Tests were collapsed to FILES still carries Lines keyed
+// by the node ids that no longer appear in Tests. ForSpan must read that as
+// "no line evidence" — never as "no test reaches this span", which is a
+// positive claim about coverage that gets signed into the verdict.
+func TestForSpanRefusesUnreachedWhenNoSelectedTestHasLines(t *testing.T) {
+	sel := spanSelection()
+	sel.Tests = []string{"tests/test_a.py", "tests/test_b.py"} // collapsed to files
+	sel.Cmd = append([]string{"python3", "-m", "pytest", "-q"}, sel.Tests...)
+	cmd, tests, rule := pyPlugin{}.ForSpan(sel, LineRange{41, 42})
+	if rule != SpanRuleFile {
+		t.Errorf("rule = %q, want %q — the ids in Lines are not the tests that will run", rule, SpanRuleFile)
+	}
+	if !reflect.DeepEqual(cmd, sel.Cmd) || !reflect.DeepEqual(tests, sel.Tests) {
+		t.Errorf("must run the file selection unchanged: cmd=%v tests=%v", cmd, tests)
+	}
+}
+
+// Cmd is Base + Tests by construction, and the nil-Base fallback slices Cmd
+// on that assumption. A Selection that does not hold it would slice out of
+// range (or, worse, silently cut the interpreter off the front), so the
+// fallback checks rather than trusts.
+func TestForSpanFileFallbackWhenCmdIsShorterThanTests(t *testing.T) {
+	sel := spanSelection()
+	sel.Base = nil
+	sel.Cmd = []string{"pytest"} // shorter than Tests: not Base+Tests
+	cmd, _, rule := pyPlugin{}.ForSpan(sel, LineRange{41, 42})
+	if rule != SpanRuleFile || !reflect.DeepEqual(cmd, sel.Cmd) {
+		t.Errorf("rule=%q cmd=%v, want the file selection unchanged", rule, cmd)
 	}
 }

@@ -57,6 +57,19 @@ func TestDevCommandForIsNilWithoutLineEvidence(t *testing.T) {
 	}
 }
 
+// A Selection whose node ids overflowed the argv cap is collapsed to test
+// FILES, and the line evidence — keyed by the node ids that no longer run —
+// can no longer narrow anything. The run must fall back to the file's shared
+// command rather than grade every mutant against a lookup that always misses.
+func TestDevCommandForIsNilForACollapsedSelection(t *testing.T) {
+	sel := lineSelection()
+	sel.Tests = []string{"tests/test_a.py"}
+	sel.Cmd = []string{"python3", "-m", "pytest", "-q", "tests/test_a.py"}
+	if f := DevCommandFor(RunSpec{Lang: "python", Selection: sel}); f != nil {
+		t.Errorf("collapsed selection must grade per FILE: got %+v", f(adequacy.Mutant{ID: "m", Span: lang.LineRange{Start: 41, End: 41}}))
+	}
+}
+
 // The driver prefers PerMutantScorer when the run carries line evidence,
 // and the per-mutant grading reaches the Verdict's mutant refs and stats.
 type recordingPerMutantScorer struct {

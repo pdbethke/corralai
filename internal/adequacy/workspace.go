@@ -343,11 +343,17 @@ func (w *WorkspaceRunner) RunTestVerbose(ctx context.Context, files map[string]s
 // "short test summary info", `go test`'s FAIL lines), so a run that printed
 // megabytes of trace still yields the half that can answer "which test".
 //
+// The cap is enforced AS THE BYTES ARRIVE (tailWriter), not by trimming a
+// buffer afterwards. This runs once per mutant, in every tree, concurrently;
+// buffering the whole run first held every byte a stack-trace-heavy suite
+// printed, dozens of times over, to return 64 KiB of it. See tailWriter's
+// own doc.
+//
 // Output rides along even on a non-nil error, exactly as RunTestVerbose does.
 func (w *WorkspaceRunner) RunTestDetailed(ctx context.Context, files map[string]string, testCmd []string) (bool, []byte, error) {
-	var out bytes.Buffer
-	ok, err := w.applyRunRestore(ctx, files, testCmd, &out, &out)
-	return ok, tailBytes(out.Bytes(), maxDetailedOutput), err
+	out := newTailWriter(maxDetailedOutput)
+	ok, err := w.applyRunRestore(ctx, files, testCmd, out, out)
+	return ok, out.Bytes(), err
 }
 
 // applyRunRestore is the single implementation of this runner's

@@ -640,15 +640,14 @@ func scanModelCallTotals(results []reposcan.FileResult) []advpool.ModelCall {
 }
 
 // recordCertifyRepoScan writes scan and files to st in one transaction.
-// st is opened (and later closed) by the caller — BEFORE the scan even runs
-// — so the identical handle also serves reposcan.Scan's verdict cache during
-// the run (see runCertifyRepo and newLedgerCache). Opening it here, as this
-// function used to, would have meant two separate handles on the same DuckDB
-// file within one process: one for the cache's reads during the scan, a
-// second opened fresh at the very end for this write. Every error case (a
-// failed write) is returned unchanged to the caller, which is responsible
-// for the fail-open handling — this function does not print anything
-// itself, so it stays testable as a pure function of its inputs.
+// st is opened, and closed, by the caller AROUND THIS CALL — not held across
+// the scan. DuckDB is single-writer per file, and a handle held for the whole
+// run locked the operator's ledger out of `corral scans` for the duration of
+// every audit (see runCertifyRepo's DSN resolution, and ledgerCache, which
+// opens per lookup for the same reason). Every error case (a failed write) is
+// returned unchanged to the caller, which is responsible for the fail-open
+// handling — this function does not print anything itself, so it stays
+// testable as a pure function of its inputs.
 //
 // scan_mutants is written separately, AFTER scan+files have already
 // committed and the scan id is known. A RecordMutants failure is logged and
@@ -784,8 +783,17 @@ func spreadMax(s *advpool.TestsPerMutantSpread) *int {
 // modelcorr.Pair.KappaDefined's doc): a caller storing Kappa unconditionally
 // would write a fabricated 0 for exactly the case modelcorr invented the
 // flag to keep distinct from a real zero.
+//
+// And JACCARD stays nil unless the pair says Sufficient. modelcorr.Compare
+// ZEROES Jaccard when the survivor union is below MinSurvivorUnion, and
+// Pair.Sufficient's own doc is explicit that callers MUST check it first.
+// Storing that zero would file "the union was too small for the coefficient
+// to mean anything" as "the two writers missed nothing in common" — the
+// strongest possible claim in the opposite direction, in a column a
+// cross-repo query averages. Sufficient itself is still recorded, so "we
+// compared, and the sample was too small" stays legible.
 func challengerJaccard(p *modelcorr.Pair) *float64 {
-	if p == nil {
+	if p == nil || !p.Sufficient {
 		return nil
 	}
 	v := p.Jaccard

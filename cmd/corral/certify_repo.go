@@ -748,50 +748,42 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	// Opened here, BEFORE the scan, so ONE handle serves two purposes: it is
-	// the verdict cache's read path during reposcan.Scan below (see
-	// newLedgerCache), and it is the ledger's write path in the --record
-	// block at the end of this function. Opening it only at the end, as this
-	// used to, would mean two separate handles on the same DuckDB file within
-	// one process — the cache would have nothing to read from during the
-	// scan it exists to speed up.
+	// The ledger is opened PER OPERATION, never held across the scan.
 	//
-	// This does NOT change --record's own meaning or when recording happens:
-	// the store is opened only when *recordFlag is set, exactly as it was
-	// opened only inside the (now-shorter) --record block before. --record-db
-	// alone still records nothing, silently — that behaviour is entirely
-	// gated by *recordFlag below, unchanged.
+	// DuckDB is single-writer per file. This used to open one handle before
+	// the scan and hold it until the final write, so for an entire hours-long
+	// audit a concurrent `corral scans` against the same (default) DSN failed
+	// with "Conflicting lock is held" — the record of the audits already paid
+	// for went dark for the duration of the next one. Now the verdict cache
+	// opens and closes around each lookup (see ledgerCache.withStore) and the
+	// recording sequence below opens and closes around its own writes.
 	//
-	// One consequence is correct but surprising, so it is stated here rather
-	// than discovered: the handle is now held for the WHOLE scan, not just the
-	// instant of the final write. DuckDB is single-process-exclusive on a
-	// file, so during a long `--record` audit a concurrent `corral scans`
-	// against the same (default) DSN cannot open the ledger at all — see
-	// openScanStore, which already says so in its error. Nothing is lost; the
-	// reader simply has to wait, or be pointed at a copy.
+	// The DSN is still RESOLVED here, and probed once by opening and
+	// immediately closing it: an unopenable ledger must be reported, and
+	// reporting it at the end of a paid scan (where it was always reported)
+	// is too late to be useful without also saying so now. --record-db alone
+	// still records nothing, silently — that behaviour is gated entirely by
+	// *recordFlag, unchanged.
 	//
 	// An unopenable DSN does not fail the scan: scanStoreErr is carried
 	// forward and reported in the --record block at the bottom, in the same
-	// place and the same words a write failure has always been reported —
-	// this is not a new failure path, just the existing one's error surfacing
-	// earlier in the run than the write itself does.
-	var scanStore *scanstore.Store
+	// place and the same words a write failure has always been reported.
+	var ledgerDSN string
 	var scanStoreErr error
 	if *recordFlag {
-		dsn := *recordDSNFlag
-		if dsn == "" {
-			dsn = defaultScanDSN()
+		ledgerDSN = *recordDSNFlag
+		if ledgerDSN == "" {
+			ledgerDSN = defaultScanDSN()
 		}
-		st, err := scanstore.Open(dsn)
+		st, err := scanstore.Open(ledgerDSN)
 		if err != nil {
 			scanStoreErr = err
-		} else {
-			scanStore = st
-			// Deferred here, not in the --record block: this function has
-			// several early-return paths above --record's own site (the
-			// argvErr refusal just above, for one), and every one of them
-			// must still release the DuckDB handle.
-			defer func() { _ = scanStore.Close() }()
+			// A DSN that cannot be opened must not be handed to the cache:
+			// every lookup would pay an open that cannot succeed.
+			ledgerDSN = ""
+		} else if cerr := st.Close(); cerr != nil {
+			scanStoreErr = cerr
+			ledgerDSN = ""
 		}
 	}
 
@@ -837,14 +829,14 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// ex is non-nil here: it is constructed on every non-dry-run path above,
 	// and the dry run returned before this point.
 	//
-	// scanStore was opened above, BEFORE this call, specifically so it could
-	// serve as the cache's read path here: newLedgerCache(nil) (no --record,
-	// or an unopenable DSN) already misses every key, so this needs no extra
-	// nil-guard — the cache is simply inactive for the run.
+	// The cache is addressed by DSN and opens the ledger only for the instant
+	// of a lookup: newLedgerCache("") (no --record, or an unopenable DSN)
+	// misses every key, so this needs no extra guard — the cache is simply
+	// inactive for the run.
 	auditCtx, stopSignals := auditContext(stderr)
 	defer stopSignals()
 
-	results = reposcan.Scan(auditCtx, jobs, ex, newLedgerCache(scanStore), workers)
+	results = reposcan.Scan(auditCtx, jobs, ex, newLedgerCache(ledgerDSN), workers)
 	rep := reposcan.Aggregate(*owner, cfg.Repo, *commit, totalFiles, len(cands), results, excl)
 
 	// The diff selected zero candidates: a docs-only (or no-paired-test-only)
@@ -994,11 +986,23 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			// from an earlier point in the run.
 			fmt.Fprintf(stderr, "corral certify --repo: scan ledger NOT written: %v\n", scanStoreErr)
 		} else {
-			id, err := recordCertifyRepoScan(scanStore, scan, files, mutants, modelCallRows, eventRows, stderr)
+			// Opened for THIS write and closed immediately: the whole point
+			// of not holding the handle across the scan (see the DSN
+			// resolution above) is that the ledger is readable by anything
+			// else in between.
+			st, err := scanstore.Open(ledgerDSN)
 			if err != nil {
 				fmt.Fprintf(stderr, "corral certify --repo: scan ledger NOT written: %v\n", err)
 			} else {
-				scanID = id
+				id, rerr := recordCertifyRepoScan(st, scan, files, mutants, modelCallRows, eventRows, stderr)
+				if cerr := st.Close(); cerr != nil && rerr == nil {
+					fmt.Fprintf(stderr, "corral certify --repo: scan %d recorded, but closing the ledger failed: %v\n", id, cerr)
+				}
+				if rerr != nil {
+					fmt.Fprintf(stderr, "corral certify --repo: scan ledger NOT written: %v\n", rerr)
+				} else {
+					scanID = id
+				}
 			}
 		}
 	}
@@ -1042,8 +1046,8 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			// ledger permanently disagrees with the pushed row about whether
 			// this scan produced a statement. Fail-open like every other
 			// write in this sequence.
-			if scanID != 0 && scanStore != nil {
-				if uerr := scanStore.SetStatementSHA256(context.Background(), scanID, sha); uerr != nil {
+			if scanID != 0 && ledgerDSN != "" {
+				if uerr := stampStatementSHA256(ledgerDSN, scanID, sha); uerr != nil {
 					fmt.Fprintf(stderr, "corral certify --repo: scan %d recorded, but its statement_sha256 was NOT stamped: %v\n", scanID, uerr)
 				}
 			}
@@ -3853,6 +3857,23 @@ func warehouseRowsSHA256(b auditpush.Bundle) (string, error) {
 	}
 	sum := sha256.Sum256(js)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+// stampStatementSHA256 opens the ledger, stamps one scan's statement hash,
+// and closes it again — one more operation-scoped handle, for the same
+// reason as every other one in this function: DuckDB is single-writer per
+// file, and a reader must never have to wait out an audit to see the audits
+// that came before it.
+func stampStatementSHA256(dsn string, scanID int64, sha string) error {
+	st, err := scanstore.Open(dsn)
+	if err != nil {
+		return err
+	}
+	if uerr := st.SetStatementSHA256(context.Background(), scanID, sha); uerr != nil {
+		_ = st.Close()
+		return uerr
+	}
+	return st.Close()
 }
 
 // pushBundle appends one recorded scan, at all five grains, to a warehouse

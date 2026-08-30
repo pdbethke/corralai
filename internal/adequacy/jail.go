@@ -307,6 +307,29 @@ func (j bwrapJail) RunTestVerbose(ctx context.Context, files map[string]string, 
 	return res.ExitCode == 0, res.Output, nil
 }
 
+// RunTestDetailed is RunTestVerbose's byte-returning sibling: the
+// adequacy.DetailedJail contract the scorer uses to name the test that killed
+// a mutant (killed_by).
+//
+// The jail already KEEPS the run's output — RunTestVerbose returns the same
+// bytes — so implementing this costs nothing: the same run, the same exit
+// code, the same verdict. Without it, `--substrate jail` recorded NULL in
+// killed_by for every mutant it killed, and a column that exists for one
+// substrate out of two is a column no cross-repo query can trust.
+//
+// Capped to the LAST maxDetailedOutput: a runner puts its failure summary at
+// the end, which is the half that can answer "which test".
+//
+// Output rides along even on a non-nil error, exactly as RunTestVerbose does.
+func (j bwrapJail) RunTestDetailed(ctx context.Context, files map[string]string, testCmd []string) (bool, []byte, error) {
+	res, err := j.runInJail(ctx, files, testCmd)
+	out := tailBytes([]byte(res.Output), maxDetailedOutput)
+	if err != nil {
+		return false, out, err
+	}
+	return res.ExitCode == 0, out, nil
+}
+
 // Enumerate is RunTest's stdout-returning sibling: same disposable
 // workspace/perms/anti-traversal handling (writeWorkspace), but reports
 // sandbox.Result.Output instead of collapsing the run to a bool. An empty

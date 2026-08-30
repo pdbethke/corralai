@@ -836,6 +836,17 @@ func nullableString(v string) any {
 	return v
 }
 
+// nullIfEmptyString binds SQL NULL for an empty string. "" and "this ledger
+// does not say" are different answers, and an empty string is a VALUE: a
+// query filtering `killed_by <> ”` and one filtering `killed_by IS NOT NULL`
+// must agree, and they only can if nothing ever writes the empty string.
+func nullIfEmptyString(v string) any {
+	if v == "" {
+		return nil
+	}
+	return v
+}
+
 // nullablePositive binds SQL NULL for a count that is only ever positive
 // when something actually recorded it. A stored 0 is a NUMBER — a later
 // query averages it, compares it and ranks on it — where NULL is the only
@@ -1473,7 +1484,13 @@ func (s *Store) RecordMutants(ctx context.Context, ms []Mutant) error {
 			// — and today it is the only state: advpool.MutantRef carries no
 			// span, so nothing produces one. Line 0 does not exist, and a
 			// reader jumping to it would be sent to the top of the file.
-			m.DurationMillis, m.KilledBy, nullablePositive(m.SpanStart), nullablePositive(m.SpanEnd), m.ProvenByAuthoredAlone,
+			// killed_by is NULL, never '': a mutant killed by a run whose
+			// output nothing could parse — or by a TIMEOUT, where no test
+			// reported anything at all — has no killer to name, and an empty
+			// string is a VALUE a query counts as "we know who caught it".
+			// Both producers' comments already said NULL; only the bind did
+			// not.
+			m.DurationMillis, nullIfEmptyString(m.KilledBy), nullablePositive(m.SpanStart), nullablePositive(m.SpanEnd), m.ProvenByAuthoredAlone,
 		); err != nil {
 			return fmt.Errorf("scanstore: RecordMutants: insert %s/%s: %w", m.Path, m.MutantID, err)
 		}

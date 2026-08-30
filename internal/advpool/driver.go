@@ -654,6 +654,17 @@ type Verdict struct {
 	// callers must still check Pair.Sufficient before reading Jaccard and
 	// Pair.KappaDefined before reading Kappa, exactly as modelcorr documents.
 	ChallengerAgreement *modelcorr.Pair
+	// PromptShape discloses what a mutant-generator shard actually SAW:
+	// "chunk" when every shard of this run showed only its own symbols'
+	// bodies (see advpool's shardCode), "file" when even one shard fell back
+	// to the whole file (a shard whose symbols never resolved to a signature,
+	// or whose extractor never populated Lines), and "" — never fabricated —
+	// on a run that predates this disclosure (an unsharded whole-file run
+	// also reads "file": the model saw the whole file either way, which is
+	// the same claim). A caller must never guess this from RegionsTotal or
+	// any other field; it is set once, here, from the SAME shard-by-shard
+	// decision the render actually made.
+	PromptShape string `json:"prompt_shape,omitempty"`
 }
 
 // RunState is the observable status of one run: Converged is true once the run
@@ -979,6 +990,13 @@ type runState struct {
 	// should read like the former. Empty/absent for an unsharded run's single
 	// bare-keyed task, which falls back to its Title.
 	shardSymbols map[string][]string
+	// promptShape is Verdict.PromptShape, computed once at StartRun from the
+	// SAME ShardSymbols call BuildDAG made internally (mirroring
+	// shardSymbols/shardStats): "chunk" when every shard's signatures were
+	// signaturesChunkable, "file" when any fell back or the run had no
+	// shards at all (PresetMutants replays a fixed exam and generates
+	// nothing, so it stays "").
+	promptShape string
 
 	// shardStats is per-shard generation outcome, keyed by shard index — the
 	// metrics substrate. Recorded per shard and NEVER summed: summing collapses
@@ -1361,6 +1379,26 @@ func (d *Driver) StartRun(missionID int64, rs RunSpec, sigs []repoindex.Signatur
 		}
 	}
 
+	// promptShape is the disclosure a signed verdict carries about what a
+	// generator shard actually SAW — "chunk" only when EVERY shard's own
+	// signatures resolved to a real Lines span (ShardIsChunked, the same
+	// rule renderMutantGeneratorShard applied when it actually rendered),
+	// "file" the moment any shard fell back, and "" (never fabricated) for
+	// a preset run that never dispatched a generator seat at all.
+	promptShape := ""
+	if rs.PresetMutants == nil {
+		promptShape = "file"
+		if len(shards) > 0 {
+			promptShape = "chunk"
+			for _, sh := range shards {
+				if !ShardIsChunked(sigs, sh) {
+					promptShape = "file"
+					break
+				}
+			}
+		}
+	}
+
 	// testComplexity is the dev suite's own complexity — see the runState
 	// field comment. A parse failure here (an unsupported/unparseable dev
 	// test) is not fatal to the run: the conditioning axis is best-effort
@@ -1378,6 +1416,7 @@ func (d *Driver) StartRun(missionID int64, rs RunSpec, sigs []repoindex.Signatur
 		shardRetries:   map[string]int{},
 		droppedKeys:    map[string]bool{},
 		shardSymbols:   shardSymbols,
+		promptShape:    promptShape,
 		shardStats:     stats,
 		shadowStats:    shadowStats,
 		testComplexity: testComplexity,
@@ -2429,6 +2468,7 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	v := aggregate(run.rs, d.Assign, run.devKillRate, run.mutantsTotal, len(run.devSurvivors), run.provenMissed,
 		criticFindings, d.Threshold, false, run.testWriterFailed, run.poolTestUnsound)
 	v.RegionsTotal = run.regionsTotal
+	v.PromptShape = run.promptShape
 	v.RegionsProbed = run.regionsProbed
 	v.DroppedRegions = run.droppedRegions
 	// The evidence behind ProvenMissed rides onto the verdict beside the count
@@ -2863,6 +2903,7 @@ func (d *Driver) timeoutVerdict(run *runState) Verdict {
 	v.RegionsTotal = run.regionsTotal
 	v.RegionsProbed = run.regionsProbed
 	v.DroppedRegions = run.droppedRegions
+	v.PromptShape = run.promptShape
 	v.ModelsByRole = map[string]string(d.Assign)
 	// A stalled run still spent everything it spent, and it is the run an
 	// operator most needs the clock for: "which phase was it sitting in when

@@ -214,13 +214,16 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 				// model_set is (reposcan.CanonicalKV), so a per-file role
 				// assignment is byte-comparable with it rather than a second,
 				// possibly-drifting serialization.
-				ModelsByRole:             reposcan.CanonicalKV(r.Verdict.ModelsByRole),
-				MutantsTotal:             r.Verdict.MutantsTotal,
-				RegionsTotal:             r.Verdict.RegionsTotal,
-				RegionsProbed:            r.Verdict.RegionsProbed,
-				DroppedRegions:           strings.Join(r.Verdict.DroppedRegions, ","),
-				VacuousFindings:          len(r.Verdict.VacuousFindings),
-				Status:                   r.Verdict.Status,
+				ModelsByRole:    reposcan.CanonicalKV(r.Verdict.ModelsByRole),
+				MutantsTotal:    r.Verdict.MutantsTotal,
+				RegionsTotal:    r.Verdict.RegionsTotal,
+				RegionsProbed:   r.Verdict.RegionsProbed,
+				DroppedRegions:  strings.Join(r.Verdict.DroppedRegions, ","),
+				VacuousFindings: len(r.Verdict.VacuousFindings),
+				Status:          r.Verdict.Status,
+				// What a mutant-generator shard actually saw for this file —
+				// see scanstore.File.PromptShape's doc.
+				PromptShape:              r.Verdict.PromptShape,
 				AuthoredTestNotCollected: r.Verdict.AuthoredTestNotCollected,
 				BaselineFailed:           r.Verdict.BaselineFailed,
 				// SuiteBaselineMillis is the cost-model input: how long the

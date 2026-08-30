@@ -218,6 +218,13 @@ type WeakFile struct {
 	// Challenger.KappaDefined before printing or storing either coefficient,
 	// and Challenger.Mutants is how many survivors the pair actually covers.
 	Challenger *modelcorr.Pair
+	// PromptShape mirrors advpool.Verdict.PromptShape: "chunk" when every
+	// mutant-generator shard saw only its own symbols' bodies plus the
+	// file's preamble, "file" when even one shard fell back to showing the
+	// whole file (including an unsharded run, which always showed the whole
+	// file). "" — never fabricated — for a run that predates this
+	// disclosure, or a preset (`--mutants`) run that generated nothing.
+	PromptShape string
 }
 
 // MeasuredSpread reports whether this file's run actually measured a
@@ -474,6 +481,8 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 			// nil whenever no comparable pair exists (see
 			// advpool.Verdict.ChallengerAgreement's doc).
 			Challenger: r.Verdict.ChallengerAgreement,
+			// What a generator shard actually saw — see WeakFile.PromptShape.
+			PromptShape: r.Verdict.PromptShape,
 		})
 	}
 

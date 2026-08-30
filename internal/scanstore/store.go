@@ -295,6 +295,13 @@ type File struct {
 	VacuousFindings int
 	// Status is advpool.Verdict.Status ("certified" | "needs-review").
 	Status string
+	// PromptShape mirrors advpool.Verdict.PromptShape: "chunk" when every
+	// mutant-generator shard on this file's run saw only its own symbols'
+	// bodies plus the file's preamble, "file" when even one shard fell back
+	// to the whole file (including every unsharded run, which always shows
+	// the whole file). "" for a row written before this column existed, or
+	// a rejected file that was never scored — never a fabricated value.
+	PromptShape string
 	// AuthoredTestNotCollected mirrors advpool.Verdict.AuthoredTestNotCollected:
 	// the run proved a killing test compiled and ran, but the dev suite's own
 	// collection never picked it up, so ProvenMissed on this row is earned
@@ -463,6 +470,7 @@ var scanFilesMigrationCols = []struct{ name, ddl string }{
 	{"tests_per_mutant_median", "tests_per_mutant_median INTEGER"},
 	{"tests_per_mutant_max", "tests_per_mutant_max INTEGER"},
 	{"writer_mode", "writer_mode VARCHAR"},
+	{"prompt_shape", "prompt_shape VARCHAR"},
 }
 
 // scansMigrationCols is the same ledger at the SCAN grain. `scans` had no
@@ -610,7 +618,8 @@ func Open(dsn string) (*Store, error) {
 		tests_per_mutant_min INTEGER,
 		tests_per_mutant_median INTEGER,
 		tests_per_mutant_max INTEGER,
-		writer_mode VARCHAR
+		writer_mode VARCHAR,
+		prompt_shape VARCHAR
 	)`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("scanstore: create scan_files table: %w", err)
@@ -989,9 +998,9 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 			mutant_ms_median, mutant_ms_max,
 			challenger_jaccard, challenger_kappa, challenger_sufficient, goals_derived,
 			per_mutant, tests_per_mutant_min, tests_per_mutant_median, tests_per_mutant_max,
-			writer_mode
+			writer_mode, prompt_shape
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id, f.Path, f.Lang, f.Disposition, f.Reason,
 			fileKillRate(f), f.Survivors, f.Gradable, f.PreflightState, f.Evidence, f.Detail, f.TimedOut, f.TestWriterFailed, f.ProvenMissed, f.PoolTestUnsound,
 			f.ProvenMutantIDs, f.AuthoredTest, f.CacheKey, f.VerdictJSON, f.ComputedAt,
@@ -1004,7 +1013,7 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 			f.MutantMillisMedian, f.MutantMillisMax,
 			f.ChallengerJaccard, f.ChallengerKappa, f.ChallengerSufficient, f.GoalsDerived,
 			f.PerMutant, f.TestsPerMutantMin, f.TestsPerMutantMedian, f.TestsPerMutantMax,
-			nullableString(f.WriterMode),
+			nullableString(f.WriterMode), nullableString(f.PromptShape),
 		); err != nil {
 			return 0, fmt.Errorf("scanstore: insert scan_files row for %q: %w", f.Path, err)
 		}
@@ -1170,7 +1179,7 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		mutant_ms_median, mutant_ms_max,
 		challenger_jaccard, challenger_kappa, challenger_sufficient, goals_derived,
 		per_mutant, tests_per_mutant_min, tests_per_mutant_median, tests_per_mutant_max,
-		writer_mode
+		writer_mode, prompt_shape
 		FROM scan_files WHERE scan_id = ? ORDER BY rowid`, scanID)
 	if err != nil {
 		return nil, fmt.Errorf("scanstore: files for scan %d: %w", scanID, err)
@@ -1231,6 +1240,7 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		var challengerJaccard, challengerKappa sql.NullFloat64
 		var challengerSufficient, perMutant sql.NullBool
 		var tpmMin, tpmMedian, tpmMax sql.NullInt64
+		var promptShape sql.NullString
 		if err := rows.Scan(&f.Path, &f.Lang, &f.Disposition, &f.Reason,
 			&f.KillRate, &f.Survivors, &f.Gradable, &f.PreflightState, &f.Evidence, &detail, &timedOut, &testWriterFailed, &provenMissed, &poolTestUnsound,
 			&provenIDs, &authoredTest,
@@ -1243,7 +1253,7 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 			&selectionMS, &generationMS, &poolMS, &devPassMS, &authoredPassMS, &criticMS, &totalMS,
 			&mutantMSMedian, &mutantMSMax,
 			&challengerJaccard, &challengerKappa, &challengerSufficient, &goalsDerived,
-			&perMutant, &tpmMin, &tpmMedian, &tpmMax, &writerMode); err != nil {
+			&perMutant, &tpmMin, &tpmMedian, &tpmMax, &writerMode, &promptShape); err != nil {
 			return nil, fmt.Errorf("scanstore: scan scan_files row: %w", err)
 		}
 		f.Detail = detail.String
@@ -1319,6 +1329,7 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		f.TestsPerMutantMin = nullCount(tpmMin)
 		f.TestsPerMutantMedian = nullCount(tpmMedian)
 		f.TestsPerMutantMax = nullCount(tpmMax)
+		f.PromptShape = promptShape.String
 		out = append(out, f)
 	}
 	return out, rows.Err()

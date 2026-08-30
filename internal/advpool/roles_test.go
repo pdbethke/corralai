@@ -159,9 +159,9 @@ func TestBuildDAGShardedEmitsOneSpecPerShard(t *testing.T) {
 		Code: "package p\nfunc A() {}\nfunc B() {}\nfunc C() {}\n",
 	}
 	sigs := []repoindex.Signature{
-		{Name: "A", Complexity: 5, Lines: 10},
-		{Name: "B", Complexity: 3, Lines: 6},
-		{Name: "C", Complexity: 1, Lines: 2},
+		{Name: "A", Complexity: 5, Line: 2, Lines: 1},
+		{Name: "B", Complexity: 3, Line: 3, Lines: 1},
+		{Name: "C", Complexity: 1, Line: 4, Lines: 1},
 	}
 	assign := RoleAssignment{RoleMutantGenerator: "m", RoleTestWriter: "w", RoleTestCritic: "c"}
 	got := mutantSpecs(BuildDAG(rs, assign, sigs))
@@ -180,9 +180,10 @@ func TestBuildDAGShardedEmitsOneSpecPerShard(t *testing.T) {
 		if len(s.DependsOn) != 0 {
 			t.Errorf("spec[%d].DependsOn: want none, got %v", i, s.DependsOn)
 		}
-		// Whole file is still the context — sharding changes aim, not context.
-		if !strings.Contains(s.Instruction, rs.Code) {
-			t.Errorf("spec[%d] must carry the whole file as context", i)
+		// A shard sees its OWN symbol's body plus the file's preamble — never
+		// the whole file, which is exactly what chunking exists to stop.
+		if !strings.Contains(s.Instruction, "package p") {
+			t.Errorf("spec[%d] must carry the file's preamble", i)
 		}
 	}
 	for i := 0; i < 3; i++ {

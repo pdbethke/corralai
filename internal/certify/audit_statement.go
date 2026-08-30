@@ -91,6 +91,13 @@ type AuditedFile struct {
 	// suite that writes into its own .venv during a run writes through a
 	// shared link. Absent when nothing was shared.
 	SharedDirs []string `json:"sharedDirs,omitempty"`
+	// PromptShape discloses what a mutant-generator shard actually SAW:
+	// "chunk" when every shard on this file's run showed only its own
+	// symbols' bodies plus the file's preamble, "file" when even one shard
+	// fell back to the whole file (including every unsharded run, which
+	// always shows the whole file). Omitted, never signed as "", on a run
+	// that predates this disclosure.
+	PromptShape string `json:"promptShape,omitempty"`
 }
 
 // TestsPerMutantSpread is how many tests each graded mutant ran: the
@@ -228,6 +235,9 @@ func BuildAuditAttestation(s AuditStatement) map[string]any {
 		}
 		if f.PoolTestUnsound {
 			entry["poolTestUnsound"] = true
+		}
+		if f.PromptShape != "" {
+			entry["promptShape"] = f.PromptShape
 		}
 		files = append(files, entry)
 	}

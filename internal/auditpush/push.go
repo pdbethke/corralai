@@ -196,6 +196,12 @@ type Row struct {
 	// not by the caller remembering to blank them — see PushBundle.
 	AuthoredTest string
 	VerdictJSON  string
+	// PromptShape mirrors scanstore.File.PromptShape / advpool.Verdict.PromptShape:
+	// "chunk" when every mutant-generator shard on this file's run saw only
+	// its own symbols' bodies plus the file's preamble, "file" when even one
+	// shard fell back to the whole file (including every unsharded run).
+	// "" for a row from before this disclosure existed — never fabricated.
+	PromptShape string
 }
 
 // Link identifies the ledger scan and signed statement a pushed row belongs

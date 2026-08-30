@@ -2569,6 +2569,13 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 		// authored test's own — never a dev test that happened to flake.
 		fmt.Fprint(w, " — proven by the authored test alone")
 	}
+	// What a mutant-generator shard actually SAW: "chunk" when every shard
+	// showed only its own symbols, "file" when even one fell back (including
+	// an unsharded run, which always shows the whole file). Silent — never a
+	// fabricated "file" — for a run that predates this disclosure.
+	if f.PromptShape != "" {
+		fmt.Fprintf(w, " — prompts: %s", f.PromptShape)
+	}
 	fmt.Fprintln(w)
 	// How many private trees scored this file at once, or why it only got
 	// one — the same wording noteConcurrency printed live during the run,
@@ -3847,6 +3854,9 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 			Trees:           f.Trees,
 			ConcurrencyNote: f.ConcurrencyNote,
 			SharedDirs:      f.SharedDirs,
+			// What a mutant-generator shard actually saw — see
+			// certify.AuditedFile.PromptShape's doc.
+			PromptShape: f.PromptShape,
 		})
 	}
 	// Same resolution the warehouse push uses: a statement whose subject names

@@ -188,6 +188,7 @@ func buildAuditRows(files []scanstore.File, scanID int64, meta bundleMeta) []aud
 			// forgotten blanking here cannot leak code.
 			AuthoredTest: f.AuthoredTest,
 			VerdictJSON:  f.VerdictJSON,
+			PromptShape:  f.PromptShape,
 		})
 	}
 	return rows

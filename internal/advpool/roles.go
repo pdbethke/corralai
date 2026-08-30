@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -367,16 +368,143 @@ func ShardIndexFromKey(key string) (int, bool) {
 }
 
 // renderMutantGeneratorShard renders one shard's prompt: the SAME testgen
-// prompt and the SAME whole-file context as the unsharded path, with the goal
-// augmented by an aiming directive and the signature list filtered to this
-// shard's symbols. The file is never fragmented — patch-based mutants anchor
-// against the whole original.
-func renderMutantGeneratorShard(rs RunSpec, sigs []repoindex.Signature, sh Shard) string {
+// prompt as the unsharded path, with the goal augmented by an aiming
+// directive, the signature list filtered to this shard's symbols, and the
+// CODE narrowed to this shard's own symbol bodies plus the file's preamble
+// (see shardCode) — a shard sees its symbols, not the file. The bool result
+// is false whenever the narrowing fell back to the whole file (shardCode
+// could not slice it); callers that need to know the SHAPE of the whole
+// run's prompts (StartRun, for Verdict.PromptShape) use ShardIsChunked
+// instead of re-rendering.
+//
+// The SEARCH-anchor uniqueness check this narrowing must never touch lives
+// entirely downstream, in testgen.parseMutantsDiag/adequacy.Mutant.Apply,
+// and is always called with the WHOLE original file (see driver.go's
+// d.Validator.ParseMutants(mgs[i].Result, run.rs.Code)) — narrowing what the
+// model SEES changes nothing about what an anchor is validated against.
+func renderMutantGeneratorShard(rs RunSpec, sigs []repoindex.Signature, sh Shard) (string, bool) {
+	shardSigs := filterSignatures(sigs, sh.Symbols)
 	aimed := rs
 	aimed.Goal = fmt.Sprintf(
 		"%s\n\nATTACK ONLY THESE FUNCTIONS: %s. Every mutation you produce MUST edit code inside one of them. Other functions in the file are being attacked by other seats — do not mutate them, and do not report that you skipped them.",
 		rs.Goal, strings.Join(sh.Symbols, ", "))
-	return renderMutantGenerator(aimed, filterSignatures(sigs, sh.Symbols), nil)
+	code, chunked := shardCode(langFor(rs), rs.Code, shardSigs)
+	aimed.Code = code
+	if chunked {
+		aimed.Goal += "\n\nThe code below is NOT the whole file — only the functions you are attacking, plus the file's own imports. SEARCH anchors must be copied VERBATIM from the code shown below, and must be UNIQUE in the whole file (not just in what is shown)."
+	}
+	return renderMutantGenerator(aimed, shardSigs, nil), chunked
+}
+
+// signaturesChunkable reports whether every signature in sigs carries a real
+// Lines span. Empty or any zero/negative Lines means "cannot slice this
+// shard" — an unnamed extractor gap must never silently hide code from the
+// model with no way for a reader to know it happened, so the honest answer
+// is to show everything instead of guessing at a range.
+func signaturesChunkable(sigs []repoindex.Signature) bool {
+	if len(sigs) == 0 {
+		return false
+	}
+	for _, s := range sigs {
+		if s.Lines <= 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// ShardIsChunked reports whether sh's rendered generator prompt would show
+// only its symbols' bodies (true) or fall back to the whole file (false),
+// without paying for the render itself. StartRun uses this to tally the
+// run's overall PromptShape from the SAME ShardSymbols call BuildDAG makes
+// internally, mirroring the existing shardSymbols/shardStats bookkeeping
+// pattern rather than re-deriving the rule a third way.
+func ShardIsChunked(sigs []repoindex.Signature, sh Shard) bool {
+	return signaturesChunkable(filterSignatures(sigs, sh.Symbols))
+}
+
+// commentPrefix is the line-comment token to render the elision separator
+// in, so it reads as a comment (never code) in the language a shard's slice
+// is shown in. Best-effort for a language not listed: "//" is wrong for
+// some, but the separator never touches an anchor, so a wrong comment
+// character costs nothing but cosmetics.
+func commentPrefix(lang string) string {
+	switch lang {
+	case "python", "ruby":
+		return "#"
+	default:
+		return "//"
+	}
+}
+
+// shardCode returns the code shown to one generator shard: the language's
+// Preamble (see lang.PreambleFor) followed by the union of shardSigs' own
+// [Line, Line+Lines) ranges (1-indexed, half-open — repoindex.Signature.Line
+// is the 1-indexed start row, Lines is the inclusive line-count span),
+// merged where they touch or overlap, each gap marked with an elision
+// comment naming how many lines were cut. The bool is false — meaning
+// shardCode fell back to the WHOLE file — whenever shardSigs is not
+// signaturesChunkable: a shard whose symbols didn't resolve to any
+// signature, or whose extractor never populated Lines, has no honest range
+// to slice, and showing a PARTIAL or WRONG range would hide code from the
+// model with no way for a reader to know it happened.
+func shardCode(p golang.Plugin, code string, shardSigs []repoindex.Signature) (string, bool) {
+	if !signaturesChunkable(shardSigs) {
+		return code, false
+	}
+	lines := strings.Split(code, "\n")
+
+	type span struct{ from, to int } // 1-indexed, inclusive
+	spans := make([]span, 0, len(shardSigs))
+	for _, s := range shardSigs {
+		from, to := s.Line, s.Line+s.Lines-1
+		if from < 1 {
+			from = 1
+		}
+		if to > len(lines) {
+			to = len(lines)
+		}
+		if from > to {
+			continue
+		}
+		spans = append(spans, span{from, to})
+	}
+	if len(spans) == 0 {
+		return code, false
+	}
+	sort.Slice(spans, func(i, j int) bool { return spans[i].from < spans[j].from })
+	merged := spans[:1]
+	for _, s := range spans[1:] {
+		last := &merged[len(merged)-1]
+		if s.from <= last.to+1 {
+			if s.to > last.to {
+				last.to = s.to
+			}
+			continue
+		}
+		merged = append(merged, s)
+	}
+
+	preamble := golang.PreambleFor(p, code)
+	preambleLines := 0
+	if preamble != "" {
+		preambleLines = len(strings.Split(preamble, "\n"))
+	}
+	cprefix := commentPrefix(p.Name())
+
+	var b strings.Builder
+	b.WriteString(preamble)
+	b.WriteString("\n")
+	shown := preambleLines
+	for _, sp := range merged {
+		if elided := sp.from - 1 - shown; elided > 0 {
+			fmt.Fprintf(&b, "%s … %d lines elided — SEARCH anchors must be verbatim from the code shown and unique in the WHOLE file\n", cprefix, elided)
+		}
+		b.WriteString(strings.Join(lines[sp.from-1:sp.to], "\n"))
+		b.WriteString("\n")
+		shown = sp.to
+	}
+	return strings.TrimRight(b.String(), "\n"), true
 }
 
 // filterSignatures keeps only the signatures whose symbolIdentity is in
@@ -620,11 +748,12 @@ func BuildDAG(rs RunSpec, assign RoleAssignment, sigs []repoindex.Signature) []q
 		// whole-file seat with an unchanged key and a byte-identical prompt.
 		if role.Name == RoleMutantGenerator && len(shards) > 0 {
 			for _, sh := range shards {
+				instruction, _ := renderMutantGeneratorShard(rs, sigs, sh)
 				specs = append(specs, queue.TaskSpec{
 					Key:         ShardTaskKey(sh.Index),
 					Role:        RoleMutantGenerator,
 					Title:       shardTitle(sh),
-					Instruction: renderMutantGeneratorShard(rs, sigs, sh),
+					Instruction: instruction,
 					Model:       assign[RoleMutantGenerator],
 				})
 			}
@@ -635,11 +764,12 @@ func BuildDAG(rs RunSpec, assign RoleAssignment, sigs []repoindex.Signature) []q
 			// why this is a role key and not a boolean field.
 			if strings.TrimSpace(rs.ShadowModel) != "" {
 				for _, sh := range shards {
+					instruction, _ := renderMutantGeneratorShard(rs, sigs, sh)
 					specs = append(specs, queue.TaskSpec{
 						Key:         ShadowShardTaskKey(sh.Index),
 						Role:        RoleMutantGeneratorShadow,
 						Title:       "Challenger: " + shardTitle(sh),
-						Instruction: renderMutantGeneratorShard(rs, sigs, sh),
+						Instruction: instruction,
 						Model:       rs.ShadowModel,
 					})
 				}

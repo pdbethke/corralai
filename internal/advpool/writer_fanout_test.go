@@ -729,3 +729,135 @@ func TestAttemptRowsForEverySurvivorInBatchedMode(t *testing.T) {
 		t.Fatalf("wrote %d rows, want 4 (2 survivors x 2 writers): %+v", len(sink.attempts), sink.attempts)
 	}
 }
+
+// TestAgreementCoversOnlySurvivorsBOTHSeatsAttempted.
+//
+// challengerVectors gates on the FILE-level measured flags and then folds
+// EVERY survivor into the comparison. Under the fan-out that is the same
+// fabrication the per-seat attempt filter exists to prevent, one consumer
+// over: a survivor whose challenger seat never graded reads `false` on both
+// sides by map-zero-value and lands in modelcorr.Compare as a genuine "both
+// writers missed this one" — a SHARED BLIND SPOT invented out of a retry
+// budget. It inflates SharedSurvivors, and Jaccard is exactly that over the
+// union, so the headline coefficient rises with the number of seats that
+// never ran.
+func TestAgreementCoversOnlySurvivorsBOTHSeatsAttempted(t *testing.T) {
+	survivors := []adequacy.Mutant{{ID: "m1"}, {ID: "m2"}, {ID: "m3"}}
+	d := &Driver{Assign: RoleAssignment{RoleTestWriter: "primary-model"}}
+	run := &runState{
+		rs:           RunSpec{CodePath: "a.go", ShadowWriterModel: "challenger-model", WriterMode: WriterModePerSurvivor},
+		writerMode:   WriterModePerSurvivor,
+		devSurvivors: survivors,
+		// The PRIMARY graded all three and killed two of them.
+		provenIDs:             []string{"m1", "m2"},
+		primaryWriterMeasured: true,
+		writerOrder:           []string{"m1", "m2", "m3"},
+		writerAttempts: map[string]*writerAttempt{
+			"m1": {mutant: survivors[0], done: true, measured: true, proven: true},
+			"m2": {mutant: survivors[1], done: true, measured: true, proven: true},
+			"m3": {mutant: survivors[2], done: true, measured: true},
+		},
+		// The CHALLENGER graded only m1, and killed nothing. Its m2 and m3
+		// seats never produced a grading test — they are UNMEASURED, not a
+		// challenger that looked and missed.
+		shadowWriterMeasured: true,
+		shadowWriterKilled:   nil,
+		shadowWriterOrder:    []string{"m1", "m2", "m3"},
+		shadowWriterAttempts: map[string]*writerAttempt{
+			"m1": {mutant: survivors[0], done: true, measured: true},
+			"m2": {mutant: survivors[1], done: true},
+			"m3": {mutant: survivors[2], done: true},
+		},
+	}
+
+	pair := challengerPair(d, run)
+	if pair == nil {
+		t.Fatal("no pair was produced — both seats measured at least one survivor, so a comparison exists")
+	}
+	// ONE survivor was attempted by both seats, so the comparison is over one
+	// mutant. Hand-computed: m1 — primary killed it, challenger did not.
+	if pair.Mutants != 1 {
+		t.Fatalf("Mutants = %d, want 1 — only m1 was attempted by BOTH seats: %+v", pair.Mutants, *pair)
+	}
+	if pair.SurvivedA != 0 {
+		t.Errorf("SurvivedA = %d, want 0 — the primary killed m1", pair.SurvivedA)
+	}
+	if pair.SurvivedB != 1 {
+		t.Errorf("SurvivedB = %d, want 1 — the challenger did not kill m1", pair.SurvivedB)
+	}
+	if pair.UnionSurvivors != 1 {
+		t.Errorf("UnionSurvivors = %d, want 1", pair.UnionSurvivors)
+	}
+	// The bug this test exists for: m2 and m3 were never attempted by the
+	// challenger, so they must NOT read as survivors both writers missed.
+	// Before the per-seat filter, SharedSurvivors was 1 (m3, which neither
+	// side killed only because two seats never ran) and Mutants was 3.
+	if pair.SharedSurvivors != 0 {
+		t.Errorf("SharedSurvivors = %d, want 0 — a seat that never ran is not a shared blind spot", pair.SharedSurvivors)
+	}
+	// And a one-mutant comparison is honestly under-powered rather than
+	// confidently wrong: Sufficient follows the smaller N by itself.
+	if pair.Sufficient {
+		t.Errorf("Sufficient = true over %d mutant(s) — a comparison this small must not claim a readable Jaccard", pair.Mutants)
+	}
+}
+
+// TestAgreementCoversEverySurvivorInBatchedMode: batched has ONE seat per
+// writer for the whole file, so a measured run measured every survivor and the
+// comparison is over all of them — exactly as it always was. The per-seat
+// filter must not quietly narrow the mode that has no seats.
+func TestAgreementCoversEverySurvivorInBatchedMode(t *testing.T) {
+	survivors := []adequacy.Mutant{{ID: "m1"}, {ID: "m2"}, {ID: "m3"}}
+	d := &Driver{Assign: RoleAssignment{RoleTestWriter: "primary-model"}}
+	run := &runState{
+		rs:                    RunSpec{CodePath: "a.go", ShadowWriterModel: "challenger-model"},
+		writerMode:            WriterModeBatched,
+		devSurvivors:          survivors,
+		provenIDs:             []string{"m1"},
+		primaryWriterMeasured: true,
+		shadowWriterMeasured:  true,
+		shadowWriterKilled:    []MutantRef{{ID: "m2"}},
+	}
+	pair := challengerPair(d, run)
+	if pair == nil {
+		t.Fatal("no pair was produced for a fully measured batched run")
+	}
+	if pair.Mutants != 3 {
+		t.Fatalf("Mutants = %d, want 3 — one batched seat per writer faced every survivor: %+v", pair.Mutants, *pair)
+	}
+	// m3 is a genuine shared miss here: one seat per writer faced it and
+	// neither killed it.
+	if pair.SharedSurvivors != 1 {
+		t.Errorf("SharedSurvivors = %d, want 1 (m3, missed by both)", pair.SharedSurvivors)
+	}
+}
+
+// TestNoPairWhenNoSurvivorWasAttemptedByBothSeats: two seats that never
+// overlap have nothing to compare. An empty vector pair would be a comparison
+// over zero mutants — a number, where the honest answer is no measurement.
+func TestNoPairWhenNoSurvivorWasAttemptedByBothSeats(t *testing.T) {
+	survivors := []adequacy.Mutant{{ID: "m1"}, {ID: "m2"}}
+	d := &Driver{Assign: RoleAssignment{RoleTestWriter: "primary-model"}}
+	run := &runState{
+		rs:                    RunSpec{CodePath: "a.go", ShadowWriterModel: "challenger-model", WriterMode: WriterModePerSurvivor},
+		writerMode:            WriterModePerSurvivor,
+		devSurvivors:          survivors,
+		provenIDs:             []string{"m1"},
+		primaryWriterMeasured: true,
+		shadowWriterMeasured:  true,
+		writerOrder:           []string{"m1", "m2"},
+		writerAttempts: map[string]*writerAttempt{
+			"m1": {mutant: survivors[0], done: true, measured: true, proven: true},
+			"m2": {mutant: survivors[1], done: true},
+		},
+		shadowWriterOrder: []string{"m1", "m2"},
+		shadowWriterAttempts: map[string]*writerAttempt{
+			"m1": {mutant: survivors[0], done: true},
+			"m2": {mutant: survivors[1], done: true, measured: true},
+		},
+	}
+	if pair := challengerPair(d, run); pair != nil {
+		t.Fatalf("a pair was produced over %d mutant(s) although the two seats' measured sets do not overlap: %+v",
+			pair.Mutants, *pair)
+	}
+}

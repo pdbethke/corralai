@@ -206,13 +206,17 @@ type WeakFile struct {
 	MutantMillisMedian int64
 	MutantMillisMax    int64
 	// Challenger mirrors advpool.Verdict.ChallengerAgreement: the primary
-	// writer's agreement with the challenger writer over the same survivor
-	// set. nil whenever no comparable pair exists — no challenger ran,
-	// either seat's kill vector was never measured, or the primary salvaged
-	// (see ChallengerAgreement's own doc for the full gating). Non-nil does
-	// NOT mean Jaccard/Kappa are individually meaningful: a caller must
-	// still check Challenger.Sufficient / Challenger.KappaDefined before
-	// printing or storing either coefficient.
+	// writer's agreement with the challenger writer over the survivors BOTH
+	// seats genuinely attempted — which under the per-survivor writer mode is
+	// the overlap of their measured sets, not necessarily every survivor the
+	// file had (see ChallengerAgreement's own doc for why counting the rest
+	// would invent a shared blind spot). nil whenever no comparable pair
+	// exists — no challenger ran, either seat's kill vector was never
+	// measured, the primary salvaged, or the two measured sets do not
+	// overlap. Non-nil does NOT mean Jaccard/Kappa are individually
+	// meaningful: a caller must still check Challenger.Sufficient /
+	// Challenger.KappaDefined before printing or storing either coefficient,
+	// and Challenger.Mutants is how many survivors the pair actually covers.
 	Challenger *modelcorr.Pair
 }
 

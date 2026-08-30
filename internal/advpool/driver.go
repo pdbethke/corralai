@@ -634,8 +634,22 @@ type Verdict struct {
 	// and Cohen's kappa, from internal/modelcorr. nil whenever no comparable
 	// pair exists: no challenger was configured, either seat's own kill
 	// vector was never measured (see runState.primaryWriterMeasured /
-	// shadowWriterMeasured), or the primary salvaged (RULING P11 — a
-	// salvaged primary is not comparable to a challenger that got no rescue).
+	// shadowWriterMeasured), the primary salvaged (RULING P11 — a
+	// salvaged primary is not comparable to a challenger that got no rescue),
+	// or the two seats' measured sets do not overlap at all.
+	//
+	// THE PAIR COVERS ONLY THE SURVIVORS BOTH SEATS GENUINELY ATTEMPTED, not
+	// every survivor the file had. Under WriterModePerSurvivor each survivor
+	// gets its own seat on each side, and a seat that exhausted its budget
+	// without a grading test measured NOTHING about that survivor — for
+	// either writer. Counting it would put a survivor neither side attempted
+	// into the vectors as `false` on both, which Compare reads as a shared
+	// blind spot, inflating SharedSurvivors and therefore Jaccard by however
+	// many seats failed. Pair.Mutants is the size of the ACTUAL overlap, and
+	// Pair.Sufficient follows it — a narrow overlap reports itself as
+	// under-powered rather than as a confident measurement of the wrong
+	// thing. In batched mode one seat per writer faces every survivor, so the
+	// overlap is the whole set and nothing changes.
 	// Non-nil does NOT mean the coefficients are meaningful on their own —
 	// callers must still check Pair.Sufficient before reading Jaccard and
 	// Pair.KappaDefined before reading Kappa, exactly as modelcorr documents.
@@ -2562,6 +2576,15 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 // carried straight onto the Verdict), so the two never disagree about WHEN a
 // comparison is legitimate.
 //
+// IT ANSWERS "IS A COMPARISON LEGITIMATE AT ALL", NOT "WHICH SURVIVORS ARE
+// IN IT". The maps it returns are the two proven-kill SETS; neither is
+// zero-filled over devSurvivors, and a caller must not read a miss out of an
+// absent key. Under WriterModePerSurvivor each survivor has its own seat on
+// each side, so which survivors are comparable is a PER-MUTANT question —
+// both consumers answer it with runState.primarySeatMeasured /
+// shadowSeatMeasured, and folding in a survivor neither seat attempted is the
+// fabrication both of those filters exist to refuse.
+//
 // UNMEASURED IS NOT ZERO, for the primary and the challenger alike: this
 // guard was originally written for the challenger alone, which left two
 // reachable paths to a signed verdict with run.provenIDs still nil
@@ -2662,11 +2685,36 @@ func challengerPair(d *Driver, run *runState) *modelcorr.Pair {
 	if !ok {
 		return nil
 	}
+	// PER SEAT, exactly as recordMutantAttempts filters — and for the same
+	// reason, one consumer over. challengerVectors gates on the FILE-level
+	// measured flags, which under the fan-out are true as soon as ANY seat on
+	// each side grades. Folding in a survivor whose primary or challenger
+	// seat never produced a grading test reads `false` on both sides by
+	// map-zero-value, which Compare counts as bothSurvived: a SHARED BLIND
+	// SPOT invented out of a retry budget. SharedSurvivors inflates, and
+	// Jaccard is that over the union, so the headline coefficient would rise
+	// with the number of seats that never ran — a measurement of corral's own
+	// exhaustion, reported as a fact about two models.
+	//
+	// A survivor enters the comparison only when BOTH sides genuinely
+	// attempted it. In batched mode both helpers report the file-level flag,
+	// because one seat per writer really did face every survivor, so that
+	// path's vectors are unchanged.
 	primaryVec := make(map[string]bool, len(run.devSurvivors))
 	shadowVec := make(map[string]bool, len(run.devSurvivors))
 	for _, m := range run.devSurvivors {
+		if !run.primarySeatMeasured(m.ID) || !run.shadowSeatMeasured(m.ID) {
+			continue
+		}
 		primaryVec[m.ID] = killedByPrimary[m.ID]
 		shadowVec[m.ID] = killedByShadow[m.ID]
+	}
+	if len(primaryVec) == 0 {
+		// The two seats' measured sets do not overlap at all, so there is
+		// nothing to compare. Comparing zero mutants would produce a Pair —
+		// a number — where the honest answer is that no comparison exists,
+		// the same absence a run with no challenger reports.
+		return nil
 	}
 	pair, err := modelcorr.Compare(
 		modelcorr.Vector{Model: d.Assign[RoleTestWriter], Killed: primaryVec},

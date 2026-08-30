@@ -13,6 +13,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/auditpush"
+	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/scanstore"
 )
@@ -148,5 +149,75 @@ func TestAttestationCarriesTheWriterMode(t *testing.T) {
 	}
 	if doc.Predicate.Files[0].WriterMode != advpool.WriterModePerSurvivor {
 		t.Errorf("statement writerMode = %q, want %q", doc.Predicate.Files[0].WriterMode, advpool.WriterModePerSurvivor)
+	}
+}
+
+// TestReportRendersEveryUnmergeableProvenTest is the honesty half of the
+// per-survivor fan-out on a language whose parts will not merge. Each part is
+// a test corral WROTE, COMPILED and RAN to kill a specific survivor —
+// ProvenMissed counts them — so a report that prints only the merged file
+// tells a developer that N gaps are provable and hands them fewer than N
+// tests.
+func TestReportRendersEveryUnmergeableProvenTest(t *testing.T) {
+	var b bytes.Buffer
+	printWeakFile(&b, reposcan.WeakFile{
+		Path: "lib/a.rb", KillRate: 0.4, Survivors: 2, ProvenMissed: 2,
+		WriterMode: advpool.WriterModePerSurvivor, WriterCalls: 2,
+		AuthoredTest: "require 'minitest/autorun'\n\ndef test_one\n  assert true\nend\n",
+		AuthoredExtra: []lang.AuthoredPart{{
+			MutantID: "s0/m2",
+			Source:   "require 'spec_helper'\n\nRSpec.describe Thing do\nend\n",
+			Reason:   "lang: authored parts use different test frameworks",
+		}},
+	})
+	out := b.String()
+	if !strings.Contains(out, "def test_one") {
+		t.Errorf("the merged authored test is missing:\n%s", out)
+	}
+	if !strings.Contains(out, "proven test for s0/m2 (separate file") {
+		t.Errorf("the unmergeable proven test has no header naming its survivor:\n%s", out)
+	}
+	if !strings.Contains(out, "RSpec.describe Thing do") {
+		t.Errorf("the unmergeable proven test's source was dropped — a proven gap with no test to act on:\n%s", out)
+	}
+	if !strings.Contains(out, "different test frameworks") {
+		t.Errorf("the reason it could not be merged is not shown:\n%s", out)
+	}
+}
+
+// TestAuthoredRecordJoinsTheUnmergeableParts: the ledger stores ONE authored
+// artifact per file, so a run whose parts would not merge must still record
+// every proven test — behind a separator that says plainly it is a record and
+// not a file to run.
+func TestAuthoredRecordJoinsTheUnmergeableParts(t *testing.T) {
+	v := advpool.Verdict{
+		Lang:         "ruby",
+		AuthoredTest: "def test_one\n  assert true\nend\n",
+		AuthoredExtra: []lang.AuthoredPart{
+			{MutantID: "m2", Source: "it 'works' do\nend\n", Reason: "different frameworks"},
+		},
+	}
+	rec := v.AuthoredRecord()
+	if !strings.Contains(rec, "def test_one") || !strings.Contains(rec, "it 'works' do") {
+		t.Fatalf("the record lost a proven test:\n%s", rec)
+	}
+	if !strings.Contains(rec, "# --- corral: separate test file (unmergeable) — m2") {
+		t.Errorf("the record does not separate the parts with a comment naming the survivor:\n%s", rec)
+	}
+
+	// A file whose parts all merged records exactly the merged file — no
+	// separator, nothing added.
+	clean := advpool.Verdict{Lang: "ruby", AuthoredTest: "def test_one\nend\n"}
+	if clean.AuthoredRecord() != clean.AuthoredTest {
+		t.Errorf("a fully merged file was rewritten: %q", clean.AuthoredRecord())
+	}
+	// And a Go verdict uses Go's comment marker, since the column holds
+	// source a reader may well paste somewhere.
+	goV := advpool.Verdict{
+		Lang: "go", AuthoredTest: "package p\n",
+		AuthoredExtra: []lang.AuthoredPart{{MutantID: "m2", Source: "package p\n"}},
+	}
+	if !strings.Contains(goV.AuthoredRecord(), "// --- corral: separate test file (unmergeable) — m2") {
+		t.Errorf("a Go record used a # comment:\n%s", goV.AuthoredRecord())
 	}
 }

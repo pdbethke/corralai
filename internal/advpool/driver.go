@@ -633,6 +633,12 @@ type RunState struct {
 	// perfect dev suite made the test-writer moot. NOT part of the signed
 	// Verdict — evidence handed back to the dev, not certified state.
 	AuthoredTest string
+	// AuthoredExtra is every proven authored test that could NOT be merged
+	// into AuthoredTest — see Verdict.AuthoredExtra. Exposed here beside
+	// AuthoredTest because a caller that prints one must print the other:
+	// they are one set of proofs, split only by what the language's
+	// concatenator could fold.
+	AuthoredExtra []golang.AuthoredPart
 	// Matrix is the tests×mutants matrix result (swarm slice 5), when the run
 	// opted in (RunSpec.Matrix) and a Driver.Enumerator was wired. nil when
 	// the matrix phase never ran (opted out, no Enumerator, or it hasn't
@@ -1399,7 +1405,8 @@ func (d *Driver) RunStatus(missionID int64) (RunState, bool) {
 	if !ok {
 		return RunState{}, false
 	}
-	return RunState{Converged: run.verdict != nil, Verdict: run.verdict, AuthoredTest: run.authoredTest, Matrix: run.matrix}, true
+	return RunState{Converged: run.verdict != nil, Verdict: run.verdict,
+		AuthoredTest: run.authoredTest, AuthoredExtra: run.authoredExtra, Matrix: run.matrix}, true
 }
 
 // Tick advances one run given the current task states. It returns a non-nil

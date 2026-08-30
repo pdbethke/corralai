@@ -1520,9 +1520,23 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 
 	// Hand the pool's authored test back: when it killed a survivor the dev suite
 	// missed, print it so the dev can adopt it.
-	if st, ok := d.RunStatus(localMissionID); ok && strings.TrimSpace(st.AuthoredTest) != "" {
-		fmt.Fprintf(stdout, "\nthe herd authored a test that catches a gap your suite missed — add it to %s:\n\n", tp)
-		fmt.Fprintln(stdout, strings.TrimRight(st.AuthoredTest, "\n"))
+	if st, ok := d.RunStatus(localMissionID); ok {
+		if strings.TrimSpace(st.AuthoredTest) != "" {
+			fmt.Fprintf(stdout, "\nthe herd authored a test that catches a gap your suite missed — add it to %s:\n\n", tp)
+			fmt.Fprintln(stdout, strings.TrimRight(st.AuthoredTest, "\n"))
+		}
+		// And every proven part the language's concatenator would not fold
+		// into that file. Each is a test that was written, compiled and RUN
+		// to kill the survivor it names, so it must reach the operator whole
+		// — see reposcan.WeakFile.AuthoredExtra.
+		for _, p := range st.AuthoredExtra {
+			fmt.Fprintf(stdout, "\nproven test for survivor %s — a SEPARATE file, it cannot be merged with the one above:\n", p.MutantID)
+			if r := strings.TrimSpace(p.Reason); r != "" {
+				fmt.Fprintf(stdout, "  why: %s\n", r)
+			}
+			fmt.Fprintln(stdout, "")
+			fmt.Fprintln(stdout, strings.TrimRight(p.Source, "\n"))
+		}
 	}
 
 	return *verdict, nil

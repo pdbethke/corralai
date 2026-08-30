@@ -203,7 +203,13 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 				// wall a real pallets/flask "tried and missed" hit on
 				// 2026-07-31.
 				ProvenMutantIDs: strings.Join(r.Verdict.ProvenMutantIDs, ","),
-				AuthoredTest:    r.Verdict.AuthoredTest,
+				// AuthoredRecord, not AuthoredTest: the column holds ONE
+				// artifact per file, and a per-survivor run on a language
+				// whose parts will not merge has several proven tests. The
+				// record joins them behind a separator comment that says it
+				// is a record rather than a runnable file — dropping the
+				// extras would retain fewer proofs than proven_missed counts.
+				AuthoredTest: r.Verdict.AuthoredRecord(),
 				// ModelsByRole is canonicalized the same way the scan-wide
 				// model_set is (reposcan.CanonicalKV), so a per-file role
 				// assignment is byte-comparable with it rather than a second,

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/pdbethke/corralai/internal/advpool"
+	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/modelcorr"
 )
 
@@ -68,6 +69,16 @@ type WeakFile struct {
 	//
 	// Only meaningful alongside ProvenMissed > 0.
 	AuthoredTest string
+	// AuthoredExtra mirrors advpool.Verdict.AuthoredExtra: proven authored
+	// tests the language's concatenator would not fold into AuthoredTest.
+	//
+	// Every reader MUST render these. Each one is a test corral wrote,
+	// compiled and ran to kill a specific survivor, and ProvenMissed counts
+	// it — so a report that prints AuthoredTest alone tells a developer that
+	// N gaps are provable and hands them fewer than N tests. That is the same
+	// "told a gap is provable and handed nothing to act on" failure
+	// AuthoredTest itself was added to fix, in a narrower form.
+	AuthoredExtra []lang.AuthoredPart
 	// PoolTestUnsound mirrors advpool.Verdict.PoolTestUnsound: true when the
 	// pool's authored test DID compile (TestWriterFailed is false) but its
 	// scoring report never genuinely graded (it failed on the unmutated
@@ -422,6 +433,7 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 			SelectedTests:     r.Verdict.TestSelection.Selected,
 			SuiteTests:        r.Verdict.TestSelection.Of,
 			SelectionFallback: r.Verdict.TestSelection.Fallback,
+			AuthoredExtra:     r.Verdict.AuthoredExtra,
 			WriterMode:        r.Verdict.WriterMode,
 			WriterCalls:       writerCallsOf(r.Verdict),
 			// And at which GRAIN it was measured: a rate averaged over

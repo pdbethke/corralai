@@ -2622,9 +2622,32 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 	// the markers above already say why.
 	if f.ProvenMissed > 0 && strings.TrimSpace(f.AuthoredTest) != "" {
 		fmt.Fprintf(w, "      the pool wrote this test and RAN it to prove the gap — add it to your suite:\n")
-		for _, line := range strings.Split(strings.TrimRight(f.AuthoredTest, "\n"), "\n") {
-			fmt.Fprintf(w, "        %s\n", line)
+		printAuthoredSource(w, f.AuthoredTest)
+	}
+	// The parts that would not merge into the file above. Printed in FULL,
+	// each under its own header: every one is a test corral wrote, compiled
+	// and ran to kill the survivor it names, and ProvenMissed counts it — so
+	// printing only the merged file would report N provable gaps and hand the
+	// developer fewer than N tests. On a language whose parts routinely will
+	// not merge that is not an edge case, it is the whole output.
+	//
+	// Not gated on ProvenMissed > 0 the way the merged file is: a part only
+	// ever exists BECAUSE it proved its survivor, so an extra with a zero
+	// count would be a bug worth seeing rather than noise worth hiding.
+	for _, p := range f.AuthoredExtra {
+		fmt.Fprintf(w, "      proven test for %s (separate file — it cannot be merged with the others):\n", p.MutantID)
+		if r := strings.TrimSpace(p.Reason); r != "" {
+			fmt.Fprintf(w, "        why: %s\n", r)
 		}
+		printAuthoredSource(w, p.Source)
+	}
+}
+
+// printAuthoredSource writes one authored test's source, indented, so several
+// of them in a row read as separate files rather than one run-on block.
+func printAuthoredSource(w io.Writer, src string) {
+	for _, line := range strings.Split(strings.TrimRight(src, "\n"), "\n") {
+		fmt.Fprintf(w, "        %s\n", line)
 	}
 }
 

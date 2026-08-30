@@ -452,3 +452,63 @@ func TestPerSurvivorTaskKeyIsUniquePerMutant(t *testing.T) {
 		}
 	}
 }
+
+// TestUnmergeableProvenTestsRideTheVerdict: two seats each proved their own
+// survivor, and both declared the same helper. The concatenator will not
+// rename a helper (its call sites are the model's own code), so one part
+// cannot join the merged file — and it must NOT be dropped: it is a test that
+// was written, compiled and RUN to kill the survivor it names, which is
+// exactly what ProvenMissed counts.
+func TestUnmergeableProvenTestsRideTheVerdict(t *testing.T) {
+	const (
+		testA = "package target\n\nimport \"testing\"\n\nfunc helper() int { return 1 }\n\nfunc TestKillsA(t *testing.T) { _ = helper() }\n"
+		testB = "package target\n\nimport \"testing\"\n\nfunc helper() int { return 2 }\n\nfunc TestKillsB(t *testing.T) { _ = helper() }\n"
+		testC = "package target\n\nimport \"testing\"\n\nfunc TestKillsC(t *testing.T) {}\n"
+	)
+	kills := map[string]string{testA: "m1", testB: "m2", testC: "m3"}
+	d, missionID, _ := fanoutRun(t, WriterModePerSurvivor, kills, nil)
+	devTick(t, d, missionID)
+
+	v := driveFanout(t, d, missionID, map[string]string{
+		"test-writer/m1": testA,
+		"test-writer/m2": testB,
+		"test-writer/m3": testC,
+	})
+
+	if v.ProvenMissed != 3 {
+		t.Fatalf("ProvenMissed = %d, want 3 — an unmergeable proof is still a proof", v.ProvenMissed)
+	}
+	if len(v.AuthoredExtra) != 1 || v.AuthoredExtra[0].MutantID != "m2" {
+		t.Fatalf("AuthoredExtra = %+v, want exactly the part that could not merge", v.AuthoredExtra)
+	}
+	if strings.TrimSpace(v.AuthoredExtra[0].Reason) == "" {
+		t.Error("the carried-out part says nothing about WHY it is separate")
+	}
+	if !strings.Contains(v.AuthoredExtra[0].Source, "TestKillsB") {
+		t.Errorf("the carried-out part lost its source: %q", v.AuthoredExtra[0].Source)
+	}
+	if strings.Contains(v.AuthoredTest, "TestKillsB") {
+		t.Errorf("the unmergeable part was merged anyway:\n%s", v.AuthoredTest)
+	}
+	for _, want := range []string{"TestKillsA", "TestKillsC"} {
+		if !strings.Contains(v.AuthoredTest, want) {
+			t.Errorf("the merged file lost %s:\n%s", want, v.AuthoredTest)
+		}
+	}
+
+	// And the one artifact the ledger stores holds every proof, behind a
+	// separator that says plainly it is a record and not a file to run.
+	rec := v.AuthoredRecord()
+	for _, want := range []string{"TestKillsA", "TestKillsB", "TestKillsC", "separate test file (unmergeable) — m2"} {
+		if !strings.Contains(rec, want) {
+			t.Errorf("the authored record is missing %q:\n%s", want, rec)
+		}
+	}
+
+	// RunStatus is what `certify --local` prints from, so the extras must
+	// reach it too or the local path drops a proof the repo path shows.
+	st, ok := d.RunStatus(missionID)
+	if !ok || len(st.AuthoredExtra) != 1 {
+		t.Fatalf("RunStatus.AuthoredExtra = %+v, want the one carried-out part", st.AuthoredExtra)
+	}
+}

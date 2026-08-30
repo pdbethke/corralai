@@ -329,7 +329,7 @@ func ungradableEvidence(reason string) string {
 // taste. Pairing was NOT attempted for:
 //   - no-language (:215) — no plugin matched, so TestPaths is never reached
 //   - is-test (:222) — the file IS a test, excluded before pairing
-//   - not-a-regular-file (:189), skipped-dir (:117,:142) — walk-time, earlier
+//   - not-a-regular-file, skipped-dir, gitignored — walk-time, earlier
 //     still, before language detection even runs
 //
 // Pairing WAS attempted, and its result is precisely what decided the row, for

@@ -6,7 +6,11 @@
 package reposcan
 
 import (
+	"bytes"
+	"errors"
+	"fmt"
 	"io/fs"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -58,6 +62,14 @@ const (
 	// there, rather than see a repo that appears smaller than it is. VCS and
 	// dependency trees are the exception — see invisibleDirs.
 	ReasonSkippedDir = "skipped-dir"
+	// ReasonGitignored marks a file the repository's own .gitignore says is
+	// not its source — a sibling worktree, generated output, a scratch copy.
+	// The hardcoded skip list cannot know a project's private names, and a
+	// gitignored COPY of a source file pairs perfectly with its own test, so
+	// without this it is counted (and can be selected) as a candidate: on
+	// this repo three stale worktrees under .worktrees/ turned 227 candidates
+	// into 468. Accounted like skipped-dir: the file is listed, never dropped.
+	ReasonGitignored = "gitignored"
 )
 
 // skipDirs are never walked: dependency, build-output and VCS trees are not
@@ -96,10 +108,12 @@ var invisibleDirs = map[string]bool{
 	".bundle": true,
 }
 
-// skippedDirFiles enumerates the regular files under dir as skipped-dir
-// exclusions, keyed repo-relative to root. Non-regular entries (symlinks,
-// devices) are not followed and not listed: the point is an honest count of
-// source files not looked at, not an inventory of the filesystem.
+// subtreeFiles enumerates the regular files under dir as exclusions carrying
+// reason, keyed repo-relative to root. Non-regular entries (symlinks, devices)
+// are not followed and not listed: the point is an honest count of source
+// files not looked at, not an inventory of the filesystem. A file named .git
+// (a linked worktree's pointer to its main repository) is VCS, not source,
+// and stays invisible like the .git directory it stands in for.
 //
 // Degradation: a subtree that cannot be read (permissions, a directory that
 // vanished mid-scan) is NOT scan-fatal. These are trees the audit deliberately
@@ -107,14 +121,14 @@ var invisibleDirs = map[string]bool{
 // into them at all, so an unreadable build/ could not affect a scan. Failing
 // the whole run over one would be a regression. The unreadable subtree is
 // recorded as a single skipped-dir entry and the walk continues.
-func skippedDirFiles(dir, root string) ([]Exclusion, error) {
+func subtreeFiles(dir, root, reason string) ([]Exclusion, error) {
 	var out []Exclusion
 	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			// Account the unreadable path as one entry and move on. d may be
 			// nil here (an error stat-ing the root of the subtree).
 			if rel, rerr := filepath.Rel(root, p); rerr == nil {
-				out = append(out, Exclusion{Path: filepath.ToSlash(rel), Reason: ReasonSkippedDir})
+				out = append(out, Exclusion{Path: filepath.ToSlash(rel), Reason: reason})
 			}
 			if d != nil && d.IsDir() {
 				return fs.SkipDir
@@ -132,17 +146,62 @@ func skippedDirFiles(dir, root string) ([]Exclusion, error) {
 			}
 			return nil
 		}
-		if !d.Type().IsRegular() {
+		if !d.Type().IsRegular() || d.Name() == ".git" {
 			return nil
 		}
 		rel, rerr := filepath.Rel(root, p)
 		if rerr != nil {
 			return rerr
 		}
-		out = append(out, Exclusion{Path: filepath.ToSlash(rel), Reason: ReasonSkippedDir})
+		out = append(out, Exclusion{Path: filepath.ToSlash(rel), Reason: reason})
 		return nil
 	})
 	return out, err
+}
+
+// gitIgnored asks the repository what its own .gitignore stack excludes under
+// root, as root-relative slash paths: files, and directories git collapsed to
+// a single entry (a wholly-ignored directory, or a nested repository such as
+// a linked worktree, comes back as "dir/" with nothing beneath it listed).
+//
+// The scan does not reimplement ignore semantics — nested .gitignore files,
+// .git/info/exclude, core.excludesFile and negations all already have an
+// authority, and it is git. Outside a git work tree, or with no git on PATH,
+// both sets are nil and the walk behaves exactly as it always has: there is
+// no authority to consult, so .gitignore is just a file. Inside a work tree a
+// git failure IS an error — degrading to "walk everything" there would
+// silently move the candidate count, which is the defect this exists to fix.
+func gitIgnored(root string) (files, dirs map[string]bool, err error) {
+	git, lerr := exec.LookPath("git")
+	if lerr != nil {
+		return nil, nil, nil
+	}
+	probe := exec.Command(git, "-C", root, "rev-parse", "--is-inside-work-tree") // #nosec G204 -- git resolved via LookPath; root is the operator's own scan root; every other arg literal
+	if out, perr := probe.Output(); perr != nil || strings.TrimSpace(string(out)) != "true" {
+		var exit *exec.ExitError
+		if perr != nil && !errors.As(perr, &exit) {
+			return nil, nil, fmt.Errorf("git rev-parse: %w", perr)
+		}
+		return nil, nil, nil
+	}
+	ls := exec.Command(git, "-C", root, "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory") // #nosec G204 -- same: LookPath binary, operator's root, literal args
+	out, lserr := ls.Output()
+	if lserr != nil {
+		return nil, nil, fmt.Errorf("git ls-files --ignored in %s: %w", root, lserr)
+	}
+	files, dirs = map[string]bool{}, map[string]bool{}
+	for _, ent := range bytes.Split(out, []byte{0}) {
+		if len(ent) == 0 {
+			continue
+		}
+		p := filepath.ToSlash(string(ent))
+		if strings.HasSuffix(p, "/") {
+			dirs[strings.TrimSuffix(p, "/")] = true
+		} else {
+			files[p] = true
+		}
+	}
+	return files, dirs, nil
 }
 
 // Enumerate walks root and classifies every file into an audit candidate or
@@ -158,6 +217,11 @@ func Enumerate(root string) ([]Candidate, []Exclusion, error) {
 func EnumerateWithTests(root string, tests *TestMap) ([]Candidate, []Exclusion, error) {
 	var cands []Candidate
 	var excl []Exclusion
+
+	ignoredFiles, ignoredDirs, err := gitIgnored(root)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	// First pass: which repo-relative paths exist, so pairing can check.
 	present := map[string]bool{}
@@ -175,12 +239,22 @@ func EnumerateWithTests(root string, tests *TestMap) ([]Candidate, []Exclusion, 
 				// this they vanish from the walked total, making the repo
 				// look smaller than it is in a report that gets signed.
 				if !invisibleDirs[d.Name()] {
-					sub, serr := skippedDirFiles(path, root)
+					sub, serr := subtreeFiles(path, root, ReasonSkippedDir)
 					if serr != nil {
 						return serr
 					}
 					excl = append(excl, sub...)
 				}
+				return filepath.SkipDir
+			}
+			if ignoredDirs[filepath.ToSlash(rel)] {
+				// The repo's own .gitignore says nothing under here is its
+				// source. Accounted like build output, for the same reason.
+				sub, serr := subtreeFiles(path, root, ReasonGitignored)
+				if serr != nil {
+					return serr
+				}
+				excl = append(excl, sub...)
 				return filepath.SkipDir
 			}
 			return nil
@@ -194,6 +268,10 @@ func EnumerateWithTests(root string, tests *TestMap) ([]Candidate, []Exclusion, 
 		// the audit reads off the operator's disk.
 		if !d.Type().IsRegular() {
 			excl = append(excl, Exclusion{Path: slash, Reason: ReasonNotRegularFile})
+			return nil
+		}
+		if ignoredFiles[slash] {
+			excl = append(excl, Exclusion{Path: slash, Reason: ReasonGitignored})
 			return nil
 		}
 		present[slash] = true

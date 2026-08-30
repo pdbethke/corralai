@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
+	"github.com/pdbethke/corralai/internal/lang"
 )
 
 // extractCode pulls Go source out of a model response. It handles a
@@ -119,24 +120,29 @@ func afterMarkerLine(s string) string {
 // splice must reproduce original byte-for-byte. Any violation returns ok=false
 // so the caller drops the mutant — corral never scores a mutant it cannot prove
 // is a faithful single-point derivative of the exact code under audit.
-func applyMutation(original, search, replace string) (mutant string, ok bool) {
+//
+// span is the 1-based, inclusive range of ORIGINAL lines the SEARCH anchor
+// occupied — the lines a test must reach to observe this mutant.
+func applyMutation(original, search, replace string) (mutant string, span lang.LineRange, ok bool) {
 	if search == "" || search == replace {
-		return "", false
+		return "", lang.LineRange{}, false
 	}
 	i := strings.Index(original, search)
 	if i < 0 {
-		return "", false // anchor not found
+		return "", lang.LineRange{}, false // anchor not found
 	}
 	if strings.Contains(original[i+len(search):], search) {
-		return "", false // anchor not unique
+		return "", lang.LineRange{}, false // anchor not unique
 	}
 	mutant = original[:i] + replace + original[i+len(search):]
 	// Integrity round-trip: undo the one change and demand the EXACT original
 	// back — nothing outside the replaced span may have moved.
 	if mutant[:i]+search+mutant[i+len(replace):] != original {
-		return "", false
+		return "", lang.LineRange{}, false
 	}
-	return mutant, true
+	start := strings.Count(original[:i], "\n") + 1
+	end := start + strings.Count(strings.TrimSuffix(search, "\n"), "\n")
+	return mutant, lang.LineRange{Start: start, End: end}, true
 }
 
 func sha256Sum(s string) []byte {

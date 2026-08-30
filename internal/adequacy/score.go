@@ -24,6 +24,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/pdbethke/corralai/internal/lang"
 )
 
 // minMutantTimeout / maxMutantTimeout bound the auto-derived per-mutant
@@ -121,6 +123,11 @@ type Mutant struct {
 	// patch re-applies to reproduce Code. Set by testgen's patch applier, which
 	// drops any mutant that cannot be proven a clean single-region derivative.
 	ParentSHA256 string
+	// Span is the 1-based, inclusive range of ORIGINAL lines this mutant's
+	// SEARCH anchor occupied — the lines a test must reach to observe it.
+	// Zero when the producer cannot say (hand-built fixtures): the scorer
+	// then grades the mutant by the file's whole selection and says so.
+	Span lang.LineRange
 }
 
 // Jail runs a test command against a set of files (path -> content) in an

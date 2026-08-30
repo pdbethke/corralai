@@ -132,7 +132,7 @@ func parseMutantsDiag(resp, original string) ([]adequacy.Mutant, MutantParseDiag
 			}
 			continue
 		}
-		mutant, ok := applyMutation(original, search, replace)
+		mutant, span, ok := applyMutation(original, search, replace)
 		if !ok {
 			// applyMutation refused after the anchor was known present, so the
 			// remaining causes are non-uniqueness and the integrity round-trip.
@@ -149,6 +149,7 @@ func parseMutantsDiag(resp, original string) ([]adequacy.Mutant, MutantParseDiag
 			ID:           fmt.Sprintf("m%d", len(out)+1),
 			Code:         mutant,
 			ParentSHA256: parentHash,
+			Span:         span,
 		})
 	}
 	return out, d

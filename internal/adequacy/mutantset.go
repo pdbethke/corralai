@@ -63,6 +63,14 @@ type MutantSetEntry struct {
 // The parent hash is what makes storing only the hunk safe: the source the
 // hunk re-applies to is proven to be the source it was cut from before any
 // mutant is handed back.
+//
+// A WHOLE-FILE ENTRY IS LEGAL HERE, and re-recording a replayed v1 set is how
+// one gets written: the v1 reader upgrades each entry to Search:"" /
+// Replace:<the file>, and --record-mutants writes those straight back out, so
+// a v2 document can legitimately contain whole-file entries alongside hunks.
+// Neither the format nor the parent hash distinguishes them —
+// Mutant.IsWholeFile() is the discriminator, and anything that renders a hunk
+// (a diff view, a per-survivor prompt) must ask it first.
 type RecordedMutant struct {
 	ID      string         `json:"id"`
 	Span    lang.LineRange `json:"span"`

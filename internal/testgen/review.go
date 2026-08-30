@@ -78,11 +78,11 @@ func TriageSurvivors(ctx context.Context, m LLM, goal, code, test string, surviv
 		// compliant code is already above in the same prompt, so this is
 		// redundant bulk — Task 2 replaces it with a rendered diff. TODO(Task
 		// 2): render the hunk instead of materialising the file here.
-		code, aerr := s.Apply(code)
+		mutCode, aerr := s.Apply(code)
 		if aerr != nil {
 			return nil, fmt.Errorf("testgen: survivor %s does not apply to the code under review: %w", s.ID, aerr)
 		}
-		fmt.Fprintf(&b, "MUTANT %s:\n%s\n\n", s.ID, code)
+		fmt.Fprintf(&b, "MUTANT %s:\n%s\n\n", s.ID, mutCode)
 	}
 	resp, err := m.Ask(ctx, reviewSystem, b.String())
 	if err != nil {

@@ -88,6 +88,22 @@ func TestParseMutants_DropsUnappliableHunks(t *testing.T) {
 	if muts[0].ID != "m1" {
 		t.Errorf("kept mutant ID = %q, want m1", muts[0].ID)
 	}
+
+	// An empty SEARCH is now OVERLOADED: adequacy.Mutant treats Search=="" as
+	// the v1 WHOLE-FILE shape, where Replace IS the entire file. That shape is
+	// only ever CONSTRUCTED by the v1 reader. A model that emits an empty
+	// SEARCH must still be refused here as a no-op — accepting it would turn a
+	// hunk the generator botched into a whole-file mutant whose "Replace" is
+	// three lines of code, silently replacing the file under audit with them.
+	t.Run("an empty SEARCH is a no-op, never the whole-file shape", func(t *testing.T) {
+		ms, d := parseMutantsDiag(srBlock("5", "", "x"), orig)
+		if len(ms) != 0 {
+			t.Fatalf("an empty SEARCH must produce NO mutant, got %+v", ms)
+		}
+		if d.NoOp != 1 {
+			t.Fatalf("diag = %+v, want the empty SEARCH counted as 1 no-op", d)
+		}
+	})
 }
 
 // TestWhitespaceMangledSearchIsRefusedNotAnchored pins the subtlety the hunk

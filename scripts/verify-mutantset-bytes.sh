@@ -221,6 +221,14 @@ func main() {
 	if differing > 0 {
 		os.Exit(1)
 	}
+	if identical == 0 {
+		// A verification that verified nothing must never read as a pass. The
+		// likely causes are all operator-side — the wrong file, the wrong
+		// commit, an empty set — and every one of them looks identical to
+		// success if zero comparisons is allowed to exit 0.
+		fmt.Fprintln(os.Stderr, "verify-mutantset-bytes: NOTHING WAS VERIFIED — no mutant was compared. Check the path key, the checked-out commit, and that the set is not empty.")
+		os.Exit(1)
+	}
 }
 GO
 

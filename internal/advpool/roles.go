@@ -159,8 +159,10 @@ func renderTestWriterRepairing(rs RunSpec, sigs []repoindex.Signature, survivors
 			// until RenderHunk lands. TODO(Task 2): render the hunk.
 			code, aerr := m.Apply(rs.Code)
 			if aerr != nil {
-				// Skip rather than fail the seat: a survivor the prompt cannot
-				// show is one fewer example, not a broken run.
+				// Named, not dropped: the writer is told to kill these
+				// survivors by id, and one that silently vanished would look
+				// like a survivor that never existed.
+				fmt.Fprintf(&b, "\n--- SURVIVOR %s (not renderable) ---\n", m.ID)
 				continue
 			}
 			fmt.Fprintf(&b, "\n--- SURVIVOR %s ---\n%s\n", m.ID, code)

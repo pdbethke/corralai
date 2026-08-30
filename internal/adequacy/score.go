@@ -218,6 +218,13 @@ func (m Mutant) IsWholeFile() bool { return m.Search == "" }
 // original says — that is the v1 compatibility path, where the recorded
 // document holds the finished file and there is nothing to splice.
 //
+// THE EMPTY SEARCH IS OVERLOADED, so be exact about who may construct one: an
+// empty Search is the v1 whole-file shape and is only ever CONSTRUCTED by the
+// v1 reader — the parser refuses an empty SEARCH from a model. Were it not,
+// a generator that botched a hunk would produce a "whole-file mutant" whose
+// entire content is the three lines it meant to substitute, and Apply would
+// hand that to the jail as the file under audit.
+//
 // Otherwise Search must be non-empty, must DIFFER from Replace (a mutation
 // that changes nothing is not a mutant), and must occur EXACTLY ONCE in
 // original. Every violation is an error and never a silent no-op: an

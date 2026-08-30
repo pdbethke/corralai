@@ -237,7 +237,7 @@ Usage of certify --repo:
   -substrate string
     	where the audit runs: jail (bwrap) or workspace (mutate --repo in place; the caller IS the isolation boundary, e.g. an ephemeral CI runner) (default "jail")
   -swarm int
-    	max concurrent audit workers (0 = auto-size to this host's cores)
+    	max concurrent audit workers (0 = auto-size to this host's cores); on --substrate workspace it also sizes the private trees that score one file's mutants at once (budget/4, min 1), so --swarm 4 is one tree
   -tests string
     	JSON file mapping repo-relative SOURCE paths to their test files, consulted before filename convention. Convention cannot pair a project that names tests after behaviour rather than after source files (expressjs/express: lib/response.js is tested by test/res.send.js, res.json.js …), and it can pair the WRONG file (psf/requests pairs adapters.py to an 8-line test_adapters.py while its real coverage is in a 108KB test_requests.py). A mapping to a file that does not exist is refused, never silently fallen back to convention
   -timeout certify --local

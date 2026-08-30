@@ -79,7 +79,7 @@ func TestGoTreeEnvDividesTheCPU(t *testing.T) {
 
 	// 24 cores over 6 trees = 4 apiece.
 	got := te.TreeEnv(t.TempDir(), 4)
-	want := map[string]bool{"GOMAXPROCS=4": true, "GOFLAGS=-p=4": true}
+	want := map[string]bool{"GOMAXPROCS=4": true, "GOFLAGS=-trimpath -p=4": true}
 	if len(got) != len(want) {
 		t.Fatalf("TreeEnv = %v, want %v", got, want)
 	}
@@ -99,8 +99,8 @@ func TestGoTreeEnvDividesTheCPU(t *testing.T) {
 			flags = kv
 		}
 	}
-	if flags != "GOFLAGS=-mod=vendor -p=4" {
-		t.Fatalf("GOFLAGS = %q, want the operator's own flags kept with -p appended", flags)
+	if flags != "GOFLAGS=-mod=vendor -trimpath -p=4" {
+		t.Fatalf("GOFLAGS = %q, want the operator's own flags kept with -trimpath and -p appended", flags)
 	}
 
 	// Fails closed: a degenerate share is one core, never zero (GOMAXPROCS=0

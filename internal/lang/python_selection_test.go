@@ -337,3 +337,74 @@ func TestPythonWithAuthoredTestUsesTheStrippedBase(t *testing.T) {
 		t.Errorf("uncovered authored cmd = %v, want %v (the stripped base + the authored test alone)", got, want)
 	}
 }
+
+func spanSelection() Selection {
+	return Selection{
+		Method: "coverage-context", Of: 10,
+		Base:  []string{"python3", "-m", "pytest", "-q"},
+		Cmd:   []string{"python3", "-m", "pytest", "-q", "tests/test_a.py::t1", "tests/test_a.py::t2", "tests/test_b.py::t3"},
+		Tests: []string{"tests/test_a.py::t1", "tests/test_a.py::t2", "tests/test_b.py::t3"},
+		Lines: map[string][]LineRange{
+			"tests/test_a.py::t1": {{10, 20}},
+			"tests/test_a.py::t2": {{10, 12}, {40, 45}},
+			"tests/test_b.py::t3": {{40, 60}},
+		},
+		Static: []LineRange{{1, 5}, {30, 30}},
+	}
+}
+
+func TestForSpanPicksTheTestsThatReachTheSpan(t *testing.T) {
+	cmd, tests, rule := pyPlugin{}.ForSpan(spanSelection(), LineRange{41, 42})
+	if rule != SpanRuleLines {
+		t.Fatalf("rule = %q", rule)
+	}
+	want := []string{"tests/test_a.py::t2", "tests/test_b.py::t3"}
+	if !reflect.DeepEqual(tests, want) {
+		t.Errorf("tests = %v, want %v", tests, want)
+	}
+	if !reflect.DeepEqual(cmd, []string{"python3", "-m", "pytest", "-q", "tests/test_a.py::t2", "tests/test_b.py::t3"}) {
+		t.Errorf("cmd = %v", cmd)
+	}
+}
+
+func TestForSpanStaticLineRunsTheWholeFileSelection(t *testing.T) {
+	sel := spanSelection()
+	cmd, tests, rule := pyPlugin{}.ForSpan(sel, LineRange{29, 31}) // touches static line 30
+	if rule != SpanRuleStatic || !reflect.DeepEqual(cmd, sel.Cmd) || !reflect.DeepEqual(tests, sel.Tests) {
+		t.Errorf("static span must run the file selection: rule=%q cmd=%v", rule, cmd)
+	}
+}
+
+func TestForSpanUnreachedRunsTheWholeFileSelectionAnyway(t *testing.T) {
+	sel := spanSelection()
+	cmd, _, rule := pyPlugin{}.ForSpan(sel, LineRange{70, 75})
+	if rule != SpanRuleUnreached || !reflect.DeepEqual(cmd, sel.Cmd) {
+		t.Errorf("unreached span must still run the file selection: rule=%q cmd=%v", rule, cmd)
+	}
+}
+
+func TestForSpanNoSpanOrNoLinesIsToday(t *testing.T) {
+	sel := spanSelection()
+	if cmd, _, rule := (pyPlugin{}).ForSpan(sel, LineRange{}); rule != SpanRuleFile || !reflect.DeepEqual(cmd, sel.Cmd) {
+		t.Errorf("zero span: rule=%q cmd=%v", rule, cmd)
+	}
+	sel.Lines = nil
+	if cmd, _, rule := (pyPlugin{}).ForSpan(sel, LineRange{41, 42}); rule != SpanRuleFile || !reflect.DeepEqual(cmd, sel.Cmd) {
+		t.Errorf("no line evidence: rule=%q cmd=%v", rule, cmd)
+	}
+}
+
+func TestForSpanArgvFallbackStillApplies(t *testing.T) {
+	sel := spanSelection()
+	var ids []string
+	for i := 0; i < 3000; i++ {
+		id := fmt.Sprintf("tests/test_big.py::test_%04d_%s", i, strings.Repeat("x", 20))
+		ids = append(ids, id)
+		sel.Lines[id] = []LineRange{{41, 42}}
+	}
+	sel.Tests = append(sel.Tests, ids...)
+	_, tests, rule := pyPlugin{}.ForSpan(sel, LineRange{41, 42})
+	if rule != SpanRuleLines || len(tests) != 3 || tests[len(tests)-1] != "tests/test_big.py" {
+		t.Errorf("over the argv cap the subset collapses to files: %v", tests)
+	}
+}

@@ -1214,20 +1214,65 @@ func (pyPlugin) Select(evidence []byte, repoRoot, codePath, testPath string, tes
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
-	if argvLen(ids) > selectionMaxArgv {
-		files := map[string]bool{}
-		for _, id := range ids {
-			files[strings.SplitN(id, "::", 2)[0]] = true
-		}
-		ids = ids[:0]
-		for f := range files {
-			ids = append(ids, f)
-		}
-		sort.Strings(ids)
-	}
+	ids = collapseToFilesIfTooLong(ids)
 	sel.Tests = ids
 	sel.Cmd = append(append([]string{}, sel.Base...), ids...)
 	return sel, nil
+}
+
+// collapseToFilesIfTooLong collapses ids (sorted node ids) to their
+// containing files when the sorted argv would exceed selectionMaxArgv —
+// still evidence-derived, just a coarser (superset) selection than the
+// individual node ids would give. A no-op when ids already fits.
+func collapseToFilesIfTooLong(ids []string) []string {
+	if argvLen(ids) <= selectionMaxArgv {
+		return ids
+	}
+	files := map[string]bool{}
+	for _, id := range ids {
+		files[strings.SplitN(id, "::", 2)[0]] = true
+	}
+	out := make([]string, 0, len(files))
+	for f := range files {
+		out = append(out, f)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// ForSpan narrows sel to the tests whose recorded coverage reaches span. See
+// TestSelector.ForSpan and SpanRule for the contract.
+func (pyPlugin) ForSpan(sel Selection, span LineRange) ([]string, []string, string) {
+	file := func(rule string) ([]string, []string, string) {
+		return append([]string{}, sel.Cmd...), append([]string{}, sel.Tests...), rule
+	}
+	if span.IsZero() || len(sel.Lines) == 0 {
+		return file(SpanRuleFile)
+	}
+	for _, s := range sel.Static {
+		if s.Overlaps(span) {
+			return file(SpanRuleStatic)
+		}
+	}
+	var ids []string
+	for _, id := range sel.Tests {
+		for _, r := range sel.Lines[id] {
+			if r.Overlaps(span) {
+				ids = append(ids, id)
+				break
+			}
+		}
+	}
+	if len(ids) == 0 {
+		return file(SpanRuleUnreached)
+	}
+	sort.Strings(ids)
+	ids = collapseToFilesIfTooLong(ids)
+	base := sel.Base
+	if base == nil {
+		base = sel.Cmd[:len(sel.Cmd)-len(sel.Tests)] // Cmd is Base + Tests by construction
+	}
+	return append(append([]string{}, base...), ids...), ids, SpanRuleLines
 }
 
 // pyValueOptions are the pytest options that take their value as a SEPARATE

@@ -306,4 +306,17 @@ type TestSelector interface {
 	// sel.Base when the Selection carries one, so "alone" is true rather
 	// than "alongside whatever the operator's targets collect".
 	WithAuthoredTest(sel Selection, testCmd []string, authoredTestPath string) []string
+	// ForSpan narrows sel to the tests whose recorded coverage reaches span.
+	// It never returns an empty command: the fallbacks all run the file's
+	// selection, because corral reports what it ran, not what coverage
+	// predicted. Only meaningful when len(sel.Tests) > 0.
+	ForSpan(sel Selection, span LineRange) (cmd []string, tests []string, rule string)
 }
+
+// SpanRule names why ForSpan chose what it chose.
+const (
+	SpanRuleLines     = "lines"     // a strict subset reaches the span
+	SpanRuleStatic    = "static"    // the span touches an import-time line: the whole file selection
+	SpanRuleUnreached = "unreached" // no test reaches the span: the whole file selection runs anyway
+	SpanRuleFile      = "file"      // no span, or no line evidence: today's behaviour
+)

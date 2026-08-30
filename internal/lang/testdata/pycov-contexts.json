@@ -2,12 +2,7 @@
  "files": {
   "pkg/__init__.py": {
    "lines": {},
-   "static": [
-    [
-     0,
-     0
-    ]
-   ],
+   "static": [],
    "tests": []
   },
   "pkg/calc.py": {
@@ -42,12 +37,7 @@
   },
   "tests/__init__.py": {
    "lines": {},
-   "static": [
-    [
-     0,
-     0
-    ]
-   ],
+   "static": [],
    "tests": []
   },
   "tests/test_calc.py": {

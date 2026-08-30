@@ -1055,6 +1055,11 @@ for path in data.measured_files():
     by_test = {}
     static = set()
     for lineno, ctxs in data.contexts_by_lineno(path).items():
+        # coverage reports line 0 for a module with nothing executable in it
+        # (an empty __init__.py), and a [[0,0]] range is a line that does not
+        # exist: no mutant span can overlap it, and it reads as evidence.
+        if lineno <= 0:
+            continue
         for c in ctxs:
             if not c:
                 static.add(lineno)

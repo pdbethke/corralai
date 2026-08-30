@@ -245,6 +245,76 @@ func TestPerMutantDisclosedEvenWhenEveryMutantIsInvalid(t *testing.T) {
 	}
 }
 
+// spanRecordingJail is a project whose suite passes on the compliant code,
+// fails on anything else, and records every command it was asked to run. It
+// is the only way to see WHICH command each mutant actually faced: the
+// per-mutant closure is handed to adequacy.Score as an option, and a wiring
+// mistake between JailScorer and Score would leave every mutant graded by
+// the shared command while the report still said "coverage-lines".
+type spanRecordingJail struct {
+	codePath string
+	code     string
+	cmds     [][]string // test commands only; the compile gate is not a grading
+}
+
+func (j *spanRecordingJail) RunTest(_ context.Context, files map[string]string, cmd []string) (bool, error) {
+	// The compile gate runs the language plugin's own check, never pytest.
+	// It must PASS, or every mutant is invalid and nothing is graded.
+	if !strings.Contains(strings.Join(cmd, " "), "pytest") {
+		return true, nil
+	}
+	j.cmds = append(j.cmds, append([]string{}, cmd...))
+	return files[j.codePath] == j.code, nil // the compliant baseline passes; a mutant is killed
+}
+
+// JailScorer.ScoreReportFor must hand the per-mutant closure all the way
+// through to adequacy.Score, so each mutant is executed against the tests
+// that reach ITS span while the baseline stays the file's shared command.
+func TestScoreReportForRunsEachMutantsOwnCommand(t *testing.T) {
+	const codePath, code = "pkg/a.py", "x = 1\n"
+	jail := &spanRecordingJail{codePath: codePath, code: code}
+	s := repoScorer(lineSelection())
+	s.Jail = jail
+	s.BaseFiles = map[string]string{codePath: code, "tests/test_a.py": "def test_x(): pass\n"}
+
+	mutants := []adequacy.Mutant{
+		{ID: "m1", Code: "x = 2\n", Span: lang.LineRange{Start: 41, End: 41}}, // reached by t2 alone
+		{ID: "m2", Code: "x = 3\n", Span: lang.LineRange{Start: 2, End: 2}},   // import-time: the file selection
+	}
+	shared := DevCommand(RunSpec{Lang: "python", TestCmd: "python3 -m pytest -q", Selection: lineSelection()})
+	rep, err := s.ScoreReportFor(context.Background(), codePath, code, "", mutants,
+		shared, DevCommandFor(RunSpec{Lang: "python", Selection: lineSelection()}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The baseline is a question about the FILE, so it runs the shared
+	// command; each mutant then runs its own.
+	if len(jail.cmds) < 3 {
+		t.Fatalf("jail ran %d test command(s): %v", len(jail.cmds), jail.cmds)
+	}
+	wantBase := []string{"python3", "-m", "pytest", "-q", "tests/test_a.py::t1", "tests/test_a.py::t2"}
+	if !reflect.DeepEqual(jail.cmds[0], wantBase) {
+		t.Errorf("baseline ran %v, want the file's shared selection %v", jail.cmds[0], wantBase)
+	}
+	byCmd := map[string]bool{}
+	for _, c := range jail.cmds {
+		byCmd[strings.Join(c, " ")] = true
+	}
+	narrowed := "python3 -m pytest -q tests/test_a.py::t2"
+	if !byCmd[narrowed] {
+		t.Errorf("no mutant ran the narrowed command %q: %v", narrowed, jail.cmds)
+	}
+
+	// And the grading is REPORTED, not merely performed.
+	if got, want := rep.PerMutant["m1"], (adequacy.MutantGrading{TestsRun: 1, Rule: lang.SpanRuleLines}); got != want {
+		t.Errorf("m1 grading = %+v, want %+v", got, want)
+	}
+	if got, want := rep.PerMutant["m2"], (adequacy.MutantGrading{TestsRun: 2, Rule: lang.SpanRuleStatic}); got != want {
+		t.Errorf("m2 grading = %+v, want %+v", got, want)
+	}
+}
+
 // The spread is a MEASUREMENT, and a Verdict is marshalled whole into the
 // signed record, the ledger and the warehouse. A run that measured no spread
 // must therefore carry no spread at all: a struct field with `omitempty`

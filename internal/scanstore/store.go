@@ -844,6 +844,12 @@ type Mutant struct {
 	// scan that is mostly "static" or "unreached" narrowed almost nothing,
 	// and the count of rules is what says so. Both are zero on a run that
 	// graded every mutant with the file's one shared command.
+	//
+	// They describe the DEV pass — the exam this mutant's outcome above came
+	// from. Proven describes the AUTHORED pass, which runs the pool's own
+	// test and is never narrowed per mutant: a row reading tests_run 3 and
+	// proven true means three tests failed to kill it and the authored test
+	// then did, not that the authored test ran those three.
 	TestsRun      int
 	SelectionRule string
 }

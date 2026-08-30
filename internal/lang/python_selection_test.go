@@ -3,6 +3,7 @@
 package lang
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -250,6 +251,33 @@ func TestPythonSelectReadsLinesAndStaticFromV2(t *testing.T) {
 	}
 	if len(sel.Static) == 0 {
 		t.Errorf("the def lines execute at import and must be reported static: %+v", sel.Static)
+	}
+}
+
+// A module with nothing executable in it (an empty __init__.py) is reported
+// by coverage at line 0, and the reducer used to emit [[0,0]] as a static
+// range. Line 0 does not exist: no mutant span can overlap it, and every
+// reader downstream treats a static range as evidence about real source.
+func TestRecordedEvidenceCarriesNoLineZero(t *testing.T) {
+	var doc struct {
+		Files map[string]pySelectionFile `json:"files"`
+	}
+	if err := json.Unmarshal(recordedEvidence(t), &doc); err != nil {
+		t.Fatal(err)
+	}
+	for path, f := range doc.Files {
+		for _, r := range f.Static {
+			if r[0] <= 0 || r[1] <= 0 {
+				t.Errorf("%s: static range %v is not a source line", path, r)
+			}
+		}
+		for idx, rngs := range f.Lines {
+			for _, r := range rngs {
+				if r[0] <= 0 || r[1] <= 0 {
+					t.Errorf("%s test %s: line range %v is not a source line", path, idx, r)
+				}
+			}
+		}
 	}
 }
 

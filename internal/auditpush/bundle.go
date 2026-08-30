@@ -29,6 +29,15 @@ const SchemaVersion = 2
 // The key is (Repo, RunURL, ScanID), and that is deliberate: it is unique
 // PER WRITER, so twenty runners pushing at once need no coordination and can
 // never collide. A local run has RunURL "" and Host set.
+//
+// One case DOES repeat the key, and it is worth naming rather than
+// discovering: a local run with no --record has RunURL "" and ScanID 0, so
+// every such push to the same repo lands under ("repo", "", 0). That is
+// safe, not a bug — these tables are APPEND-ONLY and every row carries ts,
+// so the rows stack rather than overwrite and every reader (corral_seal
+// included) orders by ts. What the repeated key costs is joinability: those
+// rows cannot be tied back to a local ledger scan, because there is no
+// ledger scan to tie them to. --record is what makes the key distinguishing.
 type ScanRow struct {
 	Repo   string
 	RunURL string
@@ -94,7 +103,12 @@ type MutantRow struct {
 	// KilledBy is the first failing test id, best effort, when the language
 	// plugin can parse one out of the runner's output. "" when it cannot —
 	// never inferred.
-	KilledBy  string
+	KilledBy string
+	// SpanStart and SpanEnd are the mutated line range. NOTHING produces
+	// them yet (advpool.MutantRef carries no span), and they are 1-BASED, so
+	// 0 is unambiguously "not recorded" and is written SQL NULL — line 0
+	// does not exist, and a reader jumping to it would be sent to the top of
+	// the file.
 	SpanStart int
 	SpanEnd   int
 	// Code is the mutant's source. It IS the audited code, so it is written
@@ -600,6 +614,15 @@ func lockTarget(target string) func() {
 	if !strings.HasPrefix(target, "md:") {
 		if abs, err := filepath.Abs(target); err == nil {
 			key = abs
+			// And through any symlink, because the mutex is the ONLY thing
+			// standing between two same-process writers and a silently lost
+			// push: two names for one file that hash to two keys would take
+			// two locks and lose one of the writes. EvalSymlinks fails on a
+			// warehouse that does not exist yet, which is fine — the
+			// absolute path is already a correct key for that case.
+			if real, err := filepath.EvalSymlinks(abs); err == nil {
+				key = real
+			}
 		}
 	}
 	v, _ := pushLocks.LoadOrStore(key, &sync.Mutex{})
@@ -732,7 +755,7 @@ func pushBundleOnce(target string, b Bundle) (Counts, error) {
 			nullIfEmpty(m.ParentSHA256), m.Outcome, nullIfEmpty(m.InvalidReason),
 			m.Proven, m.ProvenByAuthoredAlone, m.TestsRun,
 			nullIfEmpty(m.SelectionRule), m.DurationMillis, nullIfEmpty(m.KilledBy),
-			m.SpanStart, m.SpanEnd, code, m.StatementSHA256, SchemaVersion,
+			nullIfZeroInt(m.SpanStart), nullIfZeroInt(m.SpanEnd), code, m.StatementSHA256, SchemaVersion,
 		); err != nil {
 			return Counts{}, fmt.Errorf("auditpush: insert mutant %s/%s: %w", m.Path, m.MutantID, err)
 		}

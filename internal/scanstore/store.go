@@ -319,9 +319,14 @@ type File struct {
 	// invalid and timed-out mutants have no row of their own here and are
 	// carried at the FILE grain instead — a disclosed asymmetry with the
 	// warehouse's corral_mutants, which is a new table and can be complete.
-	MutantsGraded   int
-	MutantsInvalid  int
-	MutantsTimedOut int
+	MutantsGraded  int
+	MutantsInvalid int
+	// MutantsTimedOut is *int, not int, because NOTHING produces it yet: no
+	// verdict field counts mutants that hit their deadline. A stored 0 would
+	// be the positive claim "none timed out" on every row corral has ever
+	// written, which is a measurement nobody made. nil until the task that
+	// measures it lands; a genuine zero then means a genuine zero.
+	MutantsTimedOut *int
 	// The per-phase clock. Every one is *int64 and every one is SQL NULL
 	// until the task that measures it lands: the single timing number that
 	// existed before this change (SuiteBaselineMillis) is not where the
@@ -815,6 +820,17 @@ func nullableString(v string) any {
 	return v
 }
 
+// nullablePositive binds SQL NULL for a count that is only ever positive
+// when something actually recorded it. A stored 0 is a NUMBER — a later
+// query averages it, compares it and ranks on it — where NULL is the only
+// encoding of "this ledger does not say".
+func nullablePositive(v int) any {
+	if v < 1 {
+		return nil
+	}
+	return v
+}
+
 // nullableTrees binds SQL NULL for a concurrency that was never recorded.
 // Trees < 1 is the one "not recorded" state (see advpool.Concurrency): the
 // jail substrate builds no trees, a rejected file was never scored, and a
@@ -822,12 +838,7 @@ func nullableString(v string) any {
 // is a NUMBER — a later query would average it, compare it and rank on it —
 // where NULL is the only encoding of "this ledger does not say". Same rule
 // as mutants_from above, for the same reason.
-func nullableTrees(v int) any {
-	if v < 1 {
-		return nil
-	}
-	return v
-}
+func nullableTrees(v int) any { return nullablePositive(v) }
 
 // nullMillis turns a nullable BIGINT column into the *int64 the File struct
 // carries. It is the READ half of the rule the write half enforces by taking
@@ -1152,7 +1163,8 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		}
 		f.ParentSHA256 = parentSHA.String
 		f.MutantsGraded = int(mutantsGraded.Int64)
-		f.MutantsInvalid, f.MutantsTimedOut = int(mutantsInvalid.Int64), int(mutantsTimedOut.Int64)
+		f.MutantsInvalid = int(mutantsInvalid.Int64)
+		f.MutantsTimedOut = nullCount(mutantsTimedOut)
 		f.GoalsDerived = int(goalsDerived.Int64)
 		f.SelectionMillis = nullMillis(selectionMS)
 		f.GenerationMillis = nullMillis(generationMS)
@@ -1284,6 +1296,11 @@ type Mutant struct {
 	// (advpool's lang.LineRange). They are what turns a mutant id into a
 	// place: "which lines survive" is the question a reader actually has,
 	// and an opaque id cannot answer it.
+	//
+	// NOTHING produces them yet — advpool.MutantRef, which is what reaches
+	// this package, carries no span — so every row written today stores SQL
+	// NULL. They are 1-based, so 0 is unambiguously "not recorded" rather
+	// than a line.
 	SpanStart int
 	SpanEnd   int
 	// ProvenByAuthoredAlone marks a survivor the pool's AUTHORED test killed
@@ -1362,7 +1379,11 @@ func (s *Store) RecordMutants(ctx context.Context, ms []Mutant) error {
 				duration_ms, killed_by, span_start, span_end, proven_by_authored_alone)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			m.ScanID, m.Path, m.MutantID, m.Outcome, m.ParentSHA256, m.Proven, m.TestsRun, m.SelectionRule,
-			m.DurationMillis, m.KilledBy, m.SpanStart, m.SpanEnd, m.ProvenByAuthoredAlone,
+			// Line numbers are 1-BASED, so 0 is the one "not recorded" state
+			// — and today it is the only state: advpool.MutantRef carries no
+			// span, so nothing produces one. Line 0 does not exist, and a
+			// reader jumping to it would be sent to the top of the file.
+			m.DurationMillis, m.KilledBy, nullablePositive(m.SpanStart), nullablePositive(m.SpanEnd), m.ProvenByAuthoredAlone,
 		); err != nil {
 			return fmt.Errorf("scanstore: RecordMutants: insert %s/%s: %w", m.Path, m.MutantID, err)
 		}
@@ -1518,4 +1539,25 @@ func (s *Store) EventsForScan(ctx context.Context, scanID int64) ([]Event, error
 		return nil, fmt.Errorf("scanstore: EventsForScan: %w", err)
 	}
 	return out, nil
+}
+
+// SetStatementSHA256 stamps the signed statement's hash onto a scan header
+// after the fact.
+//
+// It exists because of an ordering the scan cannot avoid: the statement has
+// to NAME the scan id, so it is written after the header row, and the header
+// row therefore has nothing to write in this column at INSERT time. Without
+// this the local ledger's statement_sha256 was empty on every run that used
+// --attest — while the pushed warehouse row carried the hash — which is
+// exactly the asymmetry the column was added to remove.
+//
+// This is the ONE UPDATE this package performs. The ledger is otherwise
+// append-only, and that is deliberate; the exception is narrow (one column,
+// one row, a value that was unknowable when the row was written) and it
+// cannot rewrite a measurement.
+func (s *Store) SetStatementSHA256(ctx context.Context, id int64, sha string) error {
+	if _, err := s.db.ExecContext(ctx, `UPDATE scans SET statement_sha256 = ? WHERE id = ?`, sha, id); err != nil {
+		return fmt.Errorf("scanstore: SetStatementSHA256 for scan %d: %w", id, err)
+	}
+	return nil
 }

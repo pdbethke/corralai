@@ -3,10 +3,12 @@
 package main
 
 import (
+	"bytes"
 	"io"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/pdbethke/corralai/internal/advpool"
@@ -18,11 +20,17 @@ import (
 // twoFileLedgerRows builds the ledger rows for a scan that audited one file
 // and refused another — the shape the warehouse used to lose. repoDir holds
 // the audited file so ParentSHA256 is a real hash of real bytes.
-func twoFileLedgerRows(t *testing.T) (string, []scanstore.File) {
+func twoFileLedgerRows(t *testing.T) (string, []scanstore.File, []scanstore.Mutant) {
 	t.Helper()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte("package p\n\nfunc F() int { return 1 }\n"), 0o600); err != nil {
 		t.Fatalf("write the audited file: %v", err)
+	}
+	// The refused file exists on disk too — it is a real source file corral
+	// walked and would not grade, and its parent_sha256 IS a read of these
+	// bytes, because it has no mutants to take one from.
+	if err := os.WriteFile(filepath.Join(dir, "b.go"), []byte("package p\n\nfunc G() int { return 2 }\n"), 0o600); err != nil {
+		t.Fatalf("write the rejected file: %v", err)
 	}
 	results := []reposcan.FileResult{
 		{
@@ -39,6 +47,16 @@ func twoFileLedgerRows(t *testing.T) (string, []scanstore.File) {
 					TestsPerMutant: &advpool.TestsPerMutantSpread{Min: 3, Median: 4, Max: 9},
 				},
 				Concurrency: advpool.Concurrency{Trees: 6, Note: "probe passed"},
+				// The generator hashed the exact bytes it mutated, and every
+				// mutant of one file agrees. That hash — not a re-read of the
+				// checkout — is the file's parent_sha256.
+				DevKilledMutants: []advpool.MutantRef{
+					{ID: "m1", ParentSHA256: auditedParentSHA, TestsRun: 4, Rule: "lines"},
+				},
+				DevSurvivedMutants: []advpool.MutantRef{
+					{ID: "m2", ParentSHA256: auditedParentSHA, TestsRun: 3, Rule: "lines"},
+					{ID: "m3", ParentSHA256: auditedParentSHA, TestsRun: 5, Rule: "lines"},
+				},
 			},
 		},
 		{
@@ -48,8 +66,17 @@ func twoFileLedgerRows(t *testing.T) (string, []scanstore.File) {
 			Detail:   "the suite did not pass on unmutated code",
 		},
 	}
-	return dir, buildScanFileRows(results, nil, reposcan.CoverageMap{}, "", dir, io.Discard)
+	return dir, buildScanFileRows(results, nil, reposcan.CoverageMap{}, "", dir, io.Discard),
+		buildScanMutantRows(0, results)
 }
+
+// auditedParentSHA is the hash the mutant generator recorded for a.go's
+// bytes. Deliberately NOT the sha256 of what twoFileLedgerRows writes to
+// disk: the two must not be allowed to coincide, or a test would pass with
+// the file re-read at record time — which is exactly the bug (the workspace
+// substrate overlays the file during the audit, so a later re-read is not
+// guaranteed to be the graded bytes).
+const auditedParentSHA = "1111111111111111111111111111111111111111111111111111111111111111"
 
 // TestBundleIsTheLedgerRowForRow is the whole point of having ONE mapping:
 // the pushed rows are the ledger's rows, not a second derivation of the
@@ -65,7 +92,7 @@ func twoFileLedgerRows(t *testing.T) (string, []scanstore.File) {
 //     of assertions is exactly what stops covering the struct the day
 //     somebody adds a field to it.
 func TestBundleIsTheLedgerRowForRow(t *testing.T) {
-	_, files := twoFileLedgerRows(t)
+	_, files, _ := twoFileLedgerRows(t)
 	if len(files) != 2 {
 		t.Fatalf("expected two ledger rows, got %d", len(files))
 	}
@@ -146,16 +173,204 @@ func TestBundleIsTheLedgerRowForRow(t *testing.T) {
 					f.Path, name, lv.Field(i).Interface(), rf.Interface())
 			}
 		}
-		if row.MutantsPlanted != f.MutantsTotal {
-			t.Errorf("%s: mutants_planted = %d, want the ledger's mutants_total %d", f.Path, row.MutantsPlanted, f.MutantsTotal)
+		// PLANTED, not graded. advpool's MutantsTotal is the count that
+		// reached grading (compile-gate rejects excluded), so filing it under
+		// mutants_planted understated every run that produced an invalid
+		// mutant — and it duplicated mutants_graded exactly, which is how the
+		// column stopped saying anything.
+		wantPlanted := f.MutantsGraded + f.MutantsInvalid
+		if row.MutantsPlanted != wantPlanted {
+			t.Errorf("%s: mutants_planted = %d, want graded+invalid = %d", f.Path, row.MutantsPlanted, wantPlanted)
 		}
 	}
 
-	// The audited row's validity key is a real hash of the real bytes.
+	// The audited row's validity key is the GENERATOR's hash of the bytes it
+	// mutated, not a re-read of the checkout.
 	for _, r := range b.Files {
-		if r.Path == "a.go" && len(r.ParentSHA256) != 64 {
-			t.Errorf("the audited row's parent_sha256 = %q, want a sha256 of the audited bytes", r.ParentSHA256)
+		if r.Path == "a.go" && r.ParentSHA256 != auditedParentSHA {
+			t.Errorf("the audited row's parent_sha256 = %q, want the mutants' own parent hash %q", r.ParentSHA256, auditedParentSHA)
 		}
+	}
+}
+
+// TestAuditedParentSHAIsTheMutantsOwn is the validity key stated as the one
+// question it has to answer: "is this verdict still current for HEAD?" is
+// `parent_sha256 == sha256(HEAD:path)`, and that only works if the file's
+// hash and its mutants' hashes are THE SAME BYTES. Two sources for one
+// number is how they stop agreeing — and re-reading the checkout at record
+// time is not even a second source, it is a different one: the workspace
+// substrate writes the mutant into the file and restores it, so a re-read
+// races the audit it is supposed to describe.
+func TestAuditedParentSHAIsTheMutantsOwn(t *testing.T) {
+	_, files, mutants := twoFileLedgerRows(t)
+	scan := scanstore.Scan{Repo: "o/r", Commit: "deadbeef", Audited: 1, Candidates: 2}
+	b := buildBundle(scan, 11, files, mutants, nil, nil, auditpush.Link{}, false,
+		"o/r", "deadbeef", "", bundleMeta{Passed: false})
+
+	target := filepath.Join(t.TempDir(), "w.duckdb")
+	if _, err := pushBundle(target, b); err != nil {
+		t.Fatalf("pushBundle: %v", err)
+	}
+
+	rows := queryRows(t, target, `SELECT parent_sha256 FROM corral_audits WHERE path = 'a.go'`)
+	if len(rows) != 1 {
+		t.Fatalf("got %d audit row(s) for a.go, want 1", len(rows))
+	}
+	fileSHA, _ := rows[0][0].(string)
+	if fileSHA == "" {
+		t.Fatal("the audited file's parent_sha256 is empty")
+	}
+	mutantRows := queryRows(t, target, `SELECT DISTINCT parent_sha256 FROM corral_mutants WHERE path = 'a.go'`)
+	if len(mutantRows) != 1 {
+		t.Fatalf("a.go's mutants report %d distinct parent hashes, want 1", len(mutantRows))
+	}
+	if mutantRows[0][0] != fileSHA {
+		t.Errorf("corral_audits.parent_sha256 = %v but corral_mutants.parent_sha256 = %v — the file and its mutants disagree about which bytes were audited",
+			fileSHA, mutantRows[0][0])
+	}
+
+	// A file the scan never graded has no mutants to take a hash from, so
+	// its hash IS a read of the checkout — and it must be present, because
+	// "never audited" is a state the seal reader has to be able to report.
+	rej := queryRows(t, target, `SELECT parent_sha256 FROM corral_audits WHERE path = 'b.go'`)
+	if len(rej) != 1 {
+		t.Fatalf("got %d audit row(s) for the rejected file, want 1", len(rej))
+	}
+	if sha, _ := rej[0][0].(string); len(sha) != 64 {
+		t.Errorf("a rejected file's parent_sha256 = %v, want the sha256 of its bytes on disk", rej[0][0])
+	}
+}
+
+// TestDisagreeingMutantParentsRecordNoHash: if a file's mutants do not agree
+// on which bytes they came from, there is no single answer to "what was
+// audited" — and a hash picked from the first mutant would silently make a
+// stale verdict look live. Record nothing, and say so on stderr.
+func TestDisagreeingMutantParentsRecordNoHash(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte("package p\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	results := []reposcan.FileResult{{
+		Job: reposcan.Job{Path: "a.go", Lang: "go"}, Gradable: true,
+		Verdict: advpool.Verdict{
+			DevKilledMutants:   []advpool.MutantRef{{ID: "m1", ParentSHA256: "aaaa"}},
+			DevSurvivedMutants: []advpool.MutantRef{{ID: "m2", ParentSHA256: "bbbb"}},
+		},
+	}}
+	var stderr bytes.Buffer
+	files := buildScanFileRows(results, nil, reposcan.CoverageMap{}, "", dir, &stderr)
+	if len(files) != 1 {
+		t.Fatalf("got %d row(s), want 1", len(files))
+	}
+	if files[0].ParentSHA256 != "" {
+		t.Errorf("parent_sha256 = %q, want empty when the mutants disagree", files[0].ParentSHA256)
+	}
+	if !strings.Contains(stderr.String(), "a.go") {
+		t.Errorf("the disagreement must be disclosed on stderr, got %q", stderr.String())
+	}
+}
+
+// TestPushSourceCarriesTheAuthoredTestButNoMutantCode walks the REAL path —
+// ledger rows built from a report, mapped, pushed — and pins the help text
+// to what actually happens. --push-source sends the authored test and the
+// verdict JSON. It does NOT send mutant code, because nothing keeps mutant
+// source in the ledger for it to send, and a flag whose help promises bytes
+// it never carries is a custody claim in the wrong direction.
+func TestPushSourceCarriesTheAuthoredTestButNoMutantCode(t *testing.T) {
+	_, files, mutants := twoFileLedgerRows(t)
+	scan := scanstore.Scan{Repo: "o/r", Commit: "deadbeef", Audited: 1, Candidates: 2}
+
+	for _, tc := range []struct {
+		name         string
+		sourcePushed bool
+		wantAuthored bool
+	}{
+		{"default", false, false},
+		{"--push-source", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := buildBundle(scan, 11, files, mutants, nil, nil, auditpush.Link{},
+				tc.sourcePushed, "o/r", "deadbeef", "", bundleMeta{})
+			target := filepath.Join(t.TempDir(), "w.duckdb")
+			if _, err := pushBundle(target, b); err != nil {
+				t.Fatalf("pushBundle: %v", err)
+			}
+			got := queryRows(t, target, `SELECT count(*) FROM corral_audits WHERE authored_test IS NOT NULL`)
+			present := got[0][0].(int64) > 0
+			if present != tc.wantAuthored {
+				t.Errorf("authored_test present = %v, want %v", present, tc.wantAuthored)
+			}
+			code := queryRows(t, target, `SELECT count(*) FROM corral_mutants WHERE code IS NOT NULL`)
+			if code[0][0].(int64) != 0 {
+				t.Errorf("%v mutant row(s) carry code — the ledger keeps no mutant source, so the help text must not promise it",
+					code[0][0])
+			}
+		})
+	}
+}
+
+// TestWarehouseRowsSHA256HashesWhatIsPushed is the third-party check the
+// signed statement exists for: a verifier holding the statement and the
+// warehouse recomputes the hash FROM THE ROWS THEY CAN SEE. In default mode
+// the source columns are NULL in the warehouse, so a hash taken over the
+// in-memory rows WITH their source would be one no verifier could ever
+// reproduce — the statement would carry a number that never matches.
+func TestWarehouseRowsSHA256HashesWhatIsPushed(t *testing.T) {
+	_, files, mutants := twoFileLedgerRows(t)
+	scan := scanstore.Scan{Repo: "o/r", Commit: "deadbeef", Audited: 1, Candidates: 2}
+	b := buildBundle(scan, 11, files, mutants, nil, nil, auditpush.Link{}, false,
+		"o/r", "deadbeef", "", bundleMeta{})
+	// The fixture really does carry source, or this proves nothing.
+	if b.Files[0].AuthoredTest == "" && b.Files[1].AuthoredTest == "" {
+		t.Fatal("fixture carries no authored test; the test cannot distinguish the two hashes")
+	}
+
+	signed, err := warehouseRowsSHA256(b)
+	if err != nil {
+		t.Fatalf("hash: %v", err)
+	}
+
+	target := filepath.Join(t.TempDir(), "w.duckdb")
+	if _, err := pushBundle(target, b); err != nil {
+		t.Fatalf("pushBundle: %v", err)
+	}
+	// Rebuild the bundle's source-bearing fields from what the warehouse
+	// ACTUALLY holds, then re-hash. This is the verifier's move.
+	readBack := b
+	readBack.Files = append([]auditpush.Row(nil), b.Files...)
+	for i := range readBack.Files {
+		rows := queryRows(t, target,
+			`SELECT coalesce(authored_test, ''), coalesce(verdict_json, '') FROM corral_audits WHERE path = '`+readBack.Files[i].Path+`'`)
+		readBack.Files[i].AuthoredTest, _ = rows[0][0].(string)
+		readBack.Files[i].VerdictJSON, _ = rows[0][1].(string)
+	}
+	readBack.Mutants = append([]auditpush.MutantRow(nil), b.Mutants...)
+	for i := range readBack.Mutants {
+		rows := queryRows(t, target,
+			`SELECT coalesce(code, '') FROM corral_mutants WHERE mutant_id = '`+readBack.Mutants[i].MutantID+`'`)
+		readBack.Mutants[i].Code, _ = rows[0][0].(string)
+	}
+	verified, err := warehouseRowsSHA256(readBack)
+	if err != nil {
+		t.Fatalf("re-hash: %v", err)
+	}
+	if verified != signed {
+		t.Errorf("a verifier rehashing the pushed rows gets %s, but the statement signs %s — the statement hashes bytes the warehouse never received",
+			verified, signed)
+	}
+}
+
+// TestSpreadPointersDoNotAliasTheVerdict: the three ledger columns are
+// pointers, and handing back &s.Min would leave the ledger row pointing into
+// the verdict it was derived from — a later mutation of the verdict would
+// silently rewrite a recorded number, and a recorded number that can change
+// after the fact is not a record.
+func TestSpreadPointersDoNotAliasTheVerdict(t *testing.T) {
+	src := &advpool.TestsPerMutantSpread{Min: 3, Median: 4, Max: 9}
+	min, median, max := spreadMin(src), spreadMedian(src), spreadMax(src)
+	src.Min, src.Median, src.Max = 100, 200, 300
+	if *min != 3 || *median != 4 || *max != 9 {
+		t.Errorf("the recorded spread followed the verdict: %d/%d/%d, want 3/4/9", *min, *median, *max)
 	}
 }
 
@@ -165,12 +380,16 @@ func TestBundleIsTheLedgerRowForRow(t *testing.T) {
 // in the mapping may depend on map iteration order, a clock or a pointer
 // address.
 func TestWarehouseRowsSHA256IsDeterministic(t *testing.T) {
-	_, files := twoFileLedgerRows(t)
+	_, files, mutants := twoFileLedgerRows(t)
 	scan := scanstore.Scan{Repo: "o/r", Commit: "deadbeef", Audited: 1, Candidates: 2}
 	meta := bundleMeta{ModelsByRole: `{"writer":"m"}`, Passed: true}
+	// Every grain, not just the files: the hash covers the whole bundle, and
+	// a determinism claim that exercises one table is not the claim.
+	calls := []scanstore.ModelCall{{Path: "a.go", Role: "test-writer", Model: "w-1", Calls: 2}}
+	events := []scanstore.Event{{Path: "a.go", Seq: 1, Kind: "phase-start", Actor: "driver"}}
 
-	first := buildBundle(scan, 11, files, nil, nil, nil, auditpush.Link{}, false, "o/r", "deadbeef", "", meta)
-	second := buildBundle(scan, 11, files, nil, nil, nil, auditpush.Link{}, false, "o/r", "deadbeef", "", meta)
+	first := buildBundle(scan, 11, files, mutants, calls, events, auditpush.Link{}, false, "o/r", "deadbeef", "", meta)
+	second := buildBundle(scan, 11, files, mutants, calls, events, auditpush.Link{}, false, "o/r", "deadbeef", "", meta)
 
 	a, err := warehouseRowsSHA256(first)
 	if err != nil {

@@ -142,9 +142,14 @@ type Row struct {
 	// mutant. corral_mutants carries all four outcomes at the mutant grain;
 	// these are the same facts summarised per file so the common query does
 	// not need the join.
-	MutantsGraded   int
-	MutantsInvalid  int
-	MutantsTimedOut int
+	MutantsGraded  int
+	MutantsInvalid int
+	// MutantsTimedOut is *int because nothing produces it yet: no verdict
+	// field counts mutants that hit their deadline. A stored 0 would be the
+	// positive claim "none timed out" on every row in the warehouse — a
+	// measurement nobody made — so it is written SQL NULL until there is
+	// something to write.
+	MutantsTimedOut *int
 	RegionsTotal    int
 	RegionsProbed   int
 	DroppedRegions  string

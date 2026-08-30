@@ -108,17 +108,31 @@ func killRatePtr(v float64) *float64 {
 // (`--mutants`), or "" when it generated its own. It rides only on AUDITED
 // rows: a rejected or excluded file sat no exam at all, and stamping a set
 // identifier on it would claim it was graded against one.
-// repoDir is the checkout the scan ran against, used ONLY to hash each
-// audited file's bytes into ParentSHA256 — the validity key a later reader
-// checks against its own checkout to tell a live verdict from a stale one.
-// The bytes are read HERE, at record time, rather than carried out of the
-// audit: reposcan.FileResult carries neither the source nor a file-level
-// hash (advpool's ParentSHA256 is per MUTANT, and a per-mutant run can
-// derive mutants from different parents). That is sound because the scan
-// holds the checkout unchanged for its own duration — `certify --repo`
-// never writes into --repo, the jail and the workspace trees are copies —
-// so the bytes hashed here are the bytes graded. A file that cannot be read
-// gets "" rather than a fabricated hash.
+// ParentSHA256 — the validity key a later reader checks against its own
+// checkout to tell a live verdict from a stale one — has ONE source per
+// disposition, and which source is not a detail:
+//
+//   - An AUDITED file takes the hash its own MUTANTS carry
+//     (advpool.MutantRef.ParentSHA256). The generator hashed the exact bytes
+//     it mutated, before anything overlaid the file, so that hash IS what
+//     was graded. All of a file's mutants must agree; if they do not, there
+//     is no single answer to "what was audited" and the row records NOTHING
+//     (with a line on stderr) rather than picking one and making a stale
+//     verdict look live.
+//   - A file that was never graded — rejected, or excluded before it ever
+//     became a job — has no mutants to take a hash from, so and only so is
+//     repoDir/path read here. "Never audited" is a state the seal reader has
+//     to be able to report, and it needs a hash to report it against.
+//
+// Re-reading the checkout for an AUDITED file would be a different source,
+// not a second one: on the workspace substrate the audit writes each mutant
+// into the file in place and restores it afterwards, so a read at record
+// time is not guaranteed to be the bytes the generator hashed — and a
+// validity key that can disagree with the mutants it was derived from is
+// worse than none. (An earlier version of this comment claimed
+// `certify --repo` "never writes into --repo". It does.)
+//
+// A file that cannot be read gets "" rather than a fabricated hash.
 func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclusion, preflight reposcan.CoverageMap, mutantsFrom string, repoDir string, stderr io.Writer) []scanstore.File {
 	results = dedupeResultsByPath(results)
 	rows := make([]scanstore.File, 0, len(results)+len(excluded))
@@ -254,15 +268,16 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 				// is what lets oldestReuse (verdict_cache.go) report how old
 				// a reused verdict really is instead of when it was reused.
 				ComputedAt: r.ComputedAt,
-				// The validity key: this file's own bytes. See the repoDir
-				// parameter's doc above.
-				ParentSHA256: auditedFileSHA256(repoDir, path),
+				// The validity key: the bytes the generator mutated, taken
+				// from this file's own mutants. See the doc above.
+				ParentSHA256: auditedParentSHA256(path, r.Verdict, stderr),
 				// The denominators the rate is over, split. MutantsGraded is
 				// the verdict's own "actually graded" count (compile-gate
 				// rejects excluded) and MutantsInvalid is what the gate threw
 				// out — a rate over 8 of 12 mutants and one over 8 of 8 are
 				// different claims. MutantsTimedOut has no source in the
-				// verdict yet and stays 0 rather than being guessed.
+				// verdict yet and stays nil — SQL NULL — rather than
+				// claiming, on every row, that nothing timed out.
 				MutantsGraded:  r.Verdict.MutantsTotal,
 				MutantsInvalid: r.Verdict.MutantsInvalid,
 				// At which GRAIN the rate was measured, carried in the ledger
@@ -287,6 +302,9 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 			Path: path, Lang: r.Job.Lang, Disposition: "rejected", Reason: reason,
 			Gradable: false, Evidence: ungradableEvidence(reason), PreflightState: preflightState(preflight, path),
 			Detail: r.Detail,
+			// Ungradable: no verdict, so no mutants, so the hash is a read
+			// of the checkout — the same rule the excluded rows below follow.
+			ParentSHA256: auditedFileSHA256(repoDir, path),
 		})
 	}
 
@@ -300,6 +318,10 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 		rows = append(rows, scanstore.File{
 			Path: e.Path, Lang: detectLang(e.Path), Disposition: "rejected", Reason: e.Reason,
 			Gradable: false, Evidence: exclusionEvidence(e.Reason, pfState), PreflightState: pfState,
+			// Never graded, so there are no mutants to take a hash from:
+			// this is the one disposition whose hash is a read of the
+			// checkout. See buildScanFileRows' doc.
+			ParentSHA256: auditedFileSHA256(repoDir, e.Path),
 		})
 	}
 	return rows
@@ -569,6 +591,34 @@ func stampScanID(id int64, mutants []scanstore.Mutant, calls []scanstore.ModelCa
 	}
 }
 
+// auditedParentSHA256 is the hash a graded file's own mutants carry. Every
+// mutant of one file must report the same parent: they were all derived from
+// one set of bytes, and a disagreement means either two different sources
+// reached the generator or something rewrote the file mid-audit. Either way
+// there is no single answer to "which bytes does this verdict describe", and
+// the honest record is none — announced, not swallowed, because a validity
+// key going silently missing is how a stale verdict later reads as live.
+func auditedParentSHA256(path string, v advpool.Verdict, stderr io.Writer) string {
+	sha := ""
+	for _, group := range [][]advpool.MutantRef{v.DevKilledMutants, v.DevSurvivedMutants} {
+		for _, m := range group {
+			if m.ParentSHA256 == "" {
+				continue
+			}
+			if sha == "" {
+				sha = m.ParentSHA256
+				continue
+			}
+			if m.ParentSHA256 != sha {
+				fmt.Fprintf(stderr, "corral certify --repo: %s: mutants disagree about the parent they came from (%s vs %s) — recording no parent_sha256 for this file\n",
+					path, sha, m.ParentSHA256)
+				return ""
+			}
+		}
+	}
+	return sha
+}
+
 // auditedFileSHA256 hashes the file at repoDir/path — the audited bytes —
 // through the same fileSHA256 the recorded-mutant-set path uses, so a hash in
 // this ledger and one in a recorded set are the same function of the same
@@ -587,23 +637,30 @@ func auditedFileSHA256(repoDir, path string) string {
 // nullable ledger columns. A nil spread means no mutant was graded per
 // mutant, and all three stay nil — never {0,0,0}, which would read as "every
 // mutant ran no tests".
+// Each returns a COPY. Handing back &s.Min would leave the recorded row
+// pointing into the verdict it was derived from, so a later mutation of the
+// verdict would silently rewrite a number already treated as recorded — and
+// a record that can change after the fact is not a record.
 func spreadMin(s *advpool.TestsPerMutantSpread) *int {
 	if s == nil {
 		return nil
 	}
-	return &s.Min
+	v := s.Min
+	return &v
 }
 
 func spreadMedian(s *advpool.TestsPerMutantSpread) *int {
 	if s == nil {
 		return nil
 	}
-	return &s.Median
+	v := s.Median
+	return &v
 }
 
 func spreadMax(s *advpool.TestsPerMutantSpread) *int {
 	if s == nil {
 		return nil
 	}
-	return &s.Max
+	v := s.Max
+	return &v
 }

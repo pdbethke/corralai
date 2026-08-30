@@ -126,8 +126,17 @@ func buildAuditRows(files []scanstore.File, scanID int64, meta bundleMeta) []aud
 			// Scope, gates and roster: the same values on every row, so a
 			// reader of one row can see what the run was held to.
 			Audited: meta.Audited, Candidates: meta.Candidates,
-			MutantsPlanted: f.MutantsTotal, ModelsByRole: meta.ModelsByRole,
-			MinKillRate: meta.MinKillRate, MaxProvenMissed: meta.MaxProvenMissed,
+			// PLANTED, not graded: advpool's MutantsTotal counts the mutants
+			// that reached grading, with the compile-gate rejects already
+			// removed. Filing it under mutants_planted understated every run
+			// that produced an invalid mutant, and made the column an exact
+			// duplicate of mutants_graded.
+			// A timed-out mutant is planted too, but nothing counts them yet
+			// (MutantsTimedOut is nil on every row), so adding it would be
+			// adding a phantom. Revisit when there is a producer.
+			MutantsPlanted: f.MutantsGraded + f.MutantsInvalid,
+			ModelsByRole:   meta.ModelsByRole,
+			MinKillRate:    meta.MinKillRate, MaxProvenMissed: meta.MaxProvenMissed,
 			Passed: meta.Passed,
 			// WHICH measurement the rate is, and at which grain.
 			TestSelection: f.TestSelection, SelectedTests: f.SelectedTests,

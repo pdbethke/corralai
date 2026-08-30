@@ -53,7 +53,7 @@ func TestLedgerRecordsEveryGrain(t *testing.T) {
 			ParentSHA256:    "aaaa",
 			MutantsGraded:   8,
 			MutantsInvalid:  1,
-			MutantsTimedOut: 2,
+			MutantsTimedOut: iptr(2),
 			SelectionMillis: i64(11), GenerationMillis: i64(22), PoolMillis: i64(33),
 			DevPassMillis: i64(44), AuthoredPassMillis: i64(55), CriticMillis: i64(66),
 			TotalMillis:        i64(231),
@@ -273,7 +273,7 @@ func TestLedgerMigratesFromTheSharedDirsShape(t *testing.T) {
 		t.Fatalf("FilesForScan returned %d rows, want 1", len(gotFiles))
 	}
 	f := gotFiles[0]
-	if f.ParentSHA256 != "" || f.MutantsGraded != 0 || f.GoalsDerived != 0 {
+	if f.ParentSHA256 != "" || f.MutantsGraded != 0 || f.GoalsDerived != 0 || f.MutantsTimedOut != nil {
 		t.Errorf("a pre-migration row must read back with EMPTY new fields, got %+v", f)
 	}
 	for name, v := range map[string]*int64{
@@ -385,6 +385,10 @@ func TestUnmeasuredMillisAreNull(t *testing.T) {
 		"authored_pass_ms", "critic_ms", "total_ms", "mutant_ms_median", "mutant_ms_max",
 		"challenger_jaccard", "challenger_kappa", "challenger_sufficient",
 		"tests_per_mutant_min", "tests_per_mutant_median", "tests_per_mutant_max",
+		// mutants_timed_out has NO producer yet (no verdict field counts
+		// timed-out mutants), and a stored 0 would read as the positive claim
+		// "none timed out".
+		"mutants_timed_out",
 	} {
 		var isNull bool
 		if err := db.QueryRow(`SELECT ` + col + ` IS NULL FROM scan_files WHERE path = 'pkg/a.go'`).Scan(&isNull); err != nil {
@@ -394,11 +398,47 @@ func TestUnmeasuredMillisAreNull(t *testing.T) {
 			t.Errorf("scan_files.%s must be SQL NULL when nothing measured it", col)
 		}
 	}
-	var isNull bool
-	if err := db.QueryRow(`SELECT duration_ms IS NULL FROM scan_mutants WHERE mutant_id = 'm1'`).Scan(&isNull); err != nil {
-		t.Fatalf("probe scan_mutants.duration_ms: %v", err)
+	// span_start/span_end have no producer at all today (advpool.MutantRef
+	// carries no span), so every row's is unrecorded — and a 0 in a column of
+	// 1-based line numbers is a line that does not exist.
+	for _, col := range []string{"duration_ms", "span_start", "span_end"} {
+		var isNull bool
+		if err := db.QueryRow(`SELECT ` + col + ` IS NULL FROM scan_mutants WHERE mutant_id = 'm1'`).Scan(&isNull); err != nil {
+			t.Fatalf("probe scan_mutants.%s: %v", col, err)
+		}
+		if !isNull {
+			t.Errorf("scan_mutants.%s must be SQL NULL when nothing recorded it", col)
+		}
 	}
-	if !isNull {
-		t.Error("scan_mutants.duration_ms must be SQL NULL when nothing measured it")
+}
+
+// TestStatementSHAIsStampedOnTheScanRow closes a loop the ledger could not:
+// the statement is written AFTER the scan row (it has to name the scan id),
+// so scans.statement_sha256 was written empty on every run that used
+// --attest and stayed empty forever. The warehouse row carried the hash and
+// the local ledger did not, which is precisely the asymmetry the column was
+// added to remove.
+func TestStatementSHAIsStampedOnTheScanRow(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "stamp.duckdb")
+	st, err := scanstore.Open(dsn)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+
+	id, err := st.Record(ctx, scanstore.Scan{Owner: "local", Repo: "demo"}, nil)
+	if err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	if err := st.SetStatementSHA256(ctx, id, "deadbeef"); err != nil {
+		t.Fatalf("SetStatementSHA256: %v", err)
+	}
+	headers, err := st.Scans(ctx, 10)
+	if err != nil {
+		t.Fatalf("Scans: %v", err)
+	}
+	if len(headers) != 1 || headers[0].StatementSHA256 != "deadbeef" {
+		t.Fatalf("statement_sha256 = %q, want deadbeef", headers[0].StatementSHA256)
 	}
 }

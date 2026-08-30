@@ -49,7 +49,7 @@ func sampleBundle() Bundle {
 				Path: "pkg/a.go", Lang: "go", Disposition: "audited",
 				KillRate: f64(0.5), Survivors: 2, ProvenMissed: 1,
 				ParentSHA256: "aaaa", Evidence: "proven", Status: "certified",
-				MutantsGraded: 8, MutantsInvalid: 1, MutantsTimedOut: 0,
+				MutantsGraded: 8, MutantsInvalid: 1,
 				GoalsDerived: 3, AuthoredTest: "def test_x(): pass",
 				VerdictJSON: `{"dev_kill_rate":0.5}`,
 			},
@@ -63,7 +63,7 @@ func sampleBundle() Bundle {
 			{Repo: "o/r", RunURL: "https://ci/1", ScanID: 7, Path: "pkg/a.go",
 				MutantID: "m1", ParentSHA256: "aaaa", Outcome: "killed",
 				TestsRun: 4, DurationMillis: ms(120), KilledBy: "TestFoo",
-				SpanStart: 41, SpanEnd: 43, Code: "return !ok"},
+				Code: "return !ok"},
 			{Repo: "o/r", RunURL: "https://ci/1", ScanID: 7, Path: "pkg/a.go",
 				MutantID: "m2", ParentSHA256: "aaaa", Outcome: "survived",
 				Proven: true, ProvenByAuthoredAlone: true, Code: "x := 1"},
@@ -123,6 +123,22 @@ func TestPushBundleWritesFiveTablesInOneTransaction(t *testing.T) {
 		}
 		if bad != 0 {
 			t.Errorf("%s has %d row(s) not at schema_version 2", table, bad)
+		}
+	}
+
+	// Nothing produces a mutant span or a timed-out count yet, and a 0 in
+	// either column is a positive claim: line 0 does not exist, and "0
+	// mutants timed out" is a measurement nobody made.
+	for _, probe := range []struct{ table, col string }{
+		{"corral_mutants", "span_start"}, {"corral_mutants", "span_end"},
+		{"corral_audits", "mutants_timed_out"},
+	} {
+		var notNull int
+		if err := db.QueryRow(`SELECT count(*) FROM ` + probe.table + ` WHERE ` + probe.col + ` IS NOT NULL`).Scan(&notNull); err != nil {
+			t.Fatalf("probe %s.%s: %v", probe.table, probe.col, err)
+		}
+		if notNull != 0 {
+			t.Errorf("%s.%s has %d non-NULL row(s), but nothing produces that value", probe.table, probe.col, notNull)
 		}
 	}
 
@@ -187,11 +203,25 @@ ALTER TABLE corral_audits ADD COLUMN tests_per_mutant_min INTEGER;
 ALTER TABLE corral_audits ADD COLUMN tests_per_mutant_median INTEGER;
 ALTER TABLE corral_audits ADD COLUMN tests_per_mutant_max INTEGER;`
 
+// The two shapes an operator running YESTERDAY's corral actually has on
+// disk: 32 columns after the concurrency disclosure (37420d1) and 33 after
+// Task 1's scan_id (0d95056). They matter more than the older three,
+// because they are the ones a real upgrade will meet.
+const warehouseV4ConcurrencyDDL = warehouseV3PerMutantDDL + `
+ALTER TABLE corral_audits ADD COLUMN trees INTEGER;
+ALTER TABLE corral_audits ADD COLUMN concurrency_note VARCHAR;
+ALTER TABLE corral_audits ADD COLUMN shared_dirs VARCHAR;`
+
+const warehouseV5ScanIDDDL = warehouseV4ConcurrencyDDL + `
+ALTER TABLE corral_audits ADD COLUMN scan_id BIGINT;`
+
 func TestPushBundleMigratesEveryPriorWarehouseShape(t *testing.T) {
 	for name, ddl := range map[string]string{
-		"original":   warehouseV1DDL,
-		"selection":  warehouseV2SelectionDDL,
-		"per-mutant": warehouseV3PerMutantDDL,
+		"original":    warehouseV1DDL,
+		"selection":   warehouseV2SelectionDDL,
+		"per-mutant":  warehouseV3PerMutantDDL,
+		"concurrency": warehouseV4ConcurrencyDDL,
+		"scan-id":     warehouseV5ScanIDDDL,
 	} {
 		t.Run(name, func(t *testing.T) {
 			target := filepath.Join(t.TempDir(), "legacy.duckdb")

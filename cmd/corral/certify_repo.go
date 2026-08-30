@@ -75,7 +75,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	substrateFlag := fs.String("substrate", substrateJail, "where the audit runs: "+substrateJail+" (bwrap) or "+substrateWorkspace+" (mutate --repo in place; the caller IS the isolation boundary, e.g. an ephemeral CI runner)")
 	diffBase := fs.String("diff-base", "", "bound the scan to files changed since this git ref, instead of ranking + --top. In a PR the diff IS the bound: ranking and --top do not apply on this path")
 	pushFlag := fs.String("push", "", "append this scan's per-file verdicts to a DuckDB you own — a path, or `md:<db>` for MotherDuck (which reads motherduck_token from the environment). corral has no hosted tier and keeps nothing: the warehouse is yours, and any DuckDB works, so this is a destination rather than a lock-in. Append-only. Every row carries the ledger's scan id (0 when --record was not given), and — traceable only with --attest — the sha256 of the signed statement it came from, so a row can be checked against something a third party can verify; without --attest, statement_sha256 is honestly empty rather than fabricated. It answers what one pull request cannot — a single kill rate is a sample, and the same unchanged diff has scored 0.85 and 0.90; forty of them are a distribution")
-	pushSourceFlag := fs.Bool("push-source", false, "with --push, also send the SOURCE BYTES to your warehouse: each mutant's code, the pool's authored test, and the full verdict JSON. Off by default because those bytes ARE your audited code — without this, the pushed rows carry numbers, hashes, reasons and model names, and no source leaves the box. Turning it on is what makes a mutant readable in the warehouse (\"show me the survivor\"), and the scan row records that it was on, so the custody question is answerable from the table rather than from whoever remembers the argv")
+	pushSourceFlag := fs.Bool("push-source", false, "with --push, also send the SOURCE BYTES corral holds to your warehouse: the pool's authored test, and the full verdict JSON. Off by default because those bytes are derived from — and quote — your audited code; without this the pushed rows carry numbers, hashes, reasons and model names, and no source leaves the box. Mutant code is NOT carried, by either setting: corral does not keep mutant source at rest, so the corral_mutants.code column exists and is always NULL until something records it. The scan row records which setting was used, so the custody question is answerable from the table rather than from whoever remembers the argv")
 	attestFlag := fs.String("attest", "", "write the scan's verdict as an in-toto Statement to this file — the receipt a reviewer can verify without trusting the run that produced it. Consumed by GitHub's attestation API (actions/attest), which signs it keylessly through the workflow's own OIDC identity, so the signature chains to the repository and workflow rather than to a key that lived on an ephemeral runner. Carries every file's kill rate, survivors and proven gaps WITH the honesty flags that say what a zero means, the thresholds it was judged against, and the models in each role")
 	maxProvenMissedFlag := fs.String("max-proven-missed", "", "fail the scan (exit 1) if ANY audited file has MORE than this many proven-missed gaps — survivors the pool then killed with a test it WROTE and RAN. Opt-in and unset by default. Prefer this to --min-kill-rate as a merge gate: a kill rate is a proportion of freshly generated mutants and moves between runs on unchanged code, so a threshold set near a healthy value flaps red and gets switched off. A proven-missed gap is a specific demonstrated bug the suite does not catch, established by execution, and 0 means the pool proved nothing — not that it sampled well")
 	minKillRateFlag := fs.String("min-kill-rate", "", "fail the scan (exit 1) if ANY audited file's kill rate is below this value (0.0-1.0 inclusive; a minimum, so a file exactly at the threshold passes). Opt-in: unset by default, so exit codes are unchanged unless this is given. Applies PER FILE, not to the aggregate — a well-tested file must not mask a weak one")
@@ -1010,6 +1010,18 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "corral certify --repo: writing --attest statement: %v\n", err)
 		} else {
 			statementSHA256 = sha
+			// Close the loop the ordering opens: the statement had to be
+			// written after the scan row (it names the scan id), so the row
+			// went in with this column empty. Stamp it now, or the local
+			// ledger permanently disagrees with the pushed row about whether
+			// this scan produced a statement. Fail-open like every other
+			// write in this sequence.
+			if scanID != 0 && scanStore != nil {
+				if uerr := scanStore.SetStatementSHA256(context.Background(), scanID, sha); uerr != nil {
+					fmt.Fprintf(stderr, "corral certify --repo: scan %d recorded, but its statement_sha256 was NOT stamped: %v\n", scanID, uerr)
+				}
+			}
+			bundle.Scan.StatementSHA256 = sha
 			fmt.Fprintf(stdout, "  wrote the audit statement to %s — attest it with actions/attest, verify with `gh attestation verify`\n", *attestFlag)
 		}
 	}
@@ -3721,10 +3733,22 @@ func warehouseRowsSHA256(b auditpush.Bundle) (string, error) {
 	b.Files = append([]auditpush.Row(nil), b.Files...)
 	for i := range b.Files {
 		b.Files[i].StatementSHA256 = ""
+		// The hash must cover what the WAREHOUSE receives, not what this
+		// process happens to hold. Without --push-source the writer stores
+		// SQL NULL for these, so hashing them here would sign a number no
+		// verifier could ever reproduce from the rows they can actually see
+		// — a cross-check that never checks out is worse than none.
+		if !b.SourcePushed {
+			b.Files[i].AuthoredTest = ""
+			b.Files[i].VerdictJSON = ""
+		}
 	}
 	b.Mutants = append([]auditpush.MutantRow(nil), b.Mutants...)
 	for i := range b.Mutants {
 		b.Mutants[i].StatementSHA256 = ""
+		if !b.SourcePushed {
+			b.Mutants[i].Code = ""
+		}
 	}
 	b.Calls = append([]auditpush.ModelCallRow(nil), b.Calls...)
 	for i := range b.Calls {

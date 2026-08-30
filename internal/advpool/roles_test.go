@@ -3,6 +3,7 @@
 package advpool
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -505,5 +506,60 @@ func TestHarnessOverrideNoopWithoutProjectTests(t *testing.T) {
 	base := "You are a TEST-WRITER. Use node:test."
 	if got := harnessOverride(base, RunSpec{}); got != base {
 		t.Fatalf("system prompt must be untouched with no project tests, got:\n%s", got)
+	}
+}
+
+// bigCodeFile builds a synthetic file of roughly n bytes out of unique,
+// numbered lines — big enough to stand in for the 36 KB file the cost
+// measurement (0.5M tokens on one writer seat) was taken against, and with
+// every line unique so a single-line SEARCH anchors uniquely.
+func bigCodeFile(n int) string {
+	var b strings.Builder
+	for i := 0; b.Len() < n; i++ {
+		fmt.Fprintf(&b, "var line%05d = %d // filler content for line %05d\n", i, i, i)
+	}
+	return b.String()
+}
+
+// TestWriterPromptCarriesTheFileOnceAndDiffs pins the shape the whole-file
+// representation was replaced for: the code under review appears in the
+// writer's prompt exactly ONCE (via WriteTestPrompt's TARGET FILE section),
+// and each survivor appears as one small RenderHunk diff rather than a
+// second copy of the file. The size bound is the plan's own acceptance
+// number: 24 survivors of a 36 KB file must render under 60 KB, not the
+// ~0.5M-token/864 KB a whole-file-per-survivor render would have cost.
+func TestWriterPromptCarriesTheFileOnceAndDiffs(t *testing.T) {
+	const fileSize = 36 * 1024
+	const nSurvivors = 24
+	code := bigCodeFile(fileSize)
+	lines := strings.Split(strings.TrimSuffix(code, "\n"), "\n")
+
+	survivors := make([]adequacy.Mutant, nSurvivors)
+	stride := len(lines) / nSurvivors
+	for i := range survivors {
+		line := lines[i*stride]
+		survivors[i] = adequacy.Mutant{
+			ID:      fmt.Sprintf("m%d", i),
+			Search:  line + "\n",
+			Replace: strings.Replace(line, "var ", "var MUTATED_", 1) + "\n",
+		}
+	}
+
+	rs := RunSpec{
+		Goal: "reject bad input", CodePath: "big.go", Code: code, Lang: "go",
+	}
+	got := renderTestWriter(rs, nil, survivors)
+
+	if n := strings.Count(got, code); n != 1 {
+		t.Fatalf("code under review must appear exactly once in the prompt, appeared %d times", n)
+	}
+	if n := strings.Count(got, "--- SURVIVOR "); n != nSurvivors {
+		t.Fatalf("expected %d SURVIVOR diff blocks, got %d", nSurvivors, n)
+	}
+	if strings.Contains(got, "(not renderable)") {
+		t.Fatal("RenderHunk always renders — no survivor should fall back to the old not-renderable marker")
+	}
+	if len(got) >= 60*1024 {
+		t.Fatalf("writer prompt for %d survivors of a %d-byte file is %d bytes, want < 60 KB", nSurvivors, len(code), len(got))
 	}
 }

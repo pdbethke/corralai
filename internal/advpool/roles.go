@@ -152,20 +152,15 @@ func renderTestWriterRepairing(rs RunSpec, sigs []repoindex.Signature, survivors
 		var b strings.Builder
 		fmt.Fprintf(&b, "%s\n\nThe developer's own tests did NOT catch the following goal-violating mutants (they passed undetected). Write a test that specifically kills these survivors — proving the missed bugs are real and catchable, not equivalent mutants.\n\n%s\n", rs.Goal, testgen.WriterStrictnessNote())
 		for _, m := range survivors {
-			// TEMPORARY, replaced in Task 2 by the diff renderer. A mutant is
-			// its hunk now; materialising the whole file here is exactly the
-			// 0.5M-token-per-file waste the representation change exists to
-			// remove, and it survives only so the writer seat keeps working
-			// until RenderHunk lands. TODO(Task 2): render the hunk.
-			code, aerr := m.Apply(rs.Code)
-			if aerr != nil {
-				// Named, not dropped: the writer is told to kill these
-				// survivors by id, and one that silently vanished would look
-				// like a survivor that never existed.
-				fmt.Fprintf(&b, "\n--- SURVIVOR %s (not renderable) ---\n", m.ID)
-				continue
-			}
-			fmt.Fprintf(&b, "\n--- SURVIVOR %s ---\n%s\n", m.ID, code)
+			// A mutant is its hunk, not the whole file it would make: the
+			// code under review is already above (once, via WriteTestPrompt's
+			// TARGET FILE), so each survivor here is a small diff against it
+			// rather than a second copy of the file — see RenderHunk's doc
+			// comment for the 0.5M-token-per-file cost this removes.
+			// RenderHunk always renders (never errors, never dumps a whole
+			// file), so every survivor is named here — none can silently
+			// vanish from what the writer is told to kill.
+			fmt.Fprintf(&b, "\n%s\n", RenderHunk(m, rs.Code, 3))
 		}
 		goal = b.String()
 	}

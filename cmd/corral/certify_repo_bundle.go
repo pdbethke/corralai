@@ -231,7 +231,7 @@ func buildEventRows(events []scanstore.Event, scanID int64, meta bundleMeta) []a
 	for _, e := range events {
 		rows = append(rows, auditpush.EventRow{
 			Repo: meta.Repo, RunURL: meta.RunURL, ScanID: scanID,
-			Path: e.Path, Seq: e.Seq, Kind: e.Kind, Actor: e.Actor,
+			Path: e.Path, TS: e.TS, Seq: e.Seq, Kind: e.Kind, Actor: e.Actor,
 			Subject: e.Subject, Model: e.Model,
 			DurationMillis: e.DurationMillis, Detail: e.Detail,
 		})

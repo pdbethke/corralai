@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -92,40 +93,72 @@ func (r dbSealReader) Close() error { return r.db.Close() }
 // target — ONE connection, `USE warehouse` so every unqualified statement
 // resolves there, and `md:` gets the motherduck extension loaded first.
 //
-// Read-only wherever DuckDB allows it: a local file is ATTACHed
-// `(READ_ONLY)` first, which is also why the view has to be created OUTSIDE
-// that attempt when it is missing — a read-only attach cannot run DDL. `md:`
-// databases skip the read-only attempt outright (motherduck's own access
-// control, not this reader's, is what would gate a write there) and a local
-// file that fails the read-only attach (most commonly: the view does not
-// exist yet, or the file does not exist yet at all) falls back to a normal
-// attach for exactly long enough to create the view, never to write a row —
-// this reader has no INSERT/UPDATE/DELETE anywhere in it.
+// Read-only wherever DuckDB allows it. That is not a preference: `corral
+// seal` is a READER, and a reader that holds a writable handle on the
+// operator's warehouse can corrupt it on a crash and blocks a concurrent
+// push for no benefit. This reader has no INSERT/UPDATE/DELETE anywhere in
+// it.
+//
+// The one thing it does write is the corral_seal VIEW, and only when the
+// warehouse does not have one — a file whose corral_audits came from an
+// older corral, or from another writer entirely. A read-only attach cannot
+// run DDL, so that path closes the read-only handle, re-opens writable JUST
+// long enough for the CREATE VIEW, and then re-opens read-only to actually
+// read. `md:` skips the read-only attempt outright (motherduck's own access
+// control, not this reader's, is what would gate a write there), so its
+// handle can run the DDL where it stands.
+//
+// A `--db` naming a path that does not exist is a TYPO and is refused. DuckDB
+// answers a missing file by CREATING it, so without this check seal would
+// invent an empty warehouse, report it as empty, and leave the file behind
+// for the next reader to be confused by.
 func openSealDB(dsn string) (sealReader, error) {
 	isMD := strings.HasPrefix(dsn, "md:")
+	if !isMD {
+		if _, err := os.Stat(dsn); err != nil {
+			return nil, fmt.Errorf("corral seal: no warehouse at %s — nothing has pushed to it yet (run `certify --repo --push %s` first), or --db names the wrong path; a reader does not create one", dsn, dsn)
+		}
+	}
+
 	db, err := attachWarehouse(dsn, !isMD)
-	if err != nil && !isMD {
-		// The read-only attempt failed — almost always because the view is
-		// not there yet to read. Reopen writable, JUST to create it.
-		db, err = attachWarehouse(dsn, false)
-		if err != nil {
+	if err != nil {
+		if isMD {
 			return nil, fmt.Errorf("corral seal: opening %s: %w", dsn, err)
 		}
-		if _, verr := db.Exec(auditpush.SealViewDDL); verr != nil {
-			db.Close()
-			return nil, fmt.Errorf("corral seal: creating corral_seal view: %w", verr)
-		}
-		return dbSealReader{db: db}, nil
+		// The READ-ONLY attach itself failed on a file that exists — a
+		// warehouse another process holds the lock on, a file that is not a
+		// DuckDB database, a permissions problem. Report what actually
+		// happened; do NOT retry writable, which would turn "someone else is
+		// pushing" into a second writer fighting for the same lock.
+		return nil, fmt.Errorf("corral seal: opening %s read-only: %w", dsn, err)
 	}
-	if err != nil {
-		return nil, fmt.Errorf("corral seal: opening %s: %w", dsn, err)
-	}
-	// Confirm the view is actually there to read: a read-only attach on a
-	// warehouse with corral_audits but no corral_seal view (or nothing at
-	// all yet) cannot create it, and the honest response is to say so.
+
+	// Confirm the view is actually there to read.
 	if _, verr := db.Exec("SELECT 1 FROM corral_seal LIMIT 0"); verr != nil {
+		if isMD {
+			// Already writable: create it where we stand.
+			if _, derr := db.Exec(auditpush.SealViewDDL); derr != nil {
+				db.Close()
+				return nil, fmt.Errorf("corral seal: %s has no corral_seal view and creating it failed: %w (the read said: %v)", dsn, derr, verr)
+			}
+			return dbSealReader{db: db}, nil
+		}
+		// Read-only cannot run DDL. Close, create the view through a
+		// writable handle, and come back read-only to read.
 		db.Close()
-		return nil, fmt.Errorf("corral seal: %s has no corral_seal view and is not writable to create one (run `certify --repo --push` against it first, or open it directly with duckdb to create the view): %w", dsn, verr)
+		w, werr := attachWarehouse(dsn, false)
+		if werr != nil {
+			return nil, fmt.Errorf("corral seal: %s has no corral_seal view and could not be opened writable to create one: %w (the read said: %v)", dsn, werr, verr)
+		}
+		if _, derr := w.Exec(auditpush.SealViewDDL); derr != nil {
+			w.Close()
+			return nil, fmt.Errorf("corral seal: creating the corral_seal view in %s: %w", dsn, derr)
+		}
+		w.Close()
+		db, err = attachWarehouse(dsn, true)
+		if err != nil {
+			return nil, fmt.Errorf("corral seal: reopening %s read-only after creating the corral_seal view: %w", dsn, err)
+		}
 	}
 	return dbSealReader{db: db}, nil
 }
@@ -277,10 +310,13 @@ func runSealWithRepo(st sealReader, repoDir string, top int, asJSON bool, stdout
 		sum, herr := fileSHA256(filepath.Join(repoDir, c.Path))
 		switch {
 		case herr != nil:
-			// The file the audit graded no longer exists (or cannot be
-			// read) in this checkout — that IS staleness, just from the
-			// other direction. Say so rather than reporting a hash error.
-			states = append(states, sealState{Path: c.Path, State: fmt.Sprintf("stale (file changed since %s)", r.TS.Format("2006-01-02 15:04")), Row: &rc})
+			// A file corral cannot READ is not a file that CHANGED. Calling
+			// it stale tells the operator to re-audit a file whose bytes may
+			// be byte-identical to the ones that were graded — a diagnosis
+			// nothing here made. It does not count as live either: the
+			// validity key could not be computed, so the honest state is
+			// that the reader does not know.
+			states = append(states, sealState{Path: c.Path, State: "unreadable", Row: &rc})
 		case sum == r.ParentSHA256:
 			states = append(states, sealState{Path: c.Path, State: "live", Row: &rc})
 			live++
@@ -330,7 +366,14 @@ func trimPercent(pct float64) string {
 	return fmt.Sprintf("%.1f", pct)
 }
 
+// emitSealJSON writes the rows as JSON. A nil slice is normalized to an
+// EMPTY one first: `[]` is "this warehouse has no graded rows", and `null` is
+// a shape a pipeline has to special-case (or crashes on) for a state that is
+// perfectly ordinary.
 func emitSealJSON(rows []sealRow, stdout io.Writer) int {
+	if rows == nil {
+		rows = []sealRow{}
+	}
 	enc := json.NewEncoder(stdout)
 	enc.SetIndent("", "  ")
 	_ = enc.Encode(rows)

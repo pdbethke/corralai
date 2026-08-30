@@ -6,9 +6,15 @@ import (
 	"database/sql"
 	"path/filepath"
 	"testing"
+	"time"
 
 	_ "github.com/marcboeker/go-duckdb/v2"
 )
+
+// sampleEventTS is the fixture tape's start: every beat is offset from it, so
+// a push that stamped its own clock over them is visible as four identical
+// timestamps.
+var sampleEventTS = time.Date(2026, 8, 30, 9, 0, 0, 0, time.UTC)
 
 func f64(v float64) *float64 { return &v }
 func ms(v int64) *int64      { return &v }
@@ -80,11 +86,13 @@ func sampleBundle() Bundle {
 				Role: "test-writer", Model: "w-1", Calls: 4,
 				InputTokens: 300, OutputTokens: 130, WallMillis: 2200},
 		},
+		// Each beat carries its OWN time, as a real tape does: corral_events.ts
+		// is when the beat happened, not when the push ran.
 		Events: []EventRow{
-			{Repo: "o/r", RunURL: "https://ci/1", ScanID: 7, Path: "pkg/a.go", Seq: 1, Kind: "phase-start", Actor: "driver", Subject: "generation"},
-			{Repo: "o/r", RunURL: "https://ci/1", ScanID: 7, Path: "pkg/a.go", Seq: 2, Kind: "model-call", Actor: "mutant-generator", Model: "m-1", DurationMillis: ms(1500), Detail: `{"retries":0}`},
-			{Repo: "o/r", RunURL: "https://ci/1", ScanID: 7, Path: "pkg/a.go", Seq: 3, Kind: "phase-end", Actor: "driver", Subject: "generation", DurationMillis: ms(3000)},
-			{Repo: "o/r", RunURL: "https://ci/1", ScanID: 7, Path: "pkg/a.go", Seq: 4, Kind: "dev-pass", Actor: "driver", DurationMillis: ms(9000)},
+			{Repo: "o/r", RunURL: "https://ci/1", ScanID: 7, Path: "pkg/a.go", TS: sampleEventTS, Seq: 1, Kind: "phase-start", Actor: "driver", Subject: "generation"},
+			{Repo: "o/r", RunURL: "https://ci/1", ScanID: 7, Path: "pkg/a.go", TS: sampleEventTS.Add(time.Second), Seq: 2, Kind: "model-call", Actor: "mutant-generator", Model: "m-1", DurationMillis: ms(1500), Detail: `{"retries":0}`},
+			{Repo: "o/r", RunURL: "https://ci/1", ScanID: 7, Path: "pkg/a.go", TS: sampleEventTS.Add(3 * time.Second), Seq: 3, Kind: "phase-end", Actor: "driver", Subject: "generation", DurationMillis: ms(3000)},
+			{Repo: "o/r", RunURL: "https://ci/1", ScanID: 7, Path: "pkg/a.go", TS: sampleEventTS.Add(12 * time.Second), Seq: 4, Kind: "dev-pass", Actor: "driver", DurationMillis: ms(9000)},
 		},
 	}
 }

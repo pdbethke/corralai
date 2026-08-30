@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -232,8 +233,112 @@ func TestOpenSealDBCreatesViewAndReads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second openSealDB: %v", err)
 	}
-	defer st2.Close()
 	if rows2, err := st2.SealRows(context.Background(), "o/r"); err != nil || len(rows2) != 1 {
 		t.Errorf("second open: rows=%v err=%v", rows2, err)
+	}
+	_ = st2.Close()
+
+	// NOW the branch this test's name has always claimed. Every push creates
+	// the view (auditpush.PushBundle runs SealViewDDL), so up to here the
+	// reader has never once had to create anything and the create path was
+	// unproven. Drop the view and re-open: a warehouse whose corral_audits
+	// came from another writer, or from a corral that predates the view, is
+	// exactly this state.
+	dropSealView(t, target)
+	st3, err := openSealDB(target)
+	if err != nil {
+		t.Fatalf("openSealDB with the view dropped: %v", err)
+	}
+	defer st3.Close()
+	rows3, err := st3.SealRows(context.Background(), "o/r")
+	if err != nil {
+		t.Fatalf("SealRows after the reader created the view: %v", err)
+	}
+	if len(rows3) != 1 || rows3[0].Path != "pkg/a.go" {
+		t.Errorf("rows after the reader created the view = %+v, want the pushed audit", rows3)
+	}
+}
+
+// dropSealView removes corral_seal from a warehouse file, leaving
+// corral_audits behind — the state a warehouse written by anything other
+// than this version of PushBundle is in.
+func dropSealView(t *testing.T, target string) {
+	t.Helper()
+	db, err := sql.Open("duckdb", target)
+	if err != nil {
+		t.Fatalf("open %s: %v", target, err)
+	}
+	defer db.Close()
+	if _, err := db.Exec("DROP VIEW IF EXISTS corral_seal"); err != nil {
+		t.Fatalf("drop corral_seal: %v", err)
+	}
+}
+
+// TestOpenSealDBRefusesAMissingWarehouse: `--db` naming a path that does not
+// exist is a TYPO, and DuckDB's answer to a typo is to create an empty
+// database — so seal would print "corral_seal is empty" about a warehouse it
+// had just invented, and leave the file behind for the next reader to find.
+// Refuse, and leave no file.
+func TestOpenSealDBRefusesAMissingWarehouse(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "typo.duckdb")
+	st, err := openSealDB(target)
+	if err == nil {
+		_ = st.Close()
+		t.Fatal("openSealDB created a warehouse for a path that did not exist")
+	}
+	if !strings.Contains(err.Error(), "no warehouse at "+target) {
+		t.Errorf("error = %v, want it to say there is no warehouse at %s", err, target)
+	}
+	if _, serr := os.Stat(target); serr == nil {
+		t.Errorf("%s was created by a READER", target)
+	}
+}
+
+// TestSealJSONEmptyIsAnEmptyArray: `--json` with nothing to report must emit
+// `[]`, not `null`. A pipeline reading `null` as "the command failed" (or
+// crashing on it) is the whole reason the empty case has to be a value.
+func TestSealJSONEmptyIsAnEmptyArray(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := runSeal([]string{"--db", "unused", "--json"},
+		func(string) (sealReader, error) { return fakeSealReader{}, nil }, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("runSeal exit %d, stderr=%s", code, errOut.String())
+	}
+	if got := strings.TrimSpace(out.String()); got != "[]" {
+		t.Errorf("--json with no rows printed %q, want []", got)
+	}
+}
+
+// TestSealUnreadableFileIsNotStale: a hot file corral cannot READ is not a
+// file that CHANGED. Reporting "stale (file changed since ...)" for a
+// permission error tells the operator to re-audit a file whose bytes may be
+// identical to the ones that were graded — a diagnosis the reader never
+// made.
+func TestSealUnreadableFileIsNotStale(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: chmod 000 does not make a file unreadable")
+	}
+	dir, repo := sealFixtureRepo(t)
+	if err := os.Chmod(filepath.Join(dir, "live.go"), 0o000); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(filepath.Join(dir, "live.go"), 0o600) })
+
+	ts := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
+	reader := fakeSealReader{rows: []sealRow{
+		{Repo: repo, Path: "live.go", ParentSHA256: "whatever", KillRate: 0.9, TS: ts},
+	}}
+	var out, errOut bytes.Buffer
+	code := runSeal([]string{"--db", "unused", "--repo", dir, "--top", "3"},
+		func(string) (sealReader, error) { return reader, nil }, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("runSeal exit %d, stderr=%s", code, errOut.String())
+	}
+	got := out.String()
+	if !strings.Contains(got, "unreadable") {
+		t.Errorf("an unreadable hot file must be reported as unreadable; got:\n%s", got)
+	}
+	if strings.Contains(got, "stale (") {
+		t.Errorf("an unreadable hot file was reported as stale — a diagnosis nothing measured:\n%s", got)
 	}
 }

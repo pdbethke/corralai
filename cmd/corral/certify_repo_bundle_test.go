@@ -315,12 +315,11 @@ func TestBuildEventRowsIsFieldForField(t *testing.T) {
 	lt := lv.Type()
 	// deliberatelyUnmappedEvent names every scanstore.Event field with no
 	// identically-named, identically-typed auditpush.EventRow field.
-	deliberatelyUnmappedEvent := map[string]string{
-		// corral_events.ts is stamped with the PUSH time (see PushBundle),
-		// not the ledger's own event TS — EventRow carries no TS field at
-		// all, so there is nothing here for the reflection walk to compare.
-		"TS": "corral_events.ts is the push time, not the ledger event's own TS",
-	}
+	// Empty on purpose: every scanstore.Event field, TS included, has an
+	// identically-named EventRow field the walk below compares. corral_events.ts
+	// used to be the PUSH time, which made the tape's own clock unrecoverable
+	// from the warehouse — see TestEventTimestampsAreTheEventsOwn.
+	deliberatelyUnmappedEvent := map[string]string{}
 	for i := 0; i < lt.NumField(); i++ {
 		name := lt.Field(i).Name
 		if _, skip := deliberatelyUnmappedEvent[name]; skip {
@@ -598,4 +597,50 @@ func TestKilledByReachesTheWarehouseRow(t *testing.T) {
 		return
 	}
 	t.Fatal("the killed mutant is missing from the bundle rows")
+}
+
+// TestEventTimestampsAreTheEventsOwn: corral_events.ts must be WHEN THE BEAT
+// HAPPENED, not when the push ran.
+//
+// Every row of a push carried one identical `now`, so the warehouse could
+// order a tape by seq but could never say how long anything took between two
+// beats, or when in the run a beat fell — the tape's own clock was thrown
+// away at the door, and a warehouse whose whole purpose is "what did this
+// audit cost, and where" cannot answer either question from a column that
+// only records the upload.
+func TestEventTimestampsAreTheEventsOwn(t *testing.T) {
+	first := time.Date(2026, 8, 30, 9, 0, 0, 0, time.UTC)
+	second := first.Add(7 * time.Minute)
+	events := []scanstore.Event{
+		{ScanID: 11, Path: "a.go", Seq: 1, TS: first, Kind: "pool_subject", Detail: `{}`},
+		{ScanID: 11, Path: "a.go", Seq: 2, TS: second, Kind: "pool_verdict", Detail: `{}`},
+	}
+	b := buildBundle(scanstore.Scan{Repo: "o/r", Commit: "deadbeef"}, 11, nil, nil, nil, events,
+		auditpush.Link{}, false, "o/r", "deadbeef", "", bundleMeta{})
+	target := filepath.Join(t.TempDir(), "w.duckdb")
+	if _, err := pushBundle(target, b); err != nil {
+		t.Fatalf("pushBundle: %v", err)
+	}
+
+	rows := queryRows(t, target, `SELECT seq, ts FROM corral_events ORDER BY seq`)
+	if len(rows) != 2 {
+		t.Fatalf("corral_events holds %d row(s), want 2", len(rows))
+	}
+	got := make([]time.Time, 2)
+	for i, r := range rows {
+		ts, ok := r[1].(time.Time)
+		if !ok {
+			t.Fatalf("row %d: ts = %T, want a timestamp", i, r[1])
+		}
+		got[i] = ts.UTC()
+	}
+	if !got[0].Equal(first) {
+		t.Errorf("event 1 ts = %s, want the beat's own time %s (push time would be now)", got[0], first)
+	}
+	if !got[1].Equal(second) {
+		t.Errorf("event 2 ts = %s, want the beat's own time %s", got[1], second)
+	}
+	if got[0].Equal(got[1]) {
+		t.Error("both events landed on the same ts — the tape's own clock was replaced by the push's")
+	}
 }

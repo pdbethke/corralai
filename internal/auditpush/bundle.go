@@ -153,10 +153,16 @@ type ModelCallRow struct {
 // events inside one millisecond are ordinary, and a tape whose order depends
 // on clock granularity is not a tape.
 type EventRow struct {
-	Repo    string
-	RunURL  string
-	ScanID  int64
-	Path    string
+	Repo   string
+	RunURL string
+	ScanID int64
+	Path   string
+	// TS is when the BEAT happened, carried from the ledger's own event row
+	// — not when the push ran. Every row of a push used to share one `now`,
+	// which threw the tape's clock away at the door: the warehouse could
+	// order beats by Seq but could never say when in the run one fell, or
+	// how long the gap between two of them was.
+	TS      time.Time
 	Seq     int64
 	Kind    string
 	Actor   string
@@ -837,7 +843,8 @@ func pushBundleOnce(target string, b Bundle) (Counts, error) {
 		    ts, repo, run_url, scan_id, path, seq, kind, actor, subject, model,
 		    duration_ms, detail, statement_sha256, schema_version
 		  ) VALUES (`+placeholders(14)+`)`,
-			now, e.Repo, e.RunURL, e.ScanID, e.Path, e.Seq, e.Kind, e.Actor,
+			// e.TS, not `now`: the tape's clock is the measurement.
+			e.TS, e.Repo, e.RunURL, e.ScanID, e.Path, e.Seq, e.Kind, e.Actor,
 			e.Subject, e.Model, e.DurationMillis, nullIfEmpty(e.Detail),
 			e.StatementSHA256, SchemaVersion,
 		); err != nil {

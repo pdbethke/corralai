@@ -362,14 +362,41 @@ func (s JailScorer) ScoreReportFor(ctx context.Context, codePath, code, test str
 // miss because CompileTest DOES overlay (so the compile gate passed and
 // TestWriterFailed stayed false) while SCORING silently used a workspace that
 // never contained the test at all.
+// RuleAuthoredAlone is the per-mutant rule the AUTHORED pass records: the
+// survivor was run against the authored test and nothing else.
+const RuleAuthoredAlone = "authored-alone"
+
+// AuthoredAlone reports whether this run's authored pass proves survivors
+// with the authored test alone — true exactly when the language has a
+// TestSelector and the run carries a selection. It is spec-derived so the
+// verdict can say it without asking the scorer.
+func AuthoredAlone(rs RunSpec) bool {
+	return selectorFor(rs.Lang, rs.Selection) != nil
+}
+
 func (s JailScorer) ScoreAuthoredReport(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (adequacy.Report, error) {
-	scoreBase, cmd := s.scoreWorkspace(codePath, test, testCmd)
-	cmd = s.authoredCmd(codePath, cmd)
+	scoreBase, base := s.scoreWorkspace(codePath, test, testCmd)
+	cmd := s.authoredCmd(codePath, base)
 	if s.BaseFiles != nil {
 		scoreBase = s.authoredWorkspace(codePath, test)
 	}
 
-	rep, err := adequacy.Score(ctx, s.Jail, scoreBase, codePath, code, mutants, cmd, s.baseScoreOpts()...)
+	// The mutants here are SURVIVORS of the dev pass: no selected dev test
+	// killed them, so re-running those tests cannot kill them either — the
+	// only test that can is the authored one. Each survivor therefore runs
+	// the authored test ALONE, which is both cheaper (one test instead of
+	// the file's selection, per survivor) and more honest: a dev test that
+	// flaked during this pass used to count as the authored test proving a
+	// gap. The compliance baseline and the canary keep the shared command —
+	// they ask whether the authored test is real, not whether it kills.
+	opts := s.baseScoreOpts()
+	if ts := s.selector(); ts != nil {
+		alone := ts.WithAuthoredTest(golang.Selection{Base: s.Selection.Base}, base, authoredTestPath(codePath, s.DevTestPath, s.BaseFiles))
+		opts = append(opts, adequacy.WithCommandFor(func(adequacy.Mutant) adequacy.MutantCommand {
+			return adequacy.MutantCommand{Cmd: alone, Tests: 1, Rule: RuleAuthoredAlone}
+		}))
+	}
+	rep, err := adequacy.Score(ctx, s.Jail, scoreBase, codePath, code, mutants, cmd, opts...)
 	if err != nil {
 		return adequacy.Report{}, fmt.Errorf("advpool: score authored report: %w", err)
 	}

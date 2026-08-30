@@ -285,6 +285,29 @@ Every row above was produced with the disclosure in place: the
 `1–234, median 158` is the report line's own text, and the same numbers are
 in `scan_mutants`, the attestation and the warehouse row for those scans.
 
+### The authored pass proves alone
+
+The acceptance table above put the authored pass at the top of the cost:
+each survivor of the dev pass was proven against the file's full selection
+plus the authored test, with the writer's retries on top. But the mutants in
+that pass are *survivors* — no selected dev test killed them — so re-running
+those tests cannot kill them either. The only test that can is the authored
+one.
+
+So, whenever the run has a selector, the authored pass grades each survivor
+with **the authored test alone** (`base + authored path`); the compliance
+baseline and the canary keep the shared command, because they ask whether
+the authored test is real, not whether it kills. This is cheaper (one test
+per survivor instead of the file's selection) and stricter: a dev test that
+flaked during the authored pass used to count as the authored test proving a
+gap. Under this rule a proven count can only be the authored test's own.
+
+That is a change in what `proven` means — it can only go *down* — so it is
+`VerdictGeneration` "4", the verdict carries `authored_alone`, the report
+line appends `proven by the authored test alone`, and the attestation signs
+`provenByAuthoredAlone`. Runs with no selector (`--whole-suite`, `--local`,
+Ruby, `node:test`) prove the old way and say nothing new.
+
 ## Part B — not built
 
 A per-worker tree on the workspace substrate, letting concurrent scoring runs

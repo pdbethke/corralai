@@ -32,5 +32,7 @@ package reposcan
 // is invalidated wholesale by bumping this, without deleting any ledger data.
 //
 // "2" (2026-08-28): coverage-guided test selection changed what the scorer runs.
+// "4" (2026-08-30): the authored pass proves each survivor with the authored
+// test alone — a proven count can no longer come from a flaking dev test.
 // "3" (2026-08-29): per-mutant selection changed what the dev pass runs per mutant.
-const VerdictGeneration = "3"
+const VerdictGeneration = "4"

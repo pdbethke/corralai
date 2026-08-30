@@ -419,3 +419,80 @@ func TestTimeoutVerdictCarriesPerMutantGrading(t *testing.T) {
 		t.Errorf("Rules = %v, want %v", got, want)
 	}
 }
+
+// The AUTHORED pass grades survivors of the dev pass. No selected dev test
+// killed them, so the only test that can is the authored one: each survivor
+// runs the authored test ALONE, while the compliance baseline and the
+// canary keep the shared command (selection + authored path) — they are
+// questions about whether the authored test is real, not about the mutant.
+func TestScoreAuthoredReportGradesEachSurvivorWithTheAuthoredTestAlone(t *testing.T) {
+	const codePath, code = "pkg/a.py", "x = 1\n"
+	jail := &spanRecordingJail{codePath: codePath, code: code}
+	s := repoScorer(lineSelection())
+	s.Jail = jail
+	s.BaseFiles = map[string]string{codePath: code, "tests/test_a.py": "def test_x(): pass\n"}
+	authored := authoredTestPath(codePath, s.DevTestPath, s.BaseFiles)
+
+	mutants := []adequacy.Mutant{
+		{ID: "m1", Code: "x = 2\n", Span: lang.LineRange{Start: 41, End: 41}},
+		{ID: "m2", Code: "x = 3\n", Span: lang.LineRange{Start: 2, End: 2}},
+	}
+	rep, err := s.ScoreAuthoredReport(context.Background(), codePath, code, "def test_authored(): pass\n", mutants, "python3 -m pytest -q")
+	if err != nil {
+		t.Fatal(err)
+	}
+	shared := []string{"python3", "-m", "pytest", "-q", "tests/test_a.py::t1", "tests/test_a.py::t2", authored}
+	alone := []string{"python3", "-m", "pytest", "-q", authored}
+	if len(jail.cmds) < 3 || !reflect.DeepEqual(jail.cmds[0], shared) {
+		t.Fatalf("the compliance baseline must run the shared authored command %v; ran %v", shared, jail.cmds)
+	}
+	aloneRuns := 0
+	for _, c := range jail.cmds[1:] {
+		if reflect.DeepEqual(c, alone) {
+			aloneRuns++
+		}
+	}
+	if aloneRuns < 2 {
+		t.Errorf("each survivor must run the authored test alone %v; commands: %v", alone, jail.cmds)
+	}
+	for _, id := range []string{"m1", "m2"} {
+		if got, want := rep.PerMutant[id], (adequacy.MutantGrading{TestsRun: 1, Rule: RuleAuthoredAlone}); got != want {
+			t.Errorf("%s grading = %+v, want %+v", id, got, want)
+		}
+	}
+}
+
+// Without a selector (whole suite, --local, Ruby) the authored pass is
+// byte-for-byte what it was: one shared command, no per-mutant grading.
+func TestScoreAuthoredReportWithoutASelectorIsUnchanged(t *testing.T) {
+	const codePath, code = "pkg/a.py", "x = 1\n"
+	jail := &spanRecordingJail{codePath: codePath, code: code}
+	s := repoScorer(lang.Selection{})
+	s.Jail = jail
+	s.BaseFiles = map[string]string{codePath: code, "tests/test_a.py": "def test_x(): pass\n"}
+	rep, err := s.ScoreAuthoredReport(context.Background(), codePath, code, "def test_authored(): pass\n",
+		[]adequacy.Mutant{{ID: "m1", Code: "x = 2\n"}}, "python3 -m pytest -q")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range jail.cmds {
+		if !reflect.DeepEqual(c, []string{"python3", "-m", "pytest", "-q"}) {
+			t.Errorf("a zero Selection must leave every authored-pass command as before: %v", c)
+		}
+	}
+	if rep.PerMutant != nil {
+		t.Errorf("no per-mutant grading without a selector: %+v", rep.PerMutant)
+	}
+}
+
+func TestVerdictSaysWhetherTheAuthoredPassProvedAlone(t *testing.T) {
+	if v := verdictFromSpec(RunSpec{Lang: "python", Selection: lineSelection()}); !v.TestSelection.AuthoredAlone {
+		t.Error("a python run with a selection proves survivors with the authored test alone; the verdict must say so")
+	}
+	if v := verdictFromSpec(RunSpec{Lang: "python"}); v.TestSelection.AuthoredAlone {
+		t.Error("a whole-suite run proves the old way")
+	}
+	if v := verdictFromSpec(RunSpec{Lang: "ruby", Selection: lang.Selection{Method: "coverage-context"}}); v.TestSelection.AuthoredAlone {
+		t.Error("ruby has no selector")
+	}
+}

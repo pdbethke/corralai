@@ -105,6 +105,10 @@ type WeakFile struct {
 	// MeasuredSpread rather than testing the numbers.
 	PerMutant      bool
 	TestsPerMutant *advpool.TestsPerMutantSpread
+	// ProvenByAuthoredAlone mirrors advpool.Verdict.TestSelection.AuthoredAlone:
+	// ProvenMissed was established by the authored test alone, not by any
+	// test in a shared command.
+	ProvenByAuthoredAlone bool
 	// Rules mirrors advpool.Verdict.TestSelection.Rules: how many mutants got
 	// their command by each rule (lang.SpanRule*). The spread says how much
 	// the narrowing narrowed; this says how much of it was narrowing at all —
@@ -347,10 +351,11 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 			// And at which GRAIN it was measured: a rate averaged over
 			// mutants that each faced a different test set is not one
 			// measurement unless the report carries the spread.
-			PerMutant:      r.Verdict.TestSelection.PerMutant,
-			TestsPerMutant: r.Verdict.TestSelection.TestsPerMutant,
-			Rules:          r.Verdict.TestSelection.Rules,
-			Uncovered:      r.Verdict.Uncovered,
+			PerMutant:             r.Verdict.TestSelection.PerMutant,
+			ProvenByAuthoredAlone: r.Verdict.TestSelection.AuthoredAlone,
+			TestsPerMutant:        r.Verdict.TestSelection.TestsPerMutant,
+			Rules:                 r.Verdict.TestSelection.Rules,
+			Uncovered:             r.Verdict.Uncovered,
 		})
 	}
 

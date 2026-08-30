@@ -28,6 +28,7 @@ func verdictFromSpec(rs RunSpec) Verdict {
 		TestSelection: TestSelection{
 			Method: rs.Selection.Method, Selected: len(rs.Selection.Tests),
 			Of: rs.Selection.Of, Fallback: rs.Selection.Fallback,
+			AuthoredAlone: AuthoredAlone(rs),
 		},
 		Uncovered: rs.Selection.Method != "" && len(rs.Selection.Tests) == 0,
 	}

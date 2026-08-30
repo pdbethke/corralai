@@ -122,3 +122,23 @@ func TestPrintWeakFileNamesThePerMutantMeasurement(t *testing.T) {
 		t.Errorf("a run that did NOT grade per mutant must not claim it did: %q", b.String())
 	}
 }
+
+func TestPrintWeakFileSaysProvenByTheAuthoredTestAlone(t *testing.T) {
+	var b bytes.Buffer
+	printWeakFile(&b, reposcan.WeakFile{Path: "pkg/a.py", KillRate: 0.55, Survivors: 18, ProvenMissed: 18,
+		SelectionMethod: "coverage-lines", SelectedTests: 234, SuiteTests: 620, ProvenByAuthoredAlone: true})
+	if !strings.Contains(b.String(), "proven by the authored test alone") {
+		t.Errorf("got %q", b.String())
+	}
+	b.Reset()
+	printWeakFile(&b, reposcan.WeakFile{Path: "pkg/b.py", KillRate: 0.55, Survivors: 18, ProvenMissed: 0,
+		SelectionMethod: "coverage-lines", SelectedTests: 234, SuiteTests: 620, ProvenByAuthoredAlone: true})
+	if strings.Contains(b.String(), "proven by the authored test alone") {
+		t.Errorf("nothing was proven; the clause must not print: %q", b.String())
+	}
+	b.Reset()
+	printWeakFile(&b, reposcan.WeakFile{Path: "pkg/c.py", KillRate: 0.55, Survivors: 18, ProvenMissed: 3, SelectionFallback: "--whole-suite"})
+	if strings.Contains(b.String(), "authored test alone") {
+		t.Errorf("a whole-suite run proves the old way: %q", b.String())
+	}
+}

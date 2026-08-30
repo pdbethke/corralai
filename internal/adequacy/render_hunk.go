@@ -8,18 +8,36 @@ import (
 )
 
 // RenderHunk renders one mutant as a unified-diff block sized for a prompt:
-// a header naming the survivor and the ORIGINAL lines it spans, `context`
-// lines of unchanged code before and after, the removed lines prefixed "-"
-// and the added lines prefixed "+", every line numbered
-// ("  12 | ...", "- 13 | ...", "+ 13 | ..."). It exists so a prompt that
-// must show a model what a mutant DID never needs the whole mutated file to
-// do it — see Mutant's doc comment for the cost that materialising the
-// whole file was measured to have (0.5M tokens on one writer seat).
+// a header naming the survivor, `context` lines of unchanged code before
+// and after, the removed lines prefixed "-" and the added lines prefixed
+// "+", every line numbered ("  12 | ...", "- 13 | ...", "+ 13 | ...").
+// It exists so a prompt that must show a model what a mutant DID never
+// needs the whole mutated file to do it — see Mutant's doc comment for the
+// cost that materialising the whole file was measured to have (0.5M tokens
+// on one writer seat).
+//
+// The numbering is a unified diff's DUAL numbering, not one shared line
+// count: before-context and the removed "-" lines are numbered against
+// ORIGINAL, because that is the file a test actually runs against and
+// where a reviewer must go to see the mutant's anchor. The added "+" lines
+// and after-context are numbered against the MUTATED file instead — the
+// file Replace actually produces — because nothing constrains a hunk's
+// SEARCH and REPLACE to the same line count, and reusing ORIGINAL's
+// numbers for the "+" side when they differ makes two different physical
+// lines claim the same number (measured: a 2-line SEARCH replaced by a
+// 3-line REPLACE put the 3rd added line and the first after-context line
+// both at the SEARCH span's original end+1). The header's line range
+// ("lines <start>-<end>") names this same MUTATED region: <start> is
+// shared between both files (the splice point does not move), but <end>
+// is the last line REPLACE produces, which only equals the original
+// span's end when the two are the same length.
 //
 // A whole-file (v1) mutant (m.IsWholeFile()) has no anchor to hunk against —
 // Replace IS the whole mutated file — so it renders as a line diff of
 // Replace against original instead: a simple LCS (correctness over
-// prettiness), never the file verbatim.
+// prettiness), never the file verbatim, following the same dual-numbering
+// rule (original numbers before the first change, mutated numbers from the
+// first change onward).
 //
 // RenderHunk never errors and never dumps a file: an anchor that does not
 // occur in original (which Apply would reject) renders a degraded,
@@ -47,22 +65,49 @@ func splitLines(s string) []string {
 
 // renderAnchoredHunk renders a hunk-native mutant: Search anchors a known
 // span of original, so the removed/added lines and their surrounding
-// context are computed directly, with no diffing needed.
+// context are computed directly, with no diffing needed — but the removed
+// side and the added side are numbered against DIFFERENT files (see
+// RenderHunk's doc comment), so their line counts are tracked separately.
 func renderAnchoredHunk(m Mutant, original string, context int) string {
-	span := HunkSpan(original, m.Search)
-	if span.IsZero() {
+	origSpan := HunkSpan(original, m.Search)
+	if origSpan.IsZero() {
 		// The anchor is not IN original (a mutant graded against different
 		// bytes than it was cut from, or a hand-built fixture). Apply would
 		// refuse this; RenderHunk instead says so plainly rather than
 		// indexing into lines that do not exist.
 		return renderUnanchoredHunk(m)
 	}
-	start, end := span.Start, span.End
+	start, origEnd := origSpan.Start, origSpan.End
 	origLines := splitLines(original)
 	replaceLines := splitLines(m.Replace)
 
+	// The REPLACE region's end in the MUTATED file: the splice starts at
+	// the same `start` (the prefix before it is byte-identical in both
+	// files), but runs for len(replaceLines) lines rather than the
+	// SEARCH span's line count — that is exactly where the two numberings
+	// diverge. A pure deletion (no replace lines) has no "+" side to
+	// number; end stays start-1 so the range reads empty rather than
+	// negative or bogus.
+	mutEnd := start - 1
+	if len(replaceLines) > 0 {
+		mutEnd = start + len(replaceLines) - 1
+	}
+	// m.Span, when a producer set it, is computed the same way (HunkSpan
+	// against the SAME original) as origSpan here, so its Start must agree
+	// with this hunk's start — the splice point is one integer, read the
+	// same way regardless of which file's line numbers you're using. A
+	// disagreement means m.Span was computed against DIFFERENT bytes than
+	// `original` here (a caller bug: rendering a mutant against the wrong
+	// source) and is surfaced in the header rather than silently trusted or
+	// silently dropped.
+	header := fmt.Sprintf("--- SURVIVOR %s (lines %d-%d) ---", m.ID, start, mutEnd)
+	if !m.Span.IsZero() && m.Span.Start != start {
+		header = fmt.Sprintf("--- SURVIVOR %s (lines %d-%d) (SPAN MISMATCH: recorded Span.Start=%d, computed=%d — rendered against the wrong source?) ---",
+			m.ID, start, mutEnd, m.Span.Start, start)
+	}
+
 	var b strings.Builder
-	fmt.Fprintf(&b, "--- SURVIVOR %s (lines %d-%d) ---", m.ID, start, end)
+	b.WriteString(header)
 
 	beforeFrom := start - context
 	if beforeFrom < 1 {
@@ -71,18 +116,23 @@ func renderAnchoredHunk(m Mutant, original string, context int) string {
 	for n := beforeFrom; n < start; n++ {
 		fmt.Fprintf(&b, "\n  %d | %s", n, origLines[n-1])
 	}
-	for n := start; n <= end; n++ {
+	for n := start; n <= origEnd; n++ {
 		fmt.Fprintf(&b, "\n- %d | %s", n, origLines[n-1])
 	}
 	for i, line := range replaceLines {
 		fmt.Fprintf(&b, "\n+ %d | %s", start+i, line)
 	}
-	afterTo := end + context
+	// After-context is ORIGINAL content (the lines following the SEARCH
+	// span never changed) but MUTATED numbers — offset by however many
+	// lines longer or shorter REPLACE made the file, so numbering stays
+	// contiguous with the "+" side above instead of rewinding into it.
+	delta := mutEnd - origEnd
+	afterTo := origEnd + context
 	if afterTo > len(origLines) {
 		afterTo = len(origLines)
 	}
-	for n := end + 1; n <= afterTo; n++ {
-		fmt.Fprintf(&b, "\n  %d | %s", n, origLines[n-1])
+	for n := origEnd + 1; n <= afterTo; n++ {
+		fmt.Fprintf(&b, "\n  %d | %s", n+delta, origLines[n-1])
 	}
 	return b.String()
 }
@@ -228,6 +278,16 @@ func renderWholeFileDiff(m Mutant, original string, context int) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "--- SURVIVOR %s (lines %d-%d) ---", m.ID, firstOrig, lastOrig)
 	skipped := 0
+	// changed tracks whether any 'd'/'i' op has been emitted yet: equal
+	// lines strictly before the first change are numbered against
+	// ORIGINAL (they haven't diverged from it yet, so the two numberings
+	// agree anyway); equal lines from the first change onward are
+	// numbered against MUTATED, the same dual-numbering rule the anchored
+	// hunk uses, so a post-change context line never re-claims a line
+	// number an added line already used (the bug this fixes: a whole-file
+	// edit that grows the file left a later equal line stamped with its
+	// stale original number, colliding with an added line at that number).
+	changed := false
 	for i, op := range numbered {
 		if !show[i] {
 			skipped++
@@ -239,10 +299,16 @@ func renderWholeFileDiff(m Mutant, original string, context int) string {
 		}
 		switch op.kind {
 		case 'e':
-			fmt.Fprintf(&b, "\n  %d | %s", op.origN, op.line)
+			n := op.origN
+			if changed {
+				n = op.newN
+			}
+			fmt.Fprintf(&b, "\n  %d | %s", n, op.line)
 		case 'd':
+			changed = true
 			fmt.Fprintf(&b, "\n- %d | %s", op.origN, op.line)
 		case 'i':
+			changed = true
 			fmt.Fprintf(&b, "\n+ %d | %s", op.newN, op.line)
 		}
 	}

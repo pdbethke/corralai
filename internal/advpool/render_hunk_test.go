@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
+	golang "github.com/pdbethke/corralai/internal/lang"
 )
 
 // TestRenderHunkGolden pins the exact block shape for a hunk-native mutant:
@@ -127,5 +128,129 @@ func TestRenderHunkWholeFileMutantDiffs(t *testing.T) {
 	}, "\n")
 	if got != want {
 		t.Fatalf("RenderHunk mismatch:\ngot:\n%s\n\nwant:\n%s", got, want)
+	}
+}
+
+// TestRenderHunkDualNumberingGrowingReplace reproduces the reviewer's
+// collision: a 2-line SEARCH replaced by a 3-line REPLACE. Removed lines and
+// before-context stay in ORIGINAL numbering; added lines and after-context
+// must switch to MUTATED numbering (the line count the replacement actually
+// produces) — otherwise the 3rd added line and the first after-context line
+// both claim the same original line number.
+func TestRenderHunkDualNumberingGrowingReplace(t *testing.T) {
+	original := "a\nb\nc\nd\ne\nf\ng\nh\n"
+	m := adequacy.Mutant{ID: "t1", Search: "c\nd\n", Replace: "C1\nC2\nC3\n"}
+
+	want := strings.Join([]string{
+		"--- SURVIVOR t1 (lines 3-5) ---",
+		"  1 | a",
+		"  2 | b",
+		"- 3 | c",
+		"- 4 | d",
+		"+ 3 | C1",
+		"+ 4 | C2",
+		"+ 5 | C3",
+		"  6 | e",
+		"  7 | f",
+	}, "\n")
+	if got := RenderHunk(m, original, 2); got != want {
+		t.Fatalf("RenderHunk mismatch:\ngot:\n%s\n\nwant:\n%s", got, want)
+	}
+}
+
+// TestRenderHunkDualNumberingShrinkingReplace is the mirror case: a 3-line
+// SEARCH replaced by a 1-line REPLACE. After-context numbers must shift
+// BACKWARD to the mutated file's numbering, not stay pinned to the
+// original's.
+func TestRenderHunkDualNumberingShrinkingReplace(t *testing.T) {
+	original := "a\nb\nc\nd\ne\nf\ng\nh\n"
+	m := adequacy.Mutant{ID: "t2", Search: "c\nd\ne\n", Replace: "X\n"}
+
+	want := strings.Join([]string{
+		"--- SURVIVOR t2 (lines 3-3) ---",
+		"  1 | a",
+		"  2 | b",
+		"- 3 | c",
+		"- 4 | d",
+		"- 5 | e",
+		"+ 3 | X",
+		"  4 | f",
+		"  5 | g",
+	}, "\n")
+	if got := RenderHunk(m, original, 2); got != want {
+		t.Fatalf("RenderHunk mismatch:\ngot:\n%s\n\nwant:\n%s", got, want)
+	}
+}
+
+// TestRenderHunkAtFileEdgesLengthChange extends the file-edges coverage
+// with a length-changing replacement that reaches the last line: after-
+// context is naturally empty here regardless, but the ADDED lines and the
+// header must use the mutated file's line count, not the original's.
+func TestRenderHunkAtFileEdgesLengthChange(t *testing.T) {
+	original := "p\nq\nr\ns\nt"
+	m := adequacy.Mutant{ID: "t3", Search: "s\nt", Replace: "S1\nS2\nS3"}
+
+	want := strings.Join([]string{
+		"--- SURVIVOR t3 (lines 4-6) ---",
+		"  2 | q",
+		"  3 | r",
+		"- 4 | s",
+		"- 5 | t",
+		"+ 4 | S1",
+		"+ 5 | S2",
+		"+ 6 | S3",
+	}, "\n")
+	if got := RenderHunk(m, original, 2); got != want {
+		t.Fatalf("RenderHunk mismatch:\ngot:\n%s\n\nwant:\n%s", got, want)
+	}
+}
+
+// TestRenderHunkWholeFileDiffDualNumbering covers the same dual-numbering
+// rule on the v1 whole-file (LCS) path: a length-changing edit (one line
+// becomes two) must not leave a post-change context line stamped with its
+// ORIGINAL number when that collides with an added line's MUTATED number.
+func TestRenderHunkWholeFileDiffDualNumbering(t *testing.T) {
+	original := "one\ntwo\nthree\nfour\nfive\n"
+	m := adequacy.Mutant{ID: "w2", Replace: "one\ntwo\nTHREE_A\nTHREE_B\nfour\nfive\n"}
+
+	got := RenderHunk(m, original, 1)
+
+	for _, want := range []string{"- 3 | three", "+ 3 | THREE_A", "+ 4 | THREE_B", "  5 | four"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected %q in:\n%s", want, got)
+		}
+	}
+	// The bug this guards against: "four" kept its ORIGINAL number (4) after
+	// the file grew by one line, which collided with "+ 4 | THREE_B" above —
+	// two different physical lines both claiming line 4.
+	if strings.Contains(got, "  4 | four") {
+		t.Fatalf("post-change context line kept its stale ORIGINAL number, colliding with an added line:\n%s", got)
+	}
+}
+
+// TestRenderHunkSurfacesSpanMismatch pins the "assert they agree" rule for
+// m.Span vs. the freshly-computed anchor start: when a producer's recorded
+// Span disagrees with what HunkSpan(original, m.Search) computes fresh
+// against the ACTUAL source being rendered, that is a caller bug (the
+// mutant is being rendered against the wrong bytes) and RenderHunk must say
+// so loudly in the output, not silently trust the stale Span or silently
+// drop the survivor.
+func TestRenderHunkSurfacesSpanMismatch(t *testing.T) {
+	original := "a\nb\nc\nd\ne\n"
+	m := adequacy.Mutant{
+		ID:      "m9",
+		Search:  "c\n",
+		Replace: "C\n",
+		// The real anchor is line 3; a stale/wrong recorded Span claims 1.
+		Span: golang.LineRange{Start: 1, End: 1},
+	}
+	got := RenderHunk(m, original, 1)
+	if !strings.Contains(got, "SPAN MISMATCH") {
+		t.Fatalf("expected a surfaced span mismatch, got:\n%s", got)
+	}
+	// Still a working diff computed from the trustworthy, freshly-derived
+	// anchor — not a crash, not a dropped survivor.
+	if !strings.Contains(got, "- 3 | c") || !strings.Contains(got, "+ 3 | C") {
+		t.Fatalf("mismatch report must not come at the cost of a correct diff:\n%s", got)
 	}
 }

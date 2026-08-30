@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 )
@@ -153,6 +154,14 @@ func newWriterShadowRun(t *testing.T, missionID int64, rs RunSpec, scorer Scorer
 	if err != nil {
 		t.Fatalf("NewDriver: %v", err)
 	}
+	// A FROZEN clock, set before StartRun. The verdict carries the run's
+	// per-phase timing, and TestShadowWriterNeverChangesVerdict's arm 1
+	// compares two runs' digests byte for byte: on a real clock the two would
+	// differ by microseconds of wall time and the comparison would say
+	// "nondeterministic" about a fixture that is perfectly deterministic in
+	// every field this test is actually about.
+	frozen := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	d.Now = func() time.Time { return frozen }
 	if err := d.StartRun(missionID, rs, nil); err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}

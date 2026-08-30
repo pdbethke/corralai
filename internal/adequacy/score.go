@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -260,16 +261,41 @@ type Report struct {
 	// plain Jail leaves this empty rather than failing.
 	InvalidReasons map[string]string
 	// PerMutant records what each GRADED mutant was actually graded with,
-	// keyed by Mutant.ID. Populated only when WithCommandFor was set; nil
-	// otherwise, so a caller that never opted in sees no behavior change.
+	// keyed by Mutant.ID. There is one entry per mutant that reached the
+	// suite — a mutant the compile gate rejected is absent, because nothing
+	// graded it and it has nothing to report.
+	//
+	// It used to be populated only under WithCommandFor. It is now filled on
+	// every run because every graded mutant is TIMED, and a per-mutant
+	// duration is the only thing that can say whether a slow file is one
+	// pathological mutant or forty ordinary ones. TestsRun and Rule stay
+	// zero for a caller that did not opt in, exactly as before, and nothing
+	// downstream infers the grading MODE from this map (see the driver's
+	// perMutantGraded, which is recorded from the call, not from here).
 	PerMutant map[string]MutantGrading
+	// MutantDurationMedian and MutantDurationMax summarize PerMutant's
+	// durations over the GRADED mutants — the compile-gate rejects are
+	// excluded, for the same reason they are excluded from Total: they never
+	// sat the exam, and a run of zeros folded into the spread would report a
+	// file as faster than any mutant of it ever was.
+	//
+	// The median is the upper of the two middle values on an even count,
+	// never their mean: it is a duration something actually took.
+	MutantDurationMedian time.Duration
+	MutantDurationMax    time.Duration
 }
 
-// MutantGrading is what a single mutant was actually graded with, when
-// WithCommandFor chose a command for it.
+// MutantGrading is what a single mutant was actually graded with.
 type MutantGrading struct {
+	// TestsRun and Rule are set only when WithCommandFor chose a command for
+	// this mutant; both stay zero on a run graded by one shared command.
 	TestsRun int
 	Rule     string
+	// Duration is the wall clock of the ONE suite run that graded this
+	// mutant — not the compile gate that preceded it (which is not the
+	// exam), and not a timed-out mutant's second, baseline-reprobing run
+	// (which measures the machine, not the mutant).
+	Duration time.Duration
 }
 
 // VerboseJail is a Jail that can also report what a run PRINTED, not just
@@ -479,8 +505,19 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 			}
 			grading = &MutantGrading{TestsRun: mc.Tests, Rule: mc.Rule}
 		}
+		if grading == nil {
+			// Every graded mutant gets an entry, because every graded mutant
+			// is timed. A caller that never set WithCommandFor still gets
+			// TestsRun 0 / Rule "" here, which is what it always got.
+			grading = &MutantGrading{}
+		}
 		mctx, cancel := context.WithTimeout(ctx, perMutant)
+		// THE measurement: the single suite run that decides this mutant's
+		// verdict. Recorded even when that run errors or times out, so a
+		// mutant that ate its whole budget says so.
+		mstart := time.Now()
 		passed, err := runCmd(mctx, m.Code, cmd)
+		grading.Duration = time.Since(mstart)
 		cancel()
 		if err != nil {
 			if errors.Is(err, ErrTestTimeout) {
@@ -584,5 +621,31 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 	// from len(mutants) up front: dividing by the emitted count would put the
 	// invalid mutants back into the denominator by the back door.
 	rep.Total = len(rep.Killed) + len(rep.Survived)
+	rep.MutantDurationMedian, rep.MutantDurationMax = mutantSpread(rep.PerMutant)
 	return rep, nil
+}
+
+// mutantSpread is the middle and the worst of what grading one mutant cost,
+// over the mutants that were actually graded. Both are zero when nothing was
+// timed — a run whose baseline failed, or one on a Jail so fast every run
+// rounds to nothing — and every reader stores that as NULL rather than as a
+// file whose mutants were free.
+func mutantSpread(per map[string]MutantGrading) (median, max time.Duration) {
+	if len(per) == 0 {
+		return 0, 0
+	}
+	ds := make([]time.Duration, 0, len(per))
+	for _, g := range per {
+		if g.Duration > 0 {
+			ds = append(ds, g.Duration)
+		}
+	}
+	if len(ds) == 0 {
+		return 0, 0
+	}
+	sort.Slice(ds, func(i, j int) bool { return ds[i] < ds[j] })
+	// The UPPER of the two middle values on an even count, matching the
+	// tests-per-mutant spread beside it: this is a duration some mutant
+	// really took, not an average of two that nothing did.
+	return ds[len(ds)/2], ds[len(ds)-1]
 }

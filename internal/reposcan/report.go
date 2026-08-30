@@ -138,6 +138,24 @@ type WeakFile struct {
 	// not decoration — they are the one thing the trees did not hold
 	// privately. Empty when nothing was shared.
 	SharedDirs []string
+	// Timing mirrors advpool.Verdict.Timing: where this file's audit spent
+	// its wall clock, phase by phase. Carried onto the report so the printer
+	// never reaches back into the verdict — and so the one line an operator
+	// reads to find the slow phase is built from the same numbers the ledger
+	// stores. Every phase that did not run is zero, and every reader renders
+	// that as "—" rather than as a phase that cost nothing.
+	Timing advpool.Timing
+	// MutantsGraded mirrors advpool.Verdict.MutantsTotal: the denominator the
+	// per-mutant spread below is over. The dev-pass duration alone cannot say
+	// whether a slow file had four mutants or four hundred.
+	MutantsGraded int
+	// MutantMillisMedian and MutantMillisMax are how long grading ONE mutant
+	// took — the middle and the worst, in milliseconds, over the mutants that
+	// were actually graded. They answer the question the file total cannot:
+	// one pathological mutant, or all of them. 0 means nothing timed a
+	// mutant, and the line prints no spread rather than "median 0s".
+	MutantMillisMedian int64
+	MutantMillisMax    int64
 }
 
 // MeasuredSpread reports whether this file's run actually measured a
@@ -377,6 +395,11 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 			Trees:           r.Verdict.Concurrency.Trees,
 			ConcurrencyNote: r.Verdict.Concurrency.Note,
 			SharedDirs:      r.Verdict.Concurrency.Shared,
+			// And where the minutes went — see WeakFile.Timing.
+			Timing:             r.Verdict.Timing,
+			MutantsGraded:      r.Verdict.MutantsTotal,
+			MutantMillisMedian: r.Verdict.MutantDurationMedian.Milliseconds(),
+			MutantMillisMax:    r.Verdict.MutantDurationMax.Milliseconds(),
 		})
 	}
 

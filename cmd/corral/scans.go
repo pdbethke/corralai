@@ -73,7 +73,7 @@ func splitSharedDirs(v string) []string {
 func runScans(args []string, open func(dsn string) (scansReader, error), stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, "usage: corral scans list [--db <path>] [--limit n] [--json]")
-		fmt.Fprintln(stderr, "       corral scans show <scan-id> [--db <path>] [--json] [--evidence]")
+		fmt.Fprintln(stderr, "       corral scans show <scan-id> [--db <path>] [--json] [--evidence] [--timing]")
 		return 2
 	}
 
@@ -140,7 +140,7 @@ func runScansList(args []string, open func(string) (scansReader, error), stdout,
 
 func runScansShow(args []string, open func(string) (scansReader, error), stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: corral scans show <scan-id> [--db <path>] [--json] [--evidence]")
+		fmt.Fprintln(stderr, "usage: corral scans show <scan-id> [--db <path>] [--json] [--evidence] [--timing]")
 		return 2
 	}
 	id, err := strconv.ParseInt(args[0], 10, 64)
@@ -153,6 +153,7 @@ func runScansShow(args []string, open func(string) (scansReader, error), stdout,
 	dsn := fs.String("db", "", "path to the scan ledger (default: $CORRALAI_SCANS_DB, else ~/.claude/corralai_scans.duckdb)")
 	asJSON := fs.Bool("json", false, "emit the raw rows as JSON")
 	evidence := fs.Bool("evidence", false, "also print the pool's authored test source for each audited file")
+	timing := fs.Bool("timing", false, "also print where each audited file's wall clock went, phase by phase")
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
 	}
@@ -200,6 +201,22 @@ func runScansShow(args []string, open func(string) (scansReader, error), stdout,
 			f.Evidence, scanFileNote(f))
 	}
 	tw.Flush()
+
+	// WHERE THE MINUTES WENT, one line per file, through the SAME helper the
+	// report prints live — so a stored scan and the run that produced it read
+	// identically. Opt-in: the table above is already wide, and every row
+	// recorded before the clock existed has nothing to say here.
+	if *timing {
+		for _, f := range files {
+			t, med, max := timingOf(f)
+			if !t.Measured() {
+				// Nothing was timed. Seven em dashes would look like a
+				// measurement; silence is the honest rendering.
+				continue
+			}
+			fmt.Fprintf(stdout, "\n%s\n%s\n", f.Path, timingLine(t, f.MutantsGraded, med, max))
+		}
+	}
 
 	if *evidence {
 		for _, f := range files {

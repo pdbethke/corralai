@@ -306,12 +306,14 @@ func TestScoreReportForRunsEachMutantsOwnCommand(t *testing.T) {
 		t.Errorf("no mutant ran the narrowed command %q: %v", narrowed, jail.cmds)
 	}
 
-	// And the grading is REPORTED, not merely performed.
-	if got, want := rep.PerMutant["m1"], (adequacy.MutantGrading{TestsRun: 1, Rule: lang.SpanRuleLines}); got != want {
-		t.Errorf("m1 grading = %+v, want %+v", got, want)
+	// And the grading is REPORTED, not merely performed. Duration is left out
+	// of the comparison on purpose: every graded mutant is also TIMED now,
+	// and a wall clock cannot be a golden value.
+	if got := rep.PerMutant["m1"]; got.TestsRun != 1 || got.Rule != lang.SpanRuleLines {
+		t.Errorf("m1 grading = %+v, want TestsRun=1 Rule=%s", got, lang.SpanRuleLines)
 	}
-	if got, want := rep.PerMutant["m2"], (adequacy.MutantGrading{TestsRun: 2, Rule: lang.SpanRuleStatic}); got != want {
-		t.Errorf("m2 grading = %+v, want %+v", got, want)
+	if got := rep.PerMutant["m2"]; got.TestsRun != 2 || got.Rule != lang.SpanRuleStatic {
+		t.Errorf("m2 grading = %+v, want TestsRun=2 Rule=%s", got, lang.SpanRuleStatic)
 	}
 }
 
@@ -456,8 +458,8 @@ func TestScoreAuthoredReportGradesEachSurvivorWithTheAuthoredTestAlone(t *testin
 		t.Errorf("each survivor must run the authored test alone %v; commands: %v", alone, jail.cmds)
 	}
 	for _, id := range []string{"m1", "m2"} {
-		if got, want := rep.PerMutant[id], (adequacy.MutantGrading{TestsRun: 1, Rule: RuleAuthoredAlone}); got != want {
-			t.Errorf("%s grading = %+v, want %+v", id, got, want)
+		if got := rep.PerMutant[id]; got.TestsRun != 1 || got.Rule != RuleAuthoredAlone {
+			t.Errorf("%s grading = %+v, want TestsRun=1 Rule=%s", id, got, RuleAuthoredAlone)
 		}
 	}
 }
@@ -480,8 +482,12 @@ func TestScoreAuthoredReportWithoutASelectorIsUnchanged(t *testing.T) {
 			t.Errorf("a zero Selection must leave every authored-pass command as before: %v", c)
 		}
 	}
-	if rep.PerMutant != nil {
-		t.Errorf("no per-mutant grading without a selector: %+v", rep.PerMutant)
+	// PerMutant is populated on every graded run (each mutant is timed), but
+	// a run with no selector records no per-mutant COMMAND evidence — which
+	// is what "unchanged" means: nothing here can make a whole-suite verdict
+	// disclose a narrowing that did not happen.
+	if got := rep.PerMutant["m1"]; got.TestsRun != 0 || got.Rule != "" {
+		t.Errorf("no per-mutant grading without a selector: %+v", got)
 	}
 }
 

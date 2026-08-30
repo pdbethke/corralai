@@ -435,6 +435,14 @@ type localAuditInput struct {
 	// substrate: the jail builds no trees and has nothing to disclose.
 	concurrency *adequacy.Disclosure
 
+	// selectionDuration is how long the SCAN's single instrumented coverage
+	// run took (cmd/corral's collectSelection), handed down so this file's
+	// RunSpec can carry it onto the verdict. Zero for `certify --local`,
+	// which runs no scan-wide selection pass, and for --whole-suite, which
+	// instruments nothing — both of which the ledger stores as NULL rather
+	// than as a selection that was free.
+	selectionDuration time.Duration
+
 	// pool, when non-nil, is where THIS file-job's workspace pool lives: the
 	// first thing that needs it builds and probes it, everything after that
 	// borrows the same one, and the CALLER (localExecutor.Execute) closes it
@@ -1073,6 +1081,22 @@ func normalizedConcurrency(d *adequacy.Disclosure) advpool.Concurrency {
 	return advpool.Concurrency{Trees: d.Trees, Note: d.Note, Shared: d.Shared}
 }
 
+// poolDuration is what the workspace substrate spent before it could score
+// anything: copying the checkout into N private trees, then probing them with
+// the baseline and the canary. Both halves come from the ONE Disclosure the
+// probe wrote (adequacy.WorkspacePool.Probe), so the number on the verdict is
+// the number the pool actually measured, not a second derivation.
+//
+// nil is the jail substrate, which builds no trees and has nothing to
+// disclose; a pool of one copies and probes nothing and reports zero. Either
+// way the phase did not happen and the ledger stores NULL.
+func poolDuration(d *adequacy.Disclosure) time.Duration {
+	if d == nil {
+		return 0
+	}
+	return d.CopyDuration + d.ProbeDuration
+}
+
 func newAuditRunSpec(in localAuditInput, roles auditRoles, subj runSubject) advpool.RunSpec {
 	n := in.nMutants
 	if n <= 0 {
@@ -1105,9 +1129,16 @@ func newAuditRunSpec(in localAuditInput, roles auditRoles, subj runSubject) advp
 		// that out as Trees 1 is what keeps a signed record from ever
 		// reading "trees: 0", a claim nothing measured.
 		Concurrency: normalizedConcurrency(in.concurrency),
-		NMutants:    n,
-		Lang:        subj.lang,
-		MaxShards:   resolveMaxShards(in.maxShards),
+		// The two phases the DRIVER cannot time, measured by the code that
+		// ran them: the scan's one instrumented selection pass, and the
+		// workspace pool's copies plus its concurrency probe. Both are zero
+		// for a caller that did neither, and zero reaches the ledger as NULL
+		// — see advpool.RunSpec.SelectionDuration.
+		SelectionDuration: in.selectionDuration,
+		PoolDuration:      poolDuration(in.concurrency),
+		NMutants:          n,
+		Lang:              subj.lang,
+		MaxShards:         resolveMaxShards(in.maxShards),
 		// Both challenger seats, from the SAME resolved struct the
 		// RoleAssignment was built from — so a seat that is named, paid for and
 		// recorded is also a seat the driver can actually run.

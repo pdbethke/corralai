@@ -286,6 +286,21 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 				TestsPerMutantMin:    spreadMin(r.Verdict.TestSelection.TestsPerMutant),
 				TestsPerMutantMedian: spreadMedian(r.Verdict.TestSelection.TestsPerMutant),
 				TestsPerMutantMax:    spreadMax(r.Verdict.TestSelection.TestsPerMutant),
+				// WHERE THE MINUTES WENT, one nullable column per phase.
+				// millisOrNil, not a bare Milliseconds(): a phase that did
+				// not run must read back as unknown, and a stored 0 would be
+				// averaged into the cost model as a phase that is free.
+				SelectionMillis:    millisOrNil(r.Verdict.Timing.Selection),
+				GenerationMillis:   millisOrNil(r.Verdict.Timing.Generation),
+				PoolMillis:         millisOrNil(r.Verdict.Timing.Pool),
+				DevPassMillis:      millisOrNil(r.Verdict.Timing.DevPass),
+				AuthoredPassMillis: millisOrNil(r.Verdict.Timing.AuthoredPass),
+				CriticMillis:       millisOrNil(r.Verdict.Timing.Critic),
+				TotalMillis:        millisOrNil(r.Verdict.Timing.Total),
+				// And the shape of the dev pass at the file grain: one slow
+				// mutant or forty ordinary ones.
+				MutantMillisMedian: millisOrNil(r.Verdict.MutantDurationMedian),
+				MutantMillisMax:    millisOrNil(r.Verdict.MutantDurationMax),
 			})
 			continue
 		}
@@ -508,6 +523,11 @@ func buildScanMutantRows(scanID int64, results []reposcan.FileResult) []scanstor
 				ScanID: scanID, Path: r.Job.Path, MutantID: m.ID,
 				Outcome: "killed", ParentSHA256: m.ParentSHA256,
 				TestsRun: m.TestsRun, SelectionRule: m.Rule,
+				// How long THIS mutant's own grading run took. NULL, never
+				// 0, on a run that did not time its mutants — the whole
+				// point of the column is to let a query name the mutants
+				// that ate the dev pass, and a zero would name all of them.
+				DurationMillis: millisOrNil(m.Duration),
 			})
 		}
 		for _, m := range r.Verdict.DevSurvivedMutants {
@@ -524,6 +544,7 @@ func buildScanMutantRows(scanID int64, results []reposcan.FileResult) []scanstor
 				// too, where the two are NOT the same claim.
 				ProvenByAuthoredAlone: proven[m.ID],
 				TestsRun:              m.TestsRun, SelectionRule: m.Rule,
+				DurationMillis: millisOrNil(m.Duration),
 			})
 		}
 	}

@@ -414,6 +414,7 @@ something can query it, so:
 corral scans list                    # recent scans: repo, substrate, audited, kill rate
 corral scans show <id>               # per-file dispositions for one scan
 corral scans show <id> --evidence    # + the pool's own authored test
+corral scans show <id> --timing      # + where each file's wall clock went
 ```
 
 A local DuckDB file, no brain required, read-only by design. `show` renders
@@ -425,6 +426,15 @@ are very different facts and the report has always known the difference.
 is the case worth reading, and it is stored precisely so diagnosing it never
 requires paying for a second audit. A never-graded scan renders `—`, never
 `0.00`: corral does not report a score for something it never measured.
+
+`--timing` prints one line per audited file naming every phase — selection,
+generation, pool, dev pass (with how long grading one mutant took, median and
+worst), authored, critic, total. It is the same line `certify --repo` prints
+when the audit finishes, from the same helper, so a stored scan and the run
+that produced it read identically. **A phase that did not run prints `—`, never
+`0s`**: the jail substrate builds no trees, `--critic-model off` runs no critic,
+and reporting either as zero seconds would tell a cost model those phases are
+free.
 
 **Look before you spend (`--dry-run`, `--json`).** Enumeration needs no model
 key, no jail and no money, and it already knows a great deal about your

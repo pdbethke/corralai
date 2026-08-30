@@ -543,7 +543,14 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		if !*wholeSuiteFlag {
 			fmt.Fprintln(stdout, "  selection: running the suite once with per-test coverage instrumentation…")
 		}
+		selStart := time.Now()
 		ex.selection = ex.collectSelection(context.Background(), enumeratedSourcePaths(cands, excl[:enumExcl]))
+		// Recorded even when the run FAILED to produce evidence: the suite
+		// still ran, and the minutes it burned are part of what this scan
+		// cost. Under --whole-suite collectSelection returns immediately
+		// having run nothing, and the near-zero it records rounds to a NULL
+		// the ledger reads as "did not happen".
+		ex.selectionDuration = time.Since(selStart)
 		if !ex.selection.Ran {
 			fmt.Fprintf(stdout, "  selection: grading by the WHOLE suite — %s\n", ex.selection.Note)
 		}
@@ -2512,6 +2519,18 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 	if f.Trees >= 1 {
 		fmt.Fprintf(w, "   concurrency: %s\n", concurrencyDisclosure(f.Trees, f.ConcurrencyNote, f.SharedDirs))
 	}
+	// WHERE THE MINUTES WENT. Printed through the same helper `corral scans
+	// show --timing` uses, so the line an operator reads now and the line
+	// they read back out of the ledger are the same sentence.
+	//
+	// Silent when the run measured no phase at all — a verdict served from a
+	// cache row written before any of this existed. Seven em dashes would be
+	// noise, and worse, would look like a measurement of nothing.
+	if f.Timing.Measured() {
+		fmt.Fprintln(w, timingLine(f.Timing, f.MutantsGraded,
+			time.Duration(f.MutantMillisMedian)*time.Millisecond,
+			time.Duration(f.MutantMillisMax)*time.Millisecond))
+	}
 
 	// The artifact that makes "N proven, catchable gap(s)" actionable. --repo
 	// is the mode the GitHub Action runs, and it reported the COUNT while
@@ -3006,6 +3025,15 @@ type localExecutor struct {
 	// collectSelection) and asked per job (see selectionFor). Its zero value
 	// means no evidence — every file grades whole-suite, disclosed.
 	selection reposcan.SelectionEvidence
+	// selectionDuration is how long the scan's ONE instrumented coverage run
+	// took. Measured HERE — around the call — because it is the only place
+	// that could: it happens once, for the whole repo, before any file's run
+	// exists, so the driver cannot time it and every file's RunSpec has to be
+	// handed the answer (advpool.RunSpec.SelectionDuration).
+	//
+	// It is a PER-SCAN cost carried on every file's verdict, not a per-file
+	// measurement: summing it across files would invent time nobody spent.
+	selectionDuration time.Duration
 
 	// wholeSuite is the operator's --whole-suite opt-out: grade every mutant
 	// against the project's whole suite instead of the tests that
@@ -3199,8 +3227,11 @@ func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
 		// pool's own authored test, which no evidence run ever saw.
 		baseArgv:  l.baseCmd(j),
 		selection: sel,
-		substrate: l.substrate,
-		timeout:   l.timeout,
+		// The scan's one instrumented run, carried onto every file's spec —
+		// see localExecutor.selectionDuration.
+		selectionDuration: l.selectionDuration,
+		substrate:         l.substrate,
+		timeout:           l.timeout,
 		// See localExecutor.perFileSwarm: 1 everywhere the scan really does
 		// fan out over files, and the otherwise-unspent budget on the
 		// workspace substrate, which serializes them.

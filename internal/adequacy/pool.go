@@ -37,6 +37,20 @@ type Disclosure struct {
 	// the isolation argument otherwise rules out. The report has to be able
 	// to say which ones they were.
 	Shared []string
+	// CopyDuration is how long copying the checkout into N private trees
+	// took, and ProbeDuration how long the concurrency probe's 2N suite
+	// invocations took. Together they are the price of parallelism paid
+	// BEFORE a single mutant is scored, and both were unmeasured: a file
+	// whose audit spent minutes on setup reported only its dev pass, so the
+	// minutes had nowhere to appear.
+	//
+	// Both are ZERO for a pool of one, which copies nothing and probes
+	// nothing — and zero here is recorded as SQL NULL downstream, never as a
+	// setup that was free. On a DOWNGRADE they are non-zero and honest: the
+	// copies were made and the probe did run; the answer was simply that the
+	// trees could not be used.
+	CopyDuration  time.Duration
+	ProbeDuration time.Duration
 }
 
 // maxUniverseBytes bounds the checkout a pool is willing to copy N times.
@@ -91,6 +105,12 @@ type WorkspacePool struct {
 	root    string
 	timeout time.Duration
 	opts    []WorkspaceOption
+
+	// copyDuration is what building this pool's trees cost, retained for the
+	// same reason `shared` is: Probe returns a FRESH Disclosure, and a
+	// caller that records only the probe's answer must not lose the half of
+	// the cost that was paid before the probe ran.
+	copyDuration time.Duration
 
 	// shared is the Disclosure.Shared this pool was built with, retained so
 	// Probe can restate it on the disclosure it returns: the dep dirs stay
@@ -189,6 +209,10 @@ func NewWorkspacePool(ctx context.Context, root string, n int, timeout time.Dura
 		return single("checkout over 2 GiB")
 	}
 
+	// THE COPY. Measured around the whole loop, not per tree: N trees is one
+	// decision and one cost, and the audit paid all of it before it could
+	// score anything.
+	copyStart := time.Now()
 	var temps []string
 	var linked []string
 	cleanup := func() {
@@ -214,9 +238,11 @@ func NewWorkspacePool(ctx context.Context, root string, n int, timeout time.Dura
 		}
 		linked = shared // identical for every tree: same root, same probe
 	}
+	copied := time.Since(copyStart)
 	p := newPool(root, temps, temps, timeout, treeEnv, plugEnv, opts)
 	p.shared = linked
-	return p, Disclosure{Trees: n, Shared: linked}, nil
+	p.copyDuration = copied
+	return p, Disclosure{Trees: n, Shared: linked, CopyDuration: copied}, nil
 }
 
 // newPool wires one runner per tree. temps is the subset of trees Close may
@@ -516,8 +542,16 @@ const probeOutputCap = 2 << 10 // 2 KiB
 func (p *WorkspacePool) Probe(ctx context.Context, base map[string]string, codePath, compliantCode string, testCmd []string) (*WorkspacePool, Disclosure) {
 	n := p.Trees()
 	if n <= 1 {
+		// Nothing was copied and nothing is about to be probed: this pool IS
+		// the checkout. Both durations stay zero, which every reader records
+		// as "did not happen".
 		return p, Disclosure{Trees: 1}
 	}
+
+	// THE PROBE's own clock, started before the first of its two rounds and
+	// read on every path out — including the downgrades, which spent the
+	// time and then discovered the trees were unusable.
+	probeStart := time.Now()
 
 	downgrade := func(note string) (*WorkspacePool, Disclosure) {
 		// The copies are dead the moment the answer is "one tree": nothing
@@ -528,13 +562,19 @@ func (p *WorkspacePool) Probe(ctx context.Context, base map[string]string, codeP
 			// so this is unreachable in practice; if it ever is reached, the
 			// honest answer is to keep scoring on the pool we have and say
 			// only what we know.
-			return p, Disclosure{Trees: n, Note: note}
+			return p, Disclosure{Trees: n, Note: note, CopyDuration: p.copyDuration, ProbeDuration: time.Since(probeStart)}
 		}
+		spent := time.Since(probeStart)
+		copied := p.copyDuration
 		p.Close()
 		// Shared is deliberately nil: a pool of one runs on the checkout
 		// itself and links nothing, so the copies' shared dep dirs are no
 		// longer true of the pool being returned.
-		return one, Disclosure{Trees: 1, Note: note}
+		// The copies and the probe were PAID FOR even though the answer was
+		// "one tree": a downgraded file's audit really did cost this, and
+		// reporting nothing would make the slowest possible outcome — copy,
+		// probe, then serialize anyway — look like the cheapest.
+		return one, Disclosure{Trees: 1, Note: note, CopyDuration: copied, ProbeDuration: spent}
 	}
 
 	baseOK, baseOut := p.runEverywhere(ctx, base, codePath, compliantCode, testCmd)
@@ -549,7 +589,7 @@ func (p *WorkspacePool) Probe(ctx context.Context, base map[string]string, codeP
 			return downgrade(fmt.Sprintf("a tree imports the original checkout (canary passed under %d)", n))
 		}
 	}
-	return p, Disclosure{Trees: n, Shared: p.shared}
+	return p, Disclosure{Trees: n, Shared: p.shared, CopyDuration: p.copyDuration, ProbeDuration: time.Since(probeStart)}
 }
 
 // runEverywhere runs one variant of codePath in EVERY tree simultaneously,

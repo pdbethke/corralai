@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/auditpush"
@@ -51,12 +52,22 @@ func twoFileLedgerRows(t *testing.T) (string, []scanstore.File, []scanstore.Muta
 				// mutant of one file agrees. That hash — not a re-read of the
 				// checkout — is the file's parent_sha256.
 				DevKilledMutants: []advpool.MutantRef{
-					{ID: "m1", ParentSHA256: auditedParentSHA, TestsRun: 4, Rule: "lines"},
+					{ID: "m1", ParentSHA256: auditedParentSHA, TestsRun: 4, Rule: "lines", Duration: 54 * time.Second},
 				},
 				DevSurvivedMutants: []advpool.MutantRef{
-					{ID: "m2", ParentSHA256: auditedParentSHA, TestsRun: 3, Rule: "lines"},
+					{ID: "m2", ParentSHA256: auditedParentSHA, TestsRun: 3, Rule: "lines", Duration: 3 * time.Minute},
 					{ID: "m3", ParentSHA256: auditedParentSHA, TestsRun: 5, Rule: "lines"},
 				},
+				// The clock. Set on the fixture so the field-for-field walk
+				// below actually WALKS the timing columns: a mapping that
+				// dropped them would otherwise compare nil to nil and pass.
+				Timing: advpool.Timing{
+					Selection: 92 * time.Second, Generation: 4*time.Minute + 10*time.Second,
+					Pool: 12 * time.Second, DevPass: 35*time.Minute + 4*time.Second,
+					AuthoredPass: 109 * time.Second, Total: 43*time.Minute + 13*time.Second,
+				},
+				MutantDurationMedian: 54 * time.Second,
+				MutantDurationMax:    3 * time.Minute,
 			},
 		},
 		{

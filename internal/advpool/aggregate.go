@@ -36,7 +36,31 @@ func verdictFromSpec(rs RunSpec) Verdict {
 		// itself ever failed to converge.
 		Concurrency: rs.Concurrency,
 		Uncovered:   rs.Selection.Method != "" && len(rs.Selection.Tests) == 0,
+		// The two phases the driver could not have timed, from the caller
+		// that did (see RunSpec.SelectionDuration/PoolDuration). They ride
+		// through here — the shared construction site — so the TIMED-OUT
+		// verdict carries them too: the scan's instrumented run and the
+		// pool's copies were paid for whether or not the pool converged, and
+		// a timeout that reported them as unmeasured would understate the
+		// cost of exactly the runs that cost the most.
+		Timing: Timing{Selection: rs.SelectionDuration, Pool: rs.PoolDuration},
 	}
+}
+
+// timingWith overlays the phases the DRIVER measured onto the ones the SPEC
+// supplied, leaving each side to own the fields it actually measured. Total
+// belongs to neither and is set by the caller at the moment the run ends.
+//
+// A plain assignment would be the bug this function exists to prevent: both
+// Verdict construction sites build from verdictFromSpec (which fills
+// Selection and Pool) and then have the run's own five to add, and
+// `v.Timing = run.timing` at either of them silently erases the caller's two.
+func timingWith(spec, run Timing) Timing {
+	spec.Generation = run.Generation
+	spec.DevPass = run.DevPass
+	spec.AuthoredPass = run.AuthoredPass
+	spec.Critic = run.Critic
+	return spec
 }
 
 // applyPerMutantStats fills the Verdict's per-mutant disclosure from the

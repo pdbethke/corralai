@@ -60,9 +60,18 @@ func TestScoreRunsEachMutantWithItsOwnCommand(t *testing.T) {
 	if got := j.cmds["x = 2\n"]; !reflect.DeepEqual(got, [][]string{suite}) {
 		t.Errorf("m2 must run the command its rule chose, got %v", got)
 	}
+	// Compared field by field rather than by DeepEqual over the whole map:
+	// every graded mutant now also carries a measured Duration, which is a
+	// wall clock and cannot be a golden value.
 	want := map[string]MutantGrading{"m1": {TestsRun: 1, Rule: "lines"}, "m2": {TestsRun: 7, Rule: "static"}}
-	if !reflect.DeepEqual(rep.PerMutant, want) {
-		t.Errorf("PerMutant = %+v, want %+v", rep.PerMutant, want)
+	if len(rep.PerMutant) != len(want) {
+		t.Fatalf("PerMutant = %+v, want an entry per graded mutant %+v", rep.PerMutant, want)
+	}
+	for id, w := range want {
+		got := rep.PerMutant[id]
+		if got.TestsRun != w.TestsRun || got.Rule != w.Rule {
+			t.Errorf("PerMutant[%s] = %+v, want TestsRun=%d Rule=%s", id, got, w.TestsRun, w.Rule)
+		}
 	}
 }
 
@@ -84,7 +93,16 @@ func TestScoreWithoutCommandForIsUnchanged(t *testing.T) {
 			t.Errorf("every run must use the shared command when CommandFor is nil: %v", c)
 		}
 	}
-	if rep.PerMutant != nil {
-		t.Errorf("PerMutant must be nil when no per-mutant command was used: %+v", rep.PerMutant)
+	// PerMutant is populated on EVERY graded run now — each mutant is timed —
+	// but a run with no CommandFor still records no command evidence, which
+	// is what "unchanged" means here. Nothing downstream reads the grading
+	// MODE off this map (the driver records that from the call it made), so
+	// filling it in cannot flip a verdict's disclosure.
+	g, ok := rep.PerMutant["m1"]
+	if !ok {
+		t.Fatal("the graded mutant has no PerMutant entry, so nothing timed its run")
+	}
+	if g.TestsRun != 0 || g.Rule != "" {
+		t.Errorf("PerMutant[m1] = %+v, want no command evidence when CommandFor is nil", g)
 	}
 }

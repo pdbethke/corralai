@@ -73,7 +73,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	jsonOut := fs.Bool("json", false, "with --dry-run, emit the repository's audit surface as JSON instead of the human report: per-language counts, every auditable file with its inferred test pairing, and the machine-stable exclusion tally. Needs no key, no jail and no money — it is the free inventory a UI or a tenant's own tooling can consume instead of scraping stdout")
 	substrateFlag := fs.String("substrate", substrateJail, "where the audit runs: "+substrateJail+" (bwrap) or "+substrateWorkspace+" (mutate --repo in place; the caller IS the isolation boundary, e.g. an ephemeral CI runner)")
 	diffBase := fs.String("diff-base", "", "bound the scan to files changed since this git ref, instead of ranking + --top. In a PR the diff IS the bound: ranking and --top do not apply on this path")
-	pushFlag := fs.String("push", "", "append this scan's per-file verdicts to a DuckDB you own — a path, or `md:<db>` for MotherDuck (which reads motherduck_token from the environment). corral has no hosted tier and keeps nothing: the warehouse is yours, and any DuckDB works, so this is a destination rather than a lock-in. Append-only. Every row carries the ledger's scan id (0 when --record was not given), and — traceable only with --attest — the sha256 of the signed statement it came from, so a row can be checked against something a third party can verify; without --attest, statement_sha256 is honestly empty rather than fabricated. It answers what one pull request cannot — a single kill rate is a sample, and the same unchanged diff has scored 0.85 and 0.90; forty of them are a distribution")
+	pushFlag := fs.String("push", "", "append this scan's per-file verdicts to a DuckDB you own — a path, or `md:<db>` for MotherDuck (which reads motherduck_token from the environment). corral has no hosted tier and keeps nothing: the warehouse is yours, and any DuckDB works, so this is a destination rather than a lock-in. Append-only. Every row carries the ledger's scan id (0 when --record was not given), and — traceable only with --attest — the sha256 of the signed statement it came from, so a row can be checked against something a third party can verify; without --attest, statement_sha256 is honestly empty rather than fabricated; and with --attest, a statement that FAILS to write withholds the push too, since a row that cannot name the statement it came from is not written. It answers what one pull request cannot — a single kill rate is a sample, and the same unchanged diff has scored 0.85 and 0.90; forty of them are a distribution")
 	pushSourceFlag := fs.Bool("push-source", false, "with --push, also send the SOURCE BYTES corral holds to your warehouse: the pool's authored test, and the full verdict JSON. Off by default because those bytes are derived from — and quote — your audited code; without this the pushed rows carry numbers, hashes, reasons and model names, and no source leaves the box. Mutant code is NOT carried, by either setting: corral does not keep mutant source at rest, so the corral_mutants.code column exists and is always NULL until something records it. The scan row records which setting was used, so the custody question is answerable from the table rather than from whoever remembers the argv")
 	attestFlag := fs.String("attest", "", "write the scan's verdict as an in-toto Statement to this file — the receipt a reviewer can verify without trusting the run that produced it. Consumed by GitHub's attestation API (actions/attest), which signs it keylessly through the workflow's own OIDC identity, so the signature chains to the repository and workflow rather than to a key that lived on an ephemeral runner. Carries every file's kill rate, survivors and proven gaps WITH the honesty flags that say what a zero means, the thresholds it was judged against, and the models in each role")
 	maxProvenMissedFlag := fs.String("max-proven-missed", "", "fail the scan (exit 1) if ANY audited file has MORE than this many proven-missed gaps — survivors the pool then killed with a test it WROTE and RAN. Opt-in and unset by default. Prefer this to --min-kill-rate as a merge gate: a kill rate is a proportion of freshly generated mutants and moves between runs on unchanged code, so a threshold set near a healthy value flaps red and gets switched off. A proven-missed gap is a specific demonstrated bug the suite does not catch, established by execution, and 0 means the pool proved nothing — not that it sampled well")
@@ -1063,6 +1063,16 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// pushed looking traceable when it is not; without --attest there is no
 	// statement to point to, and a row's statement_sha256 is honestly
 	// empty.
+	//
+	// A CONSEQUENCE WORTH NAMING, because it is a real operator surprise:
+	// with --attest, a FAILED statement write withholds the whole push.
+	// statementSHA256 stays empty, Require is still true (it is set from the
+	// flag, not from the outcome), and PushBundle then refuses every row.
+	// That is the intended direction — an untraceable row is worse than a
+	// missing one, and the failure was already printed loudly on stderr —
+	// but it means one fail-open write turning bad silently takes the next
+	// one with it. Neither changes the exit code; see the block comment
+	// above.
 	if strings.TrimSpace(*pushFlag) != "" {
 		bundle.Link = auditpush.Link{ScanID: scanID, StatementSHA256: statementSHA256, Require: strings.TrimSpace(*attestFlag) != ""}
 		switch {
@@ -3820,14 +3830,40 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 	return hex.EncodeToString(sum[:]), nil
 }
 
-// warehouseRowsSHA256 is the hex sha256 of the bundle's canonical JSON with
-// every StatementSHA256 blanked — the value the signed statement carries as
-// warehouseRowsSha256, and the value a verifier recomputes from the rows they
-// find in the warehouse.
+// warehouseRowsSHA256 is the hex sha256 of the bundle's canonical JSON, with
+// BlankUnpushedSource applied and every StatementSHA256 blanked — the value
+// the signed statement carries as warehouseRowsSha256.
 //
-// Blanking is not cosmetic: the pushed rows carry the hash of the statement
-// that names them, so hashing them WITH that field would make the statement's
-// hash depend on itself.
+// Blanking the statement hash is not cosmetic: the pushed rows carry the hash
+// of the statement that names them, so hashing them WITH that field would
+// make the statement's hash depend on itself.
+//
+// WHAT THIS HASH IS, EXACTLY: a SELF-CONSISTENCY CHECK over the canonical
+// JSON of the bundle this process built and pushed. It binds the statement to
+// the rows the run produced, so the two cannot be swapped or edited
+// independently, and a holder of BOTH artifacts can check them against each
+// other in either order.
+//
+// WHAT IT IS NOT: a hash a third party can reproduce from the warehouse
+// alone. The writer's SQL conversions are lossy by design, and rebuilding the
+// bundle from a SELECT would not give these bytes back:
+//
+//   - kill_rate is written NULL for an uncovered file (insertFileRow), while
+//     the bundle row carries the *float64 the run held. NULL back out is not
+//     the value that went in.
+//   - tests_per_mutant_min/median/max are dropped entirely unless PerMutant
+//     is set, so a whole-suite row's spread — present in the bundle, absent
+//     from the table — cannot be recovered.
+//
+// (The source columns are NOT in this category: BlankUnpushedSource runs
+// here and in PushBundle, from the same function, so what is hashed is what
+// the warehouse receives.)
+//
+// So the honest claim is "the statement and the pushed rows came from one
+// run and neither has been altered since", not "anyone can recompute this
+// from your warehouse". Reproducing it needs the bundle, which means the
+// pushing side. Do not upgrade the claim in a doc or a README without first
+// making the two conversions above lossless.
 func warehouseRowsSHA256(b auditpush.Bundle) (string, error) {
 	// The hash must cover what the WAREHOUSE receives, not what this process
 	// happens to hold. Without --push-source the writer stores SQL NULL for

@@ -4,6 +4,7 @@ package auditpush
 
 import (
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -255,13 +256,46 @@ ALTER TABLE corral_audits ADD COLUMN shared_dirs VARCHAR;`
 const warehouseV5ScanIDDDL = warehouseV4ConcurrencyDDL + `
 ALTER TABLE corral_audits ADD COLUMN scan_id BIGINT;`
 
+// warehouseV6ScansDDL is the shape 818e2ab shipped: corral_audits as above,
+// PLUS the four new tables — and corral_scans WITHOUT selection_ms, the
+// column the scan grain grew when it took ownership of the one instrumented
+// coverage run. It is the first warehouse in the wild that a corral push can
+// meet with a corral_scans table already there and already out of date, so it
+// is the first real exercise of corralScansMigrationCols; every earlier
+// fixture predates the table entirely and migrates it by CREATE.
+const warehouseV6ScansDDL = warehouseV5ScanIDDDL + `
+CREATE TABLE corral_scans (
+  ts               TIMESTAMPTZ NOT NULL,
+  repo             VARCHAR     NOT NULL,
+  run_url          VARCHAR,
+  scan_id          BIGINT,
+  commit_sha       VARCHAR,
+  corral_version   VARCHAR,
+  substrate        VARCHAR,
+  host             VARCHAR,
+  cores            INTEGER,
+  trees_requested  INTEGER,
+  diff_base        VARCHAR,
+  candidates       INTEGER,
+  audited          INTEGER,
+  passed           BOOLEAN,
+  total_ms         BIGINT,
+  input_tokens     BIGINT,
+  output_tokens    BIGINT,
+  model_calls      BIGINT,
+  source_pushed    BOOLEAN,
+  statement_sha256 VARCHAR,
+  schema_version   INTEGER
+);`
+
 func TestPushBundleMigratesEveryPriorWarehouseShape(t *testing.T) {
 	for name, ddl := range map[string]string{
-		"original":    warehouseV1DDL,
-		"selection":   warehouseV2SelectionDDL,
-		"per-mutant":  warehouseV3PerMutantDDL,
-		"concurrency": warehouseV4ConcurrencyDDL,
-		"scan-id":     warehouseV5ScanIDDDL,
+		"original":                   warehouseV1DDL,
+		"selection":                  warehouseV2SelectionDDL,
+		"per-mutant":                 warehouseV3PerMutantDDL,
+		"concurrency":                warehouseV4ConcurrencyDDL,
+		"scan-id":                    warehouseV5ScanIDDDL,
+		"scans-without-selection-ms": warehouseV6ScansDDL,
 	} {
 		t.Run(name, func(t *testing.T) {
 			target := filepath.Join(t.TempDir(), "legacy.duckdb")
@@ -309,6 +343,17 @@ func TestPushBundleMigratesEveryPriorWarehouseShape(t *testing.T) {
 				if n != 1 {
 					t.Errorf("corral_audits.%s missing after the migration", col)
 				}
+			}
+			// corral_scans is the OTHER table with a migration list, and the
+			// only fixture that can exercise it is one whose warehouse
+			// already has the table — every earlier shape predates it and
+			// gets it by CREATE, which is not the additive path.
+			var n int
+			if err := db.QueryRow(`SELECT count(*) FROM duckdb_columns() WHERE table_name = 'corral_scans' AND column_name = 'selection_ms'`).Scan(&n); err != nil {
+				t.Fatalf("probe corral_scans.selection_ms: %v", err)
+			}
+			if n != 1 {
+				t.Error("corral_scans.selection_ms missing after the migration")
 			}
 		})
 	}
@@ -379,5 +424,41 @@ func TestPushRefusesMoreThanOneLink(t *testing.T) {
 	if _, err := Push(target, []Row{{Repo: "o/r", Commit: "c", Path: "a.py"}},
 		Link{ScanID: 1}, Link{ScanID: 2}); err == nil {
 		t.Fatal("Push must refuse more than one Link rather than silently using the first")
+	}
+}
+
+// TestIsLockHeldMatchesDuckDBsRealMessage pins the retry loop's trigger
+// against the message DuckDB actually emits, verbatim, rather than against
+// the phrases someone remembered while writing the matcher.
+//
+// The driver surfaces a conflicting file lock as a plain error with no code,
+// so a substring match is all there is — which makes the exact text
+// load-bearing. If it drifts (a DuckDB upgrade rewords it) the loop stops
+// retrying and a concurrent push fails outright instead of waiting its turn,
+// with no test anywhere to say why. The string below was copied from a live
+// failure, not paraphrased.
+func TestIsLockHeldMatchesDuckDBsRealMessage(t *testing.T) {
+	held := []string{
+		`IO Error: Could not set lock on file "/home/u/.claude/corralai_scans.duckdb": Conflicting lock is held in /usr/local/bin/corral (PID 31337). However, you would be able to open this database in read-only mode, e.g. by using the -readonly parameter in the CLI`,
+		// The two phrasings the matcher was written against, kept so a
+		// future narrowing of the match cannot silently drop either.
+		"Could not set lock",
+		"database is locked",
+	}
+	for _, msg := range held {
+		if !isLockHeld(errors.New(msg)) {
+			t.Errorf("isLockHeld did not recognise a held lock: %q", msg)
+		}
+	}
+	for _, msg := range []string{
+		"", "Binder Error: Table \"corral_scans\" does not have a column with name \"selection_ms\"",
+		"IO Error: No such file or directory",
+	} {
+		if isLockHeld(errors.New(msg)) {
+			t.Errorf("isLockHeld treated an unrelated failure as a held lock: %q", msg)
+		}
+	}
+	if isLockHeld(nil) {
+		t.Error("isLockHeld(nil) is true")
 	}
 }

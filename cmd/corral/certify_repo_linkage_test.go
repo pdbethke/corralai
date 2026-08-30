@@ -117,7 +117,15 @@ func TestPushedRowsCarryTheStatementSHA(t *testing.T) {
 	att := filepath.Join(dir, "att.json")
 	rep := oneAuditedFileReport()
 
-	bundle := oneAuditedFileBundle(7 /* ledger scan id */)
+	// The rows are built carrying NO scan id, and the id is supplied ONLY
+	// through Link. That is the assertion: stampLink's own doc says it writes
+	// Link.ScanID onto every row, and so does the --push help, but it
+	// returned early whenever there was no statement hash and never touched
+	// ScanID on any path. The bug was invisible because the production caller
+	// happens to build its rows with the same id it later puts in Link — so
+	// a fixture that pre-stamped the rows could not fail no matter what
+	// stampLink did.
+	bundle := oneAuditedFileBundle(0)
 	sha, err := writeAuditStatement(att, dir, rep, map[string]string{"writer": "m"}, nil, nil, true, 7, bundle)
 	if err != nil {
 		t.Fatal(err)
@@ -139,7 +147,7 @@ func TestPushedRowsCarryTheStatementSHA(t *testing.T) {
 		t.Errorf("statement_sha256 = %v, want %s", rows[0][0], sha)
 	}
 	if rows[0][1] != int64(7) {
-		t.Errorf("scan_id = %v, want 7", rows[0][1])
+		t.Errorf("scan_id = %v, want 7 — Link.ScanID must reach the row", rows[0][1])
 	}
 
 	// And the statement names the scan and the rows it produced.

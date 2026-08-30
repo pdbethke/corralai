@@ -584,37 +584,69 @@ func PushBundle(target string, b Bundle) (Counts, error) {
 
 // stampLink writes the bundle's Link onto every row of every table, so a row
 // and the statement it names can never disagree about which run produced
-// them. ScanID is stamped unconditionally (0 is the honest value when
-// --record was not given); the statement hash only when there IS one, so the
-// legacy Push path — whose callers set the field on the rows themselves —
-// keeps working unchanged.
+// them.
+//
+// TWO FIELDS, TWO INDEPENDENT CONDITIONS, and the second used to swallow the
+// first. The statement hash is written only when there IS one — an empty
+// statement_sha256 is a run without --attest, said honestly, not an unknown.
+// That check sat as an EARLY RETURN at the top of the function, so a bundle
+// with no statement hash left before ScanID was touched at all; and since the
+// only other path never wrote it either, this function did not stamp ScanID
+// on ANY path, while its own doc and the --push help both said it did.
+// Nothing caught it because the one production caller builds its rows with
+// the same scan id it later puts in Link, so the write would have been a
+// no-op over an already-correct value. A second caller trusting the
+// documented contract would have pushed rows joined to scan 0.
+//
+// ScanID is now written first and independently — every row, statement or no
+// statement — with ONE guard: a zero Link.ScanID writes nothing. Zero is not
+// an id, it is the absence of one (no --record; or the legacy Push path,
+// whose callers set ScanID on the rows themselves and pass a bare Link), and
+// stamping it would replace a row's real id with a claim that no ledger row
+// exists.
 func stampLink(b Bundle) Bundle {
-	sha := strings.TrimSpace(b.Link.StatementSHA256)
-	if sha == "" {
-		return b
-	}
 	files := make([]Row, len(b.Files))
 	copy(files, b.Files)
-	for i := range files {
-		files[i].StatementSHA256 = sha
-	}
 	mutants := make([]MutantRow, len(b.Mutants))
 	copy(mutants, b.Mutants)
-	for i := range mutants {
-		mutants[i].StatementSHA256 = sha
-	}
 	calls := make([]ModelCallRow, len(b.Calls))
 	copy(calls, b.Calls)
-	for i := range calls {
-		calls[i].StatementSHA256 = sha
-	}
 	events := make([]EventRow, len(b.Events))
 	copy(events, b.Events)
-	for i := range events {
-		events[i].StatementSHA256 = sha
+
+	if id := b.Link.ScanID; id != 0 {
+		for i := range files {
+			files[i].ScanID = id
+		}
+		for i := range mutants {
+			mutants[i].ScanID = id
+		}
+		for i := range calls {
+			calls[i].ScanID = id
+		}
+		for i := range events {
+			events[i].ScanID = id
+		}
+		b.Scan.ScanID = id
 	}
+
+	if sha := strings.TrimSpace(b.Link.StatementSHA256); sha != "" {
+		for i := range files {
+			files[i].StatementSHA256 = sha
+		}
+		for i := range mutants {
+			mutants[i].StatementSHA256 = sha
+		}
+		for i := range calls {
+			calls[i].StatementSHA256 = sha
+		}
+		for i := range events {
+			events[i].StatementSHA256 = sha
+		}
+		b.Scan.StatementSHA256 = sha
+	}
+
 	b.Files, b.Mutants, b.Calls, b.Events = files, mutants, calls, events
-	b.Scan.StatementSHA256 = sha
 	return b
 }
 

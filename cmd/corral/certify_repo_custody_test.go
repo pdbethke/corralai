@@ -67,10 +67,21 @@ func TestEventsNeverCarrySourceBytes(t *testing.T) {
 			}
 			// The length of what was withheld is disclosed, so a reader can
 			// tell "no source" from "an empty file".
-			for _, want := range []string{"code_bytes", "dev_test_code_bytes"} {
+			for _, want := range []string{"code_bytes", "dev_test_code_bytes", "goal_bytes"} {
 				if !strings.Contains(subject.Detail, want) {
 					t.Errorf("pool_subject detail does not disclose %q (the withheld length): %s", want, subject.Detail)
 				}
+			}
+			// THE GOAL IS NOT A NUMBER. It is prose an operator wrote (or a
+			// deriver wrote from the source), it is carried verbatim on the
+			// pool_subject beat, and it is the one remaining free-text field
+			// on the tape. The warehouse holds numbers, hashes, reasons and
+			// model names; it does not hold what a repo is trying to do. Its
+			// LENGTH still ships, for the same reason every other withheld
+			// field's does: "no goal" and "a 60-character goal" are different
+			// answers.
+			if strings.Contains(subject.Detail, "passwords >= 12 chars") {
+				t.Errorf("the goal text reached the tape verbatim: %s", subject.Detail)
 			}
 
 			// 1. In memory, straight off the sink.

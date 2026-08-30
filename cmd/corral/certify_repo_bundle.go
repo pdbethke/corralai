@@ -116,8 +116,10 @@ func buildBundle(
 // buildAuditRows maps ledger file rows to warehouse rows, field for field.
 // Deterministic by construction: it reads nothing but its arguments, so two
 // calls on the same ledger rows produce byte-identical JSON — which is what
-// makes the statement's warehouseRowsSha256 verifiable by a third party who
-// rebuilds the rows.
+// makes the statement's warehouseRowsSha256 checkable at all. Checkable by
+// someone holding the LEDGER ROWS, note, not by someone holding only the
+// warehouse: the writer's kill_rate and tests_per_mutant_* conversions are
+// lossy, so a SELECT cannot rebuild this input. See warehouseRowsSHA256.
 func buildAuditRows(files []scanstore.File, scanID int64, meta bundleMeta) []auditpush.Row {
 	rows := make([]auditpush.Row, 0, len(files))
 	for _, f := range files {

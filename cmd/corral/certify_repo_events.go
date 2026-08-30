@@ -136,8 +136,9 @@ func (s *scanEventSink) drain() []scanstore.Event {
 	return out
 }
 
-// sourceBearingDetailKeys names every event-detail key whose VALUE is source
-// — the audited file's bytes, a suite's bytes, a mutant's bytes, or a
+// sourceBearingDetailKeys names every event-detail key whose VALUE is
+// withheld from the tape — the audited file's bytes, a suite's bytes, a
+// mutant's bytes, a runner's raw output, or a
 // runner's raw output. The sink drops each one before the detail map is ever
 // encoded, so neither the local ledger's scan_events nor the warehouse's
 // corral_events can hold source bytes, with or without --push-source.
@@ -158,9 +159,19 @@ func (s *scanEventSink) drain() []scanstore.Event {
 // rest are named in advance because this is a leak that is invisible until
 // someone reads a warehouse: a future emit that reaches for the obvious name
 // is redacted on arrival instead of shipping source for a release.
+// `goal` is on the list for a different reason from the rest, and it is the
+// reason the rule is worth stating as a rule. It is not source bytes: it is
+// PROSE — what this repo is trying to be true, written by the operator or
+// derived from the code — and it is the only free-text field left on the
+// beat. The warehouse holds numbers, hashes, reasons and model names. A
+// sentence describing what a private repo is defending against is none of
+// those, and it rides to the operator's warehouse (and, on a shared one, to
+// everyone with SELECT) exactly as the source did. Its LENGTH still ships, so
+// "no goal was set" and "a goal was set" stay distinguishable.
 var sourceBearingDetailKeys = map[string]bool{
 	"code":          true,
 	"dev_test_code": true,
+	"goal":          true,
 	"authored_test": true,
 	"test_code":     true,
 	"pool_test":     true,

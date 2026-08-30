@@ -193,11 +193,17 @@ type Row struct {
 }
 
 // Link identifies the ledger scan and signed statement a pushed row belongs
-// to — the fields cmd/corral's pushAuditRows stamps onto every row from a
-// single source so a row and the statement it names can never disagree
-// about which run produced them.
+// to — the fields stampLink (internal/auditpush/bundle.go) writes onto every
+// row of every table from a single source, so a row and the statement it
+// names can never disagree about which run produced them. (It used to name
+// cmd/corral's pushAuditRows, which was replaced by the bundle path in the
+// same change that made the warehouse hold every disposition rather than only
+// the audited files.)
 type Link struct {
-	// ScanID is written onto Row.ScanID.
+	// ScanID is written onto Row.ScanID — and onto the scan, mutant,
+	// model-call and event rows too. Zero writes nothing: it is the absence
+	// of a ledger id, not an id, and the legacy Push path sets the field on
+	// its rows directly. See stampLink.
 	ScanID int64
 	// StatementSHA256 is written onto Row.StatementSHA256.
 	StatementSHA256 string

@@ -127,9 +127,19 @@ type AuditStatement struct {
 	// warehouse rows this scan produces — computed BEFORE this statement is
 	// signed, from the same rows a --push would write (with ScanID set and
 	// StatementSHA256 left empty, since the statement's own hash cannot
-	// depend on itself). It lets a verifier hold the statement and the
-	// pushed rows and check them against each other in either order,
-	// instead of only trusting the row's one-way pointer back.
+	// depend on itself). It lets a holder of BOTH the statement and the
+	// pushed rows check them against each other in either order, instead of
+	// only trusting the row's one-way pointer back.
+	//
+	// A SELF-CONSISTENCY CHECK OVER THE BUNDLE, NOT A REPRODUCIBILITY CLAIM
+	// OVER THE WAREHOUSE. Two of the writer's conversions are lossy on
+	// purpose — kill_rate is stored NULL for an uncovered file, and the
+	// tests_per_mutant_* columns are dropped when the run was not graded per
+	// mutant — so rebuilding the canonical JSON from a SELECT does not give
+	// these bytes back. What this value proves is that the statement and the
+	// rows came from one run and neither has been altered since; it does not
+	// let a third party recompute the hash from the warehouse alone. See
+	// cmd/corral's warehouseRowsSHA256 for the full list.
 	WarehouseRowsSHA256 string `json:"warehouseRowsSha256,omitempty"`
 }
 

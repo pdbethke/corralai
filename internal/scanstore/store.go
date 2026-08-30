@@ -282,6 +282,18 @@ var scanFilesMigrationCols = []struct{ name, ddl string }{
 	{"uncovered", "uncovered BOOLEAN"},
 }
 
+// scanMutantsMigrationCols is the same ledger, at the mutant grain: the
+// columns scan_mutants has needed beyond its original shape
+// (scan_id/path/mutant_id/outcome/parent_sha256/proven), in the order they
+// must be added. Both are also in the fresh CREATE TABLE below, so a new
+// store runs zero ALTERs; this list is what brings a scan_mutants written by
+// an earlier version of this package up to the current shape rather than
+// failing every mutant INSERT against it.
+var scanMutantsMigrationCols = []struct{ name, ddl string }{
+	{"tests_run", "tests_run INTEGER"},
+	{"selection_rule", "selection_rule VARCHAR"},
+}
+
 // Open opens (creating if absent) the scans/scan_files store at dsn.
 func Open(dsn string) (*Store, error) {
 	db, err := sql.Open("duckdb", dsn)
@@ -392,10 +404,17 @@ func Open(dsn string) (*Store, error) {
 		scan_id BIGINT, path VARCHAR, mutant_id VARCHAR,
 		outcome VARCHAR CHECK (outcome IN ('killed', 'survived')),
 		parent_sha256 VARCHAR,
-		proven BOOLEAN
+		proven BOOLEAN,
+		tests_run INTEGER,
+		selection_rule VARCHAR
 	)`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("scanstore: create scan_mutants table: %w", err)
+	}
+
+	if err := migrateScanMutants(db); err != nil {
+		db.Close()
+		return nil, err
 	}
 
 	// scans.id allocation: a CREATE SEQUENCE + nextval(), the same approach
@@ -450,6 +469,43 @@ func migrateScanFiles(db *sql.DB) error {
 		}
 		if _, err := db.Exec("ALTER TABLE scan_files ADD COLUMN " + col.ddl); err != nil {
 			return fmt.Errorf("scanstore: migrate: add column %s: %w", col.name, err)
+		}
+	}
+	return nil
+}
+
+// migrateScanMutants is migrateScanFiles for scan_mutants: probe
+// information_schema.columns, add only what is missing, and surface any other
+// ALTER failure rather than swallowing it. Idempotent across opens. Kept as
+// its own function rather than folded into a generic helper because the two
+// tables' column lists are separate ledgers of separate decisions, and a
+// shared loop would invite adding a column to the wrong one.
+func migrateScanMutants(db *sql.DB) error {
+	rows, err := db.Query(`SELECT column_name FROM information_schema.columns WHERE table_name = ?`, "scan_mutants")
+	if err != nil {
+		return fmt.Errorf("scanstore: probe existing scan_mutants columns: %w", err)
+	}
+	existing := map[string]bool{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			rows.Close()
+			return fmt.Errorf("scanstore: scan existing scan_mutants column: %w", err)
+		}
+		existing[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("scanstore: probe existing scan_mutants columns: %w", err)
+	}
+	rows.Close()
+
+	for _, col := range scanMutantsMigrationCols {
+		if existing[col.name] {
+			continue
+		}
+		if _, err := db.Exec("ALTER TABLE scan_mutants ADD COLUMN " + col.ddl); err != nil {
+			return fmt.Errorf("scanstore: migrate scan_mutants: add column %s: %w", col.name, err)
 		}
 	}
 	return nil
@@ -778,6 +834,18 @@ type Mutant struct {
 	// Survived-and-proven and survived-and-unadjudicated are different claims
 	// and a leaderboard that conflates them is indefensible.
 	Proven bool
+	// TestsRun and SelectionRule are what this mutant was actually GRADED
+	// by, when the run graded each mutant with the tests that reach its own
+	// lines (advpool.MutantRef.TestsRun/.Rule). A survivor that faced 3
+	// tests and one that faced 41 are different claims about the suite, and
+	// a file-grain kill rate averages the difference away — so the record
+	// carries it at the grain the grading happened. SelectionRule is a
+	// lang.SpanRule* value ("lines" | "static" | "unreached" | "file"): a
+	// scan that is mostly "static" or "unreached" narrowed almost nothing,
+	// and the count of rules is what says so. Both are zero on a run that
+	// graded every mutant with the file's one shared command.
+	TestsRun      int
+	SelectionRule string
 }
 
 // RecordMutants appends mutant rows. An empty slice is a no-op, not an error:
@@ -799,8 +867,8 @@ func (s *Store) RecordMutants(ctx context.Context, ms []Mutant) error {
 	defer func() { _ = tx.Rollback() }()
 	for _, m := range ms {
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO scan_mutants (scan_id, path, mutant_id, outcome, parent_sha256, proven) VALUES (?, ?, ?, ?, ?, ?)`,
-			m.ScanID, m.Path, m.MutantID, m.Outcome, m.ParentSHA256, m.Proven,
+			`INSERT INTO scan_mutants (scan_id, path, mutant_id, outcome, parent_sha256, proven, tests_run, selection_rule) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			m.ScanID, m.Path, m.MutantID, m.Outcome, m.ParentSHA256, m.Proven, m.TestsRun, m.SelectionRule,
 		); err != nil {
 			return fmt.Errorf("scanstore: RecordMutants: insert %s/%s: %w", m.Path, m.MutantID, err)
 		}
@@ -812,7 +880,7 @@ func (s *Store) RecordMutants(ctx context.Context, ms []Mutant) error {
 // for the CLI reader.
 func (s *Store) MutantsForScan(ctx context.Context, scanID int64) ([]Mutant, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT scan_id, path, mutant_id, outcome, parent_sha256, proven FROM scan_mutants WHERE scan_id = ? ORDER BY path, mutant_id`, scanID)
+		`SELECT scan_id, path, mutant_id, outcome, parent_sha256, proven, tests_run, selection_rule FROM scan_mutants WHERE scan_id = ? ORDER BY path, mutant_id`, scanID)
 	if err != nil {
 		return nil, fmt.Errorf("scanstore: MutantsForScan: %w", err)
 	}
@@ -820,11 +888,17 @@ func (s *Store) MutantsForScan(ctx context.Context, scanID int64) ([]Mutant, err
 	var out []Mutant
 	for rows.Next() {
 		var m Mutant
-		var parent sql.NullString
-		if err := rows.Scan(&m.ScanID, &m.Path, &m.MutantID, &m.Outcome, &parent, &m.Proven); err != nil {
+		var parent, rule sql.NullString
+		// NULL-tolerant on purpose: rows written before these columns
+		// existed (and rows from a run that did not grade per mutant) read
+		// back as zero rather than as a scan error.
+		var testsRun sql.NullInt64
+		if err := rows.Scan(&m.ScanID, &m.Path, &m.MutantID, &m.Outcome, &parent, &m.Proven, &testsRun, &rule); err != nil {
 			return nil, fmt.Errorf("scanstore: MutantsForScan: scan row: %w", err)
 		}
 		m.ParentSHA256 = parent.String
+		m.TestsRun = int(testsRun.Int64)
+		m.SelectionRule = rule.String
 		out = append(out, m)
 	}
 	if err := rows.Err(); err != nil {

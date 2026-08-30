@@ -118,3 +118,41 @@ func TestUncoveredFileSignsNoKillRate(t *testing.T) {
 		t.Fatalf("statement does not marshal: %v", err)
 	}
 }
+
+// TestPerMutantEntrySignsTheSpread pins the signed artifact at the grain the
+// grading happens. Once each mutant is graded by the tests that reach its own
+// lines, "234 of 620" is the file's union and no mutant's own denominator —
+// so the statement carries the spread, and a file NOT graded per mutant must
+// not carry a claim it cannot support.
+func TestPerMutantEntrySignsTheSpread(t *testing.T) {
+	got := BuildAuditAttestation(AuditStatement{
+		Repo: "r", Commit: "c",
+		Files: []AuditedFile{
+			{Path: "src/flask/cli.py", KillRate: killRate(0.65), Survivors: 4,
+				TestSelection: "coverage-lines", SelectedTests: 234, SuiteTests: 620,
+				PerMutant: true, TestsPerMutantMin: 3, TestsPerMutantMedian: 9, TestsPerMutantMax: 41},
+			{Path: "pkg/a.py", KillRate: killRate(0.9), Survivors: 1,
+				TestSelection: "coverage-context", SelectedTests: 14, SuiteTests: 1431},
+		},
+	})
+	files := got["predicate"].(map[string]any)["files"].([]map[string]any)
+	pm := files[0]
+	if pm["perMutant"] != true {
+		t.Errorf("a per-mutant run must say so: %#v", pm)
+	}
+	if pm["testsPerMutantMin"] != 3 || pm["testsPerMutantMedian"] != 9 || pm["testsPerMutantMax"] != 41 {
+		t.Errorf("the spread must be signed with the rate: %#v", pm)
+	}
+	shared := files[1]
+	if _, ok := shared["perMutant"]; ok {
+		t.Errorf("a file graded by one shared command must not claim per-mutant grading: %#v", shared)
+	}
+	for _, k := range []string{"testsPerMutantMin", "testsPerMutantMedian", "testsPerMutantMax"} {
+		if _, ok := shared[k]; ok {
+			t.Errorf("%s must be absent, not zero-filled, on a shared-command file: %#v", k, shared)
+		}
+	}
+	if _, err := json.Marshal(got); err != nil {
+		t.Fatalf("statement does not marshal: %v", err)
+	}
+}

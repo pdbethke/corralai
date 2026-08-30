@@ -22,6 +22,13 @@ import (
 type scansReader interface {
 	Scans(ctx context.Context, limit int) ([]scanstore.ScanRow, error)
 	FilesForScan(ctx context.Context, scanID int64) ([]scanstore.File, error)
+	// MutantsForScan backs the per-mutant half of the SELECTION column: once
+	// each mutant is graded by the tests that reach its own lines, the
+	// file-grain counts are a union and the spread lives only at the mutant
+	// grain. Part of the interface rather than an optional type assertion so
+	// a reader that cannot answer it fails to compile instead of quietly
+	// printing the narrower claim.
+	MutantsForScan(ctx context.Context, scanID int64) ([]scanstore.Mutant, error)
 	Close() error
 }
 
@@ -163,12 +170,22 @@ func runScansShow(args []string, open func(string) (scansReader, error), stdout,
 		return 0
 	}
 
+	// The per-mutant spread is derived from the mutant rows rather than
+	// stored again at the file grain: scan_mutants already records what each
+	// mutant was graded by, and a second copy of the same fact is a second
+	// thing that can disagree. Best-effort — a ledger too old to answer
+	// still prints every file row, with the column saying only what it can.
+	spreads, merr := mutantSpreads(context.Background(), st, id)
+	if merr != nil {
+		fmt.Fprintln(stderr, "corral scans show: per-mutant spread unavailable:", merr)
+	}
+
 	tw := tabwriter.NewWriter(stdout, 0, 2, 2, ' ', 0)
 	fmt.Fprintln(tw, "PATH\tDISPOSITION\tREASON\tKILL RATE\tSURVIVORS\tPROVEN\tSELECTION\tEVIDENCE\tNOTE\t")
 	for _, f := range files {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\t%d\t%s\t%s\t%s\t\n",
 			f.Path, f.Disposition, f.Reason, formatKillRate(f.KillRate),
-			f.Survivors, f.ProvenMissed, scanFileSelection(f), f.Evidence, scanFileNote(f))
+			f.Survivors, f.ProvenMissed, scanFileSelectionWith(f, spreads[f.Path]), f.Evidence, scanFileNote(f))
 	}
 	tw.Flush()
 
@@ -255,17 +272,61 @@ func baseScanFileNote(f scanstore.File) string {
 	}
 }
 
-// scanFileSelection renders WHICH MEASUREMENT a row's kill rate is, in one
+// mutantSpread is how many tests the file's mutants each actually ran, over
+// the mutants whose grading recorded a count. ok is false when the ledger
+// recorded no per-mutant grading for the file at all — distinct from a
+// recorded spread of 0, and the reason the column cannot simply test the
+// numbers for zero.
+type mutantSpread struct {
+	min, max int
+	ok       bool
+}
+
+// mutantSpreads folds a scan's mutant rows into one spread per path.
+func mutantSpreads(ctx context.Context, st scansReader, scanID int64) (map[string]mutantSpread, error) {
+	ms, err := st.MutantsForScan(ctx, scanID)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]mutantSpread{}
+	for _, m := range ms {
+		// A mutant graded by the file's shared command records no rule, and
+		// counting it as a 0 would invent a "0–41/mutant" spread nothing
+		// measured.
+		if m.SelectionRule == "" {
+			continue
+		}
+		sp, seen := out[m.Path]
+		if !seen || m.TestsRun < sp.min {
+			sp.min = m.TestsRun
+		}
+		if !seen || m.TestsRun > sp.max {
+			sp.max = m.TestsRun
+		}
+		sp.ok = true
+		out[m.Path] = sp
+	}
+	return out, nil
+}
+
+// scanFileSelectionWith renders WHICH MEASUREMENT a row's kill rate is, in one
 // column. A ledger reader comparing two rows is comparing two answers, and
 // they are only comparable if they answered the same question: "0.65 over 14
 // of 1431 tests" and "0.65 over the whole suite" are different claims. "—"
 // means the ledger does not say — a row written before these columns existed,
 // or a rejected file that was never graded at all — never a positive
 // whole-suite claim, which such a row cannot make.
-func scanFileSelection(f scanstore.File) string {
+//
+// It carries the per-mutant spread when the scan recorded one:
+// "coverage-lines 234/620" alone reads as though every mutant faced 234
+// tests; ", 3–41/mutant" is what says otherwise. A zero mutantSpread is the
+// ordinary shared-command run, and prints exactly the column that always was.
+func scanFileSelectionWith(f scanstore.File, sp mutantSpread) string {
 	switch {
 	case f.Uncovered:
 		return "UNCOVERED"
+	case f.TestSelection != "" && sp.ok:
+		return fmt.Sprintf("%s %d/%d, %d–%d/mutant", f.TestSelection, f.SelectedTests, f.SuiteTests, sp.min, sp.max)
 	case f.TestSelection != "":
 		return fmt.Sprintf("%s %d/%d", f.TestSelection, f.SelectedTests, f.SuiteTests)
 	case f.SelectionFallback != "":

@@ -2211,6 +2211,16 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 	// scan's own record) still prints nothing, because it genuinely does not
 	// know.
 	switch {
+	case f.SelectionMethod != "" && !f.Uncovered && f.PerMutant:
+		// Per-mutant grading makes SelectedTests the file's UNION — the
+		// tests SOME mutant faced — and no mutant's own denominator. The
+		// spread is the honest half: "234 of 620" alone invites the reader
+		// to take 234 for the number every mutant survived, when the true
+		// figure may be 3. The method is the verdict's own, never stamped
+		// here, so the label cannot outlive the measurement it names.
+		fmt.Fprintf(w, "   graded by %d of %d tests — %d to %d per mutant, median %d (%s)",
+			f.SelectedTests, f.SuiteTests,
+			f.TestsPerMutantMin, f.TestsPerMutantMax, f.TestsPerMutantMedian, f.SelectionMethod)
 	case f.SelectionMethod != "" && !f.Uncovered:
 		fmt.Fprintf(w, "   graded by %d of %d tests (%s)", f.SelectedTests, f.SuiteTests, f.SelectionMethod)
 	case f.SelectionMethod != "" && f.Uncovered:
@@ -3184,6 +3194,13 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 			SuiteTests:        f.SuiteTests,
 			SelectionFallback: f.SelectionFallback,
 			Uncovered:         f.Uncovered,
+			// And at which grain: a signed rate averaged over mutants that
+			// each faced a different test set needs the spread to be read
+			// as the measurement it is.
+			PerMutant:            f.PerMutant,
+			TestsPerMutantMin:    f.TestsPerMutantMin,
+			TestsPerMutantMedian: f.TestsPerMutantMedian,
+			TestsPerMutantMax:    f.TestsPerMutantMax,
 		})
 	}
 	// Same resolution the warehouse push uses: a statement whose subject names

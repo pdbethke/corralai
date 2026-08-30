@@ -44,3 +44,39 @@ func TestMinKillRateFailsAnUncoveredFile(t *testing.T) {
 		t.Errorf("exit %d, want 1: an uncovered file under a --min-kill-rate gate is a failure, not a pass on a withheld number", code)
 	}
 }
+
+// TestPrintWeakFileNamesThePerMutantMeasurement pins the disclosure at the
+// grain the grading now happens: when each mutant was graded by the tests
+// that reach ITS lines, "234 of 620 tests" is the file's UNION, not what any
+// one mutant faced. A line that printed only the union would let a reader
+// take 234 for the number every mutant survived.
+func TestPrintWeakFileNamesThePerMutantMeasurement(t *testing.T) {
+	var b bytes.Buffer
+	printWeakFile(&b, reposcan.WeakFile{
+		Path: "src/flask/cli.py", KillRate: 0.65,
+		SelectionMethod: "coverage-lines", SelectedTests: 234, SuiteTests: 620,
+		PerMutant: true, TestsPerMutantMin: 3, TestsPerMutantMedian: 9, TestsPerMutantMax: 41,
+	})
+	want := "graded by 234 of 620 tests — 3 to 41 per mutant, median 9 (coverage-lines)"
+	if !strings.Contains(b.String(), want) {
+		t.Errorf("got %q, want it to contain %q", b.String(), want)
+	}
+	// The method comes from the verdict, never from a hardcoded string here:
+	// a per-mutant run's selection IS "coverage-lines", and a printer that
+	// stamped the label itself would keep saying so after the measurement
+	// changed underneath it.
+	if strings.Contains(b.String(), "coverage-context") {
+		t.Errorf("the method must be the verdict's, not invented: %q", b.String())
+	}
+
+	// Without PerMutant the line is byte-identical to what it has always
+	// been — the per-mutant clause is an ADDITION, not a rewrite.
+	b.Reset()
+	printWeakFile(&b, reposcan.WeakFile{Path: "pkg/a.py", KillRate: 0.65, SelectionMethod: "coverage-context", SelectedTests: 14, SuiteTests: 1431})
+	if !strings.Contains(b.String(), "graded by 14 of 1431 tests (coverage-context)") {
+		t.Errorf("got %q", b.String())
+	}
+	if strings.Contains(b.String(), "per mutant") {
+		t.Errorf("a run that did NOT grade per mutant must not claim it did: %q", b.String())
+	}
+}

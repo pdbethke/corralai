@@ -89,6 +89,20 @@ type WeakFile struct {
 	// the language, --whole-suite, an evidence run that failed). Empty when
 	// SelectionMethod is set. Never both.
 	SelectionFallback string
+	// PerMutant and TestsPerMutant{Min,Median,Max} mirror
+	// advpool.Verdict.TestSelection.PerMutant / .TestsPerMutant: each mutant
+	// was graded by the tests that reach ITS OWN lines, not by one command
+	// shared across the file. SelectedTests is then the file's UNION — the
+	// tests any mutant faced — and no mutant's own denominator, so the
+	// spread is what says how much the narrowing actually narrowed. A Min
+	// equal to the Max means every mutant faced the same set after all.
+	// Zero on a run that graded the file with one shared command, which is
+	// why a printer must gate the clause on PerMutant rather than on the
+	// numbers being nonzero.
+	PerMutant            bool
+	TestsPerMutantMin    int
+	TestsPerMutantMedian int
+	TestsPerMutantMax    int
 	// Uncovered mirrors advpool.Verdict.Uncovered: the evidence ran and found
 	// NO test executing this file. Its kill rate is not a measurement of the
 	// suite's strength — nothing graded the file — so a caller must withhold
@@ -314,7 +328,14 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 			SelectedTests:     r.Verdict.TestSelection.Selected,
 			SuiteTests:        r.Verdict.TestSelection.Of,
 			SelectionFallback: r.Verdict.TestSelection.Fallback,
-			Uncovered:         r.Verdict.Uncovered,
+			// And at which GRAIN it was measured: a rate averaged over
+			// mutants that each faced a different test set is not one
+			// measurement unless the report carries the spread.
+			PerMutant:            r.Verdict.TestSelection.PerMutant,
+			TestsPerMutantMin:    r.Verdict.TestSelection.TestsPerMutant.Min,
+			TestsPerMutantMedian: r.Verdict.TestSelection.TestsPerMutant.Median,
+			TestsPerMutantMax:    r.Verdict.TestSelection.TestsPerMutant.Max,
+			Uncovered:            r.Verdict.Uncovered,
 		})
 	}
 

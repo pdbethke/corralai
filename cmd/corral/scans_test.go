@@ -12,9 +12,10 @@ import (
 )
 
 type fakeScansReader struct {
-	scans []scanstore.ScanRow
-	files []scanstore.File
-	limit int // records what the command asked for
+	scans   []scanstore.ScanRow
+	files   []scanstore.File
+	mutants []scanstore.Mutant
+	limit   int // records what the command asked for
 }
 
 func (f *fakeScansReader) Scans(_ context.Context, limit int) ([]scanstore.ScanRow, error) {
@@ -23,6 +24,9 @@ func (f *fakeScansReader) Scans(_ context.Context, limit int) ([]scanstore.ScanR
 }
 func (f *fakeScansReader) FilesForScan(context.Context, int64) ([]scanstore.File, error) {
 	return f.files, nil
+}
+func (f *fakeScansReader) MutantsForScan(context.Context, int64) ([]scanstore.Mutant, error) {
+	return f.mutants, nil
 }
 func (f *fakeScansReader) Close() error { return nil }
 
@@ -214,5 +218,44 @@ func TestScansShowMarksAReusedFile(t *testing.T) {
 	}
 	if !strings.Contains(got, "REUSED") {
 		t.Errorf("no reuse marker at all:\n%s", got)
+	}
+}
+
+// TestScanFileSelectionShowsThePerMutantSpread pins the ledger reader's
+// column at the grain the grading happened. Two rows are only comparable if
+// they answered the same question, and "234/620" hides that one file's
+// mutants each faced between 3 and 41 of those tests.
+func TestScanFileSelectionShowsThePerMutantSpread(t *testing.T) {
+	f := scanstore.File{Path: "src/flask/cli.py", TestSelection: "coverage-lines", SelectedTests: 234, SuiteTests: 620}
+	got := scanFileSelectionWith(f, mutantSpread{min: 3, max: 41, ok: true})
+	if got != "coverage-lines 234/620, 3–41/mutant" {
+		t.Errorf("scanFileSelectionWith = %q", got)
+	}
+	// A scan whose mutants carry no per-mutant grading prints exactly what
+	// it always did — never a fabricated 0–0.
+	if got := scanFileSelectionWith(f, mutantSpread{}); got != "coverage-lines 234/620" {
+		t.Errorf("scanFileSelection = %q, want the unchanged column", got)
+	}
+
+	// And end to end: `scans show` must derive the spread from the scan's
+	// own mutant rows, not require a second copy of the fact at the file
+	// grain.
+	r := &fakeScansReader{
+		files: []scanstore.File{{Path: "src/flask/cli.py", Disposition: "audited",
+			TestSelection: "coverage-lines", SelectedTests: 234, SuiteTests: 620}},
+		mutants: []scanstore.Mutant{
+			{Path: "src/flask/cli.py", MutantID: "m1", Outcome: "killed", TestsRun: 3, SelectionRule: "lines"},
+			{Path: "src/flask/cli.py", MutantID: "m2", Outcome: "survived", TestsRun: 41, SelectionRule: "unreached"},
+			// No rule: graded by the file's shared command, so it must not
+			// drag the minimum down to a 0 nothing measured.
+			{Path: "src/flask/cli.py", MutantID: "m3", Outcome: "killed"},
+		},
+	}
+	var out, errOut bytes.Buffer
+	if code := runScans([]string{"show", "7"}, openFake(r), &out, &errOut); code != 0 {
+		t.Fatalf("exit = %d, stderr=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "coverage-lines 234/620, 3–41/mutant") {
+		t.Errorf("scans show did not disclose the per-mutant spread:\n%s", out.String())
 	}
 }

@@ -174,14 +174,13 @@ C is next.
 > result are pinned in CI so neither can be quietly papered over; see [the foreign-repo
 > sweep](#the-gate--for-a-repo-and-for-a-control-owner) below.
 
-By default the audit runs two distinct Claude
-models off one key (Sonnet writes/mutates, Haiku critiques) — the distinctness rule
-satisfied with a single key, though two models from one lab are the WEAKEST form of
-it and share the most lineage; on that same default path, `--critic-model gemini-3.6-flash` plus
-`GEMINI_API_KEY` (or `GOOGLE_API_KEY`) routes the critic to Gemini via the
-OpenAI-compatible Google endpoint, a real cross-vendor critic, while the writer and
-mutant-generator stay on Claude — a missing key fails the run closed rather than
-silently falling back.
+One key can satisfy the distinctness rule on its own — name two different models
+from the same provider (Sonnet writing and mutating, Haiku critiquing, say) — though
+two models from one lab are the WEAKEST form of it and share the most lineage. Naming
+`--critic-model gemini-3.6-flash` plus `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) routes
+the critic to Gemini via the OpenAI-compatible Google endpoint, a real cross-vendor
+critic, while the writer and mutant-generator stay on whatever you named — a missing
+key fails the run closed rather than silently falling back.
 
 Cross-vendor routing is **one-directional by design**: it applies to the critic, and
 only when you have *not* pinned `MODEL_BACKEND`. Setting `MODEL_BACKEND` explicitly
@@ -298,7 +297,7 @@ The name is the metaphor: the **corral** is the enclosure the models work in, th
 **fences** are the security boundaries, and the brain corrals a herd of (possibly
 different) models — it coordinates and contains, it doesn't do the work itself.
 
-> **Where it's at:** v0.1, solo-maintained, tested honestly — every claim in this
+> **Where it's at:** pre-1.0, solo-maintained, tested honestly — every claim in this
 > README was run before it was written. Issues and verified-harness PRs welcome.
 
 ## The gate — for a repo, and for a control owner
@@ -759,13 +758,13 @@ of.
   seats, each attacking a different group of functions, so **every function gets
   probed** instead of whatever one generator happened to pick. `--n-mutants` (default
   5) is a **per-shard** budget; the default 8 shards means up to ~40 mutants scored.
-- **The shadow challenger.** `--shadow-model` (default `claude-haiku-4-5` — the
-  critic's model, no extra credential) fans a cheap challenger seat across every region
-  for a region-controlled, execution-proven head-to-head between generator models —
-  same file, same goal, same commit. **It never affects the verdict**: shadow mutants
+- **The shadow challenger.** `--shadow-model <model>` fans a challenger
+  mutant-generator seat across every region for a region-controlled,
+  execution-proven head-to-head between generator models — same file, same goal,
+  same commit. **Off unless named**, like every other seat. **It never affects the verdict**: shadow mutants
   are scored and recorded to the scorecard (`corral scorecard`), but only the primary
   generator's mutants feed the kill-rate. It roughly doubles generator API calls and
-  jail wall-clock; `--shadow-model off` disables it.
+  jail wall-clock.
 - **The challenger writer, and the decorrelation measurement.**
   `--shadow-writer-model` (off unless named) runs a SECOND test-writer against the
   same survivors as the primary, so the two seats' misses can be compared. The
@@ -796,8 +795,7 @@ of.
   baseline is a fabricated number. It now prints the runner's own output alongside
   that refusal, so `baseline does not pass unmutated` comes with the traceback,
   missing import or failing test that caused it. Costs no extra run.
-- **Turning the critic off.** `--critic-model off` (same `off`/`none` spelling as
-  `--shadow-model`) drops the test-critic entirely. The critic is **advisory** — its
+- **Turning the critic off.** `--critic-model off` drops the test-critic entirely. The critic is **advisory** — its
   findings ride the verdict as unverified review and never gate certification — so a
   run without it reports the same execution-proven kill-rate and proven-missed count,
   just with no second opinion attached. That absence is reported as *empty*, not as a

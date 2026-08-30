@@ -164,7 +164,7 @@ func runScansShow(args []string, open func(string) (scansReader, error), stdout,
 	dsn := fs.String("db", "", "path to the scan ledger (default: $CORRALAI_SCANS_DB, else ~/.claude/corralai_scans.duckdb)")
 	asJSON := fs.Bool("json", false, "emit the raw rows as JSON")
 	evidence := fs.Bool("evidence", false, "also print the pool's authored test source for each audited file")
-	timing := fs.Bool("timing", false, "also print where each audited file's wall clock went, phase by phase")
+	timing := fs.Bool("timing", false, "also print where each audited file's wall clock went, phase by phase — with --json, adds top-level selection_ms and model_calls and wraps the file array in an object ({\"files\": [...], \"selection_ms\": ..., \"model_calls\": [...]}) instead of emitting it bare")
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
 	}
@@ -182,10 +182,17 @@ func runScansShow(args []string, open func(string) (scansReader, error), stdout,
 		return 1
 	}
 	if *asJSON {
-		enc := json.NewEncoder(stdout)
-		enc.SetIndent("", "  ")
-		_ = enc.Encode(files)
-		return 0
+		if !*timing {
+			// UNCHANGED shape: the bare file array every existing consumer of
+			// `scans show --json` already parses. --timing is what adds the
+			// scan-grain selection_ms and the model_calls rows below — asking
+			// for neither must not change what this prints.
+			enc := json.NewEncoder(stdout)
+			enc.SetIndent("", "  ")
+			_ = enc.Encode(files)
+			return 0
+		}
+		return runScansShowJSONWithTiming(st, id, files, stdout, stderr)
 	}
 	if len(files) == 0 {
 		fmt.Fprintf(stdout, "scan %d has no recorded files (unknown id? see `corral scans list`)\n", id)
@@ -279,6 +286,78 @@ func runScansShow(args []string, open func(string) (scansReader, error), stdout,
 			fmt.Fprintln(stdout, f.AuthoredTest)
 		}
 	}
+	return 0
+}
+
+// scansShowJSON is the `--json --timing` shape of `corral scans show`: the
+// same file array `--json` alone prints, plus the two things `--timing`
+// prints to the terminal that the bare array had nowhere to carry —
+// scan-grain selection_ms and the per-file, per-role model-call rows.
+//
+// It exists because a docs fixture had to hand-transcribe cost numbers out of
+// the text `--timing` readout: everything that readout prints was already
+// MEASURED and already reachable from this reader, it just never reached
+// `--json`. Wrapping is opt-in to --timing precisely so the bare-array shape
+// `--json` alone has always printed stays byte-identical — an existing
+// consumer that never asked for timing sees no change at all.
+type scansShowJSON struct {
+	Files       []scanstore.File     `json:"files"`
+	SelectionMS *int64               `json:"selection_ms"`
+	ModelCalls  []scansShowModelCall `json:"model_calls"`
+}
+
+// scansShowModelCall is one scan_model_calls row, snake_case and with the
+// same nullable-vs-zero discipline the rest of this ledger keeps: Retries and
+// CachedInputTokens are NULL when the ledger never measured them (see
+// scanstore.ModelCall.Retries and the doc below), never a stored 0 that a
+// later query would average as a measured zero.
+type scansShowModelCall struct {
+	Path         string `json:"path"`
+	Role         string `json:"role"`
+	Model        string `json:"model"`
+	Calls        int    `json:"calls"`
+	Retries      *int   `json:"retries"`
+	InputTokens  int64  `json:"input_tokens"`
+	OutputTokens int64  `json:"output_tokens"`
+	// CachedInputTokens is always null: nothing in this ledger measures a
+	// cached-token count today (scanstore.ModelCall carries no such column).
+	// Present, rather than omitted, so a consumer can tell "not measured" from
+	// "field does not exist on this build" the same way the ledger's own
+	// nullable columns do.
+	CachedInputTokens *int64 `json:"cached_input_tokens"`
+	WallMillis        int64  `json:"wall_ms"`
+}
+
+// runScansShowJSONWithTiming is the --json branch of `--timing`: the ledger
+// reads that back the text readout above already makes (ScanByID for the
+// scan-grain selection_ms, ModelCallsForScan for the cost rows), rendered as
+// JSON instead of text. Best-effort like the text readout: a reader that
+// cannot answer ModelCallsForScan still prints the file array and
+// selection_ms, with model_calls simply empty.
+func runScansShowJSONWithTiming(st scansReader, id int64, files []scanstore.File, stdout, stderr io.Writer) int {
+	out := scansShowJSON{Files: files, ModelCalls: []scansShowModelCall{}}
+
+	if row, ok, serr := st.ScanByID(context.Background(), id); serr != nil {
+		fmt.Fprintln(stderr, "corral scans show: scan header unavailable:", serr)
+	} else if ok {
+		out.SelectionMS = row.SelectionMillis
+	}
+
+	calls, cerr := st.ModelCallsForScan(context.Background(), id)
+	if cerr != nil {
+		fmt.Fprintln(stderr, "corral scans show: model calls unavailable:", cerr)
+	}
+	for _, c := range calls {
+		out.ModelCalls = append(out.ModelCalls, scansShowModelCall{
+			Path: c.Path, Role: c.Role, Model: c.Model, Calls: c.Calls,
+			Retries: c.Retries, InputTokens: c.InputTokens, OutputTokens: c.OutputTokens,
+			CachedInputTokens: nil, WallMillis: c.WallMillis,
+		})
+	}
+
+	enc := json.NewEncoder(stdout)
+	enc.SetIndent("", "  ")
+	_ = enc.Encode(out)
 	return 0
 }
 

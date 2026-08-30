@@ -5,6 +5,7 @@ package advpool
 import (
 	"encoding/json"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -137,6 +138,60 @@ func TestVerdictMutantDurationsAreMilliseconds(t *testing.T) {
 	for _, bad := range []string{"MutantDurationMedian", "MutantDurationMax", "54000000000"} {
 		if strings.Contains(js, bad) {
 			t.Errorf("verdict JSON still carries %q (the Go name / raw nanoseconds): %s", bad, js)
+		}
+	}
+}
+
+// TestVerdictBaselineAndMutantRefDurationsAreMilliseconds is
+// TestVerdictMutantDurationsAreMilliseconds's sibling for the other two
+// durations that shipped the same bug: BaselineDuration on Verdict itself,
+// and Duration on a MutantRef reached through DevKilledMutants /
+// DevSurvivedMutants. Both had no JSON tag, so both went out as raw
+// nanoseconds under their Go field names.
+//
+// It also runs the cheap structural guard the task named: a regexp over
+// every quoted JSON key in a FULL fullVerdict() marshal, checked against the
+// four field names this whole bug class has now touched
+// (BaselineDuration, MutantDurationMedian, MutantDurationMax, and MutantRef's
+// Duration) — the guard that would have caught all four bugs, past and
+// present, without needing to know each one's literal spelling in advance.
+// It is deliberately NOT a claim that every key in the document is
+// snake_case: Verdict carries many other untagged fields on purpose (out of
+// scope for this fix), and asserting that would fail on unrelated,
+// pre-existing fields this change never touched.
+func TestVerdictBaselineAndMutantRefDurationsAreMilliseconds(t *testing.T) {
+	want := fullVerdict()
+	b, err := json.Marshal(want)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	js := string(b)
+
+	for _, wantSub := range []string{
+		`"baseline_duration_ms":3000`,
+		`"duration_ms":250`,
+		`"duration_ms":300`,
+	} {
+		if !strings.Contains(js, wantSub) {
+			t.Errorf("verdict JSON is missing %s: %s", wantSub, js)
+		}
+	}
+	for _, rawNanos := range []string{"3000000000", "250000000", "300000000"} {
+		if strings.Contains(js, rawNanos) {
+			t.Errorf("verdict JSON still carries a raw nanosecond count %q: %s", rawNanos, js)
+		}
+	}
+
+	keyRe := regexp.MustCompile(`"([A-Z][A-Za-z]*)":`)
+	bad := map[string]bool{
+		"BaselineDuration":     true,
+		"MutantDurationMedian": true,
+		"MutantDurationMax":    true,
+		"Duration":             true,
+	}
+	for _, m := range keyRe.FindAllStringSubmatch(js, -1) {
+		if bad[m[1]] {
+			t.Errorf("verdict JSON still carries the raw Go field name %q: %s", m[1], js)
 		}
 	}
 }

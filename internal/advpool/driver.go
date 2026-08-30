@@ -299,7 +299,11 @@ type MutantRef struct {
 	// cannot say whether that was one pathological mutant or forty ordinary
 	// ones. Zero when the run was not timed, and stored as SQL NULL rather
 	// than 0 for exactly that reason (see scanstore.Mutant.DurationMillis).
-	Duration time.Duration
+	//
+	// `json:"-"`: the wire form is duration_ms, written by MutantRef's own
+	// MarshalJSON below — the same reason Verdict.BaselineDuration carries
+	// this tag.
+	Duration time.Duration `json:"-"`
 	// KilledBy is the id of the first test that FAILED on this mutant, when
 	// the language's runner said so in words corral can parse
 	// (adequacy.MutantGrading.KilledBy). It answers "which test was awake",
@@ -424,8 +428,12 @@ type Verdict struct {
 	// BaselineDuration is the dev suite's compliant (unmutated) wall-clock
 	// runtime — the single input to the audit cost model (O(mutants x the
 	// TARGET's suite runtime)). See adequacy.Report.BaselineDuration.
-	BaselineDuration time.Duration
-	MutantsTotal     int // mutants actually GRADED (compile-gate rejects excluded)
+	//
+	// `json:"-"`: the wire form is baseline_duration_ms, written by
+	// verdictWire in verdict_wire.go (the same reason MutantDurationMedian
+	// and MutantDurationMax carry this tag — see that type's doc).
+	BaselineDuration time.Duration `json:"-"`
+	MutantsTotal     int           // mutants actually GRADED (compile-gate rejects excluded)
 	// MutantsInvalid counts mutants that failed the language's own compile
 	// check and were never run. Surfaced rather than dropped: a run where the
 	// generator produced mostly unbuildable mutants graded a much smaller exam

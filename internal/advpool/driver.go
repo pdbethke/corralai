@@ -86,14 +86,22 @@ type PerMutantScorer interface {
 // to narrow by (DevCommandFor non-nil), else with the run's single shared
 // command. Both branches issue DevCommand(rs) as the baseline/compile-gate
 // command, so the fallback is the pre-per-mutant path unchanged.
-func scoreDevReport(ctx context.Context, scorer Scorer, rs RunSpec, mutants []adequacy.Mutant) (adequacy.Report, error) {
+//
+// The bool says whether the per-mutant closure was actually HANDED to the
+// scorer. That is the fact the verdict's disclosure must rest on, and it is
+// knowable only here: the returned Report's PerMutant map is empty whenever
+// no mutant reached grading (every one rejected by the compile gate), which
+// is a statement about the exam, not about which command the run chose.
+func scoreDevReport(ctx context.Context, scorer Scorer, rs RunSpec, mutants []adequacy.Mutant) (adequacy.Report, bool, error) {
 	cmd := DevCommand(rs)
 	if pm, ok := scorer.(PerMutantScorer); ok {
 		if cmdFor := DevCommandFor(rs); cmdFor != nil {
-			return pm.ScoreReportFor(ctx, rs.CodePath, rs.Code, rs.DevTestCode, mutants, cmd, cmdFor)
+			rep, err := pm.ScoreReportFor(ctx, rs.CodePath, rs.Code, rs.DevTestCode, mutants, cmd, cmdFor)
+			return rep, true, err
 		}
 	}
-	return scorer.ScoreReport(ctx, rs.CodePath, rs.Code, rs.DevTestCode, mutants, cmd)
+	rep, err := scorer.ScoreReport(ctx, rs.CodePath, rs.Code, rs.DevTestCode, mutants, cmd)
+	return rep, false, err
 }
 
 // scoreDevSurvivors is scoreDevReport's Score-shaped sibling, for the shadow
@@ -552,6 +560,13 @@ type runState struct {
 	// aggregate reads to decide whether TestSelection discloses per-mutant
 	// stats at all — an empty exam must not read as "not graded per mutant".
 	perMutant map[string]adequacy.MutantGrading
+	// perMutantGraded is whether the dev pass actually handed the per-mutant
+	// closure to a scorer that took it. It is the disclosure's source of
+	// truth, and it is deliberately NOT `perMutant != nil`: adequacy.Score
+	// leaves PerMutant empty when no mutant reached grading at all (every one
+	// rejected by the compile gate), and such a run must still sign as the
+	// per-mutant measurement it was rather than as a whole-selection one.
+	perMutantGraded bool
 	// baselineFailed is true when the dev suite did not pass on the UNMUTATED
 	// compliant code inside the jail (adequacy.Report.CompliantPass=false) — a
 	// build/environment failure (bad toolchain, missing dep, a shell-mangled
@@ -1139,10 +1154,15 @@ func applyDevScore(ctx context.Context, run *runState, scorer Scorer, mutants []
 	// Per mutant when the scorer can and the run has line evidence to narrow
 	// by — see scoreDevReport, which owns that choice for both this pass and
 	// the shadow one, so the two can never disagree about what exam was set.
-	rep, serr := scoreDevReport(ctx, scorer, run.rs, mutants)
+	rep, perMutant, serr := scoreDevReport(ctx, scorer, run.rs, mutants)
 	if serr != nil {
 		return fmt.Errorf("advpool: score dev tests: %w", serr)
 	}
+	// Whether the run was GRADED per mutant — recorded from the call, not
+	// inferred from rep.PerMutant, which is empty on a run whose every mutant
+	// the compile gate rejected. Inferring it there would sign such a run as
+	// an ordinary whole-selection measurement, which is not what it was.
+	run.perMutantGraded = perMutant
 	run.baselineFailed = !rep.CompliantPass
 	run.baselineDuration = rep.BaselineDuration
 	// Keep the runner's own words on a FAILING baseline. certify --repo has
@@ -1172,8 +1192,9 @@ func applyDevScore(ctx context.Context, run *runState, scorer Scorer, mutants []
 	run.invalidReasons = rep.InvalidReasons
 	run.mutantsTotal = len(mutants) - run.mutantsInvalid
 	// What each mutant was actually graded with, kept so the verdict's mutant
-	// refs can carry it. nil on a run that graded every mutant with the same
-	// command — which is also how the aggregate tells the two apart.
+	// refs can carry it. Empty both on a run that graded every mutant with
+	// the same command AND on a per-mutant run with nothing left to grade —
+	// run.perMutantGraded above, not this map, is what tells those apart.
 	run.perMutant = rep.PerMutant
 	run.devSurvivors = survivorsFrom(rep, mutants)
 	run.devKilled = toMutantRefsWith(killedFrom(rep, mutants), rep.PerMutant)
@@ -1904,7 +1925,7 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	// Computed HERE, from the refs, rather than in verdictFromSpec: the spec
 	// says what the run intended to narrow by, and only the finished refs say
 	// what each mutant was really graded with.
-	applyPerMutantStats(&v, run.perMutant != nil, v.DevKilledMutants, v.DevSurvivedMutants)
+	applyPerMutantStats(&v, run.perMutantGraded, v.DevKilledMutants, v.DevSurvivedMutants)
 
 	if d.Signer != nil {
 		recordID, head, serr := d.Signer.SignVerdict(ctx, v)
@@ -2136,53 +2157,64 @@ func (d *Driver) adjudicateCriticFindings(ctx context.Context, missionID int64, 
 // tickAggregate's leaderboard gate, which only fires on StatusCertified) it
 // earns no leaderboard fitness for any model: a stalled run proved nothing.
 func (d *Driver) timeoutVerdict(run *runState) Verdict {
-	return Verdict{
-		Repo:             run.rs.Repo,
-		Commit:           run.rs.Commit,
-		Lang:             run.rs.Lang,
-		DevKillRate:      run.devKillRate,
-		BaselineDuration: run.baselineDuration,
-		MutantsTotal:     run.mutantsTotal,
-		MutantsInvalid:   run.mutantsInvalid,
-		Survivors:        len(run.devSurvivors),
-		ProvenMissed:     run.provenMissed,
-		// The mutant-level evidence must ride the TIMEOUT verdict too, for the
-		// same reason BaselineDuration and the could-not-grade flags do below:
-		// a run that scored dev adequacy and only then stalled has real
-		// per-mutant data, not zero values nothing ever computed.
-		DevKilledMutants:   run.devKilled,
-		DevSurvivedMutants: toMutantRefs(run.devSurvivors),
-		// The could-not-grade flags must ride the TIMEOUT verdict too. A run
-		// that scored dev adequacy, could not grade it (failed baseline, or a
-		// surviving canary), and only then stalled would otherwise be SIGNED
-		// reading "DevKillRate 0, Survivors 0, MutantsTotal N" with no marker —
-		// renderAdvVerdict falls straight through to `dev_kill_rate: 0.00`,
-		// which is a fabricated measurement. Never fabricate a score.
-		BaselineFailed:   run.baselineFailed,
-		BaselineOutput:   run.baselineOutput,
-		SuiteIgnoresFile: run.suiteIgnoresFile,
-		// TestWriterFailed/PoolTestUnsound must ride the TIMEOUT verdict too:
-		// a run that reached tickPoolAdequacy, converged its pool score (or
-		// gave up on a non-compiling test) and only THEN stalled (test-critic
-		// never finished) would otherwise sign a TimedOut verdict with a
-		// ProvenMissed that looks like an ordinary graded value, dropping the
-		// caveat that explains it.
-		TestWriterFailed:         run.testWriterFailed,
-		PoolTestUnsound:          run.poolTestUnsound,
-		AuthoredTestNotCollected: run.authoredTestNotCollected,
-		// Coverage fields (I-5): a run that dispatched N regions and dropped
-		// some before hitting RunDeadline must carry that shortfall on the
-		// timeout verdict too, or the CLI's RegionsTotal > 0 guard silently
-		// suppresses PARTIAL AUDIT for exactly the run most likely to have one
-		// (a stall is often the dropped regions' downstream symptom).
-		RegionsTotal:   run.regionsTotal,
-		RegionsProbed:  run.regionsProbed,
-		DroppedRegions: run.droppedRegions,
-		ModelsByRole:   map[string]string(d.Assign),
-		Status:         StatusNeedsReview,
-		TimedOut:       true,
-		DevScored:      run.devScored,
-	}
+	// Built from verdictFromSpec, exactly like the converged verdict, and
+	// then overlaid with whatever the run actually managed to measure. This
+	// used to be a bare Verdict literal, so a timed-out run signed with NO
+	// TestSelection and no Uncovered at all — the record could not say what
+	// measurement its partial numbers even were. It is the second Verdict
+	// construction site in this package, and it has now been the place a
+	// field was forgotten more than once.
+	v := verdictFromSpec(run.rs)
+	v.DevKillRate = run.devKillRate
+	v.BaselineDuration = run.baselineDuration
+	v.MutantsTotal = run.mutantsTotal
+	v.MutantsInvalid = run.mutantsInvalid
+	v.Survivors = len(run.devSurvivors)
+	v.ProvenMissed = run.provenMissed
+	// The mutant-level evidence must ride the TIMEOUT verdict too, for the
+	// same reason BaselineDuration and the could-not-grade flags do below:
+	// a run that scored dev adequacy and only then stalled has real
+	// per-mutant data, not zero values nothing ever computed.
+	v.DevKilledMutants = run.devKilled
+	// Graded, like the killed refs beside them: carrying the grading on one
+	// vector and not the other would put two grains of the same evidence in
+	// one signed record.
+	v.DevSurvivedMutants = toMutantRefsWith(run.devSurvivors, run.perMutant)
+	// And the same disclosure the aggregate applies, from the same refs: a
+	// run that graded per mutant and only THEN stalled measured what it
+	// measured, and the record has to say so.
+	applyPerMutantStats(&v, run.perMutantGraded, v.DevKilledMutants, v.DevSurvivedMutants)
+	// The could-not-grade flags must ride the TIMEOUT verdict too. A run
+	// that scored dev adequacy, could not grade it (failed baseline, or a
+	// surviving canary), and only then stalled would otherwise be SIGNED
+	// reading "DevKillRate 0, Survivors 0, MutantsTotal N" with no marker —
+	// renderAdvVerdict falls straight through to `dev_kill_rate: 0.00`,
+	// which is a fabricated measurement. Never fabricate a score.
+	v.BaselineFailed = run.baselineFailed
+	v.BaselineOutput = run.baselineOutput
+	v.SuiteIgnoresFile = run.suiteIgnoresFile
+	// TestWriterFailed/PoolTestUnsound must ride the TIMEOUT verdict too:
+	// a run that reached tickPoolAdequacy, converged its pool score (or
+	// gave up on a non-compiling test) and only THEN stalled (test-critic
+	// never finished) would otherwise sign a TimedOut verdict with a
+	// ProvenMissed that looks like an ordinary graded value, dropping the
+	// caveat that explains it.
+	v.TestWriterFailed = run.testWriterFailed
+	v.PoolTestUnsound = run.poolTestUnsound
+	v.AuthoredTestNotCollected = run.authoredTestNotCollected
+	// Coverage fields (I-5): a run that dispatched N regions and dropped
+	// some before hitting RunDeadline must carry that shortfall on the
+	// timeout verdict too, or the CLI's RegionsTotal > 0 guard silently
+	// suppresses PARTIAL AUDIT for exactly the run most likely to have one
+	// (a stall is often the dropped regions' downstream symptom).
+	v.RegionsTotal = run.regionsTotal
+	v.RegionsProbed = run.regionsProbed
+	v.DroppedRegions = run.droppedRegions
+	v.ModelsByRole = map[string]string(d.Assign)
+	v.Status = StatusNeedsReview
+	v.TimedOut = true
+	v.DevScored = run.devScored
+	return v
 }
 
 // feedLeaderboard is the gate-earned fitness feed: one (model, role,

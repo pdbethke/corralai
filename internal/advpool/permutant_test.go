@@ -6,6 +6,7 @@ import (
 	"context"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/lang"
@@ -102,7 +103,20 @@ func TestVerdictCarriesPerMutantGrading(t *testing.T) {
 		{ID: "m2", Code: "c2", ParentSHA256: "p2", Span: lang.LineRange{Start: 2, End: 2}},
 		{ID: "m3", Code: "c3", ParentSHA256: "p3"},
 	}
-	scorer := &recordingPerMutantScorer{fakeScorer: fakeScorer{devKillRate: 0.5, devSurvivors: mutants}}
+	// The dev report must KILL a real mutant, not the fake's synthetic "k0"
+	// ids: killedFrom drops an id that names no mutant, so a scripted-by-rate
+	// report leaves DevKilledMutants empty and the grading assertion below
+	// would pass vacuously over half the evidence it exists to check.
+	// devReported pre-set routes the dev pass through reportFn.
+	scorer := &recordingPerMutantScorer{fakeScorer: fakeScorer{
+		devKillRate:  0.5,
+		devSurvivors: mutants[1:],
+		devReported:  true,
+		reportFn: func(_ context.Context, _, _, _ string, _ []adequacy.Mutant, _ string) (adequacy.Report, error) {
+			return adequacy.Report{CompliantPass: true, CanaryKilled: true, Total: 3,
+				Killed: []string{"m1"}, Survived: []string{"m2", "m3"}}, nil
+		},
+	}}
 	validator := &fakeValidator{mutants: mutants}
 	d := newTestDriverWithSpec(t, 91, scorer, validator, 0.1, perMutantRunSpec())
 
@@ -110,6 +124,12 @@ func TestVerdictCarriesPerMutantGrading(t *testing.T) {
 
 	if scorer.gotCmdFor == nil {
 		t.Fatal("the driver graded the dev pass through ScoreReport, not ScoreReportFor — the per-mutant closure never reached a scorer that can take it")
+	}
+	if len(v.DevKilledMutants) != 1 || v.DevKilledMutants[0].ID != "m1" {
+		t.Fatalf("DevKilledMutants = %+v, want the one killed mutant m1 — the killed-ref grading path must be exercised, not skipped", v.DevKilledMutants)
+	}
+	if k := v.DevKilledMutants[0]; k.TestsRun != 1 || k.Rule != lang.SpanRuleLines {
+		t.Errorf("killed ref m1 = %+v, want TestsRun 1 / rule %q — a KILLED mutant must carry what killed it", k, lang.SpanRuleLines)
 	}
 	refs := append(append([]MutantRef{}, v.DevKilledMutants...), v.DevSurvivedMutants...)
 	if len(refs) != len(mutants) {
@@ -142,5 +162,130 @@ func TestVerdictCarriesPerMutantGrading(t *testing.T) {
 	}
 	if got, want := v.TestSelection.Rules, map[string]int{"lines": 1, "static": 1, "file": 1}; !reflect.DeepEqual(got, want) {
 		t.Errorf("TestSelection.Rules = %v, want %v", got, want)
+	}
+}
+
+// allInvalidPerMutantScorer is a PerMutantScorer whose dev report grades
+// NOTHING: every mutant was rejected by the compile gate, which is exactly
+// the shape adequacy.Score returns — Invalid full, PerMutant empty — and the
+// case that must NOT be mistaken for "this run was not graded per mutant".
+type allInvalidPerMutantScorer struct {
+	fakeScorer
+	mutants []adequacy.Mutant
+}
+
+func (a *allInvalidPerMutantScorer) ScoreReportFor(_ context.Context, _, _, _ string, mutants []adequacy.Mutant, _ string, _ adequacy.CommandFor) (adequacy.Report, error) {
+	rep := adequacy.Report{CompliantPass: true, CanaryKilled: true}
+	for _, m := range mutants {
+		rep.Invalid = append(rep.Invalid, m.ID)
+	}
+	return rep, nil
+}
+
+func (a *allInvalidPerMutantScorer) ScoreFor(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string, _ adequacy.CommandFor) (float64, []adequacy.Mutant, error) {
+	return a.fakeScorer.Score(ctx, codePath, code, test, mutants, testCmd)
+}
+
+// A per-mutant run whose whole exam was rejected by the compile gate still
+// graded per mutant: the closure WAS handed to the scorer, and the record has
+// to say which measurement produced its (empty) numbers. Inferring the
+// disclosure from the report's PerMutant map instead would sign this run as
+// an ordinary whole-selection one — a claim about behaviour that never ran.
+func TestPerMutantDisclosedEvenWhenEveryMutantIsInvalid(t *testing.T) {
+	mutants := []adequacy.Mutant{
+		{ID: "m1", Code: "c1", Span: lang.LineRange{Start: 41, End: 41}},
+		{ID: "m2", Code: "c2", Span: lang.LineRange{Start: 2, End: 2}},
+	}
+	scorer := &allInvalidPerMutantScorer{mutants: mutants}
+	validator := &fakeValidator{mutants: mutants}
+	d := newTestDriverWithSpec(t, 92, scorer, validator, 0.1, perMutantRunSpec())
+
+	// Not drivePoolToConvergence: an exam with nothing left to grade leaves no
+	// survivors, so the test-writer seat is moot and never becomes claimable.
+	ready := claimAllReady(t, d.Q)
+	mustComplete(t, d.Q, ready[RoleTestCritic].ID, "critic findings filed")
+	mustComplete(t, d.Q, ready[RoleMutantGenerator].ID, "raw mutants")
+	v, err := d.Tick(context.Background(), 92)
+	if err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	if v == nil {
+		t.Fatal("expected a verdict: an all-invalid exam has nothing left to wait for")
+	}
+
+	if v.MutantsInvalid != len(mutants) || v.MutantsTotal != 0 {
+		t.Fatalf("invalid=%d total=%d, want the whole exam rejected", v.MutantsInvalid, v.MutantsTotal)
+	}
+	if !v.TestSelection.PerMutant {
+		t.Error("PerMutant = false — an all-invalid exam was still graded per mutant, and the record must say so")
+	}
+	if v.TestSelection.Method != MethodCoverageLines {
+		t.Errorf("Method = %q, want %q", v.TestSelection.Method, MethodCoverageLines)
+	}
+	if got := v.TestSelection.TestsPerMutant; got.Min != 0 || got.Median != 0 || got.Max != 0 {
+		t.Errorf("TestsPerMutant = %+v, want all zero — nothing was graded, so nothing may be reported", got)
+	}
+	if len(v.TestSelection.Rules) != 0 {
+		t.Errorf("Rules = %v, want empty — no mutant was graded by any rule", v.TestSelection.Rules)
+	}
+}
+
+// A run that graded per mutant and only THEN stalled must sign the same
+// disclosure the converged path signs. timeoutVerdict was a bare Verdict
+// literal: no TestSelection at all, and ungraded survivor refs beside graded
+// killed ones — two grains of the same evidence in one signed record.
+func TestTimeoutVerdictCarriesPerMutantGrading(t *testing.T) {
+	const mission int64 = 93
+	mutants := []adequacy.Mutant{
+		{ID: "m1", Code: "c1", ParentSHA256: "p1", Span: lang.LineRange{Start: 41, End: 41}},
+		{ID: "m2", Code: "c2", ParentSHA256: "p2", Span: lang.LineRange{Start: 2, End: 2}},
+	}
+	scorer := &recordingPerMutantScorer{fakeScorer: fakeScorer{devKillRate: 0.5, devSurvivors: mutants}}
+	validator := &fakeValidator{mutants: mutants}
+	q := newTestQueue(t)
+	clk := &fakeClock{t: time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)}
+	d, err := NewDriver(q, scorer, validator, decorrelatedAssign(), 0.1)
+	if err != nil {
+		t.Fatalf("NewDriver: %v", err)
+	}
+	d.Now = clk.Now
+	d.RunDeadline = 10 * time.Minute
+	if err := d.StartRun(mission, perMutantRunSpec(), nil); err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	if _, err := q.PromoteReady(mission); err != nil {
+		t.Fatalf("PromoteReady: %v", err)
+	}
+	// The dev pass runs (and grades per mutant); then the run stalls.
+	mg := claimByKey(t, d.Q, RoleMutantGenerator)
+	mustComplete(t, d.Q, mg.ID, "raw mutants")
+	if v, err := d.Tick(context.Background(), mission); err != nil || v != nil {
+		t.Fatalf("dev-adequacy Tick: v=%+v err=%v, want nil/nil", v, err)
+	}
+	clk.advance(d.RunDeadline + time.Second)
+
+	v, err := d.Tick(context.Background(), mission)
+	if err != nil {
+		t.Fatalf("deadline Tick: %v", err)
+	}
+	if v == nil || !v.TimedOut {
+		t.Fatalf("want a TimedOut verdict, got %+v", v)
+	}
+	if v.TestSelection.Method != MethodCoverageLines || !v.TestSelection.PerMutant {
+		t.Errorf("TestSelection = %+v, want method %q and PerMutant true", v.TestSelection, MethodCoverageLines)
+	}
+	if len(v.DevSurvivedMutants) != len(mutants) {
+		t.Fatalf("DevSurvivedMutants = %+v, want %d graded refs", v.DevSurvivedMutants, len(mutants))
+	}
+	for _, r := range v.DevSurvivedMutants {
+		if r.TestsRun <= 0 || r.Rule == "" {
+			t.Errorf("survivor ref %+v lost its grading on the timeout path", r)
+		}
+	}
+	if got := v.TestSelection.TestsPerMutant; got.Min != 1 || got.Median != 2 || got.Max != 2 {
+		t.Errorf("TestsPerMutant = %+v, want {Min:1 Median:2 Max:2}", got)
+	}
+	if got, want := v.TestSelection.Rules, map[string]int{"lines": 1, "static": 1}; !reflect.DeepEqual(got, want) {
+		t.Errorf("Rules = %v, want %v", got, want)
 	}
 }

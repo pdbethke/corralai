@@ -1,0 +1,37 @@
+{
+  "selection_ms": 80914,
+  "model_calls": [
+    {
+      "path": "src/requests/adapters.py",
+      "role": "test-writer",
+      "model": "gemini-3.6-flash",
+      "calls": 1,
+      "retries": null,
+      "input_tokens": 121917,
+      "output_tokens": 1088,
+      "cached_input_tokens": null,
+      "wall_ms": 38120
+    }
+  ],
+  "files": [
+    {
+      "Path": "src/requests/adapters.py",
+      "Lang": "python",
+      "KillRate": 0.5897435897435898,
+      "Survivors": 16,
+      "ProvenMissed": 12,
+      "Trees": 6,
+      "ModelsByRole": "mutant-generator=gemini-3.6-flash,test-writer=gemini-3.6-flash",
+      "MutantsGraded": 39,
+      "MutantMillisMedian": 63200,
+      "MutantMillisMax": 300018,
+      "SelectionMillis": 80914,
+      "GenerationMillis": null,
+      "PoolMillis": 65459,
+      "DevPassMillis": 685103,
+      "AuthoredPassMillis": 109249,
+      "CriticMillis": null,
+      "TotalMillis": 861352
+    }
+  ]
+}

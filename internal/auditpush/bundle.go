@@ -814,7 +814,7 @@ func pushBundleOnce(target string, b Bundle) (Counts, error) {
 		    host, cores, trees_requested, diff_base, candidates, audited, passed,
 		    total_ms, input_tokens, output_tokens, model_calls,
 		    source_pushed, statement_sha256, selection_ms, schema_version
-		  ) VALUES (`+placeholders(22)+`)`,
+		  ) VALUES (`+placeholders(22)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 			now, b.Scan.Repo, b.Scan.RunURL, b.Scan.ScanID, b.Scan.Commit,
 			b.Scan.CorralVersion, b.Scan.Substrate, b.Scan.Host, b.Scan.Cores,
 			nullIfZeroInt(b.Scan.TreesRequested), b.Scan.DiffBase,
@@ -844,7 +844,7 @@ func pushBundleOnce(target string, b Bundle) (Counts, error) {
 		    invalid_reason, proven, proven_by_authored_alone, tests_run,
 		    selection_rule, duration_ms, killed_by, span_start, span_end, code,
 		    statement_sha256, schema_version
-		  ) VALUES (`+placeholders(20)+`)`,
+		  ) VALUES (`+placeholders(20)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 			now, m.Repo, m.RunURL, m.ScanID, m.Path, m.MutantID,
 			nullIfEmpty(m.ParentSHA256), m.Outcome, nullIfEmpty(m.InvalidReason),
 			m.Proven, m.ProvenByAuthoredAlone, m.TestsRun,
@@ -860,7 +860,7 @@ func pushBundleOnce(target string, b Bundle) (Counts, error) {
 		if _, err := tx.Exec(`INSERT INTO corral_model_calls (
 		    ts, repo, run_url, scan_id, path, role, model, calls, retries,
 		    input_tokens, output_tokens, wall_ms, statement_sha256, schema_version
-		  ) VALUES (`+placeholders(14)+`)`,
+		  ) VALUES (`+placeholders(14)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 			now, mc.Repo, mc.RunURL, mc.ScanID, mc.Path, mc.Role, mc.Model,
 			mc.Calls, mc.Retries, mc.InputTokens, mc.OutputTokens, mc.WallMillis,
 			mc.StatementSHA256, SchemaVersion,
@@ -874,7 +874,7 @@ func pushBundleOnce(target string, b Bundle) (Counts, error) {
 		if _, err := tx.Exec(`INSERT INTO corral_events (
 		    ts, repo, run_url, scan_id, path, seq, kind, actor, subject, model,
 		    duration_ms, detail, statement_sha256, schema_version
-		  ) VALUES (`+placeholders(14)+`)`,
+		  ) VALUES (`+placeholders(14)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 			// e.TS, not `now`: the tape's clock is the measurement.
 			e.TS, e.Repo, e.RunURL, e.ScanID, e.Path, e.Seq, e.Kind, e.Actor,
 			e.Subject, e.Model, e.DurationMillis, nullIfEmpty(e.Detail),
@@ -943,7 +943,7 @@ func insertFileRow(tx *sql.Tx, now time.Time, r Row) error {
 	    selection_ms, generation_ms, pool_ms, dev_pass_ms, authored_pass_ms,
 	    critic_ms, total_ms, mutant_ms_median, mutant_ms_max,
 	    authored_test, verdict_json, schema_version
-	  ) VALUES (`+placeholders(70)+`)`,
+	  ) VALUES (`+placeholders(70)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 		now, r.Repo, r.Commit, r.Path, r.Lang,
 		killRate, r.Survivors, r.ProvenMissed,
 		r.TimedOut, r.TestWriterFailed, r.PoolTestUnsound,

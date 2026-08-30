@@ -332,15 +332,30 @@ type TestSelection struct {
 	// actually ran, over the mutants whose grading recorded a count. It is
 	// the honest summary of how much the narrowing narrowed: a Min equal to
 	// the Max means every mutant faced the same set after all.
-	TestsPerMutant struct {
-		Min    int `json:"min"`
-		Median int `json:"median"`
-		Max    int `json:"max"`
-	} `json:"tests_per_mutant,omitempty"`
+	//
+	// A POINTER so that "no spread was measured" is expressible. A Verdict is
+	// marshalled whole into the signed statement, the ledger and the
+	// warehouse, and a struct field with `omitempty` never omits: every
+	// whole-suite verdict used to sign {0,0,0}, a range nobody measured and
+	// indistinguishable from a real one. nil is the only honest value when
+	// no mutant's grading recorded a count — which includes every run that
+	// did not grade per mutant, and a per-mutant run whose whole exam was
+	// rejected by the compile gate.
+	TestsPerMutant *TestsPerMutantSpread `json:"tests_per_mutant,omitempty"`
 	// Rules counts the mutants by WHY they got the command they got
 	// (lang.SpanRule*). A run that is mostly "static" or "unreached" narrowed
 	// almost nothing, and the count is what says so.
 	Rules map[string]int `json:"rules,omitempty"`
+}
+
+// TestsPerMutantSpread is how many tests the graded mutants each ran: the
+// smallest, the middle and the largest. Named (and always reached through a
+// pointer) so that an unmeasured spread is ABSENT everywhere it travels
+// rather than three zeros that read as a measurement.
+type TestsPerMutantSpread struct {
+	Min    int `json:"min"`
+	Median int `json:"median"`
+	Max    int `json:"max"`
 }
 
 // Verdict is one run's final, gated outcome.

@@ -6,6 +6,8 @@ import (
 	"math"
 	"sort"
 	"time"
+
+	"github.com/pdbethke/corralai/internal/advpool"
 )
 
 // maxUngradableDetailsPerReason bounds how many sample detail lines
@@ -96,13 +98,13 @@ type WeakFile struct {
 	// tests any mutant faced — and no mutant's own denominator, so the
 	// spread is what says how much the narrowing actually narrowed. A Min
 	// equal to the Max means every mutant faced the same set after all.
-	// Zero on a run that graded the file with one shared command, which is
-	// why a printer must gate the clause on PerMutant rather than on the
-	// numbers being nonzero.
-	PerMutant            bool
-	TestsPerMutantMin    int
-	TestsPerMutantMedian int
-	TestsPerMutantMax    int
+	// nil on a run that graded the file with one shared command, and also on
+	// a per-mutant run whose every mutant was rejected by the compile gate:
+	// an unmeasured spread is ABSENT, never {0,0,0}, so no printer, signer
+	// or warehouse row can mistake three zeros for a measurement. Ask
+	// MeasuredSpread rather than testing the numbers.
+	PerMutant      bool
+	TestsPerMutant *advpool.TestsPerMutantSpread
 	// Uncovered mirrors advpool.Verdict.Uncovered: the evidence ran and found
 	// NO test executing this file. Its kill rate is not a measurement of the
 	// suite's strength — nothing graded the file — so a caller must withhold
@@ -110,6 +112,13 @@ type WeakFile struct {
 	// caught nothing here".
 	Uncovered bool
 }
+
+// MeasuredSpread reports whether this file's run actually measured a
+// per-mutant spread — the one question every reader of TestsPerMutant has to
+// answer before printing, signing or storing it. A method rather than a
+// nil-check repeated at each call site, because the three that used to test
+// `Max > 0` were three chances to read an unmeasured zero as a range.
+func (w WeakFile) MeasuredSpread() bool { return w.TestsPerMutant != nil }
 
 // RepoReport is the repo-level result. It is mostly ACCOUNTING, because that
 // is what makes the headline number honest: a reader can see exactly what the
@@ -331,11 +340,9 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 			// And at which GRAIN it was measured: a rate averaged over
 			// mutants that each faced a different test set is not one
 			// measurement unless the report carries the spread.
-			PerMutant:            r.Verdict.TestSelection.PerMutant,
-			TestsPerMutantMin:    r.Verdict.TestSelection.TestsPerMutant.Min,
-			TestsPerMutantMedian: r.Verdict.TestSelection.TestsPerMutant.Median,
-			TestsPerMutantMax:    r.Verdict.TestSelection.TestsPerMutant.Max,
-			Uncovered:            r.Verdict.Uncovered,
+			PerMutant:      r.Verdict.TestSelection.PerMutant,
+			TestsPerMutant: r.Verdict.TestSelection.TestsPerMutant,
+			Uncovered:      r.Verdict.Uncovered,
 		})
 	}
 

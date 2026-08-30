@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/reposcan"
 )
 
@@ -68,7 +69,7 @@ func TestPrintWeakFileNamesThePerMutantMeasurement(t *testing.T) {
 	printWeakFile(&b, reposcan.WeakFile{
 		Path: "src/flask/cli.py", KillRate: 0.65,
 		SelectionMethod: "coverage-lines", SelectedTests: 234, SuiteTests: 620,
-		PerMutant: true, TestsPerMutantMin: 3, TestsPerMutantMedian: 9, TestsPerMutantMax: 41,
+		PerMutant: true, TestsPerMutant: &advpool.TestsPerMutantSpread{Min: 3, Median: 9, Max: 41},
 	})
 	want := "graded by 234 of 620 tests — 3 to 41 per mutant, median 9 (coverage-lines)"
 	if !strings.Contains(b.String(), want) {

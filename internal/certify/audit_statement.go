@@ -58,14 +58,25 @@ type AuditedFile struct {
 	// so the spread travels with it. A verifier handed "0.65 over 234 of
 	// 620" and nothing else would reasonably conclude every mutant faced
 	// 234 tests; TestsPerMutantMin/Max is what refutes that.
-	// TestsPerMutant* are ABSENT, never zero, when the run graded per mutant
-	// but no mutant survived the compile gate to be graded: PerMutant is
-	// true and the spread is {0,0,0}, and a signed 0-to-0 range would be a
-	// measurement nobody made.
-	PerMutant            bool `json:"perMutant,omitempty"`
-	TestsPerMutantMin    int  `json:"testsPerMutantMin,omitempty"`
-	TestsPerMutantMedian int  `json:"testsPerMutantMedian,omitempty"`
-	TestsPerMutantMax    int  `json:"testsPerMutantMax,omitempty"`
+	// TestsPerMutant is nil — never a zero-filled struct — when no spread was
+	// measured: an ordinary shared-command run, or a per-mutant run whose
+	// every mutant was rejected by the compile gate before anything could be
+	// graded. A signed 0-to-0 range would be a measurement nobody made.
+	PerMutant      bool                  `json:"perMutant,omitempty"`
+	TestsPerMutant *TestsPerMutantSpread `json:"testsPerMutant,omitempty"`
+}
+
+// TestsPerMutantSpread is how many tests each graded mutant ran: the
+// smallest, the middle and the largest.
+//
+// It is this package's own copy of advpool.TestsPerMutantSpread rather than
+// that type: advpool imports certify (it signs its verdicts), so certify
+// cannot import advpool back. The pointer is the load-bearing half either
+// way — an unmeasured spread is absent, not three zeros.
+type TestsPerMutantSpread struct {
+	Min    int `json:"min"`
+	Median int `json:"median"`
+	Max    int `json:"max"`
 }
 
 // AuditStatement describes one scan: which commit, which files, what was
@@ -121,13 +132,14 @@ func BuildAuditAttestation(s AuditStatement) map[string]any {
 			entry["perMutant"] = true
 			// The spread only when one was actually MEASURED. A per-mutant
 			// run whose every mutant was rejected by the compile gate
-			// carries {0,0,0}, and signing those zeros would put a range
+			// measured none, and signing zeros for it would put a range
 			// nobody measured over a signature — the same reason an
-			// uncovered file signs no killRate.
-			if f.TestsPerMutantMax > 0 {
-				entry["testsPerMutantMin"] = f.TestsPerMutantMin
-				entry["testsPerMutantMedian"] = f.TestsPerMutantMedian
-				entry["testsPerMutantMax"] = f.TestsPerMutantMax
+			// uncovered file signs no killRate. The absence is structural:
+			// the field is a pointer, so there are no zeros to sign.
+			if s := f.TestsPerMutant; s != nil {
+				entry["testsPerMutantMin"] = s.Min
+				entry["testsPerMutantMedian"] = s.Median
+				entry["testsPerMutantMax"] = s.Max
 			}
 		}
 		if f.SelectionFallback != "" {

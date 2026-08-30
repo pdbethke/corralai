@@ -130,7 +130,7 @@ func TestPerMutantEntrySignsTheSpread(t *testing.T) {
 		Files: []AuditedFile{
 			{Path: "src/flask/cli.py", KillRate: killRate(0.65), Survivors: 4,
 				TestSelection: "coverage-lines", SelectedTests: 234, SuiteTests: 620,
-				PerMutant: true, TestsPerMutantMin: 3, TestsPerMutantMedian: 9, TestsPerMutantMax: 41},
+				PerMutant: true, TestsPerMutant: &TestsPerMutantSpread{Min: 3, Median: 9, Max: 41}},
 			{Path: "pkg/a.py", KillRate: killRate(0.9), Survivors: 1,
 				TestSelection: "coverage-context", SelectedTests: 14, SuiteTests: 1431},
 		},

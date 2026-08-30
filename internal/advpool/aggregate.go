@@ -72,12 +72,16 @@ func applyPerMutantStats(v *Verdict, graded bool, refs ...[]MutantRef) {
 		return
 	}
 	sort.Ints(counts)
-	v.TestSelection.TestsPerMutant.Min = counts[0]
-	v.TestSelection.TestsPerMutant.Max = counts[len(counts)-1]
-	// The upper of the two middle values on an even count, not their mean:
-	// this is a count of tests, and reporting a median of 2 when no mutant
-	// ran 2 tests would be a number nothing measured.
-	v.TestSelection.TestsPerMutant.Median = counts[len(counts)/2]
+	// Set only here, and only with counts in hand: the field is a pointer so
+	// that every other path leaves it ABSENT rather than {0,0,0}.
+	v.TestSelection.TestsPerMutant = &TestsPerMutantSpread{
+		Min: counts[0],
+		Max: counts[len(counts)-1],
+		// The upper of the two middle values on an even count, not their
+		// mean: this is a count of tests, and reporting a median of 2 when
+		// no mutant ran 2 tests would be a number nothing measured.
+		Median: counts[len(counts)/2],
+	}
 }
 
 // aggregate composes a run's Verdict from its scored components and applies

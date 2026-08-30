@@ -270,7 +270,7 @@ func TestPerMutantRowCarriesTheSpread(t *testing.T) {
 	if _, err := Push(target, []Row{
 		{Repo: "o/r", Commit: "c", Path: "src/flask/cli.py", KillRate: rate(0.65), Survivors: 4,
 			TestSelection: "coverage-lines", SelectedTests: 234, SuiteTests: 620,
-			PerMutant: true, TestsPerMutantMin: 3, TestsPerMutantMedian: 9, TestsPerMutantMax: 41},
+			PerMutant: true, TestsPerMutant: &TestsPerMutantSpread{Min: 3, Median: 9, Max: 41}},
 		{Repo: "o/r", Commit: "c", Path: "pkg/a.py", KillRate: rate(0.9), Survivors: 1,
 			TestSelection: "coverage-context", SelectedTests: 14, SuiteTests: 1431},
 		// Per-mutant, but the compile gate left no mutant graded: the run
@@ -362,7 +362,7 @@ func TestPushMigratesAPreExistingWarehouseOntoThePerMutantColumns(t *testing.T) 
 		Repo: "o/r", Commit: "c", Path: "src/flask/cli.py", Lang: "python",
 		KillRate: rate(0.65), Survivors: 4,
 		TestSelection: "coverage-lines", SelectedTests: 234, SuiteTests: 620,
-		PerMutant: true, TestsPerMutantMin: 3, TestsPerMutantMedian: 9, TestsPerMutantMax: 41,
+		PerMutant: true, TestsPerMutant: &TestsPerMutantSpread{Min: 3, Median: 9, Max: 41},
 	}})
 	if err != nil {
 		t.Fatalf("Push onto a pre-per-mutant warehouse must migrate it, not fail: %v", err)

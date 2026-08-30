@@ -85,16 +85,23 @@ type Row struct {
 	// with it, or a cross-repo average of kill_rate silently mixes a rate
 	// earned over 3 tests per mutant with one earned over 620.
 	//
-	// The three counts are written as SQL NULL, not 0, when PerMutant is set
-	// but nothing was graded (every mutant rejected by the compile gate
-	// leaves the spread at {0,0,0}): a stored 0-to-0 range is a measurement
-	// nobody made, and the whole point of these columns is that a number in
-	// this table was measured.
-	PerMutant            bool
-	TestsPerMutantMin    int
-	TestsPerMutantMedian int
-	TestsPerMutantMax    int
+	// The three columns are written as SQL NULL, not 0, when no spread was
+	// measured — an ordinary shared-command run, or a per-mutant run whose
+	// every mutant was rejected by the compile gate before anything could be
+	// graded. A stored 0-to-0 range is a measurement nobody made, and the
+	// whole point of these columns is that a number in this table was
+	// measured. nil is that absence, carried by the type rather than by a
+	// caller remembering to leave three ints alone.
+	PerMutant      bool
+	TestsPerMutant *TestsPerMutantSpread
 }
+
+// TestsPerMutantSpread is how many tests each graded mutant ran: the
+// smallest, the middle and the largest. This package's own copy of the
+// pool's spread — auditpush is a leaf writer and imports no engine package
+// — reached only through a pointer so an unmeasured spread is absent rather
+// than three zeros.
+type TestsPerMutantSpread struct{ Min, Median, Max int }
 
 const schema = `
 CREATE TABLE IF NOT EXISTS corral_audits (
@@ -279,8 +286,8 @@ func Push(target string, rows []Row) (int, error) {
 		// 0-to-0 range would read as "every mutant ran no tests" instead of
 		// "no mutant was graded".
 		var pmMin, pmMedian, pmMax any
-		if r.PerMutant && r.TestsPerMutantMax > 0 {
-			pmMin, pmMedian, pmMax = r.TestsPerMutantMin, r.TestsPerMutantMedian, r.TestsPerMutantMax
+		if s := r.TestsPerMutant; r.PerMutant && s != nil {
+			pmMin, pmMedian, pmMax = s.Min, s.Median, s.Max
 		}
 		if _, err := stmt.Exec(now, r.Repo, r.Commit, r.Path, r.Lang,
 			killRate, r.Survivors, r.ProvenMissed,

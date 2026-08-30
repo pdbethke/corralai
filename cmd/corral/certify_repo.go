@@ -2211,7 +2211,7 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 	// scan's own record) still prints nothing, because it genuinely does not
 	// know.
 	switch {
-	case f.SelectionMethod != "" && !f.Uncovered && f.PerMutant && f.TestsPerMutantMax > 0:
+	case f.SelectionMethod != "" && !f.Uncovered && f.PerMutant && f.MeasuredSpread():
 		// Per-mutant grading makes SelectedTests the file's UNION — the
 		// tests SOME mutant faced — and no mutant's own denominator. The
 		// spread is the honest half: "234 of 620" alone invites the reader
@@ -2220,7 +2220,7 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 		// here, so the label cannot outlive the measurement it names.
 		fmt.Fprintf(w, "   graded by %d of %d tests — %d to %d per mutant, median %d (%s)",
 			f.SelectedTests, f.SuiteTests,
-			f.TestsPerMutantMin, f.TestsPerMutantMax, f.TestsPerMutantMedian, f.SelectionMethod)
+			f.TestsPerMutant.Min, f.TestsPerMutant.Max, f.TestsPerMutant.Median, f.SelectionMethod)
 	case f.SelectionMethod != "" && !f.Uncovered && f.PerMutant:
 		// Per-mutant, but no mutant was graded — every one was rejected by
 		// the compile gate, which leaves the spread at {0,0,0}. "0 to 0 per
@@ -3176,6 +3176,29 @@ func signableKillRate(f reposcan.WeakFile) *float64 {
 	return &kr
 }
 
+// signableSpread and pushableSpread carry a file's per-mutant spread across
+// the package boundary — into the signed statement and into the warehouse
+// row — and carry NOTHING when none was measured. Two functions rather than
+// one because certify and auditpush each own their copy of the type (see
+// their own docs: certify cannot import advpool, and auditpush imports no
+// engine package at all); the rule they share is the single nil-check in
+// MeasuredSpread, so neither of them re-derives "was this measured?".
+func signableSpread(f reposcan.WeakFile) *certify.TestsPerMutantSpread {
+	if !f.MeasuredSpread() {
+		return nil
+	}
+	s := f.TestsPerMutant
+	return &certify.TestsPerMutantSpread{Min: s.Min, Median: s.Median, Max: s.Max}
+}
+
+func pushableSpread(f reposcan.WeakFile) *auditpush.TestsPerMutantSpread {
+	if !f.MeasuredSpread() {
+		return nil
+	}
+	s := f.TestsPerMutant
+	return &auditpush.TestsPerMutantSpread{Min: s.Min, Median: s.Median, Max: s.Max}
+}
+
 // writeAuditStatement renders the scan into certify's in-toto audit statement
 // and writes it to path.
 //
@@ -3204,10 +3227,8 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 			// And at which grain: a signed rate averaged over mutants that
 			// each faced a different test set needs the spread to be read
 			// as the measurement it is.
-			PerMutant:            f.PerMutant,
-			TestsPerMutantMin:    f.TestsPerMutantMin,
-			TestsPerMutantMedian: f.TestsPerMutantMedian,
-			TestsPerMutantMax:    f.TestsPerMutantMax,
+			PerMutant:      f.PerMutant,
+			TestsPerMutant: signableSpread(f),
 		})
 	}
 	// Same resolution the warehouse push uses: a statement whose subject names
@@ -3276,10 +3297,9 @@ func pushAuditRows(target, repoDir string, r reposcan.RepoReport, models map[str
 			// warehouse query averaging kill_rate across repos cannot tell a
 			// rate measured over 3 tests per mutant from one over 620
 			// without it, which is two measurements reported as one.
-			PerMutant:         f.PerMutant,
-			TestsPerMutantMin: f.TestsPerMutantMin, TestsPerMutantMedian: f.TestsPerMutantMedian,
-			TestsPerMutantMax: f.TestsPerMutantMax,
-			Audited:           r.Audited, Candidates: r.Candidates,
+			PerMutant:      f.PerMutant,
+			TestsPerMutant: pushableSpread(f),
+			Audited:        r.Audited, Candidates: r.Candidates,
 			ModelsByRole: string(rosterJSON),
 			MinKillRate:  minKillRate, MaxProvenMissed: maxProvenMissed,
 			Passed: passed, RunURL: runURL,

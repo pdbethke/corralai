@@ -4,7 +4,9 @@ package advpool
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -170,7 +172,7 @@ func TestVerdictCarriesPerMutantGrading(t *testing.T) {
 	if !v.TestSelection.PerMutant {
 		t.Error("TestSelection.PerMutant = false — the verdict does not disclose that each mutant got its own command")
 	}
-	if got := v.TestSelection.TestsPerMutant; got.Min != 1 || got.Median != 2 || got.Max != 2 {
+	if got := v.TestSelection.TestsPerMutant; got == nil || *got != (TestsPerMutantSpread{Min: 1, Median: 2, Max: 2}) {
 		t.Errorf("TestsPerMutant = %+v, want {Min:1 Median:2 Max:2}", got)
 	}
 	if got, want := v.TestSelection.Rules, map[string]int{"lines": 1, "static": 1, "file": 1}; !reflect.DeepEqual(got, want) {
@@ -235,11 +237,56 @@ func TestPerMutantDisclosedEvenWhenEveryMutantIsInvalid(t *testing.T) {
 	if v.TestSelection.Method != MethodCoverageLines {
 		t.Errorf("Method = %q, want %q", v.TestSelection.Method, MethodCoverageLines)
 	}
-	if got := v.TestSelection.TestsPerMutant; got.Min != 0 || got.Median != 0 || got.Max != 0 {
-		t.Errorf("TestsPerMutant = %+v, want all zero — nothing was graded, so nothing may be reported", got)
+	if got := v.TestSelection.TestsPerMutant; got != nil {
+		t.Errorf("TestsPerMutant = %+v, want ABSENT — nothing was graded, so there is no spread to report", got)
 	}
 	if len(v.TestSelection.Rules) != 0 {
 		t.Errorf("Rules = %v, want empty — no mutant was graded by any rule", v.TestSelection.Rules)
+	}
+}
+
+// The spread is a MEASUREMENT, and a Verdict is marshalled whole into the
+// signed record, the ledger and the warehouse. A run that measured no spread
+// must therefore carry no spread at all: a struct field with `omitempty`
+// never omits, so every whole-suite verdict was signing
+// "tests_per_mutant":{"min":0,"median":0,"max":0} — three numbers nobody
+// measured, indistinguishable from a real spread of zero.
+func TestVerdictOmitsAnUnmeasuredSpread(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		v    Verdict
+		want []string // substrings that MUST appear
+	}{
+		{name: "whole suite", v: Verdict{}},
+		{
+			name: "per-mutant, nothing graded",
+			v:    Verdict{TestSelection: TestSelection{Method: MethodCoverageLines, PerMutant: true}},
+			want: []string{`"per_mutant":true`},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b, err := json.Marshal(tc.v)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(b), "tests_per_mutant") {
+				t.Errorf("an unmeasured spread must be ABSENT, not zero: %s", b)
+			}
+			for _, w := range tc.want {
+				if !strings.Contains(string(b), w) {
+					t.Errorf("missing %s in %s", w, b)
+				}
+			}
+		})
+	}
+	// And a measured one is still there, with its three numbers.
+	v := Verdict{TestSelection: TestSelection{PerMutant: true, TestsPerMutant: &TestsPerMutantSpread{Min: 1, Median: 2, Max: 41}}}
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"tests_per_mutant":{"min":1,"median":2,"max":41}`) {
+		t.Errorf("a measured spread must be carried whole: %s", b)
 	}
 }
 
@@ -295,7 +342,7 @@ func TestTimeoutVerdictCarriesPerMutantGrading(t *testing.T) {
 			t.Errorf("survivor ref %+v lost its grading on the timeout path", r)
 		}
 	}
-	if got := v.TestSelection.TestsPerMutant; got.Min != 1 || got.Median != 2 || got.Max != 2 {
+	if got := v.TestSelection.TestsPerMutant; got == nil || *got != (TestsPerMutantSpread{Min: 1, Median: 2, Max: 2}) {
 		t.Errorf("TestsPerMutant = %+v, want {Min:1 Median:2 Max:2}", got)
 	}
 	if got, want := v.TestSelection.Rules, map[string]int{"lines": 1, "static": 1}; !reflect.DeepEqual(got, want) {

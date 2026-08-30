@@ -225,9 +225,9 @@ func TestRecorderWritesV2Only(t *testing.T) {
 // authored exam — the same model-blind key bug that once let one model's
 // verdict be served for another's, in the one dimension --mutants controls.
 func TestAuditConfigKeySeparatesAReplayFromAGeneratedRun(t *testing.T) {
-	generated := auditConfigKey(false, "coverage-context", nil, "")
-	replayA := auditConfigKey(false, "coverage-context", nil, shaOf("set-a"))
-	replayB := auditConfigKey(false, "coverage-context", nil, shaOf("set-b"))
+	generated := auditConfigKey(false, "coverage-context", nil, "", "")
+	replayA := auditConfigKey(false, "coverage-context", nil, shaOf("set-a"), "")
+	replayB := auditConfigKey(false, "coverage-context", nil, shaOf("set-b"), "")
 
 	if generated == replayA {
 		t.Error("a replayed run shares a cache key with a generated one — a cached verdict from another exam would be served as this one's")
@@ -235,7 +235,7 @@ func TestAuditConfigKeySeparatesAReplayFromAGeneratedRun(t *testing.T) {
 	if replayA == replayB {
 		t.Error("two DIFFERENT recorded sets share a cache key — the key does not identify the exam")
 	}
-	if replayA != auditConfigKey(false, "coverage-context", nil, shaOf("set-a")) {
+	if replayA != auditConfigKey(false, "coverage-context", nil, shaOf("set-a"), "") {
 		t.Error("the key is not stable for the same set")
 	}
 }

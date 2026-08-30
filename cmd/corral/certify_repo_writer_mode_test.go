@@ -256,3 +256,24 @@ func TestWriterLineDisclosesUngradedSeatsAndSuppressesACachedCount(t *testing.T)
 		t.Errorf("a cached verdict printed the EARNING run's cost as this scan's: %q", out)
 	}
 }
+
+// TestWriterModeIsInTheVerdictCacheKey: the two modes make DIFFERENT
+// measurements — per-survivor proves each survivor alone against its own
+// mutant on its own budget, batched proves them together on one — and the
+// verdict discloses, records and SIGNS which one earned the numbers. A key
+// blind to the mode would serve a per-survivor verdict to a batched run and
+// sign `writerMode: per-survivor` for a run that never executed it: exactly
+// the hardcoded-ModelSet failure, one dimension over.
+func TestWriterModeIsInTheVerdictCacheKey(t *testing.T) {
+	per := auditConfigKey(false, "", nil, "", advpool.WriterModePerSurvivor)
+	batched := auditConfigKey(false, "", nil, "", advpool.WriterModeBatched)
+	if per == batched {
+		t.Fatalf("auditConfigKey is blind to --writer-mode: %q for both modes — a batched run would be served a per-survivor verdict", per)
+	}
+	if unset := auditConfigKey(false, "", nil, "", ""); unset == per || unset == batched {
+		t.Errorf("an UNNAMED mode must key apart from both spellings, got %q", unset)
+	}
+	if !strings.Contains(per, "writer-mode=") {
+		t.Errorf("auditConfigKey = %q, want a writer-mode component", per)
+	}
+}

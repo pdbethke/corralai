@@ -583,7 +583,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// carries the flags that change what a mutant run against a given file
 	// MEASURES, not which files get audited. See auditConfigKey for the
 	// inclusion/exclusion rationale.
-	auditConfig := auditConfigKey(*wholeSuiteFlag, selectionMethod, checkArgv, mutantsFromSHA)
+	auditConfig := auditConfigKey(*wholeSuiteFlag, selectionMethod, checkArgv, mutantsFromSHA, writerMode)
 
 	// testSurfacePaths has to STAT the testdata entries it admits, and every
 	// read a scan performs is confined to the repository through an *os.Root —
@@ -1198,8 +1198,24 @@ func fileSelectionKey(sel lang.Selection) string {
 // Bias when adding to this list: include. Over-inclusion causes a needless
 // miss, which costs money. Under-inclusion serves a stale verdict, which
 // signs an unmeasured claim.
-func auditConfigKey(wholeSuite bool, method string, checkArgv []string, mutantsFrom string) string {
+func auditConfigKey(wholeSuite bool, method string, checkArgv []string, mutantsFrom, writerMode string) string {
 	m := map[string]string{}
+	// The WRITER MODE, for the same reason the grading mode is here: the two
+	// shapes are different exams. Per-survivor proves each survivor ALONE
+	// against its own mutant, on its own repair budget, behind its own
+	// compliant baseline; batched proves all of them together on one budget
+	// and one pass. Whichever earned the numbers is disclosed on the report
+	// line, recorded in the ledger and SIGNED into the attestation — so a key
+	// blind to it would serve a per-survivor verdict to a batched run and
+	// then sign `writerMode: per-survivor` for a run that never executed it.
+	//
+	// Keyed by its resolved spelling, never by a bool: an EMPTY mode is a
+	// caller that named none (the brain, a test) and must key exactly as it
+	// always has, which is also why this is the one component that can be
+	// absent while a mode is nonetheless in force downstream.
+	if writerMode != "" {
+		m["writer-mode"] = writerMode
+	}
 	// A REPLAYED run sat a different exam from a generated one, so its
 	// verdict is not interchangeable with a cached generated verdict for the
 	// same content — and a generated verdict is not interchangeable with a

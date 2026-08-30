@@ -437,10 +437,15 @@ type localAuditInput struct {
 
 	// selectionDuration is how long the SCAN's single instrumented coverage
 	// run took (cmd/corral's collectSelection), handed down so this file's
-	// RunSpec can carry it onto the verdict. Zero for `certify --local`,
-	// which runs no scan-wide selection pass, and for --whole-suite, which
-	// instruments nothing — both of which the ledger stores as NULL rather
-	// than as a selection that was free.
+	// RunSpec can carry it onto the verdict.
+	//
+	// Zero whenever no such run happened: `certify --local` runs no scan-wide
+	// selection pass at all, and --whole-suite (or an unsupported language)
+	// returns from collectSelection before it instruments anything. The
+	// measurement is taken around the RUN, not around the call, precisely so
+	// those cases record nothing — the ledger then stores NULL and the report
+	// prints "—", rather than a near-zero that reads as a selection pass that
+	// was free.
 	selectionDuration time.Duration
 
 	// pool, when non-nil, is where THIS file-job's workspace pool lives: the

@@ -534,6 +534,12 @@ type Verdict struct {
 	// they are not a phase: they are the SHAPE of the dev pass, and the
 	// question "is this file slow because of one mutant or all of them" has
 	// no other answer at the file grain. Zero when nothing timed a mutant.
+	//
+	// NOT a decomposition of Timing.DevPass, and the arithmetic does not
+	// close: at mutant concurrency N > 1 each duration is a CONTENDED wall
+	// clock measured while N-1 siblings ran beside it, so median x graded
+	// routinely EXCEEDS the dev pass it happened inside. Read them as the
+	// per-mutant cost distribution, never as a budget that must sum.
 	MutantDurationMedian time.Duration
 	MutantDurationMax    time.Duration
 }
@@ -2188,7 +2194,7 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	// this driver measured itself. Total is read last, here, because THIS is
 	// where the run ends.
 	v.Timing = timingWith(v.Timing, run.timing)
-	v.Timing.Total = d.now().Sub(run.startedAt)
+	v.Timing.Total = totalWith(v.Timing, d.now().Sub(run.startedAt))
 	v.MutantDurationMedian = run.mutantDurationMedian
 	v.MutantDurationMax = run.mutantDurationMax
 	// The mutant-level evidence behind DevKillRate/Survivors, carried the same
@@ -2491,7 +2497,7 @@ func (d *Driver) timeoutVerdict(run *runState) Verdict {
 	// deadline fired stays absent rather than being closed at an arbitrary
 	// moment and passed off as complete.
 	v.Timing = timingWith(v.Timing, run.timing)
-	v.Timing.Total = d.now().Sub(run.startedAt)
+	v.Timing.Total = totalWith(v.Timing, d.now().Sub(run.startedAt))
 	v.MutantDurationMedian = run.mutantDurationMedian
 	v.MutantDurationMax = run.mutantDurationMax
 	v.Status = StatusNeedsReview

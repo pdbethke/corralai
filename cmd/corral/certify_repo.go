@@ -543,14 +543,11 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		if !*wholeSuiteFlag {
 			fmt.Fprintln(stdout, "  selection: running the suite once with per-test coverage instrumentation…")
 		}
-		selStart := time.Now()
+		// collectSelection times ITSELF, around the instrumented run and
+		// nowhere else — see localExecutor.selectionDuration. A clock started
+		// here would tick for --whole-suite too, which returns from that call
+		// having run nothing at all.
 		ex.selection = ex.collectSelection(context.Background(), enumeratedSourcePaths(cands, excl[:enumExcl]))
-		// Recorded even when the run FAILED to produce evidence: the suite
-		// still ran, and the minutes it burned are part of what this scan
-		// cost. Under --whole-suite collectSelection returns immediately
-		// having run nothing, and the near-zero it records rounds to a NULL
-		// the ledger reads as "did not happen".
-		ex.selectionDuration = time.Since(selStart)
 		if !ex.selection.Ran {
 			fmt.Fprintf(stdout, "  selection: grading by the WHOLE suite — %s\n", ex.selection.Note)
 		}
@@ -2088,7 +2085,23 @@ func (l *localExecutor) collectSelection(ctx context.Context, sources []string) 
 	if err != nil {
 		return reposcan.SelectionEvidence{Note: fmt.Sprintf("selection: %v", err)}
 	}
-	return reposcan.CollectSelectionEvidence(ctx, runner, files, plug, testCmd)
+	// THE INSTRUMENTED RUN, and the only statement in this function that runs
+	// the project's suite. The clock is here, and only here: every return
+	// above is a decision, not a run, and must record no time.
+	start := time.Now()
+	ev := collectSelectionEvidence(ctx, runner, files, plug, testCmd)
+	// Recorded even when the run produced no usable evidence: the suite still
+	// executed, and the minutes it burned are part of what this scan cost.
+	l.selectionDuration = time.Since(start)
+	return ev
+}
+
+// collectSelectionEvidence is reposcan.CollectSelectionEvidence behind a
+// package var, the same seam newWorkspacePool/probeWorkspacePool use: it is
+// the one call in collectSelection that runs the project's whole suite, and a
+// test of what is TIMED must be able to stand in for it without one.
+var collectSelectionEvidence = func(ctx context.Context, runner coverageRunner, files map[string]string, p lang.Plugin, testCmd []string) reposcan.SelectionEvidence {
+	return reposcan.CollectSelectionEvidence(ctx, runner, files, p, testCmd)
 }
 
 // goModulePath reads the `module` directive out of repoDir's go.mod, for
@@ -3026,10 +3039,17 @@ type localExecutor struct {
 	// means no evidence — every file grades whole-suite, disclosed.
 	selection reposcan.SelectionEvidence
 	// selectionDuration is how long the scan's ONE instrumented coverage run
-	// took. Measured HERE — around the call — because it is the only place
-	// that could: it happens once, for the whole repo, before any file's run
-	// exists, so the driver cannot time it and every file's RunSpec has to be
-	// handed the answer (advpool.RunSpec.SelectionDuration).
+	// took, and ZERO when there was no such run. It is measured inside
+	// collectSelection, around the run itself — never around the CALL, which
+	// returns immediately under --whole-suite, for an unsupported language,
+	// or when the runner could not be built. A clock around the call recorded
+	// microseconds for those, which the ledger stored as 1ms and the report
+	// printed as `selection 0s`: a scan claiming it ran a selection pass, for
+	// free, when it ran none.
+	//
+	// The driver cannot measure this itself — it happens once, for the whole
+	// repo, before any file's run exists — so every file's RunSpec is handed
+	// the answer (advpool.RunSpec.SelectionDuration).
 	//
 	// It is a PER-SCAN cost carried on every file's verdict, not a per-file
 	// measurement: summing it across files would invent time nobody spent.

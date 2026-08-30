@@ -4,6 +4,7 @@ package advpool
 
 import (
 	"sort"
+	"time"
 
 	"github.com/pdbethke/corralai/internal/queue"
 )
@@ -61,6 +62,19 @@ func timingWith(spec, run Timing) Timing {
 	spec.AuthoredPass = run.AuthoredPass
 	spec.Critic = run.Critic
 	return spec
+}
+
+// totalWith is the audit's WHOLE wall clock for one file: the driver's own
+// elapsed time PLUS the two phases that were paid before the driver existed.
+//
+// The driver's elapsed time alone is not the answer. Selection and Pool are
+// measured by the caller and handed over on the RunSpec precisely because
+// they happen before StartRun, so a Total read as "now minus startedAt"
+// EXCLUDES them — and would report a 43-minute audit as 41, while claiming
+// (on a type whose whole purpose is to account for the minutes) to be the
+// number the phases sum within.
+func totalWith(t Timing, driverElapsed time.Duration) time.Duration {
+	return driverElapsed + t.Selection + t.Pool
 }
 
 // applyPerMutantStats fills the Verdict's per-mutant disclosure from the

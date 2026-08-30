@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"strings"
 	"testing"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/advpool"
+	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/scanstore"
 )
@@ -176,5 +178,75 @@ func TestRunSpecCarriesTheTwoPhasesTheDriverCannotTime(t *testing.T) {
 func TestJailSubstrateReportsNoPoolTime(t *testing.T) {
 	if d := poolDuration(nil); d != 0 {
 		t.Errorf("poolDuration(nil) = %v, want 0 — the jail substrate has no pool", d)
+	}
+}
+
+// TestSelectionTimeIsRecordedOnlyWhenTheSuiteActuallyRan.
+//
+// `--whole-suite` instruments NOTHING: collectSelection returns before it
+// builds a runner. A clock started around the call regardless recorded a few
+// microseconds, which millisOrNil rounded up to a stored 1 and the report
+// rendered as `selection 0s` — a scan that ran no selection pass claiming, in
+// a signed and pushed record, that it ran one for free. The clock has to be
+// gated on the same condition the RUN is.
+func TestSelectionTimeIsRecordedOnlyWhenTheSuiteActuallyRan(t *testing.T) {
+	orig := collectSelectionEvidence
+	t.Cleanup(func() { collectSelectionEvidence = orig })
+	collectSelectionEvidence = func(ctx context.Context, runner coverageRunner, files map[string]string, p lang.Plugin, testCmd []string) reposcan.SelectionEvidence {
+		time.Sleep(5 * time.Millisecond)
+		return reposcan.SelectionEvidence{Ran: true}
+	}
+
+	ws := &localExecutor{wholeSuite: true, substrate: substrateWorkspace, repoDir: t.TempDir()}
+	ws.selection = ws.collectSelection(context.Background(), []string{"a.py"})
+	if ws.selectionDuration != 0 {
+		t.Errorf("--whole-suite recorded %v of selection time for a pass that never ran", ws.selectionDuration)
+	}
+
+	ran := &localExecutor{substrate: substrateWorkspace, repoDir: t.TempDir()}
+	ran.selection = ran.collectSelection(context.Background(), []string{"a.py"})
+	if !ran.selection.Ran {
+		t.Fatalf("the fixture did not reach the instrumented run: %+v", ran.selection)
+	}
+	if ran.selectionDuration < 5*time.Millisecond {
+		t.Errorf("the instrumented run took at least 5ms and was recorded as %v", ran.selectionDuration)
+	}
+}
+
+// TestUnmeasuredSelectionIsNullAndDashed is the other half of the same
+// ruling, at the two places the number surfaces.
+func TestUnmeasuredSelectionIsNullAndDashed(t *testing.T) {
+	rows := buildScanFileRows([]reposcan.FileResult{{
+		Job: reposcan.Job{Path: "a.go", Lang: "go"}, Gradable: true,
+		Verdict: advpool.Verdict{
+			DevKillRate: 0.5,
+			Timing:      advpool.Timing{DevPass: 35 * time.Minute, Total: 36 * time.Minute},
+		},
+	}}, nil, reposcan.CoverageMap{}, "", t.TempDir(), io.Discard)
+	if len(rows) != 1 || rows[0].SelectionMillis != nil {
+		t.Errorf("a scan that ran no selection pass stored %v; NULL is the only honest value", rows[0].SelectionMillis)
+	}
+	line := timingLine(advpool.Timing{DevPass: 35 * time.Minute, Total: 36 * time.Minute}, 0, 0, 0)
+	if !strings.Contains(line, "selection —") {
+		t.Errorf("line %q must say selection —, never 0s", line)
+	}
+}
+
+// TestSubSecondPhasesNeverPrintZero: a phase that ran and took 1ms is not a
+// phase that did not run. Rounding it to `0s` is the same lie as storing 0
+// for an unmeasured phase, in the other direction — and `—` would be a
+// second one, because the phase demonstrably happened.
+func TestSubSecondPhasesNeverPrintZero(t *testing.T) {
+	if got := durationText(time.Millisecond); got != "<1s" {
+		t.Errorf("durationText(1ms) = %q, want %q", got, "<1s")
+	}
+	if got := durationText(999 * time.Millisecond); got != "<1s" {
+		t.Errorf("durationText(999ms) = %q, want %q", got, "<1s")
+	}
+	if got := durationText(0); got != unmeasured {
+		t.Errorf("durationText(0) = %q, want %q", got, unmeasured)
+	}
+	if got := durationText(time.Second); got != "1s" {
+		t.Errorf("durationText(1s) = %q, want %q", got, "1s")
 	}
 }

@@ -24,9 +24,10 @@ import (
 // pool's copies and probe happen before the driver is even constructed. The
 // remaining five are measured at the DAG's own boundaries in driver.go.
 //
-// Total is the run's own wall clock, so it is at least the sum of the phases
-// — the difference is queue latency and the bookkeeping between them, which
-// is exactly the residual worth seeing.
+// Total is the file's WHOLE audit — the driver's own elapsed time plus the
+// two phases paid before the driver existed — so it is at least the sum of
+// the six phases. The difference is queue latency and the bookkeeping between
+// them, which is exactly the residual worth seeing.
 type Timing struct {
 	// Selection is the scan's ONE instrumented run (see
 	// RunSpec.SelectionDuration). It is a per-scan cost carried on every
@@ -45,6 +46,12 @@ type Timing struct {
 	// DevPass is the dev suite scored against every mutant — on real repos
 	// the overwhelming majority of an audit, and the number this whole type
 	// exists to surface.
+	//
+	// It is the WHOLE dev pass, which is one adequacy.Score call: the
+	// compliant baseline run and the canary run are inside it, as are the
+	// compile gate's checks. The baseline is ALSO reported on its own as
+	// Verdict.BaselineDuration — that is a component of this number, not an
+	// eighth phase beside it, and adding the two would double-count it.
 	DevPass time.Duration
 	// AuthoredPass is from the end of the dev pass to the pool's own score:
 	// the test-writer seat's model time, its compile retries, and the run of
@@ -57,7 +64,11 @@ type Timing struct {
 	// the delay it imposes at the end, not its own elapsed model time. Zero
 	// when no critic was assigned (`--critic-model off`).
 	Critic time.Duration
-	// Total is the run's own wall clock, from StartRun to the verdict.
+	// Total is the file's whole audit: the driver's own wall clock, from
+	// StartRun to the verdict, PLUS Selection and Pool — which were spent on
+	// this file's behalf before StartRun and so are not in that window. See
+	// totalWith. It is not measured independently of the parts, so it cannot
+	// disagree with them about which work it covers.
 	Total time.Duration
 }
 

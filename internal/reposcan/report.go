@@ -154,6 +154,10 @@ type WeakFile struct {
 	// were actually graded. They answer the question the file total cannot:
 	// one pathological mutant, or all of them. 0 means nothing timed a
 	// mutant, and the line prints no spread rather than "median 0s".
+	//
+	// Under mutant concurrency each is a CONTENDED wall clock, so median x
+	// MutantsGraded can exceed Timing.DevPass — see
+	// adequacy.MutantGrading.Duration. A distribution, not a budget.
 	MutantMillisMedian int64
 	MutantMillisMax    int64
 }

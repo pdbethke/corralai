@@ -53,7 +53,14 @@ func TestVerdictTimingSumsWithinTotal(t *testing.T) {
 	}
 	d.Now = clk.Now // BEFORE StartRun: startedAt is the run's own zero.
 	d.Signer = &fakeSigner{}
-	if err := d.StartRun(mission, testRunSpec(), nil); err != nil {
+	// The two phases the CALLER measured. Non-zero on purpose: they are spent
+	// BEFORE StartRun, so a Total read as "now minus startedAt" excludes them
+	// and the sum-within-total invariant below would pass vacuously on the
+	// only shape it exists to constrain — a real `certify --repo` scan.
+	rs := testRunSpec()
+	rs.SelectionDuration = 92 * time.Second
+	rs.PoolDuration = 12 * time.Second
+	if err := d.StartRun(mission, rs, nil); err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
 	if _, err := q.PromoteReady(mission); err != nil {
@@ -91,6 +98,9 @@ func TestVerdictTimingSumsWithinTotal(t *testing.T) {
 	}
 
 	tm := v.Timing
+	if tm.Selection != 92*time.Second || tm.Pool != 12*time.Second {
+		t.Errorf("Timing = %+v, want the spec's own selection/pool durations", tm)
+	}
 	if tm.Generation != 4*time.Minute {
 		t.Errorf("Timing.Generation = %v, want 4m", tm.Generation)
 	}
@@ -109,6 +119,15 @@ func TestVerdictTimingSumsWithinTotal(t *testing.T) {
 	sum := tm.Selection + tm.Generation + tm.Pool + tm.DevPass + tm.AuthoredPass + tm.Critic
 	if tm.Total < sum {
 		t.Fatalf("Timing.Total %v is less than its own phases' sum %v — a phase is being counted outside the run", tm.Total, sum)
+	}
+	// And it is the WHOLE cost, not just the driver's slice of it: the
+	// selection run and the pool's copies were paid for this file's audit
+	// before the driver existed, and a Total that omitted them would report
+	// a 43-minute audit as 41.
+	// 4m generation + 5m dev + 3m authored + 30s critic = 12m30s of driver
+	// elapsed, plus the 1m32s selection and 12s pool the caller handed over.
+	if want := 12*time.Minute + 30*time.Second + 92*time.Second + 12*time.Second; tm.Total != want {
+		t.Errorf("Timing.Total = %v, want %v — the driver's elapsed time PLUS the two phases the caller measured", tm.Total, want)
 	}
 }
 
@@ -146,8 +165,8 @@ func TestTimedOutVerdictCarriesWhatItSpent(t *testing.T) {
 	if v.Timing.Selection != 92*time.Second || v.Timing.Pool != 12*time.Second {
 		t.Errorf("the timeout verdict dropped the spec's own durations: %+v", v.Timing)
 	}
-	if v.Timing.Total != 43*time.Minute {
-		t.Errorf("Timing.Total = %v, want the 43m the run was alive", v.Timing.Total)
+	if want := 43*time.Minute + 92*time.Second + 12*time.Second; v.Timing.Total != want {
+		t.Errorf("Timing.Total = %v, want the 43m the run was alive plus the selection and pool it was handed (%v)", v.Timing.Total, want)
 	}
 	if v.Timing.AuthoredPass != 0 || v.Timing.Critic != 0 {
 		t.Errorf("phases that never ran reported time: %+v", v.Timing)

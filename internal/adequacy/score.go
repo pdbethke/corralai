@@ -274,7 +274,9 @@ type Report struct {
 	// perMutantGraded, which is recorded from the call, not from here).
 	PerMutant map[string]MutantGrading
 	// MutantDurationMedian and MutantDurationMax summarize PerMutant's
-	// durations over the GRADED mutants — the compile-gate rejects are
+	// durations — CONTENDED ones under concurrency, so median x graded can
+	// exceed the pass they were measured in; see MutantGrading.Duration —
+	// over the GRADED mutants — the compile-gate rejects are
 	// excluded, for the same reason they are excluded from Total: they never
 	// sat the exam, and a run of zeros folded into the spread would report a
 	// file as faster than any mutant of it ever was.
@@ -295,6 +297,13 @@ type MutantGrading struct {
 	// mutant — not the compile gate that preceded it (which is not the
 	// exam), and not a timed-out mutant's second, baseline-reprobing run
 	// (which measures the machine, not the mutant).
+	//
+	// CONTENDED under WithConcurrency(N>1): the run was one of N sharing the
+	// box, so this is how long it took under that load, not how long it
+	// would take alone. The durations of N mutants therefore OVERLAP, and
+	// summing them (or multiplying the median by the graded count) exceeds
+	// the wall clock of the pass they happened in. They are a cost
+	// distribution — which mutants are expensive — never a budget.
 	Duration time.Duration
 }
 

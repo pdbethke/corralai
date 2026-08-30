@@ -57,9 +57,18 @@ func timingLine(t advpool.Timing, n int, med, max time.Duration) string {
 // Not time.Duration.String(): that renders 35m4s, which reads as a different
 // magnitude at a glance next to 35m40s, and it carries sub-second precision
 // no phase of an audit is measured to.
+//
+// A positive duration NEVER renders as "0s". Rounding a phase that really ran
+// down to zero seconds is the same false claim as storing 0 for a phase that
+// did not run, from the other side — and "—" would be a second one, because
+// this phase demonstrably happened. Sub-second is reported as "<1s": the only
+// honest reading of a phase too fast for the unit this line is written in.
 func durationText(d time.Duration) string {
 	if d <= 0 {
 		return unmeasured
+	}
+	if d < time.Second {
+		return "<1s"
 	}
 	d = d.Round(time.Second)
 	h := int(d / time.Hour)

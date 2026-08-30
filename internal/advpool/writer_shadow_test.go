@@ -412,11 +412,28 @@ func TestShadowWriterNeverChangesVerdict(t *testing.T) {
 	}
 	// ChallengerAgreement is asserted on its own terms — it is SUPPOSED to be
 	// nil with the challenger off and non-nil with it on; that difference IS
-	// the measurement, not a leak. What must not happen is a NIL vs nil check
-	// standing in for the belt-and-braces digest below, so this only checks
-	// that OFF carries nothing (the digest comparison covers ON).
+	// the measurement, not a leak.
 	if off.ChallengerAgreement != nil {
 		t.Errorf("ChallengerAgreement = %+v with no challenger named — there is nothing to compare", off.ChallengerAgreement)
+	}
+	// And the ON arm, positively. Every assertion above (and the digest
+	// below) is satisfied by a challenger that RAN and produced NOTHING: the
+	// isolation this test exists to prove is vacuous if the seat never
+	// yielded the one measurement it is paid for. The pair must name BOTH
+	// writers, or a reader of the record cannot tell which two models were
+	// compared.
+	pair := got.ChallengerAgreement
+	if pair == nil {
+		t.Fatal("ChallengerAgreement is nil with a challenger named and measured — the seat's whole output is the comparison, and nothing else in this test would notice its absence")
+	}
+	if pair.ModelA != decorrelatedAssign()[RoleTestWriter] {
+		t.Errorf("ChallengerAgreement.ModelA = %q, want the PRIMARY writer %q", pair.ModelA, decorrelatedAssign()[RoleTestWriter])
+	}
+	if pair.ModelB != "challenger-model" {
+		t.Errorf("ChallengerAgreement.ModelB = %q, want the challenger %q", pair.ModelB, "challenger-model")
+	}
+	if pair.Mutants == 0 {
+		t.Error("ChallengerAgreement carries no denominator — a coefficient with no N is the number that ends up on a slide outliving its caveats")
 	}
 
 	// Belt and braces: with the provenance entry AND the challenger's own

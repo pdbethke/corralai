@@ -195,7 +195,13 @@ func TestBundleIsTheLedgerRowForRow(t *testing.T) {
 			}
 			rf := rv.FieldByName(name)
 			if !rf.IsValid() {
-				continue // no warehouse column of that name
+				// t.Errorf, not a silent continue: this walk exists to catch
+				// a ledger field that never reaches the warehouse, and
+				// skipping every field with no matching name skipped exactly
+				// that case. A field with no column belongs on the
+				// deliberately-unmapped list, WITH the reason.
+				t.Errorf("scanstore.File.%s has no warehouse column of the same name, and is not on the deliberately-unmapped list", name)
+				continue
 			}
 			if rf.Type() != lv.Field(i).Type() {
 				t.Errorf("%s: field %s is %s in the ledger and %s in the warehouse, and is not on the deliberately-unmapped list",

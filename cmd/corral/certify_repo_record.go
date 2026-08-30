@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/scanstore"
@@ -107,7 +108,18 @@ func killRatePtr(v float64) *float64 {
 // (`--mutants`), or "" when it generated its own. It rides only on AUDITED
 // rows: a rejected or excluded file sat no exam at all, and stamping a set
 // identifier on it would claim it was graded against one.
-func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclusion, preflight reposcan.CoverageMap, mutantsFrom string, stderr io.Writer) []scanstore.File {
+// repoDir is the checkout the scan ran against, used ONLY to hash each
+// audited file's bytes into ParentSHA256 — the validity key a later reader
+// checks against its own checkout to tell a live verdict from a stale one.
+// The bytes are read HERE, at record time, rather than carried out of the
+// audit: reposcan.FileResult carries neither the source nor a file-level
+// hash (advpool's ParentSHA256 is per MUTANT, and a per-mutant run can
+// derive mutants from different parents). That is sound because the scan
+// holds the checkout unchanged for its own duration — `certify --repo`
+// never writes into --repo, the jail and the workspace trees are copies —
+// so the bytes hashed here are the bytes graded. A file that cannot be read
+// gets "" rather than a fabricated hash.
+func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclusion, preflight reposcan.CoverageMap, mutantsFrom string, repoDir string, stderr io.Writer) []scanstore.File {
 	results = dedupeResultsByPath(results)
 	rows := make([]scanstore.File, 0, len(results)+len(excluded))
 	seen := make(map[string]bool, len(results)+len(excluded))
@@ -242,6 +254,23 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 				// is what lets oldestReuse (verdict_cache.go) report how old
 				// a reused verdict really is instead of when it was reused.
 				ComputedAt: r.ComputedAt,
+				// The validity key: this file's own bytes. See the repoDir
+				// parameter's doc above.
+				ParentSHA256: auditedFileSHA256(repoDir, path),
+				// The denominators the rate is over, split. MutantsGraded is
+				// the verdict's own "actually graded" count (compile-gate
+				// rejects excluded) and MutantsInvalid is what the gate threw
+				// out — a rate over 8 of 12 mutants and one over 8 of 8 are
+				// different claims. MutantsTimedOut has no source in the
+				// verdict yet and stays 0 rather than being guessed.
+				MutantsGraded:  r.Verdict.MutantsTotal,
+				MutantsInvalid: r.Verdict.MutantsInvalid,
+				// At which GRAIN the rate was measured, carried in the ledger
+				// so the warehouse row can be built from the ledger alone.
+				PerMutant:            r.Verdict.TestSelection.PerMutant,
+				TestsPerMutantMin:    spreadMin(r.Verdict.TestSelection.TestsPerMutant),
+				TestsPerMutantMedian: spreadMedian(r.Verdict.TestSelection.TestsPerMutant),
+				TestsPerMutantMax:    spreadMax(r.Verdict.TestSelection.TestsPerMutant),
 			})
 			continue
 		}
@@ -463,8 +492,16 @@ func buildScanMutantRows(scanID int64, results []reposcan.FileResult) []scanstor
 			rows = append(rows, scanstore.Mutant{
 				ScanID: scanID, Path: r.Job.Path, MutantID: m.ID,
 				Outcome: "survived", ParentSHA256: m.ParentSHA256,
-				Proven:   proven[m.ID],
-				TestsRun: m.TestsRun, SelectionRule: m.Rule,
+				Proven: proven[m.ID],
+				// A survivor the AUTHORED test killed is, by construction, one
+				// the dev suite did not: it is in DevSurvivedMutants. So for
+				// this grain proven and proven-by-authored-alone coincide, and
+				// the column is written from the same lookup rather than from a
+				// second derivation that could disagree with it. It is a
+				// separate column because the mutant table admits killed rows
+				// too, where the two are NOT the same claim.
+				ProvenByAuthoredAlone: proven[m.ID],
+				TestsRun:              m.TestsRun, SelectionRule: m.Rule,
 			})
 		}
 	}
@@ -491,16 +528,82 @@ func buildScanMutantRows(scanID int64, results []reposcan.FileResult) []scanstor
 // It returns the ledger's scan id so the caller can thread it into the
 // audit statement and warehouse push that follow — the link this function's
 // own package comment set out to make traceable.
-func recordCertifyRepoScan(st *scanstore.Store, scan scanstore.Scan, files []scanstore.File, results []reposcan.FileResult, stderr io.Writer) (int64, error) {
+func recordCertifyRepoScan(st *scanstore.Store, scan scanstore.Scan, files []scanstore.File, mutants []scanstore.Mutant, calls []scanstore.ModelCall, events []scanstore.Event, stderr io.Writer) (int64, error) {
 	id, err := st.Record(context.Background(), scan, files)
 	if err != nil {
 		return 0, err
 	}
-	if err := st.RecordMutants(context.Background(), buildScanMutantRows(id, results)); err != nil {
+	// The mutant, model-call and event rows are built by the CALLER and
+	// stamped with the id here. They are the same slices the warehouse bundle
+	// is built from, which is the point: rebuilding them from the report a
+	// second time is how the ledger and the warehouse start disagreeing about
+	// what the scan found.
+	stampScanID(id, mutants, calls, events)
+	if err := st.RecordMutants(context.Background(), mutants); err != nil {
 		// The caller's stderr, not the global logger, for the same reason as
 		// in buildScanFileRows: fail-open still has to be LOUD where the
 		// operator is actually looking.
 		fmt.Fprintf(stderr, "corral certify --repo: scan %d recorded, but scan_mutants was NOT written: %v\n", id, err)
 	}
+	if err := st.RecordModelCalls(context.Background(), calls); err != nil {
+		fmt.Fprintf(stderr, "corral certify --repo: scan %d recorded, but scan_model_calls was NOT written: %v\n", id, err)
+	}
+	if err := st.RecordEvents(context.Background(), events); err != nil {
+		fmt.Fprintf(stderr, "corral certify --repo: scan %d recorded, but scan_events was NOT written: %v\n", id, err)
+	}
 	return id, nil
+}
+
+// stampScanID writes the ledger's assigned id onto rows the caller built
+// before that id existed. One place, so a grain cannot be forgotten: a row
+// with scan_id 0 is a row that joins to nothing.
+func stampScanID(id int64, mutants []scanstore.Mutant, calls []scanstore.ModelCall, events []scanstore.Event) {
+	for i := range mutants {
+		mutants[i].ScanID = id
+	}
+	for i := range calls {
+		calls[i].ScanID = id
+	}
+	for i := range events {
+		events[i].ScanID = id
+	}
+}
+
+// auditedFileSHA256 hashes the file at repoDir/path — the audited bytes —
+// through the same fileSHA256 the recorded-mutant-set path uses, so a hash in
+// this ledger and one in a recorded set are the same function of the same
+// bytes. "" when the file cannot be read: a missing hash is honest, an
+// invented one is a validity claim that would tell a later reader a stale
+// verdict is live.
+func auditedFileSHA256(repoDir, path string) string {
+	sum, err := fileSHA256(filepath.Join(repoDir, path))
+	if err != nil {
+		return ""
+	}
+	return sum
+}
+
+// spreadMin/Median/Max lift advpool's per-mutant spread into the three
+// nullable ledger columns. A nil spread means no mutant was graded per
+// mutant, and all three stay nil — never {0,0,0}, which would read as "every
+// mutant ran no tests".
+func spreadMin(s *advpool.TestsPerMutantSpread) *int {
+	if s == nil {
+		return nil
+	}
+	return &s.Min
+}
+
+func spreadMedian(s *advpool.TestsPerMutantSpread) *int {
+	if s == nil {
+		return nil
+	}
+	return &s.Median
+}
+
+func spreadMax(s *advpool.TestsPerMutantSpread) *int {
+	if s == nil {
+		return nil
+	}
+	return &s.Max
 }

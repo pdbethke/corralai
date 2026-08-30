@@ -13,11 +13,12 @@ import (
 
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/reposcan"
+	"github.com/pdbethke/corralai/internal/scanstore"
 )
 
 // oneAuditedFileReport is a RepoReport with one WeakFile whose kill rate is
-// 0.5 — just enough shape for writeAuditStatement and pushAuditRows to work
-// with, reusing the same reposcan types the rest of this package's tests use.
+// 0.5 — just enough shape for writeAuditStatement and the push to work with,
+// reusing the same reposcan types the rest of this package's tests use.
 func oneAuditedFileReport() reposcan.RepoReport {
 	return reposcan.RepoReport{
 		Repo: "o/r", Commit: "deadbeef", Audited: 1, Candidates: 1,
@@ -66,6 +67,22 @@ func queryRows(t *testing.T, dbPath, query string) [][]any {
 	return out
 }
 
+// oneAuditedFileBundle is the LEDGER half of the same scan: the rows
+// buildScanFileRows would have produced, mapped through the one bundle
+// builder. Since Task 2 the pushed rows come from the ledger, not from the
+// report, so a linkage test has to travel the same road the command does.
+func oneAuditedFileBundle(scanID int64) auditpush.Bundle {
+	rate := 0.5
+	scan := scanstore.Scan{Repo: "o/r", Commit: "deadbeef", Audited: 1, Candidates: 1}
+	files := []scanstore.File{{
+		Path: "pkg/a.go", Lang: "go", Disposition: "audited",
+		KillRate: &rate, Survivors: 2, Gradable: true, Evidence: "proven",
+	}}
+	return buildBundle(scan, scanID, files, nil, nil, nil,
+		auditpush.Link{}, false, "o/r", "deadbeef", "",
+		bundleMeta{ModelsByRole: `{"writer":"m"}`, Passed: true})
+}
+
 // linkageStatement mirrors the shape readStatement needs out of the written
 // DSSE payload: the predicate fields writeAuditStatement adds so a pushed row
 // and the statement it came from can be checked against each other.
@@ -100,7 +117,8 @@ func TestPushedRowsCarryTheStatementSHA(t *testing.T) {
 	att := filepath.Join(dir, "att.json")
 	rep := oneAuditedFileReport()
 
-	sha, err := writeAuditStatement(att, dir, rep, map[string]string{"writer": "m"}, nil, nil, true, 7 /* ledger scan id */)
+	bundle := oneAuditedFileBundle(7 /* ledger scan id */)
+	sha, err := writeAuditStatement(att, dir, rep, map[string]string{"writer": "m"}, nil, nil, true, 7, bundle)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +126,8 @@ func TestPushedRowsCarryTheStatementSHA(t *testing.T) {
 		t.Fatalf("sha %q", sha)
 	}
 
-	if _, err := pushAuditRows(db, dir, rep, map[string]string{"writer": "m"}, nil, nil, true, auditpush.Link{ScanID: 7, StatementSHA256: sha}); err != nil {
+	bundle.Link = auditpush.Link{ScanID: 7, StatementSHA256: sha}
+	if _, err := pushBundle(db, bundle); err != nil {
 		t.Fatal(err)
 	}
 
@@ -141,7 +160,7 @@ func TestWriteAuditStatementHonestlyRecordsScanIDZero(t *testing.T) {
 	att := filepath.Join(dir, "att.json")
 	rep := oneAuditedFileReport()
 
-	if _, err := writeAuditStatement(att, dir, rep, map[string]string{"writer": "m"}, nil, nil, true, 0); err != nil {
+	if _, err := writeAuditStatement(att, dir, rep, map[string]string{"writer": "m"}, nil, nil, true, 0, oneAuditedFileBundle(0)); err != nil {
 		t.Fatal(err)
 	}
 	stmt := readStatement(t, att)
@@ -156,9 +175,8 @@ func TestWriteAuditStatementHonestlyRecordsScanIDZero(t *testing.T) {
 func TestPushWithoutAttestCarriesNoStatementSHA(t *testing.T) {
 	dir := t.TempDir()
 	db := filepath.Join(dir, "w.duckdb")
-	rep := oneAuditedFileReport()
 
-	if _, err := pushAuditRows(db, dir, rep, map[string]string{"writer": "m"}, nil, nil, true, auditpush.Link{}); err != nil {
+	if _, err := pushBundle(db, oneAuditedFileBundle(0)); err != nil {
 		t.Fatal(err)
 	}
 

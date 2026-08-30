@@ -91,7 +91,7 @@ type WeakFile struct {
 	// the language, --whole-suite, an evidence run that failed). Empty when
 	// SelectionMethod is set. Never both.
 	SelectionFallback string
-	// PerMutant and TestsPerMutant{Min,Median,Max} mirror
+	// PerMutant and TestsPerMutant mirror
 	// advpool.Verdict.TestSelection.PerMutant / .TestsPerMutant: each mutant
 	// was graded by the tests that reach ITS OWN lines, not by one command
 	// shared across the file. SelectedTests is then the file's UNION — the

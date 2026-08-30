@@ -57,7 +57,7 @@ type AuditedFile struct {
 	// SelectedTests the file's UNION rather than any mutant's denominator —
 	// so the spread travels with it. A verifier handed "0.65 over 234 of
 	// 620" and nothing else would reasonably conclude every mutant faced
-	// 234 tests; TestsPerMutantMin/Max is what refutes that.
+	// 234 tests; the spread is what refutes that.
 	// TestsPerMutant is nil — never a zero-filled struct — when no spread was
 	// measured: an ordinary shared-command run, or a per-mutant run whose
 	// every mutant was rejected by the compile gate before anything could be

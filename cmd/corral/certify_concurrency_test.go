@@ -13,29 +13,47 @@ import (
 	"time"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
+	"github.com/pdbethke/corralai/internal/advpool"
+	"github.com/pdbethke/corralai/internal/lang"
+	"github.com/pdbethke/corralai/internal/reposcan"
 )
 
 // The pin that USED to say "workspace is always 1" now says how the budget is
 // divided. One tree per worker makes the substrate concurrency-safe, so the
 // only remaining question is how many trees the box can afford: a quarter of
-// the budget (each tree's suite still wants CPU of its own), never more
-// mutants than there are jobs to score, never less than one.
+// the budget, because each tree runs a REAL suite that wants CPU of its own.
+//
+// The jobs argument is swept and must not matter. jobs is the FILE count, and
+// this number is trees-PER-FILE; files are already serialized on this
+// substrate. Capping by it pinned the headline case — a diff-scoped audit of
+// ONE changed file, the shape with 23 of 24 cores idle — to a single tree
+// forever.
 func TestResolveMutantConcurrency_WorkspaceSpendsAQuarterOfTheBudget(t *testing.T) {
 	for _, tc := range []struct {
-		name               string
-		budget, jobs, want int
+		name         string
+		budget, want int
 	}{
-		{"24-core box, plenty of mutants", 24, 40, 6},
-		{"small box floors at one tree", 4, 40, 1},
-		{"never more trees than mutants", 24, 3, 3},
-		{"degenerate budget fails closed", 0, 40, 1},
-		{"degenerate job count fails closed", 24, 0, 1},
+		{"24-core box", 24, 6},
+		{"small box floors at one tree", 4, 1},
+		{"degenerate budget fails closed", 0, 1},
+		{"negative budget fails closed", -8, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := resolveMutantConcurrency(tc.budget, substrateWorkspace, 1, tc.jobs); got != tc.want {
-				t.Fatalf("resolveMutantConcurrency(%d, workspace, 1, %d) = %d, want %d", tc.budget, tc.jobs, got, tc.want)
+			for _, jobs := range []int{0, 1, 3, 40} {
+				if got := resolveMutantConcurrency(tc.budget, substrateWorkspace, 1, jobs); got != tc.want {
+					t.Fatalf("resolveMutantConcurrency(%d, workspace, 1, %d) = %d, want %d", tc.budget, jobs, got, tc.want)
+				}
 			}
 		})
+	}
+}
+
+// THE CASE THE CAP BROKE, called out on its own because it is the one the
+// design was written for: one changed file, a 24-core box, and — before this
+// — exactly one tree, because len(jobs) is the number of FILES.
+func TestResolveMutantConcurrency_OneFileStillGetsItsTrees(t *testing.T) {
+	if got := resolveMutantConcurrency(24, substrateWorkspace, 1, 1); got != 6 {
+		t.Fatalf("a one-file workspace audit on a 24-core box = %d tree(s), want 6 — the diff-scoped audit is the shape this exists for", got)
 	}
 }
 
@@ -195,5 +213,70 @@ func TestWorkspaceWiringDisclosesTheDowngrade(t *testing.T) {
 	}
 	if !strings.Contains(in.concurrency.Note, "baseline failed under 3") {
 		t.Fatalf("downgrade note = %q, want the probe's own reason (the operator has to be able to see WHY the audit is slow)", in.concurrency.Note)
+	}
+}
+
+// ONE pool per file-job: built once, probed once.
+//
+// The first cut of this wiring built a pool inside the baseline-stability
+// runner, deleted its N tree copies when that runner was released, and built
+// a SECOND one for the audit — two copies of the whole checkout and four
+// probe rounds (4N suite invocations) per file where the design priced one
+// copy and two rounds. Worse, two probes of a marginally-flaky suite can
+// answer differently, so the line printed on screen and the number recorded
+// on the verdict could disagree about what actually ran.
+//
+// None of that is visible in the RESULT — both pools work — so it is counted
+// at the seam instead.
+func TestOnePoolIsBuiltAndProbedPerFileJob(t *testing.T) {
+	root, testCmd := workspaceProbeRepo(t)
+
+	builds, probes := 0, 0
+	realNew, realProbe := newWorkspacePool, probeWorkspacePool
+	t.Cleanup(func() { newWorkspacePool, probeWorkspacePool = realNew, realProbe })
+	newWorkspacePool = func(ctx context.Context, r string, n int, timeout time.Duration, opts ...adequacy.WorkspaceOption) (*adequacy.WorkspacePool, adequacy.Disclosure, error) {
+		builds++
+		return realNew(ctx, r, n, timeout, opts...)
+	}
+	probeWorkspacePool = func(ctx context.Context, p *adequacy.WorkspacePool, base map[string]string, codePath, code string, cmd []string) (*adequacy.WorkspacePool, adequacy.Disclosure) {
+		probes++
+		return realProbe(ctx, p, base, codePath, code, cmd)
+	}
+
+	ex := newLocalExecutor(root, testCmd, substrateWorkspace, time.Minute, nil)
+	ex.mutantConcurrency = 3
+	// The real newBaseline (the seam's default) builds the pool; the audit is
+	// stubbed down to the one thing that matters here — it drives the REAL
+	// prepareAuditJail with the input Execute built, which is where a second
+	// pool would be constructed.
+	plug, ok := lang.ByName("go")
+	if !ok {
+		t.Fatal("no go plugin")
+	}
+	var scored int
+	ex.audit = func(ctx context.Context, in localAuditInput) (advpool.Verdict, error) {
+		prep, err := prepareAuditJail(ctx, in, plug, time.Minute, io.Discard)
+		if err != nil {
+			return advpool.Verdict{}, err
+		}
+		defer prep.cleanup()
+		scored = prep.wiring.scorer.Concurrency
+		return advpool.Verdict{DevKillRate: 1}, nil
+	}
+
+	job := reposcan.Job{Path: "a.go", TestPath: "a_test.go", Lang: "go", Goal: reposcan.Goal{Text: "keeps saying OK"}}
+	if _, err := ex.Execute(context.Background(), job); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	if builds != 1 || probes != 1 {
+		t.Fatalf("built %d pool(s) and probed %d time(s) for ONE file, want 1 and 1 — a second pool is a second copy of the whole checkout, a second probe, and a disclosure that can disagree with the one on the verdict", builds, probes)
+	}
+	if scored != 3 {
+		t.Fatalf("the audit scored against %d tree(s), want 3 — the audit must reuse the job's probed pool, not fall back to one tree", scored)
+	}
+	// And the trees are gone: the JOB owns them, so Execute releases them.
+	if ex.auditInputFor(job).pool.pool != nil {
+		t.Fatal("a fresh input must start with no pool")
 	}
 }

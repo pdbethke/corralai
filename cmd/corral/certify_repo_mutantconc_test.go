@@ -63,16 +63,20 @@ func TestResolveMutantConcurrency_SaturatedByFilesStaysSequential(t *testing.T) 
 // moves to the pool's probe (baseline in all N at once) which is what may
 // still send a run back to a single tree.
 func TestResolveMutantConcurrency_WorkspaceGetsAQuarterOfTheBudget(t *testing.T) {
-	for _, tc := range []struct{ budget, jobs, want int }{
-		{1, 4, 1}, {4, 4, 1}, {16, 40, 4}, {128, 40, 32}, {16, 2, 2},
+	for _, tc := range []struct{ budget, want int }{
+		{1, 1}, {4, 1}, {16, 4}, {128, 32},
 	} {
 		for _, workers := range []int{1, 2, 8} {
-			// workers is deliberately swept and deliberately IGNORED by the
-			// formula: resolveScanWorkers already holds this substrate at one
-			// file at a time, so dividing by a worker count that never runs
-			// would hand the mutant axis nothing.
-			if got := resolveMutantConcurrency(tc.budget, substrateWorkspace, workers, tc.jobs); got != tc.want {
-				t.Fatalf("workspace budget=%d jobs=%d workers=%d = %d, want %d", tc.budget, tc.jobs, workers, got, tc.want)
+			for _, jobs := range []int{1, 2, 40} {
+				// workers AND jobs are deliberately swept and deliberately
+				// IGNORED by the formula: resolveScanWorkers already holds
+				// this substrate at one file at a time, so dividing by a
+				// worker count that never runs — or capping trees-per-file by
+				// the number of FILES — hands the mutant axis nothing in
+				// exactly the diff-scoped case it exists for.
+				if got := resolveMutantConcurrency(tc.budget, substrateWorkspace, workers, jobs); got != tc.want {
+					t.Fatalf("workspace budget=%d jobs=%d workers=%d = %d, want %d", tc.budget, jobs, workers, got, tc.want)
+				}
 			}
 		}
 	}
@@ -81,7 +85,7 @@ func TestResolveMutantConcurrency_WorkspaceGetsAQuarterOfTheBudget(t *testing.T)
 // Fail closed on this branch too: a missing budget or an empty job list must
 // mean one tree, never unbounded concurrency over a real checkout.
 func TestResolveMutantConcurrency_WorkspaceDegenerateInputsFailClosed(t *testing.T) {
-	for _, tc := range []struct{ budget, jobs int }{{0, 4}, {-1, 4}, {16, 0}, {16, -2}, {-3, -3}} {
+	for _, tc := range []struct{ budget, jobs int }{{0, 4}, {-1, 4}, {0, 0}, {-3, -3}} {
 		if got := resolveMutantConcurrency(tc.budget, substrateWorkspace, 1, tc.jobs); got != 1 {
 			t.Fatalf("workspace budget=%d jobs=%d = %d, want 1 (fail closed)", tc.budget, tc.jobs, got)
 		}
@@ -121,9 +125,9 @@ func TestLocalExecutor_PassesMutantConcurrencyToAudit(t *testing.T) {
 // the only thing that can actually establish the suite is safe under N.
 func TestLocalExecutor_WorkspaceSubstratePassesTheTreeCountDown(t *testing.T) {
 	workers, _ := resolveScanWorkers(16, substrateWorkspace)
-	got := resolveMutantConcurrency(resolveSwarm(16), substrateWorkspace, workers, 40)
+	got := resolveMutantConcurrency(resolveSwarm(16), substrateWorkspace, workers, 1)
 	if got != 4 {
-		t.Fatalf("composed workspace concurrency = %d, want 4 (a quarter of --swarm 16)", got)
+		t.Fatalf("composed workspace concurrency = %d, want 4 (a quarter of --swarm 16, and NOT capped by the one file in the scan)", got)
 	}
 
 	ex := newLocalExecutor("/tmp/repo", nil, substrateWorkspace, 0, nil)

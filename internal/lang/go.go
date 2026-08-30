@@ -4,6 +4,7 @@ package lang
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -321,12 +322,24 @@ func (goPlugin) WorkspaceRunEnv() (env []string, cleanup func()) { return nil, f
 // cores is this tree's share, already divided by the pool; a degenerate share
 // floors at 1 (GOMAXPROCS=0 is rejected outright by the runtime, and -p=0
 // means "unlimited" — exactly the oversubscription this exists to prevent).
+//
+// GOFLAGS APPENDS to whatever the operator already set rather than replacing
+// it: GOFLAGS is a single space-separated variable, so assigning it outright
+// silently drops a `-mod=vendor` or a `-tags=integration` the project's suite
+// needs — the mutant would then be graded by a build the operator never runs,
+// or by no build at all. -p is placed LAST so it wins if their GOFLAGS
+// happens to set one too (later flags override earlier ones), which is the
+// one value this tree is not free to give up.
 func (goPlugin) TreeEnv(tree string, cores int) []string {
 	if cores < 1 {
 		cores = 1
 	}
 	n := strconv.Itoa(cores)
-	return []string{"GOMAXPROCS=" + n, "GOFLAGS=-p=" + n}
+	flags := "-p=" + n
+	if existing := strings.TrimSpace(os.Getenv("GOFLAGS")); existing != "" {
+		flags = existing + " " + flags
+	}
+	return []string{"GOMAXPROCS=" + n, "GOFLAGS=" + flags}
 }
 
 func (goPlugin) ParseTestList(output string) []string {

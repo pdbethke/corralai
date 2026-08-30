@@ -139,7 +139,22 @@ func NewWorkspacePool(ctx context.Context, root string, n int, timeout time.Dura
 	single := func(note string) (*WorkspacePool, Disclosure, error) {
 		// A pool of one links nothing — it IS the checkout — so Shared stays
 		// nil no matter what dep dirs are present.
-		p := newPool(root, []string{root}, nil, timeout, treeEnv, plugEnv, opts)
+		//
+		// And it carries NO TREE ENV, which is the whole point of passing nil
+		// here rather than treeEnv. WithTreeEnv describes what a COPY needs in
+		// order to behave like the checkout: its own root on PYTHONPATH so it
+		// cannot import the original through an editable install's .pth, and
+		// its own SHARE of the box (GOMAXPROCS, -p) because it is one of N.
+		// Applied to the operator's real checkout, both are wrong and both
+		// are harmful — the run would be pinned to cores/N with no other tree
+		// to yield to (SLOWER than never having tried to parallelise), and a
+		// PYTHONPATH would be injected into a suite that never asked for one.
+		//
+		// This is the path every downgrade lands on, including Probe's: the
+		// contract is that a pool of one on root is today's WorkspaceRunner,
+		// byte for byte, and an env the caller only meant for copies would
+		// break that silently.
+		p := newPool(root, []string{root}, nil, timeout, nil, plugEnv, opts)
 		return p, Disclosure{Trees: 1, Note: note}, nil
 	}
 

@@ -5,6 +5,7 @@ package lang
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -22,6 +23,10 @@ func TestPythonTreeEnvPutsTheTreeFirstOnPYTHONPATH(t *testing.T) {
 	if !ok {
 		t.Fatal("python plugin does not implement lang.TreeEnver — the pool can never give its trees an import path")
 	}
+
+	// Explicit, so the assertion means the same thing on a box whose shell
+	// happens to export one.
+	t.Setenv("PYTHONPATH", "")
 
 	flat := t.TempDir()
 	got := te.TreeEnv(flat, 4)
@@ -70,6 +75,8 @@ func TestGoTreeEnvDividesTheCPU(t *testing.T) {
 	if !ok {
 		t.Fatal("go plugin does not implement lang.TreeEnver — six trees would each try to use all 24 cores")
 	}
+	t.Setenv("GOFLAGS", "")
+
 	// 24 cores over 6 trees = 4 apiece.
 	got := te.TreeEnv(t.TempDir(), 4)
 	want := map[string]bool{"GOMAXPROCS=4": true, "GOFLAGS=-p=4": true}
@@ -81,12 +88,27 @@ func TestGoTreeEnvDividesTheCPU(t *testing.T) {
 			t.Fatalf("TreeEnv = %v, unexpected %q (want %v)", got, kv, want)
 		}
 	}
+	// The operator's own GOFLAGS survive: assigning GOFLAGS outright would
+	// silently drop a -mod=vendor the project's suite needs, and grade the
+	// mutant with a build the operator never runs.
+	t.Setenv("GOFLAGS", "-mod=vendor")
+	got = te.TreeEnv(t.TempDir(), 4)
+	var flags string
+	for _, kv := range got {
+		if strings.HasPrefix(kv, "GOFLAGS=") {
+			flags = kv
+		}
+	}
+	if flags != "GOFLAGS=-mod=vendor -p=4" {
+		t.Fatalf("GOFLAGS = %q, want the operator's own flags kept with -p appended", flags)
+	}
+
 	// Fails closed: a degenerate share is one core, never zero (GOMAXPROCS=0
 	// is rejected by the runtime) and never unbounded.
 	for _, cores := range []int{0, -1} {
 		got := te.TreeEnv(t.TempDir(), cores)
 		for _, kv := range got {
-			if kv != "GOMAXPROCS=1" && kv != "GOFLAGS=-p=1" {
+			if kv != "GOMAXPROCS=1" && !strings.HasSuffix(kv, "-p=1") {
 				t.Fatalf("TreeEnv(cores=%d) = %v, want a share of 1", cores, got)
 			}
 		}

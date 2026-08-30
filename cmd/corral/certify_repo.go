@@ -2744,8 +2744,18 @@ func resolveScanWorkers(swarmFlag int, substrate string) (int, string) {
 // substrate at one file at a time. A quarter because a tree is not a jail: it
 // is a copy of the checkout on disk running a REAL suite that wants CPU,
 // memory and I/O of its own (the spec's cores/4 default, --swarm overriding
-// the cores half). Capped at jobs — mutants here — because trees are
-// expensive and idle ones are pure cost.
+// the cores half).
+//
+// It is NOT capped by jobs, and that asymmetry with the jail branch is
+// deliberate. jobs is the FILE count, and the number this branch sizes is
+// trees-per-file — the two are unrelated the moment files stop running
+// concurrently. Capping by it would have pinned a diff-scoped one-file audit
+// to a single tree forever, which is the exact shape (one changed file, ~40
+// mutants, 23 of 24 cores idle) this whole design exists for. There is no
+// mutant count to cap by either: mutants do not exist until the generator has
+// run, long after this decision. An unused tree costs one copy of the
+// checkout and nothing else — adequacy.Score never runs more mutants at once
+// than it has mutants.
 //
 // Whether the trees are actually USED is not decided here: the pool's probe
 // runs the unmutated baseline in all N at once and downgrades to 1, disclosed,
@@ -2756,13 +2766,10 @@ func resolveScanWorkers(swarmFlag int, substrate string) (int, string) {
 // 1, never unbounded.
 func resolveMutantConcurrency(budget int, substrate string, workers, jobs int) int {
 	if substrate == substrateWorkspace {
-		if budget < 1 || jobs < 1 {
+		if budget < 1 {
 			return 1
 		}
 		n := budget / 4
-		if jobs < n {
-			n = jobs
-		}
 		if n < 1 {
 			return 1
 		}
@@ -3076,10 +3083,16 @@ func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
 		// Where the pool's concurrency probe writes its answer for this file.
 		// A pointer because the input travels BY VALUE from here to
 		// buildJailWiring; allocated for every job so the executor can print
-		// the disclosure below and Task 5 can put it on the verdict, and left
-		// at its zero value (Trees 0) by the jail substrate, which builds no
-		// trees and has nothing to disclose.
+		// the disclosure below and the verdict can carry it, and left at its
+		// zero value (Trees 0) by the jail substrate, which builds no trees
+		// and has nothing to disclose.
 		concurrency: new(adequacy.Disclosure),
+		// And the box the job's ONE pool of private trees lives in. Created
+		// here, on the workspace substrate only, because THIS is the scope
+		// that owns it: the baseline-stability check and the audit are two
+		// consumers of one pool, and Execute closes it when both are done.
+		// nil on the jail substrate, which has no trees to share.
+		pool: l.workspacePoolBox(),
 		// H1a produces a REPORT, not a sealed statement: no ledger, no
 		// signing key, no scorecard feed (N concurrent audits must not
 		// contend on one single-process DuckDB file). Signing is H1c.
@@ -3101,8 +3114,52 @@ func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
 	}
 }
 
+// noteConcurrency prints one file's concurrency disclosure: how many private
+// trees its pool got, or that it got one and WHY.
+//
+// The wording is the spec's, verbatim, because the same two sentences have to
+// appear in the live progress, in the report and in the ledger — an operator
+// who sees "concurrency: 1" on screen and a different phrase in the record
+// cannot tell whether they are the same fact.
+//
+// Nothing is printed for a disclosure that was never written (Trees 0): the
+// jail substrate has no trees to disclose, and inventing a line for it would
+// claim a measurement that never happened.
+func (l *localExecutor) noteConcurrency(path string, d *adequacy.Disclosure) {
+	switch {
+	case d == nil || d.Trees < 1:
+		return
+	case d.Trees > 1:
+		l.note("%s: concurrency: %d trees (baseline passed under %d)\n", path, d.Trees, d.Trees)
+	case d.Note != "":
+		l.note("%s: concurrency: 1 (%s)\n", path, d.Note)
+	}
+	// Trees == 1 with no note is the ordinary "the budget only bought one
+	// tree" case — the substrate's own default, and not news.
+}
+
+// workspacePoolBox returns the box this job's private-tree pool will live in,
+// or nil on a substrate that builds no trees. One box per JOB: two files must
+// never share trees (the second file's mutants would be written into a tree
+// the first file's suite is reading), and the same file's baseline check and
+// audit must never build two (a second copy of the checkout and a second
+// probe, for an answer the first one already has).
+func (l *localExecutor) workspacePoolBox() *workspacePool {
+	if l.substrate != substrateWorkspace {
+		return nil
+	}
+	return &workspacePool{}
+}
+
 func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.FileResult, error) {
 	in := l.auditInputFor(j)
+	// The job owns its private trees for as long as the job lasts — through
+	// the baseline-stability check AND the audit, which is the whole point of
+	// hanging them here rather than on the wiring's own cleanup (that one is
+	// deliberately released between the two). Deferred immediately so every
+	// early return below still deletes the copies. A no-op when there are
+	// none, which is every jail-substrate job.
+	defer in.pool.close()
 
 	// The scan-wide, per-language seed: the tree copy, the vendoring and the
 	// tree walk depend only on the repo + language, so they are done ONCE and
@@ -3245,30 +3302,6 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 // The base handed to the selector is the operator's `-- <cmd>` when they gave
 // one, else the plugin's stock recursive command: the operator's markers and
 // flags are honoured, and the selection only ever narrows what they chose.
-// noteConcurrency prints one file's concurrency disclosure: how many private
-// trees its pool got, or that it got one and WHY.
-//
-// The wording is the spec's, verbatim, because the same two sentences have to
-// appear in the live progress, in the report and in the ledger — an operator
-// who sees "concurrency: 1" on screen and a different phrase in the record
-// cannot tell whether they are the same fact.
-//
-// Nothing is printed for a disclosure that was never written (Trees 0): the
-// jail substrate has no trees to disclose, and inventing a line for it would
-// claim a measurement that never happened.
-func (l *localExecutor) noteConcurrency(path string, d *adequacy.Disclosure) {
-	switch {
-	case d == nil || d.Trees < 1:
-		return
-	case d.Trees > 1:
-		l.note("%s: concurrency: %d trees (baseline passed under %d)\n", path, d.Trees, d.Trees)
-	case d.Note != "":
-		l.note("%s: concurrency: 1 (%s)\n", path, d.Note)
-	}
-	// Trees == 1 with no note is the ordinary "the budget only bought one
-	// tree" case — the substrate's own default, and not news.
-}
-
 func (l *localExecutor) selectionFor(j reposcan.Job) lang.Selection {
 	if l.wholeSuite {
 		return lang.Selection{Fallback: "--whole-suite"}

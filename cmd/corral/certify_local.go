@@ -435,6 +435,13 @@ type localAuditInput struct {
 	// substrate: the jail builds no trees and has nothing to disclose.
 	concurrency *adequacy.Disclosure
 
+	// pool, when non-nil, is where THIS file-job's workspace pool lives: the
+	// first thing that needs it builds and probes it, everything after that
+	// borrows the same one, and the CALLER (localExecutor.Execute) closes it
+	// once the whole job is done. Nil means "build your own and own it",
+	// which is `certify --local`'s position and every jail-substrate caller's.
+	pool *workspacePool
+
 	// substrate selects where the audit runs: "" or substrateJail (today's
 	// behavior) builds and mutates inside the bwrap jail; substrateWorkspace
 	// mutates repoDir in place and skips jail construction entirely — the
@@ -657,7 +664,7 @@ func prepareAuditJail(ctx context.Context, in localAuditInput, plug lang.Plugin,
 		baseArgv: in.baseArgv, selection: in.selection,
 		bindDirFlag: in.bindDirs, noBindDepsFlag: in.noBindDeps, stdout: stdout,
 		seed: in.seed, substrate: in.substrate, mutantConcurrency: in.mutantConcurrency,
-		concurrency: in.concurrency,
+		concurrency: in.concurrency, pool: in.pool,
 	})
 	if err != nil {
 		return p, auditUsageErr("%v", err)
@@ -1444,6 +1451,10 @@ type jailWiringInput struct {
 	// concurrency is localAuditInput.concurrency, threaded through: the
 	// workspace branch writes the probe's answer there. nil records nothing.
 	concurrency *adequacy.Disclosure
+	// pool is localAuditInput.pool, threaded through: the job's one pool,
+	// filled in here on first use and closed by the job's owner. nil means
+	// this wiring builds and owns a pool of its own.
+	pool *workspacePool
 }
 
 // Substrate names for jailWiringInput.substrate / localAuditInput.substrate,
@@ -1472,6 +1483,48 @@ func workspaceFromSeed(seed repoSeed, overlay map[string]string) map[string]stri
 	}
 	return w
 }
+
+// workspacePool is ONE file-job's pool of private trees, threaded through
+// the job the way repoSeed is threaded through a scan's language: built and
+// PROBED exactly once, then shared by everything that grades that file.
+//
+// It has to be a box around the pointer rather than the pointer itself
+// because localAuditInput travels BY VALUE from the executor down to
+// buildJailWiring, so a pool constructed at the bottom could never be seen at
+// the top. That mattered: the first cut built and probed one pool for the
+// baseline-stability check and a SECOND for the audit, which is two copies of
+// the whole checkout and four probe rounds per file where the design priced
+// one — and left the printed disclosure and the recorded one free to
+// disagree, since two probes of a flaky suite can answer differently.
+//
+// Whoever creates the box owns Close: buildJailWiring fills it in and does
+// NOT hang the pool off jailWiring.cleanup, because that cleanup is released
+// between the baseline and the audit. `certify --local`, which passes no box,
+// keeps the old ownership (the wiring's cleanup closes the pool).
+type workspacePool struct{ pool *adequacy.WorkspacePool }
+
+// close releases the trees. Nil-safe on both levels: a jail-substrate job has
+// no box, and a job that failed before wiring has a box with no pool.
+func (h *workspacePool) close() {
+	if h == nil || h.pool == nil {
+		return
+	}
+	h.pool.Close()
+	h.pool = nil
+}
+
+// newWorkspacePool and probeWorkspacePool are the pool's construction and
+// probe seams. They exist as variables ONLY so a test can count them: "the
+// pool is built once and probed once per file" is a property no assertion
+// about the pool itself can see, and the duplicate-construction bug above was
+// invisible to every test that looked only at the result.
+var (
+	newWorkspacePool = adequacy.NewWorkspacePool
+
+	probeWorkspacePool = func(ctx context.Context, p *adequacy.WorkspacePool, base map[string]string, codePath, compliantCode string, testCmd []string) (*adequacy.WorkspacePool, adequacy.Disclosure) {
+		return p.Probe(ctx, base, codePath, compliantCode, testCmd)
+	}
+)
 
 // jailWiring is what buildJailWiring resolves: the jail-backed
 // scorer/validator/enumerator, the workspace keys for the code + dev-test files,
@@ -1538,52 +1591,6 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		}
 		w.codeKey, w.devTestKey = filepath.ToSlash(ck), filepath.ToSlash(dk)
 
-		// How many mutants this file may score at once — and therefore how
-		// many PRIVATE TREES the pool copies. resolveMutantConcurrency is the
-		// only place that number is decided; 1 (every caller that does not
-		// set it, `certify --local` included) makes NewWorkspacePool return
-		// exactly the WorkspaceRunner on the real checkout this branch has
-		// always built: no copy, no probe, no behaviour change.
-		trees := in.mutantConcurrency
-		if trees < 1 {
-			trees = 1
-		}
-
-		// WithPerRunEnv wires the resolved language plugin's own
-		// per-run environment (e.g. python.go's fresh __pycache__
-		// redirect) into EVERY baseline/canary/mutant/authored-test
-		// invocation this runner makes — see WithPerRunEnv's and
-		// lang.Plugin.WorkspaceRunEnv's doc comments for why this
-		// substrate specifically needs it (it mutates the SAME real
-		// checkout across every one of those calls, unlike the jail).
-		// in.langName was set from the already-resolved plugin's own
-		// Name() (see buildJailWiring's caller), so ByName here can only
-		// fail if the registry itself changed between resolution and
-		// this call — never in practice — and degrades to no extra env
-		// rather than failing the whole audit over it.
-		var runnerOpts []adequacy.WorkspaceOption
-		if plug, ok := lang.ByName(in.langName); ok {
-			runnerOpts = append(runnerOpts, adequacy.WithPerRunEnv(plug.WorkspaceRunEnv))
-			// WithTreeEnv is per-TREE and therefore only meaningful once
-			// there is more than one: it gives a copy its own import path
-			// (Python) and its own SHARE of the box (Go). The share is
-			// DIVIDED — N trees each assuming all cores thrash the machine
-			// and can fail the probe on contention alone, downgrading a
-			// suite that is perfectly safe. A plugin that implements no
-			// lang.TreeEnver gets no tree env, which is the honest answer for
-			// a language whose toolchain neither records an absolute import
-			// path nor fans out by itself.
-			if te, ok := plug.(lang.TreeEnver); ok && trees > 1 {
-				share := runtime.NumCPU() / trees
-				if share < 1 {
-					share = 1
-				}
-				runnerOpts = append(runnerOpts, adequacy.WithTreeEnv(func(tree string) []string {
-					return te.TreeEnv(tree, share)
-				}))
-			}
-		}
-
 		// EMPTY but NON-NIL. scoreWorkspace (internal/advpool/gate.go:143)
 		// branches on BaseFiles != nil: non-nil takes the repo-aware path and
 		// uses the run's own TestCmd; nil rebuilds a synthetic single-file
@@ -1592,33 +1599,103 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		// must NOT be rewritten over itself.
 		base := map[string]string{}
 
-		pool, disc, perr := adequacy.NewWorkspacePool(ctx, in.repoDir, trees, in.timeout, runnerOpts...)
-		if perr != nil {
-			return w, perr
+		// ONE pool per file-job. The job's baseline-stability runner and its
+		// audit both come through here, and building a second pool for the
+		// second of them would copy the checkout twice and probe it twice —
+		// paying 4N suite invocations for a design that priced 2N, and
+		// letting the printed disclosure and the recorded one disagree. When
+		// the caller supplied a box (localExecutor.Execute, which owns Close
+		// for the whole job) the pool is built into it once and reused after.
+		var pool *adequacy.WorkspacePool
+		if in.pool != nil && in.pool.pool != nil {
+			pool = in.pool.pool
+		} else {
+			// How many mutants this file may score at once — and therefore
+			// how many PRIVATE TREES to copy. resolveMutantConcurrency is the
+			// only place that number is decided; 1 (every caller that does
+			// not set it, `certify --local` included) makes NewWorkspacePool
+			// return exactly the WorkspaceRunner on the real checkout this
+			// branch has always built: no copy, no probe, no behaviour
+			// change.
+			trees := in.mutantConcurrency
+			if trees < 1 {
+				trees = 1
+			}
+
+			// WithPerRunEnv wires the resolved language plugin's own
+			// per-run environment (e.g. python.go's fresh __pycache__
+			// redirect) into EVERY baseline/canary/mutant/authored-test
+			// invocation this runner makes — see WithPerRunEnv's and
+			// lang.Plugin.WorkspaceRunEnv's doc comments for why this
+			// substrate specifically needs it (it mutates the SAME real
+			// checkout across every one of those calls, unlike the jail).
+			// in.langName was set from the already-resolved plugin's own
+			// Name() (see buildJailWiring's caller), so ByName here can only
+			// fail if the registry itself changed between resolution and
+			// this call — never in practice — and degrades to no extra env
+			// rather than failing the whole audit over it.
+			var runnerOpts []adequacy.WorkspaceOption
+			if plug, ok := lang.ByName(in.langName); ok {
+				runnerOpts = append(runnerOpts, adequacy.WithPerRunEnv(plug.WorkspaceRunEnv))
+				// WithTreeEnv is per-TREE and therefore only meaningful once
+				// there is more than one: it gives a copy its own import path
+				// (Python) and its own SHARE of the box (Go). The share is
+				// DIVIDED — N trees each assuming all cores thrash the
+				// machine and can fail the probe on contention alone,
+				// downgrading a suite that is perfectly safe. A plugin that
+				// implements no lang.TreeEnver gets no tree env, which is the
+				// honest answer for a language whose toolchain neither
+				// records an absolute import path nor fans out by itself.
+				// A pool that downgrades to the checkout itself drops the
+				// tree env entirely — see adequacy.NewWorkspacePool.
+				if te, ok := plug.(lang.TreeEnver); ok && trees > 1 {
+					share := runtime.NumCPU() / trees
+					if share < 1 {
+						share = 1
+					}
+					runnerOpts = append(runnerOpts, adequacy.WithTreeEnv(func(tree string) []string {
+						return te.TreeEnv(tree, share)
+					}))
+				}
+			}
+
+			built, disc, perr := newWorkspacePool(ctx, in.repoDir, trees, in.timeout, runnerOpts...)
+			if perr != nil {
+				return w, perr
+			}
+			if verr := built.Verify(); verr != nil {
+				built.Close()
+				return w, verr
+			}
+			// THE PROBE, run before a single mutant is scored and on exactly
+			// the files the scorer's own baseline uses: the unmutated subject
+			// in every tree at once (does this suite survive N of itself?)
+			// and adequacy.CanaryCode in every tree (does each tree import
+			// its OWN copy, or did an editable install point them all back at
+			// the original checkout?). Either answer being no returns a
+			// ONE-tree pool on the real checkout — today's behaviour — with
+			// the reason attached, never a parallel run that grades one
+			// tree's mutant with another tree's suite.
+			//
+			// It costs two extra ROUNDS per file — the baseline in all N
+			// trees at once, then the canary in all N at once, so 2N suite
+			// invocations but only two suite runtimes of wall clock — which
+			// is the price of not signing a kill rate the substrate cannot
+			// support. A pool of one skips it entirely (Probe returns
+			// immediately), so nothing that runs serially today pays for it.
+			built, disc = probeWorkspacePool(ctx, built, base, w.codeKey, string(in.code), in.checkArgv)
+			if in.concurrency != nil {
+				*in.concurrency = disc
+			}
+			pool = built
+			if in.pool != nil {
+				// The job owns it from here: NOT hung off w.cleanup, which is
+				// released between the baseline check and the audit.
+				in.pool.pool = pool
+			} else {
+				w.cleanup = pool.Close
+			}
 		}
-		if verr := pool.Verify(); verr != nil {
-			pool.Close()
-			return w, verr
-		}
-		// THE PROBE, run before a single mutant is scored and on exactly the
-		// files the scorer's own baseline uses: the unmutated subject in
-		// every tree at once (does this suite survive N of itself?) and
-		// adequacy.CanaryCode in every tree (does each tree import its OWN
-		// copy, or did an editable install point them all back at the
-		// original checkout?). Either answer being no returns a ONE-tree pool
-		// on the real checkout — today's behaviour — with the reason
-		// attached, never a parallel run that grades one tree's mutant with
-		// another tree's suite.
-		//
-		// It costs two extra suite runs per file, which is the price of not
-		// signing a kill rate the substrate cannot support. A pool of one
-		// skips it entirely (Probe returns immediately), so nothing that runs
-		// serially today pays for it.
-		pool, disc = pool.Probe(ctx, base, w.codeKey, string(in.code), in.checkArgv)
-		if in.concurrency != nil {
-			*in.concurrency = disc
-		}
-		w.cleanup = pool.Close
 
 		// Concurrency is the pool's REAL tree count, read back after the
 		// probe rather than the count that was asked for: a downgraded pool

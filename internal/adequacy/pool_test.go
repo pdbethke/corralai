@@ -260,3 +260,61 @@ func TestProbeCatchesATreeThatImportsTheOriginal(t *testing.T) {
 		t.Errorf("got %+v", d)
 	}
 }
+
+// TestDowngradedPoolCarriesNoTreeEnv is the other half of "a pool of one IS
+// the checkout, byte for byte".
+//
+// WithTreeEnv describes what a COPY needs to behave like the checkout: its own
+// root on PYTHONPATH (so it cannot import the original through an editable
+// install's .pth) and its own SHARE of the box (GOMAXPROCS, -p, because it is
+// one of N). On the checkout itself both are actively harmful — the run would
+// be pinned to cores/N with no sibling tree to yield to, i.e. SLOWER than if
+// concurrency had never been attempted, and a suite that never asked for a
+// PYTHONPATH would get one.
+//
+// Every downgrade path lands here: n <= 1, a checkout that is not a git work
+// tree, a universe over the cap, and Probe's own downgrade (which rebuilds
+// through NewWorkspacePool with the SAME option list, tree env included —
+// which is exactly how this got shipped wrong once).
+func TestDowngradedPoolCarriesNoTreeEnv(t *testing.T) {
+	treeEnv := WithTreeEnv(func(tree string) []string { return []string{"CORRAL_TREE=" + tree} })
+	// The run passes only if the tree env is ABSENT.
+	clean := []string{"sh", "-c", `[ -z "$CORRAL_TREE" ]`}
+
+	t.Run("n=1", func(t *testing.T) {
+		root := newGitRepo(t, map[string]string{"a.py": "x=0\n"}, nil)
+		p, _, _ := NewWorkspacePool(context.Background(), root, 1, time.Minute, treeEnv)
+		defer p.Close()
+		if ok, err := p.RunTest(context.Background(), nil, clean); err != nil || !ok {
+			t.Errorf("a one-tree pool injected the per-tree env into the operator's checkout: ok=%v err=%v", ok, err)
+		}
+	})
+
+	t.Run("not a git work tree", func(t *testing.T) {
+		root := t.TempDir()
+		writeFile(t, filepath.Join(root, "a.py"), "x=0\n")
+		p, d, _ := NewWorkspacePool(context.Background(), root, 3, time.Minute, treeEnv)
+		defer p.Close()
+		if d.Trees != 1 {
+			t.Fatalf("expected a downgrade, got %+v", d)
+		}
+		if ok, err := p.RunTest(context.Background(), nil, clean); err != nil || !ok {
+			t.Errorf("a downgraded pool injected the per-tree env into the operator's checkout: ok=%v err=%v", ok, err)
+		}
+	})
+
+	t.Run("probe downgrade", func(t *testing.T) {
+		root := newGitRepo(t, map[string]string{"a.py": "x=0\n"}, nil)
+		// Passes only in the checkout itself, so the probe must downgrade.
+		cmd := []string{"sh", "-c", `[ "$(pwd -P)" = "` + root + `" ] && [ "$(cat a.py)" = "x=0" ]`}
+		p, _, _ := NewWorkspacePool(context.Background(), root, 3, time.Minute, treeEnv)
+		q, d := p.Probe(context.Background(), nil, "a.py", "x=0\n", cmd)
+		defer q.Close()
+		if d.Trees != 1 {
+			t.Fatalf("expected a downgrade, got %+v", d)
+		}
+		if ok, err := q.RunTest(context.Background(), nil, clean); err != nil || !ok {
+			t.Errorf("the pool the probe fell back to carries the per-tree env, on the operator's own checkout: ok=%v err=%v", ok, err)
+		}
+	})
+}

@@ -311,7 +311,12 @@ func gitUniverse(root string) (paths []string, size int64, err error) {
 		}
 		seen[rel] = true
 		fi, serr := os.Lstat(filepath.Join(root, filepath.FromSlash(rel)))
-		if serr != nil || !fi.Mode().IsRegular() {
+		// Regular files and SYMLINKS. A tracked symlink is part of the
+		// checkout (requests: tests/certs/valid/ca -> ../expired/ca); a copy
+		// without it fails the suite in every tree and the probe then blames
+		// concurrency for an incomplete copy. Sockets, devices and submodule
+		// gitlinks are still skipped.
+		if serr != nil || !(fi.Mode().IsRegular() || fi.Mode()&os.ModeSymlink != 0) {
 			continue // gone, or a symlink/submodule/device: not ours to copy
 		}
 		paths = append(paths, rel)
@@ -356,12 +361,25 @@ func copyTree(root, tree string, universe []string) (shared []string, err error)
 // permission bits — an executable in the checkout (a test script, a hook)
 // must still be executable in the copy.
 func copyFile(src, dst string) error {
-	fi, err := os.Stat(src)
+	fi, err := os.Lstat(src)
 	if err != nil {
 		return fmt.Errorf("adequacy: stat %s: %w", src, err)
 	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
 		return fmt.Errorf("adequacy: creating %s: %w", filepath.Dir(dst), err)
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		// A symlink is copied AS a symlink with its target verbatim: a
+		// relative target keeps pointing inside the tree, an absolute one
+		// keeps pointing wherever the operator pointed it.
+		target, rerr := os.Readlink(src)
+		if rerr != nil {
+			return fmt.Errorf("adequacy: readlink %s: %w", src, rerr)
+		}
+		if serr := os.Symlink(target, dst); serr != nil {
+			return fmt.Errorf("adequacy: linking %s: %w", dst, serr)
+		}
+		return nil
 	}
 	in, err := os.Open(src) // #nosec G304 -- a path git itself listed inside the operator's checkout
 	if err != nil {
@@ -591,10 +609,14 @@ func (p *WorkspacePool) runEverywhere(ctx context.Context, base map[string]strin
 
 // capOutput trims a tree's output to what a note can carry, collapsing the
 // whitespace a shell leaves around it so the reason reads as one sentence.
+// capOutput keeps the TAIL of a runner's output: pytest, go test and jest
+// all print their failure summary last, and a note that quotes the first
+// 2 KiB of a suite's chatter says nothing about why it failed (found on
+// requests, where the head was a flask warning).
 func capOutput(s string) string {
 	s = strings.TrimSpace(s)
 	if len(s) > probeOutputCap {
-		s = s[:probeOutputCap] + "… (truncated)"
+		s = "(truncated) …" + s[len(s)-probeOutputCap:]
 	}
 	return s
 }

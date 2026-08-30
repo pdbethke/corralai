@@ -381,3 +381,36 @@ func TestToxIsNeverSharedBetweenTrees(t *testing.T) {
 		mustNotExist(t, filepath.Join(tree, ".tox"))
 	}
 }
+
+// Found on requests: tests/certs/valid/ca is a TRACKED SYMLINK (-> ../expired/ca).
+// The copy kept regular files only, so every tree lacked the CA the TLS test
+// verifies against, the baseline failed under any N > 1, and the probe blamed
+// the SUITE ("not concurrency-safe") for what was an incomplete copy. At N=1
+// nothing is copied, so the downgrade "fixed" it — three runs in a row. A
+// tree must carry the checkout's symlinks as symlinks, target verbatim.
+func TestPoolCopiesSymlinksAsSymlinks(t *testing.T) {
+	root := newGitRepo(t, map[string]string{"a.py": "x=1\n", "certs/expired/ca.crt": "CA\n"}, nil)
+	if err := os.Symlink("expired", filepath.Join(root, "certs", "valid")); err != nil {
+		t.Fatal(err)
+	}
+	// Untracked-not-ignored is in the universe too, so no commit is needed;
+	// requests' link is tracked, and the copy must not care which.
+	p, d, err := NewWorkspacePool(context.Background(), root, 2, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	if d.Trees != 2 {
+		t.Fatalf("disclosure = %+v", d)
+	}
+	for _, tree := range p.treeRoots() {
+		target, err := os.Readlink(filepath.Join(tree, "certs", "valid"))
+		if err != nil {
+			t.Fatalf("%s: certs/valid must be a symlink like the checkout's: %v", tree, err)
+		}
+		if target != "expired" {
+			t.Errorf("%s: certs/valid -> %q, want the checkout's target %q verbatim", tree, target, "expired")
+		}
+		mustExist(t, filepath.Join(tree, "certs", "valid", "ca.crt"))
+	}
+}

@@ -67,7 +67,9 @@ jobs:
     # Reporting a verdict is the point; blocking the merge is not (yet). A red
     # X here must not read as "this PR is broken".
     continue-on-error: true
-    timeout-minutes: 180
+    # GitHub's ceiling for one job. The audit below is told to use nearly all
+    # of it, on purpose — see `timeout`.
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
         with:
@@ -127,6 +129,18 @@ jobs:
           # left. Raise it only alongside a real measurement of what a run
           # here actually takes.
           top: "1"
+          # The WHOLE audit of that one file, not a bounded sample. corral's
+          # 10m default is a guardrail for a PR author who did not choose to
+          # start an hours-long job; this workflow chose to. On 2026-08-28
+          # churn-x-size picked cmd/corral/certify_repo.go, every mutant
+          # re-ran `go test ./...` (66s of it is cmd/corral alone, on 24
+          # cores; a hosted runner has 4), and the 10m ceiling fell before a
+          # single mutant scored: COULD-NOT-GRADE, no number. A run that
+          # still hits THIS ceiling banks a [TIMED OUT] verdict once the dev
+          # suite has scored — a real number, disclosed as non-converged —
+          # instead of nothing. Sized just under timeout-minutes so corral's
+          # own signed timeout verdict lands before GitHub kills the job.
+          timeout: "340m"
           # All-Gemini on gemini-3.6-flash, because that is the configuration
           # this project actually has evidence for: five paid flask replicates,
           # ProvenMissed non-zero in every one. corral's own defaults are

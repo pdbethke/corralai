@@ -949,6 +949,78 @@ func TestActionPassesTopOnlyWhenSet(t *testing.T) {
 	})
 }
 
+// TestActionPassesTimeoutOnlyWhenSet: the per-file budget (`--timeout`,
+// default 10m) is a cost guardrail sized for a PR author who did not choose to
+// start an hours-long job. It was a CLI-only flag — the README said so — so a
+// workflow that WANTS the whole audit (this repo's own self-audit, or anyone
+// on faster hardware) had no way to ask for it: on 2026-08-28 the self-audit
+// picked cmd/corral/certify_repo.go, ran `go test ./...` per mutant on a
+// 4-vCPU runner, and hit the 10m ceiling before a single mutant scored —
+// COULD-NOT-GRADE, no number. Raising the ceiling is the operator's call, and
+// it needs a door. Same shape as `top`: passed through verbatim when set,
+// absent when not, so corral keeps ownership of the default.
+func TestActionPassesTimeoutOnlyWhenSet(t *testing.T) {
+	a := loadActionYAML(t)
+	runStep := findStepContaining(t, a, "certify --repo")
+
+	readFullArgv := func(tmp string) []string {
+		t.Helper()
+		argvBytes, err := os.ReadFile(filepath.Join(tmp, "argv.log"))
+		if err != nil {
+			t.Fatalf("no argv.log written — corral stub was never invoked: %v", err)
+		}
+		content := strings.TrimSuffix(string(argvBytes), "\x00")
+		if content == "" {
+			return nil
+		}
+		return strings.Split(content, "\x00")
+	}
+
+	if _, ok := a.Inputs["timeout"]; !ok {
+		t.Fatal(`action.yml should declare a "timeout" input so a workflow can let a whole audit run`)
+	}
+
+	// The flag must exist and parse on the real command, with a Go duration.
+	var out, errb bytes.Buffer
+	if code := runCertifyRepo([]string{
+		"--repo", t.TempDir(), "--dry-run", "--timeout", "5h30m",
+	}, &out, &errb); code != 0 {
+		t.Fatalf("certify --repo rejected --timeout, the flag the action now passes: exit %d, stderr=%s", code, errb.String())
+	}
+
+	t.Run("set", func(t *testing.T) {
+		tmp := t.TempDir()
+		out, runErr, _ := runRunCorralStep(t, runStep, tmp, "true", "TIMEOUT=5h30m")
+		if runErr != nil {
+			t.Fatalf("run-corral step failed: %v\n%s", runErr, out)
+		}
+		full := readFullArgv(tmp)
+		found := false
+		for i, a := range full {
+			if a == "--timeout" && i+1 < len(full) && full[i+1] == "5h30m" {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("want --timeout 5h30m in corral's argv, got: %v", full)
+		}
+	})
+
+	t.Run("unset", func(t *testing.T) {
+		tmp := t.TempDir()
+		out, runErr, _ := runRunCorralStep(t, runStep, tmp, "true", "TIMEOUT=")
+		if runErr != nil {
+			t.Fatalf("run-corral step failed: %v\n%s", runErr, out)
+		}
+		full := readFullArgv(tmp)
+		for _, a := range full {
+			if a == "--timeout" {
+				t.Errorf("timeout input was empty; --timeout must not be passed at all (corral keeps its own default), got: %v", full)
+			}
+		}
+	})
+}
+
 // TestActionRoutesTheKeyToTheNamedProvider: `model-key` was wired into the run
 // as ANTHROPIC_API_KEY and nothing else. That is coherent with corral's default
 // models (defaultDeriveModel == defaultLocalMutantModel == claude-sonnet-5), so

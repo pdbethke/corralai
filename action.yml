@@ -40,6 +40,10 @@ inputs:
     description: "Audit at most this many of the highest-ranked candidate files, as a ceiling on what one run can cost. An audit costs roughly (mutants × your suite's whole runtime) PER FILE, and the file count comes from the PR's diff — a number the author picks, not you. On a repo whose suite takes a minute, a ten-file PR is a job measured in tens of hours, discovered only once it is running. Leave empty to keep corral's own default bound."
     required: false
     default: ""
+  timeout:
+    description: "Per-file budget as a Go duration (e.g. '45m', '5h'). corral gives up on a single file's run once this has elapsed, and the default (10m) is sized for a PR author who did not choose to start an hours-long job — NOT for a whole audit. Every mutant re-runs your suite, so a converging audit of one large file on a hosted runner is measured in hours; raise this, and the job's own timeout-minutes with it, when you want the complete audit rather than a bounded sample. Leave empty to keep corral's own default."
+    required: false
+    default: ""
   anthropic-key:
     description: "Anthropic API key, supplied to the run as ANTHROPIC_API_KEY. Set as many provider keys as your role→model routing needs — they are independent and additive, NOT alternatives. corral rejects a run whose test-critic shares a model with its test-writer (a critic grading its own model's homework is not an independent check), so a genuinely cross-vendor pair needs two keys present in the same run. Pass as a secret; never inline."
     required: false
@@ -136,6 +140,7 @@ runs:
         PUSH_TARGET: ${{ inputs.push }}
         motherduck_token: ${{ inputs.motherduck-token }}
         TOP: ${{ inputs.top }}
+        TIMEOUT: ${{ inputs.timeout }}
         REPO_OWNER: ${{ github.repository_owner }}
         COMMIT_SHA: ${{ github.sha }}
         TEST_COMMAND: ${{ inputs.test-command }}
@@ -240,6 +245,7 @@ runs:
           echo "CORRAL_ATTEST_PATH=${RUNNER_TEMP:-/tmp}/corral-audit-statement.json" >> "$GITHUB_ENV"
         fi
         [ -n "${TOP:-}" ] && args+=(--top "$TOP")
+        [ -n "${TIMEOUT:-}" ] && args+=(--timeout "$TIMEOUT")
         # Role→model routing. Each is omitted when empty so corral keeps
         # ownership of its own defaults — the action must never become a second
         # place where a default model is decided.

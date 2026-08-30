@@ -373,8 +373,8 @@ instead of converging. A file whose run hits this deadline after the dev
 suite's own kill-rate was already measured is reported as **audited**, not
 dropped — marked `[TIMED OUT — pool did not converge]` in the weakest-files
 list (and `timed_out` in `--record`'s ledger row) so it never reads as a
-clean convergence. Raise it for a large file that needs more room; not yet
-wired into the GitHub Action as an input — today it's a CLI flag only.
+clean convergence. Raise it for a large file that needs more room — on the
+CLI, or through the GitHub Action's `timeout` input.
 **A scan whose only audited files are all `[TIMED OUT]` still exits non-zero**
 even without `--min-kill-rate`: the dev-adequacy measurement is real, but
 corral's own adversarial verification (test-writer, critic) never ran to

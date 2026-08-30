@@ -217,7 +217,12 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 				// WHICH exam this kill rate answers, when it was a recorded
 				// one. See scanstore.File.MutantsFrom.
 				MutantsFrom: mutantsFrom,
-				CacheHit:    r.CacheHit,
+				// How many private trees scored this file at once, or why
+				// it only got one — the same fact the screen and the
+				// attestation say. See scanstore.File.Trees.
+				Trees:           r.Verdict.Concurrency.Trees,
+				ConcurrencyNote: r.Verdict.Concurrency.Note,
+				CacheHit:        r.CacheHit,
 				// VerdictJSON is the single serialization every future Get
 				// has to parse (marshalVerdict, verdict_cache.go) — "" above
 				// on a marshal failure, never a partial or hand-rolled blob.

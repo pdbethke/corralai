@@ -122,6 +122,15 @@ type WeakFile struct {
 	// the number rather than print the 0.00 that would read as "your tests
 	// caught nothing here".
 	Uncovered bool
+	// Trees and ConcurrencyNote mirror advpool.Verdict.Concurrency: how many
+	// private trees the workspace substrate's probe scored this file with
+	// at once, or — when it granted only one — why (a downgrade after a
+	// baseline that failed under concurrency, or simply the substrate that
+	// builds no trees at all). Trees is never 0 in a populated report: the
+	// verdict it is copied from never carries a bare 0 either — see
+	// advpool.Concurrency's doc.
+	Trees           int
+	ConcurrencyNote string
 }
 
 // MeasuredSpread reports whether this file's run actually measured a
@@ -356,6 +365,10 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 			TestsPerMutant:        r.Verdict.TestSelection.TestsPerMutant,
 			Rules:                 r.Verdict.TestSelection.Rules,
 			Uncovered:             r.Verdict.Uncovered,
+			// How many trees scored this file at once, or why it only got
+			// one — see advpool.Verdict.Concurrency's doc.
+			Trees:           r.Verdict.Concurrency.Trees,
+			ConcurrencyNote: r.Verdict.Concurrency.Note,
 		})
 	}
 

@@ -259,3 +259,27 @@ func TestScanFileSelectionShowsThePerMutantSpread(t *testing.T) {
 		t.Errorf("scans show did not disclose the per-mutant spread:\n%s", out.String())
 	}
 }
+
+// TestScansShow_DisclosesConcurrency pins the ledger reader's half of "every
+// reader says how many trees scored the file, or why one" — `corral scans
+// show` must print the same fact the live progress and the report line do,
+// through the same shared wording.
+func TestScansShow_DisclosesConcurrency(t *testing.T) {
+	r := &fakeScansReader{
+		files: []scanstore.File{
+			{Path: "src/flask/cli.py", Disposition: "audited", Trees: 6},
+			{Path: "downgraded.py", Disposition: "audited", Trees: 1,
+				ConcurrencyNote: "suite is not concurrency-safe: baseline failed under 3"},
+		},
+	}
+	var out, errOut bytes.Buffer
+	if code := runScans([]string{"show", "7"}, openFake(r), &out, &errOut); code != 0 {
+		t.Fatalf("exit = %d, stderr=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "6 trees (baseline passed under 6)") {
+		t.Errorf("scans show did not disclose the tree count:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "1 (suite is not concurrency-safe: baseline failed under 3)") {
+		t.Errorf("scans show did not disclose the downgrade note:\n%s", out.String())
+	}
+}

@@ -72,7 +72,8 @@ func TestPrintWeakFileNamesTheMeasurement(t *testing.T) {
 		PerMutant: true, TestsPerMutant: &advpool.TestsPerMutantSpread{Min: 3, Median: 9, Max: 41},
 		Rules: map[string]int{"lines": 30},
 	})
-	if !strings.HasSuffix(strings.TrimRight(b.String(), "\n"), "(coverage-lines)") {
+	lines := strings.Split(strings.TrimRight(b.String(), "\n"), "\n")
+	if !strings.HasSuffix(lines[0], "(coverage-lines)") {
 		t.Errorf("an all-lines run prints no breakdown: %q", b.String())
 	}
 }
@@ -140,5 +141,34 @@ func TestPrintWeakFileSaysProvenByTheAuthoredTestAlone(t *testing.T) {
 	printWeakFile(&b, reposcan.WeakFile{Path: "pkg/c.py", KillRate: 0.55, Survivors: 18, ProvenMissed: 3, SelectionFallback: "--whole-suite"})
 	if strings.Contains(b.String(), "authored test alone") {
 		t.Errorf("a whole-suite run proves the old way: %q", b.String())
+	}
+}
+
+// TestPrintWeakFileNamesTheConcurrency pins the report's half of "every
+// reader says how many trees scored the file, or why one". The wording must
+// be the SAME as noteConcurrency's live progress line — both go through
+// concurrencyDisclosure — so an operator reading the report after the fact
+// sees exactly what they saw scroll past during the run.
+func TestPrintWeakFileNamesTheConcurrency(t *testing.T) {
+	var b bytes.Buffer
+	printWeakFile(&b, reposcan.WeakFile{Path: "pkg/a.py", KillRate: 0.65, Trees: 6})
+	if !strings.Contains(b.String(), "   concurrency: 6 trees (baseline passed under 6)") {
+		t.Errorf("got %q", b.String())
+	}
+
+	b.Reset()
+	printWeakFile(&b, reposcan.WeakFile{Path: "pkg/b.py", KillRate: 0.65, Trees: 1,
+		ConcurrencyNote: "suite is not concurrency-safe: baseline failed under 3"})
+	if !strings.Contains(b.String(), "   concurrency: 1 (suite is not concurrency-safe: baseline failed under 3)") {
+		t.Errorf("got %q", b.String())
+	}
+
+	b.Reset()
+	printWeakFile(&b, reposcan.WeakFile{Path: "pkg/c.py", KillRate: 0.65, Trees: 1})
+	if !strings.Contains(b.String(), "   concurrency: 1") {
+		t.Errorf("got %q", b.String())
+	}
+	if strings.Contains(b.String(), "   concurrency: 1 (") {
+		t.Errorf("no note must print bare '1', not an empty parenthetical: %q", b.String())
 	}
 }

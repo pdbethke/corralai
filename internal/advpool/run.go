@@ -32,7 +32,13 @@ type RunSpec struct {
 	// UNCOVERED: no test executes it, the dev pass runs nothing, and the
 	// verdict says so instead of printing a 0.00 nobody measured.
 	Selection lang.Selection
-	Lang      string // "" defaults to "go" at render time (back-compat)
+	// Concurrency carries how many private trees the workspace substrate's
+	// probe granted this file (or why it granted only one), from
+	// cmd/corral/certify_local.go's buildJailWiring — see
+	// advpool.Concurrency's doc for the normalization guarantee (Trees is
+	// never 0 once this reaches a Verdict).
+	Concurrency Concurrency
+	Lang        string // "" defaults to "go" at render time (back-compat)
 
 	// ImportPath is the PRE-COMPUTED result of the run's language plugin's
 	// ImportPath(CodePath, exists) — the real, package-qualified import for

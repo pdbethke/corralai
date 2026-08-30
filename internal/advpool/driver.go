@@ -354,6 +354,22 @@ type TestSelection struct {
 	AuthoredAlone bool `json:"authored_alone,omitempty"`
 }
 
+// Concurrency discloses how many private trees the workspace substrate's
+// concurrency probe granted this file — how many mutants were scored AT ONCE
+// — or, when it granted only one, WHY: the substrate builds no trees at all
+// (the jail path), the budget only bought one, or the probe downgraded a
+// suite that failed under concurrency (Note carries the reason, verbatim,
+// so the screen and the record never disagree — see
+// cmd/corral/certify_repo.go's noteConcurrency). Trees is never 0 in a
+// populated Verdict: the caller that builds the RunSpec normalizes an absent
+// or zero probe answer to "1 tree, no note" before it ever reaches here, so
+// a reader of the signed record never has to wonder whether 0 means
+// "one tree" or "never measured".
+type Concurrency struct {
+	Trees int    `json:"trees"`
+	Note  string `json:"note,omitempty"`
+}
+
 // TestsPerMutantSpread is how many tests the graded mutants each ran: the
 // smallest, the middle and the largest. Named (and always reached through a
 // pointer) so that an unmeasured spread is ABSENT everywhere it travels
@@ -449,6 +465,9 @@ type Verdict struct {
 	// suite (Method "", and Fallback says why under selection). Two
 	// verdicts with different Methods are not comparable.
 	TestSelection TestSelection
+	// Concurrency discloses how many private trees scored this file at
+	// once, or why it only got one. See the Concurrency type's doc.
+	Concurrency Concurrency
 	// Uncovered: the evidence run found no test executing this file. The
 	// dev kill rate is WITHHELD by every reader (report, ledger, gate) —
 	// the survivors are real, the 0.00 is not a measurement.

@@ -598,6 +598,35 @@ func TestBuildScanFileRowsCarriesPoolTestUnsound(t *testing.T) {
 	if !rows[0].PoolTestUnsound {
 		t.Error("row.PoolTestUnsound = false, want true")
 	}
+}
+
+// TestBuildScanFileRowsCarriesConcurrency proves buildScanFileRows hands
+// advpool.Verdict.Concurrency through into the scanstore.File row for an
+// audited file — the ledger's half of "every reader says how many trees
+// scored the file, or why one".
+func TestBuildScanFileRowsCarriesConcurrency(t *testing.T) {
+	results := []reposcan.FileResult{
+		{Job: reposcan.Job{Path: "src/flask/cli.py", Lang: "python"}, Gradable: true,
+			Verdict: advpool.Verdict{DevKillRate: 0.467, Survivors: 16, MutantsTotal: 30, DevScored: true,
+				Concurrency: advpool.Concurrency{Trees: 6}}},
+		{Job: reposcan.Job{Path: "downgraded.py", Lang: "python"}, Gradable: true,
+			Verdict: advpool.Verdict{DevKillRate: 0.5, Survivors: 4, MutantsTotal: 10, DevScored: true,
+				Concurrency: advpool.Concurrency{Trees: 1, Note: "suite is not concurrency-safe: baseline failed under 3"}}},
+	}
+	rows := buildScanFileRows(results, nil, reposcan.CoverageMap{}, "", io.Discard)
+	if len(rows) != 2 {
+		t.Fatalf("buildScanFileRows returned %d rows, want 2", len(rows))
+	}
+	byPath := map[string]scanstore.File{}
+	for _, r := range rows {
+		byPath[r.Path] = r
+	}
+	if got := byPath["src/flask/cli.py"]; got.Trees != 6 || got.ConcurrencyNote != "" {
+		t.Errorf("row = %+v, want Trees 6, no note", got)
+	}
+	if got := byPath["downgraded.py"]; got.Trees != 1 || got.ConcurrencyNote != "suite is not concurrency-safe: baseline failed under 3" {
+		t.Errorf("row = %+v, want the downgrade note preserved", got)
+	}
 	if rows[0].TestWriterFailed {
 		t.Error("row.TestWriterFailed = true, want false — the test DID compile")
 	}

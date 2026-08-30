@@ -68,6 +68,16 @@ type AuditedFile struct {
 	// should expect from any selection-graded file.
 	ProvenByAuthoredAlone bool                  `json:"provenByAuthoredAlone,omitempty"`
 	TestsPerMutant        *TestsPerMutantSpread `json:"testsPerMutant,omitempty"`
+	// Trees and ConcurrencyNote disclose how many private trees the
+	// workspace substrate's probe scored this file with at once, or —
+	// when it granted only one — why. Trees is signed on EVERY file
+	// (never omitted): a verifier must be able to see the exam ran at
+	// concurrency 1 without inferring it from an absent key, and a struct
+	// field with `omitempty` would drop exactly the "1" that most needs
+	// to be visible. ConcurrencyNote signs only when the substrate
+	// actually had a reason to give.
+	Trees           int    `json:"trees"`
+	ConcurrencyNote string `json:"concurrencyNote,omitempty"`
 }
 
 // TestsPerMutantSpread is how many tests each graded mutant ran: the
@@ -114,6 +124,13 @@ func BuildAuditAttestation(s AuditStatement) map[string]any {
 			"path":         f.Path,
 			"survivors":    f.Survivors,
 			"provenMissed": f.ProvenMissed,
+			// Signed on every file, never omitted: a verifier must be able
+			// to see the exam ran at concurrency 1 without inferring it
+			// from an absent key.
+			"trees": f.Trees,
+		}
+		if f.ConcurrencyNote != "" {
+			entry["concurrencyNote"] = f.ConcurrencyNote
 		}
 		// Omitted, never zero-filled: an absent killRate says "no rate was
 		// measured for this file", and a consumer that reads a 0.0 instead

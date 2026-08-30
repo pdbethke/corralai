@@ -2391,6 +2391,10 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 		fmt.Fprint(w, " — proven by the authored test alone")
 	}
 	fmt.Fprintln(w)
+	// How many private trees scored this file at once, or why it only got
+	// one — the same wording noteConcurrency printed live during the run,
+	// through the one shared helper, so the screen and the record agree.
+	fmt.Fprintf(w, "   concurrency: %s\n", concurrencyDisclosure(f.Trees, f.ConcurrencyNote))
 
 	// The artifact that makes "N proven, catchable gap(s)" actionable. --repo
 	// is the mode the GitHub Action runs, and it reported the COUNT while
@@ -3114,28 +3118,40 @@ func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
 	}
 }
 
+// concurrencyDisclosure renders the human-readable half of "how many trees
+// scored this file, or why one" — the ONE place that wording is spelled out,
+// shared by the live progress line (noteConcurrency, below), the per-file
+// report line (printWeakFile) and, through them, the ledger and the
+// attestation. An operator who sees "concurrency: 1 (…)" on screen and a
+// different phrase in the record would have no way to tell whether they are
+// the same fact; a second copy of this string is exactly how that drifts.
+func concurrencyDisclosure(trees int, note string) string {
+	switch {
+	case trees > 1:
+		return fmt.Sprintf("%d trees (baseline passed under %d)", trees, trees)
+	case note != "":
+		return fmt.Sprintf("1 (%s)", note)
+	default:
+		return "1"
+	}
+}
+
 // noteConcurrency prints one file's concurrency disclosure: how many private
 // trees its pool got, or that it got one and WHY.
 //
-// The wording is the spec's, verbatim, because the same two sentences have to
-// appear in the live progress, in the report and in the ledger — an operator
-// who sees "concurrency: 1" on screen and a different phrase in the record
-// cannot tell whether they are the same fact.
-//
 // Nothing is printed for a disclosure that was never written (Trees 0): the
 // jail substrate has no trees to disclose, and inventing a line for it would
-// claim a measurement that never happened.
+// claim a measurement that never happened. Trees == 1 with no note is the
+// ordinary "the budget only bought one tree" case — the substrate's own
+// default, and not news either.
 func (l *localExecutor) noteConcurrency(path string, d *adequacy.Disclosure) {
-	switch {
-	case d == nil || d.Trees < 1:
+	if d == nil || d.Trees < 1 {
 		return
-	case d.Trees > 1:
-		l.note("%s: concurrency: %d trees (baseline passed under %d)\n", path, d.Trees, d.Trees)
-	case d.Note != "":
-		l.note("%s: concurrency: 1 (%s)\n", path, d.Note)
 	}
-	// Trees == 1 with no note is the ordinary "the budget only bought one
-	// tree" case — the substrate's own default, and not news.
+	if d.Trees == 1 && d.Note == "" {
+		return
+	}
+	l.note("%s: concurrency: %s\n", path, concurrencyDisclosure(d.Trees, d.Note))
 }
 
 // workspacePoolBox returns the box this job's private-tree pool will live in,
@@ -3498,6 +3514,10 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 			// as the measurement it is.
 			PerMutant:      f.PerMutant,
 			TestsPerMutant: signableSpread(f),
+			// How many private trees scored this file at once, or why it
+			// only got one — the same fact the screen and the ledger say.
+			Trees:           f.Trees,
+			ConcurrencyNote: f.ConcurrencyNote,
 		})
 	}
 	// Same resolution the warehouse push uses: a statement whose subject names
@@ -3568,7 +3588,12 @@ func pushAuditRows(target, repoDir string, r reposcan.RepoReport, models map[str
 			// without it, which is two measurements reported as one.
 			PerMutant:      f.PerMutant,
 			TestsPerMutant: pushableSpread(f),
-			Audited:        r.Audited, Candidates: r.Candidates,
+			// How many private trees scored this file at once, or why it
+			// only got one — denormalized onto the row like the rest of
+			// the qualifiers above.
+			Trees:           f.Trees,
+			ConcurrencyNote: f.ConcurrencyNote,
+			Audited:         r.Audited, Candidates: r.Candidates,
 			ModelsByRole: string(rosterJSON),
 			MinKillRate:  minKillRate, MaxProvenMissed: maxProvenMissed,
 			Passed: passed, RunURL: runURL,

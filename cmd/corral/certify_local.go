@@ -1054,6 +1054,18 @@ func orArgv(a, b []string) []string {
 // key and into the signed record's ModelsByRole, and then never placed on the
 // RunSpec any consumer reads. Every seat model this run will use is now
 // assembled in one testable place.
+// normalizedConcurrency turns the workspace substrate's raw probe answer
+// (a nil pointer, or a zero-value Disclosure on the jail substrate, which
+// builds no trees) into the one Concurrency a Verdict is allowed to carry:
+// Trees is never 0, because the probe itself never asserts that — it either
+// measured N trees or downgraded to 1 and said why.
+func normalizedConcurrency(d *adequacy.Disclosure) advpool.Concurrency {
+	if d == nil || d.Trees < 1 {
+		return advpool.Concurrency{Trees: 1}
+	}
+	return advpool.Concurrency{Trees: d.Trees, Note: d.Note}
+}
+
 func newAuditRunSpec(in localAuditInput, roles auditRoles, subj runSubject) advpool.RunSpec {
 	n := in.nMutants
 	if n <= 0 {
@@ -1076,9 +1088,19 @@ func newAuditRunSpec(in localAuditInput, roles auditRoles, subj runSubject) advp
 		// `--local` path, where checkArgv IS the base.
 		TestCmd:   adequacy.ShellJoin(orArgv(in.baseArgv, in.checkArgv)),
 		Selection: in.selection,
-		NMutants:  n,
-		Lang:      subj.lang,
-		MaxShards: resolveMaxShards(in.maxShards),
+		// Concurrency carries the workspace substrate's probe answer onto
+		// the RunSpec the driver actually reads — the ONLY hop that does,
+		// so every verdict, report line and ledger row can disclose how
+		// many trees scored this file, or why it only got one. Normalized
+		// here, not left to the reader: a nil pointer (the jail substrate,
+		// which builds no trees at all) or a zero Trees (never a fact the
+		// probe itself asserts) both mean "one tree, no note" — writing
+		// that out as Trees 1 is what keeps a signed record from ever
+		// reading "trees: 0", a claim nothing measured.
+		Concurrency: normalizedConcurrency(in.concurrency),
+		NMutants:    n,
+		Lang:        subj.lang,
+		MaxShards:   resolveMaxShards(in.maxShards),
 		// Both challenger seats, from the SAME resolved struct the
 		// RoleAssignment was built from — so a seat that is named, paid for and
 		// recorded is also a seat the driver can actually run.

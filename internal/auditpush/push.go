@@ -94,6 +94,12 @@ type Row struct {
 	// caller remembering to leave three ints alone.
 	PerMutant      bool
 	TestsPerMutant *TestsPerMutantSpread
+	// Trees and ConcurrencyNote disclose how many private trees scored this
+	// file at once, or — when it only got one — why. The same fact the
+	// report line and the signed attestation carry, denormalized onto this
+	// row so a cross-repo query does not need to reconstruct it.
+	Trees           int
+	ConcurrencyNote string
 }
 
 // TestsPerMutantSpread is how many tests each graded mutant ran: the
@@ -133,7 +139,9 @@ CREATE TABLE IF NOT EXISTS corral_audits (
   per_mutant              BOOLEAN,
   tests_per_mutant_min    INTEGER,
   tests_per_mutant_median INTEGER,
-  tests_per_mutant_max    INTEGER
+  tests_per_mutant_max    INTEGER,
+  trees                   INTEGER,
+  concurrency_note        VARCHAR
 );`
 
 // corralAuditsMigrationCols is the additive set of columns this package has
@@ -163,6 +171,8 @@ var corralAuditsMigrationCols = []struct{ name, ddl string }{
 	{"tests_per_mutant_min", "tests_per_mutant_min INTEGER"},
 	{"tests_per_mutant_median", "tests_per_mutant_median INTEGER"},
 	{"tests_per_mutant_max", "tests_per_mutant_max INTEGER"},
+	{"trees", "trees INTEGER"},
+	{"concurrency_note", "concurrency_note VARCHAR"},
 }
 
 // migrateCorralAudits additively brings a corral_audits table created before
@@ -255,8 +265,9 @@ func Push(target string, rows []Row) (int, error) {
 	    audited, candidates, mutants_planted, models_by_role,
 	    min_kill_rate, max_proven_missed, passed, statement_sha256, run_url,
 	    test_selection, selected_tests, suite_tests, selection_fallback, uncovered,
-	    per_mutant, tests_per_mutant_min, tests_per_mutant_median, tests_per_mutant_max
-	  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+	    per_mutant, tests_per_mutant_min, tests_per_mutant_median, tests_per_mutant_max,
+	    trees, concurrency_note
+	  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 	if err != nil {
 		return 0, err
 	}
@@ -289,13 +300,21 @@ func Push(target string, rows []Row) (int, error) {
 		if s := r.TestsPerMutant; r.PerMutant && s != nil {
 			pmMin, pmMedian, pmMax = s.Min, s.Median, s.Max
 		}
+		// concurrencyNote is SQL NULL, not "", for a row with no note: an
+		// empty string would be indistinguishable from "the substrate had
+		// nothing to say" and "this column predates the row".
+		var concurrencyNote any
+		if r.ConcurrencyNote != "" {
+			concurrencyNote = r.ConcurrencyNote
+		}
 		if _, err := stmt.Exec(now, r.Repo, r.Commit, r.Path, r.Lang,
 			killRate, r.Survivors, r.ProvenMissed,
 			r.TimedOut, r.TestWriterFailed, r.PoolTestUnsound,
 			r.Audited, r.Candidates, r.MutantsPlanted, r.ModelsByRole,
 			minKill, maxGaps, r.Passed, r.StatementSHA256, r.RunURL,
 			r.TestSelection, r.SelectedTests, r.SuiteTests, r.SelectionFallback, r.Uncovered,
-			r.PerMutant, pmMin, pmMedian, pmMax); err != nil {
+			r.PerMutant, pmMin, pmMedian, pmMax,
+			r.Trees, concurrencyNote); err != nil {
 			return n, fmt.Errorf("auditpush: insert %s: %w", r.Path, err)
 		}
 		n++

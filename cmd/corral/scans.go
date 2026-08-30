@@ -181,11 +181,12 @@ func runScansShow(args []string, open func(string) (scansReader, error), stdout,
 	}
 
 	tw := tabwriter.NewWriter(stdout, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, "PATH\tDISPOSITION\tREASON\tKILL RATE\tSURVIVORS\tPROVEN\tSELECTION\tEVIDENCE\tNOTE\t")
+	fmt.Fprintln(tw, "PATH\tDISPOSITION\tREASON\tKILL RATE\tSURVIVORS\tPROVEN\tSELECTION\tCONCURRENCY\tEVIDENCE\tNOTE\t")
 	for _, f := range files {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\t%d\t%s\t%s\t%s\t\n",
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\t%d\t%s\t%s\t%s\t%s\t\n",
 			f.Path, f.Disposition, f.Reason, formatKillRate(f.KillRate),
-			f.Survivors, f.ProvenMissed, scanFileSelectionWith(f, spreads[f.Path]), f.Evidence, scanFileNote(f))
+			f.Survivors, f.ProvenMissed, scanFileSelectionWith(f, spreads[f.Path]),
+			concurrencyDisclosure(f.Trees, f.ConcurrencyNote), f.Evidence, scanFileNote(f))
 	}
 	tw.Flush()
 

@@ -115,6 +115,22 @@ func TestAggregateCarriesTheSelectionOntoTheVerdict(t *testing.T) {
 	}
 }
 
+// TestAggregateCarriesConcurrencyOntoTheVerdict pins the other half of "every
+// reader says how many trees scored the file, or why one" — the RunSpec's
+// Concurrency must reach the Verdict unchanged, the same way Selection does,
+// so a timed-out verdict (built off this same function) still discloses it.
+func TestAggregateCarriesConcurrencyOntoTheVerdict(t *testing.T) {
+	rs := RunSpec{Concurrency: Concurrency{Trees: 6}}
+	if v := verdictFromSpec(rs); v.Concurrency.Trees != 6 || v.Concurrency.Note != "" {
+		t.Errorf("got %+v, want Trees 6, no note", v.Concurrency)
+	}
+
+	rs = RunSpec{Concurrency: Concurrency{Trees: 1, Note: "suite is not concurrency-safe: baseline failed under 3"}}
+	if v := verdictFromSpec(rs); v.Concurrency.Trees != 1 || v.Concurrency.Note != "suite is not concurrency-safe: baseline failed under 3" {
+		t.Errorf("got %+v, want the downgrade note preserved", v.Concurrency)
+	}
+}
+
 // I2/I3. The narrowing belongs to the CALLER that means "the run's command",
 // not to ScoreReport: as a scorer-internal rewrite it silently narrowed a
 // caller-supplied command (the matrix's own per-test selector) and silently

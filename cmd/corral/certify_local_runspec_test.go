@@ -5,6 +5,7 @@ package main
 import (
 	"testing"
 
+	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/advpool"
 )
 
@@ -84,5 +85,43 @@ func TestUnnamedChallengerWriterLeavesTheRunSpecEmpty(t *testing.T) {
 	}
 	if _, ok := roles.assign[advpool.RoleTestWriterShadow]; ok {
 		t.Error("an unnamed challenger writer must not appear in the role assignment at all")
+	}
+}
+
+// TestConcurrencyReachesTheRunSpec walks the same CLI→RunSpec seam for the
+// workspace substrate's concurrency probe: buildJailWiring writes its answer
+// into in.concurrency, and newAuditRunSpec is the ONLY place that copies it
+// onto the RunSpec the driver actually reads — miss this hop and every
+// verdict, report line and ledger row downstream discloses nothing.
+//
+// A nil pointer or a zero Trees must normalize to {Trees: 1}, never {Trees:
+// 0}: 0 is not a fact the probe ever asserts (it either measured N trees or
+// downgraded to 1 with a reason), so a signed record reading "trees: 0"
+// would be a claim nothing made.
+func TestConcurrencyReachesTheRunSpec(t *testing.T) {
+	roles := auditRoles{}
+	subj := runSubject{repo: "r", commit: "c", codePath: "a.go", lang: "go"}
+
+	rs := newAuditRunSpec(localAuditInput{checkArgv: []string{"go", "test", "./..."}}, roles, subj)
+	if rs.Concurrency.Trees != 1 || rs.Concurrency.Note != "" {
+		t.Errorf("nil concurrency pointer = %+v, want {Trees: 1, Note: \"\"}", rs.Concurrency)
+	}
+
+	zero := &adequacy.Disclosure{}
+	rs = newAuditRunSpec(localAuditInput{checkArgv: []string{"go", "test", "./..."}, concurrency: zero}, roles, subj)
+	if rs.Concurrency.Trees != 1 || rs.Concurrency.Note != "" {
+		t.Errorf("zero-value disclosure = %+v, want {Trees: 1, Note: \"\"}", rs.Concurrency)
+	}
+
+	many := &adequacy.Disclosure{Trees: 6}
+	rs = newAuditRunSpec(localAuditInput{checkArgv: []string{"go", "test", "./..."}, concurrency: many}, roles, subj)
+	if rs.Concurrency.Trees != 6 || rs.Concurrency.Note != "" {
+		t.Errorf("6-tree disclosure = %+v, want {Trees: 6, Note: \"\"}", rs.Concurrency)
+	}
+
+	downgraded := &adequacy.Disclosure{Trees: 1, Note: "suite is not concurrency-safe: baseline failed under 3"}
+	rs = newAuditRunSpec(localAuditInput{checkArgv: []string{"go", "test", "./..."}, concurrency: downgraded}, roles, subj)
+	if rs.Concurrency.Trees != 1 || rs.Concurrency.Note != downgraded.Note {
+		t.Errorf("downgraded disclosure = %+v, want the note preserved", rs.Concurrency)
 	}
 }

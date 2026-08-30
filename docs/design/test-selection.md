@@ -308,10 +308,106 @@ line appends `proven by the authored test alone`, and the attestation signs
 `provenByAuthoredAlone`. Runs with no selector (`--whole-suite`, `--local`,
 Ruby, `node:test`) prove the old way and say nothing new.
 
-## Part B — not built
+## Part B — scoring mutants at once, on the substrate that runs real suites
 
-A per-worker tree on the workspace substrate, letting concurrent scoring runs
-avoid the CPython `__pycache__` staleness hazard (documented in
-`internal/lang/lang.go`) without a fresh workspace per mutant, is designed
-but not implemented, along with the concurrency-safety probe that would prove
-it closes the hazard. Nothing in this document depends on it landing.
+Shipped 2026-08-30 as #171 (design: private trees on the workspace
+substrate, behind a concurrency probe), plus one fix found by the first real
+run (symlinks in the tree copy).
+
+### The rules
+
+- **One private tree per worker.** The workspace substrate mutates a checkout
+  in place, which is why it scored one mutant at a time. Now N workers each
+  own a copy of the checkout built from `git ls-files --cached --others
+  --exclude-standard` (tracked plus untracked-not-ignored: the operator's
+  uncommitted edits are graded; nothing gitignored is duplicated), with the
+  ignored dependency directories (`node_modules`, `vendor`, `.venv`, `venv`,
+  `.bundle`) symlinked in — and named in the disclosure as `shared`, because
+  they are the one channel between trees. `.tox` is deliberately not shared:
+  tox writes into it. Symlinks in the checkout are copied as symlinks.
+- **The probe runs first.** Before any mutant is scored, the unmutated
+  baseline runs in every tree at once, then the canary (invalid source at the
+  audited path must fail the command in every tree — the editable-install
+  trap, where a copy would import the original through a `.pth`). Any
+  failure means one tree, on the checkout itself, and the record says why
+  with the tail of the runner's output.
+- **N = `max(1, budget/4)`**, budget = `--swarm` or the host's cores; each
+  tree's run gets `cores/N` (`GOMAXPROCS`, `-p`) and, for Go, `-trimpath` so
+  N trees share one build cache (measured: the cache is path-dependent —
+  a second copy of this module rebuilt from scratch at 5.05 s versus 2.42 s
+  warm; with `-trimpath`, 2.42 s). N = 1 is the checkout, byte for byte: no
+  copy, no probe. On a 4-vCPU runner that is what you get.
+- **A replayable mutant set.** `--record-mutants` writes what was graded;
+  `--mutants` replays it with no generator call and refuses a changed file.
+  This is what made the invariant below measurable — and it is the first
+  reproducible audit corral offers: same commit, same set, same verdict.
+- **Disclosure, no generation bump.** `concurrency: 6 trees (baseline
+  passed under 6; shared: .venv)` or `concurrency: 1 (<why>)` on the report
+  line, `trees` / `concurrency_note` / `shared_dirs` on `scan_files`, the
+  attestation and the warehouse row. An unmeasured concurrency (the jail, a
+  cache hit from before this change) is *not recorded* — never rendered or
+  signed as 1. The number is the same measurement; that is the invariant.
+
+### Measured
+
+Same setup as every table above (all `gemini-3.6-flash`, `--critic-model
+off`, `--substrate workspace`, 24 cores). The dev-pass sets are compared
+mutant by mutant from `scan_mutants`.
+
+| target | run | trees | dev-pass set (killed / survived) | proven | wall |
+|---|---|---|---|---|---|
+| `requests/adapters.py` | record (with generation) | 1 (downgraded: symlink bug, below) | 23 / 16 of 39 | 3 | 43m13s |
+| same set, replay | `--swarm 4` | 1 | **identical, 39 of 39** | 16 | 48m56s |
+| same set, replay | `--swarm 24` | 6 | **identical, 39 of 39** | 4 | **17m34s** |
+| `flask/cli.py` | record (with generation) | 6 | 16 / 24 of 40 | 5 | 2m26s |
+| same set, replay | `--swarm 4` | 1 | **identical, 40 of 40** | 5 | 3m31s |
+| same set, replay | `--swarm 24` | 6 | **identical, 40 of 40** | 17 | 3m09s |
+
+What that says, plainly:
+
+- **The invariant holds on real repos.** Every replay of a recorded set
+  produced the identical killed/survived partition, at one tree and at six.
+  The *proven* count is a different animal: the writer is a model, and on
+  the same sixteen survivors it proved 3, then 16 (a targeted test per
+  survivor — read, not vacuous). The dev-pass number is reproducible now;
+  the proven number is a draw, and the record should be read that way.
+- **Flask gains nothing worth measuring**, as predicted: its suite is
+  seconds, the run is the writer's. Requests is the shape the design was
+  written for. On the same 39 mutants, six trees took the audit from **48m56s to 17m34s** (the dev pass itself from ~39 to ~13 minutes; what remains is the model — generation and the writer — and the instrumented selection run). That is the number Part B was written for, and the set underneath it did not move.
+- **Six trees cost nothing the suite feels.** The full requests suite in six
+  hand-made copies at once: 77.6 s each, the same as one alone; the selected
+  234 tests, 62 s each. The work is I/O-bound waiting; the box was idle.
+- **The probe earned its keep on the first run, and then hid a bug.** With
+  `--repo .` the tree's `.venv` link pointed at itself (a relative root —
+  fixed the same afternoon). Then three runs in a row downgraded requests with
+  `baseline failed under N`, at six trees and at three, while the same command
+  in six hand-made copies passed every time. The reason was not concurrency:
+  `tests/certs/valid/ca` is a **tracked symlink** (`-> ../expired/ca`) and
+  the copy kept regular files only, so every tree lacked the CA the TLS test
+  verifies against — and at N = 1 nothing is copied. The probe was right to
+  refuse; the note quoted the *head* of the output (a flask warning) and blamed
+  the suite. Both fixed: symlinks are copied, notes keep the tail. The lesson
+  is the one this project keeps relearning — a disclosure that names the
+  wrong cause is a slow run that looks like an honest one.
+
+### Residuals
+
+- A suite that is concurrency-unsafe only *sometimes* (a timing-sensitive
+  handshake, a port it occasionally binds) can pass the probe and then fail
+  spuriously under load during grading — which grades a survivor as
+  **killed**. The invariant test on a fixed set is the only guard today; the
+  designed answer is *confirm the kill*: re-run the failing test alone before
+  recording a kill, which pairs naturally with fail-fast and `killed_by`.
+- The copy is a plain `io.Copy` per file (no `cp --reflink`); the 2 GiB
+  disk cap is per universe, not per N — a 1.9 GiB checkout at six trees is
+  11 GiB under `$TMPDIR`. ENOSPC downgrades cleanly.
+- Non-regular tracked paths other than symlinks (submodule gitlinks,
+  sockets) are still dropped silently.
+- A graceful interrupt (`SIGTERM`) "finishes the current step" — observed to
+  keep grading for 22 minutes at N = 1. It should stop after the current
+  mutant's run and restore.
+- `--mutants` still derives goals (a model call) and still requires
+  `--mutant-model` in the roster, for a run that generates nothing.
+- `--swarm` sizes both the LLM workers and the trees; a clean N = 1 versus
+  N = 6 comparison uses `--swarm 4` versus `--swarm 24` so the writer's
+  parallelism matches.

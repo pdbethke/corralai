@@ -436,6 +436,13 @@ that produced it read identically. **A phase that did not run prints `—`, neve
 and reporting either as zero seconds would tell a cost model those phases are
 free.
 
+The **selection** pass is one instrumented run shared by the whole scan, so it
+is announced once above the file lines (`selection 1m32s (once per scan)`) and
+recorded once, on the scan row. It is still named on each file's line — a
+readout has to account for every phase that file's audit waited on — but it is
+deliberately **not** part of a file's `total`, so `sum(total_ms)` across a
+scan's files is a sound number rather than one that grows with the file count.
+
 **Look before you spend (`--dry-run`, `--json`).** Enumeration needs no model
 key, no jail and no money, and it already knows a great deal about your
 repository. It reports a per-language profile — how many source files corral can

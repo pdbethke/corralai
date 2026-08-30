@@ -64,17 +64,21 @@ func timingWith(spec, run Timing) Timing {
 	return spec
 }
 
-// totalWith is the audit's WHOLE wall clock for one file: the driver's own
-// elapsed time PLUS the two phases that were paid before the driver existed.
+// totalWith is what THIS FILE's audit cost: the driver's own elapsed time
+// plus Pool, which is per file and is paid before StartRun (the checkout is
+// copied and probed while the jail wiring is built, so it falls outside the
+// "now minus startedAt" window).
 //
-// The driver's elapsed time alone is not the answer. Selection and Pool are
-// measured by the caller and handed over on the RunSpec precisely because
-// they happen before StartRun, so a Total read as "now minus startedAt"
-// EXCLUDES them — and would report a 43-minute audit as 41, while claiming
-// (on a type whose whole purpose is to account for the minutes) to be the
-// number the phases sum within.
+// SELECTION IS DELIBERATELY NOT ADDED. The instrumented coverage run happens
+// ONCE for the whole scan and is shared by every file of it. Charging it to
+// each file would make `sum(total_ms)` over a scan's audits count one run
+// once per file — a number that grows with the file count and measures
+// nothing. It is still REPORTED per file, so a readout can name every phase
+// of that file's audit, and it is RECORDED once, on the scan header
+// (scanstore.Scan.SelectionMillis / corral_scans.selection_ms), which is the
+// column a cost query adds.
 func totalWith(t Timing, driverElapsed time.Duration) time.Duration {
-	return driverElapsed + t.Selection + t.Pool
+	return driverElapsed + t.Pool
 }
 
 // applyPerMutantStats fills the Verdict's per-mutant disclosure from the

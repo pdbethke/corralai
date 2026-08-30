@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/pdbethke/corralai/internal/scanstore"
 )
@@ -29,6 +30,11 @@ type scansReader interface {
 	// a reader that cannot answer it fails to compile instead of quietly
 	// printing the narrower claim.
 	MutantsForScan(ctx context.Context, scanID int64) ([]scanstore.Mutant, error)
+	// ScanByID backs the facts that live at the SCAN grain rather than the
+	// file grain — selection_ms above all, the one instrumented coverage run
+	// a whole scan shares. ok is false for an unknown id, which is an answer,
+	// not an error.
+	ScanByID(ctx context.Context, scanID int64) (scanstore.ScanRow, bool, error)
 	Close() error
 }
 
@@ -207,6 +213,22 @@ func runScansShow(args []string, open func(string) (scansReader, error), stdout,
 	// identically. Opt-in: the table above is already wide, and every row
 	// recorded before the clock existed has nothing to say here.
 	if *timing {
+		// The scan grain FIRST, and only what actually happened at it: the
+		// instrumented coverage run is ONE run shared by every file below, so
+		// it is announced once here. Every file's own line names it too (a
+		// readout must be able to account for each phase of that file's
+		// audit), and the per-file totals deliberately exclude it — which is
+		// what makes summing them sound.
+		//
+		// A reader that cannot answer, or a scan that instrumented nothing,
+		// prints nothing: an em dash here would announce a missing
+		// measurement where there was no measurement to make.
+		if row, ok, serr := st.ScanByID(context.Background(), id); serr != nil {
+			fmt.Fprintln(stderr, "corral scans show: scan header unavailable:", serr)
+		} else if ok && row.SelectionMillis != nil {
+			sel := time.Duration(*row.SelectionMillis) * time.Millisecond
+			fmt.Fprintf(stdout, "\nselection %s (once per scan)\n", durationText(sel))
+		}
 		for _, f := range files {
 			t, med, max := timingOf(f)
 			if !t.Measured() {

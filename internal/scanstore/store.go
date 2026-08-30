@@ -91,6 +91,20 @@ type Scan struct {
 	// browser, a MotherDuck share) should not have to subtract two
 	// timestamps in every query to ask the first question anyone asks.
 	TotalMillis int64
+	// SelectionMillis is how long the scan's ONE instrumented coverage run
+	// took — the pass that decides which tests execute which file.
+	//
+	// It lives at the SCAN grain because that is the grain it happens at. It
+	// is also carried on every file's verdict (advpool.Timing.Selection) so a
+	// per-file readout can name every phase of that file's audit, but it is
+	// the SAME run shared by all of them: summing a per-file copy across a
+	// scan would count one instrumented run once per file and invent time
+	// nobody spent. This column is the one a cost query adds.
+	//
+	// *int64, and NULL under --whole-suite (or an unsupported language, or a
+	// runner that could not be built): no pass ran, and a stored 0 would say
+	// the pass ran for free.
+	SelectionMillis *int64
 	// InputTokens, OutputTokens and ModelCalls are what the scan consumed
 	// from the providers, scan-wide. The per-role breakdown lives in
 	// scan_model_calls; these are the totals the run already printed to
@@ -459,6 +473,7 @@ var scansMigrationCols = []struct{ name, ddl string }{
 	{"model_calls", "model_calls BIGINT"},
 	{"source_pushed", "source_pushed BOOLEAN"},
 	{"statement_sha256", "statement_sha256 VARCHAR"},
+	{"selection_ms", "selection_ms BIGINT"},
 }
 
 // scanMutantsMigrationCols is the same ledger, at the mutant grain: the
@@ -500,7 +515,8 @@ func Open(dsn string) (*Store, error) {
 		started_at TIMESTAMP, finished_at TIMESTAMP,
 		corral_version VARCHAR, host VARCHAR, cores INTEGER, trees_requested INTEGER,
 		total_ms BIGINT, input_tokens BIGINT, output_tokens BIGINT, model_calls BIGINT,
-		source_pushed BOOLEAN, statement_sha256 VARCHAR
+		source_pushed BOOLEAN, statement_sha256 VARCHAR,
+		selection_ms BIGINT
 	)`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("scanstore: create scans table: %w", err)
@@ -888,15 +904,15 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 		kill_rate, cache_hits, preflight_ran, preflight_note, started_at, finished_at,
 		corral_version, host, cores, trees_requested,
 		total_ms, input_tokens, output_tokens, model_calls,
-		source_pushed, statement_sha256
-	) VALUES (nextval('scans_id'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		source_pushed, statement_sha256, selection_ms
+	) VALUES (nextval('scans_id'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	RETURNING id`,
 		time.Now().UTC(), scan.Owner, scan.Repo, scan.Commit, scan.Substrate, scan.EngineVersion, scan.ModelSet,
 		scan.Top, scan.AllCandidates, scan.DiffBase, scan.TotalFiles, scan.Candidates, scan.Audited,
 		sanitizeKillRate(scan.KillRate), scan.CacheHits, scan.PreflightRan, scan.PreflightNote, scan.StartedAt, scan.FinishedAt,
 		scan.CorralVersion, scan.Host, scan.Cores, nullableTrees(scan.TreesRequested),
 		scan.TotalMillis, scan.InputTokens, scan.OutputTokens, scan.ModelCalls,
-		scan.SourcePushed, scan.StatementSHA256,
+		scan.SourcePushed, scan.StatementSHA256, scan.SelectionMillis,
 	).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("scanstore: insert scan header: %w", err)
@@ -977,13 +993,7 @@ func (s *Store) Scans(ctx context.Context, limit int) ([]ScanRow, error) {
 	if limit <= 0 {
 		limit = 20
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id, ts, owner, repo, commit,
-		substrate, engine_version, model_set, top, all_candidates, diff_base,
-		total_files, candidates, audited, kill_rate, cache_hits,
-		preflight_ran, preflight_note, started_at, finished_at,
-		corral_version, host, cores, trees_requested,
-		total_ms, input_tokens, output_tokens, model_calls,
-		source_pushed, statement_sha256
+	rows, err := s.db.QueryContext(ctx, `SELECT `+scanHeaderCols+`
 		FROM scans ORDER BY id DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("scanstore: list scans: %w", err)
@@ -992,43 +1002,103 @@ func (s *Store) Scans(ctx context.Context, limit int) ([]ScanRow, error) {
 
 	var out []ScanRow
 	for rows.Next() {
-		var r ScanRow
-		var ts, started, finished sql.NullTime
-		var diffBase, preflightNote, modelSet, engineVersion, substrate sql.NullString
-		// kill_rate is deliberately scanned into *float64: a scan that audited
-		// nothing stored NULL rather than 0.0 (see Scan.KillRate's doc for the
-		// DuckDB NaN-ordering trap that forced this), and it must read back as
-		// "no measurement", never as a terrible score.
-		// The ten scan-grain columns added at schema_version 2 all read back
-		// nullable: a header written by an earlier corral has none of them,
-		// and trees_requested is stored NULL on the jail substrate, which
-		// builds no trees at all.
-		var corralVersion, host, statementSHA sql.NullString
-		var cores, treesRequested, totalMS, inputTokens, outputTokens, modelCalls sql.NullInt64
-		var sourcePushed sql.NullBool
-		if err := rows.Scan(&r.ID, &ts, &r.Owner, &r.Repo, &r.Commit,
-			&substrate, &engineVersion, &modelSet, &r.Top, &r.AllCandidates, &diffBase,
-			&r.TotalFiles, &r.Candidates, &r.Audited, &r.KillRate, &r.CacheHits,
-			&r.PreflightRan, &preflightNote, &started, &finished,
-			&corralVersion, &host, &cores, &treesRequested,
-			&totalMS, &inputTokens, &outputTokens, &modelCalls,
-			&sourcePushed, &statementSHA); err != nil {
-			return nil, fmt.Errorf("scanstore: scan scans row: %w", err)
+		r, err := scanScanRow(rows)
+		if err != nil {
+			return nil, err
 		}
-		r.TS, r.StartedAt, r.FinishedAt = ts.Time, started.Time, finished.Time
-		r.Substrate, r.EngineVersion, r.ModelSet = substrate.String, engineVersion.String, modelSet.String
-		r.DiffBase, r.PreflightNote = diffBase.String, preflightNote.String
-		r.CorralVersion, r.Host, r.StatementSHA256 = corralVersion.String, host.String, statementSHA.String
-		r.Cores, r.TreesRequested = int(cores.Int64), int(treesRequested.Int64)
-		r.TotalMillis, r.InputTokens = totalMS.Int64, inputTokens.Int64
-		r.OutputTokens, r.ModelCalls = outputTokens.Int64, modelCalls.Int64
-		r.SourcePushed = sourcePushed.Bool
 		out = append(out, r)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("scanstore: iterate scans: %w", err)
 	}
 	return out, nil
+}
+
+// scanHeaderCols is the scans SELECT list, spelled ONCE. Two readers of this
+// table (Scans and ScanByID) with two hand-maintained column lists is two
+// chances for a column added to one to be silently absent from the other —
+// and a reader that silently returns the zero value for a real stored number
+// is the exact failure this ledger's nullable columns exist to prevent.
+const scanHeaderCols = `id, ts, owner, repo, commit,
+		substrate, engine_version, model_set, top, all_candidates, diff_base,
+		total_files, candidates, audited, kill_rate, cache_hits,
+		preflight_ran, preflight_note, started_at, finished_at,
+		corral_version, host, cores, trees_requested,
+		total_ms, input_tokens, output_tokens, model_calls,
+		source_pushed, statement_sha256, selection_ms`
+
+// scanScanRow decodes one scans row, in scanHeaderCols' order. Shared by both
+// readers for the same reason the column list is.
+func scanScanRow(rows *sql.Rows) (ScanRow, error) {
+	var r ScanRow
+	var ts, started, finished sql.NullTime
+	var diffBase, preflightNote, modelSet, engineVersion, substrate sql.NullString
+	// kill_rate is deliberately scanned into *float64: a scan that audited
+	// nothing stored NULL rather than 0.0 (see Scan.KillRate's doc for the
+	// DuckDB NaN-ordering trap that forced this), and it must read back as
+	// "no measurement", never as a terrible score.
+	// The scan-grain columns added at schema_version 2 all read back
+	// nullable: a header written by an earlier corral has none of them,
+	// trees_requested is stored NULL on the jail substrate, which builds no
+	// trees at all, and selection_ms is NULL for a scan that instrumented
+	// nothing.
+	var corralVersion, host, statementSHA sql.NullString
+	var cores, treesRequested, totalMS, inputTokens, outputTokens, modelCalls sql.NullInt64
+	var selectionMS sql.NullInt64
+	var sourcePushed sql.NullBool
+	if err := rows.Scan(&r.ID, &ts, &r.Owner, &r.Repo, &r.Commit,
+		&substrate, &engineVersion, &modelSet, &r.Top, &r.AllCandidates, &diffBase,
+		&r.TotalFiles, &r.Candidates, &r.Audited, &r.KillRate, &r.CacheHits,
+		&r.PreflightRan, &preflightNote, &started, &finished,
+		&corralVersion, &host, &cores, &treesRequested,
+		&totalMS, &inputTokens, &outputTokens, &modelCalls,
+		&sourcePushed, &statementSHA, &selectionMS); err != nil {
+		return ScanRow{}, fmt.Errorf("scanstore: scan scans row: %w", err)
+	}
+	r.TS, r.StartedAt, r.FinishedAt = ts.Time, started.Time, finished.Time
+	r.Substrate, r.EngineVersion, r.ModelSet = substrate.String, engineVersion.String, modelSet.String
+	r.DiffBase, r.PreflightNote = diffBase.String, preflightNote.String
+	r.CorralVersion, r.Host, r.StatementSHA256 = corralVersion.String, host.String, statementSHA.String
+	r.Cores, r.TreesRequested = int(cores.Int64), int(treesRequested.Int64)
+	r.TotalMillis, r.InputTokens = totalMS.Int64, inputTokens.Int64
+	r.OutputTokens, r.ModelCalls = outputTokens.Int64, modelCalls.Int64
+	r.SourcePushed = sourcePushed.Bool
+	// A pointer, so "this scan ran no selection pass" survives the read as
+	// nil rather than becoming a 0 nobody measured.
+	if selectionMS.Valid {
+		v := selectionMS.Int64
+		r.SelectionMillis = &v
+	}
+	return r, nil
+}
+
+// ScanByID returns ONE scan header. ok is false when no scan has that id,
+// which is an ANSWER (the operator typed a number from a different ledger),
+// not an error.
+//
+// It exists because the scan grain now carries facts a per-file readout has
+// to name — selection_ms above all, the one phase that happens once for the
+// whole scan — and reaching them through Scans(limit) would mean guessing a
+// limit large enough to contain the row, which silently reports "no such
+// scan" for anything older than the guess.
+func (s *Store) ScanByID(ctx context.Context, id int64) (ScanRow, bool, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+scanHeaderCols+`
+		FROM scans WHERE id = ?`, id)
+	if err != nil {
+		return ScanRow{}, false, fmt.Errorf("scanstore: scan %d: %w", id, err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		if rerr := rows.Err(); rerr != nil {
+			return ScanRow{}, false, fmt.Errorf("scanstore: scan %d: %w", id, rerr)
+		}
+		return ScanRow{}, false, nil
+	}
+	r, err := scanScanRow(rows)
+	if err != nil {
+		return ScanRow{}, false, err
+	}
+	return r, true, nil
 }
 
 func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) {

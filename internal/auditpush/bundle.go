@@ -59,10 +59,20 @@ type ScanRow struct {
 	Passed         bool
 	// TotalMillis is the scan's own wall clock. *int64 so a run that did not
 	// time itself is NULL rather than a scan that took no time.
-	TotalMillis  *int64
-	InputTokens  int64
-	OutputTokens int64
-	ModelCalls   int64
+	TotalMillis *int64
+	// SelectionMillis is the scan's ONE instrumented coverage run — the pass
+	// that decides which tests execute which file. It belongs at the SCAN
+	// grain because that is where it happens: corral_audits.selection_ms
+	// carries the same run on every file of the scan so a per-file readout
+	// can name each phase, and summing THAT column would count one run once
+	// per file. This is the column a cost query adds.
+	//
+	// NULL — never 0 — for a scan that instrumented nothing (`--whole-suite`,
+	// an unsupported language, a runner that could not be built).
+	SelectionMillis *int64
+	InputTokens     int64
+	OutputTokens    int64
+	ModelCalls      int64
 	// SourcePushed records whether THIS run carried source bytes to the
 	// warehouse. A custody fact belongs in the record: "did our code leave
 	// the box on that run" must be answerable from the table, not from
@@ -215,6 +225,7 @@ CREATE TABLE IF NOT EXISTS corral_scans (
   model_calls      BIGINT,
   source_pushed    BOOLEAN,
   statement_sha256 VARCHAR,
+  selection_ms     BIGINT,
   schema_version   INTEGER
 );`
 
@@ -441,7 +452,12 @@ var corralAuditsMigrationCols = []struct{ name, ddl string }{
 // them goes through the additive path rather than into a CREATE TABLE an
 // existing warehouse will never re-run.
 var (
-	corralScansMigrationCols      = []struct{ name, ddl string }{}
+	// corral_scans grew selection_ms when the scan grain took ownership of
+	// the one instrumented coverage run (it had been carried only per file,
+	// where summing it over a scan counted one run once per file).
+	corralScansMigrationCols = []struct{ name, ddl string }{
+		{"selection_ms", "selection_ms BIGINT"},
+	}
 	corralMutantsMigrationCols    = []struct{ name, ddl string }{}
 	corralModelCallsMigrationCols = []struct{ name, ddl string }{}
 	corralEventsMigrationCols     = []struct{ name, ddl string }{}
@@ -716,14 +732,14 @@ func pushBundleOnce(target string, b Bundle) (Counts, error) {
 		    ts, repo, run_url, scan_id, commit_sha, corral_version, substrate,
 		    host, cores, trees_requested, diff_base, candidates, audited, passed,
 		    total_ms, input_tokens, output_tokens, model_calls,
-		    source_pushed, statement_sha256, schema_version
-		  ) VALUES (`+placeholders(21)+`)`,
+		    source_pushed, statement_sha256, selection_ms, schema_version
+		  ) VALUES (`+placeholders(22)+`)`,
 			now, b.Scan.Repo, b.Scan.RunURL, b.Scan.ScanID, b.Scan.Commit,
 			b.Scan.CorralVersion, b.Scan.Substrate, b.Scan.Host, b.Scan.Cores,
 			nullIfZeroInt(b.Scan.TreesRequested), b.Scan.DiffBase,
 			b.Scan.Candidates, b.Scan.Audited, b.Scan.Passed,
 			b.Scan.TotalMillis, b.Scan.InputTokens, b.Scan.OutputTokens, b.Scan.ModelCalls,
-			b.Scan.SourcePushed, b.Scan.StatementSHA256, SchemaVersion,
+			b.Scan.SourcePushed, b.Scan.StatementSHA256, b.Scan.SelectionMillis, SchemaVersion,
 		); err != nil {
 			return Counts{}, fmt.Errorf("auditpush: insert scan row: %w", err)
 		}

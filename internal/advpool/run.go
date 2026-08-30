@@ -111,9 +111,13 @@ type RunSpec struct {
 	// the driver CANNOT time, handed to it by the caller that did.
 	//
 	// Selection is the scan's single instrumented coverage run
-	// (cmd/corral's collectSelection): it happens once for the whole repo,
-	// before any run is started, and it is a real part of what every file's
-	// audit cost. PoolDuration is the workspace substrate's copy of the
+	// (cmd/corral's collectSelection): it happens once for the whole repo
+	// and is SHARED BY EVERY FILE of it, before any run is started. It rides
+	// every RunSpec so a file's readout can name each phase of its audit, but
+	// it is never added into that file's Timing.Total — the scan header
+	// records it once, which is the copy a cost query sums.
+	//
+	// PoolDuration, by contrast, is per FILE: the workspace substrate's copy of the
 	// checkout and its concurrency probe (adequacy.Disclosure.CopyDuration +
 	// ProbeDuration), which happen while the jail wiring is being built —
 	// again before the driver exists.

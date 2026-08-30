@@ -95,7 +95,11 @@ func buildBundle(
 			DiffBase: scan.DiffBase, Candidates: scan.Candidates, Audited: scan.Audited,
 			Passed:      meta.Passed,
 			TotalMillis: nilIfZeroMillis(scan.TotalMillis),
-			InputTokens: scan.InputTokens, OutputTokens: scan.OutputTokens,
+			// Already nullable in the ledger, so it rides through as-is: the
+			// scan grain is where the one instrumented coverage run belongs,
+			// and NULL there means the run never happened.
+			SelectionMillis: scan.SelectionMillis,
+			InputTokens:     scan.InputTokens, OutputTokens: scan.OutputTokens,
 			ModelCalls:   scan.ModelCalls,
 			SourcePushed: sourcePushed,
 		},

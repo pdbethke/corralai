@@ -13,6 +13,7 @@ import (
 
 type fakeScansReader struct {
 	scans   []scanstore.ScanRow
+	scan    scanstore.ScanRow // what ScanByID answers with; zero ID = not found
 	files   []scanstore.File
 	mutants []scanstore.Mutant
 	limit   int // records what the command asked for
@@ -27,6 +28,16 @@ func (f *fakeScansReader) FilesForScan(context.Context, int64) ([]scanstore.File
 }
 func (f *fakeScansReader) MutantsForScan(context.Context, int64) ([]scanstore.Mutant, error) {
 	return f.mutants, nil
+}
+
+// ScanByID answers with the fixture's scan header. A zero ID stands for "no
+// such scan", the same ANSWER (not error) the real store returns — every
+// pre-existing fixture leaves it unset, so the header is simply absent.
+func (f *fakeScansReader) ScanByID(context.Context, int64) (scanstore.ScanRow, bool, error) {
+	if f.scan.ID == 0 {
+		return scanstore.ScanRow{}, false, nil
+	}
+	return f.scan, true, nil
 }
 func (f *fakeScansReader) Close() error { return nil }
 

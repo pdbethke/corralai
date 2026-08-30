@@ -12,6 +12,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/advpool"
+	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/scanstore"
@@ -22,7 +23,13 @@ import (
 // an operator reads to decide where an audit's minutes went, and every phase
 // has to be named on it — including the ones that did not run, which say so
 // with an em dash rather than a 0s nobody measured.
-const wantTimingLine = "   time: selection 1m32s · generation 4m10s · pool 12s · dev pass 35m04s (39 mutants, median 54s, max 3m12s) · authored 1m49s · critic — · total 43m13s"
+// The total is the FILE's own work — pool + generation + dev pass + authored
+// + critic, plus the residual between them — and deliberately NOT the 1m32s
+// selection, which is one instrumented run shared by every file of the scan
+// and is recorded once on the scan header. Selection is still NAMED on the
+// line: a readout that skipped it could not account for a phase the file's
+// audit really waited on.
+const wantTimingLine = "   time: selection 1m32s · generation 4m10s · pool 12s · dev pass 35m04s (39 mutants, median 54s, max 3m12s) · authored 1m49s · critic — · total 41m41s"
 
 func TestTimingLineNamesEveryPhaseOrDash(t *testing.T) {
 	got := timingLine(advpool.Timing{
@@ -31,7 +38,7 @@ func TestTimingLineNamesEveryPhaseOrDash(t *testing.T) {
 		Pool:         12 * time.Second,
 		DevPass:      35*time.Minute + 4*time.Second,
 		AuthoredPass: 109 * time.Second,
-		Total:        43*time.Minute + 13*time.Second,
+		Total:        41*time.Minute + 41*time.Second,
 	}, 39, 54*time.Second, 3*time.Minute+12*time.Second)
 	if got != wantTimingLine {
 		t.Errorf("timing line:\n got %q\nwant %q", got, wantTimingLine)
@@ -64,7 +71,7 @@ func TestReportPrintsTheTimingLine(t *testing.T) {
 		Timing: advpool.Timing{
 			Selection: 92 * time.Second, Generation: 4*time.Minute + 10*time.Second,
 			Pool: 12 * time.Second, DevPass: 35*time.Minute + 4*time.Second,
-			AuthoredPass: 109 * time.Second, Total: 43*time.Minute + 13*time.Second,
+			AuthoredPass: 109 * time.Second, Total: 41*time.Minute + 41*time.Second,
 		},
 		MutantsGraded:      39,
 		MutantMillisMedian: 54000,
@@ -250,3 +257,24 @@ func TestSubSecondPhasesNeverPrintZero(t *testing.T) {
 		t.Errorf("durationText(1s) = %q, want %q", got, "1s")
 	}
 }
+
+// TestSelectionIsRecordedAtTheScanGrain. The instrumented pass runs ONCE for
+// a scan, so `sum(total_ms)` over a scan's files must not include it — it
+// lives on the scan header, and the bundle carries it there unchanged.
+func TestSelectionIsRecordedAtTheScanGrain(t *testing.T) {
+	scan := scanstore.Scan{Repo: "o/r", Commit: "deadbeef", SelectionMillis: ms64(92000)}
+	b := buildBundle(scan, 11, nil, nil, nil, nil, auditpush.Link{}, false,
+		"o/r", "deadbeef", "", bundleMeta{})
+	if b.Scan.SelectionMillis == nil || *b.Scan.SelectionMillis != 92000 {
+		t.Fatalf("the bundle's scan row carries selection_ms %v, want 92000", b.Scan.SelectionMillis)
+	}
+
+	whole := scanstore.Scan{Repo: "o/r", Commit: "deadbeef"}
+	wb := buildBundle(whole, 11, nil, nil, nil, nil, auditpush.Link{}, false,
+		"o/r", "deadbeef", "", bundleMeta{})
+	if wb.Scan.SelectionMillis != nil {
+		t.Errorf("a --whole-suite scan pushed selection_ms %d; NULL is the only honest value", *wb.Scan.SelectionMillis)
+	}
+}
+
+func ms64(v int64) *int64 { return &v }

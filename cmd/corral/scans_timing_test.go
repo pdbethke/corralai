@@ -22,16 +22,39 @@ func TestScansShowTimingIsTheSameLine(t *testing.T) {
 		Path: "pkg/a.py", Disposition: "audited", Gradable: true,
 		SelectionMillis: ms(92000), GenerationMillis: ms(250000), PoolMillis: ms(12000),
 		DevPassMillis: ms(2104000), AuthoredPassMillis: ms(109000),
-		TotalMillis:        ms(2593000),
+		TotalMillis:        ms(2501000),
 		MutantsGraded:      39,
 		MutantMillisMedian: ms(54000), MutantMillisMax: ms(192000),
 	}}}
+	r.scan = scanstore.ScanRow{ID: 1, Scan: scanstore.Scan{SelectionMillis: ms(92000)}}
 	var out, errOut bytes.Buffer
 	if code := runScans([]string{"show", "1", "--timing"}, openFake(r), &out, &errOut); code != 0 {
 		t.Fatalf("exit = %d, stderr=%s", code, errOut.String())
 	}
 	if !strings.Contains(out.String(), wantTimingLine) {
 		t.Errorf("`scans show --timing` did not print the report's own line:\n%s", out.String())
+	}
+	// And the scan grain says it ONCE, where the run happened. Without this
+	// the only selection number a reader sees is the per-file copy, which
+	// they will sum.
+	if !strings.Contains(out.String(), "selection 1m32s (once per scan)") {
+		t.Errorf("the scan header did not name the one instrumented run:\n%s", out.String())
+	}
+}
+
+// TestScansShowTimingSaysNothingAboutAnUnrunSelection: a --whole-suite scan
+// instrumented nothing, so the header has nothing to report — and must not
+// print "selection —  (once per scan)" as though something were missing.
+func TestScansShowTimingSaysNothingAboutAnUnrunSelection(t *testing.T) {
+	r := &fakeScansReader{files: []scanstore.File{{
+		Path: "pkg/a.py", Disposition: "audited", Gradable: true, DevPassMillis: ms(2104000),
+	}}, scan: scanstore.ScanRow{ID: 1}}
+	var out, errOut bytes.Buffer
+	if code := runScans([]string{"show", "1", "--timing"}, openFake(r), &out, &errOut); code != 0 {
+		t.Fatalf("exit = %d, stderr=%s", code, errOut.String())
+	}
+	if strings.Contains(out.String(), "once per scan") {
+		t.Errorf("a scan that instrumented nothing announced a selection run:\n%s", out.String())
 	}
 }
 

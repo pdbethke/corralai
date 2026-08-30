@@ -24,15 +24,23 @@ import (
 // pool's copies and probe happen before the driver is even constructed. The
 // remaining five are measured at the DAG's own boundaries in driver.go.
 //
-// Total is the file's WHOLE audit — the driver's own elapsed time plus the
-// two phases paid before the driver existed — so it is at least the sum of
-// the six phases. The difference is queue latency and the bookkeeping between
-// them, which is exactly the residual worth seeing.
+// Total covers THIS FILE's own work: Pool + Generation + DevPass +
+// AuthoredPass + Critic, plus the queue latency and bookkeeping between them,
+// which is the residual worth seeing. It deliberately EXCLUDES Selection —
+// that is one instrumented run shared by every file of the scan, it lives on
+// the scan row, and charging it to each file would make `sum(total_ms)` over
+// a scan grow with the file count while measuring nothing. Summing total_ms
+// across a scan's files is sound.
 type Timing struct {
 	// Selection is the scan's ONE instrumented run (see
-	// RunSpec.SelectionDuration). It is a per-scan cost carried on every
-	// file's verdict, not a per-file measurement: a sum over files would
-	// count it once per file and invent time nobody spent.
+	// RunSpec.SelectionDuration) — SHARED BY EVERY FILE OF THE SCAN, not a
+	// per-file measurement.
+	//
+	// It is reported here so a file's readout can name every phase of that
+	// file's audit, and it is deliberately NOT part of Total: the number a
+	// cost query adds is the scan row's own selection_ms
+	// (scanstore.Scan.SelectionMillis / corral_scans.selection_ms), recorded
+	// once, where the run happened.
 	Selection time.Duration
 	// Generation is from the moment the mutant-generator seats were enqueued
 	// to the moment their results were parsed into the exam. Zero on a
@@ -64,11 +72,11 @@ type Timing struct {
 	// the delay it imposes at the end, not its own elapsed model time. Zero
 	// when no critic was assigned (`--critic-model off`).
 	Critic time.Duration
-	// Total is the file's whole audit: the driver's own wall clock, from
-	// StartRun to the verdict, PLUS Selection and Pool — which were spent on
-	// this file's behalf before StartRun and so are not in that window. See
-	// totalWith. It is not measured independently of the parts, so it cannot
-	// disagree with them about which work it covers.
+	// Total is this FILE's audit: the driver's own wall clock, from StartRun
+	// to the verdict, plus Pool — which is per file and was spent before
+	// StartRun, so it is not in that window. Selection is excluded (see that
+	// field, and totalWith). It is not measured independently of the parts,
+	// so it cannot disagree with them about which work it covers.
 	Total time.Duration
 }
 

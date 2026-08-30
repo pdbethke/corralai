@@ -116,18 +116,23 @@ func TestVerdictTimingSumsWithinTotal(t *testing.T) {
 	if tm.Critic != 30*time.Second {
 		t.Errorf("Timing.Critic = %v, want 30s", tm.Critic)
 	}
-	sum := tm.Selection + tm.Generation + tm.Pool + tm.DevPass + tm.AuthoredPass + tm.Critic
+	// SELECTION IS DELIBERATELY EXCLUDED from this sum, and from Total. It is
+	// one instrumented run shared by every file of the scan, so charging it
+	// to each file would make `sum(total_ms)` over a scan count it once per
+	// file — time nobody spent. It is reported per file (a readout must be
+	// able to name every phase of that file's audit) and RECORDED once, on
+	// the scan header. Pool is per file and IS included.
+	sum := tm.Pool + tm.Generation + tm.DevPass + tm.AuthoredPass + tm.Critic
 	if tm.Total < sum {
-		t.Fatalf("Timing.Total %v is less than its own phases' sum %v — a phase is being counted outside the run", tm.Total, sum)
+		t.Fatalf("Timing.Total %v is less than this file's own phases %v — a phase is being counted outside the run", tm.Total, sum)
 	}
-	// And it is the WHOLE cost, not just the driver's slice of it: the
-	// selection run and the pool's copies were paid for this file's audit
-	// before the driver existed, and a Total that omitted them would report
-	// a 43-minute audit as 41.
 	// 4m generation + 5m dev + 3m authored + 30s critic = 12m30s of driver
-	// elapsed, plus the 1m32s selection and 12s pool the caller handed over.
-	if want := 12*time.Minute + 30*time.Second + 92*time.Second + 12*time.Second; tm.Total != want {
-		t.Errorf("Timing.Total = %v, want %v — the driver's elapsed time PLUS the two phases the caller measured", tm.Total, want)
+	// elapsed, plus the 12s pool the caller measured before StartRun.
+	if want := 12*time.Minute + 42*time.Second; tm.Total != want {
+		t.Errorf("Timing.Total = %v, want %v — the driver's elapsed time plus Pool, and NOT the per-scan selection run", tm.Total, want)
+	}
+	if tm.Selection == 0 {
+		t.Fatal("the fixture measured no selection, so nothing above proves it is EXCLUDED from Total")
 	}
 }
 
@@ -165,8 +170,10 @@ func TestTimedOutVerdictCarriesWhatItSpent(t *testing.T) {
 	if v.Timing.Selection != 92*time.Second || v.Timing.Pool != 12*time.Second {
 		t.Errorf("the timeout verdict dropped the spec's own durations: %+v", v.Timing)
 	}
-	if want := 43*time.Minute + 92*time.Second + 12*time.Second; v.Timing.Total != want {
-		t.Errorf("Timing.Total = %v, want the 43m the run was alive plus the selection and pool it was handed (%v)", v.Timing.Total, want)
+	// The 43m the run was alive plus the 12s pool it was handed — and NOT the
+	// 1m32s selection, which belongs to the scan, not to this file.
+	if want := 43*time.Minute + 12*time.Second; v.Timing.Total != want {
+		t.Errorf("Timing.Total = %v, want %v", v.Timing.Total, want)
 	}
 	if v.Timing.AuthoredPass != 0 || v.Timing.Critic != 0 {
 		t.Errorf("phases that never ran reported time: %+v", v.Timing)

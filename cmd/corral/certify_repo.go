@@ -942,6 +942,12 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			return 0
 		}(),
 		TotalMillis: finishedAt.Sub(startedAt).Milliseconds(),
+		// The instrumented coverage run, at the grain it HAPPENS at: once per
+		// scan. Every file's verdict carries the same duration too (so a
+		// per-file readout can name each phase of that file's audit), but
+		// this is the copy a cost query sums — adding the per-file column
+		// would count one run once per file. NULL when no pass ran.
+		SelectionMillis: scanSelectionMillis(ex),
 		// What the scan consumed. The run already printed these to stdout and
 		// then discarded them, which is how "what did that cost me" had no
 		// answer from the tool whose central caveat is that audits are
@@ -3295,6 +3301,17 @@ func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
 		presetMutants: l.presetMutants[j.Path],
 		mutantSink:    l.mutantSink,
 	}
+}
+
+// scanSelectionMillis is the scan header's selection_ms: how long the ONE
+// instrumented coverage run took, or nil when there was no such run —
+// --whole-suite, an unsupported language, a --dry-run that built no executor
+// at all. nil is SQL NULL; a 0 would claim the pass ran and cost nothing.
+func scanSelectionMillis(ex *localExecutor) *int64 {
+	if ex == nil {
+		return nil
+	}
+	return millisOrNil(ex.selectionDuration)
 }
 
 // concurrencyDisclosure renders the human-readable half of "how many trees

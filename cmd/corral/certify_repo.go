@@ -2269,6 +2269,12 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 	case f.SelectionFallback != "":
 		fmt.Fprintf(w, "   graded by the whole suite (%s)", f.SelectionFallback)
 	}
+	if f.ProvenByAuthoredAlone && f.ProvenMissed > 0 {
+		// The proven count's meaning changed with the authored pass: only
+		// the authored test ran against each survivor, so a proof is the
+		// authored test's own — never a dev test that happened to flake.
+		fmt.Fprint(w, " — proven by the authored test alone")
+	}
 	fmt.Fprintln(w)
 
 	// The artifact that makes "N proven, catchable gap(s)" actionable. --repo
@@ -3249,11 +3255,12 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 			// The statement is the one artifact a third party verifies, so it
 			// must say which measurement it is signing — and must not sign a
 			// rate for a file nothing executes.
-			TestSelection:     f.SelectionMethod,
-			SelectedTests:     f.SelectedTests,
-			SuiteTests:        f.SuiteTests,
-			SelectionFallback: f.SelectionFallback,
-			Uncovered:         f.Uncovered,
+			TestSelection:         f.SelectionMethod,
+			ProvenByAuthoredAlone: f.ProvenByAuthoredAlone,
+			SelectedTests:         f.SelectedTests,
+			SuiteTests:            f.SuiteTests,
+			SelectionFallback:     f.SelectionFallback,
+			Uncovered:             f.Uncovered,
 			// And at which grain: a signed rate averaged over mutants that
 			// each faced a different test set needs the spread to be read
 			// as the measurement it is.

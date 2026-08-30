@@ -346,6 +346,12 @@ type TestSelection struct {
 	// (lang.SpanRule*). A run that is mostly "static" or "unreached" narrowed
 	// almost nothing, and the count is what says so.
 	Rules map[string]int `json:"rules,omitempty"`
+	// AuthoredAlone: the authored pass proved each survivor with the
+	// authored test ALONE (see JailScorer.ScoreAuthoredReport). A proven
+	// count under this flag can only be the authored test's own doing;
+	// without it, any test in the shared command could have supplied the
+	// kill — a different, weaker claim.
+	AuthoredAlone bool `json:"authored_alone,omitempty"`
 }
 
 // TestsPerMutantSpread is how many tests the graded mutants each ran: the

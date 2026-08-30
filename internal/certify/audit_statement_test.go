@@ -181,3 +181,20 @@ func TestPerMutantWithNoGradedMutantSignsNoSpread(t *testing.T) {
 		t.Fatalf("statement does not marshal: %v", err)
 	}
 }
+
+func TestProvenByTheAuthoredTestAloneIsSigned(t *testing.T) {
+	got := BuildAuditAttestation(AuditStatement{
+		Repo: "r", Commit: "c",
+		Files: []AuditedFile{
+			{Path: "pkg/a.py", KillRate: killRate(0.55), Survivors: 18, ProvenMissed: 18, TestSelection: "coverage-lines", ProvenByAuthoredAlone: true},
+			{Path: "pkg/b.py", KillRate: killRate(0.55), Survivors: 2, ProvenMissed: 1},
+		},
+	})
+	files := got["predicate"].(map[string]any)["files"].([]map[string]any)
+	if v, ok := files[0]["provenByAuthoredAlone"]; !ok || v != true {
+		t.Errorf("per-selection file must sign provenByAuthoredAlone=true: %v", files[0])
+	}
+	if _, ok := files[1]["provenByAuthoredAlone"]; ok {
+		t.Errorf("a whole-suite file must not carry the key: %v", files[1])
+	}
+}

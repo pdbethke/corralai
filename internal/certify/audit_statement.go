@@ -62,8 +62,12 @@ type AuditedFile struct {
 	// measured: an ordinary shared-command run, or a per-mutant run whose
 	// every mutant was rejected by the compile gate before anything could be
 	// graded. A signed 0-to-0 range would be a measurement nobody made.
-	PerMutant      bool                  `json:"perMutant,omitempty"`
-	TestsPerMutant *TestsPerMutantSpread `json:"testsPerMutant,omitempty"`
+	PerMutant bool `json:"perMutant,omitempty"`
+	// ProvenByAuthoredAlone: provenMissed was established by the authored
+	// test alone — the strongest form of the claim, and the one a verifier
+	// should expect from any selection-graded file.
+	ProvenByAuthoredAlone bool                  `json:"provenByAuthoredAlone,omitempty"`
+	TestsPerMutant        *TestsPerMutantSpread `json:"testsPerMutant,omitempty"`
 }
 
 // TestsPerMutantSpread is how many tests each graded mutant ran: the
@@ -128,6 +132,9 @@ func BuildAuditAttestation(s AuditStatement) map[string]any {
 		// Only when the run actually graded per mutant: a zero-filled spread
 		// on a shared-command file would be a signed claim about a
 		// measurement that was never made.
+		if f.ProvenByAuthoredAlone {
+			entry["provenByAuthoredAlone"] = true
+		}
 		if f.PerMutant {
 			entry["perMutant"] = true
 			// The spread only when one was actually MEASURED. A per-mutant

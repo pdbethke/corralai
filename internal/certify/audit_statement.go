@@ -66,8 +66,14 @@ type AuditedFile struct {
 	// ProvenByAuthoredAlone: provenMissed was established by the authored
 	// test alone — the strongest form of the claim, and the one a verifier
 	// should expect from any selection-graded file.
-	ProvenByAuthoredAlone bool                  `json:"provenByAuthoredAlone,omitempty"`
-	TestsPerMutant        *TestsPerMutantSpread `json:"testsPerMutant,omitempty"`
+	ProvenByAuthoredAlone bool `json:"provenByAuthoredAlone,omitempty"`
+	// WriterMode is HOW the writer seat attacked this file's survivors:
+	// "per-survivor" (one call, one repair budget and one proof each) or
+	// "batched" (one call carrying them all). Omitted when the run named no
+	// mode — signing either spelling for a run that recorded neither would
+	// attest to a fact nobody established.
+	WriterMode     string                `json:"writerMode,omitempty"`
+	TestsPerMutant *TestsPerMutantSpread `json:"testsPerMutant,omitempty"`
 	// Trees and ConcurrencyNote disclose how many private trees the
 	// workspace substrate's probe scored this file with at once, or —
 	// when it granted only one — why. A MEASURED one is signed like any
@@ -206,6 +212,13 @@ func BuildAuditAttestation(s AuditStatement) map[string]any {
 		}
 		if f.SelectionFallback != "" {
 			entry["selectionFallback"] = f.SelectionFallback
+		}
+		// WHICH SHAPE earned the provenMissed above. Signed only when the run
+		// recorded one: a verdict from a caller that named no mode, or from
+		// before the mode existed, has no fact here, and stamping either
+		// spelling would attest to something nobody established.
+		if f.WriterMode != "" {
+			entry["writerMode"] = f.WriterMode
 		}
 		if f.TimedOut {
 			entry["timedOut"] = true

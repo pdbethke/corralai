@@ -216,6 +216,14 @@ type File struct {
 	// (no selector for the language, --whole-suite, an evidence run that
 	// failed). Empty when TestSelection is set — never both.
 	SelectionFallback string
+	// WriterMode mirrors advpool.Verdict.WriterMode: whether this file's
+	// survivors were attacked by one writer call each ("per-survivor") or by
+	// one call carrying them all ("batched"). NULL — never one of the two
+	// spellings — on a row from a run that named no mode and on every row
+	// written before this column existed: the two modes are not the same
+	// measurement, so a query that groups by them must be able to exclude the
+	// rows that cannot say which they are.
+	WriterMode string
 	// Uncovered: the evidence ran and found NO test executing this file. Its
 	// KillRate is written NULL for the same reason a rejected file's is —
 	// nothing graded the file, so a stored 0.0 would later read as "your
@@ -454,6 +462,7 @@ var scanFilesMigrationCols = []struct{ name, ddl string }{
 	{"tests_per_mutant_min", "tests_per_mutant_min INTEGER"},
 	{"tests_per_mutant_median", "tests_per_mutant_median INTEGER"},
 	{"tests_per_mutant_max", "tests_per_mutant_max INTEGER"},
+	{"writer_mode", "writer_mode VARCHAR"},
 }
 
 // scansMigrationCols is the same ledger at the SCAN grain. `scans` had no
@@ -600,7 +609,8 @@ func Open(dsn string) (*Store, error) {
 		per_mutant BOOLEAN,
 		tests_per_mutant_min INTEGER,
 		tests_per_mutant_median INTEGER,
-		tests_per_mutant_max INTEGER
+		tests_per_mutant_max INTEGER,
+		writer_mode VARCHAR
 	)`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("scanstore: create scan_files table: %w", err)
@@ -976,9 +986,10 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 			selection_ms, generation_ms, pool_ms, dev_pass_ms, authored_pass_ms, critic_ms, total_ms,
 			mutant_ms_median, mutant_ms_max,
 			challenger_jaccard, challenger_kappa, challenger_sufficient, goals_derived,
-			per_mutant, tests_per_mutant_min, tests_per_mutant_median, tests_per_mutant_max
+			per_mutant, tests_per_mutant_min, tests_per_mutant_median, tests_per_mutant_max,
+			writer_mode
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id, f.Path, f.Lang, f.Disposition, f.Reason,
 			fileKillRate(f), f.Survivors, f.Gradable, f.PreflightState, f.Evidence, f.Detail, f.TimedOut, f.TestWriterFailed, f.ProvenMissed, f.PoolTestUnsound,
 			f.ProvenMutantIDs, f.AuthoredTest, f.CacheKey, f.VerdictJSON, f.ComputedAt,
@@ -991,6 +1002,7 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 			f.MutantMillisMedian, f.MutantMillisMax,
 			f.ChallengerJaccard, f.ChallengerKappa, f.ChallengerSufficient, f.GoalsDerived,
 			f.PerMutant, f.TestsPerMutantMin, f.TestsPerMutantMedian, f.TestsPerMutantMax,
+			nullableString(f.WriterMode),
 		); err != nil {
 			return 0, fmt.Errorf("scanstore: insert scan_files row for %q: %w", f.Path, err)
 		}
@@ -1155,7 +1167,8 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		selection_ms, generation_ms, pool_ms, dev_pass_ms, authored_pass_ms, critic_ms, total_ms,
 		mutant_ms_median, mutant_ms_max,
 		challenger_jaccard, challenger_kappa, challenger_sufficient, goals_derived,
-		per_mutant, tests_per_mutant_min, tests_per_mutant_median, tests_per_mutant_max
+		per_mutant, tests_per_mutant_min, tests_per_mutant_median, tests_per_mutant_max,
+		writer_mode
 		FROM scan_files WHERE scan_id = ? ORDER BY rowid`, scanID)
 	if err != nil {
 		return nil, fmt.Errorf("scanstore: files for scan %d: %w", scanID, err)
@@ -1172,6 +1185,7 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		// The eleven verdict columns all read back nullable: a row written
 		// before this migration ran will not have them, and a rejected file
 		// was never scored, so NULL is the honest value for its counts too.
+		var writerMode sql.NullString
 		var modelsByRole, droppedRegions, status sql.NullString
 		var mutantsTotal, regionsTotal, regionsProbed, vacuousFindings sql.NullInt64
 		var authoredTestNotCollected, baselineFailed, cacheHit sql.NullBool
@@ -1227,7 +1241,7 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 			&selectionMS, &generationMS, &poolMS, &devPassMS, &authoredPassMS, &criticMS, &totalMS,
 			&mutantMSMedian, &mutantMSMax,
 			&challengerJaccard, &challengerKappa, &challengerSufficient, &goalsDerived,
-			&perMutant, &tpmMin, &tpmMedian, &tpmMax); err != nil {
+			&perMutant, &tpmMin, &tpmMedian, &tpmMax, &writerMode); err != nil {
 			return nil, fmt.Errorf("scanstore: scan scan_files row: %w", err)
 		}
 		f.Detail = detail.String
@@ -1260,6 +1274,7 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		f.SelectedTests = int(selectedTests.Int64)
 		f.SuiteTests = int(suiteTests.Int64)
 		f.SelectionFallback = selectionFallback.String
+		f.WriterMode = writerMode.String
 		f.Uncovered = uncovered.Bool
 		f.Trees = int(trees.Int64)
 		f.ConcurrencyNote = concurrencyNote.String

@@ -92,6 +92,18 @@ type WeakFile struct {
 	// the language, --whole-suite, an evidence run that failed). Empty when
 	// SelectionMethod is set. Never both.
 	SelectionFallback string
+	// WriterMode and WriterCalls mirror advpool.Verdict.WriterMode and the
+	// test-writer's own entry in advpool.Verdict.ModelCalls: whether this
+	// file's survivors were attacked one call each ("per-survivor") or all in
+	// one ("batched"), and how many calls that actually took.
+	//
+	// The COUNT rides beside the mode because the mode alone understates the
+	// shape: "per-survivor" over 24 survivors that needed 31 calls says
+	// something the label does not (seven repairs). Empty/0 is NOT RECORDED
+	// — a run that named no mode, or a verdict from before the mode existed —
+	// and a reader must print nothing rather than pick a mode.
+	WriterMode  string
+	WriterCalls int
 	// PerMutant and TestsPerMutant mirror
 	// advpool.Verdict.TestSelection.PerMutant / .TestsPerMutant: each mutant
 	// was graded by the tests that reach ITS OWN lines, not by one command
@@ -410,6 +422,8 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 			SelectedTests:     r.Verdict.TestSelection.Selected,
 			SuiteTests:        r.Verdict.TestSelection.Of,
 			SelectionFallback: r.Verdict.TestSelection.Fallback,
+			WriterMode:        r.Verdict.WriterMode,
+			WriterCalls:       writerCallsOf(r.Verdict),
 			// And at which GRAIN it was measured: a rate averaged over
 			// mutants that each faced a different test set is not one
 			// measurement unless the report carries the spread.
@@ -453,4 +467,20 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 		return rep.Weakest[i].KillRate < rep.Weakest[j].KillRate
 	})
 	return rep
+}
+
+// writerCallsOf reads the test-writer seat's call count out of a verdict's
+// per-role cost rows — the SAME numbers the cost line and the ledger use,
+// never a second derivation from the survivor count (which would be a
+// prediction, not a measurement: repairs are calls too).
+//
+// 0 when the verdict carries no test-writer row at all, which the printer
+// renders as "not recorded" rather than as a writer that made no calls.
+func writerCallsOf(v advpool.Verdict) int {
+	for _, c := range v.ModelCalls {
+		if c.Role == advpool.RoleTestWriter {
+			return c.Calls
+		}
+	}
+	return 0
 }

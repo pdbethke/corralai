@@ -241,6 +241,7 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 				SelectedTests:     r.Verdict.TestSelection.Selected,
 				SuiteTests:        r.Verdict.TestSelection.Of,
 				SelectionFallback: r.Verdict.TestSelection.Fallback,
+				WriterMode:        r.Verdict.WriterMode,
 				// Uncovered also makes the store write kill_rate NULL (see
 				// scanstore.fileKillRate): no test executes this file, so
 				// there is no measurement to record.

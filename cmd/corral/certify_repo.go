@@ -82,6 +82,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	recordFlag := fs.Bool("record", false, "record every file this scan audited or rejected, and why, into the DuckDB scan ledger (default: off). A BOOL here — unlike `certify --local`'s --record, which takes a tape PATH — see --record-db for where the ledger goes. A recording failure never changes the scan's verdict or exit code")
 	mutantsFlag := fs.String("mutants", "", "REPLAY a recorded mutant set (see --record-mutants) instead of generating one: every audited file is graded against exactly the mutants in this file, and not one generator model call is made. Mutants are authored by a model, so an ordinary run re-draws the exam every time and two runs of the same audit are not two samples of one measurement — pin the set and a change to anything ELSE becomes measurable. Every selected file must appear in the set with the SAME bytes it was recorded from; a missing file or a changed one is refused (exit 2) up front, never half-replayed. Reads a corral-mutants-2 document, or an older corral-mutants-1 one, whose whole-file mutants still replay byte-for-byte.")
 	recordMutantsFlag := fs.String("record-mutants", "", "write the mutants this scan actually GRADED to this file, as a replayable corral-mutants-2 document — one entry per audited file, each mutant its SEARCH/REPLACE hunk, tied to the sha256 of the source it was derived from. Written even when the scan's gates fail: a red verdict is still a recorded exam")
+	writerModeFlag := fs.String("writer-mode", "", "how the test-writer attacks a file's survivors: `per-survivor` (the default) makes ONE call per survivor — each carrying the file once as a cacheable shared prefix plus that survivor's diff, each repaired on its own budget and each PROVEN ALONE against its own mutant — or `batched`, the original shape: one call carrying every survivor, one repair budget for the file, one proof pass over all of them. Nothing measured changes between them (a survivor is proven iff an authored test kills it alone and passes on the original, either way); what changes is that one unbuildable test no longer spends the whole file's retries and takes every other survivor down with it. The verdict, the report line, the ledger and the attestation all record which mode earned the numbers")
 	shadowWriterModelFlag := fs.String("shadow-writer-model", "", "CHALLENGER test-writer: a second writer attacks the SAME survivors as the primary, so the two seats' misses can be compared (Jaccard over survivors, Cohen's kappa). Measurement only — it NEVER gates the verdict. OFF unless named. Recording the per-mutant outcomes additionally needs --mutant-attempts-db")
 
 	var localEndpointFlag stringSlice
@@ -98,6 +99,15 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// they now get it by default — but from execution evidence, and the
 	// replacement flag goes the OTHER way, so silently honouring the old
 	// spelling would mean the opposite of what it used to.
+	// Validated here, before anything is spent: the mode changes how many
+	// model calls a run makes and what its verdict discloses, so a typo must
+	// exit 2 rather than quietly take the default and hand back a different
+	// measurement than the one that was asked for.
+	writerMode, wmErr := advpool.ResolveWriterMode(*writerModeFlag)
+	if wmErr != nil {
+		fmt.Fprintf(stderr, "%s: %v\n", "corral certify --repo", wmErr)
+		return 2
+	}
 	if *scopeTestsFlag {
 		fmt.Fprintln(stderr, "corral certify --repo: --scope-tests was removed. Its paired-FILE scoping inverted verdicts (requests/adapters.py 1.00 -> 0.00). Selection is now by coverage evidence and on by default; pass --whole-suite to grade against the whole suite. See docs/design/test-selection.md")
 		return 2
@@ -455,6 +465,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		if mutantRecorder != nil {
 			ex.mutantSink = mutantRecorder.sink
 		}
+		ex.writerMode = writerMode
 		ex.models = auditModels{
 			writer: *writerModelFlag, mutant: *mutantModelFlag,
 			critic: *criticModelFlag, shadow: *shadowModelFlag,
@@ -2568,6 +2579,17 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 	if f.Trees >= 1 {
 		fmt.Fprintf(w, "   concurrency: %s\n", concurrencyDisclosure(f.Trees, f.ConcurrencyNote, f.SharedDirs))
 	}
+	// WHICH SHAPE the writer attacked in, and what it cost in calls. The two
+	// modes prove the same thing — a survivor is proven iff an authored test
+	// kills it alone and passes on the original — but they attempt it
+	// differently and cost differently, so a proven count read without the
+	// mode is two incomparable measurements wearing one number. Silent when
+	// nothing recorded a mode (a run that named none, or a verdict from
+	// before the mode existed): a reader is told nothing rather than told the
+	// wrong one.
+	if line := writerModeDisclosure(f.WriterMode, f.WriterCalls); line != "" {
+		fmt.Fprintf(w, "   %s\n", line)
+	}
 	// WHERE THE MINUTES WENT. Printed through the same helper `corral scans
 	// show --timing` uses, so the line an operator reads now and the line
 	// they read back out of the ledger are the same sentence.
@@ -3101,6 +3123,10 @@ type localExecutor struct {
 	// measurement: summing it across files would invent time nobody spent.
 	selectionDuration time.Duration
 
+	// writerMode is the scan-wide --writer-mode, carried onto every job's
+	// localAuditInput. Resolved and validated once at the flag boundary.
+	writerMode string
+
 	// wholeSuite is the operator's --whole-suite opt-out: grade every mutant
 	// against the project's whole suite instead of the tests that
 	// demonstrably execute the file. It changes the MEASUREMENT, not just the
@@ -3324,6 +3350,7 @@ func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
 		criticModel:       l.models.critic,
 		shadowModel:       l.models.shadow,
 		shadowWriterModel: l.models.shadowWriter,
+		writerMode:        l.writerMode,
 
 		// A nil entry is an ordinary generated run — see localExecutor.presetMutants.
 		presetMutants: l.presetMutants[j.Path],
@@ -3765,10 +3792,15 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 			// rate for a file nothing executes.
 			TestSelection:         f.SelectionMethod,
 			ProvenByAuthoredAlone: f.ProvenByAuthoredAlone,
-			SelectedTests:         f.SelectedTests,
-			SuiteTests:            f.SuiteTests,
-			SelectionFallback:     f.SelectionFallback,
-			Uncovered:             f.Uncovered,
+			// And which shape earned that proven count. A verifier comparing
+			// two signed statements has to be able to see that one file's
+			// writer got a call per survivor and the other's got one call
+			// for all of them.
+			WriterMode:        f.WriterMode,
+			SelectedTests:     f.SelectedTests,
+			SuiteTests:        f.SuiteTests,
+			SelectionFallback: f.SelectionFallback,
+			Uncovered:         f.Uncovered,
 			// And at which grain: a signed rate averaged over mutants that
 			// each faced a different test set needs the spread to be read
 			// as the measurement it is.
@@ -3979,4 +4011,35 @@ func resolveRepoName(repoDir, given string) string {
 		}
 	}
 	return repo
+}
+
+// writerModeDisclosure renders the per-file writer line: which shape the
+// writer seat attacked in, and how many calls that took.
+//
+// Shared by the live report and `corral scans show` for the same reason
+// timingLine and concurrencyDisclosure are: the sentence an operator reads
+// during the run and the one they read back out of the ledger must be the
+// same sentence, or the two will drift and a reader will have to work out
+// whether they mean the same thing.
+//
+// Returns "" when the mode was NOT RECORDED — a run whose caller named no
+// mode, or a verdict earned before the mode existed. Silence is the honest
+// rendering: neither spelling is true of such a row, and printing one would
+// be an invented fact about how a measurement was made.
+func writerModeDisclosure(mode string, calls int) string {
+	if strings.TrimSpace(mode) == "" {
+		return ""
+	}
+	// The call count is a MEASUREMENT (the seat's own ledger row), so 0 means
+	// "no cost row for this seat", not "the writer made no calls" — a cached
+	// verdict and a pre-cost-column row both look like that. The mode is
+	// still worth saying on its own.
+	if calls <= 0 {
+		return "writer: " + mode
+	}
+	unit := "calls"
+	if calls == 1 {
+		unit = "call"
+	}
+	return fmt.Sprintf("writer: %s (%d %s)", mode, calls, unit)
 }

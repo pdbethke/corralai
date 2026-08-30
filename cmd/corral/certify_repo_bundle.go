@@ -147,6 +147,7 @@ func buildAuditRows(files []scanstore.File, scanID int64, meta bundleMeta) []aud
 			// WHICH measurement the rate is, and at which grain.
 			TestSelection: f.TestSelection, SelectedTests: f.SelectedTests,
 			SuiteTests: f.SuiteTests, SelectionFallback: f.SelectionFallback,
+			WriterMode:     f.WriterMode,
 			Uncovered:      f.Uncovered,
 			PerMutant:      f.PerMutant,
 			TestsPerMutant: ledgerSpread(f),

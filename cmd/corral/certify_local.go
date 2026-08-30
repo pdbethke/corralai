@@ -110,6 +110,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	swarmFlag := fs.Int("swarm", 0, "max concurrent audit workers (0 = auto-size to this host's cores). The BUDGET clamp: independent role tasks run in parallel up to this bound, so a big audit swarms without melting the box")
 	maxShardsFlag := fs.Int("max-shards", 0, "max mutant-generator seats fanned out across the file's functions (0 = "+fmt.Sprint(advpool.DefaultMaxShards)+"). Bounds PARALLELISM only — every function is probed regardless; --n-mutants is the PER-SHARD budget")
 	shadowModelFlag := fs.String("shadow-model", "", "challenger model that attacks every region a SECOND time for a region-controlled head-to-head. OFF unless named. Recorded for comparison — NEVER gates the verdict")
+	writerModeFlag := fs.String("writer-mode", "", "how the test-writer attacks a file's survivors: `per-survivor` (the default) makes ONE call per survivor — each carrying the file once as a cacheable shared prefix plus that survivor's diff, each repaired on its own budget and each PROVEN ALONE against its own mutant — or `batched`, the original shape: one call carrying every survivor, one repair budget for the file, one proof pass over all of them. Nothing measured changes between them (a survivor is proven iff an authored test kills it alone and passes on the original, either way); what changes is that one unbuildable test no longer spends the whole file's retries and takes every other survivor down with it. The verdict, the report line, the ledger and the attestation all record which mode earned the numbers")
 	shadowWriterModelFlag := fs.String("shadow-writer-model", "", "challenger WRITER model that authors a second suite against the SAME mutant set for a mutant-controlled head-to-head. OFF unless named. Recorded for correlation — NEVER gates the verdict")
 	matrixFlag := fs.Bool("matrix", false, "opt into the tests×mutants matrix: after the primary pass, re-score EVERY dev test ALONE against the run's mutants — a per-test adequacy readout + a delete-candidate list, instead of one dev-suite-wide number. COSTLY: T tests × M mutants extra jail runs (T×M, on top of the primary pass), so leave off by default on a big suite")
 	var localEndpointFlag stringSlice
@@ -124,6 +125,15 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
+	// Validated here, before anything is spent: the mode changes how many
+	// model calls a run makes and what its verdict discloses, so a typo must
+	// exit 2 rather than quietly take the default and hand back a different
+	// measurement than the one that was asked for.
+	writerMode, wmErr := advpool.ResolveWriterMode(*writerModeFlag)
+	if wmErr != nil {
+		fmt.Fprintf(stderr, "%s: %v\n", "corral certify --local", wmErr)
+		return 2
+	}
 	if strings.TrimSpace(*codePath) == "" {
 		fmt.Fprintln(stderr, "corral certify --local: --code is required")
 		return 2
@@ -275,6 +285,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		writerModel: *writerModel, criticModel: *criticModel,
 		mutantModel: *mutantModel, shadowModel: *shadowModelFlag,
 		shadowWriterModel: *shadowWriterModelFlag,
+		writerMode:        writerMode,
 
 		jail: *jailFlag, checkArgv: checkArgv,
 		localEndpoints: localEndpoints,
@@ -370,6 +381,12 @@ type localAuditInput struct {
 	// Role models. Empty means this file's stock default.
 	writerModel, criticModel, mutantModel, shadowModel string
 	shadowWriterModel                                  string
+
+	// writerMode is the resolved --writer-mode: how the writer seat attacks
+	// this file's survivors. Already validated by ResolveWriterMode at the
+	// flag boundary, so it is one of the two canonical spellings by the time
+	// it reaches here — never an operator's raw string.
+	writerMode string
 
 	// localEndpoints places a LOCAL seat on a specific ollama daemon
 	// (role -> base URL). A daemon is pinned to a GPU by its own environment,
@@ -1149,8 +1166,12 @@ func newAuditRunSpec(in localAuditInput, roles auditRoles, subj runSubject) advp
 		// recorded is also a seat the driver can actually run.
 		ShadowModel:       roles.shadow,
 		ShadowWriterModel: roles.shadowWriter,
-		Matrix:            in.matrix,
-		ImportPath:        subj.importPath,
+		// HOW the writer attacks. The CLI's default is per-survivor; an
+		// EMPTY value here means batched, which is what a caller outside the
+		// CLI (the brain, a test) gets — see RunSpec.WriterMode.
+		WriterMode: in.writerMode,
+		Matrix:     in.matrix,
+		ImportPath: subj.importPath,
 		// nil = generate, exactly as every caller did before --mutants existed.
 		PresetMutants: in.presetMutants,
 	}

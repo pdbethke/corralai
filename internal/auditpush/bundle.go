@@ -269,6 +269,7 @@ CREATE TABLE IF NOT EXISTS corral_audits (
   selected_tests     INTEGER,
   suite_tests        INTEGER,
   selection_fallback VARCHAR,
+  writer_mode        VARCHAR,
   uncovered          BOOLEAN,
   per_mutant              BOOLEAN,
   tests_per_mutant_min    INTEGER,
@@ -413,6 +414,7 @@ var corralAuditsMigrationCols = []struct{ name, ddl string }{
 	{"selected_tests", "selected_tests INTEGER"},
 	{"suite_tests", "suite_tests INTEGER"},
 	{"selection_fallback", "selection_fallback VARCHAR"},
+	{"writer_mode", "writer_mode VARCHAR"},
 	{"uncovered", "uncovered BOOLEAN"},
 	{"per_mutant", "per_mutant BOOLEAN"},
 	{"tests_per_mutant_min", "tests_per_mutant_min INTEGER"},
@@ -945,6 +947,7 @@ func insertFileRow(tx *sql.Tx, now time.Time, r Row) error {
 	    audited, candidates, mutants_planted, models_by_role,
 	    min_kill_rate, max_proven_missed, passed, statement_sha256, run_url,
 	    test_selection, selected_tests, suite_tests, selection_fallback, uncovered,
+	    writer_mode,
 	    per_mutant, tests_per_mutant_min, tests_per_mutant_median, tests_per_mutant_max,
 	    trees, concurrency_note, shared_dirs, scan_id,
 	    disposition, reason, preflight_state, evidence, detail, status,
@@ -957,13 +960,14 @@ func insertFileRow(tx *sql.Tx, now time.Time, r Row) error {
 	    selection_ms, generation_ms, pool_ms, dev_pass_ms, authored_pass_ms,
 	    critic_ms, total_ms, mutant_ms_median, mutant_ms_max,
 	    authored_test, verdict_json, schema_version
-	  ) VALUES (`+placeholders(70)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+	  ) VALUES (`+placeholders(71)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 		now, r.Repo, r.Commit, r.Path, r.Lang,
 		killRate, r.Survivors, r.ProvenMissed,
 		r.TimedOut, r.TestWriterFailed, r.PoolTestUnsound,
 		r.Audited, r.Candidates, r.MutantsPlanted, r.ModelsByRole,
 		minKill, maxGaps, r.Passed, r.StatementSHA256, r.RunURL,
 		r.TestSelection, r.SelectedTests, r.SuiteTests, r.SelectionFallback, r.Uncovered,
+		nullIfEmpty(r.WriterMode),
 		r.PerMutant, pmMin, pmMedian, pmMax,
 		// trees is SQL NULL, not 0, when nothing measured it: the jail
 		// substrate builds no trees and a cached pre-concurrency verdict

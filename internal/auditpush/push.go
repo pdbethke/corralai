@@ -77,7 +77,13 @@ type Row struct {
 	SelectedTests     int
 	SuiteTests        int
 	SelectionFallback string
-	Uncovered         bool
+	// WriterMode is HOW the writer seat attacked this file's survivors:
+	// "per-survivor" or "batched". EMPTY reaches the warehouse as NULL, never
+	// as either spelling — a run that named no mode, or a row pushed by a
+	// corral from before the mode existed, must be excludable from a query
+	// that groups by it. The two are not the same measurement.
+	WriterMode string
+	Uncovered  bool
 	// And at which GRAIN it was measured. PerMutant says each mutant was
 	// graded by the tests that reach its own lines, which makes SelectedTests
 	// the file's UNION and no mutant's denominator — so the spread travels

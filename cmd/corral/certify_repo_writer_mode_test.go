@@ -1,0 +1,152 @@
+// SPDX-License-Identifier: Elastic-2.0
+
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/pdbethke/corralai/internal/advpool"
+	"github.com/pdbethke/corralai/internal/auditpush"
+	"github.com/pdbethke/corralai/internal/reposcan"
+	"github.com/pdbethke/corralai/internal/scanstore"
+)
+
+// TestWeakFileLineDisclosesTheWriterMode: the two modes cost differently and
+// attempt differently, so a per-file line that reported a proven count without
+// saying which shape earned it would leave two incomparable measurements
+// looking identical.
+func TestWeakFileLineDisclosesTheWriterMode(t *testing.T) {
+	var b bytes.Buffer
+	printWeakFile(&b, reposcan.WeakFile{
+		Path: "pkg/a.py", KillRate: 0.5, Survivors: 24, ProvenMissed: 3,
+		WriterMode: advpool.WriterModePerSurvivor, WriterCalls: 24,
+	})
+	if !strings.Contains(b.String(), "writer: per-survivor (24 calls)") {
+		t.Errorf("per-survivor mode is not disclosed: %q", b.String())
+	}
+
+	b.Reset()
+	printWeakFile(&b, reposcan.WeakFile{
+		Path: "pkg/b.py", KillRate: 0.5, Survivors: 4, ProvenMissed: 1,
+		WriterMode: advpool.WriterModeBatched, WriterCalls: 1,
+	})
+	if !strings.Contains(b.String(), "writer: batched (1 call)") {
+		t.Errorf("batched mode is not disclosed: %q", b.String())
+	}
+
+	// A verdict earned before the mode existed, or by a caller that named
+	// none: NOT RECORDED, and it must not be rendered as either mode.
+	b.Reset()
+	printWeakFile(&b, reposcan.WeakFile{Path: "pkg/c.py", KillRate: 0.5, Survivors: 2, ProvenMissed: 1})
+	if strings.Contains(b.String(), "writer:") {
+		t.Errorf("an unrecorded writer mode was rendered anyway: %q", b.String())
+	}
+}
+
+// TestWriterModeFlagRejectsAnUnknownValue: exit 2 is the usage code, and a
+// typo must never silently take the default — the mode changes what the run
+// costs and what its verdict claims.
+func TestWriterModeFlagRejectsAnUnknownValue(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.py"), []byte("def f():\n    return 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, cmd := range []struct {
+		name string
+		run  func(args []string, out, errw *bytes.Buffer) int
+	}{
+		{"--repo", func(args []string, out, errw *bytes.Buffer) int { return runCertifyRepo(args, out, errw) }},
+	} {
+		var out, errb bytes.Buffer
+		code := cmd.run([]string{
+			"--repo", root, "--writer-mode", "bogus",
+			"--writer-model", testHerdWriter, "--mutant-model", testHerdMutant,
+			"--critic-model", "off", "--dry-run",
+		}, &out, &errb)
+		if code != 2 {
+			t.Errorf("%s --writer-mode bogus exited %d, want 2 (usage)", cmd.name, code)
+		}
+		if !strings.Contains(errb.String(), "writer-mode") {
+			t.Errorf("%s: the error does not name the flag: %q", cmd.name, errb.String())
+		}
+	}
+}
+
+// TestWriterModeRoundTripsThroughTheLedger: scan_files.writer_mode is the
+// column a later query needs to keep two modes' rows apart. Unset must land
+// as SQL NULL, never as one of the two spellings.
+func TestWriterModeRoundTripsThroughTheLedger(t *testing.T) {
+	st, err := scanstore.Open(filepath.Join(t.TempDir(), "s.duckdb"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+
+	id, err := st.Record(ctx, scanstore.Scan{Owner: "o", Repo: "r", Commit: "c"}, []scanstore.File{
+		{Path: "a.py", Disposition: "audited", Evidence: "proven", WriterMode: advpool.WriterModePerSurvivor},
+		{Path: "b.py", Disposition: "audited", Evidence: "proven"},
+	})
+	if err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	files, err := st.FilesForScan(ctx, id)
+	if err != nil {
+		t.Fatalf("FilesForScan: %v", err)
+	}
+	got := map[string]string{}
+	for _, f := range files {
+		got[f.Path] = f.WriterMode
+	}
+	if got["a.py"] != advpool.WriterModePerSurvivor {
+		t.Errorf("a.py writer_mode = %q, want %q", got["a.py"], advpool.WriterModePerSurvivor)
+	}
+	if got["b.py"] != "" {
+		t.Errorf("b.py writer_mode = %q, want empty (SQL NULL — the run named no mode)", got["b.py"])
+	}
+}
+
+// TestAttestationCarriesTheWriterMode: the statement is the one artifact a
+// third party verifies without trusting the run, so it must say which shape
+// earned the proven count it signs.
+func TestAttestationCarriesTheWriterMode(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "statement.json")
+	rep := reposcan.RepoReport{
+		Owner: "o", Repo: "r", Commit: "abc123", Audited: 1, Candidates: 1,
+		Weakest: []reposcan.WeakFile{{
+			Path: "a.py", KillRate: 0.5, Survivors: 2, ProvenMissed: 1,
+			WriterMode: advpool.WriterModePerSurvivor, WriterCalls: 2,
+		}},
+	}
+	if _, err := writeAuditStatement(out, dir, rep, map[string]string{"test-writer": "w"}, nil, nil, true, 0, auditpush.Bundle{}); err != nil {
+		t.Fatalf("writeAuditStatement: %v", err)
+	}
+	raw, err := os.ReadFile(out) //nolint:gosec // test-owned temp path
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Predicate struct {
+			Files []struct {
+				Path       string `json:"path"`
+				WriterMode string `json:"writerMode"`
+			} `json:"files"`
+		} `json:"predicate"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("unmarshal statement: %v", err)
+	}
+	if len(doc.Predicate.Files) != 1 {
+		t.Fatalf("statement carries %d file(s), want 1", len(doc.Predicate.Files))
+	}
+	if doc.Predicate.Files[0].WriterMode != advpool.WriterModePerSurvivor {
+		t.Errorf("statement writerMode = %q, want %q", doc.Predicate.Files[0].WriterMode, advpool.WriterModePerSurvivor)
+	}
+}

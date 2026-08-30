@@ -79,6 +79,19 @@ Usage:
                                   Local DuckDB file, no brain required:
                                   --db <path> (default $CORRALAI_SCANS_DB, else
                                   ~/.claude/corralai_scans.duckdb), --limit n, --json
+  corral seal [flags]            the repo's CURRENT state as the union of still-valid verdicts,
+                                  read from a certify --repo --push warehouse (many audits, one
+                                  current state — not one scan's snapshot). Reads corral_seal
+                                  (latest kill-rate-bearing row per path), creating the view if
+                                  a writer never has. With --repo <dir>: judges each of the
+                                  repo's churn x size top-N ("hot") files live (bytes unchanged
+                                  since the audit), stale (changed since), or never audited —
+                                  and prints "coverage: N of M hot files carry a live verdict".
+                                  Without --repo: the warehouse's latest verdict per path, no
+                                  live/stale judgement. Read-only — never writes a row.
+                                  flags: --db <dsn> (default $CORRALAI_SCANS_DB, else
+                                  ~/.claude/corralai_scans.duckdb) --repo <dir> --top n (default 20)
+                                  --json
   corral demo [flags]             a complete audit of a tiny project, in ONE command: writes a
                                   small Go package with a five-clause password rule and a test
                                   that checks only two of them, then audits it with the real

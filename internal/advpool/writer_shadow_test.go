@@ -333,10 +333,12 @@ func digestOf(t *testing.T, v Verdict) string {
 //
 //  1. challenger OFF vs OFF — the digest must be byte-identical, which is what
 //     proves the run is deterministic enough for arm 2 to mean anything;
-//  2. challenger NAMED — the ONLY permitted difference is the ModelsByRole
-//     provenance entry (a signed record should say what ran). Every OUTCOME
-//     field is asserted individually rather than through the digest, so a field
-//     added to Verdict later cannot silently pass this test.
+//  2. challenger NAMED — the ONLY permitted differences are the ModelsByRole
+//     provenance entry (a signed record should say what ran) and
+//     ChallengerAgreement (the measurement the challenger exists to produce —
+//     necessarily nil when it did not run). Every OUTCOME field is asserted
+//     individually rather than through the digest, so a field added to
+//     Verdict later cannot silently pass this test.
 func TestShadowWriterNeverChangesVerdict(t *testing.T) {
 	base := newTestRunSpec(t)
 
@@ -408,13 +410,23 @@ func TestShadowWriterNeverChangesVerdict(t *testing.T) {
 	if got.AuthoredTest != off.AuthoredTest {
 		t.Errorf("AuthoredTest changed %q -> %q — the CHALLENGER's suite is being handed back as the pool's", off.AuthoredTest, got.AuthoredTest)
 	}
+	// ChallengerAgreement is asserted on its own terms — it is SUPPOSED to be
+	// nil with the challenger off and non-nil with it on; that difference IS
+	// the measurement, not a leak. What must not happen is a NIL vs nil check
+	// standing in for the belt-and-braces digest below, so this only checks
+	// that OFF carries nothing (the digest comparison covers ON).
+	if off.ChallengerAgreement != nil {
+		t.Errorf("ChallengerAgreement = %+v with no challenger named — there is nothing to compare", off.ChallengerAgreement)
+	}
 
-	// Belt and braces: with the provenance entry removed, the whole verdict
-	// must hash identically — this catches any field the list above forgot.
+	// Belt and braces: with the provenance entry AND the challenger's own
+	// measurement removed, the whole verdict must hash identically — this
+	// catches any field the list above forgot.
 	sameProvenance := got
 	sameProvenance.ModelsByRole = off.ModelsByRole
+	sameProvenance.ChallengerAgreement = off.ChallengerAgreement
 	if digestOf(t, sameProvenance) != digestOf(t, off) {
-		t.Fatalf("a Verdict field OTHER than ModelsByRole changed when the challenger ran:\n without = %s\n with    = %s\na measurement seat has leaked into a gating artifact",
+		t.Fatalf("a Verdict field OTHER than ModelsByRole/ChallengerAgreement changed when the challenger ran:\n without = %s\n with    = %s\na measurement seat has leaked into a gating artifact",
 			digestOf(t, off), digestOf(t, sameProvenance))
 	}
 }

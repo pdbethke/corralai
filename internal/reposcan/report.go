@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/pdbethke/corralai/internal/advpool"
+	"github.com/pdbethke/corralai/internal/modelcorr"
 )
 
 // maxUngradableDetailsPerReason bounds how many sample detail lines
@@ -166,6 +167,15 @@ type WeakFile struct {
 	// adequacy.MutantGrading.Duration. A distribution, not a budget.
 	MutantMillisMedian int64
 	MutantMillisMax    int64
+	// Challenger mirrors advpool.Verdict.ChallengerAgreement: the primary
+	// writer's agreement with the challenger writer over the same survivor
+	// set. nil whenever no comparable pair exists — no challenger ran,
+	// either seat's kill vector was never measured, or the primary salvaged
+	// (see ChallengerAgreement's own doc for the full gating). Non-nil does
+	// NOT mean Jaccard/Kappa are individually meaningful: a caller must
+	// still check Challenger.Sufficient / Challenger.KappaDefined before
+	// printing or storing either coefficient.
+	Challenger *modelcorr.Pair
 }
 
 // MeasuredSpread reports whether this file's run actually measured a
@@ -411,6 +421,10 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 			MutantsGraded:      r.Verdict.MutantsTotal,
 			MutantMillisMedian: r.Verdict.MutantDurationMedian.Milliseconds(),
 			MutantMillisMax:    r.Verdict.MutantDurationMax.Milliseconds(),
+			// The primary/challenger agreement, carried straight through —
+			// nil whenever no comparable pair exists (see
+			// advpool.Verdict.ChallengerAgreement's doc).
+			Challenger: r.Verdict.ChallengerAgreement,
 		})
 	}
 

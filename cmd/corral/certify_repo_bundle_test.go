@@ -14,6 +14,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/auditpush"
+	"github.com/pdbethke/corralai/internal/modelcorr"
 	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/scanstore"
 )
@@ -41,10 +42,22 @@ func twoFileLedgerRows(t *testing.T) (string, []scanstore.File, []scanstore.Muta
 	}
 	results := []reposcan.FileResult{
 		{
-			Job:      reposcan.Job{Path: "a.go", Lang: "go"},
+			Job: reposcan.Job{Path: "a.go", Lang: "go", Goal: reposcan.Goal{
+				Text: "F never returns a negative number", Provenance: "derived:claude-x@v1.2.3",
+			}},
 			Gradable: true,
 			Verdict: advpool.Verdict{
 				DevKillRate: 0.5, Survivors: 2, ProvenMissed: 1,
+				// A real pair, non-nil and Sufficient, so the field-for-field
+				// walk below actually exercises the Challenger columns
+				// rather than comparing nil to nil.
+				ChallengerAgreement: &modelcorr.Pair{
+					ModelA: "writer-a", ModelB: "writer-b",
+					Mutants: 8, SurvivedA: 4, SurvivedB: 3,
+					SharedSurvivors: 3, UnionSurvivors: 4,
+					Jaccard: 0.75, Sufficient: true,
+					Kappa: 0.4, KappaDefined: true,
+				},
 				MutantsTotal: 8, MutantsInvalid: 1,
 				RegionsTotal: 2, RegionsProbed: 2,
 				Status: "needs-review", AuthoredTest: "func TestX(t *testing.T) {}",

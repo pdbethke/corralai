@@ -14,6 +14,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/lang"
+	"github.com/pdbethke/corralai/internal/modelcorr"
 	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/scanstore"
 )
@@ -301,6 +302,18 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 				// mutant or forty ordinary ones.
 				MutantMillisMedian: millisOrNil(r.Verdict.MutantDurationMedian),
 				MutantMillisMax:    millisOrNil(r.Verdict.MutantDurationMax),
+				// The primary/challenger agreement — NULL (all three
+				// pointers nil) unless a comparable pair was actually
+				// computed. See advpool.Verdict.ChallengerAgreement's doc
+				// for the full gating.
+				ChallengerJaccard:    challengerJaccard(r.Verdict.ChallengerAgreement),
+				ChallengerKappa:      challengerKappa(r.Verdict.ChallengerAgreement),
+				ChallengerSufficient: challengerSufficient(r.Verdict.ChallengerAgreement),
+				// How many goals reposcan's DERIVER produced for this file —
+				// 0 (not NULL: the column is a plain int, see
+				// scanstore.File.GoalsDerived's doc) unless this file's goal
+				// actually came from derivingGoalSource.
+				GoalsDerived: goalsDerivedFor(r.Job.Goal),
 			})
 			continue
 		}
@@ -320,6 +333,10 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 			// Ungradable: no verdict, so no mutants, so the hash is a read
 			// of the checkout — the same rule the excluded rows below follow.
 			ParentSHA256: auditedFileSHA256(repoDir, path),
+			// A job WAS emitted for this file (it has a Goal — EmitJobs never
+			// emits one without), so the same GoalsDerived question has a real
+			// answer here too, even though the file never got a verdict.
+			GoalsDerived: goalsDerivedFor(r.Job.Goal),
 		})
 	}
 
@@ -755,4 +772,51 @@ func spreadMax(s *advpool.TestsPerMutantSpread) *int {
 	}
 	v := s.Max
 	return &v
+}
+
+// challengerJaccard/Kappa/Sufficient lift a *modelcorr.Pair onto the
+// ledger's three nullable columns. All three stay nil on a nil pair — "the
+// challenger did not run" — never a fabricated 0.0/false, which would read
+// as "the challenger ran and disagreed completely".
+//
+// Kappa additionally stays nil when the pair itself says it is undefined
+// (p_e == 1, both seats degenerate over the same outcome — see
+// modelcorr.Pair.KappaDefined's doc): a caller storing Kappa unconditionally
+// would write a fabricated 0 for exactly the case modelcorr invented the
+// flag to keep distinct from a real zero.
+func challengerJaccard(p *modelcorr.Pair) *float64 {
+	if p == nil {
+		return nil
+	}
+	v := p.Jaccard
+	return &v
+}
+
+func challengerKappa(p *modelcorr.Pair) *float64 {
+	if p == nil || !p.KappaDefined {
+		return nil
+	}
+	v := p.Kappa
+	return &v
+}
+
+func challengerSufficient(p *modelcorr.Pair) *bool {
+	if p == nil {
+		return nil
+	}
+	v := p.Sufficient
+	return &v
+}
+
+// goalsDerivedFor answers scanstore.File.GoalsDerived for one file: 1 when
+// this file's goal actually came from reposcan's DERIVER
+// (reposcan.GoalWasDerived), 0 otherwise — a hand-written --goals entry, or
+// no goal at all. 0 is the field's own documented default (see its doc in
+// internal/scanstore/store.go): a plain int, not a pointer, so there is no
+// NULL to preserve here the way there is for the Challenger columns above.
+func goalsDerivedFor(g reposcan.Goal) int {
+	if reposcan.GoalWasDerived(g) {
+		return 1
+	}
+	return 0
 }

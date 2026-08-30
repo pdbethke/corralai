@@ -15,6 +15,7 @@ import (
 	"github.com/pdbethke/corralai/internal/adequacy"
 	golang "github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/matrix"
+	"github.com/pdbethke/corralai/internal/modelcorr"
 	"github.com/pdbethke/corralai/internal/queue"
 	"github.com/pdbethke/corralai/internal/repoindex"
 )
@@ -567,6 +568,17 @@ type Verdict struct {
 	// per-mutant cost distribution, never as a budget that must sum.
 	MutantDurationMedian time.Duration
 	MutantDurationMax    time.Duration
+	// ChallengerAgreement is the primary writer's agreement with the
+	// challenger writer over the SAME survivor set — Jaccard-over-survivors
+	// and Cohen's kappa, from internal/modelcorr. nil whenever no comparable
+	// pair exists: no challenger was configured, either seat's own kill
+	// vector was never measured (see runState.primaryWriterMeasured /
+	// shadowWriterMeasured), or the primary salvaged (RULING P11 — a
+	// salvaged primary is not comparable to a challenger that got no rescue).
+	// Non-nil does NOT mean the coefficients are meaningful on their own —
+	// callers must still check Pair.Sufficient before reading Jaccard and
+	// Pair.KappaDefined before reading Kappa, exactly as modelcorr documents.
+	ChallengerAgreement *modelcorr.Pair
 }
 
 // RunState is the observable status of one run: Converged is true once the run
@@ -2301,9 +2313,15 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 		}
 	}
 
-	// Feed both writer seats' per-mutant outcomes, pair-or-nothing. Same
-	// RecordID!=0 guard as BugCatch/CriticFindings above; see
-	// recordMutantAttempts' own doc for the rest of the gating.
+	// The in-memory agreement measurement, carried onto the verdict itself —
+	// UNGATED by RecordID/Signer, unlike every sink above: `certify --repo`
+	// signs no per-file record and wires no MutantAttempts sink, so this is
+	// the only path that measurement reaches that command's verdict at all.
+	v.ChallengerAgreement = challengerPair(d, run)
+
+	// Feed both writer seats' per-mutant outcomes, pair-or-nothing, to the
+	// DURABLE store (a DIFFERENT sink, gated on RecordID!=0 same as
+	// BugCatch/CriticFindings above — see recordMutantAttempts' own doc).
 	d.recordMutantAttempts(run, v)
 
 	// Feed the matrix sink with the SAME matrix result tickMatrix already
@@ -2342,54 +2360,61 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 // within-run correlation, and a sink half-fed with unpairable rows would
 // invite pooling correlation across runs — which is confounded, because each
 // run has its own mutant set.
+// challengerVectors builds the two writer seats' per-mutant kill vectors over
+// run.devSurvivors — the set both are asked to kill — or reports ok=false
+// when no comparable pair exists. Shared by recordMutantAttempts (the
+// durable, per-mutant DB rows) and challengerPair (the in-memory Jaccard/kappa
+// carried straight onto the Verdict), so the two never disagree about WHEN a
+// comparison is legitimate.
+//
+// UNMEASURED IS NOT ZERO, for the primary and the challenger alike: this
+// guard was originally written for the challenger alone, which left two
+// reachable paths to a signed verdict with run.provenIDs still nil
+// (testWriterFailed and poolTestUnsound) — on either, killedByPrimary would
+// be empty and every survivor would read `survived` for a seat that never
+// ran. See runState.primaryWriterMeasured / shadowWriterMeasured.
+//
+// RULING P11 — a SALVAGED primary is not comparable. The two seats run under
+// asymmetric leniency: the primary gets salvageByDeselect (a partially-broken
+// suite has its failing selectors deselected and is re-scored, and that
+// salvaged remainder becomes provenIDs), a clean-code repair round, and 3
+// attempts. The challenger gets 2 compile retries and neither rescue. So when
+// the primary salvaged, its vector came from a deselected remainder and the
+// challenger's did not, and the head-to-head quietly favours the primary —
+// the same class of error as scoring the two seats against different mutant
+// sets. This pool's standing discipline is to record no comparison rather
+// than a confounded one.
+func challengerVectors(run *runState) (killedByPrimary, killedByShadow map[string]bool, ok bool) {
+	if run.rs.ShadowWriterModel == "" || !run.shadowWriterMeasured || !run.primaryWriterMeasured || run.writerSalvaged {
+		return nil, nil, false
+	}
+	// `run.provenIDs` is the PRIMARY writer's proven-kill vector (from
+	// provenMutantIDs(rep, run.devSurvivors)). Do NOT use run.devKilled: that
+	// is the DEV SUITE's vector over every mutant, so pairing it against a
+	// writer compares a writer to the developer's own tests, not writer to
+	// writer.
+	killedByPrimary = make(map[string]bool, len(run.provenIDs))
+	for _, id := range run.provenIDs {
+		killedByPrimary[id] = true
+	}
+	killedByShadow = make(map[string]bool, len(run.shadowWriterKilled))
+	for _, m := range run.shadowWriterKilled {
+		killedByShadow[m.ID] = true
+	}
+	return killedByPrimary, killedByShadow, true
+}
+
 func (d *Driver) recordMutantAttempts(run *runState, v Verdict) {
 	// The v.RecordID != 0 guard is the SAME one BugCatch and CriticFindings
 	// use, for the same reason (driver.go:1630): a Driver wired without a
 	// Signer leaves RecordID at zero, and rows carrying record_id=0 are
 	// unlinkable to the audit that produced them.
-	if d.MutantAttempts == nil || v.RecordID == 0 || run.rs.ShadowWriterModel == "" || !run.shadowWriterMeasured {
+	if d.MutantAttempts == nil || v.RecordID == 0 {
 		return
 	}
-	// UNMEASURED IS NOT ZERO — for the PRIMARY too. This guard was originally
-	// written for the challenger alone, which left two reachable paths to a
-	// signed verdict with run.provenIDs still nil (testWriterFailed and
-	// poolTestUnsound). On either, killedByPrimary below is empty and every
-	// survivor is written as `survived` for the primary: a total blind spot
-	// fabricated from a seat that never ran the code. See
-	// runState.primaryWriterMeasured for why this is a positive flag.
-	if !run.primaryWriterMeasured {
+	killedByPrimary, killedByShadow, ok := challengerVectors(run)
+	if !ok {
 		return
-	}
-	// RULING P11 — a SALVAGED primary is not comparable.
-	//
-	// The two seats run under asymmetric leniency: the primary gets
-	// salvageByDeselect (driver.go:1531 — a partially-broken suite has its
-	// failing selectors deselected and is re-scored, and that salvaged
-	// remainder becomes provenIDs), a clean-code repair round, and 3 attempts.
-	// The challenger gets 2 compile retries and neither rescue.
-	//
-	// So when the primary salvaged, its vector came from a deselected
-	// remainder and the challenger's did not, and the head-to-head quietly
-	// favours the primary. That is CONFOUNDED — the same class of error as
-	// scoring the two seats against different mutant sets — and this pool's
-	// standing discipline is to record no comparison rather than a confounded
-	// one.
-	if run.writerSalvaged {
-		return
-	}
-	// RULING P9: pair the two WRITERS over run.devSurvivors — the set both are
-	// asked to kill. `run.provenIDs` is the PRIMARY writer's proven-kill vector
-	// (driver.go:581, from provenMutantIDs(rep, run.devSurvivors)).
-	// Do NOT use run.devKilled: that is the DEV SUITE's vector over every
-	// mutant, so pairing it against a writer compares a writer to the
-	// developer's own tests, not writer to writer.
-	killedByPrimary := make(map[string]bool, len(run.provenIDs))
-	for _, id := range run.provenIDs {
-		killedByPrimary[id] = true
-	}
-	killedByShadow := make(map[string]bool, len(run.shadowWriterKilled))
-	for _, m := range run.shadowWriterKilled {
-		killedByShadow[m.ID] = true
 	}
 	outcome := func(killed bool) string {
 		if killed {
@@ -2413,6 +2438,40 @@ func (d *Driver) recordMutantAttempts(run *runState, v Verdict) {
 		)
 	}
 	d.MutantAttempts.Record(v.RecordID, v.RecordHead, attempts)
+}
+
+// challengerPair computes the primary/challenger agreement DIRECTLY from the
+// run's own in-memory kill vectors — no store, no RecordID/Signer required.
+// It is the measurement `corral certify --repo` needs for the warehouse
+// (internal/scanstore.File.ChallengerJaccard/Kappa/Sufficient): that path
+// signs nothing per file and wires no MutantAttemptSink, so a comparison
+// gated on d.MutantAttempts or v.RecordID would be structurally inert there,
+// exactly the failure mode recordMutantAttempts' own doc warns about
+// ("advpool computed the pair, found d.MutantAttempts nil, and threw every
+// row away").
+//
+// nil whenever challengerVectors reports no comparable pair, or Compare
+// itself errors (which construction here should make unreachable: both
+// vectors are built over the identical run.devSurvivors set).
+func challengerPair(d *Driver, run *runState) *modelcorr.Pair {
+	killedByPrimary, killedByShadow, ok := challengerVectors(run)
+	if !ok {
+		return nil
+	}
+	primaryVec := make(map[string]bool, len(run.devSurvivors))
+	shadowVec := make(map[string]bool, len(run.devSurvivors))
+	for _, m := range run.devSurvivors {
+		primaryVec[m.ID] = killedByPrimary[m.ID]
+		shadowVec[m.ID] = killedByShadow[m.ID]
+	}
+	pair, err := modelcorr.Compare(
+		modelcorr.Vector{Model: d.Assign[RoleTestWriter], Killed: primaryVec},
+		modelcorr.Vector{Model: run.rs.ShadowWriterModel, Killed: shadowVec},
+	)
+	if err != nil {
+		return nil
+	}
+	return &pair
 }
 
 // adjudicateCriticFindings builds the execution-checked adjudication for each

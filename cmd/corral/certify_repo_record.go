@@ -620,8 +620,9 @@ func buildScanModelCallRows(results []reposcan.FileResult) []scanstore.ModelCall
 				Path: r.Job.Path, Role: c.Role, Model: c.Model,
 				Calls: c.Calls, Retries: c.Retries,
 				InputTokens: c.InputTokens, OutputTokens: c.OutputTokens,
-				CachedInputTokens: c.CachedInputTokens,
-				WallMillis:        c.Wall.Milliseconds(),
+				CachedInputTokens:     c.CachedInputTokens,
+				CacheWriteInputTokens: c.CacheWriteInputTokens,
+				WallMillis:            c.Wall.Milliseconds(),
 			})
 		}
 	}
@@ -667,6 +668,12 @@ func scanModelCallTotals(results []reposcan.FileResult) []advpool.ModelCall {
 			}
 			t.InputTokens += c.InputTokens
 			t.OutputTokens += c.OutputTokens
+			// The two cache counters follow Retries' NULL-not-zero rule, not
+			// InputTokens' plain addition: a role no provider reported
+			// caching for must leave the total nil, so the cost line says
+			// nothing about caching rather than claiming a measured miss.
+			t.CachedInputTokens = addCacheCount(t.CachedInputTokens, c.CachedInputTokens)
+			t.CacheWriteInputTokens = addCacheCount(t.CacheWriteInputTokens, c.CacheWriteInputTokens)
 			t.Wall += c.Wall
 		}
 	}

@@ -119,8 +119,9 @@ func modelCallsByPath(calls []scanstore.ModelCall) map[string][]advpool.ModelCal
 		byPath[c.Path] = append(byPath[c.Path], advpool.ModelCall{
 			Role: c.Role, Model: c.Model, Calls: c.Calls, Retries: c.Retries,
 			InputTokens: c.InputTokens, OutputTokens: c.OutputTokens,
-			CachedInputTokens: c.CachedInputTokens,
-			Wall:              time.Duration(c.WallMillis) * time.Millisecond,
+			CachedInputTokens:     c.CachedInputTokens,
+			CacheWriteInputTokens: c.CacheWriteInputTokens,
+			Wall:                  time.Duration(c.WallMillis) * time.Millisecond,
 		})
 	}
 	for path, cs := range byPath {

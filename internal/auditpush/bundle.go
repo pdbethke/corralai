@@ -148,8 +148,12 @@ type ModelCallRow struct {
 	// Retries is: silence from a provider is not a measured miss. See
 	// scanstore.ModelCall.CachedInputTokens.
 	CachedInputTokens *int64
-	OutputTokens      int64
-	WallMillis        int64
+	// CacheWriteInputTokens is the price of the saving above: Anthropic bills
+	// a cache write at 1.25x an ordinary input token. Nullable, and nil
+	// independently of the read count.
+	CacheWriteInputTokens *int64
+	OutputTokens          int64
+	WallMillis            int64
 
 	StatementSHA256 string
 }
@@ -359,6 +363,7 @@ CREATE TABLE IF NOT EXISTS corral_model_calls (
   input_tokens     BIGINT,
   output_tokens    BIGINT,
   cached_input_tokens BIGINT,
+  cache_write_input_tokens BIGINT,
   wall_ms          BIGINT,
   statement_sha256 VARCHAR,
   schema_version   INTEGER
@@ -482,6 +487,7 @@ var (
 	// read one back.
 	corralModelCallsMigrationCols = []struct{ name, ddl string }{
 		{"cached_input_tokens", "cached_input_tokens BIGINT"},
+		{"cache_write_input_tokens", "cache_write_input_tokens BIGINT"},
 	}
 	corralEventsMigrationCols = []struct{ name, ddl string }{}
 )
@@ -873,12 +879,14 @@ func pushBundleOnce(target string, b Bundle) (Counts, error) {
 	for _, mc := range b.Calls {
 		if _, err := tx.Exec(`INSERT INTO corral_model_calls (
 		    ts, repo, run_url, scan_id, path, role, model, calls, retries,
-		    input_tokens, output_tokens, cached_input_tokens, wall_ms,
+		    input_tokens, output_tokens, cached_input_tokens,
+		    cache_write_input_tokens, wall_ms,
 		    statement_sha256, schema_version
-		  ) VALUES (`+placeholders(15)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+		  ) VALUES (`+placeholders(16)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 			now, mc.Repo, mc.RunURL, mc.ScanID, mc.Path, mc.Role, mc.Model,
 			mc.Calls, mc.Retries, mc.InputTokens, mc.OutputTokens,
-			nullIfNilInt64(mc.CachedInputTokens), mc.WallMillis,
+			nullIfNilInt64(mc.CachedInputTokens), nullIfNilInt64(mc.CacheWriteInputTokens),
+			mc.WallMillis,
 			mc.StatementSHA256, SchemaVersion,
 		); err != nil {
 			return Counts{}, fmt.Errorf("auditpush: insert model call %s/%s: %w", mc.Path, mc.Role, err)

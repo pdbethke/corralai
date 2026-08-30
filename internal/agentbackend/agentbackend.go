@@ -685,6 +685,10 @@ func (b *anthropicBackend) Chat(messages []Message, tools []any) (Message, error
 			// A POINTER: a response that omits it has reported nothing, not
 			// a miss — see Usage.CachedInputTokens.
 			CacheReadInputTokens *int64 `json:"cache_read_input_tokens"`
+			// The WRITE half: tokens Anthropic put INTO the cache on this
+			// call, billed at 1.25x. Also a pointer — a response that
+			// reports a read and no write has not reported a zero write.
+			CacheCreationInputTokens *int64 `json:"cache_creation_input_tokens"`
 		} `json:"usage"`
 	}
 	hdr := map[string]string{"x-api-key": b.key, "anthropic-version": "2023-06-01"}
@@ -692,9 +696,10 @@ func (b *anthropicBackend) Chat(messages []Message, tools []any) (Message, error
 		return Message{}, err
 	}
 	res := Message{Role: "assistant", Usage: Usage{
-		InputTokens:       out.Usage.InputTokens,
-		OutputTokens:      out.Usage.OutputTokens,
-		CachedInputTokens: out.Usage.CacheReadInputTokens,
+		InputTokens:           out.Usage.InputTokens,
+		OutputTokens:          out.Usage.OutputTokens,
+		CachedInputTokens:     out.Usage.CacheReadInputTokens,
+		CacheWriteInputTokens: out.Usage.CacheCreationInputTokens,
 	}}
 	for _, c := range out.Content {
 		switch c.Type {

@@ -194,7 +194,7 @@ Usage of certify --local:
   -timeout duration
     	give up if the run makes no progress for this long (not a hard wall-clock cap — a single slow LLM call can overshoot it) (default 10m0s)
   -writer-mode per-survivor
-    	how the test-writer attacks a file's survivors: per-survivor (the default) makes ONE call per survivor — each carrying the file once as a cacheable shared prefix plus that survivor's diff, each repaired on its own budget and each PROVEN ALONE against its own mutant — or `batched`, the original shape: one call carrying every survivor, one repair budget for the file, one proof pass over all of them. Nothing measured changes between them (a survivor is proven iff an authored test kills it alone and passes on the original, either way); what changes is that one unbuildable test no longer spends the whole file's retries and takes every other survivor down with it. The verdict, the report line, the ledger and the attestation all record which mode earned the numbers
+    	how the test-writer attacks this file's survivors: per-survivor (the default) makes ONE call per survivor — each carrying the file once as a cacheable shared prefix plus that survivor's diff, each repaired on its own budget and each PROVEN ALONE against its own mutant — or `batched`, the original shape: one call carrying every survivor, one repair budget, one proof pass over all of them. Nothing measured changes between them (a survivor is proven iff an authored test kills it alone and passes on the original, either way); what changes is that one unbuildable test no longer spends the whole file's retries and takes every other survivor down with it
   -writer-model string
     	model for the test-writer role — REQUIRED, corral has no default models
 ```

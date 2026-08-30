@@ -673,7 +673,8 @@ func Open(dsn string) (*Store, error) {
 	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS scan_model_calls (
 		scan_id BIGINT, path VARCHAR, role VARCHAR, model VARCHAR,
 		calls INTEGER, retries INTEGER,
-		input_tokens BIGINT, output_tokens BIGINT, cached_input_tokens BIGINT, wall_ms BIGINT
+		input_tokens BIGINT, output_tokens BIGINT,
+		cached_input_tokens BIGINT, cache_write_input_tokens BIGINT, wall_ms BIGINT
 	)`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("scanstore: create scan_model_calls table: %w", err)
@@ -799,6 +800,7 @@ func migrateScanMutants(db *sql.DB) error {
 // re-run.
 var scanModelCallsMigrationCols = []struct{ name, ddl string }{
 	{"cached_input_tokens", "cached_input_tokens BIGINT"},
+	{"cache_write_input_tokens", "cache_write_input_tokens BIGINT"},
 }
 
 var scanEventsMigrationCols = []struct{ name, ddl string }{}
@@ -1467,8 +1469,13 @@ type ModelCall struct {
 	// would average as a measured zero. See
 	// agentbackend.Usage.CachedInputTokens.
 	CachedInputTokens *int64
-	OutputTokens      int64
-	WallMillis        int64
+	// CacheWriteInputTokens is what filling that cache cost — billed at 1.25x
+	// an ordinary input token, so the saving above has a price and both
+	// belong in the same row. Nullable for the same reason, and independently
+	// of the read count.
+	CacheWriteInputTokens *int64
+	OutputTokens          int64
+	WallMillis            int64
 }
 
 // Event is one entry on the tape: an ordered log of what the pool did, at
@@ -1593,10 +1600,11 @@ func (s *Store) RecordModelCalls(ctx context.Context, cs []ModelCall) error {
 	defer func() { _ = tx.Rollback() }()
 	for _, c := range cs {
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO scan_model_calls (scan_id, path, role, model, calls, retries, input_tokens, output_tokens, cached_input_tokens, wall_ms)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			`INSERT INTO scan_model_calls (scan_id, path, role, model, calls, retries, input_tokens, output_tokens, cached_input_tokens, cache_write_input_tokens, wall_ms)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			c.ScanID, c.Path, c.Role, c.Model, c.Calls, retriesParam(c.Retries),
-			c.InputTokens, c.OutputTokens, cachedTokensParam(c.CachedInputTokens), c.WallMillis,
+			c.InputTokens, c.OutputTokens,
+			cachedTokensParam(c.CachedInputTokens), cachedTokensParam(c.CacheWriteInputTokens), c.WallMillis,
 		); err != nil {
 			return fmt.Errorf("scanstore: RecordModelCalls: insert %s/%s: %w", c.Path, c.Role, err)
 		}
@@ -1609,7 +1617,7 @@ func (s *Store) RecordModelCalls(ctx context.Context, cs []ModelCall) error {
 // than whatever the storage layer happens to return.
 func (s *Store) ModelCallsForScan(ctx context.Context, scanID int64) ([]ModelCall, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT scan_id, path, role, model, calls, retries, input_tokens, output_tokens, cached_input_tokens, wall_ms
+		`SELECT scan_id, path, role, model, calls, retries, input_tokens, output_tokens, cached_input_tokens, cache_write_input_tokens, wall_ms
 		 FROM scan_model_calls WHERE scan_id = ? ORDER BY path, role`, scanID)
 	if err != nil {
 		return nil, fmt.Errorf("scanstore: ModelCallsForScan: %w", err)
@@ -1619,8 +1627,8 @@ func (s *Store) ModelCallsForScan(ctx context.Context, scanID int64) ([]ModelCal
 	for rows.Next() {
 		var c ModelCall
 		var path, role, model sql.NullString
-		var calls, retries, in, outTok, cached, wall sql.NullInt64
-		if err := rows.Scan(&c.ScanID, &path, &role, &model, &calls, &retries, &in, &outTok, &cached, &wall); err != nil {
+		var calls, retries, in, outTok, cached, written, wall sql.NullInt64
+		if err := rows.Scan(&c.ScanID, &path, &role, &model, &calls, &retries, &in, &outTok, &cached, &written, &wall); err != nil {
 			return nil, fmt.Errorf("scanstore: ModelCallsForScan: scan row: %w", err)
 		}
 		c.Path, c.Role, c.Model = path.String, role.String, model.String
@@ -1629,6 +1637,10 @@ func (s *Store) ModelCallsForScan(ctx context.Context, scanID int64) ([]ModelCal
 		if cached.Valid {
 			v := cached.Int64
 			c.CachedInputTokens = &v
+		}
+		if written.Valid {
+			v := written.Int64
+			c.CacheWriteInputTokens = &v
 		}
 		c.InputTokens, c.OutputTokens, c.WallMillis = in.Int64, outTok.Int64, wall.Int64
 		out = append(out, c)

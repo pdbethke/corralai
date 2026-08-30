@@ -50,6 +50,21 @@ type Usage struct {
 	// the same NULL-not-zero rule ModelCall.Retries follows, for the same
 	// reason.
 	CachedInputTokens *int64
+	// CacheWriteInputTokens is how many tokens the provider WROTE into its
+	// cache on this call — Anthropic's `cache_creation_input_tokens`.
+	//
+	// It is recorded beside the reads because a cache write is billed at
+	// 1.25x an ordinary input token: the FIRST call of a fan-out costs more
+	// than an uncached one, and only the calls after it save. A ledger that
+	// held the reads alone would report the saving and hide its price, which
+	// is the wrong half of the trade to be able to see.
+	//
+	// Nullable, separately from CachedInputTokens: a response that reports a
+	// write and no read has not reported a read of zero. Only Anthropic
+	// reports this at all — the OpenAI-compatible wire has no equivalent, and
+	// Gemini's implicit cache has no write to bill — so it is NULL almost
+	// everywhere, which is exactly what NULL is for.
+	CacheWriteInputTokens *int64
 }
 
 // UsageMeter accumulates Usage across the calls of one run — or, since this
@@ -88,6 +103,10 @@ type UsageMeter struct {
 	// from "nothing measured" without allocating on every Add.
 	cached     int64
 	cachedSeen bool
+	// The write half of the same pair, tracked separately for the same
+	// reason: "reported a write, said nothing about reads" is a real shape.
+	cacheWrite     int64
+	cacheWriteSeen bool
 
 	// Model is which model this meter is timing. Set once, at construction,
 	// before the meter is handed to any Chatter — one meter per role means
@@ -121,6 +140,10 @@ func (m *UsageMeter) AddTimed(u Usage, wall time.Duration) {
 		m.cached += *u.CachedInputTokens
 		m.cachedSeen = true
 	}
+	if u.CacheWriteInputTokens != nil {
+		m.cacheWrite += *u.CacheWriteInputTokens
+		m.cacheWriteSeen = true
+	}
 }
 
 // Totals reports the accumulated input tokens, output tokens, and call count.
@@ -148,8 +171,12 @@ type ModelUsage struct {
 	// prompt-token count, and nil when no call did — see Usage's own field
 	// for why silence is NULL and never 0.
 	CachedInputTokens *int64
-	Calls             int64
-	Wall              time.Duration
+	// CacheWriteInputTokens is the sum over the calls that reported a cache
+	// WRITE, nil when none did — see Usage's field for why the price of the
+	// saving is recorded beside the saving.
+	CacheWriteInputTokens *int64
+	Calls                 int64
+	Wall                  time.Duration
 }
 
 // Snapshot reads every field of the meter at once, under one lock
@@ -163,13 +190,18 @@ func (m *UsageMeter) Snapshot() ModelUsage {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	var cached *int64
+	var cached, written *int64
 	if m.cachedSeen {
 		v := m.cached
 		cached = &v
 	}
+	if m.cacheWriteSeen {
+		v := m.cacheWrite
+		written = &v
+	}
 	return ModelUsage{Model: m.Model, InputTokens: m.in, OutputTokens: m.out,
-		CachedInputTokens: cached, Calls: m.calls, Wall: m.wall}
+		CachedInputTokens: cached, CacheWriteInputTokens: written,
+		Calls: m.calls, Wall: m.wall}
 }
 
 // meteredChatter is AsChatter plus an observer. It changes nothing about the

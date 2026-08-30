@@ -23,7 +23,8 @@ import (
 // fixture value (scanstore.ModelCall.Retries, advpool.ModelCall.Retries) —
 // so a measured (non-nil) retries count in a test literal does not need its
 // own named local everywhere it appears.
-func intPtr(v int) *int { return &v }
+func intPtr(v int) *int     { return &v }
+func i64ptr(v int64) *int64 { return &v }
 
 // twoFileLedgerRows builds the ledger rows for a scan that audited one file
 // and refused another — the shape the warehouse used to lose. repoDir holds
@@ -255,9 +256,16 @@ func TestBuildModelCallRowsIsFieldForField(t *testing.T) {
 	}
 	for _, tc := range retriesCases {
 		t.Run(tc.name, func(t *testing.T) {
+			// The two cache counters are set NON-NIL here on purpose: the
+			// reflection walk below compares field values, and a nil on both
+			// sides compares equal whether the mapping carries the field or
+			// silently drops it. A real, distinct value is the only way this
+			// fixture can catch a dropped column.
 			call := scanstore.ModelCall{
 				ScanID: 11, Path: "a.go", Role: "mutant-generator", Model: "m-1",
-				Calls: 24, Retries: tc.retries, InputTokens: 900_000, OutputTokens: 31_000, WallMillis: 45_000,
+				Calls: 24, Retries: tc.retries, InputTokens: 900_000, OutputTokens: 31_000,
+				CachedInputTokens: i64ptr(760_000), CacheWriteInputTokens: i64ptr(38_000),
+				WallMillis: 45_000,
 			}
 			rows := buildModelCallRows([]scanstore.ModelCall{call}, 11, bundleMeta{Repo: "o/r", RunURL: "https://ci/1"})
 			if len(rows) != 1 {
@@ -284,6 +292,15 @@ func TestBuildModelCallRowsIsFieldForField(t *testing.T) {
 					t.Errorf("%s was dropped or changed on the way to the warehouse: ledger %v, row %v",
 						name, lv.Field(i).Interface(), rf.Interface())
 				}
+			}
+			// Nullability is checked explicitly as well as by value: a
+			// mapping that coerced a measured count to 0, or a nil to 0,
+			// would still be "equal" under a sloppier comparison.
+			if row.CachedInputTokens == nil || *row.CachedInputTokens != 760_000 {
+				t.Errorf("row.CachedInputTokens = %v, want a measured 760000", row.CachedInputTokens)
+			}
+			if row.CacheWriteInputTokens == nil || *row.CacheWriteInputTokens != 38_000 {
+				t.Errorf("row.CacheWriteInputTokens = %v, want a measured 38000", row.CacheWriteInputTokens)
 			}
 			if (row.Retries == nil) != (tc.retries == nil) {
 				t.Errorf("row.Retries nil-ness = %v, want %v (nil must stay nil, a measured value must survive)",

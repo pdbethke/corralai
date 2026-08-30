@@ -326,7 +326,11 @@ type scansShowModelCall struct {
 	// from "field does not exist on this build" the same way the ledger's own
 	// nullable columns do.
 	CachedInputTokens *int64 `json:"cached_input_tokens"`
-	WallMillis        int64  `json:"wall_ms"`
+	// CacheWriteInputTokens is what filling that cache cost (Anthropic bills
+	// a write at 1.25x an input token) — null wherever nothing reported one,
+	// which is every provider but Anthropic.
+	CacheWriteInputTokens *int64 `json:"cache_write_input_tokens"`
+	WallMillis            int64  `json:"wall_ms"`
 }
 
 // runScansShowJSONWithTiming is the --json branch of `--timing`: the ledger
@@ -352,7 +356,8 @@ func runScansShowJSONWithTiming(st scansReader, id int64, files []scanstore.File
 		out.ModelCalls = append(out.ModelCalls, scansShowModelCall{
 			Path: c.Path, Role: c.Role, Model: c.Model, Calls: c.Calls,
 			Retries: c.Retries, InputTokens: c.InputTokens, OutputTokens: c.OutputTokens,
-			CachedInputTokens: c.CachedInputTokens, WallMillis: c.WallMillis,
+			CachedInputTokens: c.CachedInputTokens, CacheWriteInputTokens: c.CacheWriteInputTokens,
+			WallMillis: c.WallMillis,
 		})
 	}
 

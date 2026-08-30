@@ -16,6 +16,7 @@ import (
 func scansShowJSONFixture() *fakeScansReader {
 	retries := 1
 	cachedTokens := int64(240000)
+	cacheWrites := int64(38000)
 	return &fakeScansReader{
 		files: []scanstore.File{{
 			Path: "pkg/a.py", Lang: "python", Disposition: "audited", Gradable: true,
@@ -30,7 +31,8 @@ func scansShowJSONFixture() *fakeScansReader {
 			// actually reports on; the generator row leaves it NULL.
 			{ScanID: 1, Path: "pkg/a.py", Role: "test-writer", Model: "w-1",
 				Calls: 5, InputTokens: 300000, OutputTokens: 17000,
-				CachedInputTokens: &cachedTokens, WallMillis: 2200},
+				CachedInputTokens: &cachedTokens, CacheWriteInputTokens: &cacheWrites,
+				WallMillis: 2200},
 		},
 	}
 }
@@ -119,6 +121,7 @@ const wantScansShowJSONWithTiming = `{
       "input_tokens": 900000,
       "output_tokens": 31000,
       "cached_input_tokens": null,
+      "cache_write_input_tokens": null,
       "wall_ms": 4100
     },
     {
@@ -130,6 +133,7 @@ const wantScansShowJSONWithTiming = `{
       "input_tokens": 300000,
       "output_tokens": 17000,
       "cached_input_tokens": 240000,
+      "cache_write_input_tokens": 38000,
       "wall_ms": 2200
     }
   ]

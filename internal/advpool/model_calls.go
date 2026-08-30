@@ -48,6 +48,13 @@ type ModelCall struct {
 	// cache") that a later query would average; NULL is the honest value
 	// for silence.
 	CachedInputTokens *int64
+	// CacheWriteInputTokens is what this seat paid to FILL the cache the
+	// reads above drew on — Anthropic bills a write at 1.25x an ordinary
+	// input token, so the first call of a fan-out is dearer than an uncached
+	// one and only the rest save. Recording the reads alone would show the
+	// saving and hide its price. Nullable, and nil separately from
+	// CachedInputTokens: only Anthropic reports it.
+	CacheWriteInputTokens *int64
 	// Wall is this role's accumulated wall-clock time across every call this
 	// file's audit made it — a MEASUREMENT (agentbackend.UsageMeter times
 	// every call), never a budget. It rides on the Verdict the same way
@@ -68,14 +75,15 @@ type ModelCall struct {
 // the same NULL-not-zero rule the ledger column follows, carried onto the
 // wire so a cached verdict cannot round-trip nil into 0.
 type modelCallWire struct {
-	Role              string `json:"role"`
-	Model             string `json:"model"`
-	Calls             int    `json:"calls"`
-	Retries           *int   `json:"retries,omitempty"`
-	InputTokens       int64  `json:"input_tokens,omitempty"`
-	OutputTokens      int64  `json:"output_tokens,omitempty"`
-	CachedInputTokens *int64 `json:"cached_input_tokens,omitempty"`
-	WallMillis        int64  `json:"wall_ms,omitempty"`
+	Role                  string `json:"role"`
+	Model                 string `json:"model"`
+	Calls                 int    `json:"calls"`
+	Retries               *int   `json:"retries,omitempty"`
+	InputTokens           int64  `json:"input_tokens,omitempty"`
+	OutputTokens          int64  `json:"output_tokens,omitempty"`
+	CachedInputTokens     *int64 `json:"cached_input_tokens,omitempty"`
+	CacheWriteInputTokens *int64 `json:"cache_write_input_tokens,omitempty"`
+	WallMillis            int64  `json:"wall_ms,omitempty"`
 }
 
 // MarshalJSON writes the millisecond form, so a verdict served from the
@@ -85,8 +93,9 @@ func (c ModelCall) MarshalJSON() ([]byte, error) {
 	return json.Marshal(modelCallWire{
 		Role: c.Role, Model: c.Model, Calls: c.Calls, Retries: c.Retries,
 		InputTokens: c.InputTokens, OutputTokens: c.OutputTokens,
-		CachedInputTokens: c.CachedInputTokens,
-		WallMillis:        c.Wall.Milliseconds(),
+		CachedInputTokens:     c.CachedInputTokens,
+		CacheWriteInputTokens: c.CacheWriteInputTokens,
+		WallMillis:            c.Wall.Milliseconds(),
 	})
 }
 
@@ -99,8 +108,9 @@ func (c *ModelCall) UnmarshalJSON(b []byte) error {
 	*c = ModelCall{
 		Role: w.Role, Model: w.Model, Calls: w.Calls, Retries: w.Retries,
 		InputTokens: w.InputTokens, OutputTokens: w.OutputTokens,
-		CachedInputTokens: w.CachedInputTokens,
-		Wall:              time.Duration(w.WallMillis) * time.Millisecond,
+		CachedInputTokens:     w.CachedInputTokens,
+		CacheWriteInputTokens: w.CacheWriteInputTokens,
+		Wall:                  time.Duration(w.WallMillis) * time.Millisecond,
 	}
 	return nil
 }

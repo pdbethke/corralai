@@ -149,3 +149,52 @@ func TestAnthropicSendsNoSystemBlockWhenThereIsNoSystemPrompt(t *testing.T) {
 		t.Errorf("system = %#v, want the field absent", body["system"])
 	}
 }
+
+// TestAnthropicReportsCacheWriteTokens: a cache WRITE is billed at 1.25x a
+// normal input token, so the first call of a fan-out costs MORE than an
+// uncached one and only the calls after it save. A ledger that recorded only
+// the reads would report the saving and hide its price.
+func TestAnthropicReportsCacheWriteTokens(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"ok"}],
+		  "usage":{"input_tokens":40,"output_tokens":7,"cache_creation_input_tokens":38000}}`)
+	}))
+	defer srv.Close()
+
+	b := &anthropicBackend{base: srv.URL, key: "k", model: "claude-test"}
+	m, err := b.Chat([]Message{{Role: "system", Content: "prefix"}, {Role: "user", Content: "hi"}}, nil)
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if m.Usage.CacheWriteInputTokens == nil || *m.Usage.CacheWriteInputTokens != 38000 {
+		t.Fatalf("CacheWriteInputTokens = %v, want 38000", m.Usage.CacheWriteInputTokens)
+	}
+	// Reads and writes are separate measurements: the write above reported no
+	// read, and inventing a 0 would claim this call read nothing from cache.
+	if m.Usage.CachedInputTokens != nil {
+		t.Errorf("CachedInputTokens = %d, want nil — this response reported only a write", *m.Usage.CachedInputTokens)
+	}
+}
+
+// TestUsageMeterAccumulatesCacheWritesSeparately: two nullable counters, two
+// independent "was this ever measured" answers.
+func TestUsageMeterAccumulatesCacheWritesSeparately(t *testing.T) {
+	var m UsageMeter
+	w := int64(38000)
+	r := int64(1200)
+	m.Add(Usage{InputTokens: 10, CacheWriteInputTokens: &w})
+	m.Add(Usage{InputTokens: 10, CachedInputTokens: &r})
+	snap := m.Snapshot()
+	if snap.CacheWriteInputTokens == nil || *snap.CacheWriteInputTokens != 38000 {
+		t.Errorf("CacheWriteInputTokens = %v, want 38000", snap.CacheWriteInputTokens)
+	}
+	if snap.CachedInputTokens == nil || *snap.CachedInputTokens != 1200 {
+		t.Errorf("CachedInputTokens = %v, want 1200", snap.CachedInputTokens)
+	}
+
+	var none UsageMeter
+	none.Add(Usage{InputTokens: 10})
+	if s := none.Snapshot(); s.CacheWriteInputTokens != nil {
+		t.Errorf("CacheWriteInputTokens = %d, want nil", *s.CacheWriteInputTokens)
+	}
+}

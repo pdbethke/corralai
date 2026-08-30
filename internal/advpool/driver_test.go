@@ -816,7 +816,11 @@ func (f *fakeMatrixSink) Record(recordID int64, recordHead string, obs []MatrixO
 // newTestDriverWithSpec mirrors newTestDriver but lets the caller supply the
 // RunSpec (needed to set Matrix: true — testRunSpec()'s default leaves it
 // false, byte-compatible with every pre-matrix test).
-func newTestDriverWithSpec(t *testing.T, missionID int64, scorer *fakeScorer, validator *fakeValidator, threshold float64, rs RunSpec) *Driver {
+// The scorer is taken as the Scorer INTERFACE, not *fakeScorer: every
+// existing caller still passes a *fakeScorer, and a test that needs a scorer
+// implementing an optional extension (PerMutantScorer — see permutant_test.go)
+// can pass that instead of growing a second, near-identical harness.
+func newTestDriverWithSpec(t *testing.T, missionID int64, scorer Scorer, validator *fakeValidator, threshold float64, rs RunSpec) *Driver {
 	t.Helper()
 	q := newTestQueue(t)
 	d, err := NewDriver(q, scorer, validator, decorrelatedAssign(), threshold)

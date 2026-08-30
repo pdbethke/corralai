@@ -65,6 +65,51 @@ func scoreAuthored(ctx context.Context, scorer Scorer, codePath, code, test stri
 	return scorer.ScoreReport(ctx, codePath, code, test, mutants, testCmd)
 }
 
+// PerMutantScorer is the optional RICHER contract: a Scorer that can grade
+// each mutant with its OWN command — the tests that actually reach the lines
+// that mutant changed — instead of the one command the whole file shares.
+// JailScorer implements it; the test fakes need not, and the driver
+// type-asserts, so a Scorer that cannot do this keeps behaving exactly as it
+// did (see scoreDevReport/scoreDevSurvivors).
+//
+// It is a separate interface rather than two more methods on Scorer for that
+// reason alone: Scorer is implemented by every fake in this package's tests,
+// and widening it would force eleven doubles to grow a method none of them
+// has anything to say about.
+type PerMutantScorer interface {
+	ScoreReportFor(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string, cmdFor adequacy.CommandFor) (adequacy.Report, error)
+	ScoreFor(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string, cmdFor adequacy.CommandFor) (float64, []adequacy.Mutant, error)
+}
+
+// scoreDevReport grades mutants the way the run's DEV pass grades them: per
+// mutant when the scorer can (PerMutantScorer) and the run has line evidence
+// to narrow by (DevCommandFor non-nil), else with the run's single shared
+// command. Both branches issue DevCommand(rs) as the baseline/compile-gate
+// command, so the fallback is the pre-per-mutant path unchanged.
+func scoreDevReport(ctx context.Context, scorer Scorer, rs RunSpec, mutants []adequacy.Mutant) (adequacy.Report, error) {
+	cmd := DevCommand(rs)
+	if pm, ok := scorer.(PerMutantScorer); ok {
+		if cmdFor := DevCommandFor(rs); cmdFor != nil {
+			return pm.ScoreReportFor(ctx, rs.CodePath, rs.Code, rs.DevTestCode, mutants, cmd, cmdFor)
+		}
+	}
+	return scorer.ScoreReport(ctx, rs.CodePath, rs.Code, rs.DevTestCode, mutants, cmd)
+}
+
+// scoreDevSurvivors is scoreDevReport's Score-shaped sibling, for the shadow
+// mutant-generator pass. The challenger's mutants must face the SAME exam the
+// primary's did — the pass is a controlled head-to-head — so it narrows by
+// the same closure, not merely by the same shared command.
+func scoreDevSurvivors(ctx context.Context, scorer Scorer, rs RunSpec, mutants []adequacy.Mutant) (float64, []adequacy.Mutant, error) {
+	cmd := DevCommand(rs)
+	if pm, ok := scorer.(PerMutantScorer); ok {
+		if cmdFor := DevCommandFor(rs); cmdFor != nil {
+			return pm.ScoreFor(ctx, rs.CodePath, rs.Code, rs.DevTestCode, mutants, cmd, cmdFor)
+		}
+	}
+	return scorer.Score(ctx, rs.CodePath, rs.Code, rs.DevTestCode, mutants, cmd)
+}
+
 // Validator is brain-side artifact validation of a worker's structured
 // result, run before the driver trusts it enough to score or promote on it.
 type Validator interface {
@@ -226,6 +271,14 @@ type EventSink interface {
 type MutantRef struct {
 	ID           string
 	ParentSHA256 string
+	// TestsRun and Rule are what this mutant was actually GRADED by, when the
+	// run graded each mutant with its own command (see PerMutantScorer). A
+	// kill rate averaged over mutants graded by different test sets is not
+	// one measurement unless the record says which set each one faced, so the
+	// disclosure rides at the same grain as the grading. Both are zero on a
+	// run that graded every mutant with the file's shared command.
+	TestsRun int
+	Rule     string // lang.SpanRule*; "" when the run was not graded per mutant
 }
 
 // toMutantRefs strips MUTANT SOURCE down to the reference scan_mutants needs:
@@ -233,9 +286,21 @@ type MutantRef struct {
 // TYPE, not by caller discipline — anything reachable from a Verdict field
 // eventually reaches the warehouse.
 func toMutantRefs(ms []adequacy.Mutant) []MutantRef {
+	return toMutantRefsWith(ms, nil)
+}
+
+// toMutantRefsWith is toMutantRefs carrying the per-mutant grading a
+// per-mutant run produced (adequacy.Report.PerMutant, keyed by mutant ID). A
+// nil map is the ordinary run: every ref's TestsRun/Rule stay zero, which is
+// exactly what toMutantRefs produced before per-mutant grading existed.
+func toMutantRefsWith(ms []adequacy.Mutant, grading map[string]adequacy.MutantGrading) []MutantRef {
 	refs := make([]MutantRef, len(ms))
 	for i, m := range ms {
 		refs[i] = MutantRef{ID: m.ID, ParentSHA256: m.ParentSHA256}
+		if g, ok := grading[m.ID]; ok {
+			refs[i].TestsRun = g.TestsRun
+			refs[i].Rule = g.Rule
+		}
 	}
 	return refs
 }
@@ -250,6 +315,24 @@ type TestSelection struct {
 	Selected int    `json:"selected"`
 	Of       int    `json:"of"`
 	Fallback string `json:"fallback"`
+	// PerMutant is true when the run graded each mutant with the tests that
+	// reach its own span rather than with the file's shared selection — a
+	// different measurement from the one Method/Selected describe, so it is
+	// disclosed rather than folded into them.
+	PerMutant bool `json:"per_mutant,omitempty"`
+	// TestsPerMutant is the spread of how many tests each graded mutant
+	// actually ran, over the mutants whose grading recorded a count. It is
+	// the honest summary of how much the narrowing narrowed: a Min equal to
+	// the Max means every mutant faced the same set after all.
+	TestsPerMutant struct {
+		Min    int `json:"min"`
+		Median int `json:"median"`
+		Max    int `json:"max"`
+	} `json:"tests_per_mutant,omitempty"`
+	// Rules counts the mutants by WHY they got the command they got
+	// (lang.SpanRule*). A run that is mostly "static" or "unreached" narrowed
+	// almost nothing, and the count is what says so.
+	Rules map[string]int `json:"rules,omitempty"`
 }
 
 // Verdict is one run's final, gated outcome.
@@ -463,6 +546,12 @@ type runState struct {
 	// need it for survivors. Set alongside devSurvivors in applyDevScore,
 	// carried onto Verdict.DevKilledMutants — see that field's doc for why.
 	devKilled []MutantRef
+	// perMutant is adequacy.Report.PerMutant from the dev pass: what each
+	// mutant was actually graded with, keyed by mutant ID. nil unless the run
+	// graded per mutant (see PerMutantScorer), which is also the signal the
+	// aggregate reads to decide whether TestSelection discloses per-mutant
+	// stats at all — an empty exam must not read as "not graded per mutant".
+	perMutant map[string]adequacy.MutantGrading
 	// baselineFailed is true when the dev suite did not pass on the UNMUTATED
 	// compliant code inside the jail (adequacy.Report.CompliantPass=false) — a
 	// build/environment failure (bad toolchain, missing dep, a shell-mangled
@@ -1046,7 +1135,11 @@ func applyDevScore(ctx context.Context, run *runState, scorer Scorer, mutants []
 	// DevCommand, not rs.TestCmd: the run's command narrowed to the tests
 	// that execute this file. The scorer no longer does it — see DevCommand
 	// for why the caller has to be the one that means it.
-	rep, serr := scorer.ScoreReport(ctx, run.rs.CodePath, run.rs.Code, run.rs.DevTestCode, mutants, DevCommand(run.rs))
+	//
+	// Per mutant when the scorer can and the run has line evidence to narrow
+	// by — see scoreDevReport, which owns that choice for both this pass and
+	// the shadow one, so the two can never disagree about what exam was set.
+	rep, serr := scoreDevReport(ctx, scorer, run.rs, mutants)
 	if serr != nil {
 		return fmt.Errorf("advpool: score dev tests: %w", serr)
 	}
@@ -1078,8 +1171,12 @@ func applyDevScore(ctx context.Context, run *runState, scorer Scorer, mutants []
 	run.mutantsInvalid = len(rep.Invalid)
 	run.invalidReasons = rep.InvalidReasons
 	run.mutantsTotal = len(mutants) - run.mutantsInvalid
+	// What each mutant was actually graded with, kept so the verdict's mutant
+	// refs can carry it. nil on a run that graded every mutant with the same
+	// command — which is also how the aggregate tells the two apart.
+	run.perMutant = rep.PerMutant
 	run.devSurvivors = survivorsFrom(rep, mutants)
-	run.devKilled = toMutantRefs(killedFrom(rep, mutants))
+	run.devKilled = toMutantRefsWith(killedFrom(rep, mutants), rep.PerMutant)
 	run.mutants = mutants
 	return nil
 }
@@ -1803,7 +1900,11 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	// The mutant-level evidence behind DevKillRate/Survivors, carried the same
 	// way — see Verdict.DevKilledMutants.
 	v.DevKilledMutants = run.devKilled
-	v.DevSurvivedMutants = toMutantRefs(run.devSurvivors)
+	v.DevSurvivedMutants = toMutantRefsWith(run.devSurvivors, run.perMutant)
+	// Computed HERE, from the refs, rather than in verdictFromSpec: the spec
+	// says what the run intended to narrow by, and only the finished refs say
+	// what each mutant was really graded with.
+	applyPerMutantStats(&v, run.perMutant != nil, v.DevKilledMutants, v.DevSurvivedMutants)
 
 	if d.Signer != nil {
 		recordID, head, serr := d.Signer.SignVerdict(ctx, v)

@@ -2,7 +2,18 @@
 
 package advpool
 
-import "github.com/pdbethke/corralai/internal/queue"
+import (
+	"sort"
+
+	"github.com/pdbethke/corralai/internal/queue"
+)
+
+// MethodCoverageLines is TestSelection.Method for a run that graded each
+// mutant with the tests that reach its own span. It is deliberately NOT the
+// selection's own "coverage-context": that names the file-level narrowing,
+// and a verdict earned per mutant answers a different question — so it keys
+// differently in the cache and reads differently in the record.
+const MethodCoverageLines = "coverage-lines"
 
 // verdictFromSpec builds the spec-derived fields of a Verdict: the run's own
 // identity (Repo, Commit, Lang) and how it discloses its Selection
@@ -20,6 +31,53 @@ func verdictFromSpec(rs RunSpec) Verdict {
 		},
 		Uncovered: rs.Selection.Method != "" && len(rs.Selection.Tests) == 0,
 	}
+}
+
+// applyPerMutantStats fills the Verdict's per-mutant disclosure from the
+// mutant refs the run finished with — the ONE place that turns "each mutant
+// was graded by its own command" into something a reader (and the ledger) can
+// check: how many tests each mutant really ran, and why it got them.
+//
+// graded says whether the run graded per mutant at all. It is passed rather
+// than inferred from the refs because an exam with no graded mutants left
+// (every mutant rejected by the compile gate) would otherwise read as an
+// ordinary whole-selection run, which is a different claim about what
+// happened.
+//
+// Method becomes "coverage-lines": the kill rate is no longer the file
+// selection's measurement, and a cached verdict keyed on the old Method would
+// be served for a run that measured something else.
+func applyPerMutantStats(v *Verdict, graded bool, refs ...[]MutantRef) {
+	if !graded {
+		return
+	}
+	v.TestSelection.PerMutant = true
+	v.TestSelection.Method = MethodCoverageLines
+	rules := map[string]int{}
+	var counts []int
+	for _, group := range refs {
+		for _, r := range group {
+			if r.Rule != "" {
+				rules[r.Rule]++
+			}
+			// Only a mutant whose grading recorded a count: a zero is "not
+			// known", and averaging it in would understate every spread.
+			if r.TestsRun > 0 {
+				counts = append(counts, r.TestsRun)
+			}
+		}
+	}
+	v.TestSelection.Rules = rules
+	if len(counts) == 0 {
+		return
+	}
+	sort.Ints(counts)
+	v.TestSelection.TestsPerMutant.Min = counts[0]
+	v.TestSelection.TestsPerMutant.Max = counts[len(counts)-1]
+	// The upper of the two middle values on an even count, not their mean:
+	// this is a count of tests, and reporting a median of 2 when no mutant
+	// ran 2 tests would be a number nothing measured.
+	v.TestSelection.TestsPerMutant.Median = counts[len(counts)/2]
 }
 
 // aggregate composes a run's Verdict from its scored components and applies

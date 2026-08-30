@@ -308,6 +308,40 @@ func (s JailScorer) ScoreReport(ctx context.Context, codePath, code, test string
 	return rep, nil
 }
 
+// ScoreFor is Score with a per-mutant command: identical in every respect
+// except that each mutant is graded by cmdFor(m) instead of the shared
+// testCmd. It is JailScorer's half of PerMutantScorer — see that interface
+// for why the richer contract is optional. A nil cmdFor is exactly Score.
+func (s JailScorer) ScoreFor(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string, cmdFor adequacy.CommandFor) (float64, []adequacy.Mutant, error) {
+	scoreBase, cmd := s.scoreWorkspace(codePath, test, testCmd)
+
+	opts := append(s.gatedScoreOpts(codePath, scoreBase), adequacy.WithCommandFor(cmdFor))
+	rep, err := adequacy.Score(ctx, s.Jail, scoreBase, codePath, code, mutants, cmd, opts...)
+	if err != nil {
+		return 0, nil, fmt.Errorf("advpool: score: %w", err)
+	}
+	return rep.KillRate(), survivorsFrom(rep, mutants), nil
+}
+
+// ScoreReportFor is ScoreReport with a per-mutant command — JailScorer's
+// other half of PerMutantScorer. The returned Report carries PerMutant: what
+// each mutant was actually graded with, which is what lets the verdict
+// disclose the narrowing instead of merely performing it.
+//
+// The baseline and the compile gate still run the shared command: they are
+// questions about the FILE (does the suite pass at all, does this mutant
+// compile), not about one mutant's span.
+func (s JailScorer) ScoreReportFor(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string, cmdFor adequacy.CommandFor) (adequacy.Report, error) {
+	scoreBase, cmd := s.scoreWorkspace(codePath, test, testCmd)
+
+	opts := append(s.gatedScoreOpts(codePath, scoreBase), adequacy.WithCommandFor(cmdFor))
+	rep, err := adequacy.Score(ctx, s.Jail, scoreBase, codePath, code, mutants, cmd, opts...)
+	if err != nil {
+		return adequacy.Report{}, fmt.Errorf("advpool: score report: %w", err)
+	}
+	return rep, nil
+}
+
 // ScoreAuthoredReport scores a POOL-authored test (the test-writer's output)
 // against mutants — the AuthoredScorer extension tickPoolAdequacy prefers
 // over ScoreReport. Identical to ScoreReport in single-file mode (BaseFiles
@@ -569,6 +603,34 @@ func DevCommandArgv(sel golang.Selection, langName string, base []string, devTes
 		return base
 	}
 	return ts.WithAuthoredTest(sel, base, devTestPath)
+}
+
+// DevCommandFor is DevCommand at the MUTANT grain: the closure the dev (and
+// shadow) pass hands a scorer so each mutant is graded by the tests that
+// actually reach the lines it changed, rather than by the whole file
+// selection every mutant shares.
+//
+// It returns nil — meaning "exactly today's behaviour" — whenever there is
+// nothing honest to narrow BY: no per-test line evidence (a v1-shaped
+// Selection recorded before evidence carried line ranges), no selected tests
+// (an uncovered file: the file selection is already empty, and narrowing an
+// empty set is not a measurement), or no TestSelector for the language. A nil
+// CommandFor is the one value adequacy.WithCommandFor treats as "grade every
+// mutant with the shared command", so the fallback is byte-for-byte the
+// pre-per-mutant path rather than a second, subtly different one.
+func DevCommandFor(rs RunSpec) adequacy.CommandFor {
+	sel := rs.Selection
+	if len(sel.Lines) == 0 || len(sel.Tests) == 0 {
+		return nil
+	}
+	ts := selectorFor(rs.Lang, sel)
+	if ts == nil {
+		return nil
+	}
+	return func(m adequacy.Mutant) adequacy.MutantCommand {
+		cmd, tests, rule := ts.ForSpan(sel, m.Span)
+		return adequacy.MutantCommand{Cmd: cmd, Tests: len(tests), Rule: rule}
+	}
 }
 
 // selectorFor is the run's TestSelector, or nil when the run has no

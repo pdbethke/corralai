@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -780,7 +781,16 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 
 	workers, swarmReadout := resolveScanWorkers(*swarmFlag, *substrateFlag)
 	fmt.Fprint(stdout, swarmReadout)
-	mutantConc := resolveMutantConcurrency(resolveSwarm(*swarmFlag), *substrateFlag, workers, len(jobs))
+	// Two budgets, on purpose. The jail divides the LLM-worker budget
+	// (resolveSwarm, auto-capped so a box does not open 23 model
+	// conversations at once); the workspace sizes TREES, which are CPU, not
+	// conversations — cores/4 by design, capped by nothing but an explicit
+	// --swarm. Feeding it the capped number gave a 24-core box two trees.
+	budget := resolveSwarm(*swarmFlag)
+	if *substrateFlag == substrateWorkspace {
+		budget = treeBudget(*swarmFlag)
+	}
+	mutantConc := resolveMutantConcurrency(budget, *substrateFlag, workers, len(jobs))
 	if mutantConc > 1 {
 		// Named for what each concurrent mutant actually gets, because the
 		// two substrates buy different things with the same number: a
@@ -2768,6 +2778,17 @@ func resolveScanWorkers(swarmFlag int, substrate string) (int, string) {
 //
 // Fails closed on both branches: any degenerate budget/worker/job count yields
 // 1, never unbounded.
+// treeBudget is the budget the workspace substrate divides into private
+// trees: the operator's --swarm when given, else every core on the host. It
+// deliberately bypasses resolveSwarm's localSwarmAutoCap — that cap bounds
+// concurrent MODEL calls, and a tree is a test process, not a model call.
+func treeBudget(swarmFlag int) int {
+	if swarmFlag > 0 {
+		return swarmFlag
+	}
+	return runtime.NumCPU()
+}
+
 func resolveMutantConcurrency(budget int, substrate string, workers, jobs int) int {
 	if substrate == substrateWorkspace {
 		if budget < 1 {

@@ -318,3 +318,41 @@ func TestDowngradedPoolCarriesNoTreeEnv(t *testing.T) {
 		}
 	})
 }
+
+// Found by the first real run: `corral certify --repo .` hands the pool a
+// RELATIVE root, and a symlink whose target is the relative ".venv" points at
+// ITSELF from inside the tree — every run failed with "too many levels of
+// symbolic links" and the probe (correctly) downgraded to one tree. The
+// checkout's dep dirs must be linked by absolute path, whatever root the
+// operator typed.
+func TestPoolLinksDepDirsByAbsolutePathFromARelativeRoot(t *testing.T) {
+	root := newGitRepo(t, map[string]string{"a.py": "x=1\n"}, nil)
+	writeFile(t, filepath.Join(root, ".venv", "bin", "marker"), "here\n")
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(wd) }()
+	p, d, err := NewWorkspacePool(context.Background(), ".", 2, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	if d.Trees != 2 {
+		t.Fatalf("disclosure = %+v", d)
+	}
+	for _, tree := range p.treeRoots() {
+		target, err := os.Readlink(filepath.Join(tree, ".venv"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !filepath.IsAbs(target) {
+			t.Errorf("%s: .venv links to %q — a relative target resolves inside the tree, i.e. to itself", tree, target)
+		}
+		// Reading THROUGH the link is the real test: a self-loop fails here.
+		mustExist(t, filepath.Join(tree, ".venv", "bin", "marker"))
+	}
+}

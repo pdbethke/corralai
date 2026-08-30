@@ -3,6 +3,7 @@
 package main
 
 import (
+	"runtime"
 	"testing"
 
 	"github.com/pdbethke/corralai/internal/reposcan"
@@ -156,5 +157,23 @@ func TestResolveMutantConcurrency_IdleWorkersDoNotEatTheBudget(t *testing.T) {
 	// Two files: two workers actually run, so each gets half.
 	if got := resolveMutantConcurrency(8, substrateJail, 8, 2); got != 4 {
 		t.Fatalf("2 jobs on an 8-worker pool = %d, want 4", got)
+	}
+}
+
+// Found by the first real run: on a 24-core box the default came out at TWO
+// trees, because the budget handed to resolveMutantConcurrency was
+// resolveSwarm's — the LLM-worker auto-size, capped at localSwarmAutoCap (8)
+// so a box does not open 23 model conversations at once. Trees are not model
+// conversations: the design's default is cores/4, and only an explicit --swarm
+// overrides it.
+func TestTreeBudgetIsTheHostsCoresNotTheLLMAutoCap(t *testing.T) {
+	if got := treeBudget(0); got != runtime.NumCPU() {
+		t.Errorf("treeBudget(0) = %d, want NumCPU %d", got, runtime.NumCPU())
+	}
+	if got := treeBudget(5); got != 5 {
+		t.Errorf("treeBudget(5) = %d, want the operator's 5", got)
+	}
+	if runtime.NumCPU() >= 24 && resolveMutantConcurrency(treeBudget(0), substrateWorkspace, 1, 1) < 6 {
+		t.Errorf("a 24+ core box must default to at least 6 trees, got %d", resolveMutantConcurrency(treeBudget(0), substrateWorkspace, 1, 1))
 	}
 }

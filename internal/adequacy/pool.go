@@ -127,6 +127,15 @@ var (
 // WithTreeEnv is lifted out of opts and honoured here, per tree; every other
 // option is passed through to each tree's NewWorkspaceRunner unchanged.
 func NewWorkspacePool(ctx context.Context, root string, n int, timeout time.Duration, opts ...WorkspaceOption) (*WorkspacePool, Disclosure, error) {
+	// Absolute from here on. The dep-dir symlinks below carry root as their
+	// TARGET, and `--repo .` hands us "." — a link whose target is the relative
+	// ".venv" resolves inside the tree, to itself, and every command run
+	// through it dies with ELOOP. The first real run found this; the probe
+	// downgraded correctly and the disclosure said why, which is the only
+	// reason it was a slow run and not a wrong one.
+	if abs, err := filepath.Abs(root); err == nil {
+		root = abs
+	}
 	// The probe exists to read the two env-shaped options back out: they are
 	// opaque funcs, so there is no way to inspect the list without applying
 	// it. Applying it to a throwaway runner is that inspection.

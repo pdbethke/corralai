@@ -782,7 +782,17 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprint(stdout, swarmReadout)
 	mutantConc := resolveMutantConcurrency(resolveSwarm(*swarmFlag), *substrateFlag, workers, len(jobs))
 	if mutantConc > 1 {
-		fmt.Fprintf(stdout, "  mutant scoring: %d at once per file — the jail budget file-parallelism cannot spend (scoring runs the suite once per mutant, so this is the dominant cost on any repo with a real suite)\n", mutantConc)
+		// Named for what each concurrent mutant actually gets, because the
+		// two substrates buy different things with the same number: a
+		// disposable jail apiece, or a private copy of the checkout apiece.
+		// The workspace line is an INTENTION, not a result — each file's own
+		// probe decides whether its suite survives that many trees, and the
+		// per-file `concurrency:` line reports what it decided.
+		what := "the jail budget file-parallelism cannot spend"
+		if *substrateFlag == substrateWorkspace {
+			what = "one private tree each, where the file's own probe allows it"
+		}
+		fmt.Fprintf(stdout, "  mutant scoring: %d at once per file — %s (scoring runs the suite once per mutant, so this is the dominant cost on any repo with a real suite)\n", mutantConc, what)
 	}
 
 	// The workspace substrate pins file-level concurrency to 1 (one checkout,
@@ -2679,21 +2689,21 @@ func printRepoReport(w io.Writer, r reposcan.RepoReport, nothingInScope bool, mi
 // concurrency is free correctness-wise.
 //
 // The workspace substrate is clamped to ONE worker, whatever the operator
-// asked for. Every job on that substrate mutates the SAME checkout in place
-// (adequacy.NewWorkspaceRunner over --repo), and the apply/restore ledger is
-// per-runner: it assumes exclusivity. Run two jobs at once and job B's suite
-// executes while job A has a mutant — or adequacy.CanaryCode, which does not
-// compile — written into A's file. B's surviving mutants are then recorded as
-// KILLED (an inflated kill rate on a record this product signs) and B's
-// baseline can fail into a spurious baseline-failed/flaky-baseline. Neither
-// is detectable after the fact.
+// asked for — but it is no longer clamped to one RUN. Files are serialized
+// because a tree is a copy of the whole checkout and N files' pools at once
+// is N times that disk; WITHIN a file, adequacy.WorkspacePool gives each
+// concurrent mutant its own private tree, so the suite really does run many
+// at a time (see resolveMutantConcurrency, and the per-file `concurrency:`
+// line the executor prints once the pool's probe has answered).
 //
-// The fix is serialization, not a per-job tree copy: copying the tree per job
-// is the memory ceiling this substrate exists to escape. That cost is real, so
-// the readout STATES the clamp rather than silently differing from --swarm.
+// The readout must not claim more than that. It used to say the substrate
+// "mutates one checkout in place, so jobs run one at a time", which was true
+// of the whole audit and is now true only of the file axis; an operator who
+// reads it as "corral cannot use my box" is being told something false about
+// the thing this design changed.
 func resolveScanWorkers(swarmFlag int, substrate string) (int, string) {
 	if substrate == substrateWorkspace {
-		return 1, fmt.Sprintf("  swarm: 1 worker — --substrate %s mutates one checkout in place, so jobs run one at a time\n", substrateWorkspace)
+		return 1, fmt.Sprintf("  swarm: 1 worker — --substrate %s audits one file at a time (mutants within a file run concurrently, in private trees)\n", substrateWorkspace)
 	}
 	n := resolveSwarm(swarmFlag)
 	return n, fmt.Sprintf("  swarm: %d workers\n", n)
@@ -2719,17 +2729,44 @@ func resolveScanWorkers(swarmFlag int, substrate string) (int, string) {
 // files already saturate the budget the result is 1 and nothing changes, which
 // is why this is safe to turn on by default.
 //
-// The workspace substrate is pinned to 1 and cannot spend the budget on this
-// axis at all: adequacy.WorkspaceRunner mutates ONE checkout in place with NO
-// mutex, so two concurrent applyFiles interleave and one job's suite runs
-// against another's mutant — recording SURVIVORS AS KILLED and signing an
-// inflated kill rate that is undetectable after the fact. Unlike the file axis
-// (where serialization is a throughput choice) this one is a correctness
-// boundary. Fails closed: any degenerate budget/worker count yields 1, never
-// unbounded.
+// The workspace substrate divides the budget differently, and used to be
+// pinned to 1. The pin was a correctness boundary, not a throughput choice:
+// adequacy.WorkspaceRunner mutates ONE checkout in place with NO mutex, so two
+// concurrent applyFiles interleave and one job's suite runs against another's
+// mutant — recording SURVIVORS AS KILLED and signing an inflated kill rate
+// that is undetectable after the fact. adequacy.WorkspacePool removes the
+// shared tree (one private copy per worker) and with it the reason for the
+// pin, so the budget can finally reach the axis that dominates the cost of a
+// real audit: scoring runs the target's whole suite once per mutant.
+//
+// The share is a QUARTER of the budget, not all of it, and it does not divide
+// by the file workers because resolveScanWorkers already holds the workspace
+// substrate at one file at a time. A quarter because a tree is not a jail: it
+// is a copy of the checkout on disk running a REAL suite that wants CPU,
+// memory and I/O of its own (the spec's cores/4 default, --swarm overriding
+// the cores half). Capped at jobs — mutants here — because trees are
+// expensive and idle ones are pure cost.
+//
+// Whether the trees are actually USED is not decided here: the pool's probe
+// runs the unmutated baseline in all N at once and downgrades to 1, disclosed,
+// if the suite is not concurrency-safe. This function sizes the ambition; the
+// probe is what keeps it honest.
+//
+// Fails closed on both branches: any degenerate budget/worker/job count yields
+// 1, never unbounded.
 func resolveMutantConcurrency(budget int, substrate string, workers, jobs int) int {
 	if substrate == substrateWorkspace {
-		return 1
+		if budget < 1 || jobs < 1 {
+			return 1
+		}
+		n := budget / 4
+		if jobs < n {
+			n = jobs
+		}
+		if n < 1 {
+			return 1
+		}
+		return n
 	}
 	if budget < 1 || workers < 1 || jobs < 1 {
 		return 1
@@ -3030,9 +3067,19 @@ func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
 		// workspace substrate, which serializes them.
 		swarm: l.effectivePerFileSwarm(),
 		// The other half of the same budget: files in parallel x mutants in
-		// parallel. Reaches only the bwrap-jail scorer, never the workspace
-		// runner — resolveMutantConcurrency pins workspace at 1.
+		// parallel. On the jail substrate that many disposable jails; on the
+		// workspace substrate that many PRIVATE TREES in the pool (see
+		// resolveMutantConcurrency, which no longer pins the workspace to 1
+		// because adequacy.WorkspacePool removed the shared checkout that
+		// made the pin necessary).
 		mutantConcurrency: l.mutantConcurrency,
+		// Where the pool's concurrency probe writes its answer for this file.
+		// A pointer because the input travels BY VALUE from here to
+		// buildJailWiring; allocated for every job so the executor can print
+		// the disclosure below and Task 5 can put it on the verdict, and left
+		// at its zero value (Trees 0) by the jail substrate, which builds no
+		// trees and has nothing to disclose.
+		concurrency: new(adequacy.Disclosure),
 		// H1a produces a REPORT, not a sealed statement: no ledger, no
 		// signing key, no scorecard feed (N concurrent audits must not
 		// contend on one single-process DuckDB file). Signing is H1c.
@@ -3081,6 +3128,14 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 	if err != nil {
 		return reposcan.FileResult{}, l.fail(j, err)
 	}
+	// The concurrency probe has run by now (building the baseline runner is
+	// what builds — and probes — this file's pool), so its answer is available
+	// and is said out loud, per file. The DOWNGRADE is the interesting event:
+	// an operator watching a workspace audit crawl has to be able to see that
+	// their suite failed under N trees, and why, rather than inferring it from
+	// the wall clock. Silent when nothing was measured (the jail substrate,
+	// which builds no trees).
+	l.noteConcurrency(j.Path, in.concurrency)
 	// Deferred, not called inline: a panic in CheckBaselineStable or in the
 	// jail beneath it would otherwise leak the vendor staging dir. Released
 	// explicitly before l.audit too, since the audit builds its own jail and
@@ -3190,6 +3245,30 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 // The base handed to the selector is the operator's `-- <cmd>` when they gave
 // one, else the plugin's stock recursive command: the operator's markers and
 // flags are honoured, and the selection only ever narrows what they chose.
+// noteConcurrency prints one file's concurrency disclosure: how many private
+// trees its pool got, or that it got one and WHY.
+//
+// The wording is the spec's, verbatim, because the same two sentences have to
+// appear in the live progress, in the report and in the ledger — an operator
+// who sees "concurrency: 1" on screen and a different phrase in the record
+// cannot tell whether they are the same fact.
+//
+// Nothing is printed for a disclosure that was never written (Trees 0): the
+// jail substrate has no trees to disclose, and inventing a line for it would
+// claim a measurement that never happened.
+func (l *localExecutor) noteConcurrency(path string, d *adequacy.Disclosure) {
+	switch {
+	case d == nil || d.Trees < 1:
+		return
+	case d.Trees > 1:
+		l.note("%s: concurrency: %d trees (baseline passed under %d)\n", path, d.Trees, d.Trees)
+	case d.Note != "":
+		l.note("%s: concurrency: 1 (%s)\n", path, d.Note)
+	}
+	// Trees == 1 with no note is the ordinary "the budget only bought one
+	// tree" case — the substrate's own default, and not news.
+}
+
 func (l *localExecutor) selectionFor(j reposcan.Job) lang.Selection {
 	if l.wholeSuite {
 		return lang.Selection{Fallback: "--whole-suite"}

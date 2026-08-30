@@ -170,6 +170,38 @@ type Plugin interface {
 	WorkspaceRunEnv() (env []string, cleanup func())
 }
 
+// TreeEnver is an OPTIONAL plugin capability: the environment one PRIVATE
+// TREE of a concurrent workspace pool must run under
+// (internal/adequacy.WorkspacePool). A plugin that does not implement it gets
+// no tree env at all, which is correct for every language whose toolchain
+// neither resolves imports through an absolute path recorded elsewhere nor
+// fans out over the whole box on its own.
+//
+// It is separate from Plugin (rather than another method on it) because it is
+// a property of ONE substrate's ONE mode — N copies of a checkout — and every
+// plugin would otherwise carry a no-op for it.
+//
+// tree is that tree's root; cores is the share of the box THIS tree may use
+// (the pool divides, it does not multiply: N trees each assuming all cores
+// thrash the machine and turn the concurrency probe into a false negative).
+// The returned "VAR=value" assignments are applied to every run in that tree,
+// BEFORE Plugin.WorkspaceRunEnv's, so a plugin's per-run env can still
+// override a tree-derived value.
+//
+// The two implementations, and why only they:
+//
+//   - Python (python.go): a tree is a COPY, and an editable install's .pth
+//     points at the ORIGINAL checkout. Without the tree's own root on
+//     PYTHONPATH the suite imports unmutated source and every mutant
+//     "survives" — the false-accusation shape this codebase has killed
+//     repeatedly. PYTHONPATH entries precede .pth entries, which is what
+//     makes this work at all.
+//   - Go (go.go): `go test` builds and runs packages in parallel by itself,
+//     so N trees each using every core is N-times oversubscribed.
+type TreeEnver interface {
+	TreeEnv(tree string, cores int) []string
+}
+
 var registry = map[string]Plugin{}
 
 // Register adds a plugin to the registry. Called from plugin files' init().

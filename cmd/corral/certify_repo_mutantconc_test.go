@@ -52,18 +52,38 @@ func TestResolveMutantConcurrency_SaturatedByFilesStaysSequential(t *testing.T) 
 	}
 }
 
-// THE SAFETY RULE, and the one that must never regress: WorkspaceRunner mutates
-// ONE checkout in place and has NO mutex. Two concurrent applyFiles interleave
-// and corrupt the tree — job B's suite runs against job A's mutant, so B's
-// survivors record as KILLED and corral signs an inflated kill rate that is not
-// detectable after the fact. The workspace substrate is serialized whatever the
-// budget says, and unlike the file axis it cannot be "spent" elsewhere.
-func TestResolveMutantConcurrency_WorkspaceAlwaysSequential(t *testing.T) {
-	for _, budget := range []int{1, 4, 16, 128} {
+// THE SAFETY RULE, restated for the substrate that now has private trees.
+// The old rule was "workspace is ALWAYS 1", and it was right for as long as
+// every job mutated ONE shared checkout with no mutex: two concurrent
+// applyFiles interleave, job B's suite runs against job A's mutant, B's
+// survivors record as KILLED and corral signs an inflated kill rate nobody
+// can detect afterwards. adequacy.WorkspacePool removes the shared tree, so
+// the rule becomes an ARITHMETIC one — a quarter of the budget, never more
+// trees than mutants, never fewer than one — and the correctness argument
+// moves to the pool's probe (baseline in all N at once) which is what may
+// still send a run back to a single tree.
+func TestResolveMutantConcurrency_WorkspaceGetsAQuarterOfTheBudget(t *testing.T) {
+	for _, tc := range []struct{ budget, jobs, want int }{
+		{1, 4, 1}, {4, 4, 1}, {16, 40, 4}, {128, 40, 32}, {16, 2, 2},
+	} {
 		for _, workers := range []int{1, 2, 8} {
-			if got := resolveMutantConcurrency(budget, substrateWorkspace, workers, 4); got != 1 {
-				t.Fatalf("workspace substrate budget=%d workers=%d = %d, want 1 — WorkspaceRunner has no mutex and MUST NOT be parallelized", budget, workers, got)
+			// workers is deliberately swept and deliberately IGNORED by the
+			// formula: resolveScanWorkers already holds this substrate at one
+			// file at a time, so dividing by a worker count that never runs
+			// would hand the mutant axis nothing.
+			if got := resolveMutantConcurrency(tc.budget, substrateWorkspace, workers, tc.jobs); got != tc.want {
+				t.Fatalf("workspace budget=%d jobs=%d workers=%d = %d, want %d", tc.budget, tc.jobs, workers, got, tc.want)
 			}
+		}
+	}
+}
+
+// Fail closed on this branch too: a missing budget or an empty job list must
+// mean one tree, never unbounded concurrency over a real checkout.
+func TestResolveMutantConcurrency_WorkspaceDegenerateInputsFailClosed(t *testing.T) {
+	for _, tc := range []struct{ budget, jobs int }{{0, 4}, {-1, 4}, {16, 0}, {16, -2}, {-3, -3}} {
+		if got := resolveMutantConcurrency(tc.budget, substrateWorkspace, 1, tc.jobs); got != 1 {
+			t.Fatalf("workspace budget=%d jobs=%d = %d, want 1 (fail closed)", tc.budget, tc.jobs, got)
 		}
 	}
 }
@@ -94,19 +114,26 @@ func TestLocalExecutor_PassesMutantConcurrencyToAudit(t *testing.T) {
 	}
 }
 
-// And the safety boundary end-to-end: whatever the operator's budget, a
-// workspace-substrate scan must hand 1 down. resolveMutantConcurrency is the
-// gate, but this pins the composed result, since that is what actually decides
-// whether an unsynchronized checkout gets written by two goroutines.
-func TestLocalExecutor_WorkspaceSubstrateNeverParallelizesMutants(t *testing.T) {
+// And the composed result end-to-end: a workspace-substrate scan must hand
+// the file's audit the TREE COUNT, because that is the number that decides
+// how many private trees the pool builds and how many mutants score at once.
+// It used to be pinned to 1 here; the pin moved to the pool's probe, which is
+// the only thing that can actually establish the suite is safe under N.
+func TestLocalExecutor_WorkspaceSubstratePassesTheTreeCountDown(t *testing.T) {
 	workers, _ := resolveScanWorkers(16, substrateWorkspace)
-	got := resolveMutantConcurrency(resolveSwarm(16), substrateWorkspace, workers, 4)
+	got := resolveMutantConcurrency(resolveSwarm(16), substrateWorkspace, workers, 40)
+	if got != 4 {
+		t.Fatalf("composed workspace concurrency = %d, want 4 (a quarter of --swarm 16)", got)
+	}
 
 	ex := newLocalExecutor("/tmp/repo", nil, substrateWorkspace, 0, nil)
 	ex.mutantConcurrency = got
 	in := ex.auditInputFor(reposcan.Job{Path: "src/a.go", TestPath: "src/a_test.go", Lang: "go"})
-	if in.mutantConcurrency != 1 {
-		t.Fatalf("workspace scan handed mutantConcurrency=%d — WorkspaceRunner has no mutex; concurrent applyFiles corrupt the tree and record survivors as KILLED", in.mutantConcurrency)
+	if in.mutantConcurrency != 4 {
+		t.Fatalf("audit input mutantConcurrency = %d, want 4 — the tree count never reached the pool, so the audit stays serial and silent about it", in.mutantConcurrency)
+	}
+	if in.concurrency == nil {
+		t.Fatal("audit input has no concurrency sink — the probe's answer would be discarded and the report could not disclose it")
 	}
 }
 

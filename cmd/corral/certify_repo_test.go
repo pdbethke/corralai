@@ -1949,7 +1949,7 @@ func TestScanResolvesTheSandboxExactlyOnceForTheWholeScan(t *testing.T) {
 	// irrelevant here (the fake isolator cannot actually run a suite) — the
 	// measurement is how many times the sandbox got resolved.
 	drive := func(in localAuditInput) {
-		if p, err := prepareAuditJail(in, plug, time.Minute, io.Discard); err == nil {
+		if p, err := prepareAuditJail(context.Background(), in, plug, time.Minute, io.Discard); err == nil {
 			p.cleanup()
 		}
 	}

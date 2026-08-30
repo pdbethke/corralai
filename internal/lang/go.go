@@ -310,6 +310,25 @@ func (goPlugin) ParseCoverage(stdout, modulePath string) (executed map[string]bo
 // lang.Plugin.WorkspaceRunEnv's doc comment.
 func (goPlugin) WorkspaceRunEnv() (env []string, cleanup func()) { return nil, func() {} }
 
+// TreeEnv divides the box between the pool's trees instead of letting each
+// one assume all of it. `go test` already builds and runs packages in
+// parallel (GOMAXPROCS for the test binary, -p for the build), so N trees
+// each taking every core is N-times oversubscribed: the machine thrashes,
+// every suite gets slower, and the concurrency probe — whose whole job is to
+// decide whether the suite PASSES under N — can fail on contention alone and
+// downgrade a perfectly safe suite to one tree.
+//
+// cores is this tree's share, already divided by the pool; a degenerate share
+// floors at 1 (GOMAXPROCS=0 is rejected outright by the runtime, and -p=0
+// means "unlimited" — exactly the oversubscription this exists to prevent).
+func (goPlugin) TreeEnv(tree string, cores int) []string {
+	if cores < 1 {
+		cores = 1
+	}
+	n := strconv.Itoa(cores)
+	return []string{"GOMAXPROCS=" + n, "GOFLAGS=-p=" + n}
+}
+
 func (goPlugin) ParseTestList(output string) []string {
 	var out []string
 	for _, line := range strings.Split(output, "\n") {

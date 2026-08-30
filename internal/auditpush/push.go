@@ -17,9 +17,12 @@
 // Two rules the schema enforces rather than documents:
 //
 //   - APPEND ONLY. A verified receipt that can be UPDATEd is not a receipt.
-//     Rows are inserted, never modified, and each carries the sha256 of the
-//     signed statement it came from so a row traces back to something a third
-//     party can verify.
+//     Rows are inserted, never modified, and — whenever --attest ran too —
+//     each carries the sha256 of the signed statement it came from, so a row
+//     traces back to something a third party can verify. Without --attest
+//     there is no statement to point to, and a row's statement_sha256 is
+//     honestly empty rather than fabricated; scan_id is always the ledger's
+//     row id, or 0 when --record was not given.
 //   - THE QUALIFIERS TRAVEL WITH THE NUMBERS. proven_missed = 0 means "nothing
 //     was proven" rather than "the suite is clean" whenever the writer failed
 //     or its test never graded. Aggregation is exactly where that distinction
@@ -105,6 +108,32 @@ type Row struct {
 	// symlinked into every tree rather than copied — the one thing the trees
 	// did NOT hold privately. SQL NULL, not "", when nothing was shared.
 	SharedDirs string
+	// ScanID is the local scan ledger's row id this row was pushed alongside
+	// (see scanstore.Store.Record), or 0 when the ledger was not written.
+	// It is the join key back to scan_files/scan_mutants, and — together
+	// with StatementSHA256 — the other half of the link a signed statement
+	// makes to this row: the statement names ScanID and the hash of the
+	// rows it was written with, and this row names the statement's own
+	// hash. Two pointers, not one, so either can be checked against the
+	// other.
+	ScanID int64
+}
+
+// Link identifies the ledger scan and signed statement a pushed row belongs
+// to — the fields cmd/corral's pushAuditRows stamps onto every row from a
+// single source so a row and the statement it names can never disagree
+// about which run produced them.
+type Link struct {
+	// ScanID is written onto Row.ScanID.
+	ScanID int64
+	// StatementSHA256 is written onto Row.StatementSHA256.
+	StatementSHA256 string
+	// Require, when true, refuses to push any row whose StatementSHA256 is
+	// empty. The certify --repo path sets this whenever --attest produced a
+	// statement, so a row that would otherwise claim traceability actually
+	// has it; without --attest there is no statement to point to, Require
+	// is false, and a row with statement_sha256 = '' pushes honestly.
+	Require bool
 }
 
 // TestsPerMutantSpread is how many tests each graded mutant ran: the
@@ -147,7 +176,8 @@ CREATE TABLE IF NOT EXISTS corral_audits (
   tests_per_mutant_max    INTEGER,
   trees                   INTEGER,
   concurrency_note        VARCHAR,
-  shared_dirs             VARCHAR
+  shared_dirs             VARCHAR,
+  scan_id                 BIGINT
 );`
 
 // corralAuditsMigrationCols is the additive set of columns this package has
@@ -180,6 +210,7 @@ var corralAuditsMigrationCols = []struct{ name, ddl string }{
 	{"trees", "trees INTEGER"},
 	{"concurrency_note", "concurrency_note VARCHAR"},
 	{"shared_dirs", "shared_dirs VARCHAR"},
+	{"scan_id", "scan_id BIGINT"},
 }
 
 // migrateCorralAudits additively brings a corral_audits table created before
@@ -228,12 +259,29 @@ func migrateCorralAudits(db *sql.DB) error {
 // target is a DuckDB path or `md:<db>`. For MotherDuck the caller must have set
 // motherduck_token in the environment — the same contract fleet sync uses, and
 // the reason this takes no credential of its own: corral never holds one.
-func Push(target string, rows []Row) (int, error) {
+//
+// link is variadic so Push(target, rows) keeps working for every caller that
+// has no statement to link rows to — the test-only/legacy path, and any
+// future caller pushing rows without --attest. Passing a Link enforces
+// Link.Require: refuse the whole push, naming the offending row, rather than
+// writing a row that looks traceable when it is not.
+func Push(target string, rows []Row, link ...Link) (int, error) {
 	if strings.TrimSpace(target) == "" {
 		return 0, fmt.Errorf("auditpush: no target")
 	}
 	if len(rows) == 0 {
 		return 0, nil
+	}
+	var lk Link
+	if len(link) > 0 {
+		lk = link[0]
+	}
+	if lk.Require {
+		for _, r := range rows {
+			if strings.TrimSpace(r.StatementSHA256) == "" {
+				return 0, fmt.Errorf("auditpush: row %s has no statement_sha256, but a signed statement is required", r.Path)
+			}
+		}
 	}
 
 	db, err := sql.Open("duckdb", "")
@@ -273,8 +321,8 @@ func Push(target string, rows []Row) (int, error) {
 	    min_kill_rate, max_proven_missed, passed, statement_sha256, run_url,
 	    test_selection, selected_tests, suite_tests, selection_fallback, uncovered,
 	    per_mutant, tests_per_mutant_min, tests_per_mutant_median, tests_per_mutant_max,
-	    trees, concurrency_note, shared_dirs
-	  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+	    trees, concurrency_note, shared_dirs, scan_id
+	  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 	if err != nil {
 		return 0, err
 	}
@@ -337,7 +385,7 @@ func Push(target string, rows []Row) (int, error) {
 			minKill, maxGaps, r.Passed, r.StatementSHA256, r.RunURL,
 			r.TestSelection, r.SelectedTests, r.SuiteTests, r.SelectionFallback, r.Uncovered,
 			r.PerMutant, pmMin, pmMedian, pmMax,
-			trees, concurrencyNote, sharedDirs); err != nil {
+			trees, concurrencyNote, sharedDirs, r.ScanID); err != nil {
 			return n, fmt.Errorf("auditpush: insert %s: %w", r.Path, err)
 		}
 		n++

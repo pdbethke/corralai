@@ -514,3 +514,50 @@ func TestPushMigratesAPreExistingWarehouseOntoTheConcurrencyColumns(t *testing.T
 		t.Errorf("migrated concurrency columns did not round-trip: trees=%d shared=%v", trees, shared)
 	}
 }
+
+// TestPushRefusesARowWithoutStatementSHA is the guard the certify --repo path
+// leans on: when a Link says a statement is required (--attest was given),
+// a row with no statement_sha256 must never reach the warehouse looking
+// traceable when it is not. The test-only/legacy path above passes rows with
+// no Link at all, which must keep working unchanged.
+func TestPushRefusesARowWithoutStatementSHA(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "w.duckdb")
+
+	_, err := Push(target, []Row{{
+		Repo: "o/r", Commit: "c", Path: "a.py",
+	}}, Link{Require: true})
+	if err == nil {
+		t.Fatal("Push must refuse a row with no statement_sha256 when Link.Require is true")
+	}
+	if !contains(err.Error(), "a.py") {
+		t.Errorf("error %q must name the offending row", err.Error())
+	}
+
+	// A statement_sha256 present satisfies the requirement.
+	if _, err := Push(target, []Row{{
+		Repo: "o/r", Commit: "c", Path: "b.py", StatementSHA256: "deadbeef",
+	}}, Link{Require: true}); err != nil {
+		t.Fatalf("Push with a statement_sha256 present must not be refused: %v", err)
+	}
+}
+
+// TestPushScanIDRoundTrips confirms the additive scan_id column lands and
+// reads back — the ledger-row join key every warehouse consumer relies on.
+func TestPushScanIDRoundTrips(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "w.duckdb")
+
+	if _, err := Push(target, []Row{{
+		Repo: "o/r", Commit: "c", Path: "a.py", ScanID: 42,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	db := openTarget(t, target)
+	var scanID int64
+	if err := db.QueryRow(`SELECT scan_id FROM corral_audits WHERE path = 'a.py'`).Scan(&scanID); err != nil {
+		t.Fatalf("read back scan_id: %v", err)
+	}
+	if scanID != 42 {
+		t.Errorf("scan_id = %d, want 42", scanID)
+	}
+}

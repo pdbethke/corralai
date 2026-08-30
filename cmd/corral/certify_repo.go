@@ -74,7 +74,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	jsonOut := fs.Bool("json", false, "with --dry-run, emit the repository's audit surface as JSON instead of the human report: per-language counts, every auditable file with its inferred test pairing, and the machine-stable exclusion tally. Needs no key, no jail and no money — it is the free inventory a UI or a tenant's own tooling can consume instead of scraping stdout")
 	substrateFlag := fs.String("substrate", substrateJail, "where the audit runs: "+substrateJail+" (bwrap) or "+substrateWorkspace+" (mutate --repo in place; the caller IS the isolation boundary, e.g. an ephemeral CI runner)")
 	diffBase := fs.String("diff-base", "", "bound the scan to files changed since this git ref, instead of ranking + --top. In a PR the diff IS the bound: ranking and --top do not apply on this path")
-	pushFlag := fs.String("push", "", "append this scan's per-file verdicts to a DuckDB you own — a path, or `md:<db>` for MotherDuck (which reads motherduck_token from the environment). corral has no hosted tier and keeps nothing: the warehouse is yours, and any DuckDB works, so this is a destination rather than a lock-in. Append-only, and every row carries the sha256 of the signed statement it came from, so a row traces back to something a third party can verify. It answers what one pull request cannot — a single kill rate is a sample, and the same unchanged diff has scored 0.85 and 0.90; forty of them are a distribution")
+	pushFlag := fs.String("push", "", "append this scan's per-file verdicts to a DuckDB you own — a path, or `md:<db>` for MotherDuck (which reads motherduck_token from the environment). corral has no hosted tier and keeps nothing: the warehouse is yours, and any DuckDB works, so this is a destination rather than a lock-in. Append-only. Every row carries the ledger's scan id (0 when --record was not given), and — traceable only with --attest — the sha256 of the signed statement it came from, so a row can be checked against something a third party can verify; without --attest, statement_sha256 is honestly empty rather than fabricated. It answers what one pull request cannot — a single kill rate is a sample, and the same unchanged diff has scored 0.85 and 0.90; forty of them are a distribution")
 	attestFlag := fs.String("attest", "", "write the scan's verdict as an in-toto Statement to this file — the receipt a reviewer can verify without trusting the run that produced it. Consumed by GitHub's attestation API (actions/attest), which signs it keylessly through the workflow's own OIDC identity, so the signature chains to the repository and workflow rather than to a key that lived on an ephemeral runner. Carries every file's kill rate, survivors and proven gaps WITH the honesty flags that say what a zero means, the thresholds it was judged against, and the models in each role")
 	maxProvenMissedFlag := fs.String("max-proven-missed", "", "fail the scan (exit 1) if ANY audited file has MORE than this many proven-missed gaps — survivors the pool then killed with a test it WROTE and RAN. Opt-in and unset by default. Prefer this to --min-kill-rate as a merge gate: a kill rate is a proportion of freshly generated mutants and moves between runs on unchanged code, so a threshold set near a healthy value flaps red and gets switched off. A proven-missed gap is a specific demonstrated bug the suite does not catch, established by execution, and 0 means the pool proved nothing — not that it sampled well")
 	minKillRateFlag := fs.String("min-kill-rate", "", "fail the scan (exit 1) if ANY audited file's kill rate is below this value (0.0-1.0 inclusive; a minimum, so a file exactly at the threshold passes). Opt-in: unset by default, so exit codes are unchanged unless this is given. Applies PER FILE, not to the aggregate — a well-tested file must not mask a weak one")
@@ -883,46 +883,27 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		return m
 	}
 
-	// The audit statement, written after the exit code is known so `passed`
-	// records the verdict this run actually returned rather than a guess made
-	// before the gates were applied.
+	// End-of-scan sequence: ledger record → attestation → push, in that
+	// order, because each later step needs something the one before it
+	// produces. scanID is the ledger's row id (0 when --record was not
+	// given, or when the ledger write failed — 0 is the honest value
+	// either way, never a fabricated id). statementSHA256 is the sha256 of
+	// the --attest statement writeAuditStatement wrote (empty when --attest
+	// was not given, or its write failed). Both are folded into the rows
+	// --push writes, which is why push must run last: it is the only step
+	// with nothing later depending on it.
 	//
-	// A write failure is loud but never changes the exit code: this command is
-	// a merge gate, and a full disk must not red-build a pull request over
-	// bookkeeping — the same fail-open rule the ledger write below follows, for
-	// the same reason.
-	// Push before the statement write below, so a push failure is reported on
-	// its own rather than confused with an attestation problem. Like the ledger
-	// write, it never changes the exit code: this command is a merge gate, and
-	// an unreachable warehouse must not red-build a pull request over
-	// bookkeeping.
-	if strings.TrimSpace(*pushFlag) != "" {
-		n, perr := pushAuditRows(*pushFlag, *repoDir, rep, models(), minKillRate, maxProvenMissed, exitCode == 0)
-		switch {
-		case perr != nil:
-			fmt.Fprintf(stderr, "corral certify --repo: pushing to %s: %v\n", *pushFlag, perr)
-		case n > 0:
-			fmt.Fprintf(stdout, "  pushed %d row(s) to %s\n", n, *pushFlag)
-		}
-	}
-
-	if strings.TrimSpace(*attestFlag) != "" {
-		if err := writeAuditStatement(*attestFlag, *repoDir, rep, models(), minKillRate, maxProvenMissed, exitCode == 0); err != nil {
-			fmt.Fprintf(stderr, "corral certify --repo: writing --attest statement: %v\n", err)
-		} else {
-			fmt.Fprintf(stdout, "  wrote the audit statement to %s — attest it with actions/attest, verify with `gh attestation verify`\n", *attestFlag)
-		}
-	}
-
-	// FAIL-OPEN, deliberately, and this is the one place in corral where
-	// uncertainty must not fail closed: this command's exit code is a CI
-	// merge gate. If a ledger write could change it, a full disk or a busy
-	// DuckDB file would red-build a pull request over bookkeeping. So a
-	// recording failure is printed loudly on stderr and the verdict and
-	// exit code decided above stand unchanged. Do not "fix" this into a
-	// failure path — that is precisely the bug this comment exists to head
-	// off. Placed after `code` is computed, and calling nothing that can
-	// panic into the exit path below.
+	// Every one of the three writes below is FAIL-OPEN, deliberately, and
+	// this is the one place in corral where uncertainty must not fail
+	// closed: this command's exit code is a CI merge gate. If a ledger
+	// write, a statement write, or a push could change it, a full disk or
+	// an unreachable warehouse would red-build a pull request over
+	// bookkeeping. So each failure is printed loudly on stderr and the
+	// verdict and exit code decided above stand unchanged. Do not "fix"
+	// this into a failure path — that is precisely the bug this comment
+	// exists to head off. Placed after `code` is computed, and calling
+	// nothing that can panic into the exit path below.
+	var scanID int64
 	if *recordFlag {
 		if scanStoreErr != nil {
 			// The open failure happened earlier (above, before the scan) but
@@ -942,9 +923,46 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 				StartedAt: startedAt, FinishedAt: time.Now(),
 			}
 			files := buildScanFileRows(results, rep.Excluded, preflightResult, mutantsFromSHA, stderr)
-			if err := recordCertifyRepoScan(scanStore, scan, files, results, stderr); err != nil {
+			id, err := recordCertifyRepoScan(scanStore, scan, files, results, stderr)
+			if err != nil {
 				fmt.Fprintf(stderr, "corral certify --repo: scan ledger NOT written: %v\n", err)
+			} else {
+				scanID = id
 			}
+		}
+	}
+
+	// The audit statement, written after the exit code is known so `passed`
+	// records the verdict this run actually returned rather than a guess
+	// made before the gates were applied, and after the ledger record above
+	// so it can name the scan it belongs to (scanId: 0, honestly, when
+	// --record was not given or its write failed).
+	var statementSHA256 string
+	if strings.TrimSpace(*attestFlag) != "" {
+		sha, err := writeAuditStatement(*attestFlag, *repoDir, rep, models(), minKillRate, maxProvenMissed, exitCode == 0, scanID)
+		if err != nil {
+			fmt.Fprintf(stderr, "corral certify --repo: writing --attest statement: %v\n", err)
+		} else {
+			statementSHA256 = sha
+			fmt.Fprintf(stdout, "  wrote the audit statement to %s — attest it with actions/attest, verify with `gh attestation verify`\n", *attestFlag)
+		}
+	}
+
+	// Push last: its rows carry scanID and statementSHA256 from the two
+	// steps above, so a pushed row and the statement it names can be
+	// checked against each other. Link.Require mirrors --attest: when it
+	// was given, a row without a statement_sha256 is refused rather than
+	// pushed looking traceable when it is not; without --attest there is no
+	// statement to point to, and a row's statement_sha256 is honestly
+	// empty.
+	if strings.TrimSpace(*pushFlag) != "" {
+		link := auditpush.Link{ScanID: scanID, StatementSHA256: statementSHA256, Require: strings.TrimSpace(*attestFlag) != ""}
+		n, perr := pushAuditRows(*pushFlag, *repoDir, rep, models(), minKillRate, maxProvenMissed, exitCode == 0, link)
+		switch {
+		case perr != nil:
+			fmt.Fprintf(stderr, "corral certify --repo: pushing to %s: %v\n", *pushFlag, perr)
+		case n > 0:
+			fmt.Fprintf(stdout, "  pushed %d row(s) to %s\n", n, *pushFlag)
 		}
 	}
 
@@ -3527,12 +3545,17 @@ func pushableSpread(f reposcan.WeakFile) *auditpush.TestsPerMutantSpread {
 }
 
 // writeAuditStatement renders the scan into certify's in-toto audit statement
-// and writes it to path.
+// and writes it to path, returning the sha256 (hex) of the bytes it wrote —
+// the hash a pushed row carries so it can be traced back to this statement.
+//
+// scanID is the local scan ledger's row id (0 when --record was not given —
+// the honest value, not a sentinel: this statement then signs scanId: 0
+// rather than fabricate a ledger row that does not exist).
 //
 // Every file the report scored is carried, not only the weakest: a statement
 // that listed only the failures would be a highlight reel, and the claim a
 // reviewer is being asked to accept is about the whole audited surface.
-func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map[string]string, minKillRate *float64, maxProvenMissed *int, passed bool) error {
+func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map[string]string, minKillRate *float64, maxProvenMissed *int, passed bool, scanID int64) (string, error) {
 	files := make([]certify.AuditedFile, 0, len(r.Weakest))
 	for _, f := range r.Weakest {
 		files = append(files, certify.AuditedFile{
@@ -3571,41 +3594,71 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 	// nothing — and two copies of this logic would drift.
 	repo, commit, err := auditSubject(repoDir, r)
 	if err != nil {
-		return fmt.Errorf("refusing to write an audit statement: %w", err)
+		return "", fmt.Errorf("refusing to write an audit statement: %w", err)
 	}
 
+	// The rows this scan WOULD push (or did, if --push also ran), built the
+	// same way pushAuditRows builds them, with ScanID set and
+	// StatementSHA256 left empty — the statement's own hash cannot depend on
+	// itself. Hashed and signed here so a verifier holding the statement and
+	// the pushed rows can check either one against the other, in either
+	// order, rather than trusting only the row's one-way pointer back.
+	rows, err := buildAuditRows(repoDir, r, models, minKillRate, maxProvenMissed, passed)
+	if err != nil {
+		return "", fmt.Errorf("refusing to write an audit statement: %w", err)
+	}
+	for i := range rows {
+		rows[i].ScanID = scanID
+		rows[i].StatementSHA256 = ""
+	}
+	rowsJSON, err := json.Marshal(rows)
+	if err != nil {
+		return "", err
+	}
+	rowsSHA := sha256.Sum256(rowsJSON)
+
 	stmt := certify.BuildAuditAttestation(certify.AuditStatement{
-		Repo:            repo,
-		Commit:          commit,
-		Files:           files,
-		Audited:         r.Audited,
-		Candidates:      r.Candidates,
-		ModelsByRole:    models,
-		MinKillRate:     minKillRate,
-		MaxProvenMissed: maxProvenMissed,
-		Passed:          passed,
+		Repo:                repo,
+		Commit:              commit,
+		Files:               files,
+		Audited:             r.Audited,
+		Candidates:          r.Candidates,
+		ModelsByRole:        models,
+		MinKillRate:         minKillRate,
+		MaxProvenMissed:     maxProvenMissed,
+		Passed:              passed,
+		ScanID:              scanID,
+		WarehouseRowsSHA256: hex.EncodeToString(rowsSHA[:]),
 	})
 	b, err := json.MarshalIndent(stmt, "", "  ")
 	if err != nil {
-		return err
+		return "", err
 	}
-	return os.WriteFile(path, b, 0o600)
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:]), nil
 }
 
-// pushAuditRows appends this scan's per-file verdicts to a warehouse the
-// operator owns.
+// buildAuditRows builds this scan's per-file rows as they will land in the
+// warehouse, WITHOUT stamping ScanID or StatementSHA256 — those two are the
+// link, and every caller sets them for its own purpose: pushAuditRows from
+// the auditpush.Link it was given, writeAuditStatement to hash the rows
+// deterministically (with StatementSHA256 left empty, since the statement's
+// own hash cannot depend on itself) before it signs.
 //
-// Reuses writeAuditStatement's subject resolution deliberately: a row whose
-// commit is blank cannot be joined to anything, and the two would drift if each
-// worked it out separately.
-func pushAuditRows(target, repoDir string, r reposcan.RepoReport, models map[string]string, minKillRate *float64, maxProvenMissed *int, passed bool) (int, error) {
+// Reuses auditSubject deliberately: a row whose commit is blank cannot be
+// joined to anything, and this is the same resolution the statement uses, so
+// the two can never disagree about which revision they name.
+func buildAuditRows(repoDir string, r reposcan.RepoReport, models map[string]string, minKillRate *float64, maxProvenMissed *int, passed bool) ([]auditpush.Row, error) {
 	repo, commit, err := auditSubject(repoDir, r)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	rosterJSON, err := json.Marshal(models)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 
 	// A GitHub run URL when we are in one, so a row in the warehouse leads back
@@ -3646,7 +3699,22 @@ func pushAuditRows(target, repoDir string, r reposcan.RepoReport, models map[str
 			Passed: passed, RunURL: runURL,
 		})
 	}
-	return auditpush.Push(target, rows)
+	return rows, nil
+}
+
+// pushAuditRows appends this scan's per-file verdicts to a warehouse the
+// operator owns, stamping every row with link's scan id and statement hash
+// so a row and the statement it names can be checked against each other.
+func pushAuditRows(target, repoDir string, r reposcan.RepoReport, models map[string]string, minKillRate *float64, maxProvenMissed *int, passed bool, link auditpush.Link) (int, error) {
+	rows, err := buildAuditRows(repoDir, r, models, minKillRate, maxProvenMissed, passed)
+	if err != nil {
+		return 0, err
+	}
+	for i := range rows {
+		rows[i].ScanID = link.ScanID
+		rows[i].StatementSHA256 = link.StatementSHA256
+	}
+	return auditpush.Push(target, rows, link)
 }
 
 // gitHeadCommit resolves repoDir's HEAD, or "" when repoDir is not a checkout

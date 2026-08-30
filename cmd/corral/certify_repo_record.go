@@ -488,10 +488,13 @@ func buildScanMutantRows(scanID int64, results []reposcan.FileResult) []scanstor
 // recorded in scan_files above, so losing mutant detail costs analysis, not
 // correctness, and must not turn into "scan ledger NOT written" for a scan
 // that, in every way that matters, was.
-func recordCertifyRepoScan(st *scanstore.Store, scan scanstore.Scan, files []scanstore.File, results []reposcan.FileResult, stderr io.Writer) error {
+// It returns the ledger's scan id so the caller can thread it into the
+// audit statement and warehouse push that follow — the link this function's
+// own package comment set out to make traceable.
+func recordCertifyRepoScan(st *scanstore.Store, scan scanstore.Scan, files []scanstore.File, results []reposcan.FileResult, stderr io.Writer) (int64, error) {
 	id, err := st.Record(context.Background(), scan, files)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if err := st.RecordMutants(context.Background(), buildScanMutantRows(id, results)); err != nil {
 		// The caller's stderr, not the global logger, for the same reason as
@@ -499,5 +502,5 @@ func recordCertifyRepoScan(st *scanstore.Store, scan scanstore.Scan, files []sca
 		// operator is actually looking.
 		fmt.Fprintf(stderr, "corral certify --repo: scan %d recorded, but scan_mutants was NOT written: %v\n", id, err)
 	}
-	return nil
+	return id, nil
 }

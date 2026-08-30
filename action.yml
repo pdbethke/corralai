@@ -21,7 +21,7 @@ inputs:
     required: false
     default: ""
   push:
-    description: "Append this run's per-file verdicts to a DuckDB YOU own — a path, or 'md:<db>' for MotherDuck. corral has no hosted tier and keeps nothing: your key, your runner, your warehouse, and any DuckDB works. Append-only, and every row carries the sha256 of the signed statement it came from plus the run URL, so a row traces back to something verifiable. This is what answers the question one pull request cannot: a single kill rate is a sample — the same unchanged diff has scored 0.85 and 0.90 — while forty of them are a distribution you can read a trend from. For MotherDuck, also set 'motherduck-token'."
+    description: "Append this run's per-file verdicts to a DuckDB YOU own — a path, or 'md:<db>' for MotherDuck. corral has no hosted tier and keeps nothing: your key, your runner, your warehouse, and any DuckDB works. Append-only. Every row carries the local scan ledger's row id (0, since this Action does not enable corral's own --record) plus the run URL, and — traceable only when 'attest' is also set — the sha256 of the signed statement it came from, so a row can be checked against something verifiable; without 'attest', statement_sha256 is honestly empty rather than fabricated. This is what answers the question one pull request cannot: a single kill rate is a sample — the same unchanged diff has scored 0.85 and 0.90 — while forty of them are a distribution you can read a trend from. For MotherDuck, also set 'motherduck-token'."
     required: false
     default: ""
   motherduck-token:

@@ -244,3 +244,33 @@ func TestConcurrencyIsSigned(t *testing.T) {
 		t.Errorf("a file that shared nothing must not carry the key: %v", files[1])
 	}
 }
+
+// The statement names the scan it came from — 0 is the honest value when the
+// ledger was never written, not a sentinel for "unknown" — and, when the
+// caller supplies it, the hash of the warehouse rows this scan produced, so a
+// row and its statement can be checked against each other in either order.
+func TestAuditAttestationCarriesScanIDAndWarehouseRowsSHA(t *testing.T) {
+	got := BuildAuditAttestation(AuditStatement{
+		Repo: "r", Commit: "c", Audited: 1, Candidates: 1,
+		ScanID: 7, WarehouseRowsSHA256: "deadbeef",
+	})
+	predicate := got["predicate"].(map[string]any)
+	if predicate["scanId"] != int64(7) {
+		t.Errorf("predicate scanId = %v, want 7", predicate["scanId"])
+	}
+	if predicate["warehouseRowsSha256"] != "deadbeef" {
+		t.Errorf("predicate warehouseRowsSha256 = %v, want deadbeef", predicate["warehouseRowsSha256"])
+	}
+
+	// scanId is honest even at zero — the ledger was not written — so it is
+	// never omitted; warehouseRowsSha256 has nothing honest to say when
+	// empty, so it is.
+	zero := BuildAuditAttestation(AuditStatement{Repo: "r", Commit: "c"})
+	zeroPredicate := zero["predicate"].(map[string]any)
+	if v, ok := zeroPredicate["scanId"]; !ok || v != int64(0) {
+		t.Errorf("predicate scanId = %v, ok=%v, want 0 present", v, ok)
+	}
+	if _, ok := zeroPredicate["warehouseRowsSha256"]; ok {
+		t.Error("predicate warehouseRowsSha256 must be omitted when empty, not signed as \"\"")
+	}
+}

@@ -116,6 +116,21 @@ type AuditStatement struct {
 	MinKillRate     *float64
 	MaxProvenMissed *int
 	Passed          bool
+	// ScanID is the local scan ledger's row id for this run (see
+	// scanstore.Store.Record), or 0 when the ledger was not written
+	// (--record was not given). 0 is the honest value here, not a sentinel
+	// for "unknown": a reader who wants a real join key already needed
+	// --record, and a statement that fabricated a nonzero id would claim a
+	// ledger row that does not exist.
+	ScanID int64 `json:"scanId"`
+	// WarehouseRowsSHA256 is the sha256 of the canonical JSON of the
+	// warehouse rows this scan produces — computed BEFORE this statement is
+	// signed, from the same rows a --push would write (with ScanID set and
+	// StatementSHA256 left empty, since the statement's own hash cannot
+	// depend on itself). It lets a verifier hold the statement and the
+	// pushed rows and check them against each other in either order,
+	// instead of only trusting the row's one-way pointer back.
+	WarehouseRowsSHA256 string `json:"warehouseRowsSha256,omitempty"`
 }
 
 // BuildAuditAttestation renders the statement as an in-toto Statement v1.
@@ -207,6 +222,34 @@ func BuildAuditAttestation(s AuditStatement) map[string]any {
 		gates["maxProvenMissed"] = *s.MaxProvenMissed
 	}
 
+	predicate := map[string]any{
+		"auditor": map[string]any{
+			"id": "https://corralai.dev/certify",
+		},
+		// What was measured, per file, with its honesty flags attached.
+		"files": files,
+		// The denominator and the roster.
+		"scope": map[string]any{
+			"audited":    s.Audited,
+			"candidates": s.Candidates,
+		},
+		"modelsByRole": models,
+		// The thresholds this verdict was judged against. Without them
+		// "passed: true" is unreadable — it says nothing about the bar.
+		"gates":  gates,
+		"passed": s.Passed,
+		// ScanID is signed even at 0 — the ledger was not written — because
+		// that absence is itself something a verifier needs to see, not a
+		// key to omit.
+		"scanId": s.ScanID,
+	}
+	// WarehouseRowsSHA256 is omitted, never signed as "", when the caller
+	// has nothing to say — the same rule every other unmeasured field in
+	// this predicate follows.
+	if s.WarehouseRowsSHA256 != "" {
+		predicate["warehouseRowsSha256"] = s.WarehouseRowsSHA256
+	}
+
 	return map[string]any{
 		"_type": "https://in-toto.io/Statement/v1",
 		"subject": []map[string]any{
@@ -216,22 +259,6 @@ func BuildAuditAttestation(s AuditStatement) map[string]any {
 			},
 		},
 		"predicateType": AuditPredicateType,
-		"predicate": map[string]any{
-			"auditor": map[string]any{
-				"id": "https://corralai.dev/certify",
-			},
-			// What was measured, per file, with its honesty flags attached.
-			"files": files,
-			// The denominator and the roster.
-			"scope": map[string]any{
-				"audited":    s.Audited,
-				"candidates": s.Candidates,
-			},
-			"modelsByRole": models,
-			// The thresholds this verdict was judged against. Without them
-			// "passed: true" is unreadable — it says nothing about the bar.
-			"gates":  gates,
-			"passed": s.Passed,
-		},
+		"predicate":     predicate,
 	}
 }

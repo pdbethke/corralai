@@ -46,7 +46,7 @@ func TestPythonInstrumentDerivesFromOperatorCommand(t *testing.T) {
 		`[ "$rc" -eq 0 ] || exit "$rc"`,
 		// The evidence is reduced INSIDE the run to {file: [node ids]} — the
 		// full coverage-json with contexts was 411 MB on flask (#165).
-		`"format": "corral-selection-1"`,
+		`"format": "corral-selection-2"`,
 		"contexts_by_lineno",
 	} {
 		if !strings.Contains(script, want) {
@@ -117,7 +117,7 @@ func TestPythonSelectAbsentTestFileIsAnError(t *testing.T) {
 // coverage-json this used to parse — is refused rather than misread.
 func TestPythonSelectRejectsAnUnknownEvidenceFormat(t *testing.T) {
 	old := `{"meta":{"show_contexts":true},"totals":{"covered_lines":1},"files":{"pkg/calc.py":{"summary":{"num_statements":1,"covered_lines":1},"contexts":{"1":["tests/test_calc.py::test_add|run"]}}}}`
-	if _, err := (pyPlugin{}).Select([]byte(old), "", "pkg/calc.py", "tests/test_calc.py", []string{"pytest"}); err == nil || !strings.Contains(err.Error(), "corral-selection-1") {
+	if _, err := (pyPlugin{}).Select([]byte(old), "", "pkg/calc.py", "tests/test_calc.py", []string{"pytest"}); err == nil || !strings.Contains(err.Error(), "corral-selection-2") {
 		t.Errorf("the old coverage-json shape must be refused by name, got err=%v", err)
 	}
 }
@@ -151,7 +151,9 @@ func TestPythonSelectFallsBackToFilesWhenArgvWouldBeTooLong(t *testing.T) {
 	for i := 0; i < 3000; i++ {
 		ctxs = append(ctxs, fmt.Sprintf(`"tests/test_big.py::test_%04d_%s"`, i, strings.Repeat("x", 20)))
 	}
-	ev := `{"format":"corral-selection-1","tests":3000,"files":{"pkg/calc.py":[` + strings.Join(ctxs, ",") + `],"tests/test_big.py":[` + ctxs[0] + `]}}`
+	ev := `{"format":"corral-selection-2","tests":3000,"files":{` +
+		`"pkg/calc.py":{"tests":[` + strings.Join(ctxs, ",") + `],"lines":{},"static":[]},` +
+		`"tests/test_big.py":{"tests":[` + ctxs[0] + `],"lines":{},"static":[]}}}`
 	sel, err := pyPlugin{}.Select([]byte(ev), "", "pkg/calc.py", "tests/test_big.py", []string{"pytest"})
 	if err != nil {
 		t.Fatal(err)
@@ -207,12 +209,63 @@ func TestPythonSelectionEndToEndOnFixture(t *testing.T) {
 	if !reflect.DeepEqual(sel.Tests, want) {
 		t.Errorf("live Tests = %v, want %v", sel.Tests, want)
 	}
+	if len(sel.Lines) == 0 {
+		t.Errorf("live evidence must carry per-test line ranges: %+v", sel)
+	}
 	// And the narrowed command actually runs, collecting exactly those.
 	run := exec.Command(sel.Cmd[0], sel.Cmd[1:]...)
 	run.Dir = fixture
 	run.Env = c.Env
 	if out, err := run.CombinedOutput(); err != nil || !strings.Contains(string(out), "2 passed") {
 		t.Errorf("narrowed command: err=%v\n%s", err, out)
+	}
+}
+
+func TestPythonSelectReadsLinesAndStaticFromV2(t *testing.T) {
+	sel, err := pyPlugin{}.Select(recordedEvidence(t), "", "pkg/calc.py", "tests/test_calc.py", []string{"pytest"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sel.Method != "coverage-context" || len(sel.Tests) != 2 || sel.Of != 3 {
+		t.Fatalf("per-file facts must be unchanged by v2: %+v", sel)
+	}
+	// From the recording: test_add executes calc.py's add body (line 2);
+	// test_sub its sub body (line 6). def lines 1 and 5 run at import time.
+	add := sel.Lines["tests/test_calc.py::test_add"]
+	sub := sel.Lines["tests/test_other.py::test_sub"]
+	if len(add) == 0 || len(sub) == 0 {
+		t.Fatalf("Lines must carry each selected test's ranges: %+v", sel.Lines)
+	}
+	if !add[0].Overlaps(LineRange{2, 2}) || add[0].Overlaps(LineRange{6, 6}) {
+		t.Errorf("test_add should reach add's body (line 2) and not sub's (line 6): %+v", add)
+	}
+	if len(sel.Static) == 0 {
+		t.Errorf("the def lines execute at import and must be reported static: %+v", sel.Static)
+	}
+}
+
+func TestPythonSelectRefusesV1ByName(t *testing.T) {
+	v1 := `{"format":"corral-selection-1","tests":1,"files":{"pkg/calc.py":["tests/test_calc.py::test_add"]}}`
+	_, err := pyPlugin{}.Select([]byte(v1), "", "pkg/calc.py", "tests/test_calc.py", []string{"pytest"})
+	if err == nil || !strings.Contains(err.Error(), "corral-selection-2") {
+		t.Errorf("v1 must be refused naming the expected format, got %v", err)
+	}
+}
+
+func TestLineRangeOverlaps(t *testing.T) {
+	cases := []struct {
+		a, b LineRange
+		want bool
+	}{
+		{LineRange{1, 5}, LineRange{5, 9}, true},
+		{LineRange{1, 5}, LineRange{6, 9}, false},
+		{LineRange{3, 3}, LineRange{1, 9}, true},
+		{LineRange{}, LineRange{1, 9}, false},
+	}
+	for _, c := range cases {
+		if got := c.a.Overlaps(c.b); got != c.want {
+			t.Errorf("%v overlaps %v = %v, want %v", c.a, c.b, got, c.want)
+		}
 	}
 }
 

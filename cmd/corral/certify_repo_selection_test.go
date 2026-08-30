@@ -47,7 +47,9 @@ func TestAuditConfigKeyNamesTheSelectionMethod(t *testing.T) {
 // refactor cannot resolve the command in one place and forget the other.
 func TestAuditInputCarriesTheSelection(t *testing.T) {
 	ex := &localExecutor{repoDir: t.TempDir(), substrate: substrateWorkspace}
-	ex.selection = reposcan.SelectionEvidence{Ran: true, Raw: []byte(`{"format":"corral-selection-1","tests":1,"files":{"pkg/a.py":["tests/test_a.py::test_x"],"tests/test_a.py":["tests/test_a.py::test_x"]}}`)}
+	ex.selection = reposcan.SelectionEvidence{Ran: true, Raw: []byte(`{"format":"corral-selection-2","tests":1,"files":{` +
+		`"pkg/a.py":{"tests":["tests/test_a.py::test_x"],"lines":{},"static":[]},` +
+		`"tests/test_a.py":{"tests":["tests/test_a.py::test_x"],"lines":{},"static":[]}}}`)}
 	in := ex.auditInputFor(reposcan.Job{Path: "pkg/a.py", TestPath: "tests/test_a.py", Lang: "python"})
 	if in.selection.Method != "coverage-context" || len(in.selection.Tests) != 1 {
 		t.Errorf("selection not carried: %+v", in.selection)

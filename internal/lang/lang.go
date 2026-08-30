@@ -248,6 +248,26 @@ type Selection struct {
 	Method   string
 	Of       int
 	Fallback string
+	// Lines, when the evidence carried them, maps each selected test to the
+	// ranges of the audited file's lines it executed; Static is the file's
+	// lines executed under no test context (import time). Both nil for a
+	// whole-suite selection or evidence that did not record lines. They are
+	// what ForSpan narrows by.
+	Lines  map[string][]LineRange
+	Static []LineRange
+}
+
+// LineRange is a closed, 1-based range of source lines.
+type LineRange struct{ Start, End int }
+
+// IsZero reports the zero LineRange, which Overlaps treats as never
+// overlapping anything.
+func (r LineRange) IsZero() bool { return r.Start == 0 && r.End == 0 }
+
+// Overlaps reports whether r and o share at least one line. Neither range
+// overlaps anything when either is the zero LineRange.
+func (r LineRange) Overlaps(o LineRange) bool {
+	return !r.IsZero() && !o.IsZero() && r.Start <= o.End && o.Start <= r.End
 }
 
 // TestSelector is an OPTIONAL plugin extension that narrows the project's

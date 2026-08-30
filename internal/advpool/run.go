@@ -6,7 +6,10 @@
 // enqueue the returned specs and drive completions themselves (Phase 5).
 package advpool
 
-import "github.com/pdbethke/corralai/internal/lang"
+import (
+	"github.com/pdbethke/corralai/internal/adequacy"
+	"github.com/pdbethke/corralai/internal/lang"
+)
 
 // RunSpec is one adversarial-pool run: the code under review PLUS the
 // developer's own tests for it. The pool's central question is not "does
@@ -77,6 +80,24 @@ type RunSpec struct {
 	// default) preserves today's single-test critic auto-refute path byte-
 	// for-byte — every existing run/test keeps behaving exactly as before.
 	Matrix bool
+
+	// PresetMutants REPLACES generation: when non-nil the run seeds no
+	// mutant-generator seat (nor a shadow-generator one), spends no model
+	// call on generation, and grades the dev suite against exactly these
+	// mutants, in this order.
+	//
+	// It exists because the exam is otherwise re-drawn every run. Mutants are
+	// authored by a MODEL, and the same model on the same unchanged file
+	// produces a different set each time — generator variance on one file is
+	// larger than most effects a comparison would be trying to measure. So
+	// two runs of "the same" audit are not two samples of one measurement;
+	// they are two different exams, and their kill rates are not comparable.
+	// Pinning the set makes them comparable, which is the only way a claim
+	// about anything ELSE that changed (concurrency, a writer model, a
+	// substrate) can be proven rather than asserted.
+	//
+	// nil — the default, and every pre-existing caller — generates as before.
+	PresetMutants []adequacy.Mutant
 }
 
 // RoleAssignment maps a role name (Role.Name) to the gate-earned model that

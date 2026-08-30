@@ -115,6 +115,8 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	var localEndpointFlag stringSlice
 	fs.Var(&localEndpointFlag, "local-endpoint", "place a LOCAL seat on a specific ollama daemon, as <role>=<url> (repeatable; e.g. test-writer=http://localhost:11436). A daemon is pinned to a GPU by its own environment (HIP_VISIBLE_DEVICES / CUDA_VISIBLE_DEVICES), so this is how two models occupy two cards at once — corral selects the DAEMON, never the device. Without it every local seat shares OLLAMA_URL, one card and one VRAM budget. Roles: mutant-generator, test-writer, test-critic, mutant-generator-shadow, test-writer-shadow. An unknown role, a duplicate role, a non-absolute url, or an endpoint on a seat holding a CLOUD model is refused rather than ignored")
 
+	mutantsFlag := fs.String("mutants", "", "REPLAY a recorded mutant set (see --record-mutants) instead of generating one: --code is graded against exactly the mutants recorded for it, and no mutant-generator model call is made. Refused (exit 2) if the file is absent from the set or its bytes have changed since it was recorded — a mutant is a single-point edit of specific bytes, and re-applying it to different ones grades an exam nobody wrote")
+	recordMutantsFlag := fs.String("record-mutants", "", "write the mutants this run actually GRADED to this file, as a replayable corral-mutants-1 document tied to the sha256 of the source they came from. Mutants are authored by a model, so an ordinary run re-draws the exam every time; pin the set and a later comparison measures the thing you changed instead of generator variance. Written even when the verdict is needs-review")
 	var bindDirFlag stringSlice
 	fs.Var(&bindDirFlag, "bind-dir", "extra repo-relative dependency dir to mount read-only into the jail instead of copying it into the workspace (repeatable; node_modules/vendor/.venv/venv/.bundle are auto-detected) — --repo-dir mode only")
 	noBindDepsFlag := fs.Bool("no-bind-deps", false, "copy dependency dirs into the jail workspace instead of bind-mounting them read-only (the pre-bind behavior; subject to the workspace size cap)")
@@ -209,6 +211,52 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		return st, k, nil
 	}
 
+	// --mutants: read and CHECKED before the audit starts, against the exact
+	// bytes about to be graded. The check is the whole point — a mutant is a
+	// single-point edit of specific source, so replaying it against anything
+	// else grades an exam nobody wrote and nobody reviewed.
+	var presetMutants []adequacy.Mutant
+	if p := strings.TrimSpace(*mutantsFlag); p != "" {
+		set, serr := adequacy.ReadMutantSet(p)
+		if serr != nil {
+			fmt.Fprintf(stderr, "corral certify --local: %v\n", serr)
+			return 2
+		}
+		// The path as the operator spelled it on --code is the key: in
+		// --repo-dir mode that is already the repo-relative path a scan
+		// records, and in single-file mode it is the only name this run has
+		// for the file.
+		src, rerr := os.ReadFile(localMutantSourcePath(*repoDirFlag, *codePath)) // #nosec G304 -- the file this run was asked to audit
+		if rerr != nil {
+			fmt.Fprintf(stderr, "corral certify --local: --mutants: reading %s to check it against the recorded set: %v\n", *codePath, rerr)
+			return 2
+		}
+		ms, merr := set.MutantsFor(*codePath, string(src))
+		if merr != nil {
+			fmt.Fprintf(stderr, "corral certify --local: --mutants: %v\n", merr)
+			return 2
+		}
+		presetMutants = ms
+		fmt.Fprintf(stdout, "replaying %d recorded mutant(s) for %s from %s — no mutant-generator model call will be made\n", len(ms), *codePath, p)
+	}
+
+	// --record-mutants: flushed after the run on EVERY exit path below, a
+	// needs-review verdict included. A red run's exam is the one most worth
+	// being able to reproduce.
+	var mutantSink func(string, []adequacy.Mutant)
+	if p := strings.TrimSpace(*recordMutantsFlag); p != "" {
+		rc := newMutantSetRecorder()
+		mutantSink = rc.sink
+		defer func() {
+			n, werr := rc.write(p)
+			if werr != nil {
+				fmt.Fprintf(stderr, "corral certify --local: --record-mutants NOT written: %v\n", werr)
+				return
+			}
+			rc.report(stdout, p, n)
+		}()
+	}
+
 	auditCtx, stopSignals := auditContext(stderr)
 	defer stopSignals()
 
@@ -229,6 +277,8 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		bindDirs:       bindDirFlag, noBindDeps: *noBindDepsFlag,
 
 		repo: strings.TrimSpace(*repoFlag), commit: strings.TrimSpace(*commitFlag),
+
+		presetMutants: presetMutants, mutantSink: mutantSink,
 
 		matrix: *matrixFlag, record: rec, bugCatchDB: localBugCatchDBPath(), criticScoreDB: localCriticScoreDBPath(),
 		mutantAttemptsDB: localMutantAttemptsDBPath(),
@@ -350,6 +400,19 @@ type localAuditInput struct {
 	// suite must run instead. Zero on the `--local` path, which is exactly
 	// the pre-selection behaviour.
 	selection lang.Selection
+
+	// presetMutants REPLAYS a recorded mutant set for THIS file instead of
+	// generating one: the run seeds no mutant-generator seat and grades the
+	// dev suite against exactly these mutants. nil generates as before. The
+	// caller is responsible for having proven these mutants are edits of the
+	// bytes about to be audited — see adequacy.MutantSetFile.MutantsFor,
+	// which is the only thing that can prove it.
+	presetMutants []adequacy.Mutant
+
+	// mutantSink, when non-nil, is handed the mutants this file's dev pass
+	// actually GRADED, once. It is how `--record-mutants` accumulates a
+	// replayable set across a whole scan. nil records nothing.
+	mutantSink func(codePath string, ms []adequacy.Mutant)
 
 	// substrate selects where the audit runs: "" or substrateJail (today's
 	// behavior) builds and mutates inside the bwrap jail; substrateWorkspace
@@ -994,6 +1057,8 @@ func newAuditRunSpec(in localAuditInput, roles auditRoles, subj runSubject) advp
 		ShadowWriterModel: roles.shadowWriter,
 		Matrix:            in.matrix,
 		ImportPath:        subj.importPath,
+		// nil = generate, exactly as every caller did before --mutants existed.
+		PresetMutants: in.presetMutants,
 	}
 }
 
@@ -1093,6 +1158,9 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 		d.Signer = advpool.CertSigner{Key: k, Store: st, Witness: nil}
 	}
 	d.Enumerator = jailEnum
+	// --record-mutants: nil leaves the driver recording nothing, which is
+	// every pre-existing caller's position.
+	d.MutantSink = in.mutantSink
 
 	// --record: the tape sink is the driver's EventSink (pool reasoning beats)
 	// and is also fed the task lifecycle + findings from the drive loop below,

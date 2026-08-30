@@ -79,6 +79,8 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	minKillRateFlag := fs.String("min-kill-rate", "", "fail the scan (exit 1) if ANY audited file's kill rate is below this value (0.0-1.0 inclusive; a minimum, so a file exactly at the threshold passes). Opt-in: unset by default, so exit codes are unchanged unless this is given. Applies PER FILE, not to the aggregate — a well-tested file must not mask a weak one")
 	preflightFlag := fs.Bool("preflight", false, "run the project's test suite once with coverage instrumentation and report which source files it never executes. One extra suite run; reports coverage-grade evidence, not proof")
 	recordFlag := fs.Bool("record", false, "record every file this scan audited or rejected, and why, into the DuckDB scan ledger (default: off). A BOOL here — unlike `certify --local`'s --record, which takes a tape PATH — see --record-db for where the ledger goes. A recording failure never changes the scan's verdict or exit code")
+	mutantsFlag := fs.String("mutants", "", "REPLAY a recorded mutant set (see --record-mutants) instead of generating one: every audited file is graded against exactly the mutants in this file, and not one generator model call is made. Mutants are authored by a model, so an ordinary run re-draws the exam every time and two runs of the same audit are not two samples of one measurement — pin the set and a change to anything ELSE becomes measurable. Every selected file must appear in the set with the SAME bytes it was recorded from; a missing file or a changed one is refused (exit 2) up front, never half-replayed")
+	recordMutantsFlag := fs.String("record-mutants", "", "write the mutants this scan actually GRADED to this file, as a replayable corral-mutants-1 document — one entry per audited file, each tied to the sha256 of the source it was derived from. Written even when the scan's gates fail: a red verdict is still a recorded exam")
 	shadowWriterModelFlag := fs.String("shadow-writer-model", "", "CHALLENGER test-writer: a second writer attacks the SAME survivors as the primary, so the two seats' misses can be compared (Jaccard over survivors, Cohen's kappa). Measurement only — it NEVER gates the verdict. OFF unless named. Recording the per-mutant outcomes additionally needs --mutant-attempts-db")
 
 	var localEndpointFlag stringSlice
@@ -347,6 +349,73 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
+	// --mutants: resolved HERE, after selection and before EVERY model-facing
+	// step below — the jail preflight, the provider preflight, and goal
+	// derivation, which is where the money starts. The point of a replayed set
+	// is that it costs no generation, so a refusal that arrives after a scan
+	// has already paid for a goal per file would be the one failure mode this
+	// flag exists to avoid. Placed before the dry-run return too, so a dry run
+	// checks the set as strictly as a real scan does.
+	var presetMutants map[string][]adequacy.Mutant
+	var mutantsFromSHA string
+	if p := strings.TrimSpace(*mutantsFlag); p != "" {
+		set, serr := adequacy.ReadMutantSet(p)
+		if serr != nil {
+			fmt.Fprintf(stderr, "corral certify --repo: %v\n", serr)
+			return 2
+		}
+		sum, herr := fileSHA256(p)
+		if herr != nil {
+			fmt.Fprintf(stderr, "corral certify --repo: hashing --mutants %s: %v\n", p, herr)
+			return 2
+		}
+		mutantsFromSHA = sum
+		mutRoot, merr := os.OpenRoot(*repoDir)
+		if merr != nil {
+			fmt.Fprintf(stderr, "corral certify --repo: opening %s: %v\n", *repoDir, merr)
+			return 1
+		}
+		selPaths := make([]string, 0, len(selected))
+		for _, c := range selected {
+			selPaths = append(selPaths, c.Path)
+		}
+		sort.Strings(selPaths)
+		presetMutants, merr = presetMutantsForSelection(mutRoot, set, selPaths)
+		_ = mutRoot.Close()
+		if merr != nil {
+			fmt.Fprintf(stderr, "corral certify --repo: %v\n", merr)
+			return 2
+		}
+		fmt.Fprintf(stdout, "  replaying a recorded mutant set for %d file(s) from %s — no mutant-generator model call will be made\n", len(presetMutants), p)
+	}
+
+	// --record-mutants: the accumulator every audited file's driver feeds. It
+	// is flushed once at the very end of this function, on EVERY exit path
+	// past this point (see the deferred write), because a scan whose gate
+	// failed is still a scan whose exam is worth keeping — reproducing a red
+	// verdict is the first thing anyone does with one.
+	var mutantRecorder *mutantSetRecorder
+	if p := strings.TrimSpace(*recordMutantsFlag); p != "" {
+		mutantRecorder = newMutantSetRecorder()
+		defer func() {
+			if *dryRun {
+				// Inert, and said so rather than left silent (the same rule
+				// --record follows just below): a dry run audits nothing, so
+				// there are no graded mutants to record, and writing an empty
+				// document here would be indistinguishable from a real scan
+				// that graded nothing.
+				fmt.Fprintln(stderr, "corral certify --repo: --record-mutants ignored — --dry-run grades nothing, so there are no mutants to record")
+				return
+			}
+			n, werr := mutantRecorder.write(p)
+			if werr != nil {
+				fmt.Fprintf(stderr, "corral certify --repo: --record-mutants NOT written: %v\n", werr)
+				return
+			}
+			mutantRecorder.report(stdout, p, n)
+		}()
+	}
+
 	// EVERY scan-fatal preflight runs BEFORE the first derivation, because
 	// derivation is where the money goes: EmitJobs below performs up to --top
 	// sequential model calls, and an operator on a host that cannot sandbox
@@ -366,6 +435,10 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// repo can mix languages.
 		ex = newLocalExecutor(*repoDir, checkArgv, *substrateFlag, *timeoutFlag, stdout)
 		ex.wholeSuite = *wholeSuiteFlag
+		ex.presetMutants = presetMutants
+		if mutantRecorder != nil {
+			ex.mutantSink = mutantRecorder.sink
+		}
 		ex.models = auditModels{
 			writer: *writerModelFlag, mutant: *mutantModelFlag,
 			critic: *criticModelFlag, shadow: *shadowModelFlag,
@@ -400,7 +473,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
-	gs, disclosure, code := resolveGoalSource(stderr, *repoDir, *goalsPath, *deriveModel, *dryRun, len(selected), newLLMDeriver)
+	gs, disclosure, code := resolveGoalSource(stderr, *repoDir, *goalsPath, *deriveModel, *dryRun, len(selected), certifyRepoDeriver)
 	if code != 0 {
 		return code
 	}
@@ -467,7 +540,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// carries the flags that change what a mutant run against a given file
 	// MEASURES, not which files get audited. See auditConfigKey for the
 	// inclusion/exclusion rationale.
-	auditConfig := auditConfigKey(*wholeSuiteFlag, selectionMethod, checkArgv)
+	auditConfig := auditConfigKey(*wholeSuiteFlag, selectionMethod, checkArgv, mutantsFromSHA)
 
 	// testSurfacePaths has to STAT the testdata entries it admits, and every
 	// read a scan performs is confined to the repository through an *os.Root —
@@ -833,7 +906,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 				PreflightRan: preflightResult.Ran, PreflightNote: preflightResult.Note,
 				StartedAt: startedAt, FinishedAt: time.Now(),
 			}
-			files := buildScanFileRows(results, rep.Excluded, preflightResult, stderr)
+			files := buildScanFileRows(results, rep.Excluded, preflightResult, mutantsFromSHA, stderr)
 			if err := recordCertifyRepoScan(scanStore, scan, files, results, stderr); err != nil {
 				fmt.Fprintf(stderr, "corral certify --repo: scan ledger NOT written: %v\n", err)
 			}
@@ -937,8 +1010,18 @@ func fileSelectionKey(sel lang.Selection) string {
 // Bias when adding to this list: include. Over-inclusion causes a needless
 // miss, which costs money. Under-inclusion serves a stale verdict, which
 // signs an unmeasured claim.
-func auditConfigKey(wholeSuite bool, method string, checkArgv []string) string {
+func auditConfigKey(wholeSuite bool, method string, checkArgv []string, mutantsFrom string) string {
 	m := map[string]string{}
+	// A REPLAYED run sat a different exam from a generated one, so its
+	// verdict is not interchangeable with a cached generated verdict for the
+	// same content — and a generated verdict is not interchangeable with a
+	// replay of some OTHER set either. Without this the cache would serve one
+	// exam's kill rate under another exam's name, silently: exactly the
+	// blindness the hardcoded ModelSet:"unset" key had, in the one dimension
+	// --mutants exists to control.
+	if mutantsFrom != "" {
+		m["mutants-from"] = mutantsFrom
+	}
 	if wholeSuite {
 		m["whole-suite"] = "true"
 	} else if method != "" {
@@ -1359,6 +1442,13 @@ func changedFiles(root, baseRef string) ([]string, error) {
 // wiring can be tested without a provider credential — and, more importantly,
 // without any possibility of a real model call from a unit test.
 type deriverFactory func(model string) (reposcan.Deriver, error)
+
+// certifyRepoDeriver is the factory runCertifyRepo actually uses. A package
+// var rather than a direct call to newLLMDeriver so a test can prove a
+// refusal happens BEFORE derivation — "no model was called" is not something
+// stdout can be asked about, and the only honest way to assert it is to make
+// the construction observable.
+var certifyRepoDeriver deriverFactory = newLLMDeriver
 
 // resolveGoalSource picks where goals come from and returns the ONE line that
 // discloses it. Split out of runCertifyRepo so both the choice and its
@@ -2709,6 +2799,17 @@ type localExecutor struct {
 	// on the workspace substrate; see resolveMutantConcurrency.
 	mutantConcurrency int
 
+	// presetMutants is the `--mutants` replay set, keyed by repo-relative
+	// path: a file present here is graded against exactly these mutants and
+	// seeds no generator. Every SELECTED file is present or the scan already
+	// refused (see presetMutantsForSelection), so a nil lookup here means an
+	// ordinary generated run, never a silent half-replay.
+	presetMutants map[string][]adequacy.Mutant
+
+	// mutantSink is `--record-mutants`: fed the mutants each file's dev pass
+	// actually graded. nil records nothing.
+	mutantSink func(codePath string, ms []adequacy.Mutant)
+
 	// selection is what ONE instrumented run of this repo's suite learned
 	// about which tests execute which files, collected once per scan (see
 	// collectSelection) and asked per job (see selectionFor). Its zero value
@@ -2931,6 +3032,10 @@ func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
 		criticModel:       l.models.critic,
 		shadowModel:       l.models.shadow,
 		shadowWriterModel: l.models.shadowWriter,
+
+		// A nil entry is an ordinary generated run — see localExecutor.presetMutants.
+		presetMutants: l.presetMutants[j.Path],
+		mutantSink:    l.mutantSink,
 	}
 }
 

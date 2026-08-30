@@ -31,9 +31,9 @@ func TestWholeSuiteFlagParses(t *testing.T) {
 }
 
 func TestAuditConfigKeyNamesTheSelectionMethod(t *testing.T) {
-	a := auditConfigKey(false, "coverage-context", nil)
-	b := auditConfigKey(false, "", nil)
-	c := auditConfigKey(true, "", nil)
+	a := auditConfigKey(false, "coverage-context", nil, "")
+	b := auditConfigKey(false, "", nil, "")
+	c := auditConfigKey(true, "", nil, "")
 	if a == b || b == c || a == c {
 		t.Errorf("selection method must move the key: %q %q %q", a, b, c)
 	}

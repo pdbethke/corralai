@@ -572,7 +572,7 @@ func TestBuildScanFileRowsCarriesProvenMissed(t *testing.T) {
 		{Job: reposcan.Job{Path: "src/flask/cli.py", Lang: "python"}, Gradable: true,
 			Verdict: advpool.Verdict{DevKillRate: 0.467, Survivors: 16, MutantsTotal: 30, ProvenMissed: 7, DevScored: true}},
 	}
-	rows := buildScanFileRows(results, nil, reposcan.CoverageMap{}, io.Discard)
+	rows := buildScanFileRows(results, nil, reposcan.CoverageMap{}, "", io.Discard)
 	if len(rows) != 1 {
 		t.Fatalf("buildScanFileRows returned %d rows, want 1", len(rows))
 	}
@@ -591,7 +591,7 @@ func TestBuildScanFileRowsCarriesPoolTestUnsound(t *testing.T) {
 		{Job: reposcan.Job{Path: "unsound.py", Lang: "python"}, Gradable: true,
 			Verdict: advpool.Verdict{DevKillRate: 0.5, Survivors: 4, MutantsTotal: 10, PoolTestUnsound: true, DevScored: true}},
 	}
-	rows := buildScanFileRows(results, nil, reposcan.CoverageMap{}, io.Discard)
+	rows := buildScanFileRows(results, nil, reposcan.CoverageMap{}, "", io.Discard)
 	if len(rows) != 1 {
 		t.Fatalf("buildScanFileRows returned %d rows, want 1", len(rows))
 	}

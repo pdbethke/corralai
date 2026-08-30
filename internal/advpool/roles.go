@@ -443,6 +443,16 @@ func BuildDAG(rs RunSpec, assign RoleAssignment, sigs []repoindex.Signature) []q
 		if role.Name == RoleTestCritic && strings.TrimSpace(assign[RoleTestCritic]) == "" {
 			continue
 		}
+		// A run handed a fixed mutant set generates NOTHING. Skipping the
+		// generator ROLE (rather than emptying `shards`) covers both fan-out
+		// shapes at once: the sharded seats, the unsharded whole-file seat
+		// this loop would otherwise fall through to, AND the challenger seats,
+		// which are only ever emitted from inside the generator branch. There
+		// is no fourth place a generator task can come from, so there is no
+		// path by which a preset run pays for generation.
+		if role.Name == RoleMutantGenerator && rs.PresetMutants != nil {
+			continue
+		}
 		// The mutant-generator fans out into one seat per shard when the file
 		// has an extractable symbol surface; otherwise it stays exactly one
 		// whole-file seat with an unchanged key and a byte-identical prompt.

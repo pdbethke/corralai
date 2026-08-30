@@ -150,18 +150,7 @@ func renderTestWriterRepairing(rs RunSpec, sigs []repoindex.Signature, survivors
 	goal := rs.Goal
 	if len(survivors) > 0 {
 		var b strings.Builder
-		fmt.Fprintf(&b, "%s\n\nThe developer's own tests did NOT catch the following goal-violating mutants (they passed undetected). Write a test that specifically kills these survivors — proving the missed bugs are real and catchable, not equivalent mutants.\n\n%s\n", rs.Goal, testgen.WriterStrictnessNote())
-		for _, m := range survivors {
-			// A mutant is its hunk, not the whole file it would make: the
-			// code under review is already above (once, via WriteTestPrompt's
-			// TARGET FILE), so each survivor here is a small diff against it
-			// rather than a second copy of the file — see RenderHunk's doc
-			// comment for the 0.5M-token-per-file cost this removes.
-			// RenderHunk always renders (never errors, never dumps a whole
-			// file), so every survivor is named here — none can silently
-			// vanish from what the writer is told to kill.
-			fmt.Fprintf(&b, "\n%s\n", RenderHunk(m, rs.Code, 3))
-		}
+		fmt.Fprintf(&b, "%s\n\n%s", rs.Goal, survivorBlock(rs, survivors))
 		goal = b.String()
 	}
 	// Tell the writer the actual file name. WriteTestPrompt hands the model the
@@ -232,26 +221,110 @@ func renderTestWriterRepairing(rs RunSpec, sigs []repoindex.Signature, survivors
 	}
 	named := fmt.Sprintf("%s Your test may share the package/namespace with the developer's OWN tests, so give your test function(s) and any helpers UNIQUE names — never redeclare an identifier the existing suite may already define.\n\n%s%s%s",
 		fileFact, harnessExemplar(rs), importNote, goal)
-	if strings.TrimSpace(cleanFailure) != "" {
-		// A DIFFERENT failure from a compile error, and it must not be worded
-		// as one: this test BUILT and RAN, and then failed against the
-		// unmutated, correct code — so it asserts something untrue about
-		// working software, and every mutant it might have caught is
-		// discarded (an invalid test may never earn a kill rate).
-		//
-		// The measured shape this exists for: a writer produced 13 tests
-		// against flask's internals, TEN of which passed; three carried wrong
-		// API assumptions and, because the compliant check is all-or-nothing
-		// per FILE, took the other ten down with them. Naming the failing
-		// tests specifically is what lets a model drop or fix three
-		// assumptions instead of rewriting thirteen tests it mostly got right.
-		named = fmt.Sprintf("%s\n\n--- YOUR PREVIOUS ATTEMPT FAILED ON THE UNMUTATED, CORRECT CODE ---\nYou wrote:\n%s\n\nRun against the ORIGINAL (unmodified) source, your test reported:\n%s\n\nThat means your test asserts something that is NOT true of the correct code — a wrong assumption about the API, not a bug you have found. The whole file is discarded when ANY test in it fails this way, so tests of yours that were fine are being thrown away too.\n\nReturn a corrected FULL test file that PASSES against the unmodified source. Fix or DELETE only the assertions that failed; keep the ones that already passed. Do not weaken a test into something that would pass against a broken implementation too — a test that cannot fail proves nothing.", named, prevTest, strings.TrimSpace(cleanFailure))
-	}
-	if strings.TrimSpace(compileErr) != "" {
-		named = fmt.Sprintf("%s\n\n--- YOUR PREVIOUS ATTEMPT DID NOT COMPILE ---\nYou wrote:\n%s\n\nThe compiler reported:\n%s\n\nReturn a corrected FULL test file that compiles cleanly. Fix exactly what the compiler flagged; if it is a redeclared/duplicate identifier, rename yours to something unique.", named, prevTest, strings.TrimSpace(compileErr))
-	}
+	named += cleanFailureRepairBlock(prevTest, cleanFailure) + compileRepairBlock(prevTest, compileErr)
 	system, user := testgen.WriteTestPrompt(harnessOverride(p.TestWriterSystem(), rs), named, rs.Code, sigs)
 	return joinPrompt(system, user)
+}
+
+// survivorBlock is the SURVIVOR half of the writer's instruction: the
+// strictness note plus one rendered hunk per survivor. Shared by the batched
+// render (every survivor at once) and the per-survivor suffix (exactly one),
+// so the two modes cannot drift on how a survivor is described.
+//
+// A mutant is its hunk, not the whole file it would make: the code under
+// review is already in the prompt once (WriteTestPrompt's TARGET FILE), so
+// each survivor here is a small diff against it rather than a second copy of
+// the file — see RenderHunk's doc comment for the 0.5M-token-per-file cost
+// this removes. RenderHunk always renders (never errors, never dumps a whole
+// file), so every survivor handed in is named — none can silently vanish from
+// what the writer is told to kill.
+func survivorBlock(rs RunSpec, survivors []adequacy.Mutant) string {
+	var b strings.Builder
+	verb := "these survivors"
+	if len(survivors) == 1 {
+		verb = "this survivor"
+	}
+	fmt.Fprintf(&b, "The developer's own tests did NOT catch the following goal-violating mutant(s) (they passed undetected). Write a test that specifically kills %s — proving the missed bug is real and catchable, not an equivalent mutant.\n\n%s\n", verb, testgen.WriterStrictnessNote())
+	for _, m := range survivors {
+		fmt.Fprintf(&b, "\n%s\n", RenderHunk(m, rs.Code, 3))
+	}
+	return b.String()
+}
+
+// cleanFailureRepairBlock is the repair prompt for a test that COMPILED and
+// then failed against the unmutated, correct code. Empty when there is no such
+// failure to feed back.
+//
+// Factored out of the render so the per-survivor path (renderTestWriterFor)
+// and the batched path use the SAME words: the two repair prompts are the most
+// carefully-worded text in this file, each written against a measured failure,
+// and two copies would drift.
+func cleanFailureRepairBlock(prevTest, cleanFailure string) string {
+	if strings.TrimSpace(cleanFailure) == "" {
+		return ""
+	}
+	// A DIFFERENT failure from a compile error, and it must not be worded
+	// as one: this test BUILT and RAN, and then failed against the
+	// unmutated, correct code — so it asserts something untrue about
+	// working software, and every mutant it might have caught is
+	// discarded (an invalid test may never earn a kill rate).
+	//
+	// The measured shape this exists for: a writer produced 13 tests
+	// against flask's internals, TEN of which passed; three carried wrong
+	// API assumptions and, because the compliant check is all-or-nothing
+	// per FILE, took the other ten down with them. Naming the failing
+	// tests specifically is what lets a model drop or fix three
+	// assumptions instead of rewriting thirteen tests it mostly got right.
+	return fmt.Sprintf("\n\n--- YOUR PREVIOUS ATTEMPT FAILED ON THE UNMUTATED, CORRECT CODE ---\nYou wrote:\n%s\n\nRun against the ORIGINAL (unmodified) source, your test reported:\n%s\n\nThat means your test asserts something that is NOT true of the correct code — a wrong assumption about the API, not a bug you have found. The whole file is discarded when ANY test in it fails this way, so tests of yours that were fine are being thrown away too.\n\nReturn a corrected FULL test file that PASSES against the unmodified source. Fix or DELETE only the assertions that failed; keep the ones that already passed. Do not weaken a test into something that would pass against a broken implementation too — a test that cannot fail proves nothing.", prevTest, strings.TrimSpace(cleanFailure))
+}
+
+// compileRepairBlock is the repair prompt for a test that did not build.
+// Empty when there is no compiler error to feed back. See
+// cleanFailureRepairBlock for why both live here rather than inline.
+func compileRepairBlock(prevTest, compileErr string) string {
+	if strings.TrimSpace(compileErr) == "" {
+		return ""
+	}
+	return fmt.Sprintf("\n\n--- YOUR PREVIOUS ATTEMPT DID NOT COMPILE ---\nYou wrote:\n%s\n\nThe compiler reported:\n%s\n\nReturn a corrected FULL test file that compiles cleanly. Fix exactly what the compiler flagged; if it is a redeclared/duplicate identifier, rename yours to something unique.", prevTest, strings.TrimSpace(compileErr))
+}
+
+// renderTestWriterPrefix is the part of a writer instruction that is the SAME
+// for every survivor of one file: the system prompt, the goal, the target
+// file, the signature surface, the harness exemplar and the import/placement
+// facts. It is exactly the survivor-less render — the instruction BuildDAG
+// seeds the pre-promotion task with — so there is one definition of "the
+// file's context", not two that could drift.
+//
+// BYTE-IDENTICAL ACROSS A FILE'S TASKS is the load-bearing property, and it is
+// what makes the per-survivor fan-out affordable: this prefix is most of the
+// prompt (a real file plus its signatures), and a provider that can cache a
+// repeated prefix bills it once instead of N times. A single differing byte —
+// a survivor id, a count, a timestamp — defeats the cache entirely, so nothing
+// per-survivor may appear here. See renderTestWriterSuffix for the half that
+// varies, and internal/agentbackend for the request-side cache_control block
+// that asks Anthropic to actually reuse it.
+func renderTestWriterPrefix(rs RunSpec, sigs []repoindex.Signature) string {
+	return renderTestWriter(rs, sigs, nil)
+}
+
+// renderTestWriterSuffix is the per-survivor half: exactly one rendered hunk,
+// appended after the shared prefix. Kept short on purpose — every byte here is
+// a byte the provider cannot serve from cache.
+func renderTestWriterSuffix(rs RunSpec, m adequacy.Mutant) string {
+	return "\n\n" + survivorBlock(rs, []adequacy.Mutant{m})
+}
+
+// renderTestWriterFor renders ONE survivor's writer instruction: the shared
+// prefix, that survivor's diff, and (on a retry) the repair block for whichever
+// of the two failure modes this seat hit. prevTest/compileErr/cleanFailure are
+// all empty on a first attempt.
+//
+// The repair block goes AFTER the survivor, not inside the prefix, for the
+// cache reason above: a repaired seat still shares its prefix with its
+// siblings.
+func renderTestWriterFor(rs RunSpec, sigs []repoindex.Signature, m adequacy.Mutant, prevTest, compileErr, cleanFailure string) string {
+	return renderTestWriterPrefix(rs, sigs) + renderTestWriterSuffix(rs, m) +
+		cleanFailureRepairBlock(prevTest, cleanFailure) + compileRepairBlock(prevTest, compileErr)
 }
 
 // DefaultMaxShards is the stock generator width. It matches
@@ -388,6 +461,66 @@ func ResolveOptionalModel(flag, def string) string {
 		return def
 	}
 	return f
+}
+
+// Writer modes: HOW the writer seat attacks a file's survivors. See
+// RunSpec.WriterMode for the semantics and why an EMPTY RunSpec value means
+// batched while the CLI's default is per-survivor.
+const (
+	// WriterModePerSurvivor makes one writer call PER SURVIVOR. Each call
+	// carries the file's byte-identical cacheable prefix plus exactly one
+	// survivor's diff; each returned test is repaired on its own budget and
+	// PROVEN ALONE against its own mutant, so a proof names the survivor it
+	// killed rather than being attributed from a whole-file re-score. The
+	// operator's authored file is the proven tests concatenated.
+	WriterModePerSurvivor = "per-survivor"
+	// WriterModeBatched is the original shape: ONE call carrying every
+	// survivor as a diff, one repair budget for the whole file, one proof
+	// pass over all survivors at once.
+	WriterModeBatched = "batched"
+)
+
+// ResolveWriterMode validates an operator's --writer-mode spelling, returning
+// the canonical value. An empty flag takes WriterModePerSurvivor — the
+// COMMAND-LINE default, which is not the RunSpec zero value (see
+// RunSpec.WriterMode for why those differ).
+//
+// A closed set with a hard error, not a silent fallback: the mode changes how
+// many model calls a run makes, what each proof means, and what the verdict
+// discloses. An operator who typed `--writer-mode per_survivor` and got the
+// default would be handed a different measurement than the one they asked for
+// and told nothing.
+func ResolveWriterMode(flag string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(flag)) {
+	case "":
+		return WriterModePerSurvivor, nil
+	case WriterModePerSurvivor:
+		return WriterModePerSurvivor, nil
+	case WriterModeBatched:
+		return WriterModeBatched, nil
+	}
+	return "", fmt.Errorf("unknown --writer-mode %q: want %q or %q", flag, WriterModePerSurvivor, WriterModeBatched)
+}
+
+// TestWriterTaskKey is the queue key for the writer seat aimed at ONE
+// survivor. Keys are unique per mission and a mutant id is unique within a run
+// (a sharded run prefixes ids with the shard index), so one survivor is
+// exactly one seat — two survivors can never collide onto one key and quietly
+// leave one of them unattacked while the verdict still counts it.
+//
+// The bare role key (RoleTestWriter) stays the batched mode's key, unchanged,
+// so nothing about a batched run's queue shape moves.
+func TestWriterTaskKey(mutantID string) string {
+	return RoleTestWriter + "/" + mutantID
+}
+
+// ShadowTestWriterTaskKey is TestWriterTaskKey for the CHALLENGER seat. It
+// carries the challenger's own role prefix for the same structural reason
+// RoleTestWriterShadow exists: tasksByRole(RoleTestWriter) must not be able to
+// return a shadow task, and a prefix is a fact about the key rather than a
+// check someone must remember to write.
+func ShadowTestWriterTaskKey(mutantID string) string {
+	return RoleTestWriterShadow + "/" + mutantID
 }
 
 // ShadowShardTaskKey is the queue key for the challenger seat on shard i.

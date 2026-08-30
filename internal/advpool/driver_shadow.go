@@ -290,7 +290,14 @@ func (d *Driver) runShadowWriterPass(ctx context.Context, missionID int64, run *
 	if strings.TrimSpace(run.rs.ShadowWriterModel) == "" {
 		return
 	}
-	if run.shadowWriterMeasured || run.shadowWriterAttempts >= MaxShadowWriterAttempts {
+	if run.writerMode == WriterModePerSurvivor {
+		// The challenger fans out with the primary; its per-survivor body is
+		// runShadowWriterFanout. Routed here rather than at the call site so
+		// tickPoolAdequacy has one challenger entry point either way.
+		d.runShadowWriterFanout(ctx, missionID, run)
+		return
+	}
+	if run.shadowWriterMeasured || run.shadowWriterCompileRetries >= MaxShadowWriterAttempts {
 		return
 	}
 	if run.shadowWriterTaskID == 0 {
@@ -339,10 +346,10 @@ func (d *Driver) runShadowWriterPass(ctx context.Context, missionID int64, run *
 	shadowTest := d.Validator.ParseTest(task.Result)
 	if cerr := d.Validator.CompileTest(ctx, run.rs.CodePath, run.rs.Code, shadowTest); cerr != nil {
 		// The challenger's OWN budget — never run.testWriterAttempts.
-		run.shadowWriterAttempts++
-		if run.shadowWriterAttempts >= MaxShadowWriterAttempts {
+		run.shadowWriterCompileRetries++
+		if run.shadowWriterCompileRetries >= MaxShadowWriterAttempts {
 			log.Printf("advpool: run %d: the challenger writer produced no compiling test after %d attempt(s) — recorded as UNMEASURED, not as zero kills: %v",
-				missionID, run.shadowWriterAttempts, cerr)
+				missionID, run.shadowWriterCompileRetries, cerr)
 			return
 		}
 		// A corrective retry, mirroring the primary's: feed the compiler's own
@@ -437,4 +444,171 @@ func provenRefs(rep adequacy.Report, survivors []adequacy.Mutant) []MutantRef {
 		}
 	}
 	return refs
+}
+
+// enqueueShadowWritersPerSurvivor adds ONE challenger writer seat per
+// survivor, mirroring the primary's fan-out exactly.
+//
+// The shapes must match or the comparison is confounded by the shape rather
+// than by the model: a challenger asked one batched question while the primary
+// answers N per-survivor ones is being given a different (and harder) task,
+// and the difference would be recorded as a model result. Enqueued here,
+// beside the primary, so the challenger costs the run no extra ticks.
+//
+// Never fatal: the seat records a comparison and nothing else, so an enqueue
+// failure logs and leaves the challenger absent.
+func (d *Driver) enqueueShadowWritersPerSurvivor(missionID int64, run *runState, survivors []adequacy.Mutant) {
+	if len(run.shadowWriterOrder) > 0 {
+		return
+	}
+	specs := make([]queue.TaskSpec, 0, len(survivors))
+	for _, m := range survivors {
+		specs = append(specs, queue.TaskSpec{
+			Key:         ShadowTestWriterTaskKey(m.ID),
+			Role:        RoleTestWriterShadow,
+			Title:       "Challenger: " + writerSeatTitle(m),
+			Instruction: renderTestWriterFor(run.rs, run.sigs, m, "", "", ""),
+			Model:       run.rs.ShadowWriterModel,
+		})
+	}
+	if err := d.Q.Enqueue(missionID, specs); err != nil {
+		log.Printf("advpool: run %d: could not enqueue the per-survivor challenger writer seats (measurement only): %v", missionID, err)
+		return
+	}
+	tasks, lerr := d.tasksByRole(missionID, RoleTestWriterShadow)
+	if lerr != nil {
+		log.Printf("advpool: run %d: challenger writer seats enqueued but not found (measurement only): %v", missionID, lerr)
+		return
+	}
+	byKey := make(map[string]int64, len(tasks))
+	for _, t := range liveTasks(tasks) {
+		byKey[t.Key] = t.ID
+	}
+	run.shadowWriterAttempts = map[string]*writerAttempt{}
+	for _, m := range survivors {
+		id, ok := byKey[ShadowTestWriterTaskKey(m.ID)]
+		if !ok {
+			// UNMEASURED, not zero: a seat this run cannot name is a seat it
+			// can never read, and the challenger must be absent from the
+			// comparison rather than present with an empty kill vector.
+			log.Printf("advpool: run %d: challenger writer seat for survivor %s is missing — it is UNMEASURED, not zero kills", missionID, m.ID)
+			continue
+		}
+		run.shadowWriterAttempts[m.ID] = &writerAttempt{mutant: m, taskID: id}
+		run.shadowWriterOrder = append(run.shadowWriterOrder, m.ID)
+	}
+}
+
+// runShadowWriterFanout is runShadowWriterPass's per-survivor body: it
+// advances each challenger seat the same way the primary's advances, and
+// records the challenger's proven-kill vector only once every seat is
+// terminal.
+//
+// It is held to the SAME invariants runShadowWriterPass is (see that
+// function's doc): never fatal, never able to change the run's grade, its own
+// retry budget, and UNMEASURED IS NOT ZERO — a seat that never compiled, never
+// passed its baseline or never reached the file leaves no entry in the vector
+// and does not, by its absence, claim the challenger missed that survivor.
+// That last point is why shadowWriterMeasured is set only when at least one
+// seat genuinely graded.
+func (d *Driver) runShadowWriterFanout(ctx context.Context, missionID int64, run *runState) {
+	if run.shadowWriterDone {
+		return
+	}
+	for _, id := range run.shadowWriterOrder {
+		a := run.shadowWriterAttempts[id]
+		if a.done {
+			continue
+		}
+		task, terr := d.Q.TaskByID(a.taskID)
+		if terr != nil {
+			log.Printf("advpool: run %d: challenger writer seat for %s unavailable (measurement only): %v", missionID, id, terr)
+			a.done = true
+			continue
+		}
+		if task == nil || task.Status != queue.StatusDone {
+			// Still working. This must never hold up the primary, so the
+			// pass simply returns and comes round again.
+			return
+		}
+		if task.Result == ShadowProviderFailedResult {
+			// The call itself failed: there is no output to parse, and
+			// parsing it anyway would record a fabricated failure for a model
+			// that was never asked the question.
+			a.done = true
+			continue
+		}
+
+		test := d.Validator.ParseTest(task.Result)
+		if cerr := d.Validator.CompileTest(ctx, run.rs.CodePath, run.rs.Code, test); cerr != nil {
+			a.repairs++
+			if a.repairs >= MaxShadowWriterAttempts {
+				log.Printf("advpool: run %d: the challenger produced no compiling test for survivor %s after %d attempt(s) — UNMEASURED, not zero kills: %v",
+					missionID, id, a.repairs, cerr)
+				a.done = true
+				continue
+			}
+			instr := renderTestWriterFor(run.rs, run.sigs, a.mutant, "", "", "")
+			if strings.TrimSpace(test) != "" {
+				var ce *CompileError
+				msg := cerr.Error()
+				if errors.As(cerr, &ce) && strings.TrimSpace(ce.Output) != "" {
+					msg = ce.Output
+				}
+				instr = renderTestWriterFor(run.rs, run.sigs, a.mutant, test, msg, "")
+			}
+			newID, serr := d.Q.SupersedeTask(task.ID, queue.TaskSpec{
+				Key:         ShadowTestWriterTaskKey(a.mutant.ID),
+				Role:        RoleTestWriterShadow,
+				Title:       task.Title,
+				Instruction: instr,
+				Model:       run.rs.ShadowWriterModel,
+			})
+			if serr != nil {
+				log.Printf("advpool: run %d: could not reissue the challenger writer for %s (measurement only): %v", missionID, id, serr)
+				a.done = true
+				continue
+			}
+			a.taskID = newID
+			if _, perr := d.Q.PromoteReady(missionID); perr != nil {
+				log.Printf("advpool: run %d: could not promote the reissued challenger writer for %s (measurement only): %v", missionID, id, perr)
+			}
+			return
+		}
+
+		rep, serr := scoreAuthored(ctx, d.Scorer, run.rs.CodePath, run.rs.Code, test, []adequacy.Mutant{a.mutant}, run.rs.TestCmd)
+		if serr != nil {
+			log.Printf("advpool: run %d: challenger writer scoring for %s failed (measurement only): %v", missionID, id, serr)
+			a.done = true
+			continue
+		}
+		a.done = true
+		if !rep.CompliantPass || !rep.CanaryKilled || rep.AuthoredTestUnreached || rep.Total == 0 {
+			continue
+		}
+		a.measured = true
+		a.proven = len(provenMutantIDs(rep, []adequacy.Mutant{a.mutant})) > 0
+	}
+
+	run.shadowWriterDone = true
+	measured := 0
+	for _, id := range run.shadowWriterOrder {
+		a := run.shadowWriterAttempts[id]
+		if !a.measured {
+			continue
+		}
+		measured++
+		if a.proven {
+			run.shadowWriterKilled = append(run.shadowWriterKilled,
+				MutantRef{ID: a.mutant.ID, ParentSHA256: a.mutant.ParentSHA256})
+		}
+	}
+	if measured == 0 {
+		// Nothing graded anywhere: the challenger is ABSENT from the
+		// comparison rather than present with an all-survive vector.
+		return
+	}
+	run.shadowWriterMeasured = true
+	log.Printf("advpool: run %d: the challenger writer (%s) proved %d of %d survivor(s) across %d graded seat(s) — measurement only, it does not gate this verdict",
+		missionID, run.rs.ShadowWriterModel, len(run.shadowWriterKilled), len(run.shadowWriterOrder), measured)
 }

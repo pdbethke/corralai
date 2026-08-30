@@ -26,11 +26,14 @@ import (
 // numbers for the "+" side when they differ makes two different physical
 // lines claim the same number (measured: a 2-line SEARCH replaced by a
 // 3-line REPLACE put the 3rd added line and the first after-context line
-// both at the SEARCH span's original end+1). The header's line range
-// ("lines <start>-<end>") names this same MUTATED region: <start> is
-// shared between both files (the splice point does not move), but <end>
-// is the last line REPLACE produces, which only equals the original
-// span's end when the two are the same length.
+// both at the SEARCH span's original end+1). ON THE ANCHORED-HUNK PATH the
+// header's line range ("lines <start>-<end>") names this same MUTATED
+// region: <start> is shared between both files (the splice point does not
+// move), but <end> is the last line REPLACE produces, which only equals the
+// original span's end when the two are the same length. The whole-file (v1)
+// path below carries a header too, and it is NOT the same claim — its range
+// is in ORIGINAL numbering (the first and last original lines the diff
+// covers), because a v1 mutant has no anchored splice point to share.
 //
 // A whole-file (v1) mutant (m.IsWholeFile()) has no anchor to hunk against —
 // Replace IS the whole mutated file — so it renders as a line diff of

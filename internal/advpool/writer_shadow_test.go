@@ -564,11 +564,11 @@ func TestShadowWriterRetriesDoNotConsumePrimaryBudget(t *testing.T) {
 	if st.shadowWriterMeasured {
 		t.Error("shadowWriterMeasured = true after every attempt failed to compile")
 	}
-	if st.shadowWriterAttempts == 0 {
+	if st.shadowWriterCompileRetries == 0 {
 		t.Error("shadowWriterAttempts = 0 — the challenger's own budget was never charged")
 	}
-	if st.shadowWriterAttempts > MaxShadowWriterAttempts {
-		t.Errorf("shadowWriterAttempts = %d, over its own budget of %d", st.shadowWriterAttempts, MaxShadowWriterAttempts)
+	if st.shadowWriterCompileRetries > MaxShadowWriterAttempts {
+		t.Errorf("shadowWriterAttempts = %d, over its own budget of %d", st.shadowWriterCompileRetries, MaxShadowWriterAttempts)
 	}
 }
 

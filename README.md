@@ -443,6 +443,34 @@ readout has to account for every phase that file's audit waited on — but it is
 deliberately **not** part of a file's `total`, so `sum(total_ms)` across a
 scan's files is a sound number rather than one that grows with the file count.
 
+**The warehouse (`--push`, CLI and Action).** `certify --repo --push <path or
+md:<db>>` appends this scan's per-file verdicts to a DuckDB **you** own —
+corral has no hosted tier and keeps nothing, so any DuckDB works, and this is
+a destination rather than a lock-in. Append-only. Every row carries the local
+scan ledger's row id (`0` when `--record` wasn't given) and, traceable only
+with `--attest`, the sha256 of the signed statement it came from — so a row
+can be checked against something a third party can verify, and without
+`--attest` that column is honestly empty rather than fabricated. It answers
+what one pull request cannot: a single kill rate is a sample — the same
+unchanged diff has scored `0.85` and `0.90` — while forty of them, pushed
+across forty PRs, are a distribution you can read a trend from. `md:<db>`
+targets MotherDuck and reads its token from `motherduck_token`
+(`--motherduck-token`, or the Action's `motherduck-token` input) in the
+environment.
+
+`--push-source` additionally sends the pool's authored test and the full
+verdict JSON — never mutant code, which corral keeps at rest under no
+setting. Off by default: without it, a pushed row carries numbers, hashes,
+reasons, and model names, and no source leaves the box.
+
+`corral seal` (see `corral --help`) reads the warehouse's `corral_seal`
+view back — the union of every push's still-valid verdicts, not any one
+scan's snapshot. Running this Action per PR, at scale, is documented in
+**[docs/corral/actions-as-swarm.md](docs/corral/actions-as-swarm.md)**;
+what a pushed row's timing and cost columns actually mean, quoted from two
+real recorded scans, is in
+**[docs/design/cost-model.md](docs/design/cost-model.md)**.
+
 **Look before you spend (`--dry-run`, `--json`).** Enumeration needs no model
 key, no jail and no money, and it already knows a great deal about your
 repository. It reports a per-language profile — how many source files corral can

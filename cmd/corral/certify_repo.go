@@ -394,6 +394,11 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// past this point (see the deferred write), because a scan whose gate
 	// failed is still a scan whose exam is worth keeping — reproducing a red
 	// verdict is the first thing anyone does with one.
+	// Declared here, not at the Scan call below, so the --record-mutants
+	// closure can read the scan's own per-file results: a file served from
+	// the verdict cache never runs a dev pass and so never reaches the sink,
+	// and the record line has to be able to say so.
+	var results []reposcan.FileResult
 	var mutantRecorder *mutantSetRecorder
 	if p := strings.TrimSpace(*recordMutantsFlag); p != "" {
 		mutantRecorder = newMutantSetRecorder()
@@ -412,7 +417,17 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 				fmt.Fprintf(stderr, "corral certify --repo: --record-mutants NOT written: %v\n", werr)
 				return
 			}
-			mutantRecorder.report(stdout, p, n)
+			audited, cacheHits := 0, 0
+			for _, r := range results {
+				if !r.Gradable {
+					continue
+				}
+				audited++
+				if r.CacheHit {
+					cacheHits++
+				}
+			}
+			mutantRecorder.report(stdout, p, n, audited, cacheHits)
 		}()
 	}
 
@@ -793,7 +808,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	auditCtx, stopSignals := auditContext(stderr)
 	defer stopSignals()
 
-	results := reposcan.Scan(auditCtx, jobs, ex, newLedgerCache(scanStore), workers)
+	results = reposcan.Scan(auditCtx, jobs, ex, newLedgerCache(scanStore), workers)
 	rep := reposcan.Aggregate(*owner, cfg.Repo, *commit, totalFiles, len(cands), results, excl)
 
 	// The diff selected zero candidates: a docs-only (or no-paired-test-only)

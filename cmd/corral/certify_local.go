@@ -222,22 +222,23 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "corral certify --local: %v\n", serr)
 			return 2
 		}
-		// The path as the operator spelled it on --code is the key: in
-		// --repo-dir mode that is already the repo-relative path a scan
-		// records, and in single-file mode it is the only name this run has
-		// for the file.
-		src, rerr := os.ReadFile(localMutantSourcePath(*repoDirFlag, *codePath)) // #nosec G304 -- the file this run was asked to audit
+		// The lookup key is the SAME codeKey the recorder writes under — see
+		// localMutantSetKey. Keying on the raw --code string instead made a
+		// run unable to replay its own recording whenever --code carried a
+		// directory component.
+		setKey, srcPath := localMutantSetKey(*repoDirFlag, *codePath)
+		src, rerr := os.ReadFile(srcPath) // #nosec G304 -- the file this run was asked to audit
 		if rerr != nil {
 			fmt.Fprintf(stderr, "corral certify --local: --mutants: reading %s to check it against the recorded set: %v\n", *codePath, rerr)
 			return 2
 		}
-		ms, merr := set.MutantsFor(*codePath, string(src))
+		ms, merr := set.MutantsFor(setKey, string(src))
 		if merr != nil {
 			fmt.Fprintf(stderr, "corral certify --local: --mutants: %v\n", merr)
 			return 2
 		}
 		presetMutants = ms
-		fmt.Fprintf(stdout, "replaying %d recorded mutant(s) for %s from %s — no mutant-generator model call will be made\n", len(ms), *codePath, p)
+		fmt.Fprintf(stdout, "replaying %d recorded mutant(s) for %s from %s — no mutant-generator model call will be made\n", len(ms), setKey, p)
 	}
 
 	// --record-mutants: flushed after the run on EVERY exit path below, a
@@ -253,7 +254,10 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 				fmt.Fprintf(stderr, "corral certify --local: --record-mutants NOT written: %v\n", werr)
 				return
 			}
-			rc.report(stdout, p, n)
+			// 0/0: `certify --local` audits one file and has no verdict
+			// cache, so there is no denominator or cache-hit count to
+			// disclose — see mutantSetRecorder.report.
+			rc.report(stdout, p, n, 0, 0)
 		}()
 	}
 

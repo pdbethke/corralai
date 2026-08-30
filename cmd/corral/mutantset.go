@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
@@ -87,10 +88,28 @@ func (r *mutantSetRecorder) write(path string) (int, error) {
 	return len(r.files), nil
 }
 
-// report writes the recorder's own disclosure: how many files landed, and
-// every file that could not be recorded replayably.
-func (r *mutantSetRecorder) report(w io.Writer, path string, n int) {
-	fmt.Fprintf(w, "  wrote %d file(s) of graded mutants to %s — replay them with `--mutants %s`\n", n, path, path)
+// report writes the recorder's own disclosure: how many files landed out of
+// how many the scan audited, and why the rest are missing.
+//
+// audited/cacheHits exist because of a gap that is otherwise SILENT and
+// self-defeating: a file served from the verdict cache runs no dev pass, so
+// MutantSink never fires for it and it is simply absent from the document. A
+// later `--mutants` replay then refuses that file as unrecorded — the set
+// cannot replay the very scan that produced it — and nothing anywhere said
+// why. A count of what landed is not enough to notice that; the denominator
+// and the reason are.
+//
+// Both are 0 on the `certify --local` path, which has no cache and audits one
+// file; the line then degrades to the plain "wrote N file(s)" form.
+func (r *mutantSetRecorder) report(w io.Writer, path string, n, audited, cacheHits int) {
+	if audited > 0 && n < audited {
+		fmt.Fprintf(w, "  wrote %d of %d audited file(s) of graded mutants to %s — replay them with `--mutants %s`\n", n, audited, path, path)
+	} else {
+		fmt.Fprintf(w, "  wrote %d file(s) of graded mutants to %s — replay them with `--mutants %s`\n", n, path, path)
+	}
+	if cacheHits > 0 {
+		fmt.Fprintf(w, "  %d file(s) served from the verdict cache and cannot be replayed (re-run without the cache to record them)\n", cacheHits)
+	}
 	r.mu.Lock()
 	skipped := append([]string(nil), r.skipped...)
 	r.mu.Unlock()
@@ -159,13 +178,44 @@ func fileSHA256(path string) (string, error) {
 	return sha256Hex(b), nil
 }
 
-// localMutantSourcePath resolves the file `certify --local` is about to
-// audit, for the byte check --mutants performs before the run. In --repo-dir
-// mode --code is repo-relative (the same key a scan records); without it,
-// --code is already a filesystem path.
-func localMutantSourcePath(repoDir, codePath string) string {
+// localMutantSetKey is the name `certify --local` records a file under, and
+// therefore the name `--mutants` must look it up by. It MIRRORS
+// buildJailWiring's own codeKey, which is what reaches
+// advpool.RunSpec.CodePath and so what the driver hands MutantSink:
+//
+//   - --repo-dir mode: the path relative to the repo root, slash-separated —
+//     the same spelling a `certify --repo` scan records, so sets interchange
+//     between the two commands.
+//   - single-file mode: filepath.Base(--code). The jail sees one bare file,
+//     and that basename is the only name the run has for it.
+//
+// Deriving it here rather than using the raw --code string is the whole
+// point. The recorder writes under codeKey; a lookup keyed on the raw flag
+// disagreed with it the moment --code carried a directory component, so
+// `--code sub/x.py --record-mutants s.json` wrote the entry as `x.py` and the
+// byte-identical replay of that same command was then REFUSED as an
+// unrecorded file. A round-trip that its own output cannot survive is worse
+// than no round-trip: the refusal is indistinguishable from the real
+// tampering the check exists to catch.
+//
+// It also returns the filesystem path to read the bytes from, so the two can
+// never be derived from different rules.
+func localMutantSetKey(repoDir, codePath string) (key, fsPath string) {
+	repoDir = strings.TrimSpace(repoDir)
 	if repoDir == "" {
-		return codePath
+		return filepath.Base(codePath), codePath
 	}
-	return filepath.Join(repoDir, codePath)
+	fsPath = codePath
+	if !filepath.IsAbs(codePath) {
+		fsPath = filepath.Join(repoDir, codePath)
+	}
+	rel, err := filepath.Rel(repoDir, fsPath)
+	if err != nil {
+		// buildJailWiring refuses this case outright ("--code is not inside
+		// --repo-dir"), and will do so a moment later. Fall back to the
+		// spelling the operator used so the refusal that reaches them names
+		// the real problem rather than a mutant-set miss standing in for it.
+		return filepath.ToSlash(codePath), fsPath
+	}
+	return filepath.ToSlash(rel), fsPath
 }

@@ -197,3 +197,140 @@ func TestAuditConfigKeySeparatesAReplayFromAGeneratedRun(t *testing.T) {
 		t.Error("the key is not stable for the same set")
 	}
 }
+
+// TestLocalMutantSetKeyRoundTripsWhatItRecords is fix-round-1 finding 1: the
+// recorder writes each entry under advpool.RunSpec.CodePath — buildJailWiring's
+// codeKey — while the --mutants lookup keyed on the RAW --code string. Any
+// --code with a directory component therefore recorded as `x.py` and was then
+// refused when the byte-identical command tried to replay it: a set that
+// cannot replay the run that produced it, with the refusal looking exactly
+// like the tampering the check exists to catch.
+func TestLocalMutantSetKeyRoundTripsWhatItRecords(t *testing.T) {
+	root := t.TempDir()
+	const src = "def add(a, b):\n    return a + b\n"
+	mustWrite(t, filepath.Join(root, "sub", "dir", "x.py"), src)
+
+	t.Run("single-file mode records and looks up the same basename", func(t *testing.T) {
+		// The recorder's key is what the driver hands MutantSink, which in
+		// single-file mode is filepath.Base(--code).
+		rec := newMutantSetRecorder()
+		rec.sink("x.py", []adequacy.Mutant{{ID: "m1", Code: "bad", ParentSHA256: shaOf(src)}})
+		setPath := filepath.Join(t.TempDir(), "s.json")
+		if _, err := rec.write(setPath); err != nil {
+			t.Fatal(err)
+		}
+		set, err := adequacy.ReadMutantSet(setPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Replay with the SAME --code the recording run used.
+		codeArg := filepath.Join(root, "sub", "dir", "x.py")
+		key, fsPath := localMutantSetKey("", codeArg)
+		if fsPath != codeArg {
+			t.Fatalf("fsPath = %q, want the --code path %q", fsPath, codeArg)
+		}
+		if _, err := set.MutantsFor(key, src); err != nil {
+			t.Fatalf("a run cannot replay its own recording: key %q: %v", key, err)
+		}
+	})
+
+	t.Run("repo-dir mode records and looks up the repo-relative path", func(t *testing.T) {
+		rec := newMutantSetRecorder()
+		rec.sink("sub/dir/x.py", []adequacy.Mutant{{ID: "m1", Code: "bad", ParentSHA256: shaOf(src)}})
+		setPath := filepath.Join(t.TempDir(), "s.json")
+		if _, err := rec.write(setPath); err != nil {
+			t.Fatal(err)
+		}
+		set, err := adequacy.ReadMutantSet(setPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		key, fsPath := localMutantSetKey(root, "sub/dir/x.py")
+		if key != "sub/dir/x.py" {
+			t.Fatalf("key = %q, want the repo-relative path a --repo scan also records", key)
+		}
+		if fsPath != filepath.Join(root, "sub", "dir", "x.py") {
+			t.Fatalf("fsPath = %q, want the file inside --repo-dir", fsPath)
+		}
+		if _, err := set.MutantsFor(key, src); err != nil {
+			t.Fatalf("a --repo-dir run cannot replay its own recording: key %q: %v", key, err)
+		}
+	})
+}
+
+// TestCertifyLocalReplaysItsOwnRecordingKey drives the two flags through
+// runCertifyLocal itself, in SINGLE-FILE mode with a --code that carries a
+// directory component — the exact shape that broke. The recording run writes
+// its entry under the driver's codeKey (`x.py`); replaying the identical
+// command used to look the file up under the raw `<dir>/x.py` and refuse it.
+// The audit itself cannot run here (no provider key), which is fine: the
+// --mutants check runs before any of that, so the assertion is on the refusal
+// that must NOT happen.
+func TestCertifyLocalReplaysItsOwnRecordingKey(t *testing.T) {
+	root := t.TempDir()
+	const src = "def add(a, b):\n    return a + b\n"
+	codeArg := filepath.Join(root, "examples", "x.py")
+	mustWrite(t, codeArg, src)
+
+	// What the recording run wrote: keyed by advpool.RunSpec.CodePath, which
+	// in single-file mode is filepath.Base(--code).
+	setPath := filepath.Join(t.TempDir(), "s.json")
+	rec := newMutantSetRecorder()
+	rec.sink("x.py", []adequacy.Mutant{{ID: "m1", Code: "def add(a, b):\n    return a - b\n", ParentSHA256: shaOf(src)}})
+	if _, err := rec.write(setPath); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errb bytes.Buffer
+	runCertifyLocal([]string{
+		"--code", codeArg, "--goal", "add must add",
+		"--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off",
+		"--mutants", setPath,
+	}, &out, &errb)
+
+	if strings.Contains(errb.String(), "--mutants:") {
+		t.Fatalf("the run refused its own recorded set:\n%s", errb.String())
+	}
+	if !strings.Contains(out.String(), "replaying 1 recorded mutant(s)") {
+		t.Fatalf("expected the replay disclosure on stdout, got:\nstdout=%s\nstderr=%s", out.String(), errb.String())
+	}
+}
+
+// TestMutantSetRecorderReportDisclosesCacheHits is fix-round-1 finding 2: a
+// file served from the verdict cache runs no dev pass, never reaches the
+// sink, and is silently absent from the recorded set — which then refuses its
+// own replay for that file with nothing anywhere explaining why. The record
+// line has to carry the denominator and the reason, not just the count.
+func TestMutantSetRecorderReportDisclosesCacheHits(t *testing.T) {
+	rec := newMutantSetRecorder()
+	rec.sink("pkg/a.go", []adequacy.Mutant{{ID: "m1", Code: "x", ParentSHA256: shaOf("a")}})
+	// No parent hash: recorded as skipped, never as a replayable entry.
+	rec.sink("pkg/b.go", []adequacy.Mutant{{ID: "m1", Code: "x"}})
+
+	var buf bytes.Buffer
+	// 4 audited: a (recorded), b (skipped), and 2 served from the cache.
+	rec.report(&buf, "set.json", 1, 4, 2)
+	got := buf.String()
+
+	if !strings.Contains(got, "wrote 1 of 4 audited file(s)") {
+		t.Errorf("the record line must carry the denominator, got:\n%s", got)
+	}
+	if !strings.Contains(got, "2 file(s) served from the verdict cache and cannot be replayed") {
+		t.Errorf("cache-served files must be disclosed, got:\n%s", got)
+	}
+	if !strings.Contains(got, "re-run without the cache to record them") {
+		t.Errorf("the disclosure must say what to do about it, got:\n%s", got)
+	}
+	if !strings.Contains(got, "pkg/b.go") {
+		t.Errorf("a file skipped for a missing parent hash must still be named, got:\n%s", got)
+	}
+
+	// The `certify --local` shape: no denominator, no cache, no extra lines.
+	var plain bytes.Buffer
+	newMutantSetRecorder().report(&plain, "set.json", 0, 0, 0)
+	if strings.Contains(plain.String(), "audited file(s)") || strings.Contains(plain.String(), "verdict cache") {
+		t.Errorf("a cache-less single-file run must not claim a denominator it has not got, got:\n%s", plain.String())
+	}
+}

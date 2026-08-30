@@ -197,10 +197,11 @@ func runScansShow(args []string, open func(string) (scansReader, error), stdout,
 	// mutant was graded by, and a second copy of the same fact is a second
 	// thing that can disagree. Best-effort — a ledger too old to answer
 	// still prints every file row, with the column saying only what it can.
-	spreads, merr := mutantSpreads(context.Background(), st, id)
+	mutants, merr := st.MutantsForScan(context.Background(), id)
 	if merr != nil {
-		fmt.Fprintln(stderr, "corral scans show: per-mutant spread unavailable:", merr)
+		fmt.Fprintln(stderr, "corral scans show: per-mutant rows unavailable:", merr)
 	}
+	spreads := mutantSpreads(mutants)
 
 	tw := tabwriter.NewWriter(stdout, 0, 2, 2, ' ', 0)
 	fmt.Fprintln(tw, "PATH\tDISPOSITION\tREASON\tKILL RATE\tSURVIVORS\tPROVEN\tSELECTION\tCONCURRENCY\tEVIDENCE\tNOTE\t")
@@ -212,6 +213,17 @@ func runScansShow(args []string, open func(string) (scansReader, error), stdout,
 			f.Evidence, scanFileNote(f))
 	}
 	tw.Flush()
+
+	// WHICH TEST WAS AWAKE, per killed mutant, when the runner said so.
+	// Silent otherwise — see killedByListing.
+	if lines := killedByListing(mutants); len(lines) > 0 {
+		fmt.Fprintln(stdout, "\nkilled by:")
+		kw := tabwriter.NewWriter(stdout, 0, 2, 2, ' ', 0)
+		for _, l := range lines {
+			fmt.Fprintln(kw, l)
+		}
+		kw.Flush()
+	}
 
 	// WHERE THE MINUTES WENT, one line per file, through the SAME helper the
 	// report prints live — so a stored scan and the run that produced it read
@@ -351,11 +363,7 @@ type mutantSpread struct {
 }
 
 // mutantSpreads folds a scan's mutant rows into one spread per path.
-func mutantSpreads(ctx context.Context, st scansReader, scanID int64) (map[string]mutantSpread, error) {
-	ms, err := st.MutantsForScan(ctx, scanID)
-	if err != nil {
-		return nil, err
-	}
+func mutantSpreads(ms []scanstore.Mutant) map[string]mutantSpread {
 	out := map[string]mutantSpread{}
 	for _, m := range ms {
 		// A mutant graded by the file's shared command records no rule, and
@@ -374,7 +382,27 @@ func mutantSpreads(ctx context.Context, st scansReader, scanID int64) (map[strin
 		sp.ok = true
 		out[m.Path] = sp
 	}
-	return out, nil
+	return out
+}
+
+// killedByListing is the per-mutant answer to "which test was awake": one
+// line per killed mutant whose grading run actually named its killer.
+//
+// Printed ONLY when at least one row has an id. A killed_by is best-effort —
+// NULL for a language whose runner corral does not parse, for a
+// timeout-kill, and for any output whose summary said nothing — and a block
+// of em dashes would announce a missing measurement where no measurement was
+// ever attempted. Rows are emitted in the ledger's own order so two readings
+// of one scan agree.
+func killedByListing(ms []scanstore.Mutant) []string {
+	var lines []string
+	for _, m := range ms {
+		if m.Outcome != "killed" || m.KilledBy == "" {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("  %s\t%s\t%s", m.Path, m.MutantID, m.KilledBy))
+	}
+	return lines
 }
 
 // scanFileSelectionWith renders WHICH MEASUREMENT a row's kill rate is, in one

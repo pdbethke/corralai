@@ -60,7 +60,7 @@ func TestMutantGateFallsBackWhenTheTestPathIsAbsent(t *testing.T) {
 func TestMutantGateSkippedForUnsupportedLanguage(t *testing.T) {
 	s := JailScorer{}
 	opts := s.gatedScoreOpts("weird/thing.cobol", map[string]string{})
-	if len(opts) != 2 {
-		t.Errorf("scoreOpts returned %d options for an unsupported language, want exactly 2 (timeout, concurrency)", len(opts))
+	if len(opts) != len(s.baseScoreOpts()) {
+		t.Errorf("scoreOpts returned %d options for an unsupported language, want the %d base options and no compile gate", len(opts), len(s.baseScoreOpts()))
 	}
 }

@@ -372,3 +372,27 @@ const (
 	SpanRuleUnreached = "unreached" // no test reaches the span: the whole file selection runs anyway
 	SpanRuleFile      = "file"      // no span, or no line evidence: today's behaviour
 )
+
+// FailureParser is an OPTIONAL plugin extension that names the FIRST test the
+// runner reported as failing, read out of that runner's own output.
+//
+// It exists to answer, for a killed mutant, "which test was awake" — a
+// question the scorer could never answer because Jail.RunTest only ever
+// returned a bool. The answer is recorded (scan_mutants.killed_by) so a later
+// reader can see which tests are actually doing the catching, and which parts
+// of a suite have never caught anything.
+//
+// BEST-EFFORT, NEVER GUESSED. The id must be lifted verbatim from the
+// output's own summary. An output with no summary — a passing run, a build
+// failure, a runner corral does not understand — returns "", and the column
+// is stored as NULL. A fabricated or inferred id would name a test that never
+// ran, in a record whose whole product is that its claims are checkable.
+//
+// Deliberately unimplemented for the languages whose runners corral cannot
+// parse precisely (ruby, javascript, typescript), for the same reason
+// FailureDeselector is: a wrong id is worse than no id.
+type FailureParser interface {
+	// FirstFailure returns the first failing test's id, or "" when the output
+	// names none.
+	FirstFailure(output []byte) string
+}

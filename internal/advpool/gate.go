@@ -222,6 +222,15 @@ type JailScorer struct {
 	// know the substrate — see cmd/corral's resolveMutantConcurrency, which is
 	// the single place that decision is made.
 	Concurrency int
+	// FailureParser, when non-nil, names the first test that failed on each
+	// KILLED mutant, read out of the runner's own output (see
+	// adequacy.WithFailureParser). nil — every existing JailScorer{} literal
+	// — records nothing, which is what the ledger held before this existed.
+	//
+	// It is passed in rather than derived from Lang here so that the ONE
+	// place that resolves a plugin for a run also decides whether that
+	// plugin's runner output is parseable at all.
+	FailureParser golang.FailureParser
 }
 
 // scoreOpts is the option list every adequacy.Score call in this file shares.
@@ -232,6 +241,7 @@ func (s JailScorer) baseScoreOpts() []adequacy.ScoreOption {
 	return []adequacy.ScoreOption{
 		adequacy.WithMutantTimeout(s.MutantTimeout),
 		adequacy.WithConcurrency(s.Concurrency),
+		adequacy.WithFailureParser(s.FailureParser),
 	}
 }
 

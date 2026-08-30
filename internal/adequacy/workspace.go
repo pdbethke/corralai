@@ -335,6 +335,21 @@ func (w *WorkspaceRunner) RunTestVerbose(ctx context.Context, files map[string]s
 	return ok, out.String(), err
 }
 
+// RunTestDetailed is RunTestVerbose handing the output back as BYTES, capped
+// to the last maxDetailedOutput of it — the adequacy.DetailedJail contract the
+// scorer uses to name the test that killed a mutant.
+//
+// The tail, not the head: a runner puts its failure SUMMARY last (pytest's
+// "short test summary info", `go test`'s FAIL lines), so a run that printed
+// megabytes of trace still yields the half that can answer "which test".
+//
+// Output rides along even on a non-nil error, exactly as RunTestVerbose does.
+func (w *WorkspaceRunner) RunTestDetailed(ctx context.Context, files map[string]string, testCmd []string) (bool, []byte, error) {
+	var out bytes.Buffer
+	ok, err := w.applyRunRestore(ctx, files, testCmd, &out, &out)
+	return ok, tailBytes(out.Bytes(), maxDetailedOutput), err
+}
+
 // applyRunRestore is the single implementation of this runner's
 // apply/run/restore discipline: overlay files onto the checkout, run cmd in
 // it under the runner's wall-clock bound, and restore via defer — so a

@@ -1501,3 +1501,41 @@ func alignPyPath(path, root string) (string, bool) {
 	}
 	return rel, true
 }
+
+// FirstFailure names the first test pytest's "short test summary info" block
+// reports as failing. pytest prints one `FAILED <id> - <error>` line per
+// failure and one `ERROR <id>` line per test it could not even collect, in
+// the order they happened; the FIRST of either is the answer, with an ERROR
+// prefixed `error:` so a reader is never told a test failed when it never
+// ran at all.
+//
+// The trailing " - <error>" prose is stripped: it is pytest's message, not
+// part of the id.
+//
+// An id must contain "::" — that is what makes it a pytest NODE id rather
+// than prose. A line like `FAILED because the venv was missing` names no
+// test, and returning its first word would put a fabricated id in the
+// ledger. Collection errors that name only a FILE are likewise declined:
+// nothing there identifies a test.
+func (pyPlugin) FirstFailure(output []byte) string {
+	for _, line := range strings.Split(string(output), "\n") {
+		line = strings.TrimSpace(line)
+		var prefix string
+		rest, ok := strings.CutPrefix(line, "FAILED ")
+		if !ok {
+			if rest, ok = strings.CutPrefix(line, "ERROR "); !ok {
+				continue
+			}
+			prefix = "error:"
+		}
+		if id, _, found := strings.Cut(rest, " "); found {
+			rest = id
+		}
+		rest = strings.TrimSpace(rest)
+		if rest == "" || !strings.Contains(rest, "::") {
+			continue
+		}
+		return prefix + rest
+	}
+	return ""
+}

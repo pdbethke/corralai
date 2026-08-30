@@ -528,6 +528,13 @@ func buildScanMutantRows(scanID int64, results []reposcan.FileResult) []scanstor
 				// point of the column is to let a query name the mutants
 				// that ate the dev pass, and a zero would name all of them.
 				DurationMillis: millisOrNil(m.Duration),
+				// WHICH TEST CAUGHT IT — on the killed rows only. A survivor
+				// row has no killer by construction, so the column is not
+				// even written there: an empty string beside a survivor
+				// would read as "we looked and could not tell" instead of
+				// "nothing caught it". Empty here too whenever the runner's
+				// output did not say, and stored as NULL rather than "".
+				KilledBy: m.KilledBy,
 			})
 		}
 		for _, m := range r.Verdict.DevSurvivedMutants {

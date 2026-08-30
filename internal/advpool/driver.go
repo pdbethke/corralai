@@ -294,6 +294,15 @@ type MutantRef struct {
 	// ones. Zero when the run was not timed, and stored as SQL NULL rather
 	// than 0 for exactly that reason (see scanstore.Mutant.DurationMillis).
 	Duration time.Duration
+	// KilledBy is the id of the first test that FAILED on this mutant, when
+	// the language's runner said so in words corral can parse
+	// (adequacy.MutantGrading.KilledBy). It answers "which test was awake",
+	// which the ledger could never say: a kill was recorded as a bare fact.
+	// Empty on a survivor (nothing caught it), on a timeout-kill (no test
+	// reported anything), and for every language whose runner output corral
+	// declines to parse — stored as SQL NULL rather than "" for exactly that
+	// reason, and never inferred from anything but the output.
+	KilledBy string
 }
 
 // toMutantRefs strips MUTANT SOURCE down to the reference scan_mutants needs:
@@ -316,6 +325,7 @@ func toMutantRefsWith(ms []adequacy.Mutant, grading map[string]adequacy.MutantGr
 			refs[i].TestsRun = g.TestsRun
 			refs[i].Rule = g.Rule
 			refs[i].Duration = g.Duration
+			refs[i].KilledBy = g.KilledBy
 		}
 	}
 	return refs

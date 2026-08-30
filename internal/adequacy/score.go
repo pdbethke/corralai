@@ -73,6 +73,11 @@ type scoreConfig struct {
 	// for that mutant instead of the shared testCmd. nil (the default)
 	// reproduces today's behavior byte-for-byte.
 	commandFor CommandFor
+	// failureParser, when set AND the Jail implements DetailedJail, reads the
+	// id of the first failing test out of each KILLED mutant's run output.
+	// nil (the default) leaves every KilledBy empty and keeps the mutant runs
+	// on the plain, output-discarding path they have always used.
+	failureParser lang.FailureParser
 }
 
 // MutantCommand is what CommandFor decides for one mutant.
@@ -110,6 +115,21 @@ func WithMutantTimeout(d time.Duration) ScoreOption {
 // python, ruby, javascript and typescript.
 func WithMutantCompileCheck(cmds [][]string) ScoreOption {
 	return func(c *scoreConfig) { c.mutantCompileCheck = cmds }
+}
+
+// WithFailureParser names, for each KILLED mutant, the first test the runner
+// reported as failing — best effort, and only ever the id the output itself
+// printed (see lang.FailureParser).
+//
+// It changes NOTHING that is measured. The kill/survive verdict is the same
+// run and the same exit code; the only difference is that the run's output is
+// kept and read instead of discarded. Two conditions must BOTH hold or the
+// column simply stays empty: a parser is supplied here, and the Jail
+// implements DetailedJail. A survivor never gets an id, because nothing
+// caught it, and an output whose summary cannot be parsed gets "" rather than
+// a guess.
+func WithFailureParser(p lang.FailureParser) ScoreOption {
+	return func(c *scoreConfig) { c.failureParser = p }
 }
 
 // WithConcurrency scores up to n mutants at once. The default (and anything
@@ -305,6 +325,16 @@ type MutantGrading struct {
 	// the wall clock of the pass they happened in. They are a cost
 	// distribution — which mutants are expensive — never a budget.
 	Duration time.Duration
+	// KilledBy is the id of the FIRST test the runner reported as failing on
+	// this mutant — the test that was awake. Set only for KILLED mutants, and
+	// only when WithFailureParser supplied a parser AND the Jail could hand
+	// back the run's output (DetailedJail); "" everywhere else, including for
+	// a mutant killed by a TIMEOUT, where no test reported anything at all.
+	//
+	// Best effort and never inferred: it is lifted verbatim from the output's
+	// own summary, so an unparsable run stores NULL rather than naming a test
+	// that may not have run.
+	KilledBy string
 }
 
 // VerboseJail is a Jail that can also report what a run PRINTED, not just
@@ -317,6 +347,40 @@ type MutantGrading struct {
 // output.
 type VerboseJail interface {
 	RunTestVerbose(ctx context.Context, files map[string]string, testCmd []string) (bool, string, error)
+}
+
+// maxDetailedOutput bounds what a DetailedJail hands back: the LAST 64 KiB of
+// the run. A failing suite's summary is at the END of its output — pytest's
+// "short test summary info" block and `go test`'s FAIL lines both trail
+// everything else — so the tail is the half that can answer "which test", and
+// a stack-trace-heavy run must not be able to hold megabytes per mutant.
+const maxDetailedOutput = 64 << 10
+
+// DetailedJail is a Jail that can hand back what a run PRINTED as bytes, for
+// the ONE reader that needs them: the language plugin's failure parser, which
+// turns the runner's own summary into the id of the first test that failed
+// (lang.FailureParser). VerboseJail already returns output, but only the
+// baseline and the compile gate go through it; this is the mutant path, and
+// it is separated so that the mutant path's cost is opted into rather than
+// inherited.
+//
+// Optional on purpose, exactly like VerboseJail: a Jail that only implements
+// RunTest keeps working and simply reports no killer. Nothing MEASURED
+// changes either way — the pass/fail that decides the verdict is the same
+// run, the same exit code, the same semantics.
+type DetailedJail interface {
+	RunTestDetailed(ctx context.Context, files map[string]string, testCmd []string) (ok bool, output []byte, err error)
+}
+
+// tailBytes keeps the last n bytes of b, copying rather than aliasing so the
+// runner's buffer can be reused.
+func tailBytes(b []byte, n int) []byte {
+	if len(b) > n {
+		b = b[len(b)-n:]
+	}
+	out := make([]byte, len(b))
+	copy(out, b)
+	return out
 }
 
 // KillRate is the adequacy score: the fraction of mutants the test caught.
@@ -373,6 +437,21 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 
 	run := func(rctx context.Context, code string) (bool, error) {
 		return runCmd(rctx, code, testCmd)
+	}
+
+	// THE MUTANT PATH, when — and only when — both halves of the killed_by
+	// feature are present: a parser to read the output and a jail that can
+	// hand it over. Everything else about the run is identical to runCmd's,
+	// including which exit code means killed.
+	dj, detailed := j.(DetailedJail)
+	nameKiller := cfg.failureParser != nil && detailed
+	runCmdDetailed := func(rctx context.Context, code string, cmd []string) (bool, []byte, error) {
+		files := make(map[string]string, len(base)+1)
+		for k, v := range base {
+			files[k] = v
+		}
+		files[codePath] = code
+		return dj.RunTestDetailed(rctx, files, cmd)
 	}
 
 	// runCmdVerbose keeps the checker's OUTPUT when the Jail can report it.
@@ -525,7 +604,22 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 		// verdict. Recorded even when that run errors or times out, so a
 		// mutant that ate its whole budget says so.
 		mstart := time.Now()
-		passed, err := runCmd(mctx, m.Code, cmd)
+		var (
+			passed   bool
+			err      error
+			killedBy string
+		)
+		if nameKiller {
+			var out []byte
+			passed, out, err = runCmdDetailed(mctx, m.Code, cmd)
+			if err == nil && !passed {
+				// A kill, and the output is the only thing entitled to say
+				// which test made it one. "" when the summary says nothing.
+				killedBy = cfg.failureParser.FirstFailure(out)
+			}
+		} else {
+			passed, err = runCmd(mctx, m.Code, cmd)
+		}
 		grading.Duration = time.Since(mstart)
 		cancel()
 		if err != nil {
@@ -575,6 +669,9 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 			return
 		}
 		// test PASSED on a violation => it did NOT catch it
+		if !passed {
+			grading.KilledBy = killedBy
+		}
 		outcomes[i] = outcome{killed: !passed, grading: grading}
 	}
 

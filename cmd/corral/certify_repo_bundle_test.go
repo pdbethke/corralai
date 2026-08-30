@@ -58,7 +58,11 @@ func twoFileLedgerRows(t *testing.T) (string, []scanstore.File, []scanstore.Muta
 				// mutant of one file agrees. That hash — not a re-read of the
 				// checkout — is the file's parent_sha256.
 				DevKilledMutants: []advpool.MutantRef{
-					{ID: "m1", ParentSHA256: auditedParentSHA, TestsRun: 4, Rule: "lines", Duration: 54 * time.Second},
+					{ID: "m1", ParentSHA256: auditedParentSHA, TestsRun: 4, Rule: "lines", Duration: 54 * time.Second,
+						// A REAL id, so the walk below actually walks
+						// killed_by: an empty one compares "" to "" and a
+						// dropped mapping passes.
+						KilledBy: "tests/test_a.py::test_scale"},
 				},
 				DevSurvivedMutants: []advpool.MutantRef{
 					{ID: "m2", ParentSHA256: auditedParentSHA, TestsRun: 3, Rule: "lines", Duration: 3 * time.Minute},
@@ -497,4 +501,40 @@ func TestWarehouseRowsSHA256IsDeterministic(t *testing.T) {
 	if c != a {
 		t.Error("warehouseRowsSha256 changed when a statement hash was attached — the statement's hash would then depend on itself")
 	}
+}
+
+// killed_by has to survive BOTH hops — the verdict's MutantRef into the
+// ledger row, and the ledger row into the warehouse bundle. It is the one
+// column that says which test was awake, and a drop anywhere on that path
+// leaves the warehouse with a kill it cannot attribute.
+func TestKilledByReachesTheWarehouseRow(t *testing.T) {
+	_, _, mutants := twoFileLedgerRows(t)
+
+	var killed *scanstore.Mutant
+	for i := range mutants {
+		if mutants[i].MutantID == "m1" {
+			killed = &mutants[i]
+		}
+		if mutants[i].Outcome == "survived" && mutants[i].KilledBy != "" {
+			t.Errorf("survivor %s carries killed_by %q — nothing caught it", mutants[i].MutantID, mutants[i].KilledBy)
+		}
+	}
+	if killed == nil {
+		t.Fatal("the killed mutant is missing from the ledger rows")
+	}
+	if killed.KilledBy != "tests/test_a.py::test_scale" {
+		t.Fatalf("ledger row killed_by = %q, want the verdict's own id", killed.KilledBy)
+	}
+
+	rows := buildMutantRows(mutants, 7, bundleMeta{Repo: "acme/widgets", RunURL: "https://example.test/1"})
+	for _, r := range rows {
+		if r.MutantID != "m1" {
+			continue
+		}
+		if r.KilledBy != "tests/test_a.py::test_scale" {
+			t.Fatalf("bundle row killed_by = %q, want the ledger's own id", r.KilledBy)
+		}
+		return
+	}
+	t.Fatal("the killed mutant is missing from the bundle rows")
 }

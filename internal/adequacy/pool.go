@@ -448,6 +448,20 @@ func (p *WorkspacePool) RunTestVerbose(ctx context.Context, files map[string]str
 	return r.RunTestVerbose(ctx, files, testCmd)
 }
 
+// RunTestDetailed is RunTestVerbose's byte-returning sibling, borrowed the
+// same way. The pool implements it for the same reason it implements
+// RunTestVerbose: substituting a pool for a WorkspaceRunner must never
+// silently cost a caller a capability — here, the id of the test that killed
+// each mutant, which would simply go missing on every parallel run.
+func (p *WorkspacePool) RunTestDetailed(ctx context.Context, files map[string]string, testCmd []string) (bool, []byte, error) {
+	r, release, err := p.borrow(ctx)
+	if err != nil {
+		return false, nil, err
+	}
+	defer release()
+	return r.RunTestDetailed(ctx, files, testCmd)
+}
+
 // Enumerate borrows a tree exactly as RunTest does, then runs there.
 //
 // Borrowing is NOT optional even though enumeration is nominally a pre-flight.

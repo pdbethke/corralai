@@ -1637,6 +1637,18 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 			w.cleanup = func() {}
 		}
 	}()
+	// WHICH TEST WAS AWAKE. The language plugin either can read its runner's
+	// failure summary or it cannot; there is no middle answer, and a plugin
+	// that does not implement lang.FailureParser leaves every killed_by NULL
+	// rather than having an id guessed for it. Resolved ONCE here, off the
+	// same in.langName every other plugin lookup in this function uses, and
+	// handed to all three scorer wirings so no substrate silently drops the
+	// column.
+	var failureParser lang.FailureParser
+	if plug, ok := lang.ByName(in.langName); ok {
+		failureParser, _ = plug.(lang.FailureParser)
+	}
+
 	if in.substrate == substrateWorkspace {
 		// The runner IS the isolation boundary — an ephemeral VM with the repo
 		// checked out and the toolchain installed. Nothing to seed, nothing to
@@ -1774,7 +1786,7 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		// has ONE tree, and a scorer told to run six mutants at once against
 		// it would queue five of them behind the borrow channel for the whole
 		// audit. The number that scores must be the number that exists.
-		w.scorer = advpool.JailScorer{Jail: pool, BaseFiles: base, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Concurrency: pool.Trees(), Lang: in.langName, Selection: in.selection}
+		w.scorer = advpool.JailScorer{Jail: pool, BaseFiles: base, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Concurrency: pool.Trees(), Lang: in.langName, Selection: in.selection, FailureParser: failureParser}
 		w.validator = advpool.JailValidator{Jail: pool, BaseFiles: base, DevTestPath: w.devTestKey}
 		w.jailEnum = advpool.JailEnumerator{Jail: pool, BaseFiles: base}
 		// w.depBinds stays nil: there is nothing to bind read-only when the
@@ -1828,7 +1840,7 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		// RunSpec.Matrix, so wiring it here costs nothing when --matrix is off
 		// (the flag is the real gate).
 		enumerator := adequacy.NewEnumerator(in.iso, in.timeout, adequacy.WithReadOnlyBinds(depBinds))
-		w.scorer = advpool.JailScorer{Jail: jail, BaseFiles: repoFiles, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection}
+		w.scorer = advpool.JailScorer{Jail: jail, BaseFiles: repoFiles, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, FailureParser: failureParser}
 		w.validator = advpool.JailValidator{Jail: jail, BaseFiles: repoFiles, DevTestPath: w.devTestKey}
 		w.jailEnum = advpool.JailEnumerator{Jail: enumerator, BaseFiles: repoFiles}
 		if len(depBinds) > 0 {
@@ -1843,7 +1855,7 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		w.devTestKey = filepath.Base(in.testPath)
 		jail := adequacy.NewJail(in.iso, in.timeout)
 		enumerator := adequacy.NewEnumerator(in.iso, in.timeout)
-		w.scorer = advpool.JailScorer{Jail: jail, MutantTimeout: in.testTimeout, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection}
+		w.scorer = advpool.JailScorer{Jail: jail, MutantTimeout: in.testTimeout, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, FailureParser: failureParser}
 		w.validator = advpool.JailValidator{Jail: jail}
 		w.jailEnum = advpool.JailEnumerator{Jail: enumerator}
 	}

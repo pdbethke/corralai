@@ -47,6 +47,34 @@ func TestPrintWeakFileNamesTheMeasurement(t *testing.T) {
 	if !strings.Contains(b.String(), "(coverage-lines; no mutant graded)") {
 		t.Errorf("a per-mutant run that graded nothing must say so: %q", b.String())
 	}
+
+	// The rule breakdown is what says how much of the narrowing was real.
+	// A run reported as "coverage-lines" whose mutants were mostly graded by
+	// the whole file selection (static, unreached, file) narrowed almost
+	// nothing, and the line that prints only the spread lets that pass as a
+	// per-mutant measurement.
+	b.Reset()
+	printWeakFile(&b, reposcan.WeakFile{
+		Path: "pkg/a.py", KillRate: 0.5, SelectionMethod: "coverage-lines",
+		SelectedTests: 234, SuiteTests: 620,
+		PerMutant: true, TestsPerMutant: &advpool.TestsPerMutantSpread{Min: 3, Median: 9, Max: 41},
+		Rules: map[string]int{"lines": 30, "static": 4, "unreached": 1, "file": 2},
+	})
+	if !strings.Contains(b.String(), "(coverage-lines; 4 static, 1 unreached, 2 file)") {
+		t.Errorf("the non-lines rules must be broken out, in a stable order: %q", b.String())
+	}
+	// Every mutant narrowed by its own lines: nothing to qualify, and the
+	// parenthetical is exactly what it always was.
+	b.Reset()
+	printWeakFile(&b, reposcan.WeakFile{
+		Path: "pkg/a.py", KillRate: 0.5, SelectionMethod: "coverage-lines",
+		SelectedTests: 234, SuiteTests: 620,
+		PerMutant: true, TestsPerMutant: &advpool.TestsPerMutantSpread{Min: 3, Median: 9, Max: 41},
+		Rules: map[string]int{"lines": 30},
+	})
+	if !strings.HasSuffix(strings.TrimRight(b.String(), "\n"), "(coverage-lines)") {
+		t.Errorf("an all-lines run prints no breakdown: %q", b.String())
+	}
 }
 
 func TestMinKillRateFailsAnUncoveredFile(t *testing.T) {

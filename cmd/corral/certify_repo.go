@@ -2159,6 +2159,33 @@ func orderExclusionsForListing(excl []reposcan.Exclusion) []reposcan.Exclusion {
 	return out
 }
 
+// nonLineSpanRules are the rules under which a mutant did NOT get a narrowed
+// command, in the order the breakdown prints them. Listed explicitly rather
+// than derived by ranging the map: the order must be stable across runs, and
+// "lines" — the case where the narrowing worked — is deliberately absent,
+// because a breakdown that printed it would bury the qualifier in the number
+// it qualifies.
+var nonLineSpanRules = []string{lang.SpanRuleStatic, lang.SpanRuleUnreached, lang.SpanRuleFile}
+
+// selectionRuleBreakdown renders the mutants that were NOT narrowed by their
+// own lines: "; 4 static, 1 unreached, 2 file", or "" when every mutant was.
+// A "coverage-lines" run whose mutants mostly ran the file's whole selection
+// narrowed almost nothing, and the spread alone cannot say that — 3 to 41
+// tests per mutant reads the same whether the 41s were measured or were the
+// file's selection standing in for evidence nobody had.
+func selectionRuleBreakdown(rules map[string]int) string {
+	var parts []string
+	for _, r := range nonLineSpanRules {
+		if n := rules[r]; n > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", n, r))
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "; " + strings.Join(parts, ", ")
+}
+
 // printWeakFile prints one "weakest files" line, including the marker and
 // the disambiguating proven-missed count — factored out so the truncation
 // fallback (F4, below) renders a byte-identical line for a file that falls
@@ -2218,9 +2245,10 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 		// to take 234 for the number every mutant survived, when the true
 		// figure may be 3. The method is the verdict's own, never stamped
 		// here, so the label cannot outlive the measurement it names.
-		fmt.Fprintf(w, "   graded by %d of %d tests — %d to %d per mutant, median %d (%s)",
+		fmt.Fprintf(w, "   graded by %d of %d tests — %d to %d per mutant, median %d (%s%s)",
 			f.SelectedTests, f.SuiteTests,
-			f.TestsPerMutant.Min, f.TestsPerMutant.Max, f.TestsPerMutant.Median, f.SelectionMethod)
+			f.TestsPerMutant.Min, f.TestsPerMutant.Max, f.TestsPerMutant.Median,
+			f.SelectionMethod, selectionRuleBreakdown(f.Rules))
 	case f.SelectionMethod != "" && !f.Uncovered && f.PerMutant:
 		// Per-mutant, but no mutant was graded — every one was rejected by
 		// the compile gate, which leaves the spread at {0,0,0}. "0 to 0 per

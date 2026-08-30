@@ -105,6 +105,13 @@ type WeakFile struct {
 	// MeasuredSpread rather than testing the numbers.
 	PerMutant      bool
 	TestsPerMutant *advpool.TestsPerMutantSpread
+	// Rules mirrors advpool.Verdict.TestSelection.Rules: how many mutants got
+	// their command by each rule (lang.SpanRule*). The spread says how much
+	// the narrowing narrowed; this says how much of it was narrowing at all —
+	// a run whose mutants are mostly "static" or "unreached" ran the file's
+	// whole selection for them, and only the breakdown says so. nil on a run
+	// that did not grade per mutant.
+	Rules map[string]int
 	// Uncovered mirrors advpool.Verdict.Uncovered: the evidence ran and found
 	// NO test executing this file. Its kill rate is not a measurement of the
 	// suite's strength — nothing graded the file — so a caller must withhold
@@ -342,6 +349,7 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 			// measurement unless the report carries the spread.
 			PerMutant:      r.Verdict.TestSelection.PerMutant,
 			TestsPerMutant: r.Verdict.TestSelection.TestsPerMutant,
+			Rules:          r.Verdict.TestSelection.Rules,
 			Uncovered:      r.Verdict.Uncovered,
 		})
 	}

@@ -126,9 +126,9 @@ Haiku critiquing, say) off that single `ANTHROPIC_API_KEY`. Naming
 `GOOGLE_API_KEY`) routes the critic to Gemini via the OpenAI-compatible Google
 endpoint — a real cross-vendor critic, writer and mutant-generator unchanged. A
 missing key fails the run closed instead of silently falling back. It supports
-Go, Python (pytest), Ruby (minitest/RSpec), JavaScript (node:test), and
-TypeScript (tsc + node:test) — the language is inferred from `--code`'s
-extension.
+Go, Python (pytest), Ruby (minitest/RSpec), JavaScript (node:test),
+TypeScript (tsc + node:test), and PHP (PHPUnit) — the language is inferred
+from `--code`'s extension.
 
 **It always runs sandboxed.** `bwrap` is the Linux default; `--jail container`
 falls back to docker/podman; macOS uses `sandbox-exec`. There's no unsandboxed

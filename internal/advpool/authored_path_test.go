@@ -4,6 +4,7 @@ package advpool
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
@@ -140,6 +141,60 @@ func TestScoreAuthoredReport_OverlaysAtTheRelocatedPath(t *testing.T) {
 	}
 	if _, wrong := ws[advPoolTestPath(codePath)]; wrong {
 		t.Fatalf("authored test still overlaid at the uncollected sibling %q", advPoolTestPath(codePath))
+	}
+}
+
+// TestScoreAuthoredReport_LandsBesideAnEvidenceOnlyCoveringTest is Task 2's
+// remaining piece of the F1 chain, proved through the SAME fake-jail seam as
+// TestScoreAuthoredReport_OverlaysAtTheRelocatedPath above — but with a
+// codePath/devTest pair that bears NO filename relation, mirroring an
+// evidence-only candidate (reposcan.Candidate.TestPath == "", DevTestPath
+// set from CoveringTestPath instead — see auditInputFor's
+// orDefault(j.TestPath, j.CoveringTestPath)). authoredTestPath's relocation
+// logic is purely a function of the devTestPath STRING, so nothing here
+// needs to know the string's provenance; this pins that the mechanism the
+// evidence-only path now depends on is exercised by execution, not just
+// asserted by reasoning about a name-paired fixture.
+func TestScoreAuthoredReport_LandsBesideAnEvidenceOnlyCoveringTest(t *testing.T) {
+	// No filename convention pairs mypkg/core.py with tests/test_smoke.py —
+	// the exact shape TestCertifyRepoEvidenceOnlyCandidateActuallyGrades
+	// uses for an evidence-only candidacy fixture.
+	const codePath = "mypkg/core.py"
+	const coveringTest = "tests/test_smoke.py"
+	want := authoredTestPath(codePath, coveringTest, nil)
+	if filepath.Dir(want) != "tests" {
+		t.Fatalf("authoredTestPath(%q, %q) = %q, want it sited beside the covering test in tests/", codePath, coveringTest, want)
+	}
+
+	jail := &wellBehavedJail{
+		codePath: codePath,
+		testPath: want, // the canary is only "seen" at the relocated path
+		passOn:   map[string]bool{"COMPLIANT": true, "MUTANT": false},
+	}
+	s := JailScorer{
+		Jail:        jail,
+		BaseFiles:   map[string]string{"pyproject.toml": "[tool.pytest.ini_options]\ntestpaths = [\"tests\"]\n"},
+		DevTestPath: coveringTest,
+	}
+
+	mutants := []adequacy.Mutant{{ID: "m1", Replace: "MUTANT"}}
+	rep, err := s.ScoreAuthoredReport(context.Background(), codePath, "COMPLIANT", "AUTHORED-TEST", mutants, "pytest")
+	if err != nil {
+		t.Fatalf("ScoreAuthoredReport: %v", err)
+	}
+	if !rep.CanaryKilled {
+		t.Fatal("positive control did not react at the relocated path — the authored test is still being written somewhere the project's own runner never collects")
+	}
+	if len(rep.Killed) != 1 {
+		t.Fatalf("genuine proven kill did not come through: %+v", rep)
+	}
+
+	ws := s.authoredWorkspace(codePath, "AUTHORED-TEST")
+	if ws[want] != "AUTHORED-TEST" {
+		t.Fatalf("authored test not overlaid beside the covering test at %q; keys=%v", want, wsKeys(ws))
+	}
+	if _, wrong := ws[advPoolTestPath(codePath)]; wrong {
+		t.Fatalf("authored test still overlaid at the uncollected sibling %q, not beside %q", advPoolTestPath(codePath), coveringTest)
 	}
 }
 

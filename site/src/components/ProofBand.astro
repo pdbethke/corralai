@@ -50,6 +50,7 @@ const audits = [
     <p class="cta-label">Run it yourself — one command, off a single <code>ANTHROPIC_API_KEY</code>:</p>
     <pre class="cmd">corral certify --local --code validator.py \
   --goal "reject passwords under 8 chars, or missing a digit or an uppercase letter" \
+  --writer-model claude-sonnet-5 --mutant-model claude-sonnet-5 --critic-model claude-haiku-4-5 \
   -- pytest</pre>
     <p class="cta-foot">
       Every number above is a real signed record you can verify offline —

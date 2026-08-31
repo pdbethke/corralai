@@ -84,10 +84,10 @@ pipeline. See [The task queue + verify gate](/docs/concepts/queue-and-verify/).
 
 ## Missions — read-only tracking, not a build pipeline
 
-Every audit run (adversarial pool, repo-work) is tracked as a mission record
-internally, so the same durable history + replay applies to it — there is no
-tool that turns a directive into a mission to build; `create_mission` doesn't
-exist. These are the observability surface over that tracking record:
+A mission is the tracked record of one audit run. Every audit run
+(adversarial pool, repo-work) is tracked as a mission record internally, so
+the same durable history + replay applies to it — there is no tool that
+turns a directive into a mission to build; `create_mission` doesn't exist. These are the observability surface over that tracking record:
 
 - **`mission_status`** / **`list_missions`** — one run's status, or recent runs and theirs.
 - **`resolve_review`** / **`pause_mission`** / **`resume_mission`** / **`cancel_mission`** — operator controls over a run's lifecycle.

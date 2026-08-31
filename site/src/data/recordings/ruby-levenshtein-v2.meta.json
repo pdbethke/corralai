@@ -1,0 +1,13 @@
+{
+  "directive": "adversarial pool · lib/text/levenshtein.rb (threedaymonk/text) — UTF-8 edit distance against the gem's own minitest suite via rake",
+  "task_count": 6,
+  "done_task_count": 6,
+  "finding_count": 2,
+  "duration_seconds": 140,
+  "models": ["gemini-3.6-flash", "gemini-3.7-flash"],
+  "platform": {
+    "inference": "vendor cloud — Gemini 3.6 Flash planting and writing, a decorrelated Gemini 3.7 Flash critic",
+    "host": "linux/amd64 · bwrap jail · --repo-dir"
+  },
+  "hero_note": "NEEDS-REVIEW: 7 of 9 faults killed, and one of the two survivors PROVEN catchable by an authored test the suite lacked. An earlier attempt was refused free of charge — the test command named a single file, so corral's own test could never have been collected."
+}

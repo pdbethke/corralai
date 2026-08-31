@@ -1,0 +1,342 @@
+{
+  "events": [
+    {
+      "ts": 1,
+      "kind": "pool_subject",
+      "actor": "corral-advpool",
+      "subject": "sportspicker_core/awards.py",
+      "detail": {
+        "code": "\"\"\"\nThe award arithmetic — the pot, the shares, the ranks.\n\nPure by design, and deliberately so. This is the code the whole cross-sport\ndesign rests on: a contest contributes exactly its budget, whatever the\nstrategy does internally. Keeping it free of the database means the invariant\ncan be checked directly, and adversarially, without standing anything up.\n\nNothing here imports SQLAlchemy or touches a session. The service supplies\nalready-loaded scores and persists what comes back.\n\"\"\"\nfrom dataclasses import dataclass\n\n\n@dataclass(frozen=True)\nclass Award:\n    \"\"\"One member's outcome for one round.\"\"\"\n\n    membership_id: int\n    raw_score: float\n    tiebreaker_total: int | None\n    rank_in_round: int\n    points_awarded: float\n\n\ndef competition_ranks(scores) -\u003e dict[int, int]:\n    \"\"\"\n    Rank members by raw score, ties sharing a rank.\n\n    Competition ranking (\"1224\"): two members tied for first both place\n    first and the next places third. Assigning them distinct ranks would\n    contradict the tie-splitting the strategies deliberately perform.\n    \"\"\"\n    ordered = sorted(scores, key=lambda s: s.raw_points, reverse=True)\n    positions: dict[int, int] = {}\n    rank = 0\n    previous = None\n    for index, score in enumerate(ordered):\n        if score.raw_points != previous:\n            rank = index + 1\n            previous = score.raw_points\n        positions[score.membership_id] = rank\n    return positions\n\n\ndef effective_pot(pot: float, scores, params: dict) -\u003e float:\n    \"\"\"\n    Shrink or void the pot when too few members scored.\n\n    ``min_participants`` counts members who *scored*, not members who merely\n    played. Because weights are normalised, a non-scorer already takes nothing\n    from the pot, so the risk this guards against is a tiny handful of scorers\n    splitting a pot meant for a much larger field — two of forty, say.\n    Counting pickers would not guard against that at all.\n    \"\"\"\n    minimum = int(params.get(\"min_participants\", 0))\n    if not minimum:\n        return pot\n\n    scoring = sum(1 for s in scores if s.raw_points \u003e 0)\n    if scoring \u003e= minimum:\n        return pot\n\n    mode = params.get(\"min_participants_mode\", \"scale\")\n    return 0.0 if mode == \"void\" else pot * (scoring / minimum)\n\n\ndef award_round(scores, weights: dict[int, float], pot: float, params: dict,\n                is_baseline: bool = False) -\u003e list[Award]:\n    \"\"\"\n    Turn one round's scores and strategy weights into awards.\n\n    Weights are relative; they are normalised into shares of the pot here, so\n    a contest contributes exactly its budget no matter what scale a strategy\n    emits. Two behaviours carry most of the subtlety:\n\n    * When every weight is zero — an all-zero-scoring field under ``share`` or\n      ``equal`` — nothing differentiates the members, so the pot is split\n      evenly rather than silently going unawarded. A non-baseline strategy\n      must always contribute its full (possibly scaled) pot to a non-empty\n      field. That is the pot-exactness invariant.\n    * A baseline strategy bypasses budget scaling entirely and pays raw\n      points. That unnormalised behaviour is precisely what it exists to\n      measure, so it must not be \"fixed\".\n    \"\"\"\n    if not scores:\n        return []\n\n    total_weight = sum(weights.values())\n    pot_after_minimum = effective_pot(pot, scores, params)\n    positions = competition_ranks(scores)\n    even_split = pot_after_minimum / len(scores)\n\n    awards = []\n    for score in scores:\n        weight = weights.get(score.membership_id, 0.0)\n        if is_baseline:\n            points = score.raw_points\n        elif total_weight \u003e 0:\n            points = (weight / total_weight) * pot_after_minimum\n        else:\n            points = even_split\n\n        awards.append(Award(\n            membership_id=score.membership_id,\n            raw_score=score.raw_points,\n            tiebreaker_total=score.tiebreaker_total,\n            rank_in_round=positions[score.membership_id],\n            points_awarded=points,\n        ))\n    return awards\n\n\ndef pot_for(budget: float, round_count: int) -\u003e float:\n    \"\"\"\n    A round's share of its contest's budget.\n\n    The divisor is every round in the contest, not merely the played ones, so\n    a round's value is knowable in advance and never repriced mid-season.\n    Unplayed rounds simply award nothing, and the contest reaches its full\n    budget once they have all been played.\n\n    Both boundaries carry weight, and neither is an edge case here. A contest\n    of one round pays its whole budget in that round: a fight card sits beside\n    an eighteen-round season precisely so it can, and a guard that swallowed it\n    would make the shorter contest count for nothing. A contest of no rounds\n    pays nothing at all rather than dividing by zero.\n    \"\"\"\n    if round_count \u003c= 0:\n        return 0.0\n    return float(budget) / round_count\n",
+        "code_path": "sportspicker_core/awards.py",
+        "dev_test_code": "\"\"\"\nThe award arithmetic.\n\nThis is the invariant the whole cross-sport design rests on: a contest\ncontributes exactly its budget, whatever the strategy does internally. These\ntests run with no database, so the claim can be checked directly rather than\ninferred from standings.\n\"\"\"\nfrom dataclasses import dataclass\n\nimport pytest\n\nfrom sportspicker_core import (\n    Award, award_round, competition_ranks, effective_pot, pot_for,\n)\nfrom sportspicker_core import normalization_registry\n\nTOLERANCE = 1e-3          # relative; Numeric(12,4) rounding accumulates\nRANK_PARAMS = {\"points_table\": [25, 18, 15], \"tail_value\": 0}\n\n\n@dataclass(frozen=True)\nclass Score:\n    \"\"\"Stands in for a RoundScore without importing the ORM-adjacent module.\"\"\"\n\n    membership_id: int\n    raw_points: float\n    wins: int = 0\n    tiebreaker_total: int | None = None\n\n\ndef field(*points: float) -\u003e list[Score]:\n    return [Score(index + 1, value) for index, value in enumerate(points)]\n\n\ndef weigh(slug: str, scores, params: dict) -\u003e dict[int, float]:\n    return normalization_registry.get(slug).weigh_round(scores, params)\n\n\nclass TestPotFor:\n\n    def test_divides_the_budget_across_every_round(self):\n        assert pot_for(1000, 4) == pytest.approx(250)\n\n    def test_a_contest_with_no_rounds_awards_nothing_rather_than_raising(self):\n        assert pot_for(1000, 0) == 0.0\n        assert pot_for(1000, -1) == 0.0\n\n    def test_a_single_round_contest_pays_its_whole_budget_in_that_round(self):\n        \"\"\"\n        The one-round case is the guard's boundary, and the shape the library\n        exists to support alongside a season: a fight card is one round, and it\n        must contribute its whole budget or it silently counts for nothing\n        beside an 18-round league.\n\n        Added after an audit: widening the empty-contest guard from\n        ``round_count \u003c= 0`` to ``\u003c= 1`` passed the whole suite, because every\n        other case here uses four rounds or none.\n        \"\"\"\n        assert pot_for(1000, 1) == pytest.approx(1000)\n\n\nclass TestCompetitionRanks:\n\n    def test_distinct_scores_rank_in_order(self):\n        assert competition_ranks(field(9, 5, 1)) == {1: 1, 2: 2, 3: 3}\n\n    def test_a_tie_shares_a_rank_and_skips_the_next(self):\n        \"\"\"Competition ranking: 1-2-2-4, never 1-2-3-4 for tied members.\"\"\"\n        assert competition_ranks(field(9, 5, 5, 1)) == {1: 1, 2: 2, 3: 2, 4: 4}\n\n    def test_a_three_way_tie_at_the_top(self):\n        assert competition_ranks(field(7, 7, 7, 2)) == {1: 1, 2: 1, 3: 1, 4: 4}\n\n    def test_everyone_tied_shares_first(self):\n        assert competition_ranks(field(3, 3, 3)) == {1: 1, 2: 1, 3: 1}\n\n\nclass TestPotExactness:\n    \"\"\"The core invariant, checked directly rather than through standings.\"\"\"\n\n    @pytest.mark.parametrize(\"slug,params\", [\n        (\"rank\", RANK_PARAMS),\n        (\"share\", {}),\n        (\"equal\", {}),\n    ])\n    def test_a_contest_contributes_exactly_its_pot(self, slug, params):\n        scores = field(9, 5, 1)\n\n        awards = award_round(scores, weigh(slug, scores, params), 1000.0, params)\n\n        assert sum(a.points_awarded for a in awards) == pytest.approx(1000, rel=TOLERANCE)\n\n    @pytest.mark.parametrize(\"slug,params\", [\n        (\"rank\", RANK_PARAMS),\n        (\"share\", {}),\n        (\"equal\", {}),\n    ])\n    def test_an_all_zero_field_still_receives_the_whole_pot(self, slug, params):\n        \"\"\"\n        Nothing separates the members, so the pot is split evenly rather than\n        silently going unawarded. `share` and `equal` emit all-zero weights\n        here; `rank` ties everyone. All three must still pay out in full.\n        \"\"\"\n        scores = field(0, 0, 0)\n\n        awards = award_round(scores, weigh(slug, scores, params), 900.0, params)\n\n        assert sum(a.points_awarded for a in awards) == pytest.approx(900, rel=TOLERANCE)\n        assert all(a.points_awarded == pytest.approx(300, rel=TOLERANCE) for a in awards)\n\n    def test_holds_for_a_large_field(self):\n        \"\"\"Rounding is per-row, so error accumulates with the field size.\"\"\"\n        scores = field(*range(50))\n        params = {\"points_table\": list(range(50, 0, -1)), \"tail_value\": 0}\n\n        awards = award_round(scores, weigh(\"rank\", scores, params), 1000.0, params)\n\n        assert sum(a.points_awarded for a in awards) == pytest.approx(1000, rel=TOLERANCE)\n\n    def test_a_single_member_takes_the_whole_pot(self):\n        scores = field(4)\n\n        awards = award_round(scores, weigh(\"rank\", scores, RANK_PARAMS), 500.0, RANK_PARAMS)\n\n        assert awards[0].points_awarded == pytest.approx(500, rel=TOLERANCE)\n\n    def test_an_empty_field_awards_nothing_and_does_not_divide_by_zero(self):\n        assert award_round([], {}, 1000.0, {}) == []\n\n\nclass TestBaseline:\n\n    def test_a_baseline_pays_raw_points_and_ignores_the_pot(self):\n        \"\"\"\n        That unnormalised behaviour is precisely what a baseline exists to\n        measure, so it must survive rather than be \"corrected\".\n        \"\"\"\n        scores = field(7, 3)\n\n        awards = award_round(\n            scores, weigh(\"raw\", scores, {}), 1000.0, {}, is_baseline=True\n        )\n\n        assert [a.points_awarded for a in awards] == [7, 3]\n        assert sum(a.points_awarded for a in awards) != pytest.approx(1000)\n\n\nclass TestMinimumParticipants:\n\n    def test_off_by_default(self):\n        scores = field(5, 0, 0)\n\n        assert effective_pot(1000.0, scores, {}) == 1000.0\n\n    def test_scale_shrinks_the_pot_in_proportion(self):\n        \"\"\"Two of a required four scored, so half the pot is at stake.\"\"\"\n        scores = field(5, 5, 0, 0)\n\n        assert effective_pot(1000.0, scores, {\"min_participants\": 4}) == pytest.approx(500)\n\n    def test_void_awards_nothing(self):\n        scores = field(5, 0, 0)\n\n        pot = effective_pot(\n            1000.0, scores,\n            {\"min_participants\": 3, \"min_participants_mode\": \"void\"},\n        )\n\n        assert pot == 0.0\n\n    def test_a_full_field_is_untouched(self):\n        scores = field(5, 4, 3)\n\n        assert effective_pot(1000.0, scores, {\"min_participants\": 3}) == 1000.0\n\n    def test_a_field_exactly_on_the_minimum_is_met_not_missed(self):\n        \"\"\"\n        The minimum is a floor to reach, not a bar to clear: a field landing\n        exactly on it has met the requirement and keeps the whole pot.\n\n        This has to be asserted in VOID mode. The scale-mode case above also\n        sits exactly on the minimum, but scaling by ``scoring / minimum`` is\n        1.0 there, so it returns the full pot whether the comparison is ``\u003e=``\n        or ``\u003e`` — it reads as coverage of this boundary while discriminating\n        nothing. Voiding is where the two answers diverge: the whole pot, or\n        none of it.\n\n        Added after an audit, which flipped that comparison and watched the\n        suite pass.\n        \"\"\"\n        scores = field(5, 4, 3)\n        params = {\"min_participants\": 3, \"min_participants_mode\": \"void\"}\n\n        assert effective_pot(1000.0, scores, params) == 1000.0\n\n    def test_it_counts_scorers_not_pickers(self):\n        \"\"\"\n        The knob guards against a handful of scorers splitting a pot meant for\n        a much larger field. Counting everyone present would not guard against\n        that at all, since non-scorers already take nothing.\n        \"\"\"\n        scores = field(5, 0, 0, 0, 0)      # five present, one scoring\n\n        pot = effective_pot(1000.0, scores, {\"min_participants\": 5})\n\n        assert pot == pytest.approx(200)\n\n    def test_scaling_still_distributes_exactly_the_reduced_pot(self):\n        params = {\"min_participants\": 4, \"points_table\": [25, 18, 15], \"tail_value\": 0}\n        scores = field(9, 5, 0, 0)\n\n        awards = award_round(scores, weigh(\"rank\", scores, params), 1000.0, params)\n\n        assert sum(a.points_awarded for a in awards) == pytest.approx(500, rel=TOLERANCE)\n\n\nclass TestAwardShape:\n\n    def test_awards_carry_the_inputs_needed_to_explain_a_placing(self):\n        scores = [Score(7, 9.0, wins=3, tiebreaker_total=4)]\n\n        awards = award_round(scores, weigh(\"rank\", scores, RANK_PARAMS), 100.0, RANK_PARAMS)\n\n        assert isinstance(awards[0], Award)\n        assert awards[0].membership_id == 7\n        assert awards[0].raw_score == 9.0\n        assert awards[0].tiebreaker_total == 4\n        assert awards[0].rank_in_round == 1\n\n    def test_a_member_missing_from_the_weights_scores_nothing_but_stays_ranked(self):\n        \"\"\"\n        An enrolled member the strategy did not weigh still appears, on zero\n        points, in their rightful place.\n\n        The second member must SCORE for this to prove anything. It used to\n        read ``field(9, 0)``, and an audit's critic pointed out the assertion\n        could not fail: a member on zero raw points takes nothing from a\n        normalised pot regardless of whether absent-from-weights is handled at\n        all. Giving them four points makes the claim real — they earned\n        something, the strategy left them unweighted, and the award must still\n        be zero while the ranking still counts them.\n        \"\"\"\n        scores = field(9, 4)\n        weights = {1: 25.0}            # the second member has no weight at all\n\n        awards = award_round(scores, weights, 100.0, {})\n\n        by_member = {a.membership_id: a for a in awards}\n        assert by_member[2].points_awarded == 0.0\n        assert by_member[2].rank_in_round == 2\n        # And the pot still lands in full on the member who was weighed.\n        assert sum(a.points_awarded for a in awards) == pytest.approx(100.0)\n        assert by_member[1].points_awarded == pytest.approx(100, rel=TOLERANCE)\n",
+        "dev_test_path": "tests_core/test_awards.py",
+        "goal": "a contest pays out exactly its budget: shares split the pot by rank, ties share fairly, and no rounding ever creates or destroys money"
+      }
+    },
+    {
+      "ts": 2,
+      "kind": "task_created",
+      "subject": "mutant-generator/0",
+      "detail": {
+        "role": "mutant-generator",
+        "title": "Generate mutants for award_round"
+      }
+    },
+    {
+      "ts": 3,
+      "kind": "task_claimed",
+      "actor": "gemini-3.6-flash/mutant-generator",
+      "subject": "mutant-generator/0",
+      "detail": {
+        "role": "mutant-generator",
+        "title": "Generate mutants for award_round"
+      }
+    },
+    {
+      "ts": 4,
+      "kind": "task_created",
+      "subject": "mutant-generator/1",
+      "detail": {
+        "role": "mutant-generator",
+        "title": "Generate mutants for effective_pot"
+      }
+    },
+    {
+      "ts": 5,
+      "kind": "task_claimed",
+      "actor": "gemini-3.6-flash/mutant-generator",
+      "subject": "mutant-generator/1",
+      "detail": {
+        "role": "mutant-generator",
+        "title": "Generate mutants for effective_pot"
+      }
+    },
+    {
+      "ts": 6,
+      "kind": "task_created",
+      "subject": "mutant-generator/2",
+      "detail": {
+        "role": "mutant-generator",
+        "title": "Generate mutants for competition_ranks"
+      }
+    },
+    {
+      "ts": 7,
+      "kind": "task_claimed",
+      "actor": "gemini-3.6-flash/mutant-generator",
+      "subject": "mutant-generator/2",
+      "detail": {
+        "role": "mutant-generator",
+        "title": "Generate mutants for competition_ranks"
+      }
+    },
+    {
+      "ts": 8,
+      "kind": "task_created",
+      "subject": "mutant-generator/3",
+      "detail": {
+        "role": "mutant-generator",
+        "title": "Generate mutants for pot_for"
+      }
+    },
+    {
+      "ts": 9,
+      "kind": "task_claimed",
+      "actor": "gemini-3.6-flash/mutant-generator",
+      "subject": "mutant-generator/3",
+      "detail": {
+        "role": "mutant-generator",
+        "title": "Generate mutants for pot_for"
+      }
+    },
+    {
+      "ts": 10,
+      "kind": "task_created",
+      "subject": "test-critic",
+      "detail": {
+        "role": "test-critic",
+        "title": "Critique the dev's tests"
+      }
+    },
+    {
+      "ts": 11,
+      "kind": "task_claimed",
+      "actor": "gemini-3.7-flash/test-critic",
+      "subject": "test-critic",
+      "detail": {
+        "role": "test-critic",
+        "title": "Critique the dev's tests"
+      }
+    },
+    {
+      "ts": 12,
+      "kind": "task_done",
+      "actor": "gemini-3.7-flash/test-critic",
+      "subject": "test-critic",
+      "detail": {
+        "result": "The tests are sound and rigorous; no vacuous or tautological tests were found.",
+        "role": "test-critic"
+      }
+    },
+    {
+      "ts": 13,
+      "kind": "task_done",
+      "actor": "gemini-3.6-flash/mutant-generator",
+      "subject": "mutant-generator/2",
+      "detail": {
+        "result": "===MUTATION_1===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n    ordered = sorted(scores, key=lambda s: s.raw_points, reverse=True)\n=======\n    ordered = sorted(scores, key=lambda s: s.raw_points, reverse=False)\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_2===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n    for index, score in enumerate(ordered):\n        if score.raw_points != previous:\n            rank = index + 1\n            previous = score.raw_points\n=======\n    for index, score in enumerate(ordered):\n        if score.raw_points != previous:\n            rank = rank + 1\n            previous = score.raw_points\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_3===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n        if score.raw_points != previous:\n            rank = index + 1\n            previous = score.raw_points\n=======\n        if score.raw_points != previous:\n            rank = index\n            previous = score.raw_points\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_4===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n        if score.raw_points != previous:\n            rank = index + 1\n=======\n        if True:\n            rank = index + 1\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_5===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n            rank = index + 1\n            previous = score.raw_points\n        positions[score.membership_id] = rank\n=======\n            rank = index + 2\n            previous = score.raw_points\n        positions[score.membership_id] = rank\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE",
+        "role": "mutant-generator"
+      }
+    },
+    {
+      "ts": 14,
+      "kind": "task_done",
+      "actor": "gemini-3.6-flash/mutant-generator",
+      "subject": "mutant-generator/3",
+      "detail": {
+        "result": "===MUTATION_1===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n    if round_count \u003c= 0:\n        return 0.0\n    return float(budget) / round_count\n=======\n    if round_count \u003c 0:\n        return 0.0\n    return float(budget) / round_count\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_2===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n    if round_count \u003c= 0:\n        return 0.0\n    return float(budget) / round_count\n=======\n    if round_count \u003c= 0:\n        return 0.0\n    return float(budget) / (round_count + 1)\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_3===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n    if round_count \u003c= 0:\n        return 0.0\n    return float(budget) / round_count\n=======\n    if round_count \u003c= 1:\n        return 0.0\n    return float(budget) / round_count\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_4===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n    if round_count \u003c= 0:\n        return 0.0\n    return float(budget) / round_count\n=======\n    if round_count \u003c= 0:\n        return 0.0\n    return float(budget) * round_count\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_5===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n    if round_count \u003c= 0:\n        return 0.0\n    return float(budget) / round_count\n=======\n    if round_count \u003c= 0:\n        return 0.0\n    return float(budget) // round_count\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE",
+        "role": "mutant-generator"
+      }
+    },
+    {
+      "ts": 15,
+      "kind": "task_done",
+      "actor": "gemini-3.6-flash/mutant-generator",
+      "subject": "mutant-generator/1",
+      "detail": {
+        "result": "===MUTATION_1===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n    minimum = int(params.get(\"min_participants\", 0))\n=======\n    minimum = int(params.get(\"min_participants\", 1))\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_2===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n    if not minimum:\n        return pot\n=======\n    if minimum \u003c 0:\n        return pot\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_3===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n    scoring = sum(1 for s in scores if s.raw_points \u003e 0)\n=======\n    scoring = sum(1 for s in scores if s.raw_points \u003e= 0)\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_4===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n    if scoring \u003e= minimum:\n        return pot\n=======\n    if scoring \u003e minimum:\n        return pot\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_5===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n    mode = params.get(\"min_participants_mode\", \"scale\")\n    return 0.0 if mode == \"void\" else pot * (scoring / minimum)\n=======\n    mode = params.get(\"min_participants_mode\", \"scale\")\n    return 0.0 if mode == \"void\" else pot\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE",
+        "role": "mutant-generator"
+      }
+    },
+    {
+      "ts": 16,
+      "kind": "task_done",
+      "actor": "gemini-3.6-flash/mutant-generator",
+      "subject": "mutant-generator/0",
+      "detail": {
+        "result": "===MUTATION_1===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n        elif total_weight \u003e 0:\n            points = (weight / total_weight) * pot_after_minimum\n=======\n        elif total_weight \u003e 0:\n            points = (weight / total_weight) * pot\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_2===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n    even_split = pot_after_minimum / len(scores)\n=======\n    even_split = pot_after_minimum / (len(scores) + 1)\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_3===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n    for score in scores:\n        weight = weights.get(score.membership_id, 0.0)\n=======\n    for score in scores:\n        weight = weights.get(score.membership_id, 1.0)\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_4===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n        if is_baseline:\n            points = score.raw_points\n=======\n        if not is_baseline:\n            points = score.raw_points\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_5===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n        else:\n            points = even_split\n=======\n        else:\n            points = 0.0\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE",
+        "role": "mutant-generator"
+      }
+    },
+    {
+      "ts": 17,
+      "kind": "phase_generation",
+      "actor": "corral-advpool",
+      "subject": "sportspicker_core/awards.py",
+      "detail": {
+        "duration_ms": 24067
+      }
+    },
+    {
+      "ts": 18,
+      "kind": "pool_shard",
+      "actor": "corral-advpool",
+      "subject": "award_round",
+      "detail": {
+        "dropped": false,
+        "mutants": 5,
+        "parse_retries": 0,
+        "region": "award_round",
+        "region_complexity": 5,
+        "region_lines": 44,
+        "shard": 0
+      }
+    },
+    {
+      "ts": 19,
+      "kind": "pool_shard",
+      "actor": "corral-advpool",
+      "subject": "effective_pot",
+      "detail": {
+        "dropped": false,
+        "mutants": 5,
+        "parse_retries": 0,
+        "region": "effective_pot",
+        "region_complexity": 4,
+        "region_lines": 20,
+        "shard": 1
+      }
+    },
+    {
+      "ts": 20,
+      "kind": "pool_shard",
+      "actor": "corral-advpool",
+      "subject": "competition_ranks",
+      "detail": {
+        "dropped": false,
+        "mutants": 5,
+        "parse_retries": 0,
+        "region": "competition_ranks",
+        "region_complexity": 3,
+        "region_lines": 18,
+        "shard": 2
+      }
+    },
+    {
+      "ts": 21,
+      "kind": "pool_shard",
+      "actor": "corral-advpool",
+      "subject": "pot_for",
+      "detail": {
+        "dropped": false,
+        "mutants": 5,
+        "parse_retries": 0,
+        "region": "pot_for",
+        "region_complexity": 2,
+        "region_lines": 18,
+        "shard": 3
+      }
+    },
+    {
+      "ts": 22,
+      "kind": "pool_dev_adequacy",
+      "actor": "corral-advpool",
+      "detail": {
+        "dev_kill_rate": 0.9,
+        "duration_ms": 13900,
+        "mutants_total": 20,
+        "survivor_ids": [
+          "s1/m2",
+          "s3/m5"
+        ],
+        "survivors": 2
+      }
+    },
+    {
+      "ts": 23,
+      "kind": "task_created",
+      "subject": "test-writer/s1/m2",
+      "detail": {
+        "role": "test-writer",
+        "title": "Write test killing survivor s1/m2"
+      }
+    },
+    {
+      "ts": 24,
+      "kind": "task_claimed",
+      "actor": "gemini-3.6-flash/test-writer",
+      "subject": "test-writer/s1/m2",
+      "detail": {
+        "role": "test-writer",
+        "title": "Write test killing survivor s1/m2"
+      }
+    },
+    {
+      "ts": 25,
+      "kind": "task_created",
+      "subject": "test-writer/s3/m5",
+      "detail": {
+        "role": "test-writer",
+        "title": "Write test killing survivor s3/m5"
+      }
+    },
+    {
+      "ts": 26,
+      "kind": "task_claimed",
+      "actor": "gemini-3.6-flash/test-writer",
+      "subject": "test-writer/s3/m5",
+      "detail": {
+        "role": "test-writer",
+        "title": "Write test killing survivor s3/m5"
+      }
+    },
+    {
+      "ts": 27,
+      "kind": "task_done",
+      "actor": "gemini-3.6-flash/test-writer",
+      "subject": "test-writer/s3/m5",
+      "detail": {
+        "result": "import pytest\n\nfrom sportspicker_core.awards import pot_for\n\n\ndef test_pot_for_fractional_division_exactness():\n    assert pot_for(10.0, 4) == pytest.approx(2.5)",
+        "role": "test-writer"
+      }
+    },
+    {
+      "ts": 28,
+      "kind": "task_done",
+      "actor": "gemini-3.6-flash/test-writer",
+      "subject": "test-writer/s1/m2",
+      "detail": {
+        "result": "from dataclasses import dataclass\n\nimport pytest\n\nfrom sportspicker_core import effective_pot\n\n\n@dataclass(frozen=True)\nclass CorralScore:\n    membership_id: int\n    raw_points: float\n\n\ndef test_effective_pot_zero_min_participants_does_not_consume_scores():\n    scores_iter = iter([CorralScore(1, 10.0)])\n    pot = effective_pot(1000.0, scores_iter, {})\n    assert pot == 1000.0\n    assert next(scores_iter, None) is not None",
+        "role": "test-writer"
+      }
+    },
+    {
+      "ts": 29,
+      "kind": "phase_authored_pass",
+      "actor": "corral-advpool",
+      "subject": "sportspicker_core/awards.py",
+      "detail": {
+        "duration_ms": 32461
+      }
+    },
+    {
+      "ts": 30,
+      "kind": "phase_critic",
+      "actor": "corral-advpool",
+      "subject": "sportspicker_core/awards.py",
+      "detail": {
+        "duration_ms": 0
+      }
+    },
+    {
+      "ts": 31,
+      "kind": "pool_verdict",
+      "actor": "corral-advpool",
+      "subject": "9db6158b1d69272ee1fea804fe48496bc8834fba",
+      "detail": {
+        "dev_kill_rate": 0.9,
+        "models_by_role": {
+          "mutant-generator": "gemini-3.6-flash",
+          "test-critic": "gemini-3.7-flash",
+          "test-writer": "gemini-3.6-flash"
+        },
+        "mutants_total": 20,
+        "proven_missed": 2,
+        "record_head": "2e4f3bbe98a9424ef56d8355b32a5981a55944999b2788abeb1b2fd06fa4946b",
+        "record_id": 73,
+        "status": "certified",
+        "survivors": 2
+      }
+    }
+  ]
+}

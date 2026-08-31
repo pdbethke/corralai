@@ -106,7 +106,19 @@ def scan_deny(text, whoami, hostname):
         # — not a host path, so not a deny; the manifest still surfaces it
         # for the human's eyeball pass.
         preceded_by_word = m.start() > 0 and (text[m.start() - 1].isalnum() or text[m.start() - 1] in '._-')
-        if path.startswith('/') and not preceded_by_word and not path.startswith(SAFE_PATH_PREFIXES):
+        # A schema/spec URL (https://slsa.dev/provenance/v1,
+        # https://in-toto.io/Statement/v1, …) is public identifier text, not a
+        # host path — it shows up verbatim in signing/attestation source. The
+        # match starts at the SECOND '/' of the scheme's "://" (the first '/'
+        # isn't alnum, so it never opens the path-segment group), so the
+        # carve-out looks one char back for that leading '/' and then for
+        # "http:" or "https:" immediately before it.
+        preceded_by_url_scheme = (
+            m.start() > 0
+            and text[m.start() - 1] == '/'
+            and re.search(r'https?:$', text[max(0, m.start() - 7):m.start() - 1]) is not None
+        )
+        if path.startswith('/') and not preceded_by_word and not preceded_by_url_scheme and not path.startswith(SAFE_PATH_PREFIXES):
             offenses.append(('absolute path outside demo-container roots', path))
     return offenses
 

@@ -39,3 +39,15 @@ test('the hero leads with the house question', async ({ page }) => {
   await page.goto('/');
   await expect(page.locator('#hero h1')).toContainText('Would you trust your house');
 });
+
+// Pin: the hero's default recording is now corral-audits-corral (corral
+// auditing its own signing code, NEEDS-REVIEW) — the founder-requested
+// featured tape. The pool caption is data-driven off the tape's own
+// pool_verdict event, so this also proves that event renders correctly.
+test('the hero replays corral-audits-corral by default and its pool caption renders', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('#hero .verdict-strip .vs-status')).toHaveText('NEEDS-REVIEW');
+  await expect(page.locator('#hero .verdict-strip .vs-file code')).toContainText('certify.go');
+  await expect(page.locator('#hero .caption').first()).toContainText('NEEDS-REVIEW');
+  await expect(page.locator('#hero .bd-link')).toHaveAttribute('href', '/recordings/#corral-audits-corral');
+});

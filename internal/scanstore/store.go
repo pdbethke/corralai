@@ -105,6 +105,16 @@ type Scan struct {
 	// runner that could not be built): no pass ran, and a stored 0 would say
 	// the pass ran for free.
 	SelectionMillis *int64
+	// SelectionReusedFrom is the id of the PRIOR scan whose instrumented
+	// coverage evidence this scan reused, because its tree, instrumented
+	// command and language plugin were all byte-identical to that scan's —
+	// see internal/reposcan.TreeDigest and the selection_cache table. nil
+	// on every scan that ran its own instrumented pass (or ran none at
+	// all): a reused scan and a scan that instrumented nothing both leave
+	// SelectionMillis nil, and this is the ONLY column that tells them
+	// apart, so it must never be a fabricated 0 or a guess — only a real
+	// prior scan id, or nothing.
+	SelectionReusedFrom *int64
 	// InputTokens, OutputTokens and ModelCalls are what the scan consumed
 	// from the providers, scan-wide. The per-role breakdown lives in
 	// scan_model_calls; these are the totals the run already printed to
@@ -501,6 +511,7 @@ var scansMigrationCols = []struct{ name, ddl string }{
 	{"source_pushed", "source_pushed BOOLEAN"},
 	{"statement_sha256", "statement_sha256 VARCHAR"},
 	{"selection_ms", "selection_ms BIGINT"},
+	{"selection_reused_from", "selection_reused_from BIGINT"},
 }
 
 // scanMutantsMigrationCols is the same ledger, at the mutant grain: the
@@ -543,7 +554,7 @@ func Open(dsn string) (*Store, error) {
 		corral_version VARCHAR, host VARCHAR, cores INTEGER, trees_requested INTEGER,
 		total_ms BIGINT, input_tokens BIGINT, output_tokens BIGINT, model_calls BIGINT,
 		source_pushed BOOLEAN, statement_sha256 VARCHAR,
-		selection_ms BIGINT
+		selection_ms BIGINT, selection_reused_from BIGINT
 	)`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("scanstore: create scans table: %w", err)
@@ -746,6 +757,26 @@ func Open(dsn string) (*Store, error) {
 	)`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("scanstore: create goal_cache table: %w", err)
+	}
+
+	// selection_cache is content-addressed like goal_cache, on
+	// (tree_digest, cmd_digest, plugin) rather than a source digest: the
+	// evidence ONE instrumented run of a project's suite produces is a
+	// property of the WHOLE checkout (which tests execute which files) and
+	// the exact instrumented command that produced it, not of any one
+	// file. scan_id names the scan that EARNED this row — the one that
+	// actually paid for the instrumented run — so a later reuse can say
+	// "reused from scan N" rather than merely "reused from somewhere". No
+	// migration list, for the same reason goal_cache has none: this table
+	// did not exist before this change, so CREATE TABLE IF NOT EXISTS on
+	// every Open is the whole story.
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS selection_cache (
+		tree_digest VARCHAR, cmd_digest VARCHAR, plugin VARCHAR,
+		raw BLOB, note VARCHAR, created_at TIMESTAMP, scan_id BIGINT,
+		UNIQUE (tree_digest, cmd_digest, plugin)
+	)`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("scanstore: create selection_cache table: %w", err)
 	}
 
 	// scans.id allocation: a CREATE SEQUENCE + nextval(), the same approach
@@ -993,15 +1024,15 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 		kill_rate, cache_hits, preflight_ran, preflight_note, started_at, finished_at,
 		corral_version, host, cores, trees_requested,
 		total_ms, input_tokens, output_tokens, model_calls,
-		source_pushed, statement_sha256, selection_ms
-	) VALUES (nextval('scans_id'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		source_pushed, statement_sha256, selection_ms, selection_reused_from
+	) VALUES (nextval('scans_id'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	RETURNING id`,
 		time.Now().UTC(), scan.Owner, scan.Repo, scan.Commit, scan.Substrate, scan.EngineVersion, scan.ModelSet,
 		scan.Top, scan.AllCandidates, scan.DiffBase, scan.TotalFiles, scan.Candidates, scan.Audited,
 		sanitizeKillRate(scan.KillRate), scan.CacheHits, scan.PreflightRan, scan.PreflightNote, scan.StartedAt, scan.FinishedAt,
 		scan.CorralVersion, scan.Host, scan.Cores, nullableTrees(scan.TreesRequested),
 		scan.TotalMillis, scan.InputTokens, scan.OutputTokens, scan.ModelCalls,
-		scan.SourcePushed, scan.StatementSHA256, scan.SelectionMillis,
+		scan.SourcePushed, scan.StatementSHA256, scan.SelectionMillis, scan.SelectionReusedFrom,
 	).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("scanstore: insert scan header: %w", err)
@@ -1116,7 +1147,7 @@ const scanHeaderCols = `id, ts, owner, repo, commit,
 		preflight_ran, preflight_note, started_at, finished_at,
 		corral_version, host, cores, trees_requested,
 		total_ms, input_tokens, output_tokens, model_calls,
-		source_pushed, statement_sha256, selection_ms`
+		source_pushed, statement_sha256, selection_ms, selection_reused_from`
 
 // scanScanRow decodes one scans row, in scanHeaderCols' order. Shared by both
 // readers for the same reason the column list is.
@@ -1135,7 +1166,7 @@ func scanScanRow(rows *sql.Rows) (ScanRow, error) {
 	// nothing.
 	var corralVersion, host, statementSHA sql.NullString
 	var cores, treesRequested, totalMS, inputTokens, outputTokens, modelCalls sql.NullInt64
-	var selectionMS sql.NullInt64
+	var selectionMS, selectionReusedFrom sql.NullInt64
 	var sourcePushed sql.NullBool
 	if err := rows.Scan(&r.ID, &ts, &r.Owner, &r.Repo, &r.Commit,
 		&substrate, &engineVersion, &modelSet, &r.Top, &r.AllCandidates, &diffBase,
@@ -1143,7 +1174,7 @@ func scanScanRow(rows *sql.Rows) (ScanRow, error) {
 		&r.PreflightRan, &preflightNote, &started, &finished,
 		&corralVersion, &host, &cores, &treesRequested,
 		&totalMS, &inputTokens, &outputTokens, &modelCalls,
-		&sourcePushed, &statementSHA, &selectionMS); err != nil {
+		&sourcePushed, &statementSHA, &selectionMS, &selectionReusedFrom); err != nil {
 		return ScanRow{}, fmt.Errorf("scanstore: scan scans row: %w", err)
 	}
 	r.TS, r.StartedAt, r.FinishedAt = ts.Time, started.Time, finished.Time
@@ -1159,6 +1190,13 @@ func scanScanRow(rows *sql.Rows) (ScanRow, error) {
 	if selectionMS.Valid {
 		v := selectionMS.Int64
 		r.SelectionMillis = &v
+	}
+	// Same discipline: "reused from scan N" must read back as a real id or
+	// not at all, never a fabricated 0 that would misname scan zero as the
+	// source.
+	if selectionReusedFrom.Valid {
+		v := selectionReusedFrom.Int64
+		r.SelectionReusedFrom = &v
 	}
 	return r, nil
 }

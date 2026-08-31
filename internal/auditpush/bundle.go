@@ -70,9 +70,14 @@ type ScanRow struct {
 	// NULL — never 0 — for a scan that instrumented nothing (`--whole-suite`,
 	// an unsupported language, a runner that could not be built).
 	SelectionMillis *int64
-	InputTokens     int64
-	OutputTokens    int64
-	ModelCalls      int64
+	// SelectionReusedFrom is the id of the PRIOR scan whose instrumented
+	// coverage evidence this scan reused (see the local ledger's
+	// scans.selection_reused_from, which this rides through unchanged).
+	// nil on every scan that ran its own pass, or ran none at all.
+	SelectionReusedFrom *int64
+	InputTokens         int64
+	OutputTokens        int64
+	ModelCalls          int64
 	// SourcePushed records whether THIS run carried source bytes to the
 	// warehouse. A custody fact belongs in the record: "did our code leave
 	// the box on that run" must be answerable from the table, not from
@@ -244,6 +249,7 @@ CREATE TABLE IF NOT EXISTS corral_scans (
   source_pushed    BOOLEAN,
   statement_sha256 VARCHAR,
   selection_ms     BIGINT,
+  selection_reused_from BIGINT,
   schema_version   INTEGER
 );`
 
@@ -483,6 +489,7 @@ var (
 	// where summing it over a scan counted one run once per file).
 	corralScansMigrationCols = []struct{ name, ddl string }{
 		{"selection_ms", "selection_ms BIGINT"},
+		{"selection_reused_from", "selection_reused_from BIGINT"},
 	}
 	corralMutantsMigrationCols = []struct{ name, ddl string }{}
 	// cached_input_tokens is additive: a warehouse an earlier corral created
@@ -837,14 +844,14 @@ func pushBundleOnce(target string, b Bundle) (Counts, error) {
 		    ts, repo, run_url, scan_id, commit_sha, corral_version, substrate,
 		    host, cores, trees_requested, diff_base, candidates, audited, passed,
 		    total_ms, input_tokens, output_tokens, model_calls,
-		    source_pushed, statement_sha256, selection_ms, schema_version
-		  ) VALUES (`+placeholders(22)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+		    source_pushed, statement_sha256, selection_ms, selection_reused_from, schema_version
+		  ) VALUES (`+placeholders(23)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 			now, b.Scan.Repo, b.Scan.RunURL, b.Scan.ScanID, b.Scan.Commit,
 			b.Scan.CorralVersion, b.Scan.Substrate, b.Scan.Host, b.Scan.Cores,
 			nullIfZeroInt(b.Scan.TreesRequested), b.Scan.DiffBase,
 			b.Scan.Candidates, b.Scan.Audited, b.Scan.Passed,
 			b.Scan.TotalMillis, b.Scan.InputTokens, b.Scan.OutputTokens, b.Scan.ModelCalls,
-			b.Scan.SourcePushed, b.Scan.StatementSHA256, b.Scan.SelectionMillis, SchemaVersion,
+			b.Scan.SourcePushed, b.Scan.StatementSHA256, b.Scan.SelectionMillis, b.Scan.SelectionReusedFrom, SchemaVersion,
 		); err != nil {
 			return Counts{}, fmt.Errorf("auditpush: insert scan row: %w", err)
 		}

@@ -252,6 +252,11 @@ func runScansShow(args []string, open func(string) (scansReader, error), stdout,
 		} else if ok && row.SelectionMillis != nil {
 			sel := time.Duration(*row.SelectionMillis) * time.Millisecond
 			fmt.Fprintf(stdout, "\nselection %s (once per scan)\n", durationText(sel))
+		} else if ok && row.SelectionReusedFrom != nil {
+			// This scan ran no selection pass of its own (SelectionMillis is
+			// nil above), and this is the one column that tells "reused"
+			// apart from "never ran" — see scanstore.Scan.SelectionReusedFrom.
+			fmt.Fprintf(stdout, "\nselection: reused — tree unchanged since scan %d\n", *row.SelectionReusedFrom)
 		}
 		// The money half of the same readout, by the same per-file grouping:
 		// best-effort, like the spread above — a ledger written before

@@ -90,6 +90,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 
 	recordDSNFlag := fs.String("record-db", "", "path to the scan ledger (default: $CORRALAI_SCANS_DB, else ~/.claude/corralai_scans.duckdb)")
 	noGoalCacheFlag := fs.Bool("no-goal-cache", false, "skip the goal cache — every candidate is re-derived even when a PRIOR scan already derived a goal for the exact same bytes, model and prompt revision. Re-buys a model call per file that a content-addressed cache would otherwise have served for free; use this to isolate goal-derivation variance from a comparison, or on a scan whose operator does not want a goal receipt kept in the ledger at all. The cache lives in the same ledger --record-db names, independent of --record itself")
+	noSelectionCacheFlag := fs.Bool("no-selection-cache", false, "skip the selection cache — the ONE instrumented coverage run always executes, even when a PRIOR scan already ran the identical instrumented command over a byte-identical tree. Re-buys a full suite run (the single most expensive measurement a scan makes outside model calls) that a content-addressed cache would otherwise have served for free; use this to isolate selection variance from a comparison, or when the operator does not trust the tree to be unchanged. The cache lives in the same ledger --record-db names, and (like the goal cache) is consulted independent of --record itself; only WRITING a fresh hit requires --record, since a scan_id has to exist to write one against")
 	timeoutFlag := fs.Duration("timeout", 10*time.Minute, "per-file budget: give up on a single file's run if it makes no progress for this long (not a hard wall-clock cap — a single slow LLM call can overshoot it). Same default and semantics as `certify --local`'s --timeout; raise it for a large file that needs more room to converge")
 	if err := fs.Parse(flagArgs); err != nil {
 		return 2
@@ -462,6 +463,17 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// repo can mix languages.
 		ex = newLocalExecutor(*repoDir, checkArgv, *substrateFlag, *timeoutFlag, stdout)
 		ex.wholeSuite = *wholeSuiteFlag
+		// The selection cache lives in the same ledger --record-db names,
+		// independent of --record for its Get half — see --no-selection-cache's
+		// own help text and collectSelection's doc for why writing a hit still
+		// needs a scan id that only --record ever assigns.
+		if !*noSelectionCacheFlag {
+			selCacheDSN := *recordDSNFlag
+			if selCacheDSN == "" {
+				selCacheDSN = defaultScanDSN()
+			}
+			ex.selectionCache = newSelectionLedgerCache(selCacheDSN)
+		}
 		ex.presetMutants = presetMutants
 		if mutantRecorder != nil {
 			ex.mutantSink = mutantRecorder.sink
@@ -564,18 +576,27 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// printed to the operator, and the scan grades whole-suite — a real
 	// measurement, just a different question, said out loud.
 	if ex != nil && len(selected) > 0 {
+		selectionSources := enumeratedSourcePaths(cands, excl[:enumExcl])
 		// Announced only when it is about to happen: under --whole-suite
 		// collectSelection returns immediately without running anything, and
 		// printing "running the suite once with instrumentation…" for a run
-		// that instruments nothing is a claim about work never done.
+		// that instruments nothing is a claim about work never done. A cache
+		// HIT is previewed here — cheaply, before the (possibly
+		// minutes-long) instrumented run collectSelection would otherwise be
+		// about to start — so the announce line can say "reused" instead of
+		// "running" for a run that is never going to happen.
 		if !*wholeSuiteFlag {
-			fmt.Fprintln(stdout, "  selection: running the suite once with per-test coverage instrumentation…")
+			if reusedFrom, hit := ex.selectionCachePeek(selectionSources); hit {
+				fmt.Fprintf(stdout, "  selection: reused — tree unchanged since scan %d\n", reusedFrom)
+			} else {
+				fmt.Fprintln(stdout, "  selection: running the suite once with per-test coverage instrumentation…")
+			}
 		}
 		// collectSelection times ITSELF, around the instrumented run and
 		// nowhere else — see localExecutor.selectionDuration. A clock started
 		// here would tick for --whole-suite too, which returns from that call
 		// having run nothing at all.
-		ex.selection = ex.collectSelection(context.Background(), enumeratedSourcePaths(cands, excl[:enumExcl]))
+		ex.selection = ex.collectSelection(context.Background(), selectionSources)
 		if !ex.selection.Ran {
 			fmt.Fprintf(stdout, "  selection: grading by the WHOLE suite — %s\n", ex.selection.Note)
 		}
@@ -995,6 +1016,9 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// this is the copy a cost query sums — adding the per-file column
 		// would count one run once per file. NULL when no pass ran.
 		SelectionMillis: scanSelectionMillis(ex),
+		// nil unless collectSelection served a cache HIT this scan — see
+		// localExecutor.selectionReusedFrom's own doc.
+		SelectionReusedFrom: scanSelectionReusedFrom(ex),
 		// What the scan consumed. The run already printed these to stdout and
 		// then discarded them, which is how "what did that cost me" had no
 		// answer from the tool whose central caveat is that audits are
@@ -1034,6 +1058,20 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 				fmt.Fprintf(stderr, "corral certify --repo: scan ledger NOT written: %v\n", err)
 			} else {
 				id, rerr := recordCertifyRepoScan(st, scan, files, mutants, modelCallRows, eventRows, stderr)
+				// A fresh MISS's raw evidence is held on the executor (see
+				// pendingSelectionPut's own doc): this is the earliest point a
+				// scan id exists to Put it against, on the SAME handle just
+				// used to record the scan — opening a second one here would
+				// pay DuckDB's single-writer lock twice for one write. Best
+				// effort, like every write in this fail-open block: a lost
+				// selection-cache row costs the NEXT scan an instrumented
+				// run, never THIS scan's exit code.
+				if rerr == nil && ex != nil && ex.pendingSelectionPut != nil {
+					p := ex.pendingSelectionPut
+					if perr := st.SelectionCachePut(context.Background(), p.TreeDigest, p.CmdDigest, p.Plugin, p.Raw, "", id); perr != nil {
+						fmt.Fprintf(stderr, "corral certify --repo: scan %d recorded, but the selection cache was NOT written: %v\n", id, perr)
+					}
+				}
 				if cerr := st.Close(); cerr != nil && rerr == nil {
 					fmt.Fprintf(stderr, "corral certify --repo: scan %d recorded, but closing the ledger failed: %v\n", id, cerr)
 				}
@@ -2172,36 +2210,131 @@ func (l *localExecutor) runPreflight(ctx context.Context, sources []string) repo
 	return reposcan.Preflight(ctx, runner, files, plug, testCmd, repoRoot)
 }
 
-// collectSelection runs the selector's instrumented command once for the
-// scan's language, unless --whole-suite. Any failure is a Note, never
-// fatal: the scan still has a real measurement to make.
-func (l *localExecutor) collectSelection(ctx context.Context, sources []string) reposcan.SelectionEvidence {
-	if l.wholeSuite {
-		return reposcan.SelectionEvidence{Note: "--whole-suite"}
-	}
+// pendingSelectionCachePut is a MISS's raw evidence, held on the executor
+// between collectSelection (which has the bytes but no scan id yet) and the
+// recording sequence (which has the id but not the bytes) — see
+// localExecutor.pendingSelectionPut's own doc for why the Put cannot happen
+// at collection time.
+type pendingSelectionCachePut struct {
+	TreeDigest, CmdDigest, Plugin string
+	Raw                           []byte
+}
+
+// resolveSelectionPlugin is the language/plugin/testCmd resolution shared by
+// collectSelection and selectionCachePeek: both need to know WHICH
+// instrumented command a scan would run before either running it or asking
+// the cache about it, and repeating this logic in two places (rather than
+// factoring it once) is how they would drift about which plugin a mixed
+// repo resolves to. note is non-empty only when plug is nil — the reason no
+// plugin could be resolved, in the exact wording collectSelection has always
+// returned as a SelectionEvidence.Note.
+func (l *localExecutor) resolveSelectionPlugin(sources []string) (plug lang.Plugin, langName string, testCmd []string, note string) {
 	langs := preflightLanguages(sources)
 	if len(langs) == 0 {
-		return reposcan.SelectionEvidence{Note: "no source files"}
+		return nil, "", nil, "no source files"
 	}
-	langName := ""
 	if len(langs) == 1 {
 		for n := range langs {
 			langName = n
 		}
 	} else {
-		var note string
 		if langName, note = selectPreflightLanguage(langs, l.checkArgv); langName == "" {
-			return reposcan.SelectionEvidence{Note: note}
+			return nil, "", nil, note
 		}
 	}
-	plug, ok := lang.ByName(langName)
+	p, ok := lang.ByName(langName)
 	if !ok {
-		return reposcan.SelectionEvidence{Note: fmt.Sprintf("unknown language %q", langName)}
+		return nil, "", nil, fmt.Sprintf("unknown language %q", langName)
 	}
-	testCmd := l.checkArgv
-	if len(testCmd) == 0 {
-		testCmd = plug.TestCmd()
+	tc := l.checkArgv
+	if len(tc) == 0 {
+		tc = p.TestCmd()
 	}
+	return p, langName, tc, ""
+}
+
+// selectionCacheKey computes the (tree_digest, cmd_digest) pair collectSelection
+// and selectionCachePeek both key the selection cache on for plug/testCmd,
+// through the SAME instrumentation Instrument would apply before the suite
+// actually ran — the instrumentation flags are part of what produced the
+// evidence, not the operator's bare testCmd (see reposcan.TreeDigest's own
+// doc on the universe half of this key). ok is false whenever no key can be
+// computed at all: plug has no TestSelector, Instrument refuses testCmd, or
+// TreeDigest could not name a tree (outside a git work tree, or a git
+// failure) — every one of those means "this scan cannot be cache-keyed",
+// never a value worth caching against.
+func (l *localExecutor) selectionCacheKey(plug lang.Plugin, testCmd []string) (treeDigest, cmdDigest string, ok bool) {
+	sel, selOK := plug.(lang.TestSelector)
+	if !selOK {
+		return "", "", false
+	}
+	cmd, cmdOK := sel.Instrument(testCmd)
+	if !cmdOK {
+		return "", "", false
+	}
+	td, err := reposcan.TreeDigest(l.repoDir)
+	if err != nil || td == "" {
+		return "", "", false
+	}
+	return td, selectionCmdDigest(cmd), true
+}
+
+// selectionCachePeek previews whether collectSelection is about to serve a
+// cache HIT, without consuming anything — it exists only so the caller can
+// choose the right announce line BEFORE the (possibly minutes-long)
+// instrumented run: "selection: reused …" instead of "running the suite
+// once…" for a hit neither one of which has happened yet at print time.
+// collectSelection performs the identical lookup moments later; both calls
+// are cheap (a git ls-files plus one ledger read), and duplicating them is
+// far simpler than threading state between two calls that would otherwise
+// have to agree by construction.
+func (l *localExecutor) selectionCachePeek(sources []string) (scanID int64, ok bool) {
+	if l.wholeSuite || l.selectionCache == nil {
+		return 0, false
+	}
+	plug, _, testCmd, _ := l.resolveSelectionPlugin(sources)
+	if plug == nil {
+		return 0, false
+	}
+	treeDigest, cmdDigest, keyOK := l.selectionCacheKey(plug, testCmd)
+	if !keyOK {
+		return 0, false
+	}
+	_, id, hit, err := l.selectionCache.SelectionCacheGet(context.Background(), treeDigest, cmdDigest, plug.Name())
+	if err != nil || !hit {
+		return 0, false
+	}
+	return id, true
+}
+
+// collectSelection runs the selector's instrumented command once for the
+// scan's language, unless --whole-suite OR a prior scan already ran the
+// IDENTICAL instrumented command over a byte-identical tree (see
+// selectionCacheKey) — in which case that scan's raw evidence is reused
+// verbatim and l.selectionReusedFrom names which scan. Any failure is a
+// Note, never fatal: the scan still has a real measurement to make.
+func (l *localExecutor) collectSelection(ctx context.Context, sources []string) reposcan.SelectionEvidence {
+	if l.wholeSuite {
+		return reposcan.SelectionEvidence{Note: "--whole-suite"}
+	}
+	plug, langName, testCmd, note := l.resolveSelectionPlugin(sources)
+	if plug == nil {
+		return reposcan.SelectionEvidence{Note: note}
+	}
+
+	var treeDigest, cmdDigest string
+	var keyOK bool
+	if l.selectionCache != nil {
+		treeDigest, cmdDigest, keyOK = l.selectionCacheKey(plug, testCmd)
+		if keyOK {
+			if raw, scanID, hit, err := l.selectionCache.SelectionCacheGet(ctx, treeDigest, cmdDigest, langName); err == nil && hit {
+				id := scanID
+				l.selectionReusedFrom = &id
+				return reposcan.SelectionEvidence{Raw: raw, Ran: true}
+			}
+		}
+	}
+
 	runner, files, err := l.scanRunner(langName, plug, selectionMaxOutput, selectionTimeout)
 	if err != nil {
 		return reposcan.SelectionEvidence{Note: fmt.Sprintf("selection: %v", err)}
@@ -2214,6 +2347,12 @@ func (l *localExecutor) collectSelection(ctx context.Context, sources []string) 
 	// Recorded even when the run produced no usable evidence: the suite still
 	// executed, and the minutes it burned are part of what this scan cost.
 	l.selectionDuration = time.Since(start)
+	// Held for the recording sequence to Put once this scan has a ledger id
+	// (see pendingSelectionPut's own doc) — only for a genuine run that
+	// produced usable evidence, keyed under a cache this scan could resolve.
+	if ev.Ran && l.selectionCache != nil && keyOK {
+		l.pendingSelectionPut = &pendingSelectionCachePut{TreeDigest: treeDigest, CmdDigest: cmdDigest, Plugin: langName, Raw: ev.Raw}
+	}
 	return ev
 }
 
@@ -2223,6 +2362,21 @@ func (l *localExecutor) collectSelection(ctx context.Context, sources []string) 
 // test of what is TIMED must be able to stand in for it without one.
 var collectSelectionEvidence = func(ctx context.Context, runner coverageRunner, files map[string]string, p lang.Plugin, testCmd []string) reposcan.SelectionEvidence {
 	return reposcan.CollectSelectionEvidence(ctx, runner, files, p, testCmd)
+}
+
+// selectionCmdDigest is the sha256 of the EXACT instrumented command argv —
+// the plugin's Instrument output, not the operator's bare testCmd, because
+// the instrumentation flags (a coverage-context plugin, a per-test report
+// format) are part of what produced the evidence: two different flag sets
+// against the same tree can measure two different things. Length-prefixed
+// per argument, the same discipline reposcan.KeyInputs.CacheKey follows, so
+// no two different argv slices can fold to the same digest by concatenation.
+func selectionCmdDigest(cmd []string) string {
+	h := sha256.New()
+	for _, a := range cmd {
+		fmt.Fprintf(h, "%d:%s|", len(a), a)
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // goModulePath reads the `module` directive out of repoDir's go.mod, for
@@ -3238,6 +3392,29 @@ type localExecutor struct {
 	// measurement: summing it across files would invent time nobody spent.
 	selectionDuration time.Duration
 
+	// selectionCache is the (tree_digest, cmd_digest, plugin)-keyed store
+	// collectSelection consults before running the instrumented suite, and
+	// records a fresh run's evidence into once the scan has a ledger id
+	// (see recordCertifyRepoScan's caller in certify_repo.go). nil under
+	// --no-selection-cache or a --dry-run (which never builds a
+	// localExecutor at all) — every lookup and every hold-for-Put below is
+	// gated on it being non-nil.
+	selectionCache selectionCacheStore
+	// selectionReusedFrom is set the moment collectSelection serves a cache
+	// HIT: the id of the scan whose evidence this scan is reusing. nil on
+	// every scan that ran its own instrumented pass or ran none at all —
+	// see scanstore.Scan.SelectionReusedFrom's doc for why this is the only
+	// signal that tells "reused" apart from "never ran".
+	selectionReusedFrom *int64
+	// pendingSelectionPut holds a freshly-collected MISS's raw evidence and
+	// the key it was collected under, for the recording sequence to Put once
+	// this scan's own ledger id exists — collectSelection runs long before
+	// Record does (see collectSelection's doc), so there is no scan id to
+	// write the row against at collection time. nil whenever nothing was
+	// collected fresh (a cache hit, no cache wired, or the pass did not run
+	// at all).
+	pendingSelectionPut *pendingSelectionCachePut
+
 	// writerMode is the scan-wide --writer-mode, carried onto every job's
 	// localAuditInput. Resolved and validated once at the flag boundary.
 	writerMode string
@@ -3486,6 +3663,18 @@ func scanSelectionMillis(ex *localExecutor) *int64 {
 		return nil
 	}
 	return millisOrNil(ex.selectionDuration)
+}
+
+// scanSelectionReusedFrom is the scan header's selection_reused_from: the id
+// of the prior scan whose coverage evidence THIS scan reused, or nil when
+// this scan ran its own pass (or ran none at all) — see
+// localExecutor.selectionReusedFrom's own doc for why this is the only
+// column that tells "reused" apart from "never ran".
+func scanSelectionReusedFrom(ex *localExecutor) *int64 {
+	if ex == nil {
+		return nil
+	}
+	return ex.selectionReusedFrom
 }
 
 // scanEventRows drains the scan's accumulated tape, or nil when ex is nil —

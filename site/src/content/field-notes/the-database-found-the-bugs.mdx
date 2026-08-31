@@ -2,7 +2,7 @@
 title: "The database found the bugs"
 description: "We made our audit tool write every decision — every planted bug's fate, every model call's cost, every downgrade's reason — into a DuckDB file. Within 48 hours the database had caught five bugs in the tool itself that no test suite had. A field note on analytics as a debugger, and why the receipts now live in a warehouse you own."
 pubDate: 2026-08-31
-draft: true
+draft: false
 ---
 
 {/* SPDX-License-Identifier: Elastic-2.0 */}
@@ -80,6 +80,14 @@ goal is blunt: one audit per pull request, forty pull requests, one place
 where "how is our test suite actually doing, and what does it cost us" is a
 query — and where a counterparty you grant access can check your receipts
 without taking your word for anything.
+
+And this stopped being a design the week I wrote this. The first live
+end-to-end run happened while this note was in draft: a real audit pushed
+itself to MotherDuck, created its own database on first contact (that path
+had a bug, naturally — found by running it before advertising it), and the
+seal view answered from their side of the wire with the audit's signed
+statement hash attached to the row. The receipts are now a URL I can hand
+to someone.
 
 That last part is the whole company thesis in one sentence: the number you
 certify has to be earned by execution, and everything around it had better

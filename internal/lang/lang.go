@@ -413,11 +413,15 @@ type TestSelector interface {
 	// the operator's own collection targets removed, resolved against
 	// repoRoot — because on a runner that UNIONS positional arguments
 	// (pytest does) appending to the raw command narrows nothing at all.
-	// testPath is the file's paired test:
-	// a codePath ABSENT from the evidence is uncovered only when testPath is
-	// present (the suite ran the tests meant to cover it); absent both, the
-	// suite may never have run that test, and Select errors — the caller
-	// grades whole-suite and discloses the error text.
+	// testPath is the file's paired test. A codePath ABSENT from the
+	// evidence is NEVER "uncovered" — only a file PRESENT in the evidence
+	// with zero covering tests is (absence of evidence is not evidence of
+	// absence: a file whose paired test genuinely ran, testPath present,
+	// can still be missing from the report for reasons that have nothing
+	// to do with whether the suite executed it, e.g. an editable/src-layout
+	// install whose sources coverage measures OUTSIDE the repo root and
+	// drops). Select therefore always errors on an absent codePath — the
+	// caller grades whole-suite and discloses the error text.
 	Select(evidence []byte, repoRoot, codePath, testPath string, testCmd []string) (Selection, error)
 	// WithAuthoredTest returns the command for the POOL pass: the selection
 	// plus the pool's authored test at authoredTestPath, so the authored
@@ -431,6 +435,52 @@ type TestSelector interface {
 	// selection, because corral reports what it ran, not what coverage
 	// predicted. Only meaningful when len(sel.Tests) > 0.
 	ForSpan(sel Selection, span LineRange) (cmd []string, tests []string, rule string)
+	// Index parses ONE instrumented run's evidence — the exact document
+	// Select reads — into a per-file readout covering EVERY measured file at
+	// once, rather than narrowing to a single codePath. It exists for
+	// evidence-first candidacy: "which files does any test cover, and by how
+	// much" is a repo-wide question, and calling Select once per source file
+	// just to answer it would re-parse the same document a file-count worth
+	// of times. Implementations MUST share Select's own parsing rather than
+	// hand-roll a second reader of the same format.
+	//
+	// Paths are relative in the same sense Select's codePath is; a plugin
+	// that needs an absolute repoRoot to relativize evidence paths applies
+	// the empty-root case Select already handles (most evidence paths are
+	// already repo-relative — see python's alignPyPath).
+	Index(evidence []byte) (map[string]FileCoverage, error)
+}
+
+// FileCoverage is one measured file's entry from TestSelector.Index: every
+// covering test (by whatever selector the evidence stores as a test's
+// identity), mapped to how many of THIS file's lines it executed. A caller
+// ranking "which test covers this file the most" reads it directly, without
+// re-parsing the evidence.
+type FileCoverage struct {
+	Tests map[string]int
+	// HasStatic is true when the evidence recorded coverage for this file
+	// OUTSIDE any test context — lines executed at import/module-load time
+	// (a package __init__.py, a module-level constant, a decorator
+	// evaluated at import) that pytest-cov cannot attribute to any one
+	// test. A file with zero covering Tests but HasStatic true was
+	// genuinely EXECUTED — just never by a test directly — a different,
+	// honest finding from a file with neither: see
+	// reposcan.WidenCandidacyByEvidence's ReasonImportOnly, the exclusion
+	// this distinction exists to make possible.
+	HasStatic bool
+	// HasStatements is true when coverage's OWN static parse of the file
+	// found at least one executable statement — independent of whether
+	// anything ran. False means the file is empty, comment-only, or
+	// otherwise has NOTHING to execute: a genuinely empty __init__.py
+	// reads zero Tests and HasStatic false, the exact same SHAPE as a real
+	// file nothing executes, and without this distinguishing signal the
+	// two are indistinguishable — see
+	// reposcan.WidenCandidacyByEvidence's ReasonNoExecutableCode, the
+	// benign exclusion this exists to make possible. Defaults to true
+	// (conservative) when a plugin could not determine the count for one
+	// file — never silently swallowing a real finding over an analysis
+	// hiccup.
+	HasStatements bool
 }
 
 // SpanRule names why ForSpan chose what it chose.
@@ -463,4 +513,82 @@ type FailureParser interface {
 	// FirstFailure returns the first failing test's id, or "" when the output
 	// names none.
 	FirstFailure(output []byte) string
+}
+
+// SelectionDiagnoser is an OPTIONAL TestSelector extension: a plugin that
+// can recognize its own instrumented selection run's failure text —
+// whatever a runner could capture, possibly just an exit code's worth of
+// stderr tail — and explain, in an operator's own vocabulary, what to do
+// about it. Python implements this for the pytest-cov plugin requirement:
+// a stock venv missing it makes the instrumented pytest invocation exit 4
+// with "unrecognized arguments: --cov ...", printing nothing else, and the
+// generic "the run failed"/"printed nothing" note would leave an operator
+// to rediscover that themselves.
+//
+// DiagnoseSelectionFailure returns "" when it recognizes nothing in text —
+// the caller falls back to its own generic wording, never a fabricated one.
+type SelectionDiagnoser interface {
+	DiagnoseSelectionFailure(text string) string
+}
+
+// LibraryCodeClassifier is an OPTIONAL TestSelector extension: a selector
+// that can tell whether one file sits inside IMPORTABLE LIBRARY CODE, as
+// opposed to project tooling that merely happens to share the language —
+// docs config (docs/conf.py), a setup/build script (setup.py, noxfile.py),
+// a one-off automation script (scripts/*.py). Founder ruling: the loudest
+// findings a mutation audit can produce (reposcan's ReasonUncovered,
+// ReasonImportOnly) must speak only about the library a repo SHIPS, never
+// about everything merely WRITTEN in its language — a docs-build config
+// with zero coverage is real, but reporting it under the same headline as
+// a genuinely untested library module dilutes the finding on essentially
+// every real repo, which carries several such files.
+//
+// hasPath answers "does this exact repo-relative path exist, by the
+// caller's own already-enumerated inventory" — the file-existence oracle,
+// supplied as a closure (not a real filesystem read) so this stays pure
+// and testable, the same discipline Plugin.ImportPath's own exists
+// parameter already follows.
+//
+// A selector that does not implement this is never asked — every file it
+// measured is treated as library code, byte-identical to before this
+// interface existed. IsLibraryCode is consulted ONLY when the evidence
+// would otherwise relabel a ReasonNoPairedTest exclusion (uncovered,
+// import-only, no-executable-code); it is NEVER consulted for promoting a
+// file the evidence shows a test genuinely covers — that positive finding
+// stands regardless of where the file lives.
+type LibraryCodeClassifier interface {
+	IsLibraryCode(path string, hasPath func(string) bool) bool
+}
+
+// SourceRootInstrumenter is an OPTIONAL TestSelector extension: a selector
+// that can narrow (or otherwise use) its instrumented run to a
+// caller-supplied set of SOURCE ROOTS — the distinct top-level directories
+// the scan's own file enumeration found the language's OWN, non-test
+// source files under (e.g. []string{"src"} for a src-layout project,
+// []string{"mypkg"} for a flat package, []string{"."} when sources sit at
+// the repo root; possibly several, for a repo with more than one).
+//
+// It exists because coverage.py's default source scope (the whole cwd)
+// makes "uncovered" UNREACHABLE for an editable/src-layout install:
+// coverage measures a file by where python actually imported it from, and
+// an editable install imports the project's real sources from OUTSIDE the
+// checked-out tree, so the reducer's own repo-root filter drops every one
+// of them — the file never appears in the evidence document at all, which
+// this package correctly reads as "not measured", never "uncovered" (see
+// CollectSelectionEvidence's own doc). Passing `--cov=<root>` per root
+// instead tells coverage to measure the SOURCE tree it was actually asked
+// to audit, which is what makes a genuinely dead module — one truly never
+// executed — show up PRESENT with zero contexts: a real "uncovered"
+// finding, reachable for the first time.
+//
+// A selector that does not implement this is asked via the plain
+// Instrument(testCmd) instead — roots are advisory, an optimization this
+// package makes when it can derive them, never a required input.
+type SourceRootInstrumenter interface {
+	// InstrumentSourceRoots is Instrument, plus sourceRoots. ok=false has
+	// the same meaning Instrument's does: this command cannot be
+	// instrumented at all — the caller grades whole-suite, disclosed. An
+	// empty sourceRoots (none could be derived) is a legitimate input, not
+	// an error — implementations fall back to their Instrument default.
+	InstrumentSourceRoots(testCmd []string, sourceRoots []string) (cmd []string, ok bool)
 }

@@ -68,7 +68,7 @@ func TestSelectionCacheReusesIdenticalTree(t *testing.T) {
 	calls := 0
 	orig := collectSelectionEvidence
 	t.Cleanup(func() { collectSelectionEvidence = orig })
-	collectSelectionEvidence = func(ctx context.Context, runner coverageRunner, files map[string]string, p lang.Plugin, testCmd []string) reposcan.SelectionEvidence {
+	collectSelectionEvidence = func(ctx context.Context, runner coverageRunner, files map[string]string, p lang.Plugin, testCmd []string, sourcePaths []string) reposcan.SelectionEvidence {
 		calls++
 		return reposcan.SelectionEvidence{Ran: true, Raw: []byte("evidence-from-call-" + string(rune('0'+calls)))}
 	}
@@ -153,7 +153,7 @@ func TestNoSelectionCacheFlagRunsEveryTime(t *testing.T) {
 	calls := 0
 	orig := collectSelectionEvidence
 	t.Cleanup(func() { collectSelectionEvidence = orig })
-	collectSelectionEvidence = func(ctx context.Context, runner coverageRunner, files map[string]string, p lang.Plugin, testCmd []string) reposcan.SelectionEvidence {
+	collectSelectionEvidence = func(ctx context.Context, runner coverageRunner, files map[string]string, p lang.Plugin, testCmd []string, sourcePaths []string) reposcan.SelectionEvidence {
 		calls++
 		return reposcan.SelectionEvidence{Ran: true, Raw: []byte("evidence")}
 	}
@@ -172,6 +172,70 @@ func TestNoSelectionCacheFlagRunsEveryTime(t *testing.T) {
 	}
 	if strings.Contains(out2.String(), "selection: reused") {
 		t.Errorf("--no-selection-cache: must never claim a reuse, got:\n%s", out2.String())
+	}
+}
+
+// TestSelectionCacheNeverPutsOnAFailedRun is the write-side half of the
+// caching defect: an instrumented run that came back Ran:false (a failed
+// suite, or one that printed nothing) must NEVER reach the ledger's
+// selection_cache table — collectSelection gates the Put on ev.Ran, and
+// this proves that gate actually stops a poisoned entry from being
+// written, not merely that a passing run's real evidence gets recorded (the
+// headline reuse test already covers that). A second scan over the SAME
+// unchanged tree must therefore run the instrumented pass AGAIN too — there
+// is nothing cached to serve.
+func TestSelectionCacheNeverPutsOnAFailedRun(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
+	root, base, goals := selCacheFixture(t)
+	dsn := filepath.Join(t.TempDir(), "scans.duckdb")
+
+	calls := 0
+	orig := collectSelectionEvidence
+	t.Cleanup(func() { collectSelectionEvidence = orig })
+	collectSelectionEvidence = func(ctx context.Context, runner coverageRunner, files map[string]string, p lang.Plugin, testCmd []string, sourcePaths []string) reposcan.SelectionEvidence {
+		calls++
+		// Ran:false — exactly what CollectSelectionEvidence itself now
+		// returns for an instrumented run that printed nothing (a failed
+		// suite before its own evidence-emitting step, or any other
+		// disclosed failure). Never a Raw-carrying, Ran:true evidence.
+		return reposcan.SelectionEvidence{Note: "python: selection evidence run exited 4 and printed nothing"}
+	}
+
+	var out1, err1 bytes.Buffer
+	runCertifyRepo(selCacheArgs(root, base, goals, dsn), &out1, &err1)
+	if err1.Len() != 0 {
+		t.Fatalf("scan 1: stderr must be empty, got %q", err1.String())
+	}
+	if calls != 1 {
+		t.Fatalf("scan 1: collectSelectionEvidence called %d time(s), want 1", calls)
+	}
+
+	db, derr := sql.Open("duckdb", dsn)
+	if derr != nil {
+		t.Fatalf("open ledger: %v", derr)
+	}
+	defer db.Close()
+	var n int
+	if qerr := db.QueryRow(`SELECT count(*) FROM selection_cache`).Scan(&n); qerr != nil {
+		t.Fatalf("count selection_cache: %v", qerr)
+	}
+	if n != 0 {
+		t.Fatalf("selection_cache has %d row(s) after a failed run, want 0 — a failed instrumented run must never be Put", n)
+	}
+
+	// A second scan over the SAME unchanged tree: with nothing cached, this
+	// must run the instrumented pass again, not silently serve a miss as
+	// though it were a hit for zero cost.
+	var out2, err2 bytes.Buffer
+	runCertifyRepo(selCacheArgs(root, base, goals, dsn), &out2, &err2)
+	if err2.Len() != 0 {
+		t.Fatalf("scan 2: stderr must be empty, got %q", err2.String())
+	}
+	if calls != 2 {
+		t.Errorf("scan 2: collectSelectionEvidence called %d time(s) total, want 2 — a failed run must never be served from cache", calls)
+	}
+	if strings.Contains(out2.String(), "selection: reused") {
+		t.Errorf("scan 2: must never claim a reuse of a failed run's evidence:\n%s", out2.String())
 	}
 }
 

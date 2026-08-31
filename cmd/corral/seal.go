@@ -52,6 +52,17 @@ type sealReader interface {
 	// callers sort what they need. repo == "" means every repo the warehouse
 	// has ever seen a verdict for; a non-empty repo filters to it.
 	SealRows(ctx context.Context, repo string) ([]sealRow, error)
+	// UncoveredPaths returns the paths, scoped to repo, whose truly-latest
+	// corral_audits row (across EVERY disposition, not just the graded ones
+	// corral_seal itself is filtered to — see SealViewDDL's `kill_rate IS
+	// NOT NULL`) is an uncovered one: the selection evidence measured the
+	// file and found no test that executes it
+	// (reposcan.ReasonUncovered). "Truly latest" is what keeps this
+	// honest — a file that was once uncovered and has since been paired
+	// with a real test and graded must not be reported uncovered forever,
+	// so the comparison is against the newest row for the path, period, not
+	// the newest UNCOVERED one.
+	UncoveredPaths(ctx context.Context, repo string) (map[string]bool, error)
 	Close() error
 }
 
@@ -82,6 +93,59 @@ func (r dbSealReader) SealRows(ctx context.Context, repo string) ([]sealRow, err
 			return nil, err
 		}
 		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// UncoveredPaths queries corral_audits DIRECTLY, not the corral_seal view:
+// the view's `kill_rate IS NOT NULL` filter is exactly what would hide an
+// uncovered row (KillRate is nil BY CONSTRUCTION for one — see
+// auditpush.Row.Uncovered's doc), so an uncovered file would otherwise be
+// indistinguishable from one this warehouse has never seen at all.
+//
+// A pre-fix row (pushed before Task 1's F4) may carry `reason` naming
+// reposcan.ReasonUncovered without the `uncovered` column set — the OR
+// tolerates that at no cost, rather than silently missing every row a
+// warehouse recorded before the column existed.
+//
+// "Truly latest" needs a DETERMINISTIC tiebreaker, not `ORDER BY ts DESC`
+// alone: every file row in one PushBundle call shares the exact same `ts`
+// (auditpush.pushBundleOnce computes `now` once per bundle, see bundle.go),
+// and two separate pushes can in principle land the same timestamp too —
+// coarse clock resolution, or a test driving two PushBundle calls back to
+// back. scan_id is NOT that tiebreaker: it is the local ledger's row id and
+// reads 0 for every run pushed without --record (push.go's own doc: "scan_id
+// is always the ledger's row id, or 0 when --record was not given"), so
+// several genuinely different pushes can tie on it too. What IS monotonic
+// is insertion order itself: corral_audits is APPEND ONLY — inserted, never
+// UPDATEd or DELETEd (push.go's own rule) — so DuckDB's `rowid`
+// pseudocolumn, which tracks physical insertion order, is safe to rely on
+// here for exactly the reason internal/scanstore/store.go's FilesForScan
+// already relies on it for scan_files (see that doc comment): an ORDER BY
+// that assumed rowid survives updates/deletes would not be safe, but that
+// case never arises for an append-only table. `ORDER BY ts DESC, rowid
+// DESC` is therefore not incidental: for any tie on ts, the row physically
+// inserted LAST — i.e. pushed most recently — wins, which is the same
+// answer "truly latest" is supposed to give.
+func (r dbSealReader) UncoveredPaths(ctx context.Context, repo string) (map[string]bool, error) {
+	q := `SELECT path FROM (
+	        SELECT path, COALESCE(uncovered, false) AS uncovered, COALESCE(reason, '') AS reason,
+	               row_number() OVER (PARTITION BY path ORDER BY ts DESC, rowid DESC) AS rn
+	        FROM corral_audits WHERE repo = ?
+	      ) WHERE rn = 1 AND (uncovered OR reason = ?)`
+	rows, err := r.db.QueryContext(ctx, q, repo, reposcan.ReasonUncovered)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := map[string]bool{}
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		out[p] = true
 	}
 	return out, rows.Err()
 }
@@ -298,9 +362,28 @@ func runSealWithRepo(st sealReader, repoDir string, top int, asJSON bool, stdout
 		byPath[r.Path] = r
 	}
 
+	uncov, err := st.UncoveredPaths(context.Background(), repo)
+	if err != nil {
+		fmt.Fprintln(stderr, "corral seal:", err)
+		return 1
+	}
+
 	states := make([]sealState, 0, len(hot))
-	live := 0
+	live, uncovered := 0, 0
 	for _, c := range hot {
+		if uncov[c.Path] {
+			// Checked BEFORE the "never audited" default and before the
+			// live/stale comparison below: uncovered is its own state,
+			// distinct from both — the evidence ran and PROVED no test
+			// executes this file, which is a stronger and different claim
+			// than "corral has not looked yet". It is also, by
+			// UncoveredPaths' own contract, the file's truly-latest verdict,
+			// so it takes priority over anything corral_seal (graded-only)
+			// might still hold from an OLDER row.
+			states = append(states, sealState{Path: c.Path, State: "uncovered"})
+			uncovered++
+			continue
+		}
 		r, ok := byPath[c.Path]
 		if !ok {
 			states = append(states, sealState{Path: c.Path, State: "never audited"})
@@ -366,8 +449,16 @@ func runSealWithRepo(st sealReader, repoDir string, top int, asJSON bool, stdout
 	if len(states) > 0 {
 		pct = 100 * float64(live) / float64(len(states))
 	}
-	fmt.Fprintf(stdout, "coverage: %d of %d hot files carry a live verdict (%s%%)\n",
+	line := fmt.Sprintf("coverage: %d of %d hot files carry a live verdict (%s%%)",
 		live, len(states), trimPercent(pct))
+	if uncovered > 0 {
+		// Named explicitly rather than left to read as an ordinary "not yet
+		// audited" gap: these files were LOOKED AT — the selection evidence
+		// ran and found no test that executes them at all, which is a
+		// finding, not an omission.
+		line += fmt.Sprintf("; %d uncovered — no test executes them", uncovered)
+	}
+	fmt.Fprintln(stdout, line)
 	return 0
 }
 

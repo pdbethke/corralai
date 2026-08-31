@@ -262,12 +262,55 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 
 	fmt.Fprintf(stdout, "corral certify --repo %s\n", *repoDir)
 
-	// Captured BEFORE any candidate-level exclusion is appended below. Only
-	// Enumerate's exclusions are non-candidates; every later reason
-	// (not-selected, ungoaled, derive-failed, source-too-large) names a file
-	// already counted in
-	// len(cands), and adding those to the file total would report more files
-	// than exist on disk.
+	// --record-mutants: the accumulator every audited file's driver feeds. It
+	// is flushed once at the very end of this function, on EVERY exit path
+	// past this point (see the deferred write), because a scan whose gate
+	// failed is still a scan whose exam is worth keeping — reproducing a red
+	// verdict is the first thing anyone does with one.
+	// Declared here, not at the Scan call below, so the --record-mutants
+	// closure can read the scan's own per-file results: a file served from
+	// the verdict cache never runs a dev pass and so never reaches the sink,
+	// and the record line has to be able to say so.
+	var results []reposcan.FileResult
+	var mutantRecorder *mutantSetRecorder
+	if p := strings.TrimSpace(*recordMutantsFlag); p != "" {
+		mutantRecorder = newMutantSetRecorder()
+		defer func() {
+			if *dryRun {
+				// Inert, and said so rather than left silent (the same rule
+				// --record follows just below): a dry run audits nothing, so
+				// there are no graded mutants to record, and writing an empty
+				// document here would be indistinguishable from a real scan
+				// that graded nothing.
+				fmt.Fprintln(stderr, "corral certify --repo: --record-mutants ignored — --dry-run grades nothing, so there are no mutants to record")
+				return
+			}
+			n, werr := mutantRecorder.write(p)
+			if werr != nil {
+				fmt.Fprintf(stderr, "corral certify --repo: --record-mutants NOT written: %v\n", werr)
+				return
+			}
+			audited, cacheHits := 0, 0
+			for _, r := range results {
+				if !r.Gradable {
+					continue
+				}
+				audited++
+				if r.CacheHit {
+					cacheHits++
+				}
+			}
+			mutantRecorder.report(stdout, p, n, audited, cacheHits)
+		}()
+	}
+
+	// Captured BEFORE any candidate-level exclusion is appended below (and
+	// before evidence-first widening further down reclassifies some of
+	// these): only Enumerate's exclusions are non-candidates at this point.
+	// Widening later ADDS to len(cands) and REMOVES from len(excl) by
+	// exactly the same count (a file promoted out of no-paired-test), so it
+	// decrements this variable by that count rather than re-deriving it —
+	// see the widening block's own comment.
 	enumExcl := len(excl)
 
 	// effectiveTop is the bound this scan actually APPLIED, for the ledger
@@ -393,13 +436,23 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// flag exists to avoid. Placed before the dry-run return too, so a dry run
 	// checks the set as strictly as a real scan does.
 	var presetMutants map[string][]adequacy.Mutant
-	var mutantsFromSHA string
+	var mutantsFromSHA, mutantsPath string
+	// mutantSet is retained (not just its resolved presetMutants) because
+	// evidence-first widening runs AFTER this block (see #F3): an
+	// evidence-only candidate does not exist yet here to be resolved
+	// against, so the block below that appends widened candidates to
+	// `selected` re-resolves THEM against this same document rather than
+	// silently leaving them ungraded by a fresh (unreplayed) generation —
+	// see the widening block's own "top up presetMutants" step.
+	var mutantSet adequacy.MutantSetFile
 	if p := strings.TrimSpace(*mutantsFlag); p != "" {
+		mutantsPath = p
 		set, serr := adequacy.ReadMutantSet(p)
 		if serr != nil {
 			fmt.Fprintf(stderr, "corral certify --repo: %v\n", serr)
 			return 2
 		}
+		mutantSet = set
 		sum, herr := fileSHA256(p)
 		if herr != nil {
 			fmt.Fprintf(stderr, "corral certify --repo: hashing --mutants %s: %v\n", p, herr)
@@ -424,49 +477,6 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		}
 		fmt.Fprintf(stdout, "  replaying a recorded mutant set for %d file(s) from %s — no mutant-generator model call will be made\n", len(presetMutants), p)
 	}
-
-	// --record-mutants: the accumulator every audited file's driver feeds. It
-	// is flushed once at the very end of this function, on EVERY exit path
-	// past this point (see the deferred write), because a scan whose gate
-	// failed is still a scan whose exam is worth keeping — reproducing a red
-	// verdict is the first thing anyone does with one.
-	// Declared here, not at the Scan call below, so the --record-mutants
-	// closure can read the scan's own per-file results: a file served from
-	// the verdict cache never runs a dev pass and so never reaches the sink,
-	// and the record line has to be able to say so.
-	var results []reposcan.FileResult
-	var mutantRecorder *mutantSetRecorder
-	if p := strings.TrimSpace(*recordMutantsFlag); p != "" {
-		mutantRecorder = newMutantSetRecorder()
-		defer func() {
-			if *dryRun {
-				// Inert, and said so rather than left silent (the same rule
-				// --record follows just below): a dry run audits nothing, so
-				// there are no graded mutants to record, and writing an empty
-				// document here would be indistinguishable from a real scan
-				// that graded nothing.
-				fmt.Fprintln(stderr, "corral certify --repo: --record-mutants ignored — --dry-run grades nothing, so there are no mutants to record")
-				return
-			}
-			n, werr := mutantRecorder.write(p)
-			if werr != nil {
-				fmt.Fprintf(stderr, "corral certify --repo: --record-mutants NOT written: %v\n", werr)
-				return
-			}
-			audited, cacheHits := 0, 0
-			for _, r := range results {
-				if !r.Gradable {
-					continue
-				}
-				audited++
-				if r.CacheHit {
-					cacheHits++
-				}
-			}
-			mutantRecorder.report(stdout, p, n, audited, cacheHits)
-		}()
-	}
-
 	// EVERY scan-fatal preflight runs BEFORE the first derivation, because
 	// derivation is where the money goes: EmitJobs below performs up to --top
 	// sequential model calls, and an operator on a host that cannot sandbox
@@ -474,6 +484,15 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// Both checks are cheap — newLocalExecutor only probes the backend, and its
 	// seeds are lazy — and both are scan-wide facts the first job would have
 	// known instantly.
+	//
+	// Placed AFTER --mutants is validated above (not before): a replayed
+	// mutant set needs neither a sandbox nor a model, so refusing a
+	// stale/missing --mutants file must not first demand a jail or a
+	// provider key — or, since #F3, first pay for a full instrumented suite
+	// run — that the refusal was always going to make moot. The scan's own
+	// evidence collection (below, after this block) waits for the same
+	// reason: it is the OTHER expensive thing this preflight exists to gate
+	// ahead of.
 	//
 	// Skipped on a dry run, which never audits anything: demanding a jail and a
 	// provider key to print the jobs a scan WOULD emit would refuse the one
@@ -599,56 +618,156 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	})
 	modelSet := modelSetKey(rmWriter, rmMutant, rmCritic, rmShadow, rmShadowWriter)
 
-	// Selection evidence: ONE instrumented run of the suite for the whole
-	// scan, whose answer every job then asks about its own file. Collected
-	// HERE — before auditConfig below — because the grading mode is part of a
-	// verdict's identity and the key has to spell which measurement was made.
+	// Evidence-first candidacy (the evidence-as-candidacy design), and the
+	// scan's one instrumented selection run underneath it (#163): collected
+	// HERE, AFTER --mutants/the jail preflight/the provider preflight — a
+	// stale --mutants file or a missing key must be refused BEFORE the scan
+	// pays for a real, possibly-minutes-long suite run for nothing (see #F3
+	// in the fix round that moved this). It still runs before auditConfig
+	// below, because the grading mode is part of a verdict's identity and
+	// the key has to spell which measurement was made.
 	//
-	// Never fatal, and never on a dry run (ex is nil there: a dry run audits
-	// nothing, so it must not run the project's suite). A failure is a Note
-	// printed to the operator, and the scan grades whole-suite — a real
-	// measurement, just a different question, said out loud.
-	if ex != nil && len(selected) > 0 {
-		selectionSources := enumeratedSourcePaths(cands, excl[:enumExcl])
-		// Announced only when it is about to happen: under --whole-suite
-		// collectSelection returns immediately without running anything, and
-		// printing "running the suite once with instrumentation…" for a run
-		// that instruments nothing is a claim about work never done. A cache
-		// HIT is previewed here — cheaply, before the (possibly
-		// minutes-long) instrumented run collectSelection would otherwise be
-		// about to start — so the announce line can say "reused" instead of
-		// "running" for a run that is never going to happen.
-		if !*wholeSuiteFlag {
-			if reusedFrom, hit := ex.selectionCachePeek(selectionSources); hit {
-				fmt.Fprintf(stdout, "  selection: reused — tree unchanged since scan %d\n", reusedFrom)
-			} else {
-				fmt.Fprintln(stdout, "  selection: running the suite once with per-test coverage instrumentation…")
+	// skipEvidence is the one case this scan already knows, before running
+	// anything, will not benefit from evidence: a --diff-base scan that
+	// selected NOTHING from pairing and has no unpairable-in-diff file
+	// evidence might rescue. Restoring a bare `len(selected) > 0` guard
+	// (selected being the PAIRING-based list Rank/Select or the diff bound
+	// produced above) would also skip evidence collection on every
+	// non-diff-base repo where pairing alone finds zero candidates — the
+	// itsdangerous/aisuite shape the whole design exists for (10/10 source
+	// files unpaired by name, all 10 covered by evidence) — so it is scoped
+	// to --diff-base specifically, where "nothing selected" really can mean
+	// "nothing to gain".
+	skipEvidence := *diffBase != "" && len(selected) == 0 && len(unpairableInDiff) == 0
+	evidenceCandidacyOK := false
+	selectionMethod := ""
+	if ex != nil && !skipEvidence {
+		// Every source Enumerate saw, paired or not — this instrumented run
+		// answers about the whole tree, not just what pairing already
+		// resolved, or an evidence-only candidate could never be discovered
+		// in the first place.
+		selectionSources := enumeratedSourcePaths(cands, excl)
+		if len(selectionSources) > 0 {
+			// Announced only when it is about to happen: under --whole-suite
+			// collectSelection returns immediately without running anything, and
+			// printing "running the suite once with instrumentation…" for a run
+			// that instruments nothing is a claim about work never done. A cache
+			// HIT is previewed here — cheaply, before the (possibly
+			// minutes-long) instrumented run collectSelection would otherwise be
+			// about to start — so the announce line can say "reused" instead of
+			// "running" for a run that is never going to happen.
+			if !*wholeSuiteFlag {
+				if reusedFrom, hit := ex.selectionCachePeek(selectionSources); hit {
+					fmt.Fprintf(stdout, "  selection: reused — tree unchanged since scan %d\n", reusedFrom)
+				} else {
+					fmt.Fprintln(stdout, "  selection: running the suite once with per-test coverage instrumentation…")
+				}
+			}
+			// collectSelection times ITSELF, around the instrumented run and
+			// nowhere else — see localExecutor.selectionDuration. A clock started
+			// here would tick for --whole-suite too, which returns from that call
+			// having run nothing at all.
+			ex.selection = ex.collectSelection(context.Background(), selectionSources)
+			if !ex.selection.Ran {
+				fmt.Fprintf(stdout, "  selection: grading by the WHOLE suite — %s\n", ex.selection.Note)
+			}
+			// SCAN-SCOPED: this instrumented run happens ONCE, for the whole
+			// repo, before any per-file driver exists — the driver has no
+			// notion of it (see RunSpec.SelectionDuration's doc), so it is
+			// recorded here directly rather than through a file's EventSink.
+			// Path "" is the scan-scoped marker; omitted (not zero) when the
+			// pass never ran (--whole-suite, an unsupported language, no
+			// runner) — see scanEventSink.record.
+			if ex.selectionDuration > 0 {
+				ex.events.forScan("phase_selection", "", map[string]any{
+					"duration_ms": ex.selectionDuration.Milliseconds(),
+				})
 			}
 		}
-		// collectSelection times ITSELF, around the instrumented run and
-		// nowhere else — see localExecutor.selectionDuration. A clock started
-		// here would tick for --whole-suite too, which returns from that call
-		// having run nothing at all.
-		ex.selection = ex.collectSelection(context.Background(), selectionSources)
-		if !ex.selection.Ran {
-			fmt.Fprintf(stdout, "  selection: grading by the WHOLE suite — %s\n", ex.selection.Note)
+		if ex.selection.Ran {
+			selectionMethod = "coverage-context"
 		}
-		// SCAN-SCOPED: this instrumented run happens ONCE, for the whole
-		// repo, before any per-file driver exists — the driver has no
-		// notion of it (see RunSpec.SelectionDuration's doc), so it is
-		// recorded here directly rather than through a file's EventSink.
-		// Path "" is the scan-scoped marker; omitted (not zero) when the
-		// pass never ran (--whole-suite, an unsupported language, no
-		// runner) — see scanEventSink.record.
-		if ex.selectionDuration > 0 {
-			ex.events.forScan("phase_selection", "", map[string]any{
-				"duration_ms": ex.selectionDuration.Milliseconds(),
-			})
+
+		// WIDEN: the SAME plugin resolution collectSelection just used, asked
+		// again here rather than threaded out of it: resolveSelectionPlugin
+		// does no I/O (it only inspects the already-enumerated sources and
+		// the operator's own testCmd), so a second call costs nothing.
+		plug, _, _, _ := ex.resolveSelectionPlugin(selectionSources)
+		var idx reposcan.EvidenceIndex
+		var idxOK bool
+		if plug != nil {
+			idx, idxOK = reposcan.ParseEvidenceIndex(ex.selection, plug)
 		}
-	}
-	selectionMethod := ""
-	if ex != nil && ex.selection.Ran {
-		selectionMethod = "coverage-context"
+		var promoted int
+		cands, excl, promoted = reposcan.WidenCandidacyByEvidence(cands, excl, idx, idxOK)
+		evidenceCandidacyOK = idxOK
+		// enumExcl was captured right after Enumerate, before Rank/Select or
+		// widening touched excl — a promotion moves exactly one entry OUT of
+		// excl per promoted file, so this keeps totalFiles (len(cands) +
+		// enumExcl, computed below) equal to the number of files the walk
+		// actually found rather than double-counting a promoted file.
+		enumExcl -= promoted
+		if *diffBase == "" {
+			// Ranking/--top already ran over the pairing-based candidates
+			// above; an evidence-only candidate (TestPath == "", by
+			// construction — see WidenCandidacyByEvidence) has no churn×size
+			// signal of its own to compete with, so it is ADDED here rather
+			// than reconsidered by Rank/Select. Withholding it because a
+			// ranking pass that never saw it did not choose it would be
+			// exactly the "measurement computed then discarded" shape this
+			// whole feature exists to fix.
+			//
+			// The --diff-base branch is deliberately left alone: it already
+			// scopes `selected` to the operator's own changed-file bound, and
+			// folding an evidence rescue into that bound is a deeper
+			// diff+evidence interaction this fix round does not attempt —
+			// widening above still keeps cands/excl (and therefore every
+			// summary/disclosure line) truthful either way.
+			var evidenceOnly []reposcan.Candidate
+			for _, c := range cands {
+				if c.TestPath == "" {
+					selected = append(selected, c)
+					evidenceOnly = append(evidenceOnly, c)
+				}
+			}
+			// --mutants was resolved ABOVE, over the pairing-based
+			// `selected` — an evidence-only candidate did not exist yet to
+			// be named in that resolution. Top it up here, against the SAME
+			// document (mutantSet), rather than let these files fall
+			// through to a fresh (unreplayed) generation: a scan that asked
+			// to replay everything selected must not silently generate for
+			// the one shape of candidate this task just taught it to find.
+			// REFUSES (exit 2), exactly like the resolution above, when the
+			// document has no entry — or a stale one — for a newly-promoted
+			// file: the whole point of --mutants is that a run replays
+			// EVERYTHING it grades, never some replayed and some generated.
+			if mutantsPath != "" && ex != nil && len(evidenceOnly) > 0 {
+				mutRoot, merr := os.OpenRoot(*repoDir)
+				if merr != nil {
+					fmt.Fprintf(stderr, "corral certify --repo: opening %s: %v\n", *repoDir, merr)
+					return 1
+				}
+				extraPaths := make([]string, 0, len(evidenceOnly))
+				for _, c := range evidenceOnly {
+					extraPaths = append(extraPaths, c.Path)
+				}
+				sort.Strings(extraPaths)
+				extra, merr := presetMutantsForSelection(mutRoot, mutantSet, extraPaths)
+				_ = mutRoot.Close()
+				if merr != nil {
+					fmt.Fprintf(stderr, "corral certify --repo: %v\n", merr)
+					return 2
+				}
+				if presetMutants == nil {
+					presetMutants = make(map[string][]adequacy.Mutant, len(extra))
+				}
+				for path, ms := range extra {
+					presetMutants[path] = ms
+				}
+				ex.presetMutants = presetMutants
+				fmt.Fprintf(stdout, "  replaying a recorded mutant set for %d evidence-only candidate(s) from %s too\n", len(extra), mutantsPath)
+			}
+		}
 	}
 
 	// AuditConfig, like ModelSet above, is part of a verdict's identity: it
@@ -758,8 +877,14 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// worked.
 		fmt.Fprintf(stdout, "  %d source file(s) paired from --tests, ahead of filename convention\n", n)
 	}
+	selectionNote := ""
+	if ex != nil {
+		selectionNote = ex.selection.Note
+	}
+	fmt.Fprintln(stdout, candidacySummaryLine(cands, excl, evidenceCandidacyOK, *dryRun, selectionNote))
 	printLanguageProfile(stdout, reposcan.BuildLanguageProfile(cands, excl))
 	printSearchPairings(stdout, cands)
+	printEvidencePairings(stdout, cands)
 	printExclusions(stdout, excl)
 
 	// An explicit `-- <cmd>` is applied to EVERY job, so it is only meaningful
@@ -2063,7 +2188,7 @@ const preflightTimeout = 5 * time.Minute
 //
 // The Python reducer runs inside the instrumented shell and emits, per
 // file, the node ids that executed it plus each test's line ranges and the
-// import-time ranges (corral-selection-2), measured 2026-08-30: flask
+// import-time ranges (corral-selection-3), measured 2026-08-30: flask
 // 1,331,508 bytes, requests 1,053,331 bytes (the unreduced `coverage json
 // --show-contexts` for the same flask run was 411 MB — see
 // docs/design/test-selection.md). 64 MiB is ~50× that; 15 min is ~11×
@@ -2468,7 +2593,7 @@ func (l *localExecutor) collectSelection(ctx context.Context, sources []string) 
 	// the project's suite. The clock is here, and only here: every return
 	// above is a decision, not a run, and must record no time.
 	start := time.Now()
-	ev := collectSelectionEvidence(ctx, runner, files, plug, testCmd)
+	ev := collectSelectionEvidence(ctx, runner, files, plug, testCmd, sources)
 	// Recorded even when the run produced no usable evidence: the suite still
 	// executed, and the minutes it burned are part of what this scan cost.
 	l.selectionDuration = time.Since(start)
@@ -2485,8 +2610,8 @@ func (l *localExecutor) collectSelection(ctx context.Context, sources []string) 
 // package var, the same seam newWorkspacePool/probeWorkspacePool use: it is
 // the one call in collectSelection that runs the project's whole suite, and a
 // test of what is TIMED must be able to stand in for it without one.
-var collectSelectionEvidence = func(ctx context.Context, runner coverageRunner, files map[string]string, p lang.Plugin, testCmd []string) reposcan.SelectionEvidence {
-	return reposcan.CollectSelectionEvidence(ctx, runner, files, p, testCmd)
+var collectSelectionEvidence = func(ctx context.Context, runner coverageRunner, files map[string]string, p lang.Plugin, testCmd []string, sourcePaths []string) reposcan.SelectionEvidence {
+	return reposcan.CollectSelectionEvidence(ctx, runner, files, p, testCmd, sourcePaths)
 }
 
 // selectionCmdDigest is the sha256 of the EXACT instrumented command argv —
@@ -2566,9 +2691,13 @@ func goModulePath(repoDir string) (string, error) {
 // as source" — language-detected, not a test file — regardless of whether it
 // ended up a candidate. cands alone is a narrower set (Enumerate additionally
 // demoted an ambiguous pairing, or found no paired test, into an exclusion),
-// so this adds back the two Enumerate-level reasons that still describe a
-// language-detected, non-test file: ReasonNoPairedTest and
-// ReasonAmbiguousTest. enumOnlyExcl MUST be Enumerate's own exclusions only
+// so this adds back the Enumerate-level reasons that still describe a
+// language-detected, non-test file: ReasonNoPairedTest, ReasonAmbiguousTest,
+// ReasonUncovered, and ReasonImportOnly (a no-paired-test file the evidence
+// went on to measure at zero covering tests — either genuinely uncovered or
+// executed only at import time — still a real source file either way, just
+// excluded for a truthful reason instead). enumOnlyExcl MUST be Enumerate's
+// own exclusions, widened by evidence, only
 // (excl[:enumExcl] in runCertifyRepo) — later-appended reasons
 // (not-selected/ungoaled/derive-failed/source-too-large) describe candidates
 // already counted via cands, and re-detecting their language here would be
@@ -2588,7 +2717,8 @@ func enumeratedSourcePaths(cands []reposcan.Candidate, enumOnlyExcl []reposcan.E
 		add(c.Path)
 	}
 	for _, e := range enumOnlyExcl {
-		if e.Reason != reposcan.ReasonNoPairedTest && e.Reason != reposcan.ReasonAmbiguousTest {
+		if e.Reason != reposcan.ReasonNoPairedTest && e.Reason != reposcan.ReasonAmbiguousTest &&
+			e.Reason != reposcan.ReasonUncovered && e.Reason != reposcan.ReasonImportOnly {
 			continue
 		}
 		if _, ok := lang.Detect(e.Path); ok {
@@ -2754,6 +2884,93 @@ const maxListedExclusions = 20
 // TestPaths candidate predicted. Silent otherwise: the vast majority of a
 // scan's candidates pair by convention, and printing a line per file there
 // would just repeat what the "%d candidate(s)" count already says.
+// candidacySummaryLine is the design's own required line: how many
+// candidates came from the measurement (evidence-paired: no filename
+// pairing, only coverage), how many from the filename walk (name-paired,
+// pairing-based — stranger-path's own candidates, whether or not the
+// evidence also measured them), how many source files the evidence
+// positively measured at zero covering tests with nothing else executing
+// them either (uncovered), and how many the evidence measured at zero
+// covering tests but DID find import-time coverage for (import-only) — a
+// package __init__.py or a constants module, executed by every test that
+// imports it but exercised by none of them directly; conflating the two
+// would call that "uncovered" on essentially every Python repo. It also
+// says WHICH basis produced these numbers, because a reader must never
+// mistake a pairing-only fallback's zeros for "nothing was uncovered".
+func candidacySummaryLine(cands []reposcan.Candidate, excl []reposcan.Exclusion, evidenceOK, dryRun bool, selectionNote string) string {
+	evidencePaired, namePaired := 0, 0
+	for _, c := range cands {
+		if c.TestPath == "" {
+			evidencePaired++
+		} else {
+			namePaired++
+		}
+	}
+	uncovered, importOnly := 0, 0
+	for _, e := range excl {
+		switch e.Reason {
+		case reposcan.ReasonUncovered:
+			uncovered++
+		case reposcan.ReasonImportOnly:
+			// Counted on its own, the same way uncovered is: a different,
+			// honest finding (executed, just never by a test directly —
+			// see ReasonImportOnly's own doc), not folded into uncovered's
+			// count and not silently dropped either.
+			importOnly++
+		}
+	}
+	line := fmt.Sprintf("  evidence-paired %d · name-paired %d · uncovered %d · import-only %d", evidencePaired, namePaired, uncovered, importOnly)
+	switch {
+	case dryRun:
+		// EXACT wording per the design's Dry-run honesty decision: a dry run
+		// never runs the suite, so it must never guess at coverage — pairing
+		// is all it has, and it says so rather than print zeros that would
+		// read as "the evidence measured this and found nothing".
+		line += " — uncovered/evidence-paired unknown without a run — pairing shown"
+	case !evidenceOK:
+		// selectionNote is ex.selection.Note (empty when there was never an
+		// executor to ask, e.g. a scan that skipped evidence collection
+		// entirely) — appended so the SAME reason the "selection:" line
+		// above already gave is not lost the moment a reader's eye reaches
+		// this summary instead: "(no selection evidence)" alone forces a
+		// scroll back up to find out why.
+		if selectionNote != "" {
+			line += fmt.Sprintf(" — pairing-only candidacy (no selection evidence: %s)", selectionNote)
+		} else {
+			line += " — pairing-only candidacy (no selection evidence)"
+		}
+	}
+	return line
+}
+
+// printEvidencePairings discloses every candidate that has NO filename
+// pairing at all — TestPath is empty — and so exists as a candidate only
+// because the selection evidence measured a covering test for it. The
+// counterpart to printSearchPairings, which discloses the OTHER path a
+// pairing-based candidate can take (found by search rather than by strict
+// convention); an evidence-only candidate took neither, so it gets its own
+// disclosure line rather than being silently indistinguishable from a
+// convention-paired one.
+func printEvidencePairings(w io.Writer, cands []reposcan.Candidate) {
+	var evidenceOnly []reposcan.Candidate
+	for _, c := range cands {
+		if c.TestPath == "" {
+			evidenceOnly = append(evidenceOnly, c)
+		}
+	}
+	for i, c := range evidenceOnly {
+		if i == maxListedExclusions {
+			fmt.Fprintf(w, "    ... and %d more paired by evidence\n", len(evidenceOnly)-maxListedExclusions)
+			break
+		}
+		n := 0
+		if c.CoveringTests != nil {
+			n = *c.CoveringTests
+		}
+		fmt.Fprintf(w, "    %s paired by evidence: %d covering test(s), authored test lands beside %s\n", c.Path, n, c.CoveringTestPath)
+	}
+}
+
 func printSearchPairings(w io.Writer, cands []reposcan.Candidate) {
 	var viaSearch []reposcan.Candidate
 	for _, c := range cands {
@@ -2864,12 +3081,22 @@ func selectionRuleBreakdown(rules map[string]int) string {
 func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 	marker := ""
 	switch {
+	case f.ImportOnly:
+		// Checked BEFORE the plain Uncovered case: ImportOnly implies it,
+		// and the two must never share a marker — the file WAS executed
+		// (at import time), just never by a test directly, and calling that
+		// "UNCOVERED — no test executes this file" would be false in the
+		// sense a reader checks it against. Reuses reposcan.ReasonImportOnly
+		// verbatim rather than inventing a second wording for the same claim.
+		marker = "  [" + reposcan.ReasonImportOnly + "]"
 	case f.Uncovered:
-		// FIRST, and it withholds the rate below: the selection evidence
-		// found NO test executing this file, so its kill rate measures
-		// nothing. Printing "0.00" here would read as "your tests caught
-		// nothing" — an accusation about a measurement that was never made,
-		// when the real finding is that the file is untested outright.
+		// FIRST (among the remaining cases), and it withholds the rate
+		// below: the selection evidence found NO test executing this file
+		// AT ALL — genuinely dead, no coverage of any kind — so its kill
+		// rate measures nothing. Printing "0.00" here would read as "your
+		// tests caught nothing" — an accusation about a measurement that
+		// was never made, when the real finding is that the file is
+		// untested outright.
 		marker = "  [UNCOVERED — no test executes this file]"
 	case f.TimedOut:
 		marker = "  [TIMED OUT — pool did not converge]"
@@ -2929,6 +3156,11 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 		fmt.Fprintf(w, "   graded by %d of %d tests (%s; no mutant graded)", f.SelectedTests, f.SuiteTests, f.SelectionMethod)
 	case f.SelectionMethod != "" && !f.Uncovered:
 		fmt.Fprintf(w, "   graded by %d of %d tests (%s)", f.SelectedTests, f.SuiteTests, f.SelectionMethod)
+	case f.SelectionMethod != "" && f.ImportOnly:
+		// Checked before the plain Uncovered case, same reason as the
+		// marker above: "none execute it" would be the same false claim in
+		// a different sentence for a file the evidence measured executing.
+		fmt.Fprintf(w, "   graded by the tests for this file — %s (%s)", reposcan.ReasonImportOnly, f.SelectionMethod)
 	case f.SelectionMethod != "" && f.Uncovered:
 		// The uncovered line used to fall through to nothing — the ONE line
 		// where the mode is most load-bearing was the one line that said
@@ -3114,17 +3346,43 @@ func printRepoReport(w io.Writer, r reposcan.RepoReport, nothingInScope bool, mi
 	case r.Audited == 0:
 		fmt.Fprintln(w, "  COULD-NOT-GRADE: nothing was audited; no score is reported.")
 	case r.GradedFiles == 0:
-		// Audited, but nothing graded: every audited file is UNCOVERED. There
-		// is no mean to print (KillRate is NaN by construction) and a 0.00
-		// here would be the withheld number arriving as a repo-wide verdict.
-		fmt.Fprintf(w, "  NO GRADED FILE: all %d audited file(s) are UNCOVERED — no test executes them, so no kill rate was measured\n", r.Audited)
+		// Audited, but nothing graded: every audited file is either
+		// genuinely UNCOVERED or import-only (see ReasonImportOnly's own
+		// doc) — never claim the loudest word for a file the evidence
+		// measured executing. There is no mean to print (KillRate is NaN by
+		// construction) and a 0.00 here would be the withheld number
+		// arriving as a repo-wide verdict.
+		switch {
+		case r.ImportOnlyFiles == r.UncoveredFiles:
+			// Every ungraded file is import-only — none genuinely dead.
+			fmt.Fprintf(w, "  NO GRADED FILE: all %d audited file(s) were %s, so no kill rate was measured\n", r.Audited, reposcan.ReasonImportOnly)
+		case r.ImportOnlyFiles == 0:
+			// The ORIGINAL claim, byte-identical: no import-only files at
+			// all, so nothing here changed from before this distinction
+			// existed.
+			fmt.Fprintf(w, "  NO GRADED FILE: all %d audited file(s) are UNCOVERED — no test executes them, so no kill rate was measured\n", r.Audited)
+		default:
+			fmt.Fprintf(w, "  NO GRADED FILE: all %d audited file(s) are ungraded — %d UNCOVERED (no test executes them at all), %d %s — so no kill rate was measured\n",
+				r.Audited, r.UncoveredFiles-r.ImportOnlyFiles, r.ImportOnlyFiles, reposcan.ReasonImportOnly)
+		}
 	case r.UncoveredFiles > 0:
 		// The denominator is stated whenever it differs from Audited: the
 		// mean is over the files that were actually graded, and a reader
 		// dividing by "audited" would get a different number than the one
-		// printed.
-		fmt.Fprintf(w, "  kill rate %.2f over %d graded file(s) — %d audited, %d UNCOVERED and excluded from the mean (%.0f%% of %d candidates audited)\n",
-			r.KillRate, r.GradedFiles, r.Audited, r.UncoveredFiles, 100*r.AuditedFraction(), r.Candidates)
+		// printed. Same UNCOVERED/import-only split as above, for the SAME
+		// reason — this line's %d UNCOVERED must never include a file the
+		// evidence measured executing.
+		switch {
+		case r.ImportOnlyFiles == r.UncoveredFiles:
+			fmt.Fprintf(w, "  kill rate %.2f over %d graded file(s) — %d audited, %d %s and excluded from the mean (%.0f%% of %d candidates audited)\n",
+				r.KillRate, r.GradedFiles, r.Audited, r.UncoveredFiles, reposcan.ReasonImportOnly, 100*r.AuditedFraction(), r.Candidates)
+		case r.ImportOnlyFiles == 0:
+			fmt.Fprintf(w, "  kill rate %.2f over %d graded file(s) — %d audited, %d UNCOVERED and excluded from the mean (%.0f%% of %d candidates audited)\n",
+				r.KillRate, r.GradedFiles, r.Audited, r.UncoveredFiles, 100*r.AuditedFraction(), r.Candidates)
+		default:
+			fmt.Fprintf(w, "  kill rate %.2f over %d graded file(s) — %d audited, %d excluded from the mean (%d UNCOVERED, %d %s) (%.0f%% of %d candidates audited)\n",
+				r.KillRate, r.GradedFiles, r.Audited, r.UncoveredFiles, r.UncoveredFiles-r.ImportOnlyFiles, r.ImportOnlyFiles, reposcan.ReasonImportOnly, 100*r.AuditedFraction(), r.Candidates)
+		}
 	default:
 		fmt.Fprintf(w, "  kill rate %.2f over %d audited file(s) (%.0f%% of %d candidates)\n",
 			r.KillRate, r.Audited, 100*r.AuditedFraction(), r.Candidates)
@@ -3185,8 +3443,23 @@ func printRepoReport(w io.Writer, r reposcan.RepoReport, nothingInScope bool, mi
 	// executes them — so they are named inside that clause, not as a third
 	// bucket that would not add up.
 	if r.Audited > 0 {
-		fmt.Fprintf(w, "  test selection: %d file(s) graded by the tests that execute them (%d of those UNCOVERED — no test executes them at all), %d by the whole suite\n",
-			r.SelectedFiles, r.UncoveredFiles, r.WholeSuiteFiles)
+		switch {
+		case r.ImportOnlyFiles == 0:
+			// Byte-identical to before this distinction existed.
+			fmt.Fprintf(w, "  test selection: %d file(s) graded by the tests that execute them (%d of those UNCOVERED — no test executes them at all), %d by the whole suite\n",
+				r.SelectedFiles, r.UncoveredFiles, r.WholeSuiteFiles)
+		case r.UncoveredFiles == r.ImportOnlyFiles:
+			// None genuinely dead — the word UNCOVERED must not appear at
+			// all, not even as a truthful "0 of those".
+			fmt.Fprintf(w, "  test selection: %d file(s) graded by the tests that execute them (%d %s), %d by the whole suite\n",
+				r.SelectedFiles, r.ImportOnlyFiles, reposcan.ReasonImportOnly, r.WholeSuiteFiles)
+		default:
+			// Split the same way the summary lines above do: the genuinely
+			// dead count must not include a file the evidence measured
+			// executing at import time.
+			fmt.Fprintf(w, "  test selection: %d file(s) graded by the tests that execute them (%d of those UNCOVERED — no test executes them at all, %d %s), %d by the whole suite\n",
+				r.SelectedFiles, r.UncoveredFiles-r.ImportOnlyFiles, r.ImportOnlyFiles, reposcan.ReasonImportOnly, r.WholeSuiteFiles)
+		}
 	}
 	// Sorted, like printExclusions: map iteration order is random, and a
 	// report a later slice signs and anchors has to be byte-reproducible.
@@ -3252,9 +3525,14 @@ func printRepoReport(w io.Writer, r reposcan.RepoReport, nothingInScope bool, mi
 	// the two never disagree about what happened: r.Weakest is empty in both
 	// of those states anyway, but the guard keeps the intent explicit.
 	if minKillRate != nil && !nothingInScope && r.Audited > 0 {
-		var breaches, uncovered []reposcan.WeakFile
+		var breaches, uncovered, importOnly []reposcan.WeakFile
 		for _, f := range r.Weakest {
 			switch {
+			case f.ImportOnly:
+				// Checked before the plain Uncovered case: both fail the
+				// gate identically (see repoScanExitCode), but only the
+				// genuinely dead ones get the word UNCOVERED.
+				importOnly = append(importOnly, f)
 			case f.Uncovered:
 				uncovered = append(uncovered, f)
 			case f.KillRate < *minKillRate:
@@ -3276,6 +3554,15 @@ func printRepoReport(w io.Writer, r reposcan.RepoReport, nothingInScope bool, mi
 			fmt.Fprintf(w, "  UNCOVERED: %d file(s) no test executes at all:\n", len(uncovered))
 			for _, f := range uncovered {
 				fmt.Fprintf(w, "    %s: UNCOVERED — no test executes it (fails --min-kill-rate)\n", f.Path)
+			}
+		}
+		// Same disposition (fails the gate, no rate), different, honest
+		// claim: reuses reposcan.ReasonImportOnly verbatim rather than a
+		// second wording for the same finding.
+		if len(importOnly) > 0 {
+			fmt.Fprintf(w, "  IMPORT-ONLY: %d file(s) %s (fails --min-kill-rate):\n", len(importOnly), reposcan.ReasonImportOnly)
+			for _, f := range importOnly {
+				fmt.Fprintf(w, "    %s: %s (fails --min-kill-rate)\n", f.Path, reposcan.ReasonImportOnly)
 			}
 		}
 	}
@@ -3734,11 +4021,25 @@ func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
 		localEndpoints: l.localEndpoints,
 		repoDir:        l.repoDir,
 		codePath:       j.Path,
-		testPath:       j.TestPath,
-		goal:           j.Goal.Text,
-		lang:           j.Lang,
-		repo:           j.Repo,
-		iso:            l.iso,
+		// j.TestPath is empty for an evidence-only candidate BY
+		// CONSTRUCTION (see reposcan.WidenCandidacyByEvidence): the whole
+		// point is that no filename convention paired one. Leaving testPath
+		// empty here would send prepareAuditJail to reposcan.FindTest,
+		// which — for exactly the same reason — finds nothing and refuses
+		// the job as "no test found", so the file consumes a --top slot,
+		// pays for goal derivation, and lands ungradable despite the
+		// evidence proving a test covers it. j.CoveringTestPath is that
+		// covering test, already known — the measurement the candidacy
+		// decision was made from — so use it directly rather than have
+		// prepareAuditJail re-derive (and fail to re-derive) the same fact
+		// by search. This does NOT move the cache key: KeyInputs is
+		// computed in EmitJobs from Candidate.TestPath (still empty), never
+		// from this field — see TestEvidenceOnlyCandidateKeysOnTheSuiteDigestNotAPerFileDigest.
+		testPath: orDefault(j.TestPath, j.CoveringTestPath),
+		goal:     j.Goal.Text,
+		lang:     j.Lang,
+		repo:     j.Repo,
+		iso:      l.iso,
 		// "local" rather than "" when the operator gave no --commit: an empty
 		// commit makes auditOneFile fall back to `git rev-parse HEAD` — which
 		// reads the CWD's repo, not the SCANNED one, and would stamp every
@@ -4036,6 +4337,14 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 	// did the pool's own test demonstrate a real, catchable bug (corral's
 	// strongest claim), or did it try and prove nothing.
 	switch {
+	case v.ImportOnly:
+		// Checked before the plain Uncovered case: the file WAS executed,
+		// at import time, just never by a test directly — printing
+		// "UNCOVERED — no test executes it" here is exactly the false
+		// claim this branch exists to stop, THE first place it reached an
+		// operator (this note prints minutes before the final report).
+		// Reuses reposcan.ReasonImportOnly verbatim.
+		l.note("%s: %s (rate withheld)\n", j.Path, reposcan.ReasonImportOnly)
 	case v.Uncovered:
 		// The live note is a reader too, and the first one an operator sees.
 		// No test executes this file, so its rate measures nothing — printing

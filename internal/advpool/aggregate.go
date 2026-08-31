@@ -36,7 +36,20 @@ func verdictFromSpec(rs RunSpec) Verdict {
 		// probe ran and the pool's trees were established before the pool
 		// itself ever failed to converge.
 		Concurrency: rs.Concurrency,
-		Uncovered:   rs.Selection.Method != "" && len(rs.Selection.Tests) == 0,
+		// Uncovered stays the UNION of both shapes (genuinely dead, or
+		// import-only) — every existing consumer withholds the rate on
+		// this flag alone, and that withholding is correct for both. See
+		// Verdict.Uncovered/ImportOnly's own docs for why ImportOnly is a
+		// REFINEMENT, never a replacement.
+		Uncovered: rs.Selection.Method != "" && len(rs.Selection.Tests) == 0,
+		// ImportOnly narrows Uncovered to the shape where the evidence ALSO
+		// recorded static (import-time) coverage — len(rs.Selection.Static)
+		// > 0 — the same signal reposcan.WidenCandidacyByEvidence's
+		// ReasonImportOnly already keys off at candidacy time, now applied
+		// here too since the same false claim ("no test executes this
+		// file") can reach a reader through a PAIRED file's grading, not
+		// only through candidacy.
+		ImportOnly: rs.Selection.Method != "" && len(rs.Selection.Tests) == 0 && len(rs.Selection.Static) > 0,
 		// The two phases the driver could not have timed, from the caller
 		// that did (see RunSpec.SelectionDuration/PoolDuration). They ride
 		// through here — the shared construction site — so the TIMED-OUT

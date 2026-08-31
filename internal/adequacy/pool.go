@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
 // Disclosure is what the verdict and the report say about concurrency: how
@@ -505,6 +507,18 @@ func (p *WorkspacePool) Enumerate(ctx context.Context, files map[string]string, 
 	}
 	defer release()
 	return r.Enumerate(ctx, files, cmd)
+}
+
+// EnumerateDetailed is Enumerate's optional richer twin, delegated to the
+// borrowed WorkspaceRunner's own EnumerateDetailed — see its doc for what
+// it captures beyond Enumerate.
+func (p *WorkspacePool) EnumerateDetailed(ctx context.Context, files map[string]string, cmd []string) (sandbox.EnumerateResult, error) {
+	r, release, err := p.borrow(ctx)
+	if err != nil {
+		return sandbox.EnumerateResult{}, err
+	}
+	defer release()
+	return r.EnumerateDetailed(ctx, files, cmd)
 }
 
 // Verify pre-flights every tree, so a copy that failed to materialise is

@@ -32,6 +32,25 @@ type Candidate struct {
 	// selection), so a later reader (the JSON inventory, the human report)
 	// can disclose it without re-deriving the fact.
 	ViaSearch bool
+	// CoveringTestPath is the selection evidence's most-covering test FILE
+	// for this candidate — the covering test with the most executed lines of
+	// this file, by containing file (ties: the more specific path — see
+	// moreSpecificTestPath). Set ONLY for an evidence-only candidate
+	// (TestPath == ""), where it is the authored-test landing hint: the
+	// pairing-based candidate already has an obvious home (TestPath's own
+	// directory), and this is the measured proxy for "where this file's
+	// tests live" when no filename pairing exists. "" for a paired
+	// candidate — WidenCandidacyByEvidence never sets it there, so a
+	// mirrored fixture's already-candidate rows stay byte-identical.
+	CoveringTestPath string
+	// CoveringTests is the number of tests the evidence showed execute this
+	// file, disclosed on the evidence-paired report line and carried to the
+	// ledger's covering_tests column. nil means the evidence never measured
+	// this file (including every candidate on a scan where no evidence ran
+	// at all) — never confused with a measured, genuine zero, which
+	// WidenCandidacyByEvidence excludes as ReasonUncovered rather than
+	// leaving as a zero-value Candidate.
+	CoveringTests *int
 }
 
 // Exclusion is a file deliberately NOT audited, with a machine-stable reason.
@@ -78,6 +97,54 @@ const (
 	// this repo three stale worktrees under .worktrees/ turned 227 candidates
 	// into 468. Accounted like skipped-dir: the file is listed, never dropped.
 	ReasonGitignored = "gitignored"
+	// ReasonUncovered marks a source file the selection evidence actually
+	// MEASURED and found zero tests executing, AND found no coverage for it
+	// at all outside a test either — genuinely nothing executed it. The
+	// loudest finding a mutation audit of a test suite can produce, and a
+	// different claim from ReasonNoPairedTest (a statement about NAMES: no
+	// filename convention predicted a test, which says nothing about
+	// whether some other test happens to execute the file). Applied ONLY
+	// when evidence exists, positively measured the file at zero covering
+	// tests, AND found no import-time (static) coverage for it either — see
+	// WidenCandidacyByEvidence and ReasonImportOnly, the sibling finding
+	// for a file executed but never by a test. Absence of evidence is
+	// never treated as evidence of absence: a file the evidence never
+	// measured keeps ReasonNoPairedTest. The exact string is load-bearing —
+	// it is the disclosure text itself, not a machine code a reader has to
+	// translate.
+	ReasonUncovered = "uncovered — no test executes this file"
+	// ReasonImportOnly marks a source file the selection evidence
+	// positively measured at zero covering TESTS but non-empty coverage
+	// OUTSIDE any test context — executed only at import/module-load time
+	// (a package __init__.py, a module-level constant, a decorator
+	// evaluated at import). This is NOT ReasonUncovered: the file was
+	// genuinely executed, coverage.py recorded real lines for it — it is
+	// only that no TEST exercises it directly, which pytest-cov's own
+	// per-test contexts cannot attribute to any test id (see
+	// lang.FileCoverage.HasStatic). Calling this "uncovered" would be
+	// false in the sense a reader checks it against: every test in the
+	// suite typically imports the package, which is exactly why this hits
+	// on essentially every Python repo's __init__.py and constants
+	// modules. Same disposition as ReasonUncovered — excluded from the
+	// audit, since there is nothing a TEST-scoped kill rate could grade it
+	// against — but a different, honest claim, counted separately. The
+	// exact string is load-bearing, same as ReasonUncovered's.
+	ReasonImportOnly = "imported at load time — no test exercises it directly"
+	// ReasonNoExecutableCode marks a source file the selection evidence
+	// positively measured with ZERO covering tests AND zero coverage
+	// outside a test either — the SAME shape ReasonUncovered reads — but
+	// whose file coverage.py's own static parse found to contain NO
+	// executable statement at all (see lang.FileCoverage.HasStatements): a
+	// genuinely empty file, or one that is comment-only. There is nothing
+	// to execute, nothing a test could cover, and nothing a test could be
+	// blamed for missing — a 0-byte tests/__init__.py is the textbook
+	// case, and every real Python repo carries several such files. Calling
+	// this "uncovered" would be a nonsense claim (there IS no test-vs-code
+	// question to answer) that inflates the headline finding on literally
+	// every scan. Benign: still excluded (there is nothing to grade), but
+	// never counted alongside ReasonUncovered/ReasonImportOnly, and never
+	// worded as though the tests failed at anything.
+	ReasonNoExecutableCode = "no executable code"
 )
 
 // skipDirs are never walked: dependency, build-output and VCS trees are not
@@ -377,6 +444,147 @@ func EnumerateWithTests(root string, tests *TestMap) ([]Candidate, []Exclusion, 
 	sort.Slice(cands, func(i, j int) bool { return cands[i].Path < cands[j].Path })
 	sort.Slice(excl, func(i, j int) bool { return excl[i].Path < excl[j].Path })
 	return cands, excl, nil
+}
+
+// WidenCandidacyByEvidence is the evidence-first half of candidacy: a file
+// with a language, not gitignored, not a test — and NO filename pairing —
+// still becomes a candidate when the selection evidence shows at least one
+// test executes it, and is relabeled when the evidence positively measured
+// it at ZERO covering tests (rather than left as ReasonNoPairedTest) — as
+// ReasonUncovered when NOTHING executed it at all, or as ReasonImportOnly
+// when it WAS executed, just never by a test directly (import/module-load
+// time coverage only — a package __init__.py, a module constant). These
+// are two different, honest claims under what the design called one
+// "zero covering tests" state, and conflating them would call a package's
+// __init__.py "uncovered" on essentially every Python repo, since every
+// test typically imports it. Candidacy is therefore paired ∪
+// evidence-covered: pairing alone (stranger-path's own walk) is untouched,
+// and this only ever ADDS candidates or renames the reason on an exclusion
+// — it never removes a pairing-based candidate or changes its
+// TestPath/ViaSearch.
+//
+// ok mirrors ParseEvidenceIndex's own bool: false means there is no index to
+// widen with (evidence never ran, an unsupported language, or unparseable
+// evidence), and cands/excl come back byte-identical to what was passed in —
+// the pairing-only candidacy the design calls the fallback.
+//
+// Already-paired candidates get CoveringTests filled in when the evidence
+// also measured them (ledger metadata only — see Candidate.CoveringTests);
+// TestPath, ViaSearch and every other field, and every excluded-for-another-
+// reason entry, are left exactly as the pairing walk produced them, which is
+// what keeps an already-candidate file's report line, grading command, cache
+// key and verdict byte-identical (see the mirrored-fixture test).
+//
+// promoted is the count of NEW candidates this call added (the third
+// return) — a caller keeping its own Enumerate-level exclusion count needs
+// it to decrement that count by exactly the same number a promotion moves
+// out of excl, rather than re-deriving "how many enumerate-level
+// exclusions are left" from a excl slice that may since have grown
+// candidate-level entries of its own (not-selected, ungoaled, ...) that
+// this function correctly ignores but a naive re-count would not.
+func WidenCandidacyByEvidence(cands []Candidate, excl []Exclusion, idx EvidenceIndex, ok bool) ([]Candidate, []Exclusion, int) {
+	if !ok {
+		return cands, excl, 0
+	}
+
+	for i := range cands {
+		if n, _, _, _, measured := idx.CoverageFor(cands[i].Path); measured {
+			v := n
+			cands[i].CoveringTests = &v
+		}
+	}
+
+	// hasPath is lang.LibraryCodeClassifier's file-existence oracle: the
+	// repo's own enumerated inventory (every candidate AND every exclusion
+	// — cands/excl together are every source Enumerate ever saw) UNIONED
+	// with whatever the evidence itself measured, so a package __init__.py
+	// is found whether it was paired, excluded, or simply present in the
+	// coverage data — never a second filesystem read.
+	known := make(map[string]bool, len(cands)+len(excl))
+	for _, c := range cands {
+		known[c.Path] = true
+	}
+	for _, e := range excl {
+		known[e.Path] = true
+	}
+	hasPath := func(p string) bool { return known[p] || idx.Measured(p) }
+
+	kept := excl[:0:0]
+	var promoted int
+	for _, e := range excl {
+		if e.Reason != ReasonNoPairedTest {
+			kept = append(kept, e)
+			continue
+		}
+		n, mostCovering, hasStatic, hasStatements, measured := idx.CoverageFor(e.Path)
+		switch {
+		case !measured:
+			// Absence of evidence is not evidence of absence: this file's
+			// only honest reason remains "no filename convention predicted a
+			// test", not a claim the evidence never actually made.
+			kept = append(kept, e)
+		case n > 0:
+			v := n
+			langName := ""
+			if p, ok := lang.Detect(e.Path); ok {
+				langName = p.Name()
+			}
+			cands = append(cands, Candidate{
+				Path:             e.Path,
+				Lang:             langName,
+				CoveringTestPath: mostCovering,
+				CoveringTests:    &v,
+			})
+			promoted++
+		case !isLibraryCode(e.Path, hasPath):
+			// Founder ruling: uncovered/import-only/no-executable-code are
+			// the loudest findings a mutation audit produces, and they must
+			// speak only about the library a repo SHIPS — docs config, a
+			// setup/build script, a one-off automation script all measure
+			// real, but the finding would dilute the headline on every real
+			// repo, which carries several. The file is still ENUMERATED and
+			// still excluded, under its ORIGINAL, honest reason — this is
+			// promotion's OWN gate too (n > 0, above), never invoked for a
+			// non-library file, so a covered non-library file still becomes
+			// a candidate; only the negative claims are scoped.
+			kept = append(kept, e)
+		case !hasStatements:
+			// Coverage's own static parse found NOTHING to execute — an
+			// empty or comment-only file (a 0-byte __init__.py is the
+			// textbook case). There is no code for a test to have covered,
+			// so this is benign, not a scolding "your tests are bad" claim.
+			kept = append(kept, Exclusion{Path: e.Path, Reason: ReasonNoExecutableCode})
+		case hasStatic:
+			// Executed, just never by a test directly (import/module-load
+			// time only) — a real, different finding from ReasonUncovered.
+			// See ReasonImportOnly's own doc.
+			kept = append(kept, Exclusion{Path: e.Path, Reason: ReasonImportOnly})
+		default:
+			kept = append(kept, Exclusion{Path: e.Path, Reason: ReasonUncovered})
+		}
+	}
+
+	sort.Slice(cands, func(i, j int) bool { return cands[i].Path < cands[j].Path })
+	return cands, kept, promoted
+}
+
+// isLibraryCode asks p's OPTIONAL lang.LibraryCodeClassifier, when it
+// implements one, whether path is library code — see that interface's own
+// doc for the rule and why it exists. A plugin that does not implement it
+// (every language except python today), or a path lang.Detect cannot
+// resolve at all, is treated as library code: byte-identical to before
+// this distinction existed, never a NEW exclusion for a language this
+// package has no opinion about.
+func isLibraryCode(path string, hasPath func(string) bool) bool {
+	p, ok := lang.Detect(path)
+	if !ok {
+		return true
+	}
+	lc, ok := p.(lang.LibraryCodeClassifier)
+	if !ok {
+		return true
+	}
+	return lc.IsLibraryCode(path, hasPath)
 }
 
 // demoteAmbiguousPairings enforces, as a global property (not a per-plugin

@@ -47,7 +47,7 @@ func TestPythonInstrumentDerivesFromOperatorCommand(t *testing.T) {
 		`[ "$rc" -eq 0 ] || exit "$rc"`,
 		// The evidence is reduced INSIDE the run to {file: [node ids]} — the
 		// full coverage-json with contexts was 411 MB on flask (#165).
-		`"format": "corral-selection-2"`,
+		`"format": "corral-selection-3"`,
 		"contexts_by_lineno",
 	} {
 		if !strings.Contains(script, want) {
@@ -62,6 +62,88 @@ func TestPythonInstrumentDerivesFromOperatorCommand(t *testing.T) {
 func TestPythonInstrumentRefusesANonPytestCommand(t *testing.T) {
 	if _, ok := (pyPlugin{}).Instrument([]string{"make", "test"}); ok {
 		t.Error("Instrument must refuse a command it cannot splice coverage into")
+	}
+}
+
+// THE SECOND DEFECT: coverage.py's default (bare --cov) scope is the whole
+// cwd, which is exactly what makes "uncovered" unreachable for a
+// src-layout/editable install (see InstrumentSourceRoots's own doc) —
+// coverage measures a file by where python actually imported it from, an
+// editable install imports from OUTSIDE the checked-out tree, and the
+// reducer's own repo-root filter drops it entirely. One --cov=<root> per
+// derived source root instead scopes coverage to what was actually asked
+// to be audited.
+func TestPythonInstrumentSourceRootsEmitsPerRootCovFlags(t *testing.T) {
+	cmd, ok := pyPlugin{}.InstrumentSourceRoots([]string{"pytest", "-q"}, []string{"src"})
+	if !ok {
+		t.Fatal("InstrumentSourceRoots: ok=false for a plain pytest command")
+	}
+	script := cmd[2]
+	if !strings.Contains(script, "--cov=src --cov-context=test") {
+		t.Errorf("script must scope coverage to the derived root, got:\n%s", script)
+	}
+	if strings.Contains(script, " --cov --cov-context") {
+		t.Errorf("script must NOT fall back to bare --cov when a root was given:\n%s", script)
+	}
+	// Every other clause survives untouched: the rc guard, the JSON tail,
+	// the pinned C tracer — this only ever changes the --cov flag(s).
+	for _, want := range []string{
+		"COVERAGE_CORE=ctrace COVERAGE_FILE=",
+		`[ "$rc" -eq 0 ] || exit "$rc"`,
+		`"format": "corral-selection-3"`,
+		"--cov-context=test --cov-report= -p no:cacheprovider",
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("script lacks %q:\n%s", want, script)
+		}
+	}
+}
+
+// More than one source root emits one --cov= per root, in the order given.
+func TestPythonInstrumentSourceRootsEmitsOneFlagPerRoot(t *testing.T) {
+	cmd, ok := pyPlugin{}.InstrumentSourceRoots([]string{"pytest"}, []string{"src", "otherpkg"})
+	if !ok {
+		t.Fatal("ok=false")
+	}
+	script := cmd[2]
+	if !strings.Contains(script, "--cov=src --cov=otherpkg --cov-context=test") {
+		t.Errorf("script must carry one --cov= per root, got:\n%s", script)
+	}
+}
+
+// A root of "." (sources at the repo root) is a legitimate root, not a
+// special case that gets dropped.
+func TestPythonInstrumentSourceRootsAcceptsDotForRootLevelSources(t *testing.T) {
+	cmd, ok := pyPlugin{}.InstrumentSourceRoots([]string{"pytest"}, []string{"."})
+	if !ok {
+		t.Fatal("ok=false")
+	}
+	if !strings.Contains(cmd[2], "--cov=. --cov-context=test") {
+		t.Errorf("script must carry --cov=., got:\n%s", cmd[2])
+	}
+}
+
+// No roots derived (nil/empty) is not an error — it is byte-identical to
+// Instrument's own bare --cov fallback.
+func TestPythonInstrumentSourceRootsFallsBackToBareCovWhenEmpty(t *testing.T) {
+	withRoots, ok := pyPlugin{}.InstrumentSourceRoots([]string{"pytest", "-q"}, nil)
+	if !ok {
+		t.Fatal("ok=false")
+	}
+	plain, ok := pyPlugin{}.Instrument([]string{"pytest", "-q"})
+	if !ok {
+		t.Fatal("ok=false")
+	}
+	if !reflect.DeepEqual(withRoots, plain) {
+		t.Errorf("InstrumentSourceRoots(nil) = %v, want byte-identical to Instrument = %v", withRoots, plain)
+	}
+}
+
+// The command-shape refusal (anything that is not a recognized pytest
+// invocation) applies identically to the source-roots entry point.
+func TestPythonInstrumentSourceRootsRefusesANonPytestCommand(t *testing.T) {
+	if _, ok := (pyPlugin{}).InstrumentSourceRoots([]string{"make", "test"}, []string{"src"}); ok {
+		t.Error("InstrumentSourceRoots must refuse a command it cannot splice coverage into")
 	}
 }
 
@@ -87,10 +169,25 @@ func TestPythonSelectPicksOnlyTestsThatExecutedTheFile(t *testing.T) {
 	}
 }
 
-// pkg/untested.py is ABSENT from the recording (never imported); its paired
-// test file ran, so the absence is evidence: no test executes it.
-func TestPythonSelectEmptyForAFileNoTestExecutes(t *testing.T) {
-	sel, err := pyPlugin{}.Select(recordedEvidence(t), "", "pkg/untested.py", "tests/test_calc.py", []string{"pytest"})
+// pkg/untested.py is ABSENT from the recording (never imported). Even
+// though its paired test file DID run (sawTest), absence is NEVER
+// "uncovered": a file present in the evidence with zero covering tests is
+// the only uncovered finding (see TestPythonSelectPresentWithZeroTestsIsUncovered)
+// — an absent one can be missing from the report for reasons that have
+// nothing to do with whether the suite executed it (an editable/src-layout
+// install measures it OUTSIDE the repo root and the reducer drops it; see
+// python.go's Select doc). Error → the caller grades whole-suite, disclosed.
+func TestPythonSelectAbsentFileWithATestThatRanIsAnErrorNotUncovered(t *testing.T) {
+	_, err := pyPlugin{}.Select(recordedEvidence(t), "", "pkg/untested.py", "tests/test_calc.py", []string{"pytest"})
+	if err == nil {
+		t.Fatal("an absent file must fall back disclosed, not read as uncovered")
+	}
+}
+
+// pkg/__init__.py IS present in the recording, with zero covering tests —
+// this, and only this, is what "uncovered" measures.
+func TestPythonSelectPresentWithZeroTestsIsUncovered(t *testing.T) {
+	sel, err := pyPlugin{}.Select(recordedEvidence(t), "", "pkg/__init__.py", "tests/test_calc.py", []string{"pytest"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +215,7 @@ func TestPythonSelectAbsentTestFileIsAnError(t *testing.T) {
 // coverage-json this used to parse — is refused rather than misread.
 func TestPythonSelectRejectsAnUnknownEvidenceFormat(t *testing.T) {
 	old := `{"meta":{"show_contexts":true},"totals":{"covered_lines":1},"files":{"pkg/calc.py":{"summary":{"num_statements":1,"covered_lines":1},"contexts":{"1":["tests/test_calc.py::test_add|run"]}}}}`
-	if _, err := (pyPlugin{}).Select([]byte(old), "", "pkg/calc.py", "tests/test_calc.py", []string{"pytest"}); err == nil || !strings.Contains(err.Error(), "corral-selection-2") {
+	if _, err := (pyPlugin{}).Select([]byte(old), "", "pkg/calc.py", "tests/test_calc.py", []string{"pytest"}); err == nil || !strings.Contains(err.Error(), "corral-selection-3") {
 		t.Errorf("the old coverage-json shape must be refused by name, got err=%v", err)
 	}
 }
@@ -152,7 +249,7 @@ func TestPythonSelectFallsBackToFilesWhenArgvWouldBeTooLong(t *testing.T) {
 	for i := 0; i < 3000; i++ {
 		ctxs = append(ctxs, fmt.Sprintf(`"tests/test_big.py::test_%04d_%s"`, i, strings.Repeat("x", 20)))
 	}
-	ev := `{"format":"corral-selection-2","tests":3000,"files":{` +
+	ev := `{"format":"corral-selection-3","tests":3000,"files":{` +
 		`"pkg/calc.py":{"tests":[` + strings.Join(ctxs, ",") + `],"lines":{"0":[[2,2]],"1":[[6,6]]},"static":[[1,1]]},` +
 		`"tests/test_big.py":{"tests":[` + ctxs[0] + `],"lines":{},"static":[]}}}`
 	sel, err := pyPlugin{}.Select([]byte(ev), "", "pkg/calc.py", "tests/test_big.py", []string{"pytest"})
@@ -284,7 +381,7 @@ func TestRecordedEvidenceCarriesNoLineZero(t *testing.T) {
 func TestPythonSelectRefusesV1ByName(t *testing.T) {
 	v1 := `{"format":"corral-selection-1","tests":1,"files":{"pkg/calc.py":["tests/test_calc.py::test_add"]}}`
 	_, err := pyPlugin{}.Select([]byte(v1), "", "pkg/calc.py", "tests/test_calc.py", []string{"pytest"})
-	if err == nil || !strings.Contains(err.Error(), "corral-selection-2") {
+	if err == nil || !strings.Contains(err.Error(), "corral-selection-3") {
 		t.Errorf("v1 must be refused naming the expected format, got %v", err)
 	}
 }
@@ -355,13 +452,14 @@ func TestPythonSelectStripsCollectionTargetsFromTheBaseCommand(t *testing.T) {
 // The uncovered pass inverts the same way: without the strip, the authored
 // test's path is appended to a command that still names tests/, so the whole
 // suite runs and the "no test executes this file" finding is graded against
-// everything.
+// everything. pkg/__init__.py is PRESENT in the recording with zero
+// covering tests — a genuinely uncovered file, not merely absent.
 func TestPythonWithAuthoredTestUsesTheStrippedBase(t *testing.T) {
 	fixture, err := filepath.Abs(filepath.Join("testdata", "pycov-fixture"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	sel, err := pyPlugin{}.Select(recordedEvidence(t), fixture, "pkg/untested.py", "tests/test_calc.py", []string{"pytest", "tests/"})
+	sel, err := pyPlugin{}.Select(recordedEvidence(t), fixture, "pkg/__init__.py", "tests/test_calc.py", []string{"pytest", "tests/"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -474,5 +572,147 @@ func TestForSpanFileFallbackWhenCmdIsShorterThanTests(t *testing.T) {
 	cmd, _, rule := pyPlugin{}.ForSpan(sel, LineRange{41, 42})
 	if rule != SpanRuleFile || !reflect.DeepEqual(cmd, sel.Cmd) {
 		t.Errorf("rule=%q cmd=%v, want the file selection unchanged", rule, cmd)
+	}
+}
+
+// Index parses the SAME evidence document Select reads, but answers about
+// every measured file at once: the per-file test->lines-executed readout
+// candidacy needs to decide "does anything cover this file" without calling
+// Select once per source file.
+func TestPythonIndexReadsEveryMeasuredFile(t *testing.T) {
+	idx, err := pyPlugin{}.Index(recordedEvidence(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	calc, ok := idx["pkg/calc.py"]
+	if !ok {
+		t.Fatal("Index: pkg/calc.py missing from the readout")
+	}
+	want := map[string]int{
+		"tests/test_calc.py::test_add":  1,
+		"tests/test_other.py::test_sub": 1,
+	}
+	if !reflect.DeepEqual(calc.Tests, want) {
+		t.Errorf("pkg/calc.py Tests = %v, want %v", calc.Tests, want)
+	}
+	// A file the suite measured but nothing executed still appears, with an
+	// empty Tests map — Index reports zero coverage as a fact about the
+	// file, not as the file's absence from the readout.
+	if init, ok := idx["pkg/__init__.py"]; !ok || len(init.Tests) != 0 {
+		t.Errorf("pkg/__init__.py = %+v, ok=%v, want a present entry with zero covering tests", init, ok)
+	}
+	// A file the evidence never measured at all is genuinely absent — Index
+	// must not invent a zero-coverage entry for it.
+	if _, ok := idx["never/measured.py"]; ok {
+		t.Error("Index must not fabricate an entry for a file the evidence never measured")
+	}
+}
+
+// THE FOURTH DEFECT: Index must carry whether a file's coverage includes
+// import/module-load-time (static) execution, alongside the per-test
+// contexts — this, not coveringTests alone, is what lets a caller tell a
+// package __init__.py (executed by every test that imports it, exercised
+// by none directly) from a genuinely dead file.
+func TestPythonIndexCarriesHasStatic(t *testing.T) {
+	idx, err := pyPlugin{}.Index(recordedEvidence(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calc, ok := idx["pkg/calc.py"]; !ok || !calc.HasStatic {
+		t.Errorf("pkg/calc.py HasStatic = %v, ok=%v, want true (the fixture records static ranges for it)", calc.HasStatic, ok)
+	}
+	// The fixture's pkg/__init__.py has BOTH zero tests and zero static —
+	// genuinely dead, not import-only. HasStatic must be false here so the
+	// two states are not conflated.
+	if init, ok := idx["pkg/__init__.py"]; !ok || init.HasStatic {
+		t.Errorf("pkg/__init__.py HasStatic = %v, ok=%v, want false (the fixture's static coverage is empty)", init.HasStatic, ok)
+	}
+}
+
+// The actual import-only shape: zero covering tests, non-empty static.
+func TestPythonIndexImportOnlyFileHasZeroTestsAndHasStaticTrue(t *testing.T) {
+	raw := `{"format":"corral-selection-3","tests":1,"files":{` +
+		`"src/pkg/__init__.py":{"tests":[],"lines":{},"static":[[1,3]]}}}`
+	idx, err := pyPlugin{}.Index([]byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, ok := idx["src/pkg/__init__.py"]
+	if !ok {
+		t.Fatal("Index: src/pkg/__init__.py missing from the readout")
+	}
+	if len(f.Tests) != 0 {
+		t.Errorf("Tests = %v, want empty (zero covering tests)", f.Tests)
+	}
+	if !f.HasStatic {
+		t.Error("HasStatic = false, want true — the file has non-empty static (import-time) coverage")
+	}
+}
+
+func TestPythonIndexSharesSelectsParsing(t *testing.T) {
+	if _, err := (pyPlugin{}).Index([]byte(`{"format":"not-corral-selection-3"}`)); err == nil {
+		t.Error("Index must refuse a document with the wrong format stamp, exactly like Select")
+	}
+	if _, err := (pyPlugin{}).Index([]byte("")); err == nil {
+		t.Error("Index must refuse empty evidence, exactly like Select")
+	}
+}
+
+func TestPythonIsLibraryCodeFlatLayout(t *testing.T) {
+	hasPath := func(p string) bool { return p == "mypkg/__init__.py" }
+	if !(pyPlugin{}).IsLibraryCode("mypkg/foo.py", hasPath) {
+		t.Error("mypkg/foo.py with mypkg/__init__.py present must be library code")
+	}
+	if (pyPlugin{}).IsLibraryCode("scripts/foo.py", hasPath) {
+		t.Error("scripts/foo.py with no __init__.py anywhere must NOT be library code")
+	}
+}
+
+func TestPythonIsLibraryCodeNestedPackage(t *testing.T) {
+	// sub/ has no __init__.py of its own, but mypkg/ (an ancestor) does —
+	// the WHOLE directory chain must be walked, not just the immediate dir.
+	hasPath := func(p string) bool { return p == "mypkg/__init__.py" }
+	if !(pyPlugin{}).IsLibraryCode("mypkg/sub/foo.py", hasPath) {
+		t.Error("mypkg/sub/foo.py must be library code via the mypkg ancestor's __init__.py")
+	}
+}
+
+func TestPythonIsLibraryCodeSrcLayout(t *testing.T) {
+	// src/<pkg>/... counts even with NO __init__.py anywhere — PEP 420
+	// namespace packages ship without one.
+	hasPath := func(string) bool { return false }
+	if !(pyPlugin{}).IsLibraryCode("src/pkg/foo.py", hasPath) {
+		t.Error("src/pkg/foo.py must be library code even with no __init__.py measured")
+	}
+	if !(pyPlugin{}).IsLibraryCode("src/pkg/sub/foo.py", hasPath) {
+		t.Error("src/pkg/sub/foo.py (deeper under src/pkg) must also be library code")
+	}
+	// A bare file directly under src/, with no package segment, does not
+	// qualify on the src/ shortcut alone.
+	if (pyPlugin{}).IsLibraryCode("src/foo.py", hasPath) {
+		t.Error("src/foo.py (no package dir under src/) must not be library code via the shortcut alone")
+	}
+}
+
+func TestPythonIsLibraryCodeDocsAndScripts(t *testing.T) {
+	hasPath := func(string) bool { return false }
+	for _, p := range []string{"docs/conf.py", "setup.py", "noxfile.py", "scripts/release.py"} {
+		if (pyPlugin{}).IsLibraryCode(p, hasPath) {
+			t.Errorf("%s must not be library code — it sits in no importable package", p)
+		}
+	}
+}
+
+func TestPythonDiagnoseSelectionFailureNamesMissingPytestCov(t *testing.T) {
+	text := "usage: pytest [options]\npytest: error: unrecognized arguments: --cov --cov-context=test --cov-report=\n"
+	hint := (pyPlugin{}).DiagnoseSelectionFailure(text)
+	if !strings.Contains(hint, "pytest-cov") || !strings.Contains(hint, "pip install pytest-cov") {
+		t.Errorf("hint = %q, want it to name pytest-cov and how to install it", hint)
+	}
+}
+
+func TestPythonDiagnoseSelectionFailureRecognizesNothingElse(t *testing.T) {
+	if hint := (pyPlugin{}).DiagnoseSelectionFailure("some unrelated failure text"); hint != "" {
+		t.Errorf("hint = %q, want empty for text it does not recognize", hint)
 	}
 }

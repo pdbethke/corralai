@@ -199,7 +199,7 @@ func TestJailSubstrateReportsNoPoolTime(t *testing.T) {
 func TestSelectionTimeIsRecordedOnlyWhenTheSuiteActuallyRan(t *testing.T) {
 	orig := collectSelectionEvidence
 	t.Cleanup(func() { collectSelectionEvidence = orig })
-	collectSelectionEvidence = func(ctx context.Context, runner coverageRunner, files map[string]string, p lang.Plugin, testCmd []string) reposcan.SelectionEvidence {
+	collectSelectionEvidence = func(ctx context.Context, runner coverageRunner, files map[string]string, p lang.Plugin, testCmd []string, sourcePaths []string) reposcan.SelectionEvidence {
 		time.Sleep(5 * time.Millisecond)
 		return reposcan.SelectionEvidence{Ran: true}
 	}

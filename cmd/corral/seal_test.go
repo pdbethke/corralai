@@ -18,8 +18,17 @@ import (
 )
 
 // fakeSealReader is the in-memory sealReader test double: no DuckDB, no
-// attach, just the rows a real warehouse's corral_seal view would return.
-type fakeSealReader struct{ rows []sealRow }
+// attach, just the rows a real warehouse's corral_seal view would return,
+// plus the uncovered paths a real warehouse's corral_audits (queried
+// directly, bypassing that view) would surface.
+type fakeSealReader struct {
+	rows []sealRow
+	// uncovered is scoped by repo, mirroring the real reader's `WHERE repo =
+	// ?` — a fixture asserting cross-repo isolation (as
+	// TestSealMarksLiveStaleAndNever already does for rows) must be able to
+	// do the same for uncovered paths.
+	uncovered map[string][]string
+}
 
 func (f fakeSealReader) SealRows(_ context.Context, repo string) ([]sealRow, error) {
 	if strings.TrimSpace(repo) == "" {
@@ -30,6 +39,14 @@ func (f fakeSealReader) SealRows(_ context.Context, repo string) ([]sealRow, err
 		if r.Repo == repo {
 			out = append(out, r)
 		}
+	}
+	return out, nil
+}
+
+func (f fakeSealReader) UncoveredPaths(_ context.Context, repo string) (map[string]bool, error) {
+	out := map[string]bool{}
+	for _, p := range f.uncovered[repo] {
+		out[p] = true
 	}
 	return out, nil
 }
@@ -161,6 +178,76 @@ func TestSealWithoutRepoJudgesNothing(t *testing.T) {
 	}
 }
 
+// TestSealMarksUncoveredDistinctFromNeverAudited is the task's headline
+// test: a hot file whose warehouse row is UNCOVERED (the selection evidence
+// ran and found no test executing it) must be reported as its own state —
+// not "never audited" (which claims corral never looked at all, when it did
+// and found the gap), not counted toward the live count, and named in the
+// coverage sentence.
+func TestSealMarksUncoveredDistinctFromNeverAudited(t *testing.T) {
+	dir, repo := sealFixtureRepo(t)
+
+	liveSHA, err := fileSHA256(filepath.Join(dir, "live.go"))
+	if err != nil {
+		t.Fatalf("hashing live.go: %v", err)
+	}
+
+	ts := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
+	reader := fakeSealReader{
+		rows: []sealRow{
+			{Repo: repo, Path: "live.go", ParentSHA256: liveSHA, KillRate: 0.9, Survivors: 1, TS: ts},
+		},
+		uncovered: map[string][]string{
+			repo: {"stale.go"},
+			// A different repo's uncovered path for one of these SAME names
+			// must not leak in — same discipline as the rows leak check.
+			"someone/else": {"never.go"},
+		},
+	}
+
+	var out, errOut bytes.Buffer
+	code := runSeal([]string{"--db", "unused", "--repo", dir, "--top", "3"},
+		func(string) (sealReader, error) { return reader, nil }, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("runSeal exit %d, stderr=%s", code, errOut.String())
+	}
+
+	got := out.String()
+	for _, want := range []string{
+		"live", "live.go",
+		"uncovered", "stale.go",
+		"never audited", "never.go",
+		"coverage: 1 of 3 hot files carry a live verdict (33.3%); 1 uncovered — no test executes them",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output missing %q; got:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "stale (") {
+		t.Errorf("an uncovered file was reported as stale — a diagnosis nothing measured:\n%s", got)
+	}
+}
+
+// TestSealJSONUncoveredState pins the --json shape for an uncovered file:
+// the state string, and null numbers (like never-audited) since nothing was
+// ever measured for it.
+func TestSealJSONUncoveredState(t *testing.T) {
+	dir, repo := sealFixtureRepo(t)
+	reader := fakeSealReader{uncovered: map[string][]string{repo: {"live.go"}}}
+
+	var out, errOut bytes.Buffer
+	code := runSeal([]string{"--db", "unused", "--repo", dir, "--top", "3", "--json"},
+		func(string) (sealReader, error) { return reader, nil }, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("runSeal exit %d, stderr=%s", code, errOut.String())
+	}
+	for _, want := range []string{`"state": "uncovered"`, `"path": "live.go"`, `"kill_rate": null`} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("json output missing %q; got:\n%s", want, out.String())
+		}
+	}
+}
+
 // TestSealJSONWithRepo pins the --json shape for the --repo path: snake_case
 // keys, and a never-audited row carrying null numbers rather than zeros that
 // would misreport "audited, scored 0" as a real measurement.
@@ -256,6 +343,254 @@ func TestOpenSealDBCreatesViewAndReads(t *testing.T) {
 	}
 	if len(rows3) != 1 || rows3[0].Path != "pkg/a.go" {
 		t.Errorf("rows after the reader created the view = %+v, want the pushed audit", rows3)
+	}
+}
+
+// TestOpenSealDBUncoveredPathsBypassesTheView exercises the REAL production
+// path for UncoveredPaths: an uncovered row (KillRate nil, Uncovered true —
+// exactly what auditpush.insertFileRow writes for one) pushed alongside an
+// ordinary graded row. corral_seal itself is `kill_rate IS NOT NULL`
+// filtered (SealViewDDL), so the uncovered row is invisible to SealRows —
+// this proves UncoveredPaths finds it anyway, by querying corral_audits
+// directly, and that the graded row is NOT reported uncovered.
+func TestOpenSealDBUncoveredPathsBypassesTheView(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "warehouse.duckdb")
+	live := 0.75
+	bundle := auditpush.Bundle{
+		Scan: auditpush.ScanRow{Repo: "o/r", Commit: "abc123", Candidates: 2, Audited: 2},
+		Files: []auditpush.Row{
+			{Repo: "o/r", Commit: "abc123", Path: "pkg/a.go", Lang: "go",
+				Disposition: "audited", KillRate: &live, Survivors: 2, ProvenMissed: 1,
+				ParentSHA256: "aaaa", Evidence: "proven"},
+			{Repo: "o/r", Commit: "abc123", Path: "pkg/b.go", Lang: "go",
+				Disposition: "excluded", Reason: reposcan.ReasonUncovered, Uncovered: true,
+				ParentSHA256: "bbbb"},
+		},
+	}
+	if _, err := auditpush.PushBundle(target, bundle); err != nil {
+		t.Fatalf("PushBundle: %v", err)
+	}
+
+	st, err := openSealDB(target)
+	if err != nil {
+		t.Fatalf("openSealDB: %v", err)
+	}
+	defer st.Close()
+
+	uncov, err := st.UncoveredPaths(context.Background(), "o/r")
+	if err != nil {
+		t.Fatalf("UncoveredPaths: %v", err)
+	}
+	if !uncov["pkg/b.go"] {
+		t.Errorf("uncov = %+v, want pkg/b.go present", uncov)
+	}
+	if uncov["pkg/a.go"] {
+		t.Errorf("the graded row pkg/a.go was reported uncovered: %+v", uncov)
+	}
+
+	// And SealRows, reading the (kill_rate IS NOT NULL) view, must NOT see
+	// the uncovered row at all — the whole reason UncoveredPaths exists.
+	rows, err := st.SealRows(context.Background(), "o/r")
+	if err != nil {
+		t.Fatalf("SealRows: %v", err)
+	}
+	if len(rows) != 1 || rows[0].Path != "pkg/a.go" {
+		t.Errorf("SealRows = %+v, want only the graded pkg/a.go row", rows)
+	}
+}
+
+// TestOpenSealDBUncoveredThenGradedIsNotReportedUncovered pins one direction
+// of the flip: a path pushed uncovered, and LATER paired with a real test
+// and graded, must NOT still read uncovered — the whole reason
+// UncoveredPaths compares each path's TRULY latest row (by ts, tiebroken by
+// insertion order — see UncoveredPaths' doc) rather than the latest
+// UNCOVERED row. A test with only one push per path (as
+// TestOpenSealDBUncoveredPathsBypassesTheView has) cannot catch a query that
+// picked the wrong "latest" definition; this one pushes twice, through the
+// real openSealDB/PushBundle path, and checks the ordering is honored.
+func TestOpenSealDBUncoveredThenGradedIsNotReportedUncovered(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "warehouse.duckdb")
+
+	if _, err := auditpush.PushBundle(target, auditpush.Bundle{
+		Scan: auditpush.ScanRow{Repo: "o/r", Commit: "c1", Candidates: 1, Audited: 1},
+		Files: []auditpush.Row{
+			{Repo: "o/r", Commit: "c1", Path: "pkg/a.go", Lang: "go",
+				Disposition: "excluded", Reason: reposcan.ReasonUncovered, Uncovered: true,
+				ParentSHA256: "aaaa"},
+		},
+	}); err != nil {
+		t.Fatalf("first PushBundle (uncovered): %v", err)
+	}
+
+	// A real clock advances on its own, but a coarse one (or a very fast
+	// back-to-back push, which is exactly what this test does) can tie —
+	// forcing a gap here keeps the test about the ORDERING logic, not about
+	// how fast time.Now() ticks on this host.
+	time.Sleep(2 * time.Millisecond)
+
+	live := 0.9
+	if _, err := auditpush.PushBundle(target, auditpush.Bundle{
+		Scan: auditpush.ScanRow{Repo: "o/r", Commit: "c2", Candidates: 1, Audited: 1},
+		Files: []auditpush.Row{
+			{Repo: "o/r", Commit: "c2", Path: "pkg/a.go", Lang: "go",
+				Disposition: "audited", KillRate: &live, Survivors: 1, ProvenMissed: 1,
+				ParentSHA256: "bbbb"},
+		},
+	}); err != nil {
+		t.Fatalf("second PushBundle (graded): %v", err)
+	}
+
+	st, err := openSealDB(target)
+	if err != nil {
+		t.Fatalf("openSealDB: %v", err)
+	}
+	defer st.Close()
+
+	uncov, err := st.UncoveredPaths(context.Background(), "o/r")
+	if err != nil {
+		t.Fatalf("UncoveredPaths: %v", err)
+	}
+	if uncov["pkg/a.go"] {
+		t.Errorf("pkg/a.go was later GRADED, but is still reported uncovered: %+v", uncov)
+	}
+
+	rows, err := st.SealRows(context.Background(), "o/r")
+	if err != nil {
+		t.Fatalf("SealRows: %v", err)
+	}
+	if len(rows) != 1 || rows[0].ParentSHA256 != "bbbb" {
+		t.Errorf("SealRows = %+v, want the later graded row (parent_sha256 bbbb)", rows)
+	}
+}
+
+// TestOpenSealDBGradedThenUncoveredIsReportedUncovered pins the OTHER
+// direction: a path pushed graded, and later re-audited with its covering
+// test gone (or never found again), must flip to uncovered — the state is
+// not sticky in the direction that would hide a regression, either.
+func TestOpenSealDBGradedThenUncoveredIsReportedUncovered(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "warehouse.duckdb")
+
+	live := 0.9
+	if _, err := auditpush.PushBundle(target, auditpush.Bundle{
+		Scan: auditpush.ScanRow{Repo: "o/r", Commit: "c1", Candidates: 1, Audited: 1},
+		Files: []auditpush.Row{
+			{Repo: "o/r", Commit: "c1", Path: "pkg/a.go", Lang: "go",
+				Disposition: "audited", KillRate: &live, Survivors: 1, ProvenMissed: 1,
+				ParentSHA256: "aaaa"},
+		},
+	}); err != nil {
+		t.Fatalf("first PushBundle (graded): %v", err)
+	}
+
+	time.Sleep(2 * time.Millisecond)
+
+	if _, err := auditpush.PushBundle(target, auditpush.Bundle{
+		Scan: auditpush.ScanRow{Repo: "o/r", Commit: "c2", Candidates: 1, Audited: 1},
+		Files: []auditpush.Row{
+			{Repo: "o/r", Commit: "c2", Path: "pkg/a.go", Lang: "go",
+				Disposition: "excluded", Reason: reposcan.ReasonUncovered, Uncovered: true,
+				ParentSHA256: "bbbb"},
+		},
+	}); err != nil {
+		t.Fatalf("second PushBundle (uncovered): %v", err)
+	}
+
+	st, err := openSealDB(target)
+	if err != nil {
+		t.Fatalf("openSealDB: %v", err)
+	}
+	defer st.Close()
+
+	uncov, err := st.UncoveredPaths(context.Background(), "o/r")
+	if err != nil {
+		t.Fatalf("UncoveredPaths: %v", err)
+	}
+	if !uncov["pkg/a.go"] {
+		t.Errorf("pkg/a.go was later found UNCOVERED, but the stale graded row still wins: %+v", uncov)
+	}
+
+	// SealRows reads corral_seal, which is filtered to kill_rate IS NOT
+	// NULL rows — it still shows the OLDER graded row here (there is no
+	// newer graded one to replace it with), which is correct: runSealWithRepo
+	// checks UncoveredPaths FIRST and gives it priority over whatever
+	// corral_seal alone would say, precisely to cover this case. This
+	// assertion pins that corral_seal's own (expected, documented)
+	// limitation is still there, so a future change to SealRows itself does
+	// not silently start hiding it.
+	rows, err := st.SealRows(context.Background(), "o/r")
+	if err != nil {
+		t.Fatalf("SealRows: %v", err)
+	}
+	if len(rows) != 1 || rows[0].ParentSHA256 != "aaaa" {
+		t.Errorf("SealRows = %+v, want the stale graded row (parent_sha256 aaaa) since corral_seal itself has no newer graded row", rows)
+	}
+}
+
+// TestOpenSealDBUncoveredPathsTiebreaksOnInsertionOrderNotTs forces the
+// exact tie ORDER BY ts DESC alone cannot resolve: two corral_audits rows
+// for the SAME path with the IDENTICAL timestamp (the shape one PushBundle
+// call itself produces for every file it writes — see UncoveredPaths' doc),
+// inserted directly so the test controls physical insertion order without
+// depending on the host clock advancing between two calls. Row_number()'s
+// tiebreak is otherwise UNSPECIFIED, so this pins that `rowid DESC` — not
+// incidental physical/return order — decides: the row inserted SECOND must
+// win, in both directions.
+func TestOpenSealDBUncoveredPathsTiebreaksOnInsertionOrderNotTs(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "warehouse.duckdb")
+	// Establishes the schema (including corral_audits) with no rows of its
+	// own, exactly like TestOpenSealDBCreatesViewAndReads's setup pattern.
+	if _, err := auditpush.PushBundle(target, auditpush.Bundle{
+		Scan: auditpush.ScanRow{Repo: "o/r", Commit: "c0", Candidates: 0, Audited: 0},
+	}); err != nil {
+		t.Fatalf("PushBundle (schema only): %v", err)
+	}
+
+	db, err := sql.Open("duckdb", target)
+	if err != nil {
+		t.Fatalf("open %s: %v", target, err)
+	}
+	insert := func(path string, uncovered bool, parentSHA string) {
+		t.Helper()
+		q := `INSERT INTO corral_audits (ts, repo, commit_sha, path, kill_rate, uncovered, reason, parent_sha256)
+		      VALUES (TIMESTAMP '2026-08-31 12:00:00', 'o/r', 'c1', ?, ?, ?, ?, ?)`
+		var killRate any
+		reason := ""
+		if !uncovered {
+			killRate = 0.9
+		} else {
+			reason = reposcan.ReasonUncovered
+		}
+		if _, err := db.Exec(q, path, killRate, uncovered, reason, parentSHA); err != nil {
+			t.Fatalf("insert %s: %v", path, err)
+		}
+	}
+	// pkg/a.go: uncovered inserted FIRST, graded inserted SECOND — the
+	// graded row must win (must NOT read uncovered).
+	insert("pkg/a.go", true, "uncovered-first")
+	insert("pkg/a.go", false, "graded-second")
+	// pkg/b.go: graded inserted FIRST, uncovered inserted SECOND — the
+	// uncovered row must win (MUST read uncovered).
+	insert("pkg/b.go", false, "graded-first")
+	insert("pkg/b.go", true, "uncovered-second")
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	st, err := openSealDB(target)
+	if err != nil {
+		t.Fatalf("openSealDB: %v", err)
+	}
+	defer st.Close()
+
+	uncov, err := st.UncoveredPaths(context.Background(), "o/r")
+	if err != nil {
+		t.Fatalf("UncoveredPaths: %v", err)
+	}
+	if uncov["pkg/a.go"] {
+		t.Errorf("pkg/a.go: the LATER-inserted graded row must win a same-ts tie; got uncovered: %+v", uncov)
+	}
+	if !uncov["pkg/b.go"] {
+		t.Errorf("pkg/b.go: the LATER-inserted uncovered row must win a same-ts tie; got %+v", uncov)
 	}
 }
 

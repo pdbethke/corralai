@@ -115,6 +115,43 @@ func TestAggregateCarriesTheSelectionOntoTheVerdict(t *testing.T) {
 	}
 }
 
+// THE RESIDUAL: the same false "no test executes it" claim the candidacy
+// fix (reposcan.ReasonImportOnly) closed for an UNPAIRED file can still
+// reach a reader through a PAIRED file's grading, via this exact flag —
+// verdictFromSpec is where it must be caught, since every reader downstream
+// (printWeakFile, the live executor note, printRepoReport) branches on
+// Verdict.Uncovered/ImportOnly, never on the raw Selection again.
+func TestAggregateDistinguishesImportOnlyFromGenuinelyUncovered(t *testing.T) {
+	// Genuinely dead: zero tests, zero static. Uncovered, NOT ImportOnly —
+	// today's behaviour, byte-identical.
+	rs := RunSpec{Selection: lang.Selection{Method: "coverage-context", Of: 40}}
+	v := verdictFromSpec(rs)
+	if !v.Uncovered || v.ImportOnly {
+		t.Errorf("genuinely dead: got Uncovered=%v ImportOnly=%v, want true/false", v.Uncovered, v.ImportOnly)
+	}
+
+	// Import-only: zero tests, but the evidence recorded static (import-time)
+	// coverage — executed, just never by a test directly. Uncovered stays
+	// true (the rate is still withheld, same as before), but ImportOnly
+	// must ALSO be true so a reader picks the honest wording.
+	rs.Selection.Static = []lang.LineRange{{Start: 1, End: 3}}
+	v = verdictFromSpec(rs)
+	if !v.Uncovered {
+		t.Error("import-only must still be Uncovered — the rate is still withheld, same gating as before")
+	}
+	if !v.ImportOnly {
+		t.Error("zero tests + non-empty static must set ImportOnly")
+	}
+
+	// A file with tests selected is neither, regardless of Static — the
+	// distinction only ever applies to the zero-Tests case.
+	rs.Selection.Tests = []string{"a"}
+	v = verdictFromSpec(rs)
+	if v.Uncovered || v.ImportOnly {
+		t.Errorf("a file with selected tests must be neither, got Uncovered=%v ImportOnly=%v", v.Uncovered, v.ImportOnly)
+	}
+}
+
 // TestAggregateCarriesConcurrencyOntoTheVerdict pins the other half of "every
 // reader says how many trees scored the file, or why one" — the RunSpec's
 // Concurrency must reach the Verdict unchanged, the same way Selection does,

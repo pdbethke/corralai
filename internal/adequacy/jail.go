@@ -374,6 +374,18 @@ func (j bwrapJail) Enumerate(ctx context.Context, files map[string]string, cmd [
 	return res.Output, nil
 }
 
+// EnumerateDetailed is Enumerate's optional richer twin (see
+// reposcan.CollectSelectionEvidence's unexported detailedRunner): the jail
+// backend already captures the exit code and COMBINED stdout+stderr for
+// every run (sandbox.Result), so unlike the workspace substrate's own
+// EnumerateDetailed there is nothing extra to capture here — Output already
+// carries whatever a failed run wrote to either stream, Stderr is left
+// empty to avoid reporting the same bytes twice.
+func (j bwrapJail) EnumerateDetailed(ctx context.Context, files map[string]string, cmd []string) (sandbox.EnumerateResult, error) {
+	res, err := j.runInJail(ctx, files, cmd)
+	return sandbox.EnumerateResult{Output: res.Output, ExitCode: res.ExitCode}, err
+}
+
 // envWithDepBinPaths prepends each bound dependency directory's `.bin` to PATH
 // inside the jail.
 //

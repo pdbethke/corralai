@@ -161,7 +161,7 @@ func readFileRows(db *sql.DB, repo string, scanID int64) ([]Row, error) {
 		challenger_sufficient, goals_derived, goal_reused,
 		selection_ms, generation_ms, pool_ms, dev_pass_ms, authored_pass_ms,
 		critic_ms, total_ms, mutant_ms_median, mutant_ms_max,
-		authored_test, verdict_json, prompt_shape
+		authored_test, verdict_json, prompt_shape, covering_tests
 	   FROM corral_audits WHERE repo = ? AND scan_id = ?`, repo, scanID)
 	if err != nil {
 		return nil, err
@@ -187,6 +187,7 @@ func readFileRows(db *sql.DB, repo string, scanID int64) ([]Row, error) {
 		var selectionMillis, generationMillis, poolMillis, devPassMillis, authoredPassMillis sql.NullInt64
 		var criticMillis, totalMillis, mutantMillisMedian, mutantMillisMax sql.NullInt64
 		var authoredTest, verdictJSON, promptShape sql.NullString
+		var coveringTests sql.NullInt64
 
 		if err := rows.Scan(
 			&r.Repo, &r.Commit, &r.Path, &r.Lang,
@@ -207,7 +208,7 @@ func readFileRows(db *sql.DB, repo string, scanID int64) ([]Row, error) {
 			&challengerSufficient, &r.GoalsDerived, &goalReused,
 			&selectionMillis, &generationMillis, &poolMillis, &devPassMillis, &authoredPassMillis,
 			&criticMillis, &totalMillis, &mutantMillisMedian, &mutantMillisMax,
-			&authoredTest, &verdictJSON, &promptShape,
+			&authoredTest, &verdictJSON, &promptShape, &coveringTests,
 		); err != nil {
 			return nil, err
 		}
@@ -248,6 +249,7 @@ func readFileRows(db *sql.DB, repo string, scanID int64) ([]Row, error) {
 		r.AuthoredTest = authoredTest.String
 		r.VerdictJSON = verdictJSON.String
 		r.PromptShape = promptShape.String
+		r.CoveringTests = nullInt(coveringTests)
 
 		out = append(out, r)
 	}

@@ -3774,6 +3774,62 @@ func skipWithoutPythonCoverage(t *testing.T) {
 	}
 }
 
+// preflightImportOnlyPythonFixture is preflightUnpairedPythonFixture's
+// sibling for THE FOURTH DEFECT: mypkg/__init__.py carries real
+// module-level (import-time) code, executed once when
+// tests/test_smoke.py's `from mypkg.core import used` first imports the
+// package — at COLLECTION time, before pytest-cov has switched to any
+// test's own dynamic context, so coverage.py records it as STATIC
+// (context-less) coverage, never a per-test one. It has no filename
+// pairing (no test___init__.py) and zero covering tests, but IS genuinely
+// executed — the exact shape ReasonImportOnly exists to name honestly,
+// distinct from mypkg/orphan.py's genuine ReasonUncovered right beside it.
+func preflightImportOnlyPythonFixture(t *testing.T, root string) {
+	t.Helper()
+	mustWrite(t, filepath.Join(root, "pyproject.toml"), "[tool.coverage.run]\nsource = [\"mypkg\"]\n")
+	mustWrite(t, filepath.Join(root, "mypkg", "__init__.py"), "GREETING = \"hello\"\n")
+	mustWrite(t, filepath.Join(root, "mypkg", "core.py"), "def used():\n    return 1\n")
+	mustWrite(t, filepath.Join(root, "mypkg", "orphan.py"), "def never_called():\n    return 2\n")
+	mustWrite(t, filepath.Join(root, "tests", "test_smoke.py"),
+		"from mypkg.core import used\n\n\ndef test_it():\n    assert used() == 1\n")
+}
+
+// TestCertifyRepoImportOnlyFileIsExcludedDistinctlyFromUncovered is the
+// real, end-to-end proof (real pytest + coverage, no faking): a package
+// __init__.py executed only at import time must be excluded
+// "imported at load time — no test exercises it directly", NEVER the
+// literal string "no test executes this file" — the false claim a reader
+// would reasonably read as "nothing runs this", when in truth every test
+// that imports the package runs it. mypkg/orphan.py, genuinely never
+// executed, must still read ReasonUncovered right beside it, and the
+// summary line must count both, separately.
+func TestCertifyRepoImportOnlyFileIsExcludedDistinctlyFromUncovered(t *testing.T) {
+	skipWithoutPythonCoverage(t)
+	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
+	root := t.TempDir()
+	preflightImportOnlyPythonFixture(t, root)
+
+	var out, errb bytes.Buffer
+	runCertifyRepo([]string{
+		"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off",
+		"--goals", writeGoals(t, root, `{}`), "--substrate", substrateWorkspace,
+	}, &out, &errb)
+	s := out.String()
+
+	if !strings.Contains(s, "excluded mypkg/__init__.py (imported at load time — no test exercises it directly)") {
+		t.Errorf("mypkg/__init__.py must be excluded under the import-only reason, verbatim:\n%s", s)
+	}
+	if strings.Contains(s, "excluded mypkg/__init__.py (uncovered — no test executes this file)") {
+		t.Errorf("mypkg/__init__.py must NEVER read as uncovered — it was genuinely executed at import time:\n%s", s)
+	}
+	if !strings.Contains(s, "excluded mypkg/orphan.py (uncovered — no test executes this file)") {
+		t.Errorf("mypkg/orphan.py, genuinely never executed, must still read uncovered:\n%s", s)
+	}
+	if !strings.Contains(s, "uncovered 1 · import-only 1") {
+		t.Errorf("summary line must count uncovered and import-only separately (1 each), got:\n%s", s)
+	}
+}
+
 // TestCertifyRepoPreflightRunsWhenPairingFindsNoCandidates is the regression
 // for the review's Important 1. runPreflight derived its language set from
 // `cands` — the test-pairing-derived CANDIDATE set — so it declined with
@@ -3784,6 +3840,15 @@ func skipWithoutPythonCoverage(t *testing.T) {
 //
 // The language set now comes from the ENUMERATED SOURCE SET, which is the
 // same slice the report buckets against.
+//
+// Since the evidence-as-candidacy change, PAIRING alone still finds no
+// candidates here (mypkg/core.py has no filename-conventional test), but the
+// scan's own selection evidence now DOES pair it — tests/test_smoke.py
+// covers it — so it is 1 candidate, "paired by evidence", not 0. It stays
+// COULD-NOT-GRADE because --goals `{}` supplies it none, so nothing about
+// the pre-flight assertions below — the reason this test exists — changes:
+// the pre-flight still runs over the same enumerated source set and still
+// finds mypkg/orphan.py the one file measured and never executed.
 func TestCertifyRepoPreflightRunsWhenPairingFindsNoCandidates(t *testing.T) {
 	skipWithoutPythonCoverage(t)
 	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
@@ -3795,8 +3860,51 @@ func TestCertifyRepoPreflightRunsWhenPairingFindsNoCandidates(t *testing.T) {
 		"--substrate", substrateWorkspace, "--preflight"}, &out, &errb)
 
 	s := out.String()
+	if !strings.Contains(s, "1 candidate(s)") {
+		t.Fatalf("fixture is wrong: this scan must have exactly 1 candidate (mypkg/core.py, paired by evidence):\n%s", s)
+	}
+	if !strings.Contains(s, "mypkg/core.py paired by evidence:") {
+		t.Errorf("mypkg/core.py must be disclosed as evidence-paired — pairing alone finds no candidate here:\n%s", s)
+	}
+	_, section, found := strings.Cut(s, "\nCoverage pre-flight")
+	if !found {
+		t.Fatalf("missing the pre-flight section:\n%s\nstderr:\n%s", s, errb.String())
+	}
+	if strings.Contains(section, "could not run:") {
+		t.Fatalf("the pre-flight declined on a repo with no candidates — the exact repos it exists for:\n%s", section)
+	}
+	if !strings.Contains(section, "mypkg/orphan.py") {
+		t.Errorf("mypkg/orphan.py is measured and never executed and must be named:\n%s", section)
+	}
+	if strings.Contains(section, "mypkg/core.py") {
+		t.Errorf("mypkg/core.py IS executed by the suite and must not be named:\n%s", section)
+	}
+}
+
+// TestCertifyRepoPreflightRunsWhenPairingAndEvidenceBothFindNoCandidates is
+// F2's restoration of the ORIGINAL zero-candidate regression
+// TestCertifyRepoPreflightRunsWhenPairingFindsNoCandidates used to guard,
+// before evidence-first candidacy widened its fixture to 1. --whole-suite
+// collects no selection evidence at all (see the design's evidence-absent
+// fallback), so candidacy here stays genuinely pairing-only and genuinely
+// zero — the exact case runPreflight was built to still work on (measured
+// on jsonschema 0/31, filelock 0/35, itsdangerous 0/10, markupsafe 0/7).
+func TestCertifyRepoPreflightRunsWhenPairingAndEvidenceBothFindNoCandidates(t *testing.T) {
+	skipWithoutPythonCoverage(t)
+	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
+	root := t.TempDir()
+	preflightUnpairedPythonFixture(t, root)
+
+	var out, errb bytes.Buffer
+	runCertifyRepo([]string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--goals", writeGoals(t, root, `{}`),
+		"--substrate", substrateWorkspace, "--whole-suite", "--preflight"}, &out, &errb)
+
+	s := out.String()
 	if !strings.Contains(s, "0 candidate(s)") {
-		t.Fatalf("fixture is wrong: this scan must have ZERO candidates:\n%s", s)
+		t.Fatalf("fixture is wrong: --whole-suite collects no evidence, so this scan must have ZERO candidates:\n%s", s)
+	}
+	if strings.Contains(s, "paired by evidence") {
+		t.Errorf("--whole-suite must produce no evidence-paired candidate:\n%s", s)
 	}
 	_, section, found := strings.Cut(s, "\nCoverage pre-flight")
 	if !found {

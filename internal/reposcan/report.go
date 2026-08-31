@@ -151,8 +151,18 @@ type WeakFile struct {
 	// NO test executing this file. Its kill rate is not a measurement of the
 	// suite's strength — nothing graded the file — so a caller must withhold
 	// the number rather than print the 0.00 that would read as "your tests
-	// caught nothing here".
+	// caught nothing here". TRUE for both shapes ImportOnly distinguishes —
+	// see it below.
 	Uncovered bool
+	// ImportOnly mirrors advpool.Verdict.ImportOnly: Uncovered's refinement
+	// — the file WAS executed, at import/module-load time, just never by a
+	// test directly. Implies Uncovered; a caller gating on withholding the
+	// rate needs no change (Uncovered alone already covers it), but a
+	// caller PRINTING the word "UNCOVERED" must check this FIRST and print
+	// reposcan.ReasonImportOnly's exact text instead — calling an
+	// import-only file "uncovered" is false in the sense a reader checks it
+	// against.
+	ImportOnly bool
 	// Trees and ConcurrencyNote mirror advpool.Verdict.Concurrency: how many
 	// private trees the workspace substrate's probe scored this file with
 	// at once, or — when it granted only one — why (a downgrade after a
@@ -317,6 +327,15 @@ type RepoReport struct {
 	SelectedFiles   int
 	WholeSuiteFiles int
 	UncoveredFiles  int
+	// ImportOnlyFiles is a SUBSET of UncoveredFiles (itself a subset of
+	// SelectedFiles) — files the evidence found zero covering tests for but
+	// DID find import/module-load-time coverage for (see WeakFile.ImportOnly).
+	// Both are excluded from GradedFiles identically (nothing to grade a
+	// kill rate against either way); this count exists so a printer can
+	// tell a reader HOW MANY of the "UNCOVERED" files were genuinely dead
+	// versus merely un-exercised-by-a-test-directly, rather than folding a
+	// different, honest finding into the loudest one.
+	ImportOnlyFiles int
 	// GradedFiles is Audited MINUS UncoveredFiles — the denominator KillRate
 	// is actually averaged over. It is a separate number because an uncovered
 	// file was audited (corral looked at it, and found that nothing executes
@@ -439,6 +458,9 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 		}
 		if r.Verdict.Uncovered {
 			rep.UncoveredFiles++
+			if r.Verdict.ImportOnly {
+				rep.ImportOnlyFiles++
+			}
 		} else {
 			rep.GradedFiles++
 			sum += r.Verdict.DevKillRate
@@ -471,6 +493,7 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 			TestsPerMutant:        r.Verdict.TestSelection.TestsPerMutant,
 			Rules:                 r.Verdict.TestSelection.Rules,
 			Uncovered:             r.Verdict.Uncovered,
+			ImportOnly:            r.Verdict.ImportOnly,
 			// How many trees scored this file at once, or why it only got
 			// one — see advpool.Verdict.Concurrency's doc.
 			Trees:           r.Verdict.Concurrency.Trees,

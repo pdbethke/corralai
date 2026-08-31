@@ -260,6 +260,15 @@ type File struct {
 	// nothing graded the file, so a stored 0.0 would later read as "your
 	// tests caught nothing here" about a measurement that was never made.
 	Uncovered bool
+	// CoveringTests is the number of tests the selection evidence showed
+	// execute this file — reposcan.Candidate.CoveringTests, carried whole.
+	// nil (SQL NULL) for a row from a scan where the evidence never measured
+	// this file at all (no evidence collected, or an evidence-collection
+	// failure that fell back to pairing-only candidacy — see the
+	// evidence-as-candidacy design) — never confused with a measured,
+	// genuine zero. Additive: a row written before this column existed is
+	// also NULL.
+	CoveringTests *int
 	// MutantsFrom is the sha256 of the RECORDED MUTANT SET this row's audit
 	// replayed (`certify --repo --mutants`), and empty when the run generated
 	// its own mutants — which is the normal case and every pre-`--mutants`
@@ -512,6 +521,7 @@ var scanFilesMigrationCols = []struct{ name, ddl string }{
 	{"tests_per_mutant_max", "tests_per_mutant_max INTEGER"},
 	{"writer_mode", "writer_mode VARCHAR"},
 	{"prompt_shape", "prompt_shape VARCHAR"},
+	{"covering_tests", "covering_tests INTEGER"},
 }
 
 // scansMigrationCols is the same ledger at the SCAN grain. `scans` had no
@@ -665,7 +675,8 @@ func Open(dsn string) (*Store, error) {
 		tests_per_mutant_median INTEGER,
 		tests_per_mutant_max INTEGER,
 		writer_mode VARCHAR,
-		prompt_shape VARCHAR
+		prompt_shape VARCHAR,
+		covering_tests INTEGER
 	)`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("scanstore: create scan_files table: %w", err)
@@ -1016,20 +1027,24 @@ func nullCount(v sql.NullInt64) *int {
 	return &n
 }
 
-// retriesParam is the WRITE half of nullCount's read: a nil *int (the only
-// value any producer in this codebase sets today — see ModelCall.Retries'
-// doc) binds SQL NULL; a non-nil pointer binds the measured count. Kept as
-// its own function, rather than inlining `any(c.Retries)`, so the one place
-// this column's nil-ness is decided cannot silently drift from the read
-// side's nullCount.
-func retriesParam(v *int) any {
+// nullableIntPtr is the WRITE half of nullCount's read: a nil *int binds SQL
+// NULL; a non-nil pointer binds the measured value. Shared by every nullable
+// *int column this store writes (ModelCall.Retries, File.CoveringTests, ...)
+// rather than each column inlining its own `any(...)` — the one place a
+// column's nil-ness is decided cannot silently drift from the read side's
+// nullCount that way. Named for the WRITE, not for any one caller: renamed
+// from retriesParam, which named the first column to need it rather than
+// the shape it converts — the trap DRY exists to catch, since a name that
+// names its first caller invites a second caller to write a near-duplicate
+// rather than reuse it.
+func nullableIntPtr(v *int) any {
 	if v == nil {
 		return nil
 	}
 	return *v
 }
 
-// cachedTokensParam is retriesParam for the cached-prompt count: NULL when
+// cachedTokensParam is nullableIntPtr for the cached-prompt count: NULL when
 // nothing measured one, never a stored 0 a later query would average.
 func cachedTokensParam(v *int64) any {
 	if v == nil {
@@ -1096,9 +1111,9 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 			mutant_ms_median, mutant_ms_max,
 			challenger_jaccard, challenger_kappa, challenger_sufficient, goals_derived, goal_reused,
 			per_mutant, tests_per_mutant_min, tests_per_mutant_median, tests_per_mutant_max,
-			writer_mode, prompt_shape
+			writer_mode, prompt_shape, covering_tests
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id, f.Path, f.Lang, f.Disposition, f.Reason,
 			fileKillRate(f), f.Survivors, f.Gradable, f.PreflightState, f.Evidence, f.Detail, f.TimedOut, f.TestWriterFailed, f.ProvenMissed, f.PoolTestUnsound,
 			f.ProvenMutantIDs, f.AuthoredTest, f.CacheKey, f.VerdictJSON, f.ComputedAt,
@@ -1111,7 +1126,7 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 			f.MutantMillisMedian, f.MutantMillisMax,
 			f.ChallengerJaccard, f.ChallengerKappa, f.ChallengerSufficient, f.GoalsDerived, f.GoalReused,
 			f.PerMutant, f.TestsPerMutantMin, f.TestsPerMutantMedian, f.TestsPerMutantMax,
-			nullableString(f.WriterMode), nullableString(f.PromptShape),
+			nullableString(f.WriterMode), nullableString(f.PromptShape), nullableIntPtr(f.CoveringTests),
 		); err != nil {
 			return 0, fmt.Errorf("scanstore: insert scan_files row for %q: %w", f.Path, err)
 		}
@@ -1294,7 +1309,7 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		mutant_ms_median, mutant_ms_max,
 		challenger_jaccard, challenger_kappa, challenger_sufficient, goals_derived, goal_reused,
 		per_mutant, tests_per_mutant_min, tests_per_mutant_median, tests_per_mutant_max,
-		writer_mode, prompt_shape
+		writer_mode, prompt_shape, covering_tests
 		FROM scan_files WHERE scan_id = ? ORDER BY rowid`, scanID)
 	if err != nil {
 		return nil, fmt.Errorf("scanstore: files for scan %d: %w", scanID, err)
@@ -1356,6 +1371,12 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		var challengerSufficient, perMutant, goalReused sql.NullBool
 		var tpmMin, tpmMedian, tpmMax sql.NullInt64
 		var promptShape sql.NullString
+		// covering_tests reads back nullable for the same reason every other
+		// evidence-shaped column here does: a row from a scan where the
+		// evidence never measured this file (no evidence run, or a
+		// pairing-only fallback) has none, and that is a different fact from
+		// a measured zero.
+		var coveringTests sql.NullInt64
 		if err := rows.Scan(&f.Path, &f.Lang, &f.Disposition, &f.Reason,
 			&f.KillRate, &f.Survivors, &f.Gradable, &f.PreflightState, &f.Evidence, &detail, &timedOut, &testWriterFailed, &provenMissed, &poolTestUnsound,
 			&provenIDs, &authoredTest,
@@ -1368,7 +1389,7 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 			&selectionMS, &generationMS, &poolMS, &devPassMS, &authoredPassMS, &criticMS, &totalMS,
 			&mutantMSMedian, &mutantMSMax,
 			&challengerJaccard, &challengerKappa, &challengerSufficient, &goalsDerived, &goalReused,
-			&perMutant, &tpmMin, &tpmMedian, &tpmMax, &writerMode, &promptShape); err != nil {
+			&perMutant, &tpmMin, &tpmMedian, &tpmMax, &writerMode, &promptShape, &coveringTests); err != nil {
 			return nil, fmt.Errorf("scanstore: scan scan_files row: %w", err)
 		}
 		f.Detail = detail.String
@@ -1414,6 +1435,7 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 			v := reusedFromScanID.Int64
 			f.ReusedFromScanID = &v
 		}
+		f.CoveringTests = nullCount(coveringTests)
 		f.ParentSHA256 = parentSHA.String
 		f.MutantsGraded = int(mutantsGraded.Int64)
 		f.MutantsInvalid = int(mutantsInvalid.Int64)
@@ -1732,7 +1754,7 @@ func (s *Store) RecordModelCalls(ctx context.Context, cs []ModelCall) error {
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO scan_model_calls (scan_id, path, role, model, calls, retries, input_tokens, output_tokens, cached_input_tokens, cache_write_input_tokens, wall_ms)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			c.ScanID, c.Path, c.Role, c.Model, c.Calls, retriesParam(c.Retries),
+			c.ScanID, c.Path, c.Role, c.Model, c.Calls, nullableIntPtr(c.Retries),
 			c.InputTokens, c.OutputTokens,
 			cachedTokensParam(c.CachedInputTokens), cachedTokensParam(c.CacheWriteInputTokens), c.WallMillis,
 		); err != nil {

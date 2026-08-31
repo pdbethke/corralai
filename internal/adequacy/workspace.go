@@ -315,7 +315,8 @@ func (w *WorkspaceRunner) applyFiles(files map[string]string) (restore func(), e
 // a panic. A file that did not exist before is REMOVED rather than left as a
 // stray, because a leftover file is indistinguishable from part of the repo.
 func (w *WorkspaceRunner) RunTest(ctx context.Context, files map[string]string, testCmd []string) (bool, error) {
-	return w.applyRunRestore(ctx, files, testCmd, nil, nil)
+	code, err := w.applyRunRestore(ctx, files, testCmd, nil, nil)
+	return code == 0, err
 }
 
 // RunTestVerbose is RunTest that ALSO returns the command's combined
@@ -331,8 +332,8 @@ func (w *WorkspaceRunner) RunTest(ctx context.Context, files map[string]string, 
 // whatever the command printed before it was killed.
 func (w *WorkspaceRunner) RunTestVerbose(ctx context.Context, files map[string]string, testCmd []string) (bool, string, error) {
 	var out bytes.Buffer
-	ok, err := w.applyRunRestore(ctx, files, testCmd, &out, &out)
-	return ok, out.String(), err
+	code, err := w.applyRunRestore(ctx, files, testCmd, &out, &out)
+	return code == 0, out.String(), err
 }
 
 // RunTestDetailed is RunTestVerbose handing the output back as BYTES, capped
@@ -364,8 +365,8 @@ func (w *WorkspaceRunner) RunTestVerbose(ctx context.Context, files map[string]s
 // Output rides along even on a non-nil error, exactly as RunTestVerbose does.
 func (w *WorkspaceRunner) RunTestDetailed(ctx context.Context, files map[string]string, testCmd []string) (bool, []byte, error) {
 	out := newTailWriter(maxDetailedOutput)
-	ok, err := w.applyRunRestore(ctx, files, testCmd, out, out)
-	return ok, out.Bytes(), err
+	code, err := w.applyRunRestore(ctx, files, testCmd, out, out)
+	return code == 0, out.Bytes(), err
 }
 
 // applyRunRestore is the single implementation of this runner's
@@ -375,15 +376,18 @@ func (w *WorkspaceRunner) RunTestDetailed(ctx context.Context, files map[string]
 // RunTest, RunTestVerbose and Enumerate differ ONLY in which streams they
 // capture, which is what stdout/stderr (either may be nil, meaning discard)
 // express. A non-zero exit is a RESULT, not an error, for all three.
-func (w *WorkspaceRunner) applyRunRestore(ctx context.Context, files map[string]string, cmdArgv []string, stdout, stderr io.Writer) (bool, error) {
+// The returned int is the command's exit code (0 for success), or -1 when
+// the process did not exit normally at all (a timeout, or the command could
+// not be run) — the caller never mistakes -1 for a genuine exit(-1).
+func (w *WorkspaceRunner) applyRunRestore(ctx context.Context, files map[string]string, cmdArgv []string, stdout, stderr io.Writer) (int, error) {
 	if len(cmdArgv) == 0 {
-		return false, errors.New("adequacy: workspace runner needs a command")
+		return -1, errors.New("adequacy: workspace runner needs a command")
 	}
 
 	restore, err := w.applyFiles(files)
 	defer restore()
 	if err != nil {
-		return false, err
+		return -1, err
 	}
 
 	ctx, cancel := w.bound(ctx)
@@ -429,19 +433,19 @@ func (w *WorkspaceRunner) applyRunRestore(ctx context.Context, files map[string]
 	// so a genuinely hanging command still falls through to ErrTestTimeout
 	// below, exactly as before.
 	if st := cmd.ProcessState; st != nil && st.Exited() {
-		return st.ExitCode() == 0, nil // a non-zero exit is a RESULT, not an error
+		return st.ExitCode(), nil // a non-zero exit is a RESULT, not an error
 	}
 	if ctx.Err() != nil {
-		return false, ErrTestTimeout
+		return -1, ErrTestTimeout
 	}
 	if runErr != nil {
 		var ee *exec.ExitError
 		if errors.As(runErr, &ee) {
-			return false, nil // a non-zero exit is a RESULT, not an error
+			return -1, nil // a non-zero exit is a RESULT, not an error — Exited() above normally already caught it
 		}
-		return false, fmt.Errorf("adequacy: running the command: %w", runErr)
+		return -1, fmt.Errorf("adequacy: running the command: %w", runErr)
 	}
-	return true, nil
+	return 0, nil
 }
 
 // Enumerate applies files over the checkout, runs cmd in it capturing
@@ -459,4 +463,33 @@ func (w *WorkspaceRunner) Enumerate(ctx context.Context, files map[string]string
 	var stdout bytes.Buffer
 	_, err := w.applyRunRestore(ctx, files, cmd, &stdout, nil)
 	return stdout.String(), err
+}
+
+// EnumerateDetailed is Enumerate's optional richer twin — the seam
+// reposcan.CollectSelectionEvidence uses (structurally, see its unexported
+// detailedRunner) to tell "the instrumented run succeeded and had nothing
+// to print" from "it failed before it could print anything, and here is
+// why". Unlike Enumerate, it also captures stderr — Enumerate discards it
+// (nil) — and reports the exit code.
+//
+// stdout is capped exactly the way Enumerate's is (WithWorkspaceMaxOutput);
+// stderr is capped separately to a fixed tail (tailWriter, the same
+// discipline RunTestDetailed uses): diagnostics only ever need the end of
+// it, and holding an unbounded copy would reopen the memory problem
+// WithWorkspaceMaxOutput exists to close.
+func (w *WorkspaceRunner) EnumerateDetailed(ctx context.Context, files map[string]string, cmd []string) (sandbox.EnumerateResult, error) {
+	stderrTail := newTailWriter(maxDetailedOutput)
+	var out string
+	var code int
+	var err error
+	if w.maxOutput > 0 {
+		buf := sandbox.NewCappedWriter(w.maxOutput)
+		code, err = w.applyRunRestore(ctx, files, cmd, buf, stderrTail)
+		out = buf.String()
+	} else {
+		var stdout bytes.Buffer
+		code, err = w.applyRunRestore(ctx, files, cmd, &stdout, stderrTail)
+		out = stdout.String()
+	}
+	return sandbox.EnumerateResult{Output: out, Stderr: string(stderrTail.Bytes()), ExitCode: code}, err
 }

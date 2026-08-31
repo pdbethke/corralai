@@ -1040,16 +1040,56 @@ func (pyPlugin) DeselectArgs(selectors []string) []string {
 // superset, still evidence-derived, and never a whole-suite fallback.
 const selectionMaxArgv = 32 * 1024
 
-// Instrument builds the one instrumented run selection evidence comes from.
-// Same command-shape rules as CoverageCmd (a `pytest` or `<interp> -m pytest`
-// argv; anything else is refused rather than guessed at), but the
-// instrumentation is pytest-cov's, because only pytest-cov records
+// DiagnoseSelectionFailure implements lang.SelectionDiagnoser: it recognizes
+// pytest's own usage error when the project's venv lacks the pytest-cov
+// plugin Instrument's command requires. Without it, `--cov
+// --cov-context=test --cov-report=` is unrecognised, pytest exits 4 via
+// argparse before running anything, and prints exactly this text to
+// stderr — the one case worth naming explicitly, because "install a
+// plugin" is an operator action a generic "the run failed" note does not
+// suggest.
+func (pyPlugin) DiagnoseSelectionFailure(text string) string {
+	if strings.Contains(text, "unrecognized arguments: --cov") {
+		return "per-test selection needs the pytest-cov plugin installed in this project's environment (pip install pytest-cov) — without it corral grades by the whole suite and pairs tests by filename only"
+	}
+	return ""
+}
+
+// Instrument builds the one instrumented run selection evidence comes from,
+// with coverage.py's default (whole-cwd) source scope — see
+// InstrumentSourceRoots for why that default makes "uncovered" unreachable
+// for a src-layout/editable install, and prefer it when source roots are
+// known. Same command-shape rules as CoverageCmd (a `pytest` or `<interp>
+// -m pytest` argv; anything else is refused rather than guessed at), but
+// the instrumentation is pytest-cov's, because only pytest-cov records
 // per-TEST dynamic contexts while keeping the project's own coverage
 // configuration (source/omit) in force. `--cov-report=` suppresses the
 // terminal report; the JSON is emitted afterwards by coverage itself with
 // contexts shown. The data file is a temp path so the project's own
 // .coverage is never touched.
 func (pyPlugin) Instrument(testCmd []string) (cmd []string, ok bool) {
+	return pyPlugin{}.instrument(testCmd, nil)
+}
+
+// InstrumentSourceRoots implements lang.SourceRootInstrumenter: one
+// --cov=<root> per derived source root, instead of coverage.py's bare
+// --cov (the whole cwd). This is what makes "uncovered" reachable at all
+// for an editable/src-layout install — coverage.py otherwise measures a
+// file by where python actually IMPORTED it from, which for such an
+// install is a path outside the checked-out tree; the reducer's own
+// repo-root filter then drops it entirely, and this package correctly
+// reads that as "never measured", not "uncovered" (see
+// CollectSelectionEvidence's doc). Scoping coverage to the real source
+// root(s) instead means a genuinely dead module shows up PRESENT with
+// zero contexts, a real uncovered finding.
+//
+// An empty sourceRoots is not an error — it falls back to instrument's
+// bare-cov behaviour, byte-identical to Instrument.
+func (pyPlugin) InstrumentSourceRoots(testCmd []string, sourceRoots []string) (cmd []string, ok bool) {
+	return pyPlugin{}.instrument(testCmd, sourceRoots)
+}
+
+func (pyPlugin) instrument(testCmd []string, sourceRoots []string) (cmd []string, ok bool) {
 	var interp string
 	var args []string
 	switch {
@@ -1086,9 +1126,23 @@ func (pyPlugin) Instrument(testCmd []string) (cmd []string, ok bool) {
 	// {file: [node ids]} — `coverage json --show-contexts` emits every
 	// context of every line and was 411 MB on flask (branch=true); the
 	// reduced form of the same run is 331 KB (#165).
+	// One --cov=<root> per derived source root scopes coverage to the
+	// project's real sources instead of --cov's bare, whole-cwd default —
+	// see InstrumentSourceRoots's own doc for why that default makes
+	// "uncovered" unreachable for a src-layout/editable install. No roots
+	// derived (or none passed at all, the plain Instrument caller) falls
+	// back to that same bare --cov, byte-identical to before this existed.
+	covFlags := "--cov"
+	if len(sourceRoots) > 0 {
+		parts := make([]string, len(sourceRoots))
+		for i, r := range sourceRoots {
+			parts[i] = "--cov=" + shellArg(r)
+		}
+		covFlags = strings.Join(parts, " ")
+	}
 	script := `f=$(mktemp) && trap 'rm -f "$f"' EXIT && ` +
 		`COVERAGE_CORE=ctrace COVERAGE_FILE="$f" ` + qi + " -m " + strings.Join(q, " ") +
-		` --cov --cov-context=test --cov-report= -p no:cacheprovider` +
+		" " + covFlags + ` --cov-context=test --cov-report= -p no:cacheprovider` +
 		`; rc=$?; [ "$rc" -eq 0 ] || exit "$rc"; ` +
 		`COVERAGE_CORE=ctrace COVERAGE_FILE="$f" ` + qi + " - <<'PY'\n" + pySelectionReducer + "PY\n"
 	return []string{"sh", "-c", script}, true
@@ -1101,7 +1155,11 @@ func (pyPlugin) Instrument(testCmd []string) (cmd []string, ok bool) {
 // pytest-cov's `|setup`/`|run`/`|teardown` phase suffix stripped), the
 // closed line ranges each of those tests executed (by index into that
 // test list), the ranges executed under no test context at all (import
-// time), and the number of distinct tests seen anywhere.
+// time), how many executable statements coverage's OWN static parse found
+// in the file (cov.analysis2 — independent of whether anything ran, which
+// is what lets a caller tell a genuinely empty file, e.g. a blank
+// __init__.py, from a real one nothing executed), and the number of
+// distinct tests seen anywhere.
 const pySelectionReducer = `import json, os, sys
 import coverage
 cov = coverage.Coverage(data_file=os.environ["COVERAGE_FILE"])
@@ -1139,12 +1197,17 @@ for path in data.measured_files():
             by_test.setdefault(c.rsplit("|", 1)[0], set()).add(lineno)
     ids = sorted(by_test)
     tests.update(ids)
+    try:
+        num_statements = len(cov.analysis2(path)[1])
+    except Exception:
+        num_statements = None
     files[rel] = {
         "tests": ids,
         "lines": {str(i): ranges(by_test[t]) for i, t in enumerate(ids)},
         "static": ranges(static),
+        "statements": num_statements,
     }
-json.dump({"format": "corral-selection-2", "tests": len(tests), "files": files}, sys.stdout, separators=(",", ":"))
+json.dump({"format": "corral-selection-3", "tests": len(tests), "files": files}, sys.stdout, separators=(",", ":"))
 `
 
 // shellArg renders one Instrument argv element for inclusion in its sh -c
@@ -1173,7 +1236,19 @@ func shellArg(s string) string {
 // executed it; pytest-cov names a test context `<nodeid>|<phase>`.
 // pySelectionFormat stamps the reducer's output so Select refuses any other
 // document — including the full coverage-json it used to parse — by name.
-const pySelectionFormat = "corral-selection-2"
+// Bumped to -3 (from -2) when pySelectionFile grew Statements: a document
+// stamped -2 (a real one may still sit in an on-disk selection cache —
+// internal/scanstore's Tier A — from before this field existed) decodes
+// Statements as its zero value, which would misread as "zero executable
+// statements" for EVERY previously-uncovered file, not just genuinely
+// empty ones. Refusing the old stamp by name — the same rule this format
+// already enforces against any OTHER shape — forces a fresh instrumented
+// run instead of silently misreading a document that predates the field;
+// scanstore.SelectionCacheGet's own doc already established that an
+// unusable cached document is a MISS, not a false hit, and this is that
+// same discipline applied to a format version rather than an empty byte
+// string.
+const pySelectionFormat = "corral-selection-3"
 
 // pySelectionEvidence is what pySelectionReducer emits: Tests is the count
 // of distinct tests seen across the whole run; Files is decoded separately
@@ -1189,50 +1264,75 @@ type pySelectionEvidence struct {
 
 // pySelectionFile is one measured file's entry: the node ids of the tests
 // that executed it, each test's executed line ranges (by index into
-// Tests), and the ranges executed under no test context (import time).
+// Tests), the ranges executed under no test context (import time), and how
+// many EXECUTABLE STATEMENTS coverage's own static parse found in the file
+// — independent of whether anything ran, the signal that distinguishes a
+// file with real code nothing executed (Statements > 0, Tests and Static
+// both empty: genuinely uncovered) from a file with NO code to execute at
+// all (Statements == 0: an empty or comment-only __init__.py, benign, not
+// a finding). A *int, not int: nil means the reducer's own analysis2 call
+// failed for this file (rare — see pySelectionReducer) and the count is
+// UNKNOWN, which Index treats as "has statements" (the conservative
+// default: never silently swallow a real finding because one file's
+// analysis hiccuped).
 type pySelectionFile struct {
-	Tests  []string            `json:"tests"`
-	Lines  map[string][][2]int `json:"lines"`
-	Static [][2]int            `json:"static"`
+	Tests      []string            `json:"tests"`
+	Lines      map[string][][2]int `json:"lines"`
+	Static     [][2]int            `json:"static"`
+	Statements *int                `json:"statements"`
 }
 
 type pySelectionEvidenceFiles struct {
 	Files map[string]pySelectionFile `json:"files"`
 }
 
-// Select narrows testCmd to the tests whose recorded context executed any
-// line of codePath. Node ids are sorted so the command — and therefore the
-// cache key — is stable for the same evidence.
-func (pyPlugin) Select(evidence []byte, repoRoot, codePath, testPath string, testCmd []string) (Selection, error) {
-	// The evidence is usually a raw `coverage json` capture: whatever the
-	// wrapped test run printed, then the JSON as the LAST line (Instrument's
-	// own shape). It may also be the JSON alone, pretty-printed across many
-	// lines (a recorded fixture) — try the whole trimmed payload first, and
-	// only fall back to the last-line-of-stdout rule on failure.
+// parsePySelectionEvidence decodes ONE instrumented run's evidence into the
+// corral-selection-3 document, checking the format stamp BEFORE ever
+// trusting the shape of what follows. This is the ONE reader of the format —
+// Select (one file) and Index (every file) both call it, rather than each
+// re-implementing the same decode.
+//
+// The evidence is usually a raw `coverage json` capture: whatever the
+// wrapped test run printed, then the JSON as the LAST line (Instrument's own
+// shape). It may also be the JSON alone, pretty-printed across many lines (a
+// recorded fixture) — try the whole trimmed payload first, and only fall
+// back to the last-line-of-stdout rule on failure.
+func parsePySelectionEvidence(evidence []byte) (pySelectionEvidence, error) {
 	var rep pySelectionEvidence
 	payload := strings.TrimSpace(string(evidence))
 	if payload == "" {
-		return Selection{}, fmt.Errorf("lang: python selection evidence is empty")
+		return pySelectionEvidence{}, fmt.Errorf("lang: python selection evidence is empty")
 	}
 	if err := json.Unmarshal([]byte(payload), &rep); err != nil {
 		payload = lastNonEmptyLine(evidence)
 		if payload == "" {
-			return Selection{}, fmt.Errorf("lang: python selection evidence is empty")
+			return pySelectionEvidence{}, fmt.Errorf("lang: python selection evidence is empty")
 		}
 		if err := json.Unmarshal([]byte(payload), &rep); err != nil {
-			return Selection{}, fmt.Errorf("lang: unparseable python selection evidence (last line is not JSON): %w", err)
+			return pySelectionEvidence{}, fmt.Errorf("lang: unparseable python selection evidence (last line is not JSON): %w", err)
 		}
 	}
 	if rep.Format != pySelectionFormat {
-		return Selection{}, fmt.Errorf("lang: python selection evidence is not a %s document (format %q)", pySelectionFormat, rep.Format)
+		return pySelectionEvidence{}, fmt.Errorf("lang: python selection evidence is not a %s document (format %q)", pySelectionFormat, rep.Format)
 	}
 	var files pySelectionEvidenceFiles
 	if err := json.Unmarshal([]byte(payload), &files); err != nil {
-		return Selection{}, fmt.Errorf("lang: unparseable %s files: %w", pySelectionFormat, err)
+		return pySelectionEvidence{}, fmt.Errorf("lang: unparseable %s files: %w", pySelectionFormat, err)
 	}
 	rep.Files = files.Files
 	if rep.Files == nil {
-		return Selection{}, fmt.Errorf("lang: python selection evidence has no files — the suite most likely never ran")
+		return pySelectionEvidence{}, fmt.Errorf("lang: python selection evidence has no files — the suite most likely never ran")
+	}
+	return rep, nil
+}
+
+// Select narrows testCmd to the tests whose recorded context executed any
+// line of codePath. Node ids are sorted so the command — and therefore the
+// cache key — is stable for the same evidence.
+func (pyPlugin) Select(evidence []byte, repoRoot, codePath, testPath string, testCmd []string) (Selection, error) {
+	rep, err := parsePySelectionEvidence(evidence)
+	if err != nil {
+		return Selection{}, err
 	}
 
 	root := normalizePyRepoRoot(repoRoot)
@@ -1272,15 +1372,22 @@ func (pyPlugin) Select(evidence []byte, repoRoot, codePath, testPath string, tes
 		}
 	}
 	if mine == nil {
-		// Absent from the report. coverage only lists files the suite
-		// imported, so absence means no test executed it — PROVIDED the
-		// suite actually ran the test meant to cover it. Without that
-		// evidence, "uncovered" would accuse a file whose test was simply
-		// filtered out or failed to collect.
+		// Absent from the report. This is NEVER "uncovered": coverage only
+		// lists files it could resolve back under the repo root, and a file
+		// whose paired test genuinely ran (sawTest) can still be missing
+		// here for reasons that have nothing to do with whether the suite
+		// executed it — most commonly an editable/src-layout install whose
+		// sources coverage measures OUTSIDE root, which the reducer's own
+		// `if rel.startswith(".."): continue` silently drops (see
+		// CollectSelectionEvidence's document-level pathology check, which
+		// usually catches this for the whole scan before any one file
+		// reaches here). Absence of evidence is not evidence of absence, so
+		// this always falls back to grading the whole suite, disclosed,
+		// rather than claim a kill rate for a file nothing measured.
 		if !sawTest {
 			return Selection{}, fmt.Errorf("lang: python selection evidence never saw %s or its paired test %q — did the suite run it?", codePath, testPath)
 		}
-		mine = map[string]bool{}
+		return Selection{}, fmt.Errorf("lang: python selection evidence measured %d file(s) but never %s, though its paired test %q did run — its coverage may not have been recorded under the repo root (e.g. an editable/src-layout install); falling back to the whole suite", len(rep.Files), codePath, testPath)
 	}
 	sel := Selection{Method: "coverage-context", Of: rep.Tests, Base: stripPyCollectionTargets(testCmd, root), Lines: lines, Static: static}
 	if len(mine) == 0 {
@@ -1306,6 +1413,80 @@ func (pyPlugin) Select(evidence []byte, repoRoot, codePath, testPath string, tes
 	sel.Tests = ids
 	sel.Cmd = append(append([]string{}, sel.Base...), ids...)
 	return sel, nil
+}
+
+// Index parses the same corral-selection-3 document Select reads, into a
+// per-file readout for EVERY file the run measured: for each, the covering
+// tests mapped to how many of THAT file's lines each one executed. Shares
+// parsePySelectionEvidence with Select — no second reader of the format.
+//
+// Paths come back exactly as alignPyPath resolves them with an empty root:
+// the reducer already writes repo-relative paths for the common case
+// (os.path.relpath against the run's own cwd), and a caller building a
+// scan-wide index has no single per-file repoRoot to relativize against
+// anyway — candidacy is evaluated at the repo root the evidence was
+// collected from, so this matches Select's own root="" behaviour for a
+// relative measured path.
+func (pyPlugin) Index(evidence []byte) (map[string]FileCoverage, error) {
+	rep, err := parsePySelectionEvidence(evidence)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]FileCoverage, len(rep.Files))
+	for path, f := range rep.Files {
+		p, ok := alignPyPath(path, "")
+		if !ok {
+			continue
+		}
+		tests := make(map[string]int, len(f.Tests))
+		for _, id := range f.Tests {
+			tests[id] = 0
+		}
+		for idxStr, rngs := range f.Lines {
+			idx, err := strconv.Atoi(idxStr)
+			if err != nil || idx < 0 || idx >= len(f.Tests) {
+				// Index degrades per-entry rather than failing the whole
+				// scan-wide readout over one file's malformed lines index —
+				// unlike Select, which errors because it is answering about
+				// exactly one file and has nothing safer to fall back to.
+				continue
+			}
+			id := f.Tests[idx]
+			n := 0
+			for _, r := range rngs {
+				n += r[1] - r[0] + 1
+			}
+			tests[id] += n
+		}
+		out[p] = FileCoverage{Tests: tests, HasStatic: len(f.Static) > 0, HasStatements: f.Statements == nil || *f.Statements > 0}
+	}
+	return out, nil
+}
+
+// IsLibraryCode implements lang.LibraryCodeClassifier: path is library code
+// when its directory chain contains a MEASURED __init__.py (flat layout —
+// mypkg/foo.py counts because mypkg/__init__.py does, and a nested
+// mypkg/sub/foo.py counts if EITHER mypkg/sub or mypkg itself has one), or
+// when it sits at least two segments under a top-level src/ directory (the
+// src/<pkg>/... layout, honoured even for a PEP 420 namespace package that
+// ships with NO __init__.py at all — the walk below would otherwise never
+// recognize one). docs/conf.py, setup.py, noxfile.py and scripts/*.py all
+// have neither and are correctly NOT library code.
+func (pyPlugin) IsLibraryCode(path string, hasPath func(string) bool) bool {
+	slash := filepath.ToSlash(path)
+	if parts := strings.Split(slash, "/"); len(parts) >= 3 && parts[0] == "src" {
+		return true
+	}
+	dir := slash
+	for {
+		dir = filepath.ToSlash(filepath.Dir(dir))
+		if dir == "." || dir == "/" || dir == "" {
+			return false
+		}
+		if hasPath(dir + "/__init__.py") {
+			return true
+		}
+	}
 }
 
 // collapseToFilesIfTooLong collapses ids (sorted node ids) to their

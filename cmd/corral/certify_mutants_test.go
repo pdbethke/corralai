@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -13,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
+	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/reposcan"
 )
 
@@ -374,5 +376,98 @@ func TestMutantSetRecorderReportDisclosesCacheHits(t *testing.T) {
 	newMutantSetRecorder().report(&plain, "set.json", 0, 0, 0)
 	if strings.Contains(plain.String(), "audited file(s)") || strings.Contains(plain.String(), "verdict cache") {
 		t.Errorf("a cache-less single-file run must not claim a denominator it has not got, got:\n%s", plain.String())
+	}
+}
+
+// TestCertifyRepoRefusesAStaleMutantSetBeforeRunningTheInstrumentedSuite is
+// F3: the scan's own selection-evidence run (the SAME instrumented suite
+// pass candidacy widening now uses) must never execute before --mutants,
+// the jail preflight and the provider preflight have all had their say — a
+// stale/missing --mutants file (or a missing key) must be refused BEFORE a
+// real, possibly-minutes-long suite run, not after.
+func TestCertifyRepoRefusesAStaleMutantSetBeforeRunningTheInstrumentedSuite(t *testing.T) {
+	root := t.TempDir()
+	gitRun := gitCmd(t, root)
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n\nfunc A() int { return 1 }\n")
+	mustWrite(t, filepath.Join(root, "pkg", "a_test.go"), "package pkg\n")
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+
+	setPath := filepath.Join(root, "mutants.json")
+	if err := adequacy.WriteMutantSet(setPath, adequacy.MutantSetFile{
+		Format: adequacy.MutantSetFormat,
+		Files: map[string]adequacy.MutantSetEntry{
+			"pkg/a.go": {
+				ParentSHA256: shaOf("package pkg\n\nfunc A() int { return 2 }\n"), // stale
+				Mutants:      []adequacy.RecordedMutant{{ID: "m1", Replace: "package pkg\n\nfunc A() int { return 0 }\n"}},
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	orig := collectSelectionEvidence
+	t.Cleanup(func() { collectSelectionEvidence = orig })
+	ran := false
+	collectSelectionEvidence = func(ctx context.Context, runner coverageRunner, files map[string]string, p lang.Plugin, testCmd []string, sourcePaths []string) reposcan.SelectionEvidence {
+		ran = true
+		return reposcan.SelectionEvidence{Ran: true}
+	}
+
+	var out, errb bytes.Buffer
+	code := runCertifyRepo([]string{
+		"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off",
+		"--substrate", substrateWorkspace, "--mutants", setPath,
+		"--", "false",
+	}, &out, &errb)
+	if code != 2 {
+		t.Fatalf("exit %d, want 2: stdout=%s stderr=%s", code, out.String(), errb.String())
+	}
+	if ran {
+		t.Error("the instrumented selection suite ran before the stale --mutants refusal — the exact cost F3 exists to avoid")
+	}
+}
+
+// TestCertifyRepoDiffBaseWithNothingSelectedNeverRunsTheInstrumentedSuite is
+// F3's second half: restoring a cost guard for an empty --diff-base scan.
+// Scoped to --diff-base specifically (not to "pairing found zero
+// candidates" in general) — see the guard's own comment in runCertifyRepo
+// for why a blanket `len(selected) > 0` would regress the design's own
+// itsdangerous-shaped headline case.
+func TestCertifyRepoDiffBaseWithNothingSelectedNeverRunsTheInstrumentedSuite(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
+	root := t.TempDir()
+	gitRun := gitCmd(t, root)
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n\nfunc A() int { return 1 }\n")
+	mustWrite(t, filepath.Join(root, "pkg", "a_test.go"), "package pkg\n")
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+	base := gitRevParseHead(t, root)
+	// A second commit that touches NOTHING under pkg/ — the diff against
+	// base selects zero candidates and rescues no unpairable file either.
+	mustWrite(t, filepath.Join(root, "README.md"), "docs only\n")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "docs", "--no-gpg-sign")
+
+	orig := collectSelectionEvidence
+	t.Cleanup(func() { collectSelectionEvidence = orig })
+	ran := false
+	collectSelectionEvidence = func(ctx context.Context, runner coverageRunner, files map[string]string, p lang.Plugin, testCmd []string, sourcePaths []string) reposcan.SelectionEvidence {
+		ran = true
+		return reposcan.SelectionEvidence{Ran: true}
+	}
+
+	var out, errb bytes.Buffer
+	code := runCertifyRepo([]string{
+		"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off",
+		"--substrate", substrateWorkspace, "--diff-base", base,
+	}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit=%d, want 0 (nothing in scope is not a failure): stdout=%s stderr=%s", code, out.String(), errb.String())
+	}
+	if ran {
+		t.Error("the instrumented selection suite ran for a --diff-base scan that selected nothing and had nothing to rescue")
 	}
 }

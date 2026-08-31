@@ -57,7 +57,7 @@ func runVerifyAttest(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("verify", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	attestFlag := fs.String("attest", "", "the --attest statement to verify (required) — the plain JSON path (its signed envelope is expected at <path>.dsse.json) or the envelope itself")
-	dbFlag := fs.String("db", "", "also recompute the warehouse rows' hash from this pushed DuckDB (a path, or md:<db> for MotherDuck) and compare it to the statement's claim")
+	dbFlag := fs.String("db", "", "also recompute the warehouse rows' hash from this pushed DuckDB (a path, or md:<db> for MotherDuck) and compare it to the statement's claim. A VACUUMed or twice-pushed warehouse can change row order and trip a false ✗ here without tampering")
 	rekorIndexFlag := fs.Int64("rekor-index", -1, "also confirm this Rekor log index's entry matches the envelope (default: read the index --db recorded for this scan, if --db was given)")
 	pubFlag := fs.String("pub", "", "hex-encoded Ed25519 public key to verify the signature against (default: the local certify key, CORRALAI_CERTIFY_KEY_FILE)")
 	if err := fs.Parse(args); err != nil {
@@ -321,7 +321,7 @@ func verifyWarehouseRows(dbFlag string, stmt map[string]any) verifyCheckResult {
 		return verifyCheckResult{checked: false, detail: fmt.Sprintf("hashing the rows read back: %v", herr)}
 	}
 	if got != id.warehouseRowsSHA256 {
-		return verifyCheckResult{checked: true, ok: false, detail: "the rows read back from --db hash to a different value than the statement claims"}
+		return verifyCheckResult{checked: true, ok: false, detail: "the rows read back from --db hash to a different value than the statement claims — note: a VACUUMed or re-pushed warehouse changes row order and can trip this without tampering; re-verify against a warehouse that has only been pushed to once"}
 	}
 	return verifyCheckResult{checked: true, ok: true, detail: "the rows read back from --db hash to exactly the value the statement claims"}
 }

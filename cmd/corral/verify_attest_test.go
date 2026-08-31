@@ -210,8 +210,8 @@ func TestVerifyAttestRowsHashMismatch(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("exit %d, want 1; stdout=%s stderr=%s", code, out, errb)
 	}
-	if !strings.Contains(out, "✗ warehouse rows: the rows read back from --db hash to a different value than the statement claims") {
-		t.Errorf("stdout = %q, want a failing warehouse-rows line", out)
+	if !strings.Contains(out, "✗ warehouse rows: the rows read back from --db hash to a different value than the statement claims — note: a VACUUMed or re-pushed warehouse changes row order and can trip this without tampering; re-verify against a warehouse that has only been pushed to once") {
+		t.Errorf("stdout = %q, want a failing warehouse-rows line carrying the false-alarm caveat", out)
 	}
 }
 
@@ -362,5 +362,21 @@ func TestVerifyAttestNoEnvelopeExit2(t *testing.T) {
 	}
 	if !strings.Contains(errb, "no signed DSSE envelope found") {
 		t.Errorf("stderr = %q, want it to say no envelope was found", errb)
+	}
+}
+
+// TestVerifyDBFlagHelpNamesTheOrderingCaveat pins the coordinator's second
+// requirement: an operator staring only at --help — never having seen the
+// mismatch line itself — must already know a ✗ here is not automatically
+// tampering.
+func TestVerifyDBFlagHelpNamesTheOrderingCaveat(t *testing.T) {
+	var out, errb bytes.Buffer
+	runVerifyAttest([]string{"--help"}, &out, &errb)
+	help := out.String() + errb.String()
+	if !strings.Contains(help, "--db") {
+		t.Fatalf("--help output does not mention --db at all:\n%s", help)
+	}
+	if !strings.Contains(help, "VACUUM") && !strings.Contains(help, "vacuum") {
+		t.Errorf("--db's help text does not name the VACUUM/re-push false-alarm caveat:\n%s", help)
 	}
 }

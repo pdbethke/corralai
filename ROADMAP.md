@@ -304,14 +304,15 @@ Go binary.**
   produces the same zero and would have kept the gate green. The mapped row is the
   positive assertion — verified by removing `.js` from the plugin and confirming
   only that row goes red.
-- **Signatures and complexity for five languages.** Go, Python, Ruby,
-  JavaScript and TypeScript. Python previously skipped class methods entirely
-  and the other three had no extractor at all, which mattered more than it
-  looks: the mutant-generator shards by SYMBOL, so a file that corral could not
-  read symbols from collapsed to a single generator seat instead of up to eight —
-  silently, on a run that still reported as complete. Measured:
+- **Signatures and complexity for six languages.** Go, Python, Ruby,
+  JavaScript, TypeScript and PHP. Python previously skipped class methods
+  entirely and the other three had no extractor at all, which mattered more
+  than it looks: the mutant-generator shards by SYMBOL, so a file that corral
+  could not read symbols from collapsed to a single generator seat instead of
+  up to eight — silently, on a run that still reported as complete. Measured:
   `requests/adapters.py` 1 symbol → 19, `rubocop` 729 of 736 files measured,
-  `express/lib/response.js` 2 → 20.
+  `express/lib/response.js` 2 → 20. PHP's own extractor shipped later
+  (2026-08-31), receiver-scoped to the enclosing class/trait from the start.
 - **Coverage-guided test selection is now the default for Python**, replacing
   the paired-file scoping this section used to describe (`--scope-tests`,
   since removed): a file is graded by the tests execution evidence shows

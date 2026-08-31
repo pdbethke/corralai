@@ -134,11 +134,11 @@ project that names tests after *behavior* rather than after the source file
 relying on pairing to find it. Before spending a real run, `corral doctor`
 checks the environment for free — see below.
 
-Go, Python, Ruby, JavaScript and TypeScript — the language is inferred from
-`--code`'s extension, each a plugin in `internal/lang`. The authored test is
-written in **your project's own harness** (it is shown your existing test file
-and told to match it), so vitest, jest, pytest, minitest and RSpec all work
-without configuration.
+Go, Python, Ruby, JavaScript, TypeScript and PHP — the language is inferred
+from `--code`'s extension, each a plugin in `internal/lang`. The authored test
+is written in **your project's own harness** (it is shown your existing test
+file and told to match it), so vitest, jest, pytest, minitest, RSpec and
+PHPUnit all work without configuration.
 
 **Where each language's support actually stands.** A tool that argues for
 execution over self-report should not claim a language on the strength of a
@@ -151,16 +151,32 @@ passing unit test, so here is what has actually been run, against what:
 | **TypeScript** | a private SDK, and [vercel/ms](https://github.com/vercel/ms) | 0.79 / **0.94**, 3 and 2 gaps proven |
 | **JavaScript** | [vercel/ms](https://github.com/vercel/ms) under jest | **CERTIFIED**, 33 of 35 killed, 2 gaps proven |
 | **Ruby** | [minitest](https://github.com/minitest/minitest) itself | 36 of 40 killed, **0.90** |
+| **PHP** | [webmozart/assert](https://github.com/webmozart/assert) under PHPUnit | **CERTIFIED**, 40 of 40 planted faults killed, 0 survivors |
 
 Go and Python are exercised hardest — Go continuously in CI, Python across
-repeated whole-repo scans. **TypeScript, JavaScript and Ruby each rest on a
-single third-party repository**, which is enough to show the plugin works and
-is not evidence about the ecosystem. Treat them accordingly.
+repeated whole-repo scans. **TypeScript, JavaScript, Ruby and PHP each rest on
+a single third-party repository**, which is enough to show the plugin works
+and is not evidence about the ecosystem. Treat them accordingly. PHP's own
+40/40 deserves the same honesty every other row gets: a suite that killed
+everything an adversary planted is a genuinely adequate suite on THAT run —
+but it also means the pool's proving seat, which exists to author a killing
+test against whatever survives, had nothing left to prove. Zero survivors is
+the good outcome, not a gap in what was measured.
 
 One number in that table deserves its own warning: kill rate moves **run to
 run on the same file with the same suite**, because the faults are generated
 afresh each time. Measured swing on one file: 0.55 to 0.80. A single run is
 evidence of specific gaps, **not a grade** — never quote one as a score.
+
+**A PHP-specific trap, closed before it costs you anything:** Debian/Ubuntu's
+`/usr/bin/php` is commonly a symlink through `/etc/alternatives` — resolves
+fine on the host, but the sandbox's own mount table binds `/usr` itself, not
+`/etc/alternatives`, so that chain can dangle once inside the jail even
+though `php` looks perfectly normal from outside it. `certify --local`'s
+preflight now resolves the real interpreter and probes it *through* the
+sandbox before spending a single model call, and refuses with the fix named
+if it can't follow the chain: pass an explicit interpreter in your test
+command, e.g. `-- php8.5 vendor/bin/phpunit tests/`.
 
 C is next.
 

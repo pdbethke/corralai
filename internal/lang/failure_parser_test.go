@@ -143,6 +143,91 @@ func TestGoFirstFailure(t *testing.T) {
 	}
 }
 
+// phpunitFailureSummary is a real PHPUnit tail: the dot-progress line, the
+// numbered failure section, then the "FAILURES!" summary. Each failing test
+// is reported as "N) Class::method" — the id must come back verbatim,
+// without the "N) " numbering.
+const phpunitFailureSummary = `PHPUnit 10.5.16 by Sebastian Bergmann and contributors.
+
+Runtime:       PHP 8.2.10
+
+..F.                                                               4 / 4 (100%)
+
+Time: 00:00.014, Memory: 6.00 MB
+
+There was 1 failure:
+
+1) Tests\InvoiceTest::testPriceIsNeverNegative
+Failed asserting that -5.0 is greater than or equal to 0.
+
+/repo/tests/InvoiceTest.php:22
+
+FAILURES!
+Tests: 4, Assertions: 4, Failures: 1.
+`
+
+// phpunitFatalError is the "Error:" shape: an exception thrown during a
+// test (not a collection failure — the test DID run), reported under "There
+// was 1 error:" with the same numbered "N) Class::method" id.
+const phpunitFatalError = `PHPUnit 10.5.16 by Sebastian Bergmann and contributors.
+
+Runtime:       PHP 8.2.10
+
+.E                                                                 2 / 2 (100%)
+
+Time: 00:00.011, Memory: 6.00 MB
+
+There was 1 error:
+
+1) Tests\InvoiceTest::testDescribeUnknownKind
+Error: Call to undefined method Invoice::describeUnknownKind()
+
+/repo/tests/InvoiceTest.php:40
+
+ERRORS!
+Tests: 2, Assertions: 1, Errors: 1.
+`
+
+// phpunitCleanPass is a fully passing run — PHPUnit's terse "OK" summary,
+// with no numbered section at all.
+const phpunitCleanPass = `PHPUnit 10.5.16 by Sebastian Bergmann and contributors.
+
+Runtime:       PHP 8.2.10
+
+....                                                               4 / 4 (100%)
+
+Time: 00:00.010, Memory: 6.00 MB
+
+OK (4 tests, 4 assertions)
+`
+
+func TestPHPFirstFailure(t *testing.T) {
+	p, ok := ByName("php")
+	if !ok {
+		t.Fatal("php plugin not registered")
+	}
+	fp, ok := p.(FailureParser)
+	if !ok {
+		t.Fatal("php plugin does not implement FailureParser")
+	}
+	for _, tc := range []struct {
+		name   string
+		output string
+		want   string
+	}{
+		{"FAILURES! summary names the failing test", phpunitFailureSummary, `Tests\InvoiceTest::testPriceIsNeverNegative`},
+		{"a fatal Error: is named the same way", phpunitFatalError, `Tests\InvoiceTest::testDescribeUnknownKind`},
+		{"a clean OK run names nothing", phpunitCleanPass, ""},
+		{"empty output names nothing", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := fp.FirstFailure([]byte(tc.output)); got != tc.want {
+				t.Errorf("FirstFailure = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // The languages corral can audit but whose runners it cannot parse precisely
 // must offer NO parser at all. A wrong id is worse than none: the ledger
 // would name a test that never ran.

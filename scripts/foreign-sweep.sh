@@ -72,6 +72,12 @@ fi
 #                      filename rule derives `response -> res`. Pinned at 0 so
 #                      nobody "fixes" it into a false positive without noticing
 #                      the regression here first.
+#   webmozart/assert   PHP -- the multilang-gate acceptance repo (2026-08-31):
+#                      a small, pure PHPUnit library, proven CERTIFIED (40/40
+#                      planted faults killed, 0 survivors) via `certify --local
+#                      --repo-dir`. Its own sibling tests/ tree pairs
+#                      src/Assert.php -> tests/AssertTest.php by the same
+#                      Test-suffix convention the php plugin's TestPaths uses.
 #
 # A repo with a map at testdata/foreign-sweep-tests/<name>.json is scanned a
 # SECOND time with --tests, recorded as a separate `<name>+tests` row against
@@ -91,6 +97,7 @@ REPOS=(
   "gin-gonic/gin     34dac209ffb6ef85cc78c5d217bbb7ad001d68fd"
   "rubocop/rubocop   c4607810f6291eeed9a5155feecd03501ac1feb2"
   "expressjs/express a3714473feb3d2908add734d340e7755fd85e0a3"
+  "webmozart/assert  2ccb7c2e821038c03a3e6e1700c570c158c55f70"
 )
 
 WORK="$(mktemp -d)"

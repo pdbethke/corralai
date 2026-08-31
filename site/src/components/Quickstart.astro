@@ -18,10 +18,10 @@ corral certify --local --code path/to/file.go \
   <pre class="code">corral certify verify record.json    # re-runs the proof — no key, no network</pre>
   <p>
     The herd runs in a bwrap jail on Linux (<code>--jail container</code> for
-    docker/podman elsewhere) and grades tests in five languages — Go, Python,
-    Ruby, JavaScript, TypeScript — writing its killing test in
-    <em>your</em> project's harness, so vitest, jest, pytest and minitest work
-    without configuration. Roles are decorrelation-<strong>enforced</strong> across
+    docker/podman elsewhere) and grades tests in six languages — Go, Python,
+    Ruby, JavaScript, TypeScript, PHP — writing its killing test in
+    <em>your</em> project's harness, so vitest, jest, pytest, minitest and
+    PHPUnit work without configuration. Roles are decorrelation-<strong>enforced</strong> across
     models — the critic must differ from the writer or the run refuses — and
     each role can be pointed at a different <em>vendor</em>: a Gemini
     fault-planter with a Claude critic is a supported run, off your own keys.
@@ -29,9 +29,9 @@ corral certify --local --code path/to/file.go \
   <p class="caveat">
     Honest about the coverage behind that: <strong>Go and Python are exercised
     hardest</strong> — Go continuously in this repo's own CI, Python across
-    repeated whole-repo scans of Flask. TypeScript, JavaScript and Ruby each
-    rest on a <strong>single third-party repository</strong> so far, which shows
-    the plugin works and is not evidence about the ecosystem.
+    repeated whole-repo scans of Flask. TypeScript, JavaScript, Ruby and PHP
+    each rest on a <strong>single third-party repository</strong> so far,
+    which shows the plugin works and is not evidence about the ecosystem.
     <a href="https://github.com/pdbethke/corralai#readme">The evidence table is in the README →</a>
   </p>
   <p>

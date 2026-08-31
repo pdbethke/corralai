@@ -113,3 +113,23 @@ func mustWrite(t *testing.T, p, s string) {
 		t.Fatal(err)
 	}
 }
+
+// TestVendorAutoBindsExactlyParallelToNodeModulesAndVenv pins Task 2's
+// requirement that a Composer PHP project's vendor/ dir (holding
+// vendor/bin/phpunit) auto-binds read-only exactly the same way
+// node_modules and .venv already do — same depDirNames entry, same
+// shouldBind outcome under both backends that can relocate a dir.
+func TestVendorAutoBindsExactlyParallelToNodeModulesAndVenv(t *testing.T) {
+	if !depDirNames["vendor"] {
+		t.Fatal(`depDirNames["vendor"] = false, want true — vendor/ (Composer's PHP dep tree, and Go's) must auto-bind`)
+	}
+	for _, name := range []string{"node_modules", "vendor", ".venv"} {
+		for _, backend := range []string{"bwrap", "none"} {
+			got := shouldBind(name, name, loadOpts{BackendName: backend})
+			want := backend == "bwrap"
+			if got != want {
+				t.Errorf("shouldBind(%q, backend=%q) = %v, want %v — vendor/ must track node_modules/.venv exactly", name, backend, got, want)
+			}
+		}
+	}
+}

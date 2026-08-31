@@ -50,7 +50,7 @@ func (v Verdict) AuthoredRecord() string {
 // for python and ruby and harmless as a label anywhere corral does not know.
 func recordCommentMarker(langName string) string {
 	switch langName {
-	case "go", "javascript", "typescript":
+	case "go", "javascript", "typescript", "php":
 		return "//"
 	}
 	return "#"

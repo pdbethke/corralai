@@ -23,12 +23,12 @@ is the honest version: what it can't do yet, and what's next.
 - The **repo gate** and the **control gate** run continuously against a
   brain, requiring the actual check to pass — not a self-report — before
   branch protection lets a PR merge.
-- **Multi-model, multi-language** (Go, Python, Ruby, JS, TS), decorrelation
+- **Multi-model, multi-language** (Go, Python, Ruby, JS, TS, PHP), decorrelation
   enforced by construction — each role can be pointed at a different *vendor* —
-  key-free on a local 7B if you want it. Coverage across those five is uneven
+  key-free on a local 7B if you want it. Coverage across those six is uneven
   and stated plainly: Go and Python are exercised hardest, while TypeScript,
-  JavaScript and Ruby each rest on a single third-party repository so far. The
-  evidence table is in the README.
+  JavaScript, Ruby and PHP each rest on a single third-party repository so far.
+  The evidence table is in the README.
 - The **jail** (`bwrap`/container/`sandbox-exec`), the **human gate** on
   admin actions and merges, and a fully **attributed action ledger**.
 - The **learning loop** (findings → human-approved skills), **shared memory /
@@ -103,7 +103,7 @@ Operationally, v0.1 has real, named ceilings, not "coming soon" hand-waving:
   (as distinct from mutation-testing your suite) isn't part of it.
 - **Whole-repo scanning is much weaker in JavaScript/TypeScript than in
   Go, Python, or Ruby.** `certify --local` audits any single file you name, in
-  any of the five languages — you give it the path, so nothing is discovered.
+  any of the six languages — you give it the path, so nothing is discovered.
   `certify --repo` must *find* the files first, pairing each source file with
   its test by naming convention, and those conventions fit some ecosystems far
   better than others. Measured on real repos: `rubocop/rubocop` **736**

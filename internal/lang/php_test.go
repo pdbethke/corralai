@@ -24,10 +24,20 @@ func TestPHPPlugin(t *testing.T) {
 	}
 	// A two-command SEQUENCE, not a single argv element: `php -l` only
 	// checks one file per invocation, and the workspace substrate execs
-	// argv directly with no shell to splice a `&&` for it.
+	// argv directly with no shell to splice a `&&` for it. argv[0] is the
+	// DERIVED interpreter (phpInterpreter's own resolution), never the bare
+	// literal "php" — see php_interpreter_test.go: on Debian/Ubuntu that
+	// name is commonly a symlink through /etc/alternatives, invisible from
+	// inside the sandbox even though it resolves fine on the host.
 	cc := p.CompileCheck("Invoice.php", "InvoiceTest.php")
-	if !reflect.DeepEqual(cc, [][]string{{"php", "-l", "Invoice.php"}, {"php", "-l", "InvoiceTest.php"}}) {
-		t.Fatalf("CompileCheck = %v", cc)
+	if len(cc) != 2 {
+		t.Fatalf("CompileCheck = %v, want a 2-command sequence", cc)
+	}
+	wantInterp, _ := phpInterpreter(nil)
+	for i, want := range []string{"Invoice.php", "InvoiceTest.php"} {
+		if !reflect.DeepEqual(cc[i], []string{wantInterp, "-l", want}) {
+			t.Fatalf("CompileCheck()[%d] = %v, want [%q -l %q]", i, cc[i], wantInterp, want)
+		}
 	}
 	if cmd := p.TestCmd(); len(cmd) == 0 || cmd[0] != "vendor/bin/phpunit" {
 		t.Fatalf("TestCmd = %v, want vendor/bin/phpunit", cmd)

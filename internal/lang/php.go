@@ -3,11 +3,17 @@
 package lang
 
 import (
+	"context"
 	"fmt"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
 func init() { Register(phpPlugin{}) }
@@ -28,18 +34,84 @@ func (phpPlugin) Scaffold() map[string]string { return map[string]string{} }
 // invoke.
 func (phpPlugin) TestCmd() []string { return []string{"vendor/bin/phpunit"} }
 
-// CompileCheck syntax-checks BOTH files with `php -l` (offline, no
+// CompileCheck syntax-checks BOTH files with `<interpreter> -l` (offline, no
 // autoloading needed). `php -l` only ever reports on a SINGLE file per
 // invocation, so this returns a TWO-command sequence — codePath then
 // testPath, run in order, stopping at the first failure — rather than
 // trying to splice `&&` into one argv element: the workspace substrate execs
 // argv directly with no shell to interpret it (see ruby.go's identical
 // CompileCheck for the bug class this avoids).
+//
+// The interpreter is phpInterpreter(nil)'s own resolved, symlink-free
+// path — NEVER the bare literal "php". CompileCheck's signature carries no
+// testCmd (unlike Preflight), so it always takes phpInterpreter's LookPath+
+// EvalSymlinks branch; that is sufficient here because a syntax-only `-l`
+// check does not need to be the SAME interpreter binary the operator's own
+// test command grades with, only a REAL one the sandbox can actually see.
+// A bare "php" resolved fine on the HOST in the acceptance run that found
+// this bug (webmozart/assert, Debian) but /usr/bin/php was a symlink
+// through /etc/alternatives the sandbox's mount table does not carry —
+// baseline passed (the operator's own testCmd named an explicit php8.5),
+// and every one of 40 mutants was invalidated by THIS hardcoded literal
+// with "sh: 1: php: not found". phpInterpreter resolving to a real absolute
+// path under /usr fixes it: /usr is always bind-mounted whole.
+//
+// On the rare host where phpInterpreter itself fails (no php resolvable at
+// all), the literal "php" is kept as the argv[0] fallback: CompileCheck has
+// no error return, so there is nothing better to do than the exact
+// pre-existing behavior — and Preflight (which DOES return an error) is
+// what actually refuses the run before this is ever reached.
 func (phpPlugin) CompileCheck(codePath, testPath string) [][]string {
-	return [][]string{
-		{"php", "-l", codePath},
-		{"php", "-l", testPath},
+	interp, err := phpInterpreter(nil)
+	if err != nil {
+		interp = "php"
 	}
+	return [][]string{
+		{interp, "-l", codePath},
+		{interp, "-l", testPath},
+	}
+}
+
+// phpVersionedInterpreterRe matches a php interpreter's basename, with or
+// without a version suffix (php, php8, php8.3, ...) — deliberately narrow
+// so it never matches "phpunit" or any other php-prefixed tool.
+var phpVersionedInterpreterRe = regexp.MustCompile(`^php[0-9.]*$`)
+
+// phpInterpreter derives the ACTUAL php binary to invoke for a check corral
+// runs on the code's own behalf (CompileCheck's `-l`, and Preflight's own
+// jail probe below) — NOT the interpreter that grades the operator's suite,
+// which is whatever their own testCmd already names verbatim regardless of
+// what this returns.
+//
+// Debian/Ubuntu's /usr/bin/php is commonly a symlink through
+// /etc/alternatives — resolves fine with a bare LookPath on the HOST (the
+// alternatives system lives entirely on the host filesystem), but the
+// sandbox's mount table carries only /usr ITSELF (see internal/sandbox's
+// bwrap Wrap(), which `--ro-bind`s exactly that path and nothing under
+// /etc), so that same chain can dangle once inside it.
+//
+// testCmd's own argv[0] is preferred WHEN it already names a php variant
+// (basename matches phpVersionedInterpreterRe): that is the operator's own
+// choice, used VERBATIM — no further resolution attempted, mirroring
+// preflightBin's identical "the operator's own command is stronger evidence
+// than any stock guess" philosophy. Otherwise (testCmd names something else,
+// e.g. vendor/bin/phpunit, or is empty), "php" is resolved via LookPath then
+// filepath.EvalSymlinks to its FINAL real path — the form the sandbox's
+// /usr bind-mount can actually see, unlike the bare, possibly-symlinked
+// name.
+func phpInterpreter(testCmd []string) (string, error) {
+	if bin, ok := firstExecutableToken(testCmd); ok && phpVersionedInterpreterRe.MatchString(filepath.Base(bin)) {
+		return bin, nil
+	}
+	resolved, err := exec.LookPath("php")
+	if err != nil {
+		return "", fmt.Errorf("lang: php: %w", err)
+	}
+	real, err := filepath.EvalSymlinks(resolved)
+	if err != nil {
+		return "", fmt.Errorf("lang: php: could not resolve %q to its real path: %w", resolved, err)
+	}
+	return real, nil
 }
 
 // TestPaths covers PHPUnit's dominant naming convention — a `Test` SUFFIX on
@@ -68,18 +140,86 @@ func (phpPlugin) TestPaths(codePath string) []TestCandidate {
 // projects use alongside the plural.
 func (phpPlugin) TestRoots() []string { return []string{"tests", "test"} }
 
-// Preflight requires BOTH `php` itself and the test command's own binary —
-// or, when the operator named an explicit test command, THAT command's own
-// binary (see preflightBin and Plugin.Preflight's doc comment). `php` is
-// checked unconditionally because `vendor/bin/phpunit`'s shebang invokes it
-// even though the stock command never names "php" in argv itself; a host
-// with the phpunit binary present but no `php` interpreter would otherwise
+// Preflight requires the DERIVED php interpreter (phpInterpreter — the
+// operator's own testCmd argv[0] when it already names a php variant, else
+// "php" resolved via LookPath+EvalSymlinks to its real path) AND the test
+// command's own binary — or, when the operator named an explicit test
+// command, THAT command's own binary (see preflightBin and
+// Plugin.Preflight's doc comment). The interpreter is checked
+// unconditionally because `vendor/bin/phpunit`'s shebang invokes it even
+// though the stock command never names it in argv itself; a host with the
+// phpunit binary present but no working php interpreter would otherwise
 // pass preflight and fail at run time instead of refusing up front.
+//
+// It THEN probes that SAME interpreter through an actual sandbox, before
+// any model spend — a host-only LookPath check cannot see the gap this
+// closes: /usr/bin/php resolving fine via the OS's /etc/alternatives
+// indirection on the HOST tells you nothing about whether the SANDBOX's own
+// mount table (which does not carry /etc/alternatives) can still follow it.
+// This is the exact bug an acceptance run on webmozart/assert hit: baseline
+// passed (an explicit php8.5 in testCmd), but CompileCheck's then-hardcoded
+// "php -l" invalidated all 40 mutants with "sh: 1: php: not found" — a cost
+// a free, pre-spend probe would have caught. See phpJailPreflight.
 func (phpPlugin) Preflight(testCmd []string) error {
-	if err := toolOnPath("php"); err != nil {
+	interp, err := phpInterpreter(testCmd)
+	if err != nil {
 		return err
 	}
-	return toolOnPath(preflightBin(testCmd, "vendor/bin/phpunit"))
+	if err := toolOnPath(interp); err != nil {
+		return err
+	}
+	if err := toolOnPath(preflightBin(testCmd, "vendor/bin/phpunit")); err != nil {
+		return err
+	}
+	iso, isoErr := sandbox.Resolve(sandbox.Config{})
+	if isoErr != nil {
+		// No sandbox backend at all is a SEPARATE, already-owned gate
+		// (certify --local's own "sandbox starts" check, run before any
+		// plugin is even resolved) — declining here avoids double-reporting
+		// the same absence under a misleading "php" name.
+		return nil
+	}
+	return phpJailPreflight(iso, interp)
+}
+
+// phpJailPreflight verifies interp is reachable from INSIDE a sandbox — not
+// merely present on the host — by actually running `interp -v` there
+// through internal/sandbox's own Run (the same primitive
+// cmd/corral/jail.go's newRunJail and its "doctor <-> run parity" checks are
+// built on), with no dependency binds at all: a bare version probe needs
+// none, and /usr — which is where a REAL php always lives — is unconditionally
+// bind-mounted by every backend regardless of Options.ReadOnlyBinds.
+//
+// A missing/unreadable probe workspace is treated as inconclusive (nil, not
+// an error): this is a best-effort ADDITIONAL check layered on top of the
+// host-side ones above, not the sole gate.
+func phpJailPreflight(iso sandbox.Isolator, interp string) error {
+	dir, err := os.MkdirTemp("", "corral-php-preflight-*")
+	if err != nil {
+		return nil
+	}
+	defer os.RemoveAll(dir)
+
+	res := sandbox.Run(context.Background(), shellQuote(interp)+" -v", sandbox.Options{
+		Workspace: dir,
+		Backend:   iso,
+		Timeout:   15 * time.Second,
+	})
+	if res.ExitCode == 0 && !res.TimedOut {
+		return nil
+	}
+	detail := strings.TrimSpace(res.Output)
+	if res.Err != "" {
+		if detail != "" {
+			detail += "\n"
+		}
+		detail += res.Err
+	}
+	return fmt.Errorf(
+		"lang: php: %q resolves on the HOST but is not reachable INSIDE the sandbox (exit %d): %s\n"+
+			"this is commonly Debian/Ubuntu's /usr/bin/php being a symlink through /etc/alternatives, which the sandbox's mount table does not carry — "+
+			"name an explicit interpreter in your test command instead (e.g. `-- php8.3 vendor/bin/phpunit tests/`)",
+		interp, res.ExitCode, detail)
 }
 
 func (phpPlugin) PromptLang() string { return "PHP" }

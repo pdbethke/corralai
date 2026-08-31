@@ -35,7 +35,7 @@ func TestGoalCacheDisclosureLineIsUnchangedWhenNothingWasReused(t *testing.T) {
 func TestGoalCacheDisclosureLineGoldenMixed(t *testing.T) {
 	base := "  goals derived per file by test-model-x@v1.2.3 — no goal-critic; each goal is judged after the fact by mutant yield"
 	got := goalCacheDisclosureLine(base, "test-model-x", "v1.2.3", 2, 3)
-	want := "  goals: 2 derived by test-model-x@v1.2.3, 3 reused (identical source)"
+	want := "  goals: 2 derived by test-model-x@v1.2.3, 3 reused (identical source) — no goal-critic; each goal is judged after the fact by mutant yield"
 	if got != want {
 		t.Errorf("goalCacheDisclosureLine mixed = %q, want %q", got, want)
 	}
@@ -66,7 +66,7 @@ func TestNoGoalCacheFlagDerivesEveryTime(t *testing.T) {
 		var errb bytes.Buffer
 		gs, _, code := resolveGoalSource(&errb, root, "", "test-model-x", false, 1,
 			func(string) (reposcan.Deriver, error) { return countingDeriver{calls: &calls}, nil },
-			store, false)
+			store, false, true)
 		if code != 0 {
 			t.Fatalf("resolveGoalSource: code=%d stderr=%s", code, errb.String())
 		}
@@ -102,7 +102,7 @@ func TestResolveGoalSourceGoalsFilePathNeverWiresTheCache(t *testing.T) {
 		func(string) (reposcan.Deriver, error) {
 			t.Fatal("the --goals path must never construct a deriver")
 			return nil, nil
-		}, store, false)
+		}, store, false, true)
 	if code != 0 || gs == nil {
 		t.Fatalf("code=%d gs=%v", code, gs)
 	}
@@ -218,5 +218,113 @@ func TestAttestationCarriesGoalReusedOnlyWhenTrue(t *testing.T) {
 	}
 	if _, ok := fresh["goalReused"]; ok {
 		t.Errorf("fresh.go must not sign a goalReused key at all (never a signed false): %+v\nfull statement:\n%s", fresh, b)
+	}
+}
+
+// TestGoalReceiptLine pins the print DECISION goalReceiptLine makes: a
+// receipt only when the scan actually wrote something (fresh > 0) AND
+// --record was given; every other combination is silent.
+func TestGoalReceiptLine(t *testing.T) {
+	cases := []struct {
+		name          string
+		fresh         int
+		recordEnabled bool
+		want          string
+	}{
+		{"fresh derivations, --record given", 3, true, "  goal receipts kept in /tmp/scans.duckdb (--no-goal-cache to skip)"},
+		{"fresh derivations, no --record", 3, false, ""},
+		{"nothing fresh (all reused), --record given", 0, true, ""},
+		{"nothing fresh, no --record", 0, false, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := goalReceiptLine("/tmp/scans.duckdb", tc.recordEnabled, tc.fresh)
+			if got != tc.want {
+				t.Errorf("goalReceiptLine(...) = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestGoalCacheNoPutWithoutRecord is IMPORTANT-3's headline case at the
+// resolveGoalSource level: a scan run with recordEnabled=false must still
+// derive a goal (the scan itself is not degraded), but must write NOTHING
+// into the store — a second resolveGoalSource over the SAME ledger and the
+// SAME bytes must derive again, because nothing was ever put there to
+// reuse.
+func TestGoalCacheNoPutWithoutRecord(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "a.go"), "package p\n")
+	dsn := filepath.Join(t.TempDir(), "scans.duckdb")
+
+	callsFor := func(recordEnabled bool) int {
+		calls := 0
+		var errb bytes.Buffer
+		store := newGoalLedgerCache(dsn)
+		gs, _, code := resolveGoalSource(&errb, root, "", "test-model-x", false, 1,
+			func(string) (reposcan.Deriver, error) { return countingDeriver{calls: &calls}, nil },
+			store, false, recordEnabled)
+		if code != 0 {
+			t.Fatalf("resolveGoalSource: code=%d stderr=%s", code, errb.String())
+		}
+		if _, _, err := gs.GoalFor(reposcan.Candidate{Path: "a.go", Lang: "go"}); err != nil {
+			t.Fatalf("GoalFor: %v", err)
+		}
+		return calls
+	}
+
+	if n := callsFor(false); n != 1 {
+		t.Fatalf("first scan (no --record): deriver called %d time(s), want 1", n)
+	}
+	// A SECOND scan, same ledger, same bytes, still no --record: if the
+	// first scan had written anything, this would be a cache hit (0
+	// calls). It must derive again.
+	if n := callsFor(false); n != 1 {
+		t.Errorf("second scan (no --record): deriver called %d time(s), want 1 — the first scan must not have written a row to reuse", n)
+	}
+}
+
+// TestGoalCacheGetHitsWithoutRecord is the OTHER half of IMPORTANT-3's
+// ruling: a fact an EARLIER, RECORDED scan wrote is still served to a LATER
+// scan that itself runs without --record — the read half is unconditional,
+// only the write half is gated.
+func TestGoalCacheGetHitsWithoutRecord(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "a.go"), "package p\n")
+	dsn := filepath.Join(t.TempDir(), "scans.duckdb")
+
+	// Scan 1: --record given, so the derivation is written.
+	calls1 := 0
+	var errb1 bytes.Buffer
+	store1 := newGoalLedgerCache(dsn)
+	gs1, _, code := resolveGoalSource(&errb1, root, "", "test-model-x", false, 1,
+		func(string) (reposcan.Deriver, error) { return countingDeriver{calls: &calls1}, nil },
+		store1, false, true)
+	if code != 0 {
+		t.Fatalf("resolveGoalSource (scan 1): code=%d stderr=%s", code, errb1.String())
+	}
+	if _, _, err := gs1.GoalFor(reposcan.Candidate{Path: "a.go", Lang: "go"}); err != nil {
+		t.Fatalf("GoalFor (scan 1): %v", err)
+	}
+	if calls1 != 1 {
+		t.Fatalf("scan 1: deriver called %d time(s), want 1", calls1)
+	}
+
+	// Scan 2: NO --record. It must still GET scan 1's row and not derive
+	// again.
+	calls2 := 0
+	var errb2 bytes.Buffer
+	store2 := newGoalLedgerCache(dsn)
+	gs2, _, code := resolveGoalSource(&errb2, root, "", "test-model-x", false, 1,
+		func(string) (reposcan.Deriver, error) { return countingDeriver{calls: &calls2}, nil },
+		store2, false, false)
+	if code != 0 {
+		t.Fatalf("resolveGoalSource (scan 2): code=%d stderr=%s", code, errb2.String())
+	}
+	if _, _, err := gs2.GoalFor(reposcan.Candidate{Path: "a.go", Lang: "go"}); err != nil {
+		t.Fatalf("GoalFor (scan 2): %v", err)
+	}
+	if calls2 != 0 {
+		t.Errorf("scan 2 (no --record): deriver called %d time(s), want 0 — scan 1's recorded row must still be served", calls2)
 	}
 }

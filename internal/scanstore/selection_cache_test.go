@@ -27,10 +27,10 @@ func TestSelectionCachePutGetRoundTrip(t *testing.T) {
 	// almost any encoding by accident.
 	raw := bytes.Repeat([]byte("selection-evidence-byte."), 1<<15+7)
 
-	if err := st.SelectionCachePut(ctx, "tree1", "cmd1", "python", raw, "", 42); err != nil {
+	if err := st.SelectionCachePut(ctx, "tree1", "cmd1", "python", "workspace", raw, "", 42); err != nil {
 		t.Fatalf("SelectionCachePut: %v", err)
 	}
-	got, scanID, ok, err := st.SelectionCacheGet(ctx, "tree1", "cmd1", "python")
+	got, scanID, ok, err := st.SelectionCacheGet(ctx, "tree1", "cmd1", "python", "workspace")
 	if err != nil {
 		t.Fatalf("SelectionCacheGet: %v", err)
 	}
@@ -45,9 +45,12 @@ func TestSelectionCachePutGetRoundTrip(t *testing.T) {
 	}
 }
 
-// TestSelectionCacheGetMissesOnAnyKeyChange: tree_digest, cmd_digest and
-// plugin are all part of the key — a change to any one of them is a
-// genuinely different question and must never be served from another row.
+// TestSelectionCacheGetMissesOnAnyKeyChange: tree_digest, cmd_digest,
+// plugin and substrate are all part of the key — a change to any one of
+// them is a genuinely different question and must never be served from
+// another row. substrate matters most: a jail run's degraded-but-Ran=true
+// evidence must never be served to a workspace run over the identical
+// tree, or the reverse (the #110 class).
 func TestSelectionCacheGetMissesOnAnyKeyChange(t *testing.T) {
 	dsn := filepath.Join(t.TempDir(), "scans.duckdb")
 	st, err := Open(dsn)
@@ -57,21 +60,22 @@ func TestSelectionCacheGetMissesOnAnyKeyChange(t *testing.T) {
 	defer st.Close()
 	ctx := context.Background()
 
-	if err := st.SelectionCachePut(ctx, "tree1", "cmd1", "python", []byte("evidence"), "", 1); err != nil {
+	if err := st.SelectionCachePut(ctx, "tree1", "cmd1", "python", "workspace", []byte("evidence"), "", 1); err != nil {
 		t.Fatalf("SelectionCachePut: %v", err)
 	}
 
 	cases := []struct {
-		name                          string
-		treeDigest, cmdDigest, plugin string
+		name                                     string
+		treeDigest, cmdDigest, plugin, substrate string
 	}{
-		{"different tree", "tree2", "cmd1", "python"},
-		{"different cmd", "tree1", "cmd2", "python"},
-		{"different plugin", "tree1", "cmd1", "go"},
+		{"different tree", "tree2", "cmd1", "python", "workspace"},
+		{"different cmd", "tree1", "cmd2", "python", "workspace"},
+		{"different plugin", "tree1", "cmd1", "go", "workspace"},
+		{"different substrate", "tree1", "cmd1", "python", "jail"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, _, ok, err := st.SelectionCacheGet(ctx, tc.treeDigest, tc.cmdDigest, tc.plugin)
+			_, _, ok, err := st.SelectionCacheGet(ctx, tc.treeDigest, tc.cmdDigest, tc.plugin, tc.substrate)
 			if err != nil {
 				t.Fatalf("SelectionCacheGet: %v", err)
 			}
@@ -103,10 +107,10 @@ func TestSelectionCacheTableMigratesOntoAnExistingLedger(t *testing.T) {
 	}
 	defer st2.Close()
 	ctx := context.Background()
-	if err := st2.SelectionCachePut(ctx, "t", "c", "go", []byte("x"), "", 1); err != nil {
+	if err := st2.SelectionCachePut(ctx, "t", "c", "go", "workspace", []byte("x"), "", 1); err != nil {
 		t.Fatalf("SelectionCachePut after reopen: %v", err)
 	}
-	if _, _, ok, err := st2.SelectionCacheGet(ctx, "t", "c", "go"); err != nil || !ok {
+	if _, _, ok, err := st2.SelectionCacheGet(ctx, "t", "c", "go", "workspace"); err != nil || !ok {
 		t.Fatalf("SelectionCacheGet after reopen: ok=%v err=%v", ok, err)
 	}
 }

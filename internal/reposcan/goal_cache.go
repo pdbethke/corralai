@@ -49,6 +49,14 @@ type CachingGoalSource struct {
 	store     GoalCacheStore
 	model     string
 	promptRev string
+	// writable gates the Put half only — Get always runs regardless (see
+	// NewCachingGoalSource's doc). false is the shape a scan without
+	// --record uses: it may still READ a fact recorded by an earlier,
+	// recorded scan, but it writes nothing of its own — the same
+	// read-always/write-under---record rule the selection cache follows
+	// (collectSelection's Get is unconditional; its Put happens only in
+	// runCertifyRepo's *recordFlag block).
+	writable bool
 
 	fresh  int
 	reused int
@@ -63,8 +71,17 @@ type CachingGoalSource struct {
 // constructor omits root, but Candidate has nowhere else to get one from,
 // and a cache keyed on the wrong bytes is worse than no cache at all. See
 // this task's report for the full note.
-func NewCachingGoalSource(root string, inner GoalSource, store GoalCacheStore, model, promptRev string) GoalSource {
-	return &CachingGoalSource{root: root, inner: inner, store: store, model: model, promptRev: promptRev}
+//
+// writable, when false, disables GoalCachePut entirely: a scan run without
+// --record can still READ another scan's recorded fact (Get is never
+// gated), but it must not itself write model-derived text about the
+// operator's source into the default ledger just because it happened to
+// derive a goal — before this gate, a bare `corral certify --repo
+// --derive-model X` (no --record at all) silently grew the goal_cache
+// table on every run. See the selection cache's identical PUT-only gate,
+// wired at this file's own call site in cmd/corral/certify_repo.go.
+func NewCachingGoalSource(root string, inner GoalSource, store GoalCacheStore, model, promptRev string, writable bool) GoalSource {
+	return &CachingGoalSource{root: root, inner: inner, store: store, model: model, promptRev: promptRev, writable: writable}
 }
 
 // Stats returns how many candidates actually reached the inner source
@@ -96,7 +113,7 @@ func (s *CachingGoalSource) GoalFor(c Candidate) (Goal, bool, error) {
 		return g, ok, err
 	}
 	s.fresh++
-	if s.store != nil && derr == nil {
+	if s.store != nil && derr == nil && s.writable {
 		// A write failure must never fail the scan — the same fail-closed
 		// rule verdict_cache.go's ledgerCache follows. Worst case, the next
 		// scan pays for this file again.

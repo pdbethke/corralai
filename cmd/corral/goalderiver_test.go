@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"testing"
@@ -91,5 +93,18 @@ func TestLLMDeriverNoneIsExactMatchNotSubstring(t *testing.T) {
 				t.Errorf("ok = %v, want %v for reply %q", ok, tc.want, tc.reply)
 			}
 		})
+	}
+}
+
+// TestGoalDeriverPromptDigestIsPinned is the CI trip-wire for the ritual
+// goalDeriverPromptDigest's own doc names: a change to EITHER
+// goalDeriverSystem or goalDeriverUserTemplate that does not also update
+// this constant fails here, before it can ship a prompt whose text no
+// longer matches what GoalPromptRev's key claims to key on.
+func TestGoalDeriverPromptDigestIsPinned(t *testing.T) {
+	sum := sha256.Sum256([]byte(goalDeriverSystem + goalDeriverUserTemplate))
+	got := hex.EncodeToString(sum[:])
+	if got != goalDeriverPromptDigest {
+		t.Fatalf("sha256(goalDeriverSystem+goalDeriverUserTemplate) = %s, want %s (pinned in goalDeriverPromptDigest) — if this prompt edit was intentional, bump GoalPromptRev and update goalDeriverPromptDigest to %s in the same commit", got, goalDeriverPromptDigest, got)
 	}
 }

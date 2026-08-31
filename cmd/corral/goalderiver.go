@@ -24,12 +24,27 @@ Answer with ONE sentence naming the property, in the imperative — for example 
 
 Do not describe what the code does. Do not mention tests. Do not explain your reasoning. If the file has no meaningful correctness property (it is generated, trivial, or purely declarative), answer exactly: NONE`
 
-// GoalPromptRev versions goalDeriverSystem above. Part of the goal cache's
-// key (alongside path, source digest and model) precisely so a prompt edit
-// can never miss the bump: any change to the text above without bumping this
-// constant would let a cached goal from the OLD prompt masquerade as an
-// answer to the new one.
+// GoalPromptRev versions the WHOLE prompt a model actually sees —
+// goalDeriverSystem above AND goalDeriverUserTemplate below, both. Part of
+// the goal cache's key (alongside path, source digest and model) precisely
+// so a prompt edit can never miss the bump: any change to either text
+// without bumping this constant would let a cached goal from the OLD
+// prompt masquerade as an answer to the new one.
 const GoalPromptRev = "gp1"
+
+// goalDeriverPromptDigest pins sha256(goalDeriverSystem +
+// goalDeriverUserTemplate) — see TestGoalDeriverPromptDigestIsPinned, which
+// recomputes that hash and fails CI the moment EITHER text changes without
+// this constant changing to match. THE RITUAL, in order: edit the prompt
+// text; bump GoalPromptRev above (a bump the goal cache's key needs, which
+// nothing in this file can enforce by itself); recompute this digest
+// (sha256 of goalDeriverSystem+goalDeriverUserTemplate concatenated,
+// hex-encoded) and paste the new value here, in the SAME commit. The test
+// enforces only the last step — a prompt edit that changed the text but
+// left this digest stale fails CI immediately, forcing the editor back to
+// the ritual instead of shipping a prompt whose cache key silently no
+// longer matches what it asks.
+const goalDeriverPromptDigest = "f044983472f64cacf3a7811747a17b2da099a5487c8835f8f3811e369ec0c14d"
 
 type llmDeriver struct{ b agentbackend.Backend }
 
@@ -49,8 +64,21 @@ func newLLMDeriver(model string) (reposcan.Deriver, error) {
 	return llmDeriver{b: b}, nil
 }
 
+// goalDeriverUserTemplate is the format string Derive fills in with the
+// candidate's own path/language/source below. EDITING THIS TEXT REQUIRES
+// BUMPING GoalPromptRev, exactly like goalDeriverSystem above: the prompt
+// revision is part of the goal cache's key over BOTH halves of the prompt a
+// model actually sees, not just the system half — a user-template edit that
+// did not bump it would let the new wording silently serve goals the OLD
+// wording produced, the same silent-drift shape a system-prompt edit could.
+// TestGoalDeriverPromptDigestIsPinned hashes goalDeriverSystem plus this
+// literal and fails CI if either changes without the constant beside it
+// also changing, so this comment is not the only thing standing between an
+// editor and a missed bump.
+const goalDeriverUserTemplate = "File: %s\nLanguage: %s\n\n%s"
+
 func (d llmDeriver) Derive(ctx context.Context, c reposcan.Candidate, source string) (string, bool, error) {
-	user := fmt.Sprintf("File: %s\nLanguage: %s\n\n%s", c.Path, c.Lang, source)
+	user := fmt.Sprintf(goalDeriverUserTemplate, c.Path, c.Lang, source)
 	reply, err := d.b.Chat([]agentbackend.Message{
 		{Role: "system", Content: goalDeriverSystem},
 		{Role: "user", Content: user},

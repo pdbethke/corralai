@@ -420,14 +420,35 @@ the scan ledger, exact keys only, every reuse disclosed:
 
 - **Goals**: a goal derived from identical bytes is a fact — cached by
   `(path, source sha256, model, prompt revision)`, ungoaled results included.
-  The line says `goals: N derived, M reused (identical source)`; the ledger
-  says `goal_reused`. Pinned `--goals` bypasses; `--no-goal-cache` opts out.
+  The base line (`goals derived per file by <model>@<version> — no
+  goal-critic; each goal is judged after the fact by mutant yield`) prints
+  BEFORE derivation begins, the way it always has; once EmitJobs has asked
+  the cache about every candidate, a second line — `goals: N derived by
+  <model>@<version>, M reused (identical source) — no goal-critic; each
+  goal is judged after the fact by mutant yield` — prints only when M > 0,
+  carrying the SAME accountability clause the base line does (a reused
+  goal is still an unaudited machine claim). The ledger says `goal_reused`.
+  Pinned `--goals` bypasses; `--no-goal-cache` opts out.
+
+  Reads happen on every scan that has the cache wired at all — a fact an
+  earlier, RECORDED scan wrote is worth reading back whether or not this
+  scan records anything of its own. Writes are gated on `--record`, the
+  same asymmetry the selection cache below follows: a scan without
+  `--record` must not itself grow the default ledger with model-derived
+  text about the operator's source. When a scan does write, it prints
+  `  goal receipts kept in <dsn> (--no-goal-cache to skip)` once.
 - **Selection evidence**: the instrumented run's output is cached by
-  `(tree digest, instrumented-command digest, plugin)` where the tree digest
-  covers the same universe the pool copies — tracked + untracked-not-ignored,
-  symlink targets included — so a one-byte source edit misses and gitignored
-  churn cannot poison. The line says `selection: reused — tree unchanged
-  since scan <id>`; `selection_ms` is NULL because the phase did not run.
+  `(tree digest, instrumented-command digest, plugin, substrate)` where the
+  tree digest covers the same universe the pool copies — tracked +
+  untracked-not-ignored, symlink targets included — so a one-byte source
+  edit misses and gitignored churn cannot poison. `substrate` is in the key
+  because a jail run's instrumented evidence can be degraded in ways
+  specific to that sandbox; without it, a workspace scan over an
+  identical tree could be served a jail-degraded row (the #110 class of
+  bug, recurring one cache later). The line says `selection: reused — tree
+  unchanged since scan <id>`; `selection_ms` is NULL because the phase did
+  not run. Reads are unconditional; writes are gated on `--record` (the
+  goal cache above mirrors this rule exactly).
 - **The interplay is the point**: stable goals make `GoalDigest` stable,
   which makes the verdict cache key stable — so the verdict cache, inert
   since it shipped (#110: goals re-derived differently every run), now
@@ -441,8 +462,29 @@ Measured (flask, `--top 1`, per-survivor, recorded mutant set, 24 cores):
 | wall | 3m47s | **0.87s** |
 | model calls | 25 (writer) + goal derivation | **0** |
 | writer tokens in | 0.4M | 0 |
-| lines | `time: … authored 3m17s · total 3m32s` | `selection: reused…`, `goals: 0 derived, 1 reused`, `1 verdict(s) reused from cache` |
+| lines | `time: … authored 3m17s · total 3m32s` | `selection: reused…`, `goals: 0 derived by <model>@<version>, 1 reused (identical source) — no goal-critic; each goal is judged after the fact by mutant yield`, `1 verdict(s) reused from cache` |
 | proven | 17 of 24 | (reused verdict — no new claim) |
 
 The kill rate did not move (it cannot: identical bytes, identical exam), and
 the cache-hit row records no spend and no time, because it paid none.
+
+**An instrumented run that leaves an untracked, non-ignored artifact behind**
+(a coverage report, a `.pyc`, anything the suite writes into the checkout
+without `.gitignore` covering it) changes what `git ls-files --others
+--exclude-standard` enumerates, which moves `TreeDigest` on the very next
+scan — a MISS, never a stale hit: the selection cache can serve the wrong
+evidence to nothing, only fail to reuse what it otherwise could have.
+Gitignore your coverage output.
+
+**Growth.** Both tables are unbounded — nothing evicts a row today. What a
+row costs differs by an order of magnitude: a `goal_cache` row is a
+sentence of text plus a digest, effectively free at any scale a real repo
+reaches. A `selection_cache` row holds the RAW instrumented-coverage
+payload, capped at 64 MiB per row; large repos produce profiles in the
+hundreds of MB before reduction, so a big monorepo's selection cache grows
+by tens of MB per distinct tree state, not bytes. Deleting rows is always
+safe in both directions — `DELETE FROM goal_cache` costs the next scan a
+re-derivation per file it touches; `DELETE FROM selection_cache` costs the
+next scan one suite run — never a wrong answer, only a paid-for one.
+Eviction (by age, by row count, or on `corral scans` disk-pressure) is a
+parked follow-up, not yet built.

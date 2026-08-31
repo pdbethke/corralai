@@ -162,7 +162,7 @@ func reuseFixtureScan(t *testing.T, root, dsn string, deriver reposcan.Deriver, 
 		goalStore = newGoalLedgerCache(dsn)
 	}
 	gs, disclosure, code := resolveGoalSource(&errb, root, "", "test-model-x", false, len(selected),
-		func(string) (reposcan.Deriver, error) { return deriver, nil }, goalStore, noGoalCache)
+		func(string) (reposcan.Deriver, error) { return deriver, nil }, goalStore, noGoalCache, true)
 	if code != 0 {
 		t.Fatalf("resolveGoalSource: code=%d stderr=%s", code, errb.String())
 	}
@@ -235,7 +235,7 @@ func reuseFixtureScan(t *testing.T, root, dsn string, deriver reposcan.Deriver, 
 	}
 	if ex.pendingSelectionPut != nil {
 		p := ex.pendingSelectionPut
-		if perr := st.SelectionCachePut(context.Background(), p.TreeDigest, p.CmdDigest, p.Plugin, p.Raw, "", id); perr != nil {
+		if perr := st.SelectionCachePut(context.Background(), p.TreeDigest, p.CmdDigest, p.Plugin, p.Substrate, p.Raw, "", id); perr != nil {
 			t.Fatalf("SelectionCachePut: %v", perr)
 		}
 	}

@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"testing"
 
 	"github.com/pdbethke/corralai/internal/scanstore"
@@ -113,6 +114,7 @@ const wantScansShowJSONWithTiming = `{
     }
   ],
   "selection_ms": 92000,
+  "selection_reused_from": null,
   "model_calls": [
     {
       "path": "pkg/a.py",
@@ -243,5 +245,32 @@ func TestScansShowJSONWithoutTimingIsByteIdenticalToTheOldShape(t *testing.T) {
 	}
 	if out.String() != wantScansShowJSONBare {
 		t.Errorf("`scans show --json` (no --timing) =\n%s\nwant (unchanged, pre-existing shape):\n%s", out.String(), wantScansShowJSONBare)
+	}
+}
+
+// TestScansShowJSONWithTimingCarriesSelectionReusedFrom is IMPORTANT-5's
+// headline case: a scan that reused a prior scan's selection evidence (so
+// SelectionMS is nil, per scanstore.Scan.SelectionReusedFrom's own doc)
+// must carry that scan's id under "selection_reused_from", not a null the
+// text readout would have disclosed but --json --timing dropped.
+func TestScansShowJSONWithTimingCarriesSelectionReusedFrom(t *testing.T) {
+	r := scansShowJSONFixture()
+	reusedFrom := int64(7)
+	r.scan.SelectionMillis = nil
+	r.scan.SelectionReusedFrom = &reusedFrom
+
+	var out, errOut bytes.Buffer
+	if code := runScans([]string{"show", "1", "--json", "--timing"}, openFake(r), &out, &errOut); code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, errOut.String())
+	}
+	var decoded scansShowJSON
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
+		t.Fatalf("decode: %v\n%s", err, out.String())
+	}
+	if decoded.SelectionMS != nil {
+		t.Errorf("selection_ms = %v, want nil — the pass did not run this scan", *decoded.SelectionMS)
+	}
+	if decoded.SelectionReusedFrom == nil || *decoded.SelectionReusedFrom != 7 {
+		t.Errorf("selection_reused_from = %v, want *7", decoded.SelectionReusedFrom)
 	}
 }

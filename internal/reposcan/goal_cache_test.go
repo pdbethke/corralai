@@ -72,7 +72,7 @@ func TestCachingGoalSourceReusesOnlyIdenticalBytes(t *testing.T) {
 	}
 	inner := &countingGoalSource{goal: Goal{Text: "must never panic", Provenance: "derived:m@v1"}, ok: true}
 	store := newFakeGoalCacheStore()
-	gs := NewCachingGoalSource(root, inner, store, "m", "gp1")
+	gs := NewCachingGoalSource(root, inner, store, "m", "gp1", true)
 
 	c := Candidate{Path: path, Lang: "go"}
 	g1, ok1, err1 := gs.GoalFor(c)
@@ -137,7 +137,7 @@ func TestUngoaledIsCachedToo(t *testing.T) {
 	}
 	inner := &countingGoalSource{ok: false}
 	store := newFakeGoalCacheStore()
-	gs := NewCachingGoalSource(root, inner, store, "m", "gp1")
+	gs := NewCachingGoalSource(root, inner, store, "m", "gp1", true)
 
 	c := Candidate{Path: path, Lang: "go"}
 	if _, ok, err := gs.GoalFor(c); err != nil || ok {
@@ -172,7 +172,7 @@ func TestCachingGoalSourceNeverCachesAnError(t *testing.T) {
 	}
 	inner := &countingGoalSource{err: os.ErrDeadlineExceeded}
 	store := newFakeGoalCacheStore()
-	gs := NewCachingGoalSource(root, inner, store, "m", "gp1")
+	gs := NewCachingGoalSource(root, inner, store, "m", "gp1", true)
 
 	c := Candidate{Path: path, Lang: "go"}
 	if _, _, err := gs.GoalFor(c); err == nil {
@@ -226,7 +226,7 @@ func TestCachingGoalSourceDigestMatchesEmitJobsSourceDigest(t *testing.T) {
 
 	goal := Goal{Text: "must never panic", Provenance: "derived:m@v1"}
 	store := newFakeGoalCacheStore()
-	cgs := NewCachingGoalSource(root, fixedGoalSource{goal: goal}, store, "model-x", "gp1")
+	cgs := NewCachingGoalSource(root, fixedGoalSource{goal: goal}, store, "model-x", "gp1", true)
 
 	cand := Candidate{Path: relPath, Lang: "go"}
 	if _, ok, err := cgs.GoalFor(cand); err != nil || !ok {
@@ -302,4 +302,74 @@ func TestCachingGoalSourceDigestMatchesEmitJobsSourceDigest(t *testing.T) {
 	if handBuiltKey != realKey {
 		t.Errorf("CachingGoalSource's digest (%q) does not agree with EmitJobs' own SourceDigest for the same candidate/root: hand-built key %q != real Job.CacheKey %q", cachedDigest, handBuiltKey, realKey)
 	}
+}
+
+// TestCachingGoalSourceWritableFalseNeverPuts is the read-always/write-gated
+// contract itself: with writable=false, a fresh derivation must still
+// return the derived goal (the scan still gets graded), but must record
+// NOTHING into the store — the shape a scan without --record uses. Get
+// stays live regardless: a fact an earlier, RECORDED scan already wrote is
+// still served here, proving the gate is on Put only.
+func TestCachingGoalSourceWritableFalseNeverPuts(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.go"), []byte("package p\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	inner := &countingGoalSource{goal: Goal{Text: "must never panic", Provenance: "derived:m@v1"}, ok: true}
+	store := newFakeGoalCacheStore()
+	gs := NewCachingGoalSource(root, inner, store, "m", "gp1", false)
+
+	c := Candidate{Path: "a.go", Lang: "go"}
+	g, ok, err := gs.GoalFor(c)
+	if err != nil || !ok {
+		t.Fatalf("GoalFor: goal=%+v ok=%v err=%v", g, ok, err)
+	}
+	if inner.calls != 1 {
+		t.Fatalf("inner.calls = %d, want 1 — a fresh derivation must still happen", inner.calls)
+	}
+	if len(store.rows) != 0 {
+		t.Fatalf("store carries %d row(s), want 0 — writable=false must Put nothing", len(store.rows))
+	}
+
+	// A second call over the SAME bytes must derive AGAIN — nothing was
+	// cached to serve back, since nothing was ever written.
+	if _, _, err := gs.GoalFor(c); err != nil {
+		t.Fatalf("second GoalFor: %v", err)
+	}
+	if inner.calls != 2 {
+		t.Errorf("inner.calls = %d, want 2 — with writable=false there is nothing to reuse, so every call re-derives", inner.calls)
+	}
+
+	// But a fact an EARLIER, recorded scan already wrote is still SERVED —
+	// writable=false gates Put, never Get.
+	inner2 := &countingGoalSource{}
+	preseeded := newFakeGoalCacheStore()
+	digest, derr := DigestFile(mustOpenRoot(t, root), "a.go")
+	if derr != nil {
+		t.Fatal(derr)
+	}
+	if err := preseeded.GoalCachePut(context.Background(), "a.go", digest, "m", "gp1", "must never panic", "derived:m@v1", false); err != nil {
+		t.Fatal(err)
+	}
+	readOnly := NewCachingGoalSource(root, inner2, preseeded, "m", "gp1", false)
+	g2, ok2, err2 := readOnly.GoalFor(c)
+	if err2 != nil || !ok2 {
+		t.Fatalf("GoalFor over a preseeded row: goal=%+v ok=%v err=%v", g2, ok2, err2)
+	}
+	if inner2.calls != 0 {
+		t.Errorf("inner2.calls = %d, want 0 — a preseeded row must be served without reaching inner even when writable=false", inner2.calls)
+	}
+	if !GoalWasReused(g2) {
+		t.Errorf("a Get hit must still be marked reused: %q", g2.Provenance)
+	}
+}
+
+func mustOpenRoot(t *testing.T, root string) *os.Root {
+	t.Helper()
+	r, err := os.OpenRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close() })
+	return r
 }

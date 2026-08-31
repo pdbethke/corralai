@@ -760,20 +760,34 @@ func Open(dsn string) (*Store, error) {
 	}
 
 	// selection_cache is content-addressed like goal_cache, on
-	// (tree_digest, cmd_digest, plugin) rather than a source digest: the
-	// evidence ONE instrumented run of a project's suite produces is a
-	// property of the WHOLE checkout (which tests execute which files) and
-	// the exact instrumented command that produced it, not of any one
-	// file. scan_id names the scan that EARNED this row — the one that
-	// actually paid for the instrumented run — so a later reuse can say
-	// "reused from scan N" rather than merely "reused from somewhere". No
-	// migration list, for the same reason goal_cache has none: this table
-	// did not exist before this change, so CREATE TABLE IF NOT EXISTS on
-	// every Open is the whole story.
+	// (tree_digest, cmd_digest, plugin, substrate) rather than a source
+	// digest: the evidence ONE instrumented run of a project's suite
+	// produces is a property of the WHOLE checkout (which tests execute
+	// which files) and the exact instrumented command that produced it,
+	// not of any one file. scan_id names the scan that EARNED this row —
+	// the one that actually paid for the instrumented run — so a later
+	// reuse can say "reused from scan N" rather than merely "reused from
+	// somewhere". No migration list, for the same reason goal_cache has
+	// none: this table did not exist before this change, so CREATE TABLE
+	// IF NOT EXISTS on every Open is the whole story.
+	//
+	// substrate joined the key (and the CREATE TABLE, in place — this
+	// column is not additive via migrateColumns, and the UNIQUE constraint
+	// was widened directly) before this table ever shipped to a merged
+	// branch: a jail run's "Ran=true" instrumented evidence is degraded in
+	// ways specific to that sandbox (see the jail's own recipe doc), and
+	// without substrate in the key a workspace run could be served a
+	// jail-degraded row keyed on the identical tree — the #110 class of
+	// bug, recurring one cache later. Because feat/tier-a-caches never
+	// merged, there is no shipped row shape to migrate off of, so widening
+	// the CREATE TABLE (and the UNIQUE constraint with it) directly is the
+	// whole fix — a real migration, adding a column AFTER a UNIQUE already
+	// shipped, would need DuckDB's ALTER TABLE ... ADD COLUMN plus
+	// re-creating the constraint, which this branch never had to do.
 	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS selection_cache (
-		tree_digest VARCHAR, cmd_digest VARCHAR, plugin VARCHAR,
+		tree_digest VARCHAR, cmd_digest VARCHAR, plugin VARCHAR, substrate VARCHAR,
 		raw BLOB, note VARCHAR, created_at TIMESTAMP, scan_id BIGINT,
-		UNIQUE (tree_digest, cmd_digest, plugin)
+		UNIQUE (tree_digest, cmd_digest, plugin, substrate)
 	)`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("scanstore: create selection_cache table: %w", err)

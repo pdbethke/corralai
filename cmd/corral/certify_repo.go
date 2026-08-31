@@ -73,7 +73,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	jsonOut := fs.Bool("json", false, "with --dry-run, emit the repository's audit surface as JSON instead of the human report: per-language counts, every auditable file with its inferred test pairing, and the machine-stable exclusion tally. Needs no key, no jail and no money — it is the free inventory a UI or a tenant's own tooling can consume instead of scraping stdout")
 	substrateFlag := fs.String("substrate", substrateJail, "where the audit runs: "+substrateJail+" (bwrap) or "+substrateWorkspace+" (mutate --repo in place; the caller IS the isolation boundary, e.g. an ephemeral CI runner)")
 	diffBase := fs.String("diff-base", "", "bound the scan to files changed since this git ref, instead of ranking + --top. In a PR the diff IS the bound: ranking and --top do not apply on this path")
-	pushFlag := fs.String("push", "", "append this scan's per-file verdicts to a DuckDB you own — a path, or `md:<db>` for MotherDuck (which reads motherduck_token from the environment). corral has no hosted tier and keeps nothing: the warehouse is yours, and any DuckDB works, so this is a destination rather than a lock-in. Append-only. Every row carries the ledger's scan id (0 when --record was not given), and — traceable only with --attest — the sha256 of the signed statement it came from, so a row can be checked against something a third party can verify; without --attest, statement_sha256 is honestly empty rather than fabricated; and with --attest, a statement that FAILS to write withholds the push too, since a row that cannot name the statement it came from is not written. It answers what one pull request cannot — a single kill rate is a sample, and the same unchanged diff has scored 0.85 and 0.90; forty of them are a distribution")
+	pushFlag := fs.String("push", "", "append this scan's per-file verdicts to a DuckDB you own — a path, or `md:<db>` for MotherDuck (which reads motherduck_token from the environment; the database is created on first push if it does not already exist — a MotherDuck SHARE is a read target and cannot be pushed to). corral has no hosted tier and keeps nothing: the warehouse is yours, and any DuckDB works, so this is a destination rather than a lock-in. Append-only. Every row carries the ledger's scan id (0 when --record was not given), and — traceable only with --attest — the sha256 of the signed statement it came from, so a row can be checked against something a third party can verify; without --attest, statement_sha256 is honestly empty rather than fabricated; and with --attest, a statement that FAILS to write withholds the push too, since a row that cannot name the statement it came from is not written. It answers what one pull request cannot — a single kill rate is a sample, and the same unchanged diff has scored 0.85 and 0.90; forty of them are a distribution")
 	pushSourceFlag := fs.Bool("push-source", false, "with --push, also send the SOURCE BYTES corral holds to your warehouse: the pool's authored test, and the full verdict JSON. Off by default because those bytes are derived from — and quote — your audited code; without this the pushed rows carry numbers, hashes, reasons and model names, and no source leaves the box. Mutant code is NOT carried, by either setting: corral does not keep mutant source at rest, so the corral_mutants.code column exists and is always NULL until something records it. The scan row records which setting was used, so the custody question is answerable from the table rather than from whoever remembers the argv")
 	attestFlag := fs.String("attest", "", "write the scan's verdict as an in-toto Statement to this file — the receipt a reviewer can verify without trusting the run that produced it. Consumed by GitHub's attestation API (actions/attest), which signs it keylessly through the workflow's own OIDC identity, so the signature chains to the repository and workflow rather than to a key that lived on an ephemeral runner. Carries every file's kill rate, survivors and proven gaps WITH the honesty flags that say what a zero means, the thresholds it was judged against, and the models in each role")
 	maxProvenMissedFlag := fs.String("max-proven-missed", "", "fail the scan (exit 1) if ANY audited file has MORE than this many proven-missed gaps — survivors the pool then killed with a test it WROTE and RAN. Opt-in and unset by default. Prefer this to --min-kill-rate as a merge gate: a kill rate is a proportion of freshly generated mutants and moves between runs on unchanged code, so a threshold set near a healthy value flaps red and gets switched off. A proven-missed gap is a specific demonstrated bug the suite does not catch, established by execution, and 0 means the pool proved nothing — not that it sampled well")
@@ -514,32 +514,42 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	}
 
 	// The goal cache lives in the same ledger --record-db names, resolved
-	// here (independent of --record: a goal derived from identical bytes is
-	// a fact worth keeping whether or not this scan also records its
-	// verdicts) so it is available BEFORE derivation — resolveGoalSource
-	// wires it into the derived path below, and derivation is where the
-	// money goes.
+	// here so it is available BEFORE derivation — resolveGoalSource wires
+	// it into the derived path below, and derivation is where the money
+	// goes. Its READ half is unconditional: a fact recorded by an earlier,
+	// RECORDED scan is worth reusing whether or not THIS scan also
+	// records anything. Its WRITE half is gated on *recordFlag, passed to
+	// resolveGoalSource below — see NewCachingGoalSource's doc for why a
+	// scan run without --record must not itself grow the default ledger
+	// with model-derived text about the operator's source just because it
+	// happened to derive a goal.
+	var goalCacheDSN string
 	var goalStore reposcan.GoalCacheStore
 	if !*noGoalCacheFlag {
-		goalCacheDSN := *recordDSNFlag
+		goalCacheDSN = *recordDSNFlag
 		if goalCacheDSN == "" {
 			goalCacheDSN = defaultScanDSN()
 		}
 		goalStore = newGoalLedgerCache(goalCacheDSN)
 	}
 
-	gs, disclosure, code := resolveGoalSource(stderr, *repoDir, *goalsPath, *deriveModel, *dryRun, len(selected), certifyRepoDeriver, goalStore, *noGoalCacheFlag)
+	gs, disclosure, code := resolveGoalSource(stderr, *repoDir, *goalsPath, *deriveModel, *dryRun, len(selected), certifyRepoDeriver, goalStore, *noGoalCacheFlag, *recordFlag)
 	if code != 0 {
 		return code
 	}
-	// The caching wrapper's own counts (fresh vs reused) are only known once
-	// EmitJobs has asked it about every candidate, so its disclosure line is
-	// printed AFTER EmitJobs below (see goalCacheDisclosureLine) rather than
-	// here. Every other path — --goals (nothing to disclose), a dry run, no
-	// candidates selected — has nothing further to learn from EmitJobs and
-	// is printed immediately, unchanged from before this cache existed.
+	// The base announce line prints HERE, unconditionally, BEFORE derivation
+	// begins — exactly where it printed before the goal cache existed: an
+	// operator watching a cache-wired run must still see "goals derived per
+	// file by X@Y…" before the (possibly many) sequential model calls start,
+	// not learn only afterward that any derivation happened at all. The
+	// caching wrapper's own counts (fresh vs reused) are only known once
+	// EmitJobs has asked it about every candidate, so a SECOND line — the
+	// one naming those counts — prints after EmitJobs below (see
+	// goalCacheDisclosureLine) whenever there is something beyond the base
+	// line to say (reused > 0); a cache-wired scan that reused nothing has
+	// nothing more to add and stays at one line.
 	cachingGS, cacheWired := gs.(*reposcan.CachingGoalSource)
-	if disclosure != "" && !cacheWired {
+	if disclosure != "" {
 		fmt.Fprintln(stdout, disclosure)
 	}
 
@@ -684,12 +694,16 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	// NOW the caching wrapper has asked about every candidate, so its fresh
-	// vs reused counts are final — print the disclosure the print site above
-	// deferred. Unchanged wording when nothing was reused: see
-	// goalCacheDisclosureLine's own doc.
+	// vs reused counts are final. A second line prints only when there is
+	// something beyond the base line above to say — goalCacheDisclosureLine
+	// returns the base UNCHANGED when reused==0, and printing that again
+	// would just repeat the line already on screen.
 	if cacheWired {
 		fresh, reused := cachingGS.Stats()
-		if line := goalCacheDisclosureLine(disclosure, *deriveModel, version, fresh, reused); line != "" {
+		if line := goalCacheDisclosureLine(disclosure, *deriveModel, version, fresh, reused); line != "" && line != disclosure {
+			fmt.Fprintln(stdout, line)
+		}
+		if line := goalReceiptLine(goalCacheDSN, *recordFlag, fresh); line != "" {
 			fmt.Fprintln(stdout, line)
 		}
 	}
@@ -1068,7 +1082,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 				// run, never THIS scan's exit code.
 				if rerr == nil && ex != nil && ex.pendingSelectionPut != nil {
 					p := ex.pendingSelectionPut
-					if perr := st.SelectionCachePut(context.Background(), p.TreeDigest, p.CmdDigest, p.Plugin, p.Raw, "", id); perr != nil {
+					if perr := st.SelectionCachePut(context.Background(), p.TreeDigest, p.CmdDigest, p.Plugin, p.Substrate, p.Raw, "", id); perr != nil {
 						fmt.Fprintf(stderr, "corral certify --repo: scan %d recorded, but the selection cache was NOT written: %v\n", id, perr)
 					}
 				}
@@ -1726,12 +1740,34 @@ var certifyRepoDeriver deriverFactory = newLLMDeriver
 // path — printed UNCHANGED whenever nothing was reused (reused == 0), so a
 // scan that never hit the cache says exactly what corral has always said.
 // Only once there is something to disclose beyond "a model derived these"
-// does the line change shape, to name both numbers.
+// does the line change shape, to name both numbers — and even then it must
+// carry the SAME accountability clause base does ("no goal-critic; each
+// goal is judged after the fact by mutant yield"), not drop it: a reused
+// goal is still an unaudited machine claim, exactly as much as a freshly
+// derived one, and a reader who only ever sees a scan with reused > 0 must
+// not be told any less about how these goals are judged than a reader of a
+// scan with reused == 0 is.
 func goalCacheDisclosureLine(base, model, engineVersion string, fresh, reused int) string {
 	if reused == 0 {
 		return base
 	}
-	return fmt.Sprintf("  goals: %d derived by %s@%s, %d reused (identical source)", fresh, model, engineVersion, reused)
+	return fmt.Sprintf("  goals: %d derived by %s@%s, %d reused (identical source) — no goal-critic; each goal is judged after the fact by mutant yield", fresh, model, engineVersion, reused)
+}
+
+// goalReceiptLine is the receipt disclosed once per scan that actually PUT
+// something into the goal cache. fresh > 0 with the cache wired means at
+// least one derivation reached the store's Put half THIS scan (see
+// CachingGoalSource.GoalFor); recordEnabled mirrors CachingGoalSource's own
+// writable gate exactly (both are *recordFlag), so this line and an actual
+// write always agree — a scan without --record derives (fresh can be > 0)
+// but writes nothing, and this returns "" for it too. Split out of
+// runCertifyRepo so the printing DECISION is testable without a ledger, a
+// jail or a scan.
+func goalReceiptLine(dsn string, recordEnabled bool, fresh int) string {
+	if fresh <= 0 || !recordEnabled {
+		return ""
+	}
+	return fmt.Sprintf("  goal receipts kept in %s (--no-goal-cache to skip)", dsn)
 }
 
 // resolveGoalSource picks where goals come from and returns the ONE line that
@@ -1751,8 +1787,16 @@ func goalCacheDisclosureLine(base, model, engineVersion string, fresh, reused in
 // TestPinnedGoalsBypass doc) or when nothing was selected (no goal will ever
 // be asked for).
 //
+// recordEnabled is *recordFlag, threaded through to the CachingGoalSource's
+// own writable gate: Get always runs regardless of it (a fact an earlier,
+// RECORDED scan wrote is still worth reading), but a scan run WITHOUT
+// --record must not itself write model-derived text about the operator's
+// source into the default ledger just because it happened to derive a
+// goal — the same read-always/write-under---record rule the selection
+// cache already follows (see NewCachingGoalSource's doc).
+//
 // Returns the process exit code to use on failure; 0 means the source is good.
-func resolveGoalSource(stderr io.Writer, repoDir, goalsPath, deriveModel string, dryRun bool, nSelected int, newDeriver deriverFactory, store reposcan.GoalCacheStore, noGoalCache bool) (reposcan.GoalSource, string, int) {
+func resolveGoalSource(stderr io.Writer, repoDir, goalsPath, deriveModel string, dryRun bool, nSelected int, newDeriver deriverFactory, store reposcan.GoalCacheStore, noGoalCache, recordEnabled bool) (reposcan.GoalSource, string, int) {
 	// --goals takes precedence when given, so hand-written goals keep working
 	// and that path needs no provider credential at all.
 	if goalsPath != "" {
@@ -1797,7 +1841,7 @@ func resolveGoalSource(stderr io.Writer, repoDir, goalsPath, deriveModel string,
 		// caller has no store to give (an unopenable --record-db, or a scan
 		// with the goal cache turned off some other way).
 		if store != nil && !noGoalCache {
-			gs = reposcan.NewCachingGoalSource(repoDir, gs, store, deriveModel, GoalPromptRev)
+			gs = reposcan.NewCachingGoalSource(repoDir, gs, store, deriveModel, GoalPromptRev, recordEnabled)
 		}
 		return gs, disclosure, 0
 	}
@@ -2216,8 +2260,8 @@ func (l *localExecutor) runPreflight(ctx context.Context, sources []string) repo
 // localExecutor.pendingSelectionPut's own doc for why the Put cannot happen
 // at collection time.
 type pendingSelectionCachePut struct {
-	TreeDigest, CmdDigest, Plugin string
-	Raw                           []byte
+	TreeDigest, CmdDigest, Plugin, Substrate string
+	Raw                                      []byte
 }
 
 // resolveSelectionPlugin is the language/plugin/testCmd resolution shared by
@@ -2258,11 +2302,16 @@ func (l *localExecutor) resolveSelectionPlugin(sources []string) (plug lang.Plug
 // through the SAME instrumentation Instrument would apply before the suite
 // actually ran — the instrumentation flags are part of what produced the
 // evidence, not the operator's bare testCmd (see reposcan.TreeDigest's own
-// doc on the universe half of this key). ok is false whenever no key can be
-// computed at all: plug has no TestSelector, Instrument refuses testCmd, or
-// TreeDigest could not name a tree (outside a git work tree, or a git
-// failure) — every one of those means "this scan cannot be cache-keyed",
-// never a value worth caching against.
+// doc on the universe half of this key). The substrate the scan is running
+// on (l.substrate) is the CALLER'S half of the key — see
+// localExecutor.selectionCache's own doc — not computed here, because it is
+// already a field, not something this method has to derive.
+//
+// ok is false whenever no key can be computed at all: plug has no
+// TestSelector, Instrument refuses testCmd, or TreeDigest could not name a
+// tree (outside a git work tree, or a git failure) — every one of those
+// means "this scan cannot be cache-keyed", never a value worth caching
+// against.
 func (l *localExecutor) selectionCacheKey(plug lang.Plugin, testCmd []string) (treeDigest, cmdDigest string, ok bool) {
 	sel, selOK := plug.(lang.TestSelector)
 	if !selOK {
@@ -2272,11 +2321,34 @@ func (l *localExecutor) selectionCacheKey(plug lang.Plugin, testCmd []string) (t
 	if !cmdOK {
 		return "", "", false
 	}
-	td, err := reposcan.TreeDigest(l.repoDir)
-	if err != nil || td == "" {
+	td, ok := l.treeDigestOnce()
+	if !ok {
 		return "", "", false
 	}
 	return td, selectionCmdDigest(cmd), true
+}
+
+// treeDigestOnce is reposcan.TreeDigest(l.repoDir), memoized on the
+// executor: selectionCachePeek and collectSelection both need it for the
+// SAME scan over the SAME checkout (a git ls-files plus a hash per file,
+// cheap but not free on a large repo), and the tree cannot change under a
+// scan that only ever reads it — a scan does not mutate the checkout it is
+// auditing. Computed once, cached for every later call this scan makes.
+// ok=false (an unrepresentable tree — outside a git work tree, or a git
+// failure) is cached too: a repeat call is not going to grow a git work
+// tree that was not there a moment ago.
+func (l *localExecutor) treeDigestOnce() (digest string, ok bool) {
+	if l.treeDigestComputed {
+		return l.treeDigest, l.treeDigest != ""
+	}
+	td, err := reposcan.TreeDigest(l.repoDir)
+	l.treeDigestComputed = true
+	if err != nil {
+		l.treeDigest = ""
+		return "", false
+	}
+	l.treeDigest = td
+	return td, td != ""
 }
 
 // selectionCachePeek previews whether collectSelection is about to serve a
@@ -2300,7 +2372,7 @@ func (l *localExecutor) selectionCachePeek(sources []string) (scanID int64, ok b
 	if !keyOK {
 		return 0, false
 	}
-	_, id, hit, err := l.selectionCache.SelectionCacheGet(context.Background(), treeDigest, cmdDigest, plug.Name())
+	_, id, hit, err := l.selectionCache.SelectionCacheGet(context.Background(), treeDigest, cmdDigest, plug.Name(), l.substrate)
 	if err != nil || !hit {
 		return 0, false
 	}
@@ -2327,7 +2399,7 @@ func (l *localExecutor) collectSelection(ctx context.Context, sources []string) 
 	if l.selectionCache != nil {
 		treeDigest, cmdDigest, keyOK = l.selectionCacheKey(plug, testCmd)
 		if keyOK {
-			if raw, scanID, hit, err := l.selectionCache.SelectionCacheGet(ctx, treeDigest, cmdDigest, langName); err == nil && hit {
+			if raw, scanID, hit, err := l.selectionCache.SelectionCacheGet(ctx, treeDigest, cmdDigest, langName, l.substrate); err == nil && hit {
 				id := scanID
 				l.selectionReusedFrom = &id
 				return reposcan.SelectionEvidence{Raw: raw, Ran: true}
@@ -2351,7 +2423,7 @@ func (l *localExecutor) collectSelection(ctx context.Context, sources []string) 
 	// (see pendingSelectionPut's own doc) — only for a genuine run that
 	// produced usable evidence, keyed under a cache this scan could resolve.
 	if ev.Ran && l.selectionCache != nil && keyOK {
-		l.pendingSelectionPut = &pendingSelectionCachePut{TreeDigest: treeDigest, CmdDigest: cmdDigest, Plugin: langName, Raw: ev.Raw}
+		l.pendingSelectionPut = &pendingSelectionCachePut{TreeDigest: treeDigest, CmdDigest: cmdDigest, Plugin: langName, Substrate: l.substrate, Raw: ev.Raw}
 	}
 	return ev
 }
@@ -3400,6 +3472,13 @@ type localExecutor struct {
 	// localExecutor at all) — every lookup and every hold-for-Put below is
 	// gated on it being non-nil.
 	selectionCache selectionCacheStore
+	// treeDigest/treeDigestComputed memoize treeDigestOnce: reposcan.TreeDigest
+	// runs at most once per scan regardless of how many callers ask for it
+	// this scan (see treeDigestOnce's own doc). "" with treeDigestComputed
+	// true means the tree could not be named (outside a git work tree, or a
+	// git failure) — a real, cached answer, not "not yet asked".
+	treeDigest         string
+	treeDigestComputed bool
 	// selectionReusedFrom is set the moment collectSelection serves a cache
 	// HIT: the id of the scan whose evidence this scan is reusing. nil on
 	// every scan that ran its own instrumented pass or ran none at all —

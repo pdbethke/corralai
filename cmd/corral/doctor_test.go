@@ -168,6 +168,24 @@ func TestCheckToolchainFailsWhenBinaryInvisibleInJail(t *testing.T) {
 // TestCheckToolchainPassesWhenReallyReachable is the control: a tool that
 // genuinely exists inside the jail (/usr is always mounted) must still pass,
 // so the fix above is not a blanket "any non-zero exit fails" regression.
+// TestToolNotFoundInJailRequiresToolNameAnchor pins the fix for a false
+// FAIL: the bare "No such file or directory" branch used to fire on ANY
+// occurrence of that phrase, so a tool whose own --version output happens to
+// mention some unrelated missing file (not the tool binary itself) would be
+// read as "the jail can't see this tool" and hard-fail a run that would have
+// worked. The phrase must also carry the tool's own name to count.
+func TestToolNotFoundInJailRequiresToolNameAnchor(t *testing.T) {
+	if toolNotFoundInJail("error: /etc/some-other-config: No such file or directory", "mytool") {
+		t.Error("toolNotFoundInJail fired without the tool name in the output — must stay inconclusive, not FAIL")
+	}
+	if !toolNotFoundInJail("mytool: No such file or directory", "mytool") {
+		t.Error("toolNotFoundInJail did not fire when the tool name IS in the output")
+	}
+	if !toolNotFoundInJail("sh: 1: mytool: not found", "mytool") {
+		t.Error("toolNotFoundInJail did not fire on the sh-shaped \"not found\" message")
+	}
+}
+
 func TestCheckToolchainPassesWhenReallyReachable(t *testing.T) {
 	iso, err := sandbox.Resolve(sandbox.Config{})
 	if err != nil {

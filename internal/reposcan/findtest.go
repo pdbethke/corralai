@@ -279,11 +279,25 @@ func gitVisibleFiles(root string) ([]string, error) {
 // skips (skipDirs, defined in candidate.go), so a search root can never
 // reach into vendor/node_modules/.venv just because git could not tell it
 // not to.
+//
+// A subdirectory this process cannot read (permission denied, most often)
+// is skipped rather than aborting the whole walk: FindTest's caller turns a
+// walk error into a raw "no test found: <os error>" message that throws away
+// the "Looked for:" listing a stranger actually needs — one unreadable
+// directory anywhere under root must not cost the whole disclosure. Only an
+// error reading the root itself (nothing left to walk at all) still
+// propagates.
 func walkSkippingBuildDirs(root string) ([]string, error) {
 	var files []string
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return err
+			if p == root {
+				return err
+			}
+			if d != nil && d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 		rel, rerr := filepath.Rel(root, p)
 		if rerr != nil {

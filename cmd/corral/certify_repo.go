@@ -2703,10 +2703,18 @@ const maxListedExclusions = 20
 // scan's candidates pair by convention, and printing a line per file there
 // would just repeat what the "%d candidate(s)" count already says.
 func printSearchPairings(w io.Writer, cands []reposcan.Candidate) {
+	var viaSearch []reposcan.Candidate
 	for _, c := range cands {
 		if c.ViaSearch {
-			fmt.Fprintf(w, "    %s paired by search: %s\n", c.Path, c.TestPath)
+			viaSearch = append(viaSearch, c)
 		}
+	}
+	for i, c := range viaSearch {
+		if i == maxListedExclusions {
+			fmt.Fprintf(w, "    ... and %d more paired by search\n", len(viaSearch)-maxListedExclusions)
+			break
+		}
+		fmt.Fprintf(w, "    %s paired by search: %s\n", c.Path, c.TestPath)
 	}
 }
 

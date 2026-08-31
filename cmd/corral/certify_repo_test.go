@@ -3199,6 +3199,40 @@ func TestPrintExclusionsListsCandidateLevelReasonsFirst(t *testing.T) {
 	}
 }
 
+// TestPrintSearchPairingsIsCapped pins the same cap-and-announce shape
+// printExclusions already uses: a real repo can have far more than
+// maxListedExclusions files paired only by the recursive search fallback,
+// and an uncapped listing buries the report exactly the way an uncapped
+// exclusion listing used to.
+func TestPrintSearchPairingsIsCapped(t *testing.T) {
+	var cands []reposcan.Candidate
+	n := maxListedExclusions + 5
+	for i := 0; i < n; i++ {
+		cands = append(cands, reposcan.Candidate{
+			Path:      fmt.Sprintf("pkg%02d/thing.py", i),
+			TestPath:  fmt.Sprintf("tests/pkg%02d/test_thing.py", i),
+			ViaSearch: true,
+		})
+	}
+
+	var out bytes.Buffer
+	printSearchPairings(&out, cands)
+	s := out.String()
+
+	for i := 0; i < maxListedExclusions; i++ {
+		want := fmt.Sprintf("pkg%02d/thing.py", i)
+		if !strings.Contains(s, want) {
+			t.Errorf("pairing %s should be listed (within the cap):\n%s", want, s)
+		}
+	}
+	if strings.Contains(s, fmt.Sprintf("pkg%02d/thing.py", n-1)) {
+		t.Errorf("pairing beyond the cap must not be listed individually:\n%s", s)
+	}
+	if !strings.Contains(s, "... and 5 more paired by search") {
+		t.Errorf("the cap must announce exactly how many lines it withheld:\n%s", s)
+	}
+}
+
 // --all audits every candidate, ignoring the default bound.
 func TestCertifyRepoAllIgnoresTheDefaultBound(t *testing.T) {
 	root := t.TempDir()

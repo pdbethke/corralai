@@ -101,13 +101,23 @@ then refuses unless you pass `--allow-unanchored`.
 ### Audit a real repo
 
 Install your project's dev dependencies first — the suite must pass for you
-before corral can plant bugs against it. Then:
+before corral can plant bugs against it. For Python, installing `coverage`
+alongside your test deps unlocks per-test selection; without it corral grades
+by the whole suite and says so. Then:
 
 ```bash
 corral certify --repo . --substrate workspace \
   --writer-model <model> --mutant-model <model> --critic-model <model> \
+  --derive-model <model> \
   -- <your test command>       # e.g. -- python -m pytest, or -- npm test
 ```
+
+That's four seats, not three: a repo scan derives a goal per file, so
+`--derive-model` is required whenever you're not supplying `--goals`
+yourself — without it corral refuses with "no goal source" before it does
+anything else. The test-writer and test-critic must also be *different*
+models — corral's decorrelation guard refuses a shared model between the two
+("nemo iudex in causa sua," no judge in their own case).
 
 `--substrate workspace` mutates your own checkout in place instead of copying
 it into a bwrap jail — the caller (your shell, a CI runner) *is* the isolation

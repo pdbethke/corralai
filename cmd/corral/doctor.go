@@ -167,10 +167,15 @@ func checkToolchain(iso sandbox.Isolator, cmd []string, depBinds []adequacy.DepB
 		// --version — that one stays inconclusive, since claiming a failure
 		// there would send the operator after a problem that may not exist.
 		if toolNotFoundInJail(out, tool) {
+			parity := "the run itself will hit this exact wall — same jail, same binds, same env — and die grading nothing."
+			if len(depBinds) == 0 {
+				parity = "a bare `--local` run (no --repo-dir) will hit this exact wall — same jail, same binds, same env — and die grading nothing.\n" +
+					"a `certify --local --repo-dir` run additionally binds your project's dependency dirs (.venv/node_modules/...) read-only, so this failure may not apply there — rerun doctor with the same flags to be sure."
+			}
 			return checkResult{name: "toolchain reachable inside the sandbox", detail: fmt.Sprintf(
-				"%s\nthe run itself will hit this exact wall — same jail, same binds, same env — and die grading nothing.\n"+
+				"%s\n%s\n"+
 					"the jail cannot see %s — for a repo with a virtualenv use `certify --repo --substrate workspace`, or bake the toolchain into CORRALAI_EXEC_IMAGE.",
-				strings.TrimSpace(out), toolchainDirHint(tool))}
+				strings.TrimSpace(out), parity, toolchainDirHint(tool))}
 		}
 		return checkResult{name: "toolchain reachable inside the sandbox", ok: true,
 			detail: fmt.Sprintf("%q is reachable, but `--version` exited non-zero — inconclusive, not a failure: many test runners do not accept that flag", tool)}
@@ -186,7 +191,8 @@ func checkToolchain(iso sandbox.Isolator, cmd []string, depBinds []adequacy.DepB
 // jail's fresh workspace, which is a hard failure, not a tool that merely
 // rejects `--version`.
 func toolNotFoundInJail(out, tool string) bool {
-	return strings.Contains(out, tool+": not found") || strings.Contains(out, "No such file or directory")
+	return strings.Contains(out, tool+": not found") ||
+		(strings.Contains(out, "No such file or directory") && strings.Contains(out, tool))
 }
 
 // toolchainDirHint names the thing to blame in the fix hint: the parent

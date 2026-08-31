@@ -3,7 +3,9 @@
 package reposcan
 
 import (
+	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 
 	"github.com/pdbethke/corralai/internal/lang"
@@ -264,6 +266,43 @@ func TestGitVisibleFilesSkipsSkipDirsEvenWhenTracked(t *testing.T) {
 	}
 	if len(files) == 0 || files[0] != "src/widgets/thing.py" && !containsStr(files, "src/widgets/thing.py") {
 		t.Fatalf("expected the real source file still present: %v", files)
+	}
+}
+
+// TestFindTestSkipsUnreadableSubdirInNonGitFallback pins the fix for a walk
+// that used to die whole-hog on one permission-denied directory: outside a
+// git work tree, the recursive fallback walks the filesystem directly
+// (walkSkippingBuildDirs), and a subdirectory this process cannot read must
+// be skipped, not turned into a raw error that replaces the "Looked for:"
+// listing FindTest's caller builds from a clean miss.
+func TestFindTestSkipsUnreadableSubdirInNonGitFallback(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root — chmod 000 does not block reads")
+	}
+	root := writeTree(t, map[string]string{
+		"src/itsdangerous/signer.py":  "class Signer: pass\n",
+		"tests/locked/test_signer.py": "def test_x(): pass\n",
+	})
+	locked := filepath.Join(root, "tests", "locked")
+	if err := os.Chmod(locked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o750) })
+
+	p, ok := lang.ByName("python")
+	if !ok {
+		t.Fatal("python plugin not registered")
+	}
+
+	res, err := FindTest(p, root, "src/itsdangerous/signer.py")
+	if err != nil {
+		t.Fatalf("FindTest returned a raw error instead of a clean miss: %v", err)
+	}
+	if res.Found {
+		t.Fatalf("Found = true (%q), want false — the only match was inside the unreadable dir", res.Path)
+	}
+	if len(res.Roots) == 0 {
+		t.Error("Roots is empty — the \"Looked for:\" listing needs this even when a subdir was unreadable")
 	}
 }
 

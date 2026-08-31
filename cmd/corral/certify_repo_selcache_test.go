@@ -68,7 +68,7 @@ func TestSelectionCacheReusesIdenticalTree(t *testing.T) {
 	calls := 0
 	orig := collectSelectionEvidence
 	t.Cleanup(func() { collectSelectionEvidence = orig })
-	collectSelectionEvidence = func(ctx context.Context, runner coverageRunner, files map[string]string, p lang.Plugin, testCmd []string) reposcan.SelectionEvidence {
+	collectSelectionEvidence = func(ctx context.Context, runner coverageRunner, files map[string]string, p lang.Plugin, testCmd []string, sourcePaths []string) reposcan.SelectionEvidence {
 		calls++
 		return reposcan.SelectionEvidence{Ran: true, Raw: []byte("evidence-from-call-" + string(rune('0'+calls)))}
 	}
@@ -153,7 +153,7 @@ func TestNoSelectionCacheFlagRunsEveryTime(t *testing.T) {
 	calls := 0
 	orig := collectSelectionEvidence
 	t.Cleanup(func() { collectSelectionEvidence = orig })
-	collectSelectionEvidence = func(ctx context.Context, runner coverageRunner, files map[string]string, p lang.Plugin, testCmd []string) reposcan.SelectionEvidence {
+	collectSelectionEvidence = func(ctx context.Context, runner coverageRunner, files map[string]string, p lang.Plugin, testCmd []string, sourcePaths []string) reposcan.SelectionEvidence {
 		calls++
 		return reposcan.SelectionEvidence{Ran: true, Raw: []byte("evidence")}
 	}
@@ -192,7 +192,7 @@ func TestSelectionCacheNeverPutsOnAFailedRun(t *testing.T) {
 	calls := 0
 	orig := collectSelectionEvidence
 	t.Cleanup(func() { collectSelectionEvidence = orig })
-	collectSelectionEvidence = func(ctx context.Context, runner coverageRunner, files map[string]string, p lang.Plugin, testCmd []string) reposcan.SelectionEvidence {
+	collectSelectionEvidence = func(ctx context.Context, runner coverageRunner, files map[string]string, p lang.Plugin, testCmd []string, sourcePaths []string) reposcan.SelectionEvidence {
 		calls++
 		// Ran:false — exactly what CollectSelectionEvidence itself now
 		// returns for an instrumented run that printed nothing (a failed

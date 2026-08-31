@@ -253,8 +253,8 @@ func reuseFixtureScan(t *testing.T, root, dsn string, deriver reposcan.Deriver, 
 // on every scan; a raw payload that changed shape per call (as the
 // standalone selection-cache test uses) would make that assertion
 // meaningless here, where the raw bytes also feed EmitJobs' cache key.
-func stableSelectionEvidence(calls *int) func(ctx context.Context, runner coverageRunner, files map[string]string, p lang.Plugin, testCmd []string) reposcan.SelectionEvidence {
-	return func(context.Context, coverageRunner, map[string]string, lang.Plugin, []string) reposcan.SelectionEvidence {
+func stableSelectionEvidence(calls *int) func(ctx context.Context, runner coverageRunner, files map[string]string, p lang.Plugin, testCmd []string, sourcePaths []string) reposcan.SelectionEvidence {
+	return func(context.Context, coverageRunner, map[string]string, lang.Plugin, []string, []string) reposcan.SelectionEvidence {
 		*calls++
 		return reposcan.SelectionEvidence{Ran: true, Raw: []byte("{}")}
 	}

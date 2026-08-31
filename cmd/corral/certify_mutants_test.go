@@ -410,7 +410,7 @@ func TestCertifyRepoRefusesAStaleMutantSetBeforeRunningTheInstrumentedSuite(t *t
 	orig := collectSelectionEvidence
 	t.Cleanup(func() { collectSelectionEvidence = orig })
 	ran := false
-	collectSelectionEvidence = func(ctx context.Context, runner coverageRunner, files map[string]string, p lang.Plugin, testCmd []string) reposcan.SelectionEvidence {
+	collectSelectionEvidence = func(ctx context.Context, runner coverageRunner, files map[string]string, p lang.Plugin, testCmd []string, sourcePaths []string) reposcan.SelectionEvidence {
 		ran = true
 		return reposcan.SelectionEvidence{Ran: true}
 	}
@@ -454,7 +454,7 @@ func TestCertifyRepoDiffBaseWithNothingSelectedNeverRunsTheInstrumentedSuite(t *
 	orig := collectSelectionEvidence
 	t.Cleanup(func() { collectSelectionEvidence = orig })
 	ran := false
-	collectSelectionEvidence = func(ctx context.Context, runner coverageRunner, files map[string]string, p lang.Plugin, testCmd []string) reposcan.SelectionEvidence {
+	collectSelectionEvidence = func(ctx context.Context, runner coverageRunner, files map[string]string, p lang.Plugin, testCmd []string, sourcePaths []string) reposcan.SelectionEvidence {
 		ran = true
 		return reposcan.SelectionEvidence{Ran: true}
 	}

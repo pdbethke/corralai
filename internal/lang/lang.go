@@ -507,3 +507,36 @@ type FailureParser interface {
 type SelectionDiagnoser interface {
 	DiagnoseSelectionFailure(text string) string
 }
+
+// SourceRootInstrumenter is an OPTIONAL TestSelector extension: a selector
+// that can narrow (or otherwise use) its instrumented run to a
+// caller-supplied set of SOURCE ROOTS — the distinct top-level directories
+// the scan's own file enumeration found the language's OWN, non-test
+// source files under (e.g. []string{"src"} for a src-layout project,
+// []string{"mypkg"} for a flat package, []string{"."} when sources sit at
+// the repo root; possibly several, for a repo with more than one).
+//
+// It exists because coverage.py's default source scope (the whole cwd)
+// makes "uncovered" UNREACHABLE for an editable/src-layout install:
+// coverage measures a file by where python actually imported it from, and
+// an editable install imports the project's real sources from OUTSIDE the
+// checked-out tree, so the reducer's own repo-root filter drops every one
+// of them — the file never appears in the evidence document at all, which
+// this package correctly reads as "not measured", never "uncovered" (see
+// CollectSelectionEvidence's own doc). Passing `--cov=<root>` per root
+// instead tells coverage to measure the SOURCE tree it was actually asked
+// to audit, which is what makes a genuinely dead module — one truly never
+// executed — show up PRESENT with zero contexts: a real "uncovered"
+// finding, reachable for the first time.
+//
+// A selector that does not implement this is asked via the plain
+// Instrument(testCmd) instead — roots are advisory, an optimization this
+// package makes when it can derive them, never a required input.
+type SourceRootInstrumenter interface {
+	// InstrumentSourceRoots is Instrument, plus sourceRoots. ok=false has
+	// the same meaning Instrument's does: this command cannot be
+	// instrumented at all — the caller grades whole-suite, disclosed. An
+	// empty sourceRoots (none could be derived) is a legitimate input, not
+	// an error — implementations fall back to their Instrument default.
+	InstrumentSourceRoots(testCmd []string, sourceRoots []string) (cmd []string, ok bool)
+}

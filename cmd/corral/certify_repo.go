@@ -2593,7 +2593,7 @@ func (l *localExecutor) collectSelection(ctx context.Context, sources []string) 
 	// the project's suite. The clock is here, and only here: every return
 	// above is a decision, not a run, and must record no time.
 	start := time.Now()
-	ev := collectSelectionEvidence(ctx, runner, files, plug, testCmd)
+	ev := collectSelectionEvidence(ctx, runner, files, plug, testCmd, sources)
 	// Recorded even when the run produced no usable evidence: the suite still
 	// executed, and the minutes it burned are part of what this scan cost.
 	l.selectionDuration = time.Since(start)
@@ -2610,8 +2610,8 @@ func (l *localExecutor) collectSelection(ctx context.Context, sources []string) 
 // package var, the same seam newWorkspacePool/probeWorkspacePool use: it is
 // the one call in collectSelection that runs the project's whole suite, and a
 // test of what is TIMED must be able to stand in for it without one.
-var collectSelectionEvidence = func(ctx context.Context, runner coverageRunner, files map[string]string, p lang.Plugin, testCmd []string) reposcan.SelectionEvidence {
-	return reposcan.CollectSelectionEvidence(ctx, runner, files, p, testCmd)
+var collectSelectionEvidence = func(ctx context.Context, runner coverageRunner, files map[string]string, p lang.Plugin, testCmd []string, sourcePaths []string) reposcan.SelectionEvidence {
+	return reposcan.CollectSelectionEvidence(ctx, runner, files, p, testCmd, sourcePaths)
 }
 
 // selectionCmdDigest is the sha256 of the EXACT instrumented command argv —

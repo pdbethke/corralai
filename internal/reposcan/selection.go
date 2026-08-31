@@ -5,6 +5,7 @@ package reposcan
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/pdbethke/corralai/internal/lang"
@@ -140,10 +141,68 @@ func hasMeasuredSourceFile(p lang.Plugin, measured map[string]lang.FileCoverage)
 	return false
 }
 
+// sourceRootsFor derives the distinct top-level directories p's OWN,
+// non-test source files live under, from sourcePaths — the scan's full
+// enumerated file list (every language mixed together; filtered here to p
+// by lang.Detect, the same oracle Enumerate itself uses). "." names a file
+// that sits directly at the repo root, with no directory component at all.
+// Sorted for a STABLE result independent of sourcePaths' own iteration
+// order, since callers key an instrumented run's identity off the command
+// this feeds (see selectionCmdDigest) — a nondeterministic root order would
+// make the SAME tree hash to two different cache keys.
+//
+// This is advisory input for lang.SourceRootInstrumenter (python.go's
+// InstrumentSourceRoots): scoping an instrumented run's coverage collection
+// to a project's REAL source root(s), rather than coverage.py's whole-cwd
+// default, is what makes "uncovered" reachable at all for a
+// src-layout/editable install — see that interface's own doc for why the
+// default makes it unreachable instead.
+func sourceRootsFor(p lang.Plugin, sourcePaths []string) []string {
+	seen := map[string]bool{}
+	var roots []string
+	for _, path := range sourcePaths {
+		detected, ok := lang.Detect(path)
+		if !ok || detected.Name() != p.Name() {
+			continue
+		}
+		if isTestFile(p, path) {
+			continue
+		}
+		root := "."
+		if i := strings.Index(path, "/"); i >= 0 {
+			root = path[:i]
+		}
+		if !seen[root] {
+			seen[root] = true
+			roots = append(roots, root)
+		}
+	}
+	sort.Strings(roots)
+	return roots
+}
+
+// instrumentCmd asks sel for the instrumented command, preferring the
+// OPTIONAL richer lang.SourceRootInstrumenter contract (with sourceRoots)
+// when p implements it, falling back to the plain Instrument(testCmd)
+// every other plugin, and any test fake, still gets.
+func instrumentCmd(p lang.Plugin, sel lang.TestSelector, testCmd []string, sourceRoots []string) (cmd []string, ok bool) {
+	if ri, ok := p.(lang.SourceRootInstrumenter); ok {
+		return ri.InstrumentSourceRoots(testCmd, sourceRoots)
+	}
+	return sel.Instrument(testCmd)
+}
+
 // CollectSelectionEvidence runs the plugin's Instrument command once in the
 // scan's substrate. Never fatal: any refusal or failure becomes a Note,
 // because a scan that cannot select still has a real (whole-suite)
 // measurement to make — it just has to say which one it made.
+//
+// sourcePaths is the scan's full enumerated source list (every language
+// mixed, whatever enumeratedSourcePaths built) — used only to DERIVE source
+// roots (sourceRootsFor) for a plugin that can use them
+// (lang.SourceRootInstrumenter); nil is a legitimate "none known", never an
+// error, and every plugin that does not implement that optional interface
+// ignores it entirely.
 //
 // An instrumented run that produced no usable stdout — whitespace-only or
 // genuinely empty — is NEVER Ran:true: a shell-wrapped instrumented command
@@ -154,12 +213,12 @@ func hasMeasuredSourceFile(p lang.Plugin, measured map[string]lang.FileCoverage)
 // successful, empty-but-real run would record it as a Ran:true evidence
 // document that measured NOTHING, indistinguishable on its face from a
 // suite that genuinely covers zero files.
-func CollectSelectionEvidence(ctx context.Context, runner commandRunner, files map[string]string, p lang.Plugin, testCmd []string) SelectionEvidence {
+func CollectSelectionEvidence(ctx context.Context, runner commandRunner, files map[string]string, p lang.Plugin, testCmd []string, sourcePaths []string) SelectionEvidence {
 	sel, ok := p.(lang.TestSelector)
 	if !ok {
 		return SelectionEvidence{Note: fmt.Sprintf("no selector for %s", p.Name())}
 	}
-	cmd, ok := sel.Instrument(testCmd)
+	cmd, ok := instrumentCmd(p, sel, testCmd, sourceRootsFor(p, sourcePaths))
 	if !ok {
 		return SelectionEvidence{Note: fmt.Sprintf("%s: cannot instrument test command %v", p.Name(), testCmd)}
 	}

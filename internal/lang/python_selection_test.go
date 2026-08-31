@@ -65,6 +65,88 @@ func TestPythonInstrumentRefusesANonPytestCommand(t *testing.T) {
 	}
 }
 
+// THE SECOND DEFECT: coverage.py's default (bare --cov) scope is the whole
+// cwd, which is exactly what makes "uncovered" unreachable for a
+// src-layout/editable install (see InstrumentSourceRoots's own doc) —
+// coverage measures a file by where python actually imported it from, an
+// editable install imports from OUTSIDE the checked-out tree, and the
+// reducer's own repo-root filter drops it entirely. One --cov=<root> per
+// derived source root instead scopes coverage to what was actually asked
+// to be audited.
+func TestPythonInstrumentSourceRootsEmitsPerRootCovFlags(t *testing.T) {
+	cmd, ok := pyPlugin{}.InstrumentSourceRoots([]string{"pytest", "-q"}, []string{"src"})
+	if !ok {
+		t.Fatal("InstrumentSourceRoots: ok=false for a plain pytest command")
+	}
+	script := cmd[2]
+	if !strings.Contains(script, "--cov=src --cov-context=test") {
+		t.Errorf("script must scope coverage to the derived root, got:\n%s", script)
+	}
+	if strings.Contains(script, " --cov --cov-context") {
+		t.Errorf("script must NOT fall back to bare --cov when a root was given:\n%s", script)
+	}
+	// Every other clause survives untouched: the rc guard, the JSON tail,
+	// the pinned C tracer — this only ever changes the --cov flag(s).
+	for _, want := range []string{
+		"COVERAGE_CORE=ctrace COVERAGE_FILE=",
+		`[ "$rc" -eq 0 ] || exit "$rc"`,
+		`"format": "corral-selection-2"`,
+		"--cov-context=test --cov-report= -p no:cacheprovider",
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("script lacks %q:\n%s", want, script)
+		}
+	}
+}
+
+// More than one source root emits one --cov= per root, in the order given.
+func TestPythonInstrumentSourceRootsEmitsOneFlagPerRoot(t *testing.T) {
+	cmd, ok := pyPlugin{}.InstrumentSourceRoots([]string{"pytest"}, []string{"src", "otherpkg"})
+	if !ok {
+		t.Fatal("ok=false")
+	}
+	script := cmd[2]
+	if !strings.Contains(script, "--cov=src --cov=otherpkg --cov-context=test") {
+		t.Errorf("script must carry one --cov= per root, got:\n%s", script)
+	}
+}
+
+// A root of "." (sources at the repo root) is a legitimate root, not a
+// special case that gets dropped.
+func TestPythonInstrumentSourceRootsAcceptsDotForRootLevelSources(t *testing.T) {
+	cmd, ok := pyPlugin{}.InstrumentSourceRoots([]string{"pytest"}, []string{"."})
+	if !ok {
+		t.Fatal("ok=false")
+	}
+	if !strings.Contains(cmd[2], "--cov=. --cov-context=test") {
+		t.Errorf("script must carry --cov=., got:\n%s", cmd[2])
+	}
+}
+
+// No roots derived (nil/empty) is not an error — it is byte-identical to
+// Instrument's own bare --cov fallback.
+func TestPythonInstrumentSourceRootsFallsBackToBareCovWhenEmpty(t *testing.T) {
+	withRoots, ok := pyPlugin{}.InstrumentSourceRoots([]string{"pytest", "-q"}, nil)
+	if !ok {
+		t.Fatal("ok=false")
+	}
+	plain, ok := pyPlugin{}.Instrument([]string{"pytest", "-q"})
+	if !ok {
+		t.Fatal("ok=false")
+	}
+	if !reflect.DeepEqual(withRoots, plain) {
+		t.Errorf("InstrumentSourceRoots(nil) = %v, want byte-identical to Instrument = %v", withRoots, plain)
+	}
+}
+
+// The command-shape refusal (anything that is not a recognized pytest
+// invocation) applies identically to the source-roots entry point.
+func TestPythonInstrumentSourceRootsRefusesANonPytestCommand(t *testing.T) {
+	if _, ok := (pyPlugin{}).InstrumentSourceRoots([]string{"make", "test"}, []string{"src"}); ok {
+		t.Error("InstrumentSourceRoots must refuse a command it cannot splice coverage into")
+	}
+}
+
 func TestPythonSelectPicksOnlyTestsThatExecutedTheFile(t *testing.T) {
 	base := []string{"python3", "-m", "pytest", "-q"}
 	sel, err := pyPlugin{}.Select(recordedEvidence(t), "", "pkg/calc.py", "tests/test_calc.py", base)

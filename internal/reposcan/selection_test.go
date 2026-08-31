@@ -33,7 +33,7 @@ func (f *fakeDetailedRunner) EnumerateDetailed(_ context.Context, _ map[string]s
 
 func TestSelectionEvidenceNoSelectorIsWholeSuiteDisclosed(t *testing.T) {
 	ruby, _ := lang.ByName("ruby")
-	ev := CollectSelectionEvidence(context.Background(), &fakeRunner{}, nil, ruby, []string{"rspec"})
+	ev := CollectSelectionEvidence(context.Background(), &fakeRunner{}, nil, ruby, []string{"rspec"}, nil)
 	if ev.Ran {
 		t.Fatal("ran with no selector")
 	}
@@ -46,7 +46,7 @@ func TestSelectionEvidenceNoSelectorIsWholeSuiteDisclosed(t *testing.T) {
 func TestSelectionEvidenceRunFailureIsDisclosedPerFile(t *testing.T) {
 	py, _ := lang.ByName("python")
 	r := &fakeRunner{err: errors.New("boom")}
-	ev := CollectSelectionEvidence(context.Background(), r, nil, py, []string{"pytest"})
+	ev := CollectSelectionEvidence(context.Background(), r, nil, py, []string{"pytest"}, nil)
 	if ev.Ran || ev.Note != "python: selection evidence run failed: boom" {
 		t.Errorf("got %+v", ev)
 	}
@@ -64,7 +64,7 @@ func TestSelectionEvidenceForNarrowsFromRecordedEvidence(t *testing.T) {
 	raw := `{"format":"corral-selection-2","tests":1,"files":{` +
 		`"pkg/a.py":{"tests":["tests/test_a.py::test_x"],"lines":{},"static":[]},` +
 		`"tests/test_a.py":{"tests":["tests/test_a.py::test_x"],"lines":{},"static":[]}}}`
-	ev := CollectSelectionEvidence(context.Background(), &fakeRunner{out: raw}, nil, py, []string{"pytest"})
+	ev := CollectSelectionEvidence(context.Background(), &fakeRunner{out: raw}, nil, py, []string{"pytest"}, nil)
 	if !ev.Ran {
 		t.Fatalf("did not run: %s", ev.Note)
 	}
@@ -91,7 +91,7 @@ func TestSelectionEvidenceForNarrowsFromRecordedEvidence(t *testing.T) {
 
 func TestSelectionEvidenceInstrumentRefusalIsDisclosed(t *testing.T) {
 	py, _ := lang.ByName("python")
-	ev := CollectSelectionEvidence(context.Background(), &fakeRunner{}, nil, py, []string{"make", "test"})
+	ev := CollectSelectionEvidence(context.Background(), &fakeRunner{}, nil, py, []string{"make", "test"}, nil)
 	if ev.Ran || ev.Note != "python: cannot instrument test command [make test]" {
 		t.Errorf("got %+v", ev)
 	}
@@ -119,7 +119,7 @@ func TestSelectionEvidenceZeroValueIsDisclosedWholeSuite(t *testing.T) {
 func TestSelectionEvidenceEmptyOutputIsNotRan(t *testing.T) {
 	py, _ := lang.ByName("python")
 	r := &fakeDetailedRunner{res: sandbox.EnumerateResult{Output: "", ExitCode: 4}}
-	ev := CollectSelectionEvidence(context.Background(), r, nil, py, []string{"pytest"})
+	ev := CollectSelectionEvidence(context.Background(), r, nil, py, []string{"pytest"}, nil)
 	if ev.Ran {
 		t.Fatalf("an instrumented run that printed nothing must not be Ran, got %+v", ev)
 	}
@@ -139,7 +139,7 @@ func TestSelectionEvidenceEmptyOutputNamesMissingPytestCov(t *testing.T) {
 	py, _ := lang.ByName("python")
 	stderr := "usage: pytest [options]\npytest: error: unrecognized arguments: --cov --cov-context=test --cov-report=\n"
 	r := &fakeDetailedRunner{res: sandbox.EnumerateResult{Output: "", ExitCode: 4, Stderr: stderr}}
-	ev := CollectSelectionEvidence(context.Background(), r, nil, py, []string{"pytest"})
+	ev := CollectSelectionEvidence(context.Background(), r, nil, py, []string{"pytest"}, nil)
 	if ev.Ran {
 		t.Fatalf("got Ran=true, want false: %+v", ev)
 	}
@@ -157,7 +157,7 @@ func TestSelectionEvidenceEmptyOutputNamesMissingPytestCov(t *testing.T) {
 // reason to trust the empty string.
 func TestSelectionEvidenceEmptyOutputWithoutDetailedContractIsStillNotRan(t *testing.T) {
 	py, _ := lang.ByName("python")
-	ev := CollectSelectionEvidence(context.Background(), &fakeRunner{out: "   \n"}, nil, py, []string{"pytest"})
+	ev := CollectSelectionEvidence(context.Background(), &fakeRunner{out: "   \n"}, nil, py, []string{"pytest"}, nil)
 	if ev.Ran {
 		t.Fatalf("got Ran=true, want false: %+v", ev)
 	}
@@ -177,7 +177,7 @@ func TestSelectionEvidencePathologicalDocumentFallsBack(t *testing.T) {
 	py, _ := lang.ByName("python")
 	raw := `{"format":"corral-selection-2","tests":1,"files":{` +
 		`"tests/test_a.py":{"tests":["tests/test_a.py::test_x"],"lines":{},"static":[]}}}`
-	ev := CollectSelectionEvidence(context.Background(), &fakeRunner{out: raw}, nil, py, []string{"pytest"})
+	ev := CollectSelectionEvidence(context.Background(), &fakeRunner{out: raw}, nil, py, []string{"pytest"}, nil)
 	if ev.Ran {
 		t.Fatalf("a document with no source files must not be usable, got %+v", ev)
 	}
@@ -191,7 +191,7 @@ func TestSelectionEvidencePathologicalDocumentFallsBack(t *testing.T) {
 func TestSelectionEvidenceEmptyDocumentFallsBack(t *testing.T) {
 	py, _ := lang.ByName("python")
 	raw := `{"format":"corral-selection-2","tests":0,"files":{}}`
-	ev := CollectSelectionEvidence(context.Background(), &fakeRunner{out: raw}, nil, py, []string{"pytest"})
+	ev := CollectSelectionEvidence(context.Background(), &fakeRunner{out: raw}, nil, py, []string{"pytest"}, nil)
 	if ev.Ran {
 		t.Fatalf("got Ran=true, want false: %+v", ev)
 	}
@@ -204,8 +204,132 @@ func TestSelectionEvidenceGoodDocumentIsUnchanged(t *testing.T) {
 	raw := `{"format":"corral-selection-2","tests":1,"files":{` +
 		`"pkg/a.py":{"tests":["tests/test_a.py::test_x"],"lines":{},"static":[]},` +
 		`"tests/test_a.py":{"tests":["tests/test_a.py::test_x"],"lines":{},"static":[]}}}`
-	ev := CollectSelectionEvidence(context.Background(), &fakeRunner{out: raw}, nil, py, []string{"pytest"})
+	ev := CollectSelectionEvidence(context.Background(), &fakeRunner{out: raw}, nil, py, []string{"pytest"}, nil)
 	if !ev.Ran || ev.Note != "" {
 		t.Errorf("got %+v, want a plain Ran:true evidence", ev)
+	}
+}
+
+// THE THIRD MEASUREMENT: coverage.py's default (bare --cov) scope is the
+// whole cwd, which makes "uncovered" unreachable for a src-layout/editable
+// install — coverage measures a file by where python actually imported it
+// from, an editable install imports it from OUTSIDE the checked-out tree,
+// and the reducer's own repo-root filter drops it entirely. sourceRootsFor
+// derives what CollectSelectionEvidence feeds a
+// lang.SourceRootInstrumenter to fix that.
+
+func TestSourceRootsForDerivesSrcLayout(t *testing.T) {
+	py, _ := lang.ByName("python")
+	got := sourceRootsFor(py, []string{
+		"src/pkg/mod.py", "src/pkg/__init__.py", "src/pkg/dead.py", "tests/test_mod.py",
+	})
+	want := []string{"src"}
+	if !stringSlicesEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+func TestSourceRootsForDerivesFlatPackage(t *testing.T) {
+	py, _ := lang.ByName("python")
+	got := sourceRootsFor(py, []string{"mypkg/core.py", "mypkg/util.py", "test_core.py"})
+	want := []string{"mypkg"}
+	if !stringSlicesEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+func TestSourceRootsForDerivesDotForRootLevelSources(t *testing.T) {
+	py, _ := lang.ByName("python")
+	got := sourceRootsFor(py, []string{"itsdangerous.py", "serializer.py", "test_serializer.py"})
+	want := []string{"."}
+	if !stringSlicesEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+// Multiple genuine source roots come back deduped and SORTED — stable
+// regardless of sourcePaths' own order, since a cache key is derived from
+// the instrumented command this feeds.
+func TestSourceRootsForDedupsAndSorts(t *testing.T) {
+	py, _ := lang.ByName("python")
+	got := sourceRootsFor(py, []string{
+		"src/a.py", "src/b.py", "otherpkg/c.py", "tests/test_a.py",
+	})
+	want := []string{"otherpkg", "src"}
+	if !stringSlicesEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+// A file belonging to a DIFFERENT language must never contribute a root —
+// this repo's enumerated source list is every language mixed together.
+func TestSourceRootsForIgnoresOtherLanguages(t *testing.T) {
+	py, _ := lang.ByName("python")
+	got := sourceRootsFor(py, []string{"src/a.py", "cmd/main.go", "web/app.js"})
+	want := []string{"src"}
+	if !stringSlicesEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+// No source files at all (nil, or every path filtered out) derives no
+// roots — not an error, sourceRootsFor's caller treats it as "none known".
+func TestSourceRootsForEmptyWhenNothingQualifies(t *testing.T) {
+	py, _ := lang.ByName("python")
+	if got := sourceRootsFor(py, nil); len(got) != 0 {
+		t.Errorf("got %v, want none", got)
+	}
+	if got := sourceRootsFor(py, []string{"tests/test_a.py"}); len(got) != 0 {
+		t.Errorf("a test-only source list must derive no roots, got %v", got)
+	}
+}
+
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// End-to-end: CollectSelectionEvidence must actually THREAD the derived
+// roots into the instrumented command, not merely compute them and drop
+// them on the floor.
+func TestCollectSelectionEvidenceThreadsSourceRootsIntoInstrument(t *testing.T) {
+	py, _ := lang.ByName("python")
+	r := &fakeRunner{out: `{"format":"corral-selection-2","tests":1,"files":{` +
+		`"src/pkg/a.py":{"tests":["tests/test_a.py::test_x"],"lines":{},"static":[]}}}`}
+	sourcePaths := []string{"src/pkg/a.py", "tests/test_a.py"}
+	ev := CollectSelectionEvidence(context.Background(), r, nil, py, []string{"pytest"}, sourcePaths)
+	if !ev.Ran {
+		t.Fatalf("did not run: %s", ev.Note)
+	}
+	if r.got == nil || r.got[0] != "sh" {
+		t.Fatalf("the runner was not handed an instrumented command: %v", r.got)
+	}
+	script := r.got[2]
+	if !strings.Contains(script, "--cov=src --cov-context=test") {
+		t.Errorf("script must be scoped to the derived root \"src\", got:\n%s", script)
+	}
+	if strings.Contains(script, " --cov --cov-context") {
+		t.Errorf("script must not fall back to bare --cov once a root was derivable:\n%s", script)
+	}
+}
+
+// With no sourcePaths at all (nil — a caller with nothing to derive from,
+// or a plugin that never implements the optional interface), the command
+// is byte-identical to plain Instrument's bare --cov.
+func TestCollectSelectionEvidenceWithNoSourcePathsFallsBackToBareCov(t *testing.T) {
+	py, _ := lang.ByName("python")
+	r := &fakeRunner{out: `{"format":"corral-selection-2","tests":1,"files":{` +
+		`"pkg/a.py":{"tests":["tests/test_a.py::test_x"],"lines":{},"static":[]}}}`}
+	CollectSelectionEvidence(context.Background(), r, nil, py, []string{"pytest"}, nil)
+	script := r.got[2]
+	if !strings.Contains(script, " --cov --cov-context=test") {
+		t.Errorf("script must fall back to bare --cov with no sourcePaths, got:\n%s", script)
 	}
 }

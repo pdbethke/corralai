@@ -1055,16 +1055,41 @@ func (pyPlugin) DiagnoseSelectionFailure(text string) string {
 	return ""
 }
 
-// Instrument builds the one instrumented run selection evidence comes from.
-// Same command-shape rules as CoverageCmd (a `pytest` or `<interp> -m pytest`
-// argv; anything else is refused rather than guessed at), but the
-// instrumentation is pytest-cov's, because only pytest-cov records
+// Instrument builds the one instrumented run selection evidence comes from,
+// with coverage.py's default (whole-cwd) source scope — see
+// InstrumentSourceRoots for why that default makes "uncovered" unreachable
+// for a src-layout/editable install, and prefer it when source roots are
+// known. Same command-shape rules as CoverageCmd (a `pytest` or `<interp>
+// -m pytest` argv; anything else is refused rather than guessed at), but
+// the instrumentation is pytest-cov's, because only pytest-cov records
 // per-TEST dynamic contexts while keeping the project's own coverage
 // configuration (source/omit) in force. `--cov-report=` suppresses the
 // terminal report; the JSON is emitted afterwards by coverage itself with
 // contexts shown. The data file is a temp path so the project's own
 // .coverage is never touched.
 func (pyPlugin) Instrument(testCmd []string) (cmd []string, ok bool) {
+	return pyPlugin{}.instrument(testCmd, nil)
+}
+
+// InstrumentSourceRoots implements lang.SourceRootInstrumenter: one
+// --cov=<root> per derived source root, instead of coverage.py's bare
+// --cov (the whole cwd). This is what makes "uncovered" reachable at all
+// for an editable/src-layout install — coverage.py otherwise measures a
+// file by where python actually IMPORTED it from, which for such an
+// install is a path outside the checked-out tree; the reducer's own
+// repo-root filter then drops it entirely, and this package correctly
+// reads that as "never measured", not "uncovered" (see
+// CollectSelectionEvidence's doc). Scoping coverage to the real source
+// root(s) instead means a genuinely dead module shows up PRESENT with
+// zero contexts, a real uncovered finding.
+//
+// An empty sourceRoots is not an error — it falls back to instrument's
+// bare-cov behaviour, byte-identical to Instrument.
+func (pyPlugin) InstrumentSourceRoots(testCmd []string, sourceRoots []string) (cmd []string, ok bool) {
+	return pyPlugin{}.instrument(testCmd, sourceRoots)
+}
+
+func (pyPlugin) instrument(testCmd []string, sourceRoots []string) (cmd []string, ok bool) {
 	var interp string
 	var args []string
 	switch {
@@ -1101,9 +1126,23 @@ func (pyPlugin) Instrument(testCmd []string) (cmd []string, ok bool) {
 	// {file: [node ids]} — `coverage json --show-contexts` emits every
 	// context of every line and was 411 MB on flask (branch=true); the
 	// reduced form of the same run is 331 KB (#165).
+	// One --cov=<root> per derived source root scopes coverage to the
+	// project's real sources instead of --cov's bare, whole-cwd default —
+	// see InstrumentSourceRoots's own doc for why that default makes
+	// "uncovered" unreachable for a src-layout/editable install. No roots
+	// derived (or none passed at all, the plain Instrument caller) falls
+	// back to that same bare --cov, byte-identical to before this existed.
+	covFlags := "--cov"
+	if len(sourceRoots) > 0 {
+		parts := make([]string, len(sourceRoots))
+		for i, r := range sourceRoots {
+			parts[i] = "--cov=" + shellArg(r)
+		}
+		covFlags = strings.Join(parts, " ")
+	}
 	script := `f=$(mktemp) && trap 'rm -f "$f"' EXIT && ` +
 		`COVERAGE_CORE=ctrace COVERAGE_FILE="$f" ` + qi + " -m " + strings.Join(q, " ") +
-		` --cov --cov-context=test --cov-report= -p no:cacheprovider` +
+		" " + covFlags + ` --cov-context=test --cov-report= -p no:cacheprovider` +
 		`; rc=$?; [ "$rc" -eq 0 ] || exit "$rc"; ` +
 		`COVERAGE_CORE=ctrace COVERAGE_FILE="$f" ` + qi + " - <<'PY'\n" + pySelectionReducer + "PY\n"
 	return []string{"sh", "-c", script}, true

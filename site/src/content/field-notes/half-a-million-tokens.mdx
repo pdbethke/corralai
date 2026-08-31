@@ -1,0 +1,103 @@
+---
+title: "Half a million tokens to spot a one-line change"
+description: "The first time our cost meter ran, it printed one line about our own tool that nobody had ever been able to see: the test-writing model was being handed the same 36 KB file twenty-four times per call. What happened in the twelve hours after that line, and the rule it left behind: cold exam, warm prover."
+pubDate: 2026-08-31
+draft: true
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+
+*Field note. Corral audits test suites by planting bugs and seeing who
+notices. This week we pointed its new cost meter at corral itself. The meter's
+first sentence was embarrassing, which is how you know it was working.*
+
+---
+
+## The line
+
+We had just taught every audit to record where its time and money went — one
+line per file, straight from the ledger, not from anyone's estimate:
+
+```
+cost: 0.5M tokens in / 1.5k out across 2 calls — test-writer 0.5M/1.5k (2 calls)
+```
+
+Half a million tokens of input. Two calls. For a 36 KB Python file.
+
+The file is about nine thousand tokens. Something was sending it fifty times.
+
+## The grep
+
+One grep found it. When corral plants a bug and the developer's tests sleep
+through it, a model is asked to write the test that would have caught it. Our
+prompt showed that model each surviving bug as *the entire mutated file* —
+all 36 KB, per survivor, twenty-four survivors — and asked it to play
+spot-the-difference across two dozen near-identical copies.
+
+The representation was the disease. Internally, a planted bug *was* a full
+copy of the file with one line changed, because that was convenient the week
+it was written, and everything downstream inherited it: the prompts, the
+recorded audits, the event log. Megabytes of copies of your file, everywhere,
+to describe one-line edits.
+
+That's an N+1 problem — the same one every ORM tutorial warns you about,
+wearing an AI costume. Pull whole objects where you needed rows, pay per item
+for what should have been paid once.
+
+## The fix, and the receipt
+
+A planted bug is now what it always actually was: a ten-line diff. The model
+gets the file once and twenty-four diffs. Same exam, same bugs, same grading —
+we replayed the exact recorded bug set before and after, three runs per
+configuration, and every single run produced the identical kill/survive
+partition, checked bug by bug from the ledger.
+
+The receipts, from the same meter that filed the complaint:
+
+- The test-writer's input dropped from **0.5M tokens to 41k** on that file.
+  On a second project's hot file, 122k to 12k. Roughly a 10–12× cut, from
+  changing what the model *sees*, not what it does.
+- Then we stopped batching. One call per surviving bug, all at once, each
+  answer proved on its own in its own sandbox. On the file with twenty-four
+  survivors, the batched writer had been proving 4–6 of them per run. Per-bug,
+  it proved **21, 23, and 22** across three runs. Not a better model. The same
+  model, no longer asked to fix twenty-four things in one breath, where one
+  broken test used to sink the whole batch.
+- And the honest cell in the table: on a project whose test suite takes 77
+  seconds to run, per-bug proving pays for its rigor in wall clock — each
+  proof re-verifies the baseline — and bought nothing there that the diffs
+  hadn't already won. So the flag's help text now states the trade in plain
+  terms, and the guidance is a measured fact instead of a vibe.
+
+Every one of those numbers is a row in a database, tied to the exact recorded
+bug set that produced it. When the next optimization comes, it argues against
+these rows or it doesn't ship.
+
+## The rule it left behind
+
+The same day, we started designing the next thing — agents that share what
+they learn, in real time, through the database they already write to. A
+proven test kills a bug its author wasn't even assigned? Post the fact, cancel
+the redundant work. A repo audited on every pull request? The fortieth audit
+should know what the first one paid to learn.
+
+Which forced the sentence that now governs all of it:
+
+**Cold exam, warm prover.**
+
+Anything that changes *which exam your code takes* stays cold — no memory, no
+aiming, no accumulated cleverness — or the certification means nothing.
+Anything that helps *prove* what the cold exam already found, or stops you
+re-paying for facts already verified by execution, is fair game — as long as
+the record says the prover was warm.
+
+That's the same discipline we keep demanding of test suites, pointed at
+ourselves: the number you certify has to be earned cold, and everything else
+had better leave a receipt.
+
+---
+
+*The meter that started this exists because a founder rule from week one:
+record every decision. It took one evening of telemetry to find a bug that
+had been silently taxing every audit for a month. Instrument first. The
+optimization will introduce itself.*

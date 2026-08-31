@@ -80,6 +80,80 @@ func TestWidenCandidacyRelabelsAMeasuredZeroCoverageFileAsUncovered(t *testing.T
 	}
 }
 
+// THE FOURTH DEFECT: a file present in the evidence with zero covering
+// TESTS but NON-EMPTY static (import/module-load-time) coverage was
+// executed — coverage.py recorded real lines for it — just never by a
+// test directly. Calling that "uncovered — no test executes this file" is
+// false in the sense a reader checks it against, and hits on essentially
+// every Python repo's package __init__.py. Must relabel ReasonImportOnly,
+// NEVER ReasonUncovered — same disposition (excluded, nothing to grade a
+// kill rate against) but a different, honest claim.
+func TestWidenCandidacyRelabelsAnImportOnlyFileDistinctlyFromUncovered(t *testing.T) {
+	excl := []Exclusion{{Path: "src/pkg/__init__.py", Reason: ReasonNoPairedTest}}
+	idx, ok := widenFixtureIndex(t, map[string]lang.FileCoverage{
+		"src/pkg/__init__.py": {Tests: map[string]int{}, HasStatic: true},
+	})
+
+	gotCands, gotExcl, promoted := WidenCandidacyByEvidence(nil, excl, idx, ok)
+
+	if len(gotCands) != 0 {
+		t.Fatalf("cands = %+v, want none — import-only never promotes, same as uncovered", gotCands)
+	}
+	if len(gotExcl) != 1 || gotExcl[0].Reason != ReasonImportOnly {
+		t.Fatalf("excl = %+v, want exactly one entry reasoned %q", gotExcl, ReasonImportOnly)
+	}
+	if gotExcl[0].Reason == ReasonUncovered {
+		t.Error("an executed-but-import-only file must NEVER read as ReasonUncovered")
+	}
+	if promoted != 0 {
+		t.Errorf("promoted = %d, want 0 — a relabel is not a promotion", promoted)
+	}
+}
+
+// A genuinely dead file — zero covering tests AND zero static coverage,
+// nothing executed it at all — is still ReasonUncovered. The distinction
+// above must not weaken this, the ORIGINAL headline case.
+func TestWidenCandidacyStillLabelsAGenuinelyDeadFileUncovered(t *testing.T) {
+	excl := []Exclusion{{Path: "src/pkg/deadmod.py", Reason: ReasonNoPairedTest}}
+	idx, ok := widenFixtureIndex(t, map[string]lang.FileCoverage{
+		"src/pkg/deadmod.py": {Tests: map[string]int{}, HasStatic: false},
+	})
+
+	gotCands, gotExcl, promoted := WidenCandidacyByEvidence(nil, excl, idx, ok)
+
+	if len(gotCands) != 0 {
+		t.Fatalf("cands = %+v, want none", gotCands)
+	}
+	if len(gotExcl) != 1 || gotExcl[0].Reason != ReasonUncovered {
+		t.Fatalf("excl = %+v, want exactly one entry reasoned %q", gotExcl, ReasonUncovered)
+	}
+	if promoted != 0 {
+		t.Errorf("promoted = %d, want 0", promoted)
+	}
+}
+
+// A file present in the evidence WITH covering tests must promote to a
+// candidate exactly as before — HasStatic (true or false) never changes
+// that outcome, only the zero-covering-tests branch cares about it.
+func TestWidenCandidacyPromotesRegardlessOfHasStaticWhenTestsCoverIt(t *testing.T) {
+	excl := []Exclusion{{Path: "pkg/utils.py", Reason: ReasonNoPairedTest}}
+	idx, ok := widenFixtureIndex(t, map[string]lang.FileCoverage{
+		"pkg/utils.py": {Tests: map[string]int{"tests/test_api.py::test_a": 4}, HasStatic: true},
+	})
+
+	gotCands, gotExcl, promoted := WidenCandidacyByEvidence(nil, excl, idx, ok)
+
+	if len(gotExcl) != 0 {
+		t.Fatalf("excl = %+v, want utils.py promoted out of the exclusion list", gotExcl)
+	}
+	if len(gotCands) != 1 || gotCands[0].Path != "pkg/utils.py" {
+		t.Fatalf("cands = %+v, want pkg/utils.py promoted", gotCands)
+	}
+	if promoted != 1 {
+		t.Errorf("promoted = %d, want 1", promoted)
+	}
+}
+
 // A file the evidence never measured AT ALL keeps its original reason:
 // absence of evidence must never be read as evidence of absence.
 func TestWidenCandidacyLeavesAnUnmeasuredFileAsNoPairedTest(t *testing.T) {

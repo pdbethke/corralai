@@ -458,6 +458,16 @@ type TestSelector interface {
 // re-parsing the evidence.
 type FileCoverage struct {
 	Tests map[string]int
+	// HasStatic is true when the evidence recorded coverage for this file
+	// OUTSIDE any test context — lines executed at import/module-load time
+	// (a package __init__.py, a module-level constant, a decorator
+	// evaluated at import) that pytest-cov cannot attribute to any one
+	// test. A file with zero covering Tests but HasStatic true was
+	// genuinely EXECUTED — just never by a test directly — a different,
+	// honest finding from a file with neither: see
+	// reposcan.WidenCandidacyByEvidence's ReasonImportOnly, the exclusion
+	// this distinction exists to make possible.
+	HasStatic bool
 }
 
 // SpanRule names why ForSpan chose what it chose.

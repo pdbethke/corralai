@@ -1426,7 +1426,7 @@ func (pyPlugin) Index(evidence []byte) (map[string]FileCoverage, error) {
 			}
 			tests[id] += n
 		}
-		out[p] = FileCoverage{Tests: tests}
+		out[p] = FileCoverage{Tests: tests, HasStatic: len(f.Static) > 0}
 	}
 	return out, nil
 }

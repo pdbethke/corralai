@@ -2693,10 +2693,11 @@ func goModulePath(repoDir string) (string, error) {
 // demoted an ambiguous pairing, or found no paired test, into an exclusion),
 // so this adds back the Enumerate-level reasons that still describe a
 // language-detected, non-test file: ReasonNoPairedTest, ReasonAmbiguousTest,
-// and ReasonUncovered (a no-paired-test file the evidence went on to measure
-// at zero covering tests — still a real source file, just excluded for a
-// truthful reason instead). enumOnlyExcl MUST be Enumerate's own exclusions,
-// widened by evidence, only
+// ReasonUncovered, and ReasonImportOnly (a no-paired-test file the evidence
+// went on to measure at zero covering tests — either genuinely uncovered or
+// executed only at import time — still a real source file either way, just
+// excluded for a truthful reason instead). enumOnlyExcl MUST be Enumerate's
+// own exclusions, widened by evidence, only
 // (excl[:enumExcl] in runCertifyRepo) — later-appended reasons
 // (not-selected/ungoaled/derive-failed/source-too-large) describe candidates
 // already counted via cands, and re-detecting their language here would be
@@ -2716,7 +2717,8 @@ func enumeratedSourcePaths(cands []reposcan.Candidate, enumOnlyExcl []reposcan.E
 		add(c.Path)
 	}
 	for _, e := range enumOnlyExcl {
-		if e.Reason != reposcan.ReasonNoPairedTest && e.Reason != reposcan.ReasonAmbiguousTest && e.Reason != reposcan.ReasonUncovered {
+		if e.Reason != reposcan.ReasonNoPairedTest && e.Reason != reposcan.ReasonAmbiguousTest &&
+			e.Reason != reposcan.ReasonUncovered && e.Reason != reposcan.ReasonImportOnly {
 			continue
 		}
 		if _, ok := lang.Detect(e.Path); ok {
@@ -2886,10 +2888,15 @@ const maxListedExclusions = 20
 // candidates came from the measurement (evidence-paired: no filename
 // pairing, only coverage), how many from the filename walk (name-paired,
 // pairing-based — stranger-path's own candidates, whether or not the
-// evidence also measured them), and how many source files the evidence
-// positively measured at zero covering tests (uncovered). It also says WHICH
-// basis produced these numbers, because a reader must never mistake a
-// pairing-only fallback's zeros for "nothing was uncovered".
+// evidence also measured them), how many source files the evidence
+// positively measured at zero covering tests with nothing else executing
+// them either (uncovered), and how many the evidence measured at zero
+// covering tests but DID find import-time coverage for (import-only) — a
+// package __init__.py or a constants module, executed by every test that
+// imports it but exercised by none of them directly; conflating the two
+// would call that "uncovered" on essentially every Python repo. It also
+// says WHICH basis produced these numbers, because a reader must never
+// mistake a pairing-only fallback's zeros for "nothing was uncovered".
 func candidacySummaryLine(cands []reposcan.Candidate, excl []reposcan.Exclusion, evidenceOK, dryRun bool, selectionNote string) string {
 	evidencePaired, namePaired := 0, 0
 	for _, c := range cands {
@@ -2899,13 +2906,20 @@ func candidacySummaryLine(cands []reposcan.Candidate, excl []reposcan.Exclusion,
 			namePaired++
 		}
 	}
-	uncovered := 0
+	uncovered, importOnly := 0, 0
 	for _, e := range excl {
-		if e.Reason == reposcan.ReasonUncovered {
+		switch e.Reason {
+		case reposcan.ReasonUncovered:
 			uncovered++
+		case reposcan.ReasonImportOnly:
+			// Counted on its own, the same way uncovered is: a different,
+			// honest finding (executed, just never by a test directly —
+			// see ReasonImportOnly's own doc), not folded into uncovered's
+			// count and not silently dropped either.
+			importOnly++
 		}
 	}
-	line := fmt.Sprintf("  evidence-paired %d · name-paired %d · uncovered %d", evidencePaired, namePaired, uncovered)
+	line := fmt.Sprintf("  evidence-paired %d · name-paired %d · uncovered %d · import-only %d", evidencePaired, namePaired, uncovered, importOnly)
 	switch {
 	case dryRun:
 		// EXACT wording per the design's Dry-run honesty decision: a dry run

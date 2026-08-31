@@ -98,17 +98,38 @@ const (
 	// into 468. Accounted like skipped-dir: the file is listed, never dropped.
 	ReasonGitignored = "gitignored"
 	// ReasonUncovered marks a source file the selection evidence actually
-	// MEASURED and found zero tests executing — the loudest finding a
-	// mutation audit of a test suite can produce, and a different claim from
-	// ReasonNoPairedTest (a statement about NAMES: no filename convention
-	// predicted a test, which says nothing about whether some other test
-	// happens to execute the file). Applied ONLY when evidence exists and
-	// positively measured the file at zero covering tests — see
-	// WidenCandidacyByEvidence. Absence of evidence is never treated as
-	// evidence of absence: a file the evidence never measured keeps
-	// ReasonNoPairedTest. The exact string is load-bearing — it is the
-	// disclosure text itself, not a machine code a reader has to translate.
+	// MEASURED and found zero tests executing, AND found no coverage for it
+	// at all outside a test either — genuinely nothing executed it. The
+	// loudest finding a mutation audit of a test suite can produce, and a
+	// different claim from ReasonNoPairedTest (a statement about NAMES: no
+	// filename convention predicted a test, which says nothing about
+	// whether some other test happens to execute the file). Applied ONLY
+	// when evidence exists, positively measured the file at zero covering
+	// tests, AND found no import-time (static) coverage for it either — see
+	// WidenCandidacyByEvidence and ReasonImportOnly, the sibling finding
+	// for a file executed but never by a test. Absence of evidence is
+	// never treated as evidence of absence: a file the evidence never
+	// measured keeps ReasonNoPairedTest. The exact string is load-bearing —
+	// it is the disclosure text itself, not a machine code a reader has to
+	// translate.
 	ReasonUncovered = "uncovered — no test executes this file"
+	// ReasonImportOnly marks a source file the selection evidence
+	// positively measured at zero covering TESTS but non-empty coverage
+	// OUTSIDE any test context — executed only at import/module-load time
+	// (a package __init__.py, a module-level constant, a decorator
+	// evaluated at import). This is NOT ReasonUncovered: the file was
+	// genuinely executed, coverage.py recorded real lines for it — it is
+	// only that no TEST exercises it directly, which pytest-cov's own
+	// per-test contexts cannot attribute to any test id (see
+	// lang.FileCoverage.HasStatic). Calling this "uncovered" would be
+	// false in the sense a reader checks it against: every test in the
+	// suite typically imports the package, which is exactly why this hits
+	// on essentially every Python repo's __init__.py and constants
+	// modules. Same disposition as ReasonUncovered — excluded from the
+	// audit, since there is nothing a TEST-scoped kill rate could grade it
+	// against — but a different, honest claim, counted separately. The
+	// exact string is load-bearing, same as ReasonUncovered's.
+	ReasonImportOnly = "imported at load time — no test exercises it directly"
 )
 
 // skipDirs are never walked: dependency, build-output and VCS trees are not
@@ -413,12 +434,19 @@ func EnumerateWithTests(root string, tests *TestMap) ([]Candidate, []Exclusion, 
 // WidenCandidacyByEvidence is the evidence-first half of candidacy: a file
 // with a language, not gitignored, not a test — and NO filename pairing —
 // still becomes a candidate when the selection evidence shows at least one
-// test executes it, and is relabeled ReasonUncovered (rather than left as
-// ReasonNoPairedTest) when the evidence positively measured it at ZERO
-// covering tests. Candidacy is therefore paired ∪ evidence-covered: pairing
-// alone (stranger-path's own walk) is untouched, and this only ever ADDS
-// candidates or renames the reason on an exclusion — it never removes a
-// pairing-based candidate or changes its TestPath/ViaSearch.
+// test executes it, and is relabeled when the evidence positively measured
+// it at ZERO covering tests (rather than left as ReasonNoPairedTest) — as
+// ReasonUncovered when NOTHING executed it at all, or as ReasonImportOnly
+// when it WAS executed, just never by a test directly (import/module-load
+// time coverage only — a package __init__.py, a module constant). These
+// are two different, honest claims under what the design called one
+// "zero covering tests" state, and conflating them would call a package's
+// __init__.py "uncovered" on essentially every Python repo, since every
+// test typically imports it. Candidacy is therefore paired ∪
+// evidence-covered: pairing alone (stranger-path's own walk) is untouched,
+// and this only ever ADDS candidates or renames the reason on an exclusion
+// — it never removes a pairing-based candidate or changes its
+// TestPath/ViaSearch.
 //
 // ok mirrors ParseEvidenceIndex's own bool: false means there is no index to
 // widen with (evidence never ran, an unsupported language, or unparseable
@@ -445,7 +473,7 @@ func WidenCandidacyByEvidence(cands []Candidate, excl []Exclusion, idx EvidenceI
 	}
 
 	for i := range cands {
-		if n, _, measured := idx.CoverageFor(cands[i].Path); measured {
+		if n, _, _, measured := idx.CoverageFor(cands[i].Path); measured {
 			v := n
 			cands[i].CoveringTests = &v
 		}
@@ -458,13 +486,18 @@ func WidenCandidacyByEvidence(cands []Candidate, excl []Exclusion, idx EvidenceI
 			kept = append(kept, e)
 			continue
 		}
-		n, mostCovering, measured := idx.CoverageFor(e.Path)
+		n, mostCovering, hasStatic, measured := idx.CoverageFor(e.Path)
 		switch {
 		case !measured:
 			// Absence of evidence is not evidence of absence: this file's
 			// only honest reason remains "no filename convention predicted a
 			// test", not a claim the evidence never actually made.
 			kept = append(kept, e)
+		case n == 0 && hasStatic:
+			// Executed, just never by a test directly (import/module-load
+			// time only) — a real, different finding from ReasonUncovered.
+			// See ReasonImportOnly's own doc.
+			kept = append(kept, Exclusion{Path: e.Path, Reason: ReasonImportOnly})
 		case n == 0:
 			kept = append(kept, Exclusion{Path: e.Path, Reason: ReasonUncovered})
 		default:

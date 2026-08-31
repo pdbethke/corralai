@@ -21,22 +21,33 @@ type EvidenceIndex struct {
 type evidenceFileEntry struct {
 	coveringTests int
 	mostCovering  string // the covering test FILE with the most executed lines; "" when coveringTests == 0
+	// hasStatic is true when the evidence also recorded coverage for this
+	// file OUTSIDE any test context — import/module-load time execution a
+	// selector cannot attribute to one test (see lang.FileCoverage.HasStatic).
+	// A file with coveringTests == 0 and hasStatic true was genuinely
+	// executed, just never by a test directly — WidenCandidacyByEvidence's
+	// ReasonImportOnly, distinct from ReasonUncovered (coveringTests == 0
+	// AND hasStatic false: nothing executed it at all).
+	hasStatic bool
 }
 
 // CoverageFor answers one file: how many tests cover it (0 is a genuine
-// finding — the evidence measured this file and no test executed it), the
-// most-covering test FILE (empty when coveringTests is 0), and whether the
-// evidence measured this file AT ALL. measured=false means the file never
-// appeared in the evidence's own file list — absence of evidence, which a
-// caller must NEVER treat as evidence of absence (see the design's Failure
-// posture decision): the zero values of the other two returns carry no
-// meaning in that case.
-func (idx EvidenceIndex) CoverageFor(path string) (coveringTests int, mostCoveringTestPath string, measured bool) {
+// finding — the evidence measured this file and no test executed it
+// DIRECTLY), the most-covering test FILE (empty when coveringTests is 0),
+// whether the evidence ALSO recorded coverage for it outside any test
+// context (import/module-load time — see lang.FileCoverage.HasStatic; a
+// file with coveringTests == 0 and hasStatic true was genuinely executed,
+// just never by a test), and whether the evidence measured this file AT
+// ALL. measured=false means the file never appeared in the evidence's own
+// file list — absence of evidence, which a caller must NEVER treat as
+// evidence of absence (see the design's Failure posture decision): the
+// zero values of every other return carry no meaning in that case.
+func (idx EvidenceIndex) CoverageFor(path string) (coveringTests int, mostCoveringTestPath string, hasStatic bool, measured bool) {
 	f, ok := idx.files[path]
 	if !ok {
-		return 0, "", false
+		return 0, "", false, false
 	}
-	return f.coveringTests, f.mostCovering, true
+	return f.coveringTests, f.mostCovering, f.hasStatic, true
 }
 
 // ParseEvidenceIndex builds an EvidenceIndex from one scan's selection
@@ -75,7 +86,7 @@ func ParseEvidenceIndex(ev SelectionEvidence, plug lang.Plugin) (EvidenceIndex, 
 		if n == 0 {
 			best = ""
 		}
-		files[path] = evidenceFileEntry{coveringTests: n, mostCovering: best}
+		files[path] = evidenceFileEntry{coveringTests: n, mostCovering: best, hasStatic: fc.HasStatic}
 	}
 	return EvidenceIndex{files: files}, true
 }

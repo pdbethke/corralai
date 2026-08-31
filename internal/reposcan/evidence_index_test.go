@@ -76,25 +76,44 @@ func TestParseEvidenceIndexCoverageForAndMostCovering(t *testing.T) {
 		t.Fatal("ParseEvidenceIndex: ok=false, want true")
 	}
 
-	n, mostCovering, measured := idx.CoverageFor("pkg/utils.py")
+	n, mostCovering, hasStatic, measured := idx.CoverageFor("pkg/utils.py")
 	if !measured || n != 3 {
-		t.Fatalf("CoverageFor(pkg/utils.py) = %d, %q, %v; want 3 covering tests, measured=true", n, mostCovering, measured)
+		t.Fatalf("CoverageFor(pkg/utils.py) = %d, %q, %v, %v; want 3 covering tests, measured=true", n, mostCovering, hasStatic, measured)
 	}
 	if mostCovering != "tests/test_api.py" {
 		t.Errorf("mostCovering = %q, want the FILE of the single test with the most executed lines (test_b, 5 lines) = tests/test_api.py", mostCovering)
 	}
 
-	n, mostCovering, measured = idx.CoverageFor("pkg/dead.py")
-	if !measured || n != 0 || mostCovering != "" {
-		t.Errorf("CoverageFor(pkg/dead.py) = %d, %q, %v; want 0 covering tests, no most-covering, measured=true (a POSITIVE zero finding)", n, mostCovering, measured)
+	n, mostCovering, hasStatic, measured = idx.CoverageFor("pkg/dead.py")
+	if !measured || n != 0 || mostCovering != "" || hasStatic {
+		t.Errorf("CoverageFor(pkg/dead.py) = %d, %q, %v, %v; want 0 covering tests, no most-covering, hasStatic=false, measured=true (a POSITIVE zero finding)", n, mostCovering, hasStatic, measured)
 	}
 
-	n, mostCovering, measured = idx.CoverageFor("pkg/never-measured.py")
+	n, mostCovering, hasStatic, measured = idx.CoverageFor("pkg/never-measured.py")
 	if measured {
 		t.Errorf("CoverageFor(pkg/never-measured.py): measured=true, want false — absence of evidence is not evidence of absence")
 	}
 	_ = n
 	_ = mostCovering
+	_ = hasStatic
+}
+
+// A file with zero covering TESTS but HasStatic true (import/module-load
+// time coverage only) must read back hasStatic=true from CoverageFor —
+// this, not coveringTests alone, is what distinguishes ReasonImportOnly
+// from ReasonUncovered in WidenCandidacyByEvidence.
+func TestParseEvidenceIndexCarriesHasStatic(t *testing.T) {
+	sel := fakeSelector{index: map[string]lang.FileCoverage{
+		"pkg/__init__.py": {Tests: map[string]int{}, HasStatic: true},
+	}}
+	idx, ok := ParseEvidenceIndex(SelectionEvidence{Ran: true, Raw: []byte("x")}, sel)
+	if !ok {
+		t.Fatal("ParseEvidenceIndex: ok=false")
+	}
+	n, _, hasStatic, measured := idx.CoverageFor("pkg/__init__.py")
+	if !measured || n != 0 || !hasStatic {
+		t.Errorf("CoverageFor(pkg/__init__.py) = %d, hasStatic=%v, measured=%v; want 0 covering tests, hasStatic=true, measured=true", n, hasStatic, measured)
+	}
 }
 
 func TestMoreSpecificTestPathTieBreak(t *testing.T) {
@@ -108,7 +127,7 @@ func TestMoreSpecificTestPathTieBreak(t *testing.T) {
 	if !ok {
 		t.Fatal("ParseEvidenceIndex: ok=false")
 	}
-	_, mostCovering, _ := idx.CoverageFor("pkg/utils.py")
+	_, mostCovering, _, _ := idx.CoverageFor("pkg/utils.py")
 	if mostCovering != "tests/unit/test_utils.py" {
 		t.Errorf("mostCovering = %q, want the more specific (deeper) tied path tests/unit/test_utils.py", mostCovering)
 	}

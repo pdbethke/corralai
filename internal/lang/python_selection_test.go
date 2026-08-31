@@ -608,6 +608,47 @@ func TestPythonIndexReadsEveryMeasuredFile(t *testing.T) {
 	}
 }
 
+// THE FOURTH DEFECT: Index must carry whether a file's coverage includes
+// import/module-load-time (static) execution, alongside the per-test
+// contexts — this, not coveringTests alone, is what lets a caller tell a
+// package __init__.py (executed by every test that imports it, exercised
+// by none directly) from a genuinely dead file.
+func TestPythonIndexCarriesHasStatic(t *testing.T) {
+	idx, err := pyPlugin{}.Index(recordedEvidence(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calc, ok := idx["pkg/calc.py"]; !ok || !calc.HasStatic {
+		t.Errorf("pkg/calc.py HasStatic = %v, ok=%v, want true (the fixture records static ranges for it)", calc.HasStatic, ok)
+	}
+	// The fixture's pkg/__init__.py has BOTH zero tests and zero static —
+	// genuinely dead, not import-only. HasStatic must be false here so the
+	// two states are not conflated.
+	if init, ok := idx["pkg/__init__.py"]; !ok || init.HasStatic {
+		t.Errorf("pkg/__init__.py HasStatic = %v, ok=%v, want false (the fixture's static coverage is empty)", init.HasStatic, ok)
+	}
+}
+
+// The actual import-only shape: zero covering tests, non-empty static.
+func TestPythonIndexImportOnlyFileHasZeroTestsAndHasStaticTrue(t *testing.T) {
+	raw := `{"format":"corral-selection-2","tests":1,"files":{` +
+		`"src/pkg/__init__.py":{"tests":[],"lines":{},"static":[[1,3]]}}}`
+	idx, err := pyPlugin{}.Index([]byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, ok := idx["src/pkg/__init__.py"]
+	if !ok {
+		t.Fatal("Index: src/pkg/__init__.py missing from the readout")
+	}
+	if len(f.Tests) != 0 {
+		t.Errorf("Tests = %v, want empty (zero covering tests)", f.Tests)
+	}
+	if !f.HasStatic {
+		t.Error("HasStatic = false, want true — the file has non-empty static (import-time) coverage")
+	}
+}
+
 func TestPythonIndexSharesSelectsParsing(t *testing.T) {
 	if _, err := (pyPlugin{}).Index([]byte(`{"format":"not-corral-selection-2"}`)); err == nil {
 		t.Error("Index must refuse a document with the wrong format stamp, exactly like Select")

@@ -51,6 +51,14 @@ is the honest version: what it can't do yet, and what's next.
   roadmap.
 - **`time:`/`cost:`** telemetry lines on every run, so wall-clock and spend
   are visible without instrumenting anything yourself.
+- **Public transparency-log anchoring.** `corral certify --repo --attest`
+  writes a signed DSSE envelope beside the statement when a local signing key
+  is configured; opt-in `--transparency` uploads it to Sigstore's public Rekor
+  log — public and permanent, the flag's own help text says so — and records
+  the receipt (log index + uuid) in the ledger and warehouse. `corral verify`
+  then checks three legs — DSSE signature, warehouse rows-hash against the
+  statement, Rekor inclusion — and has run ✓✓✓ against live infrastructure:
+  Rekor index `2667058567`, from a real flask audit.
 
 ## What it does *not* claim yet
 
@@ -131,12 +139,6 @@ From the [roadmap](https://github.com/pdbethke/corralai/blob/main/ROADMAP.md)
 (directional, not committed) — corral's arc is from a certify CLI + a merge
 gate to a full **accountability plane for AI-written code**:
 
-- **Public transparency-log anchoring.** `--transparency` (in development):
-  ship the ledger head to Sigstore Rekor, an external, append-only,
-  timestamped witness, so tampering is detectable even if you don't trust the
-  brain, for every run — not just a brain-witnessed one. The MotherDuck
-  warehouse itself already shipped (see "What v0.1 is" above); this item is
-  specifically the public-log anchor, still ahead.
 - **Coverage-evidence candidacy.** "Uncovered" as a first-class finding
   alongside a proven survivor — a way to flag code a mutant never even
   reached, not just code whose mutant went unkilled.

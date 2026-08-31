@@ -13,7 +13,9 @@ your browser**, over corral's *real* audit dataset. Real SQL, no backend.
 
 ## What you can query
 
-Two real DuckDB tables, shipped as small parquet extracts and queried client-side:
+Four real DuckDB tables, shipped as parquet extracts and queried client-side —
+corral's own historical stores, hand-exported from the machine that produced
+them:
 
 - **`audit_ledger`** — the signed verdict records. Every audit is a tamper-evident,
   hash-linked row: `repo`, `commit`, `record_head` (the signature head), `certified`
@@ -21,10 +23,19 @@ Two real DuckDB tables, shipped as small parquet extracts and queried client-sid
 - **`bug_catches`** — per-model, per-role, per-region execution telemetry: which
   model planted or graded, `mutants_planted` / `mutants_killed` / `mutants_survived`,
   `region_complexity`, and more.
+- **`scans`** — whole-repo scan runs: `total_files`, `candidates`, `audited`,
+  `kill_rate` per scan.
+- **`scan_files`** — every candidate file a scan considered, audited or
+  rejected, with `disposition`, `reason`, `kill_rate`, `survivors`, and
+  `proven_missed`.
 
-The page ships four preset queries — the signed ledger, each audit's verdict joined
-to its execution-proven kill-rate, "which model actually catches bugs," and mutation
-difficulty vs. code complexity — plus a **live query box** so you can write your own.
+The page ships **eight** preset queries — which files keep shipping demonstrated
+gaps, whether a file's kill rate is drifting or just noisy sampling, which model
+catches bugs in which role, every signed verdict by repo, every audited file's
+proven gap, one file's replicate series, the honest denominator of what a scan
+rejected and why, and the scan-level receipts — plus a **live query box** so you
+can write your own. Open [the page](/warehouse/) to see the current set; it's
+likely to keep moving.
 
 ## It's grounded, not marketing
 
@@ -41,10 +52,12 @@ The [page on this site](/warehouse/) queries corral's own historical stores —
 `audit_ledger`, `bug_catches`, `scans`, `scan_files` — hand-exported from the
 machine that produced them.
 
-`--push` writes something newer and simpler: one **`corral_audits`** row per
-audited file. Same subject, different shape, and everything below describes
-`corral_audits`, because that is what you get. The published page has not been
-backfilled into it.
+`--push` writes something newer: a five-table bundle — `corral_scans`,
+`corral_audits` (one row per audited file), `corral_mutants`, `corral_model_calls`,
+and `corral_events` — auto-created on first push, plus a `corral_seal` view that
+cross-references the pushed statement's hash against the rows it produced. Same
+subject, different shape, and everything below describes that bundle, because
+that is what you get. The published page has not been backfilled into it.
 
 ## Getting your own
 

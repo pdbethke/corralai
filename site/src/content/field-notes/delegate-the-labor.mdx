@@ -101,6 +101,7 @@ export ANTHROPIC_API_KEY=sk-ant-...
 corral certify --local \
   --code path/to/your/file.py \
   --goal "what this code must guarantee" \
+  --writer-model claude-sonnet-5 --mutant-model claude-sonnet-5 --critic-model claude-haiku-4-5 \
   -- python -m pytest
 ```
 

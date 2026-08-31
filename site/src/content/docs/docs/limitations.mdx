@@ -1,17 +1,16 @@
 ---
 title: Limitations & roadmap
-description: Where corralai is honestly at (v0.1), what it deliberately does not claim, and where it's heading next.
+description: Where corralai is honestly at (v0.7), what it deliberately does not claim, and where it's heading next.
 ---
 
 {/* SPDX-License-Identifier: Elastic-2.0 */}
-{/* Source: ROADMAP.md + SECURITY.md ("What this does not claim"). Honest v0.x
-    framing for a Wednesday-launch audience. */}
+{/* Source: ROADMAP.md + SECURITY.md ("What this does not claim"). Honest v0.x framing for a Wednesday-launch audience. */}
 
-Corralai is **v0.1** — solo-maintained and moving fast. The foundations are in
+Corralai is **v0.7** — solo-maintained and moving fast. The foundations are in
 place; most of what's ahead is *surfacing* them, not re-architecting. This page
 is the honest version: what it can't do yet, and what's next.
 
-## What v0.1 is
+## What v0.7 is
 
 - **Certify by execution** works end to end: `corral certify -- <check>` and
   `corral certify --local`'s adversarial pool (mutant-generator → your suite
@@ -35,10 +34,23 @@ is the honest version: what it can't do yet, and what's next.
 - The **learning loop** (findings → human-approved skills), **shared memory /
   `search_memory`**, and durable **history + replay** — the recordings you
   can watch on this site are real exported runs.
-- Embedded **DuckDB analytics** and optional **MotherDuck** fleet sync — plus a
-  public **[DuckDB integration page](/warehouse/)** that runs DuckDB in your
-  browser (WebAssembly) over the real audit ledger + execution telemetry, with a
-  live SQL box and `?q=` deep-links.
+- Embedded **DuckDB analytics** and optional **MotherDuck** fleet sync —
+  `--push md:<db>` auto-creates the five-table `corral_scans`/`corral_audits`/
+  `corral_mutants`/`corral_model_calls`/`corral_events` bundle plus a
+  `corral_seal` view that cross-references the pushed statement's hash
+  against the rows themselves — plus a public **[DuckDB integration
+  page](/warehouse/)** that runs DuckDB in your browser (WebAssembly) over the
+  real audit ledger + execution telemetry, with a live SQL box and `?q=`
+  deep-links.
+- **`corral seal`**, a per-survivor test-writer, recorded mutant sets
+  (`corral-mutants-1`/`corral-mutants-2`) with `--mutants` replay, per-file
+  and per-mutant test selection backed by Tier-A goal/selection caches (a
+  second scan of an unchanged tree is close to free), concurrent workspace
+  scoring (`--swarm` trees), probe + recursive test pairing, `doctor`↔`run`
+  sandbox parity, and a PEP-735 dependency-group hint — all shipped, not
+  roadmap.
+- **`time:`/`cost:`** telemetry lines on every run, so wall-clock and spend
+  are visible without instrumenting anything yourself.
 
 ## What it does *not* claim yet
 
@@ -119,16 +131,23 @@ From the [roadmap](https://github.com/pdbethke/corralai/blob/main/ROADMAP.md)
 (directional, not committed) — corral's arc is from a certify CLI + a merge
 gate to a full **accountability plane for AI-written code**:
 
-- **The trustless tier.** Ship the ledger head to an external, append-only,
-  timestamped witness (Sigstore Rekor, or a shared MotherDuck warehouse) so
-  tampering is detectable even if you don't trust the brain — central-trust
-  today becomes tamper-evident-against-everyone next.
-- **One-command agent onboarding.** Independent, dev-driven agents join with
-  deterministic passive telemetry via their own hooks — capture by
-  instrumentation, never by an agent choosing to self-report.
-- **The MotherDuck accountability warehouse.** Signed records from every
-  dev, CI runner, and project federate into one shared, queryable warehouse
-  — the same DuckDB schema, a DSN flip.
+- **Public transparency-log anchoring.** `--transparency` (in development):
+  ship the ledger head to Sigstore Rekor, an external, append-only,
+  timestamped witness, so tampering is detectable even if you don't trust the
+  brain, for every run — not just a brain-witnessed one. The MotherDuck
+  warehouse itself already shipped (see "What v0.1 is" above); this item is
+  specifically the public-log anchor, still ahead.
+- **Coverage-evidence candidacy.** "Uncovered" as a first-class finding
+  alongside a proven survivor — a way to flag code a mutant never even
+  reached, not just code whose mutant went unkilled.
+- **A `--files`/`--pick` selection UI.** A way to hand-pick which files a
+  `--repo` scan audits, instead of the pairing heuristic choosing for you.
+- **A PHP language plugin.** The fifth-through-sixth-language set (Go,
+  Python, Ruby, JS, TS) doesn't include PHP yet.
+- **One-command agent onboarding** and **a fleet refresh.** Independent,
+  dev-driven agents joining with deterministic passive telemetry via their
+  own hooks (capture by instrumentation, never self-report), and a pass over
+  the fleet-coordination surface as usage grows past what it was built for.
 - **The shared corpus.** A blind-spot pattern proven once becomes a shared,
   versioned, signed skill every client's audit can pull from — execution-proven,
   human-gated, never opaque weights.

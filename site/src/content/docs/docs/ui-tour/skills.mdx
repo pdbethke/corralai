@@ -1,0 +1,17 @@
+---
+title: Skills
+description: The tab that shows the fleet's shared skills — the versioned artifacts corral sync pulls to every member.
+---
+
+The Skills tab lists the fleet's shared skills — "we share skills, not just
+memories" made visible. It fetches `/api/skills`, the same artifact store
+`corral sync` reads and writes, and shows each skill as a name, path, and
+one-line description. This is the whole fleet's canonical set (what every
+synced member *can* use), not any one agent's private equip list — the same
+honest scope as the fleet-skills section of the agent inspector.
+
+A skill lands here the same way a memory entry does: an approved learning-loop
+proposal writes it to the artifact store, and `corral sync` carries it to
+every member of the fleet. See [memory tiers and the learning
+loop](/docs/concepts/memory-and-learning-loop/) for how a finding becomes a
+skill in the first place.

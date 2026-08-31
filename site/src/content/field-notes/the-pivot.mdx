@@ -51,7 +51,7 @@ It's one line you drop into a pipeline:
 corral certify -- go test ./... && go build ./...
 ```
 
-It runs the check itself, records what produced the change, signs a provenance statement, and anchors it to Sigstore's public Rekor log. And then anyone can verify it — against a *published* key, not my word. Tamper with the record to hide a failed test, and verification fails and names the broken link.
+It runs the check itself, records what produced the change, and signs a provenance statement. And then anyone can verify it — against a *published* key, not my word. Tamper with the record to hide a failed test, and verification fails and names the broken link. Run standalone like that, the signature is local and unwitnessed; anchoring it to Sigstore's public Rekor log is what the brain-mediated run below does.
 
 I'm not asking you to take that on faith either. A few hours ago I certified a build against our production brain, and it landed in the public transparency log as **Rekor entry #2138328104** — a real, permanent, publicly-witnessed record you can look up at [search.sigstore.dev](https://search.sigstore.dev) right now, with zero corral credentials. That's the difference between "trust me" and "check it yourself," and it's the entire point.
 

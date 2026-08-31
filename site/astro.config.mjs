@@ -80,6 +80,7 @@ export default defineConfig({
             { label: 'Progress', slug: 'docs/ui-tour/progress' },
             { label: 'Topology', slug: 'docs/ui-tour/topology' },
             { label: 'Memory', slug: 'docs/ui-tour/memory' },
+            { label: 'Skills', slug: 'docs/ui-tour/skills' },
             { label: 'Proposals', slug: 'docs/ui-tour/proposals' },
             { label: 'Completed + replay + agent windows', slug: 'docs/ui-tour/completed-and-replay' },
           ],

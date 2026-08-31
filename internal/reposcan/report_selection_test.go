@@ -64,6 +64,42 @@ func TestUncoveredFileIsExcludedFromTheHeadlineMean(t *testing.T) {
 	}
 }
 
+// THE RESIDUAL: ImportOnly must reach the report (WeakFile, RepoReport)
+// exactly the way Uncovered does, distinguished on its own — a genuinely
+// dead file and an import-only one are BOTH excluded from GradedFiles (the
+// same withholding), but only ImportOnlyFiles counts the latter, so a
+// printer can tell them apart without re-deriving the distinction.
+func TestRepoReportCarriesImportOnlyDistinctFromUncovered(t *testing.T) {
+	results := []FileResult{
+		{Gradable: true, Verdict: advpool.Verdict{TestSelection: advpool.TestSelection{Method: "coverage-context"}, Uncovered: true}},
+		{Gradable: true, Verdict: advpool.Verdict{TestSelection: advpool.TestSelection{Method: "coverage-context"}, Uncovered: true, ImportOnly: true}},
+		{Gradable: true, Verdict: advpool.Verdict{DevKillRate: 1.0, TestSelection: advpool.TestSelection{Method: "coverage-context", Selected: 3, Of: 10}}},
+	}
+	results[0].Job.Path, results[1].Job.Path, results[2].Job.Path = "pkg/dead.py", "pkg/__init__.py", "pkg/a.py"
+	r := Aggregate("o", "r", "c", 3, 3, results, nil)
+
+	if r.UncoveredFiles != 2 {
+		t.Errorf("UncoveredFiles = %d, want 2 (BOTH shapes withhold the rate)", r.UncoveredFiles)
+	}
+	if r.ImportOnlyFiles != 1 {
+		t.Errorf("ImportOnlyFiles = %d, want 1 (a SUBSET of UncoveredFiles)", r.ImportOnlyFiles)
+	}
+	if r.GradedFiles != 1 || r.KillRate != 1.0 {
+		t.Errorf("GradedFiles=%d KillRate=%v, want 1/1.0 — neither withheld shape enters the mean", r.GradedFiles, r.KillRate)
+	}
+
+	byPath := map[string]WeakFile{}
+	for _, w := range r.Weakest {
+		byPath[w.Path] = w
+	}
+	if w := byPath["pkg/dead.py"]; !w.Uncovered || w.ImportOnly {
+		t.Errorf("pkg/dead.py = %+v, want Uncovered=true ImportOnly=false", w)
+	}
+	if w := byPath["pkg/__init__.py"]; !w.Uncovered || !w.ImportOnly {
+		t.Errorf("pkg/__init__.py = %+v, want Uncovered=true ImportOnly=true", w)
+	}
+}
+
 // The report is what the printer, the signer and the warehouse read; the
 // verdict is not. Whatever the run disclosed about the per-mutant grain has
 // to survive the copy — the spread AND the rule counts, and the absence of a

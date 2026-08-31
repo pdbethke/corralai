@@ -1155,7 +1155,11 @@ func (pyPlugin) instrument(testCmd []string, sourceRoots []string) (cmd []string
 // pytest-cov's `|setup`/`|run`/`|teardown` phase suffix stripped), the
 // closed line ranges each of those tests executed (by index into that
 // test list), the ranges executed under no test context at all (import
-// time), and the number of distinct tests seen anywhere.
+// time), how many executable statements coverage's OWN static parse found
+// in the file (cov.analysis2 — independent of whether anything ran, which
+// is what lets a caller tell a genuinely empty file, e.g. a blank
+// __init__.py, from a real one nothing executed), and the number of
+// distinct tests seen anywhere.
 const pySelectionReducer = `import json, os, sys
 import coverage
 cov = coverage.Coverage(data_file=os.environ["COVERAGE_FILE"])
@@ -1193,12 +1197,17 @@ for path in data.measured_files():
             by_test.setdefault(c.rsplit("|", 1)[0], set()).add(lineno)
     ids = sorted(by_test)
     tests.update(ids)
+    try:
+        num_statements = len(cov.analysis2(path)[1])
+    except Exception:
+        num_statements = None
     files[rel] = {
         "tests": ids,
         "lines": {str(i): ranges(by_test[t]) for i, t in enumerate(ids)},
         "static": ranges(static),
+        "statements": num_statements,
     }
-json.dump({"format": "corral-selection-2", "tests": len(tests), "files": files}, sys.stdout, separators=(",", ":"))
+json.dump({"format": "corral-selection-3", "tests": len(tests), "files": files}, sys.stdout, separators=(",", ":"))
 `
 
 // shellArg renders one Instrument argv element for inclusion in its sh -c
@@ -1227,7 +1236,19 @@ func shellArg(s string) string {
 // executed it; pytest-cov names a test context `<nodeid>|<phase>`.
 // pySelectionFormat stamps the reducer's output so Select refuses any other
 // document — including the full coverage-json it used to parse — by name.
-const pySelectionFormat = "corral-selection-2"
+// Bumped to -3 (from -2) when pySelectionFile grew Statements: a document
+// stamped -2 (a real one may still sit in an on-disk selection cache —
+// internal/scanstore's Tier A — from before this field existed) decodes
+// Statements as its zero value, which would misread as "zero executable
+// statements" for EVERY previously-uncovered file, not just genuinely
+// empty ones. Refusing the old stamp by name — the same rule this format
+// already enforces against any OTHER shape — forces a fresh instrumented
+// run instead of silently misreading a document that predates the field;
+// scanstore.SelectionCacheGet's own doc already established that an
+// unusable cached document is a MISS, not a false hit, and this is that
+// same discipline applied to a format version rather than an empty byte
+// string.
+const pySelectionFormat = "corral-selection-3"
 
 // pySelectionEvidence is what pySelectionReducer emits: Tests is the count
 // of distinct tests seen across the whole run; Files is decoded separately
@@ -1243,11 +1264,22 @@ type pySelectionEvidence struct {
 
 // pySelectionFile is one measured file's entry: the node ids of the tests
 // that executed it, each test's executed line ranges (by index into
-// Tests), and the ranges executed under no test context (import time).
+// Tests), the ranges executed under no test context (import time), and how
+// many EXECUTABLE STATEMENTS coverage's own static parse found in the file
+// — independent of whether anything ran, the signal that distinguishes a
+// file with real code nothing executed (Statements > 0, Tests and Static
+// both empty: genuinely uncovered) from a file with NO code to execute at
+// all (Statements == 0: an empty or comment-only __init__.py, benign, not
+// a finding). A *int, not int: nil means the reducer's own analysis2 call
+// failed for this file (rare — see pySelectionReducer) and the count is
+// UNKNOWN, which Index treats as "has statements" (the conservative
+// default: never silently swallow a real finding because one file's
+// analysis hiccuped).
 type pySelectionFile struct {
-	Tests  []string            `json:"tests"`
-	Lines  map[string][][2]int `json:"lines"`
-	Static [][2]int            `json:"static"`
+	Tests      []string            `json:"tests"`
+	Lines      map[string][][2]int `json:"lines"`
+	Static     [][2]int            `json:"static"`
+	Statements *int                `json:"statements"`
 }
 
 type pySelectionEvidenceFiles struct {
@@ -1255,7 +1287,7 @@ type pySelectionEvidenceFiles struct {
 }
 
 // parsePySelectionEvidence decodes ONE instrumented run's evidence into the
-// corral-selection-2 document, checking the format stamp BEFORE ever
+// corral-selection-3 document, checking the format stamp BEFORE ever
 // trusting the shape of what follows. This is the ONE reader of the format —
 // Select (one file) and Index (every file) both call it, rather than each
 // re-implementing the same decode.
@@ -1383,7 +1415,7 @@ func (pyPlugin) Select(evidence []byte, repoRoot, codePath, testPath string, tes
 	return sel, nil
 }
 
-// Index parses the same corral-selection-2 document Select reads, into a
+// Index parses the same corral-selection-3 document Select reads, into a
 // per-file readout for EVERY file the run measured: for each, the covering
 // tests mapped to how many of THAT file's lines each one executed. Shares
 // parsePySelectionEvidence with Select — no second reader of the format.
@@ -1426,9 +1458,35 @@ func (pyPlugin) Index(evidence []byte) (map[string]FileCoverage, error) {
 			}
 			tests[id] += n
 		}
-		out[p] = FileCoverage{Tests: tests, HasStatic: len(f.Static) > 0}
+		out[p] = FileCoverage{Tests: tests, HasStatic: len(f.Static) > 0, HasStatements: f.Statements == nil || *f.Statements > 0}
 	}
 	return out, nil
+}
+
+// IsLibraryCode implements lang.LibraryCodeClassifier: path is library code
+// when its directory chain contains a MEASURED __init__.py (flat layout —
+// mypkg/foo.py counts because mypkg/__init__.py does, and a nested
+// mypkg/sub/foo.py counts if EITHER mypkg/sub or mypkg itself has one), or
+// when it sits at least two segments under a top-level src/ directory (the
+// src/<pkg>/... layout, honoured even for a PEP 420 namespace package that
+// ships with NO __init__.py at all — the walk below would otherwise never
+// recognize one). docs/conf.py, setup.py, noxfile.py and scripts/*.py all
+// have neither and are correctly NOT library code.
+func (pyPlugin) IsLibraryCode(path string, hasPath func(string) bool) bool {
+	slash := filepath.ToSlash(path)
+	if parts := strings.Split(slash, "/"); len(parts) >= 3 && parts[0] == "src" {
+		return true
+	}
+	dir := slash
+	for {
+		dir = filepath.ToSlash(filepath.Dir(dir))
+		if dir == "." || dir == "/" || dir == "" {
+			return false
+		}
+		if hasPath(dir + "/__init__.py") {
+			return true
+		}
+	}
 }
 
 // collapseToFilesIfTooLong collapses ids (sorted node ids) to their

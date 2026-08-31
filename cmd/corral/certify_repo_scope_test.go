@@ -13,7 +13,7 @@ import (
 
 // pyEvidence is one instrumented run's answer for a repo where
 // tests/test_target.py (and nothing else) executes src/pkg/target.py.
-const pyEvidence = `{"format":"corral-selection-2","tests":2,"files":{` +
+const pyEvidence = `{"format":"corral-selection-3","tests":2,"files":{` +
 	`"src/pkg/target.py":{"tests":["tests/test_target.py::test_t"],"lines":{},"static":[]},` +
 	`"tests/test_target.py":{"tests":["tests/test_target.py::test_t"],"lines":{},"static":[]},` +
 	`"src/pkg/other.py":{"tests":["tests/test_other.py::test_o"],"lines":{},"static":[]},` +

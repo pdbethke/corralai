@@ -62,9 +62,15 @@ func TestWidenCandidacyPromotesAnUnpairedFileTheEvidenceCovers(t *testing.T) {
 // other headline case: excluded, but truthfully — "uncovered", not
 // "no-paired-test".
 func TestWidenCandidacyRelabelsAMeasuredZeroCoverageFileAsUncovered(t *testing.T) {
-	excl := []Exclusion{{Path: "pkg/dead.py", Reason: ReasonNoPairedTest}}
+	// pkg/__init__.py establishes pkg/ as an importable package — the
+	// library-code gate (founder ruling, below) requires it for a bare
+	// "pkg/..." path with no src/ prefix.
+	excl := []Exclusion{
+		{Path: "pkg/dead.py", Reason: ReasonNoPairedTest},
+		{Path: "pkg/__init__.py", Reason: ReasonNoPairedTest},
+	}
 	idx, ok := widenFixtureIndex(t, map[string]lang.FileCoverage{
-		"pkg/dead.py": {Tests: map[string]int{}},
+		"pkg/dead.py": {Tests: map[string]int{}, HasStatements: true},
 	})
 
 	gotCands, gotExcl, promoted := WidenCandidacyByEvidence(nil, excl, idx, ok)
@@ -72,8 +78,16 @@ func TestWidenCandidacyRelabelsAMeasuredZeroCoverageFileAsUncovered(t *testing.T
 	if len(gotCands) != 0 {
 		t.Fatalf("cands = %+v, want none — zero coverage never promotes", gotCands)
 	}
-	if len(gotExcl) != 1 || gotExcl[0].Reason != ReasonUncovered {
-		t.Fatalf("excl = %+v, want exactly one entry reasoned %q", gotExcl, ReasonUncovered)
+	// pkg/__init__.py itself was never measured (idx has no entry for it):
+	// absence of evidence, so it keeps its original reason untouched.
+	var dead *Exclusion
+	for i := range gotExcl {
+		if gotExcl[i].Path == "pkg/dead.py" {
+			dead = &gotExcl[i]
+		}
+	}
+	if dead == nil || dead.Reason != ReasonUncovered {
+		t.Fatalf("excl = %+v, want pkg/dead.py reasoned %q", gotExcl, ReasonUncovered)
 	}
 	if promoted != 0 {
 		t.Errorf("promoted = %d, want 0 — a relabel is not a promotion", promoted)
@@ -91,7 +105,7 @@ func TestWidenCandidacyRelabelsAMeasuredZeroCoverageFileAsUncovered(t *testing.T
 func TestWidenCandidacyRelabelsAnImportOnlyFileDistinctlyFromUncovered(t *testing.T) {
 	excl := []Exclusion{{Path: "src/pkg/__init__.py", Reason: ReasonNoPairedTest}}
 	idx, ok := widenFixtureIndex(t, map[string]lang.FileCoverage{
-		"src/pkg/__init__.py": {Tests: map[string]int{}, HasStatic: true},
+		"src/pkg/__init__.py": {Tests: map[string]int{}, HasStatic: true, HasStatements: true},
 	})
 
 	gotCands, gotExcl, promoted := WidenCandidacyByEvidence(nil, excl, idx, ok)
@@ -116,7 +130,7 @@ func TestWidenCandidacyRelabelsAnImportOnlyFileDistinctlyFromUncovered(t *testin
 func TestWidenCandidacyStillLabelsAGenuinelyDeadFileUncovered(t *testing.T) {
 	excl := []Exclusion{{Path: "src/pkg/deadmod.py", Reason: ReasonNoPairedTest}}
 	idx, ok := widenFixtureIndex(t, map[string]lang.FileCoverage{
-		"src/pkg/deadmod.py": {Tests: map[string]int{}, HasStatic: false},
+		"src/pkg/deadmod.py": {Tests: map[string]int{}, HasStatic: false, HasStatements: true},
 	})
 
 	gotCands, gotExcl, promoted := WidenCandidacyByEvidence(nil, excl, idx, ok)
@@ -129,6 +143,112 @@ func TestWidenCandidacyStillLabelsAGenuinelyDeadFileUncovered(t *testing.T) {
 	}
 	if promoted != 0 {
 		t.Errorf("promoted = %d, want 0", promoted)
+	}
+}
+
+// THE EMPTY-FILE DEFECT: a file with zero covering tests AND zero static
+// coverage is the SAME shape as a genuinely dead file — UNLESS coverage's
+// own static parse found no executable statement in it at all (a 0-byte or
+// comment-only file, the textbook case being tests/__init__.py). That is
+// benign — nothing to execute, nothing a test could cover — and must never
+// read as "uncovered", which every real Python repo's handful of empty
+// __init__.py files would otherwise inflate the headline finding with.
+func TestWidenCandidacyExcludesAnEmptyFileAsNoExecutableCode(t *testing.T) {
+	excl := []Exclusion{
+		{Path: "pkg/empty.py", Reason: ReasonNoPairedTest},
+		{Path: "pkg/__init__.py", Reason: ReasonNoPairedTest},
+	}
+	idx, ok := widenFixtureIndex(t, map[string]lang.FileCoverage{
+		"pkg/empty.py": {Tests: map[string]int{}, HasStatements: false},
+	})
+
+	gotCands, gotExcl, promoted := WidenCandidacyByEvidence(nil, excl, idx, ok)
+
+	if len(gotCands) != 0 {
+		t.Fatalf("cands = %+v, want none", gotCands)
+	}
+	var empty *Exclusion
+	for i := range gotExcl {
+		if gotExcl[i].Path == "pkg/empty.py" {
+			empty = &gotExcl[i]
+		}
+	}
+	if empty == nil || empty.Reason != ReasonNoExecutableCode {
+		t.Fatalf("excl = %+v, want pkg/empty.py reasoned %q", gotExcl, ReasonNoExecutableCode)
+	}
+	if empty.Reason == ReasonUncovered || empty.Reason == ReasonImportOnly {
+		t.Error("an empty file must never read as uncovered or import-only")
+	}
+	if promoted != 0 {
+		t.Errorf("promoted = %d, want 0", promoted)
+	}
+}
+
+// THE FOUNDER RULING: uncovered/import-only/no-executable-code apply to
+// LIBRARY CODE ONLY. A file with zero coverage that sits in NO importable
+// package (no __init__.py anywhere in its directory chain, no src/<pkg>/
+// layout) — docs/conf.py is the canonical example — keeps its ORDINARY
+// no-paired-test reason. It is still enumerated, still excluded, just
+// never counted among the loudest findings.
+func TestWidenCandidacyLeavesANonLibraryFileAtItsOrdinaryReason(t *testing.T) {
+	excl := []Exclusion{{Path: "docs/conf.py", Reason: ReasonNoPairedTest}}
+	idx, ok := widenFixtureIndex(t, map[string]lang.FileCoverage{
+		"docs/conf.py": {Tests: map[string]int{}, HasStatements: true},
+	})
+
+	gotCands, gotExcl, promoted := WidenCandidacyByEvidence(nil, excl, idx, ok)
+
+	if len(gotCands) != 0 {
+		t.Fatalf("cands = %+v, want none", gotCands)
+	}
+	if len(gotExcl) != 1 || gotExcl[0].Reason != ReasonNoPairedTest || gotExcl[0].Path != "docs/conf.py" {
+		t.Fatalf("excl = %+v, want docs/conf.py untouched at its ordinary reason %q — the evidence measured it, but it is not library code", gotExcl, ReasonNoPairedTest)
+	}
+	if promoted != 0 {
+		t.Errorf("promoted = %d, want 0", promoted)
+	}
+}
+
+// The library gate is scoped to a real package: src/pkg/dead.py (an
+// src/<pkg>/ layout — no __init__.py needed, PEP 420 namespace packages
+// ship without one) IS library code, and a genuine zero-coverage finding
+// for it stays the loud ReasonUncovered.
+func TestWidenCandidacyStillLabelsAnSrcLayoutLibraryFileUncovered(t *testing.T) {
+	excl := []Exclusion{{Path: "src/pkg/dead.py", Reason: ReasonNoPairedTest}}
+	idx, ok := widenFixtureIndex(t, map[string]lang.FileCoverage{
+		"src/pkg/dead.py": {Tests: map[string]int{}, HasStatements: true},
+	})
+
+	_, gotExcl, _ := WidenCandidacyByEvidence(nil, excl, idx, ok)
+
+	if len(gotExcl) != 1 || gotExcl[0].Reason != ReasonUncovered {
+		t.Fatalf("excl = %+v, want src/pkg/dead.py reasoned %q", gotExcl, ReasonUncovered)
+	}
+}
+
+// A FLAT-layout library file (mypkg/dead.py, WITH mypkg/__init__.py
+// present as its own enumerated entry) is also library code, and a genuine
+// zero-coverage finding for it stays ReasonUncovered — the founder's own
+// worked example.
+func TestWidenCandidacyStillLabelsAFlatLayoutLibraryFileUncovered(t *testing.T) {
+	excl := []Exclusion{
+		{Path: "mypkg/dead.py", Reason: ReasonNoPairedTest},
+		{Path: "mypkg/__init__.py", Reason: ReasonNoPairedTest},
+	}
+	idx, ok := widenFixtureIndex(t, map[string]lang.FileCoverage{
+		"mypkg/dead.py": {Tests: map[string]int{}, HasStatements: true},
+	})
+
+	_, gotExcl, _ := WidenCandidacyByEvidence(nil, excl, idx, ok)
+
+	var dead *Exclusion
+	for i := range gotExcl {
+		if gotExcl[i].Path == "mypkg/dead.py" {
+			dead = &gotExcl[i]
+		}
+	}
+	if dead == nil || dead.Reason != ReasonUncovered {
+		t.Fatalf("excl = %+v, want mypkg/dead.py reasoned %q", gotExcl, ReasonUncovered)
 	}
 }
 

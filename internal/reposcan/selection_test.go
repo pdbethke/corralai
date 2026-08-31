@@ -61,7 +61,7 @@ func TestSelectionEvidenceRunFailureIsDisclosedPerFile(t *testing.T) {
 
 func TestSelectionEvidenceForNarrowsFromRecordedEvidence(t *testing.T) {
 	py, _ := lang.ByName("python")
-	raw := `{"format":"corral-selection-2","tests":1,"files":{` +
+	raw := `{"format":"corral-selection-3","tests":1,"files":{` +
 		`"pkg/a.py":{"tests":["tests/test_a.py::test_x"],"lines":{},"static":[]},` +
 		`"tests/test_a.py":{"tests":["tests/test_a.py::test_x"],"lines":{},"static":[]}}}`
 	ev := CollectSelectionEvidence(context.Background(), &fakeRunner{out: raw}, nil, py, []string{"pytest"}, nil)
@@ -175,7 +175,7 @@ func TestSelectionEvidenceEmptyOutputWithoutDetailedContractIsStillNotRan(t *tes
 // disclosed, naming the likely cause.
 func TestSelectionEvidencePathologicalDocumentFallsBack(t *testing.T) {
 	py, _ := lang.ByName("python")
-	raw := `{"format":"corral-selection-2","tests":1,"files":{` +
+	raw := `{"format":"corral-selection-3","tests":1,"files":{` +
 		`"tests/test_a.py":{"tests":["tests/test_a.py::test_x"],"lines":{},"static":[]}}}`
 	ev := CollectSelectionEvidence(context.Background(), &fakeRunner{out: raw}, nil, py, []string{"pytest"}, nil)
 	if ev.Ran {
@@ -190,7 +190,7 @@ func TestSelectionEvidencePathologicalDocumentFallsBack(t *testing.T) {
 // degenerate form and must be treated identically.
 func TestSelectionEvidenceEmptyDocumentFallsBack(t *testing.T) {
 	py, _ := lang.ByName("python")
-	raw := `{"format":"corral-selection-2","tests":0,"files":{}}`
+	raw := `{"format":"corral-selection-3","tests":0,"files":{}}`
 	ev := CollectSelectionEvidence(context.Background(), &fakeRunner{out: raw}, nil, py, []string{"pytest"}, nil)
 	if ev.Ran {
 		t.Fatalf("got Ran=true, want false: %+v", ev)
@@ -201,7 +201,7 @@ func TestSelectionEvidenceEmptyDocumentFallsBack(t *testing.T) {
 // usable, no pathology note. Guards the fix above from over-triggering.
 func TestSelectionEvidenceGoodDocumentIsUnchanged(t *testing.T) {
 	py, _ := lang.ByName("python")
-	raw := `{"format":"corral-selection-2","tests":1,"files":{` +
+	raw := `{"format":"corral-selection-3","tests":1,"files":{` +
 		`"pkg/a.py":{"tests":["tests/test_a.py::test_x"],"lines":{},"static":[]},` +
 		`"tests/test_a.py":{"tests":["tests/test_a.py::test_x"],"lines":{},"static":[]}}}`
 	ev := CollectSelectionEvidence(context.Background(), &fakeRunner{out: raw}, nil, py, []string{"pytest"}, nil)
@@ -301,7 +301,7 @@ func stringSlicesEqual(a, b []string) bool {
 // them on the floor.
 func TestCollectSelectionEvidenceThreadsSourceRootsIntoInstrument(t *testing.T) {
 	py, _ := lang.ByName("python")
-	r := &fakeRunner{out: `{"format":"corral-selection-2","tests":1,"files":{` +
+	r := &fakeRunner{out: `{"format":"corral-selection-3","tests":1,"files":{` +
 		`"src/pkg/a.py":{"tests":["tests/test_a.py::test_x"],"lines":{},"static":[]}}}`}
 	sourcePaths := []string{"src/pkg/a.py", "tests/test_a.py"}
 	ev := CollectSelectionEvidence(context.Background(), r, nil, py, []string{"pytest"}, sourcePaths)
@@ -325,7 +325,7 @@ func TestCollectSelectionEvidenceThreadsSourceRootsIntoInstrument(t *testing.T) 
 // is byte-identical to plain Instrument's bare --cov.
 func TestCollectSelectionEvidenceWithNoSourcePathsFallsBackToBareCov(t *testing.T) {
 	py, _ := lang.ByName("python")
-	r := &fakeRunner{out: `{"format":"corral-selection-2","tests":1,"files":{` +
+	r := &fakeRunner{out: `{"format":"corral-selection-3","tests":1,"files":{` +
 		`"pkg/a.py":{"tests":["tests/test_a.py::test_x"],"lines":{},"static":[]}}}`}
 	CollectSelectionEvidence(context.Background(), r, nil, py, []string{"pytest"}, nil)
 	script := r.got[2]

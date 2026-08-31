@@ -130,6 +130,21 @@ const (
 	// against — but a different, honest claim, counted separately. The
 	// exact string is load-bearing, same as ReasonUncovered's.
 	ReasonImportOnly = "imported at load time — no test exercises it directly"
+	// ReasonNoExecutableCode marks a source file the selection evidence
+	// positively measured with ZERO covering tests AND zero coverage
+	// outside a test either — the SAME shape ReasonUncovered reads — but
+	// whose file coverage.py's own static parse found to contain NO
+	// executable statement at all (see lang.FileCoverage.HasStatements): a
+	// genuinely empty file, or one that is comment-only. There is nothing
+	// to execute, nothing a test could cover, and nothing a test could be
+	// blamed for missing — a 0-byte tests/__init__.py is the textbook
+	// case, and every real Python repo carries several such files. Calling
+	// this "uncovered" would be a nonsense claim (there IS no test-vs-code
+	// question to answer) that inflates the headline finding on literally
+	// every scan. Benign: still excluded (there is nothing to grade), but
+	// never counted alongside ReasonUncovered/ReasonImportOnly, and never
+	// worded as though the tests failed at anything.
+	ReasonNoExecutableCode = "no executable code"
 )
 
 // skipDirs are never walked: dependency, build-output and VCS trees are not
@@ -473,11 +488,26 @@ func WidenCandidacyByEvidence(cands []Candidate, excl []Exclusion, idx EvidenceI
 	}
 
 	for i := range cands {
-		if n, _, _, measured := idx.CoverageFor(cands[i].Path); measured {
+		if n, _, _, _, measured := idx.CoverageFor(cands[i].Path); measured {
 			v := n
 			cands[i].CoveringTests = &v
 		}
 	}
+
+	// hasPath is lang.LibraryCodeClassifier's file-existence oracle: the
+	// repo's own enumerated inventory (every candidate AND every exclusion
+	// — cands/excl together are every source Enumerate ever saw) UNIONED
+	// with whatever the evidence itself measured, so a package __init__.py
+	// is found whether it was paired, excluded, or simply present in the
+	// coverage data — never a second filesystem read.
+	known := make(map[string]bool, len(cands)+len(excl))
+	for _, c := range cands {
+		known[c.Path] = true
+	}
+	for _, e := range excl {
+		known[e.Path] = true
+	}
+	hasPath := func(p string) bool { return known[p] || idx.Measured(p) }
 
 	kept := excl[:0:0]
 	var promoted int
@@ -486,21 +516,14 @@ func WidenCandidacyByEvidence(cands []Candidate, excl []Exclusion, idx EvidenceI
 			kept = append(kept, e)
 			continue
 		}
-		n, mostCovering, hasStatic, measured := idx.CoverageFor(e.Path)
+		n, mostCovering, hasStatic, hasStatements, measured := idx.CoverageFor(e.Path)
 		switch {
 		case !measured:
 			// Absence of evidence is not evidence of absence: this file's
 			// only honest reason remains "no filename convention predicted a
 			// test", not a claim the evidence never actually made.
 			kept = append(kept, e)
-		case n == 0 && hasStatic:
-			// Executed, just never by a test directly (import/module-load
-			// time only) — a real, different finding from ReasonUncovered.
-			// See ReasonImportOnly's own doc.
-			kept = append(kept, Exclusion{Path: e.Path, Reason: ReasonImportOnly})
-		case n == 0:
-			kept = append(kept, Exclusion{Path: e.Path, Reason: ReasonUncovered})
-		default:
+		case n > 0:
 			v := n
 			langName := ""
 			if p, ok := lang.Detect(e.Path); ok {
@@ -513,11 +536,55 @@ func WidenCandidacyByEvidence(cands []Candidate, excl []Exclusion, idx EvidenceI
 				CoveringTests:    &v,
 			})
 			promoted++
+		case !isLibraryCode(e.Path, hasPath):
+			// Founder ruling: uncovered/import-only/no-executable-code are
+			// the loudest findings a mutation audit produces, and they must
+			// speak only about the library a repo SHIPS — docs config, a
+			// setup/build script, a one-off automation script all measure
+			// real, but the finding would dilute the headline on every real
+			// repo, which carries several. The file is still ENUMERATED and
+			// still excluded, under its ORIGINAL, honest reason — this is
+			// promotion's OWN gate too (n > 0, above), never invoked for a
+			// non-library file, so a covered non-library file still becomes
+			// a candidate; only the negative claims are scoped.
+			kept = append(kept, e)
+		case !hasStatements:
+			// Coverage's own static parse found NOTHING to execute — an
+			// empty or comment-only file (a 0-byte __init__.py is the
+			// textbook case). There is no code for a test to have covered,
+			// so this is benign, not a scolding "your tests are bad" claim.
+			kept = append(kept, Exclusion{Path: e.Path, Reason: ReasonNoExecutableCode})
+		case hasStatic:
+			// Executed, just never by a test directly (import/module-load
+			// time only) — a real, different finding from ReasonUncovered.
+			// See ReasonImportOnly's own doc.
+			kept = append(kept, Exclusion{Path: e.Path, Reason: ReasonImportOnly})
+		default:
+			kept = append(kept, Exclusion{Path: e.Path, Reason: ReasonUncovered})
 		}
 	}
 
 	sort.Slice(cands, func(i, j int) bool { return cands[i].Path < cands[j].Path })
 	return cands, kept, promoted
+}
+
+// isLibraryCode asks p's OPTIONAL lang.LibraryCodeClassifier, when it
+// implements one, whether path is library code — see that interface's own
+// doc for the rule and why it exists. A plugin that does not implement it
+// (every language except python today), or a path lang.Detect cannot
+// resolve at all, is treated as library code: byte-identical to before
+// this distinction existed, never a NEW exclusion for a language this
+// package has no opinion about.
+func isLibraryCode(path string, hasPath func(string) bool) bool {
+	p, ok := lang.Detect(path)
+	if !ok {
+		return true
+	}
+	lc, ok := p.(lang.LibraryCodeClassifier)
+	if !ok {
+		return true
+	}
+	return lc.IsLibraryCode(path, hasPath)
 }
 
 // demoteAmbiguousPairings enforces, as a global property (not a per-plugin

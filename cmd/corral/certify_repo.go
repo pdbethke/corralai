@@ -2188,7 +2188,7 @@ const preflightTimeout = 5 * time.Minute
 //
 // The Python reducer runs inside the instrumented shell and emits, per
 // file, the node ids that executed it plus each test's line ranges and the
-// import-time ranges (corral-selection-2), measured 2026-08-30: flask
+// import-time ranges (corral-selection-3), measured 2026-08-30: flask
 // 1,331,508 bytes, requests 1,053,331 bytes (the unreduced `coverage json
 // --show-contexts` for the same flask run was 411 MB — see
 // docs/design/test-selection.md). 64 MiB is ~50× that; 15 min is ~11×
@@ -3081,12 +3081,22 @@ func selectionRuleBreakdown(rules map[string]int) string {
 func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 	marker := ""
 	switch {
+	case f.ImportOnly:
+		// Checked BEFORE the plain Uncovered case: ImportOnly implies it,
+		// and the two must never share a marker — the file WAS executed
+		// (at import time), just never by a test directly, and calling that
+		// "UNCOVERED — no test executes this file" would be false in the
+		// sense a reader checks it against. Reuses reposcan.ReasonImportOnly
+		// verbatim rather than inventing a second wording for the same claim.
+		marker = "  [" + reposcan.ReasonImportOnly + "]"
 	case f.Uncovered:
-		// FIRST, and it withholds the rate below: the selection evidence
-		// found NO test executing this file, so its kill rate measures
-		// nothing. Printing "0.00" here would read as "your tests caught
-		// nothing" — an accusation about a measurement that was never made,
-		// when the real finding is that the file is untested outright.
+		// FIRST (among the remaining cases), and it withholds the rate
+		// below: the selection evidence found NO test executing this file
+		// AT ALL — genuinely dead, no coverage of any kind — so its kill
+		// rate measures nothing. Printing "0.00" here would read as "your
+		// tests caught nothing" — an accusation about a measurement that
+		// was never made, when the real finding is that the file is
+		// untested outright.
 		marker = "  [UNCOVERED — no test executes this file]"
 	case f.TimedOut:
 		marker = "  [TIMED OUT — pool did not converge]"
@@ -3146,6 +3156,11 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 		fmt.Fprintf(w, "   graded by %d of %d tests (%s; no mutant graded)", f.SelectedTests, f.SuiteTests, f.SelectionMethod)
 	case f.SelectionMethod != "" && !f.Uncovered:
 		fmt.Fprintf(w, "   graded by %d of %d tests (%s)", f.SelectedTests, f.SuiteTests, f.SelectionMethod)
+	case f.SelectionMethod != "" && f.ImportOnly:
+		// Checked before the plain Uncovered case, same reason as the
+		// marker above: "none execute it" would be the same false claim in
+		// a different sentence for a file the evidence measured executing.
+		fmt.Fprintf(w, "   graded by the tests for this file — %s (%s)", reposcan.ReasonImportOnly, f.SelectionMethod)
 	case f.SelectionMethod != "" && f.Uncovered:
 		// The uncovered line used to fall through to nothing — the ONE line
 		// where the mode is most load-bearing was the one line that said
@@ -3331,17 +3346,43 @@ func printRepoReport(w io.Writer, r reposcan.RepoReport, nothingInScope bool, mi
 	case r.Audited == 0:
 		fmt.Fprintln(w, "  COULD-NOT-GRADE: nothing was audited; no score is reported.")
 	case r.GradedFiles == 0:
-		// Audited, but nothing graded: every audited file is UNCOVERED. There
-		// is no mean to print (KillRate is NaN by construction) and a 0.00
-		// here would be the withheld number arriving as a repo-wide verdict.
-		fmt.Fprintf(w, "  NO GRADED FILE: all %d audited file(s) are UNCOVERED — no test executes them, so no kill rate was measured\n", r.Audited)
+		// Audited, but nothing graded: every audited file is either
+		// genuinely UNCOVERED or import-only (see ReasonImportOnly's own
+		// doc) — never claim the loudest word for a file the evidence
+		// measured executing. There is no mean to print (KillRate is NaN by
+		// construction) and a 0.00 here would be the withheld number
+		// arriving as a repo-wide verdict.
+		switch {
+		case r.ImportOnlyFiles == r.UncoveredFiles:
+			// Every ungraded file is import-only — none genuinely dead.
+			fmt.Fprintf(w, "  NO GRADED FILE: all %d audited file(s) were %s, so no kill rate was measured\n", r.Audited, reposcan.ReasonImportOnly)
+		case r.ImportOnlyFiles == 0:
+			// The ORIGINAL claim, byte-identical: no import-only files at
+			// all, so nothing here changed from before this distinction
+			// existed.
+			fmt.Fprintf(w, "  NO GRADED FILE: all %d audited file(s) are UNCOVERED — no test executes them, so no kill rate was measured\n", r.Audited)
+		default:
+			fmt.Fprintf(w, "  NO GRADED FILE: all %d audited file(s) are ungraded — %d UNCOVERED (no test executes them at all), %d %s — so no kill rate was measured\n",
+				r.Audited, r.UncoveredFiles-r.ImportOnlyFiles, r.ImportOnlyFiles, reposcan.ReasonImportOnly)
+		}
 	case r.UncoveredFiles > 0:
 		// The denominator is stated whenever it differs from Audited: the
 		// mean is over the files that were actually graded, and a reader
 		// dividing by "audited" would get a different number than the one
-		// printed.
-		fmt.Fprintf(w, "  kill rate %.2f over %d graded file(s) — %d audited, %d UNCOVERED and excluded from the mean (%.0f%% of %d candidates audited)\n",
-			r.KillRate, r.GradedFiles, r.Audited, r.UncoveredFiles, 100*r.AuditedFraction(), r.Candidates)
+		// printed. Same UNCOVERED/import-only split as above, for the SAME
+		// reason — this line's %d UNCOVERED must never include a file the
+		// evidence measured executing.
+		switch {
+		case r.ImportOnlyFiles == r.UncoveredFiles:
+			fmt.Fprintf(w, "  kill rate %.2f over %d graded file(s) — %d audited, %d %s and excluded from the mean (%.0f%% of %d candidates audited)\n",
+				r.KillRate, r.GradedFiles, r.Audited, r.UncoveredFiles, reposcan.ReasonImportOnly, 100*r.AuditedFraction(), r.Candidates)
+		case r.ImportOnlyFiles == 0:
+			fmt.Fprintf(w, "  kill rate %.2f over %d graded file(s) — %d audited, %d UNCOVERED and excluded from the mean (%.0f%% of %d candidates audited)\n",
+				r.KillRate, r.GradedFiles, r.Audited, r.UncoveredFiles, 100*r.AuditedFraction(), r.Candidates)
+		default:
+			fmt.Fprintf(w, "  kill rate %.2f over %d graded file(s) — %d audited, %d excluded from the mean (%d UNCOVERED, %d %s) (%.0f%% of %d candidates audited)\n",
+				r.KillRate, r.GradedFiles, r.Audited, r.UncoveredFiles, r.UncoveredFiles-r.ImportOnlyFiles, r.ImportOnlyFiles, reposcan.ReasonImportOnly, 100*r.AuditedFraction(), r.Candidates)
+		}
 	default:
 		fmt.Fprintf(w, "  kill rate %.2f over %d audited file(s) (%.0f%% of %d candidates)\n",
 			r.KillRate, r.Audited, 100*r.AuditedFraction(), r.Candidates)
@@ -3402,8 +3443,23 @@ func printRepoReport(w io.Writer, r reposcan.RepoReport, nothingInScope bool, mi
 	// executes them — so they are named inside that clause, not as a third
 	// bucket that would not add up.
 	if r.Audited > 0 {
-		fmt.Fprintf(w, "  test selection: %d file(s) graded by the tests that execute them (%d of those UNCOVERED — no test executes them at all), %d by the whole suite\n",
-			r.SelectedFiles, r.UncoveredFiles, r.WholeSuiteFiles)
+		switch {
+		case r.ImportOnlyFiles == 0:
+			// Byte-identical to before this distinction existed.
+			fmt.Fprintf(w, "  test selection: %d file(s) graded by the tests that execute them (%d of those UNCOVERED — no test executes them at all), %d by the whole suite\n",
+				r.SelectedFiles, r.UncoveredFiles, r.WholeSuiteFiles)
+		case r.UncoveredFiles == r.ImportOnlyFiles:
+			// None genuinely dead — the word UNCOVERED must not appear at
+			// all, not even as a truthful "0 of those".
+			fmt.Fprintf(w, "  test selection: %d file(s) graded by the tests that execute them (%d %s), %d by the whole suite\n",
+				r.SelectedFiles, r.ImportOnlyFiles, reposcan.ReasonImportOnly, r.WholeSuiteFiles)
+		default:
+			// Split the same way the summary lines above do: the genuinely
+			// dead count must not include a file the evidence measured
+			// executing at import time.
+			fmt.Fprintf(w, "  test selection: %d file(s) graded by the tests that execute them (%d of those UNCOVERED — no test executes them at all, %d %s), %d by the whole suite\n",
+				r.SelectedFiles, r.UncoveredFiles-r.ImportOnlyFiles, r.ImportOnlyFiles, reposcan.ReasonImportOnly, r.WholeSuiteFiles)
+		}
 	}
 	// Sorted, like printExclusions: map iteration order is random, and a
 	// report a later slice signs and anchors has to be byte-reproducible.
@@ -3469,9 +3525,14 @@ func printRepoReport(w io.Writer, r reposcan.RepoReport, nothingInScope bool, mi
 	// the two never disagree about what happened: r.Weakest is empty in both
 	// of those states anyway, but the guard keeps the intent explicit.
 	if minKillRate != nil && !nothingInScope && r.Audited > 0 {
-		var breaches, uncovered []reposcan.WeakFile
+		var breaches, uncovered, importOnly []reposcan.WeakFile
 		for _, f := range r.Weakest {
 			switch {
+			case f.ImportOnly:
+				// Checked before the plain Uncovered case: both fail the
+				// gate identically (see repoScanExitCode), but only the
+				// genuinely dead ones get the word UNCOVERED.
+				importOnly = append(importOnly, f)
 			case f.Uncovered:
 				uncovered = append(uncovered, f)
 			case f.KillRate < *minKillRate:
@@ -3493,6 +3554,15 @@ func printRepoReport(w io.Writer, r reposcan.RepoReport, nothingInScope bool, mi
 			fmt.Fprintf(w, "  UNCOVERED: %d file(s) no test executes at all:\n", len(uncovered))
 			for _, f := range uncovered {
 				fmt.Fprintf(w, "    %s: UNCOVERED — no test executes it (fails --min-kill-rate)\n", f.Path)
+			}
+		}
+		// Same disposition (fails the gate, no rate), different, honest
+		// claim: reuses reposcan.ReasonImportOnly verbatim rather than a
+		// second wording for the same finding.
+		if len(importOnly) > 0 {
+			fmt.Fprintf(w, "  IMPORT-ONLY: %d file(s) %s (fails --min-kill-rate):\n", len(importOnly), reposcan.ReasonImportOnly)
+			for _, f := range importOnly {
+				fmt.Fprintf(w, "    %s: %s (fails --min-kill-rate)\n", f.Path, reposcan.ReasonImportOnly)
 			}
 		}
 	}
@@ -4267,6 +4337,14 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 	// did the pool's own test demonstrate a real, catchable bug (corral's
 	// strongest claim), or did it try and prove nothing.
 	switch {
+	case v.ImportOnly:
+		// Checked before the plain Uncovered case: the file WAS executed,
+		// at import time, just never by a test directly — printing
+		// "UNCOVERED — no test executes it" here is exactly the false
+		// claim this branch exists to stop, THE first place it reached an
+		// operator (this note prints minutes before the final report).
+		// Reuses reposcan.ReasonImportOnly verbatim.
+		l.note("%s: %s (rate withheld)\n", j.Path, reposcan.ReasonImportOnly)
 	case v.Uncovered:
 		// The live note is a reader too, and the first one an operator sees.
 		// No test executes this file, so its rate measures nothing — printing

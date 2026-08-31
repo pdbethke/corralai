@@ -50,7 +50,10 @@ func TestCertifyRepoDryRunNeverWidensCandidacyByEvidence(t *testing.T) {
 // executed by tests/test_smoke.py, so it becomes a candidate "paired by
 // evidence"; mypkg/orphan.py is measured and executes under NO test, so it
 // is excluded "uncovered — no test executes this file" rather than the
-// name-shaped "no-paired-test" — and the summary counts all three lanes.
+// name-shaped "no-paired-test"; mypkg/__init__.py is EMPTY (the fixture's
+// own doc: "" — zero bytes), so it is excluded "no executable code",
+// NEVER counted alongside the genuine uncovered finding — and the summary
+// counts every lane.
 func TestCertifyRepoEvidenceWidensCandidacyAndNamesUncoveredTruthfully(t *testing.T) {
 	skipWithoutPythonCoverage(t)
 	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
@@ -78,8 +81,17 @@ func TestCertifyRepoEvidenceWidensCandidacyAndNamesUncoveredTruthfully(t *testin
 	if !strings.Contains(s, "excluded mypkg/orphan.py (uncovered — no test executes this file)") {
 		t.Errorf("mypkg/orphan.py must be excluded under the truthful uncovered reason, not no-paired-test:\n%s", s)
 	}
-	if !strings.Contains(s, "evidence-paired 1 · name-paired 0 · uncovered 2") {
-		t.Errorf("missing the candidacy summary line with the right tally:\n%s", s)
+	// mypkg/__init__.py is EMPTY: coverage's own static parse finds no
+	// executable statement in it, so it must NEVER be counted alongside
+	// mypkg/orphan.py's genuine uncovered finding.
+	if !strings.Contains(s, "excluded mypkg/__init__.py (no executable code)") {
+		t.Errorf("an empty __init__.py must be excluded as no-executable-code, not uncovered:\n%s", s)
+	}
+	if strings.Contains(s, "excluded mypkg/__init__.py (uncovered") {
+		t.Errorf("an empty __init__.py must never read as uncovered:\n%s", s)
+	}
+	if !strings.Contains(s, "evidence-paired 1 · name-paired 0 · uncovered 1 · import-only 0") {
+		t.Errorf("missing the candidacy summary line with the right tally — exactly ONE genuine uncovered file:\n%s", s)
 	}
 }
 

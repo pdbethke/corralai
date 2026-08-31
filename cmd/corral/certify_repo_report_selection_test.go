@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/reposcan"
@@ -33,6 +34,28 @@ func TestPrintWeakFileNamesTheMeasurement(t *testing.T) {
 	// where the mode is most load-bearing was the one line that said nothing.
 	if !strings.Contains(b.String(), "graded by the tests for this file — none execute it (coverage-context)") {
 		t.Errorf("uncovered must still say which measurement it is: %q", b.String())
+	}
+
+	// THE RESIDUAL: a paired, import-only file (evidence recorded static
+	// coverage but zero test contexts — e.g. a package __init__.py) must
+	// NEVER print the word UNCOVERED, though its rate is withheld exactly
+	// the same way. Reuses reposcan.ReasonImportOnly verbatim.
+	b.Reset()
+	printWeakFile(&b, reposcan.WeakFile{Path: "pkg/__init__.py", Uncovered: true, ImportOnly: true, SelectionMethod: "coverage-context"})
+	if strings.Contains(b.String(), "UNCOVERED") {
+		t.Errorf("an import-only file must never print UNCOVERED: %q", b.String())
+	}
+	if !strings.Contains(b.String(), "  ["+reposcan.ReasonImportOnly+"]") {
+		t.Errorf("missing the import-only marker, verbatim: %q", b.String())
+	}
+	if strings.Contains(b.String(), "0.00") {
+		t.Errorf("import-only must also withhold the rate, never print 0.00: %q", b.String())
+	}
+	if !strings.Contains(b.String(), "withheld") {
+		t.Errorf("import-only must withhold the rate, same as uncovered: %q", b.String())
+	}
+	if !strings.Contains(b.String(), "graded by the tests for this file — "+reposcan.ReasonImportOnly+" (coverage-context)") {
+		t.Errorf("import-only must say which measurement it is, in its own words: %q", b.String())
 	}
 
 	// A per-mutant run whose every mutant was rejected by the compile gate
@@ -85,6 +108,56 @@ func TestMinKillRateFailsAnUncoveredFile(t *testing.T) {
 	r := reposcan.RepoReport{Audited: 1, GradedFiles: 1, Weakest: []reposcan.WeakFile{{Path: "pkg/u.py", Uncovered: true, KillRate: 0.9}}}
 	if code := repoScanExitCode(r, false, &min, nil); code != 1 {
 		t.Errorf("exit %d, want 1: an uncovered file under a --min-kill-rate gate is a failure, not a pass on a withheld number", code)
+	}
+}
+
+// The same gate must fail an import-only file identically — it has no rate
+// to satisfy the threshold either. Only the REPORTED WORDING differs
+// elsewhere (printWeakFile, printRepoReport); the gate itself is unchanged.
+func TestMinKillRateFailsAnImportOnlyFile(t *testing.T) {
+	min := 0.5
+	r := reposcan.RepoReport{Audited: 1, GradedFiles: 1, Weakest: []reposcan.WeakFile{{Path: "pkg/__init__.py", Uncovered: true, ImportOnly: true, KillRate: 0.9}}}
+	if code := repoScanExitCode(r, false, &min, nil); code != 1 {
+		t.Errorf("exit %d, want 1: an import-only file under a --min-kill-rate gate is a failure, not a pass on a withheld number", code)
+	}
+}
+
+// THE RESIDUAL, at the repo-report level: printRepoReport's NO-GRADED-FILE
+// and kill-rate summary lines must not call an all-import-only (or
+// mixed) audit UNCOVERED either.
+func TestPrintRepoReportDistinguishesImportOnlyInSummaryLines(t *testing.T) {
+	// Every audited file import-only: the ORIGINAL "all N audited file(s)
+	// are UNCOVERED" wording must not appear at all.
+	var b bytes.Buffer
+	r := reposcan.RepoReport{Audited: 2, GradedFiles: 0, UncoveredFiles: 2, ImportOnlyFiles: 2}
+	printRepoReport(&b, r, false, nil, nil, nil, time.Time{})
+	if strings.Contains(b.String(), "UNCOVERED") {
+		t.Errorf("all-import-only audit must never print UNCOVERED: %q", b.String())
+	}
+	if !strings.Contains(b.String(), "NO GRADED FILE: all 2 audited file(s) were "+reposcan.ReasonImportOnly) {
+		t.Errorf("missing the all-import-only NO GRADED FILE line, verbatim: %q", b.String())
+	}
+
+	// A genuinely all-uncovered audit (ImportOnlyFiles == 0) is BYTE
+	// IDENTICAL to before this distinction existed.
+	b.Reset()
+	r = reposcan.RepoReport{Audited: 2, GradedFiles: 0, UncoveredFiles: 2, ImportOnlyFiles: 0}
+	printRepoReport(&b, r, false, nil, nil, nil, time.Time{})
+	if !strings.Contains(b.String(), "NO GRADED FILE: all 2 audited file(s) are UNCOVERED — no test executes them, so no kill rate was measured") {
+		t.Errorf("a genuinely all-uncovered audit must keep the exact original wording: %q", b.String())
+	}
+
+	// A mix: some graded, some genuinely uncovered, some import-only — the
+	// %d UNCOVERED in the summary line must count ONLY the genuinely dead
+	// ones.
+	b.Reset()
+	r = reposcan.RepoReport{Audited: 4, GradedFiles: 2, KillRate: 0.5, UncoveredFiles: 2, ImportOnlyFiles: 1, Candidates: 4}
+	printRepoReport(&b, r, false, nil, nil, nil, time.Time{})
+	if !strings.Contains(b.String(), "1 UNCOVERED") {
+		t.Errorf("mixed audit: the UNCOVERED count must exclude the import-only file, got: %q", b.String())
+	}
+	if !strings.Contains(b.String(), "1 "+reposcan.ReasonImportOnly) {
+		t.Errorf("mixed audit: missing the import-only count, verbatim: %q", b.String())
 	}
 }
 

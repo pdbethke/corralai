@@ -557,10 +557,36 @@ type Verdict struct {
 	// Concurrency discloses how many private trees scored this file at
 	// once, or why it only got one. See the Concurrency type's doc.
 	Concurrency Concurrency
-	// Uncovered: the evidence run found no test executing this file. The
-	// dev kill rate is WITHHELD by every reader (report, ledger, gate) —
-	// the survivors are real, the 0.00 is not a measurement.
-	Uncovered  bool
+	// Uncovered: the evidence run found no test executing this file — TRUE
+	// for BOTH shapes ReasonImportOnly's own doc distinguishes (genuinely
+	// dead, or executed only at import time), because BOTH withhold the
+	// same way: the dev kill rate is WITHHELD by every reader (report,
+	// ledger, gate) regardless of which shape it is — the survivors are
+	// real, the 0.00 is not a measurement either way. Every existing
+	// consumer of this flag (gating, NULL-ing the ledger's kill_rate,
+	// GradedFiles' denominator) is therefore UNCHANGED by ImportOnly's
+	// addition below; ImportOnly only ever REFINES which text a reader
+	// prints, never whether a rate is withheld.
+	Uncovered bool
+	// ImportOnly is Uncovered's refinement: true when the file was ALSO
+	// executed — coverage recorded real lines for it, at import/module-load
+	// time (a package __init__.py, a module-level constant) — just never by
+	// a test directly (pytest-cov attributes import-time execution to no
+	// test's own dynamic context). Always false when Uncovered is false;
+	// when Uncovered is true, distinguishes "genuinely nothing executed
+	// this" (ImportOnly false — the ORIGINAL uncovered claim) from
+	// "executed, just not by a test" (ImportOnly true — a DIFFERENT, honest
+	// claim: reporting the latter as plain "UNCOVERED — no test executes
+	// this file" is false in the sense a reader checks it against, and hits
+	// on essentially every Python repo's __init__.py). Every reader that
+	// PRINTS the word UNCOVERED must check this first and substitute
+	// reposcan.ReasonImportOnly's exact text instead — see printWeakFile,
+	// the live per-file note, and printRepoReport's NO-GRADED-FILE/
+	// KILL-RATE-BREACH sections. Every reader that only GATES on Uncovered
+	// (withhold the rate, fail --min-kill-rate, exclude from GradedFiles)
+	// needs no change at all: ImportOnly implies Uncovered, so the
+	// existing `if v.Uncovered` checks already catch it.
+	ImportOnly bool
 	RecordID   int64  // the signed build-record id (0 if signing skipped/failed)
 	RecordHead string // the record's ledger head
 	// TimedOut is true when this verdict came from RunDeadline's backstop

@@ -47,7 +47,7 @@ func TestPythonInstrumentDerivesFromOperatorCommand(t *testing.T) {
 		`[ "$rc" -eq 0 ] || exit "$rc"`,
 		// The evidence is reduced INSIDE the run to {file: [node ids]} — the
 		// full coverage-json with contexts was 411 MB on flask (#165).
-		`"format": "corral-selection-2"`,
+		`"format": "corral-selection-3"`,
 		"contexts_by_lineno",
 	} {
 		if !strings.Contains(script, want) {
@@ -90,7 +90,7 @@ func TestPythonInstrumentSourceRootsEmitsPerRootCovFlags(t *testing.T) {
 	for _, want := range []string{
 		"COVERAGE_CORE=ctrace COVERAGE_FILE=",
 		`[ "$rc" -eq 0 ] || exit "$rc"`,
-		`"format": "corral-selection-2"`,
+		`"format": "corral-selection-3"`,
 		"--cov-context=test --cov-report= -p no:cacheprovider",
 	} {
 		if !strings.Contains(script, want) {
@@ -215,7 +215,7 @@ func TestPythonSelectAbsentTestFileIsAnError(t *testing.T) {
 // coverage-json this used to parse — is refused rather than misread.
 func TestPythonSelectRejectsAnUnknownEvidenceFormat(t *testing.T) {
 	old := `{"meta":{"show_contexts":true},"totals":{"covered_lines":1},"files":{"pkg/calc.py":{"summary":{"num_statements":1,"covered_lines":1},"contexts":{"1":["tests/test_calc.py::test_add|run"]}}}}`
-	if _, err := (pyPlugin{}).Select([]byte(old), "", "pkg/calc.py", "tests/test_calc.py", []string{"pytest"}); err == nil || !strings.Contains(err.Error(), "corral-selection-2") {
+	if _, err := (pyPlugin{}).Select([]byte(old), "", "pkg/calc.py", "tests/test_calc.py", []string{"pytest"}); err == nil || !strings.Contains(err.Error(), "corral-selection-3") {
 		t.Errorf("the old coverage-json shape must be refused by name, got err=%v", err)
 	}
 }
@@ -249,7 +249,7 @@ func TestPythonSelectFallsBackToFilesWhenArgvWouldBeTooLong(t *testing.T) {
 	for i := 0; i < 3000; i++ {
 		ctxs = append(ctxs, fmt.Sprintf(`"tests/test_big.py::test_%04d_%s"`, i, strings.Repeat("x", 20)))
 	}
-	ev := `{"format":"corral-selection-2","tests":3000,"files":{` +
+	ev := `{"format":"corral-selection-3","tests":3000,"files":{` +
 		`"pkg/calc.py":{"tests":[` + strings.Join(ctxs, ",") + `],"lines":{"0":[[2,2]],"1":[[6,6]]},"static":[[1,1]]},` +
 		`"tests/test_big.py":{"tests":[` + ctxs[0] + `],"lines":{},"static":[]}}}`
 	sel, err := pyPlugin{}.Select([]byte(ev), "", "pkg/calc.py", "tests/test_big.py", []string{"pytest"})
@@ -381,7 +381,7 @@ func TestRecordedEvidenceCarriesNoLineZero(t *testing.T) {
 func TestPythonSelectRefusesV1ByName(t *testing.T) {
 	v1 := `{"format":"corral-selection-1","tests":1,"files":{"pkg/calc.py":["tests/test_calc.py::test_add"]}}`
 	_, err := pyPlugin{}.Select([]byte(v1), "", "pkg/calc.py", "tests/test_calc.py", []string{"pytest"})
-	if err == nil || !strings.Contains(err.Error(), "corral-selection-2") {
+	if err == nil || !strings.Contains(err.Error(), "corral-selection-3") {
 		t.Errorf("v1 must be refused naming the expected format, got %v", err)
 	}
 }
@@ -631,7 +631,7 @@ func TestPythonIndexCarriesHasStatic(t *testing.T) {
 
 // The actual import-only shape: zero covering tests, non-empty static.
 func TestPythonIndexImportOnlyFileHasZeroTestsAndHasStaticTrue(t *testing.T) {
-	raw := `{"format":"corral-selection-2","tests":1,"files":{` +
+	raw := `{"format":"corral-selection-3","tests":1,"files":{` +
 		`"src/pkg/__init__.py":{"tests":[],"lines":{},"static":[[1,3]]}}}`
 	idx, err := pyPlugin{}.Index([]byte(raw))
 	if err != nil {
@@ -650,11 +650,56 @@ func TestPythonIndexImportOnlyFileHasZeroTestsAndHasStaticTrue(t *testing.T) {
 }
 
 func TestPythonIndexSharesSelectsParsing(t *testing.T) {
-	if _, err := (pyPlugin{}).Index([]byte(`{"format":"not-corral-selection-2"}`)); err == nil {
+	if _, err := (pyPlugin{}).Index([]byte(`{"format":"not-corral-selection-3"}`)); err == nil {
 		t.Error("Index must refuse a document with the wrong format stamp, exactly like Select")
 	}
 	if _, err := (pyPlugin{}).Index([]byte("")); err == nil {
 		t.Error("Index must refuse empty evidence, exactly like Select")
+	}
+}
+
+func TestPythonIsLibraryCodeFlatLayout(t *testing.T) {
+	hasPath := func(p string) bool { return p == "mypkg/__init__.py" }
+	if !(pyPlugin{}).IsLibraryCode("mypkg/foo.py", hasPath) {
+		t.Error("mypkg/foo.py with mypkg/__init__.py present must be library code")
+	}
+	if (pyPlugin{}).IsLibraryCode("scripts/foo.py", hasPath) {
+		t.Error("scripts/foo.py with no __init__.py anywhere must NOT be library code")
+	}
+}
+
+func TestPythonIsLibraryCodeNestedPackage(t *testing.T) {
+	// sub/ has no __init__.py of its own, but mypkg/ (an ancestor) does —
+	// the WHOLE directory chain must be walked, not just the immediate dir.
+	hasPath := func(p string) bool { return p == "mypkg/__init__.py" }
+	if !(pyPlugin{}).IsLibraryCode("mypkg/sub/foo.py", hasPath) {
+		t.Error("mypkg/sub/foo.py must be library code via the mypkg ancestor's __init__.py")
+	}
+}
+
+func TestPythonIsLibraryCodeSrcLayout(t *testing.T) {
+	// src/<pkg>/... counts even with NO __init__.py anywhere — PEP 420
+	// namespace packages ship without one.
+	hasPath := func(string) bool { return false }
+	if !(pyPlugin{}).IsLibraryCode("src/pkg/foo.py", hasPath) {
+		t.Error("src/pkg/foo.py must be library code even with no __init__.py measured")
+	}
+	if !(pyPlugin{}).IsLibraryCode("src/pkg/sub/foo.py", hasPath) {
+		t.Error("src/pkg/sub/foo.py (deeper under src/pkg) must also be library code")
+	}
+	// A bare file directly under src/, with no package segment, does not
+	// qualify on the src/ shortcut alone.
+	if (pyPlugin{}).IsLibraryCode("src/foo.py", hasPath) {
+		t.Error("src/foo.py (no package dir under src/) must not be library code via the shortcut alone")
+	}
+}
+
+func TestPythonIsLibraryCodeDocsAndScripts(t *testing.T) {
+	hasPath := func(string) bool { return false }
+	for _, p := range []string{"docs/conf.py", "setup.py", "noxfile.py", "scripts/release.py"} {
+		if (pyPlugin{}).IsLibraryCode(p, hasPath) {
+			t.Errorf("%s must not be library code — it sits in no importable package", p)
+		}
 	}
 }
 

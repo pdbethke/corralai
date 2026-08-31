@@ -468,6 +468,19 @@ type FileCoverage struct {
 	// reposcan.WidenCandidacyByEvidence's ReasonImportOnly, the exclusion
 	// this distinction exists to make possible.
 	HasStatic bool
+	// HasStatements is true when coverage's OWN static parse of the file
+	// found at least one executable statement — independent of whether
+	// anything ran. False means the file is empty, comment-only, or
+	// otherwise has NOTHING to execute: a genuinely empty __init__.py
+	// reads zero Tests and HasStatic false, the exact same SHAPE as a real
+	// file nothing executes, and without this distinguishing signal the
+	// two are indistinguishable — see
+	// reposcan.WidenCandidacyByEvidence's ReasonNoExecutableCode, the
+	// benign exclusion this exists to make possible. Defaults to true
+	// (conservative) when a plugin could not determine the count for one
+	// file — never silently swallowing a real finding over an analysis
+	// hiccup.
+	HasStatements bool
 }
 
 // SpanRule names why ForSpan chose what it chose.
@@ -516,6 +529,35 @@ type FailureParser interface {
 // the caller falls back to its own generic wording, never a fabricated one.
 type SelectionDiagnoser interface {
 	DiagnoseSelectionFailure(text string) string
+}
+
+// LibraryCodeClassifier is an OPTIONAL TestSelector extension: a selector
+// that can tell whether one file sits inside IMPORTABLE LIBRARY CODE, as
+// opposed to project tooling that merely happens to share the language —
+// docs config (docs/conf.py), a setup/build script (setup.py, noxfile.py),
+// a one-off automation script (scripts/*.py). Founder ruling: the loudest
+// findings a mutation audit can produce (reposcan's ReasonUncovered,
+// ReasonImportOnly) must speak only about the library a repo SHIPS, never
+// about everything merely WRITTEN in its language — a docs-build config
+// with zero coverage is real, but reporting it under the same headline as
+// a genuinely untested library module dilutes the finding on essentially
+// every real repo, which carries several such files.
+//
+// hasPath answers "does this exact repo-relative path exist, by the
+// caller's own already-enumerated inventory" — the file-existence oracle,
+// supplied as a closure (not a real filesystem read) so this stays pure
+// and testable, the same discipline Plugin.ImportPath's own exists
+// parameter already follows.
+//
+// A selector that does not implement this is never asked — every file it
+// measured is treated as library code, byte-identical to before this
+// interface existed. IsLibraryCode is consulted ONLY when the evidence
+// would otherwise relabel a ReasonNoPairedTest exclusion (uncovered,
+// import-only, no-executable-code); it is NEVER consulted for promoting a
+// file the evidence shows a test genuinely covers — that positive finding
+// stands regardless of where the file lives.
+type LibraryCodeClassifier interface {
+	IsLibraryCode(path string, hasPath func(string) bool) bool
 }
 
 // SourceRootInstrumenter is an OPTIONAL TestSelector extension: a selector

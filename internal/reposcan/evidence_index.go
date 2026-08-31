@@ -29,6 +29,13 @@ type evidenceFileEntry struct {
 	// ReasonImportOnly, distinct from ReasonUncovered (coveringTests == 0
 	// AND hasStatic false: nothing executed it at all).
 	hasStatic bool
+	// hasStatements mirrors lang.FileCoverage.HasStatements: false means
+	// coverage's own static parse found NO executable code in the file at
+	// all — a genuinely empty or comment-only file, for which coveringTests
+	// == 0 and hasStatic == false is the SAME shape a real file nothing
+	// executes produces. WidenCandidacyByEvidence's ReasonNoExecutableCode
+	// is the disambiguation.
+	hasStatements bool
 }
 
 // CoverageFor answers one file: how many tests cover it (0 is a genuine
@@ -37,17 +44,37 @@ type evidenceFileEntry struct {
 // whether the evidence ALSO recorded coverage for it outside any test
 // context (import/module-load time — see lang.FileCoverage.HasStatic; a
 // file with coveringTests == 0 and hasStatic true was genuinely executed,
-// just never by a test), and whether the evidence measured this file AT
-// ALL. measured=false means the file never appeared in the evidence's own
-// file list — absence of evidence, which a caller must NEVER treat as
-// evidence of absence (see the design's Failure posture decision): the
-// zero values of every other return carry no meaning in that case.
-func (idx EvidenceIndex) CoverageFor(path string) (coveringTests int, mostCoveringTestPath string, hasStatic bool, measured bool) {
+// just never by a test), whether coverage's OWN static parse found any
+// executable statement in the file at all (lang.FileCoverage.HasStatements
+// — false means an empty or comment-only file has NOTHING for a test to
+// have covered, a benign finding never confused with a real file nothing
+// executes), and whether the evidence measured this file AT ALL.
+// measured=false means the file never appeared in the evidence's own file
+// list — absence of evidence, which a caller must NEVER treat as evidence
+// of absence (see the design's Failure posture decision): the zero values
+// of every other return carry no meaning in that case.
+func (idx EvidenceIndex) CoverageFor(path string) (coveringTests int, mostCoveringTestPath string, hasStatic, hasStatements, measured bool) {
 	f, ok := idx.files[path]
 	if !ok {
-		return 0, "", false, false
+		return 0, "", false, false, false
 	}
-	return f.coveringTests, f.mostCovering, f.hasStatic, true
+	return f.coveringTests, f.mostCovering, f.hasStatic, f.hasStatements, true
+}
+
+// Measured reports whether the evidence's own file list contains path
+// exactly — the file-existence oracle lang.LibraryCodeClassifier.IsLibraryCode
+// consults (via a caller-supplied closure, see WidenCandidacyByEvidence) to
+// find a package-marking __init__.py without a second filesystem read. It
+// answers strictly less than "does this file exist in the repo" — only
+// files the evidence run actually measured are visible here — which is
+// exactly the SAME limitation candidacy already accepts everywhere else
+// (absence of evidence is not evidence of absence): WidenCandidacyByEvidence
+// widens this with the repo's own enumerated cands/excl paths before using
+// it, so a package __init__.py the evidence never measured (rare — see
+// python.go's Instrument doc on source-scoping) is still found.
+func (idx EvidenceIndex) Measured(path string) bool {
+	_, ok := idx.files[path]
+	return ok
 }
 
 // ParseEvidenceIndex builds an EvidenceIndex from one scan's selection
@@ -86,7 +113,7 @@ func ParseEvidenceIndex(ev SelectionEvidence, plug lang.Plugin) (EvidenceIndex, 
 		if n == 0 {
 			best = ""
 		}
-		files[path] = evidenceFileEntry{coveringTests: n, mostCovering: best, hasStatic: fc.HasStatic}
+		files[path] = evidenceFileEntry{coveringTests: n, mostCovering: best, hasStatic: fc.HasStatic, hasStatements: fc.HasStatements}
 	}
 	return EvidenceIndex{files: files}, true
 }

@@ -3,6 +3,7 @@
 package scanstore
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
@@ -37,6 +38,18 @@ func (s *Store) SelectionCacheGet(ctx context.Context, treeDigest, cmdDigest, pl
 			return nil, 0, false, nil
 		}
 		return nil, 0, false, fmt.Errorf("scanstore: selection cache get: %w", serr)
+	}
+	// A row whose raw is empty/whitespace-only can only have been written
+	// before CollectSelectionEvidence stopped Put-ing a failed instrumented
+	// run's empty output as though it were real evidence (a Ran:true
+	// document that measured nothing) — the fix closes the write side, but
+	// a ledger already holding one of these rows must not keep serving it
+	// forever. Treated as an honest miss: the caller re-runs the
+	// instrumented pass, which either heals the row (a real Put on success)
+	// or produces a fresh, disclosed failure — either way this ledger stops
+	// being the reason a repo's selection stays dead.
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nil, 0, false, nil
 	}
 	return raw, id.Int64, true, nil
 }

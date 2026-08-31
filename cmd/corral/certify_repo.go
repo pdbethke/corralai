@@ -877,7 +877,11 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// worked.
 		fmt.Fprintf(stdout, "  %d source file(s) paired from --tests, ahead of filename convention\n", n)
 	}
-	fmt.Fprintln(stdout, candidacySummaryLine(cands, excl, evidenceCandidacyOK, *dryRun))
+	selectionNote := ""
+	if ex != nil {
+		selectionNote = ex.selection.Note
+	}
+	fmt.Fprintln(stdout, candidacySummaryLine(cands, excl, evidenceCandidacyOK, *dryRun, selectionNote))
 	printLanguageProfile(stdout, reposcan.BuildLanguageProfile(cands, excl))
 	printSearchPairings(stdout, cands)
 	printEvidencePairings(stdout, cands)
@@ -2886,7 +2890,7 @@ const maxListedExclusions = 20
 // positively measured at zero covering tests (uncovered). It also says WHICH
 // basis produced these numbers, because a reader must never mistake a
 // pairing-only fallback's zeros for "nothing was uncovered".
-func candidacySummaryLine(cands []reposcan.Candidate, excl []reposcan.Exclusion, evidenceOK, dryRun bool) string {
+func candidacySummaryLine(cands []reposcan.Candidate, excl []reposcan.Exclusion, evidenceOK, dryRun bool, selectionNote string) string {
 	evidencePaired, namePaired := 0, 0
 	for _, c := range cands {
 		if c.TestPath == "" {
@@ -2910,7 +2914,17 @@ func candidacySummaryLine(cands []reposcan.Candidate, excl []reposcan.Exclusion,
 		// read as "the evidence measured this and found nothing".
 		line += " — uncovered/evidence-paired unknown without a run — pairing shown"
 	case !evidenceOK:
-		line += " — pairing-only candidacy (no selection evidence)"
+		// selectionNote is ex.selection.Note (empty when there was never an
+		// executor to ask, e.g. a scan that skipped evidence collection
+		// entirely) — appended so the SAME reason the "selection:" line
+		// above already gave is not lost the moment a reader's eye reaches
+		// this summary instead: "(no selection evidence)" alone forces a
+		// scroll back up to find out why.
+		if selectionNote != "" {
+			line += fmt.Sprintf(" — pairing-only candidacy (no selection evidence: %s)", selectionNote)
+		} else {
+			line += " — pairing-only candidacy (no selection evidence)"
+		}
 	}
 	return line
 }

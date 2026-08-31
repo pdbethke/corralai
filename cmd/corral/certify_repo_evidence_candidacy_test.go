@@ -107,7 +107,10 @@ func TestCertifyRepoWholeSuiteFallsBackToPairingOnlyCandidacy(t *testing.T) {
 	if strings.Contains(s, "paired by evidence") {
 		t.Errorf("--whole-suite must produce no evidence-paired candidate:\n%s", s)
 	}
-	if !strings.Contains(s, "pairing-only candidacy (no selection evidence)") {
+	// The parenthetical now carries the SAME reason the "selection:" line
+	// above it already gave — "(no selection evidence)" alone is the
+	// generic case; --whole-suite's own note is appended after the colon.
+	if !strings.Contains(s, "pairing-only candidacy (no selection evidence: --whole-suite)") {
 		t.Errorf("missing the evidence-absent fallback wording on the summary line:\n%s", s)
 	}
 }

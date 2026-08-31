@@ -173,6 +173,50 @@ func TestWorkspaceRunnerEnumerateRestoresWhenTheCommandFails(t *testing.T) {
 	}
 }
 
+// EnumerateDetailed is the seam reposcan.CollectSelectionEvidence uses to
+// tell a genuinely empty-but-successful run from a run that failed before
+// it could print anything: it must report the real exit code, unlike bare
+// Enumerate which folds every outcome into (output, nil-or-error).
+func TestWorkspaceRunnerEnumerateDetailedReportsExitCode(t *testing.T) {
+	root := wsTree(t, map[string]string{"a.txt": "ORIGINAL\n"})
+	w := NewWorkspaceRunner(root, 0)
+
+	res, err := w.EnumerateDetailed(context.Background(), nil, []string{"sh", "-c", "exit 4"})
+	if err != nil {
+		t.Fatalf("a non-zero exit is a RESULT, not an error: %v", err)
+	}
+	if res.ExitCode != 4 {
+		t.Errorf("ExitCode = %d, want 4", res.ExitCode)
+	}
+	if res.Output != "" {
+		t.Errorf("Output = %q, want empty", res.Output)
+	}
+}
+
+// Unlike Enumerate (which discards stderr entirely — cmd.Stderr is nil),
+// EnumerateDetailed captures it: the whole point is to surface what a
+// failed instrumented run printed on the stream a caller like pytest's own
+// "unrecognized arguments" error actually uses.
+func TestWorkspaceRunnerEnumerateDetailedCapturesStderr(t *testing.T) {
+	root := wsTree(t, map[string]string{"a.txt": "ORIGINAL\n"})
+	w := NewWorkspaceRunner(root, 0)
+
+	res, err := w.EnumerateDetailed(context.Background(), nil,
+		[]string{"sh", "-c", "echo out-line; echo err-line 1>&2; exit 4"})
+	if err != nil {
+		t.Fatalf("a non-zero exit is a RESULT, not an error: %v", err)
+	}
+	if res.Output != "out-line\n" {
+		t.Errorf("Output = %q, want just stdout", res.Output)
+	}
+	if !strings.Contains(res.Stderr, "err-line") {
+		t.Errorf("Stderr = %q, want it to contain the command's stderr", res.Stderr)
+	}
+	if res.ExitCode != 4 {
+		t.Errorf("ExitCode = %d, want 4", res.ExitCode)
+	}
+}
+
 // A mutant that names a path under a directory that does not yet exist must
 // have that directory removed too, not just the file. Restore only ever
 // wrote back or removed the file entry; a directory it had to create to hold

@@ -105,6 +105,23 @@ type Result struct {
 	Err      string `json:"err,omitempty"`
 }
 
+// EnumerateResult is what an Enumerate-shaped runner's OPTIONAL detailed
+// variant (adequacy.WorkspaceRunner.EnumerateDetailed,
+// adequacy.WorkspacePool.EnumerateDetailed, adequacy's jail backend) can
+// report about one run beyond the bare (string, error) Enumerate contract:
+// the exit status and a stderr tail, so a caller can tell "the run
+// succeeded and had nothing to print" from "it failed before it could
+// print anything, and here is why" — see
+// reposcan.CollectSelectionEvidence's Note construction, the seam this
+// exists for. Declared here, in the leaf sandbox package both adequacy and
+// reposcan already depend on, so extending the seam does not add an import
+// edge between them in either direction.
+type EnumerateResult struct {
+	Output   string // stdout only — identical to what a plain Enumerate call returns.
+	Stderr   string // last bytes of stderr, diagnostics only — never parsed as evidence.
+	ExitCode int    // -1 when the process did not exit normally (timeout, exec failure).
+}
+
 // MinimalEnv returns a safe, secret-free environment for executed code: just
 // PATH/HOME/LANG from the host. The bee's CORRAL_TOKEN and the like are never
 // exported to commands.

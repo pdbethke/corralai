@@ -87,10 +87,25 @@ func TestPythonSelectPicksOnlyTestsThatExecutedTheFile(t *testing.T) {
 	}
 }
 
-// pkg/untested.py is ABSENT from the recording (never imported); its paired
-// test file ran, so the absence is evidence: no test executes it.
-func TestPythonSelectEmptyForAFileNoTestExecutes(t *testing.T) {
-	sel, err := pyPlugin{}.Select(recordedEvidence(t), "", "pkg/untested.py", "tests/test_calc.py", []string{"pytest"})
+// pkg/untested.py is ABSENT from the recording (never imported). Even
+// though its paired test file DID run (sawTest), absence is NEVER
+// "uncovered": a file present in the evidence with zero covering tests is
+// the only uncovered finding (see TestPythonSelectPresentWithZeroTestsIsUncovered)
+// — an absent one can be missing from the report for reasons that have
+// nothing to do with whether the suite executed it (an editable/src-layout
+// install measures it OUTSIDE the repo root and the reducer drops it; see
+// python.go's Select doc). Error → the caller grades whole-suite, disclosed.
+func TestPythonSelectAbsentFileWithATestThatRanIsAnErrorNotUncovered(t *testing.T) {
+	_, err := pyPlugin{}.Select(recordedEvidence(t), "", "pkg/untested.py", "tests/test_calc.py", []string{"pytest"})
+	if err == nil {
+		t.Fatal("an absent file must fall back disclosed, not read as uncovered")
+	}
+}
+
+// pkg/__init__.py IS present in the recording, with zero covering tests —
+// this, and only this, is what "uncovered" measures.
+func TestPythonSelectPresentWithZeroTestsIsUncovered(t *testing.T) {
+	sel, err := pyPlugin{}.Select(recordedEvidence(t), "", "pkg/__init__.py", "tests/test_calc.py", []string{"pytest"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -355,13 +370,14 @@ func TestPythonSelectStripsCollectionTargetsFromTheBaseCommand(t *testing.T) {
 // The uncovered pass inverts the same way: without the strip, the authored
 // test's path is appended to a command that still names tests/, so the whole
 // suite runs and the "no test executes this file" finding is graded against
-// everything.
+// everything. pkg/__init__.py is PRESENT in the recording with zero
+// covering tests — a genuinely uncovered file, not merely absent.
 func TestPythonWithAuthoredTestUsesTheStrippedBase(t *testing.T) {
 	fixture, err := filepath.Abs(filepath.Join("testdata", "pycov-fixture"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	sel, err := pyPlugin{}.Select(recordedEvidence(t), fixture, "pkg/untested.py", "tests/test_calc.py", []string{"pytest", "tests/"})
+	sel, err := pyPlugin{}.Select(recordedEvidence(t), fixture, "pkg/__init__.py", "tests/test_calc.py", []string{"pytest", "tests/"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -516,5 +532,19 @@ func TestPythonIndexSharesSelectsParsing(t *testing.T) {
 	}
 	if _, err := (pyPlugin{}).Index([]byte("")); err == nil {
 		t.Error("Index must refuse empty evidence, exactly like Select")
+	}
+}
+
+func TestPythonDiagnoseSelectionFailureNamesMissingPytestCov(t *testing.T) {
+	text := "usage: pytest [options]\npytest: error: unrecognized arguments: --cov --cov-context=test --cov-report=\n"
+	hint := (pyPlugin{}).DiagnoseSelectionFailure(text)
+	if !strings.Contains(hint, "pytest-cov") || !strings.Contains(hint, "pip install pytest-cov") {
+		t.Errorf("hint = %q, want it to name pytest-cov and how to install it", hint)
+	}
+}
+
+func TestPythonDiagnoseSelectionFailureRecognizesNothingElse(t *testing.T) {
+	if hint := (pyPlugin{}).DiagnoseSelectionFailure("some unrelated failure text"); hint != "" {
+		t.Errorf("hint = %q, want empty for text it does not recognize", hint)
 	}
 }

@@ -86,6 +86,53 @@ func TestSelectionCacheGetMissesOnAnyKeyChange(t *testing.T) {
 	}
 }
 
+// TestSelectionCacheGetTreatsEmptyRawAsAMiss heals a ledger that already
+// holds a poisoned row: before the write-side fix, a failed instrumented
+// run (empty stdout, nil error — a non-zero exit is a RESULT there, not an
+// error) was recorded as though it were real, Ran:true evidence. That row
+// can already exist in a real database; this ledger must never keep
+// serving it as a hit — every empty/whitespace-only raw is an honest MISS,
+// so the caller re-runs the instrumented pass instead of being stuck
+// forever on evidence that measured nothing.
+func TestSelectionCacheGetTreatsEmptyRawAsAMiss(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "scans.duckdb")
+	st, err := Open(dsn)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+
+	for _, raw := range [][]byte{{}, []byte("   "), []byte("\n\t \n")} {
+		if err := st.SelectionCachePut(ctx, "tree1", "cmd1", "python", "workspace", raw, "", 1); err != nil {
+			t.Fatalf("SelectionCachePut(%q): %v", raw, err)
+		}
+		got, scanID, ok, err := st.SelectionCacheGet(ctx, "tree1", "cmd1", "python", "workspace")
+		if err != nil {
+			t.Fatalf("SelectionCacheGet after Put(%q): %v", raw, err)
+		}
+		if ok {
+			t.Errorf("Put(%q): got a hit, want a miss — empty raw must never be served", raw)
+		}
+		if got != nil || scanID != 0 {
+			t.Errorf("Put(%q): got raw=%q scanID=%d on a miss, want the zero values", raw, got, scanID)
+		}
+	}
+
+	// A genuine, non-empty Put under the SAME key is still served normally
+	// — the empty-raw rule does not turn this cache into a permanent miss.
+	if err := st.SelectionCachePut(ctx, "tree1", "cmd1", "python", "workspace", []byte("real evidence"), "", 2); err != nil {
+		t.Fatalf("SelectionCachePut (healing): %v", err)
+	}
+	got, scanID, ok, err := st.SelectionCacheGet(ctx, "tree1", "cmd1", "python", "workspace")
+	if err != nil {
+		t.Fatalf("SelectionCacheGet after healing Put: %v", err)
+	}
+	if !ok || string(got) != "real evidence" || scanID != 2 {
+		t.Errorf("got raw=%q scanID=%d ok=%v, want a hit on the healed row", got, scanID, ok)
+	}
+}
+
 // TestSelectionCacheTableMigratesOntoAnExistingLedger: a store opened
 // against a DSN that already holds a scans/scan_files ledger from before
 // selection_cache existed must gain the table on reopen, not fail or

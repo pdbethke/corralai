@@ -1040,6 +1040,21 @@ func (pyPlugin) DeselectArgs(selectors []string) []string {
 // superset, still evidence-derived, and never a whole-suite fallback.
 const selectionMaxArgv = 32 * 1024
 
+// DiagnoseSelectionFailure implements lang.SelectionDiagnoser: it recognizes
+// pytest's own usage error when the project's venv lacks the pytest-cov
+// plugin Instrument's command requires. Without it, `--cov
+// --cov-context=test --cov-report=` is unrecognised, pytest exits 4 via
+// argparse before running anything, and prints exactly this text to
+// stderr — the one case worth naming explicitly, because "install a
+// plugin" is an operator action a generic "the run failed" note does not
+// suggest.
+func (pyPlugin) DiagnoseSelectionFailure(text string) string {
+	if strings.Contains(text, "unrecognized arguments: --cov") {
+		return "per-test selection needs the pytest-cov plugin installed in this project's environment (pip install pytest-cov) — without it corral grades by the whole suite and pairs tests by filename only"
+	}
+	return ""
+}
+
 // Instrument builds the one instrumented run selection evidence comes from.
 // Same command-shape rules as CoverageCmd (a `pytest` or `<interp> -m pytest`
 // argv; anything else is refused rather than guessed at), but the
@@ -1286,15 +1301,22 @@ func (pyPlugin) Select(evidence []byte, repoRoot, codePath, testPath string, tes
 		}
 	}
 	if mine == nil {
-		// Absent from the report. coverage only lists files the suite
-		// imported, so absence means no test executed it — PROVIDED the
-		// suite actually ran the test meant to cover it. Without that
-		// evidence, "uncovered" would accuse a file whose test was simply
-		// filtered out or failed to collect.
+		// Absent from the report. This is NEVER "uncovered": coverage only
+		// lists files it could resolve back under the repo root, and a file
+		// whose paired test genuinely ran (sawTest) can still be missing
+		// here for reasons that have nothing to do with whether the suite
+		// executed it — most commonly an editable/src-layout install whose
+		// sources coverage measures OUTSIDE root, which the reducer's own
+		// `if rel.startswith(".."): continue` silently drops (see
+		// CollectSelectionEvidence's document-level pathology check, which
+		// usually catches this for the whole scan before any one file
+		// reaches here). Absence of evidence is not evidence of absence, so
+		// this always falls back to grading the whole suite, disclosed,
+		// rather than claim a kill rate for a file nothing measured.
 		if !sawTest {
 			return Selection{}, fmt.Errorf("lang: python selection evidence never saw %s or its paired test %q — did the suite run it?", codePath, testPath)
 		}
-		mine = map[string]bool{}
+		return Selection{}, fmt.Errorf("lang: python selection evidence measured %d file(s) but never %s, though its paired test %q did run — its coverage may not have been recorded under the repo root (e.g. an editable/src-layout install); falling back to the whole suite", len(rep.Files), codePath, testPath)
 	}
 	sel := Selection{Method: "coverage-context", Of: rep.Tests, Base: stripPyCollectionTargets(testCmd, root), Lines: lines, Static: static}
 	if len(mine) == 0 {

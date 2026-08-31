@@ -413,11 +413,15 @@ type TestSelector interface {
 	// the operator's own collection targets removed, resolved against
 	// repoRoot — because on a runner that UNIONS positional arguments
 	// (pytest does) appending to the raw command narrows nothing at all.
-	// testPath is the file's paired test:
-	// a codePath ABSENT from the evidence is uncovered only when testPath is
-	// present (the suite ran the tests meant to cover it); absent both, the
-	// suite may never have run that test, and Select errors — the caller
-	// grades whole-suite and discloses the error text.
+	// testPath is the file's paired test. A codePath ABSENT from the
+	// evidence is NEVER "uncovered" — only a file PRESENT in the evidence
+	// with zero covering tests is (absence of evidence is not evidence of
+	// absence: a file whose paired test genuinely ran, testPath present,
+	// can still be missing from the report for reasons that have nothing
+	// to do with whether the suite executed it, e.g. an editable/src-layout
+	// install whose sources coverage measures OUTSIDE the repo root and
+	// drops). Select therefore always errors on an absent codePath — the
+	// caller grades whole-suite and discloses the error text.
 	Select(evidence []byte, repoRoot, codePath, testPath string, testCmd []string) (Selection, error)
 	// WithAuthoredTest returns the command for the POOL pass: the selection
 	// plus the pool's authored test at authoredTestPath, so the authored
@@ -486,4 +490,20 @@ type FailureParser interface {
 	// FirstFailure returns the first failing test's id, or "" when the output
 	// names none.
 	FirstFailure(output []byte) string
+}
+
+// SelectionDiagnoser is an OPTIONAL TestSelector extension: a plugin that
+// can recognize its own instrumented selection run's failure text —
+// whatever a runner could capture, possibly just an exit code's worth of
+// stderr tail — and explain, in an operator's own vocabulary, what to do
+// about it. Python implements this for the pytest-cov plugin requirement:
+// a stock venv missing it makes the instrumented pytest invocation exit 4
+// with "unrecognized arguments: --cov ...", printing nothing else, and the
+// generic "the run failed"/"printed nothing" note would leave an operator
+// to rediscover that themselves.
+//
+// DiagnoseSelectionFailure returns "" when it recognizes nothing in text —
+// the caller falls back to its own generic wording, never a fabricated one.
+type SelectionDiagnoser interface {
+	DiagnoseSelectionFailure(text string) string
 }

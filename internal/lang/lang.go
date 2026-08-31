@@ -204,6 +204,33 @@ type TreeEnver interface {
 	TreeEnv(tree string, cores int) []string
 }
 
+// TestRooter is an OPTIONAL plugin extension naming the top-level
+// directories a RECURSIVE test search should look under when NONE of
+// TestPaths' own candidates exists on disk — the fallback for a repo whose
+// test layout does not match any convention TestPaths derives from the
+// source path alone (e.g. pallets/itsdangerous: `src/itsdangerous/signer.py`
+// pairs with `tests/test_itsdangerous/test_signer.py`, one directory level
+// deeper than any convention-derived mirror). A plugin with no
+// implementation gets the generic default (see reposcan's testRootsFor) —
+// "tests" alone — which is right for every language whose only real
+// parallel-tree convention already spells that name; only a language with
+// an ADDITIONAL well-known root (Ruby's `test`/`spec`, JS/TS's `__tests__`)
+// needs to implement this.
+//
+// Search stays BOUNDED and safe by construction: the caller (reposcan)
+// never walks a directory the repository's own .gitignore excludes — see
+// FindTest's doc comment — so naming a root here is never itself a way to
+// widen the search into `node_modules` or `.venv`.
+type TestRooter interface {
+	// TestRoots returns the top-level directories to search recursively,
+	// most-specific-need-not-apply — FindTest scores MATCHES by shared path
+	// context with codePath, not by which root produced them. Empty means
+	// "no roots of my own"; reposcan still applies its generic default in
+	// that case, so this is additive, never a way to opt OUT of the
+	// fallback.
+	TestRoots() []string
+}
+
 var registry = map[string]Plugin{}
 
 // Register adds a plugin to the registry. Called from plugin files' init().

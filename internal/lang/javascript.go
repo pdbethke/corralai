@@ -126,6 +126,11 @@ func (jsPlugin) TestPaths(codePath string) []TestCandidate {
 	return dedupeCandidates(out)
 }
 
+// TestRoots names JS/TS's additional conventional test roots (beyond
+// reposcan's generic "tests" default): a same-directory __tests__ folder,
+// and the singular test/ spelling many Node projects use.
+func (jsPlugin) TestRoots() []string { return []string{"__tests__", "test", "tests"} }
+
 // Preflight checks the operator's own test command's binary (e.g. a project
 // script or a node version manager's shim not on PATH under "node") when one
 // is given, else the stock "node" — see preflightBin and Plugin.Preflight's

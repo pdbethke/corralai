@@ -73,7 +73,13 @@ type auditableJSON struct {
 	// in a 108KB test_requests.py. A UI showing this should invite correction,
 	// not present it as settled.
 	TestPath string `json:"test_path"`
-	Lang     string `json:"lang"`
+	// ViaSearch is true when TestPath came from the recursive fallback (a
+	// test that EXISTS, found by searching the conventional test roots)
+	// rather than from filename convention — see TestPath's own doc comment
+	// for why this pairing already invites correction; a search-found one
+	// invites it a little more.
+	ViaSearch bool   `json:"via_search,omitempty"`
+	Lang      string `json:"lang"`
 	// Complexity is ABSENT (nil) unless corral actually measured it. A
 	// signature extractor exists only for Go and Python; ExtractSignatures
 	// returns "no signature extractor for language" for ruby, javascript and
@@ -158,7 +164,7 @@ func buildScanInventoryAt(root, repo string, walked int, ranking string, cands [
 		})
 	}
 	for _, c := range cands {
-		a := auditableJSON{Path: c.Path, TestPath: c.TestPath, Lang: c.Lang}
+		a := auditableJSON{Path: c.Path, TestPath: c.TestPath, ViaSearch: c.ViaSearch, Lang: c.Lang}
 		if root != "" {
 			// Best-effort and local: tree-sitter parsing, no model call. An
 			// unreadable file yields no measurement rather than a zero.

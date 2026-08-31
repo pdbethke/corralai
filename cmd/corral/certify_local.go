@@ -561,6 +561,26 @@ func auditErr(format string, a ...any) error {
 	return localAuditError{msg: fmt.Sprintf(format, a...)}
 }
 
+// noTestFoundErr renders a reposcan.FindTest miss as the message an operator
+// actually needs: not just "no test found", but every convention candidate
+// FindTest already ruled out and every root its recursive fallback already
+// searched — the rehearsal this whole change exists for made a stranger
+// guess wrong TWICE (a --repo run that silently excluded the file, then a
+// --local run that guessed one sibling path and died trying to open it)
+// before ever learning where corral had actually looked. This message is the
+// third guess made unnecessary.
+func noTestFoundErr(codePath string, res reposcan.SearchResult) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "no test found for %s (pass --test to override). Looked for:\n", codePath)
+	for _, t := range res.Tried {
+		fmt.Fprintf(&b, "  %s\n", t)
+	}
+	if len(res.Roots) > 0 {
+		fmt.Fprintf(&b, "and searched %s recursively for a matching basename\n", strings.Join(res.Roots, ", "))
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
 // isAuditUsageError reports whether err is an auditOneFile usage error (exit
 // 2 rather than exit 1). Anything else — including a nil-safe non-audit error
 // — is an internal failure.
@@ -650,9 +670,33 @@ func prepareAuditJail(ctx context.Context, in localAuditInput, plug lang.Plugin,
 	}
 	tp := strings.TrimSpace(in.testPath)
 	if tp == "" {
-		tp = plug.TestPaths(in.codePath)[0].Path
+		// --test always overrides everything below it; only reached when the
+		// operator named no test at all. searchRoot is where FindTest resolves
+		// its candidates AND its recursive fallback against: repoDir in
+		// repo-aware mode (codePath is repo-relative), the working directory
+		// otherwise (codePath is already a filesystem path relative to it) —
+		// the same root fsPath itself joins against.
+		searchRoot := repoDir
+		if searchRoot == "" {
+			searchRoot = "."
+		}
+		res, ferr := reposcan.FindTest(plug, searchRoot, in.codePath)
+		if ferr != nil {
+			return p, auditErr("searching for a test for %s: %v", in.codePath, ferr)
+		}
+		if !res.Found {
+			return p, auditUsageErr("%s", noTestFoundErr(in.codePath, res))
+		}
+		tp = res.Path
+		if res.ViaSearch {
+			// The plugin's own naming convention never found this — every
+			// TestPaths candidate came up empty, and this is the ONE line
+			// that discloses the pairing came from somewhere else instead of
+			// silently presenting it as though it were the expected sibling.
+			fmt.Fprintf(stdout, "  paired by search: %s\n", tp)
+		}
 	}
-	devTest, err := os.ReadFile(fsPath(tp)) // #nosec G304 -- operator-supplied (or sibling-derived) test path
+	devTest, err := os.ReadFile(fsPath(tp)) // #nosec G304 -- operator-supplied (or convention/search-derived) test path
 	if err != nil {
 		return p, auditUsageErr("reading test %s: %v (pass --test to override)", tp, err)
 	}

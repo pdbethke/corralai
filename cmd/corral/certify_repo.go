@@ -736,6 +736,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "  %d source file(s) paired from --tests, ahead of filename convention\n", n)
 	}
 	printLanguageProfile(stdout, reposcan.BuildLanguageProfile(cands, excl))
+	printSearchPairings(stdout, cands)
 	printExclusions(stdout, excl)
 
 	// An explicit `-- <cmd>` is applied to EVERY job, so it is only meaningful
@@ -2694,6 +2695,20 @@ func repoScanExitCode(r reposcan.RepoReport, nothingInScope bool, minKillRate *f
 // reason above it is COMPLETE and the cap announces exactly how many lines it
 // withheld. Nothing is silently dropped; the counts still add up.
 const maxListedExclusions = 20
+
+// printSearchPairings discloses every candidate whose test pairing came from
+// the recursive fallback (reposcan.Candidate.ViaSearch) rather than from the
+// language plugin's own naming convention — a test that EXISTS but that no
+// TestPaths candidate predicted. Silent otherwise: the vast majority of a
+// scan's candidates pair by convention, and printing a line per file there
+// would just repeat what the "%d candidate(s)" count already says.
+func printSearchPairings(w io.Writer, cands []reposcan.Candidate) {
+	for _, c := range cands {
+		if c.ViaSearch {
+			fmt.Fprintf(w, "    %s paired by search: %s\n", c.Path, c.TestPath)
+		}
+	}
+}
 
 func printExclusions(w io.Writer, excl []reposcan.Exclusion) {
 	if len(excl) == 0 {

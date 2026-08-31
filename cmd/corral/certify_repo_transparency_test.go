@@ -153,12 +153,20 @@ func TestCertifyRepoTransparencyStampsLedgerAndBundle(t *testing.T) {
 	if len(fake.Uploads) != 1 {
 		t.Fatalf("logger received %d upload(s), want 1", len(fake.Uploads))
 	}
-	written, rerr := os.ReadFile(attestPath)
+	// The upload carries the SIGNED ENVELOPE's bytes, not the plain
+	// statement's — byte-identity now pins the envelope, per T1b.
+	envPath := dsseEnvelopePathFor(attestPath)
+	written, rerr := os.ReadFile(envPath)
 	if rerr != nil {
-		t.Fatalf("reading %s: %v", attestPath, rerr)
+		t.Fatalf("reading the envelope %s: %v", envPath, rerr)
 	}
 	if string(fake.Uploads[0]) != string(written) {
-		t.Errorf("uploaded bytes differ from the file on disk")
+		t.Errorf("uploaded bytes differ from the envelope file on disk")
+	}
+	// And the plain file is untouched by any of this — still there, still
+	// what a plain --attest run has always produced.
+	if _, err := os.Stat(attestPath); err != nil {
+		t.Errorf("the plain --attest file is missing: %v", err)
 	}
 
 	st, err := scanstore.Open(dsn)
@@ -240,5 +248,30 @@ func TestCertifyRepoTransparencyFailsOpenOnUploadError(t *testing.T) {
 	}
 	if scans[0].RekorUUID != "" {
 		t.Errorf("ledger RekorUUID = %q, want empty after a failed upload", scans[0].RekorUUID)
+	}
+}
+
+// TestTransparencyWithoutSigningKeyExitsUsageError pins requirement 2 of
+// T1b: --transparency REFUSES (exit 2, naming CORRALAI_CERTIFY_KEY_FILE)
+// when no usable local signing key is available — checked early, before any
+// real work runs, exactly like the --attest guard above. A corrupt
+// configured key file is used (rather than "unconfigured") so the test is
+// deterministic regardless of what key material happens to exist on the
+// host running it.
+func TestTransparencyWithoutSigningKeyExitsUsageError(t *testing.T) {
+	t.Setenv("CORRALAI_CERTIFY_KEY", "")
+	corrupt := filepath.Join(t.TempDir(), "corrupt_key")
+	if err := os.WriteFile(corrupt, []byte("not a valid seed"), 0o600); err != nil {
+		t.Fatalf("seeding a corrupt key file: %v", err)
+	}
+	t.Setenv("CORRALAI_CERTIFY_KEY_FILE", corrupt)
+
+	var out, errb bytes.Buffer
+	code := runCertifyRepo([]string{"--attest", filepath.Join(t.TempDir(), "statement.json"), "--transparency"}, &out, &errb)
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2; stderr=%q", code, errb.String())
+	}
+	if !strings.Contains(errb.String(), "CORRALAI_CERTIFY_KEY_FILE") {
+		t.Errorf("stderr = %q, want it to name CORRALAI_CERTIFY_KEY_FILE", errb.String())
 	}
 }

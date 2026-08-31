@@ -1,15 +1,20 @@
 // SPDX-License-Identifier: Elastic-2.0
 
-// Package transparency anchors a certify DSSE envelope to a public
-// append-only transparency log (Sigstore Rekor) and verifies the log's
-// inclusion proof offline, so a third party can confirm a build attestation
-// was publicly logged without trusting the corral that produced it.
+package transparency
+
+// This file holds the BUILD-RECORD anchoring path — see doc.go for how it
+// relates to the --attest/--transparency path in logger.go.
+//
+// Witness anchors a certify DSSE envelope (a `corral certify` build record)
+// to a public append-only transparency log (Sigstore Rekor) and verifies
+// the log's inclusion proof offline, so a third party can confirm a build
+// attestation was publicly logged without trusting the corral that
+// produced it.
 //
 // The Witness abstraction has two implementations: a real RekorWitness that
 // talks to a Rekor instance and verifies inclusion against the Sigstore TUF
 // trust root, and a deterministic, hermetic fakeWitness used by downstream
 // tests to exercise the anchor/verify wiring without any network.
-package transparency
 
 import (
 	"context"

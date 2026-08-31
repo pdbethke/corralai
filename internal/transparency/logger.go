@@ -20,14 +20,9 @@ import (
 // log: the log index and entry UUID a reader can hand to Rekor's own UI or
 // API to look the entry back up, plus the time the log committed it.
 //
-// Deliberately a SEPARATE type from this package's own Entry (see witness.go)
-// rather than a reuse of it: Entry carries the inclusion-proof material the
-// Witness path needs to verify an anchor entirely offline (Merkle proof, SET,
-// canonical body) — a heavier shape than the two-column ledger/warehouse
-// receipt (rekor_log_index, rekor_uuid) this simpler Logger path stores. The
-// two abstractions anchor different things (a build record's DSSE envelope
-// via Witness; a `--attest` audit statement's bytes via Logger) and were
-// built independently; this file does not touch Witness or its Entry.
+// See doc.go for how this file's Logger/LogEntry relate to witness.go's
+// Witness/Entry — two independent Rekor paths sharing this package, on
+// purpose not unified.
 type LogEntry struct {
 	LogIndex       int64
 	UUID           string

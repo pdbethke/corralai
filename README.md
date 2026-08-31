@@ -507,6 +507,23 @@ verdict JSON — never mutant code, which corral keeps at rest under no
 setting. Off by default: without it, a pushed row carries numbers, hashes,
 reasons, and model names, and no source leaves the box.
 
+**Public transparency (`--attest --transparency`).** When a local signing key
+is configured (`CORRALAI_CERTIFY_KEY_FILE`), `--attest` also signs the same
+statement into a DSSE envelope beside the plain file (`<path>.dsse.json`) —
+the plain file `actions/attest` consumes in CI is untouched either way.
+`--transparency` uploads that envelope to Sigstore's public Rekor log and
+prints the receipt (`attestation logged: rekor index <n> (uuid <u>)`); it
+refuses (exit 2) rather than upload an unsigned statement, and fails **open**
+on the upload itself — a Rekor outage prints one line and leaves the scan's
+own exit code untouched. **The entry is public and permanent: once logged it
+cannot be removed or edited, by anyone, including corral.** `corral verify
+--attest <path> [--db <dsn>] [--rekor-index <n>]` is the checker that ships
+with the claim: it verifies the DSSE signature and reports who signed,
+recomputes the pushed warehouse rows' hash against a `--db` and compares it to
+the statement, and confirms a Rekor entry — given or read back from `--db` —
+matches the envelope on disk. Three independent checks, one line each, never
+a silent pass.
+
 `corral seal` (see `corral --help`) reads the warehouse's `corral_seal`
 view back — the union of every push's still-valid verdicts, not any one
 scan's snapshot. Running this Action per PR, at scale, is documented in

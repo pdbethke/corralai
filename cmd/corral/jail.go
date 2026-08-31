@@ -7,9 +7,39 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 
+	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/sandbox"
 )
+
+// newRunJail is the ONE place in this package that turns a resolved sandbox
+// backend into the adequacy.Jail an actual run scores mutants with. Every
+// caller — the real `--local` scoring/validation/enumeration jails AND
+// doctor's own preflight probe — MUST go through this function, never call
+// adequacy.NewJail directly, so the two can never quietly diverge.
+//
+// This exists because they DID diverge once, silently: doctor built its own
+// jail with no dependency binds while a `--repo-dir` run built one with
+// depBinds (auto-detected .venv/node_modules/vendor dirs) via a second,
+// separate call to adequacy.NewJail. The preflight and the run were probing
+// two different sandbox realities, and doctor had no way to notice — the
+// rehearsal that motivated this: doctor reported the toolchain reachable,
+// the real run then died with `.venv/bin/python: not found`, 27k tokens
+// spent on mutants that were never graded. depBinds nil/empty behaves
+// identically to omitting the option — WithReadOnlyBinds(nil) leaves the
+// jail's binds unset — so this is always safe to call unconditionally,
+// bare mode included.
+func newRunJail(iso sandbox.Isolator, timeout time.Duration, depBinds []adequacy.DepBind) adequacy.Jail {
+	return adequacy.NewJail(iso, timeout, adequacy.WithReadOnlyBinds(depBinds))
+}
+
+// newRunEnumerator is newRunJail's Enumerator-returning sibling — same
+// backend/timeout/binds contract, same single-definition requirement. Wired
+// wherever an Enumerator is built alongside a Jail off the same inputs.
+func newRunEnumerator(iso sandbox.Isolator, timeout time.Duration, depBinds []adequacy.DepBind) adequacy.Enumerator {
+	return adequacy.NewEnumerator(iso, timeout, adequacy.WithReadOnlyBinds(depBinds))
+}
 
 // resolveLocalJail resolves the sandbox for a --local run from the --jail flag
 // (or auto), returning an actionable error and NEVER a weaker/unsandboxed

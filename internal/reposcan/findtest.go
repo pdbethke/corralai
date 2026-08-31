@@ -219,14 +219,19 @@ type SearchResult struct {
 
 // gitVisibleFiles enumerates every file the repository at root considers its
 // own — git's tracked files plus untracked-but-not-ignored ones — as
-// root-relative, slash-separated paths. It NEVER walks a gitignored
-// directory: `git ls-files` already applies the full .gitignore stack
-// (nested files, .git/info/exclude, core.excludesFile), the same authority
-// candidate.go's own gitIgnored consults, so this is the identical
-// git-universe rule applied as an allow-list instead of a deny-list. Outside
-// a git work tree, or with no git on PATH, falls back to a plain recursive
-// walk that still skips the standard skipDirs (vendor, node_modules,
-// .venv, ...) — never a search that reaches into a dependency tree.
+// root-relative, slash-separated paths, with the SAME skipDirs (vendor,
+// node_modules, .venv, ...) filter applied unconditionally, on top of
+// whatever `git ls-files` returns. Outside a git work tree, or with no git on
+// PATH, falls back to a plain recursive walk that applies the identical
+// filter directly during the walk (walkSkippingBuildDirs) instead of after —
+// either way, a dependency tree is never part of the search universe.
+//
+// The extra filter on the git branch matters because `git ls-files` answers
+// "what does git track or see as untracked-but-not-ignored", NOT "what is a
+// dependency tree" — a node_modules/ or .venv/ committed by mistake (or an
+// untracked one missing from .gitignore) is fully git-visible, and without
+// this pass a candidate basename living inside it would be handed back as a
+// paired test.
 func gitVisibleFiles(root string) ([]string, error) {
 	if root == "" {
 		// "" means "the working directory" to every OTHER caller in this
@@ -250,7 +255,11 @@ func gitVisibleFiles(root string) ([]string, error) {
 				if len(ent) == 0 {
 					continue
 				}
-				files = append(files, filepath.ToSlash(string(ent)))
+				rel := filepath.ToSlash(string(ent))
+				if pathUnderSkippedDir(rel) {
+					continue
+				}
+				files = append(files, rel)
 			}
 			return files, nil
 		} else if perr != nil {
@@ -294,6 +303,20 @@ func walkSkippingBuildDirs(root string) ([]string, error) {
 	return files, err
 }
 
+// pathUnderSkippedDir reports whether a slash-separated, root-relative path
+// has any path SEGMENT in skipDirs — the same unconditional filter
+// walkSkippingBuildDirs applies during its own walk, applied here as a
+// post-hoc check for git's flat file list, which has no directory-descent
+// step to short-circuit.
+func pathUnderSkippedDir(rel string) bool {
+	for _, seg := range strings.Split(rel, "/") {
+		if skipDirs[seg] {
+			return true
+		}
+	}
+	return false
+}
+
 // FindTest resolves the test file for codePath under root, in two strictly
 // ordered stages:
 //
@@ -327,6 +350,11 @@ func FindTest(p lang.Plugin, root, codePath string) (SearchResult, error) {
 		}
 		res.Tried = append(res.Tried, cp)
 		full := cp
+		// Guard, not a fix for a live bug: every caller today either passes
+		// root == "" (doctor.go, checkPairing) or a repo-relative cp that is
+		// never absolute, so this never actually joins in practice. It exists
+		// so a FUTURE non-empty-root caller with an absolute candidate path
+		// can't silently get a mis-joined path out of Stat.
 		if root != "" && !filepath.IsAbs(cp) {
 			full = filepath.Join(root, cp)
 		}

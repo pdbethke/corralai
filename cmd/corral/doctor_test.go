@@ -5,8 +5,11 @@ package main
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
+
+	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
 // TestDoctorReportsMissingCredentialsPerModel: a key alone does not move
@@ -106,3 +109,72 @@ func TestDoctorFailsWithNonZeroExit(t *testing.T) {
 }
 
 func writeFile(path, content string) error { return os.WriteFile(path, []byte(content), 0o644) }
+
+// TestCheckToolchainFailsWhenBinaryInvisibleInJail reproduces the exact
+// rehearsal shape this whole change exists for: a `.venv/bin/python` that IS
+// on the host (so a host-only check, or a check that merely resolves the
+// binary against the operator's cwd, would call it reachable) but is NOT
+// inside the jail's own fresh workspace, because nothing seeds it there
+// (bare mode — no --repo-dir). Before this fix, checkToolchain read the
+// resulting non-zero exit as "inconclusive, not a failure"; the real run
+// then died with the shell's own ".venv/bin/python: not found" having
+// already spent tokens on mutants that were never graded. This must now
+// FAIL, with that same "not found" wording plus the fix hint.
+func TestCheckToolchainFailsWhenBinaryInvisibleInJail(t *testing.T) {
+	iso, err := sandbox.Resolve(sandbox.Config{})
+	if err != nil {
+		t.Skipf("no working sandbox backend on this host: %v", err)
+	}
+
+	dir := t.TempDir()
+	if err := os.MkdirAll(dir+"/.venv/bin", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	real, lerr := exec.LookPath("python3")
+	if lerr != nil {
+		real, lerr = exec.LookPath("sh")
+		if lerr != nil {
+			t.Skip("neither python3 nor sh on PATH to symlink as the fake venv interpreter")
+		}
+	}
+	if err := os.Symlink(real, dir+"/.venv/bin/python"); err != nil {
+		t.Fatal(err)
+	}
+
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(wd)
+
+	got := checkToolchain(iso, []string{".venv/bin/python"}, nil)
+	if got.ok {
+		t.Fatalf("checkToolchain must FAIL when the run's own jail cannot see the toolchain: %+v", got)
+	}
+	if !strings.Contains(got.detail, "not found") {
+		t.Errorf("detail %q must carry the run's own \"not found\" message", got.detail)
+	}
+	if !strings.Contains(got.detail, "--substrate workspace") {
+		t.Errorf("detail %q must name the fix: certify --repo --substrate workspace", got.detail)
+	}
+	if !strings.Contains(got.detail, "CORRALAI_EXEC_IMAGE") {
+		t.Errorf("detail %q must name the other fix: baking the toolchain into CORRALAI_EXEC_IMAGE", got.detail)
+	}
+}
+
+// TestCheckToolchainPassesWhenReallyReachable is the control: a tool that
+// genuinely exists inside the jail (/usr is always mounted) must still pass,
+// so the fix above is not a blanket "any non-zero exit fails" regression.
+func TestCheckToolchainPassesWhenReallyReachable(t *testing.T) {
+	iso, err := sandbox.Resolve(sandbox.Config{})
+	if err != nil {
+		t.Skipf("no working sandbox backend on this host: %v", err)
+	}
+	got := checkToolchain(iso, []string{"sh"}, nil)
+	if !got.ok {
+		t.Fatalf("checkToolchain must pass for a genuinely reachable tool: %+v", got)
+	}
+}

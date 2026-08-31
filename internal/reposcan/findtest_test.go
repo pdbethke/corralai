@@ -3,6 +3,7 @@
 package reposcan
 
 import (
+	"os/exec"
 	"testing"
 
 	"github.com/pdbethke/corralai/internal/lang"
@@ -233,4 +234,52 @@ func TestFindTestReportsTriedAndRootsOnMiss(t *testing.T) {
 	if len(res.Roots) == 0 {
 		t.Error("Roots is empty on a miss — the operator needs to see where the search looked")
 	}
+}
+
+// TestGitVisibleFilesSkipsSkipDirsEvenWhenTracked pins a gap the non-git
+// walk (walkSkippingBuildDirs) always closed but the git branch of
+// gitVisibleFiles did not: `git ls-files` answers "what does git track or
+// see as untracked-but-not-ignored", not "what is a dependency tree" — a
+// node_modules/ directory committed by mistake (or missing from
+// .gitignore) is fully git-visible, and without gitVisibleFiles applying
+// the SAME skipDirs filter the non-git walk always applied, a test file
+// living inside it could be handed back by FindTest's recursive fallback
+// as a paired test.
+func TestGitVisibleFilesSkipsSkipDirsEvenWhenTracked(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"src/widgets/thing.py":           "x = 1\n",
+		"node_modules/foo/thing.test.js": "test('x', () => {});\n",
+	})
+	gitInit(t, root)
+	addAll(t, root)
+
+	files, err := gitVisibleFiles(root)
+	if err != nil {
+		t.Fatalf("gitVisibleFiles: %v", err)
+	}
+	for _, f := range files {
+		if f == "node_modules/foo/thing.test.js" {
+			t.Fatalf("gitVisibleFiles returned a TRACKED file inside node_modules/ — the dependency-tree filter must be unconditional, not just for untracked/gitignored files: %v", files)
+		}
+	}
+	if len(files) == 0 || files[0] != "src/widgets/thing.py" && !containsStr(files, "src/widgets/thing.py") {
+		t.Fatalf("expected the real source file still present: %v", files)
+	}
+}
+
+func addAll(t *testing.T, dir string) {
+	t.Helper()
+	cmd := exec.Command("git", "-C", dir, "add", "-A")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git add -A: %v\n%s", err, out)
+	}
+}
+
+func containsStr(ss []string, s string) bool {
+	for _, x := range ss {
+		if x == s {
+			return true
+		}
+	}
+	return false
 }

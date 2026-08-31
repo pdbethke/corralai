@@ -1925,14 +1925,14 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 			w.codeKey:    string(in.code),
 			w.devTestKey: string(in.devTest),
 		})
-		jail := adequacy.NewJail(in.iso, in.timeout, adequacy.WithReadOnlyBinds(depBinds))
+		jail := newRunJail(in.iso, in.timeout, depBinds)
 		// enumerator backs the tests×mutants matrix's test-listing step
 		// (--matrix). Wired unconditionally off the SAME backend/timeout/binds
 		// as jail (bwrapJail satisfies both interfaces) — a nil
 		// advpool.Driver.Enumerator makes tickMatrix always skip regardless of
 		// RunSpec.Matrix, so wiring it here costs nothing when --matrix is off
 		// (the flag is the real gate).
-		enumerator := adequacy.NewEnumerator(in.iso, in.timeout, adequacy.WithReadOnlyBinds(depBinds))
+		enumerator := newRunEnumerator(in.iso, in.timeout, depBinds)
 		w.scorer = advpool.JailScorer{Jail: jail, BaseFiles: repoFiles, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, FailureParser: failureParser}
 		w.validator = advpool.JailValidator{Jail: jail, BaseFiles: repoFiles, DevTestPath: w.devTestKey}
 		w.jailEnum = advpool.JailEnumerator{Jail: enumerator, BaseFiles: repoFiles}
@@ -1946,8 +1946,8 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 	} else {
 		w.codeKey = filepath.Base(in.codePath)
 		w.devTestKey = filepath.Base(in.testPath)
-		jail := adequacy.NewJail(in.iso, in.timeout)
-		enumerator := adequacy.NewEnumerator(in.iso, in.timeout)
+		jail := newRunJail(in.iso, in.timeout, nil)
+		enumerator := newRunEnumerator(in.iso, in.timeout, nil)
 		w.scorer = advpool.JailScorer{Jail: jail, MutantTimeout: in.testTimeout, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, FailureParser: failureParser}
 		w.validator = advpool.JailValidator{Jail: jail}
 		w.jailEnum = advpool.JailEnumerator{Jail: enumerator}

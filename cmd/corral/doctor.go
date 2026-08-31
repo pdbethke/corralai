@@ -68,7 +68,7 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	results = append(results, checkSandbox(iso, isoErr))
 
 	if isoErr == nil {
-		results = append(results, checkToolchain(iso, cmd))
+		results = append(results, checkToolchain(iso, cmd, nil))
 	}
 	results = append(results, checkCredentials(*mutantModel, *writerModel, *criticModel)...)
 	if strings.TrimSpace(*code) != "" {
@@ -115,20 +115,41 @@ func checkSandbox(iso sandbox.Isolator, err error) checkResult {
 	return checkResult{name: "sandbox starts", ok: true}
 }
 
-// checkToolchain runs the test command's own binary INSIDE the jail. The host
-// having it proves nothing: the jail mounts /usr and the dependency dirs, so a
-// compiler from snap, asdf, nvm, rustup, pyenv or Homebrew can be on PATH here
-// and absent there.
-func checkToolchain(iso sandbox.Isolator, cmd []string) checkResult {
+// checkToolchain runs the test command's own binary INSIDE the SAME jail
+// configuration `certify --local` would actually score with — same builder
+// (newRunJail), same binds, same env, same seeded-files rule (none, for a
+// bare toolchain probe: neither this check nor a bare/no-`--repo-dir` real
+// run seeds anything beyond the run's own workspace). The host having the
+// tool proves nothing: the jail mounts /usr and the dependency dirs, so a
+// compiler from snap, asdf, nvm, rustup, pyenv or Homebrew can be on PATH
+// here and absent there — and a relative path like `.venv/bin/python`,
+// resolved against the OPERATOR's cwd for the toolchain-bind heuristic, is
+// resolved against the JAIL's own fresh, empty workspace when it actually
+// runs, and is not there at all.
+//
+// depBinds mirrors whatever the real run would bind read-only (nil in bare
+// `--code`/`--test` mode, the auto-detected node_modules/vendor/.venv/...
+// set under `--repo-dir` — see certify --local's own newRunJail call), so a
+// probe run under `--repo-dir` sees exactly the dependency dirs the audit
+// itself will see.
+func checkToolchain(iso sandbox.Isolator, cmd []string, depBinds []adequacy.DepBind) checkResult {
 	if len(cmd) == 0 {
 		return checkResult{name: "toolchain reachable inside the sandbox", ok: true,
 			detail: "skipped — no test command given (pass it after `--`)"}
 	}
 	tool := cmd[0]
-	jail := adequacy.NewJail(iso, 60*time.Second)
+	jail := newRunJail(iso, 60*time.Second, depBinds)
+	// newRunJail's concrete jail (adequacy.NewJail's bwrapJail) always
+	// implements VerboseJail too — asserted here rather than widening
+	// Jail's own narrow interface, which exists to keep every OTHER caller
+	// (the scorer, which only ever needs pass/fail) honest about that.
+	vjail, ok := jail.(adequacy.VerboseJail)
+	if !ok {
+		return checkResult{name: "toolchain reachable inside the sandbox", detail: "internal: jail does not support verbose output"}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	pass, err := jail.RunTest(ctx, nil, []string{tool, "--version"})
+	pass, out, err := vjail.RunTestVerbose(ctx, nil, []string{tool, "--version"})
 	if err != nil {
 		var snap adequacy.ErrSnapToolchain
 		if asSnap(err, &snap) {
@@ -138,13 +159,46 @@ func checkToolchain(iso sandbox.Isolator, cmd []string) checkResult {
 			"%q could not run inside the sandbox: %v", tool, err)}
 	}
 	if !pass {
-		// Not every tool supports --version; a non-zero exit is inconclusive,
-		// and claiming a failure here would send the operator after a problem
-		// that may not exist.
+		// The run this check preflights would hit the SAME jail with the
+		// SAME command and die the same way — so "the shell could not even
+		// find the binary" (exit 127, sh's own "<tool>: not found") is a
+		// hard FAIL, never "inconclusive". Any OTHER non-zero exit is a
+		// distinct case: the tool WAS found and ran, it just doesn't accept
+		// --version — that one stays inconclusive, since claiming a failure
+		// there would send the operator after a problem that may not exist.
+		if toolNotFoundInJail(out, tool) {
+			return checkResult{name: "toolchain reachable inside the sandbox", detail: fmt.Sprintf(
+				"%s\nthe run itself will hit this exact wall — same jail, same binds, same env — and die grading nothing.\n"+
+					"the jail cannot see %s — for a repo with a virtualenv use `certify --repo --substrate workspace`, or bake the toolchain into CORRALAI_EXEC_IMAGE.",
+				strings.TrimSpace(out), toolchainDirHint(tool))}
+		}
 		return checkResult{name: "toolchain reachable inside the sandbox", ok: true,
 			detail: fmt.Sprintf("%q is reachable, but `--version` exited non-zero — inconclusive, not a failure: many test runners do not accept that flag", tool)}
 	}
 	return checkResult{name: "toolchain reachable inside the sandbox", ok: true}
+}
+
+// toolNotFoundInJail reports whether out is the JAIL SHELL's own "no such
+// command" complaint (sh: 1: <tool>: not found, or the container backend's
+// "No such file or directory") rather than the probed tool's own non-zero
+// exit — the exact failure mode that killed the run this check exists to
+// catch: the toolchain was on the operator's host but invisible inside the
+// jail's fresh workspace, which is a hard failure, not a tool that merely
+// rejects `--version`.
+func toolNotFoundInJail(out, tool string) bool {
+	return strings.Contains(out, tool+": not found") || strings.Contains(out, "No such file or directory")
+}
+
+// toolchainDirHint names the thing to blame in the fix hint: the parent
+// directory of a relative toolchain path (".venv/bin/python" -> ".venv"),
+// since that is what the jail actually failed to see — or the bare command
+// name when there is no directory to name (a PATH-relative "pytest").
+func toolchainDirHint(tool string) string {
+	tool = strings.TrimSpace(tool)
+	if i := strings.IndexByte(tool, '/'); i >= 0 {
+		return tool[:i]
+	}
+	return tool
 }
 
 // checkCredentials resolves the credential each assigned role needs. A key

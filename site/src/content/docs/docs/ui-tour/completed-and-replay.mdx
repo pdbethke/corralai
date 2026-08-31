@@ -28,3 +28,14 @@ and what it would have said in review), not just the one-line target it
 flagged, so the advisory opinion is auditable rather than a black box.
 
 ![The replay control bar after playing an audit run through to the end: a play button, a fully-advanced scrub bar, the position label "45 / 45", a 1x speed selector, and an exit-replay button](../../../../assets/ui-tour/replay-bar.png)
+
+## Files
+
+Alongside the task-story modal, a replay's Files tab reconstructs who
+touched which path and when, from the herd's recorded file claims — scrub-
+driven, the same way the story lens is. It's a tree, colored per agent, with
+a claimed/touched count in the header; paths only, since the tape doesn't
+capture file contents. For an audit run, the same tab shows the authored
+test instead (whichever the run actually produced) — the file tree is the
+build-run view of the identical scrub-driven space.
+

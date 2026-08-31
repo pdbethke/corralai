@@ -13,9 +13,12 @@
     proposals: an LLM drafts corrective guidance plus a reusable skill, and the
     operator approves or rejects it — from a Proposals tab (a live count badge)
     or <code>corral-admin proposals</code>. Approval promotes the guidance into
-    vetted memory and a versioned skill artifact that later audits carry
-    (fence-wrapped, clearly labeled, capped at 3). And the loop watches its own
-    efficacy: if the same blind spot keeps surviving after promotion, a revision
-    proposal reopens for the human to reconsider.
+    vetted memory and a versioned skill artifact, synced to every fleet member
+    by <code>corral sync</code> and visible in the Skills tab. From there it's
+    <em>pull</em>, not push: the herd itself searches that corpus
+    (<code>search_memory</code>) before working, the same way any agent reaches
+    for a reference. And the loop watches its own efficacy: if the same blind
+    spot keeps surviving after promotion, a revision proposal reopens for the
+    human to reconsider.
   </p>
 </section>

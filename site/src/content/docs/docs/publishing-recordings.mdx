@@ -91,15 +91,12 @@ audience.
 
 ### 4. Analysis + linking
 
-Write (or, once [#41] lands, have the herd draft) `<slug>.analysis.md`, and
-set `meta.result` to the repo's `{url, label}` so the card grows its link.
-The analysis is human-gated with everything else — it ships in the same
-review as the manifest materials.
+Write `<slug>.analysis.md`, and set `meta.result` to the repo's `{url, label}`
+so the card grows its link. The analysis is human-gated with everything else
+— it ships in the same review as the manifest materials.
 
 ### 5. Commit
 
 Commit the tape + meta + analysis together; CI rebuilds analytics and
 deploys the site. The gallery enumerates recordings by glob — committing
 the files *is* publishing them.
-
-[#41]: https://github.com/pdbethke/corralai/issues

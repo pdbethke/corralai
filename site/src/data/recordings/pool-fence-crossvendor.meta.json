@@ -11,5 +11,6 @@
   "platform": {
     "inference": "vendor cloud \u2014 Claude Sonnet 5 (Anthropic) + Gemini 3.5 Flash (Google)",
     "host": "linux/amd64"
-  }
+  },
+  "note": "recorded 2026-07-17 \u2014 models current at the time; the routing pool's Gemini floor has since moved to 3.6+."
 }

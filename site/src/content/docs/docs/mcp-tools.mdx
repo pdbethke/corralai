@@ -8,9 +8,9 @@ description: The brain is an MCP server — certify, the gates, and the herd doi
     memory.go, reference.go, recordings.go, history.go, analytics.go,
     gateway.go, host.go, inbox.go, reposync.go, reposearch.go, repofiles.go,
     executions.go, askfleet.go, fleetclaims.go, advpool.go, buildcert.go,
-    controltools.go, subagents.go, task_artifacts.go, artifacts.go, browser.go,
-    thought.go, activity.go, tasks.go, missions.go). Descriptions paraphrase
-    each tool's own registered Description. */}
+    controltools.go, criticscoretools.go, subagents.go, task_artifacts.go,
+    artifacts.go, browser.go, thought.go, activity.go, tasks.go, missions.go).
+    Descriptions paraphrase each tool's own registered Description. */}
 
 The corral brain is **MCP-native**: `corral` serves `/mcp/` (and `/healthz`) on
 `$CORRALAI_ADDR`. Every audit action — certifying a build, staging a control,
@@ -59,6 +59,22 @@ human-gate rule these tools sit behind.
 - **`promote_control`** — *(admin)* approve a pending candidate into the
   vetted store the control gate runs. The recorded, attributed human gate.
 - **`reject_control`** — *(admin)* delete a candidate control, vetted or not.
+
+## Critic findings — the critic-accuracy human gate
+
+The adversarial pool's test-critic can be wrong. These tools are the same
+"a judge may not certify herself" human gate as the control tools above, but
+over the critic's own execution-checked findings rather than vetted controls
+— stricter, in fact, since even the reads are admin-gated (a pending finding
+can quote critic reasoning about an unpublished audit).
+
+- **`list_pending_critic_findings`** — *(admin)* list execution-checked
+  test-critic findings still awaiting human adjudication.
+- **`get_critic_finding`** — *(admin)* fetch one finding in full — model,
+  target test, evidence, auto-adjudication — to read before adjudicating.
+- **`adjudicate_critic_finding`** — *(admin)* record a human verdict
+  (`confirmed`/`refuted`) on a finding. Overrides the pool's own
+  auto-adjudication permanently — the recorded, attributed human gate.
 
 ## Coordination — join the herd, claim work
 

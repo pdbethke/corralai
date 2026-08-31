@@ -29,7 +29,7 @@ for (const [p, mod] of Object.entries(analysisModules)) {
   analyses[p.split('/').pop()!.replace(/\.analysis\.md$/, '')] = (mod as any).Content;
 }
 const streams: Record<string, unknown> = {};
-const cards: { slug: string; directive: string; models: string[]; task_count: number; done_task_count: number; finding_count: number; minutes: number; result?: { url: string; label: string }; platform?: string; video?: string }[] = [];
+const cards: { slug: string; directive: string; models: string[]; task_count: number; done_task_count: number; finding_count: number; minutes: number; result?: { url: string; label: string }; platform?: string; video?: string; note?: string }[] = [];
 
 // One quiet line from meta.platform — e.g. "RTX 5070 · Ryzen 9 5900 · 128GB ·
 // local ollama". Marketing shorthand for the card; the meta keeps full names.
@@ -64,6 +64,10 @@ for (const [p, mod] of Object.entries(streamModules)) {
     // site/public/recordings/<slug>.mp4, the card grows a "watch the run" link
     // (a downloadable/embeddable mp4). Existence is checked at build time.
     video: fs.existsSync(`public/recordings/${slug}.mp4`) ? `/recordings/${slug}.mp4` : undefined,
+    // meta.note is an optional dated caveat — e.g. a tape recorded with a
+    // model that's since been retired from the routing pool. Shown verbatim
+    // on the card; the tape itself is never edited.
+    note: meta.note || undefined,
   });
 }
 // Lead with the sportspicker pair, in that order: the same file audited twice,
@@ -123,6 +127,7 @@ const replayCorpus = buildReplayCorpus(streams, cards[0]?.slug ?? '');
           {c.models.length > 0 && <span class="models">{c.models.join(' + ')}</span>}
           <span class="stats">{c.task_count} tasks ({c.done_task_count} done) · {c.finding_count} findings · {c.minutes}m</span>
           {c.platform && <span class="platform">recorded on {c.platform}</span>}
+          {c.note && <span class="note">{c.note}</span>}
           {analyses[c.slug] && <span class="has-analysis">analysis below ↓</span>}
           {c.video && (
             <a class="video-link" href={c.video} target="_blank" rel="noopener noreferrer">▶ watch the run (mp4)</a>
@@ -202,6 +207,7 @@ const replayCorpus = buildReplayCorpus(streams, cards[0]?.slug ?? '');
   .models { color: var(--amber); font-size: 0.85rem; }
   .stats { color: var(--muted); font-size: 0.85rem; }
   .platform { color: var(--muted); font-size: 0.78rem; }
+  .note { color: var(--muted); font-size: 0.78rem; font-style: italic; }
   .has-analysis { color: var(--amber); font-size: 0.78rem; }
   .analysis-panel { border-left: 3px solid var(--amber); padding-left: 16px; }
   .analysis-panel :global(h1), .analysis-panel :global(h2) { font-size: 1.15rem; }

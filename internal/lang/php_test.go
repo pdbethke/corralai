@@ -33,7 +33,10 @@ func TestPHPPlugin(t *testing.T) {
 	if len(cc) != 2 {
 		t.Fatalf("CompileCheck = %v, want a 2-command sequence", cc)
 	}
-	wantInterp, _ := phpInterpreter(nil)
+	wantInterp, interpErr := phpInterpreter(nil)
+	if interpErr != nil {
+		t.Skipf("no php on PATH — cannot derive the expected interpreter on this host: %v", interpErr)
+	}
 	for i, want := range []string{"Invoice.php", "InvoiceTest.php"} {
 		if !reflect.DeepEqual(cc[i], []string{wantInterp, "-l", want}) {
 			t.Fatalf("CompileCheck()[%d] = %v, want [%q -l %q]", i, cc[i], wantInterp, want)

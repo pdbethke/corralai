@@ -100,18 +100,50 @@ var phpVersionedInterpreterRe = regexp.MustCompile(`^php[0-9.]*$`)
 // /usr bind-mount can actually see, unlike the bare, possibly-symlinked
 // name.
 func phpInterpreter(testCmd []string) (string, error) {
+	interp, _, err := phpInterpreterAndProbe(testCmd)
+	return interp, err
+}
+
+// phpInterpreterAndProbe derives BOTH values phpInterpreter's two callers
+// need, which DIFFER for the stock, no-explicit-interpreter case:
+//
+//   - interp is phpInterpreter's own result — what CompileCheck execs
+//     DIRECTLY (no shell, no shebang), so a fully host-resolved absolute
+//     path is exactly right there.
+//   - probe is what Preflight's jail check must run to predict whether the
+//     ACTUAL TEST COMMAND will work. For an explicit interpreter (testCmd's
+//     argv0 already names a php variant), the operator's own command execs
+//     it directly too — probe equals interp, no indirection.
+//
+// For the STOCK command (`vendor/bin/phpunit`, or no testCmd at all — the
+// dominant real shape, and the exact one the acceptance run's first paid
+// attempt burned spend on), the operator's command never names an
+// interpreter in argv at all: it runs THROUGH vendor/bin/phpunit's own
+// `#!/usr/bin/env php` shebang, and `env` resolves that BARE name "php" via
+// its OWN lookup on the JAIL's PATH, at RUN TIME — not via anything this
+// plugin pre-resolved on the host. Probing the fully-resolved absolute path
+// in that case would only prove CompileCheck's OWN invocation is fine; it
+// says nothing about whether env's bare lookup survives entering the
+// sandbox, which is precisely the gap that dangled: /usr/bin/php resolves
+// through /etc/alternatives on the HOST (where env would also find it), but
+// the jail's mount table carries no /etc/alternatives, so the SAME bare
+// lookup dangles once inside it even though the host-resolved real path
+// (used only by CompileCheck, never by the actual suite run) is perfectly
+// reachable. So probe is deliberately the literal "php" in this branch —
+// exactly what env will ask the jail's PATH for.
+func phpInterpreterAndProbe(testCmd []string) (interp, probe string, err error) {
 	if bin, ok := firstExecutableToken(testCmd); ok && phpVersionedInterpreterRe.MatchString(filepath.Base(bin)) {
-		return bin, nil
+		return bin, bin, nil
 	}
 	resolved, err := exec.LookPath("php")
 	if err != nil {
-		return "", fmt.Errorf("lang: php: %w", err)
+		return "", "", fmt.Errorf("lang: php: %w", err)
 	}
 	real, err := filepath.EvalSymlinks(resolved)
 	if err != nil {
-		return "", fmt.Errorf("lang: php: could not resolve %q to its real path: %w", resolved, err)
+		return "", "", fmt.Errorf("lang: php: could not resolve %q to its real path: %w", resolved, err)
 	}
-	return real, nil
+	return real, "php", nil
 }
 
 // TestPaths covers PHPUnit's dominant naming convention — a `Test` SUFFIX on
@@ -161,7 +193,7 @@ func (phpPlugin) TestRoots() []string { return []string{"tests", "test"} }
 // "php -l" invalidated all 40 mutants with "sh: 1: php: not found" — a cost
 // a free, pre-spend probe would have caught. See phpJailPreflight.
 func (phpPlugin) Preflight(testCmd []string) error {
-	interp, err := phpInterpreter(testCmd)
+	interp, probe, err := phpInterpreterAndProbe(testCmd)
 	if err != nil {
 		return err
 	}
@@ -179,28 +211,31 @@ func (phpPlugin) Preflight(testCmd []string) error {
 		// the same absence under a misleading "php" name.
 		return nil
 	}
-	return phpJailPreflight(iso, interp)
+	return phpJailPreflight(iso, probe)
 }
 
-// phpJailPreflight verifies interp is reachable from INSIDE a sandbox — not
-// merely present on the host — by actually running `interp -v` there
-// through internal/sandbox's own Run (the same primitive
-// cmd/corral/jail.go's newRunJail and its "doctor <-> run parity" checks are
-// built on), with no dependency binds at all: a bare version probe needs
-// none, and /usr — which is where a REAL php always lives — is unconditionally
-// bind-mounted by every backend regardless of Options.ReadOnlyBinds.
+// phpJailPreflight verifies probe is reachable from INSIDE a sandbox — not
+// merely present on the host — by actually running `probe -v` there through
+// internal/sandbox's own Run (the same primitive cmd/corral/jail.go's
+// newRunJail and its "doctor <-> run parity" checks are built on), with no
+// dependency binds at all: a bare version probe needs none, and /usr —
+// where a REAL php always lives — is unconditionally bind-mounted by every
+// backend regardless of Options.ReadOnlyBinds. probe is whichever of
+// phpInterpreterAndProbe's two values actually matters for what will run —
+// see that function's doc comment for why they differ for the stock,
+// no-explicit-interpreter case.
 //
 // A missing/unreadable probe workspace is treated as inconclusive (nil, not
 // an error): this is a best-effort ADDITIONAL check layered on top of the
 // host-side ones above, not the sole gate.
-func phpJailPreflight(iso sandbox.Isolator, interp string) error {
+func phpJailPreflight(iso sandbox.Isolator, probe string) error {
 	dir, err := os.MkdirTemp("", "corral-php-preflight-*")
 	if err != nil {
 		return nil
 	}
 	defer os.RemoveAll(dir)
 
-	res := sandbox.Run(context.Background(), shellQuote(interp)+" -v", sandbox.Options{
+	res := sandbox.Run(context.Background(), shellQuote(probe)+" -v", sandbox.Options{
 		Workspace: dir,
 		Backend:   iso,
 		Timeout:   15 * time.Second,
@@ -218,8 +253,43 @@ func phpJailPreflight(iso sandbox.Isolator, interp string) error {
 	return fmt.Errorf(
 		"lang: php: %q resolves on the HOST but is not reachable INSIDE the sandbox (exit %d): %s\n"+
 			"this is commonly Debian/Ubuntu's /usr/bin/php being a symlink through /etc/alternatives, which the sandbox's mount table does not carry — "+
-			"name an explicit interpreter in your test command instead (e.g. `-- php8.3 vendor/bin/phpunit tests/`)",
-		interp, res.ExitCode, detail)
+			"name an explicit interpreter in your test command instead (e.g. `-- %s vendor/bin/phpunit tests/`)",
+		probe, res.ExitCode, detail, phpSuggestedInterpreter())
+}
+
+// phpSuggestedInterpreter names a concrete phpX.Y for the refusal hint's
+// example. Best-effort and never load-bearing — a wrong SUGGESTION only
+// costs a slightly less on-point example, never a wrong verdict — so this
+// stays a one-liner: scan PATH's directories for names matching
+// phpVersionedInterpreterRe (excluding the bare "php" itself, which is the
+// name that just dangled) and take the lexicographically-greatest. That is
+// also the numerically-greatest for the plain single-digit-minor scheme
+// every currently-supported PHP release uses (8.0 through 8.5+); it is not
+// a general version-comparison (a hypothetical "php8.10" would sort before
+// "php8.9"), which is acceptable for an illustrative example and not worth
+// a real semver parser here. A host with nothing installed falls back to a
+// fixed, currently-current version.
+func phpSuggestedInterpreter() string {
+	best := ""
+	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			name := e.Name()
+			if name == "php" || !phpVersionedInterpreterRe.MatchString(name) {
+				continue
+			}
+			if name > best {
+				best = name
+			}
+		}
+	}
+	if best != "" {
+		return best
+	}
+	return "php8.5"
 }
 
 func (phpPlugin) PromptLang() string { return "PHP" }

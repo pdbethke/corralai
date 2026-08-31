@@ -204,3 +204,132 @@ func TestPHPJailPreflightPassesForARealInterpreter(t *testing.T) {
 		t.Fatalf("phpJailPreflight(%q) must pass for a real, resolved interpreter: %v", interp, err)
 	}
 }
+
+// fakePHPIsolator is a minimal sandbox.Isolator standing in for real bwrap
+// mount semantics: it runs the probe command through a plain shell whose
+// PATH is pinned to binDir ONLY. This reproduces the exact "a resolved
+// absolute path works, but the bare env-resolved name does not" shape a
+// real bwrap jail's /usr-only mount produces for a Debian /etc/alternatives
+// chain — from scratch, so the test needs neither the host's own
+// alternatives system nor writing into a real /usr.
+type fakePHPIsolator struct{ binDir string }
+
+func (fakePHPIsolator) Name() string     { return "fake" }
+func (fakePHPIsolator) Preflight() error { return nil }
+func (f fakePHPIsolator) Wrap(command string, _ sandbox.Options, _ []string) ([]string, error) {
+	return []string{"sh", "-c", "PATH=" + f.binDir + " " + command}, nil
+}
+
+// mustFakePHPBin writes an executable "php version probe" script at
+// binDir/name that exits 0, creating binDir if needed.
+func mustFakePHPBin(t *testing.T, binDir, name string) {
+	t.Helper()
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(binDir, name), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestPHPInterpreterAndProbeDiffersForStockVsExplicit pins F1's fix: the
+// stock command (no interpreter of its own in argv) yields a probe of the
+// BARE name "php" — what vendor/bin/phpunit's own `#!/usr/bin/env php`
+// shebang asks env to resolve at run time, inside the JAIL's own PATH — even
+// though the interpreter used for CompileCheck's direct invocation is the
+// fully host-resolved absolute path. An explicit php8.5 command uses that
+// SAME token for both: no shebang/env indirection is involved when the
+// operator's own command execs it directly.
+func TestPHPInterpreterAndProbeDiffersForStockVsExplicit(t *testing.T) {
+	if _, err := exec.LookPath("php"); err != nil {
+		t.Skip("no php on PATH — cannot exercise the resolution on this host")
+	}
+	interp, probe, err := phpInterpreterAndProbe(nil)
+	if err != nil {
+		t.Fatalf("phpInterpreterAndProbe(nil): %v", err)
+	}
+	if probe != "php" {
+		t.Errorf("phpInterpreterAndProbe(nil) probe = %q, want the bare name \"php\" (what env in phpunit's shebang resolves)", probe)
+	}
+	if !filepath.IsAbs(interp) {
+		t.Errorf("phpInterpreterAndProbe(nil) interp = %q, want an absolute resolved path (still used for CompileCheck)", interp)
+	}
+
+	interp2, probe2, err := phpInterpreterAndProbe([]string{"php8.5", "vendor/bin/phpunit"})
+	if err != nil {
+		t.Fatalf("phpInterpreterAndProbe(explicit php8.5): %v", err)
+	}
+	if interp2 != "php8.5" || probe2 != "php8.5" {
+		t.Errorf("phpInterpreterAndProbe(explicit php8.5) = (%q, %q), want (\"php8.5\", \"php8.5\") — no shebang indirection for an explicit interpreter", interp2, probe2)
+	}
+}
+
+// TestPHPJailPreflightProbesTheBareNameForTheStockCommand is F1's central
+// proof: with a fixture where the RESOLVED absolute path works but the bare
+// name "php" is absent (the dangling-symlink shape), Preflight must REFUSE
+// for the stock command (vendor/bin/phpunit, no interpreter named — the
+// exact shape of the acceptance run's first paid-failure attempt) and PASS
+// for an explicit php8.5 command.
+func TestPHPJailPreflightProbesTheBareNameForTheStockCommand(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "bin")
+	// Only the VERSIONED name exists — bare "php" is absent, modelling a
+	// resolved-but-dangling-bare-name interpreter: phpInterpreter(nil)
+	// would resolve to some OTHER real path outside bin/ on this host (or
+	// fail, if none), but the STOCK command's own probe must go through
+	// bin/ alone via the fake isolator below.
+	mustFakePHPBin(t, bin, "php8.5")
+	iso := fakePHPIsolator{binDir: bin}
+
+	// The stock case: phpInterpreterAndProbe's own probe value for a
+	// no-interpreter testCmd is the bare name "php" — absent from bin/ —
+	// so phpJailPreflight must refuse.
+	_, probe, err := phpInterpreterAndProbe([]string{"vendor/bin/phpunit"})
+	if err != nil {
+		t.Skipf("no php on PATH to resolve for the stock branch on this host: %v", err)
+	}
+	if jerr := phpJailPreflight(iso, probe); jerr == nil {
+		t.Fatal("phpJailPreflight must REFUSE the stock command's probe when the bare name is absent from the jail's PATH")
+	}
+
+	// The explicit case: probe = "php8.5" itself, present in bin/, so it
+	// must PASS — proving this is not a blanket "the fake jail always
+	// fails" artifact.
+	_, probe2, err := phpInterpreterAndProbe([]string{"php8.5", "vendor/bin/phpunit"})
+	if err != nil {
+		t.Fatalf("phpInterpreterAndProbe(explicit php8.5): %v", err)
+	}
+	if jerr := phpJailPreflight(iso, probe2); jerr != nil {
+		t.Fatalf("phpJailPreflight must PASS for the explicit interpreter's own probe: %v", jerr)
+	}
+}
+
+// TestPHPSuggestedInterpreterFallsBackToAFixedVersion is F3's pin: with no
+// php[0-9.]* binaries anywhere on PATH, the suggestion falls back to a
+// fixed, named version rather than the empty string or the bare "php" that
+// dangled in the first place.
+func TestPHPSuggestedInterpreterFallsBackToAFixedVersion(t *testing.T) {
+	oldPath := os.Getenv("PATH")
+	t.Cleanup(func() { os.Setenv("PATH", oldPath) })
+	os.Setenv("PATH", t.TempDir()) // empty: nothing named php* anywhere on it
+
+	got := phpSuggestedInterpreter()
+	if got == "" || got == "php" {
+		t.Fatalf("phpSuggestedInterpreter() = %q, want a concrete versioned fallback", got)
+	}
+}
+
+// TestPHPSuggestedInterpreterPrefersAHostInstalledVersion: when a versioned
+// php IS on PATH, the suggestion names THAT one rather than a hardcoded
+// guess that might not even be installed.
+func TestPHPSuggestedInterpreterPrefersAHostInstalledVersion(t *testing.T) {
+	dir := t.TempDir()
+	mustFakePHPBin(t, dir, "php9.9")
+	oldPath := os.Getenv("PATH")
+	t.Cleanup(func() { os.Setenv("PATH", oldPath) })
+	os.Setenv("PATH", dir)
+
+	if got := phpSuggestedInterpreter(); got != "php9.9" {
+		t.Errorf("phpSuggestedInterpreter() = %q, want the host's own installed \"php9.9\"", got)
+	}
+}

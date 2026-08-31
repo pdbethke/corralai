@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -285,13 +286,16 @@ func TestVerifyAttestRekorMismatch(t *testing.T) {
 // --db recorded for this scan (auditpush's rekor_log_index column, per
 // T1) is used automatically — one fewer thing an operator has to copy by
 // hand off the --transparency print line.
+//
+// The bundle here is built with the receipt ALREADY set before the hash is
+// computed, for simplicity — this test is about the index-lookup wiring,
+// not about hash correctness across the receipt-stamped-after-hashing
+// order. It works whether or not warehouseRowsSHA256 blanks the receipt
+// fields, so it does NOT by itself prove anything about that order — see
+// TestWarehouseRowsSHA256IgnoresTheReceiptStampedAfterHashing for the test
+// that actually pins the real production order (build → hash with the
+// receipt nil → stamp → push with the receipt set → verify still passes).
 func TestVerifyAttestRekorIndexReadFromDB(t *testing.T) {
-	// Built directly (not via pushedRowsHash) so the RECEIPT is part of the
-	// bundle BEFORE the hash is computed — exactly what a real
-	// --attest --push --transparency run does (stamp the receipt, then push
-	// the same bundle the statement's hash already covers). Retrofitting a
-	// receipt onto an already-hashed bundle via UPDATE would (correctly)
-	// break check 2's hash match, which is not what this test is about.
 	idx := int64(99)
 	bundle := auditpush.Bundle{
 		Scan: auditpush.ScanRow{Repo: "o/r", ScanID: 7, Commit: "deadbeef", Audited: 1, Candidates: 1,
@@ -378,5 +382,141 @@ func TestVerifyDBFlagHelpNamesTheOrderingCaveat(t *testing.T) {
 	}
 	if !strings.Contains(help, "VACUUM") && !strings.Contains(help, "vacuum") {
 		t.Errorf("--db's help text does not name the VACUUM/re-push false-alarm caveat:\n%s", help)
+	}
+}
+
+// TestWarehouseRowsSHA256IgnoresTheReceiptStampedAfterHashing pins F1: the
+// PRODUCTION order in runCertifyRepo is build bundle → compute
+// warehouseRowsSHA256 (the receipt is nil — --transparency has not
+// uploaded anything yet) → sign the statement with that hash → upload →
+// STAMP the receipt onto the bundle → push the bundle, now carrying the
+// receipt, to the warehouse. A verifier that reads the PUSHED rows back
+// (which DO carry the receipt) and recomputes the hash must get the SAME
+// value the statement signed (computed when the receipt was still nil) —
+// otherwise every real --transparency run's own statement fails its own
+// --db check, which is exactly the bug this test catches.
+func TestWarehouseRowsSHA256IgnoresTheReceiptStampedAfterHashing(t *testing.T) {
+	bundleNoReceipt := auditpush.Bundle{
+		Scan: auditpush.ScanRow{Repo: "o/r", ScanID: 7, Commit: "deadbeef", Audited: 1, Candidates: 1},
+		Files: []auditpush.Row{
+			{Repo: "o/r", ScanID: 7, Path: "pkg/a.go", Commit: "deadbeef",
+				KillRate: ptrF(0.5), Survivors: 2, Disposition: "audited", Evidence: "proven"},
+		},
+	}
+	// The hash the statement actually signs — computed BEFORE the receipt
+	// exists, exactly like writeAuditStatement calling warehouseRowsSHA256
+	// before --transparency has uploaded anything.
+	signedHash, err := warehouseRowsSHA256(bundleNoReceipt)
+	if err != nil {
+		t.Fatalf("warehouseRowsSHA256 (no receipt): %v", err)
+	}
+
+	// The receipt is stamped AFTER — onto a copy, the way runCertifyRepo
+	// stamps bundle.Scan.RekorLogIndex/RekorUUID after a successful upload —
+	// and THIS is the bundle that actually gets pushed.
+	idx := int64(2666822278)
+	bundleWithReceipt := bundleNoReceipt
+	bundleWithReceipt.Scan.RekorLogIndex = &idx
+	bundleWithReceipt.Scan.RekorUUID = "uuid-from-a-real-upload"
+
+	target := filepath.Join(t.TempDir(), "warehouse.duckdb")
+	if _, err := auditpush.PushBundle(target, bundleWithReceipt); err != nil {
+		t.Fatalf("PushBundle: %v", err)
+	}
+
+	db, err := sql.Open("duckdb", target)
+	if err != nil {
+		t.Fatalf("open %s: %v", target, err)
+	}
+	defer db.Close()
+	readBack, err := auditpush.ReadBundle(db, "o/r", 7)
+	if err != nil {
+		t.Fatalf("ReadBundle: %v", err)
+	}
+	if readBack.Scan.RekorLogIndex == nil || *readBack.Scan.RekorLogIndex != idx {
+		t.Fatalf("read-back bundle lost the receipt — fixture is not exercising the real case")
+	}
+
+	gotHash, err := warehouseRowsSHA256(readBack)
+	if err != nil {
+		t.Fatalf("warehouseRowsSHA256 (read back, with receipt): %v", err)
+	}
+	if gotHash != signedHash {
+		t.Errorf("recomputed hash %q != the hash the statement signed %q — the receipt, stamped AFTER hashing, is leaking into the hash", gotHash, signedHash)
+	}
+}
+
+// TestVerifyAttestRowsHashMatchAcrossRealProductionOrder is the same fix,
+// exercised through corral verify itself end to end: a statement signed
+// with warehouseRowsSha256 computed BEFORE the receipt existed must still
+// pass check 2 against a warehouse whose pushed row carries the receipt —
+// the shape every real --attest --push --transparency run actually
+// produces.
+func TestVerifyAttestRowsHashMatchAcrossRealProductionOrder(t *testing.T) {
+	bundleNoReceipt := auditpush.Bundle{
+		Scan: auditpush.ScanRow{Repo: "o/r", ScanID: 7, Commit: "deadbeef", Audited: 1, Candidates: 1},
+		Files: []auditpush.Row{
+			{Repo: "o/r", ScanID: 7, Path: "pkg/a.go", Commit: "deadbeef",
+				KillRate: ptrF(0.5), Survivors: 2, Disposition: "audited", Evidence: "proven"},
+		},
+	}
+	signedHash, err := warehouseRowsSHA256(bundleNoReceipt)
+	if err != nil {
+		t.Fatalf("warehouseRowsSHA256: %v", err)
+	}
+	stmtPath := signedFixtureStatement(t, "o/r", 7, signedHash)
+
+	idx := int64(2666822278)
+	bundleWithReceipt := bundleNoReceipt
+	bundleWithReceipt.Scan.RekorLogIndex = &idx
+	bundleWithReceipt.Scan.RekorUUID = "uuid-from-a-real-upload"
+	target := filepath.Join(t.TempDir(), "warehouse.duckdb")
+	if _, err := auditpush.PushBundle(target, bundleWithReceipt); err != nil {
+		t.Fatalf("PushBundle: %v", err)
+	}
+
+	// The pushed bundle carries a real-looking RekorLogIndex (needed to
+	// exercise the same read-back path a real --transparency run leaves
+	// behind), which means --db alone would make check 3 look one up and
+	// fetch it — this test is about check 2 only, so a FakeLogger keeps it
+	// off the network regardless of what check 3 does with it.
+	orig := newTransparencyLogger
+	t.Cleanup(func() { newTransparencyLogger = orig })
+	newTransparencyLogger = func(string) transparency.Logger { return &transparency.FakeLogger{} }
+
+	// check 3 (rekor inclusion) is irrelevant here — the bundle's
+	// RekorLogIndex makes --db's auto-lookup fire, and the FakeLogger's
+	// zero-value entry will not match, which is fine: this test asserts
+	// only check 2's own line, not the overall exit code.
+	_, out, errb := runVerify(t, []string{"--attest", stmtPath, "--db", target})
+	if !strings.Contains(out, "✓ warehouse rows:") {
+		t.Errorf("stdout = %q (stderr=%s), want the warehouse-rows check to pass despite the receipt being stamped after hashing", out, errb)
+	}
+	if strings.Contains(out, "✗ warehouse rows:") {
+		t.Errorf("stdout = %q, warehouse-rows check failed — the receipt stamped after hashing leaked into the hash", out)
+	}
+}
+
+// TestVerifyAttestRekorFetchErrorIsNotCheckedNotFailed pins F2: a fetch
+// failure (network down, the log unreachable, the entry not found) is a
+// MISSING input — "not checked" — never a ✗. Only a FETCHED entry whose
+// logged hash disagrees (TestVerifyAttestRekorMismatch, above) is a real
+// mismatch. The exit code must not move for a fetch error alone.
+func TestVerifyAttestRekorFetchErrorIsNotCheckedNotFailed(t *testing.T) {
+	stmtPath := signedFixtureStatement(t, "o/r", 7, "")
+	fake := &transparency.FakeLogger{GetErr: errors.New("rekor: connection refused")}
+	orig := newTransparencyLogger
+	t.Cleanup(func() { newTransparencyLogger = orig })
+	newTransparencyLogger = func(string) transparency.Logger { return fake }
+
+	code, out, errb := runVerify(t, []string{"--attest", stmtPath, "--rekor-index", "55"})
+	if code != 0 {
+		t.Fatalf("exit %d, want 0 (a fetch error must not fail the run); stdout=%s stderr=%s", code, out, errb)
+	}
+	if !strings.Contains(out, "· rekor inclusion: not checked (fetching the log entry failed: rekor: connection refused)") {
+		t.Errorf("stdout = %q, want a not-checked line naming the fetch failure", out)
+	}
+	if strings.Contains(out, "✗ rekor inclusion:") {
+		t.Errorf("stdout = %q, a fetch error must never print as a ✗", out)
 	}
 }

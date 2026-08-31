@@ -4404,6 +4404,21 @@ func warehouseRowsSHA256(b auditpush.Bundle) (string, error) {
 	// is one copy that gets a field added to it and one that does not.
 	auditpush.BlankUnpushedSource(&b)
 	b.Scan.StatementSHA256 = ""
+	// The --transparency receipt is blanked for the SAME reason
+	// StatementSHA256 is, one step further down the same chain: production
+	// order is build bundle -> compute THIS hash (the receipt does not
+	// exist yet -- --transparency has not uploaded anything) -> sign the
+	// statement with that hash -> upload -> stamp bundle.Scan.RekorLogIndex
+	// / RekorUUID -> push the NOW-receipted bundle to the warehouse. A
+	// verifier reading the pushed rows back sees the receipt; the
+	// statement it is checking against does not, because the receipt
+	// postdates the hash by construction. Leaving these two fields live
+	// here made every real --transparency run's own statement fail its
+	// own `corral verify --db` check with a false, tamper-shaped mismatch
+	// -- caught empirically, not theoretically: a real receipt value
+	// measurably flips this hash.
+	b.Scan.RekorLogIndex = nil
+	b.Scan.RekorUUID = ""
 	b.Files = append([]auditpush.Row(nil), b.Files...)
 	for i := range b.Files {
 		b.Files[i].StatementSHA256 = ""

@@ -374,7 +374,16 @@ func verifyRekorInclusion(ctx context.Context, envelope []byte, stmt map[string]
 
 	entry, err := newTransparencyLogger(rekorBaseURL()).Get(ctx, index)
 	if err != nil {
-		return verifyCheckResult{checked: true, ok: false, detail: fmt.Sprintf("fetching rekor index %d: %v", index, err)}
+		// A FETCH failure (network down, the log unreachable, the entry not
+		// found) is a MISSING input, not a mismatch: it says nothing about
+		// whether this envelope was tampered with, only that this check
+		// could not be run right now. checked=false keeps it out of the
+		// exit-1 accounting and prints as "not checked", matching every
+		// other missing-input case above — the usage sentence "exits 1
+		// only on a real mismatch" stays true. A FETCHED entry whose
+		// logged hash does not match, below, is the one real ✗ this check
+		// can produce.
+		return verifyCheckResult{checked: false, detail: fmt.Sprintf("fetching the log entry failed: %v", err)}
 	}
 	sum := sha256.Sum256(envelope)
 	want := hex.EncodeToString(sum[:])

@@ -1,0 +1,94 @@
+---
+title: "The database found the bugs"
+description: "We made our audit tool write every decision — every planted bug's fate, every model call's cost, every downgrade's reason — into a DuckDB file. Within 48 hours the database had caught five bugs in the tool itself that no test suite had. A field note on analytics as a debugger, and why the receipts now live in a warehouse you own."
+pubDate: 2026-08-31
+draft: true
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+
+*Field note. Corral audits test suites by planting bugs and running your
+tests against them. A founding rule of the project was: record every
+decision. This week that rule stopped being bookkeeping and started being a
+debugger. Companion to
+[Half a million tokens to spot a one-line change](/field-notes/half-a-million-tokens/)
+— that was the first catch; this is the pattern.*
+
+---
+
+## The setup
+
+Every corral audit writes its whole life into a local DuckDB file: one row
+per scan, one per file at every disposition, one per planted bug with its
+fate (`killed`/`survived`, by which test, in how many milliseconds), one per
+model call with its tokens, and the run's event stream. Not logs — *tables*.
+The difference matters, because you can't `GROUP BY` a log.
+
+Then we spent two days optimizing the tool, and the discipline we enforce on
+everything held: no change ships unless the numbers before and after come
+from those tables, on a **recorded, replayable set of planted bugs** — the
+same exam, re-sat, so the only thing that can move is the thing you changed.
+
+The database repaid us five times in forty-eight hours.
+
+## The catches
+
+**The meter's first sentence.** One `cost:` row exposed the test-writing
+model being handed a 36 KB file twenty-four times per call. That story got
+[its own note](/field-notes/half-a-million-tokens/). What matters here: the
+bug was a month old, invisible in every log, and one row old in the table.
+
+**A disclosure blaming the wrong suspect.** Our concurrency probe kept
+downgrading a real project's audit with *"suite is not concurrency-safe"* —
+three runs in a row. The suite was fine. Diffing the per-bug fate rows
+between runs (a two-line query against `scan_mutants`) showed the kill
+results identical everywhere the runs overlapped, which meant the failure
+wasn't in the scoring at all — it was in the setup: the tree copy silently
+dropped a tracked *symlink* the test certificates lived behind. A log would
+have shown the same error message forever. The table showed the shape of
+what *didn't* change.
+
+**A confidence score for a comparison that never happened.** We run two
+rival test-writing models and record how often they miss the same bugs — an
+agreement coefficient. Because every attempt is a row, a review could ask:
+what happens when one model's seat never ran? Answer: the never-attempted
+bugs were being counted as "both models missed this," and the coefficient
+came back looking *significant* — `Jaccard 0.333, sufficient: true` — for a
+comparison with one real data point. Fixed so the statistic covers only
+what both seats genuinely attempted. Scarce and honest beats plentiful and
+fabricated, and only the rows made the fabrication visible.
+
+**A cache spending other runs' money.** When a verdict is reused from
+cache, the run that reuses it must report *no* cost and *no* time — it paid
+none. The tables showed reused rows carrying the original run's wall clock
+and token spend under the new run's id, which would have double-counted
+every nightly re-scan forever. The rule is now enforced at every reporting
+hop, and there's a test that reads it back out of the database.
+
+**A provider's cache, measured instead of believed.** The optimization
+story assumed prompt caching would kick in. The `cached_tokens` column
+showed it *did* on one project and *did not* on another — same code, same
+provider. We shipped the column, not the assumption.
+
+## Why the receipts live in a warehouse
+
+All of this happened against a local file. But the same rows now push — in
+one transaction, linked by hash to the signed audit statement — to a
+warehouse *you* own: any DuckDB, including [MotherDuck](https://motherduck.com)
+if you want it shared. corral hosts nothing and keeps nothing. The design
+goal is blunt: one audit per pull request, forty pull requests, one place
+where "how is our test suite actually doing, and what does it cost us" is a
+query — and where a counterparty you grant access can check your receipts
+without taking your word for anything.
+
+That last part is the whole company thesis in one sentence: the number you
+certify has to be earned by execution, and everything around it had better
+leave a receipt. It turns out that when you build the receipts first, they
+don't just convince other people — they debug you.
+
+---
+
+*Practical note: the tables are ordinary DuckDB. `corral scans show <id>
+--timing` prints where a run's minutes and tokens went; `--json` gives you
+the rows; the warehouse schema is five tables and a view. Nothing about the
+analytics needs our tooling — that's the point.*

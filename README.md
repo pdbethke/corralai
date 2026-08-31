@@ -1030,6 +1030,15 @@ licensing@corralai.dev.
 Contributions are welcome under a one-time [CLA](CLA.md); see
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
+## Sponsor this work
+
+Corral is built in the open by one maintainer, with agentic assistance — and
+audited by itself: the [recordings gallery](https://corralai.dev/recordings/)
+leads with corral grading its own signing code, gaps and all. If you want the
+old guards — CI/CD, software tests, accountability — to hold as AI writes more
+of both the code and the tests that gate it, you can fund that work:
+**[github.com/sponsors/pdbethke](https://github.com/sponsors/pdbethke)**.
+
 ---
 **[corralai.dev](https://corralai.dev)** — a live-replay one-pager (`site/`, Astro,
 Cloudflare Pages) · github.com/pdbethke/corralai. Full docs — concepts, a UI tour, and

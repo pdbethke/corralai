@@ -105,6 +105,16 @@ type Scan struct {
 	// runner that could not be built): no pass ran, and a stored 0 would say
 	// the pass ran for free.
 	SelectionMillis *int64
+	// SelectionReusedFrom is the id of the PRIOR scan whose instrumented
+	// coverage evidence this scan reused, because its tree, instrumented
+	// command and language plugin were all byte-identical to that scan's —
+	// see internal/reposcan.TreeDigest and the selection_cache table. nil
+	// on every scan that ran its own instrumented pass (or ran none at
+	// all): a reused scan and a scan that instrumented nothing both leave
+	// SelectionMillis nil, and this is the ONLY column that tells them
+	// apart, so it must never be a fabricated 0 or a guess — only a real
+	// prior scan id, or nothing.
+	SelectionReusedFrom *int64
 	// InputTokens, OutputTokens and ModelCalls are what the scan consumed
 	// from the providers, scan-wide. The per-role breakdown lives in
 	// scan_model_calls; these are the totals the run already printed to
@@ -386,6 +396,15 @@ type File struct {
 	// none were derived, which is a real and common answer, so this one is a
 	// plain int rather than a pointer.
 	GoalsDerived int
+	// GoalReused is whether this file's goal was served from the goal cache
+	// — a prior scan derived it from the SAME bytes — rather than freshly
+	// derived by this scan. *bool, like ChallengerSufficient above: "not
+	// reused" and "the question was never asked" (no cache wired, a
+	// hand-written --goals entry, a pre-migration row) are different
+	// claims, and a stored false cannot tell them apart. NULL until a
+	// reused goal is actually recorded; true is the only value this column
+	// ever fabricates nothing to avoid.
+	GoalReused *bool
 	// PerMutant and TestsPerMutantMin/Median/Max are
 	// advpool.Verdict.TestSelection.PerMutant / .TestsPerMutant: whether each
 	// mutant was graded by the tests that reach its own lines, and the spread
@@ -465,6 +484,7 @@ var scanFilesMigrationCols = []struct{ name, ddl string }{
 	{"challenger_kappa", "challenger_kappa DOUBLE"},
 	{"challenger_sufficient", "challenger_sufficient BOOLEAN"},
 	{"goals_derived", "goals_derived INTEGER"},
+	{"goal_reused", "goal_reused BOOLEAN"},
 	{"per_mutant", "per_mutant BOOLEAN"},
 	{"tests_per_mutant_min", "tests_per_mutant_min INTEGER"},
 	{"tests_per_mutant_median", "tests_per_mutant_median INTEGER"},
@@ -491,6 +511,7 @@ var scansMigrationCols = []struct{ name, ddl string }{
 	{"source_pushed", "source_pushed BOOLEAN"},
 	{"statement_sha256", "statement_sha256 VARCHAR"},
 	{"selection_ms", "selection_ms BIGINT"},
+	{"selection_reused_from", "selection_reused_from BIGINT"},
 }
 
 // scanMutantsMigrationCols is the same ledger, at the mutant grain: the
@@ -533,7 +554,7 @@ func Open(dsn string) (*Store, error) {
 		corral_version VARCHAR, host VARCHAR, cores INTEGER, trees_requested INTEGER,
 		total_ms BIGINT, input_tokens BIGINT, output_tokens BIGINT, model_calls BIGINT,
 		source_pushed BOOLEAN, statement_sha256 VARCHAR,
-		selection_ms BIGINT
+		selection_ms BIGINT, selection_reused_from BIGINT
 	)`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("scanstore: create scans table: %w", err)
@@ -614,6 +635,7 @@ func Open(dsn string) (*Store, error) {
 		challenger_kappa DOUBLE,
 		challenger_sufficient BOOLEAN,
 		goals_derived INTEGER,
+		goal_reused BOOLEAN,
 		per_mutant BOOLEAN,
 		tests_per_mutant_min INTEGER,
 		tests_per_mutant_median INTEGER,
@@ -719,6 +741,56 @@ func Open(dsn string) (*Store, error) {
 	if err := migrateScanEvents(db); err != nil {
 		db.Close()
 		return nil, err
+	}
+
+	// goal_cache is content-addressed, not scan-scoped: one row per
+	// (path, source_digest, model, engine_prompt_rev), reused across every
+	// scan that asks the same question about the same bytes. No migration
+	// list — this table did not exist before this change, so CREATE TABLE
+	// IF NOT EXISTS on every Open is the whole story: a ledger opened
+	// before this table existed gains it on the next Open, the same way
+	// scan_events itself first appeared.
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS goal_cache (
+		path VARCHAR, source_digest VARCHAR, model VARCHAR, engine_prompt_rev VARCHAR,
+		goal VARCHAR, provenance VARCHAR, created_at TIMESTAMP,
+		UNIQUE (path, source_digest, model, engine_prompt_rev)
+	)`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("scanstore: create goal_cache table: %w", err)
+	}
+
+	// selection_cache is content-addressed like goal_cache, on
+	// (tree_digest, cmd_digest, plugin, substrate) rather than a source
+	// digest: the evidence ONE instrumented run of a project's suite
+	// produces is a property of the WHOLE checkout (which tests execute
+	// which files) and the exact instrumented command that produced it,
+	// not of any one file. scan_id names the scan that EARNED this row —
+	// the one that actually paid for the instrumented run — so a later
+	// reuse can say "reused from scan N" rather than merely "reused from
+	// somewhere". No migration list, for the same reason goal_cache has
+	// none: this table did not exist before this change, so CREATE TABLE
+	// IF NOT EXISTS on every Open is the whole story.
+	//
+	// substrate joined the key (and the CREATE TABLE, in place — this
+	// column is not additive via migrateColumns, and the UNIQUE constraint
+	// was widened directly) before this table ever shipped to a merged
+	// branch: a jail run's "Ran=true" instrumented evidence is degraded in
+	// ways specific to that sandbox (see the jail's own recipe doc), and
+	// without substrate in the key a workspace run could be served a
+	// jail-degraded row keyed on the identical tree — the #110 class of
+	// bug, recurring one cache later. Because feat/tier-a-caches never
+	// merged, there is no shipped row shape to migrate off of, so widening
+	// the CREATE TABLE (and the UNIQUE constraint with it) directly is the
+	// whole fix — a real migration, adding a column AFTER a UNIQUE already
+	// shipped, would need DuckDB's ALTER TABLE ... ADD COLUMN plus
+	// re-creating the constraint, which this branch never had to do.
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS selection_cache (
+		tree_digest VARCHAR, cmd_digest VARCHAR, plugin VARCHAR, substrate VARCHAR,
+		raw BLOB, note VARCHAR, created_at TIMESTAMP, scan_id BIGINT,
+		UNIQUE (tree_digest, cmd_digest, plugin, substrate)
+	)`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("scanstore: create selection_cache table: %w", err)
 	}
 
 	// scans.id allocation: a CREATE SEQUENCE + nextval(), the same approach
@@ -966,15 +1038,15 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 		kill_rate, cache_hits, preflight_ran, preflight_note, started_at, finished_at,
 		corral_version, host, cores, trees_requested,
 		total_ms, input_tokens, output_tokens, model_calls,
-		source_pushed, statement_sha256, selection_ms
-	) VALUES (nextval('scans_id'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		source_pushed, statement_sha256, selection_ms, selection_reused_from
+	) VALUES (nextval('scans_id'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	RETURNING id`,
 		time.Now().UTC(), scan.Owner, scan.Repo, scan.Commit, scan.Substrate, scan.EngineVersion, scan.ModelSet,
 		scan.Top, scan.AllCandidates, scan.DiffBase, scan.TotalFiles, scan.Candidates, scan.Audited,
 		sanitizeKillRate(scan.KillRate), scan.CacheHits, scan.PreflightRan, scan.PreflightNote, scan.StartedAt, scan.FinishedAt,
 		scan.CorralVersion, scan.Host, scan.Cores, nullableTrees(scan.TreesRequested),
 		scan.TotalMillis, scan.InputTokens, scan.OutputTokens, scan.ModelCalls,
-		scan.SourcePushed, scan.StatementSHA256, scan.SelectionMillis,
+		scan.SourcePushed, scan.StatementSHA256, scan.SelectionMillis, scan.SelectionReusedFrom,
 	).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("scanstore: insert scan header: %w", err)
@@ -996,11 +1068,11 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 			parent_sha256, mutants_graded, mutants_invalid, mutants_timed_out,
 			selection_ms, generation_ms, pool_ms, dev_pass_ms, authored_pass_ms, critic_ms, total_ms,
 			mutant_ms_median, mutant_ms_max,
-			challenger_jaccard, challenger_kappa, challenger_sufficient, goals_derived,
+			challenger_jaccard, challenger_kappa, challenger_sufficient, goals_derived, goal_reused,
 			per_mutant, tests_per_mutant_min, tests_per_mutant_median, tests_per_mutant_max,
 			writer_mode, prompt_shape
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id, f.Path, f.Lang, f.Disposition, f.Reason,
 			fileKillRate(f), f.Survivors, f.Gradable, f.PreflightState, f.Evidence, f.Detail, f.TimedOut, f.TestWriterFailed, f.ProvenMissed, f.PoolTestUnsound,
 			f.ProvenMutantIDs, f.AuthoredTest, f.CacheKey, f.VerdictJSON, f.ComputedAt,
@@ -1011,7 +1083,7 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 			f.ParentSHA256, f.MutantsGraded, f.MutantsInvalid, f.MutantsTimedOut,
 			f.SelectionMillis, f.GenerationMillis, f.PoolMillis, f.DevPassMillis, f.AuthoredPassMillis, f.CriticMillis, f.TotalMillis,
 			f.MutantMillisMedian, f.MutantMillisMax,
-			f.ChallengerJaccard, f.ChallengerKappa, f.ChallengerSufficient, f.GoalsDerived,
+			f.ChallengerJaccard, f.ChallengerKappa, f.ChallengerSufficient, f.GoalsDerived, f.GoalReused,
 			f.PerMutant, f.TestsPerMutantMin, f.TestsPerMutantMedian, f.TestsPerMutantMax,
 			nullableString(f.WriterMode), nullableString(f.PromptShape),
 		); err != nil {
@@ -1089,7 +1161,7 @@ const scanHeaderCols = `id, ts, owner, repo, commit,
 		preflight_ran, preflight_note, started_at, finished_at,
 		corral_version, host, cores, trees_requested,
 		total_ms, input_tokens, output_tokens, model_calls,
-		source_pushed, statement_sha256, selection_ms`
+		source_pushed, statement_sha256, selection_ms, selection_reused_from`
 
 // scanScanRow decodes one scans row, in scanHeaderCols' order. Shared by both
 // readers for the same reason the column list is.
@@ -1108,7 +1180,7 @@ func scanScanRow(rows *sql.Rows) (ScanRow, error) {
 	// nothing.
 	var corralVersion, host, statementSHA sql.NullString
 	var cores, treesRequested, totalMS, inputTokens, outputTokens, modelCalls sql.NullInt64
-	var selectionMS sql.NullInt64
+	var selectionMS, selectionReusedFrom sql.NullInt64
 	var sourcePushed sql.NullBool
 	if err := rows.Scan(&r.ID, &ts, &r.Owner, &r.Repo, &r.Commit,
 		&substrate, &engineVersion, &modelSet, &r.Top, &r.AllCandidates, &diffBase,
@@ -1116,7 +1188,7 @@ func scanScanRow(rows *sql.Rows) (ScanRow, error) {
 		&r.PreflightRan, &preflightNote, &started, &finished,
 		&corralVersion, &host, &cores, &treesRequested,
 		&totalMS, &inputTokens, &outputTokens, &modelCalls,
-		&sourcePushed, &statementSHA, &selectionMS); err != nil {
+		&sourcePushed, &statementSHA, &selectionMS, &selectionReusedFrom); err != nil {
 		return ScanRow{}, fmt.Errorf("scanstore: scan scans row: %w", err)
 	}
 	r.TS, r.StartedAt, r.FinishedAt = ts.Time, started.Time, finished.Time
@@ -1132,6 +1204,13 @@ func scanScanRow(rows *sql.Rows) (ScanRow, error) {
 	if selectionMS.Valid {
 		v := selectionMS.Int64
 		r.SelectionMillis = &v
+	}
+	// Same discipline: "reused from scan N" must read back as a real id or
+	// not at all, never a fabricated 0 that would misname scan zero as the
+	// source.
+	if selectionReusedFrom.Valid {
+		v := selectionReusedFrom.Int64
+		r.SelectionReusedFrom = &v
 	}
 	return r, nil
 }
@@ -1177,7 +1256,7 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		parent_sha256, mutants_graded, mutants_invalid, mutants_timed_out,
 		selection_ms, generation_ms, pool_ms, dev_pass_ms, authored_pass_ms, critic_ms, total_ms,
 		mutant_ms_median, mutant_ms_max,
-		challenger_jaccard, challenger_kappa, challenger_sufficient, goals_derived,
+		challenger_jaccard, challenger_kappa, challenger_sufficient, goals_derived, goal_reused,
 		per_mutant, tests_per_mutant_min, tests_per_mutant_median, tests_per_mutant_max,
 		writer_mode, prompt_shape
 		FROM scan_files WHERE scan_id = ? ORDER BY rowid`, scanID)
@@ -1238,7 +1317,7 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		var selectionMS, generationMS, poolMS, devPassMS, authoredPassMS, criticMS, totalMS sql.NullInt64
 		var mutantMSMedian, mutantMSMax sql.NullInt64
 		var challengerJaccard, challengerKappa sql.NullFloat64
-		var challengerSufficient, perMutant sql.NullBool
+		var challengerSufficient, perMutant, goalReused sql.NullBool
 		var tpmMin, tpmMedian, tpmMax sql.NullInt64
 		var promptShape sql.NullString
 		if err := rows.Scan(&f.Path, &f.Lang, &f.Disposition, &f.Reason,
@@ -1252,7 +1331,7 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 			&parentSHA, &mutantsGraded, &mutantsInvalid, &mutantsTimedOut,
 			&selectionMS, &generationMS, &poolMS, &devPassMS, &authoredPassMS, &criticMS, &totalMS,
 			&mutantMSMedian, &mutantMSMax,
-			&challengerJaccard, &challengerKappa, &challengerSufficient, &goalsDerived,
+			&challengerJaccard, &challengerKappa, &challengerSufficient, &goalsDerived, &goalReused,
 			&perMutant, &tpmMin, &tpmMedian, &tpmMax, &writerMode, &promptShape); err != nil {
 			return nil, fmt.Errorf("scanstore: scan scan_files row: %w", err)
 		}
@@ -1324,6 +1403,10 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		if challengerSufficient.Valid {
 			v := challengerSufficient.Bool
 			f.ChallengerSufficient = &v
+		}
+		if goalReused.Valid {
+			v := goalReused.Bool
+			f.GoalReused = &v
 		}
 		f.PerMutant = perMutant.Bool
 		f.TestsPerMutantMin = nullCount(tpmMin)

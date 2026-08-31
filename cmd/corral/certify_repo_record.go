@@ -337,6 +337,7 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 				// scanstore.File.GoalsDerived's doc) unless this file's goal
 				// actually came from derivingGoalSource.
 				GoalsDerived: goalsDerivedFor(r.Job.Goal),
+				GoalReused:   goalReusedFor(r.Job.GoalReused),
 			})
 			continue
 		}
@@ -360,6 +361,7 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 			// emits one without), so the same GoalsDerived question has a real
 			// answer here too, even though the file never got a verdict.
 			GoalsDerived: goalsDerivedFor(r.Job.Goal),
+			GoalReused:   goalReusedFor(r.Job.GoalReused),
 		})
 	}
 
@@ -877,6 +879,20 @@ func goalsDerivedFor(g reposcan.Goal) int {
 		return 1
 	}
 	return 0
+}
+
+// goalReusedFor answers scanstore.File.GoalReused: *bool, not bool, for the
+// same reason ChallengerSufficient is — "this goal was NOT reused" and "the
+// goal cache was never asked about this file" (no cache wired, a
+// hand-written --goals entry, a pre-migration row) are different claims,
+// and only the first is a fact this scan actually established. true is the
+// only value ever written; every other case reads back NULL.
+func goalReusedFor(reused bool) *bool {
+	if reused {
+		v := true
+		return &v
+	}
+	return nil
 }
 
 // unmeasuredOnReuse returns ms for a file this scan actually audited, and nil

@@ -178,6 +178,11 @@ type Row struct {
 	ChallengerKappa      *float64
 	ChallengerSufficient *bool
 	GoalsDerived         int
+	// GoalReused mirrors scanstore.File.GoalReused: *bool, and true is the
+	// only value ever written — "not reused" and "the goal cache was never
+	// asked about this file" are different claims a stored false cannot
+	// tell apart, so both read back NULL here.
+	GoalReused *bool
 	// The per-phase clock. NULL until the phase is actually timed — see the
 	// same fields on scanstore.File. A 0 here would report a phase that
 	// costs nothing into the page whose entire purpose is the cost model.

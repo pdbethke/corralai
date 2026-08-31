@@ -99,7 +99,10 @@ func buildBundle(
 			// scan grain is where the one instrumented coverage run belongs,
 			// and NULL there means the run never happened.
 			SelectionMillis: scan.SelectionMillis,
-			InputTokens:     scan.InputTokens, OutputTokens: scan.OutputTokens,
+			// Same discipline: already nullable in the ledger, rides through
+			// as-is. nil unless THIS scan reused a prior one's evidence.
+			SelectionReusedFrom: scan.SelectionReusedFrom,
+			InputTokens:         scan.InputTokens, OutputTokens: scan.OutputTokens,
 			ModelCalls:   scan.ModelCalls,
 			SourcePushed: sourcePushed,
 		},
@@ -174,6 +177,7 @@ func buildAuditRows(files []scanstore.File, scanID int64, meta bundleMeta) []aud
 			ChallengerKappa:      f.ChallengerKappa,
 			ChallengerSufficient: f.ChallengerSufficient,
 			GoalsDerived:         f.GoalsDerived,
+			GoalReused:           f.GoalReused,
 			SelectionMillis:      f.SelectionMillis,
 			GenerationMillis:     f.GenerationMillis,
 			PoolMillis:           f.PoolMillis,

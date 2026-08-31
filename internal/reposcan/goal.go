@@ -21,6 +21,13 @@ const (
 	// (see derive.go's "derived:%s@%s") — the one thing that distinguishes a
 	// machine-derived goal from a hand-written one after the job is built.
 	goalDerivedPrefix = "derived:"
+	// goalReusedSuffix is appended by CachingGoalSource to whatever
+	// provenance the inner source wrote, on a cache hit. It closes the
+	// string rather than replacing it: a reused goal's provenance still
+	// names the model and engine version that ORIGINALLY derived it, plus
+	// the fact that this particular answer was served from the cache rather
+	// than paid for again.
+	goalReusedSuffix = " (reused)"
 )
 
 // GoalWasDerived reports whether g came from a model (derivingGoalSource),
@@ -29,6 +36,15 @@ const (
 // produced, and a hand-written goal was never asked of a deriver at all.
 func GoalWasDerived(g Goal) bool {
 	return strings.HasPrefix(g.Provenance, goalDerivedPrefix)
+}
+
+// GoalWasReused reports whether g was served by a CachingGoalSource from a
+// prior derivation over IDENTICAL bytes, rather than freshly derived (or
+// re-derived after a miss) on this call. Used for Job.GoalReused, and from
+// there for every downstream disclosure hop (the ledger, the attestation,
+// the warehouse).
+func GoalWasReused(g Goal) bool {
+	return strings.HasSuffix(g.Provenance, goalReusedSuffix)
 }
 
 // GoalSource supplies the goal for a candidate. ok=false means UNGOALED:

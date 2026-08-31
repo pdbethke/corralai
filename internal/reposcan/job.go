@@ -23,6 +23,12 @@ type Job struct {
 	Path, TestPath, Lang string
 	Goal                 Goal
 	CacheKey             string
+	// GoalReused mirrors GoalWasReused(Goal): this file's goal was served
+	// by a CachingGoalSource from a prior scan over identical bytes, rather
+	// than freshly derived. Carried on the job so every downstream
+	// disclosure hop (WeakFile, the ledger, the attestation, the warehouse)
+	// can read it without re-deriving the same fact from Goal.Provenance.
+	GoalReused bool
 }
 
 // EmitConfig is the scan-wide context every job inherits.
@@ -207,6 +213,7 @@ func EmitJobs(cfg EmitConfig, cands []Candidate, gs GoalSource) ([]Job, []Exclus
 			Owner: cfg.Owner, Repo: cfg.Repo, Commit: cfg.Commit,
 			Path: c.Path, TestPath: c.TestPath, Lang: c.Lang,
 			Goal: goal, CacheKey: key,
+			GoalReused: GoalWasReused(goal),
 		})
 	}
 	return jobs, excl, nil

@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -70,9 +71,14 @@ type ScanRow struct {
 	// NULL — never 0 — for a scan that instrumented nothing (`--whole-suite`,
 	// an unsupported language, a runner that could not be built).
 	SelectionMillis *int64
-	InputTokens     int64
-	OutputTokens    int64
-	ModelCalls      int64
+	// SelectionReusedFrom is the id of the PRIOR scan whose instrumented
+	// coverage evidence this scan reused (see the local ledger's
+	// scans.selection_reused_from, which this rides through unchanged).
+	// nil on every scan that ran its own pass, or ran none at all.
+	SelectionReusedFrom *int64
+	InputTokens         int64
+	OutputTokens        int64
+	ModelCalls          int64
 	// SourcePushed records whether THIS run carried source bytes to the
 	// warehouse. A custody fact belongs in the record: "did our code leave
 	// the box on that run" must be answerable from the table, not from
@@ -244,6 +250,7 @@ CREATE TABLE IF NOT EXISTS corral_scans (
   source_pushed    BOOLEAN,
   statement_sha256 VARCHAR,
   selection_ms     BIGINT,
+  selection_reused_from BIGINT,
   schema_version   INTEGER
 );`
 
@@ -308,6 +315,7 @@ CREATE TABLE IF NOT EXISTS corral_audits (
   challenger_kappa        DOUBLE,
   challenger_sufficient   BOOLEAN,
   goals_derived           INTEGER,
+  goal_reused             BOOLEAN,
   selection_ms            BIGINT,
   generation_ms           BIGINT,
   pool_ms                 BIGINT,
@@ -455,6 +463,7 @@ var corralAuditsMigrationCols = []struct{ name, ddl string }{
 	{"challenger_kappa", "challenger_kappa DOUBLE"},
 	{"challenger_sufficient", "challenger_sufficient BOOLEAN"},
 	{"goals_derived", "goals_derived INTEGER"},
+	{"goal_reused", "goal_reused BOOLEAN"},
 	{"selection_ms", "selection_ms BIGINT"},
 	{"generation_ms", "generation_ms BIGINT"},
 	{"pool_ms", "pool_ms BIGINT"},
@@ -481,6 +490,7 @@ var (
 	// where summing it over a scan counted one run once per file).
 	corralScansMigrationCols = []struct{ name, ddl string }{
 		{"selection_ms", "selection_ms BIGINT"},
+		{"selection_reused_from", "selection_reused_from BIGINT"},
 	}
 	corralMutantsMigrationCols = []struct{ name, ddl string }{}
 	// cached_input_tokens is additive: a warehouse an earlier corral created
@@ -556,6 +566,15 @@ const lockRetryWindow = 30 * time.Second
 // set motherduck_token in the environment — the same contract fleet sync
 // uses, and the reason this takes no credential of its own: corral never
 // holds one.
+//
+// A local path is created by ATTACH itself on first use; a MotherDuck
+// database is not — the first push to a `md:<db>` an operator has never
+// created gets ATTACH's "no database/share named" Catalog Error, which
+// pushBundleOnce recovers from by issuing CREATE DATABASE IF NOT EXISTS and
+// retrying the attach once (see attachWithAutoCreate). A MotherDuck SHARE
+// is a READ target, not a push target: CREATE DATABASE against a share
+// name fails, and that failure surfaces verbatim rather than being
+// retried.
 //
 // The handle is opened and closed inside this call, on purpose. DuckDB
 // allows a single writer on a file, so holding a handle across a scan would
@@ -764,6 +783,83 @@ func isLockHeld(err error) bool {
 		strings.Contains(msg, "database is locked")
 }
 
+// motherDuckDatabaseNamePattern is what motherDuckDBName requires a
+// MotherDuck database name to match before it is ever interpolated into
+// DDL: identifier characters only. `md:foo"; DROP TABLE x; --` is refused
+// here, not sanitized — there is no safe way to quote an arbitrary string
+// into a bare CREATE DATABASE identifier, so a name outside this pattern is
+// a hard error instead.
+var motherDuckDatabaseNamePattern = regexp.MustCompile(`^[A-Za-z0-9_]+$`)
+
+// motherDuckDBName extracts the database name from a `md:<db>` target — the
+// part after "md:", up to a "?" (a DSN can carry query parameters) or a
+// "/" (a share path, see below) — and validates it against
+// motherDuckDatabaseNamePattern.
+func motherDuckDBName(target string) (string, error) {
+	name := strings.TrimPrefix(target, "md:")
+	if i := strings.IndexAny(name, "?/"); i >= 0 {
+		name = name[:i]
+	}
+	if name == "" {
+		return "", fmt.Errorf("auditpush: %q names no database after \"md:\"", target)
+	}
+	if !motherDuckDatabaseNamePattern.MatchString(name) {
+		return "", fmt.Errorf("auditpush: database name %q is not [A-Za-z0-9_]+, refusing to build DDL from it", name)
+	}
+	return name, nil
+}
+
+// isMissingMotherDuckDatabase reports whether err is the specific DuckDB
+// Catalog Error MotherDuck raises when ATTACH names a database (or share)
+// that does not exist yet: "Catalog Error: no database/share named '<db>'
+// found". Matched on this literal substring — nothing else in this
+// package's error surface produces it — so a first-time push to a database
+// an operator has never created is distinguishable from every other ATTACH
+// failure (a bad token, a network error, a genuinely misspelled share).
+func isMissingMotherDuckDatabase(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "no database/share named")
+}
+
+// attachWithAutoCreate runs attach() once. If it fails on a `md:` target
+// with the specific "no database/share named" Catalog Error (see
+// isMissingMotherDuckDatabase), it treats that as "this is a first push to
+// a database nobody has created yet" — unlike a local DuckDB path, which
+// ATTACH itself creates on first use, MotherDuck requires an explicit
+// CREATE DATABASE before a database it does not already know about can be
+// attached. It validates and extracts the database name (motherDuckDBName,
+// which refuses anything but [A-Za-z0-9_]+ rather than quoting an arbitrary
+// string into DDL), calls createDB(name) once, and retries attach() exactly
+// once. Any other error class (a bad token, a network failure, an ATTACH
+// that fails for a reason unrelated to the database not existing) is
+// returned as-is, with no create and no retry — and a database created via
+// createDB is never attempted for a local path, since attach is not even
+// asked for a local path here.
+//
+// A MotherDuck SHARE is a READ target, not a push target: CREATE DATABASE
+// against a share name fails (shares are not databases an account can
+// create into), and that failure is surfaced verbatim rather than retried
+// again — a share was never going to become writable by trying harder.
+func attachWithAutoCreate(target string, attach func() error, createDB func(name string) error) error {
+	err := attach()
+	if err == nil {
+		return nil
+	}
+	if !strings.HasPrefix(target, "md:") || !isMissingMotherDuckDatabase(err) {
+		return err
+	}
+	name, nerr := motherDuckDBName(target)
+	if nerr != nil {
+		return fmt.Errorf("%w (and could not create it: %v)", err, nerr)
+	}
+	if cerr := createDB(name); cerr != nil {
+		return fmt.Errorf("%w (creating database %q failed: %v)", err, name, cerr)
+	}
+	return attach()
+}
+
 func pushBundleOnce(target string, b Bundle) (Counts, error) {
 	db, err := sql.Open("duckdb", "")
 	if err != nil {
@@ -780,7 +876,15 @@ func pushBundleOnce(target string, b Bundle) (Counts, error) {
 			return Counts{}, fmt.Errorf("auditpush: load motherduck extension: %w", err)
 		}
 	}
-	if _, err := db.Exec(fmt.Sprintf("ATTACH '%s' AS warehouse", strings.ReplaceAll(target, "'", "''"))); err != nil {
+	attach := func() error {
+		_, err := db.Exec(fmt.Sprintf("ATTACH '%s' AS warehouse", strings.ReplaceAll(target, "'", "''")))
+		return err
+	}
+	createDB := func(name string) error {
+		_, err := db.Exec(fmt.Sprintf(`CREATE DATABASE IF NOT EXISTS "%s"`, name))
+		return err
+	}
+	if err := attachWithAutoCreate(target, attach, createDB); err != nil {
 		return Counts{}, fmt.Errorf("auditpush: attach %q: %w", target, err)
 	}
 	// From here every statement is unqualified and lands in the operator's
@@ -835,14 +939,14 @@ func pushBundleOnce(target string, b Bundle) (Counts, error) {
 		    ts, repo, run_url, scan_id, commit_sha, corral_version, substrate,
 		    host, cores, trees_requested, diff_base, candidates, audited, passed,
 		    total_ms, input_tokens, output_tokens, model_calls,
-		    source_pushed, statement_sha256, selection_ms, schema_version
-		  ) VALUES (`+placeholders(22)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+		    source_pushed, statement_sha256, selection_ms, selection_reused_from, schema_version
+		  ) VALUES (`+placeholders(23)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 			now, b.Scan.Repo, b.Scan.RunURL, b.Scan.ScanID, b.Scan.Commit,
 			b.Scan.CorralVersion, b.Scan.Substrate, b.Scan.Host, b.Scan.Cores,
 			nullIfZeroInt(b.Scan.TreesRequested), b.Scan.DiffBase,
 			b.Scan.Candidates, b.Scan.Audited, b.Scan.Passed,
 			b.Scan.TotalMillis, b.Scan.InputTokens, b.Scan.OutputTokens, b.Scan.ModelCalls,
-			b.Scan.SourcePushed, b.Scan.StatementSHA256, b.Scan.SelectionMillis, SchemaVersion,
+			b.Scan.SourcePushed, b.Scan.StatementSHA256, b.Scan.SelectionMillis, b.Scan.SelectionReusedFrom, SchemaVersion,
 		); err != nil {
 			return Counts{}, fmt.Errorf("auditpush: insert scan row: %w", err)
 		}
@@ -966,11 +1070,11 @@ func insertFileRow(tx *sql.Tx, now time.Time, r Row) error {
 	    regions_total, regions_probed, dropped_regions, vacuous_findings,
 	    authored_test_not_collected, baseline_failed, suite_baseline_ms,
 	    proven_mutant_ids, challenger_jaccard, challenger_kappa,
-	    challenger_sufficient, goals_derived,
+	    challenger_sufficient, goals_derived, goal_reused,
 	    selection_ms, generation_ms, pool_ms, dev_pass_ms, authored_pass_ms,
 	    critic_ms, total_ms, mutant_ms_median, mutant_ms_max,
 	    authored_test, verdict_json, schema_version, prompt_shape
-	  ) VALUES (`+placeholders(72)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+	  ) VALUES (`+placeholders(73)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 		now, r.Repo, r.Commit, r.Path, r.Lang,
 		killRate, r.Survivors, r.ProvenMissed,
 		r.TimedOut, r.TestWriterFailed, r.PoolTestUnsound,
@@ -991,7 +1095,7 @@ func insertFileRow(tx *sql.Tx, now time.Time, r Row) error {
 		r.RegionsTotal, r.RegionsProbed, nullIfEmpty(r.DroppedRegions), r.VacuousFindings,
 		r.AuthoredTestNotCollected, r.BaselineFailed, r.SuiteBaselineMillis,
 		nullIfEmpty(r.ProvenMutantIDs), r.ChallengerJaccard, r.ChallengerKappa,
-		r.ChallengerSufficient, r.GoalsDerived,
+		r.ChallengerSufficient, r.GoalsDerived, r.GoalReused,
 		r.SelectionMillis, r.GenerationMillis, r.PoolMillis, r.DevPassMillis,
 		r.AuthoredPassMillis, r.CriticMillis, r.TotalMillis,
 		r.MutantMillisMedian, r.MutantMillisMax,

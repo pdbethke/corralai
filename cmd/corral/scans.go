@@ -164,7 +164,7 @@ func runScansShow(args []string, open func(string) (scansReader, error), stdout,
 	dsn := fs.String("db", "", "path to the scan ledger (default: $CORRALAI_SCANS_DB, else ~/.claude/corralai_scans.duckdb)")
 	asJSON := fs.Bool("json", false, "emit the raw rows as JSON")
 	evidence := fs.Bool("evidence", false, "also print the pool's authored test source for each audited file")
-	timing := fs.Bool("timing", false, "also print where each audited file's wall clock went, phase by phase — with --json, adds top-level selection_ms and model_calls and wraps the file array in an object ({\"files\": [...], \"selection_ms\": ..., \"model_calls\": [...]}) instead of emitting it bare")
+	timing := fs.Bool("timing", false, "also print where each audited file's wall clock went, phase by phase — with --json, adds top-level selection_ms, selection_reused_from and model_calls and wraps the file array in an object ({\"files\": [...], \"selection_ms\": ..., \"selection_reused_from\": ..., \"model_calls\": [...]}) instead of emitting it bare")
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
 	}
@@ -252,6 +252,11 @@ func runScansShow(args []string, open func(string) (scansReader, error), stdout,
 		} else if ok && row.SelectionMillis != nil {
 			sel := time.Duration(*row.SelectionMillis) * time.Millisecond
 			fmt.Fprintf(stdout, "\nselection %s (once per scan)\n", durationText(sel))
+		} else if ok && row.SelectionReusedFrom != nil {
+			// This scan ran no selection pass of its own (SelectionMillis is
+			// nil above), and this is the one column that tells "reused"
+			// apart from "never ran" — see scanstore.Scan.SelectionReusedFrom.
+			fmt.Fprintf(stdout, "\nselection: reused — tree unchanged since scan %d\n", *row.SelectionReusedFrom)
 		}
 		// The money half of the same readout, by the same per-file grouping:
 		// best-effort, like the spread above — a ledger written before
@@ -301,9 +306,17 @@ func runScansShow(args []string, open func(string) (scansReader, error), stdout,
 // `--json` alone has always printed stays byte-identical — an existing
 // consumer that never asked for timing sees no change at all.
 type scansShowJSON struct {
-	Files       []scanstore.File     `json:"files"`
-	SelectionMS *int64               `json:"selection_ms"`
-	ModelCalls  []scansShowModelCall `json:"model_calls"`
+	Files       []scanstore.File `json:"files"`
+	SelectionMS *int64           `json:"selection_ms"`
+	// SelectionReusedFrom is the id of the scan whose selection evidence
+	// THIS scan reused — null when this scan ran its own selection pass
+	// (SelectionMS is set instead) or ran none at all. See
+	// scanstore.Scan.SelectionReusedFrom's own doc for why this is the only
+	// column that tells those two cases apart; the text `--timing` readout
+	// already prints it (see the "selection: reused" line above), and this
+	// field is the same fact reaching --json.
+	SelectionReusedFrom *int64               `json:"selection_reused_from"`
+	ModelCalls          []scansShowModelCall `json:"model_calls"`
 }
 
 // scansShowModelCall is one scan_model_calls row, snake_case and with the
@@ -346,6 +359,7 @@ func runScansShowJSONWithTiming(st scansReader, id int64, files []scanstore.File
 		fmt.Fprintln(stderr, "corral scans show: scan header unavailable:", serr)
 	} else if ok {
 		out.SelectionMS = row.SelectionMillis
+		out.SelectionReusedFrom = row.SelectionReusedFrom
 	}
 
 	calls, cerr := st.ModelCallsForScan(context.Background(), id)

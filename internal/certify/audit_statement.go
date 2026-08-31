@@ -98,6 +98,13 @@ type AuditedFile struct {
 	// always shows the whole file). Omitted, never signed as "", on a run
 	// that predates this disclosure.
 	PromptShape string `json:"promptShape,omitempty"`
+	// GoalReused discloses that this file's goal was served from the goal
+	// cache — a PRIOR scan derived it from the same bytes, by the same
+	// model under the same prompt revision — rather than freshly derived by
+	// THIS scan. omitempty: present (and true) only when a goal was
+	// actually reused, never a signed false for the ordinary case, so a
+	// verifier reading this key at all learns something.
+	GoalReused bool `json:"goalReused,omitempty"`
 }
 
 // TestsPerMutantSpread is how many tests each graded mutant ran: the
@@ -238,6 +245,13 @@ func BuildAuditAttestation(s AuditStatement) map[string]any {
 		}
 		if f.PromptShape != "" {
 			entry["promptShape"] = f.PromptShape
+		}
+		// Signed only when true: this file's goal was served from the goal
+		// cache rather than freshly derived by this scan. Never a signed
+		// false for the ordinary case — the same rule every other honesty
+		// flag in this predicate follows.
+		if f.GoalReused {
+			entry["goalReused"] = true
 		}
 		files = append(files, entry)
 	}

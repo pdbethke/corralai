@@ -225,6 +225,14 @@ type WeakFile struct {
 	// file). "" — never fabricated — for a run that predates this
 	// disclosure, or a preset (`--mutants`) run that generated nothing.
 	PromptShape string
+	// GoalReused mirrors Job.GoalReused: this file's goal was served from
+	// the goal cache — a prior scan derived it from the SAME bytes — rather
+	// than freshly derived by this scan. false for a fresh derivation, a
+	// hand-written --goals entry, or a run with no cache wired; downstream
+	// consumers (the ledger, the attestation) carry it forward as NULL
+	// rather than a fabricated false, so a reader can still tell "not
+	// reused" from "the question was never asked".
+	GoalReused bool
 }
 
 // MeasuredSpread reports whether this file's run actually measured a
@@ -483,6 +491,9 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 			Challenger: r.Verdict.ChallengerAgreement,
 			// What a generator shard actually saw — see WeakFile.PromptShape.
 			PromptShape: r.Verdict.PromptShape,
+			// Whether this file's goal was served from the goal cache —
+			// see WeakFile.GoalReused.
+			GoalReused: r.Job.GoalReused,
 		})
 	}
 

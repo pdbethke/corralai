@@ -260,6 +260,21 @@ type File struct {
 	// nothing graded the file, so a stored 0.0 would later read as "your
 	// tests caught nothing here" about a measurement that was never made.
 	Uncovered bool
+	// ImportOnly refines Uncovered: nil (SQL NULL) for a row written before
+	// this column existed, or for an audited row this scan simply did not
+	// carry the refinement for (defensive only — every write path below
+	// always sets it once Uncovered is known). *true means the file WAS
+	// executed — at import/module-load time, coverage.py's own static
+	// record, never inside a test's dynamic context — just never by a test
+	// DIRECTLY (reposcan.ReasonImportOnly / advpool.Verdict.ImportOnly);
+	// *false means Uncovered is a genuine "nothing executed this at all"
+	// finding. Every reader that prints the word UNCOVERED off this row
+	// (corral scans, corral seal) MUST check ImportOnly FIRST: calling an
+	// imported-but-untested file "UNCOVERED — no test executes this file"
+	// is the exact false claim reposcan.ReasonImportOnly exists to correct,
+	// and it survives here unless every reader honours the same precedence
+	// the candidacy exclusion already does.
+	ImportOnly *bool
 	// CoveringTests is the number of tests the selection evidence showed
 	// execute this file — reposcan.Candidate.CoveringTests, carried whole.
 	// nil (SQL NULL) for a row from a scan where the evidence never measured
@@ -522,6 +537,7 @@ var scanFilesMigrationCols = []struct{ name, ddl string }{
 	{"writer_mode", "writer_mode VARCHAR"},
 	{"prompt_shape", "prompt_shape VARCHAR"},
 	{"covering_tests", "covering_tests INTEGER"},
+	{"import_only", "import_only BOOLEAN"},
 }
 
 // scansMigrationCols is the same ledger at the SCAN grain. `scans` had no
@@ -676,7 +692,8 @@ func Open(dsn string) (*Store, error) {
 		tests_per_mutant_max INTEGER,
 		writer_mode VARCHAR,
 		prompt_shape VARCHAR,
-		covering_tests INTEGER
+		covering_tests INTEGER,
+		import_only BOOLEAN
 	)`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("scanstore: create scan_files table: %w", err)
@@ -1044,6 +1061,19 @@ func nullableIntPtr(v *int) any {
 	return *v
 }
 
+// nullableBoolPtr is nullableIntPtr's boolean twin: a nil *bool binds SQL
+// NULL (a row written before File.ImportOnly existed, or one this write
+// path did not set); a non-nil pointer binds the known true/false value.
+// Shared by every nullable *bool column this store writes, for the same
+// reason nullableIntPtr is: the one place a column's nil-ness is decided
+// cannot silently drift from the read side's nullBoolPtr.
+func nullableBoolPtr(v *bool) any {
+	if v == nil {
+		return nil
+	}
+	return *v
+}
+
 // cachedTokensParam is nullableIntPtr for the cached-prompt count: NULL when
 // nothing measured one, never a stored 0 a later query would average.
 func cachedTokensParam(v *int64) any {
@@ -1111,9 +1141,9 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 			mutant_ms_median, mutant_ms_max,
 			challenger_jaccard, challenger_kappa, challenger_sufficient, goals_derived, goal_reused,
 			per_mutant, tests_per_mutant_min, tests_per_mutant_median, tests_per_mutant_max,
-			writer_mode, prompt_shape, covering_tests
+			writer_mode, prompt_shape, covering_tests, import_only
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id, f.Path, f.Lang, f.Disposition, f.Reason,
 			fileKillRate(f), f.Survivors, f.Gradable, f.PreflightState, f.Evidence, f.Detail, f.TimedOut, f.TestWriterFailed, f.ProvenMissed, f.PoolTestUnsound,
 			f.ProvenMutantIDs, f.AuthoredTest, f.CacheKey, f.VerdictJSON, f.ComputedAt,
@@ -1126,7 +1156,7 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 			f.MutantMillisMedian, f.MutantMillisMax,
 			f.ChallengerJaccard, f.ChallengerKappa, f.ChallengerSufficient, f.GoalsDerived, f.GoalReused,
 			f.PerMutant, f.TestsPerMutantMin, f.TestsPerMutantMedian, f.TestsPerMutantMax,
-			nullableString(f.WriterMode), nullableString(f.PromptShape), nullableIntPtr(f.CoveringTests),
+			nullableString(f.WriterMode), nullableString(f.PromptShape), nullableIntPtr(f.CoveringTests), nullableBoolPtr(f.ImportOnly),
 		); err != nil {
 			return 0, fmt.Errorf("scanstore: insert scan_files row for %q: %w", f.Path, err)
 		}
@@ -1309,7 +1339,7 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		mutant_ms_median, mutant_ms_max,
 		challenger_jaccard, challenger_kappa, challenger_sufficient, goals_derived, goal_reused,
 		per_mutant, tests_per_mutant_min, tests_per_mutant_median, tests_per_mutant_max,
-		writer_mode, prompt_shape, covering_tests
+		writer_mode, prompt_shape, covering_tests, import_only
 		FROM scan_files WHERE scan_id = ? ORDER BY rowid`, scanID)
 	if err != nil {
 		return nil, fmt.Errorf("scanstore: files for scan %d: %w", scanID, err)
@@ -1377,6 +1407,10 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		// pairing-only fallback) has none, and that is a different fact from
 		// a measured zero.
 		var coveringTests sql.NullInt64
+		// import_only reads back nullable for a row written before this
+		// column existed — see File.ImportOnly's own doc for why NULL is
+		// distinct from a known false.
+		var importOnly sql.NullBool
 		if err := rows.Scan(&f.Path, &f.Lang, &f.Disposition, &f.Reason,
 			&f.KillRate, &f.Survivors, &f.Gradable, &f.PreflightState, &f.Evidence, &detail, &timedOut, &testWriterFailed, &provenMissed, &poolTestUnsound,
 			&provenIDs, &authoredTest,
@@ -1389,7 +1423,7 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 			&selectionMS, &generationMS, &poolMS, &devPassMS, &authoredPassMS, &criticMS, &totalMS,
 			&mutantMSMedian, &mutantMSMax,
 			&challengerJaccard, &challengerKappa, &challengerSufficient, &goalsDerived, &goalReused,
-			&perMutant, &tpmMin, &tpmMedian, &tpmMax, &writerMode, &promptShape, &coveringTests); err != nil {
+			&perMutant, &tpmMin, &tpmMedian, &tpmMax, &writerMode, &promptShape, &coveringTests, &importOnly); err != nil {
 			return nil, fmt.Errorf("scanstore: scan scan_files row: %w", err)
 		}
 		f.Detail = detail.String
@@ -1436,6 +1470,10 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 			f.ReusedFromScanID = &v
 		}
 		f.CoveringTests = nullCount(coveringTests)
+		if importOnly.Valid {
+			v := importOnly.Bool
+			f.ImportOnly = &v
+		}
 		f.ParentSHA256 = parentSHA.String
 		f.MutantsGraded = int(mutantsGraded.Int64)
 		f.MutantsInvalid = int(mutantsInvalid.Int64)

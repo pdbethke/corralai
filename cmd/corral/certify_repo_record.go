@@ -255,6 +255,16 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 				// scanstore.fileKillRate): no test executes this file, so
 				// there is no measurement to record.
 				Uncovered: r.Verdict.Uncovered,
+				// ImportOnly refines Uncovered for a GRADED file's own
+				// verdict, the same way it does for a candidacy-level
+				// exclusion below: the evidence found the file executed —
+				// at import time, never inside a test — which every reader
+				// that prints the word UNCOVERED off this row must check
+				// FIRST (see scanstore.File.ImportOnly's own doc). Always
+				// set here, even false: a graded row that DOES know the
+				// answer should never read back NULL the way a
+				// pre-migration row honestly must.
+				ImportOnly: boolPtr(r.Verdict.ImportOnly),
 				// WHICH exam this kill rate answers, when it was a recorded
 				// one. See scanstore.File.MutantsFrom.
 				MutantsFrom: mutantsFrom,
@@ -396,6 +406,13 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 			// column meant for humans, not by the boolean column meant for
 			// exactly this.
 			Uncovered: e.Reason == reposcan.ReasonUncovered,
+			// ImportOnly mirrors Uncovered's own fix, at the SAME candidacy
+			// grain: a file WidenCandidacyByEvidence excluded as
+			// reposcan.ReasonImportOnly is executed (import-time only), not
+			// untested outright, and `corral scans`/`corral seal` must be
+			// able to tell the two exclusions apart by column, not just by
+			// re-parsing Reason.
+			ImportOnly: boolPtr(e.Reason == reposcan.ReasonImportOnly),
 		})
 	}
 	return rows
@@ -942,3 +959,10 @@ func unmeasuredOnReuse(r reposcan.FileResult, ms *int64) *int64 {
 	}
 	return ms
 }
+
+// boolPtr is the one helper this file needs for a *bool ledger column
+// (scanstore.File.ImportOnly): a definitively-known true/false value, as
+// opposed to nil — the "this write path never set it" state a pre-migration
+// row also reads back as. Named for the shape it converts, the same reason
+// scanstore's own nullableIntPtr was renamed off its first caller.
+func boolPtr(v bool) *bool { return &v }

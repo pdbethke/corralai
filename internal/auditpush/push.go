@@ -213,6 +213,15 @@ type Row struct {
 	// (no evidence collected, or a pairing-only fallback) — never confused
 	// with a measured, genuine zero.
 	CoveringTests *int
+	// ImportOnly mirrors scanstore.File.ImportOnly: refines Uncovered — nil
+	// for a row pushed before this column existed, *true when the file was
+	// executed at import time and never by a test directly (see
+	// reposcan.ReasonImportOnly), *false when Uncovered is a genuine
+	// "nothing executed this at all" finding. A reader (corral seal's
+	// UncoveredPaths) that prints the word UNCOVERED off Uncovered alone,
+	// without checking this FIRST, reintroduces the exact false claim
+	// reposcan.ReasonImportOnly exists to correct.
+	ImportOnly *bool
 }
 
 // Link identifies the ledger scan and signed statement a pushed row belongs

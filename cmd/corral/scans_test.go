@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/scanstore"
 )
 
@@ -233,6 +234,31 @@ func TestScansShowMarksAReusedFile(t *testing.T) {
 	}
 	if !strings.Contains(got, "REUSED") {
 		t.Errorf("no reuse marker at all:\n%s", got)
+	}
+}
+
+// TestScanFileSelectionDistinguishesImportOnlyFromUncovered pins the fix for
+// `corral scans` calling an imported-but-untested file UNCOVERED: a row
+// whose evidence found it executed at import time — never by a test
+// directly — must print reposcan.ReasonImportOnly's own text, and a row the
+// evidence genuinely never executed must keep the plain, byte-identical
+// "UNCOVERED" this column has always printed.
+func TestScanFileSelectionDistinguishesImportOnlyFromUncovered(t *testing.T) {
+	importOnly := true
+	f := scanstore.File{Path: "pkg/__init__.py", Uncovered: true, ImportOnly: &importOnly}
+	if got := scanFileSelectionWith(f, mutantSpread{}); got != reposcan.ReasonImportOnly {
+		t.Errorf("scanFileSelectionWith(import-only) = %q, want %q", got, reposcan.ReasonImportOnly)
+	}
+
+	dead := scanstore.File{Path: "pkg/dead.py", Uncovered: true}
+	if got := scanFileSelectionWith(dead, mutantSpread{}); got != "UNCOVERED" {
+		t.Errorf("scanFileSelectionWith(genuinely uncovered) = %q, want the unchanged %q", got, "UNCOVERED")
+	}
+
+	notImportOnly := false
+	explicit := scanstore.File{Path: "pkg/dead2.py", Uncovered: true, ImportOnly: &notImportOnly}
+	if got := scanFileSelectionWith(explicit, mutantSpread{}); got != "UNCOVERED" {
+		t.Errorf("scanFileSelectionWith(ImportOnly=false) = %q, want %q", got, "UNCOVERED")
 	}
 }
 

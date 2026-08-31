@@ -28,6 +28,12 @@ type fakeSealReader struct {
 	// TestSealMarksLiveStaleAndNever already does for rows) must be able to
 	// do the same for uncovered paths.
 	uncovered map[string][]string
+	// importOnly is UncoveredPaths' own subset, scoped by repo the same
+	// way: a path named here is also named in uncovered — this fixture does
+	// not enforce that (a test constructing an inconsistent fixture is
+	// testing the reader's contract, not this double), it only hands the
+	// two maps back the way ImportOnlyPaths' own contract requires.
+	importOnly map[string][]string
 }
 
 func (f fakeSealReader) SealRows(_ context.Context, repo string) ([]sealRow, error) {
@@ -46,6 +52,14 @@ func (f fakeSealReader) SealRows(_ context.Context, repo string) ([]sealRow, err
 func (f fakeSealReader) UncoveredPaths(_ context.Context, repo string) (map[string]bool, error) {
 	out := map[string]bool{}
 	for _, p := range f.uncovered[repo] {
+		out[p] = true
+	}
+	return out, nil
+}
+
+func (f fakeSealReader) ImportOnlyPaths(_ context.Context, repo string) (map[string]bool, error) {
+	out := map[string]bool{}
+	for _, p := range f.importOnly[repo] {
 		out[p] = true
 	}
 	return out, nil
@@ -228,6 +242,46 @@ func TestSealMarksUncoveredDistinctFromNeverAudited(t *testing.T) {
 	}
 }
 
+// TestSealMarksImportOnlyDistinctFromUncovered pins the fix for `corral
+// seal` calling an imported-but-untested file UNCOVERED: a path
+// ImportOnlyPaths also names must print reposcan.ReasonImportOnly's own
+// text, never the plain "uncovered" a genuinely dead file still gets.
+func TestSealMarksImportOnlyDistinctFromUncovered(t *testing.T) {
+	dir, repo := sealFixtureRepo(t)
+
+	reader := fakeSealReader{
+		uncovered: map[string][]string{
+			repo: {"stale.go", "never.go"},
+		},
+		importOnly: map[string][]string{
+			repo: {"stale.go"},
+		},
+	}
+
+	var out, errOut bytes.Buffer
+	code := runSeal([]string{"--db", "unused", "--repo", dir, "--top", "3"},
+		func(string) (sealReader, error) { return reader, nil }, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("runSeal exit %d, stderr=%s", code, errOut.String())
+	}
+
+	got := out.String()
+	if !strings.Contains(got, reposcan.ReasonImportOnly) {
+		t.Errorf("output missing the import-only text %q; got:\n%s", reposcan.ReasonImportOnly, got)
+	}
+	for _, line := range strings.Split(got, "\n") {
+		if strings.Contains(line, "stale.go") && strings.Contains(line, "uncovered") && !strings.Contains(line, reposcan.ReasonImportOnly) {
+			t.Errorf("stale.go (import-only) was printed plain UNCOVERED:\n%s", line)
+		}
+		if strings.Contains(line, "never.go") && strings.Contains(line, reposcan.ReasonImportOnly) {
+			t.Errorf("never.go (genuinely uncovered, not import-only) was printed the import-only text:\n%s", line)
+		}
+	}
+	if !strings.Contains(got, "never.go") {
+		t.Errorf("never.go (genuinely uncovered) missing from output:\n%s", got)
+	}
+}
+
 // TestSealJSONUncoveredState pins the --json shape for an uncovered file:
 // the state string, and null numbers (like never-audited) since nothing was
 // ever measured for it.
@@ -396,6 +450,63 @@ func TestOpenSealDBUncoveredPathsBypassesTheView(t *testing.T) {
 	}
 	if len(rows) != 1 || rows[0].Path != "pkg/a.go" {
 		t.Errorf("SealRows = %+v, want only the graded pkg/a.go row", rows)
+	}
+}
+
+// TestOpenSealDBImportOnlyPathsBypassesTheView is
+// TestOpenSealDBUncoveredPathsBypassesTheView's own sibling: the REAL
+// production query (dbSealReader.ImportOnlyPaths, actual DuckDB SQL, not
+// the fake) must find an import-only row directly off corral_audits, and
+// UncoveredPaths must ALSO name it (the union both shapes set) while
+// distinguishing it from a genuinely uncovered row and a graded one.
+func TestOpenSealDBImportOnlyPathsBypassesTheView(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "warehouse.duckdb")
+	live := 0.75
+	trueVal, falseVal := true, false
+	bundle := auditpush.Bundle{
+		Scan: auditpush.ScanRow{Repo: "o/r", Commit: "abc123", Candidates: 3, Audited: 3},
+		Files: []auditpush.Row{
+			{Repo: "o/r", Commit: "abc123", Path: "pkg/a.go", Lang: "go",
+				Disposition: "audited", KillRate: &live, Survivors: 2, ProvenMissed: 1,
+				ParentSHA256: "aaaa", Evidence: "proven"},
+			{Repo: "o/r", Commit: "abc123", Path: "pkg/init.go", Lang: "go",
+				Disposition: "excluded", Reason: reposcan.ReasonImportOnly,
+				Uncovered: true, ImportOnly: &trueVal, ParentSHA256: "cccc"},
+			{Repo: "o/r", Commit: "abc123", Path: "pkg/dead.go", Lang: "go",
+				Disposition: "excluded", Reason: reposcan.ReasonUncovered,
+				Uncovered: true, ImportOnly: &falseVal, ParentSHA256: "bbbb"},
+		},
+	}
+	if _, err := auditpush.PushBundle(target, bundle); err != nil {
+		t.Fatalf("PushBundle: %v", err)
+	}
+
+	st, err := openSealDB(target)
+	if err != nil {
+		t.Fatalf("openSealDB: %v", err)
+	}
+	defer st.Close()
+
+	imp, err := st.ImportOnlyPaths(context.Background(), "o/r")
+	if err != nil {
+		t.Fatalf("ImportOnlyPaths: %v", err)
+	}
+	if !imp["pkg/init.go"] {
+		t.Errorf("imp = %+v, want pkg/init.go present", imp)
+	}
+	if imp["pkg/dead.go"] || imp["pkg/a.go"] {
+		t.Errorf("imp = %+v, want ONLY pkg/init.go", imp)
+	}
+
+	uncov, err := st.UncoveredPaths(context.Background(), "o/r")
+	if err != nil {
+		t.Fatalf("UncoveredPaths: %v", err)
+	}
+	if !uncov["pkg/init.go"] || !uncov["pkg/dead.go"] {
+		t.Errorf("uncov = %+v, want BOTH pkg/init.go and pkg/dead.go — import_only is a REFINEMENT of uncovered, not a replacement", uncov)
+	}
+	if uncov["pkg/a.go"] {
+		t.Errorf("the graded row pkg/a.go was reported uncovered: %+v", uncov)
 	}
 }
 

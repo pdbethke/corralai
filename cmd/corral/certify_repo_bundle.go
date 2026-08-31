@@ -174,6 +174,7 @@ func buildAuditRows(files []scanstore.File, scanID int64, meta bundleMeta) []aud
 			ChallengerKappa:      f.ChallengerKappa,
 			ChallengerSufficient: f.ChallengerSufficient,
 			GoalsDerived:         f.GoalsDerived,
+			GoalReused:           f.GoalReused,
 			SelectionMillis:      f.SelectionMillis,
 			GenerationMillis:     f.GenerationMillis,
 			PoolMillis:           f.PoolMillis,

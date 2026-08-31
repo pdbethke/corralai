@@ -13,11 +13,23 @@ import (
 // generator consumes. It deliberately never mentions tests: the deriver is
 // given source only, and asking "what does this code guarantee" rather than
 // "what is tested" is what keeps the kill rate measuring a real gap.
+// EDITING THIS TEXT REQUIRES BUMPING GoalPromptRev (below): the prompt
+// revision is part of the goal cache's key, so a prompt edit that did not
+// bump it would let the new prompt silently serve goals the OLD prompt
+// produced — a cache hit indistinguishable from a fresh answer, for a
+// question that was never actually asked under the new wording.
 const goalDeriverSystem = `You state the single most important correctness or security property that a piece of source code must satisfy.
 
 Answer with ONE sentence naming the property, in the imperative — for example "must never return a negative balance" or "must reject a token whose signature does not verify".
 
 Do not describe what the code does. Do not mention tests. Do not explain your reasoning. If the file has no meaningful correctness property (it is generated, trivial, or purely declarative), answer exactly: NONE`
+
+// GoalPromptRev versions goalDeriverSystem above. Part of the goal cache's
+// key (alongside path, source digest and model) precisely so a prompt edit
+// can never miss the bump: any change to the text above without bumping this
+// constant would let a cached goal from the OLD prompt masquerade as an
+// answer to the new one.
+const GoalPromptRev = "gp1"
 
 type llmDeriver struct{ b agentbackend.Backend }
 

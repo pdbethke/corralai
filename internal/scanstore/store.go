@@ -386,6 +386,15 @@ type File struct {
 	// none were derived, which is a real and common answer, so this one is a
 	// plain int rather than a pointer.
 	GoalsDerived int
+	// GoalReused is whether this file's goal was served from the goal cache
+	// — a prior scan derived it from the SAME bytes — rather than freshly
+	// derived by this scan. *bool, like ChallengerSufficient above: "not
+	// reused" and "the question was never asked" (no cache wired, a
+	// hand-written --goals entry, a pre-migration row) are different
+	// claims, and a stored false cannot tell them apart. NULL until a
+	// reused goal is actually recorded; true is the only value this column
+	// ever fabricates nothing to avoid.
+	GoalReused *bool
 	// PerMutant and TestsPerMutantMin/Median/Max are
 	// advpool.Verdict.TestSelection.PerMutant / .TestsPerMutant: whether each
 	// mutant was graded by the tests that reach its own lines, and the spread
@@ -465,6 +474,7 @@ var scanFilesMigrationCols = []struct{ name, ddl string }{
 	{"challenger_kappa", "challenger_kappa DOUBLE"},
 	{"challenger_sufficient", "challenger_sufficient BOOLEAN"},
 	{"goals_derived", "goals_derived INTEGER"},
+	{"goal_reused", "goal_reused BOOLEAN"},
 	{"per_mutant", "per_mutant BOOLEAN"},
 	{"tests_per_mutant_min", "tests_per_mutant_min INTEGER"},
 	{"tests_per_mutant_median", "tests_per_mutant_median INTEGER"},
@@ -614,6 +624,7 @@ func Open(dsn string) (*Store, error) {
 		challenger_kappa DOUBLE,
 		challenger_sufficient BOOLEAN,
 		goals_derived INTEGER,
+		goal_reused BOOLEAN,
 		per_mutant BOOLEAN,
 		tests_per_mutant_min INTEGER,
 		tests_per_mutant_median INTEGER,
@@ -719,6 +730,22 @@ func Open(dsn string) (*Store, error) {
 	if err := migrateScanEvents(db); err != nil {
 		db.Close()
 		return nil, err
+	}
+
+	// goal_cache is content-addressed, not scan-scoped: one row per
+	// (path, source_digest, model, engine_prompt_rev), reused across every
+	// scan that asks the same question about the same bytes. No migration
+	// list — this table did not exist before this change, so CREATE TABLE
+	// IF NOT EXISTS on every Open is the whole story: a ledger opened
+	// before this table existed gains it on the next Open, the same way
+	// scan_events itself first appeared.
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS goal_cache (
+		path VARCHAR, source_digest VARCHAR, model VARCHAR, engine_prompt_rev VARCHAR,
+		goal VARCHAR, provenance VARCHAR, created_at TIMESTAMP,
+		UNIQUE (path, source_digest, model, engine_prompt_rev)
+	)`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("scanstore: create goal_cache table: %w", err)
 	}
 
 	// scans.id allocation: a CREATE SEQUENCE + nextval(), the same approach
@@ -996,11 +1023,11 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 			parent_sha256, mutants_graded, mutants_invalid, mutants_timed_out,
 			selection_ms, generation_ms, pool_ms, dev_pass_ms, authored_pass_ms, critic_ms, total_ms,
 			mutant_ms_median, mutant_ms_max,
-			challenger_jaccard, challenger_kappa, challenger_sufficient, goals_derived,
+			challenger_jaccard, challenger_kappa, challenger_sufficient, goals_derived, goal_reused,
 			per_mutant, tests_per_mutant_min, tests_per_mutant_median, tests_per_mutant_max,
 			writer_mode, prompt_shape
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id, f.Path, f.Lang, f.Disposition, f.Reason,
 			fileKillRate(f), f.Survivors, f.Gradable, f.PreflightState, f.Evidence, f.Detail, f.TimedOut, f.TestWriterFailed, f.ProvenMissed, f.PoolTestUnsound,
 			f.ProvenMutantIDs, f.AuthoredTest, f.CacheKey, f.VerdictJSON, f.ComputedAt,
@@ -1011,7 +1038,7 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 			f.ParentSHA256, f.MutantsGraded, f.MutantsInvalid, f.MutantsTimedOut,
 			f.SelectionMillis, f.GenerationMillis, f.PoolMillis, f.DevPassMillis, f.AuthoredPassMillis, f.CriticMillis, f.TotalMillis,
 			f.MutantMillisMedian, f.MutantMillisMax,
-			f.ChallengerJaccard, f.ChallengerKappa, f.ChallengerSufficient, f.GoalsDerived,
+			f.ChallengerJaccard, f.ChallengerKappa, f.ChallengerSufficient, f.GoalsDerived, f.GoalReused,
 			f.PerMutant, f.TestsPerMutantMin, f.TestsPerMutantMedian, f.TestsPerMutantMax,
 			nullableString(f.WriterMode), nullableString(f.PromptShape),
 		); err != nil {
@@ -1177,7 +1204,7 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		parent_sha256, mutants_graded, mutants_invalid, mutants_timed_out,
 		selection_ms, generation_ms, pool_ms, dev_pass_ms, authored_pass_ms, critic_ms, total_ms,
 		mutant_ms_median, mutant_ms_max,
-		challenger_jaccard, challenger_kappa, challenger_sufficient, goals_derived,
+		challenger_jaccard, challenger_kappa, challenger_sufficient, goals_derived, goal_reused,
 		per_mutant, tests_per_mutant_min, tests_per_mutant_median, tests_per_mutant_max,
 		writer_mode, prompt_shape
 		FROM scan_files WHERE scan_id = ? ORDER BY rowid`, scanID)
@@ -1238,7 +1265,7 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		var selectionMS, generationMS, poolMS, devPassMS, authoredPassMS, criticMS, totalMS sql.NullInt64
 		var mutantMSMedian, mutantMSMax sql.NullInt64
 		var challengerJaccard, challengerKappa sql.NullFloat64
-		var challengerSufficient, perMutant sql.NullBool
+		var challengerSufficient, perMutant, goalReused sql.NullBool
 		var tpmMin, tpmMedian, tpmMax sql.NullInt64
 		var promptShape sql.NullString
 		if err := rows.Scan(&f.Path, &f.Lang, &f.Disposition, &f.Reason,
@@ -1252,7 +1279,7 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 			&parentSHA, &mutantsGraded, &mutantsInvalid, &mutantsTimedOut,
 			&selectionMS, &generationMS, &poolMS, &devPassMS, &authoredPassMS, &criticMS, &totalMS,
 			&mutantMSMedian, &mutantMSMax,
-			&challengerJaccard, &challengerKappa, &challengerSufficient, &goalsDerived,
+			&challengerJaccard, &challengerKappa, &challengerSufficient, &goalsDerived, &goalReused,
 			&perMutant, &tpmMin, &tpmMedian, &tpmMax, &writerMode, &promptShape); err != nil {
 			return nil, fmt.Errorf("scanstore: scan scan_files row: %w", err)
 		}
@@ -1324,6 +1351,10 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		if challengerSufficient.Valid {
 			v := challengerSufficient.Bool
 			f.ChallengerSufficient = &v
+		}
+		if goalReused.Valid {
+			v := goalReused.Bool
+			f.GoalReused = &v
 		}
 		f.PerMutant = perMutant.Bool
 		f.TestsPerMutantMin = nullCount(tpmMin)

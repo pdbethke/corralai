@@ -231,6 +231,8 @@ Usage of certify --repo:
     	model for the mutant-generator role — REQUIRED, corral has no default models
   -mutants string
     	REPLAY a recorded mutant set (see --record-mutants) instead of generating one: every audited file is graded against exactly the mutants in this file, and not one generator model call is made. Mutants are authored by a model, so an ordinary run re-draws the exam every time and two runs of the same audit are not two samples of one measurement — pin the set and a change to anything ELSE becomes measurable. Every selected file must appear in the set with the SAME bytes it was recorded from; a missing file or a changed one is refused (exit 2) up front, never half-replayed. Reads a corral-mutants-2 document, or an older corral-mutants-1 one, whose whole-file mutants still replay byte-for-byte.
+  -no-goal-cache
+    	skip the goal cache — every candidate is re-derived even when a PRIOR scan already derived a goal for the exact same bytes, model and prompt revision. Re-buys a model call per file that a content-addressed cache would otherwise have served for free; use this to isolate goal-derivation variance from a comparison, or on a scan whose operator does not want a goal receipt kept in the ledger at all. The cache lives in the same ledger --record-db names, independent of --record itself
   -owner string
     	owning account for the scan (tenant identifier) (default "local")
   -preflight

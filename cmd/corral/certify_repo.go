@@ -89,6 +89,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	fs.Var(&localEndpointFlag, "local-endpoint", "place a LOCAL seat on a specific ollama daemon, as <role>=<url> (repeatable; e.g. mutant-generator=http://localhost:11436). A daemon is pinned to a GPU by its own environment, so this is how two models occupy two cards at once — corral selects the DAEMON, never the device. Without it every local seat shares OLLAMA_URL, one card and one VRAM budget")
 
 	recordDSNFlag := fs.String("record-db", "", "path to the scan ledger (default: $CORRALAI_SCANS_DB, else ~/.claude/corralai_scans.duckdb)")
+	noGoalCacheFlag := fs.Bool("no-goal-cache", false, "skip the goal cache — every candidate is re-derived even when a PRIOR scan already derived a goal for the exact same bytes, model and prompt revision. Re-buys a model call per file that a content-addressed cache would otherwise have served for free; use this to isolate goal-derivation variance from a comparison, or on a scan whose operator does not want a goal receipt kept in the ledger at all. The cache lives in the same ledger --record-db names, independent of --record itself")
 	timeoutFlag := fs.Duration("timeout", 10*time.Minute, "per-file budget: give up on a single file's run if it makes no progress for this long (not a hard wall-clock cap — a single slow LLM call can overshoot it). Same default and semantics as `certify --local`'s --timeout; raise it for a large file that needs more room to converge")
 	if err := fs.Parse(flagArgs); err != nil {
 		return 2
@@ -500,16 +501,33 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
-	gs, disclosure, code := resolveGoalSource(stderr, *repoDir, *goalsPath, *deriveModel, *dryRun, len(selected), certifyRepoDeriver)
+	// The goal cache lives in the same ledger --record-db names, resolved
+	// here (independent of --record: a goal derived from identical bytes is
+	// a fact worth keeping whether or not this scan also records its
+	// verdicts) so it is available BEFORE derivation — resolveGoalSource
+	// wires it into the derived path below, and derivation is where the
+	// money goes.
+	var goalStore reposcan.GoalCacheStore
+	if !*noGoalCacheFlag {
+		goalCacheDSN := *recordDSNFlag
+		if goalCacheDSN == "" {
+			goalCacheDSN = defaultScanDSN()
+		}
+		goalStore = newGoalLedgerCache(goalCacheDSN)
+	}
+
+	gs, disclosure, code := resolveGoalSource(stderr, *repoDir, *goalsPath, *deriveModel, *dryRun, len(selected), certifyRepoDeriver, goalStore, *noGoalCacheFlag)
 	if code != 0 {
 		return code
 	}
-	// Printed on EVERY path that has something to disclose. A machine-invented
-	// goal has no goal-critic — a goal cannot be executed, so a second model
-	// grading the first would be opinion on opinion — which means DISCLOSURE is
-	// the accountability mechanism: the reader is told what question was asked
-	// and by whom, and execution answers it afterwards through mutant yield.
-	if disclosure != "" {
+	// The caching wrapper's own counts (fresh vs reused) are only known once
+	// EmitJobs has asked it about every candidate, so its disclosure line is
+	// printed AFTER EmitJobs below (see goalCacheDisclosureLine) rather than
+	// here. Every other path — --goals (nothing to disclose), a dry run, no
+	// candidates selected — has nothing further to learn from EmitJobs and
+	// is printed immediately, unchanged from before this cache existed.
+	cachingGS, cacheWired := gs.(*reposcan.CachingGoalSource)
+	if disclosure != "" && !cacheWired {
 		fmt.Fprintln(stdout, disclosure)
 	}
 
@@ -643,6 +661,16 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintf(stderr, "corral certify --repo: emitting jobs: %v\n", err)
 		return 1
+	}
+	// NOW the caching wrapper has asked about every candidate, so its fresh
+	// vs reused counts are final — print the disclosure the print site above
+	// deferred. Unchanged wording when nothing was reused: see
+	// goalCacheDisclosureLine's own doc.
+	if cacheWired {
+		fresh, reused := cachingGS.Stats()
+		if line := goalCacheDisclosureLine(disclosure, *deriveModel, version, fresh, reused); line != "" {
+			fmt.Fprintln(stdout, line)
+		}
 	}
 	// The exclusion sources partition DIFFERENTLY, and conflating them
 	// double-counts files:
@@ -1654,6 +1682,20 @@ type deriverFactory func(model string) (reposcan.Deriver, error)
 // the construction observable.
 var certifyRepoDeriver deriverFactory = newLLMDeriver
 
+// goalCacheDisclosureLine formats the derived-goals disclosure once a scan
+// knows how many goals it actually paid for versus served from the goal
+// cache. base is resolveGoalSource's own disclosure line for the derived
+// path — printed UNCHANGED whenever nothing was reused (reused == 0), so a
+// scan that never hit the cache says exactly what corral has always said.
+// Only once there is something to disclose beyond "a model derived these"
+// does the line change shape, to name both numbers.
+func goalCacheDisclosureLine(base, model, engineVersion string, fresh, reused int) string {
+	if reused == 0 {
+		return base
+	}
+	return fmt.Sprintf("  goals: %d derived by %s@%s, %d reused (identical source)", fresh, model, engineVersion, reused)
+}
+
 // resolveGoalSource picks where goals come from and returns the ONE line that
 // discloses it. Split out of runCertifyRepo so both the choice and its
 // disclosure are testable: on the derived path there is no goal-critic, so this
@@ -1663,8 +1705,16 @@ var certifyRepoDeriver deriverFactory = newLLMDeriver
 // --goals map is the operator's own claim, and a scan that selected nothing
 // will never ask for a goal at all.
 //
+// store, when non-nil (and noGoalCache false), wraps the derived path in a
+// reposcan.CachingGoalSource: a goal derived from identical bytes, by the
+// same model under the same prompt revision, is a fact reused rather than
+// re-purchased. Never wired on the --goals path (that branch returns
+// before store is ever consulted — see internal/reposcan/goal_cache_test.go's
+// TestPinnedGoalsBypass doc) or when nothing was selected (no goal will ever
+// be asked for).
+//
 // Returns the process exit code to use on failure; 0 means the source is good.
-func resolveGoalSource(stderr io.Writer, repoDir, goalsPath, deriveModel string, dryRun bool, nSelected int, newDeriver deriverFactory) (reposcan.GoalSource, string, int) {
+func resolveGoalSource(stderr io.Writer, repoDir, goalsPath, deriveModel string, dryRun bool, nSelected int, newDeriver deriverFactory, store reposcan.GoalCacheStore, noGoalCache bool) (reposcan.GoalSource, string, int) {
 	// --goals takes precedence when given, so hand-written goals keep working
 	// and that path needs no provider credential at all.
 	if goalsPath != "" {
@@ -1701,9 +1751,17 @@ func resolveGoalSource(stderr io.Writer, repoDir, goalsPath, deriveModel string,
 			fmt.Fprintf(stderr, "corral certify --repo: %v\n", derr)
 			return nil, "", 2
 		}
-		return reposcan.NewDerivingGoalSource(repoDir, d, deriveModel, version, 3),
-			fmt.Sprintf("  goals derived per file by %s@%s — no goal-critic; each goal is judged after the fact by mutant yield", deriveModel, version),
-			0
+		var gs reposcan.GoalSource = reposcan.NewDerivingGoalSource(repoDir, d, deriveModel, version, 3)
+		disclosure := fmt.Sprintf("  goals derived per file by %s@%s — no goal-critic; each goal is judged after the fact by mutant yield", deriveModel, version)
+		// A goal derived from identical bytes, by the same model under the
+		// same prompt revision, is a fact — reused with a receipt, not
+		// re-derived. Not wired at all under --no-goal-cache or when the
+		// caller has no store to give (an unopenable --record-db, or a scan
+		// with the goal cache turned off some other way).
+		if store != nil && !noGoalCache {
+			gs = reposcan.NewCachingGoalSource(repoDir, gs, store, deriveModel, GoalPromptRev)
+		}
+		return gs, disclosure, 0
 	}
 	// Nothing was selected, so no goal will ever be asked for. A real source
 	// rather than a nil interface: EmitJobs returns early on an empty candidate
@@ -3873,6 +3931,9 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 			// What a mutant-generator shard actually saw — see
 			// certify.AuditedFile.PromptShape's doc.
 			PromptShape: f.PromptShape,
+			// Whether this file's goal was served from the goal cache — see
+			// certify.AuditedFile.GoalReused's doc.
+			GoalReused: f.GoalReused,
 		})
 	}
 	// Same resolution the warehouse push uses: a statement whose subject names

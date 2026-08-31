@@ -3006,7 +3006,7 @@ func TestResolveGoalSourceDerivedPathDisclosesTheModel(t *testing.T) {
 				t.Errorf("factory got model %q", model)
 			}
 			return stubDeriver{}, nil
-		})
+		}, nil, false)
 	if code != 0 || gs == nil {
 		t.Fatalf("code=%d gs=%v stderr=%s", code, gs, errb.String())
 	}
@@ -3036,7 +3036,7 @@ func TestResolveGoalSourceGoalsFileDisclosesNothingAndDerivesNothing(t *testing.
 		func(string) (reposcan.Deriver, error) {
 			t.Fatal("the --goals path must never construct a deriver")
 			return nil, nil
-		})
+		}, nil, false)
 	if code != 0 || gs == nil {
 		t.Fatalf("code=%d gs=%v stderr=%s", code, gs, errb.String())
 	}
@@ -3053,7 +3053,7 @@ func TestResolveGoalSourceNothingSelectedNeedsNoDeriver(t *testing.T) {
 		func(string) (reposcan.Deriver, error) {
 			t.Fatal("no candidate was selected; a deriver must not be built")
 			return nil, nil
-		})
+		}, nil, false)
 	if code != 0 || gs == nil || disclosure != "" {
 		t.Fatalf("code=%d gs=%v disclosure=%q stderr=%s", code, gs, disclosure, errb.String())
 	}
@@ -3063,7 +3063,7 @@ func TestResolveGoalSourceNothingSelectedNeedsNoDeriver(t *testing.T) {
 func TestResolveGoalSourceDeriverFailureIsAUsageError(t *testing.T) {
 	var errb bytes.Buffer
 	gs, _, code := resolveGoalSource(&errb, t.TempDir(), "", "test-model-x", false, 3,
-		func(string) (reposcan.Deriver, error) { return nil, errors.New("goal deriver: no key") })
+		func(string) (reposcan.Deriver, error) { return nil, errors.New("goal deriver: no key") }, nil, false)
 	if code != 2 || gs != nil {
 		t.Fatalf("code=%d gs=%v, want 2 and nil", code, gs)
 	}

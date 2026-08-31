@@ -308,6 +308,7 @@ CREATE TABLE IF NOT EXISTS corral_audits (
   challenger_kappa        DOUBLE,
   challenger_sufficient   BOOLEAN,
   goals_derived           INTEGER,
+  goal_reused             BOOLEAN,
   selection_ms            BIGINT,
   generation_ms           BIGINT,
   pool_ms                 BIGINT,
@@ -455,6 +456,7 @@ var corralAuditsMigrationCols = []struct{ name, ddl string }{
 	{"challenger_kappa", "challenger_kappa DOUBLE"},
 	{"challenger_sufficient", "challenger_sufficient BOOLEAN"},
 	{"goals_derived", "goals_derived INTEGER"},
+	{"goal_reused", "goal_reused BOOLEAN"},
 	{"selection_ms", "selection_ms BIGINT"},
 	{"generation_ms", "generation_ms BIGINT"},
 	{"pool_ms", "pool_ms BIGINT"},
@@ -966,11 +968,11 @@ func insertFileRow(tx *sql.Tx, now time.Time, r Row) error {
 	    regions_total, regions_probed, dropped_regions, vacuous_findings,
 	    authored_test_not_collected, baseline_failed, suite_baseline_ms,
 	    proven_mutant_ids, challenger_jaccard, challenger_kappa,
-	    challenger_sufficient, goals_derived,
+	    challenger_sufficient, goals_derived, goal_reused,
 	    selection_ms, generation_ms, pool_ms, dev_pass_ms, authored_pass_ms,
 	    critic_ms, total_ms, mutant_ms_median, mutant_ms_max,
 	    authored_test, verdict_json, schema_version, prompt_shape
-	  ) VALUES (`+placeholders(72)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+	  ) VALUES (`+placeholders(73)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 		now, r.Repo, r.Commit, r.Path, r.Lang,
 		killRate, r.Survivors, r.ProvenMissed,
 		r.TimedOut, r.TestWriterFailed, r.PoolTestUnsound,
@@ -991,7 +993,7 @@ func insertFileRow(tx *sql.Tx, now time.Time, r Row) error {
 		r.RegionsTotal, r.RegionsProbed, nullIfEmpty(r.DroppedRegions), r.VacuousFindings,
 		r.AuthoredTestNotCollected, r.BaselineFailed, r.SuiteBaselineMillis,
 		nullIfEmpty(r.ProvenMutantIDs), r.ChallengerJaccard, r.ChallengerKappa,
-		r.ChallengerSufficient, r.GoalsDerived,
+		r.ChallengerSufficient, r.GoalsDerived, r.GoalReused,
 		r.SelectionMillis, r.GenerationMillis, r.PoolMillis, r.DevPassMillis,
 		r.AuthoredPassMillis, r.CriticMillis, r.TotalMillis,
 		r.MutantMillisMedian, r.MutantMillisMax,

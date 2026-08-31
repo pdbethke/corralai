@@ -43,9 +43,13 @@ func twoFileLedgerRows(t *testing.T) (string, []scanstore.File, []scanstore.Muta
 	}
 	results := []reposcan.FileResult{
 		{
+			// Provenance ends " (reused)" and GoalReused is true — a REAL,
+			// non-default value, so the field-for-field walk below actually
+			// exercises the goal-cache column rather than comparing nil to
+			// nil (see reposcan.GoalWasReused).
 			Job: reposcan.Job{Path: "a.go", Lang: "go", Goal: reposcan.Goal{
-				Text: "F never returns a negative number", Provenance: "derived:claude-x@v1.2.3",
-			}},
+				Text: "F never returns a negative number", Provenance: "derived:claude-x@v1.2.3 (reused)",
+			}, GoalReused: true},
 			Gradable: true,
 			Verdict: advpool.Verdict{
 				DevKillRate: 0.5, Survivors: 2, ProvenMissed: 1,

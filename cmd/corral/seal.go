@@ -107,10 +107,30 @@ func (r dbSealReader) SealRows(ctx context.Context, repo string) ([]sealRow, err
 // reposcan.ReasonUncovered without the `uncovered` column set — the OR
 // tolerates that at no cost, rather than silently missing every row a
 // warehouse recorded before the column existed.
+//
+// "Truly latest" needs a DETERMINISTIC tiebreaker, not `ORDER BY ts DESC`
+// alone: every file row in one PushBundle call shares the exact same `ts`
+// (auditpush.pushBundleOnce computes `now` once per bundle, see bundle.go),
+// and two separate pushes can in principle land the same timestamp too —
+// coarse clock resolution, or a test driving two PushBundle calls back to
+// back. scan_id is NOT that tiebreaker: it is the local ledger's row id and
+// reads 0 for every run pushed without --record (push.go's own doc: "scan_id
+// is always the ledger's row id, or 0 when --record was not given"), so
+// several genuinely different pushes can tie on it too. What IS monotonic
+// is insertion order itself: corral_audits is APPEND ONLY — inserted, never
+// UPDATEd or DELETEd (push.go's own rule) — so DuckDB's `rowid`
+// pseudocolumn, which tracks physical insertion order, is safe to rely on
+// here for exactly the reason internal/scanstore/store.go's FilesForScan
+// already relies on it for scan_files (see that doc comment): an ORDER BY
+// that assumed rowid survives updates/deletes would not be safe, but that
+// case never arises for an append-only table. `ORDER BY ts DESC, rowid
+// DESC` is therefore not incidental: for any tie on ts, the row physically
+// inserted LAST — i.e. pushed most recently — wins, which is the same
+// answer "truly latest" is supposed to give.
 func (r dbSealReader) UncoveredPaths(ctx context.Context, repo string) (map[string]bool, error) {
 	q := `SELECT path FROM (
 	        SELECT path, COALESCE(uncovered, false) AS uncovered, COALESCE(reason, '') AS reason,
-	               row_number() OVER (PARTITION BY path ORDER BY ts DESC) AS rn
+	               row_number() OVER (PARTITION BY path ORDER BY ts DESC, rowid DESC) AS rn
 	        FROM corral_audits WHERE repo = ?
 	      ) WHERE rn = 1 AND (uncovered OR reason = ?)`
 	rows, err := r.db.QueryContext(ctx, q, repo, reposcan.ReasonUncovered)

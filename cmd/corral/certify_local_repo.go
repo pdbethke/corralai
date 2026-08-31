@@ -172,6 +172,12 @@ type loadOpts struct {
 // depDirNames are directory basenames auto-detected as dependency trees:
 // large, vendor-managed, and irrelevant to the mutant/text seed — binding
 // them read-only instead of copying keeps them out of the 64 MiB cap.
+//
+// "vendor" already covers TWO languages under the one basename: it named
+// Go's own module vendor dir first, and Composer's PHP dependency tree
+// (`composer install`'s target, holding vendor/bin/phpunit) lands at the
+// exact same repo-relative name — no separate PHP entry was needed here,
+// only the one below.
 var depDirNames = map[string]bool{
 	"node_modules": true,
 	"vendor":       true,

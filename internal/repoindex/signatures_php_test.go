@@ -70,3 +70,42 @@ func TestPHPSignatures(t *testing.T) {
 		t.Errorf("Invoice.status complexity = %d, want 4 (1 + 3 case arms, default excluded)", s.Complexity)
 	}
 }
+
+// TestPHPSignaturesDistinctReceiverIdentity is the review rider from Task 1:
+// two different classes defining a method of the SAME name must not collapse
+// to one symbol identity (Receiver + "." + Name) — advpool.symbolIdentity
+// relies on this to bin-pack shards without one class's method silently
+// standing in for the other's.
+func TestPHPSignaturesDistinctReceiverIdentity(t *testing.T) {
+	const src = `<?php
+class Invoice {
+    public function handle(): void
+    {
+        echo "invoice";
+    }
+}
+
+class Refund {
+    public function handle(): void
+    {
+        echo "refund";
+    }
+}
+`
+	sigs, err := ExtractSignatures(src, "php")
+	if err != nil {
+		t.Fatalf("ExtractSignatures(php): %v", err)
+	}
+	got := idsOf(sigs)
+	for _, want := range []string{"Invoice.handle", "Refund.handle"} {
+		if _, ok := got[want]; !ok {
+			t.Errorf("missing %q; got %v", want, keysOfSigs(got))
+		}
+	}
+	if len(sigs) != 2 {
+		t.Fatalf("got %d signatures, want exactly 2 (one per class) — a collapse would report fewer: %+v", len(sigs), sigs)
+	}
+	if got["Invoice.handle"].Receiver != "Invoice" || got["Refund.handle"].Receiver != "Refund" {
+		t.Errorf("Receiver did not disambiguate the two classes' same-named method: %+v", got)
+	}
+}

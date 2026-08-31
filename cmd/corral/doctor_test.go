@@ -163,6 +163,14 @@ func TestCheckToolchainFailsWhenBinaryInvisibleInJail(t *testing.T) {
 	if !strings.Contains(got.detail, "CORRALAI_EXEC_IMAGE") {
 		t.Errorf("detail %q must name the other fix: baking the toolchain into CORRALAI_EXEC_IMAGE", got.detail)
 	}
+	// Task 2 (php): vendor/ auto-binds exactly parallel to node_modules and
+	// .venv (Composer's dep tree, holding vendor/bin/phpunit), so the hint
+	// naming what --repo-dir additionally binds must say so explicitly
+	// rather than trailing off in a "..." that leaves an operator guessing
+	// whether their PHP project's vendor dir is covered.
+	if !strings.Contains(got.detail, "vendor") {
+		t.Errorf("detail %q must name vendor/ among the auto-bound dependency dirs", got.detail)
+	}
 }
 
 // TestCheckToolchainPassesWhenReallyReachable is the control: a tool that

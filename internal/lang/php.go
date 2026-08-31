@@ -3,7 +3,9 @@
 package lang
 
 import (
+	"fmt"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -167,4 +169,98 @@ func (phpPlugin) FirstFailure(output []byte) string {
 		}
 	}
 	return ""
+}
+
+// phpNamespaceRe matches a top-level `namespace X\Y;` declaration — PHP's
+// SINGLETON header: exactly one may govern a file, unlike an `import`/`use`
+// line, which may repeat harmlessly. Only the single-statement form is
+// matched (no `namespace X { ... }` braced form): the writer prompt never
+// asks for it, and none of the shipped languages' concatenators handle a
+// braced/block variant of their own singleton header either (Go's
+// `goPackageRe` is equally single-form).
+var phpNamespaceRe = regexp.MustCompile(`^namespace\s+([\w\\]+)\s*;`)
+
+// phpUseRe matches a top-level `use X\Y;` IMPORT statement. It is checked
+// only when a line is top-level (mergeParts never applies isHeader to an
+// indented line), which is what keeps this from also matching a trait
+// inclusion (`use Loggable;`) INSIDE a class body — that always sits
+// indented one level in.
+var phpUseRe = regexp.MustCompile(`^use\s+[\w\\]`)
+
+var (
+	phpRequireRe = regexp.MustCompile(`^require(?:_once)?\s`)
+	phpDeclareRe = regexp.MustCompile(`^declare\s*\(`)
+	// phpClassRe accepts the `final`/`abstract` modifiers PHPUnit test
+	// classes sometimes carry ahead of `class`.
+	phpClassRe = regexp.MustCompile(`^(?:final\s+|abstract\s+)*class\s+([A-Za-z_]\w*)`)
+	phpFuncRe  = regexp.MustCompile(`^function\s+([A-Za-z_]\w*)\s*\(`)
+)
+
+// ConcatTests folds several proven PHPUnit files into one: the opening
+// `<?php` tag and a `namespace` declaration are stripped out and re-emitted
+// exactly once (both are SINGLETONS PHP fails to parse repeated — the same
+// reasoning goPlugin.ConcatTests gives its own `package` clause), disagreeing
+// namespace declarations REFUSED rather than guessed at (mirrors Go's
+// package-clause mismatch), `use`/`require(_once)`/`declare` lines hoisted
+// and de-duplicated by exact text, and a colliding class (or, defensively, a
+// colliding top-level function) name SUFFIXED with its mutant id.
+//
+// Every top-level declaration here is renameable, unlike Go/Python/Ruby's
+// "only the test name" carve-out: an authored PHP test's class is not
+// referenced from ANYWHERE outside its own file — PHPUnit's directory-based
+// discovery `require()`s a matching file and reflects on whichever TestCase
+// subclasses it finds newly declared, it does not look the class up by name
+// — so suffixing every occurrence of a colliding name within that SAME
+// part's body (mergeParts' word-boundary-bounded substitution, the identical
+// mechanism JS's full permissiveness already relies on) safely rewrites its
+// own internal self-references (`new InvoiceTest()`, `InvoiceTest::class`)
+// along with the declaration itself. That is also why two parts declaring
+// the SAME class name is the ordinary case here, not a rare collision: the
+// writer prompt gives the model no per-mutant class name to differentiate
+// on, so the common shape is exactly the one this merge exists to handle —
+// see the design doc's "decide by what phpunit COLLECTS" note and the
+// fake-jail proof in concat_php_jail_test.go: a file with several
+// distinctly (or suffix-disambiguated) named TestCase subclasses is
+// discovered and runs every one of them.
+func (phpPlugin) ConcatTests(parts []AuthoredPart) (string, error) {
+	ns := ""
+	nsSet := false
+	flat := make([]AuthoredPart, 0, len(parts))
+	for _, part := range parts {
+		var kept []string
+		for _, line := range strings.Split(part.Source, "\n") {
+			trimmed := strings.TrimRight(line, " \t")
+			probe := strings.TrimSpace(trimmed)
+			switch {
+			case probe == "<?php":
+				// The opening tag is a SINGLETON re-emitted once, verbatim,
+				// as ConcatTests' own literal prefix below — not a
+				// de-duplicated header collected from the parts.
+				continue
+			case phpNamespaceRe.MatchString(probe):
+				name := phpNamespaceRe.FindStringSubmatch(probe)[1]
+				if nsSet && ns != name {
+					return "", fmt.Errorf("lang: authored parts disagree about the namespace declaration (%q vs %q)", ns, name)
+				}
+				ns, nsSet = name, true
+				continue
+			default:
+				kept = append(kept, trimmed)
+			}
+		}
+		flat = append(flat, AuthoredPart{MutantID: part.MutantID, Source: strings.Join(kept, "\n")})
+	}
+
+	prefix := "<?php"
+	if ns != "" {
+		prefix += "\n\nnamespace " + ns + ";"
+	}
+
+	return mergeParts(flat, concatSpec{
+		isHeader: func(line string) bool {
+			return phpUseRe.MatchString(line) || phpRequireRe.MatchString(line) || phpDeclareRe.MatchString(line)
+		},
+		declRes:           []*regexp.Regexp{phpClassRe, phpFuncRe},
+		renameOnCollision: func(string) bool { return true },
+	}, prefix, func(headers []string) string { return strings.Join(headers, "\n") })
 }

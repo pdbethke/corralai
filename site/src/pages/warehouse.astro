@@ -121,7 +121,8 @@ const initialSql = PRESETS[0].sql;
       shape, and the <a href="/docs/warehouse/">documentation</a> describes that
       one, because it is the shape you get. This page has not been backfilled
       into it, and saying so is cheaper than pretending the two are the same
-      table.
+      table. <code>corral verify --db</code> now checks that rows-hash against
+      the statement mechanically rather than leaving it to eyeball comparison.
 
       <strong>What is not here, and why.</strong> The ledger on the machine that
       produced these extracts also records audits of PRIVATE repositories. Those

@@ -124,11 +124,12 @@ test, not just the diagnosis.
 
 **The result is evidence, not a report.** The verdict is signed and recorded so it
 can be queried later; where a witness is configured, it can also be anchored to an
-external transparency log (Sigstore Rekor) — opt-in, off by default, and never on
-the `--local` path most of this site's examples run. See [Verify a record
-yourself](/docs/verify-a-record/) for the difference between a signed record and
-an anchored one. It's built to gate a merge, which means it has to be something a
-skeptical third party can check rather than something you tell them.
+external transparency log (Sigstore Rekor) via `--transparency` — shipped, opt-in,
+off by default, and never on the `--local` path most of this site's examples run.
+See [Verify a record yourself](/docs/verify-a-record/) for the difference between a
+signed record and an anchored one. It's built to gate a merge, which means it has
+to be something a skeptical third party can check rather than something you tell
+them.
 
 That's the honest split. The measurement is a well-understood technique we
 implement conventionally. The adversarial half — plant, survive, **author a killing

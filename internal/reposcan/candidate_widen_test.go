@@ -24,13 +24,16 @@ func TestWidenCandidacyPromotesAnUnpairedFileTheEvidenceCovers(t *testing.T) {
 		"pkg/utils.py": {Tests: map[string]int{"tests/test_api.py::test_a": 4}},
 	})
 
-	gotCands, gotExcl := WidenCandidacyByEvidence(cands, excl, idx, ok)
+	gotCands, gotExcl, nPromoted := WidenCandidacyByEvidence(cands, excl, idx, ok)
 
 	if len(gotExcl) != 0 {
 		t.Fatalf("excl = %+v, want utils.py promoted out of the exclusion list", gotExcl)
 	}
 	if len(gotCands) != 2 {
 		t.Fatalf("cands = %+v, want 2 (the original pairing plus the evidence-only promotion)", gotCands)
+	}
+	if nPromoted != 1 {
+		t.Errorf("promoted = %d, want 1", nPromoted)
 	}
 	var promoted *Candidate
 	for i := range gotCands {
@@ -64,13 +67,16 @@ func TestWidenCandidacyRelabelsAMeasuredZeroCoverageFileAsUncovered(t *testing.T
 		"pkg/dead.py": {Tests: map[string]int{}},
 	})
 
-	gotCands, gotExcl := WidenCandidacyByEvidence(nil, excl, idx, ok)
+	gotCands, gotExcl, promoted := WidenCandidacyByEvidence(nil, excl, idx, ok)
 
 	if len(gotCands) != 0 {
 		t.Fatalf("cands = %+v, want none — zero coverage never promotes", gotCands)
 	}
 	if len(gotExcl) != 1 || gotExcl[0].Reason != ReasonUncovered {
 		t.Fatalf("excl = %+v, want exactly one entry reasoned %q", gotExcl, ReasonUncovered)
+	}
+	if promoted != 0 {
+		t.Errorf("promoted = %d, want 0 — a relabel is not a promotion", promoted)
 	}
 }
 
@@ -82,13 +88,16 @@ func TestWidenCandidacyLeavesAnUnmeasuredFileAsNoPairedTest(t *testing.T) {
 		"pkg/other.py": {Tests: map[string]int{"tests/test_x.py::test_x": 1}},
 	})
 
-	gotCands, gotExcl := WidenCandidacyByEvidence(nil, excl, idx, ok)
+	gotCands, gotExcl, promoted := WidenCandidacyByEvidence(nil, excl, idx, ok)
 
 	if len(gotCands) != 0 {
 		t.Fatalf("cands = %+v, want none", gotCands)
 	}
 	if len(gotExcl) != 1 || gotExcl[0].Reason != ReasonNoPairedTest || gotExcl[0].Path != "pkg/never_imported.py" {
 		t.Fatalf("excl = %+v, want the original no-paired-test entry untouched", gotExcl)
+	}
+	if promoted != 0 {
+		t.Errorf("promoted = %d, want 0", promoted)
 	}
 }
 
@@ -106,7 +115,7 @@ func TestWidenCandidacyLeavesOtherExclusionReasonsAlone(t *testing.T) {
 		"pkg/ambiguous.py": {Tests: map[string]int{"tests/test_x.py::test_x": 1}},
 	})
 
-	_, gotExcl := WidenCandidacyByEvidence(nil, excl, idx, ok)
+	_, gotExcl, promoted := WidenCandidacyByEvidence(nil, excl, idx, ok)
 
 	if len(gotExcl) != 3 {
 		t.Fatalf("excl = %+v, want all 3 untouched", gotExcl)
@@ -115,6 +124,9 @@ func TestWidenCandidacyLeavesOtherExclusionReasonsAlone(t *testing.T) {
 		if gotExcl[i] != e {
 			t.Errorf("excl[%d] = %+v, want unchanged %+v", i, gotExcl[i], e)
 		}
+	}
+	if promoted != 0 {
+		t.Errorf("promoted = %d, want 0", promoted)
 	}
 }
 
@@ -130,7 +142,7 @@ func TestWidenCandidacyLeavesAnAlreadyPairedCandidateByteIdentical(t *testing.T)
 		"pkg/api.py": {Tests: map[string]int{"tests/test_api.py::test_a": 2}},
 	})
 
-	gotCands, gotExcl := WidenCandidacyByEvidence(cands, nil, idx, ok)
+	gotCands, gotExcl, promoted := WidenCandidacyByEvidence(cands, nil, idx, ok)
 
 	if len(gotExcl) != 0 {
 		t.Fatalf("excl = %+v, want none", gotExcl)
@@ -145,6 +157,9 @@ func TestWidenCandidacyLeavesAnAlreadyPairedCandidateByteIdentical(t *testing.T)
 	if got.CoveringTests == nil || *got.CoveringTests != 1 {
 		t.Errorf("CoveringTests = %v, want 1 (ledger metadata only)", got.CoveringTests)
 	}
+	if promoted != 0 {
+		t.Errorf("promoted = %d, want 0 — an already-paired candidate is never a promotion", promoted)
+	}
 }
 
 // The fallback: no evidence to widen with (ok=false) leaves cands/excl
@@ -153,12 +168,15 @@ func TestWidenCandidacyIsANoOpWithoutEvidence(t *testing.T) {
 	cands := []Candidate{{Path: "pkg/api.py", TestPath: "tests/test_api.py", Lang: "python"}}
 	excl := []Exclusion{{Path: "pkg/utils.py", Reason: ReasonNoPairedTest}}
 
-	gotCands, gotExcl := WidenCandidacyByEvidence(cands, excl, EvidenceIndex{}, false)
+	gotCands, gotExcl, promoted := WidenCandidacyByEvidence(cands, excl, EvidenceIndex{}, false)
 
 	if len(gotCands) != 1 || gotCands[0] != cands[0] {
 		t.Errorf("cands = %+v, want unchanged %+v", gotCands, cands)
 	}
 	if len(gotExcl) != 1 || gotExcl[0] != excl[0] {
 		t.Errorf("excl = %+v, want unchanged %+v", gotExcl, excl)
+	}
+	if promoted != 0 {
+		t.Errorf("promoted = %d, want 0", promoted)
 	}
 }

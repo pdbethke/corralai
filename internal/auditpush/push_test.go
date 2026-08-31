@@ -172,6 +172,57 @@ func TestUncoveredRowStoresANullRateAndItsSelection(t *testing.T) {
 	}
 }
 
+// TestUncoveredCandidacyRowIsFindableByColumn is F4's regression: a file the
+// evidence-as-candidacy design excludes as "uncovered — no test executes
+// this file" (reposcan.ReasonUncovered) is a REJECTED row, not a graded one
+// — it never reaches a job at all — and Uncovered must still be TRUE on it,
+// so `WHERE uncovered` finds the design's own headline finding by COLUMN,
+// the same way a graded-but-zero-coverage row already is above, rather than
+// only by matching the reason string.
+func TestUncoveredCandidacyRowIsFindableByColumn(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "w.duckdb")
+	const uncoveredReason = "uncovered — no test executes this file" // reposcan.ReasonUncovered, verbatim
+	if _, err := Push(target, []Row{
+		{Repo: "o/r", Commit: "c", Path: "pkg/orphan.py",
+			Disposition: "rejected", Reason: uncoveredReason, Uncovered: true},
+		{Repo: "o/r", Commit: "c", Path: "pkg/unrelated.py",
+			Disposition: "rejected", Reason: "no-paired-test", Uncovered: false},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	db := openTarget(t, target)
+	rows, err := db.Query(`SELECT path FROM corral_audits WHERE uncovered ORDER BY path`)
+	if err != nil {
+		t.Fatalf("query by column: %v", err)
+	}
+	defer rows.Close()
+	var got []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, p)
+	}
+	if len(got) != 1 || got[0] != "pkg/orphan.py" {
+		t.Fatalf("WHERE uncovered = %v, want exactly [pkg/orphan.py] — a candidacy-level uncovered exclusion must be findable by the boolean column, not only by matching the reason text", got)
+	}
+
+	var disposition, reason string
+	var killRate *float64
+	if err := db.QueryRow(`SELECT disposition, reason, kill_rate FROM corral_audits WHERE path = 'pkg/orphan.py'`).
+		Scan(&disposition, &reason, &killRate); err != nil {
+		t.Fatal(err)
+	}
+	if disposition != "rejected" || reason != uncoveredReason {
+		t.Errorf("disposition/reason = %q/%q, want rejected/%q", disposition, reason, uncoveredReason)
+	}
+	if killRate != nil {
+		t.Errorf("an uncovered candidacy row was never graded — kill_rate = %v, want NULL", *killRate)
+	}
+}
+
 // TestPushMigratesAPreExistingWarehouse pins the upgrade path. An operator's
 // corral_audits was created by an earlier corral, so `CREATE TABLE IF NOT
 // EXISTS` is a no-op and the table keeps its old 20 columns — while the

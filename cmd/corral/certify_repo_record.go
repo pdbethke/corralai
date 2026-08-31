@@ -386,6 +386,16 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 			// this is the one disposition whose hash is a read of the
 			// checkout. See buildScanFileRows' doc.
 			ParentSHA256: auditedFileSHA256(repoDir, e.Path),
+			// Uncovered mirrors the disposition, not just the reason STRING:
+			// a candidate-level "uncovered" row (this one, from
+			// reposcan.WidenCandidacyByEvidence's ReasonUncovered) must be
+			// findable by `WHERE uncovered` the same way a GRADED file's own
+			// zero-coverage row already is (see the audited branch above),
+			// not only by matching the reason text. Before this, the design's
+			// headline finding was queryable only by string comparison on a
+			// column meant for humans, not by the boolean column meant for
+			// exactly this.
+			Uncovered: e.Reason == reposcan.ReasonUncovered,
 		})
 	}
 	return rows

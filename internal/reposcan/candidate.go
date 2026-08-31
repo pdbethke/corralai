@@ -431,9 +431,17 @@ func EnumerateWithTests(root string, tests *TestMap) ([]Candidate, []Exclusion, 
 // reason entry, are left exactly as the pairing walk produced them, which is
 // what keeps an already-candidate file's report line, grading command, cache
 // key and verdict byte-identical (see the mirrored-fixture test).
-func WidenCandidacyByEvidence(cands []Candidate, excl []Exclusion, idx EvidenceIndex, ok bool) ([]Candidate, []Exclusion) {
+//
+// promoted is the count of NEW candidates this call added (the third
+// return) — a caller keeping its own Enumerate-level exclusion count needs
+// it to decrement that count by exactly the same number a promotion moves
+// out of excl, rather than re-deriving "how many enumerate-level
+// exclusions are left" from a excl slice that may since have grown
+// candidate-level entries of its own (not-selected, ungoaled, ...) that
+// this function correctly ignores but a naive re-count would not.
+func WidenCandidacyByEvidence(cands []Candidate, excl []Exclusion, idx EvidenceIndex, ok bool) ([]Candidate, []Exclusion, int) {
 	if !ok {
-		return cands, excl
+		return cands, excl, 0
 	}
 
 	for i := range cands {
@@ -444,6 +452,7 @@ func WidenCandidacyByEvidence(cands []Candidate, excl []Exclusion, idx EvidenceI
 	}
 
 	kept := excl[:0:0]
+	var promoted int
 	for _, e := range excl {
 		if e.Reason != ReasonNoPairedTest {
 			kept = append(kept, e)
@@ -470,11 +479,12 @@ func WidenCandidacyByEvidence(cands []Candidate, excl []Exclusion, idx EvidenceI
 				CoveringTestPath: mostCovering,
 				CoveringTests:    &v,
 			})
+			promoted++
 		}
 	}
 
 	sort.Slice(cands, func(i, j int) bool { return cands[i].Path < cands[j].Path })
-	return cands, kept
+	return cands, kept, promoted
 }
 
 // demoteAmbiguousPairings enforces, as a global property (not a per-plugin

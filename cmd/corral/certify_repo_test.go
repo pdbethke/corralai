@@ -3825,6 +3825,46 @@ func TestCertifyRepoPreflightRunsWhenPairingFindsNoCandidates(t *testing.T) {
 	}
 }
 
+// TestCertifyRepoPreflightRunsWhenPairingAndEvidenceBothFindNoCandidates is
+// F2's restoration of the ORIGINAL zero-candidate regression
+// TestCertifyRepoPreflightRunsWhenPairingFindsNoCandidates used to guard,
+// before evidence-first candidacy widened its fixture to 1. --whole-suite
+// collects no selection evidence at all (see the design's evidence-absent
+// fallback), so candidacy here stays genuinely pairing-only and genuinely
+// zero — the exact case runPreflight was built to still work on (measured
+// on jsonschema 0/31, filelock 0/35, itsdangerous 0/10, markupsafe 0/7).
+func TestCertifyRepoPreflightRunsWhenPairingAndEvidenceBothFindNoCandidates(t *testing.T) {
+	skipWithoutPythonCoverage(t)
+	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
+	root := t.TempDir()
+	preflightUnpairedPythonFixture(t, root)
+
+	var out, errb bytes.Buffer
+	runCertifyRepo([]string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--goals", writeGoals(t, root, `{}`),
+		"--substrate", substrateWorkspace, "--whole-suite", "--preflight"}, &out, &errb)
+
+	s := out.String()
+	if !strings.Contains(s, "0 candidate(s)") {
+		t.Fatalf("fixture is wrong: --whole-suite collects no evidence, so this scan must have ZERO candidates:\n%s", s)
+	}
+	if strings.Contains(s, "paired by evidence") {
+		t.Errorf("--whole-suite must produce no evidence-paired candidate:\n%s", s)
+	}
+	_, section, found := strings.Cut(s, "\nCoverage pre-flight")
+	if !found {
+		t.Fatalf("missing the pre-flight section:\n%s\nstderr:\n%s", s, errb.String())
+	}
+	if strings.Contains(section, "could not run:") {
+		t.Fatalf("the pre-flight declined on a repo with no candidates — the exact repos it exists for:\n%s", section)
+	}
+	if !strings.Contains(section, "mypkg/orphan.py") {
+		t.Errorf("mypkg/orphan.py is measured and never executed and must be named:\n%s", section)
+	}
+	if strings.Contains(section, "mypkg/core.py") {
+		t.Errorf("mypkg/core.py IS executed by the suite and must not be named:\n%s", section)
+	}
+}
+
 // writeGoals writes a --goals file into root and returns its path.
 func writeGoals(t *testing.T, root, body string) string {
 	t.Helper()

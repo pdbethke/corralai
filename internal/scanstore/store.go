@@ -1027,20 +1027,24 @@ func nullCount(v sql.NullInt64) *int {
 	return &n
 }
 
-// retriesParam is the WRITE half of nullCount's read: a nil *int (the only
-// value any producer in this codebase sets today — see ModelCall.Retries'
-// doc) binds SQL NULL; a non-nil pointer binds the measured count. Kept as
-// its own function, rather than inlining `any(c.Retries)`, so the one place
-// this column's nil-ness is decided cannot silently drift from the read
-// side's nullCount.
-func retriesParam(v *int) any {
+// nullableIntPtr is the WRITE half of nullCount's read: a nil *int binds SQL
+// NULL; a non-nil pointer binds the measured value. Shared by every nullable
+// *int column this store writes (ModelCall.Retries, File.CoveringTests, ...)
+// rather than each column inlining its own `any(...)` — the one place a
+// column's nil-ness is decided cannot silently drift from the read side's
+// nullCount that way. Named for the WRITE, not for any one caller: renamed
+// from retriesParam, which named the first column to need it rather than
+// the shape it converts — the trap DRY exists to catch, since a name that
+// names its first caller invites a second caller to write a near-duplicate
+// rather than reuse it.
+func nullableIntPtr(v *int) any {
 	if v == nil {
 		return nil
 	}
 	return *v
 }
 
-// cachedTokensParam is retriesParam for the cached-prompt count: NULL when
+// cachedTokensParam is nullableIntPtr for the cached-prompt count: NULL when
 // nothing measured one, never a stored 0 a later query would average.
 func cachedTokensParam(v *int64) any {
 	if v == nil {
@@ -1122,7 +1126,7 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 			f.MutantMillisMedian, f.MutantMillisMax,
 			f.ChallengerJaccard, f.ChallengerKappa, f.ChallengerSufficient, f.GoalsDerived, f.GoalReused,
 			f.PerMutant, f.TestsPerMutantMin, f.TestsPerMutantMedian, f.TestsPerMutantMax,
-			nullableString(f.WriterMode), nullableString(f.PromptShape), retriesParam(f.CoveringTests),
+			nullableString(f.WriterMode), nullableString(f.PromptShape), nullableIntPtr(f.CoveringTests),
 		); err != nil {
 			return 0, fmt.Errorf("scanstore: insert scan_files row for %q: %w", f.Path, err)
 		}
@@ -1750,7 +1754,7 @@ func (s *Store) RecordModelCalls(ctx context.Context, cs []ModelCall) error {
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO scan_model_calls (scan_id, path, role, model, calls, retries, input_tokens, output_tokens, cached_input_tokens, cache_write_input_tokens, wall_ms)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			c.ScanID, c.Path, c.Role, c.Model, c.Calls, retriesParam(c.Retries),
+			c.ScanID, c.Path, c.Role, c.Model, c.Calls, nullableIntPtr(c.Retries),
 			c.InputTokens, c.OutputTokens,
 			cachedTokensParam(c.CachedInputTokens), cachedTokensParam(c.CacheWriteInputTokens), c.WallMillis,
 		); err != nil {
